@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// The "My Photos" source in the left panel.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", content = "id", rename_all = "camelCase")]
 pub enum LibrarySource {
     #[default]
     All,
