@@ -14,12 +14,14 @@
 //!    a 128-bit little-endian block: 11-bit max, 11-bit min, 4-bit index of the max, 4-bit index of the min and 14
 //!    seven-bit deltas above the min, scaled by the smallest shift that fits `max − min` into 7 bits.
 //!
-//! Also: uncompressed 16-bit ARW, and lossless-JPEG tiled ARW through the generic TIFF path.
+//! Also: uncompressed 16-bit ARW, and lossless-compressed ARW (Compression 7, ILCE-7M4 and later): LJ92 tiles whose
+//! frames hold one 2×2 CFA cell per four-component sample ([`read_quad_tiles`]). Other lossless-JPEG layouts go
+//! through the generic TIFF path.
 
-use crate::tiffraw::{Packing, read_image_in};
-use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
+use crate::tiffraw::{Packing, check_image, read_image_in};
+use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result, ljpeg};
 use lightcraft_geom::Orientation;
-use lightcraft_tiff::image::chunk_bytes;
+use lightcraft_tiff::image::{Chunk, ImageInfo, Layout, chunk_bytes};
 use lightcraft_tiff::tags::{self as t, photometric};
 use lightcraft_tiff::{Ifd, Tiff};
 use rayon::prelude::*;
@@ -87,6 +89,79 @@ pub(crate) fn decode_row(row: &[u8], out: &mut [u16]) {
     }
 }
 
+/// Whether `info` holds Sony's lossless-compressed layout: LJ92 tiles whose frames are half the tile in each
+/// direction with four components (checked on the first tile).
+fn is_quad_tiled(bytes: &[u8], info: &ImageInfo) -> bool {
+    let Layout::Tiles { tile_width, tile_height } = info.layout else { return false };
+    info.samples_per_pixel == 1
+        && info
+            .chunks(bytes.len() as u64)
+            .first()
+            .and_then(|c| chunk_bytes(bytes, c))
+            .and_then(|src| ljpeg::frame_info(src).ok())
+            .is_some_and(|(fw, fh, nc, _)| nc == 4 && fw * 2 == tile_width as usize && fh * 2 == tile_height as usize)
+}
+
+/// Decode Sony's lossless-compressed raw data. Each tile is one LJ92 frame of half the tile's width and height whose
+/// four components are the tile's 2×2 CFA cells in raster order (top-left, top-right, bottom-left, bottom-right), so
+/// all four colour planes are predicted separately. Observed in the files' own frame headers (512×512 tiles holding
+/// 256×256×4 frames) and checked on decoded images; the generic TIFF path reads a frame as a row-major sample stream
+/// (DNG's convention), which would interleave each tile's left and right halves row by row.
+fn read_quad_tiles(bytes: &[u8], info: &ImageInfo) -> Result<Vec<u16>> {
+    let (w, h) = (info.width as usize, info.height as usize);
+    let total = check_image(bytes, info)?;
+    let chunks = info.chunks(bytes.len() as u64);
+    let decoded: Vec<Result<(Chunk, ljpeg::Frame)>> = chunks
+        .par_iter()
+        .map(|c| {
+            let src = chunk_bytes(bytes, c).ok_or_else(|| RawError::Corrupt("tile offset past end of file".into()))?;
+            let f = ljpeg::decode(src, (c.width as usize * c.height as usize).max(1 << 16))?;
+            if f.components != 4 || f.data.len() < f.width * f.height * 4 {
+                return Err(RawError::Corrupt(format!(
+                    "lossless ARW tile: {} samples in a {}×{}×{} frame",
+                    f.data.len(),
+                    f.width,
+                    f.height,
+                    f.components
+                )));
+            }
+            Ok((*c, f))
+        })
+        .collect();
+    let mut out = vec![0u16; total];
+    let mut ok = 0usize;
+    let mut first_err = None;
+    for r in decoded {
+        let (c, f) = match r {
+            Ok(v) => v,
+            Err(e) => {
+                first_err.get_or_insert(e);
+                continue;
+            }
+        };
+        ok += 1;
+        let (x0, y0) = (c.x as usize, c.y as usize);
+        for fy in 0..f.height {
+            for k in 0..4 {
+                let y = y0 + 2 * fy + (k >> 1);
+                if y >= h {
+                    continue;
+                }
+                for fx in 0..f.width {
+                    let x = x0 + 2 * fx + (k & 1);
+                    if x < w {
+                        out[y * w + x] = f.data[(fy * f.width + fx) * 4 + k];
+                    }
+                }
+            }
+        }
+    }
+    if ok == 0 {
+        return Err(first_err.unwrap_or_else(|| RawError::Corrupt("no decodable tiles".into())));
+    }
+    Ok(out)
+}
+
 fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
     tiff.all_ifds()
         .into_iter()
@@ -125,6 +200,13 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             (RawData::U16(data), 14)
         }
         32767 => return Err(RawError::Unsupported("Sony ARW version 1 / packed compressed variant".into())),
+        7 if is_quad_tiled(bytes, &info) => match mode {
+            Mode::Full => (RawData::U16(read_quad_tiles(bytes, &info)?), bits),
+            Mode::Header => {
+                check_image(bytes, &info)?;
+                (RawData::U16(Vec::new()), bits)
+            }
+        },
         1 => {
             let packing = if strip_len >= (w * h * 2) as u64 { Packing::Word16 } else { Packing::Msb };
             (read_image_in(mode, bytes, &info, tiff.order, packing)?, bits)
@@ -244,5 +326,49 @@ mod tests {
         // degenerate thresholds do not panic
         let _ = code_curve(&[]);
         let _ = code_curve(&[60000, 1, 0, 0]);
+    }
+
+    #[test]
+    fn quad_tiles_place_cfa_cells() {
+        // 14×12 mosaic in 8×8 tiles (the right and bottom tiles overhang), each tile a 4×4 frame of 2×2 cells,
+        // stored column by column in the file as Sony does while TileOffsets stay in raster order
+        let (w, h, tw) = (14usize, 12usize, 8usize);
+        let mosaic: Vec<u16> = (0..w * h).map(|i| 100 + (i * 37 % 4000) as u16).collect();
+        let at = |x: usize, y: usize| if x < w && y < h { mosaic[y * w + x] } else { 0 };
+        let mut file = vec![0u8; 16];
+        let mut offsets = vec![0u64; 4];
+        let mut counts = vec![0u64; 4];
+        for tx in 0..2 {
+            for ty in 0..2 {
+                let mut frame = Vec::new();
+                for fy in 0..tw / 2 {
+                    for fx in 0..tw / 2 {
+                        let (x, y) = (tx * tw + 2 * fx, ty * tw + 2 * fy);
+                        frame.extend([at(x, y), at(x + 1, y), at(x, y + 1), at(x + 1, y + 1)]);
+                    }
+                }
+                let enc = ljpeg::encode(&frame, tw / 2, tw / 2, 4, 14, 1, 0);
+                offsets[ty * 2 + tx] = file.len() as u64;
+                counts[ty * 2 + tx] = enc.len() as u64;
+                file.extend(enc);
+            }
+        }
+        let info = ImageInfo {
+            width: w as u32,
+            height: h as u32,
+            bits_per_sample: vec![14],
+            samples_per_pixel: 1,
+            compression: 7,
+            photometric: photometric::CFA,
+            planar: 1,
+            predictor: 1,
+            sample_format: 1,
+            new_subfile_type: 0,
+            layout: Layout::Tiles { tile_width: tw as u32, tile_height: tw as u32 },
+            offsets,
+            byte_counts: counts,
+        };
+        assert!(is_quad_tiled(&file, &info));
+        assert_eq!(read_quad_tiles(&file, &info).unwrap(), mosaic);
     }
 }
