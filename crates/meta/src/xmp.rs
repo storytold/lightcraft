@@ -8,7 +8,8 @@
 //! Writing emits the interchange subset in standard namespaces (dc, xmp, photoshop, exif, exifEX, tiff, lr) and
 //! LightCraft's full develop settings as an opaque JSON string in `lc:settings`.
 
-use crate::{DateTime, Flash, Gps, Metadata, Orientation, parse_number};
+use crate::{DateTime, Flash, Gps, Metadata, Orientation, Region, RegionKind, parse_number};
+use lightcraft_geom::{Point, Rect};
 use quick_xml::escape::{escape, partial_escape};
 use quick_xml::events::Event;
 use std::collections::BTreeMap;
@@ -32,6 +33,11 @@ const NAMESPACES: &[(&str, &str)] = &[
     ("lc", LC_NS),
     // Read-only: develop settings written by other raw developers (interchange; see docs/xmp-interop.md).
     ("crs", CRS_NS),
+    // Read-only: face/pet/focus regions written by Lightroom, digiKam, Picasa and others (MWG Region
+    // Guidelines v2.0). Canonicalising these three lets a packet use any prefix for them.
+    ("mwg-rs", "http://www.metadataworkinggroup.com/schemas/regions/"),
+    ("stArea", "http://ns.adobe.com/xmp/sType/Area#"),
+    ("stDim", "http://ns.adobe.com/xap/1.0/sType/Dimensions#"),
 ];
 
 /// The camera-raw-settings namespace URI (prefix `crs`), read for interchange only.
@@ -369,6 +375,52 @@ fn parse_gps_coord(s: &str) -> Option<f64> {
     v.is_finite().then_some(v)
 }
 
+/// `mwg-rs:Regions` → every region in its `RegionList`, converted to the full-image normalized frame.
+/// Malformed or out-of-range entries are skipped rather than rejecting the whole list: one bad region
+/// (from Lightroom, digiKam, Picasa, or a hand-edited file) shouldn't hide the rest.
+fn parse_regions(regions: &XmpValue) -> Vec<Region> {
+    // `AppliedToDimensions` documents the pixel size regions were authored against. It's only consulted
+    // for the rare region whose own Area is in pixel units instead of MWG's normalized default below.
+    let px_dims = regions.field("mwg-rs:AppliedToDimensions").and_then(|d| {
+        let w = d.field("stDim:w").and_then(XmpValue::text).and_then(parse_number)?;
+        let h = d.field("stDim:h").and_then(XmpValue::text).and_then(parse_number)?;
+        (w > 0.0 && h > 0.0).then_some((w, h))
+    });
+    let Some(list) = regions.field("mwg-rs:RegionList") else { return Vec::new() };
+    list.items().iter().filter_map(|item| parse_one_region(item, px_dims)).collect()
+}
+
+fn parse_one_region(item: &XmpValue, px_dims: Option<(f64, f64)>) -> Option<Region> {
+    let area = item.field("mwg-rs:Area")?;
+    let num_attr = |k: &str| area.field(k).and_then(XmpValue::text).and_then(parse_number);
+    // stArea:x/y are the region's CENTER, not its top-left corner (MWG Region Guidelines §Area).
+    let (cx, cy, w, h) = (num_attr("stArea:x")?, num_attr("stArea:y")?, num_attr("stArea:w")?, num_attr("stArea:h")?);
+    let finite_and_sane = [cx, cy, w, h].iter().all(|v| v.is_finite() && v.abs() <= 1.0e6);
+    if !finite_and_sane || w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    // `stArea:unit` is "normalized" (a fraction of AppliedToDimensions) in every writer we know of, and
+    // that needs no cross-referencing at all. Only a region that explicitly says "pixel" gets divided
+    // down, and only if AppliedToDimensions is there to divide by; otherwise it's dropped rather than
+    // stored as a nonsense fraction.
+    let is_pixels = area.field("stArea:unit").and_then(XmpValue::text).is_some_and(|u| u.eq_ignore_ascii_case("pixel"));
+    let (cx, cy, w, h) = match (is_pixels, px_dims) {
+        (false, _) => (cx, cy, w, h),
+        (true, Some((dw, dh))) => (cx / dw, cy / dh, w / dw, h / dh),
+        (true, None) => return None,
+    };
+    let name = item.field("mwg-rs:Name").and_then(XmpValue::text).map(str::to_string).filter(|s| !s.is_empty());
+    let description = item.field("mwg-rs:Description").and_then(XmpValue::text).map(str::to_string).filter(|s| !s.is_empty());
+    let kind = match item.field("mwg-rs:Type").and_then(XmpValue::text).unwrap_or("") {
+        t if t.eq_ignore_ascii_case("face") => RegionKind::Face,
+        t if t.eq_ignore_ascii_case("pet") => RegionKind::Pet,
+        t if t.eq_ignore_ascii_case("focus") => RegionKind::Focus,
+        t if t.eq_ignore_ascii_case("barcode") => RegionKind::BarCode,
+        t => RegionKind::Other(t.to_string()),
+    };
+    Some(Region { rect: Rect::from_center(Point::new(cx, cy), w, h), kind, name, description })
+}
+
 fn fmt_gps_coord(v: f64, pos: char, neg: char) -> String {
     let a = v.abs();
     let d = a.trunc();
@@ -465,6 +517,7 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
         let altitude = num("exif:GPSAltitude").map(|a| if first("exif:GPSAltitudeRef").as_deref() == Some("1") { -a } else { a });
         m.gps = Some(Gps { latitude: lat, longitude: lon, altitude });
     }
+    m.regions = values.get("mwg-rs:Regions").map(parse_regions).unwrap_or_default();
     let lc_settings = props.get("lc:settings").and_then(|v| v.first()).cloned();
     Ok(XmpData { metadata: m, lc_settings, properties: props, values })
 }
@@ -605,6 +658,9 @@ mod tests {
 
     fn full() -> Metadata {
         Metadata {
+            // write_xmp doesn't emit regions yet (read-only interchange; see docs/xmp-interop.md), so the
+            // roundtrip fixture must leave this empty or `roundtrip_all_fields` can't round-trip it.
+            regions: Vec::new(),
             make: Some("Maker & Sons".into()),
             model: Some("X <1>".into()),
             serial_number: Some("SN1".into()),
@@ -758,5 +814,131 @@ mod tests {
         assert_eq!(parse_gps_coord(""), None);
         assert_eq!(parse_gps_coord("é"), None);
         assert_eq!(fmt_gps_coord(-45.51, 'N', 'S'), "45,30.600000S");
+    }
+
+    /// MWG Region Guidelines v2.0, element form (`rdf:parseType="Resource"`, self-closing `Area`) — how
+    /// Lightroom typically writes it. One named face, one untyped/unnamed region (still usable), one
+    /// region with a description. `AppliedToDimensions` is present but irrelevant: normalized areas
+    /// (the default, and the only unit real files use) don't need it.
+    #[test]
+    fn mwg_regions_element_form() {
+        let x = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description rdf:about=""
+                xmlns:mwg-rs="http://www.metadataworkinggroup.com/schemas/regions/"
+                xmlns:stArea="http://ns.adobe.com/xmp/sType/Area#"
+                xmlns:stDim="http://ns.adobe.com/xap/1.0/sType/Dimensions#">
+              <mwg-rs:Regions rdf:parseType="Resource">
+                <mwg-rs:AppliedToDimensions rdf:parseType="Resource" stDim:w="4000" stDim:h="3000" stDim:unit="pixel"/>
+                <mwg-rs:RegionList>
+                  <rdf:Bag>
+                    <rdf:li rdf:parseType="Resource">
+                      <mwg-rs:Area rdf:parseType="Resource" stArea:x="0.5" stArea:y="0.4" stArea:w="0.2" stArea:h="0.3" stArea:unit="normalized"/>
+                      <mwg-rs:Name>Jane Doe</mwg-rs:Name>
+                      <mwg-rs:Type>Face</mwg-rs:Type>
+                    </rdf:li>
+                    <rdf:li rdf:parseType="Resource">
+                      <mwg-rs:Area rdf:parseType="Resource" stArea:x="0.1" stArea:y="0.1" stArea:w="0.05" stArea:h="0.05" stArea:unit="normalized"/>
+                    </rdf:li>
+                    <rdf:li rdf:parseType="Resource">
+                      <mwg-rs:Area rdf:parseType="Resource" stArea:x="0.8" stArea:y="0.2" stArea:w="0.1" stArea:h="0.1" stArea:unit="normalized"/>
+                      <mwg-rs:Type>Pet</mwg-rs:Type>
+                      <mwg-rs:Name>Rex</mwg-rs:Name>
+                      <mwg-rs:Description>Good boy</mwg-rs:Description>
+                    </rdf:li>
+                  </rdf:Bag>
+                </mwg-rs:RegionList>
+              </mwg-rs:Regions>
+            </rdf:Description></rdf:RDF></x:xmpmeta>"#;
+        let regions = parse_xmp(x).unwrap().metadata.regions;
+        assert_eq!(regions.len(), 3, "{regions:?}");
+
+        assert_eq!(regions[0].kind, RegionKind::Face);
+        assert_eq!(regions[0].name.as_deref(), Some("Jane Doe"));
+        assert_eq!(regions[0].description, None);
+        let r = regions[0].rect;
+        assert!((r.x0 - 0.4).abs() < 1e-9 && (r.x1 - 0.6).abs() < 1e-9, "{r:?}");
+        assert!((r.y0 - 0.25).abs() < 1e-9 && (r.y1 - 0.55).abs() < 1e-9, "{r:?}");
+
+        // No mwg-rs:Type or mwg-rs:Name at all: still a usable region, kind falls back to `Other("")`.
+        assert_eq!(regions[1].kind, RegionKind::Other(String::new()));
+        assert_eq!(regions[1].name, None);
+
+        assert_eq!(regions[2].kind, RegionKind::Pet);
+        assert_eq!(regions[2].name.as_deref(), Some("Rex"));
+        assert_eq!(regions[2].description.as_deref(), Some("Good boy"));
+    }
+
+    /// A second, differently-shaped encoding: each region is its own `rdf:Description` (rather than an
+    /// `rdf:li rdf:parseType="Resource"`), `mwg-rs:Type` as an attribute instead of an element, and an
+    /// unrecognised `mwg-rs:Type` value kept verbatim.
+    #[test]
+    fn mwg_regions_attribute_form_and_unknown_type() {
+        let x = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description rdf:about=""
+                xmlns:mwg-rs="http://www.metadataworkinggroup.com/schemas/regions/"
+                xmlns:stArea="http://ns.adobe.com/xmp/sType/Area#">
+              <mwg-rs:Regions rdf:parseType="Resource">
+                <mwg-rs:RegionList>
+                  <rdf:Bag>
+                    <rdf:li>
+                      <rdf:Description mwg-rs:Type="BarCode">
+                        <mwg-rs:Area stArea:x="0.3" stArea:y="0.3" stArea:w="0.1" stArea:h="0.1"/>
+                      </rdf:Description>
+                    </rdf:li>
+                    <rdf:li>
+                      <rdf:Description mwg-rs:Type="Sticker">
+                        <mwg-rs:Area stArea:x="0.6" stArea:y="0.6" stArea:w="0.1" stArea:h="0.1"/>
+                      </rdf:Description>
+                    </rdf:li>
+                  </rdf:Bag>
+                </mwg-rs:RegionList>
+              </mwg-rs:Regions>
+            </rdf:Description></rdf:RDF>"#;
+        let regions = parse_xmp(x).unwrap().metadata.regions;
+        assert_eq!(regions.len(), 2, "{regions:?}");
+        assert_eq!(regions[0].kind, RegionKind::BarCode);
+        assert_eq!(regions[1].kind, RegionKind::Other("Sticker".to_string()));
+    }
+
+    /// Hostile/malformed regions are dropped individually, never panic, and never poison the rest of
+    /// the list: missing Area, non-finite or absurd numbers, zero/negative size, and a pixel-unit area
+    /// with no `AppliedToDimensions` to convert it (so it can't be stored as a nonsense fraction).
+    #[test]
+    fn mwg_regions_hostile_inputs_are_dropped_not_panicking() {
+        let x = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description rdf:about=""
+                xmlns:mwg-rs="http://www.metadataworkinggroup.com/schemas/regions/"
+                xmlns:stArea="http://ns.adobe.com/xmp/sType/Area#">
+              <mwg-rs:Regions rdf:parseType="Resource">
+                <mwg-rs:RegionList>
+                  <rdf:Bag>
+                    <rdf:li rdf:parseType="Resource"><mwg-rs:Name>No Area</mwg-rs:Name></rdf:li>
+                    <rdf:li rdf:parseType="Resource"><mwg-rs:Area rdf:parseType="Resource" stArea:x="NaN" stArea:y="0.1" stArea:w="0.1" stArea:h="0.1"/></rdf:li>
+                    <rdf:li rdf:parseType="Resource"><mwg-rs:Area rdf:parseType="Resource" stArea:x="1e300" stArea:y="0.1" stArea:w="0.1" stArea:h="0.1"/></rdf:li>
+                    <rdf:li rdf:parseType="Resource"><mwg-rs:Area rdf:parseType="Resource" stArea:x="0.5" stArea:y="0.5" stArea:w="0" stArea:h="0.1"/></rdf:li>
+                    <rdf:li rdf:parseType="Resource"><mwg-rs:Area rdf:parseType="Resource" stArea:x="0.5" stArea:y="0.5" stArea:w="-0.1" stArea:h="0.1"/></rdf:li>
+                    <rdf:li rdf:parseType="Resource"><mwg-rs:Area rdf:parseType="Resource" stArea:x="100" stArea:y="100" stArea:w="50" stArea:h="50" stArea:unit="pixel"/></rdf:li>
+                    <rdf:li rdf:parseType="Resource"><mwg-rs:Area rdf:parseType="Resource" stArea:x="0.5" stArea:y="0.5" stArea:w="0.2" stArea:h="0.2"/><mwg-rs:Type>Face</mwg-rs:Type></rdf:li>
+                  </rdf:Bag>
+                </mwg-rs:RegionList>
+              </mwg-rs:Regions>
+            </rdf:Description></rdf:RDF>"#;
+        let regions = parse_xmp(x).unwrap().metadata.regions;
+        assert_eq!(regions.len(), 1, "only the last, well-formed region should survive: {regions:?}");
+        assert_eq!(regions[0].kind, RegionKind::Face);
+    }
+
+    /// `extract()`'s precedence (EXIF/IPTC never carry regions; XMP is read and filled in like keywords).
+    #[test]
+    fn regions_merge_like_keywords() {
+        let with_region = Region { rect: Rect::from_center(Point::new(0.5, 0.5), 0.2, 0.2), kind: RegionKind::Face, name: None, description: None };
+        let mut a = Metadata::default();
+        let b = Metadata { regions: vec![with_region.clone()], ..Default::default() };
+        a.fill_missing(&b);
+        assert_eq!(a.regions, vec![with_region.clone()]);
+
+        let mut a = Metadata::default();
+        a.overlay_user_fields(&b);
+        assert_eq!(a.regions, vec![with_region]);
     }
 }
