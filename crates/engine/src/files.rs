@@ -351,8 +351,16 @@ pub fn embedded_preview_srgb(bytes: &[u8], max_edge: usize) -> Option<lightcraft
 }
 
 /// Filesystem-backed embedded-preview hook (native).
+///
+/// Reads the whole file to find the preview, so it holds the memory gate for twice the file's size (the file and the
+/// decoded preview): background work (the face scan) waits for room, interactive work is counted and never waits.
 pub fn fs_preview_loader() -> PreviewLoader {
-    Arc::new(|path: &str, max_edge: usize| embedded_preview_srgb(&std::fs::read(path).ok()?, max_edge))
+    Arc::new(|path: &str, max_edge: usize| {
+        let len = std::fs::metadata(path).map(|m| m.len() as usize).unwrap_or(0);
+        let gate = crate::memory::work_gate();
+        let _permit = if crate::memory::is_background() { gate.acquire(len.saturating_mul(2)) } else { gate.acquire_urgent(len.saturating_mul(2)) };
+        embedded_preview_srgb(&std::fs::read(path).ok()?, max_edge)
+    })
 }
 
 /// Filesystem-backed hooks (native). On the web the host installs bytes-based hooks instead.

@@ -7,8 +7,10 @@
 //! the result, so the window never waits for a model.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::time::Duration;
 
 use lightcraft_catalog::PhotoId;
 use lightcraft_faces::align::{Rgb, align_to_template, crop_box};
@@ -31,18 +33,99 @@ pub(crate) const REGION_SCORE: f32 = 0.6;
 /// find faces in; the raw itself is decoded then).
 const MIN_PREVIEW_EDGE: usize = 1000;
 
-/// How many photos are worked on at once: an eighth of the processor's threads, between one and three, so the window and
-/// whatever else is running keep their share (each one holds a decoded full-size photo, about 250 MB, while it works).
-/// `LIGHTCRAFT_FACE_THREADS` overrides it.
-pub(crate) fn scan_threads() -> usize {
-    threads_for(std::thread::available_parallelism().map_or(1, |n| n.get()), std::env::var("LIGHTCRAFT_FACE_THREADS").ok().as_deref())
+/// Most photos ever worked on at once.
+const MAX_WORKERS: usize = 24;
+/// What one photo in progress holds: the file, its decoded picture and the copies the detector and recogniser read.
+/// Measured: peak memory grew by about 180 MB for each extra worker.
+const WORKER_BYTES: usize = 180 << 20;
+/// Photos queued behind the ones running, so a worker that finishes never waits for the next frame to be fed.
+pub(crate) const PREFETCH: usize = 2;
+
+/// How hard the background scan may work right now, as the app judges from what the user is doing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Pace {
+    /// Start nothing new: the user is dragging, typing or scrolling.
+    Pause = 0,
+    /// One photo at a time: the user is around, or the window is out of sight.
+    Light = 1,
+    /// Half the machine: the user is idle.
+    Normal = 2,
+    /// Most of the machine: the user is watching the progress.
+    Full = 3,
 }
 
-fn threads_for(cores: usize, setting: Option<&str>) -> usize {
-    match setting.and_then(|v| v.trim().parse::<usize>().ok()) {
-        Some(n) => n.clamp(1, 16),
-        None => (cores / 8).clamp(1, 3),
+impl Pace {
+    fn from_u8(n: u8) -> Pace {
+        match n {
+            0 => Pace::Pause,
+            1 => Pace::Light,
+            3 => Pace::Full,
+            _ => Pace::Normal,
+        }
     }
+
+    /// `pause`, `light`, `normal` or `full`; anything else (or nothing) is `normal`.
+    pub fn parse(name: Option<&str>) -> Pace {
+        match name {
+            Some("pause") => Pace::Pause,
+            Some("light") => Pace::Light,
+            Some("full") => Pace::Full,
+            _ => Pace::Normal,
+        }
+    }
+}
+
+/// How many photos are worked on at once at `pace` on a machine with `cores` threads (as the system reports them, which
+/// respects container limits and affinity). `cap` is a limit the user set (`LIGHTCRAFT_FACE_THREADS`). Memory is not
+/// decided here: decodes wait at the process-wide memory gate ([`crate::memory::work_gate`]), sized from the RAM.
+pub(crate) fn workers_for(cores: usize, pace: Pace, cap: Option<usize>) -> usize {
+    let n = match pace {
+        Pace::Pause => return 0,
+        Pace::Light => 1,
+        Pace::Normal => cores / 2,
+        Pace::Full => cores * 4 / 5,
+    }
+    .clamp(1, MAX_WORKERS);
+    cap.map_or(n, |c| n.min(c.clamp(1, MAX_WORKERS)))
+}
+
+fn cores() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| n.get())
+}
+
+fn cap_from_env() -> Option<usize> {
+    std::env::var("LIGHTCRAFT_FACE_THREADS").ok().and_then(|v| v.trim().parse::<usize>().ok())
+}
+
+/// The most photos the memory budget can hold in progress at once: half of it (the rest is the window's, the caches',
+/// the renders'), a worker at a time. Raising the budget (`LIGHTCRAFT_MEMORY_MB`) raises this.
+fn memory_workers() -> usize {
+    (crate::memory::budget() / 2 / WORKER_BYTES).max(1)
+}
+
+/// Photos to work on at once at `pace` on this machine: by the processor's threads and the pace, and never more than
+/// the memory allows. A limit the user sets (`LIGHTCRAFT_FACE_THREADS`) replaces the memory one.
+pub(crate) fn target_workers(pace: Pace) -> usize {
+    workers_for(cores(), pace, Some(cap_from_env().unwrap_or_else(memory_workers)))
+}
+
+/// Threads the worker pool starts with: enough for the fullest pace (the idle ones cost nothing).
+pub(crate) fn max_workers() -> usize {
+    target_workers(Pace::Full)
+}
+
+/// Threads for the scan's own parallel work (decoding a picture, developing it) at `pace` on a machine with `cores` threads:
+/// two when light, half the machine when normal, four fifths when watched. A photo's parallel parts are most of its cost,
+/// so this, more than the number of photos at once, is how much of the processor the scan takes. Measured on a 32-thread
+/// desktop (4 photos at once): 8 threads scanned 2.2 photos a second, 16 threads 5.8, 25 threads 6.4.
+fn pool_threads_for(cores: usize, pace: Pace, cap: Option<usize>) -> usize {
+    let n = match pace {
+        Pace::Pause | Pace::Light => 2,
+        Pace::Normal => cores / 2,
+        Pace::Full => cores * 4 / 5,
+    }
+    .clamp(2, 32);
+    cap.map_or(n, |c| n.min(c.max(1)))
 }
 
 /// One photo's faces to embed (and, if `detect`, to find first).
@@ -155,11 +238,91 @@ pub(crate) fn process(p: Prepared, embedder: &Embedder) -> Done {
 
 type Job = (Arc<Embedder>, Prepared);
 
+/// How many photos may be worked on at once, changed at any moment by the pace: a thread that has a job waits here until
+/// fewer than that are running. A pace of zero holds every job where it is, with nothing decoded.
+struct Limit {
+    allowed: AtomicUsize,
+    /// The pace the limit was last set for (a [`Pace`] as a number): the pool a photo's parallel work uses.
+    pace: AtomicU8,
+    running: Mutex<usize>,
+    wake: Condvar,
+}
+
+impl Limit {
+    fn new() -> Limit {
+        Limit { allowed: AtomicUsize::new(0), pace: AtomicU8::new(Pace::Normal as u8), running: Mutex::new(0), wake: Condvar::new() }
+    }
+
+    fn set(&self, n: usize, pace: Pace) {
+        self.pace.store(pace as u8, Ordering::Relaxed);
+        self.allowed.store(n, Ordering::Relaxed);
+        self.wake.notify_all();
+    }
+
+    fn pace(&self) -> Pace {
+        Pace::from_u8(self.pace.load(Ordering::Relaxed))
+    }
+
+    /// Wait for a place; the limit is looked at again whenever it changes and at least every 100 ms.
+    fn enter(&self) {
+        let mut running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
+        while *running >= self.allowed.load(Ordering::Relaxed) {
+            running = self.wake.wait_timeout(running, Duration::from_millis(100)).unwrap_or_else(PoisonError::into_inner).0;
+        }
+        *running += 1;
+    }
+
+    fn leave(&self) {
+        let mut running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
+        *running = running.saturating_sub(1);
+        drop(running);
+        self.wake.notify_one();
+    }
+}
+
+/// The threads a photo's parallel work (decoding, developing a picture) runs on at `pace`: one pool for each of three sizes
+/// ([`pool_threads_for`]), made when first needed, whose idle threads cost nothing. rayon's global pool serves the
+/// interactive work (the loupe, exports) and has no priorities, so scan work queued there would make a slider drag wait
+/// behind it; here a light scan can use only two threads however large the machine is.
+fn scan_pool(pace: Pace) -> Option<&'static rayon::ThreadPool> {
+    static LIGHT: std::sync::OnceLock<Option<rayon::ThreadPool>> = std::sync::OnceLock::new();
+    static NORMAL: std::sync::OnceLock<Option<rayon::ThreadPool>> = std::sync::OnceLock::new();
+    static FULL: std::sync::OnceLock<Option<rayon::ThreadPool>> = std::sync::OnceLock::new();
+    let (cell, pace) = match pace {
+        Pace::Pause | Pace::Light => (&LIGHT, Pace::Light),
+        Pace::Normal => (&NORMAL, Pace::Normal),
+        Pace::Full => (&FULL, Pace::Full),
+    };
+    cell.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(pool_threads_for(cores(), pace, cap_from_env()))
+            .thread_name(move |i| format!("lightcraft-faces-{}-{i}", pace as u8))
+            .build()
+            .ok()
+    })
+    .as_ref()
+}
+
+/// Run one photo on the pool for the pace, so its parallel parts stay there.
+///
+/// It must NOT wait at the memory gate ([`crate::memory::work_gate`], which background decodes do): a job running on a
+/// pool thread that waits inside a nested rayon call can pick up another job to run on top of itself, and if that one waits
+/// for memory the first holds, neither can finish (seen as a few photos that never come back). The memory a scan may use is
+/// instead limited by how many photos run at once ([`memory_workers`]); its decodes count as interactive ones at the gate,
+/// which never wait.
+fn process_in_background(prepared: Prepared, embedder: &Embedder, pace: Pace) -> Done {
+    let work = || process(prepared, embedder);
+    match scan_pool(pace) {
+        Some(pool) => pool.install(work),
+        None => work(),
+    }
+}
+
 /// Threads that run [`process`] for the jobs they are given, each on one photo at a time.
 pub(crate) struct Worker {
     jobs: Sender<Job>,
     done: Receiver<Done>,
-    threads: usize,
+    limit: Arc<Limit>,
 }
 
 impl Worker {
@@ -167,16 +330,20 @@ impl Worker {
         let (jobs, job_rx) = channel::<Job>();
         let (done_tx, done) = channel::<Done>();
         let job_rx = Arc::new(Mutex::new(job_rx));
+        let limit = Arc::new(Limit::new());
         let mut started = 0;
-        for i in 0..threads.clamp(1, 16) {
-            let (rx, tx) = (job_rx.clone(), done_tx.clone());
+        for i in 0..threads.clamp(1, MAX_WORKERS) {
+            let (rx, tx, limit) = (job_rx.clone(), done_tx.clone(), limit.clone());
             let spawned = std::thread::Builder::new().name(format!("lightcraft-faces-{i}")).spawn(move || {
                 loop {
                     // the lock is held only while waiting for a job, never while working on one; the threads end when
                     // the session (the only sender) is dropped
                     let next = rx.lock().unwrap_or_else(PoisonError::into_inner).recv();
                     let Ok((embedder, prepared)) = next else { break };
-                    if tx.send(process(prepared, &embedder)).is_err() {
+                    limit.enter();
+                    let done = process_in_background(prepared, &embedder, limit.pace());
+                    limit.leave();
+                    if tx.send(done).is_err() {
                         break;
                     }
                 }
@@ -185,12 +352,12 @@ impl Worker {
                 started += 1;
             }
         }
-        (started > 0).then_some(Worker { jobs, done, threads: started })
+        (started > 0).then_some(Worker { jobs, done, limit })
     }
 
-    /// How many photos can be worked on at once.
-    pub fn threads(&self) -> usize {
-        self.threads
+    /// How many photos may be worked on at once from now on (what is running is not interrupted).
+    pub fn allow(&self, n: usize, pace: Pace) {
+        self.limit.set(n, pace);
     }
 
     pub fn submit(&self, embedder: Arc<Embedder>, prepared: Prepared) -> bool {
@@ -208,13 +375,91 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_eighth_of_the_threads_between_one_and_three_unless_told_otherwise() {
-        assert_eq!([1, 2, 4, 8, 12, 16, 32, 128].map(|c| threads_for(c, None)), [1, 1, 1, 1, 1, 2, 3, 3]);
-        assert_eq!(threads_for(32, Some("3")), 3);
-        assert_eq!(threads_for(32, Some(" 2 ")), 2);
-        // an override is kept sane, and rubbish is ignored
-        assert_eq!((threads_for(4, Some("0")), threads_for(4, Some("999"))), (1, 16));
-        assert_eq!((threads_for(32, Some("many")), threads_for(32, Some("-1")), threads_for(32, Some(""))), (3, 3, 3));
+    fn the_pace_sets_how_much_of_the_machine_the_scan_may_use() {
+        use Pace::*;
+        // a 32-thread desktop: nothing while the user works, one photo around them, half when idle, most when watched
+        assert_eq!([Pause, Light, Normal, Full].map(|p| workers_for(32, p, None)), [0, 1, 16, 24]);
+        assert_eq!([Pause, Light, Normal, Full].map(|p| workers_for(8, p, None)), [0, 1, 4, 6]);
+        assert_eq!([Pause, Light, Normal, Full].map(|p| workers_for(4, p, None)), [0, 1, 2, 3]);
+        // small machines still get one worker (except while paused)
+        assert_eq!([Pause, Light, Normal, Full].map(|p| workers_for(1, p, None)), [0, 1, 1, 1]);
+        assert_eq!(workers_for(0, Full, None), 1);
+        assert_eq!(workers_for(10_000, Full, None), MAX_WORKERS);
+        // a limit set by the user caps every pace, and is itself kept sane
+        assert_eq!([Light, Normal, Full].map(|p| workers_for(32, p, Some(3))), [1, 3, 3]);
+        assert_eq!((workers_for(32, Full, Some(0)), workers_for(32, Pause, Some(5))), (1, 0));
+        assert_eq!(workers_for(32, Full, Some(usize::MAX)), 24);
+    }
+
+    #[test]
+    fn the_limit_holds_threads_to_the_pace_and_can_change_at_any_moment() {
+        let limit = Arc::new(Limit::new());
+        let (now, peak) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let started = Arc::new(AtomicUsize::new(0));
+        let threads: Vec<_> = (0..6)
+            .map(|_| {
+                let (limit, now, peak, started) = (limit.clone(), now.clone(), peak.clone(), started.clone());
+                std::thread::spawn(move || {
+                    limit.enter();
+                    started.fetch_add(1, Ordering::SeqCst);
+                    let n = now.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(n, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(40));
+                    now.fetch_sub(1, Ordering::SeqCst);
+                    limit.leave();
+                })
+            })
+            .collect();
+        // paused: nothing starts
+        std::thread::sleep(Duration::from_millis(150));
+        assert_eq!(started.load(Ordering::SeqCst), 0);
+        // two at a time, never more
+        limit.set(2, Pace::Normal);
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(started.load(Ordering::SeqCst) >= 2);
+        // raised, the rest go; every thread finishes
+        limit.set(6, Pace::Full);
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert_eq!(started.load(Ordering::SeqCst), 6);
+        assert!(peak.load(Ordering::SeqCst) >= 2, "it did run in parallel");
+        assert_eq!(*limit.running.lock().unwrap(), 0, "every place was given back");
+    }
+
+    #[test]
+    fn memory_limits_the_workers_and_a_users_limit_replaces_it() {
+        // the default budget (a quarter of the RAM, at most 1.5 GiB) holds a few photos in progress, not dozens
+        assert!((1..=8).contains(&memory_workers()), "{}", memory_workers());
+        assert!(target_workers(Pace::Full) >= 1);
+        assert_eq!(target_workers(Pace::Pause), 0);
+    }
+
+    #[test]
+    fn pace_names_are_forgiving() {
+        assert_eq!(["pause", "light", "normal", "full"].map(|n| Pace::parse(Some(n))), [Pace::Pause, Pace::Light, Pace::Normal, Pace::Full]);
+        assert_eq!(
+            (Pace::parse(None), Pace::parse(Some("")), Pace::parse(Some("FULL")), Pace::parse(Some("turbo"))),
+            (Pace::Normal, Pace::Normal, Pace::Normal, Pace::Normal)
+        );
+    }
+
+    #[test]
+    fn the_scans_parallel_work_gets_a_pool_the_size_of_the_pace() {
+        use Pace::*;
+        assert_eq!([Pause, Light, Normal, Full].map(|p| pool_threads_for(32, p, None)), [2, 2, 16, 25]);
+        assert_eq!([Light, Normal, Full].map(|p| pool_threads_for(8, p, None)), [2, 4, 6]);
+        assert_eq!([Light, Normal, Full].map(|p| pool_threads_for(2, p, None)), [2, 2, 2]);
+        assert_eq!(pool_threads_for(10_000, Full, None), 32);
+        assert_eq!([Light, Normal, Full].map(|p| pool_threads_for(32, p, Some(3))), [2, 3, 3]);
+        // the pools exist and are the sizes asked for
+        for pace in [Light, Normal, Full] {
+            let pool = scan_pool(pace).expect("a pool can be built");
+            assert_eq!(pool.install(rayon::current_num_threads), pool_threads_for(cores(), pace, cap_from_env()));
+        }
+        // a paused scan has the light pool; the pace is remembered as a number and read back
+        assert_eq!(scan_pool(Pause).map(|p| p as *const _), scan_pool(Light).map(|p| p as *const _));
+        assert_eq!([0, 1, 2, 3, 9].map(Pace::from_u8), [Pause, Light, Normal, Full, Normal]);
     }
 
     #[test]

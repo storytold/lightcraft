@@ -100,7 +100,7 @@ mod imp {
     use super::super::face_detect::{LABEL, MARK};
     use super::super::face_models::{finish_downloads, installed_models, read_settings};
     use super::Similar;
-    use crate::faces_worker::{Done, EDGE, Prepared, Worker, process, scan_threads};
+    use crate::faces_worker::{Done, EDGE, PREFETCH, Pace, Prepared, Worker, max_workers, process, target_workers};
     use crate::{Result, Session};
 
     /// Defaults for suggestions, until a model's own threshold is known.
@@ -422,8 +422,12 @@ mod imp {
     /// `faces.pump`: cheap to call every frame. Takes in what the background worker has finished and, when it is idle,
     /// hands it the next photo with faces to embed. Does nothing (and says so) until recognition is switched on in
     /// Settings with a model chosen.
-    pub fn pump(s: &mut Session, _: &Value) -> Result<Value> {
+    pub fn pump(s: &mut Session, p: &Value) -> Result<Value> {
         const C: &str = "faces.pump";
+        // how hard the scan may work now, from what the user is doing (the app says); nothing new is started while paused,
+        // and what is already running finishes
+        let pace = Pace::parse(p.get("pace").and_then(Value::as_str));
+        let target = target_workers(pace);
         // a model that has finished downloading is installed and switched on here, whether or not recognition was on
         finish_downloads(s);
         let enabled = s.face_models_dir.clone().is_some_and(|d| enabled_cached(s, &d));
@@ -456,13 +460,17 @@ mod imp {
             s.faces.queue = queue;
             s.faces.queue_stamp = Some(s.catalog.revision);
         }
-        let threads = s.faces.worker.as_ref().map_or_else(scan_threads, Worker::threads);
-        while s.faces.in_flight.len() < threads {
+        if target > 0 && s.faces.worker.is_none() && !s.faces.queue.is_empty() {
+            s.faces.worker = Worker::start(max_workers());
+        }
+        // the workers are allowed `target` photos at once; a couple more wait behind them, so a worker that finishes has its
+        // next photo at once instead of waiting for the next frame to hand it one
+        if let Some(w) = &s.faces.worker {
+            w.allow(target, pace);
+        }
+        while target > 0 && s.faces.in_flight.len() < target + PREFETCH {
             let Some(id) = s.faces.queue.pop() else { break };
             let Some(job) = prepare(s, id, true) else { continue };
-            if s.faces.worker.is_none() {
-                s.faces.worker = Worker::start(threads);
-            }
             if s.faces.worker.as_ref().is_some_and(|w| w.submit(embedder.clone(), job)) {
                 s.faces.in_flight.insert(id);
             } else {
@@ -475,7 +483,7 @@ mod imp {
             "pendingPhotos": s.faces.queue.len() + s.faces.in_flight.len(),
             "indexedFaces": s.faces.index.len(),
             "searchedPhotos": s.faces.scanned.len(),
-            "threads": threads,
+            "workers": target,
             "embedded": embedded,
         }))
     }
@@ -778,7 +786,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Index Faces in the Background",
             [],
             None,
-            "{} → {active, inFlight, pendingPhotos, indexedFaces} — cheap to call every frame: takes in what the background worker has finished and gives it the next photo; inactive until face recognition is on in Settings with a model chosen",
+            "{pace?: pause | light | normal | full} → {active, inFlight, pendingPhotos, indexedFaces, searchedPhotos, workers} — cheap to call every frame: takes in what the background workers have finished and gives them the next photos, as many at once as the pace allows (none when paused, one when light, half the machine's threads when normal, four fifths when full); inactive until face recognition is on in Settings with a model chosen",
             super::always,
             imp::pump
         ),

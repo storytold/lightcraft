@@ -106,11 +106,26 @@ Turning recognition on starts a scan of the whole library, once, in the backgrou
   again. These boxes are LightCraft's own bookkeeping: not an undo step, never written to a sidecar.
 - Photos you have named faces in go first, then the rest. Raw files are read through the camera's embedded preview (much
   faster than decoding the raw); everything else is rendered at 2048 pixels.
-- It runs on one to three worker threads (an eighth of the processor's threads; `LIGHTCRAFT_FACE_THREADS` sets it), each of
-  which holds a decoded photo of about 250 MB while it works. Nothing is throttled otherwise: it simply uses those threads
-  until it is done. On a 32-thread desktop it does about 6 photos a second (2.5 with one worker and decoding every raw);
-  Settings ▸ Faces shows how many photos are left. The first scan of a large library takes a while (10,000 photos: roughly
-  half an hour); after that only new photos are looked at.
+- **How hard it works follows what you are doing.** The app tells the engine on every call to `faces.pump`, which is made
+  about 20 times a second while there is work and a few times a minute otherwise (the window is not redrawn for it at any
+  other time). Dragging, typing or scrolling: nothing new is started. The pointer moving, or the window minimized or behind
+  another app: **light**, one photo at a time on two threads. Idle for three seconds: **normal**, half of the processor's
+  threads. Idle and looking at the progress (Settings ▸ Faces, or the People view): **full**, four fifths. Photos already
+  running are never interrupted, and a change of pace takes effect at once.
+- **Threads and photos.** Most of a photo's cost is its parallel work (decoding, developing the picture), so the pace sets the
+  size of a pool of threads for that work: two, half the machine, four fifths. The scan has pools of its own, not the one the
+  loupe and exports use (which has no priorities), so a slider drag never queues behind a scan. Measured on a 32-thread
+  desktop with 4 photos at once: about 6.4 photos a second at full pace (a pool of 25 threads), 6.0 at normal (16) and 1.8
+  when light (2 threads).
+- **Memory** limits the number of photos at once as much as the processor does: a photo in progress holds about 180 MB
+  (peak memory grew by that much per extra worker), so at most half of the memory budget (a quarter of the RAM, at most
+  1.5 GiB, unless `LIGHTCRAFT_MEMORY_MB` says otherwise) is given to them: about four photos at once on a default setup,
+  whatever the core count. Eight at once was not much faster and needed about twice the memory (a 2.0 GB peak against
+  1.1 GB). `LIGHTCRAFT_FACE_THREADS` replaces these limits with a number of your own. A couple more photos wait behind
+  the running ones, so a worker that finishes has its next photo at once.
+- **Speed.** A mixed raw and JPEG library of 184 photos (the raws read through their embedded previews, 73 photos searched
+  for faces) took about 29 seconds on that machine at full pace: roughly 6 photos a second, so the first scan of 10,000 photos
+  is a matter of half an hour; after that only new photos are looked at. Settings ▸ Faces shows how many are left.
 - Opening another library starts a fresh scan state; nothing learned about one library is used in another.
 
 ### A person's page
