@@ -46,7 +46,7 @@ server share it.
 
 **Photo ▸ Detect Faces** (`faces.detect`) runs the bundled detector on the selected photos and adds what it finds as
 unnamed face boxes, in one undo step. A new run replaces earlier detections; boxes that came from XMP, or that you drew or
-named, are never touched, and no sidecar is written. It looks at the photo upright and uncropped with default settings,
+named, are never touched (and a face that already has one is not boxed a second time), and no sidecar is written. It looks at the photo upright and uncropped with default settings,
 so your edits and crops do not matter. `apply: false` only reports. It finds faces of about 10 pixels and up in a
 640-pixel version of the photo (so very small faces in a large group photo can be missed; looking at tiles is planned).
 The detector's output matches OpenCV's own YuNet on a 45-photo public-domain test set (97 of 99 faces found by both,

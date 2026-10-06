@@ -13,6 +13,7 @@ pub mod curves;
 mod develop;
 mod edit;
 mod export;
+mod face_detect;
 mod face_models;
 pub mod filters;
 pub mod keywords;
@@ -142,6 +143,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(metadata::specs());
         v.extend(filters::specs());
         v.extend(face_models::specs());
+        v.extend(face_detect::specs());
         v
     })
 }
