@@ -864,6 +864,9 @@ pub struct Caches {
     pub faces_next_pump: f64,
     /// When the user last dragged, typed or scrolled, and when they last moved the pointer (egui time).
     pub last_input: f64,
+    /// The pace the face scan was last given, and whether the window was in front then (for `ui.inspect`).
+    pub faces_pace: &'static str,
+    pub faces_in_front: bool,
     pub last_move: f64,
     /// Name suggestions for the photo in the loupe: (photo, catalog revision, faces indexed, suggestions by region).
     pub face_hints: Option<(u64, u64, u64, std::sync::Arc<panels::faces::Hints>)>,

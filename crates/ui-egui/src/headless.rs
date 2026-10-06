@@ -569,6 +569,20 @@ mod tests {
         assert_eq!(h.request("engine.execute", json!({"command": "view.person", "params": {"name": "  "}}), t)["ok"], false);
     }
 
+    /// `ui.inspect` says how hard the face scan is allowed to work and whether the window counts as in front, so a slow
+    /// scan can be told from a stuck one.
+    #[test]
+    fn inspect_reports_the_face_scan_pace() {
+        let mut h = demo([1000.0, 700.0]);
+        let t = Duration::from_secs(10);
+        h.settle(SETTLE);
+        h.step();
+        let r = h.request("ui.inspect", json!({}), t);
+        let scan = &r["result"]["faceScan"];
+        assert!(["pause", "light", "normal", "full"].contains(&scan["pace"].as_str().unwrap_or("")), "{scan}");
+        assert!(scan["focused"].is_boolean() && scan["pending"].is_u64() && scan["indexed"].is_u64(), "{scan}");
+    }
+
     /// Profile browser: live variant thumbnails, hover previews in the loupe without touching the
     /// photo or its history, click applies, the star toggles the favourite.
     #[test]

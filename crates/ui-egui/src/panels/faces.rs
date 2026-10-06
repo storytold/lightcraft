@@ -19,14 +19,12 @@ use crate::widgets::register;
 /// How hard the background scan may work (the engine's `faces.pump` pace), from what the user is doing: nothing new
 /// while they drag, type or scroll; one photo at a time while they are around or the window is out of sight; half the
 /// machine once they have been idle for a few seconds; most of it while they are looking at the scan's progress.
-fn scan_pace(app: &LightcraftApp, ctx: &egui::Context, now: f64) -> &'static str {
+fn scan_pace(app: &LightcraftApp, ctx: &egui::Context, now: f64) -> (&'static str, bool) {
     let (focused, minimized) = ctx.input(|i| (i.focused, i.raw.viewports.get(&i.raw.viewport_id).and_then(|v| v.minimized).unwrap_or(false)));
-    pace_for(
-        focused && !minimized,
-        now - app.caches.last_input,
-        now - app.caches.last_move,
-        matches!(&app.ui.dialog, Some(crate::state::Dialog::Settings { tab }) if tab == "faces") || app.ui.view == crate::state::ViewMode::People,
-    )
+    let in_front = focused && !minimized;
+    let watching =
+        matches!(&app.ui.dialog, Some(crate::state::Dialog::Settings { tab }) if tab == "faces") || app.ui.view == crate::state::ViewMode::People;
+    (pace_for(in_front, now - app.caches.last_input, now - app.caches.last_move, watching), in_front)
 }
 
 /// The pace for a window that is in front (or not), `worked` seconds after the user last dragged, typed or scrolled and
@@ -536,7 +534,9 @@ pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
     if now < app.caches.faces_next_pump {
         return;
     }
-    let pace = scan_pace(app, ctx, now);
+    let (pace, in_front) = scan_pace(app, ctx, now);
+    app.caches.faces_pace = pace;
+    app.caches.faces_in_front = in_front;
     let Ok(v) = app.session.execute("faces.pump", &json!({"pace": pace})) else { return };
     app.caches.faces_active = v["active"] == true;
     app.caches.faces_indexed = v["indexedFaces"].as_u64().unwrap_or(0);
