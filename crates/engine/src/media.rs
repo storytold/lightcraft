@@ -26,7 +26,7 @@ use lightcraft_raster::{Histogram, Rgb32f, Rgba8};
 use serde::{Deserialize, Serialize};
 
 /// Bump when the pipeline's output changes, to invalidate cached thumbnails.
-pub const RENDER_CACHE_VERSION: u64 = 8;
+pub const RENDER_CACHE_VERSION: u64 = 9;
 
 /// Thumbnails render at one of these long edges (so window/cell size changes reuse the cache).
 pub const THUMB_SIZES: [usize; 4] = [128, 256, 384, 512];

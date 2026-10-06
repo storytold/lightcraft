@@ -41,6 +41,10 @@ fn camera_tone_and_relative_wb() {
     s.wb.mode = WbMode::Custom;
     s.wb.temp = 8000.0;
     check("camera tone edited", &src, &info, &s, &RenderRequest::fit(320, 240));
+    // a DNG profile tone curve: per channel, hue-preserving
+    let info = SourceInfo { camera_tone: Some(curve.per_channel()), relative_wb: false, ..info };
+    check("camera tone per channel edited", &src, &info, &s, &RenderRequest::fit(320, 240));
+    check("camera tone per channel neutral", &src, &info, &DevelopSettings::default(), &RenderRequest::fit(320, 240));
 }
 
 fn scene(i: usize, w: usize, h: usize) -> Arc<Rgb32f> {

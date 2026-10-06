@@ -8,6 +8,9 @@
 - Luminar looks: `.lmp` files and `.mplumpack` collections import as presets (grouped by collection); the sliders
   with a counterpart here come along, the rest is listed.
 - 23 new built-in presets: Portrait, Landscape, Urban, Food, Seasons, Vintage and B&W toners.
+- iPhone ProRAW opens looking like the iPhone's own photo instead of very dark: LightCraft applies the local tone map
+  ProRAW files carry (the DNG gain table map), and applies a DNG's own tone curve to colour, not only brightness.
+  DNGs that LightCraft writes keep the gain table map.
 
 ### Reliability
 - LightCraft no longer crashes at launch on Windows PCs whose Vulkan driver is broken (issue #136, e.g. some Intel UHD
