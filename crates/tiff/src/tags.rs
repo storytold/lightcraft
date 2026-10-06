@@ -179,6 +179,12 @@ pub const FORWARD_MATRIX_3: u16 = 52532;
 pub const ILLUMINANT_DATA_1: u16 = 52533;
 pub const ILLUMINANT_DATA_2: u16 = 52534;
 pub const ILLUMINANT_DATA_3: u16 = 52535;
+// DNG 1.6 semantic masks (spec chapter 4, "Semantic Masks")
+pub const SEMANTIC_NAME: u16 = 52526;
+pub const SEMANTIC_INSTANCE_ID: u16 = 52528;
+pub const MASK_SUB_AREA: u16 = 52536;
+/// NewSubFileType of a semantic mask IFD.
+pub const SUBFILE_SEMANTIC_MASK: u32 = 0x10004;
 
 // --- Compression codes (TIFF 6.0, DNG, and widely used registrations)
 pub mod compression {
@@ -206,4 +212,6 @@ pub mod photometric {
     pub const YCBCR: u16 = 6;
     pub const CFA: u16 = 32803;
     pub const LINEAR_RAW: u16 = 34892;
+    /// DNG 1.6 semantic mask.
+    pub const MASK: u16 = 52527;
 }

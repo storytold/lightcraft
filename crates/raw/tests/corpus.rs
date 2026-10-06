@@ -232,3 +232,30 @@ fn corpus_adobe_dngs_carry_profile_looks() {
     }
     eprintln!("{seen} Adobe-converted DNGs checked");
 }
+
+/// iPhone ProRAW (`corpus/apple/IMG_1361.DNG`, iPhone 12 Pro, CC0 from raw.pixls.us) carries a
+/// lossy-JPEG sky matte at half resolution as a DNG semantic mask: it decodes, and it is a sky. The
+/// matte is stored like the raw (landscape; the photo is shown rotated 90° clockwise), so the sky
+/// is on its left and the lake and shore on its right.
+#[test]
+fn corpus_proraw_sky_matte() {
+    let path = corpus_root().join("apple/IMG_1361.DNG");
+    let Ok(bytes) = std::fs::read(&path) else {
+        eprintln!("skip: {} absent", path.display());
+        return;
+    };
+    let t0 = Instant::now();
+    let masks = lightcraft_raw::semantic_masks(&bytes);
+    eprintln!("semantic masks read in {:.1} ms", t0.elapsed().as_secs_f64() * 1e3);
+    let names: Vec<&str> = masks.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(names, ["urn:com:apple:photo:2020:aux:semanticskymatte"]);
+    let m = &masks[0];
+    assert_eq!((m.width, m.height, m.sub_area), (2016, 1512, None));
+    let cols = |x0: usize, x1: usize| {
+        let sum: f64 = (0..m.height).flat_map(|y| m.data[y * m.width + x0..y * m.width + x1].iter()).map(|&v| v as f64 / 65535.0).sum();
+        sum / ((x1 - x0) * m.height) as f64
+    };
+    let (left, right) = (cols(0, 100), cols(1916, 2016));
+    eprintln!("sky matte: left columns {left:.3}, right columns {right:.3}");
+    assert!(left > 0.5 && right < 0.02, "left {left}, right {right}");
+}

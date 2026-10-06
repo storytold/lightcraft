@@ -225,7 +225,8 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
         };
         let xy = lightcraft_raw::color::as_shot_white_xy(&raw);
         let t = lightcraft_raw::color::camera_transform(&raw, xy);
-        let camera_look = crate::camera_preview::fit_preview(&raw, &bytes, &t);
+        // the source's segmentation mattes (DNG semantic masks), read while the preview is fitted
+        let (camera_look, mattes) = rayon::join(|| crate::camera_preview::fit_preview(&raw, &bytes, &t), || dng_mattes(&bytes, &raw));
         drop(bytes);
         // Embedded lens corrections are applied by the pipeline ("Enable Profile Corrections"), not baked in.
         let lens = embedded_lens(&raw.info());
@@ -288,13 +289,49 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
         let relative = raw.format == lightcraft_raw::RawFormat::Arw && t.matrix_is_fallback;
         let camera_tone = camera_look.map(|p| p.tone).or_else(|| raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve));
         let (temp, tint) = if relative { (6500.0, 0.0) } else { (temp.round(), tint.round()) };
-        return Ok((img, SourceInfo { raw: true, as_shot_temp: temp, as_shot_tint: tint, lens, relative_wb: relative, camera_tone }));
+        return Ok((img, SourceInfo { raw: true, as_shot_temp: temp, as_shot_tint: tint, lens, relative_wb: relative, camera_tone, mattes }));
     }
     let d = lightcraft_codecs::decode(&bytes, lightcraft_codecs::DecodeOptions::fit(max_edge as u32, max_edge as u32)).map_err(|e| e.to_string())?;
     drop(bytes);
     let img = d.to_working();
     let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
     Ok((img.into_oriented(Orientation::from_exif(d.orientation)), SourceInfo::default()))
+}
+
+/// The semantic masks of a DNG that AI masks understand, over the developed image (default crop,
+/// oriented like it). Person mattes without a confidently selected pixel are left out (the
+/// Subject mask then falls back to its heuristic); a sky matte counts even when empty (no sky).
+fn dng_mattes(bytes: &[u8], raw: &lightcraft_raw::RawImage) -> Option<Arc<lightcraft_pipeline::masks::Mattes>> {
+    use lightcraft_pipeline::masks::{MatteKind, Mattes};
+    if raw.format != lightcraft_raw::RawFormat::Dng {
+        return None;
+    }
+    let mut mattes = Mattes::default();
+    for m in lightcraft_raw::semantic_masks(bytes) {
+        let Some(kind) = matte_kind(&m.name) else { continue };
+        let Some(img) = m.developed(raw.active_area, raw.crop) else { continue };
+        if kind != MatteKind::Sky && !img.data.iter().any(|&v| v >= 128) {
+            continue;
+        }
+        mattes.push(kind, img.into_oriented(raw.orientation));
+    }
+    (!mattes.is_empty()).then(|| Arc::new(mattes))
+}
+
+/// What a semantic mask selects, by its `SemanticName`: Apple's (iPhone ProRAW) are named after
+/// their auxiliary image types, `urn:com:apple:photo:<year>:aux:<type>`. Other names: `None`.
+fn matte_kind(name: &str) -> Option<lightcraft_pipeline::masks::MatteKind> {
+    use lightcraft_pipeline::masks::MatteKind::*;
+    let kind = name.strip_prefix("urn:com:apple:photo:")?.rsplit(':').next()?;
+    Some(match kind {
+        "semanticskymatte" => Sky,
+        "semanticskinmatte" => Skin,
+        "semantichairmatte" => Hair,
+        "semanticteethmatte" => Teeth,
+        "semanticglassesmatte" => Glasses,
+        "portraiteffectsmatte" => Person,
+        _ => return None,
+    })
 }
 
 /// A DNG `ProfileToneCurve` (linear in, linear out, 1.0 = white after exposure compensation) as the
@@ -446,6 +483,70 @@ mod tests {
         };
         let (dim, _) = load_bytes(&lightcraft_raw::write_dng(&raw, &Default::default()).unwrap(), 64).unwrap();
         assert!((mean(&dim) / mean(&before) - 0.5).abs() < 0.02, "{} vs {}", mean(&dim), mean(&before));
+    }
+
+    /// iPhone ProRAW-style semantic masks drive the Sky mask: Apple's sky matte (here the right
+    /// half of the sensor, i.e. the bottom of the photo once turned 90° clockwise — where the sky
+    /// heuristic would never look) is used; a matte with an unknown name is ignored.
+    #[test]
+    fn dng_sky_matte_drives_the_sky_mask() {
+        use lightcraft_develop::{DevelopSettings, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
+        use lightcraft_pipeline::{RenderRequest, render};
+        use lightcraft_tiff::tags::{self as t, photometric};
+        use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+        let (w, h) = (16u32, 8u32);
+        let image = |ifd: &mut IfdBuilder, w: u32, h: u32, cpp: u16, bits: u16, data: Vec<u8>| {
+            ifd.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
+            ifd.set(t::IMAGE_LENGTH, Value::Long(vec![h]));
+            ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![bits; cpp as usize]));
+            ifd.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![cpp]));
+            ifd.set(t::COMPRESSION, Value::Short(vec![1]));
+            ifd.set_image(ImageData::Strips { rows_per_strip: h, strips: vec![data] });
+        };
+        let mut raw = IfdBuilder::new();
+        raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
+        raw.set(t::PHOTOMETRIC, Value::Short(vec![photometric::LINEAR_RAW]));
+        image(&mut raw, w, h, 3, 16, 12000u16.to_le_bytes().repeat((w * h * 3) as usize));
+        let matte = |name: &str, right: bool| {
+            let mut m = IfdBuilder::new();
+            m.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![t::SUBFILE_SEMANTIC_MASK]));
+            m.set(t::PHOTOMETRIC, Value::Short(vec![photometric::MASK]));
+            m.set(t::SEMANTIC_NAME, Value::Ascii(name.into()));
+            image(&mut m, w / 2, h / 2, 1, 8, (0..w / 2 * h / 2).map(|i| if (i % (w / 2) >= w / 4) == right { 255 } else { 0 }).collect());
+            m
+        };
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![1]));
+        ifd0.set(t::DNG_VERSION, Value::Byte(vec![1, 6, 0, 0]));
+        ifd0.set(t::MAKE, Value::Ascii("Apple".into()));
+        ifd0.set(t::ORIENTATION, Value::Short(vec![6]));
+        ifd0.set(t::COLOR_MATRIX_1, Value::SRational(vec![(1, 1), (0, 1), (0, 1), (0, 1), (1, 1), (0, 1), (0, 1), (0, 1), (1, 1)]));
+        ifd0.set(t::CALIBRATION_ILLUMINANT_1, Value::Short(vec![21]));
+        ifd0.set(t::PHOTOMETRIC, Value::Short(vec![photometric::RGB]));
+        image(&mut ifd0, 4, 2, 3, 8, vec![128; 24]);
+        ifd0.add_sub_ifd(raw);
+        ifd0.add_sub_ifd(matte("urn:com:apple:photo:2020:aux:semanticskymatte", true));
+        ifd0.add_sub_ifd(matte("urn:com:apple:photo:2020:aux:semanticsomethingelse", false));
+        let bytes = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+
+        let (img, info) = load_bytes(&bytes, 64).unwrap();
+        assert_eq!((img.width, img.height), (8, 16));
+        assert!(info.mattes.is_some());
+        let sky = Mask {
+            components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Sky }],
+            adjust: LocalAdjustments { exposure: -3.0, ..Default::default() },
+            ..Default::default()
+        };
+        let s = DevelopSettings { masks: vec![sky], ..Default::default() };
+        let req = RenderRequest::fit(8, 16);
+        let green = |s: &DevelopSettings, info: &SourceInfo, y: usize| render(&img, info, s, &req).image.get(4, y)[1] as i32;
+        let plain = DevelopSettings::default();
+        assert_eq!(green(&s, &info, 2), green(&plain, &info, 2), "no sky at the top");
+        assert!(green(&s, &info, 13) + 40 < green(&plain, &info, 13), "the sky at the bottom is darkened");
+        // without the matte the heuristic looks at the top of the frame instead
+        let heuristic = SourceInfo { mattes: None, ..info.clone() };
+        assert!(green(&s, &heuristic, 2) < green(&plain, &heuristic, 2));
+        assert_eq!(green(&s, &heuristic, 13), green(&plain, &heuristic, 13));
     }
 
     #[test]
