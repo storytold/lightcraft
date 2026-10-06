@@ -3,9 +3,10 @@
 //!
 //! Adding a model is: pick or drop a `.onnx` file → the engine inspects it (`faces.models.inspect`) →
 //! this dialog shows what it is and its terms → the user ticks "I accept" → `faces.models.install`.
-//! LightCraft fetches a model only when the user presses Download on a model it has a pinned address for
-//! (`faces.models.download`: checked against its size and SHA-256, then this same dialog opens); "Open page"
-//! opens the model's own page in the browser for anything else.
+//! LightCraft fetches a model only when the user presses Download on a model it has a pinned address for: the
+//! same dialog shows its terms first, and accepting them downloads it (`faces.models.download`: checked against its
+//! size and SHA-256), installs it, starts using it and switches recognition on, with no further question. "Open
+//! page" opens the model's own page in the browser for anything else.
 
 use egui::RichText;
 use serde_json::{Value, json};
@@ -95,7 +96,11 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         "Off by default. LightCraft already reads the face names other apps wrote into your photos; this is for models that suggest who is in a photo. Everything stays on your computer; the only thing LightCraft ever fetches from the internet is a model you press Download for.",
     );
     if list["runtime"].as_bool() == Some(true) {
-        hint(ui, t, "Each model is tested when you add it, and runs on your computer's processor.");
+        hint(
+            ui,
+            t,
+            "Pressing Download (or adding a model file) installs the model, tests it, starts using it and turns recognition on. It runs on your computer's processor.",
+        );
         if on && list["embedder"].is_null() {
             hint(ui, t, "Choose a recognition model below (Use) to start suggesting names.");
         } else if on && app.caches.faces_active {
@@ -127,7 +132,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     heading(ui, t, "Recognition models");
     for m in all.iter().filter(|m| m["role"] == "embedder") {
         let dl = downloads.iter().find(|d| d["id"] == m["id"]);
-        model_row(app, ui, t, m, dl);
+        model_row(app, ui, t, m, dl, list["runtime"].as_bool() == Some(true));
     }
     ui.add_space(6.0);
     ui.horizontal(|ui| {
@@ -141,11 +146,12 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
 }
 
-fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, dl: Option<&Value>) {
+fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, dl: Option<&Value>, can_run: bool) {
     let id = m["id"].as_str().unwrap_or("").to_string();
     let (installed, selected) = (m["installed"].as_bool() == Some(true), m["selected"].as_bool() == Some(true));
     let dl_state = if installed { None } else { dl.and_then(|d| d["state"].as_str()) };
-    let host = m["downloadHost"].as_str().unwrap_or("").to_string();
+    // a build that cannot run recognition models has no use for a download
+    let host = if can_run { m["downloadHost"].as_str().unwrap_or("").to_string() } else { String::new() };
     egui::Frame::NONE.inner_margin(egui::Margin::symmetric(0, 3)).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
@@ -186,7 +192,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                         register(ui.ctx(), format!("faces:progress:{id}"), bar.rect);
                     }
                     (Some("done"), _) => {
-                        ui.label(RichText::new("Downloaded and checked. Review its terms to install it.").font(t.font(11.5)).color(t.text_dim));
+                        ui.label(RichText::new("Downloaded and checked. Installing…").font(t.font(11.5)).color(t.text_dim));
                     }
                     (Some("failed"), Some(d)) => {
                         let why = sentence(d["error"].as_str().unwrap_or("The download failed"));
@@ -223,21 +229,8 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                                 app.caches.faces_dl_watch.retain(|w| w != &id);
                             }
                         }
-                        Some("done") => {
-                            let path = dl.and_then(|d| d["path"].as_str()).unwrap_or("").to_string();
-                            let r = ui.button("Review terms…");
-                            register(ui.ctx(), format!("faces:review:{id}"), r.rect);
-                            if r.clicked()
-                                && let Err(e) = open_dialog(app, &path)
-                            {
-                                app.toast(ui.ctx(), e);
-                            }
-                            let r = ui.button("Delete").on_hover_text("Throws away the downloaded file");
-                            register(ui.ctx(), format!("faces:deleteDownload:{id}"), r.rect);
-                            if r.clicked() {
-                                let _ = app.run("faces.models.downloadCancel", json!({"id": id}));
-                            }
-                        }
+                        // the engine installs it within a moment; nothing to press
+                        Some("done") => {}
                         _ => {
                             if let Some(url) = m["source"].as_str() {
                                 let r = ui
@@ -251,16 +244,13 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                             if !host.is_empty() {
                                 let label = if dl_state == Some("failed") { "Try again" } else { "Download" };
                                 let tip = format!(
-                                    "Downloads {} from {host}, checks it, then shows you its terms. Nothing else is sent.",
+                                    "Shows the model's terms, then downloads {} from {host}, installs it and starts using it. Nothing else is sent.",
                                     mb(m["sizeBytes"].as_u64())
                                 );
                                 let r = ui.button(label).on_hover_text(tip);
                                 register(ui.ctx(), format!("faces:download:{id}"), r.rect);
                                 if r.clicked() {
-                                    match app.run("faces.models.download", json!({"id": id})) {
-                                        Ok(_) => app.caches.faces_dl_watch.push(id.clone()),
-                                        Err(e) => app.toast(ui.ctx(), e),
-                                    }
+                                    open_download_dialog(app, m);
                                 }
                             }
                         }
@@ -296,6 +286,19 @@ pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info
     if info["alreadyInstalled"] == true {
         ui.label(RichText::new("Already installed. Installing again is harmless.").color(t.text_dim));
     }
+    let download = info["download"].is_string();
+    if download {
+        let host = info["host"].as_str().unwrap_or("its own repository");
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!(
+                    "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, starts using it and turns face recognition on."
+                ))
+                .color(t.text_label),
+            )
+            .wrap(),
+        );
+    }
     let commercial = m["licence"]["commercial"].as_str().unwrap_or("unknown");
     ui.label(RichText::new(licence_line(m)).font(t.semibold(12.5)).color(if commercial == "yes" { t.text } else { t.caution }));
     let notice = m["licence"]["notice"].as_str().unwrap_or("");
@@ -322,7 +325,29 @@ pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info
     }
     ui.add_space(4.0);
     check(ui, "faceModel.accept", accepted, "I have read these terms and accept them for my own use");
-    ui.label(RichText::new("The model is kept on this computer only. LightCraft never uploads or shares it.").font(t.font(11.5)).color(t.text_dim));
+    let closing = if download {
+        "Nothing is fetched until you accept. The model is kept on this computer only; LightCraft never uploads or shares it."
+    } else {
+        "The model is kept on this computer only. LightCraft never uploads or shares it."
+    };
+    ui.label(RichText::new(closing).font(t.font(11.5)).color(t.text_dim));
+}
+
+/// Pressing Download: the model's terms first, in the same dialog as a model file. Accepting them starts the download;
+/// nothing is fetched before.
+fn open_download_dialog(app: &mut LightcraftApp, m: &Value) {
+    let info = json!({
+        "kind": "known",
+        "fileName": m["id"],
+        "sizeBytes": m["sizeBytes"],
+        "model": m,
+        "alreadyInstalled": false,
+        "download": m["id"],
+        "host": m["downloadHost"],
+        "assumptions": [],
+        "reason": null,
+    });
+    app.ui.dialog = Some(crate::state::Dialog::FaceModel { path: String::new(), info, accepted: false });
 }
 
 /// Inspect `path` and open the dialog for it (also what dropping a `.onnx` file on the window does).
@@ -332,13 +357,24 @@ pub fn open_dialog(app: &mut LightcraftApp, path: &str) -> Result<Value, String>
     Ok(Value::Null)
 }
 
-/// The dialog's OK: install the model (the engine refuses without the acceptance).
-pub fn install(app: &mut LightcraftApp, path: &str, accepted: bool) -> Result<Value, String> {
+/// The dialog's OK (the engine refuses without the acceptance): for a download, start it and watch it; for a file,
+/// install it. Either way the model ends up installed, in use, with recognition on.
+pub fn install(app: &mut LightcraftApp, path: &str, info: &Value, accepted: bool) -> Result<Value, String> {
     if !accepted {
         return Err("Tick the box to accept the model's terms first".into());
     }
-    let r = app.run("faces.models.install", json!({"path": path, "acknowledged": true}));
     app.caches.faces_epoch += 1;
+    if let Some(id) = info["download"].as_str() {
+        let r = app.run("faces.models.download", json!({"id": id, "acknowledged": true}));
+        if r.is_ok() {
+            app.caches.faces_dl_watch.push(id.to_string());
+        }
+        return r;
+    }
+    let r = app.run("faces.models.install", json!({"path": path, "acknowledged": true}));
+    if let Ok(v) = &r {
+        app.ui.status = format!("{} is installed and in use: face recognition is on", v["installed"]["name"].as_str().unwrap_or("The model"));
+    }
     r
 }
 
@@ -471,26 +507,22 @@ pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
     ctx.request_repaint_after(std::time::Duration::from_millis(if busy { 50 } else { 1000 }));
 }
 
-/// Which watched downloads to act on: the file to show the licence dialog for (one at a time), and the ids still to
-/// watch (running, or finished but waiting for a free moment to show them).
-fn due(rows: &[Value], watched: Vec<String>, can_show: bool) -> (Option<String>, Vec<String>) {
-    let (mut show, mut keep) = (None, Vec::new());
+/// Sort the watched downloads: those that have been installed (to announce), and those still to watch (running, or
+/// arrived and being installed). A failed or cancelled one is dropped: the model's row in Settings says what happened.
+fn due(rows: &[Value], watched: Vec<String>) -> (Vec<String>, Vec<String>) {
+    let (mut installed, mut keep) = (Vec::new(), Vec::new());
     for id in watched {
-        let row = rows.iter().find(|r| r["id"] == id.as_str());
-        match row.and_then(|r| r["state"].as_str()) {
-            Some("running") => keep.push(id),
-            Some("done") if !can_show || show.is_some() => keep.push(id),
-            Some("done") => show = row.and_then(|r| r["path"].as_str()).map(str::to_string),
-            // failed or cancelled (or gone): the model's row in Settings says what happened
+        match rows.iter().find(|r| r["id"] == id.as_str()).and_then(|r| r["state"].as_str()) {
+            Some("running" | "done") => keep.push(id),
+            Some("installed") => installed.push(id),
             _ => {}
         }
     }
-    (show, keep)
+    (installed, keep)
 }
 
-/// Follows the downloads the user started: keeps redrawing while one runs (the progress bar), and opens the licence
-/// dialog for each as soon as its file is checked and ready. A finished download that cannot be shown yet (another
-/// dialog is open) is shown when that one closes; Settings, which is a dialog too, is replaced.
+/// Follows the downloads the user started: keeps redrawing while one runs (the progress bar), and says so when a
+/// model has been installed, is in use and recognition is on (the engine does all of that by itself).
 fn watch_downloads(app: &mut LightcraftApp, ctx: &egui::Context) {
     if app.caches.faces_dl_watch.is_empty() {
         return;
@@ -500,13 +532,22 @@ fn watch_downloads(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     };
     let rows: Vec<Value> = v["downloads"].as_array().cloned().unwrap_or_default();
-    let can_show = matches!(app.ui.dialog, None | Some(crate::state::Dialog::Settings { .. }));
-    let (show, keep) = due(&rows, std::mem::take(&mut app.caches.faces_dl_watch), can_show);
+    let (installed, keep) = due(&rows, std::mem::take(&mut app.caches.faces_dl_watch));
     app.caches.faces_dl_watch = keep;
-    if let Some(path) = show
-        && let Err(e) = open_dialog(app, &path)
-    {
-        app.toast(ctx, e);
+    for id in installed {
+        let name = app
+            .session
+            .execute("faces.models.list", &json!({}))
+            .ok()
+            .and_then(|l| {
+                l["models"].as_array().and_then(|a| a.iter().find(|m| m["id"] == id.as_str()).and_then(|m| m["name"].as_str().map(str::to_string)))
+            })
+            .unwrap_or_else(|| id.clone());
+        let _ = app.session.execute("faces.models.downloadCancel", &json!({"id": id}));
+        app.caches.faces_epoch += 1;
+        let text = format!("{name} is installed and in use: face recognition is on");
+        app.ui.status = text.clone();
+        app.toast(ctx, text);
     }
     ctx.request_repaint_after(std::time::Duration::from_millis(120));
 }
@@ -516,26 +557,17 @@ mod tests {
     use super::*;
 
     fn row(id: &str, state: &str) -> Value {
-        json!({"id": id, "state": state, "path": format!("/models/.downloads/{id}.onnx")})
+        json!({"id": id, "state": state})
     }
 
     #[test]
-    fn a_finished_download_opens_its_terms_once_and_the_rest_wait() {
-        let rows = vec![row("a", "running"), row("b", "done"), row("c", "done"), row("d", "failed")];
-        let watched = || ["a", "b", "c", "d", "gone"].map(String::from).to_vec();
-        // free to show: the first finished one opens; the running one and the second finished one stay watched
-        let (show, keep) = due(&rows, watched(), true);
-        assert_eq!(show.as_deref(), Some("/models/.downloads/b.onnx"));
-        assert_eq!(keep, ["a", "c"]);
-        // another dialog is open: nothing opens, finished ones wait
-        let (show, keep) = due(&rows, watched(), false);
-        assert_eq!(show, None);
-        assert_eq!(keep, ["a", "b", "c"]);
-        // failed, cancelled and vanished downloads are dropped without opening anything
-        let (show, keep) = due(&[row("d", "failed"), row("e", "cancelled")], ["d", "e", "x"].map(String::from).to_vec(), true);
-        assert_eq!((show, keep.len()), (None, 0));
-        // a finished row without a path (cannot happen, but is data) opens nothing
-        let (show, _) = due(&[json!({"id": "a", "state": "done"})], vec!["a".into()], true);
-        assert_eq!(show, None);
+    fn an_installed_download_is_announced_once_and_the_rest_are_followed() {
+        let rows = vec![row("a", "running"), row("b", "done"), row("c", "installed"), row("d", "failed"), row("e", "cancelled")];
+        let watched = ["a", "b", "c", "d", "e", "gone"].map(String::from).to_vec();
+        let (installed, keep) = due(&rows, watched);
+        assert_eq!(installed, ["c"]);
+        // running and just-arrived ones are watched; failed, cancelled and vanished ones are dropped
+        assert_eq!(keep, ["a", "b"]);
+        assert_eq!(due(&[], vec!["x".into()]), (vec![], vec![]));
     }
 }

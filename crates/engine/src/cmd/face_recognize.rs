@@ -51,7 +51,7 @@ mod imp {
     use serde_json::{Value, json};
 
     use super::super::bad;
-    use super::super::face_models::{installed_models, read_settings};
+    use super::super::face_models::{finish_downloads, installed_models, read_settings};
     use crate::faces_worker::{Done, EDGE, Prepared, Worker, process};
     use crate::{Result, Session};
 
@@ -60,6 +60,9 @@ mod imp {
     const DEFAULT_MARGIN: f32 = 0.06;
     /// How long a look at the models folder is trusted by the per-frame `faces.pump`.
     const RECHECK: Duration = Duration::from_secs(1);
+    /// How often the background pump writes new embeddings to the cache file (appending is cheap; this keeps it to a few
+    /// writes a minute, and a session that ends writes the rest).
+    const SAVE_EVERY: Duration = Duration::from_secs(3);
 
     /// The chosen recognition model, loaded, with the index reset to it when it changed. `fresh` looks at the models
     /// folder again; otherwise a look made in the last second is trusted (the UI asks every frame).
@@ -88,7 +91,7 @@ mod imp {
             lightcraft_faces::OutputSpec::Embedding { dim } => dim as usize,
             _ => return Err(bad(cmd, "the chosen model is not a recognition model")),
         };
-        let cache = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join("face-embeddings.bin"));
+        let cache = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join(format!("face-embeddings-{id}.bin")));
         s.faces.index.reset(&tag, dim, cache);
         s.faces.queue.clear();
         s.faces.queue_stamp = None;
@@ -319,6 +322,8 @@ mod imp {
     /// Settings with a model chosen.
     pub fn pump(s: &mut Session, _: &Value) -> Result<Value> {
         const C: &str = "faces.pump";
+        // a model that has finished downloading is installed and switched on here, whether or not recognition was on
+        finish_downloads(s);
         let enabled = s.face_models_dir.clone().is_some_and(|d| enabled_cached(s, &d));
         if !enabled {
             return Ok(json!({"active": false}));
@@ -333,6 +338,12 @@ mod imp {
         };
         s.faces.retry_at = None;
         let (embedded, _) = collect(s);
+        if s.faces.index.has_unsaved() && s.faces.saved_at.is_none_or(|t| t.elapsed() >= SAVE_EVERY) {
+            if let Err(e) = s.faces.index.save() {
+                log::warn!("could not save the face embeddings: {e}");
+            }
+            s.faces.saved_at = Some(Instant::now());
+        }
         if s.faces.in_flight.is_empty() {
             if s.faces.queue.is_empty() && s.faces.queue_stamp != Some(s.catalog.revision) {
                 s.faces.queue = pending(s, &[]);

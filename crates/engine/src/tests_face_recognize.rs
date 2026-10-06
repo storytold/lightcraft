@@ -164,7 +164,7 @@ fn embeddings_are_cached_beside_the_library_and_reset_for_another_model() {
     set_regions(&mut s, a, vec![region(0.1, Some("Ann")), region(0.5, None)]);
     install(&mut s, 64);
     s.execute("faces.index", &json!({"budgetMs": 60_000})).unwrap();
-    assert!(lib.join("face-embeddings.bin").is_file());
+    assert!(lib.join(format!("face-embeddings-{}.bin", s.faces.index.tag.split('@').next().unwrap())).is_file());
     s.close_library().unwrap();
     drop(s);
 
@@ -204,7 +204,8 @@ fn the_background_pump_indexes_by_itself_once_recognition_is_on() {
     let (a, b) = two_photos(&s);
     set_regions(&mut s, a, vec![region(0.1, Some("Ann")), region(0.5, None)]);
     set_regions(&mut s, b, vec![region(0.3, None)]);
-    // off by default: it does nothing, and says so
+    // installing the model switched recognition on; switched off, the pump does nothing, and says so
+    assert_eq!(s.execute("faces.enable", &json!({"enabled": false})).unwrap()["enabled"], false);
     assert_eq!(s.execute("faces.pump", &json!({})).unwrap()["active"], false);
     assert_eq!(s.faces.index.len(), 0);
     s.execute("faces.enable", &json!({"enabled": true})).unwrap();
@@ -230,5 +231,36 @@ fn the_background_pump_indexes_by_itself_once_recognition_is_on() {
     let r = s.execute("faces.suggest", &json!({"ids": [b.0], "threshold": -1.0, "margin": -2.0, "budgetMs": 0})).unwrap();
     assert_eq!(r["photos"][0]["faces"].as_array().unwrap().len(), 2);
     assert!(r["photos"][0]["faces"][0]["suggestion"]["name"].is_string(), "{r}");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn the_background_pump_saves_what_it_embeds_for_the_next_launch() {
+    let d = temp("pumpsave");
+    let (lib, models) = (d.join("lib"), d.join("models"));
+    let mut s = Session::new().with_fs();
+    s.face_models_dir = Some(models);
+    s.open_library(&lib, true).unwrap();
+    let model = d.join("tiny64.onnx");
+    std::fs::write(&model, lightcraft_faces::synthetic::tiny_embedder_model(64)).unwrap();
+    // installing switches recognition on: nothing else is asked for
+    s.execute("faces.models.install", &json!({"path": model.to_string_lossy(), "acknowledged": true})).unwrap();
+    let (a, b) = two_photos(&s);
+    set_regions(&mut s, a, vec![region(0.1, Some("Ann")), region(0.5, None)]);
+    set_regions(&mut s, b, vec![region(0.3, None)]);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while std::time::Instant::now() < deadline && s.faces.index.len() < 3 {
+        s.execute("faces.pump", &json!({})).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(s.faces.index.len(), 3);
+    let (tag, path) = (s.faces.index.tag.clone(), s.faces.index.path.clone().unwrap());
+    assert!(path.file_name().unwrap().to_string_lossy().starts_with("face-embeddings-custom-"), "one cache file per model: {}", path.display());
+    // the first batch is written at once; whatever is left is written when the session ends, so a launch never redoes work
+    s.close_library().unwrap();
+    drop(s);
+    let mut again = crate::faces_index::Index::default();
+    again.reset(&tag, 64, Some(path));
+    assert_eq!(again.len(), 3);
     let _ = std::fs::remove_dir_all(&d);
 }

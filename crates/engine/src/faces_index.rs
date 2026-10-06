@@ -1,8 +1,8 @@
 //! The face index: one embedding per face region, kept in memory and cached beside the library.
 //!
 //! Embedding a face costs a model run (tens to hundreds of milliseconds), so each region is embedded once and
-//! remembered, keyed by its photo and its box. The cache file (`face-embeddings.bin` in the library folder)
-//! belongs to one model: its header names the model and its file hash, and a file made by another model, an older
+//! remembered, keyed by its photo and its box. The cache file (`face-embeddings-<model id>.bin` in the library folder,
+//! one per model, so switching back to an earlier model does not start over) belongs to one model: its header names the model and its file hash, and a file made by another model, an older
 //! format, or a damaged one is simply ignored and rebuilt. Embeddings are kept out of the catalog on purpose: they are
 //! large, rebuildable, and not comparable between models.
 //!
@@ -74,9 +74,22 @@ impl Index {
         self.unsaved.push((key, e));
     }
 
-    /// Start over for `tag` (`dim` numbers per face), loading what the cache file at `path` holds for it.
+    /// Whether there are embeddings not yet written to the cache file.
+    pub fn has_unsaved(&self) -> bool {
+        !self.unsaved.is_empty()
+    }
+
+    /// Start over for `tag` (`dim` numbers per face), loading what the cache file at `path` holds for it. What the
+    /// previous model's index had not written yet is written first, so switching models loses nothing.
     pub fn reset(&mut self, tag: &str, dim: usize, path: Option<PathBuf>) {
-        *self = Index { tag: tag.to_string(), dim, path, ..Index::default() };
+        let _ = self.save();
+        self.tag = tag.to_string();
+        self.dim = dim;
+        self.path = path;
+        self.entries.clear();
+        self.unsaved.clear();
+        self.skipped.clear();
+        self.file_matches = false;
         if let Some(p) = self.path.clone() {
             self.load(&p);
         }
@@ -167,6 +180,12 @@ impl Index {
         }
         self.unsaved.clear();
         Ok(())
+    }
+}
+
+impl Drop for Index {
+    fn drop(&mut self) {
+        let _ = self.save();
     }
 }
 
@@ -276,4 +295,6 @@ pub(crate) struct FacesState {
     /// Photos still to hand to the worker, and the catalog revision this list was made at.
     pub queue: Vec<lightcraft_catalog::PhotoId>,
     pub queue_stamp: Option<u64>,
+    /// When the index was last written to its cache file by the background pump.
+    pub saved_at: Option<std::time::Instant>,
 }

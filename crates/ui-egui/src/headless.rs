@@ -461,6 +461,45 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Pressing Download in Settings shows the model's terms first and fetches nothing until they are accepted; a build
+    /// that cannot run recognition models offers no download. The licence dialog replaces Settings, which it was opened from.
+    #[test]
+    fn download_shows_the_terms_first_and_fetches_nothing_until_accepted() {
+        use crate::state::Dialog;
+        let mut h = demo([1400.0, 900.0]);
+        let t = Duration::from_secs(10);
+        let dir = std::env::temp_dir().join(format!("lc-ui-facedl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        h.app.session.face_models_dir = Some(dir.join("models"));
+        h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "faces"}}), t);
+        h.settle(SETTLE);
+        h.step();
+        let runtime = h.app.session.execute("faces.models.list", &json!({})).unwrap()["runtime"] == true;
+        let r = h.request("ui.clickWidget", json!({"id": "faces:download:sface-2021dec"}), t);
+        if !runtime {
+            assert_eq!(r["ok"], false, "a build that cannot run the model offers no download: {r}");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+        let Some(dlg) = h.app.ui.dialog.clone() else { panic!("no dialog") };
+        let Dialog::FaceModel { path, info, accepted } = &dlg else { panic!("the terms did not replace Settings: {dlg:?}") };
+        assert_eq!((info["download"].as_str(), *accepted, path.as_str()), (Some("sface-2021dec"), false, ""));
+        assert_eq!(info["model"]["licence"]["commercial"], "unknown");
+        // OK does nothing until the terms are accepted, and nothing has been fetched
+        assert!(crate::panels::dialogs::confirm_dialog(&mut h.app, &dlg).is_err());
+        assert_eq!(h.app.session.execute("faces.models.downloads", &json!({})).unwrap()["downloads"], json!([]));
+        // cancelling leaves it that way
+        h.request("ui.key", json!({"key": "escape"}), t);
+        h.step();
+        assert!(h.app.ui.dialog.is_none());
+        assert_eq!(h.app.session.execute("faces.models.downloads", &json!({})).unwrap()["downloads"], json!([]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Profile browser: live variant thumbnails, hover previews in the loupe without touching the
     /// photo or its history, click applies, the star toggles the favourite.
     #[test]

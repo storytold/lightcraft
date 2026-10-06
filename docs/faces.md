@@ -21,23 +21,32 @@ LightCraft reads the face names other apps (Lightroom, digiKam…) write into yo
 
 ## Adding a recognition model
 
-1. **Settings ▸ Faces ▸ Download** on a model LightCraft has a pinned address for (SFace, AuraFace), or **Add a model file…**
-   (or drop a `.onnx` file on the window) for any other. A download runs in the background with a progress bar; when
-   the file has arrived and matched its recorded size and SHA-256, the dialog below opens by itself.
-2. LightCraft looks at the file (it never runs it at this point): it recognises models it knows by their SHA-256, and
-   for any other file it reads the input and output shapes and describes what it assumed (112 × 112 aligned faces,
-   RGB, `(x − 127.5) / 127.5`, one vector per face: the ArcFace convention that InsightFace models also use).
-3. A dialog shows the licence, whether commercial use is allowed, what the model was trained on (or that this is not
-   known), and **Install stays disabled until you tick "I have read these terms and accept them for my own use"**.
-4. The model is copied into LightCraft's models folder and checked against the original by hash.
+Adding a model is how you say you want it: once it is installed it is **chosen and recognition is switched on**, with no
+further step. The one question is its licence, and that comes first.
 
-LightCraft fetches a model only when you press **Download**, and only from the address pinned in its code to a commit of
+1. **Settings ▸ Faces ▸ Download** on SFace or AuraFace (the models LightCraft has a pinned address for), or **Add a
+   model file…** (or drop a `.onnx` file on the window) for any other.
+2. A dialog shows the licence, whether commercial use is allowed, what the model was trained on (or that this is not
+   known) and, for a file LightCraft does not know, what it assumed (112 × 112 aligned faces, RGB, `(x − 127.5) / 127.5`,
+   one vector per face: the ArcFace convention that InsightFace models also use). The button (**Accept & Download**, or
+   **Install** for a file) stays disabled until you tick "I have read these terms and accept them for my own use".
+3. A download runs in the background with a progress bar and a Cancel button. When it has arrived and matched its recorded
+   size and SHA-256, the model is installed, tested, chosen and recognition is turned on; the status line says so. A file
+   goes through the same steps without the download.
+
+The newest model is the one in use. An earlier one stays installed, **Use** switches back, and each model keeps its own
+cache of embeddings (`face-embeddings-<model id>.bin` in the library folder), so going back does not start over. Removing
+the model in use hands over to another installed one. Results of the model that was running when you switched are
+discarded, never mixed into the new one's index.
+
+LightCraft fetches a model only when you accept a **Download**, and only from the address pinned in its code to a commit of
 the model's own repository (github.com for SFace, huggingface.co for AuraFace); nothing about you or your photos is
 sent. It has no HTTP stack of its own (the usual TLS crates bring in C or assembly), so the transfer is done by the computer's own `curl` (Windows 10
 and later, macOS and most Linux have it), started hidden. A file that does not match its recorded size and SHA-256 is
-thrown away; one that does waits in `<models folder>/.downloads` until you have accepted its terms, and is deleted once
-installed (or when you press Delete). Without `curl`, or offline, the row says so; **Open page** opens the model's own
-page in your browser, and you add the file as above.
+thrown away; one that does waits in `<models folder>/.downloads` for the moment it takes to install, then is moved into
+place. Quitting stops a download and its `curl`. Without `curl`, or offline, the row says so; **Open page** opens the
+model's own page in your browser, and you add the file as above. A build without the recognition runtime offers no
+download.
 
 Non-commercial models (InsightFace, for example) can be added by file for your own use; LightCraft never bundles,
 hosts, downloads or links them from a picker, and the dialog says so.
@@ -100,5 +109,5 @@ suggestions it would make and how many were right.
 ## Commands
 
 All of this is reachable from the control channel, the CLI and MCP: `faces.models.list`, `faces.models.inspect {path}`,
-`faces.models.install {path, acknowledged: true}`, `faces.models.download {id}` (then `faces.models.downloads`, and `faces.models.downloadCancel {id}`), `faces.models.remove {id}`, `faces.models.select {id}`,
-`faces.enable {enabled?}`, `faces.detect {ids?, apply?}`, `faces.index {budgetMs?, ids?}`, `faces.pump` (what the app calls every frame), `faces.suggest {ids?, threshold?, margin?}`, `faces.setName {id?, index, name}` and `faces.evaluate`. `acknowledged` must be `true`: the caller has shown the user the terms and the user agreed.
+`faces.models.install {path, acknowledged: true, activate?}`, `faces.models.download {id, acknowledged: true}` (then `faces.models.downloads`, which also installs what has arrived, and `faces.models.downloadCancel {id}`), `faces.models.remove {id}`, `faces.models.select {id}`,
+`faces.enable {enabled?}`, `faces.detect {ids?, apply?}`, `faces.index {budgetMs?, ids?}`, `faces.pump` (what the app calls every frame), `faces.suggest {ids?, threshold?, margin?}`, `faces.setName {id?, index, name}` and `faces.evaluate`. `acknowledged` must be `true`: the caller has shown the user the terms and the user agreed. Installing makes the model the one in use and switches recognition on unless `activate` is `false`.

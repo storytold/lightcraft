@@ -59,6 +59,7 @@ pub const WHATS_NEW: &str = include_str!("../../../../docs/whats-new.md");
 
 pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(mut dlg) = app.ui.dialog.clone() else { return };
+    let at_start = dlg.clone();
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
     // The backdrop is an area below the dialog window (a bare `Middle` layer painter would be
@@ -785,7 +786,13 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         add_label.as_str()
                     }
                     Dialog::Merge { .. } => "Merge",
-                    Dialog::FaceModel { .. } if !informational => "Install",
+                    Dialog::FaceModel { info, .. } if !informational => {
+                        if info["download"].is_string() {
+                            "Accept & Download"
+                        } else {
+                            "Install"
+                        }
+                    }
                     Dialog::ConfirmDelete { .. } => "Delete",
                     _ if informational => "Close",
                     _ => "OK",
@@ -816,6 +823,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             Err(e) if matches!(dlg, Dialog::Import { .. }) => app.toast(ctx, e),
             _ => close = true,
         }
+    }
+    // a dialog opened from inside this one (a button in Settings that shows a licence) takes its place
+    if app.ui.dialog.as_ref().is_some_and(|now| *now != at_start) {
+        return;
     }
     app.ui.dialog = if close { None } else { Some(dlg) };
 }
@@ -866,7 +877,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::RenameKeyword { from, to } => app.run("keyword.rename", json!({"from": from, "to": to})),
         Dialog::MergeKeywords { from, into } => app.run("keyword.merge", json!({"from": from, "into": into})),
         Dialog::AutoStack { gap } => app.run("stack.auto", json!({"gap": gap})),
-        Dialog::FaceModel { path, accepted, .. } => crate::panels::faces::install(app, path, *accepted),
+        Dialog::FaceModel { path, info, accepted } => crate::panels::faces::install(app, path, info, *accepted),
         Dialog::AllMetadata { .. } | Dialog::SystemInfo { .. } | Dialog::WhatsNew => Ok(serde_json::Value::Null),
         Dialog::Cull { reject_below, pick_best } => {
             let mut p = json!({"pickBest": pick_best});

@@ -36,10 +36,13 @@ pub enum State {
         bytes: u64,
         total: u64,
     },
-    /// Fetched and verified, waiting in the staging folder at `path`.
+    /// Fetched and verified (its SHA-256 is `sha256`), waiting in the staging folder at `path` to be installed.
     Done {
         path: PathBuf,
+        sha256: String,
     },
+    /// Installed and in use: nothing more to do but tell the user.
+    Installed,
     Failed(String),
     Cancelled,
 }
@@ -74,10 +77,11 @@ pub struct Downloads {
 }
 
 impl Downloads {
-    /// Start fetching `spec` into `<models dir>/.downloads/`. One download runs at a time.
+    /// Start fetching `spec` into `<models dir>/.downloads/`. Different models can download side by side; the same
+    /// one is started once.
     pub fn start(&mut self, spec: Download, models_dir: &Path) -> Result<(), String> {
-        if self.jobs.values().any(|j| matches!(j.get(), State::Running { .. })) {
-            return Err("another model is still downloading: wait for it to finish, or cancel it".into());
+        if self.jobs.get(&spec.id).is_some_and(|j| matches!(j.get(), State::Running { .. })) {
+            return Err("that model is already downloading".into());
         }
         let staging = models_dir.join(STAGING);
         std::fs::create_dir_all(&staging).map_err(|e| format!("could not create the download folder: {e}"))?;
@@ -115,11 +119,11 @@ impl Downloads {
         match job.get() {
             // the thread notices, stops curl, deletes the partial file and marks itself cancelled
             State::Running { .. } => {}
-            State::Done { path } => {
+            State::Done { path, .. } => {
                 let _ = std::fs::remove_file(path);
                 self.jobs.remove(id);
             }
-            State::Failed(_) | State::Cancelled => {
+            State::Installed | State::Failed(_) | State::Cancelled => {
                 self.jobs.remove(id);
             }
         }
@@ -128,7 +132,33 @@ impl Downloads {
 
     /// The staged file at `path` has been installed (its copy is the model now) or is no longer wanted.
     pub fn staged_file_used(&mut self, path: &Path) {
-        self.jobs.retain(|_, j| !matches!(j.get(), State::Done { path: p } if p == path));
+        self.jobs.retain(|_, j| !matches!(j.get(), State::Done { path: p, .. } if p == path));
+    }
+
+    /// Downloads that have arrived and been checked, ready to install: (model id, staged file, its SHA-256).
+    pub fn finished(&self) -> Vec<(String, PathBuf, String)> {
+        let mut out: Vec<_> = self
+            .jobs
+            .iter()
+            .filter_map(|(id, j)| match j.get() {
+                State::Done { path, sha256 } => Some((id.clone(), path, sha256)),
+                _ => None,
+            })
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    /// Record how installing a finished download went (`Installed` or `Failed`).
+    pub fn set_outcome(&mut self, id: &str, state: State) {
+        match self.jobs.get(id) {
+            Some(j) => j.set(state),
+            None => {
+                let j = Shared::new(0);
+                j.set(state);
+                self.jobs.insert(id.to_string(), Arc::new(j));
+            }
+        }
     }
 }
 
@@ -280,7 +310,7 @@ fn run(spec: &Download, staging: &Path, shared: &Shared, fetcher: &Fetcher) {
     // fetched earlier and never installed: no need to fetch again
     if target.is_file() {
         if matches_spec(&target) {
-            shared.set(State::Done { path: target });
+            shared.set(State::Done { path: target, sha256: spec.sha256.clone() });
             return;
         }
         let _ = std::fs::remove_file(&target);
@@ -312,7 +342,7 @@ fn run(spec: &Download, staging: &Path, shared: &Shared, fetcher: &Fetcher) {
         return;
     }
     match std::fs::rename(&part, &target) {
-        Ok(()) => shared.set(State::Done { path: target }),
+        Ok(()) => shared.set(State::Done { path: target, sha256: spec.sha256.clone() }),
         Err(e) => fail(format!("could not save the downloaded file: {e}")),
     }
 }
@@ -386,7 +416,7 @@ mod tests {
         std::fs::create_dir_all(&staging).unwrap();
         let shared = Shared::new(spec.size_bytes);
         run(&spec, &staging, &shared, &f);
-        let State::Done { path } = shared.get() else { panic!("{:?}", shared.get()) };
+        let State::Done { path, .. } = shared.get() else { panic!("{:?}", shared.get()) };
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
         assert!(!staging.join("test-model.onnx.part").exists());
         // asked again with the copy still staged: no fetch needed (a program that does not exist would fail)
@@ -481,7 +511,7 @@ mod tests {
         std::fs::write(&file, b"x").unwrap();
         let mut d = Downloads::default();
         let shared = Arc::new(Shared::new(1));
-        shared.set(State::Done { path: file.clone() });
+        shared.set(State::Done { path: file.clone(), sha256: String::new() });
         d.jobs.insert("m".into(), shared);
         assert_eq!(d.snapshot().len(), 1);
         assert!(!d.running());

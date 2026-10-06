@@ -241,7 +241,12 @@ fn installing_runs_the_self_test_and_refuses_models_that_do_not_work() {
     std::fs::write(&broken, lightcraft_faces::synthetic::embedder_model(64)).unwrap();
     let e = s.execute("faces.models.install", &json!({"path": broken.to_string_lossy(), "acknowledged": true})).unwrap_err().to_string();
     assert!(e.contains("could not be loaded") || e.contains("self-test"), "{e}");
-    let leftovers: Vec<_> = std::fs::read_dir(d.join("models")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    let leftovers: Vec<_> = std::fs::read_dir(d.join("models"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n != "settings.json")
+        .collect();
     assert!(leftovers.len() == 1 && leftovers[0].starts_with("custom-works-"), "only the working model remains: {leftovers:?}");
     let _ = std::fs::remove_dir_all(&d);
 }
@@ -260,6 +265,13 @@ fn download_offers_only_pinned_models_and_refuses_the_rest() {
         assert!(s.execute("faces.models.download", &json!({"id": id})).is_err(), "{id}");
     }
     assert!(s.execute("faces.models.download", &json!({})).is_err());
+    // a known model is not fetched until its terms have been accepted
+    for params in
+        [json!({"id": "sface-2021dec"}), json!({"id": "sface-2021dec", "acknowledged": false}), json!({"id": "sface-2021dec", "acknowledged": "yes"})]
+    {
+        assert!(s.execute("faces.models.download", &params).is_err(), "{params}");
+    }
+    assert_eq!(s.execute("faces.models.downloads", &json!({})).unwrap()["downloads"], json!([]));
     let r = s.execute("faces.models.downloads", &json!({})).unwrap();
     assert!(r["running"].as_bool().is_some());
     // no models folder (the web build): refused, not a crash
@@ -288,5 +300,88 @@ fn installing_a_staged_download_removes_the_staged_file() {
     let mine = model_file(&d, "mine.onnx", 512);
     s.execute("faces.models.install", &json!({"path": mine, "acknowledged": true})).unwrap();
     assert!(std::path::Path::new(&mine).exists());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+fn settings_of(d: &std::path::Path) -> Value {
+    serde_json::from_slice(&std::fs::read(d.join("models").join("settings.json")).unwrap()).unwrap()
+}
+
+#[test]
+fn installing_a_model_chooses_it_and_switches_recognition_on() {
+    let d = temp("activate");
+    let mut s = session(&d);
+    let a = s.execute("faces.models.install", &json!({"path": model_file(&d, "First.onnx", 64), "acknowledged": true})).unwrap();
+    let a_id = a["installed"]["id"].as_str().unwrap().to_string();
+    assert_eq!(a["active"], json!({"embedder": a_id, "enabled": true}));
+    assert_eq!(a["installed"]["selected"], true);
+    assert_eq!(settings_of(&d), json!({"enabled": true, "embedder": a_id}));
+    // a second model takes over (the newest is the one the user just asked for); the first stays installed
+    let b = s.execute("faces.models.install", &json!({"path": model_file(&d, "Second.onnx", 96), "acknowledged": true})).unwrap();
+    let b_id = b["installed"]["id"].as_str().unwrap().to_string();
+    assert_ne!(a_id, b_id);
+    assert_eq!(b["active"]["embedder"], json!(b_id));
+    let l = s.execute("faces.models.list", &json!({})).unwrap();
+    assert_eq!((find(&l, &a_id)["installed"].clone(), find(&l, &a_id)["selected"].clone()), (json!(true), json!(false)));
+    assert_eq!(find(&l, &b_id)["selected"], true);
+    // switching back is a choice, and a model added with `activate: false` leaves the choice alone
+    s.execute("faces.models.select", &json!({"id": a_id})).unwrap();
+    let c = s.execute("faces.models.install", &json!({"path": model_file(&d, "Third.onnx", 128), "acknowledged": true, "activate": false})).unwrap();
+    let c_id = c["installed"]["id"].as_str().unwrap().to_string();
+    assert_eq!(c["active"]["embedder"], json!(a_id));
+    assert_eq!(c["installed"]["selected"], false);
+    // a switched-off recognition is switched back on by the next install, not by a refused one
+    s.execute("faces.enable", &json!({"enabled": false})).unwrap();
+    assert!(s.execute("faces.models.install", &json!({"path": model_file(&d, "Nope.onnx", 64)})).is_err());
+    assert_eq!(settings_of(&d)["enabled"], false);
+    s.execute("faces.models.install", &json!({"path": model_file(&d, "Fourth.onnx", 64), "acknowledged": true})).unwrap();
+    assert_eq!(settings_of(&d)["enabled"], true);
+    // removing the model in use hands over to another installed one instead of leaving nothing chosen
+    let in_use = settings_of(&d)["embedder"].as_str().unwrap().to_string();
+    let r = s.execute("faces.models.remove", &json!({"id": in_use})).unwrap();
+    let next = r["embedder"].as_str().unwrap().to_string();
+    assert_ne!(next, in_use);
+    assert!([&a_id, &b_id, &c_id].contains(&&next) || next.starts_with("custom-"), "{next}");
+    assert_eq!(settings_of(&d)["embedder"], json!(next));
+    // removing a model that is not in use changes nothing
+    let other = [&a_id, &b_id, &c_id].into_iter().find(|i| **i != next && **i != in_use).unwrap().clone();
+    s.execute("faces.models.remove", &json!({"id": other})).unwrap();
+    assert_eq!(settings_of(&d)["embedder"], json!(next));
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_download_that_arrives_is_installed_and_switched_on_by_itself() {
+    use crate::face_download::{STAGING, State};
+    let d = temp("finish");
+    let mut s = session(&d);
+    let staging = d.join("models").join(STAGING);
+    std::fs::create_dir_all(&staging).unwrap();
+    // what the download thread leaves when it succeeds: a verified file in the staging folder and a finished job
+    let staged = model_file(&staging, "arrived.onnx", 64);
+    let sha = lightcraft_faces::hash::sha256_file(std::path::Path::new(&staged)).unwrap();
+    s.face_downloads.set_outcome("fake-model", State::Done { path: staged.clone().into(), sha256: sha });
+    let r = s.execute("faces.models.downloads", &json!({})).unwrap();
+    assert_eq!(r["downloads"][0]["id"], "fake-model");
+    assert_eq!(r["downloads"][0]["state"], "installed", "{r}");
+    let st = settings_of(&d);
+    assert_eq!(st["enabled"], true);
+    assert!(st["embedder"].as_str().unwrap().starts_with("custom-arrived-"), "{st}");
+    assert!(!std::path::Path::new(&staged).exists(), "the staged file was moved into place");
+    // the record stays until it is cleared, and is cleared once
+    assert_eq!(s.execute("faces.models.downloads", &json!({})).unwrap()["downloads"][0]["state"], "installed");
+    assert_eq!(s.execute("faces.models.downloadCancel", &json!({"id": "fake-model"})).unwrap()["discarded"], true);
+    assert_eq!(s.execute("faces.models.downloads", &json!({})).unwrap()["downloads"], json!([]));
+
+    // a download that turns out not to be a usable model is thrown away, and the reason is shown
+    let junk = staging.join("junk.onnx");
+    std::fs::write(&junk, b"definitely not a model").unwrap();
+    let sha = lightcraft_faces::hash::sha256_file(&junk).unwrap();
+    s.face_downloads.set_outcome("fake-junk", State::Done { path: junk.clone(), sha256: sha });
+    let r = s.execute("faces.models.downloads", &json!({})).unwrap();
+    assert_eq!(r["downloads"][0]["state"], "failed", "{r}");
+    assert!(r["downloads"][0]["error"].as_str().unwrap().contains("cannot be used"), "{r}");
+    assert!(!junk.exists());
+    assert_eq!(settings_of(&d)["embedder"], st["embedder"], "a failed download leaves the choice alone");
     let _ = std::fs::remove_dir_all(&d);
 }
