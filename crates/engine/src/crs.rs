@@ -298,9 +298,12 @@ pub fn to_partial(props: &Props, raw: Option<bool>) -> Value {
     n(o, "GrainSize", "grain.size");
     n(o, "GrainFrequency", "grain.roughness");
 
-    // ---- Optics (manual corrections; lens profiles are ours, only the switch carries over)
-    if let Some(b) = boolean(props, "crs:LensProfileEnable") {
-        put(o, "optics.lens_profile", json!(b));
+    // ---- Optics (manual corrections; lens profiles are ours, only the switch carries over).
+    // Our profile corrections are the file's own (DNG-embedded) ones, which Lightroom applies
+    // whatever its "Enable Profile Corrections" box says [inferred]: so only an enabling switch
+    // carries over, and `LensProfileEnable=0` (the default in most presets) leaves ours as it is.
+    if boolean(props, "crs:LensProfileEnable") == Some(true) {
+        put(o, "optics.lens_profile", json!(true));
     }
     if let Some(b) = boolean(props, "crs:AutoLateralCA") {
         put(o, "optics.remove_ca", json!(b));
@@ -589,5 +592,17 @@ mod tests {
         let used_points = "<crs:PointColors><rdf:Seq><rdf:li>0.5, 0.2, 0.1, 10, 0, 0, 0, 0</rdf:li></rdf:Seq></crs:PointColors>";
         let got = unmapped(&preset_packet(r#"crs:HDREditMode="1" crs:FutureSlider="12""#, used_points));
         assert_eq!(got, ["FutureSlider", "HDREditMode", "PointColors"]);
+    }
+
+    #[test]
+    fn disabled_lens_profile_switch_keeps_embedded_corrections() {
+        // Lightroom applies a file's built-in lens corrections regardless of its profile switch,
+        // and ours are only those: a preset's `LensProfileEnable=0` must not turn them off
+        let p = props(&preset_packet("", ""));
+        let mut d = DevelopSettings::default();
+        d.optics.lens_profile = true;
+        assert!(apply_partial(&d, &to_partial(&p, None), 1.0).optics.lens_profile);
+        let on = props(&preset_packet("", "").replace(r#"crs:LensProfileEnable="0""#, r#"crs:LensProfileEnable="1""#));
+        assert!(apply_partial(&DevelopSettings::default(), &to_partial(&on, None), 1.0).optics.lens_profile);
     }
 }

@@ -49,6 +49,8 @@
 - 23 new built-in presets: Portrait, Landscape, Urban, Food, Seasons, Vintage and B&W toners.
 - Importing XMP presets no longer lists bookkeeping fields (`Cluster`, `SortName`, `SupportsAmount2`, the as-shot
   white, empty Point Color slots…) as settings that couldn't be carried over.
+- A preset whose lens-profile switch is off no longer turns off the lens corrections built into a DNG (iPhone ProRAW
+  and other files with embedded distortion / vignetting corrections), matching what the preset does elsewhere.
 - Imported `.cube` LUT profiles appear in the Profile menu and the profile browser, grouped by their folder, and stay
   favourites across restarts (issue #328).
 
@@ -86,6 +88,7 @@
 ### Library
 - Choosing a date under By Date or a keyword under Keywords shows those photos from All Photos, as their counts
   promise, instead of filtering whatever album or folder was open, which often showed nothing (issue #341).
+)
 )
 
 ### Reliability
