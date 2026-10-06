@@ -8,6 +8,8 @@
 - Luminar looks: `.lmp` files and `.mplumpack` collections import as presets (grouped by collection); the sliders
   with a counterpart here come along, the rest is listed.
 - 23 new built-in presets: Portrait, Landscape, Urban, Food, Seasons, Vintage and B&W toners.
+- Importing XMP presets no longer lists bookkeeping fields (`Cluster`, `SortName`, `SupportsAmount2`, the as-shot
+  white, empty Point Color slots…) as settings that couldn't be carried over.
 
 ### Reliability
 - LightCraft no longer crashes at launch on Windows PCs whose Vulkan driver is broken (issue #136, e.g. some Intel UHD
