@@ -48,8 +48,33 @@ place. Quitting stops a download and its `curl`. Without `curl`, or offline, the
 model's own page in your browser, and you add the file as above. A build without the recognition runtime offers no
 download.
 
-Non-commercial models (InsightFace, for example) can be added by file for your own use; LightCraft never bundles,
-hosts, downloads or links them from a picker, and the dialog says so.
+### Bring your own models: `catalog.json`
+
+LightCraft's built-in list only holds models whose terms let the project point at them. For anything else (a stronger
+recogniser whose weights are for research use, a model you trained, a mirror you trust) put a `catalog.json` in the models
+folder. Each entry is a model manifest plus the address to fetch it from, and it then gets the same **Download** button as
+a built-in model, with its licence notice shown before anything is fetched. LightCraft ships and links to none of them: what
+the file says, and whether you may use the weights, is yours to check (the dialog shows the notice you wrote, in a warning
+colour unless you marked the model `"commercial": "yes"`).
+
+```json
+{ "models": [ {
+    "id": "my-recogniser", "name": "My recogniser (R50)", "version": "1", "role": "embedder",
+    "url": "https://example.org/weights/recogniser.onnx",
+    "sha256": "(64 lowercase hex digits)", "sizeBytes": 166000000,
+    "licence": { "name": "Research use only", "commercial": "no", "notice": "Not for commercial use." },
+    "provenance": "Trained on ...",
+    "output": { "kind": "embedding", "dim": 512 },
+    "thresholds": { "matchCosine": 0.4 }
+} ] }
+```
+
+`input` may be left out (112 × 112 RGB, `(x − 127.5) / 127.5`, the ArcFace convention that InsightFace-style models use); say
+otherwise with `"input": {"width": 112, "height": 112, "colour": "bgr", "mean": [0,0,0], "std": [1,1,1]}`. `sha256` and
+`sizeBytes` are required (a download is checked against them), the address must be `https`, and the model must give one
+vector per face. A bad entry is reported in Settings ▸ Faces and skipped; the rest still load. The same file by hand
+(Add a model file…) is recognised by its hash and gets the terms you wrote. Models you cannot or do not want to list can
+still be added by file; non-commercial models are never offered by the built-in list.
 
 The models folder is `<config>/models` (`%APPDATA%\LightCraft\models` on Windows, `~/Library/Application Support/LightCraft/models`
 on macOS, `~/.config/lightcraft/models` on Linux), or `$LIGHTCRAFT_FACE_MODELS`. The desktop app, the CLI and the MCP

@@ -144,6 +144,10 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
         ui.label(RichText::new("or drop a .onnx file on the window").color(t.text_dim));
     });
+    // what is wrong with the user's own catalog (catalog.json in the models folder), if anything
+    for e in list["catalog"]["errors"].as_array().into_iter().flatten().filter_map(Value::as_str).take(3) {
+        ui.add(egui::Label::new(RichText::new(format!("catalog.json: {e}")).font(t.font(11.5)).color(t.caution)).wrap());
+    }
     if let Some(d) = all.iter().find(|m| m["role"] == "detector") {
         ui.add_space(4.0);
         hint(ui, t, &format!("Faces are found by {} ({}, included).", d["name"].as_str().unwrap_or("the detector"), mb(d["sizeBytes"].as_u64())));

@@ -59,7 +59,12 @@ fn face_input(t: &TensorInfo) -> Option<(u32, u32)> {
 
 /// Propose what to do with a probed model. `sha256` and `size` describe the file, `file_name` names it.
 pub fn suggest(info: &OnnxInfo, sha256: &str, size: u64, file_name: &str) -> Suggestion {
-    if let Some(m) = crate::known::lookup(sha256) {
+    suggest_with(info, sha256, size, file_name, &[])
+}
+
+/// [`suggest`], also recognising the models in `extra` (the user's own catalog) by their SHA-256.
+pub fn suggest_with(info: &OnnxInfo, sha256: &str, size: u64, file_name: &str, extra: &[ModelManifest]) -> Suggestion {
+    if let Some(m) = crate::known::lookup(sha256).or_else(|| extra.iter().find(|m| m.sha256.as_deref() == Some(sha256)).cloned()) {
         return Suggestion::Known(m);
     }
     let [input] = info.inputs.as_slice() else {

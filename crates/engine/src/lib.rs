@@ -138,6 +138,8 @@ pub struct Session {
     pub face_models_dir: Option<std::path::PathBuf>,
     /// Face models being downloaded at the user's request (`faces.models.download`).
     pub(crate) face_downloads: face_download::Downloads,
+    /// The user's own list of models to download (`catalog.json` in the models folder), as last read.
+    pub(crate) face_catalog: lightcraft_faces::catalog::Catalog,
     /// The loaded recognition model and the face embeddings made with it.
     #[cfg(feature = "recognition")]
     pub(crate) faces: faces_index::FacesState,
@@ -242,6 +244,7 @@ impl Session {
             skip_auto_write: false,
             face_models_dir: None,
             face_downloads: Default::default(),
+            face_catalog: Default::default(),
             #[cfg(feature = "recognition")]
             faces: Default::default(),
             clipboard: None,

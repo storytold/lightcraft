@@ -385,3 +385,61 @@ fn a_download_that_arrives_is_installed_and_switched_on_by_itself() {
     assert_eq!(settings_of(&d)["embedder"], st["embedder"], "a failed download leaves the choice alone");
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn the_users_own_catalog_adds_models_with_the_same_download_and_install() {
+    use crate::face_download::State;
+    let d = temp("catalog");
+    let mut s = session(&d);
+    let models = d.join("models");
+    std::fs::create_dir_all(&models).unwrap();
+    // a model file, and a catalog that lists it by its hash (plus an entry that cannot be used)
+    let file = model_file(&d, "weights.onnx", 64);
+    let (sha, size) = (lightcraft_faces::hash::sha256_file(std::path::Path::new(&file)).unwrap(), std::fs::metadata(&file).unwrap().len());
+    let catalog = json!({"models": [
+        {"id": "my-research-model", "name": "My research model", "version": "1", "role": "embedder", "url": "https://models.example.org/w/weights.onnx",
+         "sha256": sha, "sizeBytes": size, "licence": {"name": "Research only", "commercial": "no", "notice": "Not for commercial use."},
+         "provenance": "Some dataset", "output": {"kind": "embedding", "dim": 64}, "thresholds": {"matchCosine": 0.42}},
+        {"id": "broken", "name": "No hash", "version": "1", "role": "embedder", "url": "https://models.example.org/x.onnx", "output": {"kind": "embedding", "dim": 64}},
+    ]});
+    std::fs::write(models.join("catalog.json"), catalog.to_string()).unwrap();
+    // it is listed like a built-in model, with its own terms, a download address, and the problem with the other entry
+    let l = s.execute("faces.models.list", &json!({})).unwrap();
+    let m = find(&l, "my-research-model");
+    assert_eq!(
+        (m["fromCatalog"].clone(), m["downloadHost"].clone(), m["licence"]["commercial"].clone()),
+        (json!(true), json!("models.example.org"), json!("no"))
+    );
+    assert_eq!(m["installed"], false);
+    assert_eq!(find(&l, "broken"), &Value::Null);
+    assert_eq!(l["catalog"]["models"], 1);
+    assert!(l["catalog"]["errors"][0].as_str().unwrap().contains("broken"), "{}", l["catalog"]);
+    // nothing is fetched without the terms being accepted
+    assert!(s.execute("faces.models.download", &json!({"id": "my-research-model"})).is_err());
+    // a file that matches is recognised as that model (not as a draft), so its terms and settings are used
+    let seen = s.execute("faces.models.inspect", &json!({"path": file})).unwrap();
+    assert_eq!((seen["kind"].clone(), seen["model"]["id"].clone()), (json!("known"), json!("my-research-model")));
+    // a finished download of it installs under the catalog's id, with the catalog's licence record
+    let staging = models.join(crate::face_download::STAGING);
+    std::fs::create_dir_all(&staging).unwrap();
+    let staged = staging.join("weights.onnx");
+    std::fs::copy(&file, &staged).unwrap();
+    s.face_downloads.set_outcome("my-research-model", State::Done { path: staged, sha256: sha });
+    let r = s.execute("faces.models.downloads", &json!({})).unwrap();
+    assert_eq!(r["downloads"][0]["state"], "installed", "{r}");
+    let st = settings_of(&d);
+    assert_eq!((st["embedder"].clone(), st["enabled"].clone()), (json!("my-research-model"), json!(true)));
+    let l = s.execute("faces.models.list", &json!({})).unwrap();
+    assert_eq!(
+        (find(&l, "my-research-model")["installed"].clone(), find(&l, "my-research-model")["accepted"]["commercial"].clone()),
+        (json!(true), json!("no"))
+    );
+    // a broken or hostile catalog never stops the list
+    for bytes in [&b"{"[..], b"[]", &vec![b'x'; 400_000]] {
+        std::fs::write(models.join("catalog.json"), bytes).unwrap();
+        let l = s.execute("faces.models.list", &json!({})).unwrap();
+        assert!(l["catalog"]["errors"].as_array().is_some_and(|e| !e.is_empty()), "{}", l["catalog"]);
+        assert!(find(&l, "sface-2021dec")["id"] == "sface-2021dec");
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}

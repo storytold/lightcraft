@@ -9,9 +9,10 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use lightcraft_faces::catalog::{self, Catalog};
 use lightcraft_faces::hash::sha256_file;
 use lightcraft_faces::manifest::{self, MAX_MANIFEST_BYTES, MAX_MODEL_BYTES, ModelManifest, Role};
-use lightcraft_faces::suggest::{Suggestion, suggest};
+use lightcraft_faces::suggest::{Suggestion, suggest_with};
 use lightcraft_faces::{known, onnx};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -88,8 +89,30 @@ pub(super) fn installed_models(dir: &Path) -> Vec<Installed> {
     out
 }
 
-fn row(m: &ModelManifest, installed: bool, selected: bool, accepted: &Value) -> Value {
+/// Read the user's catalog (`catalog.json` in the models folder) anew: a few kilobytes, so it is always current.
+fn refresh_catalog(s: &mut Session) {
+    let Some(dir) = s.face_models_dir.clone() else { return };
+    let file = dir.join("catalog.json");
+    s.face_catalog = match read_capped(&file, catalog::MAX_CATALOG_BYTES) {
+        Some(bytes) => catalog::parse(&bytes),
+        None if file.is_file() => catalog::parse(&vec![b' '; catalog::MAX_CATALOG_BYTES + 1]),
+        None => Catalog::default(),
+    };
+}
+
+/// The manifests of the catalog's models (what a file's hash is matched against, besides the built-in ones).
+fn catalog_manifests(s: &Session) -> Vec<ModelManifest> {
+    s.face_catalog.entries.iter().map(|e| e.manifest.clone()).collect()
+}
+
+/// How to fetch a model: the built-in address, or the one in the user's catalog.
+fn download_spec(s: &Session, id: &str) -> Option<known::Download> {
+    known::download(id).or_else(|| s.face_catalog.entries.iter().find(|e| e.manifest.id == id).and_then(catalog::Entry::download))
+}
+
+fn row(s: &Session, m: &ModelManifest, installed: bool, selected: bool, accepted: &Value) -> Value {
     let bundled = known::BUNDLED.contains(&m.id.as_str());
+    let from_catalog = s.face_catalog.entries.iter().any(|e| e.manifest.id == m.id);
     json!({
         "id": m.id,
         "name": m.name,
@@ -99,10 +122,12 @@ fn row(m: &ModelManifest, installed: bool, selected: bool, accepted: &Value) -> 
         "source": m.source,
         "sizeBytes": m.size_bytes,
         "sha256": m.sha256,
-        "known": known::all().iter().any(|k| k.id == m.id),
+        "known": from_catalog || known::all().iter().any(|k| k.id == m.id),
+        // from the user's own catalog file
+        "fromCatalog": from_catalog,
         "bundled": bundled,
         // a pinned address LightCraft can fetch it from (the user presses Download), and which site that is
-        "downloadHost": known::download(&m.id).map(|d| known::host(&d.url).to_string()),
+        "downloadHost": download_spec(s, &m.id).map(|d| known::host(&d.url).to_string()),
         "installed": installed || bundled,
         "selected": selected,
         "accepted": accepted,
@@ -118,7 +143,7 @@ struct Inspection {
 
 /// Look at a model file. `known_sha` is its SHA-256 when something already checked it (a finished download), so a
 /// file of hundreds of megabytes is not read again just to be hashed.
-fn inspect_file(path: &str, cmd: &str, known_sha: Option<&str>) -> Result<Inspection> {
+fn inspect_file(path: &str, cmd: &str, known_sha: Option<&str>, extra: &[ModelManifest]) -> Result<Inspection> {
     let p = Path::new(path);
     let meta = std::fs::metadata(p).map_err(|e| bad(cmd, format!("cannot read `{path}`: {e}")))?;
     if !meta.is_file() {
@@ -133,13 +158,14 @@ fn inspect_file(path: &str, cmd: &str, known_sha: Option<&str>) -> Result<Inspec
     };
     let file_name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let suggestion = match onnx::probe_path(p) {
-        Ok(info) => suggest(&info, &sha256, meta.len(), &file_name),
+        Ok(info) => suggest_with(&info, &sha256, meta.len(), &file_name, extra),
         Err(e) => Suggestion::Unsupported(e.to_string()),
     };
     Ok(Inspection { sha256, size: meta.len(), file_name, suggestion })
 }
 
 fn list(s: &mut Session, _: &Value) -> Result<Value> {
+    refresh_catalog(s);
     let dir = s.face_models_dir.clone();
     let (settings, installed) = match &dir {
         Some(d) => (read_settings(d), installed_models(d)),
@@ -149,11 +175,18 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
     let mut models: Vec<Value> = Vec::new();
     for k in known::all() {
         let found = on_disk(&k.id);
-        models.push(row(&k, found.is_some(), settings.embedder.as_deref() == Some(k.id.as_str()), found.map_or(&Value::Null, |f| &f.accepted)));
+        models.push(row(s, &k, found.is_some(), settings.embedder.as_deref() == Some(k.id.as_str()), found.map_or(&Value::Null, |f| &f.accepted)));
+    }
+    // the user's own catalog
+    for e in &s.face_catalog.entries {
+        let found = on_disk(&e.manifest.id);
+        let chosen = settings.embedder.as_deref() == Some(e.manifest.id.as_str());
+        models.push(row(s, &e.manifest, found.is_some(), chosen, found.map_or(&Value::Null, |f| &f.accepted)));
     }
     for i in &installed {
-        if !known::all().iter().any(|k| k.id == i.manifest.id) {
-            models.push(row(&i.manifest, true, settings.embedder.as_deref() == Some(i.manifest.id.as_str()), &i.accepted));
+        let listed = known::all().iter().any(|k| k.id == i.manifest.id) || s.face_catalog.entries.iter().any(|e| e.manifest.id == i.manifest.id);
+        if !listed {
+            models.push(row(s, &i.manifest, true, settings.embedder.as_deref() == Some(i.manifest.id.as_str()), &i.accepted));
         }
     }
     Ok(json!({
@@ -163,13 +196,20 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
         // whether this build can run recognition models (the `recognition` feature: tract)
         "runtime": cfg!(feature = "recognition"),
         "models": models,
+        // the user's own list of models to download: where it goes, how many it holds, and what was wrong with the rest
+        "catalog": {
+            "path": dir.as_ref().map(|d| d.join("catalog.json").display().to_string()),
+            "models": s.face_catalog.entries.len(),
+            "errors": s.face_catalog.errors,
+        },
     }))
 }
 
 fn inspect(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "faces.models.inspect";
     let path = str_param(p, "path").ok_or_else(|| bad(C, "missing `path`"))?;
-    let ins = inspect_file(path, C, None)?;
+    refresh_catalog(s);
+    let ins = inspect_file(path, C, None, &catalog_manifests(s))?;
     let installed = s.face_models_dir.as_deref().map(installed_models).unwrap_or_default();
     let (kind, model, assumptions, reason) = match &ins.suggestion {
         Suggestion::Known(m) => ("known", Some(m), Vec::new(), None),
@@ -183,7 +223,7 @@ fn inspect(s: &mut Session, p: &Value) -> Result<Value> {
         "sizeBytes": ins.size,
         "sha256": ins.sha256,
         "kind": kind,
-        "model": model.map(|m| row(m, already, false, &Value::Null)),
+        "model": model.map(|m| row(s, m, already, false, &Value::Null)),
         "assumptions": assumptions,
         "reason": reason,
         "alreadyInstalled": already,
@@ -195,7 +235,8 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad(C, "missing `path`"))?;
     let acknowledged = p.get("acknowledged").and_then(Value::as_bool).unwrap_or(false);
     let activate = p.get("activate").and_then(Value::as_bool).unwrap_or(true);
-    let ins = inspect_file(path, C, None)?;
+    refresh_catalog(s);
+    let ins = inspect_file(path, C, None, &catalog_manifests(s))?;
     install_file(s, C, Path::new(path), ins, acknowledged, activate, false)
 }
 
@@ -263,7 +304,7 @@ fn install_file(s: &mut Session, c: &str, src: &Path, ins: Inspection, acknowled
     }
     let now = read_settings(&dir);
     let selected = now.embedder.as_deref() == Some(m.id.as_str());
-    Ok(json!({"installed": row(&m, true, selected, &accepted), "active": {"embedder": now.embedder, "enabled": now.enabled}}))
+    Ok(json!({"installed": row(s, &m, true, selected, &accepted), "active": {"embedder": now.embedder, "enabled": now.enabled}}))
 }
 
 /// What an error says, without the command it came from (for a line shown to the user).
@@ -278,8 +319,9 @@ fn plain(e: &EngineError) -> String {
 /// switched on without another question. Called by `faces.models.downloads` and by every frame's `faces.pump`.
 pub(super) fn finish_downloads(s: &mut Session) {
     const C: &str = "faces.models.download";
+    let extra = catalog_manifests(s);
     for (id, path, sha) in s.face_downloads.finished() {
-        let outcome = inspect_file(&path.to_string_lossy(), C, Some(&sha)).and_then(|ins| install_file(s, C, &path, ins, true, true, true));
+        let outcome = inspect_file(&path.to_string_lossy(), C, Some(&sha), &extra).and_then(|ins| install_file(s, C, &path, ins, true, true, true));
         match outcome {
             Ok(_) => s.face_downloads.set_outcome(&id, State::Installed),
             Err(e) => {
@@ -297,7 +339,8 @@ fn download(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "faces.models.download";
     let id = str_param(p, "id").ok_or_else(|| bad(C, "missing `id`"))?;
     let dir = models_dir(s, C)?;
-    let spec = known::download(id).ok_or_else(|| bad(C, "LightCraft has no download for that model: get the file from its page, then add it"))?;
+    refresh_catalog(s);
+    let spec = download_spec(s, id).ok_or_else(|| bad(C, "LightCraft has no download for that model: get the file from its page, then add it"))?;
     if !cfg!(feature = "recognition") {
         return Err(bad(C, "this build cannot run face recognition models, so there is nothing to download for it"));
     }
@@ -315,8 +358,8 @@ fn download(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"started": id, "from": host}))
 }
 
-fn download_row(id: &str, state: &State) -> Value {
-    let from = known::download(id).map(|d| known::host(&d.url).to_string());
+fn download_row(s: &Session, id: &str, state: &State) -> Value {
+    let from = download_spec(s, id).map(|d| known::host(&d.url).to_string());
     match state {
         State::Running { bytes, total } => json!({"id": id, "state": "running", "bytes": bytes, "total": total, "from": from}),
         State::Done { path, .. } => json!({"id": id, "state": "done", "path": path.display().to_string(), "from": from}),
@@ -329,7 +372,7 @@ fn download_row(id: &str, state: &State) -> Value {
 /// `faces.models.downloads`: where each download stands (a finished one is installed first).
 fn downloads(s: &mut Session, _: &Value) -> Result<Value> {
     finish_downloads(s);
-    let all: Vec<Value> = s.face_downloads.snapshot().iter().map(|(id, st)| download_row(id, st)).collect();
+    let all: Vec<Value> = s.face_downloads.snapshot().iter().map(|(id, st)| download_row(s, id, st)).collect();
     Ok(json!({"running": s.face_downloads.running(), "downloads": all}))
 }
 
