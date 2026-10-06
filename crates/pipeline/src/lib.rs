@@ -4,7 +4,7 @@
 //! (full size or a proxy), plus [`DevelopSettings`]. Output: a display-encoded sRGB image at the
 //! requested size, and its histogram.
 //!
-//! Stage order (see `docs/pipeline.md`):
+//! Stage order (the GPU port of the same stages is described in `docs/gpu-pipeline.md`):
 //! 1. geometry — user orientation, lens corrections (distortion, CA, vignetting), perspective, crop +
 //!    straighten, flips; one resample at output resolution; then defringe
 //! 2. scene-linear — white balance, exposure, dehaze, local tone (highlights/shadows), texture,

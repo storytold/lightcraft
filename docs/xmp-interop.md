@@ -79,8 +79,17 @@ Our pipeline renders differently, so **values carry over but the look is approxi
 
 We read these fields; we never write them. Only fields in the packet are applied: the result is a partial settings
 object that gets merged like a preset, so everything else keeps its current or default value. Packets marked
-`crs:AlreadyApplied="True"` are skipped, because those pixels already contain the edit. Only process-version 2012+ field
-names are read (e.g. `Exposure2012`, not the older `Exposure`).
+`crs:AlreadyApplied="True"` are skipped, because those pixels already contain the edit. Process-version 2012+ names
+(e.g. `Exposure2012`) are read; the older process-version 2010 names (`Exposure`, `Contrast`, `FillLight`,
+`HighlightRecovery`, `Shadows`, `Brightness`, `Clarity`) are approximated with today's sliders when the packet has no
+2012-era fields, and `ToneCurve` is used when there is no `ToneCurvePV2012` (see the preset import notes below).
+
+Values carry over, but several tools render differently from Lightroom and can't be matched without reference renders:
+calibration rotates Rec.2020 primaries in OkLCh (not the camera's primaries), the colour mixer uses an even ±29° hue
+range per band in OkLCh with hue/luminance shifts weighted by chroma, colour grading runs before the tone curves, the
+parametric curve's region shapes are our own, and Blacks is a pedestal on our tone map. Tone curves run in one fixed
+curve space (linear ProPhoto/ROMM primaries with the sRGB transfer curve, `crates/pipeline/src/finish.rs`), so a preset
+renders the same whatever the export colour space; that Lightroom's curves run in that space is our inference.
 
 | `crs:` field(s) | LightCraft control | Notes |
 |---|---|---|
@@ -111,7 +120,7 @@ names are read (e.g. `Exposure2012`, not the older `Exposure`).
 | `LensProfileEnable`, `AutoLateralCA` | `optics.lens_profile`, `optics.remove_ca` | lens profiles are the file's own (DNG-embedded) corrections, which Lightroom applies whatever its profile switch says (our inference): only `LensProfileEnable=1` carries over, `0` leaves the switch as it is |
 | `LensManualDistortionAmount`, `VignetteAmount`, `VignetteMidpoint` | `optics.distortion`, `optics.vignetting`, `optics.vignetting_midpoint` | |
 | `DefringePurple/GreenAmount/HueLo/HueHi` | `optics.defringe_*` | |
-| `ShadowTint`, `RedHue/Saturation`, `GreenHue/Saturation`, `BlueHue/Saturation` | `calibration.shadows_tint`, `calibration.red_hue/red_sat`, … | Calibration panel, 1:1 |
+| `ShadowTint`, `RedHue/Saturation`, `GreenHue/Saturation`, `BlueHue/Saturation` | `calibration.shadows_tint`, `calibration.red_hue/red_sat`, … | values 1:1; the rendering differs (see above) |
 | `PerspectiveVertical/Horizontal/Rotate/Scale/Aspect/X/Y` | `geometry.vertical/horizontal/rotate/scale/aspect/offset_x/offset_y` | |
 | `PerspectiveUpright` | `geometry.upright` | 0 off, 1 auto, 2 level, 3 vertical, 4 full, 5 guided |
 | `HasCrop`, `CropLeft/Top/Right/Bottom`, `CropAngle` | `crop.geometry` | normalized edges → rect; angle in degrees; `HasCrop="False"` → no crop |
