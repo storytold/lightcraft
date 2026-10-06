@@ -45,7 +45,9 @@ pub fn yunet() -> ModelManifest {
     }
 }
 
-/// SFace 2021dec (OpenCV Zoo).
+/// SFace 2021dec (OpenCV Zoo). Its match threshold is a starting point: on 755 named faces (busts, matched across
+/// shots more than five seconds apart) 0.55 gave 97.5% right suggestions for 88% of faces; `faces.evaluate` checks it on
+/// your own photos.
 pub fn sface() -> ModelManifest {
     ModelManifest {
         id: "sface-2021dec".into(),
@@ -64,11 +66,12 @@ pub fn sface() -> ModelManifest {
         provenance: "Undocumented. The original SFace repository mentions CASIA-WebFace, VGGFace2 and MS1MV2.".into(),
         input: InputSpec { width: 112, height: 112, colour: Colour::Rgb, mean: [0.0; 3], std: [1.0; 3], resize: Resize::Stretch },
         output: OutputSpec::Embedding { dim: 128 },
-        thresholds: Thresholds::default(),
+        thresholds: Thresholds { match_cosine: Some(0.55), ..Thresholds::default() },
     }
 }
 
-/// AuraFace v1 `glintr100` (fal.ai).
+/// AuraFace v1 `glintr100` (fal.ai). Starting-point threshold: on the same 755 faces 0.40 gave 96.6% right suggestions
+/// for 56% of faces (0.30: 97.3% for 85%).
 pub fn auraface() -> ModelManifest {
     ModelManifest {
         id: "auraface-v1".into(),
@@ -87,7 +90,7 @@ pub fn auraface() -> ModelManifest {
         provenance: "Undisclosed: \"a commercial dataset comprising face images from various sources\".".into(),
         input: InputSpec::default(),
         output: OutputSpec::Embedding { dim: 512 },
-        thresholds: Thresholds::default(),
+        thresholds: Thresholds { match_cosine: Some(0.40), ..Thresholds::default() },
     }
 }
 

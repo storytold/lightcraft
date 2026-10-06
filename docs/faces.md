@@ -58,8 +58,38 @@ The detector's output matches OpenCV's own YuNet on a 45-photo public-domain tes
 mean box overlap 0.97), including marble busts and paintings, with no false boxes on the landscape and architecture
 photos in the set.
 
+## Suggesting who is in a photo
+
+With **Recognise faces** switched on in Settings ▸ Faces and a recognition model chosen (**Use**), LightCraft works out, in
+the background, what each face in your library looks like to the model, and uses the faces you have already named to
+suggest names for the ones you have not:
+
+- An unnamed face with a good match gets a dim label such as **Jane Doe?** in the loupe. Click it and the name box opens
+  with the guess filled in; Enter confirms. Any other unnamed face shows **Add name** when you point at it. Clicking a name
+  lets you change it, and clearing the box removes it. Typing completes from the people you have already named.
+- **Nothing is ever named for you.** A suggestion is only a label until you confirm it, and a suggestion appears only when
+  the match is strong *and* clearly ahead of the next person: it is better to leave a face unnamed than to name it wrongly.
+  Naming a face also makes it one of the faces the others are compared with, so the suggestions improve as you go.
+- Faces come from the names other apps wrote into your photos (read from XMP), from Photo ▸ Detect Faces, or both. A face is
+  aligned using the detector's five landmarks (eyes, nose, mouth corners) when it finds the same face, and cut out by its box
+  otherwise.
+- Everything stays on your computer. The embeddings (one short list of numbers per face) are cached in the library folder in
+  `face-embeddings.bin` and rebuilt if you choose another model; they are not part of the catalog and not written to XMP.
+- It works in the background on a separate thread, so the window stays responsive; a large library takes a while the
+  first time (about 0.3 to 1 second per photo with faces on a typical processor, depending on the model).
+
+How well it works: on 755 named faces of marble busts from one museum folder (each face hidden in turn and matched against
+shots taken more than five seconds apart), SFace named the right person first 95.5% of the time and AuraFace 94.7%; at
+the starting thresholds LightCraft suggests (SFace 0.55, AuraFace 0.40) about 97% of the suggestions were right. Busts are
+a hard case in some ways (no skin or hair to go by) and an easy one in others (the same sculpture looks the same in every
+shot), so check a model on your own photos before trusting it:
+
+`faces.evaluate` tests a model on *your* photos: it hides each named face in turn, asks who it looks like from the others
+(ignoring shots taken within a few seconds of it, which would make it too easy) and reports, for each threshold, how many
+suggestions it would make and how many were right.
+
 ## Commands
 
 All of this is reachable from the control channel, the CLI and MCP: `faces.models.list`, `faces.models.inspect {path}`,
 `faces.models.install {path, acknowledged: true}`, `faces.models.remove {id}`, `faces.models.select {id}`,
-`faces.enable {enabled?}`, and `faces.detect {ids?, apply?}`. `acknowledged` must be `true`: the caller has shown the user the terms and the user agreed.
+`faces.enable {enabled?}`, `faces.detect {ids?, apply?}`, `faces.index {budgetMs?, ids?}`, `faces.pump` (what the app calls every frame), `faces.suggest {ids?, threshold?, margin?}`, `faces.setName {id?, index, name}` and `faces.evaluate`. `acknowledged` must be `true`: the caller has shown the user the terms and the user agreed.
