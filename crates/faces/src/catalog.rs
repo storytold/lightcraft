@@ -107,6 +107,8 @@ pub fn parse(bytes: &[u8]) -> Catalog {
         out.errors.push(format!("catalog.json is larger than {} KB: not read", MAX_CATALOG_BYTES / 1024));
         return out;
     }
+    // Notepad and older PowerShell begin a UTF-8 file with a byte-order mark
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
     let value: Value = match serde_json::from_slice(bytes) {
         Ok(v) => v,
         Err(e) => {
@@ -171,6 +173,14 @@ mod tests {
         nonsense["speed"] = json!(-3);
         let c = cat(vec![nonsense]);
         assert!(c.entries.is_empty() && c.errors.iter().any(|e| e.contains("speed")), "{:?}", c.errors);
+    }
+
+    #[test]
+    fn a_file_saved_with_a_byte_order_mark_still_reads() {
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(json!({"models": [good("with-bom")]}).to_string().as_bytes());
+        let c = parse(&bytes);
+        assert_eq!((c.entries.len(), c.errors.len()), (1, 0), "{:?}", c.errors);
     }
 
     #[test]

@@ -503,6 +503,89 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Until face recognition is set up, the People view and the loupe's name box say so and offer the next step: with no
+    /// model, a button that opens Settings ▸ Faces; with a model installed but recognition off, one that switches it on.
+    #[test]
+    fn people_and_the_name_box_offer_to_set_face_recognition_up() {
+        use crate::state::{Dialog, ViewMode};
+        use lightcraft_catalog::Op;
+        let mut h = demo([1400.0, 900.0]);
+        let t = Duration::from_secs(10);
+        let dir = std::env::temp_dir().join(format!("lc-ui-facesetup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        h.app.session.face_models_dir = Some(dir.join("models"));
+        let runtime = h.app.session.execute("faces.models.list", &json!({})).unwrap()["runtime"] == true;
+        let id = h.app.session.active().unwrap();
+        let mut meta = h.app.session.catalog.photo(id).unwrap().meta.clone();
+        meta.regions = vec![lightcraft_meta::Region {
+            rect: lightcraft_geom::Rect { x0: 0.3, y0: 0.2, x1: 0.55, y1: 0.6 },
+            kind: lightcraft_meta::RegionKind::Face,
+            name: None,
+            description: None,
+        }];
+        h.app.session.commit("setup", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+        let offers = |h: &mut Headless| h.request("ui.widgets", json!({}), t).to_string().contains("\"faces:setup\"");
+
+        h.request("engine.execute", json!({"command": "view.people"}), t);
+        h.settle(SETTLE);
+        h.step();
+        assert_eq!(h.app.ui.view, ViewMode::People);
+        if !runtime {
+            assert!(!offers(&mut h), "a build that cannot run recognition offers nothing");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        // no model: the offer is there, and one click lands in Settings ▸ Faces
+        assert!(offers(&mut h));
+        let r = h.request("ui.clickWidget", json!({"id": "faces:setup"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+        assert_eq!(h.app.ui.dialog, Some(Dialog::Settings { tab: "faces".into() }));
+        h.app.ui.dialog = None;
+
+        // the loupe's name box offers it too, and its button leaves for Settings with the box closed
+        h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
+        h.settle(SETTLE);
+        h.request("ui.pointer", json!({"events": [{"kind": "move", "x": 0.42, "y": 0.4}]}), t);
+        h.step();
+        h.step();
+        h.request("ui.clickWidget", json!({"id": "regionLabel:0"}), t);
+        h.step();
+        h.step();
+        assert!(h.app.ui.name_edit.is_some() && offers(&mut h), "the name box offers the setup");
+        let r = h.request("ui.clickWidget", json!({"id": "faces:setup"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+        assert!(h.app.ui.name_edit.is_none());
+        assert_eq!(h.app.ui.dialog, Some(Dialog::Settings { tab: "faces".into() }));
+        h.app.ui.dialog = None;
+
+        // a model installed but recognition off: "Turn on" does it on the spot
+        let model = dir.join("Mine.onnx");
+        std::fs::write(&model, lightcraft_faces::synthetic::tiny_embedder_model(512)).unwrap();
+        let installed = h.app.run("faces.models.install", json!({"path": model.to_string_lossy(), "acknowledged": true, "activate": false})).unwrap();
+        h.app.run("faces.models.select", json!({"id": installed["installed"]["id"]})).unwrap();
+        h.app.caches.faces_epoch += 1;
+        h.request("engine.execute", json!({"command": "view.people"}), t);
+        h.settle(SETTLE);
+        h.step();
+        assert!(offers(&mut h));
+        assert_eq!(h.app.session.execute("faces.models.list", &json!({})).unwrap()["enabled"], false);
+        let r = h.request("ui.clickWidget", json!({"id": "faces:setup"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+        assert_eq!(h.app.session.execute("faces.models.list", &json!({})).unwrap()["enabled"], true);
+        assert_eq!(h.app.ui.dialog, None, "nothing to go to Settings for");
+        h.step();
+        assert!(!offers(&mut h), "once it is on the offer is gone");
+        h.settle(SETTLE);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A click on a person's card opens their page, which shows only cropped faces (one per face, not per photo); a click
     /// on one opens its photo; Back, the People button and Escape return to everyone.
     #[test]

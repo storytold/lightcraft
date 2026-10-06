@@ -55,18 +55,106 @@ fn list_id() -> egui::Id {
 }
 
 /// The engine's model list, re-read at most every [`REFRESH_SECS`], or at once after an action changed it.
-fn models(app: &mut LightcraftApp, ui: &egui::Ui) -> Value {
-    let now = ui.input(|i| i.time);
+fn models(app: &mut LightcraftApp, ctx: &egui::Context) -> Value {
+    let now = ctx.input(|i| i.time);
     let epoch = app.caches.faces_epoch;
-    if let Some((e, at, v)) = ui.data(|d| d.get_temp::<(u64, f64, Value)>(list_id()))
+    if let Some((e, at, v)) = ctx.data(|d| d.get_temp::<(u64, f64, Value)>(list_id()))
         && e == epoch
         && now - at < REFRESH_SECS
     {
         return v;
     }
     let v = app.run("faces.models.list", json!({})).unwrap_or(Value::Null);
-    ui.data_mut(|d| d.insert_temp(list_id(), (epoch, now, v.clone())));
+    ctx.data_mut(|d| d.insert_temp(list_id(), (epoch, now, v.clone())));
     v
+}
+
+/// What stands between the user and name suggestions, for the prompts where faces are shown or named.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Setup {
+    /// Recognition is on (or about to start): nothing to offer.
+    Running,
+    /// A model is installed and chosen; only the switch is off.
+    TurnOn,
+    /// No model to use yet: Settings ▸ Faces has the download.
+    GetModel,
+    /// This build cannot keep or run models: nothing to offer.
+    Unavailable,
+}
+
+/// Where the user stands with face recognition. Cheap: the model list is read at most every 1.5 s, and not at all while
+/// recognition runs.
+pub fn setup(app: &mut LightcraftApp, ctx: &egui::Context) -> Setup {
+    if app.caches.faces_active {
+        return Setup::Running;
+    }
+    let list = models(app, ctx);
+    if list["dir"].is_null() || list["runtime"].as_bool() != Some(true) {
+        return Setup::Unavailable;
+    }
+    let chosen = list["embedder"].as_str();
+    let usable = chosen.is_some_and(|id| list["models"].as_array().into_iter().flatten().any(|m| m["id"] == id && m["installed"] == true));
+    match (usable, list["enabled"].as_bool() == Some(true)) {
+        (true, true) => Setup::Running,
+        (true, false) => Setup::TurnOn,
+        (false, _) => Setup::GetModel,
+    }
+}
+
+impl Setup {
+    /// The sentence and the button label that offer the next step; none when there is nothing to do.
+    pub fn prompt(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Setup::TurnOn => Some(("Face recognition is off. Turn it on to get name suggestions and see look-alike faces together.", "Turn on")),
+            Setup::GetModel => {
+                Some(("Face recognition needs a model to suggest names: a one-time download, in Settings.", "Set up face recognition"))
+            }
+            Setup::Running | Setup::Unavailable => None,
+        }
+    }
+
+    /// The same offer as one line of a small box (the name box in the loupe).
+    pub fn short(self) -> Option<&'static str> {
+        match self {
+            Setup::TurnOn => Some("Turn on name suggestions"),
+            Setup::GetModel => Some("Set up name suggestions…"),
+            Setup::Running | Setup::Unavailable => None,
+        }
+    }
+}
+
+/// The prompt's button: switch recognition on, or open Settings ▸ Faces, where the model is one click away.
+pub fn take_step(app: &mut LightcraftApp, ctx: &egui::Context, step: Setup) {
+    match step {
+        Setup::TurnOn => {
+            if app.run("faces.enable", json!({"enabled": true})).is_ok() {
+                app.caches.faces_epoch += 1;
+                app.ui.status = "Face recognition is on".into();
+                app.toast(ctx, "Face recognition is on");
+            }
+        }
+        Setup::GetModel => {
+            let _ = app.run("app.settings", json!({"tab": "faces"}));
+        }
+        Setup::Running | Setup::Unavailable => {}
+    }
+}
+
+/// A slim line under a view's heading offering to set recognition up, shown only while it is not set up.
+pub fn setup_banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let step = setup(app, ui.ctx());
+    let Some((message, button)) = step.prompt() else { return };
+    let t = Tokens::get(ui.ctx());
+    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 6)).show(ui, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(message).font(t.font(12.5)).color(t.text_dim));
+            let r = ui.button(button);
+            register(ui.ctx(), "faces:setup", r.rect);
+            if r.clicked() {
+                take_step(app, ui.ctx(), step);
+            }
+        });
+    });
 }
 
 /// A download-style size: decimal megabytes, as file managers and model pages show them.
@@ -110,7 +198,7 @@ fn open_page(app: &mut LightcraftApp, url: &str) {
 
 /// The Settings ▸ Faces tab.
 pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    let list = models(app, ui);
+    let list = models(app, ui.ctx());
     heading(ui, t, "Face recognition");
     if list["dir"].is_null() {
         hint(ui, t, "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)");
@@ -462,16 +550,19 @@ pub enum Editor {
     Open,
     Submit(String),
     Cancel,
+    /// The offer to set up recognition was pressed.
+    Setup,
 }
 
 /// The inline name box under a face: type a name (completed from the people already named), pick one of the
-/// suggestions, Enter to confirm, Escape to cancel.
+/// suggestions, Enter to confirm, Escape to cancel. While recognition is not set up it offers the next step (`setup`).
 pub fn name_editor(
     ctx: &egui::Context,
     at: egui::Pos2,
     edit: &mut crate::state::NameEdit,
     candidates: &[(String, f32)],
     people: &[String],
+    setup: Setup,
 ) -> Editor {
     let t = Tokens::get(ctx);
     let mut outcome = Editor::Open;
@@ -509,6 +600,13 @@ pub fn name_editor(
                 register(ui.ctx(), format!("faceName:pick:{name}"), b.rect);
                 if b.clicked() {
                     outcome = Editor::Submit(name);
+                }
+            }
+            if let Some(label) = setup.short() {
+                let b = ui.add(egui::Button::new(RichText::new(label).font(t.font(12.0)).color(t.accent)).frame(false));
+                register(ui.ctx(), "faces:setup", b.rect);
+                if b.clicked() {
+                    outcome = Editor::Setup;
                 }
             }
             ui.label(RichText::new("Enter to confirm, Esc to cancel").font(t.font(11.0)).color(t.text_dim));

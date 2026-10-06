@@ -201,6 +201,11 @@ Turning recognition on starts a scan of the whole library, once, in the backgrou
 
 ### The People view
 
+Until recognition is set up, a line at the top says what it takes and has one button: **Set up face recognition** (no model
+yet: it opens Settings ▸ Faces, where the download is) or **Turn on** (a model is installed, recognition is off: it switches it
+on there and then). The loupe's name box offers the same ("Set up name suggestions…" / "Turn on name suggestions"), and so
+does a person's page.
+
 **People** shows a card for each named person (their face, with the number of photos they are in on the picture) and, below
 a line, the **Unnamed faces**: every face nobody has named, as cropped pictures. With recognition running, faces that look
 alike are next to each other (put in order by looking at every pair, for up to the first 1,500 embedded faces), and a face

@@ -67,6 +67,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let (head, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEADER_H), Sense::hover());
     ui.painter().text(pos2(head.left() + PAD, head.center().y), Align2::LEFT_CENTER, "Named People", t.semibold(15.0), t.text);
     ui.painter().text(pos2(head.right() - PAD, head.center().y), Align2::RIGHT_CENTER, people.len().to_string(), t.font(13.0), t.text_dim);
+    // until face recognition is set up: what it takes, and a button that does the next step
+    super::faces::setup_banner(app, ui);
     // the filters narrowing the list (a date, a keyword…), removable here
     let chips = lightcraft_engine::filter_chips(&app.session.filter, &app.session.catalog);
     super::chips::show(app, ui, &chips);

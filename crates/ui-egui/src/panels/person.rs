@@ -125,8 +125,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
     let more: Vec<&Face> = page.more.iter().filter(|f| !dismissed.contains(&(f.photo, f.index))).collect();
     // what the "More" section says when it has no faces to show
     let recognising = app.caches.faces_active || page.ready;
-    let note: Option<String> = if !recognising {
-        Some(format!("Turn on face recognition in Settings to find more photos of {shown_name}."))
+    // with a model installed the button switches recognition on; without one it opens Settings ▸ Faces
+    let step = if recognising { super::faces::Setup::Running } else { super::faces::setup(app, ui.ctx()) };
+    let note: Option<String> = if step == super::faces::Setup::TurnOn {
+        Some(format!("Face recognition is off. Turn it on to find more photos of {shown_name}."))
+    } else if !recognising {
+        Some(format!("Face recognition needs a model, in Settings, to find more photos of {shown_name}."))
     } else if more.is_empty() && page.pending > 0 {
         Some(format!("Looking through your photos… {} left", page.pending))
     } else if more.is_empty() {
@@ -172,8 +176,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         ui.painter().text(pos2(area.left() + PAD, area.top() + more_top + 36.0), Align2::LEFT_CENTER, sub, t.font(12.0), t.text_dim);
         if !recognising {
             let r = Rect::from_min_size(pos2(area.left() + PAD + 330.0, area.top() + more_top + 8.0), vec2(120.0, 24.0));
-            if ui.put(r, egui::Button::new("Open Settings")).clicked() {
-                let _ = app.run("app.settings", json!({"tab": "faces"}));
+            let label = if step == super::faces::Setup::TurnOn { "Turn on" } else { "Open Settings" };
+            let b = ui.put(r, egui::Button::new(label));
+            register(ui.ctx(), "faces:setup", b.rect);
+            if b.clicked() {
+                if step == super::faces::Setup::TurnOn {
+                    super::faces::take_step(app, ui.ctx(), step);
+                } else {
+                    let _ = app.run("app.settings", json!({"tab": "faces"}));
+                }
             }
         }
         let grid_top = more_top + SECTION_H;

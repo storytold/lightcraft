@@ -343,7 +343,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
         let hints = super::faces::hints_for(app, id.0);
         let people = if app.ui.name_edit.is_some() { app.caches.person_names(&app.session.catalog) } else { Default::default() };
-        match region_overlay(ui, &p, &map, &photo, hints.as_deref(), &people, &mut app.ui.name_edit) {
+        // while the name box is open and recognition is not set up, the box offers the next step
+        let setup = if app.ui.name_edit.is_some() { super::faces::setup(app, ui.ctx()) } else { super::faces::Setup::Running };
+        match region_overlay(ui, &p, &map, &photo, hints.as_deref(), &people, &mut app.ui.name_edit, setup) {
+            Some(RegionEdit::SetUp) => {
+                app.ui.name_edit = None;
+                super::faces::take_step(app, ui.ctx(), setup);
+            }
             Some(RegionEdit::Remove(index)) => {
                 let _ = app.run("photo.removeRegion", json!({"id": id.0, "index": index}));
             }
@@ -452,6 +458,8 @@ enum RegionEdit {
     Resize(usize, lightcraft_geom::Rect),
     /// A name was typed or picked for the face.
     Name(usize, String),
+    /// The name box's offer to set up face recognition was pressed.
+    SetUp,
 }
 
 /// Handles of a box: (x, y) as fractions of its width and height, and the cursor they show.
@@ -478,6 +486,7 @@ fn region_overlay(
     hints: Option<&super::faces::Hints>,
     people: &[String],
     editing: &mut Option<crate::state::NameEdit>,
+    setup: super::faces::Setup,
 ) -> Option<RegionEdit> {
     let t = Tokens::get(p.ctx());
     let clip = p.clip_rect();
@@ -596,8 +605,9 @@ fn region_overlay(
         }
         if editing_this && let Some(e) = editing.as_mut() {
             let candidates = hint.map(|h| h.candidates.as_slice()).unwrap_or(&[]);
-            match super::faces::name_editor(ui.ctx(), pos2(label.left(), rect.bottom() + 8.0), e, candidates, people) {
+            match super::faces::name_editor(ui.ctx(), pos2(label.left(), rect.bottom() + 8.0), e, candidates, people, setup) {
                 super::faces::Editor::Submit(name) => edit = Some(RegionEdit::Name(index, name)),
+                super::faces::Editor::Setup => edit = Some(RegionEdit::SetUp),
                 super::faces::Editor::Cancel => *editing = None,
                 super::faces::Editor::Open => {}
             }
