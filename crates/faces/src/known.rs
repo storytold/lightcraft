@@ -104,6 +104,44 @@ pub fn lookup(sha256: &str) -> Option<ModelManifest> {
     all().into_iter().find(|m| m.sha256.as_deref() == Some(sha256))
 }
 
+/// Where the user's "Download" button fetches a model from. The URL is pinned to a commit of the model's own
+/// repository, and what arrives is checked against the manifest's size and SHA-256 before anything uses it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Download {
+    pub id: String,
+    pub url: String,
+    /// The name the file is kept under while it waits for the user to accept its terms.
+    pub file_name: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+}
+
+/// Pinned download addresses by model id. Only models whose terms allow us to point at them are here: a model
+/// that is marked non-commercial is never offered for download (the user brings the file themselves).
+const SOURCES: &[(&str, &str, &str)] = &[
+    (
+        "sface-2021dec",
+        "https://github.com/opencv/opencv_zoo/raw/25f423d0e04c31a17254620e58febd7386da523b/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
+        "face_recognition_sface_2021dec.onnx",
+    ),
+    ("auraface-v1", "https://huggingface.co/fal/AuraFace-v1/resolve/af6d057c9b0ec4071d4c49c80e3539258798b609/glintr100.onnx", "glintr100.onnx"),
+];
+
+/// How to download the model with this id, if LightCraft offers to.
+pub fn download(id: &str) -> Option<Download> {
+    let (_, url, file_name) = SOURCES.iter().find(|(i, _, _)| *i == id)?;
+    let m = all().into_iter().find(|m| m.id == id)?;
+    if m.licence.commercial == Commercial::No || BUNDLED.contains(&id) {
+        return None;
+    }
+    Some(Download { id: m.id, url: (*url).into(), file_name: (*file_name).into(), size_bytes: m.size_bytes?, sha256: m.sha256? })
+}
+
+/// "github.com" for a download address: what the user is told the file comes from.
+pub fn host(url: &str) -> &str {
+    url.strip_prefix("https://").and_then(|r| r.split('/').next()).unwrap_or("")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,6 +169,28 @@ mod tests {
         assert_eq!(lookup(YUNET_SHA256).map(|m| m.role), Some(Role::Detector));
         assert!(lookup(&"0".repeat(64)).is_none());
         assert!(lookup("").is_none());
+    }
+
+    #[test]
+    fn downloads_are_pinned_checked_and_only_for_models_we_may_point_at() {
+        for m in all() {
+            let Some(d) = download(&m.id) else { continue };
+            assert!(d.url.starts_with("https://"), "{}: https only", d.id);
+            assert!(!d.url.contains("/main/") && !d.url.contains("/master/"), "{}: pinned to a commit, not a branch", d.id);
+            assert!(d.file_name.ends_with(".onnx") && !d.file_name.contains(['/', '\\']), "{}", d.file_name);
+            assert_eq!((Some(d.size_bytes), Some(d.sha256.as_str())), (m.size_bytes, m.sha256.as_deref()), "{}", d.id);
+            assert!(m.licence.commercial != Commercial::No, "{} is non-commercial and must not be offered", d.id);
+        }
+        assert_eq!(download("sface-2021dec").map(|d| host(&d.url).to_string()).as_deref(), Some("github.com"));
+        assert_eq!(download("auraface-v1").map(|d| host(&d.url).to_string()).as_deref(), Some("huggingface.co"));
+        // the bundled detector, unknown ids and path tricks have nothing to download
+        for id in ["yunet-2023mar", "nope", "", "../sface-2021dec"] {
+            assert!(download(id).is_none(), "{id}");
+        }
+        // every address in the table belongs to a known model
+        for (id, _, _) in SOURCES {
+            assert!(all().iter().any(|m| m.id == *id), "{id}");
+        }
     }
 
     #[test]

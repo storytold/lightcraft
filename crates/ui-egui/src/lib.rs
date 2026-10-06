@@ -853,6 +853,9 @@ pub struct Caches {
     pub album_count_scans: usize,
     /// Bumped when a face model is installed, removed or chosen, so Settings re-reads the list at once.
     pub faces_epoch: u64,
+    /// Face models the user pressed Download for that have not arrived yet (model ids): the licence dialog opens for
+    /// each when its file is ready.
+    pub faces_dl_watch: Vec<String>,
     /// Whether the background face indexer is running, how many faces it has embedded, how many photos are left, and
     /// when to ask it again.
     pub faces_active: bool,

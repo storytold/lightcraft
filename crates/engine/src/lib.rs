@@ -19,6 +19,7 @@ pub mod crs_masks;
 pub mod demo;
 pub mod devices;
 pub mod export;
+mod face_download;
 #[cfg(feature = "recognition")]
 mod faces_index;
 #[cfg(feature = "recognition")]
@@ -135,6 +136,8 @@ pub struct Session {
     pub(crate) skip_auto_write: bool,
     /// Where the host keeps face models (one folder each); `None` where there is no file system (the web).
     pub face_models_dir: Option<std::path::PathBuf>,
+    /// Face models being downloaded at the user's request (`faces.models.download`).
+    pub(crate) face_downloads: face_download::Downloads,
     /// The loaded recognition model and the face embeddings made with it.
     #[cfg(feature = "recognition")]
     pub(crate) faces: faces_index::FacesState,
@@ -238,6 +241,7 @@ impl Session {
             interaction: None,
             skip_auto_write: false,
             face_models_dir: None,
+            face_downloads: Default::default(),
             #[cfg(feature = "recognition")]
             faces: Default::default(),
             clipboard: None,

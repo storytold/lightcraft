@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd, str_param};
+use crate::face_download::{self, State};
 use crate::{EngineError, Result, Session};
 
 #[derive(Default, Serialize, Deserialize)]
@@ -100,6 +101,8 @@ fn row(m: &ModelManifest, installed: bool, selected: bool, accepted: &Value) -> 
         "sha256": m.sha256,
         "known": known::all().iter().any(|k| k.id == m.id),
         "bundled": bundled,
+        // a pinned address LightCraft can fetch it from (the user presses Download), and which site that is
+        "downloadHost": known::download(&m.id).map(|d| known::host(&d.url).to_string()),
         "installed": installed || bundled,
         "selected": selected,
         "accepted": accepted,
@@ -228,7 +231,50 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
     write_atomic(&home.join("face-model.json"), &serde_json::to_vec_pretty(&m).map_err(|e| fail("manifest", e))?)?;
     let accepted = json!({"acceptedAt": (s.clock)(), "licence": m.licence.name, "commercial": m.licence.commercial, "fileName": ins.file_name, "selfTest": test});
     write_atomic(&home.join("installed.json"), &serde_json::to_vec_pretty(&accepted).map_err(|e| fail("record", e))?)?;
+    // a file that was downloaded and waited for the user's acceptance has served: the installed copy is the model now
+    let staged = Path::new(path);
+    if staged.parent() == Some(dir.join(face_download::STAGING).as_path()) {
+        let _ = std::fs::remove_file(staged);
+        s.face_downloads.staged_file_used(staged);
+    }
     Ok(json!({"installed": row(&m, true, false, &accepted)}))
+}
+
+/// `faces.models.download {id}`: fetch a model LightCraft knows an address for, in the background.
+fn download(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "faces.models.download";
+    let id = str_param(p, "id").ok_or_else(|| bad(C, "missing `id`"))?;
+    let dir = models_dir(s, C)?;
+    let spec = known::download(id).ok_or_else(|| bad(C, "LightCraft has no download for that model: get the file from its page, then add it"))?;
+    if installed_models(&dir).iter().any(|i| i.manifest.id == spec.id) {
+        return Err(bad(C, "that model is already installed"));
+    }
+    let host = known::host(&spec.url).to_string();
+    s.face_downloads.start(spec, &dir).map_err(|e| bad(C, e))?;
+    Ok(json!({"started": id, "from": host}))
+}
+
+fn download_row(id: &str, state: &State) -> Value {
+    let from = known::download(id).map(|d| known::host(&d.url).to_string());
+    match state {
+        State::Running { bytes, total } => json!({"id": id, "state": "running", "bytes": bytes, "total": total, "from": from}),
+        State::Done { path } => json!({"id": id, "state": "done", "path": path.display().to_string(), "from": from}),
+        State::Failed(why) => json!({"id": id, "state": "failed", "error": why, "from": from}),
+        State::Cancelled => json!({"id": id, "state": "cancelled", "from": from}),
+    }
+}
+
+/// `faces.models.downloads`: where each download stands.
+fn downloads(s: &mut Session, _: &Value) -> Result<Value> {
+    let all: Vec<Value> = s.face_downloads.snapshot().iter().map(|(id, st)| download_row(id, st)).collect();
+    Ok(json!({"running": s.face_downloads.running(), "downloads": all}))
+}
+
+/// `faces.models.downloadCancel {id}`: stop a download, or throw away a finished one that was not installed.
+fn download_cancel(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "faces.models.downloadCancel";
+    let id = str_param(p, "id").ok_or_else(|| bad(C, "missing `id`"))?;
+    Ok(json!({"discarded": s.face_downloads.discard(id)}))
 }
 
 /// Load the model and run its self-test: `Ok(null)` in a build without the recognition runtime (nothing can
@@ -328,6 +374,9 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "faces.models.list", "Face Models", [], None, "{} → {dir, enabled, embedder, runtime, models: [{id, name, role, licence{name, commercial, url, notice}, provenance, source, sizeBytes, known, bundled, installed, selected}]}", always, list),
         cmd!(query "faces.models.inspect", "Inspect Face Model File", [], None, "{path} → what a .onnx file is: {kind: known | draft | unsupported, model, assumptions, reason, alreadyInstalled}; installs nothing", always, inspect),
         cmd!(query "faces.models.install", "Install Face Model", [], None, "{path, acknowledged: true} — copy a .onnx face recognition model into the models folder. `acknowledged` must be true: the user has been shown its licence (see inspect) and accepted it", always, install),
+        cmd!(query "faces.models.download", "Download Face Model", [], None, "{id} → {started, from} — fetch a recognition model LightCraft has a pinned address for (see `downloadHost` in the list), in the background with the system's curl. It is checked against its size and SHA-256 and then waits in the models folder; follow with `faces.models.install` on its path once the user has accepted its terms", always, download),
+        cmd!(query "faces.models.downloads", "Face Model Downloads", [], None, "{} → {running, downloads: [{id, state: running | done | failed | cancelled, bytes, total, path, error, from}]}", always, downloads),
+        cmd!(query "faces.models.downloadCancel", "Cancel Face Model Download", [], None, "{id} → {discarded} — stop a download, or delete a finished one that was not installed", always, download_cancel),
         cmd!(query "faces.models.test", "Test Face Model", [], None, "{id} → {ok, result: {loadMs, embedMs, dimension, checks}} — load an installed recognition model and check it gives sensible faces; needs the recognition runtime", always, test),
         cmd!(query "faces.models.remove", "Remove Face Model", [], None, "{id} — delete an installed model", always, remove),
         cmd!(query "faces.models.select", "Choose Face Recognition Model", [], None, "{id: installed recogniser | null}", always, select),

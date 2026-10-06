@@ -245,3 +245,48 @@ fn installing_runs_the_self_test_and_refuses_models_that_do_not_work() {
     assert!(leftovers.len() == 1 && leftovers[0].starts_with("custom-works-"), "only the working model remains: {leftovers:?}");
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn download_offers_only_pinned_models_and_refuses_the_rest() {
+    let d = temp("download");
+    let mut s = session(&d);
+    // what can be downloaded is said in the list
+    let l = s.execute("faces.models.list", &json!({})).unwrap();
+    assert_eq!(find(&l, "sface-2021dec")["downloadHost"], "github.com");
+    assert_eq!(find(&l, "auraface-v1")["downloadHost"], "huggingface.co");
+    assert_eq!(find(&l, "yunet-2023mar")["downloadHost"], Value::Null, "the detector ships with the app");
+    // nothing is fetched for an address or id the user (or an agent) makes up
+    for id in ["yunet-2023mar", "nope", "", "../sface-2021dec", "https://example.org/m.onnx"] {
+        assert!(s.execute("faces.models.download", &json!({"id": id})).is_err(), "{id}");
+    }
+    assert!(s.execute("faces.models.download", &json!({})).is_err());
+    let r = s.execute("faces.models.downloads", &json!({})).unwrap();
+    assert!(r["running"].as_bool().is_some());
+    // no models folder (the web build): refused, not a crash
+    let mut web = Session::new();
+    assert!(web.execute("faces.models.download", &json!({"id": "sface-2021dec"})).is_err());
+    assert_eq!(web.execute("faces.models.downloads", &json!({})).unwrap()["downloads"], json!([]));
+    assert_eq!(s.execute("faces.models.downloadCancel", &json!({"id": "nothing"})).unwrap()["discarded"], false);
+    assert!(s.execute("faces.models.downloadCancel", &json!({})).is_err());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn installing_a_staged_download_removes_the_staged_file() {
+    let d = temp("staged");
+    let mut s = session(&d);
+    let staging = d.join("models").join(crate::face_download::STAGING);
+    std::fs::create_dir_all(&staging).unwrap();
+    let staged = model_file(&staging, "waiting.onnx", 512);
+    // a staging folder is never mistaken for a model
+    let l = s.execute("faces.models.list", &json!({})).unwrap();
+    assert!(l["models"].as_array().unwrap().iter().all(|m| m["id"] != crate::face_download::STAGING));
+    let r = s.execute("faces.models.install", &json!({"path": staged, "acknowledged": true})).unwrap();
+    assert!(r["installed"]["id"].as_str().unwrap().starts_with("custom-"));
+    assert!(!std::path::Path::new(&staged).exists(), "the staged copy is deleted once installed");
+    // a file from anywhere else is left where it is
+    let mine = model_file(&d, "mine.onnx", 512);
+    s.execute("faces.models.install", &json!({"path": mine, "acknowledged": true})).unwrap();
+    assert!(std::path::Path::new(&mine).exists());
+    let _ = std::fs::remove_dir_all(&d);
+}
