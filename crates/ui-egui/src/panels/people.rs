@@ -109,9 +109,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 t.text_dim,
             );
         }
+        let mut shown = 0;
         for row in visible(PAD, rows, row_h) {
             for col in 0..cols {
                 let Some(person) = people.get(row * cols + col) else { break };
+                shown += 1;
                 let min = area.min + vec2(PAD + col as f32 * (edge + GAP), PAD + row as f32 * row_h);
                 let selected = active.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(&person.name));
                 card(app, ui, person, Rect::from_min_size(min, vec2(edge, edge + NAME_H)), edge, ppp, selected);
@@ -126,10 +128,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             for col in 0..tile_cols {
                 let i = row * tile_cols + col;
                 let Some(face) = unnamed.faces.get(i) else { break };
+                shown += 1;
                 let min = area.min + vec2(PAD + col as f32 * (tile + GAP), grid_top + row as f32 * tile_row);
                 super::unnamed::tile(app, ui, &unnamed, i, Rect::from_min_size(min, vec2(tile, tile)), face, ppp);
             }
         }
+        // the picture cache keeps all of them (a fixed budget would evict and re-request the same few every frame)
+        app.renderer.want_variants(shown);
     });
 }
 

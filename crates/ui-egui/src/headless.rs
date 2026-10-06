@@ -648,6 +648,49 @@ mod tests {
         assert_eq!(named(&h, ids[1], 0), None);
     }
 
+    /// A screenful of faces larger than the picture cache's usual budget (96) is all kept: with a fixed budget the same few
+    /// tiles were evicted and re-requested every frame and stayed blank.
+    #[test]
+    fn a_screenful_of_small_faces_is_not_evicted_and_left_blank() {
+        use lightcraft_catalog::Op;
+        let mut h = demo([1500.0, 1000.0]);
+        let t = Duration::from_secs(20);
+        let ids: Vec<_> = h.app.session.catalog.photos().map(|p| p.id).collect();
+        // seven unnamed faces in every photo of the demo library
+        for id in &ids {
+            let mut meta = h.app.session.catalog.photo(*id).unwrap().meta.clone();
+            meta.regions = (0..7)
+                .map(|k| lightcraft_meta::Region {
+                    rect: lightcraft_geom::Rect { x0: 0.05 + 0.12 * k as f64, y0: 0.2, x1: 0.15 + 0.12 * k as f64, y1: 0.45 },
+                    kind: lightcraft_meta::RegionKind::Face,
+                    name: None,
+                    description: None,
+                })
+                .collect();
+            h.app.session.commit("setup", Op::SetMeta { id: *id, meta: Box::new(meta) }).unwrap();
+        }
+        // the smallest faces, so a lot of them fit on the screen
+        h.request("ui.set", json!({"thumbSize": 90.0, "view": "people"}), t);
+        h.settle(SETTLE);
+        h.step();
+        let drawn = h.request("ui.widgets", json!({"filter": "unnamed-face:"}), t)["result"].as_array().map_or(0, Vec::len);
+        assert!(drawn > 96, "the test needs more faces on screen than the usual budget, got {drawn}");
+        // the pictures are made and kept, well beyond the old budget (a few demo photos share a scene, so two faces can share a
+        // picture: the count is a little under the number of tiles)
+        let started = Instant::now();
+        while h.app.renderer.variant_textures() < drawn - 20 && started.elapsed() < Duration::from_secs(20) {
+            h.step();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let kept = h.app.renderer.variant_textures();
+        assert!(kept > 96 + 30, "{kept} pictures kept for {drawn} faces on screen");
+        // and they stay: many more frames, and none is evicted to be asked for again
+        for _ in 0..30 {
+            h.step();
+        }
+        assert!(h.app.renderer.variant_textures() >= kept, "{} pictures kept after more frames, {kept} before", h.app.renderer.variant_textures());
+    }
+
     /// `ui.inspect` says how hard the face scan is allowed to work and whether the window counts as in front, so a slow
     /// scan can be told from a stuck one.
     #[test]

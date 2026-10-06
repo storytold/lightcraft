@@ -151,9 +151,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
             let last = (((viewport.bottom() - top) / row_h).ceil().max(0.0) as usize).min(rows);
             first..last
         };
+        let mut shown = 0;
         for row in visible(PAD, confirmed_rows) {
             for col in 0..cols {
                 let Some(f) = page.confirmed.get(row * cols + col) else { break };
+                shown += 1;
                 let min = area.min + vec2(PAD + col as f32 * (edge + super::people::TILE_GAP), PAD + row as f32 * row_h);
                 if let Hit::Open = tile(app, ui, Rect::from_min_size(min, vec2(edge, edge)), f, ppp, false, &shown_name) {
                     hit = Some((Hit::Open, f.clone()));
@@ -178,6 +180,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         for row in visible(grid_top, more_rows) {
             for col in 0..cols {
                 let Some(f) = more.get(row * cols + col) else { break };
+                shown += 1;
                 let min = area.min + vec2(PAD + col as f32 * (edge + super::people::TILE_GAP), grid_top + row as f32 * row_h);
                 match tile(app, ui, Rect::from_min_size(min, vec2(edge, edge)), f, ppp, true, &shown_name) {
                     Hit::Confirm => hit = Some((Hit::Confirm, (*f).clone())),
@@ -186,6 +189,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
                 }
             }
         }
+        // the picture cache keeps every face on screen
+        app.renderer.want_variants(shown);
     });
     if let Some((what, f)) = hit {
         match what {
