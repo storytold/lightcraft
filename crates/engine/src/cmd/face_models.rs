@@ -21,10 +21,10 @@ use crate::{EngineError, Result, Session};
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-struct FaceSettings {
-    enabled: bool,
+pub(super) struct FaceSettings {
+    pub(super) enabled: bool,
     /// The installed recogniser in use.
-    embedder: Option<String>,
+    pub(super) embedder: Option<String>,
 }
 
 fn fail(what: &str, e: impl std::fmt::Display) -> EngineError {
@@ -42,7 +42,7 @@ fn read_capped(path: &Path, max: usize) -> Option<Vec<u8>> {
     (buf.len() <= max).then_some(buf)
 }
 
-fn read_settings(dir: &Path) -> FaceSettings {
+pub(super) fn read_settings(dir: &Path) -> FaceSettings {
     read_capped(&dir.join("settings.json"), 4096).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
 }
 
@@ -60,14 +60,14 @@ fn write_settings(dir: &Path, st: &FaceSettings) -> Result<()> {
     write_atomic(&dir.join("settings.json"), &serde_json::to_vec_pretty(st).map_err(|e| fail("settings", e))?)
 }
 
-struct Installed {
-    manifest: ModelManifest,
-    accepted: Value,
+pub(super) struct Installed {
+    pub(super) manifest: ModelManifest,
+    pub(super) accepted: Value,
 }
 
 /// The models in the folder. A folder that is not a valid model (wrong name, no model file, a manifest that
 /// does not validate or does not match its folder) is ignored, never trusted.
-fn installed_models(dir: &Path) -> Vec<Installed> {
+pub(super) fn installed_models(dir: &Path) -> Vec<Installed> {
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
     let mut out = Vec::new();
     for e in entries.flatten() {

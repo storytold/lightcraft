@@ -19,6 +19,10 @@ pub mod crs_masks;
 pub mod demo;
 pub mod devices;
 pub mod export;
+#[cfg(feature = "recognition")]
+mod faces_index;
+#[cfg(feature = "recognition")]
+mod faces_worker;
 pub mod files;
 pub mod fonts;
 pub mod guard;
@@ -131,6 +135,9 @@ pub struct Session {
     pub(crate) skip_auto_write: bool,
     /// Where the host keeps face models (one folder each); `None` where there is no file system (the web).
     pub face_models_dir: Option<std::path::PathBuf>,
+    /// The loaded recognition model and the face embeddings made with it.
+    #[cfg(feature = "recognition")]
+    pub(crate) faces: faces_index::FacesState,
     /// Copied develop settings (partial JSON) for Paste.
     pub clipboard: Option<Value>,
     /// The folder on disk the [`LibrarySource::Folder`] view browses.
@@ -231,6 +238,8 @@ impl Session {
             interaction: None,
             skip_auto_write: false,
             face_models_dir: None,
+            #[cfg(feature = "recognition")]
+            faces: Default::default(),
             clipboard: None,
             meta_clipboard: None,
             browse: None,
@@ -709,6 +718,8 @@ mod tests_color;
 mod tests_export;
 #[cfg(test)]
 mod tests_face_models;
+#[cfg(all(test, feature = "recognition"))]
+mod tests_face_recognize;
 #[cfg(test)]
 mod tests_forget_local;
 #[cfg(test)]

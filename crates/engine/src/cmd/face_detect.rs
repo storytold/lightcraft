@@ -20,14 +20,14 @@ use crate::{Result, Session};
 
 const C: &str = "faces.detect";
 /// Regions made by this command say so in their description; only those are replaced on a new run.
-const MARK: &str = "Detected by ";
+pub(crate) const MARK: &str = "Detected by ";
 const LABEL: &str = "YuNet 2023mar";
 /// Long edge of the picture the detector looks at (it shrinks it to its own 640 anyway).
 const LOOK_EDGE: usize = 1280;
 /// How much a detection must overlap a region the photo already has to count as the same face.
 const EXISTING_IOU: f64 = 0.3;
 
-fn detector() -> std::result::Result<&'static Detector, String> {
+pub(crate) fn detector() -> std::result::Result<&'static Detector, String> {
     static DETECTOR: OnceLock<std::result::Result<Detector, String>> = OnceLock::new();
     DETECTOR.get_or_init(|| Detector::new(BUNDLED).map_err(|e| e.to_string())).as_ref().map_err(Clone::clone)
 }
@@ -53,8 +53,18 @@ fn overlaps_existing(f: &Face, regions: &[Region]) -> bool {
     })
 }
 
-fn is_detected(r: &Region) -> bool {
+pub(crate) fn is_detected(r: &Region) -> bool {
     r.description.as_deref().is_some_and(|d| d.starts_with(MARK))
+}
+
+/// The photo as the faces see it: upright, uncropped, default settings, as 8-bit RGB with its size, its long edge at
+/// most `edge`.
+pub(crate) fn render_rgb(s: &mut Session, id: lightcraft_catalog::PhotoId, edge: usize) -> std::result::Result<(Vec<u8>, usize, usize), String> {
+    let settings = DevelopSettings::default();
+    let job = s.preview_job(id, edge, edge, false, &settings).ok_or("no such photo")?;
+    let image = job.run().rendered?.image;
+    let rgb: Vec<u8> = image.data.iter().flat_map(|px| [px[0], px[1], px[2]]).collect();
+    Ok((rgb, image.width, image.height))
 }
 
 fn detect(s: &mut Session, p: &Value) -> Result<Value> {
@@ -69,17 +79,14 @@ fn detect(s: &mut Session, p: &Value) -> Result<Value> {
     let started = Instant::now();
     let (mut results, mut ops) = (Vec::new(), Vec::new());
     for id in s.targets(p) {
-        let settings = DevelopSettings::default();
-        let Some(job) = s.preview_job(id, LOOK_EDGE, LOOK_EDGE, false, &settings) else { continue };
-        let rendered = match job.run().rendered {
-            Ok(r) => r.image,
+        let (rgb, width, height) = match render_rgb(s, id, LOOK_EDGE) {
+            Ok(r) => r,
             Err(e) => {
                 results.push(json!({"id": id.0, "error": e}));
                 continue;
             }
         };
-        let rgb: Vec<u8> = rendered.data.iter().flat_map(|px| [px[0], px[1], px[2]]).collect();
-        let faces = match detector.detect(&rgb, rendered.width, rendered.height, &opts) {
+        let faces = match detector.detect(&rgb, width, height, &opts) {
             Ok(f) => f,
             Err(e) => {
                 results.push(json!({"id": id.0, "error": e.to_string()}));
