@@ -330,3 +330,59 @@ fn soft_proof_maps_into_the_proof_gamut_and_flags_what_does_not_fit() {
     assert!(blue(&pro) > 0);
     assert!(red(&pro) < n, "ProPhoto holds more than sRGB");
 }
+
+/// Mean absolute 8-bit difference.
+fn mean_diff(a: &lightcraft_raster::Rgba8, b: &lightcraft_raster::Rgba8) -> f64 {
+    let n = a.data.len().max(1) as f64;
+    a.data.iter().zip(&b.data).map(|(p, q)| (0..3).map(|c| (p[c] as f64 - q[c] as f64).abs()).sum::<f64>() / 3.0).sum::<f64>() / n
+}
+
+#[test]
+fn sharpening_radius_is_in_source_pixels() {
+    let full = lightcraft_scenes::demo_library()[0].render(480, 320);
+    let info = SourceInfo { raw: true, native_long: 480, ..Default::default() };
+    let mut s = DevelopSettings::default();
+    let req = RenderRequest::fit(480, 480);
+    let plain = render(&full, &info, &s, &req).image;
+    s.detail.sharpen_amount = 100.0;
+    s.detail.sharpen_detail = 100.0;
+    let strength = |s: &DevelopSettings, src: &Rgb32f, info: &SourceInfo, req: &RenderRequest| {
+        let mut off = s.clone();
+        off.detail.sharpen_amount = 0.0;
+        mean_diff(&render(src, info, s, req).image, &render(src, info, &off, req).image)
+    };
+    // the radius has an effect, growing with it
+    s.detail.sharpen_radius = 0.5;
+    let r05 = strength(&s, &full, &info, &req);
+    s.detail.sharpen_radius = 3.0;
+    let r3 = strength(&s, &full, &info, &req);
+    assert!(r05 > 0.2 && r3 > 1.5 * r05, "radius 0.5: {r05}, radius 3: {r3}");
+    assert_ne!(render(&full, &info, &s, &req).image, plain);
+
+    // a half-size preview from a half-size proxy sharpens like one from the full-size source
+    // (the radius is in the original's pixels, not the proxy's)
+    s.detail.sharpen_radius = 2.0;
+    let proxy = lightcraft_raster::resample::resize(&full, 240, 160, lightcraft_raster::resample::Filter::Box);
+    let half = RenderRequest::fit(240, 240);
+    let from_full = strength(&s, &full, &info, &half);
+    let from_proxy = strength(&s, &proxy, &info, &half);
+    assert!((from_proxy - from_full).abs() < 0.15 * from_full, "proxy {from_proxy} vs full {from_full}");
+    // without the original's size the proxy's own pixels would set the radius: twice as wide
+    let unknown = SourceInfo { native_long: 0, ..info };
+    let wrong = strength(&s, &proxy, &unknown, &half);
+    assert!(wrong > 1.3 * from_proxy, "{wrong} vs {from_proxy}");
+}
+
+#[test]
+fn baseline_sharpness_scales_the_amount() {
+    let src = lightcraft_scenes::demo_library()[0].render(240, 160);
+    let req = RenderRequest::fit(240, 240);
+    let mut s = DevelopSettings::default();
+    s.detail.sharpen_amount = 40.0;
+    let base = SourceInfo { raw: true, ..Default::default() };
+    let pro = SourceInfo { baseline_sharpness: 1.5, ..base };
+    let at_1_5 = render(&src, &pro, &s, &req).image;
+    assert_ne!(at_1_5, render(&src, &base, &s, &req).image);
+    s.detail.sharpen_amount = 60.0;
+    assert!(max_diff(&at_1_5, &render(&src, &base, &s, &req).image) <= 1);
+}

@@ -179,6 +179,9 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
         ifd.set(t::AS_SHOT_WHITE_XY, rat_vec(&[xy.x, xy.y]));
     }
     ifd.set(t::BASELINE_EXPOSURE, Value::SRational(vec![srational(c.baseline_exposure)]));
+    if let Some(v) = c.baseline_sharpness {
+        ifd.set(t::BASELINE_SHARPNESS, rat_vec(&[v]));
+    }
     // the source's own profile look travels with its data (conversions, smart previews, merges)
     let p = &c.profile;
     let table_tags = |ifd: &mut IfdBuilder, table: &crate::profile::HsvTable, dims: u16, enc: u16| {

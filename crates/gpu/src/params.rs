@@ -27,7 +27,13 @@ const FIELDS: &[(&str, usize)] = &[
     ("TEX", 1),
     ("DEHAZE", 1),
     ("SHARPEN", 1),
+    ("SHARPEN_LOCAL", 1),
     ("SHARPEN_MASK", 1),
+    ("SHARPEN_HALO", 1),
+    ("SHARPEN_FINE", 1),
+    ("HAS_SHARP", 1),
+    // offset of the sharpening blur in the `tex` buffer (after the texture plane when both exist)
+    ("SHARP_OFF", 1),
     ("HAS_CLAR", 1),
     ("HAS_TEX", 1),
     ("HAS_DARK", 1),
@@ -131,6 +137,9 @@ impl Block {
 pub struct Present {
     pub clarity: bool,
     pub texture: bool,
+    /// The sharpening blur is bound, in the `tex` buffer at `sharpen_off` words.
+    pub sharpen: bool,
+    pub sharpen_off: usize,
     pub dark: bool,
     /// The blurred chromaticity follows the mask planes in the `masks` buffer.
     pub chroma: bool,
@@ -173,7 +182,12 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.f("TEX", fp.tex);
     p.f("DEHAZE", fp.dehaze);
     p.f("SHARPEN", fp.sharpen);
+    p.f("SHARPEN_LOCAL", fp.sharpen_local);
     p.f("SHARPEN_MASK", fp.sharpen_mask);
+    p.f("SHARPEN_HALO", fp.sharpen_halo);
+    p.f("SHARPEN_FINE", fp.sharpen_fine);
+    p.b("HAS_SHARP", present.sharpen);
+    p.u("SHARP_OFF", present.sharpen_off as u32);
     p.b("HAS_CLAR", present.clarity);
     p.b("HAS_TEX", present.texture);
     p.b("HAS_DARK", present.dark);

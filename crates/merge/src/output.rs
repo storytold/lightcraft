@@ -45,6 +45,7 @@ pub fn color_data(color: &FrameColor) -> ColorData {
                 as_shot_neutral: Some([1.0, 1.0, 1.0]),
                 as_shot_white_xy: None,
                 baseline_exposure: 0.0,
+                baseline_sharpness: None,
                 profile: Default::default(),
             }
         }

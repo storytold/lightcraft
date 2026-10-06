@@ -26,7 +26,7 @@ use lightcraft_raster::{Histogram, Rgb32f, Rgba8};
 use serde::{Deserialize, Serialize};
 
 /// Bump when the pipeline's output changes, to invalidate cached thumbnails.
-pub const RENDER_CACHE_VERSION: u64 = 7;
+pub const RENDER_CACHE_VERSION: u64 = 8;
 
 /// Thumbnails render at one of these long edges (so window/cell size changes reuse the cache).
 pub const THUMB_SIZES: [usize; 4] = [128, 256, 384, 512];
@@ -598,13 +598,22 @@ pub fn source_info(p: &Photo) -> SourceInfo {
     if matches!(p.source, Source::Demo { .. }) {
         return SourceInfo { raw: true, ..Default::default() };
     }
+    let native_long = p.width.max(p.height);
     // A raw shown from its embedded preview is a rendered (display-referred) JPEG: relative white
     // balance and the display tone curve, like any other rendered file.
     if p.develops_raw() {
         let (temp, tint) = if p.relative_wb() { (6500.0, 0.0) } else { p.as_shot_wb.unwrap_or((5500.0, 0.0)) };
-        SourceInfo { raw: true, as_shot_temp: temp, as_shot_tint: tint, lens: p.embedded_lens, relative_wb: p.relative_wb(), ..Default::default() }
+        SourceInfo {
+            raw: true,
+            as_shot_temp: temp,
+            as_shot_tint: tint,
+            lens: p.embedded_lens,
+            relative_wb: p.relative_wb(),
+            native_long,
+            ..Default::default()
+        }
     } else {
-        SourceInfo::default()
+        SourceInfo { native_long, ..Default::default() }
     }
 }
 

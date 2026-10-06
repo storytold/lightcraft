@@ -13,6 +13,12 @@
 - A preset whose lens-profile switch is off no longer turns off the lens corrections built into a DNG (iPhone ProRAW
   and other files with embedded distortion / vignetting corrections), matching what the preset does elsewhere.
 
+### Editing
+- Sharpening's Radius and Detail sliders now work. Radius is in the photo's own pixels (0.5–3), so a 1:1 view and a
+  full-size export match and a downscaled view shows what the downscaled export will; Detail holds back halos and
+  fine texture at low values. DNG files that ask for more or less sharpening (`BaselineSharpness`, e.g. 1.5 on iPhone
+  ProRAW) get it.
+
 ### Reliability
 - LightCraft no longer crashes at launch on Windows PCs whose Vulkan driver is broken (issue #136, e.g. some Intel UHD
   630 drivers): on Windows the window and GPU rendering use DirectX 12 only and never load the Vulkan driver unless

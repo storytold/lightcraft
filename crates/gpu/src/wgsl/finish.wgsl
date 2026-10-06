@@ -193,6 +193,24 @@ fn refine_saturation(before: vec3<f32>, after: vec3<f32>, refine: f32) -> vec3<f
     return y1 + (after - y1) * k;
 }
 
+// `finish::sharpen_term`.
+fn sharpen_term(det: f32) -> f32 {
+    let a = abs(det);
+    let mask = pf(F_SHARPEN_MASK);
+    let halo = pf(F_SHARPEN_HALO);
+    let fine = pf(F_SHARPEN_FINE);
+    var m = 1.0;
+    if (mask > 0.0) {
+        m = sstep(mask * 0.25, mask * 0.25 + 0.15, a);
+    }
+    var f = 1.0;
+    if (fine > 0.0) {
+        f = sstep(0.0, fine, a);
+    }
+    // the argument clamped: some drivers' tanh overflows to NaN for large inputs
+    return m * f * halo * tanh(clamp(det / max(halo, 1e-3), -10.0, 10.0));
+}
+
 fn ghash(i: i32, j: i32, seed: u32) -> f32 {
     var v = (bitcast<u32>(i) * GRAIN_H0) ^ (bitcast<u32>(j) * GRAIN_H1) ^ (seed * GRAIN_H2);
     v ^= v >> 13u;
@@ -365,19 +383,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         delta += cl * 0.85 * det * (0.35 + 0.65 * mid);
     }
     let tx = pf(F_TEX) + lt[8];
-    let sp = lt[13] * 0.6 + pf(F_SHARPEN);
-    if ((tx != 0.0 || sp != 0.0) && pu(F_HAS_TEX) != 0u) {
+    if (tx != 0.0 && pu(F_HAS_TEX) != 0u) {
         let det = l_pre - tex[i];
         let tame = 1.0 - 0.6 * sstep(0.4, 1.6, abs(det));
         delta += tx * 1.1 * clamp(det, -1.0, 1.0) * tame;
-        if (sp != 0.0) {
-            let sm = pf(F_SHARPEN_MASK);
-            var mk = 1.0;
-            if (sm > 0.0) {
-                mk = sstep(sm * 0.25, sm * 0.25 + 0.15, abs(det));
-            }
-            delta += sp * 1.3 * clamp(det, -0.8, 0.8) * mk;
-        }
+    }
+    let sp = lt[13] * pf(F_SHARPEN_LOCAL) + pf(F_SHARPEN);
+    if (sp != 0.0 && pu(F_HAS_SHARP) != 0u) {
+        delta += sp * sharpen_term(l_pre - tex[pu(F_SHARP_OFF) + i]);
     }
     // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
     if (l_noise != 0.0 && pu(F_HAS_TEX) != 0u) {

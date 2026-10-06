@@ -1,4 +1,11 @@
 //! The per-pixel stage: everything after the spatial planes are ready, in one parallel pass.
+//!
+//! **Sharpening** is an unsharp mask on log luminance: the detail is the difference to a Gaussian
+//! blur of σ = Radius source pixels ([`crate::local::sharpen_blur`]), scaled by Amount / 100 ×
+//! the DNG `BaselineSharpness`. Detail (0..100) suppresses halos and fine texture at low values:
+//! the detail term is soft-limited to ±(0.15 + 0.65·Detail/100) EV (overshoot at strong edges),
+//! and detail smaller than 0.06·(1 − Detail/100) EV (fine texture, noise) is faded out. Masking
+//! keeps only edges whose detail exceeds its threshold.
 
 use lightcraft_color::luminance_2020;
 use lightcraft_color::spline::{Lut1, MonotoneCurve};
@@ -174,8 +181,13 @@ pub struct FinishParams {
     pub clar: f32,
     pub tex: f32,
     pub dehaze: f32,
+    /// Sharpening: global gain (Amount / 100 × BaselineSharpness), gain per unit of local
+    /// Sharpness, Masking (0..1), halo limit (EV) and fine-detail threshold (EV), see [`sharpen_term`].
     pub sharpen: f32,
+    pub sharpen_local: f32,
     pub sharpen_mask: f32,
+    pub sharpen_halo: f32,
+    pub sharpen_fine: f32,
     /// Airlight after and before exposure, exposure gain and EV (see [`crate::Prepared`]).
     pub air: f32,
     pub air_pre: f32,
@@ -218,6 +230,8 @@ impl FinishParams {
             ((s.grain.amount / 100.0) as f32 * 0.13, cell.max(0.6), (s.grain.roughness / 100.0) as f32, s.grain.seed)
         });
         let calibration = s.section_enabled("calibration");
+        let bs = if info.baseline_sharpness.is_finite() { info.baseline_sharpness.clamp(0.0, 4.0) } else { 1.0 };
+        let detail = (s.detail.sharpen_detail / 100.0).clamp(0.0, 1.0) as f32;
         FinishParams {
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
@@ -242,8 +256,11 @@ impl FinishParams {
             clar,
             tex,
             dehaze,
-            sharpen: (s.detail.sharpen_amount / 150.0) as f32,
+            sharpen: (s.detail.sharpen_amount / 100.0) as f32 * bs,
+            sharpen_local: 0.9 * bs,
             sharpen_mask: (s.detail.sharpen_masking / 100.0) as f32,
+            sharpen_halo: 0.15 + 0.65 * detail,
+            sharpen_fine: 0.06 * (1.0 - detail),
             air: air_pre * gain,
             air_pre,
             gain,
@@ -450,17 +467,18 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 delta += cl * 0.85 * det * (0.35 + 0.65 * mid);
             }
             let tx = tex + l_tex;
-            let sp = l_sharp * 0.6 + sharpen;
-            if (tx != 0.0 || sp != 0.0)
+            if tx != 0.0
                 && let Some(b) = &p.texture_blur
             {
                 let det = l_pre - b.data[i];
                 let tame = 1.0 - 0.6 * smooth(0.4, 1.6, det.abs());
                 delta += tx * 1.1 * det.clamp(-1.0, 1.0) * tame;
-                if sp != 0.0 {
-                    let m = if sharpen_mask > 0.0 { smooth(sharpen_mask * 0.25, sharpen_mask * 0.25 + 0.15, det.abs()) } else { 1.0 };
-                    delta += sp * 1.3 * det.clamp(-0.8, 0.8) * m;
-                }
+            }
+            let sp = l_sharp * fp.sharpen_local + sharpen;
+            if sp != 0.0
+                && let Some(b) = &p.sharpen_blur
+            {
+                delta += sp * sharpen_term(l_pre - b.data[i], sharpen_mask, fp.sharpen_halo, fp.sharpen_fine);
             }
             // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
             if l_noise != 0.0
@@ -622,6 +640,17 @@ pub fn defringe_weight(c: [f32; 3], det: f32) -> f32 {
     smooth(0.04, 0.3, det.abs()) * smooth(0.02, 0.2, purple).max(smooth(0.02, 0.2, green))
 }
 
+/// Sharpening's contribution (EV, per unit of gain) for log-luminance detail `det` (the pixel
+/// minus its unsharp-mask blur): `mask` = Masking (0..1), `halo` = soft limit (EV), `fine` =
+/// fine-detail threshold (EV; 0 = sharpen all detail). See the module docs.
+#[inline]
+pub fn sharpen_term(det: f32, mask: f32, halo: f32, fine: f32) -> f32 {
+    let a = det.abs();
+    let m = if mask > 0.0 { smooth(mask * 0.25, mask * 0.25 + 0.15, a) } else { 1.0 };
+    let f = if fine > 0.0 { smooth(0.0, fine, a) } else { 1.0 };
+    m * f * halo * (det / halo.max(1e-3)).clamp(-10.0, 10.0).tanh()
+}
+
 /// Refine Saturation: scale the curved colour's chroma (around its luma, encoded values) so its
 /// saturation (chroma / luma) moves from the curve's towards the pre-curve one: the ratio is
 /// `(s_curve / s_before)^refine`, so 1 keeps the curve, 0 restores the original saturation.
@@ -686,6 +715,22 @@ mod tests {
         // luma is kept
         let y = |e: [f32; 3]| 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
         assert!((y(r) - y(after)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn sharpen_detail_limits_halos_and_spares_fine_texture() {
+        let (low, high) = ((0.15, 0.06), (0.8, 0.0)); // Detail 0 and 100: (halo, fine)
+        // a strong edge: limited overshoot at Detail 0, nearly linear at 100
+        let edge = 0.6;
+        assert!(sharpen_term(edge, 0.0, low.0, low.1) <= 0.15 + 1e-6);
+        assert!(sharpen_term(edge, 0.0, high.0, high.1) > 0.45);
+        // fine texture / noise: faded out at Detail 0, sharpened at 100
+        let fine = 0.008;
+        assert!(sharpen_term(fine, 0.0, low.0, low.1) < 0.1 * fine);
+        assert!((sharpen_term(fine, 0.0, high.0, high.1) - fine).abs() < 1e-4);
+        // symmetric (no brightness drift), and Masking keeps only edges
+        assert_eq!(sharpen_term(-edge, 0.0, low.0, low.1), -sharpen_term(edge, 0.0, low.0, low.1));
+        assert_eq!(sharpen_term(0.05, 1.0, high.0, high.1), 0.0);
     }
 
     #[test]
