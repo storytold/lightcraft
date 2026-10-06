@@ -10,6 +10,8 @@
 - 23 new built-in presets: Portrait, Landscape, Urban, Food, Seasons, Vintage and B&W toners.
 - Importing XMP presets no longer lists bookkeeping fields (`Cluster`, `SortName`, `SupportsAmount2`, the as-shot
   white, empty Point Color slots…) as settings that couldn't be carried over.
+- A preset whose lens-profile switch is off no longer turns off the lens corrections built into a DNG (iPhone ProRAW
+  and other files with embedded distortion / vignetting corrections), matching what the preset does elsewhere.
 
 ### Reliability
 - LightCraft no longer crashes at launch on Windows PCs whose Vulkan driver is broken (issue #136, e.g. some Intel UHD

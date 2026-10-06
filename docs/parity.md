@@ -252,7 +252,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-EDIT-DETAIL-SUPERRES | Super resolution | P2 | ⬜ | | |
 | LR-EDIT-DETAIL-AISHARPEN | AI sharpen | OOS | 🚫 | | |
 | LR-EDIT-OPTICS-CA | Remove chromatic aberration | P1 | ✅ | `crates/ui-egui/src/panels/edit.rs` (checkbox), `ctl:optics.caRed`, `ctl:optics.caBlue` | |
-| LR-EDIT-OPTICS-PROFILE | Lens profile corrections | P1 | 🟡 | `ctl:optics.profileDistortion`, `ctl:optics.profileVignetting`, `crates/pipeline/src/optics.rs` | uses corrections embedded in DNG/raw files; no lens-profile database |
+| LR-EDIT-OPTICS-PROFILE | Lens profile corrections | P1 | 🟡 | `ctl:optics.profileDistortion`, `ctl:optics.profileVignetting`, `crates/pipeline/src/optics.rs`, `crates/engine/src/crs.rs` | uses corrections embedded in DNG/raw files (the Enable switch and the amount sliders act on those); an imported preset's `LensProfileEnable=0` leaves them on, as Lightroom applies built-in corrections regardless (inferred); no lens-profile database |
 | LR-EDIT-OPTICS-DEFRINGE | Defringe | P1 | ✅ | `ctl:optics.defringe*` | no fringe eyedropper |
 | LR-EDIT-OPTICS-MANUAL | Manual distortion / vignetting | P1 | ✅ | `ctl:optics.distortion`, `ctl:optics.vignetting`, `ctl:optics.vignettingMidpoint` | |
 | LR-EDIT-GEOM-UPRIGHT | Upright | P1 | ✅ | `cmd:geometry.upright`, `cmd:geometry.guides` | |
