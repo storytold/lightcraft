@@ -13,6 +13,11 @@ LightCraft reads the face names other apps (Lightroom, digiKam…) write into yo
 - **Face recognition models are never bundled.** They are large (AuraFace is 261 MB), and their licences and training
   data deserve a decision by the person installing them. Everything works without one: names from XMP, the People
   view, the face boxes.
+- **Recognition runs on [tract](https://github.com/sonos/tract)** (Apache-2.0 or MIT), an ONNX runtime written in
+  Rust, in the desktop app and the CLI. Its build is not only Rust: it assembles hand-written assembly kernels for
+  speed, and on Linux ARM machines (aarch64) it may also compile a few small C ones, skipped when the compiler
+  cannot. A build with `--no-default-features` leaves tract, and so recognition, out (the desktop executable is
+  about 24 MB smaller on Windows); detection with YuNet and everything else stay.
 
 ## Adding a recognition model
 

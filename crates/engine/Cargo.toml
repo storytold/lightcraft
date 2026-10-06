@@ -8,6 +8,10 @@ description = "LightCraft engine: session, command registry, history, render job
 [lints]
 workspace = true
 
+[features]
+# Run installed face recognition models (the tract runtime). Off in the web build.
+recognition = ["lightcraft-faces/tract"]
+
 [dependencies]
 lightcraft-geom = { workspace = true }
 lightcraft-color = { workspace = true }

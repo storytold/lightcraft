@@ -92,8 +92,10 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         t,
         "Off by default. LightCraft already reads the face names other apps wrote into your photos; this is for models that suggest who is in a photo. Everything stays on your computer.",
     );
-    if list["runtime"].as_bool() != Some(true) {
-        hint(ui, t, "Models can be added and chosen now. Running them arrives in a later update.");
+    if list["runtime"].as_bool() == Some(true) {
+        hint(ui, t, "Each model is tested when you add it, and runs on your computer's processor.");
+    } else {
+        hint(ui, t, "This build cannot run recognition models: they can be added and chosen, not used.");
     }
     let all: Vec<Value> = list["models"].as_array().cloned().unwrap_or_default();
     heading(ui, t, "Face detector");
@@ -142,6 +144,13 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value) 
                 } else {
                     t.caution
                 }));
+                if let Some(test) = m["accepted"]["selfTest"].as_object() {
+                    let (line, ok) = match (test.get("ok").and_then(Value::as_bool), test.get("embedMs").and_then(Value::as_f64)) {
+                        (Some(true), Some(ms)) => (format!("Works · {ms:.0} ms per face"), true),
+                        _ => ("Failed its last test".to_string(), false),
+                    };
+                    ui.label(RichText::new(line).font(t.font(11.5)).color(if ok { t.text_dim } else { t.caution }));
+                }
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if installed {

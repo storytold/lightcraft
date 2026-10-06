@@ -367,7 +367,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         h.app.session.face_models_dir = Some(dir.join("models"));
         let model = dir.join("Mine.onnx");
-        std::fs::write(&model, lightcraft_faces::synthetic::embedder_model(512)).unwrap();
+        std::fs::write(&model, lightcraft_faces::synthetic::tiny_embedder_model(512)).unwrap();
         let open = |h: &mut Headless, path: &std::path::Path| {
             h.request("engine.execute", json!({"command": "dialog.faceModel", "params": {"path": path.to_string_lossy()}}), t)
         };

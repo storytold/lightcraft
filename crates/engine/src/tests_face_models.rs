@@ -22,7 +22,7 @@ fn session(dir: &std::path::Path) -> Session {
 
 fn model_file(dir: &std::path::Path, name: &str, dim: u64) -> String {
     let p = dir.join(name);
-    std::fs::write(&p, lightcraft_faces::synthetic::embedder_model(dim)).unwrap();
+    std::fs::write(&p, lightcraft_faces::synthetic::tiny_embedder_model(dim)).unwrap();
     p.to_string_lossy().into_owned()
 }
 
@@ -36,7 +36,7 @@ fn the_list_knows_the_known_models_and_is_honest_about_the_runtime() {
     let mut s = session(&d);
     let l = s.execute("faces.models.list", &json!({})).unwrap();
     assert_eq!(l["enabled"], false);
-    assert_eq!(l["runtime"], false);
+    assert_eq!(l["runtime"], cfg!(feature = "recognition"));
     assert_eq!(find(&l, "yunet-2023mar")["bundled"], true);
     assert_eq!(find(&l, "yunet-2023mar")["installed"], true);
     assert_eq!(find(&l, "auraface-v1")["installed"], false);
@@ -216,4 +216,32 @@ fn detect_replaces_only_earlier_detections_and_is_one_undo_step() {
     }
     let mut empty = Session::new();
     assert!(empty.execute("faces.detect", &json!({})).is_err());
+}
+
+/// With the recognition runtime: installing runs the model's self-test, a model that does not work is refused
+/// and leaves nothing behind, and `faces.models.test` runs it again.
+#[cfg(feature = "recognition")]
+#[test]
+fn installing_runs_the_self_test_and_refuses_models_that_do_not_work() {
+    let d = temp("selftest");
+    let mut s = session(&d);
+    // a working model passes; its record keeps the result
+    let f = model_file(&d, "Works.onnx", 64);
+    let r = s.execute("faces.models.install", &json!({"path": f, "acknowledged": true})).unwrap();
+    let id = r["installed"]["id"].as_str().unwrap().to_string();
+    assert_eq!(r["installed"]["accepted"]["selfTest"]["ok"], true, "{r}");
+    assert_eq!(r["installed"]["accepted"]["selfTest"]["dimension"], 64);
+    let t = s.execute("faces.models.test", &json!({"id": id})).unwrap();
+    assert_eq!(t["ok"], true, "{t}");
+    assert!(t["result"]["embedMs"].as_f64().unwrap() >= 0.0);
+    assert!(s.execute("faces.models.test", &json!({"id": "nope"})).is_err());
+    assert!(s.execute("faces.models.test", &json!({})).is_err());
+    // a graph with no layers passes the shape check but cannot run: refused, and nothing is left on disk
+    let broken = d.join("Broken.onnx");
+    std::fs::write(&broken, lightcraft_faces::synthetic::embedder_model(64)).unwrap();
+    let e = s.execute("faces.models.install", &json!({"path": broken.to_string_lossy(), "acknowledged": true})).unwrap_err().to_string();
+    assert!(e.contains("could not be loaded") || e.contains("self-test"), "{e}");
+    let leftovers: Vec<_> = std::fs::read_dir(d.join("models")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert!(leftovers.len() == 1 && leftovers[0].starts_with("custom-works-"), "only the working model remains: {leftovers:?}");
+    let _ = std::fs::remove_dir_all(&d);
 }

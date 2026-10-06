@@ -34,6 +34,7 @@ lightcraft-mcp = { path = "crates/mcp" }
 # foundation
 thiserror = "2"
 sha2 = "0.10"
+tract-onnx = "0.23" # CPU ONNX runtime for face recognition models (Rust, but its build assembles hand-written speed kernels and, on Linux aarch64, may compile optional C ones; see docs/faces.md); behind the `recognition` feature
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 log = "0.4"

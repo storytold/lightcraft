@@ -152,8 +152,8 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
         "dir": dir.as_ref().map(|d| d.display().to_string()),
         "enabled": settings.enabled,
         "embedder": settings.embedder,
-        // running a model is not built in yet: models can be installed and chosen, not used
-        "runtime": false,
+        // whether this build can run recognition models (the `recognition` feature: tract)
+        "runtime": cfg!(feature = "recognition"),
         "models": models,
     }))
 }
@@ -215,10 +215,61 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
         let _ = std::fs::remove_file(&part);
         return Err(e);
     }
+    // a model that does not work is never left installed
+    let test = match self_test(&final_path, &m) {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = std::fs::remove_file(&final_path);
+            let _ = std::fs::remove_file(home.join("face-model.json"));
+            let _ = std::fs::remove_dir(&home);
+            return Err(bad(C, e));
+        }
+    };
     write_atomic(&home.join("face-model.json"), &serde_json::to_vec_pretty(&m).map_err(|e| fail("manifest", e))?)?;
-    let accepted = json!({"acceptedAt": (s.clock)(), "licence": m.licence.name, "commercial": m.licence.commercial, "fileName": ins.file_name});
+    let accepted = json!({"acceptedAt": (s.clock)(), "licence": m.licence.name, "commercial": m.licence.commercial, "fileName": ins.file_name, "selfTest": test});
     write_atomic(&home.join("installed.json"), &serde_json::to_vec_pretty(&accepted).map_err(|e| fail("record", e))?)?;
     Ok(json!({"installed": row(&m, true, false, &accepted)}))
+}
+
+/// Load the model and run its self-test: `Ok(null)` in a build without the recognition runtime (nothing can
+/// be checked), `Ok(result)` when it passes, `Err(reason)` when it does not load or fails a check.
+#[cfg(feature = "recognition")]
+fn self_test(path: &Path, m: &ModelManifest) -> std::result::Result<Value, String> {
+    let embedder = lightcraft_faces::runtime::Embedder::load(path, m).map_err(|e| e.to_string())?;
+    let t = embedder.self_test();
+    if !t.ok {
+        let failed: Vec<&str> = t.checks.iter().filter(|(_, ok)| !*ok).map(|(c, _)| c.as_str()).collect();
+        return Err(format!("the model failed its self-test: it does not {}", failed.join(", and does not ")));
+    }
+    serde_json::to_value(&t).map_err(|e| e.to_string())
+}
+
+#[cfg(not(feature = "recognition"))]
+fn self_test(_: &Path, _: &ModelManifest) -> std::result::Result<Value, String> {
+    Ok(Value::Null)
+}
+
+/// `faces.models.test {id}`: run an installed model's self-test again.
+fn test(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "faces.models.test";
+    let id = str_param(p, "id").ok_or_else(|| bad(C, "missing `id`"))?;
+    let dir = models_dir(s, C)?;
+    if !cfg!(feature = "recognition") {
+        return Err(bad(C, "this build cannot run face recognition models"));
+    }
+    let found = installed_models(&dir).into_iter().find(|i| i.manifest.id == id).ok_or_else(|| bad(C, "that model is not installed"))?;
+    let result = self_test(&dir.join(id).join("model.onnx"), &found.manifest);
+    let (ok, detail) = match &result {
+        Ok(v) => (true, v.clone()),
+        Err(e) => (false, json!(e)),
+    };
+    // keep the latest outcome with the model's record
+    let mut record = found.accepted;
+    if let Some(o) = record.as_object_mut() {
+        o.insert("selfTest".into(), if ok { detail.clone() } else { json!({"ok": false, "error": detail}) });
+        write_atomic(&dir.join(id).join("installed.json"), &serde_json::to_vec_pretty(&record).map_err(|e| fail("record", e))?)?;
+    }
+    Ok(json!({"id": id, "ok": ok, "result": detail}))
 }
 
 fn remove(s: &mut Session, p: &Value) -> Result<Value> {
@@ -277,6 +328,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "faces.models.list", "Face Models", [], None, "{} → {dir, enabled, embedder, runtime, models: [{id, name, role, licence{name, commercial, url, notice}, provenance, source, sizeBytes, known, bundled, installed, selected}]}", always, list),
         cmd!(query "faces.models.inspect", "Inspect Face Model File", [], None, "{path} → what a .onnx file is: {kind: known | draft | unsupported, model, assumptions, reason, alreadyInstalled}; installs nothing", always, inspect),
         cmd!(query "faces.models.install", "Install Face Model", [], None, "{path, acknowledged: true} — copy a .onnx face recognition model into the models folder. `acknowledged` must be true: the user has been shown its licence (see inspect) and accepted it", always, install),
+        cmd!(query "faces.models.test", "Test Face Model", [], None, "{id} → {ok, result: {loadMs, embedMs, dimension, checks}} — load an installed recognition model and check it gives sensible faces; needs the recognition runtime", always, test),
         cmd!(query "faces.models.remove", "Remove Face Model", [], None, "{id} — delete an installed model", always, remove),
         cmd!(query "faces.models.select", "Choose Face Recognition Model", [], None, "{id: installed recogniser | null}", always, select),
         cmd!(query "faces.enable", "Face Recognition On/Off", [], None, "{enabled?: bool} (toggles when omitted)", always, enable),

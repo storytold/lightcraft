@@ -15,6 +15,8 @@ pub mod known;
 pub mod manifest;
 pub mod net;
 pub mod onnx;
+#[cfg(feature = "tract")]
+pub mod runtime;
 pub mod suggest;
 pub mod synthetic;
 pub mod yunet;

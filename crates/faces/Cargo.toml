@@ -8,7 +8,13 @@ description = "LightCraft faces (L1): face-model manifests, validation, the know
 [lints]
 workspace = true
 
+[features]
+default = []
+# Run installed face recognition models on the CPU with tract (Rust; its build assembles hand-written speed kernels, see docs/faces.md. Adds about 14 MB with size-first settings).
+tract = ["dep:tract-onnx"]
+
 [dependencies]
+tract-onnx = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
