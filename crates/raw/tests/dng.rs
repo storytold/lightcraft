@@ -532,3 +532,138 @@ fn malformed_profile_look_tags_are_ignored() {
     let plain = decode(&profile_dng(ByteOrder::Little, |_| {})).unwrap();
     assert!(plain.color.profile.is_empty());
 }
+
+/// Lossless JPEG XL codestream of `px` (`w × h × cpp` interleaved), 16-bit unless `eight`.
+fn jxl_encode(px: &[u16], w: usize, h: usize, cpp: usize, eight: bool) -> Vec<u8> {
+    use zune_core::bit_depth::BitDepth;
+    use zune_core::colorspace::ColorSpace;
+    use zune_core::options::EncoderOptions;
+    let cs = if cpp == 1 { ColorSpace::Luma } else { ColorSpace::RGB };
+    let (bytes, depth): (Vec<u8>, _) = if eight {
+        (px.iter().map(|&v| v as u8).collect(), BitDepth::Eight)
+    } else {
+        (px.iter().flat_map(|v| v.to_ne_bytes()).collect(), BitDepth::Sixteen)
+    };
+    let mut out = Vec::new();
+    zune_jpegxl::JxlSimpleEncoder::new(&bytes, EncoderOptions::new(w, h, cs, depth)).encode(&mut out).unwrap();
+    out
+}
+
+/// A bare codestream wrapped in the ISO-BMFF container (signature, `ftyp`, `jxlc`).
+fn jxl_container(cs: &[u8]) -> Vec<u8> {
+    let mut b = vec![0, 0, 0, 0x0c, b'J', b'X', b'L', b' ', 0x0d, 0x0a, 0x87, 0x0a, 0, 0, 0, 0x14];
+    b.extend_from_slice(b"ftypjxl \0\0\0\0jxl ");
+    b.extend_from_slice(&((cs.len() + 8) as u32).to_be_bytes());
+    b.extend_from_slice(b"jxlc");
+    b.extend_from_slice(cs);
+    b
+}
+
+/// A tiled JPEG XL raw IFD of `px`. Edge tiles alternate between being coded at their in-image size
+/// and padded to the nominal tile size (with junk the decoder must drop); tiles alternate between bare
+/// codestreams and containers.
+fn jxl_tiled(px: &[u16], w: usize, h: usize, cpp: usize, bits: u16, cfa: bool, tile: (usize, usize)) -> IfdBuilder {
+    let (tw, th) = tile;
+    let mut tiles = Vec::new();
+    for ty in 0..h.div_ceil(th) {
+        for tx in 0..w.div_ceil(tw) {
+            let i = tiles.len();
+            let (vw, vh) = (tw.min(w - tx * tw), th.min(h - ty * th));
+            let (cw, ch) = if i % 2 == 0 { (tw, th) } else { (vw, vh) };
+            let mut t = vec![bits.min(8) * 7; cw * ch * cpp];
+            for y in 0..vh {
+                for x in 0..vw {
+                    for s in 0..cpp {
+                        t[(y * cw + x) * cpp + s] = px[((ty * th + y) * w + tx * tw + x) * cpp + s];
+                    }
+                }
+            }
+            let cs = jxl_encode(&t, cw, ch, cpp, bits == 8);
+            tiles.push(if i % 3 == 1 { jxl_container(&cs) } else { cs });
+        }
+    }
+    let mut raw = base_ifd(w, h, bits, cpp, cfa);
+    raw.set(t::COMPRESSION, Value::Short(vec![compression::JPEG_XL]));
+    raw.set_image(ImageData::Tiles { tile_width: tw as u32, tile_height: th as u32, tiles });
+    raw
+}
+
+#[test]
+fn jpeg_xl_tiles_decode_bit_exactly() {
+    let (w, h) = (37, 29);
+    // LinearRaw 3 × 16-bit, the full code range
+    let px = pattern(w, h, 3, 16);
+    let bytes = dng(jxl_tiled(&px, w, h, 3, 16, false, (16, 16)), ByteOrder::Big);
+    let img = decode(&bytes).unwrap();
+    assert_eq!((img.width, img.height, img.cpp), (w, h, 3));
+    assert_eq!(img.data, RawData::U16(px));
+    assert_eq!(lightcraft_raw::probe_info(&bytes).unwrap(), img.info());
+    // CFA 1 × 8/12/14-bit
+    for bits in [8u32, 12, 14] {
+        let px = pattern(w, h, 1, bits);
+        let img = decode(&dng(jxl_tiled(&px, w, h, 1, bits as u16, true, (16, 8)), ByteOrder::Little)).unwrap();
+        assert_eq!(img.data, RawData::U16(px), "{bits} bits");
+        assert_eq!(img.white, vec![((1u32 << bits) - 1) as f32]);
+        assert_eq!(img.cfa.unwrap().name(), "GRBG");
+    }
+    // strips: a single JPEG XL strip per 8 rows (the last one shorter)
+    let px = pattern(w, h, 1, 12);
+    let strips = px.chunks(w * 8).map(|c| jxl_encode(c, w, c.len() / w, 1, false)).collect();
+    let mut raw = base_ifd(w, h, 12, 1, true);
+    raw.set(t::COMPRESSION, Value::Short(vec![compression::JPEG_XL]));
+    raw.set_image(ImageData::Strips { rows_per_strip: 8, strips });
+    assert_eq!(decode(&dng(raw, ByteOrder::Big)).unwrap().data, RawData::U16(px));
+}
+
+#[test]
+fn malformed_jpeg_xl_tiles_are_errors() {
+    use lightcraft_raw::RawError;
+    let (w, h) = (16, 16);
+    let px = pattern(w, h, 1, 12);
+    let good = jxl_encode(&px, w, h, 1, false);
+    let one = |tile: Vec<u8>, cpp: usize| {
+        let mut raw = base_ifd(w, h, 12, cpp, cpp == 1);
+        raw.set(t::COMPRESSION, Value::Short(vec![compression::JPEG_XL]));
+        raw.set_image(ImageData::Tiles { tile_width: w as u32, tile_height: h as u32, tiles: vec![tile] });
+        dng(raw, ByteOrder::Little)
+    };
+    // garbage, every truncation, and flipped bytes: errors (or, for a truncation that only drops
+    // trailing padding, the exact samples), never panics
+    let mut garbage = vec![0xff, 0x0a];
+    garbage.extend((0..400u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8));
+    assert!(matches!(decode(&one(garbage, 1)), Err(RawError::Corrupt(_))));
+    for n in 0..good.len() {
+        let bytes = one(good[..n].to_vec(), 1);
+        if let Ok(img) = decode(&bytes) {
+            assert_eq!(img.data, RawData::U16(px.clone()), "truncated to {n}");
+        }
+        let _ = lightcraft_raw::probe_info(&bytes);
+    }
+    for i in 0..good.len() {
+        let mut b = good.clone();
+        b[i] ^= 0x5a;
+        let _ = decode(&one(b, 1));
+    }
+    // a tile of the wrong size, or the wrong plane count for the IFD
+    let small = jxl_encode(&px[..w * 8], w, 8, 1, false);
+    assert!(matches!(decode(&one(small, 1)), Err(RawError::Corrupt(_))));
+    assert!(matches!(decode(&one(good.clone(), 3)), Err(RawError::Corrupt(_))));
+    assert!(matches!(lightcraft_raw::probe_info(&one(good, 3)), Err(RawError::Corrupt(_))));
+}
+
+#[test]
+fn jpeg_xl_preview_ifd_is_offered() {
+    let raw = synthetic(16, 16, Some(Cfa::bayer("RGGB").unwrap()), 1);
+    let RawData::U16(px) = &raw.data else { unreachable!() };
+    let mut sub = base_ifd(16, 16, 14, 1, true);
+    sub.set(t::COMPRESSION, Value::Short(vec![compression::JPEG_XL]));
+    sub.set_image(ImageData::Tiles { tile_width: 16, tile_height: 16, tiles: vec![jxl_encode(px, 16, 16, 1, false)] });
+    let preview = jxl_container(&jxl_encode(&[200; 4 * 2 * 3], 4, 2, 3, true));
+    let bytes = dng_with(sub, ByteOrder::Big, |ifd0| {
+        ifd0.set(t::COMPRESSION, Value::Short(vec![compression::JPEG_XL]));
+        ifd0.set_image(ImageData::Strips { rows_per_strip: 2, strips: vec![preview.clone()] });
+    });
+    // the rendered RGB preview is offered whole; the (single-tile) CFA raw never is
+    assert_eq!(embedded_preview(&bytes).unwrap(), preview);
+    assert_eq!(decode(&bytes).unwrap().data, raw.data);
+}

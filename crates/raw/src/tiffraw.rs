@@ -1,4 +1,4 @@
-//! Reading the pixel data of a TIFF IFD (strips or tiles; uncompressed, lossless JPEG, Deflate), in parallel.
+//! Reading the pixel data of a TIFF IFD (strips or tiles; uncompressed, lossless/lossy JPEG, Deflate, JPEG XL), in parallel.
 
 use crate::unpack::*;
 use crate::{MAX_SAMPLES, RawData, RawError, Result, ljpeg};
@@ -18,7 +18,7 @@ pub enum Packing {
     Word16,
 }
 
-enum ChunkPx {
+pub(crate) enum ChunkPx {
     U16(Vec<u16>),
     F32(Vec<f32>),
 }
@@ -61,11 +61,24 @@ pub(crate) fn read_image_in(mode: crate::Mode, data: &[u8], info: &ImageInfo, or
         crate::Mode::Header => {
             check_image(data, info)?;
             // a lossless-JPEG layout the decoder rejects (subsampled components, e.g. Sony's
-            // lossless M/S sizes) must fail here too, as the full decode will
-            if info.compression == 7
-                && let Some(src) = info.chunks(data.len() as u64).first().and_then(|c| chunk_bytes(data, c))
+            // lossless M/S sizes) must fail here too, as the full decode will; likewise a JPEG XL
+            // chunk whose headers don't match the IFD
+            let first = info.chunks(data.len() as u64).first().copied();
+            if let Some(c) = first
+                && let Some(src) = chunk_bytes(data, &c)
             {
-                ljpeg::frame_info(src)?;
+                match info.compression {
+                    7 => {
+                        ljpeg::frame_info(src)?;
+                    }
+                    comp::JPEG_XL => {
+                        let planar = info.planar == 2 && info.samples_per_pixel > 1;
+                        let cpp = if planar { 1 } else { info.samples_per_pixel as usize };
+                        let (cw, ch, vw, vh) = chunk_dims(info, &c);
+                        jxl_chunk_check(src, cw, ch, vw, vh, cpp, info.bits() as u32, info.sample_format == 3)?;
+                    }
+                    _ => {}
+                }
             }
             Ok(if info.sample_format == 3 { RawData::F32(Vec::new()) } else { RawData::U16(Vec::new()) })
         }
@@ -138,7 +151,7 @@ pub fn read_image(data: &[u8], info: &ImageInfo, order: ByteOrder, packing: Pack
 #[allow(clippy::too_many_arguments)]
 fn decode_chunk(data: &[u8], info: &ImageInfo, c: &Chunk, order: ByteOrder, packing: Packing, cpp: usize, bits: u32, float: bool) -> Result<ChunkPx> {
     let src = chunk_bytes(data, c).ok_or_else(|| RawError::Corrupt("chunk offset past end of file".into()))?;
-    let (cw, ch) = (c.width as usize, c.height as usize);
+    let (cw, ch, vw, vh) = chunk_dims(info, c);
     let n = cw.checked_mul(ch).and_then(|v| v.checked_mul(cpp)).ok_or(RawError::Limit("chunk too large"))?;
     if n > MAX_SAMPLES {
         return Err(RawError::Limit("chunk too large"));
@@ -176,8 +189,32 @@ fn decode_chunk(data: &[u8], info: &ImageInfo, c: &Chunk, order: ByteOrder, pack
             let raw = inflate(src, row_bytes * ch)?;
             unpack_chunk(&raw, order, packing, cw, ch, cpp, bits, float, info.predictor)
         }
+        comp::JPEG_XL => jxl_chunk(src, cw, ch, vw, vh, cpp, bits, float),
         other => Err(RawError::Unsupported(format!("TIFF compression {other}"))),
     }
+}
+
+/// A chunk's nominal size and the part of it inside the image (smaller for edge tiles).
+fn chunk_dims(info: &ImageInfo, c: &Chunk) -> (usize, usize, usize, usize) {
+    let (cw, ch) = (c.width as usize, c.height as usize);
+    let vw = cw.min(info.width.saturating_sub(c.x) as usize);
+    let vh = ch.min(info.height.saturating_sub(c.y) as usize);
+    (cw, ch, vw, vh)
+}
+
+#[cfg(feature = "jxl")]
+use crate::jxl::{check as jxl_chunk_check, decode as jxl_chunk};
+
+#[cfg(not(feature = "jxl"))]
+#[allow(clippy::too_many_arguments)]
+fn jxl_chunk(_: &[u8], _: usize, _: usize, _: usize, _: usize, _: usize, _: u32, _: bool) -> Result<ChunkPx> {
+    Err(RawError::Unsupported("JPEG XL DNG (built without the `jxl` feature)".into()))
+}
+
+#[cfg(not(feature = "jxl"))]
+#[allow(clippy::too_many_arguments)]
+fn jxl_chunk_check(src: &[u8], cw: usize, ch: usize, vw: usize, vh: usize, cpp: usize, bits: u32, float: bool) -> Result<()> {
+    jxl_chunk(src, cw, ch, vw, vh, cpp, bits, float).map(|_| ())
 }
 
 /// Decode one baseline JPEG chunk to 8-bit samples: (samples, width, height, channels).

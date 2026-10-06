@@ -79,9 +79,6 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     if !(1..=4).contains(&cpp) {
         return Err(RawError::Unsupported(format!("{cpp} samples per pixel")));
     }
-    if info.compression == t::compression::JPEG_XL {
-        return Err(RawError::Unsupported("JPEG XL DNG".into()));
-    }
     let mut data = read_image_in(mode, bytes, &info, tiff.order, Packing::Msb)?;
     let bits = info.bits() as u32;
 

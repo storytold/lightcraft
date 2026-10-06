@@ -20,7 +20,14 @@ rayon = { workspace = true }
 miniz_oxide = { workspace = true }
 zune-jpeg = { workspace = true }
 zune-core = { workspace = true }
+jxl-oxide = { workspace = true, optional = true }
+
+[features]
+default = ["jxl"]
+## JPEG XL compressed DNGs (DNG 1.7, compression 52546) via jxl-oxide (pure Rust, MIT OR Apache-2.0).
+jxl = ["dep:jxl-oxide"]
 
 [dev-dependencies]
 jpeg-encoder = { workspace = true }
 proptest = { workspace = true }
+zune-jpegxl = { workspace = true }

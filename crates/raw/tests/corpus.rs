@@ -48,7 +48,9 @@ fn corpus_raw_decodes() {
         let tp = t0.elapsed().as_secs_f64() * 1e3;
         // DNG previews are optional (and some carry only an uncompressed RGB thumbnail); vendor raws always embed a JPEG
         if let Some(p) = &preview {
-            assert!(p.starts_with(&[0xff, 0xd8]) && p.ends_with(&[0xff, 0xd9]), "{name}: preview is not a JPEG");
+            let jpeg = p.starts_with(&[0xff, 0xd8]) && p.ends_with(&[0xff, 0xd9]);
+            let jxl = p.starts_with(&[0xff, 0x0a]) || p.starts_with(b"\0\0\0\x0cJXL ");
+            assert!(jpeg || jxl, "{name}: preview is neither a JPEG nor a JPEG XL file");
         } else {
             assert_eq!(fmt, RawFormat::Dng, "{name}: no embedded preview");
         }
