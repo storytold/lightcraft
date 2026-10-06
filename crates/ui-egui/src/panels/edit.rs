@@ -84,6 +84,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         wb.tint = 0.0;
     }
     let preview_only = app.session.catalog.photo(id).and_then(|p| p.preview_only.clone());
+    let source_info = app.session.source_info(id);
+    if source_info.raw && source_info.relative_wb {
+        let message = if source_info.camera_rgb_tone {
+            "Camera colour (macOS)"
+        } else if source_info.camera_tone.is_some() {
+            "Estimated camera colour"
+        } else {
+            "Camera colour is uncalibrated; colour and brightness may be inaccurate"
+        };
+        ui.label(app.ui.language.tr(message));
+    }
 
     if app.ui.histogram {
         histogram(app, ui, id);

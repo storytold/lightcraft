@@ -450,6 +450,7 @@ impl Journal {
             }
         }
         catalog.revision = 0;
+        catalog.upgrade_arw_defaults();
         Ok((j, catalog, report))
     }
 

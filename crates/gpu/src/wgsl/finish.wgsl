@@ -18,6 +18,21 @@ fn tone_apply(y: f32) -> f32 {
     return v;
 }
 
+fn response_at(i: vec3<u32>) -> vec3<f32> {
+    let o = pu(F_RESPONSE_OFF) + 3u*(i.x + 33u*(i.y+33u*i.z));
+    return vec3<f32>(aux[o],aux[o+1u],aux[o+2u]);
+}
+fn camera_response(c: vec3<f32>) -> vec3<f32> {
+    let x = clamp(log(vec3<f32>(1.0)+max(c,vec3<f32>(0.0))/0.001)/log(16001.0),vec3<f32>(0.0),vec3<f32>(1.0))*32.0;
+    let i = min(vec3<u32>(x),vec3<u32>(31u));
+    let t = x-vec3<f32>(i);
+    let a = mix(response_at(i),response_at(i+vec3<u32>(1u,0u,0u)),t.x);
+    let b = mix(response_at(i+vec3<u32>(0u,1u,0u)),response_at(i+vec3<u32>(1u,1u,0u)),t.x);
+    let c0 = mix(response_at(i+vec3<u32>(0u,0u,1u)),response_at(i+vec3<u32>(1u,0u,1u)),t.x);
+    let d = mix(response_at(i+vec3<u32>(0u,1u,1u)),response_at(i+vec3<u32>(1u,1u,1u)),t.x);
+    return mix(mix(a,b,t.y),mix(c0,d,t.y),t.z);
+}
+
 fn encode_srgb(v: f32) -> f32 {
     let o = pu(F_SRGB_OFF);
     let f = clamp(v, 0.0, 1.0) * f32(SRGB_N);
@@ -400,8 +415,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (yl > 1e-9) {
         d = c * o / yl;
     }
+    if (pu(F_CAMERA_RGB_TONE) != 0u) {
+        d = vec3<f32>(tone_apply(max(c.x, 0.0)), tone_apply(max(c.y, 0.0)), tone_apply(max(c.z, 0.0)));
+    }
+    if (pu(F_HAS_RESPONSE) != 0u) {
+        d = camera_response(c);
+        let y = lum2020(d);
+        if (pu(F_RESPONSE_ADJUST) != 0u && y > 1e-9) { d *= tone_apply(y)/y; }
+    }
     let mx = max(d.x, max(d.y, d.z));
-    if (mx > 1.0) {
+    if (mx > 1.0 && pu(F_HAS_RESPONSE) == 0u) {
         let t = clamp((mx - 1.0) / max(mx - o, 1e-6), 0.0, 1.0);
         d = d + (o - d) * t;
     }

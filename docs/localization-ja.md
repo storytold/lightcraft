@@ -19,3 +19,5 @@ LightCraft は日本語と英語（English）の表示に対応しています�
 
 表示・フォント・言語の切り替え・設定の保存・コマンドIDの保持は
 `cargo test -p lightcraft-ui-egui i18n::tests` で検証します。
+
+Comparison captions, culling empty states and known toast messages use the selected language. Sony camera-colour status messages have Japanese translations, including estimated and uncalibrated fallback notices. User-supplied names and unknown messages remain unchanged.

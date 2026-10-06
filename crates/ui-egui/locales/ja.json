@@ -115,7 +115,7 @@
   "Camera": "カメラ",
   "Cameras and Cards": "カメラとメモリーカード",
   "Cancel": "キャンセル",
-  "Candidate": "候補",
+  "Candidate": "比較写真",
   "Caption": "キャプション",
   "Capture Date": "撮影日時",
   "Captured": "撮影日時",
@@ -459,7 +459,7 @@
   "Magenta Hue": "マゼンタの色相",
   "Magenta Luminance": "マゼンタの輝度",
   "Magenta Saturation": "マゼンタの彩度",
-  "Make Candidate the Select": "候補の写真を選択側にする",
+  "Make Candidate the Select": "比較写真を基準にする",
   "Manual": "手動",
   "Masking": "マスク",
   "Masking (M)": "マスク（M）",
@@ -850,7 +850,7 @@
   "Suggestions": "候補",
   "Survey": "一覧比較",
   "Survey (N)": "一覧比較（N）",
-  "Swap": "入れ替え",
+  "Swap": "写真を入れ替え",
   "Swap Aspect (X)": "縦横比を入れ替え（X）",
   "Swap Before and After Settings": "編集前と編集後の設定を入れ替える",
   "Sync Settings": "設定を同期",
@@ -1017,5 +1017,10 @@
   "Quit": "終了",
   "Temporary session — your library isn't open, and nothing you do here is saved.": "一時セッション：ライブラリが開かれていないため、ここでの操作は保存されません。",
   "Back Up Library…": "ライブラリをバックアップ…",
-  "Restore Library from Backup…": "バックアップからライブラリを復元…"
+  "Restore Library from Backup…": "バックアップからライブラリを復元…",
+  "Select photo": "基準写真",
+  "Auto settings applied": "自動補正を適用しました",
+  "Estimated camera colour": "カメラカラーを推定しています",
+  "Camera colour is uncalibrated; colour and brightness may be inaccurate": "このRAWはカメラカラー未校正です。色や明るさが不正確になる場合があります",
+  "Camera colour (macOS)": "カメラカラー（macOS）"
 }

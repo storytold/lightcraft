@@ -192,7 +192,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
     let pt = ui.painter();
     let mut x = cap.left() + 4.0;
     if !label.is_empty() {
-        let g = pt.layout_no_wrap(label.to_string(), t.semibold(12.0), if active { t.text } else { t.text_label });
+        let g = pt.layout_no_wrap(crate::i18n::tr(label).to_string(), t.semibold(12.0), if active { t.text } else { t.text_label });
         pt.galley(pos2(x, cap.center().y - g.size().y / 2.0), g.clone(), t.text);
         x += g.size().x + 10.0;
     }
@@ -246,7 +246,7 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let area = canvas.shrink(18.0);
     let half = (area.width() - 16.0) / 2.0;
     let panes = [
-        (sel, Rect::from_min_size(area.min, vec2(half, area.height())), "Select", 0u8),
+        (sel, Rect::from_min_size(area.min, vec2(half, area.height())), "Select photo", 0u8),
         (cand, Rect::from_min_size(pos2(area.right() - half, area.top()), vec2(half, area.height())), "Candidate", 1u8),
     ];
     let zoom = app.ui.zoom;

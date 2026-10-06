@@ -28,6 +28,20 @@ impl DevelopSettings {
         s
     }
 
+    /// Conservative, editable Sony capture defaults. Higher-ISO shots start with mild
+    /// luminance NR and edge masking instead of sharpening every sensor-noise fluctuation.
+    pub fn for_sony_raw(as_shot_temp: f64, as_shot_tint: f64, iso: Option<u32>) -> DevelopSettings {
+        let mut s = Self::for_raw(as_shot_temp, as_shot_tint);
+        let stops = (f64::from(iso.unwrap_or(100).max(100)) / 200.0).log2().max(0.0);
+        s.detail.nr_luminance = (stops * 9.0).clamp(0.0, 66.0).round();
+        s.detail.sharpen_amount = (30.0 - stops * 4.0).clamp(8.0, 30.0).round();
+        s.detail.sharpen_masking = (15.0 + stops * 12.0).clamp(15.0, 85.0).round();
+        let high_iso = (stops - 4.0).max(0.0);
+        s.detail.nr_color = (25.0 + high_iso * 11.0).min(60.0).round();
+        s.detail.nr_detail = (50.0 - high_iso * 8.0).max(25.0).round();
+        s
+    }
+
     pub fn to_json(&self) -> Value {
         serde_json::to_value(self).unwrap_or(Value::Null)
     }
@@ -164,5 +178,22 @@ mod tests {
         assert_eq!(s.disabled_sections.len(), 1);
         s.set_section_enabled("effects", true);
         assert!(s.section_enabled("effects"));
+    }
+    #[test]
+    fn sony_capture_defaults_reduce_noise_without_baking_edits() {
+        let low = DevelopSettings::for_sony_raw(6500.0, 0.0, Some(100));
+        let high = DevelopSettings::for_sony_raw(6500.0, 0.0, Some(1600));
+        assert_eq!(low.detail.nr_luminance, 0.0);
+        assert!(high.detail.nr_luminance > low.detail.nr_luminance);
+        assert!(high.detail.sharpen_amount < low.detail.sharpen_amount);
+        assert!(high.detail.sharpen_masking > low.detail.sharpen_masking);
+        assert_eq!(high.light.exposure, 0.0);
+        assert_eq!(high.color.saturation, 0.0);
+        let extreme = DevelopSettings::for_sony_raw(6500.0, 0.0, Some(32000));
+        assert!(extreme.detail.nr_luminance > high.detail.nr_luminance);
+        assert!(extreme.detail.nr_color > high.detail.nr_color);
+        assert!(extreme.detail.sharpen_amount < high.detail.sharpen_amount);
+        assert_eq!(extreme.light.exposure, 0.0);
+        assert_eq!(extreme.wb.temp, 6500.0);
     }
 }

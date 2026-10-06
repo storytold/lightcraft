@@ -1,0 +1,14 @@
+[package]
+name = "lightcraft-sysraw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Bounded macOS calibrated linear RAW decoding with a safe Rust interface"
+
+[lints]
+workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5.2"
+objc2-foundation = { version = "0.2.2", features = ["NSData", "NSDictionary", "NSValue", "NSString", "NSGeometry"] }
+objc2-core-image = { version = "0.2.2", default-features = false, features = ["std", "CIRAWFilter", "CIFilter", "CIImage", "CIContext"] }

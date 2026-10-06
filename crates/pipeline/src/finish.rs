@@ -153,6 +153,9 @@ pub struct FinishParams {
     /// A LUT profile and its amount (0..2), applied to the display-encoded colour.
     pub lut: Option<(std::sync::Arc<crate::lut::Lut3d>, f32)>,
     pub tone: ToneMap,
+    pub camera_rgb_tone: bool,
+    pub camera_response: Option<std::sync::Arc<crate::tone::CameraResponse>>,
+    pub response_adjustment: bool,
     pub ops: ColorOps,
     /// Calibration: primaries matrix (row-major, linear Rec.2020) and shadows tint (−1..1).
     pub calib: Option<[[f32; 3]; 3]>,
@@ -219,9 +222,14 @@ impl FinishParams {
         });
         let calibration = s.section_enabled("calibration");
         FinishParams {
+            camera_rgb_tone: info.raw && info.camera_rgb_tone,
+            camera_response: info.camera_response.clone().filter(|_| info.raw),
+            response_adjustment: s.light.contrast != 0.0 || s.light.whites != 0.0 || s.light.blacks != 0.0,
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
-            tone: if let Some(curve) = info.camera_tone.as_ref().filter(|_| info.raw) {
+            tone: if info.raw && info.camera_response.is_some() {
+                ToneMap::display(s.light.contrast, s.light.whites, s.light.blacks)
+            } else if let Some(curve) = info.camera_tone.as_ref().filter(|_| info.raw) {
                 ToneMap::camera(curve, s.light.contrast, s.light.whites, s.light.blacks)
             } else if info.raw {
                 ToneMap::new(s.light.contrast, s.light.whites, s.light.blacks)
@@ -482,9 +490,19 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             // --- tone map on luminance, highlight desaturation
             let yl = luminance_2020(c);
             let o = tone.apply(yl);
-            let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
+            let mut d = if let Some(response) = &fp.camera_response {
+                let d = response.apply(c);
+                let y = luminance_2020(d);
+                if fp.response_adjustment && y > 1e-9 { d.map(|v| v * tone.apply(y) / y) } else { d }
+            } else if fp.camera_rgb_tone {
+                c.map(|v| tone.apply(v.max(0.0)))
+            } else if yl > 1e-9 {
+                c.map(|v| v * o / yl)
+            } else {
+                [0.0; 3]
+            };
             let mx = d[0].max(d[1]).max(d[2]);
-            if mx > 1.0 {
+            if mx > 1.0 && fp.camera_response.is_none() {
                 let t = ((mx - 1.0) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
                 d = d.map(|v| v + (o - v) * t);
             }

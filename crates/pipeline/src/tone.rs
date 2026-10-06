@@ -14,6 +14,86 @@ pub const LUT_MIN_EV: f32 = -14.0;
 pub const LUT_MAX_EV: f32 = 10.0;
 pub const LUT_N: usize = 4096;
 
+/// A bounded scene-linear Rec.2020 → display-linear Rec.2020 response sampled from
+/// the calibrated decoder with synthetic inputs, independently of the photographed scene.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct CameraResponse {
+    data: Vec<[f32; 3]>,
+}
+
+impl<'de> serde::Deserialize<'de> for CameraResponse {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        struct Wire {
+            data: Vec<[f32; 3]>,
+        }
+        Self::new(Wire::deserialize(d)?.data).ok_or_else(|| serde::de::Error::custom("invalid camera response"))
+    }
+}
+
+impl CameraResponse {
+    pub const SIZE: usize = 33;
+    pub const SCALE: f32 = 0.001;
+    pub const MAX: f32 = 16.0;
+    pub fn new(data: Vec<[f32; 3]>) -> Option<Self> {
+        if data.len() != Self::SIZE.pow(3) || data.iter().flatten().any(|x| !x.is_finite() || !(-0.5..=2.0).contains(x)) {
+            return None;
+        }
+        if data.first()?.iter().any(|v| v.abs() > 1e-4) || lightcraft_color::luminance_2020(*data.last()?) < 0.9 {
+            return None;
+        }
+        let mut previous = 0.0;
+        for i in 0..Self::SIZE {
+            let y = lightcraft_color::luminance_2020(*data.get(i + Self::SIZE * (i + Self::SIZE * i))?);
+            if y + 0.002 < previous {
+                return None;
+            }
+            previous = y;
+        }
+        Some(Self { data })
+    }
+    pub fn data(&self) -> &[[f32; 3]] {
+        &self.data
+    }
+    pub fn input(i: usize) -> f32 {
+        Self::SCALE * (((1.0 + Self::MAX / Self::SCALE).ln() * i as f32 / (Self::SIZE - 1) as f32).exp() - 1.0)
+    }
+    pub fn apply(&self, c: [f32; 3]) -> [f32; 3] {
+        let x = c.map(|v| {
+            let v = if v.is_finite() { v.max(0.0) } else { 0.0 };
+            ((1.0 + v / Self::SCALE).ln() / (1.0 + Self::MAX / Self::SCALE).ln()).clamp(0.0, 1.0) * (Self::SIZE - 1) as f32
+        });
+        let i = x.map(|v| (v as usize).min(Self::SIZE - 2));
+        let t = std::array::from_fn::<_, 3, _>(|k| x[k] - i[k] as f32);
+        let mut out = [0.0; 3];
+        for b in 0..2 {
+            for g in 0..2 {
+                for r in 0..2 {
+                    let weight = [r, g, b].iter().enumerate().map(|(k, d)| if *d == 0 { 1.0 - t[k] } else { t[k] }).product::<f32>();
+                    let index = i[0] + r + Self::SIZE * (i[1] + g + Self::SIZE * (i[2] + b));
+                    if let Some(p) = self.data.get(index) {
+                        for k in 0..3 {
+                            out[k] += p[k] * weight;
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+    /// Grey-axis approximation used only for metering/Auto Tone, never for rendering colour.
+    pub fn grey_tone(&self) -> CameraTone {
+        let mut previous = 0.0f32;
+        let knots = std::array::from_fn(|i| {
+            let x = Self::input(i + 1);
+            let y = lightcraft_color::luminance_2020(self.apply([x; 3])).clamp(0.0, 1.0 - f32::EPSILON).max(previous);
+            previous = y;
+            [x, y]
+        });
+        CameraTone::new(knots).unwrap_or_else(CameraTone::neutral)
+    }
+}
+
 /// A file-local camera look, fitted independently of the scene-linear colour transform.
 /// Knots are scene/display-linear luminance pairs. Keeping this in the finish stage preserves
 /// RAW exposure and highlight headroom; it is never baked into the decoded sensor pixels.
@@ -34,6 +114,18 @@ impl<'de> serde::Deserialize<'de> for CameraTone {
 }
 
 impl CameraTone {
+    /// A restrained display response for a calibrated source whose optional starting-look fit
+    /// was rejected. Midtones remain linear; only display highlights receive a soft shoulder.
+    /// This curve never changes the source calibration or lifts shadows to match a preview.
+    pub fn neutral() -> Self {
+        let knots = std::array::from_fn(|i| {
+            let x = 2f32.powf(-12.0 + i as f32 * 14.0 / 31.0);
+            let y = if x <= 0.8 { x } else { 0.8 + 0.2 * (1.0 - (-(x - 0.8) / 0.2).exp()) };
+            [x, y.min(1.0 - f32::EPSILON)]
+        });
+        Self { knots }
+    }
+
     pub fn new(knots: [[f32; 2]; 32]) -> Option<Self> {
         let mut previous = [0.0, 0.0];
         for p in knots {
@@ -177,6 +269,86 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    fn synthetic_response() -> CameraResponse {
+        let mut data = Vec::new();
+        for b in 0..33 {
+            for g in 0..33 {
+                for r in 0..33 {
+                    let c = [r, g, b].map(CameraResponse::input).map(|v| v / (1.0 + v));
+                    data.push([0.8 * c[0] + 0.2 * c[1], c[1], 0.9 * c[2] + 0.1 * c[0]]);
+                }
+            }
+        }
+        CameraResponse::new(data).unwrap()
+    }
+    #[test]
+    fn response_preserves_cross_channel_colour_and_is_bounded() {
+        let response = synthetic_response();
+        assert_eq!(response.apply([0.0; 3]), [0.0; 3]);
+        let c = [CameraResponse::input(18), CameraResponse::input(13), CameraResponse::input(10)];
+        let v = c.map(|x| x / (1.0 + x));
+        let expected = [0.8 * v[0] + 0.2 * v[1], v[1], 0.9 * v[2] + 0.1 * v[0]];
+        for (a, b) in response.apply(c).iter().zip(expected) {
+            assert!((a - b).abs() < 1e-6);
+        }
+        assert!(response.apply([f32::INFINITY, -1.0, f32::NAN]).iter().all(|v| v.is_finite()));
+        assert!(CameraResponse::new(vec![[0.0; 3]; 33usize.pow(3)]).is_none());
+        assert!(CameraResponse::new(vec![[1.0; 3]; 33usize.pow(3)]).is_none());
+        assert!(CameraResponse::new(vec![[0.0; 3]; 8]).is_none());
+        let mut invalid = response.data.clone();
+        invalid[123][0] = f32::NAN;
+        assert!(CameraResponse::new(invalid).is_none());
+        let encoded = serde_json::to_string(&response).unwrap();
+        assert_eq!(serde_json::from_str::<CameraResponse>(&encoded).unwrap(), response);
+    }
+
+    #[test]
+    fn ordinary_initial_render_uses_response_once_and_keeps_linear_source() {
+        let response = std::sync::Arc::new(synthetic_response());
+        let c = [CameraResponse::input(18), CameraResponse::input(13), CameraResponse::input(10)];
+        let mut src = lightcraft_raster::Rgb32f::new(8, 8);
+        src.data.fill(c);
+        let info = crate::SourceInfo {
+            raw: true,
+            relative_wb: true,
+            camera_response: Some(response),
+            camera_tone: Some(CameraTone::neutral()),
+            ..Default::default()
+        };
+        let settings = lightcraft_develop::DevelopSettings::default();
+        let actual = crate::render(&src, &info, &settings, &crate::RenderRequest::fit(8, 8));
+        let v = c.map(|x| x / (1.0 + x));
+        let expected = [0.8 * v[0] + 0.2 * v[1], v[1], 0.9 * v[2] + 0.1 * v[0]];
+        let out = lightcraft_color::REC2020.to_space(&lightcraft_color::SRGB).apply(expected.map(f64::from)).map(|v| v as f32);
+        let (out, _) = crate::finish::gamut_map(out, [0.2126, 0.7152, 0.0722]);
+        let expected = out.map(|v| (lightcraft_color::transfer::linear_to_srgb(v) * 255.0).round() as u8);
+        for (a, b) in actual.image.data[0][..3].iter().zip(expected) {
+            assert!(a.abs_diff(b) <= 1);
+        }
+        assert_eq!(src.data[0], c);
+        let mut edited = settings;
+        edited.light.exposure = -1.0;
+        let darker = crate::render(&src, &info, &edited, &crate::RenderRequest::fit(8, 8));
+        assert!(darker.image.data[0][0] < actual.image.data[0][0]);
+    }
+
+    #[test]
+    fn neutral_camera_response_preserves_midtones_and_bounds_highlights() {
+        let curve = CameraTone::neutral();
+        assert!(CameraTone::new(curve.knots).is_some());
+        for x in [0.0, 0.001, 0.02, 0.18, 0.4, 0.6] {
+            assert!((curve.apply(x) - x).abs() < 1e-5);
+        }
+        let mut previous = 0.0;
+        for i in 0..1000 {
+            let v = curve.apply(i as f32 / 100.0);
+            assert!((0.0..=1.0).contains(&v) && v >= previous);
+            previous = v;
+        }
+        assert!(curve.apply(1.0) < 1.0);
+        assert!(curve.apply(2.0) > curve.apply(1.0));
+    }
+
     use super::*;
 
     #[test]

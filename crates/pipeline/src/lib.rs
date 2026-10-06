@@ -55,7 +55,7 @@ use lightcraft_raster::{Histogram, Plane, Rgb32f, Rgba8, par_rows};
 pub use tone::ToneMap;
 
 /// Facts about the source the settings are interpreted against.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SourceInfo {
     /// Lens corrections embedded in the file (DNG opcodes), relative to the EXIF-oriented source.
     pub lens: Option<lightcraft_develop::EmbeddedLens>,
@@ -67,11 +67,26 @@ pub struct SourceInfo {
     /// No measured camera illuminant: WB adjustments are relative to the camera's rendered look.
     pub relative_wb: bool,
     pub camera_tone: Option<tone::CameraTone>,
+    pub camera_response: Option<Arc<tone::CameraResponse>>,
+    /// Calibrated linear RAW with a shared channel response, rather than luminance-only tone.
+    pub camera_rgb_tone: bool,
+    /// Original oriented sensor long edge, independent of the decoded preview resolution.
+    pub sensor_long_edge: usize,
 }
 
 impl Default for SourceInfo {
     fn default() -> Self {
-        Self { raw: false, as_shot_temp: 6500.0, as_shot_tint: 0.0, lens: None, relative_wb: false, camera_tone: None }
+        Self {
+            raw: false,
+            as_shot_temp: 6500.0,
+            as_shot_tint: 0.0,
+            lens: None,
+            relative_wb: false,
+            camera_tone: None,
+            camera_response: None,
+            camera_rgb_tone: false,
+            sensor_long_edge: 0,
+        }
     }
 }
 
@@ -313,7 +328,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let frame = frame_for(src, info, s, req.apply_crop);
     let (w, h) = frame.fit(req.max_w, req.max_h);
     let px_per_long = frame.px_per_long(w);
-    let src_long = src.width.max(src.height);
+    let src_long = info.sensor_long_edge.max(src.width.max(src.height));
     let geo = hash_of((format!("{frame:?}"), w, h));
     let (wb_t, wb_tint) = local::effective_wb(info, s);
     let eyes = redeye::resolve(src, &s.red_eye, s.orientation, &frame, w, h, px_per_long);

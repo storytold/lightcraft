@@ -38,6 +38,51 @@ pub fn auto_tone(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> AutoTo
     ev.sort_by(|a, b| a.total_cmp(b));
     let median = percentile(&ev, 0.5);
     let exposure = (-median * 0.85 - 0.1).clamp(-4.0, 4.0);
+    if let Some(curve) = info.camera_tone.as_ref().filter(|_| info.raw) {
+        // Evaluate the same starting response as the renderer, after the proposed scene-linear
+        // exposure. Scene EV thresholds cannot describe a camera look's compressed highlights.
+        // Anchor exposure to the camera response too: a boost curve's display middle grey
+        // does not occur at scene-linear 0.18. Invert the monotone response with bounded search.
+        let (mut low_input, mut high_input) = (0.0f32, 16.0f32);
+        for _ in 0..24 {
+            let middle = (low_input + high_input) * 0.5;
+            if curve.apply(middle) < 0.18 {
+                low_input = middle;
+            } else {
+                high_input = middle;
+            }
+        }
+        let desired_input = ((low_input + high_input) * 0.5).max(1e-6);
+        let median_input = 0.18 * 2f32.powf(median);
+        let exposure = ((desired_input / median_input.max(1e-6)).log2() * 0.85 - 0.1).clamp(-4.0, 4.0);
+        let gain = 2f32.powf(exposure);
+        let mut ys: Vec<f32> = img
+            .data
+            .iter()
+            .map(|c| {
+                if let Some(response) = &info.camera_response {
+                    luminance_2020(response.apply(c.map(|v| v * gain)))
+                } else if info.camera_rgb_tone {
+                    luminance_2020(c.map(|v| curve.apply((v * gain).max(0.0))))
+                } else {
+                    curve.apply(luminance_2020(*c) * gain)
+                }
+            })
+            .collect();
+        ys.sort_by(f32::total_cmp);
+        let (lo, black, high, white) = (percentile(&ys, 0.05), percentile(&ys, 0.01), percentile(&ys, 0.95), percentile(&ys, 0.995));
+        let spread = (high.max(1e-6) / lo.max(1e-6)).log2();
+        return AutoTone {
+            exposure: (f64::from(exposure) * 100.0).round() / 100.0,
+            contrast: f64::from(((4.5 - spread) * 6.0).clamp(-20.0, 30.0).round()),
+            highlights: -f64::from(((white - 0.9).max(0.0) * 300.0).min(60.0).round()),
+            shadows: f64::from(((0.04 - lo).max(0.0) * 500.0).min(50.0).round()),
+            whites: f64::from(((0.9 - white).max(0.0) * 60.0).min(30.0).round()),
+            blacks: -f64::from(((black - 0.015).max(0.0) * 250.0).min(25.0).round()),
+            vibrance: s.color.vibrance,
+            saturation: s.color.saturation,
+        };
+    }
     let (p01, p05, p95, p995) =
         (percentile(&ev, 0.01) + exposure, percentile(&ev, 0.05) + exposure, percentile(&ev, 0.95) + exposure, percentile(&ev, 0.995) + exposure);
     let highlights = if p995 > 2.2 { -((p995 - 2.2) * 38.0).min(90.0) } else { 0.0 };
@@ -152,6 +197,25 @@ mod tests {
         let (t, tint) = auto_wb(&img, &SourceInfo::default());
         assert!((t - 6500.0).abs() < 150.0, "{t}");
         assert!(tint.abs() < 6.0, "{tint}");
+    }
+    #[test]
+    fn camera_auto_tone_evaluates_display_response_and_keeps_colour_controls() {
+        let curve = crate::tone::CameraTone::new(std::array::from_fn(|i| {
+            let x = 0.004 * 1.18f32.powi(i as i32);
+            [x, 1.0 - (-4.0 * x).exp()]
+        }))
+        .unwrap();
+        let info = SourceInfo { raw: true, camera_rgb_tone: true, camera_tone: Some(curve), ..Default::default() };
+        let src = Rgb32f::from_fn(32, 32, |x, _| [0.08 + x as f32 * 0.006; 3]);
+        let mut s = DevelopSettings::default();
+        s.color.vibrance = 7.0;
+        s.color.saturation = -4.0;
+        let a = auto_tone(&src, &info, &s);
+        assert!(a.exposure.is_finite() && a.highlights <= 0.0);
+        let generic = auto_tone(&src, &SourceInfo::default(), &s);
+        assert!(a.exposure < generic.exposure - 0.5, "a boosted starting response must change the exposure anchor");
+        assert_eq!(a.vibrance, 7.0);
+        assert_eq!(a.saturation, -4.0);
     }
 
     #[test]

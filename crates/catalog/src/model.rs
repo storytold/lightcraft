@@ -349,6 +349,7 @@ impl Photo {
     pub fn camera_defaults(&self) -> DevelopSettings {
         let wb = if self.relative_wb() { Some((6500.0, 0.0)) } else { self.as_shot_wb };
         let mut d = match wb {
+            Some((t, tint)) if self.relative_wb() => DevelopSettings::for_sony_raw(t, tint, self.meta.iso),
             Some((t, tint)) => DevelopSettings::for_raw(t, tint),
             None => DevelopSettings::default(),
         };

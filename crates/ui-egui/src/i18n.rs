@@ -73,7 +73,19 @@ mod tests {
     #[test]
     fn catalog_is_valid_and_contains_core_workflows() {
         let messages: BTreeMap<String, String> = serde_json::from_str(include_str!("../locales/ja.json")).unwrap();
-        for key in ["Import Photos…", "Export…", "Exposure", "White Balance", "Settings", "Language"] {
+        for key in [
+            "Import Photos…",
+            "Export…",
+            "Exposure",
+            "White Balance",
+            "Settings",
+            "Language",
+            "Select photo",
+            "Candidate",
+            "Auto settings applied",
+            "Estimated camera colour",
+            "Camera colour (macOS)",
+        ] {
             assert!(messages.get(key).is_some_and(|value| !value.is_empty() && value != key), "{key}");
         }
     }

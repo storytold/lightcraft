@@ -41,6 +41,36 @@ fn camera_tone_and_relative_wb() {
     s.wb.mode = WbMode::Custom;
     s.wb.temp = 8000.0;
     check("camera tone edited", &src, &info, &s, &RenderRequest::fit(320, 240));
+    let calibrated = SourceInfo { camera_rgb_tone: true, sensor_long_edge: 6192, ..info };
+    check("calibrated channel tone", &src, &calibrated, &s, &RenderRequest::fit(320, 240));
+}
+
+#[test]
+fn calibrated_rgb_response_matches_cpu_with_edits() {
+    if !gpu() {
+        return;
+    }
+    let mut data = Vec::new();
+    for b in 0..33 {
+        for g in 0..33 {
+            for r in 0..33 {
+                let c = [r, g, b].map(lightcraft_pipeline::tone::CameraResponse::input).map(|v| v / (1.0 + v));
+                data.push([0.8 * c[0] + 0.2 * c[1], c[1], 0.9 * c[2] + 0.1 * c[0]]);
+            }
+        }
+    }
+    let response = Arc::new(lightcraft_pipeline::tone::CameraResponse::new(data).unwrap());
+    let info =
+        SourceInfo { raw: true, relative_wb: true, camera_tone: Some(response.grey_tone()), camera_response: Some(response), ..Default::default() };
+    let src = scene(2, 320, 240);
+    let mut s = DevelopSettings::default();
+    check("direct RGB response neutral", &src, &info, &s, &RenderRequest::fit(320, 240));
+    s.light.exposure = -1.0;
+    s.light.highlights = -30.0;
+    s.light.contrast = 25.0;
+    s.wb.mode = WbMode::Custom;
+    s.wb.temp = 5500.0;
+    check("direct RGB response edited", &src, &info, &s, &RenderRequest::fit(320, 240));
 }
 
 fn scene(i: usize, w: usize, h: usize) -> Arc<Rgb32f> {

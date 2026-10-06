@@ -157,14 +157,14 @@ fn smart_run(
             // a complete proxy is kept; a missing or damaged one (cut short by a crash or a full
             // drive) is (re)built
             let damaged = path.exists();
-            if damaged && crate::smart::is_valid(&path) {
+            if damaged && crate::smart::is_current(&path) {
                 n.built += 1;
             } else {
                 // atomic: a failed write leaves no partial proxy that would pass for a built one
                 let r = source
                     .ok_or_else(|| "nothing to build from".to_string())
                     .and_then(|s| s.load_source())
-                    .and_then(|src| crate::smart::encode(&src.image, src.info_or(Default::default()).camera_tone.as_ref()))
+                    .and_then(|src| crate::smart::encode_source(&src.image, &src.info_or(Default::default())))
                     .and_then(|b| lightcraft_catalog::safe_file::write_atomic(&path, &b).map_err(|e| format!("{}: {e}", path.display())));
                 match r {
                     Ok(()) => {

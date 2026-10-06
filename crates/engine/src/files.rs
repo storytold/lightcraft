@@ -213,7 +213,50 @@ pub fn load_vec(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo),
     rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge))
 }
 
+/// Display-fit rejection cannot invalidate a successful calibrated RAW decode.
+#[cfg(any(target_os = "macos", test))]
+fn calibrated_native_source(native: lightcraft_sysraw::LinearRaw, mut info: SourceInfo) -> (Rgb32f, SourceInfo) {
+    let response = native.response.and_then(lightcraft_pipeline::tone::CameraResponse::new).map(std::sync::Arc::new);
+    let fitted = response.as_ref().map(|r| r.grey_tone()).or_else(|| crate::camera_preview::native_tone(&native.linear_proxy, &native.display_proxy));
+    if response.is_some() && lightcraft_pipeline::profiling() {
+        eprintln!("[profile] native RAW direct RGB response; no scene/preview tone fitting");
+    }
+    info.camera_response = response;
+    if fitted.is_none() && lightcraft_pipeline::profiling() {
+        eprintln!("[profile] macOS RAW starting tone rejected; retaining calibrated source with neutral response");
+    }
+    info.raw = true;
+    info.relative_wb = true;
+    info.camera_tone = Some(fitted.unwrap_or_else(lightcraft_pipeline::tone::CameraTone::neutral));
+    info.camera_rgb_tone = true;
+    let p = native.pixels;
+    let img = Rgb32f { width: p.width, height: p.height, data: p.rgb };
+    if lightcraft_pipeline::profiling() {
+        eprintln!("[profile] ARW calibrated macOS linear source {}×{}, separate channel tone", img.width, img.height);
+    }
+    (img, info)
+}
+
 fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
+    #[cfg(target_os = "macos")]
+    if lightcraft_raw::probe(&bytes) == Some(lightcraft_raw::RawFormat::Arw) {
+        match lightcraft_sysraw::decode(&bytes, max_edge) {
+            Ok(native) => {
+                let metadata = lightcraft_raw::probe_info(&bytes).ok();
+                let info = SourceInfo {
+                    lens: metadata.as_ref().and_then(embedded_lens),
+                    sensor_long_edge: metadata.as_ref().map(|r| r.crop.width.max(r.crop.height)).unwrap_or(0),
+                    ..Default::default()
+                };
+                return Ok(calibrated_native_source(native, info));
+            }
+            Err(e) => {
+                if lightcraft_pipeline::profiling() {
+                    eprintln!("[profile] macOS RAW unavailable: {e}; using portable estimate");
+                }
+            }
+        }
+    }
     if lightcraft_raw::probe(&bytes).is_some() {
         let mut raw = match lightcraft_raw::decode(&bytes) {
             Ok(r) => r,
@@ -283,7 +326,15 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
         let (temp, tint) = if relative { (6500.0, 0.0) } else { (temp.round(), tint.round()) };
         return Ok((
             img,
-            SourceInfo { raw: true, as_shot_temp: temp, as_shot_tint: tint, lens, relative_wb: relative, camera_tone: camera_look.map(|p| p.tone) },
+            SourceInfo {
+                raw: true,
+                as_shot_temp: temp,
+                as_shot_tint: tint,
+                lens,
+                relative_wb: relative,
+                camera_tone: camera_look.map(|p| p.tone),
+                ..Default::default()
+            },
         ));
     }
     let d = lightcraft_codecs::decode(&bytes, lightcraft_codecs::DecodeOptions::fit(max_edge as u32, max_edge as u32)).map_err(|e| e.to_string())?;
@@ -380,6 +431,24 @@ impl crate::Session {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rejected_native_look_keeps_calibrated_pixels_and_capture_wb() {
+        let proxy = || lightcraft_sysraw::Pixels { width: 1, height: 1, rgb: vec![[0.2, 0.1, 0.05]] };
+        let native = lightcraft_sysraw::LinearRaw {
+            response: None,
+            pixels: lightcraft_sysraw::Pixels { width: 1, height: 1, rgb: vec![[3.0, 0.2, 0.05]] },
+            linear_proxy: proxy(),
+            display_proxy: proxy(),
+        };
+        assert!(crate::camera_preview::native_tone(&native.linear_proxy, &native.display_proxy).is_none());
+        let (pixels, info) =
+            super::calibrated_native_source(native, lightcraft_pipeline::SourceInfo { sensor_long_edge: 6192, ..Default::default() });
+        assert_eq!(pixels.data, vec![[3.0, 0.2, 0.05]]);
+        assert!(info.raw && info.relative_wb && info.camera_rgb_tone);
+        assert_eq!(info.sensor_long_edge, 6192);
+        assert!((info.camera_tone.unwrap().apply(0.18) - 0.18).abs() < 1e-5);
+    }
+
     use super::*;
     use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
 

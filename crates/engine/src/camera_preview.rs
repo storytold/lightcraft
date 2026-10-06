@@ -61,7 +61,81 @@ fn displayed(scene: [f64; 3], tone: &ToneMap) -> [f64; 3] {
     if y <= 0.0 {
         return [0.0; 3];
     }
-    scene.map(|v| v * f64::from(tone.apply(y as f32)) / y)
+    let o = f64::from(tone.apply(y as f32));
+    let mut d = scene.map(|v| v * o / y);
+    let mx = d.iter().copied().fold(0.0, f64::max);
+    if mx > 1.0 {
+        let t = ((mx - 1.0) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
+        d = d.map(|v| v + (o - v) * t);
+    }
+    output_mapped(d)
+}
+
+fn output_mapped(d: [f64; 3]) -> [f64; 3] {
+    let out = lightcraft_color::REC2020.to_space(&lightcraft_color::SRGB).apply(d).map(|v| v as f32);
+    let (mapped, _) = lightcraft_pipeline::finish::gamut_map(out, [0.2126, 0.7152, 0.0722]);
+    lightcraft_color::SRGB.to_space(&lightcraft_color::REC2020).apply(mapped.map(f64::from))
+}
+
+/// The native decoder supplies calibrated linear colours; only a bounded channel response is
+/// learned from its own display/linear proxy pair. Colour matrices are never learned from JPEG.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn native_tone(linear: &lightcraft_sysraw::Pixels, display: &lightcraft_sysraw::Pixels) -> Option<CameraTone> {
+    if (linear.width, linear.height) != (display.width, display.height) || linear.rgb.len() != display.rgb.len() {
+        return None;
+    }
+    let mut training = Vec::new();
+    let mut holdout = Vec::new();
+    for (i, (a, b)) in linear.rgb.iter().zip(&display.rgb).enumerate() {
+        if !a.iter().chain(b).all(|v| v.is_finite()) {
+            return None;
+        }
+        for c in 0..3 {
+            if a[c] > 0.001 && b[c] > 0.001 && b[c] < 0.98 && i % 3 != 0 {
+                training.push((f64::from(a[c]), f64::from(b[c])));
+            }
+        }
+        if i % 3 == 0 {
+            holdout.push((*a, *b));
+        }
+    }
+    let curve = fit_tone(training)?;
+    if holdout.len() < 128 {
+        return None;
+    }
+    let mut bands = [(0.0f64, 0usize); 4];
+    let error = holdout
+        .iter()
+        .map(|(a, b)| {
+            let actual = output_mapped(a.map(|v| f64::from(curve.apply(v.max(0.0)))));
+            let target = output_mapped(b.map(f64::from));
+            let e = (0..3).map(|c| (actual[c] - target[c]).powi(2)).sum::<f64>() / 3.0;
+            let y = luma(target);
+            let band = if y < 0.08 {
+                0
+            } else if y < 0.3 {
+                1
+            } else if y < 0.7 {
+                2
+            } else {
+                3
+            };
+            bands[band].0 += e;
+            bands[band].1 += 1;
+            e
+        })
+        .sum::<f64>()
+        / holdout.len() as f64;
+    if lightcraft_pipeline::profiling() {
+        eprintln!("[profile] native ARW final-display holdout RMS {:.5}", error.sqrt());
+    }
+    if error.sqrt() > 0.05 {
+        return None;
+    }
+    if bands.iter().any(|(sum, count)| *count >= 32 && (sum / *count as f64).sqrt() > 0.065) {
+        return None;
+    }
+    Some(curve)
 }
 
 fn fit_pairs(sensor: &Rgb32f, reference: &Rgb32f) -> Option<CameraLook> {
@@ -192,6 +266,22 @@ fn fit_tone(mut pairs: Vec<(f64, f64)>) -> Option<CameraTone> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn calibrated_channel_response_is_validated_after_output_mapping() {
+        let mut linear = lightcraft_sysraw::Pixels { width: 64, height: 64, rgb: Vec::new() };
+        let mut display = lightcraft_sysraw::Pixels { width: 64, height: 64, rgb: Vec::new() };
+        for i in 0..4096 {
+            let x = 0.005 + (i % 101) as f32 * 0.006;
+            let p = [x, x * (0.6 + (i % 7) as f32 * 0.06), x * (0.2 + (i % 13) as f32 * 0.04)];
+            linear.rgb.push(p);
+            display.rgb.push(p.map(|v| 1.0 - (-3.0 * v).exp()));
+        }
+        let curve = native_tone(&linear, &display).unwrap();
+        assert!(curve.apply(0.05) < curve.apply(0.3));
+        assert!(curve.apply(0.0) == 0.0);
+        display.rgb.fill([f32::NAN; 3]);
+        assert!(native_tone(&linear, &display).is_none());
+    }
     #[test]
     fn separates_nonlinear_tone_from_colour_and_keeps_sensor_headroom() {
         let known = Mat3([[1.8, -0.4, -0.1], [-0.2, 1.5, -0.1], [-0.05, -0.3, 1.7]]);

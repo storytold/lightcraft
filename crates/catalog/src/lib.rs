@@ -268,6 +268,35 @@ impl Catalog {
     pub fn photos(&self) -> impl Iterator<Item = &Arc<Photo>> {
         self.photos.values()
     }
+
+    /// Schema/default-policy migration: only untouched legacy Sony factory defaults change.
+    /// Custom edits, import presets and browsed Local records are preserved. Replay happens
+    /// first, so a durable user edit always wins over this idempotent default upgrade.
+    pub(crate) fn upgrade_arw_defaults(&mut self) {
+        for photo in self.photos.values_mut() {
+            if !photo.relative_wb()
+                || photo.import_look.is_some()
+                || photo.edited.is_some()
+                || photo.local
+                || photo.develop.wb.mode != lightcraft_develop::WbMode::AsShot
+            {
+                continue;
+            }
+            let mut legacy = DevelopSettings::for_raw(photo.develop.wb.temp, photo.develop.wb.tint);
+            legacy.optics.lens_profile = photo.embedded_lens.is_some();
+            // The first Sony policy stopped increasing luminance NR at ISO 3200.
+            // Recognize that exact untouched policy too, never a user-adjusted approximation.
+            let mut previous_sony = legacy.clone();
+            let stops = (f64::from(photo.meta.iso.unwrap_or(100).max(100)) / 200.0).log2().max(0.0);
+            previous_sony.detail.nr_luminance = (stops * 9.0).clamp(0.0, 36.0).round();
+            previous_sony.detail.sharpen_amount = (30.0 - stops * 4.0).clamp(16.0, 30.0).round();
+            previous_sony.detail.sharpen_masking = (15.0 + stops * 12.0).clamp(15.0, 65.0).round();
+            if *photo.develop == legacy || *photo.develop == previous_sony {
+                let defaults = photo.camera_defaults();
+                Arc::make_mut(photo).develop = Arc::new(defaults);
+            }
+        }
+    }
     pub fn len(&self) -> usize {
         self.photos.len()
     }

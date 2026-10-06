@@ -171,10 +171,9 @@ pub fn specs() -> Vec<CommandSpec> {
                         Some(l) => (*l).clone(),
                         None => {
                             let info = s.source_info(id);
-                            DevelopSettings {
-                                wb: lightcraft_develop::WhiteBalance { mode: WbMode::AsShot, temp: info.as_shot_temp, tint: info.as_shot_tint },
-                                ..Default::default()
-                            }
+                            let mut fresh = s.catalog.photo(id).map(|p| p.camera_defaults()).unwrap_or_default();
+                            fresh.wb = lightcraft_develop::WhiteBalance { mode: WbMode::AsShot, temp: info.as_shot_temp, tint: info.as_shot_tint };
+                            fresh
                         }
                     };
                     s.develop_op(id, fresh, "Reset")

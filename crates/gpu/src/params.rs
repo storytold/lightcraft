@@ -19,6 +19,10 @@ const FIELDS: &[(&str, usize)] = &[
     ("CURVES", 1),
     ("GAIN", 1),
     ("EV", 1),
+    ("CAMERA_RGB_TONE", 1),
+    ("RESPONSE_OFF", 1),
+    ("HAS_RESPONSE", 1),
+    ("RESPONSE_ADJUST", 1),
     ("AIR", 1),
     ("AIR_PRE", 1),
     ("HL", 1),
@@ -154,7 +158,14 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         aux.extend_from_slice(m);
     }
 
+    let response_off = aux.len();
+    if let Some(r) = &fp.camera_response {
+        aux.extend_from_slice(r.data().as_flattened());
+    }
     let mut p = Block::new();
+    p.u("RESPONSE_OFF", response_off as u32);
+    p.b("HAS_RESPONSE", fp.camera_response.is_some());
+    p.b("RESPONSE_ADJUST", fp.response_adjustment);
     p.u("W", fp.w as u32);
     p.u("H", fp.h as u32);
     p.u("NMASK", masks.len() as u32);
@@ -165,6 +176,7 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.f("REFINE_SAT", fp.refine_sat);
     p.f("GAIN", fp.gain);
     p.f("EV", fp.ev);
+    p.b("CAMERA_RGB_TONE", fp.camera_rgb_tone);
     p.f("AIR", fp.air);
     p.f("AIR_PRE", fp.air_pre);
     p.f("HL", fp.hl);
