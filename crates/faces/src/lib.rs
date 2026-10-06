@@ -9,10 +9,12 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod align;
 pub mod graph;
 pub mod hash;
 pub mod known;
 pub mod manifest;
+pub mod matching;
 pub mod net;
 pub mod onnx;
 #[cfg(feature = "tract")]
