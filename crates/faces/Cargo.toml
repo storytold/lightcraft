@@ -1,0 +1,18 @@
+[package]
+name = "lightcraft-faces"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightCraft faces (L1): face-model manifests, validation, the known-model table and an ONNX shape probe"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

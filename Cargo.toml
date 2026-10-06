@@ -12,6 +12,7 @@ repository = "https://github.com/storytold/lightcraft"
 [workspace.dependencies]
 # internal
 lightcraft-geom = { path = "crates/geom" }
+lightcraft-faces = { path = "crates/faces" }
 lightcraft-sysmem = { path = "crates/sysmem" }
 lightcraft-color = { path = "crates/color" }
 lightcraft-raster = { path = "crates/raster" }
@@ -32,6 +33,7 @@ lightcraft-mcp = { path = "crates/mcp" }
 
 # foundation
 thiserror = "2"
+sha2 = "0.10"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 log = "0.4"
