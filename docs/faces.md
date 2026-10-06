@@ -172,10 +172,11 @@ Turning recognition on starts a scan of the whole library, once, in the backgrou
   faster than decoding the raw); everything else is rendered at 2048 pixels.
 - **How hard it works follows what you are doing.** The app tells the engine on every call to `faces.pump`, which is made
   about 20 times a second while there is work and a few times a minute otherwise (the window is not redrawn for it at any
-  other time). Dragging, typing or scrolling: nothing new is started. The pointer moving, or the window minimized or behind
-  another app: **light**, one photo at a time on two threads. Idle for three seconds: **normal**, half of the processor's
-  threads. Idle and looking at the progress (Settings ▸ Faces, or the People view): **full**, four fifths. Photos already
-  running are never interrupted, and a change of pace takes effect at once.
+  other time). Dragging, typing or scrolling: nothing new is started. The pointer moving, or the window minimized:
+  **light**, one photo at a time on two threads. Idle for three seconds, or the window still on screen but with another
+  app in front (you are working elsewhere): **normal**, half of the processor's threads. Idle and looking at the progress
+  (Settings ▸ Faces, or the People view): **full**, four fifths. Photos already running are never interrupted, and a
+  change of pace takes effect at once.
 - **Threads and photos.** Most of a photo's cost is its parallel work (decoding, developing the picture), so the pace sets the
   size of a pool of threads for that work: two, half the machine, four fifths. The scan has pools of its own, not the one the
   loupe and exports use (which has no priorities), so a slider drag never queues behind a scan. Measured on a 32-thread

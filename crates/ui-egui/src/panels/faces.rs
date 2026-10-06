@@ -17,21 +17,25 @@ use crate::theme::Tokens;
 use crate::widgets::register;
 
 /// How hard the background scan may work (the engine's `faces.pump` pace), from what the user is doing: nothing new
-/// while they drag, type or scroll; one photo at a time while they are around or the window is out of sight; half the
-/// machine once they have been idle for a few seconds; most of it while they are looking at the scan's progress.
+/// while they drag, type or scroll; one photo at a time while they are around or the window is minimized; half the
+/// machine once they have been idle for a few seconds, or while another app has the keyboard but this window is still
+/// on screen; most of it while they are looking at the scan's progress.
 fn scan_pace(app: &LightcraftApp, ctx: &egui::Context, now: f64) -> (&'static str, bool) {
     let (focused, minimized) = ctx.input(|i| (i.focused, i.raw.viewports.get(&i.raw.viewport_id).and_then(|v| v.minimized).unwrap_or(false)));
-    let in_front = focused && !minimized;
     let watching =
         matches!(&app.ui.dialog, Some(crate::state::Dialog::Settings { tab }) if tab == "faces") || app.ui.view == crate::state::ViewMode::People;
-    (pace_for(in_front, now - app.caches.last_input, now - app.caches.last_move, watching), in_front)
+    (pace_for(focused, minimized, now - app.caches.last_input, now - app.caches.last_move, watching), focused && !minimized)
 }
 
-/// The pace for a window that is in front (or not), `worked` seconds after the user last dragged, typed or scrolled and
-/// `moved` seconds after they last moved the pointer, while they are (or are not) looking at the scan's progress.
-fn pace_for(in_front: bool, worked: f64, moved: f64, watching: bool) -> &'static str {
-    if !in_front {
+/// The pace for a window that has the keyboard (or not) and is minimized (or not), `worked` seconds after the user last
+/// dragged, typed or scrolled and `moved` seconds after they last moved the pointer, while they are (or are not) looking
+/// at the scan's progress.
+fn pace_for(focused: bool, minimized: bool, worked: f64, moved: f64, watching: bool) -> &'static str {
+    if minimized {
         "light"
+    } else if !focused {
+        // still on screen, but the user is working in another app: no input here to get in the way of
+        "normal"
     } else if worked < 0.4 {
         "pause"
     } else if moved < 3.0 {
@@ -616,14 +620,16 @@ mod tests {
 
     #[test]
     fn the_scan_works_hard_only_when_nobody_is_in_the_way() {
-        // (in front, seconds since a drag/key/scroll, seconds since the pointer moved, watching the progress)
-        assert_eq!(pace_for(true, 0.1, 0.1, true), "pause", "dragging a slider: nothing new, even if watching");
-        assert_eq!(pace_for(true, 2.0, 0.2, false), "light", "the pointer is moving: one photo at a time");
-        assert_eq!(pace_for(true, 5.0, 2.9, true), "light");
-        assert_eq!(pace_for(true, 5.0, 4.0, false), "normal", "idle for a few seconds: half the machine");
-        assert_eq!(pace_for(true, 60.0, 60.0, true), "full", "idle and looking at the progress: most of it");
-        // out of sight (minimized, another app in front): gentle, whatever the user did last
-        assert_eq!([pace_for(false, 0.0, 0.0, true), pace_for(false, 99.0, 99.0, true)], ["light", "light"]);
+        // (focused, minimized, seconds since a drag/key/scroll, seconds since the pointer moved, watching the progress)
+        assert_eq!(pace_for(true, false, 0.1, 0.1, true), "pause", "dragging a slider: nothing new, even if watching");
+        assert_eq!(pace_for(true, false, 2.0, 0.2, false), "light", "the pointer is moving: one photo at a time");
+        assert_eq!(pace_for(true, false, 5.0, 2.9, true), "light");
+        assert_eq!(pace_for(true, false, 5.0, 4.0, false), "normal", "idle for a few seconds: half the machine");
+        assert_eq!(pace_for(true, false, 60.0, 60.0, true), "full", "idle and looking at the progress: most of it");
+        // minimized: gentle, whatever the user did last
+        assert_eq!([pace_for(true, true, 0.0, 0.0, true), pace_for(false, true, 99.0, 99.0, true)], ["light", "light"]);
+        // on screen behind another app: the user is elsewhere, so the scan gets on with it, however recent the last input
+        assert_eq!([pace_for(false, false, 0.0, 0.0, true), pace_for(false, false, 99.0, 99.0, false)], ["normal", "normal"]);
     }
 
     fn row(id: &str, state: &str) -> Value {

@@ -46,7 +46,7 @@ pub(crate) const PREFETCH: usize = 2;
 pub(crate) enum Pace {
     /// Start nothing new: the user is dragging, typing or scrolling.
     Pause = 0,
-    /// One photo at a time: the user is around, or the window is out of sight.
+    /// One photo at a time: the user is around, or the window is minimized.
     Light = 1,
     /// Half the machine: the user is idle.
     Normal = 2,
