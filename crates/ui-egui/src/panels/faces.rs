@@ -94,6 +94,21 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     );
     if list["runtime"].as_bool() == Some(true) {
         hint(ui, t, "Each model is tested when you add it, and runs on your computer's processor.");
+        if on && list["embedder"].is_null() {
+            hint(ui, t, "Choose a recognition model below (Use) to start suggesting names.");
+        } else if on && app.caches.faces_active {
+            let left = app.caches.faces_pending;
+            let status = if left > 0 {
+                format!(
+                    "Learning your faces in the background: {} embedded, {left} photo{} to go.",
+                    app.caches.faces_indexed,
+                    if left == 1 { "" } else { "s" }
+                )
+            } else {
+                format!("{} faces learned; names are suggested as you browse.", app.caches.faces_indexed)
+            };
+            hint(ui, t, &status);
+        }
     } else {
         hint(ui, t, "This build cannot run recognition models: they can be added and chosen, not used.");
     }
@@ -253,4 +268,132 @@ pub fn install(app: &mut LightcraftApp, path: &str, accepted: bool) -> Result<Va
     let r = app.run("faces.models.install", json!({"path": path, "acknowledged": true}));
     app.caches.faces_epoch += 1;
     r
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Naming faces in the loupe
+
+/// A suggestion for one unnamed face: the best guess (when it passes the bar) and the closest few people.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Hint {
+    pub suggestion: Option<(String, f32)>,
+    pub candidates: Vec<(String, f32)>,
+}
+
+/// Suggestions for the unnamed faces of one photo, by region index.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Hints {
+    pub by_index: std::collections::HashMap<usize, Hint>,
+}
+
+/// Suggestions for `photo`'s unnamed faces from what is already indexed (nothing is embedded for this: the background
+/// indexer does that). `None` while recognition is off. Asked again only when the catalog or the index changed.
+pub fn hints_for(app: &mut LightcraftApp, photo: u64) -> Option<std::sync::Arc<Hints>> {
+    if !app.caches.faces_active {
+        return None;
+    }
+    let (rev, indexed) = (app.session.catalog.revision, app.caches.faces_indexed);
+    if let Some((p, r, i, h)) = &app.caches.face_hints
+        && (*p, *r, *i) == (photo, rev, indexed)
+    {
+        return Some(h.clone());
+    }
+    let answer = app.session.execute("faces.suggest", &json!({"ids": [photo], "budgetMs": 0})).ok()?;
+    let pair = |v: &Value| Some((v["name"].as_str()?.to_string(), v["score"].as_f64()? as f32));
+    let mut hints = Hints::default();
+    for f in answer["photos"][0]["faces"].as_array().into_iter().flatten() {
+        let Some(index) = f["index"].as_u64().and_then(|i| usize::try_from(i).ok()) else { continue };
+        hints.by_index.insert(
+            index,
+            Hint { suggestion: pair(&f["suggestion"]), candidates: f["candidates"].as_array().into_iter().flatten().filter_map(pair).collect() },
+        );
+    }
+    let hints = std::sync::Arc::new(hints);
+    app.caches.face_hints = Some((photo, rev, indexed, hints.clone()));
+    Some(hints)
+}
+
+/// What the name box did this frame.
+pub enum Editor {
+    Open,
+    Submit(String),
+    Cancel,
+}
+
+/// The inline name box under a face: type a name (completed from the people already named), pick one of the
+/// suggestions, Enter to confirm, Escape to cancel.
+pub fn name_editor(
+    ctx: &egui::Context,
+    at: egui::Pos2,
+    edit: &mut crate::state::NameEdit,
+    candidates: &[(String, f32)],
+    people: &[String],
+) -> Editor {
+    let t = Tokens::get(ctx);
+    let mut outcome = Editor::Open;
+    let opening = edit.fresh;
+    let shown = egui::Area::new(egui::Id::new("face-name-editor")).order(egui::Order::Foreground).fixed_pos(at).constrain(true).show(ctx, |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            ui.set_min_width(230.0);
+            let r = ui.add(egui::TextEdit::singleline(&mut edit.text).hint_text("Name").desired_width(220.0));
+            register(ui.ctx(), "field:faceName", r.rect);
+            if edit.fresh {
+                r.request_focus();
+                edit.fresh = false;
+            }
+            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                outcome = Editor::Submit(edit.text.trim().to_string());
+            }
+            let typed = edit.text.trim().to_lowercase();
+            let mut offered: Vec<(String, Option<f32>)> = candidates.iter().take(3).map(|(n, s)| (n.clone(), Some(*s))).collect();
+            if !typed.is_empty() {
+                for p in people.iter().filter(|p| p.to_lowercase().starts_with(&typed)) {
+                    if offered.len() >= 7 {
+                        break;
+                    }
+                    if !offered.iter().any(|(n, _)| n.eq_ignore_ascii_case(p)) {
+                        offered.push((p.clone(), None));
+                    }
+                }
+            }
+            for (name, score) in offered {
+                let label = match score {
+                    Some(s) => format!("{name}   {:.0}%", (s * 100.0).max(0.0)),
+                    None => name.clone(),
+                };
+                let b = ui.add(egui::Button::new(RichText::new(label).color(t.text_label)).frame(false).min_size(egui::vec2(220.0, 0.0)));
+                register(ui.ctx(), format!("faceName:pick:{name}"), b.rect);
+                if b.clicked() {
+                    outcome = Editor::Submit(name);
+                }
+            }
+            ui.label(RichText::new("Enter to confirm, Esc to cancel").font(t.font(11.0)).color(t.text_dim));
+        });
+    });
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        outcome = Editor::Cancel;
+    }
+    // a click anywhere else closes it (not on the frame it opened, which is the click that opened it)
+    if !opening && ctx.input(|i| i.pointer.any_pressed()) && ctx.input(|i| i.pointer.interact_pos()).is_some_and(|p| !shown.response.rect.contains(p))
+    {
+        outcome = Editor::Cancel;
+    }
+    outcome
+}
+
+/// Called every frame: keeps the background face indexer going while recognition is on, and notes whether it is
+/// running, how many faces it has done and how many photos are left (the loupe's suggestions depend on it).
+pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
+    let now = ctx.input(|i| i.time);
+    if now < app.caches.faces_next_pump {
+        return;
+    }
+    let Ok(v) = app.session.execute("faces.pump", &json!({})) else { return };
+    app.caches.faces_active = v["active"] == true;
+    app.caches.faces_indexed = v["indexedFaces"].as_u64().unwrap_or(0);
+    app.caches.faces_pending = v["pendingPhotos"].as_u64().unwrap_or(0);
+    // keep asking quickly while there is work, slowly otherwise
+    let busy = app.caches.faces_active && (app.caches.faces_pending > 0 || v["inFlight"].as_u64().unwrap_or(0) > 0);
+    app.caches.faces_next_pump = now + if busy { 0.05 } else { 1.0 };
+    ctx.request_repaint_after(std::time::Duration::from_millis(if busy { 50 } else { 1000 }));
 }

@@ -266,6 +266,9 @@ pub struct UiState {
     pub show_counts: bool,
     /// Face / pet boxes (read from XMP) over the photo in the loupe.
     pub face_boxes: bool,
+    /// A face's name being typed in the loupe.
+    #[serde(skip)]
+    pub name_edit: Option<NameEdit>,
     /// Local sidebar locations hidden with “Remove from Local” (folders on disk are untouched).
     pub hidden_locations: Vec<String>,
     /// Copies opened in an external editor this session (reloaded when the window is focused
@@ -383,6 +386,16 @@ impl Dialog {
     pub fn create_preset() -> Dialog {
         Dialog::CreatePreset { name: String::new(), group: "User Presets".into(), groups: default_preset_groups() }
     }
+}
+
+/// A face's name being typed in the loupe: which face, and what has been typed so far.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NameEdit {
+    pub photo: u64,
+    pub index: usize,
+    pub text: String,
+    /// Just opened: the text box takes the keyboard focus once.
+    pub fresh: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -560,6 +573,7 @@ impl Default for UiState {
             grid_info: "filename".into(),
             show_counts: true,
             face_boxes: true,
+            name_edit: None,
             hidden_locations: Vec::new(),
             dragging_control: None,
             external_edits: Vec::new(),

@@ -355,6 +355,58 @@ mod tests {
         h.settle(SETTLE);
     }
 
+    /// Naming a face in the loupe: point at an unnamed face, click its "Add name" label, type, Enter. Needs the
+    /// recognition runtime only for the background indexer, so the naming itself is tested whatever the build.
+    #[test]
+    fn naming_a_face_in_the_loupe() {
+        use crate::state::NameEdit;
+        use lightcraft_catalog::Op;
+        let mut h = demo([1400.0, 900.0]);
+        let t = Duration::from_secs(10);
+        let id = h.app.session.active().unwrap();
+        let mut meta = h.app.session.catalog.photo(id).unwrap().meta.clone();
+        meta.regions = vec![lightcraft_meta::Region {
+            rect: lightcraft_geom::Rect { x0: 0.3, y0: 0.2, x1: 0.55, y1: 0.6 },
+            kind: lightcraft_meta::RegionKind::Face,
+            name: None,
+            description: None,
+        }];
+        h.app.session.commit("setup", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+        h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
+        h.settle(SETTLE);
+        // pointing at the box shows the invitation; clicking it opens the name box
+        h.request("ui.pointer", json!({"events": [{"kind": "move", "x": 0.42, "y": 0.4}]}), t);
+        h.step();
+        h.step();
+        let r = h.request("ui.clickWidget", json!({"id": "regionLabel:0"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        assert!(matches!(&h.app.ui.name_edit, Some(NameEdit { index: 0, .. })), "{:?}", h.app.ui.name_edit);
+        // Escape closes it without naming anything
+        let r = h.request("ui.key", json!({"key": "escape"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+        assert!(h.app.ui.name_edit.is_none(), "{:?}", h.app.ui.name_edit);
+        assert_eq!(h.app.session.catalog.photo(id).unwrap().meta.regions[0].name, None);
+        // open it again, type a name, Enter: the face is named, in one undo step
+        h.request("ui.pointer", json!({"events": [{"kind": "move", "x": 0.42, "y": 0.4}]}), t);
+        h.step();
+        h.step();
+        h.request("ui.clickWidget", json!({"id": "regionLabel:0"}), t);
+        h.step();
+        h.step();
+        let undo = h.app.session.undo.len();
+        h.request("ui.text", json!({"text": "Ann"}), t);
+        h.step();
+        h.request("ui.key", json!({"key": "enter"}), t);
+        h.step();
+        h.step();
+        assert_eq!(h.app.session.catalog.photo(id).unwrap().meta.regions[0].name.as_deref(), Some("Ann"));
+        assert_eq!(h.app.session.undo.len(), undo + 1);
+        assert!(h.app.ui.name_edit.is_none());
+    }
+
     /// Adding a face model: the dialog shows the file's terms, the model is installed only once they are
     /// accepted, and a file LightCraft cannot use only says why.
     #[test]

@@ -79,8 +79,8 @@ fn matches(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
 }
 
 pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
-    // don't steal keys from text fields
-    if ctx.egui_wants_keyboard_input() {
+    // don't steal keys from text fields, or from the face name box (Escape closes it, it does not leave the loupe)
+    if ctx.egui_wants_keyboard_input() || app.ui.name_edit.is_some() {
         return;
     }
     let mut fire: Vec<String> = Vec::new();

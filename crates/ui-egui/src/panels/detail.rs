@@ -337,9 +337,19 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         filter_pill(app, ui, canvas);
     }
     if app.ui.face_boxes {
-        match region_overlay(ui, &p, &map, &photo) {
+        // a name box left open on another photo is dropped
+        if app.ui.name_edit.as_ref().is_some_and(|e| e.photo != id.0) {
+            app.ui.name_edit = None;
+        }
+        let hints = super::faces::hints_for(app, id.0);
+        let people = if app.ui.name_edit.is_some() { app.caches.person_names(&app.session.catalog) } else { Default::default() };
+        match region_overlay(ui, &p, &map, &photo, hints.as_deref(), &people, &mut app.ui.name_edit) {
             Some(RegionEdit::Remove(index)) => {
                 let _ = app.run("photo.removeRegion", json!({"id": id.0, "index": index}));
+            }
+            Some(RegionEdit::Name(index, name)) => {
+                app.ui.name_edit = None;
+                let _ = app.run("faces.setName", json!({"id": id.0, "index": index, "name": name}));
             }
             Some(RegionEdit::Resize(index, r)) => {
                 let _ = app.run("photo.setRegion", json!({"id": id.0, "index": index, "rect": {"x0": r.x0, "y0": r.y0, "x1": r.x1, "y1": r.y1}}));
@@ -440,6 +450,8 @@ enum RegionEdit {
     Remove(usize),
     /// A handle drag ended: the region's new box (normalized, upright frame).
     Resize(usize, lightcraft_geom::Rect),
+    /// A name was typed or picked for the face.
+    Name(usize, String),
 }
 
 /// Handles of a box: (x, y) as fractions of its width and height, and the cursor they show.
@@ -458,7 +470,15 @@ const REGION_HANDLES: [(f32, f32, egui::CursorIcon); 8] = [
 /// a × in its corner and eight resize handles. A drag previews the new box live and is reported once,
 /// on release (one undo step); the × reports the region to remove. Both are catalog-only edits:
 /// LightCraft doesn't write regions to XMP.
-fn region_overlay(ui: &egui::Ui, p: &egui::Painter, map: &CanvasMap, photo: &lightcraft_catalog::Photo) -> Option<RegionEdit> {
+fn region_overlay(
+    ui: &egui::Ui,
+    p: &egui::Painter,
+    map: &CanvasMap,
+    photo: &lightcraft_catalog::Photo,
+    hints: Option<&super::faces::Hints>,
+    people: &[String],
+    editing: &mut Option<crate::state::NameEdit>,
+) -> Option<RegionEdit> {
     let t = Tokens::get(p.ctx());
     let clip = p.clip_rect();
     let pointer = ui.input(|i| i.pointer.hover_pos());
@@ -531,9 +551,20 @@ fn region_overlay(ui: &egui::Ui, p: &egui::Painter, map: &CanvasMap, photo: &lig
                 edit = Some(RegionEdit::Remove(index));
             }
         }
-        let Some(name) = &r.name else { continue };
+        // what the label says: the name, a guess to confirm ("Jane Doe?"), or on hover an invitation to name the face
+        let is_face = r.kind == lightcraft_meta::RegionKind::Face;
+        let hint = hints.and_then(|h| h.by_index.get(&index));
+        let hovered = pointer.is_some_and(|h| rect.expand(3.0).contains(h));
+        let editing_this = editing.as_ref().is_some_and(|e| e.photo == photo.id.0 && e.index == index);
+        let (text, text_color, fill_alpha, invitation) = match (&r.name, hint.and_then(|h| h.suggestion.as_ref())) {
+            (Some(n), _) => (n.clone(), Color32::from_gray(225), 235, false),
+            (None, Some((n, _))) if is_face => (format!("{n}?"), Color32::from_gray(185), 200, false),
+            (None, None) if is_face && live.is_none() => ("Add name".to_string(), Color32::from_gray(150), 190, true),
+            _ => continue,
+        };
         // the name in a dark label with a caret, centred above the box (below it when there is no room)
-        let g = p.layout_no_wrap(name.clone(), t.font(13.0), Color32::from_gray(225));
+        let name = &text;
+        let g = p.layout_no_wrap(name.clone(), t.font(13.0), text_color);
         let (pad, caret) = (vec2(14.0, 7.0), 5.0);
         let size = g.size() + pad * 2.0;
         let above = rect.top() - caret - size.y >= clip.top();
@@ -544,12 +575,33 @@ fn region_overlay(ui: &egui::Ui, p: &egui::Painter, map: &CanvasMap, photo: &lig
         };
         let left = (rect.center().x - size.x / 2.0).clamp(clip.left(), (clip.right() - size.x).max(clip.left()));
         let label = Rect::from_min_size(pos2(left, top), size);
-        let fill = Color32::from_rgba_unmultiplied(56, 56, 56, 235);
+        // the invitation shows while the pointer is on the box *or on the label* (and the gap between), so it can be reached
+        if invitation && !(hovered || editing_this || pointer.is_some_and(|h| rect.union(label).expand(3.0).contains(h))) {
+            continue;
+        }
+        let fill = Color32::from_rgba_unmultiplied(56, 56, 56, fill_alpha);
         p.rect_filled(label, 3.0, fill);
         p.rect_stroke(label, 3.0, Stroke::new(1.0, Color32::from_black_alpha(160)), StrokeKind::Inside);
         let cx = rect.center().x.clamp(label.left() + caret + 4.0, label.right() - caret - 4.0);
         p.add(egui::Shape::convex_polygon(vec![pos2(cx - caret, base), pos2(cx + caret, base), pos2(cx, tip)], fill, Stroke::NONE));
-        p.galley(label.min + pad, g, Color32::from_gray(225));
+        p.galley(label.min + pad, g, text_color);
+        if is_face && live.is_none() {
+            // a click on the label opens the name box, filled with the name or the guess
+            let resp = ui.interact(label, egui::Id::new(("region-label", index)), Sense::click());
+            register(ui.ctx(), format!("regionLabel:{index}"), label);
+            if resp.on_hover_text("Click to name this face").clicked() {
+                let start = r.name.clone().or_else(|| hint.and_then(|h| h.suggestion.as_ref().map(|(n, _)| n.clone()))).unwrap_or_default();
+                *editing = Some(crate::state::NameEdit { photo: photo.id.0, index, text: start, fresh: true });
+            }
+        }
+        if editing_this && let Some(e) = editing.as_mut() {
+            let candidates = hint.map(|h| h.candidates.as_slice()).unwrap_or(&[]);
+            match super::faces::name_editor(ui.ctx(), pos2(label.left(), rect.bottom() + 8.0), e, candidates, people) {
+                super::faces::Editor::Submit(name) => edit = Some(RegionEdit::Name(index, name)),
+                super::faces::Editor::Cancel => *editing = None,
+                super::faces::Editor::Open => {}
+            }
+        }
     }
     edit
 }
