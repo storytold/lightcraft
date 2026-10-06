@@ -1,8 +1,24 @@
 //! The per-pixel stage: everything after the spatial planes are ready, in one parallel pass.
+//!
+//! **Tone curves** (parametric + master + red/green/blue point curves, Refine Saturation) run in
+//! one fixed curve space, whatever the output space: linear Rec.2020 → linear ProPhoto (ROMM)
+//! primaries, Bradford-adapted to D50 like every D50 target here, encoded with the sRGB transfer
+//! curve (the "Melissa RGB" convention Lightroom shows its RGB readouts in; that its curves run
+//! there too is our inference). Only the 0..1 part of each channel goes through the curve tables:
+//! the part outside (a channel above white, or a negative channel of a colour outside ProPhoto) is
+//! carried past the curve unchanged, then the output's gamut mapping handles it. So a preset looks
+//! the same exported to sRGB, Display P3, Adobe RGB or ProPhoto, up to that final gamut mapping.
+//!
+//! **Sharpening** is an unsharp mask on log luminance: the detail is the difference to a Gaussian
+//! blur of σ = Radius source pixels ([`crate::local::sharpen_blur`]), scaled by Amount / 100 ×
+//! the DNG `BaselineSharpness`. Detail (0..100) suppresses halos and fine texture at low values:
+//! the detail term is soft-limited to ±(0.15 + 0.65·Detail/100) EV (overshoot at strong edges),
+//! and detail smaller than 0.06·(1 − Detail/100) EV (fine texture, noise) is faded out. Masking
+//! keeps only edges whose detail exceeds its threshold.
 
-use lightcraft_color::luminance_2020;
 use lightcraft_color::spline::{Lut1, MonotoneCurve};
-use lightcraft_color::transfer::linear_to_srgb;
+use lightcraft_color::transfer::{linear_to_srgb, srgb_to_linear};
+use lightcraft_color::{PROPHOTO, REC2020, luminance_2020};
 use lightcraft_develop::{DevelopSettings, LocalAdjustments, ToneCurve, VignetteStyle};
 use lightcraft_geom::Point;
 use lightcraft_raster::Rgba8;
@@ -157,8 +173,13 @@ pub struct FinishParams {
     /// Calibration: primaries matrix (row-major, linear Rec.2020) and shadows tint (−1..1).
     pub calib: Option<[[f32; 3]; 3]>,
     pub shadow_tint: f32,
-    /// Tone curves (parametric ∘ point, per channel) on encoded values, 1024 entries each.
+    /// Tone curves (parametric ∘ point, per channel) on curve-space encoded values, 1024 entries
+    /// each (see the module docs).
     pub curves: Option<[Lut1; 3]>,
+    /// Linear Rec.2020 → linear curve space, its inverse, and the curve space's luminance weights.
+    pub curve_in: [[f32; 3]; 3],
+    pub curve_out: [[f32; 3]; 3],
+    pub curve_luma: [f32; 3],
     /// Refine Saturation as 0..1 (1 = the curves' own saturation).
     pub refine_sat: f32,
     pub vig: Option<Vig>,
@@ -174,8 +195,13 @@ pub struct FinishParams {
     pub clar: f32,
     pub tex: f32,
     pub dehaze: f32,
+    /// Sharpening: global gain (Amount / 100 × BaselineSharpness), gain per unit of local
+    /// Sharpness, Masking (0..1), halo limit (EV) and fine-detail threshold (EV), see [`sharpen_term`].
     pub sharpen: f32,
+    pub sharpen_local: f32,
     pub sharpen_mask: f32,
+    pub sharpen_halo: f32,
+    pub sharpen_fine: f32,
     /// Airlight after and before exposure, exposure gain and EV (see [`crate::Prepared`]).
     pub air: f32,
     pub air_pre: f32,
@@ -190,6 +216,14 @@ pub struct FinishParams {
     pub w: usize,
     pub h: usize,
     pub px_per_long: f64,
+}
+
+/// The tone curves' space (see the module docs): linear Rec.2020 → linear ProPhoto (D50), its
+/// inverse, and ProPhoto's luminance weights.
+pub fn curve_space() -> ([[f32; 3]; 3], [[f32; 3]; 3], [f32; 3]) {
+    let m = REC2020.to_space(&PROPHOTO);
+    let mi = m.inverse().unwrap_or_else(|| PROPHOTO.to_space(&REC2020));
+    (m.to_f32(), mi.to_f32(), PROPHOTO.luma().map(|v| v as f32))
 }
 
 impl FinishParams {
@@ -218,6 +252,9 @@ impl FinishParams {
             ((s.grain.amount / 100.0) as f32 * 0.13, cell.max(0.6), (s.grain.roughness / 100.0) as f32, s.grain.seed)
         });
         let calibration = s.section_enabled("calibration");
+        let (curve_in, curve_out, curve_luma) = curve_space();
+        let bs = if info.baseline_sharpness.is_finite() { info.baseline_sharpness.clamp(0.0, 4.0) } else { 1.0 };
+        let detail = (s.detail.sharpen_detail / 100.0).clamp(0.0, 1.0) as f32;
         FinishParams {
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
@@ -231,6 +268,9 @@ impl FinishParams {
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
             ops: ColorOps::new(s),
             curves: curve_luts(&s.curve),
+            curve_in,
+            curve_out,
+            curve_luma,
             refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
             vig: if effects { vignette(s) } else { None },
             to_out: space.from_working(),
@@ -242,8 +282,11 @@ impl FinishParams {
             clar,
             tex,
             dehaze,
-            sharpen: (s.detail.sharpen_amount / 150.0) as f32,
+            sharpen: (s.detail.sharpen_amount / 100.0) as f32 * bs,
+            sharpen_local: 0.9 * bs,
             sharpen_mask: (s.detail.sharpen_masking / 100.0) as f32,
+            sharpen_halo: 0.15 + 0.65 * detail,
+            sharpen_fine: 0.06 * (1.0 - detail),
             air: air_pre * gain,
             air_pre,
             gain,
@@ -347,6 +390,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let aspect = w as f32 / h as f32;
 
     let srgb = srgb_lut();
+    let enc_lut = (!exact).then_some(srgb);
     let mut out = vec![T::default(); w * h];
     for_rows(&mut out, w, |y, row| {
         for (x, px) in row.iter_mut().enumerate() {
@@ -450,17 +494,18 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 delta += cl * 0.85 * det * (0.35 + 0.65 * mid);
             }
             let tx = tex + l_tex;
-            let sp = l_sharp * 0.6 + sharpen;
-            if (tx != 0.0 || sp != 0.0)
+            if tx != 0.0
                 && let Some(b) = &p.texture_blur
             {
                 let det = l_pre - b.data[i];
                 let tame = 1.0 - 0.6 * smooth(0.4, 1.6, det.abs());
                 delta += tx * 1.1 * det.clamp(-1.0, 1.0) * tame;
-                if sp != 0.0 {
-                    let m = if sharpen_mask > 0.0 { smooth(sharpen_mask * 0.25, sharpen_mask * 0.25 + 0.15, det.abs()) } else { 1.0 };
-                    delta += sp * 1.3 * det.clamp(-0.8, 0.8) * m;
-                }
+            }
+            let sp = l_sharp * fp.sharpen_local + sharpen;
+            if sp != 0.0
+                && let Some(b) = &p.sharpen_blur
+            {
+                delta += sp * sharpen_term(l_pre - b.data[i], sharpen_mask, fp.sharpen_halo, fp.sharpen_fine);
             }
             // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
             if l_noise != 0.0
@@ -523,6 +568,11 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 }
             }
 
+            // --- tone curves, in the fixed curve space (see the module docs)
+            if let Some(l) = curves {
+                d = apply_curves(d, l, fp, enc_lut);
+            }
+
             // --- gamut map to the output space (desaturate towards luminance until in range);
             // soft proofing maps into the proof space first and shows that in the output space
             let mut warn = None;
@@ -543,15 +593,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             }
             r = mapped;
 
-            // --- encode, curves, grain
+            // --- encode, grain
             let mut e = if exact { r.map(|v| linear_to_srgb(v.clamp(0.0, 1.0))) } else { r.map(|v| encode_srgb(srgb, v)) };
-            if let Some(l) = curves {
-                let e0 = e;
-                e = [l[0].eval(e[0]), l[1].eval(e[1]), l[2].eval(e[2])];
-                if fp.refine_sat < 1.0 {
-                    e = refine_saturation(e0, e, fp.refine_sat);
-                }
-            }
             if let Some((amt, cell, rough, seed)) = *grain {
                 let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
                 let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32, (n.y * fp.oh) as f32 / long as f32);
@@ -622,12 +665,50 @@ pub fn defringe_weight(c: [f32; 3], det: f32) -> f32 {
     smooth(0.04, 0.3, det.abs()) * smooth(0.02, 0.2, purple).max(smooth(0.02, 0.2, green))
 }
 
-/// Refine Saturation: scale the curved colour's chroma (around its luma, encoded values) so its
-/// saturation (chroma / luma) moves from the curve's towards the pre-curve one: the ratio is
-/// `(s_curve / s_before)^refine`, so 1 keeps the curve, 0 restores the original saturation.
+/// Sharpening's contribution (EV, per unit of gain) for log-luminance detail `det` (the pixel
+/// minus its unsharp-mask blur): `mask` = Masking (0..1), `halo` = soft limit (EV), `fine` =
+/// fine-detail threshold (EV; 0 = sharpen all detail). See the module docs.
 #[inline]
-pub fn refine_saturation(before: [f32; 3], after: [f32; 3], refine: f32) -> [f32; 3] {
-    let luma = |e: [f32; 3]| 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
+pub fn sharpen_term(det: f32, mask: f32, halo: f32, fine: f32) -> f32 {
+    let a = det.abs();
+    let m = if mask > 0.0 { smooth(mask * 0.25, mask * 0.25 + 0.15, a) } else { 1.0 };
+    let f = if fine > 0.0 { smooth(0.0, fine, a) } else { 1.0 };
+    m * f * halo * (det / halo.max(1e-3)).clamp(-10.0, 10.0).tanh()
+}
+
+/// The tone curves on display-linear Rec.2020 `d`, in the curve space (see the module docs):
+/// encode the 0..1 part of each curve-space channel (`enc`: the table, else the exact curve),
+/// look it up, decode, add back the part outside 0..1, return to Rec.2020. Refine Saturation
+/// adjusts the curved colour's saturation and then restores the curve's (linear) luminance, so
+/// it changes colour, not tone.
+#[inline]
+pub fn apply_curves(d: [f32; 3], l: &[Lut1; 3], fp: &FinishParams, enc: Option<&[f32; SRGB_LUT_N + 1]>) -> [f32; 3] {
+    let q = mul3(&fp.curve_in, d);
+    let qc = q.map(|v| v.clamp(0.0, 1.0));
+    let e0 = match enc {
+        Some(t) => qc.map(|v| encode_srgb(t, v)),
+        None => qc.map(linear_to_srgb),
+    };
+    let e = [l[0].eval(e0[0]), l[1].eval(e0[1]), l[2].eval(e0[2])];
+    let dec = srgb_decode_lut();
+    let mut lin = e.map(|v| decode_srgb(dec, v));
+    if fp.refine_sat < 1.0 {
+        let y = |c: [f32; 3]| fp.curve_luma[0] * c[0] + fp.curve_luma[1] * c[1] + fp.curve_luma[2] * c[2];
+        let r = refine_saturation(e0, e, fp.refine_sat, fp.curve_luma).map(|v| decode_srgb(dec, v));
+        let (y0, y1) = (y(lin), y(r));
+        lin = if y1 > 1e-6 { r.map(|v| v * y0 / y1) } else { r };
+    }
+    let q1: [f32; 3] = std::array::from_fn(|k| lin[k] + (q[k] - qc[k]));
+    mul3(&fp.curve_out, q1)
+}
+
+/// Refine Saturation: scale the curved colour's chroma (around its luma with weights `luma`,
+/// encoded values) so its saturation (chroma / luma) moves from the curve's towards the
+/// pre-curve one: the ratio is `(s_curve / s_before)^refine`, so 1 keeps the curve, 0 restores
+/// the original saturation.
+#[inline]
+pub fn refine_saturation(before: [f32; 3], after: [f32; 3], refine: f32, luma: [f32; 3]) -> [f32; 3] {
+    let luma = |e: [f32; 3]| luma[0] * e[0] + luma[1] * e[1] + luma[2] * e[2];
     let chroma = |e: [f32; 3]| e[0].max(e[1]).max(e[2]) - e[0].min(e[1]).min(e[2]);
     let (y0, y1) = (luma(before), luma(after));
     let s0 = chroma(before) / y0.max(1e-4);
@@ -663,6 +744,26 @@ fn encode_srgb(lut: &[f32; SRGB_LUT_N + 1], v: f32) -> f32 {
     lut[i] + (lut[i + 1] - lut[i]) * t
 }
 
+/// sRGB-encoded → linear table (`SRGB_LUT_N + 1` entries over 0..1), interpolated linearly.
+static SRGB_DECODE: std::sync::LazyLock<Box<[f32; SRGB_LUT_N + 1]>> = std::sync::LazyLock::new(|| {
+    let mut t = Box::new([0.0f32; SRGB_LUT_N + 1]);
+    for (i, v) in t.iter_mut().enumerate() {
+        *v = srgb_to_linear(i as f32 / SRGB_LUT_N as f32);
+    }
+    t
+});
+
+pub fn srgb_decode_lut() -> &'static [f32; SRGB_LUT_N + 1] {
+    &SRGB_DECODE
+}
+
+/// sRGB-encoded (clamped to 0..1) → linear by an interpolated table: within 1e-7 of the exact
+/// curve.
+#[inline]
+fn decode_srgb(lut: &[f32; SRGB_LUT_N + 1], v: f32) -> f32 {
+    encode_srgb(lut, v)
+}
+
 #[inline]
 fn enc(v: f32) -> u8 {
     // `v` is already sRGB-encoded; round to 8 bits.
@@ -673,19 +774,37 @@ fn enc(v: f32) -> u8 {
 mod tests {
     use super::*;
 
+    const BT709: [f32; 3] = [0.2126, 0.7152, 0.0722];
+
     #[test]
     fn refine_saturation_restores_the_pre_curve_saturation() {
         let before = [0.5, 0.3, 0.2];
         let after = [0.7, 0.35, 0.15]; // a contrasty curve: more saturated
-        assert_eq!(refine_saturation(before, after, 1.0), after);
-        let r = refine_saturation(before, after, 0.0);
+        assert_eq!(refine_saturation(before, after, 1.0, BT709), after);
+        let r = refine_saturation(before, after, 0.0, BT709);
         let sat = |e: [f32; 3]| (e[0] - e[2]) / (0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2]);
         assert!((sat(r) - sat(before)).abs() < 1e-4, "{r:?}");
-        let half = refine_saturation(before, after, 0.5);
+        let half = refine_saturation(before, after, 0.5, BT709);
         assert!(sat(half) > sat(before) && sat(half) < sat(after));
         // luma is kept
         let y = |e: [f32; 3]| 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
         assert!((y(r) - y(after)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn sharpen_detail_limits_halos_and_spares_fine_texture() {
+        let (low, high) = ((0.15, 0.06), (0.8, 0.0)); // Detail 0 and 100: (halo, fine)
+        // a strong edge: limited overshoot at Detail 0, nearly linear at 100
+        let edge = 0.6;
+        assert!(sharpen_term(edge, 0.0, low.0, low.1) <= 0.15 + 1e-6);
+        assert!(sharpen_term(edge, 0.0, high.0, high.1) > 0.45);
+        // fine texture / noise: faded out at Detail 0, sharpened at 100
+        let fine = 0.008;
+        assert!(sharpen_term(fine, 0.0, low.0, low.1) < 0.1 * fine);
+        assert!((sharpen_term(fine, 0.0, high.0, high.1) - fine).abs() < 1e-4);
+        // symmetric (no brightness drift), and Masking keeps only edges
+        assert_eq!(sharpen_term(-edge, 0.0, low.0, low.1), -sharpen_term(edge, 0.0, low.0, low.1));
+        assert_eq!(sharpen_term(0.05, 1.0, high.0, high.1), 0.0);
     }
 
     #[test]

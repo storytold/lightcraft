@@ -39,6 +39,7 @@ fn synthetic(w: usize, h: usize, cfa: Option<Cfa>, cpp: usize) -> RawImage {
         ],
         as_shot_neutral: Some([0.5, 1.0, 0.7]),
         baseline_exposure: 0.35,
+        baseline_sharpness: Some(1.5),
         ..Default::default()
     };
     let metadata = lightcraft_meta::Metadata { make: Some("Synth".into()), model: Some("Cam 1".into()), rating: Some(3), ..Default::default() };
@@ -84,6 +85,7 @@ fn assert_same(a: &RawImage, b: &RawImage) {
     let (n1, n2) = (a.color.as_shot_neutral.unwrap(), b.color.as_shot_neutral.unwrap());
     assert!((0..3).all(|i| (n1[i] - n2[i]).abs() < 1e-6));
     assert!((a.color.baseline_exposure - b.color.baseline_exposure).abs() < 1e-6);
+    assert!(b.color.baseline_sharpness.is_some_and(|v| (v - 1.5).abs() < 1e-6), "{:?}", b.color.baseline_sharpness);
     assert_eq!(b.metadata.make.as_deref(), Some("Synth"));
     assert_eq!(b.metadata.rating, Some(3));
 }

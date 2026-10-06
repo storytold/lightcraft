@@ -191,11 +191,16 @@ const HIGHLIGHT_CLIP: f32 = 0.99;
 /// instead of a ~1.2 s full demosaic; zooming in still uses the full-size source).
 /// `None` = demosaic at full size.
 pub fn bin_factor(raw: &lightcraft_raw::RawImage, max_edge: usize) -> Option<usize> {
-    let c = raw.crop.clipped(raw.active_area.width, raw.active_area.height);
-    let long = if c.width > 1 && c.height > 1 { c.width.max(c.height) } else { raw.active_area.width.max(raw.active_area.height) };
+    let long = developed_long(raw);
     let need = (max_edge.saturating_mul(9) / 10).max(1);
     let need3 = (max_edge.saturating_mul(3) / 4).max(1);
     [8usize, 6, 4, 3, 2].into_iter().find(|&k| raw.can_bin(k) && (long / k >= need || (k == 3 && !raw.can_bin(2) && long / k >= need3)))
+}
+
+/// Long edge (px) of a raw's full-size developed image: its default crop, else its active area.
+fn developed_long(raw: &lightcraft_raw::RawImage) -> usize {
+    let c = raw.crop.clipped(raw.active_area.width, raw.active_area.height);
+    if c.width > 1 && c.height > 1 { c.width.max(c.height) } else { raw.active_area.width.max(raw.active_area.height) }
 }
 
 /// Decode a file into a linear Rec.2020 image no larger than `max_edge`, oriented.
@@ -224,6 +229,8 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
             Err(e) => return Err(e.to_string()),
         };
         let xy = lightcraft_raw::color::as_shot_white_xy(&raw);
+        let native_long = u32::try_from(developed_long(&raw)).unwrap_or(0);
+        let baseline_sharpness = raw.color.baseline_sharpness.unwrap_or(1.0) as f32;
         let t = lightcraft_raw::color::camera_transform(&raw, xy);
         // the source's segmentation mattes (DNG semantic masks), read while the preview is fitted
         let (camera_look, mattes) = rayon::join(|| crate::camera_preview::fit_preview(&raw, &bytes, &t), || dng_mattes(&bytes, &raw));
@@ -289,13 +296,25 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
         let relative = raw.format == lightcraft_raw::RawFormat::Arw && t.matrix_is_fallback;
         let camera_tone = camera_look.map(|p| p.tone).or_else(|| raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve));
         let (temp, tint) = if relative { (6500.0, 0.0) } else { (temp.round(), tint.round()) };
-        return Ok((img, SourceInfo { raw: true, as_shot_temp: temp, as_shot_tint: tint, lens, relative_wb: relative, camera_tone, mattes }));
+        let info = SourceInfo {
+            raw: true,
+            as_shot_temp: temp,
+            as_shot_tint: tint,
+            lens,
+            relative_wb: relative,
+            camera_tone,
+            mattes,
+            native_long,
+            baseline_sharpness,
+        };
+        return Ok((img, info));
     }
     let d = lightcraft_codecs::decode(&bytes, lightcraft_codecs::DecodeOptions::fit(max_edge as u32, max_edge as u32)).map_err(|e| e.to_string())?;
     drop(bytes);
     let img = d.to_working();
     let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
-    Ok((img.into_oriented(Orientation::from_exif(d.orientation)), SourceInfo::default()))
+    let native_long = d.source_width.max(d.source_height);
+    Ok((img.into_oriented(Orientation::from_exif(d.orientation)), SourceInfo { native_long, ..SourceInfo::default() }))
 }
 
 /// The semantic masks of a DNG that AI masks understand, over the developed image (default crop,
@@ -586,7 +605,7 @@ mod tests {
         assert_eq!(p.kind, MediaKind::Raw, "still a raw file (filters, Convert to DNG…)");
         assert!(!p.develops_raw());
         // rendered like the JPEG it is: relative white balance, display tone curve, no raw defaults
-        assert_eq!(crate::media::source_info(&p), SourceInfo::default());
+        assert_eq!(SourceInfo { native_long: 0, ..crate::media::source_info(&p) }, SourceInfo::default());
         assert_eq!(*p.develop, lightcraft_develop::DevelopSettings::default());
         assert!(s.render_job(id, 48, 48, false, true).unwrap().run().rendered.is_ok());
         // agents see it

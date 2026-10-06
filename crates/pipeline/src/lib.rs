@@ -4,17 +4,20 @@
 //! (full size or a proxy), plus [`DevelopSettings`]. Output: a display-encoded sRGB image at the
 //! requested size, and its histogram.
 //!
-//! Stage order (see `docs/pipeline.md`):
+//! Stage order (the GPU port of the same stages is described in `docs/gpu-pipeline.md`):
 //! 1. geometry — user orientation, lens corrections (distortion, CA, vignetting), perspective, crop +
 //!    straighten, flips; one resample at output resolution; then defringe
 //! 2. scene-linear — white balance, exposure, dehaze, local tone (highlights/shadows), texture,
-//!    clarity, local adjustments (masks)
+//!    clarity, sharpening, local adjustments (masks)
 //! 3. tone map — contrast / whites / blacks filmic curve on luminance, highlight desaturation
-//! 4. colour — vibrance, saturation, colour mixer, colour grading, B&W (OkLCh)
-//! 5. display — gamut map to the output space (sRGB unless [`RenderRequest::space`] says otherwise), encode, tone curves (parametric + point), vignette, grain
+//! 4. colour — vibrance, saturation, colour mixer, colour grading, B&W (OkLCh); vignette
+//! 5. tone curves (parametric + point) in a fixed curve space (see [`finish`]), whatever the output
+//! 6. display — gamut map to the output space (sRGB unless [`RenderRequest::space`] says otherwise), encode, grain
 //!
 //! Spatial parameters are specified relative to the image's long edge, so a 400 px preview and a
-//! 60 MP export look alike.
+//! 60 MP export look alike. Sharpening's radius is the exception: it is in source pixels (scaled
+//! to the output by [`Plan::px_per_src`]), so a downscaled render shows what downscaling the
+//! full-size result would.
 //!
 //! Exposure is a gain, so the spatial stages run on the un-exposed image and the per-pixel stage
 //! applies it (filters on log luminance are shift-equivariant: identical result). With
@@ -69,11 +72,27 @@ pub struct SourceInfo {
     pub camera_tone: Option<tone::CameraTone>,
     /// Segmentation mattes stored in the file (DNG semantic masks): AI masks use them.
     pub mattes: Option<Arc<masks::Mattes>>,
+    /// Long edge (px) of the full-resolution source the pixels were decoded from (a preview or
+    /// smart preview is smaller); 0 = unknown: the buffer's own long edge.
+    pub native_long: u32,
+    /// DNG `BaselineSharpness`: the camera's sharpening relative to a reference camera (1 = as the
+    /// reference; the Sharpening amount is multiplied by it).
+    pub baseline_sharpness: f32,
 }
 
 impl Default for SourceInfo {
     fn default() -> Self {
-        Self { raw: false, as_shot_temp: 6500.0, as_shot_tint: 0.0, lens: None, relative_wb: false, camera_tone: None, mattes: None }
+        Self {
+            raw: false,
+            as_shot_temp: 6500.0,
+            as_shot_tint: 0.0,
+            lens: None,
+            relative_wb: false,
+            camera_tone: None,
+            mattes: None,
+            native_long: 0,
+            baseline_sharpness: 1.0,
+        }
     }
 }
 
@@ -138,6 +157,8 @@ pub(crate) struct Prepared {
     pub base: Arc<Plane>,
     pub clarity_blur: Option<Arc<Plane>>,
     pub texture_blur: Option<Arc<Plane>>,
+    /// Unsharp-mask blur of `log_l` for Sharpening (its radius in source pixels).
+    pub sharpen_blur: Option<Arc<Plane>>,
     pub dark: Option<Arc<Plane>>,
     /// Blurred chromaticity (`rgb / Y`) for local Moiré / Noise.
     pub chroma_blur: Option<Arc<Rgb32f>>,
@@ -294,6 +315,8 @@ pub struct Plan<'a> {
     pub h: usize,
     /// Output pixels per unit of the oriented source's long edge.
     pub px_per_long: f64,
+    /// Output pixels per pixel of the full-resolution source ([`SourceInfo::native_long`]).
+    pub px_per_src: f64,
     /// Long edge of the source buffer (px).
     pub src_long: usize,
     /// Key of the resampled source (together with the source buffer's identity).
@@ -318,6 +341,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let (w, h) = frame.fit(req.max_w, req.max_h);
     let px_per_long = frame.px_per_long(w);
     let src_long = src.width.max(src.height);
+    let native_long = if info.native_long > 0 { info.native_long as usize } else { src_long };
+    let px_per_src = px_per_long / native_long.max(1) as f64;
     let geo = hash_of((format!("{frame:?}"), w, h));
     let (wb_t, wb_tint) = local::effective_wb(info, s);
     let eyes = redeye::resolve(src, &s.red_eye, s.orientation, &frame, w, h, px_per_long);
@@ -332,7 +357,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         src_long,
     ));
-    Plan { settings, frame, w, h, px_per_long, src_long, geo, lin_key, eyes, mattes: info.mattes.clone() }
+    Plan { settings, frame, w, h, px_per_long, px_per_src, src_long, geo, lin_key, eyes, mattes: info.mattes.clone() }
 }
 
 /// Whether the scene-linear stage needs work only the CPU does (defringe, spot removal).
@@ -382,7 +407,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Src::Shared(a) => a,
     };
     let plan = plan(src_img, info, s, req);
-    let Plan { ref frame, w, h, px_per_long, src_long, geo, lin_key, .. } = plan;
+    let Plan { ref frame, w, h, px_per_long, px_per_src, src_long, geo, lin_key, .. } = plan;
     let s = &*plan.settings;
 
     let shared = match (&src, cache) {
@@ -411,7 +436,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Some(p) if p.key == lin_key => p,
         _ => local::Planes { key: lin_key, ..Default::default() },
     };
-    let prep = local::prepare(lin.clone(), s, frame, px_per_long, req.quality, &mut planes, plan.mattes.as_deref());
+    let prep = local::prepare(lin.clone(), s, frame, px_per_long, px_per_src, req.quality, &mut planes, plan.mattes.as_deref());
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
         c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes });

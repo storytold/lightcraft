@@ -2,10 +2,11 @@
 //! delivered in. Previews are always 8-bit sRGB; exports may ask for a wide-gamut space and/or
 //! 16-bit or linear float samples.
 //!
-//! The per-pixel stage works in scene-linear Rec.2020 and ends by converting to the target's
-//! primaries, gamut mapping into the *target* gamut, and encoding. Tone curves and grain operate on
-//! sRGB-curve-encoded values of the target primaries (identical to the sRGB path when the target is
-//! sRGB); afterwards the values are re-encoded with the target's own curve.
+//! The per-pixel stage works in scene-linear Rec.2020, applies the tone curves in a fixed curve
+//! space (independent of the target, see [`crate::finish`]), and ends by converting to the
+//! target's primaries, gamut mapping into the *target* gamut, and encoding. Grain operates on
+//! sRGB-curve-encoded values of the target primaries (identical to the sRGB path when the target
+//! is sRGB); afterwards the values are re-encoded with the target's own curve.
 
 use lightcraft_color::{ADOBE_RGB, DISPLAY_P3, PROPHOTO, REC2020, RgbSpace, SRGB};
 use serde::{Deserialize, Serialize};

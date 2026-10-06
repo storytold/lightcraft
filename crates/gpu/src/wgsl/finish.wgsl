@@ -179,9 +179,9 @@ fn calibrate(c0: vec3<f32>) -> vec3<f32> {
     return c;
 }
 
-// `finish::refine_saturation`.
+// `finish::refine_saturation` (luma weights of the curve space).
 fn refine_saturation(before: vec3<f32>, after: vec3<f32>, refine: f32) -> vec3<f32> {
-    let lw = vec3<f32>(0.2126, 0.7152, 0.0722);
+    let lw = vec3<f32>(pf(F_CURVE_Y), pf(F_CURVE_Y + 1u), pf(F_CURVE_Y + 2u));
     let y0 = dot(before, lw);
     let y1 = dot(after, lw);
     let s0 = (max(before.x, max(before.y, before.z)) - min(before.x, min(before.y, before.z))) / max(y0, 1e-4);
@@ -191,6 +191,65 @@ fn refine_saturation(before: vec3<f32>, after: vec3<f32>, refine: f32) -> vec3<f
     }
     let k = clamp(pow(s0 / s1, 1.0 - refine), 0.0, 4.0);
     return y1 + (after - y1) * k;
+}
+
+// sRGB-encoded (clamped to 0..1) → linear.
+fn decode_srgb(v: f32) -> f32 {
+    let e = clamp(v, 0.0, 1.0);
+    if (e <= 0.04045) {
+        return e / 12.92;
+    }
+    return pow((e + 0.055) / 1.055, 2.4);
+}
+
+fn mat_at(o: u32) -> array<vec3<f32>, 3> {
+    return array<vec3<f32>, 3>(
+        vec3<f32>(pf(o), pf(o + 1u), pf(o + 2u)),
+        vec3<f32>(pf(o + 3u), pf(o + 4u), pf(o + 5u)),
+        vec3<f32>(pf(o + 6u), pf(o + 7u), pf(o + 8u)),
+    );
+}
+
+// `finish::apply_curves`: the tone curves in the fixed curve space.
+fn apply_curves(d: vec3<f32>) -> vec3<f32> {
+    let q = mul3(mat_at(F_CURVE_M), d);
+    let qc = clamp(q, vec3<f32>(0.0), vec3<f32>(1.0));
+    let e0 = vec3<f32>(encode_srgb(qc.x), encode_srgb(qc.y), encode_srgb(qc.z));
+    let e = vec3<f32>(curve(0u, e0.x), curve(1u, e0.y), curve(2u, e0.z));
+    var lin = vec3<f32>(decode_srgb(e.x), decode_srgb(e.y), decode_srgb(e.z));
+    let rs = pf(F_REFINE_SAT);
+    if (rs < 1.0) {
+        let lw = vec3<f32>(pf(F_CURVE_Y), pf(F_CURVE_Y + 1u), pf(F_CURVE_Y + 2u));
+        let er = refine_saturation(e0, e, rs);
+        let r = vec3<f32>(decode_srgb(er.x), decode_srgb(er.y), decode_srgb(er.z));
+        let y0 = dot(lin, lw);
+        let y1 = dot(r, lw);
+        if (y1 > 1e-6) {
+            lin = r * (y0 / y1);
+        } else {
+            lin = r;
+        }
+    }
+    let q1 = lin + (q - qc);
+    return mul3(mat_at(F_CURVE_MI), q1);
+}
+
+// `finish::sharpen_term`.
+fn sharpen_term(det: f32) -> f32 {
+    let a = abs(det);
+    let mask = pf(F_SHARPEN_MASK);
+    let halo = pf(F_SHARPEN_HALO);
+    let fine = pf(F_SHARPEN_FINE);
+    var m = 1.0;
+    if (mask > 0.0) {
+        m = sstep(mask * 0.25, mask * 0.25 + 0.15, a);
+    }
+    var f = 1.0;
+    if (fine > 0.0) {
+        f = sstep(0.0, fine, a);
+    }
+    // the argument clamped: some drivers' tanh overflows to NaN for large inputs
+    return m * f * halo * tanh(clamp(det / max(halo, 1e-3), -10.0, 10.0));
 }
 
 fn ghash(i: i32, j: i32, seed: u32) -> f32 {
@@ -365,19 +424,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         delta += cl * 0.85 * det * (0.35 + 0.65 * mid);
     }
     let tx = pf(F_TEX) + lt[8];
-    let sp = lt[13] * 0.6 + pf(F_SHARPEN);
-    if ((tx != 0.0 || sp != 0.0) && pu(F_HAS_TEX) != 0u) {
+    if (tx != 0.0 && pu(F_HAS_TEX) != 0u) {
         let det = l_pre - tex[i];
         let tame = 1.0 - 0.6 * sstep(0.4, 1.6, abs(det));
         delta += tx * 1.1 * clamp(det, -1.0, 1.0) * tame;
-        if (sp != 0.0) {
-            let sm = pf(F_SHARPEN_MASK);
-            var mk = 1.0;
-            if (sm > 0.0) {
-                mk = sstep(sm * 0.25, sm * 0.25 + 0.15, abs(det));
-            }
-            delta += sp * 1.3 * clamp(det, -0.8, 0.8) * mk;
-        }
+    }
+    let sp = lt[13] * pf(F_SHARPEN_LOCAL) + pf(F_SHARPEN);
+    if (sp != 0.0 && pu(F_HAS_SHARP) != 0u) {
+        delta += sp * sharpen_term(l_pre - tex[pu(F_SHARP_OFF) + i]);
     }
     // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
     if (l_noise != 0.0 && pu(F_HAS_TEX) != 0u) {
@@ -449,6 +503,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
+    // --- tone curves, in the fixed curve space
+    if (pu(F_CURVES) != 0u) {
+        d = apply_curves(d);
+    }
+
     // --- gamut map to the output space (desaturate towards luminance until in range)
     let om = array<vec3<f32>, 3>(
         vec3<f32>(pf(F_OUT_M), pf(F_OUT_M + 1u), pf(F_OUT_M + 2u)),
@@ -470,16 +529,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         r = yy + (r - yy) * tg;
     }
 
-    // --- encode, curves, grain
+    // --- encode, grain
     var e = vec3<f32>(encode_srgb(r.x), encode_srgb(r.y), encode_srgb(r.z));
-    if (pu(F_CURVES) != 0u) {
-        let e0 = e;
-        e = vec3<f32>(curve(0u, e.x), curve(1u, e.y), curve(2u, e.z));
-        let rs = pf(F_REFINE_SAT);
-        if (rs < 1.0) {
-            e = refine_saturation(e0, e, rs);
-        }
-    }
     if (pu(F_GRAIN) != 0u) {
         let px = f32(x) + 0.5;
         let py = f32(y) + 0.5;

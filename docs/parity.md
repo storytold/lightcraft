@@ -26,7 +26,7 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | C. Views & navigation (VIEW) | 16 | 0 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 0 | 2 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 42 | 1 | 5 | 1 | 28/28 (100%) | 13/14 (93%) |
+| F. Edit panel — global adjustments (EDIT) | 36 | 7 | 5 | 1 | 23/28 (82%) | 12/14 (86%) |
 | G. Profiles (PROF) | 6 | 2 | 3 | 0 | 3/4 (75%) | 2/3 (67%) |
 | H. Crop & rotate (CROP) | 9 | 0 | 0 | 1 | 6/6 (100%) | 3/3 (100%) |
 | I. Remove / healing (REM) | 7 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
@@ -47,10 +47,10 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | X. Cross-cutting behaviours (BEHAV) | 15 | 4 | 1 | 1 | 8/8 (100%) | 6/8 (75%) |
 | Y. Menus | 81 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 74 | 3 | 3 | 1 | 49/52 (94%) | 22/23 (96%) |
-| Lightroom Classic extras | 31 | 9 | 40 | 9 | — | 21/22 (95%) |
-| **Total** | 387 | 30 | 90 | 37 | 194/200 (97%) | 139/149 (93%) |
+| Lightroom Classic extras | 30 | 10 | 40 | 9 | — | 20/22 (91%) |
+| **Total** | 380 | 37 | 90 | 37 | 189/200 (95%) | 137/149 (92%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.3%** of 507 in-scope rows — P0 98.5% of 200 · P1 95.6% of 149 · P2 39.6% of 158.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **78.6%** of 507 in-scope rows — P0 97.2% of 200 · P1 95.0% of 149 · P2 39.6% of 158.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -66,7 +66,9 @@ Take the first one nobody is working on.
 3. **LR-IMP-CAMERA-COVERAGE** (P0): per-model verification; grow the CC0 corpus and fix per-model bugs (like the CR2
    colour-filter layout, fixed in #85 by reading the file's own tag).
 4. **LR-BEHAV-RENDER-FIDELITY** (P1): a side-by-side fidelity suite against Lightroom renders (kept local in `plan/`),
-   then tune tone, highlights, texture/clarity/dehaze, NR and sharpening against it.
+   then tune tone, highlights, texture/clarity/dehaze, NR and sharpening against it, and the tools known to follow
+   different semantics (LR-EDIT-CALIB camera primaries, LR-EDIT-COLOR-MIXER-HSL band shapes, LR-EDIT-COLOR-GRADING
+   order, LR-EDIT-LIGHT-CURVE-PARAM regions, LR-EDIT-LIGHT-BLACKS).
 5. **LR-EDIT-OPTICS-PROFILE** (P1): a lens-profile database of our own (embedded DNG/maker corrections work today).
 6. **AI masks and Enhance** (LR-MASK-SUBJECT / SKY / PEOPLE / OBJECTS, LR-EDIT-DETAIL-DENOISE, SUPERRES, LENSBLUR):
    blocked on a model strategy (permissively licensed weights or our own training, pure-Rust inference). A maintainer
@@ -120,7 +122,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-IMP-PRESET | Preset on import | P2 | ✅ | `cmd:library.import` (`preset`) | chosen in the import review; one History entry |
 | LR-IMP-RAWDEFAULT | Raw defaults | P1 | ✅ | `cmd:library.preferences`, `crates/engine/src/import.rs`, `crates/ui-egui/src/panels/settings.rs` | LightCraft default / a preset / per camera (make + model); non-raw default too; the preset look counts as unedited and Reset returns to it |
 | LR-IMP-MIGRATE | Migrate other catalogs | OOS | 🚫 | | |
-| LR-IMP-PROFILES | Import profiles & presets | P1 | ✅ | `cmd:file.importPresets`, `cmd:preset.import`, `cmd:profile.import`, `crates/engine/src/preset_import.rs`, `crates/engine/src/preset_luminar.rs` | presets: .lcpreset, XMP, classic .lrtemplate, photos carrying edits ("DNG presets"), Luminar looks (.lmp, .mplumpack collections; sliders with a counterpart), .zip bundles, folders (folder → group), drag & drop; masks carried over; unmapped settings reported; profiles: .cube 3D LUTs; Adobe profile formats deliberately unsupported |
+| LR-IMP-PROFILES | Import profiles & presets | P1 | ✅ | `cmd:file.importPresets`, `cmd:preset.import`, `cmd:profile.import`, `crates/engine/src/preset_import.rs`, `crates/engine/src/preset_luminar.rs` | presets: .lcpreset, XMP, classic .lrtemplate, photos carrying edits ("DNG presets"), Luminar looks (.lmp, .mplumpack collections; sliders with a counterpart), .zip bundles, folders (folder → group), drag & drop; masks carried over; unmapped settings reported (fields that only describe the preset or photo, e.g. `Cluster`, `SortName`, `SupportsAmount2`, the as-shot white, empty Point Color slots, are not); profiles: .cube 3D LUTs; Adobe profile formats deliberately unsupported |
 | LR-IMP-LOCAL | Work on files in place | P0 | ✅ | `cmd:library.browse`, `cmd:photo.addToLibrary`, `cmd:library.import` (mode add), `cmd:local.addRoot`, `cmd:local.hide`, `cmd:local.restoreHidden`, `crates/engine/src/cmd/browse.rs`, `crates/ui-egui/src/panels/left.rs` (`local_section`), `crates/ui-egui/src/panels/grid.rs` (`folder_header`) | Local: browse Pictures / Desktop / Downloads / Home or any folder without adding it (breadcrumb, Include subfolders, Add N to My Photos); browsed photos stay out of All Photos, albums and counts; folders picked with Browse Folder… (or Keep in Local / Add to Local on a folder row) stay listed across restarts, and browsing a folder inside a listed one highlights it inside that tree (opened down to it, siblings reachable) instead of adding a root; edits go to XMP sidecars; importing promotes them; right-click a top-level location → Remove from Local hides the shortcut only (nothing on disk or in the catalog changes), saved with the UI state, and “Show N hidden locations” (or Browse Folder… on it) brings it back; a folder is one location however its path is spelled (`/` or `\`, trailing separator, `.`/`..`, drive-letter case; `folder_key` in `crates/catalog/src/query.rs`); browsed photos nobody changed are forgotten once their folder has not been browsed for 30 days (Settings → Performance → Local folders, 0 = never; checked when the library opens, or `cmd:library.forgetLocal` with `dryRun`; files and sidecars stay, browsing again brings them back; see `crates/catalog/src/local.rs` for what counts as a change) |
 | LR-IMP-SIDECAR-SPLIT | Separate XMP sidecar variants | P2 | ⬜ | `cmd:library.xmpPreferences` | sidecar naming option exists (stem/full), no split sidecars |
 | LR-IMP-FORMATS | Supported formats | P0 | 🟡 | `crates/codecs/src/lib.rs`, `crates/raw/src/lib.rs`, `crates/raw/src/jxl.rs` | JPEG, PNG, TIFF, WebP, JXL, PSD, GIF, BMP; DNG (incl. lossy / Smart Preview DNG and DNG 1.7 JPEG XL tiles/strips — lossless decodes bit-exactly, checked on synthetic CFA/LinearRaw files and a JXL re-encode of a CC0 iPhone ProRAW; lossy XYB tiles decode but are unverified on a real file; a single-chunk JXL preview IFD is offered as the embedded preview), CR2 (colour-filter layout from the file's `CR2CFAPattern` tag, issue #85), ARW, NEF (uncompressed, lossless and lossy compressed 12/14-bit, `crates/raw/src/vendor/nefc.rs`), RAF, RW2, PEF, ORF. Missing: CR3, compressed RAF/ORF, RW2 v4, NEF "lossy after split" (preview only: imported with `preview_only` = the decoder's reason, rendered as a rendered JPEG, flagged by a grid badge and loupe/Edit/Info notices, `previewOnly` in `catalog.query`; Reload clears it once the file decodes), HEIC/AVIF decode |
@@ -224,11 +226,11 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-EDIT-LIGHT-HIGHLIGHTS | Highlights | P0 | ✅ | `ctl:light.highlights` | |
 | LR-EDIT-LIGHT-SHADOWS | Shadows | P0 | ✅ | `ctl:light.shadows` | |
 | LR-EDIT-LIGHT-WHITES | Whites | P0 | ✅ | `ctl:light.whites` | |
-| LR-EDIT-LIGHT-BLACKS | Blacks | P0 | ✅ | `ctl:light.blacks` | |
-| LR-EDIT-LIGHT-CURVE-PARAM | Parametric curve | P0 | ✅ | `ctl:curve.highlights`, `ctl:curve.lights`, `ctl:curve.darks`, `ctl:curve.shadows`, `ctl:curve.split*` | |
+| LR-EDIT-LIGHT-BLACKS | Blacks | P0 | 🟡 | `ctl:light.blacks` | a pedestal on our own filmic tone map, not Lightroom's black-point behaviour; can't be matched without reference renders |
+| LR-EDIT-LIGHT-CURVE-PARAM | Parametric curve | P0 | 🟡 | `ctl:curve.highlights`, `ctl:curve.lights`, `ctl:curve.darks`, `ctl:curve.shadows`, `ctl:curve.split*`, `crates/pipeline/src/finish.rs` (`curve_luts`) | the region shapes (raised-cosine windows around the splits) are our own and differ from Lightroom's; can't be matched without reference renders |
 | LR-EDIT-LIGHT-CURVE-POINT | Point curve | P0 | ✅ | `cmd:develop.curve`, `cmd:curve.reset`, `cmd:curve.presets`, `cmd:curve.applyPreset`, `cmd:curve.savePreset`, `cmd:curve.deletePreset`, `cmd:curve.importPresets`, `cmd:curve.exportPresets`, `cmd:file.importCurvePresets`, `cmd:file.exportCurvePresets`, `crates/engine/src/cmd/curves.rs`, `crates/ui-egui/src/panels/edit.rs` | click to add a point; drag a point in both axes (between its neighbours, input / output readout, one undo step per drag); drag empty space to add and drag; double-click removes; reset: double-click a channel selector (that channel), the Reset button under the graph (every curve incl. parametric) or right-click the graph (channel / all); Point Curve preset dropdown: own Linear / Medium Contrast / Strong Contrast, user presets (save the current point curves, delete by right-click; saved with the library), import / export as `.lccurve` JSON |
-| LR-EDIT-LIGHT-CURVE-RGB | Per-channel curves | P0 | ✅ | `cmd:develop.curve` (`channel`) | |
-| LR-EDIT-LIGHT-CURVE-REFINESAT | Curve saturation compensation | P1 | ✅ | `ctl:curve.refineSaturation` | |
+| LR-EDIT-LIGHT-CURVE-RGB | Per-channel curves | P0 | ✅ | `cmd:develop.curve` (`channel`), `crates/pipeline/src/finish.rs` (`apply_curves`) | all tone curves run in one fixed curve space (linear ProPhoto/ROMM primaries, sRGB transfer curve), so a preset renders the same in every export colour space (an XMP preset on a ProRAW, sRGB vs Display P3: mean ΔE2000 0.65 → 0.002); that Lightroom's curves use that space is our inference |
+| LR-EDIT-LIGHT-CURVE-REFINESAT | Curve saturation compensation | P1 | ✅ | `ctl:curve.refineSaturation` | moves the curved colour's saturation back towards the uncurved one, keeping the curve's luminance |
 | LR-EDIT-LIGHT-CURVE-TAT | Drag-on-image curve adjust | P1 | ✅ | `cmd:develop.targeted` (`target: curve`) | |
 | LR-EDIT-COLOR-WB-PRESET | White-balance presets | P0 | ✅ | `cmd:develop.wb` | |
 | LR-EDIT-COLOR-WB-PICKER | White-balance eyedropper | P0 | ✅ | `cmd:tool.wbPicker`, `cmd:develop.wbPick` | no magnified loupe while picking |
@@ -236,24 +238,24 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-EDIT-COLOR-TINT | Tint | P0 | ✅ | `ctl:wb.tint` | |
 | LR-EDIT-COLOR-VIBRANCE | Vibrance | P0 | ✅ | `ctl:color.vibrance` | |
 | LR-EDIT-COLOR-SATURATION | Saturation | P0 | ✅ | `ctl:color.saturation` | |
-| LR-EDIT-COLOR-MIXER-HSL | 8-band colour mixer | P0 | ✅ | `ctl:mixer.*` | no targeted (drag-on-image) mode |
+| LR-EDIT-COLOR-MIXER-HSL | 8-band colour mixer | P0 | 🟡 | `ctl:mixer.*`, `crates/pipeline/src/colorops.rs` | renders differently from Lightroom: every band has the same ±28.6° hue range in OkLCh, and hue / luminance shifts are weighted by chroma; can't be matched without reference renders; no targeted (drag-on-image) mode |
 | LR-EDIT-COLOR-MIXER-BW | B&W mix | P1 | ✅ | `ctl:bw.*`, `cmd:develop.autoBwMix` | eight bands; Auto pushes each hue band's colourful pixels away from the mean lightness (own rule) |
 | LR-EDIT-COLOR-POINTCOLOR | Point colour | P1 | ✅ | `cmd:pointColor.pick`, `cmd:pointColor.delete` | |
-| LR-EDIT-COLOR-GRADING | Colour grading wheels | P0 | ✅ | `ctl:grading.*` | |
+| LR-EDIT-COLOR-GRADING | Colour grading wheels | P0 | 🟡 | `ctl:grading.*`, `crates/pipeline/src/colorops.rs` | runs in OkLab before the tone curves; Lightroom's order and blending differ; can't be matched without reference renders |
 | LR-EDIT-EFFECTS-TEXTURE | Texture | P0 | ✅ | `ctl:effects.texture` | |
 | LR-EDIT-EFFECTS-CLARITY | Clarity | P0 | ✅ | `ctl:effects.clarity` | |
 | LR-EDIT-EFFECTS-DEHAZE | Dehaze | P0 | ✅ | `ctl:effects.dehaze` | |
 | LR-EDIT-EFFECTS-VIGNETTE | Post-crop vignette | P0 | ✅ | `ctl:vignette.*`, `crates/pipeline/src/finish.rs`, `crates/ui-egui/src/panels/edit.rs` | style picker (Highlight / Color / Paint) in the Effects section |
 | LR-EDIT-EFFECTS-GRAIN | Grain | P1 | ✅ | `ctl:grain.*` | |
-| LR-EDIT-DETAIL-SHARPEN | Sharpening | P0 | ✅ | `ctl:detail.sharpenAmount`, `ctl:detail.sharpenRadius`, `ctl:detail.sharpenDetail`, `ctl:detail.sharpenMasking` | no Alt-drag mask preview |
-| LR-EDIT-DETAIL-NR | Luminance noise reduction | P0 | ✅ | `ctl:detail.nrLuminance`, `ctl:detail.nrDetail`, `ctl:detail.nrContrast` | |
+| LR-EDIT-DETAIL-SHARPEN | Sharpening | P0 | ✅ | `ctl:detail.sharpenAmount`, `ctl:detail.sharpenRadius`, `ctl:detail.sharpenDetail`, `ctl:detail.sharpenMasking`, `crates/pipeline/src/finish.rs` (`sharpen_term`), `crates/pipeline/src/local.rs` (`sharpen_blur`) | unsharp mask on luminance: Radius = Gaussian σ in source pixels (previews of a downscaled view show what downscaling the full-size result would), Detail limits halos and fades out fine texture at low values (own model), Masking keeps edges; the amount is multiplied by a DNG's `BaselineSharpness` (ProRAW 1.5); no Alt-drag mask preview |
+| LR-EDIT-DETAIL-NR | Luminance noise reduction | P0 | 🟡 | `ctl:detail.nrLuminance`, `ctl:detail.nrDetail`, `ctl:detail.nrContrast` | Contrast (`nrContrast`) is stored and carried over from presets but not rendered |
 | LR-EDIT-DETAIL-CNR | Colour noise reduction | P0 | ✅ | `ctl:detail.nrColor`, `ctl:detail.nrColorDetail`, `ctl:detail.nrColorSmoothness` | |
 | LR-EDIT-DETAIL-DENOISE | AI denoise | P2 | ⬜ | | settings field reserved, not rendered |
 | LR-EDIT-DETAIL-RAWDETAILS | Improved demosaic toggle | P2 | ⬜ | | |
 | LR-EDIT-DETAIL-SUPERRES | Super resolution | P2 | ⬜ | | |
 | LR-EDIT-DETAIL-AISHARPEN | AI sharpen | OOS | 🚫 | | |
 | LR-EDIT-OPTICS-CA | Remove chromatic aberration | P1 | ✅ | `crates/ui-egui/src/panels/edit.rs` (checkbox), `ctl:optics.caRed`, `ctl:optics.caBlue` | |
-| LR-EDIT-OPTICS-PROFILE | Lens profile corrections | P1 | 🟡 | `ctl:optics.profileDistortion`, `ctl:optics.profileVignetting`, `crates/pipeline/src/optics.rs` | uses corrections embedded in DNG/raw files; no lens-profile database |
+| LR-EDIT-OPTICS-PROFILE | Lens profile corrections | P1 | 🟡 | `ctl:optics.profileDistortion`, `ctl:optics.profileVignetting`, `crates/pipeline/src/optics.rs`, `crates/engine/src/crs.rs` | uses corrections embedded in DNG/raw files (the Enable switch and the amount sliders act on those); an imported preset's `LensProfileEnable=0` leaves them on, as Lightroom applies built-in corrections regardless (inferred); no lens-profile database |
 | LR-EDIT-OPTICS-DEFRINGE | Defringe | P1 | ✅ | `ctl:optics.defringe*` | no fringe eyedropper |
 | LR-EDIT-OPTICS-MANUAL | Manual distortion / vignetting | P1 | ✅ | `ctl:optics.distortion`, `ctl:optics.vignetting`, `ctl:optics.vignettingMidpoint` | |
 | LR-EDIT-GEOM-UPRIGHT | Upright | P1 | ✅ | `cmd:geometry.upright`, `cmd:geometry.guides` | |
@@ -261,7 +263,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-EDIT-GEOM-CONSTRAIN | Constrain crop | P1 | ✅ | `crates/ui-egui/src/panels/right.rs` (checkbox → `cmd:develop.merge`) | |
 | LR-EDIT-GEOM-GRID | Grid while transforming | P2 | ✅ | `crates/ui-egui/src/panels/detail.rs` | a fine grid over the photo while a geometry slider is dragged |
 | LR-EDIT-LENSBLUR | Lens blur | P2 | ⬜ | | settings field reserved, not rendered |
-| LR-EDIT-CALIB | Calibration [Classic] | P1 | ✅ | `ctl:calibration.*` | shadows tint, red/green/blue primary hue and saturation; read/written in XMP |
+| LR-EDIT-CALIB | Calibration [Classic] | P1 | 🟡 | `ctl:calibration.*`, `crates/pipeline/src/colorops.rs` | shadows tint, red/green/blue primary hue and saturation; read/written in XMP; the rendering rotates Rec.2020 primaries in OkLCh, not the camera's primaries as Lightroom does, so values carry over but the look differs |
 | LR-EDIT-SECTION-TOGGLE | Section on/off | P1 | ✅ | `cmd:develop.sectionEnabled` | |
 | LR-EDIT-RESET | Reset all / section / slider | P0 | ✅ | `cmd:develop.reset`, `cmd:develop.resetSection`, `cmd:develop.resetControl`, `crates/ui-egui/src/widgets.rs` (double-click) | no "reset to open" |
 | LR-EDIT-SHOWORIG | Show original | P0 | ✅ | `cmd:view.showOriginal` | |
@@ -737,7 +739,7 @@ From `08-lightroom-classic-extras.md` (Classic-only features) and part 2 of `06-
 | LRC-DEV-SOFTPROOF | Soft proofing | P2 | 🟡 | `cmd:view.softProof`, `crates/pipeline/src/output.rs` (`Proof`), `crates/ui-egui/src/panels/edit.rs` (`soft_proofing`) | S in the loupe (in grids S stays Expand/Collapse Stack): paper-white surround and "Proof Preview", proof profile (sRGB / Display P3 / Adobe RGB / ProPhoto / Rec. 2020), destination (red) and display (blue) gamut warnings, Create Proof Copy (a named virtual copy). Missing: printer ICC profiles, rendering intent, Simulate Paper & Ink |
 | LRC-DEV-AUTOSYNC | Sync / auto sync / paste previous | P1 | ✅ | `cmd:develop.sync`, `cmd:develop.autoSync`, `cmd:develop.pastePrevious` | Edit ▸ Sync Settings / Auto Sync (⌥⇧⌘A): only the changed settings carry over, one undo step, slider drags sync on release, spots / red eye stay per photo; Edit panel banner |
 | LRC-DEV-MATCHEXP | Match total exposures | P2 | ✅ | `cmd:develop.matchExposure` | Photo ▸ Match Total Exposures: the selected photos' Exposure set so shutter × ISO ÷ aperture² plus the slider matches the active photo's |
-| LRC-DEV-CALIB | Calibration panel | P1 | ✅ | `ctl:calibration.*` | |
+| LRC-DEV-CALIB | Calibration panel | P1 | 🟡 | `ctl:calibration.*` | see LR-EDIT-CALIB: Rec.2020 primaries rotated in OkLCh, not camera primaries |
 | LRC-DEV-TAT | Targeted adjustment tools | P1 | ✅ | `cmd:develop.targeted` (`target`: curve / hue / sat / lum) | |
 | LRC-DEV-DEFAULTS | Per-camera raw defaults | P1 | ✅ | `cmd:library.preferences` (`camera`, `import.perCamera`), `crates/ui-egui/src/panels/settings.rs` | Settings → Import: raw default and per-camera presets |
 | LRC-DEV-VIEWOPTIONS | Develop view options | P2 | ⬜ | | |

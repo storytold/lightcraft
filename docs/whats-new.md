@@ -8,6 +8,19 @@
 - Luminar looks: `.lmp` files and `.mplumpack` collections import as presets (grouped by collection); the sliders
   with a counterpart here come along, the rest is listed.
 - 23 new built-in presets: Portrait, Landscape, Urban, Food, Seasons, Vintage and B&W toners.
+- A preset looks the same whatever colour space you export to: tone curves (parametric, point and red/green/blue)
+  now run in one fixed curve space instead of the export's (an XMP preset on an iPhone ProRAW, sRGB vs Display P3:
+  mean ΔE2000 0.65 → 0.002).
+- Importing XMP presets no longer lists bookkeeping fields (`Cluster`, `SortName`, `SupportsAmount2`, the as-shot
+  white, empty Point Color slots…) as settings that couldn't be carried over.
+- A preset whose lens-profile switch is off no longer turns off the lens corrections built into a DNG (iPhone ProRAW
+  and other files with embedded distortion / vignetting corrections), matching what the preset does elsewhere.
+
+### Editing
+- Sharpening's Radius and Detail sliders now work. Radius is in the photo's own pixels (0.5–3), so a 1:1 view and a
+  full-size export match and a downscaled view shows what the downscaled export will; Detail holds back halos and
+  fine texture at low values. DNG files that ask for more or less sharpening (`BaselineSharpness`, e.g. 1.5 on iPhone
+  ProRAW) get it.
 
 ### Reliability
 - LightCraft no longer crashes at launch on Windows PCs whose Vulkan driver is broken (issue #136, e.g. some Intel UHD
