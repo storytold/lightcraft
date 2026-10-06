@@ -14,6 +14,7 @@ list (author, source, license) is in assets/ATTRIBUTION.md.
 
 Inter (assets/fonts/Inter-*.ttf) — SIL Open Font License 1.1. See assets/fonts/OFL-Inter.txt.
 Showcase photographs by Ansel Adams, Dorothea Lange and NASA (docs/images/) — public domain. See assets/ATTRIBUTION.md.
+YuNet face detector (assets/models/face_detection_yunet_2023mar.onnx) — MIT License, Copyright (c) 2020 Shiqi Yu. See assets/models/LICENSE-YuNet.txt.
 
 Builds made with craft-fonts (the optional CRAFT_FONTS_DIR build input; all official releases)
 also embed the fonts listed in https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md

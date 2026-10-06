@@ -9,11 +9,14 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod graph;
 pub mod hash;
 pub mod known;
 pub mod manifest;
+pub mod net;
 pub mod onnx;
 pub mod suggest;
 pub mod synthetic;
+pub mod yunet;
 
 pub use manifest::{Colour, Commercial, InputSpec, Licence, ManifestError, ModelManifest, OutputSpec, Resize, Role, Thresholds};

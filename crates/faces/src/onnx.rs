@@ -51,36 +51,37 @@ pub enum ProbeError {
     Io(#[from] io::Error),
 }
 
-type Result<T> = std::result::Result<T, ProbeError>;
+pub(crate) type Result<T> = std::result::Result<T, ProbeError>;
 
-enum Wire {
+pub(crate) enum Wire {
     Varint(u64),
     /// A length-delimited field: its bytes are `start..end` and the reader sits at `start`.
     Len {
         start: u64,
         end: u64,
     },
-    /// Fixed-width data already skipped.
-    Skipped,
+    Fixed32(u32),
+    #[allow(dead_code)]
+    Fixed64(u64),
 }
 
-struct Walker<'a, R> {
-    r: &'a mut R,
-    total: u64,
-    fields: u32,
+pub(crate) struct Walker<'a, R> {
+    pub(crate) r: &'a mut R,
+    pub(crate) total: u64,
+    pub(crate) fields: u32,
 }
 
 impl<R: Read + Seek> Walker<'_, R> {
-    fn pos(&mut self) -> Result<u64> {
+    pub(crate) fn pos(&mut self) -> Result<u64> {
         Ok(self.r.stream_position()?)
     }
 
-    fn seek_to(&mut self, at: u64) -> Result<()> {
+    pub(crate) fn seek_to(&mut self, at: u64) -> Result<()> {
         self.r.seek(SeekFrom::Start(at))?;
         Ok(())
     }
 
-    fn byte(&mut self) -> Result<u8> {
+    pub(crate) fn byte(&mut self) -> Result<u8> {
         let mut b = [0u8; 1];
         self.r
             .read_exact(&mut b)
@@ -89,7 +90,7 @@ impl<R: Read + Seek> Walker<'_, R> {
         Ok(x)
     }
 
-    fn varint(&mut self) -> Result<u64> {
+    pub(crate) fn varint(&mut self) -> Result<u64> {
         let mut v = 0u64;
         for shift in (0..70u32).step_by(7) {
             let b = self.byte()?;
@@ -104,7 +105,7 @@ impl<R: Read + Seek> Walker<'_, R> {
     }
 
     /// The next field of the message that ends at `end`, or `None` at its end.
-    fn next(&mut self, end: u64) -> Result<Option<(u32, Wire)>> {
+    pub(crate) fn next(&mut self, end: u64) -> Result<Option<(u32, Wire)>> {
         let here = self.pos()?;
         if here >= end {
             return Ok(None);
@@ -117,14 +118,23 @@ impl<R: Read + Seek> Walker<'_, R> {
         let number = u32::try_from(tag >> 3).map_err(|_| ProbeError::Malformed("field number too large"))?;
         let wire = match tag & 7 {
             0 => Wire::Varint(self.varint()?),
-            1 | 5 => {
-                let n = if tag & 7 == 1 { 8 } else { 4 };
-                let at = self.pos()?.checked_add(n).ok_or(ProbeError::Malformed("offset overflow"))?;
-                if at > end {
+            1 => {
+                let at = self.pos()?.checked_add(8).ok_or(ProbeError::Malformed("offset overflow"))?;
+                if at > end || at > self.total {
                     return Err(ProbeError::Malformed("field runs past its message"));
                 }
-                self.seek_to(at)?;
-                Wire::Skipped
+                let mut b = [0u8; 8];
+                self.r.read_exact(&mut b).map_err(|_| ProbeError::Malformed("file ends inside a field"))?;
+                Wire::Fixed64(u64::from_le_bytes(b))
+            }
+            5 => {
+                let at = self.pos()?.checked_add(4).ok_or(ProbeError::Malformed("offset overflow"))?;
+                if at > end || at > self.total {
+                    return Err(ProbeError::Malformed("field runs past its message"));
+                }
+                let mut b = [0u8; 4];
+                self.r.read_exact(&mut b).map_err(|_| ProbeError::Malformed("file ends inside a field"))?;
+                Wire::Fixed32(u32::from_le_bytes(b))
             }
             2 => {
                 let len = self.varint()?;
@@ -141,7 +151,7 @@ impl<R: Read + Seek> Walker<'_, R> {
     }
 
     /// A bounded UTF-8 string occupying `start..end` (empty when it is longer than we care about).
-    fn string(&mut self, start: u64, end: u64) -> Result<String> {
+    pub(crate) fn string(&mut self, start: u64, end: u64) -> Result<String> {
         let len = end.saturating_sub(start);
         if len > MAX_STRING {
             return Ok(String::new());
@@ -149,6 +159,20 @@ impl<R: Read + Seek> Walker<'_, R> {
         let mut buf = Vec::new();
         self.r.by_ref().take(len).read_to_end(&mut buf)?;
         Ok(String::from_utf8_lossy(&buf).into_owned())
+    }
+
+    /// The bytes of `start..end`, which must be at most `max` long.
+    pub(crate) fn bytes(&mut self, start: u64, end: u64, max: u64) -> Result<Vec<u8>> {
+        let len = end.saturating_sub(start);
+        if len > max {
+            return Err(ProbeError::Malformed("a field is larger than allowed"));
+        }
+        let mut buf = Vec::new();
+        self.r.by_ref().take(len).read_to_end(&mut buf)?;
+        if buf.len() as u64 != len {
+            return Err(ProbeError::Malformed("file ends inside a field"));
+        }
+        Ok(buf)
     }
 }
 
@@ -201,7 +225,7 @@ fn tensor_type<R: Read + Seek>(w: &mut Walker<R>, end: u64, info: &mut TensorInf
     Ok(())
 }
 
-fn type_proto<R: Read + Seek>(w: &mut Walker<R>, end: u64, info: &mut TensorInfo) -> Result<()> {
+pub(crate) fn type_proto<R: Read + Seek>(w: &mut Walker<R>, end: u64, info: &mut TensorInfo) -> Result<()> {
     while let Some((n, f)) = w.next(end)? {
         match (n, f) {
             (1, Wire::Len { end: e, .. }) => {
