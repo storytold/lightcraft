@@ -122,6 +122,10 @@ fn row(s: &Session, m: &ModelManifest, installed: bool, selected: bool, accepted
         "source": m.source,
         "sizeBytes": m.size_bytes,
         "sha256": m.sha256,
+        // how fast it is as a multiple of a ResNet-100 model (computers differ, ratios between models hardly do), and
+        // that in words; null when nobody has measured it
+        "speed": m.speed,
+        "speedText": m.speed.map(manifest::describe_speed).filter(|t| !t.is_empty()),
         "known": from_catalog || known::all().iter().any(|k| k.id == m.id),
         // from the user's own catalog file
         "fromCatalog": from_catalog,

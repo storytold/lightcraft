@@ -65,11 +65,14 @@ colour unless you marked the model `"commercial": "yes"`).
     "licence": { "name": "Research use only", "commercial": "no", "notice": "Not for commercial use." },
     "provenance": "Trained on ...",
     "output": { "kind": "embedding", "dim": 512 },
-    "thresholds": { "matchCosine": 0.4 }
+    "thresholds": { "matchCosine": 0.4 },
+    "speed": 1.7
 } ] }
 ```
 
-`input` may be left out (112 × 112 RGB, `(x − 127.5) / 127.5`, the ArcFace convention that InsightFace-style models use); say
+`speed` is optional: how many times faster the model is than a ResNet-100 (1.7 for a ResNet-50, 7 for a MobileFaceNet; see the
+next section). Settings ▸ Faces shows it as "1.7× faster than a ResNet-100 model", also before the model is downloaded; leave it
+out if you have not measured it and nothing is shown. `input` may be left out (112 × 112 RGB, `(x − 127.5) / 127.5`, the ArcFace convention that InsightFace-style models use); say
 otherwise with `"input": {"width": 112, "height": 112, "colour": "bgr", "mean": [0,0,0], "std": [1,1,1]}`. `sha256` and
 `sizeBytes` are required (a download is checked against them), the address must be `https`, and the model must give one
 vector per face. A bad entry is reported in Settings ▸ Faces and skipped; the rest still load. The same file by hand
@@ -92,9 +95,11 @@ server share it.
 
 ## How fast are the models
 
-Milliseconds depend on your computer, so here is the speed as a ratio to a **ResNet-100 model = 1×**: a bigger number is
-faster. Measured with LightCraft's runtime (tract on the CPU, one thread per face) by timing each model's self-test, median of
-ten runs, on a 32-thread desktop; the ratios should carry over to other machines, the milliseconds will not.
+Settings ▸ Faces shows these ratios beside each model (before it is downloaded too), not milliseconds. Milliseconds depend
+on your computer, so the speed is a ratio to a **ResNet-100 model = 1×**: a bigger number is faster. Measured with
+LightCraft's runtime (tract on the CPU, one thread per face) by timing each model's self-test, median of ten runs, on a
+32-thread desktop; the ratios should carry over to other machines, the milliseconds will not. A model with no known ratio
+shows none.
 
 | Model | Size | Speed (ResNet-100 = 1×) | Here |
 | --- | --- | --- | --- |
@@ -129,7 +134,7 @@ or 200 adds only a few tenths more, and AuraFace's published CFP-FP and AgeDB-30
 a ResNet-100 (so it is not the accuracy choice its size suggests). InsightFace's pretrained weights are, in its own words,
 "available for non-commercial research purposes only"; TopoFR's page states no licence for its weights.
 
-## Finding faces yourself## Finding faces yourself
+## Finding faces yourself
 
 **Photo ▸ Detect Faces** (`faces.detect`) runs the bundled detector on the selected photos and adds what it finds as
 unnamed face boxes, in one undo step. A new run replaces earlier detections; boxes that came from XMP, or that you drew or

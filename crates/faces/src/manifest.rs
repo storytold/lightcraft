@@ -129,6 +129,31 @@ pub struct ModelManifest {
     pub output: OutputSpec,
     #[serde(default)]
     pub thresholds: Thresholds,
+    /// How fast it is as a multiple of a ResNet-100 model's speed (`1.0`): `2.0` is twice as fast. Shown instead of
+    /// timings, which depend on the computer; leave it out when you have not measured it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<f32>,
+}
+
+/// The reference model the `speed` ratios are measured against.
+pub const SPEED_REFERENCE: &str = "a ResNet-100 model";
+
+/// A speed ratio in plain words, as times faster than the reference ("4.6× faster than a ResNet-100 model").
+pub fn describe_speed(speed: f32) -> String {
+    if !(speed.is_finite() && speed > 0.0) {
+        return String::new();
+    }
+    let times = |x: f32| {
+        let s = format!("{x:.1}");
+        s.strip_suffix(".0").map_or(s.clone(), str::to_string)
+    };
+    if speed >= 1.15 {
+        format!("{}× faster than {SPEED_REFERENCE}", times(speed))
+    } else if speed > 0.87 {
+        format!("Same speed as {SPEED_REFERENCE}")
+    } else {
+        format!("{}× slower than {SPEED_REFERENCE}", times(1.0 / speed))
+    }
 }
 
 #[derive(Debug, PartialEq, thiserror::Error)]
@@ -231,6 +256,7 @@ pub fn validate(m: &ModelManifest) -> Result<(), ManifestError> {
     ratio("thresholds.matchCosine", m.thresholds.match_cosine, -1.0, 1.0)?;
     ratio("thresholds.score", m.thresholds.score, 0.0, 1.0)?;
     ratio("thresholds.nmsIou", m.thresholds.nms_iou, 0.0, 1.0)?;
+    ratio("speed", m.speed, 0.01, 1000.0)?;
     Ok(())
 }
 
@@ -267,6 +293,19 @@ mod tests {
             input: InputSpec::default(),
             output: OutputSpec::Embedding { dim: 512 },
             thresholds: Thresholds { match_cosine: Some(0.4), ..Default::default() },
+            speed: Some(1.7),
+        }
+    }
+
+    #[test]
+    fn speed_reads_as_times_faster_than_the_reference() {
+        assert_eq!(describe_speed(7.0), "7× faster than a ResNet-100 model");
+        assert_eq!(describe_speed(4.6), "4.6× faster than a ResNet-100 model");
+        assert_eq!(describe_speed(1.7), "1.7× faster than a ResNet-100 model");
+        assert_eq!(describe_speed(1.0), "Same speed as a ResNet-100 model");
+        assert_eq!(describe_speed(0.5), "2× slower than a ResNet-100 model");
+        for odd in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(describe_speed(odd), "", "{odd}");
         }
     }
 
@@ -318,6 +357,9 @@ mod tests {
             ),
             ("nan threshold", Box::new(|m| m.thresholds.match_cosine = Some(f32::NAN))),
             ("threshold range", Box::new(|m| m.thresholds.score = Some(1.5))),
+            ("nan speed", Box::new(|m| m.speed = Some(f32::NAN))),
+            ("zero speed", Box::new(|m| m.speed = Some(0.0))),
+            ("huge speed", Box::new(|m| m.speed = Some(1e9))),
         ];
         for (what, f) in cases {
             let mut m = good();

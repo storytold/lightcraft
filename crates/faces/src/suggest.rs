@@ -103,6 +103,7 @@ pub fn suggest_with(info: &OnnxInfo, sha256: &str, size: u64, file_name: &str, e
         input: InputSpec { width, height, ..InputSpec::default() },
         output: OutputSpec::Embedding { dim },
         thresholds: Thresholds::default(),
+        speed: None,
     };
     let assumptions = vec![
         format!("Faces are aligned crops of {width} × {height} pixels."),

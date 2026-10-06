@@ -198,11 +198,17 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                 } else {
                     t.caution
                 }));
-                if let Some(test) = m["accepted"]["selfTest"].as_object() {
-                    let (line, ok) = match (test.get("ok").and_then(Value::as_bool), test.get("embedMs").and_then(Value::as_f64)) {
-                        (Some(true), Some(ms)) => (format!("Works · {ms:.0} ms per face"), true),
-                        _ => ("Failed its last test".to_string(), false),
-                    };
+                // how fast it is, as times faster than a ResNet-100 model (milliseconds would depend on the computer),
+                // with whether it passed its test when it has been installed
+                let speed = m["speedText"].as_str().filter(|s| !s.is_empty());
+                let (line, ok) = match m["accepted"]["selfTest"].as_object() {
+                    Some(test) if test.get("ok").and_then(Value::as_bool) == Some(true) => {
+                        (Some(speed.map_or("Works".to_string(), |s| format!("Works · {s}"))), true)
+                    }
+                    Some(_) => (Some("Failed its last test".to_string()), false),
+                    None => (speed.map(str::to_string), true),
+                };
+                if let Some(line) = line {
                     ui.label(RichText::new(line).font(t.font(11.5)).color(if ok { t.text_dim } else { t.caution }));
                 }
                 match (dl_state, dl) {

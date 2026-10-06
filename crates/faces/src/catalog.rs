@@ -14,10 +14,12 @@
 //!     "licence": { "name": "Research use only", "commercial": "no", "notice": "Not for commercial use." },
 //!     "provenance": "Trained on …",
 //!     "output": { "kind": "embedding", "dim": 512 },
-//!     "thresholds": { "matchCosine": 0.4 }
+//!     "thresholds": { "matchCosine": 0.4 },
+//!     "speed": 1.7
 //! } ] }
 //! ```
 //!
+//! `speed` (optional) is how many times faster the model is than a ResNet-100, shown in Settings instead of timings.
 //! `input` may be left out (112 × 112 RGB, `(x − 127.5) / 127.5`, the ArcFace convention). The file is untrusted: it is read
 //! with a size limit, every entry is validated, and a bad entry is reported and skipped, never a reason to refuse the rest.
 //! The `sha256` and `sizeBytes` are required, since they are what a downloaded file is checked against.
@@ -146,7 +148,7 @@ mod tests {
             "url": "https://example.org/w/recogniser-r50.onnx?download=1",
             "sha256": "ab".repeat(32), "sizeBytes": 1234,
             "licence": {"name": "Research only", "commercial": "no", "notice": "Not for commercial use."},
-            "output": {"kind": "embedding", "dim": 512}, "thresholds": {"matchCosine": 0.4},
+            "output": {"kind": "embedding", "dim": 512}, "thresholds": {"matchCosine": 0.4}, "speed": 1.7,
         })
     }
 
@@ -164,6 +166,11 @@ mod tests {
         let d = e.download().unwrap();
         assert_eq!((d.size_bytes, d.sha256.len(), d.url.as_str()), (1234, 64, "https://example.org/w/recogniser-r50.onnx?download=1"));
         assert_eq!(e.manifest.input, crate::InputSpec::default(), "the input defaults to the ArcFace convention");
+        assert_eq!(e.manifest.speed, Some(1.7), "the speed ratio is the user's to state");
+        let mut nonsense = good("nonsense-speed");
+        nonsense["speed"] = json!(-3);
+        let c = cat(vec![nonsense]);
+        assert!(c.entries.is_empty() && c.errors.iter().any(|e| e.contains("speed")), "{:?}", c.errors);
     }
 
     #[test]

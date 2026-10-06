@@ -42,6 +42,7 @@ pub fn yunet() -> ModelManifest {
         input: InputSpec { width: 640, height: 640, colour: Colour::Bgr, mean: [0.0; 3], std: [1.0; 3], resize: Resize::Letterbox },
         output: OutputSpec::Detector { decoder: "yunet-v2".into() },
         thresholds: Thresholds { match_cosine: None, score: Some(0.6), nms_iou: Some(0.3) },
+        speed: None,
     }
 }
 
@@ -67,6 +68,7 @@ pub fn sface() -> ModelManifest {
         input: InputSpec { width: 112, height: 112, colour: Colour::Rgb, mean: [0.0; 3], std: [1.0; 3], resize: Resize::Stretch },
         output: OutputSpec::Embedding { dim: 128 },
         thresholds: Thresholds { match_cosine: Some(0.55), ..Thresholds::default() },
+        speed: Some(4.6),
     }
 }
 
@@ -91,6 +93,7 @@ pub fn auraface() -> ModelManifest {
         input: InputSpec::default(),
         output: OutputSpec::Embedding { dim: 512 },
         thresholds: Thresholds { match_cosine: Some(0.40), ..Thresholds::default() },
+        speed: Some(1.0),
     }
 }
 

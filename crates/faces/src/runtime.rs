@@ -191,6 +191,7 @@ mod tests {
             input: InputSpec::default(),
             output: OutputSpec::Embedding { dim },
             thresholds: Thresholds::default(),
+            speed: None,
         }
     }
 

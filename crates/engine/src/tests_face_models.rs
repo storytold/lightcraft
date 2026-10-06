@@ -42,6 +42,10 @@ fn the_list_knows_the_known_models_and_is_honest_about_the_runtime() {
     assert_eq!(find(&l, "auraface-v1")["installed"], false);
     assert_eq!(find(&l, "auraface-v1")["licence"]["commercial"], "yes");
     assert_eq!(find(&l, "sface-2021dec")["licence"]["commercial"], "unknown");
+    // speed is a ratio to a ResNet-100 model, in words, for models that are not installed yet too; never milliseconds
+    assert_eq!(find(&l, "sface-2021dec")["speedText"], "4.6× faster than a ResNet-100 model");
+    assert_eq!(find(&l, "auraface-v1")["speedText"], "Same speed as a ResNet-100 model");
+    assert_eq!(find(&l, "yunet-2023mar")["speedText"], Value::Null, "nobody timed the detector against it");
     // a build with no folder lists too, and cannot install
     let mut web = Session::new();
     assert!(web.execute("faces.models.list", &json!({})).is_ok());
