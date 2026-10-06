@@ -14,5 +14,6 @@ pub mod known;
 pub mod manifest;
 pub mod onnx;
 pub mod suggest;
+pub mod synthetic;
 
 pub use manifest::{Colour, Commercial, InputSpec, Licence, ManifestError, ModelManifest, OutputSpec, Resize, Role, Thresholds};

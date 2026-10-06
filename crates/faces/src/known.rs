@@ -9,6 +9,9 @@ use crate::manifest::{Colour, Commercial, InputSpec, Licence, ModelManifest, Out
 /// Detector output decoders built into LightCraft.
 pub const DECODERS: &[&str] = &["yunet-v2"];
 
+/// Models that ship inside LightCraft (they are not installed by the user).
+pub const BUNDLED: &[&str] = &["yunet-2023mar"];
+
 pub const YUNET_SHA256: &str = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4";
 pub const SFACE_SHA256: &str = "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79";
 pub const AURAFACE_SHA256: &str = "a7933ea5330113b01c9b60351d8f4c33003f145d8470ac5f0e52ee2effe25c60";

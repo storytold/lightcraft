@@ -145,6 +145,14 @@ fn bad<T>(field: &'static str, why: impl Into<String>) -> Result<T, ManifestErro
     Err(ManifestError::Field(field, why.into()))
 }
 
+/// A model id is a folder name: 1 to 64 characters, starting with a lowercase letter or digit, then
+/// lowercase letters, digits, `.`, `_` or `-`. So it is never `.`, `..`, hidden, or a path.
+pub fn valid_id(id: &str) -> bool {
+    let mut bytes = id.bytes();
+    let first_ok = bytes.next().is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
+    first_ok && id.len() <= 64 && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-'))
+}
+
 fn text(field: &'static str, s: &str, min: usize, max: usize) -> Result<(), ManifestError> {
     let n = s.chars().count();
     if n < min || n > max {
@@ -174,10 +182,8 @@ fn ratio(field: &'static str, v: Option<f32>, lo: f32, hi: f32) -> Result<(), Ma
 /// Check a manifest from any source. Everything the rest of LightCraft relies on (sizes it will allocate,
 /// numbers it will divide by, text it will show) is bounded here.
 pub fn validate(m: &ModelManifest) -> Result<(), ManifestError> {
-    let id_ok =
-        (1..=64).contains(&m.id.len()) && m.id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-'));
-    if !id_ok {
-        return bad("id", "must be 1 to 64 characters: lowercase letters, digits, '.', '_' or '-'");
+    if !valid_id(&m.id) {
+        return bad("id", "must be 1 to 64 characters: lowercase letters and digits, then also '.', '_' or '-'");
     }
     text("name", &m.name, 1, 120)?;
     text("version", &m.version, 1, 40)?;
@@ -278,6 +284,11 @@ mod tests {
             ("empty id", Box::new(|m| m.id = String::new())),
             ("uppercase id", Box::new(|m| m.id = "Bad".into())),
             ("path in id", Box::new(|m| m.id = "../etc".into())),
+            ("dot id", Box::new(|m| m.id = ".".into())),
+            ("dotdot id", Box::new(|m| m.id = "..".into())),
+            ("hidden id", Box::new(|m| m.id = ".hidden".into())),
+            ("slash id", Box::new(|m| m.id = "a/b".into())),
+            ("backslash id", Box::new(|m| m.id = r"a\b".into())),
             ("long id", Box::new(|m| m.id = "a".repeat(65))),
             ("empty name", Box::new(|m| m.name = String::new())),
             ("control in name", Box::new(|m| m.name = "a\u{7}b".into())),
