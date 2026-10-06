@@ -2182,6 +2182,7 @@ dependencies = [
  "lightcraft-raster",
  "lightcraft-raw",
  "lightcraft-scenes",
+ "lightcraft-tiff",
  "log",
  "miniz_oxide 0.8.9",
  "rayon",

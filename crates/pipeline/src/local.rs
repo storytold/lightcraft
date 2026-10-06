@@ -279,7 +279,15 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
 /// The spatial planes the per-pixel stage needs for `img` (white-balanced, before exposure),
 /// reusing whatever `planes` already holds for it. Missing planes are computed side by side (each
 /// one alone scales poorly: the guided filters work on small subsampled grids).
-pub(crate) fn prepare(img: Arc<Rgb32f>, s: &DevelopSettings, frame: &Frame, px_per_long: f64, q: Quality, planes: &mut Planes) -> Prepared {
+pub(crate) fn prepare(
+    img: Arc<Rgb32f>,
+    s: &DevelopSettings,
+    frame: &Frame,
+    px_per_long: f64,
+    q: Quality,
+    planes: &mut Planes,
+    mattes: Option<&masks::Mattes>,
+) -> Prepared {
     let log_l = planes.log_l.get_or_insert_with(|| Arc::new(timed("log_l", || img.map(log_lum)))).clone();
     let PlaneSigmas { base: base_sigma, clarity: clarity_sigma, texture: texture_sigma, dark: dark_sigma, chroma: chroma_sigma } =
         plane_sigmas(s, px_per_long, q);
@@ -324,7 +332,7 @@ pub(crate) fn prepare(img: Arc<Rgb32f>, s: &DevelopSettings, frame: &Frame, px_p
         None => (None, 1.0),
     };
     let ev = s.light.exposure as f32;
-    let masks = timed("masks", || masks::evaluate(&s.masks, frame, img.width, img.height, &img, &log_l, ev));
+    let masks = timed("masks", || masks::evaluate(&s.masks, frame, img.width, img.height, &img, &log_l, ev, mattes));
     Prepared { img, log_l, base, clarity_blur, texture_blur, dark, chroma_blur, air, masks, px_per_long }
 }
 

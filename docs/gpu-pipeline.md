@@ -79,7 +79,8 @@ use (e.g. `Intel(R) UHD Graphics 630 (Dx12)`).
   sampling), `mask` (linear / radial / luminance / colour range / brush shapes, combine, finalize),
   `finish` (the whole per-pixel stage) — each mirrors a named CPU function.
 - Per-stage hybrid: defringe and spot removal (rare, CPU-only for now) download the resampled image,
-  run on the CPU and upload; heuristic mask shapes (Sky, Subject, Background, …) and brushes of more
+  run on the CPU and upload; AI mask shapes (Sky, Subject, Background, …: heuristics, or the photo's own
+  segmentation mattes) and brushes of more
   than 4096 dabs are evaluated on the CPU and uploaded; sources over the buffer limit are resampled
   on the CPU.
 - Stage cache: `GpuStages` mirrors `StageCache` (same keys: source identity + `geo`, `lin_key`,

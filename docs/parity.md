@@ -44,13 +44,13 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | U. Map & location (MAP) | 0 | 1 | 1 | 0 | — | 0/1 (0%) |
 | V. Preferences (PREF) | 5 | 0 | 3 | 3 | 1/1 (100%) | 4/4 (100%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
-| X. Cross-cutting behaviours (BEHAV) | 15 | 3 | 2 | 1 | 8/8 (100%) | 6/8 (75%) |
+| X. Cross-cutting behaviours (BEHAV) | 15 | 4 | 1 | 1 | 8/8 (100%) | 6/8 (75%) |
 | Y. Menus | 81 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 74 | 3 | 3 | 1 | 49/52 (94%) | 22/23 (96%) |
 | Lightroom Classic extras | 31 | 9 | 40 | 9 | — | 21/22 (95%) |
-| **Total** | 387 | 29 | 91 | 37 | 194/200 (97%) | 139/149 (93%) |
+| **Total** | 387 | 30 | 90 | 37 | 194/200 (97%) | 139/149 (93%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.2%** of 507 in-scope rows — P0 98.5% of 200 · P1 95.6% of 149 · P2 39.2% of 158.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.3%** of 507 in-scope rows — P0 98.5% of 200 · P1 95.6% of 149 · P2 39.6% of 158.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -70,7 +70,8 @@ Take the first one nobody is working on.
 5. **LR-EDIT-OPTICS-PROFILE** (P1): a lens-profile database of our own (embedded DNG/maker corrections work today).
 6. **AI masks and Enhance** (LR-MASK-SUBJECT / SKY / PEOPLE / OBJECTS, LR-EDIT-DETAIL-DENOISE, SUPERRES, LENSBLUR):
    blocked on a model strategy (permissively licensed weights or our own training, pure-Rust inference). A maintainer
-   decision, not just engineering.
+   decision, not just engineering. Photos that ship their own segmentation mattes (DNG semantic masks, e.g. iPhone
+   ProRAW's sky matte) already get real Sky / Subject masks from them.
 7. **HDR** (Q. HDR, LR-EXP-HDR), **video** (R. Video), **Classic output modules** (Map view, Book, Slideshow module,
    Print, publish): large, well understood, lower priority than 1–5.
 
@@ -325,11 +326,11 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
 | LR-MASK-PANEL | Masks panel | P0 | ✅ | `cmd:panel.masking`, `cmd:mask.add`, `cmd:mask.select`, `cmd:mask.rename`, `cmd:mask.duplicate` (`invert`), `cmd:mask.move`, `cmd:mask.visible`, `cmd:mask.delete`, `crates/ui-egui/src/panels/masking.rs` | list with per-mask show/hide eye, double-click rename, right-click menu (duplicate, duplicate and invert, invert, hide, move up/down, rename, delete); fits any panel width (create tiles go to three columns, mask actions wrap, long component names are cut short); no drag-to-reorder |
-| LR-MASK-SUBJECT | Select subject | P2 | 🟡 | `cmd:mask.add` (`subject`), `crates/pipeline/src/masks.rs` | saliency heuristic, no segmentation model |
-| LR-MASK-SKY | Select sky | P2 | 🟡 | `cmd:mask.add` (`sky`) | heuristic |
-| LR-MASK-BACKGROUND | Select background | P2 | 🟡 | `cmd:mask.add` (`background`) | inverse of the subject heuristic |
+| LR-MASK-SUBJECT | Select subject | P2 | 🟡 | `cmd:mask.add` (`subject`), `crates/pipeline/src/masks.rs` | saliency heuristic, no segmentation model; a photo that carries person mattes (DNG semantic masks: iPhone ProRAW portrait / skin / hair / teeth / glasses mattes) uses them instead |
+| LR-MASK-SKY | Select sky | P2 | 🟡 | `cmd:mask.add` (`sky`), `crates/pipeline/src/masks.rs` (`Mattes`), `crates/raw/src/semantic.rs` | heuristic; a photo that carries a sky matte (DNG semantic mask, e.g. iPhone ProRAW) uses it instead — real segmentation incl. between branches, through orientation / crop / lens corrections, preview = export |
+| LR-MASK-BACKGROUND | Select background | P2 | 🟡 | `cmd:mask.add` (`background`) | inverse of the subject mask (heuristic, or the photo's person mattes) |
 | LR-MASK-OBJECTS | Object selection | P2 | ⬜ | | shape exists (falls back to the subject heuristic); no UI |
-| LR-MASK-PEOPLE | People parts | P2 | ⬜ | | |
+| LR-MASK-PEOPLE | People parts | P2 | ⬜ | | shape exists (no UI): uses the photo's person / skin / hair / teeth / glasses mattes when it carries them (DNG semantic masks), else the subject heuristic |
 | LR-MASK-LANDSCAPE | Landscape classes | P2 | ⬜ | | shape exists, evaluates empty |
 | LR-MASK-BRUSH | Brush mask | P0 | ✅ | `cmd:tool.brush`, `cmd:mask.brushStroke` (`autoMask`), `crates/pipeline/src/masks.rs` | size/feather/flow/density/erase; Auto Mask: dabs weighted by similarity to the colour under the dab centre, refined by a guided filter on luminance (CPU + GPU); no A/B brushes, no pressure |
 | LR-MASK-LINEAR | Linear gradient | P0 | ✅ | `cmd:tool.linear`, `cmd:mask.update` | |

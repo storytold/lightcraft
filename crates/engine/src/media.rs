@@ -26,7 +26,7 @@ use lightcraft_raster::{Histogram, Rgb32f, Rgba8};
 use serde::{Deserialize, Serialize};
 
 /// Bump when the pipeline's output changes, to invalidate cached thumbnails.
-pub const RENDER_CACHE_VERSION: u64 = 7;
+pub const RENDER_CACHE_VERSION: u64 = 8;
 
 /// Thumbnails render at one of these long edges (so window/cell size changes reuse the cache).
 pub const THUMB_SIZES: [usize; 4] = [128, 256, 384, 512];
@@ -89,7 +89,7 @@ impl DecodedSource {
     /// What to render these pixels against: the decoder's facts, else `header` (the catalog's)
     /// with any stored camera tone curve.
     pub fn info_or(&self, header: SourceInfo) -> SourceInfo {
-        self.info.unwrap_or(SourceInfo { camera_tone: self.camera_tone.or(header.camera_tone), ..header })
+        self.info.clone().unwrap_or_else(|| SourceInfo { camera_tone: self.camera_tone.or(header.camera_tone), ..header })
     }
 }
 
@@ -197,8 +197,9 @@ fn rendered_budget(share: usize) -> usize {
     RENDERED_MEM_BYTES.min(share / 4)
 }
 
-fn source_bytes(img: &Rgb32f) -> usize {
-    img.data.len() * 12 + 64 + std::mem::size_of::<SourceInfo>()
+fn source_bytes(s: &DecodedSource) -> usize {
+    let mattes = s.info.as_ref().and_then(|i| i.mattes.as_ref()).map_or(0, |m| m.bytes());
+    s.image.data.len() * 12 + 64 + std::mem::size_of::<SourceInfo>() + mattes
 }
 
 impl MediaCache {
@@ -249,8 +250,8 @@ impl MediaCache {
             let Some((tick, which)) = candidates.into_iter().flatten().min() else { break };
             let freed = match which {
                 0 => self.thumbs.pop_oldest(),
-                1 => self.previews.iter().position(|e| e.2 == tick).map(|i| source_bytes(&self.previews.remove(i).1.image)),
-                2 => self.full.take().map(|e| source_bytes(&e.1.image)),
+                1 => self.previews.iter().position(|e| e.2 == tick).map(|i| source_bytes(&self.previews.remove(i).1)),
+                2 => self.full.take().map(|e| source_bytes(&e.1)),
                 _ => self.rendered.evict_oldest(),
             };
             match freed {
@@ -302,7 +303,7 @@ impl MediaCache {
         let tick = lightcraft_preview::next_tick();
         match level {
             SourceLevel::Thumb => {
-                let cost = source_bytes(&img.image);
+                let cost = source_bytes(&img);
                 self.thumbs.insert(id, img, cost);
             }
             SourceLevel::Preview => {
@@ -336,8 +337,8 @@ impl MediaCache {
     /// Decoded sources held: (thumbnail level, preview level, full size).
     pub fn usage(&self) -> (crate::memory::Usage, crate::memory::Usage, crate::memory::Usage) {
         use crate::memory::Usage;
-        let previews = Usage::new(self.previews.len(), self.previews.iter().map(|e| source_bytes(&e.1.image)).sum());
-        let full = self.full.as_ref().map(|e| Usage::new(1, source_bytes(&e.1.image))).unwrap_or_default();
+        let previews = Usage::new(self.previews.len(), self.previews.iter().map(|e| source_bytes(&e.1)).sum());
+        let full = self.full.as_ref().map(|e| Usage::new(1, source_bytes(&e.1))).unwrap_or_default();
         (Usage::new(self.thumbs.len(), self.thumbs.cost()), previews, full)
     }
 
@@ -860,20 +861,21 @@ mod tests {
         let mut s = crate::Session::with_demo();
         let id = s.active().unwrap();
         let mut job = s.render_job(id, 64, 64, false, true).unwrap();
+        let loaded_info = info.clone();
         job.source = SourceRef::File {
             path: "synthetic.arw".into(),
             max_edge: 64,
             loader: Some(Arc::new(move |_, _| {
                 let mut image = Rgb32f::new(64, 64);
                 image.data.fill([0.1; 3]);
-                Ok((image, info))
+                Ok((image, loaded_info.clone()))
             })),
             fallback: None,
         };
         job.info = SourceInfo::default(); // Header facts cannot override decoder facts.
         job.settings = Arc::new(DevelopSettings::default());
         let r = job.clone().run();
-        assert_eq!(r.loaded.as_ref().unwrap().info, Some(info));
+        assert_eq!(r.loaded.as_ref().unwrap().info.as_ref(), Some(&info));
         let expected = lightcraft_pipeline::render(&r.loaded.as_ref().unwrap().image, &info, &job.settings, &job.request);
         assert_eq!(r.rendered.as_ref().unwrap().image.data, expected.image.data);
         s.accept(&r);

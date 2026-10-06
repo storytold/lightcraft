@@ -532,3 +532,104 @@ fn malformed_profile_look_tags_are_ignored() {
     let plain = decode(&profile_dng(ByteOrder::Little, |_| {})).unwrap();
     assert!(plain.color.profile.is_empty());
 }
+
+/// A semantic mask IFD (8-bit, uncompressed) named `name`.
+fn mask_ifd(w: usize, h: usize, name: &str, px: Vec<u8>) -> IfdBuilder {
+    let mut m = IfdBuilder::new();
+    m.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![t::SUBFILE_SEMANTIC_MASK]));
+    m.set(t::IMAGE_WIDTH, Value::Long(vec![w as u32]));
+    m.set(t::IMAGE_LENGTH, Value::Long(vec![h as u32]));
+    m.set(t::BITS_PER_SAMPLE, Value::Short(vec![8]));
+    m.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![1]));
+    m.set(t::PHOTOMETRIC, Value::Short(vec![photometric::MASK]));
+    m.set(t::COMPRESSION, Value::Short(vec![1]));
+    if !name.is_empty() {
+        m.set(t::SEMANTIC_NAME, Value::Ascii(name.into()));
+    }
+    m.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![px] });
+    m
+}
+
+/// Semantic masks: a cropped mask is placed by its `MaskSubArea` (zero outside it), mapped onto the
+/// developed image (default crop of the active area), and doesn't disturb the raw decode.
+#[test]
+fn semantic_masks_are_read_and_placed() {
+    use lightcraft_raw::semantic::MaskSubArea;
+    for order in [ByteOrder::Little, ByteOrder::Big] {
+        let bytes = profile_dng(order, |ifd0| {
+            // a 4 × 2 crop at (top 1, left 2) of an 8 × 4 mask over the 8 × 6 image
+            let mut sky = mask_ifd(4, 2, "sky", vec![10, 20, 30, 40, 50, 60, 70, 255]);
+            sky.set(t::MASK_SUB_AREA, Value::Long(vec![1, 2, 8, 4]));
+            ifd0.add_sub_ifd(sky);
+            let mut skin = mask_ifd(2, 2, "skin", vec![0, 255, 255, 0]);
+            skin.set(t::SEMANTIC_INSTANCE_ID, Value::Ascii("person_a".into()));
+            ifd0.add_sub_ifd(skin);
+        });
+        let raw = decode(&bytes).unwrap();
+        assert_eq!((raw.width, raw.height, raw.cpp), (8, 6, 3), "the masks are not the raw image");
+        let masks = lightcraft_raw::semantic_masks(&bytes);
+        assert_eq!(masks.len(), 2);
+        let (sky, skin) = (&masks[0], &masks[1]);
+        assert_eq!((sky.name.as_str(), sky.instance_id.as_deref(), sky.width, sky.height), ("sky", None, 4, 2));
+        assert_eq!(sky.sub_area, Some(MaskSubArea { top: 1, left: 2, full_width: 8, full_height: 4 }));
+        assert_eq!((sky.data[0], sky.data[7]), (10 * 257, 65535));
+        assert_eq!((skin.name.as_str(), skin.instance_id.as_deref(), skin.sub_area), ("skin", Some("person_a"), None));
+        // positions are in uncropped-mask pixels: zero outside the stored crop
+        assert!((sky.value_at(2.5, 1.5) - 10.0 / 255.0).abs() < 1e-4);
+        assert!((sky.value_at(5.5, 2.5) - 1.0).abs() < 1e-4);
+        assert_eq!((sky.value_at(1.5, 1.5), sky.value_at(2.5, 0.5), sky.value_at(6.5, 1.5)), (0.0, 0.0, 0.0));
+        // over the whole image: the uncropped mask's 8 × 4 grid
+        let full = sky.developed(Rect::new(0, 0, 8, 6), Rect::new(0, 0, 8, 6)).unwrap();
+        assert_eq!((full.width, full.height), (8, 4));
+        assert_eq!((full.get(2, 1), full.get(5, 2), full.get(1, 1), full.get(6, 2), full.get(2, 0)), (10, 255, 0, 0, 0));
+        // a default crop keeping columns 2..6 of the image: the stored crop fills it
+        let cropped = sky.developed(Rect::new(0, 0, 8, 6), Rect::new(2, 0, 4, 6)).unwrap();
+        assert_eq!((cropped.width, cropped.height), (4, 4));
+        assert_eq!((cropped.get(0, 1), cropped.get(3, 2), cropped.get(0, 0)), (10, 255, 0));
+    }
+}
+
+/// Malformed semantic masks are skipped (never a panic), and so is the `MaskSubArea` of a mask it
+/// doesn't fit; the raw image still decodes.
+#[test]
+fn malformed_semantic_masks_are_skipped() {
+    let bytes = profile_dng(ByteOrder::Little, |ifd0| {
+        ifd0.add_sub_ifd(mask_ifd(2, 2, "", vec![1, 2, 3, 4])); // no SemanticName
+        let mut rgb = mask_ifd(2, 2, "rgb", vec![0; 12]);
+        rgb.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![3]));
+        rgb.set(t::BITS_PER_SAMPLE, Value::Short(vec![8, 8, 8]));
+        ifd0.add_sub_ifd(rgb);
+        let mut huge = mask_ifd(2, 2, "huge", vec![0; 4]);
+        huge.set(t::IMAGE_WIDTH, Value::Long(vec![100_000]));
+        huge.set(t::IMAGE_LENGTH, Value::Long(vec![100_000]));
+        ifd0.add_sub_ifd(huge);
+        let mut tiny = mask_ifd(2, 2, "tiny data", vec![0; 4]);
+        tiny.set(t::IMAGE_WIDTH, Value::Long(vec![4000]));
+        tiny.set(t::IMAGE_LENGTH, Value::Long(vec![3000]));
+        ifd0.add_sub_ifd(tiny);
+        let mut jxl = mask_ifd(2, 2, "unknown coding", vec![0; 4]);
+        jxl.set(t::COMPRESSION, Value::Short(vec![60_000]));
+        ifd0.add_sub_ifd(jxl);
+        let mut zero = mask_ifd(2, 2, "zero size", vec![0; 4]);
+        zero.set(t::IMAGE_WIDTH, Value::Long(vec![0]));
+        ifd0.add_sub_ifd(zero);
+        let mut short = mask_ifd(4, 4, "short strip", vec![200; 3]);
+        short.set(t::MASK_SUB_AREA, Value::Long(vec![u32::MAX, u32::MAX, u32::MAX, u32::MAX]));
+        ifd0.add_sub_ifd(short);
+        let mut outside = mask_ifd(2, 2, "sub area too small", vec![255; 4]);
+        outside.set(t::MASK_SUB_AREA, Value::Long(vec![3, 0, 2, 4]));
+        ifd0.add_sub_ifd(outside);
+    });
+    assert_eq!(decode(&bytes).unwrap().cpp, 3);
+    let masks = lightcraft_raw::semantic_masks(&bytes);
+    let names: Vec<&str> = masks.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(names, ["short strip", "sub area too small"]);
+    assert!(masks.iter().all(|m| m.sub_area.is_none()), "sub areas the mask doesn't fit are ignored");
+    for m in &masks {
+        let d = m.developed(Rect::new(0, 0, 8, 6), Rect::new(0, 0, 8, 6)).unwrap();
+        assert_eq!((d.width, d.height), (m.width, m.height));
+        assert!(m.developed(Rect::new(0, 0, 8, 6), Rect::new(8, 6, 0, 0)).is_none());
+    }
+    // not a TIFF at all
+    assert!(lightcraft_raw::semantic_masks(b"not a dng").is_empty());
+}

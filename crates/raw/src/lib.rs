@@ -2,7 +2,8 @@
 //!
 //! - [`probe`] recognises raw containers; [`decode`] turns a file into a [`RawImage`] (sensor data + everything
 //!   needed to render it: CFA, black/white levels, active area, default crop, orientation, DNG colour tags,
-//!   opcode lists, [`Metadata`]); [`embedded_preview`] returns the largest embedded JPEG.
+//!   opcode lists, [`Metadata`]); [`embedded_preview`] returns the largest embedded JPEG; [`semantic_masks`]
+//!   reads a DNG's semantic masks (segmentation mattes, e.g. iPhone ProRAW's sky matte).
 //! - [`RawImage::normalized`] subtracts black, scales white to 1.0 and crops to the active area (applying DNG
 //!   `OpcodeList1`/`OpcodeList2`); [`demosaic`] turns CFA data into camera-RGB [`Rgb32f`];
 //!   [`RawImage::develop`] does all of it plus `OpcodeList3` and the default crop; [`RawImage::develop_binned`]
@@ -31,6 +32,7 @@ pub mod ljpeg;
 pub mod opcodes;
 mod preview;
 pub mod profile;
+pub mod semantic;
 mod tiffraw;
 mod unpack;
 mod vendor;
@@ -43,6 +45,7 @@ pub use lightcraft_meta::Metadata;
 pub use lightcraft_raster::Rgb32f;
 pub use opcodes::{Opcode, OpcodeLists};
 pub use preview::embedded_preview;
+pub use semantic::{SemanticMask, semantic_masks};
 
 use lightcraft_color::Xy;
 use lightcraft_tiff::{Tiff, TiffError};

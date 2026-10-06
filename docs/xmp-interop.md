@@ -136,7 +136,7 @@ mask: `CorrectionName` → name, `CorrectionAmount` → Amount, inactive correct
 | `Mask/Gradient` (`FullX/Y`, `ZeroX/Y`) | linear gradient | full effect at the Full point |
 | `Mask/CircularGradient` (`Top/Left/Bottom/Right`, `Angle`, `Feather`, `Flipped`) | radial gradient | box fractions → long-edge radii (presets assume 3:2; sidecars use the photo's shape); `Flipped` → invert |
 | `Mask/Paint` (`Dabs` "d x y", `Radius`, `Flow`, `CenterWeight`, `MaskValue`) | brush | one brush component per correction; `MaskValue` ≤ 0 erases |
-| `Mask/Image` `MaskSubType` 1 / 2 | Subject / Sky | other AI selections are reported, not guessed |
+| `Mask/Image` `MaskSubType` 1 / 2 | Subject / Sky | other AI selections are reported, not guessed; on a photo that carries segmentation mattes (DNG semantic masks, e.g. iPhone ProRAW's sky matte) they use those, else our heuristics |
 | `Mask/RangeMask` `Type` 2 / 3 (`LumRange`, `DepthRange`) | luminance / depth range | lightness converted to our range scale; colour ranges are reported |
 | `MaskBlendMode` 0 / 1 / 2, `MaskInverted` | add / subtract / intersect, invert | |
 
