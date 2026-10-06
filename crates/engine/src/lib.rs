@@ -381,6 +381,17 @@ impl Session {
         Ok(())
     }
 
+    /// The box to cut a face's picture from: the detector's, when the scan has looked at the face (every face is then shown
+    /// equally close, however loosely or tightly its own region was drawn), else the region's own box.
+    pub fn face_view(&self, id: PhotoId, rect: lightcraft_geom::Rect) -> lightcraft_geom::Rect {
+        #[cfg(feature = "recognition")]
+        if let Some(v) = self.faces.index.view(id.0, &rect) {
+            return v;
+        }
+        let _ = id;
+        rect
+    }
+
     /// Apply an op that is LightCraft's own bookkeeping rather than something the user did (faces found by the background
     /// scan): journaled like any op, but not an undo step, and it leaves the redo stack alone.
     #[cfg(feature = "recognition")]

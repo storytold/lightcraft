@@ -445,7 +445,10 @@ mod tests {
         assert_eq!(r["ok"], true, "{r}");
         let listed = h.app.run("faces.models.list", json!({})).unwrap();
         assert!(listed["models"].as_array().unwrap().iter().any(|m| m["installed"] == true && m["known"] == false), "{listed}");
-        assert!(h.app.ui.dialog.is_none());
+        // installed, in use and recognition on: back in Settings ▸ Faces, where the scan can be watched
+        assert_eq!(h.app.ui.dialog, Some(Dialog::Settings { tab: "faces".into() }));
+        assert_eq!(listed["enabled"], true);
+        h.app.ui.dialog = None;
 
         // a file that is not a usable model says why and offers no install
         let junk = dir.join("junk.onnx");
@@ -567,6 +570,82 @@ mod tests {
         // a missing or empty name is refused
         assert_eq!(h.request("engine.execute", json!({"command": "view.person", "params": {}}), t)["ok"], false);
         assert_eq!(h.request("engine.execute", json!({"command": "view.person", "params": {"name": "  "}}), t)["ok"], false);
+    }
+
+    /// The People view lists the unnamed faces below the named people: select some (a click each, or all), type a name,
+    /// press Enter, and they are all named at once, in one undo step; the new person appears among the named.
+    #[test]
+    fn unnamed_faces_are_selected_and_named_together() {
+        use lightcraft_catalog::Op;
+        let mut h = demo([1400.0, 900.0]);
+        let t = Duration::from_secs(10);
+        let ids: Vec<_> = h.app.session.catalog.photos().map(|p| p.id).take(3).collect();
+        let face = |x: f64, name: Option<&str>| lightcraft_meta::Region {
+            rect: lightcraft_geom::Rect { x0: x, y0: 0.2, x1: x + 0.2, y1: 0.55 },
+            kind: lightcraft_meta::RegionKind::Face,
+            name: name.map(str::to_string),
+            description: None,
+        };
+        for (id, regions) in [
+            (ids[0], vec![face(0.1, Some("Jane Doe")), face(0.5, None)]),
+            (ids[1], vec![face(0.3, None), face(0.6, None)]),
+            (ids[2], vec![face(0.3, None)]),
+        ] {
+            let mut meta = h.app.session.catalog.photo(id).unwrap().meta.clone();
+            meta.regions = regions;
+            h.app.session.commit("setup", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+        }
+        h.request("engine.execute", json!({"command": "view.people"}), t);
+        h.settle(SETTLE);
+        h.step();
+        h.step();
+        let tiles = |h: &mut Headless| h.request("ui.widgets", json!({"filter": "unnamed-face:"}), t)["result"].as_array().map_or(0, Vec::len);
+        // the named person is a card, and the four unnamed faces are tiles below
+        let r = h.request("ui.clickWidget", json!({"id": "person:Jane Doe"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.request("engine.execute", json!({"command": "view.people"}), t);
+        h.step();
+        h.step();
+        assert_eq!(tiles(&mut h), 4);
+        // select two (nothing is named by selecting), and the naming bar appears
+        for (id, i) in [(ids[1], 0), (ids[2], 0)] {
+            let r = h.request("ui.clickWidget", json!({"id": format!("unnamed-face:{}:{i}", id.0)}), t);
+            assert_eq!(r["ok"], true, "{r}");
+            h.step();
+            h.step();
+        }
+        assert_eq!(h.app.ui.unnamed_selected.len(), 2);
+        let bar = h.request("ui.widgets", json!({"filter": "unnamed:"}), t).to_string();
+        assert!(bar.contains("unnamed:name") && bar.contains("unnamed:clear"), "{bar}");
+        assert!(h.request("ui.widgets", json!({"filter": "field:unnamedName"}), t).to_string().contains("field:unnamedName"));
+        // type a name and press Enter: both faces are named, in one undo step, and the selection is gone
+        let undo = h.app.session.undo.len();
+        h.request("ui.text", json!({"text": "Ann Example"}), t);
+        h.step();
+        h.request("ui.key", json!({"key": "enter"}), t);
+        h.step();
+        h.step();
+        let named = |h: &Headless, id: lightcraft_catalog::PhotoId, i: usize| h.app.session.catalog.photo(id).unwrap().meta.regions[i].name.clone();
+        assert_eq!((named(&h, ids[1], 0), named(&h, ids[2], 0)), (Some("Ann Example".to_string()), Some("Ann Example".to_string())));
+        assert_eq!(named(&h, ids[1], 1), None, "a face that was not selected stays unnamed");
+        assert_eq!(h.app.session.undo.len(), undo + 1, "one step for both");
+        assert!(h.app.ui.unnamed_selected.is_empty() && h.app.ui.unnamed_name.is_empty());
+        h.settle(SETTLE);
+        h.step();
+        assert_eq!(tiles(&mut h), 2, "the named faces left the unnamed list");
+        assert_eq!(h.app.session.catalog.people().len(), 2, "and the new person is among the named");
+        // select all, then clear: nothing is named
+        h.request("ui.clickWidget", json!({"id": "unnamed:selectAll"}), t);
+        h.step();
+        h.step();
+        assert_eq!(h.app.ui.unnamed_selected.len(), 2);
+        h.request("ui.clickWidget", json!({"id": "unnamed:clear"}), t);
+        h.step();
+        assert!(h.app.ui.unnamed_selected.is_empty());
+        // undo gives the two faces back
+        h.request("engine.execute", json!({"command": "edit.undo"}), t);
+        h.step();
+        assert_eq!(named(&h, ids[1], 0), None);
     }
 
     /// `ui.inspect` says how hard the face scan is allowed to work and whether the window counts as in front, so a slow

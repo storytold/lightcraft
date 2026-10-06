@@ -117,49 +117,22 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let _ = app.run("faces.enable", json!({"enabled": on}));
         app.caches.faces_epoch += 1;
     }
-    hint(
-        ui,
-        t,
-        "Off by default. LightCraft already reads the face names other apps wrote into your photos; this is for models that suggest who is in a photo. Everything stays on your computer; the only thing LightCraft ever fetches from the internet is a model you press Download for.",
-    );
-    if list["runtime"].as_bool() == Some(true) {
-        hint(
-            ui,
-            t,
-            "Pressing Download (or adding a model file) installs the model, tests it, starts using it and turns recognition on. It runs on your computer's processor.",
-        );
-        if on && list["embedder"].is_null() {
-            hint(ui, t, "Choose a recognition model below (Use) to start suggesting names.");
-        } else if on && app.caches.faces_active {
-            let left = app.caches.faces_pending;
-            let status = if left > 0 {
-                format!(
-                    "Scanning your photos for faces in the background: {} faces learned, {left} photo{} to go.",
-                    app.caches.faces_indexed,
-                    if left == 1 { "" } else { "s" }
-                )
-            } else {
-                format!("{} faces learned. Open a person in People to see more photos of them.", app.caches.faces_indexed)
-            };
-            hint(ui, t, &status);
-        }
-    } else {
+    hint(ui, t, "Suggests who is in a photo from the faces you have named. Everything stays on your computer.");
+    let runtime = list["runtime"].as_bool() == Some(true);
+    if !runtime {
         hint(ui, t, "This build cannot run recognition models: they can be added and chosen, not used.");
+    } else if on && list["embedder"].is_null() {
+        hint(ui, t, "Choose a model below (Use) to start.");
+    } else if on && app.caches.faces_active {
+        scan_progress(app, ui, t);
     }
     let all: Vec<Value> = list["models"].as_array().cloned().unwrap_or_default();
     let downloads =
         app.session.execute("faces.models.downloads", &json!({})).map(|v| v["downloads"].as_array().cloned().unwrap_or_default()).unwrap_or_default();
-    heading(ui, t, "Face detector");
-    for m in all.iter().filter(|m| m["role"] == "detector") {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(m["name"].as_str().unwrap_or("")).color(t.text));
-            ui.label(RichText::new(format!("{} · included", mb(m["sizeBytes"].as_u64()))).color(t.text_dim));
-        });
-    }
-    heading(ui, t, "Recognition models");
+    heading(ui, t, "Models");
     for m in all.iter().filter(|m| m["role"] == "embedder") {
         let dl = downloads.iter().find(|d| d["id"] == m["id"]);
-        model_row(app, ui, t, m, dl, list["runtime"].as_bool() == Some(true));
+        model_row(app, ui, t, m, dl, runtime);
     }
     ui.add_space(6.0);
     ui.horizontal(|ui| {
@@ -171,6 +144,24 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
         ui.label(RichText::new("or drop a .onnx file on the window").color(t.text_dim));
     });
+    if let Some(d) = all.iter().find(|m| m["role"] == "detector") {
+        ui.add_space(4.0);
+        hint(ui, t, &format!("Faces are found by {} ({}, included).", d["name"].as_str().unwrap_or("the detector"), mb(d["sizeBytes"].as_u64())));
+    }
+}
+
+/// How the scan is going: a bar while photos are left, then how many faces it learned.
+fn scan_progress(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    let (left, peak, faces) = (app.caches.faces_pending, app.caches.faces_peak.max(1), app.caches.faces_indexed);
+    if left == 0 {
+        hint(ui, t, &format!("{faces} faces learned."));
+        return;
+    }
+    let text = format!("Scanning photos for faces: {left} left · {faces} faces so far");
+    let bar = ui.add(
+        egui::ProgressBar::new((1.0 - left as f32 / peak as f32).clamp(0.0, 1.0)).desired_width(380.0).text(RichText::new(text).font(t.font(11.5))),
+    );
+    register(ui.ctx(), "faces:scanProgress", bar.rect);
 }
 
 fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, dl: Option<&Value>, can_run: bool) {
@@ -391,16 +382,20 @@ pub fn install(app: &mut LightcraftApp, path: &str, info: &Value, accepted: bool
         return Err("Tick the box to accept the model's terms first".into());
     }
     app.caches.faces_epoch += 1;
+    let back_to_settings = |app: &mut LightcraftApp| app.ui.dialog = Some(crate::state::Dialog::Settings { tab: "faces".into() });
     if let Some(id) = info["download"].as_str() {
         let r = app.run("faces.models.download", json!({"id": id, "acknowledged": true}));
         if r.is_ok() {
             app.caches.faces_dl_watch.push(id.to_string());
+            // the progress is in Settings: stay there
+            back_to_settings(app);
         }
         return r;
     }
     let r = app.run("faces.models.install", json!({"path": path, "acknowledged": true}));
     if let Ok(v) = &r {
         app.ui.status = format!("{} is installed and in use: face recognition is on", v["installed"]["name"].as_str().unwrap_or("The model"));
+        back_to_settings(app);
     }
     r
 }
@@ -541,6 +536,8 @@ pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
     app.caches.faces_active = v["active"] == true;
     app.caches.faces_indexed = v["indexedFaces"].as_u64().unwrap_or(0);
     app.caches.faces_pending = v["pendingPhotos"].as_u64().unwrap_or(0);
+    // the progress bar's whole: the most photos that were left at once since the scan last finished
+    app.caches.faces_peak = if app.caches.faces_pending == 0 { 0 } else { app.caches.faces_peak.max(app.caches.faces_pending) };
     // Frames are drawn only when something asks for one, so nothing here wakes the window needlessly: while there is work it
     // asks to be called again in 50 ms (the progress in Settings, the next photos for the workers); with recognition on and
     // nothing to do it looks again every few seconds (a few wake-ups a minute); with recognition off it asks for nothing

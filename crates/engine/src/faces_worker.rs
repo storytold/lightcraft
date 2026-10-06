@@ -148,7 +148,8 @@ pub(crate) struct Done {
     pub tag: String,
     pub epoch: u64,
     pub id: PhotoId,
-    pub results: Vec<(Rect, Option<Vec<f32>>)>,
+    /// Each face's region, its embedding (`None` when it could not be made) and the box to show it by.
+    pub results: Vec<(Rect, Option<Vec<f32>>, Rect)>,
     /// Faces were to be looked for in this photo.
     pub detect_wanted: bool,
     /// What the detector found (their embeddings are in `results`); `None` when the photo could not be searched.
@@ -175,7 +176,7 @@ fn face_rect(f: &Face) -> Option<Rect> {
 /// Do the work for one photo. Never panics: whatever goes wrong, its faces come back as `None`.
 pub(crate) fn process(p: Prepared, embedder: &Embedder) -> Done {
     let Prepared { tag, epoch, id, job, preview, todo, detect } = p;
-    let fallback = |todo: Vec<Rect>| todo.into_iter().map(|r| (r, None)).collect::<Vec<_>>();
+    let fallback = |todo: Vec<Rect>| todo.into_iter().map(|r| (r, None, r)).collect::<Vec<_>>();
     let rects = todo.clone();
     let run = catch_unwind(AssertUnwindSafe(|| {
         let from_preview = preview.and_then(|(path, load)| load(&path, EDGE)).filter(|img| img.width.max(img.height) >= MIN_PREVIEW_EDGE);
@@ -194,7 +195,7 @@ pub(crate) fn process(p: Prepared, embedder: &Embedder) -> Done {
         let img = Rgb { data: &rgb, width: w, height: h };
         let (iw, ih) = embedder.input_size();
         let scaled = |f: &Face| f.landmarks.map(|(x, y)| (x * w as f32, y * h as f32));
-        let mut results: Vec<(Rect, Option<Vec<f32>>)> = todo
+        let mut results: Vec<(Rect, Option<Vec<f32>>, Rect)> = todo
             .into_iter()
             .map(|rect| {
                 let best = found.iter().map(|f| (overlap(&rect, f), f)).filter(|(o, _)| *o >= MATCH_IOU).max_by(|a, b| a.0.total_cmp(&b.0));
@@ -212,7 +213,9 @@ pub(crate) fn process(p: Prepared, embedder: &Embedder) -> Done {
                     ),
                 };
                 let v = crop.and_then(|c| embedder.embed(&c).ok());
-                (rect, v)
+                // shown by the detector's box where it found this face: every face then has the same tightness
+                let view = best.and_then(|(_, f)| face_rect(f)).unwrap_or(rect);
+                (rect, v, view)
             })
             .collect();
         // a photo with no face regions: what the detector is sure of becomes its faces, embedded in the same pass
@@ -222,7 +225,7 @@ pub(crate) fn process(p: Prepared, embedder: &Embedder) -> Done {
                 for f in faces.iter().filter(|f| f.score >= REGION_SCORE) {
                     let Some(rect) = face_rect(f) else { continue };
                     let v = align_to_template(&img, &scaled(f), iw, ih).and_then(|c| embedder.embed(&c).ok());
-                    results.push((rect, v));
+                    results.push((rect, v, rect));
                     rects.push(rect);
                 }
                 rects

@@ -325,3 +325,148 @@ fn faces_person_lists_a_persons_faces_and_looks_for_more_only_while_recognition_
     assert!(s.execute("faces.person", &json!({"name": "Ann", "more": u64::MAX})).is_ok());
     let _ = std::fs::remove_dir_all(&d);
 }
+
+fn unit64(parts: &[(usize, f32)]) -> Vec<f32> {
+    let mut v = vec![0.0f32; 64];
+    for (i, x) in parts {
+        v[*i] = *x;
+    }
+    let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    v.iter().map(|x| x / n).collect()
+}
+
+#[test]
+fn many_faces_are_named_in_one_undo_step() {
+    let d = temp("namemany");
+    let (mut s, _) = setup(&d, 64);
+    let (a, b) = two_photos(&s);
+    let detected = |x: f64| Region { description: Some("Detected by YuNet 2023mar".into()), ..region(x, None) };
+    set_regions(&mut s, a, vec![detected(0.1), region(0.5, None)]);
+    set_regions(&mut s, b, vec![detected(0.3)]);
+    let undo = s.undo.len();
+    let r = s
+        .execute(
+            "faces.nameFaces",
+            &json!({"faces": [{"photo": a.0, "index": 0}, {"photo": a.0, "index": 1}, {"photo": b.0, "index": 0}], "name": "  Jane Doe "}),
+        )
+        .unwrap();
+    assert_eq!((r["named"].clone(), r["photos"].clone()), (json!(3), json!(2)));
+    assert_eq!(s.undo.len(), undo + 1, "one step for the whole group");
+    for (id, i) in [(a, 0), (a, 1), (b, 0)] {
+        let reg = &s.catalog.photo(id).unwrap().meta.regions[i];
+        assert_eq!(reg.name.as_deref(), Some("Jane Doe"));
+        assert!(reg.description.is_none() || !reg.description.as_deref().unwrap().starts_with("Detected by"), "a named face is the user's now");
+    }
+    // undo restores every one of them together
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.photo(a).unwrap().meta.regions.iter().chain(s.catalog.photo(b).unwrap().meta.regions.iter()).all(|r| r.name.is_none()));
+    // an empty name clears; faces that do not exist are skipped, and with none left it is an error
+    s.execute("faces.nameFaces", &json!({"faces": [{"photo": a.0, "index": 0}], "name": "Ann"})).unwrap();
+    let r = s
+        .execute(
+            "faces.nameFaces",
+            &json!({"faces": [{"photo": a.0, "index": 0}, {"photo": a.0, "index": 99}, {"photo": 987_654, "index": 0}], "name": null}),
+        )
+        .unwrap();
+    assert_eq!(r["named"], 1);
+    assert!(s.catalog.photo(a).unwrap().meta.regions[0].name.is_none());
+    for bad in [
+        json!({"name": "x"}),
+        json!({"faces": "x", "name": "x"}),
+        json!({"faces": [{"photo": a.0}], "name": "x"}),
+        json!({"faces": [{"photo": 987_654, "index": 0}], "name": "x"}),
+        json!({"faces": [{"photo": a.0, "index": 0}], "name": 7}),
+        json!({"faces": [{"photo": a.0, "index": 0}], "name": "bad\u{7}name"}),
+        json!({"faces": vec![json!({"photo": a.0, "index": 0}); 5001], "name": "x"}),
+    ] {
+        assert!(s.execute("faces.nameFaces", &bad).is_err(), "{bad}");
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn unnamed_faces_come_with_look_alikes_together_and_the_name_the_named_ones_suggest() {
+    let d = temp("unnamed");
+    let (mut s, _) = setup(&d, 64);
+    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    let (a, b) = two_photos(&s);
+    let c = s.catalog.photos().map(|p| p.id).find(|id| *id != a && *id != b).unwrap();
+    set_regions(&mut s, a, vec![region(0.1, Some("Ann")), region(0.5, None), region(0.7, None)]);
+    set_regions(&mut s, b, vec![region(0.1, None), region(0.5, None)]);
+    set_regions(&mut s, c, vec![region(0.3, None)]);
+    // three faces like Ann, two like Bob (unnamed), one unembedded
+    let put = |s: &mut Session, id: lightcraft_catalog::PhotoId, x: f64, v: Vec<f32>| s.faces.index.insert(id.0, &region(x, None).rect, v);
+    put(&mut s, a, 0.1, unit64(&[(0, 1.0)])); // Ann, named
+    put(&mut s, a, 0.5, unit64(&[(1, 1.0)])); // like Bob
+    put(&mut s, b, 0.1, unit64(&[(0, 0.97), (2, 0.2)])); // like Ann
+    put(&mut s, b, 0.5, unit64(&[(1, 0.98), (2, 0.2)])); // like Bob
+    put(&mut s, c, 0.3, unit64(&[(0, 0.95), (3, 0.3)])); // like Ann
+    // (a's last face, at 0.7, is not embedded yet)
+    let r = s.execute("faces.unnamed", &json!({})).unwrap();
+    assert_eq!((r["total"].clone(), r["ordered"].clone(), r["ready"].clone()), (json!(5), json!(true), json!(true)), "{r}");
+    let faces = r["faces"].as_array().unwrap();
+    let at = |f: &Value| (f["photo"].as_u64().unwrap(), f["index"].as_u64().unwrap());
+    let order: Vec<(u64, u64)> = faces.iter().map(at).collect();
+    // look-alikes are neighbours: the two like Bob are adjacent, and the three like Ann are adjacent; the unembedded one is last
+    let pos = |x: (u64, u64)| order.iter().position(|o| *o == x).unwrap();
+    assert_eq!(pos((a.0, 1)).abs_diff(pos((b.0, 1))), 1, "{order:?}");
+    assert_eq!(order.last(), Some(&(a.0, 2)), "{order:?}");
+    // a face the named ones recognise carries the name they suggest
+    let like_ann = faces.iter().find(|f| at(f) == (b.0, 0)).unwrap();
+    assert_eq!(like_ann["suggestion"]["name"], "Ann", "{like_ann}");
+    assert!(faces.iter().find(|f| at(f) == (b.0, 1)).unwrap()["suggestion"].is_null(), "Bob is nobody the named faces know");
+    // each face says which box to show it by; with no scan view it is its own box
+    for k in ["x0", "y0", "x1", "y1"] {
+        assert!((like_ann["view"][k].as_f64().unwrap() - like_ann["rect"][k].as_f64().unwrap()).abs() < 1e-3, "{like_ann}");
+    }
+    // a limit cuts the list, not the count
+    let r = s.execute("faces.unnamed", &json!({"limit": 2})).unwrap();
+    assert_eq!((r["total"].clone(), r["faces"].as_array().unwrap().len()), (json!(5), 2));
+    // switched off, the faces are still listed, in photo order, without suggestions
+    s.execute("faces.enable", &json!({"enabled": false})).unwrap();
+    let r = s.execute("faces.unnamed", &json!({})).unwrap();
+    assert_eq!((r["total"].clone(), r["ordered"].clone(), r["ready"].clone()), (json!(5), json!(false), json!(false)));
+    assert!(r["faces"].as_array().unwrap().iter().all(|f| f["suggestion"].is_null()));
+    for odd in [json!({"limit": 0}), json!({"limit": "x"}), json!({"limit": u64::MAX})] {
+        assert!(s.execute("faces.unnamed", &odd).is_ok(), "{odd}");
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn every_scanned_face_is_shown_by_the_same_kind_of_box() {
+    let d = temp("view");
+    let (mut s, _) = setup(&d, 64);
+    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    let (a, _) = two_photos(&s);
+    // a loosely drawn box (from some other tool) and the detector's tighter box of the same face
+    let loose = lightcraft_geom::Rect { x0: 0.2, y0: 0.1, x1: 0.8, y1: 0.9 };
+    let tight = lightcraft_geom::Rect { x0: 0.35, y0: 0.25, x1: 0.65, y1: 0.65 };
+    let mut meta = s.catalog.photo(a).unwrap().meta.clone();
+    meta.regions = vec![Region { rect: loose, kind: RegionKind::Face, name: Some("Ann".into()), description: None }];
+    s.commit("setup", Op::SetMeta { id: a, meta: Box::new(meta) }).unwrap();
+    // before the scan has looked at it, the face is shown by its own box
+    assert_eq!(s.face_view(a, loose), loose);
+    s.faces.index.insert_with_view(a.0, &loose, unit64(&[(0, 1.0)]), &tight);
+    let shown = s.face_view(a, loose);
+    assert!((shown.x0 - tight.x0).abs() < 1e-3 && (shown.y1 - tight.y1).abs() < 1e-3, "shown by the detector's box once known: {shown:?}");
+    // a face nobody has looked at, or in another photo, is shown by its own box
+    let other = lightcraft_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.2 };
+    assert_eq!(s.face_view(a, other), other);
+    // the page of the person uses it too
+    let r = s.execute("faces.person", &json!({"name": "Ann"})).unwrap();
+    let view = &r["confirmed"][0]["view"];
+    assert!((view["x0"].as_f64().unwrap() - tight.x0).abs() < 1e-3, "{r}");
+    // and it survives a restart: the index file keeps it beside the embedding
+    let (tag, path) = (s.faces.index.tag.clone(), d.join("view-cache.bin"));
+    let mut written = crate::faces_index::Index::default();
+    written.reset(&tag, 64, Some(path.clone()));
+    written.insert_with_view(a.0, &loose, unit64(&[(0, 1.0)]), &tight);
+    written.save().unwrap();
+    drop(written);
+    let mut again = crate::faces_index::Index::default();
+    again.reset(&tag, 64, Some(path));
+    let v = again.view(a.0, &loose).expect("the face is remembered");
+    assert!((v.x0 - tight.x0).abs() < 1e-3 && (v.y0 - tight.y0).abs() < 1e-3, "{v:?}");
+    let _ = std::fs::remove_dir_all(&d);
+}

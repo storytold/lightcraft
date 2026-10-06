@@ -125,8 +125,24 @@ Turning recognition on starts a scan of the whole library, once, in the backgrou
   the running ones, so a worker that finishes has its next photo at once.
 - **Speed.** A mixed raw and JPEG library of 184 photos (the raws read through their embedded previews, 73 photos searched
   for faces) took about 29 seconds on that machine at full pace: roughly 6 photos a second, so the first scan of 10,000 photos
-  is a matter of half an hour; after that only new photos are looked at. Settings ▸ Faces shows how many are left.
+  is a matter of half an hour; after that only new photos are looked at. Settings ▸ Faces shows how many are left, with a progress bar. After you accept a model's terms
+  you are returned to that tab, so the download and then the scan can be watched there; the main window has no status bar.
 - Opening another library starts a fresh scan state; nothing learned about one library is used in another.
+
+### The People view
+
+**People** shows a card for each named person (their face, with the number of photos they are in on the picture) and, below
+a line, the **Unnamed faces**: every face nobody has named, as cropped pictures. With recognition running, faces that look
+alike are next to each other (put in order by looking at every pair, for up to the first 1,500 embedded faces), and a face
+the named ones recognise carries the name they suggest along its bottom edge; click that name to accept it for that face.
+To name a group: click faces to select them (Shift-click selects a range, **Select all** takes every one listed), type a
+name in the bar that appears (people already named complete as you type), press Enter: all of them are named at once, as
+one undo step. Selecting names nothing.
+
+The thumbnail-size slider in the bottom bar sizes the faces here too, with limits of their own. Every face is shown by the
+same kind of box: the detector's own box once the scan has looked at it (kept beside its embedding), so a loosely drawn box
+from another tool does not make one face look farther away than the next; before the scan has looked at a face it is shown
+by its own box.
 
 ### A person's page
 
@@ -151,4 +167,4 @@ suggestions it would make and how many were right.
 
 All of this is reachable from the control channel, the CLI and MCP: `faces.models.list`, `faces.models.inspect {path}`,
 `faces.models.install {path, acknowledged: true, activate?}`, `faces.models.download {id, acknowledged: true}` (then `faces.models.downloads`, which also installs what has arrived, and `faces.models.downloadCancel {id}`), `faces.models.remove {id}`, `faces.models.select {id}`,
-`faces.enable {enabled?}`, `faces.detect {ids?, apply?}`, `faces.index {budgetMs?, ids?}`, `faces.pump` (what the app calls every frame), `faces.suggest {ids?, threshold?, margin?}`, `faces.person {name, more?}` (a person's faces and the unnamed faces that look like them), `faces.setName {id?, index, name}` and `faces.evaluate`. `acknowledged` must be `true`: the caller has shown the user the terms and the user agreed. Installing makes the model the one in use and switches recognition on unless `activate` is `false`.
+`faces.enable {enabled?}`, `faces.detect {ids?, apply?}`, `faces.index {budgetMs?, ids?}`, `faces.pump` (what the app calls every frame), `faces.suggest {ids?, threshold?, margin?}`, `faces.person {name, more?}` (a person's faces and the unnamed faces that look like them), `faces.unnamed {limit?}` (every unnamed face, look-alikes together, with suggested names), `faces.setName {id?, index, name}`, `faces.nameFaces {faces: [{photo, index}], name}` (name many at once, one undo step) and `faces.evaluate`. `acknowledged` must be `true`: the caller has shown the user the terms and the user agreed. Installing makes the model the one in use and switches recognition on unless `activate` is `false`.

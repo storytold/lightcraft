@@ -2,12 +2,18 @@
 //!
 //! Embedding a face costs a model run (tens to hundreds of milliseconds), so each region is embedded once and
 //! remembered, keyed by its photo and its box. The cache file (`face-embeddings-<model id>.bin` in the library folder,
-//! one per model, so switching back to an earlier model does not start over) belongs to one model: its header names the model and its file hash, and a file made by another model, an older
-//! format, or a damaged one is simply ignored and rebuilt. Embeddings are kept out of the catalog on purpose: they are
-//! large, rebuildable, and not comparable between models.
+//! one per model, so switching back to an earlier model does not start over) belongs to one model: its header names the
+//! model and its file hash, and a file made by another model, an older format, or a damaged one is simply ignored and
+//! rebuilt. Embeddings are kept out of the catalog on purpose: they are large, rebuildable, and not comparable between
+//! models.
 //!
-//! Layout (little-endian): `"LCFE"`, version `1`, tag length `u16`, the tag (`<model id>@<sha256>`), dimension `u32`,
-//! then records of `photo u64`, four `i32` (the box in ten-thousandths), and `dim` `f32`.
+//! Each face also keeps the box to cut its picture from (its "view"): the detector's box when the detector found the same
+//! face, so every face is shown equally close however loosely or tightly its own region was drawn (a Lightroom box, an
+//! older tool's box), else the region's own box.
+//!
+//! Layout (little-endian): `"LCFE"`, version `2`, tag length `u16`, the tag (`<model id>@<sha256>`), dimension `u32`,
+//! then records of `photo u64`, four `i32` (the region's box in ten-thousandths), four `i32` (the view box likewise), and
+//! `dim` `f32`.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -17,11 +23,20 @@ use std::sync::Arc;
 use lightcraft_geom::Rect;
 
 const MAGIC: &[u8; 4] = b"LCFE";
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 /// Largest cache file we read.
 const MAX_FILE: u64 = 1 << 30;
 
 pub(crate) type Key = (u64, [i32; 4]);
+
+/// One face's record: its embedding and its view box (quantized like a key).
+type Entry = (Arc<[f32]>, [i32; 4]);
+
+/// A quantized box as a rectangle again.
+fn rect_of(k: [i32; 4]) -> Rect {
+    let f = |v: i32| f64::from(v) / 10_000.0;
+    Rect { x0: f(k[0]), y0: f(k[1]), x1: f(k[2]), y1: f(k[3]) }
+}
 
 /// A region's box as the integer key it is cached under.
 pub(crate) fn region_key(r: &Rect) -> [i32; 4] {
@@ -34,8 +49,8 @@ pub(crate) struct Index {
     /// `<model id>@<sha256>` of the model the embeddings belong to.
     pub tag: String,
     pub dim: usize,
-    entries: HashMap<Key, Arc<[f32]>>,
-    unsaved: Vec<(Key, Arc<[f32]>)>,
+    entries: HashMap<Key, Entry>,
+    unsaved: Vec<(Key, Entry)>,
     /// Faces that could not be embedded this session (so they are not retried on every call).
     skipped: std::collections::HashSet<Key>,
     /// The cache file on disk belongs to this model, so new records can be appended to it.
@@ -49,7 +64,12 @@ impl Index {
     }
 
     pub fn get(&self, photo: u64, rect: &Rect) -> Option<&Arc<[f32]>> {
-        self.entries.get(&(photo, region_key(rect)))
+        self.entries.get(&(photo, region_key(rect))).map(|e| &e.0)
+    }
+
+    /// The box to cut this face's picture from, once the scan has looked at it.
+    pub fn view(&self, photo: u64, rect: &Rect) -> Option<Rect> {
+        self.entries.get(&(photo, region_key(rect))).map(|e| rect_of(e.1))
     }
 
     #[cfg(test)]
@@ -67,11 +87,17 @@ impl Index {
         self.skipped.insert((photo, region_key(rect)));
     }
 
+    #[cfg(test)]
     pub fn insert(&mut self, photo: u64, rect: &Rect, embedding: Vec<f32>) {
-        let e: Arc<[f32]> = embedding.into();
+        self.insert_with_view(photo, rect, embedding, rect);
+    }
+
+    /// Remember a face's embedding and the box to show it by.
+    pub fn insert_with_view(&mut self, photo: u64, rect: &Rect, embedding: Vec<f32>, view: &Rect) {
+        let entry: Entry = (embedding.into(), region_key(view));
         let key = (photo, region_key(rect));
-        self.entries.insert(key, e.clone());
-        self.unsaved.push((key, e));
+        self.entries.insert(key, entry.clone());
+        self.unsaved.push((key, entry));
     }
 
     /// Whether there are embeddings not yet written to the cache file.
@@ -116,18 +142,16 @@ impl Index {
             return;
         }
         self.file_matches = true;
-        let record = 8 + 16 + dim * 4;
+        let record = 8 + 16 + 16 + dim * 4;
         while let Some((rec, tail)) = rest.split_at_checked(record) {
             rest = tail;
             let photo = u64::from_le_bytes([rec[0], rec[1], rec[2], rec[3], rec[4], rec[5], rec[6], rec[7]]);
-            let mut key = [0i32; 4];
-            for (i, k) in key.iter_mut().enumerate() {
-                let o = 8 + i * 4;
-                *k = i32::from_le_bytes([rec[o], rec[o + 1], rec[o + 2], rec[o + 3]]);
-            }
-            let emb: Vec<f32> = rec[24..].as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
+            let int = |at: usize| i32::from_le_bytes([rec[at], rec[at + 1], rec[at + 2], rec[at + 3]]);
+            let key = [int(8), int(12), int(16), int(20)];
+            let view = [int(24), int(28), int(32), int(36)];
+            let emb: Vec<f32> = rec[40..].as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
             if emb.iter().all(|v| v.is_finite()) {
-                self.entries.insert((photo, key), emb.into());
+                self.entries.insert((photo, key), (emb.into(), view));
             }
         }
     }
@@ -143,11 +167,11 @@ impl Index {
         h
     }
 
-    fn record(&self, key: &Key, emb: &[f32]) -> Vec<u8> {
-        let mut r = Vec::with_capacity(24 + emb.len() * 4);
+    fn record(&self, key: &Key, entry: &Entry) -> Vec<u8> {
+        let mut r = Vec::with_capacity(40 + entry.0.len() * 4);
         r.extend_from_slice(&key.0.to_le_bytes());
-        key.1.iter().for_each(|k| r.extend_from_slice(&k.to_le_bytes()));
-        emb.iter().for_each(|v| r.extend_from_slice(&v.to_le_bytes()));
+        key.1.iter().chain(entry.1.iter()).for_each(|k| r.extend_from_slice(&k.to_le_bytes()));
+        entry.0.iter().for_each(|v| r.extend_from_slice(&v.to_le_bytes()));
         r
     }
 

@@ -1,6 +1,7 @@
 //! Recognition commands: `faces.index` (embed the faces in the library), `faces.suggest` (who might an unnamed
-//! face be?), `faces.person` (one person's faces, and the unnamed faces that look like them) and `faces.setName`
-//! (name a face, which is what teaches the suggestions).
+//! face be?), `faces.person` (one person's faces, and the unnamed faces that look like them), `faces.unnamed` (every
+//! unnamed face, look-alikes together) and `faces.setName` / `faces.nameFaces` (name one face, or many at once, which is
+//! what teaches the suggestions).
 //!
 //! Everything here is a suggestion for the user to confirm; nothing is ever named automatically. All of it is
 //! catalog-only (no sidecar is written) and `faces.setName` is undoable.
@@ -11,31 +12,124 @@ use serde_json::{Value, json};
 use super::{CommandSpec, bad, cmd};
 use crate::{Result, Session};
 
+/// The `name` parameter of the naming commands: a name, or none (`null`, empty) to clear it.
+fn name_param(p: &Value, c: &str) -> Result<Option<String>> {
+    let name = match p.get("name") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_str().ok_or_else(|| bad(c, "`name` must be text or null"))?.trim().to_string()).filter(|n| !n.is_empty()),
+    };
+    if let Some(n) = &name
+        && (n.chars().count() > 200 || n.chars().any(char::is_control))
+    {
+        return Err(bad(c, "a name is at most 200 characters, without control characters"));
+    }
+    Ok(name)
+}
+
+/// Give a face region its name. Naming makes the face yours: a later "Detect Faces" run no longer replaces it.
+fn apply_name(region: &mut lightcraft_meta::Region, name: &Option<String>) {
+    region.name = name.clone();
+    if name.is_some() && region.description.as_deref().is_some_and(|d| d.starts_with(super::face_detect::MARK)) {
+        region.description = None;
+    }
+}
+
+/// `faces.nameFaces {faces: [{photo, index}], name}`: name (or clear) many face regions at once, as one undo step: what
+/// naming a group of look-alikes does.
+fn name_faces(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "faces.nameFaces";
+    let name = name_param(p, C)?;
+    let list = p.get("faces").and_then(Value::as_array).ok_or_else(|| bad(C, "missing `faces`"))?;
+    if list.len() > 5000 {
+        return Err(bad(C, "at most 5000 faces at a time"));
+    }
+    let mut by_photo: std::collections::BTreeMap<u64, Vec<usize>> = std::collections::BTreeMap::new();
+    for f in list {
+        let (Some(photo), Some(index)) =
+            (f.get("photo").and_then(Value::as_u64), f.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()))
+        else {
+            return Err(bad(C, "each face needs a `photo` and an `index`"));
+        };
+        by_photo.entry(photo).or_default().push(index);
+    }
+    let (mut ops, mut named) = (Vec::new(), 0usize);
+    for (photo, indexes) in by_photo {
+        let id = lightcraft_catalog::PhotoId(photo);
+        let Some(photo) = s.catalog.photo(id) else { continue };
+        let mut meta = photo.meta.clone();
+        let before = named;
+        for i in indexes {
+            if let Some(region) = meta.regions.get_mut(i).filter(|r| r.kind == lightcraft_meta::RegionKind::Face) {
+                apply_name(region, &name);
+                named += 1;
+            }
+        }
+        if named > before {
+            ops.push(Op::SetMeta { id, meta: Box::new(meta) });
+        }
+    }
+    if ops.is_empty() {
+        return Err(bad(C, "none of those faces exist"));
+    }
+    let photos = ops.len();
+    s.commit(if name.is_some() { "Name Faces" } else { "Clear Face Names" }, Op::Batch { ops })?;
+    s.skip_auto_write = true;
+    Ok(json!({"named": named, "photos": photos, "name": name}))
+}
+
 /// `faces.setName {id?, index, name}`: name (or, with `null` or an empty name, un-name) one face region. Naming
 /// makes the face yours: a later "Detect Faces" run no longer replaces it.
 fn set_name(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "faces.setName";
     let id = p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId).or_else(|| s.active()).ok_or_else(|| bad(C, "no photo"))?;
     let index = p.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(C, "missing or invalid `index`"))?;
-    let name = match p.get("name") {
-        None | Some(Value::Null) => None,
-        Some(v) => Some(v.as_str().ok_or_else(|| bad(C, "`name` must be text or null"))?.trim().to_string()).filter(|n| !n.is_empty()),
-    };
-    if let Some(n) = &name
-        && (n.chars().count() > 200 || n.chars().any(char::is_control))
-    {
-        return Err(bad(C, "a name is at most 200 characters, without control characters"));
-    }
+    let name = name_param(p, C)?;
     let mut meta = s.catalog.photo(id).ok_or_else(|| bad(C, "no such photo"))?.meta.clone();
     let region = meta.regions.get_mut(index).ok_or_else(|| bad(C, "no such region"))?;
-    region.name = name.clone();
-    if name.is_some() && region.description.as_deref().is_some_and(|d| d.starts_with(super::face_detect::MARK)) {
-        // a detected face the user has named is theirs now
-        region.description = None;
-    }
+    apply_name(region, &name);
     s.commit(if name.is_some() { "Name Face" } else { "Clear Face Name" }, Op::SetMeta { id, meta: Box::new(meta) })?;
     s.skip_auto_write = true;
     Ok(json!({"id": id.0, "index": index, "name": name}))
+}
+
+/// Most faces `faces.unnamed` lists.
+const MAX_UNNAMED: usize = 3000;
+
+/// How the unnamed faces were laid out.
+struct Arranged {
+    /// Faces that look alike are next to each other (only the ones already embedded can be).
+    ordered: bool,
+    /// Recognition is on and a model is loaded.
+    ready: bool,
+    /// A name for some faces, when the faces already named say so with confidence: `(photo, index)` to `(name, score)`.
+    suggestions: std::collections::HashMap<(u64, usize), (String, f32)>,
+}
+
+/// `faces.unnamed {limit?: 600}`: the faces nobody has named, to be named a group at a time. With recognition running,
+/// faces that look alike are next to each other, and a face the named faces recognise carries the name they suggest.
+fn unnamed(s: &mut Session, p: &Value) -> Result<Value> {
+    let limit = p.get("limit").and_then(Value::as_u64).map_or(600, |n| usize::try_from(n).unwrap_or(600)).clamp(1, MAX_UNNAMED);
+    let mut all: Vec<(u64, usize, lightcraft_geom::Rect)> = Vec::new();
+    for ph in s.catalog.photos().filter(|ph| ph.in_library()) {
+        for (index, r) in ph.meta.regions.iter().enumerate() {
+            if r.kind == lightcraft_meta::RegionKind::Face && r.name.is_none() {
+                all.push((ph.id.0, index, r.rect));
+            }
+        }
+    }
+    all.sort_by_key(|(photo, index, _)| (*photo, *index));
+    let total = all.len();
+    let arranged = imp::arrange_unnamed(s, &mut all, limit);
+    all.truncate(limit);
+    let faces: Vec<Value> = all
+        .iter()
+        .map(|(photo, index, rect)| {
+            let view = s.face_view(lightcraft_catalog::PhotoId(*photo), *rect);
+            let suggestion = arranged.suggestions.get(&(*photo, *index)).map(|(name, score)| json!({"name": name, "score": score}));
+            json!({"photo": photo, "index": index, "rect": rect_json(rect), "view": rect_json(&view), "suggestion": suggestion})
+        })
+        .collect();
+    Ok(json!({"total": total, "faces": faces, "ordered": arranged.ordered, "ready": arranged.ready}))
 }
 
 /// What looking for faces that resemble a person found.
@@ -73,7 +167,7 @@ fn person(s: &mut Session, p: &Value) -> Result<Value> {
             }
             total += 1;
             if confirmed.len() < MAX_CONFIRMED {
-                confirmed.push(json!({"photo": ph.id.0, "index": index, "rect": rect_json(&r.rect)}));
+                confirmed.push(json!({"photo": ph.id.0, "index": index, "rect": rect_json(&r.rect), "view": rect_json(&s.face_view(ph.id, r.rect))}));
             }
         }
     }
@@ -222,10 +316,10 @@ mod imp {
             }
         }
         let (mut embedded, mut failed) = (0, 0);
-        for (rect, v) in d.results {
+        for (rect, v, view) in d.results {
             match v {
                 Some(v) if v.len() == s.faces.index.dim => {
-                    s.faces.index.insert(d.id.0, &rect, v);
+                    s.faces.index.insert_with_view(d.id.0, &rect, v, &view);
                     embedded += 1;
                 }
                 _ => {
@@ -528,9 +622,94 @@ mod imp {
         scored.truncate(limit);
         let items = scored
             .into_iter()
-            .map(|(score, photo, index, rect)| json!({"photo": photo, "index": index, "rect": super::rect_json(&rect), "score": score}))
+            .map(|(score, photo, index, rect)| {
+                let view = s.face_view(PhotoId(photo), rect);
+                json!({"photo": photo, "index": index, "rect": super::rect_json(&rect), "view": super::rect_json(&view), "score": score})
+            })
             .collect();
         Similar { items, ..ready }
+    }
+
+    /// Most faces put in order of likeness (the order is a pass over every pair of them).
+    const MAX_ARRANGED: usize = 1500;
+
+    /// Faces in an order that puts look-alikes together: start anywhere, then always go to the closest face not yet placed.
+    fn nearest_chain(embeddings: &[&[f32]]) -> Vec<usize> {
+        let n = embeddings.len();
+        let (mut placed, mut order) = (vec![false; n], Vec::with_capacity(n));
+        let mut current = 0;
+        if n == 0 {
+            return order;
+        }
+        placed[0] = true;
+        order.push(0);
+        for _ in 1..n {
+            let mut best: Option<(usize, f32)> = None;
+            for (j, e) in embeddings.iter().enumerate() {
+                if placed[j] {
+                    continue;
+                }
+                let c = matching::cosine(embeddings[current], e).unwrap_or(-1.0);
+                if best.is_none_or(|(_, b)| c > b) {
+                    best = Some((j, c));
+                }
+            }
+            let Some((j, _)) = best else { break };
+            placed[j] = true;
+            order.push(j);
+            current = j;
+        }
+        order
+    }
+
+    /// Put the unnamed faces `all` in order of likeness (the ones already embedded; the rest follow in photo order) and
+    /// find a name for those the named faces recognise, for the first `limit` of them.
+    pub fn arrange_unnamed(s: &mut Session, all: &mut Vec<(u64, usize, Rect)>, limit: usize) -> super::Arranged {
+        let none = super::Arranged { ordered: false, ready: false, suggestions: Default::default() };
+        let Some(dir) = s.face_models_dir.clone() else { return none };
+        if !enabled_cached(s, &dir) {
+            return none;
+        }
+        let Ok(embedder) = current_with(s, "faces.unnamed", false) else { return none };
+        let (mut embedded, mut plain) = (Vec::new(), Vec::new());
+        for f in all.drain(..) {
+            match s.faces.index.get(f.0, &f.2) {
+                Some(e) => embedded.push((f, e.clone())),
+                None => plain.push(f),
+            }
+        }
+        let beyond = embedded.split_off(embedded.len().min(MAX_ARRANGED));
+        let order = nearest_chain(&embedded.iter().map(|(_, e)| &e[..]).collect::<Vec<_>>());
+        let ordered: Vec<((u64, usize, Rect), Arc<[f32]>)> = order.into_iter().filter_map(|i| embedded.get(i).cloned()).collect();
+        // names the faces already named suggest, as `faces.suggest` would
+        let gallery: Vec<(String, Arc<[f32]>)> = s
+            .catalog
+            .photos()
+            .filter(|ph| ph.in_library())
+            .flat_map(|ph| {
+                ph.meta
+                    .regions
+                    .iter()
+                    .filter(|r| r.kind == RegionKind::Face)
+                    .filter_map(|r| Some((r.name.clone()?, s.faces.index.get(ph.id.0, &r.rect)?.clone())))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let refs: Vec<(&str, &[f32])> = gallery.iter().map(|(n, e)| (n.as_str(), &e[..])).collect();
+        let threshold = embedder.manifest().thresholds.match_cosine.unwrap_or(DEFAULT_THRESHOLD);
+        let mut suggestions = std::collections::HashMap::new();
+        if !refs.is_empty() {
+            for ((photo, index, _), e) in ordered.iter().take(limit) {
+                if let Some(x) = matching::suggest(&matching::rank(e, &refs), threshold, DEFAULT_MARGIN) {
+                    suggestions.insert((*photo, *index), (x.name, x.score));
+                }
+            }
+        }
+        let grouped = !ordered.is_empty();
+        all.extend(ordered.into_iter().map(|(f, _)| f));
+        all.extend(beyond.into_iter().map(|(f, _)| f));
+        all.extend(plain);
+        super::Arranged { ordered: grouped, ready: true, suggestions }
     }
 
     /// Whether face recognition is switched on, looked up at most once a second.
@@ -627,7 +806,7 @@ mod imp {
             (s, d)
         }
 
-        fn finished(s: &Session, id: PhotoId, found: Option<Vec<Rect>>, results: Vec<(Rect, Option<Vec<f32>>)>) -> Done {
+        fn finished(s: &Session, id: PhotoId, found: Option<Vec<Rect>>, results: Vec<(Rect, Option<Vec<f32>>, Rect)>) -> Done {
             Done { tag: s.faces.index.tag.clone(), epoch: s.faces.epoch, id, results, detect_wanted: true, found }
         }
 
@@ -638,7 +817,7 @@ mod imp {
             set_regions(&mut s, b, vec![region(0.1, Some("Ann"))]);
             let (undo, redo) = (s.undo.len(), s.redo.len());
             let found = region(0.3, None).rect;
-            let done = finished(&s, a, Some(vec![found]), vec![(found, Some(unit(&[(0, 1.0)])))]);
+            let done = finished(&s, a, Some(vec![found]), vec![(found, Some(unit(&[(0, 1.0)])), found)]);
             assert_eq!(ingest(&mut s, done), (1, 0));
             let regions = &s.catalog.photo(a).unwrap().meta.regions;
             assert_eq!(regions.len(), 1);
@@ -650,7 +829,7 @@ mod imp {
             assert!(s.faces.scanned.contains(a.0) && s.faces.index.contains(a.0, &found));
             // a photo that has faces by now (the user, an import) keeps exactly those
             let other = region(0.6, None).rect;
-            let done = finished(&s, b, Some(vec![other]), vec![(other, None)]);
+            let done = finished(&s, b, Some(vec![other]), vec![(other, None, other)]);
             ingest(&mut s, done);
             assert_eq!(s.catalog.photo(b).unwrap().meta.regions.len(), 1);
             assert!(s.faces.scanned.contains(b.0));
@@ -697,7 +876,7 @@ mod imp {
             s.faces.index.insert(a.0, &rect, unit(&[(0, 1.0)]));
             s.faces.scanned.insert(a.0);
             let epoch = s.faces.epoch;
-            let old = finished(&s, a, Some(vec![rect]), vec![(rect, Some(unit(&[(1, 1.0)])))]);
+            let old = finished(&s, a, Some(vec![rect]), vec![(rect, Some(unit(&[(1, 1.0)])), rect)]);
             s.open_library(d.join("second"), true).unwrap();
             assert_eq!((s.faces.index.len(), s.faces.scanned.len(), s.faces.queue.len(), s.faces.in_flight.len()), (0, 0, 0, 0));
             assert!(s.faces.epoch != epoch && s.faces.embedder.is_none());
@@ -759,6 +938,10 @@ mod imp {
     pub fn similar(_: &mut Session, _: &str, _: usize) -> super::Similar {
         super::Similar { items: Vec::new(), ready: false, pending: 0 }
     }
+
+    pub fn arrange_unnamed(_: &mut Session, _: &mut Vec<(u64, usize, lightcraft_geom::Rect)>, _: usize) -> super::Arranged {
+        super::Arranged { ordered: false, ready: false, suggestions: Default::default() }
+    }
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -798,6 +981,24 @@ pub fn specs() -> Vec<CommandSpec> {
             "{budgetMs?: 0, burstSecs?: 5, margin?, thresholds?: [..], scope?: \"visible\"} → {queries, top1, sweep: [{threshold, suggested, correct, precision, recall}]} — leave-one-out over your named faces: each is ranked against the others (ignoring shots within burstSecs of it) to show how well the chosen model recognises people in *your* photos and which threshold to trust. Faces not yet embedded are done within budgetMs (`faces.index` does them all); counts only",
             super::always,
             imp::evaluate
+        ),
+        cmd!(
+            query "faces.unnamed",
+            "Unnamed Faces",
+            [],
+            None,
+            "{limit?: 600} → {total, faces: [{photo, index, rect, view, suggestion: {name, score} | null}], ordered, ready} — the faces nobody has named; with recognition running, look-alikes are next to each other and a face the named ones recognise carries the name they suggest. `view` is the box to show the face by. Name them with `faces.nameFaces`",
+            super::always,
+            unnamed
+        ),
+        cmd!(
+            "faces.nameFaces",
+            "Name Faces",
+            [],
+            None,
+            "{faces: [{photo, index}], name} → {named, photos} — name (or, with a null or empty name, clear) many face regions as one undoable step; the sidecar is not touched",
+            super::always,
+            name_faces
         ),
         cmd!(
             query "faces.person",

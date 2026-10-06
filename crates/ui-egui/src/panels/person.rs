@@ -12,13 +12,10 @@ use crate::LightcraftApp;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
-/// A face's picture (points).
-const TILE: f32 = 104.0;
-const GAP: f32 = 10.0;
 const PAD: f32 = 20.0;
 const SECTION_H: f32 = 56.0;
 
-/// One face: which photo, which of its regions, where, and (for the "More" faces) how alike.
+/// One face: which photo, which of its regions, the box to show it by, and (for the "More" faces) how alike.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Face {
     pub photo: u64,
@@ -40,11 +37,12 @@ pub struct PersonPage {
 }
 
 fn face_of(v: &Value) -> Option<Face> {
-    let r = &v["rect"];
+    let rect = |r: &Value| Some(lightcraft_geom::Rect { x0: r["x0"].as_f64()?, y0: r["y0"].as_f64()?, x1: r["x1"].as_f64()?, y1: r["y1"].as_f64()? });
     Some(Face {
         photo: v["photo"].as_u64()?,
         index: usize::try_from(v["index"].as_u64()?).ok()?,
-        rect: lightcraft_geom::Rect { x0: r["x0"].as_f64()?, y0: r["y0"].as_f64()?, x1: r["x1"].as_f64()?, y1: r["y1"].as_f64()? },
+        // shown by the detector's box when the scan has one: every face equally close
+        rect: rect(&v["view"]).or_else(|| rect(&v["rect"]))?,
         score: v["score"].as_f64().unwrap_or(0.0) as f32,
     })
 }
@@ -137,11 +135,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         None
     };
     let ppp = ui.ctx().pixels_per_point();
+    let edge = super::people::tile_edge(app.ui.thumb_size);
     let mut hit: Option<(Hit, Face)> = None;
     egui::ScrollArea::vertical().auto_shrink(false).show_viewport(ui, |ui, viewport| {
         let width = ui.available_width();
-        let cols = (((width - PAD * 2.0 + GAP) / (TILE + GAP)).floor() as usize).max(1);
-        let row_h = TILE + GAP;
+        let cols = super::people::columns(width, edge);
+        let row_h = edge + super::people::TILE_GAP;
         let confirmed_rows = page.confirmed.len().div_ceil(cols);
         let more_rows = more.len().div_ceil(cols);
         let more_top = PAD + confirmed_rows as f32 * row_h + 12.0;
@@ -155,8 +154,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         for row in visible(PAD, confirmed_rows) {
             for col in 0..cols {
                 let Some(f) = page.confirmed.get(row * cols + col) else { break };
-                let min = area.min + vec2(PAD + col as f32 * (TILE + GAP), PAD + row as f32 * row_h);
-                if let Hit::Open = tile(app, ui, Rect::from_min_size(min, vec2(TILE, TILE)), f, ppp, false, &shown_name) {
+                let min = area.min + vec2(PAD + col as f32 * (edge + super::people::TILE_GAP), PAD + row as f32 * row_h);
+                if let Hit::Open = tile(app, ui, Rect::from_min_size(min, vec2(edge, edge)), f, ppp, false, &shown_name) {
                     hit = Some((Hit::Open, f.clone()));
                 }
             }
@@ -179,8 +178,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         for row in visible(grid_top, more_rows) {
             for col in 0..cols {
                 let Some(f) = more.get(row * cols + col) else { break };
-                let min = area.min + vec2(PAD + col as f32 * (TILE + GAP), grid_top + row as f32 * row_h);
-                match tile(app, ui, Rect::from_min_size(min, vec2(TILE, TILE)), f, ppp, true, &shown_name) {
+                let min = area.min + vec2(PAD + col as f32 * (edge + super::people::TILE_GAP), grid_top + row as f32 * row_h);
+                match tile(app, ui, Rect::from_min_size(min, vec2(edge, edge)), f, ppp, true, &shown_name) {
                     Hit::Confirm => hit = Some((Hit::Confirm, (*f).clone())),
                     Hit::Dismiss => hit = Some((Hit::Dismiss, (*f).clone())),
                     _ => {}
@@ -218,7 +217,7 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, f: &Face, ppp: f32,
     let hovered = resp.hovered() || x_resp.as_ref().is_some_and(|x| x.hovered());
     let p = ui.painter();
     p.rect_filled(r, 3.0, t.canvas);
-    if let Some(job) = app.session.face_job(lightcraft_catalog::PhotoId(f.photo), f.rect, (TILE * ppp).ceil() as usize)
+    if let Some(job) = app.session.face_job(lightcraft_catalog::PhotoId(f.photo), f.rect, (r.width() * ppp).ceil() as usize)
         && let Some(tex) = app.renderer.variant(job)
     {
         p.image(tex.tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
