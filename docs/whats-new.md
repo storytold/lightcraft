@@ -8,6 +8,9 @@
 - Luminar looks: `.lmp` files and `.mplumpack` collections import as presets (grouped by collection); the sliders
   with a counterpart here come along, the rest is listed.
 - 23 new built-in presets: Portrait, Landscape, Urban, Food, Seasons, Vintage and B&W toners.
+- A preset looks the same whatever colour space you export to: tone curves (parametric, point and red/green/blue)
+  now run in one fixed curve space instead of the export's (an XMP preset on an iPhone ProRAW, sRGB vs Display P3:
+  mean ΔE2000 0.65 → 0.002).
 - Importing XMP presets no longer lists bookkeeping fields (`Cluster`, `SortName`, `SupportsAmount2`, the as-shot
   white, empty Point Color slots…) as settings that couldn't be carried over.
 - A preset whose lens-profile switch is off no longer turns off the lens corrections built into a DNG (iPhone ProRAW

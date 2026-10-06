@@ -10,8 +10,9 @@
 //! 2. scene-linear — white balance, exposure, dehaze, local tone (highlights/shadows), texture,
 //!    clarity, sharpening, local adjustments (masks)
 //! 3. tone map — contrast / whites / blacks filmic curve on luminance, highlight desaturation
-//! 4. colour — vibrance, saturation, colour mixer, colour grading, B&W (OkLCh)
-//! 5. display — gamut map to the output space (sRGB unless [`RenderRequest::space`] says otherwise), encode, tone curves (parametric + point), vignette, grain
+//! 4. colour — vibrance, saturation, colour mixer, colour grading, B&W (OkLCh); vignette
+//! 5. tone curves (parametric + point) in a fixed curve space (see [`finish`]), whatever the output
+//! 6. display — gamut map to the output space (sRGB unless [`RenderRequest::space`] says otherwise), encode, grain
 //!
 //! Spatial parameters are specified relative to the image's long edge, so a 400 px preview and a
 //! 60 MP export look alike. Sharpening's radius is the exception: it is in source pixels (scaled

@@ -284,9 +284,10 @@ fn refine_saturation_tames_a_contrast_curve() {
     s.curve.refine_saturation = 0.0;
     let refined = render(&src, &info, &s, &req).image.data[0];
     assert!(sat(full) > sat(refined), "{flat:?} {full:?} {refined:?}");
-    // the curve's tone change stays
-    let y = |p: [u8; 4]| 0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32;
-    assert!((y(full) - y(refined)).abs() < 2.0);
+    // the curve's tone change stays: same luminance (measured on the 8-bit sRGB result)
+    let lin = |v: u8| lightcraft_color::transfer::srgb_to_linear(v as f32 / 255.0);
+    let y = |p: [u8; 4]| 0.2126 * lin(p[0]) + 0.7152 * lin(p[1]) + 0.0722 * lin(p[2]);
+    assert!((y(full) / y(refined) - 1.0).abs() < 0.04, "{flat:?} {full:?} {refined:?}");
 }
 
 #[test]
@@ -329,6 +330,40 @@ fn soft_proof_maps_into_the_proof_gamut_and_flags_what_does_not_fit() {
             .image;
     assert!(blue(&pro) > 0);
     assert!(red(&pro) < n, "ProPhoto holds more than sRGB");
+}
+
+#[test]
+fn tone_curves_do_not_depend_on_the_output_space() {
+    use crate::{DeepSamples, OutputDepth, OutputSpace};
+    use lightcraft_geom::Point;
+    let info = SourceInfo { raw: true, ..Default::default() };
+    // moderate colours that stay inside every output gamut (so no output gamut mapping differs)
+    let cols = [[0.12, 0.05, 0.03], [0.03, 0.07, 0.12], [0.05, 0.1, 0.04], [0.2, 0.17, 0.1], [0.02, 0.02, 0.025], [0.25, 0.12, 0.18]];
+    let src = Rgb32f::from_fn(6, 1, |x, _| cols[x]);
+    let pts = |v: &[(f64, f64)]| v.iter().map(|&(x, y)| Point::new(x, y)).collect::<Vec<_>>();
+    let mut s = DevelopSettings::default();
+    let xyz = |s: &DevelopSettings, space: OutputSpace| -> Vec<[f64; 3]> {
+        let req = RenderRequest { space, depth: OutputDepth::F32Linear, ..RenderRequest::fit(6, 1) };
+        let r = render(&src, &info, s, &req);
+        let Some(DeepSamples::F32(v)) = r.deep.map(|d| d.samples) else { panic!("no float samples") };
+        let m = space.rgb_space().to_xyz();
+        v.chunks(3).map(|c| m.apply([c[0] as f64, c[1] as f64, c[2] as f64])).collect()
+    };
+    let flat = xyz(&s, OutputSpace::Srgb);
+    s.curve.master = pts(&[(0.0, 0.0), (0.25, 0.18), (0.75, 0.85), (1.0, 1.0)]);
+    s.curve.red = pts(&[(0.0, 0.0), (0.5, 0.6), (1.0, 1.0)]);
+    s.curve.blue = pts(&[(0.0, 0.08), (1.0, 0.92)]);
+    s.curve.shadows = 30.0;
+    s.curve.refine_saturation = 60.0;
+    let srgb = xyz(&s, OutputSpace::Srgb);
+    let moved = srgb.iter().zip(&flat).map(|(a, b)| (0..3).map(|k| (a[k] - b[k]).abs()).fold(0.0, f64::max)).fold(0.0, f64::max);
+    assert!(moved > 0.02, "the curves change the colours ({moved})");
+    for space in [OutputSpace::DisplayP3, OutputSpace::AdobeRgb] {
+        let other = xyz(&s, space);
+        for (a, b) in srgb.iter().zip(&other) {
+            assert!((0..3).all(|k| (a[k] - b[k]).abs() < 1.5e-3), "{space:?}: {a:?} vs {b:?}");
+        }
+    }
 }
 
 /// Mean absolute 8-bit difference.
