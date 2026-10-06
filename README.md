@@ -260,6 +260,9 @@ lightcraft --control 7980 ~/Pictures/trip
 - **Pure Rust, no C.** Our own RAW decoders (DNG, Canon CR2, Sony ARW, Nikon NEF, Fujifilm RAF incl. X-Trans,
   Panasonic RW2, Pentax PEF, Olympus ORF), our own colour science, our own pipeline. JPEG, PNG, TIFF, WebP, PSD
   composites and JPEG XL open today.
+- **Native on macOS, Windows and Linux**, and in the browser through WebAssembly, from one Rust codebase. Windows
+  builds come for x64, x86 and ARM64 (Windows on ARM, no emulation); every ARM64 change is tested on ARM64 hardware
+  in CI.
 - **Scene-referred & wide-gamut.** Linear Rec.2020 float internally, Bradford-adapted white balance, gamut mapping
   instead of clipping, a filmic shoulder for raw and pixel-exact pass-through for JPEGs you haven't touched.
 - **Resolution-independent edits.** Radii and brush sizes are relative to the image, so a 400 px preview, your

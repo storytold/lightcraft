@@ -1,0 +1,140 @@
+# Windows on ARM (#135): package the ARM64 release the way release.yml does (cross-compiled on an
+# x64 runner, unsigned here), then install that MSI on a Windows 11 ARM64 runner and run it, and
+# run the test suite natively on ARM64.
+name: Windows ARM64
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - "**/Cargo.toml"
+      - "**/build.rs"
+      - .github/workflows/windows-arm64.yml
+      - packaging/windows/**
+  schedule:
+    - cron: "41 4 * * 1" # weekly, so drift in the runner images shows up
+  workflow_dispatch:
+
+concurrency:
+  group: windows-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  package:
+    name: package (cross-compiled on x64)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          toolchain: stable
+          targets: aarch64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: windows-arm64-package
+      - name: Install WiX
+        shell: pwsh
+        run: dotnet tool install --global wix --version 5.0.2
+      - name: Build and package (unsigned)
+        shell: pwsh
+        env:
+          DIST: ${{ github.workspace }}\dist\arm64
+        run: ./packaging/windows/package.ps1 -Arch arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lightcraft-windows-arm64
+          path: dist/arm64/*
+          if-no-files-found: error
+          retention-days: 7
+
+  install:
+    name: install and run on ARM64
+    needs: package
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: lightcraft-windows-arm64
+          path: dist
+      - name: Install the MSI, check it, run it, uninstall it
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msi = (Get-ChildItem dist/*.msi | Select-Object -First 1).FullName
+          $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/l*v', 'install.log' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content install.log -Tail 60; throw "msiexec /i exited $($p.ExitCode)" }
+          $dir = Join-Path $env:ProgramFiles 'LightCraft'
+          foreach ($exe in 'lightcraft.exe', 'lightcraft-cli.exe') {
+            $path = Join-Path $dir $exe
+            if (-not (Test-Path $path)) { Get-ChildItem -Recurse $env:ProgramFiles -Filter $exe | Select-Object -First 3; throw "$exe not installed in $dir" }
+            $bytes = [System.IO.File]::ReadAllBytes($path)
+            $machine = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3C) + 4)
+            if ($machine -ne 0xAA64) { throw "$exe is for machine 0x$('{0:X}' -f $machine), not ARM64" }
+            Write-Output "ok $path (ARM64)"
+          }
+          # The installed CLI runs natively: decode raw (DNG), develop, merge, export and render the UI.
+          $cli = Join-Path $dir 'lightcraft-cli.exe'
+          # stdout is returned (some of it is JSON); stderr goes straight to the log.
+          function Invoke-Cli { $out = & $cli @args | Out-String; if ($LASTEXITCODE -ne 0) { Write-Output $out; throw "lightcraft-cli $args exited $LASTEXITCODE" }; return $out }
+          function Assert-Image([string] $Path, [byte[]] $Magic) {
+            if (-not (Test-Path $Path)) { throw "$Path was not written" }
+            $head = [System.IO.File]::ReadAllBytes($Path)[0..($Magic.Length - 1)]
+            if (Compare-Object $head $Magic -SyncWindow 0) { throw "$Path is not the expected image format" }
+            Write-Output "ok $Path ($((Get-Item $Path).Length) bytes)"
+          }
+          $jpeg = [byte[]](0xFF, 0xD8, 0xFF); $png = [byte[]](0x89, 0x50, 0x4E, 0x47); $tiff = [byte[]](0x49, 0x49, 0x2A, 0x00)
+          if ((Invoke-Cli --version) -notmatch '^lightcraft-cli \d+\.\d+\.\d+') { throw 'unexpected --version output' }
+          if ((Invoke-Cli --help) -notmatch 'USAGE') { throw 'unexpected --help output' }
+          $commands = Invoke-Cli commands --json | ConvertFrom-Json
+          if ($commands.id -notcontains 'app.export') { throw 'commands --json does not list app.export' }
+          if ((Invoke-Cli controls) -notmatch 'light\.exposure') { throw 'controls does not list light.exposure' }
+          Write-Output "ok lightcraft-cli: $($commands.Count) commands"
+          New-Item -ItemType Directory -Force smoke | Out-Null
+          Invoke-Cli synth-merge hdr -o smoke\hdr | Out-Null
+          $dngs = (Get-ChildItem smoke\hdr\bracket-*.dng | Sort-Object Name).FullName
+          if ($dngs.Count -ne 3) { throw "synth-merge wrote $($dngs.Count) DNGs, expected 3" }
+          foreach ($d in $dngs) { Assert-Image $d $tiff }
+          Invoke-Cli render $dngs[1] -o smoke\render.jpg --set light.exposure=0.5 --set color.vibrance=20 --size 800 | Out-Null
+          Assert-Image smoke\render.jpg $jpeg
+          $merged = Invoke-Cli merge hdr @dngs | ConvertFrom-Json
+          Assert-Image $merged.path $tiff
+          $runOut = Invoke-Cli run --import $merged.path develop.set control=light.exposure value=-0.5 app.export path=smoke\hdr.png longEdge=600
+          if ($runOut -match '"ok":false') { Write-Output $runOut; throw 'run reported a failed command' }
+          Assert-Image smoke\hdr.png $png
+          Invoke-Cli run --demo develop.set control=light.exposure value=0.7 develop.auto app.export path=smoke\demo.jpg longEdge=800 | Out-Null
+          Assert-Image smoke\demo.jpg $jpeg
+          Invoke-Cli snapshot --demo -o smoke\ui.png --size 1200x800 | Out-Null
+          Assert-Image smoke\ui.png $png
+          Write-Output 'ok lightcraft-cli: decoded, developed, merged and exported raws and rendered the UI on ARM64'
+          $p = Start-Process msiexec.exe -ArgumentList '/x', "`"$msi`"", '/qn' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec /x exited $($p.ExitCode)" }
+          if (Test-Path (Join-Path $dir 'lightcraft.exe')) { throw 'uninstall left lightcraft.exe behind' }
+          Write-Output 'ok uninstalled'
+
+  test:
+    name: test (native ARM64)
+    runs-on: windows-11-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: windows-arm64-test
+      - name: Test
+        run: cargo test --workspace --locked
