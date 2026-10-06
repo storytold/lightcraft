@@ -295,6 +295,9 @@ impl Session {
         {
             log::error!("library: {e}");
         }
+        // what was learned about the old library's faces is saved, and none of it carries over (photo ids are per library)
+        #[cfg(feature = "recognition")]
+        self.faces.library_changed();
         let (mut journal, catalog, report) = Journal::open(catalog)?;
         self.catalog = catalog;
         self.undo.clear();

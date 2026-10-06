@@ -864,6 +864,8 @@ pub struct Caches {
     pub faces_next_pump: f64,
     /// Name suggestions for the photo in the loupe: (photo, catalog revision, faces indexed, suggestions by region).
     pub face_hints: Option<(u64, u64, u64, std::sync::Arc<panels::faces::Hints>)>,
+    /// The open person page: (name, catalog revision, faces indexed, when it was asked for, the page).
+    pub person_page: Option<(String, u64, u64, f64, std::sync::Arc<panels::person::PersonPage>)>,
     person_names: Option<(u64, std::sync::Arc<Vec<String>>)>,
     /// The grid's date runs, layout and indexes (by the visible list's generation).
     pub grid: panels::grid::GridCache,

@@ -15,6 +15,7 @@ pub mod library_problem;
 pub mod masking;
 pub mod notices;
 pub mod people;
+pub mod person;
 pub mod presets;
 pub mod profiles;
 pub mod right;

@@ -1,5 +1,6 @@
 //! People: a card per person named on faces (read from XMP): a close-up of their largest face, the
-//! name and how many photos they are in. A click shows that person's photos in the grid.
+//! name and how many photos they are in. A click opens that person's page (`person.rs`): only their cropped faces,
+//! and the faces that look like them.
 //!
 //! Only the rows on screen ask for a face render (the engine caches them, memory and disk).
 
@@ -19,6 +20,9 @@ const PAD: f32 = 20.0;
 const HEADER_H: f32 = 44.0;
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    if let Some(name) = app.ui.person_page.clone() {
+        return super::person::show(app, ui, &name);
+    }
     let t = Tokens::get(ui.ctx());
     let people = app.caches.people(&app.session.catalog, &app.session.filter);
     let (head, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEADER_H), Sense::hover());
@@ -80,8 +84,7 @@ fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &Person, r: Rect, pp
     p.text(pos2(r.left() + 2.0, face.bottom() + 14.0), Align2::LEFT_CENTER, name, t.semibold(13.0), t.text);
     let photos = if person.count == 1 { "1 photo".to_string() } else { format!("{} photos", person.count) };
     p.text(pos2(r.left() + 2.0, face.bottom() + 32.0), Align2::LEFT_CENTER, photos, t.font(12.0), t.text_dim);
-    if resp.on_hover_text(format!("{} — show their photos", person.name)).clicked() {
-        let _ = app.run("library.filter", json!({"person": person.name}));
-        let _ = app.run("view.photoGrid", json!({}));
+    if resp.on_hover_text(format!("{} — their faces", person.name)).clicked() {
+        let _ = app.run("view.person", json!({"name": person.name}));
     }
 }

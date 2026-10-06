@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use crate::Session;
 
-fn temp(name: &str) -> PathBuf {
+pub(crate) fn temp(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("lc-facerec-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
@@ -19,7 +19,7 @@ fn temp(name: &str) -> PathBuf {
 }
 
 /// A demo session with a tiny model installed and chosen.
-fn setup(d: &std::path::Path, dim: u64) -> (Session, String) {
+pub(crate) fn setup(d: &std::path::Path, dim: u64) -> (Session, String) {
     let mut s = Session::with_demo();
     s.face_models_dir = Some(d.join("models"));
     let model = d.join(format!("tiny{dim}.onnx"));
@@ -30,17 +30,17 @@ fn setup(d: &std::path::Path, dim: u64) -> (Session, String) {
     (s, id)
 }
 
-fn region(x: f64, name: Option<&str>) -> Region {
+pub(crate) fn region(x: f64, name: Option<&str>) -> Region {
     Region { rect: Rect { x0: x, y0: 0.2, x1: x + 0.25, y1: 0.6 }, kind: RegionKind::Face, name: name.map(str::to_string), description: None }
 }
 
-fn set_regions(s: &mut Session, id: PhotoId, regions: Vec<Region>) {
+pub(crate) fn set_regions(s: &mut Session, id: PhotoId, regions: Vec<Region>) {
     let mut meta = s.catalog.photo(id).unwrap().meta.clone();
     meta.regions = regions;
     s.commit("setup", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
 }
 
-fn two_photos(s: &Session) -> (PhotoId, PhotoId) {
+pub(crate) fn two_photos(s: &Session) -> (PhotoId, PhotoId) {
     let mut ids = s.catalog.photos().map(|p| p.id).collect::<Vec<_>>();
     ids.sort();
     (ids[0], ids[1])
@@ -248,19 +248,80 @@ fn the_background_pump_saves_what_it_embeds_for_the_next_launch() {
     let (a, b) = two_photos(&s);
     set_regions(&mut s, a, vec![region(0.1, Some("Ann")), region(0.5, None)]);
     set_regions(&mut s, b, vec![region(0.3, None)]);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    while std::time::Instant::now() < deadline && s.faces.index.len() < 3 {
-        s.execute("faces.pump", &json!({})).unwrap();
+    let photos = s.catalog.photos().count();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let mut last = json!(null);
+    while std::time::Instant::now() < deadline {
+        last = s.execute("faces.pump", &json!({})).unwrap();
+        if last["pendingPhotos"] == 0 && s.faces.index.len() == 3 && s.faces.scanned.len() == photos - 2 {
+            break;
+        }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    assert_eq!(s.faces.index.len(), 3);
+    assert_eq!((s.faces.index.len(), s.faces.scanned.len()), (3, photos - 2), "{last}");
     let (tag, path) = (s.faces.index.tag.clone(), s.faces.index.path.clone().unwrap());
     assert!(path.file_name().unwrap().to_string_lossy().starts_with("face-embeddings-custom-"), "one cache file per model: {}", path.display());
-    // the first batch is written at once; whatever is left is written when the session ends, so a launch never redoes work
+    // the first batch is written at once; whatever is left is written when the session ends, so a launch never redoes
+    // work: neither the embeddings nor the list of photos already searched for faces
     s.close_library().unwrap();
     drop(s);
     let mut again = crate::faces_index::Index::default();
     again.reset(&tag, 64, Some(path));
     assert_eq!(again.len(), 3);
+    let mut searched = crate::faces_index::Scanned::default();
+    searched.reset(Some(lib.join("face-scanned.bin")));
+    assert_eq!(searched.len(), photos - 2, "every photo without faces is remembered as searched");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn faces_person_lists_a_persons_faces_and_looks_for_more_only_while_recognition_runs() {
+    let d = temp("person");
+    let (mut s, _) = setup(&d, 64);
+    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    let (a, b) = two_photos(&s);
+    set_regions(&mut s, a, vec![region(0.1, Some("Ann")), region(0.5, Some("Bob"))]);
+    set_regions(&mut s, b, vec![region(0.1, None), region(0.5, Some("ann"))]);
+    let unit = |parts: &[(usize, f32)]| {
+        let mut v = vec![0.0f32; 64];
+        for (i, x) in parts {
+            v[*i] = *x;
+        }
+        let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        v.iter().map(|x| x / n).collect::<Vec<f32>>()
+    };
+    for (id, x, v) in [(a, 0.1, unit(&[(0, 1.0)])), (a, 0.5, unit(&[(1, 1.0)])), (b, 0.1, unit(&[(0, 0.9), (1, 0.1)])), (b, 0.5, unit(&[(0, 1.0)]))] {
+        s.faces.index.insert(id.0, &region(x, None).rect, v);
+    }
+    // the name is matched without regard to case or surrounding spaces; every face is listed, wherever it is
+    let r = s.execute("faces.person", &json!({"name": "  ANN "})).unwrap();
+    assert_eq!((r["name"].clone(), r["total"].clone()), (json!("Ann"), json!(2)));
+    let mut at: Vec<(u64, u64)> =
+        r["confirmed"].as_array().unwrap().iter().map(|f| (f["photo"].as_u64().unwrap(), f["index"].as_u64().unwrap())).collect();
+    at.sort();
+    let mut want = vec![(a.0, 0), (b.0, 1)];
+    want.sort();
+    assert_eq!(at, want);
+    assert!(r["confirmed"].as_array().unwrap().iter().any(|f| f["rect"]["x0"] == 0.1 && f["rect"]["y1"] == 0.6));
+    // recognition is on (installing the model switched it on): the unnamed face that looks like Ann is offered
+    assert_eq!(r["ready"], true);
+    let more = r["more"].as_array().unwrap();
+    assert_eq!((more.len(), more[0]["photo"].clone(), more[0]["index"].clone()), (1, json!(b.0), json!(0)), "{r}");
+    assert!(more[0]["score"].as_f64().unwrap() > 0.9);
+    // confirming it moves it from one list to the other (and is one undo step)
+    s.execute("faces.setName", &json!({"id": b.0, "index": 0, "name": "Ann"})).unwrap();
+    let r = s.execute("faces.person", &json!({"name": "Ann"})).unwrap();
+    assert_eq!((r["total"].clone(), r["more"].as_array().unwrap().len()), (json!(3), 0));
+    // switched off, the faces are still listed but nothing is searched for
+    s.execute("faces.enable", &json!({"enabled": false})).unwrap();
+    let r = s.execute("faces.person", &json!({"name": "Ann"})).unwrap();
+    assert_eq!((r["total"].clone(), r["ready"].clone(), r["more"].as_array().unwrap().len()), (json!(3), json!(false), 0));
+    // nobody by that name, and bad input, are plain answers and errors
+    let r = s.execute("faces.person", &json!({"name": "Nobody"})).unwrap();
+    assert_eq!((r["total"].clone(), r["confirmed"].as_array().unwrap().len(), r["ready"].clone()), (json!(0), 0, json!(false)));
+    for bad in [json!({}), json!({"name": ""}), json!({"name": "   "}), json!({"name": 7})] {
+        assert!(s.execute("faces.person", &bad).is_err(), "{bad}");
+    }
+    assert!(s.execute("faces.person", &json!({"name": "Ann", "more": u64::MAX})).is_ok());
     let _ = std::fs::remove_dir_all(&d);
 }

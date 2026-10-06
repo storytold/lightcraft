@@ -500,6 +500,75 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A click on a person's card opens their page, which shows only cropped faces (one per face, not per photo); a click
+    /// on one opens its photo; Back, the People button and Escape return to everyone.
+    #[test]
+    fn a_persons_page_shows_their_faces_and_back_returns_to_everyone() {
+        use crate::state::ViewMode;
+        use lightcraft_catalog::Op;
+        let mut h = demo([1400.0, 900.0]);
+        let t = Duration::from_secs(10);
+        let ids: Vec<_> = h.app.session.catalog.photos().map(|p| p.id).take(3).collect();
+        let face = |x: f64, name: &str| lightcraft_meta::Region {
+            rect: lightcraft_geom::Rect { x0: x, y0: 0.2, x1: x + 0.25, y1: 0.6 },
+            kind: lightcraft_meta::RegionKind::Face,
+            name: Some(name.to_string()),
+            description: None,
+        };
+        // Jane Doe twice in the first photo and once in the second; John Roe in the third
+        for (id, regions) in [
+            (ids[0], vec![face(0.1, "Jane Doe"), face(0.5, "jane doe")]),
+            (ids[1], vec![face(0.3, "Jane Doe")]),
+            (ids[2], vec![face(0.3, "John Roe")]),
+        ] {
+            let mut meta = h.app.session.catalog.photo(id).unwrap().meta.clone();
+            meta.regions = regions;
+            h.app.session.commit("setup", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+        }
+        let open_people = |h: &mut Headless| {
+            h.request("engine.execute", json!({"command": "view.people"}), t);
+            h.settle(SETTLE);
+            h.step();
+        };
+        open_people(&mut h);
+        assert_eq!((h.app.ui.view, h.app.ui.person_page.clone()), (ViewMode::People, None));
+        // the card opens the page: a face tile for each of the three faces, not a tile per photo
+        let r = h.request("ui.clickWidget", json!({"id": "person:Jane Doe"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+        assert_eq!((h.app.ui.view, h.app.ui.person_page.as_deref()), (ViewMode::People, Some("Jane Doe")));
+        let widgets = h.request("ui.widgets", json!({}), t).to_string();
+        for (id, index) in [(ids[0], 0), (ids[0], 1), (ids[1], 0)] {
+            assert!(widgets.contains(&format!("\"person-face:{}:{index}\"", id.0)), "a tile for each face: {widgets}");
+        }
+        assert!(!widgets.contains(&format!("\"person-face:{}:0\"", ids[2].0)), "someone else's face is not on the page");
+        // a face opens its photo in the detail view
+        h.request("ui.clickWidget", json!({"id": format!("person-face:{}:0", ids[1].0)}), t);
+        h.step();
+        h.step();
+        assert_eq!((h.app.ui.view, h.app.session.active()), (ViewMode::Detail, Some(ids[1])));
+        // back to the page, then each way out of it
+        h.request("engine.execute", json!({"command": "view.person", "params": {"name": "Jane Doe"}}), t);
+        h.step();
+        assert_eq!((h.app.ui.view, h.app.ui.person_page.as_deref()), (ViewMode::People, Some("Jane Doe")));
+        let r = h.request("ui.clickWidget", json!({"id": "person:back"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+        assert_eq!(h.app.ui.person_page, None);
+        h.request("engine.execute", json!({"command": "view.person", "params": {"name": "Jane Doe"}}), t);
+        h.request("ui.key", json!({"key": "escape"}), t);
+        h.step();
+        assert_eq!((h.app.ui.view, h.app.ui.person_page.clone()), (ViewMode::People, None), "Escape goes back to everyone");
+        h.request("engine.execute", json!({"command": "view.person", "params": {"name": "John Roe"}}), t);
+        open_people(&mut h);
+        assert_eq!(h.app.ui.person_page, None, "the People button shows everyone");
+        // a missing or empty name is refused
+        assert_eq!(h.request("engine.execute", json!({"command": "view.person", "params": {}}), t)["ok"], false);
+        assert_eq!(h.request("engine.execute", json!({"command": "view.person", "params": {"name": "  "}}), t)["ok"], false);
+    }
+
     /// Profile browser: live variant thumbnails, hover previews in the loupe without touching the
     /// photo or its history, click applies, the star toggles the favourite.
     #[test]

@@ -430,6 +430,11 @@ fn enable(s: &mut Session, p: &Value) -> Result<Value> {
     let mut st = read_settings(&dir);
     st.enabled = p.get("enabled").and_then(Value::as_bool).unwrap_or(!st.enabled);
     write_settings(&dir, &st)?;
+    // the background scan notices at once, not within the second it trusts its last look
+    #[cfg(feature = "recognition")]
+    {
+        s.faces.enabled_seen = None;
+    }
     Ok(json!({"enabled": st.enabled}))
 }
 

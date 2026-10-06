@@ -381,6 +381,16 @@ impl Session {
         Ok(())
     }
 
+    /// Apply an op that is LightCraft's own bookkeeping rather than something the user did (faces found by the background
+    /// scan): journaled like any op, but not an undo step, and it leaves the redo stack alone.
+    #[cfg(feature = "recognition")]
+    pub(crate) fn apply_system(&mut self, op: Op) -> Result<()> {
+        let fwd = op.clone();
+        self.catalog.apply(op)?;
+        self.pending_log.push(fwd);
+        Ok(())
+    }
+
     /// Leaving photo `id` after editing it: keep its settings as an automatic version (when they
     /// differ from its latest version; at most [`AUTO_VERSIONS`] auto versions, oldest dropped).
     /// Saved with the library but not an undo step.

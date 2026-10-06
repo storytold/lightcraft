@@ -107,12 +107,12 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             let left = app.caches.faces_pending;
             let status = if left > 0 {
                 format!(
-                    "Learning your faces in the background: {} embedded, {left} photo{} to go.",
+                    "Scanning your photos for faces in the background: {} faces learned, {left} photo{} to go.",
                     app.caches.faces_indexed,
                     if left == 1 { "" } else { "s" }
                 )
             } else {
-                format!("{} faces learned; names are suggested as you browse.", app.caches.faces_indexed)
+                format!("{} faces learned. Open a person in People to see more photos of them.", app.caches.faces_indexed)
             };
             hint(ui, t, &status);
         }

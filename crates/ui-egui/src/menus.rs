@@ -22,6 +22,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.compare", "Compare", Some("Shift+C"), "View"),
     ("view.survey", "Survey", Some("N"), "View"),
     ("view.people", "People", None, "View"),
+    ("view.person", "Show Person", None, ""),
     ("view.faceBoxes", "Face Boxes", None, "View"),
     ("view.reference", "Reference View", Some("Shift+R"), "View"),
     ("photo.setReference", "Set as Reference Photo", None, ""),
@@ -272,7 +273,17 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         "view.people" => {
             app.ui.view = ViewMode::People;
+            app.ui.person_page = None;
             Ok(json!({"people": app.session.catalog.people().len()}))
+        }
+        "view.person" => {
+            // {name}: one person's page in the People view: their faces, and the faces that look like them
+            let Some(name) = p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()) else {
+                return Some(Err("view.person: missing `name`".into()));
+            };
+            app.ui.view = ViewMode::People;
+            app.ui.person_page = Some(name.to_string());
+            Ok(json!({"person": name}))
         }
         "view.survey" => {
             app.ui.view = ViewMode::Survey;
@@ -319,6 +330,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 app.ui.slideshow = None;
             } else if !app.ui.tool.is_empty() {
                 app.ui.tool.clear();
+            } else if app.ui.view == ViewMode::People && app.ui.person_page.is_some() {
+                app.ui.person_page = None;
             } else if matches!(app.ui.view, ViewMode::Compare | ViewMode::Survey) {
                 app.ui.view = ViewMode::Detail;
             } else if app.ui.view == ViewMode::Detail {

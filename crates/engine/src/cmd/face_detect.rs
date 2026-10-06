@@ -21,7 +21,7 @@ use crate::{Result, Session};
 const C: &str = "faces.detect";
 /// Regions made by this command say so in their description; only those are replaced on a new run.
 pub(crate) const MARK: &str = "Detected by ";
-const LABEL: &str = "YuNet 2023mar";
+pub(crate) const LABEL: &str = "YuNet 2023mar";
 /// Long edge of the picture the detector looks at (it shrinks it to its own 640 anyway).
 const LOOK_EDGE: usize = 1280;
 /// How much a detection must overlap a region the photo already has to count as the same face.

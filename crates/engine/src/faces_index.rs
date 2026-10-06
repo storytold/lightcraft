@@ -189,6 +189,113 @@ impl Drop for Index {
     }
 }
 
+const SCAN_MAGIC: &[u8; 4] = b"LCFS";
+const SCAN_VERSION: u8 = 1;
+/// The detector a search was made with: a record made by another one is ignored (a better detector may find more).
+pub(crate) const SCAN_TAG: &str = "yunet-2023mar";
+/// Largest record file we read.
+const SCAN_MAX_FILE: u64 = 64 << 20;
+
+/// The photos the detector has already searched for faces, so each is searched once, however many times LightCraft
+/// starts. Kept beside the library (`face-scanned.bin`: a header naming the detector, then photo ids, appended to).
+#[derive(Default)]
+pub(crate) struct Scanned {
+    set: std::collections::HashSet<u64>,
+    unsaved: Vec<u64>,
+    path: Option<PathBuf>,
+    file_matches: bool,
+}
+
+impl Scanned {
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    pub fn contains(&self, photo: u64) -> bool {
+        self.set.contains(&photo)
+    }
+
+    pub fn len(&self) -> usize {
+        self.set.len()
+    }
+
+    pub fn insert(&mut self, photo: u64) {
+        if self.set.insert(photo) {
+            self.unsaved.push(photo);
+        }
+    }
+
+    pub fn has_unsaved(&self) -> bool {
+        !self.unsaved.is_empty()
+    }
+
+    /// Start over with the record at `path` (written first: what was not yet saved is not lost).
+    pub fn reset(&mut self, path: Option<PathBuf>) {
+        let _ = self.save();
+        self.set.clear();
+        self.unsaved.clear();
+        self.file_matches = false;
+        self.path = path;
+        if let Some(p) = self.path.clone() {
+            self.load(&p);
+        }
+    }
+
+    fn header() -> Vec<u8> {
+        let mut h = Vec::new();
+        h.extend_from_slice(SCAN_MAGIC);
+        h.push(SCAN_VERSION);
+        h.extend_from_slice(&(SCAN_TAG.len() as u16).to_le_bytes());
+        h.extend_from_slice(SCAN_TAG.as_bytes());
+        h
+    }
+
+    fn load(&mut self, path: &Path) {
+        let Ok(meta) = std::fs::metadata(path) else { return };
+        if meta.len() > SCAN_MAX_FILE {
+            return;
+        }
+        let Ok(bytes) = std::fs::read(path) else { return };
+        let head = Self::header();
+        let Some(rest) = bytes.strip_prefix(head.as_slice()) else { return };
+        self.file_matches = true;
+        // a half-written last id (a crash while appending) is ignored
+        self.set.extend(rest.as_chunks::<8>().0.iter().map(|c| u64::from_le_bytes(*c)));
+    }
+
+    /// Write what was added since the last save: appended when the file is this detector's, else the whole record
+    /// is written fresh (atomically). A failure is returned and the ids stay pending.
+    pub fn save(&mut self) -> std::io::Result<()> {
+        let Some(path) = self.path.clone() else {
+            self.unsaved.clear();
+            return Ok(());
+        };
+        if self.unsaved.is_empty() {
+            return Ok(());
+        }
+        if self.file_matches {
+            let mut f = std::fs::OpenOptions::new().append(true).open(&path)?;
+            let buf: Vec<u8> = self.unsaved.iter().flat_map(|id| id.to_le_bytes()).collect();
+            f.write_all(&buf)?;
+        } else {
+            let mut buf = Self::header();
+            buf.extend(self.set.iter().flat_map(|id| id.to_le_bytes()));
+            let part = path.with_extension("part");
+            std::fs::write(&part, &buf)?;
+            std::fs::rename(&part, &path)?;
+            self.file_matches = true;
+        }
+        self.unsaved.clear();
+        Ok(())
+    }
+}
+
+impl Drop for Scanned {
+    fn drop(&mut self) {
+        let _ = self.save();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,4 +404,28 @@ pub(crate) struct FacesState {
     pub queue_stamp: Option<u64>,
     /// When the index was last written to its cache file by the background pump.
     pub saved_at: Option<std::time::Instant>,
+    /// Bumped when another library is opened: what a worker was making for the old one is dropped.
+    pub epoch: u64,
+    /// Photos already searched for faces.
+    pub scanned: Scanned,
+    /// Photos that could not be searched this session (unreadable files): left alone until the next launch.
+    pub scan_failed: std::collections::HashSet<u64>,
+}
+
+impl FacesState {
+    /// Another library is being opened: what was learned about the old one is saved, and nothing of it is kept (photo
+    /// ids are only unique within a library). The loaded model stays; the index is reloaded for the new library.
+    pub fn library_changed(&mut self) {
+        self.index.reset("", 0, None);
+        self.scanned.reset(None);
+        self.scan_failed.clear();
+        self.embedder = None;
+        self.checked = None;
+        self.queue.clear();
+        self.queue_stamp = None;
+        self.in_flight.clear();
+        self.retry_at = None;
+        self.saved_at = None;
+        self.epoch = self.epoch.wrapping_add(1);
+    }
 }

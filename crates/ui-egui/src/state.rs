@@ -269,6 +269,12 @@ pub struct UiState {
     /// A face's name being typed in the loupe.
     #[serde(skip)]
     pub name_edit: Option<NameEdit>,
+    /// The person whose page the People view shows (their faces and the faces that look like them); `None`: everyone.
+    #[serde(skip)]
+    pub person_page: Option<String>,
+    /// "More" faces the user hid with ×, for this session: (photo, region index).
+    #[serde(skip)]
+    pub dismissed_faces: std::collections::HashSet<(u64, usize)>,
     /// Local sidebar locations hidden with “Remove from Local” (folders on disk are untouched).
     pub hidden_locations: Vec<String>,
     /// Copies opened in an external editor this session (reloaded when the window is focused
@@ -574,6 +580,8 @@ impl Default for UiState {
             show_counts: true,
             face_boxes: true,
             name_edit: None,
+            person_page: None,
+            dismissed_faces: Default::default(),
             hidden_locations: Vec::new(),
             dragging_control: None,
             external_edits: Vec::new(),

@@ -764,6 +764,17 @@ impl crate::Session {
         }
     }
 
+    /// The camera's embedded preview of a raw file, for the face scan. Faces are read from the unedited picture, so the
+    /// photo's edits do not matter, and the camera's own JPEG (oriented, display-ready) costs a fraction of decoding the
+    /// raw. `None` for anything else, and where the host installed no loader.
+    #[cfg(feature = "recognition")]
+    pub(crate) fn scan_preview_of(&self, p: &Photo) -> Option<(String, PreviewLoader)> {
+        match (&p.source, &self.media.preview_loader) {
+            (Source::File { path }, Some(l)) if p.kind == MediaKind::Raw => Some((path.clone(), l.clone())),
+            _ => None,
+        }
+    }
+
     /// Something to show in the loupe right away for `id` (see [`QuickJob`]): its cached view
     /// render, else the embedded preview of an unedited raw, else a cached or fresh thumbnail.
     pub fn quick_view_job(&mut self, id: PhotoId, max_edge: usize, apply_crop: bool) -> Option<QuickJob> {

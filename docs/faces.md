@@ -92,9 +92,35 @@ suggest names for the ones you have not:
   aligned using the detector's five landmarks (eyes, nose, mouth corners) when it finds the same face, and cut out by its box
   otherwise.
 - Everything stays on your computer. The embeddings (one short list of numbers per face) are cached in the library folder in
-  `face-embeddings.bin` and rebuilt if you choose another model; they are not part of the catalog and not written to XMP.
-- It works in the background on a separate thread, so the window stays responsive; a large library takes a while the
-  first time (about 0.3 to 1 second per photo with faces on a typical processor, depending on the model).
+  `face-embeddings-<model id>.bin`, one file per model, so switching models back and forth does not start over; they are
+  not part of the catalog and not written to XMP.
+
+### The background scan
+
+Turning recognition on starts a scan of the whole library, once, in the background:
+
+- A photo that already has face boxes (from XMP, or drawn, or named) has its faces embedded.
+- A photo with **no** face boxes at all is searched with the detector, and what it is sure of becomes that photo's unnamed
+  face boxes (marked "Detected by YuNet", so a manual Detect Faces replaces them), embedded in the same pass. Photos are
+  searched once: `face-scanned.bin` in the library folder remembers which, so a photo whose boxes you remove is not boxed
+  again. These boxes are LightCraft's own bookkeeping: not an undo step, never written to a sidecar.
+- Photos you have named faces in go first, then the rest. Raw files are read through the camera's embedded preview (much
+  faster than decoding the raw); everything else is rendered at 2048 pixels.
+- It runs on one to three worker threads (an eighth of the processor's threads; `LIGHTCRAFT_FACE_THREADS` sets it), each of
+  which holds a decoded photo of about 250 MB while it works. Nothing is throttled otherwise: it simply uses those threads
+  until it is done. On a 32-thread desktop it does about 6 photos a second (2.5 with one worker and decoding every raw);
+  Settings ▸ Faces shows how many photos are left. The first scan of a large library takes a while (10,000 photos: roughly
+  half an hour); after that only new photos are looked at.
+- Opening another library starts a fresh scan state; nothing learned about one library is used in another.
+
+### A person's page
+
+In **People**, a click on a person opens their page: **only cropped faces**, never whole photos. First the faces named
+with their name (a click opens that photo), then **More**: the unnamed faces that look like them, most alike first. Click one
+to confirm it (that names the face, as one undo step, and it moves up into their faces), or × to hide it for this session.
+**Show photos** puts their photos in the grid; **‹ People** or Escape goes back. "More" only holds faces the scan has
+already embedded, so it fills in as the scan goes; it shows faces scoring above four fifths of the model's suggestion bar,
+since you look at each one before anything is named.
 
 How well it works: on 755 named faces of marble busts from one museum folder (each face hidden in turn and matched against
 shots taken more than five seconds apart), SFace named the right person first 95.5% of the time and AuraFace 94.7%; at
@@ -110,4 +136,4 @@ suggestions it would make and how many were right.
 
 All of this is reachable from the control channel, the CLI and MCP: `faces.models.list`, `faces.models.inspect {path}`,
 `faces.models.install {path, acknowledged: true, activate?}`, `faces.models.download {id, acknowledged: true}` (then `faces.models.downloads`, which also installs what has arrived, and `faces.models.downloadCancel {id}`), `faces.models.remove {id}`, `faces.models.select {id}`,
-`faces.enable {enabled?}`, `faces.detect {ids?, apply?}`, `faces.index {budgetMs?, ids?}`, `faces.pump` (what the app calls every frame), `faces.suggest {ids?, threshold?, margin?}`, `faces.setName {id?, index, name}` and `faces.evaluate`. `acknowledged` must be `true`: the caller has shown the user the terms and the user agreed. Installing makes the model the one in use and switches recognition on unless `activate` is `false`.
+`faces.enable {enabled?}`, `faces.detect {ids?, apply?}`, `faces.index {budgetMs?, ids?}`, `faces.pump` (what the app calls every frame), `faces.suggest {ids?, threshold?, margin?}`, `faces.person {name, more?}` (a person's faces and the unnamed faces that look like them), `faces.setName {id?, index, name}` and `faces.evaluate`. `acknowledged` must be `true`: the caller has shown the user the terms and the user agreed. Installing makes the model the one in use and switches recognition on unless `activate` is `false`.
