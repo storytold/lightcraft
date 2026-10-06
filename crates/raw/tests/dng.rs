@@ -770,3 +770,107 @@ fn malformed_semantic_masks_are_skipped() {
     // not a TIFF at all
     assert!(lightcraft_raw::semantic_masks(b"not a dng").is_empty());
 }
+
+/// `ProfileGainTableMap` / `ProfileGainTableMap2` bytes in `order`: a `dims` = (V, H, N) grid with
+/// spacing 0.5 and origin 0.25, green-only input weights, `v2` = (data type, gamma, gain min,
+/// gain max), then `data` (the stored gains, already in `order`).
+fn gain_map_tag(order: ByteOrder, dims: [u32; 3], v2: Option<(u32, f32, f32, f32)>, data: &[u8]) -> Vec<u8> {
+    let be = order == ByteOrder::Big;
+    let u = |v: u32| if be { v.to_be_bytes() } else { v.to_le_bytes() };
+    let mut b = Vec::new();
+    b.extend_from_slice(&u(dims[0]));
+    b.extend_from_slice(&u(dims[1]));
+    for v in [0.5f64, 0.5, 0.25, 0.25] {
+        b.extend_from_slice(&if be { v.to_be_bytes() } else { v.to_le_bytes() });
+    }
+    b.extend_from_slice(&u(dims[2]));
+    for w in [0.0f32, 1.0, 0.0, 0.0, 0.0] {
+        b.extend_from_slice(&u(w.to_bits()));
+    }
+    if let Some((dt, gamma, min, max)) = v2 {
+        for v in [dt, gamma.to_bits(), min.to_bits(), max.to_bits()] {
+            b.extend_from_slice(&u(v));
+        }
+    }
+    b.extend_from_slice(data);
+    b
+}
+
+fn f32_bytes(v: &[f32], order: ByteOrder) -> Vec<u8> {
+    v.iter().flat_map(|f| if order == ByteOrder::Big { f.to_be_bytes() } else { f.to_le_bytes() }).collect()
+}
+
+/// [`profile_dng`] with binary tags in the raw IFD (where Apple writes `ProfileGainTableMap`) and
+/// in IFD 0.
+fn gain_map_dng(order: ByteOrder, raw_tags: &[(u16, &[u8])], ifd0_tags: &[(u16, &[u8])]) -> Vec<u8> {
+    let (w, h) = (8, 6);
+    let px = pattern(w, h, 3, 16);
+    let mut raw = base_ifd(w, h, 16, 3, false);
+    raw.set(t::COMPRESSION, Value::Short(vec![1]));
+    raw.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![u16_bytes(&px, order)] });
+    for (tag, b) in raw_tags {
+        raw.set(*tag, Value::Undefined(b.to_vec()));
+    }
+    dng_with(raw, order, |ifd0| {
+        for (tag, b) in ifd0_tags {
+            ifd0.set(*tag, Value::Undefined(b.to_vec()));
+        }
+    })
+}
+
+#[test]
+fn gain_table_maps_follow_dng_precedence() {
+    const V1: u16 = t::PROFILE_GAIN_TABLE_MAP;
+    const V2: u16 = t::PROFILE_GAIN_TABLE_MAP_2;
+    for order in [ByteOrder::Big, ByteOrder::Little] {
+        let v1 = gain_map_tag(order, [2, 2, 4], None, &f32_bytes(&(1..=16).map(|i| i as f32 * 0.25).collect::<Vec<_>>(), order));
+        // Apple's layout: version 1 in the raw IFD, in the file's byte order
+        let apple = gain_map_dng(order, &[(V1, &v1[..])], &[]);
+        let img = decode(&apple).unwrap();
+        let map = img.color.profile.gain_table_map.clone().expect("gain table map");
+        assert_eq!((map.points_v, map.points_h, map.points_n, map.gamma), (2, 2, 4, 1.0));
+        assert_eq!((map.spacing_v, map.origin_h, map.weights[1]), (0.5, 0.25, 1.0));
+        assert_eq!(map.gains[5], 1.5);
+        assert_eq!(lightcraft_raw::probe_info(&apple).unwrap().color.profile, img.color.profile);
+        // our DNG writer keeps it
+        let again = decode(&write_dng(&img, &DngWriteOptions::default()).unwrap()).unwrap();
+        assert_eq!(again.color.profile.gain_table_map.as_ref(), Some(&map));
+        // version 1 in IFD 0 (where DNG 1.7 says it was meant to go) is read too
+        let in_ifd0 = decode(&gain_map_dng(order, &[], &[(V1, &v1[..])])).unwrap();
+        assert_eq!(in_ifd0.color.profile.gain_table_map.as_ref(), Some(&map));
+        // version 2 in IFD 0 supersedes version 1: 8-bit gains over 0.5..=1.5, gamma 2
+        let v2 = gain_map_tag(order, [1, 1, 2], Some((0, 2.0, 0.5, 1.5)), &[0, 255]);
+        let img = decode(&gain_map_dng(order, &[(V1, &v1[..])], &[(V2, &v2[..])])).unwrap();
+        let map2 = img.color.profile.gain_table_map.clone().unwrap();
+        assert_eq!((map2.points_n, map2.gamma, map2.gains.clone()), (2, 2.0, vec![0.5, 1.5]));
+        // a gamma ≠ 1 survives our writer (as version 2)
+        let again = decode(&write_dng(&img, &DngWriteOptions::default()).unwrap()).unwrap();
+        assert_eq!(again.color.profile.gain_table_map, Some(map2));
+        // a malformed version 2 (gamma outside 0.25..=4) falls back to version 1
+        let bad_v2 = gain_map_tag(order, [1, 1, 2], Some((0, 9.0, 0.5, 1.5)), &[0, 255]);
+        assert_eq!(decode(&gain_map_dng(order, &[(V1, &v1[..])], &[(V2, &bad_v2[..])])).unwrap().color.profile.gain_table_map, Some(map));
+    }
+}
+
+#[test]
+fn malformed_gain_table_maps_are_ignored() {
+    let order = ByteOrder::Little;
+    let ok = gain_map_tag(order, [1, 1, 2], None, &f32_bytes(&[1.0, 2.0], order));
+    let cases: Vec<(&str, Vec<u8>, bool)> = vec![
+        ("valid", ok.clone(), false),
+        ("empty", vec![], false),
+        ("header only", ok[..64].to_vec(), false),
+        ("one byte short", ok[..ok.len() - 1].to_vec(), false),
+        ("NaN gain", gain_map_tag(order, [1, 1, 2], None, &f32_bytes(&[1.0, f32::NAN], order)), false),
+        ("negative gain", gain_map_tag(order, [1, 1, 2], None, &f32_bytes(&[1.0, -2.0], order)), false),
+        ("huge dimensions", gain_map_tag(order, [u32::MAX, u32::MAX, u32::MAX], None, &f32_bytes(&[1.0, 2.0], order)), false),
+        ("zero points", gain_map_tag(order, [1, 0, 2], None, &[]), false),
+        ("unknown data type", gain_map_tag(order, [1, 1, 2], Some((9, 1.0, 0.0, 1.0)), &[0, 0]), true),
+        ("NaN gain range", gain_map_tag(order, [1, 1, 2], Some((0, 1.0, f32::NAN, 1.0)), &[0, 255]), true),
+    ];
+    for (what, bytes, v2) in cases {
+        let tag = if v2 { t::PROFILE_GAIN_TABLE_MAP_2 } else { t::PROFILE_GAIN_TABLE_MAP };
+        let img = decode(&gain_map_dng(order, &[(tag, &bytes[..])], &[])).unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert_eq!(img.color.profile.gain_table_map.is_some(), what == "valid", "{what}");
+    }
+}

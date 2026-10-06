@@ -214,6 +214,11 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     if let Some(curve) = &p.tone_curve {
         ifd.set(t::PROFILE_TONE_CURVE, Value::Float(curve.points.iter().flatten().copied().collect()));
     }
+    if let Some(map) = &p.gain_table_map {
+        // the raw IFD is IFD 0 here, where both tag versions are valid
+        let (version2, bytes) = map.to_bytes(opts.order);
+        ifd.set(if version2 { t::PROFILE_GAIN_TABLE_MAP_2 } else { t::PROFILE_GAIN_TABLE_MAP }, Value::Undefined(bytes));
+    }
     for (list, tag) in [(&raw.opcodes.list1, t::OPCODE_LIST_1), (&raw.opcodes.list2, t::OPCODE_LIST_2), (&raw.opcodes.list3, t::OPCODE_LIST_3)] {
         if !list.is_empty() {
             ifd.set(tag, Value::Undefined(opcodes::write_list(list)));

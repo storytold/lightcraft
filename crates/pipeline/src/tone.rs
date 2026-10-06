@@ -7,6 +7,17 @@
 //! Rendered (display-referred) sources such as JPEGs use [`ToneMap::display`] instead: identity at
 //! neutral settings (an unedited JPEG renders exactly as the file), with contrast/whites/blacks as
 //! S-curve adjustments in a gamma-2.2 perceptual domain and a short shoulder above 0.95.
+//!
+//! A DNG `ProfileToneCurve` ([`CameraTone::per_channel`]) is applied to RGB instead of luminance:
+//! in linear ProPhoto RGB, the curve maps the largest and smallest channel, and the middle
+//! channel keeps its relative position between them, so the hue holds. Contrast curves then add
+//! saturation, as the file's maker intends. On Apple ProRAW this brings the default render much
+//! closer to Apple's own embedded render than a luminance-only curve does (docs/parity.md,
+//! LR-PROF-CAMERACOLOR).
+
+use std::sync::LazyLock;
+
+use lightcraft_color::{D50, D65, Mat3, PROPHOTO, REC2020, bradford};
 
 pub const GREY: f32 = 0.18;
 /// The tone LUT spans `LUT_MIN_EV..LUT_MAX_EV` around grey in `LUT_N` steps.
@@ -20,6 +31,8 @@ pub const LUT_N: usize = 4096;
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct CameraTone {
     knots: [[f32; 2]; 32],
+    /// Applied per channel (hue-preserving, linear ProPhoto RGB) instead of on luminance.
+    rgb: bool,
 }
 
 impl<'de> serde::Deserialize<'de> for CameraTone {
@@ -27,9 +40,12 @@ impl<'de> serde::Deserialize<'de> for CameraTone {
         #[derive(serde::Deserialize)]
         struct Wire {
             knots: [[f32; 2]; 32],
+            #[serde(default)]
+            rgb: bool,
         }
         let w = Wire::deserialize(d)?;
-        Self::new(w.knots).ok_or_else(|| serde::de::Error::custom("invalid camera tone curve"))
+        let tone = Self::new(w.knots).ok_or_else(|| serde::de::Error::custom("invalid camera tone curve"))?;
+        Ok(if w.rgb { tone.per_channel() } else { tone })
     }
 }
 
@@ -42,7 +58,13 @@ impl CameraTone {
             }
             previous = p;
         }
-        Some(Self { knots })
+        Some(Self { knots, rgb: false })
+    }
+
+    /// The same curve applied to RGB (hue-preserving, linear ProPhoto) instead of luminance; used
+    /// for a DNG `ProfileToneCurve`.
+    pub fn per_channel(self) -> Self {
+        Self { rgb: true, ..self }
     }
 
     pub fn apply(&self, y: f32) -> f32 {
@@ -68,6 +90,24 @@ impl CameraTone {
 #[derive(Clone, Debug)]
 pub struct ToneMap {
     lut: Vec<f32>,
+    /// Rec.2020 → ProPhoto and back when applied per channel ([`CameraTone::per_channel`]).
+    rgb: Option<([[f32; 3]; 3], [[f32; 3]; 3])>,
+}
+
+/// Linear Rec.2020 D65 → linear ProPhoto D50, and back (for [`ToneMap::apply_rgb`]).
+static PROPHOTO_MATRICES: LazyLock<([[f32; 3]; 3], [[f32; 3]; 3])> = LazyLock::new(|| {
+    let to: Mat3 = PROPHOTO.from_xyz().mul(&bradford(D65, D50)).mul(&REC2020.to_xyz());
+    (to.to_f32(), to.inverse().unwrap_or(Mat3::IDENTITY).to_f32())
+});
+
+/// The matrices [`ToneMap::apply_rgb`] uses: linear Rec.2020 D65 → linear ProPhoto D50, and back.
+pub fn prophoto_matrices() -> ([[f32; 3]; 3], [[f32; 3]; 3]) {
+    *PROPHOTO_MATRICES
+}
+
+#[inline]
+fn mul3(m: &[[f32; 3]; 3], c: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|i| m[i][0] * c[0] + m[i][1] * c[1] + m[i][2] * c[2])
 }
 
 impl ToneMap {
@@ -81,7 +121,7 @@ impl ToneMap {
                 if neutral { y } else { adjustment.apply(y) }
             })
             .collect();
-        ToneMap { lut }
+        ToneMap { lut, rgb: curve.rgb.then(prophoto_matrices) }
     }
     /// `contrast`, `whites`, `blacks` in −100..100 (Lightroom slider units).
     pub fn new(contrast: f64, whites: f64, blacks: f64) -> ToneMap {
@@ -113,7 +153,7 @@ impl ToneMap {
                 o.clamp(0.0, 1.0)
             })
             .collect();
-        ToneMap { lut }
+        ToneMap { lut, rgb: None }
     }
 
     /// Tone map for display-referred sources: identity at neutral settings.
@@ -147,12 +187,17 @@ impl ToneMap {
                 o.clamp(0.0, 1.0)
             })
             .collect();
-        ToneMap { lut }
+        ToneMap { lut, rgb: None }
     }
 
     /// The table (`LUT_N` entries, see [`ToneMap::apply`]).
     pub fn lut(&self) -> &[f32] {
         &self.lut
+    }
+
+    /// Whether the curve is applied per channel ([`ToneMap::apply_rgb`]) rather than to luminance.
+    pub fn per_channel(&self) -> bool {
+        self.rgb.is_some()
     }
 
     /// Scene luminance → display-linear luminance.
@@ -167,6 +212,25 @@ impl ToneMap {
         let t = f - i as f32;
         let v = self.lut[i] + (self.lut[i + 1] - self.lut[i]) * t;
         if ev < LUT_MIN_EV { v * (y / (GREY * 2f32.powf(LUT_MIN_EV))) } else { v }
+    }
+
+    /// Scene-linear Rec.2020 → display-linear Rec.2020, per channel and hue-preserving: in linear
+    /// ProPhoto RGB the largest and smallest channel go through the curve and the middle one keeps
+    /// its relative position between them. A map built without [`CameraTone::per_channel`] has no
+    /// matrices and applies the curve to each Rec.2020 channel the same way.
+    #[inline]
+    pub fn apply_rgb(&self, c: [f32; 3]) -> [f32; 3] {
+        let p = match &self.rgb {
+            Some((to, _)) => mul3(to, c),
+            None => c,
+        };
+        let (hi, lo) = (p[0].max(p[1]).max(p[2]), p[0].min(p[1]).min(p[2]));
+        let (th, tl) = (self.apply(hi), self.apply(lo));
+        let q = if hi - lo > 1e-9 { p.map(|v| tl + (th - tl) * (v - lo) / (hi - lo)) } else { [th; 3] };
+        match &self.rgb {
+            Some((_, from)) => mul3(from, q),
+            None => q,
+        }
     }
 }
 
@@ -203,6 +267,51 @@ mod tests {
         invalid[1][0] = invalid[0][0];
         assert!(CameraTone::new(invalid).is_none());
         assert!(serde_json::from_value::<CameraTone>(serde_json::json!({"knots": invalid})).is_err());
+    }
+
+    /// A DNG profile tone curve applied per channel keeps greys on the curve, keeps the hue (in
+    /// ProPhoto, where it is applied), adds the saturation a contrast curve gives, and survives
+    /// serialisation (smart previews carry it); older serialised curves stay luminance curves.
+    #[test]
+    fn per_channel_camera_tone_keeps_hue_and_greys() {
+        let knots = std::array::from_fn(|i| {
+            let x = 2f32.powf(-12.0 + 12.0 * i as f32 / 31.0);
+            // an S-curve in linear light (darker shadows, brighter mids)
+            [x, (x * x * (3.0 - 2.0 * x)).min(0.9995)]
+        });
+        let luma = CameraTone::new(knots).unwrap();
+        let rgb = luma.per_channel();
+        let t = ToneMap::camera(&rgb, 0.0, 0.0, 0.0);
+        assert!(t.per_channel() && !ToneMap::camera(&luma, 0.0, 0.0, 0.0).per_channel());
+        for g in [0.01f32, 0.18, 0.5, 0.9] {
+            let out = t.apply_rgb([g; 3]);
+            assert!(out.iter().all(|v| (v - t.apply(g)).abs() < 1e-4), "{g}: {out:?}");
+        }
+        let (to, _) = prophoto_matrices();
+        let hue = |c: [f32; 3]| {
+            let p = mul3(&to, c);
+            let (hi, lo) = (p[0].max(p[1]).max(p[2]), p[0].min(p[1]).min(p[2]));
+            let mid = p[0] + p[1] + p[2] - hi - lo;
+            ((mid - lo) / (hi - lo), p.iter().position(|v| *v == hi), p.iter().position(|v| *v == lo))
+        };
+        let sat = |c: [f32; 3]| {
+            let p = mul3(&to, c);
+            let hi = p[0].max(p[1]).max(p[2]);
+            (hi - p[0].min(p[1]).min(p[2])) / hi
+        };
+        let luminance_tone = ToneMap::camera(&luma, 0.0, 0.0, 0.0);
+        for c in [[0.4f32, 0.2, 0.1], [0.05, 0.3, 0.12], [0.2, 0.25, 0.6]] {
+            let out = t.apply_rgb(c);
+            let (h0, h1) = (hue(c), hue(out));
+            assert!((h0.0 - h1.0).abs() < 1e-3 && h0.1 == h1.1 && h0.2 == h1.2, "{c:?} → {out:?}");
+            // an S-curve saturates where the luminance curve keeps the ratios
+            let y = lightcraft_color::luminance_2020(c);
+            let by_luma = c.map(|v| v * luminance_tone.apply(y) / y);
+            assert!(sat(out) > sat(by_luma) + 0.01, "{c:?}: {} vs {}", sat(out), sat(by_luma));
+        }
+        let json = serde_json::to_value(rgb).unwrap();
+        assert_eq!(serde_json::from_value::<CameraTone>(json).unwrap(), rgb);
+        assert_eq!(serde_json::from_value::<CameraTone>(serde_json::json!({ "knots": knots })).unwrap(), luma);
     }
 
     #[test]

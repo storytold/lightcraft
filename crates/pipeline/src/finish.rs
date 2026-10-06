@@ -524,15 +524,21 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 c = crate::colorops::calibrate(c, fp.calib.as_ref(), fp.shadow_tint);
             }
 
-            // --- tone map on luminance, highlight desaturation
-            let yl = luminance_2020(c);
-            let o = tone.apply(yl);
-            let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
-            let mx = d[0].max(d[1]).max(d[2]);
-            if mx > 1.0 {
-                let t = ((mx - 1.0) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
-                d = d.map(|v| v + (o - v) * t);
-            }
+            // --- tone map: on luminance with highlight desaturation, or (a DNG profile tone
+            // curve) per channel, hue-preserving
+            let mut d = if tone.per_channel() {
+                tone.apply_rgb(c)
+            } else {
+                let yl = luminance_2020(c);
+                let o = tone.apply(yl);
+                let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
+                let mx = d[0].max(d[1]).max(d[2]);
+                if mx > 1.0 {
+                    let t = ((mx - 1.0) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
+                    d = d.map(|v| v + (o - v) * t);
+                }
+                d
+            };
 
             // --- colour
             d = ops.apply(d, l_sat, l_hue);

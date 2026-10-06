@@ -76,6 +76,10 @@ const FIELDS: &[(&str, usize)] = &[
     ("CALIB", 1),
     ("CALIB_M", 9),
     ("SHADOW_TINT", 1),
+    // a DNG profile tone curve applied per channel (`ToneMap::apply_rgb`)
+    ("TONE_RGB", 1),
+    ("TONE_TO", 9),
+    ("TONE_FROM", 9),
     ("OUT_M", 9),
     ("OUT_Y", 3),
     ("OUT_TRC", 1),
@@ -244,6 +248,12 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         p.fs("CALIB_M", m.as_flattened());
     }
     p.f("SHADOW_TINT", fp.shadow_tint);
+    if fp.tone.per_channel() {
+        let (to, from) = lightcraft_pipeline::tone::prophoto_matrices();
+        p.b("TONE_RGB", true);
+        p.fs("TONE_TO", to.as_flattened());
+        p.fs("TONE_FROM", from.as_flattened());
+    }
     p.fs("OUT_M", fp.to_out.as_flattened());
     p.fs("OUT_Y", &fp.out_luma);
     let (trc, gamma) = fp.out_trc.code();

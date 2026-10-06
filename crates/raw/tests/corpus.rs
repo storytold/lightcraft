@@ -197,9 +197,10 @@ fn corpus_nef_compressed_matches_uncompressed() {
 }
 
 /// Issue #138: DNGs converted by Adobe software carry their camera profile's hue/saturation map and
-/// look table; we read them (and render with them). Camera-written DNGs here carry none.
+/// look table; we read them (and render with them). Apple ProRAW carries a tone curve and a gain
+/// table map (its local tone mapping). Other camera-written DNGs here carry none.
 #[test]
-fn corpus_adobe_dngs_carry_profile_looks() {
+fn corpus_dngs_carry_profile_looks() {
     let dir = corpus_root().join("raw");
     let Ok(rd) = std::fs::read_dir(&dir) else {
         eprintln!("skip: {} absent", dir.display());
@@ -220,17 +221,28 @@ fn corpus_adobe_dngs_carry_profile_looks() {
             assert!(look.look_table.is_some(), "{name}: no look table");
             // a profile applied to a mid grey keeps it (close to) neutral
             let t = lightcraft_raw::profile::ProfileTables::new(look, 0.5).unwrap();
-            let g = t.apply([0.18; 3], 1.0);
+            let g = t.apply([0.18; 3], 1.0, [0.5; 2]);
             assert!(g.iter().all(|v| (v - g[0]).abs() < 0.01 * g[0].max(0.01)), "{name}: grey → {g:?}");
         }
+        if name.starts_with("dng-apple-") {
+            seen += 1;
+            let map = look.gain_table_map.as_ref().unwrap_or_else(|| panic!("{name}: no gain table map"));
+            assert!(map.points_v > 1 && map.points_h > 1 && map.points_n > 1, "{name}");
+            assert!(look.tone_curve.is_some(), "{name}: no tone curve");
+            // the map lifts dark tones (Apple's local tone mapping), most at the darkest input
+            let t = lightcraft_raw::profile::ProfileTables::new(look, 0.5).unwrap();
+            let dark = t.apply([0.01; 3], 1.0, [0.5; 2]);
+            assert!(dark[1] > 0.015, "{name}: dark grey → {dark:?}");
+        }
         eprintln!(
-            "{name:44} profile look: hsm {} look {} tone {}",
+            "{name:44} profile look: hsm {} look {} tone {} gain map {}",
             look.hue_sat_map[0].is_some(),
             look.look_table.is_some(),
-            look.tone_curve.is_some()
+            look.tone_curve.is_some(),
+            look.gain_table_map.is_some()
         );
     }
-    eprintln!("{seen} Adobe-converted DNGs checked");
+    eprintln!("{seen} DNGs with profile looks checked");
 }
 
 /// iPhone ProRAW (`corpus/apple/IMG_1361.DNG`, iPhone 12 Pro, CC0 from raw.pixls.us) carries a

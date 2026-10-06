@@ -157,6 +157,31 @@ fn color_ops(rgb: vec3<f32>, local_sat: f32, local_hue: f32) -> vec3<f32> {
     return oklab_inv(lab);
 }
 
+// `ToneMap::apply_rgb`: in linear ProPhoto RGB the largest and smallest channel go through the
+// tone curve, the middle one keeps its relative position between them (the hue holds).
+fn tone_rgb(c: vec3<f32>) -> vec3<f32> {
+    let to_pp = array<vec3<f32>, 3>(
+        vec3<f32>(pf(F_TONE_TO), pf(F_TONE_TO + 1u), pf(F_TONE_TO + 2u)),
+        vec3<f32>(pf(F_TONE_TO + 3u), pf(F_TONE_TO + 4u), pf(F_TONE_TO + 5u)),
+        vec3<f32>(pf(F_TONE_TO + 6u), pf(F_TONE_TO + 7u), pf(F_TONE_TO + 8u)),
+    );
+    let from_pp = array<vec3<f32>, 3>(
+        vec3<f32>(pf(F_TONE_FROM), pf(F_TONE_FROM + 1u), pf(F_TONE_FROM + 2u)),
+        vec3<f32>(pf(F_TONE_FROM + 3u), pf(F_TONE_FROM + 4u), pf(F_TONE_FROM + 5u)),
+        vec3<f32>(pf(F_TONE_FROM + 6u), pf(F_TONE_FROM + 7u), pf(F_TONE_FROM + 8u)),
+    );
+    let p = mul3(to_pp, c);
+    let hi = max(p.x, max(p.y, p.z));
+    let lo = min(p.x, min(p.y, p.z));
+    let th = tone_apply(hi);
+    let tl = tone_apply(lo);
+    var q = vec3<f32>(th);
+    if (hi - lo > 1e-9) {
+        q = tl + (th - tl) * (p - lo) / (hi - lo);
+    }
+    return mul3(from_pp, q);
+}
+
 // `colorops::calibrate`: primaries matrix, then the shadows tint (luminance kept).
 fn calibrate(c0: vec3<f32>) -> vec3<f32> {
     var c = c0;
@@ -447,17 +472,22 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         c = calibrate(c);
     }
 
-    // --- tone map on luminance, highlight desaturation
-    let yl = lum2020(c);
-    let o = tone_apply(yl);
+    // --- tone map: on luminance with highlight desaturation, or (a DNG profile tone curve) per
+    // channel, hue-preserving
     var d = vec3<f32>(0.0);
-    if (yl > 1e-9) {
-        d = c * o / yl;
-    }
-    let mx = max(d.x, max(d.y, d.z));
-    if (mx > 1.0) {
-        let t = clamp((mx - 1.0) / max(mx - o, 1e-6), 0.0, 1.0);
-        d = d + (o - d) * t;
+    if (pu(F_TONE_RGB) != 0u) {
+        d = tone_rgb(c);
+    } else {
+        let yl = lum2020(c);
+        let o = tone_apply(yl);
+        if (yl > 1e-9) {
+            d = c * o / yl;
+        }
+        let mx = max(d.x, max(d.y, d.z));
+        if (mx > 1.0) {
+            let t = clamp((mx - 1.0) / max(mx - o, 1e-6), 0.0, 1.0);
+            d = d + (o - d) * t;
+        }
     }
 
     // --- colour
