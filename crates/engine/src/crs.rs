@@ -44,6 +44,17 @@ const NON_ADJUSTMENT: &[&str] = &[
     "crs:AlreadyApplied",
     "crs:RawFileName",
     "crs:HasCrop",
+    // preset/library bookkeeping and tool options that don't change the rendering
+    "crs:Cluster",
+    "crs:SupportsAmount2",
+    "crs:RequiresRGBTables",
+    "crs:SortName",
+    "crs:Description",
+    "crs:CropConstrainToWarp",
+    "crs:OverrideLookVignette",
+    // the file's as-shot white, recorded next to the edit (ours comes from the file itself)
+    "crs:AsShotTemperature",
+    "crs:AsShotTint",
 ];
 
 /// True if the packet carries any `crs:` adjustment (not just bookkeeping fields).
@@ -373,8 +384,19 @@ pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values
             mask_skips = skipped.into_iter().map(|k| format!("Mask: {k}")).collect();
         }
     }
-    // fields that only switch a panel on/off or name things: not adjustments by themselves
-    let quiet = |k: &str| k.starts_with("Enable") || k.starts_with("ToneCurveName") || k == "AutoTone" || k == "AutoGrayscaleMix";
+    // fields that only switch a panel on/off or name things: not adjustments by themselves; an
+    // HDR edit mode that is off, and Point Color slots that are all empty (-1)
+    let value_is = |k: &str, f: &dyn Fn(&[String]) -> bool| props.get(&format!("crs:{k}")).is_some_and(|v| f(v));
+    let off = |v: &[String]| v.iter().all(|s| s.trim() == "0");
+    let empty_points = |v: &[String]| v.iter().all(|s| s.split(',').all(|n| n.trim().parse::<f64>().is_ok_and(|x| x == -1.0) || n.trim().is_empty()));
+    let quiet = |k: &str| {
+        k.starts_with("Enable")
+            || k.starts_with("ToneCurveName")
+            || k == "AutoTone"
+            || k == "AutoGrayscaleMix"
+            || (k == "HDREditMode" && value_is(k, &off))
+            || (k == "PointColors" && value_is(k, &empty_points))
+    };
     let mut unmapped: Vec<String> = props
         .keys()
         .filter(|k| k.starts_with("crs:"))
@@ -538,5 +560,34 @@ mod tests {
         assert_eq!(p.settings, json!({"light": {"contrast": 25.0}}));
         assert!(!p.builtin);
         assert!(preset_from_xmp("<x/>", "f").is_none());
+    }
+
+    /// A preset packet (written for this test) with the bookkeeping fields Lightroom presets carry.
+    fn preset_packet(extra_attrs: &str, extra_elems: &str) -> String {
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+             crs:PresetType="Normal" crs:Cluster="" crs:UUID="0123ABCD" crs:SupportsAmount2="True" crs:SupportsAmount="True"
+             crs:RequiresRGBTables="False" crs:Contrast2012="+25" crs:LensProfileEnable="0" crs:OverrideLookVignette="False"
+             crs:CropConstrainToWarp="0" crs:AsShotTemperature="7450" crs:AsShotTint="23" {extra_attrs}>
+            <crs:SortName><rdf:Alt><rdf:li xml:lang="x-default"/></rdf:Alt></crs:SortName>
+            <crs:Description><rdf:Alt><rdf:li xml:lang="x-default"/></rdf:Alt></crs:Description>
+            {extra_elems}
+          </rdf:Description></rdf:RDF></x:xmpmeta>"#
+        )
+    }
+
+    fn unmapped(x: &str) -> Vec<String> {
+        to_partial_report(&props(x), None, None, 1.5).1
+    }
+
+    #[test]
+    fn preset_bookkeeping_is_not_reported_but_real_gaps_are() {
+        let empty_points = "<crs:PointColors><rdf:Seq><rdf:li>-1.000000, -1.000000, -1.000000, -1.000000</rdf:li></rdf:Seq></crs:PointColors>";
+        assert_eq!(unmapped(&preset_packet(r#"crs:HDREditMode="0""#, empty_points)), Vec::<String>::new());
+        // an HDR edit, a used Point Color slot and an unknown adjustment still are
+        let used_points = "<crs:PointColors><rdf:Seq><rdf:li>0.5, 0.2, 0.1, 10, 0, 0, 0, 0</rdf:li></rdf:Seq></crs:PointColors>";
+        let got = unmapped(&preset_packet(r#"crs:HDREditMode="1" crs:FutureSlider="12""#, used_points));
+        assert_eq!(got, ["FutureSlider", "HDREditMode", "PointColors"]);
     }
 }
