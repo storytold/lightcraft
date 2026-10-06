@@ -458,6 +458,13 @@ pub enum Dialog {
         pick_best: bool,
     },
     /// Help ▸ System Info: (label, value) rows.
+    /// A face model file the user chose: what it is, its licence terms, and the "I accept" box.
+    FaceModel {
+        path: String,
+        /// The engine's `faces.models.inspect` answer.
+        info: serde_json::Value,
+        accepted: bool,
+    },
     SystemInfo {
         rows: Vec<(String, String)>,
     },

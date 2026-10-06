@@ -100,6 +100,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("tool.keywordPainter", "Keyword Painter", None, ""),
     ("view.gridInfo", "Grid Info", None, ""),
     ("dialog.allMetadata", "All Metadata…", None, "Photo"),
+    ("dialog.faceModel", "Add Face Model…", None, ""),
     ("dialog.newSmartAlbum", "New Smart Album from Filter…", Some("Cmd+Alt+N"), "File"),
     ("dialog.createPreset", "Create Preset…", Some("Cmd+Shift+P"), "Photo"),
     ("dialog.autoStack", "Auto-Stack by Capture Time…", None, "Photo>Stack"),
@@ -387,7 +388,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "app.settings" => {
             let tab = p.get("tab").and_then(Value::as_str).unwrap_or("general");
             if !crate::panels::settings::TABS.iter().any(|(id, _)| *id == tab) {
-                return Some(Err(format!("unknown settings tab `{tab}` (general|import|performance|interface)")));
+                return Some(Err(format!("unknown settings tab `{tab}` (general|import|performance|interface|faces)")));
             }
             app.ui.dialog = Some(Dialog::Settings { tab: tab.into() });
             Ok(Value::Null)
@@ -835,6 +836,16 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "merge.panoramaLast" => crate::merge::start_last(app, "merge.panorama"),
         "merge.hdrPanoramaLast" => crate::merge::start_last(app, "merge.hdrPanorama"),
         "dialog.mergeHdr" => crate::merge::open(app, "merge.hdr"),
+        "dialog.faceModel" => {
+            let path = match p.get("path").and_then(Value::as_str) {
+                Some(x) => Some(x.to_string()),
+                None => app.services.pick_model_file.as_mut().and_then(|f| f().into_iter().next()),
+            };
+            match path {
+                Some(path) => crate::panels::faces::open_dialog(app, &path),
+                None => Ok(Value::Null),
+            }
+        }
         "dialog.mergePanorama" => crate::merge::open(app, "merge.panorama"),
         "dialog.mergeHdrPanorama" => crate::merge::open(app, "merge.hdrPanorama"),
         "app.about" => {

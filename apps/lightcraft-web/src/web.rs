@@ -207,6 +207,8 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
         // Preset files: browser pickers are asynchronous; not wired on the web yet.
         pick_preset_files: None,
         pick_tracklog: None,
+        // Face models need a folder to live in; the web has none.
+        pick_model_file: None,
         save_preset_file: None,
         pick_curve_preset_files: None,
         save_curve_preset_file: None,

@@ -355,6 +355,60 @@ mod tests {
         h.settle(SETTLE);
     }
 
+    /// Adding a face model: the dialog shows the file's terms, the model is installed only once they are
+    /// accepted, and a file LightCraft cannot use only says why.
+    #[test]
+    fn adding_a_face_model_shows_its_terms_and_installs_only_once_accepted() {
+        use crate::state::Dialog;
+        let mut h = demo([1400.0, 900.0]);
+        let t = Duration::from_secs(10);
+        let dir = std::env::temp_dir().join(format!("lc-ui-facemodel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        h.app.session.face_models_dir = Some(dir.join("models"));
+        let model = dir.join("Mine.onnx");
+        std::fs::write(&model, lightcraft_faces::synthetic::embedder_model(512)).unwrap();
+        let open = |h: &mut Headless, path: &std::path::Path| {
+            h.request("engine.execute", json!({"command": "dialog.faceModel", "params": {"path": path.to_string_lossy()}}), t)
+        };
+
+        // the dialog opens for the chosen file, with nothing accepted and nothing installed
+        assert_eq!(open(&mut h, &model)["ok"], true);
+        h.settle(SETTLE);
+        h.step();
+        let Some(dlg) = h.app.ui.dialog.clone() else { panic!("no dialog") };
+        let Dialog::FaceModel { info, accepted, .. } = &dlg else { panic!("{dlg:?}") };
+        assert!(!accepted);
+        assert_eq!(info["kind"], "draft");
+        assert!(!dir.join("models").exists());
+        // OK does nothing yet
+        assert!(crate::panels::dialogs::confirm_dialog(&mut h.app, &dlg).is_err());
+        assert!(!dir.join("models").exists());
+        // ticking the box and confirming installs it
+        let r = h.request("ui.clickWidget", json!({"id": "check:faceModel.accept"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        assert!(matches!(&h.app.ui.dialog, Some(Dialog::FaceModel { accepted: true, .. })));
+        let r = h.request("ui.dialog.confirm", json!({}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        let listed = h.app.run("faces.models.list", json!({})).unwrap();
+        assert!(listed["models"].as_array().unwrap().iter().any(|m| m["installed"] == true && m["known"] == false), "{listed}");
+        assert!(h.app.ui.dialog.is_none());
+
+        // a file that is not a usable model says why and offers no install
+        let junk = dir.join("junk.onnx");
+        std::fs::write(&junk, b"not a model").unwrap();
+        assert_eq!(open(&mut h, &junk)["ok"], true);
+        h.step();
+        let Some(Dialog::FaceModel { info, .. }) = h.app.ui.dialog.clone() else { panic!("no dialog") };
+        assert_eq!(info["kind"], "unsupported");
+        // a path that does not exist is an error, not a dialog
+        h.app.ui.dialog = None;
+        assert_eq!(open(&mut h, &dir.join("nope.onnx"))["ok"], false);
+        assert!(h.app.ui.dialog.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Profile browser: live variant thumbnails, hover previews in the loupe without touching the
     /// photo or its history, click applies, the star toggles the favourite.
     #[test]

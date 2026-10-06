@@ -76,6 +76,8 @@ pub type HostAction = Box<dyn FnMut(&mut Session) -> Result<Value, String>>;
 pub struct Services {
     /// Show an open dialog for photos; returns paths.
     pub pick_files: Option<PickFiles>,
+    /// Open dialog for a face model (`.onnx`; Settings ▸ Faces ▸ Add a model file…).
+    pub pick_model_file: Option<PickFiles>,
     /// Open dialog for preset files (`.lcpreset`, `.xmp`, `.lrtemplate`, `.zip`, `.dng`, Luminar `.lmp` / `.mplumpack`).
     pub pick_preset_files: Option<PickFiles>,
     /// Open dialog for a GPS track log (`.gpx`; Photo ▸ Auto-Tag from Tracklog…).
@@ -577,6 +579,13 @@ impl LightcraftApp {
             let dropped: Vec<String> =
                 ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_string_lossy().to_string()).filter(|p| !p.is_empty()).collect());
             // preset files import as presets, everything else as photos
+            // a dropped face model opens its licence dialog; presets and photos as before
+            let (models, dropped): (Vec<String>, Vec<String>) = dropped.into_iter().partition(|p| is_model_file(p));
+            if let Some(model) = models.first()
+                && let Err(e) = panels::faces::open_dialog(self, model)
+            {
+                self.toast(ctx, e);
+            }
             let (presets, photos): (Vec<String>, Vec<String>) = dropped.into_iter().partition(|p| is_preset_file(p));
             if !presets.is_empty() {
                 let _ = self.run("file.importPresets", serde_json::json!({"paths": presets}));
@@ -767,6 +776,11 @@ pub fn is_bw(d: &lightcraft_develop::DevelopSettings) -> bool {
     d.treatment == lightcraft_develop::Treatment::Bw || d.profile.id == "lc.mono" || d.profile.id.starts_with("lc.bw.")
 }
 
+/// A dropped face model file (`.onnx`).
+pub fn is_model_file(path: &str) -> bool {
+    std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("onnx"))
+}
+
 /// Files dropped on the window that are presets rather than photos.
 pub fn is_preset_file(path: &str) -> bool {
     let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
@@ -775,6 +789,16 @@ pub fn is_preset_file(path: &str) -> bool {
 
 #[cfg(test)]
 mod drop_tests {
+    #[test]
+    fn dropped_face_models_are_told_apart() {
+        for p in ["/a/model.onnx", "/a/dir/M.ONNX"] {
+            assert!(super::is_model_file(p), "{p}");
+        }
+        for p in ["/a/model.onnx.jpg", "/a/onnx", "/a/b.png"] {
+            assert!(!super::is_model_file(p), "{p}");
+        }
+    }
+
     #[test]
     fn dropped_presets_are_told_apart_from_photos() {
         for p in ["/a/Look.lrtemplate", "/a/b.XMP", "/a/pack.zip", "/a/x.lcpreset", "/a/Magic Hour.mplumpack", "/a/Pop.lmp", "/a/Bundle.LMP"] {
@@ -798,6 +822,8 @@ pub struct Caches {
     album_counts: Option<(u64, std::sync::Arc<std::collections::HashMap<lightcraft_catalog::AlbumId, usize>>)>,
     /// How often the album counts were recomputed (tests check that unchanged frames don't).
     pub album_count_scans: usize,
+    /// Bumped when a face model is installed, removed or chosen, so Settings re-reads the list at once.
+    pub faces_epoch: u64,
     /// The grid's date runs, layout and indexes (by the visible list's generation).
     pub grid: panels::grid::GridCache,
     /// What the grid did on its frames (benchmarks and tests check unchanged frames stay cheap).

@@ -42,15 +42,15 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | S. Export (EXP) | 15 | 1 | 2 | 0 | 7/7 (100%) | 7/7 (100%) |
 | T. Share (SHARE) | 0 | 0 | 0 | 4 | — | — |
 | U. Map & location (MAP) | 0 | 1 | 1 | 0 | — | 0/1 (0%) |
-| V. Preferences (PREF) | 5 | 0 | 3 | 3 | 1/1 (100%) | 4/4 (100%) |
+| V. Preferences (PREF) | 5 | 1 | 2 | 3 | 1/1 (100%) | 4/4 (100%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 15 | 4 | 1 | 1 | 8/8 (100%) | 6/8 (75%) |
 | Y. Menus | 81 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 74 | 3 | 3 | 1 | 49/52 (94%) | 22/23 (96%) |
 | Lightroom Classic extras | 31 | 10 | 39 | 9 | — | 21/22 (95%) |
-| **Total** | 387 | 33 | 87 | 37 | 194/200 (97%) | 139/149 (93%) |
+| **Total** | 387 | 34 | 86 | 37 | 194/200 (97%) | 139/149 (93%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.6%** of 507 in-scope rows — P0 98.5% of 200 · P1 95.6% of 149 · P2 40.5% of 158.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.7%** of 507 in-scope rows — P0 98.5% of 200 · P1 95.6% of 149 · P2 40.8% of 158.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -466,7 +466,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-PREF-ACCOUNT | Account | OOS | 🚫 | | |
 | LR-PREF-INTERFACE | Interface options | P1 | ✅ | `cmd:app.settings` | filmstrip names/badges, grid badges (auto/always/never), square-grid names, navigator, info overlay |
 | LR-PREF-PERFORMANCE | GPU / performance | P1 | ✅ | `cmd:app.gpu`, `cmd:app.memoryBudget`, `cmd:app.settings` | GPU on/off, preview size (1600–5120 px), memory budget, thumbnail cache size in Settings |
-| LR-PREF-PEOPLE | Face recognition | P2 | ⬜ | | |
+| LR-PREF-PEOPLE | Face recognition | P2 | 🟡 | `cmd:faces.enable`, `cmd:faces.models.list`, `cmd:faces.models.inspect`, `cmd:faces.models.install`, `cmd:faces.models.remove`, `cmd:faces.models.select`, `cmd:dialog.faceModel`, `crates/faces/src/lib.rs`, `crates/ui-egui/src/panels/faces.rs` | Settings ▸ Faces: an off-by-default toggle and the face model list. Models are opt-in and never bundled (the YuNet detector, 233 KB, is the one exception, not wired yet): add one by picking or dropping a `.onnx`, which is recognised by hash or described from its shape, shows its licence terms and training-data note, and installs only after an "I accept" box. Nothing runs a model yet (no inference runtime), so nothing recognises faces yet |
 | LR-PREF-WATERMARK | Watermark settings | P1 | ✅ | `cmd:export.savePreset`, `crates/ui-egui/src/panels/dialogs.rs` | set in the Export dialog; kept with Export with Previous and in saved export presets |
 | LR-PREF-SHORTCUTS | Shortcut customisation | — | 🚫 | | not customisable in the reference app either; a keymap editor would be an extra |
 | LR-PREF-TECHPREVIEW | Early-access toggles | P2 | ⬜ | | |

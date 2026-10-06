@@ -2243,7 +2243,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-faces"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "proptest",
  "serde",
@@ -2408,6 +2408,7 @@ dependencies = [
  "lightcraft-color",
  "lightcraft-develop",
  "lightcraft-engine",
+ "lightcraft-faces",
  "lightcraft-geom",
  "lightcraft-meta",
  "lightcraft-pipeline",
