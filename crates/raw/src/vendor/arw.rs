@@ -21,8 +21,9 @@
 //! default 512 on 1″-sensor bodies such as the RX100 series), else 512 (14-bit) / 128 (12-bit).
 //!
 //! Also: uncompressed 16-bit ARW, and lossless-compressed ARW (Compression 7, ILCE-7M4 and later): LJ92 tiles whose
-//! frames hold one 2×2 CFA cell per four-component sample ([`read_quad_tiles`]). Other lossless-JPEG layouts go
-//! through the generic TIFF path.
+//! frames hold one 2×2 CFA cell per four-component sample ([`read_quad_tiles`]); reduced-size (M/S) lossless ARWs
+//! store subsampled YCbCr instead ([`decode_ycbcr`], issue #147). Other lossless-JPEG layouts go through the
+//! generic TIFF path.
 
 use crate::tiffraw::{Packing, check_image, read_image_in};
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result, ljpeg};
@@ -300,6 +301,199 @@ fn read_quad_tiles(bytes: &[u8], info: &ImageInfo) -> Result<Vec<u16>> {
     Ok(out)
 }
 
+/// Black offset of the luma in Sony's YCbCr ARWs, in the samples' own units. The files' `ReferenceBlackWhite`
+/// says 0, but on the CC0 samples the darkest pixels sit at ≈1060 and, registered against the same scene shot as
+/// a full-size (CFA) ARW (ILCE-7RM5), luma = 0.997 × (white-balanced, black-subtracted CFA luma) + 1034.
+const YCC_BLACK: f32 = 1024.0;
+/// Sony's clip level of the white-balanced RGB behind the YCbCr samples: clipped highlights are stored as a
+/// neutral luma plateau at 18 876 (ILCE-7M4 M-size sample), i.e. 17 852 above [`YCC_BLACK`].
+const YCC_WHITE: f32 = 18876.0;
+/// The values written for the camera RGB we reconstruct: `YCC_OUT_BLACK` + black-subtracted camera RGB (a raw-like
+/// scale), white level `YCC_OUT_BLACK + YCC_WHITE − YCC_BLACK` for every channel.
+const YCC_OUT_BLACK: f32 = 512.0;
+/// TIFF 6.0 `YCbCrCoefficients` (`LumaRed`, `LumaGreen`, `LumaBlue`).
+const YCBCR_COEFFICIENTS: u16 = 0x0211;
+
+/// Sony's reduced-size lossless ARWs ("M" and "S" RAW size on the ILCE-7M4, -7RM5, -1 and later): TIFF
+/// compression 7 with `PhotometricInterpretation` 6 (YCbCr), three samples per pixel, `YCbCrSubSampling` 2×2 (M)
+/// or 2×1 (S). Each tile is one lossless-JPEG frame of the tile's size whose luma has sampling factors 2×2 / 2×1
+/// and whose two chroma components are 1×1 ([`ljpeg::decode_planar`]). The image is already demosaiced and white
+/// balanced: luma and chroma follow the TIFF 6.0 YCbCr definition (section 21) with the file's
+/// `YCbCrCoefficients` (BT.601: 0.299, 0.587, 0.114), chroma centred on 16 384 and on the luma's scale — checked
+/// by registering an M- and an S-size ILCE-7RM5 file against the L-size (CFA) one of the same scene: luma
+/// = 0.997·Y + 1034 (M) and chroma = 1.01 × the TIFF formula (S: Cb 1.014, Cr 1.008; M: Cb 1.006, Cr 0.89, the
+/// least reliable of the four with the M frame registered at a non-integer scale). We invert that (with chroma
+/// co-sited, `YCbCrPositioning` 2, and interpolated bilinearly), remove [`YCC_BLACK`] and divide by the file's white balance (`0x7313`), so
+/// the result is linear camera RGB like a `LinearRaw` DNG, with the as-shot multipliers reported as usual.
+fn decode_ycbcr(
+    bytes: &[u8],
+    mode: Mode,
+    tiff: &Tiff,
+    raw: &Ifd,
+    info: &ImageInfo,
+    wb: Option<[f32; 3]>,
+    mn: Option<&makernote::MakerNote>,
+) -> Result<RawImage> {
+    let (w, h) = (info.width as usize, info.height as usize);
+    if info.samples_per_pixel != 3 || !matches!(info.layout, Layout::Tiles { .. }) {
+        return Err(RawError::Unsupported("Sony YCbCr ARW that is not tiled with three samples per pixel".into()));
+    }
+    check_image(bytes, info)?;
+    let coeffs = match raw.f64s(YCBCR_COEFFICIENTS).as_deref() {
+        Some([r, g, b]) if [r, g, b].iter().all(|v| (0.01..1.0).contains(*v)) && (r + g + b - 1.0).abs() < 0.01 => [*r as f32, *g as f32, *b as f32],
+        _ => [0.299, 0.587, 0.114],
+    };
+    let gains = wb.unwrap_or([1.0; 3]);
+    let data = match mode {
+        Mode::Header => Vec::new(),
+        Mode::Full => {
+            let (luma, chroma, (hs, vs)) = read_ycbcr_planes(bytes, info)?;
+            ycbcr_to_camera_rgb(&luma, &chroma, w, h, (hs, vs), coeffs, gains)
+        }
+    };
+    // one white level for all channels, as for a mosaic: Sony clipped after white balance, so a clipped highlight
+    // (R, G, B = clip / gains in camera RGB) becomes exactly white once the pipeline applies the multipliers
+    let white = vec![YCC_OUT_BLACK + (YCC_WHITE - YCC_BLACK)];
+    let crop = match (raw.u64s(CROP_TOP_LEFT).as_deref(), raw.u64s(CROP_SIZE).as_deref()) {
+        (Some([x, y]), Some([cw, ch])) if *cw > 0 && *ch > 0 => Rect::new(*x as usize, *y as usize, *cw as usize, *ch as usize).clipped(w, h),
+        _ => default_crop(raw, mn, w, h),
+    };
+    let mut metadata = lightcraft_meta::from_tiff(tiff);
+    metadata.width = Some(crop.width as u32);
+    metadata.height = Some(crop.height as u32);
+    let img = RawImage {
+        format: RawFormat::Arw,
+        width: w,
+        height: h,
+        cpp: 3,
+        data: RawData::U16(data),
+        cfa: None,
+        bits: info.bits() as u32,
+        black: BlackLevel::uniform(YCC_OUT_BLACK),
+        white,
+        active_area: Rect::new(0, 0, w, h),
+        crop,
+        orientation: Orientation::from_exif(tiff.ifds[0].u16(t::ORIENTATION).unwrap_or(1)),
+        color: ColorData::default(),
+        wb_multipliers: wb,
+        linearized: false,
+        opcodes: OpcodeLists::default(),
+        metadata,
+    };
+    img.validate_for(mode)?;
+    Ok(img)
+}
+
+/// Decode every tile of a subsampled YCbCr ARW into a full-size luma plane and two chroma planes (Cb, Cr) of
+/// `⌈w / H⌉ × ⌈h / V⌉` samples; returns them with the luma sampling factors `(H, V)`.
+type YccPlanes = (Vec<u16>, [Vec<u16>; 2], (usize, usize));
+fn read_ycbcr_planes(bytes: &[u8], info: &ImageInfo) -> Result<YccPlanes> {
+    let (w, h) = (info.width as usize, info.height as usize);
+    let chunks = info.chunks(bytes.len() as u64);
+    let decoded: Vec<Result<(Chunk, ljpeg::PlanarFrame)>> = chunks
+        .par_iter()
+        .map(|c| {
+            let src = chunk_bytes(bytes, c).ok_or_else(|| RawError::Corrupt("tile offset past end of file".into()))?;
+            let f = ljpeg::decode_planar(src, (c.width as usize * c.height as usize * 3).max(1 << 16))?;
+            let ok = f.planes.len() == 3
+                && (f.width, f.height) == (c.width as usize, c.height as usize)
+                && f.planes[1..].iter().all(|p| p.sampling == (1, 1))
+                && matches!(f.planes[0].sampling, (1 | 2, 1 | 2));
+            if !ok {
+                return Err(RawError::Unsupported(format!(
+                    "Sony YCbCr ARW tile: {}×{} frame with sampling {:?}",
+                    f.width,
+                    f.height,
+                    f.planes.iter().map(|p| p.sampling).collect::<Vec<_>>()
+                )));
+            }
+            Ok((*c, f))
+        })
+        .collect();
+    let mut sampling = None;
+    let mut luma = vec![0u16; w * h];
+    let mut chroma: [Vec<u16>; 2] = [Vec::new(), Vec::new()];
+    let (mut cw, mut ch) = (0, 0);
+    let mut ok = 0usize;
+    let mut first_err = None;
+    for r in decoded {
+        let (c, f) = match r {
+            Ok(v) => v,
+            Err(e) => {
+                first_err.get_or_insert(e);
+                continue;
+            }
+        };
+        let (hs, vs) = f.planes[0].sampling;
+        match sampling {
+            None => {
+                sampling = Some((hs, vs));
+                (cw, ch) = (w.div_ceil(hs), h.div_ceil(vs));
+                chroma = [vec![16384u16; cw * ch], vec![16384u16; cw * ch]];
+            }
+            Some(s) if s != (hs, vs) => {
+                first_err.get_or_insert(RawError::Corrupt("Sony YCbCr ARW: tiles with different sampling".into()));
+                continue;
+            }
+            Some(_) => {}
+        }
+        ok += 1;
+        let (x0, y0) = (c.x as usize, c.y as usize);
+        let p = &f.planes[0];
+        for y in 0..p.height.min(h.saturating_sub(y0)) {
+            let n = p.width.min(w.saturating_sub(x0));
+            luma[(y0 + y) * w + x0..][..n].copy_from_slice(&p.data[y * p.width..][..n]);
+        }
+        let (cx0, cy0) = (x0 / hs, y0 / vs);
+        for (k, plane) in f.planes[1..].iter().enumerate() {
+            for y in 0..plane.height.min(ch.saturating_sub(cy0)) {
+                let n = plane.width.min(cw.saturating_sub(cx0));
+                chroma[k][(cy0 + y) * cw + cx0..][..n].copy_from_slice(&plane.data[y * plane.width..][..n]);
+            }
+        }
+    }
+    match sampling {
+        Some(s) if ok > 0 => Ok((luma, chroma, s)),
+        _ => Err(first_err.unwrap_or_else(|| RawError::Corrupt("no decodable tiles".into()))),
+    }
+}
+
+/// YCbCr → camera RGB (see [`decode_ycbcr`]): interleaved `w × h × 3` samples on a raw-like scale.
+fn ycbcr_to_camera_rgb(luma: &[u16], chroma: &[Vec<u16>; 2], w: usize, h: usize, (hs, vs): (usize, usize), coeffs: [f32; 3], gains: [f32; 3]) -> Vec<u16> {
+    let (cw, ch) = (w.div_ceil(hs), h.div_ceil(vs));
+    let [kr, kg, kb] = coeffs;
+    let inv = gains.map(|g| if g > 0.0 && g.is_finite() { 1.0 / g } else { 1.0 });
+    let mut out = vec![0u16; w * h * 3];
+    out.par_chunks_mut(w * 3).enumerate().for_each(|(y, row)| {
+        // co-sited chroma: sample (i, j) sits on luma (i·H, j·V)
+        let fy = y as f32 / vs as f32;
+        let j0 = (fy as usize).min(ch - 1);
+        let j1 = (j0 + 1).min(ch - 1);
+        let ty = fy - j0 as f32;
+        for x in 0..w {
+            let fx = x as f32 / hs as f32;
+            let i0 = (fx as usize).min(cw - 1);
+            let i1 = (i0 + 1).min(cw - 1);
+            let tx = fx - i0 as f32;
+            let at = |p: &Vec<u16>| {
+                let v = |i: usize, j: usize| f32::from(p.get(j * cw + i).copied().unwrap_or(16384));
+                let top = v(i0, j0) + (v(i1, j0) - v(i0, j0)) * tx;
+                let bottom = v(i0, j1) + (v(i1, j1) - v(i0, j1)) * tx;
+                top + (bottom - top) * ty - 16384.0
+            };
+            let (cb, cr) = (at(&chroma[0]), at(&chroma[1]));
+            let yv = f32::from(luma.get(y * w + x).copied().unwrap_or(0)) - YCC_BLACK;
+            let r = cr * (2.0 - 2.0 * kr) + yv;
+            let b = cb * (2.0 - 2.0 * kb) + yv;
+            let g = (yv - kb * b - kr * r) / kg;
+            for (c, v) in [r, g, b].into_iter().enumerate() {
+                row[x * 3 + c] = (YCC_OUT_BLACK + v * inv[c]).round().clamp(0.0, 65535.0) as u16;
+            }
+        }
+    });
+    out
+}
+
 /// `SR2Private` tags (ExifTool "Sony SR2Private" table; the IFD is referenced by IFD0's `DNGPrivateData`).
 const SR2_SUBIFD_OFFSET: u16 = 0x7200;
 const SR2_SUBIFD_LENGTH: u16 = 0x7201;
@@ -383,7 +577,23 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     if w * h > crate::MAX_SAMPLES {
         return Err(RawError::Limit("image too large"));
     }
+    let model = ifd0.string(t::MODEL).unwrap_or_default();
+    let mn = tiff
+        .exif()
+        .and_then(|e| e.get(t::MAKER_NOTE))
+        .and_then(|e| makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &ifd0.string(t::MAKE).unwrap_or_default()));
+    let wb = raw
+        .f64s(WB_RGGB)
+        .filter(|v| v.len() == 4 && v[1] > 0.0 && v[0] > 0.0 && v[3] > 0.0)
+        .map(|v| {
+            let g = (v[1] + v[2]) / 2.0;
+            [(v[0] / g) as f32, 1.0, (v[3] / g) as f32]
+        })
+        .or_else(|| mn.as_ref().and_then(|m| tag2010_wb(&model, m.ifd.bytes(MN_TAG2010)?, m.order)));
     let bits = info.bits() as u32;
+    if info.compression == 7 && info.photometric == photometric::YCBCR {
+        return decode_ycbcr(bytes, mode, &tiff, raw, &info, wb, mn.as_ref());
+    }
     let chunks = info.chunks(bytes.len() as u64);
     let strip_len: u64 = chunks.iter().map(|c| c.len).sum();
     let (data, out_bits) = match info.compression {
@@ -440,19 +650,6 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         _ => BlackLevel::uniform(sr2_black(bytes, ifd0, tiff.order).filter(|_| scale_bits >= 14).unwrap_or(default_black)),
     };
     let white = raw.f64(t::WHITE_LEVEL).map(|v| v as f32).filter(|v| *v > 0.0).unwrap_or_else(|| super::white_from_data(samples, scale_bits));
-    let model = ifd0.string(t::MODEL).unwrap_or_default();
-    let mn = tiff
-        .exif()
-        .and_then(|e| e.get(t::MAKER_NOTE))
-        .and_then(|e| makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &ifd0.string(t::MAKE).unwrap_or_default()));
-    let wb = raw
-        .f64s(WB_RGGB)
-        .filter(|v| v.len() == 4 && v[1] > 0.0 && v[0] > 0.0 && v[3] > 0.0)
-        .map(|v| {
-            let g = (v[1] + v[2]) / 2.0;
-            [(v[0] / g) as f32, 1.0, (v[3] / g) as f32]
-        })
-        .or_else(|| mn.as_ref().and_then(|m| tag2010_wb(&model, m.ifd.bytes(MN_TAG2010)?, m.order)));
     let crop = match (raw.u64s(CROP_TOP_LEFT).as_deref(), raw.u64s(CROP_SIZE).as_deref()) {
         (Some([x, y]), Some([cw, ch])) if *cw > 0 && *ch > 0 => Rect::new(*x as usize, *y as usize, *cw as usize, *ch as usize).clipped(w, h),
         _ => default_crop(raw, mn.as_ref(), w, h),
@@ -600,6 +797,81 @@ mod tests {
         assert_eq!(sr2_black_levels(&cipher([0; 4]), Little), None);
         assert_eq!(sr2_black_levels(&cipher([800; 4])[..5], Little), None);
         assert_eq!(sr2_black_levels(&[], Little), None);
+    }
+
+    /// Camera RGB → Sony's YCbCr samples (the model `decode_ycbcr` inverts).
+    fn to_ycc(rgb: [f32; 3], gains: [f32; 3]) -> [f32; 3] {
+        let [r, g, b] = [rgb[0] * gains[0], rgb[1] * gains[1], rgb[2] * gains[2]];
+        let y = 0.299 * r + 0.587 * g + 0.114 * b;
+        [y + YCC_BLACK, (b - y) / 1.772 + 16384.0, (r - y) / 1.402 + 16384.0]
+    }
+
+    #[test]
+    fn ycbcr_tiles_decode_to_camera_rgb() {
+        // 4:2:0 (M) and 4:2:2 (S) images of 20×12 in 8×8 tiles, from camera RGB that is linear in x and y (so the
+        // bilinear interpolation of co-sited chroma is exact) and a white balance of 2.4 / 1.7
+        let gains = [2.4f32, 1.0, 1.7];
+        for (hs, vs) in [(2usize, 2usize), (2, 1)] {
+            let (w, h, tw) = (20usize, 12usize, 8usize);
+            let rgb_at = |x: usize, y: usize| [300.0 + 20.0 * x as f32, 900.0 + 12.0 * y as f32, 500.0 + 5.0 * (x + y) as f32];
+            let (tx_n, ty_n) = (w.div_ceil(tw), h.div_ceil(tw));
+            let mut file = vec![0u8; 16];
+            let (mut offsets, mut counts) = (vec![0u64; tx_n * ty_n], vec![0u64; tx_n * ty_n]);
+            for ty in 0..ty_n {
+                for tx in 0..tx_n {
+                    // a tile overhanging the image repeats its edge
+                    let px = |x: usize, y: usize| rgb_at((tx * tw + x).min(w - 1), (ty * tw + y).min(h - 1));
+                    let luma: Vec<u16> =
+                        (0..tw * tw).map(|i| to_ycc(px(i % tw, i / tw), gains)[0].round() as u16).collect();
+                    let (cw, ch) = (tw / hs, tw / vs);
+                    let chroma = |k: usize| -> Vec<u16> { (0..cw * ch).map(|i| to_ycc(px(i % cw * hs, i / cw * vs), gains)[k].round() as u16).collect() };
+                    let enc = ljpeg::encode_planar(&[luma, chroma(1), chroma(2)], tw, tw, &[(hs, vs), (1, 1), (1, 1)], 16, 1, 0);
+                    offsets[ty * tx_n + tx] = file.len() as u64;
+                    counts[ty * tx_n + tx] = enc.len() as u64;
+                    file.extend(enc);
+                }
+            }
+            let info = ImageInfo {
+                width: w as u32,
+                height: h as u32,
+                bits_per_sample: vec![15, 15, 15],
+                samples_per_pixel: 3,
+                compression: 7,
+                photometric: photometric::YCBCR,
+                planar: 1,
+                predictor: 1,
+                sample_format: 1,
+                new_subfile_type: 0,
+                layout: Layout::Tiles { tile_width: tw as u32, tile_height: tw as u32 },
+                offsets,
+                byte_counts: counts,
+            };
+            let (luma, chroma, sampling) = read_ycbcr_planes(&file, &info).unwrap();
+            assert_eq!(sampling, (hs, vs));
+            let out = ycbcr_to_camera_rgb(&luma, &chroma, w, h, sampling, [0.299, 0.587, 0.114], gains);
+            for y in 0..h {
+                for x in 0..w {
+                    let want = rgb_at(x, y);
+                    for c in 0..3 {
+                        let got = out[(y * w + x) * 3 + c] as f32 - YCC_OUT_BLACK;
+                        // rounding of the samples, amplified by the inverse transform; the last odd column / row
+                        // has no chroma sample to its right / below and repeats the previous one
+                        let edge = (hs == 2 && x == w - 1 && x % 2 == 1) || (vs == 2 && y == h - 1 && y % 2 == 1);
+                        let tol = if edge { 40.0 } else { 3.0 };
+                        assert!((got - want[c]).abs() <= tol, "{hs}×{vs} ({x}, {y}) channel {c}: {got} vs {}", want[c]);
+                    }
+                }
+            }
+            // a corrupt tile is skipped (left at zero luma) as long as one decodes; none decodable is an error
+            let mut bad = info.clone();
+            bad.offsets[0] = file.len() as u64 + 10;
+            assert!(read_ycbcr_planes(&file, &bad).is_ok());
+            bad.offsets.iter_mut().for_each(|o| *o = 3);
+            assert!(read_ycbcr_planes(&file, &bad).is_err());
+            for n in [0, 20, file.len() / 2] {
+                let _ = read_ycbcr_planes(&file[..n], &info);
+            }
+        }
     }
 
     #[test]

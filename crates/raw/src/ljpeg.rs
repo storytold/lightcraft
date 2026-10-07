@@ -1,9 +1,11 @@
 //! Lossless JPEG ("LJ92"): ITU-T T.81 / ISO 10918-1 process 14 (Annex H), Huffman-coded, as used by DNG,
 //! Canon CR2 and Sony lossless ARW.
 //!
-//! - All seven predictors, 2–16 bit precision, 1–4 interleaved components (1×1 sampling), point transform,
-//!   restart intervals, `SSSS = 16` differences.
-//! - [`decode`] returns the frame as interleaved samples in raster order (`width × height × components`),
+//! - All seven predictors, 2–16 bit precision, 1–4 interleaved components, point transform, restart intervals,
+//!   `SSSS = 16` differences.
+//! - Subsampled components (sampling factors other than 1×1, e.g. Sony's M/S-size lossless ARW with 4:2:0 /
+//!   4:2:2 YCbCr): [`decode_planar`] returns one plane per component.
+//! - [`decode`] returns a 1×1-sampled frame as interleaved samples in raster order (`width × height × components`),
 //!   which callers re-tile (DNG tiles, CR2 slices).
 //! - [`encode`] writes a conforming stream with per-component optimal Huffman tables built with the
 //!   T.81 Annex K.2 procedure — used by tests (bit-exact round trips) and later by DNG export.
@@ -207,6 +209,8 @@ struct Header {
     height: usize,
     width: usize,
     comps: Vec<u8>,
+    /// Horizontal and vertical sampling factors per component (T.81 `Hi`, `Vi`).
+    sampling: Vec<(usize, usize)>,
     tables: [Option<Huffman>; 4],
     table_for: Vec<usize>,
     predictor: u8,
@@ -228,6 +232,7 @@ fn parse_header(d: &[u8]) -> Result<Header, RawError> {
         height: 0,
         width: 0,
         comps: vec![],
+        sampling: vec![],
         tables: [None, None, None, None],
         table_for: vec![],
         predictor: 1,
@@ -272,10 +277,16 @@ fn parse_header(d: &[u8]) -> Result<Header, RawError> {
                 }
                 for c in 0..n {
                     let (id, samp) = (seg[6 + 3 * c], seg[7 + 3 * c]);
-                    if samp != 0x11 {
-                        return Err(RawError::Unsupported("lossless JPEG with subsampled components".into()));
+                    let (hs, vs) = ((samp >> 4) as usize, (samp & 15) as usize);
+                    if !(1..=4).contains(&hs) || !(1..=4).contains(&vs) {
+                        return Err(err("bad sampling factor"));
                     }
                     h.comps.push(id);
+                    h.sampling.push((hs, vs));
+                }
+                // T.81 B.2.2: at most 10 data units per MCU
+                if h.sampling.iter().map(|(a, b)| a * b).sum::<usize>() > 10 {
+                    return Err(err("too many samples per MCU"));
                 }
                 if !(2..=16).contains(&h.precision) {
                     return Err(err("bad precision"));
@@ -343,9 +354,18 @@ pub fn frame_info(d: &[u8]) -> Result<(usize, usize, usize, u8), RawError> {
     Ok((h.width, h.height, h.comps.len(), h.precision))
 }
 
-/// Decode a lossless JPEG stream. `max_samples` bounds the allocation (hostile headers).
+/// The components' sampling factors `(H, V)` from the frame header (all `(1, 1)` unless subsampled).
+pub fn sampling_factors(d: &[u8]) -> Result<Vec<(usize, usize)>, RawError> {
+    Ok(parse_header(d)?.sampling)
+}
+
+/// Decode a lossless JPEG stream. `max_samples` bounds the allocation (hostile headers). Subsampled frames
+/// (sampling factors other than 1×1) are decoded by [`decode_planar`].
 pub fn decode(d: &[u8], max_samples: usize) -> Result<Frame, RawError> {
     let h = parse_header(d)?;
+    if h.sampling.iter().any(|&s| s != (1, 1)) {
+        return Err(RawError::Unsupported("lossless JPEG with subsampled components (planar decode only)".into()));
+    }
     let (w, ht, nc) = (h.width, h.height, h.comps.len());
     if w == 0 || ht == 0 {
         return Err(err("zero frame size"));
@@ -428,6 +448,163 @@ pub fn decode(d: &[u8], max_samples: usize) -> Result<Frame, RawError> {
         }
     }
     Ok(Frame { width: w, height: ht, components: nc, precision: h.precision, predictor: pred, point_transform: h.pt, data: out })
+}
+
+/// One component of a [`PlanarFrame`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Plane {
+    /// Sampling factors `(H, V)`.
+    pub sampling: (usize, usize),
+    /// Size in samples: `⌈X · H / Hmax⌉ × ⌈Y · V / Vmax⌉` (T.81 A.1.1).
+    pub width: usize,
+    pub height: usize,
+    /// `width × height` samples in raster order.
+    pub data: Vec<u16>,
+}
+
+/// A decoded lossless-JPEG frame with one plane per component, for frames with subsampled components.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlanarFrame {
+    /// Frame size `X × Y` (the size of a component with the largest sampling factors).
+    pub width: usize,
+    pub height: usize,
+    pub precision: u8,
+    pub predictor: u8,
+    pub point_transform: u8,
+    pub planes: Vec<Plane>,
+}
+
+/// Decode a lossless JPEG stream into one plane per component, honouring sampling factors (ITU-T T.81 A.1.1,
+/// A.2.3 and Annex H): the scan is a sequence of MCUs, each holding `Hi × Vi` samples of component `i` (in raster
+/// order within the MCU) for every component in turn. Each sample is predicted from its neighbours in its own
+/// component (H.1.2.1): the first sample of the scan or of a restart interval from `2^(P − Pt − 1)`, the rest of
+/// that component line from the left neighbour, all samples not in the first column with the scan's predictor.
+///
+/// First column, with vertical sampling `V > 1`: the first sample of each *MCU row* is predicted from the first
+/// sample of the previous MCU row (`V` lines up), the first samples of the other lines of the MCU row from the
+/// line above. T.81 reads as "the line above" for every line; the rule used here was established black-box on
+/// Sony's 4:2:0 lossless ARWs (ILCE-7M4 M-size), where it is the only candidate that decodes without row-wide
+/// steps (mean absolute step between adjacent row means 10.6 vs 45.6 for "the line above" on a 512-line tile,
+/// and no wrapped samples, against 17 % wrapped over the whole image). With `V = 1` both readings agree.
+///
+/// Restart intervals must span whole MCU rows. Works for 1×1 sampling too (then the planes are the
+/// de-interleaved [`decode`] output). `max_samples` bounds the allocation.
+pub fn decode_planar(d: &[u8], max_samples: usize) -> Result<PlanarFrame, RawError> {
+    let h = parse_header(d)?;
+    let (w, ht, nc) = (h.width, h.height, h.comps.len());
+    if w == 0 || ht == 0 {
+        return Err(err("zero frame size"));
+    }
+    let hmax = h.sampling.iter().map(|s| s.0).max().unwrap_or(1);
+    let vmax = h.sampling.iter().map(|s| s.1).max().unwrap_or(1);
+    let (mcux, mcuy) = (w.div_ceil(hmax), ht.div_ceil(vmax));
+    // planes are decoded at whole-MCU size and trimmed afterwards
+    let padded: Vec<(usize, usize)> = h.sampling.iter().map(|&(hs, vs)| (mcux * hs, mcuy * vs)).collect();
+    let total = padded
+        .iter()
+        .try_fold(0usize, |acc, &(pw, ph)| pw.checked_mul(ph).and_then(|n| acc.checked_add(n)))
+        .ok_or_else(|| err("frame too large"))?;
+    if total > max_samples {
+        return Err(RawError::Limit("lossless JPEG frame larger than expected"));
+    }
+    let entropy = &d[h.scan_start..];
+    if (entropy.len() as u64 + 64) * 8 < total as u64 {
+        return Err(err("entropy data too short for frame"));
+    }
+    if h.restart > 0 && h.restart % mcux != 0 {
+        return Err(RawError::Unsupported("lossless JPEG restart interval inside an MCU row of a subsampled frame".into()));
+    }
+    let tables: Vec<&Huffman> = h
+        .table_for
+        .iter()
+        .map(|&t| h.tables.get(t).and_then(Option::as_ref).ok_or_else(|| err("scan uses an undefined Huffman table")))
+        .collect::<Result<_, RawError>>()?;
+    let mut planes: Vec<Vec<u16>> = padded.iter().map(|&(pw, ph)| vec![0u16; pw * ph]).collect();
+    let mut br = BitReader::new(entropy);
+    let init = 1i32 << (h.precision - h.pt - 1);
+    let pred = h.predictor;
+    let mut restart_left = h.restart;
+    // MCU row where the scan / current restart interval started: its first line per component is the "first line"
+    let mut interval_row = 0usize;
+    let mut reset_pending = vec![true; nc];
+    for my in 0..mcuy {
+        for mx in 0..mcux {
+            if h.restart > 0 {
+                if restart_left == 0 {
+                    if !br.restart() {
+                        return Err(err("missing restart marker"));
+                    }
+                    restart_left = h.restart;
+                    interval_row = my;
+                    reset_pending.iter_mut().for_each(|r| *r = true);
+                }
+                restart_left -= 1;
+            }
+            for c in 0..nc {
+                let (hs, vs) = h.sampling[c];
+                let pw = padded[c].0;
+                let plane = &mut planes[c];
+                let first_line = interval_row * vs;
+                for by in 0..vs {
+                    let y = my * vs + by;
+                    for bx in 0..hs {
+                        let x = mx * hs + bx;
+                        let i = y * pw + x;
+                        let p = if reset_pending[c] {
+                            reset_pending[c] = false;
+                            init
+                        } else if y == first_line {
+                            // x > 0 here: the line's first sample was the reset sample
+                            plane[i - 1] as i32
+                        } else if pred == 0 {
+                            0
+                        } else if x == 0 {
+                            // the first sample of an MCU row: from the first sample of the previous MCU row
+                            // (see the function docs); the first sample of any other line: from the one above
+                            if by == 0 { plane[i - vs * pw] as i32 } else { plane[i - pw] as i32 }
+                        } else {
+                            let ra = plane[i - 1] as i32;
+                            let rb = plane[i - pw] as i32;
+                            let rc = plane[i - pw - 1] as i32;
+                            match pred {
+                                1 => ra,
+                                2 => rb,
+                                3 => rc,
+                                4 => ra + rb - rc,
+                                5 => ra + ((rb - rc) >> 1),
+                                6 => rb + ((ra - rc) >> 1),
+                                _ => (ra + rb) >> 1,
+                            }
+                        };
+                        let ssss = tables[c].decode(&mut br)?;
+                        let diff = diff_value(&mut br, ssss);
+                        plane[i] = ((p + diff) & 0xffff) as u16;
+                    }
+                }
+            }
+        }
+        if br.overrun > 64 * 8 {
+            return Err(err("entropy data exhausted"));
+        }
+    }
+    let planes = planes
+        .into_iter()
+        .zip(&h.sampling)
+        .zip(&padded)
+        .map(|((mut data, &(hs, vs)), &(pw, _))| {
+            let (cw, ch) = ((w * hs).div_ceil(hmax), (ht * vs).div_ceil(vmax));
+            if cw != pw {
+                data = data.chunks_exact(pw).take(ch).flat_map(|row| row[..cw].iter().copied()).collect();
+            } else {
+                data.truncate(cw * ch);
+            }
+            if h.pt > 0 {
+                data.iter_mut().for_each(|v| *v <<= h.pt);
+            }
+            Plane { sampling: (hs, vs), width: cw, height: ch, data }
+        })
+        .collect();
+    Ok(PlanarFrame { width: w, height: ht, precision: h.precision, predictor: pred, point_transform: h.pt, planes })
 }
 
 // ------------------------------------------------------------------------------------------------ encoder
@@ -700,6 +877,143 @@ pub fn encode(data: &[u16], width: usize, height: usize, components: usize, prec
     out
 }
 
+/// Test encoder for subsampled frames: `planes[c]` is component `c` at `⌈w · H / Hmax⌉ × ⌈h · V / Vmax⌉` samples,
+/// coded in interleaved MCUs with the prediction rules of [`decode_planar`] (one Huffman table per component).
+#[cfg(test)]
+pub(crate) fn encode_planar(
+    planes: &[Vec<u16>],
+    w: usize,
+    h: usize,
+    sampling: &[(usize, usize)],
+    precision: u8,
+    predictor: u8,
+    restart: usize,
+) -> Vec<u8> {
+    let nc = planes.len();
+    let (hmax, vmax) = (sampling.iter().map(|s| s.0).max().unwrap_or(1), sampling.iter().map(|s| s.1).max().unwrap_or(1));
+    let (mcux, mcuy) = (w.div_ceil(hmax), h.div_ceil(vmax));
+    // pad every plane to whole MCUs by repeating its last column / row
+    let padded: Vec<(usize, Vec<u16>)> = planes
+        .iter()
+        .zip(sampling)
+        .map(|(p, &(hs, vs))| {
+            let (cw, ch) = ((w * hs).div_ceil(hmax), (h * vs).div_ceil(vmax));
+            let (pw, ph) = (mcux * hs, mcuy * vs);
+            (pw, (0..pw * ph).map(|i| p[(i / pw).min(ch - 1) * cw + (i % pw).min(cw - 1)]).collect())
+        })
+        .collect();
+    let init = 1i32 << (precision - 1);
+    // differences in coding order, with the component of each
+    let mut diffs: Vec<(usize, i32)> = Vec::new();
+    let mut marks = Vec::new();
+    let mut restart_left = restart;
+    let mut interval_row = 0;
+    let mut reset = vec![true; nc];
+    for my in 0..mcuy {
+        for mx in 0..mcux {
+            if restart > 0 {
+                if restart_left == 0 {
+                    marks.push(diffs.len());
+                    restart_left = restart;
+                    interval_row = my;
+                    reset.iter_mut().for_each(|r| *r = true);
+                }
+                restart_left -= 1;
+            }
+            for c in 0..nc {
+                let (hs, vs) = sampling[c];
+                let (pw, ref p) = padded[c];
+                for by in 0..vs {
+                    for bx in 0..hs {
+                        let (x, y) = (mx * hs + bx, my * vs + by);
+                        let i = y * pw + x;
+                        let pred = if reset[c] {
+                            reset[c] = false;
+                            init
+                        } else if y == interval_row * vs {
+                            p[i - 1] as i32
+                        } else if x == 0 {
+                            if by == 0 { p[i - vs * pw] as i32 } else { p[i - pw] as i32 }
+                        } else {
+                            let (ra, rb, rc) = (p[i - 1] as i32, p[i - pw] as i32, p[i - pw - 1] as i32);
+                            match predictor {
+                                1 => ra,
+                                2 => rb,
+                                3 => rc,
+                                4 => ra + rb - rc,
+                                5 => ra + ((rb - rc) >> 1),
+                                6 => rb + ((ra - rc) >> 1),
+                                _ => (ra + rb) >> 1,
+                            }
+                        };
+                        let mut d = (p[i] as i32 - pred) & 0xffff;
+                        if d > 32768 {
+                            d -= 65536;
+                        }
+                        diffs.push((c, d));
+                    }
+                }
+            }
+        }
+    }
+    let tables: Vec<([u8; 16], Vec<u8>)> = (0..nc)
+        .map(|c| {
+            let mut freq = [0u32; 17];
+            diffs.iter().filter(|(k, _)| *k == c).for_each(|(_, d)| freq[ssss_of(*d) as usize] += 1);
+            code_lengths(&freq)
+        })
+        .collect();
+    let mut out = vec![0xff, 0xd8, 0xff, 0xc3];
+    out.extend_from_slice(&((8 + 3 * nc) as u16).to_be_bytes());
+    out.push(precision);
+    out.extend_from_slice(&(h as u16).to_be_bytes());
+    out.extend_from_slice(&(w as u16).to_be_bytes());
+    out.push(nc as u8);
+    for (c, &(hs, vs)) in sampling.iter().enumerate() {
+        out.extend_from_slice(&[c as u8 + 1, (hs << 4 | vs) as u8, 0]);
+    }
+    for (c, (counts, values)) in tables.iter().enumerate() {
+        out.extend_from_slice(&[0xff, 0xc4]);
+        out.extend_from_slice(&((2 + 17 + values.len()) as u16).to_be_bytes());
+        out.push(c as u8);
+        out.extend_from_slice(counts);
+        out.extend_from_slice(values);
+    }
+    if restart > 0 {
+        out.extend_from_slice(&[0xff, 0xdd, 0, 4]);
+        out.extend_from_slice(&(restart as u16).to_be_bytes());
+    }
+    out.extend_from_slice(&[0xff, 0xda]);
+    out.extend_from_slice(&((6 + 2 * nc) as u16).to_be_bytes());
+    out.push(nc as u8);
+    for c in 0..nc {
+        out.extend_from_slice(&[c as u8 + 1, (c as u8) << 4]);
+    }
+    out.extend_from_slice(&[predictor, 0, 0]);
+    let codes: Vec<[(u32, u8); 17]> = tables.iter().map(|(c, v)| canonical_codes(c, v)).collect();
+    let mut bw = BitWriter { out, acc: 0, n: 0 };
+    let mut rst = 0u8;
+    for (i, &(c, d)) in diffs.iter().enumerate() {
+        if marks.contains(&i) {
+            bw.flush();
+            bw.out.extend_from_slice(&[0xff, 0xd0 + rst]);
+            rst = (rst + 1) & 7;
+            bw.acc = 0;
+        }
+        let s = ssss_of(d);
+        let (code, len) = codes[c][s as usize];
+        bw.put(code, len as u32);
+        if s > 0 && s < 16 {
+            let v = if d < 0 { d - 1 } else { d };
+            bw.put(v as u32 & ((1 << s) - 1), s as u32);
+        }
+    }
+    bw.flush();
+    let mut out = bw.out;
+    out.extend_from_slice(&[0xff, 0xd9]);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -769,6 +1083,92 @@ mod tests {
             bad[i] ^= 0x5a;
         }
         let _ = decode(&bad, usize::MAX);
+    }
+
+    /// Smooth test planes for a `w × h` frame with the given sampling factors.
+    fn planar_input(w: usize, h: usize, sampling: &[(usize, usize)], seed: u64) -> Vec<Vec<u16>> {
+        let (hmax, vmax) = (sampling.iter().map(|s| s.0).max().unwrap(), sampling.iter().map(|s| s.1).max().unwrap());
+        sampling
+            .iter()
+            .enumerate()
+            .map(|(c, &(hs, vs))| {
+                let (pw, ph) = ((w * hs).div_ceil(hmax), (h * vs).div_ceil(vmax));
+                let n = noise(pw * ph, 12, seed + c as u64);
+                (0..pw * ph).map(|i| 1000 + (i / pw * 7 + i % pw * 3) as u16 % 2000 + n[i] % 300).collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn planar_roundtrip_subsampled() {
+        for (w, h, sampling) in [
+            (16usize, 12usize, vec![(2usize, 2usize), (1, 1), (1, 1)]), // 4:2:0 (Sony M-size)
+            (16, 12, vec![(2, 1), (1, 1), (1, 1)]),                    // 4:2:2 (Sony S-size)
+            (15, 11, vec![(2, 2), (1, 1), (1, 1)]),                    // partial MCUs at the right and bottom
+            (9, 7, vec![(1, 1), (1, 1)]),                              // no subsampling
+            (8, 8, vec![(1, 2), (2, 1), (1, 1)]),
+        ] {
+            let planes = planar_input(w, h, &sampling, 3);
+            for pred in 1..=7 {
+                let enc = encode_planar(&planes, w, h, &sampling, 15, pred, 0);
+                let f = decode_planar(&enc, usize::MAX).unwrap_or_else(|e| panic!("{w}×{h} {sampling:?} p{pred}: {e}"));
+                assert_eq!((f.width, f.height, f.predictor), (w, h, pred));
+                for (k, p) in f.planes.iter().enumerate() {
+                    assert_eq!(p.sampling, sampling[k]);
+                    assert_eq!(p.data, planes[k], "{w}×{h} {sampling:?} predictor {pred} component {k}");
+                }
+            }
+        }
+        // restart intervals of whole MCU rows
+        let s = [(2, 2), (1, 1), (1, 1)];
+        let planes = planar_input(16, 12, &s, 9);
+        let enc = encode_planar(&planes, 16, 12, &s, 15, 1, 16);
+        assert_eq!(decode_planar(&enc, usize::MAX).unwrap().planes.into_iter().map(|p| p.data).collect::<Vec<_>>(), planes);
+        // ... others are reported, not mis-decoded
+        let enc = encode_planar(&planes, 16, 12, &s, 15, 1, 5);
+        assert!(matches!(decode_planar(&enc, usize::MAX), Err(RawError::Unsupported(_))));
+        // the interleaved decoder hands subsampled frames to the planar one
+        let enc = encode_planar(&planes, 16, 12, &s, 15, 1, 0);
+        assert!(matches!(decode(&enc, usize::MAX), Err(RawError::Unsupported(_))));
+        assert_eq!(sampling_factors(&enc).unwrap(), s.to_vec());
+    }
+
+    #[test]
+    fn planar_first_column_follows_the_mcu_row() {
+        // a frame whose first column steps between MCU rows: decoding with "the line above" for the first sample
+        // of an MCU row would shift every later row; our encoder mirrors the rule of `decode_planar`
+        let s = [(2, 2), (1, 1), (1, 1)];
+        let mut planes = planar_input(8, 8, &s, 5);
+        for (y, row) in planes[0].chunks_mut(8).enumerate() {
+            row[0] = 4000 + 500 * y as u16;
+        }
+        let enc = encode_planar(&planes, 8, 8, &s, 15, 1, 0);
+        assert_eq!(decode_planar(&enc, usize::MAX).unwrap().planes[0].data, planes[0]);
+    }
+
+    #[test]
+    fn planar_rejects_bad_streams() {
+        let s = [(2, 2), (1, 1), (1, 1)];
+        let planes = planar_input(16, 12, &s, 1);
+        let enc = encode_planar(&planes, 16, 12, &s, 15, 1, 0);
+        assert!(decode_planar(&[], 100).is_err());
+        assert!(matches!(decode_planar(&enc, 100), Err(RawError::Limit(_))));
+        for n in 0..enc.len() {
+            let _ = decode_planar(&enc[..n], usize::MAX);
+        }
+        let mut bad = enc.clone();
+        for i in (20..bad.len()).step_by(3) {
+            bad[i] ^= 0x5a;
+        }
+        let _ = decode_planar(&bad, usize::MAX);
+        // sampling factors 0 or > 4, and more than 10 samples per MCU
+        let sof = enc.windows(2).position(|w| w == [0xff, 0xc3]).unwrap();
+        for samp in [0x00u8, 0x50, 0x05, 0x44] {
+            let mut b = enc.clone();
+            b[sof + 11] = samp; // first component's sampling byte
+            b[sof + 14] = samp;
+            assert!(decode_planar(&b, usize::MAX).is_err(), "sampling {samp:#x}");
+        }
     }
 
     #[test]

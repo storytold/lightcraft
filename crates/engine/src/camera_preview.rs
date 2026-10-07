@@ -40,7 +40,12 @@ pub(crate) fn fit_preview(raw: &RawImage, bytes: &[u8], transform: &CameraTransf
     }
     // Fixed, bounded proxy: the selected look cannot depend on thumbnail/export resolution.
     let k = (crop.width.max(crop.height).div_ceil(384).max(2)).div_ceil(2) * 2;
-    let sensor = raw.develop_binned(k, 0.99).ok()??;
+    let sensor = match raw.develop_binned(k, 0.99).ok()? {
+        Some(s) => s,
+        // reduced-size (M/S) ARWs are already RGB (issue #147): no demosaic, the box fit below does the binning
+        None if raw.cpp == 3 && raw.cfa.is_none() => raw.develop(lightcraft_raw::Method::Bilinear).ok()?,
+        None => return None,
+    };
     let mut sensor = fit(&sensor, 96, 96, Filter::Box);
     let reference = fit(&reference, sensor.width, sensor.height, Filter::Box);
     let gain = 2f32.powf(transform.baseline_exposure as f32);
