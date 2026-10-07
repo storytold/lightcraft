@@ -15,15 +15,15 @@ fn corpus_root() -> PathBuf {
 
 /// Variants known not to decode yet (see the crate docs): matched against the lower-case file name.
 const KNOWN_UNSUPPORTED: &[&str] = &[
-    "cr3-",                     // CR3 / CRX (M11.1)
-    "arw-sony-a7m4-lossless-m", // Sony lossless compressed M/S: subsampled (YCbCr) lossless JPEG
-    "arw-sony-a7m4-lossless-s", // "
-    "raf-fuji-xt20-compressed", // Fujifilm compressed RAF
-    "rw2-panasonic-gh5.",       // Panasonic raw format 4 (quantised)
-    "rw2-panasonic-gx80",       // "
-    "rw2-panasonic-g9-b",       // "
-    "orf-olympus-em",           // Olympus compressed ORF
-    "sraw",                     // Canon sRAW / mRAW
+    "cr3-",                            // CR3 / CRX (M11.1)
+    "arw-sony-a7m4-lossless-m",        // Sony lossless compressed M/S: subsampled (YCbCr) lossless JPEG
+    "arw-sony-a7m4-lossless-s",        // "
+    "raf-fuji-xt20-compressed",        // Fujifilm compressed RAF
+    "rw2-panasonic-gh5.",              // Panasonic raw format 4 (quantised)
+    "rw2-panasonic-gx80",              // "
+    "rw2-panasonic-g9-b",              // "
+    "orf-olympus-om1ii-hires50-14bit", // Olympus 14-bit compressed ORF (OM-1 Mark II High Res Shot)
+    "sraw",                            // Canon sRAW / mRAW
 ];
 
 #[test]
@@ -288,4 +288,85 @@ fn corpus_sony_pre2017_colour_metadata() {
         seen += 1;
     }
     eprintln!("pre-2017 Sony ARW colour metadata checked on {seen} files");
+}
+
+/// Per cell of a 16×12 grid: the mean red, green and blue of an 8-bit RGB image, linearised (gamma 2.2).
+fn preview_cells(jpeg: &[u8]) -> Vec<[f64; 3]> {
+    use zune_core::bytestream::ZCursor;
+    use zune_core::colorspace::ColorSpace;
+    use zune_core::options::DecoderOptions;
+    let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB);
+    let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(jpeg), opts);
+    let px = d.decode().unwrap();
+    let (w, h) = d.dimensions().unwrap();
+    let mut cells = vec![([0f64; 3], 0f64); 16 * 12];
+    for y in (0..h).step_by(4) {
+        for x in (0..w).step_by(4) {
+            let cell = &mut cells[(y * 12 / h) * 16 + x * 16 / w];
+            for c in 0..3 {
+                cell.0[c] += (px[(y * w + x) * 3 + c] as f64 / 255.0).powf(2.2);
+            }
+            cell.1 += 1.0;
+        }
+    }
+    cells.into_iter().map(|(s, n)| s.map(|v| v / n)).collect()
+}
+
+/// The same grid over a raw image's active area: black-subtracted, white-balanced means of its red, green and blue
+/// sites, relative to white.
+fn raw_cells(img: &lightcraft_raw::RawImage) -> Vec<[f64; 3]> {
+    let lightcraft_raw::RawData::U16(d) = &img.data else { panic!("float data") };
+    let (a, cfa) = (img.active_area, img.cfa.as_ref().unwrap());
+    let wb = img.wb_multipliers.unwrap_or([1.0; 3]);
+    let (black, white) = (img.black.mean() as f64, img.white_at(0) as f64);
+    let mut cells = vec![([0f64; 3], [0f64; 3]); 16 * 12];
+    for y in (0..a.height).step_by(3) {
+        for x in (0..a.width).step_by(3) {
+            let cell = &mut cells[(y * 12 / a.height) * 16 + x * 16 / a.width];
+            let c = cfa.color_at(a.x + x, a.y + y) as usize;
+            cell.0[c] += d[(a.y + y) * img.width + a.x + x] as f64 - black;
+            cell.1[c] += 1.0;
+        }
+    }
+    cells.into_iter().map(|(s, n)| [0, 1, 2].map(|c| s[c] / n[c] * wb[c] as f64 / (white - black))).collect()
+}
+
+/// ORFs decode to the picture their own embedded JPEG shows: over a 16×12 grid, brightness and the red/blue
+/// balance follow the preview. A wrong decode fails the first, a wrong colour-filter layout the second (greens
+/// taken for red and blue give no red/blue signal; swapped red and blue an inverted one, −0.97 on the E-M1 and
+/// E-620 samples, which are BGGR, when read as RGGB).
+#[test]
+fn corpus_orf_matches_embedded_preview() {
+    let dir = corpus_root().join("raw");
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        eprintln!("skip: {} absent", dir.display());
+        return;
+    };
+    let mut paths: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+    paths.sort();
+    let mut seen = 0;
+    for p in paths {
+        let name = p.file_name().unwrap().to_string_lossy().to_lowercase();
+        if !name.starts_with("orf-") || !name.ends_with(".orf") {
+            continue;
+        }
+        let bytes = std::fs::read(&p).unwrap();
+        let Ok(img) = decode(&bytes) else { continue };
+        let (raw, jpeg) = (raw_cells(&img), preview_cells(&embedded_preview(&bytes).unwrap()));
+        // cells that are neither near black nor clipped in either image
+        let usable: Vec<usize> = (0..raw.len()).filter(|&i| raw[i].iter().chain(&jpeg[i]).all(|&v| v > 0.004 && v < 0.8)).collect();
+        let pick = |f: &dyn Fn(&[f64; 3]) -> f64, cells: &[[f64; 3]]| usable.iter().map(|&i| f(&cells[i])).collect::<Vec<_>>();
+        let luma = |c: &[f64; 3]| c[1].ln();
+        let red_blue = |c: &[f64; 3]| (c[0] / c[2]).ln();
+        let (rl, rc) = (correlation(&pick(&luma, &raw), &pick(&luma, &jpeg)), correlation(&pick(&red_blue, &raw), &pick(&red_blue, &jpeg)));
+        eprintln!(
+            "{name:44} {} cells: brightness correlation {rl:.3}, red/blue correlation {rc:.3}; {}",
+            usable.len(),
+            img.cfa.as_ref().unwrap().name()
+        );
+        assert!(rl > 0.9, "{name}: brightness correlation with the preview {rl}");
+        assert!(rc > 0.7, "{name}: red/blue correlation with the preview {rc}");
+        seen += 1;
+    }
+    eprintln!("{seen} ORFs compared with their previews");
 }

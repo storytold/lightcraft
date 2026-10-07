@@ -288,7 +288,7 @@ LightCraft is young and moving fast. **Where we honestly stand** (details in the
   older-Canon raws on one machine.
 - **The biggest gaps:**
   - **camera colour calibration:** raws other than DNG develop with a neutral colour matrix today, so colour is muted;
-  - **CR3 and compressed Fujifilm / Olympus raws:** these open as embedded previews only;
+  - **CR3 and compressed Fujifilm raws:** these open as embedded previews only;
   - **AI masks and denoise:** subject and sky selection are classical heuristics;
   - **HDR, video and the Classic Print / Book / Map modules.**
 - **What's next:** see [where we're going](ROADMAP.md#where-were-going).
@@ -303,7 +303,7 @@ LightCraft is young and moving fast. **Where we honestly stand** (details in the
 | Profiles (Color, Neutral, Vivid, Landscape, Portrait, Monochrome: our own looks), presets, versions, history, copy/paste/sync settings | ✅ |
 | Camera colour: DNG files use their own matrices | ✅ · our own calibration for other raws ⬜ (top priority; neutral fallback today) |
 | Native macOS menu bar (generated from the command registry), control channel + every widget addressable, headless UI snapshots | ✅ |
-| RAW: DNG, CR2, ARW, NEF (uncompressed + lossless/lossy compressed), Fujifilm RAF (uncompressed, Bayer + X-Trans), Panasonic RW2, Pentax PEF, Olympus ORF (uncompressed); embedded previews for every format incl. CR3 | ✅ · CR3, compressed RAF/ORF decode ⬜ |
+| RAW: DNG, CR2, ARW, NEF (uncompressed + lossless/lossy compressed), Fujifilm RAF (uncompressed, Bayer + X-Trans), Panasonic RW2, Pentax PEF, Olympus ORF (uncompressed + 12-bit compressed); embedded previews for every format incl. CR3 | ✅ · CR3, compressed RAF decode ⬜ |
 | Detail: sharpening, luminance + colour noise reduction | ✅ · AI Denoise, Super Resolution ⬜ |
 | Remove / Heal / Clone spots (auto source), Visualize Spots, Red Eye and Pet Eye (auto pupil detection, catchlight) | ✅ · content-aware fill, spot pin editing 🚧 |
 | Export: JPEG / PNG / TIFF / WebP / AVIF / DNG / original, sizing, file-size limit, output sharpening, naming templates, batch, metadata policy, text or image watermark | ✅ · HDR export ⬜ |

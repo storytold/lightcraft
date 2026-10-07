@@ -1,25 +1,30 @@
-//! Olympus ORF — uncompressed variants.
+//! Olympus ORF — the container, the uncompressed variants and everything around the samples. The compressed
+//! variant's bit stream is decoded by [`super::orfc`].
 //!
-//! Sources: TIFF 6.0 (the `IIRO`/`MMOR` container is a TIFF with a different magic number), the ExifTool
-//! Olympus tag-name documentation (maker-note sub-directories `0x2020` CameraSettings — `0x0101/0x0102`
-//! PreviewImageStart/Length — and `0x2040` ImageProcessing — `0x0100` WB_RBLevels, `0x0600` BlackLevel2,
-//! `0x0612–0x0615` CropLeft/Top/Width/Height) and our own black-box analysis of CC0 samples from raw.pixls.us
-//! (E-1, E-400, XZ-2):
+//! Sources: TIFF 6.0 (the `IIRO`/`MMOR` container is a TIFF with a different magic number), Exif 2.3 (`CFAPattern`,
+//! tag `0xa302`), the ExifTool Olympus tag-name documentation (maker-note sub-directories `0x2020` CameraSettings —
+//! `0x0101/0x0102` PreviewImageStart/Length — and `0x2040` ImageProcessing — `0x0100` WB_RBLevels, `0x0600`
+//! BlackLevel2, `0x0612–0x0615` CropLeft/Top/Width/Height) and our own black-box analysis of CC0 samples from
+//! raw.pixls.us (16 files, E-1 … OM-1 Mark II):
 //!
 //! - 16 bits per sample: little-endian words; some bodies (E-1, E-400) store 12-bit values in the top bits (the low
 //!   four bits zero in more than 99% of samples), which we shift down.
 //! - 12-bit packed (XZ-2): each row is a sequence of little-endian 32-bit words read MSB-first (found by testing
 //!   candidate bit orders for the smoothest image).
-//! - Olympus's compressed ORF (most interchangeable-lens bodies since ~2008) is not decoded: no permissively
-//!   licensed description exists. It reports [`RawError::Unsupported`]; the embedded preview still works.
-//! - The files carry no CFA tag. The green diagonal is found from the data (the diagonal whose two samples differ
-//!   least); bodies with greens on the main diagonal (E-1, E-400) are GRBG, the others (XZ-2) RGGB — verified by
-//!   colour renders.
+//! - Compressed (E-410 onwards): 16 bits declared, one strip well under 12 bits per pixel that starts with
+//!   `00 00 00 00 01 00 00`; see [`super::orfc`]. Other strips of that size (the OM-1 Mark II's 14-bit High Res Shot)
+//!   report [`RawError::Unsupported`]; the embedded preview still works.
+//! - The colour-filter layout is the Exif `CFAPattern` of the file, present in all 16 samples: GRBG (E-1, E-400,
+//!   TG-6), BGGR (E-620, E-M1) or RGGB (the rest). It agrees with the picture in every one of them: with it, the
+//!   red/blue balance of the decoded mosaic follows the embedded JPEG (`corpus_orf_matches_embedded_preview`). The
+//!   samples' active areas all start at even offsets, so they can't tell whether the pattern is anchored at the
+//!   sensor origin (assumed) or at the active area. Files without the tag fall back to the green diagonal found
+//!   from the data, which can't tell red from blue (RGGB or GRBG is assumed).
 
-use super::white_from_data;
+use super::{orfc, white_from_data};
 use crate::tiffraw::{Packing, read_image};
 use crate::unpack::unpack_msb;
-use crate::{BlackLevel, Cfa, ColorData, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
+use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
 use lightcraft_geom::Orientation;
 use lightcraft_tiff::image::chunk_bytes;
 use lightcraft_tiff::makernote::MakerNote;
@@ -33,6 +38,8 @@ pub(crate) const PREVIEW_LENGTH: u16 = 0x0102;
 const WB_RB: u16 = 0x0100;
 const BLACK: u16 = 0x0600;
 const CROP: [u16; 4] = [0x0612, 0x0613, 0x0614, 0x0615];
+/// Exif `CFAPattern`.
+const EXIF_CFA_PATTERN: u16 = 0xa302;
 
 /// The Olympus maker note.
 pub(crate) fn maker_note(bytes: &[u8], tiff: &Tiff) -> Option<MakerNote> {
@@ -66,35 +73,71 @@ pub(crate) fn unpack_row_le32_msb(src: &[u8], bits: u32, out: &mut [u16]) {
     unpack_msb(&swapped, bits, out);
 }
 
-/// GRBG when the greens sit on the main diagonal of the 2×2 cell at the sensor origin, else RGGB.
+/// The colour-filter layout from the Exif `CFAPattern` tag (`0xa302`: two 16-bit repeat counts in either byte
+/// order, then one byte per site, 0 = red, 1 = green, 2 = blue), when it describes a 2×2 Bayer cell.
+fn cfa_from_exif(tiff: &Tiff) -> Option<Cfa> {
+    let [c0, c1, r0, r1, sites @ ..] = tiff.exif()?.bytes(EXIF_CFA_PATTERN)? else { return None };
+    let two = |a: &u8, b: &u8| matches!((*a, *b), (2, 0) | (0, 2));
+    let count = |colour: u8| sites.iter().filter(|&&s| s == colour).count();
+    (two(c0, c1) && two(r0, r1) && sites.len() == 4 && (count(0), count(1), count(2)) == (1, 2, 1) && (sites[0] == 1) == (sites[3] == 1))
+        .then(|| Cfa { width: 2, height: 2, pattern: sites.to_vec() })
+}
+
+/// The layout found from the samples, for files without the Exif tag: GRBG when the greens sit on the main
+/// diagonal of the 2×2 cell at the sensor origin, else RGGB. Over 32×32-pixel blocks of `a` (every fourth in both
+/// directions) it compares the block totals of the two sites on each diagonal: the two greens of a block see the
+/// same light, red and blue rarely do. (Differences of single pixels are not enough: on the E-M10 Mark III sample,
+/// whose red and blue levels are close, texture outweighs them.)
 pub(crate) fn cfa_from_data(d: &[u16], w: usize, a: Rect) -> Cfa {
-    let (x0, y0) = (a.x + ((a.width / 8) & !1), a.y + ((a.height / 8) & !1));
-    let (x1, y1) = (a.x + a.width * 7 / 8, a.y + a.height * 7 / 8);
+    const BLOCK: usize = 32;
+    let (x0, y0) = ((a.x + 1) & !1, (a.y + 1) & !1);
+    let across = (a.x + a.width).saturating_sub(x0) / BLOCK;
+    let down = (a.y + a.height).saturating_sub(y0) / BLOCK;
     let (mut main, mut anti) = (0u64, 0u64);
-    for y in (y0..y1.saturating_sub(1)).step_by(16) {
-        for x in (x0..x1.saturating_sub(1)).step_by(8) {
-            let (x, y) = (x & !1, y & !1);
-            let p = |dx: usize, dy: usize| d[(y + dy) * w + x + dx] as i64;
-            main += (p(0, 0) - p(1, 1)).unsigned_abs();
-            anti += (p(1, 0) - p(0, 1)).unsigned_abs();
+    for by in (0..down).step_by(4) {
+        for bx in (0..across).step_by(4) {
+            let mut sums = [0i64; 4];
+            for y in 0..BLOCK {
+                let start = (y0 + by * BLOCK + y) * w + x0 + bx * BLOCK;
+                let Some(row) = d.get(start..start + BLOCK) else { continue };
+                for (x, &v) in row.iter().enumerate() {
+                    sums[(y & 1) * 2 + (x & 1)] += v as i64;
+                }
+            }
+            main += (sums[0] - sums[3]).unsigned_abs();
+            anti += (sums[1] - sums[2]).unsigned_abs();
         }
     }
     Cfa::bayer_static(if main < anti { "GRBG" } else { "RGGB" })
 }
 
-pub(crate) fn decode(bytes: &[u8]) -> Result<RawImage> {
+pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let tiff = Tiff::parse(bytes)?;
     let ifd0 = &tiff.ifds[0];
     let info = ifd0.image()?;
     let (w, h) = (info.width as usize, info.height as usize);
     let n = w.checked_mul(h).filter(|n| *n > 0 && *n <= crate::MAX_SAMPLES).ok_or(RawError::Limit("image too large"))?;
+    let mn = maker_note(bytes, &tiff);
+    let ip = mn.as_ref().and_then(|m| sub_ifd(bytes, m, IMAGE_PROCESSING));
+    let active = match ip.as_ref().map(|i| CROP.map(|tag| i.u64(tag).map(|v| v as usize))) {
+        Some([Some(x), Some(y), Some(cw), Some(ch)]) if cw > 0 && ch > 0 && x + cw <= w && y + ch <= h => Rect::new(x, y, cw, ch),
+        _ => Rect::new(0, 0, w, h),
+    };
     let chunks = info.chunks(bytes.len() as u64);
     let total: u64 = chunks.iter().map(|c| c.len).sum();
+    let stated = cfa_from_exif(&tiff);
     let (mut data, bits) = if info.compression != 1 {
         return Err(RawError::Unsupported(format!("ORF compression {}", info.compression)));
     } else if total >= (n as u64) * 2 {
         let d = read_image(bytes, &info, tiff.order, Packing::Word16)?;
         (d, 16)
+    } else if let [chunk] = chunks.as_slice()
+        && let Some(src) = chunk_bytes(bytes, chunk)
+        && orfc::is_compressed(src)
+    {
+        // a header-only probe needs the samples only when the file doesn't state its colour-filter layout
+        let d = if mode == Mode::Full || stated.is_none() { orfc::decode(src, w, h)? } else { Vec::new() };
+        (RawData::U16(d), 12)
     } else if total * 8 >= (n as u64) * 12 && total * 8 < (n as u64) * 13 && chunks.len() == 1 {
         let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
         let stride = src.len() / h;
@@ -102,7 +145,9 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<RawImage> {
         d.par_chunks_mut(w).enumerate().for_each(|(y, row)| unpack_row_le32_msb(&src[y * stride..(y + 1) * stride], 12, row));
         (RawData::U16(d), 12)
     } else {
-        return Err(RawError::Unsupported("Olympus compressed ORF".into()));
+        let head = chunks.first().and_then(|c| chunk_bytes(bytes, c)).and_then(|s| s.get(..8)).unwrap_or_default();
+        let head: Vec<String> = head.iter().map(|b| format!("{b:02x}")).collect();
+        return Err(RawError::Unsupported(format!("this Olympus compressed ORF variant is not decoded yet (strip header {})", head.join(" "))));
     };
     let RawData::U16(ref mut samples) = data else { return Err(RawError::Unsupported("float ORF".into())) };
     let bits = if bits == 16 && samples.iter().step_by(7).filter(|v| *v & 15 != 0).count() * 700 <= n {
@@ -122,13 +167,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<RawImage> {
         bits
     };
 
-    let mn = maker_note(bytes, &tiff);
-    let ip = mn.as_ref().and_then(|m| sub_ifd(bytes, m, IMAGE_PROCESSING));
-    let active = match ip.as_ref().map(|i| CROP.map(|tag| i.u64(tag).map(|v| v as usize))) {
-        Some([Some(x), Some(y), Some(cw), Some(ch)]) if cw > 0 && ch > 0 && x + cw <= w && y + ch <= h => Rect::new(x, y, cw, ch),
-        _ => Rect::new(0, 0, w, h),
-    };
-    let cfa = cfa_from_data(samples, w, active);
+    let cfa = stated.unwrap_or_else(|| cfa_from_data(samples, w, active));
     let black = match ip.as_ref().and_then(|i| i.f64s(BLACK)).as_deref() {
         Some(v @ [_, _, _, _]) => {
             let a = cfa.shifted(active.x, active.y);
@@ -165,7 +204,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<RawImage> {
         opcodes: OpcodeLists::default(),
         metadata,
     };
-    img.validate()?;
+    img.validate_for(mode)?;
     Ok(img)
 }
 

@@ -13,9 +13,9 @@
 //!
 //! Formats: DNG (uncompressed, lossless JPEG, lossy JPEG (Smart Previews), Deflate incl. floating point, tiled/stripped, CFA and LinearRaw),
 //! Canon CR2, Nikon NEF/NRW (uncompressed, Huffman lossless / lossy compressed), Sony ARW (uncompressed, ARW2, lossless), Fujifilm RAF (uncompressed Bayer
-//! and X-Trans), Panasonic RW2 (packed 12/14-bit), Pentax PEF (uncompressed, Huffman), Olympus ORF (uncompressed).
+//! and X-Trans), Panasonic RW2 (packed 12/14-bit), Pentax PEF (uncompressed, Huffman), Olympus ORF (uncompressed, 12-bit compressed).
 //! [`embedded_preview`] covers all of them plus CR3. Variants we can't decode yet (Nikon "lossy after split" NEF,
-//! Panasonic quantised RW2, compressed ORF/RAF, CR3) return [`RawError::Unsupported`]; each vendor module documents its sources
+//! Panasonic quantised RW2, compressed RAF, 14-bit compressed ORF, CR3) return [`RawError::Unsupported`]; each vendor module documents its sources
 //! (public specifications, tag-name documentation, black-box analysis of CC0 samples) and gaps. Non-DNG files carry no
 //! colour matrix: [`color`] falls back to a documented neutral model. The decoders never panic on malformed input.
 #![forbid(unsafe_code)]
@@ -158,7 +158,7 @@ pub fn decode(bytes: &[u8]) -> Result<RawImage> {
 /// measure them from the samples).
 ///
 /// A few uncompressed vendor formats derive part of this from the samples themselves (Nikon
-/// NEF: optically masked trailing columns; Olympus ORF: the CFA phase and bit depth; Pentax PEF
+/// NEF: optically masked trailing columns; uncompressed Olympus ORF: the bit depth; Pentax PEF
 /// without crop tags: dark borders); for those the samples are read (unpacked, nothing to
 /// decompress) and dropped.
 pub fn probe_info(bytes: &[u8]) -> Result<RawInfo> {
@@ -184,7 +184,7 @@ fn decode_with(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         RawFormat::Raf => vendor::raf::decode(bytes, mode),
         RawFormat::Rw2 => vendor::rw2::decode(bytes, mode),
         RawFormat::Pef => vendor::pef::decode(bytes, mode),
-        RawFormat::Orf => vendor::orf::decode(bytes),
+        RawFormat::Orf => vendor::orf::decode(bytes, mode),
         other => Err(RawError::Unsupported(format!("{other:?} files are not decoded yet"))),
     }
 }

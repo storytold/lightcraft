@@ -23,7 +23,7 @@ duplicate Local entries #22, black GPU exports on an Intel iGPU #78).
 | Dimension | Estimate | What's true today | Biggest gaps |
 |---|---:|---|---|
 | **Feature checklist** | 79% | P0 core and P1 nearly complete: import (Add / Copy / Move, templates, devices), library, grid/loupe/compare/survey, every Edit slider, curves, colour grading, masking tools, crop/Upright, heal/clone, presets/profiles, versions/history, sync, export, menus, shortcuts | P1: lens-profile database, content-aware fill (patch synthesis), video playback/trim |
-| **RAW coverage** (formats people shoot) | ~50% | DNG (all kinds), CR2, ARW, NEF (uncompressed + Huffman lossless/lossy), uncompressed RAF/ORF, packed RW2, PEF; every container's embedded preview (incl. CR3) | **CR3** (every Canon since ~2018), compressed RAF/ORF, RW2 v4, Nikon lossy-after-split, Canon sRAW, HEIC/AVIF. NEFs labelled compressed but stored uncompressed (Z 6 packed 14-bit, D850 12-bit uncompressed). Per-model verification is thin (~40 corpus files vs >1,000 models) |
+| **RAW coverage** (formats people shoot) | ~50% | DNG (all kinds), CR2, ARW, NEF (uncompressed + Huffman lossless/lossy), ORF (uncompressed + 12-bit compressed), uncompressed RAF, packed RW2, PEF; every container's embedded preview (incl. CR3) | **CR3** (every Canon since ~2018), compressed RAF, 14-bit compressed ORF (OM-1 II High Res Shot), RW2 v4, Nikon lossy-after-split, Canon sRAW, HEIC/AVIF. NEFs labelled compressed but stored uncompressed (Z 6 packed 14-bit, D850 12-bit uncompressed). Per-model verification is thin (~40 corpus files vs >1,000 models) |
 | **Colour & image quality** | ~55–65% | Pipeline is complete and fast; GPU path CPU-exact within 1/255 | **No measured camera calibration database**: ARW and NEF have a guarded per-file embedded-JPEG colour estimate (docs/camera-preview-colour.md); other non-DNG raws and rejected estimates use a neutral matrix. Colour fidelity remains incomplete. No lens-profile database. No measured fidelity against Lightroom (tone, highlights, texture/clarity, NR, sharpening are tuned by eye) |
 | **AI & computational** | ~15–20% | Assisted culling (focus, bursts), auto tone, HDR/panorama merge; subject/sky/background masks as classical heuristics | Real segmentation masks (subject, sky, people, objects, landscape, depth), AI denoise, super resolution, lens blur, generative remove, faces/people, natural-language search. **Blocked on a model strategy** (licensable weights or our own training; pure-Rust inference is feasible) |
 | **Workflow & library** | ~85% (single machine) | Robust catalog (journal + snapshots, background compaction, crash-tested), 85k-photo libraries stay responsive, Local browsing with automatic cleanup, XMP interop, keywords, smart albums, Move import | Opening an 85k library takes 1.7–4.7 s; no cloud sync (out of scope), no tablet companion (#74, roadmap), shared albums, publish services, tethering |
@@ -37,7 +37,7 @@ duplicate Local entries #22, black GPU exports on an Intel iGPU #78).
 |---|---:|---|
 | JPEG / DNG shooter, single machine | ~85% | Fidelity polish, AI masks |
 | Nikon / Sony / older-Canon raw shooter | ~65% | Camera colour fidelity and coverage (ARW and NEF preview estimates are only a starting point) |
-| Canon CR3 / Fujifilm / Olympus shooter | ~35% | Their raws open as embedded previews only (CR3: the full-size JPEG with full metadata) |
+| Canon CR3 / Fujifilm / Olympus shooter | ~35% | CR3 and compressed RAF open as embedded previews only (CR3: the full-size JPEG with full metadata). Olympus ORF now decodes, but with the neutral colour matrix (muted colour); this row's estimate predates that and has not been re-assessed for Olympus |
 | Lightroom Classic power user | ~45% | Print, Book, Map, publish, tethering |
 | Relies on AI (masks, denoise) | ~25% | Object / Describe masks via optional SAM 3 (download not yet hosted); no AI denoise |
 
@@ -48,9 +48,10 @@ Priorities, in order. Each points at tracker rows in [`docs/parity.md`](docs/par
 1. **Camera colour calibration of our own** (LR-PROF-CAMERACOLOR, P0): fit each camera to its own embedded JPEG, use
    matrices the files carry themselves, then chart shots. Sony ARW and Nikon NEF have the file-local fit (matrix + tone
    curve from their own JPEG); generalise it to the other makes' raws (RW2, PEF, ORF…), then validate fidelity.
-2. **Raw formats, clean-room** (LR-IMP-FORMATS, P0): **CR3** first, then compressed RAF / ORF, RW2 v4, NEF
+2. **Raw formats, clean-room** (LR-IMP-FORMATS, P0): **CR3** first, then compressed RAF, RW2 v4, NEF
    lossy-after-split, sRAW. Decided 2026-10-05: write our own decoders from prose descriptions (never decoder source,
-   no LGPL dependency); compressed NEF (#86) is the template.
+   no LGPL dependency); compressed NEF (#86) is the template. Compressed ORF (2026-10-07) is decoded but did not
+   meet that standard: see the provenance note in `crates/raw/src/vendor/orfc.rs`.
 3. **Verified camera coverage** (LR-IMP-CAMERA-COVERAGE, P0): a CC0 sample per model in the corpus, each decoded and
    checked for plausible colour; fix per-model bugs (#85).
 4. **Render fidelity suite** (LR-BEHAV-RENDER-FIDELITY, P1): measure our output against Lightroom on the same CC0 raws
@@ -84,7 +85,7 @@ hardening (#78), copyright metadata (#51), GPX geotagging (#60), import tag help
 | M8 | Heal / Remove | content-aware remove (PatchMatch), heal, clone, brush spots, visualize spots, red/pet eye | 6–10 | 🚧 (heal, clone, auto source, visualize spots, red/pet eye ✅; PatchMatch remove ⬜) |
 | M9 | Presets, profiles, versions, sync | preset browser + amount, create/import presets, profile browser, versions, history, copy/paste/sync settings | 5–8 | ✅ |
 | M10 | Export & share | export dialog (JPEG/PNG/TIFF/DNG/AVIF/JXL/original), sizing, sharpening, metadata, watermark, naming, batch jobs, XMP sidecars, HDR export | 6–10 | 🚧 (all formats incl. DNG/original, sizing, presets, background jobs ✅; JXL encode, HDR export ⬜) |
-| M11 | RAW II | CR3, RAF (X-Trans), ORF, RW2, PEF, SRW, 3FR, IIQ + long tail; camera calibration DB; HEIC/AVIF/JXL import | 20–35 | 🚧 (RAF uncompressed, RW2 packed, PEF, ORF uncompressed ✅; **camera colour calibration** 🚧 (guarded ARW and NEF preview fitting; measured database still missing), CR3, compressed ORF/RAF ⬜) |
+| M11 | RAW II | CR3, RAF (X-Trans), ORF, RW2, PEF, SRW, 3FR, IIQ + long tail; camera calibration DB; HEIC/AVIF/JXL import | 20–35 | 🚧 (RAF uncompressed, RW2 packed, PEF, ORF uncompressed + 12-bit compressed ✅; **camera colour calibration** 🚧 (guarded ARW and NEF preview fitting; measured database still missing), CR3, compressed RAF ⬜) |
 | M12 | AI & smart features | subject/sky/background/people/object masks, semantic search, faces/People (permissively licensed models, pure-Rust inference) | 20–40 | ⬜ |
 | M13 | Merge | HDR merge (deghost), panorama (projections, boundary warp, fill edges), HDR panorama | 10–15 | ✅ |
 | M14 | Video | import/playback/trim via FilmCraft crates, global edits + presets on video, video export | 6–10 | ⬜ |
@@ -118,7 +119,7 @@ trip, slideshow, auto import…) in ≈ 12 h on 2026-10-02; four to six parallel
 | Work package | Tracker rows | Agent-hours | Risk |
 |---|---|---:|---|
 | Remaining P0/P1 UI and library features (folder rename/move, keyword painter, people view…) | ≈ 8 | 5–10 | low |
-| Raw codecs: CR3 (CRX), compressed ORF / RAF, NEF lossy-after-split, RW2 v4, HEIC/AVIF decode, JPEG XL DNG | LR-IMP-FORMATS | 40–80 | **high** — clean-room black-box analysis, no permissive specs |
+| Raw codecs: CR3 (CRX), compressed RAF, 14-bit compressed ORF, NEF lossy-after-split, RW2 v4, HEIC/AVIF decode, JPEG XL DNG | LR-IMP-FORMATS | 40–80 | **high** — clean-room black-box analysis, no permissive specs |
 | Lens-profile database of our own (calibration targets, fitting, data) | LR-EDIT-OPTICS-PROFILE | 15–30 | data collection |
 | Video: playback, trim, edits, export (pure-Rust decode, ideally shared with FilmCraft) | R. Video | 20–40 | medium |
 | AI: subject / sky / background / people / object masks, object-aware remove, AI denoise, super resolution, lens blur, people & faces, natural-language search, culling | ≈ 30 | 80–150 | **high** — permissively licensed weights, pure-Rust inference, maybe training |
@@ -165,7 +166,8 @@ The milestone estimates in the table above were made before work started and are
 Decoded (CC0 corpus from raw.pixls.us, `cargo xtask corpus --download`, `crates/raw/tests/corpus.rs`): DNG (uncompressed,
 LJ92, lossy JPEG / Smart Previews, Deflate, float, linear), CR2, ARW (uncompressed, ARW2, LJ92; as-shot white balance and black level of pre-2017 bodies from the enciphered
 maker-note `Tag2010` and the encrypted `SR2SubIFD`, both recovered by black-box analysis, `crates/raw/src/vendor/arw.rs`), NEF/NRW uncompressed and Huffman-compressed (lossless, lossy type 1/2, 12/14-bit), RAF uncompressed (Bayer and
-X-Trans), RW2 packed 12/14-bit, PEF (uncompressed and Huffman), ORF uncompressed (16-bit and 12-bit packed). Every
+X-Trans), RW2 packed 12/14-bit, PEF (uncompressed and Huffman), ORF uncompressed (16-bit and 12-bit packed) and 12-bit compressed (E-410 … OM-1;
+colour-filter layout from the file's Exif `CFAPattern`, `crates/raw/src/vendor/orfc.rs`). Every
 supported container also yields its embedded JPEG preview (CR3 too), and the engine shows that preview for raw variants
 it can't decode yet.
 
@@ -177,7 +179,9 @@ Not decoded yet — preview only (no permissively licensed description; black-bo
 - **Panasonic RW2 raw format 4** (quantised): the block layout is known (0x4000-byte chunks rotated by 0x1ff8; 128-bit
   blocks of two 12-bit seeds plus four groups of a 2-bit scale and three 8-bit codes; scales 0/1 are ×1/×2 differences
   from the same-colour pixel two to the left), the reconstruction rule for scales 2/3 is not established.
-- **Olympus compressed ORF**, **Fujifilm compressed RAF**, **Canon CR3/CRX** (M11.1), **Canon sRAW/mRAW**, lossy DNG.
+- **Olympus 14-bit compressed ORF** (OM-1 Mark II High Res Shot; the strip starts with a different header than the
+  12-bit variant and has not been analysed).
+- **Fujifilm compressed RAF**, **Canon CR3/CRX** (M11.1), **Canon sRAW/mRAW**, lossy DNG.
 
 **Camera colour matrices:** ARW files can use guarded, separate chromaticity and tone estimates from their own embedded JPEG (see `docs/camera-preview-colour.md`); this is a per-file camera-look estimate with relative WB, not measured calibration or absolute-Kelvin WB. Other non-DNG raws and rejected fits use the documented neutral fallback (camera RGB ≈ linear sRGB, flagged
 `matrix_is_fallback`) with the file's as-shot white-balance multipliers. Clean sources to evaluate next: manufacturer
@@ -206,3 +210,7 @@ with the optional `CRAFT_FONTS_DIR` input (all releases), so no system fonts are
 characters stay upright in top-to-bottom columns, with newlines starting columns to the
 left. This is basic lettering, without tate-chu-yoko, ruby, kinsoku, or general vertical
 OpenType shaping. The same coverage renderer serves 8/16/32-bit exports.
+- 2026-10-07: Olympus / OM System 12-bit compressed ORF decoded (12 CC0 samples from 11 bodies, E-410 … OM-1,
+  identical to a reference decoder's output wherever it has pixels); ORF colour-filter layout now read from the Exif
+  `CFAPattern` tag (E-M1 and E-620 are BGGR, which the old data-based guess could not produce). The decoder is
+  documented as *not* clean-room (written by an AI model that recalled the format; `crates/raw/src/vendor/orfc.rs`).

@@ -5,6 +5,7 @@ pub mod cr2;
 pub mod nef;
 pub mod nefc;
 pub mod orf;
+pub mod orfc;
 pub mod pef;
 pub mod raf;
 pub mod rw2;

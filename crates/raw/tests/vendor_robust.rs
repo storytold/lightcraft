@@ -46,6 +46,32 @@ fn magic_tiff(magic: &[u8; 4], make: &str) -> Vec<u8> {
     b
 }
 
+/// An Olympus compressed ORF: seven header bytes, then per pixel a sign bit, two low bits, a unary quotient and
+/// 4 (first three pixels of each colour of a row) or 2 verbatim bits; here every quotient and remainder is zero
+/// and the low bits vary, a valid stream of small values (see `vendor/orfc.rs`).
+fn orf_compressed() -> Vec<u8> {
+    let mut bits: Vec<bool> = Vec::new();
+    for i in 0..(W * H) as usize {
+        let low = i * 7 % 4;
+        let verbatim = if i % (W as usize) < 6 { 4 } else { 2 };
+        bits.extend([false, low & 2 != 0, low & 1 != 0, true]);
+        bits.extend(std::iter::repeat_n(false, verbatim));
+    }
+    let mut strip = vec![0, 0, 0, 0, 1, 0, 0];
+    strip.extend(bits.chunks(8).map(|c| c.iter().enumerate().fold(0u8, |a, (i, &b)| a | (b as u8) << (7 - i))));
+    let mut ifd = IfdBuilder::new();
+    ifd.set(t::IMAGE_WIDTH, Value::Long(vec![W]));
+    ifd.set(t::IMAGE_LENGTH, Value::Long(vec![H]));
+    ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+    ifd.set(t::COMPRESSION, Value::Short(vec![1]));
+    ifd.set(t::PHOTOMETRIC, Value::Short(vec![1]));
+    ifd.set(t::MAKE, Value::Ascii("OLYMPUS CORPORATION".into()));
+    ifd.set_image(ImageData::Strips { rows_per_strip: H, strips: vec![strip] });
+    let mut b = TiffWriter::new(ByteOrder::Little, false).write(&[ifd]).unwrap();
+    b[..4].copy_from_slice(b"IIRO");
+    b
+}
+
 /// A Panasonic RW2: sensor size, bit depth and raw format in IFD0, 12-bit packed blocks.
 fn rw2() -> Vec<u8> {
     let mut ifd = IfdBuilder::new();
@@ -177,6 +203,7 @@ fn samples() -> Vec<Vec<u8>> {
         cfa_tiff("SAMSUNG", 1, 12, ByteOrder::Little),
         cfa_tiff("ACME", 1, 16, ByteOrder::Little),
         magic_tiff(b"IIRO", "OLYMPUS IMAGING CORP."),
+        orf_compressed(),
         rw2(),
         cr2(),
         raf(),
@@ -195,6 +222,14 @@ fn exercise(bytes: &[u8]) {
 }
 
 #[test]
+fn compressed_orf_sample_is_valid() {
+    let img = lightcraft_raw::decode(&orf_compressed()).unwrap();
+    let lightcraft_raw::RawData::U16(d) = &img.data else { panic!("float data") };
+    assert_eq!((img.width, img.height, img.bits, d.len()), (W as usize, H as usize, 12, (W * H) as usize));
+    assert!(d.iter().any(|&v| v > 0) && d.iter().all(|&v| v < 200), "{:?}", &d[..16]);
+}
+
+#[test]
 fn vendor_samples_truncated_at_every_length() {
     for s in samples() {
         exercise(&s);
@@ -208,7 +243,7 @@ proptest! {
     #![proptest_config(ProptestConfig { cases: 2000, .. ProptestConfig::default() })]
 
     #[test]
-    fn mutated_vendor_files_never_panic(kind in 0usize..12, flips in proptest::collection::vec((any::<usize>(), any::<u8>()), 1..16), cut in any::<usize>()) {
+    fn mutated_vendor_files_never_panic(kind in 0usize..13, flips in proptest::collection::vec((any::<usize>(), any::<u8>()), 1..16), cut in any::<usize>()) {
         let mut data = samples().swap_remove(kind);
         let n = data.len();
         for (i, v) in flips {
