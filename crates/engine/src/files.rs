@@ -18,6 +18,7 @@ fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
     let camera = [m.make.clone().unwrap_or_default(), m.model.clone().unwrap_or_default()].join(" ").trim().to_string();
     let meta = Meta {
         camera,
+        camera_temperature: m.camera_temperature,
         lens: m.lens_model.clone().unwrap_or_default(),
         focal_mm: m.focal_length.map(|f| f as f32),
         aperture: m.f_number.map(|f| f as f32),
@@ -135,6 +136,8 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         // Vendor RGB multipliers do not identify an absolute illuminant without camera calibration.
         let relative = crate::camera_preview::file_local_look(raw.format) && !lightcraft_raw::color::has_matrix(&raw.color);
         let as_shot_wb = Some(if relative { (6500.0, 0.0) } else { (t.round(), tint.round()) });
+        let mut meta = meta;
+        meta.camera_temperature = raw.metadata.camera_temperature;
         let embedded_lens = embedded_lens(&raw);
         return Ok(ProbeInfo {
             embedded_lens,

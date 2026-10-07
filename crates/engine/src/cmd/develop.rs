@@ -256,6 +256,44 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(serde_json::to_value(a).unwrap_or_default())
         }),
         cmd!(
+            "develop.wbKelvin",
+            "White Balance Kelvin",
+            [],
+            None,
+            "{temp?, tint?} displayed Kelvin/tint; uncalibrated RAW uses a camera-anchored estimate",
+            has_active,
+            |s, p| {
+                let id = active(s, "develop.wbKelvin")?;
+                if !s.catalog.photo(id).is_some_and(|photo| photo.develops_raw()) {
+                    return Err(bad("develop.wbKelvin", "Kelvin controls require a developed RAW"));
+                }
+                let scale = s.wb_kelvin_scale(id);
+                let (current, current_tint) = s.wb_display(id).ok_or_else(|| bad("develop.wbKelvin", "no settings"))?;
+                let temp = if p.get("temp").is_some() { f64_req(p, "temp", "develop.wbKelvin")? } else { current };
+                let tint = if p.get("tint").is_some() { f64_req(p, "tint", "develop.wbKelvin")? } else { current_tint };
+                // Preserve the untouched channel exactly, including legacy custom edits.
+                let canonical = if temp == current {
+                    let d = s.develop_of(id).ok_or_else(|| bad("develop.wbKelvin", "no settings"))?;
+                    lightcraft_pipeline::local::effective_wb(&s.source_info(id), &d).0
+                } else {
+                    temp / scale
+                };
+                if !canonical.is_finite() || !(2000.0..=50000.0).contains(&canonical) || !tint.is_finite() || !(-150.0..=150.0).contains(&tint) {
+                    return Err(bad("develop.wbKelvin", "temperature or tint outside the supported range"));
+                }
+                if s.develop_of(id).is_some_and(|d| d.wb.mode == WbMode::Custom && d.wb.temp == canonical && d.wb.tint == tint) {
+                    return Ok(json!({"temp": temp, "tint": tint, "estimated": s.source_info(id).relative_wb}));
+                }
+                edit(s, "develop.wbKelvin", "White Balance", |d| {
+                    d.wb.mode = WbMode::Custom;
+                    d.wb.temp = canonical;
+                    d.wb.tint = tint;
+                    Ok(())
+                })?;
+                Ok(json!({"temp": temp, "tint": tint, "estimated": s.source_info(id).relative_wb}))
+            }
+        ),
+        cmd!(
             "develop.wb",
             "White Balance",
             [],
@@ -277,7 +315,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         .preset()
                         .map(|(t, ti)| {
                             // presets are relative to daylight for rendered files
-                            if info.raw && !info.relative_wb { (t, ti) } else { (6500.0 * t / 5500.0, ti) }
+                            if info.raw { (t / s.wb_kelvin_scale(id), ti) } else { (6500.0 * t / 5500.0, ti) }
                         })
                         .unwrap_or((info.as_shot_temp, info.as_shot_tint)),
                 };

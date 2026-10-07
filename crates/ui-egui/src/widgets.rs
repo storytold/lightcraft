@@ -157,7 +157,9 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     // screen readers: a slider named after its control, with its value
     let label_text = crate::i18n::tr(label_override.unwrap_or(spec.label)).to_string();
     resp.widget_info(|| egui::WidgetInfo::slider(enabled, value, label_text.clone()));
-    let label_resp = ui.interact(label_rect, id.with("label"), Sense::click());
+    let value_rect = Rect::from_min_max(pos2(label_rect.right() - 68.0, label_rect.top()), label_rect.right_bottom());
+    let label_hit = Rect::from_min_max(label_rect.min, pos2(value_rect.left(), label_rect.bottom()));
+    let label_resp = ui.interact(label_hit, id.with("label"), if enabled { Sense::click() } else { Sense::hover() });
     register(ui.ctx(), format!("slider:{}", spec.id), track_rect);
     let mut out = SliderOut::default();
     let span = (spec.max - spec.min).max(1e-9);
@@ -202,7 +204,7 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
             out.drag_stopped = true;
         }
         // ↑ / ↓ while the pointer rests on the row nudge the value (⇧: five times as much)
-        if enabled && out.value.is_none() && ui.rect_contains_pointer(row) {
+        if enabled && out.value.is_none() && !ui.ctx().egui_wants_keyboard_input() && ui.rect_contains_pointer(row) {
             let (up, down, shift) = ui.input_mut(|i| {
                 let shift = i.modifiers.shift;
                 let m = if shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
@@ -224,9 +226,56 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let text_c = if enabled { t.text_label } else { t.text_disabled };
     let p = ui.painter();
     p.text(label_rect.left_center(), Align2::LEFT_CENTER, crate::i18n::tr(label_override.unwrap_or(spec.label)), t.font(12.5), text_c);
-    let shown = if spec.id == "wb.temp" { format!("{v:.0}") } else { spec.format(v).replace("+0.00", "0").replace("-0.00", "0") };
-    let shown = if shown == "+0" || shown == "-0" { "0".to_string() } else { shown };
-    p.text(label_rect.right_center(), Align2::RIGHT_CENTER, shown, t.font(12.5), text_c);
+    let value_id = id.with("value");
+    let shown = spec.format(v);
+    let mut text = ui
+        .data(|data| data.get_temp::<(f64, String)>(value_id))
+        .filter(|(original, _)| *original == v)
+        .map(|(_, text)| text)
+        .unwrap_or_else(|| shown.clone());
+    // Capture Escape before TextEdit consumes it; discard the buffer immediately on cancel.
+    let cancel = ui.memory(|m| m.has_focus(value_id)) && ui.input(|i| i.key_pressed(egui::Key::Escape));
+    // The row is already allocated; a child UI must not rewind the parent's cursor.
+    let numeric = ui.new_child(egui::UiBuilder::new().max_rect(value_rect)).add_enabled(
+        enabled,
+        egui::TextEdit::singleline(&mut text)
+            .id(value_id)
+            // Retain focus until we handle Escape, before app-wide Back to Grid sees it.
+            .event_filter(egui::EventFilter { escape: true, horizontal_arrows: true, vertical_arrows: true, ..Default::default() })
+            .desired_width(value_rect.width())
+            .font(t.font(12.5))
+            .text_color(text_c)
+            .horizontal_align(egui::Align::RIGHT)
+            .margin(vec2(0.0, 0.0))
+            .frame(egui::Frame::NONE),
+    );
+    register(ui.ctx(), format!("value:{}", spec.id), numeric.rect);
+    if numeric.gained_focus()
+        && let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), value_id)
+    {
+        state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(text.chars().count()))));
+        state.store(ui.ctx(), value_id);
+    }
+    if cancel || !enabled {
+        numeric.surrender_focus();
+        ui.data_mut(|data| data.remove::<(f64, String)>(value_id));
+    } else if numeric.lost_focus() {
+        if text != shown
+            && let Ok(nv) = text.trim().parse::<f64>()
+            && nv.is_finite()
+        {
+            let nv = nv.clamp(spec.min, spec.max);
+            if nv != v {
+                v = nv;
+                out.value = Some(v);
+                out.drag_started = true;
+                out.drag_stopped = true;
+            }
+        }
+        ui.data_mut(|data| data.remove::<(f64, String)>(value_id));
+    } else if numeric.has_focus() {
+        ui.data_mut(|data| data.insert_temp(value_id, (v, text)));
+    }
     let ring = 7.0;
     let tx = to_x(v);
     paint_track(ui, track_rect, &spec.track, &t, tx, ring);

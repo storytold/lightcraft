@@ -95,6 +95,12 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<RawImage> {
     let active_w = trailing_masked_columns(samples, w, h, white);
     let crop = default_crop(mn.as_ref(), active_w, h);
     let mut metadata = lightcraft_meta::from_tiff(&tiff);
+    // Nikon ColorTemperatureAuto (ExifTool tag documentation), not a camera colour profile.
+    metadata.camera_temperature = mn
+        .as_ref()
+        .filter(|m| m.ifd.string(0x0005).is_some_and(|mode| mode.starts_with("AUTO")))
+        .and_then(|m| m.ifd.u16(0x004f))
+        .filter(|k| (2000..=50000).contains(k));
     metadata.width = Some(crop.width as u32);
     metadata.height = Some(crop.height as u32);
     let img = RawImage {
@@ -193,6 +199,18 @@ mod tests {
         }
         ifd0.add_sub_ifd(raw);
         TiffWriter::new(ByteOrder::Big, false).write(&[ifd0]).unwrap()
+    }
+
+    #[test]
+    fn camera_temperature_is_validated_and_survives_header_probe() {
+        for (value, expected) in [(5550, Some(5550)), (0, None), (65535, None)] {
+            let mut mn = IfdBuilder::new();
+            mn.set(0x0005, Value::Ascii("AUTO0".into()));
+            mn.set(0x004f, Value::Short(vec![value]));
+            let bytes = nef_with_note(1, 14, vec![vec![0; 128]], 8, 8, 8, Some(mn));
+            assert_eq!(crate::probe_info(&bytes).unwrap().metadata.camera_temperature, expected);
+            assert_eq!(crate::decode(&bytes).unwrap().metadata.camera_temperature, expected);
+        }
     }
 
     #[test]

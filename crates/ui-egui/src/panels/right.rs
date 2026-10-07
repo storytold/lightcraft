@@ -25,7 +25,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         };
         egui::ScrollArea::vertical().id_salt("right-scroll").auto_shrink([false, false]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            match app.ui.right {
+            // Editing buffers belong to the photo; switching photos cannot commit stale input.
+            ui.push_id(id, |ui| match app.ui.right {
                 RightPanel::Edit => super::edit::show(app, ui, id),
                 RightPanel::Profiles => super::profiles::show(app, ui, id),
                 RightPanel::Crop => crop(app, ui, id),
@@ -37,7 +38,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 RightPanel::Versions => versions(app, ui, id),
                 RightPanel::Activity => activity(app, ui, id),
                 RightPanel::None => {}
-            }
+            });
         });
     });
     if let Some(w) = resized {

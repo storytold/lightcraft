@@ -705,6 +705,7 @@ mod tests {
             exposure_program: Some(2),
             metering_mode: Some(3),
             white_balance: Some(1),
+            camera_temperature: None, // Nikon-only metadata is not emitted into standard XMP.
             orientation: Some(Orientation::Rotate270),
             gps: Some(Gps { latitude: 48.858222, longitude: -2.2945, altitude: Some(-3.5) }),
             width: Some(8000),

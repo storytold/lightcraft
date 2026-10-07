@@ -157,6 +157,8 @@ impl CopyrightStatus {
 #[serde(default)]
 pub struct Meta {
     pub camera: String,
+    /// Camera-reported automatic colour temperature; only a display anchor for uncalibrated RAW.
+    pub camera_temperature: Option<u16>,
     pub lens: String,
     pub focal_mm: Option<f32>,
     pub aperture: Option<f32>,

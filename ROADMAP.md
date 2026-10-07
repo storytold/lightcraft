@@ -12,7 +12,7 @@ projects (DrawCraft reached its first four milestones in ≈ 4½ h) and are revi
 
 **In one line:** the checklist says **79%** (P0 98.5%, P1 95.9%, P2 39%), but measured by whether a working
 photographer could replace Lightroom without noticing, we are at roughly **60–70%**. The remaining gap is mostly
-**quality of results and camera coverage**, not missing buttons.
+**quality of results and camera coverage**, not missing buttons. RAW temperature/tint now support direct numeric entry; uncalibrated Sony/Nikon temperature remains an explicitly estimated Kelvin scale.
 
 Caveat on the checklist: ✅ is set by whoever lands a feature, and nobody has systematically checked rows against
 Lightroom's behaviour or output. Bugs keep turning up in ✅ areas (CR2 colour-filter phase on some Canon models #85,
@@ -179,7 +179,7 @@ Not decoded yet — preview only (no permissively licensed description; black-bo
   from the same-colour pixel two to the left), the reconstruction rule for scales 2/3 is not established.
 - **Olympus compressed ORF**, **Fujifilm compressed RAF**, **Canon CR3/CRX** (M11.1), **Canon sRAW/mRAW**, lossy DNG.
 
-**Camera colour matrices:** ARW files can use guarded, separate chromaticity and tone estimates from their own embedded JPEG (see `docs/camera-preview-colour.md`); this is a per-file camera-look estimate with relative WB, not measured calibration or absolute-Kelvin WB. Other non-DNG raws and rejected fits use the documented neutral fallback (camera RGB ≈ linear sRGB, flagged
+**Camera colour matrices:** ARW files can use guarded, separate chromaticity and tone estimates from their own embedded JPEG (see `docs/camera-preview-colour.md`); this is a per-file camera-look estimate with relative WB processing and numeric estimated-Kelvin entry, not measured calibration or absolute-Kelvin WB. Other non-DNG raws and rejected fits use the documented neutral fallback (camera RGB ≈ linear sRGB, flagged
 `matrix_is_fallback`) with the file's as-shot white-balance multipliers. Clean sources to evaluate next: manufacturer
 matrices stored in the files themselves (Olympus ImageProcessing `ColorMatrix`, Pentax/Panasonic equivalents) and our
 own chart-based calibration (M11.4). Adobe matrices are never used.

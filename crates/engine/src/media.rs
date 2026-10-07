@@ -865,6 +865,25 @@ impl crate::Session {
         Ok(job)
     }
 
+    /// Kelvin display multiplier for uncalibrated RAW. Stored settings and render references
+    /// remain unchanged, so old edits, sidecars, presets and history keep their pixel meaning.
+    /// Camera temperature anchors the estimate; older catalogs without it use 6500 K.
+    pub fn wb_kelvin_scale(&self, id: PhotoId) -> f64 {
+        if !self.source_info(id).relative_wb {
+            return 1.0;
+        }
+        let anchor = self.catalog.photo(id).and_then(|p| p.meta.camera_temperature).filter(|k| (2000..=50000).contains(k)).unwrap_or(6500);
+        f64::from(anchor) / 6500.0
+    }
+
+    /// Current user-facing temperature and tint, resolving As Shot against the source.
+    pub fn wb_display(&self, id: PhotoId) -> Option<(f64, f64)> {
+        let d = self.develop_of(id)?;
+        let info = self.source_info(id);
+        let (temp, tint) = lightcraft_pipeline::local::effective_wb(&info, &d);
+        Some((temp * self.wb_kelvin_scale(id), tint))
+    }
+
     /// Prefer decoder facts to header-only metadata for pixel-statistics commands.
     pub fn source_info(&self, id: PhotoId) -> SourceInfo {
         let header = self.catalog.photo(id).map(|p| source_info(p)).unwrap_or_default();

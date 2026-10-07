@@ -26,7 +26,7 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | C. Views & navigation (VIEW) | 16 | 0 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 42 | 1 | 5 | 1 | 28/28 (100%) | 13/14 (93%) |
+| F. Edit panel — global adjustments (EDIT) | 41 | 2 | 5 | 1 | 27/28 (96%) | 13/14 (93%) |
 | G. Profiles (PROF) | 6 | 2 | 3 | 0 | 3/4 (75%) | 2/3 (67%) |
 | H. Crop & rotate (CROP) | 9 | 0 | 0 | 1 | 6/6 (100%) | 3/3 (100%) |
 | I. Remove / healing (REM) | 7 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
@@ -48,9 +48,9 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | Y. Menus | 81 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 74 | 3 | 3 | 1 | 49/52 (94%) | 22/23 (96%) |
 | Lightroom Classic extras | 31 | 10 | 39 | 9 | — | 21/22 (95%) |
-| **Total** | 388 | 34 | 86 | 37 | 194/200 (97%) | 139/149 (93%) |
+| **Total** | 387 | 35 | 86 | 37 | 193/200 (97%) | 139/149 (93%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.7%** of 508 in-scope rows — P0 98.5% of 200 · P1 95.6% of 149 · P2 41.2% of 159.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.6%** of 508 in-scope rows — P0 98.2% of 200 · P1 95.6% of 149 · P2 41.2% of 159.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -59,7 +59,7 @@ Ordered by user impact, then tier, then effort. The checklist above counts featu
 that decide whether a photographer can switch (see the honest assessment in [ROADMAP.md](../ROADMAP.md#where-we-stand)).
 Take the first one nobody is working on.
 
-1. **LR-PROF-CAMERACOLOR** (P0): our own camera colour calibration. Sony ARW and Nikon NEF now get a guarded file-local fit to their own embedded JPEG (colour matrix + hue/saturation/value table + tone and chroma curves, relative WB; per-model profiles pooled from many photos via `lightcraft-cli calibrate`; ARW: 7 of 10 public samples accepted, mean ΔE vs the camera JPEG 17–26 → 3–10; NEF: 13 of 13 decodable samples from 6 bodies accepted, ΔE 13–46 → 3–8, one mixed-light scene 13 → 12); Z 8 validation also fixes Nikon crop metadata, Adobe RGB preview interpretation and highlight-aware tone fitting; measured calibration and fidelity remain missing. Other non-DNG raws and rejected fits still use a neutral matrix. Expand validated preview fitting and use matrices the files carry themselves; never Adobe data.
+1. **LR-PROF-CAMERACOLOR** (P0): our own camera colour calibration. Sony ARW and Nikon NEF now get a guarded file-local fit to their own embedded JPEG (colour matrix + hue/saturation/value table + tone and chroma curves, relative processing with estimated Kelvin entry; per-model profiles pooled from many photos via `lightcraft-cli calibrate`; ARW: 7 of 10 public samples accepted, mean ΔE vs the camera JPEG 17–26 → 3–10; NEF: 13 of 13 decodable samples from 6 bodies accepted, ΔE 13–46 → 3–8, one mixed-light scene 13 → 12); Z 8 validation also fixes Nikon crop metadata, Adobe RGB preview interpretation and highlight-aware tone fitting; measured calibration and fidelity remain missing. Other non-DNG raws and rejected fits still use a neutral matrix. Expand validated preview fitting and use matrices the files carry themselves; never Adobe data.
 2. **LR-IMP-FORMATS** (P0): **CR3** first (every Canon body since ~2018), then compressed RAF / ORF, RW2 v4, Nikon
    "lossy after split" NEF, Canon sRAW; HEIC/AVIF decode. Clean-room, from prose descriptions only (see
    `crates/raw/src/vendor/nefc.rs` for how compressed NEF was done). Until decoded, such photos are `preview_only`.
@@ -233,8 +233,8 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-EDIT-LIGHT-CURVE-TAT | Drag-on-image curve adjust | P1 | ✅ | `cmd:develop.targeted` (`target: curve`) | |
 | LR-EDIT-COLOR-WB-PRESET | White-balance presets | P0 | ✅ | `cmd:develop.wb` | |
 | LR-EDIT-COLOR-WB-PICKER | White-balance eyedropper | P0 | ✅ | `cmd:tool.wbPicker`, `cmd:develop.wbPick` | no magnified loupe while picking |
-| LR-EDIT-COLOR-TEMP | Temperature | P0 | ✅ | `ctl:wb.temp` | relative scale for non-raw in the UI |
-| LR-EDIT-COLOR-TINT | Tint | P0 | ✅ | `ctl:wb.tint` | |
+| LR-EDIT-COLOR-TEMP | Temperature | P0 | 🟡 | `ctl:wb.temp` `cmd:develop.wbKelvin` | Click number to type Kelvin (Enter/blur commit, Escape cancel, undo); uncalibrated RAW uses a camera-anchored estimate, measured calibration missing; non-raw stays relative |
+| LR-EDIT-COLOR-TINT | Tint | P0 | ✅ | `ctl:wb.tint` | Numeric entry and undo; uncalibrated RAW uses −150…150 relative to As Shot |
 | LR-EDIT-COLOR-VIBRANCE | Vibrance | P0 | ✅ | `ctl:color.vibrance` | |
 | LR-EDIT-COLOR-SATURATION | Saturation | P0 | ✅ | `ctl:color.saturation` | |
 | LR-EDIT-COLOR-MIXER-HSL | 8-band colour mixer | P0 | ✅ | `ctl:mixer.*` | no targeted (drag-on-image) mode |

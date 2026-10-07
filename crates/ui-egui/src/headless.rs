@@ -914,6 +914,75 @@ mod tests {
         assert_eq!(exposure(&h), 1.0);
     }
 
+    #[test]
+    fn slider_numeric_entry_commits_cancels_and_undoes() {
+        let mut h = demo([1300.0, 1000.0]);
+        let t = Duration::from_secs(10);
+        h.request("ui.set", json!({"view": "detail", "right": "edit"}), t);
+        h.settle(SETTLE);
+        let exposure = |h: &Headless| h.app.session.develop_of(h.app.session.active().unwrap()).unwrap().light.exposure;
+        let widgets = h.request("ui.widgets", json!({}), t);
+        let rect = |id: &str| widgets["result"].as_array().unwrap().iter().find(|w| w["id"] == id).unwrap()["rect"].clone();
+        let track = rect("slider:light.exposure");
+        let next_value = rect("value:light.contrast");
+        assert!(
+            next_value[1].as_f64().unwrap() > track[1].as_f64().unwrap() + track[3].as_f64().unwrap(),
+            "numeric input must preserve slider row height"
+        );
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "value:light.exposure"}), t)["ok"], true);
+        h.request("ui.text", json!({"text": "1.23"}), t);
+        assert_eq!(exposure(&h), 0.0, "typing is not committed yet");
+        h.request("ui.key", json!({"key": "Enter"}), t);
+        assert!((exposure(&h) - 1.23).abs() < 1e-9);
+        h.request("ui.clickWidget", json!({"id": "value:light.exposure"}), t);
+        h.request("ui.text", json!({"text": "2.34"}), t);
+        h.request("ui.key", json!({"key": "Escape"}), t);
+        assert!((exposure(&h) - 1.23).abs() < 1e-9, "Escape cancels");
+        h.request("engine.execute", json!({"command": "edit.undo"}), t);
+        assert_eq!(exposure(&h), 0.0, "one undo restores the previous value");
+        h.request("ui.clickWidget", json!({"id": "value:light.exposure"}), t);
+        h.request("ui.text", json!({"text": "NaN"}), t);
+        h.request("ui.key", json!({"key": "Enter"}), t);
+        assert_eq!(exposure(&h), 0.0, "non-finite input is rejected");
+        h.request("ui.clickWidget", json!({"id": "value:light.exposure"}), t);
+        h.request("ui.text", json!({"text": "0.75"}), t);
+        h.request("ui.clickWidget", json!({"id": "value:light.contrast"}), t);
+        assert_eq!(exposure(&h), 0.75, "focus loss commits");
+    }
+
+    #[test]
+    fn raw_kelvin_entry_escape_stays_in_detail_and_preserves_undo() {
+        use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
+        let mut h = demo([1600.0, 1100.0]);
+        let t = Duration::from_secs(10);
+        let id = PhotoId(100);
+        let mut p = Photo::new(id, Source::File { path: "synthetic.nef".into() }, "synthetic.nef", "NEF", 16, 16, "");
+        p.kind = MediaKind::Raw;
+        p.meta.camera_temperature = Some(5550);
+        h.app.session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        h.app.session.execute("library.select", &json!({"ids": [100], "active": 100})).unwrap();
+        h.request("ui.set", json!({"view": "detail", "right": "edit", "openSections": ["color"]}), t);
+        h.settle(SETTLE);
+        let before = h.app.session.develop_of(id).unwrap();
+        for (control, text) in [("wb.temp", "7118"), ("wb.tint", "-96")] {
+            h.request("ui.clickWidget", json!({"id": format!("value:{control}")}), t);
+            h.request("ui.text", json!({"text": text}), t);
+            h.request("ui.key", json!({"key": "Enter"}), t);
+        }
+        let edited = h.app.session.develop_of(id).unwrap();
+        assert!((h.app.session.wb_display(id).unwrap().0 - 7118.0).abs() < 1e-7);
+        assert_eq!(edited.wb.tint, -96.0);
+        h.request("ui.clickWidget", json!({"id": "value:wb.temp"}), t);
+        h.request("ui.text", json!({"text": "6000"}), t);
+        h.request("ui.key", json!({"key": "Escape"}), t);
+        assert_eq!(h.app.session.develop_of(id).unwrap(), edited);
+        assert_eq!(h.app.ui.view, crate::state::ViewMode::Detail);
+        h.request("engine.execute", json!({"command": "edit.undo"}), t);
+        assert_eq!(h.app.session.develop_of(id).unwrap().wb.tint, 0.0);
+        h.request("engine.execute", json!({"command": "edit.undo"}), t);
+        assert_eq!(h.app.session.develop_of(id).unwrap(), before);
+    }
+
     /// ↑ / ↓ over a slider nudge it (one undo step each); ⇧Z picks and moves to the next photo.
     #[test]
     fn slider_nudge_and_pick_advance() {

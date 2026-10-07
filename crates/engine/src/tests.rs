@@ -17,6 +17,7 @@ fn changing_one_wb_control_resolves_as_shot_without_stale_tint() {
     let mut s = demo();
     let id = PhotoId(100);
     let mut p = Photo::new(id, Source::File { path: "synthetic.arw".into() }, "synthetic.arw", "ARW", 16, 16, "");
+    p.kind = lightcraft_catalog::MediaKind::Raw;
     // A catalog made by the old generic-matrix Kelvin inference.
     p.as_shot_wb = Some((6829.0, -127.0));
     p.develop = std::sync::Arc::new(DevelopSettings::for_raw(6829.0, -127.0));
@@ -816,4 +817,75 @@ fn face_job_follows_rotate_right() {
     // the rotated photo is h × w pixels
     let (pw, ph) = ((r.x1 - r.x0) * h, (r.y1 - r.y0) * w);
     assert!((pw - ph).abs() < 1e-6 * w.max(h), "square in rotated pixels: {pw} × {ph}");
+}
+
+#[test]
+fn kelvin_entry_preserves_raw_reference_and_existing_edits() {
+    use lightcraft_catalog::{Photo, PhotoId, Source};
+    use lightcraft_develop::DevelopSettings;
+    let mut s = demo();
+    let id = PhotoId(100);
+    let mut p = Photo::new(id, Source::File { path: "synthetic.nef".into() }, "synthetic.nef", "NEF", 16, 16, "");
+    p.kind = lightcraft_catalog::MediaKind::Raw;
+    p.meta.camera_temperature = Some(5550);
+    p.as_shot_wb = Some((7118.0, -96.0));
+    p.develop = std::sync::Arc::new(DevelopSettings::for_raw(7118.0, -96.0));
+    s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    s.execute("library.select", &json!({"ids": [100], "active": 100})).unwrap();
+    assert_eq!(s.wb_display(id), Some((5550.0, 0.0)));
+    assert_eq!(s.source_info(id).as_shot_temp, 6500.0);
+    assert!(lightcraft_pipeline::local::wb_matrix_for(&s.source_info(id), &active_dev(&s)).is_none());
+    let undo_before = s.undo.len();
+    s.execute("develop.wbKelvin", &json!({"temp": 7118})).unwrap();
+    assert!((s.wb_display(id).unwrap().0 - 7118.0).abs() < 1e-9);
+    assert_eq!(s.wb_display(id).unwrap().1, 0.0);
+    assert_eq!(s.undo.len(), undo_before + 1);
+    s.execute("develop.wbKelvin", &json!({"tint": -96})).unwrap();
+    assert!((s.wb_display(id).unwrap().0 - 7118.0).abs() < 1e-9);
+    assert_eq!(s.wb_display(id).unwrap().1, -96.0);
+    let saved = active_dev(&s);
+    let matrix = lightcraft_pipeline::local::wb_matrix_for(&s.source_info(id), &saved);
+    let shown = s.wb_display(id).unwrap();
+    s.execute("develop.wbKelvin", &json!({"temp": shown.0, "tint": shown.1})).unwrap();
+    assert_eq!(matrix, lightcraft_pipeline::local::wb_matrix_for(&s.source_info(id), &active_dev(&s)));
+    for params in [json!({"temp": 0}), json!({"temp": 50000}), json!({"temp": "NaN"}), json!({"tint": 151})] {
+        assert!(s.execute("develop.wbKelvin", &params).is_err());
+        assert_eq!(active_dev(&s), saved);
+    }
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!((s.wb_display(id).unwrap().0 - 7118.0).abs() < 1e-9);
+    assert_eq!(s.wb_display(id).unwrap().1, 0.0);
+    s.execute("develop.wb", &json!({"mode": "daylight"})).unwrap();
+    assert!((s.wb_display(id).unwrap().0 - 5500.0).abs() < 1e-6);
+    s.execute("develop.wb", &json!({"mode": "asShot"})).unwrap();
+    assert_eq!(s.wb_display(id), Some((5550.0, 0.0)));
+    // Canonical API and old custom settings keep their pixel meaning.
+    s.execute("develop.set", &json!({"values": {"wb.temp": 8000, "wb.tint": 12}})).unwrap();
+    assert_eq!((active_dev(&s).wb.temp, active_dev(&s).wb.tint), (8000.0, 12.0));
+    assert!((s.wb_display(id).unwrap().0 - 8000.0 * 5550.0 / 6500.0).abs() < 1e-9);
+    assert_eq!(s.wb_display(id).unwrap().1, 12.0);
+}
+
+#[test]
+fn kelvin_scale_distinguishes_calibrated_raw_fallback_and_preview_only() {
+    use lightcraft_catalog::{MediaKind, Photo, PhotoId, Source};
+    for (format, kind, preview, anchor, expected, editable) in [
+        ("NEF", MediaKind::Raw, None, None, 6500.0, true),
+        ("ARW", MediaKind::Raw, None, Some(0), 6500.0, true),
+        ("DNG", MediaKind::Raw, None, Some(5550), 5200.0, true),
+        ("NEF", MediaKind::Raw, Some("unsupported".to_string()), Some(5550), 6500.0, false),
+        ("JPG", MediaKind::Image, None, Some(5550), 6500.0, false),
+    ] {
+        let mut s = demo();
+        let id = PhotoId(100);
+        let mut p = Photo::new(id, Source::File { path: "synthetic".into() }, "synthetic", format, 16, 16, "");
+        p.kind = kind;
+        p.preview_only = preview;
+        p.meta.camera_temperature = anchor;
+        p.as_shot_wb = Some((5200.0, 4.0));
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        s.execute("library.select", &json!({"ids": [100], "active": 100})).unwrap();
+        assert_eq!(s.wb_display(id).unwrap().0, expected, "{format}");
+        assert_eq!(s.execute("develop.wbKelvin", &json!({"temp": 7118})).is_ok(), editable, "{format}");
+    }
 }

@@ -76,7 +76,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
     // a raw shown from its embedded JPEG (preview only) gets the rendered-file white balance scale
-    let raw = app.session.catalog.photo(id).is_some_and(|p| p.develops_raw() && !p.relative_wb());
+    let raw = app.session.catalog.photo(id).is_some_and(|p| p.develops_raw());
     let mut d = d;
     if d.wb.mode == WbMode::AsShot && app.session.catalog.photo(id).is_some_and(|p| p.relative_wb()) {
         let wb = &mut std::sync::Arc::make_mut(&mut d).wb;
@@ -197,8 +197,29 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             });
         });
         if raw {
-            control(app, ui, d, "wb.temp", true);
-            control(app, ui, d, "wb.tint", true);
+            let (temp, tint) = app.session.wb_display(id).unwrap_or((d.wb.temp, d.wb.tint));
+            let scale = app.session.wb_kelvin_scale(id);
+            if app.session.source_info(id).relative_wb {
+                egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 4 }).show(ui, |ui| {
+                    ui.label(RichText::new("Estimated Kelvin").small().color(t.text_dim))
+                        .on_hover_text("Camera temperature anchors this scale when available; otherwise 6500 K. Camera colour calibration is unavailable. Tint is relative to As Shot.");
+                });
+            }
+            if let Some(base) = controls::find("wb.temp") {
+                let spec = ControlSpec {
+                    min: (base.min * scale).ceil(),
+                    max: (base.max * scale).floor(),
+                    default: base.default * scale,
+                    step: 1.0,
+                    ..*base
+                };
+                let out = slider(ui, &spec, temp, true, None);
+                apply_slider_out(app, &spec, out, |app, v| app.run("develop.wbKelvin", json!({"temp": v})));
+            }
+            if let Some(spec) = controls::find("wb.tint") {
+                let out = slider(ui, spec, tint, true, None);
+                apply_slider_out(app, spec, out, |app, v| app.run("develop.wbKelvin", json!({"tint": v})));
+            }
         } else {
             let out = slider(ui, &REL_TEMP, k_to_rel(d.wb.temp), true, None);
             apply_slider_out(app, &REL_TEMP, out, |app, v| app.run("develop.set", json!({"control": "wb.temp", "value": rel_to_k(v)})));

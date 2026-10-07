@@ -107,6 +107,8 @@ pub struct Metadata {
     pub metering_mode: Option<u16>,
     /// Exif `WhiteBalance` (0 auto, 1 manual).
     pub white_balance: Option<u16>,
+    /// Camera-reported automatic colour temperature (Kelvin), when available.
+    pub camera_temperature: Option<u16>,
     pub orientation: Option<Orientation>,
     pub gps: Option<Gps>,
     /// Pixel dimensions as recorded (not oriented).
@@ -176,6 +178,7 @@ impl Metadata {
             exposure_program,
             metering_mode,
             white_balance,
+            camera_temperature,
             orientation,
             gps,
             width,
