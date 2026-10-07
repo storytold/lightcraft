@@ -7,7 +7,8 @@
 //! table; photos of that model then only fit their tone and chroma curves.
 //!
 //! Profiles are JSON files (`<model>.json`) in [`dir`]: `LIGHTCRAFT_CAMERA_PROFILES`, else
-//! `<config>/camera-profiles`. They are read once per process; a damaged or hostile file is
+//! `<config>/camera-profiles`; a local profile replaces the one built in ([`BUNDLED`], from
+//! `assets/camera-profiles/`). They are read once per process; a damaged or hostile file is
 //! ignored with a warning. They hold aggregate colour statistics only, never image content.
 use lightcraft_color::Mat3;
 use lightcraft_raw::profile::HsvTable;
@@ -20,6 +21,10 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 const VERSION: u32 = 1;
 /// Largest profile file read (a 5 × 72 × 5 table is ~60 KB of JSON).
 const MAX_FILE: u64 = 4 << 20;
+
+/// Profiles built into LightCraft (`assets/camera-profiles/`, see `assets/ATTRIBUTION.md`):
+/// `(model, JSON)`.
+pub const BUNDLED: &[(&str, &str)] = &[("ILCE-7M4", include_str!("../../../assets/camera-profiles/ILCE-7M4.json"))];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CameraProfile {
@@ -88,11 +93,22 @@ pub fn load(path: &Path) -> Result<CameraProfile, String> {
         return Err(format!("{}: {size} bytes is too large for a camera profile", path.display()));
     }
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let profile: CameraProfile = serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    parse(&bytes, &path.display().to_string())
+}
+
+/// Parse and validate a profile's JSON (`origin` names it in errors).
+fn parse(json: &[u8], origin: &str) -> Result<CameraProfile, String> {
+    let profile: CameraProfile = serde_json::from_slice(json).map_err(|e| format!("{origin}: {e}"))?;
     if !profile.valid() {
-        return Err(format!("{}: not a usable camera profile (version {}, model {:?})", path.display(), profile.version, profile.model));
+        return Err(format!("{origin}: not a usable camera profile (version {}, model {:?})", profile.version, profile.model));
     }
     Ok(profile)
+}
+
+/// The built-in profile for `model`, if any.
+fn bundled(model: &str) -> Option<CameraProfile> {
+    let (_, json) = BUNDLED.iter().find(|(m, _)| *m == model)?;
+    parse(json.as_bytes(), &format!("built-in profile {model}")).inspect_err(|e| eprintln!("lightcraft: ignoring camera profile {e}")).ok()
 }
 
 /// Write `profile` to `dir` (created if needed) as `<model>.json`; returns the path.
@@ -111,7 +127,7 @@ fn cache() -> &'static Mutex<HashMap<String, Option<Arc<CameraProfile>>>> {
     CACHE.get_or_init(Default::default)
 }
 
-/// The profile for camera `model` from [`dir`], read once per process.
+/// The profile for camera `model`: from [`dir`], else built in; read once per process.
 pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
     let model = model.trim();
     if model.is_empty() {
@@ -136,6 +152,7 @@ pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
         },
         _ => None,
     };
+    let profile = profile.or_else(|| bundled(model).map(Arc::new));
     cache.insert(model.to_owned(), profile.clone());
     profile
 }
@@ -145,8 +162,10 @@ pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
 pub fn cache_key() -> u64 {
     static KEY: OnceLock<u64> = OnceLock::new();
     *KEY.get_or_init(|| {
-        let Some(entries) = dir().and_then(|d| std::fs::read_dir(d).ok()) else { return 0 };
+        let entries = dir().and_then(|d| std::fs::read_dir(d).ok());
         let mut files: Vec<(String, u64, u64)> = entries
+            .into_iter()
+            .flatten()
             .flatten()
             .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
             .filter_map(|e| {
@@ -159,6 +178,9 @@ pub fn cache_key() -> u64 {
         let mut h = lightcraft_preview::Hasher128::new();
         for (name, len, modified) in &files {
             h.str(name).u64(*len).u64(*modified);
+        }
+        for (model, json) in BUNDLED {
+            h.str(model).str(json);
         }
         h.finish().0 as u64
     })
@@ -256,6 +278,18 @@ mod tests {
         assert!(load(&dir.join("junk.json")).is_err());
         assert!(load(&dir.join("missing.json")).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bundled_profiles_are_valid_and_named_after_their_model() {
+        assert!(!BUNDLED.is_empty());
+        for (model, json) in BUNDLED {
+            let p = parse(json.as_bytes(), model).unwrap();
+            assert_eq!(p.model, *model);
+            assert!(p.files >= 5 && p.hue_sat.is_some(), "{model}: {} photos", p.files);
+            assert_eq!(bundled(model), Some(p));
+        }
+        assert!(bundled("No Such Camera").is_none());
     }
 
     #[test]
