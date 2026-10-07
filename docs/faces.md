@@ -90,7 +90,46 @@ server share it.
 
 "Commercial use allowed" in the dialog is the weights' licence; it says nothing about the training data.
 
-## Finding faces yourself
+## How fast are the models
+
+Milliseconds depend on your computer, so here is the speed as a ratio to a **ResNet-100 model = 1×**: a bigger number is
+faster. Measured with LightCraft's runtime (tract on the CPU, one thread per face) by timing each model's self-test, median of
+ten runs, on a 32-thread desktop; the ratios should carry over to other machines, the milliseconds will not.
+
+| Model | Size | Speed (ResNet-100 = 1×) | Here |
+| --- | --- | --- | --- |
+| MobileFaceNet (InsightFace buffalo_sc) | 14 MB | **7× faster** | 31 ms per face |
+| SFace (OpenCV Zoo) | 39 MB | **4.6× faster** | 47 ms |
+| ResNet-50 class (InsightFace buffalo_l `w600k_r50`) | 174 MB | **1.7× faster** | 129 ms |
+| ResNet-100 class (AuraFace) | 261 MB | **1×** (the reference) | 218 ms |
+
+Models of the same architecture run at the same speed whoever trained them, so the ResNet-50 row stands for any R50
+recogniser (TopoFR R50, AdaFace R50…) and the ResNet-100 row for any R100. A ResNet-200 would be about **half as fast** as the
+R100 (0.5×, estimated from the compute, not measured). Only the recognition step is timed here: scanning a photo also decodes
+it and finds its faces (about as much work as one SFace face), so a whole-photo scan with an R100 takes roughly 2.5 to 3
+times as long as with SFace, not 4.6 times.
+
+### And how well do they recognise?
+
+Published numbers only, each copied from the model's own page (we have not re-run them). Higher is better. They are
+standard face-verification benchmarks: **IJB-C** (hard, mixed-quality photos; true-accept rate at one false accept in
+10,000), **CFP-FP** (frontal against profile) and **AgeDB-30** (years apart), both in percent.
+
+| Model | Speed (R100 = 1×) | IJB-C | CFP-FP | AgeDB-30 | Source |
+| --- | --- | --- | --- | --- | --- |
+| MobileFaceNet (InsightFace buffalo_s / buffalo_sc) | 7× faster | 95.02 | 98.00 | 96.58 | InsightFace model zoo |
+| SFace (OpenCV Zoo) | 4.6× faster | not given | not given | not given | OpenCV Zoo says 0.9940 on a set it does not name |
+| ResNet-50 (InsightFace buffalo_l) | 1.7× faster | 97.25 | 99.33 | 98.23 | InsightFace model zoo |
+| ResNet-100 (AuraFace v1) | 1× | not given | 95.19 | 96.10 | its Hugging Face page |
+| TopoFR R50 / R100 / R200 (Glint360K) | 1.7× / 1× / 0.5× | 97.27 / 97.60 / 97.84 | not given | not given | TopoFR repository |
+
+Read with care: the sources report different sets, so the blanks are not zeros and the rows are not all on the same
+yardstick. What the numbers do say: a ResNet-50 recogniser is about two points above a MobileFaceNet on IJB-C, a ResNet-100
+or 200 adds only a few tenths more, and AuraFace's published CFP-FP and AgeDB-30 are below buffalo_l's ResNet-50 despite being
+a ResNet-100 (so it is not the accuracy choice its size suggests). InsightFace's pretrained weights are, in its own words,
+"available for non-commercial research purposes only"; TopoFR's page states no licence for its weights.
+
+## Finding faces yourself## Finding faces yourself
 
 **Photo ▸ Detect Faces** (`faces.detect`) runs the bundled detector on the selected photos and adds what it finds as
 unnamed face boxes, in one undo step. A new run replaces earlier detections; boxes that came from XMP, or that you drew or
