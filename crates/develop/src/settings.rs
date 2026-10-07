@@ -158,6 +158,7 @@ impl WbMode {
 pub struct WhiteBalance {
     pub mode: WbMode,
     pub temp: f64,
+    /// Correction direction: negative adds green, positive adds magenta.
     pub tint: f64,
 }
 

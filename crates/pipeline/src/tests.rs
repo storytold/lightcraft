@@ -330,3 +330,28 @@ fn soft_proof_maps_into_the_proof_gamut_and_flags_what_does_not_fit() {
     assert!(blue(&pro) > 0);
     assert!(red(&pro) < n, "ProPhoto holds more than sRGB");
 }
+
+#[test]
+fn tint_negative_is_green_and_positive_is_magenta() {
+    use lightcraft_develop::WbMode;
+    let src = Rgb32f::filled(16, 16, [0.18; 3]);
+    // Rendered images, uncalibrated RAW and calibrated RAW with a nonzero As Shot tint.
+    for info in [
+        SourceInfo::default(),
+        SourceInfo { raw: true, relative_wb: true, ..Default::default() },
+        SourceInfo { raw: true, as_shot_temp: 4200.0, as_shot_tint: 15.0, ..Default::default() },
+    ] {
+        let mut s = DevelopSettings::default();
+        let neutral = render(&src, &info, &s, &RenderRequest::fit(16, 16)).image.get(8, 8);
+        assert!((neutral[0] as i16 - neutral[1] as i16).abs() <= 1);
+        assert!((neutral[2] as i16 - neutral[1] as i16).abs() <= 1);
+        s.wb.mode = WbMode::Custom;
+        s.wb.temp = info.as_shot_temp;
+        for delta in [-50.0, 50.0] {
+            s.wb.tint = info.as_shot_tint + delta;
+            let p = render(&src, &info, &s, &RenderRequest::fit(16, 16)).image.get(8, 8);
+            let magenta = (p[0] as f64 + p[2] as f64) / 2.0 - p[1] as f64;
+            assert!(magenta * delta > 100.0, "delta {delta} must follow the green/magenta track, got {p:?}");
+        }
+    }
+}

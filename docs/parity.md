@@ -234,7 +234,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-EDIT-COLOR-WB-PRESET | White-balance presets | P0 | ✅ | `cmd:develop.wb` | |
 | LR-EDIT-COLOR-WB-PICKER | White-balance eyedropper | P0 | ✅ | `cmd:tool.wbPicker`, `cmd:develop.wbPick` | no magnified loupe while picking |
 | LR-EDIT-COLOR-TEMP | Temperature | P0 | 🟡 | `ctl:wb.temp` `cmd:develop.wbKelvin` | Click number to type Kelvin (Enter/blur commit, Escape cancel, undo); uncalibrated RAW uses a camera-anchored estimate, measured calibration missing; non-raw stays relative |
-| LR-EDIT-COLOR-TINT | Tint | P0 | ✅ | `ctl:wb.tint` | Numeric entry and undo; uncalibrated RAW uses −150…150 relative to As Shot |
+| LR-EDIT-COLOR-TINT | Tint | P0 | ✅ | `ctl:wb.tint` | Numeric entry and undo; negative/left adds green, positive/right adds magenta, consistent across CPU/GPU and auto/picker; uncalibrated RAW uses −150…150 relative to As Shot |
 | LR-EDIT-COLOR-VIBRANCE | Vibrance | P0 | ✅ | `ctl:color.vibrance` | |
 | LR-EDIT-COLOR-SATURATION | Saturation | P0 | ✅ | `ctl:color.saturation` | |
 | LR-EDIT-COLOR-MIXER-HSL | 8-band colour mixer | P0 | ✅ | `ctl:mixer.*` | no targeted (drag-on-image) mode |

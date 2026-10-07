@@ -191,3 +191,28 @@ mod bw_tests {
         assert_eq!(auto_bw_mix(&grey, &SourceInfo::default(), &DevelopSettings::default()), [0.0; 8]);
     }
 }
+
+#[cfg(test)]
+mod tint_tests {
+    use super::*;
+
+    #[test]
+    fn auto_wb_and_picker_correct_green_with_positive_tint() {
+        // The picker delegates a sampled patch to this same auto_wb implementation.
+        for (rgb, sign) in [([0.18, 0.24, 0.18], 1.0), ([0.24, 0.18, 0.24], -1.0)] {
+            let img = Rgb32f::filled(16, 16, rgb);
+            let info = SourceInfo { raw: true, relative_wb: true, ..Default::default() };
+            let (temp, tint) = auto_wb(&img, &info);
+            assert!(tint * sign > 0.0, "{rgb:?}: temp {temp}, tint {tint}");
+            let mut s = DevelopSettings::default();
+            s.wb.mode = lightcraft_develop::WbMode::Custom;
+            s.wb.temp = temp;
+            s.wb.tint = tint;
+            let mut corrected = img;
+            crate::local::white_balance(&mut corrected, &info, &s);
+            let p = corrected.get(0, 0);
+            let spread = p[0].max(p[1]).max(p[2]) - p[0].min(p[1]).min(p[2]);
+            assert!(spread < 0.003, "{rgb:?} -> {p:?}");
+        }
+    }
+}

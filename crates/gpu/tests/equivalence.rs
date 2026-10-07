@@ -628,3 +628,24 @@ fn output_spaces_match() {
         }
     }
 }
+
+#[test]
+fn tint_directions_match_cpu_for_raw_and_rendered_sources() {
+    if !gpu() {
+        return;
+    }
+    let src = Arc::new(Rgb32f::filled(64, 64, [0.18; 3]));
+    for info in [
+        SourceInfo::default(),
+        SourceInfo { raw: true, relative_wb: true, ..Default::default() },
+        SourceInfo { raw: true, as_shot_temp: 4200.0, as_shot_tint: 15.0, ..Default::default() },
+    ] {
+        for delta in [-50.0, 50.0] {
+            let mut s = DevelopSettings::default();
+            s.wb.mode = WbMode::Custom;
+            s.wb.temp = info.as_shot_temp;
+            s.wb.tint = info.as_shot_tint + delta;
+            check("tint direction", &src, &info, &s, &RenderRequest::fit(64, 64));
+        }
+    }
+}
