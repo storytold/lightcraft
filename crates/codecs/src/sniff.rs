@@ -174,6 +174,9 @@ fn tiff_is_raw(b: &[u8]) -> bool {
         for e in &entries {
             match e.tag {
                 0xC612 => return true, // DNGVersion
+                // TIFF/EP CFARepeatPatternDim / CFAPattern: only sensor data carries them, whatever the
+                // compression (Sony's medium/small lossless ARWs store YCbCr photometric with JPEG compression)
+                0x828D | 0x828E => return true,
                 0x0106 if matches!(t.uint(e), Some(32803 | 34892)) => return true,
                 0x0103 if matches!(t.uint(e), Some(32767 | 32769 | 32770 | 34316 | 34713 | 65000 | 65535)) => return true,
                 0x014A => {
@@ -232,5 +235,35 @@ mod tests {
         b.extend_from_slice(&[1, 4, 0, 0]);
         b.extend_from_slice(&0u32.to_le_bytes());
         assert_eq!(sniff(&b), Some(Format::RawTiffLike));
+    }
+
+    /// A Sony medium-size lossless ARW: compression 7 and photometric YCbCr in the raw SubIFD, which
+    /// no other marker flags; its CFAPattern does.
+    #[test]
+    fn a_cfa_pattern_in_a_subifd_marks_a_raw() {
+        let entry = |tag: u16, typ: u16, count: u32, val: [u8; 4]| {
+            let mut e = tag.to_le_bytes().to_vec();
+            e.extend_from_slice(&typ.to_le_bytes());
+            e.extend_from_slice(&count.to_le_bytes());
+            e.extend_from_slice(&val);
+            e
+        };
+        let build = |with_cfa: bool| {
+            let mut b = b"II*\0\x08\0\0\0".to_vec();
+            // IFD0 at 8: one SubIFDs entry, pointing at the SubIFD at 26
+            b.extend_from_slice(&1u16.to_le_bytes());
+            b.extend(entry(0x014A, 4, 1, 26u32.to_le_bytes()));
+            b.extend_from_slice(&0u32.to_le_bytes());
+            let mut sub = vec![entry(0x0103, 3, 1, [7, 0, 0, 0]), entry(0x0106, 3, 1, [6, 0, 0, 0])];
+            if with_cfa {
+                sub.push(entry(0x828E, 1, 4, [0, 1, 1, 2]));
+            }
+            b.extend_from_slice(&(sub.len() as u16).to_le_bytes());
+            sub.into_iter().for_each(|e| b.extend(e));
+            b.extend_from_slice(&0u32.to_le_bytes());
+            b
+        };
+        assert_eq!(sniff(&build(true)), Some(Format::RawTiffLike));
+        assert_eq!(sniff(&build(false)), Some(Format::Tiff), "without the pattern it is an ordinary TIFF");
     }
 }
