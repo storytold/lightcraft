@@ -50,6 +50,10 @@ or CMYK profile converted by the CMS straight to linear Rec.2020), `Container` (
 EXIF `R03` Adobe RGB hint), `Untagged` (assumed sRGB; untagged float data assumed linear),
 `IccUnsupported` (profile present but unusable → **sRGB fallback**), `Naive` (CMYK without profile).
 
+`decode_jpeg_with_fallback(bytes, opts, space)` lets an enclosing RAW container supply the colour
+space of a JPEG with no ICC or EXIF metadata. It applies the transfer curve before linear-light
+resizing; a JPEG carrying its own metadata retains its existing interpretation.
+
 ICC profiles are parsed with `moxcms` (v2/v4, `curv`/`para` TRCs, `chad`); sRGB, Display P3,
 Adobe RGB (1998), ProPhoto (ROMM) and Rec.2020 are recognised by colorants. `icc::write_matrix_trc`
 emits v4 display profiles (D50 PCS, Bradford `chad`) for export embedding.

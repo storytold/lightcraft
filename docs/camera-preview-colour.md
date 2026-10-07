@@ -4,7 +4,15 @@ ARW and NEF decoding supply a Bayer mosaic and camera white-balance multipliers,
 
 ## Colour and tone are separate
 
-A fixed sensor proxy of at most 96×96 is developed with the file's WB, black/white levels and active crop. The embedded JPEG is decoded with DCT scaling and a 64-million-pixel input limit, converted through the codec's colour management, and reduced to the same size. Aspect ratios must agree within 2%. Near-black, clipped and nonfinite samples are excluded. At least 256 paired pixels, 5% coloured samples and a nonsingular input covariance with bounded condition are required.
+A fixed sensor proxy of at most 96×96 is developed with the file's WB, black/white levels and active crop. The embedded JPEG is decoded with DCT scaling and a 64-million-pixel input limit, converted through the codec's colour management, and reduced to the same size. Aspect ratios must agree within 2%. Near-black and nonfinite samples are excluded; colour fitting also excludes clipped JPEG channels. At least 256 paired pixels, 5% coloured samples and a nonsingular input covariance with bounded condition are required.
+
+The sensor proxy averages each CFA channel before highlight reconstruction: one clipped glint
+must not replace a whole proxy cell's mean with its maximum. Colour fitting excludes clipped
+JPEG channels and bright highlights; tone and chroma fitting also include the bright reference
+pixels, so the camera's shoulder is observed instead of extrapolated from midtones alone.
+Training and validation are split by original pixel index **before** those filters, shared by
+every fitting stage. Validation includes highlights too. Exact display-white references are
+bounded to 0.9999 when fitting the tone curve, retaining its continuous shoulder above the data.
 
 Two thirds of the usable pixels train a ridge-regularised 3×3 **chromaticity** correction (luminance-normalised RGB). This avoids trying to encode the camera's nonlinear tone curve in a matrix, which left skin grey in the earlier matrix-only estimate. Coefficients are bounded by 8. A matrix can't follow the camera's hue-dependent rendering, though: on a photo of a lime shirt among grey rocks the best matrix rendered the shirt olive (16° hue error), because the few saturated pixels have little weight against the many dull ones, and a matrix fitted to the shirt alone breaks everything else. So a **hue/saturation table** (5 values × 72 hues × 5 saturations, the DNG `ProfileHueSatMap` layout with an sRGB-encoded value axis, applied in linear ProPhoto RGB after the baseline exposure) is fitted to the residual hue shifts and saturation ratios after the matrix: Gaussian kernels around each node (2.5° hue, 0.15 saturation, 0.12 encoded value), weighted by saturation, shrunk toward identity where the photo has few samples, saturation 0 left as identity so neutrals stay neutral. The value axis matters: on a sunny waterfall scene dark yellows had to turn ~12° toward orange while brighter yellow-greens turned ~9° toward green, and one shift per hue made both worse. The table restores each pixel's luminance (the tone curve owns luminance; without that, saturation boosts darkened colours and the table lost on held-out pixels).
 
@@ -34,6 +42,21 @@ Public CC0 samples (raw.pixls.us; 10 files, ILCE-6000, -6400 ×2, -6700, -7M3, -
 
 ### Nikon NEF
 
+Nikon Z 8 validation exposed three additional issues: the maker-note `CropArea` (0x0045) was
+ignored, untagged embedded JPEGs were treated as sRGB even when Nikon `ColorSpace` (0x001e)
+declared Adobe RGB, and the midtone-only tone fit flattened highlight texture. The decoder now
+honours a bounded `[left, top, width, height]` crop without shifting the sensor/CFA origin. Quick
+previews, unsupported-RAW fallback and colour fitting share the enclosing colour declaration
+when the JPEG has no ICC/EXIF metadata; existing JPEG metadata takes precedence. No manufacturer
+profile or calibration data is copied. These fixes and the highlight-aware fitting above
+invalidate render caches (version 12); existing smart previews must be rebuilt to obtain the new look.
+
+On the local Z 8 pair, unedited 1200-pixel exports compared with the colour-managed camera JPEG
+at 300×200 pixels reduced mean CIE76 ΔE from 6.70 to 4.47 (95th percentile 16.93 → 15.74).
+This is a single overexposed scene, not a model-wide calibration claim; clipped areas and the
+camera's local processing still differ. Synthetic tests cover the missing highlight shoulder,
+disjoint training/validation, colour-declaration precedence and malformed/out-of-bounds crop tags.
+
 The same fit, gates and relative WB apply to NEF/NRW (issue #150: NEFs rendered muted and greenish). Public CC0 samples from raw.pixls.us (D750 12/14-bit, D780 12-bit, D850 12/14-bit, D7500 12/14-bit lossless and lossy, Z 50 12-bit) plus five local D7500 shots of an indoor event, rendered at 1200 px and compared with each file's embedded JPEG (mean CIE76 ΔE at 200 px): all 13 decodable files accepted, held-out RMS 0.11–0.24 → 0.01–0.09, ΔE 13–46 → 2.9–7.8 with matching mean lightness. The exception is a mixed-light D7500 scene (faces lit by a purple screen): accepted (RMS 0.156 → 0.057) but only ΔE 12.7 → 12.0, rendered warmer and lighter than the camera JPEG; the linear-display error the gate measures is dominated by the bright screen. Files that still open as the embedded preview (lossy-after-split, uncompressed data labelled compressed) are not fitted.
 
 Measuring this found a decoder bug: 12-bit NEFs store maker note `0x003d` BlackLevel in 14-bit units (D750 600, D780/Z 50 1008, D850/D7500 400, while their darkest samples are 150 / ~252 / 99), so 12-bit files rendered nearly black or with crushed shadows before any fit. The decoder now scales it to the sample depth; the fits for the same D7500 scene at 12 and 14 bits then agree (held-out RMS 0.042–0.049 vs 0.050–0.054; before, the 12-bit fits had to desaturate to compensate).
@@ -47,4 +70,3 @@ This is a per-file camera-look estimate, **not measured spectral calibration or 
 One photo can show too little of a colour for its own fit to learn it: in a second shot of the lime shirt only a few dozen proxy pixels show it, next to a hillside of foliage at the same hue that the camera renders differently, and the shirt stayed yellow (hue 68° against the JPEG's 82°; a 192-pixel proxy only reached 74°). `lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS…` therefore pools the colour pairs of many ARWs per camera model — each against its own embedded JPEG, at a 192-pixel proxy, at most 4000 pairs per photo, files spread evenly over the folders — and fits one matrix (from white-balanced camera RGB, so no single photo's white point is baked in) and one hue/saturation/value table. Models need at least 5 usable photos.
 
 Profiles are JSON files `<model>.json` in `$LIGHTCRAFT_CAMERA_PROFILES`, else `<config>/camera-profiles` (macOS `~/Library/Application Support/LightCraft/camera-profiles`); a local profile replaces a built-in one. Built-in profiles live in `assets/camera-profiles/` (listed in `assets/ATTRIBUTION.md`) and are compiled in, so the app, CLI and web build share them: ILCE-7M4, fitted to 597 photos (2.2 million colour pairs) shot in 2026, mostly with the Standard creative style and DRO Auto. They hold aggregate colour statistics only. A photo of a profiled model takes its colour from the profile and fits only its own tone and chroma curves (DRO and picture styles vary per shot); the acceptance gates still apply, and a rejected fit falls back as before. Files are read once per process and validated (version, bounded invertible matrix, table shape and finite data); a damaged file is ignored with a warning. The profiles folder's contents are part of the render cache keys, so thumbnails rendered before a profile existed are redone; smart previews built before keep their colour until rebuilt.
-

@@ -5,6 +5,30 @@ use lightcraft_tiff::image::chunk_bytes;
 use lightcraft_tiff::tags as t;
 use lightcraft_tiff::{Ifd, Tiff, makernote};
 
+/// Colour space of an embedded JPEG when the enclosing raw supplies it instead of the JPEG.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreviewColorSpace {
+    Srgb,
+    AdobeRgb,
+}
+
+/// Nikon maker-note ColorSpace (0x001e: 1 = sRGB, 2 = Adobe RGB), per Nikon tag documentation.
+/// This is a fallback only: a JPEG's own ICC/EXIF colour declaration takes precedence.
+pub fn embedded_preview_color_space(bytes: &[u8]) -> Option<PreviewColorSpace> {
+    let tiff = Tiff::parse(bytes).ok()?;
+    let make = tiff.ifds.first()?.string(t::MAKE)?;
+    if !make.to_ascii_uppercase().starts_with("NIKON") {
+        return None;
+    }
+    let e = tiff.exif()?.get(t::MAKER_NOTE)?;
+    let mn = makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make)?;
+    match mn.ifd.u16(0x001e)? {
+        1 => Some(PreviewColorSpace::Srgb),
+        2 => Some(PreviewColorSpace::AdobeRgb),
+        _ => None,
+    }
+}
+
 /// Whether `b` looks like a displayable (DCT) JPEG: SOI, and the first SOF marker is not lossless.
 fn is_dct_jpeg(b: &[u8]) -> bool {
     if b.len() < 4 || b[0] != 0xff || b[1] != 0xd8 {

@@ -17,6 +17,19 @@ use lightcraft_tiff::{ByteOrder, Ifd, Tiff, makernote};
 const WB_RB_LEVELS: u16 = 0x000c;
 const BLACK_LEVEL: u16 = 0x003d;
 const LINEARIZATION_TABLE: u16 = 0x0096;
+const CROP_AREA: u16 = 0x0045;
+
+/// Nikon CropArea is `[left, top, width, height]` in sensor pixels (maker-note tag documentation).
+/// Keep the active area/CFA origin unchanged: the default crop is applied after demosaicing.
+fn default_crop(mn: Option<&makernote::MakerNote>, w: usize, h: usize) -> Rect {
+    let fallback = Rect::new(0, 0, w, h);
+    let Some(values) = mn.and_then(|m| m.ifd.u64s(CROP_AREA)) else { return fallback };
+    let [x, y, width, height] = values.as_slice() else { return fallback };
+    if *width == 0 || *height == 0 || x.checked_add(*width).is_none_or(|v| v > w as u64) || y.checked_add(*height).is_none_or(|v| v > h as u64) {
+        return fallback;
+    }
+    Rect::new(*x as usize, *y as usize, *width as usize, *height as usize)
+}
 
 fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
     tiff.all_ifds()
@@ -80,9 +93,10 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<RawImage> {
     };
     let white = white_from_data(samples, bits);
     let active_w = trailing_masked_columns(samples, w, h, white);
+    let crop = default_crop(mn.as_ref(), active_w, h);
     let mut metadata = lightcraft_meta::from_tiff(&tiff);
-    metadata.width = Some(active_w as u32);
-    metadata.height = Some(h as u32);
+    metadata.width = Some(crop.width as u32);
+    metadata.height = Some(crop.height as u32);
     let img = RawImage {
         format: RawFormat::Nef,
         width: w,
@@ -94,7 +108,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<RawImage> {
         black,
         white: vec![white],
         active_area: Rect::new(0, 0, active_w, h),
-        crop: Rect::new(0, 0, active_w, h),
+        crop,
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
         color: ColorData::default(),
         wb_multipliers: wb,
@@ -179,6 +193,42 @@ mod tests {
         }
         ifd0.add_sub_ifd(raw);
         TiffWriter::new(ByteOrder::Big, false).write(&[ifd0]).unwrap()
+    }
+
+    #[test]
+    fn preview_color_space_is_read_from_the_nikon_note() {
+        for (value, expected) in [(1, Some(crate::PreviewColorSpace::Srgb)), (2, Some(crate::PreviewColorSpace::AdobeRgb)), (3, None)] {
+            let mut mn = IfdBuilder::new();
+            mn.set(0x001e, Value::Short(vec![value]));
+            let bytes = nef_with_note(1, 14, vec![vec![0; 128]], 8, 8, 8, Some(mn));
+            assert_eq!(crate::embedded_preview_color_space(&bytes), expected);
+        }
+        assert_eq!(crate::embedded_preview_color_space(&nef(1, 14, vec![vec![0; 128]], 8, 8, 8)), None);
+        assert_eq!(crate::embedded_preview_color_space(b"not a TIFF"), None);
+    }
+
+    #[test]
+    fn nikon_crop_area_preserves_sensor_origin_and_rejects_invalid_rectangles() {
+        let (w, h) = (32, 24);
+        let words: Vec<u8> = (0..w * h).flat_map(|i| (100 + i as u16).to_be_bytes()).collect();
+        for (values, expected) in [
+            (vec![2, 4, 28, 16], Rect::new(2, 4, 28, 16)),
+            (vec![31, 4, 28, 16], Rect::new(0, 0, 32, 24)),
+            (vec![2, 4, 0, 16], Rect::new(0, 0, 32, 24)),
+            (vec![u32::MAX, 4, 28, 16], Rect::new(0, 0, 32, 24)),
+            (vec![2, 4, 28], Rect::new(0, 0, 32, 24)),
+        ] {
+            let mut mn = IfdBuilder::new();
+            mn.set(CROP_AREA, Value::Long(values));
+            let bytes = nef_with_note(1, 14, vec![words.clone()], w, h, h, Some(mn));
+            let raw = crate::decode(&bytes).unwrap();
+            assert_eq!(raw.crop, expected);
+            assert_eq!(raw.active_area, Rect::new(0, 0, 32, 24));
+            assert_eq!(raw.metadata.width, Some(expected.width as u32));
+            assert_eq!(raw.metadata.height, Some(expected.height as u32));
+            let developed = raw.develop(crate::Method::Bilinear).unwrap();
+            assert_eq!((developed.width, developed.height), (expected.width, expected.height));
+        }
     }
 
     #[test]

@@ -42,7 +42,7 @@ pub use lightcraft_geom::Orientation;
 pub use lightcraft_meta::Metadata;
 pub use lightcraft_raster::Rgb32f;
 pub use opcodes::{Opcode, OpcodeLists};
-pub use preview::embedded_preview;
+pub use preview::{PreviewColorSpace, embedded_preview, embedded_preview_color_space};
 
 use lightcraft_color::Xy;
 use lightcraft_tiff::{Tiff, TiffError};

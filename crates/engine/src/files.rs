@@ -320,6 +320,21 @@ fn preview_orientation(raw_bytes: &[u8], jpeg_orientation: u16) -> Orientation {
     lightcraft_meta::extract(raw_bytes).orientation.unwrap_or(Orientation::Normal)
 }
 
+/// Shared colour interpretation for quick previews, unsupported RAW fallback and camera-look fitting.
+pub(crate) fn decode_raw_preview(bytes: &[u8], opts: lightcraft_codecs::DecodeOptions) -> Option<lightcraft_codecs::Decoded> {
+    let jpeg = lightcraft_raw::embedded_preview(bytes)?;
+    match lightcraft_raw::embedded_preview_color_space(bytes) {
+        Some(space) => {
+            let space = match space {
+                lightcraft_raw::PreviewColorSpace::Srgb => lightcraft_codecs::NamedSpace::Srgb,
+                lightcraft_raw::PreviewColorSpace::AdobeRgb => lightcraft_codecs::NamedSpace::AdobeRgb,
+            };
+            lightcraft_codecs::decode_jpeg_with_fallback(&jpeg, opts, space).ok()
+        }
+        None => lightcraft_codecs::decode(&jpeg, opts).ok(),
+    }
+}
+
 /// Oriented size of the embedded preview of a raw file.
 fn embedded_preview_size(bytes: &[u8]) -> Option<(u32, u32)> {
     let jpeg = lightcraft_raw::embedded_preview(bytes)?;
@@ -333,8 +348,7 @@ fn embedded_preview_size(bytes: &[u8]) -> Option<(u32, u32)> {
 
 /// The embedded preview of a raw file as a working-space image no larger than `max_edge`, oriented.
 pub fn load_embedded_preview(bytes: &[u8], max_edge: usize) -> Option<(Rgb32f, SourceInfo)> {
-    let jpeg = lightcraft_raw::embedded_preview(bytes)?;
-    let d = lightcraft_codecs::decode(&jpeg, lightcraft_codecs::DecodeOptions::fit(max_edge as u32, max_edge as u32)).ok()?;
+    let d = decode_raw_preview(bytes, lightcraft_codecs::DecodeOptions::fit(max_edge as u32, max_edge as u32))?;
     let img = d.to_working();
     let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
     Some((img.oriented(preview_orientation(bytes, d.orientation)), SourceInfo::default()))
@@ -343,8 +357,7 @@ pub fn load_embedded_preview(bytes: &[u8], max_edge: usize) -> Option<(Rgb32f, S
 /// The embedded preview of a raw file for display (sRGB, oriented, no larger than `max_edge`): the
 /// loupe and grid show it until the raw itself has been developed ([`crate::media::QuickJob`]).
 pub fn embedded_preview_srgb(bytes: &[u8], max_edge: usize) -> Option<lightcraft_raster::Rgba8> {
-    let jpeg = lightcraft_raw::embedded_preview(bytes)?;
-    let mut d = lightcraft_codecs::decode(&jpeg, lightcraft_codecs::DecodeOptions::fit(max_edge as u32, max_edge as u32)).ok()?;
+    let mut d = decode_raw_preview(bytes, lightcraft_codecs::DecodeOptions::fit(max_edge as u32, max_edge as u32))?;
     if d.image.width.max(d.image.height) > max_edge {
         d.image = fit(&d.image, max_edge, max_edge, Filter::Box);
         d.alpha = None;
