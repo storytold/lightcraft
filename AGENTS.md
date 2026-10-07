@@ -57,7 +57,7 @@ of it. Full standard: `../craftrules/standards/never-crash.md`
 - **Everything is a command** (`crates/engine`): id, label, menu path, shortcut, params, enabled(), run(). UI, CLI, control channel and MCP all dispatch by id. Every slider is a `develop` control spec.
 - **Resolution independence:** settings use normalized image coordinates and relative radii; previews and exports must match.
 - **Quality gates** before every commit: `cargo xtask ci` (fmt, clippy -D warnings, tests, layers, assets, wasm).
-- **Contributor credits are compiled in.** About ▸ Contributors/Models come from `contributors/contributors.json`, baked into the binary by `crates/ui-egui/build.rs` (never read at run time). Regenerate it with `python3 ../craftrules/scripts/contributors.py .` and commit it; never hand-edit it. GitHub usernames only; display and real names only with consent recorded in craftrules `contributors/people.toml`. See `docs/contributors.md`.
+- **Contributor credits are compiled in.** About ▸ Contributors/Models come from `contributors/contributors.json`, baked into the binary by `crates/ui-egui/build.rs` (never read at run time). Regenerate it with `python3 ../../craftrules/scripts/contributors.py .` and commit it; never hand-edit it. GitHub usernames only; display and real names only with consent recorded in craftrules `contributors/people.toml`. See `docs/contributors.md`.
 - **Commits:** one task id per commit (`M2.3: local Laplacian highlights/shadows`). Only green states. End messages with the attribution line required by the environment.
 
 ## Assets: icons, images, fonts (ABSOLUTE RULE — never violate)
