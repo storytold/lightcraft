@@ -23,8 +23,9 @@ const QUIT: &str = "app.quit";
 const SETTINGS: &str = "app.settings";
 const SETTINGS_KEY: &str = "Cmd+,";
 /// Keys whose meaning depends on the panel (X = reject or swap crop aspect, ⌫ = delete the photo
-/// or the active mask): left to the egui handler, which knows the context.
-const CONTEXTUAL: &[&str] = &["X", "Delete"];
+/// or the active mask, P/U = pick/unflag with culling and auto-advance): left to the egui handler,
+/// which knows the context.
+const CONTEXTUAL: &[&str] = &["P", "U", "X", "Delete"];
 /// Shortcuts text fields need while they have focus.
 const TEXT_EDIT: &[&str] = &["Cmd+A", "Cmd+C", "Cmd+V", "Cmd+X", "Cmd+Z", "Cmd+Shift+Z"];
 
