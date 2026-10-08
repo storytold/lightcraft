@@ -244,7 +244,7 @@ fn fit_pairs_with(sensor: &Rgb32f, reference: &Rgb32f, colour: Option<(Mat3, Opt
         if let Some(tone) = fit_chroma(&bright, &look) {
             look.tone = tone;
         }
-        let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+        let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0, 0.0);
         let (mut linear, mut perceptual, mut samples) = (0.0, 0.0, 0);
         for (x, target) in pairs.iter().step_by(3) {
             let corrected = displayed(colour(*x), &tone);
@@ -433,7 +433,7 @@ fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Option<Camer
         let p = look.matrix.apply(*x);
         correction.as_ref().map_or(p, |c| c.apply(p.map(|v| v as f32)).map(f64::from))
     };
-    let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+    let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0, 0.0);
     let predict = |x: &[f64; 3]| displayed(scene(x), &tone);
     let chroma = |p: [f64; 3]| {
         let y = luma(p);
@@ -464,7 +464,7 @@ fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Option<Camer
         *node = (sum / (weight + CHROMA_SHRINK)).exp() as f32;
     }
     let fitted = look.tone.with_chroma(curve)?;
-    let with = ToneMap::camera(&fitted, 0.0, 0.0, 0.0);
+    let with = ToneMap::camera(&fitted, 0.0, 0.0, 0.0, 0.0);
     let error = |map: &ToneMap| -> f64 {
         pairs
             .iter()
@@ -523,7 +523,7 @@ fn fit_tone(mut pairs: Vec<(f64, f64)>) -> Option<CameraTone> {
         }
         i += n;
     }
-    CameraTone::new(knots)
+    CameraTone::new(&knots)
 }
 
 #[cfg(test)]
@@ -573,7 +573,7 @@ mod tests {
         let original = sensor.clone();
         let fit = fit_pairs(&sensor, &reference).unwrap();
         assert_eq!(sensor.data, original.data);
-        let tone = ToneMap::camera(&fit.tone, 0.0, 0.0, 0.0);
+        let tone = ToneMap::camera(&fit.tone, 0.0, 0.0, 0.0, 0.0);
         let error: f64 = sensor
             .data
             .iter()
@@ -700,8 +700,8 @@ mod tests {
         let chroma = fit.tone.chroma();
         assert!(chroma[6] < 0.5 * chroma[1], "highlights bleach relative to shadows: {chroma:?}");
         // and the rendered highlights land on the camera's, far closer than without the curve
-        let with = ToneMap::camera(&fit.tone, 0.0, 0.0, 0.0);
-        let without = ToneMap::camera(&fit.tone.with_chroma([1.0; lightcraft_pipeline::tone::CHROMA_N]).unwrap(), 0.0, 0.0, 0.0);
+        let with = ToneMap::camera(&fit.tone, 0.0, 0.0, 0.0, 0.0);
+        let without = ToneMap::camera(&fit.tone.with_chroma([1.0; lightcraft_pipeline::tone::CHROMA_N]).unwrap(), 0.0, 0.0, 0.0, 0.0);
         let highlight_error = |map: &ToneMap| -> f64 {
             sensor
                 .data
@@ -753,7 +753,7 @@ mod tests {
         let look = fit_pairs_with(&sensor, &reference, Some((matrix, None))).unwrap();
         assert_eq!(look.matrix, matrix);
         assert!(look.hue_sat.is_none());
-        let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+        let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0, 0.0);
         let error = sensor
             .data
             .iter()

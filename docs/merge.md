@@ -40,7 +40,8 @@ largest rectangle of image data (set as the develop crop, so it stays adjustable
 push–pull diffusion. Output: 16-bit integer DNG (16-bit float for HDR panoramas).
 
 **DNG output** (`output.rs`): LinearRaw, 3 samples, Deflate tiles; values scaled below 1.0 with the
-scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB), other sources get
+scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB) except a gain table map
+(`ProfileGainTableMap*`, positioned on one capture's sensor area), other sources get
 `ColorMatrix1`/`ForwardMatrix1` of their RGB space.
 
 ## Measured (synthetic tests, `cargo test -p lightcraft-merge`)

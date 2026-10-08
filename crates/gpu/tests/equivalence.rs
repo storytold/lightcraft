@@ -28,11 +28,11 @@ fn camera_tone_and_relative_wb() {
         return;
     }
     let src = scene(2, 320, 240);
-    let curve = lightcraft_pipeline::tone::CameraTone::new(std::array::from_fn(|i| {
+    let knots: [[f32; 2]; 32] = std::array::from_fn(|i| {
         let x = 0.004 * 1.18f32.powi(i as i32);
         [x, 1.0 - (-2.0 * x).exp()]
-    }))
-    .unwrap();
+    });
+    let curve = lightcraft_pipeline::tone::CameraTone::new(&knots).unwrap();
     let info = SourceInfo { raw: true, relative_wb: true, camera_tone: Some(curve), ..Default::default() };
     let mut s = DevelopSettings::default();
     check("camera tone neutral", &src, &info, &s, &RenderRequest::fit(320, 240));
@@ -41,6 +41,10 @@ fn camera_tone_and_relative_wb() {
     s.wb.mode = WbMode::Custom;
     s.wb.temp = 8000.0;
     check("camera tone edited", &src, &info, &s, &RenderRequest::fit(320, 240));
+    // a DNG profile tone curve: per channel, hue-preserving
+    let info = SourceInfo { camera_tone: Some(curve.per_channel()), relative_wb: false, ..info };
+    check("camera tone per channel edited", &src, &info, &s, &RenderRequest::fit(320, 240));
+    check("camera tone per channel neutral", &src, &info, &DevelopSettings::default(), &RenderRequest::fit(320, 240));
     // a camera chroma curve: richer shadows, highlights bleached toward white
     let curve = curve.with_chroma([1.4, 1.3, 1.1, 1.0, 0.7, 0.4, 0.25, 0.2]).unwrap();
     let info = SourceInfo { camera_tone: Some(curve), ..info };
@@ -203,6 +207,12 @@ fn cases() -> Vec<(&'static str, Edit)> {
         ("sharpen masking", |s| {
             s.detail.sharpen_amount = 90.0;
             s.detail.sharpen_masking = 60.0;
+        }),
+        ("sharpen radius + detail", |s| {
+            s.detail.sharpen_amount = 120.0;
+            s.detail.sharpen_radius = 2.6;
+            s.detail.sharpen_detail = 70.0;
+            s.effects.texture = 20.0;
         }),
         ("white balance", |s| {
             s.wb.mode = WbMode::Custom;

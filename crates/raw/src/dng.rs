@@ -1,13 +1,14 @@
 //! DNG (Adobe Digital Negative Specification 1.7): raw IFD selection, pixel data (via [`crate::tiffraw`]),
 //! linearization, black/white levels, active area, default crop, CFA description, colour tags, opcode lists.
 
+use crate::gaintable::GainTableMap;
 use crate::profile::{HsvTable, ProfileLook, ToneCurve};
 use crate::tiffraw::{Packing, read_image_in};
 use crate::{BlackLevel, Cfa, ColorData, Mat3, Mode, RawData, RawError, RawFormat, RawImage, Rect, Result, opcodes};
 use lightcraft_color::Xy;
 use lightcraft_geom::Orientation;
 use lightcraft_tiff::tags::{self as t, photometric};
-use lightcraft_tiff::{Ifd, Tiff};
+use lightcraft_tiff::{ByteOrder, Ifd, Tiff};
 
 /// The main raw IFD: full-resolution (NewSubfileType 0) CFA or LinearRaw image with the most pixels.
 pub(crate) fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
@@ -33,7 +34,8 @@ fn vec3(v: Option<Vec<f64>>) -> Option<[f64; 3]> {
 }
 
 /// Colour tags: DNG puts them in IFD0, but some writers use the raw IFD; prefer the raw IFD.
-pub(crate) fn color_data(ifd0: &Ifd, raw: &Ifd) -> ColorData {
+/// `order` is the file's byte order (for the binary gain-table-map tags).
+pub(crate) fn color_data(ifd0: &Ifd, raw: &Ifd, order: ByteOrder) -> ColorData {
     let get = |tag: u16| raw.f64s(tag).or_else(|| ifd0.f64s(tag));
     let geti = |tag: u16| raw.u16(tag).or_else(|| ifd0.u16(tag));
     ColorData {
@@ -46,13 +48,16 @@ pub(crate) fn color_data(ifd0: &Ifd, raw: &Ifd) -> ColorData {
         as_shot_white_xy: get(t::AS_SHOT_WHITE_XY).filter(|v| v.len() == 2 && v[0] > 0.0 && v[1] > 0.0).map(|v| Xy::new(v[0], v[1])),
         baseline_exposure: get(t::BASELINE_EXPOSURE).and_then(|v| v.first().copied()).filter(|v| v.is_finite()).unwrap_or(0.0)
             + get(t::BASELINE_EXPOSURE_OFFSET).and_then(|v| v.first().copied()).filter(|v| v.is_finite()).unwrap_or(0.0),
-        profile: profile_look(ifd0, raw),
+        // DNG 1.7 BaselineSharpness (IFD 0 or the enhanced IFD); implausible values are ignored
+        baseline_sharpness: get(t::BASELINE_SHARPNESS).and_then(|v| v.first().copied()).filter(|v| v.is_finite() && *v > 0.0 && *v <= 16.0),
+        profile: profile_look(ifd0, raw, order),
     }
 }
 
-/// The profile look tags (`ProfileHueSatMap*`, `ProfileLookTable*`, `ProfileToneCurve`); malformed
-/// ones are ignored. Like the colour tags, read from the raw IFD first, else IFD 0.
-pub(crate) fn profile_look(ifd0: &Ifd, raw: &Ifd) -> ProfileLook {
+/// The profile look tags (`ProfileHueSatMap*`, `ProfileLookTable*`, `ProfileToneCurve`,
+/// `ProfileGainTableMap*`); malformed ones are ignored. Like the colour tags, read from the raw IFD
+/// first, else IFD 0.
+pub(crate) fn profile_look(ifd0: &Ifd, raw: &Ifd, order: ByteOrder) -> ProfileLook {
     let pick = |tag: u16| if raw.contains(tag) { raw } else { ifd0 };
     let table = |dims: u16, data: u16, enc: u16| {
         let ifd = pick(dims);
@@ -67,7 +72,20 @@ pub(crate) fn profile_look(ifd0: &Ifd, raw: &Ifd) -> ProfileLook {
         ],
         look_table: table(t::PROFILE_LOOK_TABLE_DIMS, t::PROFILE_LOOK_TABLE_DATA, t::PROFILE_LOOK_TABLE_ENCODING),
         tone_curve: pick(t::PROFILE_TONE_CURVE).f64s(t::PROFILE_TONE_CURVE).and_then(|v| ToneCurve::from_tag(&v)),
+        gain_table_map: gain_table_map(ifd0, raw, order),
     }
+}
+
+/// The gain table map to render with (DNG 1.7 precedence): `ProfileGainTableMap2` from IFD 0
+/// (the embedded camera profile), else from the raw IFD; else `ProfileGainTableMap` from the raw
+/// IFD (where DNG 1.6 put it, and where Apple writes it), else from IFD 0 (where DNG 1.7 says it
+/// was meant to be). A malformed tag falls through to the next one.
+fn gain_table_map(ifd0: &Ifd, raw: &Ifd, order: ByteOrder) -> Option<GainTableMap> {
+    let parse = |ifd: &Ifd, tag: u16| ifd.bytes(tag).and_then(|b| GainTableMap::parse(b, order, tag == t::PROFILE_GAIN_TABLE_MAP_2));
+    parse(ifd0, t::PROFILE_GAIN_TABLE_MAP_2)
+        .or_else(|| parse(raw, t::PROFILE_GAIN_TABLE_MAP_2))
+        .or_else(|| parse(raw, t::PROFILE_GAIN_TABLE_MAP))
+        .or_else(|| parse(ifd0, t::PROFILE_GAIN_TABLE_MAP))
 }
 
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
@@ -78,9 +96,6 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let (w, h, cpp) = (info.width as usize, info.height as usize, info.samples_per_pixel as usize);
     if !(1..=4).contains(&cpp) {
         return Err(RawError::Unsupported(format!("{cpp} samples per pixel")));
-    }
-    if info.compression == t::compression::JPEG_XL {
-        return Err(RawError::Unsupported("JPEG XL DNG".into()));
     }
     let mut data = read_image_in(mode, bytes, &info, tiff.order, Packing::Msb)?;
     let bits = info.bits() as u32;
@@ -175,7 +190,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         active_area,
         crop,
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
-        color: color_data(ifd0, raw),
+        color: color_data(ifd0, raw, tiff.order),
         wb_multipliers: None,
         linearized,
         opcodes,

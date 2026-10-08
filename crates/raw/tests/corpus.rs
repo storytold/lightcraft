@@ -44,7 +44,9 @@ fn corpus_raw_decodes() {
         // DNG previews are optional (and some carry only an uncompressed RGB thumbnail); vendor raws embed a JPEG,
         // except the Panasonic `.RAW` files of 2005–2007
         if let Some(p) = &preview {
-            assert!(p.starts_with(&[0xff, 0xd8]) && p.ends_with(&[0xff, 0xd9]), "{name}: preview is not a JPEG");
+            let jpeg = p.starts_with(&[0xff, 0xd8]) && p.ends_with(&[0xff, 0xd9]);
+            let jxl = p.starts_with(&[0xff, 0x0a]) || p.starts_with(b"\0\0\0\x0cJXL ");
+            assert!(jpeg || jxl, "{name}: preview is neither a JPEG nor a JPEG XL file");
         } else {
             assert!(fmt == RawFormat::Dng || name.starts_with("raw-panasonic-"), "{name}: no embedded preview");
         }
@@ -220,9 +222,11 @@ fn corpus_nef_12_bit_black_level_matches_14_bit() {
 }
 
 /// Issue #138: DNGs converted by Adobe software carry their camera profile's hue/saturation map and
-/// look table; we read them (and render with them). Camera-written DNGs here carry none.
+/// look table; we read them (and render with them). Apple ProRAW carries a tone curve and a gain
+/// table map (its local tone mapping, read and kept but not rendered, as in Lightroom Classic).
+/// Other camera-written DNGs here carry none.
 #[test]
-fn corpus_adobe_dngs_carry_profile_looks() {
+fn corpus_dngs_carry_profile_looks() {
     let dir = corpus_root().join("raw");
     let Ok(rd) = std::fs::read_dir(&dir) else {
         eprintln!("skip: {} absent", dir.display());
@@ -246,14 +250,51 @@ fn corpus_adobe_dngs_carry_profile_looks() {
             let g = t.apply([0.18; 3], 1.0);
             assert!(g.iter().all(|v| (v - g[0]).abs() < 0.01 * g[0].max(0.01)), "{name}: grey → {g:?}");
         }
+        if name.starts_with("dng-apple-") {
+            seen += 1;
+            let map = look.gain_table_map.as_ref().unwrap_or_else(|| panic!("{name}: no gain table map"));
+            assert!(map.points_v > 1 && map.points_h > 1 && map.points_n > 1, "{name}");
+            assert!(look.tone_curve.is_some(), "{name}: no tone curve");
+            // the map lifts dark tones (Apple's local tone mapping), most at the darkest input
+            let first = &map.gains[..map.points_n];
+            assert!(first[0] > 1.5 && first[0] >= first[map.points_n - 1], "{name}: first table {first:?}");
+        }
         eprintln!(
-            "{name:44} profile look: hsm {} look {} tone {}",
+            "{name:44} profile look: hsm {} look {} tone {} gain map {}",
             look.hue_sat_map[0].is_some(),
             look.look_table.is_some(),
-            look.tone_curve.is_some()
+            look.tone_curve.is_some(),
+            look.gain_table_map.is_some()
         );
     }
-    eprintln!("{seen} Adobe-converted DNGs checked");
+    eprintln!("{seen} DNGs with profile looks checked");
+}
+
+/// iPhone ProRAW (`corpus/apple/IMG_1361.DNG`, iPhone 12 Pro, CC0 from raw.pixls.us) carries a
+/// lossy-JPEG sky matte at half resolution as a DNG semantic mask: it decodes, and it is a sky. The
+/// matte is stored like the raw (landscape; the photo is shown rotated 90° clockwise), so the sky
+/// is on its left and the lake and shore on its right.
+#[test]
+fn corpus_proraw_sky_matte() {
+    let path = corpus_root().join("apple/IMG_1361.DNG");
+    let Ok(bytes) = std::fs::read(&path) else {
+        eprintln!("skip: {} absent", path.display());
+        return;
+    };
+    let t0 = Instant::now();
+    let masks = lightcraft_raw::semantic_masks(&bytes);
+    eprintln!("semantic masks read in {:.1} ms", t0.elapsed().as_secs_f64() * 1e3);
+    let names: Vec<&str> = masks.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(names, ["urn:com:apple:photo:2020:aux:semanticskymatte"]);
+    let m = &masks[0];
+    assert_eq!((m.width, m.height, m.sub_area), (2016, 1512, None));
+    let cols = |x0: usize, x1: usize| {
+        let sum: f64 = (0..m.height).flat_map(|y| m.data[y * m.width + x0..y * m.width + x1].iter()).map(|&v| v as f64 / 65535.0).sum();
+        sum / ((x1 - x0) * m.height) as f64
+    };
+    let (left, right) = (cols(0, 100), cols(1916, 2016));
+    eprintln!("sky matte: left columns {left:.3}, right columns {right:.3}");
+    assert!(left > 0.5 && right < 0.02, "left {left}, right {right}");
 }
 
 /// Issue #148: Sony ARWs from before ~2017 carry no plain white-balance, black-level or crop tags in the raw IFD.

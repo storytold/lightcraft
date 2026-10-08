@@ -4,17 +4,20 @@
 //! (full size or a proxy), plus [`DevelopSettings`]. Output: a display-encoded sRGB image at the
 //! requested size, and its histogram.
 //!
-//! Stage order (see `docs/pipeline.md`):
+//! Stage order (the GPU port of the same stages is described in `docs/gpu-pipeline.md`):
 //! 1. geometry — user orientation, lens corrections (distortion, CA, vignetting), perspective, crop +
 //!    straighten, flips; one resample at output resolution; then defringe
 //! 2. scene-linear — white balance, exposure, dehaze, local tone (highlights/shadows), texture,
-//!    clarity, local adjustments (masks)
+//!    clarity, sharpening, local adjustments (masks)
 //! 3. tone map — contrast / whites / blacks filmic curve on luminance, highlight desaturation
-//! 4. colour — vibrance, saturation, colour mixer, colour grading, B&W (OkLCh)
-//! 5. display — gamut map to the output space (sRGB unless [`RenderRequest::space`] says otherwise), encode, tone curves (parametric + point), vignette, grain
+//! 4. colour — vibrance, saturation, colour mixer, colour grading, B&W (OkLCh); vignette
+//! 5. tone curves (parametric + point) in a fixed curve space (see [`finish`]), whatever the output
+//! 6. display — gamut map to the output space (sRGB unless [`RenderRequest::space`] says otherwise), encode, grain
 //!
 //! Spatial parameters are specified relative to the image's long edge, so a 400 px preview and a
-//! 60 MP export look alike.
+//! 60 MP export look alike. Sharpening's radius is the exception: it is in source pixels (scaled
+//! to the output by [`Plan::px_per_src`]), so a downscaled render shows what downscaling the
+//! full-size result would.
 //!
 //! Exposure is a gain, so the spatial stages run on the un-exposed image and the per-pixel stage
 //! applies it (filters on log luminance are shift-equivariant: identical result). With
@@ -30,6 +33,7 @@ pub mod dust;
 pub mod finish;
 pub mod geometry;
 pub mod local;
+pub mod lr_tables;
 pub mod lut;
 pub mod masks;
 pub mod optics;
@@ -54,8 +58,19 @@ use lightcraft_raster::{Histogram, Plane, Rgb32f, Rgba8, par_rows};
 
 pub use tone::ToneMap;
 
+/// A raw source's own colour model, for white balance: like Lightroom, a white balance
+/// re-evaluates the camera's colour matrices at the chosen white (camera-space white balance, DNG
+/// spec ch. 6) instead of adapting the as-shot rendering ([`local::wb_matrix_for`]).
+#[derive(Debug, PartialEq)]
+pub struct CameraColor {
+    /// The file's colour tags (its profile look tables left out: they are applied at load).
+    pub tags: lightcraft_raw::ColorData,
+    /// The white the source pixels were developed for.
+    pub developed_for: lightcraft_color::Xy,
+}
+
 /// Facts about the source the settings are interpreted against.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SourceInfo {
     /// Lens corrections embedded in the file (DNG opcodes), relative to the EXIF-oriented source.
     pub lens: Option<lightcraft_develop::EmbeddedLens>,
@@ -66,12 +81,34 @@ pub struct SourceInfo {
     pub as_shot_tint: f64,
     /// No measured camera illuminant: WB adjustments are relative to the camera's rendered look.
     pub relative_wb: bool,
+    /// The camera's colour model (raw files with a colour matrix); `None`: white balance adapts
+    /// the developed pixels (Bradford, linear Rec.2020).
+    pub camera_color: Option<Arc<CameraColor>>,
     pub camera_tone: Option<tone::CameraTone>,
+    /// Segmentation mattes stored in the file (DNG semantic masks): AI masks use them.
+    pub mattes: Option<Arc<masks::Mattes>>,
+    /// Long edge (px) of the full-resolution source the pixels were decoded from (a preview or
+    /// smart preview is smaller); 0 = unknown: the buffer's own long edge.
+    pub native_long: u32,
+    /// DNG `BaselineSharpness`: the camera's sharpening relative to a reference camera (1 = as the
+    /// reference; the Sharpening amount is multiplied by it).
+    pub baseline_sharpness: f32,
 }
 
 impl Default for SourceInfo {
     fn default() -> Self {
-        Self { raw: false, as_shot_temp: 6500.0, as_shot_tint: 0.0, lens: None, relative_wb: false, camera_tone: None }
+        Self {
+            raw: false,
+            as_shot_temp: 6500.0,
+            as_shot_tint: 0.0,
+            lens: None,
+            relative_wb: false,
+            camera_color: None,
+            camera_tone: None,
+            mattes: None,
+            native_long: 0,
+            baseline_sharpness: 1.0,
+        }
     }
 }
 
@@ -124,6 +161,15 @@ pub struct Rendered {
     pub deep: Option<DeepImage>,
 }
 
+impl Rendered {
+    /// A deep render with its 8-bit image and histogram.
+    pub fn from_deep(deep: DeepImage) -> Rendered {
+        let image = deep.to_rgba8();
+        let histogram = Histogram::of_srgb8(&image);
+        Rendered { image, histogram, deep: Some(deep) }
+    }
+}
+
 /// Everything the per-pixel stage needs, precomputed at output resolution.
 ///
 /// The image and planes are computed *before exposure* (so they can be reused while exposure is
@@ -142,8 +188,9 @@ pub(crate) struct Prepared {
     /// Airlight of `dark` (before exposure).
     pub air: f32,
     pub masks: Vec<masks::Evaluated>,
-    /// Output pixels per unit of the source long edge.
+    /// Output pixels per unit of the source long edge, and per full-resolution source pixel.
     pub px_per_long: f64,
+    pub px_per_src: f64,
 }
 
 /// Output size for a source of `src_w × src_h` under `s`, fitting `max_w × max_h`.
@@ -292,6 +339,8 @@ pub struct Plan<'a> {
     pub h: usize,
     /// Output pixels per unit of the oriented source's long edge.
     pub px_per_long: f64,
+    /// Output pixels per pixel of the full-resolution source ([`SourceInfo::native_long`]).
+    pub px_per_src: f64,
     /// Long edge of the source buffer (px).
     pub src_long: usize,
     /// Key of the resampled source (together with the source buffer's identity).
@@ -300,6 +349,10 @@ pub struct Plan<'a> {
     pub lin_key: u64,
     /// Red eye / pet eye corrections with their detected pupils, in output pixels.
     pub eyes: Vec<redeye::EyeK>,
+    /// The source's segmentation mattes ([`SourceInfo::mattes`]).
+    pub mattes: Option<Arc<masks::Mattes>>,
+    /// Tone sliders as Lightroom applies them on a DNG profile tone curve ([`finish::lr_tone`]).
+    pub lr_tone: bool,
 }
 
 /// Resolve `s` against `src` for `req` (see [`Plan`]).
@@ -314,6 +367,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let (w, h) = frame.fit(req.max_w, req.max_h);
     let px_per_long = frame.px_per_long(w);
     let src_long = src.width.max(src.height);
+    let native_long = if info.native_long > 0 { info.native_long as usize } else { src_long };
+    let px_per_src = px_per_long / native_long.max(1) as f64;
     let geo = hash_of((format!("{frame:?}"), w, h));
     let (wb_t, wb_tint) = local::effective_wb(info, s);
     let eyes = redeye::resolve(src, &s.red_eye, s.orientation, &frame, w, h, px_per_long);
@@ -328,7 +383,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         src_long,
     ));
-    Plan { settings, frame, w, h, px_per_long, src_long, geo, lin_key, eyes }
+    Plan { settings, frame, w, h, px_per_long, px_per_src, src_long, geo, lin_key, eyes, mattes: info.mattes.clone(), lr_tone: finish::lr_tone(info) }
 }
 
 /// Whether the scene-linear stage needs work only the CPU does (defringe, spot removal).
@@ -378,7 +433,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Src::Shared(a) => a,
     };
     let plan = plan(src_img, info, s, req);
-    let Plan { ref frame, w, h, px_per_long, src_long, geo, lin_key, .. } = plan;
+    let Plan { ref frame, w, h, px_per_long, px_per_src, src_long, geo, lin_key, .. } = plan;
     let s = &*plan.settings;
 
     let shared = match (&src, cache) {
@@ -407,17 +462,15 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Some(p) if p.key == lin_key => p,
         _ => local::Planes { key: lin_key, ..Default::default() },
     };
-    let prep = local::prepare(lin.clone(), s, frame, px_per_long, req.quality, &mut planes);
+    let prep = local::prepare(lin.clone(), s, frame, px_per_long, px_per_src, req.quality, plan.lr_tone, &mut planes, plan.mattes.as_deref());
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
         c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes });
     }
     if req.depth != OutputDepth::U8 {
         let deep = finish::finish_deep(&prep, s, frame, info, req.space, req.depth, req.proof);
-        let image = deep.to_rgba8();
-        let histogram = Histogram::of_srgb8(&image);
         lap("finish (deep)", &mut t);
-        return Rendered { image, histogram, deep: Some(deep) };
+        return Rendered::from_deep(deep);
     }
     let image = finish::finish(&prep, s, frame, info, req.space, req.proof);
     lap("finish", &mut t);
@@ -465,7 +518,7 @@ fn overlay_alpha(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Plane> 
         return Some(e.alpha.clone());
     }
     let ev = plan.settings.light.exposure as f32;
-    Some(masks::evaluate_one(m, &plan.frame, plan.w, plan.h, &prep.img, &prep.log_l, ev))
+    Some(masks::evaluate_one(m, &plan.frame, plan.w, plan.h, &prep.img, &prep.log_l, ev, plan.mattes.as_deref()))
 }
 
 /// Convenience: render a before/after pair side by side is up to the UI; this renders "before"

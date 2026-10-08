@@ -38,3 +38,4 @@ sam = ["dep:lightcraft-segment"]
 
 [dev-dependencies]
 libc = { workspace = true }
+lightcraft-tiff = { workspace = true }

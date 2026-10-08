@@ -1,5 +1,7 @@
 //! Embedded preview extraction: the largest baseline/progressive JPEG stored in a TIFF-based raw (IFD strips
-//! with JPEG compression, `JPEGInterchangeFormat` pointers in any IFD, Nikon/others' maker-note preview IFDs).
+//! with JPEG compression, `JPEGInterchangeFormat` pointers in any IFD, Nikon/others' maker-note preview IFDs),
+//! or a DNG 1.7 JPEG XL preview IFD stored as a single tile/strip (a standalone `.jxl` file, as the spec
+//! recommends for previews).
 
 use lightcraft_tiff::image::chunk_bytes;
 use lightcraft_tiff::tags as t;
@@ -32,6 +34,11 @@ fn is_dct_jpeg(b: &[u8]) -> bool {
     false
 }
 
+/// Whether `b` is a JPEG XL file: a bare codestream or the ISO-BMFF container's signature box.
+fn is_jxl(b: &[u8]) -> bool {
+    b.starts_with(&[0xff, 0x0a]) || b.starts_with(&[0, 0, 0, 0x0c, b'J', b'X', b'L', b' ', 0x0d, 0x0a, 0x87, 0x0a])
+}
+
 fn candidates<'a>(data: &'a [u8], ifd: &Ifd, base: u64, out: &mut Vec<&'a [u8]>) {
     // whole JPEG files stored as an undefined-type tag value (e.g. Panasonic `JpgFromRaw` 0x002e)
     for e in &ifd.entries {
@@ -59,9 +66,20 @@ fn candidates<'a>(data: &'a [u8], ifd: &Ifd, base: u64, out: &mut Vec<&'a [u8]>)
             out.push(s);
         }
     }
+    // a rendered (RGB or grey, never CFA/LinearRaw/mask) JPEG XL preview in one chunk
+    if ifd.u16(t::COMPRESSION) == Some(t::compression::JPEG_XL)
+        && matches!(ifd.u16(t::PHOTOMETRIC), Some(t::photometric::BLACK_IS_ZERO | t::photometric::RGB))
+        && let Ok(info) = ifd.image()
+        && let [chunk] = info.chunks(data.len() as u64).as_slice()
+        && let Some(s) = chunk_bytes(data, chunk)
+        && is_jxl(s)
+    {
+        out.push(s);
+    }
 }
 
-/// The largest embedded JPEG preview, if any.
+/// The largest embedded preview, if any: a JPEG, or (DNG 1.7) a JPEG XL file — both decode with
+/// `lightcraft_codecs::decode`.
 pub fn embedded_preview(bytes: &[u8]) -> Option<Vec<u8>> {
     if bytes.starts_with(b"FUJIFILMCCD-RAW") {
         let j = crate::vendor::raf::header(bytes).ok()?.jpeg?;
@@ -93,7 +111,8 @@ pub fn embedded_preview(bytes: &[u8]) -> Option<Vec<u8>> {
     if let Some(p) = crate::vendor::orf::preview(bytes) {
         found.push(p);
     }
-    found.into_iter().filter(|s| is_dct_jpeg(s)).max_by_key(|s| s.len()).map(|s| trim_eoi(s).to_vec())
+    let best = found.into_iter().filter(|s| is_dct_jpeg(s) || is_jxl(s)).max_by_key(|s| s.len())?;
+    Some(if is_jxl(best) { best.to_vec() } else { trim_eoi(best).to_vec() })
 }
 
 /// Canon CR3: the full-size JPEG track (see [`lightcraft_meta::cr3`]), else the `PRVW` / `THMB` boxes.

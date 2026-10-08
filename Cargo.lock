@@ -2855,7 +2855,6 @@ name = "lightcraft-color"
 version = "0.4.0"
 dependencies = [
  "lightcraft-geom",
- "proptest",
  "serde",
 ]
 
@@ -2891,6 +2890,7 @@ dependencies = [
  "lightcraft-raw",
  "lightcraft-scenes",
  "lightcraft-segment",
+ "lightcraft-tiff",
  "log",
  "miniz_oxide 0.8.9",
  "rayon",
@@ -2931,6 +2931,7 @@ dependencies = [
  "lightcraft-raster",
  "lightcraft-scenes",
  "log",
+ "naga",
  "pollster 1.0.1",
  "wgpu",
 ]
@@ -2983,6 +2984,7 @@ dependencies = [
  "lightcraft-develop",
  "lightcraft-geom",
  "lightcraft-raster",
+ "lightcraft-raw",
  "lightcraft-scenes",
  "proptest",
  "rayon",
@@ -3019,6 +3021,7 @@ name = "lightcraft-raw"
 version = "0.4.0"
 dependencies = [
  "jpeg-encoder",
+ "jxl-oxide",
  "lightcraft-color",
  "lightcraft-geom",
  "lightcraft-meta",
@@ -3031,6 +3034,7 @@ dependencies = [
  "thiserror 2.0.21",
  "zune-core",
  "zune-jpeg",
+ "zune-jpegxl",
 ]
 
 [[package]]
@@ -6744,6 +6748,15 @@ name = "zune-jpeg"
 version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
+dependencies = [
+ "zune-core",
+]
+
+[[package]]
+name = "zune-jpegxl"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cba11ecd07cc23351500e840ae03841b7e4997923ec8e4832ee3ae199ea0b6b4"
 dependencies = [
  "zune-core",
 ]

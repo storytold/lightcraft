@@ -352,7 +352,8 @@ impl Photo {
         }
     }
     /// The built-in defaults for this photo, before any user default preset: raws start from
-    /// their as-shot white balance; embedded lens corrections on when the file has them.
+    /// their as-shot white balance; embedded lens corrections on when the file has them. Apple
+    /// ProRAW (an Apple DNG) gets Sharpening 50 at Radius 1.4, as Lightroom Classic imports it.
     pub fn camera_defaults(&self) -> DevelopSettings {
         let wb = if self.relative_wb() { Some((6500.0, 0.0)) } else { self.as_shot_wb };
         let mut d = match wb {
@@ -361,6 +362,10 @@ impl Photo {
         };
         if self.embedded_lens.is_some() {
             d.optics.lens_profile = true;
+        }
+        if self.develops_raw() && self.format.eq_ignore_ascii_case("DNG") && self.meta.camera.starts_with("Apple ") {
+            d.detail.sharpen_amount = 50.0;
+            d.detail.sharpen_radius = 1.4;
         }
         d
     }

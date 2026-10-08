@@ -29,10 +29,16 @@ pub enum DngSamples {
     U16,
 }
 
-/// The DNG colour tags for frames of `color`.
+/// The DNG colour tags for frames of `color`. A source's gain table map is dropped: it is
+/// positioned on that one capture's active area, which a merged image (aligned, oriented,
+/// stitched, cropped) no longer shares.
 pub fn color_data(color: &FrameColor) -> ColorData {
     match color {
-        FrameColor::Camera(c) => (**c).clone(),
+        FrameColor::Camera(c) => {
+            let mut c = (**c).clone();
+            c.profile.gain_table_map = None;
+            c
+        }
         FrameColor::Linear { to_xyz_d50 } => {
             let to_xyz_d65 = bradford(D50, D65).mul(to_xyz_d50);
             let cm = to_xyz_d65.inverse().unwrap_or(Mat3::IDENTITY);
@@ -45,6 +51,7 @@ pub fn color_data(color: &FrameColor) -> ColorData {
                 as_shot_neutral: Some([1.0, 1.0, 1.0]),
                 as_shot_white_xy: None,
                 baseline_exposure: 0.0,
+                baseline_sharpness: None,
                 profile: Default::default(),
             }
         }

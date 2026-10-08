@@ -44,6 +44,17 @@ const NON_ADJUSTMENT: &[&str] = &[
     "crs:AlreadyApplied",
     "crs:RawFileName",
     "crs:HasCrop",
+    // preset/library bookkeeping and tool options that don't change the rendering
+    "crs:Cluster",
+    "crs:SupportsAmount2",
+    "crs:RequiresRGBTables",
+    "crs:SortName",
+    "crs:Description",
+    "crs:CropConstrainToWarp",
+    "crs:OverrideLookVignette",
+    // the file's as-shot white, recorded next to the edit (ours comes from the file itself)
+    "crs:AsShotTemperature",
+    "crs:AsShotTint",
 ];
 
 /// True if the packet carries any `crs:` adjustment (not just bookkeeping fields).
@@ -233,11 +244,14 @@ pub fn to_partial(props: &Props, raw: Option<bool>) -> Value {
             put(o, "curve.master", c);
         }
     }
-    for (crs, ch) in
-        [("ToneCurvePV2012", "master"), ("ToneCurvePV2012Red", "red"), ("ToneCurvePV2012Green", "green"), ("ToneCurvePV2012Blue", "blue")]
-    {
-        if let Some(c) = curve(props, &format!("crs:{crs}")) {
-            put(o, &format!("curve.{ch}"), c);
+    // Lightroom Classic reads the red / green / blue curves only together with the master 2012
+    // curve: a channel curve without `ToneCurvePV2012` leaves the photo unchanged
+    if let Some(c) = curve(props, "crs:ToneCurvePV2012") {
+        put(o, "curve.master", c);
+        for (crs, ch) in [("ToneCurvePV2012Red", "red"), ("ToneCurvePV2012Green", "green"), ("ToneCurvePV2012Blue", "blue")] {
+            if let Some(c) = curve(props, &format!("crs:{crs}")) {
+                put(o, &format!("curve.{ch}"), c);
+            }
         }
     }
 
@@ -287,9 +301,12 @@ pub fn to_partial(props: &Props, raw: Option<bool>) -> Value {
     n(o, "GrainSize", "grain.size");
     n(o, "GrainFrequency", "grain.roughness");
 
-    // ---- Optics (manual corrections; lens profiles are ours, only the switch carries over)
-    if let Some(b) = boolean(props, "crs:LensProfileEnable") {
-        put(o, "optics.lens_profile", json!(b));
+    // ---- Optics (manual corrections; lens profiles are ours, only the switch carries over).
+    // Our profile corrections are the file's own (DNG-embedded) ones, which Lightroom applies
+    // whatever its "Enable Profile Corrections" box says [inferred]: so only an enabling switch
+    // carries over, and `LensProfileEnable=0` (the default in most presets) leaves ours as it is.
+    if boolean(props, "crs:LensProfileEnable") == Some(true) {
+        put(o, "optics.lens_profile", json!(true));
     }
     if let Some(b) = boolean(props, "crs:AutoLateralCA") {
         put(o, "optics.remove_ca", json!(b));
@@ -373,8 +390,19 @@ pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values
             mask_skips = skipped.into_iter().map(|k| format!("Mask: {k}")).collect();
         }
     }
-    // fields that only switch a panel on/off or name things: not adjustments by themselves
-    let quiet = |k: &str| k.starts_with("Enable") || k.starts_with("ToneCurveName") || k == "AutoTone" || k == "AutoGrayscaleMix";
+    // fields that only switch a panel on/off or name things: not adjustments by themselves; an
+    // HDR edit mode that is off, and Point Color slots that are all empty (-1)
+    let value_is = |k: &str, f: &dyn Fn(&[String]) -> bool| props.get(&format!("crs:{k}")).is_some_and(|v| f(v));
+    let off = |v: &[String]| v.iter().all(|s| s.trim() == "0");
+    let empty_points = |v: &[String]| v.iter().all(|s| s.split(',').all(|n| n.trim().parse::<f64>().is_ok_and(|x| x == -1.0) || n.trim().is_empty()));
+    let quiet = |k: &str| {
+        k.starts_with("Enable")
+            || k.starts_with("ToneCurveName")
+            || k == "AutoTone"
+            || k == "AutoGrayscaleMix"
+            || (k == "HDREditMode" && value_is(k, &off))
+            || (k == "PointColors" && value_is(k, &empty_points))
+    };
     let mut unmapped: Vec<String> = props
         .keys()
         .filter(|k| k.starts_with("crs:"))
@@ -493,6 +521,24 @@ mod tests {
     }
 
     #[test]
+    fn channel_curves_need_the_master_curve() {
+        // Lightroom ignores a red / green / blue curve without `ToneCurvePV2012`
+        let packet = |master: &str| {
+            format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:ToneCurveName2012="Custom">{master}
+           <crs:ToneCurvePV2012Green><rdf:Seq><rdf:li>0, 0</rdf:li><rdf:li>64, 40</rdf:li><rdf:li>255, 255</rdf:li></rdf:Seq></crs:ToneCurvePV2012Green>
+          </rdf:Description></rdf:RDF></x:xmpmeta>"#
+            )
+        };
+        let alone = to_partial(&props(&packet("")), Some(true));
+        assert!(alone.pointer("/curve/green").is_none(), "{alone}");
+        let master = "<crs:ToneCurvePV2012><rdf:Seq><rdf:li>0, 0</rdf:li><rdf:li>255, 255</rdf:li></rdf:Seq></crs:ToneCurvePV2012>";
+        let with = to_partial(&props(&packet(master)), Some(true));
+        assert!(with.pointer("/curve/green").is_some() && with.pointer("/curve/master").is_some(), "{with}");
+    }
+
+    #[test]
     fn element_form_bw_and_incremental_wb() {
         let x = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
           <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
@@ -538,5 +584,46 @@ mod tests {
         assert_eq!(p.settings, json!({"light": {"contrast": 25.0}}));
         assert!(!p.builtin);
         assert!(preset_from_xmp("<x/>", "f").is_none());
+    }
+
+    /// A preset packet (written for this test) with the bookkeeping fields Lightroom presets carry.
+    fn preset_packet(extra_attrs: &str, extra_elems: &str) -> String {
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+             crs:PresetType="Normal" crs:Cluster="" crs:UUID="0123ABCD" crs:SupportsAmount2="True" crs:SupportsAmount="True"
+             crs:RequiresRGBTables="False" crs:Contrast2012="+25" crs:LensProfileEnable="0" crs:OverrideLookVignette="False"
+             crs:CropConstrainToWarp="0" crs:AsShotTemperature="7450" crs:AsShotTint="23" {extra_attrs}>
+            <crs:SortName><rdf:Alt><rdf:li xml:lang="x-default"/></rdf:Alt></crs:SortName>
+            <crs:Description><rdf:Alt><rdf:li xml:lang="x-default"/></rdf:Alt></crs:Description>
+            {extra_elems}
+          </rdf:Description></rdf:RDF></x:xmpmeta>"#
+        )
+    }
+
+    fn unmapped(x: &str) -> Vec<String> {
+        to_partial_report(&props(x), None, None, 1.5).1
+    }
+
+    #[test]
+    fn preset_bookkeeping_is_not_reported_but_real_gaps_are() {
+        let empty_points = "<crs:PointColors><rdf:Seq><rdf:li>-1.000000, -1.000000, -1.000000, -1.000000</rdf:li></rdf:Seq></crs:PointColors>";
+        assert_eq!(unmapped(&preset_packet(r#"crs:HDREditMode="0""#, empty_points)), Vec::<String>::new());
+        // an HDR edit, a used Point Color slot and an unknown adjustment still are
+        let used_points = "<crs:PointColors><rdf:Seq><rdf:li>0.5, 0.2, 0.1, 10, 0, 0, 0, 0</rdf:li></rdf:Seq></crs:PointColors>";
+        let got = unmapped(&preset_packet(r#"crs:HDREditMode="1" crs:FutureSlider="12""#, used_points));
+        assert_eq!(got, ["FutureSlider", "HDREditMode", "PointColors"]);
+    }
+
+    #[test]
+    fn disabled_lens_profile_switch_keeps_embedded_corrections() {
+        // Lightroom applies a file's built-in lens corrections regardless of its profile switch,
+        // and ours are only those: a preset's `LensProfileEnable=0` must not turn them off
+        let p = props(&preset_packet("", ""));
+        let mut d = DevelopSettings::default();
+        d.optics.lens_profile = true;
+        assert!(apply_partial(&d, &to_partial(&p, None), 1.0).optics.lens_profile);
+        let on = props(&preset_packet("", "").replace(r#"crs:LensProfileEnable="0""#, r#"crs:LensProfileEnable="1""#));
+        assert!(apply_partial(&DevelopSettings::default(), &to_partial(&on, None), 1.0).optics.lens_profile);
     }
 }

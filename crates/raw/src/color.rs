@@ -181,7 +181,11 @@ pub struct CameraTransform {
 
 /// Camera transform for white `wb_xy`: `rec2020 = matrix · (wb ⊙ camera)`.
 pub fn camera_transform(raw: &RawImage, wb_xy: Xy) -> CameraTransform {
-    let color = &raw.color;
+    camera_transform_of(&raw.color, wb_xy)
+}
+
+/// [`camera_transform`] from the colour tags alone.
+pub fn camera_transform_of(color: &ColorData, wb_xy: Xy) -> CameraTransform {
     let fallback = !has_matrix(color);
     let wb = wb_multipliers(color, wb_xy);
     let to_d50 = camera_to_xyz_d50(color, wb_xy);
@@ -190,6 +194,19 @@ pub fn camera_transform(raw: &RawImage, wb_xy: Xy) -> CameraTransform {
     let k = (white[0] + white[1] + white[2]) / 3.0;
     let matrix = if k.abs() > 1e-12 { Mat3(m.0.map(|r| r.map(|v| v / k))) } else { m };
     CameraTransform { matrix, wb: wb.map(|v| v as f32), white_xy: wb_xy, matrix_is_fallback: fallback, baseline_exposure: color.baseline_exposure }
+}
+
+/// Linear Rec.2020 → linear Rec.2020 matrix that re-develops pixels developed with the camera
+/// transform for white `from` as if developed for white `to`: the camera's own colour model is
+/// evaluated at the new white (camera-space white balance, DNG spec ch. 6), as Lightroom does.
+/// `None` when the tags have no colour matrix or the transform is singular.
+pub fn rebalance(color: &ColorData, from: Xy, to: Xy) -> Option<Mat3> {
+    if !has_matrix(color) {
+        return None;
+    }
+    let (a, b) = (camera_transform_of(color, from), camera_transform_of(color, to));
+    let ratio = Mat3::diag(f64::from(b.wb[0] / a.wb[0]), f64::from(b.wb[1] / a.wb[1]), f64::from(b.wb[2] / a.wb[2]));
+    Some(b.matrix.mul(&ratio).mul(&a.matrix.inverse()?))
 }
 
 /// `(matrix, multipliers)` with `rec2020 = matrix · (multipliers ⊙ camera)`, linear Rec.2020 D65.

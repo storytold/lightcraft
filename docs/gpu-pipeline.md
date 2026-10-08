@@ -82,21 +82,27 @@ use (e.g. `Intel(R) UHD Graphics 630 (Dx12)`).
 
 ## Structure
 - Shared parameters, so the two implementations cannot drift apart: `pipeline::plan` (effective
-  settings, frame, output size, stage-cache keys), `Frame::sample_plan`, `local::{wb_matrix_for,
-  nr_params, plane_sigmas, guided_fast_step, airlight_of}`, `finish::{FinishParams, mask_terms}`,
-  `masks::brush_dabs`; exact tables (tone LUT, sRGB LUT, curve LUTs, resample taps) and the OkLab
-  matrices are uploaded / generated into the WGSL prelude from the CPU values.
+  settings, frame, output size, `px_per_src`, stage-cache keys), `Frame::sample_plan`, `local::{wb_matrix_for,
+  nr_params, plane_sigmas, gauss_taps, guided_fast_step, airlight_of}`, `finish::{FinishParams, mask_terms}`,
+  `masks::brush_dabs`; exact tables (tone LUT, sRGB LUT, curve LUTs, resample taps, sharpening taps), the
+  curve-space matrices and the OkLab matrices are uploaded / generated into the WGSL prelude from the CPU values.
 - Buffers, not textures: images are `array<f32>` with the CPU's interleaved layout (RGB, 1–3
   channels), so upload / readback are plain copies of `Rgb32f` / `Plane` / `Rgba8` data.
 - Kernels (`crates/gpu/src/wgsl/`): `geom` (orientation pixel map, bilinear through the
   crop/straighten/flip affine or the full lens + perspective warp), `resize` (separable resample
   with the CPU's taps; Mitchell prefilter, box/bilinear for the fast guided filter), `blur` (box
-  passes with running sums over pixel chunks; three each way = the CPU's Gaussian), `map`
+  passes with running sums over pixel chunks; three each way = the CPU's Gaussian; and the sampled
+  Gaussian of sharpening's blur), `map`
   (log luminance, dark channel, guided-filter steps, white balance, luminance / colour NR, airlight
   sampling), `mask` (linear / radial / luminance / colour range / brush shapes, combine, finalize),
-  `finish` (the whole per-pixel stage) — each mirrors a named CPU function.
+  `finish` (the whole per-pixel stage) — each mirrors a named CPU function. Sharpening acts on the
+  finished image (`finish::Sharpen`), so with it on `finish` runs twice: the first pass writes each
+  pixel's finished luminance into the output buffer, the host blurs it, and the second pass applies
+  the gain. `finish` already binds the 10 storage buffers a device must offer, so that blur shares the
+  `tex` binding (placed after the texture plane when both are needed, offset `SHARP_OFF`).
 - Per-stage hybrid: defringe and spot removal (rare, CPU-only for now) download the resampled image,
-  run on the CPU and upload; heuristic mask shapes (Sky, Subject, Background, …) and brushes of more
+  run on the CPU and upload; AI mask shapes (Sky, Subject, Background, …: heuristics, or the photo's own
+  segmentation mattes) and brushes of more
   than 4096 dabs are evaluated on the CPU and uploaded; sources over the buffer limit are resampled
   on the CPU.
 - Stage cache: `GpuStages` mirrors `StageCache` (same keys: source identity + `geo`, `lin_key`,

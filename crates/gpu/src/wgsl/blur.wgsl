@@ -78,3 +78,44 @@ fn box_v(@builtin(global_invocation_id) g: vec3<u32>) {
         acc = acc + ld(u32(min(i32(y) + r + 1, last)) * w + x, nc) - ld(u32(max(i32(y) - r, 0)) * w + x, nc);
     }
 }
+
+// Sampled Gaussian passes over one channel (`lightcraft_pipeline::local::sharpen_blur`), one
+// thread per pixel. P: w, h, r, then the taps w[0..=r] (f32 bits; centre first).
+@compute @workgroup_size(64, 4)
+fn gauss_h(@builtin(global_invocation_id) g: vec3<u32>) {
+    let w = pu(0u);
+    let h = pu(1u);
+    let r = pu(2u);
+    let x = g.x;
+    let y = g.y;
+    if (x >= w || y >= h) {
+        return;
+    }
+    let row = y * w;
+    let last = w - 1u;
+    var acc = pf(3u) * src[row + x];
+    for (var k = 1u; k <= r; k++) {
+        let lo = select(0u, x - k, x >= k);
+        acc += pf(3u + k) * (src[row + lo] + src[row + min(x + k, last)]);
+    }
+    dst[row + x] = acc;
+}
+
+@compute @workgroup_size(64, 4)
+fn gauss_v(@builtin(global_invocation_id) g: vec3<u32>) {
+    let w = pu(0u);
+    let h = pu(1u);
+    let r = pu(2u);
+    let x = g.x;
+    let y = g.y;
+    if (x >= w || y >= h) {
+        return;
+    }
+    let last = h - 1u;
+    var acc = pf(3u) * src[y * w + x];
+    for (var k = 1u; k <= r; k++) {
+        let lo = select(0u, y - k, y >= k);
+        acc += pf(3u + k) * (src[lo * w + x] + src[min(y + k, last) * w + x]);
+    }
+    dst[y * w + x] = acc;
+}

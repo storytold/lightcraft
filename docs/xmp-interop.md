@@ -95,19 +95,46 @@ write them, from sidecars and from XMP embedded in the file. Named faces become 
 Many raw developers store edits as `crs:` properties (`http://ns.adobe.com/camera-raw-settings/1.0/`) in sidecars, in
 DNG files and in XMP presets. LightCraft reads the common ones and maps them to its own controls. We implemented this
 from the public XMP specification and by observing what each field does; no third-party code or preset files were used.
-Our pipeline renders differently, so **values carry over but the look is approximate**.
+Values carry over 1:1; how closely the look follows depends on the source (see below).
 
 We read these fields; we never write them. Only fields in the packet are applied: the result is a partial settings
 object that gets merged like a preset, so everything else keeps its current or default value. Packets marked
-`crs:AlreadyApplied="True"` are skipped, because those pixels already contain the edit. Only process-version 2012+ field
-names are read (e.g. `Exposure2012`, not the older `Exposure`).
+`crs:AlreadyApplied="True"` are skipped, because those pixels already contain the edit. Process-version 2012+ names
+(e.g. `Exposure2012`) are read; the older process-version 2010 names (`Exposure`, `Contrast`, `FillLight`,
+`HighlightRecovery`, `Shadows`, `Brightness`, `Clarity`) are approximated with today's sliders when the packet has no
+2012-era fields, and `ToneCurve` is used when there is no `ToneCurvePV2012` (see the preset import notes below).
+
+How close the look comes depends on the source. On Apple ProRAW (DNGs with a profile tone curve) the tools were fitted
+to Lightroom Classic 15.6 renders of the same file (local reference kit, see `docs/parity.md` →
+LR-BEHAV-RENDER-FIDELITY): white balance re-evaluates the camera's colour matrices at the new white, as Lightroom
+does, with Lightroom's tint sign (positive = magenta correction); calibration is a linear-ProPhoto matrix with
+Lightroom's strengths and a subtractive shadows tint; the tone sliders run in Lightroom's order: Exposure through
+Lightroom's base operator (a black-offset toe and a shoulder that follow BaselineExposure + Exposure), Highlights /
+Shadows with Lightroom's local (neighbourhood-weighted) behaviour, Whites then Blacks on the base output, the profile
+tone curve, then Contrast, adapting to the image (to the 33rd percentile of its log luminance). The colour mixer is
+Lightroom's HSL one in linear ProPhoto with
+its band centres and strengths: Saturation scales a colour's spread around its HSL lightness, Luminance scales the
+lightness (and the spread less), acting less on dark and weakly coloured pixels. The parametric curve's regions have
+Lightroom's shapes and apply one after the other; point curves are natural cubic splines; Vibrance and Saturation are
+fitted too. Colour grading runs after the tone curves, as in Lightroom, as per-channel gains in linear ProPhoto weighted
+by luminance (strong wheels, Balance and Blending sweeps are still a few ΔE off), and a Highlight / Colour Priority
+post-crop vignette darkens like an exposure change before the tone map. Sharpening is Lightroom's: on the finished image
+(after the curves), a luminance gain from each pixel's ratio to a Gaussian blur, with Amount / Radius / Detail /
+Masking fitted at full size; colour noise reduction's strength is fitted too. An export smaller than the photo is
+rendered at full size and downsized as Lightroom does (bicubic on gamma-1.8 values), so sharpening and noise reduction
+look the same at every size. Still our own: texture / clarity / dehaze, luminance noise reduction and a lightening
+vignette. Other raws keep our filmic tone map for the tone sliders. Tone curves run in one fixed curve space (linear
+ProPhoto/ROMM primaries with the sRGB transfer curve, `crates/pipeline/src/finish.rs`), so a preset renders the same
+whatever the export colour space; Lightroom's curves measurably run there, its master curve keeps hues (the largest and
+smallest channel go through it) and its red / green / blue curves act per channel, as ours do. Like Lightroom, a packet
+without `ToneCurvePV2012` leaves the red / green / blue curves alone (Lightroom ignores them without the master curve).
 
 | `crs:` field(s) | LightCraft control | Notes |
 |---|---|---|
 | `Exposure2012` | `light.exposure` | EV, 1:1 |
 | `Contrast2012`, `Highlights2012`, `Shadows2012`, `Whites2012`, `Blacks2012` | `light.contrast` … `light.blacks` | −100..100, 1:1 |
 | `WhiteBalance` | `wb.mode` | `As Shot`, `Auto`, `Daylight`, `Cloudy`, `Shade`, `Tungsten`, `Fluorescent`, `Flash`; other names → custom |
-| `Temperature`, `Tint` | `wb.temp`, `wb.tint` | Kelvin / tint for raw files (and presets) |
+| `Temperature`, `Tint` | `wb.temp`, `wb.tint` | Kelvin / tint for raw files (and presets); tint +1 = a white 1/3000 Duv greener (corrected towards magenta), as in Lightroom |
 | `IncrementalTemperature`, `IncrementalTint` | `wb.temp`, `wb.tint` | rendered files: −100..100 on our relative scale (mired shift around 6500 K, same as the Temp slider) |
 | `Vibrance`, `Saturation` | `color.vibrance`, `color.saturation` | 1:1 |
 | `Texture`, `Clarity2012`, `Dehaze` | `effects.texture`, `effects.clarity`, `effects.dehaze` | 1:1 |
@@ -122,16 +149,16 @@ names are read (e.g. `Exposure2012`, not the older `Exposure`).
 | `ColorGradeShadowLum`, `ColorGradeHighlightLum` | `grading.shadows/highlights.lum` | |
 | `ColorGradeMidtoneHue/Sat/Lum`, `ColorGradeGlobalHue/Sat/Lum` | `grading.midtones/global.*` | |
 | `ColorGradeBlending`, `SplitToningBalance` | `grading.blending`, `grading.balance` | |
-| `Sharpness`, `SharpenRadius`, `SharpenDetail`, `SharpenEdgeMasking` | `detail.sharpen_*` | |
+| `Sharpness`, `SharpenRadius`, `SharpenDetail`, `SharpenEdgeMasking` | `detail.sharpen_*` | Radius in source pixels; the amount is relative to a DNG `BaselineSharpness` of 1.5 (ProRAW's: other files scale it by theirs / 1.5). Apple ProRAW imports at Lightroom's Sharpening 50, Radius 1.4 |
 | `LuminanceSmoothing`, `LuminanceNoiseReductionDetail`, `LuminanceNoiseReductionContrast` | `detail.nr_luminance/nr_detail/nr_contrast` | |
 | `ColorNoiseReduction`, `ColorNoiseReductionDetail`, `ColorNoiseReductionSmoothness` | `detail.nr_color/nr_color_detail/nr_color_smoothness` | |
 | `PostCropVignetteAmount/Midpoint/Roundness/Feather/HighlightContrast` | `vignette.amount/midpoint/roundness/feather/highlights` | |
 | `PostCropVignetteStyle` | `vignette.style` | 1 highlight priority, 2 colour priority, 3 paint overlay |
 | `GrainAmount`, `GrainSize`, `GrainFrequency` | `grain.amount`, `grain.size`, `grain.roughness` | |
-| `LensProfileEnable`, `AutoLateralCA` | `optics.lens_profile`, `optics.remove_ca` | the switch only; lens profiles are our own |
+| `LensProfileEnable`, `AutoLateralCA` | `optics.lens_profile`, `optics.remove_ca` | lens profiles are the file's own (DNG-embedded) corrections, which Lightroom applies whatever its profile switch says (our inference): only `LensProfileEnable=1` carries over, `0` leaves the switch as it is |
 | `LensManualDistortionAmount`, `VignetteAmount`, `VignetteMidpoint` | `optics.distortion`, `optics.vignetting`, `optics.vignetting_midpoint` | |
 | `DefringePurple/GreenAmount/HueLo/HueHi` | `optics.defringe_*` | |
-| `ShadowTint`, `RedHue/Saturation`, `GreenHue/Saturation`, `BlueHue/Saturation` | `calibration.shadows_tint`, `calibration.red_hue/red_sat`, … | Calibration panel, 1:1 |
+| `ShadowTint`, `RedHue/Saturation`, `GreenHue/Saturation`, `BlueHue/Saturation` | `calibration.shadows_tint`, `calibration.red_hue/red_sat`, … | values 1:1; strengths fitted to Lightroom (see above) |
 | `PerspectiveVertical/Horizontal/Rotate/Scale/Aspect/X/Y` | `geometry.vertical/horizontal/rotate/scale/aspect/offset_x/offset_y` | |
 | `PerspectiveUpright` | `geometry.upright` | 0 off, 1 auto, 2 level, 3 vertical, 4 full, 5 guided |
 | `HasCrop`, `CropLeft/Top/Right/Bottom`, `CropAngle` | `crop.geometry` | normalized edges → rect; angle in degrees; `HasCrop="False"` → no crop |
@@ -156,7 +183,7 @@ mask: `CorrectionName` → name, `CorrectionAmount` → Amount, inactive correct
 | `Mask/Gradient` (`FullX/Y`, `ZeroX/Y`) | linear gradient | full effect at the Full point |
 | `Mask/CircularGradient` (`Top/Left/Bottom/Right`, `Angle`, `Feather`, `Flipped`) | radial gradient | box fractions → long-edge radii (presets assume 3:2; sidecars use the photo's shape); `Flipped` → invert |
 | `Mask/Paint` (`Dabs` "d x y", `Radius`, `Flow`, `CenterWeight`, `MaskValue`) | brush | one brush component per correction; `MaskValue` ≤ 0 erases |
-| `Mask/Image` `MaskSubType` 1 / 2 | Subject / Sky | other AI selections are reported, not guessed |
+| `Mask/Image` `MaskSubType` 1 / 2 | Subject / Sky | other AI selections are reported, not guessed; on a photo that carries segmentation mattes (DNG semantic masks, e.g. iPhone ProRAW's sky matte) they use those, else our heuristics |
 | `Mask/RangeMask` `Type` 2 / 3 (`LumRange`, `DepthRange`) | luminance / depth range | lightness converted to our range scale; colour ranges are reported |
 | `MaskBlendMode` 0 / 1 / 2, `MaskInverted` | add / subtract / intersect, invert | |
 
@@ -170,7 +197,7 @@ carry over are listed in `preset.import`'s `unmapped` as `Mask: <kind>`.
 |---|---|
 | Ours: `.lcpreset` | JSON `{"format": "lightcraft.preset", "version": 1, "presets": [{id, name, group, settings}]}`, where `settings` is a partial develop-settings object (only the groups the preset includes). A file can hold one preset or many, and every preset keeps its group. Import also accepts a bare preset object or an array of them. |
 | Export | `preset.export {path, ids?, group?}`: all user presets by default, or the given ids or one group. In the app: File ▸ Export Presets…, Presets panel ▸ ⋯ ▸ Export User Presets…, or right-click a group ▸ Export Group…. |
-| Import | `preset.import {paths, group?, dryRun?}`: files or folders (recursive): `.lcpreset`, `.xmp`, classic `.lrtemplate` (a Lua table: `value.settings` holds the same field names as `crs:`), photos that carry their edits in XMP ("DNG presets" from mobile apps; their crop, geometry and custom white balance are left out) and `.zip` bundles of any of these. Presets in a folder (or a folder inside a zip) go to a group named after it, unless the file names its own group. The result lists, per preset, the settings that couldn't be carried over (`unmapped`, e.g. `CameraProfile`, `Look`, local masks), and the app's toast names them. Older (process version 2010) fields — `Exposure`, `Contrast`, `FillLight`, `HighlightRecovery`, `Shadows`, `Brightness`, `Clarity`, `ToneCurve` — are approximated with today's sliders when a preset has no 2012-era fields. Dropping preset files on the window imports them too. In the app: File ▸ Import Presets…, or Presets panel ▸ ⋯ ▸ Import Presets…. A preset that's already there (same name, group and settings) is skipped. If an id clashes, the import gets a fresh `user.*` id, and built-in presets are never replaced. |
+| Import | `preset.import {paths, group?, dryRun?}`: files or folders (recursive): `.lcpreset`, `.xmp`, classic `.lrtemplate` (a Lua table: `value.settings` holds the same field names as `crs:`), photos that carry their edits in XMP ("DNG presets" from mobile apps; their crop, geometry and custom white balance are left out) and `.zip` bundles of any of these. Presets in a folder (or a folder inside a zip) go to a group named after it, unless the file names its own group. The result lists, per preset, the settings that couldn't be carried over (`unmapped`, e.g. `CameraProfile`, `Look`, local masks), and the app's toast names them; fields that only describe the preset or the photo (`Cluster`, `SortName`, `Description`, `SupportsAmount2`, `RequiresRGBTables`, `CropConstrainToWarp`, `OverrideLookVignette`, `AsShotTemperature` / `AsShotTint`, an off `HDREditMode`, empty `PointColors` slots) aren't listed. Older (process version 2010) fields — `Exposure`, `Contrast`, `FillLight`, `HighlightRecovery`, `Shadows`, `Brightness`, `Clarity`, `ToneCurve` — are approximated with today's sliders when a preset has no 2012-era fields. Dropping preset files on the window imports them too. In the app: File ▸ Import Presets…, or Presets panel ▸ ⋯ ▸ Import Presets…. A preset that's already there (same name, group and settings) is skipped. If an id clashes, the import gets a fresh `user.*` id, and built-in presets are never replaced. |
 | XMP presets | Read with the `crs:` table above, with `crs:Name` as the name (falling back to the file name) and `crs:Group` as the group (falling back to "Imported Presets"). Only the fields the preset sets are included, so applying it leaves everything else alone and the Amount slider scales it like any other preset. We only read XMP presets; we don't write them. |
 
 LightCraft ships no third-party presets. Its built-in presets are its own values (`crates/engine/src/presets.rs`).

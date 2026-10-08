@@ -1,5 +1,6 @@
 //! DNG camera-profile look data carried by the file itself (Adobe DNG Specification 1.6/1.7,
-//! chapter 6 and the `ProfileHueSatMap*`, `ProfileLookTable*` and `ProfileToneCurve` tags).
+//! chapter 6 and the `ProfileHueSatMap*`, `ProfileLookTable*`, `ProfileToneCurve` and
+//! `ProfileGainTableMap*` tags).
 //!
 //! - A hue/saturation/value table holds, for a grid of (value, hue, saturation) inputs, a hue shift
 //!   in degrees, a saturation scale and a value scale (value-major, hue-middle, saturation-minor).
@@ -10,11 +11,17 @@
 //! - `ProfileHueSatMapData1/2` follow the colour matrices (interpolated by the same illuminant
 //!   weight); `ProfileLookTableData` comes after exposure compensation and before any tone curve.
 //! - `ProfileToneCurve`: (input, output) pairs in linear gamma from (0, 0) to (1, 1).
+//! - `ProfileGainTableMap*` ([`crate::gaintable`]) is read and kept (a DNG export writes it back)
+//!   but not rendered: Lightroom Classic renders Apple ProRAW without it (measured on the iPhone
+//!   12 Pro corpus file against Lightroom Classic 15.6: with the map the default render is far
+//!   brighter than Lightroom's, mean ΔE00 19; without it Lightroom's output is a tight function of
+//!   the hue/saturation map, exposure compensation and tone curve alone).
 //!
 //! The data is read from the user's own file at run time; nothing here ships profile data.
 //! Values above 1.0 (highlight headroom) keep their headroom: the table's value scale only ever
 //! lowers them, so a lookup can't clip what the scene-referred pipeline still needs.
 
+use crate::gaintable::GainTableMap;
 use lightcraft_color::transfer::{linear_to_srgb, srgb_to_linear};
 use lightcraft_color::{D50, D65, Mat3, PROPHOTO, REC2020, bradford};
 use serde::{Deserialize, Serialize};
@@ -207,11 +214,14 @@ pub struct ProfileLook {
     pub look_table: Option<HsvTable>,
     /// `ProfileToneCurve`.
     pub tone_curve: Option<ToneCurve>,
+    /// `ProfileGainTableMap2`, else `ProfileGainTableMap`.
+    #[serde(default)]
+    pub gain_table_map: Option<GainTableMap>,
 }
 
 impl ProfileLook {
     pub fn is_empty(&self) -> bool {
-        self.hue_sat_map.iter().all(Option::is_none) && self.look_table.is_none() && self.tone_curve.is_none()
+        self.hue_sat_map.iter().all(Option::is_none) && self.look_table.is_none() && self.tone_curve.is_none() && self.gain_table_map.is_none()
     }
 
     /// The hue/saturation map for calibration-1 weight `g` (one table: used for any white).
@@ -234,7 +244,7 @@ pub struct ProfileTables {
 }
 
 impl ProfileTables {
-    /// `None` when the profile has no hue/saturation map and no look table.
+    /// `None` when the profile has no hue/saturation map or look table.
     pub fn new(look: &ProfileLook, illuminant_weight: f64) -> Option<ProfileTables> {
         let hue_sat = look.hue_sat_for(illuminant_weight);
         if hue_sat.is_none() && look.look_table.is_none() {
@@ -245,8 +255,8 @@ impl ProfileTables {
         Some(ProfileTables { hue_sat, look: look.look_table.clone(), to_prophoto: to.to_f32(), from_prophoto: from.to_f32() })
     }
 
-    /// Hue/saturation map, then `gain` (exposure compensation), then the look table:
-    /// linear Rec.2020 D65 in, linear Rec.2020 D65 out.
+    /// Hue/saturation map, then `gain` (exposure compensation), then the look table: linear
+    /// Rec.2020 D65 in, linear Rec.2020 D65 out.
     #[inline]
     pub fn apply(&self, rgb: [f32; 3], gain: f32) -> [f32; 3] {
         let m = &self.to_prophoto;
@@ -360,7 +370,7 @@ mod tests {
         let m = HsvTable::blend(&a, &b, 0.25).unwrap();
         assert_eq!(m.data[1], [7.5, 1.75, 1.0]);
         assert!(HsvTable::blend(&a, &identity(3, 2, 1), 0.5).is_none());
-        let look = ProfileLook { hue_sat_map: [Some(a.clone()), None], look_table: Some(a), tone_curve: None };
+        let look = ProfileLook { hue_sat_map: [Some(a.clone()), None], look_table: Some(a), tone_curve: None, gain_table_map: None };
         let t = ProfileTables::new(&look, 0.5).unwrap();
         let c = [0.3, 0.2, 0.1];
         assert!(close(t.apply(c, 2.0), [0.6, 0.4, 0.2], 1e-4), "{:?}", t.apply(c, 2.0));

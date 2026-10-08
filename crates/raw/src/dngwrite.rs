@@ -182,6 +182,9 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
         ifd.set(t::AS_SHOT_NEUTRAL, rat_vec(&m.map(|v| 1.0 / v as f64)));
     }
     ifd.set(t::BASELINE_EXPOSURE, Value::SRational(vec![srational(c.baseline_exposure)]));
+    if let Some(v) = c.baseline_sharpness {
+        ifd.set(t::BASELINE_SHARPNESS, rat_vec(&[v]));
+    }
     // the source's own profile look travels with its data (conversions, smart previews, merges)
     let p = &c.profile;
     let table_tags = |ifd: &mut IfdBuilder, table: &crate::profile::HsvTable, dims: u16, enc: u16| {
@@ -213,6 +216,11 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     }
     if let Some(curve) = &p.tone_curve {
         ifd.set(t::PROFILE_TONE_CURVE, Value::Float(curve.points.iter().flatten().copied().collect()));
+    }
+    if let Some(map) = &p.gain_table_map {
+        // the raw IFD is IFD 0 here, where both tag versions are valid
+        let (version2, bytes) = map.to_bytes(opts.order);
+        ifd.set(if version2 { t::PROFILE_GAIN_TABLE_MAP_2 } else { t::PROFILE_GAIN_TABLE_MAP }, Value::Undefined(bytes));
     }
     for (list, tag) in [(&raw.opcodes.list1, t::OPCODE_LIST_1), (&raw.opcodes.list2, t::OPCODE_LIST_2), (&raw.opcodes.list3, t::OPCODE_LIST_3)] {
         if !list.is_empty() {

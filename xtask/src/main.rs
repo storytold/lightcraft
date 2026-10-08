@@ -336,6 +336,9 @@ const RAW_SAMPLES: &[(&str, &str)] = &[
         "dng-adobe-canon-5d3-lossy.dng",
         "https://raw.pixls.us/getfile.php/1023/nice/Adobe%20DNG%20Converter%20-%20Canon%20EOS%205D%20Mark%20III%20-%20Lossy%20JPEG%20compression%20%283:2%29.DNG",
     ),
+    // Apple ProRAW (iPhone 12 Pro, iOS 14.3): LinearRaw LJ92 tiles, ProfileToneCurve, ProfileGainTableMap.
+    // sha256 e91e77a4533ed7cce551d83330676ea5c47dd5e55fb38adda7819366afdbdfc2
+    ("dng-apple-iphone12pro-proraw.dng", "https://raw.pixls.us/data/Apple/iPhone%2012%20Pro/IMG_1361.DNG"),
     (
         "dng-canon-5d3-14bit-small.dng",
         "https://raw.pixls.us/getfile.php/2204/nice/Canon%20-%20EOS%205D%20Mark%20III%20-%2014bit%2014bit%20%282.3471882640587%29.dng",

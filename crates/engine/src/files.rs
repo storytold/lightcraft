@@ -192,11 +192,16 @@ const HIGHLIGHT_CLIP: f32 = 0.99;
 /// instead of a ~1.2 s full demosaic; zooming in still uses the full-size source).
 /// `None` = demosaic at full size.
 pub fn bin_factor(raw: &lightcraft_raw::RawImage, max_edge: usize) -> Option<usize> {
-    let c = raw.crop.clipped(raw.active_area.width, raw.active_area.height);
-    let long = if c.width > 1 && c.height > 1 { c.width.max(c.height) } else { raw.active_area.width.max(raw.active_area.height) };
+    let long = developed_long(raw);
     let need = (max_edge.saturating_mul(9) / 10).max(1);
     let need3 = (max_edge.saturating_mul(3) / 4).max(1);
     [8usize, 6, 4, 3, 2].into_iter().find(|&k| raw.can_bin(k) && (long / k >= need || (k == 3 && !raw.can_bin(2) && long / k >= need3)))
+}
+
+/// Long edge (px) of a raw's full-size developed image: its default crop, else its active area.
+fn developed_long(raw: &lightcraft_raw::RawImage) -> usize {
+    let c = raw.crop.clipped(raw.active_area.width, raw.active_area.height);
+    if c.width > 1 && c.height > 1 { c.width.max(c.height) } else { raw.active_area.width.max(raw.active_area.height) }
 }
 
 /// Decode a file into a linear Rec.2020 image no larger than `max_edge`, oriented.
@@ -225,8 +230,11 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
             Err(e) => return Err(e.to_string()),
         };
         let xy = lightcraft_raw::color::as_shot_white_xy(&raw);
+        let native_long = u32::try_from(developed_long(&raw)).unwrap_or(0);
+        let baseline_sharpness = raw.color.baseline_sharpness.unwrap_or(1.0) as f32;
         let t = lightcraft_raw::color::camera_transform(&raw, xy);
-        let camera_look = crate::camera_preview::fit_preview(&raw, &bytes, &t);
+        // the source's segmentation mattes (DNG semantic masks), read while the preview is fitted
+        let (camera_look, mattes) = rayon::join(|| crate::camera_preview::fit_preview(&raw, &bytes, &t), || dng_mattes(&bytes, &raw));
         drop(bytes);
         // Embedded lens corrections are applied by the pipeline ("Enable Profile Corrections"), not baked in.
         let lens = embedded_lens(&raw.info());
@@ -255,21 +263,26 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
         let hue_sat = camera_look.as_ref().and_then(|p| p.hue_sat.as_ref()).and_then(crate::camera_preview::HueSat::new);
         let gain = 2f32.powf(t.baseline_exposure as f32);
         let wb = t.wb;
-        // A DNG's own profile look (hue/saturation map, look table), DNG spec chapter 6.
+        // A DNG's own profile look (hue/saturation map, look table), DNG spec chapter 6. Its gain
+        // table map (Apple ProRAW) is not rendered, as in Lightroom Classic (see
+        // `lightcraft_raw::profile`).
         let tables = lightcraft_raw::profile::ProfileTables::new(&raw.color.profile, lightcraft_raw::color::illuminant_weight(&raw.color, xy));
-        img.map_in_place(|p| {
-            let c = [p[0] * wb[0], p[1] * wb[1], p[2] * wb[2]];
-            let rgb = [
-                m[0][0] * c[0] + m[0][1] * c[1] + m[0][2] * c[2],
-                m[1][0] * c[0] + m[1][1] * c[1] + m[1][2] * c[2],
-                m[2][0] * c[0] + m[2][1] * c[1] + m[2][2] * c[2],
-            ];
-            let rgb = match &tables {
-                Some(tables) => tables.apply(rgb, gain),
-                None => rgb.map(|v| v * gain),
-            };
-            // after the baseline exposure, as when it was fitted
-            hue_sat.as_ref().map_or(rgb, |h| h.apply(rgb)).map(|v| v.max(0.0))
+        let width = img.width;
+        lightcraft_raster::par_rows(&mut img.data, width, |_, row| {
+            for p in row.iter_mut() {
+                let c = [p[0] * wb[0], p[1] * wb[1], p[2] * wb[2]];
+                let rgb = [
+                    m[0][0] * c[0] + m[0][1] * c[1] + m[0][2] * c[2],
+                    m[1][0] * c[0] + m[1][1] * c[1] + m[1][2] * c[2],
+                    m[2][0] * c[0] + m[2][1] * c[1] + m[2][2] * c[2],
+                ];
+                let rgb = match &tables {
+                    Some(tables) => tables.apply(rgb, gain),
+                    None => rgb.map(|v| v * gain),
+                };
+                // after the baseline exposure, as when it was fitted
+                *p = hue_sat.as_ref().map_or(rgb, |h| h.apply(rgb)).map(|v| v.max(0.0));
+            }
         });
         stages.push(("colour", t0.elapsed()));
         let img = fit(&img, max_edge, max_edge, Filter::Box);
@@ -290,26 +303,95 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
         }
         let (temp, tint) = xy_to_temp_tint(xy);
         let relative = crate::camera_preview::file_local_look(raw.format) && t.matrix_is_fallback;
-        let camera_tone = camera_look.as_ref().map(|p| p.tone).or_else(|| raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve));
+        // White balance re-evaluates the file's own colour model (when it has one and no
+        // file-local look matrix sits on top of it)
+        let camera_color = (!t.matrix_is_fallback && camera_look.is_none()).then(|| {
+            let tags = lightcraft_raw::ColorData { profile: Default::default(), ..raw.color.clone() };
+            Arc::new(lightcraft_pipeline::CameraColor { tags, developed_for: xy })
+        });
+        // a DNG profile curve renders in Lightroom's chain, whose Contrast adapts to the image as
+        // decoded (at its own exposure, before any edit)
+        let camera_tone = camera_look.as_ref().map(|p| p.tone).or_else(|| {
+            raw.color
+                .profile
+                .tone_curve
+                .as_ref()
+                .and_then(|c| dng_tone_curve(c, t.baseline_exposure))
+                .map(|tone| tone.with_key(lightcraft_pipeline::tone::lr_key(&img.data, tone.baseline_exposure())))
+        });
         let (temp, tint) = if relative { (6500.0, 0.0) } else { (temp.round(), tint.round()) };
-        return Ok((img, SourceInfo { raw: true, as_shot_temp: temp, as_shot_tint: tint, lens, relative_wb: relative, camera_tone }));
+        let info = SourceInfo {
+            raw: true,
+            as_shot_temp: temp,
+            as_shot_tint: tint,
+            lens,
+            relative_wb: relative,
+            camera_color,
+            camera_tone,
+            mattes,
+            native_long,
+            baseline_sharpness,
+        };
+        return Ok((img, info));
     }
     let d = lightcraft_codecs::decode(&bytes, lightcraft_codecs::DecodeOptions::fit(max_edge as u32, max_edge as u32)).map_err(|e| e.to_string())?;
     drop(bytes);
     let img = d.to_working();
     let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
-    Ok((img.into_oriented(Orientation::from_exif(d.orientation)), SourceInfo::default()))
+    let native_long = d.source_width.max(d.source_height);
+    Ok((img.into_oriented(Orientation::from_exif(d.orientation)), SourceInfo { native_long, ..SourceInfo::default() }))
+}
+
+/// The semantic masks of a DNG that AI masks understand, over the developed image (default crop,
+/// oriented like it). Person mattes without a confidently selected pixel are left out (the
+/// Subject mask then falls back to its heuristic); a sky matte counts even when empty (no sky).
+fn dng_mattes(bytes: &[u8], raw: &lightcraft_raw::RawImage) -> Option<Arc<lightcraft_pipeline::masks::Mattes>> {
+    use lightcraft_pipeline::masks::{MatteKind, Mattes};
+    if raw.format != lightcraft_raw::RawFormat::Dng {
+        return None;
+    }
+    let mut mattes = Mattes::default();
+    for m in lightcraft_raw::semantic_masks(bytes) {
+        let Some(kind) = matte_kind(&m.name) else { continue };
+        let Some(img) = m.developed(raw.active_area, raw.crop) else { continue };
+        if kind != MatteKind::Sky && !img.data.iter().any(|&v| v >= 128) {
+            continue;
+        }
+        mattes.push(kind, img.into_oriented(raw.orientation));
+    }
+    (!mattes.is_empty()).then(|| Arc::new(mattes))
+}
+
+/// What a semantic mask selects, by its `SemanticName`: Apple's (iPhone ProRAW) are named after
+/// their auxiliary image types, `urn:com:apple:photo:<year>:aux:<type>`. Other names: `None`.
+fn matte_kind(name: &str) -> Option<lightcraft_pipeline::masks::MatteKind> {
+    use lightcraft_pipeline::masks::MatteKind::*;
+    let kind = name.strip_prefix("urn:com:apple:photo:")?.rsplit(':').next()?;
+    Some(match kind {
+        "semanticskymatte" => Sky,
+        "semanticskinmatte" => Skin,
+        "semantichairmatte" => Hair,
+        "semanticteethmatte" => Teeth,
+        "semanticglassesmatte" => Glasses,
+        "portraiteffectsmatte" => Person,
+        _ => return None,
+    })
 }
 
 /// A DNG `ProfileToneCurve` (linear in, linear out, 1.0 = white after exposure compensation) as the
-/// finish stage's camera tone curve: 32 knots, log-spaced over 12 stops below white; above white
-/// the camera tone's shoulder continues it.
-pub(crate) fn dng_tone_curve(curve: &lightcraft_raw::profile::ToneCurve) -> Option<lightcraft_pipeline::tone::CameraTone> {
-    let knots: [[f32; 2]; 32] = std::array::from_fn(|i| {
-        let x = 2f32.powf(-12.0 + 12.0 * i as f32 / 31.0);
+/// finish stage's camera tone curve: 128 knots, log-spaced over 12 stops below white (within 0.03 L*
+/// of the full curve on Apple ProRAW's 257-point curve); above white the camera tone's shoulder
+/// continues it. Applied per channel, hue-preserving, in linear ProPhoto RGB, inside Lightroom's
+/// own tone chain, which depends on the file's `baseline_exposure` (EV; see
+/// `lightcraft_pipeline::tone`).
+pub(crate) fn dng_tone_curve(curve: &lightcraft_raw::profile::ToneCurve, baseline_exposure: f64) -> Option<lightcraft_pipeline::tone::CameraTone> {
+    use lightcraft_pipeline::tone::{CAMERA_TONE_KNOTS, CameraTone};
+    let last = (CAMERA_TONE_KNOTS - 1) as f32;
+    let knots: [[f32; 2]; CAMERA_TONE_KNOTS] = std::array::from_fn(|i| {
+        let x = 2f32.powf(-12.0 + 12.0 * i as f32 / last);
         [x, curve.eval(x).min(0.9995)]
     });
-    lightcraft_pipeline::tone::CameraTone::new(knots)
+    CameraTone::new(&knots).map(|t| t.per_channel().with_baseline_exposure(baseline_exposure as f32))
 }
 
 /// Orientation for an embedded preview: its own EXIF orientation when it has one, else the raw file's.
@@ -434,7 +516,7 @@ mod tests {
         // a map that removes all saturation, and a tone curve
         let grey = HsvTable { hue_divisions: 4, sat_divisions: 2, val_divisions: 1, data: vec![[0.0, 0.0, 1.0]; 8], srgb_value: false };
         raw.color.profile =
-            ProfileLook { hue_sat_map: [Some(grey), None], look_table: None, tone_curve: ToneCurve::from_tag(&[0.0, 0.0, 0.18, 0.3, 1.0, 1.0]) };
+            ProfileLook { hue_sat_map: [Some(grey), None], tone_curve: ToneCurve::from_tag(&[0.0, 0.0, 0.18, 0.3, 1.0, 1.0]), ..Default::default() };
         let with = lightcraft_raw::write_dng(&raw, &Default::default()).unwrap();
         let (after, info) = load_bytes(&with, 64).unwrap();
         assert!(sat(&after) < 1e-3, "saturation {} → {}", sat(&before), sat(&after));
@@ -450,6 +532,97 @@ mod tests {
         };
         let (dim, _) = load_bytes(&lightcraft_raw::write_dng(&raw, &Default::default()).unwrap(), 64).unwrap();
         assert!((mean(&dim) / mean(&before) - 0.5).abs() < 0.02, "{} vs {}", mean(&dim), mean(&before));
+    }
+
+    /// iPhone ProRAW-style semantic masks drive the Sky mask: Apple's sky matte (here the right
+    /// half of the sensor, i.e. the bottom of the photo once turned 90° clockwise — where the sky
+    /// heuristic would never look) is used; a matte with an unknown name is ignored.
+    #[test]
+    fn dng_sky_matte_drives_the_sky_mask() {
+        use lightcraft_develop::{DevelopSettings, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
+        use lightcraft_pipeline::{RenderRequest, render};
+        use lightcraft_tiff::tags::{self as t, photometric};
+        use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+        let (w, h) = (16u32, 8u32);
+        let image = |ifd: &mut IfdBuilder, w: u32, h: u32, cpp: u16, bits: u16, data: Vec<u8>| {
+            ifd.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
+            ifd.set(t::IMAGE_LENGTH, Value::Long(vec![h]));
+            ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![bits; cpp as usize]));
+            ifd.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![cpp]));
+            ifd.set(t::COMPRESSION, Value::Short(vec![1]));
+            ifd.set_image(ImageData::Strips { rows_per_strip: h, strips: vec![data] });
+        };
+        let mut raw = IfdBuilder::new();
+        raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
+        raw.set(t::PHOTOMETRIC, Value::Short(vec![photometric::LINEAR_RAW]));
+        image(&mut raw, w, h, 3, 16, 12000u16.to_le_bytes().repeat((w * h * 3) as usize));
+        let matte = |name: &str, right: bool| {
+            let mut m = IfdBuilder::new();
+            m.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![t::SUBFILE_SEMANTIC_MASK]));
+            m.set(t::PHOTOMETRIC, Value::Short(vec![photometric::MASK]));
+            m.set(t::SEMANTIC_NAME, Value::Ascii(name.into()));
+            image(&mut m, w / 2, h / 2, 1, 8, (0..w / 2 * h / 2).map(|i| if (i % (w / 2) >= w / 4) == right { 255 } else { 0 }).collect());
+            m
+        };
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![1]));
+        ifd0.set(t::DNG_VERSION, Value::Byte(vec![1, 6, 0, 0]));
+        ifd0.set(t::MAKE, Value::Ascii("Apple".into()));
+        ifd0.set(t::ORIENTATION, Value::Short(vec![6]));
+        ifd0.set(t::COLOR_MATRIX_1, Value::SRational(vec![(1, 1), (0, 1), (0, 1), (0, 1), (1, 1), (0, 1), (0, 1), (0, 1), (1, 1)]));
+        ifd0.set(t::CALIBRATION_ILLUMINANT_1, Value::Short(vec![21]));
+        ifd0.set(t::PHOTOMETRIC, Value::Short(vec![photometric::RGB]));
+        image(&mut ifd0, 4, 2, 3, 8, vec![128; 24]);
+        ifd0.add_sub_ifd(raw);
+        ifd0.add_sub_ifd(matte("urn:com:apple:photo:2020:aux:semanticskymatte", true));
+        ifd0.add_sub_ifd(matte("urn:com:apple:photo:2020:aux:semanticsomethingelse", false));
+        let bytes = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+
+        let (img, info) = load_bytes(&bytes, 64).unwrap();
+        assert_eq!((img.width, img.height), (8, 16));
+        assert!(info.mattes.is_some());
+        let sky = Mask {
+            components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Sky }],
+            adjust: LocalAdjustments { exposure: -3.0, ..Default::default() },
+            ..Default::default()
+        };
+        let s = DevelopSettings { masks: vec![sky], ..Default::default() };
+        let req = RenderRequest::fit(8, 16);
+        let green = |s: &DevelopSettings, info: &SourceInfo, y: usize| render(&img, info, s, &req).image.get(4, y)[1] as i32;
+        let plain = DevelopSettings::default();
+        assert_eq!(green(&s, &info, 2), green(&plain, &info, 2), "no sky at the top");
+        assert!(green(&s, &info, 13) + 40 < green(&plain, &info, 13), "the sky at the bottom is darkened");
+        // without the matte the heuristic looks at the top of the frame instead
+        let heuristic = SourceInfo { mattes: None, ..info.clone() };
+        assert!(green(&s, &heuristic, 2) < green(&plain, &heuristic, 2));
+        assert_eq!(green(&s, &heuristic, 13), green(&plain, &heuristic, 13));
+    }
+
+    /// Apple ProRAW: like Lightroom Classic, the default render ignores the file's
+    /// `ProfileGainTableMap` (Apple's local tone mapping); a map that would double every pixel
+    /// changes nothing.
+    #[test]
+    fn dng_gain_table_map_is_not_rendered() {
+        use lightcraft_raw::gaintable::GainTableMap;
+        let plain = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+        let mut raw = lightcraft_raw::decode(&plain).unwrap();
+        let (before, _) = load_bytes(&lightcraft_raw::write_dng(&raw, &Default::default()).unwrap(), 64).unwrap();
+        raw.color.profile.gain_table_map = Some(GainTableMap {
+            points_v: 1,
+            points_h: 1,
+            points_n: 1,
+            spacing_v: 1.0,
+            spacing_h: 1.0,
+            origin_v: 0.0,
+            origin_h: 0.0,
+            weights: [0.2, 0.2, 0.2, 0.2, 0.2],
+            gamma: 1.0,
+            gains: vec![2.0],
+        });
+        let with_map = lightcraft_raw::write_dng(&raw, &Default::default()).unwrap();
+        assert!(lightcraft_raw::decode(&with_map).unwrap().color.profile.gain_table_map.is_some(), "the map is kept");
+        let (after, _) = load_bytes(&with_map, 64).unwrap();
+        assert_eq!(before.data, after.data);
     }
 
     #[test]
@@ -489,7 +662,7 @@ mod tests {
         assert_eq!(p.kind, MediaKind::Raw, "still a raw file (filters, Convert to DNG…)");
         assert!(!p.develops_raw());
         // rendered like the JPEG it is: relative white balance, display tone curve, no raw defaults
-        assert_eq!(crate::media::source_info(&p), SourceInfo::default());
+        assert_eq!(SourceInfo { native_long: 0, ..crate::media::source_info(&p) }, SourceInfo::default());
         assert_eq!(*p.develop, lightcraft_develop::DevelopSettings::default());
         assert!(s.render_job(id, 48, 48, false, true).unwrap().run().rendered.is_ok());
         // agents see it
