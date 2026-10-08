@@ -165,7 +165,7 @@ pub(crate) fn decode_with_fallback(bytes: &[u8], opts: &DecodeOptions, fallback:
         return Err(Error::Malformed(F, "no frame header".into()));
     }
     check_size(F, m.width as u64, m.height as u64, opts)?;
-    let scale_to = opts.max_size.filter(|&(mw, mh)| mw > 0 && mh > 0 && (m.width >= 2 * mw || m.height >= 2 * mh));
+    let scale_to = opts.max_size.filter(|&(mw, mh)| mw > 0 && mh > 0 && (m.width >= mw.saturating_mul(2) || m.height >= mh.saturating_mul(2)));
     // zune-jpeg handles the common cases fastest; jpeg-decoder covers DCT scaling, CMYK/YCCK,
     // 12-bit and non-interleaved sequential scans (which zune-jpeg 0.5 mis-decodes with subsampling).
     let non_interleaved = matches!(m.sof, 0xC0 | 0xC1) && m.first_scan_components < m.components;
@@ -375,6 +375,17 @@ mod tests {
                 assert_eq!(find_ff(s), s.iter().position(|&v| v == 0xFF), "{at:?} from {start}");
             }
         }
+    }
+
+    #[test]
+    fn unbounded_fit_box_decodes_at_full_size() {
+        // a full-size load asks for the largest box (`usize::MAX` saturated to `u32::MAX`): no DCT scaling,
+        // and no overflow working out whether to scale
+        use crate::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+        let pixels = vec![128u8; 32 * 24 * 3];
+        let jpeg = encode_jpeg(&EncodeImage::new(32, 24, 3, Samples::U8(&pixels)), 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+        let d = crate::decode(&jpeg, DecodeOptions::fit(u32::MAX, u32::MAX)).unwrap();
+        assert_eq!((d.width, d.height), (32, 24));
     }
 
     #[test]

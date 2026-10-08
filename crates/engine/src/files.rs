@@ -310,7 +310,7 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
         let (temp, tint) = if relative { (6500.0, 0.0) } else { (temp.round(), tint.round()) };
         return Ok((img, SourceInfo { raw: true, as_shot_temp: temp, as_shot_tint: tint, lens, relative_wb: relative, camera_tone }));
     }
-    let d = lightcraft_codecs::decode(&bytes, lightcraft_codecs::DecodeOptions::fit(max_edge as u32, max_edge as u32)).map_err(|e| e.to_string())?;
+    let d = lightcraft_codecs::decode(&bytes, fit_box(max_edge)).map_err(|e| e.to_string())?;
     drop(bytes);
     let img = d.to_working();
     let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
@@ -378,7 +378,7 @@ fn embedded_preview_size(bytes: &[u8]) -> Option<(u32, u32)> {
 
 /// The embedded preview of a raw file as a working-space image no larger than `max_edge`, oriented.
 pub fn load_embedded_preview(bytes: &[u8], max_edge: usize) -> Option<(Rgb32f, SourceInfo)> {
-    let d = decode_raw_preview(bytes, lightcraft_codecs::DecodeOptions::fit(max_edge as u32, max_edge as u32))?;
+    let d = decode_raw_preview(bytes, fit_box(max_edge))?;
     let img = d.to_working();
     let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
     Some((img.oriented(preview_orientation(bytes, d.orientation)), SourceInfo::default()))
@@ -387,13 +387,20 @@ pub fn load_embedded_preview(bytes: &[u8], max_edge: usize) -> Option<(Rgb32f, S
 /// The embedded preview of a raw file for display (sRGB, oriented, no larger than `max_edge`): the
 /// loupe and grid show it until the raw itself has been developed ([`crate::media::QuickJob`]).
 pub fn embedded_preview_srgb(bytes: &[u8], max_edge: usize) -> Option<lightcraft_raster::Rgba8> {
-    let mut d = decode_raw_preview(bytes, lightcraft_codecs::DecodeOptions::fit(max_edge as u32, max_edge as u32))?;
+    let mut d = decode_raw_preview(bytes, fit_box(max_edge))?;
     if d.image.width.max(d.image.height) > max_edge {
         d.image = fit(&d.image, max_edge, max_edge, Filter::Box);
         d.alpha = None;
     }
     let o = preview_orientation(bytes, d.orientation);
     Some(d.to_srgb8().oriented(o))
+}
+
+/// Decode options fitting into a `max_edge` square; `usize::MAX` (a full-size load) or any edge past
+/// `u32::MAX` asks for the largest box rather than wrapping to a small one.
+fn fit_box(max_edge: usize) -> lightcraft_codecs::DecodeOptions {
+    let e = u32::try_from(max_edge).unwrap_or(u32::MAX);
+    lightcraft_codecs::DecodeOptions::fit(e, e)
 }
 
 /// Filesystem-backed embedded-preview hook (native).
