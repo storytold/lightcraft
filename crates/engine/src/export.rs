@@ -967,11 +967,19 @@ pub struct Exported {
 
 /// Output size of photo `p` under `o` (its cropped full size when `o.resize` is `None`).
 pub fn output_size(p: &lightcraft_catalog::Photo, o: &ExportOptions) -> (usize, usize) {
-    let (w, h) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
     match &o.resize {
-        Some(r) => r.apply(w, h),
-        None => ((w.round() as usize).max(1), (h.round() as usize).max(1)),
+        Some(r) => {
+            let (w, h) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
+            r.apply(w, h)
+        }
+        None => full_size(p),
     }
+}
+
+/// The cropped size of photo `p` at its own resolution.
+fn full_size(p: &lightcraft_catalog::Photo) -> (usize, usize) {
+    let (w, h) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
+    ((w.round() as usize).max(1), (h.round() as usize).max(1))
 }
 
 /// Render photo `id` at the requested size and encode it (or copy / convert its original for
@@ -995,6 +1003,8 @@ struct RenderWork {
     job: crate::media::RenderJob,
     meta: Option<Metadata>,
     opts: ExportOptions,
+    /// The size to downsize the full-size render to ([`lightcraft_pipeline::DeepImage::downscaled`]).
+    downscale: Option<(usize, usize)>,
 }
 
 enum Work {
@@ -1039,10 +1049,26 @@ fn prepare_guarded(
     let p = session.catalog.photo(id).ok_or("no such photo")?;
     let file_name = o.file_name_for(p, seq);
     let work = if o.format.is_rendered() {
+        // Smaller than the photo: render at full size and downsize the result, as Lightroom does
+        // (sharpening and noise reduction act at the photo's own resolution).
         let (w, h) = output_size(p, o);
+        let full = full_size(p);
+        let downscale = (w.max(h) < full.0.max(full.1)).then(|| {
+            let req = lightcraft_pipeline::RenderRequest::fit(w, h);
+            lightcraft_pipeline::output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop, &req)
+        });
         let meta = export_metadata(p, o);
-        let job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
-        Work::Render(Box::new(RenderWork { job, meta, opts: o.clone() }))
+        let job = match downscale {
+            Some(_) => {
+                let depth = match o.effective_depth() {
+                    OutputDepth::U8 => OutputDepth::U16,
+                    d => d,
+                };
+                session.export_job(id, full.0, full.1, o.effective_space(), depth)?
+            }
+            None => session.export_job(id, w, h, o.effective_space(), o.effective_depth())?,
+        };
+        Work::Render(Box::new(RenderWork { job, meta, opts: o.clone(), downscale }))
     } else {
         let lightcraft_catalog::Source::File { path } = &p.source else {
             return Err(format!("{} is a generated demo photo: it has no original file to export", p.file_name));
@@ -1064,8 +1090,13 @@ impl PreparedExport {
         let file_name = self.file_name;
         match self.work {
             Work::Render(w) => {
-                let RenderWork { job, meta, opts } = *w;
-                let r = job.run().rendered?;
+                let RenderWork { job, meta, opts, downscale } = *w;
+                let mut r = job.run().rendered?;
+                if let Some((dw, dh)) = downscale
+                    && let Some(deep) = &r.deep
+                {
+                    r = lightcraft_pipeline::Rendered::from_deep(deep.downscaled(dw, dh));
+                }
                 let bytes = encode_rendered(&r, &opts, meta.as_ref())?;
                 Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new() })
             }

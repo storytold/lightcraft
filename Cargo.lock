@@ -2148,7 +2148,6 @@ name = "lightcraft-color"
 version = "0.2.1"
 dependencies = [
  "lightcraft-geom",
- "proptest",
  "serde",
 ]
 
@@ -2212,6 +2211,7 @@ dependencies = [
  "lightcraft-raster",
  "lightcraft-scenes",
  "log",
+ "naga",
  "pollster 1.0.1",
  "wgpu",
 ]
@@ -2264,6 +2264,7 @@ dependencies = [
  "lightcraft-develop",
  "lightcraft-geom",
  "lightcraft-raster",
+ "lightcraft-raw",
  "lightcraft-scenes",
  "proptest",
  "rayon",

@@ -694,7 +694,7 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
         if v.is_empty() { vec![Point::new(0.0, 0.0), Point::new(1.0, 1.0)] } else { v.clone() }
     };
     let pts = pts_of(d);
-    let curve = lightcraft_color::spline::MonotoneCurve::new(&pts.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>());
+    let curve = lightcraft_color::spline::PointCurve::new(&pts.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>());
     let color = match ch.as_str() {
         "red" => hex("#dd3333"),
         "green" => hex("#33bb55"),

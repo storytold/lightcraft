@@ -11,12 +11,11 @@
 //! - `ProfileHueSatMapData1/2` follow the colour matrices (interpolated by the same illuminant
 //!   weight); `ProfileLookTableData` comes after exposure compensation and before any tone curve.
 //! - `ProfileToneCurve`: (input, output) pairs in linear gamma from (0, 0) to (1, 1).
-//! - `ProfileGainTableMap*` ([`crate::gaintable`]): spatially varying gains, applied after exposure
-//!   compensation and before the tone curve. The spec gives no order relative to the look table.
-//!   We apply the map first: it belongs to the profile's base rendering, as the hue/saturation
-//!   map does, and the look table is a creative look on top of that rendering. Its table input is
-//!   then exactly the exposure-compensated image the map's weights assume. Apple ProRAW has no
-//!   look table, so the choice doesn't affect it.
+//! - `ProfileGainTableMap*` ([`crate::gaintable`]) is read and kept (a DNG export writes it back)
+//!   but not rendered: Lightroom Classic renders Apple ProRAW without it (measured on the iPhone
+//!   12 Pro corpus file against Lightroom Classic 15.6: with the map the default render is far
+//!   brighter than Lightroom's, mean ΔE00 19; without it Lightroom's output is a tight function of
+//!   the hue/saturation map, exposure compensation and tone curve alone).
 //!
 //! The data is read from the user's own file at run time; nothing here ships profile data.
 //! Values above 1.0 (highlight headroom) keep their headroom: the table's value scale only ever
@@ -240,44 +239,32 @@ impl ProfileLook {
 pub struct ProfileTables {
     hue_sat: Option<HsvTable>,
     look: Option<HsvTable>,
-    gain_map: Option<GainTableMap>,
     to_prophoto: [[f32; 3]; 3],
     from_prophoto: [[f32; 3]; 3],
 }
 
 impl ProfileTables {
-    /// `None` when the profile has no hue/saturation map, look table or gain table map.
+    /// `None` when the profile has no hue/saturation map or look table.
     pub fn new(look: &ProfileLook, illuminant_weight: f64) -> Option<ProfileTables> {
         let hue_sat = look.hue_sat_for(illuminant_weight);
-        if hue_sat.is_none() && look.look_table.is_none() && look.gain_table_map.is_none() {
+        if hue_sat.is_none() && look.look_table.is_none() {
             return None;
         }
         let to: Mat3 = PROPHOTO.from_xyz().mul(&bradford(D65, D50)).mul(&REC2020.to_xyz());
         let from = to.inverse()?;
-        Some(ProfileTables {
-            hue_sat,
-            look: look.look_table.clone(),
-            gain_map: look.gain_table_map.clone(),
-            to_prophoto: to.to_f32(),
-            from_prophoto: from.to_f32(),
-        })
+        Some(ProfileTables { hue_sat, look: look.look_table.clone(), to_prophoto: to.to_f32(), from_prophoto: from.to_f32() })
     }
 
-    /// Hue/saturation map, then `gain` (exposure compensation), then the gain table map at
-    /// relative active-area position `pos` ([`crate::gaintable::MapPlacement`]), then the look
-    /// table: linear Rec.2020 D65 in, linear Rec.2020 D65 out.
+    /// Hue/saturation map, then `gain` (exposure compensation), then the look table: linear
+    /// Rec.2020 D65 in, linear Rec.2020 D65 out.
     #[inline]
-    pub fn apply(&self, rgb: [f32; 3], gain: f32, pos: [f32; 2]) -> [f32; 3] {
+    pub fn apply(&self, rgb: [f32; 3], gain: f32) -> [f32; 3] {
         let m = &self.to_prophoto;
         let mut p: [f32; 3] = std::array::from_fn(|i| m[i][0] * rgb[0] + m[i][1] * rgb[1] + m[i][2] * rgb[2]);
         if let Some(t) = &self.hue_sat {
             p = t.apply(p);
         }
         p = p.map(|v| v * gain);
-        if let Some(map) = &self.gain_map {
-            let g = map.gain(p, pos);
-            p = p.map(|v| v * g);
-        }
         if let Some(t) = &self.look {
             p = t.apply(p);
         }
@@ -386,7 +373,7 @@ mod tests {
         let look = ProfileLook { hue_sat_map: [Some(a.clone()), None], look_table: Some(a), tone_curve: None, gain_table_map: None };
         let t = ProfileTables::new(&look, 0.5).unwrap();
         let c = [0.3, 0.2, 0.1];
-        assert!(close(t.apply(c, 2.0, [0.5; 2]), [0.6, 0.4, 0.2], 1e-4), "{:?}", t.apply(c, 2.0, [0.5; 2]));
+        assert!(close(t.apply(c, 2.0), [0.6, 0.4, 0.2], 1e-4), "{:?}", t.apply(c, 2.0));
         assert!(ProfileTables::new(&ProfileLook::default(), 0.5).is_none());
     }
 

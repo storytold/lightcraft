@@ -261,17 +261,13 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
         let m = camera_look.map(|p| p.matrix.mul(&t.matrix)).unwrap_or(t.matrix).to_f32();
         let gain = 2f32.powf(t.baseline_exposure as f32);
         let wb = t.wb;
-        // A DNG's own profile look (hue/saturation map, gain table map, look table), DNG spec
-        // chapter 6. The gain table map is positioned on the active area. The spec places it
-        // after warp opcodes; the embedded lens warp is applied later, by the pipeline, so on a
-        // file carrying both the map is sampled up to the warp's displacement away. The map is a
-        // coarse grid of smooth tables (Apple: 6 × 8), so that offset changes the gains only
-        // slightly.
+        // A DNG's own profile look (hue/saturation map, look table), DNG spec chapter 6. Its gain
+        // table map (Apple ProRAW) is not rendered, as in Lightroom Classic (see
+        // `lightcraft_raw::profile`).
         let tables = lightcraft_raw::profile::ProfileTables::new(&raw.color.profile, lightcraft_raw::color::illuminant_weight(&raw.color, xy));
-        let place = lightcraft_raw::gaintable::MapPlacement::new(raw.active_area, raw.crop, img.width, img.height);
         let width = img.width;
-        lightcraft_raster::par_rows(&mut img.data, width, |y, row| {
-            for (x, p) in row.iter_mut().enumerate() {
+        lightcraft_raster::par_rows(&mut img.data, width, |_, row| {
+            for p in row.iter_mut() {
                 let c = [p[0] * wb[0], p[1] * wb[1], p[2] * wb[2]];
                 let rgb = [
                     m[0][0] * c[0] + m[0][1] * c[1] + m[0][2] * c[2],
@@ -279,7 +275,7 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
                     m[2][0] * c[0] + m[2][1] * c[1] + m[2][2] * c[2],
                 ];
                 *p = match &tables {
-                    Some(tables) => tables.apply(rgb, gain, place.at(x, y)).map(|v| v.max(0.0)),
+                    Some(tables) => tables.apply(rgb, gain).map(|v| v.max(0.0)),
                     None => rgb.map(|v| (v * gain).max(0.0)),
                 };
             }
@@ -303,7 +299,22 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
         }
         let (temp, tint) = xy_to_temp_tint(xy);
         let relative = raw.format == lightcraft_raw::RawFormat::Arw && t.matrix_is_fallback;
-        let camera_tone = camera_look.map(|p| p.tone).or_else(|| raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve));
+        // White balance re-evaluates the file's own colour model (when it has one and no
+        // file-local look matrix sits on top of it)
+        let camera_color = (!t.matrix_is_fallback && camera_look.is_none()).then(|| {
+            let tags = lightcraft_raw::ColorData { profile: Default::default(), ..raw.color.clone() };
+            Arc::new(lightcraft_pipeline::CameraColor { tags, developed_for: xy })
+        });
+        // a DNG profile curve renders in Lightroom's chain, whose Contrast adapts to the image as
+        // decoded (at its own exposure, before any edit)
+        let camera_tone = camera_look.map(|p| p.tone).or_else(|| {
+            raw.color
+                .profile
+                .tone_curve
+                .as_ref()
+                .and_then(|c| dng_tone_curve(c, t.baseline_exposure))
+                .map(|tone| tone.with_key(lightcraft_pipeline::tone::lr_key(&img.data, tone.baseline_exposure())))
+        });
         let (temp, tint) = if relative { (6500.0, 0.0) } else { (temp.round(), tint.round()) };
         let info = SourceInfo {
             raw: true,
@@ -311,6 +322,7 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
             as_shot_tint: tint,
             lens,
             relative_wb: relative,
+            camera_color,
             camera_tone,
             mattes,
             native_long,
@@ -363,17 +375,19 @@ fn matte_kind(name: &str) -> Option<lightcraft_pipeline::masks::MatteKind> {
 }
 
 /// A DNG `ProfileToneCurve` (linear in, linear out, 1.0 = white after exposure compensation) as the
-/// finish stage's camera tone curve: 32 knots, log-spaced over 12 stops below white (within 0.32 L*
+/// finish stage's camera tone curve: 128 knots, log-spaced over 12 stops below white (within 0.03 L*
 /// of the full curve on Apple ProRAW's 257-point curve); above white the camera tone's shoulder
-/// continues it. Applied per channel, hue-preserving, in linear ProPhoto RGB: on Apple ProRAW that
-/// lands much closer to the maker's own render than a luminance-only curve (docs/parity.md,
-/// LR-PROF-CAMERACOLOR).
-pub(crate) fn dng_tone_curve(curve: &lightcraft_raw::profile::ToneCurve) -> Option<lightcraft_pipeline::tone::CameraTone> {
-    let knots: [[f32; 2]; 32] = std::array::from_fn(|i| {
-        let x = 2f32.powf(-12.0 + 12.0 * i as f32 / 31.0);
+/// continues it. Applied per channel, hue-preserving, in linear ProPhoto RGB, inside Lightroom's
+/// own tone chain, which depends on the file's `baseline_exposure` (EV; see
+/// `lightcraft_pipeline::tone`).
+pub(crate) fn dng_tone_curve(curve: &lightcraft_raw::profile::ToneCurve, baseline_exposure: f64) -> Option<lightcraft_pipeline::tone::CameraTone> {
+    use lightcraft_pipeline::tone::{CAMERA_TONE_KNOTS, CameraTone};
+    let last = (CAMERA_TONE_KNOTS - 1) as f32;
+    let knots: [[f32; 2]; CAMERA_TONE_KNOTS] = std::array::from_fn(|i| {
+        let x = 2f32.powf(-12.0 + 12.0 * i as f32 / last);
         [x, curve.eval(x).min(0.9995)]
     });
-    lightcraft_pipeline::tone::CameraTone::new(knots).map(lightcraft_pipeline::tone::CameraTone::per_channel)
+    CameraTone::new(&knots).map(|t| t.per_channel().with_baseline_exposure(baseline_exposure as f32))
 }
 
 /// Orientation for an embedded preview: its own EXIF orientation when it has one, else the raw file's.
@@ -580,50 +594,31 @@ mod tests {
         assert_eq!(green(&s, &heuristic, 13), green(&plain, &heuristic, 13));
     }
 
-    /// Apple ProRAW: the `ProfileGainTableMap` is applied at load, positioned on the active area
-    /// (not on the default crop), at pixel centres, with linear blending between tables and the
-    /// edge tables repeated outside the grid.
+    /// Apple ProRAW: like Lightroom Classic, the default render ignores the file's
+    /// `ProfileGainTableMap` (Apple's local tone mapping); a map that would double every pixel
+    /// changes nothing.
     #[test]
-    fn dng_gain_table_map_is_applied_on_the_active_area() {
+    fn dng_gain_table_map_is_not_rendered() {
         use lightcraft_raw::gaintable::GainTableMap;
         let plain = crate::tests_xmp::synthetic_dng_with(None, Default::default());
         let mut raw = lightcraft_raw::decode(&plain).unwrap();
-        assert_eq!((raw.active_area.width, raw.active_area.height), (32, 24));
-        // a 16-px-wide default crop starting at active-area column 8
-        raw.crop = lightcraft_raw::Rect::new(8, 0, 16, 24);
         let (before, _) = load_bytes(&lightcraft_raw::write_dng(&raw, &Default::default()).unwrap(), 64).unwrap();
-        assert_eq!(before.width, 16);
-        // two one-point tables: gain 1 at u = 0.25, gain 2 at u = 0.75
         raw.color.profile.gain_table_map = Some(GainTableMap {
             points_v: 1,
-            points_h: 2,
+            points_h: 1,
             points_n: 1,
             spacing_v: 1.0,
-            spacing_h: 0.5,
+            spacing_h: 1.0,
             origin_v: 0.0,
-            origin_h: 0.25,
+            origin_h: 0.0,
             weights: [0.2, 0.2, 0.2, 0.2, 0.2],
             gamma: 1.0,
-            gains: vec![1.0, 2.0],
+            gains: vec![2.0],
         });
-        let (after, _) = load_bytes(&lightcraft_raw::write_dng(&raw, &Default::default()).unwrap(), 64).unwrap();
-        for (x, want) in [(0, 1.03125), (8, 1.53125), (15, 1.96875)] {
-            for y in [0, 11, 23] {
-                let (a, b) = (after.get(x, y), before.get(x, y));
-                for c in 0..3 {
-                    let ratio = a[c] / b[c];
-                    assert!(b[c] < 1e-4 || (ratio - want).abs() < 1e-3, "({x}, {y}) channel {c}: {ratio} (want {want})");
-                }
-            }
-        }
-        // inside the crop but beyond the last table the edge gain repeats
-        raw.crop = lightcraft_raw::Rect::new(24, 0, 8, 24);
-        let (right, _) = load_bytes(&lightcraft_raw::write_dng(&raw, &Default::default()).unwrap(), 64).unwrap();
-        raw.color.profile.gain_table_map = None;
-        let (right_plain, _) = load_bytes(&lightcraft_raw::write_dng(&raw, &Default::default()).unwrap(), 64).unwrap();
-        for (a, b) in right.data.iter().zip(&right_plain.data) {
-            assert!(b[1] < 1e-4 || (a[1] / b[1] - 2.0).abs() < 1e-3, "{a:?} vs {b:?}");
-        }
+        let with_map = lightcraft_raw::write_dng(&raw, &Default::default()).unwrap();
+        assert!(lightcraft_raw::decode(&with_map).unwrap().color.profile.gain_table_map.is_some(), "the map is kept");
+        let (after, _) = load_bytes(&with_map, 64).unwrap();
+        assert_eq!(before.data, after.data);
     }
 
     #[test]

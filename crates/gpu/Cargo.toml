@@ -25,3 +25,4 @@ bytemuck = { workspace = true }
 
 [dev-dependencies]
 lightcraft-scenes = { workspace = true }
+naga = { workspace = true }

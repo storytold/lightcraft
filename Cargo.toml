@@ -65,6 +65,7 @@ ravif = { version = "0.13", default-features = false, features = ["threading"] }
 # gpu (crates/gpu; native backends only, no GL: everything stays pure Rust)
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "metal", "vulkan", "dx12", "wgsl"] }
 pollster = "1"
+naga = { version = "30", default-features = false, features = ["wgsl-in"] } # wgpu's shader compiler: validates the WGSL kernels in tests without a device
 
 # ui
 egui = "0.36"

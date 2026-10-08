@@ -8,9 +8,20 @@
 - Luminar looks: `.lmp` files and `.mplumpack` collections import as presets (grouped by collection); the sliders
   with a counterpart here come along, the rest is listed.
 - 23 new built-in presets: Portrait, Landscape, Urban, Food, Seasons, Vintage and B&W toners.
-- iPhone ProRAW opens looking like the iPhone's own photo instead of very dark: LightCraft applies the local tone map
-  ProRAW files carry (the DNG gain table map), and applies a DNG's own tone curve to colour, not only brightness.
-  DNGs that LightCraft writes keep the gain table map.
+- iPhone ProRAW looks as it does in Lightroom Classic (mean ΔE2000 0.58 against Lightroom's own 2000 px export, from
+  19.5): the file's local tone map (DNG gain table map) is kept but no longer rendered, as Lightroom doesn't, and a
+  DNG's own tone curve applies to colour, not only brightness. DNGs that LightCraft writes keep the gain table map.
+  ProRAW now imports with Lightroom's sharpening for it (50, Radius 1.4).
+- XMP presets render like Lightroom's on ProRAW: white balance (re-evaluated in the camera's own colour model; Tint
+  has Lightroom's sign now), calibration, the colour mixer (Lightroom's HSL mixer: Luminance now lightens or darkens
+  blues and dark colours as Lightroom does), Exposure / Contrast / Highlights / Shadows / Whites / Blacks (in
+  Lightroom's order, Contrast adapting to the image as Lightroom's does), the parametric and point curves (the master
+  curve now keeps hues, as Lightroom's does), Vibrance, Saturation, colour grading (now after the tone curves, as in
+  Lightroom), the darkening post-crop vignette, sharpening and colour noise reduction follow models measured from
+  Lightroom Classic renders. Three real presets went from mean ΔE2000 19–23 to 0.7–2.1 against Lightroom.
+- Exports smaller than the photo are rendered at full size and then downsized the way Lightroom does it, so
+  sharpening and noise reduction look the same at every export size.
+- A red / green / blue curve in an XMP preset without the master curve is ignored, as Lightroom ignores it.
 - A preset looks the same whatever colour space you export to: tone curves (parametric, point and red/green/blue)
   now run in one fixed curve space instead of the export's (an XMP preset on an iPhone ProRAW, sRGB vs Display P3:
   mean ΔE2000 0.65 → 0.002).
@@ -20,10 +31,11 @@
   and other files with embedded distortion / vignetting corrections), matching what the preset does elsewhere.
 
 ### Editing
-- Sharpening's Radius and Detail sliders now work. Radius is in the photo's own pixels (0.5–3), so a 1:1 view and a
-  full-size export match and a downscaled view shows what the downscaled export will; Detail holds back halos and
-  fine texture at low values. DNG files that ask for more or less sharpening (`BaselineSharpness`, e.g. 1.5 on iPhone
-  ProRAW) get it.
+- Sharpening works like Lightroom's: it acts on the finished image (after the tone curves) with Lightroom's strength
+  for every Amount, Radius, Detail and Masking (measured at full size: Lightroom sharpens far more than our former
+  unsharp mask did). Radius is in the photo's own pixels (0.5–3), so a 1:1 view and a full-size export match. DNG
+  files that ask for more or less sharpening (`BaselineSharpness`, e.g. 1.5 on iPhone ProRAW) get it.
+- Colour noise reduction has Lightroom's strength (100 no longer overdoes it).
 
 ### Reliability
 - LightCraft no longer crashes at launch on Windows PCs whose Vulkan driver is broken (issue #136, e.g. some Intel UHD

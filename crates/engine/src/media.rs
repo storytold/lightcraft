@@ -861,11 +861,11 @@ mod tests {
 
     #[test]
     fn decoder_info_survives_render_jobs_cache_and_eviction() {
-        let tone = lightcraft_pipeline::tone::CameraTone::new(std::array::from_fn(|i| {
+        let knots: [[f32; 2]; 32] = std::array::from_fn(|i| {
             let x = 0.01 * (i + 1) as f32;
             [x, (x * 2.0).min(0.9)]
-        }))
-        .unwrap();
+        });
+        let tone = lightcraft_pipeline::tone::CameraTone::new(&knots).unwrap();
         let info = SourceInfo { raw: true, relative_wb: true, camera_tone: Some(tone), ..Default::default() };
         let mut s = crate::Session::with_demo();
         let id = s.active().unwrap();

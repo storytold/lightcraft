@@ -1,27 +1,19 @@
 //! DNG `ProfileGainTableMap` (tag 52525, DNG 1.6) and `ProfileGainTableMap2` (tag 52544, DNG 1.7):
-//! a coarse grid of 1D gain tables carrying the maker's local tone mapping. Apple ProRAW has one;
-//! it lifts shadows and compresses highlights region by region. Without it a ProRAW renders
-//! with a very dark foreground.
+//! a coarse grid of 1D gain tables carrying the maker's local tone mapping. Apple ProRAW has one.
+//!
+//! We read and write the tag (a DNG export keeps it) but don't render it: Lightroom Classic
+//! renders Apple ProRAW without the map (see [`crate::profile`]), and so do we.
 //!
 //! - The grid has `MapPointsV × MapPointsH` tables of `MapPointsN` gains. Its origin and spacing
-//!   are relative to the active area (1.0 = the active area's height or width) and may lie
-//!   partly outside it. Pixels are sampled at their centres. Between grid points the four
-//!   surrounding tables are blended bilinearly; outside the grid the edge tables repeat.
-//! - The table input is the dot product of (R, G, B, min, max) with the tag's five weights,
-//!   clamped to 0..=1. Version 2 then raises it to the tag's `Gamma`. The table is read at
-//!   index `input · MapPointsN` with linear interpolation, clamped to the last entry. The gain
-//!   multiplies R, G and B, and values above 1 are kept.
-//! - It is applied in linear ProPhoto (RIMM) RGB, D50, after `BaselineExposure` and before
-//!   `ProfileToneCurve` (see [`crate::profile::ProfileTables`] for where it sits relative to the
-//!   hue/saturation map and the look table).
+//!   are relative to the active area (1.0 = the active area's height or width).
+//! - The table input is the dot product of (R, G, B, min, max) with the tag's five weights;
+//!   version 2 then raises it to the tag's `Gamma`.
 //! - Version 2 stores gains as u8 or u16 (mapped linearly onto `GainMin..=GainMax`), f16 or f32.
 //!   It takes precedence over version 1 when both are present.
 //!
-//! Multi-byte fields use the file's byte order. Malformed tags are ignored and the file renders
-//! without the map: a wrong size, zero or huge dimensions, non-finite or negative gains,
-//! non-positive spacing, or gamma outside 0.25..=4.
+//! Multi-byte fields use the file's byte order. Malformed tags are ignored: a wrong size, zero or
+//! huge dimensions, non-finite or negative gains, non-positive spacing, or gamma outside 0.25..=4.
 
-use crate::Rect;
 use lightcraft_tiff::ByteOrder;
 use serde::{Deserialize, Serialize};
 
@@ -139,91 +131,6 @@ impl GainTableMap {
         }
         (version2, out)
     }
-
-    /// The gain for linear RIMM `rgb` at relative active-area position `pos` (`[u, v]`: across,
-    /// down; see [`MapPlacement`]).
-    #[inline]
-    pub fn gain(&self, rgb: [f32; 3], pos: [f32; 2]) -> f32 {
-        let w = &self.weights;
-        let lo = rgb[0].min(rgb[1]).min(rgb[2]);
-        let hi = rgb[0].max(rgb[1]).max(rgb[2]);
-        let t = w[0] * rgb[0] + w[1] * rgb[1] + w[2] * rgb[2] + w[3] * lo + w[4] * hi;
-        // NaN-safe clamp to 0..=1
-        let mut t = if t > 0.0 { t.min(1.0) } else { 0.0 };
-        if self.gamma != 1.0 {
-            t = t.powf(self.gamma);
-        }
-        let last = self.points_n.saturating_sub(1);
-        let x = (t * self.points_n as f32).min(last as f32);
-        let i0 = (x as usize).min(last);
-        let (i1, fi) = ((i0 + 1).min(last), x - i0 as f32);
-        let row = axis(pos[1], self.origin_v, self.spacing_v, self.points_v);
-        let col = axis(pos[0], self.origin_h, self.spacing_h, self.points_h);
-        let n = self.points_n;
-        let table = |r: usize, c: usize| -> f32 {
-            let base = (r * self.points_h + c) * n;
-            let a = self.gains.get(base + i0).copied().unwrap_or(1.0);
-            let b = self.gains.get(base + i1).copied().unwrap_or(a);
-            a + (b - a) * fi
-        };
-        let top = lerp(table(row.0, col.0), table(row.0, col.1), col.2);
-        let bottom = if row.2 > 0.0 { lerp(table(row.1, col.0), table(row.1, col.1), col.2) } else { top };
-        lerp(top, bottom, row.2)
-    }
-}
-
-#[inline]
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t
-}
-
-/// Grid cell along one axis for relative position `p`: (lower index, upper index, fraction),
-/// clamped to the grid (edge replication).
-#[inline]
-fn axis(p: f32, origin: f64, spacing: f64, points: usize) -> (usize, usize, f32) {
-    let last = points.saturating_sub(1);
-    if last == 0 {
-        return (0, 0, 0.0);
-    }
-    let x = ((f64::from(p) - origin) / spacing) as f32;
-    let x = if x > 0.0 { x.min(last as f32) } else { 0.0 };
-    let i0 = (x as usize).min(last);
-    (i0, (i0 + 1).min(last), x - i0 as f32)
-}
-
-/// Where the pixels of a developed image sit on a gain table map. The developed image is the
-/// default crop of the active area, possibly binned. Positions are relative to the active area,
-/// at pixel centres.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct MapPlacement {
-    u0: f32,
-    du: f32,
-    v0: f32,
-    dv: f32,
-}
-
-impl MapPlacement {
-    /// For a `width × height` image of the default `crop` (relative to `active`). As in
-    /// [`crate::RawInfo::developed_size`], a degenerate crop means the whole active area.
-    pub fn new(active: Rect, crop: Rect, width: usize, height: usize) -> MapPlacement {
-        let (aw, ah) = (active.width.max(1), active.height.max(1));
-        let c = crop.clipped(aw, ah);
-        let c = if c.width > 1 && c.height > 1 { c } else { Rect::new(0, 0, aw, ah) };
-        let sx = c.width as f64 / width.max(1) as f64;
-        let sy = c.height as f64 / height.max(1) as f64;
-        MapPlacement {
-            u0: ((c.x as f64 + 0.5 * sx) / aw as f64) as f32,
-            du: (sx / aw as f64) as f32,
-            v0: ((c.y as f64 + 0.5 * sy) / ah as f64) as f32,
-            dv: (sy / ah as f64) as f32,
-        }
-    }
-
-    /// Relative active-area position (`[u, v]`) of the centre of pixel (`x`, `y`).
-    #[inline]
-    pub fn at(&self, x: usize, y: usize) -> [f32; 2] {
-        [self.u0 + x as f32 * self.du, self.v0 + y as f32 * self.dv]
-    }
 }
 
 #[cfg(test)]
@@ -274,48 +181,6 @@ mod tests {
     }
 
     #[test]
-    fn gain_interpolates_tables_and_positions() {
-        for order in [ByteOrder::Big, ByteOrder::Little] {
-            // grid points at u, v ∈ {0.25, 0.75}
-            let b = tag(order, [2, 2, 4], [0.5, 0.5], [0.25, 0.25], GREEN, None, &floats(order, &grid()));
-            let m = GainTableMap::parse(&b, order, false).unwrap();
-            let g = |green: f32, u: f32, v: f32| m.gain([0.3, green, 0.9], [u, v]);
-            // input 0.25 → index 1.0 exactly; at grid point (0, 0) the table is [1, 2, 3, 4]
-            assert_eq!(g(0.25, 0.25, 0.25), 2.0);
-            // input 0.3 → index 1.2: 2 + 0.2 · (3 − 2)
-            assert!((g(0.3, 0.25, 0.25) - 2.2).abs() < 1e-5);
-            // input 1 → index 4, clamped to the last entry
-            assert_eq!(g(1.0, 0.25, 0.25), 4.0);
-            assert_eq!(g(7.0, 0.25, 0.25), 4.0, "input clamps to 1");
-            assert_eq!(g(-1.0, 0.25, 0.25), 1.0, "input clamps to 0");
-            assert_eq!(g(f32::NAN, 0.25, 0.25), 1.0);
-            // other grid points: table (0, 1) has base 2, (1, 0) base 3, (1, 1) base 4
-            assert_eq!(g(0.25, 0.75, 0.25), 4.0);
-            assert_eq!(g(0.25, 0.25, 0.75), 6.0);
-            assert_eq!(g(0.25, 0.75, 0.75), 8.0);
-            // bilinear between the four: centre = mean of bases 1..4 = 2.5 → 2.5 · 2
-            assert!((g(0.25, 0.5, 0.5) - 5.0).abs() < 1e-5);
-            // a quarter of the way across the top row: base 1.25
-            assert!((g(0.25, 0.375, 0.25) - 2.5).abs() < 1e-5);
-            // outside the grid the edge tables repeat
-            assert_eq!(g(0.25, 0.0, 0.0), 2.0);
-            assert_eq!(g(0.25, 1.0, 0.0), 4.0);
-            assert_eq!(g(0.25, 1.0, 1.0), 8.0);
-            assert!((g(0.25, 0.5, -3.0) - 3.0).abs() < 1e-5, "top edge, half-way across");
-        }
-    }
-
-    #[test]
-    fn input_weights_use_min_and_max() {
-        let order = ByteOrder::Big;
-        // one table, N = 2: gain 1 at input 0 and 3 at input 0.5 (index 1), clamped beyond
-        let b = tag(order, [1, 1, 2], [1.0, 1.0], [0.0, 0.0], [0.0, 0.0, 0.0, 0.5, 0.5], None, &floats(order, &[1.0, 3.0]));
-        let m = GainTableMap::parse(&b, order, false).unwrap();
-        // (min + max) / 2 of (0.1, 0.5, 0.3) = 0.3 → index 0.6 → 1 + 0.6 · 2
-        assert!((m.gain([0.1, 0.5, 0.3], [0.5, 0.5]) - 2.2).abs() < 1e-5);
-    }
-
-    #[test]
     fn version_2_storage_types_and_gamma() {
         let order = ByteOrder::Little;
         let v2 = |dt: u32, gamma: f32, data: &[u8]| {
@@ -331,9 +196,9 @@ mod tests {
         // f16 ignores GainMin/GainMax: 1.0, 2.0, 0.5, 0
         let m = v2(2, 1.0, &[0x00, 0x3c, 0x00, 0x40, 0x00, 0x38, 0, 0]).unwrap();
         assert_eq!(m.gains, vec![1.0, 2.0, 0.5, 0.0]);
-        // f32 with gamma 2: input 0.5 → 0.25 → index 1
+        // f32 with gamma 2
         let m = v2(3, 2.0, &floats(order, &[1.0, 2.0, 3.0, 4.0])).unwrap();
-        assert_eq!(m.gain([0.0, 0.5, 0.0], [0.5, 0.5]), 2.0);
+        assert_eq!((m.gains.clone(), m.gamma), (vec![1.0, 2.0, 3.0, 4.0], 2.0));
         // unknown data type, gamma out of range, size for another type: ignored
         assert!(v2(4, 1.0, &[0; 4]).is_none());
         assert!(v2(0, 0.1, &[0; 4]).is_none());
@@ -399,20 +264,5 @@ mod tests {
             assert!(v2);
             assert_eq!(GainTableMap::parse(&b, order, true).unwrap(), g);
         }
-    }
-
-    #[test]
-    fn placement_is_pixel_centred_in_the_active_area() {
-        // 4000 × 3000 active area, full-size image of a 3000 × 2000 crop at (500, 400)
-        let p = MapPlacement::new(Rect::new(8, 10, 4000, 3000), Rect::new(500, 400, 3000, 2000), 3000, 2000);
-        let close = |a: [f32; 2], b: [f64; 2]| (a[0] as f64 - b[0]).abs() < 1e-6 && (a[1] as f64 - b[1]).abs() < 1e-6;
-        assert!(close(p.at(0, 0), [500.5 / 4000.0, 400.5 / 3000.0]));
-        assert!(close(p.at(2999, 1999), [3499.5 / 4000.0, 2399.5 / 3000.0]));
-        // the same crop binned 4× covers the same area with 4-pixel steps
-        let b = MapPlacement::new(Rect::new(8, 10, 4000, 3000), Rect::new(500, 400, 3000, 2000), 750, 500);
-        assert!(close(b.at(0, 0), [502.0 / 4000.0, 402.0 / 3000.0]));
-        // no default crop: the whole active area
-        let f = MapPlacement::new(Rect::new(0, 0, 4000, 3000), Rect::default(), 4000, 3000);
-        assert!(close(f.at(3999, 2999), [3999.5 / 4000.0, 2999.5 / 3000.0]));
     }
 }

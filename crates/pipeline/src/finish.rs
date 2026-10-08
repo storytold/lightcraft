@@ -3,20 +3,22 @@
 //! **Tone curves** (parametric + master + red/green/blue point curves, Refine Saturation) run in
 //! one fixed curve space, whatever the output space: linear Rec.2020 → linear ProPhoto (ROMM)
 //! primaries, Bradford-adapted to D50 like every D50 target here, encoded with the sRGB transfer
-//! curve (the "Melissa RGB" convention Lightroom shows its RGB readouts in; that its curves run
-//! there too is our inference). Only the 0..1 part of each channel goes through the curve tables:
-//! the part outside (a channel above white, or a negative channel of a colour outside ProPhoto) is
-//! carried past the curve unchanged, then the output's gamut mapping handles it. So a preset looks
-//! the same exported to sRGB, Display P3, Adobe RGB or ProPhoto, up to that final gamut mapping.
+//! curve (the "Melissa RGB" convention Lightroom shows its RGB readouts in; Lightroom Classic's
+//! red / green / blue curves on a grey ramp pass within 0.3/255 of their points in this
+//! encoding). The parametric ∘ master curve is hue-preserving ([`apply_curves`]), as Lightroom's
+//! is; the channel curves act per channel. Only the 0..1 part of each channel goes through the
+//! curve tables: the part outside (a channel above white, or a negative channel of a colour
+//! outside ProPhoto) is carried past the curve unchanged, then the output's gamut mapping handles
+//! it. So a preset looks the same exported to sRGB, Display P3, Adobe RGB or ProPhoto, up to that
+//! final gamut mapping.
 //!
-//! **Sharpening** is an unsharp mask on log luminance: the detail is the difference to a Gaussian
-//! blur of σ = Radius source pixels ([`crate::local::sharpen_blur`]), scaled by Amount / 100 ×
-//! the DNG `BaselineSharpness`. Detail (0..100) suppresses halos and fine texture at low values:
-//! the detail term is soft-limited to ±(0.15 + 0.65·Detail/100) EV (overshoot at strong edges),
-//! and detail smaller than 0.06·(1 − Detail/100) EV (fine texture, noise) is faded out. Masking
-//! keeps only edges whose detail exceeds its threshold.
+//! **Sharpening** acts on the finished image, as Lightroom's does (after the tone curves: under a
+//! flat or a steep master curve Lightroom's sharpening follows the same law on its output, not on
+//! its input). See [`Sharpen`]: the per-pixel stage runs in two passes when it is on — the colour
+//! of every pixel, then a Gaussian blur of their display-linear luminance (σ from Amount, Radius
+//! and Detail, in source pixels) and a luminance gain from each pixel's ratio to that blur.
 
-use lightcraft_color::spline::{Lut1, MonotoneCurve};
+use lightcraft_color::spline::{Lut1, PointCurve};
 use lightcraft_color::transfer::{linear_to_srgb, srgb_to_linear};
 use lightcraft_color::{PROPHOTO, REC2020, luminance_2020};
 use lightcraft_develop::{DevelopSettings, LocalAdjustments, ToneCurve, VignetteStyle};
@@ -36,8 +38,50 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Parametric region curve (encoded domain) composed with the master point curve.
-fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
+/// Parametric curve regions as Lightroom shapes them, fitted to Lightroom Classic 15.6 renders of a
+/// grey ramp (each region at ±30 / ±60 with the default splits and at ±60 with splits 13 / 62 / 76,
+/// and a preset's four regions together; grey curve within 1.3/255 for that preset, single regions
+/// mostly within 1–3/255). Each region moves the encoded value by `±A · |amount/100|^η · bump`, a
+/// smooth peak of height 1 over its span ([`param_geometry`]); the regions apply one after the other
+/// (Lights, Shadows, Highlights, then Darks), each on the previous result, which is how Lightroom
+/// combines them (adding them overshoots in the highlights). Per region (Shadows, Darks, Lights,
+/// Highlights) and sign (`[positive, negative]`): (A, sharpness, η).
+const PARAM_BUMP: [[(f32, f32, f32); 2]; 4] = [
+    [(0.1034, 0.6642, 1.3277), (0.1002, 0.7514, 0.7513)],
+    [(0.2099, 0.9492, 1.0966), (0.2774, 0.856, 1.0663)],
+    [(0.2307, 2.9818, 0.8182), (0.2038, 2.8146, 0.9803)],
+    [(0.1337, 1.9981, 0.9593), (0.1204, 1.8523, 1.0215)],
+];
+/// The regions' spans from the splits (see [`param_geometry`]).
+const PARAM_GEOM: [f32; 8] = [0.6174, 0.0017, 0.0199, 0.6383, 0.6208, 0.0, 0.1852, 0.3864];
+/// The order Lightroom applies the regions in (indices into [`PARAM_BUMP`]).
+const PARAM_ORDER: [usize; 4] = [2, 0, 3, 1];
+
+/// Each region's (start, peak, end) from the shadows / midtones / highlights splits: Shadows over
+/// 0..midtones split, Darks from 0 to past the highlights split, Lights from near 0 to 1,
+/// Highlights over midtones split..1; the peaks are blends of the splits.
+fn param_geometry(s1: f32, s2: f32, s3: f32) -> [(f32, f32, f32); 4] {
+    let g = PARAM_GEOM;
+    [
+        (0.0, g[0] * s1 + g[1] * s2, s2),
+        (0.0, g[2] * s1 + g[3] * s2, s3 + g[4] * (1.0 - s3)),
+        (g[5] * s1, g[6] * s2 + (1.0 - g[6]) * s3, 1.0),
+        (s2, s3 + g[7] * (1.0 - s3), 1.0),
+    ]
+}
+
+/// A peak of height 1 at `c` over `l..r` (0 outside), of sharpness `p`.
+fn param_bump(x: f32, (l, c, r): (f32, f32, f32), p: f32) -> f32 {
+    let span = (r - l).max(1e-6);
+    let t = ((x - l) / span).clamp(0.0, 1.0);
+    let tc = ((c - l) / span).clamp(1e-3, 1.0 - 1e-3);
+    let q = p * (1.0 - tc) / tc;
+    (t / tc).powf(p) * ((1.0 - t) / (1.0 - tc)).powf(q)
+}
+
+/// Tone curve tables on curve-space encoded values: `[0]` the parametric region curve composed
+/// with the master point curve, `[1..4]` the red / green / blue point curves (identity if unset).
+fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 4]> {
     let parametric = c.highlights != 0.0 || c.lights != 0.0 || c.darks != 0.0 || c.shadows != 0.0;
     let master = !ToneCurve::point_curve_is_identity(&c.master);
     let chans = [&c.red, &c.green, &c.blue].map(|p| !ToneCurve::point_curve_is_identity(p));
@@ -46,19 +90,19 @@ fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     }
     const N: usize = 1024;
     let (s1, s2, s3) = ((c.split_shadows / 100.0) as f32, (c.split_mid / 100.0) as f32, (c.split_highlights / 100.0) as f32);
-    let regions = [(0.0, s1, c.shadows), (s1, s2, c.darks), (s2, s3, c.lights), (s3, 1.0, c.highlights)];
+    let geometry = param_geometry(s1, s2, s3);
+    let amounts = [c.shadows, c.darks, c.lights, c.highlights].map(|a| (a.clamp(-100.0, 100.0) / 100.0) as f32);
     let mut base = Lut1::from_fn(N, |x| {
-        let mut d = 0.0;
-        for (a, b, amt) in regions {
-            if amt == 0.0 {
+        let mut y = x;
+        for i in PARAM_ORDER {
+            let a = amounts[i];
+            if a == 0.0 {
                 continue;
             }
-            let (ctr, half) = ((a + b) / 2.0, (b - a) * 0.75 + 0.05);
-            let t = ((x - ctr) / half).clamp(-1.0, 1.0);
-            let win = 0.5 + 0.5 * (t * std::f32::consts::PI).cos();
-            d += (amt / 100.0) as f32 * 0.22 * win;
+            let (amp, p, eta) = PARAM_BUMP[i][usize::from(a < 0.0)];
+            y = (y + a.signum() * amp * a.abs().powf(eta) * param_bump(y, geometry[i], p)).clamp(0.0, 1.0);
         }
-        (x + d * 4.0 * x * (1.0 - x)).clamp(0.0, 1.0)
+        y
     });
     // keep monotone
     for i in 1..N {
@@ -66,16 +110,26 @@ fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     }
     let to_pts = |p: &[Point]| p.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>();
     if master {
-        base = MonotoneCurve::new(&to_pts(&c.master)).to_lut(N).compose(&base);
+        base = PointCurve::new(&to_pts(&c.master)).to_lut(N).compose(&base);
     }
     let per = [&c.red, &c.green, &c.blue];
-    Some(std::array::from_fn(|i| if chans[i] { MonotoneCurve::new(&to_pts(per[i])).to_lut(N).compose(&base) } else { base.clone() }))
+    let chan = |i: usize| if chans[i] { PointCurve::new(&to_pts(per[i])).to_lut(N) } else { Lut1::from_fn(N, |x| x) };
+    Some([base, chan(0), chan(1), chan(2)])
 }
+
+/// Post-crop vignette strength, fitted to Lightroom Classic renders (Apple ProRAW at ±50): Highlight
+/// and Colour Priority are an exposure change before the tone map (so the tone curve's toe darkens
+/// shadows more than highlights, as in Lightroom), `exp(k · amount · falloff)`. k for darkening in
+/// Highlight Priority, darkening in Colour Priority, and lightening. Mean ΔE00 vs Lightroom at −50:
+/// 1.67 / 1.71; lightening (+50) stays far off (6.1: Lightroom's has another shape).
+pub const VIG_STRENGTH: [f32; 3] = [4.0, 4.5, 1.5];
 
 /// Vignette (post-crop) parameters.
 #[derive(Clone, Copy, Debug)]
 pub struct Vig {
     pub amount: f32,
+    /// ln exposure gain at full falloff (Highlight / Colour Priority; see [`VIG_STRENGTH`]).
+    pub strength: f32,
     pub start: f32,
     pub width: f32,
     pub aspect_mix: f32,
@@ -84,14 +138,38 @@ pub struct Vig {
     pub style: VignetteStyle,
 }
 
+impl Vig {
+    /// 0 inside the vignette, rising to 1 towards the corners of a `w` × `h` frame at pixel (x, y).
+    #[inline]
+    pub fn falloff(&self, x: usize, y: usize, w: usize, h: usize) -> f32 {
+        let aspect = w as f32 / h as f32;
+        let u = (x as f32 + 0.5) / w as f32 * 2.0 - 1.0;
+        let vv = (y as f32 + 0.5) / h as f32 * 2.0 - 1.0;
+        let sx = 1.0 + (aspect - 1.0) * self.aspect_mix;
+        let sy = 1.0 + (1.0 / aspect - 1.0) * self.aspect_mix;
+        let (ax, ay) = ((u * sx.max(1.0) / sx.max(sy)).abs(), (vv * sy.max(1.0) / sx.max(sy)).abs());
+        let dist = (ax.powf(self.power) + ay.powf(self.power)).powf(1.0 / self.power);
+        smooth(self.start, self.start + self.width, dist)
+    }
+}
+
 fn vignette(s: &DevelopSettings) -> Option<Vig> {
     let v = &s.vignette;
     (v.amount != 0.0).then(|| {
         let r = (v.roundness / 100.0) as f32;
+        let amount = (v.amount / 100.0) as f32;
+        let k = match v.style {
+            _ if amount > 0.0 => VIG_STRENGTH[2],
+            VignetteStyle::ColorPriority => VIG_STRENGTH[1],
+            _ => VIG_STRENGTH[0],
+        };
         Vig {
-            amount: (v.amount / 100.0) as f32,
-            start: 0.15 + (v.midpoint / 100.0) as f32 * 0.95,
-            width: 0.05 + (v.feather / 100.0) as f32 * 1.1,
+            amount,
+            strength: k * amount,
+            // Midpoint / Feather 50: the falloff Lightroom's renders fit (from half the way out
+            // to the corners, over the whole remaining distance)
+            start: 0.025 + (v.midpoint / 100.0) as f32 * 0.95,
+            width: 0.05 + (v.feather / 100.0) as f32 * 1.9,
             aspect_mix: ((r + 1.0) / 2.0).clamp(0.0, 1.0),
             power: if r >= 0.0 { 2.0 } else { 2.0 + (-r) * 6.0 },
             highlights: (v.highlights / 100.0) as f32,
@@ -173,9 +251,9 @@ pub struct FinishParams {
     /// Calibration: primaries matrix (row-major, linear Rec.2020) and shadows tint (−1..1).
     pub calib: Option<[[f32; 3]; 3]>,
     pub shadow_tint: f32,
-    /// Tone curves (parametric ∘ point, per channel) on curve-space encoded values, 1024 entries
-    /// each (see the module docs).
-    pub curves: Option<[Lut1; 3]>,
+    /// Tone curves on curve-space encoded values, 1024 entries each: parametric ∘ master, then
+    /// red / green / blue (see [`apply_curves`] and the module docs).
+    pub curves: Option<[Lut1; 4]>,
     /// Linear Rec.2020 → linear curve space, its inverse, and the curve space's luminance weights.
     pub curve_in: [[f32; 3]; 3],
     pub curve_out: [[f32; 3]; 3],
@@ -190,18 +268,19 @@ pub struct FinishParams {
     pub out_trc: OutputTrc,
     /// Soft proofing (CPU only; the GPU path declines proof renders).
     pub proof: Option<crate::output::ProofParams>,
+    /// Global Highlights / Shadows (−1..1) of the scene-linear local tone step; 0 when they run
+    /// as Lightroom applies them instead (`lr_hs`).
     pub hl: f32,
     pub sh: f32,
+    /// Highlights / Shadows after the tone map, as Lightroom applies them on a source with a DNG
+    /// profile tone curve ([`crate::tone::LrHs`]); the base plane is then the neighbourhood blur
+    /// ([`crate::tone::LR_CONTEXT_SIGMA`]).
+    pub lr_hs: Option<crate::tone::LrHs>,
     pub clar: f32,
     pub tex: f32,
     pub dehaze: f32,
-    /// Sharpening: global gain (Amount / 100 × BaselineSharpness), gain per unit of local
-    /// Sharpness, Masking (0..1), halo limit (EV) and fine-detail threshold (EV), see [`sharpen_term`].
-    pub sharpen: f32,
-    pub sharpen_local: f32,
-    pub sharpen_mask: f32,
-    pub sharpen_halo: f32,
-    pub sharpen_fine: f32,
+    /// Sharpening on the finished image ([`Sharpen`]).
+    pub sharpen: Option<Sharpen>,
     /// Airlight after and before exposure, exposure gain and EV (see [`crate::Prepared`]).
     pub air: f32,
     pub air_pre: f32,
@@ -227,7 +306,8 @@ pub fn curve_space() -> ([[f32; 3]; 3], [[f32; 3]; 3], [f32; 3]) {
 }
 
 impl FinishParams {
-    /// Parameters for a `w × h` render into `space`; `ev`/`air_pre` as in [`crate::Prepared`].
+    /// Parameters for a `w × h` render into `space`; `ev`/`air_pre` as in [`crate::Prepared`];
+    /// `px_per_src`: output px per source px ([`crate::Plan::px_per_src`]).
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         s: &DevelopSettings,
@@ -236,6 +316,7 @@ impl FinishParams {
         w: usize,
         h: usize,
         px_per_long: f64,
+        px_per_src: f64,
         air_pre: f32,
         space: OutputSpace,
     ) -> FinishParams {
@@ -253,18 +334,20 @@ impl FinishParams {
         });
         let calibration = s.section_enabled("calibration");
         let (curve_in, curve_out, curve_luma) = curve_space();
-        let bs = if info.baseline_sharpness.is_finite() { info.baseline_sharpness.clamp(0.0, 4.0) } else { 1.0 };
-        let detail = (s.detail.sharpen_detail / 100.0).clamp(0.0, 1.0) as f32;
+        let lr_tone = lr_tone(info);
+        let lr_hs = if lr_tone { crate::tone::LrHs::new(s.light.highlights, s.light.shadows) } else { None };
+        let tone = if let Some(curve) = info.camera_tone.as_ref().filter(|_| info.raw) {
+            // Highlights / Shadows run before Contrast, as in Lightroom
+            ToneMap::camera_split(curve, s.light.exposure, s.light.contrast, s.light.whites, s.light.blacks, lr_hs.is_some())
+        } else if info.raw {
+            ToneMap::new(s.light.contrast, s.light.whites, s.light.blacks)
+        } else {
+            ToneMap::display(s.light.contrast, s.light.whites, s.light.blacks)
+        };
         FinishParams {
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
-            tone: if let Some(curve) = info.camera_tone.as_ref().filter(|_| info.raw) {
-                ToneMap::camera(curve, s.light.contrast, s.light.whites, s.light.blacks)
-            } else if info.raw {
-                ToneMap::new(s.light.contrast, s.light.whites, s.light.blacks)
-            } else {
-                ToneMap::display(s.light.contrast, s.light.whites, s.light.blacks)
-            },
+            tone,
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
             ops: ColorOps::new(s),
             curves: curve_luts(&s.curve),
@@ -277,16 +360,13 @@ impl FinishParams {
             out_luma: space.luma(),
             out_trc: space.trc(),
             proof: None,
-            hl: (s.light.highlights / 100.0) as f32,
-            sh: (s.light.shadows / 100.0) as f32,
+            hl: if lr_tone { 0.0 } else { (s.light.highlights / 100.0) as f32 },
+            sh: if lr_tone { 0.0 } else { (s.light.shadows / 100.0) as f32 },
+            lr_hs,
             clar,
             tex,
             dehaze,
-            sharpen: (s.detail.sharpen_amount / 100.0) as f32 * bs,
-            sharpen_local: 0.9 * bs,
-            sharpen_mask: (s.detail.sharpen_masking / 100.0) as f32,
-            sharpen_halo: 0.15 + 0.65 * detail,
-            sharpen_fine: 0.06 * (1.0 - detail),
+            sharpen: Sharpen::new(s, info.baseline_sharpness, px_per_src),
             air: air_pre * gain,
             air_pre,
             gain,
@@ -302,9 +382,16 @@ impl FinishParams {
     }
 }
 
+/// Whether the source's tone runs as Lightroom's on a DNG profile tone curve (its base operator,
+/// Contrast / Blacks / Whites in the tone map, Highlights / Shadows after it; see [`crate::tone`]
+/// and [`crate::tone::LrHs`]).
+pub fn lr_tone(info: &SourceInfo) -> bool {
+    info.raw && info.camera_tone.is_some_and(|c| c.is_per_channel())
+}
+
 pub(crate) fn finish(p: &Prepared, s: &DevelopSettings, frame: &Frame, info: &SourceInfo, space: OutputSpace, proof: Option<crate::Proof>) -> Rgba8 {
     let (w, h) = (p.img.width, p.img.height);
-    let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, space);
+    let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.px_per_src, p.air, space);
     fp.proof = proof.map(|pr| pr.params(space));
     let trc = fp.out_trc;
     let data = finish_with(p, &fp, false, |e| match trc {
@@ -330,7 +417,7 @@ pub(crate) fn finish_deep(
 ) -> DeepImage {
     use lightcraft_color::transfer::srgb_to_linear;
     let (w, h) = (p.img.width, p.img.height);
-    let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, space);
+    let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.px_per_src, p.air, space);
     fp.proof = proof.map(|pr| pr.params(space));
     let trc = fp.out_trc;
     let samples = match depth {
@@ -361,39 +448,17 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 ) -> Vec<T> {
     let (w, h) = (p.img.width, p.img.height);
     let p_lut = fp.lut.clone();
-    let FinishParams {
-        tone,
-        ops,
-        curves,
-        vig,
-        to_out,
-        out_luma,
-        hl,
-        sh,
-        clar,
-        tex,
-        dehaze,
-        sharpen,
-        sharpen_mask,
-        air,
-        air_pre,
-        gain,
-        ev,
-        grain,
-        ..
-    } = fp;
-    let (hl, sh, clar, tex, dehaze, sharpen, sharpen_mask, air, air_pre, gain, ev) =
-        (*hl, *sh, *clar, *tex, *dehaze, *sharpen, *sharpen_mask, *air, *air_pre, *gain, *ev);
+    let FinishParams { tone, ops, curves, vig, to_out, out_luma, hl, sh, clar, tex, dehaze, air, air_pre, gain, ev, grain, .. } = fp;
+    let (hl, sh, clar, tex, dehaze, air, air_pre, gain, ev) = (*hl, *sh, *clar, *tex, *dehaze, *air, *air_pre, *gain, *ev);
     let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
     let out_to_norm = fp.out_to_norm;
     let long = fp.ow.max(fp.oh);
-    let aspect = w as f32 / h as f32;
 
     let srgb = srgb_lut();
     let enc_lut = (!exact).then_some(srgb);
-    let mut out = vec![T::default(); w * h];
-    for_rows(&mut out, w, |y, row| {
-        for (x, px) in row.iter_mut().enumerate() {
+    // a pixel's finished colour (display-linear Rec.2020, graded) and its local Sharpness
+    let colour = |x: usize, y: usize| -> ([f32; 3], f32) {
+        {
             let i = y * w + x;
             let raw = p.img.data[i];
             let mut c = if gain == 1.0 { raw } else { raw.map(|v| v * gain) };
@@ -501,12 +566,6 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 let tame = 1.0 - 0.6 * smooth(0.4, 1.6, det.abs());
                 delta += tx * 1.1 * det.clamp(-1.0, 1.0) * tame;
             }
-            let sp = l_sharp * fp.sharpen_local + sharpen;
-            if sp != 0.0
-                && let Some(b) = &p.sharpen_blur
-            {
-                delta += sp * sharpen_term(l_pre - b.data[i], sharpen_mask, fp.sharpen_halo, fp.sharpen_fine);
-            }
             // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
             if l_noise != 0.0
                 && let Some(b) = &p.texture_blur
@@ -519,15 +578,39 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 c = c.map(|v| v * g);
             }
 
+            // --- post-crop vignette, Highlight / Colour Priority: an exposure change before the
+            // tone map (see [`VIG_STRENGTH`]); Highlights spares the bright parts of a darkening one
+            if let Some(v) = vig
+                && v.style != VignetteStyle::PaintOverlay
+            {
+                let t = v.falloff(x, y, w, h);
+                if t > 0.0 {
+                    let mut e = v.strength * t;
+                    if e < 0.0 && v.style == VignetteStyle::HighlightPriority && v.highlights > 0.0 {
+                        e *= 1.0 - v.highlights * smooth(0.4, 1.0, tone.apply(luminance_2020(c)).clamp(0.0, 1.0));
+                    }
+                    let g = e.exp();
+                    c = c.map(|q| q * g);
+                }
+            }
+
             // --- calibration (scene linear, before the tone map)
             if fp.calib.is_some() || fp.shadow_tint != 0.0 {
                 c = crate::colorops::calibrate(c, fp.calib.as_ref(), fp.shadow_tint);
             }
 
             // --- tone map: on luminance with highlight desaturation, or (a DNG profile tone
-            // curve) per channel, hue-preserving
+            // curve) per channel, hue-preserving. Highlights / Shadows as Lightroom applies them
+            // on a DNG profile tone curve: a luminance gain from the pixel's and its
+            // neighbourhood's display luminance, before Whites / Blacks (inside the map when
+            // those are set) and Contrast (Lightroom's order)
+            let hs = fp.lr_hs.as_ref().map(|lr| (lr, tone.apply_context(crate::tone::GREY * base.exp2()).max(1e-6).log2()));
+            let inside = hs.is_some() && tone.hs_inside();
             let mut d = if tone.per_channel() {
-                tone.apply_rgb(c)
+                match hs.filter(|_| inside) {
+                    Some((lr, ctx)) => tone.apply_rgb_hs(c, |y| lr.gain(y.max(1e-6).log2(), ctx)),
+                    None => tone.apply_rgb(c),
+                }
             } else {
                 let yl = luminance_2020(c);
                 let o = tone.apply(yl);
@@ -539,46 +622,49 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 }
                 d
             };
+            if let Some((lr, ctx)) = hs {
+                if !inside {
+                    let k = lr.gain(luminance_2020(d).max(1e-6).log2(), ctx);
+                    if k != 0.0 {
+                        let g = k.exp2();
+                        d = d.map(|v| v * g);
+                    }
+                }
+                d = tone.apply_contrast_rgb(d);
+            }
 
-            // --- colour
+            // --- colour (grading follows the tone curves, below)
             d = ops.apply(d, l_sat, l_hue);
             if let Some((dir, amt)) = tint_col {
                 let lab = lightcraft_color::perceptual::oklab_from_2020(d);
                 d = lightcraft_color::perceptual::oklab_to_2020([lab[0], lab[1] + dir[0] * 0.08 * amt, lab[2] + dir[1] * 0.08 * amt]);
             }
 
-            // --- vignette (display linear, post-crop)
-            if let Some(v) = vig {
-                let u = (x as f32 + 0.5) / w as f32 * 2.0 - 1.0;
-                let vv = (y as f32 + 0.5) / h as f32 * 2.0 - 1.0;
-                let sx = 1.0 + (aspect - 1.0) * v.aspect_mix;
-                let sy = 1.0 + (1.0 / aspect - 1.0) * v.aspect_mix;
-                let (ax, ay) = ((u * sx.max(1.0) / sx.max(sy)).abs(), (vv * sy.max(1.0) / sx.max(sy)).abs());
-                let dist = (ax.powf(v.power) + ay.powf(v.power)).powf(1.0 / v.power);
-                let t = smooth(v.start, v.start + v.width, dist);
+            // --- Paint Overlay vignette (display linear, post-crop): towards black or white
+            if let Some(v) = vig
+                && v.style == VignetteStyle::PaintOverlay
+            {
+                let t = v.falloff(x, y, w, h);
                 if t > 0.0 {
-                    let lum = luminance_2020(d).clamp(0.0, 1.0);
                     if v.amount < 0.0 {
-                        let mut f = 1.0 + v.amount * t;
-                        if v.style == VignetteStyle::HighlightPriority {
-                            f += (1.0 - f) * v.highlights * smooth(0.4, 1.0, lum);
-                        }
-                        if v.style == VignetteStyle::PaintOverlay {
-                            d = d.map(|c| c * (1.0 - (-v.amount) * t) + 0.0);
-                        } else {
-                            d = d.map(|c| c * f);
-                        }
+                        d = d.map(|c| c * (1.0 + v.amount * t));
                     } else {
                         d = d.map(|c| c + (1.0 - c) * v.amount * t * 0.85);
                     }
                 }
             }
 
-            // --- tone curves, in the fixed curve space (see the module docs)
+            // --- tone curves, in the fixed curve space (see the module docs), then colour grading
             if let Some(l) = curves {
                 d = apply_curves(d, l, fp, enc_lut);
             }
-
+            d = ops.grade(d);
+            (d, l_sharp)
+        }
+    };
+    // gamut map, encode, grain, LUT profile
+    let emit = |d: [f32; 3], x: usize, y: usize| -> T {
+        {
             // --- gamut map to the output space (desaturate towards luminance until in range);
             // soft proofing maps into the proof space first and shows that in the output space
             let mut warn = None;
@@ -618,7 +704,41 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 }
                 None => e,
             };
-            *px = store(warn.unwrap_or(e));
+            store(warn.unwrap_or(e))
+        }
+    };
+    let mut out = vec![T::default(); w * h];
+    let Some(shp) = &fp.sharpen else {
+        for_rows(&mut out, w, |y, row| {
+            for (x, px) in row.iter_mut().enumerate() {
+                *px = emit(colour(x, y).0, x, y);
+            }
+        });
+        return out;
+    };
+    // sharpening: every pixel's colour, then the blur of their luminance, then the gain
+    let mut mid = vec![([0.0f32; 3], 0.0f32); w * h];
+    for_rows(&mut mid, w, |y, row| {
+        for (x, px) in row.iter_mut().enumerate() {
+            *px = colour(x, y);
+        }
+    });
+    let lum = lightcraft_raster::Plane { width: w, height: h, data: mid.iter().map(|(d, _)| luminance_2020(*d).max(0.0)).collect() };
+    let blur = crate::local::sharpen_blur(&lum, shp.sigma);
+    let log_blur = |x: usize, y: usize| blur.data[y.min(h - 1) * w + x.min(w - 1)].max(1e-9).log2();
+    for_rows(&mut out, w, |y, row| {
+        for (x, px) in row.iter_mut().enumerate() {
+            let i = y * w + x;
+            let (d, local) = mid[i];
+            let grad = if shp.mask > 0.0 {
+                let gx = log_blur(x + 1, y) - log_blur(x.saturating_sub(1), y);
+                let gy = log_blur(x, y + 1) - log_blur(x, y.saturating_sub(1));
+                0.5 * gx.hypot(gy)
+            } else {
+                0.0
+            };
+            let g = shp.gain(lum.data[i], blur.data[i], local, grad);
+            *px = emit(if g == 1.0 { d } else { d.map(|v| v * g) }, x, y);
         }
     });
     out
@@ -671,32 +791,142 @@ pub fn defringe_weight(c: [f32; 3], det: f32) -> f32 {
     smooth(0.04, 0.3, det.abs()) * smooth(0.02, 0.2, purple).max(smooth(0.02, 0.2, green))
 }
 
-/// Sharpening's contribution (EV, per unit of gain) for log-luminance detail `det` (the pixel
-/// minus its unsharp-mask blur): `mask` = Masking (0..1), `halo` = soft limit (EV), `fine` =
-/// fine-detail threshold (EV; 0 = sharpen all detail). See the module docs.
-#[inline]
-pub fn sharpen_term(det: f32, mask: f32, halo: f32, fine: f32) -> f32 {
-    let a = det.abs();
-    let m = if mask > 0.0 { smooth(mask * 0.25, mask * 0.25 + 0.15, a) } else { 1.0 };
-    let f = if fine > 0.0 { smooth(0.0, fine, a) } else { 1.0 };
-    m * f * halo * (det / halo.max(1e-3)).clamp(-10.0, 10.0).tanh()
+// ---- Sharpening, fitted to Lightroom Classic 15.6 renders of an Apple ProRAW at full size: Amount
+// 10…150 at Radius 1.0, Radius 0.5…3 and Detail 0…100 at Amount 50, Amount 25…150 at Radius 1.4,
+// Masking 50 / 100 (mean ΔE00 to Lightroom's 0.05–0.6 up to Amount 100, unsharpened 0.09–1.97).
+
+/// Amount knots of the sharpening tables: the slider on a file with `BaselineSharpness`
+/// [`SHARPEN_BS_REF`] (other files scale the slider by their own BaselineSharpness / that).
+pub const SHARPEN_AMT: [f32; 8] = [0.0, 10.0, 25.0, 40.0, 50.0, 75.0, 98.0, 150.0];
+/// The `BaselineSharpness` of the file the tables were measured on.
+const SHARPEN_BS_REF: f32 = 1.5;
+/// Per amount knot at Radius 1.0, Detail 25: gain `k`, limit `L` (log2) and blur σ (source px).
+const SHARPEN_K: [f32; 8] = [0.0, 0.395, 1.374, 2.915, 4.491, 12.202, 28.011, 144.696];
+const SHARPEN_LIMIT: [f32; 8] = [0.16, 0.16, 0.34, 0.48, 0.556, 0.664, 0.636, 0.494];
+const SHARPEN_SIGMA: [f32; 8] = [1.143, 1.143, 0.971, 0.836, 0.754, 0.6, 0.53, 0.459];
+/// Radius knots, and (k, L, σ) at each relative to Radius 1.0, measured at Amount 50.
+const SHARPEN_RADII: [f32; 5] = [0.5, 1.0, 1.4, 2.0, 3.0];
+const SHARPEN_RADIUS_F: [[f32; 3]; 5] = [[2.972, 0.8, 0.561], [1.0, 1.0, 1.0], [0.75, 1.041, 1.39], [0.481, 1.003, 2.039], [0.27, 0.919, 3.294]];
+/// The Radius factors of k and σ act as these powers at each amount knot (Radius matters more for
+/// k as Amount grows: at Radius 1.4 k is 0.87× its Radius 1.0 value at Amount 25, 0.36× at 150).
+const SHARPEN_RADIUS_POW: [[f32; 2]; 8] = [[0.3, 0.65], [0.3, 0.65], [0.49, 0.774], [0.8, 0.91], [1.0, 1.0], [1.9, 1.1], [2.75, 1.19], [3.53, 1.216]];
+/// Detail knots, and (k, L, σ) at each relative to Detail 25, measured at Amount 50, Radius 1.4.
+const SHARPEN_DETAILS: [f32; 4] = [0.0, 25.0, 50.0, 100.0];
+const SHARPEN_DETAIL_F: [[f32; 3]; 4] = [[0.245, 0.46, 1.581], [1.0, 1.0, 1.0], [1.8, 1.18, 0.839], [3.474, 1.352, 0.724]];
+
+/// Piecewise-linear `ys` over ascending `xs` at `x`, clamped to the ends.
+fn interp<const N: usize>(xs: &[f32; N], ys: impl Fn(usize) -> f32, x: f32) -> f32 {
+    let i = xs.iter().rposition(|k| *k <= x).unwrap_or(0).min(N.saturating_sub(2));
+    let (x0, x1) = (xs[i], xs[(i + 1).min(N - 1)]);
+    let t = if x1 > x0 { ((x - x0) / (x1 - x0)).clamp(0.0, 1.0) } else { 0.0 };
+    ys(i) + (ys((i + 1).min(N - 1)) - ys(i)) * t
 }
 
-/// The tone curves on display-linear Rec.2020 `d`, in the curve space (see the module docs):
-/// encode the 0..1 part of each curve-space channel (`enc`: the table, else the exact curve),
-/// look it up, decode, add back the part outside 0..1, return to Rec.2020. Refine Saturation
-/// adjusts the curved colour's saturation and then restores the curve's (linear) luminance, so
-/// it changes colour, not tone.
+/// Lightroom's capture sharpening, on the finished image (after the tone curves and grading): a
+/// pixel's display-linear luminance `Y` and its Gaussian blur `B` give a log2 gain
+/// `L·tanh(k·(Y / B − 1) / L)` that scales the colour. Masking keeps it to edges: it fades in as
+/// the blur's log2 gradient (per source pixel) goes from `SHARPEN_MASK_AT·Masking` over
+/// `SHARPEN_MASK_WIDTH` (reached at Masking 25, from nothing at 0).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sharpen {
+    /// σ of the luminance blur, output px.
+    pub sigma: f32,
+    /// k and L at each [`SHARPEN_AMT`] knot, Radius and Detail applied.
+    pub k: [f32; 8],
+    pub limit: [f32; 8],
+    /// The amount (table units), and per unit of local Sharpness.
+    pub amount: f32,
+    pub local: f32,
+    /// Masking (0..1), and output px per source px (the mask's gradient is per source pixel).
+    pub mask: f32,
+    pub px_per_src: f32,
+}
+
+/// Masking: the log2 gradient (per source px) at which sharpening starts, per unit of Masking, and
+/// the width it fades in over (Masking 50 / 100 within ΔE00 0.18 / 0.10 of Lightroom; without the
+/// mask 0.53 / 0.63).
+pub const SHARPEN_MASK_AT: f32 = 0.0292;
+pub const SHARPEN_MASK_WIDTH: f32 = 0.4667;
+
+impl Sharpen {
+    /// Below this σ (output px) the luminance blur is the identity to < 0.1 %: no sharpening.
+    pub const MIN_SIGMA: f32 = crate::local::SHARPEN_MIN_SIGMA;
+
+    /// Sharpening for `s` on a file with `BaselineSharpness` `bs`, rendered at `px_per_src` output
+    /// px per source px; `None` when it does nothing.
+    pub fn new(s: &DevelopSettings, bs: f32, px_per_src: f64) -> Option<Sharpen> {
+        let scale = if bs.is_finite() { bs.clamp(0.0, 4.0) / SHARPEN_BS_REF } else { 1.0 / SHARPEN_BS_REF };
+        let amount = (s.detail.sharpen_amount as f32).clamp(0.0, 150.0) * scale;
+        let local = s.masks.iter().any(|m| m.adjust.sharpness != 0.0);
+        if amount <= 0.0 && !local {
+            return None;
+        }
+        let radius = if s.detail.sharpen_radius.is_finite() { (s.detail.sharpen_radius as f32).clamp(0.5, 3.0) } else { 1.0 };
+        let detail = if s.detail.sharpen_detail.is_finite() { (s.detail.sharpen_detail as f32).clamp(0.0, 100.0) } else { 25.0 };
+        // the factors' logs, linear between the radius knots
+        let rf = |j: usize| interp(&SHARPEN_RADII, |i| SHARPEN_RADIUS_F[i][j].ln(), radius);
+        let df = |j: usize| interp(&SHARPEN_DETAILS, |i| SHARPEN_DETAIL_F[i][j], detail);
+        let (rk, rl, rs) = (rf(0), rf(1), rf(2));
+        let k = std::array::from_fn(|i| SHARPEN_K[i] * (rk * SHARPEN_RADIUS_POW[i][0]).exp() * df(0));
+        let limit = std::array::from_fn(|i| SHARPEN_LIMIT[i] * rl.exp() * df(1));
+        // one blur for the image: the global amount's σ (a local-only sharpening: Amount 50's)
+        let a = if amount > 0.0 { amount.min(150.0) } else { 50.0 };
+        let sigma_src = interp(&SHARPEN_AMT, |i| SHARPEN_SIGMA[i] * (rs * SHARPEN_RADIUS_POW[i][1]).exp(), a) * df(2);
+        let sigma = sigma_src * px_per_src as f32;
+        (sigma >= Self::MIN_SIGMA && sigma.is_finite()).then_some(Sharpen {
+            sigma,
+            k,
+            limit,
+            amount,
+            // local Sharpness ±100 adds or takes ±90 (table units, scaled like the slider)
+            local: 90.0 * scale,
+            mask: (s.detail.sharpen_masking as f32 / 100.0).clamp(0.0, 1.0),
+            px_per_src: px_per_src as f32,
+        })
+    }
+
+    /// The gain for a pixel of luminance `y` whose blur is `blur`, with local Sharpness `local`
+    /// (−1..1) and the blur's log2 gradient `grad` (per output px; used by Masking).
+    #[inline]
+    pub fn gain(&self, y: f32, blur: f32, local: f32, grad: f32) -> f32 {
+        let a = self.amount + local * self.local;
+        if a == 0.0 || y.is_nan() || y <= 0.0 || blur.is_nan() || blur <= 0.0 {
+            return 1.0;
+        }
+        let at = a.abs().min(150.0);
+        let k = interp(&SHARPEN_AMT, |i| self.k[i], at) * a.signum();
+        let lim = interp(&SHARPEN_AMT, |i| self.limit[i], at).max(1e-3);
+        let mut m = lim * (k * (y / blur - 1.0) / lim).tanh();
+        if self.mask > 0.0 {
+            let e0 = SHARPEN_MASK_AT * self.mask;
+            let width = SHARPEN_MASK_WIDTH * (self.mask * 4.0).min(1.0);
+            m *= smooth(e0, e0 + width, grad * self.px_per_src.max(1e-6));
+        }
+        m.exp2()
+    }
+}
+
+/// The tone curves on display-linear Rec.2020 `d`, in the curve space (see the module docs), on
+/// the 0..1 part of each curve-space channel (`enc`: the encoding table, else the exact curve).
+/// The parametric ∘ master curve is hue-preserving, as Lightroom applies it: the largest and
+/// smallest channel go through it and the middle one keeps its relative position between them
+/// (linear). The red / green / blue curves then act per channel. The part outside 0..1 is added
+/// back and the result returned to Rec.2020. Refine Saturation adjusts the curved colour's
+/// saturation and then restores the curve's (linear) luminance, so it changes colour, not tone.
 #[inline]
-pub fn apply_curves(d: [f32; 3], l: &[Lut1; 3], fp: &FinishParams, enc: Option<&[f32; SRGB_LUT_N + 1]>) -> [f32; 3] {
+pub fn apply_curves(d: [f32; 3], l: &[Lut1; 4], fp: &FinishParams, enc: Option<&[f32; SRGB_LUT_N + 1]>) -> [f32; 3] {
     let q = mul3(&fp.curve_in, d);
     let qc = q.map(|v| v.clamp(0.0, 1.0));
-    let e0 = match enc {
-        Some(t) => qc.map(|v| encode_srgb(t, v)),
-        None => qc.map(linear_to_srgb),
+    let encode = |v: f32| match enc {
+        Some(t) => encode_srgb(t, v),
+        None => linear_to_srgb(v),
     };
-    let e = [l[0].eval(e0[0]), l[1].eval(e0[1]), l[2].eval(e0[2])];
     let dec = srgb_decode_lut();
+    let e0 = qc.map(encode);
+    let (mx, mn) = (qc[0].max(qc[1]).max(qc[2]), qc[0].min(qc[1]).min(qc[2]));
+    let (hi, lo) = (decode_srgb(dec, l[0].eval(encode(mx))), decode_srgb(dec, l[0].eval(encode(mn))));
+    let b = if mx - mn > 1e-9 { qc.map(|v| lo + (hi - lo) * (v - mn) / (mx - mn)) } else { [hi; 3] };
+    let e: [f32; 3] = std::array::from_fn(|k| l[k + 1].eval(encode(b[k])));
     let mut lin = e.map(|v| decode_srgb(dec, v));
     if fp.refine_sat < 1.0 {
         let y = |c: [f32; 3]| fp.curve_luma[0] * c[0] + fp.curve_luma[1] * c[1] + fp.curve_luma[2] * c[2];
@@ -798,19 +1028,31 @@ mod tests {
     }
 
     #[test]
-    fn sharpen_detail_limits_halos_and_spares_fine_texture() {
-        let (low, high) = ((0.15, 0.06), (0.8, 0.0)); // Detail 0 and 100: (halo, fine)
-        // a strong edge: limited overshoot at Detail 0, nearly linear at 100
-        let edge = 0.6;
-        assert!(sharpen_term(edge, 0.0, low.0, low.1) <= 0.15 + 1e-6);
-        assert!(sharpen_term(edge, 0.0, high.0, high.1) > 0.45);
-        // fine texture / noise: faded out at Detail 0, sharpened at 100
-        let fine = 0.008;
-        assert!(sharpen_term(fine, 0.0, low.0, low.1) < 0.1 * fine);
-        assert!((sharpen_term(fine, 0.0, high.0, high.1) - fine).abs() < 1e-4);
-        // symmetric (no brightness drift), and Masking keeps only edges
-        assert_eq!(sharpen_term(-edge, 0.0, low.0, low.1), -sharpen_term(edge, 0.0, low.0, low.1));
-        assert_eq!(sharpen_term(0.05, 1.0, high.0, high.1), 0.0);
+    fn sharpening_follows_lightroom_at_its_measured_settings() {
+        // Lightroom's defaults for the ProRAW (BaselineSharpness 1.5): Amount 50, Radius 1.4; its
+        // own fit there: k 3.37, L 0.584, σ 1.047 source px
+        let mut s = DevelopSettings::default();
+        s.detail.sharpen_amount = 50.0;
+        s.detail.sharpen_radius = 1.4;
+        let sh = Sharpen::new(&s, 1.5, 1.0).unwrap();
+        assert!((sh.sigma - 1.047).abs() < 0.01, "{}", sh.sigma);
+        let log_gain = |y: f32| sh.gain(y, 1.0, 0.0, 1.0).log2();
+        assert!((log_gain(1.001) / 0.001 - 3.37).abs() < 0.05, "{}", log_gain(1.001) / 0.001);
+        assert!((log_gain(3.0) - 0.584).abs() < 0.01 && (log_gain(0.2) + 0.584).abs() < 0.01);
+        // at half size the blur is half as wide (in output px)
+        assert!((Sharpen::new(&s, 1.5, 0.5).unwrap().sigma - sh.sigma / 2.0).abs() < 1e-4);
+        // the amount is relative to BaselineSharpness 1.5: Amount 75 on a file without it is the same
+        s.detail.sharpen_amount = 75.0;
+        let plain = Sharpen::new(&s, 1.0, 1.0).unwrap();
+        assert!((plain.sigma - sh.sigma).abs() < 1e-4 && (plain.amount - sh.amount).abs() < 1e-4, "{plain:?} vs {sh:?}");
+        // Masking spares flat areas, keeps edges
+        s.detail.sharpen_masking = 100.0;
+        let masked = Sharpen::new(&s, 1.0, 1.0).unwrap();
+        assert_eq!(masked.gain(1.1, 1.0, 0.0, 0.0), 1.0);
+        assert_eq!(masked.gain(1.1, 1.0, 0.0, 1.0), sh.gain(1.1, 1.0, 0.0, 1.0));
+        // nothing to do without an amount
+        s.detail.sharpen_amount = 0.0;
+        assert_eq!(Sharpen::new(&s, 1.5, 1.0), None);
     }
 
     #[test]

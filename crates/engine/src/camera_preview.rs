@@ -119,7 +119,7 @@ fn fit_pairs(sensor: &Rgb32f, reference: &Rgb32f) -> Option<CameraLook> {
     let tone_pairs: Vec<_> =
         pairs.iter().enumerate().filter(|(i, _)| i % 3 != 0).map(|(_, (x, y))| (luma(matrix.apply(*x).map(|v| v.max(0.0))), luma(*y))).collect();
     let curve = fit_tone(tone_pairs)?;
-    let tone = ToneMap::camera(&curve, 0.0, 0.0, 0.0);
+    let tone = ToneMap::camera(&curve, 0.0, 0.0, 0.0, 0.0);
     let original_tone = ToneMap::new(0.0, 0.0, 0.0);
     let mut before = 0.0;
     let mut after = 0.0;
@@ -186,7 +186,7 @@ fn fit_tone(mut pairs: Vec<(f64, f64)>) -> Option<CameraTone> {
         }
         i += n;
     }
-    CameraTone::new(knots)
+    CameraTone::new(&knots)
 }
 
 #[cfg(test)]
@@ -207,7 +207,7 @@ mod tests {
         let original = sensor.clone();
         let fit = fit_pairs(&sensor, &reference).unwrap();
         assert_eq!(sensor.data, original.data);
-        let tone = ToneMap::camera(&fit.tone, 0.0, 0.0, 0.0);
+        let tone = ToneMap::camera(&fit.tone, 0.0, 0.0, 0.0, 0.0);
         let error: f64 = sensor
             .data
             .iter()

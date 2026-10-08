@@ -198,7 +198,8 @@ fn corpus_nef_compressed_matches_uncompressed() {
 
 /// Issue #138: DNGs converted by Adobe software carry their camera profile's hue/saturation map and
 /// look table; we read them (and render with them). Apple ProRAW carries a tone curve and a gain
-/// table map (its local tone mapping). Other camera-written DNGs here carry none.
+/// table map (its local tone mapping, read and kept but not rendered, as in Lightroom Classic).
+/// Other camera-written DNGs here carry none.
 #[test]
 fn corpus_dngs_carry_profile_looks() {
     let dir = corpus_root().join("raw");
@@ -221,7 +222,7 @@ fn corpus_dngs_carry_profile_looks() {
             assert!(look.look_table.is_some(), "{name}: no look table");
             // a profile applied to a mid grey keeps it (close to) neutral
             let t = lightcraft_raw::profile::ProfileTables::new(look, 0.5).unwrap();
-            let g = t.apply([0.18; 3], 1.0, [0.5; 2]);
+            let g = t.apply([0.18; 3], 1.0);
             assert!(g.iter().all(|v| (v - g[0]).abs() < 0.01 * g[0].max(0.01)), "{name}: grey → {g:?}");
         }
         if name.starts_with("dng-apple-") {
@@ -230,9 +231,8 @@ fn corpus_dngs_carry_profile_looks() {
             assert!(map.points_v > 1 && map.points_h > 1 && map.points_n > 1, "{name}");
             assert!(look.tone_curve.is_some(), "{name}: no tone curve");
             // the map lifts dark tones (Apple's local tone mapping), most at the darkest input
-            let t = lightcraft_raw::profile::ProfileTables::new(look, 0.5).unwrap();
-            let dark = t.apply([0.01; 3], 1.0, [0.5; 2]);
-            assert!(dark[1] > 0.015, "{name}: dark grey → {dark:?}");
+            let first = &map.gains[..map.points_n];
+            assert!(first[0] > 1.5 && first[0] >= first[map.points_n - 1], "{name}: first table {first:?}");
         }
         eprintln!(
             "{name:44} profile look: hsm {} look {} tone {} gain map {}",

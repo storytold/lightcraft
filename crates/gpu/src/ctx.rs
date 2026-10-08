@@ -256,7 +256,34 @@ fn constants() -> String {
     s += &format!("const EYE_WORDS: u32 = {}u;\n", lightcraft_pipeline::redeye::EYE_WORDS);
     use lightcraft_pipeline::masks::{AUTO_TOL_CHROMA, AUTO_TOL_EV};
     s += &format!("const AUTO_TOL_EV: f32 = {AUTO_TOL_EV:?};\nconst AUTO_TOL_CHROMA: f32 = {AUTO_TOL_CHROMA:?};\n");
-    s += &format!("const SHADOW_TINT_K: f32 = {:?};\n", lightcraft_pipeline::colorops::SHADOW_TINT);
+    use lightcraft_pipeline::colorops::{SHADOW_TINT, SHADOW_TINT_RANGE};
+    s += &format!(
+        "const SHADOW_TINT_K: f32 = {SHADOW_TINT:?};\nconst SHADOW_TINT_LO: f32 = {:?};\nconst SHADOW_TINT_HI: f32 = {:?};\n",
+        SHADOW_TINT_RANGE[0], SHADOW_TINT_RANGE[1]
+    );
+    use lightcraft_pipeline::tone::{LR_KNOT_STEP, LR_KNOT0, LR_KNOTS};
+    s += &format!("const LR_K0: f32 = {LR_KNOT0:?};\nconst LR_KSTEP: f32 = {LR_KNOT_STEP:?};\nconst LR_KN: u32 = {LR_KNOTS}u;\n");
+    use lightcraft_pipeline::finish::{SHARPEN_MASK_AT, SHARPEN_MASK_WIDTH};
+    s += &format!("const SHARPEN_MASK_AT: f32 = {SHARPEN_MASK_AT:?};\nconst SHARPEN_MASK_WIDTH: f32 = {SHARPEN_MASK_WIDTH:?};\n");
+    {
+        use lightcraft_pipeline::colorops::{
+            MIX_LUM_CHROMA, MIX_LUM_POW, MIX_LUM_SPREAD, PROPHOTO_LUMA, SATURATION_POS, SKIN_HUE, VIBRANCE_NEG, VIBRANCE_POS,
+        };
+        s += &format!(
+            "const MIX_LUM_CHROMA: f32 = {MIX_LUM_CHROMA:?};\nconst MIX_LUM_POW: f32 = {MIX_LUM_POW:?};\nconst MIX_LUM_SPREAD: f32 = {MIX_LUM_SPREAD:?};\n"
+        );
+        for (name, v) in [("VIB_P", VIBRANCE_POS), ("VIB_N", VIBRANCE_NEG)] {
+            for (i, x) in v.iter().enumerate() {
+                s += &format!("const {name}{i}: f32 = {x:?};\n");
+            }
+        }
+        s += &format!("const SKIN_H: f32 = {:?};\nconst SKIN_W: f32 = {:?};\n", SKIN_HUE[0], SKIN_HUE[1]);
+        s += &format!("const SAT_P0: f32 = {:?};\nconst SAT_P1: f32 = {:?};\n", SATURATION_POS[0], SATURATION_POS[1]);
+        s += &format!(
+            "const PP_LUMA_R: f32 = {:?};\nconst PP_LUMA_G: f32 = {:?};\nconst PP_LUMA_B: f32 = {:?};\n",
+            PROPHOTO_LUMA[0], PROPHOTO_LUMA[1], PROPHOTO_LUMA[2]
+        );
+    }
     for (i, h) in GRAIN_HASH.iter().enumerate() {
         s += &format!("const GRAIN_H{i}: u32 = {h}u;\n");
     }
@@ -730,5 +757,22 @@ mod tests {
         // 1-D kernels over a 100 MP image and 2-D ones over 16k × 16k stay under 65535 per axis
         assert!(super::groups1(100_000_000 * 3).iter().all(|g| *g <= 65535));
         assert!(super::groups2(16384, 16384, [16, 16]).iter().all(|g| *g <= 65535));
+    }
+
+    /// Every kernel module (with the generated constants and bindings) parses and validates, so a
+    /// shader error shows up without a GPU, not as a GPU-path failure at run time.
+    #[test]
+    fn kernels_compile_without_a_device() {
+        let consts = super::constants();
+        for m in super::MODULES {
+            let src = super::module_source(m, &consts);
+            let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
+            naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+                .validate(&module)
+                .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
+            for e in m.entries {
+                assert!(module.entry_points.iter().any(|p| p.name == *e), "missing entry point {e}");
+            }
+        }
     }
 }

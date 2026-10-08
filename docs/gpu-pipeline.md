@@ -75,12 +75,14 @@ use (e.g. `Intel(R) UHD Graphics 630 (Dx12)`).
   crop/straighten/flip affine or the full lens + perspective warp), `resize` (separable resample
   with the CPU's taps; Mitchell prefilter, box/bilinear for the fast guided filter), `blur` (box
   passes with running sums over pixel chunks; three each way = the CPU's Gaussian; and the sampled
-  Gaussian of sharpening's unsharp mask), `map`
+  Gaussian of sharpening's blur), `map`
   (log luminance, dark channel, guided-filter steps, white balance, luminance / colour NR, airlight
   sampling), `mask` (linear / radial / luminance / colour range / brush shapes, combine, finalize),
-  `finish` (the whole per-pixel stage) — each mirrors a named CPU function. `finish` already binds the
-  10 storage buffers a device must offer, so the sharpening blur shares the `tex` binding (placed after
-  the texture plane when both are needed, offset `SHARP_OFF`).
+  `finish` (the whole per-pixel stage) — each mirrors a named CPU function. Sharpening acts on the
+  finished image (`finish::Sharpen`), so with it on `finish` runs twice: the first pass writes each
+  pixel's finished luminance into the output buffer, the host blurs it, and the second pass applies
+  the gain. `finish` already binds the 10 storage buffers a device must offer, so that blur shares the
+  `tex` binding (placed after the texture plane when both are needed, offset `SHARP_OFF`).
 - Per-stage hybrid: defringe and spot removal (rare, CPU-only for now) download the resampled image,
   run on the CPU and upload; AI mask shapes (Sky, Subject, Background, …: heuristics, or the photo's own
   segmentation mattes) and brushes of more

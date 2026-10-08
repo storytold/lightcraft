@@ -257,11 +257,11 @@ mod tests {
 
     #[test]
     fn camera_tone_travels_with_the_proxy() {
-        let tone = CameraTone::new(std::array::from_fn(|i| {
+        let knots: [[f32; 2]; 32] = std::array::from_fn(|i| {
             let x = 0.004 * 1.17f32.powi(i as i32);
             [x, 0.95 * (1.0 - (-2.7 * x).exp())]
-        }))
-        .unwrap();
+        });
+        let tone = CameraTone::new(&knots).unwrap();
         let img = lightcraft_scenes::demo_library()[0].render(64, 40);
         let bytes = encode(&img, Some(&tone)).unwrap();
         assert_eq!(decode(&bytes).unwrap().1, Some(tone));

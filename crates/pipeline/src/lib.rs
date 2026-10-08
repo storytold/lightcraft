@@ -33,6 +33,7 @@ pub mod dust;
 pub mod finish;
 pub mod geometry;
 pub mod local;
+pub mod lr_tables;
 pub mod lut;
 pub mod masks;
 pub mod optics;
@@ -57,6 +58,17 @@ use lightcraft_raster::{Histogram, Plane, Rgb32f, Rgba8, par_rows};
 
 pub use tone::ToneMap;
 
+/// A raw source's own colour model, for white balance: like Lightroom, a white balance
+/// re-evaluates the camera's colour matrices at the chosen white (camera-space white balance, DNG
+/// spec ch. 6) instead of adapting the as-shot rendering ([`local::wb_matrix_for`]).
+#[derive(Debug, PartialEq)]
+pub struct CameraColor {
+    /// The file's colour tags (its profile look tables left out: they are applied at load).
+    pub tags: lightcraft_raw::ColorData,
+    /// The white the source pixels were developed for.
+    pub developed_for: lightcraft_color::Xy,
+}
+
 /// Facts about the source the settings are interpreted against.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceInfo {
@@ -69,6 +81,9 @@ pub struct SourceInfo {
     pub as_shot_tint: f64,
     /// No measured camera illuminant: WB adjustments are relative to the camera's rendered look.
     pub relative_wb: bool,
+    /// The camera's colour model (raw files with a colour matrix); `None`: white balance adapts
+    /// the developed pixels (Bradford, linear Rec.2020).
+    pub camera_color: Option<Arc<CameraColor>>,
     pub camera_tone: Option<tone::CameraTone>,
     /// Segmentation mattes stored in the file (DNG semantic masks): AI masks use them.
     pub mattes: Option<Arc<masks::Mattes>>,
@@ -88,6 +103,7 @@ impl Default for SourceInfo {
             as_shot_tint: 0.0,
             lens: None,
             relative_wb: false,
+            camera_color: None,
             camera_tone: None,
             mattes: None,
             native_long: 0,
@@ -145,6 +161,15 @@ pub struct Rendered {
     pub deep: Option<DeepImage>,
 }
 
+impl Rendered {
+    /// A deep render with its 8-bit image and histogram.
+    pub fn from_deep(deep: DeepImage) -> Rendered {
+        let image = deep.to_rgba8();
+        let histogram = Histogram::of_srgb8(&image);
+        Rendered { image, histogram, deep: Some(deep) }
+    }
+}
+
 /// Everything the per-pixel stage needs, precomputed at output resolution.
 ///
 /// The image and planes are computed *before exposure* (so they can be reused while exposure is
@@ -157,16 +182,15 @@ pub(crate) struct Prepared {
     pub base: Arc<Plane>,
     pub clarity_blur: Option<Arc<Plane>>,
     pub texture_blur: Option<Arc<Plane>>,
-    /// Unsharp-mask blur of `log_l` for Sharpening (its radius in source pixels).
-    pub sharpen_blur: Option<Arc<Plane>>,
     pub dark: Option<Arc<Plane>>,
     /// Blurred chromaticity (`rgb / Y`) for local Moiré / Noise.
     pub chroma_blur: Option<Arc<Rgb32f>>,
     /// Airlight of `dark` (before exposure).
     pub air: f32,
     pub masks: Vec<masks::Evaluated>,
-    /// Output pixels per unit of the source long edge.
+    /// Output pixels per unit of the source long edge, and per full-resolution source pixel.
     pub px_per_long: f64,
+    pub px_per_src: f64,
 }
 
 /// Output size for a source of `src_w × src_h` under `s`, fitting `max_w × max_h`.
@@ -327,6 +351,8 @@ pub struct Plan<'a> {
     pub eyes: Vec<redeye::EyeK>,
     /// The source's segmentation mattes ([`SourceInfo::mattes`]).
     pub mattes: Option<Arc<masks::Mattes>>,
+    /// Tone sliders as Lightroom applies them on a DNG profile tone curve ([`finish::lr_tone`]).
+    pub lr_tone: bool,
 }
 
 /// Resolve `s` against `src` for `req` (see [`Plan`]).
@@ -357,7 +383,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         src_long,
     ));
-    Plan { settings, frame, w, h, px_per_long, px_per_src, src_long, geo, lin_key, eyes, mattes: info.mattes.clone() }
+    Plan { settings, frame, w, h, px_per_long, px_per_src, src_long, geo, lin_key, eyes, mattes: info.mattes.clone(), lr_tone: finish::lr_tone(info) }
 }
 
 /// Whether the scene-linear stage needs work only the CPU does (defringe, spot removal).
@@ -436,17 +462,15 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Some(p) if p.key == lin_key => p,
         _ => local::Planes { key: lin_key, ..Default::default() },
     };
-    let prep = local::prepare(lin.clone(), s, frame, px_per_long, px_per_src, req.quality, &mut planes, plan.mattes.as_deref());
+    let prep = local::prepare(lin.clone(), s, frame, px_per_long, px_per_src, req.quality, plan.lr_tone, &mut planes, plan.mattes.as_deref());
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
         c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes });
     }
     if req.depth != OutputDepth::U8 {
         let deep = finish::finish_deep(&prep, s, frame, info, req.space, req.depth, req.proof);
-        let image = deep.to_rgba8();
-        let histogram = Histogram::of_srgb8(&image);
         lap("finish (deep)", &mut t);
-        return Rendered { image, histogram, deep: Some(deep) };
+        return Rendered::from_deep(deep);
     }
     let image = finish::finish(&prep, s, frame, info, req.space, req.proof);
     lap("finish", &mut t);
