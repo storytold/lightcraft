@@ -8,6 +8,10 @@
 #   flatpak run ai.storyteller.lightcraft
 #
 # For Flathub, replace the `dir` source with a `git` source pinned to a release tag and commit.
+#
+# ai.storyteller.lightcraft.bundle.yml (same directory) builds the .flatpak attached to every
+# release from the prebuilt binaries. Keep runtime-version and finish-args identical in both
+# (packaging-lint checks this).
 id: ai.storyteller.lightcraft
 runtime: org.freedesktop.Platform
 runtime-version: '25.08'
@@ -16,14 +20,22 @@ sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
 command: lightcraft
 finish-args:
-  - --share=ipc
+  # Display: Wayland first; X11 only when no Wayland compositor is running.
   - --socket=wayland
   - --socket=fallback-x11
+  # X11 shared memory (MIT-SHM). Without it the X11 fallback is slow or fails.
+  - --share=ipc
+  # GPU access for the wgpu renderer (Vulkan, or GL as a fallback).
   - --device=dri
-  # Open/Save dialogs use the file-chooser portal (rfd), and drag-and-drop uses the document
-  # portal, so broad filesystem access isn't needed. Pictures is granted for opening files by
-  # path from the command line.
+  # The library lives in ~/Pictures/LightCraft Library by default, and imports usually come from
+  # Pictures. Open/Save dialogs go through the file-chooser portal (rfd's xdg-portal backend) and
+  # drag-and-drop through the document portal, so picked folders elsewhere work without broad
+  # filesystem access.
   - --filesystem=xdg-pictures
+  # Deliberately not granted: home/host filesystem access, and network. The network is only for
+  # the optional SAM 3 model download (AI Object/Describe masks, docs/ai-masks.md); without it
+  # that download fails with an error and everything else works. Users who want it run
+  # `flatpak override --user --share=network ai.storyteller.lightcraft`.
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
 modules:
@@ -34,8 +46,9 @@ modules:
         CARGO_HOME: /run/build/lightcraft/cargo
         CARGO_NET_OFFLINE: 'true'
     build-commands:
-      - cargo --offline build --release --locked -p lightcraft
+      - cargo --offline build --release --locked -p lightcraft -p lightcraft-cli
       - install -Dm755 target/release/lightcraft /app/bin/lightcraft
+      - install -Dm755 target/release/lightcraft-cli /app/bin/lightcraft-cli
       - install -Dm644 packaging/linux/ai.storyteller.lightcraft.desktop /app/share/applications/ai.storyteller.lightcraft.desktop
       - install -Dm644 packaging/linux/ai.storyteller.lightcraft.mime.xml /app/share/mime/packages/ai.storyteller.lightcraft.xml
       - mkdir -p /app/share/icons && cp -R assets/app-icon/hicolor /app/share/icons/
