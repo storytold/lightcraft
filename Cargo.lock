@@ -2816,13 +2816,17 @@ version = "0.2.1"
 dependencies = [
  "dhat",
  "lightcraft-codecs",
+ "lightcraft-color",
  "lightcraft-engine",
  "lightcraft-mcp",
  "lightcraft-merge",
  "lightcraft-raster",
+ "lightcraft-raw",
  "lightcraft-sysmem",
  "lightcraft-ui-egui",
+ "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

@@ -50,6 +50,22 @@ pub(crate) fn color_data(ifd0: &Ifd, raw: &Ifd) -> ColorData {
     }
 }
 
+/// Reference-camera corrections apply only to a profile with the same calibration signature.
+/// Keep this rule in the opt-in path so legacy edits retain their original interpretation.
+pub(crate) fn base_color_data(ifd0: &Ifd, raw: &Ifd) -> ColorData {
+    let mut color = color_data(ifd0, raw);
+    let signature = |tag| {
+        let ifd = if raw.contains(tag) { raw } else { ifd0 };
+        if ifd.contains(tag) { ifd.string(tag) } else { Some(String::new()) }
+    };
+    let camera = signature(t::CAMERA_CALIBRATION_SIGNATURE);
+    let profile = signature(t::PROFILE_CALIBRATION_SIGNATURE);
+    if camera.is_none() || profile.is_none() || camera != profile {
+        color.camera_calibration = [None, None];
+    }
+    color
+}
+
 /// The profile look tags (`ProfileHueSatMap*`, `ProfileLookTable*`, `ProfileToneCurve`); malformed
 /// ones are ignored. Like the colour tags, read from the raw IFD first, else IFD 0.
 pub(crate) fn profile_look(ifd0: &Ifd, raw: &Ifd) -> ProfileLook {
@@ -71,6 +87,10 @@ pub(crate) fn profile_look(ifd0: &Ifd, raw: &Ifd) -> ProfileLook {
 }
 
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
+    decode_versioned(bytes, mode, false)
+}
+
+pub(crate) fn decode_versioned(bytes: &[u8], mode: Mode, stable: bool) -> Result<RawImage> {
     let tiff = Tiff::parse(bytes)?;
     let ifd0 = &tiff.ifds[0];
     let raw = raw_ifd(&tiff).ok_or_else(|| RawError::Corrupt("DNG without a raw image IFD".into()))?;
@@ -175,7 +195,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         active_area,
         crop,
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
-        color: color_data(ifd0, raw),
+        color: if stable { base_color_data(ifd0, raw) } else { color_data(ifd0, raw) },
         wb_multipliers: None,
         linearized,
         opcodes,

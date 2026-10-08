@@ -1,5 +1,7 @@
 # Sony ARW, Nikon NEF and Panasonic RW2 starting look
 
+For the versioned **base sensor colour** workflow, see [Nikon colour calibration](nikon-colour-calibration.md). The JPEG fits below are legacy/optional **camera-look estimates**, not measured camera calibration; `calibrate` is retained as an alias of `match-camera`.
+
 ARW and NEF decoding supply a Bayer mosaic and camera white-balance multipliers, but currently no measured camera colour matrix. Treating camera RGB as linear sRGB produces a dark, muted default rendering. The loader now estimates a file-local starting look from that file's embedded camera JPEG, only when a usable camera matrix is absent. All output pixels still come from the RAW mosaic; there is no JPEG replacement or uniform saturation boost.
 
 ## Colour and tone are separate

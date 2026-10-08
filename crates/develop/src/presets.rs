@@ -114,7 +114,7 @@ impl SettingsGroup {
             SettingsGroup::Spots => &["spots"],
             SettingsGroup::RedEye => &["red_eye"],
             SettingsGroup::LensBlur => &["lens_blur"],
-            SettingsGroup::Calibration => &["calibration"],
+            SettingsGroup::Calibration => &["calibration", "raw_color"],
         }
     }
 }
@@ -158,7 +158,8 @@ fn scale_patch(base: &Value, patch: &Value, t: f64) -> Value {
             let mut out = Map::new();
             for (k, pv) in p {
                 let bv = b.get(k).unwrap_or(&Value::Null);
-                out.insert(k.clone(), scale_patch(bv, pv, t));
+                // Sensor calibration is categorical. Never interpolate its measured matrices/provenance as preset strength.
+                out.insert(k.clone(), if k == "raw_color" { if t >= 0.5 { pv.clone() } else { bv.clone() } } else { scale_patch(bv, pv, t) });
             }
             Value::Object(out)
         }
@@ -272,5 +273,20 @@ mod tests {
         let mut a = json!({"x": {"a": 1, "b": 2}, "y": [1]});
         deep_merge(&mut a, &json!({"x": {"b": 3}, "y": [2, 3]}));
         assert_eq!(a, json!({"x": {"a": 1, "b": 3}, "y": [2, 3]}));
+    }
+}
+
+#[cfg(test)]
+mod raw_colour_tests {
+    use super::*;
+    #[test]
+    fn processing_choice_is_not_interpolated_by_preset_amount() {
+        let base = DevelopSettings::default();
+        let selected = serde_json::json!({"raw_color":{"mode":"base","calibration":null}});
+        let mut d = base.clone();
+        d.raw_color.mode = crate::RawColorMode::Base;
+        assert_eq!(apply_partial(&base, &selected, 0.75).raw_color, d.raw_color);
+        assert_eq!(apply_partial(&base, &selected, 0.25).raw_color, base.raw_color);
+        assert_eq!(extract_groups(&d, &[SettingsGroup::Calibration])["raw_color"], selected["raw_color"]);
     }
 }

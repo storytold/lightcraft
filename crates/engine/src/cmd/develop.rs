@@ -126,6 +126,11 @@ pub fn specs() -> Vec<CommandSpec> {
                     return ok();
                 }
                 let id = active(s, "develop.set")?;
+                if vals.iter().any(|(k, _)| k.starts_with("wb."))
+                    && s.develop_of(id).is_some_and(|d| d.raw_color.mode != lightcraft_develop::RawColorMode::Legacy)
+                {
+                    s.source_now(id, SourceLevel::Thumb).map_err(|e| bad("develop.set", e))?;
+                }
                 let info = s.source_info(id);
                 edit(s, "develop.set", &label, |d| {
                     apply(d, &info);
@@ -266,6 +271,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let mode: WbMode =
                     serde_json::from_value(p.get("mode").cloned().unwrap_or(json!("custom"))).map_err(|e| bad("develop.wb", e.to_string()))?;
                 let id = active(s, "develop.wb")?;
+                if s.develop_of(id).is_some_and(|d| d.raw_color.mode != lightcraft_develop::RawColorMode::Legacy) {
+                    s.source_now(id, SourceLevel::Thumb).map_err(|e| bad("develop.wb", e))?;
+                }
                 let info = s.source_info(id);
                 let (mut t, mut tint) = match mode {
                     WbMode::AsShot => (info.as_shot_temp, info.as_shot_tint),

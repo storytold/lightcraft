@@ -60,9 +60,26 @@ pub(crate) fn fit_preview(raw: &RawImage, bytes: &[u8], transform: &CameraTransf
 /// Same-size proxies of the sensor (white-balanced, baseline exposure, through `transform`'s
 /// matrix: the generic camera ≈ sRGB model) and of the file's embedded camera JPEG (linear Rec.2020).
 fn proxies(raw: &RawImage, bytes: &[u8], transform: &CameraTransform, size: usize) -> Option<(Rgb32f, Rgb32f)> {
+    proxies_versioned(raw, bytes, transform, size, false)
+}
+
+fn proxies_versioned(raw: &RawImage, bytes: &[u8], transform: &CameraTransform, size: usize, colour_managed: bool) -> Option<(Rgb32f, Rgb32f)> {
     let jpeg = lightcraft_raw::embedded_preview(bytes)?;
     let edge = (2 * size).max(384) as u32;
-    let decoded = lightcraft_codecs::decode(&jpeg, lightcraft_codecs::DecodeOptions { max_size: Some((edge, edge)), max_pixels: 64_000_000 }).ok()?;
+    let opts = lightcraft_codecs::DecodeOptions { max_size: Some((edge, edge)), max_pixels: 64_000_000 };
+    let fallback = colour_managed.then(|| lightcraft_raw::embedded_preview_color_space(bytes)).flatten();
+    let decoded = match fallback {
+        Some(space) => lightcraft_codecs::decode_jpeg_with_fallback(
+            &jpeg,
+            opts,
+            match space {
+                lightcraft_raw::PreviewColorSpace::Srgb => lightcraft_codecs::NamedSpace::Srgb,
+                lightcraft_raw::PreviewColorSpace::AdobeRgb => lightcraft_codecs::NamedSpace::AdobeRgb,
+            },
+        ),
+        None => lightcraft_codecs::decode(&jpeg, opts),
+    }
+    .ok()?;
     let mut reference = decoded.to_working();
     let (a, crop) = (raw.active_area, raw.crop.clipped(raw.active_area.width, raw.active_area.height));
     if crop.width == 0 || crop.height == 0 || reference.width == 0 || reference.height == 0 {
@@ -524,6 +541,12 @@ fn fit_tone(mut pairs: Vec<(f64, f64)>) -> Option<CameraTone> {
         i += n;
     }
     CameraTone::new(knots)
+}
+
+/// Optional JPEG display style over a calibrated base; never refit the sensor matrix.
+pub(crate) fn fit_style(raw: &RawImage, bytes: &[u8], transform: &CameraTransform) -> Option<CameraTone> {
+    let (sensor, reference) = proxies_versioned(raw, bytes, transform, PROXY, true)?;
+    fit_pairs_with(&sensor, &reference, Some((Mat3::IDENTITY, None))).map(|look| look.tone)
 }
 
 #[cfg(test)]

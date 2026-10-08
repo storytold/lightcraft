@@ -120,6 +120,11 @@ pub fn auto_wb(src: &Rgb32f, info: &SourceInfo) -> (f64, f64) {
         return (info.as_shot_temp, info.as_shot_tint);
     }
     let avg = acc.map(|v| v / wsum);
+    if let Some(camera) = info.camera_wb
+        && let Some(xy) = camera.model.neutral_xy(camera.from_working.apply(avg))
+    {
+        return xy_to_temp_tint(xy);
+    }
     let xyz = REC2020.to_xyz().apply(avg);
     let shot = lightcraft_color::cct::temp_tint_to_xy(info.as_shot_temp, info.as_shot_tint);
     let seen = bradford(REC2020.white, shot).apply(xyz);

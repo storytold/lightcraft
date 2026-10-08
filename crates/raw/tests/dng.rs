@@ -494,6 +494,31 @@ fn profile_dng(order: ByteOrder, extra: impl FnOnce(&mut IfdBuilder)) -> Vec<u8>
     dng_with(raw, order, extra)
 }
 
+#[test]
+fn base_colour_uses_reference_correction_only_for_matching_signatures() {
+    for (camera, profile, accepted) in [
+        (None, None, true),
+        (Some("own-reference"), Some("own-reference"), true),
+        (Some("body-reference"), Some("different-profile"), false),
+        (Some("body-reference"), None, false),
+    ] {
+        let bytes = profile_dng(ByteOrder::Little, |ifd| {
+            ifd.set(t::CAMERA_CALIBRATION_1, Value::Double(vec![1.0, 0.0, 0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 1.1]));
+            if let Some(signature) = camera {
+                ifd.set(t::CAMERA_CALIBRATION_SIGNATURE, Value::Ascii(signature.into()));
+            }
+            if let Some(signature) = profile {
+                ifd.set(t::PROFILE_CALIBRATION_SIGNATURE, Value::Ascii(signature.into()));
+            }
+        });
+        let legacy = decode(&bytes).unwrap();
+        let base = lightcraft_raw::decode_base(&bytes).unwrap();
+        assert!(legacy.color.camera_calibration[0].is_some(), "legacy edits retain the prior interpretation");
+        assert_eq!(base.color.camera_calibration[0].is_some(), accepted);
+        assert_eq!(base.color.color_matrix, legacy.color.color_matrix);
+    }
+}
+
 fn hsv_floats(h: usize, s: usize, v: usize, f: impl Fn(usize, usize, usize) -> [f32; 3]) -> Vec<f32> {
     (0..v).flat_map(|vi| (0..h).flat_map(move |hi| (0..s).map(move |si| (vi, hi, si)))).flat_map(|(vi, hi, si)| f(vi, hi, si)).collect()
 }

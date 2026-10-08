@@ -26,7 +26,7 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | C. Views & navigation (VIEW) | 16 | 0 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 41 | 2 | 5 | 1 | 27/28 (96%) | 13/14 (93%) |
+| F. Edit panel — global adjustments (EDIT) | 40 | 3 | 5 | 1 | 26/28 (93%) | 13/14 (93%) |
 | G. Profiles (PROF) | 6 | 2 | 3 | 0 | 3/4 (75%) | 2/3 (67%) |
 | H. Crop & rotate (CROP) | 9 | 0 | 0 | 1 | 6/6 (100%) | 3/3 (100%) |
 | I. Remove / healing (REM) | 7 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
@@ -48,9 +48,9 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | Y. Menus | 81 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 74 | 3 | 3 | 1 | 49/52 (94%) | 22/23 (96%) |
 | Lightroom Classic extras | 31 | 10 | 39 | 9 | — | 21/22 (95%) |
-| **Total** | 388 | 35 | 86 | 37 | 193/200 (97%) | 139/149 (93%) |
+| **Total** | 387 | 36 | 86 | 37 | 192/200 (96%) | 139/149 (93%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.7%** of 509 in-scope rows — P0 98.2% of 200 · P1 95.6% of 149 · P2 41.6% of 160.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.6%** of 509 in-scope rows — P0 98.0% of 200 · P1 95.6% of 149 · P2 41.6% of 160.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -59,7 +59,7 @@ Ordered by user impact, then tier, then effort. The checklist above counts featu
 that decide whether a photographer can switch (see the honest assessment in [ROADMAP.md](../ROADMAP.md#where-we-stand)).
 Take the first one nobody is working on.
 
-1. **LR-PROF-CAMERACOLOR** (P0): our own camera colour calibration. Sony ARW, Nikon NEF and Panasonic RW2 now get a guarded file-local fit to their own embedded JPEG (colour matrix + hue/saturation/value table + tone and chroma curves, relative WB; per-model profiles pooled from many photos via `lightcraft-cli calibrate` for ARW and NEF; ARW: 7 of 10 public samples accepted, mean ΔE vs the camera JPEG 17–26 → 3–10; NEF: 13 of 13 decodable samples from 6 bodies accepted, ΔE 13–46 → 3–8, one mixed-light scene 13 → 12; RW2: 140 of 174 public samples accepted, from 93 of the 114 bodies with a preview, median ΔE 5.0); measured calibration and fidelity remain missing. Other non-DNG raws and rejected fits still use a neutral matrix. Expand validated preview fitting and use matrices the files carry themselves; never Adobe data.
+1. **LR-PROF-CAMERACOLOR** (P0): measured per-camera calibration remains missing. Opt-in versioned base colour, source-recorded warm/daylight profile snapshots, model-based Kelvin/Tint and independent-capture chart fitting/validation now exist (`docs/nikon-colour-calibration.md`). Collect licensed chart measurements and independent warm/daylight/intermediate holdouts; no Z 8 accuracy claim. Ordinary RAW/embedded-JPEG fitting is a separate display-style estimate. Existing edits and uncalibrated files retain their previous output with an explicit notice; see `docs/camera-preview-colour.md` for historical camera-look results.
 2. **LR-IMP-FORMATS** (P0): **CR3** first (every Canon body since ~2018), then compressed RAF / ORF, Nikon
    "lossy after split" NEF, Canon sRAW; HEIC/AVIF decode. Clean-room, from prose descriptions only (see
    `crates/raw/src/vendor/nefc.rs` for how compressed NEF was done). Until decoded, such photos are `preview_only`.
@@ -233,7 +233,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-EDIT-LIGHT-CURVE-TAT | Drag-on-image curve adjust | P1 | ✅ | `cmd:develop.targeted` (`target: curve`) | |
 | LR-EDIT-COLOR-WB-PRESET | White-balance presets | P0 | ✅ | `cmd:develop.wb` | |
 | LR-EDIT-COLOR-WB-PICKER | White-balance eyedropper | P0 | ✅ | `cmd:tool.wbPicker`, `cmd:develop.wbPick` | no magnified loupe while picking |
-| LR-EDIT-COLOR-TEMP | Temperature | P0 | ✅ | `ctl:wb.temp` | relative scale for non-raw in the UI |
+| LR-EDIT-COLOR-TEMP | Temperature | P0 | 🟡 | `ctl:wb.temp`, `cmd:develop.rawColor`, `docs/nikon-colour-calibration.md` | Model-based Kelvin in the opt-in calibrated RAW modes; relative estimates for uncalibrated RAW and rendered images. A measured camera database remains missing. |
 | LR-EDIT-COLOR-TINT | Tint | P0 | 🟡 | `ctl:wb.tint`, `docs/tint-direction.md` | Negative/left adds green and positive/right magenta; CPU/GPU regression tests. Existing-edit/preset/XMP migration policy needs review before landing |
 | LR-EDIT-COLOR-VIBRANCE | Vibrance | P0 | ✅ | `ctl:color.vibrance` | |
 | LR-EDIT-COLOR-SATURATION | Saturation | P0 | ✅ | `ctl:color.saturation` | |
@@ -276,7 +276,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-PROF-ADOBE | Standard raw looks (own equivalents) | P0 | ✅ | `crates/engine/src/presets.rs` (`PROFILES`), `crates/pipeline/src/profiles.rs` | six own looks: Color, Neutral, Vivid, Landscape, Portrait, Monochrome |
 | LR-PROF-ADAPTIVE | Adaptive profiles | P2 | ⬜ | | |
 | LR-PROF-CAMERA | Camera-matching looks | P2 | ⬜ | | |
-| LR-PROF-CAMERACOLOR | Camera colour calibration (own) | P0 | 🟡 | `crates/raw/src/color.rs`, `crates/raw/src/profile.rs`, `crates/engine/src/camera_preview.rs` | DNG files use the colour matrices and the camera-profile look they carry (`ProfileHueSatMap`, `ProfileLookTable`, `ProfileToneCurve`, read from the file at run time per DNG spec ch. 6 — Lightroom-converted DNGs rendered flat and muted without them, issue #138); Sony ARW, Nikon NEF and Panasonic RW2 get a guarded file-local fit to their own embedded JPEG — chromaticity matrix + hue/saturation/value table + tone and chroma curves, relative WB — or, with a local per-model profile pooled from many photos (`lightcraft-cli calibrate`, ARW and NEF so far, `crates/engine/src/camera_profiles.rs`), the profile's colour and only their own tone/chroma curves (on 29 held-out ILCE-7M4 photos mean ΔE vs the camera JPEG 3.54 → 3.10), kept with smart previews (see docs/camera-preview-colour.md); ARW: on 10 public raw.pixls.us samples from 8 bodies 7 fits were accepted, mean ΔE vs the camera JPEG 17–26 → 3–10; NEF: 13 of 13 decodable samples (D750, D780, D850, D7500, Z 50 and local D7500 shots) accepted, ΔE 13–46 → 3–8 (issue #150); RW2 / RWL: 140 of 174 public samples accepted, from 93 of the 114 bodies with a preview, median ΔE 5.0 with matching lightness (13 of the 14 corpus files with a preview: ΔE 9.6–27 → 2.8–8.9; most rejections are compacts and kit zooms whose camera JPEG is distortion-corrected); this is not measured camera calibration; other raws and rejected fits use a neutral fallback (camera RGB ≈ linear sRGB, `matrix_is_fallback`) with as-shot white balance, so colours are muted and not accurate. Needs our own per-camera calibration: matrices the files carry themselves (e.g. Olympus `ColorMatrix`), fitting each camera to its own embedded JPEG, then chart shots. Adobe matrices / DCPs are never used. Biggest image-quality gap today |
+| LR-PROF-CAMERACOLOR | Camera colour calibration (own) | P0 | 🟡 | `cmd:develop.rawColor`, `cmd:develop.rawColorInfo`, `crates/color/src/camera.rs`, `crates/color/src/chart.rs`, `crates/engine/src/raw_color.rs`, `docs/nikon-colour-calibration.md`, `docs/camera-preview-colour.md` | Opt-in base calibration and optional JPEG tone/chroma matching are separate; source-recorded profile snapshots, file calibration priority, model-based WB, dual-light chart fitting and capture-disjoint validation. Legacy edits and missing-profile fallback preserve d614dc7 output. No measured Nikon/Z 8 profile shipped; camera coverage and real chart verification remain missing. Historical ARW/NEF/RW2 JPEG look estimates are not sensor calibration. |
 | LR-PROF-CREATIVE | Creative profiles (own) | P2 | ✅ | `cmd:develop.profile`, `crates/pipeline/src/profiles.rs` | 16 own looks in Film / Cinematic / Muted / B&W (tone + point-curve fades, colour grading, mixer / B&W mix); scale with `ctl:profile.amount`; sliders untouched |
 | LR-PROF-LEGACY | Legacy profiles | P2 | ⬜ | | |
 | LR-PROF-NONRAW | Profiles for non-raw files | P0 | ✅ | `cmd:develop.profile` | same looks apply to JPEG/TIFF |

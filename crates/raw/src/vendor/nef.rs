@@ -17,6 +17,37 @@ use lightcraft_tiff::{ByteOrder, Ifd, Tiff, makernote};
 const WB_RB_LEVELS: u16 = 0x000c;
 const BLACK_LEVEL: u16 = 0x003d;
 const LINEARIZATION_TABLE: u16 = 0x0096;
+const CROP_AREA: u16 = 0x0045;
+
+fn default_crop(mn: Option<&makernote::MakerNote>, w: usize, h: usize) -> Option<Rect> {
+    let values = mn?.ifd.u64s(CROP_AREA)?;
+    let [x, y, width, height] = values.as_slice() else { return None };
+    if *width < 2 || *height < 2 || x.checked_add(*width)? > w as u64 || y.checked_add(*height)? > h as u64 {
+        return None;
+    }
+    Some(Rect::new(*x as usize, *y as usize, *width as usize, *height as usize))
+}
+
+/// File-defined saturation, otherwise the code range. Never a scene's brightest pixel.
+fn stable_white(raw: &Ifd, mn: Option<&makernote::MakerNote>, bits: u32) -> Result<f32> {
+    let full = ((1u32 << bits.clamp(1, 16)) - 1) as f32;
+    if let Some(v) = raw.f64s(t::WHITE_LEVEL).and_then(|v| match v.as_slice() {
+        [v] => Some(*v),
+        _ => None,
+    }) && v.is_finite()
+        && v > 0.0
+        && v <= full as f64
+    {
+        return Ok(v as f32);
+    }
+    if let Some((bytes, order)) = mn.and_then(|m| Some((m.ifd.bytes(LINEARIZATION_TABLE)?, m.order)))
+        && let nefc::Encoding::Lossy(curve) = nefc::parse_table(bytes, order, bits)?.encoding
+    {
+        let white = curve.last().copied().filter(|v| *v > 0).ok_or_else(|| RawError::Corrupt("NEF empty saturation curve".into()))?;
+        return Ok(f32::from(white));
+    }
+    Ok(full)
+}
 
 fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
     tiff.all_ifds()
@@ -28,7 +59,7 @@ fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
 /// Width without the optically masked columns some bodies append on the right: trailing columns (at most 64)
 /// whose mean is below 1% of the white level while the image interior is brighter. Kept even for CFA phase.
 pub(crate) fn trailing_masked_columns(d: &[u16], w: usize, h: usize, white: f32) -> usize {
-    if w < 128 || h == 0 {
+    if w < 128 || h == 0 || w.checked_mul(h).is_none_or(|n| n > d.len()) {
         return w;
     }
     let step = (h / 256).max(1);
@@ -43,8 +74,12 @@ pub(crate) fn trailing_masked_columns(d: &[u16], w: usize, h: usize, white: f32)
 }
 
 pub(crate) fn decode(bytes: &[u8]) -> Result<RawImage> {
+    decode_versioned(bytes, false)
+}
+
+pub(crate) fn decode_versioned(bytes: &[u8], stable: bool) -> Result<RawImage> {
     let tiff = Tiff::parse(bytes)?;
-    let ifd0 = &tiff.ifds[0];
+    let ifd0 = tiff.ifds.first().ok_or_else(|| RawError::Corrupt("NEF without IFD0".into()))?;
     let raw = raw_ifd(&tiff).ok_or_else(|| RawError::Unsupported("NEF without a CFA image IFD".into()))?;
     let info = raw.image()?;
     let (w, h) = (info.width as usize, info.height as usize);
@@ -61,7 +96,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<RawImage> {
     // (our measurements on CC0 raw.pixls.us samples; the same bodies' 14-bit files match the tag as is).
     let black_scale = if bits == 12 { 0.25 } else { 1.0 };
     let black = match mn.as_ref().and_then(|m| m.ifd.f64s(BLACK_LEVEL)).as_deref() {
-        Some([a, b, c, d]) if [a, b, c, d].iter().all(|v| **v < 16384.0) => BlackLevel {
+        Some([a, b, c, d]) if [a, b, c, d].iter().all(|v| v.is_finite() && **v >= 0.0 && **v < 16384.0) => BlackLevel {
             repeat_rows: 2,
             repeat_cols: 2,
             values: [a, b, c, d].iter().map(|v| (**v * black_scale) as f32).collect(),
@@ -78,11 +113,17 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<RawImage> {
         (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => Cfa { width: 2, height: 2, pattern: p.to_vec() },
         _ => Cfa::bayer_static("RGGB"),
     };
-    let white = white_from_data(samples, bits);
-    let active_w = trailing_masked_columns(samples, w, h, white);
+    let white = if stable { stable_white(raw, mn.as_ref(), bits)? } else { white_from_data(samples, bits) };
+    // Explicit crop beats the scene-dependent masked-column heuristic. Keep CFA origin at (0,0).
+    let declared_crop = stable.then(|| default_crop(mn.as_ref(), w, h)).flatten();
+    let active_w = if stable { w } else { trailing_masked_columns(samples, w, h, white) };
+    let crop = declared_crop.unwrap_or(Rect::new(0, 0, active_w, h));
+    if stable && black.values.iter().any(|v| *v >= white) {
+        return Err(RawError::Corrupt("NEF black level is not below saturation".into()));
+    }
     let mut metadata = lightcraft_meta::from_tiff(&tiff);
-    metadata.width = Some(active_w as u32);
-    metadata.height = Some(h as u32);
+    metadata.width = Some(crop.width as u32);
+    metadata.height = Some(crop.height as u32);
     let img = RawImage {
         format: RawFormat::Nef,
         width: w,
@@ -94,9 +135,9 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<RawImage> {
         black,
         white: vec![white],
         active_area: Rect::new(0, 0, active_w, h),
-        crop: Rect::new(0, 0, active_w, h),
+        crop,
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
-        color: ColorData::default(),
+        color: if stable { crate::dng::base_color_data(ifd0, raw) } else { ColorData::default() },
         wb_multipliers: wb,
         linearized: false,
         opcodes: OpcodeLists::default(),
@@ -179,6 +220,45 @@ mod tests {
         }
         ifd0.add_sub_ifd(raw);
         TiffWriter::new(ByteOrder::Big, false).write(&[ifd0]).unwrap()
+    }
+
+    #[test]
+    fn stable_nef_levels_crop_wb_and_legacy_are_separate() {
+        let (w, h) = (32, 24);
+        let words: Vec<u8> = (0..w * h).flat_map(|i| (5000 + (i % 4) as u16 * 50).to_be_bytes()).collect();
+        let mut mn = IfdBuilder::new();
+        mn.set(CROP_AREA, Value::Long(vec![1, 3, 28, 18]));
+        mn.set(BLACK_LEVEL, Value::Short(vec![400, 404, 408, 412]));
+        mn.set(WB_RB_LEVELS, Value::Rational(vec![(2, 1), (3, 2), (1, 1), (1, 1)]));
+        let bytes = nef_with_note(1, 14, vec![words], w, h, h, Some(mn));
+        let stable = crate::decode_base(&bytes).unwrap();
+        let legacy = crate::decode(&bytes).unwrap();
+        assert_eq!(stable.crop, Rect::new(1, 3, 28, 18));
+        assert_eq!(legacy.crop, Rect::new(0, 0, 32, 24));
+        assert_eq!(stable.active_area, legacy.active_area);
+        assert_eq!(stable.cfa, legacy.cfa, "odd crop does not shift the mosaic before demosaic");
+        assert_eq!(stable.white, vec![16383.0]);
+        assert_eq!(stable.wb_multipliers, Some([2.0, 1.0, 1.5]));
+        let n = stable.normalized().unwrap();
+        assert!((n.data[0] - (5000.0 - 400.0) / (16383.0 - 406.0)).abs() < 1e-7);
+        let developed = stable.develop(crate::Method::Bilinear).unwrap();
+        assert_eq!((developed.width, developed.height), (28, 18));
+    }
+
+    #[test]
+    fn stable_white_does_not_depend_on_bright_scene_plateaus() {
+        for level in [4000u16, 9000, 12000, 15000] {
+            let words = (0..128 * 16).flat_map(|_| level.to_be_bytes()).collect();
+            let bytes = nef(1, 14, vec![words], 128, 16, 16);
+            assert_eq!(crate::decode_base(&bytes).unwrap().white, vec![16383.0]);
+        }
+        for values in [vec![u32::MAX, 0, 20, 20], vec![1, 1, 0, 8], vec![3, 2, 33, 24], vec![1, 1, 20]] {
+            let mut mn = IfdBuilder::new();
+            mn.set(CROP_AREA, Value::Long(values));
+            let bytes = nef_with_note(1, 14, vec![vec![0; 32 * 24 * 2]], 32, 24, 24, Some(mn));
+            assert_eq!(crate::decode_base(&bytes).unwrap().crop, Rect::new(0, 0, 32, 24));
+        }
+        assert_eq!(trailing_masked_columns(&[], usize::MAX, 2, 16383.0), usize::MAX);
     }
 
     #[test]

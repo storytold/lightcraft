@@ -10,6 +10,8 @@ pub const SCHEMA_VERSION: u32 = 1;
 #[serde(default)]
 pub struct DevelopSettings {
     pub version: u32,
+    /// Versioned sensor interpretation; missing fields retain the legacy renderer.
+    pub raw_color: RawColor,
     pub profile: Profile,
     pub treatment: Treatment,
     pub wb: WhiteBalance,
@@ -44,6 +46,7 @@ impl Default for DevelopSettings {
     fn default() -> Self {
         Self {
             version: SCHEMA_VERSION,
+            raw_color: RawColor::default(),
             profile: Profile::default(),
             treatment: Treatment::Color,
             wb: WhiteBalance::default(),
@@ -916,4 +919,31 @@ pub struct Enhance {
     pub denoise: f64,
     pub raw_details: bool,
     pub super_resolution: bool,
+}
+
+/// Sensor conversion and optional camera JPEG style are explicit, portable edits.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RawColor {
+    pub mode: RawColorMode,
+    /// Snapshot: later file replacement must never silently change existing edits.
+    pub calibration: Option<lightcraft_color::camera::CameraCalibration>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RawColorMode {
+    #[default]
+    Legacy,
+    Base,
+    MatchCamera,
+}
+
+impl RawColor {
+    pub fn hash64(&self) -> u64 {
+        if self.mode == RawColorMode::Legacy {
+            return 0;
+        }
+        serde_json::to_vec(self).unwrap_or_default().iter().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3))
+    }
 }

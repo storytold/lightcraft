@@ -29,6 +29,9 @@ pub fn wb_matrix_for(info: &SourceInfo, s: &DevelopSettings) -> Option<[[f32; 3]
     if (t - info.as_shot_temp).abs() < 1e-6 && (tint - info.as_shot_tint).abs() < 1e-6 {
         return None;
     }
+    if let Some(camera) = info.camera_wb {
+        return camera.correction(t, tint).map(|m| m.to_f32());
+    }
     let set = wb_matrix(&REC2020, temp_tint_to_xy(t, tint));
     let shot = wb_matrix(&REC2020, temp_tint_to_xy(info.as_shot_temp, info.as_shot_tint));
     let m = set.mul(&shot.inverse().unwrap_or(lightcraft_color::Mat3::IDENTITY));

@@ -23,6 +23,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod binned;
+pub mod chart;
 pub mod color;
 pub mod demosaic;
 mod dng;
@@ -43,7 +44,7 @@ pub use lightcraft_geom::Orientation;
 pub use lightcraft_meta::Metadata;
 pub use lightcraft_raster::Rgb32f;
 pub use opcodes::{Opcode, OpcodeLists};
-pub use preview::embedded_preview;
+pub use preview::{PreviewColorSpace, embedded_preview, embedded_preview_color_space};
 
 use lightcraft_color::Xy;
 use lightcraft_tiff::{Tiff, TiffError};
@@ -150,6 +151,17 @@ pub fn probe(bytes: &[u8]) -> Option<RawFormat> {
 /// Decode a raw file.
 pub fn decode(bytes: &[u8]) -> Result<RawImage> {
     decode_with(bytes, Mode::Full)
+}
+
+/// Stable, opt-in sensor interpretation. Legacy edits continue to use [`decode`].
+/// Nikon: file-defined crop and saturation (otherwise fixed code range); explicit standard
+/// colour tags only. Proprietary Nikon colour matrices are not assigned guessed semantics.
+pub fn decode_base(bytes: &[u8]) -> Result<RawImage> {
+    match probe(bytes) {
+        Some(RawFormat::Nef | RawFormat::Nrw) => vendor::nef::decode_versioned(bytes, true),
+        Some(RawFormat::Dng) => dng::decode_versioned(bytes, Mode::Full, true),
+        _ => decode(bytes),
+    }
 }
 
 /// Everything [`decode`] learns about a raw file except its samples: geometry, orientation, CFA,
