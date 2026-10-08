@@ -258,7 +258,7 @@ lightcraft --control 7980 ~/Pictures/trip
 
 ## Fast, native, private
 
-- **Pure Rust, no C.** Our own RAW decoders (DNG, Canon CR2, Sony ARW, Nikon NEF, Fujifilm RAF incl. X-Trans,
+- **Pure Rust, no C.** Our own RAW decoders (DNG, Canon CR2/CR3, Sony ARW, Nikon NEF, Fujifilm RAF incl. X-Trans,
   Panasonic RW2 / Leica RWL, Pentax PEF, Olympus ORF), our own colour science, our own pipeline. JPEG, PNG, TIFF, WebP,
   PSD composites and JPEG XL open today.
 - **Scene-referred & wide-gamut.** Linear Rec.2020 float internally, Bradford-adapted white balance, gamut mapping
@@ -288,8 +288,8 @@ LightCraft is young and moving fast. **Where we honestly stand** (details in the
 - **As a day-to-day Lightroom replacement we're nearer 60–70%.** It's great for JPEG/DNG and most Nikon / Sony /
   older-Canon raws on one machine.
 - **The biggest gaps:**
-  - **camera colour calibration:** Sony, Nikon, Panasonic and Fujifilm raws have guarded estimates from their camera JPEGs, with built-in ILCE-7M4, X-H2S and X-T4 profiles; measured calibration is missing, and other raws or rejected fits retain a neutral matrix;
-  - **CR3 and compressed Olympus raws:** these open as embedded previews only. Fujifilm lossless/lossy compressed RAF now decodes sensor data; [verification and existing-library reload instructions](docs/raf-compression.md);
+  - **camera colour calibration:** Sony, Nikon, Panasonic, Fujifilm and Canon CR3 raws have guarded estimates from their camera JPEGs, with built-in ILCE-7M4, X-H2S and X-T4 profiles; measured calibration is missing, and other raws or rejected fits retain a neutral matrix;
+  - **compressed Olympus raws and unsupported CR3 variants:** these use embedded JPEG previews when present. Fujifilm lossless/lossy compressed RAF now decodes sensor data; [verification and existing-library reload instructions](docs/raf-compression.md);
   - **AI masks and denoise:** subject and sky selection are classical heuristics;
   - **HDR, video and the Classic Print / Book / Map modules.**
 - **What's next:** see [where we're going](ROADMAP.md#where-were-going).
@@ -304,7 +304,7 @@ LightCraft is young and moving fast. **Where we honestly stand** (details in the
 | Profiles (Color, Neutral, Vivid, Landscape, Portrait, Monochrome: our own looks), presets, versions, history, copy/paste/sync settings | ✅ |
 | Camera colour: DNG files use their own matrices | ✅ DNG · 🟡 own Sony/Fujifilm profiles; measured calibration database missing |
 | Native macOS menu bar (generated from the command registry), control channel + every widget addressable, headless UI snapshots | ✅ |
-| RAW: DNG, CR2, ARW, NEF (uncompressed + lossless/lossy compressed), Fujifilm RAF (uncompressed + lossless/lossy compressed, Bayer + X-Trans), Panasonic RW2 / Leica RWL / Panasonic RAW (every raw format, DMC-LX1 to DC-S1RM2), Pentax PEF, Olympus ORF (uncompressed); embedded previews for every format incl. CR3 | 🟡 · CR3, compressed ORF decode ⬜ |
+| RAW: DNG, CR2, CR3 (lossless CRX Bayer and version 0x100/0x200 C-RAW), ARW, NEF (uncompressed + lossless/lossy compressed), Fujifilm RAF (uncompressed + lossless/lossy compressed, Bayer + X-Trans), Panasonic RW2 / Leica RWL / Panasonic RAW (every raw format, DMC-LX1 to DC-S1RM2), Pentax PEF, Olympus ORF (uncompressed); embedded previews for every format incl. CR3 | 🟡 · CR3, compressed ORF decode ⬜ |
 | Detail: sharpening, luminance + colour noise reduction | ✅ · AI Denoise, Super Resolution ⬜ |
 | Remove / Heal / Clone spots (auto source), Visualize Spots, Red Eye and Pet Eye (auto pupil detection, catchlight) | ✅ · content-aware fill, spot pin editing 🚧 |
 | Export: JPEG / PNG / TIFF / WebP / AVIF / DNG / original, sizing, file-size limit, output sharpening, naming templates, batch, metadata policy, text or image watermark | ✅ · HDR export ⬜ |

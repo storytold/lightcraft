@@ -56,6 +56,9 @@ pub(crate) enum Fault {
     Corrupt,
     /// Removing the source fails (as on a read-only card).
     FailRemove,
+    /// Each copy takes a little longer and notes the thread it ran on ([`copy_threads`]), to see
+    /// an import's copies run side by side.
+    Slow,
 }
 
 #[cfg(test)]
@@ -67,6 +70,21 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn inject(f: Fault) {
     FAULT.with(|c| c.set(f));
+}
+
+/// The calling thread's injected fault (tests only), for the workers it starts to inherit.
+#[cfg(test)]
+pub(crate) fn injected_fault() -> Fault {
+    FAULT.with(|c| c.get())
+}
+
+/// The threads copies made under [`Fault::Slow`] ran on (tests only).
+#[cfg(test)]
+static COPY_THREADS: std::sync::Mutex<Vec<std::thread::ThreadId>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub(crate) fn copy_threads() -> Vec<std::thread::ThreadId> {
+    COPY_THREADS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
 }
 
 fn injected(f: Fault) -> bool {
@@ -284,6 +302,11 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<lightcraft_pr
             return Err(io::Error::other("write failed (injected)"));
         }
         io::copy(&mut inp, &mut out)?;
+        #[cfg(test)]
+        if injected(Fault::Slow) {
+            COPY_THREADS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(std::thread::current().id());
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
         if injected(Fault::Corrupt) {
             out.write_all(b"!")?;
         }

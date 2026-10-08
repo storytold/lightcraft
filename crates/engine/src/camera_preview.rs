@@ -1,5 +1,5 @@
 //! Estimate the starting look of a raw without a camera colour matrix (Sony ARW, Nikon NEF, Panasonic
-//! RW2, Fujifilm RAF) from its own JPEG. Colour and luminance are fitted separately; the JPEG supplies correspondences only,
+//! RW2, Fujifilm RAF, Canon CR3) from its own JPEG. Colour and luminance are fitted separately; the JPEG supplies correspondences only,
 //! never output pixels or a replacement for RAW editing.
 //! A global matrix can't follow the camera's hue-dependent rendering (the best matrix rendered a
 //! lime shirt olive that the camera kept lime): a hue/saturation table fitted to the residuals
@@ -31,7 +31,7 @@ pub(crate) const PROFILE_PROXY: usize = 192;
 /// as-shot look (`docs/camera-preview-colour.md`). The catalog's `Photo::relative_wb` matches the
 /// same formats by file extension.
 pub(crate) fn file_local_look(format: RawFormat) -> bool {
-    matches!(format, RawFormat::Arw | RawFormat::Nef | RawFormat::Nrw | RawFormat::Rw2 | RawFormat::Raf)
+    matches!(format, RawFormat::Arw | RawFormat::Nef | RawFormat::Nrw | RawFormat::Rw2 | RawFormat::Raf | RawFormat::Cr3)
 }
 
 pub(crate) fn fit_preview(raw: &RawImage, bytes: &[u8], transform: &CameraTransform) -> Option<CameraLook> {
@@ -83,12 +83,159 @@ fn proxies(raw: &RawImage, bytes: &[u8], transform: &CameraTransform, size: usiz
     }
     // Fixed, bounded proxy: the selected look cannot depend on thumbnail/export resolution.
     let k = (crop.width.max(crop.height).div_ceil(edge as usize).max(2)).div_ceil(2) * 2;
-    let sensor = sensor_proxy(raw, k, edge as usize)?;
+    let mut sensor = sensor_proxy(raw, k, edge as usize)?;
+    let gain = 2f32.powf(transform.baseline_exposure as f32);
+    let to_working = |p: [f32; 3]| transform.matrix.apply_f32(std::array::from_fn(|i| p[i] * transform.wb[i] * gain));
+    if raw.format == RawFormat::Cr3 {
+        // Orient the camera JPEG and the sensor identically before collecting pixel correspondences.
+        sensor = sensor.into_oriented(raw.orientation);
+        reference = reference.into_oriented(raw.orientation);
+        sensor.map_in_place(to_working);
+        // Canon's JPEG can be cropped differently from the sensor. Estimate only that common
+        // framing from edge directions, independently of the subsequent colour fit.
+        sensor = align_cr3_framing(sensor, &reference);
+    }
     let mut sensor = fit(&sensor, size, size, Filter::Box);
     let reference = fit(&reference, sensor.width, sensor.height, Filter::Box);
-    let gain = 2f32.powf(transform.baseline_exposure as f32);
-    sensor.map_in_place(|p| transform.matrix.apply_f32(std::array::from_fn(|i| p[i] * transform.wb[i] * gain)));
+    if raw.format != RawFormat::Cr3 {
+        sensor.map_in_place(to_working);
+    }
     Some((sensor, reference))
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Cr3Framing {
+    scale: f32,
+    /// Translation as a fraction of the oriented frame's width and height.
+    offset: [f32; 2],
+}
+
+impl Cr3Framing {
+    const IDENTITY: Self = Self { scale: 1.0, offset: [0.0; 2] };
+
+    fn source(self, x: f32, y: f32, w: usize, h: usize) -> (f32, f32) {
+        let (w, h) = (w as f32, h as f32);
+        ((x - w * 0.5) * self.scale + w * (0.5 + self.offset[0]), (y - h * 0.5) * self.scale + h * (0.5 + self.offset[1]))
+    }
+}
+
+/// Register the JPEG's remaining framing on a fixed proxy. Edge directions survive different
+/// white balance and monotone camera tone; no target RGB values train this three-parameter fit.
+/// A separate third of the edges must confirm a substantial improvement and a close match.
+/// A weak, flat or unrelated preview leaves the sensor framing unchanged.
+fn estimate_cr3_framing(sensor: &Rgb32f, reference: &Rgb32f) -> Option<Cr3Framing> {
+    if sensor.width.checked_mul(sensor.height)? != sensor.data.len() || reference.width.checked_mul(reference.height)? != reference.data.len() {
+        return None;
+    }
+    let sensor = fit(sensor, PROXY, PROXY, Filter::Box);
+    let (w, h) = (sensor.width, sensor.height);
+    if w < 16 || h < 16 {
+        return None;
+    }
+    let reference = fit(reference, w, h, Filter::Box);
+    if (reference.width, reference.height) != (w, h) {
+        return None;
+    }
+    let mut gradients = Rgb32f::new(w, h);
+    let mut edges = Vec::new();
+    for y in 1..h - 1 {
+        for x in 1..w - 1 {
+            let derivative = |image: &Rgb32f| {
+                [
+                    luminance_2020(image.data[y * w + x + 1]) - luminance_2020(image.data[y * w + x - 1]),
+                    luminance_2020(image.data[(y + 1) * w + x]) - luminance_2020(image.data[(y - 1) * w + x]),
+                ]
+            };
+            let d = derivative(&sensor);
+            gradients.data[y * w + x] = [d[0], d[1], 0.0];
+            let d = derivative(&reference);
+            let magnitude = d[0].hypot(d[1]);
+            let value = luminance_2020(reference.data[y * w + x]);
+            if (0.02..0.9).contains(&value) && magnitude.is_finite() && magnitude > 0.03 {
+                edges.push((x as f32 + 0.5, y as f32 + 0.5, d, magnitude, (x * 17 + y * 11) % 3 == 0));
+            }
+        }
+    }
+    if edges.len() < 192 {
+        return None;
+    }
+    let score = |framing: Cr3Framing, held_out: bool| -> Option<f64> {
+        let (mut agreement, mut weight, mut valid, mut total) = (0.0, 0.0, 0usize, 0usize);
+        for &(x, y, target, magnitude, holdout) in &edges {
+            if holdout != held_out {
+                continue;
+            }
+            total += 1;
+            let (sx, sy) = framing.source(x, y, w, h);
+            if sx < 1.5 || sy < 1.5 || sx > w as f32 - 1.5 || sy > h as f32 - 1.5 {
+                continue;
+            }
+            let sample = gradients.sample_bilinear(sx, sy);
+            let length = sample[0].hypot(sample[1]);
+            if !length.is_finite() || length <= 0.01 {
+                continue;
+            }
+            let k = f64::from(magnitude.min(0.25));
+            agreement += k * f64::from((sample[0] * target[0] + sample[1] * target[1]) / (length * magnitude));
+            weight += k;
+            valid += 1;
+        }
+        (valid >= 64 && valid * 5 >= total * 4 && weight > 0.0).then_some(agreement / weight)
+    };
+    let before = score(Cr3Framing::IDENTITY, false)?;
+    let mut best = (before, Cr3Framing::IDENTITY);
+    // At most 10% zoom and two proxy pixels of translation; a coarse search followed by one
+    // local refinement prevents unbounded optimisation on the photograph's contents.
+    for s in -10..=10 {
+        for tx in -4..=4 {
+            for ty in -4..=4 {
+                let framing = Cr3Framing { scale: 1.0 + s as f32 * 0.01, offset: [tx as f32 * 0.5 / w as f32, ty as f32 * 0.5 / h as f32] };
+                if let Some(value) = score(framing, false)
+                    && value > best.0
+                {
+                    best = (value, framing);
+                }
+            }
+        }
+    }
+    let coarse = best.1;
+    for s in -5..=5 {
+        for tx in -4..=4 {
+            for ty in -4..=4 {
+                let framing = Cr3Framing {
+                    scale: coarse.scale + s as f32 * 0.002,
+                    offset: [coarse.offset[0] + tx as f32 * 0.125 / w as f32, coarse.offset[1] + ty as f32 * 0.125 / h as f32],
+                };
+                if !(0.9..=1.1).contains(&framing.scale) || framing.offset[0].abs() > 2.0 / w as f32 || framing.offset[1].abs() > 2.0 / h as f32 {
+                    continue;
+                }
+                if let Some(value) = score(framing, false)
+                    && value > best.0
+                {
+                    best = (value, framing);
+                }
+            }
+        }
+    }
+    let (held_before, held_after) = (score(Cr3Framing::IDENTITY, true)?, score(best.1, true)?);
+    if best.0 < 0.9 || best.0 < before + 0.04 || held_after < 0.9 || held_after < held_before + 0.04 {
+        return None;
+    }
+    if lightcraft_pipeline::profiling() {
+        eprintln!("[profile] CR3 JPEG framing {:?}, held-out edge agreement {held_before:.4} -> {held_after:.4}", best.1);
+    }
+    Some(best.1)
+}
+
+fn align_cr3_framing(sensor: Rgb32f, reference: &Rgb32f) -> Rgb32f {
+    let Some(framing) = estimate_cr3_framing(&sensor, reference) else { return sensor };
+    let (w, h) = (sensor.width, sensor.height);
+    let mut aligned = Rgb32f::new(w, h);
+    for (i, pixel) in aligned.data.iter_mut().enumerate() {
+        let (x, y) = framing.source((i % w) as f32 + 0.5, (i / w) as f32 + 0.5, w, h);
+        *pixel = if x >= 0.5 && y >= 0.5 && x <= w as f32 - 0.5 && y <= h as f32 - 0.5 { sensor.sample_bilinear(x, y) } else { [f32::NAN; 3] };
+    }
+    aligned
 }
 
 /// Colour training pairs of one raw for a camera profile: white-balanced camera RGB (with the
@@ -870,8 +1017,69 @@ mod tests {
 
     #[test]
     fn supported_raws_get_a_file_local_look() {
-        assert!([RawFormat::Arw, RawFormat::Nef, RawFormat::Nrw, RawFormat::Rw2, RawFormat::Raf].into_iter().all(file_local_look));
+        assert!([RawFormat::Arw, RawFormat::Nef, RawFormat::Nrw, RawFormat::Rw2, RawFormat::Raf, RawFormat::Cr3].into_iter().all(file_local_look));
         assert!(![RawFormat::Dng, RawFormat::Cr2].into_iter().any(file_local_look));
+    }
+
+    #[test]
+    fn cr3_camera_framing_is_measured_independently_of_tone_and_rejects_unrelated_edges() {
+        let (w, h) = (192, 128);
+        let mut sensor = Rgb32f::new(w, h);
+        for (i, pixel) in sensor.data.iter_mut().enumerate() {
+            let (x, y) = ((i % w) as f32, (i / w) as f32);
+            let value = 0.35 + 0.13 * (x * 0.15 + y * 0.22).sin() + 0.1 * (x * 0.33 - y * 0.14).sin() + 0.07 * (x * 0.09 - y * 0.31).cos();
+            *pixel = [value; 3];
+        }
+        let expected = Cr3Framing { scale: 0.96, offset: [0.01, -0.006] };
+        let mut reference = Rgb32f::new(w, h);
+        for (i, pixel) in reference.data.iter_mut().enumerate() {
+            let (x, y) = expected.source((i % w) as f32 + 0.5, (i / w) as f32 + 0.5, w, h);
+            *pixel = sensor.sample_bilinear(x, y).map(|v| v.powf(0.7));
+        }
+        let measured = estimate_cr3_framing(&sensor, &reference).expect("coherent held-out edges locate camera framing despite nonlinear tone");
+        assert!((measured.scale - expected.scale).abs() < 0.006, "{measured:?}");
+        assert!((measured.offset[0] - expected.offset[0]).abs() < 0.003, "{measured:?}");
+        assert!((measured.offset[1] - expected.offset[1]).abs() < 0.003, "{measured:?}");
+        assert!(estimate_cr3_framing(&sensor, &sensor).is_none(), "already aligned pixels stay unchanged");
+        reference.data.fill([0.2; 3]);
+        assert!(estimate_cr3_framing(&sensor, &reference).is_none(), "flat previews cannot establish framing");
+        for (i, pixel) in reference.data.iter_mut().enumerate() {
+            let (x, y) = ((i % w) as f32, (i / w) as f32);
+            *pixel = [0.35 + 0.13 * (x * 0.41 - y * 0.07).sin() + 0.1 * (x * 0.04 + y * 0.39).cos(); 3];
+        }
+        assert!(estimate_cr3_framing(&sensor, &reference).is_none(), "unrelated edges cannot change the framing");
+    }
+
+    /// The guarded fit is assessed on real sensor data, never on the JPEG fallback. A corpus
+    /// download or an unfinished codec cannot make this test claim a successful RAW calibration.
+    #[test]
+    fn corpus_cr3_gets_a_framing_aligned_camera_look() {
+        let path = std::env::var_os("LIGHTCRAFT_CORPUS")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
+            .join("raw/cr3-canon-r100-raw.cr3");
+        let Ok(bytes) = std::fs::read(&path) else {
+            eprintln!("skip: {} absent", path.display());
+            return;
+        };
+        let raw = match lightcraft_raw::decode(&bytes) {
+            Ok(raw) => raw,
+            Err(lightcraft_raw::RawError::Unsupported(why)) => {
+                eprintln!("skip CR3 sensor decoder: {why}");
+                return;
+            }
+            Err(error) => panic!("CR3 corpus failed to decode: {error}"),
+        };
+        assert_eq!(raw.format, RawFormat::Cr3);
+        assert_eq!(raw.info().developed_size(), (6000, 4000));
+        let transform = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
+        let look = fit_preview(&raw, &bytes, &transform);
+        eprintln!("R100 guarded colour fit accepted: {}", look.is_some());
+        assert!(look.is_some(), "this R100 corpus photo has enough matching colour after camera-framing alignment");
+        let (_, info) = crate::files::load_bytes(&bytes, 400).unwrap();
+        assert!(info.raw && info.relative_wb);
+        assert_eq!((info.as_shot_temp, info.as_shot_tint), (6500.0, 0.0));
+        assert_eq!(info.camera_tone.is_some(), look.is_some());
     }
 
     /// A public D7500 NEF (skipped without the corpus): its look is fitted to its own JPEG and white

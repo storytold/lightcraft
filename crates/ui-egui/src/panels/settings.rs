@@ -543,6 +543,9 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 /// `app.openLibrary {path?}`: close the current library and open (or create) the one at `path`,
 /// or a folder chosen in a dialog. Remembered as the library to open at launch.
 pub fn open_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    if crate::lightroom_import::is_running(app) {
+        return Err("wait for Lightroom catalog import to finish before switching libraries".into());
+    }
     let path = match p.get("path").and_then(Value::as_str) {
         Some(x) => x.to_string(),
         None => match app.services.pick_folder.as_mut() {
@@ -555,6 +558,7 @@ pub fn open_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String>
     };
     app.session.close_library().map_err(|e| e.to_string())?;
     app.session.open_library(&path, false).map_err(|e| e.to_string())?;
+    app.lightroom_last = None;
     app.renderer.forget_all();
     app.ui.compare = None;
     app.ui.settings.library_path = path.clone();

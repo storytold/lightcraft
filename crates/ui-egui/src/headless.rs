@@ -1635,8 +1635,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         let (src, dest) = (base.join("card"), base.join("out"));
         std::fs::create_dir_all(&src).unwrap();
-        for i in 0..10u8 {
-            let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[i * 20, 3, 9, 255]; 64] };
+        // more files than a batch holds (see `batch_size`)
+        for i in 0..20u8 {
+            let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[i * 12, 3, 9, 255]; 64] };
             let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
             std::fs::write(src.join(format!("IMG_{i:02}.png")), png).unwrap();
         }
@@ -1651,7 +1652,7 @@ mod tests {
         h.settle(SETTLE);
         h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })));
         let Some(crate::state::Dialog::Import { opts }) = &h.app.ui.dialog else { panic!("no import review") };
-        assert_eq!(opts.candidates.len(), 10);
+        assert_eq!(opts.candidates.len(), 20);
         for id in ["button:importCopy", "button:importDest"] {
             let r = h.request("ui.clickWidget", json!({"id": id}), t);
             assert_eq!(r["ok"], true, "{id}: {r}");
@@ -1670,8 +1671,8 @@ mod tests {
         assert!(h.app.import.is_none(), "finished");
         let mut names: Vec<String> = std::fs::read_dir(&dest).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
         names.sort();
-        let want: Vec<String> = (1..=10).map(|i| format!("Trip-{i:02}.png")).collect();
-        assert_eq!(names, want, "numbered across batches of {}", crate::import::BATCH);
+        let want: Vec<String> = (1..=20).map(|i| format!("Trip-{i:02}.png")).collect();
+        assert_eq!(names, want, "numbered across batches of {}", lightcraft_engine::import::batch_size());
         let _ = std::fs::remove_dir_all(&base);
     }
 

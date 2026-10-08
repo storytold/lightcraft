@@ -25,6 +25,10 @@ pub mod guard;
 pub mod import;
 mod import_move;
 pub mod library;
+mod lightroom_archive;
+pub mod lightroom_catalog;
+pub mod lightroom_job;
+mod lightroom_sqlite;
 pub mod logging;
 pub mod media;
 pub mod memory;
@@ -186,6 +190,8 @@ pub struct Session {
     pub active_spot: Option<usize>,
     /// The persistent library this session writes to (`None` = in-memory only).
     pub library: Option<library::Library>,
+    /// Identity of current library opening; refreshed only after a successful open.
+    pub(crate) library_identity: Arc<()>,
     /// XMP sidecar preferences (persisted with the library).
     pub xmp: sidecar::XmpPrefs,
     /// Parameters of the last export (`app.export` params, minus targets), persisted in prefs.json.
@@ -274,6 +280,7 @@ impl Session {
             segmenter: segment::Segmenter::default(),
             active_spot: None,
             library: None,
+            library_identity: Arc::new(()),
             xmp: sidecar::XmpPrefs::default(),
             last_export: None,
             export_presets: Vec::new(),

@@ -121,6 +121,7 @@ language_table! {
     ZhHant, "zh-hant", "繁體中文（台灣）", "Hant", include_str!("../locales/zh-hant.json");
     Ja, "ja", "日本語", "Jpan", include_str!("../locales/ja.json");
     PtBr, "pt-br", "Português (Brasil)", "Latn", include_str!("../locales/pt-br.json");
+    Es, "es", "Español", "Latn", include_str!("../locales/es.json");
     De, "de", "Deutsch", "Latn", include_str!("../locales/de.json");
     Ru, "ru", "Русский", "Cyrl", include_str!("../locales/ru.json");
 }
@@ -449,6 +450,9 @@ mod tests {
         for tag in ["ru", "ru-RU", "ru_RU.UTF-8", "ru-UA"] {
             assert_eq!(Locale::parse_tag(tag), Some(Locale::Ru), "{tag}");
         }
+        for tag in ["es", "es-ES", "es_MX.UTF-8", "es-419"] {
+            assert_eq!(Locale::parse_tag(tag), Some(Locale::Es), "{tag}");
+        }
         assert_eq!(Locale::parse_tag("xx"), None);
     }
 
@@ -571,6 +575,7 @@ mod tests {
             ("app.language.simplifiedChinese", Locale::ZhHans),
             ("app.language.japanese", Locale::Ja),
             ("app.language.portuguese", Locale::PtBr),
+            ("app.language.spanish", Locale::Es),
             ("app.language.german", Locale::De),
             ("app.language.russian", Locale::Ru),
         ];

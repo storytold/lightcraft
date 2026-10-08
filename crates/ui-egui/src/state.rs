@@ -152,6 +152,8 @@ pub struct AppSettings {
     pub film_badges: bool,
     /// Grid: when to show the rating / flag / edited badges.
     pub grid_badges: GridBadges,
+    /// Shortcuts the user changed (Help ▸ Keyboard Shortcuts): command id → shortcut, `""` = none.
+    pub keymap: crate::shortcuts::Keymap,
 }
 
 impl Default for AppSettings {
@@ -167,6 +169,7 @@ impl Default for AppSettings {
             film_names: true,
             film_badges: true,
             grid_badges: GridBadges::Auto,
+            keymap: Default::default(),
         }
     }
 }

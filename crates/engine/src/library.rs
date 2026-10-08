@@ -412,6 +412,7 @@ impl Session {
                 lib.forgot_local = Some(plan);
             }
         }
+        self.library_identity = std::sync::Arc::new(());
         Ok(())
     }
 
@@ -504,12 +505,16 @@ impl Session {
             lib.retry_at = None;
             lib.last_error = None;
         }
-        match (persisted, snapshot) {
+        let result = match (persisted, snapshot) {
             (_, Ok(())) => Ok(()),
             // neither the log nor the snapshot took the queued ops
             (Err(EngineError::NotSaved(e)), Err(s)) if lib.journal.seq() == before => Err(EngineError::NotSaved(format!("{e}; snapshot: {s}"))),
             (_, Err(s)) => Err(s.into()),
+        };
+        if result.is_ok() {
+            self.library_identity = std::sync::Arc::new(());
         }
+        result
     }
 
     fn view_json(&self) -> Vec<u8> {

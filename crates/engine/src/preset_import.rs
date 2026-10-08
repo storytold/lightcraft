@@ -100,6 +100,7 @@ impl Lua {
 struct LuaParser<'a> {
     s: &'a [u8],
     i: usize,
+    depth: usize,
 }
 
 impl LuaParser<'_> {
@@ -210,6 +211,15 @@ impl LuaParser<'_> {
         std::str::from_utf8(&self.s[start..self.i]).ok().and_then(|t| t.parse().ok()).map_or_else(|| self.err("bad number"), Ok)
     }
     fn value(&mut self) -> Result<Lua, String> {
+        if self.depth >= 64 {
+            return self.err("Lua settings exceed nesting limit");
+        }
+        self.depth += 1;
+        let result = self.value_inner();
+        self.depth -= 1;
+        result
+    }
+    fn value_inner(&mut self) -> Result<Lua, String> {
         self.skip_ws();
         let Some(&c) = self.s.get(self.i) else { return self.err("unexpected end") };
         match c {
@@ -315,7 +325,10 @@ impl LuaParser<'_> {
 
 /// Parse a Lua table literal, optionally preceded by `name =` or `return`.
 pub fn parse_lua(text: &str) -> Result<Lua, String> {
-    let mut p = LuaParser { s: text.as_bytes(), i: 0 };
+    if text.len() > 16 << 20 {
+        return Err("Lua settings exceed 16 MiB".into());
+    }
+    let mut p = LuaParser { s: text.as_bytes(), i: 0, depth: 0 };
     p.skip_ws();
     let save = p.i;
     match p.ident().as_deref() {
@@ -347,6 +360,12 @@ pub fn lrtemplate_props(text: &str) -> Result<(Option<String>, Props, crate::crs
     let root = parse_lua(text)?;
     let title = root.get("title").or_else(|| root.get("internalName")).and_then(Lua::str).map(delocalize).filter(|t| !t.trim().is_empty());
     let settings = root.get("value").and_then(|v| v.get("settings")).ok_or("no develop settings in this template")?;
+    let (props, values) = lua_settings_props(settings)?;
+    Ok((title, props, values))
+}
+
+/// Data-only Lua settings shared by preset and native catalog import. Never executes Lua.
+pub(crate) fn lua_settings_props(settings: &Lua) -> Result<(Props, crate::crs_masks::Values), String> {
     let Lua::Table(_, fields) = settings else { return Err("no develop settings in this template".into()) };
     let mut props = Props::new();
     let mut values = crate::crs_masks::Values::new();
@@ -374,7 +393,7 @@ pub fn lrtemplate_props(text: &str) -> Result<(Option<String>, Props, crate::crs
         };
         props.insert(key, vals);
     }
-    Ok((title, props, values))
+    Ok((props, values))
 }
 
 // ------------------------------------------------------------------------------- XMP in files

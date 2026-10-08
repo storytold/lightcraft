@@ -99,6 +99,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::ConfirmDelete { .. } => "Delete Photos",
         Dialog::RemoveFolder { disk: true, .. } => "Remove Disk from Library",
         Dialog::RemoveFolder { .. } => "Remove Folder from Library",
+        // (nothing to download from in this build: the dialog explains the manual install)
+        Dialog::SamModel { .. } if sam_by_hand(&app.session.segmenter) => "Install the SAM 3 Model",
         Dialog::SamModel { .. } => "Download the SAM 3 Model?",
         Dialog::About => "About LightCraft",
         Dialog::Shortcuts => "Keyboard Shortcuts",
@@ -778,50 +780,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         }
                     }
                 }
-                Dialog::Shortcuts => {
-                    egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
-                        egui::Grid::new("shortcuts").striped(true).show(ui, |ui| {
-                            for (id, label, sc, _) in crate::menus::ui_commands() {
-                                if let Some(sc) = sc {
-                                    let grid_pick = *id == "panel.presets" && crate::shortcuts::library_grid(app);
-                                    ui.label(crate::i18n::tr(if grid_pick { "Flag as Pick" } else { label }));
-                                    ui.label(*sc);
-                                    ui.label(egui::RichText::new(if grid_pick { "photo.flag" } else { id }).color(t.text_dim));
-                                    ui.end_row();
-                                }
-                            }
-                            for sc in ["0–5", "Shift+0–5"] {
-                                ui.label(crate::i18n::tr("Set Rating"));
-                                ui.label(sc);
-                                ui.label(egui::RichText::new("photo.rate").color(t.text_dim));
-                                ui.end_row();
-                            }
-                            ui.label(crate::i18n::tr("Set Color Label"));
-                            ui.label("6–9");
-                            ui.label(egui::RichText::new("photo.label").color(t.text_dim));
-                            ui.end_row();
-                            for c in lightcraft_engine::command_specs() {
-                                if let Some(sc) = c.shortcut {
-                                    ui.label(crate::i18n::tr(c.label));
-                                    ui.label(sc);
-                                    ui.label(egui::RichText::new(c.id).color(t.text_dim));
-                                    ui.end_row();
-                                }
-                            }
-                            for (sc, id, _) in crate::shortcuts::ALIASES {
-                                let label = crate::menus::ui_commands()
-                                    .find(|c| c.0 == *id)
-                                    .map(|c| c.1)
-                                    .or_else(|| lightcraft_engine::find_command(id).map(|c| c.label))
-                                    .unwrap_or(id);
-                                ui.label(crate::i18n::tr(label));
-                                ui.label(*sc);
-                                ui.label(egui::RichText::new(*id).color(t.text_dim));
-                                ui.end_row();
-                            }
-                        });
-                    });
-                }
+                Dialog::Shortcuts => crate::panels::keymap::body(app, ui, &t),
             }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -829,7 +788,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 let sam = &app.session.segmenter;
                 let (sam_installed, sam_running, sam_failed) = (sam.installed(), sam.download_status().running, sam.download_status().error.is_some());
                 // no download location in this build: nothing to offer but the manual install
-                let sam_nowhere = !sam_installed && !sam_running && sam.mirrors().is_empty();
+                let sam_nowhere = sam_by_hand(sam);
                 let cancel = match &dlg {
                     Dialog::SamModel { .. } if sam_running || sam_installed || sam_nowhere => "Close",
                     Dialog::SamModel { .. } => "Not Now",
@@ -880,6 +839,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         ctx.move_to_top(w.response.layer_id);
         crate::widgets::register(ctx, "dialog:window", w.response.rect);
     }
+    // (while the shortcuts editor records a key, it takes Esc itself to cancel)
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         close = true;
     }
@@ -923,6 +883,22 @@ pub fn fmt_gap(v: f64) -> String {
 /// downloads).
 pub fn keeps_open(app: &LightcraftApp, dlg: &Dialog) -> bool {
     matches!(dlg, Dialog::SamModel { .. }) && !app.session.segmenter.installed()
+}
+
+/// No SAM 3 model, no download running and nowhere to download it from: installing it by hand is
+/// all the dialog can offer.
+fn sam_by_hand(sam: &lightcraft_engine::segment::Segmenter) -> bool {
+    !sam.installed() && !sam.download_status().running && sam.mirrors().is_empty()
+}
+
+/// The model installation guide.
+const SAM_HELP: &str = "https://github.com/storytold/lightcraft/blob/main/docs/ai-masks.md#getting-the-model";
+
+/// Show the SAM 3 model folder in the file manager (created first, so there is something to show).
+fn show_model_folder(app: &mut LightcraftApp, dir: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let reveal = app.services.reveal.as_mut().ok_or("not available here")?;
+    reveal(&dir.to_string_lossy())
 }
 
 /// The SAM 3 dialog: what the model is, its size and licence, and the download's progress.
@@ -971,12 +947,32 @@ fn sam_model_body(app: &mut LightcraftApp, ui: &mut egui::Ui, error: Option<&str
         return;
     }
     if seg.mirrors().is_empty() {
+        // nothing to download from: say how to install it by hand, with the folder and the guide a click away
+        let dir = seg.dir.clone();
         ui.label(
             egui::RichText::new(crate::i18n::tr(
-                "This build has no download location for the model yet: put the files in the folder above yourself (see docs/ai-masks.md).",
+                "This build can't download the model yet. To install it by hand, put model.safetensors, vocab.json and merges.txt from Meta's facebook/sam3 in the folder above: Object and Describe work as soon as they are there.",
             ))
             .color(t.text_dim),
         );
+        ui.horizontal_wrapped(|ui| {
+            if let Some(dir) = dir.filter(|_| app.services.reveal.is_some()) {
+                let r = ui.button(crate::i18n::tr(crate::menus::reveal_label()));
+                crate::widgets::register(ui.ctx(), "button:samFolder", r.rect);
+                if r.clicked()
+                    && let Err(e) = show_model_folder(app, &dir)
+                {
+                    app.toast(ui.ctx(), e);
+                }
+            }
+            let r = ui.link(crate::i18n::tr("How to install the model")).on_hover_text(SAM_HELP);
+            crate::widgets::register(ui.ctx(), "link:samHelp", r.rect);
+            if r.clicked()
+                && let Err(e) = crate::links::open(app, SAM_HELP)
+            {
+                app.toast(ui.ctx(), e);
+            }
+        });
     }
     if let Some(e) = error.map(str::to_string).or(d.error) {
         ui.label(egui::RichText::new(format!("{} {e}", crate::i18n::tr("The download didn't work:"))).color(egui::Color32::from_rgb(230, 90, 80)));

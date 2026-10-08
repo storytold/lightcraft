@@ -9,6 +9,7 @@ pub mod dialogs;
 pub mod edit;
 pub mod filterbar;
 pub mod grid;
+pub mod keymap;
 pub mod left;
 pub mod library_problem;
 pub mod masking;

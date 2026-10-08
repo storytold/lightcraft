@@ -1,6 +1,6 @@
-# Sony ARW, Nikon NEF, Panasonic RW2 and Fujifilm RAF starting look
+# Sony ARW, Nikon NEF, Panasonic RW2, Fujifilm RAF and Canon CR3 starting look
 
-ARW, NEF, RW2 and RAF decoding supply sensor data and camera white-balance multipliers, but currently no measured camera colour matrix. Treating camera RGB as linear sRGB produces a dark, muted default rendering. The loader now estimates a file-local starting look from that file's embedded camera JPEG, only when a usable camera matrix is absent. All output pixels still come from the RAW sensor data; there is no JPEG replacement or uniform saturation boost.
+ARW, NEF, RW2, RAF and CR3 decoding supply sensor data and camera white-balance multipliers, but currently no measured camera colour matrix. Treating camera RGB as linear sRGB produces a dark, muted default rendering. The loader now estimates a file-local starting look from that file's embedded camera JPEG, only when a usable camera matrix is absent. All output pixels still come from the RAW sensor data; there is no JPEG replacement or uniform saturation boost.
 
 ## Colour and tone are separate
 
@@ -61,6 +61,14 @@ The three original dark X-H2S wrench files have too little colour variation to l
 RAF inputs also work with `lightcraft-cli calibrate`. Tests cover real X-Trans/16-bit Bayer fits, profile use on dull scenes, per-file fitting after profile rejection, monochrome rejection, resolution independence, header/decoded relative WB, old-catalog WB transitions and invalid RAF calibration inputs. A full-size 6240×4160 X-T4 JPEG export also succeeded.
 
 These are camera-JPEG look estimates, **not measured spectral calibration or Lightroom parity**. Camera local tone, picture styles, noise reduction and lens warps cannot all be reproduced by a global matrix/curve; same-aspect crops may evade the aspect check. Skin, mixed-light scenes and saturated highlights can still differ from a supplied JPEG. Broader Sony, Nikon, Panasonic and Fujifilm model/lighting coverage, chart-based calibration, absolute WB and other manufacturers remain unverified. Rejected fits and other RAW formats retain their existing behaviour.
+
+### Canon CR3
+
+CR3 uses the same colour gates and relative WB. Its sensor and JPEG proxies are first oriented identically. Canon can crop its JPEG differently from the sensor; no lens distortion correction is applied to the sensor proxy, so a strongly distortion-corrected JPEG can fail the gates. A fixed 96-pixel proxy measures this remaining framing from luminance-gradient directions: scale is limited to 0.9–1.1 and translation to two proxy pixels. At least 192 edges are required; two thirds train the framing and the remaining third must independently reach direction agreement ≥0.90 with an improvement ≥0.04. At least 80% of each edge set must remain usable. Weak, flat, unrelated or already aligned references keep the sensor framing. This alignment affects training correspondences only; the RAW render still uses the actual sensor pixels.
+
+On the public CC0 EOS R100 / RF-S 18–45 mm sample, the measured framing scale was 0.968. Held-out edge agreement rose from 0.7291 to 0.9194, and the unchanged colour gates accepted the fit (held-out RMS 0.10625 → 0.07704). The corpus test asserts acceptance after decoding the sensor RAW, and synthetic tests cover nonlinear camera tone, known crop/translation and unrelated references. The matrix, tone and hue/saturation table are estimated from the file; no third-party camera matrix or decoder calibration source is copied.
+
+This is a per-file camera-look estimate, **not measured spectral calibration or Lightroom parity**. Camera local tone, picture styles, noise reduction and lens warps cannot all be reproduced by a global matrix/curve; same-aspect crops may evade the aspect check. Skin, mixed-light scenes and saturated highlights can still differ from a supplied JPEG. Broader Sony, Nikon and Canon model/lighting coverage, chart-based calibration, absolute WB and other manufacturers remain unverified. Rejected fits and other RAW formats retain their existing behaviour.
 
 ## Camera profiles (pooled per model)
 

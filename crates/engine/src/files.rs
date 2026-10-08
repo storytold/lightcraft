@@ -99,9 +99,9 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     let m = lightcraft_meta::extract(bytes);
     let (meta, captured) = meta_of(&m);
     if lightcraft_raw::probe(bytes).is_some() {
-        let raw = match lightcraft_raw::probe_info(bytes) {
+        let raw = match lightcraft_raw::probe_info(bytes).map_err(|e| preview_reason(bytes, e)) {
             Ok(r) => r,
-            Err(lightcraft_raw::RawError::Unsupported(why)) => {
+            Err(Ok(why)) => {
                 // a raw variant we can't decode yet: describe it from its embedded preview
                 let (w, h) = embedded_preview_size(bytes).ok_or(format!("unsupported raw ({why}) without an embedded preview"))?;
                 return Ok(ProbeInfo {
@@ -119,7 +119,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
                     ..Default::default()
                 });
             }
-            Err(e) => return Err(e.to_string()),
+            Err(Err(e)) => return Err(e),
         };
         let (mut w, mut h) = (raw.crop.width.max(1) as u32, raw.crop.height.max(1) as u32);
         if w <= 1 || h <= 1 {
@@ -179,6 +179,17 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     })
 }
 
+/// Why a raw that failed to decode should show its embedded preview instead (`Ok`), or the error
+/// to report (`Err`). Variants we can't decode yet always fall back. So does any CR3 error: the CRX
+/// decoder is verified on few bodies, and every CR3 opened from its embedded JPEG before it existed.
+fn preview_reason(bytes: &[u8], e: lightcraft_raw::RawError) -> Result<String, String> {
+    match e {
+        lightcraft_raw::RawError::Unsupported(why) => Ok(why),
+        e if lightcraft_raw::probe(bytes) == Some(lightcraft_raw::RawFormat::Cr3) => Ok(format!("CR3 {e}")),
+        e => Err(e.to_string()),
+    }
+}
+
 /// Sensor clip level (normalised) for highlight reconstruction.
 const HIGHLIGHT_CLIP: f32 = 0.99;
 
@@ -213,13 +224,13 @@ pub fn load_vec(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo),
 
 fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
     if lightcraft_raw::probe(&bytes).is_some() {
-        let mut raw = match lightcraft_raw::decode(&bytes) {
+        let mut raw = match lightcraft_raw::decode(&bytes).map_err(|e| preview_reason(&bytes, e)) {
             Ok(r) => r,
-            Err(lightcraft_raw::RawError::Unsupported(why)) => {
+            Err(Ok(why)) => {
                 // show the camera's embedded JPEG (rendered, not raw) until the variant is supported
                 return load_embedded_preview(&bytes, max_edge).ok_or(format!("unsupported raw ({why}) without an embedded preview"));
             }
-            Err(e) => return Err(e.to_string()),
+            Err(Err(e)) => return Err(e),
         };
         // Embedded lens corrections are applied by the pipeline ("Enable Profile Corrections"), not baked in
         // (removed before the camera look's binned sensor proxy too, which needs an empty `OpcodeList3`).
@@ -551,6 +562,43 @@ mod tests {
         b.extend_from_slice(&(jpeg.len() as u32).to_be_bytes());
         b.extend_from_slice(&jpeg);
         b
+    }
+
+    /// [`cr3_with_preview`] plus a full-size CRX raw track whose `CMP1` coding header is garbage:
+    /// the container parses, the raw data doesn't (`RawError::Corrupt`, not `Unsupported`).
+    fn cr3_with_corrupt_raw(w: u32, h: u32) -> Vec<u8> {
+        let bx = |kind: &[u8; 4], body: &[u8]| [&((body.len() + 8) as u32).to_be_bytes()[..], kind, body].concat();
+        let mut craw = vec![0u8; 82];
+        craw[24..26].copy_from_slice(&(w as u16).to_be_bytes());
+        craw[26..28].copy_from_slice(&(h as u16).to_be_bytes());
+        craw.extend(bx(b"CMP1", &[0xff; 4]));
+        let mut stsd = vec![0, 0, 0, 0, 0, 0, 0, 1];
+        stsd.extend(bx(b"CRAW", &craw));
+        let stsz = [0u32, 16, 1].map(u32::to_be_bytes).concat();
+        let co64 = [&[0u8, 0, 0, 0, 0, 0, 0, 1][..], &0u64.to_be_bytes()].concat();
+        let stbl = [bx(b"stsd", &stsd), bx(b"stsz", &stsz), bx(b"co64", &co64)].concat();
+        let trak = bx(b"trak", &bx(b"mdia", &bx(b"minf", &bx(b"stbl", &stbl))));
+        let preview = cr3_with_preview(w, h);
+        [&preview[..24], &bx(b"moov", &trak), &preview[24..]].concat()
+    }
+
+    /// A CR3 whose raw data fails to decode, for any reason, still opens from its embedded JPEG:
+    /// CR3s did before the CRX decoder, which is verified on few bodies (PR #279 review).
+    #[test]
+    fn corrupt_cr3_falls_back_to_embedded_preview() {
+        let b = cr3_with_corrupt_raw(48, 32);
+        let err = lightcraft_raw::decode(&b).expect_err("the fixture's raw data is corrupt");
+        assert!(!matches!(err, lightcraft_raw::RawError::Unsupported(_)), "{err}");
+        let p = probe_bytes("x.cr3", &b).unwrap();
+        assert_eq!((p.width, p.height, p.kind, p.format.as_str()), (48, 32, MediaKind::Raw, "CR3"));
+        assert!(p.preview_only.is_some_and(|why| why.contains("CR3")));
+        let (img, src) = load_bytes(&b, 24).unwrap();
+        assert_eq!((img.width, img.height), (24, 16));
+        assert!(!src.raw);
+        // other formats still report a corrupt file as an error
+        let mut dng = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+        dng.truncate(dng.len() / 2);
+        assert!(load_bytes(&dng, 24).is_err());
     }
 
     /// Issue #138: a DNG's own profile look (hue/saturation map, look table, tone curve) is

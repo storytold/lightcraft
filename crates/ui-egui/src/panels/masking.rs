@@ -1,6 +1,6 @@
 //! The Masking panel: create masks, list them, edit components and local adjustments.
 
-use egui::{Align2, Rect, Sense, Stroke, pos2, vec2};
+use egui::{Rect, Sense, Stroke, pos2, vec2};
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::{ControlSpec, LocalAdjustments, MaskShape, Section, Track};
 use serde_json::json;
@@ -10,7 +10,7 @@ use super::right::header;
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
-use crate::widgets::{divider, icon_button, register, slider, text_button};
+use crate::widgets::{divider, icon_button, one_line, register, slider, text_button};
 
 const fn spec(id: &'static str, label: &'static str, min: f64, max: f64, step: f64, decimals: u8, track: Track) -> ControlSpec {
     ControlSpec { id, label, section: Section::Light, min, max, default: 0.0, step, decimals, track }
@@ -61,12 +61,29 @@ fn kind_label(s: &MaskShape) -> (&'static str, Icon) {
 
 const TILE: f32 = 52.0;
 const TILE_GAP: f32 = 6.0;
+/// Room left and right of a tile's label.
+const TILE_PAD: f32 = 3.0;
 
-/// Columns and tile width of the Create New Mask grid in `width`: four tiles of up to 52 pt (at
-/// least 48, so the labels fit), else three (narrowed if even those don't fit).
-fn tile_layout(width: f32) -> (usize, f32) {
-    let tile = |n: f32| ((width - (n - 1.0) * TILE_GAP) / n).floor().min(TILE);
-    if tile(4.0) >= 48.0 { (4, tile(4.0)) } else { (3, tile(3.0).max(24.0)) }
+/// Columns, tile width and label size of the Create New Mask grid in `width`, `label(size)` being
+/// the widest label at a font size: four tiles of up to 52 pt (at least 48), else three, else two —
+/// the first that fits the labels at 10.5 pt, or at 9.5 pt before a column is dropped. A tile grows
+/// past 52 pt for a long (translated) label. In a panel too narrow even for that, two tiles whose
+/// labels are cut short.
+fn tile_layout(width: f32, label: impl Fn(f32) -> f32) -> (usize, f32, f32) {
+    let room = |n: usize| ((width - (n as f32 - 1.0) * TILE_GAP) / n as f32).floor();
+    for n in [4, 3, 2] {
+        let w = room(n);
+        if n == 4 && w < 48.0 {
+            continue;
+        }
+        for size in [10.5, 9.5] {
+            let need = (label(size) + 2.0 * TILE_PAD).ceil();
+            if need <= w {
+                return (n, w.min(TILE.max(need)), size);
+            }
+        }
+    }
+    (2, room(2).max(24.0), 9.5)
 }
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
@@ -88,15 +105,29 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ("luminanceRange", "Luminance", Icon::Sliders),
             ("colorRange", "Color", Icon::Picker),
         ];
-        // four 52 pt tiles a row when they fit, else as many as fit (at least three, shrunk)
-        let (cols, tile) = tile_layout(ui.available_width());
+        // four 52 pt tiles a row when they and their labels fit, else fewer (wider for a long label)
+        let widest = |size: f32| {
+            let font = t.font(size);
+            tiles
+                .iter()
+                .map(|(_, l, _)| ui.painter().layout_no_wrap(crate::i18n::tr(l).to_string(), font.clone(), t.text_dim).size().x)
+                .fold(0.0, f32::max)
+        };
+        let (cols, tile, size) = tile_layout(ui.available_width(), widest);
         egui::Grid::new("mask-tiles").spacing(vec2(TILE_GAP, TILE_GAP)).show(ui, |ui| {
             for (i, (kind, label, icon)) in tiles.iter().enumerate() {
                 let (r, resp) = ui.allocate_exact_size(vec2(tile, 52.0), Sense::click());
                 register(ui.ctx(), format!("maskNew:{kind}"), r);
                 ui.painter().rect_filled(r, 4.0, if resp.hovered() { t.hover } else { t.inset });
                 paint(ui.painter(), Rect::from_center_size(r.center() - vec2(0.0, 7.0), vec2(20.0, 20.0)), *icon, t.text_label);
-                ui.painter().text(pos2(r.center().x, r.bottom() - 9.0), Align2::CENTER_CENTER, *label, t.font(10.5), t.text_dim);
+                // (cut short only in a panel too narrow for the label: the full name on hover)
+                let label = crate::i18n::tr(label);
+                let g = one_line(ui.painter(), label, t.font(size), t.text_dim, tile - 2.0 * TILE_PAD);
+                let elided = g.elided;
+                let at = pos2(r.center().x, r.bottom() - 9.0) - g.size() / 2.0;
+                register(ui.ctx(), format!("maskNewLabel:{kind}"), Rect::from_min_size(at, g.size()));
+                ui.painter().galley(at, g, t.text_dim);
+                let resp = if elided { resp.on_hover_text(label) } else { resp };
                 if resp.clicked() {
                     // Leaving Describe must dismiss its editor before the next
                     // frame; otherwise its empty TextEdit requests focus again
@@ -142,7 +173,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         };
         if let Some(status) = status {
             ui.add_space(4.0);
-            ui.label(egui::RichText::new(crate::i18n::tr(status)).color(t.text_dim));
+            ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr(status)).color(t.text_dim)).wrap());
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         }
         // the model download, while its dialog is closed
@@ -213,13 +244,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             );
             let icon = m.components.first().map(|c| kind_label(&c.shape).1).unwrap_or(Icon::Mask);
             paint(ui.painter(), Rect::from_min_size(r.min + vec2(8.0, 7.0), vec2(16.0, 16.0)), icon, t.text_label);
-            ui.painter().text(
-                pos2(r.left() + 32.0, r.center().y),
-                Align2::LEFT_CENTER,
-                &m.name,
-                t.font(13.0),
-                if m.visible { t.text } else { t.text_disabled },
-            );
+            // a long name is cut short (with …) before the eye, the full name on hover
+            let color = if m.visible { t.text } else { t.text_disabled };
+            let g = one_line(ui.painter(), &m.name, t.font(13.0), color, r.width() - 32.0 - 32.0);
+            let elided = g.elided;
+            let at = pos2(r.left() + 32.0, r.center().y - g.size().y / 2.0);
+            register(ui.ctx(), format!("maskName:{}", m.id), Rect::from_min_size(at, g.size()));
+            ui.painter().galley(at, g, color);
+            let resp = if elided { resp.on_hover_text(&m.name) } else { resp };
             // show / hide on hover (and always while hidden)
             // (the pointer test, not `hovered`: over the eye, the row itself no longer counts as hovered)
             if ui.rect_contains_pointer(r) || !m.visible {
@@ -729,20 +761,21 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
     };
     ui.label(crate::i18n::tr(prompt));
     let mut submit = false;
-    ui.horizontal(|ui| {
+    // the (translated) Select button is placed first, at the right; the field takes what is left
+    ui.allocate_ui_with_layout(vec2(ui.available_width(), 24.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        if text_button(ui, "maskDescribeGo", crate::i18n::tr("Select"), false).clicked() {
+            submit = true;
+        }
         let r = ui.add(
             egui::TextEdit::singleline(&mut text)
                 .hint_text(crate::i18n::tr("e.g. sky · the red car · car, road"))
-                .desired_width(ui.available_width() - 64.0),
+                .desired_width(ui.available_width()),
         );
         register(ui.ctx(), "maskDescribe", r.rect);
         if !r.has_focus() && !r.lost_focus() && text.is_empty() {
             r.request_focus();
         }
         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            submit = true;
-        }
-        if text_button(ui, "maskDescribeGo", crate::i18n::tr("Select"), false).clicked() {
             submit = true;
         }
     });
@@ -835,5 +868,34 @@ fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 _ => app.ui.brush_flow = v as f32,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The grid keeps four 52 pt tiles when the labels fit, and gives a long (translated) label
+    /// room by dropping a column rather than drawing it past its tile.
+    #[test]
+    fn tile_labels_get_the_room_they_need() {
+        let short = |size: f32| size * 4.0; // "Luminance"-ish: 42 pt at 10.5
+        let long = |size: f32| size * 5.6; // "Background"/"Hintergrund": 59 pt at 10.5, 53 at 9.5
+        assert_eq!(tile_layout(224.0, short), (4, 51.0, 10.5));
+        // too wide for four at either size: three tiles, wider than 52 so the label fits
+        let (n, w, size) = tile_layout(224.0, long);
+        assert_eq!((n, size), (3, 10.5));
+        assert!(w >= long(10.5) + 2.0 * TILE_PAD && w <= (224.0 - 2.0 * TILE_GAP) / 3.0, "{w}");
+        // a smaller label keeps a column: 9.5 pt fits where 10.5 doesn't
+        let mid = |size: f32| size * 4.6; // 48.3 at 10.5, 43.7 at 9.5
+        assert_eq!(tile_layout(224.0, mid), (4, 51.0, 9.5));
+        // a wide panel: tiles stay 52 pt (or as wide as the label)
+        assert_eq!(tile_layout(474.0, short).0, 4);
+        assert_eq!(tile_layout(474.0, short).1, TILE);
+        // far too narrow for any label: two tiles (labels cut short), never a negative width
+        let (n, w, _) = tile_layout(60.0, long);
+        assert_eq!(n, 2);
+        assert!(w >= 24.0);
+        assert_eq!(tile_layout(f32::NAN, long).0, 2);
     }
 }

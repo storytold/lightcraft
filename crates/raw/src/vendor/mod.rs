@@ -2,6 +2,9 @@
 
 pub mod arw;
 pub mod cr2;
+pub mod cr3;
+pub mod crx;
+pub(crate) mod crx_wavelet;
 pub mod nef;
 pub mod nefc;
 pub mod orf;

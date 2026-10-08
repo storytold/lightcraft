@@ -1,9 +1,194 @@
-//! Keyboard shortcuts: parse `Cmd+Shift+X` style strings and dispatch UI and engine commands.
+//! Keyboard shortcuts: parse `Cmd+Shift+X` style strings, apply the user's keymap (Help ▸
+//! Keyboard Shortcuts, `app.setShortcut`) and dispatch UI and engine commands.
+
+use std::collections::BTreeMap;
+use std::sync::OnceLock;
 
 use egui::{Key, Modifiers};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::LightcraftApp;
+
+/// The user's changes to the keymap: command id → shortcut (`""` = no shortcut). Saved with the
+/// app settings (`ui.json`); commands not listed keep their declared shortcut.
+pub type Keymap = BTreeMap<String, String>;
+
+/// Shortcuts the app menu owns (Settings…, Quit), which no command can take.
+pub const RESERVED: &[&str] = &["Cmd+,", "Cmd+Q"];
+
+/// A command that can have a shortcut.
+#[derive(Clone, Copy, Debug)]
+pub struct Bindable {
+    pub id: &'static str,
+    pub label: &'static str,
+    /// The declared shortcut. An engine command whose key a UI command wraps (e.g. `W` opens the
+    /// White Balance Selector rather than sampling without a point) has none: the UI one owns it.
+    pub default: Option<&'static str>,
+}
+
+/// Every command that can have a shortcut: UI commands, then engine commands (one entry per id).
+pub fn bindable() -> &'static [Bindable] {
+    static ALL: OnceLock<Vec<Bindable>> = OnceLock::new();
+    ALL.get_or_init(|| {
+        let mut v: Vec<Bindable> = Vec::new();
+        for (id, label, sc, _) in crate::menus::ui_commands() {
+            if !v.iter().any(|b| b.id == *id) {
+                v.push(Bindable { id, label, default: *sc });
+            }
+        }
+        let ui_keys: Vec<(Modifiers, Key)> = v.iter().filter_map(|b| b.default.and_then(parse)).collect();
+        for c in lightcraft_engine::command_specs() {
+            if v.iter().any(|b| b.id == c.id) {
+                continue;
+            }
+            let default = c.shortcut.filter(|sc| parse(sc).is_some_and(|k| !ui_keys.contains(&k)));
+            v.push(Bindable { id: c.id, label: c.label, default });
+        }
+        v
+    })
+}
+
+pub fn find_bindable(id: &str) -> Option<&'static Bindable> {
+    bindable().iter().find(|b| b.id == id)
+}
+
+/// The shortcut `id` has now: the user's choice (`""` = none), else the declared one. An entry
+/// that doesn't parse (a hand-edited `ui.json`, a modifier-only key saved by an older build) is
+/// ignored.
+pub fn binding<'a>(keymap: &'a Keymap, id: &str, default: Option<&'a str>) -> Option<&'a str> {
+    match keymap.get(id) {
+        Some(sc) if sc.is_empty() => None,
+        Some(sc) if parse(sc).is_some() => Some(sc.as_str()),
+        _ => default,
+    }
+}
+
+/// The effective shortcut of command `id` (`None` for unknown commands).
+pub fn shortcut_of<'a>(keymap: &'a Keymap, id: &str) -> Option<&'a str> {
+    find_bindable(id).and_then(|b| binding(keymap, id, b.default))
+}
+
+/// Engine commands that intentionally share a key and are disambiguated by context in [`handle`].
+pub const CONTEXTUAL: &[(&str, &str)] = &[("photo.reject", "crop.rotateAspect")];
+
+/// Commands other than `id` whose shortcut is the key `sc` (contextual partners excepted).
+pub fn conflicts(keymap: &Keymap, id: &str, sc: &str) -> Vec<&'static str> {
+    let Some(key) = parse(sc) else { return vec![] };
+    bindable()
+        .iter()
+        .filter(|b| b.id != id && !CONTEXTUAL.iter().any(|(x, y)| (*x == id && *y == b.id) || (*y == id && *x == b.id)))
+        .filter(|b| binding(keymap, b.id, b.default).and_then(parse) == Some(key))
+        .map(|b| b.id)
+        .collect()
+}
+
+/// Give `id` the shortcut `sc` (`None` = no shortcut), taking it away from commands that had the
+/// same key. Returns the commands that lost it.
+pub fn assign(keymap: &mut Keymap, id: &str, sc: Option<&str>) -> Result<Vec<&'static str>, String> {
+    let b = find_bindable(id).ok_or_else(|| format!("unknown command: {id}"))?;
+    let sc = match sc.map(str::trim).filter(|s| !s.is_empty()) {
+        None => None,
+        Some(s) => {
+            let key = parse(s).ok_or_else(|| format!("not a shortcut: {s}"))?;
+            // store the canonical spelling so equal keys compare equal (menus, native accelerators)
+            let canonical = format(key.0, key.1).unwrap_or_else(|| s.to_string());
+            if RESERVED.iter().any(|r| parse(r) == Some(key)) {
+                return Err(format!("{canonical} is reserved for the app menu"));
+            }
+            Some(canonical)
+        }
+    };
+    let lost = sc.as_deref().map(|s| conflicts(keymap, id, s)).unwrap_or_default();
+    for other in &lost {
+        set(keymap, other, None);
+    }
+    set(keymap, b.id, sc.as_deref());
+    Ok(lost)
+}
+
+/// Store `sc` for `id`, dropping the entry when it equals the declared shortcut.
+fn set(keymap: &mut Keymap, id: &str, sc: Option<&str>) {
+    let default = find_bindable(id).and_then(|b| b.default);
+    let same = match (sc, default) {
+        (None, None) => true,
+        (Some(a), Some(b)) => parse(a) == parse(b),
+        _ => false,
+    };
+    if same {
+        keymap.remove(id);
+    } else {
+        keymap.insert(id.to_string(), sc.unwrap_or_default().to_string());
+    }
+}
+
+/// Restore the declared shortcut of `id`, taking it away from a command the user gave it to.
+pub fn reset(keymap: &mut Keymap, id: &str) -> Result<Vec<&'static str>, String> {
+    let b = find_bindable(id).ok_or_else(|| format!("unknown command: {id}"))?;
+    assign(keymap, id, b.default)
+}
+
+/// `app.setShortcut {id, shortcut?, reset?}`: `shortcut` null or `""` removes it.
+pub fn set_shortcut(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    let id = p.get("id").and_then(Value::as_str).ok_or("missing id")?;
+    let keymap = &mut app.ui.settings.keymap;
+    let lost = if p.get("reset").and_then(Value::as_bool).unwrap_or(false) {
+        reset(keymap, id)?
+    } else {
+        match p.get("shortcut") {
+            None => return Err("missing shortcut (null removes it)".into()),
+            Some(Value::Null) => assign(keymap, id, None)?,
+            Some(Value::String(s)) => assign(keymap, id, Some(s))?,
+            Some(_) => return Err("shortcut must be a string or null".into()),
+        }
+    };
+    Ok(json!({"id": id, "shortcut": shortcut_of(&app.ui.settings.keymap, id), "removedFrom": lost}))
+}
+
+/// ⌘ / ⇧ / ⌥ / ⌃ themselves: they modify a shortcut's key, they can't be it.
+pub fn is_modifier(k: Key) -> bool {
+    matches!(
+        k,
+        Key::ShiftLeft | Key::ShiftRight | Key::ControlLeft | Key::ControlRight | Key::AltLeft | Key::AltRight | Key::SuperLeft | Key::SuperRight
+    )
+}
+
+/// The shortcut text for a key press (`Cmd+Shift+K`), or `None` for keys a shortcut can't name.
+/// `Cmd` is ⌘ on macOS and Ctrl elsewhere; `Ctrl` is the macOS Control key.
+pub fn format(m: Modifiers, k: Key) -> Option<String> {
+    if is_modifier(k) {
+        return None;
+    }
+    let key = match k {
+        Key::Backspace | Key::Delete => "Delete",
+        Key::Slash => "/",
+        Key::Backslash => "\\",
+        Key::Equals => "=",
+        Key::Minus => "-",
+        Key::OpenBracket => "[",
+        Key::CloseBracket => "]",
+        Key::Quote => "'",
+        Key::Comma => ",",
+        k => k.name(),
+    };
+    let mut s = String::new();
+    if m.command || m.mac_cmd {
+        s.push_str("Cmd+");
+    }
+    // off macOS Ctrl *is* Cmd; on macOS it is the separate Control key
+    if m.ctrl && (m.mac_cmd || !m.command) {
+        s.push_str("Ctrl+");
+    }
+    if m.alt {
+        s.push_str("Alt+");
+    }
+    if m.shift {
+        s.push_str("Shift+");
+    }
+    s.push_str(key);
+    let back = parse(&s)?;
+    let want = if k == Key::Delete { Key::Backspace } else { k };
+    (back.1 == want).then_some(s)
+}
 
 /// Secondary key bindings for commands that already exist: `(shortcut, command id, params JSON)`.
 /// They complement the primary shortcut declared on the command (Lightroom-desktop keys that our
@@ -48,21 +233,26 @@ pub fn parse(s: &str) -> Option<(Modifiers, Key)> {
             // "Delete" means the key labelled ⌫ (egui's Backspace); forward-delete also matches, see `matches`.
             "Delete" => key = Some(Key::Backspace),
             k => {
-                key = Key::from_name(k).or(match k {
-                    "Right" => Some(Key::ArrowRight),
-                    "Left" => Some(Key::ArrowLeft),
-                    "Up" => Some(Key::ArrowUp),
-                    "Down" => Some(Key::ArrowDown),
-                    "\\" => Some(Key::Backslash),
-                    "/" => Some(Key::Slash),
-                    "=" => Some(Key::Equals),
-                    "-" => Some(Key::Minus),
-                    "[" => Some(Key::OpenBracket),
-                    "]" => Some(Key::CloseBracket),
-                    "'" => Some(Key::Quote),
-                    "," => Some(Key::Comma),
-                    _ => None,
-                })
+                // an unknown part (`Hyper`, a typo) makes the whole shortcut invalid
+                key = Some(
+                    Key::from_name(k)
+                        .or(match k {
+                            "Right" => Some(Key::ArrowRight),
+                            "Left" => Some(Key::ArrowLeft),
+                            "Up" => Some(Key::ArrowUp),
+                            "Down" => Some(Key::ArrowDown),
+                            "\\" => Some(Key::Backslash),
+                            "/" => Some(Key::Slash),
+                            "=" => Some(Key::Equals),
+                            "-" => Some(Key::Minus),
+                            "[" => Some(Key::OpenBracket),
+                            "]" => Some(Key::CloseBracket),
+                            "'" => Some(Key::Quote),
+                            "," => Some(Key::Comma),
+                            _ => None,
+                        })
+                        .filter(|k| !is_modifier(*k))?,
+                )
             }
         }
     }
@@ -92,36 +282,33 @@ fn matches(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
 }
 
 pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
-    // don't steal keys from text fields
-    if ctx.egui_wants_keyboard_input() {
+    if !matches!(app.ui.dialog, Some(crate::state::Dialog::Shortcuts)) {
+        app.recording_shortcut = None;
+    }
+    // don't steal keys from text fields or from the keymap editor recording a shortcut
+    if ctx.egui_wants_keyboard_input() || app.recording_shortcut.is_some() {
         return;
     }
     let mut fire: Vec<String> = Vec::new();
     // shortcuts the native menu bar handles (it consumes those key presses itself)
     let native = |sc: &str| app.native_shortcuts.contains(sc);
     let mut aliased: Vec<(&str, serde_json::Value)> = Vec::new();
+    let keymap = &app.ui.settings.keymap;
+    // keys the user gave to a command: the fixed bindings below (aliases, ratings) yield to them
+    let taken: Vec<(Modifiers, Key)> = keymap.values().filter_map(|s| parse(s)).collect();
     ctx.input(|i| {
-        let mut ui_keys = Vec::new();
-        for (id, _, sc, _) in crate::menus::ui_commands() {
-            if let Some((m, k)) = sc.and_then(parse) {
-                ui_keys.push((m, k));
-                if !native(sc.unwrap_or_default()) && matches(i, m, k) {
-                    fire.push(id.to_string());
-                }
-            }
-        }
-        for c in lightcraft_engine::command_specs() {
-            // A UI command bound to the same key wraps the engine command (e.g. `W` opens the
-            // White Balance Selector tool rather than sampling without a point): the UI one wins.
-            if let Some((m, k)) = c.shortcut.filter(|s| !native(s)).and_then(parse)
-                && !ui_keys.contains(&(m, k))
+        for b in bindable() {
+            if let Some(sc) = binding(keymap, b.id, b.default)
+                && let Some((m, k)) = parse(sc)
+                && !native(sc)
                 && matches(i, m, k)
             {
-                fire.push(c.id.to_string());
+                fire.push(b.id.to_string());
             }
         }
         for (sc, id, params) in ALIASES {
             if let Some((m, k)) = parse(sc).filter(|_| !native(sc))
+                && !taken.contains(&(m, k))
                 && matches(i, m, k)
             {
                 aliased.push((id, serde_json::from_str(params).unwrap_or_default()));
@@ -129,15 +316,15 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
         }
         // rating 0-5, colour labels 6-9 (with Shift: and advance)
         for (n, key) in [Key::Num0, Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5].iter().enumerate() {
-            if matches(i, Modifiers::NONE, *key) && !native(&n.to_string()) {
+            if matches(i, Modifiers::NONE, *key) && !native(&n.to_string()) && !taken.contains(&(Modifiers::NONE, *key)) {
                 fire.push(format!("rate:{n}:0"));
             }
-            if matches(i, Modifiers::SHIFT, *key) {
+            if matches(i, Modifiers::SHIFT, *key) && !taken.contains(&(Modifiers::SHIFT, *key)) {
                 fire.push(format!("rate:{n}:1"));
             }
         }
         for (label, key, sc) in [("red", Key::Num6, "6"), ("yellow", Key::Num7, "7"), ("green", Key::Num8, "8"), ("blue", Key::Num9, "9")] {
-            if matches(i, Modifiers::NONE, key) && !native(sc) {
+            if matches(i, Modifiers::NONE, key) && !native(sc) && !taken.contains(&(Modifiers::NONE, key)) {
                 fire.push(format!("label:{label}"));
             }
         }
@@ -554,8 +741,73 @@ mod tests {
         }
     }
 
-    /// Engine commands that intentionally share a key and are disambiguated by context in [`handle`].
-    const CONTEXTUAL: &[(&str, &str)] = &[("photo.reject", "crop.rotateAspect")];
+    #[test]
+    fn key_presses_format_to_shortcuts_that_parse_back() {
+        for k in Key::ALL {
+            for m in [Modifiers::NONE, Modifiers::SHIFT, Modifiers::COMMAND, Modifiers::ALT | Modifiers::SHIFT] {
+                if let Some(sc) = format(m, *k) {
+                    let want = if *k == Key::Delete { Key::Backspace } else { *k };
+                    assert_eq!(parse(&sc).map(|p| p.1), Some(want), "{sc}");
+                }
+            }
+        }
+        assert_eq!(format(Modifiers::COMMAND | Modifiers::SHIFT, Key::K).as_deref(), Some("Cmd+Shift+K"));
+        assert_eq!(format(Modifiers::NONE, Key::Slash).as_deref(), Some("/"));
+        assert_eq!(format(Modifiers::NONE, Key::Backspace).as_deref(), Some("Delete"));
+    }
+
+    #[test]
+    fn assigning_a_key_moves_it_and_reset_restores_it() {
+        let mut keymap = Keymap::new();
+        assert_eq!(shortcut_of(&keymap, "view.survey"), Some("N"));
+        // D belongs to Detail: Survey takes it, Detail loses it
+        let lost = assign(&mut keymap, "view.survey", Some("D")).unwrap();
+        assert_eq!(lost, vec!["view.detail"]);
+        assert_eq!(shortcut_of(&keymap, "view.survey"), Some("D"));
+        assert_eq!(shortcut_of(&keymap, "view.detail"), None);
+        // restoring Detail takes D back
+        let lost = reset(&mut keymap, "view.detail").unwrap();
+        assert_eq!(lost, vec!["view.survey"]);
+        assert_eq!(shortcut_of(&keymap, "view.detail"), Some("D"));
+        reset(&mut keymap, "view.survey").unwrap();
+        assert!(keymap.is_empty(), "declared shortcuts aren't stored: {keymap:?}");
+        // a command without a declared shortcut can get one, and lose it again
+        assign(&mut keymap, "view.photoGrid", Some("cmd+shift+1")).unwrap_err();
+        assign(&mut keymap, "view.photoGrid", Some("Cmd+Shift+1")).unwrap();
+        assert_eq!(shortcut_of(&keymap, "view.photoGrid"), Some("Cmd+Shift+1"));
+        assign(&mut keymap, "view.photoGrid", None).unwrap();
+        assert!(keymap.is_empty());
+    }
+
+    #[test]
+    fn bad_assignments_are_errors() {
+        let mut keymap = Keymap::new();
+        assert!(assign(&mut keymap, "no.suchCommand", Some("K")).is_err());
+        assert!(assign(&mut keymap, "view.survey", Some("Cmd+Nonsense")).is_err());
+        assert!(assign(&mut keymap, "view.survey", Some("Cmd+Q")).is_err());
+        assert!(assign(&mut keymap, "view.survey", Some("Cmd+,")).is_err());
+        assert!(keymap.is_empty());
+    }
+
+    /// Junk in a hand-edited `ui.json` keymap is ignored (the declared shortcut stays), never a panic.
+    #[test]
+    fn junk_keymap_entries_mean_no_shortcut() {
+        let mut keymap = Keymap::new();
+        keymap.insert("view.survey".into(), "Hyper+☃".into());
+        keymap.insert("no.suchCommand".into(), "K".into());
+        keymap.insert("view.detail".into(), "Cmd+SuperLeft".into());
+        assert_eq!(shortcut_of(&keymap, "view.survey"), Some("N"));
+        assert_eq!(shortcut_of(&keymap, "view.detail"), Some("D"));
+        assert!(conflicts(&keymap, "view.compare", "N").contains(&"view.survey"));
+        assert_eq!(parse("Hyper+K"), None);
+    }
+
+    /// Contextual partners keep sharing their key when one is reassigned.
+    #[test]
+    fn contextual_partners_are_not_conflicts() {
+        let keymap = Keymap::new();
+        assert!(conflicts(&keymap, "photo.reject", "X").is_empty());
+    }
 
     /// No key fires two different actions (a UI command may shadow the engine command it wraps).
     #[test]

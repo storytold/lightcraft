@@ -18,6 +18,7 @@ pub const LANGUAGE_COMMANDS: &[UiCommand] = &[
     ("app.language.traditionalChinese", crate::i18n::Locale::ZhHant.name(), None, "Edit>Language"),
     ("app.language.japanese", crate::i18n::Locale::Ja.name(), None, "Edit>Language"),
     ("app.language.portuguese", crate::i18n::Locale::PtBr.name(), None, "Edit>Language"),
+    ("app.language.spanish", crate::i18n::Locale::Es.name(), None, "Edit>Language"),
     ("app.language.german", crate::i18n::Locale::De.name(), None, "Edit>Language"),
     ("app.language.russian", crate::i18n::Locale::Ru.name(), None, "Edit>Language"),
 ];
@@ -37,6 +38,7 @@ pub fn language_from_command(id: &str) -> Option<crate::i18n::Locale> {
         "app.language.traditionalChinese" => Some(crate::i18n::Locale::ZhHant),
         "app.language.japanese" => Some(crate::i18n::Locale::Ja),
         "app.language.portuguese" => Some(crate::i18n::Locale::PtBr),
+        "app.language.spanish" => Some(crate::i18n::Locale::Es),
         "app.language.german" => Some(crate::i18n::Locale::De),
         "app.language.russian" => Some(crate::i18n::Locale::Ru),
         _ => None,
@@ -148,6 +150,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("merge.hdrPanoramaLast", "HDR Panorama with Last Settings", None, "Photo>Photo Merge"),
     ("file.addPhotos", "Import Photos…", Some("Cmd+Shift+I"), "File"),
     ("file.addFolder", "Import from Folder…", None, "File"),
+    ("file.importLightroom", "Import Lightroom Catalog…", None, "File"),
     ("file.addFromDevice", "Import from Device", None, ""),
     ("file.findMissing", "Find Missing Photos…", None, "File"),
     ("file.backupLibrary", "Back Up Library…", None, "File"),
@@ -173,6 +176,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.github", "LightCraft on GitHub", None, "Help"),
     ("app.artcraft", "ArtCraft Website", None, "Help"),
     ("app.shortcuts", "Keyboard Shortcuts", Some("Cmd+/"), "Help"),
+    ("app.setShortcut", "Set Keyboard Shortcut", None, ""),
+    ("app.resetShortcuts", "Reset All Keyboard Shortcuts", None, ""),
     ("app.export", "Export Now", None, ""),
     ("app.showInFinder", "Show in Finder", Some("Cmd+R"), "Photo"),
     ("dialog.rename", "Rename Photos…", Some("F2"), "Photo"),
@@ -240,6 +245,10 @@ pub fn parse_rgb(v: &Value) -> Option<[u8; 3]> {
 
 /// Handle UI commands; `None` means "not a UI command — send it to the engine".
 pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    if matches!(id, "library.inspectLightroom" | "library.importLightroom") {
+        let ctx = egui::Context::default();
+        return Some(crate::lightroom_import::command(app, id, p, &ctx));
+    }
     if let Some(language) = language_from_command(id) {
         app.ui.language = language;
         // Immediately, not on the next frame: the reply and anything else run this frame
@@ -976,12 +985,23 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             app.ui.dialog = Some(Dialog::Shortcuts);
             Ok(Value::Null)
         }
+        "app.setShortcut" => crate::shortcuts::set_shortcut(app, p),
+        "app.resetShortcuts" => {
+            app.ui.settings.keymap.clear();
+            Ok(Value::Null)
+        }
         "library.browse" if !cfg!(target_arch = "wasm32") => {
+            if crate::lightroom_import::is_running(app) {
+                return Some(Err("finish Lightroom catalog import before browsing folders".into()));
+            }
             // listed and read in the background (see `import::browse`)
             let path = p.get("path").and_then(Value::as_str)?;
             crate::import::browse(app, path, p.get("subfolders").and_then(Value::as_bool))
         }
         "file.addPhotos" => {
+            if crate::lightroom_import::is_running(app) {
+                return Some(Err("finish Lightroom catalog import before adding photos".into()));
+            }
             let paths = match p.get("paths").and_then(Value::as_array) {
                 Some(a) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
                 None => app.services.pick_files.as_mut().map(|f| f()).unwrap_or_default(),
@@ -991,6 +1011,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             }
             // review first: the import dialog lists what was found
             crate::import::open(app, paths)
+        }
+        "file.importLightroom" => {
+            let path =
+                p.get("path").and_then(Value::as_str).map(str::to_string).or_else(|| app.services.pick_lightroom_catalog.as_mut().and_then(|f| f()));
+            match path {
+                Some(path) => app.run("library.importLightroom", json!({"path":path})),
+                None => Ok(Value::Null),
+            }
         }
         "app.quit" => {
             app.ui.quit = true;
@@ -1319,7 +1347,7 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
         "file.exportCurvePresets" => !app.session.curve_presets.is_empty(),
         "view.compare" => app.session.catalog.len() > 1,
         "view.fullScreenPreview" | "view.infoOverlay" | "view.navigator" => app.session.active().is_some() || app.ui.fullscreen,
-        "app.openLibrary" | "file.addFolder" => app.services.pick_folder.is_some(),
+        "app.openLibrary" | "file.addFolder" => app.services.pick_folder.is_some() && !crate::lightroom_import::is_running(app),
         "file.backupLibrary" => app.services.backup_library.is_some(),
         "file.restoreLibrary" => app.services.restore_library.is_some(),
         "compare.swap" | "compare.makeSelect" => app.ui.view == ViewMode::Compare,
@@ -1347,7 +1375,7 @@ pub fn menu_entries(app: &LightcraftApp) -> Vec<MenuEntry> {
             id: id.to_string(),
             label: label.to_string(),
             menu: m.split('>').map(str::to_string).collect(),
-            shortcut: sc.map(str::to_string),
+            shortcut: crate::shortcuts::binding(&app.ui.settings.keymap, id, *sc).map(str::to_string),
             enabled: ui_enabled(app, id),
         })
         .collect();
@@ -1357,7 +1385,7 @@ pub fn menu_entries(app: &LightcraftApp) -> Vec<MenuEntry> {
                 id: c.id.into(),
                 label: c.label.into(),
                 menu: c.menu.iter().map(|s| s.to_string()).collect(),
-                shortcut: c.shortcut.map(str::to_string),
+                shortcut: crate::shortcuts::shortcut_of(&app.ui.settings.keymap, c.id).map(str::to_string),
                 enabled: c.enabled,
             });
         }

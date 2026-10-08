@@ -649,6 +649,20 @@ fn ai_masks_without_the_model_offer_the_download() {
         // no location configured in this build: no Download button (only Close), and an agent
         // confirming anyway gets the reason; the dialog stays
         h.step();
+        // …but a way to install it by hand: the guide, and the model folder (created on demand)
+        assert!(h.app.widgets.iter().any(|(id, _)| id == "link:samHelp"), "no installation guide link");
+        let shown = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let log = shown.clone();
+        h.app.services.reveal = Some(Box::new(move |p: &str| {
+            log.lock().unwrap().push(p.to_string());
+            Ok(())
+        }));
+        h.step();
+        let r = h.request("ui.clickWidget", json!({"id": "button:samFolder"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(dir.is_dir(), "the model folder is created to be shown");
+        assert_eq!(*shown.lock().unwrap(), vec![dir.to_string_lossy().to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
         let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
         assert_eq!(r["ok"], false, "{r}");
         let r = h.request("ui.dialog.confirm", json!({}), T);

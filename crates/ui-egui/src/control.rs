@@ -54,8 +54,21 @@ fn wrap(r: Result<Value, String>) -> Outcome {
 }
 
 pub fn all_commands(app: &LightcraftApp) -> Value {
-    let mut v: Vec<Value> = app.session.commands().into_iter().map(|c| serde_json::to_value(c).unwrap_or_default()).collect();
+    let keymap = &app.ui.settings.keymap;
+    let mut v: Vec<Value> = app
+        .session
+        .commands()
+        .into_iter()
+        .map(|c| {
+            let mut v = serde_json::to_value(&c).unwrap_or_default();
+            if let Some(o) = v.as_object_mut() {
+                o.insert("shortcut".into(), json!(crate::shortcuts::shortcut_of(keymap, c.id)));
+            }
+            v
+        })
+        .collect();
     for (id, label, sc, menu) in crate::menus::ui_commands() {
+        let sc = crate::shortcuts::binding(keymap, id, *sc);
         v.push(json!({"id": id, "label": label, "shortcut": sc, "menu": [menu], "enabled": crate::menus::ui_enabled(app, id), "ui": true}));
     }
     Value::Array(v)

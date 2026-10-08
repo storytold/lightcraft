@@ -80,7 +80,9 @@ The model is fetched from an ordered list of mirrors: base URLs where `<base>/mo
 > **Maintainers:** the built-in list is **empty** until LightCraft's own CDN locations exist
 > (see the `TODO(maintainer)` there): add them in order of preference, host the three files
 > unchanged, and pin `vocab.json` / `merges.txt` (size + SHA-256) in `SAM3_FILES` at the same
-> time. Until then the in-app download needs a user-configured mirror, and the dialog says so.
+> time. Until then the in-app download needs a user-configured mirror, and the dialog says so:
+> it names the three files to put in the model folder by hand, with a button that shows that folder
+> (created if needed) and a link to this guide.
 
 Hugging Face's `facebook/sam3` can't be a default: it is **gated** (each person must accept the
 licence there, wait for approval and download with their own token). Someone with access can

@@ -117,7 +117,27 @@ fn masking_contents_fit_the_right_panel_at_any_width() {
         T,
     );
     assert_eq!(r["ok"], true, "{r}");
+    let long = "The person standing beside the very long fence across the background";
+    let r = h.request("engine.execute", json!({"command": "mask.rename", "params": {"id": 1, "name": long}}), T);
+    assert_eq!(r["ok"], true, "{r}");
     for width in [RIGHT_WIDTH.min, RIGHT_WIDTH.default, 330.0, RIGHT_WIDTH.max] {
+        // a long Describe prompt being typed: the field and its Select button stay in the panel
+        h.app.ui.describe = Some(("new".into(), long.repeat(2)));
+        h.step();
+        h.step();
+        assert_inside_right_panel(&h, &format!("width {width}, describing"));
+        let (field, go) = (widget(&h, "maskDescribe"), widget(&h, "button:maskDescribeGo"));
+        assert!(field.right() <= go.left() && go.right() <= widget(&h, "panel:right_panel").right(), "width {width}: {field:?} {go:?}");
+        h.app.ui.describe = None;
+        // the painted text, not just the widgets: tile labels inside their tiles, a long mask
+        // name cut short before the eye
+        h.step();
+        for (id, r) in h.app.widgets.iter().filter(|(id, _)| id.starts_with("maskNewLabel:")) {
+            let tile = widget(&h, &id.replace("maskNewLabel:", "maskNew:"));
+            assert!(tile.contains_rect(*r), "width {width}: {id} {r:?} outside its tile {tile:?}");
+        }
+        let (name, row) = (widget(&h, "maskName:1"), widget(&h, "mask:1"));
+        assert!(name.right() <= row.right() - 27.0, "width {width}: the name {name:?} runs under the eye of {row:?}");
         for (selected, tool) in [(false, ""), (true, ""), (true, "brush")] {
             let mask = if selected { json!(2) } else { serde_json::Value::Null };
             h.request("engine.execute", json!({"command": "mask.select", "params": {"id": mask}}), T);

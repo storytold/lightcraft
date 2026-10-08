@@ -1062,6 +1062,25 @@ pub fn specs() -> Vec<CommandSpec> {
             ok()
         }),
         // ---- import
+        cmd!(query "library.inspectLightroom", "Inspect Lightroom Catalog", [], None,
+        "{path: .lrcat} → {photos, collections, missing, warnings}; read-only, no Lightroom required",
+        always, |_, p| {
+            let path = str_param(p,"path").ok_or_else(|| bad("library.inspectLightroom","missing path"))?;
+            let data = crate::lightroom_catalog::read(std::path::Path::new(path)).map_err(|e| bad("library.inspectLightroom",e))?;
+            Ok(json!({"photos":data.photos.len(),"collections":data.collections.iter().filter(|r|r.get("systemOnly").and_then(Value::as_f64).unwrap_or(0.0)==0.0).count(),"missing":data.photos.iter().filter(|p| !std::path::Path::new(&p.path).is_file()).map(|p|&p.path).collect::<Vec<_>>(),"warnings":data.warnings}))
+        }),
+        cmd!(
+            "library.importLightroom",
+            "Import Lightroom Catalog",
+            [],
+            None,
+            "{path: .lrcat, updateExisting?: false}; direct import of paths, ratings, flags, metadata, keywords, collections, virtual copies & mapped edits. Archives source settings/history first. Existing edited photos are preserved unless updateExisting=true; source catalog is read-only.",
+            always,
+            |s, p| {
+                let path = str_param(p, "path").ok_or_else(|| bad("library.importLightroom", "missing path"))?;
+                crate::lightroom_catalog::import(s, std::path::Path::new(path), bool_or(p, "updateExisting", false))
+            }
+        ),
         cmd!(
             query "library.importPreview",
             "Review Import",

@@ -18,8 +18,10 @@ use crate::render::Slot;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
-/// Files per batch (each batch joins the catalog as it is ready, so the progress window updates).
-pub(crate) const BATCH: usize = 8;
+/// Files per batch in the browser build (each batch joins the catalog as it is ready, so the
+/// progress window updates); the desktop's worker uses [`lightcraft_engine::import::batch_size`].
+#[cfg(target_arch = "wasm32")]
+const BATCH: usize = 8;
 
 /// The review dialog's first size (points). It can be resized; the photo grid takes the height.
 pub(crate) const DIALOG_SIZE: [f32; 2] = [960.0, 720.0];
@@ -87,6 +89,22 @@ pub struct ImportDialog {
     pub last_clicked: Option<usize>,
 }
 
+/// A candidate's file type, as the review groups them: its format, or its extension when the
+/// probe named none (`JPEG` and `JPG` are one type).
+fn file_type(c: &ImportCandidate) -> String {
+    let f = if c.format.trim().is_empty() {
+        std::path::Path::new(&c.path).extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default()
+    } else {
+        c.format.clone()
+    };
+    match f.trim().to_uppercase().as_str() {
+        "JPEG" => "JPG".into(),
+        "TIFF" => "TIF".into(),
+        "" => "?".into(),
+        other => other.to_string(),
+    }
+}
+
 impl ImportDialog {
     pub fn new(candidates: Vec<ImportCandidate>) -> Self {
         let checked = candidates.iter().map(|c| c.duplicate.is_none() && c.error.is_none()).collect();
@@ -94,6 +112,29 @@ impl ImportDialog {
     }
     pub fn importable(&self, i: usize) -> bool {
         self.candidates.get(i).is_some_and(|c| c.error.is_none() && (c.duplicate.is_none() || self.is_trashed(i) && !self.on_deleted.is_empty()))
+    }
+    /// The file types among the candidates (`ARW`, `JPG`…, upper case, sorted) and how many of each.
+    pub fn file_types(&self) -> Vec<(String, usize)> {
+        let mut types: std::collections::BTreeMap<String, usize> = Default::default();
+        for c in &self.candidates {
+            *types.entry(file_type(c)).or_default() += 1;
+        }
+        types.into_iter().collect()
+    }
+    /// Any file of type `ty` is checked.
+    pub fn type_checked(&self, ty: &str) -> bool {
+        self.candidates.iter().zip(&self.checked).any(|(c, on)| *on && file_type(c) == ty)
+    }
+    /// Check (the importable ones) or uncheck every file of type `ty`: the raws only, say, and not
+    /// the JPEGs kept beside them (issue #344).
+    pub fn check_type(&mut self, ty: &str, on: bool) {
+        for i in 0..self.candidates.len() {
+            let same = self.candidates.get(i).is_some_and(|c| file_type(c) == ty);
+            let importable = self.importable(i);
+            if same && let Some(c) = self.checked.get_mut(i) {
+                *c = on && importable;
+            }
+        }
     }
     /// Candidate `i` is a file whose photo is in Recently Deleted.
     pub fn is_trashed(&self, i: usize) -> bool {
@@ -273,7 +314,7 @@ impl ImportRun {
         let ctx = ctx.clone();
         let work = move || {
             let files = job.expand(&queue);
-            for chunk in files.chunks(BATCH) {
+            for chunk in files.chunks(lightcraft_engine::import::batch_size()) {
                 if cancel.load(Ordering::Relaxed) {
                     break;
                 }
@@ -819,6 +860,21 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             }
         });
     });
+    // with more than one file type: a toggle per type checks or unchecks all of its files
+    let types = d.file_types();
+    if types.len() > 1 {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(egui::RichText::new(crate::i18n::tr("File types:")).color(t.text_dim));
+            for (ty, count) in &types {
+                let on = d.type_checked(ty);
+                let r = crate::widgets::text_button(ui, &format!("importType:{ty}"), &format!("{ty} · {count}"), on)
+                    .on_hover_text(crate::i18n::tr(if on { "Uncheck the files of this type" } else { "Check the files of this type" }));
+                if r.clicked() {
+                    d.check_type(ty, !on);
+                }
+            }
+        });
+    }
     // candidate grid
     let cell = 116.0;
     let avail = ui.available_width();
@@ -1388,6 +1444,32 @@ mod tests {
         let mut candidates: Vec<ImportCandidate> = (0..6).map(|i| ImportCandidate { path: format!("img{i}.jpg"), ..Default::default() }).collect();
         candidates[3].duplicate = Some("content".into());
         ImportDialog::new(candidates)
+    }
+
+    /// A toggle per file type: the raws only, without the JPEGs beside them (issue #344).
+    #[test]
+    fn file_types_check_and_uncheck_together() {
+        let mut candidates: Vec<ImportCandidate> =
+            ["a.ARW", "a.JPG", "b.arw", "b.jpeg", "c.png"].iter().map(|p| ImportCandidate { path: p.to_string(), ..Default::default() }).collect();
+        candidates[2].format = "ARW".into();
+        candidates[3].format = "JPEG".into();
+        candidates[2].duplicate = Some("content".into());
+        let mut d = ImportDialog::new(candidates);
+        assert_eq!(d.file_types(), [("ARW".to_string(), 2), ("JPG".to_string(), 2), ("PNG".to_string(), 1)]);
+        assert!(d.type_checked("JPG"));
+        d.check_type("JPG", false);
+        assert_eq!(d.checked, [true, false, false, false, true]);
+        assert!(!d.type_checked("JPG"));
+        d.check_type("PNG", false);
+        d.check_type("ARW", true);
+        // the duplicate stays unchecked: it isn't importable
+        assert_eq!(d.checked, [true, false, false, false, false]);
+        d.check_type("JPG", true);
+        assert_eq!(d.checked, [true, true, false, true, false]);
+        assert_eq!(d.selected_paths(), ["a.ARW", "a.JPG", "b.jpeg"]);
+        // an unknown type changes nothing
+        d.check_type("CR3", false);
+        assert_eq!(d.checked, [true, true, false, true, false]);
     }
 
     #[test]

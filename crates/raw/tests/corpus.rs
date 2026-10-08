@@ -1,7 +1,7 @@
 //! Corpus test over `corpus/raw/**` (git-ignored CC0 samples from raw.pixls.us, fetched with
 //! `cargo xtask corpus --download`; `LIGHTCRAFT_CORPUS` overrides the corpus root). Skips cleanly when absent.
 //!
-//! Every file must be recognised, carry an embedded JPEG preview (DNG: optional), and either decode to a valid image or report
+//! Every file must be recognised, carry an embedded JPEG preview (optional for DNG, older Panasonic RAW and HEVC-preview CR3), and either decode to a valid image or report
 //! `Unsupported` for one of the variants we know we don't decode yet. Prints decode times
 //! (`cargo test -p lightcraft-raw --release --test corpus -- --nocapture`).
 
@@ -15,7 +15,7 @@ fn corpus_root() -> PathBuf {
 
 /// Variants known not to decode yet (see the crate docs): matched against the lower-case file name.
 const KNOWN_UNSUPPORTED: &[&str] = &[
-    "cr3-",           // CR3 / CRX (M11.1)
+    "cr3-",           // Unverified CRX coding variants; exact supported cases live in cr3_corpus.rs.
     "orf-olympus-em", // Olympus compressed ORF
     "sraw",           // Canon sRAW / mRAW
 ];
@@ -41,11 +41,14 @@ fn corpus_raw_decodes() {
         let preview = embedded_preview(&bytes);
         let tp = t0.elapsed().as_secs_f64() * 1e3;
         // DNG previews are optional (and some carry only an uncompressed RGB thumbnail); vendor raws embed a JPEG,
-        // except the Panasonic `.RAW` files of 2005–2007
+        // except the Panasonic `.RAW` files of 2005–2007 and Canon's explicit HEVC preview tracks.
         if let Some(p) = &preview {
             assert!(p.starts_with(&[0xff, 0xd8]) && p.ends_with(&[0xff, 0xd9]), "{name}: preview is not a JPEG");
         } else {
-            assert!(fmt == RawFormat::Dng || name.starts_with("raw-panasonic-"), "{name}: no embedded preview");
+            let hevc_preview = fmt == RawFormat::Cr3
+                && lightcraft_meta::cr3::parse_cr3(&bytes)
+                    .is_some_and(|c| c.tracks.iter().any(|t| t.kind == lightcraft_meta::cr3::Cr3TrackKind::Other(*b"HEVC") && t.data.is_some()));
+            assert!(fmt == RawFormat::Dng || name.starts_with("raw-panasonic-") || hevc_preview, "{name}: no embedded preview");
         }
         let preview_kb = preview.as_ref().map_or(0, |p| p.len() / 1024);
         let t1 = Instant::now();
@@ -85,7 +88,7 @@ fn corpus_raw_decodes() {
             Err(e) => panic!("{name}: {e}"),
         }
     }
-    eprintln!("corpus/raw: {ok} decoded, {unsupported} known-unsupported (preview only)");
+    eprintln!("corpus/raw: {ok} decoded, {unsupported} known-unsupported (embedded JPEG when available)");
 }
 
 /// Green-channel means of 32×32 blocks.

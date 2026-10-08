@@ -433,3 +433,70 @@ fn write_policy_timing() {
     println!("copy {n} × {} MB: byte compare with the source {bytewise:?}, probe hash {hashed:?}", size >> 20);
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// Issue #367: Import → Copy wrote and verified one file after another on one thread. The copies
+/// now run side by side, with the names, order, duplicates and reports a one-by-one copy gives:
+/// like-named files take -1, -2… in file order (also against a file already there and a literal
+/// `IMG_1-1`), and a file with the content of one copied earlier in the batch is its duplicate
+/// (also while that copy is still under way).
+#[test]
+fn copies_run_side_by_side_with_the_same_outcome() {
+    let base = temp_dir("parallel-copy");
+    let (card, dest) = (base.join("card"), base.join("out"));
+    write_png(&card.join("a/IMG_1.png"), 1);
+    write_png(&card.join("a/IMG_2.png"), 2);
+    write_png(&card.join("b/IMG_1.png"), 3);
+    write_png(&card.join("b/IMG_1-1.png"), 4);
+    write_png(&card.join("c/IMG_1.png"), 5);
+    for i in 0..8u8 {
+        write_png(&card.join(format!("d/p{i}.png")), 10 + i);
+    }
+    // the content of a file whose copy is still under way
+    std::fs::create_dir_all(card.join("e")).unwrap();
+    std::fs::copy(card.join("d/p3.png"), card.join("e/dup.png")).unwrap();
+    std::fs::create_dir_all(&dest).unwrap();
+    std::fs::write(dest.join("IMG_2.png"), b"someone else's file").unwrap();
+
+    let mut s = session();
+    inject(Fault::Slow);
+    let r = s
+        .execute(
+            "library.import",
+            &json!({"paths": [card.to_string_lossy()], "mode": "copy", "destination": dest.to_string_lossy(), "organize": "flat"}),
+        )
+        .unwrap();
+    inject(Fault::None);
+    let threads: std::collections::HashSet<_> = crate::import_move::copy_threads().into_iter().collect();
+    if std::thread::available_parallelism().map_or(1, |n| n.get()) > 1 {
+        assert!(threads.len() > 1, "copies ran on {} thread(s)", threads.len());
+    }
+
+    assert_eq!(len(&r, "imported"), 13, "{r}");
+    assert_eq!(len(&r, "failed"), 0, "{r}");
+    assert_eq!(len(&r, "duplicates"), 1, "{r}");
+    assert_eq!(r["duplicates"][0]["reason"], "content");
+    assert!(r["duplicates"][0]["path"].as_str().unwrap().ends_with("dup.png"), "{r}");
+    // the order of a one-by-one copy (files in name order), each verified
+    let expect = [
+        ("a/IMG_1.png", "IMG_1.png"),
+        ("a/IMG_2.png", "IMG_2-1.png"),
+        ("b/IMG_1-1.png", "IMG_1-1.png"),
+        ("b/IMG_1.png", "IMG_1-2.png"),
+        ("c/IMG_1.png", "IMG_1-3.png"),
+    ];
+    for (src, dst) in expect {
+        assert_eq!(std::fs::read(dest.join(dst)).unwrap(), std::fs::read(card.join(src)).unwrap(), "{src} → {dst}");
+    }
+    for i in 0..8 {
+        assert_eq!(std::fs::read(dest.join(format!("p{i}.png"))).unwrap(), std::fs::read(card.join(format!("d/p{i}.png"))).unwrap());
+    }
+    assert_eq!(std::fs::read(dest.join("IMG_2.png")).unwrap(), b"someone else's file");
+    assert_eq!(files_under(&dest).len(), 14, "{:?}", files_under(&dest));
+    // the duplicate names the photo copied from the same content (d/p3); ids follow the file order
+    let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
+    assert!(ids.windows(2).all(|w| w[0] < w[1]), "{ids:?}");
+    assert_eq!(r["duplicates"][0]["existing"], ids[8], "{r}");
+    let first = s.catalog.photo(lightcraft_catalog::PhotoId(ids[0])).unwrap();
+    assert_eq!(first.file_name, "IMG_1.png");
+    let _ = std::fs::remove_dir_all(&base);
+}

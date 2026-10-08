@@ -5,8 +5,8 @@ proptest! {
     #![proptest_config(ProptestConfig { cases: 1500, .. ProptestConfig::default() })]
 
     #[test]
-    fn random_containers_never_panic(mut data in proptest::collection::vec(any::<u8>(), 0..600), kind in 0usize..5) {
-        let heads: [&[u8]; 5] = [b"\xff\xd8\xff\xe1", b"\x89PNG\r\n\x1a\n", b"RIFF\0\0\0\0WEBP", b"II*\0", b"MM\0*"];
+    fn random_containers_never_panic(mut data in proptest::collection::vec(any::<u8>(), 0..600), kind in 0usize..6) {
+        let heads: [&[u8]; 6] = [b"\xff\xd8\xff\xe1", b"\x89PNG\r\n\x1a\n", b"RIFF\0\0\0\0WEBP", b"II*\0", b"MM\0*", b"\0\0\0\x18ftypcrx "];
         let h = heads[kind];
         if data.len() >= h.len() {
             data[..h.len()].copy_from_slice(h);

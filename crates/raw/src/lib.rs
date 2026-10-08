@@ -12,11 +12,11 @@
 //!   look tables and tone curve.
 //!
 //! Formats: DNG (uncompressed, lossless JPEG, lossy JPEG (Smart Previews), Deflate incl. floating point, tiled/stripped, CFA and LinearRaw),
-//! Canon CR2, Nikon NEF/NRW (uncompressed, Huffman lossless / lossy compressed), Sony ARW (uncompressed, ARW2, lossless), Fujifilm RAF (uncompressed Bayer
+//! Canon CR2 / CR3 (lossless CRX Bayer and version 0x100/0x200 C-RAW), Nikon NEF/NRW (uncompressed, Huffman lossless / lossy compressed), Sony ARW (uncompressed, ARW2, lossless), Fujifilm RAF (uncompressed Bayer
 //! and X-Trans, lossless and lossy compressed), Panasonic RW2 / Leica RWL / Panasonic RAW (every raw format: compressed 4 and 6, the prefix-coded strips of 8,
 //! packed 2/5/7, the 16-bit words of the oldest bodies), Pentax PEF (uncompressed, Huffman), Olympus ORF (uncompressed).
-//! [`embedded_preview`] covers all of them plus CR3. Variants we can't decode yet (Nikon "lossy after split" NEF,
-//! compressed ORF, CR3) return [`RawError::Unsupported`]; each vendor module documents its sources
+//! [`embedded_preview`] covers these containers' JPEG previews. Variants we can't decode yet (Nikon "lossy after split" NEF,
+//! compressed ORF, CR3 unverified marker families / C-RAW configurations) return [`RawError::Unsupported`]; each vendor module documents its sources
 //! (public specifications, tag-name documentation, black-box analysis of CC0 samples) and gaps. Non-DNG files carry no
 //! colour matrix: [`color`] falls back to a documented neutral model. The decoders never panic on malformed input.
 #![forbid(unsafe_code)]
@@ -92,7 +92,15 @@ impl RawFormat {
     pub fn is_supported(self) -> bool {
         matches!(
             self,
-            RawFormat::Dng | RawFormat::Cr2 | RawFormat::Nef | RawFormat::Nrw | RawFormat::Arw | RawFormat::Raf | RawFormat::Rw2 | RawFormat::Pef
+            RawFormat::Dng
+                | RawFormat::Cr2
+                | RawFormat::Cr3
+                | RawFormat::Nef
+                | RawFormat::Nrw
+                | RawFormat::Arw
+                | RawFormat::Raf
+                | RawFormat::Rw2
+                | RawFormat::Pef
         )
     }
 }
@@ -180,6 +188,7 @@ fn decode_with(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     match probe(bytes).ok_or(RawError::NotRaw)? {
         RawFormat::Dng => dng::decode(bytes, mode),
         RawFormat::Cr2 => vendor::cr2::decode(bytes, mode),
+        RawFormat::Cr3 => vendor::cr3::decode(bytes, mode),
         RawFormat::Nef | RawFormat::Nrw => vendor::nef::decode(bytes),
         RawFormat::Arw => vendor::arw::decode(bytes, mode),
         RawFormat::Raf => vendor::raf::decode(bytes, mode),

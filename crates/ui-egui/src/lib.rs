@@ -13,6 +13,7 @@ pub mod headless;
 pub mod i18n;
 pub mod icons;
 pub mod import;
+pub mod lightroom_import;
 pub mod links;
 pub mod menubar;
 pub mod menus;
@@ -33,11 +34,15 @@ mod tests_filmstrip;
 #[cfg(test)]
 mod tests_grid;
 #[cfg(test)]
+mod tests_keymap;
+#[cfg(test)]
 mod tests_labels;
 #[cfg(test)]
 mod tests_library_problem;
 #[cfg(test)]
 mod tests_masking;
+#[cfg(test)]
+mod tests_masking_layout;
 #[cfg(test)]
 mod tests_offline;
 #[cfg(test)]
@@ -109,6 +114,8 @@ pub struct Services {
     pub reveal: Option<RevealFn>,
     /// Choose a folder (Settings → General → Open Library…; desktop only).
     pub pick_folder: Option<PickFolder>,
+    /// Open a Lightroom Classic `.lrcat` catalog for read-only import.
+    pub pick_lightroom_catalog: Option<PickFolder>,
     /// Open a web link in the browser (Help menu, About, Discord button).
     pub open_url: Option<OpenUrlFn>,
     /// Open a file in an external editor (Edit in External Editor; desktop only).
@@ -151,6 +158,9 @@ pub struct LightcraftApp {
     /// Shortcuts the native menu bar currently handles (`Cmd+Z`, `G`…): the egui shortcut handler
     /// leaves them alone so nothing fires twice.
     pub native_shortcuts: std::collections::HashSet<String>,
+    /// The keyboard shortcuts editor is waiting for a key press for this command: no shortcut
+    /// fires (the native menu bar drops its accelerators too) until it gets one or is cancelled.
+    pub recording_shortcut: Option<String>,
     /// The host is [`headless::Headless`] (it answers viewport screenshot commands itself).
     pub headless_host: bool,
     /// Warnings to show one at a time (damaged settings files…, issue #103).
@@ -196,6 +206,10 @@ pub struct LightcraftApp {
     pub import: Option<import::ImportTask>,
     /// A folder scan in progress (feeds the import review).
     pub scan: Option<import::ScanTask>,
+    /// A Lightroom catalog inspect/import in progress.
+    pub lightroom: Option<lightroom_import::LightroomTask>,
+    /// Last terminal Lightroom result, exposed by the command's status/wait response.
+    pub lightroom_last: Option<Value>,
     /// A background export in progress.
     pub export: Option<export_task::ExportTask>,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
@@ -230,6 +244,7 @@ impl LightcraftApp {
             integrated_titlebar: false,
             native_menu: false,
             native_shortcuts: Default::default(),
+            recording_shortcut: None,
             headless_host: false,
             notices: vec![],
             quit_prompt: None,
@@ -255,6 +270,8 @@ impl LightcraftApp {
             merge: merge::MergeState::default(),
             import: None,
             scan: None,
+            lightroom: None,
+            lightroom_last: None,
             export: None,
             tasks: Default::default(),
             last_export_result: None,
@@ -654,6 +671,7 @@ impl LightcraftApp {
         merge::poll(self, ctx);
         import::poll_scan(self, ctx);
         import::tick(self, ctx);
+        lightroom_import::tick(self, ctx);
         tasks::poll(self, ctx);
         self.preview_build_status(ctx);
         self.save_status(ctx);
@@ -675,7 +693,7 @@ impl LightcraftApp {
         if let Some(folder) = self.session.import_defaults.auto_folder.clone() {
             const LABEL: &str = "Auto Import";
             let now = ctx.input(|i| i.time);
-            if now - self.ui.auto_import_at >= 3.0 && self.import.is_none() && !self.tasks.is_running(LABEL) {
+            if now - self.ui.auto_import_at >= 3.0 && self.import.is_none() && self.lightroom.is_none() && !self.tasks.is_running(LABEL) {
                 self.ui.auto_import_at = now;
                 let work = move || lightcraft_engine::cmd::library::list_auto_import_folder(&folder);
                 let done = |app: &mut LightcraftApp, _ctx: &egui::Context, listing: Result<Vec<(String, u64)>, String>| {
@@ -716,10 +734,12 @@ impl LightcraftApp {
                 let _ = self.run("file.importPresets", serde_json::json!({"paths": presets}));
             }
             // read and added on a worker thread (dropped folders can be large, or on a slow drive)
-            if !photos.is_empty()
-                && let Err(e) = import::start_paths(self, photos)
-            {
-                self.toast(ctx, e);
+            if !photos.is_empty() {
+                if self.lightroom.is_some() {
+                    self.toast(ctx, "Finish Lightroom catalog import before adding photos");
+                } else if let Err(e) = import::start_paths(self, photos) {
+                    self.toast(ctx, e);
+                }
             }
         }
     }
@@ -856,6 +876,7 @@ impl LightcraftApp {
         panels::library_problem::show(self, &ctx);
         import::progress(self, &ctx);
         import::scan_progress(self, &ctx);
+        lightroom_import::progress(self, &ctx);
         export_task::poll(self, &ctx);
         panels::grid::drag_feedback(self, &ctx);
         panels::toast(self, &ctx);

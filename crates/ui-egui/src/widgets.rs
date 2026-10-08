@@ -593,6 +593,15 @@ mod access_tests {
     }
 }
 
+/// `text` laid out on one line, cut short with … when it is wider than `max` (the galley's
+/// `elided` says whether it was): for text painted into a fixed box (a tile, a row before its
+/// buttons), which a plain `Painter::text` would draw past.
+pub(crate) fn one_line(painter: &egui::Painter, text: &str, font: egui::FontId, color: Color32, max: f32) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), font, color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(max.max(1.0));
+    painter.layout_job(job)
+}
+
 /// `text` shortened to fit `max` (as `width` measures it): leading folders drop first
 /// (`Users/me/Pictures/Lightroom` → `…/Pictures/Lightroom`) so the end of a path, which says the
 /// most, stays; a single name still too long loses its end (`2024-06-12 Tri…`: folders tend to
