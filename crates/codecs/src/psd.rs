@@ -167,9 +167,9 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
         };
         let idx = planes.first().ok_or_else(|| err("missing plane"))?;
         let mut v = zeroed::<u8>(n.checked_mul(3).ok_or_else(too_large)?, too_large)?;
-        for (o, &i) in v.chunks_exact_mut(3).zip(idx) {
+        for (o, &i) in v.as_chunks_mut::<3>().0.iter_mut().zip(idx) {
             let i = i as usize;
-            o.copy_from_slice(&[pal[i], pal[256 + i], pal[512 + i]]);
+            *o = [pal[i], pal[256 + i], pal[512 + i]];
         }
         Buf::U8(v)
     } else {
@@ -188,8 +188,8 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
             2 => {
                 let mut v = zeroed::<u16>(samples, too_large)?;
                 for (c, p) in planes.iter().enumerate() {
-                    for (o, s) in v.iter_mut().skip(c).step_by(used).zip(p.chunks_exact(2)) {
-                        let x = u16::from_be_bytes([s[0], s[1]]);
+                    for (o, s) in v.iter_mut().skip(c).step_by(used).zip(p.as_chunks::<2>().0) {
+                        let x = u16::from_be_bytes(*s);
                         *o = if cmyk && c < 4 { 65535 - x } else { x };
                     }
                 }
@@ -198,8 +198,8 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
             _ => {
                 let mut v = zeroed::<f32>(samples, too_large)?;
                 for (c, p) in planes.iter().enumerate() {
-                    for (o, s) in v.iter_mut().skip(c).step_by(used).zip(p.chunks_exact(4)) {
-                        let x = f32::from_be_bytes([s[0], s[1], s[2], s[3]]);
+                    for (o, s) in v.iter_mut().skip(c).step_by(used).zip(p.as_chunks::<4>().0) {
+                        let x = f32::from_be_bytes(*s);
                         *o = if cmyk && c < 4 { 1.0 - x } else { x };
                     }
                 }
