@@ -281,8 +281,9 @@ fn windows_open_url_command(url: &str) -> std::process::Command {
     c
 }
 
-/// The platform services; `ctx` repaints when a file dialog closes.
-fn services(ctx: egui::Context) -> Services {
+/// The platform services; `ctx` repaints when a file dialog closes, and `log_file` is
+/// for Help ▸ Open Log Folder.
+fn services(ctx: egui::Context, log_file: Option<&std::path::Path>) -> Services {
     Services {
         // Commands' file dialogs run on their own thread (#191): a dialog on the UI thread
         // stopped the window answering the compositor, which then reported the app as hung.
@@ -317,6 +318,7 @@ fn services(ctx: egui::Context) -> Services {
                 .map_err(|e| format!("could not start the file dialog: {e}"))?;
             Ok(rx)
         })),
+        log_file: log_file.map(|p| p.display().to_string()),
         pick_lightroom_catalog: Some(Box::new(|| {
             rfd::FileDialog::new()
                 .set_title(lightcraft_ui_egui::i18n::tr("Import Lightroom Catalog"))
@@ -637,6 +639,8 @@ fn main() -> eframe::Result {
         wgpu_options: window_wgpu_options(),
         ..Default::default()
     };
+    // the app's copy: `log_file` is still named in the message of a start that fails
+    let app_log_file = log_file.clone();
     let started = eframe::run_native(
         "LightCraft",
         options,
@@ -648,7 +652,7 @@ fn main() -> eframe::Result {
                 std::env::var_os("LIGHTCRAFT_SAM3_DIR").map(std::path::PathBuf::from).or_else(|| config_dir().map(|d| d.join("models").join("sam3")));
             // the user's own download locations, one base URL per line (LIGHTCRAFT_SAM3_MIRRORS too)
             session.segmenter.mirrors_file = config_dir().map(|d| d.join("models").join("sam3-mirrors.txt"));
-            let mut app = LightcraftApp::new(session, services(cc.egui_ctx.clone()));
+            let mut app = LightcraftApp::new(session, services(cc.egui_ctx.clone(), app_log_file.as_deref()));
             if let Some(ui) = prefs {
                 app.ui = ui;
             }

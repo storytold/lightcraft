@@ -1796,5 +1796,6 @@
   "Only": "Nur diese",
   "How to install the model": "So installierst du das Modell",
   "Install the SAM 3 Model": "SAM-3-Modell installieren",
-  "This build can't download the model yet. To install it by hand, put model.safetensors, vocab.json and merges.txt from Meta's facebook/sam3 in the folder above: Object and Describe work as soon as they are there.": "Diese Version kann das Modell noch nicht herunterladen. Zum Installieren von Hand lege model.safetensors, vocab.json und merges.txt aus Metas facebook/sam3 in den obigen Ordner: Objekt und Beschreiben funktionieren, sobald sie dort liegen."
+  "This build can't download the model yet. To install it by hand, put model.safetensors, vocab.json and merges.txt from Meta's facebook/sam3 in the folder above: Object and Describe work as soon as they are there.": "Diese Version kann das Modell noch nicht herunterladen. Zum Installieren von Hand lege model.safetensors, vocab.json und merges.txt aus Metas facebook/sam3 in den obigen Ordner: Objekt und Beschreiben funktionieren, sobald sie dort liegen.",
+  "Open Log Folder": "Protokollordner öffnen"
 }

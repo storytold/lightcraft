@@ -359,7 +359,8 @@ Language**; the choice applies immediately and persists. See [docs/localization.
 **Logs:** the desktop app writes its log to standard error and to `logs/lightcraft.log` in its settings folder
 (Linux `$XDG_CONFIG_HOME/lightcraft/logs/`, by default `~/.config/lightcraft/logs/`; macOS
 `~/Library/Application Support/LightCraft/logs/`; Windows `%APPDATA%\LightCraft\logs\`), never in the library. A
-launch from a desktop menu or the Dock has no terminal, so attach this file to a bug report. Each start moves the
+launch from a desktop menu or the Dock has no terminal, so attach this file to a bug report (**Help ▸ Open Log
+Folder** shows it in the file manager). Each start moves the
 previous log to `lightcraft.1.log` and that one to `lightcraft.2.log`, so the log of a run that crashed survives the
 next start; the file stops growing at 16 MiB, `--version` and `--help` write none, and runs with
 `LIGHTCRAFT_NO_PREFS` log to standard error only. By default LightCraft's own crates log at `info` and everything else

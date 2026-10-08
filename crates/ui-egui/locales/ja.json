@@ -1641,5 +1641,6 @@
   "繁體中文（台灣）": "繁體中文（台灣）",
   "How to install the model": "モデルのインストール方法",
   "Install the SAM 3 Model": "SAM 3モデルのインストール",
-  "This build can't download the model yet. To install it by hand, put model.safetensors, vocab.json and merges.txt from Meta's facebook/sam3 in the folder above: Object and Describe work as soon as they are there.": "このビルドではまだモデルをダウンロードできません。手動でインストールするには、Meta の facebook/sam3 の model.safetensors、vocab.json、merges.txt を上のフォルダに置いてください。置いた時点で「オブジェクト」と「説明で選択」が使えるようになります。"
+  "This build can't download the model yet. To install it by hand, put model.safetensors, vocab.json and merges.txt from Meta's facebook/sam3 in the folder above: Object and Describe work as soon as they are there.": "このビルドではまだモデルをダウンロードできません。手動でインストールするには、Meta の facebook/sam3 の model.safetensors、vocab.json、merges.txt を上のフォルダに置いてください。置いた時点で「オブジェクト」と「説明で選択」が使えるようになります。",
+  "Open Log Folder": "ログフォルダーを開く"
 }

@@ -219,6 +219,7 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
             lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
         })),
         reveal: None,
+        log_file: None,
         open_with: None,
         open_url: Some(Box::new(|url: &str| {
             let w = web_sys::window().ok_or("no window")?;

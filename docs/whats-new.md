@@ -99,6 +99,8 @@
   with the logs of the two previous runs beside it, so warnings and crashes of a run started from a desktop menu or the
   Dock can be attached to a bug report. `LIGHTCRAFT_LOG` works as before; `RUST_LOG` takes env_logger-style
   directives. See README → Quick start → Logs.
+- Help → Open Log Folder shows that log file in the file manager (Finder, Explorer, or the folder on Linux), so it
+  can be attached to a report without hunting for the settings folder (issue #260).
 - `lightcraft-cli` logs warnings on stderr too (issue #168); `LIGHTCRAFT_LOG` or `RUST_LOG` picks another level.
 - LightCraft no longer crashes at launch on Windows PCs whose Vulkan driver is broken (issue #136, e.g. some Intel UHD
   630 drivers): on Windows the window and GPU rendering use DirectX 12 only and never load the Vulkan driver unless

@@ -231,6 +231,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "app.whatsNew",
             "app.shortcuts",
             "app.systemInfo",
+            "app.openLogFolder",
             "---",
             "app.about",
         ],
@@ -1084,6 +1085,37 @@ mod tests {
         let first = app.session.visible()[0].0;
         app.session.execute("library.select", &json!({"ids": [first]})).unwrap();
         assert!(run_item(&mut app, "merge.hdrLast", Value::Null).is_err());
+    }
+
+    /// #260: Help ▸ Open Log Folder reveals the log file the host names. Without one (the web,
+    /// `--memory`) or without a file manager to show it, the item is off and the command says why.
+    #[test]
+    fn open_log_folder_reveals_the_hosts_log_file() {
+        let mut app = app();
+        let help = |app: &LightcraftApp| menu_bar(app).into_iter().find(|(t, _)| t == "Help").map(|(_, items)| items).unwrap_or_default();
+        assert!(matches!(find(&help(&app), "app.openLogFolder"), Some(MenuNode::Item { enabled: false, .. })), "listed in Help, off without a log");
+        assert!(!crate::menus::ui_enabled(&app, "app.openLogFolder"));
+        assert!(run_item(&mut app, "app.openLogFolder", Value::Null).is_err());
+        let shown = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let s = shown.clone();
+        app.services.reveal = Some(Box::new(move |p: &str| {
+            s.lock().unwrap().push(p.to_string());
+            Ok(())
+        }));
+        // a file manager alone is not enough: this session keeps no log
+        assert!(!crate::menus::ui_enabled(&app, "app.openLogFolder"));
+        assert!(run_item(&mut app, "app.openLogFolder", Value::Null).is_err());
+        assert!(shown.lock().unwrap().is_empty());
+        let log = "/home/a/.config/lightcraft/logs/lightcraft.log";
+        app.services.log_file = Some(log.into());
+        assert!(crate::menus::ui_enabled(&app, "app.openLogFolder"));
+        assert!(matches!(find(&help(&app), "app.openLogFolder"), Some(MenuNode::Item { enabled: true, .. })));
+        let r = run_item(&mut app, "app.openLogFolder", Value::Null).unwrap();
+        assert_eq!(r["path"], log);
+        assert_eq!(shown.lock().unwrap().as_slice(), [log]);
+        // the file manager's failure is the command's
+        app.services.reveal = Some(Box::new(|_: &str| Err("no file manager".into())));
+        assert_eq!(run_item(&mut app, "app.openLogFolder", Value::Null).unwrap_err(), "no file manager");
     }
 
     #[test]

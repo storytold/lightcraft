@@ -1641,5 +1641,6 @@
   "That includes the photos in the folders inside it.": "其中資料夾裡的照片也包含在內。",
   "How to install the model": "如何安裝模型",
   "Install the SAM 3 Model": "安裝 SAM 3 模型",
-  "This build can't download the model yet. To install it by hand, put model.safetensors, vocab.json and merges.txt from Meta's facebook/sam3 in the folder above: Object and Describe work as soon as they are there.": "此版本尚無法下載模型。如需手動安裝，請將 Meta 的 facebook/sam3 中的 model.safetensors、vocab.json 和 merges.txt 放入上方的資料夾：放入後即可使用「物件」與「描述」。"
+  "This build can't download the model yet. To install it by hand, put model.safetensors, vocab.json and merges.txt from Meta's facebook/sam3 in the folder above: Object and Describe work as soon as they are there.": "此版本尚無法下載模型。如需手動安裝，請將 Meta 的 facebook/sam3 中的 model.safetensors、vocab.json 和 merges.txt 放入上方的資料夾：放入後即可使用「物件」與「描述」。",
+  "Open Log Folder": "開啟記錄資料夾"
 }
