@@ -630,7 +630,7 @@
   "Remove a filter above, or choose Clear all": "请移除上方的某个筛选条件，或选择“全部清除”",
   "Remove from Target Album": "从目标相册中移除",
   "Remove shortcut": "移除快捷键",
-  "Remove this face box (undo with Edit ▸ Undo)": "移除此人脸框（可通过“编辑 ▸ 撤销”恢复）",
+  "Remove this face box (undo with Edit ▸ Undo)": "移除此人脸框（可通过“编辑 → 撤销”恢复）",
   "Rename Component": "重命名组件",
   "Reorder Masks": "重新排序蒙版",
   "Reset All": "全部重置",

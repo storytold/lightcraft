@@ -566,6 +566,21 @@ mod tests {
         });
     }
 
+    #[test]
+    fn translated_catalogs_do_not_use_missing_menu_triangles() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("locales");
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|ext| ext != "json") {
+                continue;
+            }
+            let messages: BTreeMap<String, String> = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            for (source, text) in messages {
+                assert!(!text.contains(['▸', '▾']), "{}: {source:?} uses an unpaintable menu triangle", path.display());
+            }
+        }
+    }
+
     /// The language menu covers every language, and a language's own command selects it.
     #[test]
     fn language_commands_cover_every_language() {

@@ -684,7 +684,7 @@
   "Remove a filter above, or choose Clear all": "上のフィルターを解除するか、「すべて解除」を選択してください",
   "Remove from Target Album": "追加先アルバムから除去",
   "Remove shortcut": "ショートカットを削除",
-  "Remove this face box (undo with Edit ▸ Undo)": "この顔の枠を除去（「編集 ▸ 取り消す」で元に戻せます）",
+  "Remove this face box (undo with Edit ▸ Undo)": "この顔の枠を除去（「編集 → 取り消す」で元に戻せます）",
   "Rename Component": "構成要素の名前を変更",
   "Rename Folder": "フォルダ名を変更",
   "Rename Mask": "マスク名を変更",

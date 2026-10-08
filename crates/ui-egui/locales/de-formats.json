@@ -183,7 +183,7 @@
   "… and {more} more": "… und {more} weitere",
   "LightCraft can't decode this raw variant yet ({}). You're editing the camera's embedded JPEG preview, which already includes the camera's picture style (e.g. Monochrome) and white balance.": "LightCraft kann diese RAW-Variante noch nicht dekodieren ({}). Du bearbeitest die eingebettete JPEG-Vorschau der Kamera. Sie enthält bereits deren Bildstil (z. B. Monochrom) und Weißabgleich.",
   "Filtered: {label}": "Gefiltert: {label}",
-  "{n} similar photo{} · View ▸ Clear Filters to see all": "Ähnliche Fotos: {n}{:.0} · Ansicht ▸ Filter löschen zeigt alle Fotos",
+  "{n} similar photo{} · View ▸ Clear Filters to see all": "Ähnliche Fotos: {n}{:.0} · Ansicht → Filter löschen zeigt alle Fotos",
   "Moved; {} photo(s) relinked": "Verschoben; {} Fotos neu verknüpft",
   "{} label (click more labels to show any of them)": "Markierung {} (weitere Markierungen auswählen, um alle passenden Fotos zu zeigen)",
   ", {} star{}": ", Sterne: {}{:.0}",
