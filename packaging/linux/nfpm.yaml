@@ -17,10 +17,11 @@ vendor: Learning Machines LLC
 homepage: https://getartcraft.com/apps/lightcraft
 license: MIT OR Apache-2.0
 description: |-
-  Open-source, native image editor that works the way Photoshop users expect.
-  Layers, masks, adjustment layers, layer styles, type and brushes; opens and
-  saves layered PSD/PSB files; 8/16/32-bit documents; GPU compositing (wgpu).
-  Includes lightcraft-cli, a headless converter and command runner.
+  Open-source, native photo library and raw developer that works the way
+  Lightroom users expect. Import, rate, keyword and organise photos; develop
+  raw files non-destructively with exposure, tone, color grading, masks and
+  presets; GPU processing (wgpu). Includes lightcraft-cli, a headless renderer
+  and command runner.
 
 # The binaries link only glibc and libgcc_s directly. Windowing (X11/Wayland, xkbcommon) and the
 # GPU (Vulkan, EGL/GL) are loaded at runtime, so they are dependencies/recommendations here
