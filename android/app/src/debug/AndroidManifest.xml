@@ -1,0 +1,4 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Debug loopback control channel for automated UI tests; absent in release. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+</manifest>

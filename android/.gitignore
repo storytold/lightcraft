@@ -1,0 +1,4 @@
+app/build/
+.gradle/
+app/src/main/jniLibs/
+build/reports/

@@ -98,6 +98,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 paint(ui.painter(), Rect::from_center_size(r.center() - vec2(0.0, 7.0), vec2(20.0, 20.0)), *icon, t.text_label);
                 ui.painter().text(pos2(r.center().x, r.bottom() - 9.0), Align2::CENTER_CENTER, *label, t.font(10.5), t.text_dim);
                 if resp.clicked() {
+                    // Leaving Describe must dismiss its editor before the next
+                    // frame; otherwise its empty TextEdit requests focus again
+                    // and Android opens the keyboard over the newly selected tool.
+                    if *kind != "prompt" {
+                        app.ui.describe = None;
+                    }
                     match *kind {
                         "colorRange" => {
                             // an empty colour range; clicking the photo samples it
@@ -649,6 +655,23 @@ fn needs_model(app: &mut LightcraftApp, kind: &str, op: &str) -> bool {
 /// Start an Object selection (SAM 3 clicks): a new mask, or a component of the selected one
 /// combined by `op`; the photo is analyzed meanwhile (in the background).
 pub(crate) fn start_object(app: &mut LightcraftApp, ctx: &egui::Context, op: &str) {
+    app.ui.describe = None;
+    #[cfg(target_os = "android")]
+    if !lightcraft_engine::segment::Segmenter::AVAILABLE {
+        // Android builds may not include the optional SAM runtime. Keep Object
+        // useful by using the engine's local subject/saliency mask rather than
+        // leaving the user with a dead button and an AI error.
+        let result = if op == "new" {
+            app.run("mask.add", json!({"kind": "subject"}))
+        } else {
+            app.run("mask.addComponent", json!({"op": op, "kind": "subject"}))
+        };
+        match result {
+            Ok(_) => app.toast(ctx, crate::i18n::tr("AI model unavailable; using local subject selection")),
+            Err(e) => app.toast_error(ctx, e),
+        }
+        return;
+    }
     if needs_model(app, "object", op) {
         return;
     }
@@ -766,6 +789,7 @@ fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
             continue;
         }
         if ui.button(label).clicked() {
+            app.ui.describe = None;
             if kind == "brush" {
                 app.ui.tool = "brush".into();
                 app.ui.brush_erase = op == "subtract";

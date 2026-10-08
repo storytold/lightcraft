@@ -67,6 +67,8 @@ pub type SaveFile = Box<dyn FnMut(&str) -> Option<String>>;
 pub type WriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
 /// A writer other threads can use (background export).
 pub type SharedWrite = std::sync::Arc<dyn Fn(&str, &[u8]) -> Result<(), String> + Send + Sync>;
+/// Platform export destination lookup (SAF documents need not be filesystem paths).
+pub type ExportExists = std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>;
 pub type PngEncode = Box<dyn Fn(&lightcraft_raster::Rgba8) -> Vec<u8>>;
 /// A folder chooser (`None` = cancelled).
 pub type PickFolder = Box<dyn FnMut() -> Option<String>>;
@@ -98,6 +100,9 @@ pub struct Services {
     pub write: Option<WriteFn>,
     /// Thread-safe writer: with it, UI-started exports run in the background (desktop only).
     pub write_shared: Option<SharedWrite>,
+    pub export_exists: Option<ExportExists>,
+    /// Separate from the app-private library chooser on mobile platforms.
+    pub pick_export_folder: Option<PickFolder>,
     /// PNG encoder (the host links an image encoder; the UI crate stays codec-free).
     pub png: Option<PngEncode>,
     /// Show a file in the system file manager (desktop only).
