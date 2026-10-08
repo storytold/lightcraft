@@ -22,7 +22,8 @@ const QUALITY: u8 = 90;
 
 pub struct DiskCache {
     dir: PathBuf,
-    budget: u64,
+    /// Bytes the cache may hold (changed in place by [`DiskCache::set_budget`]).
+    budget: AtomicU64,
     /// Bytes on disk (`None` until first scanned).
     total: Mutex<Option<u64>>,
     pub hits: AtomicU64,
@@ -34,7 +35,7 @@ impl DiskCache {
     pub fn new(dir: &Path, budget: u64) -> DiskCache {
         DiskCache {
             dir: dir.to_path_buf(),
-            budget,
+            budget: AtomicU64::new(budget),
             total: Mutex::new(None),
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
@@ -44,6 +45,17 @@ impl DiskCache {
 
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// Bytes the cache may hold.
+    pub fn budget(&self) -> u64 {
+        self.budget.load(Ordering::Relaxed)
+    }
+
+    /// Change the budget in place: the files stay valid (they are keyed by content), so a resize
+    /// keeps them; a smaller budget is enforced by the next write, like any other overflow.
+    pub fn set_budget(&self, bytes: u64) {
+        self.budget.store(bytes, Ordering::Relaxed);
     }
 
     fn path(&self, key: Hash128) -> PathBuf {
@@ -94,7 +106,7 @@ impl DiskCache {
             let mut t = self.total.lock().unwrap_or_else(|e| e.into_inner());
             let total = t.get_or_insert(0);
             *total += bytes.len() as u64;
-            *total > self.budget
+            *total > self.budget()
         };
         if over {
             self.prune();
@@ -134,7 +146,7 @@ impl DiskCache {
     pub fn prune(&self) {
         let mut files = self.scan();
         let mut total: u64 = files.iter().map(|f| f.1).sum();
-        let target = self.budget / 5 * 4;
+        let target = self.budget() / 5 * 4;
         files.sort_by_key(|f| f.2);
         for (p, len, _) in files {
             if total <= target {

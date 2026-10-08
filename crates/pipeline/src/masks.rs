@@ -358,16 +358,14 @@ fn matte_alpha(mattes: &[&Image<u8>], frame: &Frame, w: usize, h: usize) -> Plan
         let (sx, sy) = ((base.width as f64 / frame.ow) as f32, (base.height as f64 / frame.oh) as f32);
         for_rows(&mut out.data, w, |y, row| {
             for (x, v) in row.iter_mut().enumerate() {
-                let t = o2t.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
                 let s = match &frame.warp {
                     Some(wp) => {
-                        let s = wp.to_source(t, 1);
-                        if !wp.inside(s) {
+                        let Some((_, s)) = wp.frame(&o2t, x, y) else {
                             continue;
-                        }
+                        };
                         s
                     }
-                    None => t,
+                    None => o2t.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5)),
                 };
                 *v = v.max(bilinear(&base, s.x as f32 * sx, s.y as f32 * sy) / 255.0);
             }

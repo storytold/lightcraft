@@ -1,4 +1,4 @@
-//! Malformed vendor raw files (NEF, ARW, PEF, ORF, RW2, CR2, RAF) must decode to an error, never panic.
+//! Malformed vendor raw files (NEF, ARW, PEF, ORF, RW2 of every raw format, CR2, RAF) must decode to an error, never panic.
 
 use lightcraft_tiff::tags as t;
 use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
@@ -65,6 +65,66 @@ fn rw2() -> Vec<u8> {
     ifd.set_image(ImageData::Strips { rows_per_strip: H, strips: vec![(0..need).map(|i| (i * 29) as u8).collect()] });
     let mut b = TiffWriter::new(ByteOrder::Little, false).write(&[ifd]).unwrap();
     b[..4].copy_from_slice(b"IIU\0");
+    b
+}
+
+/// A Panasonic RW2 of raw format `format` (or, with `format` 0, the oldest 16-bit-word kind): sensor size, borders,
+/// bit depth, black levels, an in-camera crop and `n` bytes of payload at the end, at `RawDataOffset`. Format 8 also
+/// gets two strips covering the payload and a code table.
+fn rw2_of(format: u16, bits: u16, n: usize) -> Vec<u8> {
+    let u16s = |v: &[u16]| Value::Undefined(v.iter().flat_map(|x| x.to_le_bytes()).collect());
+    let build = |off: u32| {
+        let mut ifd = IfdBuilder::new();
+        for (tag, v) in [(2, W as u16), (3, H as u16), (4, 2), (5, 4), (6, H as u16), (7, W as u16), (9, 2), (0x0a, bits), (0x1c, 128), (0x1d, 128)] {
+            ifd.set(tag, Value::Short(vec![v]));
+        }
+        for (tag, v) in [(0x2f, 2u16), (0x30, 6), (0x31, H as u16 - 2), (0x32, W as u16 - 2)] {
+            ifd.set(tag, Value::Short(vec![v]));
+        }
+        if format == 0 {
+            ifd.set(0x000b, Value::Short(vec![34828]));
+            ifd.set(t::STRIP_OFFSETS, Value::Long(vec![off]));
+        } else {
+            ifd.set(0x002d, Value::Short(vec![format]));
+            ifd.set(0x0118, Value::Long(vec![off]));
+        }
+        if format == 8 {
+            let table = [
+                (6, 62),
+                (7, 126),
+                (6, 61),
+                (5, 28),
+                (4, 12),
+                (3, 4),
+                (3, 2),
+                (2, 0),
+                (3, 3),
+                (3, 5),
+                (4, 13),
+                (5, 29),
+                (6, 60),
+                (8, 254),
+                (8, 255),
+                (12, 4094),
+                (12, 4095),
+            ];
+            ifd.set(0x0040, u16s(&std::iter::once(17).chain(table.iter().flat_map(|&(l, c)| [l, c])).collect::<Vec<u16>>()));
+            let half = (n / 2) as u32;
+            let (a, b) = (off, off + half);
+            ifd.set(0x0044, u16s(&[2, a as u16, (a >> 16) as u16, b as u16, (b >> 16) as u16]));
+            ifd.set(0x0045, u16s(&[2, 0, 0, W as u16 / 2, 0]));
+            ifd.set(0x0046, u16s(&[2, (half * 8) as u16, ((half * 8) >> 16) as u16, (half * 8) as u16, ((half * 8) >> 16) as u16]));
+            ifd.set(0x0047, u16s(&[2, W as u16 / 2, W as u16 / 2]));
+            ifd.set(0x0048, u16s(&[2, H as u16, H as u16]));
+        }
+        ifd.set(t::MAKE, Value::Ascii("Panasonic".into()));
+        let mut b = TiffWriter::new(ByteOrder::Little, false).write(&[ifd]).unwrap();
+        b[..4].copy_from_slice(b"IIU\0");
+        b
+    };
+    let off = build(0).len();
+    let mut b = build(off as u32);
+    b.extend((0..n).map(|i| (i * 89 % 253) as u8));
     b
 }
 
@@ -181,6 +241,20 @@ fn samples() -> Vec<Vec<u8>> {
         cr2(),
         raf(),
     ]
+    .into_iter()
+    .chain(rw2_formats())
+    .collect()
+}
+
+/// One RW2 per encoding with a sample decoder of its own (formats 4, 6 at 14 and 12 bits, 8, and 16-bit words).
+fn rw2_formats() -> Vec<Vec<u8>> {
+    vec![
+        rw2_of(4, 12, (W * H).div_ceil(14) as usize * 16),
+        rw2_of(6, 14, (W * H).div_ceil(11) as usize * 16),
+        rw2_of(6, 12, (W * H).div_ceil(14) as usize * 16),
+        rw2_of(8, 14, (W * H) as usize * 2),
+        rw2_of(0, 12, (W * H) as usize * 2),
+    ]
 }
 
 fn exercise(bytes: &[u8]) {
@@ -208,7 +282,7 @@ proptest! {
     #![proptest_config(ProptestConfig { cases: 2000, .. ProptestConfig::default() })]
 
     #[test]
-    fn mutated_vendor_files_never_panic(kind in 0usize..12, flips in proptest::collection::vec((any::<usize>(), any::<u8>()), 1..16), cut in any::<usize>()) {
+    fn mutated_vendor_files_never_panic(kind in 0usize..17, flips in proptest::collection::vec((any::<usize>(), any::<u8>()), 1..16), cut in any::<usize>()) {
         let mut data = samples().swap_remove(kind);
         let n = data.len();
         for (i, v) in flips {
@@ -216,5 +290,14 @@ proptest! {
         }
         let keep = if cut % 3 == 0 { cut % n } else { n };
         exercise(&data[..keep]);
+    }
+}
+
+/// The RW2 samples decode as they are, so the mutations above reach every format's sample decoder.
+#[test]
+fn rw2_samples_decode_unmutated() {
+    for s in &rw2_formats() {
+        let r = lightcraft_raw::decode(s).unwrap();
+        assert_eq!((r.width, r.height), (W as usize, H as usize));
     }
 }

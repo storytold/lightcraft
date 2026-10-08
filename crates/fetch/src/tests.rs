@@ -294,13 +294,15 @@ fn no_mirrors_is_a_clear_error_and_mirror_lists_are_parsed() {
     let dir = tmp("nomirror");
     let e = run(&[pinned()], &[], &dir, &AtomicBool::new(false)).0.unwrap_err();
     assert_eq!(e, DownloadError::NoMirrors);
-    assert!(e.to_string().contains(MIRRORS_ENV));
+    assert!(e.to_string().contains("no download location"));
     let file = std::env::temp_dir().join(format!("lc-sam3-mirrors-{}.txt", std::process::id()));
     std::fs::write(&file, "# mine\nhttps://b.example/m/ # second\n\nnot a url\nhttps://a.example/x\n").unwrap();
-    let m = mirrors(Some("https://a.example/x/, ftp://no"), Some(&file));
-    assert_eq!(m[..2], ["https://a.example/x".to_string(), "https://b.example/m".to_string()]);
-    assert_eq!(m.len(), 2 + DEFAULT_MIRRORS.len());
-    assert_eq!(mirrors(None, Some(Path::new("/nonexistent/mirrors.txt"))).len(), DEFAULT_MIRRORS.len());
+    let defaults = ["https://c.example/d", "https://a.example/x"];
+    let m = mirrors(Some("https://a.example/x/, ftp://no"), Some(&file), &defaults);
+    // the environment's, then the file's, then the defaults; a repeated one is kept once
+    assert_eq!(m, ["https://a.example/x", "https://b.example/m", "https://c.example/d"]);
+    assert_eq!(mirrors(None, Some(Path::new("/nonexistent/mirrors.txt")), &defaults).len(), 2);
+    assert!(mirrors(None, None, &[]).is_empty());
     let _ = std::fs::remove_file(&file);
     let _ = std::fs::remove_dir_all(&dir);
 }

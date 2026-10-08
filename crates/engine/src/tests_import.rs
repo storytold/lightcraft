@@ -181,8 +181,12 @@ fn find_missing_matches_renamed_files_by_content() {
     let to = |name: &str| {
         found.iter().find(|f| f["from"].as_str().unwrap().ends_with(name)).map(|f| (f["to"].as_str().unwrap().to_string(), f["by"].clone()))
     };
-    assert_eq!(to("a.png"), Some((dir.join("moved/Trip-001.png").to_string_lossy().to_string(), json!("content"))));
-    assert_eq!(to("b.png"), Some((dir.join("moved/real/Trip-002.png").to_string_lossy().to_string(), json!("content"))), "not the impostor");
+    assert_eq!(to("a.png"), Some((dir.join("moved").join("Trip-001.png").to_string_lossy().to_string(), json!("content"))));
+    assert_eq!(
+        to("b.png"),
+        Some((dir.join("moved").join("real").join("Trip-002.png").to_string_lossy().to_string(), json!("content"))),
+        "not the impostor"
+    );
     assert_eq!(r["missing"], 1);
     assert_eq!(r["ambiguous"][0]["candidates"].as_array().map(Vec::len), Some(2), "{r}");
     let _ = std::fs::remove_dir_all(&dir);
@@ -582,7 +586,7 @@ fn folders_rename_and_move_with_their_photos() {
     assert!(s.execute("folder.move", &json!({"path": b.to_string_lossy(), "into": b.join("deeper").to_string_lossy()})).is_err(), "not into itself");
     let r = s.execute("folder.move", &json!({"path": b.to_string_lossy(), "into": root.join("Archive").to_string_lossy()})).unwrap();
     assert_eq!(r["relinked"], 1);
-    assert_eq!(path(&s), root.join("Archive/Italy 2026/one.png").to_string_lossy());
+    assert_eq!(path(&s), root.join("Archive").join("Italy 2026").join("one.png").to_string_lossy());
     let _ = std::fs::remove_dir_all(&root);
 }
 

@@ -24,6 +24,12 @@ encode_webp_lossless(&img, &meta)?;
 encode_avif(&img, 70, 6, &meta)?;                        // native + feature `avif`
 ```
 
+Thumbnail fallback decoding limits the source to 64 million pixels by default.
+Non-JPEG decoders allocate at source resolution before resizing, even for a tiny
+thumbnail. Use `decode_thumbnail_with` and `ThumbnailOptions::max_pixels` to set
+a different source budget. Oversized sources return `Error::TooLarge`; embedded
+JPEG previews can still be used without decoding the full source image.
+
 `Format::RawTiffLike` (DNG, CR2, NEF, ARW, PEF, ORF, RW2, SRW, …) and `Format::RawOther` (CR3, RAF,
 CRW, MRW, X3F) are detected so the engine can route them to `lightcraft-raw`; `decode` returns
 `Error::Unsupported` for them.

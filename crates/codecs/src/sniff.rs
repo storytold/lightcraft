@@ -163,6 +163,9 @@ fn tiff_is_raw(b: &[u8]) -> bool {
     }
     let Some(t) = Tiff::new(b) else { return false };
     let Some(ifd0) = t.first_ifd() else { return false };
+    let sony = t.ifd(ifd0).is_some_and(|(entries, _)| {
+        entries.iter().any(|e| e.tag == 0x010f && t.bytes(e).and_then(|v| v.get(..4)).is_some_and(|v| v.eq_ignore_ascii_case(b"SONY")))
+    });
     let mut stack = vec![ifd0];
     let mut seen = 0;
     while let Some(pos) = stack.pop() {
@@ -171,6 +174,12 @@ fn tiff_is_raw(b: &[u8]) -> bool {
             break;
         }
         let Some((entries, _)) = t.ifd(pos) else { continue };
+        // Sony M/S lossless ARWs retain a dummy CFA pattern, but store linear YCbCr.
+        // Requiring the raw pattern plus this layout keeps ordinary Sony TIFFs as TIFFs.
+        let uint = |tag| entries.iter().find(|e| e.tag == tag).and_then(|e| t.uint(e));
+        if sony && entries.iter().any(|e| e.tag == 0x828e) && uint(0x0103) == Some(7) && uint(0x0106) == Some(6) && uint(0x0115) == Some(3) {
+            return true;
+        }
         for e in &entries {
             match e.tag {
                 0xC612 => return true, // DNGVersion
@@ -232,5 +241,39 @@ mod tests {
         b.extend_from_slice(&[1, 4, 0, 0]);
         b.extend_from_slice(&0u32.to_le_bytes());
         assert_eq!(sniff(&b), Some(Format::RawTiffLike));
+    }
+
+    #[test]
+    fn sony_linear_ycbcr_subifd_is_raw_but_ordinary_tiff_is_not() {
+        fn fixture(compression: u32, pattern: bool) -> Vec<u8> {
+            let mut b = b"II*\0\x08\0\0\0".to_vec();
+            let entry = |b: &mut Vec<u8>, tag: u16, typ: u16, count: u32, value: u32| {
+                b.extend_from_slice(&tag.to_le_bytes());
+                b.extend_from_slice(&typ.to_le_bytes());
+                b.extend_from_slice(&count.to_le_bytes());
+                b.extend_from_slice(&value.to_le_bytes());
+            };
+            b.extend_from_slice(&2u16.to_le_bytes());
+            entry(&mut b, 0x010f, 2, 5, 38);
+            entry(&mut b, 0x014a, 4, 1, 44);
+            b.extend_from_slice(&0u32.to_le_bytes());
+            b.extend_from_slice(b"SONY\0\0");
+            b.extend_from_slice(&(if pattern { 4u16 } else { 3 }).to_le_bytes());
+            entry(&mut b, 0x0103, 3, 1, compression);
+            entry(&mut b, 0x0106, 3, 1, 6);
+            entry(&mut b, 0x0115, 3, 1, 3);
+            if pattern {
+                entry(&mut b, 0x828e, 1, 4, u32::MAX);
+            }
+            b.extend_from_slice(&0u32.to_le_bytes());
+            b
+        }
+        let mut raw = fixture(7, true);
+        assert_eq!(sniff(&raw), Some(Format::RawTiffLike));
+        assert_eq!(sniff(&fixture(7, false)), Some(Format::Tiff));
+        assert_eq!(sniff(&fixture(1, true)), Some(Format::Tiff));
+        assert_eq!(sniff(&raw[..38]), Some(Format::Tiff));
+        raw[38..42].copy_from_slice(b"TEST");
+        assert_eq!(sniff(&raw), Some(Format::Tiff));
     }
 }

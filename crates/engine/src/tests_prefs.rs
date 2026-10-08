@@ -2,6 +2,7 @@
 //! persistence in prefs.json.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use lightcraft_catalog::MediaKind;
 use lightcraft_develop::Preset;
@@ -261,5 +262,58 @@ fn curve_presets_save_apply_export_import_and_persist() {
     s.open_library(&lib, false).unwrap();
     let names: Vec<String> = s.curve_presets.iter().map(|p| p.name.clone()).collect();
     assert_eq!(names, ["Faded Red", "Linear (imported)"]);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+#[test]
+fn resizing_the_disk_cache_keeps_the_cache_and_its_thumbnails() {
+    let lib = temp_dir("resize");
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let cache = s.media.rendered.clone();
+    let key = lightcraft_preview::hash_bytes(b"thumbnail");
+    let img = lightcraft_raster::Rgba8 { width: 4, height: 4, data: vec![[10, 20, 30, 255]; 16] };
+    cache.put(key, Arc::new(img));
+    let generation = cache.generation();
+    s.execute("library.preferences", &json!({"cacheMb": 300})).unwrap();
+    // the same cache object (the UI keeps its textures), the same generation, the new budget
+    assert!(Arc::ptr_eq(&cache, &s.media.rendered));
+    assert_eq!(s.media.rendered.generation(), generation);
+    assert_eq!(s.media.rendered.disk().unwrap().budget(), 300 << 20);
+    assert!(s.media.rendered.get(key).is_some());
+    // an explicit clear still invalidates
+    s.execute("library.clearPreviews", &json!({})).unwrap();
+    assert_ne!(s.media.rendered.generation(), generation);
+    assert!(s.media.rendered.get(key).is_none());
+    drop(s);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+#[test]
+fn reopening_a_library_retires_the_old_cache_so_its_jobs_cannot_write_after_a_clear() {
+    let lib = temp_dir("reopen-writer");
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, true).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    // a thumbnail job still holding the first open's cache object
+    let job = s.thumb_job(id, 128).unwrap();
+    let (old, key) = job.cache.clone().unwrap();
+    // a thumbnail written before the reopen is still valid afterwards
+    let kept = lightcraft_preview::hash_bytes(b"kept thumbnail");
+    let img = lightcraft_raster::Rgba8 { width: 4, height: 4, data: vec![[10, 20, 30, 255]; 16] };
+    old.put(kept, Arc::new(img.clone()));
+    s.open_library(&lib, false).unwrap();
+    assert!(!Arc::ptr_eq(&old, &s.media.rendered));
+    assert!(s.media.rendered.get(kept).is_some(), "a plain reopen keeps the disk cache");
+    s.execute("library.clearPreviews", &json!({})).unwrap();
+    // the old job finishes: its render must not land in the cleared directory
+    let r = job.run();
+    assert!(r.rendered.is_ok());
+    old.put(kept, Arc::new(img));
+    let fresh = lightcraft_preview::PreviewCache::with_disk(1 << 20, &lib.join("thumbs"), 1 << 30);
+    assert!(fresh.get(key).is_none(), "stale thumbnail written through the replaced cache");
+    assert!(fresh.get(kept).is_none(), "stale put through the replaced cache");
+    assert!(s.media.rendered.get(key).is_none());
+    drop(s);
     let _ = std::fs::remove_dir_all(&lib);
 }

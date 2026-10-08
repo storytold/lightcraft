@@ -4,6 +4,52 @@ use lightcraft_raster::Rgba8;
 
 use super::*;
 
+#[test]
+fn cleared_generation_cannot_read_or_repopulate_memory_or_disk() {
+    let dir = std::env::temp_dir().join(format!("lc-thumbnail-generation-{}-{}", std::process::id(), next_tick()));
+    let cache = Arc::new(PreviewCache::with_disk(1 << 20, &dir, 1 << 20));
+    let key = hash_bytes(b"same-key");
+    let old = cache.generation();
+    let wrong = Arc::new(gradient(8, 8, 255));
+    let correct = Arc::new(gradient(8, 8, 0));
+    cache.put_at(old, key, wrong.clone());
+    assert!(cache.get_at(old, key).is_some());
+    cache.clear();
+    assert!(cache.get(key).is_none());
+    assert!(cache.get_at(old, key).is_none());
+    cache.put_at(old, key, wrong.clone());
+    cache.put_deferred_at(old, key, wrong);
+    assert!(cache.get(key).is_none());
+    assert!(cache.disk().unwrap().get(key).is_none());
+    cache.put_at(cache.generation(), key, correct.clone());
+    assert_eq!(cache.get(key).unwrap().as_bytes(), correct.as_bytes());
+    cache.clear();
+}
+
+#[test]
+fn retired_cache_keeps_its_files_but_refuses_every_read_and_write() {
+    let dir = temp_dir("retire");
+    let old = Arc::new(PreviewCache::with_disk(1 << 20, &dir, 1 << 20));
+    let (kept, late) = (hash_bytes(b"kept"), hash_bytes(b"late"));
+    let img = Arc::new(gradient(8, 8, 7));
+    let generation = old.generation();
+    old.put_at(generation, kept, img.clone());
+    old.retire();
+    assert_ne!(old.generation(), generation);
+    assert!(old.get_at(generation, kept).is_none());
+    assert!(old.get(kept).is_none());
+    old.put_at(generation, late, img.clone());
+    old.put_deferred_at(generation, late, img.clone());
+    old.put(late, img.clone());
+    old.put_deferred(late, img.clone());
+    old.clear();
+    // a replacement for the same directory still finds the valid file, and only that
+    let new = PreviewCache::with_disk(1 << 20, &dir, 1 << 20);
+    assert_eq!(new.get(kept).map(|i| (i.width, i.height)), Some((8, 8)), "the disk file stays (JPEG: lossy)");
+    assert!(new.get(late).is_none());
+    new.clear();
+}
+
 fn temp_dir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("lc-preview-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);

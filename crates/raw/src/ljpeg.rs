@@ -207,6 +207,7 @@ struct Header {
     height: usize,
     width: usize,
     comps: Vec<u8>,
+    sampling: Vec<u8>,
     tables: [Option<Huffman>; 4],
     table_for: Vec<usize>,
     predictor: u8,
@@ -228,6 +229,7 @@ fn parse_header(d: &[u8]) -> Result<Header, RawError> {
         height: 0,
         width: 0,
         comps: vec![],
+        sampling: vec![],
         tables: [None, None, None, None],
         table_for: vec![],
         predictor: 1,
@@ -272,10 +274,11 @@ fn parse_header(d: &[u8]) -> Result<Header, RawError> {
                 }
                 for c in 0..n {
                     let (id, samp) = (seg[6 + 3 * c], seg[7 + 3 * c]);
-                    if samp != 0x11 {
-                        return Err(RawError::Unsupported("lossless JPEG with subsampled components".into()));
+                    if !(1..=4).contains(&(samp >> 4)) || !(1..=4).contains(&(samp & 15)) {
+                        return Err(err("invalid sampling factors"));
                     }
                     h.comps.push(id);
+                    h.sampling.push(samp);
                 }
                 if !(2..=16).contains(&h.precision) {
                     return Err(err("bad precision"));
@@ -340,12 +343,119 @@ fn parse_header(d: &[u8]) -> Result<Header, RawError> {
 /// Parse only the frame header: (width, height, components, precision).
 pub fn frame_info(d: &[u8]) -> Result<(usize, usize, usize, u8), RawError> {
     let h = parse_header(d)?;
+    check_full_resolution(&h)?;
     Ok((h.width, h.height, h.comps.len(), h.precision))
+}
+
+fn check_full_resolution(h: &Header) -> Result<(), RawError> {
+    if h.sampling.iter().any(|&s| s != 0x11) {
+        return Err(RawError::Unsupported("lossless JPEG with subsampled components".into()));
+    }
+    Ok(())
+}
+
+fn check_subsampled(h: &Header) -> Result<usize, RawError> {
+    let vertical = match h.sampling.as_slice() {
+        [0x22, 0x11, 0x11] => 2,
+        [0x21, 0x11, 0x11] => 1,
+        _ => return Err(RawError::Unsupported("lossless JPEG subsampling layout".into())),
+    };
+    if h.predictor != 1 || h.restart != 0 {
+        return Err(RawError::Unsupported("lossless JPEG subsampled predictor / restarts".into()));
+    }
+    if h.width == 0 || h.height == 0 || !h.width.is_multiple_of(2) || !h.height.is_multiple_of(vertical) {
+        return Err(err("subsampled frame dimensions do not match MCU size"));
+    }
+    Ok(vertical)
+}
+
+/// Sony M/S tiles: horizontal prediction, no restart markers. Keep subsampled planes separate;
+/// expanding them into a mosaic would silently corrupt the existing CFA callers.
+pub(crate) fn frame_info_subsampled(d: &[u8]) -> Result<(usize, usize), RawError> {
+    let h = parse_header(d)?;
+    check_subsampled(&h)?;
+    Ok((h.width, h.height))
+}
+
+pub(crate) struct FrameSubsampled {
+    pub width: usize,
+    pub height: usize,
+    pub vertical_subsampling: usize,
+    /// Y at full resolution; Cb and Cr at half width, with 1× or 2× vertical subsampling.
+    pub planes: [Vec<u16>; 3],
+}
+
+/// Sony's 4:2:0 / 4:2:2 LJ92 variants: T.81 MCU ordering and differences, modulo 2^16.
+/// At the first column, the top luma row predicts from the previous MCU row's top
+/// sample (two image rows above), and the bottom row from the current top sample.
+/// Observed black-box: using the immediately preceding image row introduces tile seams.
+pub(crate) fn decode_subsampled(d: &[u8], max_samples: usize) -> Result<FrameSubsampled, RawError> {
+    let h = parse_header(d)?;
+    let vertical = check_subsampled(&h)?;
+    let pixels = h.width.checked_mul(h.height).ok_or_else(|| err("frame too large"))?;
+    let chroma = pixels / (2 * vertical);
+    let total = pixels.checked_add(chroma.checked_mul(2).ok_or_else(|| err("frame too large"))?).ok_or_else(|| err("frame too large"))?;
+    if total > max_samples {
+        return Err(RawError::Limit("lossless JPEG frame larger than expected"));
+    }
+    let entropy = &d[h.scan_start..];
+    if (entropy.len() as u64 + 64) * 8 < total as u64 {
+        return Err(err("entropy data too short for frame"));
+    }
+    let tables: Vec<&Huffman> = h
+        .table_for
+        .iter()
+        .map(|&t| h.tables.get(t).and_then(Option::as_ref).ok_or_else(|| err("missing Huffman table")))
+        .collect::<Result<_, _>>()?;
+    let mut planes = [vec![0u16; pixels], vec![0u16; chroma], vec![0u16; chroma]];
+    let mut br = BitReader::new(entropy);
+    let init = 1i32 << (h.precision - h.pt - 1);
+    for my in 0..h.height / vertical {
+        for mx in 0..h.width / 2 {
+            for (c, plane) in planes.iter_mut().enumerate() {
+                let horizontal_factor = if c == 0 { 2 } else { 1 };
+                let vertical_factor = if c == 0 { vertical } else { 1 };
+                let width = h.width * horizontal_factor / 2;
+                for dy in 0..vertical_factor {
+                    for dx in 0..horizontal_factor {
+                        let (x, y) = (mx * horizontal_factor + dx, my * vertical_factor + dy);
+                        let i = y * width + x;
+                        let pred = if x > 0 {
+                            plane[i - 1] as i32
+                        } else if c == 0 && dy == 0 && y >= vertical {
+                            plane[i - vertical * width] as i32
+                        } else if y > 0 {
+                            plane[i - width] as i32
+                        } else {
+                            init
+                        };
+                        let ssss = tables[c].decode(&mut br)?;
+                        if ssss > 16 {
+                            return Err(err("invalid difference category"));
+                        }
+                        plane[i] = ((pred + diff_value(&mut br, ssss)) & 0xffff) as u16;
+                    }
+                }
+            }
+        }
+        if br.overrun > br.bits {
+            return Err(err("entropy data exhausted"));
+        }
+    }
+    if h.pt > 0 {
+        for plane in &mut planes {
+            for v in plane {
+                *v <<= h.pt;
+            }
+        }
+    }
+    Ok(FrameSubsampled { width: h.width, height: h.height, vertical_subsampling: vertical, planes })
 }
 
 /// Decode a lossless JPEG stream. `max_samples` bounds the allocation (hostile headers).
 pub fn decode(d: &[u8], max_samples: usize) -> Result<Frame, RawError> {
     let h = parse_header(d)?;
+    check_full_resolution(&h)?;
     let (w, ht, nc) = (h.width, h.height, h.comps.len());
     if w == 0 || ht == 0 {
         return Err(err("zero frame size"));
@@ -701,8 +811,69 @@ pub fn encode(data: &[u16], width: usize, height: usize, components: usize, prec
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// Independent 4×4, 16-bit Sony 4:2:0 stream. Hand-specified differences in MCU order.
+    pub(crate) fn fixture_420() -> Vec<u8> {
+        fixture_subsampled(4, 0x22, &[-31768, 1, 1000, 1, -16384, -16284, 1, 1, 1, 1, 1, 2, 100, 1, 1000, 1, 100, 100, 1, 1, 1, 1, 1, 2])
+    }
+
+    fn fixture_subsampled(height: u8, sampling: u8, differences: &[i32]) -> Vec<u8> {
+        let mut out = vec![0xff, 0xd8, 0xff, 0xc3, 0, 17, 16, 0, height, 0, 4, 3, 1, sampling, 0, 2, 0x11, 0, 3, 0x11, 0];
+        out.extend_from_slice(&[0xff, 0xc4, 0, 36, 0]);
+        let mut counts = [0; 16];
+        counts[4] = 17;
+        out.extend_from_slice(&counts);
+        out.extend(0..=16);
+        out.extend_from_slice(&[0xff, 0xda, 0, 12, 3, 1, 0, 2, 0, 3, 0, 1, 0, 0]);
+        let mut bw = BitWriter { out, acc: 0, n: 0 };
+        for &d in differences {
+            let s = ssss_of(d);
+            bw.put(s as u32, 5);
+            if s > 0 && s < 16 {
+                let v = if d < 0 { d - 1 } else { d };
+                bw.put(v as u32 & ((1 << s) - 1), s as u32);
+            }
+        }
+        bw.flush();
+        bw.out.extend_from_slice(&[0xff, 0xd9]);
+        bw.out
+    }
+
+    #[test]
+    fn horizontal_only_subsampling_preserves_rows_and_chroma() {
+        // Independent 4×2, 16-bit 4:2:2 stream: two luma samples, Cb, Cr per MCU.
+        let enc = fixture_subsampled(2, 0x21, &[-31768, 1, -16384, -16284, 1, 1, 1, 2, 100, 1, 100, 100, 1, 1, 1, 2]);
+        let frame = decode_subsampled(&enc, 16).unwrap();
+        assert_eq!((frame.width, frame.height, frame.vertical_subsampling), (4, 2, 1));
+        assert_eq!(frame.planes[0], [1000, 1001, 1002, 1003, 1100, 1101, 1102, 1103]);
+        assert_eq!(frame.planes[1], [16384, 16385, 16484, 16485]);
+        assert_eq!(frame.planes[2], [16484, 16486, 16584, 16586]);
+        assert!(decode(&enc, 24).is_err());
+        assert!(matches!(decode_subsampled(&enc, 15), Err(RawError::Limit(_))));
+        assert!(decode_subsampled(&enc[..enc.len() - 6], 16).is_err());
+    }
+
+    #[test]
+    fn subsampled_mcu_order_preserves_each_plane() {
+        let enc = fixture_420();
+        let frame = decode_subsampled(&enc, 24).unwrap();
+        assert_eq!((frame.width, frame.height), (4, 4));
+        assert_eq!(frame.planes[0], [1000, 1001, 1002, 1003, 2000, 2001, 2002, 2003, 1100, 1101, 1102, 1103, 2100, 2101, 2102, 2103]);
+        assert_eq!(frame.planes[1], [16384, 16385, 16484, 16485]);
+        assert_eq!(frame.planes[2], [16484, 16486, 16584, 16586]);
+        assert!(decode(&enc, 48).is_err()); // CFA API must keep rejecting subsampling.
+        assert!(matches!(decode_subsampled(&enc, 23), Err(RawError::Limit(_))));
+        assert!(decode_subsampled(&enc[..enc.len() - 6], 24).is_err());
+        let mut bad = enc.clone();
+        bad[10] = 3; // odd frame width
+        assert!(frame_info_subsampled(&bad).is_err());
+        let sos = bad.windows(2).position(|w| w == [0xff, 0xda]).unwrap();
+        bad = enc.clone();
+        bad[sos + 11] = 2; // unsupported predictor
+        assert!(frame_info_subsampled(&bad).is_err());
+    }
 
     fn noise(n: usize, bits: u32, seed: u64) -> Vec<u16> {
         let mut s = seed;

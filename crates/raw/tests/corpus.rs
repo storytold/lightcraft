@@ -16,12 +16,7 @@ fn corpus_root() -> PathBuf {
 /// Variants known not to decode yet (see the crate docs): matched against the lower-case file name.
 const KNOWN_UNSUPPORTED: &[&str] = &[
     "cr3-",                     // CR3 / CRX (M11.1)
-    "arw-sony-a7m4-lossless-m", // Sony lossless compressed M/S: subsampled (YCbCr) lossless JPEG
-    "arw-sony-a7m4-lossless-s", // "
     "raf-fuji-xt20-compressed", // Fujifilm compressed RAF
-    "rw2-panasonic-gh5.",       // Panasonic raw format 4 (quantised)
-    "rw2-panasonic-gx80",       // "
-    "rw2-panasonic-g9-b",       // "
     "orf-olympus-em",           // Olympus compressed ORF
     "sraw",                     // Canon sRAW / mRAW
 ];
@@ -46,13 +41,14 @@ fn corpus_raw_decodes() {
         let t0 = Instant::now();
         let preview = embedded_preview(&bytes);
         let tp = t0.elapsed().as_secs_f64() * 1e3;
-        // DNG previews are optional (and some carry only an uncompressed RGB thumbnail); vendor raws always embed a JPEG
+        // DNG previews are optional (and some carry only an uncompressed RGB thumbnail); vendor raws embed a JPEG,
+        // except the Panasonic `.RAW` files of 2005–2007
         if let Some(p) = &preview {
             let jpeg = p.starts_with(&[0xff, 0xd8]) && p.ends_with(&[0xff, 0xd9]);
             let jxl = p.starts_with(&[0xff, 0x0a]) || p.starts_with(b"\0\0\0\x0cJXL ");
             assert!(jpeg || jxl, "{name}: preview is neither a JPEG nor a JPEG XL file");
         } else {
-            assert_eq!(fmt, RawFormat::Dng, "{name}: no embedded preview");
+            assert!(fmt == RawFormat::Dng || name.starts_with("raw-panasonic-"), "{name}: no embedded preview");
         }
         let preview_kb = preview.as_ref().map_or(0, |p| p.len() / 1024);
         let t1 = Instant::now();
@@ -329,4 +325,146 @@ fn corpus_sony_pre2017_colour_metadata() {
         seen += 1;
     }
     eprintln!("pre-2017 Sony ARW colour metadata checked on {seen} files");
+}
+
+/// The embedded JPEG as linear RGB, reduced to `gw × gh` cells.
+fn jpeg_cells(jpeg: &[u8], gw: usize, gh: usize) -> Vec<[f64; 3]> {
+    use zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
+    let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB);
+    let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(jpeg), opts);
+    let px = d.decode().unwrap();
+    let info = d.info().unwrap();
+    let (w, h) = (info.width as usize, info.height as usize);
+    let (mut sum, mut n) = (vec![[0f64; 3]; gw * gh], vec![0f64; gw * gh]);
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * gh / h) * gw + x * gw / w;
+            for c in 0..3 {
+                let v = px[(y * w + x) * 3 + c] as f64 / 255.0;
+                sum[i][c] += if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+            }
+            n[i] += 1.0;
+        }
+    }
+    sum.iter().zip(&n).map(|(s, n)| s.map(|v| v / n)).collect()
+}
+
+/// Black-subtracted means of the four sites of the 2×2 cells (anchored at sample (0, 0)) of the active area,
+/// reduced to `gw × gh` cells.
+fn raw_sites(img: &lightcraft_raw::RawImage, gw: usize, gh: usize) -> Vec<[f64; 4]> {
+    let lightcraft_raw::RawData::U16(d) = &img.data else { panic!("float data") };
+    let (w, a, black) = (img.width, img.active_area, img.black.mean() as f64);
+    let (x0, y0) = ((a.x + 1) & !1, (a.y + 1) & !1);
+    let (cw, ch) = ((a.x + a.width - x0) / 2, (a.y + a.height - y0) / 2);
+    let (mut sum, mut n) = (vec![[0f64; 4]; gw * gh], vec![0f64; gw * gh]);
+    for cy in 0..ch {
+        for cx in 0..cw {
+            let i = (cy * gh / ch) * gw + cx * gw / cw;
+            for site in 0..4 {
+                sum[i][site] += d[(y0 + 2 * cy + site / 2) * w + x0 + 2 * cx + site % 2] as f64 - black;
+            }
+            n[i] += 1.0;
+        }
+    }
+    sum.iter().zip(&n).map(|(s, n)| s.map(|v| v / n)).collect()
+}
+
+fn ranks(v: &[f64]) -> Vec<f64> {
+    let mut idx: Vec<usize> = (0..v.len()).collect();
+    idx.sort_by(|&a, &b| v[a].total_cmp(&v[b]));
+    let mut r = vec![0f64; v.len()];
+    for (rank, &i) in idx.iter().enumerate() {
+        r[i] = rank as f64;
+    }
+    r
+}
+
+/// How well the raw's chromaticities (log r/g, log b/g per cell) follow the JPEG's when the mosaic is read with
+/// `layout` (colour of each 2×2 site at sample (0, 0)).
+fn chroma_agreement(sites: &[[f64; 4]], jpeg: &[[f64; 3]], layout: &[u8]) -> f64 {
+    let (mut x, mut y) = ([vec![], vec![]], [vec![], vec![]]);
+    for (s, j) in sites.iter().zip(jpeg) {
+        let (mut rgb, mut n) = ([0f64; 3], [0f64; 3]);
+        for (site, &c) in layout.iter().enumerate() {
+            rgb[c as usize] += s[site];
+            n[c as usize] += 1.0;
+        }
+        let rgb = [rgb[0] / n[0], rgb[1] / n[1], rgb[2] / n[2]];
+        if rgb.iter().all(|v| *v > 1.0) && j.iter().all(|v| (0.002..0.9).contains(v)) {
+            for (k, c) in [0, 2].into_iter().enumerate() {
+                x[k].push((rgb[c] / rgb[1]).ln());
+                y[k].push((j[c] / j[1]).ln());
+            }
+        }
+    }
+    (correlation(&x[0], &y[0]) + correlation(&x[1], &y[1])) / 2.0
+}
+
+/// Panasonic RW2 / RWL / RAW (`crates/raw/src/vendor/rw2.rs`): one file per raw encoding (formats 2, 4, 5, 6, 7 and
+/// 8 — at 12, 14 and 16 bits — and the 16-bit words of the oldest bodies) decodes to the image of the camera's own
+/// JPEG, with the black levels, crops and colour-filter layouts the module docs derive and no defect markers left.
+#[test]
+fn corpus_panasonic_encodings() {
+    let dir = corpus_root().join("raw");
+    // (file, bits, mean black level, crop width × height, CFA layout)
+    let cases = [
+        ("raw-panasonic-fz50.raw", 12, 15.0, (3648, 2736), "BGGR"),
+        ("raw-panasonic-fz8.raw", 12, 15.0, (3072, 2304), "RGGB"),
+        ("rw2-panasonic-fz1000m2-4x3.rw2", 12, 143.0, (4864, 3648), "GBRG"),
+        ("rw2-panasonic-g9-b.rw2", 12, 143.0, (5184, 3888), "RGGB"),
+        ("rw2-panasonic-g9.rw2", 12, 127.5, (5184, 3888), "RGGB"),
+        ("rw2-panasonic-gh1.rw2", 12, 15.0, (4000, 3000), "GBRG"),
+        ("rw2-panasonic-gh5.rw2", 12, 143.5, (5184, 3888), "RGGB"),
+        ("rw2-panasonic-gh5m2.rw2", 12, 144.5, (5184, 3888), "RGGB"),
+        ("rw2-panasonic-gh5s.rw2", 14, 509.5, (3680, 2760), "RGGB"),
+        ("rw2-panasonic-gh6.rw2", 16, 2048.0, (5776, 4336), "RGGB"),
+        ("rw2-panasonic-gx80.rw2", 12, 143.0, (4592, 3448), "BGGR"),
+        ("rw2-panasonic-s1.rw2", 14, 526.0, (6000, 4000), "RGGB"),
+        ("rw2-panasonic-s5-format7.rw2", 14, 512.0, (6000, 4000), "RGGB"),
+        ("rw2-panasonic-s5m2.rw2", 14, 512.0, (6000, 4000), "RGGB"),
+        ("rw2-panasonic-s9.rw2", 12, 128.0, (6000, 4000), "RGGB"),
+        ("rwl-leica-dlux7.rwl", 12, 143.0, (4736, 3552), "BGGR"),
+    ];
+    let mut seen = 0;
+    for (name, bits, black, (cw, ch), cfa) in cases {
+        let Ok(bytes) = std::fs::read(dir.join(name)) else {
+            eprintln!("skip: {name} absent");
+            continue;
+        };
+        let img = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(img.bits, bits, "{name}: bits");
+        assert_eq!(img.black.mean(), black, "{name}: black level");
+        assert_eq!((img.crop.width, img.crop.height), (cw, ch), "{name}: crop");
+        let layout = img.cfa.clone().unwrap_or_else(|| panic!("{name}: no CFA"));
+        assert_eq!(layout.name(), cfa, "{name}: CFA layout");
+        let lightcraft_raw::RawData::U16(d) = &img.data else { panic!("float data") };
+        let a = img.active_area;
+        let zeros =
+            (a.y..a.y + a.height).map(|y| d[y * img.width + a.x..y * img.width + a.x + a.width].iter().filter(|&&v| v == 0).count()).sum::<usize>();
+        assert_eq!(zeros, 0, "{name}: defect markers left in the active area");
+        let Some(jpeg) = embedded_preview(&bytes) else {
+            // the 2005–2007 `.RAW` files have no preview; their flat scenes make the green diagonal unambiguous
+            assert_eq!(green_on_main_diagonal(&img), cfa.starts_with('G'), "{name}: mosaic statistics disagree with {cfa}");
+            seen += 1;
+            continue;
+        };
+        // the camera's JPEG shows the whole active area (whatever the crop): the raw's green must rank like it, and
+        // its colours must follow the JPEG's best with the decoded colour-filter layout
+        let (gw, gh) = (24, 18);
+        let (sites, jpeg) = (raw_sites(&img, gw, gh), jpeg_cells(&jpeg, gw, gh));
+        let green: Vec<f64> = sites.iter().map(|s| (0..4).filter(|&i| layout.pattern[i] == 1).map(|i| s[i]).sum::<f64>()).collect();
+        let jg: Vec<f64> = jpeg.iter().map(|j| j[1]).collect();
+        let rho = correlation(&ranks(&green), &ranks(&jg));
+        let agree = |l: &str| chroma_agreement(&sites, &jpeg, &lightcraft_raw::Cfa::bayer(l).unwrap().pattern);
+        let best_other = ["RGGB", "GRBG", "GBRG", "BGGR"].into_iter().filter(|l| *l != cfa).map(agree).fold(f64::MIN, f64::max);
+        let own = agree(cfa);
+        eprintln!(
+            "{name:32} {}x{} {bits}-bit: green rank correlation {rho:.3}, colour agreement {own:.3} (others ≤ {best_other:.3})",
+            img.width, img.height
+        );
+        assert!(rho > 0.9, "{name}: rank correlation with the camera JPEG {rho}");
+        assert!(own > 0.5 && own > best_other, "{name}: colours follow the JPEG better with another layout ({own} vs {best_other})");
+        seen += 1;
+    }
+    eprintln!("Panasonic encodings checked on {seen} files");
 }

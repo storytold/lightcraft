@@ -286,8 +286,8 @@ fn services() -> Services {
                 .add_filter(
                     lightcraft_ui_egui::i18n::tr("Photos"),
                     &[
-                        "jpg", "jpeg", "png", "tif", "tiff", "webp", "dng", "cr2", "cr3", "nef", "nrw", "arw", "raf", "orf", "rw2", "pef", "psd",
-                        "jxl", "gif", "bmp",
+                        "jpg", "jpeg", "png", "tif", "tiff", "webp", "dng", "cr2", "cr3", "nef", "nrw", "arw", "raf", "orf", "rw2", "rwl", "raw",
+                        "pef", "psd", "jxl", "gif", "bmp",
                     ],
                 )
                 .pick_files()

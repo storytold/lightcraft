@@ -12,6 +12,9 @@ fn err(e: impl std::fmt::Display) -> Error {
 
 pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     let mut d = image_webp::WebPDecoder::new(std::io::Cursor::new(bytes)).map_err(err)?;
+    // RIFF chunk lengths are untrusted. Metadata cannot exceed the input;
+    // otherwise a tiny truncated file can request gigabytes before read_exact fails.
+    d.set_memory_limit(bytes.len());
     let (w, h) = d.dimensions();
     check_size(F, w as u64, h as u64, opts)?;
     let alpha = d.has_alpha();

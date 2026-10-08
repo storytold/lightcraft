@@ -1,0 +1,17 @@
+[package]
+name = "lightcraft-fetch"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+description = "LightCraft model downloads: mirrors, resume, pinned SHA-256, over HTTPS in pure Rust (L0)"
+
+[lints]
+workspace = true
+
+# downloads run natively only (the web build fetches no models)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+log = { workspace = true }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+rustls-rustcrypto = "0.0.2-alpha"
+webpki-roots = "1"
+sha2 = { version = "0.10", default-features = false, features = ["std"] }

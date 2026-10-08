@@ -282,7 +282,7 @@ pub(crate) struct LocalPlaces {
     /// (label, path) of each top-level folder, in order.
     pub places: Vec<(String, String)>,
     /// The top-level folder the browsed folder lies in (the innermost one): its tree opens on
-    /// the way down to it.
+    /// the way down to it. None when that way passes through a hidden folder.
     pub owner: Option<usize>,
     /// A folder listed only for this session because the browsed folder is in no saved
     /// location (browsed from a breadcrumb, the CLI…); it stays while browsing below it.
@@ -327,7 +327,15 @@ pub(crate) fn local_places(
         }
     }
     if let Some(c) = browsing {
-        out.owner = places.iter().enumerate().filter(|(_, (_, p))| folder_within(c, p)).max_by_key(|(_, (_, p))| folder_key(p).len()).map(|(i, _)| i);
+        // A tree never opens on the way down through a hidden folder: hiding a kept folder
+        // beneath Home would otherwise reveal it again inside Home's (possibly huge) tree.
+        let through_hidden = |p: &str| hidden.iter().any(|h| folder_within(c, h) && folder_within(h, p));
+        out.owner = places
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, p))| folder_within(c, p) && !through_hidden(p))
+            .max_by_key(|(_, (_, p))| folder_key(p).len())
+            .map(|(i, _)| i);
     }
     out.places = places;
     out
@@ -353,6 +361,17 @@ fn list_subfolders(path: &str) -> Vec<(String, String)> {
         .unwrap_or_default();
     v.sort_by_key(|(n, _)| n.to_lowercase());
     v
+}
+
+/// How many [`fs_cached`] answers for `ctx` are being worked out right now. Rows appear (and
+/// the sidebar below them moves) when they land, so the headless driver counts them as pending
+/// work and waits for them before acting on widget positions.
+pub(crate) fn fs_cached_running(ctx: &egui::Context) -> usize {
+    fs_running_counter(ctx).load(std::sync::atomic::Ordering::Acquire)
+}
+
+fn fs_running_counter(ctx: &egui::Context) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<std::sync::Arc<std::sync::atomic::AtomicUsize>>(egui::Id::new("fs-cached-running")).clone())
 }
 
 /// A file-system answer for `path` (`f(path)`), kept per `kind` and path and refreshed on a worker
@@ -386,18 +405,24 @@ pub(crate) fn fs_cached<T: Clone + Send + 'static>(ui: &egui::Ui, kind: &'static
         due
     };
     if start {
-        let (out, path, repaint) = (cell.clone(), path.to_string(), ui.ctx().clone());
+        use std::sync::atomic::Ordering;
+        let running = fs_running_counter(ui.ctx());
+        running.fetch_add(1, Ordering::AcqRel);
+        let (out, path, repaint, done) = (cell.clone(), path.to_string(), ui.ctx().clone(), running.clone());
         let work = move || {
             let v = f(&path);
             let mut e = out.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             e.value = Some(v);
             e.running = false;
             drop(e);
+            // after the answer is stored: a frame that sees the count drop also sees the answer
+            done.fetch_sub(1, Ordering::AcqRel);
             repaint.request_repaint();
         };
         #[cfg(not(target_arch = "wasm32"))]
         if std::thread::Builder::new().name("lc-fs-list".into()).spawn(work).is_err() {
             cell.lock().unwrap_or_else(std::sync::PoisonError::into_inner).running = false;
+            running.fetch_sub(1, Ordering::AcqRel);
         }
         #[cfg(target_arch = "wasm32")]
         work();
@@ -829,5 +854,23 @@ mod tests {
         // hidden: no row at all
         let l = local_places(Vec::new(), &[], Some("/t/base"), None, &["/t/base/".into()]);
         assert!(l.places.is_empty() && l.browse_root.is_none());
+    }
+
+    /// A hidden folder inside a listed one (a kept folder beneath Home) is not revealed in that
+    /// one's tree while it is browsed, nor are the folders below it; hiding Home itself still
+    /// lets Pictures open down to a folder browsed inside it.
+    #[test]
+    fn hidden_folder_is_not_revealed_in_an_outer_tree() {
+        let builtin = || vec![("Pictures".to_string(), "/home/example/Pictures".to_string()), ("Home".to_string(), "/home/example".to_string())];
+        let kept = ["/home/example/AppData/Temp/lc".to_string()];
+        let l = local_places(builtin(), &kept, Some("/home/example/AppData/Temp/lc"), None, &[]);
+        assert_eq!(l.owner, Some(2), "shown as its own kept row");
+        for browsing in ["/home/example/AppData/Temp/lc", "/home/example/AppData/Temp/lc/Day 1"] {
+            let l = local_places(builtin(), &kept, Some(browsing), None, &["/home/example/AppData/Temp/lc/".into()]);
+            assert_eq!(names(&l.places), ["Pictures", "Home"], "{browsing}");
+            assert_eq!((l.owner, l.browse_root.as_deref()), (None, None), "Home does not open down to {browsing}");
+        }
+        let l = local_places(builtin(), &[], Some("/home/example/Pictures/Trip"), None, &["/home/example".into()]);
+        assert_eq!((names(&l.places), l.owner), (vec!["Pictures"], Some(0)));
     }
 }

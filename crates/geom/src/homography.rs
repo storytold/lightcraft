@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Affine, Point};
+use crate::{Affine, Point, Real};
 
 /// Row-major 3×3 matrix mapping homogeneous points: p' = H·p.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -23,10 +23,15 @@ impl Homography {
     }
 
     pub fn apply(&self, p: Point) -> Point {
+        let (x, y) = self.apply_real(p.x, p.y);
+        Point::new(x, y)
+    }
+
+    /// [`Homography::apply`] for any [`Real`] (e.g. [`Interval`](crate::Interval) bounds over many points).
+    pub fn apply_real<T: Real>(&self, x: T, y: T) -> (T, T) {
         let m = &self.0;
-        let w = m[6] * p.x + m[7] * p.y + m[8];
-        let w = if w.abs() < 1e-300 { 1e-300 } else { w };
-        Point::new((m[0] * p.x + m[1] * p.y + m[2]) / w, (m[3] * p.x + m[4] * p.y + m[5]) / w)
+        let w = (x * m[6] + y * m[7] + m[8]).clamp_tiny(1e-300);
+        ((x * m[0] + y * m[1] + m[2]) / w, (x * m[3] + y * m[4] + m[5]) / w)
     }
 
     pub fn mul(&self, o: &Homography) -> Homography {

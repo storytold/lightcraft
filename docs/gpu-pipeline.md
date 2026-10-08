@@ -4,6 +4,23 @@ The CPU pipeline (`crates/pipeline`) is the reference ("oracle"). `lightcraft-gp
 evaluates the same stages with wgpu compute shaders (WGSL) on Metal / Vulkan / DX12. Everything is
 pure Rust (wgpu, naga); the drivers are the system's. No GL backend is compiled in.
 
+Warped geometry uses a CPU-computed coverage bit mask for the source boundary.
+The CPU reference evaluates that boundary in double precision; GPU float
+rounding otherwise can turn a blank edge pixel into a photo pixel. The mask
+uses one bit per output pixel (rows padded to 32 bits). Sampling and color
+corrections remain on the GPU, and existing geometry stage caching reuses the
+result. The mask is built per 32 × 16 block (`Warp::block_coverage`): the warp
+formulas are written once, generic over `lightcraft_geom::Real`, and evaluated
+with outward-rounded `Interval`s over the block. Those bounds enclose the f64
+result of every pixel in the block, so a block whose bounds lie inside the
+image edges (the same f64 comparisons, no margin), or beyond one of them, is
+filled at once; only blocks across the edge, or whose bounds are undecided (a
+perspective denominator that may vanish), evaluate each pixel (`Warp::covers`,
+the framing chain `Warp::frame` the CPU resample uses too). The bits equal the
+per-pixel decision. At 6000 × 4000 with lens warp + perspective the mask takes
+~2.7 ms (32 threads; ~24.5 ms on one) instead of ~30 ms (~580 ms), and only
+when warped geometry rebuilds.
+
 ## Backends, environment variables and troubleshooting (issue #136)
 wgpu loads the driver of **every** backend in an instance's set while it enumerates adapters — even
 when it then picks another one. A Vulkan driver that crashes there (issue #136: an access violation

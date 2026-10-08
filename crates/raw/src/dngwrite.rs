@@ -177,6 +177,9 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
         ifd.set(t::AS_SHOT_NEUTRAL, rat_vec(&v));
     } else if let Some(xy) = c.as_shot_white_xy {
         ifd.set(t::AS_SHOT_WHITE_XY, rat_vec(&[xy.x, xy.y]));
+    } else if let Some(m) = raw.wb_multipliers.filter(|m| m.iter().all(|v| *v > 0.0 && v.is_finite())) {
+        // vendor raws (NEF, ARW…) carry white balance as multipliers: the DNG neutral is their reciprocal
+        ifd.set(t::AS_SHOT_NEUTRAL, rat_vec(&m.map(|v| 1.0 / v as f64)));
     }
     ifd.set(t::BASELINE_EXPOSURE, Value::SRational(vec![srational(c.baseline_exposure)]));
     if let Some(v) = c.baseline_sharpness {

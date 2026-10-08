@@ -2901,6 +2901,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightcraft-fetch"
+version = "0.2.1"
+dependencies = [
+ "log",
+ "rustls",
+ "rustls-rustcrypto",
+ "sha2",
+ "webpki-roots",
+]
+
+[[package]]
 name = "lightcraft-geom"
 version = "0.2.1"
 dependencies = [
@@ -3043,14 +3054,11 @@ version = "0.2.1"
 dependencies = [
  "candle-core",
  "candle-nn",
+ "lightcraft-fetch",
  "log",
- "rustls",
- "rustls-rustcrypto",
  "serde",
  "serde_json",
- "sha2",
  "thiserror 2.0.21",
- "webpki-roots",
 ]
 
 [[package]]
@@ -3084,6 +3092,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "toml",
  "web-time",
 ]
 

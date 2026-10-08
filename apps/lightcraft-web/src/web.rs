@@ -428,8 +428,9 @@ impl WebApp {
             let cores = window().map_or(1, |w| w.navigator().hardware_concurrency() as usize);
             cores.saturating_sub(1).clamp(1, 4)
         });
+        let cache = app.session.media.rendered.clone();
         let workers =
-            (n > 0).then(|| Workers::start(n, backend.as_ref().map_or("memory", |b| b.kind()), backend.clone(), index, cc.egui_ctx.clone()));
+            (n > 0).then(|| Workers::start(n, backend.as_ref().map_or("memory", |b| b.kind()), backend.clone(), index, &cache, cc.egui_ctx.clone()));
         if let Some(w) = &workers {
             app.renderer.set_offload(Box::new(w.clone()));
         }

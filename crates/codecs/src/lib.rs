@@ -217,11 +217,19 @@ pub struct ThumbnailOptions {
     /// smaller size). Defaults to `max_edge`, i.e. only previews that need no upscaling. Lower it
     /// (e.g. 160 for typical EXIF thumbnails) for an instant placeholder.
     pub min_embedded_edge: u32,
+    /// Maximum source pixels for fallback decoding (default 64 MP). Non-JPEG formats
+    /// decode at source resolution before resizing, so output size does not bound memory.
+    #[serde(default = "thumbnail_max_pixels")]
+    pub max_pixels: u64,
+}
+
+fn thumbnail_max_pixels() -> u64 {
+    64_000_000
 }
 
 impl ThumbnailOptions {
     pub fn new(max_edge: u32) -> Self {
-        ThumbnailOptions { max_edge, min_embedded_edge: max_edge }
+        ThumbnailOptions { max_edge, min_embedded_edge: max_edge, max_pixels: thumbnail_max_pixels() }
     }
 }
 
@@ -240,7 +248,7 @@ pub fn decode_thumbnail_with(bytes: &[u8], opts: &ThumbnailOptions) -> Result<Th
     {
         return Ok(t);
     }
-    let d = decode(bytes, DecodeOptions::fit(max_edge, max_edge))?;
+    let d = decode(bytes, DecodeOptions { max_size: Some((max_edge, max_edge)), max_pixels: opts.max_pixels })?;
     Ok(Thumbnail {
         image: d.to_srgb8(),
         orientation: d.orientation,

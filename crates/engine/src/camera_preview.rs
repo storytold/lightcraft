@@ -1,5 +1,5 @@
-//! Estimate the starting look of a raw without a camera colour matrix (Sony ARW, Nikon NEF) from its
-//! own JPEG. Colour and luminance are fitted separately; the JPEG supplies correspondences only,
+//! Estimate the starting look of a raw without a camera colour matrix (Sony ARW, Nikon NEF, Panasonic
+//! RW2) from its own JPEG. Colour and luminance are fitted separately; the JPEG supplies correspondences only,
 //! never output pixels or a replacement for RAW editing.
 //! A global matrix can't follow the camera's hue-dependent rendering (the best matrix rendered a
 //! lime shirt olive that the camera kept lime): a hue/saturation table fitted to the residuals
@@ -31,7 +31,7 @@ pub(crate) const PROFILE_PROXY: usize = 192;
 /// as-shot look (`docs/camera-preview-colour.md`). The catalog's `Photo::relative_wb` matches the
 /// same formats by file extension.
 pub(crate) fn file_local_look(format: RawFormat) -> bool {
-    matches!(format, RawFormat::Arw | RawFormat::Nef | RawFormat::Nrw)
+    matches!(format, RawFormat::Arw | RawFormat::Nef | RawFormat::Nrw | RawFormat::Rw2)
 }
 
 pub(crate) fn fit_preview(raw: &RawImage, bytes: &[u8], transform: &CameraTransform) -> Option<CameraLook> {
@@ -63,18 +63,28 @@ fn proxies(raw: &RawImage, bytes: &[u8], transform: &CameraTransform, size: usiz
     let jpeg = lightcraft_raw::embedded_preview(bytes)?;
     let edge = (2 * size).max(384) as u32;
     let decoded = lightcraft_codecs::decode(&jpeg, lightcraft_codecs::DecodeOptions { max_size: Some((edge, edge)), max_pixels: 64_000_000 }).ok()?;
-    let reference = decoded.to_working();
-    let crop = raw.crop.clipped(raw.active_area.width, raw.active_area.height);
+    let mut reference = decoded.to_working();
+    let (a, crop) = (raw.active_area, raw.crop.clipped(raw.active_area.width, raw.active_area.height));
     if crop.width == 0 || crop.height == 0 || reference.width == 0 || reference.height == 0 {
         return None;
     }
-    let aspect = crop.width as f64 / crop.height as f64;
-    if (reference.width as f64 / reference.height as f64 / aspect - 1.0).abs() > 0.02 {
-        return None;
+    let matches = |w: usize, h: usize, rw: usize, rh: usize| (rw as f64 / rh as f64 / (w as f64 / h as f64) - 1.0).abs() <= 0.02;
+    if !matches(crop.width, crop.height, reference.width, reference.height) {
+        // Panasonic previews show the whole active area while the default crop is the in-camera aspect ratio
+        if !matches(a.width, a.height, reference.width, reference.height) {
+            return None;
+        }
+        let (sx, sy) = (reference.width as f64 / a.width as f64, reference.height as f64 / a.height as f64);
+        let (x, y) = ((crop.x as f64 * sx).round() as usize, (crop.y as f64 * sy).round() as usize);
+        let (w, h) = ((crop.width as f64 * sx).round() as usize, (crop.height as f64 * sy).round() as usize);
+        if w < 16 || h < 16 || x + w > reference.width || y + h > reference.height {
+            return None;
+        }
+        reference = reference.into_crop(x, y, w, h);
     }
     // Fixed, bounded proxy: the selected look cannot depend on thumbnail/export resolution.
     let k = (crop.width.max(crop.height).div_ceil(edge as usize).max(2)).div_ceil(2) * 2;
-    let sensor = raw.develop_binned(k, 0.99).ok()??;
+    let sensor = sensor_proxy(raw, k, edge as usize)?;
     let mut sensor = fit(&sensor, size, size, Filter::Box);
     let reference = fit(&reference, sensor.width, sensor.height, Filter::Box);
     let gain = 2f32.powf(transform.baseline_exposure as f32);
@@ -101,6 +111,14 @@ pub(crate) fn profile_pairs(raw: &RawImage, bytes: &[u8]) -> Option<Vec<([f64; 3
 pub(crate) fn fit_profile(pairs: &[([f64; 3], [f64; 3])]) -> Option<(Mat3, Option<HsvTable>)> {
     let matrix = fit_matrix(pairs)?;
     Some((matrix, fit_hue_sat(pairs, &matrix)))
+}
+
+fn sensor_proxy(raw: &RawImage, k: usize, edge: usize) -> Option<Rgb32f> {
+    Some(match raw.develop_binned(k, 0.99).ok()? {
+        Some(sensor) => sensor,
+        None if raw.cpp == 3 && raw.cfa.is_none() => fit(&raw.develop(lightcraft_raw::Method::Bilinear).ok()?, edge, edge, Filter::Box),
+        None => return None,
+    })
 }
 
 /// A fit must cut the held-out squared error to below this share of the fallback's.
@@ -511,6 +529,35 @@ fn fit_tone(mut pairs: Vec<(f64, f64)>) -> Option<CameraTone> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linear_arw_gets_a_sensor_proxy_without_demosaicing() {
+        use lightcraft_raw::{BlackLevel, ColorData, OpcodeLists, Orientation, RawData, RawFormat, Rect};
+        let mut raw = RawImage {
+            format: RawFormat::Arw,
+            width: 32,
+            height: 32,
+            cpp: 3,
+            data: RawData::F32([0.2, 0.3, 0.4].repeat(32 * 32)),
+            cfa: None,
+            bits: 16,
+            black: BlackLevel::uniform(0.0),
+            white: vec![1.0],
+            active_area: Rect::new(0, 0, 32, 32),
+            crop: Rect::new(0, 0, 32, 32),
+            orientation: Orientation::from_exif(1),
+            color: ColorData::default(),
+            wb_multipliers: Some([1.0; 3]),
+            linearized: true,
+            opcodes: OpcodeLists::default(),
+            metadata: lightcraft_meta::Metadata::default(),
+        };
+        let proxy = sensor_proxy(&raw, 2, 384).unwrap();
+        assert_eq!((proxy.width, proxy.height), (32, 32));
+        assert_eq!(proxy.data[0], [0.2, 0.3, 0.4]);
+        raw.data = RawData::F32(Vec::new());
+        assert!(sensor_proxy(&raw, 2, 384).is_none());
+    }
     #[test]
     fn separates_nonlinear_tone_from_colour_and_keeps_sensor_headroom() {
         let known = Mat3([[1.8, -0.4, -0.1], [-0.2, 1.5, -0.1], [-0.05, -0.3, 1.7]]);
@@ -731,8 +778,8 @@ mod tests {
     }
 
     #[test]
-    fn sony_and_nikon_raws_get_a_file_local_look() {
-        assert!([RawFormat::Arw, RawFormat::Nef, RawFormat::Nrw].into_iter().all(file_local_look));
+    fn sony_nikon_and_panasonic_raws_get_a_file_local_look() {
+        assert!([RawFormat::Arw, RawFormat::Nef, RawFormat::Nrw, RawFormat::Rw2].into_iter().all(file_local_look));
         assert!(![RawFormat::Dng, RawFormat::Cr2, RawFormat::Raf].into_iter().any(file_local_look));
     }
 
@@ -749,6 +796,24 @@ mod tests {
             return;
         };
         let (_, info) = crate::files::load_bytes(&bytes, 400).unwrap();
+        assert!(info.camera_tone.is_some(), "no camera look fitted");
+        assert!(info.relative_wb && info.as_shot_temp == 6500.0 && info.as_shot_tint == 0.0);
+    }
+
+    /// A public DC-FZ1000 II RW2 shot at 4:3 on its 3:2 sensor (skipped without the corpus): the default crop is 4:3
+    /// while the embedded JPEG shows the whole sensor; the look is still fitted, against the matching part of it.
+    #[test]
+    fn corpus_rw2_with_an_in_camera_crop_gets_a_camera_look() {
+        let path = std::env::var_os("LIGHTCRAFT_CORPUS")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
+            .join("raw/rw2-panasonic-fz1000m2-4x3.rw2");
+        let Ok(bytes) = std::fs::read(&path) else {
+            eprintln!("skip: {} absent", path.display());
+            return;
+        };
+        let (img, info) = crate::files::load_bytes(&bytes, 400).unwrap();
+        assert_eq!((img.width, img.height), (400, 300), "framed in the in-camera aspect ratio");
         assert!(info.camera_tone.is_some(), "no camera look fitted");
         assert!(info.relative_wb && info.as_shot_temp == 6500.0 && info.as_shot_tint == 0.0);
     }

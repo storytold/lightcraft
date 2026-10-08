@@ -11,8 +11,10 @@ use serde_json::{Value, json};
 use crate::backend::Backend;
 
 /// File extensions recognised as photos when expanding folders.
-pub const PHOTO_EXTENSIONS: &[&str] =
-    &["jpg", "jpeg", "png", "tif", "tiff", "webp", "dng", "cr2", "cr3", "nef", "arw", "raf", "orf", "rw2", "pef", "psd", "jxl", "gif", "bmp", "avif"];
+pub const PHOTO_EXTENSIONS: &[&str] = &[
+    "jpg", "jpeg", "png", "tif", "tiff", "webp", "dng", "cr2", "cr3", "nef", "arw", "raf", "orf", "rw2", "rwl", "raw", "pef", "psd", "jxl", "gif",
+    "bmp", "avif",
+];
 
 /// Headless backend: a [`Session`] with filesystem hooks.
 pub struct Headless {

@@ -282,13 +282,10 @@ fn sample_warped(base: &Rgb32f, sx: f64, sy: f64, wp: &Warp, o2t: Affine, w: usi
     let mut out = Rgb32f::new(w, h);
     par_rows(&mut out.data, w, |y, row| {
         for (x, px) in row.iter_mut().enumerate() {
-            let t = o2t.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-            let c = wp.to_corrected(t);
-            let g = wp.corrected_to_source(c, 1);
-            if !wp.inside(g) {
+            let Some((c, g)) = wp.frame(&o2t, x, y) else {
                 *px = BLANK;
                 continue;
-            }
+            };
             let mut v = base.sample_bilinear((g.x * sx) as f32, (g.y * sy) as f32);
             if per_channel {
                 for ch in [0usize, 2] {

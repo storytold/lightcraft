@@ -9,7 +9,8 @@ use std::process::Command;
 /// Extensions treated as assets (lower-case).
 const ASSET_EXT: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "ico", "icns", "bmp", "ttf", "otf", "woff", "woff2", "wav", "mp3", "ogg", "flac", "mp4",
-    "mov", "tif", "tiff", "dng", "cr2", "cr3", "nef", "arw", "raf", "orf", "rw2", "pef", "heic", "jxl", "psd", "cube", "icc", "icm", "xmp",
+    "mov", "tif", "tiff", "dng", "cr2", "cr3", "nef", "arw", "raf", "orf", "rw2", "rwl", "raw", "pef", "heic", "jxl", "psd", "cube", "icc", "icm",
+    "xmp",
 ];
 /// Adobe-specific formats we never ship (camera/lens profiles, Lightroom templates).
 const FORBIDDEN_EXT: &[&str] = &["dcp", "lcp", "lrtemplate", "lrcat", "lrsmcol", "aco", "ase", "abr"];

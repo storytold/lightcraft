@@ -7,9 +7,11 @@
 
 mod crop;
 mod homography;
+mod real;
 
 pub use crop::{CropGeometry, crop_fit_angle, max_inscribed_scale};
 pub use homography::Homography;
+pub use real::{Interval, Real};
 
 use serde::{Deserialize, Serialize};
 
@@ -213,8 +215,13 @@ impl Affine {
         Affine::translate(p.to_vec()) * Affine::rotate(a) * Affine::translate(-p.to_vec())
     }
     pub fn apply(&self, p: Point) -> Point {
+        let (x, y) = self.apply_real(p.x, p.y);
+        Point::new(x, y)
+    }
+    /// [`Affine::apply`] for any [`Real`] (e.g. [`Interval`] bounds over many points).
+    pub fn apply_real<T: Real>(&self, x: T, y: T) -> (T, T) {
         let [a, b, c, d, e, f] = self.0;
-        Point::new(a * p.x + c * p.y + e, b * p.x + d * p.y + f)
+        (x * a + y * c + e, x * b + y * d + f)
     }
     pub fn apply_vec(&self, v: Vec2) -> Vec2 {
         let [a, b, c, d, ..] = self.0;

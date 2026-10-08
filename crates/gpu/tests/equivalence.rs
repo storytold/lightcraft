@@ -440,7 +440,6 @@ fn geometry_variants() {
     if !gpu() {
         return;
     }
-    use lightcraft_develop::{EmbeddedLens, EmbeddedVignette, EmbeddedWarp};
     let src = scene(2, 900, 600);
     let raw = SourceInfo { raw: true, ..Default::default() };
     use Orientation::*;
@@ -455,7 +454,19 @@ fn geometry_variants() {
             check(&format!("{o:?} crop={crop}"), &src, &raw, &s, &req);
         }
     }
-    // embedded DNG lens corrections (per-plane warp + vignette) with manual CA
+}
+
+#[test]
+fn embedded_lens_perspective_edges_match() {
+    if !gpu() {
+        return;
+    }
+    use lightcraft_develop::{EmbeddedLens, EmbeddedVignette, EmbeddedWarp};
+    let src = scene(2, 900, 600);
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    // The unrotated case includes a position only 0.000035 px outside the edge.
+    // f32 classification previously sampled the photo instead of blank canvas.
+    // Embedded DNG lens corrections (per-plane warp + vignette) with manual CA.
     let lens = EmbeddedLens {
         warp: Some(EmbeddedWarp {
             planes: [[1.0, -0.03, 0.01, 0.0, 0.001, -0.002], [1.0, -0.028, 0.01, 0.0, 0.001, -0.002], [1.0, -0.026, 0.01, 0.0, 0.001, -0.002]],
@@ -470,7 +481,7 @@ fn geometry_variants() {
     s.optics.ca_red = 30.0;
     s.geometry.horizontal = -15.0;
     check("embedded lens + perspective", &src, &info, &s, &RenderRequest::fit(700, 700));
-    s.orientation = Rotate270;
+    s.orientation = Orientation::Rotate270;
     check("embedded lens rotated", &src, &info, &s, &RenderRequest::fit(700, 700));
 }
 

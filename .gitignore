@@ -8,6 +8,9 @@ plan/
 .DS_Store
 .claude/
 /craft-fonts
+# nix build / nix develop
+/result
+/result-*
 # model weights are never committed (SAM 3: docs/ai-masks.md)
 *.safetensors
 *.safetensors.part

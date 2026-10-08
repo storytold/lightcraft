@@ -37,6 +37,8 @@ const BLACK_LEVEL: u16 = 0x7310;
 const WB_RGGB: u16 = 0x7313;
 const CROP_TOP_LEFT: u16 = 0x74c7;
 const CROP_SIZE: u16 = 0x74c8;
+const YCBCR_COEFFICIENTS: u16 = 529;
+const REFERENCE_BLACK_WHITE: u16 = 532;
 /// Maker-note tags (ExifTool Sony tag names): the enciphered `Tag2010` block and `FullImageSize` (height, width).
 const MN_TAG2010: u16 = 0x2010;
 const MN_FULL_IMAGE_SIZE: u16 = 0xb02b;
@@ -300,6 +302,71 @@ fn read_quad_tiles(bytes: &[u8], info: &ImageInfo) -> Result<Vec<u16>> {
     Ok(out)
 }
 
+/// Downsized M/S ARWs are linear YCbCr 4:2:0 / 4:2:2, not CFA, despite retaining dummy CFA tags.
+/// T.81 supplies the lossless coding; TIFF 6.0 supplies the YCbCr coefficients and reference
+/// levels. Sony's reference chroma black and white are identical (the neutral offset).
+fn read_ycbcr_tiles(bytes: &[u8], info: &ImageInfo, raw: &Ifd, mode: Mode) -> Result<Vec<u16>> {
+    let total = check_image(bytes, info)?;
+    if info.samples_per_pixel != 3 || info.planar != 1 || !matches!(info.layout, Layout::Tiles { .. }) {
+        return Err(RawError::Unsupported("Sony linear YCbCr tile layout".into()));
+    }
+    let chunks = info.chunks(bytes.len() as u64);
+    let first = chunks.first().and_then(|c| chunk_bytes(bytes, c)).ok_or_else(|| RawError::Corrupt("missing YCbCr tile".into()))?;
+    ljpeg::frame_info_subsampled(first)?;
+    let coefficients = raw.f64s(YCBCR_COEFFICIENTS).unwrap_or_else(|| vec![0.299, 0.587, 0.114]);
+    let [kr, kg, kb] = coefficients.as_slice() else { return Err(RawError::Corrupt("YCbCr coefficients".into())) };
+    if !coefficients.iter().all(|v| v.is_finite() && *v > 0.0 && *v < 1.0) || (kr + kg + kb - 1.0).abs() > 0.001 {
+        return Err(RawError::Corrupt("invalid YCbCr coefficients".into()));
+    }
+    let references = raw.f64s(REFERENCE_BLACK_WHITE).unwrap_or_else(|| vec![0.0, 16383.0, 16384.0, 16384.0, 16384.0, 16384.0]);
+    let [yblack, ywhite, cbzero, cbwhite, crzero, crwhite] = references.as_slice() else {
+        return Err(RawError::Corrupt("YCbCr reference levels".into()));
+    };
+    if !references.iter().all(|v| v.is_finite() && (0.0..=65535.0).contains(v))
+        || *yblack != 0.0
+        || *ywhite != 16383.0
+        || cbzero != cbwhite
+        || crzero != crwhite
+    {
+        return Err(RawError::Unsupported("Sony YCbCr reference levels".into()));
+    }
+    if mode == Mode::Header {
+        return Ok(Vec::new());
+    }
+    let decoded: Vec<(Chunk, ljpeg::FrameSubsampled)> = chunks
+        .par_iter()
+        .map(|c| {
+            let src = chunk_bytes(bytes, c).ok_or_else(|| RawError::Corrupt("YCbCr tile outside file".into()))?;
+            let limit = (c.width as usize).checked_mul(c.height as usize).and_then(|n| n.checked_mul(3)).ok_or(RawError::Limit("tile too large"))?;
+            let f = ljpeg::decode_subsampled(src, limit)?;
+            if f.width != c.width as usize || f.height != c.height as usize {
+                return Err(RawError::Corrupt("Sony YCbCr tile dimensions".into()));
+            }
+            Ok((*c, f))
+        })
+        .collect::<Result<_>>()?;
+    let (w, h) = (info.width as usize, info.height as usize);
+    let mut out = vec![0u16; total];
+    for (c, f) in decoded {
+        for y in 0..f.height.min(h.saturating_sub(c.y as usize)) {
+            for x in 0..f.width.min(w.saturating_sub(c.x as usize)) {
+                let luma = f.planes[0][y * f.width + x] as f64;
+                let ci = (y / f.vertical_subsampling) * (f.width / 2) + x / 2;
+                let cb = f.planes[1][ci] as f64 - cbzero;
+                let cr = f.planes[2][ci] as f64 - crzero;
+                let r = luma + (2.0 - 2.0 * kr) * cr;
+                let b = luma + (2.0 - 2.0 * kb) * cb;
+                let g = (luma - kr * r - kb * b) / kg;
+                let dst = (((c.y as usize + y) * w) + c.x as usize + x) * 3;
+                for (s, value) in [r, g, b].into_iter().enumerate() {
+                    out[dst + s] = value.round().clamp(0.0, 65535.0) as u16;
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// `SR2Private` tags (ExifTool "Sony SR2Private" table; the IFD is referenced by IFD0's `DNGPrivateData`).
 const SR2_SUBIFD_OFFSET: u16 = 0x7200;
 const SR2_SUBIFD_LENGTH: u16 = 0x7201;
@@ -384,9 +451,11 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         return Err(RawError::Limit("image too large"));
     }
     let bits = info.bits() as u32;
+    let linear_rgb = info.compression == 7 && info.photometric == photometric::YCBCR;
     let chunks = info.chunks(bytes.len() as u64);
     let strip_len: u64 = chunks.iter().map(|c| c.len).sum();
     let (data, out_bits) = match info.compression {
+        7 if linear_rgb => (RawData::U16(read_ycbcr_tiles(bytes, &info, raw, mode)?), 14),
         32767 if chunks.len() == 1 && strip_len >= (w * h) as u64 && strip_len < (w * h) as u64 * 5 / 4 && mode == Mode::Header => {
             chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("raw strip outside file".into()))?;
             (RawData::U16(Vec::new()), 14)
@@ -434,12 +503,17 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     };
     let default_black = if scale_bits >= 14 { 512.0 } else { 128.0 };
     let black = match raw.f64s(BLACK_LEVEL).as_deref() {
+        Some(v) if linear_rgb && !v.is_empty() => BlackLevel::uniform((v.iter().sum::<f64>() / v.len() as f64) as f32),
         Some([a, b, c, d]) => {
             BlackLevel { repeat_rows: 2, repeat_cols: 2, values: vec![*a as f32, *b as f32, *c as f32, *d as f32], ..Default::default() }
         }
         _ => BlackLevel::uniform(sr2_black(bytes, ifd0, tiff.order).filter(|_| scale_bits >= 14).unwrap_or(default_black)),
     };
-    let white = raw.f64(t::WHITE_LEVEL).map(|v| v as f32).filter(|v| *v > 0.0).unwrap_or_else(|| super::white_from_data(samples, scale_bits));
+    let white = if linear_rgb {
+        16383.0
+    } else {
+        raw.f64(t::WHITE_LEVEL).map(|v| v as f32).filter(|v| *v > 0.0).unwrap_or_else(|| super::white_from_data(samples, scale_bits))
+    };
     let model = ifd0.string(t::MODEL).unwrap_or_default();
     let mn = tiff
         .exif()
@@ -464,9 +538,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         format: RawFormat::Arw,
         width: w,
         height: h,
-        cpp: 1,
+        cpp: if linear_rgb { 3 } else { 1 },
         data,
-        cfa: Some(cfa),
+        cfa: if linear_rgb { None } else { Some(cfa) },
         bits: out_bits,
         black,
         white: vec![white],
@@ -474,7 +548,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         crop,
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
         color: ColorData::default(),
-        wb_multipliers: wb,
+        // Sony's linear YCbCr already carries as-shot WB. Applying the CFA gains again
+        // makes a neutral surface magenta. WB edits remain relative to this as-shot RGB.
+        wb_multipliers: if linear_rgb { Some([1.0; 3]) } else { wb },
         linearized: false,
         opcodes: OpcodeLists::default(),
         metadata,
@@ -486,6 +562,38 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn downsized_lossless_is_linear_rgb_not_cfa() {
+        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+        let mut raw = IfdBuilder::new();
+        raw.set(t::MAKE, Value::Ascii("SONY".into()));
+        raw.set(t::MODEL, Value::Ascii("ILCE-7M4".into()));
+        raw.set(t::IMAGE_WIDTH, Value::Long(vec![4]));
+        raw.set(t::IMAGE_LENGTH, Value::Long(vec![4]));
+        raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![15, 15, 15]));
+        raw.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![3]));
+        raw.set(t::PHOTOMETRIC, Value::Short(vec![photometric::YCBCR]));
+        raw.set(t::COMPRESSION, Value::Short(vec![7]));
+        raw.set(TONE_CURVE, Value::Short(vec![0; 4]));
+        raw.set(BLACK_LEVEL, Value::Short(vec![512; 4]));
+        raw.set(WB_RGGB, Value::Short(vec![2048, 1024, 1024, 2048]));
+        raw.set_image(ImageData::Tiles { tile_width: 4, tile_height: 4, tiles: vec![ljpeg::tests::fixture_420()] });
+        let file = TiffWriter::default().write(&[raw]).unwrap();
+        let header = decode(&file, Mode::Header).unwrap();
+        let full = decode(&file, Mode::Full).unwrap();
+        assert_eq!(header.info(), full.info());
+        assert_eq!((full.width, full.height, full.cpp), (4, 4, 3));
+        assert!(full.cfa.is_none());
+        assert_eq!(full.data.len(), 48);
+        assert_eq!(full.wb_multipliers, Some([1.0; 3]));
+        let RawData::U16(ref pixels) = full.data else {
+            panic!("integer ARW");
+        };
+        assert_eq!(&pixels[..3], &[1140, 929, 1000]);
+        let developed = full.develop(crate::Method::Bilinear).unwrap();
+        assert_eq!((developed.width, developed.height), (4, 4));
+    }
 
     /// Encode one 16-value set as an ARW2 block (the paper's scheme, used here to test the decoder).
     pub(crate) fn encode_block(v: &[u16; 16]) -> [u8; 16] {

@@ -455,6 +455,22 @@ fn colour_transform_from_decoded_dng() {
     assert!(o.iter().all(|v| (v - 1.0).abs() < 1e-9));
 }
 
+/// Issue #212: a NEF converted to DNG came out dark and green. NEF white balance is vendor multipliers
+/// (no colour matrix, no `AsShotNeutral`); the DNG must carry them as its as-shot neutral.
+#[test]
+fn vendor_white_balance_survives_dng_conversion() {
+    let mut raw = synthetic(16, 16, Some(Cfa::bayer("RGGB").unwrap()), 1);
+    raw.color = ColorData::default();
+    raw.wb_multipliers = Some([2.25, 1.0, 1.7421875]);
+    let before = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
+    let back = decode(&write_dng(&raw, &DngWriteOptions::default()).unwrap()).unwrap();
+    let after = lightcraft_raw::color::camera_transform(&back, lightcraft_raw::color::as_shot_white_xy(&back));
+    for c in 0..3 {
+        assert!((before.wb[c] - after.wb[c]).abs() < 1e-3, "{:?} vs {:?}", before.wb, after.wb);
+    }
+    assert!((after.wb[0] - 2.25).abs() < 1e-3 && (after.wb[2] - 1.7421875).abs() < 1e-3, "{:?}", after.wb);
+}
+
 #[test]
 fn rejects_unsupported_and_broken() {
     let (w, h) = (8, 8);

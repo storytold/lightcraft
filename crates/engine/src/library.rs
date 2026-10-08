@@ -563,13 +563,14 @@ impl Session {
         if self.cache_mb == 0 { crate::media::DISK_CACHE_BYTES } else { u64::from(self.cache_mb) << 20 }
     }
 
-    /// Change the thumbnail disk cache budget (MB, 0 = default): re-attaches the cache, which
-    /// trims it to the new size. Saved with the library preferences.
+    /// Change the thumbnail disk cache budget (MB, 0 = default) in place: the cached thumbnails
+    /// stay (the next write trims to the new size), and so do the textures shown from them.
+    /// Saved with the library preferences.
     pub fn set_cache_mb(&mut self, mb: u32) -> Result<()> {
         self.cache_mb = mb;
         if let Some(lib) = self.library.as_ref().filter(|l| l.on_disk) {
             let dir = lib.thumbs_dir();
-            self.media.attach_disk_cache(&dir, self.cache_bytes());
+            self.media.set_disk_cache_bytes(&dir, self.cache_bytes());
         }
         self.save_prefs()
     }

@@ -64,7 +64,7 @@ jobs:
   macos:
     name: macOS universal
     needs: version
-    runs-on: macos-15
+    runs-on: macos-15-xlarge  # M2 Pro larger runner; use only in release.yml (actions_macos_xl budget caps spend)
     environment: release
     env:
       LIGHTCRAFT_VERSION: ${{ needs.version.outputs.version }}

@@ -32,8 +32,44 @@ fn try_all(bytes: &[u8]) {
         let _ = decode_unguarded(bytes, f, &DecodeOptions { max_size: Some((8, 8)), max_pixels: 1 << 22 });
     }
     let _ = decode(bytes, small_opts());
-    let _ = decode_thumbnail(bytes, 16);
+    let _ = decode_thumbnail_with(bytes, &ThumbnailOptions { max_pixels: small_opts().max_pixels, ..ThumbnailOptions::new(16) });
     let _ = lightcraft_codecs::icc::parse(bytes);
+}
+
+#[test]
+fn webp_truncated_metadata_cannot_allocate_declared_chunk_size() {
+    let mut bytes = seeds()[5].clone();
+    let tag = bytes.windows(4).rposition(|w| w == b"XMP ").unwrap();
+    bytes[tag + 4..tag + 8].copy_from_slice(&1_946_157_060u32.to_le_bytes());
+    let decoded = decode(&bytes, small_opts()).unwrap();
+    assert_eq!((decoded.image.width, decoded.image.height), (24, 16));
+    assert!(decoded.xmp.is_none(), "invalid optional metadata is ignored");
+}
+
+#[test]
+fn thumbnail_rejects_huge_gif_before_allocating_source_pixels() {
+    // A logical screen header without a global palette; previously this reached a
+    // multi-gigabyte output allocation before discovering that no frame follows.
+    let bytes = [
+        0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x8f, 0xa4, 0xb0, 0x3f, 0x57, 0x14, 0xe8, 0x8a, 0xf8, 0xe0, 0xc7, 0x41, 0x9d, 0x0c, 0x10, 0xde, 0x54,
+        0x24, 0xcb, 0xed, 0xff, 0x4a, 0xe7, 0xa0, 0x82, 0x10, 0xa0, 0xbc, 0xac, 0xe5, 0x33, 0x3f, 0xc9, 0x8d, 0x69, 0xf4, 0x24, 0xce, 0x99, 0x4f,
+        0x0d, 0x47, 0xa0, 0xb0, 0xf4, 0xa8, 0x59, 0xad, 0x29, 0xbd, 0x09, 0x48, 0x63, 0xea, 0x59, 0xb7, 0xb7, 0xf2, 0xa1, 0x90, 0xeb, 0x92, 0xc5,
+        0x9c, 0xde, 0xcc, 0x96, 0x67, 0xc4, 0xe5, 0x8c, 0x03, 0x50, 0xb2, 0x30, 0xf8, 0xf4, 0x69, 0x1d, 0xeb, 0xb9, 0xbd, 0x4e, 0xfb, 0xbd, 0xb6,
+        0x02,
+    ];
+    let result = decode_thumbnail(&bytes, 16);
+    assert!(matches!(result, Err(Error::TooLarge(42_127, 16_304))), "{result:?}");
+}
+
+#[test]
+fn thumbnail_respects_configured_source_pixel_limit() {
+    let image = Rgba8::from_fn(3, 2, |_, _| [40, 80, 120, 255]);
+    let bytes = encode_png(&EncodeImage::rgba8(&image), &EncodeMeta::default()).unwrap();
+    let mut opts = ThumbnailOptions::new(1);
+    opts.max_pixels = 5;
+    assert!(matches!(decode_thumbnail_with(&bytes, &opts), Err(Error::TooLarge(3, 2))));
+    opts.max_pixels = 6;
+    assert_eq!(decode_thumbnail_with(&bytes, &opts).unwrap().image.width, 1);
 }
 
 fn seeds() -> &'static Vec<Vec<u8>> {

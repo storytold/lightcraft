@@ -292,7 +292,9 @@ fn devices_are_listed_and_imported_from() {
     assert_eq!(dev["name"], "CARD", "{line}");
     // the import review of its DCIM folder finds the photo
     let dcim = dev["path"].as_str().unwrap().to_string();
-    let o = Command::new(BIN).args(["run", "library.importPreview", &format!("paths=[\"{dcim}\"]")]).output().unwrap();
+    // JSON-escaped: a Windows path has backslashes
+    let paths = serde_json::to_string(&[&dcim]).unwrap();
+    let o = Command::new(BIN).args(["run", "library.importPreview", &format!("paths={paths}")]).output().unwrap();
     let line: Value = serde_json::from_slice(o.stdout.split(|b| *b == b'\n').next().unwrap()).unwrap();
     assert_eq!(line["result"]["candidates"].as_array().map(Vec::len), Some(1), "{line}");
 }

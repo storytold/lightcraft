@@ -54,6 +54,9 @@ pub(crate) fn rename_preview(
     (read(&rows), total)
 }
 
+/// About dialog tabs: (widget id suffix, label). The credits come from `crate::credits`.
+pub const ABOUT_TABS: &[(&str, &str)] = &[("about", "About"), ("contributors", "Contributors"), ("models", "Models")];
+
 /// Help ▸ What's New (docs/whats-new.md).
 pub const WHATS_NEW: &str = include_str!("../../../../docs/whats-new.md");
 
@@ -708,27 +711,46 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     ui.label(egui::RichText::new(crate::i18n::tr("They can be restored from Recently Deleted until it is emptied.")).color(t.text_dim));
                 }
                 Dialog::About => {
-                    ui.label(egui::RichText::new("LightCraft").font(t.semibold(20.0)).color(t.text));
-                    ui.label(crate::i18n::tr_format!("Version {} — a clean-room, pure-Rust photo library and raw developer.", env!("CARGO_PKG_VERSION")));
-                    ui.label(format!("MIT OR Apache-2.0. Fonts: {} (OFL). Icons: original.", crate::theme::font_credits()));
-                    ui.add_space(10.0);
-                    let discord = egui::Button::new(egui::RichText::new(crate::i18n::tr("Join the ArtCraft Discord")).font(t.semibold(15.0)).color(egui::Color32::WHITE))
-                        .fill(t.accent)
-                        .min_size(egui::vec2(260.0, 34.0));
-                    let r = ui.add(discord).on_hover_text(crate::links::DISCORD);
-                    crate::widgets::register(ui.ctx(), "button:aboutDiscord", r.rect);
-                    if r.clicked() {
-                        let _ = crate::links::open(app, crate::links::DISCORD);
-                    }
-                    ui.add_space(6.0);
-                    for (label, url) in [
-                        ("LightCraft website", crate::links::APP_PAGE),
-                        ("Source code on GitHub", crate::links::GITHUB),
-                        ("ArtCraft — more creative apps", crate::links::WEBSITE),
-                    ] {
-                        let r = ui.link(crate::i18n::tr(label)).on_hover_text(url);
-                        if r.clicked() {
-                            let _ = crate::links::open(app, url);
+                    ui.set_min_width(680.0);
+                    let tab_id = egui::Id::new("about_tab");
+                    let mut tab = ui.data_mut(|d| d.get_temp::<u8>(tab_id)).unwrap_or(0);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        for (i, (id, label)) in ABOUT_TABS.iter().enumerate() {
+                            if crate::widgets::text_button(ui, &format!("aboutTab-{id}"), label, usize::from(tab) == i).clicked() {
+                                tab = u8::try_from(i).unwrap_or(0);
+                            }
+                        }
+                    });
+                    ui.data_mut(|d| d.insert_temp(tab_id, tab));
+                    ui.separator();
+                    match tab {
+                        1 => crate::credits::contributors_ui(app, ui),
+                        2 => crate::credits::models_ui(ui),
+                        _ => {
+                            ui.label(egui::RichText::new("LightCraft").font(t.semibold(20.0)).color(t.text));
+                            ui.label(crate::i18n::tr_format!("Version {} — a clean-room, pure-Rust photo library and raw developer.", env!("CARGO_PKG_VERSION")));
+                            ui.label(format!("MIT OR Apache-2.0. Fonts: {} (OFL). Icons: original.", crate::theme::font_credits()));
+                            ui.add_space(10.0);
+                            let discord = egui::Button::new(egui::RichText::new(crate::i18n::tr("Join the ArtCraft Discord")).font(t.semibold(15.0)).color(egui::Color32::WHITE))
+                                .fill(t.accent)
+                                .min_size(egui::vec2(260.0, 34.0));
+                            let r = ui.add(discord).on_hover_text(crate::links::DISCORD);
+                            crate::widgets::register(ui.ctx(), "button:aboutDiscord", r.rect);
+                            if r.clicked() {
+                                let _ = crate::links::open(app, crate::links::DISCORD);
+                            }
+                            ui.add_space(6.0);
+                            for (label, url) in [
+                                ("LightCraft website", crate::links::APP_PAGE),
+                                ("Source code on GitHub", crate::links::GITHUB),
+                                ("ArtCraft — more creative apps", crate::links::WEBSITE),
+                            ] {
+                                let r = ui.link(crate::i18n::tr(label)).on_hover_text(url);
+                                if r.clicked() {
+                                    let _ = crate::links::open(app, url);
+                                }
+                            }
                         }
                     }
                 }

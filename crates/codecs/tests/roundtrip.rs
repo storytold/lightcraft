@@ -461,7 +461,7 @@ fn thumbnail_accepts_smaller_preview_when_asked() {
         encode_jpeg(&EncodeImage::rgba8(&main), 80, ChromaSubsampling::S420, &EncodeMeta { exif: Some(&exif), ..Default::default() }).unwrap();
     let t = decode_thumbnail(&bytes, 256).unwrap();
     assert_eq!(t.source, ThumbnailSource::Scaled);
-    let t = decode_thumbnail_with(&bytes, &ThumbnailOptions { max_edge: 256, min_embedded_edge: 160 }).unwrap();
+    let t = decode_thumbnail_with(&bytes, &ThumbnailOptions { min_embedded_edge: 160, ..ThumbnailOptions::new(256) }).unwrap();
     assert_eq!(t.source, ThumbnailSource::ExifThumbnail);
     assert_eq!((t.image.width, t.image.height), (160, 120));
 }

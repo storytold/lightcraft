@@ -177,7 +177,9 @@ fn sample_warp(@builtin(global_invocation_id) g: vec3<u32>) {
     let s = corrected_to_source(c, 1u);
     let sx = pf(10u);
     let sy = pf(11u);
-    if (!(s.x >= -0.5 && s.y >= -0.5 && s.x <= pf(12u) + 0.5 && s.y <= pf(13u) + 0.5)) {
+    // CPU reference coverage avoids an f32 rounding discontinuity at the edge.
+    let word = g.y * ((w + 31u) / 32u) + g.x / 32u;
+    if ((coverage[word] & (1u << (g.x % 32u))) == 0u) {
         put(g.y * w + g.x, vec3<f32>(BLANK_R, BLANK_G, BLANK_B));
         return;
     }
