@@ -244,11 +244,14 @@ pub fn to_partial(props: &Props, raw: Option<bool>) -> Value {
             put(o, "curve.master", c);
         }
     }
-    for (crs, ch) in
-        [("ToneCurvePV2012", "master"), ("ToneCurvePV2012Red", "red"), ("ToneCurvePV2012Green", "green"), ("ToneCurvePV2012Blue", "blue")]
-    {
-        if let Some(c) = curve(props, &format!("crs:{crs}")) {
-            put(o, &format!("curve.{ch}"), c);
+    // Lightroom Classic reads the red / green / blue curves only together with the master 2012
+    // curve: a channel curve without `ToneCurvePV2012` leaves the photo unchanged
+    if let Some(c) = curve(props, "crs:ToneCurvePV2012") {
+        put(o, "curve.master", c);
+        for (crs, ch) in [("ToneCurvePV2012Red", "red"), ("ToneCurvePV2012Green", "green"), ("ToneCurvePV2012Blue", "blue")] {
+            if let Some(c) = curve(props, &format!("crs:{crs}")) {
+                put(o, &format!("curve.{ch}"), c);
+            }
         }
     }
 
@@ -572,12 +575,30 @@ mod tests {
           <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
              crs:PresetType="Normal" crs:Cluster="" crs:UUID="0123ABCD" crs:SupportsAmount2="True" crs:SupportsAmount="True"
              crs:RequiresRGBTables="False" crs:Contrast2012="+25" crs:LensProfileEnable="0" crs:OverrideLookVignette="False"
-             crs:CropConstrainToWarp="0" crs:AsShotTemperature="7450" crs:AsShotTint="23" {extra_attrs}>
+             crs:CropConstrainToWarp="0" crs:AsShotTemperature="5500" crs:AsShotTint="10" {extra_attrs}>
             <crs:SortName><rdf:Alt><rdf:li xml:lang="x-default"/></rdf:Alt></crs:SortName>
             <crs:Description><rdf:Alt><rdf:li xml:lang="x-default"/></rdf:Alt></crs:Description>
             {extra_elems}
           </rdf:Description></rdf:RDF></x:xmpmeta>"#
         )
+    }
+
+    #[test]
+    fn channel_curves_need_the_master_curve() {
+        // Lightroom ignores a red / green / blue curve without `ToneCurvePV2012`
+        let packet = |master: &str| {
+            format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:ToneCurveName2012="Custom">{master}
+           <crs:ToneCurvePV2012Green><rdf:Seq><rdf:li>0, 0</rdf:li><rdf:li>64, 40</rdf:li><rdf:li>255, 255</rdf:li></rdf:Seq></crs:ToneCurvePV2012Green>
+          </rdf:Description></rdf:RDF></x:xmpmeta>"#
+            )
+        };
+        let alone = to_partial(&props(&packet("")), Some(true));
+        assert!(alone.pointer("/curve/green").is_none(), "{alone}");
+        let master = "<crs:ToneCurvePV2012><rdf:Seq><rdf:li>0, 0</rdf:li><rdf:li>255, 255</rdf:li></rdf:Seq></crs:ToneCurvePV2012>";
+        let with = to_partial(&props(&packet(master)), Some(true));
+        assert!(with.pointer("/curve/green").is_some() && with.pointer("/curve/master").is_some(), "{with}");
     }
 
     fn unmapped(x: &str) -> Vec<String> {
