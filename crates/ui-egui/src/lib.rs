@@ -39,6 +39,8 @@ mod tests_library_problem;
 #[cfg(test)]
 mod tests_masking;
 #[cfg(test)]
+mod tests_masking_layout;
+#[cfg(test)]
 mod tests_offline;
 #[cfg(test)]
 mod tests_panels;

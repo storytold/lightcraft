@@ -1,6 +1,6 @@
 //! The Masking panel: create masks, list them, edit components and local adjustments.
 
-use egui::{Align2, Rect, Sense, Stroke, pos2, vec2};
+use egui::{Rect, Sense, Stroke, pos2, vec2};
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::{ControlSpec, LocalAdjustments, MaskShape, Section, Track};
 use serde_json::json;
@@ -62,11 +62,22 @@ fn kind_label(s: &MaskShape) -> (&'static str, Icon) {
 const TILE: f32 = 52.0;
 const TILE_GAP: f32 = 6.0;
 
-/// Columns and tile width of the Create New Mask grid in `width`: four tiles of up to 52 pt (at
-/// least 48, so the labels fit), else three (narrowed if even those don't fit).
-fn tile_layout(width: f32) -> (usize, f32) {
-    let tile = |n: f32| ((width - (n - 1.0) * TILE_GAP) / n).floor().min(TILE);
-    if tile(4.0) >= 48.0 { (4, tile(4.0)) } else { (3, tile(3.0).max(24.0)) }
+/// Prefer four columns, but keep each translated label readable with horizontal padding.
+fn tile_layout(width: f32, label_width: f32) -> (usize, f32) {
+    let desired = TILE.max(label_width + 10.0);
+    let cols = ((width + TILE_GAP) / (desired + TILE_GAP)).floor().clamp(1.0, 4.0) as usize;
+    let tile = ((width - (cols.saturating_sub(1)) as f32 * TILE_GAP) / cols as f32).floor().min(desired).max(0.0);
+    (cols, tile)
+}
+
+/// Paint a single line within its own bounds; retain the complete value for hover help.
+fn bounded_text(ui: &egui::Ui, rect: Rect, text: &str, font: egui::FontId, color: egui::Color32, centered: bool) {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), font, color);
+    job.wrap.max_width = rect.width().max(0.0);
+    job.wrap.max_rows = 1;
+    let galley = ui.painter().layout_job(job);
+    let x = if centered { rect.center().x - galley.size().x / 2.0 } else { rect.left() };
+    ui.painter().with_clip_rect(ui.clip_rect().intersect(rect)).galley(pos2(x, rect.center().y - galley.size().y / 2.0), galley, color);
 }
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
@@ -88,15 +99,21 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ("luminanceRange", "Luminance", Icon::Sliders),
             ("colorRange", "Color", Icon::Picker),
         ];
-        // four 52 pt tiles a row when they fit, else as many as fit (at least three, shrunk)
-        let (cols, tile) = tile_layout(ui.available_width());
+        let label_width = tiles
+            .iter()
+            .map(|(_, label, _)| ui.painter().layout_no_wrap(crate::i18n::tr(label).to_string(), t.font(10.5), t.text_dim).size().x)
+            .fold(0.0, f32::max);
+        let (cols, tile) = tile_layout(ui.available_width(), label_width);
         egui::Grid::new("mask-tiles").spacing(vec2(TILE_GAP, TILE_GAP)).show(ui, |ui| {
             for (i, (kind, label, icon)) in tiles.iter().enumerate() {
                 let (r, resp) = ui.allocate_exact_size(vec2(tile, 52.0), Sense::click());
                 register(ui.ctx(), format!("maskNew:{kind}"), r);
                 ui.painter().rect_filled(r, 4.0, if resp.hovered() { t.hover } else { t.inset });
                 paint(ui.painter(), Rect::from_center_size(r.center() - vec2(0.0, 7.0), vec2(20.0, 20.0)), *icon, t.text_label);
-                ui.painter().text(pos2(r.center().x, r.bottom() - 9.0), Align2::CENTER_CENTER, *label, t.font(10.5), t.text_dim);
+                let label = crate::i18n::tr(label);
+                let label_rect = Rect::from_min_max(pos2(r.left() + 4.0, r.bottom() - 18.0), pos2(r.right() - 4.0, r.bottom()));
+                bounded_text(ui, label_rect, label, t.font(10.5), t.text_dim, true);
+                let resp = resp.on_hover_text(label);
                 if resp.clicked() {
                     match *kind {
                         "colorRange" => {
@@ -136,7 +153,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         };
         if let Some(status) = status {
             ui.add_space(4.0);
-            ui.label(egui::RichText::new(crate::i18n::tr(status)).color(t.text_dim));
+            ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr(status)).color(t.text_dim)).wrap());
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         }
         // the model download, while its dialog is closed
@@ -207,13 +224,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             );
             let icon = m.components.first().map(|c| kind_label(&c.shape).1).unwrap_or(Icon::Mask);
             paint(ui.painter(), Rect::from_min_size(r.min + vec2(8.0, 7.0), vec2(16.0, 16.0)), icon, t.text_label);
-            ui.painter().text(
-                pos2(r.left() + 32.0, r.center().y),
-                Align2::LEFT_CENTER,
-                &m.name,
-                t.font(13.0),
-                if m.visible { t.text } else { t.text_disabled },
-            );
+            let name_rect = Rect::from_min_max(pos2(r.left() + 32.0, r.top()), pos2(r.right() - 30.0, r.bottom()));
+            bounded_text(ui, name_rect, &m.name, t.font(13.0), if m.visible { t.text } else { t.text_disabled }, false);
+            let resp = resp.on_hover_text(&m.name);
             // show / hide on hover (and always while hidden)
             // (the pointer test, not `hovered`: over the eye, the row itself no longer counts as hovered)
             if ui.rect_contains_pointer(r) || !m.visible {
@@ -704,24 +717,27 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
         "intersect" => "Describe what to keep",
         _ => "Describe what to select",
     };
-    ui.label(crate::i18n::tr(prompt));
+    ui.add(egui::Label::new(crate::i18n::tr(prompt)).wrap());
     let mut submit = false;
     ui.horizontal(|ui| {
-        let r = ui.add(
-            egui::TextEdit::singleline(&mut text)
-                .hint_text(crate::i18n::tr("e.g. sky · the red car · car, road"))
-                .desired_width(ui.available_width() - 64.0),
-        );
-        register(ui.ctx(), "maskDescribe", r.rect);
-        if !r.has_focus() && !r.lost_focus() && text.is_empty() {
-            r.request_focus();
-        }
-        if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            submit = true;
-        }
-        if text_button(ui, "maskDescribeGo", crate::i18n::tr("Select"), false).clicked() {
-            submit = true;
-        }
+        // Reserve the actual translated button width before giving the editor the remainder.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if text_button(ui, "maskDescribeGo", crate::i18n::tr("Select"), false).clicked() {
+                submit = true;
+            }
+            let r = ui.add(
+                egui::TextEdit::singleline(&mut text)
+                    .hint_text(crate::i18n::tr("e.g. sky · the red car · car, road"))
+                    .desired_width(ui.available_width()),
+            );
+            register(ui.ctx(), "maskDescribe", r.rect);
+            if !r.has_focus() && !r.lost_focus() && text.is_empty() {
+                r.request_focus();
+            }
+            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                submit = true;
+            }
+        });
     });
     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         app.ui.describe = None;
