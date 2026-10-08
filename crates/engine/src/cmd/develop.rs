@@ -939,7 +939,11 @@ pub fn specs() -> Vec<CommandSpec> {
             let id = active(s, "history.restore")?;
             let i = f64_req(p, "index", "history.restore")? as usize;
             let st = s.catalog.photo(id).and_then(|ph| ph.history.get(i).cloned()).ok_or_else(|| bad("history.restore", "no such step"))?;
-            s.set_develop(id, (*st.settings).clone(), &format!("History: {}", st.label))?;
+            // Selecting an existing history step navigates to that state. It must
+            // not append another history entry named "History: ..."; doing so
+            // made a click appear to duplicate the selected row. The settings
+            // change remains undoable and durable through the normal commit path.
+            s.commit("Restore History", Op::SetDevelop { id, settings: st.settings.clone(), label: st.label.clone(), edited: Some((s.clock)()) })?;
             ok()
         }),
         // ---- interactions (slider drags, brush strokes)

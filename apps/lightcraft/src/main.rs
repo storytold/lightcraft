@@ -283,6 +283,8 @@ fn windows_open_url_command(url: &str) -> std::process::Command {
 
 fn services() -> Services {
     Services {
+        export_exists: None,
+        pick_export_folder: None,
         pick_lightroom_catalog: Some(Box::new(|| {
             rfd::FileDialog::new()
                 .set_title(lightcraft_ui_egui::i18n::tr("Import Lightroom Catalog"))

@@ -1,0 +1,26 @@
+[package]
+name = "lightcraft-android"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+lightcraft-engine.workspace = true
+lightcraft-ui-egui.workspace = true
+lightcraft-catalog.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+egui.workspace = true
+eframe = { workspace = true, features = ["wgpu", "android-native-activity"] }
+android-activity = { version = "=0.6.1", features = ["native-activity"] }
+jni = "=0.21.1"
+
+[dev-dependencies]
+lightcraft-raster.workspace = true
+lightcraft-raw.workspace = true

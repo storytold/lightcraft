@@ -673,9 +673,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                     field(ui, "Folder", |ui| {
                         trailing_button_row(ui, |ui| {
-                            if app.services.pick_folder.is_some()
+                            if (app.services.pick_export_folder.is_some() || app.services.pick_folder.is_some())
                                 && crate::widgets::text_button(ui, "exportChooseFolder", crate::i18n::tr("Choose…"), false).clicked()
-                                && let Some(pick) = app.services.pick_folder.as_mut()
+                                && let Some(pick) = app.services.pick_export_folder.as_mut().or(app.services.pick_folder.as_mut())
                                 && let Some(d) = pick()
                             {
                                 *dir = d;

@@ -777,6 +777,25 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
 }
 
 fn nodes_ui(ui: &mut egui::Ui, nodes: &[MenuNode], mac: bool, clicked: &mut Option<(String, Value)>) {
+    #[cfg(target_os = "android")]
+    {
+        // Android menus must stay inside the display bounds. Keep the menu body
+        // swipeable and leave a small affordance so users can discover items
+        // below the fold on compact tablets and portrait windows.
+        ui.small(egui::RichText::new("↕ Swipe to scroll").color(crate::theme::Tokens::get(ui.ctx()).text_dim));
+        let screen_height = ui.ctx().content_rect().height();
+        let max_height = (screen_height - 96.0).max(180.0);
+        egui::ScrollArea::vertical()
+            .id_salt(("android-menu", nodes.as_ptr() as usize))
+            .max_height(max_height)
+            .auto_shrink([false, false])
+            .show(ui, |ui| nodes_ui_inner(ui, nodes, mac, clicked));
+    }
+    #[cfg(not(target_os = "android"))]
+    nodes_ui_inner(ui, nodes, mac, clicked);
+}
+
+fn nodes_ui_inner(ui: &mut egui::Ui, nodes: &[MenuNode], mac: bool, clicked: &mut Option<(String, Value)>) {
     ui.set_min_width(220.0);
     for n in nodes {
         match n {
