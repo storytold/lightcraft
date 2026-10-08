@@ -383,6 +383,16 @@ environment.systemPackages = [ pkgs.lightcraft ];           # home-manager: home
 `nix build` installs the same desktop file, hicolor icons and AppStream metadata as the .deb/.rpm, and runs
 `cargo test --workspace` as its check phase (skip it with `pkgs.lightcraft.overrideAttrs { doCheck = false; }`).
 
+**Gentoo:** the community [::snakebyte overlay](https://github.com/switch87/snakebyte-overlay) packages
+the Linux release as `media-gfx/lightcraft-bin` (not maintained by the LightCraft team):
+
+```sh
+eselect repository add snakebyte git https://github.com/switch87/snakebyte-overlay.git
+emaint sync -r snakebyte
+echo 'media-gfx/lightcraft-bin ~amd64' >> /etc/portage/package.accept_keywords/lightcraft
+emerge --ask media-gfx/lightcraft-bin
+```
+
 **Keyboard:** <kbd>G</kbd> grid · <kbd>D</kbd> detail · <kbd>E</kbd> edit · <kbd>C</kbd> crop · <kbd>M</kbd> masking ·
 <kbd>Shift</kbd>+<kbd>P</kbd> presets · <kbd>\\</kbd> original · <kbd>Y</kbd> before/after · <kbd>Z</kbd> zoom ·
 <kbd>J</kbd> clipping · <kbd>⌘Z</kbd> undo · <kbd>⌘/</kbd> all shortcuts.
