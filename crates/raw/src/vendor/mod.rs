@@ -7,6 +7,7 @@ pub mod crx;
 pub(crate) mod crx_wavelet;
 pub mod nef;
 pub mod nefc;
+mod olympus12;
 pub mod orf;
 pub mod pef;
 pub mod raf;

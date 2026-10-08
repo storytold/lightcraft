@@ -1,0 +1,50 @@
+{
+  "date": "2026-10-08",
+  "cpu": "AMD Ryzen 9 7945HX",
+  "platform": "Windows x86_64",
+  "build": "Standalone release harness; opt-level=3, debug=0, no LTO",
+  "environment": {
+    "LIGHTCRAFT_PROFILE": "1",
+    "RAYON_NUM_THREADS": "4"
+  },
+  "method": "Warm input memory, one untimed warmup plus five full sensor decodes; median. Includes TIFF/metadata parsing and complete sensor reconstruction; excludes file loading, demosaic, colour/render, encoder and cleanup. Shared machine: timing variation is reported rather than hidden.",
+  "compressed_reader_sha256": "f4f6733b421029e5f7015049d229b13b9ce98e41ccf93f3f34393b18f500a16f",
+  "cases": [
+    {
+      "width": 5240,
+      "height": 3912,
+      "bits": 12,
+      "megapixels": 20.49888,
+      "file_bytes": 22429952,
+      "median_ms": 379.9134,
+      "ms_per_mp": 18.53337353065143,
+      "sorted_ms": [
+        333.12510000000003,
+        337.3725,
+        379.9134,
+        400.4405,
+        639.6514
+      ],
+      "file": "P5070002_EM5MkIII_Lumix G Fisheye 8mmF3.5.ORF",
+      "input_sha256": "7ca622dd28c860e1d7d68078b2bcb4123c2fc86fb8325a86e1ab5ed126b306fa"
+    },
+    {
+      "width": 10400,
+      "height": 7792,
+      "bits": 12,
+      "megapixels": 81.0368,
+      "file_bytes": 67149293,
+      "median_ms": 839.1508,
+      "ms_per_mp": 10.355181843310694,
+      "sorted_ms": [
+        796.6410999999999,
+        798.4635,
+        839.1508,
+        937.0461,
+        977.828
+      ],
+      "file": "orf-olympus-em5iii-hires.orf",
+      "input_sha256": "391f2f6ba712a517212cae53bfc9a313fc4d106d0b04d3b9af68a4ed2d5d944e"
+    }
+  ]
+}

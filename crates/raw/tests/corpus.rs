@@ -15,9 +15,8 @@ fn corpus_root() -> PathBuf {
 
 /// Variants known not to decode yet (see the crate docs): matched against the lower-case file name.
 const KNOWN_UNSUPPORTED: &[&str] = &[
-    "cr3-",           // Unverified CRX coding variants; exact supported cases live in cr3_corpus.rs.
-    "orf-olympus-em", // Olympus compressed ORF
-    "sraw",           // Canon sRAW / mRAW
+    "cr3-", // Unverified CRX coding variants; exact supported cases live in cr3_corpus.rs.
+    "sraw", // Canon sRAW / mRAW
 ];
 
 #[test]
@@ -568,4 +567,53 @@ fn corpus_raws_keep_their_container_and_are_not_thumbnail_shells() {
         checked += 1;
     }
     eprintln!("{checked} corpus raws keep their container");
+}
+
+/// Complete uncorrected sensor hashes recorded by the independent black-box
+/// reference. Ordinary tests skip absent CC0 inputs; the dedicated CI job requires
+/// every pinned file, so missing downloads cannot masquerade as passing coverage.
+#[test]
+fn corpus_olympus_sensor_checksums() {
+    use sha2::{Digest, Sha256};
+    let manifest: serde_json::Value = serde_json::from_str(include_str!("../../../docs/orf-corpus.json")).unwrap();
+    let cases = manifest["files"].as_array().unwrap();
+    let required = std::env::var_os("LIGHTCRAFT_REQUIRE_ORF_CORPUS").is_some();
+    let dir = corpus_root().join("raw");
+    let mut seen = 0;
+    for case in cases {
+        let name = case["name"].as_str().unwrap();
+        let path = dir.join(name);
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && !required => {
+                eprintln!("skip: {name} absent");
+                continue;
+            }
+            Err(error) => panic!("{}: {error}", path.display()),
+        };
+        assert_eq!(format!("{:x}", Sha256::digest(&bytes)), case["sha256"].as_str().unwrap(), "{name}: input identity");
+        let img = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        img.validate().unwrap();
+        assert_eq!(probe_info(&bytes).unwrap(), img.info(), "{name}: probe/full metadata");
+        assert_eq!(
+            (img.width, img.height),
+            (case["width"].as_u64().unwrap() as usize, case["height"].as_u64().unwrap() as usize),
+            "{name}: geometry"
+        );
+        assert_eq!(u64::from(img.bits), case["bits"].as_u64().unwrap(), "{name}: depth");
+        assert_eq!(img.cfa.as_ref().unwrap().name(), case["cfa"].as_str().unwrap(), "{name}: CFA");
+        let lightcraft_raw::RawData::U16(data) = img.data else { panic!("{name}: float data") };
+        assert_eq!(data.len(), img.width * img.height, "{name}: full stored raster");
+        let mut hash = Sha256::new();
+        for sample in &data {
+            hash.update(sample.to_le_bytes());
+        }
+        assert_eq!(format!("{:x}", hash.finalize()), case["sensor_sha256_le_u16"].as_str().unwrap(), "{name}: sensor samples differ from reference");
+        eprintln!("{name}: complete sensor hash verified");
+        seen += 1;
+    }
+    if required {
+        assert_eq!(seen, cases.len(), "incomplete required Olympus corpus");
+    }
+    eprintln!("verified {seen} Olympus sensor arrays");
 }

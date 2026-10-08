@@ -17,6 +17,7 @@
 ### RAW decoding
 - Canon CR2 and Pentax PEF raws get the same starting look fitted to the camera's own JPEG as ARW, NEF, RW2, RAF
   and CR3, instead of opening flat and desaturated (issue #310). Photos already imported pick it up when re-rendered.
+- Olympus / OM System ORFs matching the measured compressed 12-bit profile now develop from sensor data, including E-M5 III High Res Shot. E-M5 II padded 12-bit High Res Shot also decodes. Other coding profiles remain preview-only; camera colour calibration and lens corrections remain gaps. See [the measured format](raw/orf12-compressed-measured.md).
 - Panasonic and Leica raws (RW2, RWL) are now corrected for lens distortion the way the camera corrects its own JPEG
   (issue #256): the correction the camera records in the file is applied under Lens Corrections ▸ Enable Profile
   Corrections, on by default for newly imported photos, with the same framing as the camera's JPEG. At 12 mm the
