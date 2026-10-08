@@ -1,5 +1,5 @@
 //! The menu bar model: File, Edit, View, Photo, Window, Help, generated from the command registry
-//! (engine commands with menu paths + [`crate::menus::UI_COMMANDS`]) with live labels, shortcuts,
+//! (engine commands with menu paths + [`crate::menus::ui_commands`]) with live labels, shortcuts,
 //! enabled and checked state.
 //!
 //! One model drives every menu surface: the native macOS menu bar (built by the desktop host), the
@@ -119,9 +119,11 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "view.detail",
             "view.compare",
             "view.survey",
+            "view.people",
             "---",
             "view.leftPanel",
             "view.photoCounts",
+            "view.faceBoxes",
             "view.filmstrip",
             "view.histogram",
             "view.navigator",
@@ -186,12 +188,15 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "---",
             "photo.saveMetadataToFile",
             "photo.readMetadataFromFile",
+            "photo.reload",
             "app.showInFinder",
             "dialog.rename",
             "dialog.captureTime",
             "photo.tagFromTracklog",
             "---",
             "photo.delete",
+            "photo.restore",
+            "photo.deletePermanently",
         ],
     ),
     (
@@ -246,17 +251,27 @@ const HIDDEN: &[&str] = &[
     "photo.unflag",
     "photo.label",
     "library.sort",
+    "library.shuffle",
     "album.addPhotos",
     "album.create",
     "library.import",
     "preset.create",
 ];
 
-/// Items only some hosts have are left out of the others' menus (the web build's library backup).
+/// The selection includes a photo in Recently Deleted.
+pub(crate) fn selection_deleted(app: &LightcraftApp) -> bool {
+    let s = &app.session;
+    s.selection.ids.iter().copied().chain(s.selection.active).any(|id| s.catalog.photo(id).is_some_and(|p| p.deleted))
+}
+
+/// Items only some hosts have are left out of the others' menus (the web build's library backup);
+/// Restore and Delete Permanently replace Delete for photos in Recently Deleted.
 fn host_supports(app: &LightcraftApp, id: &str) -> bool {
     match id {
         "file.backupLibrary" => app.services.backup_library.is_some(),
         "file.restoreLibrary" => app.services.restore_library.is_some(),
+        "photo.restore" | "photo.deletePermanently" => selection_deleted(app),
+        "photo.delete" => !selection_deleted(app),
         _ => true,
     }
 }
@@ -270,8 +285,8 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
     let u = &app.ui;
     let panel = |p: RightPanel| Some(u.right == p);
     match id {
-        "app.language.english" => Some(u.language == crate::i18n::Language::En),
-        "app.language.japanese" => Some(u.language == crate::i18n::Language::Ja),
+        // Every language's command is checked when it is the active one.
+        _ if crate::menus::language_from_command(id).is_some() => Some(crate::menus::language_from_command(id) == Some(u.language)),
         "develop.autoSync" => Some(app.session.auto_sync),
         "view.photoCounts" => Some(u.show_counts),
         "view.secondWindow" => Some(u.second_window),
@@ -280,8 +295,10 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "view.detail" => Some(u.view == ViewMode::Detail),
         "view.compare" => Some(u.view == ViewMode::Compare),
         "view.survey" => Some(u.view == ViewMode::Survey),
+        "view.people" => Some(u.view == ViewMode::People),
         "view.reference" => Some(u.view == ViewMode::Reference),
         "view.leftPanel" => Some(u.left_panel),
+        "view.faceBoxes" => Some(u.face_boxes),
         "view.filmstrip" => Some(u.filmstrip),
         "view.histogram" => Some(u.histogram),
         "view.clipping" => Some(u.show_clipping),
@@ -442,13 +459,30 @@ fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
                 ("File Name", FileName, "fileName"),
                 ("Rating", Rating, "rating"),
                 ("File Size", FileSize, "fileSize"),
+                ("Random", Random, "random"),
             ]
             .into_iter()
             .map(|(label, key, k)| item("library.sort", json!({"key": k}), label, None, true, Some(cur.key == key)))
             .collect();
+            v.push(item("library.shuffle", json!({}), "Reshuffle", None, cur.key == Random, None));
             v.push(MenuNode::Separator);
-            v.push(item("library.sort", json!({"ascending": true}), "Ascending", None, true, Some(cur.ascending)));
-            v.push(item("library.sort", json!({"ascending": false}), "Descending", None, true, Some(!cur.ascending)));
+            // a shuffle has no direction worth choosing
+            v.push(item(
+                "library.sort",
+                json!({"ascending": true}),
+                "Ascending",
+                None,
+                cur.key != Random,
+                (cur.key != Random).then_some(cur.ascending),
+            ));
+            v.push(item(
+                "library.sort",
+                json!({"ascending": false}),
+                "Descending",
+                None,
+                cur.key != Random,
+                (cur.key != Random).then_some(!cur.ascending),
+            ));
             v.push(MenuNode::Separator);
             use lightcraft_catalog::GroupBy;
             let groups = [
@@ -719,7 +753,13 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
         });
     }
     if let Some((id, params)) = clicked {
-        let _ = run_item(app, &id, params);
+        let r = run_item(app, &id, params);
+        // an export that can't start (e.g. no folder) says why instead of doing nothing
+        if let Err(e) = r
+            && matches!(id.as_str(), "app.export" | "app.exportPrevious")
+        {
+            app.toast(ui.ctx(), e);
+        }
     }
     ui.cursor().left() - start
 }
@@ -769,6 +809,42 @@ mod tests {
             MenuNode::Submenu { children, .. } => find(children, id),
             _ => None,
         })
+    }
+
+    /// The Sort submenu is expanded by hand: Reshuffle appears once (not again from the registry),
+    /// only while sorting at random, and the direction items are off for a shuffle.
+    #[test]
+    fn sort_menu_lists_reshuffle_once_and_only_enables_it_for_random() {
+        fn sort_children(bar: &[(String, Vec<MenuNode>)]) -> Vec<MenuNode> {
+            let view = &bar.iter().find(|(t, _)| t == "View").expect("View menu").1;
+            view.iter()
+                .find_map(|n| match n {
+                    MenuNode::Submenu { label, children } if label == "Sort" => Some(children.clone()),
+                    _ => None,
+                })
+                .expect("Sort submenu")
+        }
+        let count = |nodes: &[MenuNode]| nodes.iter().filter(|n| matches!(n, MenuNode::Item { id, .. } if id == "library.shuffle")).count();
+        let mut a = app();
+        let kids = sort_children(&menu_bar(&a));
+        assert_eq!(count(&kids), 1);
+        assert!(matches!(find(&kids, "library.shuffle"), Some(MenuNode::Item { enabled: false, .. })), "off until Random is chosen");
+        a.session.execute("library.sort", &json!({"key": "random"})).expect("sort at random");
+        let kids = sort_children(&menu_bar(&a));
+        assert_eq!(count(&kids), 1);
+        assert!(matches!(find(&kids, "library.shuffle"), Some(MenuNode::Item { enabled: true, .. })));
+        // no direction is shown as chosen while shuffling
+        let dir_checked = |kids: &[MenuNode]| {
+            kids.iter()
+                .filter_map(|n| match n {
+                    MenuNode::Item { label, checked, .. } if label == "Ascending" || label == "Descending" => Some(*checked),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(dir_checked(&kids), vec![None, None]);
+        a.session.execute("library.sort", &json!({"key": "fileName"})).expect("sort by name");
+        assert!(dir_checked(&sort_children(&menu_bar(&a))).iter().all(Option::is_some), "checks come back for other keys");
     }
 
     /// File opens with the import entry points, worded as importing (not as adding a sidebar
@@ -828,8 +904,9 @@ mod tests {
         let titles: Vec<&str> = bar.iter().map(|(t, _)| t.as_str()).collect();
         assert_eq!(titles, MENUS);
         let all: Vec<MenuNode> = bar.iter().flat_map(|(_, v)| v.clone()).collect();
-        // every engine command with a menu path is reachable (parameterized ones via submenus)
-        for c in lightcraft_engine::command_specs().iter().filter(|c| !c.menu.is_empty() && !HIDDEN.contains(&c.id)) {
+        // every engine command with a menu path is reachable (parameterized ones via submenus; items
+        // that follow the state, like Restore for deleted photos, when it applies)
+        for c in lightcraft_engine::command_specs().iter().filter(|c| !c.menu.is_empty() && !HIDDEN.contains(&c.id) && host_supports(&app, c.id)) {
             assert!(find(&all, c.id).is_some(), "{} missing from the menu bar", c.id);
         }
         for id in ["photo.rate", "photo.flag", "photo.label", "library.sort", "album.addPhotos", "view.compare", "stack.group", "photo.virtualCopy"] {
@@ -928,6 +1005,13 @@ mod tests {
         // remembered (expanded) for Export with Previous, folder included
         let last = app.session.last_export.clone().unwrap();
         assert_eq!((last["format"].as_str(), last["width"].as_u64(), last.get("preset")), (Some("png"), Some(40), None));
+        // a blank folder (the Export dialog's Folder field cleared) is refused with a clear message
+        // instead of writing into the working directory
+        let n = w.len();
+        drop(w);
+        let r = run_item(&mut app, "app.export", json!({"preset": "Tiny PNG", "dir": "  "}));
+        assert_eq!(r.unwrap_err(), crate::control::NO_EXPORT_FOLDER);
+        assert_eq!(written.lock().unwrap().len(), n, "nothing written without a folder");
     }
 
     #[test]

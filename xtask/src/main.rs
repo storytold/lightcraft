@@ -234,6 +234,10 @@ const RAW_SAMPLES: &[(&str, &str)] = &[
     ("arw-sony-a7m4-lossless-l.arw", "https://raw.pixls.us/data/Sony/ILCE-7M4/ILCE-7M4_DSC06674_FullFrame-LossLess-Compressed-Large.ARW"),
     ("arw-sony-a7m4-lossless-m.arw", "https://raw.pixls.us/data/Sony/ILCE-7M4/ILCE-7M4_DSC06675_FullFrame-LossLess-Compressed-Medium.ARW"),
     ("arw-sony-a7m4-lossless-s.arw", "https://raw.pixls.us/data/Sony/ILCE-7M4/ILCE-7M4_DSC06676_FullFrame-LossLess-Compressed-Small.ARW"),
+    // pre-2017 bodies: white balance only in the enciphered maker note, black level only in the SR2SubIFD (#148)
+    ("arw-sony-rx100m3.arw", "https://raw.pixls.us/data/Sony/DSC-RX100M3/DSC00734.ARW"),
+    ("arw-sony-rx100.arw", "https://raw.pixls.us/data/Sony/DSC-RX100/DSC00838.ARW"),
+    ("arw-sony-a7rm2-12bit-uncompressed.arw", "https://raw.pixls.us/data/Sony/ILCE-7RM2/12-bit-uncompressed.ARW"),
     // CR2 colour-filter layouts differ by model (issue #85): CR2CFAPattern 3 (GBRG) and 1 (RGGB) samples
     ("cr2-canon-40d.cr2", "https://raw.pixls.us/data/Canon/EOS%2040D/_MG_0153.CR2"),
     ("cr2-canon-550d.cr2", "https://raw.pixls.us/data/Canon/EOS%20550D/IMG_4047.CR2"),
@@ -279,6 +283,14 @@ const RAW_SAMPLES: &[(&str, &str)] = &[
     (
         "nef-nikon-d7000-lossy12.nef",
         "https://raw.pixls.us/getfile.php/961/nice/Nikon%20-%20D7000%20-%2012bit%2012bit%20compressed%20%28Lossy%20%28type%202%29%29%20%283:2%29.NEF",
+    ),
+    (
+        "nef-nikon-d7500-lossless12.nef",
+        "https://raw.pixls.us/getfile.php/1532/nice/Nikon%20-%20D7500%20-%2012bit%2012bit%20compressed%20%28Lossless%29%20%283:2%29.NEF",
+    ),
+    (
+        "nef-nikon-d7500-lossless14.nef",
+        "https://raw.pixls.us/getfile.php/1534/nice/Nikon%20-%20D7500%20-%2014bit%2014bit%20compressed%20%28Lossless%29%20%283:2%29.NEF",
     ),
     (
         "nrw-nikon-b700-uncompressed.nrw",

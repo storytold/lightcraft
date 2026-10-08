@@ -8,10 +8,12 @@
 
 pub mod controls;
 pub mod presets;
+pub mod segmask;
 pub mod settings;
 
 pub use controls::{CONTROLS, ControlSpec, Section, Track};
 pub use presets::{Preset, SettingsGroup, apply_partial, extract_groups};
+pub use segmask::SegMask;
 pub use settings::*;
 
 use serde_json::Value;

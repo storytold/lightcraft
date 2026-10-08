@@ -5,6 +5,7 @@ use lightcraft_geom::Point;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, bad, bool_or, cmd, f64_or, has_active, ok, point, str_param};
+use crate::segment::{Click, MAX_CLICKS};
 use crate::{Result, Session};
 
 fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
@@ -38,8 +39,98 @@ fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
                 .unwrap_or_default();
             MaskShape::ColorRange { samples, refine: f64_or(p, "refine", 50.0) }
         }
-        other => return Err(bad(c, format!("unknown mask kind `{other}` (brush|linear|radial|sky|subject|background|luminanceRange|colorRange)"))),
+        "object" => MaskShape::Object { hint: points(p, "points"), exclude: points(p, "exclude"), seg: seg_param(p), detail: vec![], edge: 0.0 },
+        "prompt" => {
+            MaskShape::Prompt { text: str_param(p, "text").unwrap_or_default().trim().to_string(), seg: seg_param(p), detail: vec![], edge: 0.0 }
+        }
+        other => {
+            return Err(bad(
+                c,
+                format!("unknown mask kind `{other}` (brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt)"),
+            ));
+        }
     })
+}
+
+/// `[[x, y], …]` normalized points under `key`.
+fn points(p: &Value, key: &str) -> Vec<Point> {
+    p.get(key)
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|q| Some(Point::new(q.get(0)?.as_f64()?, q.get(1)?.as_f64()?))).collect())
+        .unwrap_or_default()
+}
+
+/// A segmentation passed in (`seg`: a stored or replayed AI mask; the model isn't needed).
+fn seg_param(p: &Value) -> Option<lightcraft_develop::SegMask> {
+    p.get("seg").and_then(|v| serde_json::from_value(v.clone()).ok())
+}
+
+/// What a new AI shape still needs once it is added.
+enum Later {
+    Nothing,
+    /// Background mode: these Object clicks are segmented on the worker.
+    Clicks(Vec<Point>, Vec<Point>),
+    /// Background mode: the Describe selection is computed first; the mask is added when found.
+    Text(String),
+}
+
+/// Compute the segmentation of a new AI shape (Object with clicks, Prompt) — or, in background
+/// mode, say what to queue. An Object without clicks stays empty until the photo is clicked
+/// (the photo is analyzed meanwhile); a Prompt that matches nothing is an error. Shapes given
+/// with their `seg` need no model.
+fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> {
+    let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+    let background = s.segmenter.background;
+    match shape {
+        MaskShape::Object { seg: Some(_), .. } | MaskShape::Prompt { seg: Some(_), .. } => {}
+        MaskShape::Object { hint, exclude, .. } if !hint.is_empty() && background => {
+            s.segmenter.model_dir().map_err(ai_err)?;
+            return Ok(Later::Clicks(std::mem::take(hint), std::mem::take(exclude)));
+        }
+        MaskShape::Object { hint, exclude, seg, .. } if !hint.is_empty() => {
+            *seg = Some(s.segment_clicks(id, &clicks_of(hint, exclude)).map_err(ai_err)?);
+        }
+        MaskShape::Object { .. } => {
+            // the clicks come later: refuse an Object mask that could never be computed (no
+            // model) rather than leave an empty one; in the app, analyze the photo meanwhile
+            s.segmenter.model_dir().map_err(ai_err)?;
+            if background {
+                s.segment_prepare(id).map_err(ai_err)?;
+            }
+        }
+        MaskShape::Prompt { text, .. } if background => {
+            s.segmenter.model_dir().map_err(ai_err)?;
+            if text.trim().is_empty() {
+                return Err(ai_err("describe what to select"));
+            }
+            return Ok(Later::Text(text.clone()));
+        }
+        MaskShape::Prompt { text, seg, .. } => {
+            let found = s.segment_text(id, text).map_err(ai_err)?;
+            *seg = Some(found.ok_or_else(|| ai_err(format!("nothing matching “{text}” was found in this photo")))?);
+        }
+        _ => {}
+    }
+    Ok(Later::Nothing)
+}
+
+/// Queue what a new AI component (component `comp` of mask `mask`) still needs.
+fn queue_later(s: &mut Session, later: Later, mask: u32, comp: usize, mut out: Value) -> Result<Value> {
+    if let Later::Clicks(hint, exclude) = later {
+        let id = s.active().ok_or_else(|| ai_err("no active photo"))?;
+        s.segment_clicks_later(id, mask, comp, hint, exclude).map_err(ai_err)?;
+        out["pending"] = json!(true);
+    }
+    Ok(out)
+}
+
+/// AI mask failures are shown as they are (not as "invalid parameters").
+fn ai_err(msg: impl Into<String>) -> crate::EngineError {
+    crate::EngineError::Other(msg.into())
+}
+
+pub(crate) fn clicks_of(include: &[Point], exclude: &[Point]) -> Vec<Click> {
+    include.iter().map(|p| Click { at: *p, include: true }).chain(exclude.iter().map(|p| Click { at: *p, include: false })).collect()
 }
 
 fn masks_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Mask>, &mut Option<u32>) -> Result<()>) -> Result<Value> {
@@ -67,14 +158,20 @@ pub fn specs() -> Vec<CommandSpec> {
             "Create New Mask",
             [],
             None,
-            "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…), name?}",
+            "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…; object: points/exclude [[x,y],…]; prompt: text; object/prompt: seg? a stored segmentation, no model needed), name?} — AI kinds need the SAM 3 model; in the app a prompt returns {pending} and the mask appears when found",
             has_active,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("radial").to_string();
-                let shape = shape_from(&kind, p, "mask.add")?;
+                let mut shape = shape_from(&kind, p, "mask.add")?;
+                let later = resolve_ai(s, &mut shape, "mask.add")?;
                 let name = str_param(p, "name").map(str::to_string);
+                if let Later::Text(text) = &later {
+                    let id = s.active().ok_or_else(|| bad("mask.add", "no active photo"))?;
+                    s.segment_text_later(id, None, "add", name, text).map_err(ai_err)?;
+                    return Ok(json!({"pending": true}));
+                }
                 let next = s.active().and_then(|id| s.develop_of(id)).map(|d| d.next_mask_id()).unwrap_or(1);
-                masks_edit(s, "mask.add", "Add Mask", |masks, active| {
+                let out = masks_edit(s, "mask.add", "Add Mask", |masks, active| {
                     masks.push(Mask {
                         id: next,
                         name: name.unwrap_or_else(|| format!("Mask {next}")),
@@ -83,7 +180,8 @@ pub fn specs() -> Vec<CommandSpec> {
                     });
                     *active = Some(next);
                     Ok(())
-                })
+                })?;
+                queue_later(s, later, next, 0, out)
             }
         ),
         cmd!(
@@ -95,16 +193,29 @@ pub fn specs() -> Vec<CommandSpec> {
             has_active,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("brush").to_string();
-                let shape = shape_from(&kind, p, "mask.addComponent")?;
                 let op: MaskOp =
                     serde_json::from_value(p.get("op").cloned().unwrap_or(json!("add"))).map_err(|e| bad("mask.addComponent", e.to_string()))?;
                 let active = s.active_mask;
                 let mid = mask_id(p, active, "mask.addComponent")?;
-                masks_edit(s, "mask.addComponent", "Edit Mask", |masks, _| {
+                let id = s.active().ok_or_else(|| bad("mask.addComponent", "no active photo"))?;
+                if !s.develop_of(id).is_some_and(|d| d.masks.iter().any(|m| m.id == mid)) {
+                    return Err(bad("mask.addComponent", format!("no mask {mid}")));
+                }
+                let mut shape = shape_from(&kind, p, "mask.addComponent")?;
+                let later = resolve_ai(s, &mut shape, "mask.addComponent")?;
+                if let Later::Text(text) = &later {
+                    let op = p.get("op").and_then(Value::as_str).unwrap_or("add");
+                    s.segment_text_later(id, Some(mid), op, None, text).map_err(ai_err)?;
+                    return Ok(json!({"pending": true}));
+                }
+                let mut comp = 0;
+                let out = masks_edit(s, "mask.addComponent", "Edit Mask", |masks, _| {
                     let i = find(masks, mid, "mask.addComponent")?;
                     masks[i].components.push(MaskComponent { name: None, op, invert: bool_or(p, "invert", false), shape });
+                    comp = masks[i].components.len() - 1;
                     Ok(())
-                })
+                })?;
+                queue_later(s, later, mid, comp, out)
             }
         ),
         cmd!(
@@ -212,6 +323,158 @@ pub fn specs() -> Vec<CommandSpec> {
                 })?;
                 Ok(json!({"samples": out}))
             }
+        ),
+        cmd!(
+            "mask.objectPoint",
+            "Add Object Click",
+            [],
+            None,
+            "{x, y: normalized image point, exclude?: bool (⌥-click: leave this part out), id?: maskId} — a click on the selected mask's Object selection (its last Object component); SAM 3 re-segments the object → {include, exclude}",
+            has_active,
+            |s, p| {
+                let c = "mask.objectPoint";
+                let at = Point::new(super::f64_req(p, "x", c)?, super::f64_req(p, "y", c)?);
+                if !(0.0..=1.0).contains(&at.x) || !(0.0..=1.0).contains(&at.y) {
+                    return Err(bad(c, "the point is outside the photo"));
+                }
+                let exclude = bool_or(p, "exclude", false);
+                let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                let mid = mask_id(p, s.active_mask, c)?;
+                let d = s.develop_of(id).unwrap_or_default();
+                let m = d.masks.iter().find(|m| m.id == mid).ok_or_else(|| bad(c, format!("no mask {mid}")))?;
+                let k = m
+                    .components
+                    .iter()
+                    .rposition(|x| matches!(x.shape, MaskShape::Object { .. }))
+                    .ok_or_else(|| bad(c, "the mask has no Object selection (add one first)"))?;
+                let Some(MaskShape::Object { hint, exclude: ex, edge, .. }) = m.components.get(k).map(|x| &x.shape) else {
+                    return Err(bad(c, "not an Object component"));
+                };
+                let (mut hint, mut ex, edge) = (hint.clone(), ex.clone(), *edge);
+                // clicks still on their way to the model count too
+                if let Some(pending) = s.segmenter.pending_clicks().filter(|q| (q.photo, q.mask, q.comp) == (id, mid, k)) {
+                    (hint, ex) = (pending.hint.clone(), pending.exclude.clone());
+                }
+                if hint.len() + ex.len() >= MAX_CLICKS {
+                    return Err(ai_err(format!("an Object selection takes at most {MAX_CLICKS} clicks; start a new one")));
+                }
+                if exclude {
+                    ex.push(at)
+                } else {
+                    hint.push(at)
+                }
+                if s.segmenter.background && !hint.is_empty() {
+                    let out = json!({"include": hint.len(), "exclude": ex.len(), "pending": true});
+                    s.segment_clicks_later(id, mid, k, hint, ex).map_err(ai_err)?;
+                    return Ok(out);
+                }
+                let seg = if hint.is_empty() { None } else { Some(s.segment_clicks(id, &clicks_of(&hint, &ex)).map_err(ai_err)?) };
+                let out = json!({"include": hint.len(), "exclude": ex.len()});
+                masks_edit(s, c, "Object Mask", |masks, _| {
+                    let i = find(masks, mid, c)?;
+                    if let Some(comp) = masks[i].components.get_mut(k) {
+                        comp.shape = MaskShape::Object { hint, exclude: ex, seg, detail: vec![], edge };
+                    }
+                    Ok(())
+                })?;
+                Ok(out)
+            }
+        ),
+        cmd!(
+            "mask.refineDetail",
+            "Refine AI Mask Detail",
+            [],
+            None,
+            "{id?: maskId, component?} — a zoomed-in SAM 3 pass over an Object/Describe selection (default: the mask's last one): the photo around it is analyzed again at a higher resolution, in the background; the mask updates when it's done → {started}",
+            has_active,
+            |s, p| {
+                let c = "mask.refineDetail";
+                let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                let mid = mask_id(p, s.active_mask, c)?;
+                let d = s.develop_of(id).unwrap_or_default();
+                let m = d.masks.iter().find(|m| m.id == mid).ok_or_else(|| bad(c, format!("no mask {mid}")))?;
+                let k = match p.get("component").and_then(Value::as_u64) {
+                    Some(k) => k as usize,
+                    None => m
+                        .components
+                        .iter()
+                        .rposition(|x| matches!(x.shape, MaskShape::Object { .. } | MaskShape::Prompt { .. }))
+                        .ok_or_else(|| bad(c, "the mask has no Object or Describe selection"))?,
+                };
+                let started = s.segment_detail(id, mid, k).map_err(ai_err)?;
+                Ok(json!({"started": started}))
+            }
+        ),
+        cmd!(
+            query "segment.prepare",
+            "Prepare AI Masks",
+            [],
+            None,
+            "{} — load SAM 3 and analyze the active photo in the background, so Object clicks are instant → {busy}",
+            has_active,
+            |s, _| {
+                let c = "segment.prepare";
+                let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                s.segment_prepare(id).map_err(ai_err)?;
+                Ok(json!({"busy": s.segmenter.busy()}))
+            }
+        ),
+        cmd!(
+            query "segment.model.status",
+            "AI Mask Model Status",
+            [],
+            None,
+            "{} — whether this build has AI masks, whether the SAM 3 model is installed (and where), loaded, busy, and the download's progress → {available, installed, dir, loaded, busy, analyzing, sizeBytes, license, licenseUrl, mirrors, download: {running, done, total, file, error, finished}}",
+            super::always,
+            |s, _| {
+                let g = &s.segmenter;
+                Ok(json!({
+                    "available": crate::segment::Segmenter::AVAILABLE,
+                    "installed": g.installed(),
+                    "dir": g.dir.as_ref().map(|d| d.display().to_string()),
+                    "loaded": g.loaded(),
+                    "busy": g.busy(),
+                    "analyzing": g.analyzing(),
+                    "sizeBytes": crate::segment::MODEL_BYTES,
+                    "license": crate::segment::LICENSE_NAME,
+                    "licenseUrl": crate::segment::LICENSE_URL,
+                    "mirrors": g.mirrors().len(),
+                    "download": g.download_status(),
+                }))
+            }
+        ),
+        cmd!(
+            query "segment.model.download",
+            "Download AI Mask Model",
+            [],
+            None,
+            "{acknowledged: true} — download the SAM 3 model (about 3.4 GB, Meta's SAM License, not LightCraft's) in the background, from the configured mirrors; only after the user agreed to it. Watch segment.model.status; segment.model.cancel stops it (it resumes later) → {started, installed, downloading}",
+            super::always,
+            |s, p| {
+                let c = "segment.model.download";
+                if p.get("acknowledged").and_then(Value::as_bool) != Some(true) {
+                    return Err(bad(
+                        c,
+                        format!(
+                            "the SAM 3 model is a {:.1} GB download under Meta's {} ({}): pass `acknowledged: true` once the user has agreed to download it",
+                            crate::segment::MODEL_BYTES as f64 / 1e9,
+                            crate::segment::LICENSE_NAME,
+                            crate::segment::LICENSE_URL
+                        ),
+                    ));
+                }
+                let started = s.segmenter.start_download().map_err(ai_err)?;
+                Ok(json!({"started": started, "installed": s.segmenter.installed(), "downloading": s.segmenter.download_status().running}))
+            }
+        ),
+        cmd!(
+            query "segment.model.cancel",
+            "Cancel AI Mask Model Download",
+            [],
+            None,
+            "{} — stop the SAM 3 download (what has arrived is kept, and a new download resumes from it) → {cancelled}",
+            super::always,
+            |s, _| Ok(json!({"cancelled": s.segmenter.cancel_download()}))
         ),
         cmd!(
             "mask.refine",

@@ -148,3 +148,54 @@ fn a_narrow_window_shrinks_the_panels_without_forgetting_their_width() {
     h.settle(SETTLE);
     assert_eq!(widget(&h, "panel:right_panel").width(), 480.0);
 }
+
+/// The left sidebar's Albums, Local, By Date and Keywords headers fold their sections; the choice
+/// is part of the saved UI state.
+#[test]
+fn sidebar_sections_collapse_and_remember_it() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let has = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
+    let click = |h: &mut Headless, id: &str| {
+        let r = h.request("ui.clickWidget", json!({"id": id}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+    };
+    // By Date lists years while open; its header folds them away and back
+    assert!(has(&h, "sidebarSection:byDate"));
+    let year_rows = |h: &Headless| h.app.widgets.iter().filter(|(w, _)| w.starts_with("source:date:")).count();
+    assert!(year_rows(&h) > 0, "the demo library has dated photos");
+    click(&mut h, "sidebarSection:byDate");
+    assert_eq!(year_rows(&h), 0, "folded");
+    assert!(h.app.ui.sidebar_section_collapsed("byDate") && !h.app.ui.sidebar_section_collapsed("albums"));
+    assert!(has(&h, "sidebarSection:byDate"), "the header stays so it can be reopened");
+    // the choice survives a save/load of the UI state
+    let saved = serde_json::to_value(&h.app.ui).unwrap();
+    let back: crate::state::UiState = serde_json::from_value(saved).unwrap();
+    assert!(back.sidebar_section_collapsed("byDate"));
+    click(&mut h, "sidebarSection:byDate");
+    assert!(year_rows(&h) > 0, "unfolded again");
+    // Albums folds too, and the plus button inside its header still works on its own
+    click(&mut h, "sidebarSection:albums");
+    assert!(h.app.ui.sidebar_section_collapsed("albums"));
+    assert!(has(&h, "icon:albumNew"), "the Create Album button stays in the header");
+    click(&mut h, "sidebarSection:albums");
+    assert!(!h.app.ui.sidebar_section_collapsed("albums"));
+    // Keywords and Local fold their rows too
+    let rows = |h: &Headless, prefix: &str| h.app.widgets.iter().filter(|(w, _)| w.starts_with(prefix)).count();
+    assert!(rows(&h, "source:keyword:") > 0, "the demo library has keywords");
+    click(&mut h, "sidebarSection:keywords");
+    assert_eq!(rows(&h, "source:keyword:"), 0, "keywords folded");
+    click(&mut h, "sidebarSection:keywords");
+    assert!(rows(&h, "source:keyword:") > 0);
+    if has(&h, "sidebarSection:local") {
+        click(&mut h, "sidebarSection:local");
+        assert_eq!(rows(&h, "source:local:"), 0, "local folded");
+        assert!(!has(&h, "source:local:browse"), "Browse Folder… folds with it");
+        click(&mut h, "sidebarSection:local");
+        assert!(!h.app.ui.sidebar_section_collapsed("local"));
+    }
+    // a click on the plus is the button's, not the header's
+    click(&mut h, "icon:albumNew");
+    assert!(!h.app.ui.sidebar_section_collapsed("albums"), "the plus does not fold Albums");
+}

@@ -324,6 +324,32 @@ fn a_failed_export_write_keeps_the_previous_file() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[cfg(unix)]
+#[test]
+fn export_protects_the_target_of_an_imported_symlink() {
+    use crate::export::{Conflict, Destination};
+    let (original_session, _, dir, src, original) = library_with_jpeg("export-symlink-original");
+    drop(original_session);
+    let alias = dir.join("alias.jpg");
+    std::os::unix::fs::symlink(&src, &alias).unwrap();
+    let sidecar = dir.join("metadata.xmp");
+    std::fs::write(&sidecar, b"<x/>").unwrap();
+    std::os::unix::fs::symlink(&sidecar, alias.with_extension("xmp")).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [alias.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    s.execute("develop.set", &json!({"ids": [id.0], "control": "light.exposure", "value": 1.0})).unwrap();
+    let o = ExportOptions { conflict: Conflict::Overwrite, ..Default::default() };
+    let to = Destination { dir: String::new(), exact: Some(src.to_string_lossy().to_string()) };
+    let result = disk_batch(&mut s, id, &o, &to);
+    assert!(result.is_err(), "export replaced the original through its imported alias: {result:?}");
+    assert_eq!(std::fs::read(&src).unwrap(), original);
+    assert!(s.execute("export.checkTarget", &json!({"path": src.to_string_lossy()})).is_err());
+    assert!(s.execute("export.checkTarget", &json!({"path": sidecar.to_string_lossy()})).is_err());
+    assert_eq!(std::fs::read(&sidecar).unwrap(), b"<x/>");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Issue #134: exports can always be made again, so they are written atomically but not synced to
 /// disk file by file; an edit copy that becomes a library photo still is.
 #[test]

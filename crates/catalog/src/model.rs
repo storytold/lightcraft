@@ -183,6 +183,11 @@ pub struct Meta {
     pub copyright_url: String,
     pub creator: String,
     pub keywords: Vec<String>,
+    /// Face/pet/focus regions read from XMP (MWG-RS), on the upright (EXIF-oriented) photo.
+    /// Removing or resizing one edits the catalog only; LightCraft never writes regions to XMP.
+    /// Left out of the catalog JSON when empty (most photos), so older catalogs read unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub regions: Vec<lightcraft_meta::Region>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -331,10 +336,11 @@ impl Photo {
     pub fn develops_raw(&self) -> bool {
         self.kind == MediaKind::Raw && self.preview_only.is_none()
     }
-    /// The current ARW reader has vendor WB multipliers but no measured camera illuminant.
-    /// Use adjustments relative to the camera's as-shot look, as for rendered photographs.
+    /// The current ARW and NEF readers have vendor WB multipliers but no measured camera
+    /// illuminant. Use adjustments relative to the camera's as-shot look, as for rendered
+    /// photographs (the engine's `camera_preview::file_local_look` covers the same formats).
     pub fn relative_wb(&self) -> bool {
-        self.develops_raw() && self.format.eq_ignore_ascii_case("ARW")
+        self.develops_raw() && ["ARW", "NEF", "NRW"].iter().any(|f| self.format.eq_ignore_ascii_case(f))
     }
     /// The develop settings import gave this photo: [`Photo::camera_defaults`], or the user's
     /// default preset applied on top of them ([`Photo::import_look`]).
@@ -425,5 +431,20 @@ mod edited_tests {
         assert!(p.is_edited());
         p.develop = Arc::new(DevelopSettings::default());
         assert!(!p.is_edited(), "a full reset is unedited too");
+    }
+
+    #[test]
+    fn sony_and_nikon_raws_use_relative_white_balance() {
+        for (name, format, relative) in [("a.arw", "ARW", true), ("a.nef", "NEF", true), ("a.nrw", "nrw", true), ("a.dng", "DNG", false)] {
+            let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, name, format, 10, 10, "2026-10-01T00:00:00");
+            p.kind = MediaKind::Raw;
+            p.as_shot_wb = Some((5200.0, 4.0));
+            assert_eq!(p.relative_wb(), relative, "{format}");
+            let wb = p.camera_defaults().wb;
+            assert_eq!((wb.temp, wb.tint), if relative { (6500.0, 0.0) } else { (5200.0, 4.0) }, "{format}");
+            // shown from the embedded preview: a rendered image, not a relative-WB raw
+            p.preview_only = Some("unsupported".into());
+            assert!(!p.relative_wb());
+        }
     }
 }

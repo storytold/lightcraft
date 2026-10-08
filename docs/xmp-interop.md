@@ -70,6 +70,26 @@ library share a stem, the stem sidecar belongs to one of them — a raw first, o
 the others write and read `<file>.xmp` (`IMG_0001.JPG.xmp`), falling back to the stem sidecar for reading when they
 have none. So saving one photo never overwrites the other's metadata (`Session::sidecar_naming`).
 
+## Face regions (MWG)
+
+LightCraft reads face, pet, focus and barcode regions in the Metadata Working Group's region schema
+(`mwg-rs:Regions`, `http://www.metadataworkinggroup.com/schemas/regions/`), as Lightroom, digiKam, Picasa and others
+write them, from sidecars and from XMP embedded in the file. Named faces become people in the People view
+(LR-LIB-PEOPLE in [`parity.md`](parity.md)), and every region is drawn as a box in the loupe.
+
+- **Read only.** LightCraft never writes `mwg-rs:Regions`; saving a sidecar keeps another application's regions byte
+  for byte. Removing or resizing a box in the loupe changes the library only.
+- **Areas**: `stArea:x`/`y` are the box's centre, `w`/`h` its size, normalized to the photo (`stArea:unit="pixel"`
+  areas are divided by `mwg-rs:AppliedToDimensions`, and dropped without it). Boxes are clipped to the photo; one
+  that misses it entirely, or has a non-finite, zero or negative size, is skipped (the rest of the list is kept).
+- **Orientation**: regions are stored on the upright (EXIF-oriented) photo. A `mwg-rs:Rotation` of −π/2, +π/2 or ±π
+  (how Lightroom marks a box given in the sensor's frame for Exif orientation 6, 8 or 3) is turned back into the
+  upright frame; MWG can't say "mirrored", so boxes on mirrored photos (orientations 2, 4, 5, 7) are taken as written.
+  Boxes follow LightCraft's own Rotate Left/Right and flips.
+- **Re-reading**: a sidecar that has `mwg-rs:Regions` — even with an empty list — replaces the photo's regions, so
+  regions removed in another application go away here too. A sidecar without `mwg-rs:Regions` (an application that
+  doesn't do regions) leaves the photo's regions as they are.
+
 ## Reading `crs:` develop fields
 
 Many raw developers store edits as `crs:` properties (`http://ns.adobe.com/camera-raw-settings/1.0/`) in sidecars, in

@@ -45,6 +45,11 @@ fn camera_tone_and_relative_wb() {
     let info = SourceInfo { camera_tone: Some(curve.per_channel()), relative_wb: false, ..info };
     check("camera tone per channel edited", &src, &info, &s, &RenderRequest::fit(320, 240));
     check("camera tone per channel neutral", &src, &info, &DevelopSettings::default(), &RenderRequest::fit(320, 240));
+    // a camera chroma curve: richer shadows, highlights bleached toward white
+    let curve = curve.with_chroma([1.4, 1.3, 1.1, 1.0, 0.7, 0.4, 0.25, 0.2]).unwrap();
+    let info = SourceInfo { camera_tone: Some(curve), ..info };
+    check("camera chroma curve", &src, &info, &DevelopSettings::default(), &RenderRequest::fit(320, 240));
+    check("camera chroma curve edited", &src, &info, &s, &RenderRequest::fit(320, 240));
 }
 
 fn scene(i: usize, w: usize, h: usize) -> Arc<Rgb32f> {

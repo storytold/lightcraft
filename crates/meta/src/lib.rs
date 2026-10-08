@@ -7,10 +7,12 @@
 //! - [`parse_xmp`] / [`write_xmp`] — XMP packets (interchange fields + the opaque `lc:settings` JSON).
 //! - [`parse_iptc`] — IPTC-IIM record 2 datasets.
 //! - [`parse_gpx`] — GPS track logs (GPX) for geotagging by capture time.
-//! - [`extract`] — all of the above for a whole file (JPEG, PNG, WebP, TIFF/DNG/raw).
+//! - [`extract`] — all of the above for a whole file (JPEG, PNG, WebP, TIFF/DNG/raw, Canon CR3).
+//! - [`cr3`] — the Canon CR3 container (metadata blocks, XMP, the JPEG and raw tracks).
 #![forbid(unsafe_code)]
 
 mod container;
+pub mod cr3;
 mod datetime;
 mod exif;
 mod gpx;
@@ -24,7 +26,7 @@ pub use datetime::DateTime;
 pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, write_exif};
 pub use gpx::{GpxError, Match, TrackPoint, Tracklog, parse_gpx};
 pub use iptc::parse_iptc;
-pub use lightcraft_geom::Orientation;
+pub use lightcraft_geom::{Orientation, Rect};
 pub use tags::{TagRow, file_tag_rows, tag_rows};
 pub use xmp::{CRS_NS, LC_NS, XmpData, XmpError, XmpValue, parse_xmp, write_xmp, write_xmp_lc};
 pub use xmp_merge::{MergeRules, merge_xmp};
@@ -46,6 +48,31 @@ pub struct Flash {
     pub fired: bool,
     /// The raw Exif `Flash` bit field.
     pub raw: u16,
+}
+
+/// A named region of interest on a photo (MWG Region Guidelines, `mwg-rs:Regions`): most often a face,
+/// drawn by Lightroom, digiKam, Picasa or similar tools. Read-only for now — LightCraft does not write
+/// regions yet (see `docs/xmp-interop.md`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Region {
+    /// Normalized to the image's full, oriented frame (`Metadata::width`/`height`), y-down, 0..1 on
+    /// both axes — MWG's own convention, and what `AppliedToDimensions` areas are converted to.
+    pub rect: Rect,
+    pub kind: RegionKind,
+    /// `mwg-rs:Name` (e.g. the person's name).
+    pub name: Option<String>,
+    pub description: Option<String>,
+}
+
+/// `mwg-rs:Type`. Unrecognised values are kept verbatim rather than dropped.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RegionKind {
+    Face,
+    Pet,
+    Focus,
+    BarCode,
+    /// `mwg-rs:Type` was missing, empty, or a value we don't recognise.
+    Other(String),
 }
 
 /// Everything LightCraft shows or searches about a photo. All fields are optional; unknown = `None`/empty.
@@ -113,6 +140,8 @@ pub struct Metadata {
     pub rating: Option<i8>,
     /// Colour label name (e.g. "Red").
     pub label: Option<String>,
+    /// Face/pet/focus/barcode regions (`mwg-rs:Regions`), read from XMP only.
+    pub regions: Vec<Region>,
 }
 
 macro_rules! fill {
@@ -173,6 +202,9 @@ impl Metadata {
         if self.hierarchical_keywords.is_empty() {
             self.hierarchical_keywords = other.hierarchical_keywords.clone();
         }
+        if self.regions.is_empty() {
+            self.regions = other.regions.clone();
+        }
     }
 
     /// Replace the user-editable fields (rating, label, title, caption, artist, copyright, keywords, GPS) with
@@ -184,6 +216,9 @@ impl Metadata {
         }
         if !other.hierarchical_keywords.is_empty() {
             self.hierarchical_keywords = other.hierarchical_keywords.clone();
+        }
+        if !other.regions.is_empty() {
+            self.regions = other.regions.clone();
         }
     }
 

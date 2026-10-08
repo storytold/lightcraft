@@ -4,7 +4,7 @@
 //! ```text
 //! LightCraft Library/
 //!   catalog.snap   catalog.log      (lightcraft-catalog journal)
-//!   presets.json   view.json        (user presets + favourites; last source/filter/sort/selection)
+//!   presets.json   view.json        (user presets + favourites; last source/sort/selection)
 //!   prefs.json     (library preferences: XMP sidecars, import defaults, cache size, last export)
 //!   thumbs/        (rendered thumbnail cache, safe to delete)
 //!   Originals/     (photos imported with "copy into library")
@@ -102,7 +102,8 @@ struct PresetsFile {
 struct ViewFile {
     source: LibrarySource,
     browse: Option<crate::Browse>,
-    filter: lightcraft_catalog::Filter,
+    // No filter: a library opens unfiltered. A date, keyword or person left over from the last session
+    // would silently hide photos, with only a small badge to say so.
     sort: lightcraft_catalog::Sort,
     selection: Selection,
 }
@@ -294,7 +295,13 @@ impl Session {
         {
             log::error!("library: {e}");
         }
-        let (mut journal, catalog, report) = Journal::open(catalog)?;
+        let (mut journal, mut catalog, report) = Journal::open(catalog)?;
+        // A loaded catalog counts revisions from 0, like every other one. Caches (sidebar counts,
+        // keyword tree, the grid's list…) are keyed on the revision, so give each library loaded
+        // in this process its own range: otherwise an empty library opened after one that was
+        // never edited this session would look unchanged and show the old library's numbers.
+        static LOADS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        catalog.revision = LOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed).wrapping_add(1) << 32;
         self.catalog = catalog;
         self.undo.clear();
         self.redo.clear();
@@ -346,7 +353,6 @@ impl Session {
         if let Some(v) = settings.read::<ViewFile>(files.as_mut(), "view.json") {
             self.source = v.source;
             self.browse = v.browse;
-            self.filter = v.filter;
             self.sort = v.sort;
             self.selection = v.selection;
             self.selection.ids.retain(|id| self.catalog.photo(*id).is_some());
@@ -494,17 +500,11 @@ impl Session {
     }
 
     fn view_json(&self) -> Vec<u8> {
-        let view = ViewFile {
-            source: self.source,
-            browse: self.browse.clone(),
-            filter: self.filter.clone(),
-            sort: self.sort,
-            selection: self.selection.clone(),
-        };
+        let view = ViewFile { source: self.source, browse: self.browse.clone(), sort: self.sort, selection: self.selection.clone() };
         serde_json::to_vec_pretty(&view).unwrap_or_default()
     }
 
-    /// Save the view state (source, filter, sort, selection) if it changed since it was last
+    /// Save the view state (source, sort, selection) if it changed since it was last
     /// written. Native hosts get this from [`Session::close_library`]; the browser host calls it
     /// periodically, since a tab can be closed without notice.
     pub fn save_view(&mut self) {

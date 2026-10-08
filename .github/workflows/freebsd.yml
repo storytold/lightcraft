@@ -27,6 +27,12 @@ jobs:
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
+      # Optional font build input, so the Japanese font tests run (they skip without it).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: storytold/craft-fonts
+          ref: abb83316d96aa59c1cf64784289e378fe9fa5695
+          path: craft-fonts
       - name: Build and test in a FreeBSD VM
         uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1
         with:
@@ -44,5 +50,6 @@ jobs:
             # The checkout is synced in under another owner; let tests that call git read it.
             git config --global --add safe.directory "*"
             rustc --version
+            export CRAFT_FONTS_DIR="$PWD/craft-fonts" CRAFT_FONTS_REQUIRED=1
             CARGO_PROFILE_DEV_DEBUG=0 cargo build --workspace --all-targets --locked
             CARGO_PROFILE_DEV_DEBUG=0 cargo test --workspace --locked

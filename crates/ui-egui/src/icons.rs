@@ -78,6 +78,8 @@ pub enum Icon {
     /// Community chat (opens the ArtCraft Discord): a speech bubble with three dots. Our own
     /// generic drawing, not any service's logo.
     Chat,
+    /// Face boxes on/off: four corner brackets round a small face.
+    FaceBox,
 }
 
 struct Pen<'a> {
@@ -149,8 +151,14 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             pen.rect(3.0, 4.0, 17.0, 16.0, 1.5);
             pen.line(&[(8.0, 4.0), (8.0, 16.0)]);
         }
-        Back => pen.line(&[(16.0, 10.0), (4.0, 10.0), (9.0, 5.0)]),
-        Forward => pen.line(&[(4.0, 10.0), (16.0, 10.0), (11.0, 5.0)]),
+        Back => {
+            pen.line(&[(16.0, 10.0), (4.0, 10.0)]);
+            pen.line(&[(9.0, 5.0), (4.0, 10.0), (9.0, 15.0)]);
+        }
+        Forward => {
+            pen.line(&[(4.0, 10.0), (16.0, 10.0)]);
+            pen.line(&[(11.0, 5.0), (16.0, 10.0), (11.0, 15.0)]);
+        }
         Search => {
             pen.circle(8.5, 8.5, 5.0);
             pen.line(&[(12.2, 12.2), (16.5, 16.5)]);
@@ -404,6 +412,14 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             pen.arc(10.0, 18.0, 6.5, 200.0, 340.0);
             pen.rect(2.5, 2.5, 17.5, 17.5, 2.0);
         }
+        FaceBox => {
+            pen.line(&[(2.5, 7.0), (2.5, 2.5), (7.0, 2.5)]);
+            pen.line(&[(13.0, 2.5), (17.5, 2.5), (17.5, 7.0)]);
+            pen.line(&[(2.5, 13.0), (2.5, 17.5), (7.0, 17.5)]);
+            pen.line(&[(13.0, 17.5), (17.5, 17.5), (17.5, 13.0)]);
+            pen.circle(10.0, 8.5, 2.4);
+            pen.arc(10.0, 16.0, 4.5, 215.0, 325.0);
+        }
         Picker => {
             pen.line(&[(4.0, 16.0), (11.5, 8.5)]);
             pen.closed(&[(11.0, 5.0), (15.0, 9.0), (17.0, 7.0), (13.0, 3.0)]);
@@ -465,6 +481,31 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             ]);
             for x in [6.8, 10.0, 13.2] {
                 pen.dot(x, 8.5, 1.1);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn navigation_arrowheads_have_both_halves() {
+        for icon in [Icon::Back, Icon::Forward] {
+            for scale in [1.0, 2.0] {
+                let mut view = crate::headless::HeadlessView::new();
+                let raw = crate::headless::HeadlessView::raw_input(vec2(64.0, 64.0), scale, 0.0, vec![]);
+                view.run(raw, |ui| {
+                    ui.painter().rect_filled(ui.max_rect(), 0.0, Color32::BLACK);
+                    paint(ui.painter(), Rect::from_center_size(pos2(32.0, 32.0), vec2(18.6, 18.6)), icon, Color32::WHITE);
+                });
+                let image = view.paint(&Default::default());
+                let middle = image.pixels.len() / 2;
+                let upper: u64 = image.pixels[..middle].iter().map(|p| u64::from(p.r())).sum();
+                let lower: u64 = image.pixels[middle..].iter().map(|p| u64::from(p.r())).sum();
+                assert!(upper > 0 && lower > 0, "the arrow must render");
+                assert!(upper.abs_diff(lower) < upper / 20, "arrowhead must be symmetric at scale {scale}: {upper} above, {lower} below");
             }
         }
     }

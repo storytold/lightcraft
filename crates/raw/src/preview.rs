@@ -115,10 +115,20 @@ pub fn embedded_preview(bytes: &[u8]) -> Option<Vec<u8>> {
     Some(if is_jxl(best) { best.to_vec() } else { trim_eoi(best).to_vec() })
 }
 
+/// Canon CR3: the full-size JPEG track (see [`lightcraft_meta::cr3`]), else the `PRVW` / `THMB` boxes.
+fn cr3_preview(bytes: &[u8]) -> Option<&[u8]> {
+    let full = lightcraft_meta::cr3::parse_cr3(bytes)
+        .and_then(|c| c.tracks.iter().find(|t| t.kind == lightcraft_meta::cr3::Cr3TrackKind::Jpeg).and_then(|t| t.data));
+    if let Some(j) = full.and_then(|(at, len)| bytes.get(at..at.checked_add(len)?)).filter(|j| is_dct_jpeg(j)) {
+        return Some(j);
+    }
+    cr3_preview_boxes(bytes)
+}
+
 /// Canon CR3 (ISO base media file): the `PRVW` box (Laurent Clévy's CR3 notes; layout confirmed on a CC0
 /// sample) is `u32 size, "PRVW", u32 0, u16 ?, u16 width, u16 height, u16 ?, u32 jpeg length, JPEG`; the smaller
 /// `THMB` box has the same shape. Returns the larger valid one.
-fn cr3_preview(bytes: &[u8]) -> Option<&[u8]> {
+fn cr3_preview_boxes(bytes: &[u8]) -> Option<&[u8]> {
     let mut best: Option<&[u8]> = None;
     for tag in [b"PRVW", b"THMB"] {
         let mut from = 0;
@@ -198,5 +208,33 @@ mod tests {
         for n in 0..cr3.len() {
             let _ = embedded_preview(&cr3[..n]);
         }
+    }
+
+    /// CR3 with a full-size JPEG track: that JPEG wins over the smaller `PRVW` box.
+    #[test]
+    fn cr3_prefers_the_full_size_jpeg_track() {
+        let bx = |kind: &[u8; 4], body: &[u8]| -> Vec<u8> { [&((body.len() + 8) as u32).to_be_bytes()[..], kind, body].concat() };
+        let full = |kind: &[u8; 4], body: &[u8]| bx(kind, &[&[0u8; 4][..], body].concat());
+        let (small, big) = (fake_jpeg(300), fake_jpeg(3000));
+        let mut file = bx(b"ftyp", b"crx \0\0\0\x01crx isom");
+        let mut prvw = b"\0\0\0\0\0\x01\x06\x54\x04\x38\0\x01".to_vec();
+        prvw.extend_from_slice(&(small.len() as u32).to_be_bytes());
+        prvw.extend_from_slice(&small);
+        file.extend(bx(b"PRVW", &prvw));
+        // CRAW sample entry: 82 bytes, then a JPEG child box; one sample at `at`
+        let mut craw = vec![0u8; 82];
+        craw.extend(bx(b"JPEG", &[0; 4]));
+        let at = 2048u64;
+        let stsd = full(b"stsd", &[&1u32.to_be_bytes()[..], &bx(b"CRAW", &craw)].concat());
+        let stsz = full(b"stsz", &[0u32.to_be_bytes(), 1u32.to_be_bytes(), (big.len() as u32).to_be_bytes()].concat());
+        let co64 = full(b"co64", &[&1u32.to_be_bytes()[..], &at.to_be_bytes()].concat());
+        let trak = bx(b"trak", &bx(b"mdia", &bx(b"minf", &bx(b"stbl", &[stsd, stsz, co64].concat()))));
+        file.extend(bx(b"moov", &trak));
+        file.resize(at as usize, 0);
+        file.extend_from_slice(&big);
+        assert_eq!(embedded_preview(&file).unwrap(), big);
+        // a track pointing past the end falls back to PRVW
+        file.truncate(at as usize + 100);
+        assert_eq!(embedded_preview(&file).unwrap(), small);
     }
 }

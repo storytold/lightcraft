@@ -10,7 +10,7 @@ default-run = "lightcraft"
 workspace = true
 
 [dependencies]
-lightcraft-engine = { workspace = true }
+lightcraft-engine = { workspace = true, features = ["sam"] }
 lightcraft-sysmem = { workspace = true }
 lightcraft-ui-egui = { workspace = true }
 lightcraft-codecs = { workspace = true }

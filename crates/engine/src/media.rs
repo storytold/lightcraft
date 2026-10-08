@@ -26,7 +26,7 @@ use lightcraft_raster::{Histogram, Rgb32f, Rgba8};
 use serde::{Deserialize, Serialize};
 
 /// Bump when the pipeline's output changes, to invalidate cached thumbnails.
-pub const RENDER_CACHE_VERSION: u64 = 10;
+pub const RENDER_CACHE_VERSION: u64 = 12;
 
 /// Thumbnails render at one of these long edges (so window/cell size changes reuse the cache).
 pub const THUMB_SIZES: [usize; 4] = [128, 256, 384, 512];
@@ -657,7 +657,13 @@ impl crate::Session {
             ^ id.0.wrapping_mul(0x9e37_79b9_7f4a_7c15)
             ^ content.rotate_left(17);
         let cache = thumb_bucket.map(|b| {
-            let k = Hasher128::new().str(&content_key(&p)).u64(settings.hash64()).u64(b as u64).u64(RENDER_CACHE_VERSION).finish();
+            let k = Hasher128::new()
+                .str(&content_key(&p))
+                .u64(settings.hash64())
+                .u64(b as u64)
+                .u64(RENDER_CACHE_VERSION)
+                .u64(crate::camera_profiles::cache_key())
+                .finish();
             (self.media.rendered.clone(), k)
         });
         Some(RenderJob {
@@ -686,7 +692,14 @@ impl crate::Session {
 
     /// Cache key of a variant thumbnail ([`Self::variant_job`]).
     pub fn variant_key(p: &Photo, settings: &DevelopSettings, edge: usize) -> Hash128 {
-        Hasher128::new().str(&content_key(p)).str("variant").u64(settings.hash64()).u64(edge as u64).u64(RENDER_CACHE_VERSION).finish()
+        Hasher128::new()
+            .str(&content_key(p))
+            .str("variant")
+            .u64(settings.hash64())
+            .u64(edge as u64)
+            .u64(RENDER_CACHE_VERSION)
+            .u64(crate::camera_profiles::cache_key())
+            .finish()
     }
 
     /// A thumbnail of `id` rendered with `settings` instead of its own (profile and preset
@@ -715,9 +728,58 @@ impl crate::Session {
         })
     }
 
+    /// A square close-up of `face` (normalized, in the photo's upright frame) for a People card: the
+    /// photo's own look with its crop replaced by a square around the face (room for hair and chin),
+    /// `edge` pixels across (≤ 512). The source level is the smallest that keeps the face sharp, up
+    /// to the preview. Cached like [`Self::variant_job`], and `key` likewise follows the content.
+    pub fn face_job(&mut self, id: PhotoId, face: lightcraft_geom::Rect, edge: usize) -> Option<RenderJob> {
+        let p = self.catalog.photo(id)?.clone();
+        // `face` is on the upright (EXIF-oriented) photo; the crop below is in the frame after the
+        // user's Rotate Left/Right, so carry the box (and the photo's size) over to it.
+        let orient = p.develop.orientation;
+        let face = orient.map_norm_rect(face);
+        let (w, h) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
+        let (w, h) = if orient.swaps_axes() { (h, w) } else { (w, h) };
+        let side = ((face.x1 - face.x0) * w).max((face.y1 - face.y0) * h) * 1.7;
+        // finite, within the photo, and never wider than its short side (so the clamps below are valid)
+        let side = if side.is_finite() { side.clamp(1.0, w.min(h)) } else { w.min(h) };
+        let (cx, cy) = ((face.x0 + face.x1) / 2.0 * w, (face.y0 + face.y1) / 2.0 * h);
+        let (cx, cy) = (if cx.is_finite() { cx } else { w / 2.0 }, if cy.is_finite() { cy } else { h / 2.0 });
+        let (x0, y0) = (cx.clamp(side / 2.0, w - side / 2.0) - side / 2.0, cy.clamp(side / 2.0, h - side / 2.0) - side / 2.0);
+        let rect = lightcraft_geom::Rect { x0: x0 / w, y0: y0 / h, x1: (x0 + side) / w, y1: (y0 + side) / h };
+        let mut settings = (*p.develop).clone();
+        settings.crop = lightcraft_develop::Crop { geometry: lightcraft_geom::CropGeometry { rect, angle: 0.0 }, ..Default::default() };
+        let edge = edge.clamp(16, SourceLevel::Thumb.max_edge());
+        // pixels along the long edge that leave `edge` across the crop
+        let needed = (edge as f64 * w.max(h) / side).ceil().min(SourceLevel::Preview.max_edge() as f64);
+        let level = SourceLevel::for_size(needed as usize);
+        let source = self.media.source_ref(&p, level);
+        let ck = Self::variant_key(&p, &settings, edge);
+        Some(RenderJob {
+            photo: id,
+            level,
+            source,
+            origin: p.source.clone(),
+            info: source_info(&p),
+            settings: Arc::new(settings),
+            request: RenderRequest { apply_crop: true, ..RenderRequest::fit(edge, edge) },
+            key: (ck.0 as u64) ^ ((ck.0 >> 64) as u64),
+            cache: Some((self.media.rendered.clone(), ck)),
+            stages: None,
+            view_cache: None,
+        })
+    }
+
     /// Size-independent cache key of a photo's view render (loupe) for its current settings.
     fn view_key(p: &Photo, apply_crop: bool) -> Hash128 {
-        Hasher128::new().str(&content_key(p)).str("view").u64(p.develop.hash64()).u64(apply_crop as u64).u64(RENDER_CACHE_VERSION).finish()
+        Hasher128::new()
+            .str(&content_key(p))
+            .str("view")
+            .u64(p.develop.hash64())
+            .u64(apply_crop as u64)
+            .u64(RENDER_CACHE_VERSION)
+            .u64(crate::camera_profiles::cache_key())
+            .finish()
     }
 
     /// The loupe's render job: like [`Self::render_job`], and a full-quality result is kept as the

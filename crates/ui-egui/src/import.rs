@@ -105,6 +105,8 @@ pub struct ImportTask {
     params: Value,
     pub imported: usize,
     pub duplicates: usize,
+    /// The library photos the skipped duplicates match (shown when nothing new was added).
+    existing: Vec<u64>,
     pub failed: usize,
     /// Move: originals moved, and sources left in place (reported by the engine with a reason).
     pub moved: usize,
@@ -563,6 +565,7 @@ fn commit_batch(app: &mut LightcraftApp, task: &mut ImportTask, prepared: lightc
             let len = |k: &str| v[k].as_array().map_or(0, Vec::len);
             task.imported += len("imported");
             task.duplicates += len("duplicates");
+            task.existing.extend(v["duplicates"].as_array().into_iter().flatten().filter_map(|d| d["existing"].as_u64()));
             task.failed += len("failed");
             task.moved += len("moved");
             task.kept += len("kept");
@@ -601,6 +604,11 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
         let _ = app.run("library.select", json!({"ids": [f]}));
     }
     let plural = |n: usize| if n == 1 { "" } else { "s" };
+    // nothing new, only files the library already has: show where they are (Recently Deleted is
+    // easy to miss, and the side panel that lists it starts collapsed)
+    if task.imported == 0 && task.failed == 0 && !task.cancelled && show_existing(app, ctx, &task.existing) {
+        return;
+    }
     let mut msg = if task.cancelled {
         crate::i18n::tr_format!("Import cancelled · {} photo{} added", task.imported, plural(task.imported))
     } else {
@@ -614,11 +622,52 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     }
     if task.duplicates > 0 {
         msg.push_str(&crate::i18n::tr_format!(" · {} duplicate{} skipped", task.duplicates, if task.duplicates == 1 { "" } else { "s" }));
+        let deleted = deleted_of(app, &task.existing).len();
+        if deleted > 0 {
+            msg.push_str(&crate::i18n::tr_format!(" ({} in Recently Deleted)", deleted));
+        }
     }
     if task.failed > 0 {
         msg.push_str(&crate::i18n::tr_format!(" · {} not readable", task.failed));
     }
     app.toast(ctx, msg);
+}
+
+/// The photos among `ids` that are in Recently Deleted (each once).
+fn deleted_of(app: &LightcraftApp, ids: &[u64]) -> Vec<u64> {
+    let mut v: Vec<u64> =
+        ids.iter().copied().filter(|&id| app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).is_some_and(|p| p.deleted)).collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// Select the library photos an import skipped as duplicates of, in Recently Deleted (side panel
+/// opened, with how to get them back) or in All Photos, and say so. `false` when there are none.
+fn show_existing(app: &mut LightcraftApp, ctx: &egui::Context, existing: &[u64]) -> bool {
+    let deleted = deleted_of(app, existing);
+    let (kind, mut ids) = if deleted.is_empty() { ("all", existing.to_vec()) } else { ("recentlyDeleted", deleted) };
+    ids.sort_unstable();
+    ids.dedup();
+    ids.retain(|&id| app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).is_some());
+    if ids.is_empty() || app.run("library.source", json!({"kind": kind})).is_err() {
+        return false;
+    }
+    let _ = app.run("library.select", json!({"ids": ids}));
+    app.ui.left_panel = true;
+    let n = ids.len();
+    let plural = if n == 1 { "" } else { "s" };
+    let msg = if kind == "all" {
+        crate::i18n::tr_format!("Already in the library: {} photo{} selected in All Photos", n, plural)
+    } else {
+        crate::i18n::tr_format!(
+            "Already in the library, in Recently Deleted: {} photo{} selected · right-click ▸ Restore, or Delete Permanently to import afresh",
+            n,
+            plural
+        )
+    };
+    app.toast_for(ctx, msg, 6.0);
+    true
 }
 
 /// The progress window while an import runs, with Cancel (files already copied or added stay;
@@ -949,14 +998,16 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
         p.line_segment([cb.left_center() + vec2(3.5, 0.5), cb.center_bottom() + vec2(-1.0, -4.0)], Stroke::new(2.0, Color32::WHITE));
         p.line_segment([cb.center_bottom() + vec2(-1.0, -4.0), cb.right_top() + vec2(-3.5, 4.0)], Stroke::new(2.0, Color32::WHITE));
     }
+    let in_trash = c.existing.is_some_and(|id| app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).is_some_and(|p| p.deleted));
     let badge = match (&c.duplicate, &c.error) {
+        (Some(_), _) if in_trash => Some("In Recently Deleted"),
         (Some(r), _) if r == "path" => Some("In library"),
         (Some(_), _) => Some("Duplicate"),
         (None, Some(_)) => Some("Unreadable"),
         _ => None,
     };
     if let Some(b) = badge {
-        let g = p.layout_no_wrap(b.to_string(), t.semibold(10.0), Color32::WHITE);
+        let g = p.layout_no_wrap(crate::i18n::tr(b).to_string(), t.semibold(10.0), Color32::WHITE);
         let br = Rect::from_min_size(pos2(img.right() - g.size().x - 12.0, img.top() + 6.0), g.size() + vec2(8.0, 4.0));
         p.rect_filled(br, 3.0, Color32::from_rgba_unmultiplied(170, 60, 50, 220));
         p.galley(br.min + vec2(4.0, 2.0), g, Color32::WHITE);

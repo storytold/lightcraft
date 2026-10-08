@@ -371,10 +371,10 @@ fn local_folder_tree_expands_and_browses() {
     let base_s = base.to_string_lossy().to_string();
     let r = h.request("ui.clickWidget", json!({"id": format!("folderToggle:{base_s}")}), T);
     assert_eq!(r["ok"], true, "{r}");
-    for _ in 0..3 {
-        h.step();
-    }
     let trip = base.join("Trip").to_string_lossy().to_string();
+    // the folder listing can land a few frames later on a loaded machine (FreeBSD CI): wait for the row
+    let row = format!("source:local:{trip}");
+    h.step_until(SETTLE, |h| h.app.widgets.iter().any(|(w, _)| *w == row));
     let r = h.request("ui.clickWidget", json!({"id": format!("source:local:{trip}")}), T);
     assert_eq!(r["ok"], true, "the subfolder is listed: {r}");
     assert_eq!(h.app.session.browse.as_ref().map(|b| b.path.clone()), Some(trip.clone()), "clicking it browses it");
@@ -619,4 +619,59 @@ fn soft_proofing_flags_out_of_gamut_colours_and_makes_proof_copies() {
     h.request("ui.key", json!({"key": "s"}), T);
     assert!(!h.app.ui.soft_proof);
     assert_ne!(h.app.session.catalog.stack_of(copy.id).unwrap().collapsed, stack.collapsed, "S toggled the stack");
+}
+
+/// Object / Describe without the SAM 3 model: the download is offered (never started without a
+/// yes), the dialog says why it can't start when no mirror is configured, nothing freezes and no
+/// empty mask is left behind.
+#[test]
+fn ai_masks_without_the_model_offer_the_download() {
+    use crate::state::Dialog;
+    use lightcraft_engine::segment::Segmenter;
+    let mut h = detail("panel.masking");
+    let dir = std::env::temp_dir().join(format!("lc-ui-no-sam3-{}", std::process::id()));
+    h.app.session.segmenter.dir = Some(dir.clone());
+    h.app.session.segmenter.mirrors_file = Some(dir.join("none.txt"));
+    let t = std::time::Instant::now();
+    let r = h.request("ui.clickWidget", json!({"id": "maskNew:object"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(develop(&h).masks.is_empty());
+    if !Segmenter::AVAILABLE {
+        // a build without AI masks says so (a toast), no dialog
+        assert_eq!(h.app.ui.dialog, None);
+        return;
+    }
+    assert_eq!(h.app.ui.dialog, Some(Dialog::SamModel { then: Some(("object".into(), "new".into())), error: None }));
+    assert!(!h.app.session.segmenter.download_status().running, "nothing downloads without a yes");
+    if h.app.session.segmenter.mirrors().is_empty() {
+        // no location configured in this build: no Download button (only Close), and an agent
+        // confirming anyway gets the reason; the dialog stays
+        h.step();
+        let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
+        assert_eq!(r["ok"], false, "{r}");
+        let r = h.request("ui.dialog.confirm", json!({}), T);
+        assert_eq!(r["ok"], false, "{r}");
+        assert!(r["error"].as_str().unwrap_or_default().contains("LIGHTCRAFT_SAM3_MIRRORS"), "{r}");
+        assert!(matches!(h.app.ui.dialog, Some(Dialog::SamModel { .. })), "stays open");
+    } else {
+        // with a mirror: Download starts it in the background (here it fails: nothing listens)
+        let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    // (a frame with the message laid out, so the buttons are where they are drawn)
+    h.step();
+    h.step();
+    let r = h.request("ui.clickWidget", json!({"id": "button:dialogCancel"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(h.app.ui.dialog, None);
+    // Describe asks too
+    let r = h.request("ui.clickWidget", json!({"id": "maskNew:prompt"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(h.app.ui.dialog, Some(Dialog::SamModel { then: Some(("prompt".into(), "new".into())), error: None }));
+    assert_eq!(h.app.ui.describe, None);
+    // a click command from an agent gets the not-installed error at once, and the app offers the model
+    let e = h.app.run("mask.add", json!({"kind": "prompt", "text": "sky"})).unwrap_err();
+    assert!(e.starts_with(lightcraft_engine::segment::NOT_INSTALLED), "{e}");
+    assert!(develop(&h).masks.is_empty());
+    assert!(t.elapsed() < SETTLE, "{:?}", t.elapsed());
 }

@@ -23,31 +23,31 @@ duplicate Local entries #22, black GPU exports on an Intel iGPU #78).
 | Dimension | Estimate | What's true today | Biggest gaps |
 |---|---:|---|---|
 | **Feature checklist** | 79% | P0 core and P1 nearly complete: import (Add / Copy / Move, templates, devices), library, grid/loupe/compare/survey, every Edit slider, curves, colour grading, masking tools, crop/Upright, heal/clone, presets/profiles, versions/history, sync, export, menus, shortcuts | P1: lens-profile database, content-aware fill (patch synthesis), video playback/trim |
-| **RAW coverage** (formats people shoot) | ~50% | DNG (uncompressed, lossless/lossy JPEG, Deflate/float, JPEG XL; CFA and LinearRaw incl. iPhone ProRAW), CR2, ARW, NEF (uncompressed + Huffman lossless/lossy), uncompressed RAF/ORF, packed RW2, PEF; every container's embedded preview (incl. CR3) | **CR3** (every Canon since ~2018), compressed RAF/ORF, RW2 v4, Nikon lossy-after-split, Canon sRAW, HEIC/AVIF. Per-model verification is thin (~40 corpus files vs >1,000 models) |
-| **Colour & image quality** | ~60–70% | Pipeline is complete and fast; GPU path CPU-exact within 1/255; DNGs render with the camera profile they carry, Apple ProRAW as Lightroom Classic renders it (mean ΔE00 0.58 vs Lightroom's own 2000 px export of the corpus sample; WB, calibration, colour mixer, tone sliders in Lightroom's order, tone curves, vibrance / saturation, colour grading, the post-crop vignette, sharpening and colour NR fitted to Lightroom renders, smaller exports downsized from a full-size render as Lightroom's are; three real XMP presets within mean ΔE00 0.70 / 0.87 / 2.13 of Lightroom, from 19–23) | **No measured camera calibration database**: ARW has a guarded per-file embedded-JPEG colour estimate (docs/camera-preview-colour.md); other non-DNG raws and rejected estimates use a neutral matrix. Colour fidelity remains incomplete. No lens-profile database. Fidelity is measured on one camera (Apple ProRAW) only; texture / clarity / dehaze and luminance NR are still tuned by eye; strong curves with combined calibration (the third preset, 2.1) and the deepest shadows are off. Tone curves are export-space independent (fixed ProPhoto-primaries curve space) |
+| **RAW coverage** (formats people shoot) | ~50% | DNG (all kinds), CR2, ARW, NEF (uncompressed + Huffman lossless/lossy), uncompressed RAF/ORF, packed RW2, PEF; every container's embedded preview (incl. CR3) | **CR3** (every Canon since ~2018), compressed RAF/ORF, RW2 v4, Nikon lossy-after-split, Canon sRAW, HEIC/AVIF. NEFs labelled compressed but stored uncompressed (Z 6 packed 14-bit, D850 12-bit uncompressed). Per-model verification is thin (~40 corpus files vs >1,000 models) |
+| **Colour & image quality** | ~60–70% | Pipeline is complete and fast; GPU path CPU-exact within 1/255; DNGs render with the camera profile they carry, Apple ProRAW as Lightroom Classic renders it (mean ΔE00 0.58 vs Lightroom's own 2000 px export of the corpus sample; WB, calibration, colour mixer, tone sliders in Lightroom's order, tone curves, vibrance / saturation, colour grading, the post-crop vignette, sharpening and colour NR fitted to Lightroom renders, smaller exports downsized from a full-size render as Lightroom's are; three real XMP presets within mean ΔE00 0.70 / 0.87 / 2.13 of Lightroom, from 19–23) | **No measured camera calibration database**: ARW and NEF have a guarded per-file embedded-JPEG colour estimate (docs/camera-preview-colour.md); other non-DNG raws and rejected estimates use a neutral matrix. Colour fidelity remains incomplete. No lens-profile database. Fidelity is measured on one camera (Apple ProRAW) only; texture / clarity / dehaze and luminance NR are still tuned by eye; strong curves with combined calibration (the third preset, 2.1) and the deepest shadows are off. Tone curves are export-space independent (fixed ProPhoto-primaries curve space) |
 | **AI & computational** | ~15–20% | Assisted culling (focus, bursts), auto tone, HDR/panorama merge; subject/sky/background masks as classical heuristics, or the photo's own segmentation mattes when it ships them (DNG semantic masks, e.g. iPhone ProRAW's sky matte) | Real segmentation masks (subject, sky, people, objects, landscape, depth), AI denoise, super resolution, lens blur, generative remove, faces/people, natural-language search. **Blocked on a model strategy** (licensable weights or our own training; pure-Rust inference is feasible) |
 | **Workflow & library** | ~85% (single machine) | Robust catalog (journal + snapshots, background compaction, crash-tested), 85k-photo libraries stay responsive, Local browsing with automatic cleanup, XMP interop, keywords, smart albums, Move import | Opening an 85k library takes 1.7–4.7 s; no cloud sync (out of scope), no tablet companion (#74, roadmap), shared albums, publish services, tethering |
 | **Classic modules** | ~30% | Geotagging from GPX track logs, soft proofing (partial), slideshow (basic) | **Map view, Book, Print, Slideshow module, Web, publish services**: ~40 tracker rows ⬜ |
 | **HDR & video** | 0% | | HDR edit/display/export; video play/trim/edit/export |
-| **Platform & robustness** | ~70% | macOS native; Windows/Linux builds; web via WASM; no-panic lints workspace-wide, `unsafe` confined to `crates/sysmem`; failed saves are reported; GPU errors fall back to CPU | Windows installer UI unverified on Windows (PR #79); GPU path proven only on Apple + user reports; Japanese/English UI (see docs/localization-ja.md); remaining technical errors and other languages; accessibility partial; headless UI tests time out under machine load |
+| **Platform & robustness** | ~70% | macOS native; Windows/Linux builds; web via WASM; no-panic lints workspace-wide, `unsafe` confined to `crates/sysmem`; failed saves are reported; GPU errors fall back to CPU | Windows installer UI unverified on Windows (PR #79); GPU path proven only on Apple + user reports; English, Simplified/Traditional Chinese and Japanese UI (see docs/localization.md); remaining technical errors; Traditional Chinese uses the Simplified Chinese font until craft-fonts has a TC face; accessibility partial; headless UI tests time out under machine load |
 
 ### By kind of user
 
 | User | Readiness | What blocks them |
 |---|---:|---|
 | JPEG / DNG shooter, single machine | ~85% | Fidelity polish, AI masks |
-| Nikon / Sony / older-Canon raw shooter | ~65% | Camera colour fidelity and coverage (ARW preview estimates are only a starting point) |
-| Canon CR3 / Fujifilm / Olympus shooter | ~35% | Their raws open as embedded previews only |
+| Nikon / Sony / older-Canon raw shooter | ~65% | Camera colour fidelity and coverage (ARW and NEF preview estimates are only a starting point) |
+| Canon CR3 / Fujifilm / Olympus shooter | ~35% | Their raws open as embedded previews only (CR3: the full-size JPEG with full metadata) |
 | Lightroom Classic power user | ~45% | Print, Book, Map, publish, tethering |
-| Relies on AI (masks, denoise) | ~25% | No segmentation or AI denoise models |
+| Relies on AI (masks, denoise) | ~25% | Object / Describe masks via optional SAM 3 (download not yet hosted); no AI denoise |
 
 ## Where we're going
 
 Priorities, in order. Each points at tracker rows in [`docs/parity.md`](docs/parity.md) → *Top gaps*.
 
 1. **Camera colour calibration of our own** (LR-PROF-CAMERACOLOR, P0): fit each camera to its own embedded JPEG, use
-   matrices the files carry themselves, then chart shots. Sony ARW's file-local fit (matrix + tone curve from its own
-   JPEG) is the first step; generalise it to the other makes' raws (NEF, RW2, PEF, ORF…), then validate fidelity.
+   matrices the files carry themselves, then chart shots. Sony ARW and Nikon NEF have the file-local fit (matrix + tone
+   curve from their own JPEG); generalise it to the other makes' raws (RW2, PEF, ORF…), then validate fidelity.
 2. **Raw formats, clean-room** (LR-IMP-FORMATS, P0): **CR3** first, then compressed RAF / ORF, RW2 v4, NEF
    lossy-after-split, sRAW. Decided 2026-10-05: write our own decoders from prose descriptions (never decoder source,
    no LGPL dependency); compressed NEF (#86) is the template.
@@ -58,7 +58,9 @@ Priorities, in order. Each points at tracker rows in [`docs/parity.md`](docs/par
    Clarity / texture / dehaze), then other cameras' raws.
 5. **Lens profiles of our own** (LR-EDIT-OPTICS-PROFILE, P1).
 6. **AI model strategy** (maintainer decision): which permissively licensed models (or our own training) for
-   segmentation masks and denoise; then pure-Rust inference. Unblocks M12 and Enhance.
+   segmentation masks and denoise; then pure-Rust inference. Unblocks M12 and Enhance. Object / Describe masks now
+   run Meta's SAM 3 in pure Rust (optional, user-consented download under the non-OSI SAM License; CDN mirrors still
+   to be set up, docs/ai-masks.md); Subject / Sky / People and Enhance are still open.
 7. **Then:** HDR (Q), the Classic output modules (Print first, then Map view, Book, Slideshow), video (R), localisation
    and accessibility.
 
@@ -83,12 +85,12 @@ hardening (#78), copyright metadata (#51), GPX geotagging (#60), import tag help
 | M8 | Heal / Remove | content-aware remove (PatchMatch), heal, clone, brush spots, visualize spots, red/pet eye | 6–10 | 🚧 (heal, clone, auto source, visualize spots, red/pet eye ✅; PatchMatch remove ⬜) |
 | M9 | Presets, profiles, versions, sync | preset browser + amount, create/import presets, profile browser, versions, history, copy/paste/sync settings | 5–8 | ✅ |
 | M10 | Export & share | export dialog (JPEG/PNG/TIFF/DNG/AVIF/JXL/original), sizing, sharpening, metadata, watermark, naming, batch jobs, XMP sidecars, HDR export | 6–10 | 🚧 (all formats incl. DNG/original, sizing, presets, background jobs ✅; JXL encode, HDR export ⬜) |
-| M11 | RAW II | CR3, RAF (X-Trans), ORF, RW2, PEF, SRW, 3FR, IIQ + long tail; camera calibration DB; HEIC/AVIF/JXL import | 20–35 | 🚧 (RAF uncompressed, RW2 packed, PEF, ORF uncompressed ✅; **camera colour calibration** 🚧 (guarded ARW preview fitting; measured database still missing), CR3, compressed ORF/RAF ⬜) |
+| M11 | RAW II | CR3, RAF (X-Trans), ORF, RW2, PEF, SRW, 3FR, IIQ + long tail; camera calibration DB; HEIC/AVIF/JXL import | 20–35 | 🚧 (RAF uncompressed, RW2 packed, PEF, ORF uncompressed ✅; **camera colour calibration** 🚧 (guarded ARW and NEF preview fitting; measured database still missing), CR3, compressed ORF/RAF ⬜) |
 | M12 | AI & smart features | subject/sky/background/people/object masks, semantic search, faces/People (permissively licensed models, pure-Rust inference) | 20–40 | ⬜ |
 | M13 | Merge | HDR merge (deghost), panorama (projections, boundary warp, fill edges), HDR panorama | 10–15 | ✅ |
 | M14 | Video | import/playback/trim via FilmCraft crates, global edits + presets on video, video export | 6–10 | ⬜ |
 | M15 | Classic modules | Map, Book, Slideshow, Print, Web; smart collections, stacks, virtual copies, publish services, tethering | 25–40 | 🚧 (smart albums, stacks, virtual copies, compare/survey ✅; Map/Book/Slideshow/Print/Web ⬜) |
-| M16 | 1.0 polish | preferences, shortcut editor, accessibility, localization, packaging (dmg/msi/AppImage/web), hardening | 10–20 | 🚧 (settings, keyboard shortcuts sheet, packaging basics ✅; Japanese/English localisation 🟡; accessibility and other locales ⬜) |
+| M16 | 1.0 polish | preferences, shortcut editor, accessibility, localization, packaging (dmg/msi/AppImage/web), hardening | 10–20 | 🚧 (settings, keyboard shortcuts sheet, packaging basics ✅; English/Chinese (Simplified, Traditional)/Japanese localisation 🟡; accessibility and further locales ⬜) |
 
 ## Parity estimate (feature count updated 2026-10-05; effort estimate from 2026-10-02)
 
@@ -163,7 +165,8 @@ The milestone estimates in the table above were made before work started and are
 
 Decoded (CC0 corpus from raw.pixls.us, `cargo xtask corpus --download`, `crates/raw/tests/corpus.rs`): DNG (uncompressed,
 LJ92, lossy JPEG / Smart Previews, Deflate, float, linear, DNG 1.7 JPEG XL tiles — lossless bit-exact on synthetic files and
-on a JXL re-encode of a CC0 iPhone ProRAW; lossy (XYB) JXL tiles decode but no real file has verified them), CR2, ARW (uncompressed, ARW2, LJ92), NEF/NRW uncompressed and Huffman-compressed (lossless, lossy type 1/2, 12/14-bit), RAF uncompressed (Bayer and
+on a JXL re-encode of a CC0 iPhone ProRAW; lossy (XYB) JXL tiles decode but no real file has verified them), CR2, ARW (uncompressed, ARW2, LJ92; as-shot white balance and black level of pre-2017 bodies from the enciphered uncompressed and Huffman-compressed (lossless, lossy type 1/2, 12/14-bit), RAF uncompressed (Bayer and
+maker-note `Tag2010` and the encrypted `SR2SubIFD`, both recovered by black-box analysis, `crates/raw/src/vendor/arw.rs`), NEF/NRW uncompressed and Huffman-compressed (lossless, lossy type 1/2, 12/14-bit), RAF uncompressed (Bayer and
 X-Trans), RW2 packed 12/14-bit, PEF (uncompressed and Huffman), ORF uncompressed (16-bit and 12-bit packed). Every
 supported container also yields its embedded JPEG preview (CR3 too), and the engine shows that preview for raw variants
 it can't decode yet.
@@ -193,11 +196,14 @@ own chart-based calibration (M11.4). Adobe matrices are never used.
   export hardening, clippy 1.99. Added the honest *Where we stand* assessment and *Where we're going* priorities; added
   tracker rows for camera colour, camera coverage and render fidelity.
 
-## Japanese interface and text watermarks
+## Chinese and Japanese interfaces, and text watermarks
 
-English/Japanese interface language is persisted in UI state. Core menus have Japanese
-translations; untranslated panels and dialogs retain English. BIZ UDMincho is bundled
-under OFL for Japanese glyph coverage without system fonts. Text watermarks now accept
+English, Simplified Chinese, Traditional Chinese (Taiwan) and Japanese interface languages are persisted in UI state, and the
+language table (`crates/ui-egui/src/i18n.rs`) drives the menus, settings and fonts, so another
+language is a table entry plus two catalogs (docs/localization.md). Core menus and panels are
+translated; untranslated text retains English. CJK glyphs (Chinese: Noto Sans CJK SC; Japanese UI:
+BIZ UDPGothic; watermarks: BIZ UDMincho) come from storytold/craft-fonts, embedded by builds made
+with the optional `CRAFT_FONTS_DIR` input (all releases), so no system fonts are needed. Text watermarks now accept
 `vertical: true` in export JSON/presets and expose an orientation selector. Japanese
 characters stay upright in top-to-bottom columns, with newlines starting columns to the
 left. This is basic lettering, without tate-chu-yoko, ruby, kinsoku, or general vertical

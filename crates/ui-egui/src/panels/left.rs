@@ -55,6 +55,31 @@ fn row(
     resp
 }
 
+/// A collapsible section header (Albums, Local, By Date, Keywords): the bold title with a
+/// disclosure chevron after it; a click folds or unfolds the section (kept in the UI state, so it
+/// survives restarts). Returns the header's rect and whether the section is now open.
+fn sidebar_section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, title: &str) -> (Rect, bool) {
+    let t = Tokens::get(ui.ctx());
+    let title = crate::i18n::tr(title);
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
+    register(ui.ctx(), format!("sidebarSection:{id}"), r);
+    if resp.clicked() {
+        app.ui.toggle_sidebar_section(id);
+    }
+    let open = !app.ui.sidebar_section_collapsed(id);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title));
+    let text = ui.painter().text(pos2(r.left() + 18.0, r.center().y), Align2::LEFT_CENTER, title, t.semibold(13.5), t.text_label);
+    let c = pos2(text.right() + 10.0, r.center().y);
+    let col = if resp.hovered() { t.text } else { t.text_dim };
+    let pts = if open {
+        vec![c + vec2(-4.0, -2.0), c + vec2(4.0, -2.0), c + vec2(0.0, 3.0)]
+    } else {
+        vec![c + vec2(-2.0, -4.0), c + vec2(3.0, 0.0), c + vec2(-2.0, 4.0)]
+    };
+    ui.painter().add(egui::Shape::convex_polygon(pts, col, egui::Stroke::NONE));
+    (r, open)
+}
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(egui::Stroke::new(1.0, t.divider));
@@ -85,8 +110,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
             ui.add_space(10.0);
             // Albums header
-            let (ar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::hover());
-            ui.painter().text(pos2(ar.left() + 18.0, ar.center().y), Align2::LEFT_CENTER, crate::i18n::tr("Albums"), t.semibold(13.5), t.text_label);
+            let (ar, albums_open) = sidebar_section_header(app, ui, "albums", "Albums");
             let mut hdr = ui.new_child(
                 egui::UiBuilder::new()
                     .max_rect(Rect::from_min_max(pos2(ar.right() - 50.0, ar.top()), ar.right_bottom()))
@@ -111,23 +135,23 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     app.ui.dialog = Some(crate::state::Dialog::NewAlbum { name: String::new(), folder: true });
                 }
             });
-            let albums: Vec<Album> = app.session.catalog.albums().cloned().collect();
-            albums_tree(app, ui, &albums, None, 0.0);
+            if albums_open {
+                let albums: Vec<Album> = app.session.catalog.albums().cloned().collect();
+                albums_tree(app, ui, &albums, None, 0.0);
+            }
             ui.add_space(10.0);
             local_section(app, ui);
             // By date
-            let (dr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::hover());
-            ui.painter().text(pos2(dr.left() + 18.0, dr.center().y), Align2::LEFT_CENTER, crate::i18n::tr("By Date"), t.semibold(13.5), t.text_label);
-            for g in app.caches.date_groups(&app.session.catalog).iter() {
+            let (_, dates_open) = sidebar_section_header(app, ui, "byDate", "By Date");
+            let groups = if dates_open { app.caches.date_groups(&app.session.catalog) } else { Default::default() };
+            for g in groups.iter() {
                 // year → month → day; a click filters by that prefix, the triangle opens a level
-                if date_row(app, ui, &g.year, &g.year, g.count, 0.0) {
+                if date_row(app, ui, &g.year, &crate::i18n::date_group_label(&g.year, true), g.count, 0.0) {
                     for (m, n) in &g.months {
-                        let label = lightcraft_catalog::dates::group_label(m).split(' ').next().unwrap_or(m).to_string();
+                        let label = crate::i18n::date_group_label(m, true);
                         if date_row(app, ui, m, &label, *n, 16.0) {
                             for (d, n) in g.days.iter().filter(|(d, _)| d.starts_with(m.as_str())) {
-                                let label = lightcraft_catalog::dates::group_label(d);
-                                // "Sunday, 20 September 2026" → "Sunday, 20"
-                                let label = label.rsplitn(3, ' ').nth(2).unwrap_or(&label).to_string();
+                                let label = crate::i18n::date_group_label(d, true);
                                 date_row(app, ui, d, &label, *n, 32.0);
                             }
                         }
@@ -192,9 +216,7 @@ fn local_section(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if cfg!(target_arch = "wasm32") {
         return;
     }
-    let t = Tokens::get(ui.ctx());
-    let (lr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::hover());
-    ui.painter().text(pos2(lr.left() + 18.0, lr.center().y), Align2::LEFT_CENTER, crate::i18n::tr("Local"), t.semibold(13.5), t.text_label);
+    let (_, open) = sidebar_section_header(app, ui, "local", "Local");
     let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_default();
     let mut builtin: Vec<(String, String)> = Vec::new();
     if !home.is_empty() {
@@ -212,6 +234,10 @@ fn local_section(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let local = local_places(builtin, &app.ui.local_roots, current.as_deref(), app.ui.local_browse_root.as_deref(), &app.ui.hidden_locations);
     if current.is_some() {
         app.ui.local_browse_root = local.browse_root.clone();
+    }
+    if !open {
+        ui.add_space(10.0);
+        return;
     }
     for (i, (name, path)) in local.places.iter().enumerate() {
         let transient = local.browse_root.as_deref() == Some(path.as_str());
@@ -668,15 +694,14 @@ fn is_within(app: &LightcraftApp, id: lightcraft_catalog::AlbumId, ancestor: lig
 /// filters the grid by the keyword (children included), the triangle opens a level, and the
 /// context menu renames, merges or deletes the keyword across the library.
 fn keywords_section(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
     let tree = app.caches.keyword_tree(&app.session.catalog);
     if tree.is_empty() {
         return;
     }
     ui.add_space(10.0);
-    let (kr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::hover());
-    ui.painter().text(pos2(kr.left() + 18.0, kr.center().y), Align2::LEFT_CENTER, crate::i18n::tr("Keywords"), t.semibold(13.5), t.text_label);
-    keyword_rows(app, ui, &tree, 0.0);
+    if sidebar_section_header(app, ui, "keywords", "Keywords").1 {
+        keyword_rows(app, ui, &tree, 0.0);
+    }
 }
 
 fn keyword_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[KeywordNode], indent: f32) {

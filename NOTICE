@@ -15,6 +15,20 @@ list (author, source, license) is in assets/ATTRIBUTION.md.
 Inter (assets/fonts/Inter-*.ttf) — SIL Open Font License 1.1. See assets/fonts/OFL-Inter.txt.
 Showcase photographs by Ansel Adams, Dorothea Lange and NASA (docs/images/) — public domain. See assets/ATTRIBUTION.md.
 
-BIZ UDMincho: Copyright 2022 The BIZ UDMincho Project Authors
-(https://github.com/googlefonts/morisawa-biz-ud-mincho). SIL Open Font License 1.1;
-see assets/fonts/OFL-BIZUDMincho.txt.
+crates/segment (lightcraft-segment) ports the SAM 3 model code of Hugging Face Transformers
+(https://github.com/huggingface/transformers, src/transformers/models/sam3 and sam3_tracker),
+Copyright The HuggingFace Team and Meta Platforms, Inc., licensed under the Apache License 2.0.
+The port was modified by the LightCraft contributors (2026): translated from Python/PyTorch to
+Rust on candle and restructured; each ported file says so. Because of this, crates/segment is
+licensed under the Apache License 2.0 only (LICENSE-APACHE), not under the MIT option.
+
+The SAM 3 weights are not part of LightCraft and are never distributed with it. A user downloads
+the facebook/sam3 checkpoint only when they choose to (in the app, or by hand), under Meta's SAM
+License (https://github.com/facebookresearch/sam3/blob/main/LICENSE), a separate, non-OSI
+licence. See docs/ai-masks.md.
+
+Builds made with craft-fonts (the optional CRAFT_FONTS_DIR build input; all official releases)
+also embed the fonts listed in https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md
+(the Japanese fonts BIZ UDPGothic, BIZ UDMincho and Shippori Mincho; the web build embeds only BIZ
+UDPGothic Regular), under the SIL Open Font License 1.1. Release packages include each font's
+licence as OFL-<family>.txt.

@@ -615,6 +615,10 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 let yl = luminance_2020(c);
                 let o = tone.apply(yl);
                 let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
+                let k = tone.chroma_scale(o);
+                if k != 1.0 {
+                    d = d.map(|v| o + (v - o) * k);
+                }
                 let mx = d[0].max(d[1]).max(d[2]);
                 if mx > 1.0 {
                     let t = ((mx - 1.0) / (mx - o).max(1e-6)).clamp(0.0, 1.0);

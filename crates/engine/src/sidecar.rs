@@ -99,6 +99,7 @@ pub struct SidecarData {
     pub alt_text: Option<String>,
     pub extended_description: Option<String>,
     pub keywords: Option<Vec<String>>,
+    pub regions: Option<Vec<lightcraft_meta::Region>>,
     /// Capture time (ISO 8601) from `exif:DateTimeOriginal`, `photoshop:DateCreated` or
     /// `xmp:CreateDate` (first found). Used only when the file itself has no capture time.
     pub captured: Option<String>,
@@ -133,6 +134,12 @@ pub fn parse_sidecar(xmp: &str, raw: bool) -> std::result::Result<SidecarData, S
         alt_text: m.alt_text.clone(),
         extended_description: m.extended_description.clone(),
         keywords: (!m.keywords.is_empty()).then(|| m.keywords.clone()),
+        // A sidecar that has `mwg-rs:Regions` at all (even an empty list) was written by an app that
+        // knows about regions, so it's authoritative: its list, empty or not, replaces the catalog's.
+        // One without it (most writers, LightCraft's own included, which keeps another app's
+        // `mwg-rs:Regions` byte for byte but never writes one) says nothing about regions, and the
+        // photo's are kept.
+        regions: d.values.contains_key("mwg-rs:Regions").then(|| m.regions.clone()),
         captured: m.capture_time.map(|d| d.to_iso()),
         ..Default::default()
     };
@@ -201,6 +208,9 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
     }
     if let Some(k) = &sc.keywords {
         m.keywords = k.clone();
+    }
+    if let Some(r) = &sc.regions {
+        m.regions = r.clone();
     }
     let develop = match &sc.develop {
         Some(DevelopPatch::Full(s)) => (**s).clone(),

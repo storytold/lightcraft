@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{Catalog, Photo};
+use crate::{Catalog, Photo, Source};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -62,6 +62,7 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("keywords", "Keywords", Kind::Keywords),
     ("text", "Any Searchable Text", Kind::Text),
     ("fileName", "Filename", Kind::Text),
+    ("filePath", "File Path", Kind::Text),
     ("format", "File Format", Kind::Text),
     ("title", "Title", Kind::Text),
     ("caption", "Caption", Kind::Text),
@@ -304,6 +305,20 @@ impl Rule {
                 text(&all)
             }
             "fileName" => text(&p.file_name),
+            "filePath" => {
+                // `/` and `\` both separate, whatever platform the catalog came from; demo photos have no path
+                let path = match &p.source {
+                    Source::File { path } => path.replace('\\', "/"),
+                    Source::Demo { .. } => String::new(),
+                };
+                let want = want.replace('\\', "/");
+                match op {
+                    // the whole string, spaces included (not word by word like the other text fields)
+                    "contains" => !want.trim().is_empty() && path.to_lowercase().contains(want.trim()),
+                    "notContains" => want.trim().is_empty() || !path.to_lowercase().contains(want.trim()),
+                    _ => text_op(op, &path, &want),
+                }
+            }
             "format" => text(&p.format),
             "title" => text(&m.title),
             "caption" => text(&m.caption),
@@ -445,6 +460,17 @@ mod tests {
         );
         no(json!({"rules": [{"field": "keywords", "op": "isEmpty"}]}));
         yes(json!({"rules": [{"field": "fileName", "op": "startsWith", "value": "img_"}, {"field": "fileName", "op": "endsWith", "value": ".cr2"}]}));
+        // file path: the whole string (spaces included), either separator, case-insensitive
+        let mut fp = photo(3);
+        fp.source = Source::File { path: "D:\\Photos\\Aliah Ira Polanco-Grylls\\2026\\IMG_0042.CR2".into() };
+        let fpm = |v: serde_json::Value| rs(v).matches(&fp, &cat);
+        assert!(fpm(json!({"rules": [{"field": "filePath", "op": "contains", "value": "/Aliah Ira Polanco-Grylls/"}]})));
+        assert!(!fpm(json!({"rules": [{"field": "filePath", "op": "contains", "value": "/Ira Aliah/"}]})));
+        assert!(!fpm(json!({"rules": [{"field": "filePath", "op": "contains", "value": "Polanco Grylls"}]})));
+        assert!(fpm(json!({"rules": [{"field": "filePath", "op": "notContains", "value": "/Other/"}]})));
+        assert!(fpm(json!({"rules": [{"field": "filePath", "op": "startsWith", "value": "d:/photos/"}]})));
+        no(json!({"rules": [{"field": "filePath", "op": "contains", "value": "/Aliah/"}]})); // demo photo has no path
+        yes(json!({"rules": [{"field": "filePath", "op": "isEmpty"}]}));
         yes(json!({"rules": [{"field": "camera", "op": "contains", "value": "x2"}, {"field": "title", "op": "isEmpty"}]}));
         yes(json!({"rules": [{"field": "iso", "op": "between", "value": [800, 3200]}, {"field": "aperture", "op": "lte", "value": "f/4"}]}));
         yes(json!({"rules": [{"field": "megapixels", "op": "gte", "value": 24}]}));

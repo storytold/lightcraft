@@ -324,3 +324,13 @@ fn a_library_open_in_another_process_is_refused() {
     assert_eq!(lines[0]["ok"], true);
     let _ = std::fs::remove_dir_all(&lib);
 }
+
+/// Issue #167: when `--connect ADDR` cannot reach the app, the recovery hint must name the port
+/// ADDR actually names — following the old fixed "7980" left the retry connecting elsewhere.
+#[test]
+fn connect_failure_hint_names_the_attempted_port() {
+    let (ok, _lines, err) = run_cli(&["--connect", "127.0.0.1:18437", "ui.inspect"], None);
+    assert!(!ok);
+    assert!(err.contains("--control 18437"), "the hint must name the port it tried: {err}");
+    assert!(!err.contains("--control 7980"), "{err}");
+}

@@ -16,6 +16,8 @@ pub enum ViewMode {
     Survey,
     /// A reference photo (left, fixed) beside the active photo (right, being edited).
     Reference,
+    /// A card per person named on faces (close-up, name, photo count).
+    People,
 }
 
 /// The right-hand tool/panel shown next to the tool strip.
@@ -201,7 +203,7 @@ pub const MIN_PHOTO_WIDTH: f32 = 360.0;
 #[serde(default, rename_all = "camelCase")]
 pub struct UiState {
     #[serde(default = "crate::i18n::default_language")]
-    pub language: crate::i18n::Language,
+    pub language: crate::i18n::Locale,
     /// The Build Previews run last announced (its identity, finished?).
     #[serde(skip)]
     pub preview_build_seen: Option<(usize, bool)>,
@@ -262,6 +264,11 @@ pub struct UiState {
     pub grid_info: String,
     /// Photo counts next to sources and albums in the left panel.
     pub show_counts: bool,
+    /// Face / pet boxes (read from XMP) over the photo in the loupe.
+    pub face_boxes: bool,
+    /// Left-sidebar sections folded shut by their header (`albums`, `local`, `byDate`,
+    /// `keywords`); the rest are open.
+    pub collapsed_sidebar: Vec<String>,
     /// Local sidebar locations hidden with “Remove from Local” (folders on disk are untouched).
     pub hidden_locations: Vec<String>,
     /// Copies opened in an external editor this session (reloaded when the window is focused
@@ -283,6 +290,17 @@ pub struct UiState {
     /// A mask being renamed in the Masks list: its id and the edited name.
     #[serde(skip)]
     pub renaming_mask: Option<(u32, String)>,
+    /// The Describe field (AI mask from a text prompt) while open: how the selection combines
+    /// (`new` mask, or `add`/`subtract`/`intersect` on the selected one) and the text typed.
+    #[serde(skip)]
+    pub describe: Option<(String, String)>,
+    /// A SAM 3 download was started from the app (to report its end once).
+    #[serde(skip)]
+    pub sam_downloading: bool,
+    /// When to start the zoomed-in detail pass of an AI mask (app time) and which mask: set by
+    /// each click or description, so the pass runs once the clicking stops.
+    #[serde(skip)]
+    pub detail_due: Option<(f64, u32)>,
     /// A mask component being renamed inline: (mask id, component index, name).
     pub renaming_component: Option<(u32, usize, String)>,
     /// Close the window on the next frame (File → Quit).
@@ -502,6 +520,15 @@ pub enum Dialog {
     Settings {
         tab: String,
     },
+    /// Object and Describe masks need the SAM 3 model, which isn't installed: offer to download
+    /// it (size, licence, progress). `then`: the AI mask to start once it is there (`kind`
+    /// object|prompt, `op` new|add|subtract|intersect).
+    SamModel {
+        then: Option<(String, String)>,
+        /// Why the download couldn't start (shown in the dialog).
+        #[serde(default)]
+        error: Option<String>,
+    },
     /// Confirm moving photos to Recently Deleted.
     ConfirmDelete {
         count: usize,
@@ -548,6 +575,8 @@ impl Default for UiState {
             show_filenames: true,
             grid_info: "filename".into(),
             show_counts: true,
+            face_boxes: true,
+            collapsed_sidebar: Vec::new(),
             hidden_locations: Vec::new(),
             dragging_control: None,
             external_edits: Vec::new(),
@@ -556,6 +585,9 @@ impl Default for UiState {
             search: String::new(),
             focus_search: false,
             renaming_mask: None,
+            describe: None,
+            detail_due: None,
+            sam_downloading: false,
             renaming_component: None,
             quit: false,
             dragging_photos: None,
@@ -611,6 +643,16 @@ impl UiState {
                 self.open_sections.clear();
             }
             self.open_sections.push(id.to_string());
+        }
+    }
+    pub fn sidebar_section_collapsed(&self, id: &str) -> bool {
+        self.collapsed_sidebar.iter().any(|s| s == id)
+    }
+    pub fn toggle_sidebar_section(&mut self, id: &str) {
+        if self.sidebar_section_collapsed(id) {
+            self.collapsed_sidebar.retain(|s| s != id);
+        } else {
+            self.collapsed_sidebar.push(id.to_string());
         }
     }
     pub fn flyout_open(&self, id: &str) -> bool {

@@ -48,7 +48,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 pub fn header(ui: &mut egui::Ui, title: &str) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());
-    ui.painter().text(pos2(r.left() + 24.0, r.center().y + 2.0), Align2::LEFT_CENTER, title, t.semibold(15.0), t.text);
+    ui.painter().text(pos2(r.left() + 24.0, r.center().y + 2.0), Align2::LEFT_CENTER, crate::i18n::tr(title), t.semibold(15.0), t.text);
 }
 
 pub fn label_row(ui: &mut egui::Ui, label: &str, value: &str) {
@@ -69,7 +69,7 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.horizontal(|ui| {
             ui.label(crate::i18n::tr("Aspect Ratio"));
             let cur = d.crop.aspect.map(|(w, h)| format!("{} × {}", w as f64 / 100.0, h as f64 / 100.0)).unwrap_or_else(|| "Free".into());
-            let r = ui.add(egui::Button::new(cur).frame(false));
+            let r = ui.add(egui::Button::new(crate::i18n::tr(&cur)).frame(false));
             register(ui.ctx(), "button:cropAspect", r.rect);
             egui::Popup::menu(&r).show(|ui| {
                 for (label, a) in [
@@ -84,7 +84,7 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     ("16 × 9", "16x9"),
                     ("16 × 10", "16x10"),
                 ] {
-                    if ui.button(label).clicked() {
+                    if ui.button(crate::i18n::tr(label)).clicked() {
                         let _ = app.run("crop.aspect", json!({"aspect": a}));
                     }
                 }
@@ -494,7 +494,7 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             if crate::widgets::icon_button(ui, "editCaptureTime", Icon::Pencil, vec2(20.0, 20.0), false, true, "Edit Capture Time…").clicked() {
                 let _ = app.run("dialog.captureTime", json!({}));
             }
-            let cap = p.captured.as_deref().map(lightcraft_catalog::dates::display_time).unwrap_or_else(|| "—".into());
+            let cap = p.captured.as_deref().map(crate::i18n::display_time).unwrap_or_else(|| "—".into());
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.add(egui::Label::new(egui::RichText::new(cap).size(12.5).color(t.text)).truncate());
             });
@@ -651,7 +651,7 @@ fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcr
 
 fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str, value: &str, lines: usize) {
     let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(label).size(11.5).color(t.text_dim));
+    ui.label(egui::RichText::new(crate::i18n::tr(label)).size(11.5).color(t.text_dim));
     let id = egui::Id::new(("info-field", key));
     let mut text: String = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| value.to_string());
     let edit = if lines > 1 { egui::TextEdit::multiline(&mut text).desired_rows(lines) } else { egui::TextEdit::singleline(&mut text) };
@@ -830,7 +830,8 @@ fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let mut auto: bool = ui.data(|d| d.get_temp(tab_id)).unwrap_or(false);
         let named_n = p.versions.iter().filter(|v| !v.auto).count();
         let items = [("Named", "named"), ("Auto", "auto")];
-        let labels = [crate::i18n::tr_format!("Named ({named_n})", named_n = named_n), format!("Auto ({})", p.versions.len() - named_n)];
+        let labels =
+            [crate::i18n::tr_format!("Named ({named_n})", named_n = named_n), crate::i18n::tr_format!("Auto ({})", p.versions.len() - named_n)];
         let items: Vec<(&str, &str)> = items.iter().zip(&labels).map(|((_, k), l)| (l.as_str(), *k)).collect();
         if let Some(i) = crate::widgets::segmented(ui, "versionsTab", &items, Some(auto as usize), 2) {
             auto = i == 1;
@@ -840,7 +841,7 @@ fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let shown: Vec<(usize, &lightcraft_catalog::Version)> = p.versions.iter().enumerate().filter(|(_, v)| v.auto == auto).collect();
         if shown.is_empty() {
             let msg = if auto { "No automatic versions." } else { "No versions yet. Create one to keep this look." };
-            ui.label(egui::RichText::new(msg).color(t.text_dim));
+            ui.label(egui::RichText::new(crate::i18n::tr(msg)).color(t.text_dim));
         }
         // newest first
         for (i, v) in shown.into_iter().rev() {
@@ -907,6 +908,10 @@ fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
 
 /// "Sep 30, 2026, 12:00 PM" from an ISO time.
 fn short_time(iso: &str) -> String {
+    // Other languages use their own date patterns (`i18n::display_time`).
+    if crate::i18n::language() != crate::i18n::Locale::En {
+        return crate::i18n::display_time(iso);
+    }
     let long = lightcraft_catalog::dates::display_time(iso);
     // "September 30, 2026 at 12:00:00 PM" → month abbreviated, seconds dropped
     let (date, time) = long.split_once(" at ").map_or((long.as_str(), None), |(d, t)| (d, Some(t)));
@@ -935,7 +940,13 @@ fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 ui.painter().rect_filled(r, 3.0, t.hover);
             }
             paint(ui.painter(), Rect::from_min_size(r.min + vec2(0.0, 4.0), vec2(16.0, 16.0)), Icon::Clock, t.icon);
-            ui.painter().text(pos2(r.left() + 24.0, r.center().y), Align2::LEFT_CENTER, &h.label, t.font(12.5), t.text_label);
+            ui.painter().text(
+                pos2(r.left() + 24.0, r.center().y),
+                Align2::LEFT_CENTER,
+                crate::i18n::history_label(&h.label, &app.session.presets),
+                t.font(12.5),
+                t.text_label,
+            );
             if resp.clicked() {
                 let _ = app.run("history.restore", json!({"index": i}));
             }

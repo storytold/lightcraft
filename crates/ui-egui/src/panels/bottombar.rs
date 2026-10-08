@@ -26,6 +26,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         ("detail", Icon::Single, ViewMode::Detail, "Detail (D)"),
                         ("compare", Icon::Compare, ViewMode::Compare, "Compare (Shift+C)"),
                         ("survey", Icon::Survey, ViewMode::Survey, "Survey (N)"),
+                        ("people", Icon::Subject, ViewMode::People, "People"),
                     ] {
                         if icon_button(ui, id, icon, vec2(32.0, 32.0), app.ui.view == mode, true, tip).clicked() {
                             let _ = app.run(&format!("view.{id}"), json!({}));
@@ -165,6 +166,11 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> f32 {
         {
             let _ = app.run("view.beforeAfter", json!({}));
         }
+        if app.ui.view == ViewMode::Detail
+            && icon_button(&mut child, "faceBoxes", Icon::FaceBox, vec2(30.0, 30.0), app.ui.face_boxes, true, "Face boxes").clicked()
+        {
+            let _ = app.run("view.faceBoxes", json!({}));
+        }
         if icon_button(&mut child, "filmstrip", Icon::Filmstrip, vec2(30.0, 30.0), app.ui.filmstrip, true, "Filmstrip (/)").clicked() {
             let _ = app.run("view.filmstrip", json!({}));
         }
@@ -236,18 +242,25 @@ fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ("File Name", FileName, "fileName"),
         ("Rating", Rating, "rating"),
         ("File Size", FileSize, "fileSize"),
+        ("Random", Random, "random"),
     ] {
         if ui.selectable_label(cur.key == key, crate::i18n::tr(label)).clicked() {
             let _ = app.run("library.sort", json!({"key": k}));
         }
     }
+    if cur.key == Random && ui.button(crate::i18n::tr("Reshuffle")).clicked() {
+        let _ = app.run("library.shuffle", json!({}));
+    }
     ui.separator();
-    if ui.selectable_label(cur.ascending, crate::i18n::tr("Ascending")).clicked() {
-        let _ = app.run("library.sort", json!({"ascending": true}));
-    }
-    if ui.selectable_label(!cur.ascending, crate::i18n::tr("Descending")).clicked() {
-        let _ = app.run("library.sort", json!({"ascending": false}));
-    }
+    // a shuffle has no direction worth choosing
+    ui.add_enabled_ui(cur.key != Random, |ui| {
+        if ui.selectable_label(cur.key != Random && cur.ascending, crate::i18n::tr("Ascending")).clicked() {
+            let _ = app.run("library.sort", json!({"ascending": true}));
+        }
+        if ui.selectable_label(cur.key != Random && !cur.ascending, crate::i18n::tr("Descending")).clicked() {
+            let _ = app.run("library.sort", json!({"ascending": false}));
+        }
+    });
     ui.separator();
     ui.label(egui::RichText::new(crate::i18n::tr("Group by date")).weak());
     for (label, g, k) in [

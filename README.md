@@ -200,7 +200,7 @@ A library that stays out of your way: **All Photos**, **Recently Added**, **Pick
 **Folders**, and **Recently Deleted**. Rate with <kbd>0</kbd>–<kbd>5</kbd>, flag with <kbd>P</kbd> / <kbd>X</kbd> /
 <kbd>U</kbd>, colour-label with <kbd>6</kbd>–<kbd>9</kbd>. Search understands fields:
 `rating:>3 flag:pick iso:>800 camera:x2 date:2026-04 keyword:mountains`. Every view sorts by capture date,
-import date, edit date, name, rating or size. The justified **Photo Grid** and **Square Grid** views are virtualized,
+import date, edit date, name, rating, size or at random (a stable shuffle; View → Sort → Reshuffle for a new one). The justified **Photo Grid** and **Square Grid** views are virtualized,
 so they stay smooth whether you have forty photos or forty thousand.
 
 <table>
@@ -233,11 +233,11 @@ lightcraft --control 7980 ~/Pictures/trip
 {"method": "ui.screenshot",    "params": {"path": "after.png"}}
 ```
 
-- **91 engine commands** and **48 UI commands.** List them all with `engine.commands`; read every slider's range,
-  default and current value with `develop.controls`.
-- **MCP server.** `lightcraft-cli mcp` gives Claude (or any MCP client) ~100 tools: import, query, develop, mask,
-  render (returned as an image), export. It runs headless, or attached to the running app with screenshots, clicks
-  and gestures. See [docs/mcp.md](docs/mcp.md).
+- **Command registry.** `engine.commands` lists the available commands; `develop.controls` lists every slider's
+  range, default and current value.
+- **MCP server.** `lightcraft-cli mcp` exposes the command registry to Claude (or any MCP client), alongside
+  helpers for import, query, develop, mask, render (returned as an image) and export. It runs headless, or attached
+  to the running app with screenshots, clicks and gestures. See [docs/mcp.md](docs/mcp.md).
 
   ```sh
   cargo build --release -p lightcraft-cli
@@ -334,6 +334,19 @@ cargo run --release -p lightcraft-cli -- render photo.jpg -o out.jpg --set light
 cargo xtask ci                                          # fmt, clippy, tests, layering, wasm checks
 ```
 
+**Chinese and Japanese text** need the shared font repo, an optional build input (official releases always include it):
+
+```sh
+git clone https://github.com/storytold/craft-fonts ../craft-fonts
+CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p lightcraft
+```
+
+Without it LightCraft builds and runs the same, but Chinese and Japanese text have no glyphs. Fonts are never committed to this
+repo; see [craftrules `standards/fonts.md`](https://github.com/storytold/craftrules/blob/main/standards/fonts.md).
+
+**Interface language:** **Edit → Language** (English, 简体中文, 繁體中文（台灣）, 日本語) or **Settings → General →
+Language**; the choice applies immediately and persists. See [docs/localization.md](docs/localization.md).
+
 The web build needs the `wasm32-unknown-unknown` target and the matching `wasm-bindgen` CLI
 (`cargo xtask web` prints the exact install command); see [docs/web.md](docs/web.md).
 
@@ -356,7 +369,8 @@ Humans and agents follow the same rules, so read [AGENTS.md](AGENTS.md) first. T
   work from public specs and black-box observation.
 - **No Adobe assets, ever:** no icons, screenshots, presets, profiles, LUTs or fonts from Adobe products. Every
   image, icon and font in the repo is original, public domain, Creative Commons, OFL or permissively licensed, and has
-  an entry in [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md) added in the same commit.
+  an entry in [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md) added in the same commit. New fonts go to
+  [storytold/craft-fonts](https://github.com/storytold/craft-fonts), not here.
 - **Pure Rust**, enforced crate layering, everything is a command, and `cargo xtask ci` green before every commit
   (one task id per commit).
 - **Never crash.** Non-test code returns errors instead of panicking: no `unwrap()`, `expect()`, `panic!` or
@@ -379,7 +393,7 @@ stand on its own.
 | <img src="https://raw.githubusercontent.com/storytold/vectorcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.vectorcraft.png" alt="" width="32" height="32"> | **VectorCraft** | Vector illustration | [GitHub](https://github.com/storytold/vectorcraft) | [Website](https://getartcraft.com/apps/vectorcraft) |
 | <img src="https://raw.githubusercontent.com/storytold/filmcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.filmcraft.png" alt="" width="32" height="32"> | **FilmCraft** | Video editing, color and sound | [GitHub](https://github.com/storytold/filmcraft) | [Website](https://getartcraft.com/apps/filmcraft) |
 | <img src="https://raw.githubusercontent.com/storytold/lightcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.lightcraft.png" alt="" width="32" height="32"> | **LightCraft** | **Photo library and raw development · you are here** | [GitHub](https://github.com/storytold/lightcraft) | [Website](https://getartcraft.com/apps/lightcraft) |
-| <img src="https://raw.githubusercontent.com/storytold/printcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.printcraft.png" alt="" width="32" height="32"> | **PrintCraft** | Reading, organizing and protecting PDFs | [GitHub](https://github.com/storytold/printcraft) | [Website](https://getartcraft.com/apps/printcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/pdfcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.pdfcraft.png" alt="" width="32" height="32"> | **PdfCraft** | Reading, organizing and protecting PDFs | [GitHub](https://github.com/storytold/pdfcraft) | [Website](https://getartcraft.com/apps/pdfcraft) |
 | <img src="https://raw.githubusercontent.com/storytold/effectcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.effectcraft.png" alt="" width="32" height="32"> | **EffectCraft** | Motion graphics and visual effects | [GitHub](https://github.com/storytold/effectcraft) | [Website](https://getartcraft.com/apps/effectcraft) |
 | <img src="https://raw.githubusercontent.com/storytold/designcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.designcraft.png" alt="" width="32" height="32"> | **DesignCraft** | Page layout and publishing | [GitHub](https://github.com/storytold/designcraft) | [Website](https://getartcraft.com/apps/designcraft) |
 
@@ -420,7 +434,9 @@ with its author, source and license in [assets/ATTRIBUTION.md](assets/ATTRIBUTIO
 Showcase photographs are public-domain works, used via Wikimedia Commons: Ansel Adams, *The Tetons and the Snake River*
 (1942, U.S. National Archives); Dorothea Lange, *Migrant Mother* (1936, Library of Congress); Bill Anders / NASA,
 *Earthrise* (1968); NASA, *The Blue Marble* (1972). The demo library is procedurally generated by LightCraft. UI font:
-Inter (SIL OFL 1.1). All icons are original.
+Inter (SIL OFL 1.1). Builds made with [craft-fonts](https://github.com/storytold/craft-fonts) (all official releases)
+also embed its Chinese and Japanese fonts (Noto Sans CJK SC, BIZ UDPGothic, BIZ UDMincho, Shippori Mincho; SIL OFL 1.1), listed in its
+[ATTRIBUTION.md](https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md). All icons are original.
 
 The ArtCraft name, wordmark and logos in [`docs/brand/`](docs/brand/) are trademarks of the
 ArtCraft Team and are not covered by this license. They may be used only unmodified, and only as
@@ -433,3 +449,7 @@ Forks and modified versions must remove them.
   <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>
   <sub>Made by the <a href="https://getartcraft.com/">ArtCraft</a> team and community.</sub>
 </p>
+
+## Star history
+
+[![Star History Chart](https://api.star-history.com/svg?repos=storytold/lightcraft&type=Date&legend=top-left)](https://www.star-history.com/?repos=storytold%2Flightcraft&type=date&legend=top-left)

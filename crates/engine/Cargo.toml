@@ -30,6 +30,11 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
 ab_glyph = { workspace = true }
+lightcraft-segment = { workspace = true, optional = true }
+
+[features]
+# AI masks with SAM 3 (Object / Describe). Off for the web and CLI builds.
+sam = ["dep:lightcraft-segment"]
 
 [dev-dependencies]
 libc = { workspace = true }

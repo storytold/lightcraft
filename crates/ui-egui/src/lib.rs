@@ -1,7 +1,7 @@
 //! LightCraft's egui frontend: a Lightroom-style UI over `lightcraft-engine`.
 //!
 //! The UI is thin: every action goes through [`LightcraftApp::run`], which handles UI commands
-//! (views, panels, zoom — see [`menus::UI_COMMANDS`]) and forwards everything else to the engine.
+//! (views, panels, zoom — see [`menus::ui_commands`]) and forwards everything else to the engine.
 //! The same entry point serves menus, shortcuts, buttons and the control channel ([`control`]).
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -41,6 +41,8 @@ mod tests_panels;
 mod tests_quit_unsaved;
 #[cfg(test)]
 mod tests_scroll;
+#[cfg(test)]
+mod tests_switch_library;
 #[cfg(test)]
 mod tests_unsaved;
 
@@ -157,6 +159,9 @@ pub struct LightcraftApp {
     /// Clear `synthetic_mods` on the next frame.
     synthetic_mods_release: bool,
     styled: bool,
+    /// The language the installed fonts were built for: the CJK fallback order follows the UI
+    /// language's script, so switching language reinstalls them.
+    font_language: i18n::Locale,
     fonts_ready: bool,
     last_time: f64,
     /// Rect of the photo canvas and the displayed image (screen points) from the last frame.
@@ -200,7 +205,9 @@ pub struct LightcraftApp {
 }
 
 impl LightcraftApp {
-    pub fn new(session: Session, services: Services) -> Self {
+    pub fn new(mut session: Session, services: Services) -> Self {
+        // AI mask requests run on the model's worker; frames apply their results (never wait)
+        session.segmenter.background = true;
         Self {
             session,
             ui: UiState::default(),
@@ -223,6 +230,7 @@ impl LightcraftApp {
             synthetic_mods: egui::Modifiers::NONE,
             synthetic_mods_release: false,
             styled: false,
+            font_language: i18n::Locale::En,
             fonts_ready: false,
             last_time: 0.0,
             canvas_rect: None,
@@ -260,6 +268,7 @@ impl LightcraftApp {
         }
         let r = self.session.execute(id, &params).map_err(|e| e.to_string());
         if let Err(e) = &r {
+            log::warn!("{id}: {e}");
             self.ui.status = e.clone();
         }
         r
@@ -344,8 +353,91 @@ impl LightcraftApp {
     }
 
     pub fn toast(&mut self, ctx: &egui::Context, text: impl Into<String>) {
+        self.toast_for(ctx, text, 1.4);
+    }
+
+    /// A toast that stays `secs` seconds (messages that say where to look or what to do next).
+    pub fn toast_for(&mut self, ctx: &egui::Context, text: impl Into<String>, secs: f64) {
         let t = ctx.input(|i| i.time);
-        self.ui.toast = Some((text.into(), t + 1.4));
+        self.ui.toast = Some((text.into(), t + secs));
+    }
+
+    /// AI masks: apply finished background requests (clicks, descriptions, detail passes) and
+    /// show their errors; start a zoomed-in detail pass once the clicking stops
+    /// (`ui.detail_due`); watch the model download. Never waits for the model.
+    fn ai_mask_detail(&mut self, ctx: &egui::Context) {
+        let polled = self.session.segment_poll();
+        let now = ctx.input(|i| i.time);
+        if polled.changed {
+            ctx.request_repaint();
+        }
+        if let Some(mask) = polled.refine {
+            self.ui.detail_due = Some((now + 0.3, mask));
+        }
+        if let Some(e) = polled.messages.into_iter().last() {
+            self.ai_error(ctx, e, None);
+        }
+        let seg = &self.session.segmenter;
+        if seg.busy() || seg.pending_clicks().is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+        let download = seg.download_status();
+        if download.running {
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
+        // a download finishing while its dialog is closed: say so once
+        if self.ui.sam_downloading && !download.running {
+            self.ui.sam_downloading = false;
+            let open = matches!(self.ui.dialog, Some(state::Dialog::SamModel { .. }));
+            match (&download.error, open) {
+                (_, true) => {}
+                (Some(e), false) if e.contains("cancelled") => {
+                    self.toast(ctx, crate::i18n::tr("SAM 3 download stopped: it resumes where it left off next time."))
+                }
+                (Some(e), false) => self.toast_error(ctx, format!("The SAM 3 download failed: {e}")),
+                (None, false) if download.finished => {
+                    self.toast_error(ctx, crate::i18n::tr("The SAM 3 model is installed: Object and Describe masks are ready."))
+                }
+                (None, false) => {}
+            }
+        }
+        if let Some((due, mask)) = self.ui.detail_due {
+            if now >= due && !self.session.segmenter.busy() && !self.session.segmenter.detail_busy() {
+                self.ui.detail_due = None;
+                if let Err(e) = self.run("mask.refineDetail", serde_json::json!({"id": mask})) {
+                    log::warn!("detail pass: {e}");
+                }
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(150));
+            }
+        }
+        if self.session.segmenter.detail_busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
+    }
+
+    /// An AI mask error: when the model isn't installed, the dialog that offers to download it
+    /// (`then`: the AI mask to start afterwards); otherwise a toast.
+    pub fn ai_error(&mut self, ctx: &egui::Context, e: impl Into<String>, then: Option<(&str, &str)>) {
+        let e = e.into();
+        if lightcraft_engine::segment::Segmenter::AVAILABLE && e.starts_with(lightcraft_engine::segment::NOT_INSTALLED) {
+            self.offer_sam_download(then);
+        } else {
+            self.toast_error(ctx, e);
+        }
+    }
+
+    /// Open the dialog offering the SAM 3 download (never downloads by itself).
+    pub fn offer_sam_download(&mut self, then: Option<(&str, &str)>) {
+        if self.ui.dialog.is_none() || matches!(self.ui.dialog, Some(state::Dialog::SamModel { .. })) {
+            self.ui.dialog = Some(state::Dialog::SamModel { then: then.map(|(k, o)| (k.to_string(), o.to_string())), error: None });
+        }
+    }
+
+    /// A toast for an error the user has to read and act on (stays 6 s).
+    pub fn toast_error(&mut self, ctx: &egui::Context, text: impl Into<String>) {
+        let t = ctx.input(|i| i.time);
+        self.ui.toast = Some((text.into(), t + 6.0));
     }
 
     fn drain_control(&mut self, ctx: &egui::Context) {
@@ -497,6 +589,12 @@ impl LightcraftApp {
             let repaint = ctx.clone();
             self.session.media.availability.run_in_background(std::sync::Arc::new(move || repaint.request_repaint()));
             self.styled = true;
+            self.font_language = self.ui.language;
+        } else if self.font_language != self.ui.language {
+            // Shared Han characters take the active language's forms (Japanese faces for 日本語,
+            // the Simplified Chinese face for 简体中文): rebuild the fallback order.
+            theme::install_fonts(ctx);
+            self.font_language = self.ui.language;
         } else {
             self.fonts_ready = true;
         }
@@ -673,6 +771,7 @@ impl LightcraftApp {
         }
         // panels set it again this frame while the pointer rests on a preset or profile
         self.hover_preview = None;
+        self.ai_mask_detail(&ctx);
         if self.ui.fullscreen {
             // full-screen preview: the photo alone on black
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(egui::Color32::BLACK)).show(ui, |ui| panels::detail::show(self, ui));
@@ -713,6 +812,7 @@ impl LightcraftApp {
             state::ViewMode::Compare => panels::compare::show_compare(self, ui),
             state::ViewMode::Survey => panels::compare::show_survey(self, ui),
             state::ViewMode::Reference => panels::compare::show_reference(self, ui),
+            state::ViewMode::People => panels::people::show(self, ui),
         });
         panels::second::show(self, &ctx);
         panels::notices::show(self, &ctx);
@@ -789,6 +889,7 @@ mod drop_tests {
 #[derive(Default)]
 pub struct Caches {
     keyword_tree: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::KeywordNode>>)>,
+    people: Option<(u64, lightcraft_catalog::Filter, std::sync::Arc<Vec<lightcraft_catalog::Person>>)>,
     suggestions: Option<(u64, std::sync::Arc<Vec<String>>)>,
     counts: Option<(u64, LibraryCounts)>,
     date_groups: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::DateGroup>>)>,
@@ -831,6 +932,23 @@ impl Caches {
             _ => {
                 let t = std::sync::Arc::new(cat.keyword_tree());
                 self.keyword_tree = Some((cat.revision, t.clone()));
+                t
+            }
+        }
+    }
+    /// The people named on faces among the photos the filter lets through (its own `person` aside),
+    /// with photo counts.
+    pub fn people(
+        &mut self,
+        cat: &lightcraft_catalog::Catalog,
+        filter: &lightcraft_catalog::Filter,
+    ) -> std::sync::Arc<Vec<lightcraft_catalog::Person>> {
+        let key = lightcraft_catalog::Filter { person: None, ..filter.clone() };
+        match &self.people {
+            Some((r, f, t)) if *r == cat.revision && *f == key => t.clone(),
+            _ => {
+                let t = std::sync::Arc::new(cat.people_in(&key));
+                self.people = Some((cat.revision, key, t.clone()));
                 t
             }
         }

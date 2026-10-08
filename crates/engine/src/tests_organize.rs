@@ -201,6 +201,25 @@ fn album_source_reports_in_library_state_and_persists_the_view() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A library opens unfiltered: the source and sort come back, a filter from the last session does not
+/// (it would hide photos behind a small badge).
+#[test]
+fn filters_are_not_restored_when_a_library_reopens() {
+    let dir = temp_dir("filter-not-restored");
+    let mut s = open(&dir);
+    let all = s.visible_cloned().len();
+    s.execute("library.sort", &json!({"key": "fileName"})).unwrap();
+    s.execute("library.filter", &json!({"rating": 5, "date": "2026-01-16", "person": "Jane Doe"})).unwrap();
+    assert!(s.visible_cloned().len() < all);
+    s.close_library().unwrap();
+    drop(s);
+    let mut s2 = open(&dir);
+    assert_eq!(s2.filter, lightcraft_catalog::Filter::default());
+    assert_eq!(s2.visible_cloned().len(), all);
+    assert_eq!(serde_json::to_value(s2.sort).unwrap()["key"], "fileName", "the rest of the view is restored");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn filter_chips_clear_one_filter_and_total_ignores_the_filter() {
     let dir = temp_dir("chips");
@@ -222,4 +241,18 @@ fn filter_chips_clear_one_filter_and_total_ignores_the_filter() {
         s.execute("library.filter", &c.clear).unwrap();
     }
     assert_eq!(s.filter, Default::default());
+}
+
+/// A shuffle is part of the saved view: the same seed (and so the same grid) is back on the next launch.
+#[test]
+fn random_sort_persists_with_the_view() {
+    let dir = temp_dir("random-view");
+    let mut s = open(&dir);
+    s.execute("library.sort", &json!({"key": "random", "seed": 123_456_789})).unwrap();
+    s.close_library().unwrap();
+    drop(s);
+    let s2 = open(&dir);
+    assert_eq!(s2.sort.key, lightcraft_catalog::SortKey::Random);
+    assert_eq!(s2.sort.seed, 123_456_789);
+    let _ = std::fs::remove_dir_all(&dir);
 }

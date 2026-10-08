@@ -6,7 +6,7 @@
 //! AI shapes (Sky, Subject, Background, People) use the segmentation [`Mattes`] the source carries
 //! (DNG semantic masks, e.g. iPhone ProRAW's) when it has a matching one, else a heuristic.
 
-use lightcraft_develop::{BrushStroke, LocalAdjustments, Mask, MaskOp, MaskShape};
+use lightcraft_develop::{BrushStroke, LocalAdjustments, Mask, MaskOp, MaskShape, SegMask};
 use lightcraft_geom::{Orientation, Point};
 use lightcraft_raster::{Image, Plane, Rgb32f};
 
@@ -243,6 +243,19 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
             }
             smooth_plane(&mut out, 0.01 * frame_px(frame, w));
         }
+        MaskShape::Object { seg, detail, edge, .. } | MaskShape::Prompt { seg, detail, edge, .. } if seg.is_some() || !detail.is_empty() => {
+            // Edge: below 0 a steeper transition (up to 8× the logits), above 0 feathered (up to
+            // 2 % of the long edge, so previews and exports match)
+            let e = (*edge / 100.0).clamp(-1.0, 1.0) as f32;
+            let gain = if e < 0.0 { 1.0 - 7.0 * e } else { 1.0 };
+            sample_seg(seg.as_ref(), detail, gain, frame, w, h, &mut out);
+            if e > 0.0 {
+                smooth_plane(&mut out, e * 0.02 * frame_px(frame, w));
+            }
+        }
+        // not computed yet (no clicks, or a build without the model): nothing selected
+        MaskShape::Object { hint, .. } if hint.is_empty() => {}
+        MaskShape::Prompt { .. } => {}
         MaskShape::Subject | MaskShape::Object { .. } | MaskShape::People { .. } => {
             // Saliency heuristic: centre-weighted local contrast (replaced by the segmenter in M12).
             let m = frame.out_to_norm(w, h);
@@ -264,6 +277,61 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
         MaskShape::DepthRange { .. } | MaskShape::Landscape { .. } => {}
     }
     out
+}
+
+/// A decoded [`SegMask`]: its logits and the normalized rectangle they cover.
+struct SegGrid {
+    logits: Vec<f32>,
+    side: usize,
+    r: [f64; 4],
+}
+
+impl SegGrid {
+    fn new(seg: &SegMask) -> Option<SegGrid> {
+        Some(SegGrid { logits: seg.logits()?, side: seg.side as usize, r: seg.bounds()? })
+    }
+
+    fn contains(&self, n: Point) -> bool {
+        n.x >= self.r[0] && n.x <= self.r[2] && n.y >= self.r[1] && n.y <= self.r[3]
+    }
+
+    /// The bilinearly sampled logit at normalized image point `n` (cell centres at
+    /// `(i + 0.5) / side` of the rectangle).
+    fn logit(&self, n: Point) -> f32 {
+        let side = self.side;
+        let at = |x: usize, y: usize| self.logits.get(y.min(side - 1) * side + x.min(side - 1)).copied().unwrap_or(-16.0);
+        let u = (n.x - self.r[0]) / (self.r[2] - self.r[0]);
+        let v = (n.y - self.r[1]) / (self.r[3] - self.r[1]);
+        let (fx, fy) = ((u * side as f64 - 0.5) as f32, (v * side as f64 - 0.5) as f32);
+        let (fx, fy) = (fx.clamp(0.0, (side - 1) as f32), fy.clamp(0.0, (side - 1) as f32));
+        let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
+        let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+        let top = at(x0, y0) * (1.0 - tx) + at(x0 + 1, y0) * tx;
+        let bot = at(x0, y0 + 1) * (1.0 - tx) + at(x0 + 1, y0 + 1) * tx;
+        top * (1.0 - ty) + bot * ty
+    }
+}
+
+/// Stored model segmentations at each output pixel: the zoomed-in `detail` passes inside
+/// their rectangles (the highest of them where they overlap), the whole-photo `seg`
+/// elsewhere; the logit (times `gain`: > 1 is a harder edge) through a sigmoid. Damaged
+/// data selects nothing.
+fn sample_seg(seg: Option<&SegMask>, detail: &[SegMask], gain: f32, frame: &Frame, w: usize, h: usize, out: &mut Plane) {
+    let coarse = seg.and_then(SegGrid::new);
+    // (capped: a hostile document can hold many)
+    let patches: Vec<SegGrid> = detail.iter().take(lightcraft_develop::segmask::MAX_DETAIL).filter_map(SegGrid::new).collect();
+    if coarse.is_none() && patches.is_empty() {
+        return;
+    }
+    let m = frame.out_to_norm(w, h);
+    for_rows(&mut out.data, w, |y, row| {
+        for (x, v) in row.iter_mut().enumerate() {
+            let n = m.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+            let fine = patches.iter().filter(|p| p.contains(n)).map(|p| p.logit(n)).reduce(f32::max);
+            let l = fine.or_else(|| coarse.as_ref().map(|c| c.logit(n))).unwrap_or(-16.0);
+            *v = 1.0 / (1.0 + (-l * gain).exp());
+        }
+    });
 }
 
 fn frame_px(frame: &Frame, w: usize) -> f32 {
@@ -511,6 +579,93 @@ mod tests {
         let a = shape_alpha(&MaskShape::Linear { start: Point::new(0.0, 0.0), end: Point::new(1.0, 0.0) }, &f, 100, 50, &img, &l, 0.0, None);
         assert!(a.get(1, 25) > 0.99 && a.get(98, 25) < 0.01);
         assert!((a.get(50, 25) - 0.5).abs() < 0.05);
+    }
+
+    #[test]
+    fn stored_segmentations_render_at_any_size_and_follow_the_crop() {
+        // the left half selected, on a 16² logit grid
+        let side = 16;
+        let logits: Vec<f32> = (0..side * side).map(|i| if i % side < side / 2 { 12.0 } else { -12.0 }).collect();
+        let seg = SegMask::from_logits(side, &logits);
+        for shape in [
+            MaskShape::Object { hint: vec![Point::new(0.25, 0.5)], exclude: vec![], seg: Some(seg.clone()), detail: vec![], edge: 0.0 },
+            MaskShape::Prompt { text: "left".into(), seg: Some(seg.clone()), detail: vec![], edge: 0.0 },
+        ] {
+            for (w, h) in [(40, 20), (400, 200)] {
+                let a = shape_alpha(&shape, &frame(w, h), w, h, &Rgb32f::new(w, h), &Plane::new(w, h), 0.0, None);
+                assert!(a.get(1, h / 2) > 0.99 && a.get(w - 2, h / 2) < 0.01, "{w}×{h}");
+                if w >= 400 {
+                    let soft = (0..w).filter(|x| (0.05..0.95).contains(&a.get(*x, h / 2))).count();
+                    assert!((2..30).contains(&soft), "an anti-aliased edge, not a ramp: {soft} px");
+                }
+            }
+        }
+        // cropped to the right half: nothing left selected
+        let mut d = DevelopSettings::default();
+        d.crop.geometry.rect = lightcraft_geom::Rect::from_center(Point::new(0.75, 0.5), 0.5, 1.0);
+        let f = Frame::new(40, 20, &d, true);
+        let shape = MaskShape::Prompt { text: "left".into(), seg: Some(seg), detail: vec![], edge: 0.0 };
+        let a = shape_alpha(&shape, &f, 20, 20, &Rgb32f::new(20, 20), &Plane::new(20, 20), 0.0, None);
+        assert!(a.data.iter().all(|v| *v < 0.05));
+    }
+
+    #[test]
+    fn detail_patches_replace_the_coarse_mask_inside_their_rectangle() {
+        // coarse: nothing; a patch over the right half selects its own left half (x 0.5..0.75)
+        let coarse = SegMask::from_logits(4, &[-12.0; 16]);
+        let side = 16;
+        let l: Vec<f32> = (0..side * side).map(|i| if i % side < side / 2 { 12.0 } else { -12.0 }).collect();
+        let patch = SegMask::from_logits_in(side, &l, [0.5, 0.0, 1.0, 1.0]);
+        let shape = MaskShape::Object { hint: vec![Point::new(0.6, 0.5)], exclude: vec![], seg: Some(coarse), detail: vec![patch], edge: 0.0 };
+        let (w, h) = (200, 100);
+        let a = shape_alpha(&shape, &frame(w, h), w, h, &Rgb32f::new(w, h), &Plane::new(w, h), 0.0, None);
+        assert!(a.get(20, 50) < 0.01, "outside the patch: the coarse mask");
+        assert!(a.get(120, 50) > 0.99, "inside the patch, its selected half");
+        assert!(a.get(190, 50) < 0.01, "inside the patch, its unselected half");
+    }
+
+    #[test]
+    fn a_hostile_number_of_detail_patches_is_capped() {
+        // built in memory (a deserialized document is capped already): only the first
+        // MAX_DETAIL are decoded and sampled, so this needs 4 × 4 MB, not 20 000 × 4 MB
+        let side = 1024;
+        let l: Vec<f32> = vec![12.0; side * side];
+        let patch = SegMask::from_logits_in(side, &l, [0.0, 0.0, 0.5, 1.0]);
+        let shape = MaskShape::Object { hint: vec![Point::new(0.2, 0.5)], exclude: vec![], seg: None, detail: vec![patch; 20_000], edge: 0.0 };
+        let (w, h) = (64, 32);
+        let t = std::time::Instant::now();
+        let a = shape_alpha(&shape, &frame(w, h), w, h, &Rgb32f::new(w, h), &Plane::new(w, h), 0.0, None);
+        assert!(a.get(5, 16) > 0.99 && a.get(60, 16) < 0.01);
+        assert!(t.elapsed() < std::time::Duration::from_secs(20), "{:?}", t.elapsed());
+    }
+
+    #[test]
+    fn the_edge_setting_hardens_or_feathers_the_transition() {
+        let side = 16;
+        let l: Vec<f32> = (0..side * side).map(|i| ((i % side) as f32 - 7.5) * -0.6).collect(); // a gentle ramp
+        let seg = SegMask::from_logits(side, &l);
+        let (w, h) = (400, 40);
+        let soft_px = |edge: f64| {
+            let shape = MaskShape::Prompt { text: "x".into(), seg: Some(seg.clone()), detail: vec![], edge };
+            let a = shape_alpha(&shape, &frame(w, h), w, h, &Rgb32f::new(w, h), &Plane::new(w, h), 0.0, None);
+            assert!(a.get(2, h / 2) > 0.9 && a.get(w - 3, h / 2) < 0.1, "still the same selection at {edge}");
+            (0..w).filter(|x| (0.1..0.9).contains(&a.get(*x, h / 2))).count()
+        };
+        let (hard, plain, soft) = (soft_px(-100.0), soft_px(0.0), soft_px(100.0));
+        assert!(hard < plain && plain < soft, "transition widths {hard} < {plain} < {soft}");
+    }
+
+    #[test]
+    fn ai_shapes_without_a_segmentation_select_nothing() {
+        let f = frame(30, 30);
+        let (img, l) = (Rgb32f::new(30, 30), Plane::new(30, 30));
+        for shape in [
+            MaskShape::Object { hint: vec![], exclude: vec![], seg: None, detail: vec![], edge: 0.0 },
+            MaskShape::Prompt { text: "sky".into(), seg: None, detail: vec![], edge: 0.0 },
+            MaskShape::Prompt { text: "sky".into(), seg: Some(SegMask { side: 4, data: "damaged!".into(), rect: None }), detail: vec![], edge: 0.0 },
+        ] {
+            assert!(shape_alpha(&shape, &f, 30, 30, &img, &l, 0.0, None).data.iter().all(|v| *v == 0.0));
+        }
     }
 
     #[test]

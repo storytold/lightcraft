@@ -108,6 +108,9 @@ sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHORT_VERSION@/$SHORT_VERSION/g" \
   "$HERE/Info.plist.in" >"$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist"
 printf 'APPL????' >"$APP/Contents/PkgInfo"
+# Licences (and the craft-fonts font licences when built with CRAFT_FONTS_DIR) inside the bundle.
+mkdir -p "$APP/Contents/Resources/Licenses"
+copy_docs "$APP/Contents/Resources/Licenses"
 
 # Sign inside-out: nested code first, then the bundle itself (no --deep on the final signature).
 # Today the only nested code is the main executable; frameworks/helpers would be signed here too.

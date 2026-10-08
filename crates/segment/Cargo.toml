@@ -1,0 +1,28 @@
+[package]
+name = "lightcraft-segment"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+description = "LightCraft segmentation: SAM 3 (Segment Anything with Concepts) inference in pure Rust (L3)"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+
+# the model runs natively only (the web build has no AI masks)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+rustls-rustcrypto = "0.0.2-alpha"
+webpki-roots = "1"
+sha2 = { version = "0.10", default-features = false, features = ["std"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+candle-core = { workspace = true, features = ["metal"] }
+candle-nn = { workspace = true, features = ["metal"] }

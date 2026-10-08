@@ -772,8 +772,33 @@ pub enum MaskShape {
     Subject,
     Sky,
     Background,
+    /// One object picked by clicks (SAM 3 point prompts): `hint` holds the clicks that include,
+    /// `exclude` the ones that exclude; `seg` the segmentation computed from them.
     Object {
         hint: Vec<Point>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        exclude: Vec<Point>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seg: Option<crate::SegMask>,
+        /// Zoomed-in passes over parts of the image (higher resolution than `seg`), used
+        /// inside their rectangles.
+        #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::segmask::de_detail")]
+        detail: Vec<crate::SegMask>,
+        /// Edge −100..100: below 0 harder (a steeper transition), above 0 softer (feathered).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        edge: f64,
+    },
+    /// Everything a description names ("sky", "the red car": SAM 3 concept prompts); `seg` is
+    /// the segmentation computed for it.
+    Prompt {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seg: Option<crate::SegMask>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::segmask::de_detail")]
+        detail: Vec<crate::SegMask>,
+        /// Edge −100..100, as for `Object`.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        edge: f64,
     },
     People {
         person: u32,

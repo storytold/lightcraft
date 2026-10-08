@@ -287,6 +287,8 @@
   "File Name": "ファイル名",
   "File Path": "ファイルの場所",
   "File Size": "ファイルサイズ",
+  "Random": "ランダム",
+  "Reshuffle": "シャッフルし直す",
   "File name": "ファイル名",
   "Fill Edges": "境界を補完",
   "Filmstrip": "フィルムストリップ",
@@ -1017,5 +1019,15 @@
   "Quit": "終了",
   "Temporary session — your library isn't open, and nothing you do here is saved.": "一時セッション：ライブラリが開かれていないため、ここでの操作は保存されません。",
   "Back Up Library…": "ライブラリをバックアップ…",
-  "Restore Library from Backup…": "バックアップからライブラリを復元…"
+  "Restore Library from Backup…": "バックアップからライブラリを復元…",
+  "In Recently Deleted": "最近削除した写真内",
+  "Reload from Disk": "ディスクから再読み込み",
+  "Monday": "月曜日",
+  "Tuesday": "火曜日",
+  "Wednesday": "水曜日",
+  "Thursday": "木曜日",
+  "Friday": "金曜日",
+  "Saturday": "土曜日",
+  "Sunday": "日曜日",
+  "Unknown Date": "日付不明"
 }

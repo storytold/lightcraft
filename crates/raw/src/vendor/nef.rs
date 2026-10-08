@@ -56,10 +56,17 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<RawImage> {
         if info.compression == t::compression::NIKON { compressed(bytes, &info, mn.as_ref())? } else { uncompressed(bytes, &info, tiff.order)? };
     let RawData::U16(ref samples) = data else { return Err(RawError::Unsupported("float NEF".into())) };
 
+    // Maker note 0x003d is in 14-bit units whatever the sample depth: 12-bit files from the D750, D780, D850,
+    // D7500 and Z 50 store 600 / 1008 / 400 / 400 / 1008 while their darkest samples are 150 / ~252 / 99 / 99 / ~250
+    // (our measurements on CC0 raw.pixls.us samples; the same bodies' 14-bit files match the tag as is).
+    let black_scale = if bits == 12 { 0.25 } else { 1.0 };
     let black = match mn.as_ref().and_then(|m| m.ifd.f64s(BLACK_LEVEL)).as_deref() {
-        Some([a, b, c, d]) if [a, b, c, d].iter().all(|v| **v < 16384.0) => {
-            BlackLevel { repeat_rows: 2, repeat_cols: 2, values: vec![*a as f32, *b as f32, *c as f32, *d as f32], ..Default::default() }
-        }
+        Some([a, b, c, d]) if [a, b, c, d].iter().all(|v| **v < 16384.0) => BlackLevel {
+            repeat_rows: 2,
+            repeat_cols: 2,
+            values: [a, b, c, d].iter().map(|v| (**v * black_scale) as f32).collect(),
+            ..Default::default()
+        },
         _ => BlackLevel::uniform(0.0),
     };
     let wb = mn
@@ -145,6 +152,11 @@ mod tests {
     use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
 
     fn nef(compression: u16, bits: u16, strips: Vec<Vec<u8>>, w: u32, h: u32, rps: u32) -> Vec<u8> {
+        nef_with_note(compression, bits, strips, w, h, rps, None)
+    }
+
+    /// [`nef`] with an optional maker note (`Nikon\0` v2 header + embedded big-endian TIFF holding `note`).
+    fn nef_with_note(compression: u16, bits: u16, strips: Vec<Vec<u8>>, w: u32, h: u32, rps: u32, note: Option<IfdBuilder>) -> Vec<u8> {
         let mut raw = IfdBuilder::new();
         raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
         raw.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
@@ -158,8 +170,29 @@ mod tests {
         let mut ifd0 = IfdBuilder::new();
         ifd0.set(t::MAKE, Value::Ascii("NIKON CORPORATION".into()));
         ifd0.set(t::MODEL, Value::Ascii("NIKON TEST".into()));
+        if let Some(mn) = note {
+            let mut bytes = b"Nikon\0\x02\x10\0\0".to_vec();
+            bytes.extend(TiffWriter::new(ByteOrder::Big, false).write(&[mn]).unwrap());
+            let mut exif = IfdBuilder::new();
+            exif.set(t::MAKER_NOTE, Value::Undefined(bytes));
+            ifd0.set_child(t::EXIF_IFD, exif);
+        }
         ifd0.add_sub_ifd(raw);
         TiffWriter::new(ByteOrder::Big, false).write(&[ifd0]).unwrap()
+    }
+
+    #[test]
+    fn black_level_tag_is_in_14_bit_units() {
+        let (w, h) = (16usize, 4usize);
+        let words: Vec<u8> = (0..w * h).flat_map(|i| (100 + i as u16).to_be_bytes()).collect();
+        let note = || {
+            let mut mn = IfdBuilder::new();
+            mn.set(BLACK_LEVEL, Value::Short(vec![400, 404, 408, 412]));
+            mn
+        };
+        let black = |bits| crate::decode(&nef_with_note(1, bits, vec![words.clone()], w as u32, h as u32, h as u32, Some(note()))).unwrap().black;
+        assert_eq!(black(12).values, vec![100.0, 101.0, 102.0, 103.0]);
+        assert_eq!(black(14).values, vec![400.0, 404.0, 408.0, 412.0]);
     }
 
     #[test]

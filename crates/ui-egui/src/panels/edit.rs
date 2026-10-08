@@ -140,8 +140,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(crate::i18n::tr("Profile")).font(t.font(13.0)).color(t.text_dim));
             let name = lightcraft_engine::presets::profile(&d.profile.id).map(|p| p.name).unwrap_or("Color");
-            let r =
-                crate::widgets::dropdown(ui, "profile", if name == "Color" { crate::i18n::tr("Color") } else { name }, t.font(15.0), t.text_label);
+            let r = crate::widgets::dropdown(ui, "profile", crate::i18n::tr(name), t.font(15.0), t.text_label);
             egui::Popup::menu(&r).show(|ui| profile_menu(app, ui, &d));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if crate::widgets::icon_button(ui, "profileBrowser", Icon::ProfileGrid, vec2(28.0, 28.0), false, true, "Browse Profiles").clicked() {
@@ -356,7 +355,7 @@ fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
                 key: &str,
                 p: &'static lightcraft_engine::presets::ProfileInfo,
                 pick: &mut (Option<&'static str>, Option<&'static str>)| {
-        let r = ui.selectable_label(p.id == cur, p.name);
+        let r = ui.selectable_label(p.id == cur, crate::i18n::tr(p.name));
         register(ui.ctx(), format!("profileMenu:{key}:{}", p.id), r.rect);
         if r.clicked() {
             pick.0 = Some(p.id);
@@ -366,7 +365,7 @@ fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
         }
     };
     let heading = |ui: &mut egui::Ui, s: &str| {
-        ui.label(egui::RichText::new(s).font(t.semibold(11.5)).color(t.text_dim));
+        ui.label(egui::RichText::new(crate::i18n::tr(s)).font(t.semibold(11.5)).color(t.text_dim));
     };
     for (title, key, ids) in [("Favorites", "fav", app.session.profile_favorites.clone()), ("Recent", "recent", app.session.profile_recent.clone())] {
         let list: Vec<_> = ids.iter().filter_map(|id| profile(id)).collect();
@@ -380,7 +379,7 @@ fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
         ui.separator();
     }
     for g in profile_groups() {
-        let r = ui.menu_button(g, |ui| {
+        let r = ui.menu_button(crate::i18n::tr(g), |ui| {
             ui.set_min_width(170.0);
             for p in PROFILES.iter().filter(|p| p.group == g) {
                 item(ui, "group", p, &mut pick);
@@ -392,9 +391,9 @@ fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
     if let Some(p) = profile(cur) {
         let fav = app.session.profile_favorites.iter().any(|f| f == p.id);
         let label = if fav {
-            crate::i18n::tr_format!("Remove “{}” from Favorites", p.name)
+            crate::i18n::tr_format!("Remove “{}” from Favorites", crate::i18n::tr(p.name))
         } else {
-            crate::i18n::tr_format!("Add “{}” to Favorites", p.name)
+            crate::i18n::tr_format!("Add “{}” to Favorites", crate::i18n::tr(p.name))
         };
         let r = ui.button(label);
         register(ui.ctx(), "profileMenu:toggleFavorite", r.rect);
@@ -414,7 +413,7 @@ fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
         let mut s = d.clone();
         s.profile.id = p.id.to_string();
         s.profile.amount = 100.0;
-        app.hover_preview = Some(crate::HoverPreview { label: crate::i18n::tr_format!("Profile: {}", p.name), settings: s });
+        app.hover_preview = Some(crate::HoverPreview { label: crate::i18n::tr_format!("Profile: {}", crate::i18n::tr(p.name)), settings: s });
     }
     if let Some(id) = pick.0 {
         let _ = app.run("develop.profile", json!({"id": id}));
@@ -811,7 +810,9 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
         ui.horizontal(|ui| {
             ui.label(RichText::new(crate::i18n::tr("Point Curve")).font(t.font(12.0)).color(t.text_label));
             let current = matching_preset(&app.session, &d.curve);
-            let r = crate::widgets::dropdown(ui, "curvePreset", current.as_deref().unwrap_or("Custom"), t.font(12.0), t.text);
+            let builtin = current.as_ref().is_none_or(|name| all_presets(&app.session).iter().any(|p| p.builtin && &p.name == name));
+            let label = crate::i18n::builtin_label(current.as_deref().unwrap_or("Custom"), builtin);
+            let r = crate::widgets::dropdown(ui, "curvePreset", label, t.font(12.0), t.text);
             egui::Popup::menu(&r).show(|ui| {
                 ui.set_min_width(180.0);
                 let presets = all_presets(&app.session);
@@ -821,7 +822,7 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
                         user_seen = true;
                         ui.separator();
                     }
-                    let r = ui.selectable_label(current.as_deref() == Some(p.name.as_str()), &p.name);
+                    let r = ui.selectable_label(current.as_deref() == Some(p.name.as_str()), crate::i18n::builtin_label(&p.name, p.builtin));
                     register(ui.ctx(), format!("curvePreset:{}", p.name), r.rect);
                     if r.clicked() {
                         let _ = app.run("curve.applyPreset", json!({"name": p.name}));

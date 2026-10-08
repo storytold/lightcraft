@@ -91,7 +91,8 @@ fn choices<V: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, options: &[(V, &str
 
 fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     row(ui, t, crate::i18n::tr("Language"), |ui| {
-        choices(ui, "settingsLanguage", &[(crate::i18n::Language::Ja, "日本語"), (crate::i18n::Language::En, "English")], &mut app.ui.language);
+        let languages: Vec<_> = crate::i18n::Locale::ALL.iter().map(|language| (*language, language.name())).collect();
+        choices(ui, "settingsLanguage", &languages, &mut app.ui.language);
         crate::i18n::set_language(app.ui.language);
     });
     heading(ui, t, crate::i18n::tr("Library"));

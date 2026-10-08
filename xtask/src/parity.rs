@@ -137,12 +137,17 @@ pub fn parse(md: &str) -> Doc {
     doc
 }
 
-/// Ids in `UI_COMMANDS` (`("view.detail", "Detail", Some("D"), "View"),` lines).
+/// Ids in the menu tables (`("view.detail", "Detail", Some("D"), "View"),` lines): the language
+/// commands live in their own table, which the Language menu builds from the i18n language list.
 pub fn ui_command_ids(menus_rs: &str) -> Vec<String> {
-    let Some(start) = menus_rs.find("pub const UI_COMMANDS") else { return Vec::new() };
-    let body = &menus_rs[start..];
-    let body = &body[..body.find("];").unwrap_or(body.len())];
-    body.lines().filter_map(|l| l.trim().strip_prefix("(\"")).filter_map(|l| l.split_once('"').map(|(id, _)| id.to_string())).collect()
+    let mut ids = Vec::new();
+    for table in ["pub const UI_COMMANDS", "pub const LANGUAGE_COMMANDS"] {
+        let Some(start) = menus_rs.find(table) else { continue };
+        let body = &menus_rs[start..];
+        let body = &body[..body.find("];").unwrap_or(body.len())];
+        ids.extend(body.lines().filter_map(|l| l.trim().strip_prefix("(\"")).filter_map(|l| l.split_once('"').map(|(id, _)| id.to_string())));
+    }
+    ids
 }
 
 fn known(set: &BTreeSet<String>, id: &str) -> bool {
@@ -437,5 +442,19 @@ old
     fn reads_ui_command_ids() {
         let src = "pub const UI_COMMANDS: &[UiCommand] = &[\n    (\"view.detail\", \"Detail\", Some(\"D\"), \"View\"),\n    (\"app.about\", \"About\", None, \"\"),\n];\nfn x() { (\"not.this\", 1); }";
         assert_eq!(ui_command_ids(src), ["view.detail", "app.about"]);
+        let languages =
+            "pub const LANGUAGE_COMMANDS: &[UiCommand] = &[\n    (\"app.language.english\", Locale::En.name(), None, \"Edit>Language\"),\n];\n";
+        assert_eq!(ui_command_ids(&format!("{languages}{src}")), ["view.detail", "app.about", "app.language.english"]);
+    }
+
+    /// The real menu tables: both are found, so every language command is a known id.
+    #[test]
+    fn reads_the_language_commands_from_menus_rs() {
+        let menus = include_str!("../../crates/ui-egui/src/menus.rs");
+        let ids = ui_command_ids(menus);
+        for id in ["view.detail", "app.language.english", "app.language.japanese", "app.language.simplifiedChinese", "app.language.portuguese"] {
+            assert!(ids.iter().any(|known| known == id), "{id} not found");
+        }
+        assert_eq!(ids.iter().filter(|id| id.as_str() == "app.language.english").count(), 1, "one Language menu entry per language");
     }
 }

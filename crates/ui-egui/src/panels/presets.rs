@@ -85,6 +85,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     groups.entry(p.group.clone()).or_default().push(p.clone());
                 }
                 for (g, items) in groups {
+                    // A group holding stock presets is a stock group (shown in the UI language), even
+                    // when user presets share its name; a group of user presets keeps its name.
+                    let builtin = items.iter().any(|p| p.builtin);
                     let open_id = egui::Id::new(("preset-group", &g));
                     let open: bool = ui.data(|d| d.get_temp(open_id)).unwrap_or(true);
                     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
@@ -95,7 +98,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         if open { Icon::ChevronDown } else { Icon::ChevronRight },
                         t.text_label,
                     );
-                    ui.painter().text(pos2(r.left() + 36.0, r.center().y), Align2::LEFT_CENTER, &g, t.semibold(13.0), t.text_label);
+                    ui.painter().text(
+                        pos2(r.left() + 36.0, r.center().y),
+                        Align2::LEFT_CENTER,
+                        crate::i18n::builtin_label(&g, builtin),
+                        t.semibold(13.0),
+                        t.text_label,
+                    );
                     if resp.clicked() {
                         ui.data_mut(|d| d.insert_temp(open_id, !open));
                     }
@@ -108,7 +117,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         continue;
                     }
                     for pr in items {
-                        let (pid, name, fav) = (pr.id.clone(), pr.name.clone(), pr.favorite);
+                        let (pid, name, fav) = (pr.id.clone(), crate::i18n::builtin_label(&pr.name, pr.builtin).to_string(), pr.favorite);
                         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
                         register(ui.ctx(), format!("preset:{pid}"), r);
                         let is_last = last.as_ref().is_some_and(|(l, _)| *l == pid);
@@ -156,7 +165,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         }
                         let (builtin, group) = (pr.builtin, pr.group.clone());
                         resp.context_menu(|ui| {
-                            if ui.button(if fav { "Remove from Favorites" } else { "Add to Favorites" }).clicked() {
+                            if ui.button(crate::i18n::tr(if fav { "Remove from Favorites" } else { "Add to Favorites" })).clicked() {
                                 let _ = app.run("preset.favorite", json!({"id": pid}));
                             }
                             if builtin {
@@ -168,7 +177,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                                 .clicked()
                             {
                                 match app.run("preset.update", json!({"id": pid})) {
-                                    Ok(_) => app.toast(ui.ctx(), format!("Updated “{name}”")),
+                                    Ok(_) => app.toast(ui.ctx(), crate::i18n::tr_format!("Updated “{name}”", name = name)),
                                     Err(e) => app.toast(ui.ctx(), e),
                                 }
                             }

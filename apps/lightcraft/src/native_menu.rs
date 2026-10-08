@@ -171,7 +171,7 @@ fn structure_of(bar: &[(String, Vec<MenuNode>)]) -> String {
             out.push(';');
         }
     }
-    let mut s = format!("{};", lightcraft_ui_egui::i18n::is_japanese());
+    let mut s = format!("{};", lightcraft_ui_egui::i18n::language().code());
     for (t, items) in bar {
         s.push_str(t);
         walk(items, &mut s);
@@ -418,6 +418,27 @@ impl NativeMenu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The menu model's titles stay English, so only the language can tell the native menu to
+    /// rebuild its titles (and the macOS app menu): every language switch — also between two CJK
+    /// languages — must change the structure key.
+    #[test]
+    fn switching_language_rebuilds_native_menu_structure() {
+        use lightcraft_ui_egui::i18n::{Locale, set_language};
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        set_language(Locale::En);
+        let bar = menu_bar(&app);
+        let mut seen = std::collections::BTreeSet::new();
+        for language in Locale::ALL {
+            set_language(*language);
+            assert!(seen.insert(structure_of(&bar)), "{language:?} shares another language's menu structure key");
+        }
+        set_language(Locale::ZhHant);
+        assert_eq!(label_text("File"), "檔案");
+        assert_eq!(label_text("Settings…"), "設定…");
+        assert_eq!(label_text("Quit LightCraft"), "結束 LightCraft");
+        set_language(Locale::En);
+    }
 
     #[test]
     fn shortcuts_map_to_accelerators() {

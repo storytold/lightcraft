@@ -35,7 +35,7 @@ use lightcraft_develop::DevelopSettings;
 pub use local::{DEFAULT_FORGET_DAYS, ForgetPlan, folder_of};
 pub use lock::{LibraryLock, LockError, LockOwner};
 pub use model::*;
-pub use query::{DateGroup, Filter, RatingOp, Sort, SortKey};
+pub use query::{DateGroup, Filter, Person, RatingOp, Sort, SortKey, mix64};
 pub use rules::{Match, Rule, RuleSet};
 use serde::{Deserialize, Serialize};
 pub use store::{FsStore, MemStore, Store};

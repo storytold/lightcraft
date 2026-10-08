@@ -10,9 +10,36 @@ use crate::state::{BeforeAfter, Dialog, RightPanel, ViewMode, Zoom};
 /// (id, label, shortcut, menu path)
 pub type UiCommand = (&'static str, &'static str, Option<&'static str>, &'static str);
 
+/// The "Edit → Language" entries, one per language in [`crate::i18n::Locale::ALL`], so a language
+/// added to the table shows up in the menu (and in the control channel's command list) by itself.
+pub const LANGUAGE_COMMANDS: &[UiCommand] = &[
+    ("app.language.english", crate::i18n::Locale::En.name(), None, "Edit>Language"),
+    ("app.language.simplifiedChinese", crate::i18n::Locale::ZhHans.name(), None, "Edit>Language"),
+    ("app.language.traditionalChinese", crate::i18n::Locale::ZhHant.name(), None, "Edit>Language"),
+    ("app.language.japanese", crate::i18n::Locale::Ja.name(), None, "Edit>Language"),
+    ("app.language.portuguese", crate::i18n::Locale::PtBr.name(), None, "Edit>Language"),
+];
+
+/// Every UI command: the languages, then everything else. `xtask parity` reads both tables from
+/// this file, so an id listed in `docs/parity.md` is checked wherever it is declared.
+pub fn ui_commands() -> impl Iterator<Item = &'static UiCommand> {
+    LANGUAGE_COMMANDS.iter().chain(UI_COMMANDS)
+}
+
+/// The language a Language-menu command selects, if the id is one. The engine and the UI both go
+/// through here, so the menu, the settings row and the control channel agree on the mapping.
+pub fn language_from_command(id: &str) -> Option<crate::i18n::Locale> {
+    match id {
+        "app.language.english" => Some(crate::i18n::Locale::En),
+        "app.language.simplifiedChinese" => Some(crate::i18n::Locale::ZhHans),
+        "app.language.traditionalChinese" => Some(crate::i18n::Locale::ZhHant),
+        "app.language.japanese" => Some(crate::i18n::Locale::Ja),
+        "app.language.portuguese" => Some(crate::i18n::Locale::PtBr),
+        _ => None,
+    }
+}
+
 pub const UI_COMMANDS: &[UiCommand] = &[
-    ("app.language.english", "English", None, "Edit>Language"),
-    ("app.language.japanese", "日本語", None, "Edit>Language"),
     ("view.photoGrid", "Photo Grid", None, "View"),
     ("view.squareGrid", "Square Grid", None, "View"),
     // G: Photo Grid ↔ Square Grid (from other views: the photo grid)
@@ -21,6 +48,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.detail", "Detail", Some("D"), "View"),
     ("view.compare", "Compare", Some("Shift+C"), "View"),
     ("view.survey", "Survey", Some("N"), "View"),
+    ("view.people", "People", None, "View"),
+    ("view.faceBoxes", "Face Boxes", None, "View"),
     ("view.reference", "Reference View", Some("Shift+R"), "View"),
     ("photo.setReference", "Set as Reference Photo", None, ""),
     ("compare.swap", "Swap Compare Photos", None, "View"),
@@ -206,8 +235,11 @@ pub fn parse_rgb(v: &Value) -> Option<[u8; 3]> {
 
 /// Handle UI commands; `None` means "not a UI command — send it to the engine".
 pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
-    if matches!(id, "app.language.english" | "app.language.japanese") {
-        app.ui.language = if id == "app.language.japanese" { crate::i18n::Language::Ja } else { crate::i18n::Language::En };
+    if let Some(language) = language_from_command(id) {
+        app.ui.language = language;
+        // Immediately, not on the next frame: the reply and anything else run this frame
+        // (menus rebuilt from it, toasts) are already in the new language.
+        crate::i18n::set_language(app.ui.language);
         return Some(Ok(json!(app.ui.language)));
     }
     let ctx = egui::Context::default();
@@ -263,6 +295,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "view.compare" => crate::panels::compare::enter_compare(app),
+        "view.faceBoxes" => {
+            app.ui.face_boxes = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.face_boxes);
+            Ok(json!({"show": app.ui.face_boxes}))
+        }
+        "view.people" => {
+            app.ui.view = ViewMode::People;
+            Ok(json!({"people": app.session.catalog.people().len()}))
+        }
         "view.survey" => {
             app.ui.view = ViewMode::Survey;
             Ok(json!({"photos": crate::panels::compare::survey_photos(app).len()}))
@@ -1251,8 +1291,7 @@ pub struct MenuEntry {
 
 /// The flattened menu model (UI commands + engine commands with menu paths).
 pub fn menu_entries(app: &LightcraftApp) -> Vec<MenuEntry> {
-    let mut v: Vec<MenuEntry> = UI_COMMANDS
-        .iter()
+    let mut v: Vec<MenuEntry> = ui_commands()
         .filter(|c| !c.3.is_empty())
         .map(|(id, label, sc, m)| MenuEntry {
             id: id.to_string(),

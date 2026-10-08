@@ -112,8 +112,8 @@ command registry (engine commands, plus the app's UI commands such as `view.deta
 connected): the id with `.` replaced by `_` and a `cmd_` prefix — `photo.rate` → `cmd_photo_rate`,
 `develop.set` → `cmd_develop_set`, `edit.undo` → `cmd_edit_undo`. Arguments are the command's
 JSON params (documented in each tool's description and by `list_commands`). Pass `--compact` to
-leave these out (about 90 headless / 140 connected) when a client struggles with many tools;
-`run_command` still reaches every command.
+leave these per-command tools out when a client struggles with a large tool list; `run_command`
+still reaches every command.
 
 ## Resources
 
@@ -176,6 +176,7 @@ lightcraft-cli render in.dng -o out.jpg --set light.exposure=0.5 --set light.con
 lightcraft-cli render in.jpg -o out.png --settings look.json --preset <presetId>
 lightcraft-cli commands [--json]   # the command registry
 lightcraft-cli controls [--json]   # develop control ids and ranges
+lightcraft-cli calibrate --max 300 ~/Pictures/2026   # camera colour profiles (docs/camera-preview-colour.md)
 ```
 
 ## Tests

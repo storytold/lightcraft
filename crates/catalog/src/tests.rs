@@ -297,3 +297,152 @@ fn folder_identity_ignores_spelling() {
     assert!(folder_within("/a/b", "/"));
     assert!(folder_within("C:\\x", "c:\\"));
 }
+
+/// People come from named *face* regions: counted once per photo, case-insensitive, most photos
+/// first; pets and unnamed faces are not people; the `person` filter and `person:` token match.
+#[test]
+fn people_from_named_face_regions() {
+    use lightcraft_meta::{Rect, Region, RegionKind};
+    let region = |name: Option<&str>, kind: RegionKind| Region {
+        rect: Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 },
+        kind,
+        name: name.map(str::to_string),
+        description: None,
+    };
+    let mut c = Catalog::new();
+    let mut add = |name: &str, regions: Vec<Region>| {
+        let id = c.alloc_photo_id();
+        let mut p = Photo::new(id, Source::Demo { scene: 1 }, name, "JPEG", 6000, 4000, "2026-09-30T10:00:00");
+        p.meta.regions = regions;
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        id
+    };
+    let a = add(
+        "a.jpg",
+        vec![region(Some("Jane Doe"), RegionKind::Face), region(Some("jane doe"), RegionKind::Face), region(Some("Rex"), RegionKind::Pet)],
+    );
+    let b =
+        add("b.jpg", vec![region(Some("JANE DOE"), RegionKind::Face), region(Some("John Roe"), RegionKind::Face), region(None, RegionKind::Face)]);
+    let big = Rect { x0: 0.2, y0: 0.2, x1: 0.8, y1: 0.8 };
+    let d = add("d.jpg", vec![Region { rect: big, ..region(Some("John Roe"), RegionKind::Face) }]);
+    let e = add("e.jpg", vec![region(Some("Sam"), RegionKind::Face)]);
+    add("f.jpg", vec![]);
+    let people = c.people();
+    let summary: Vec<(&str, usize)> = people.iter().map(|p| (p.name.as_str(), p.count)).collect();
+    assert_eq!(summary, vec![("Jane Doe", 2), ("John Roe", 2), ("Sam", 1)], "once per photo, pets and unnamed faces left out");
+    // the picture is the person's largest face; ties go to the lower photo id
+    assert_eq!((people[0].photo, people[0].face), (a, Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 }));
+    assert_eq!((people[1].photo, people[1].face), (d, big), "the larger face wins over an earlier, smaller one");
+
+    let q = |f: Filter| c.query(&f, &Sort::default());
+    assert_eq!(q(Filter { person: Some("jane doe".into()), ..Default::default() }).len(), 2);
+    let mut got = q(Filter { person: Some("John Roe".into()), ..Default::default() });
+    got.sort();
+    assert_eq!(got, vec![b, d]);
+    assert!(q(Filter { person: Some("Rex".into()), ..Default::default() }).is_empty(), "a pet is not a person");
+    assert_eq!(q(Filter { text: "person:SAM".into(), ..Default::default() }), vec![e], "the search token finds a person, any case");
+    assert!(q(Filter { person: Some("Jane Doe".into()), ..Default::default() }).contains(&a));
+
+    // other filters narrow who is offered (so picking a person never ends in an empty grid); the
+    // `person` filter itself does not
+    c.apply(Op::SetRating { id: b, rating: 3 }).unwrap();
+    let names = |f: Filter| c.people_in(&f).into_iter().map(|p| (p.name, p.count)).collect::<Vec<_>>();
+    let rated = Filter { rating: 1, ..Default::default() };
+    assert_eq!(
+        names(rated.clone()),
+        vec![("JANE DOE".to_string(), 1), ("John Roe".to_string(), 1)],
+        "only the rated photo's people, counted within it, spelled as first seen there"
+    );
+    assert_eq!(
+        names(Filter { person: Some("Sam".into()), ..rated }),
+        names(Filter { rating: 1, ..Default::default() }),
+        "the person filter is ignored"
+    );
+    assert_eq!(names(Filter { rating: 5, ..Default::default() }), vec![], "nobody in the filtered photos");
+}
+
+/// Most photos have no regions: the field is left out of the catalog JSON then, and a catalog written
+/// before regions existed (no `regions` key) reads with none.
+#[test]
+fn empty_regions_are_not_serialized_and_default_when_missing() {
+    let m = Meta { keywords: vec!["k".into()], ..Default::default() };
+    let v = serde_json::to_value(&m).unwrap();
+    assert!(v.get("regions").is_none(), "{v}");
+    let back: Meta = serde_json::from_value(v).unwrap();
+    assert!(back.regions.is_empty());
+    let mut with = m.clone();
+    with.regions.push(lightcraft_meta::Region {
+        rect: lightcraft_meta::Rect { x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.2 },
+        kind: lightcraft_meta::RegionKind::Face,
+        name: Some("A".into()),
+        description: None,
+    });
+    let back: Meta = serde_json::from_str(&serde_json::to_string(&with).unwrap()).unwrap();
+    assert_eq!(back, with);
+}
+
+// ---- random sort: Given a seed, the order is a stable, reproducible shuffle of the matching photos
+
+fn many(c: &mut Catalog, n: usize) -> Vec<PhotoId> {
+    (0..n).map(|i| photo(c, &format!("p{i:03}.jpg"), &format!("2026-04-{:02}T10:00:00", i % 28 + 1))).collect()
+}
+
+fn random(seed: u64) -> Sort {
+    Sort { key: SortKey::Random, seed, ..Default::default() }
+}
+
+#[test]
+fn random_sort_is_a_reproducible_permutation() {
+    let mut c = Catalog::new();
+    let ids = many(&mut c, 50);
+    let a = c.query(&Filter::default(), &random(7));
+    assert_eq!(a, c.query(&Filter::default(), &random(7)), "same seed, same order");
+    let mut sorted = a.clone();
+    sorted.sort();
+    let mut all = ids.clone();
+    all.sort();
+    assert_eq!(sorted, all, "every photo exactly once");
+    assert_ne!(a, c.query(&Filter::default(), &random(8)), "another seed, another order");
+    assert_ne!(a, c.query(&Filter::default(), &Sort::default()), "not just the date order");
+}
+
+#[test]
+fn random_sort_keeps_the_relative_order_when_the_set_changes() {
+    let mut c = Catalog::new();
+    let ids = many(&mut c, 30);
+    let before = c.query(&Filter::default(), &random(3));
+    let added = photo(&mut c, "new.jpg", "2026-05-01T10:00:00");
+    c.apply(Op::SetRating { id: ids[0], rating: 5 }).unwrap();
+    let after: Vec<PhotoId> = c.query(&Filter::default(), &random(3)).into_iter().filter(|id| *id != added).collect();
+    assert_eq!(after, before, "adding a photo or editing metadata must not reshuffle the others");
+}
+
+#[test]
+fn random_sort_respects_the_filter_and_handles_tiny_sets() {
+    let mut c = Catalog::new();
+    assert!(c.query(&Filter::default(), &random(1)).is_empty());
+    let ids = many(&mut c, 10);
+    c.apply(Op::SetRating { id: ids[4], rating: 5 }).unwrap();
+    assert_eq!(c.query(&Filter { rating: 5, ..Default::default() }, &random(1)), vec![ids[4]]);
+}
+
+#[test]
+fn random_sort_direction_reverses_and_serde_defaults_hold() {
+    let mut c = Catalog::new();
+    many(&mut c, 20);
+    let desc = c.query(&Filter::default(), &Sort { ascending: false, ..random(5) });
+    let mut asc = c.query(&Filter::default(), &Sort { ascending: true, ..random(5) });
+    asc.reverse();
+    assert_eq!(desc, asc);
+    // saved sorts from before the seed existed still load
+    let old: Sort = serde_json::from_str(r#"{"key":"fileName","ascending":true}"#).unwrap();
+    assert_eq!(old.seed, 0);
+    assert_eq!(serde_json::from_str::<Sort>(r#"{"key":"random","seed":9}"#).unwrap(), Sort { key: SortKey::Random, seed: 9, ..Default::default() });
+}
+
+#[test]
+fn random_sort_has_no_date_headers() {
+    let mut c = Catalog::new();
+    let ids = many(&mut c, 5);
+    assert!(c.date_runs(&ids, SortKey::Random, GroupBy::Day).is_empty());
+}

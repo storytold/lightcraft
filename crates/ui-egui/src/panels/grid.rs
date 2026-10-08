@@ -150,7 +150,7 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             folder_header(app, ui, hr, &b, &ids, local, &cnt)
         }
         None => {
-            let title = app.session.source.label(&app.session.catalog);
+            let title = crate::i18n::source_label(app.session.source, &app.session.catalog);
             ui.painter().text(pos2(hr.left() + 20.0, hr.center().y), Align2::LEFT_CENTER, &title, t.semibold(17.0), t.text);
             ui.painter().text(pos2(hr.right() - 20.0, hr.center().y), Align2::RIGHT_CENTER, cnt, t.font(12.5), t.text_dim);
         }
@@ -164,7 +164,11 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if !chips.is_empty() {
             let body = match total {
                 Some(n) if n > 0 => {
-                    crate::i18n::tr_format!("{n} photos in {} are hidden by the filters above", app.session.source.label(&app.session.catalog), n = n)
+                    crate::i18n::tr_format!(
+                        "{n} photos in {} are hidden by the filters above",
+                        crate::i18n::source_label(app.session.source, &app.session.catalog),
+                        n = n
+                    )
                 }
                 _ => "Remove a filter above, or choose Clear all".to_string(),
             };
@@ -409,7 +413,7 @@ fn group_header(app: &mut LightcraftApp, ui: &mut egui::Ui, run: &DateRun, ids: 
         p.rect_filled(r, 0.0, t.canvas);
         p.hline(r.x_range(), r.bottom(), Stroke::new(1.0, t.divider));
     }
-    let g = p.layout_no_wrap(run.label.clone(), t.semibold(15.0), if resp.hovered() { t.text } else { t.text_label });
+    let g = p.layout_no_wrap(crate::i18n::date_group_label(&run.key, false), t.semibold(15.0), if resp.hovered() { t.text } else { t.text_label });
     let x = r.left() + 8.0;
     let gw = g.size().x;
     p.galley(pos2(x, r.center().y - g.size().y / 2.0), g, t.text);
@@ -520,7 +524,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
                 .collect();
                 if parts.is_empty() { "—".to_string() } else { parts.join(" · ") }
             }
-            "date" => photo.captured.as_deref().map(lightcraft_catalog::dates::display_time).unwrap_or_else(|| "No date".into()),
+            "date" => photo.captured.as_deref().map(crate::i18n::display_time).unwrap_or_else(|| crate::i18n::tr("No date").into()),
             _ => photo.file_name.rsplit_once('.').map(|(n, _)| n.to_string()).unwrap_or(photo.file_name.clone()),
         };
         p.text(pos2(r.left() + 8.0, r.top() + 12.0), Align2::LEFT_CENTER, name, t.font(10.5), t.text_dim);
@@ -786,7 +790,7 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     ui.separator();
     ui.menu_button(crate::i18n::tr("Set Rating"), |ui| {
         for r in 0..=5 {
-            if ui.button(if r == 0 { "No Stars".to_string() } else { "★".repeat(r) }).clicked() {
+            if ui.button(if r == 0 { crate::i18n::tr("No Stars").to_string() } else { "★".repeat(r) }).clicked() {
                 let _ = app.run("photo.rate", json!({"rating": r}));
             }
         }
@@ -820,6 +824,9 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     }
     if ui.button(crate::i18n::tr("Rename…")).clicked() {
         let _ = app.run("dialog.rename", json!({}));
+    }
+    if ui.button(crate::i18n::tr("Reload from Disk")).clicked() {
+        let _ = app.run("photo.reload", json!({}));
     }
     if ui.button(crate::i18n::tr("Create Virtual Copy")).clicked() {
         let _ = app.run("photo.virtualCopy", json!({}));
@@ -905,7 +912,14 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
     });
     ui.separator();
-    if ui.button(crate::i18n::tr("Delete Photo")).clicked() {
+    if crate::menubar::selection_deleted(app) {
+        if ui.button(crate::i18n::tr("Restore")).clicked() {
+            let _ = app.run("photo.restore", json!({}));
+        }
+        if ui.button(crate::i18n::tr("Delete Permanently")).clicked() {
+            let _ = app.run("photo.deletePermanently", json!({}));
+        }
+    } else if ui.button(crate::i18n::tr("Delete Photo")).clicked() {
         let _ = app.run("photo.delete", json!({}));
     }
 }

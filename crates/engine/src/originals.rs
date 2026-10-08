@@ -15,6 +15,8 @@ use lightcraft_catalog::{Catalog, Source};
 pub struct OriginalGuard {
     /// lower-case file name → (path on disk, what it is: "the original of IMG_1.CR3", …)
     by_name: HashMap<String, Vec<(PathBuf, String)>>,
+    /// The entries of `by_name` that are symlinks, found on the first check that needs them.
+    links: std::sync::OnceLock<Vec<(PathBuf, String)>>,
 }
 
 impl OriginalGuard {
@@ -32,6 +34,7 @@ impl OriginalGuard {
     /// Protect `path` (an original named `label`) and its sidecars (`IMG_1.xmp`, `IMG_1.CR3.xmp`).
     pub fn add(&mut self, path: &Path, label: &str) {
         let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) else { return };
+        self.links = std::sync::OnceLock::new();
         let mut put = |file: String, p: PathBuf, what: String| self.by_name.entry(file.to_lowercase()).or_default().push((p, what));
         put(name.clone(), path.to_path_buf(), format!("the original of {label}"));
         let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
@@ -56,6 +59,19 @@ impl OriginalGuard {
                         target.display()
                     ));
                 }
+            }
+        }
+        // An imported symlink can have a different name from its original. A write to
+        // that original would change what the library reads through the link. Only do
+        // this fallback for existing targets that the name index did not protect; the links are
+        // looked up once per guard, not once per target.
+        let links = self.links.get_or_init(|| self.by_name.values().flatten().filter(|(p, _)| std::fs::read_link(p).is_ok()).cloned().collect());
+        for (p, what) in links {
+            if same_file(p, target) {
+                return Err(format!(
+                    "{} is {what} in the library: LightCraft never writes over an original (choose another folder or file name)",
+                    target.display()
+                ));
             }
         }
         Ok(())

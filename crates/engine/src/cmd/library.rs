@@ -224,6 +224,25 @@ fn select_by(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"selected": n}))
 }
 
+/// Seeds stay exactly representable as a JSON double, so web and agent clients read back what they wrote.
+const MAX_SEED: u64 = 1 << 53;
+
+/// `seed` as an integer in `0..2^53`, or `default` when absent or null; anything else is an error.
+fn seed_param(p: &Value, cmd: &str, default: u64) -> Result<u64> {
+    match p.get("seed") {
+        None | Some(Value::Null) => Ok(default),
+        Some(v) => v.as_u64().filter(|n| *n < MAX_SEED).ok_or_else(|| bad(cmd, "seed must be an integer from 0 to 2^53 - 1")),
+    }
+}
+
+/// The seed after `prev` at time `now`: a mix of `prev` and the clock text, so repeated reshuffles
+/// within one clock tick still differ (barring a 2^-53 collision). Kept below 2^53 so JSON
+/// clients that read numbers as doubles (web, MCP agents) get the same seed back.
+fn next_seed(prev: u64, now: &str) -> u64 {
+    let t = now.bytes().fold(0u64, |h, b| lightcraft_catalog::mix64(h ^ u64::from(b)));
+    (lightcraft_catalog::mix64(prev.wrapping_add(1)) ^ t) & (MAX_SEED - 1)
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         // ---- view source / filter / sort
@@ -263,7 +282,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Filter",
             [],
             None,
-            "partial Filter: {text?, rating?, ratingOp?: atLeast|exactly|atMost, flag?: pick|reject|none|null, label?, kind?, merged?: hdr|panorama|hdrPanorama|any, edited?, date?, keyword?, camera?}",
+            "partial Filter: {text?, rating?, ratingOp?: atLeast|exactly|atMost, flag?: pick|reject|none|null, label?, kind?, merged?: hdr|panorama|hdrPanorama|any, edited?, date?, keyword?, person?, camera?}",
             always,
             |s, p| {
                 let mut v = serde_json::to_value(&s.filter).unwrap_or_default();
@@ -281,7 +300,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Sort",
             ["View", "Sort"],
             None,
-            "{key?: captureDate|importDate|editDate|fileName|rating|fileSize, ascending?: bool, group?: auto|none|day|month|year}",
+            "{key?: captureDate|importDate|editDate|fileName|rating|fileSize|random, ascending?: bool, group?: auto|none|day|month|year, seed?: u64 (the shuffle `random` gives)}",
             always,
             |s, p| {
                 let key: SortKey = match p.get("key") {
@@ -292,7 +311,31 @@ pub fn specs() -> Vec<CommandSpec> {
                     Some(g) => GroupBy::parse(g).ok_or_else(|| bad("library.sort", "group must be auto|none|day|month|year"))?,
                     None => s.sort.group,
                 };
-                s.sort = Sort { key, ascending: bool_or(p, "ascending", s.sort.ascending), group };
+                let mut seed = seed_param(p, "library.sort", s.sort.seed)?;
+                let explicit = p.get("seed").is_some_and(|v| !v.is_null());
+                if key == SortKey::Random && s.sort.key != SortKey::Random && !explicit {
+                    // switching to Random is a fresh shuffle, not whatever seed was left behind
+                    seed = next_seed(seed, &(s.clock)());
+                }
+                s.sort = Sort { key, ascending: bool_or(p, "ascending", s.sort.ascending), group, seed };
+                ok()
+            }
+        ),
+        cmd!(
+            "library.shuffle",
+            "Reshuffle",
+            ["View", "Sort"],
+            None,
+            "{seed?: 0..2^53-1} — sort at random; without `seed` a new shuffle each time",
+            always,
+            |s, p| {
+                let seed = match seed_param(p, "library.shuffle", s.sort.seed)? {
+                    given if p.get("seed").is_some_and(|v| !v.is_null()) => given,
+                    // derived from the previous seed and the session clock: reproducible under a test
+                    // clock, and no RNG needed
+                    prev => next_seed(prev, &(s.clock)()),
+                };
+                s.sort = Sort { key: SortKey::Random, seed, ..s.sort };
                 ok()
             }
         ),
@@ -446,6 +489,66 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("photo.rotateRight", "Rotate Right", ["Photo"], Some("Cmd+]"), "{ids?}", has_selection, |s, p| rotate(s, p, true)),
         cmd!("photo.flipHorizontal", "Flip Horizontal", ["Photo"], None, "{ids?}", has_selection, |s, p| flip(s, p, true)),
         cmd!("photo.flipVertical", "Flip Vertical", ["Photo"], None, "{ids?}", has_selection, |s, p| flip(s, p, false)),
+        // ---- face / pet regions
+        cmd!(
+            "photo.removeRegion",
+            "Remove Face Box",
+            [],
+            None,
+            "{id?, index} — remove one face / pet region (by its position in the photo's regions) from the photo in the catalog; undoable. The XMP sidecar is never rewritten for this, even with auto-write on, so reading the metadata from the file brings the region back",
+            always,
+            |s, p| {
+                let id =
+                    p.get("id").and_then(Value::as_u64).map(PhotoId).or_else(|| s.active()).ok_or_else(|| bad("photo.removeRegion", "no photo"))?;
+                let index = p
+                    .get("index")
+                    .and_then(Value::as_u64)
+                    .and_then(|i| usize::try_from(i).ok())
+                    .ok_or_else(|| bad("photo.removeRegion", "missing or invalid `index`"))?;
+                let mut meta = s.catalog.photo(id).ok_or_else(|| bad("photo.removeRegion", "no such photo"))?.meta.clone();
+                if index >= meta.regions.len() {
+                    return Err(bad("photo.removeRegion", "no such region"));
+                }
+                let gone = meta.regions.remove(index);
+                s.commit("Remove Face Box", Op::SetMeta { id, meta: Box::new(meta) })?;
+                s.skip_auto_write = true;
+                Ok(json!({"removed": gone.name}))
+            }
+        ),
+        cmd!(
+            "photo.setRegion",
+            "Resize Face Box",
+            [],
+            None,
+            "{id?, index, rect: {x0, y0, x1, y1}} — set one face / pet region's box (normalized, in the photo's upright frame; clamped to the photo, at least 0.5 % each way) in the catalog; undoable. Like photo.removeRegion it never rewrites the XMP sidecar",
+            always,
+            |s, p| {
+                const C: &str = "photo.setRegion";
+                // a drag is one undo step however many frames it took: the caller commits once, on release
+                let id = p.get("id").and_then(Value::as_u64).map(PhotoId).or_else(|| s.active()).ok_or_else(|| bad(C, "no photo"))?;
+                let index = p
+                    .get("index")
+                    .and_then(Value::as_u64)
+                    .and_then(|i| usize::try_from(i).ok())
+                    .ok_or_else(|| bad(C, "missing or invalid `index`"))?;
+                let r = p.get("rect").ok_or_else(|| bad(C, "missing `rect`"))?;
+                let num = |k: &str| {
+                    r.get(k).and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| bad(C, format!("`rect.{k}` must be a finite number")))
+                };
+                let (a, b, c, d) = (num("x0")?, num("y0")?, num("x1")?, num("y1")?);
+                let (x0, x1) = (a.min(c).clamp(0.0, 1.0), a.max(c).clamp(0.0, 1.0));
+                let (y0, y1) = (b.min(d).clamp(0.0, 1.0), b.max(d).clamp(0.0, 1.0));
+                if x1 - x0 < 0.005 || y1 - y0 < 0.005 {
+                    return Err(bad(C, "the box would be too small"));
+                }
+                let mut meta = s.catalog.photo(id).ok_or_else(|| bad(C, "no such photo"))?.meta.clone();
+                let region = meta.regions.get_mut(index).ok_or_else(|| bad(C, "no such region"))?;
+                region.rect = lightcraft_geom::Rect { x0, y0, x1, y1 };
+                s.commit("Resize Face Box", Op::SetMeta { id, meta: Box::new(meta) })?;
+                s.skip_auto_write = true;
+                Ok(json!({"rect": {"x0": x0, "y0": y0, "x1": x1, "y1": y1}}))
+            }
+        ),
         // ---- delete / restore
         cmd!("photo.delete", "Delete Photo", ["Photo"], Some("Delete"), "{ids?} — moves to Recently Deleted", has_selection, |s, p| {
             let v = for_targets(s, p, "Delete", |id| Some(Op::SetDeleted { id, deleted: true }))?;
@@ -453,11 +556,11 @@ pub fn specs() -> Vec<CommandSpec> {
             s.selection = vis.first().map(|f| Selection::single(*f)).unwrap_or_default();
             Ok(v)
         }),
-        cmd!("photo.restore", "Restore", [], None, "{ids?}", has_selection, |s, p| for_targets(s, p, "Restore", |id| Some(Op::SetDeleted {
+        cmd!("photo.restore", "Restore", ["Photo"], None, "{ids?}", has_selection, |s, p| for_targets(s, p, "Restore", |id| Some(Op::SetDeleted {
             id,
             deleted: false
         }))),
-        cmd!("photo.deletePermanently", "Delete Permanently", [], None, "{ids?}", has_selection, |s, p| {
+        cmd!("photo.deletePermanently", "Delete Permanently", ["Photo"], None, "{ids?}", has_selection, |s, p| {
             let t = s.targets(p);
             let ops = t.iter().map(|id| s.catalog.delete_permanently_ops(*id)).collect::<Vec<_>>();
             s.commit("Delete Permanently", Op::Batch { ops })?;

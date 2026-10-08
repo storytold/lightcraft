@@ -1,0 +1,8 @@
+# Python packages for tools/sam3_reference.py (reference tensors for crates/segment/tests/reference.rs).
+#   python3 -m venv .venv-sam3 && .venv-sam3/bin/pip install -r tools/requirements-sam3-reference.txt
+torch>=2.6
+torchvision>=0.21
+transformers>=4.57
+pillow
+safetensors
+numpy

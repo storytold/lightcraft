@@ -244,14 +244,24 @@ impl Default for Watermark {
 
 /// Inter SemiBold (OFL, see assets/ATTRIBUTION.md).
 static WATERMARK_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf");
-/// BIZ UDMincho (OFL), Japanese fallback on both native and web.
-/// Bundled OFL Japanese font bytes, shared by watermarks and UI glyph fallback.
-pub static WATERMARK_JAPANESE_FONT: &[u8] = include_bytes!("../../../assets/fonts/BIZUDMincho-Regular.ttf");
+
+/// The watermark faces: Inter first, then the craft-fonts CJK faces (Mincho first, the watermark's
+/// serif look; then any other CJK face — a watermark has no UI language, so every CJK script is
+/// offered). Without craft-fonts that is Inter alone, and CJK characters draw as Inter's
+/// missing-glyph box.
+fn watermark_fonts(craft: &'static [crate::fonts::CraftFont]) -> Vec<ab_glyph::FontRef<'static>> {
+    let mut cjk: Vec<_> = crate::fonts::cjk(craft).collect();
+    cjk.sort_by_key(|f| !f.is_mincho());
+    std::iter::once(WATERMARK_FONT)
+        .chain(cjk.into_iter().map(|f| f.bytes))
+        .filter_map(|bytes| ab_glyph::FontRef::try_from_slice(bytes).ok())
+        .collect()
+}
 
 /// Draw `wm` onto `img` (straight alpha blending of the encoded values).
 pub fn draw_watermark(img: &mut Rgba8, wm: &Watermark) {
     let width = img.width;
-    watermark_coverage(img.width, img.height, wm, |x, y, k, col| {
+    watermark_coverage(img.width, img.height, wm, crate::fonts::CRAFT_FONTS, |x, y, k, col| {
         let p = &mut img.data[y * width + x];
         for c in 0..3 {
             p[c] = (p[c] as f32 + (col[c] as f32 - p[c] as f32) * k).round() as u8;
@@ -264,14 +274,14 @@ pub fn draw_watermark(img: &mut Rgba8, wm: &Watermark) {
 pub fn draw_watermark_deep(img: &mut DeepImage, wm: &Watermark) {
     let (width, trc) = (img.width, img.space.trc());
     match &mut img.samples {
-        DeepSamples::U16(v) => watermark_coverage(img.width, img.height, wm, |x, y, k, col| {
+        DeepSamples::U16(v) => watermark_coverage(img.width, img.height, wm, crate::fonts::CRAFT_FONTS, |x, y, k, col| {
             let i = (y * width + x) * 3;
             for c in 0..3 {
                 let p = v[i + c] as f32;
                 v[i + c] = (p + (col[c] as f32 * 257.0 - p) * k).round().clamp(0.0, 65535.0) as u16;
             }
         }),
-        DeepSamples::F32(v) => watermark_coverage(img.width, img.height, wm, |x, y, k, col| {
+        DeepSamples::F32(v) => watermark_coverage(img.width, img.height, wm, crate::fonts::CRAFT_FONTS, |x, y, k, col| {
             let i = (y * width + x) * 3;
             for c in 0..3 {
                 let target = trc.decode(col[c] as f32 / 255.0);
@@ -282,9 +292,16 @@ pub fn draw_watermark_deep(img: &mut DeepImage, wm: &Watermark) {
 }
 
 /// Lay out `wm` on a `width × height` image and call `blend(x, y, coverage × opacity, colour)` for
-/// every covered pixel (shadow pass first).
-fn watermark_coverage(width: usize, height: usize, wm: &Watermark, mut blend_px: impl FnMut(usize, usize, f32, [u8; 3])) {
-    use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
+/// every covered pixel (shadow pass first). `craft` is [`crate::fonts::CRAFT_FONTS`] (a parameter
+/// so tests can render without it).
+fn watermark_coverage(
+    width: usize,
+    height: usize,
+    wm: &Watermark,
+    craft: &'static [crate::fonts::CraftFont],
+    mut blend_px: impl FnMut(usize, usize, f32, [u8; 3]),
+) {
+    use ab_glyph::{Font, PxScale, ScaleFont, point};
     if !wm.image.trim().is_empty() {
         logo_coverage(width, height, wm, blend_px);
         return;
@@ -293,9 +310,8 @@ fn watermark_coverage(width: usize, height: usize, wm: &Watermark, mut blend_px:
     if text.is_empty() || width == 0 || height == 0 {
         return;
     }
-    let Ok(font) = FontRef::try_from_slice(WATERMARK_FONT) else { return };
-    let Ok(japanese) = FontRef::try_from_slice(WATERMARK_JAPANESE_FONT) else { return };
-    let fonts = [font, japanese];
+    let fonts = watermark_fonts(craft);
+    let Some(latin) = fonts.first() else { return };
     let short = width.min(height) as f32;
     let px = (wm.size.clamp(0.005, 0.5) * short).max(6.0);
     let mut glyphs = Vec::new();
@@ -333,9 +349,11 @@ fn watermark_coverage(width: usize, height: usize, wm: &Watermark, mut blend_px:
             '…' => '︙',
             other => other,
         };
-        let ch = if wm.vertical && fonts[1].glyph_id(vertical_form).0 != 0 { vertical_form } else { original };
-        let face = usize::from(fonts[0].glyph_id(ch).0 == 0);
-        let sf = fonts[face].as_scaled(PxScale::from(px));
+        let has = |font: &ab_glyph::FontRef<'_>, c: char| font.glyph_id(c).0 != 0;
+        let ch = if wm.vertical && fonts.iter().skip(1).any(|f| has(f, vertical_form)) { vertical_form } else { original };
+        // The first face with the glyph; Inter (its missing-glyph box) when none has it.
+        let face = fonts.iter().position(|f| has(f, ch)).unwrap_or(0);
+        let sf = fonts.get(face).unwrap_or(latin).as_scaled(PxScale::from(px));
         let id = sf.glyph_id(ch);
         if wm.vertical {
             let left = columns.saturating_sub(column.saturating_add(1)) as f32 * px;
@@ -1377,21 +1395,46 @@ mod tests {
         assert!(ExportOptions::from_json(&serde_json::json!({"watermark": ""})).watermark.is_none());
     }
 
-    #[test]
-    fn japanese_watermarks_support_vertical_columns_and_legacy_defaults() {
-        use ab_glyph::Font;
-        let font = ab_glyph::FontRef::try_from_slice(WATERMARK_JAPANESE_FONT).unwrap();
-        for c in "日本語".chars() {
-            assert_ne!(font.glyph_id(c).0, 0);
-        }
-        let old = ExportOptions::from_json(&json!({"watermark": {"text": "日本語"}}));
-        assert!(!old.watermark.unwrap().vertical);
+    fn vertical_japanese() -> Watermark {
         let options =
             ExportOptions::from_json(&json!({"watermark": {"text": "日本語", "vertical": true, "size": 0.1, "shadow": false, "opacity": 1.0}}));
-        let wm = options.watermark.unwrap();
+        options.watermark.unwrap()
+    }
+
+    #[test]
+    fn japanese_watermark_options_and_legacy_defaults() {
+        let old = ExportOptions::from_json(&json!({"watermark": {"text": "日本語"}}));
+        assert!(!old.watermark.unwrap().vertical);
+        let wm = vertical_japanese();
         assert!(wm.vertical);
         let round: Watermark = serde_json::from_value(serde_json::to_value(&wm).unwrap()).unwrap();
         assert!(round.vertical);
+    }
+
+    /// Built without craft-fonts, a Japanese watermark still lays out and draws (Inter's
+    /// missing-glyph boxes), and Latin text is unaffected.
+    #[test]
+    fn watermarks_work_without_craft_fonts() {
+        assert_eq!(watermark_fonts(&[]).len(), 1, "Inter only");
+        for wm in [vertical_japanese(), Watermark { text: "LightCraft 日本語".into(), ..Watermark::default() }] {
+            let mut covered = 0usize;
+            watermark_coverage(400, 300, &wm, &[], |_, _, k, _| covered += usize::from(k > 0.0));
+            assert!(covered > 0, "{:?} draws something", wm.text);
+        }
+    }
+
+    #[test]
+    fn japanese_watermarks_support_vertical_columns() {
+        use ab_glyph::Font;
+        let fonts = watermark_fonts(crate::fonts::CRAFT_FONTS);
+        if fonts.len() < 2 {
+            eprintln!("skipped: built without CRAFT_FONTS_DIR, so there is no Japanese watermark face");
+            return;
+        }
+        for c in "日本語の文字".chars() {
+            assert!(fonts[1..].iter().any(|f| f.glyph_id(c).0 != 0), "a craft-fonts face has {c}");
+        }
+        let wm = vertical_japanese();
         let mut img = Rgba8::new(400, 300);
         img.data.fill([0, 0, 0, 255]);
         draw_watermark(&mut img, &wm);

@@ -727,3 +727,93 @@ fn curve_reset_by_channel_and_whole() {
     assert_eq!(active_dev(&s).curve, lightcraft_develop::ToneCurve::default());
     assert!(s.execute("curve.reset", &json!({"channel": "alpha"})).is_err());
 }
+
+#[test]
+fn ai_masks_without_the_model_explain_themselves() {
+    let mut s = demo();
+    let id = s.active().unwrap();
+    // an Object mask that could never be computed is refused, not left empty
+    let e = s.execute("mask.add", &json!({"kind": "object"})).unwrap_err().to_string();
+    assert!(e.contains("SAM 3") || e.contains("not available"), "{e}");
+    assert!(!e.contains("invalid parameters"), "shown as is: {e}");
+    assert!(s.develop_of(id).unwrap().masks.is_empty());
+    // an empty Object component (as an older document may hold) still takes clicks
+    let shape = lightcraft_develop::MaskShape::Object { hint: vec![], exclude: vec![], seg: None, detail: vec![], edge: 0.0 };
+    let mut d = (*s.develop_of(id).unwrap()).clone();
+    d.masks.push(lightcraft_develop::Mask {
+        id: 1,
+        components: vec![lightcraft_develop::MaskComponent { name: None, op: lightcraft_develop::MaskOp::Add, invert: false, shape }],
+        ..Default::default()
+    });
+    s.set_develop(id, d, "test").unwrap();
+    s.active_mask = Some(1);
+    // clicks and descriptions need the model: an error that says what's missing, nothing changed
+    let e = s.execute("mask.objectPoint", &json!({"x": 0.5, "y": 0.5})).unwrap_err().to_string();
+    assert!(e.contains("SAM 3") || e.contains("not available"), "{e}");
+    let e = s.execute("mask.add", &json!({"kind": "prompt", "text": "sky"})).unwrap_err().to_string();
+    assert!(e.contains("SAM 3") || e.contains("not available"), "{e}");
+    let empty = std::env::temp_dir().join(format!("lc-no-sam3-{}", std::process::id()));
+    s.segmenter.dir = Some(empty.clone());
+    let e = s.execute("mask.objectPoint", &json!({"x": 0.5, "y": 0.5})).unwrap_err().to_string();
+    assert!(e.contains(&empty.display().to_string()) || e.contains("not available"), "names the folder: {e}");
+    assert_eq!(s.develop_of(id).unwrap().masks.len(), 1);
+    // bad input is an error, not a crash
+    assert!(s.execute("mask.objectPoint", &json!({"x": 1.5, "y": 0.5})).is_err());
+    assert!(s.execute("mask.add", &json!({"kind": "prompt", "text": "  "})).is_err());
+}
+
+/// A People card's close-up is a square (in pixels) inside the photo, around the face, whatever the
+/// face rectangle says: corners, oversized and degenerate rectangles never leave the frame or panic.
+#[test]
+fn face_job_crops_a_square_inside_the_photo() {
+    use lightcraft_geom::Rect;
+    let mut s = demo();
+    let id = s.active().unwrap();
+    let (w, h) = {
+        let p = s.catalog.photo(id).unwrap();
+        (f64::from(p.width), f64::from(p.height))
+    };
+    let faces = [
+        Rect { x0: 0.40, y0: 0.30, x1: 0.50, y1: 0.45 },
+        Rect { x0: 0.0, y0: 0.0, x1: 0.05, y1: 0.05 },
+        Rect { x0: 0.95, y0: 0.95, x1: 1.0, y1: 1.0 },
+        Rect { x0: -5.0, y0: -5.0, x1: 5.0, y1: 5.0 },
+        Rect { x0: 0.5, y0: 0.5, x1: 0.5, y1: 0.5 },
+        Rect { x0: f64::NAN, y0: 0.5, x1: 0.6, y1: f64::INFINITY },
+    ];
+    for face in faces {
+        let job = s.face_job(id, face, 256).expect("a job for a photo in the library");
+        let r = job.settings.crop.geometry.rect;
+        assert!((0.0..=1.0).contains(&r.x0) && (0.0..=1.0).contains(&r.y0) && r.x1 <= 1.0 + 1e-9 && r.y1 <= 1.0 + 1e-9, "{face:?} → {r:?}");
+        assert!(r.x1 > r.x0 && r.y1 > r.y0, "{face:?} → {r:?}");
+        let (pw, ph) = ((r.x1 - r.x0) * w, (r.y1 - r.y0) * h);
+        assert!((pw - ph).abs() < 1e-6 * w.max(h), "square in pixels: {face:?} → {pw} × {ph}");
+        assert_eq!(job.settings.crop.geometry.angle, 0.0);
+    }
+    // a face around (0.45, 0.375) is centred in its crop (room to spare on every side)
+    let r = s.face_job(id, faces[0], 256).unwrap().settings.crop.geometry.rect;
+    assert!((((r.x0 + r.x1) / 2.0) - 0.45).abs() < 1e-9 && (((r.y0 + r.y1) / 2.0) - 0.375).abs() < 1e-9, "{r:?}");
+    assert!(s.face_job(lightcraft_catalog::PhotoId(u64::MAX), faces[0], 256).is_none());
+}
+
+/// Regions are on the upright photo; after Rotate Right the close-up still frames the face: the box
+/// is carried into the rotated frame the crop lives in, and the crop stays square in rotated pixels.
+#[test]
+fn face_job_follows_rotate_right() {
+    use lightcraft_geom::Rect;
+    let mut s = demo();
+    let id = s.active().unwrap();
+    let (w, h) = {
+        let p = s.catalog.photo(id).unwrap();
+        (f64::from(p.width), f64::from(p.height))
+    };
+    // a small face left of centre on the upright photo
+    let face = Rect { x0: 0.30, y0: 0.45, x1: 0.35, y1: 0.50 };
+    s.execute("photo.rotateRight", &json!({})).unwrap();
+    let r = s.face_job(id, face, 256).unwrap().settings.crop.geometry.rect;
+    // a quarter turn clockwise puts the left of the photo at the top: centre (0.325, 0.475) → (0.525, 0.325)
+    assert!((((r.x0 + r.x1) / 2.0) - 0.525).abs() < 1e-9 && (((r.y0 + r.y1) / 2.0) - 0.325).abs() < 1e-9, "{r:?}");
+    // the rotated photo is h × w pixels
+    let (pw, ph) = ((r.x1 - r.x0) * h, (r.y1 - r.y0) * w);
+    assert!((pw - ph).abs() < 1e-6 * w.max(h), "square in rotated pixels: {pw} × {ph}");
+}

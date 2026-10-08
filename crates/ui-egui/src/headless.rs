@@ -204,6 +204,20 @@ impl Headless {
         }
     }
 
+    /// Run frames until `done` holds or `timeout` passes (a render that finishes on a busy machine
+    /// after a quiet spell, where [`Self::settle`] alone would stop too early). Returns `done`.
+    pub fn step_until(&mut self, timeout: Duration, done: impl Fn(&Self) -> bool) -> bool {
+        let t0 = Instant::now();
+        while !done(self) {
+            if t0.elapsed() > timeout {
+                return false;
+            }
+            self.step();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        true
+    }
+
     /// Rasterize the last frame (with the photo textures).
     pub fn paint(&self) -> ColorImage {
         self.view.paint(&HashMap::new())
@@ -286,7 +300,10 @@ mod tests {
             let mut h = demo([900.0, 600.0]);
             let r = h.request("ui.set", json!({"view": "detail"}), Duration::from_secs(10));
             assert_eq!(r["ok"], true, "{r}");
-            h.snapshot(SETTLE)
+            // Compare only fully settled frames: a timed-out settle would compare half-rendered
+            // pictures and fail as a misleading pixel diff (seen on loaded CI machines).
+            assert!(h.settle(Duration::from_secs(300)), "the demo detail view did not settle within 300 s");
+            h.paint()
         };
         let (a, b) = (shot(), shot());
         assert_eq!(a.size, b.size);
@@ -370,7 +387,8 @@ mod tests {
         let r = h.request("ui.hoverWidget", json!({"id": "profileCell:lc.vivid"}), t);
         assert_eq!(r["ok"], true, "{r}");
         h.settle(SETTLE);
-        h.step();
+        // the hover render can land after a quiet spell on a loaded machine (FreeBSD CI): wait for it
+        h.step_until(SETTLE, |h| h.app.loupe_shown.map(|l| l.1) == Some("hover"));
         assert_eq!(h.app.hover_preview.as_ref().map(|p| p.label.as_str()), Some("Profile: Vivid"));
         assert_eq!(h.app.loupe_shown.map(|l| l.1), Some("hover"));
         let hover = h.app.renderer.textures.get(&crate::render::Slot::Hover).expect("hover render");
@@ -406,7 +424,7 @@ mod tests {
         let before = photo(&h);
         h.request("ui.hoverWidget", json!({"id": "preset:lc.bw-high-contrast"}), t);
         h.settle(SETTLE);
-        h.step();
+        h.step_until(SETTLE, |h| h.app.loupe_shown.map(|l| l.1) == Some("hover"));
         assert_eq!(h.app.hover_preview.as_ref().map(|p| p.label.as_str()), Some("Preset: High Contrast B&W"));
         assert_eq!(h.app.loupe_shown.map(|l| l.1), Some("hover"));
         let after = photo(&h);
@@ -517,12 +535,16 @@ mod tests {
         ex(&mut h, "photo.setMeta", json!({"ids": [vis[0], vis[1]], "addKeywords": ["travel|italy"]}));
         ex(&mut h, "photo.setMeta", json!({"ids": [vis[2]], "addKeywords": ["travel|france"]}));
         h.request("ui.set", json!({"leftPanel": true}), t);
+        // clicks land on last frame's layout: let the keyword list settle first (on a loaded machine a
+        // row could still move, and the click then hit its neighbour, e.g. "sunrise")
+        h.settle(SETTLE);
         let r = h.request("ui.clickWidget", json!({"id": "source:keyword:travel"}), t);
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(h.app.session.filter.keyword.as_deref(), Some("travel"));
         assert_eq!(h.app.session.visible_cloned().len(), 3);
         // open the level, filter by the child
         h.request("ui.clickWidget", json!({"id": "keywordToggle:travel"}), t);
+        h.settle(SETTLE);
         let r = h.request("ui.clickWidget", json!({"id": "source:keyword:travel|italy"}), t);
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(h.app.session.visible_cloned().len(), 2);
@@ -1230,6 +1252,87 @@ mod tests {
         h.request("engine.execute", json!({"command": "edit.undo"}), t);
         assert_eq!(h.app.session.catalog.len(), n0);
         h.settle(SETTLE);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Adding a file again that is in Recently Deleted shows it there (side panel opened, photo
+    /// selected) instead of only saying "duplicate skipped"; its menus offer Restore, and once
+    /// restored a re-add selects it in All Photos.
+    #[test]
+    fn readding_a_deleted_photo_shows_it_in_recently_deleted() {
+        let dir = std::env::temp_dir().join(format!("lc-ui-readd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = lightcraft_raster::Rgba8 { width: 16, height: 12, data: vec![[200, 120, 40, 255]; 16 * 12] };
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        let file = dir.join("flower.png");
+        std::fs::write(&file, png).unwrap();
+        let paths = vec![file.to_string_lossy().to_string()];
+        let services = crate::Services { png: None, ..Default::default() };
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo().with_fs(), services);
+        app.ui.view = crate::state::ViewMode::PhotoGrid;
+        let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+        let t = Duration::from_secs(10);
+        // frames until the import has finished, so its (timed) toast is read before it expires
+        let finish_import = |h: &mut Headless| {
+            let t0 = std::time::Instant::now();
+            while h.app.import.is_some() && t0.elapsed() < Duration::from_secs(30) {
+                h.step();
+            }
+            assert!(h.app.import.is_none(), "import finished");
+        };
+        crate::import::start_paths(&mut h.app, paths.clone()).unwrap();
+        h.settle(SETTLE);
+        let id = h.app.session.selection.active.expect("imported photo selected");
+        h.request("engine.execute", json!({"command": "photo.delete", "params": {"ids": [id.0]}}), t);
+        assert!(h.app.session.catalog.photo(id).unwrap().deleted);
+        let photo_items = |app: &LightcraftApp| -> Vec<String> {
+            let bar = crate::menubar::menu_bar(app);
+            let items = &bar.iter().find(|(title, _)| title == "Photo").expect("Photo menu").1;
+            items.iter().filter_map(|n| if let crate::menubar::MenuNode::Item { id, .. } = n { Some(id.clone()) } else { None }).collect()
+        };
+        assert!(!photo_items(&h.app).contains(&"photo.restore".to_string()), "Restore only for deleted photos");
+
+        h.app.ui.left_panel = false;
+        crate::import::start_paths(&mut h.app, paths.clone()).unwrap();
+        finish_import(&mut h);
+        assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::RecentlyDeleted);
+        assert_eq!(h.app.session.selection.ids, vec![id]);
+        assert!(h.app.ui.left_panel, "the side panel listing Recently Deleted is opened");
+        let toast = h.app.ui.toast.clone().expect("toast").0;
+        assert!(toast.contains("Recently Deleted") && toast.contains("Restore"), "{toast}");
+        let items = photo_items(&h.app);
+        assert!(items.contains(&"photo.restore".to_string()) && items.contains(&"photo.deletePermanently".to_string()), "{items:?}");
+        assert!(!items.contains(&"photo.delete".to_string()), "{items:?}");
+        // a right-click on its filmstrip thumbnail opens the photo menu
+        h.request("ui.set", json!({"view": "detail"}), t);
+        h.settle(SETTLE);
+        let cell = h.app.widgets.iter().find(|(w, _)| *w == format!("film:{}", id.0)).map(|(_, r)| *r).expect("filmstrip cell");
+        assert!(!egui::Popup::is_any_open(&h.view.ctx));
+        let r = h.request("ui.click", json!({"x": cell.center().x, "y": cell.center().y, "button": "right"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert!(egui::Popup::is_any_open(&h.view.ctx), "filmstrip context menu");
+
+        let r = h.request("ui.menu.invoke", json!({"id": "photo.restore"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(!h.app.session.catalog.photo(id).unwrap().deleted, "restored");
+        crate::import::start_paths(&mut h.app, paths).unwrap();
+        finish_import(&mut h);
+        assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::All);
+        assert_eq!(h.app.session.selection.ids, vec![id]);
+        let toast = h.app.ui.toast.clone().expect("toast").0;
+        assert!(toast.contains("All Photos"), "{toast}");
+
+        // deleted permanently, the file imports afresh as a new photo
+        h.request("engine.execute", json!({"command": "photo.delete", "params": {"ids": [id.0]}}), t);
+        h.request("engine.execute", json!({"command": "photo.deletePermanently", "params": {"ids": [id.0]}}), t);
+        assert!(h.app.session.catalog.photo(id).is_none());
+        crate::import::start_paths(&mut h.app, vec![file.to_string_lossy().to_string()]).unwrap();
+        h.settle(SETTLE);
+        let fresh = h.app.session.selection.active.expect("re-imported photo selected");
+        assert_ne!(fresh, id);
+        assert!(!h.app.session.catalog.photo(fresh).unwrap().deleted);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -196,6 +196,35 @@ fn corpus_nef_compressed_matches_uncompressed() {
     }
 }
 
+/// raw.pixls.us has the same D7500 scene as 12- and 14-bit lossless compressed NEF. Both store black level 400 in
+/// maker note 0x003d (14-bit units): after subtracting the black level and scaling to white, the two must agree.
+#[test]
+fn corpus_nef_12_bit_black_level_matches_14_bit() {
+    let dir = corpus_root().join("raw");
+    let (Ok(a), Ok(b)) = (std::fs::read(dir.join("nef-nikon-d7500-lossless12.nef")), std::fs::read(dir.join("nef-nikon-d7500-lossless14.nef")))
+    else {
+        eprintln!("skip: D7500 NEF pair absent");
+        return;
+    };
+    let (a, b) = (decode(&a).unwrap(), decode(&b).unwrap());
+    assert_eq!((a.bits, b.bits), (12, 14));
+    assert!((a.black.values[0] - 100.0).abs() < 1.0 && (b.black.values[0] - 400.0).abs() < 1.0, "{:?} {:?}", a.black, b.black);
+    let normalized = |img: &lightcraft_raw::RawImage| {
+        let (black, white) = (img.black.values[0] as f64, img.white[0] as f64);
+        block_means(img).into_iter().map(|v| (v - black) / (white - black)).collect::<Vec<_>>()
+    };
+    // the two shots aren't pixel-aligned (handheld): compare the distributions, not block by block
+    let (mut na, mut nb) = (normalized(&a), normalized(&b));
+    na.sort_by(f64::total_cmp);
+    nb.sort_by(f64::total_cmp);
+    for q in [0.1, 0.5, 0.9] {
+        let (x, y) = (na[(na.len() as f64 * q) as usize], nb[(nb.len() as f64 * q) as usize]);
+        eprintln!("D7500 12- vs 14-bit: normalized quantile {q}: {x:.4} vs {y:.4}");
+        // with the tag read as 12-bit units, the 12-bit values would sit below black (negative)
+        assert!(x > 0.0 && (0.8..1.25).contains(&(x / y)), "quantile {q}: {x} vs {y}");
+    }
+}
+
 /// Issue #138: DNGs converted by Adobe software carry their camera profile's hue/saturation map and
 /// look table; we read them (and render with them). Apple ProRAW carries a tone curve and a gain
 /// table map (its local tone mapping, read and kept but not rendered, as in Lightroom Classic).
@@ -270,4 +299,34 @@ fn corpus_proraw_sky_matte() {
     let (left, right) = (cols(0, 100), cols(1916, 2016));
     eprintln!("sky matte: left columns {left:.3}, right columns {right:.3}");
     assert!(left > 0.5 && right < 0.02, "left {left}, right {right}");
+}
+
+/// Issue #148: Sony ARWs from before ~2017 carry no plain white-balance, black-level or crop tags in the raw IFD.
+/// White balance comes from the maker note's enciphered `Tag2010`, the black level from the encrypted `SR2SubIFD`
+/// and the crop from `FullImageSize`; without them the RX100 III opened bright green. Expected values: the black
+/// levels agree with each sensor's dark-pixel floor, the gains with the neutral sky of the camera JPEG.
+#[test]
+fn corpus_sony_pre2017_colour_metadata() {
+    let dir = corpus_root().join("raw");
+    // (file, black, approximate R and B gains, crop width × height)
+    let cases = [
+        ("arw-sony-rx100m3.arw", 800.0, [2.61, 1.72], (5472, 3648)),
+        ("arw-sony-rx100.arw", 800.0, [2.23, 2.00], (5472, 3648)),
+        ("arw-sony-a7rm2-12bit-uncompressed.arw", 512.0, [2.58, 1.46], (7952, 5304)),
+    ];
+    let mut seen = 0;
+    for (name, black, [r, b], (cw, ch)) in cases {
+        let Ok(bytes) = std::fs::read(dir.join(name)) else {
+            eprintln!("skip: {name} absent");
+            continue;
+        };
+        let img = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(img.black.mean(), black, "{name}: black level");
+        let wb = img.wb_multipliers.unwrap_or_else(|| panic!("{name}: no as-shot white balance"));
+        assert!((wb[0] - r).abs() < 0.01 && wb[1] == 1.0 && (wb[2] - b).abs() < 0.01, "{name}: white balance {wb:?}");
+        assert_eq!((img.crop.width, img.crop.height), (cw, ch), "{name}: crop");
+        assert!(img.white_at(0) > 16000.0, "{name}: white {} (14-bit scale)", img.white_at(0));
+        seen += 1;
+    }
+    eprintln!("pre-2017 Sony ARW colour metadata checked on {seen} files");
 }

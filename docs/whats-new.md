@@ -111,6 +111,16 @@
   changes couldn't be saved tries once more, then asks: Try Saving Again, Quit Anyway or Cancel.
 
 ### Library
+- Photos in Recently Deleted can be restored from the app: right-click ▸ Restore (or Delete Permanently), also in the
+  Photo menu. The filmstrip has the photo context menu too. Adding a file again that is in Recently Deleted no
+  longer just says "duplicate skipped": it opens the side panel on Recently Deleted with the photo selected and says
+  how to restore it or delete it permanently and import it afresh. (For a fresh start on a photo, Reset Edits,
+  Cmd+Shift+R, keeps the photo and clears its edits.)
+- Canon CR3 files show their full-size embedded JPEG (e.g. 6960 × 4640 on an EOS R6 Mark III) instead of the
+  1620 × 1080 preview, and import with their metadata: capture time, camera, lens, exposure, GPS and XMP. Their raw
+  data is not decoded yet, so they stay preview-only. For CR3s imported earlier, Photo ▸ Reload from Disk (now in
+  the Photo menu and the photo context menu) picks up the full-size preview and fills in the camera metadata they
+  were missing, without touching anything already set.
 - Rename Photos never overwrites another photo when only the letter case changes (issue #95): on case-sensitive
   volumes (Linux, case-sensitive APFS) `img_1.JPG` next to `IMG_1.JPG` is a different photo and the renamed one gets
   `img_1-1.JPG`; on case-insensitive volumes the case change still goes through.
@@ -149,9 +159,19 @@
   lost everything at quit; a temporary session shows a banner the whole time and never writes to your library.
 
 ### Editing
+- AI masks with SAM 3 (Object and Describe in the Masking panel): click an object to select it (⌥-click leaves a
+  part out), or type what to select ("sky", "the red car", "car, road"); both combine with other masks, have an
+  Edge setting, and get a sharper zoomed-in pass in the background. The model runs inside LightCraft in pure Rust
+  and never freezes the window. It is optional and not part of LightCraft (Meta's SAM License, about 3.4 GB): the
+  first time you use an AI mask, LightCraft asks before downloading it, shows the progress, can cancel and resume,
+  and checks the file before using it. Masks keep their selection, so they render and export without the model.
 - Auto Sync: edits apply to every selected photo. Auto B&W mix. Automatic versions.
 - Colour-range masks: click the photo to sample. Luminance ranges: range bar, smoothness, luminance map.
 - ⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.
+- Nikon NEFs start from a colour and tone look fitted to the camera's own JPEG, as Sony ARWs do, instead of a muted,
+  greenish neutral rendering (issue #150); white balance is adjusted relative to the as-shot look. 12-bit NEFs
+  (e.g. D750, D780, D850, D7500, Z 50) no longer render nearly black or with crushed shadows: their black level was
+  read in the wrong units.
 
 ### Viewing and sharing
 - Slideshow, second window, All Metadata, System Info.
@@ -161,3 +181,8 @@
   now develop from the raw data instead of the camera's embedded JPEG, so a B&W or other picture style set in the
   camera no longer gets baked in. Photos already imported as "preview only" switch over on Reload. (Files that
   Nikon splits into two differently compressed halves still use the preview for now.)
+- Sony ARWs from before about 2017 (RX100, RX100 II–V, RX10, NEX, SLT, ILCE-6000, A7 / A7 II / A7R II and their
+  siblings) no longer open bright green (issue #148): their as-shot white balance and black level are read from the
+  file (Sony stores them only in scrambled maker-note data on these bodies), the few columns of padding at the right
+  edge are cropped away, and "12-bit uncompressed" files are no longer clipped. The RX100 series renders much closer
+  to the camera's own JPEG.

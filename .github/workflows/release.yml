@@ -1,5 +1,6 @@
-# Release pipeline: every push to `release` builds signed installers for every platform and
-# creates or updates the draft GitHub Release "LightCraft v<version>". See docs/releasing.md.
+# Release pipeline: every push to `release` builds platform artifacts (signed where credentials
+# are configured) and creates or updates the draft GitHub Release "LightCraft v<version>".
+# See docs/releasing.md.
 #
 # All jobs run in the `release` environment (restricted to the `release` branch), which holds
 # the signing secrets. Every secret is optional: missing ones produce unsigned artifacts and a
@@ -70,6 +71,12 @@ jobs:
       LIGHTCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
       - uses: actions/checkout@v4
+      # Fonts (optional build input; required for releases): see craftrules standards/fonts.md.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: storytold/craft-fonts
+          ref: abb83316d96aa59c1cf64784289e378fe9fa5695 # bump deliberately
+          path: craft-fonts
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
@@ -87,6 +94,8 @@ jobs:
         run: packaging/macos/import-cert.sh
       - name: Build, sign, notarize
         env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -120,6 +129,12 @@ jobs:
       LIGHTCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
       - uses: actions/checkout@v4
+      # Fonts (optional build input; required for releases): see craftrules standards/fonts.md.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: storytold/craft-fonts
+          ref: abb83316d96aa59c1cf64784289e378fe9fa5695 # bump deliberately
+          path: craft-fonts
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -136,6 +151,8 @@ jobs:
       - name: Build, sign, package
         shell: pwsh
         env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -170,6 +187,12 @@ jobs:
       NFPM_VERSION: 2.47.0
     steps:
       - uses: actions/checkout@v4
+      # Fonts (optional build input; required for releases): see craftrules standards/fonts.md.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: storytold/craft-fonts
+          ref: abb83316d96aa59c1cf64784289e378fe9fa5695 # bump deliberately
+          path: craft-fonts
       - name: Install build and packaging tools
         run: |
           sudo apt-get update
@@ -187,6 +210,9 @@ jobs:
         if: inputs.version != ''
         run: cargo xtask version set "$LIGHTCRAFT_VERSION"
       - name: Build and package (AppImage, deb, rpm, tar.gz)
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
         run: packaging/linux/package.sh
       - name: Check the packages
         run: |
@@ -215,6 +241,12 @@ jobs:
       WASM_BINDGEN_VERSION: 0.2.129
     steps:
       - uses: actions/checkout@v4
+      # Fonts (optional build input; required for releases): see craftrules standards/fonts.md.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: storytold/craft-fonts
+          ref: abb83316d96aa59c1cf64784289e378fe9fa5695 # bump deliberately
+          path: craft-fonts
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -232,6 +264,9 @@ jobs:
         if: inputs.version != ''
         run: cargo xtask version set "$LIGHTCRAFT_VERSION"
       - name: Build and zip
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
         run: packaging/web/package.sh
       - uses: actions/upload-artifact@v4
         with:
