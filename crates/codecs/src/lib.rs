@@ -217,7 +217,7 @@ pub fn read_header_unguarded(bytes: &[u8], format: Format) -> Result<Header> {
 }
 
 /// Decode a JPEG preview with its enclosing container's colour space as a fallback.
-/// A JPEG carrying ICC or EXIF metadata keeps its own interpretation. The fallback is applied
+/// A JPEG carrying ICC or a recognized EXIF colour space keeps its own interpretation. The fallback is applied
 /// before transfer decoding and linear-light resizing, never to already-resampled pixels.
 pub fn decode_jpeg_with_fallback(bytes: &[u8], opts: DecodeOptions, fallback: NamedSpace) -> Result<Decoded> {
     std::panic::catch_unwind(|| jpeg::decode_with_fallback(bytes, &opts, Some(fallback)))

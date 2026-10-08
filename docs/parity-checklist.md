@@ -233,6 +233,8 @@ JPEG XL DNG camera samples are decoded in their declared linear RGB space withou
 
 ## G. Profiles (PROF)
 
+Embedded preview colour fallback is applied before resizing. ICC and explicit EXIF sRGB/Adobe RGB declarations take precedence; orientation-only EXIF does not block a camera-declared colour space.
+
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
 | LR-PROF-DROPDOWN | Profile menu | P0 | ✅ | `cmd:develop.profile`, `cmd:profiles.list`, `cmd:profiles.menu`, `cmd:profile.favorite`, `crates/ui-egui/src/panels/edit.rs` | Favorites, Recent (last 5), group submenus, favourite toggle; favourites/recent persist with the library; Amount slider under the menu for non-default profiles; Browse… opens the profile browser; resting on an entry previews it in the loupe |
