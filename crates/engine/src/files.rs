@@ -214,6 +214,23 @@ pub fn load_vec(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo),
     rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge))
 }
 
+/// Decode with a versioned sensor interpretation; settings snapshots make results reproducible.
+pub fn load_bytes_with_color(bytes: &[u8], max_edge: usize, color: &lightcraft_develop::RawColor) -> Result<(Rgb32f, SourceInfo), String> {
+    if color.mode == lightcraft_develop::RawColorMode::Legacy {
+        return load_bytes(bytes, max_edge);
+    }
+    rayon::scope(|_| {
+        if let Some(result) = crate::raw_color::load(bytes, max_edge, color)? {
+            return Ok(result);
+        }
+        let (image, mut info) = load_bytes(bytes, max_edge)?;
+        if info.raw {
+            info.raw_color_status = lightcraft_pipeline::RawColorStatus::Estimated;
+        }
+        Ok((image, info))
+    })
+}
+
 fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
     if lightcraft_raw::probe(&bytes).is_some() {
         let mut raw = match lightcraft_raw::decode(&bytes) {
@@ -292,7 +309,10 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
         let relative = crate::camera_preview::file_local_look(raw.format) && t.matrix_is_fallback;
         let camera_tone = camera_look.as_ref().map(|p| p.tone).or_else(|| raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve));
         let (temp, tint) = if relative { (6500.0, 0.0) } else { (temp.round(), tint.round()) };
-        return Ok((img, SourceInfo { raw: true, as_shot_temp: temp, as_shot_tint: tint, lens, relative_wb: relative, camera_tone }));
+        return Ok((
+            img,
+            SourceInfo { raw: true, as_shot_temp: temp, as_shot_tint: tint, lens, relative_wb: relative, camera_tone, ..Default::default() },
+        ));
     }
     let d = lightcraft_codecs::decode(&bytes, lightcraft_codecs::DecodeOptions::fit(max_edge as u32, max_edge as u32)).map_err(|e| e.to_string())?;
     drop(bytes);
@@ -366,13 +386,17 @@ pub fn fs_preview_loader() -> PreviewLoader {
 /// interactive loads (the loupe, exports) never wait — they are counted, so background work
 /// yields to them.
 pub fn fs_hooks() -> (FileLoader, FileProbe) {
-    let loader: FileLoader = Arc::new(|path: &str, max_edge: usize| {
+    let loader: FileLoader = Arc::new(|path: &str, max_edge: usize, color: &lightcraft_develop::RawColor| {
         let len = std::fs::metadata(path).map(|m| m.len() as usize).unwrap_or(0);
         let weight = len * if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 3 } else { 6 };
         let gate = crate::memory::work_gate();
         let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-        let r = load_vec(bytes, max_edge);
+        let r = if color.mode == lightcraft_develop::RawColorMode::Legacy {
+            load_vec(bytes, max_edge)
+        } else {
+            load_bytes_with_color(&bytes, max_edge, color)
+        };
         // the file, the samples and the intermediate images are gone: give their pages back
         crate::memory::release();
         r

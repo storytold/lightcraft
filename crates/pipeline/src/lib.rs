@@ -55,7 +55,8 @@ use lightcraft_raster::{Histogram, Plane, Rgb32f, Rgba8, par_rows};
 pub use tone::ToneMap;
 
 /// Facts about the source the settings are interpreted against.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct SourceInfo {
     /// Lens corrections embedded in the file (DNG opcodes), relative to the EXIF-oriented source.
     pub lens: Option<lightcraft_develop::EmbeddedLens>,
@@ -67,11 +68,24 @@ pub struct SourceInfo {
     /// No measured camera illuminant: WB adjustments are relative to the camera's rendered look.
     pub relative_wb: bool,
     pub camera_tone: Option<tone::CameraTone>,
+    pub camera_wb: Option<lightcraft_color::camera::CameraWb>,
+    pub raw_color_status: RawColorStatus,
+    pub camera_match: bool,
 }
 
 impl Default for SourceInfo {
     fn default() -> Self {
-        Self { raw: false, as_shot_temp: 6500.0, as_shot_tint: 0.0, lens: None, relative_wb: false, camera_tone: None }
+        Self {
+            raw: false,
+            as_shot_temp: 6500.0,
+            as_shot_tint: 0.0,
+            lens: None,
+            relative_wb: false,
+            camera_tone: None,
+            camera_wb: None,
+            raw_color_status: RawColorStatus::Legacy,
+            camera_match: false,
+        }
     }
 }
 
@@ -322,7 +336,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         geo,
         [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
         format!("{:?}", s.spots),
-        format!("{eyes:?}"),
+        format!("{eyes:?}:{:?}", info.camera_wb),
         // defringe runs in this stage
         format!("{:?}", s.optics),
         [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
@@ -507,3 +521,24 @@ mod tests;
 mod tests_geometry;
 #[cfg(test)]
 mod tests_local;
+
+/// Visible distinction between a valid model and the compatibility estimate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RawColorStatus {
+    #[default]
+    Legacy,
+    Estimated,
+    Embedded,
+    Own,
+}
+impl RawColorStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Legacy => "Legacy RAW processing",
+            Self::Estimated => "Estimated colour — no valid camera calibration; previous look retained",
+            Self::Embedded => "Base colour: file calibration",
+            Self::Own => "Base colour: own camera calibration",
+        }
+    }
+}

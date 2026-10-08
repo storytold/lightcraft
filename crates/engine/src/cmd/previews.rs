@@ -166,7 +166,7 @@ fn smart_run(
                 let r = source
                     .ok_or_else(|| "nothing to build from".to_string())
                     .and_then(|s| s.load_source())
-                    .and_then(|src| crate::smart::encode(&src.image, src.info_or(Default::default()).camera_tone.as_ref()))
+                    .and_then(|src| crate::smart::encode_source(&src.image, &src.info_or(Default::default()), src.interpretation))
                     .and_then(|b| lightcraft_catalog::safe_file::write_atomic(&path, &b).map_err(|e| format!("{}: {e}", path.display())));
                 match r {
                     Ok(()) => {

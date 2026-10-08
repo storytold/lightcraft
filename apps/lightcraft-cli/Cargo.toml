@@ -22,6 +22,10 @@ lightcraft-codecs = { workspace = true }
 lightcraft-raster = { workspace = true }
 lightcraft-merge = { workspace = true }
 serde_json = { workspace = true }
+serde = { workspace = true }
+lightcraft-color = { workspace = true }
+lightcraft-raw = { workspace = true }
+sha2 = { version = "0.10", default-features = false, features = ["std"] }
 dhat = { workspace = true, optional = true }
 
 [features]

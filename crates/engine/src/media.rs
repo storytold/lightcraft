@@ -62,7 +62,7 @@ impl SettingsHashes {
 }
 
 /// Bump when the pipeline's output changes, to invalidate cached thumbnails.
-pub const RENDER_CACHE_VERSION: u64 = 11;
+pub const RENDER_CACHE_VERSION: u64 = 13;
 
 /// Thumbnails render at one of these long edges (so window/cell size changes reuse the cache).
 pub const THUMB_SIZES: [usize; 4] = [128, 256, 384, 512];
@@ -105,7 +105,7 @@ impl SourceLevel {
 }
 
 /// Decodes a file into a linear Rec.2020 image no larger than `max_edge` (set by the app).
-pub type FileLoader = Arc<dyn Fn(&str, usize) -> Result<(Rgb32f, SourceInfo), String> + Send + Sync>;
+pub type FileLoader = Arc<dyn Fn(&str, usize, &lightcraft_develop::RawColor) -> Result<(Rgb32f, SourceInfo), String> + Send + Sync>;
 
 /// A raw file's embedded (camera-rendered) preview as display sRGB, oriented, no larger than
 /// `max_edge` (set by the app). `None`: no usable preview.
@@ -114,6 +114,7 @@ pub type PreviewLoader = Arc<dyn Fn(&str, usize) -> Option<Rgba8> + Send + Sync>
 /// Pixels and the source interpretation learned while decoding; they must be cached together.
 #[derive(Clone)]
 pub struct DecodedSource {
+    pub interpretation: u64,
     pub image: Arc<Rgb32f>,
     pub info: Option<SourceInfo>,
     /// A smart preview's stored camera tone curve: the one decoder fact its pixels need that the
@@ -123,7 +124,7 @@ pub struct DecodedSource {
 
 impl DecodedSource {
     pub fn new(image: Arc<Rgb32f>, info: Option<SourceInfo>) -> Self {
-        DecodedSource { image, info, camera_tone: None }
+        DecodedSource { image, info, camera_tone: None, interpretation: 0 }
     }
 
     /// What to render these pixels against: the decoder's facts, else `header` (the catalog's)
@@ -144,6 +145,7 @@ pub enum SourceRef {
         path: String,
         max_edge: usize,
         loader: Option<FileLoader>,
+        color: Box<lightcraft_develop::RawColor>,
         /// The photo's smart preview, used when the original can't be read (offline drive). The
         /// UI thread never checks whether the original is there; the render worker finds out.
         fallback: Option<std::path::PathBuf>,
@@ -163,9 +165,13 @@ impl SourceRef {
         let image = match self {
             SourceRef::Loaded(a) => return Ok((**a).clone()),
             SourceRef::Demo { scene, max_edge } => Arc::new(scene.render_fit(*max_edge)),
-            SourceRef::File { path, max_edge, loader, fallback } => {
+            SourceRef::File { path, max_edge, loader, fallback, color } => {
                 let r = match loader {
-                    Some(l) => l(path, *max_edge).map(|(image, info)| DecodedSource::new(Arc::new(image), Some(info))),
+                    Some(l) => l(path, *max_edge, color).map(|(image, info)| {
+                        let mut source = DecodedSource::new(Arc::new(image), Some(info));
+                        source.interpretation = color.hash64();
+                        source
+                    }),
                     None => Err(format!("no decoder available for {path}")),
                 };
                 // An offline original renders from its smart preview (no decoder facts: header ones).
@@ -336,7 +342,7 @@ impl MediaCache {
 
     /// The facts of photo `id`'s cached sources: the decoder's when one has them, else `header`
     /// (with a smart preview's stored camera tone curve).
-    fn source_facts(&self, id: PhotoId, header: SourceInfo) -> SourceInfo {
+    fn source_facts(&self, id: PhotoId, header: SourceInfo, interpretation: u64) -> SourceInfo {
         let cached = || {
             self.thumbs
                 .peek(&id)
@@ -344,7 +350,11 @@ impl MediaCache {
                 .chain(self.previews.iter().filter(|e| e.0 == id).map(|e| &e.1))
                 .chain(self.full.iter().filter(|e| e.0 == id).map(|e| &e.1))
         };
-        match cached().find(|s| s.info.is_some()).or_else(|| cached().next()) {
+        match cached()
+            .filter(|s| s.interpretation == interpretation)
+            .find(|s| s.info.is_some())
+            .or_else(|| cached().find(|s| s.interpretation == interpretation))
+        {
             Some(s) => s.info_or(header),
             None => header,
         }
@@ -354,7 +364,7 @@ impl MediaCache {
         self.insert_source(id, level, DecodedSource::new(img, None));
     }
 
-    fn insert_source(&mut self, id: PhotoId, level: SourceLevel, img: DecodedSource) {
+    pub(crate) fn insert_source(&mut self, id: PhotoId, level: SourceLevel, img: DecodedSource) {
         let tick = lightcraft_preview::next_tick();
         match level {
             SourceLevel::Thumb => {
@@ -398,7 +408,7 @@ impl MediaCache {
     }
 
     pub fn source_ref(&mut self, p: &Photo, level: SourceLevel) -> SourceRef {
-        if let Some(a) = self.get_source(p.id, level) {
+        if let Some(a) = self.get_source(p.id, level).filter(|a| a.interpretation == p.develop.raw_color.hash64()) {
             return SourceRef::Loaded(Box::new(a));
         }
         // Procedural scenes have a nominal size: "full" is that size, not unbounded.
@@ -417,18 +427,22 @@ impl MediaCache {
             if self.availability.is_offline(path) && self.availability.exists(&sp.to_string_lossy()) == Some(true) {
                 return SourceRef::Smart { path: sp };
             }
-            let mut r = self.origin_ref(&p.source, max_edge);
+            let mut r = self.origin_with_color(&p.source, max_edge, &p.develop.raw_color);
             if let SourceRef::File { fallback, .. } = &mut r {
                 *fallback = Some(sp);
             }
             return r;
         }
-        self.origin_ref(&p.source, max_edge)
+        self.origin_with_color(&p.source, max_edge, &p.develop.raw_color)
     }
 
     /// How to load `origin` at most `max_edge` pixels long, ignoring decoded sources in memory (a
     /// render worker in another wasm instance builds its sources from this).
     pub fn origin_ref(&mut self, origin: &Source, max_edge: usize) -> SourceRef {
+        self.origin_with_color(origin, max_edge, &Default::default())
+    }
+
+    fn origin_with_color(&mut self, origin: &Source, max_edge: usize, color: &lightcraft_develop::RawColor) -> SourceRef {
         match origin {
             Source::Demo { scene } => {
                 if self.scenes.is_empty() {
@@ -436,10 +450,12 @@ impl MediaCache {
                 }
                 match self.scenes.iter().find(|s| s.id == *scene) {
                     Some(s) => SourceRef::Demo { scene: Box::new(s.clone()), max_edge },
-                    None => SourceRef::File { path: format!("demo:{scene}"), max_edge, loader: None, fallback: None },
+                    None => SourceRef::File { path: format!("demo:{scene}"), max_edge, loader: None, fallback: None, color: Box::new(color.clone()) },
                 }
             }
-            Source::File { path } => SourceRef::File { path: path.clone(), max_edge, loader: self.file_loader.clone(), fallback: None },
+            Source::File { path } => {
+                SourceRef::File { path: path.clone(), max_edge, loader: self.file_loader.clone(), fallback: None, color: Box::new(color.clone()) }
+            }
         }
     }
 }
@@ -673,11 +689,12 @@ impl QuickJob {
 
 /// What identifies a photo's pixels for caching: its content hash, else its source.
 pub fn content_key(p: &Photo) -> String {
-    match (&p.content_hash, &p.source) {
+    let base = match (&p.content_hash, &p.source) {
         (Some(h), _) => h.clone(),
         (None, Source::Demo { scene }) => format!("demo:{scene}"),
         (None, Source::File { path }) => format!("file:{path}:{}", p.file_size),
-    }
+    };
+    if p.develop.raw_color.hash64() == 0 { base } else { format!("{base}:raw-color:{}", p.develop.raw_color.hash64()) }
 }
 
 pub fn source_info(p: &Photo) -> SourceInfo {
@@ -717,10 +734,11 @@ impl crate::Session {
         apply_crop: bool,
         thumb_bucket: Option<usize>,
     ) -> Option<RenderJob> {
-        let p = self.catalog.photo(id)?.clone();
+        let mut p = self.catalog.photo(id)?.clone();
         let level = SourceLevel::for_size(max_w.max(max_h));
-        let source = self.media.source_ref(&p, level);
         let settings = if before { Arc::new(self.before_settings(&p)) } else { p.develop.clone() };
+        Arc::make_mut(&mut p).develop = settings.clone();
+        let source = self.media.source_ref(&p, level);
         let request = RenderRequest { apply_crop, ..RenderRequest::fit(max_w, max_h) };
         // the photo id is part of the key: two photos with the same settings and size must not
         // share a result (a view slot showing photo A would otherwise look current for photo B)
@@ -770,6 +788,10 @@ impl crate::Session {
     pub fn preview_job(&mut self, id: PhotoId, max_w: usize, max_h: usize, apply_crop: bool, settings: &DevelopSettings) -> Option<RenderJob> {
         let mut job = self.render_job(id, max_w, max_h, false, apply_crop)?;
         job.settings = Arc::new(settings.clone());
+        let mut p = self.catalog.photo(id)?.clone();
+        Arc::make_mut(&mut p).develop = job.settings.clone();
+        job.source = self.media.source_ref(&p, job.level);
+        job.source_key = Some(Hasher128::new().str(&content_key(&p)).finish());
         job.key = settings.hash64() ^ ((max_w as u64) << 40) ^ ((max_h as u64) << 20) ^ (apply_crop as u64) ^ (job.level as u64) << 60;
         Some(job)
     }
@@ -792,7 +814,8 @@ impl crate::Session {
     /// hash, so a variant renders once; `key` is derived from the same hash, so a frontend can
     /// keep one texture per variant.
     pub fn variant_job(&mut self, id: PhotoId, settings: &DevelopSettings, edge: usize) -> Option<RenderJob> {
-        let p = self.catalog.photo(id)?.clone();
+        let mut p = self.catalog.photo(id)?.clone();
+        Arc::make_mut(&mut p).develop = Arc::new(settings.clone());
         let edge = edge.clamp(16, SourceLevel::Thumb.max_edge());
         let level = SourceLevel::Thumb;
         let source = self.media.source_ref(&p, level);
@@ -971,7 +994,7 @@ impl crate::Session {
     /// Prefer decoder facts to header-only metadata for pixel-statistics commands.
     pub fn source_info(&self, id: PhotoId) -> SourceInfo {
         let header = self.catalog.photo(id).map(|p| source_info(p)).unwrap_or_default();
-        self.media.source_facts(id, header)
+        self.media.source_facts(id, header, self.catalog.photo(id).map_or(0, |p| p.develop.raw_color.hash64()))
     }
 
     /// The source proxy for pixel-statistics commands (auto tone/WB), loading synchronously.
@@ -1086,7 +1109,7 @@ mod thumbnail_hash_tests {
     #[test]
     fn source_from_before_content_reload_is_not_accepted() {
         let mut s = session();
-        s.media.file_loader = Some(Arc::new(|_, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+        s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
         let old = s.thumb_job(PhotoId(1), 256).unwrap().run();
         assert!(old.loaded.is_some());
         s.catalog
@@ -1121,9 +1144,10 @@ mod tests {
         let id = s.active().unwrap();
         let mut job = s.render_job(id, 64, 64, false, true).unwrap();
         job.source = SourceRef::File {
+            color: Default::default(),
             path: "synthetic.arw".into(),
             max_edge: 64,
-            loader: Some(Arc::new(move |_, _| {
+            loader: Some(Arc::new(move |_, _, _| {
                 let mut image = Rgb32f::new(64, 64);
                 image.data.fill([0.1; 3]);
                 Ok((image, info))

@@ -639,3 +639,63 @@ fn output_spaces_match() {
         }
     }
 }
+
+#[test]
+fn tint_directions_match_cpu_for_raw_and_rendered_sources() {
+    if !gpu() {
+        return;
+    }
+    let src = Arc::new(Rgb32f::filled(64, 64, [0.18; 3]));
+    for info in [
+        SourceInfo::default(),
+        SourceInfo { raw: true, relative_wb: true, ..Default::default() },
+        SourceInfo { raw: true, as_shot_temp: 4200.0, as_shot_tint: 15.0, ..Default::default() },
+    ] {
+        for delta in [-50.0, 50.0] {
+            let mut s = DevelopSettings::default();
+            s.wb.mode = WbMode::Custom;
+            s.wb.temp = info.as_shot_temp;
+            s.wb.tint = info.as_shot_tint + delta;
+            check("tint direction", &src, &info, &s, &RenderRequest::fit(64, 64));
+        }
+    }
+}
+
+#[test]
+fn calibrated_camera_wb_matches_cpu_preview_and_export() {
+    use lightcraft_color::{
+        Mat3,
+        camera::{CameraModel, CameraWb},
+        cct,
+    };
+    if !gpu() {
+        return;
+    }
+    let model = CameraModel {
+        reference: None,
+        temperatures: [2856.0, 6504.0],
+        xyz_to_camera: [
+            Mat3([[0.8, 0.15, 0.04], [-0.2, 1.15, 0.1], [0.01, -0.04, 0.7]]),
+            Mat3([[0.75, 0.2, 0.03], [-0.15, 1.1, 0.1], [0.03, -0.05, 0.75]]),
+        ],
+    };
+    let m = model.transform(cct::temp_tint_to_xy(5000.0, 5.0)).unwrap();
+    let info = SourceInfo {
+        raw: true,
+        as_shot_temp: 5000.0,
+        as_shot_tint: 5.0,
+        camera_wb: Some(CameraWb { model, from_working: m.inverse().unwrap() }),
+        ..Default::default()
+    };
+    let src = scene(2, 320, 240);
+    for (t, tint, ev) in [(2856.0, -35.0, -1.0), (4500.0, 0.0, 0.0), (6504.0, 35.0, 1.0)] {
+        let mut s = DevelopSettings::default();
+        s.wb.mode = WbMode::Custom;
+        s.wb.temp = t;
+        s.wb.tint = tint;
+        s.light.exposure = ev;
+        for (w, h) in [(160, 120), (320, 240)] {
+            check("calibrated camera WB", &src, &info, &s, &RenderRequest::fit(w, h));
+        }
+    }
+}

@@ -27,6 +27,7 @@ mod prefs;
 mod preset_files;
 pub mod previews;
 mod query;
+mod raw_color;
 mod xmp;
 
 use serde::Serialize;
@@ -119,6 +120,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(library::specs());
         v.extend(develop::specs());
         v.extend(color::specs());
+        v.extend(raw_color::specs());
         v.extend(curves::specs());
         v.extend(masks::specs());
         v.extend(organize::specs());

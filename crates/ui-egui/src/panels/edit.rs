@@ -76,12 +76,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
     // a raw shown from its embedded JPEG (preview only) gets the rendered-file white balance scale
-    let raw = app.session.catalog.photo(id).is_some_and(|p| p.develops_raw() && !p.relative_wb());
+    let info = app.session.source_info(id);
+    let raw = info.raw && !info.relative_wb;
     let mut d = d;
-    if d.wb.mode == WbMode::AsShot && app.session.catalog.photo(id).is_some_and(|p| p.relative_wb()) {
+    if d.wb.mode == WbMode::AsShot {
         let wb = &mut std::sync::Arc::make_mut(&mut d).wb;
-        wb.temp = 6500.0;
-        wb.tint = 0.0;
+        wb.temp = info.as_shot_temp;
+        wb.tint = info.as_shot_tint;
     }
     let preview_only = app.session.catalog.photo(id).and_then(|p| p.preview_only.clone());
 
@@ -113,6 +114,34 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             });
         });
     });
+    if info.raw {
+        egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 8 }).show(ui, |ui| {
+            let mut selected = d.raw_color.mode;
+            let label = |m| match m {
+                lightcraft_develop::RawColorMode::Legacy => "Legacy RAW processing",
+                lightcraft_develop::RawColorMode::Base => "Base camera colour",
+                lightcraft_develop::RawColorMode::MatchCamera => "Match camera JPEG",
+            };
+            let combo = egui::ComboBox::from_id_salt("raw-color-mode").selected_text(label(selected)).show_ui(ui, |ui| {
+                for mode in
+                    [lightcraft_develop::RawColorMode::Legacy, lightcraft_develop::RawColorMode::Base, lightcraft_develop::RawColorMode::MatchCamera]
+                {
+                    ui.selectable_value(&mut selected, mode, label(mode));
+                }
+            });
+            register(ui.ctx(), "raw-color-mode", combo.response.rect);
+            if selected != d.raw_color.mode {
+                let _ = app.run("develop.rawColor", json!({"mode": selected}));
+            }
+            ui.small(crate::i18n::tr(info.raw_color_status.label()));
+            if d.raw_color.mode != lightcraft_develop::RawColorMode::Legacy && info.relative_wb {
+                ui.small("White balance: relative estimate");
+            }
+            if info.camera_match {
+                ui.small("Camera JPEG tone/chroma match applied");
+            }
+        });
+    }
     if let Some(why) = &preview_only {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 12 }).show(ui, |ui| {
             crate::widgets::preview_only_notice(ui, "edit", why);

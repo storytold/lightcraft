@@ -730,7 +730,7 @@ mod thumbnail_tests {
         fixture_with(Session::new(), (*photo()).clone())
     }
     fn fixture_with(mut s: Session, photo: Photo) -> (crate::LightcraftApp, std::rc::Rc<std::cell::RefCell<Work>>, egui::Context) {
-        s.media.file_loader = Some(Arc::new(|_, _| {
+        s.media.file_loader = Some(Arc::new(|_, _, _| {
             let mut image = lightcraft_raster::Rgb32f::new(8, 8);
             image.data.fill([0.3, 0.2, 0.1]);
             Ok((image, Default::default()))
@@ -912,7 +912,7 @@ mod thumbnail_tests {
         let photo = app.session.catalog.photo(PhotoId(1)).unwrap().as_ref().clone();
         app.session = lightcraft_engine::Session::new();
         app.session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
-        app.session.media.file_loader = Some(Arc::new(|_, _| {
+        app.session.media.file_loader = Some(Arc::new(|_, _, _| {
             let mut image = lightcraft_raster::Rgb32f::new(8, 8);
             image.data.fill([0.1, 0.2, 0.9]);
             Ok((image, Default::default()))

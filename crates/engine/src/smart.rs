@@ -22,10 +22,15 @@ pub fn file_name(p: &Photo) -> String {
 }
 
 /// The most header [`is_valid`] reads (the JSON line before the JPEG).
-const HEADER_MAX: u64 = 4096;
+const HEADER_MAX: u64 = 16384;
 
 /// Encode a source image (and the decoder's camera tone curve, if any) as a smart preview.
 pub fn encode(img: &Rgb32f, tone: Option<&CameraTone>) -> Result<Vec<u8>, String> {
+    encode_source(img, &lightcraft_pipeline::SourceInfo { camera_tone: tone.copied(), ..Default::default() }, 0)
+}
+
+pub fn encode_source(img: &Rgb32f, info: &lightcraft_pipeline::SourceInfo, interpretation: u64) -> Result<Vec<u8>, String> {
+    let tone = info.camera_tone.as_ref();
     // scale so all but the brightest 0.05 % fit into 0..1
     let mut lum: Vec<f32> = img.data.iter().map(|c| c[0].max(c[1]).max(c[2])).filter(|v| v.is_finite()).collect();
     let scale = if lum.is_empty() {
@@ -57,6 +62,8 @@ pub fn encode(img: &Rgb32f, tone: Option<&CameraTone>) -> Result<Vec<u8>, String
     if let Some(t) = tone {
         head["tone"] = serde_json::to_value(t).map_err(|e| e.to_string())?;
     }
+    head["sourceInfo"] = serde_json::to_value(info).map_err(|e| e.to_string())?;
+    head["interpretation"] = serde_json::json!(interpretation);
     out.extend_from_slice(head.to_string().as_bytes());
     out.push(b'\n');
     out.extend_from_slice(&jpg);
@@ -67,7 +74,7 @@ pub fn encode(img: &Rgb32f, tone: Option<&CameraTone>) -> Result<Vec<u8>, String
 /// curve is ignored, like a missing one).
 pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>), String> {
     let rest = bytes.strip_prefix(MAGIC).ok_or("not a smart preview")?;
-    let nl = rest.iter().position(|b| *b == b'\n').ok_or("bad smart preview")?;
+    let nl = rest.iter().position(|b| *b == b'\n').filter(|n| *n < HEADER_MAX as usize).ok_or("bad or oversized smart preview header")?;
     let head: serde_json::Value = serde_json::from_slice(&rest[..nl]).map_err(|e| e.to_string())?;
     let scale = head["scale"].as_f64().unwrap_or(1.0) as f32;
     let tone = head.get("tone").and_then(|t| serde_json::from_value::<CameraTone>(t.clone()).ok());
@@ -190,7 +197,23 @@ pub fn is_valid(path: &Path) -> bool {
 /// Load the proxy at `path`.
 pub fn load(path: &Path) -> Result<crate::media::DecodedSource, String> {
     let b = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    decode(&b).map(|(image, camera_tone)| crate::media::DecodedSource { image: Arc::new(image), info: None, camera_tone })
+    let (image, camera_tone) = decode(&b)?;
+    let rest = b.strip_prefix(MAGIC).ok_or("not a smart preview")?;
+    let nl = rest.iter().position(|b| *b == b'\n').filter(|n| *n < HEADER_MAX as usize).ok_or("bad or oversized smart preview header")?;
+    let head: serde_json::Value = serde_json::from_slice(rest.get(..nl).ok_or("bad smart header")?).map_err(|e| e.to_string())?;
+    let interpretation = head.get("interpretation").and_then(serde_json::Value::as_u64).unwrap_or(0);
+    let info: Option<lightcraft_pipeline::SourceInfo> = if interpretation == 0 {
+        None
+    } else {
+        Some(serde_json::from_value(head.get("sourceInfo").cloned().ok_or("missing calibrated smart preview metadata")?).map_err(|e| e.to_string())?)
+    };
+    if let Some(camera) = info.and_then(|i| i.camera_wb) {
+        camera.model.validate()?;
+        if !lightcraft_color::camera::valid_matrix(camera.from_working) {
+            return Err("invalid smart preview camera transform".into());
+        }
+    }
+    Ok(crate::media::DecodedSource { image: Arc::new(image), info, camera_tone, interpretation })
 }
 
 #[cfg(test)]
@@ -304,5 +327,32 @@ mod tests {
         let mean = err / (img.data.len() * 3) as f64;
         assert!(mean < 0.02, "mean encoded error {mean}");
         assert!(decode(b"nope").is_err());
+    }
+}
+
+#[cfg(test)]
+mod calibrated_tests {
+    #[test]
+    fn calibrated_wb_survives_an_offline_proxy() {
+        use lightcraft_color::{
+            D65, SRGB,
+            camera::{CameraModel, CameraWb},
+        };
+        use lightcraft_pipeline::{RawColorStatus, SourceInfo};
+        let model = CameraModel { temperatures: [2856.0, 6504.0], xyz_to_camera: [SRGB.from_xyz(); 2], reference: None };
+        let info = SourceInfo {
+            raw: true,
+            camera_wb: Some(CameraWb { model, from_working: model.transform(D65).unwrap().inverse().unwrap() }),
+            raw_color_status: RawColorStatus::Own,
+            ..Default::default()
+        };
+        let bytes = super::encode_source(&lightcraft_raster::Rgb32f::filled(32, 24, [0.18; 3]), &info, 1234).unwrap();
+        let path = std::env::temp_dir().join(format!("lc-calibrated-proxy-{}.lcsp", std::process::id()));
+        std::fs::write(&path, bytes).unwrap();
+        assert!(super::is_valid(&path));
+        let loaded = super::load(&path).unwrap();
+        assert_eq!(loaded.info, Some(info));
+        assert_eq!(loaded.interpretation, 1234);
+        std::fs::remove_file(path).unwrap();
     }
 }

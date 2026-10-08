@@ -15,6 +15,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod alloc_release;
+mod chart;
 
 use std::io::{BufReader, Write};
 use std::path::Path;
@@ -85,8 +86,11 @@ USAGE:
       Write synthetic merge inputs (procedural scene; bracketed DNGs or overlapping PNG views).
   lightcraft-cli commands [--json]   list every command id with its parameters
   lightcraft-cli controls [--json]   list every develop control id with its range
-  lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
-      Fit a colour profile per camera model from raw files and their embedded camera JPEGs
+  lightcraft-cli chart sample|fit|validate|inspect …
+      Measure unbalanced chart patches, fit warm/daylight sensor matrices and validate separate
+      originals. See docs/nikon-colour-calibration.md; no measured camera profile is bundled.
+  lightcraft-cli match-camera [--max N] [--out DIR] FOLDERS/FILES…
+      Estimate an optional JPEG style per camera model from raw files and their embedded camera JPEGs
       (Sony ARW, Nikon NEF): up to N files spread over the folders (default 300; 0 = all), pooled per
       model, written as <model>.json to DIR (default: the profiles folder LightCraft reads,
       <config>/camera-profiles, or $LIGHTCRAFT_CAMERA_PROFILES). Raws of a profiled model then
@@ -132,7 +136,14 @@ fn main() -> ExitCode {
         Some("merge") => merge(&args[1..]),
         Some("synth-merge") => synth_merge(&args[1..]),
         Some("controls") => controls(&args[1..]),
-        Some("calibrate") => calibrate(&args[1..]),
+        Some("chart") => chart::run(&args[1..]),
+        Some("match-camera") => calibrate(&args[1..]),
+        Some("calibrate") => {
+            eprintln!(
+                "calibrate is a legacy alias for match-camera: JPEG style estimation, NOT camera calibration. Use chart for measured calibration."
+            );
+            calibrate(&args[1..])
+        }
         Some("--version" | "-V" | "version") => {
             println!("lightcraft-cli {}", env!("CARGO_PKG_VERSION"));
             Ok(())

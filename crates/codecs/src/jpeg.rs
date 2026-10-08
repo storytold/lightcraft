@@ -105,6 +105,10 @@ pub(crate) fn parse_markers(b: &[u8]) -> Option<Markers> {
 }
 
 pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
+    decode_with_fallback(bytes, opts, None)
+}
+
+pub(crate) fn decode_with_fallback(bytes: &[u8], opts: &DecodeOptions, fallback: Option<crate::NamedSpace>) -> Result<Decoded> {
     let m = parse_markers(bytes).ok_or_else(|| Error::Malformed(F, "missing SOI".into()))?;
     if m.components == 0 {
         return Err(Error::Malformed(F, "no frame header".into()));
@@ -119,7 +123,10 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     } else {
         decode_zune(bytes, &m)?
     };
-    let meta = Meta { icc: m.icc, exif: m.exif, xmp: m.xmp, ..Default::default() };
+    // A raw container may carry the colour declaration of an otherwise untagged preview.
+    // Apply it before linearization/resizing; existing JPEG metadata always wins.
+    let hint = fallback.filter(|_| m.icc.is_none() && m.exif.is_none()).map(|space| crate::SourceSpace::named(space, crate::SpaceOrigin::Container));
+    let meta = Meta { icc: m.icc, exif: m.exif, xmp: m.xmp, hint, ..Default::default() };
     finish(F, raw, meta, (m.width, m.height), opts)
 }
 
@@ -245,6 +252,44 @@ fn mpf_images(m: &Markers) -> Vec<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn container_fallback_matches_tagged_jpeg_before_resizing_and_keeps_own_metadata() {
+        use crate::{ChromaSubsampling, EncodeImage, EncodeMeta, NamedSpace, Samples, SpaceOrigin, encode_jpeg};
+        let pixels: Vec<u8> = (0..16 * 16).flat_map(|i| if i % 2 == 0 { [120, 180, 90] } else { [30, 100, 200] }).collect();
+        let encode = |icc, exif| {
+            encode_jpeg(
+                &EncodeImage::new(16, 16, 3, Samples::U8(&pixels)),
+                100,
+                ChromaSubsampling::S444,
+                &EncodeMeta { icc, exif, ..Default::default() },
+            )
+            .unwrap()
+        };
+        let untagged = encode(None, None);
+        let adobe = crate::icc::write_named(NamedSpace::AdobeRgb);
+        let tagged = encode(Some(&adobe), None);
+        for opts in [DecodeOptions::default(), DecodeOptions::fit(3, 3)] {
+            let with = crate::decode_jpeg_with_fallback(&untagged, opts, NamedSpace::AdobeRgb).unwrap();
+            let expected = crate::decode(&tagged, opts).unwrap();
+            assert_eq!(with.space.origin, SpaceOrigin::Container);
+            let (a, b) = (with.to_working(), expected.to_working());
+            for (p, q) in a.data.iter().zip(&b.data) {
+                assert!(p.iter().zip(q).all(|(a, b)| (a - b).abs() < 0.0001), "{p:?} != {q:?}");
+            }
+        }
+        let srgb = crate::icc::write_named(NamedSpace::Srgb);
+        let exif = crate::exif::minimal_exif(6);
+        for bytes in [encode(Some(&srgb), None), encode(None, Some(&exif)), encode(Some(b"bad ICC"), None)] {
+            let opts = DecodeOptions::fit(5, 5);
+            let with = crate::decode_jpeg_with_fallback(&bytes, opts, NamedSpace::AdobeRgb).unwrap();
+            let expected = crate::decode(&bytes, opts).unwrap();
+            assert_eq!(with.space, expected.space);
+            assert_eq!(with.image, expected.image);
+            assert_eq!(with.orientation, expected.orientation);
+        }
+        assert!(crate::decode_jpeg_with_fallback(b"bad JPEG", DecodeOptions::default(), NamedSpace::AdobeRgb).is_err());
+    }
 
     #[test]
     fn scaled_request_covers() {

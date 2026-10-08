@@ -32,6 +32,7 @@ pub mod originals;
 pub mod preset_import;
 pub mod preset_luminar;
 pub mod presets;
+pub mod raw_color;
 pub mod rename;
 pub mod segment;
 pub mod sidecar;
@@ -500,6 +501,17 @@ impl Session {
     /// Change a photo's develop settings. During an interaction the change is previewed without an
     /// undo step; otherwise it is committed with a history entry.
     pub fn set_develop(&mut self, id: PhotoId, settings: DevelopSettings, label: &str) -> Result<()> {
+        if settings.raw_color.mode != lightcraft_develop::RawColorMode::Legacy {
+            if let Some(profile) = &settings.raw_color.calibration {
+                profile.validate().map_err(EngineError::Other)?;
+            }
+            if settings.wb.mode != lightcraft_develop::WbMode::AsShot
+                && let Some(camera) = self.source_info(id).camera_wb
+                && camera.correction(settings.wb.temp, settings.wb.tint).is_none()
+            {
+                return Err(EngineError::Other("white balance is outside this camera model's valid range".into()));
+            }
+        }
         let now = (self.clock)();
         let settings = Arc::new(settings);
         if let Some(i) = &self.interaction
@@ -528,7 +540,7 @@ impl Session {
         let Some(old) = self.develop_of(id) else { return Vec::new() };
         let Some(mut delta) = json_delta(&old.to_json(), &new.to_json()) else { return Vec::new() };
         if let Some(o) = delta.as_object_mut() {
-            for k in ["spots", "red_eye", "version"] {
+            for k in ["spots", "red_eye", "version", "raw_color"] {
                 o.remove(k);
             }
             if o.is_empty() {
