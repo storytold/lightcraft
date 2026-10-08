@@ -67,6 +67,8 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 
 ## A. Import (IMP)
 
+JPEG XL DNG camera samples are decoded in their declared linear RGB space without display gamut mapping. XYB tiles with non-linear transfer functions or ICC encodings remain unsupported rather than being interpreted as linear camera samples.
+
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
 | 2026-10-12 | minor | LR-IMP-FORMATS: Mamiya MEF decodes from sensor data and is imported (`vendor/mef.rs`) |

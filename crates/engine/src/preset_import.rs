@@ -698,7 +698,11 @@ text]], z = ZSTR "loc" }"#,
         let c = p.settings["curve"]["master"].as_array().unwrap();
         assert_eq!(c.len(), 3);
         assert!((c[0]["y"].as_f64().unwrap() - 20.0 / 255.0).abs() < 1e-9);
-        assert_eq!(v[0].unmapped, vec!["CameraProfile".to_string()], "profiles are ours; the rest is mapped or bookkeeping");
+        assert_eq!(
+            v[0].unmapped,
+            vec!["CameraProfile".to_string(), "EnableColorAdjustments".to_string()],
+            "profiles and unverified panel switches are reported"
+        );
         // it parses into real develop settings
         let d = lightcraft_develop::DevelopSettings::default().merged(&p.settings).expect("valid develop settings");
         assert_eq!(d.light.exposure, 0.35);
@@ -828,7 +832,7 @@ text]], z = ZSTR "loc" }"#,
         let got: Vec<(String, String)> =
             r["imported"].as_array().unwrap().iter().map(|i| (i["name"].as_str().unwrap().into(), i["group"].as_str().unwrap().into())).collect();
         assert_eq!(got, [("Warm Fade".to_string(), "Film".to_string()), ("Bright".into(), "Street".into())]);
-        assert_eq!(r["imported"][0]["unmapped"], json!(["CameraProfile"]));
+        assert_eq!(r["imported"][0]["unmapped"], json!(["CameraProfile", "EnableColorAdjustments"]));
         assert_eq!(s.presets.len(), before + 2);
         // importing again adds nothing
         let r = s.execute("preset.import", &json!({"paths": paths})).unwrap();

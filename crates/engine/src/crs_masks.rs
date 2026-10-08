@@ -167,9 +167,10 @@ fn radial_feather(m: &XmpValue, container: &str) -> f64 {
 fn component(m: &XmpValue, container: &str, aspect: f64) -> Result<Value, String> {
     let what = text(m, "crs:What").unwrap_or("");
     let op = match num(m, "crs:MaskBlendMode").unwrap_or(0.0) as i64 {
+        0 => "add",
         1 => "subtract",
         2 => "intersect",
-        _ => "add",
+        other => return Err(format!("blend mode {other}")),
     };
     let invert = flag(m, "crs:MaskInverted").unwrap_or(false);
     // positions are fractions of the image's width / height; our radii are in long-edge units
@@ -259,6 +260,13 @@ pub fn masks(values: &Values, aspect: f64) -> (Vec<Value>, Vec<String>) {
         for c in list.items() {
             if flag(c, "crs:CorrectionActive") == Some(false) {
                 continue;
+            }
+            if let XmpValue::Struct(fields) = c {
+                for field in fields.keys().filter(|k| k.starts_with("crs:Local")) {
+                    if !LOCAL.iter().any(|(name, _, _)| field.trim_start_matches("crs:") == *name) && num(c, field).is_some_and(|v| v != 0.0) {
+                        skipped.push(field.trim_start_matches("crs:").to_string());
+                    }
+                }
             }
             let comps = c.field("crs:CorrectionMasks").map(XmpValue::items).unwrap_or_default();
             let mut parts = Vec::new();
@@ -449,6 +457,29 @@ pub fn refit_radials(partial: &mut Value, from: f64, to: f64) {
 mod tests {
     use super::*;
     use lightcraft_develop::{DevelopSettings, MaskOp, MaskShape};
+
+    #[test]
+    fn unsupported_local_sliders_and_blend_modes_are_reported() {
+        let correction = XmpValue::Struct(
+            [
+                ("crs:LocalExposure2012".into(), XmpValue::Text("0.25".into())),
+                ("crs:LocalUnsupportedAdjustment".into(), XmpValue::Text("0.5".into())),
+                ("crs:LocalZeroAdjustment".into(), XmpValue::Text("0".into())),
+                (
+                    "crs:CorrectionMasks".into(),
+                    XmpValue::Array(vec![XmpValue::Struct(
+                        [("crs:What".into(), XmpValue::Text("Mask/Gradient".into())), ("crs:MaskBlendMode".into(), XmpValue::Text("7".into()))]
+                            .into(),
+                    )]),
+                ),
+            ]
+            .into(),
+        );
+        let values = Values::from([("crs:MaskGroupBasedCorrections".into(), XmpValue::Array(vec![correction]))]);
+        let (masks, skipped) = masks(&values, 1.5);
+        assert!(masks.is_empty());
+        assert_eq!(skipped, vec!["LocalUnsupportedAdjustment", "blend mode 7"]);
+    }
 
     /// A packet in the shape local corrections take (values written for this test).
     const PACKET: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">

@@ -338,6 +338,18 @@ mod lossy_tests {
     use super::*;
     use lightcraft_tiff::image::Layout;
 
+    const JXL_TILE: &[u8] = &[
+        0, 0, 0, 12, 74, 88, 76, 32, 13, 10, 135, 10, 0, 0, 0, 20, 102, 116, 121, 112, 106, 120, 108, 32, 0, 0, 0, 0, 106, 120, 108, 32, 0, 0, 0, 9,
+        106, 120, 108, 108, 10, 0, 0, 0, 229, 106, 120, 108, 99, 255, 10, 24, 112, 252, 64, 2, 8, 4, 1, 0, 64, 3, 75, 18, 197, 130, 5, 82, 208, 253,
+        70, 108, 12, 106, 12, 98, 12, 14, 198, 96, 45, 198, 24, 21, 21, 10, 116, 209, 200, 24, 201, 24, 131, 65, 93, 32, 64, 0, 24, 100, 90, 0, 116,
+        1, 162, 48, 197, 152, 234, 96, 135, 165, 53, 34, 196, 72, 177, 34, 133, 32, 118, 138, 20, 41, 82, 172, 72, 177, 98, 247, 56, 197, 138, 20,
+        43, 82, 172, 88, 59, 76, 177, 34, 197, 138, 20, 43, 82, 228, 92, 125, 56, 245, 207, 222, 81, 152, 83, 183, 105, 80, 148, 145, 248, 244, 87,
+        90, 36, 151, 69, 132, 121, 217, 159, 30, 14, 232, 212, 223, 162, 75, 10, 127, 65, 33, 34, 214, 148, 4, 9, 18, 36, 72, 144, 32, 85, 172, 67,
+        130, 4, 9, 18, 161, 79, 18, 80, 80, 14, 126, 249, 199, 110, 18, 247, 21, 115, 198, 241, 30, 241, 110, 100, 142, 126, 47, 30, 123, 123, 4, 57,
+        127, 117, 109, 27, 210, 139, 196, 81, 139, 241, 151, 151, 255, 30, 62, 60, 217, 98, 248, 240, 225, 195, 247, 175, 79, 44, 104, 96, 9, 48, 56,
+        160, 65, 18, 0, 64, 0, 208, 1, 64, 0,
+    ];
+
     /// A lossy-DNG-style image: two 16×8 tiles, each a baseline JPEG, the right one cut short
     /// by the image edge.
     #[test]
@@ -466,5 +478,110 @@ mod lossy_tests {
         assert_eq!(decode(8, 8), Ok(RawData::U16(vec![300; 8 * 8])));
         // half of the visible rows are missing
         assert!(decode(8, 4).is_err());
+    }
+
+    /// Original procedural RGB ramp, losslessly encoded with cjxl 0.11.1. Embedded as code so
+    /// tests need neither a native encoder nor a media fixture. Values deliberately exceed 8 bits.
+    #[cfg(feature = "jxl")]
+    #[test]
+    fn jpeg_xl_preserves_camera_samples_and_rejects_mismatched_headers() {
+        let ChunkPx::U16(samples) = jxl_chunk(JXL_TILE, 8, 4, 8, 4, 3, 16, false).unwrap() else { panic!("integer tile") };
+        let expected: Vec<u16> = (0..32).flat_map(|i| [1001 + i * 1301, 60123 - i * 997, 251 + i * 1113]).collect();
+        assert_eq!(samples, expected);
+        for (w, h, cpp, bits, float) in [(7, 4, 3, 16, false), (8, 3, 3, 16, false), (8, 4, 1, 16, false), (8, 4, 3, 16, true)] {
+            assert!(jxl_chunk(JXL_TILE, w, h, w, h, cpp, bits, float).is_err());
+        }
+        assert!(jxl_chunk(&JXL_TILE[..12], 8, 4, 8, 4, 3, 16, false).is_err());
+    }
+
+    #[test]
+    fn jpeg_xl_failed_tile_rejects_the_whole_image() {
+        let mut file = JXL_TILE.to_vec();
+        file.extend_from_slice(&[0; 32]);
+        let mut info = ImageInfo {
+            width: 16,
+            height: 4,
+            bits_per_sample: vec![16; 3],
+            samples_per_pixel: 3,
+            compression: comp::JPEG_XL,
+            photometric: 34892,
+            planar: 1,
+            predictor: 1,
+            sample_format: 1,
+            new_subfile_type: 16,
+            layout: Layout::Tiles { tile_width: 8, tile_height: 4 },
+            offsets: vec![0, JXL_TILE.len() as u64],
+            byte_counts: vec![JXL_TILE.len() as u64, 32],
+        };
+        assert!(read_image(&file, &info, ByteOrder::Little, Packing::Msb).is_err());
+        info.offsets.pop();
+        info.byte_counts.pop();
+        assert!(read_image(&file, &info, ByteOrder::Little, Packing::Msb).is_err());
+    }
+
+    /// Own 64×64 step/ramp scene: RGB(x,y) is 65535 for x<32, otherwise x*131+y*91.
+    /// cjxl 0.11.1, VarDCT distance .01/effort 9, linear Rec.2020. The declared narrow
+    /// Modular header is insufficient for this scene's coefficients; the default decoder fails.
+    #[cfg(feature = "jxl")]
+    #[test]
+    fn jpeg_xl_high_range_predictors_use_wide_buffers() {
+        const TILE: &[u8] = &[
+            255, 10, 79, 240, 147, 144, 71, 131, 0, 19, 8, 0, 164, 5, 255, 255, 114, 12, 0, 128, 10, 21, 216, 54, 236, 81, 88, 56, 94, 40, 160, 80,
+            88, 194, 9, 170, 23, 175, 225, 39, 20, 6, 36, 6, 223, 47, 33, 97, 10, 0, 247, 139, 241, 238, 46, 222, 197, 24, 116, 231, 189, 113, 68, 0,
+            174, 3, 145, 186, 59, 59, 38, 163, 95, 150, 244, 1, 176, 132, 107, 54, 51, 191, 73, 200, 116, 2, 244, 44, 234, 184, 207, 108, 220, 84,
+            55, 179, 1, 11, 194, 236, 124, 143, 67, 145, 135, 42, 57, 180, 71, 133, 4, 127, 39, 37, 6, 124, 2, 73, 153, 16, 195, 224, 211, 241, 158,
+            1, 4, 188, 41, 64, 224, 33, 177, 133, 14, 170, 20, 11, 137, 48, 237, 132, 154, 0, 129, 2, 102, 7, 8, 221, 4, 0, 82, 160, 64, 209, 130,
+            251, 251, 210, 93, 6, 90, 13, 136, 214, 177, 165, 73, 150, 218, 223, 202, 191, 132, 9, 212, 117, 7, 5, 196, 191, 224, 0, 0, 17, 138, 150,
+            100, 30, 205, 1, 34, 162, 163, 163, 163, 207, 177, 177, 81, 241, 250, 141, 149, 2, 176, 190, 55, 188, 141, 179, 241, 245, 132, 150, 126,
+            115, 226, 177, 249, 145, 5, 22, 150, 187, 113, 45, 58, 249, 127, 27, 55, 112, 241, 46, 175, 60, 184, 46, 248, 213, 3, 93, 110, 168, 146,
+            113, 11, 163, 171, 87, 66, 164, 185, 37, 0, 65, 162, 15, 113, 57, 205, 163, 146, 14, 253, 85, 132, 110, 3, 82, 62, 56, 22, 75, 53, 48, 2,
+            176, 154, 22, 81, 154, 8, 20, 144, 198, 178, 140, 149, 70, 222, 32, 221, 193, 25, 223, 202, 76, 155, 159, 44, 93, 242, 245, 76, 195, 79,
+            121, 122, 162, 208, 55, 43, 10, 199, 145, 252, 39, 9, 97, 147, 34, 16, 135, 16, 243, 215, 100, 90, 210, 230, 113, 11, 69, 240, 213, 146,
+            159, 79, 49, 80, 108, 44, 235, 145, 195, 7, 163, 238, 129, 217, 203, 66, 64, 22, 195, 46, 136, 15, 23, 42, 54, 41, 94, 5, 64, 205, 111,
+            127, 70, 14, 232, 7,
+        ];
+        let narrow = jxl_oxide::JxlImage::builder().read(std::io::Cursor::new(TILE)).unwrap();
+        assert!(narrow.render_frame(0).is_err());
+        let ChunkPx::U16(samples) = jxl_chunk(TILE, 64, 64, 64, 64, 3, 16, false).unwrap() else { panic!("integer tile") };
+        // Native djxl reference samples of this original procedural scene, within float roundoff.
+        for (pixel, expected) in [(0, 65535), (32, 4198), (33, 4324), (63, 8251), (100, 4805), (1000, 6605), (4095, 13986)] {
+            for channel in 0..3 {
+                assert!((samples[pixel * 3 + channel] as i32 - expected).abs() <= 2);
+            }
+        }
+    }
+
+    /// Own saturated cyan scene (6000,64000,62000), encoded as linear Rec.2020 XYB.
+    /// Intermediate sRGB is outside its gamut; display gamut mapping would destroy camera data.
+    #[cfg(feature = "jxl")]
+    #[test]
+    fn jpeg_xl_xyb_reconstructs_camera_samples_without_gamut_mapping() {
+        const TILE: &[u8] = &[
+            255, 10, 24, 112, 252, 36, 228, 209, 32, 0, 19, 8, 0, 208, 0, 255, 255, 114, 12, 0, 128, 10, 149, 81, 198, 13, 94, 206, 245, 124, 249,
+            161, 195, 98, 218, 198, 117, 134, 182, 218, 182, 176, 132, 49, 241, 140, 131, 133, 132, 20, 176, 113, 113, 96, 216, 205, 41, 60, 118,
+            217, 244, 199, 64, 208, 162, 18, 0,
+        ];
+        let ChunkPx::U16(samples) = jxl_chunk(TILE, 8, 4, 8, 4, 3, 16, false).unwrap() else { panic!("integer tile") };
+        for pixel in samples.as_chunks::<3>().0 {
+            for (&actual, expected) in pixel.iter().zip([6001, 63994, 62001]) {
+                assert!((actual as i32 - expected).abs() <= 2, "{pixel:?}");
+            }
+        }
+        // Malformed/non-linear encodings are covered by the upstream jxl::tests
+        // output_for checks; this fixture verifies the decoded camera samples.
+    }
+
+    /// Own constant float scene: linear values include highlight headroom above 1.0.
+    #[cfg(feature = "jxl")]
+    #[test]
+    fn jpeg_xl_preserves_floating_point_camera_samples() {
+        const TILE: &[u8] = &[
+            0, 0, 0, 12, 74, 88, 76, 32, 13, 10, 135, 10, 0, 0, 0, 20, 102, 116, 121, 112, 106, 120, 108, 32, 0, 0, 0, 0, 106, 120, 108, 32, 0, 0, 0,
+            9, 106, 120, 108, 108, 10, 0, 0, 0, 79, 106, 120, 108, 99, 255, 10, 24, 112, 114, 144, 8, 4, 1, 0, 236, 0, 75, 18, 197, 130, 133, 36,
+            218, 142, 184, 177, 133, 144, 5, 155, 40, 150, 252, 9, 0, 0, 0, 47, 0, 0, 4, 30, 0, 84, 5, 0, 0, 4, 0, 0, 176, 7, 0, 64, 0, 7, 64, 42, 0,
+            0, 0, 1, 0, 0, 252, 2, 0, 16, 104, 0, 170, 2, 0, 0, 0,
+        ];
+        let ChunkPx::F32(samples) = jxl_chunk(TILE, 8, 4, 8, 4, 3, 32, true).unwrap() else { panic!("float tile") };
+        assert_eq!(samples, [0.125, 0.375, 1.5].repeat(32));
     }
 }

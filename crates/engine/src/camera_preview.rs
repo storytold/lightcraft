@@ -85,10 +85,11 @@ pub(crate) fn file_local_look(format: RawFormat) -> bool {
 pub(crate) fn starting_colour(
     raw: &mut RawImage,
     bytes: &[u8],
+    external_profiles: bool,
     lens: Option<&LensGeometry>,
     embedded: Option<&lightcraft_develop::EmbeddedLens>,
 ) -> (Xy, CameraTransform, Option<CameraLook>) {
-    let (xy, t, look) = starting_colour_with(raw, |raw, t| fit_preview(raw, bytes, t, lens), |raw, t| monochrome_look(raw, bytes, t, lens));
+    let (xy, t, look) = starting_colour_with(raw, |raw, t| fit_preview(raw, bytes, t, external_profiles, lens), |raw, t| monochrome_look(raw, bytes, t, lens));
     if look.is_none() && dng_tone_eligible(raw, &t) {
         let look = fit_dng_tone(raw, bytes, &t, embedded);
         return (xy, t, look);
@@ -162,7 +163,7 @@ pub(crate) fn starting_colour_tags(raw: &mut RawImage, bytes: &[u8]) -> Option<C
     let scale = crate::files::WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
     let white = scale.dng_white(&raw.color, lightcraft_raw::color::as_shot_white_xy(raw));
     // (a merge frame arrives without its lens warp: `lightcraft_merge` removes it before calling)
-    let (_, t, look) = starting_colour(raw, bytes, None, None);
+    let (_, t, look) = starting_colour(raw, bytes, true, None, None);
     dng_colour(&raw.color, &white, &t, look.as_ref())
 }
 
@@ -260,7 +261,7 @@ fn dng_tone_curve(tone: &CameraTone) -> Option<ToneCurve> {
 }
 
 /// The look fitted to the file's camera JPEG, and whether that JPEG is black and white ([`monochrome`]).
-pub(crate) fn fit_preview(raw: &RawImage, bytes: &[u8], transform: &CameraTransform, lens: Option<&LensGeometry>) -> (Option<CameraLook>, bool) {
+pub(crate) fn fit_preview(raw: &RawImage, bytes: &[u8], transform: &CameraTransform, external_profiles: bool, lens: Option<&LensGeometry>) -> (Option<CameraLook>, bool) {
     if !transform.matrix_is_fallback || !file_local_look(raw.format) {
         return (None, false);
     }
@@ -268,7 +269,9 @@ pub(crate) fn fit_preview(raw: &RawImage, bytes: &[u8], transform: &CameraTransf
     let black_and_white = monochrome(&reference);
     // A camera profile pooled from many photos knows colours this photo shows too little of;
     // try its colour first and fit tone/chroma per photo (picture styles vary).
-    let profile = raw.metadata.model.as_deref().and_then(crate::camera_profiles::get);
+    let profile = raw.metadata.model.as_deref().and_then(|model| {
+        if external_profiles { crate::camera_profiles::get(model) } else { crate::camera_profiles::bundled(model).map(std::sync::Arc::new) }
+    });
     let colour = profile.as_ref().and_then(|p| Some((p.matrix().mul(&transform.matrix.inverse()?), p.hue_sat.clone())));
     let look = match fit_look(&sensor, &reference, &clipped, colour.clone()) {
         Some(look) => look,
@@ -2593,7 +2596,7 @@ mod tests {
         assert!(crate::camera_profiles::get("ILCE-7M4").is_some());
         let camera = lightcraft_raw::spectral::find(Some("SONY"), "ILCE-7M4").unwrap();
         let mut raw = raw_of(RawFormat::Arw, "SONY", "ILCE-7M4", Default::default());
-        let (_, t, look) = starting_colour(&mut raw, &[], None, None);
+        let (_, t, look) = starting_colour(&mut raw, &[], true, None, None);
         assert!(look.is_none());
         assert_eq!(raw.color.color_matrix, camera.color_matrix.map(Some));
         assert!(!t.matrix_is_fallback);
@@ -2652,13 +2655,13 @@ mod tests {
     #[test]
     fn a_camera_outside_the_table_keeps_the_fallback() {
         let mut raw = raw_of(RawFormat::Cr2, "Canon", "Canon EOS 7D", Default::default());
-        let (_, t, look) = starting_colour(&mut raw, &[], None, None);
+        let (_, t, look) = starting_colour(&mut raw, &[], true, None, None);
         assert!(look.is_none() && t.matrix_is_fallback);
         assert_eq!(raw.color, lightcraft_raw::ColorData::default());
         // without a model there is no table row
         let mut raw = raw_of(RawFormat::Cr2, "Canon", "", Default::default());
         raw.metadata.model = None;
-        assert!(starting_colour(&mut raw, &[], None, None).1.matrix_is_fallback);
+        assert!(starting_colour(&mut raw, &[], true, None, None).1.matrix_is_fallback);
     }
 
     /// The colour precedence on public raws (each skipped without its corpus file): a photo whose JPEG fit is
@@ -2684,7 +2687,7 @@ mod tests {
             let measured = lightcraft_raw::spectral::find(make, model).is_some();
             let covered = measured || lightcraft_raw::kelvin_presets::covers(make, model);
             let before = raw.color.clone();
-            let (_, t, fitted) = starting_colour(&mut raw, &bytes, lens.as_ref(), None);
+            let (_, t, fitted) = starting_colour(&mut raw, &bytes, true, lens.as_ref(), None);
             let spectral = !own && fitted.is_none() && measured;
             eprintln!("{name}: own matrices {own}, JPEG fit {}, spectral {spectral}", fitted.is_some());
             assert_eq!(raw.color != before, spectral, "{name}");
@@ -2792,7 +2795,7 @@ mod tests {
         assert_eq!(raw.format, RawFormat::Cr3);
         assert_eq!(raw.info().developed_size(), (6000, 4000));
         let transform = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
-        let look = fit_preview(&raw, &bytes, &transform, None).0;
+        let look = fit_preview(&raw, &bytes, &transform, true, None).0;
         eprintln!("R100 guarded colour fit accepted: {}", look.is_some());
         assert!(look.is_some(), "this R100 corpus photo has enough matching colour after camera-framing alignment");
         let (_, info) = crate::files::load_bytes(&bytes, 400).unwrap();
@@ -2825,7 +2828,7 @@ mod tests {
         let raw = lightcraft_raw::decode(&bytes).unwrap();
         assert_eq!(raw.metadata.model.as_deref(), Some(model));
         let transform = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
-        let look = fit_preview(&raw, &bytes, &transform, None).0.expect("fit accepted");
+        let look = fit_preview(&raw, &bytes, &transform, true, None).0.expect("fit accepted");
         let expected = bundled.matrix().mul(&transform.matrix.inverse().unwrap());
         for (row, want) in look.matrix.0.iter().zip(expected.0) {
             for (got, want) in row.iter().zip(want) {
@@ -3206,7 +3209,7 @@ mod tests {
             let mut raw = lightcraft_raw::decode(&bytes).unwrap();
             raw.opcodes.list3.retain(|op| !op.is_lens_correction());
             let transform = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
-            let look = fit_preview(&raw, &bytes, &transform, None).0.expect("a camera look");
+            let look = fit_preview(&raw, &bytes, &transform, true, None).0.expect("a camera look");
             // the look fitted to the JPEG, as before this change
             let (sensor, reference, clipped) = proxies(&raw, &bytes, &transform, PROXY, 0.0, None).unwrap();
             let profile = raw.metadata.model.as_deref().and_then(crate::camera_profiles::get);

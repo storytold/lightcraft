@@ -113,7 +113,7 @@ application's renderer and is ignored: the photo keeps LightCraft's own process,
 | `Exposure2012` | `light.exposure` | EV, 1:1 |
 | `Contrast2012`, `Highlights2012`, `Shadows2012`, `Whites2012`, `Blacks2012` | `light.contrast` … `light.blacks` | −100..100, 1:1 |
 | `HDREditMode` | `hdr.enabled` | `1` / `True` = HDR editing on, `0` / `False` off |
-| `WhiteBalance` | `wb.mode` | `As Shot`, `Auto`, `Daylight`, `Cloudy`, `Shade`, `Tungsten`, `Fluorescent`, `Flash`; other names → custom |
+| `WhiteBalance` | `wb.mode` | As Shot keeps the source white point. Other modes preserve resolved numeric Temperature/Tint as custom when representable on the target scale; without values, named presets resolve normally. |
 | `Temperature`, `Tint` | `wb.temp`, `wb.tint` (+ `wb.scale: kelvin`) | Kelvin / tint as written for raws with colour matrices — in the file (DNG) or measured for the camera (`lightcraft_raw::spectral`: ILCE-7M3, D850, EOS 5D Mark III…, issue #730) or read from its white-balance presets (`lightcraft_raw::kelvin_presets`: ILCA-99M2, ILCA-77M2…) — and for presets; the mapped settings say `"scale": "kelvin"` so the value stays Kelvin wherever it lands. Raws LightCraft develops relative to their as-shot look (ARW, NEF, RW2, RAF, CR3, CR2, PEF, SRW of other cameras: 6500 K / 0 means as shot) take the same mired shift from the packet's `AsShotTemperature` / `AsShotTint` instead; without that reference a custom Kelvin stays As Shot and is reported (`Temperature, Tint (custom white balance without AsShotTemperature: kept As Shot)`), because read on the relative scale it would be a large colour cast (issue #510). Note that LightCraft's Kelvin for a camera comes from its measured matrices, Lightroom's from Adobe's: the two scales differ (about 7–10 % on the ILCE-7M3), so the number is carried over, not the exact look |
 | `IncrementalTemperature`, `IncrementalTint` | `wb.temp`, `wb.tint` | rendered files: −100..100 on our relative scale (mired shift around 6500 K, same as the Temp slider); a rendered file with only `Temperature` shifts from `AsShotTemperature` like the raws above when it is present |
 | `Vibrance`, `Saturation` | `color.vibrance`, `color.saturation` | 1:1 |
@@ -142,6 +142,8 @@ application's renderer and is ignored: the photo keeps LightCraft's own process,
 | `PerspectiveVertical/Horizontal/Rotate/Scale/Aspect/X/Y` | `geometry.vertical/horizontal/rotate/scale/aspect/offset_x/offset_y` | |
 | `PerspectiveUpright` | `geometry.upright` | 0 off, 1 auto, 2 level, 3 vertical, 4 full, 5 guided; saved `UprightTransform_*` matrices are not imported, so photo import reports that Lightroom geometry was not preserved and the selected mode will be recalculated |
 | `HasCrop`, `CropLeft/Top/Right/Bottom`, `CropAngle` | `crop.geometry` | normalized edges → rect; angle in degrees; `HasCrop="False"` → no crop |
+
+Panel `Enable*` switches remain in the unmapped report: their exact saved-packet panel scope has not been verified, so the importer preserves supported slider values and reports those switches instead of guessing which groups to reset.
 
 Values pass through our control specs, so anything outside our slider ranges gets clamped.
 
