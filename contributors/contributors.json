@@ -2,23 +2,23 @@
   "schema": 1,
   "repo": "storytold/lightcraft",
   "branch": "main",
-  "head": "aec820033b7c3067980e3974e78066df11228b2e",
-  "head_date": "2026-10-08T00:03:05Z",
-  "commits": 400,
+  "head": "2694d7089fbf4ada62c6738a7c62fecdfd5711fb",
+  "head_date": "2026-10-08T00:53:19Z",
+  "commits": 424,
   "unattributed_commits": 0,
   "contributors": [
     {
       "login": "echelon",
-      "people_entry": true,
+      "people_entry": false,
       "github_name": null,
       "prs": 71,
-      "commits": 327,
-      "lines_added": 125561,
-      "lines_deleted": 8637,
+      "commits": 330,
+      "lines_added": 125623,
+      "lines_deleted": 8643,
       "binary_added": 38,
       "binary_deleted": 8,
       "first_commit": "2026-09-30T14:04:12Z",
-      "last_commit": "2026-10-08T00:03:05Z"
+      "last_commit": "2026-10-08T00:32:34Z"
     },
     {
       "login": "leipsfur",
@@ -242,6 +242,32 @@
       "last_commit": "2026-10-07T11:54:51Z"
     },
     {
+      "login": "radialmonster",
+      "people_entry": false,
+      "github_name": null,
+      "prs": 3,
+      "commits": 19,
+      "lines_added": 2630,
+      "lines_deleted": 259,
+      "binary_added": 0,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-07T12:33:51Z",
+      "last_commit": "2026-10-08T00:46:10Z"
+    },
+    {
+      "login": "bogusyogi",
+      "people_entry": false,
+      "github_name": null,
+      "prs": 1,
+      "commits": 1,
+      "lines_added": 434,
+      "lines_deleted": 29,
+      "binary_added": 0,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-07T17:06:00Z",
+      "last_commit": "2026-10-07T17:06:00Z"
+    },
+    {
       "login": "nledford",
       "people_entry": false,
       "github_name": null,
@@ -333,6 +359,19 @@
       "last_commit": "2026-10-07T22:18:44Z"
     },
     {
+      "login": "andrewyao",
+      "people_entry": false,
+      "github_name": null,
+      "prs": 1,
+      "commits": 1,
+      "lines_added": 1,
+      "lines_deleted": 1,
+      "binary_added": 0,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-08T00:53:19Z",
+      "last_commit": "2026-10-08T00:53:19Z"
+    },
+    {
       "login": "GuintherKovalski",
       "people_entry": false,
       "github_name": null,
@@ -365,9 +404,9 @@
       "company": "Anthropic",
       "model": "Claude Opus",
       "version": "5.5",
-      "commits": 341,
-      "lines_added": 129117,
-      "lines_deleted": 9101
+      "commits": 364,
+      "lines_added": 131810,
+      "lines_deleted": 9367
     },
     {
       "id": "anthropic/claude-sonnet/5.5",
@@ -383,9 +422,9 @@
       "company": "OpenAI",
       "model": "Codex",
       "version": "",
-      "commits": 8,
-      "lines_added": 6590,
-      "lines_deleted": 894
+      "commits": 14,
+      "lines_added": 8341,
+      "lines_deleted": 995
     },
     {
       "id": "anthropic/claude",
