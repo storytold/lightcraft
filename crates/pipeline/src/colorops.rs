@@ -278,6 +278,13 @@ pub const VIBRANCE_POS: [f32; 4] = [0.751, 0.736, 0.15, 0.391];
 /// Vibrance < 0: ln saturation gain at −100, exponent of (1 − S), log2 value gain, exponent of S
 /// on the value gain.
 pub const VIBRANCE_NEG: [f32; 4] = [1.288, 0.323, 0.608, 0.263];
+/// Below this HSV saturation Vibrance's value gain fades out linearly: Lightroom leaves greys'
+/// brightness alone (chart grey ramp: log2 change ≤ 0.004 at ±100). Fitted on the chart's patches
+/// under S 0.25, which the gains above leave out; on them mean ΔE00 0.77 / 1.49 / 2.61 → 0.62 /
+/// 1.20 / 2.03 at +25 / +50 / +100 and 0.64 / 1.46 / 3.85 → 0.22 / 0.76 / 2.76 at −25 / −50 / −100,
+/// greys 0.4–1.8 → under 0.14. Without it exact greys kept their value and near greys took the full
+/// gain: a step at the neutral axis.
+pub const VIBRANCE_FADE: f32 = 0.3;
 /// Skin tones Vibrance spares: HSV hue of linear ProPhoto and half-width (degrees).
 pub const SKIN_HUE: [f32; 2] = [20.0, 35.0];
 /// Saturation: chroma scale per unit at +100 and its (1 − S) exponent; at −100 the chroma goes.
@@ -293,12 +300,13 @@ pub fn vibrance(p: [f32; 3], a: f32) -> [f32; 3] {
         return p;
     }
     let rest = (1.0 - s).max(0.0);
+    let fade = (s / VIBRANCE_FADE).min(1.0);
     let (e, dv) = if a > 0.0 {
         let d = (h - SKIN_HUE[0] + 180.0).rem_euclid(360.0) - 180.0;
         let skin = 1.0 - VIBRANCE_POS[3] * (-(d / SKIN_HUE[1]).powi(2)).exp();
-        (a * VIBRANCE_POS[0] * rest.powf(VIBRANCE_POS[1]) * skin, a * VIBRANCE_POS[2] * skin)
+        (a * VIBRANCE_POS[0] * rest.powf(VIBRANCE_POS[1]) * skin, a * VIBRANCE_POS[2] * skin * fade)
     } else {
-        (a * VIBRANCE_NEG[0] * rest.powf(VIBRANCE_NEG[1]), a * VIBRANCE_NEG[2] * s.min(1.0).powf(VIBRANCE_NEG[3]))
+        (a * VIBRANCE_NEG[0] * rest.powf(VIBRANCE_NEG[1]), a * VIBRANCE_NEG[2] * s.min(1.0).powf(VIBRANCE_NEG[3]) * fade)
     };
     hsv_to_rgb(h, (s * e.exp()).min(s.max(1.0)), v * dv.exp2())
 }
@@ -557,6 +565,26 @@ mod tests {
         let ops = ColorOps::new(&DevelopSettings::default());
         assert!(ops.is_identity());
         assert_eq!(ops.apply([0.2, 0.3, 0.4], 0.0, 0.0), [0.2, 0.3, 0.4]);
+    }
+
+    #[test]
+    fn vibrance_is_continuous_at_the_neutral_axis() {
+        // an exact grey and one a rounding error off it come out alike: the value gain fades out
+        // towards neutral (it used to apply in full to every colour but an exact grey)
+        for a in [-1.0, -0.4, 0.4, 1.0] {
+            for v in [0.05f32, 0.5, 1.0] {
+                let grey = vibrance([v, v, v], a);
+                assert_eq!(grey, [v, v, v]);
+                for tint in [[1.0, 1.0, 1.0 + 1e-4], [1.0 + 1e-4, 1.0, 1.0], [1.0, 1.0 - 1e-4, 1.0]] {
+                    let near = vibrance(std::array::from_fn(|i| v * tint[i]), a);
+                    assert!((0..3).all(|c| (near[c] - grey[c]).abs() < 1e-3 * v), "a {a}, v {v}: {near:?} vs {grey:?}");
+                }
+            }
+        }
+        // saturated colours keep the full gain
+        let [_, _, v0] = rgb_to_hsv([0.6, 0.2, 0.1]);
+        let [_, _, v1] = rgb_to_hsv(vibrance([0.6, 0.2, 0.1], 1.0));
+        assert!(v1 > v0 * 1.05, "{v0} -> {v1}");
     }
 
     #[test]

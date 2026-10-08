@@ -40,6 +40,10 @@
   unsharp mask did). Radius is in the photo's own pixels (0.5–3), so a 1:1 view and a full-size export match. DNG
   files that ask for more or less sharpening (`BaselineSharpness`, e.g. 1.5 on iPhone ProRAW) get it.
 - Colour noise reduction has Lightroom's strength (100 no longer overdoes it).
+- Vibrance leaves greys' brightness alone, as Lightroom does: its brightening (or darkening) now fades out towards
+  neutral colours. Before, every near-grey pixel was brightened but an exactly grey one wasn't, which left darker
+  specks in grey areas and clipped highlights (up to 9 levels on a grey ramp at Vibrance +100). Closer to Lightroom
+  too: iPhone ProRAW at Vibrance +60 / −60, mean ΔE2000 0.96 / 1.09 → 0.92 / 1.00.
 
 ### Reliability
 - LightCraft no longer crashes at launch on Windows PCs whose Vulkan driver is broken (issue #136, e.g. some Intel UHD

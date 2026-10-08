@@ -269,7 +269,7 @@ fn constants() -> String {
     s += &format!("const SHARPEN_MASK_AT: f32 = {SHARPEN_MASK_AT:?};\nconst SHARPEN_MASK_WIDTH: f32 = {SHARPEN_MASK_WIDTH:?};\n");
     {
         use lightcraft_pipeline::colorops::{
-            MIX_LUM_CHROMA, MIX_LUM_POW, MIX_LUM_SPREAD, PROPHOTO_LUMA, SATURATION_POS, SKIN_HUE, VIBRANCE_NEG, VIBRANCE_POS,
+            MIX_LUM_CHROMA, MIX_LUM_POW, MIX_LUM_SPREAD, PROPHOTO_LUMA, SATURATION_POS, SKIN_HUE, VIBRANCE_FADE, VIBRANCE_NEG, VIBRANCE_POS,
         };
         s += &format!(
             "const MIX_LUM_CHROMA: f32 = {MIX_LUM_CHROMA:?};\nconst MIX_LUM_POW: f32 = {MIX_LUM_POW:?};\nconst MIX_LUM_SPREAD: f32 = {MIX_LUM_SPREAD:?};\n"
@@ -279,6 +279,7 @@ fn constants() -> String {
                 s += &format!("const {name}{i}: f32 = {x:?};\n");
             }
         }
+        s += &format!("const VIB_FADE: f32 = {VIBRANCE_FADE:?};\n");
         s += &format!("const SKIN_H: f32 = {:?};\nconst SKIN_W: f32 = {:?};\n", SKIN_HUE[0], SKIN_HUE[1]);
         s += &format!("const SAT_P0: f32 = {:?};\nconst SAT_P1: f32 = {:?};\n", SATURATION_POS[0], SATURATION_POS[1]);
         s += &format!(

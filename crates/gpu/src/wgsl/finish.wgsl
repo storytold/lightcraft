@@ -194,16 +194,17 @@ fn vibrance(q: vec3<f32>, a: f32) -> vec3<f32> {
         return q;
     }
     let rest = max(1.0 - p.y, 0.0);
+    let fade = min(p.y / VIB_FADE, 1.0);
     var e = 0.0;
     var dv = 0.0;
     if (a > 0.0) {
         let d = rem_euclid(p.x - SKIN_H + 180.0, 360.0) - 180.0;
         let skin = 1.0 - VIB_P3 * exp(-((d / SKIN_W) * (d / SKIN_W)));
         e = a * VIB_P0 * pow(rest, VIB_P1) * skin;
-        dv = a * VIB_P2 * skin;
+        dv = a * VIB_P2 * skin * fade;
     } else {
         e = a * VIB_N0 * pow(rest, VIB_N1);
-        dv = a * VIB_N2 * pow(min(p.y, 1.0), VIB_N3);
+        dv = a * VIB_N2 * pow(min(p.y, 1.0), VIB_N3) * fade;
     }
     return hsv_rgb(p.x, min(p.y * exp(e), max(p.y, 1.0)), p.z * exp2(dv));
 }
