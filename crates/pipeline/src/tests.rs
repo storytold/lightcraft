@@ -237,6 +237,29 @@ fn exposure_after_spatial_filters_equals_exposing_the_source() {
     assert!(d <= 2, "max difference {d}");
 }
 
+/// The Tint slider goes from green to magenta, as its track shows and as in Lightroom: a
+/// positive tint turns a neutral grey magenta (green below red and blue), a negative one green
+/// (#188). Checked for rendered files (relative scale) and raw files (absolute Kelvin/tint).
+#[test]
+fn positive_tint_renders_magenta_and_negative_green() {
+    let grey = Rgb32f::filled(16, 16, [0.18, 0.18, 0.18]);
+    let req = RenderRequest::fit(16, 16);
+    let raw = SourceInfo { raw: true, as_shot_temp: 5500.0, as_shot_tint: 10.0, ..Default::default() };
+    for info in [SourceInfo::default(), raw] {
+        let px = |tint: f64| {
+            let mut s = DevelopSettings::default();
+            s.wb.mode = lightcraft_develop::WbMode::Custom;
+            s.wb.temp = info.as_shot_temp;
+            s.wb.tint = info.as_shot_tint + tint;
+            render(&grey, &info, &s, &req).image.data[0]
+        };
+        let magenta = px(50.0);
+        assert!(magenta[1] + 5 < magenta[0] && magenta[1] + 5 < magenta[2], "+50 tint, raw={}: {magenta:?}", info.raw);
+        let green = px(-50.0);
+        assert!(green[1] > green[0] + 5 && green[1] > green[2] + 5, "-50 tint, raw={}: {green:?}", info.raw);
+    }
+}
+
 #[test]
 fn calibration_shifts_colours_but_keeps_greys() {
     let info = SourceInfo { raw: true, ..Default::default() };
