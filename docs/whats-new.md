@@ -99,6 +99,12 @@
   favourites across restarts (issue #328).
 
 ### Editing
+- Vibrance and Saturation follow Lightroom Classic more closely. Both now work in linear ProPhoto with strengths
+  measured from Lightroom's own renders: Vibrance lifts muted colours more than vivid ones, spares skin tones and
+  changes brightness a little, but not that of greys; Saturation scales colour around each pixel's luminance.
+  Measured on eleven CC0 photos (camera JPEGs, DNGs and other raws), the difference from Lightroom's effect at
+  +60 / −60 drops from mean ΔE2000 2.64 / 4.69 to 1.79 / 3.09 for Vibrance and from 2.78 / 3.10 to 2.42 / 2.84 for
+  Saturation. Edits that use them render a little differently.
 - The Tint slider works the right way round (issues #188, #321): left adds green, right adds magenta, as its track
   shows and as in Lightroom, and Tint values in Lightroom XMP sidecars now render as they do there. A custom Tint
   saved in an earlier version now shifts the other way; set it again (or re-run Auto / the white-balance picker).

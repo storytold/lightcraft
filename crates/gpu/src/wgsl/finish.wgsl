@@ -98,49 +98,122 @@ fn point_color(k: u32, lch: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(l, c, h);
 }
 
-// `ColorOps::apply`.
-fn color_ops(rgb: vec3<f32>, local_sat: f32, local_hue: f32) -> vec3<f32> {
-    if (pu(F_OPS_IDENTITY) != 0u && local_sat == 0.0 && local_hue == 0.0) {
+// `perceptual::rgb_to_hsv` (hue in degrees).
+fn rgb_hsv(c: vec3<f32>) -> vec3<f32> {
+    let mx = max(c.x, max(c.y, c.z));
+    let mn = min(c.x, min(c.y, c.z));
+    let d = mx - mn;
+    var h = 0.0;
+    if (d != 0.0) {
+        if (mx == c.x) {
+            h = rem_euclid((c.y - c.z) / d, 6.0);
+        } else if (mx == c.y) {
+            h = (c.z - c.x) / d + 2.0;
+        } else {
+            h = (c.x - c.y) / d + 4.0;
+        }
+    }
+    var s = 0.0;
+    if (mx > 0.0) {
+        s = d / mx;
+    }
+    return vec3<f32>(h * 60.0, s, mx);
+}
+
+// `perceptual::hsv_to_rgb` (hue in degrees).
+fn hsv_rgb(h: f32, s: f32, v: f32) -> vec3<f32> {
+    let c = v * s;
+    let hp = rem_euclid(h, 360.0) / 60.0;
+    let x = c * (1.0 - abs(hp % 2.0 - 1.0));
+    var q = vec3<f32>(c, 0.0, x);
+    let k = u32(hp);
+    if (k == 0u) {
+        q = vec3<f32>(c, x, 0.0);
+    } else if (k == 1u) {
+        q = vec3<f32>(x, c, 0.0);
+    } else if (k == 2u) {
+        q = vec3<f32>(0.0, c, x);
+    } else if (k == 3u) {
+        q = vec3<f32>(0.0, x, c);
+    } else if (k == 4u) {
+        q = vec3<f32>(x, 0.0, c);
+    }
+    return q + (v - c);
+}
+
+// `colorops::vibrance` on linear ProPhoto `q`.
+fn vibrance(q: vec3<f32>, a: f32) -> vec3<f32> {
+    let p = rgb_hsv(q);
+    if (p.z <= 0.0 || p.y <= 0.0) {
+        return q;
+    }
+    let rest = max(1.0 - p.y, 0.0);
+    let fade = min(p.y / VIB_FADE, 1.0);
+    var e = 0.0;
+    var dv = 0.0;
+    if (a > 0.0) {
+        let d = rem_euclid(p.x - SKIN_H + 180.0, 360.0) - 180.0;
+        let skin = 1.0 - VIB_P3 * exp(-((d / SKIN_W) * (d / SKIN_W)));
+        e = a * VIB_P0 * pow(rest, VIB_P1) * skin;
+        dv = a * VIB_P2 * skin * fade;
+    } else {
+        e = a * VIB_N0 * pow(rest, VIB_N1);
+        dv = a * VIB_N2 * pow(min(p.y, 1.0), VIB_N3) * fade;
+    }
+    return hsv_rgb(p.x, min(p.y * exp(e), max(p.y, 1.0)), p.z * exp2(dv));
+}
+
+// `colorops::saturation` on linear ProPhoto `q`.
+fn saturation(q: vec3<f32>, a: f32) -> vec3<f32> {
+    let y = dot(q, vec3<f32>(PP_LUMA_R, PP_LUMA_G, PP_LUMA_B));
+    var f = max(1.0 + a, 0.0);
+    if (a > 0.0) {
+        let s = clamp(rgb_hsv(q).y, 0.0, 1.0);
+        f = 1.0 + a * SAT_P0 * pow(1.0 - s, SAT_P1);
+    }
+    return y + (q - y) * f;
+}
+
+// `ColorOps::oklch`: the mixer and Point Color when `pre`; a mask's saturation / hue, the B&W mix
+// and colour grading when `post`.
+fn color_oklch(rgb: vec3<f32>, pre0: bool, post0: bool, local_sat: f32, local_hue: f32) -> vec3<f32> {
+    let pre = pre0 && (pu(F_MIXER) != 0u || pu(F_NPC) > 0u);
+    let post = post0 && (pu(F_BW) != 0u || pu(F_GRADING) != 0u || local_sat != 0.0 || local_hue != 0.0);
+    if (!pre && !post) {
         return rgb;
     }
     let lab0 = oklab(rgb);
     var l = lab0.x;
     var c = sqrt(lab0.y * lab0.y + lab0.z * lab0.z);
     var h = atan2(lab0.z, lab0.y);
-    if (pu(F_MIXER) != 0u) {
-        let w = band_weights(h);
-        var dh = 0.0;
-        var ds = 0.0;
-        var dl = 0.0;
-        for (var i = 0u; i < 8u; i++) {
-            dh += w[i] * pf(F_MIX_HUE + i);
-            ds += w[i] * pf(F_MIX_SAT + i);
-            dl += w[i] * pf(F_MIX_LUM + i);
+    if (pre) {
+        if (pu(F_MIXER) != 0u) {
+            let w = band_weights(h);
+            var dh = 0.0;
+            var ds = 0.0;
+            var dl = 0.0;
+            for (var i = 0u; i < 8u; i++) {
+                dh += w[i] * pf(F_MIX_HUE + i);
+                ds += w[i] * pf(F_MIX_SAT + i);
+                dl += w[i] * pf(F_MIX_LUM + i);
+            }
+            let chroma_w = min(c / 0.12, 1.0);
+            h += dh * chroma_w;
+            c *= max(1.0 + ds, 0.0);
+            l += dl * chroma_w * sqrt(max(l, 0.05));
         }
-        let chroma_w = min(c / 0.12, 1.0);
-        h += dh * chroma_w;
-        c *= max(1.0 + ds, 0.0);
-        l += dl * chroma_w * sqrt(max(l, 0.05));
-    }
-    for (var k = 0u; k < pu(F_NPC); k++) {
-        let r = point_color(k, vec3<f32>(l, c, h));
-        l = r.x;
-        c = r.y;
-        h = r.z;
-    }
-    let vib = pf(F_VIBRANCE);
-    if (vib != 0.0) {
-        let low = 1.0 - clamp(c / 0.22, 0.0, 1.0);
-        var skin = 1.0;
-        if (vib > 0.0) {
-            let q = wrap_angle(h - pf(F_SKIN)) / 0.35;
-            skin = 1.0 - 0.6 * exp(-(q * q));
+        for (var k = 0u; k < pu(F_NPC); k++) {
+            let r = point_color(k, vec3<f32>(l, c, h));
+            l = r.x;
+            c = r.y;
+            h = r.z;
         }
-        c *= max(1.0 + vib * low * low * skin * 1.2, 0.0);
     }
-    let sat = pf(F_SATURATION);
-    if (sat != 0.0 || local_sat != 0.0) {
-        c *= max(1.0 + sat + local_sat, 0.0);
+    if (!post) {
+        return oklab_inv(vec3<f32>(l, c * cos(h), c * sin(h)));
+    }
+    if (local_sat != 0.0) {
+        c *= max(1.0 + local_sat, 0.0);
     }
     h += local_hue;
     if (pu(F_BW) != 0u) {
@@ -168,6 +241,27 @@ fn color_ops(rgb: vec3<f32>, local_sat: f32, local_hue: f32) -> vec3<f32> {
         }
     }
     return oklab_inv(lab);
+}
+
+// `ColorOps::apply`: the mixer and Point Color (OkLCh), Vibrance and Saturation (linear ProPhoto),
+// then a mask's saturation / hue, the B&W mix and grading (OkLCh).
+fn color_ops(rgb: vec3<f32>, local_sat: f32, local_hue: f32) -> vec3<f32> {
+    if (pu(F_OPS_IDENTITY) != 0u && local_sat == 0.0 && local_hue == 0.0) {
+        return rgb;
+    }
+    let vib = pf(F_VIBRANCE);
+    let sat = pf(F_SATURATION);
+    if (vib == 0.0 && sat == 0.0) {
+        return color_oklch(rgb, true, true, local_sat, local_hue);
+    }
+    var q = mul3(PP_TO, color_oklch(rgb, true, false, 0.0, 0.0));
+    if (vib != 0.0) {
+        q = vibrance(q, vib);
+    }
+    if (sat != 0.0) {
+        q = saturation(q, sat);
+    }
+    return color_oklch(mul3(PP_FROM, q), false, true, local_sat, local_hue);
 }
 
 // `colorops::calibrate`: primaries matrix, then the shadows tint (luminance kept).

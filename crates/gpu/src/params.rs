@@ -47,7 +47,6 @@ const FIELDS: &[(&str, usize)] = &[
     ("WHEELS", 12),
     ("BLENDING", 1),
     ("BALANCE", 1),
-    ("SKIN", 1),
     ("BANDH", 8),
     ("VIG", 1),
     ("VIG_AMOUNT", 1),
@@ -202,7 +201,6 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         p.f("BLENDING", *blending);
         p.f("BALANCE", *balance);
     }
-    p.f("SKIN", ops.skin);
     p.fs("BANDH", lightcraft_pipeline::colorops::band_hues());
 
     if let Some(v) = &fp.vig {

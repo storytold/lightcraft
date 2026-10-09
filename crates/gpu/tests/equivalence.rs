@@ -131,6 +131,14 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.color.vibrance = 40.0;
             s.color.saturation = -20.0;
         }),
+        ("vibrance/saturation between the OkLCh tools", |s| {
+            s.color.vibrance = -35.0;
+            s.color.saturation = 25.0;
+            s.mixer.orange.hue = 20.0;
+            s.mixer.blue.sat = -40.0;
+            s.grading.shadows.hue = 220.0;
+            s.grading.shadows.sat = 30.0;
+        }),
         ("colour mixer", |s| {
             s.mixer.blue.sat = -60.0;
             s.mixer.orange.hue = 30.0;
