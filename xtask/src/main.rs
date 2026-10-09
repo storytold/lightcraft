@@ -5,6 +5,7 @@
 
 mod assets;
 mod bench;
+mod corpus_orf;
 mod ico;
 mod layers;
 mod parity;
@@ -34,7 +35,7 @@ commands:
                   build the browser app (apps/lightcraft-web) into <target>/web/;
                   --serve serves it on http://127.0.0.1:<port> (default 8080)
   ci              fmt --check, clippy -D warnings, test, parity refs, layers, assets, wasm (stops at first failure)
-  corpus [--download]
+  corpus [--download] [--orf-only]
                   show where test corpora live; --download fetches PngSuite and CC0 raw samples (raw.pixls.us) into corpus/
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
 ";
@@ -52,7 +53,7 @@ fn main() -> ExitCode {
         Some("wasm") => cmd_wasm(),
         Some("web") => web::run(&rest),
         Some("ci") => cmd_ci(),
-        Some("corpus") => cmd_corpus(rest.contains(&"--download")),
+        Some("corpus") => cmd_corpus(rest.contains(&"--download"), rest.contains(&"--orf-only")),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
@@ -448,7 +449,7 @@ const RAW_SAMPLES: &[(&str, &str)] = &[
     ("rwl-leica-dlux7.rwl", "https://raw.pixls.us/getfile.php/4204/nice/Leica%20-%20D-Lux%207%20-%204:3.RWL"),
 ];
 
-fn cmd_corpus(download: bool) -> Result<(), String> {
+fn cmd_corpus(download: bool, orf_only: bool) -> Result<(), String> {
     let corpus = root().join("corpus");
     println!(
         "Test corpora live under {} (git-ignored, never committed).
@@ -460,6 +461,10 @@ Tests that use a corpus skip cleanly when it is absent.
         corpus.display()
     );
     if !download {
+        return Ok(());
+    }
+    corpus_orf::download()?;
+    if orf_only {
         return Ok(());
     }
     let dest = corpus.join("raw");

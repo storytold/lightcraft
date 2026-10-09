@@ -368,7 +368,11 @@ mod tests {
         let a = core.render(&wire, None).unwrap();
         let b = job.run().rendered.unwrap();
         assert_eq!((a.image.width, a.image.height), (160, 120));
-        assert_eq!(a.image.data, b.image.data);
+        assert_eq!((b.image.width, b.image.height), (160, 120));
+        // the worker renders on the CPU; the engine job uses a GPU when the machine has one, which
+        // stays within docs/gpu-pipeline.md's bound (≤ 3 LSB per channel) rather than bit-exact
+        let max = a.image.data.iter().zip(&b.image.data).flat_map(|(p, q)| (0..3).map(move |c| p[c].abs_diff(q[c]))).max();
+        assert!(max.is_some_and(|m| m <= 3), "max channel difference {max:?}");
     }
 
     // a job from before windows existed has none

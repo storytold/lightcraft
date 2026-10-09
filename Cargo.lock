@@ -3031,6 +3031,7 @@ dependencies = [
  "proptest",
  "rayon",
  "serde",
+ "serde_json",
  "sha2",
  "thiserror 2.0.21",
  "zune-core",
@@ -6491,6 +6492,7 @@ dependencies = [
  "brotli",
  "flate2",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

@@ -13,3 +13,6 @@ serde_json = { workspace = true }
 # precompressed web bundle (`cargo xtask web`); pure Rust
 flate2 = "1"
 brotli = { version = "8", default-features = false, features = ["std"] }
+
+# Hash-pinned optional ORF corpus downloads.
+sha2 = { version = "0.10", default-features = false, features = ["std"] }
