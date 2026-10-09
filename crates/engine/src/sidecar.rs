@@ -114,8 +114,10 @@ pub enum DevelopPatch {
     Partial(Value),
 }
 
-/// Parse a sidecar / XMP packet. `raw` selects absolute (raw) vs relative white balance for `crs:`.
-pub fn parse_sidecar(xmp: &str, raw: bool) -> std::result::Result<SidecarData, String> {
+/// Parse a sidecar / XMP packet. `target` selects how a `crs:` white balance is read
+/// ([`crate::crs::Target`]: absolute Kelvin for raws with a measured illuminant, a shift from the
+/// as-shot white for everything developed relative to it).
+pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Result<SidecarData, String> {
     let d = lightcraft_meta::parse_xmp(xmp).map_err(|e| e.to_string())?;
     let m = &d.metadata;
     let lc = |k: &str| d.properties.get(&format!("lc:{k}")).and_then(|v| v.first()).cloned();
@@ -162,7 +164,7 @@ pub fn parse_sidecar(xmp: &str, raw: bool) -> std::result::Result<SidecarData, S
     out.develop = match full {
         Some(s) => Some(DevelopPatch::Full(Box::new(s))),
         None if crate::crs::has_adjustments(&d.properties) => {
-            Some(DevelopPatch::Partial(crate::crs::to_partial_report(&d.properties, Some(&d.values), Some(raw), crate::crs_masks::DEFAULT_ASPECT).0))
+            Some(DevelopPatch::Partial(crate::crs::to_partial_report(&d.properties, Some(&d.values), target, crate::crs_masks::DEFAULT_ASPECT).0))
         }
         None => None,
     };
@@ -475,7 +477,7 @@ impl Session {
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let Some(orig) = file_path(p) else { return Ok(None) };
         let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_naming(id)) else { return Ok(None) };
-        let sc = parse_sidecar(&packet, p.kind == MediaKind::Raw)
+        let sc = parse_sidecar(&packet, crate::crs::Target::for_photo(p))
             .map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?
             .resolve_label(&self.catalog);
         let mut q = (**p).clone();
@@ -553,7 +555,7 @@ mod tests {
     fn packet_roundtrip_restores_everything() {
         let p = photo();
         let x = sidecar_packet(&p, &lightcraft_catalog::Catalog::new());
-        let sc = parse_sidecar(&x, false).unwrap();
+        let sc = parse_sidecar(&x, crate::crs::Target::Rendered).unwrap();
         assert_eq!(sc.rating, Some(4));
         assert_eq!(sc.flag, Some(Flag::Pick));
         assert_eq!(sc.label, Some(Some(ColorLabel::Purple)));
@@ -572,7 +574,7 @@ mod tests {
         let x = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
           <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
             xmp:Rating="-1" xmp:Label="Green" crs:Exposure2012="-0.40" crs:Vibrance="+12"/></rdf:RDF></x:xmpmeta>"#;
-        let sc = parse_sidecar(x, true).unwrap();
+        let sc = parse_sidecar(x, crate::crs::Target::RawAbsolute).unwrap();
         assert_eq!((sc.rating, sc.flag, sc.label), (Some(0), Some(Flag::Reject), Some(Some(ColorLabel::Green))));
         let mut p = photo();
         let before = p.develop.clone();

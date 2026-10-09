@@ -296,6 +296,14 @@ pub struct Analysis {
     pub best: bool,
 }
 
+/// Raw formats whose readers have vendor white-balance multipliers but no measured camera
+/// illuminant: their white balance is developed relative to the as-shot look (6500 K / 0 means
+/// as shot), as for rendered photographs. `format` is the file's extension or Lightroom's
+/// `fileFormat` name, in any case. See [`Photo::relative_wb`].
+pub fn relative_wb_format(format: &str) -> bool {
+    ["ARW", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF"].iter().any(|f| format.eq_ignore_ascii_case(f))
+}
+
 impl Photo {
     pub fn new(id: PhotoId, source: Source, file_name: &str, format: &str, width: u32, height: u32, imported: &str) -> Photo {
         Photo {
@@ -341,8 +349,7 @@ impl Photo {
     /// photographs (the engine's `camera_preview::file_local_look` covers the same formats; RWL and
     /// RAW are Leica's and the oldest Panasonic bodies' names for RW2 files).
     pub fn relative_wb(&self) -> bool {
-        self.develops_raw()
-            && ["ARW", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF"].iter().any(|f| self.format.eq_ignore_ascii_case(f))
+        self.develops_raw() && relative_wb_format(&self.format)
     }
     /// The develop settings import gave this photo: [`Photo::camera_defaults`], or the user's
     /// default preset applied on top of them ([`Photo::import_look`]).

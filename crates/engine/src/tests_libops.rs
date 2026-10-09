@@ -355,9 +355,9 @@ fn label_sets_and_xmp_label_names() {
     p.label = Some(ColorLabel::Green);
     let x = crate::sidecar::sidecar_packet(&p, &s.catalog);
     assert!(x.contains("Approved"), "{x}");
-    let sc = crate::sidecar::parse_sidecar(&x, false).unwrap().resolve_label(&s.catalog);
+    let sc = crate::sidecar::parse_sidecar(&x, crate::crs::Target::Rendered).unwrap().resolve_label(&s.catalog);
     assert_eq!(sc.label, Some(Some(ColorLabel::Green)));
-    let plain = crate::sidecar::parse_sidecar(&x.replace("Approved", "Blue"), false).unwrap().resolve_label(&s.catalog);
+    let plain = crate::sidecar::parse_sidecar(&x.replace("Approved", "Blue"), crate::crs::Target::Rendered).unwrap().resolve_label(&s.catalog);
     assert_eq!(plain.label, Some(Some(ColorLabel::Blue)), "colour names still work");
     s.execute("label.deleteSet", &json!({"name": "Studio"})).unwrap();
     assert!(s.execute("label.deleteSet", &json!({"name": "Review"})).is_err(), "built-ins stay");
