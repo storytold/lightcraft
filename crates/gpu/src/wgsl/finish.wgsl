@@ -170,7 +170,7 @@ fn color_ops(rgb: vec3<f32>, local_sat: f32, local_hue: f32) -> vec3<f32> {
     return oklab_inv(lab);
 }
 
-// `colorops::calibrate`: primaries matrix, then the shadows tint (luminance kept).
+// `colorops::calibrate`: primaries matrix, then the (subtractive) shadows tint.
 fn calibrate(c0: vec3<f32>) -> vec3<f32> {
     var c = c0;
     if (pu(F_CALIB) != 0u) {
@@ -183,11 +183,15 @@ fn calibrate(c0: vec3<f32>) -> vec3<f32> {
     }
     let st = pf(F_SHADOW_TINT);
     if (st != 0.0) {
-        let y0 = lum2020(c);
-        let w = 1.0 - sstep(-5.0, -0.5, log2(max(y0, 1e-7) / 0.18));
-        c.y *= max(1.0 - SHADOW_TINT_K * st * w, 0.0);
-        let y1 = max(lum2020(c), 1e-9);
-        c = c * y0 / y1;
+        let y = lum2020(c);
+        let w = 1.0 - sstep(SHADOW_TINT_LO, SHADOW_TINT_HI, log2(max(y, 1e-7) / 0.18));
+        let k = max(1.0 - SHADOW_TINT_K * abs(st) * w, 0.0);
+        if (st > 0.0) {
+            c.y *= k;
+        } else {
+            c.x *= k;
+            c.z *= k;
+        }
     }
     return c;
 }

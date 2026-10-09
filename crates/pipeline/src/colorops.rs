@@ -5,7 +5,7 @@ use std::f32::consts::{PI, TAU};
 use std::sync::OnceLock;
 
 use lightcraft_color::perceptual::{hsv_to_rgb, lab_to_lch, lch_to_lab, oklab_from_2020, oklab_to_2020};
-use lightcraft_color::{Mat3, REC2020, SRGB};
+use lightcraft_color::{Mat3, PROPHOTO, REC2020, SRGB};
 use lightcraft_develop::{Calibration, DevelopSettings, MIXER_HUES, PointColor};
 
 /// OkLCh hue angle (radians) of a pure sRGB colour with HSV hue `deg`.
@@ -266,41 +266,51 @@ impl ColorOps {
     }
 }
 
-/// Hue rotation (OkLCh radians) of a calibration primary at ±100.
-pub const CALIB_HUE: f32 = 0.5;
-/// Chroma scale of a calibration primary at ±100 (`1 ± CALIB_SAT`).
-pub const CALIB_SAT: f32 = 0.6;
+/// Calibration primaries, per primary (red, green, blue), in linear ProPhoto: how far Hue ±100
+/// moves the primary towards the next (`[0]`) / previous (`[1]`) primary, how far Saturation
+/// ±100 takes it away from the other two (`[2]`, `[3]`), and a quadratic Saturation term (`[4]`).
+/// Fitted to Lightroom Classic 15.6 renders of a synthetic chart carrying an Apple ProRAW's own
+/// colour tags (every primary slider at ±50 / ±100 within mean ΔE00 1.2; the three reference
+/// presets, which move all primaries at once, 0.8–1.3).
+const CALIB_COEF: [[f64; 5]; 3] = [[0.308, 0.343, 0.392, 0.409, 0.034], [0.335, 0.334, 0.402, 0.402, 0.055], [0.344, 0.307, 0.389, 0.381, 0.003]];
 
-/// The calibration panel's primaries as a white-preserving 3×3 matrix on linear Rec.2020 (row-major):
-/// each primary is rotated in OkLCh hue and scaled in chroma at constant OkLab lightness, then the
-/// columns are rescaled so that neutral (1, 1, 1) maps to itself. `None` when neutral.
+/// The calibration panel's primaries as a white-preserving 3×3 matrix on linear Rec.2020
+/// (row-major), `None` when neutral. Built in linear ProPhoto (D50, Bradford): each primary's
+/// column gains `±k·amount` in the neighbouring channels (hue towards the next primary,
+/// saturation away from both), the primaries' offsets add up, and each row is completed to sum
+/// to 1 so greys stay grey.
 pub fn calibration_matrix(c: &Calibration) -> Option<[[f32; 3]; 3]> {
     let prim = c.primaries();
     if prim.iter().all(|(h, s)| *h == 0.0 && *s == 0.0) {
         return None;
     }
-    let mut p = [[0.0f64; 3]; 3];
-    for (i, (hue, sat)) in prim.iter().enumerate() {
-        let mut e = [0.0f32; 3];
-        e[i] = 1.0;
-        let [l, ch, h] = lab_to_lch(oklab_from_2020(e));
-        let h2 = h + (hue.clamp(-100.0, 100.0) / 100.0) as f32 * CALIB_HUE;
-        let c2 = ch * (1.0 + (sat.clamp(-100.0, 100.0) / 100.0) as f32 * CALIB_SAT);
-        let q = oklab_to_2020(lch_to_lab([l, c2, h2]));
-        for (r, row) in p.iter_mut().enumerate() {
-            row[i] = q[r] as f64;
-        }
+    let mut m = Mat3::IDENTITY.0;
+    for (p, (hue, sat)) in prim.iter().enumerate() {
+        let [an, ap, bn, bp, q] = CALIB_COEF[p];
+        let h = hue.clamp(-100.0, 100.0) / 100.0;
+        let s = sat.clamp(-100.0, 100.0) / 100.0;
+        let s = s * (1.0 + q * s);
+        m[(p + 1) % 3][p] += an * h - bn * s;
+        m[(p + 2) % 3][p] += -ap * h - bp * s;
     }
-    let m = Mat3(p);
-    let k = m.inverse()?.apply([1.0, 1.0, 1.0]);
-    Some(std::array::from_fn(|r| std::array::from_fn(|col| (p[r][col] * k[col]) as f32)))
+    for (i, row) in m.iter_mut().enumerate() {
+        let sum: f64 = row.iter().sum();
+        row[i] += 1.0 - sum;
+    }
+    let to = REC2020.to_space(&PROPHOTO);
+    Some(to.inverse()?.mul(&Mat3(m)).mul(&to).to_f32())
 }
 
-/// Shadows-tint strength at ±100: the green channel's relative change in deep shadows.
-pub const SHADOW_TINT: f32 = 0.3;
+/// Shadows-tint strength at ±100: the cut (×(1 − k)) of green (+) or of red and blue (−) in
+/// the deepest shadows, fading out by [`SHADOW_TINT_RANGE`].
+pub const SHADOW_TINT: f32 = 0.148;
+/// Shadows-tint weight: 1 below, 0 above this range of log2(scene luminance / 0.18).
+pub const SHADOW_TINT_RANGE: [f32; 2] = [-2.83, 2.63];
 
 /// Calibration in scene-linear light (before tone mapping): the primaries matrix, then the shadows
-/// tint (green ↔ magenta, weighted towards dark tones, luminance kept).
+/// tint, which (as in Lightroom, fitted to Lightroom Classic 15.6 renders at ±50) takes light away:
+/// positive cuts green (towards magenta), negative cuts red and blue (towards green), most in the
+/// shadows.
 #[inline]
 pub fn calibrate(c: [f32; 3], m: Option<&[[f32; 3]; 3]>, shadow_tint: f32) -> [f32; 3] {
     let mut c = c;
@@ -308,11 +318,15 @@ pub fn calibrate(c: [f32; 3], m: Option<&[[f32; 3]; 3]>, shadow_tint: f32) -> [f
         c = std::array::from_fn(|r| (m[r][0] * c[0] + m[r][1] * c[1] + m[r][2] * c[2]).max(0.0));
     }
     if shadow_tint != 0.0 {
-        let y0 = lightcraft_color::luminance_2020(c);
-        let w = 1.0 - smooth(-5.0, -0.5, (y0.max(1e-7) / 0.18).log2());
-        c[1] *= (1.0 - SHADOW_TINT * shadow_tint * w).max(0.0);
-        let y1 = lightcraft_color::luminance_2020(c).max(1e-9);
-        c = c.map(|v| v * y0 / y1);
+        let y = lightcraft_color::luminance_2020(c);
+        let w = 1.0 - smooth(SHADOW_TINT_RANGE[0], SHADOW_TINT_RANGE[1], (y.max(1e-7) / 0.18).log2());
+        let k = (1.0 - SHADOW_TINT * shadow_tint.abs() * w).max(0.0);
+        if shadow_tint > 0.0 {
+            c[1] *= k;
+        } else {
+            c[0] *= k;
+            c[2] *= k;
+        }
     }
     c
 }
@@ -400,12 +414,11 @@ mod tests {
     fn shadow_tint_targets_shadows() {
         let dark = calibrate([0.01, 0.01, 0.01], None, 1.0);
         let bright = calibrate([0.8, 0.8, 0.8], None, 1.0);
-        assert!(dark[1] < dark[0] * 0.85, "magenta shadows: {dark:?}");
-        assert!((bright[1] - bright[0]).abs() < 1e-3, "{bright:?}");
-        let y = |c: [f32; 3]| lightcraft_color::luminance_2020(c);
-        assert!((y(dark) - 0.01).abs() < 1e-5);
+        assert!(dark[1] < dark[0] * 0.9, "magenta shadows: {dark:?}");
+        assert!(dark[0] == 0.01 && dark[2] == 0.01, "only green is cut: {dark:?}");
+        assert!((bright[1] - bright[0]).abs() < 0.005 * bright[0], "{bright:?}");
         let green = calibrate([0.01, 0.01, 0.01], None, -1.0);
-        assert!(green[1] > green[0]);
+        assert!(green[1] == 0.01 && green[0] < 0.01 && green[2] < 0.01, "red and blue are cut: {green:?}");
     }
 
     #[test]
