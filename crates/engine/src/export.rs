@@ -258,33 +258,41 @@ fn watermark_fonts(craft: &'static [crate::fonts::CraftFont]) -> Vec<ab_glyph::F
         .collect()
 }
 
-/// The font's vertical form, positioned from its vertical origin within the watermark cell.
+/// Shape a whole grapheme in one cell. CJK uses vertical origins and forms; Latin stays upright.
 /// Unlike Unicode presentation-form characters, GSUB works with BIZ UD fonts too.
-fn vertical_watermark_glyph(
+fn watermark_cell_glyphs(
     font: &ab_glyph::FontRef<'_>,
     data: &harfrust::ShaperData,
-    ch: char,
+    text: &str,
+    vertical: bool,
     px: f32,
     left: f32,
     top: f32,
-) -> Option<ab_glyph::Glyph> {
+) -> Option<Vec<ab_glyph::Glyph>> {
     use ab_glyph::{Font, ScaleFont};
     let face = harfrust::FontRef::new(font.font_data()).ok()?;
     let mut buf = harfrust::UnicodeBuffer::new();
-    buf.add(ch, 0);
-    buf.set_direction(harfrust::Direction::TopToBottom);
+    buf.push_str(text);
+    buf.set_direction(if vertical { harfrust::Direction::TopToBottom } else { harfrust::Direction::LeftToRight });
     buf.guess_segment_properties();
     let shaped = data.shaper(&face).build().shape(buf, harfrust::ShapeOptions::new());
-    if shaped.glyph_infos().len() != 1 {
+    if shaped.glyph_infos().is_empty() {
         return None;
     }
-    let gid = u16::try_from(shaped.glyph_infos().first()?.glyph_id).ok().filter(|g| *g != 0)?;
-    let pos = shaped.glyph_positions().first()?;
     let sf = font.as_scaled(px);
     let (sx, sy) = (sf.h_scale_factor(), sf.v_scale_factor());
-    let height = -(pos.y_advance as f32) * sy;
-    let pen = ab_glyph::point(left + px / 2.0 + pos.x_offset as f32 * sx, top + (px - height) / 2.0 - pos.y_offset as f32 * sy);
-    Some(ab_glyph::GlyphId(gid).with_scale_and_position(px, pen))
+    let advance_x = shaped.glyph_positions().iter().map(|p| p.x_advance as f32 * sx).sum::<f32>();
+    let advance_y = shaped.glyph_positions().iter().map(|p| -(p.y_advance as f32) * sy).sum::<f32>();
+    let (mut x, mut y) = if vertical { (left + px / 2.0, top + (px - advance_y) / 2.0) } else { (left + (px - advance_x) / 2.0, top + sf.ascent()) };
+    let mut glyphs = Vec::new();
+    for (info, pos) in shaped.glyph_infos().iter().zip(shaped.glyph_positions()) {
+        let gid = u16::try_from(info.glyph_id).ok().filter(|g| *g != 0)?;
+        let pen = ab_glyph::point(x + pos.x_offset as f32 * sx, y - pos.y_offset as f32 * sy);
+        glyphs.push(ab_glyph::GlyphId(gid).with_scale_and_position(px, pen));
+        x += pos.x_advance as f32 * sx;
+        y -= pos.y_advance as f32 * sy;
+    }
+    Some(glyphs)
 }
 
 /// Draw `wm` onto `img` (straight alpha blending of the encoded values).
@@ -355,8 +363,13 @@ fn watermark_coverage(
     let mut prev = None;
     let columns = text.split('\n').count();
     let mut column = 0usize;
-    for original in text.chars() {
-        if original == '\n' {
+    use unicode_segmentation::UnicodeSegmentation;
+    // Horizontal watermarks retain scalar layout and kerning; only vertical cells use graphemes.
+    let cells: Box<dyn Iterator<Item = &str>> =
+        if wm.vertical { Box::new(text.graphemes(true)) } else { Box::new(text.char_indices().filter_map(|(i, c)| text.get(i..i + c.len_utf8()))) };
+    for cell in cells {
+        let Some(original) = cell.chars().next() else { continue };
+        if cell == "\n" || (wm.vertical && cell == "\r\n") {
             if wm.vertical {
                 column = column.saturating_add(1);
                 tw = tw.max(y);
@@ -369,17 +382,20 @@ fn watermark_coverage(
             prev = None;
             continue;
         }
-        if wm.vertical
-            && matches!(original as u32, 0x3000..=0x30FF | 0x3400..=0x9FFF | 0xFF01..=0xFF60)
-            && let Some(face) = fonts.iter().position(|font| font.glyph_id(original).0 != 0)
-            && let (Some(font), Some(Some(data))) = (fonts.get(face), vertical_data.get(face))
-        {
+        let cjk = matches!(original as u32, 0x3000..=0x30FF | 0x3400..=0x9FFF | 0xFF01..=0xFF60);
+        if wm.vertical && (cjk || cell.chars().count() > 1) {
             let left = columns.saturating_sub(column.saturating_add(1)) as f32 * px;
-            if let Some(glyph) = vertical_watermark_glyph(font, data, original, px, left, y)
-                && (glyph.id != font.glyph_id(original)
-                    || !matches!(original, '、' | '。' | 'ー' | '（' | '）' | '「' | '」' | '『' | '』' | '【' | '】'))
-            {
-                glyphs.push((face, glyph, None));
+            let shaped = fonts.iter().zip(&vertical_data).enumerate().find_map(|(face, (font, data))| {
+                let data = data.as_ref()?;
+                let cluster = watermark_cell_glyphs(font, data, cell, cjk, px, left, y)?;
+                let substituted = cluster.len() != 1 || cluster.first().is_some_and(|g| g.id != font.glyph_id(original));
+                if cjk && !substituted && matches!(original, '、' | '。' | 'ー' | '（' | '）' | '「' | '」' | '『' | '』' | '【' | '】') {
+                    return None;
+                }
+                Some((face, cluster))
+            });
+            if let Some((face, cluster)) = shaped {
+                glyphs.extend(cluster.into_iter().map(|g| (face, g, None)));
                 y += px;
                 continue;
             }
@@ -1706,7 +1722,7 @@ mod tests {
         assert_eq!(font.glyph_id('︒').0, 0);
         let data = harfrust::ShaperData::new(&harfrust::FontRef::new(entry.bytes).unwrap());
         for ch in ['、', '。'] {
-            let glyph = vertical_watermark_glyph(&font, &data, ch, 100.0, 0.0, 0.0).unwrap();
+            let glyph = watermark_cell_glyphs(&font, &data, &ch.to_string(), true, 100.0, 0.0, 0.0).unwrap().remove(0);
             assert_ne!(glyph.id, font.glyph_id(ch), "the font's vertical alternate for {ch}");
             let rect = font.outline_glyph(glyph).unwrap().px_bounds();
             assert!(rect.min.x > 50.0 && rect.max.y < 50.0, "{ch} in the upper right: {rect:?}");
@@ -1733,6 +1749,56 @@ mod tests {
         assert!(!pixels.is_empty());
         for (x, y) in pixels {
             assert!(x > 15 && y % 30 < 15, "actual export coverage at the upper right of the 30 px cell: {x}, {y}");
+        }
+    }
+
+    #[test]
+    fn vertical_watermarks_keep_combining_marks_in_one_cell() {
+        let coverage = |text: &str, craft| {
+            let wm = Watermark {
+                text: text.into(),
+                vertical: true,
+                size: 0.1,
+                anchor: Anchor::Center,
+                inset: 0.0,
+                shadow: false,
+                opacity: 1.0,
+                ..Default::default()
+            };
+            let mut pixels = vec![0.0f32; 400 * 300];
+            watermark_coverage(400, 300, &wm, craft, |x, y, k, _| pixels[y * 400 + x] = k);
+            assert!(pixels.iter().any(|&k| k > 0.0));
+            pixels
+        };
+        let compare = |a: &str, b: &str, craft| {
+            let (a_pixels, b_pixels) = (coverage(a, craft), coverage(b, craft));
+            let difference = a_pixels.iter().zip(&b_pixels).position(|(a, b)| a != b);
+            assert!(difference.is_none(), "{a:?} vs {b:?}: first differing pixel {difference:?}");
+        };
+        for (composed, decomposed) in [("éA", "e\u{301}A"), ("Å\nA", "A\u{30a}\nA"), ("A\nB", "A\r\nB"), ("日A", "日\u{e0100}A")] {
+            compare(composed, decomposed, &[]);
+        }
+        if crate::fonts::CRAFT_FONTS.iter().any(|f| f.family == "BIZ UDMincho") {
+            for (composed, decomposed) in [("が日", "か\u{3099}日"), ("ぱ\n日", "は\u{309a}\n日")] {
+                compare(composed, decomposed, crate::fonts::CRAFT_FONTS);
+            }
+        } else {
+            eprintln!("skipped Japanese comparisons: built without BIZ UDMincho from craft-fonts");
+        }
+    }
+
+    #[test]
+    fn upright_watermark_cell_retains_multiple_glyphs() {
+        use ab_glyph::{Font, ScaleFont};
+        let font = ab_glyph::FontRef::try_from_slice(WATERMARK_FONT).unwrap();
+        let data = harfrust::ShaperData::new(&harfrust::FontRef::new(WATERMARK_FONT).unwrap());
+        // There is no precomposed A with a combining long solidus overlay.
+        let glyphs = watermark_cell_glyphs(&font, &data, "A\u{338}", false, 30.0, 0.0, 0.0).unwrap();
+        assert_eq!(glyphs.len(), 2, "retain the base and the separately positioned combining glyph");
+        let baseline = font.as_scaled(30.0).ascent();
+        for glyph in glyphs {
+            assert!((glyph.position.y - baseline).abs() < 1.0, "no extra vertical cell for the mark");
+            assert!(font.outline_glyph(glyph).is_some(), "both glyphs have ink");
         }
     }
 
