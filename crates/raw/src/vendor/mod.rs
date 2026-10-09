@@ -2,6 +2,7 @@
 
 pub mod arw;
 pub mod arw6;
+mod arw6_curve;
 #[cfg(test)]
 pub(crate) mod arw6_testenc;
 pub mod cr2;

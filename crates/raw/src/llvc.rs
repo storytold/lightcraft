@@ -3,9 +3,6 @@
 //! Clean-room: written from SMPTE RDD 34:2015 §6.3 (Figures 6.5-6.8) and checked against its worked
 //! example (Figure 6.9) and Phase 0 oracle vectors. No other raw decoder's source was consulted.
 
-// Consumed by the dequantiser/wavelet/ARW6 container tasks that follow.
-#![allow(dead_code)]
-
 use crate::vendor::pef::Bits;
 use crate::{RawError, Result};
 

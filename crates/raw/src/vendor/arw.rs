@@ -20,10 +20,13 @@
 //! `0x7310`, else the level stored in the encrypted `SR2SubIFD` (see [`SR2_BLACK_AT`]; 800 rather than the
 //! default 512 on 1″-sensor bodies such as the RX100 series), else 512 (14-bit) / 128 (12-bit).
 //!
+//! ARW6 (Compressed RAW 2, compression 32766): `arw6.rs`, output in 2 × 14-bit units.
+//!
 //! Also: uncompressed 16-bit ARW, and lossless-compressed ARW (Compression 7, ILCE-7M4 and later): LJ92 tiles whose
 //! frames hold one 2×2 CFA cell per four-component sample ([`read_quad_tiles`]). Other lossless-JPEG layouts go
 //! through the generic TIFF path.
 
+use super::arw6;
 use crate::tiffraw::{Packing, check_image, read_image_in};
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result, ljpeg};
 use lightcraft_geom::Orientation;
@@ -481,6 +484,11 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
                 (RawData::U16(Vec::new()), bits)
             }
         },
+        32766 if chunks.len() == 1 => {
+            let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("raw strip outside file".into()))?;
+            (RawData::U16(arw6::decode(src, w, h, mode)?), 16)
+        }
+        32766 => return Err(RawError::Unsupported("ARW6 with more than one strip".into())),
         1 => {
             let packing = if strip_len >= (w * h * 2) as u64 { Packing::Word16 } else { Packing::Msb };
             (read_image_in(mode, bytes, &info, tiff.order, packing)?, bits)
@@ -514,6 +522,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     } else {
         raw.f64(t::WHITE_LEVEL).map(|v| v as f32).filter(|v| *v > 0.0).unwrap_or_else(|| super::white_from_data(samples, scale_bits))
     };
+    // ARW6 samples are in 2 x 14-bit units, so the file's 14-bit levels double
+    let unit = if info.compression == 32766 { 2.0 } else { 1.0 };
+    let black = BlackLevel { values: black.values.iter().map(|v| v * unit).collect(), ..black };
+    let white = white * unit;
     let model = ifd0.string(t::MODEL).unwrap_or_default();
     let mn = tiff
         .exif()

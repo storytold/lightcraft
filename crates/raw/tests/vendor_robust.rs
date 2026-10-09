@@ -232,6 +232,7 @@ fn samples() -> Vec<Vec<u8>> {
         cfa_tiff("NIKON CORPORATION", 34713, 14, ByteOrder::Big),
         cfa_tiff("SONY", 32767, 12, ByteOrder::Little),
         cfa_tiff("SONY", 1, 14, ByteOrder::Little),
+        cfa_tiff("SONY", 32766, 14, ByteOrder::Little),
         pef(1),
         pef(65535),
         cfa_tiff("SAMSUNG", 1, 12, ByteOrder::Little),
@@ -282,7 +283,7 @@ proptest! {
     #![proptest_config(ProptestConfig { cases: 2000, .. ProptestConfig::default() })]
 
     #[test]
-    fn mutated_vendor_files_never_panic(kind in 0usize..17, flips in proptest::collection::vec((any::<usize>(), any::<u8>()), 1..16), cut in any::<usize>()) {
+    fn mutated_vendor_files_never_panic(kind in 0usize..18, flips in proptest::collection::vec((any::<usize>(), any::<u8>()), 1..16), cut in any::<usize>()) {
         let mut data = samples().swap_remove(kind);
         let n = data.len();
         for (i, v) in flips {

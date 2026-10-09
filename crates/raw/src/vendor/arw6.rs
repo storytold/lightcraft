@@ -5,10 +5,8 @@
 //! checked by re-serialising parsed tiles byte-for-byte; see `docs/superpowers/specs/2026-10-09-sony-arw6-decoder-design.md`
 //! (*Container (Sony)*). No other raw decoder's source was consulted.
 
-// Consumed by the geometry and `decode` tasks that follow.
-#![allow(dead_code)]
-
 use crate::llvc::{Bands3, Plane, band_rows, dequant, reconstruct3, vld_decode_line};
+use crate::vendor::arw6_curve::{ARW6_CURVE, CURVE_KNEE};
 use crate::vendor::pef::Bits;
 use crate::{RawError, Result};
 use rayon::prelude::*;
@@ -433,8 +431,10 @@ pub(crate) fn decode_tile_planes(tile: &[u8], tw: usize, th: usize) -> Result<Ti
     let s = first_half_shift(tile, g4, w2)?;
     let (ntu, ph) = (tu_count(vs, s), phases(s));
     let layouts: Vec<HalfRows> = (0..2 * ntu).map(|n| half_layout(n, s, vs, ph)).collect();
-    let streams = h.streams.par_iter().map(|st| decode_stream(tile, st, ntu, w2, &layouts)).collect::<Result<Vec<_>>>()?;
-    let comps = (0..3).into_par_iter().map(|c| component(c, &streams, &layouts, vs, w2, ph)).collect::<Result<Vec<_>>>()?;
+    let streams =
+        h.streams.par_iter().map(|st| decode_stream(tile, st, ntu, w2, &layouts)).collect::<Vec<_>>().into_iter().collect::<Result<Vec<_>>>()?;
+    let comps =
+        (0..3).into_par_iter().map(|c| component(c, &streams, &layouts, vs, w2, ph)).collect::<Vec<_>>().into_iter().collect::<Result<Vec<_>>>()?;
     // Residual: g4's lines are the half's plane rows, dequantised with the half's nibble.
     let mut res = Plane::zeros(w2, vs);
     for ((half, lines), r) in streams.get(12).ok_or_else(|| corrupt("missing residual stream"))?.iter().zip(&layouts) {
@@ -447,10 +447,99 @@ pub(crate) fn decode_tile_planes(tile: &[u8], tw: usize, th: usize) -> Result<Ti
     Ok(TilePlanes { m, c1, c2, res })
 }
 
+/// Companding curve: 12-bit code to output value (2 x 14-bit units).
+pub(crate) fn curve(code12: i32) -> u16 {
+    let c = code12.clamp(0, 4095) as usize;
+    match c.checked_sub(CURVE_KNEE) {
+        None => c as u16,
+        Some(i) => ARW6_CURVE.get(i).copied().unwrap_or(39002),
+    }
+}
+
+/// Colour reconstruction (spec *Colour reconstruction*, checked against Phase 0 oracle output): the planes give a
+/// `(2 W2) x (2 H2)` mosaic with R at (0,0), G1 (0,1), G2 (1,0), B (1,1) of every 2x2 cell, each value passed through
+/// [`curve`]. G1 comes from the green mean minus a residual average, G2 is predicted from the (unclipped) G1 plus the
+/// residual, and R/B are chroma plus the mean of the greens clipped to 12 bits.
+pub(crate) fn colour(p: &TilePlanes) -> Result<Vec<u16>> {
+    let (w2, h2) = (p.m.width, p.m.height);
+    let len = w2.checked_mul(h2).ok_or_else(|| corrupt("tile size"))?;
+    if [&p.c1, &p.c2, &p.res].iter().any(|q| q.width != w2 || q.height != h2 || q.data.len() != len) || p.m.data.len() != len {
+        return Err(corrupt("plane size mismatch"));
+    }
+    let mw = w2.checked_mul(2).ok_or_else(|| corrupt("tile size"))?;
+    let total = len.checked_mul(4).ok_or_else(|| corrupt("tile size"))?;
+    let at = |q: &Plane, j: usize, x: usize| -> i64 { q.data.get(j * w2 + x).copied().unwrap_or(0) as i64 };
+    let mut g1 = vec![0i64; len];
+    for j in 0..h2 {
+        let jp = j.saturating_sub(1);
+        for x in 0..w2 {
+            let xn = (x + 1).min(w2 - 1);
+            let r = at(&p.res, jp, x) + at(&p.res, jp, xn) + at(&p.res, j, x) + at(&p.res, j, xn);
+            if let Some(g) = g1.get_mut(j * w2 + x) {
+                *g = at(&p.m, j, x) - ((r + 4) >> 3);
+            }
+        }
+    }
+    let g = |j: usize, x: usize| g1.get(j * w2 + x).copied().unwrap_or(0);
+    let mut out = vec![0u16; total];
+    for j in 0..h2 {
+        let jn = (j + 1).min(h2 - 1);
+        for x in 0..w2 {
+            let xp = x.saturating_sub(1);
+            let g2 = ((g(j, xp) + g(j, x) + g(jn, xp) + g(jn, x)) >> 2) + at(&p.res, j, x);
+            let mean = (g(j, x).min(4095) + g2.min(4095)) >> 1;
+            let r = 2 * at(&p.c1, j, x) + mean;
+            let b = 2 * at(&p.c2, j, x) + mean;
+            let cells = [(0, r), (1, g(j, x)), (mw, g2), (mw + 1, b)];
+            for (off, v) in cells {
+                if let Some(o) = out.get_mut(2 * j * mw + 2 * x + off) {
+                    *o = curve(v.clamp(0, 4095) as i32);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// One tile to its `tw x th` mosaic in output units.
+pub(crate) fn decode_tile(tile: &[u8], tw: usize, th: usize) -> Result<Vec<u16>> {
+    colour(&decode_tile_planes(tile, tw, th)?)
+}
+
+/// Decode a whole ARW6 strip: [`Mode::Header`](crate::Mode) validates the tile table, tile headers and stream
+/// tables and returns no samples; `Full` decodes the tiles in parallel into a `width x height` mosaic.
+pub(crate) fn decode(strip: &[u8], width: usize, height: usize, mode: crate::Mode) -> Result<Vec<u16>> {
+    let tiles = parse_tile_table(strip, width, height)?;
+    let bytes = |i: usize| tile_bytes(strip, &tiles, i).ok_or_else(|| corrupt("tile outside strip"));
+    if mode == crate::Mode::Header {
+        for (i, t) in tiles.iter().enumerate() {
+            let tile = bytes(i)?;
+            let h = parse_tile_header(tile, t.width, t.height)?;
+            let g4 = h.streams.get(12).ok_or_else(|| corrupt("missing residual stream"))?;
+            let s = first_half_shift(tile, g4, t.width / 2)?;
+            let ntu = tu_count(h.vs, s);
+            for st in &h.streams {
+                stream_halves(tile, st, ntu)?;
+            }
+        }
+        return Ok(Vec::new());
+    }
+    let decoded: Vec<Result<Vec<u16>>> = tiles.par_iter().enumerate().map(|(i, t)| decode_tile(bytes(i)?, t.width, t.height)).collect();
+    let mut out = vec![0u16; width.checked_mul(height).ok_or_else(|| corrupt("image size"))?];
+    for (t, d) in tiles.iter().zip(decoded) {
+        let d = d?;
+        for (r, row) in d.chunks_exact(t.width.max(1)).enumerate() {
+            let start = (t.y + r).checked_mul(width).and_then(|a| a.checked_add(t.x)).ok_or_else(|| corrupt("tile placement"))?;
+            let dst = start.checked_add(row.len()).and_then(|end| out.get_mut(start..end)).ok_or_else(|| corrupt("tile outside image"))?;
+            dst.copy_from_slice(row);
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llvc::Plane;
     use crate::vendor::arw6_testenc::*;
     use crate::vendor::pef::Bits;
     use lightcraft_tiff::Tiff;
@@ -725,5 +814,103 @@ mod tests {
             let _ = decode_tile_planes(&tile[..n], 64, 48);
             let _ = decode_tile_planes(&tile, 64, 48);
         }
+    }
+
+    #[test]
+    fn curve_anchors() {
+        assert_eq!(ARW6_CURVE.len(), 2668);
+        for (c, v) in [(0, 0), (1427, 1427), (1428, 1429), (1436, 1438), (2048, 2469), (3000, 8010), (4094, 38944), (4095, 39002)] {
+            assert_eq!(curve(c), v, "code {c}");
+        }
+        assert_eq!(curve(-5), 0);
+        assert_eq!(curve(5000), 39002);
+        assert!(ARW6_CURVE.windows(2).all(|w| w[0] < w[1]));
+    }
+
+    fn plane(w: usize, v: &[i32]) -> Plane {
+        Plane { width: w, height: v.len() / w, data: v.to_vec() }
+    }
+
+    fn example() -> TilePlanes {
+        TilePlanes {
+            m: plane(3, &[2048, 2052, 2060, 2050, 2049, 2070]),
+            res: plane(3, &[4, -8, 2, 0, 2, -6]),
+            c1: plane(3, &[10, -10, 0, 0, 3, -2]),
+            c2: plane(3, &[-5, 7, 1, 2, 0, 4]),
+        }
+    }
+
+    #[test]
+    fn colour_matches_the_phase0_example() {
+        let out = colour(&example()).unwrap(); // 6 wide x 4 rows, curve units
+        let code = |r: usize, c: usize| out[r * 6 + c] as i32;
+        assert_eq!(
+            [code(0, 1), code(0, 3), code(0, 5), code(2, 1), code(2, 3), code(2, 5)],
+            [2049, 2053, 2059, 2050, 2050, 2071].map(|c| curve(c) as i32)
+        ); // G1
+        assert_eq!(
+            [code(1, 0), code(1, 2), code(1, 4), code(3, 0), code(3, 2), code(3, 4)],
+            [2053, 2042, 2060, 2050, 2052, 2054].map(|c| curve(c) as i32)
+        ); // G2
+        assert_eq!([code(0, 0), code(0, 2), code(0, 4)], [2071, 2027, 2059].map(|c| curve(c) as i32)); // R
+        assert_eq!([code(1, 1), code(1, 3), code(1, 5)], [2041, 2061, 2061].map(|c| curve(c) as i32)); // B
+    }
+
+    #[test]
+    fn colour_clips_like_the_oracle() {
+        let mut p = example();
+        p.m.data[1] = 4100;
+        let out = colour(&p).unwrap();
+        assert_eq!(out[3], 39002); // G1 = 4101 -> clipped output
+        assert_eq!(out[6 + 2], curve(2554)); // G2 predicted from the unclipped G1
+        assert_eq!(out[2], curve(3304)); // R = 2*(-10) + ((4095 + 2554) >> 1): chroma uses the clipped greens
+    }
+
+    #[test]
+    fn decode_header_and_full_and_truncations() {
+        let (tile, _) = one_tile(64, 48, 3, Qis::REAL);
+        let file = arw6_file(&[(0, 0, 64, 48, tile)], 64, 48);
+        let strip = strip_of(&file);
+        assert!(decode(strip, 64, 48, crate::Mode::Header).unwrap().is_empty());
+        assert_eq!(decode(strip, 64, 48, crate::Mode::Full).unwrap().len(), 64 * 48);
+        for n in 0..strip.len() {
+            let _ = decode(&strip[..n], 64, 48, crate::Mode::Full);
+            let _ = decode(&strip[..n], 64, 48, crate::Mode::Header);
+        }
+    }
+
+    #[test]
+    fn corrupt_streams_import_then_fail() {
+        // Garbage VLD data is self-delimiting and decodes to *something*; what is detectable is a half whose index
+        // length is too short for the lines it must hold.
+        let (mut tile, _) = one_tile(64, 48, 0, Qis::REAL);
+        let h = parse_tile_header(&tile, 64, 48).unwrap();
+        let at = (h.streams[9].word + 1) * 16; // g3 c0 index table, first entry: half 0's byte length (u16 BE)
+        tile[at] = 0;
+        tile[at + 1] = 1;
+        let strip = strip_of(&arw6_file(&[(0, 0, 64, 48, tile)], 64, 48)).to_vec();
+        assert!(decode(&strip, 64, 48, crate::Mode::Header).is_ok());
+        assert!(matches!(decode(&strip, 64, 48, crate::Mode::Full), Err(RawError::Corrupt(_))));
+    }
+
+    #[test]
+    fn four_tiles_place_correctly_and_arw_reports_doubled_levels() {
+        let tiles: Vec<_> = [(0, 0), (64, 0), (0, 48), (64, 48)]
+            .iter()
+            .map(|&(x, y)| {
+                let (t, _) = one_tile(64, 48, 0, Qis::ZERO);
+                (x, y, 64, 48, t)
+            })
+            .collect();
+        let file = arw6_file(&tiles, 128, 96);
+        let img = crate::decode(&file).unwrap();
+        assert_eq!((img.width, img.height, img.bits), (128, 96, 16));
+        assert_eq!(img.black.values, vec![1024.0; 4]);
+        assert_eq!(img.white, vec![30720.0]);
+        assert_eq!(img.cfa.as_ref().map(|c| c.pattern.clone()), Some(vec![0, 1, 1, 2]));
+        let crate::RawData::U16(d) = img.data else { panic!() };
+        let single = decode(strip_of(&arw6_file(&tiles[..1], 64, 48)), 64, 48, crate::Mode::Full).unwrap();
+        assert_eq!(&d[..64], &single[..64]); // tile 0's first row lands at (0, 0)
+        assert_eq!(crate::probe_info(&file).unwrap().width, 128); // header mode: tile tables and headers only
     }
 }
