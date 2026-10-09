@@ -1,6 +1,8 @@
 //! Vendor raw formats (TIFF-based) and helpers shared by them.
 
 pub mod arw;
+#[cfg(test)]
+pub(crate) mod arw6_testenc;
 pub mod cr2;
 pub mod cr3;
 pub mod crx;
