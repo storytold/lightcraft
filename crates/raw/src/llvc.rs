@@ -192,20 +192,29 @@ fn at(v: &[i32], i: isize) -> i32 {
     v.get(i.clamp(0, last) as usize).copied().unwrap_or(0)
 }
 
+/// Saturating narrowing: hostile coefficients clamp instead of overflowing.
+fn sat(v: i64) -> i32 {
+    v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
 /// 1-D inverse 5/3 lifting, RDD 34 §6.5, with X[-1] := X[1], X[n] := X[n-2] (see `band_rows` for the sizes).
 fn inverse_1d(l: &[i32], h: &[i32], phase: u8) -> Result<Vec<i32>> {
     let (n, p) = (l.len() + h.len(), isize::from(phase));
     if band_rows(n, phase) != (l.len(), h.len()) || phase > 1 {
         return Err(RawError::Corrupt("ARW6 wavelet: band sizes do not match".into()));
     }
-    let even: Vec<i32> = l.iter().enumerate().map(|(j, &lv)| lv - ((at(h, j as isize - 1 + p) + at(h, j as isize + p) + 2) >> 2)).collect();
+    let even: Vec<i32> = l
+        .iter()
+        .enumerate()
+        .map(|(j, &lv)| sat(i64::from(lv) - ((i64::from(at(h, j as isize - 1 + p)) + i64::from(at(h, j as isize + p)) + 2) >> 2)))
+        .collect();
     let mut x = vec![0; n];
     let (lo, hi) = (usize::from(phase), 1 - usize::from(phase));
     for (xv, &e) in x.iter_mut().skip(lo).step_by(2).zip(&even) {
         *xv = e;
     }
     for (k, (xv, &hv)) in x.iter_mut().skip(hi).step_by(2).zip(h).enumerate() {
-        *xv = hv + ((at(&even, k as isize - p) + at(&even, k as isize + 1 - p)) >> 1);
+        *xv = sat(i64::from(hv) + ((i64::from(at(&even, k as isize - p)) + i64::from(at(&even, k as isize + 1 - p))) >> 1));
     }
     Ok(x)
 }
@@ -387,6 +396,43 @@ mod tests {
     fn dequant_does_not_overflow() {
         assert_eq!(dequant(i32::MAX, 31), i32::MAX);
         assert_eq!(dequant(i32::MIN, 40), -i32::MAX);
+    }
+    #[test]
+    fn extreme_coefficients_do_not_overflow() {
+        for v in [i32::MAX, i32::MIN] {
+            for (w, h) in [(7usize, 9usize), (16, 16), (9, 16)] {
+                let p = |w, h| Plane { width: w, height: h, data: vec![v; w * h] };
+                for ph in 0..2u8 {
+                    let (lh, lw) = (band_rows(h, ph), band_rows(w, 0));
+                    assert!(inverse_53_2d(&p(lw.0, lh.0), &p(lw.0, lh.1), &p(lw.1, lh.0), &p(lw.1, lh.1), ph).is_ok());
+                }
+                let (w3, h3) = (w * 8, h * 8);
+                let mut sizes = vec![];
+                let (mut cw, mut ch) = (w3, h3);
+                for ph in [0u8; 3] {
+                    let (a, b) = (band_rows(cw, 0), band_rows(ch, ph));
+                    sizes.push((a, b));
+                    (cw, ch) = (a.0, b.0);
+                }
+                let q = |l: usize, xh: bool, yh: bool| {
+                    let ((a, b), (c, d)) = sizes[l];
+                    p(if xh { b } else { a }, if yh { d } else { c })
+                };
+                let b = Bands3 {
+                    ll3: q(2, false, false),
+                    hl3: q(2, true, false),
+                    lh3: q(2, false, true),
+                    hh3: q(2, true, true),
+                    hl2: q(1, true, false),
+                    lh2: q(1, false, true),
+                    hh2: q(1, true, true),
+                    hl1: q(0, true, false),
+                    lh1: q(0, false, true),
+                    hh1: q(0, true, true),
+                };
+                assert!(reconstruct3(&b, [0, 1, 0]).is_ok());
+            }
+        }
     }
     #[test]
     fn band_rows_counts() {
