@@ -2,8 +2,8 @@
 
 - **Date:** 2026-10-09 (Phase 0 results added the same evening)
 - **Status:** Phase 0 passed. The bitstream model below is bit-exact against the black-box oracle on every tile of
-  the 8 RawDB Compressed / HQ files, and its geometry matches the camera's embedded JPEG. Spec awaiting user review;
-  then the writing-plans skill. No product code has been written.
+  the 8 RawDB Compressed / HQ files, and its geometry matches the camera's embedded JPEG. Phase 0 and the
+  implementation are on branch `claude/arw6-decoder`; the durable record is `docs/arw6-compression.md`.
 - **Tracker rows:** LR-IMP-FORMATS, LR-IMP-CAMERA-COVERAGE (`docs/parity.md`)
 - **Sub-project 1 of 3.** Follow-ups with their own specs: the ILCE-7RM6 colour profile (needs this decoder), and
   Sony embedded lens corrections (independent of it).
@@ -55,7 +55,9 @@ locally in `plan/arw6/` (gitignored; see its README).
   TUs, `0x10`, …) + index table + data, each part padded to a word. Index entry per TU: `A(16) X B(16) X`, where
   A / B are the byte lengths of half 0 / half 1 of that TU and X is the QI nibble(s): 1 nibble for g0 and g4, 3 for
   g1–g3 (one per band, HL/LH/HH). TU k's data = A bytes then B bytes, each half byte-aligned, consecutive TUs
-  contiguous. TUs per tile = ⌈VS / 16⌉; halves are numbered n = 2·TU + h.
+  contiguous. Halves per tile = ⌈(VS − 2 − s)/8⌉ + 1 with s the first-half shift (0 on FF, 3 on the APS-C crop),
+  TUs = ⌈halves/2⌉ (105 and 137 for the samples; ⌈VS/16⌉ only coincides with that for the two sample sizes);
+  halves are numbered n = 2·TU + h.
 - QI values seen, identical in Compressed and HQ files: level 1 component 0 (1,1,2), components 1–2 (2,2,3);
   level 2 (0,0,1); level 3 (0,0,0); LL3 0; residual 2. Compressed differs from HQ only in the coefficient data.
 
@@ -70,8 +72,8 @@ locally in `plan/arw6/` (gitignored; see its README).
   code (RDD 34's worked example implies V zero sets).
 - Dequantisation is not RDD 34's `X = XQ << QI`: `recon(q) = sign(q) · (((2|q| + 1) << (QI − 1)) − (|q| & 1))`,
   `recon(0) = 0`, and QI = 0 leaves q unchanged (oracle-verified on every band).
-- LL3 lines are DPCM: the coefficient is the running sum along the line, starting from 0, plus 2048 (the codes are
-  unsigned 12-bit, 0..4095).
+- LL3 lines are DPCM: the coefficient is the running sum along the line, starting from 0. The 2048 base (the codes
+  are unsigned 12-bit, 0..4095) applies to component 0 (the green mean) only; the chroma planes' sums start at 0.
 
 ### Frame geometry (sensor-anchored)
 
@@ -109,7 +111,8 @@ With plane row j and column x (clamp x±1 at the edges), all in 12-bit code unit
 - The table's unit is 2 × 14-bit DN: the darkest pixels of all eight ISO 100 files sit at 1037..1059, just above
   2 × 512, and the lossless sibling's shadow distribution matches at ×2 (×2.38, i.e. 39002/16383, would put them
   76 DN below black; ×1 would leave no shadows). So the decoder reports black = 2 × tag black (1024) and white =
-  2 × WhiteLevel (30720); saturated highlights sit at code 4095 = 39002, above white, and clip as usual. A
+  2 × the file's DNG WhiteLevel tag (16383 → 32766; the Sony 15360 tag is not read), with a data-derived
+  fallback already in output units; 32766 is also the table's one knot (code 3977, steps +87 then +11, in every file), so codes 3978..4095 sit above white and clip as usual; saturated highlights sit at code 4095 = 39002. A
   tripod-matched lossless/compressed pair would confirm the factor; see *Risks*.
 
 ### LibRaw's APS-C bug (why the oracle is not the last word)

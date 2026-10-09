@@ -576,6 +576,63 @@ fn corpus_fujifilm_compressed_samples() {
     eprintln!("verified {seen} Fujifilm compressed sensor arrays");
 }
 
+/// Checks each available `(name, width, height, sum, weighted)` case against the pinned SHA-256 in `checksums`
+/// and the decoder's sensor array; absent corpus files are skipped. Returns how many were verified.
+fn verify_sensor_arrays(checksums: &str, cases: &[(&str, usize, usize, u64, u64)]) -> usize {
+    use sha2::{Digest, Sha256};
+    let dir = corpus_root().join("raw");
+    let mut seen = 0;
+    for &(name, width, height, sum, weighted) in cases {
+        let path = format!("corpus/raw/{name}");
+        let checksum = checksums.lines().filter_map(|s| s.split_once("  ")).find(|(_, p)| *p == path).unwrap().0;
+        assert_eq!(checksum.len(), 64, "{name}: missing published SHA-256");
+        let Ok(bytes) = std::fs::read(dir.join(name)) else { continue };
+        let actual_sha: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(actual_sha, checksum, "{name}: corpus file differs from its pinned identity");
+        let img = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!((img.width, img.height), (width, height), "{name}");
+        let lightcraft_raw::RawData::U16(data) = img.data else { panic!("{name}: float data") };
+        let actual = data
+            .iter()
+            .enumerate()
+            .fold((0u64, 0u64), |(s, w), (i, &v)| (s.wrapping_add(u64::from(v)), w.wrapping_add((i as u64 + 1).wrapping_mul(u64::from(v)))));
+        assert_eq!(actual, (sum, weighted), "{name}: sensor samples differ from reference");
+        seen += 1;
+    }
+    seen
+}
+
+/// Reference sums from the oracle-verified Phase 0 model (docs/arw6-compression.md); the files are CC0 from RawDB.
+#[test]
+fn corpus_sony_arw6_samples() {
+    let cases: &[(&str, usize, usize, u64, u64)] = &[
+        ("arw6-sony-ilce7rm6-apsc-land-hq.arw", 6592, 4372, 85834467900, 1323814215465139776),
+        ("arw6-sony-ilce7rm6-apsc-land-c.arw", 6592, 4372, 100710478599, 1516298925086164077),
+        ("arw6-sony-ilce7rm6-ff-land-hq.arw", 10016, 6672, 258417758289, 9667602918876623332),
+        ("arw6-sony-ilce7rm6-ff-land-c.arw", 10016, 6672, 258558260019, 9665041696390559268),
+        ("arw6-sony-ilce7rm6-apsc-port-hq.arw", 6592, 4372, 126965386051, 1647947621898118992),
+        ("arw6-sony-ilce7rm6-apsc-port-c.arw", 6592, 4372, 122629012213, 1601616875702755341),
+        ("arw6-sony-ilce7rm6-ff-port-hq.arw", 10016, 6672, 242772794178, 8043470668590476975),
+        ("arw6-sony-ilce7rm6-ff-port-c.arw", 10016, 6672, 241868995482, 8014659803009871380),
+    ];
+    let seen = verify_sensor_arrays(include_str!("../../../docs/arw6-corpus.sha256"), cases);
+    eprintln!("verified {seen} Sony ARW6 sensor arrays");
+}
+
+/// The lossless siblings keep decoding through the LJ92 quad-tile path. Regression values from LightCraft's own
+/// LJ92 path, 2026-10-10 (no independent reference).
+#[test]
+fn corpus_sony_ilce7rm6_lossless_samples() {
+    let cases: &[(&str, usize, usize, u64, u64)] = &[
+        ("arw-sony-ilce7rm6-apsc-land-lossless.arw", 6656, 4608, 42685586690, 664300694689609738),
+        ("arw-sony-ilce7rm6-apsc-port-lossless.arw", 6656, 4608, 62443944469, 818441184988649303),
+        ("arw-sony-ilce7rm6-ff-land-lossless.arw", 10240, 7168, 128728791716, 4922490451480041632),
+        ("arw-sony-ilce7rm6-ff-port-lossless.arw", 10240, 7168, 120718314835, 4098302368966213583),
+    ];
+    let seen = verify_sensor_arrays(include_str!("../../../docs/arw6-corpus.sha256"), cases);
+    eprintln!("verified {seen} Sony ILCE-7RM6 lossless sensor arrays");
+}
+
 /// The container rule for TIFF "shells" (a small IFD0 next to a private raw block) must not touch real
 /// raws: every corpus file keeps the format its maker implies, and none is described as a private block.
 #[test]

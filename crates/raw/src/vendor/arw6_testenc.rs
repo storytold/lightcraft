@@ -13,7 +13,7 @@ fn at(v: &[i32], i: isize) -> i32 {
     if v.is_empty() { 0 } else { v[i.clamp(0, v.len() as isize - 1) as usize] }
 }
 
-/// Forward 1-D 5/3 with whole-sample symmetric extension (`plan/arw6/scratch/fwd.py::fwd1d`).
+/// Forward 1-D 5/3 with whole-sample symmetric extension (port of the Phase 0 reference model, local and not in the repo).
 fn forward_1d(x: &[i32], phase: u8) -> (Vec<i32>, Vec<i32>) {
     let n = x.len() as isize;
     let p = isize::from(phase);
@@ -80,7 +80,7 @@ pub(crate) fn forward3(x: &Plane, phases: [u8; 3]) -> Bands3 {
     Bands3 { ll3, hl3, lh3, hh3, hl2, lh2, hh2, hl1, lh1, hh1 }
 }
 
-// ---- RDD 34 line encoder (mirror of `llvc::vld_decode_line`; `plan/arw6/scratch/tilewrite.py::vld_encode`) ----
+// ---- RDD 34 line encoder (mirror of `llvc::vld_decode_line`; port of the Phase 0 reference model's encoder) ----
 
 /// MSB-first bit sink; one `0`/`1` per element until `finish`.
 #[derive(Default)]

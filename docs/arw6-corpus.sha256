@@ -1,0 +1,14 @@
+# Sony ILCE-7RM6 ARW files (ARW6 Compressed / HQ and lossless siblings); CC0 1.0, RawDB (rawdb.dnglab.org), uploaded by abbradar.
+# SHA-256 values verified 2026-10-09; see docs/arw6-compression.md.
+b60a7e752d2a8102ccbe6eebcfdbf533c6b0f2545739090873e9e8eb32cc0637  corpus/raw/arw6-sony-ilce7rm6-apsc-land-hq.arw
+1c803304e63ec508b2b5f9d59d4a7e30ed279315b35fa4c5d75f959bed62198b  corpus/raw/arw6-sony-ilce7rm6-apsc-land-c.arw
+0b6d782571e86868670f613de9fa1f1364623b24fbfd21b704b2c516d7a1c1cb  corpus/raw/arw6-sony-ilce7rm6-apsc-port-hq.arw
+c41674a485ffcf6d873e20e545ae62936192d94e95be3d53548e93bc543ecfd4  corpus/raw/arw6-sony-ilce7rm6-apsc-port-c.arw
+559fa26501d7813e56afecde2aea3d9965a99228162b194752d986193abb172c  corpus/raw/arw6-sony-ilce7rm6-ff-land-hq.arw
+d900d6cbe838be864269ad54de4a33fcac7eb3a3d4f91009739f770b8f85a23b  corpus/raw/arw6-sony-ilce7rm6-ff-land-c.arw
+81c709633cb8f6340e612c3f53bb6ec6b0cccfe5b713c67efb1e977ece9e266d  corpus/raw/arw6-sony-ilce7rm6-ff-port-hq.arw
+f4448485629c3f82ff1955fd046404350e9a1f09b346038574b89c074d7c50fd  corpus/raw/arw6-sony-ilce7rm6-ff-port-c.arw
+7aaf0b3941509d7364a6f03844783155ebc912d246d1c456e5cdb4693ec09fbc  corpus/raw/arw-sony-ilce7rm6-apsc-land-lossless.arw
+0f011933ee96525a39710daa50b59d39702b4ec5934fa0206742e2128c55f366  corpus/raw/arw-sony-ilce7rm6-apsc-port-lossless.arw
+5cb3c870bc961cf6b079d56c860d0cdf11acd1afd04e5fb8dbe041bcfd2d6201  corpus/raw/arw-sony-ilce7rm6-ff-land-lossless.arw
+b1a4026aa6adbaa27973b8b3426d8b4aa0c1cae1845cf5102359327d3b069691  corpus/raw/arw-sony-ilce7rm6-ff-port-lossless.arw

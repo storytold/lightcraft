@@ -227,7 +227,7 @@ pub(crate) fn tu_count(vs: usize, s: u8) -> usize {
     halves.div_ceil(2)
 }
 
-/// Lifting phases of levels 1..=3 for anchor offset `s` (`plan/arw6/scratch/assemble.py::geometry`):
+/// Lifting phases of levels 1..=3 for anchor offset `s` (the Phase 0 reference model, local and not in the repo; see `docs/arw6-compression.md`):
 /// FF (s = 0) gives [0, 1, 1], the APS-C crop (s = 3) [1, 0, 0].
 pub(crate) fn phases(s: u8) -> [u8; 3] {
     let s = i32::from(s);
