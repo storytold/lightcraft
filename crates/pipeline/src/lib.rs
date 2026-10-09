@@ -180,6 +180,15 @@ pub struct Rendered {
     pub deep: Option<DeepImage>,
 }
 
+impl Rendered {
+    /// A deep render with its 8-bit image and histogram.
+    pub fn from_deep(deep: DeepImage) -> Rendered {
+        let image = deep.to_rgba8();
+        let histogram = Histogram::of_srgb8(&image);
+        Rendered { image, histogram, deep: Some(deep) }
+    }
+}
+
 /// Everything the per-pixel stage needs, precomputed at output resolution.
 ///
 /// The image and planes are computed *before exposure* (so they can be reused while exposure is
@@ -520,10 +529,8 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     }
     if req.depth != OutputDepth::U8 {
         let deep = finish::finish_deep(&prep, s, frame, info, req.space, req.depth, req.proof);
-        let image = deep.to_rgba8();
-        let histogram = Histogram::of_srgb8(&image);
         lap("finish (deep)", &mut t);
-        return Rendered { image, histogram, deep: Some(deep) };
+        return Rendered::from_deep(deep);
     }
     let image = finish::finish(&prep, s, frame, info, req.space, req.proof);
     lap("finish", &mut t);

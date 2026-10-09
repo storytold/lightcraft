@@ -2,6 +2,13 @@
 
 ## October 2026
 
+### Export
+- Exports smaller than the photo are rendered at twice their size (at most full size) in 16 bits and then downsized
+  the way Lightroom Classic does it (Catmull-Rom on gamma-1.8 values), so they come closer to Lightroom's exports of
+  the same settings (2000 px exports of three camera JPEGs, unedited: mean ΔE2000 1.47 → 0.35). Exports up to about
+  1280 px cost about the same as before; a 2000 px export of a 24 MP raw takes about 3 times as long and 3.5 times
+  the memory. The browser version still renders exports at their own size.
+
 ### Masking
 - Drag anywhere inside the selected radial gradient's ellipse to move it, including rotated
   ellipses and radial components in compound masks. Edge and rotation handles keep their existing
