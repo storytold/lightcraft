@@ -228,21 +228,7 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
                 *v = 1.0 - smooth(tol * 0.5, tol, d);
             }
         }
-        MaskShape::Sky => {
-            // Classical sky heuristic until the segmenter lands (M12): bright, smooth, blue-ish or
-            // unsaturated, and connected to the top of the frame.
-            let m = frame.out_to_norm(w, h);
-            for (i, v) in out.data.iter_mut().enumerate() {
-                let (x, y) = (i % w, i / w);
-                let n = m.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-                let c = img.data[i].map(|v| v * gain);
-                let l = log_l.data[i] + ev;
-                let blue = (c[2] - c[0]).max(0.0) / (c[2] + 1e-4);
-                let top = 1.0 - smooth(0.25, 0.7, n.y as f32);
-                *v = top * smooth(-3.5, -1.0, l) * (0.4 + 0.6 * smooth(0.0, 0.3, blue).max(smooth(0.0, 1.5, l)));
-            }
-            smooth_plane(&mut out, 0.01 * frame_px(frame, w));
-        }
+        MaskShape::Sky => rasterize_sky(frame, w, h, img, log_l, ev, &mut out),
         MaskShape::Object { seg, detail, edge, .. } | MaskShape::Prompt { seg, detail, edge, .. } if seg.is_some() || !detail.is_empty() => {
             // Edge: below 0 a steeper transition (up to 8× the logits), above 0 feathered (up to
             // 2 % of the long edge, so previews and exports match)
@@ -340,6 +326,68 @@ fn frame_px(frame: &Frame, w: usize) -> f32 {
 
 fn smooth_plane(p: &mut Plane, sigma: f32) {
     *p = lightcraft_raster::blur::gaussian(p, sigma.max(0.5));
+}
+
+/// Classical sky fallback for photos without a semantic sky matte.
+///
+/// The old score had a 0.4 floor for every bright pixel and faded every candidate from 25 % to
+/// 70 % down the frame, which both admitted bright non-sky near the horizon and removed real sky
+/// before it reached the horizon. It then used a broad Gaussian (1 % of the long edge), smearing
+/// the selection across branches, wires and the horizon. Keep this heuristic local/window-stable:
+/// a true flood fill to the top cannot be reproduced by a zoom-window render without evaluating
+/// the missing part of the frame.
+fn rasterize_sky(frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32, out: &mut Plane) {
+    if w == 0 || h == 0 {
+        return;
+    }
+    let m = frame.out_to_norm(w, h);
+    let gain = ev.exp2();
+    for (i, v) in out.data.iter_mut().enumerate() {
+        let (x, y) = (i % w, i / w);
+        let n = m.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+        let c = img.data[i].map(|v| (v * gain).max(0.0));
+        let l = log_l.data[i] + ev;
+        let hi = c[0].max(c[1]).max(c[2]);
+        let lo = c[0].min(c[1]).min(c[2]);
+        let sat = (hi - lo) / (hi + 1e-4);
+        let blue = (c[2] - c[0].max(c[1])).max(0.0) / (c[2] + 1e-4);
+        let py = n.y as f32;
+
+        let bright = smooth(-3.5, -0.7, l);
+        let blue_sky = smooth(0.01, 0.18, blue);
+        // Bright, low-chroma cloud/overcast remains possible, but unlike the old brightness floor
+        // it gets a stronger vertical prior so neutral ground does not qualify as readily.
+        let neutral_sky = (1.0 - smooth(0.08, 0.24, sat)) * smooth(-2.8, -0.5, l) * (1.0 - smooth(0.50, 0.80, py));
+        // Blue sky is allowed much closer to the horizon than before; only the bottom of the frame
+        // is strongly discouraged.
+        let height = 0.15 + 0.85 * (1.0 - smooth(0.66, 0.94, py));
+        let score = bright * blue_sky.max(0.85 * neutral_sky) * height;
+        *v = smooth(0.16, 0.55, score);
+    }
+
+    // Feather at a quarter of the old width, but only across locally smooth luminance and where
+    // the unblurred classifier has support. A dark wire/branch therefore stays out instead of
+    // being filled by the blur; the horizon does not bleed into a strong luminance edge.
+    let sigma = 0.0025 * frame.output_long(w, h) as f32;
+    let blurred = lightcraft_raster::blur::gaussian(out, sigma.max(0.5));
+    let original = std::mem::replace(out, blurred);
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            let l = log_l.data[i];
+            let edge = (l - log_l.get_clamped(x as isize - 1, y as isize))
+                .abs()
+                .max((l - log_l.get_clamped(x as isize + 1, y as isize)).abs())
+                .max((l - log_l.get_clamped(x as isize, y as isize - 1)).abs())
+                .max((l - log_l.get_clamped(x as isize, y as isize + 1)).abs());
+            let flat = 1.0 - smooth(0.08, 0.35, edge);
+            let a = original.data[i];
+            let support = smooth(0.02, 0.20, a);
+            let mix = flat * (0.15 + 0.85 * support);
+            let b = out.data[i];
+            out.data[i] = (a + (b - a) * mix).clamp(0.0, 1.0);
+        }
+    }
 }
 
 /// The union (max) of `mattes` (0..255, over the EXIF-oriented source) at output resolution,
@@ -809,6 +857,30 @@ mod tests {
         assert!(l > 0.95 && r < 0.3, "refine 100: {l} vs {r}");
     }
 
+    #[test]
+    fn sky_heuristic_reaches_the_horizon_without_filling_thin_objects() {
+        let (w, h, horizon) = (200, 120, 72);
+        let img = Rgb32f::from_fn(w, h, |x, y| {
+            let wire = y == 34 && x > 20 && x < w - 20;
+            let branch = (96..=98).contains(&x) && y < horizon;
+            if wire || branch {
+                [0.04; 3]
+            } else if y < horizon {
+                [0.35, 0.60, 1.10]
+            } else {
+                [0.55, 0.38, 0.20]
+            }
+        });
+        let l = img.map(crate::local::log_lum);
+        let a = shape_alpha(&MaskShape::Sky, &frame(w, h), w, h, &img, &l, 0.0, None);
+
+        assert!(a.get(30, horizon - 3) > 0.8, "sky reaches the horizon: {}", a.get(30, horizon - 3));
+        assert!(a.get(30, horizon + 3) < 0.1, "warm ground stays out: {}", a.get(30, horizon + 3));
+        assert!(a.get(80, 34) < 0.2, "thin wire stays out: {}", a.get(80, 34));
+        assert!(a.get(97, 50) < 0.2, "thin branch stays out: {}", a.get(97, 50));
+        assert!(a.get(90, 50) > 0.8 && a.get(104, 50) > 0.8, "sky beside the branch remains selected");
+    }
+
     /// A half-resolution matte selecting the left `frac` of a `w × h` source.
     fn left_matte(w: usize, h: usize, frac: f64) -> Image<u8> {
         Image::from_fn(w / 2, h / 2, |x, _| if (x as f64 + 0.5) < frac * (w / 2) as f64 { 255 } else { 0 })
@@ -867,4 +939,4 @@ mod tests {
         let lips = MaskShape::People { person: 0, parts: vec!["Lips".into()] };
         assert_eq!(eval(&lips), shape_alpha(&lips, &f, w, h, &img, &l, 0.0, None));
     }
-}
+        }
