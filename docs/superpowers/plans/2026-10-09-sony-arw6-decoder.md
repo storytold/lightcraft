@@ -1,5 +1,7 @@
 # Sony ARW6 Decoder Implementation Plan
 
+> **Executed 2026-10-09/10.** Three rules were corrected during execution and are recorded in the spec and docs/arw6-compression.md: the TU count follows the sensor-anchored grid, the LL3 base 2048 applies to component 0 only, and the white level is 2 × the DNG WhiteLevel (32766). The plan text below is the historical record.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Decode Sony "Compressed RAW 2" ARWs (TIFF compression 32766, ILCE-7RM6 Compressed and Compressed HQ) to the sensor CFA, bit-exact against the Phase 0 reference model, in pure Rust.

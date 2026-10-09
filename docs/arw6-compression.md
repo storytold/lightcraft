@@ -35,14 +35,14 @@ With plane row j, column x (x +- 1 clamped at the edges), in 12-bit code units:
 
 - `G1[j][x] = M[j][x] - ((res[j-1][x] + res[j-1][x+1] + res[j][x] + res[j][x+1] + 4) >> 3)`, with `res[-1] := res[0]`.
 - `G2[j][x] = ((G1[j][x-1] + G1[j][x] + G1[j+1][x-1] + G1[j+1][x]) >> 2) + res[j][x]` (unclipped G1; the last row uses G1[j] for G1[j+1]).
-- `R = 2*c1 + ((min(G1, 4095) + min(G2, 4095)) >> 1)`, `B = 2*c2 + (same)`.
+- `R = 2*c1 + ((clamp(G1, 0, 4095) + clamp(G2, 0, 4095)) >> 1)`, `B = 2*c2 + (same)` (a negative green, as in deep high-ISO shadows, counts as 0).
 - Every code is clipped to 0..4095. Per 2x2 cell: R (0,0), G1 (0,1), G2 (1,0), B (1,1).
 
 ### Output range (companding table)
 
 - Codes map through one monotone table shared by all files: identity up to code 1427, then a smooth curve reaching 39002 at code 4095 (steps grow from 1 to 58). No closed form fits within +-22, so `arw6_curve.rs` embeds the table (2668 `u16` values from code 1428). It is not stored in the file.
 - Provenance: the table was read off the black-box oracle's (LibRaw, below) output over the 8 Compressed / HQ files; every code from 1027 to 4095 occurred and no two files disagreed. It is therefore a measurement of that program's output, not an independent derivation.
-- Unit: 2 x 14-bit DN. The decoder reports black = 2 x 512 = 1024 and white = 2 x the file's DNG `WhiteLevel` (16383), i.e. 32766; saturated highlights sit at code 4095 = 39002, above white, and clip as usual. If a file carries no usable white level, a data-derived fallback already in output units is used.
+- Unit: 2 x 14-bit DN. The decoder reports black = 2 x 512 = 1024 and white = 2 x the file's DNG `WhiteLevel` (16383), i.e. 32766; saturated highlights sit at code 4095 = 39002, above white, and clip as usual. If a file carries no usable white level, the white is 32766 (2 x 16383, the table's knot below), not a data-derived value.
 - The table has one knot: at code 3977 it runs 32679 -> 32766 -> 32777 (steps +87 then +11), the same in every file. 32766 = 2 x 16383 is exactly the reported white level, so the knot is the white point of the measured curve (inferred from the arithmetic, not from any documentation): codes 3978..4095 sit above white and clip.
 
 ## Verification
@@ -53,7 +53,7 @@ Geometry was checked against each file's embedded full-resolution JPEG at the De
 
 ### LibRaw's APS-C bug
 
-LibRaw assumes the full-frame grid (s = 0) for every tile. On the APS-C crop that drops the first three plane rows, leaves the last three unfed, and shifts its whole output up by 6 sensor rows; its first rows and last rows are also wrong. Our decoder differs from LibRaw there on purpose. To compare against LibRaw on APS-C files, shift its output by 6 rows and skip its first 16 and last 20 rows; on full frame compare directly.
+LibRaw assumes the full-frame grid (s = 0) for every tile. On the APS-C crop that drops the first three plane rows, leaves the last three unfed, and shifts its whole output up by 6 sensor rows; its first rows and last rows are also wrong. Our decoder differs from LibRaw there on purpose. To compare against LibRaw on APS-C files, our row y+6 equals LibRaw's row y for 12 <= y < h - 24 (LibRaw's rows 0-11 and the last 18 rows of the shifted overlap differ); on full frame compare directly, the whole frame is exact.
 
 ### Corpus
 
@@ -72,9 +72,9 @@ LibRaw assumes the full-frame grid (s = 0) for every tile. On the APS-C crop tha
 | `arw-sony-ilce7rm6-ff-land-lossless.arw` | `raw_modes/ILCE-7RM6_FF_land_RAW.ARW` | 100 851 712 | `5cb3c870bc961cf6b079d56c860d0cdf11acd1afd04e5fb8dbe041bcfd2d6201` |
 | `arw-sony-ilce7rm6-ff-port-lossless.arw` | `raw_modes/ILCE-7RM6_FF_port_RAW.ARW` | 100 884 480 | `b1a4026aa6adbaa27973b8b3426d8b4aa0c1cae1845cf5102359327d3b069691` |
 
-These 12 files are CC0 1.0 per the RawDB record of the set (uploaded by abbradar; <https://rawdb.dnglab.org/sets/Sony/ILCE-7RM6>); the server answers 303 to a signed object URL, so fetch with `curl -L` from `https://rawdb.dnglab.org/api/download/Sony/ILCE-7RM6/<source path>`. They live in the gitignored corpus; `cargo xtask corpus --download` fetches them and [arw6-corpus.sha256](arw6-corpus.sha256) pins their identities. `cargo test -p lightcraft-raw corpus_sony -- --nocapture` verifies each available file's checksum, then the decoder's sensor sum and position-weighted sum. The first 8 rows (ARW6) are checked against the Phase 0 reference sums; the 4 lossless siblings go through the existing LJ92 path and their sums are regression values from LightCraft's own decoder. The test skips absent files.
+These 12 files are CC0 1.0 per the RawDB record of the set (uploaded by abbradar; <https://rawdb.dnglab.org/sets/Sony/ILCE-7RM6>); the server answers 303 to a signed object URL, so fetch with `curl -L` from `https://rawdb.dnglab.org/api/download/Sony/ILCE-7RM6/<source path>`. They live in the gitignored corpus; `cargo xtask corpus --download` fetches them and [arw6-corpus.sha256](arw6-corpus.sha256) pins their identities. `cargo test -p lightcraft-raw corpus_sony -- --nocapture` verifies each available file's checksum, then the decoder's sensor sum and position-weighted sum. The 8 ARW6 files are checked against the Phase 0 reference sums; the 4 lossless siblings go through the existing LJ92 path and their sums are regression values from LightCraft's own decoder. The test skips absent files.
 
-Nine further full-frame HQ photos from the maintainer's A7R VI were compared with the oracle locally; they are private and never committed or published.
+Nine further full-frame HQ photos from the maintainer's A7R VI were compared with the oracle locally; they are private and never committed or published. All 9 private FF photos (ISO 100-12800, incl. two near-black night shots) decode bit-exact over the full frame (0 mismatching pixels of 66.8 MP each).
 
 Unconditional synthetic tests (encode -> decode round trips for both geometries, the RDD 34 worked example, the dequantiser, hostile and truncated input) run without the corpus.
 
@@ -83,9 +83,9 @@ Unconditional synthetic tests (encode -> decode round trips for both geometries,
 | Coverage | Status |
 |---|---|
 | ILCE-7RM6 Compressed and HQ, full frame, landscape and portrait | 4 files, exact against the reference sums |
-| ILCE-7RM6 Compressed and HQ, APS-C crop, landscape and portrait | 4 files, exact (with LibRaw only after the 6-row shift) |
+| ILCE-7RM6 Compressed and HQ, APS-C crop, landscape and portrait | 4 files, exact against the reference sums (interior-exact against LibRaw after the 6-row shift; LibRaw's own edge rows differ) |
 | ILCE-7RM6 lossless (existing LJ92 path) | 4 files, regression values |
-| Private A7R VI HQ photos | 9 files, compared locally |
+| Private A7R VI HQ photos | 9 files, bit-exact over the full frame against the oracle (local) |
 
 ## Not covered
 
@@ -93,6 +93,8 @@ Unconditional synthetic tests (encode -> decode round trips for both geometries,
 - The ILCE-7M5: same codec, no sample; unverified.
 - The x2 scale is an assumption backed by shadow-floor evidence (the darkest pixels of all eight ISO 100 files sit at 1037..1059, just above 2 x 512, and the lossless sibling's shadows match at x2; x2.38 would put them 76 DN below black). A tripod-matched lossless / compressed pair would confirm it. If wrong, only the reported black and white levels change.
 - Tiles whose plane width is not a multiple of 8.
+- First-half shifts other than 0 and 3 (other crops / bodies): the geometry is generic and round-trip tested, but no real sample exists.
+- Memory: one FF decode peaks at about 896 MB RSS (about 6.7 x the 134 MB output; the lossless path peaks at 249 MB). Follow-ups: dequantise straight into bands, place tiles as they arrive.
 - Colour: the ILCE-7RM6 bundled colour profile and Sony's embedded lens corrections are separate work.
 
 ## Sources

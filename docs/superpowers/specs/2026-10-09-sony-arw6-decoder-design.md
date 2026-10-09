@@ -18,9 +18,9 @@ these files fail the full decode and silently render from their embedded JPEG.
 
 1. **Bit-exact:** the decoded CFA equals the oracle's raw sensor array (see *Sources*) on every tile of all 17 ARW6
    files available locally: 9 private full-frame HQ shots and 8 RawDB samples (FF and APS-C, Compressed and HQ,
-   landscape and portrait). "Equals" means every pixel in the interior; on the APS-C crop the oracle's own output is
-   shifted up by 6 sensor rows and wrong in its first 16 and last 20 rows (a LibRaw bug, see *Background*), so there
-   the comparison applies the shift and skips those rows. A file the oracle cannot unpack (LibRaw issue #828
+   landscape and portrait). "Equals" means every pixel for FF files (bit-exact over the full frame); APS-C files are
+   interior-exact: the oracle's own output is shifted up by 6 sensor rows (a LibRaw bug, see *Background*), so our row
+   y+6 is compared with its row y for 12 ≤ y < h − 24 (its rows 0–11 and the last 18 rows of the overlap differ). A file the oracle cannot unpack (LibRaw issue #828
    reports two such A7R VI files) is instead checked against its embedded full-resolution JPEG, and the check that
    was used is recorded.
 2. **Geometry:** the decoded frame lines up with the embedded JPEG at the file's DefaultCropOrigin (verified in
@@ -35,7 +35,7 @@ these files fail the full decode and silently render from their embedded JPEG.
 
 Everything below was established from the file structure plus black-box comparison with the oracle, never from
 third-party decoder source. The python reference model, the companding table and the oracle binary are kept
-locally in `plan/arw6/` (gitignored; see its README).
+locally in `plan/arw6/` (local, gitignored; see its README).
 
 ### Container (Sony)
 
@@ -99,7 +99,7 @@ With plane row j and column x (clamp x±1 at the edges), all in 12-bit code unit
 - `G1[j][x] = M[j][x] − ((res[j−1][x] + res[j−1][x+1] + res[j][x] + res[j][x+1] + 4) >> 3)`, with `res[−1] := res[0]`.
 - `G2[j][x] = ((G1[j][x−1] + G1[j][x] + G1[j+1][x−1] + G1[j+1][x]) >> 2) + res[j][x]` (unclipped G1; the last row
   uses G1[j] for G1[j+1]).
-- `R = 2·c1 + ((min(G1, 4095) + min(G2, 4095)) >> 1)`, `B = 2·c2 + (same)`.
+- `R = 2·c1 + ((clamp(G1, 0, 4095) + clamp(G2, 0, 4095)) >> 1)`, `B = 2·c2 + (same)`.
 - Every output code is clipped to 0..4095. CFA positions: R (0,0), G1 (0,1), G2 (1,0), B (1,1) of each 2×2 cell.
 
 ### Output range (companding)
@@ -111,15 +111,15 @@ With plane row j and column x (clamp x±1 at the edges), all in 12-bit code unit
 - The table's unit is 2 × 14-bit DN: the darkest pixels of all eight ISO 100 files sit at 1037..1059, just above
   2 × 512, and the lossless sibling's shadow distribution matches at ×2 (×2.38, i.e. 39002/16383, would put them
   76 DN below black; ×1 would leave no shadows). So the decoder reports black = 2 × tag black (1024) and white =
-  2 × the file's DNG WhiteLevel tag (16383 → 32766; the Sony 15360 tag is not read), with a data-derived
-  fallback already in output units; 32766 is also the table's one knot (code 3977, steps +87 then +11, in every file), so codes 3978..4095 sit above white and clip as usual; saturated highlights sit at code 4095 = 39002. A
+  2 × the file's DNG WhiteLevel tag (16383 → 32766; the Sony 15360 tag is not read), falling back to 32766
+  when the tag is absent; 32766 is also the table's one knot (code 3977, steps +87 then +11, in every file), so codes 3978..4095 sit above white and clip as usual; saturated highlights sit at code 4095 = 39002. A
   tripod-matched lossless/compressed pair would confirm the factor; see *Risks*.
 
 ### LibRaw's APS-C bug (why the oracle is not the last word)
 
 LibRaw assumes the FF grid (s = 0) for every tile. On the APS-C crop that drops the first three plane rows, leaves
-the last three unfed (garbage), and shifts its whole output up by 6 sensor rows; its first ~14 sensor rows are
-also wrong. Phase 0 verified against the embedded JPEG that our model aligns at offset 0 and LibRaw's at −6 rows.
+the last three unfed (garbage), and shifts its whole output up by 6 sensor rows; its rows 0–11 and the last 18 rows
+of the shifted overlap are also wrong (our row y+6 equals its row y for 12 ≤ y < h − 24). Phase 0 verified against the embedded JPEG that our model aligns at offset 0 and LibRaw's at −6 rows.
 Our decoder therefore differs from LibRaw there on purpose, and tests compare with the shift and skip its edges.
 
 ### Current bug in LightCraft
