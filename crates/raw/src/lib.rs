@@ -34,6 +34,7 @@ pub mod highlight;
 #[cfg(feature = "jxl")]
 mod jxl;
 pub mod ljpeg;
+pub(crate) mod llvc;
 pub mod opcodes;
 mod preview;
 pub mod profile;
