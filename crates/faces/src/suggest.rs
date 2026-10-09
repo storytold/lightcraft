@@ -189,7 +189,7 @@ mod tests {
         assert!(manifest.sha256.is_none() && manifest.size_bytes.is_none());
     }
 
-    /// Opt-in: `LC_FACE_MODELS=/folder/with/onnx/files cargo test -p lightcraft-faces -- --ignored --nocapture`
+    /// Opt-in: `LC_FACE_MODELS=/folder/with/onnx/files cargo test -p dac-faces -- --ignored --nocapture`
     /// probes real models (never committed) and prints what would be suggested, with timings.
     #[test]
     #[ignore = "needs real model files: set LC_FACE_MODELS"]

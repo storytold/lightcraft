@@ -1,6 +1,6 @@
 //! HEIF / HEIC (the iPhone and Mac photo format), read-only.
 //!
-//! Decoding lives in the optional `lightcraft-heif` crate (heic-rs, a pure-Rust HEVC
+//! Decoding lives in the optional `dac-heif` crate (heic-rs, a pure-Rust HEVC
 //! still-picture decoder), enabled by this crate's `heif` feature — off by default because HEVC
 //! is patent-encumbered and whether a build carries an HEVC decoder is the distributor's call
 //! (the same policy as the sibling PhotoCraft). Without the feature, HEIF files are still
@@ -33,24 +33,24 @@ pub(crate) fn decode(_bytes: &[u8], _opts: &DecodeOptions) -> Result<Decoded> {
 }
 
 #[cfg(feature = "heif")]
-fn err(e: lightcraft_heif::Error) -> Error {
+fn err(e: dac_heif::Error) -> Error {
     match e {
         // This crate's Unsupported takes a fixed reason; the dynamic wording lives in the
-        // lightcraft-heif error itself.
-        lightcraft_heif::Error::Unsupported(_) => Error::Unsupported(F, NOT_DECODED),
-        lightcraft_heif::Error::Limit(m) | lightcraft_heif::Error::Malformed(m) => Error::Malformed(F, m),
+        // dac-heif error itself.
+        dac_heif::Error::Unsupported(_) => Error::Unsupported(F, NOT_DECODED),
+        dac_heif::Error::Limit(m) | dac_heif::Error::Malformed(m) => Error::Malformed(F, m),
     }
 }
 
 #[cfg(feature = "heif")]
 pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     // The container alone: the declared size is checked before any pixel is decoded.
-    let info = lightcraft_heif::probe(bytes).map_err(err)?;
+    let info = dac_heif::probe(bytes).map_err(err)?;
     if (info.width as u64).saturating_mul(info.height as u64) > opts.max_pixels {
         return Err(Error::TooLarge(info.width as u64, info.height as u64));
     }
-    let options = lightcraft_heif::Options { max_pixels: opts.max_pixels, apply_transforms: true };
-    let decoded = lightcraft_heif::decode(bytes, &options).map_err(err)?;
+    let options = dac_heif::Options { max_pixels: opts.max_pixels, apply_transforms: true };
+    let decoded = dac_heif::decode(bytes, &options).map_err(err)?;
     // The decoder re-reads the container; trust its output's shape, not the probe's.
     let buf = if decoded.sixteen_bit {
         let mut v = Vec::with_capacity(decoded.data.len() / 2);

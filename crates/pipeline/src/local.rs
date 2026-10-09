@@ -1,13 +1,13 @@
 //! Scene-linear preparation: white balance + exposure, and the spatial planes the per-pixel stage
 //! needs (edge-aware base layer for highlights/shadows, clarity/texture bands, dehaze veil).
 
-use lightcraft_color::cct::{temp_tint_to_xy, wb_matrix};
-use lightcraft_color::{REC2020, luminance_2020};
-use lightcraft_develop::DevelopSettings;
-use lightcraft_raster::blur::gaussian;
+use dac_color::cct::{temp_tint_to_xy, wb_matrix};
+use dac_color::{REC2020, luminance_2020};
+use dac_develop::DevelopSettings;
+use dac_raster::blur::gaussian;
 use std::sync::Arc;
 
-use lightcraft_raster::{Plane, Rgb32f, par_join};
+use dac_raster::{Plane, Rgb32f, par_join};
 
 use crate::geometry::Frame;
 use crate::{Prepared, Quality, SourceInfo, for_rows, masks, timed};
@@ -33,17 +33,17 @@ pub fn wb_matrix_for(info: &SourceInfo, s: &DevelopSettings) -> Option<[[f32; 3]
         return None;
     }
     if let Some(cc) = info.camera_color.as_deref().filter(|_| info.raw && !info.relative_wb)
-        && let Some(m) = lightcraft_raw::color::rebalance(&cc.tags, cc.developed_for, temp_tint_to_xy(t, tint))
+        && let Some(m) = dac_raw::color::rebalance(&cc.tags, cc.developed_for, temp_tint_to_xy(t, tint))
     {
         return Some(m.to_f32());
     }
     let set = wb_matrix(&REC2020, temp_tint_to_xy(t, tint));
     let shot = wb_matrix(&REC2020, temp_tint_to_xy(info.as_shot_temp, info.as_shot_tint));
-    let m = set.mul(&shot.inverse().unwrap_or(lightcraft_color::Mat3::IDENTITY));
+    let m = set.mul(&shot.inverse().unwrap_or(dac_color::Mat3::IDENTITY));
     // Normalize so neutral luminance is preserved (WB shouldn't change exposure).
     let g = m.apply([1.0, 1.0, 1.0]);
     let y = g[0] * 0.2627 + g[1] * 0.6780 + g[2] * 0.0593;
-    Some(m.mul(&lightcraft_color::Mat3::diag(1.0 / y, 1.0 / y, 1.0 / y)).to_f32())
+    Some(m.mul(&dac_color::Mat3::diag(1.0 / y, 1.0 / y, 1.0 / y)).to_f32())
 }
 
 fn wb_gain(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings, gain: f32) {
@@ -66,7 +66,7 @@ fn wb_gain(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings, gain: f32) 
 
 /// The white balance actually in effect (presets resolve to their Kelvin values for raw files).
 pub fn effective_wb(info: &SourceInfo, s: &DevelopSettings) -> (f64, f64) {
-    use lightcraft_develop::WbMode;
+    use dac_develop::WbMode;
     match s.wb.mode {
         WbMode::AsShot => (info.as_shot_temp, info.as_shot_tint),
         m if info.raw && !info.relative_wb => m.preset().unwrap_or((s.wb.temp, s.wb.tint)),
@@ -108,7 +108,7 @@ fn guided_apply(p: &Plane, a: &Plane, b: &Plane) -> Plane {
 /// bilinearly upsampled; the output keeps full-resolution edges. Equivalent to [`guided`] for
 /// large windows at a fraction of the cost.
 pub fn guided_fast(p: &Plane, sigma: f32, eps: f32) -> Plane {
-    use lightcraft_raster::resample::{Filter, resize};
+    use dac_raster::resample::{Filter, resize};
     let s = guided_fast_step(sigma);
     if s <= 1 {
         return guided(p, sigma, eps);
@@ -262,7 +262,7 @@ pub struct PlaneSigmas {
 
 pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneSigmas {
     let ppl = px_per_long as f32;
-    let local_any = |f: fn(&lightcraft_develop::LocalAdjustments) -> f64| s.masks.iter().any(|m| f(&m.adjust) != 0.0);
+    let local_any = |f: fn(&dac_develop::LocalAdjustments) -> f64| s.masks.iter().any(|m| f(&m.adjust) != 0.0);
     let tone_active =
         s.light.highlights != 0.0 || s.light.shadows != 0.0 || s.masks.iter().any(|m| m.adjust.highlights != 0.0 || m.adjust.shadows != 0.0);
     // Edge-aware base at ~1.5% of the long edge (EV² epsilon: edges of > ~0.6 EV are preserved).
@@ -395,7 +395,7 @@ mod tests {
         scene_linear_pre(&mut img, &info, &s);
         assert!((img.get(0, 0)[0] - 0.3).abs() < 1e-6);
         let mut warm = s.clone();
-        warm.wb.mode = lightcraft_develop::WbMode::Custom;
+        warm.wb.mode = dac_develop::WbMode::Custom;
         warm.wb.temp = 9000.0;
         let mut img2 = Rgb32f::filled(4, 4, [0.3, 0.3, 0.3]);
         scene_linear_pre(&mut img2, &info, &warm);

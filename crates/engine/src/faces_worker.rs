@@ -12,11 +12,11 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
-use lightcraft_catalog::PhotoId;
-use lightcraft_faces::align::{Rgb, align_to_template, crop_box};
-use lightcraft_faces::runtime::Embedder;
-use lightcraft_faces::yunet::{Detector, Face, Options};
-use lightcraft_geom::Rect;
+use dac_catalog::PhotoId;
+use dac_faces::align::{Rgb, align_to_template, crop_box};
+use dac_faces::runtime::Embedder;
+use dac_faces::yunet::{Detector, Face, Options};
+use dac_geom::Rect;
 
 use crate::media::{PreviewLoader, RenderJob};
 
@@ -301,7 +301,7 @@ fn scan_pool(pace: Pace) -> Option<&'static rayon::ThreadPool> {
     cell.get_or_init(|| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(pool_threads_for(cores(), pace, cap_from_env()))
-            .thread_name(move |i| format!("lightcraft-faces-{}-{i}", pace as u8))
+            .thread_name(move |i| format!("dac-faces-{}-{i}", pace as u8))
             .build()
             .ok()
     })
@@ -339,7 +339,7 @@ impl Worker {
         let mut started = 0;
         for i in 0..threads.clamp(1, MAX_WORKERS) {
             let (rx, tx, limit) = (job_rx.clone(), done_tx.clone(), limit.clone());
-            let spawned = std::thread::Builder::new().name(format!("lightcraft-faces-{i}")).spawn(move || {
+            let spawned = std::thread::Builder::new().name(format!("dac-faces-{i}")).spawn(move || {
                 loop {
                     // the lock is held only while waiting for a job, never while working on one; the threads end when
                     // the session (the only sender) is dropped

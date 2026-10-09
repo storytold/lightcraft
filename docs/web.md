@@ -1,6 +1,6 @@
 # LightCraft in the browser
 
-`apps/lightcraft-web` runs the same egui UI as the desktop app (`crates/ui-egui`) in the browser,
+`apps/web` runs the same egui UI as the desktop app (`crates/ui-egui`) in the browser,
 compiled to WebAssembly and drawn with WebGL2 (eframe's `glow` backend).
 
 ## Build and run locally
@@ -18,7 +18,7 @@ it's missing or a different version.
 Build, then serve:
 
 ```sh
-cargo xtask web            # → <target>/web/{index.html, worker.js, lightcraft_web.js, lightcraft_web_bg.wasm}
+cargo xtask web            # → <target>/web/{index.html, worker.js, dac_web.js, dac_web_bg.wasm}
 cargo xtask web --serve    # build, then serve on http://127.0.0.1:8080/ (or `--serve 9000`)
 cargo xtask web --dev      # unoptimized build with debug info (faster to compile, slow to run)
 ```
@@ -87,10 +87,10 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
   when the main thread can write it (`FileSystemFileHandle.createWritable`: Chrome, Edge,
   Firefox, recent Safari), otherwise IndexedDB. Both hold the same layout:
   - `library/catalog.snap`, `library/catalog.log`: the same crash-safe journal as the desktop app
-    (`lightcraft-catalog`), plus `presets.json`, `view.json`, `prefs.json` and `ui.json` (panel
+    (`dac-catalog`), plus `presets.json`, `view.json`, `prefs.json` and `ui.json` (panel
     layout). The catalog `Store` is a memory mirror loaded at start-up; every change is flushed in
     the background within a frame or two, each file replaced atomically, in modification order
-    (`apps/lightcraft-web/src/files.rs`). View state and UI prefs are saved every second when they
+    (`apps/web/src/files.rs`). View state and UI prefs are saved every second when they
     change (a tab can close without notice).
   - Known limitation: the browser storage has no file locks, so two tabs of the same origin open
     the same library and the last one to write a snapshot wins (the desktop app and the CLI lock
@@ -133,7 +133,7 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
 - **Importing photos with no filesystem.** *File ▸ Import Photos…* (<kbd>⌘⇧I</kbd>) opens the
   browser's file picker. You can also drop files anywhere on the page. The bytes are written to
   storage, then imported and decoded by the same engine code as the desktop app
-  (`lightcraft_engine::files::{probe_bytes, load_bytes}`): JPEG/PNG/TIFF/WebP and the supported
+  (`dac_engine::files::{probe_bytes, load_bytes}`): JPEG/PNG/TIFF/WebP and the supported
   raw formats. "Copy into library" is the same as "Add" here.
 - **Rendering in Web Workers.** Renders don't run on the main thread: up to four dedicated
   workers (`hardwareConcurrency − 1`, `?workers=N` to override, `?workers=0` for the old inline
@@ -146,7 +146,7 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
 - **Every develop control** (sliders, curves, mixer, grading, masking, crop…) works as it does
   on the desktop, since it's the same crate.
 - **Export downloads the file.** *Export…* (<kbd>⌘⇧E</kbd>) runs the same `app.export` path as
-  the desktop app (`lightcraft_engine::export`: JPEG/PNG/TIFF/WebP, sizing, naming). The host's
+  the desktop app (`dac_engine::export`: JPEG/PNG/TIFF/WebP, sizing, naming). The host's
   `write` service hands each file to the browser as a download instead of writing it to disk.
 - **Automation.** `await lightcraft.command("library.info", "{}")` runs any engine or UI command
   by id on the next frame and resolves to the JSON result (`web.stats` reports storage, workers

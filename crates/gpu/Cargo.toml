@@ -1,5 +1,5 @@
 [package]
-name = "lightcraft-gpu"
+name = "dac-gpu"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,12 +9,12 @@ description = "LightCraft GPU develop pipeline: wgpu compute (WGSL) twin of the 
 workspace = true
 
 [dependencies]
-lightcraft-denoise = { workspace = true, optional = true }
-lightcraft-geom = { workspace = true }
-lightcraft-color = { workspace = true }
-lightcraft-raster = { workspace = true }
-lightcraft-develop = { workspace = true }
-lightcraft-pipeline = { workspace = true }
+dac-denoise = { workspace = true, optional = true }
+dac-geom = { workspace = true }
+dac-color = { workspace = true }
+dac-raster = { workspace = true }
+dac-develop = { workspace = true }
+dac-pipeline = { workspace = true }
 log = { workspace = true }
 
 # Native only: Metal / Vulkan / DX12 through wgpu (pure Rust; the drivers are the system's).
@@ -26,7 +26,7 @@ bytemuck = { workspace = true }
 
 [features]
 default = []
-denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime"]
+denoise = ["dep:dac-denoise", "dac-denoise/runtime"]
 
 [dev-dependencies]
-lightcraft-scenes = { workspace = true }
+dac-scenes = { workspace = true }

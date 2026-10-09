@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use lightcraft_develop::DevelopSettings;
+use dac_develop::DevelopSettings;
 use proptest::prelude::*;
 
 use crate::journal::{LOG, SNAPSHOT, decode_record, encode_record};
@@ -285,12 +285,8 @@ fn streamed_snapshot_keeps_the_on_disk_format() {
     let (mut j, c, _) = open(&m);
     assert_eq!(c.to_snapshot(), full.to_snapshot());
     j.snapshot(&c).unwrap();
-    let legacy = format!(
-        "{{\"format\":\"lightcraft-catalog\",\"version\":{},\"seq\":{},\"catalog\":{}}}\n",
-        crate::journal::VERSION,
-        j.seq(),
-        c.to_snapshot()
-    );
+    let legacy =
+        format!("{{\"format\":\"dac-catalog\",\"version\":{},\"seq\":{},\"catalog\":{}}}\n", crate::journal::VERSION, j.seq(), c.to_snapshot());
     assert_eq!(String::from_utf8(m.get(SNAPSHOT).unwrap()).unwrap(), legacy);
     assert_eq!(j.stats().last_snapshot.bytes, legacy.len() as u64);
 

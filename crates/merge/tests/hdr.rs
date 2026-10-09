@@ -2,10 +2,10 @@
 //! headroom) is "photographed" at several exposures with clipping, sensor noise, 14-bit
 //! quantisation and small handheld shifts; the merge must recover the radiance.
 
-use lightcraft_merge::frame::Frame;
-use lightcraft_merge::hdr::{Deghost, HdrOptions, merge_hdr};
-use lightcraft_merge::no_progress;
-use lightcraft_raster::Rgb32f;
+use dac_merge::frame::Frame;
+use dac_merge::hdr::{Deghost, HdrOptions, merge_hdr};
+use dac_merge::no_progress;
+use dac_raster::Rgb32f;
 
 const W: usize = 640;
 const H: usize = 420;
@@ -27,7 +27,7 @@ impl Rng {
 
 /// Scene radiance (with margin), scaled so the median is ≈ 0.18 at exposure 1.
 fn truth() -> Rgb32f {
-    let scene = lightcraft_scenes::demo_library().into_iter().find(|s| s.kind == lightcraft_scenes::Kind::OceanSunset).unwrap();
+    let scene = dac_scenes::demo_library().into_iter().find(|s| s.kind == dac_scenes::Kind::OceanSunset).unwrap();
     let img = scene.render(W + 2 * M, H + 2 * M);
     let mut l: Vec<f32> = img.data.iter().map(|p| p[1]).collect();
     l.sort_by(|a, b| a.total_cmp(b));
@@ -88,7 +88,7 @@ fn bracket_merge_recovers_radiance_and_alignment() {
     for i in [0, 2] {
         let a = &r.alignments[i];
         for (x, y) in [(50.0, 50.0), (W as f64 - 50.0, H as f64 - 50.0), (320.0, 200.0)] {
-            let p = a.h.apply(lightcraft_geom::Point::new(x, y));
+            let p = a.h.apply(dac_geom::Point::new(x, y));
             let err = ((p.x - x - shifts[i].0 as f64).powi(2) + (p.y - y - shifts[i].1 as f64).powi(2)).sqrt();
             assert!(err < 0.3, "frame {i} ({}, {} inliers, rms {:.3}): alignment error {err:.3} px", a.model, a.inliers, a.rms);
         }

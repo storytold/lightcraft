@@ -6,8 +6,8 @@
 //! camera rotation `K·R·K⁻¹` (focal length [`DEFAULT_FOCAL`] in those units), re-centred so the image centre stays
 //! put and its local scale is preserved.
 
-use lightcraft_develop::Geometry;
-use lightcraft_geom::Homography;
+use dac_develop::Geometry;
+use dac_geom::Homography;
 
 /// Assumed focal length in half-long-edge units (≈ 27 mm on a 36 mm-wide frame).
 pub const DEFAULT_FOCAL: f64 = 1.5;
@@ -49,12 +49,12 @@ pub fn rot_y(a: f64) -> Mat3 {
 
 /// Translate so the origin maps to itself and scale so the local area there is unchanged.
 pub fn recentre(h: &Homography) -> Homography {
-    let o = h.apply(lightcraft_geom::Point::new(0.0, 0.0));
+    let o = h.apply(dac_geom::Point::new(0.0, 0.0));
     let t = Homography([1.0, 0.0, -o.x, 0.0, 1.0, -o.y, 0.0, 0.0, 1.0]).mul(h);
     // Jacobian at the origin (numerically)
     let e = 1e-4;
-    let px = t.apply(lightcraft_geom::Point::new(e, 0.0));
-    let py = t.apply(lightcraft_geom::Point::new(0.0, e));
+    let px = t.apply(dac_geom::Point::new(e, 0.0));
+    let py = t.apply(dac_geom::Point::new(0.0, e));
     let det = ((px.x * py.y - px.y * py.x) / (e * e)).abs();
     let s = if det > 1e-12 { 1.0 / det.sqrt() } else { 1.0 };
     Homography([s, 0.0, 0.0, 0.0, s, 0.0, 0.0, 0.0, 1.0]).mul(&t)

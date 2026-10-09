@@ -4,7 +4,7 @@ use serde_json::json;
 
 use crate::Session;
 
-fn spots(s: &Session) -> Vec<lightcraft_develop::Spot> {
+fn spots(s: &Session) -> Vec<dac_develop::Spot> {
     s.develop_of(s.active().unwrap()).unwrap().spots.clone()
 }
 
@@ -46,7 +46,7 @@ fn spots_select_move_edit_refresh_and_delete() {
     // delete the selected spot: the selection clears; deleting before a selected one shifts it
     s.execute("spot.delete", &json!({})).unwrap();
     assert_eq!((spots(&s).len(), s.active_spot), (1, None));
-    assert_eq!(spots(&s)[0].mode, lightcraft_develop::SpotMode::Clone);
+    assert_eq!(spots(&s)[0].mode, dac_develop::SpotMode::Clone);
     assert!(s.execute("spot.delete", &json!({})).is_err(), "nothing selected");
     s.execute("spot.add", &json!({"points": [[0.2, 0.2]], "source": [0.05, 0.0]})).unwrap();
     s.execute("spot.delete", &json!({"index": 0})).unwrap();

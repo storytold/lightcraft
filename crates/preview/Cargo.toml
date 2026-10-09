@@ -1,5 +1,5 @@
 [package]
-name = "lightcraft-preview"
+name = "dac-preview"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,7 @@ description = "LightCraft preview cache: content hashing, memory LRU, disk thumb
 workspace = true
 
 [dependencies]
-lightcraft-raster = { workspace = true }
+dac-raster = { workspace = true }
 siphasher = { workspace = true }
 jpeg-encoder = { workspace = true }
 zune-jpeg = { workspace = true }

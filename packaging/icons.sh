@@ -25,7 +25,7 @@ grep -q 'viewBox="-62 -62 636 636"' "$MAC" || { echo "error: unexpected viewBox 
 render() { resvg -w "$2" -h "$2" "$1" "$3" </dev/null; }
 
 render "$SVG" 1024 "$DIR/lightcraft-1024.png"
-# Runtime window/Dock icon on macOS (embedded by apps/lightcraft/src/main.rs).
+# Runtime window/Dock icon on macOS (embedded by apps/app/src/main.rs).
 render "$MAC" 512 "$DIR/lightcraft-macos-512.png"
 
 # Linux hicolor theme (also the runtime window icon on Windows and Linux: 256x256).

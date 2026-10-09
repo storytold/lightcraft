@@ -3,7 +3,7 @@
 //! common enumerations are spelled out, everything else is shown as stored. Maker notes and
 //! binary blobs are summarised by size.
 
-use lightcraft_tiff::{Ifd, Tiff, Value};
+use dac_tiff::{Ifd, Tiff, Value};
 
 /// One metadata row.
 #[derive(Clone, Debug, PartialEq)]

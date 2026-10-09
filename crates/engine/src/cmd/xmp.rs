@@ -1,6 +1,6 @@
 //! XMP sidecar commands: save/read metadata to/from files, sidecar preferences.
 
-use lightcraft_catalog::Op;
+use dac_catalog::Op;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd, has_selection, str_param};

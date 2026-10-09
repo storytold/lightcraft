@@ -275,7 +275,7 @@ mod tests {
         }
     }
 
-    /// Opt-in: `LC_FACE_MODELS=<folder> cargo test -p lightcraft-faces -- --ignored --nocapture`
+    /// Opt-in: `LC_FACE_MODELS=<folder> cargo test -p dac-faces -- --ignored --nocapture`
     /// self-tests every known recognition model found there.
     #[test]
     #[ignore = "needs real model files: set LC_FACE_MODELS"]

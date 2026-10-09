@@ -3,9 +3,9 @@
 
 use std::path::Path;
 
-use lightcraft_engine::Session;
-use lightcraft_engine::catalog::PhotoId;
-use lightcraft_raster::Rgba8;
+use dac_engine::Session;
+use dac_engine::catalog::PhotoId;
+use dac_raster::Rgba8;
 use serde_json::{Value, json};
 
 use crate::backend::{Backend, ProgressHook};
@@ -58,10 +58,10 @@ impl Headless {
     }
 
     /// The UI command `app.export`, emulated with the same parameters as the desktop app
-    /// (see `lightcraft_engine::export::ExportOptions::from_json`, plus `ids`, `dir`, `path`).
+    /// (see `dac_engine::export::ExportOptions::from_json`, plus `ids`, `dir`, `path`).
     /// With `path` and no `format`, the format follows the path's extension.
     fn export(&mut self, p: &Value) -> Result<Value, String> {
-        use lightcraft_engine::export::{Destination, ExportFormat, ExportOptions, Resize, prepare_batch, run_batch};
+        use dac_engine::export::{Destination, ExportFormat, ExportOptions, Resize, prepare_batch, run_batch};
         let p = &self.session.export_params(p)?;
         let mut opts = ExportOptions::from_params(p).map_err(|e| e.to_string())?;
         if !ExportOptions::has_size_param(p) {
@@ -82,7 +82,7 @@ impl Headless {
             None => vec![self.photo_or_active(p)?],
         };
         let dir = p.get("dir").and_then(Value::as_str).unwrap_or("");
-        let write = &mut lightcraft_engine::export::write_file;
+        let write = &mut dac_engine::export::write_file;
         let items = prepare_batch(&mut self.session, &ids, &opts)?;
         let total = items.len();
         let mut hook = self.progress.take();
@@ -163,7 +163,7 @@ impl Backend for Headless {
     }
 }
 
-/// Expand folders (recursively, sorted; bounded, see `lightcraft_engine::walk`) into photo files
+/// Expand folders (recursively, sorted; bounded, see `dac_engine::walk`) into photo files
 /// and make paths absolute.
 pub fn expand_paths(paths: &[String]) -> Vec<String> {
     let absolute = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().to_string();
@@ -172,7 +172,7 @@ pub fn expand_paths(paths: &[String]) -> Vec<String> {
     for p in paths {
         let path = Path::new(p);
         if path.is_dir() {
-            let w = lightcraft_engine::walk::files_in(path, None, lightcraft_engine::walk::Limits::default(), photo);
+            let w = dac_engine::walk::files_in(path, None, dac_engine::walk::Limits::default(), photo);
             out.extend(w.files.iter().map(|f| absolute(f)));
         } else {
             // Explicit files are kept even with unknown extensions (the probe decides).
@@ -185,16 +185,16 @@ pub fn expand_paths(paths: &[String]) -> Vec<String> {
 /// Encode by extension: `.png` (default), `.jpg`/`.jpeg` (quality), `.tif`/`.tiff`, `.webp` (lossless),
 /// `.avif` — via the shared export encoder (embeds an sRGB profile).
 pub fn encode_image(ext: &str, img: &Rgba8, quality: u8) -> Result<Vec<u8>, String> {
-    use lightcraft_engine::export::{ExportFormat, ExportOptions};
+    use dac_engine::export::{ExportFormat, ExportOptions};
     let format = ExportFormat::parse(ext).unwrap_or(ExportFormat::Png);
-    lightcraft_engine::export::encode_image(img, &ExportOptions { format, quality: quality.clamp(1, 100), ..Default::default() })
+    dac_engine::export::encode_image(img, &ExportOptions { format, quality: quality.clamp(1, 100), ..Default::default() })
 }
 
 /// Encode by the path's extension and write the file.
 pub fn write_image(path: &Path, img: &Rgba8, quality: u8) -> Result<(), String> {
     let ext = path.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
     let bytes = encode_image(&ext, img, quality)?;
-    lightcraft_engine::export::write_file(&path.to_string_lossy(), &bytes)
+    dac_engine::export::write_file(&path.to_string_lossy(), &bytes)
 }
 
 #[cfg(test)]

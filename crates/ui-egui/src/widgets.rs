@@ -2,8 +2,8 @@
 //! flyout rows, bordered buttons. Every interactive widget registers an automation id + rect
 //! ([`register`]) so the control channel can find and click it by name.
 
+use dac_develop::{ControlSpec, Track};
 use egui::{Align2, Color32, CornerRadius, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use lightcraft_develop::{ControlSpec, Track};
 
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
@@ -524,7 +524,7 @@ mod tests {
         let spec = |id, min, max, step| ControlSpec {
             id,
             label: "",
-            section: lightcraft_develop::controls::Section::Light,
+            section: dac_develop::controls::Section::Light,
             min,
             max,
             default: 0.0,
@@ -541,9 +541,9 @@ mod tests {
     /// Typed values (issue #322): signs, a decimal comma, units; on the control's steps, in range.
     #[test]
     fn typed_values_are_stepped_and_clamped() {
-        let exposure = lightcraft_develop::controls::find("light.exposure").unwrap();
-        let contrast = lightcraft_develop::controls::find("light.contrast").unwrap();
-        let temp = lightcraft_develop::controls::find("wb.temp").unwrap();
+        let exposure = dac_develop::controls::find("light.exposure").unwrap();
+        let contrast = dac_develop::controls::find("light.contrast").unwrap();
+        let temp = dac_develop::controls::find("wb.temp").unwrap();
         assert_eq!(typed_value(exposure, "1.5"), Some(1.5));
         assert_eq!(typed_value(exposure, " +0,25 "), Some(0.25));
         assert_eq!(typed_value(exposure, "-12"), Some(exposure.min), "clamped");
@@ -567,7 +567,7 @@ mod access_tests {
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx);
         ctx.enable_accesskit();
-        let spec = lightcraft_develop::controls::find("light.exposure").unwrap();
+        let spec = dac_develop::controls::find("light.exposure").unwrap();
         let mut found = Vec::new();
         for _ in 0..3 {
             let out = ctx.run_ui(egui::RawInput::default(), |ui| {

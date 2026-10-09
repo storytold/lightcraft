@@ -3,7 +3,7 @@
 use crate::convert::{Buf, Meta, Model, Raw, check_size, finish};
 use crate::space::{NamedSpace, SourceSpace, SpaceOrigin, Trc};
 use crate::{DecodeOptions, Decoded, Error, Format, Result};
-use lightcraft_color::{Mat3, RgbSpace, Xy};
+use dac_color::{Mat3, RgbSpace, Xy};
 
 const F: Format = Format::Png;
 

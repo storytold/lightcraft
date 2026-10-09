@@ -5,10 +5,10 @@ use crate::gaintable::GainTableMap;
 use crate::profile::{HsvTable, ProfileLook, ToneCurve};
 use crate::tiffraw::{Packing, read_image_in};
 use crate::{BlackLevel, Cfa, ColorData, Mat3, Mode, RawData, RawError, RawFormat, RawImage, Rect, Result, opcodes};
-use lightcraft_color::Xy;
-use lightcraft_geom::Orientation;
-use lightcraft_tiff::tags::{self as t, photometric};
-use lightcraft_tiff::{ByteOrder, Ifd, Tiff};
+use dac_color::Xy;
+use dac_geom::Orientation;
+use dac_tiff::tags::{self as t, photometric};
+use dac_tiff::{ByteOrder, Ifd, Tiff};
 
 /// The main raw IFD: full-resolution (NewSubfileType 0) CFA or LinearRaw image with the most pixels.
 pub(crate) fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
@@ -112,7 +112,7 @@ pub(crate) fn is_plain_cfa_tiff(tiff: &Tiff, bytes: &[u8]) -> bool {
         t::compression::JPEG => info
             .chunks(bytes.len() as u64)
             .first()
-            .and_then(|c| lightcraft_tiff::image::chunk_bytes(bytes, c))
+            .and_then(|c| dac_tiff::image::chunk_bytes(bytes, c))
             .is_some_and(|src| crate::ljpeg::frame_info(src).is_ok()),
         _ => false,
     }
@@ -213,7 +213,7 @@ pub(crate) fn decode_as(bytes: &[u8], mode: Mode, format: RawFormat) -> Result<R
     let opcodes =
         crate::OpcodeLists { list1: opcode_list(t::OPCODE_LIST_1), list2: opcode_list(t::OPCODE_LIST_2), list3: opcode_list(t::OPCODE_LIST_3) };
 
-    let mut metadata = lightcraft_meta::from_tiff(&tiff);
+    let mut metadata = dac_meta::from_tiff(&tiff);
     metadata.width = Some(crop.width as u32);
     metadata.height = Some(crop.height as u32);
     let img = RawImage {

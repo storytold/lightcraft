@@ -18,7 +18,7 @@
   <launchable type="desktop-id">ai.storyteller.lightcraft.desktop</launchable>
   <icon type="stock">ai.storyteller.lightcraft</icon>
   <!-- Only url types known to appstream 0.15 (Ubuntu 22.04, where CI validates): no vcs-browser. -->
-  <url type="homepage">https://getartcraft.com/apps/lightcraft</url>
+  <url type="homepage">https://getartcraft.com/apps/app</url>
   <url type="bugtracker">https://github.com/storytold/lightcraft/issues</url>
   <url type="help">https://github.com/storytold/lightcraft</url>
   <url type="contact">https://discord.gg/artcraft</url>

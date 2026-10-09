@@ -2,11 +2,11 @@
 //! pan) and **Survey** (the selected photos tiled). Rating, flag and label keys act on the active
 //! photo only here, and with Auto Advance on they move to the next candidate / photo.
 
+use dac_catalog::{Flag, PhotoId};
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
-use lightcraft_catalog::{Flag, PhotoId};
 use serde_json::{Value, json};
 
-use crate::LightcraftApp;
+use crate::DacApp;
 use crate::icons::{Icon, paint};
 use crate::render::Slot;
 use crate::state::{ViewMode, Zoom};
@@ -17,14 +17,14 @@ use crate::widgets::register;
 pub const SURVEY_MAX: usize = 48;
 
 /// Compare or Survey.
-pub fn culling(app: &LightcraftApp) -> bool {
+pub fn culling(app: &DacApp) -> bool {
     matches!(app.ui.view, ViewMode::Compare | ViewMode::Survey)
 }
 
 /// The (select, candidate) pair, repaired or chosen if needed: the active photo against the next
 /// selected photo, else against its neighbour in the view.
-pub fn compare_pair(app: &mut LightcraftApp) -> Option<(PhotoId, PhotoId)> {
-    let exists = |app: &LightcraftApp, id: PhotoId| app.session.catalog.photo(id).is_some_and(|p| !p.deleted);
+pub fn compare_pair(app: &mut DacApp) -> Option<(PhotoId, PhotoId)> {
+    let exists = |app: &DacApp, id: PhotoId| app.session.catalog.photo(id).is_some_and(|p| !p.deleted);
     if let Some((a, b)) = app.ui.compare {
         let (a, b) = (PhotoId(a), PhotoId(b));
         if a != b && exists(app, a) && exists(app, b) {
@@ -42,7 +42,7 @@ pub fn compare_pair(app: &mut LightcraftApp) -> Option<(PhotoId, PhotoId)> {
 }
 
 /// Enter Compare with the current selection (the active photo becomes the select).
-pub fn enter_compare(app: &mut LightcraftApp) -> Result<Value, String> {
+pub fn enter_compare(app: &mut DacApp) -> Result<Value, String> {
     app.ui.compare = None;
     let (a, b) = compare_pair(app).ok_or("Compare needs at least two photos")?;
     app.ui.view = ViewMode::Compare;
@@ -51,13 +51,13 @@ pub fn enter_compare(app: &mut LightcraftApp) -> Result<Value, String> {
     Ok(json!({"select": a.0, "candidate": b.0}))
 }
 
-fn select_pair(app: &mut LightcraftApp, a: PhotoId, b: PhotoId, active: PhotoId) {
+fn select_pair(app: &mut DacApp, a: PhotoId, b: PhotoId, active: PhotoId) {
     app.ui.compare = Some((a.0, b.0));
     let _ = app.session.execute("library.select", &json!({"ids": [a.0, b.0], "active": active.0}));
 }
 
 /// Move the candidate `d` photos through the view (skipping the select); it becomes active.
-pub fn compare_step(app: &mut LightcraftApp, d: isize) -> Result<Value, String> {
+pub fn compare_step(app: &mut DacApp, d: isize) -> Result<Value, String> {
     let (sel, cand) = compare_pair(app).ok_or("nothing to compare")?;
     let vis: Vec<PhotoId> = app.session.visible_cloned().into_iter().filter(|x| *x != sel).collect();
     let Some(i) = vis.iter().position(|x| *x == cand).or(if vis.is_empty() { None } else { Some(0) }) else { return Ok(Value::Null) };
@@ -66,7 +66,7 @@ pub fn compare_step(app: &mut LightcraftApp, d: isize) -> Result<Value, String> 
     Ok(json!({"candidate": vis[j].0}))
 }
 
-pub fn swap(app: &mut LightcraftApp) -> Result<Value, String> {
+pub fn swap(app: &mut DacApp) -> Result<Value, String> {
     let (a, b) = compare_pair(app).ok_or("nothing to compare")?;
     let active = app.session.active().unwrap_or(b);
     select_pair(app, b, a, active);
@@ -74,7 +74,7 @@ pub fn swap(app: &mut LightcraftApp) -> Result<Value, String> {
 }
 
 /// The candidate becomes the select; the next photo becomes the candidate.
-pub fn make_select(app: &mut LightcraftApp) -> Result<Value, String> {
+pub fn make_select(app: &mut DacApp) -> Result<Value, String> {
     let (_, b) = compare_pair(app).ok_or("nothing to compare")?;
     let vis = app.session.visible_cloned();
     let i = vis.iter().position(|x| *x == b).unwrap_or(0);
@@ -84,7 +84,7 @@ pub fn make_select(app: &mut LightcraftApp) -> Result<Value, String> {
 }
 
 /// The photos a survey shows: the selection (in view order), or the active photo alone.
-pub fn survey_photos(app: &mut LightcraftApp) -> Vec<PhotoId> {
+pub fn survey_photos(app: &mut DacApp) -> Vec<PhotoId> {
     let vis = app.session.visible_cloned();
     let sel = &app.session.selection;
     let mut v: Vec<PhotoId> = vis.iter().copied().filter(|x| sel.contains(*x)).collect();
@@ -99,7 +99,7 @@ pub fn survey_photos(app: &mut LightcraftApp) -> Vec<PhotoId> {
 }
 
 /// Move the active photo `d` steps within the survey.
-pub fn survey_step(app: &mut LightcraftApp, d: isize) -> Result<Value, String> {
+pub fn survey_step(app: &mut DacApp, d: isize) -> Result<Value, String> {
     let v = survey_photos(app);
     if v.is_empty() {
         return Ok(Value::Null);
@@ -112,7 +112,7 @@ pub fn survey_step(app: &mut LightcraftApp, d: isize) -> Result<Value, String> {
 
 /// After rating/flagging with Auto Advance: next candidate (Compare), next photo in the survey,
 /// else the next photo in the view.
-pub fn advance(app: &mut LightcraftApp) {
+pub fn advance(app: &mut DacApp) {
     let _ = match app.ui.view {
         ViewMode::Compare => compare_step(app, 1),
         ViewMode::Survey => survey_step(app, 1),
@@ -121,7 +121,7 @@ pub fn advance(app: &mut LightcraftApp) {
 }
 
 /// In the culling views, point a photo command at the active photo only (not the whole selection).
-pub fn target_active(app: &LightcraftApp, params: &mut Value) {
+pub fn target_active(app: &DacApp, params: &mut Value) {
     if culling(app)
         && params.get("ids").is_none()
         && let Some(a) = app.session.active()
@@ -130,7 +130,7 @@ pub fn target_active(app: &LightcraftApp, params: &mut Value) {
     }
 }
 
-fn area_and_filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui) -> Rect {
+fn area_and_filmstrip(app: &mut DacApp, ui: &mut egui::Ui) -> Rect {
     let t = Tokens::get(ui.ctx());
     let full = ui.max_rect();
     let film_h = if app.ui.filmstrip { t.film_h } else { 0.0 };
@@ -144,14 +144,14 @@ fn area_and_filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui) -> Rect {
 
 /// Draw one photo fitted into `area` (rendered at its display size into `slot`), with its caption
 /// strip below. Returns the image rect and the click/drag response.
-fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slot, area: Rect, label: &str, zoom: Zoom) -> (Rect, egui::Response) {
+fn photo_tile(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId, slot: Slot, area: Rect, label: &str, zoom: Zoom) -> (Rect, egui::Response) {
     let t = Tokens::get(ui.ctx());
     let ppp = ui.ctx().pixels_per_point();
     let resp = ui.interact(area, egui::Id::new(("cull-tile", slot_index(slot), id.0)), Sense::click_and_drag());
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return (area, resp) };
     let caption_h = 26.0;
     let img_area = Rect::from_min_max(area.min, pos2(area.right(), area.bottom() - caption_h));
-    let frame = lightcraft_pipeline::geometry::Frame::with_lens(
+    let frame = dac_pipeline::geometry::Frame::with_lens(
         photo.width.max(1) as usize,
         photo.height.max(1) as usize,
         &photo.develop,
@@ -241,7 +241,7 @@ fn slot_index(s: Slot) -> u8 {
     }
 }
 
-pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn show_compare(app: &mut DacApp, ui: &mut egui::Ui) {
     let canvas = area_and_filmstrip(app, ui);
     let Some((sel, cand)) = compare_pair(app) else {
         super::empty_message(ui, canvas, "Nothing to compare", "Select two photos, then choose View → Compare (Shift+C)");
@@ -295,7 +295,7 @@ pub fn survey_columns(n: usize, area: Rect) -> usize {
     best.0
 }
 
-pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn show_survey(app: &mut DacApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let canvas = area_and_filmstrip(app, ui);
     let photos = survey_photos(app);
@@ -346,7 +346,7 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
 /// Reference view: the reference photo (left, fixed) beside the active photo (right) — the one
 /// the Edit panel works on, so a look can be matched by eye.
-pub fn show_reference(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn show_reference(app: &mut DacApp, ui: &mut egui::Ui) {
     let canvas = area_and_filmstrip(app, ui);
     let reference = app.ui.reference.map(PhotoId).filter(|r| app.session.catalog.photo(*r).is_some());
     let (Some(r), Some(active)) = (reference, app.session.active()) else {

@@ -22,7 +22,7 @@
   <div id="lightcraft_loading">Loading LightCraft…</div>
   <div id="lightcraft_status" aria-live="polite"></div>
   <script type="module">
-    import init, { start, command } from "./lightcraft_web.js";
+    import init, { start, command } from "./dac_web.js";
     (async () => {
       // The Chinese font is a separate file: embedding it would exceed the host's WASM size limit.
       // Font-free development builds can still run, with the same missing-glyph warning as before.
@@ -31,7 +31,7 @@
         .catch(() => new Uint8Array());
       // Compile once; the render workers (worker.js) instantiate the same compiled module.
       const [module, font] = await Promise.all([
-        WebAssembly.compileStreaming(fetch("./lightcraft_web_bg.wasm")),
+        WebAssembly.compileStreaming(fetch("./dac_web_bg.wasm")),
         chineseFont,
       ]);
       globalThis.lightcraftModule = module;

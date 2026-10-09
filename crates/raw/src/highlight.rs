@@ -6,7 +6,7 @@
 //!   local chromaticity of nearby unclipped pixels (diffused into the clipped region with a coarse-to-fine
 //!   normalised-convolution fill). Fully clipped pixels become neutral at the brightest plausible level.
 
-use lightcraft_raster::Rgb32f;
+use dac_raster::Rgb32f;
 use rayon::prelude::*;
 
 /// Clip every channel of `wb ⊙ img` at `min_c(wb_c) · clip` — i.e. at the lowest channel's clip level after WB —
@@ -294,7 +294,7 @@ mod tests {
         count
     }
 
-    /// `cargo test --release -p lightcraft-raw --lib -- --ignored bench_reconstruct --nocapture`
+    /// `cargo test --release -p dac-raw --lib -- --ignored bench_reconstruct --nocapture`
     #[test]
     #[ignore]
     fn bench_reconstruct() {

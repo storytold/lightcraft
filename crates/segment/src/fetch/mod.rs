@@ -1,11 +1,11 @@
 //! Downloading the SAM 3 model, only when the user asked for it. The downloader itself (mirrors,
-//! resuming, checks, the pure-Rust HTTPS client) is the `lightcraft-fetch` crate; this module
+//! resuming, checks, the pure-Rust HTTPS client) is the `dac-fetch` crate; this module
 //! says what SAM 3 needs and where it may come from.
 //!
 //! The weights are never part of LightCraft (SAM License, see docs/ai-masks.md); where they are
 //! downloaded from is configured by [`DEFAULT_MIRRORS`] and the user's own list.
 
-pub use lightcraft_fetch::*;
+pub use dac_fetch::*;
 
 use std::path::Path;
 
@@ -48,7 +48,7 @@ pub const MIRRORS_ENV: &str = "LIGHTCRAFT_SAM3_MIRRORS";
 /// The mirrors to try for SAM 3, in order: the environment variable's, then the mirrors file's
 /// (one base URL per line, `#` comments), then [`DEFAULT_MIRRORS`].
 pub fn mirrors(env: Option<&str>, file: Option<&Path>) -> Vec<String> {
-    lightcraft_fetch::mirrors(env, file, DEFAULT_MIRRORS)
+    dac_fetch::mirrors(env, file, DEFAULT_MIRRORS)
 }
 
 /// Download settings for SAM 3: the defaults, plus [`TOKEN_ENV`] for a gated mirror.

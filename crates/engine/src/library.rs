@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! LightCraft Library/
-//!   catalog.snap   catalog.log      (lightcraft-catalog journal)
+//!   catalog.snap   catalog.log      (dac-catalog journal)
 //!   presets.json   view.json        (user presets + favourites; last source/sort/selection)
 //!   prefs.json     (library preferences: XMP sidecars, import defaults, cache size, last export)
 //!   thumbs/        (rendered thumbnail cache, safe to delete)
@@ -18,13 +18,13 @@
 //! [`EngineError::NotSaved`]: its change stays applied in memory and queued, and every later save
 //! retries the queue ([`Session::unsaved`] reports it meanwhile), so nothing is lost once the
 //! disk is writable again. The log is compacted into a snapshot when it
-//! grows (see [`lightcraft_catalog::SnapshotPolicy`]; written by a worker thread on native, see
-//! [`lightcraft_catalog::journal`]) and on [`Session::close_library`].
+//! grows (see [`dac_catalog::SnapshotPolicy`]; written by a worker thread on native, see
+//! [`dac_catalog::journal`]) and on [`Session::close_library`].
 
 use std::path::{Path, PathBuf};
 
-use lightcraft_catalog::{FsStore, Journal, LibraryLock, LoadReport, Store};
-use lightcraft_develop::Preset;
+use dac_catalog::{FsStore, Journal, LibraryLock, LoadReport, Store};
+use dac_develop::Preset;
 use serde::{Deserialize, Serialize};
 
 use crate::{EngineError, LibrarySource, Result, Selection, Session};
@@ -61,7 +61,7 @@ pub struct Library {
     /// When the frame loop may retry a failed append ([`Session::persist_if_dirty`] backs off).
     retry_at: Option<web_time::Instant>,
     /// What forgetting untouched Local records did when the library opened.
-    pub forgot_local: Option<lightcraft_catalog::ForgetPlan>,
+    pub forgot_local: Option<dac_catalog::ForgetPlan>,
     presets_written: String,
     view_written: Vec<u8>,
     /// Settings files that were unreadable or damaged when the library opened (`library.info` →
@@ -106,7 +106,7 @@ struct ViewFile {
     library_folder: Option<String>,
     // No filter: a library opens unfiltered. A date, keyword or person left over from the last session
     // would silently hide photos, with only a small badge to say so.
-    sort: lightcraft_catalog::Sort,
+    sort: dac_catalog::Sort,
     selection: Selection,
 }
 
@@ -191,7 +191,7 @@ fn same_dir(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// This program, for the lock owner note ("LightCraft", "lightcraft-cli").
+/// This program, for the lock owner note ("LightCraft", "dac-cli").
 fn program_name() -> String {
     let exe = std::env::current_exe().ok().and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()));
     match exe.as_deref() {
@@ -249,7 +249,7 @@ impl Session {
     /// Open (or create) the library at `dir` into this session, replacing its catalog. With
     /// `seed_demo`, a newly created library starts with the procedural demo photos.
     ///
-    /// The library is locked for this session ([`lightcraft_catalog::lock`]): if another process
+    /// The library is locked for this session ([`dac_catalog::lock`]): if another process
     /// has it open, this fails with [`EngineError::LibraryInUse`] and nothing is read or changed.
     /// Reopening the library this session already has open keeps its lock.
     pub fn open_library(&mut self, dir: impl AsRef<Path>, seed_demo: bool) -> Result<&LoadReport> {
@@ -340,7 +340,7 @@ impl Session {
         self.recent_keywords = prefs.recent_keywords;
         self.import_defaults = prefs.import;
         self.cache_mb = prefs.cache_mb;
-        self.forget_local_days = prefs.forget_local_days.unwrap_or(lightcraft_catalog::DEFAULT_FORGET_DAYS);
+        self.forget_local_days = prefs.forget_local_days.unwrap_or(dac_catalog::DEFAULT_FORGET_DAYS);
         self.smart_previews_dir = prefs.smart_previews_dir.filter(|_| on_disk).map(PathBuf::from);
         if let Some(d) = &self.smart_previews_dir {
             self.media.smart_dir = Some(d.clone());
@@ -366,8 +366,8 @@ impl Session {
             self.library_folder = v.library_folder.filter(|f| !f.trim().is_empty());
             if self.source == LibrarySource::LibraryFolder {
                 // a folder that is gone (or none): everything, not an empty grid
-                let f = lightcraft_catalog::Filter { library_folder: self.library_folder.clone(), ..Default::default() };
-                let any = self.library_folder.is_some() && !self.catalog.query(&f, &lightcraft_catalog::Sort::default()).is_empty();
+                let f = dac_catalog::Filter { library_folder: self.library_folder.clone(), ..Default::default() };
+                let any = self.library_folder.is_some() && !self.catalog.query(&f, &dac_catalog::Sort::default()).is_empty();
                 if !any {
                     self.source = LibrarySource::All;
                     self.library_folder = None;

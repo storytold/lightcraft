@@ -1,5 +1,5 @@
 // Shared helpers, prepended to every kernel (after the generated constants and bindings).
-// Each function mirrors its CPU twin in `lightcraft-pipeline` / `lightcraft-color`; keep them in step.
+// Each function mirrors its CPU twin in `dac-pipeline` / `dac-color`; keep them in step.
 
 fn pu(i: u32) -> u32 {
     return P[i];
@@ -32,12 +32,12 @@ fn wrap_angle(a: f32) -> f32 {
     return rem_euclid(a + PI, TAU) - PI;
 }
 
-// Rec.2020 luminance (`lightcraft_color::luminance_2020`).
+// Rec.2020 luminance (`dac_color::luminance_2020`).
 fn lum2020(c: vec3<f32>) -> f32 {
     return c.x * 0.2627 + c.y * 0.6780 + c.z * 0.0593;
 }
 
-// `lightcraft_pipeline::local::log_lum`.
+// `dac_pipeline::local::log_lum`.
 fn log_lum(c: vec3<f32>) -> f32 {
     return log2(max(lum2020(c), 1e-7) / GREY);
 }

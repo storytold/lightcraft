@@ -176,7 +176,7 @@ pub(crate) fn bool_or(p: &Value, key: &str, d: bool) -> bool {
 pub(crate) fn ok() -> Result<Value> {
     Ok(Value::Null)
 }
-pub(crate) fn point(p: &Value, key: &str) -> Option<lightcraft_geom::Point> {
+pub(crate) fn point(p: &Value, key: &str) -> Option<dac_geom::Point> {
     let a = p.get(key)?.as_array()?;
-    Some(lightcraft_geom::Point::new(a.first()?.as_f64()?, a.get(1)?.as_f64()?))
+    Some(dac_geom::Point::new(a.first()?.as_f64()?, a.get(1)?.as_f64()?))
 }

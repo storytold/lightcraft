@@ -2,13 +2,13 @@
 
 use std::sync::Arc;
 
-use lightcraft_catalog::{Album, Flag, Meta, Op, Photo, Source};
-use lightcraft_develop::DevelopSettings;
+use dac_catalog::{Album, Flag, Meta, Op, Photo, Source};
+use dac_develop::DevelopSettings;
 
 use crate::Session;
 
 pub fn load(s: &mut Session) {
-    let scenes = lightcraft_scenes::demo_library();
+    let scenes = dac_scenes::demo_library();
     let mut ids = Vec::new();
     let mut ops = Vec::new();
     for sc in &scenes {
@@ -51,7 +51,7 @@ pub fn load(s: &mut Session) {
                 d.effects.dehaze = 15.0;
             }
             9 => {
-                d.treatment = lightcraft_develop::Treatment::Bw;
+                d.treatment = dac_develop::Treatment::Bw;
                 d.light.contrast = 35.0;
             }
             _ => {}
@@ -108,7 +108,7 @@ pub fn load(s: &mut Session) {
 ///   holds them any more.
 ///
 /// Only demo photos use this; real files are decoded by their loader as before.
-pub(crate) fn scene_pixels(scene: &lightcraft_scenes::Scene, max_edge: usize) -> Arc<lightcraft_raster::Rgb32f> {
+pub(crate) fn scene_pixels(scene: &dac_scenes::Scene, max_edge: usize) -> Arc<dac_raster::Rgb32f> {
     let key = SceneKey { kind: scene.kind, seed: scene.seed, width: scene.width, height: scene.height, max_edge };
     let slot = {
         let mut c = scene_cache();
@@ -140,14 +140,14 @@ fn scene_cache_limit() -> usize {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct SceneKey {
-    kind: lightcraft_scenes::Kind,
+    kind: dac_scenes::Kind,
     seed: u32,
     width: u32,
     height: u32,
     max_edge: usize,
 }
 
-type SceneSlot = Arc<std::sync::OnceLock<Arc<lightcraft_raster::Rgb32f>>>;
+type SceneSlot = Arc<std::sync::OnceLock<Arc<dac_raster::Rgb32f>>>;
 
 struct SceneEntry {
     key: SceneKey,
@@ -189,8 +189,8 @@ fn trim_scene_cache(c: &mut SceneCache, limit: usize) {
 mod tests {
     use super::*;
 
-    fn small_scene() -> lightcraft_scenes::Scene {
-        lightcraft_scenes::demo_library().swap_remove(0)
+    fn small_scene() -> dac_scenes::Scene {
+        dac_scenes::demo_library().swap_remove(0)
     }
 
     #[test]
@@ -218,11 +218,11 @@ mod tests {
 
     #[test]
     fn the_cache_keeps_the_most_recent_scenes_within_its_limit() {
-        let key = |max_edge| SceneKey { kind: lightcraft_scenes::Kind::Dunes, seed: 1, width: 3, height: 2, max_edge };
+        let key = |max_edge| SceneKey { kind: dac_scenes::Kind::Dunes, seed: 1, width: 3, height: 2, max_edge };
         let entry = |max_edge, used, px: Option<usize>| {
             let slot: SceneSlot = Arc::new(std::sync::OnceLock::new());
             if let Some(n) = px {
-                let _ = slot.set(Arc::new(lightcraft_raster::Rgb32f::new(n, 1)));
+                let _ = slot.set(Arc::new(dac_raster::Rgb32f::new(n, 1)));
             }
             SceneEntry { key: key(max_edge), slot, used }
         };

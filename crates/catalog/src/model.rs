@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use lightcraft_develop::{DevelopSettings, WbMode};
+use dac_develop::{DevelopSettings, WbMode};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -89,7 +89,7 @@ impl ColorLabel {
 pub enum Source {
     /// A file on disk (native) or in the browser's storage (web).
     File { path: String },
-    /// A procedurally generated demo scene (by `lightcraft-scenes` id).
+    /// A procedurally generated demo scene (by `dac-scenes` id).
     Demo { scene: u32 },
 }
 
@@ -187,7 +187,7 @@ pub struct Meta {
     /// Removing or resizing one edits the catalog only; LightCraft never writes regions to XMP.
     /// Left out of the catalog JSON when empty (most photos), so older catalogs read unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub regions: Vec<lightcraft_meta::Region>,
+    pub regions: Vec<dac_meta::Region>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -255,7 +255,7 @@ pub struct Photo {
     /// Lens corrections embedded in the file (DNG `WarpRectilinear` / `FixVignetteRadial`), applied when
     /// "Enable Profile Corrections" is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub embedded_lens: Option<lightcraft_develop::EmbeddedLens>,
+    pub embedded_lens: Option<dac_develop::EmbeddedLens>,
     /// A virtual copy: the photo it was copied from (it shares that photo's file but has its own
     /// settings, metadata and history).
     #[serde(default, skip_serializing_if = "Option::is_none")]

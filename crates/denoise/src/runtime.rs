@@ -383,7 +383,7 @@ mod tests {
         }
     }
 
-    /// Opt-in: `LC_DENOISE_MODEL=<model_bayer.onnx> cargo test -p lightcraft-denoise --release
+    /// Opt-in: `LC_DENOISE_MODEL=<model_bayer.onnx> cargo test -p dac-denoise --release
     /// -- --ignored --nocapture` self-tests a real model (RawNIND's Bayer model: tile 512, scale about 1e6).
     #[test]
     #[ignore = "needs a real model file: set LC_DENOISE_MODEL"]

@@ -3,10 +3,10 @@
 
 use egui::{Color32, Rect, pos2, vec2};
 
-use crate::LightcraftApp;
+use crate::DacApp;
 use crate::render::Slot;
 
-pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn show(app: &mut DacApp, ctx: &egui::Context) {
     if !app.ui.second_window {
         return;
     }
@@ -21,7 +21,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     });
 }
 
-fn body(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+fn body(app: &mut DacApp, ui: &mut egui::Ui) {
     let area = ui.available_rect_before_wrap();
     crate::widgets::register(ui.ctx(), "view:secondWindow", area);
     ui.allocate_rect(area, egui::Sense::hover());

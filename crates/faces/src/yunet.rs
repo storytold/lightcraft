@@ -324,7 +324,7 @@ mod tests {
         }
     }
 
-    /// Opt-in: `LC_YUNET_REF=<folder> cargo test -p lightcraft-faces -- --ignored --nocapture` compares every output
+    /// Opt-in: `LC_YUNET_REF=<folder> cargo test -p dac-faces -- --ignored --nocapture` compares every output
     /// of the network with ONNX Runtime's on the same input (`input.bin`, `out_<name>.bin`, raw little-endian f32).
     #[test]
     #[ignore = "needs reference files: set LC_YUNET_REF"]

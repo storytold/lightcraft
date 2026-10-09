@@ -5,10 +5,10 @@
 
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
-use crate::LightcraftApp;
+use crate::DacApp;
 
 /// Applies a task's result to the app (on the UI thread).
-type Finish = Box<dyn FnOnce(&mut LightcraftApp, &egui::Context) + Send>;
+type Finish = Box<dyn FnOnce(&mut DacApp, &egui::Context) + Send>;
 
 struct Task {
     label: String,
@@ -41,16 +41,16 @@ impl Tasks {
 /// Run `work` on a worker thread, then `done(app, ctx, result)` on the UI thread (in the browser
 /// build, which has no threads, `work` runs at once and `done` on the next frame).
 pub fn spawn<T: Send + 'static>(
-    app: &mut LightcraftApp,
+    app: &mut DacApp,
     label: &str,
     work: impl FnOnce() -> T + Send + 'static,
-    done: impl FnOnce(&mut LightcraftApp, &egui::Context, T) + Send + 'static,
+    done: impl FnOnce(&mut DacApp, &egui::Context, T) + Send + 'static,
 ) -> Result<(), String> {
     let (tx, rx) = channel::<Finish>();
     let repaint = app.tasks.repaint.clone();
     let job = move || {
         let t = work();
-        let _ = tx.send(Box::new(move |app: &mut LightcraftApp, ctx: &egui::Context| done(app, ctx, t)));
+        let _ = tx.send(Box::new(move |app: &mut DacApp, ctx: &egui::Context| done(app, ctx, t)));
         if let Some(c) = repaint {
             c.request_repaint();
         }
@@ -64,7 +64,7 @@ pub fn spawn<T: Send + 'static>(
 }
 
 /// Apply finished tasks (called every frame).
-pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn poll(app: &mut DacApp, ctx: &egui::Context) {
     app.tasks.repaint = Some(ctx.clone());
     let mut i = 0;
     while i < app.tasks.running.len() {
@@ -87,7 +87,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
 }
 
 /// Wait for every task and apply it (tests, and commands asked to `wait`). `false` on timeout.
-pub fn wait(app: &mut LightcraftApp, ctx: &egui::Context, timeout: std::time::Duration) -> bool {
+pub fn wait(app: &mut DacApp, ctx: &egui::Context, timeout: std::time::Duration) -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let t0 = std::time::Instant::now();

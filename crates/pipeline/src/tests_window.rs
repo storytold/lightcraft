@@ -2,9 +2,9 @@
 //! and must match the same pixels of the full render, so zoomed views can be sharp at any zoom
 //! without materializing the whole frame.
 
-use lightcraft_develop::{DevelopSettings, controls};
-use lightcraft_geom::{Orientation, Rect};
-use lightcraft_raster::{Rgb32f, Rgba8};
+use dac_develop::{DevelopSettings, controls};
+use dac_geom::{Orientation, Rect};
+use dac_raster::{Rgb32f, Rgba8};
 
 use crate::{PixelWindow, RenderRequest, SourceInfo, render};
 
@@ -14,7 +14,7 @@ const H: usize = 640;
 const HALO: usize = 64;
 
 fn scene() -> Rgb32f {
-    lightcraft_scenes::demo_library()[0].render(480, 320)
+    dac_scenes::demo_library()[0].render(480, 320)
 }
 
 fn full(s: &DevelopSettings) -> Rgba8 {
@@ -190,8 +190,8 @@ fn noise_reduction_does_not_depend_on_the_window() {
 // Given a mask with Refine Edges, the refinement width follows the whole frame's size
 #[test]
 fn mask_edge_refinement_does_not_depend_on_the_window() {
-    use lightcraft_develop::{LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
-    use lightcraft_geom::Point;
+    use dac_develop::{LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
+    use dac_geom::Point;
     let shape = MaskShape::Linear { start: Point::new(0.45, 0.5), end: Point::new(0.55, 0.5) };
     let mut s = DevelopSettings::default();
     s.masks.push(Mask {
@@ -262,9 +262,9 @@ fn check_whole(name: &str, s: &DevelopSettings, win: PixelWindow, max_ok: u8, me
     assert!(max <= max_ok && mean <= mean_ok, "{name}: max {max} (≤ {max_ok}), mean {mean:.3} (≤ {mean_ok})");
 }
 
-fn with_spot(mode: lightcraft_develop::SpotMode, at: (f64, f64), offset: Option<(f64, f64)>) -> DevelopSettings {
-    use lightcraft_develop::Spot;
-    use lightcraft_geom::Point;
+fn with_spot(mode: dac_develop::SpotMode, at: (f64, f64), offset: Option<(f64, f64)>) -> DevelopSettings {
+    use dac_develop::Spot;
+    use dac_geom::Point;
     let mut s = DevelopSettings::default();
     s.spots.push(Spot {
         mode,
@@ -280,7 +280,7 @@ fn with_spot(mode: lightcraft_develop::SpotMode, at: (f64, f64), offset: Option<
 // Given a spot whose source patch lies outside the window, the window still shows it healed
 #[test]
 fn a_spot_with_its_source_outside_the_window_matches_the_whole_render() {
-    use lightcraft_develop::SpotMode;
+    use dac_develop::SpotMode;
     // the target is at x ≈ 0.36 of the frame; its source is 0.12 of the width to the right
     for mode in [SpotMode::Clone, SpotMode::Heal] {
         let s = with_spot(mode, (0.40, 0.5), Some((0.12, 0.05)));
@@ -292,14 +292,14 @@ fn a_spot_with_its_source_outside_the_window_matches_the_whole_render() {
 // Given a spot just outside the window whose feathered edge reaches in, the window shows it
 #[test]
 fn a_spot_overlapping_the_window_edge_matches_the_whole_render() {
-    let s = with_spot(lightcraft_develop::SpotMode::Heal, (0.30, 0.5), Some((-0.1, 0.0)));
+    let s = with_spot(dac_develop::SpotMode::Heal, (0.30, 0.5), Some((-0.1, 0.0)));
     check_whole("edge", &s, PixelWindow { x: 300, y: 200, w: 240, h: 240 }, 1, 0.1);
 }
 
 // Given a spot with an automatic source, two windows over the same spot choose the same source
 #[test]
 fn an_automatic_spot_source_does_not_depend_on_the_window() {
-    let s = with_spot(lightcraft_develop::SpotMode::Heal, (0.5, 0.5), None);
+    let s = with_spot(dac_develop::SpotMode::Heal, (0.5, 0.5), None);
     // windows so tight that the candidate sources can't all be inside them
     let (a, b) = (PixelWindow { x: 430, y: 280, w: 110, h: 90 }, PixelWindow { x: 450, y: 290, w: 110, h: 90 });
     let (ia, ib) = (window(&s, a), window(&s, b));
@@ -319,8 +319,8 @@ fn an_automatic_spot_source_does_not_depend_on_the_window() {
 // Given Auto Mask strokes that run in and out of the window, the window shows the whole render's mask
 #[test]
 fn auto_mask_strokes_match_the_whole_render() {
-    use lightcraft_develop::{BrushStroke, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
-    use lightcraft_geom::Point;
+    use dac_develop::{BrushStroke, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
+    use dac_geom::Point;
     let st = |pts: &[(f64, f64)], auto_mask, erase| BrushStroke {
         points: pts.iter().map(|p| Point::new(p.0, p.1)).collect(),
         size: 0.06,

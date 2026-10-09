@@ -126,8 +126,8 @@ mod tests {
     /// The app's own extension list (the one the folder scan uses) is covered whole.
     #[test]
     fn import_extensions_are_all_covered_in_both_cases() {
-        let pats = dialog_extensions_for(lightcraft_engine::import::EXTENSIONS, true);
-        for e in lightcraft_engine::import::EXTENSIONS {
+        let pats = dialog_extensions_for(dac_engine::import::EXTENSIONS, true);
+        for e in dac_engine::import::EXTENSIONS {
             assert!(pats.iter().any(|p| glob_ext(p, &e.to_uppercase())), "{e}");
             assert!(pats.iter().any(|p| p == e), "{e}");
         }

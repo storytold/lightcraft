@@ -269,10 +269,8 @@ pub fn with_summary(md: &str, table: &str) -> Option<String> {
 }
 
 fn registry(what: &str) -> Result<BTreeSet<String>, String> {
-    let out = crate::cargo()
-        .args(["run", "-q", "-p", "lightcraft-cli", "--", what, "--json"])
-        .output()
-        .map_err(|e| format!("lightcraft-cli {what}: {e}"))?;
+    let out =
+        crate::cargo().args(["run", "-q", "-p", "dac-cli", "--", what, "--json"]).output().map_err(|e| format!("lightcraft-cli {what}: {e}"))?;
     if !out.status.success() {
         return Err(format!("lightcraft-cli {what} --json failed:\n{}", String::from_utf8_lossy(&out.stderr)));
     }

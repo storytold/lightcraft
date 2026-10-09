@@ -12,9 +12,9 @@
 //! where it is red, so iris and catchlights stay) and darkens it; pet eye replaces the disc with a
 //! dark pupil and can add a catchlight.
 
-use lightcraft_develop::RedEye;
-use lightcraft_geom::{Orientation, Point};
-use lightcraft_raster::Rgb32f;
+use dac_develop::RedEye;
+use dac_geom::{Orientation, Point};
+use dac_raster::Rgb32f;
 
 use crate::for_rows;
 use crate::geometry::Frame;
@@ -105,7 +105,7 @@ pub fn detect(src: &Rgb32f, o: Orientation, ow: f64, oh: f64, eye: &RedEye) -> P
     if samples.is_empty() {
         return fallback;
     }
-    let lum = |c: [f32; 3]| lightcraft_color::luminance_2020(c);
+    let lum = |c: [f32; 3]| dac_color::luminance_2020(c);
     let weights: Vec<f32> = if eye.pet {
         let ymax = samples.iter().map(|(_, c)| lum(*c)).fold(0.0f32, f32::max);
         let mean = samples.iter().map(|(_, c)| lum(*c)).sum::<f32>() / samples.len() as f32;
@@ -164,7 +164,7 @@ pub fn eye_pixel(c: [f32; 3], x: f32, y: f32, eyes: &[EyeK]) -> [f32; 3] {
         let m = if e.pet { 1.0 - smooth(0.95, 1.2, d) } else { 1.0 - smooth(1.0, 1.35, d) };
         if m > 0.0 {
             if e.pet {
-                let k = lightcraft_color::luminance_2020(c).min(0.04) * (1.0 - 0.85 * e.darken);
+                let k = dac_color::luminance_2020(c).min(0.04) * (1.0 - 0.85 * e.darken);
                 c = c.map(|v| v + (k - v) * m);
             } else {
                 let red = (c[0] - c[1].max(c[2])) / c[0].max(1e-6);
@@ -250,7 +250,7 @@ mod tests {
     fn renders_fix_the_red_pupil_at_any_size() {
         use crate::{RenderRequest, SourceInfo, render};
         let src = eye_image(400, 200, 180.0, 104.0, 12.0, [0.5, 0.04, 0.04]);
-        let mut s = lightcraft_develop::DevelopSettings::default();
+        let mut s = dac_develop::DevelopSettings::default();
         s.red_eye.push(RedEye { center: Point::new(0.47, 0.5), rx: 0.1, ry: 0.08, ..Default::default() });
         let info = SourceInfo::default();
         for size in [400, 160] {
@@ -277,10 +277,10 @@ mod tests {
         // a red pupil is not a glow candidate for red-eye detection when it's green
         assert!(!detect(&src, Orientation::Normal, 400.0, 200.0, &RedEye { pet: false, ..eye }).found);
         let info = SourceInfo::default();
-        let mut s = lightcraft_develop::DevelopSettings::default();
+        let mut s = dac_develop::DevelopSettings::default();
         s.red_eye.push(eye);
         let img = render(&src, &info, &s, &RenderRequest::fit(400, 400)).image;
-        let at = |img: &lightcraft_raster::Rgba8, x: f64, y: f64| img.data[(y * 200.0) as usize * 400 + (x * 400.0) as usize];
+        let at = |img: &dac_raster::Rgba8, x: f64, y: f64| img.data[(y * 200.0) as usize * 400 + (x * 400.0) as usize];
         let c = at(&img, 0.525, 0.48);
         assert!(c[1] < 70 && c[0].abs_diff(c[1]) < 4, "dark neutral pupil: {c:?}");
         // catchlight up-left of the centre

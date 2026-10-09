@@ -32,6 +32,6 @@ pub mod runtime;
 #[doc(hidden)]
 pub mod synthetic;
 
-pub use lightcraft_denoise_core::*;
+pub use dac_denoise_core::*;
 
 pub mod synthetic_proto;

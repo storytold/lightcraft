@@ -1,4 +1,4 @@
-use lightcraft_segment::remote::{Operation, Request, read_frame};
+use dac_segment::remote::{Operation, Request, read_frame};
 use std::io::Cursor;
 
 #[test]

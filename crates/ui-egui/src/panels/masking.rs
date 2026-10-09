@@ -1,13 +1,13 @@
 //! The Masking panel: create masks, list them, edit components and local adjustments.
 
+use dac_catalog::PhotoId;
+use dac_develop::{ControlSpec, LocalAdjustments, MaskShape, Section, Track};
 use egui::{Rect, Sense, Stroke, pos2, vec2};
-use lightcraft_catalog::PhotoId;
-use lightcraft_develop::{ControlSpec, LocalAdjustments, MaskShape, Section, Track};
 use serde_json::json;
 
 use super::edit::apply_slider_out;
 use super::right::header;
-use crate::LightcraftApp;
+use crate::DacApp;
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
 use crate::widgets::{divider, icon_button, one_line, register, slider, text_button};
@@ -86,7 +86,7 @@ fn tile_layout(width: f32, label: impl Fn(f32) -> f32) -> (usize, f32, f32) {
     (2, room(2).max(24.0), 9.5)
 }
 
-pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+pub fn show(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Masking");
@@ -301,9 +301,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
                 paint(ui.painter(), r, icon, t.text_label);
                 let op = match c.op {
-                    lightcraft_develop::MaskOp::Add => "",
-                    lightcraft_develop::MaskOp::Subtract => "− ",
-                    lightcraft_develop::MaskOp::Intersect => "∩ ",
+                    dac_develop::MaskOp::Add => "",
+                    dac_develop::MaskOp::Subtract => "− ",
+                    dac_develop::MaskOp::Intersect => "∩ ",
                 };
                 if let Some((_, _, name)) = app.ui.renaming_component.as_mut().filter(|(mid, k, _)| *mid == m.id && *k == i) {
                     // inline rename: Enter (or leaving the field) commits, Escape cancels
@@ -403,7 +403,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
 }
 
 /// The right-click menu of a mask in the Masks list.
-fn mask_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: u32, name: &str, visible: bool, index: usize, count: usize) {
+fn mask_menu(app: &mut DacApp, ui: &mut egui::Ui, id: u32, name: &str, visible: bool, index: usize, count: usize) {
     let mut run = |ui: &mut egui::Ui, label: &str, enabled: bool, cmd: &str, p: serde_json::Value| {
         if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
             let _ = app.run(cmd, p);
@@ -432,8 +432,8 @@ fn mask_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: u32, name: &str, vi
 pub const OVERLAY_COLORS: [[u8; 3]; 5] = [[230, 30, 40], [40, 200, 70], [40, 110, 240], [250, 210, 30], [255, 255, 255]];
 
 /// How the selected mask is shown: overlay mode, colour, opacity, pins.
-fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    use lightcraft_pipeline::MaskView;
+fn overlay_options(app: &mut DacApp, ui: &mut egui::Ui) {
+    use dac_pipeline::MaskView;
     let t = Tokens::get(ui.ctx());
     let view = MaskView::parse(&app.ui.mask_overlay_mode).unwrap_or_default();
     ui.horizontal(|ui| {
@@ -486,9 +486,9 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
 /// Controls for a range component: the selected range (two handles over a dark → light bar),
 /// Smoothness, and Show Luminance Map; colour ranges get Refine.
-fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape: &MaskShape) {
+fn range_controls(app: &mut DacApp, ui: &mut egui::Ui, comp: usize, shape: &MaskShape) {
     let t = Tokens::get(ui.ctx());
-    let update = |app: &mut LightcraftApp, shape: MaskShape| {
+    let update = |app: &mut DacApp, shape: MaskShape| {
         let _ = app.run("mask.update", json!({"component": comp, "shape": shape}));
     };
     match shape {
@@ -630,7 +630,7 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
 }
 
 /// The right-click / "…" menu of one component of the selected mask.
-fn component_row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: u32, k: usize, label: &str, count: usize) {
+fn component_row_menu(app: &mut DacApp, ui: &mut egui::Ui, mask: u32, k: usize, label: &str, count: usize) {
     let mut run = |ui: &mut egui::Ui, text: &str, p: serde_json::Value| {
         if ui.button(text).clicked() {
             let mut p = p;
@@ -669,9 +669,9 @@ fn component_row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: u32, k: 
 
 /// Whether the SAM 3 model is missing in a build that could use it: then the download is
 /// offered (with `then` to start afterwards) instead of starting an AI mask.
-fn needs_model(app: &mut LightcraftApp, kind: &str, op: &str) -> bool {
+fn needs_model(app: &mut DacApp, kind: &str, op: &str) -> bool {
     let seg = &app.session.segmenter;
-    let missing = lightcraft_engine::segment::Segmenter::AVAILABLE && seg.remote_endpoint().is_none() && seg.dir.is_some() && !seg.installed();
+    let missing = dac_engine::segment::Segmenter::AVAILABLE && seg.remote_endpoint().is_none() && seg.dir.is_some() && !seg.installed();
     if missing {
         app.offer_sam_download(Some((kind, op)));
     }
@@ -680,7 +680,7 @@ fn needs_model(app: &mut LightcraftApp, kind: &str, op: &str) -> bool {
 
 /// Start an Object selection (SAM 3 clicks): a new mask, or a component of the selected one
 /// combined by `op`; the photo is analyzed meanwhile (in the background).
-pub(crate) fn start_object(app: &mut LightcraftApp, ctx: &egui::Context, op: &str) {
+pub(crate) fn start_object(app: &mut DacApp, ctx: &egui::Context, op: &str) {
     if needs_model(app, "object", op) {
         return;
     }
@@ -697,7 +697,7 @@ pub(crate) fn start_object(app: &mut LightcraftApp, ctx: &egui::Context, op: &st
 
 /// Start an AI mask of `kind` (object|prompt) combined by `op` (new|add|subtract|intersect),
 /// after the model was installed.
-pub(crate) fn begin_ai(app: &mut LightcraftApp, kind: &str, op: &str) -> Result<serde_json::Value, String> {
+pub(crate) fn begin_ai(app: &mut DacApp, kind: &str, op: &str) -> Result<serde_json::Value, String> {
     match kind {
         "object" => {
             let r = if op == "new" {
@@ -716,7 +716,7 @@ pub(crate) fn begin_ai(app: &mut LightcraftApp, kind: &str, op: &str) -> Result<
 }
 
 /// Open the Describe field (a new mask, or a component combined by `op`).
-pub(crate) fn start_describe(app: &mut LightcraftApp, op: &str) {
+pub(crate) fn start_describe(app: &mut DacApp, op: &str) {
     if needs_model(app, "prompt", op) {
         return;
     }
@@ -724,7 +724,7 @@ pub(crate) fn start_describe(app: &mut LightcraftApp, op: &str) {
 }
 
 /// The Describe field: type what to select ("sky", "the red car") and press Return.
-fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
+fn describe_field(app: &mut DacApp, ui: &mut egui::Ui, new_mask: bool) {
     let Some((op, mut text)) = app.ui.describe.clone() else { return };
     // a new mask's field sits under the tiles; one that combines, under the selected mask
     if (op == "new") != new_mask {
@@ -775,7 +775,7 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
     }
 }
 
-fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
+fn component_menu(app: &mut DacApp, ui: &mut egui::Ui, op: &str) {
     let b = ui.button(crate::i18n::tr("Object"));
     register(ui.ctx(), format!("maskComp:{op}:object"), b.rect);
     if b.clicked() {
@@ -809,7 +809,7 @@ fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
     }
 }
 
-fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+fn brush_settings(app: &mut DacApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 0 }).show(ui, |ui| {
         ui.horizontal(|ui| {

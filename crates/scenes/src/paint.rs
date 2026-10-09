@@ -1,8 +1,8 @@
 //! Scene painters. Coordinates: `x` = u·aspect (isotropic), `v` = 0 (top) .. 1 (bottom).
 //! Colours are authored as linear sRGB and converted to linear Rec.2020 at the end.
 
-use lightcraft_color::{REC2020, SRGB};
-use lightcraft_raster::Rgb32f;
+use dac_color::{REC2020, SRGB};
+use dac_raster::Rgb32f;
 use rayon::prelude::*;
 
 use crate::Kind;
@@ -11,7 +11,7 @@ use crate::noise::{fbm, hash, noise, rand01, ridged};
 type C = [f32; 3];
 
 fn hex(v: u32) -> C {
-    let f = |c: u32| lightcraft_color::transfer::srgb_to_linear(((v >> c) & 0xff) as f32 / 255.0);
+    let f = |c: u32| dac_color::transfer::srgb_to_linear(((v >> c) & 0xff) as f32 / 255.0);
     [f(16), f(8), f(0)]
 }
 #[inline]

@@ -2,8 +2,8 @@
 
 use crate::unpack::*;
 use crate::{MAX_SAMPLES, RawData, RawError, Result, ljpeg};
-use lightcraft_tiff::image::{Chunk, ImageInfo, chunk_bytes};
-use lightcraft_tiff::{ByteOrder, tags::compression as comp};
+use dac_tiff::image::{Chunk, ImageInfo, chunk_bytes};
+use dac_tiff::{ByteOrder, tags::compression as comp};
 use rayon::prelude::*;
 
 /// Bit packing for uncompressed integer data with bit depths other than 8/16.
@@ -336,7 +336,7 @@ fn unpack_chunk(
 #[cfg(test)]
 mod lossy_tests {
     use super::*;
-    use lightcraft_tiff::image::Layout;
+    use dac_tiff::image::Layout;
 
     /// A lossy-DNG-style image: two 16×8 tiles, each a baseline JPEG, the right one cut short
     /// by the image edge.

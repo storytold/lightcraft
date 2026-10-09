@@ -1,8 +1,6 @@
 //! Malformed-input robustness: decoding random or corrupted files must never panic.
 
-use lightcraft_raw::{
-    BlackLevel, Cfa, ColorData, DngCompression, DngWriteOptions, Method, OpcodeLists, Orientation, RawData, RawFormat, RawImage, Rect,
-};
+use dac_raw::{BlackLevel, Cfa, ColorData, DngCompression, DngWriteOptions, Method, OpcodeLists, Orientation, RawData, RawFormat, RawImage, Rect};
 use proptest::prelude::*;
 
 fn sample(comp: DngCompression) -> Vec<u8> {
@@ -27,18 +25,18 @@ fn sample(comp: DngCompression) -> Vec<u8> {
         opcodes: OpcodeLists::default(),
         metadata: Default::default(),
     };
-    lightcraft_raw::write_dng(&raw, &DngWriteOptions { compression: comp, ..Default::default() }).unwrap()
+    dac_raw::write_dng(&raw, &DngWriteOptions { compression: comp, ..Default::default() }).unwrap()
 }
 
 fn exercise(bytes: &[u8]) {
-    let _ = lightcraft_raw::probe(bytes);
-    let _ = lightcraft_raw::embedded_preview(bytes);
-    if let Ok(img) = lightcraft_raw::decode(bytes)
+    let _ = dac_raw::probe(bytes);
+    let _ = dac_raw::embedded_preview(bytes);
+    if let Ok(img) = dac_raw::decode(bytes)
         && img.width * img.height <= 1 << 16
     {
         let _ = img.develop(Method::Ahd);
-        let xy = lightcraft_raw::color::as_shot_white_xy(&img);
-        let _ = lightcraft_raw::color::camera_transform(&img, xy);
+        let xy = dac_raw::color::as_shot_white_xy(&img);
+        let _ = dac_raw::color::camera_transform(&img, xy);
     }
 }
 
@@ -69,7 +67,7 @@ proptest! {
     fn random_lj92_never_panics(data in proptest::collection::vec(any::<u8>(), 0..400)) {
         let mut s = vec![0xff, 0xd8, 0xff, 0xc3, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0];
         s.extend_from_slice(&data);
-        let _ = lightcraft_raw::ljpeg::decode(&s, 1 << 20);
+        let _ = dac_raw::ljpeg::decode(&s, 1 << 20);
     }
 }
 
@@ -86,8 +84,8 @@ fn truncation_at_every_length() {
 #[test]
 fn hostile_dimensions_are_rejected_quickly() {
     // a DNG claiming a 60000 × 60000 16-bit image with 10 bytes of data
-    use lightcraft_tiff::tags as t;
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+    use dac_tiff::tags as t;
+    use dac_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
     let mut ifd = IfdBuilder::new();
     ifd.set(t::DNG_VERSION, Value::Byte(vec![1, 4, 0, 0]));
     ifd.set(t::IMAGE_WIDTH, Value::Long(vec![60000]));
@@ -99,6 +97,6 @@ fn hostile_dimensions_are_rejected_quickly() {
     ifd.set_image(ImageData::Tiles { tile_width: 60000, tile_height: 60000, tiles: vec![vec![0xff, 0xd8, 0xff, 0xd9]] });
     let bytes = TiffWriter::default().write(&[ifd]).unwrap();
     let t0 = std::time::Instant::now();
-    assert!(lightcraft_raw::decode(&bytes).is_err());
+    assert!(dac_raw::decode(&bytes).is_err());
     assert!(t0.elapsed().as_secs_f64() < 2.0);
 }

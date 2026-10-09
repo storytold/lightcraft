@@ -24,8 +24,8 @@
 use super::white_from_data;
 use crate::unpack::{unpack_lsb, unpack_words32_msb};
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
-use lightcraft_geom::Orientation;
-use lightcraft_tiff::{ByteOrder, Ifd, Tiff};
+use dac_geom::Orientation;
+use dac_tiff::{ByteOrder, Ifd, Tiff};
 use rayon::prelude::*;
 
 const CROP_TOP_LEFT: u16 = 0x0110;
@@ -88,7 +88,7 @@ fn pair(h: &Header, tag: u16) -> Option<(usize, usize)> {
 fn raw_ifd(raw: &[u8]) -> Result<Ifd> {
     let tiff = Tiff::parse(raw).map_err(|_| RawError::Unsupported("RAF without a raw IFD (older FinePix layout)".into()))?;
     let off = tiff.ifds.first().and_then(|i| i.u64(0xf000)).ok_or_else(|| RawError::Unsupported("RAF without a raw IFD".into()))?;
-    let (ifd, _) = lightcraft_tiff::parse_ifd_at(raw, off, ByteOrder::Little, 0, false, &Default::default())?;
+    let (ifd, _) = dac_tiff::parse_ifd_at(raw, off, ByteOrder::Little, 0, false, &Default::default())?;
     Ok(ifd)
 }
 
@@ -185,7 +185,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         ifd.f64s(0xf00e).filter(|v| v.len() >= 3 && v.iter().take(3).all(|x| *x > 0.0)).map(|v| [(v[1] / v[0]) as f32, 1.0, (v[2] / v[0]) as f32]);
     let white = white_from_data(&data, bits);
 
-    let mut metadata = h.jpeg.map(lightcraft_meta::extract).unwrap_or_default();
+    let mut metadata = h.jpeg.map(dac_meta::extract).unwrap_or_default();
     metadata.width = Some(active.width as u32);
     metadata.height = Some(active.height as u32);
     let orientation = metadata.orientation.unwrap_or(Orientation::Normal);

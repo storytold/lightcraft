@@ -1,4 +1,4 @@
-# lightcraft-heif
+# dac-heif
 
 The optional HEIF / HEIC decoder of LightCraft: iPhone and Mac photos. A thin, panic-guarded wrapper
 around [`heic-rs`](https://github.com/tbraun96/heic-rs), a pure-Rust HEVC still-picture decoder
@@ -7,8 +7,8 @@ decodes to 16-bit), alpha auxiliary images, the container's rotation/mirror/crop
 Read-only: writing would need an HEVC encoder.
 
 ```rust
-let info = lightcraft_heif::probe(&bytes)?;           // size, depth, alpha: check limits first
-let img = lightcraft_heif::decode(&bytes, &lightcraft_heif::Options::default())?;
+let info = dac_heif::probe(&bytes)?;           // size, depth, alpha: check limits first
+let img = dac_heif::decode(&bytes, &dac_heif::Options::default())?;
 // img.width, img.height, img.has_alpha, img.sixteen_bit, img.data (RGB/RGBA), img.icc, img.exif, img.xmp
 ```
 
@@ -22,11 +22,11 @@ one set of regression fixtures.
 
 - **A young decoder.** heic-rs is new and has a single maintainer. It is pinned exactly
   (`=0.1.1`); moving the pin is a reviewed change (re-run the crate tests and
-  `cargo test -p lightcraft-codecs --features heif`).
+  `cargo test -p dac-codecs --features heif`).
 - **HEVC patents are a distributor's call.** HEVC is patent-encumbered in some jurisdictions, so
-  whether a build includes an HEVC decoder is a build-time choice. `lightcraft-codecs` uses this
+  whether a build includes an HEVC decoder is a build-time choice. `dac-codecs` uses this
   crate only behind its non-default `heif` feature; the apps forward it
-  (`cargo build -p lightcraft --features heif`). Without it, HEIC files are still recognised and
+  (`cargo build -p dac-app --features heif`). Without it, HEIC files are still recognised and
   opening one is a clear "HEIC/HEIF support isn't included in this build" error — the same policy
   as PhotoCraft.
 

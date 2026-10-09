@@ -1,9 +1,9 @@
 //! The smart-album rule editor: match all / any / none of a list of rules (field, operator,
-//! value), with nested groups. Field and operator lists come from `lightcraft_catalog::rules`.
+//! value), with nested groups. Field and operator lists come from `dac_catalog::rules`.
 
+use dac_catalog::rules::{FIELDS, Kind, field_kind, ops_for};
+use dac_catalog::{Match, Rule, RuleSet};
 use egui::RichText;
-use lightcraft_catalog::rules::{FIELDS, Kind, field_kind, ops_for};
-use lightcraft_catalog::{Match, Rule, RuleSet};
 use serde_json::{Value, json};
 
 use crate::theme::Tokens;

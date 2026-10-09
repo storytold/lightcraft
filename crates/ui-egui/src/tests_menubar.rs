@@ -3,7 +3,7 @@
 //! pointer left on the title then opened the first row's submenu by itself.
 
 use crate::headless::Headless;
-use crate::{LightcraftApp, Services};
+use crate::{DacApp, Services};
 use serde_json::json;
 use std::time::Duration;
 
@@ -11,7 +11,7 @@ const T: Duration = Duration::from_secs(5);
 const SETTLE: Duration = Duration::from_secs(10);
 
 fn app(size: [f32; 2]) -> Headless {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let app = DacApp::new(dac_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, size, 1.0);
     h.settle(SETTLE);
     h

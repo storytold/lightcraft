@@ -12,8 +12,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use lightcraft_engine::files::{load_bytes, probe_bytes};
-use lightcraft_engine::media::{FileLoader, FileProbe};
+use dac_engine::files::{load_bytes, probe_bytes};
+use dac_engine::media::{FileLoader, FileProbe};
 
 /// Prefix of the catalog paths of files kept in browser storage.
 pub const PATH_PREFIX: &str = "web/";
@@ -40,7 +40,7 @@ pub fn storage_key(hash: &str) -> String {
 
 /// Hash of a file's bytes (the same as the catalog's `content_hash`).
 pub fn content_hash(bytes: &[u8]) -> String {
-    lightcraft_preview::hash_bytes(bytes).to_string()
+    dac_preview::hash_bytes(bytes).to_string()
 }
 
 #[derive(Default)]
@@ -157,13 +157,13 @@ impl Originals {
     }
 
     /// Install the hooks into a session.
-    pub fn install(&self, session: &mut lightcraft_engine::Session) {
+    pub fn install(&self, session: &mut dac_engine::Session) {
         let (l, p) = self.hooks();
         session.media.file_loader = Some(l);
         session.media.file_probe = Some(p);
         let s = self.clone();
         session.media.preview_loader =
-            Some(Arc::new(move |path: &str, max_edge: usize| lightcraft_engine::files::embedded_preview_srgb(&s.get(path)?, max_edge)));
+            Some(Arc::new(move |path: &str, max_edge: usize| dac_engine::files::embedded_preview_srgb(&s.get(path)?, max_edge)));
     }
 }
 
@@ -187,8 +187,8 @@ pub fn mime_for(name: &str) -> &'static str {
 #[cfg(test)]
 pub(crate) fn png_bytes(w: usize, h: usize) -> Vec<u8> {
     let bytes: Vec<u8> = (0..w * h).flat_map(|i| [(i * 7) as u8, 128, 200, 255]).collect();
-    let img = lightcraft_raster::Rgba8::from_bytes(w, h, &bytes).unwrap();
-    lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap()
+    let img = dac_raster::Rgba8::from_bytes(w, h, &bytes).unwrap();
+    dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).unwrap()
 }
 
 #[cfg(test)]
@@ -220,14 +220,14 @@ mod tests {
     #[test]
     fn import_and_render_from_memory() {
         let store = Originals::default();
-        let mut session = lightcraft_engine::Session::new();
+        let mut session = dac_engine::Session::new();
         store.install(&mut session);
         let bytes = png_bytes(40, 30);
         let hash = content_hash(&bytes);
         let path = store.added("tiny.png", &hash, bytes.into());
         assert_eq!(store.take_pending(), vec![path.clone()]);
         let r = session.execute("library.import", &json!({"paths": [path]})).unwrap();
-        let id = lightcraft_engine::catalog::PhotoId(r["imported"][0].as_u64().unwrap());
+        let id = dac_engine::catalog::PhotoId(r["imported"][0].as_u64().unwrap());
         let p = session.catalog.photo(id).unwrap();
         assert_eq!((p.width, p.height), (40, 30));
         assert_eq!(p.file_name, "tiny.png");

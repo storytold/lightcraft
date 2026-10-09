@@ -29,11 +29,11 @@ pub mod store;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use dac_develop::DevelopSettings;
 pub use dates::{DateRun, GroupBy};
 pub use folders::FolderNode;
 pub use journal::{Journal, LoadReport, PersistStats, SnapshotPolicy, SnapshotTiming};
 pub use keywords::KeywordNode;
-use lightcraft_develop::DevelopSettings;
 pub use local::{DEFAULT_FORGET_DAYS, ForgetPlan, folder_of};
 pub use lock::{LibraryLock, LockError, LockOwner};
 pub use model::*;

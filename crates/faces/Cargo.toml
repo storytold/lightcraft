@@ -1,5 +1,5 @@
 [package]
-name = "lightcraft-faces"
+name = "dac-faces"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

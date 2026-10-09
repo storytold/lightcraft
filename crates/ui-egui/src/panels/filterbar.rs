@@ -2,11 +2,11 @@
 //! edited state and camera / lens / keyword pickers — every control drives `library.filter`.
 //! "Save as Smart Album…" keeps the current view as a live album; "Clear" resets the filter.
 
+use dac_catalog::{ColorLabel, Flag, MediaKind, RatingOp};
 use egui::{Color32, Rect, Sense, Stroke, StrokeKind, vec2};
-use lightcraft_catalog::{ColorLabel, Flag, MediaKind, RatingOp};
 use serde_json::{Value, json};
 
-use crate::LightcraftApp;
+use crate::DacApp;
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -18,7 +18,7 @@ const WIDE: f32 = 1240.0;
 /// Colour-label swatches (UI colours, our own choice).
 pub use crate::theme::label_color;
 
-fn filter(app: &mut LightcraftApp, patch: Value) {
+fn filter(app: &mut DacApp, patch: Value) {
     let _ = app.run("library.filter", patch);
 }
 
@@ -55,7 +55,7 @@ fn toggle(ui: &mut egui::Ui, id: &str, on: bool, tip: &str, draw: impl FnOnce(&e
 }
 
 /// A dropdown showing `current`; `items` are (label, filter patch, selected).
-fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, current: &str, active: bool, items: Vec<(String, Value, bool)>) {
+fn picker(app: &mut DacApp, ui: &mut egui::Ui, id: &str, current: &str, active: bool, items: Vec<(String, Value, bool)>) {
     let t = Tokens::get(ui.ctx());
     let r = crate::widgets::dropdown(
         ui,
@@ -92,7 +92,7 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, current: &str, a
     }
 }
 
-pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     // one row when there is room, else the metadata pickers and actions go to a second row
     let two_rows = ui.available_width() < WIDE;

@@ -35,4 +35,4 @@ LightCraft 的界面支持英语、简体中文、繁体中文（台湾）和日
 `LIGHTCRAFT_LANGUAGE=zh-hans lightcraft-cli snapshot ...` 可以渲染中文界面用于检查。
 
 翻译是否完整、两种目录的键与占位符是否一致、字形是否齐全，都由
-`cargo test -p lightcraft-ui-egui i18n::tests` 验证（字形检查只在指定 `CRAFT_FONTS_DIR` 时实际执行）。
+`cargo test -p dac-ui-egui i18n::tests` 验证（字形检查只在指定 `CRAFT_FONTS_DIR` 时实际执行）。

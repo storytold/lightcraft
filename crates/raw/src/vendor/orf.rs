@@ -22,10 +22,10 @@ use super::{cfa_from_exif, white_from_data};
 use crate::tiffraw::{Packing, read_image};
 use crate::unpack::unpack_msb;
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
-use lightcraft_geom::Orientation;
-use lightcraft_tiff::image::chunk_bytes;
-use lightcraft_tiff::makernote::MakerNote;
-use lightcraft_tiff::{Ifd, Tiff, Value, makernote, tags as t};
+use dac_geom::Orientation;
+use dac_tiff::image::chunk_bytes;
+use dac_tiff::makernote::MakerNote;
+use dac_tiff::{Ifd, Tiff, Value, makernote, tags as t};
 use rayon::prelude::*;
 
 pub(crate) const CAMERA_SETTINGS: u16 = 0x2020;
@@ -51,8 +51,8 @@ pub(crate) fn sub_ifd(bytes: &[u8], mn: &MakerNote, tag: u16) -> Option<Ifd> {
         Value::Undefined(_) | Value::Byte(_) => e.offset,
         _ => mn.base.checked_add(mn.ifd.u64(tag)?)?,
     };
-    let opts = lightcraft_tiff::ParseOptions { max_ifds: 4, max_depth: 1, follow_children: false, ..Default::default() };
-    lightcraft_tiff::parse_ifd_at(bytes, at, mn.order, mn.base, false, &opts).ok().map(|(i, _)| i)
+    let opts = dac_tiff::ParseOptions { max_ifds: 4, max_depth: 1, follow_children: false, ..Default::default() };
+    dac_tiff::parse_ifd_at(bytes, at, mn.order, mn.base, false, &opts).ok().map(|(i, _)| i)
 }
 
 /// Unpack one row of 12-bit samples stored as little-endian 32-bit words read MSB-first.
@@ -167,7 +167,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         .filter(|v| v.len() >= 2 && v[0] > 0.0 && v[1] > 0.0)
         .map(|v| [(v[0] / 256.0) as f32, 1.0, (v[1] / 256.0) as f32]);
     let white = white_from_data(samples, bits);
-    let mut metadata = lightcraft_meta::from_tiff(&tiff);
+    let mut metadata = dac_meta::from_tiff(&tiff);
     metadata.width = Some(active.width as u32);
     metadata.height = Some(active.height as u32);
     let img = RawImage {
@@ -207,7 +207,7 @@ pub(crate) fn preview(bytes: &[u8]) -> Option<&[u8]> {
 mod tests {
     use super::*;
     use crate::vendor::EXIF_CFA_PATTERN;
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter};
+    use dac_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter};
 
     fn orf(w: u32, h: u32, bits: u16, strip: Vec<u8>) -> Vec<u8> {
         orf_with(w, h, bits, strip, None)

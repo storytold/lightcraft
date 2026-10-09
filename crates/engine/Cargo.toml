@@ -1,5 +1,5 @@
 [package]
-name = "lightcraft-engine"
+name = "dac-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,24 +9,24 @@ description = "LightCraft engine: session, command registry, history, render job
 workspace = true
 
 [dependencies]
-lightcraft-geom = { workspace = true }
-lightcraft-color = { workspace = true }
-lightcraft-raster = { workspace = true }
-lightcraft-develop = { workspace = true }
-lightcraft-scenes = { workspace = true }
-lightcraft-pipeline = { workspace = true }
-lightcraft-gpu = { workspace = true }
-lightcraft-catalog = { workspace = true }
+dac-geom = { workspace = true }
+dac-color = { workspace = true }
+dac-raster = { workspace = true }
+dac-develop = { workspace = true }
+dac-scenes = { workspace = true }
+dac-pipeline = { workspace = true }
+dac-gpu = { workspace = true }
+dac-catalog = { workspace = true }
 web-time = { workspace = true }
-lightcraft-preview = { workspace = true }
-lightcraft-codecs = { workspace = true }
-lightcraft-raw = { workspace = true }
-lightcraft-denoise-core = { workspace = true }
-lightcraft-denoise = { workspace = true, optional = true }
-lightcraft-meta = { workspace = true }
-lightcraft-faces = { workspace = true }
+dac-preview = { workspace = true }
+dac-codecs = { workspace = true }
+dac-raw = { workspace = true }
+dac-denoise-core = { workspace = true }
+dac-denoise = { workspace = true, optional = true }
+dac-meta = { workspace = true }
+dac-faces = { workspace = true }
 miniz_oxide = { workspace = true }
-lightcraft-merge = { workspace = true }
+dac-merge = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -36,18 +36,18 @@ ab_glyph = { workspace = true }
 # Apply the font’s vertical substitutions and origins to Japanese watermarks.
 harfrust = { version = "0.12", default-features = false, features = ["std"] }
 unicode-segmentation = "1.13"
-lightcraft-segment = { workspace = true, optional = true }
+dac-segment = { workspace = true, optional = true }
 
 # model downloads run natively only (the web build fetches no models)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-lightcraft-fetch = { workspace = true }
+dac-fetch = { workspace = true }
 
 [features]
 # AI masks with SAM 3 (Object / Describe). Off for the web and CLI builds.
-sam = ["dep:lightcraft-segment"]
-denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime", "lightcraft-gpu/denoise"]
-rawnind-model = ["denoise", "lightcraft-denoise/rawnind-model", "lightcraft-denoise-core/rawnind-model"]
+sam = ["dep:dac-segment"]
+denoise = ["dep:dac-denoise", "dac-denoise/runtime", "dac-gpu/denoise"]
+rawnind-model = ["denoise", "dac-denoise/rawnind-model", "dac-denoise-core/rawnind-model"]
 
 [dev-dependencies]
 libc = { workspace = true }
-lightcraft-tiff = { workspace = true }
+dac-tiff = { workspace = true }

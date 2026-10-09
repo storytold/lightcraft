@@ -1,5 +1,5 @@
 [package]
-name = "lightcraft-raw"
+name = "dac-raw"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,11 +9,11 @@ description = "LightCraft RAW decoding, demosaicing and DNG colour model (L1)"
 workspace = true
 
 [dependencies]
-lightcraft-tiff = { workspace = true }
-lightcraft-meta = { workspace = true }
-lightcraft-raster = { workspace = true }
-lightcraft-color = { workspace = true }
-lightcraft-geom = { workspace = true }
+dac-tiff = { workspace = true }
+dac-meta = { workspace = true }
+dac-raster = { workspace = true }
+dac-color = { workspace = true }
+dac-geom = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 rayon = { workspace = true }

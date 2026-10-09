@@ -1,17 +1,17 @@
 //! The right-hand panel next to the tool strip: Edit, Crop, Remove, Masking, Red Eye, Info,
 //! Keywords, Versions, Activity.
 
+use dac_catalog::PhotoId;
 use egui::{Align2, Rect, Sense, pos2, vec2};
-use lightcraft_catalog::PhotoId;
 use serde_json::json;
 
-use crate::LightcraftApp;
+use crate::DacApp;
 use crate::icons::{Icon, paint};
 use crate::state::RightPanel;
 use crate::theme::Tokens;
 use crate::widgets::{divider, register, slider, text_button};
 
-pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(egui::Stroke::new(1.0, t.divider));
     // the presets column and the left sidebar are laid out after this panel: leave them their room
@@ -101,7 +101,7 @@ fn aspect_label(aspect: Option<(u32, u32)>, original: Option<f64>) -> String {
 }
 
 /// "Custom" row of the aspect menu: two number fields and an Apply button (`crop.aspect` `[w, h]`).
-fn custom_aspect(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+fn custom_aspect(app: &mut DacApp, ui: &mut egui::Ui) {
     let key = egui::Id::new("crop-custom-aspect");
     let (mut w, mut h): (String, String) = ui.data_mut(|d| d.get_temp(key)).unwrap_or_else(|| ("3".into(), "2".into()));
     let mut apply = false;
@@ -119,7 +119,7 @@ fn custom_aspect(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // Accept `3`, `2.5` and `3,5`; anything else (zero, negative, text, huge) is ignored.
         let num = |t: &str| t.trim().replace(',', ".").parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0 && *v <= 1000.0);
         if let (Some(x), Some(y)) = (num(&w), num(&h))
-            && (1.0 / lightcraft_geom::MAX_RATIO..=lightcraft_geom::MAX_RATIO).contains(&(x / y))
+            && (1.0 / dac_geom::MAX_RATIO..=dac_geom::MAX_RATIO).contains(&(x / y))
         {
             let _ = app.run("crop.aspect", json!({"aspect": [x, y]}));
             ui.close();
@@ -128,7 +128,7 @@ fn custom_aspect(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.data_mut(|d| d.insert_temp(key, (w, h)));
 }
 
-fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+fn crop(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Crop");
     padded(ui, |ui| {
@@ -181,7 +181,7 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         });
     });
-    let ang = lightcraft_develop::controls::find("crop.angle").copied();
+    let ang = dac_develop::controls::find("crop.angle").copied();
     if let Some(spec) = ang {
         let out = slider(ui, &spec, d.crop.geometry.angle, true, Some("Straighten"));
         super::edit::apply_slider_out(app, &spec, out, |app, v| app.run("crop.straighten", json!({"angle": v})));
@@ -230,7 +230,7 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     padded(ui, |ui| {
         ui.label(crate::i18n::tr("Upright"));
         {
-            use lightcraft_develop::Upright;
+            use dac_develop::Upright;
             let modes = [
                 ("Off", Upright::Off, "off"),
                 ("Auto", Upright::Auto, "auto"),
@@ -247,10 +247,10 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 app.ui.tool = if mode == Upright::Guided { "guidedUpright".into() } else { String::new() };
             }
         }
-        let guided = d.geometry.upright == lightcraft_develop::Upright::Guided;
+        let guided = d.geometry.upright == dac_develop::Upright::Guided;
         ui.horizontal_wrapped(|ui| {
             if !guided
-                && d.geometry.upright != lightcraft_develop::Upright::Off
+                && d.geometry.upright != dac_develop::Upright::Off
                 && text_button(ui, "uprightUpdate", crate::i18n::tr("Update"), false).clicked()
             {
                 let mode = serde_json::to_value(d.geometry.upright).unwrap_or_default();
@@ -282,14 +282,14 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let _ = app.run("develop.merge", json!({"settings": {"geometry": {"constrain_crop": c}}, "label": "Constrain Crop"}));
         }
     });
-    for spec in lightcraft_develop::controls::in_section(lightcraft_develop::Section::Geometry).filter(|c| c.id != "crop.angle") {
-        let v = lightcraft_develop::controls::get(&d, spec.id).unwrap_or(spec.default);
+    for spec in dac_develop::controls::in_section(dac_develop::Section::Geometry).filter(|c| c.id != "crop.angle") {
+        let v = dac_develop::controls::get(&d, spec.id).unwrap_or(spec.default);
         let out = slider(ui, spec, v, true, None);
         super::edit::apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": spec.id, "value": v})));
     }
 }
 
-fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+fn remove(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Remove");
     padded(ui, |ui| {
@@ -331,22 +331,22 @@ fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         (app.ui.remove_size, app.ui.remove_feather, app.ui.remove_opacity) = (sp.size as f32, sp.feather as f32, sp.opacity as f32);
         divider(ui);
         let mode = match sp.mode {
-            lightcraft_develop::SpotMode::Heal => "Heal",
-            lightcraft_develop::SpotMode::Clone => "Clone",
-            lightcraft_develop::SpotMode::Remove => "Remove",
+            dac_develop::SpotMode::Heal => "Heal",
+            dac_develop::SpotMode::Clone => "Clone",
+            dac_develop::SpotMode::Remove => "Remove",
         };
         super::edit::sub_title(ui, &crate::i18n::tr_format!("{mode} spot {} of {}", i + 1, d.spots.len(), mode = mode));
     }
-    let plain = |id: &'static str, label: &'static str, min: f64, max: f64, default: f64| lightcraft_develop::ControlSpec {
+    let plain = |id: &'static str, label: &'static str, min: f64, max: f64, default: f64| dac_develop::ControlSpec {
         id,
         label,
-        section: lightcraft_develop::Section::Detail,
+        section: dac_develop::Section::Detail,
         min,
         max,
         default,
         step: 1.0,
         decimals: 0,
-        track: lightcraft_develop::Track::Plain,
+        track: dac_develop::Track::Plain,
     };
     let sliders = [
         (plain("ui.removeSize", "Size", 1.0, 250.0, 20.0), "size", (app.ui.remove_size * 1000.0) as f64),
@@ -386,16 +386,16 @@ fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             app.ui.visualize_spots = v;
         }
     });
-    let spec = lightcraft_develop::ControlSpec {
+    let spec = dac_develop::ControlSpec {
         id: "ui.spotsThreshold",
         label: "Threshold",
-        section: lightcraft_develop::Section::Detail,
+        section: dac_develop::Section::Detail,
         min: 0.0,
         max: 100.0,
         default: 50.0,
         step: 1.0,
         decimals: 0,
-        track: lightcraft_develop::Track::Plain,
+        track: dac_develop::Track::Plain,
     };
     let out = slider(ui, &spec, app.ui.spots_threshold as f64, app.ui.visualize_spots, None);
     if let Some(v) = out.value {
@@ -410,7 +410,7 @@ fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     });
 }
 
-fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+fn red_eye(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Red Eye");
     padded(ui, |ui| {
@@ -448,8 +448,8 @@ fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     );
     for k in ["pupilSize", "darken"] {
         let cid = format!("redEye.{i}.{k}");
-        let Some(spec) = lightcraft_develop::controls::find(&cid) else { continue };
-        let v = lightcraft_develop::controls::get(&d, &cid).unwrap_or(spec.default);
+        let Some(spec) = dac_develop::controls::find(&cid) else { continue };
+        let v = dac_develop::controls::get(&d, &cid).unwrap_or(spec.default);
         let out = slider(ui, spec, v, true, None);
         super::edit::apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": cid, "value": v})));
     }
@@ -474,7 +474,7 @@ fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     });
 }
 
-fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+fn info(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
     header(ui, "Info");
     let t = Tokens::get(ui.ctx());
@@ -500,7 +500,7 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.add_space(6.0);
         // colour label: one swatch per label (hover shows its name); clicking the current one clears it
         ui.horizontal(|ui| {
-            for l in lightcraft_catalog::ColorLabel::ALL {
+            for l in dac_catalog::ColorLabel::ALL {
                 let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
                 let key = format!("{l:?}").to_lowercase();
                 register(ui.ctx(), format!("label:{key}"), r);
@@ -554,8 +554,8 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         small(ui, "File Path");
         ui.horizontal(|ui| {
             let path = match &p.source {
-                lightcraft_catalog::Source::File { path } => path.clone(),
-                lightcraft_catalog::Source::Demo { .. } => crate::i18n::tr("Generated demo photo").into(),
+                dac_catalog::Source::File { path } => path.clone(),
+                dac_catalog::Source::Demo { .. } => crate::i18n::tr("Generated demo photo").into(),
             };
             ui.add(egui::Label::new(egui::RichText::new(path).size(12.0).color(t.text_label)).truncate());
             if crate::menus::ui_enabled(app, "app.showInFinder") {
@@ -634,7 +634,7 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         // offline originals / smart previews
         // (cached answers, checked off the UI thread: unknown counts as online / no smart preview)
-        if let lightcraft_catalog::Source::File { path } = &p.source {
+        if let dac_catalog::Source::File { path } = &p.source {
             let avail = &app.session.media.availability;
             let online = !avail.is_offline(path);
             let smart = app
@@ -642,7 +642,7 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 .media
                 .smart_dir
                 .as_ref()
-                .is_some_and(|d| avail.exists(&d.join(lightcraft_engine::smart::file_name(&p)).to_string_lossy()) == Some(true));
+                .is_some_and(|d| avail.exists(&d.join(dac_engine::smart::file_name(&p)).to_string_lossy()) == Some(true));
             if !online || smart {
                 let text = match (online, smart) {
                     (false, true) => "Original offline · editing the smart preview",
@@ -665,7 +665,7 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
 
 /// The camera card at the top of Info: camera, lens, size · file size and format, then the
 /// capture settings.
-fn camera_card(ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
+fn camera_card(ui: &mut egui::Ui, p: &dac_catalog::Photo) {
     let t = Tokens::get(ui.ctx());
     let m = &p.meta;
     egui::Frame::NONE.fill(t.canvas).corner_radius(6.0).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
@@ -715,11 +715,11 @@ fn human_size(bytes: u64) -> String {
 /// A labelled metadata text field: the typed text lives in egui memory while focused and is
 /// saved (photo.setMeta `key`) when the field loses focus.
 /// Copyright Status: Unknown / Copyrighted / Public Domain (`xmpRights:Marked`).
-fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcraft_catalog::CopyrightStatus) {
+fn copyright_status(app: &mut DacApp, ui: &mut egui::Ui, current: dac_catalog::CopyrightStatus) {
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(crate::i18n::tr("Copyright Status")).size(11.5).color(t.text_dim));
     let r = egui::ComboBox::from_id_salt("info-copyright-status").selected_text(crate::i18n::tr(current.label())).show_ui(ui, |ui| {
-        for st in lightcraft_catalog::CopyrightStatus::ALL {
+        for st in dac_catalog::CopyrightStatus::ALL {
             if ui.selectable_label(st == current, crate::i18n::tr(st.label())).clicked() && st != current {
                 let _ = app.run("photo.setMeta", json!({"copyrightStatus": st.id()}));
             }
@@ -729,7 +729,7 @@ fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcr
     ui.add_space(6.0);
 }
 
-fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str, value: &str, lines: usize) {
+fn meta_field(app: &mut DacApp, ui: &mut egui::Ui, label: &str, key: &str, value: &str, lines: usize) {
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(crate::i18n::tr(label)).size(11.5).color(t.text_dim));
     let id = egui::Id::new(("info-field", key));
@@ -748,7 +748,7 @@ fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str
     ui.add_space(6.0);
 }
 
-fn keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+fn keywords(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
     header(ui, "Keywords");
     let t = Tokens::get(ui.ctx());
@@ -838,21 +838,18 @@ fn keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
 
 /// The keyword set: pick a set, then nine buttons (⌥1–⌥9) that toggle its keywords on the
 /// selected photos; "Save as Set…" keeps the current nine under a name.
-fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui, have: &[String]) {
+fn keyword_set(app: &mut DacApp, ui: &mut egui::Ui, have: &[String]) {
     let t = Tokens::get(ui.ctx());
-    let sets = lightcraft_engine::cmd::keywords::keyword_sets_json(&app.session);
+    let sets = dac_engine::cmd::keywords::keyword_sets_json(&app.session);
     let current = sets["current"].as_str().unwrap_or_default().to_string();
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Keyword Set")).color(t.text_dim));
         egui::ComboBox::from_id_salt("kw-set")
-            .selected_text(crate::i18n::builtin_label(&current, current == lightcraft_engine::cmd::keywords::RECENT))
+            .selected_text(crate::i18n::builtin_label(&current, current == dac_engine::cmd::keywords::RECENT))
             .show_ui(ui, |ui| {
                 for set in sets["sets"].as_array().into_iter().flatten() {
                     let name = set["name"].as_str().unwrap_or_default();
-                    if ui
-                        .selectable_label(name == current, crate::i18n::builtin_label(name, name == lightcraft_engine::cmd::keywords::RECENT))
-                        .clicked()
-                    {
+                    if ui.selectable_label(name == current, crate::i18n::builtin_label(name, name == dac_engine::cmd::keywords::RECENT)).clicked() {
                         let _ = app.run("keyword.useSet", json!({"name": name}));
                     }
                 }
@@ -867,7 +864,7 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui, have: &[String]) {
                         key: "name".into(),
                     });
                 }
-                if current != lightcraft_engine::cmd::keywords::RECENT
+                if current != dac_engine::cmd::keywords::RECENT
                     && ui.button(crate::i18n::tr_format!("Delete “{current}”", current = current)).clicked()
                 {
                     let _ = app.run("keyword.deleteSet", json!({"name": current}));
@@ -901,7 +898,7 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui, have: &[String]) {
     });
 }
 
-fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+fn versions(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
     header(ui, "Versions");
     let t = Tokens::get(ui.ctx());
@@ -923,7 +920,7 @@ fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.data_mut(|d| d.insert_temp(tab_id, auto));
         }
         ui.add_space(6.0);
-        let shown: Vec<(usize, &lightcraft_catalog::Version)> = p.versions.iter().enumerate().filter(|(_, v)| v.auto == auto).collect();
+        let shown: Vec<(usize, &dac_catalog::Version)> = p.versions.iter().enumerate().filter(|(_, v)| v.auto == auto).collect();
         if shown.is_empty() {
             let msg = if auto { "No automatic versions." } else { "No versions yet. Create one to keep this look." };
             ui.label(egui::RichText::new(crate::i18n::tr(msg)).color(t.text_dim));
@@ -996,7 +993,7 @@ fn short_time(iso: &str) -> String {
     if crate::i18n::language() != crate::i18n::Locale::En {
         return crate::i18n::display_time(iso);
     }
-    let long = lightcraft_catalog::dates::display_time(iso);
+    let long = dac_catalog::dates::display_time(iso);
     // "September 30, 2026 at 12:00:00 PM" → month abbreviated, seconds dropped
     let (date, time) = long.split_once(" at ").map_or((long.as_str(), None), |(d, t)| (d, Some(t)));
     let date = match date.split_once(' ') {
@@ -1009,7 +1006,7 @@ fn short_time(iso: &str) -> String {
     }
 }
 
-fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+fn activity(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
     header(ui, "History");
     let t = Tokens::get(ui.ctx());

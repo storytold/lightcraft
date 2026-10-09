@@ -83,7 +83,7 @@ fn apply(b: usize) {
     if let Some(g) = GATE.get() {
         g.set_limit(b / 4);
     }
-    lightcraft_gpu::set_pool_limit((b / 8) as u64);
+    dac_gpu::set_pool_limit((b / 8) as u64);
 }
 
 /// Share of the budget for the engine's caches.
@@ -266,7 +266,7 @@ pub fn heap_stats() -> Option<HeapUsage> {
 
 /// The GPU renderer's device buffers.
 pub fn gpu_usage() -> GpuUsage {
-    let g = lightcraft_gpu::memory();
+    let g = dac_gpu::memory();
     GpuUsage { allocated: g.allocated, pooled: g.pooled, retired: g.retired }
 }
 

@@ -22,7 +22,7 @@ fn session(dir: &std::path::Path) -> Session {
 
 fn model_file(dir: &std::path::Path, name: &str, dim: u64) -> String {
     let p = dir.join(name);
-    std::fs::write(&p, lightcraft_faces::synthetic::tiny_embedder_model(dim)).unwrap();
+    std::fs::write(&p, dac_faces::synthetic::tiny_embedder_model(dim)).unwrap();
     p.to_string_lossy().into_owned()
 }
 
@@ -146,8 +146,8 @@ fn hostile_ids_unsupported_models_and_odd_folders_are_handled() {
     // a folder whose manifest lies about its id is ignored
     let liar = models.join("liar");
     std::fs::create_dir_all(&liar).unwrap();
-    std::fs::write(liar.join("model.onnx"), lightcraft_faces::synthetic::embedder_model(64)).unwrap();
-    let mut m = lightcraft_faces::known::auraface();
+    std::fs::write(liar.join("model.onnx"), dac_faces::synthetic::embedder_model(64)).unwrap();
+    let mut m = dac_faces::known::auraface();
     m.id = "someone-else".into();
     std::fs::write(liar.join("face-model.json"), serde_json::to_vec(&m).unwrap()).unwrap();
     std::fs::write(models.join("settings.json"), b"{ not json").unwrap();
@@ -161,7 +161,7 @@ fn hostile_ids_unsupported_models_and_odd_folders_are_handled() {
     assert!(e.contains("cannot be used yet"), "{e}");
     let tokens = d.join("tokens.onnx");
     {
-        use lightcraft_faces::synthetic::{len_field, value_info_bytes};
+        use dac_faces::synthetic::{len_field, value_info_bytes};
         let mut graph = Vec::new();
         len_field(11, &value_info_bytes("pixels", 1, &[Err("N"), Ok(3), Ok(224), Ok(224)]), &mut graph);
         len_field(12, &value_info_bytes("tokens", 1, &[Err("N"), Ok(257), Ok(384)]), &mut graph);
@@ -239,8 +239,8 @@ fn a_download_that_has_arrived_is_installed_by_itself_and_its_staged_file_goes()
     let staging = d.join("models").join(".downloads");
     std::fs::create_dir_all(&staging).unwrap();
     let staged = staging.join("model.onnx");
-    std::fs::write(&staged, lightcraft_faces::synthetic::tiny_embedder_model(512)).unwrap();
-    let sha = lightcraft_faces::hash::sha256_file(&staged).unwrap();
+    std::fs::write(&staged, dac_faces::synthetic::tiny_embedder_model(512)).unwrap();
+    let sha = dac_faces::hash::sha256_file(&staged).unwrap();
     s.face_downloads.arrived("my-model", staged.clone(), &sha);
 
     let r = s.execute("faces.models.downloads", &json!({})).unwrap();
@@ -256,7 +256,7 @@ fn a_download_that_has_arrived_is_installed_by_itself_and_its_staged_file_goes()
 
     // a file that cannot be installed is thrown away with a reason
     std::fs::write(&staged, b"this is not a model").unwrap();
-    let sha = lightcraft_faces::hash::sha256_file(&staged).unwrap();
+    let sha = dac_faces::hash::sha256_file(&staged).unwrap();
     s.face_downloads.arrived("bad", staged.clone(), &sha);
     let r = s.execute("faces.models.downloads", &json!({})).unwrap();
     assert_eq!(r["downloads"][0]["state"], "failed", "{r}");
@@ -268,10 +268,10 @@ fn a_download_that_has_arrived_is_installed_by_itself_and_its_staged_file_goes()
 /// never regions that came from XMP or were named; one undo step restores everything.
 #[test]
 fn detect_replaces_only_earlier_detections_and_is_one_undo_step() {
-    use lightcraft_catalog::Op;
-    use lightcraft_meta::{Region, RegionKind};
+    use dac_catalog::Op;
+    use dac_meta::{Region, RegionKind};
     let region = |name: Option<&str>, description: Option<&str>, x: f64| Region {
-        rect: lightcraft_geom::Rect { x0: x, y0: 0.2, x1: x + 0.2, y1: 0.5 },
+        rect: dac_geom::Rect { x0: x, y0: 0.2, x1: x + 0.2, y1: 0.5 },
         kind: RegionKind::Face,
         name: name.map(str::to_string),
         description: description.map(str::to_string),
@@ -310,7 +310,7 @@ fn detect_replaces_only_earlier_detections_and_is_one_undo_step() {
     assert!(empty.execute("faces.detect", &json!({})).is_err());
 }
 
-/// Opt-in, needs the internet: `cargo test -p lightcraft-engine real_download -- --ignored --nocapture`. Downloads YuNet
+/// Opt-in, needs the internet: `cargo test -p dac-engine real_download -- --ignored --nocapture`. Downloads YuNet
 /// from its pinned address the way the app does, waits for it to be installed, then finds faces with it.
 #[test]
 #[ignore = "downloads from github.com"]
@@ -393,7 +393,7 @@ fn installing_runs_the_self_test_and_refuses_models_that_do_not_work() {
     assert!(s.execute("faces.models.test", &json!({})).is_err());
     // a graph with no layers passes the shape check but cannot run: refused, and nothing is left on disk
     let broken = d.join("Broken.onnx");
-    std::fs::write(&broken, lightcraft_faces::synthetic::embedder_model(64)).unwrap();
+    std::fs::write(&broken, dac_faces::synthetic::embedder_model(64)).unwrap();
     let e = s.execute("faces.models.install", &json!({"path": broken.to_string_lossy(), "acknowledged": true})).unwrap_err().to_string();
     assert!(e.contains("could not be loaded") || e.contains("self-test"), "{e}");
     let leftovers: Vec<_> = std::fs::read_dir(d.join("models"))
@@ -417,7 +417,7 @@ fn failed_replacement_keeps_the_installed_model_and_records() {
         let catalog = json!({"models": [{
             "id": "replacement", "name": "Replacement", "version": "1", "role": "embedder",
             "url": "https://models.example.org/weights.onnx",
-            "sha256": lightcraft_faces::hash::sha256_file(path).unwrap(),
+            "sha256": dac_faces::hash::sha256_file(path).unwrap(),
             "sizeBytes": std::fs::metadata(path).unwrap().len(),
             "licence": {"name": "MIT", "commercial": "yes"},
             "output": {"kind": "embedding", "dim": 64}
@@ -432,7 +432,7 @@ fn failed_replacement_keeps_the_installed_model_and_records() {
     let before: Vec<_> = files.iter().map(|name| std::fs::read(home.join(name)).unwrap()).collect();
     let settings = std::fs::read(models.join("settings.json")).unwrap();
     let bad = d.join("Bad.onnx");
-    std::fs::write(&bad, lightcraft_faces::synthetic::embedder_model(64)).unwrap();
+    std::fs::write(&bad, dac_faces::synthetic::embedder_model(64)).unwrap();
     write_catalog(&bad);
     let mut s = session(&d);
     assert!(s.execute("faces.models.install", &json!({"path": bad, "acknowledged": true})).is_err());
@@ -500,7 +500,7 @@ fn a_download_that_arrives_is_installed_and_switched_on_by_itself() {
     std::fs::create_dir_all(&staging).unwrap();
     // what the download thread leaves when it succeeds: a verified file in the staging folder and a finished job
     let staged = model_file(&staging, "arrived.onnx", 64);
-    let sha = lightcraft_faces::hash::sha256_file(std::path::Path::new(&staged)).unwrap();
+    let sha = dac_faces::hash::sha256_file(std::path::Path::new(&staged)).unwrap();
     s.face_downloads.set_outcome("fake-model", State::Done { path: staged.clone().into(), sha256: sha });
     let r = s.execute("faces.models.downloads", &json!({})).unwrap();
     assert_eq!(r["downloads"][0]["id"], "fake-model");
@@ -517,7 +517,7 @@ fn a_download_that_arrives_is_installed_and_switched_on_by_itself() {
     // a download that turns out not to be a usable model is thrown away, and the reason is shown
     let junk = staging.join("junk.onnx");
     std::fs::write(&junk, b"definitely not a model").unwrap();
-    let sha = lightcraft_faces::hash::sha256_file(&junk).unwrap();
+    let sha = dac_faces::hash::sha256_file(&junk).unwrap();
     s.face_downloads.set_outcome("fake-junk", State::Done { path: junk.clone(), sha256: sha });
     let r = s.execute("faces.models.downloads", &json!({})).unwrap();
     assert_eq!(r["downloads"][0]["state"], "failed", "{r}");
@@ -536,7 +536,7 @@ fn the_users_own_catalog_adds_models_with_the_same_download_and_install() {
     std::fs::create_dir_all(&models).unwrap();
     // a model file, and a catalog that lists it by its hash (plus an entry that cannot be used)
     let file = model_file(&d, "weights.onnx", 64);
-    let (sha, size) = (lightcraft_faces::hash::sha256_file(std::path::Path::new(&file)).unwrap(), std::fs::metadata(&file).unwrap().len());
+    let (sha, size) = (dac_faces::hash::sha256_file(std::path::Path::new(&file)).unwrap(), std::fs::metadata(&file).unwrap().len());
     let catalog = json!({"models": [
         {"id": "my-research-model", "name": "My research model", "version": "1", "role": "embedder", "url": "https://models.example.org/w/weights.onnx",
          "sha256": sha, "sizeBytes": size, "licence": {"name": "Research only", "commercial": "no", "notice": "Not for commercial use."},

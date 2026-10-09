@@ -2,7 +2,7 @@
 //! with `cargo xtask corpus --download`). Each test skips cleanly when its directory is absent.
 //! `LIGHTCRAFT_CORPUS` overrides the corpus root.
 
-use lightcraft_codecs::*;
+use dac_codecs::*;
 use std::path::{Path, PathBuf};
 
 fn corpus_root() -> PathBuf {
@@ -100,7 +100,7 @@ fn corpus_raw_is_routed() {
 /// Parse the OS-provided ICC profiles when present (macOS ColorSync; read-only, nothing copied).
 #[test]
 fn system_icc_profiles() {
-    use lightcraft_codecs::icc::{IccColorModel, IccKind, parse};
+    use dac_codecs::icc::{IccColorModel, IccKind, parse};
     let dir = Path::new("/System/Library/ColorSync/Profiles");
     if !dir.is_dir() {
         eprintln!("skip: no system ICC profiles");

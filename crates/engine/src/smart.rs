@@ -8,16 +8,16 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use lightcraft_catalog::Photo;
-use lightcraft_color::transfer::linear_to_srgb;
-use lightcraft_pipeline::tone::CameraTone;
-use lightcraft_raster::{Rgb32f, Rgba8};
+use dac_catalog::Photo;
+use dac_color::transfer::linear_to_srgb;
+use dac_pipeline::tone::CameraTone;
+use dac_raster::{Rgb32f, Rgba8};
 
 const MAGIC: &[u8] = b"LCSP1\n";
 
 /// The proxy's file name for a photo (by its content, so copies share one).
 pub fn file_name(p: &Photo) -> String {
-    let h = lightcraft_preview::Hasher128::new().str(&crate::media::content_key(p)).finish();
+    let h = dac_preview::Hasher128::new().str(&crate::media::content_key(p)).finish();
     format!("{:032x}.lcsp", h.0)
 }
 
@@ -45,13 +45,8 @@ pub fn encode(img: &Rgb32f, tone: Option<&CameraTone>) -> Result<Vec<u8>, String
         })
         .collect();
     let rgba = Rgba8 { width: img.width, height: img.height, data };
-    let jpg = lightcraft_codecs::encode_jpeg(
-        &lightcraft_codecs::EncodeImage::rgba8(&rgba),
-        92,
-        lightcraft_codecs::ChromaSubsampling::S444,
-        &Default::default(),
-    )
-    .map_err(|e| e.to_string())?;
+    let jpg = dac_codecs::encode_jpeg(&dac_codecs::EncodeImage::rgba8(&rgba), 92, dac_codecs::ChromaSubsampling::S444, &Default::default())
+        .map_err(|e| e.to_string())?;
     let mut out = MAGIC.to_vec();
     let mut head = serde_json::json!({"w": img.width, "h": img.height, "scale": scale});
     if let Some(t) = tone {
@@ -71,7 +66,7 @@ pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>), String> {
     let head: serde_json::Value = serde_json::from_slice(&rest[..nl]).map_err(|e| e.to_string())?;
     let scale = head["scale"].as_f64().unwrap_or(1.0) as f32;
     let tone = head.get("tone").and_then(|t| serde_json::from_value::<CameraTone>(t.clone()).ok());
-    let d = lightcraft_codecs::decode(&rest[nl + 1..], Default::default()).map_err(|e| e.to_string())?;
+    let d = dac_codecs::decode(&rest[nl + 1..], Default::default()).map_err(|e| e.to_string())?;
     // the decoder undoes the sRGB encoding; the values are the source's own primaries
     let mut img = d.image;
     img.data.iter_mut().for_each(|c| *c = c.map(|v| v * scale));
@@ -149,9 +144,7 @@ pub fn migrate(from: &Path, to: &Path, what: Existing) -> (usize, Vec<String>) {
                 } else {
                     // across drives: copied atomically (never a partial proxy at the new place)
                     std::fs::rename(&src, &dst).or_else(|_| {
-                        std::fs::read(&src)
-                            .and_then(|b| lightcraft_catalog::safe_file::write_atomic(&dst, &b))
-                            .and_then(|()| std::fs::remove_file(&src))
+                        std::fs::read(&src).and_then(|b| dac_catalog::safe_file::write_atomic(&dst, &b)).and_then(|()| std::fs::remove_file(&src))
                     })
                 }
             }
@@ -240,7 +233,7 @@ mod tests {
         let (a, b) = (base.join("a"), base.join("b"));
         std::fs::create_dir_all(&a).unwrap();
         std::fs::create_dir_all(&b).unwrap();
-        let img = lightcraft_scenes::demo_library()[0].render(64, 40);
+        let img = dac_scenes::demo_library()[0].render(64, 40);
         let good = encode(&img, None).unwrap();
         std::fs::write(a.join("1.lcsp"), &good).unwrap();
         assert!(is_valid(&a.join("1.lcsp")));
@@ -262,7 +255,7 @@ mod tests {
             [x, 0.95 * (1.0 - (-2.7 * x).exp())]
         }))
         .unwrap();
-        let img = lightcraft_scenes::demo_library()[0].render(64, 40);
+        let img = dac_scenes::demo_library()[0].render(64, 40);
         let bytes = encode(&img, Some(&tone)).unwrap();
         assert_eq!(decode(&bytes).unwrap().1, Some(tone));
         let dir = temp("tone");
@@ -272,7 +265,7 @@ mod tests {
         assert!(is_valid(&path));
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.camera_tone, Some(tone));
-        let header = lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() };
+        let header = dac_pipeline::SourceInfo { raw: true, ..Default::default() };
         assert_eq!(loaded.info_or(header).camera_tone, Some(tone));
         // a hostile curve (reversing knots) is ignored, not trusted
         let nl = MAGIC.len() + bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
@@ -290,7 +283,7 @@ mod tests {
 
     #[test]
     fn roundtrip_keeps_the_picture() {
-        let img = lightcraft_scenes::demo_library()[0].render(160, 100);
+        let img = dac_scenes::demo_library()[0].render(160, 100);
         let (back, tone) = decode(&encode(&img, None).unwrap()).unwrap();
         assert_eq!((back.width, back.height), (img.width, img.height));
         assert!(tone.is_none());

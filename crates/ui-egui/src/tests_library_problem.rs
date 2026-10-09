@@ -8,7 +8,7 @@ use serde_json::json;
 
 use crate::headless::Headless;
 use crate::panels::library_problem::LibraryProblem;
-use crate::{LightcraftApp, Services};
+use crate::{DacApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 
@@ -22,19 +22,19 @@ fn unopenable_library_asks_instead_of_running_a_demo() {
     let _ = std::fs::remove_dir_all(&dir);
     let lib = dir.join("lib");
     std::fs::create_dir_all(&lib).unwrap();
-    let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[90, 3, 9, 255]; 64] };
-    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    let img = dac_raster::Rgba8 { width: 8, height: 8, data: vec![[90, 3, 9, 255]; 64] };
+    let png = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).unwrap();
     let photo = dir.join("a.png");
     std::fs::write(&photo, png).unwrap();
 
     // another program has the library open: the launch fails like the desktop host's would
-    let held = lightcraft_catalog::LibraryLock::acquire(&lib, "another LightCraft").unwrap();
-    let mut session = lightcraft_engine::Session::new().with_fs();
+    let held = dac_catalog::LibraryLock::acquire(&lib, "another LightCraft").unwrap();
+    let mut session = dac_engine::Session::new().with_fs();
     let err = session.open_library(&lib, true).unwrap_err().to_string();
-    let png = |img: &lightcraft_raster::Rgba8| {
-        lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
+    let png = |img: &dac_raster::Rgba8| {
+        dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(img), &dac_codecs::EncodeMeta::default()).unwrap_or_default()
     };
-    let mut app = LightcraftApp::new(
+    let mut app = DacApp::new(
         session,
         Services {
             png: Some(Box::new(png)),

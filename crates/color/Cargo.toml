@@ -1,5 +1,5 @@
 [package]
-name = "lightcraft-color"
+name = "dac-color"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,7 +10,7 @@ workspace = true
 
 [dependencies]
 serde = { workspace = true }
-lightcraft-geom = { workspace = true }
+dac-geom = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

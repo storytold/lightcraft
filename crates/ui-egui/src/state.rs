@@ -213,13 +213,13 @@ impl AppSettings {
     /// source level. A full-size decode would replace the open photo's single full-resolution
     /// source in the cache, and nothing is gained by it.
     pub fn prefetch_edge(&self, wanted_px: f32, native_long_edge: usize, texture_side: usize) -> usize {
-        self.loupe_edge(wanted_px, native_long_edge, texture_side).min(lightcraft_engine::SourceLevel::Preview.max_edge())
+        self.loupe_edge(wanted_px, native_long_edge, texture_side).min(dac_engine::SourceLevel::Preview.max_edge())
     }
 
     /// Long edge for the hover (preset / profile) and Before renders, which are stand-ins drawn
     /// over the loupe: capped at the preview source level like the old default.
     pub fn stand_in_edge(&self, loupe_edge: usize, texture_side: usize) -> usize {
-        loupe_edge.min(lightcraft_engine::SourceLevel::Preview.max_edge()).min(texture_side.max(MIN_TEXTURE_SIDE))
+        loupe_edge.min(dac_engine::SourceLevel::Preview.max_edge()).min(texture_side.max(MIN_TEXTURE_SIDE))
     }
 
     /// Long edge of the zoomed frame a window render is cut from, for a photo drawn `drawn_long`
@@ -307,7 +307,7 @@ pub struct UiState {
     pub histogram: bool,
     /// Soft proofing (S in the loupe): render as `proof` would hold the photo.
     pub soft_proof: bool,
-    pub proof: lightcraft_engine::pipeline::Proof,
+    pub proof: dac_engine::pipeline::Proof,
     /// Masking: show the selected mask as a rendered overlay (O), how (`MaskView` name, ⇧O cycles),
     /// in which colour and opacity (0..100, colour views), and whether pins are drawn.
     pub mask_overlay: bool,
@@ -470,7 +470,7 @@ pub struct UiState {
     pub reference: Option<u64>,
     /// Transient toast text, expiry (seconds of app time), and optional colour-label styling.
     #[serde(skip)]
-    pub toast: Option<(String, f64, Option<lightcraft_catalog::ColorLabel>)>,
+    pub toast: Option<(String, f64, Option<dac_catalog::ColorLabel>)>,
     /// The result of the last Find Missing Photos (it searches in the background).
     #[serde(skip)]
     pub last_find_missing: Option<serde_json::Value>,
@@ -483,7 +483,7 @@ pub struct UiState {
 /// Settings group ids (`SettingsGroup` serde names) a new preset includes by default: everything
 /// but crop, masks, spots and red eye.
 pub fn default_preset_groups() -> Vec<String> {
-    lightcraft_develop::SettingsGroup::default_copy().iter().filter_map(|g| serde_json::to_value(g).ok()?.as_str().map(str::to_string)).collect()
+    dac_develop::SettingsGroup::default_copy().iter().filter_map(|g| serde_json::to_value(g).ok()?.as_str().map(str::to_string)).collect()
 }
 
 impl Dialog {
@@ -605,7 +605,7 @@ pub enum Dialog {
     SmartRules {
         id: Option<u64>,
         name: String,
-        rules: lightcraft_catalog::RuleSet,
+        rules: dac_catalog::RuleSet,
         /// The folder a new smart album is created in (ignored when editing).
         #[serde(default)]
         parent: Option<u64>,
@@ -626,9 +626,9 @@ pub enum Dialog {
     },
     /// `resize` is used unless `full_size`; `limit_kb` 0 = no limit; `dir` empty = default export folder.
     Export {
-        opts: lightcraft_engine::export::ExportOptions,
+        opts: dac_engine::export::ExportOptions,
         full_size: bool,
-        resize: lightcraft_engine::export::Resize,
+        resize: dac_engine::export::Resize,
         /// Name typed for "Save as Preset".
         #[serde(default)]
         preset_name: String,
@@ -696,7 +696,7 @@ impl Default for UiState {
             show_clipping: false,
             histogram: true,
             soft_proof: false,
-            proof: lightcraft_engine::pipeline::Proof { dest_warning: false, ..Default::default() },
+            proof: dac_engine::pipeline::Proof { dest_warning: false, ..Default::default() },
             mask_overlay: true,
             mask_overlay_mode: "color".into(),
             mask_overlay_color: [230, 30, 40],

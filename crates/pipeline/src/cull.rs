@@ -2,7 +2,7 @@
 //! scores compare across photos): focus, clipping, and a tiny signature for finding similar
 //! shots (bursts). Classical image statistics — no learned models.
 
-use lightcraft_raster::Rgb32f;
+use dac_raster::Rgb32f;
 
 /// Long edge the measurements run at.
 const EDGE: usize = 512;
@@ -25,7 +25,7 @@ fn luma(img: &Rgb32f) -> (Vec<f32>, usize, usize) {
                 }
             }
             let l = acc / ((y1 - y0) * (x1 - x0)) as f32;
-            *v = lightcraft_color::transfer::linear_to_srgb(l.clamp(0.0, 1.0));
+            *v = dac_color::transfer::linear_to_srgb(l.clamp(0.0, 1.0));
         }
     }
     (out, ow, oh)
@@ -126,12 +126,12 @@ mod tests {
 
     #[test]
     fn blur_lowers_focus_and_signatures_match() {
-        let img = lightcraft_scenes::demo_library()[0].render(480, 320);
+        let img = dac_scenes::demo_library()[0].render(480, 320);
         let soft = blur(&img, 4);
         let (a, b) = (sharpness(&img), sharpness(&soft));
         assert!(a > b + 10.0, "sharp {a} vs blurred {b}");
         assert!(similarity(&signature(&img), &signature(&soft)) > 0.95, "the same picture");
-        let other = lightcraft_scenes::demo_library()[5].render(480, 320);
+        let other = dac_scenes::demo_library()[5].render(480, 320);
         assert!(similarity(&signature(&img), &signature(&other)) < 0.9);
         assert!(clipped(&img) < 0.5);
     }

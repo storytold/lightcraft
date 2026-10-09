@@ -1,5 +1,5 @@
 [package]
-name = "lightcraft-web"
+name = "dac-web"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,11 +13,11 @@ workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-lightcraft-engine = { workspace = true }
-lightcraft-ui-egui = { workspace = true }
-lightcraft-codecs = { workspace = true }
-lightcraft-raster = { workspace = true }
-lightcraft-preview = { workspace = true }
+dac-engine = { workspace = true }
+dac-ui-egui = { workspace = true }
+dac-codecs = { workspace = true }
+dac-raster = { workspace = true }
+dac-preview = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
@@ -73,7 +73,7 @@ web-sys = { workspace = true, features = [
 ] }
 
 [features]
-# Open HEIC/HEIF photos (the optional lightcraft-heif crate). Not default so distributors choose
+# Open HEIC/HEIF photos (the optional dac-heif crate). Not default so distributors choose
 # it (HEVC patents); build with `--features heif` to include it. On wasm32 panics abort, so
 # heic-rs's `catch_unwind` guard does not apply there.
-heif = ["lightcraft-codecs/heif"]
+heif = ["dac-codecs/heif"]

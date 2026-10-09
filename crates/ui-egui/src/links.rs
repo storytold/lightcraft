@@ -7,7 +7,7 @@ pub const DISCORD: &str = "https://discord.gg/artcraft";
 /// The ArtCraft website.
 pub const WEBSITE: &str = "https://getartcraft.com";
 /// This app's page on the ArtCraft website.
-pub const APP_PAGE: &str = "https://getartcraft.com/apps/lightcraft";
+pub const APP_PAGE: &str = "https://getartcraft.com/apps/app";
 /// This app's source repository.
 pub const GITHUB: &str = "https://github.com/storytold/lightcraft";
 
@@ -33,7 +33,7 @@ pub fn url_of(cmd: &str) -> Option<&'static str> {
 }
 
 /// Open `url` in the user's browser (through the host's `open_url` service).
-pub fn open(app: &mut crate::LightcraftApp, url: &str) -> Result<serde_json::Value, String> {
+pub fn open(app: &mut crate::DacApp, url: &str) -> Result<serde_json::Value, String> {
     let open = app.services.open_url.as_mut().ok_or("can't open links here")?;
     open(url)?;
     Ok(serde_json::json!({ "url": url }))

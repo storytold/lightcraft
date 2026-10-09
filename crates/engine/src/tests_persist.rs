@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use lightcraft_catalog::{Flag, MemStore, SnapshotPolicy, Store};
+use dac_catalog::{Flag, MemStore, SnapshotPolicy, Store};
 use serde_json::json;
 
 use crate::library::LibraryStores;

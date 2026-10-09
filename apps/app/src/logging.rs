@@ -12,7 +12,7 @@
 //! and naga are chatty). `LIGHTCRAFT_LOG` keeps the meaning it had with the old logger: `info` or
 //! `debug` lowers LightCraft's own crates to that level, any other value means warnings and errors
 //! only. Without it, `RUST_LOG` replaces the default with env_logger-style directives: `debug`,
-//! `warn,lightcraft_pipeline=trace`, `wgpu_core=info`. A directive ending in `*` matches every
+//! `warn,dac_pipeline=trace`, `wgpu_core=info`. A directive ending in `*` matches every
 //! target that starts with it (`lightcraft*=debug`).
 //!
 //! Records logged before the settings folder is known are kept (up to [`MAX_PENDING`]) and
@@ -329,7 +329,7 @@ pub fn record_panics(logger: &'static AppLogger) {
         previous(info);
         let thread = std::thread::current();
         let at = info.location().map(|l| format!(" at {}:{}", l.file(), l.line())).unwrap_or_default();
-        let report = format!("panic{at}: {}", lightcraft_engine::guard::panic_message(info.payload()));
+        let report = format!("panic{at}: {}", dac_engine::guard::panic_message(info.payload()));
         logger.record_panic(thread.name().unwrap_or("?"), &report);
     }));
 }
@@ -372,8 +372,8 @@ mod tests {
         let f = Filter::parse(DEFAULT_FILTER);
         assert_eq!(f.level_for("lightcraft"), LevelFilter::Info);
         assert_eq!(f.level_for("lightcraft::control_server"), LevelFilter::Info);
-        assert_eq!(f.level_for("lightcraft_engine::guard"), LevelFilter::Info);
-        assert_eq!(f.level_for("lightcraft_ui_egui::render"), LevelFilter::Info);
+        assert_eq!(f.level_for("dac_engine::guard"), LevelFilter::Info);
+        assert_eq!(f.level_for("dac_ui_egui::render"), LevelFilter::Info);
         assert_eq!(f.level_for("wgpu_core::device"), LevelFilter::Warn);
         assert_eq!(f.level_for("naga"), LevelFilter::Warn);
         assert_eq!(f.max(), LevelFilter::Info);
@@ -385,8 +385,7 @@ mod tests {
     /// `LIGHTCRAFT_LOG` keeps working exactly as it did with the old stderr-only logger.
     #[test]
     fn lightcraft_log_keeps_its_meaning() {
-        let targets =
-            ["lightcraft", "lightcraft::control_server", "lightcraft_engine::segment", "lightcraft_gpu", "wgpu_core::device", "naga", "eframe"];
+        let targets = ["dac-app", "lightcraft::control_server", "dac_engine::segment", "dac_gpu", "wgpu_core::device", "naga", "eframe"];
         let levels = [log::Level::Error, log::Level::Warn, log::Level::Info, log::Level::Debug, log::Level::Trace];
         for value in ["info", "debug", "warn", "error", "verbose", "INFO"] {
             let f = Filter::parse(&filter_spec(Some(value), None));
@@ -408,21 +407,21 @@ mod tests {
         // The app's own variable is the more specific choice.
         let f = Filter::parse(&filter_spec(Some("info"), Some("trace")));
         assert_eq!(f.level_for("eframe"), LevelFilter::Warn);
-        assert_eq!(f.level_for("lightcraft_engine"), LevelFilter::Info);
+        assert_eq!(f.level_for("dac_engine"), LevelFilter::Info);
     }
 
     #[test]
     fn directives_follow_env_logger_and_the_most_specific_one_wins() {
-        let f = Filter::parse("info,wgpu_core=error,lightcraft_pipeline=trace,lightcraft_pipeline::tiles=off");
+        let f = Filter::parse("info,wgpu_core=error,dac_pipeline=trace,dac_pipeline::tiles=off");
         assert_eq!(f.level_for("eframe"), LevelFilter::Info);
         assert_eq!(f.level_for("wgpu_core::instance"), LevelFilter::Error);
-        assert_eq!(f.level_for("lightcraft_pipeline::stage"), LevelFilter::Trace);
-        assert_eq!(f.level_for("lightcraft_pipeline::tiles"), LevelFilter::Off);
+        assert_eq!(f.level_for("dac_pipeline::stage"), LevelFilter::Trace);
+        assert_eq!(f.level_for("dac_pipeline::tiles"), LevelFilter::Off);
         assert_eq!(f.max(), LevelFilter::Trace);
         // A module name is matched at `::` boundaries, not as a bare prefix.
         assert_eq!(f.level_for("wgpu_core_extra"), LevelFilter::Info);
         // A trailing `*` is a prefix.
-        assert_eq!(Filter::parse("lightcraft*=debug").level_for("lightcraft_raw::cr2"), LevelFilter::Debug);
+        assert_eq!(Filter::parse("lightcraft*=debug").level_for("dac_raw::cr2"), LevelFilter::Debug);
         assert_eq!(Filter::parse("lightcraft*=debug").level_for("eframe"), LevelFilter::Error);
         // A bare target name sets that target to the most verbose level, as env_logger does.
         assert_eq!(Filter::parse("naga").level_for("naga::front"), LevelFilter::Trace);
@@ -598,15 +597,15 @@ mod tests {
         let path = logger.attach_dir(&dir).expect("attach");
         assert_eq!(path, dir.join(LOG_FILE));
         record(&logger, log::Level::Warn, "wgpu_hal::vulkan", "a real warning");
-        record(&logger, log::Level::Error, "lightcraft_engine::guard", "`develop.reset` failed unexpectedly: boom");
+        record(&logger, log::Level::Error, "dac_engine::guard", "`develop.reset` failed unexpectedly: boom");
         record(&logger, log::Level::Debug, "lightcraft", "below info");
         let text = read(&path);
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 3, "{text}");
         assert!(lines[0].contains(" INFO  [") && lines[0].ends_with("lightcraft: before the settings directory"), "{text}");
         assert!(lines[1].ends_with("wgpu_hal::vulkan: a real warning"), "{text}");
-        assert!(lines[2].contains(" ERROR [") && lines[2].ends_with("lightcraft_engine::guard: `develop.reset` failed unexpectedly: boom"), "{text}");
-        assert!(logger.enabled(&log::Metadata::builder().level(log::Level::Info).target("lightcraft_ui_egui").build()));
+        assert!(lines[2].contains(" ERROR [") && lines[2].ends_with("dac_engine::guard: `develop.reset` failed unexpectedly: boom"), "{text}");
+        assert!(logger.enabled(&log::Metadata::builder().level(log::Level::Info).target("dac_ui_egui").build()));
         assert!(!logger.enabled(&log::Metadata::builder().level(log::Level::Info).target("naga").build()));
         // Attaching again rotates: the first log becomes `.1`.
         logger.attach_dir(&dir).expect("attach again");

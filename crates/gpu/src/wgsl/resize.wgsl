@@ -1,4 +1,4 @@
-// Separable resample with precomputed taps (`lightcraft_raster::resample::weights`, uploaded):
+// Separable resample with precomputed taps (`dac_raster::resample::weights`, uploaded):
 // table[3i..3i+3] = (first source index, tap count, weight offset), weights stored as f32 bits.
 // Bindings: src, table (u32), dst.
 

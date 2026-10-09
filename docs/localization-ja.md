@@ -25,4 +25,4 @@ LightCraft は日本語・簡体字中国語・英語（English）の表示に�
 `LIGHTCRAFT_LANGUAGE=ja lightcraft-cli snapshot ...` で日本語の画面を描画できます。
 
 表示・フォント・言語の切り替え・設定の保存・コマンドIDの保持は
-`cargo test -p lightcraft-ui-egui i18n::tests` で検証します（グリフの検査は `CRAFT_FONTS_DIR` 指定時のみ実行）。
+`cargo test -p dac-ui-egui i18n::tests` で検証します（グリフの検査は `CRAFT_FONTS_DIR` 指定時のみ実行）。

@@ -42,7 +42,7 @@ fn render_sizes_move_in_steps() {
 // would evict the open photo's single full-resolution source (review of #323)
 #[test]
 fn prefetch_and_stand_ins_never_ask_for_the_full_source_level() {
-    use lightcraft_engine::SourceLevel;
+    use dac_engine::SourceLevel;
     let s = with_limit(0);
     for wanted in [1000.0, 2560.0, 3024.0, 6000.0, 48000.0] {
         assert!(s.prefetch_edge(wanted, 6000, BIG) <= SourceLevel::Preview.max_edge(), "{wanted}");
@@ -143,7 +143,7 @@ mod in_the_loupe {
 
     use crate::headless::Headless;
     use crate::render::Slot;
-    use crate::{LightcraftApp, Services};
+    use crate::{DacApp, Services};
 
     const T: Duration = Duration::from_secs(20);
     const SETTLE: Duration = Duration::from_secs(120);
@@ -155,7 +155,7 @@ mod in_the_loupe {
 
     fn detail_in(size: [f32; 2]) -> (Headless, usize) {
         let services = Services { png: None, ..Default::default() };
-        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+        let app = DacApp::new(dac_engine::Session::with_demo(), services);
         let mut h = Headless::new(app, size, 1.0);
         let r = h.request("ui.set", json!({"view": "detail", "right": "none", "filmstrip": false}), T);
         assert_eq!(r["ok"], true, "{r}");
@@ -320,10 +320,10 @@ mod in_the_loupe {
         let (mut h, _) = detail();
         let id = h.app.session.active().unwrap();
         let mut s = (*h.app.session.develop_of(id).unwrap()).clone();
-        s.spots.push(lightcraft_develop::Spot {
-            points: vec![lightcraft_geom::Point::new(0.5, 0.5)],
+        s.spots.push(dac_develop::Spot {
+            points: vec![dac_geom::Point::new(0.5, 0.5)],
             size: 0.01,
-            source_offset: Some(lightcraft_geom::Point::new(0.05, 0.0)),
+            source_offset: Some(dac_geom::Point::new(0.05, 0.0)),
             ..Default::default()
         });
         h.app.session.set_develop(id, s, "Spot").unwrap();
@@ -468,7 +468,7 @@ mod in_the_loupe {
         assert_eq!(region_tile(&h), None);
     }
 
-    /// `cargo test -p lightcraft-ui-egui --release profile_slider_drag -- --ignored --nocapture`:
+    /// `cargo test -p dac-ui-egui --release profile_slider_drag -- --ignored --nocapture`:
     /// milliseconds from a slider tick to the loupe showing it, at 100 % and 400 % of the demo
     /// library's 24 MP photos (what the maintainers asked for in the review of #351).
     #[test]

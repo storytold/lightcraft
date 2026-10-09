@@ -1,5 +1,5 @@
 //! Interchange: local corrections (masks) stored as `crs:` structures in XMP sidecars, XMP
-//! presets and `.lrtemplate` files → our [`Mask`](lightcraft_develop::Mask)s.
+//! presets and `.lrtemplate` files → our [`Mask`](dac_develop::Mask)s.
 //!
 //! Four containers hold them: `MaskGroupBasedCorrections` (current: each correction has a list
 //! of mask components) and the older `GradientBasedCorrections`, `CircularGradientBasedCorrections`
@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 
-use lightcraft_meta::XmpValue;
+use dac_meta::XmpValue;
 use serde_json::{Value, json};
 
 /// Top-level properties keyed `prefix:name`, with structure.
@@ -263,7 +263,7 @@ pub fn refit_radials(partial: &mut Value, from: f64, to: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_develop::{DevelopSettings, MaskOp, MaskShape};
+    use dac_develop::{DevelopSettings, MaskOp, MaskShape};
 
     /// A packet in the shape local corrections take (values written for this test).
     const PACKET: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
@@ -297,7 +297,7 @@ mod tests {
 </rdf:Description></rdf:RDF></x:xmpmeta>"#;
 
     fn settings() -> (DevelopSettings, Vec<String>) {
-        let d = lightcraft_meta::parse_xmp(PACKET).unwrap();
+        let d = dac_meta::parse_xmp(PACKET).unwrap();
         let (partial, unmapped) = crate::crs::to_partial_report(&d.properties, Some(&d.values), None, 1.5);
         (DevelopSettings::default().merged(&partial).expect("valid settings"), unmapped)
     }
@@ -333,10 +333,8 @@ mod tests {
     #[test]
     fn masks_render() {
         let (s, _) = settings();
-        let img = lightcraft_scenes::demo_library()[0].render(96, 64);
-        let render = |d: &DevelopSettings| {
-            lightcraft_pipeline::render(&img, &Default::default(), d, &lightcraft_pipeline::RenderRequest::fit(96, 64)).image.data
-        };
+        let img = dac_scenes::demo_library()[0].render(96, 64);
+        let render = |d: &DevelopSettings| dac_pipeline::render(&img, &Default::default(), d, &dac_pipeline::RenderRequest::fit(96, 64)).image.data;
         assert_ne!(render(&DevelopSettings { light: s.light, ..Default::default() }), render(&s), "the masks change the picture");
     }
 
@@ -356,10 +354,9 @@ mod tests {
     fn presets_add_masks_once() {
         let (s, _) = settings();
         let partial = json!({"masks": serde_json::to_value(&s.masks).unwrap(), "light": {"exposure": 0.5}});
-        let p =
-            lightcraft_develop::Preset { id: "t".into(), name: "t".into(), group: "g".into(), settings: partial, favorite: false, builtin: false };
+        let p = dac_develop::Preset { id: "t".into(), name: "t".into(), group: "g".into(), settings: partial, favorite: false, builtin: false };
         let mut mine = DevelopSettings::default();
-        mine.masks.push(lightcraft_develop::Mask { id: 7, name: "Mine".into(), ..Default::default() });
+        mine.masks.push(dac_develop::Mask { id: 7, name: "Mine".into(), ..Default::default() });
         let once = p.apply(&mine, 1.0);
         assert_eq!(once.masks.len(), 4, "added to the photo's own mask");
         assert_eq!(once.masks[1].id, 8, "fresh ids");

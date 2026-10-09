@@ -1,18 +1,18 @@
 //! Opt-in same-machine denoise model-stage benchmark on one public Bayer raw.
 //! LC_DENOISE_MODEL=<onnx> LC_DENOISE_RAW=<CC0 corpus/raw> cargo test --release
-//! -p lightcraft-engine --features denoise --test denoise_cpu -- --ignored --nocapture
+//! -p dac-engine --features denoise --test denoise_cpu -- --ignored --nocapture
 //! LC_DENOISE_ONLY selects a file (default arw-sony-a7m3-compressed.arw).
 //! The whole model stage includes packing, scale/clip protection, blending and normalization;
 //! file decode, model loading and GPU setup are outside the timer. It uses the application's tile pool convention.
 #![cfg(feature = "denoise")]
 
-use lightcraft_denoise::{
+use dac_denoise::{
     TileRunner,
     bayer::Layout,
     run::{Control, Params, denoise_bayer},
     runtime::{CpuRunner, check_tile},
 };
-use lightcraft_raster::Rgb32f;
+use dac_raster::Rgb32f;
 use std::{path::Path, time::Instant};
 
 fn agree(a: &[f32], b: &[f32]) -> f32 {
@@ -35,7 +35,7 @@ fn tile_time(name: &str, r: &dyn TileRunner, x: &[f32]) {
     times.sort_by(f64::total_cmp);
     println!("{name}, one 512-cell tile, one thread: {:.1} ms median ({:.1}..{:.1})", times[2], times[0], times[4]);
 }
-fn photo_time(name: &str, r: &dyn TileRunner, raw: &lightcraft_raw::Normalized, layout: Layout, p: &Params) -> Rgb32f {
+fn photo_time(name: &str, r: &dyn TileRunner, raw: &dac_raw::Normalized, layout: Layout, p: &Params) -> Rgb32f {
     let pool = rayon::ThreadPoolBuilder::new().num_threads(p.parallel).build().unwrap();
     let run = || pool.install(|| denoise_bayer(&raw.data, raw.width, raw.height, layout, r, p, &Control::default())).unwrap();
     drop(run()); // warm the workers and their workspace cache
@@ -59,11 +59,11 @@ fn denoise_stage_compares_cpu_and_gpu() {
     let folder = std::env::var_os("LC_DENOISE_RAW").expect("set LC_DENOISE_RAW to public CC0 corpus/raw");
     let name = std::env::var("LC_DENOISE_ONLY").unwrap_or_else(|_| "arw-sony-a7m3-compressed.arw".into());
     let bytes = std::fs::read(Path::new(&folder).join(&name)).unwrap();
-    let raw = lightcraft_raw::decode(&bytes).unwrap().normalized().unwrap();
+    let raw = dac_raw::decode(&bytes).unwrap().normalized().unwrap();
     let cfa = raw.cfa.as_ref().unwrap();
     assert!(cfa.is_bayer());
     let layout = Layout::from_cell([cfa.color_at(0, 0), cfa.color_at(1, 0), cfa.color_at(0, 1), cfa.color_at(1, 1)]).unwrap();
-    let m = lightcraft_denoise::known::find("rawnind-bayer").unwrap().manifest;
+    let m = dac_denoise::known::find("rawnind-bayer").unwrap().manifest;
     let cpu = CpuRunner::load(Path::new(&model), &m).unwrap();
     let threads = std::env::var("LC_DENOISE_PARALLEL")
         .ok()
@@ -75,7 +75,7 @@ fn denoise_stage_compares_cpu_and_gpu() {
         raw.width,
         raw.height,
         raw.width as f64 * raw.height as f64 / 1e6,
-        lightcraft_denoise::run::tile_count(raw.width, raw.height, layout, 512, 64),
+        dac_denoise::run::tile_count(raw.width, raw.height, layout, 512, 64),
         threads,
         cpu.bytes_per_tile() as f64 / 1e6,
         cpu.net().macs(512) as f64 / 1e9
@@ -85,7 +85,7 @@ fn denoise_stage_compares_cpu_and_gpu() {
     tile_time("pure Rust", &cpu, &x);
     let done = photo_time("pure Rust", &cpu, &raw, layout, &p);
 
-    match lightcraft_gpu::nn::runner(cpu.net(), 512) {
+    match dac_gpu::nn::runner(cpu.net(), 512) {
         Ok(gpu) => {
             println!("GPU: {}", gpu.adapter());
             println!("CPU/check tile vs GPU: {:e}", agree(&want, &gpu.run(&x).unwrap()));

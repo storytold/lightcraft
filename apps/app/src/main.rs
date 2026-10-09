@@ -9,11 +9,11 @@
 //! line are imported (duplicates are skipped). `--memory` runs an in-memory session that writes
 //! nothing (demo photos unless files are given; used by the README showcase scripts). A library
 //! that can't be opened is never replaced silently: the window says why and asks what to do
-//! (`lightcraft_ui_egui::panels::library_problem`).
+//! (`dac_ui_egui::panels::library_problem`).
 //!
 //! `--control <port>` (or `LIGHTCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
 //! `{"id":1,"method":"ui.inspect","params":{}}` → `{"id":1,"ok":true,"result":…}`.
-//! See `lightcraft_ui_egui::control` for the methods.
+//! See `dac_ui_egui::control` for the methods.
 //!
 //! On Windows, release builds are GUI-subsystem programs: launching the app opens no console
 //! window (issue #7). Their `--help` / `--version` output and diagnostics then have no console to
@@ -29,10 +29,10 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
 
+use dac_engine::Session;
+use dac_ui_egui::panels::library_problem::LibraryProblem;
+use dac_ui_egui::{DacApp, Services, UiState};
 use dialog_filter::FileDialogExt as _;
-use lightcraft_engine::Session;
-use lightcraft_ui_egui::panels::library_problem::LibraryProblem;
-use lightcraft_ui_egui::{LightcraftApp, Services, UiState};
 
 /// Reverse-DNS app id: Wayland app id, `.desktop` file and hicolor icon name.
 const APP_ID: &str = "ai.storyteller.lightcraft";
@@ -47,14 +47,14 @@ fn app_icon() -> egui::IconData {
     eframe::icon_data::from_png_bytes(png).unwrap_or_default()
 }
 
-struct App(LightcraftApp, PrefsWriter, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>);
+struct App(DacApp, PrefsWriter, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>);
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         if let Some(m) = self.2.as_mut()
             && m.update(&mut self.0, ctx)
-            && lightcraft_ui_egui::panels::notices::may_close(&mut self.0)
+            && dac_ui_egui::panels::notices::may_close(&mut self.0)
         {
             // Quit from the menu bar: save exactly what closing the window saves (settings and
             // library, after the unsaved-changes check; otherwise its prompt shows), then end the
@@ -88,14 +88,14 @@ impl eframe::App for App {
 fn window_wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
     let mut c = eframe::egui_wgpu::WgpuConfiguration::default();
     if let eframe::egui_wgpu::WgpuSetup::CreateNew(n) = &mut c.wgpu_setup {
-        n.instance_descriptor.backends = lightcraft_engine::gpu::backend::window_backends();
-        n.instance_descriptor.backend_options = lightcraft_engine::gpu::backend::backend_options();
+        n.instance_descriptor.backends = dac_engine::gpu::backend::window_backends();
+        n.instance_descriptor.backend_options = dac_engine::gpu::backend::backend_options();
     }
     c
 }
 
 /// Written while the GPU compute device is created, removed once that returned
-/// (`lightcraft_gpu::backend::set_init_marker`). Not with `LIGHTCRAFT_NO_PREFS` (tests, scripts).
+/// (`dac_gpu::backend::set_init_marker`). Not with `LIGHTCRAFT_NO_PREFS` (tests, scripts).
 fn gpu_marker_path() -> Option<std::path::PathBuf> {
     if std::env::var_os("LIGHTCRAFT_NO_PREFS").is_some() {
         return None;
@@ -114,7 +114,7 @@ fn gpu_crash_check(in_memory: bool) -> Option<String> {
 }
 
 fn gpu_crash_check_at(marker: Option<std::path::PathBuf>, in_memory: bool) -> Option<String> {
-    use lightcraft_engine::gpu::backend;
+    use dac_engine::gpu::backend;
     let left = if in_memory {
         marker.as_deref().and_then(backend::read_init_marker)
     } else {
@@ -134,7 +134,7 @@ fn gpu_crash_notice(what: &str) -> String {
 }
 
 fn config_dir() -> Option<std::path::PathBuf> {
-    lightcraft_engine::config::config_dir()
+    dac_engine::config::config_dir()
 }
 
 /// `<config>/ui.json`, the saved UI state and app settings — `None` when nothing is read or
@@ -234,7 +234,7 @@ struct PrefsWriter {
 }
 
 impl PrefsWriter {
-    fn save(&mut self, app: &LightcraftApp) -> Result<(), String> {
+    fn save(&mut self, app: &DacApp) -> Result<(), String> {
         self.save_ui(&app.ui, app.library_problem.is_some())
     }
 
@@ -258,7 +258,7 @@ impl PrefsWriter {
         Ok(())
     }
 
-    fn tick(&mut self, app: &mut LightcraftApp, ctx: &egui::Context) {
+    fn tick(&mut self, app: &mut DacApp, ctx: &egui::Context) {
         let now = ctx.input(|i| i.time);
         let moved = app.ui.settings.library_path != self.library;
         if !moved && now - self.checked < 3.0 {
@@ -329,8 +329,8 @@ fn services(ctx: egui::Context, log_file: Option<&std::path::Path>) -> Services 
     Services {
         // Commands' file dialogs run on their own thread (#191): a dialog on the UI thread
         // stopped the window answering the compositor, which then reported the app as hung.
-        picker: Some(Box::new(move |req: lightcraft_ui_egui::pick::PickRequest| {
-            use lightcraft_ui_egui::pick::PickKind;
+        picker: Some(Box::new(move |req: dac_ui_egui::pick::PickRequest| {
+            use dac_ui_egui::pick::PickKind;
             let (tx, rx) = std::sync::mpsc::channel();
             let repaint = ctx.clone();
             std::thread::Builder::new()
@@ -363,13 +363,13 @@ fn services(ctx: egui::Context, log_file: Option<&std::path::Path>) -> Services 
         log_file: log_file.map(|p| p.display().to_string()),
         pick_lightroom_catalog: Some(Box::new(|| {
             rfd::FileDialog::new()
-                .set_title(lightcraft_ui_egui::i18n::tr("Import Lightroom Catalog"))
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Lightroom Classic Catalog"), &["lrcat"])
+                .set_title(dac_ui_egui::i18n::tr("Import Lightroom Catalog"))
+                .add_filter_nocase(dac_ui_egui::i18n::tr("Lightroom Classic Catalog"), &["lrcat"])
                 .pick_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),
         pick_folder: Some(Box::new(|| {
-            rfd::FileDialog::new().set_title(lightcraft_ui_egui::i18n::tr("Open Library")).pick_folder().map(|p| p.to_string_lossy().to_string())
+            rfd::FileDialog::new().set_title(dac_ui_egui::i18n::tr("Open Library")).pick_folder().map(|p| p.to_string_lossy().to_string())
         })),
         open_with: Some(Box::new(|path: &str, app: &str| {
             // spawned, never waited for: the editor runs alongside
@@ -421,7 +421,7 @@ fn services(ctx: egui::Context, log_file: Option<&std::path::Path>) -> Services 
         })),
         pick_files: Some(Box::new(|| {
             rfd::FileDialog::new()
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Photos"), lightcraft_engine::import::EXTENSIONS)
+                .add_filter_nocase(dac_ui_egui::i18n::tr("Photos"), dac_engine::import::EXTENSIONS)
                 .pick_files()
                 .unwrap_or_default()
                 .into_iter()
@@ -430,16 +430,16 @@ fn services(ctx: egui::Context, log_file: Option<&std::path::Path>) -> Services 
         })),
         pick_denoise_model: Some(Box::new(|| {
             rfd::FileDialog::new()
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("ONNX model"), &["onnx"])
+                .add_filter_nocase(dac_ui_egui::i18n::tr("ONNX model"), &["onnx"])
                 .pick_file()
                 .map(|p| vec![p.to_string_lossy().into_owned()])
                 .unwrap_or_default()
         })),
         pick_preset_files: Some(Box::new(|| {
             rfd::FileDialog::new()
-                .set_title(lightcraft_ui_egui::i18n::tr("Import Presets"))
+                .set_title(dac_ui_egui::i18n::tr("Import Presets"))
                 .add_filter_nocase(
-                    lightcraft_ui_egui::i18n::tr("Presets & Profiles"),
+                    dac_ui_egui::i18n::tr("Presets & Profiles"),
                     &["lcpreset", "xmp", "lrtemplate", "zip", "dng", "lmp", "mplumpack", "cube"],
                 )
                 .pick_files()
@@ -450,32 +450,32 @@ fn services(ctx: egui::Context, log_file: Option<&std::path::Path>) -> Services 
         })),
         pick_model_file: Some(Box::new(|| {
             rfd::FileDialog::new()
-                .set_title(lightcraft_ui_egui::i18n::tr("Add a Face Recognition Model"))
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Face models (ONNX)"), &["onnx"])
+                .set_title(dac_ui_egui::i18n::tr("Add a Face Recognition Model"))
+                .add_filter_nocase(dac_ui_egui::i18n::tr("Face models (ONNX)"), &["onnx"])
                 .pick_file()
                 .map(|p| vec![p.to_string_lossy().to_string()])
                 .unwrap_or_default()
         })),
         pick_tracklog: Some(Box::new(|| {
             rfd::FileDialog::new()
-                .set_title(lightcraft_ui_egui::i18n::tr("Auto-Tag from Tracklog"))
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("GPS Track Log"), &["gpx"])
+                .set_title(dac_ui_egui::i18n::tr("Auto-Tag from Tracklog"))
+                .add_filter_nocase(dac_ui_egui::i18n::tr("GPS Track Log"), &["gpx"])
                 .pick_file()
                 .map(|p| vec![p.to_string_lossy().to_string()])
                 .unwrap_or_default()
         })),
         save_preset_file: Some(Box::new(|name: &str| {
             rfd::FileDialog::new()
-                .set_title(lightcraft_ui_egui::i18n::tr("Export Presets"))
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("LightCraft Preset"), &["lcpreset"])
+                .set_title(dac_ui_egui::i18n::tr("Export Presets"))
+                .add_filter_nocase(dac_ui_egui::i18n::tr("LightCraft Preset"), &["lcpreset"])
                 .set_file_name(name)
                 .save_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),
         pick_curve_preset_files: Some(Box::new(|| {
             rfd::FileDialog::new()
-                .set_title(lightcraft_ui_egui::i18n::tr("Import Point Curve Presets"))
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Point Curve Presets"), &["lccurve", "json"])
+                .set_title(dac_ui_egui::i18n::tr("Import Point Curve Presets"))
+                .add_filter_nocase(dac_ui_egui::i18n::tr("Point Curve Presets"), &["lccurve", "json"])
                 .pick_files()
                 .unwrap_or_default()
                 .into_iter()
@@ -484,17 +484,17 @@ fn services(ctx: egui::Context, log_file: Option<&std::path::Path>) -> Services 
         })),
         save_curve_preset_file: Some(Box::new(|name: &str| {
             rfd::FileDialog::new()
-                .set_title(lightcraft_ui_egui::i18n::tr("Export Point Curve Presets"))
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Point Curve Presets"), &["lccurve"])
+                .set_title(dac_ui_egui::i18n::tr("Export Point Curve Presets"))
+                .add_filter_nocase(dac_ui_egui::i18n::tr("Point Curve Presets"), &["lccurve"])
                 .set_file_name(name)
                 .save_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),
         // atomic (temp file + sync + rename): a failed write never leaves a truncated file
-        write_shared: Some(std::sync::Arc::new(lightcraft_engine::export::write_file)),
-        write: Some(Box::new(lightcraft_engine::export::write_file)),
-        png: Some(Box::new(|img: &lightcraft_raster::Rgba8| {
-            lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
+        write_shared: Some(std::sync::Arc::new(dac_engine::export::write_file)),
+        write: Some(Box::new(dac_engine::export::write_file)),
+        png: Some(Box::new(|img: &dac_raster::Rgba8| {
+            dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(img), &dac_codecs::EncodeMeta::default()).unwrap_or_default()
         })),
         // the library is a folder on disk: backed up with the user's other files
         backup_library: None,
@@ -505,7 +505,7 @@ fn services(ctx: egui::Context, log_file: Option<&std::path::Path>) -> Services 
 /// The library session with the folder face models are kept in (`<config>/models`).
 fn open_session(in_memory: bool, dir: Option<std::path::PathBuf>, seed_demo: bool) -> (Session, Option<LibraryProblem>) {
     let (mut s, problem) = open_library_session(in_memory, dir, seed_demo);
-    s.face_models_dir = lightcraft_engine::config::default_face_models_dir();
+    s.face_models_dir = dac_engine::config::default_face_models_dir();
     (s, problem)
 }
 
@@ -569,7 +569,7 @@ ENVIRONMENT:
 ";
 
 /// The launch arguments' files and folders to import (absolute), and a notice for each one that
-/// is not imported (see [`lightcraft_engine::import::launch_path`]; issue #374).
+/// is not imported (see [`dac_engine::import::launch_path`]; issue #374).
 fn launch_imports(args: &[String]) -> (Vec<String>, Vec<String>) {
     let cwd = std::env::current_dir().ok();
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).filter(|h| !h.is_empty()).map(std::path::PathBuf::from);
@@ -577,10 +577,10 @@ fn launch_imports(args: &[String]) -> (Vec<String>, Vec<String>) {
 }
 
 fn launch_imports_in(args: &[String], cwd: Option<&std::path::Path>, home: Option<&std::path::Path>) -> (Vec<String>, Vec<String>) {
-    use lightcraft_engine::import::{LaunchPath, launch_path};
+    use dac_engine::import::{LaunchPath, launch_path};
     let (mut files, mut notices) = (Vec::new(), Vec::new());
     for a in args {
-        match launch_path(a, cwd, home, lightcraft_engine::devices::dcim_in) {
+        match launch_path(a, cwd, home, dac_engine::devices::dcim_in) {
             Some(LaunchPath::Import(p)) => files.push(p),
             Some(LaunchPath::Refused { path, why }) => {
                 log::warn!("not importing {path} given at launch: {why}");
@@ -616,7 +616,7 @@ fn control_port_from(what: &str, value: Option<String>) -> Option<u16> {
 fn main() -> eframe::Result {
     // First, so every start-up record is kept for the log file (`logging`).
     let logger = logging::install();
-    lightcraft_engine::guard::install_hook(std::env::temp_dir().join("lightcraft-panics.log"));
+    dac_engine::guard::install_hook(std::env::temp_dir().join("lightcraft-panics.log"));
     if let Some(logger) = logger {
         logging::record_panics(logger);
     }
@@ -671,7 +671,7 @@ fn main() -> eframe::Result {
     let (prefs, prefs_warning, keep_prefs_file) = load_prefs(in_memory);
     // the saved language from the start, so a failed start is reported in it too
     if let Some(ui) = &prefs {
-        lightcraft_ui_egui::i18n::set_language(ui.language);
+        dac_ui_egui::i18n::set_language(ui.language);
     }
     // --library, else the library last opened from Settings, else the default location
     let library_dir = library_dir.or_else(|| {
@@ -681,12 +681,12 @@ fn main() -> eframe::Result {
             .filter(|p| !p.is_empty() && std::env::var_os("LIGHTCRAFT_LIBRARY").is_none())
             .map(Into::into)
     });
-    let library_dir = library_dir.or_else(lightcraft_engine::library::default_dir);
+    let library_dir = library_dir.or_else(dac_engine::library::default_dir);
     // GPU compute: off if the preference says so, or if the last launch died creating the device
     // (issue #136) — before anything can create it
     let gpu_crash = gpu_crash_check(in_memory);
     let gpu_on = prefs.as_ref().is_none_or(|u| u.settings.gpu) && gpu_crash.is_none();
-    lightcraft_engine::gpu::set_enabled(gpu_on);
+    dac_engine::gpu::set_enabled(gpu_on);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("LightCraft")
@@ -715,11 +715,11 @@ fn main() -> eframe::Result {
                 std::env::var_os("LIGHTCRAFT_SAM3_DIR").map(std::path::PathBuf::from).or_else(|| config_dir().map(|d| d.join("models").join("sam3")));
             // the user's own download locations, one base URL per line (LIGHTCRAFT_SAM3_MIRRORS too)
             session.segmenter.mirrors_file = config_dir().map(|d| d.join("models").join("sam3-mirrors.txt"));
-            let mut app = LightcraftApp::new(session, services(cc.egui_ctx.clone(), app_log_file.as_deref()));
+            let mut app = DacApp::new(session, services(cc.egui_ctx.clone(), app_log_file.as_deref()));
             if let Some(ui) = prefs {
                 app.ui = ui;
             }
-            lightcraft_ui_egui::i18n::set_language(app.ui.language);
+            dac_ui_egui::i18n::set_language(app.ui.language);
             app.integrated_titlebar = cfg!(target_os = "macos");
             app.notices.extend(prefs_warning);
             app.notices.extend(launch_notices);
@@ -748,10 +748,10 @@ fn main() -> eframe::Result {
                 // listed and read on the import worker once the window shows (issue #374: never
                 // here, before the first frame, where a large folder kept the window from
                 // appearing)
-                if let Err(e) = lightcraft_ui_egui::import::start_paths(&mut app, files) {
+                if let Err(e) = dac_ui_egui::import::start_paths(&mut app, files) {
                     log::warn!("import at launch: {e}");
                 }
-                app.ui.view = lightcraft_ui_egui::state::ViewMode::PhotoGrid;
+                app.ui.view = dac_ui_egui::state::ViewMode::PhotoGrid;
             }
             // native menu bar generated from the command registry (macOS; elsewhere the menus are
             // drawn in the window's top bar). LIGHTCRAFT_NO_NATIVE_MENU=1 keeps the in-window menus.
@@ -779,7 +779,7 @@ fn startup_failed(error: &str, log_file: Option<&std::path::Path>) {
     if std::env::var_os("LIGHTCRAFT_NO_PREFS").is_some() {
         return; // tests and scripts: no dialog to click away
     }
-    let (title, text) = lightcraft_ui_egui::i18n::startup_failed_message(error, log_file.map(|p| p.display().to_string()).as_deref());
+    let (title, text) = dac_ui_egui::i18n::startup_failed_message(error, log_file.map(|p| p.display().to_string()).as_deref());
     let _ = rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Error)
         .set_title(title)
@@ -903,10 +903,10 @@ mod tests {
         assert!(m.exists(), "the marker stays for the next ordinary launch");
         // the next ordinary launch reports it once and removes it
         assert!(gpu_crash_check_at(Some(m.clone()), false).is_some());
-        lightcraft_engine::gpu::backend::set_init_marker(None);
+        dac_engine::gpu::backend::set_init_marker(None);
         assert!(!m.exists());
         assert_eq!(gpu_crash_check_at(Some(m.clone()), false), None);
-        lightcraft_engine::gpu::backend::set_init_marker(None);
+        dac_engine::gpu::backend::set_init_marker(None);
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -915,9 +915,9 @@ mod tests {
     fn gpu_crash_marker_is_reported_once() {
         let d = dir("gpu-marker");
         let m = d.join("gpu-init.marker");
-        assert_eq!(lightcraft_engine::gpu::backend::take_init_marker(&m), None);
+        assert_eq!(dac_engine::gpu::backend::take_init_marker(&m), None);
         std::fs::write(&m, "GPU device creation started (backends VULKAN | DX12)").unwrap();
-        let what = lightcraft_engine::gpu::backend::take_init_marker(&m).unwrap();
+        let what = dac_engine::gpu::backend::take_init_marker(&m).unwrap();
         let notice = gpu_crash_notice(&what);
         assert!(notice.contains("GPU rendering is now off") && notice.contains("Use the GPU for rendering"), "{notice}");
         assert!(!m.exists());

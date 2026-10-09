@@ -1,11 +1,11 @@
 //! The per-pixel stage: everything after the spatial planes are ready, in one parallel pass.
 
-use lightcraft_color::luminance_2020;
-use lightcraft_color::spline::{Lut1, MonotoneCurve};
-use lightcraft_color::transfer::linear_to_srgb;
-use lightcraft_develop::{DevelopSettings, LocalAdjustments, ToneCurve, VignetteStyle};
-use lightcraft_geom::Point;
-use lightcraft_raster::Rgba8;
+use dac_color::luminance_2020;
+use dac_color::spline::{Lut1, MonotoneCurve};
+use dac_color::transfer::linear_to_srgb;
+use dac_develop::{DevelopSettings, LocalAdjustments, ToneCurve, VignetteStyle};
+use dac_geom::Point;
+use dac_raster::Rgba8;
 
 use crate::colorops::ColorOps;
 use crate::geometry::Frame;
@@ -148,7 +148,7 @@ pub fn mask_terms(j: &LocalAdjustments) -> [f32; MASK_TERMS] {
 }
 
 /// Everything the per-pixel stage computes once per render: the CPU loop below and the GPU kernel
-/// (`lightcraft-gpu`) both read their parameters from here, so the two cannot drift apart.
+/// (`dac-gpu`) both read their parameters from here, so the two cannot drift apart.
 pub struct FinishParams {
     /// A LUT profile and its amount (0..2), applied to the display-encoded colour.
     pub lut: Option<(std::sync::Arc<crate::lut::Lut3d>, f32)>,
@@ -184,7 +184,7 @@ pub struct FinishParams {
     /// Grain: amount, cell size (px), roughness, seed.
     pub grain: Option<(f32, f32, f32, u32)>,
     /// Output px → normalized oriented coordinates.
-    pub out_to_norm: lightcraft_geom::Affine,
+    pub out_to_norm: dac_geom::Affine,
     pub ow: f64,
     pub oh: f64,
     pub w: usize,
@@ -270,7 +270,7 @@ pub(crate) fn finish(p: &Prepared, s: &DevelopSettings, frame: &Frame, info: &So
     let data = finish_with(p, &fp, false, |e| match trc {
         OutputTrc::Srgb => [enc(e[0]), enc(e[1]), enc(e[2]), 255],
         t => {
-            let x = e.map(|v| enc(t.encode(lightcraft_color::transfer::srgb_to_linear(v.clamp(0.0, 1.0)))));
+            let x = e.map(|v| enc(t.encode(dac_color::transfer::srgb_to_linear(v.clamp(0.0, 1.0)))));
             [x[0], x[1], x[2], 255]
         }
     });
@@ -288,7 +288,7 @@ pub(crate) fn finish_deep(
     depth: OutputDepth,
     proof: Option<crate::Proof>,
 ) -> DeepImage {
-    use lightcraft_color::transfer::srgb_to_linear;
+    use dac_color::transfer::srgb_to_linear;
     let (w, h) = (p.img.width, p.img.height);
     let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, space);
     fp.proof = proof.map(|pr| pr.params(space));
@@ -501,8 +501,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             // --- colour
             d = ops.apply(d, l_sat, l_hue);
             if let Some((dir, amt)) = tint_col {
-                let lab = lightcraft_color::perceptual::oklab_from_2020(d);
-                d = lightcraft_color::perceptual::oklab_to_2020([lab[0], lab[1] + dir[0] * 0.08 * amt, lab[2] + dir[1] * 0.08 * amt]);
+                let lab = dac_color::perceptual::oklab_from_2020(d);
+                d = dac_color::perceptual::oklab_to_2020([lab[0], lab[1] + dir[0] * 0.08 * amt, lab[2] + dir[1] * 0.08 * amt]);
             }
 
             // --- vignette (display linear, post-crop)

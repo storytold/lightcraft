@@ -8,7 +8,7 @@ use std::sync::Arc;
 use egui::{Align2, Color32, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::{Value, json};
 
-use crate::LightcraftApp;
+use crate::DacApp;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -20,7 +20,7 @@ const SECTION_H: f32 = 56.0;
 pub struct Face {
     pub photo: u64,
     pub index: usize,
-    pub rect: lightcraft_geom::Rect,
+    pub rect: dac_geom::Rect,
     pub score: f32,
 }
 
@@ -37,7 +37,7 @@ pub struct PersonPage {
 }
 
 fn face_of(v: &Value) -> Option<Face> {
-    let rect = |r: &Value| Some(lightcraft_geom::Rect { x0: r["x0"].as_f64()?, y0: r["y0"].as_f64()?, x1: r["x1"].as_f64()?, y1: r["y1"].as_f64()? });
+    let rect = |r: &Value| Some(dac_geom::Rect { x0: r["x0"].as_f64()?, y0: r["y0"].as_f64()?, x1: r["x1"].as_f64()?, y1: r["y1"].as_f64()? });
     Some(Face {
         photo: v["photo"].as_u64()?,
         index: usize::try_from(v["index"].as_u64()?).ok()?,
@@ -62,7 +62,7 @@ pub fn parse(v: &Value) -> PersonPage {
 
 /// The page for `name`, asked for again only when the catalog changed, or (while the scan runs) at most once a second
 /// as it learns more faces.
-fn page_for(app: &mut LightcraftApp, name: &str, now: f64) -> Arc<PersonPage> {
+fn page_for(app: &mut DacApp, name: &str, now: f64) -> Arc<PersonPage> {
     let (rev, indexed) = (app.session.catalog.revision, app.caches.faces_indexed);
     if let Some((n, r, i, at, page)) = &app.caches.person_page
         && n == name
@@ -85,7 +85,7 @@ enum Hit {
     Dismiss,
 }
 
-pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
+pub fn show(app: &mut DacApp, ui: &mut egui::Ui, name: &str) {
     let t = Tokens::get(ui.ctx());
     let now = ui.input(|i| i.time);
     let page = page_for(app, name, now);
@@ -226,7 +226,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
 
 /// One face tile. A confirmed one opens its photo when clicked; a "More" one is confirmed when clicked, and has a × that
 /// hides it.
-fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, f: &Face, ppp: f32, more: bool, name: &str) -> Hit {
+fn tile(app: &mut DacApp, ui: &mut egui::Ui, r: Rect, f: &Face, ppp: f32, more: bool, name: &str) -> Hit {
     let t = Tokens::get(ui.ctx());
     let salt = if more { "more-face" } else { "person-face" };
     let resp = ui.interact(r, egui::Id::new((salt, f.photo, f.index)), Sense::click());
@@ -237,7 +237,7 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, f: &Face, ppp: f32,
     let hovered = resp.hovered() || x_resp.as_ref().is_some_and(|x| x.hovered());
     let p = ui.painter();
     p.rect_filled(r, 3.0, t.canvas);
-    if let Some(job) = app.session.face_job(lightcraft_catalog::PhotoId(f.photo), f.rect, (r.width() * ppp).ceil() as usize)
+    if let Some(job) = app.session.face_job(dac_catalog::PhotoId(f.photo), f.rect, (r.width() * ppp).ceil() as usize)
         && let Some(tex) = app.renderer.variant(job)
     {
         p.image(tex.tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);

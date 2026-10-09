@@ -79,8 +79,8 @@ fn import_tool_copies_with_a_folder_template() {
     let _ = std::fs::remove_dir_all(&base);
     let (src, dest) = (base.join("card"), base.join("out"));
     std::fs::create_dir_all(&src).unwrap();
-    let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[20, 3, 9, 255]; 64] };
-    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    let img = dac_raster::Rgba8 { width: 8, height: 8, data: vec![[20, 3, 9, 255]; 64] };
+    let png = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).unwrap();
     std::fs::write(src.join("a.png"), png).unwrap();
     let mut b = Headless::demo();
     b.session.clock = Box::new(|| "2026-01-14T05:58:48".to_string());
@@ -99,8 +99,8 @@ fn path_writes_never_replace_an_original() {
     let base = std::env::temp_dir().join(format!("lc-mcp-guard-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[90, 30, 9, 255]; 64] };
-    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    let img = dac_raster::Rgba8 { width: 8, height: 8, data: vec![[90, 30, 9, 255]; 64] };
+    let png = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).unwrap();
     let orig = base.join("a.png");
     std::fs::write(&orig, &png).unwrap();
     let mut b = Headless::demo();
@@ -159,8 +159,8 @@ fn import_tool_moves_with_a_folder_template() {
     let _ = std::fs::remove_dir_all(&base);
     let (src, dest) = (base.join("card"), base.join("out"));
     std::fs::create_dir_all(&src).unwrap();
-    let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[21, 3, 9, 255]; 64] };
-    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    let img = dac_raster::Rgba8 { width: 8, height: 8, data: vec![[21, 3, 9, 255]; 64] };
+    let png = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).unwrap();
     std::fs::write(src.join("sample.png"), png).unwrap();
     let mut b = Headless::demo();
     b.session.clock = Box::new(|| "2026-01-14T05:58:48".to_string());
@@ -286,7 +286,7 @@ fn core_tools_have_hints_and_reject_unknown_keys() {
         let writer = tools.iter().find(|t| t["name"] == "render_photo").unwrap();
         assert_eq!(writer["annotations"]["readOnlyHint"], false);
         let export = tools.iter().find(|t| t["name"] == "export").unwrap();
-        for key in lightcraft_engine::export::OPTION_PARAMS.iter().chain(lightcraft_engine::export::TARGET_PARAMS) {
+        for key in dac_engine::export::OPTION_PARAMS.iter().chain(dac_engine::export::TARGET_PARAMS) {
             assert!(export["inputSchema"]["properties"].get(*key).is_some(), "missing export argument {key}");
         }
         let before = rpc(&mut s, 2, "resources/read", json!({"uri":"lightcraft://library"}));

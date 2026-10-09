@@ -1,9 +1,9 @@
-use lightcraft_catalog::{Op, Photo, PhotoId, Source};
-use lightcraft_develop::{BrushStroke, DevelopSettings, Mask, MaskComponent, MaskShape};
-use lightcraft_engine::Session;
-use lightcraft_engine::media::{RenderJob, RenderResult};
-use lightcraft_ui_egui::{
-    LightcraftApp, Services,
+use dac_catalog::{Op, Photo, PhotoId, Source};
+use dac_develop::{BrushStroke, DevelopSettings, Mask, MaskComponent, MaskShape};
+use dac_engine::Session;
+use dac_engine::media::{RenderJob, RenderResult};
+use dac_ui_egui::{
+    DacApp, Services,
     headless::Headless,
     panels::grid::request_thumb,
     render::{RenderOffload, Slot, Tex},
@@ -74,7 +74,7 @@ fn settings(points: usize) -> DevelopSettings {
     let mut s = DevelopSettings::default();
     if points > 0 {
         let stroke = BrushStroke {
-            points: (0..points).map(|i| lightcraft_geom::Point::new((i % 100) as f64 / 100.0, (i / 100) as f64 / 100.0)).collect(),
+            points: (0..points).map(|i| dac_geom::Point::new((i % 100) as f64 / 100.0, (i / 100) as f64 / 100.0)).collect(),
             ..Default::default()
         };
         s.masks.push(Mask {
@@ -103,7 +103,7 @@ fn micro(points: usize, pending: bool) {
         p.content_hash = Some(format!("{i:032x}"));
         session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
-    let mut app = LightcraftApp::new(session, Services::default());
+    let mut app = DacApp::new(session, Services::default());
     app.renderer.set_offload(Box::new(Blocked));
     let ctx = egui::Context::default();
     let texture = ctx.load_texture("audit", egui::ColorImage::new([1, 1], vec![egui::Color32::GRAY]), Default::default());
@@ -163,9 +163,9 @@ fn verify_texture(h: &Headless, id: PhotoId) {
         assert!(p.preview_only.is_none(), "embedded-preview fallback does not validate RAW decoding");
         assert!(info.raw, "fresh loader must return decoded RAW data");
     }
-    let req = lightcraft_engine::pipeline::RenderRequest { apply_crop: true, ..lightcraft_engine::pipeline::RenderRequest::fit(edge, edge) };
+    let req = dac_engine::pipeline::RenderRequest { apply_crop: true, ..dac_engine::pipeline::RenderRequest::fit(edge, edge) };
     // Fresh direct CPU render: no candidate job/hash/source/preview cache helpers.
-    let expected = lightcraft_engine::pipeline::render(&source, &info, &p.develop, &req).image;
+    let expected = dac_engine::pipeline::render(&source, &info, &p.develop, &req).image;
     assert_eq!(tex.size, [expected.width, expected.height]);
     assert_eq!(tex.pixels.as_ref().unwrap().pixels.iter().flat_map(|c| c.to_array()).collect::<Vec<_>>(), expected.as_bytes());
 }
@@ -198,13 +198,13 @@ fn real() {
         p.embedded_lens = probe.embedded_lens;
         p.content_hash = probe.content_hash;
         p.preview_only = probe.preview_only;
-        lightcraft_engine::import::apply_import_defaults(&session, &mut p);
+        dac_engine::import::apply_import_defaults(&session, &mut p);
         session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
-    let mut h = Headless::new(LightcraftApp::new(session, Services { png: None, ..Default::default() }), [1400.0, 900.0], 1.0);
-    h.app.renderer = lightcraft_ui_egui::render::Renderer::with_worker_threads(1);
+    let mut h = Headless::new(DacApp::new(session, Services { png: None, ..Default::default() }), [1400.0, 900.0], 1.0);
+    h.app.renderer = dac_ui_egui::render::Renderer::with_worker_threads(1);
     h.app.renderer.keep_pixels = true;
-    h.app.ui.view = lightcraft_ui_egui::state::ViewMode::PhotoGrid;
+    h.app.ui.view = dac_ui_egui::state::ViewMode::PhotoGrid;
     h.app.ui.thumb_size = if ext == "rw2" { 160.0 } else { 100.0 };
     let mut loading_frame = vec![];
     let mut loading_grid = vec![];

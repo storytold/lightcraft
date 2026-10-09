@@ -26,10 +26,10 @@
 
 use crate::tiffraw::{Packing, check_image, read_image_in};
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result, ljpeg};
-use lightcraft_geom::Orientation;
-use lightcraft_tiff::image::{Chunk, ImageInfo, Layout, chunk_bytes};
-use lightcraft_tiff::tags::{self as t, photometric};
-use lightcraft_tiff::{Ifd, Tiff, makernote};
+use dac_geom::Orientation;
+use dac_tiff::image::{Chunk, ImageInfo, Layout, chunk_bytes};
+use dac_tiff::tags::{self as t, photometric};
+use dac_tiff::{Ifd, Tiff, makernote};
 use rayon::prelude::*;
 
 const TONE_CURVE: u16 = 0x7010;
@@ -157,7 +157,7 @@ const TAG2010_WB: &[(&[&str], usize)] = &[
 /// As-shot white balance from the maker note's enciphered `Tag2010` block (bodies that do not write `0x7313` in
 /// the raw IFD: most ARWs before 2017). `model` is the Exif model; Sony appends a regional "V" to some names
 /// (SLT-A77V), which the documented lists omit.
-fn tag2010_wb(model: &str, block: &[u8], order: lightcraft_tiff::ByteOrder) -> Option<[f32; 3]> {
+fn tag2010_wb(model: &str, block: &[u8], order: dac_tiff::ByteOrder) -> Option<[f32; 3]> {
     let model = model.trim();
     let &(_, offset) = TAG2010_WB.iter().find(|(models, _)| models.iter().any(|m| model == *m || model.strip_suffix('V') == Some(*m)))?;
     let bytes: Vec<u8> = block.get(offset..offset + 6)?.iter().map(|&b| DECIPHER[b as usize]).collect();
@@ -388,11 +388,11 @@ const SR2_KEY: [u8; 4] = [0x11, 0x22, 0x33, 0x44];
 
 /// The per-channel black level from the encrypted `SR2SubIFD` (see [`SR2_BLACK_AT`]), in 14-bit units; `None`
 /// unless the file uses the known key and the four decoded levels are equal and plausible.
-fn sr2_black(bytes: &[u8], ifd0: &Ifd, order: lightcraft_tiff::ByteOrder) -> Option<f32> {
+fn sr2_black(bytes: &[u8], ifd0: &Ifd, order: dac_tiff::ByteOrder) -> Option<f32> {
     let private = ifd0.bytes(t::DNG_PRIVATE_DATA)?;
     let at = order.read_u32(private, 0)? as u64;
-    let opts = lightcraft_tiff::ParseOptions { max_ifds: 1, max_depth: 0, follow_children: false, ..Default::default() };
-    let (sr2, _) = lightcraft_tiff::parse_ifd_at(bytes, at, order, 0, false, &opts).ok()?;
+    let opts = dac_tiff::ParseOptions { max_ifds: 1, max_depth: 0, follow_children: false, ..Default::default() };
+    let (sr2, _) = dac_tiff::parse_ifd_at(bytes, at, order, 0, false, &opts).ok()?;
     if sr2.bytes(SR2_SUBIFD_KEY)? != SR2_KEY {
         return None;
     }
@@ -405,7 +405,7 @@ fn sr2_black(bytes: &[u8], ifd0: &Ifd, order: lightcraft_tiff::ByteOrder) -> Opt
 
 /// Decipher the eight `SR2SubIFD` bytes at [`SR2_BLACK_AT`] into one black level (the mean of four near-equal,
 /// plausible per-channel levels).
-fn sr2_black_levels(cipher: &[u8], order: lightcraft_tiff::ByteOrder) -> Option<f32> {
+fn sr2_black_levels(cipher: &[u8], order: dac_tiff::ByteOrder) -> Option<f32> {
     let plain: Vec<u8> = cipher.iter().zip(SR2_BLACK_KEYSTREAM).map(|(c, k)| c ^ k).collect();
     let levels: Vec<u16> = (0..4).filter_map(|i| order.read_u16(&plain, 2 * i)).collect();
     let (&lo, &hi) = (levels.iter().min()?, levels.iter().max()?);
@@ -535,7 +535,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         (Some([x, y]), Some([cw, ch])) if *cw > 0 && *ch > 0 => Rect::new(*x as usize, *y as usize, *cw as usize, *ch as usize).clipped(w, h),
         _ => default_crop(raw, mn.as_ref(), w, h),
     };
-    let mut metadata = lightcraft_meta::from_tiff(&tiff);
+    let mut metadata = dac_meta::from_tiff(&tiff);
     metadata.width = Some(crop.width as u32);
     metadata.height = Some(crop.height as u32);
     let img = RawImage {
@@ -569,7 +569,7 @@ mod tests {
 
     #[test]
     fn downsized_lossless_is_linear_rgb_not_cfa() {
-        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+        use dac_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
         let mut raw = IfdBuilder::new();
         raw.set(t::MAKE, Value::Ascii("SONY".into()));
         raw.set(t::MODEL, Value::Ascii("ILCE-7M4".into()));
@@ -601,7 +601,7 @@ mod tests {
 
     /// A 32767-compressed ARW whose single strip is `strip` bytes for a 32 x 4 image.
     fn arw_with_strip(strip: usize) -> Vec<u8> {
-        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+        use dac_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
         let mut raw = IfdBuilder::new();
         raw.set(t::MAKE, Value::Ascii("SONY".into()));
         raw.set(t::MODEL, Value::Ascii("DSLR-A200".into()));
@@ -711,7 +711,7 @@ mod tests {
 
     #[test]
     fn tag2010_white_balance_by_model() {
-        use lightcraft_tiff::ByteOrder::Little;
+        use dac_tiff::ByteOrder::Little;
         let mut plain = vec![0u8; 700];
         for (i, v) in [669u16, 256, 441].iter().enumerate() {
             plain[612 + 2 * i..614 + 2 * i].copy_from_slice(&v.to_le_bytes());
@@ -734,7 +734,7 @@ mod tests {
 
     #[test]
     fn sr2_black_level_decodes_and_rejects_garbage() {
-        use lightcraft_tiff::ByteOrder::Little;
+        use dac_tiff::ByteOrder::Little;
         let cipher =
             |levels: [u16; 4]| -> Vec<u8> { levels.iter().flat_map(|v| v.to_le_bytes()).zip(SR2_BLACK_KEYSTREAM).map(|(p, k)| p ^ k).collect() };
         assert_eq!(sr2_black_levels(&cipher([800; 4]), Little), Some(800.0));

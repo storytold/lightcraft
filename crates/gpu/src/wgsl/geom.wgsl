@@ -1,4 +1,4 @@
-// Geometry (`lightcraft_pipeline::geometry::Frame::sample`): orientation, and the single bilinear
+// Geometry (`dac_pipeline::geometry::Frame::sample`): orientation, and the single bilinear
 // resample through the crop/straighten/flip affine or the full lens + perspective warp.
 // Bindings: src (rgb), dst (rgb).
 
@@ -68,7 +68,7 @@ fn sample_affine(@builtin(global_invocation_id) g: vec3<u32>) {
     put(g.y * w + g.x, bilinear(pu(0u), pu(1u), x, y));
 }
 
-// --- the lens / perspective warp (`lightcraft_pipeline::optics::Warp`), in oriented-source px.
+// --- the lens / perspective warp (`dac_pipeline::optics::Warp`), in oriented-source px.
 // P layout (see `geom_warp_params`): 0 bw, 1 bh, 2 w, 3 h, 4..10 output → transformed affine,
 // 10 sx, 11 sy, 12 W, 13 H, 14 persp?, 15..24 persp_inv, 24 k1, 25..28 ca, 28 lens_dist,
 // 29 warp?, 30..48 warp planes (3 × 6), 48 warp centre x, 49 y, 50 warp radius, 51 vig_stops,

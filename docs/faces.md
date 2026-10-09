@@ -45,7 +45,7 @@ does check is listed under "Agreement and regression coverage".
    known) and which site the file comes from. **Download stays disabled until you tick "I have read these terms and
    accept them for my own use".** Nothing is fetched before that.
 2. LightCraft downloads the file from the model's own repository (GitHub for YuNet and SFace, Hugging Face for
-   AuraFace), at an address pinned to a commit, over https, in pure Rust (the `lightcraft-fetch` crate: no `curl`, no
+   AuraFace), at an address pinned to a commit, over https, in pure Rust (the `dac-fetch` crate: no `curl`, no
    OpenSSL). An interrupted download resumes where it stopped.
 3. The file must match the model's recorded size and SHA-256, or it is thrown away. A file that matches is installed
    by itself. Nothing else is sent anywhere, and no token or account is involved.
@@ -164,7 +164,7 @@ exponential sigmoid. Tiny confidence outputs differ by at most 4.47e-7 absolute 
 far below the 0.6 detection threshold. Neither pinned recognizer uses Sigmoid. No approximate activation or reduced
 precision was introduced to get the speed figures.
 
-`LC_FACE_MODELS=<folder> cargo test --release -p lightcraft-faces runtime::tests::real_models_pass_the_self_test -- --ignored --nocapture`
+`LC_FACE_MODELS=<folder> cargo test --release -p dac-faces runtime::tests::real_models_pass_the_self_test -- --ignored --nocapture`
 runs the installation checks against locally supplied, hash-recognized model files. Models/crops stay out of git.
 
 ### And how well do they recognise?

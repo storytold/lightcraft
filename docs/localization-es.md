@@ -42,6 +42,6 @@ Textos fijos: `crates/ui-egui/locales/es.json`. Mensajes con valores:
 comprueba los marcadores al compilar. Las terminaciones de plural del inglés se ocultan con `{:.0}`.
 
 ```sh
-cargo test -p lightcraft-ui-egui i18n::tests -- --nocapture
+cargo test -p dac-ui-egui i18n::tests -- --nocapture
 LIGHTCRAFT_LANGUAGE=es lightcraft-cli snapshot --demo -o espanol.png --size 1600x1000
 ```

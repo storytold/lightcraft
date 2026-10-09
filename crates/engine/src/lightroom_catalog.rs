@@ -9,8 +9,8 @@ use std::sync::{
 };
 
 use crate::lightroom_sqlite::{Database, LiveTable, Value as SqlValue};
-use lightcraft_catalog::{Album, Flag, Op, Photo, PhotoId, Source};
-use lightcraft_geom::{Affine, Orientation, Point, Rect};
+use dac_catalog::{Album, Flag, Op, Photo, PhotoId, Source};
+use dac_geom::{Affine, Orientation, Point, Rect};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -627,7 +627,7 @@ fn apply(s: &mut crate::Session, data: CatalogImport, update_existing: bool) -> 
     if let Some(path) = index_path {
         s.persist()?;
         let bytes = serde_json::to_vec(&applied.index).map_err(|e| error(e.to_string()))?;
-        lightcraft_catalog::safe_file::write_atomic(&path, &bytes).map_err(|e| error(e.to_string()))?;
+        dac_catalog::safe_file::write_atomic(&path, &bytes).map_err(|e| error(e.to_string()))?;
     }
     Ok(applied.report)
 }
@@ -705,7 +705,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, data: CatalogImport, contex
                 &now,
             );
             if ["RAW", "DNG", "ARW", "CR2", "CR3", "NEF", "NRW", "RAF", "ORF", "RW2", "PEF"].contains(&p.format.to_uppercase().as_str()) {
-                p.kind = lightcraft_catalog::MediaKind::Raw;
+                p.kind = dac_catalog::MediaKind::Raw;
             }
             p
         };
@@ -717,7 +717,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, data: CatalogImport, contex
             preserved += 1;
         }
         if !src.xmp.is_empty() {
-            match crate::sidecar::parse_sidecar(&src.xmp, p.kind == lightcraft_catalog::MediaKind::Raw) {
+            match crate::sidecar::parse_sidecar(&src.xmp, p.kind == dac_catalog::MediaKind::Raw) {
                 Ok(mut sc) => {
                     if let Some(crate::sidecar::DevelopPatch::Partial(partial)) = &mut sc.develop {
                         strip_xmp_sentinels(partial);
@@ -745,13 +745,13 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, data: CatalogImport, contex
             let stored_aspect = number(&src.image, "fileWidth") as f64 / number(&src.image, "fileHeight") as f64;
             match mapped_settings(
                 &src.settings,
-                p.kind == lightcraft_catalog::MediaKind::Raw,
+                p.kind == dac_catalog::MediaKind::Raw,
                 p.width.max(1) as f64 / p.height.max(1) as f64,
                 orientation,
                 stored_aspect,
             ) {
                 Ok((partial, unknown)) => {
-                    p.develop = Arc::new(lightcraft_develop::apply_partial(&p.develop, &partial, 1.0));
+                    p.develop = Arc::new(dac_develop::apply_partial(&p.develop, &partial, 1.0));
                     p.edited = Some(now.clone());
                     if !unknown.is_empty() {
                         unmapped.insert(src.source_id, unknown);
@@ -788,7 +788,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, data: CatalogImport, contex
             .collections
             .get(&collection_key)
             .copied()
-            .map(lightcraft_catalog::AlbumId)
+            .map(dac_catalog::AlbumId)
             .filter(|id| s.catalog.album(*id).is_some())
             .unwrap_or_else(|| s.catalog.alloc_album_id());
         index.collections.insert(collection_key, id.0);
@@ -857,7 +857,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, data: CatalogImport, contex
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_geom::CropGeometry;
+    use dac_geom::CropGeometry;
     fn row(v: Value) -> Row {
         serde_json::from_value(v).unwrap()
     }
@@ -927,7 +927,7 @@ mod tests {
         let data = sample();
         apply(&mut s, data.clone(), false).unwrap();
         let id = s.catalog.photos().find(|p| p.copy_of.is_none()).unwrap().id;
-        s.set_develop(id, lightcraft_develop::DevelopSettings::default(), "Personal edit").unwrap();
+        s.set_develop(id, dac_develop::DevelopSettings::default(), "Personal edit").unwrap();
         let r = apply(&mut s, data.clone(), false).unwrap();
         assert!(r["preservedExistingEdits"].as_u64().unwrap() > 0);
         assert_eq!(s.catalog.photo(id).unwrap().develop.light.exposure, 0.0);

@@ -46,7 +46,7 @@ modules:
         CARGO_HOME: /run/build/lightcraft/cargo
         CARGO_NET_OFFLINE: 'true'
     build-commands:
-      - cargo --offline build --release --locked -p lightcraft -p lightcraft-cli
+      - cargo --offline build --release --locked -p dac-app -p dac-cli
       - install -Dm755 target/release/lightcraft /app/bin/lightcraft
       - install -Dm755 target/release/lightcraft-cli /app/bin/lightcraft-cli
       - install -Dm644 packaging/linux/ai.storyteller.lightcraft.desktop /app/share/applications/ai.storyteller.lightcraft.desktop

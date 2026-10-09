@@ -3,7 +3,7 @@
 //! and a catalog clone.
 //!
 //! ```text
-//! cargo run --release -p lightcraft-catalog --example persist_bench -- <dir> [photos…]
+//! cargo run --release -p dac-catalog --example persist_bench -- <dir> [photos…]
 //! ```
 //!
 //! `<dir>` is a scratch directory (wiped per size). Default sizes: 1000 10000 85000. 90 % of the
@@ -14,8 +14,8 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use lightcraft_catalog::*;
-use lightcraft_develop::DevelopSettings;
+use dac_catalog::*;
+use dac_develop::DevelopSettings;
 
 fn ms(t: Instant) -> f64 {
     t.elapsed().as_secs_f64() * 1e3

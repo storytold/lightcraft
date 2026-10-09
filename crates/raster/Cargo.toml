@@ -1,5 +1,5 @@
 [package]
-name = "lightcraft-raster"
+name = "dac-raster"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,8 +10,8 @@ workspace = true
 
 [dependencies]
 serde = { workspace = true }
-lightcraft-geom = { workspace = true }
-lightcraft-color = { workspace = true }
+dac-geom = { workspace = true }
+dac-color = { workspace = true }
 rayon = { workspace = true, optional = true }
 
 [features]

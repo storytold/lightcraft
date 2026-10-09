@@ -6,7 +6,7 @@
 use egui::{Align2, RichText, vec2};
 use serde_json::json;
 
-use crate::LightcraftApp;
+use crate::DacApp;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -47,7 +47,7 @@ enum Choice {
 
 /// Open `path` (`None`: ask for a folder) through `app.openLibrary`; on success the problem is
 /// over (and command-line files are imported), else it shows the new error.
-fn open(app: &mut LightcraftApp, path: Option<String>) {
+fn open(app: &mut DacApp, path: Option<String>) {
     let params = match &path {
         Some(p) => json!({"path": p}),
         None => json!({}),
@@ -76,14 +76,14 @@ fn open(app: &mut LightcraftApp, path: Option<String>) {
 }
 
 /// Clear the problem once a library is open (e.g. through Settings → Open Library…).
-pub fn logic(app: &mut LightcraftApp) {
+pub fn logic(app: &mut DacApp) {
     if app.library_problem.is_some() && app.session.library.is_some() {
         app.library_problem = None;
     }
 }
 
 /// The blocking window (until a choice is made).
-pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn show(app: &mut DacApp, ctx: &egui::Context) {
     let Some(problem) = app.library_problem.clone() else { return };
     if problem.dismissed {
         return;
@@ -160,7 +160,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
 }
 
 /// The banner under the top bar while the session is temporary (Continue Without Saving).
-pub fn banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn banner(app: &mut DacApp, ui: &mut egui::Ui) {
     if !app.library_problem.as_ref().is_some_and(|p| p.dismissed) {
         return;
     }

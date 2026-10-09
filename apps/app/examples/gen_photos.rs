@@ -1,12 +1,12 @@
 //! Generate a folder of procedural test photos (JPEG) for import/startup benchmarks.
 //!
-//! `cargo run --release -p lightcraft --example gen_photos -- OUT_DIR [COUNT=200] [LONG_EDGE=2000]`
+//! `cargo run --release -p dac-app --example gen_photos -- OUT_DIR [COUNT=200] [LONG_EDGE=2000]`
 //!
-//! Each photo is a `lightcraft-scenes` demo scene rendered through the pipeline with a varied
+//! Each photo is a `dac-scenes` demo scene rendered through the pipeline with a varied
 //! look (exposure, temperature, vibrance), so every file has distinct bytes. The output is our own
 //! procedural content; keep it out of the repository (write to a scratch or gitignored folder).
 
-use lightcraft_engine::Session;
+use dac_engine::Session;
 use serde_json::json;
 
 fn main() {
@@ -30,11 +30,11 @@ fn main() {
         });
         let _ = s.execute("develop.set", &json!({"values": v}));
         let img = s.render_now(id, edge, edge).expect("render");
-        let bytes = lightcraft_codecs::encode_jpeg(
-            &lightcraft_codecs::EncodeImage::rgba8(&img.image),
+        let bytes = dac_codecs::encode_jpeg(
+            &dac_codecs::EncodeImage::rgba8(&img.image),
             88,
-            lightcraft_codecs::ChromaSubsampling::S420,
-            &lightcraft_codecs::EncodeMeta::default(),
+            dac_codecs::ChromaSubsampling::S420,
+            &dac_codecs::EncodeMeta::default(),
         )
         .expect("encode");
         let dir = out.join(format!("roll-{:02}", i / 50 + 1));

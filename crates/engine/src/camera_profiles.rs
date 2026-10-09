@@ -10,8 +10,8 @@
 //! `<config>/camera-profiles`; a local profile replaces the one built in ([`BUNDLED`], from
 //! `assets/camera-profiles/`). They are read once per process; a damaged or hostile file is
 //! ignored with a warning. They hold aggregate colour statistics only, never image content.
-use lightcraft_color::Mat3;
-use lightcraft_raw::profile::HsvTable;
+use dac_color::Mat3;
+use dac_raw::profile::HsvTable;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -168,7 +168,7 @@ pub fn cache_key() -> u64 {
             })
             .collect();
         files.sort();
-        let mut h = lightcraft_preview::Hasher128::new();
+        let mut h = dac_preview::Hasher128::new();
         for (name, len, modified) in &files {
             h.str(name).u64(*len).u64(*modified);
         }
@@ -192,7 +192,7 @@ impl Pool {
     /// Add one raw file's colour pairs. `Ok(None)` when the file can't contribute (not an ARW,
     /// NEF or RAF without colour matrices, no usable camera JPEG, too little colour).
     pub fn add(&mut self, bytes: &[u8]) -> Result<Option<String>, String> {
-        let mut raw = lightcraft_raw::decode(bytes).map_err(|e| e.to_string())?;
+        let mut raw = dac_raw::decode(bytes).map_err(|e| e.to_string())?;
         // colour only: geometric lens corrections would stop the sensor proxy from binning
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
         let Some(model) = raw.metadata.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) else { return Ok(None) };

@@ -4,8 +4,8 @@
 use crate::icc::{self, IccColorModel, IccKind};
 use crate::space::{NamedSpace, SourceSpace, SpaceOrigin, Trc};
 use crate::{DecodeOptions, Decoded, Error, Format, Result, exif};
-use lightcraft_raster::resample::{Filter, fit};
-use lightcraft_raster::{Plane, Rgb32f, par_rows};
+use dac_raster::resample::{Filter, fit};
+use dac_raster::{Plane, Rgb32f, par_rows};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Model {
@@ -328,7 +328,7 @@ fn cmyk(raw: &Raw, ch: usize, icc_bytes: Option<&[u8]>, info: Option<&icc::IccIn
         .iter()
         .map(|c| {
             let k = 1.0 - c[3];
-            [(1.0 - c[0]) * k, (1.0 - c[1]) * k, (1.0 - c[2]) * k].map(lightcraft_color::transfer::srgb_to_linear)
+            [(1.0 - c[0]) * k, (1.0 - c[1]) * k, (1.0 - c[2]) * k].map(dac_color::transfer::srgb_to_linear)
         })
         .collect();
     let origin = if icc_bytes.is_some() { SpaceOrigin::IccUnsupported } else { SpaceOrigin::Naive };

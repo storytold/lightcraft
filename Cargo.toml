@@ -11,30 +11,30 @@ repository = "https://github.com/storytold/lightcraft"
 
 [workspace.dependencies]
 # internal
-lightcraft-denoise-core = { path = "crates/denoise-core" }
-lightcraft-denoise = { path = "crates/denoise", default-features = false }
-lightcraft-geom = { path = "crates/geom" }
-lightcraft-faces = { path = "crates/faces" }
-lightcraft-sysmem = { path = "crates/sysmem" }
-lightcraft-color = { path = "crates/color" }
-lightcraft-raster = { path = "crates/raster" }
-lightcraft-tiff = { path = "crates/tiff" }
-lightcraft-raw = { path = "crates/raw" }
-lightcraft-codecs = { path = "crates/codecs" }
-lightcraft-meta = { path = "crates/meta" }
-lightcraft-develop = { path = "crates/develop" }
-lightcraft-scenes = { path = "crates/scenes" }
-lightcraft-pipeline = { path = "crates/pipeline" }
-lightcraft-gpu = { path = "crates/gpu" }
-lightcraft-catalog = { path = "crates/catalog" }
-lightcraft-preview = { path = "crates/preview" }
-lightcraft-merge = { path = "crates/merge" }
-lightcraft-engine = { path = "crates/engine" }
-lightcraft-ui-egui = { path = "crates/ui-egui" }
-lightcraft-mcp = { path = "crates/mcp" }
-lightcraft-fetch = { path = "crates/fetch" }
-lightcraft-heif = { path = "crates/heif" }
-lightcraft-segment = { path = "crates/segment" }
+dac-denoise-core = { path = "crates/denoise-core" }
+dac-denoise = { path = "crates/denoise", default-features = false }
+dac-geom = { path = "crates/geom" }
+dac-faces = { path = "crates/faces" }
+dac-sysmem = { path = "crates/sysmem" }
+dac-color = { path = "crates/color" }
+dac-raster = { path = "crates/raster" }
+dac-tiff = { path = "crates/tiff" }
+dac-raw = { path = "crates/raw" }
+dac-codecs = { path = "crates/codecs" }
+dac-meta = { path = "crates/meta" }
+dac-develop = { path = "crates/develop" }
+dac-scenes = { path = "crates/scenes" }
+dac-pipeline = { path = "crates/pipeline" }
+dac-gpu = { path = "crates/gpu" }
+dac-catalog = { path = "crates/catalog" }
+dac-preview = { path = "crates/preview" }
+dac-merge = { path = "crates/merge" }
+dac-engine = { path = "crates/engine" }
+dac-ui-egui = { path = "crates/ui-egui" }
+dac-mcp = { path = "crates/mcp" }
+dac-fetch = { path = "crates/fetch" }
+dac-heif = { path = "crates/heif" }
+dac-segment = { path = "crates/segment" }
 
 # foundation
 thiserror = "2"
@@ -70,7 +70,7 @@ zune-jpegxl = { version = "0.5", default-features = false, features = ["std"] } 
 ravif = { version = "0.13", default-features = false, features = ["threading"] } # no "asm": it needs nasm (non-Rust)
 
 # gpu (crates/gpu; native backends only, no GL: everything stays pure Rust)
-# SAM 3 inference (lightcraft-segment). 0.9.2: later releases pull `tokenizers` with the
+# SAM 3 inference (dac-segment). 0.9.2: later releases pull `tokenizers` with the
 # Oniguruma C library into candle-core, and the product is pure Rust.
 candle-core = { version = "=0.9.2", default-features = false }
 candle-nn = { version = "=0.9.2", default-features = false }
@@ -86,7 +86,7 @@ rfd = "0.17"
 muda = { version = "0.21", default-features = false } # native menu bar (macOS: objc2/AppKit, pure Rust; no GTK)
 web-time = "1"
 
-# web (apps/lightcraft-web)
+# web (apps/web)
 wasm-bindgen = "0.2.129"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
@@ -132,15 +132,15 @@ panic = "abort"
 opt-level = "s"
 
 [profile.web.package]
-lightcraft-pipeline = { opt-level = 3 }
-lightcraft-raster = { opt-level = 3 }
-lightcraft-color = { opt-level = 3 }
-lightcraft-develop = { opt-level = 3 }
-lightcraft-geom = { opt-level = 3 }
-lightcraft-raw = { opt-level = 3 }
-lightcraft-codecs = { opt-level = 3 }
-lightcraft-scenes = { opt-level = 3 }
-lightcraft-preview = { opt-level = 3 }
+dac-pipeline = { opt-level = 3 }
+dac-raster = { opt-level = 3 }
+dac-color = { opt-level = 3 }
+dac-develop = { opt-level = 3 }
+dac-geom = { opt-level = 3 }
+dac-raw = { opt-level = 3 }
+dac-codecs = { opt-level = 3 }
+dac-scenes = { opt-level = 3 }
+dac-preview = { opt-level = 3 }
 zune-jpeg = { opt-level = 3 }
 zune-core = { opt-level = 3 }
 jpeg-decoder = { opt-level = 3 }

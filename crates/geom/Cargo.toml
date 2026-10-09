@@ -1,5 +1,5 @@
 [package]
-name = "lightcraft-geom"
+name = "dac-geom"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

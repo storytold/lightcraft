@@ -2,10 +2,10 @@
 //! mutated/truncated valid files. Uses `decode_unguarded` so panics in our own code are not masked
 //! by the public entry point's panic guard.
 
-use lightcraft_codecs::exif::minimal_exif;
-use lightcraft_codecs::icc::write_named;
-use lightcraft_codecs::*;
-use lightcraft_raster::Rgba8;
+use dac_codecs::exif::minimal_exif;
+use dac_codecs::icc::write_named;
+use dac_codecs::*;
+use dac_raster::Rgba8;
 use proptest::prelude::*;
 use std::sync::OnceLock;
 
@@ -35,7 +35,7 @@ fn try_all(bytes: &[u8]) {
     let _ = decode(bytes, small_opts());
     let _ = read_header(bytes);
     let _ = decode_thumbnail_with(bytes, &ThumbnailOptions { max_pixels: small_opts().max_pixels, ..ThumbnailOptions::new(16) });
-    let _ = lightcraft_codecs::icc::parse(bytes);
+    let _ = dac_codecs::icc::parse(bytes);
 }
 
 #[test]

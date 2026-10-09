@@ -69,11 +69,11 @@ let
     vulkan-loader
   ];
 
-  # The two native binaries. The wasm app (apps/lightcraft-web) is built by `cargo xtask web`, not
+  # The two native binaries. The wasm app (apps/web) is built by `cargo xtask web`, not
   # here; xtask is tooling.
   binaries = [
     "lightcraft"
-    "lightcraft-cli"
+    "dac-cli"
   ];
 in
 rustPlatform.buildRustPackage {
@@ -100,7 +100,7 @@ rustPlatform.buildRustPackage {
     "-p"
     "lightcraft"
     "-p"
-    "lightcraft-cli"
+    "dac-cli"
   ];
 
   # `cargo xtask ci` runs `cargo test --workspace`. Tests that need what the sandbox cannot have
@@ -108,7 +108,7 @@ rustPlatform.buildRustPackage {
   # equivalence tests (no adapter).
   cargoTestFlags = [ "--workspace" ];
 
-  # One test thread at a time (RUST_TEST_THREADS=1). `lightcraft-catalog`'s `tests_lock` tests share
+  # One test thread at a time (RUST_TEST_THREADS=1). `dac-catalog`'s `tests_lock` tests share
   # a process-global resource: `flock` is inherited across `fork`, so a child process that another
   # test forked keeps the parent's just-released library lock alive until its `execve` closes the
   # (CLOEXEC) fd — long enough that the sibling test sees a spurious `LockError::InUse`, on ~30 % of
@@ -193,7 +193,7 @@ rustPlatform.buildRustPackage {
       layer as its UI. It ships with lightcraft-cli, a headless renderer, command runner and MCP
       server for AI agents.
     '';
-    homepage = "https://getartcraft.com/apps/lightcraft";
+    homepage = "https://getartcraft.com/apps/app";
     license = with lib.licenses; [
       mit
       asl20

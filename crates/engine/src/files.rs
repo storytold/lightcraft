@@ -1,19 +1,19 @@
 //! Real files: probing (dimensions + metadata for import) and loading (decode → linear Rec.2020,
-//! oriented, downscaled to the requested level). Standard formats go through `lightcraft-codecs`,
-//! camera raws through `lightcraft-raw` (demosaic + DNG colour model).
+//! oriented, downscaled to the requested level). Standard formats go through `dac-codecs`,
+//! camera raws through `dac-raw` (demosaic + DNG colour model).
 
 use std::sync::Arc;
 
-use lightcraft_catalog::{MediaKind, Meta};
-use lightcraft_color::cct::xy_to_temp_tint;
-use lightcraft_geom::Orientation;
-use lightcraft_pipeline::SourceInfo;
-use lightcraft_raster::Rgb32f;
-use lightcraft_raster::resample::{Filter, fit};
+use dac_catalog::{MediaKind, Meta};
+use dac_color::cct::xy_to_temp_tint;
+use dac_geom::Orientation;
+use dac_pipeline::SourceInfo;
+use dac_raster::Rgb32f;
+use dac_raster::resample::{Filter, fit};
 
 use crate::media::{DenoiseSpec, FileLoader, FileProbe, PairLoader, PreviewLoader, ProbeInfo};
 
-fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
+fn meta_of(m: &dac_meta::Metadata) -> (Meta, Option<String>) {
     let shutter = m.exposure_time.map(|t| if t >= 1.0 { format!("{t:.0}") } else { format!("1/{:.0}", 1.0 / t) }).unwrap_or_default();
     let camera = [m.make.clone().unwrap_or_default(), m.model.clone().unwrap_or_default()].join(" ").trim().to_string();
     let meta = Meta {
@@ -33,7 +33,7 @@ fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
         title: m.title.clone().unwrap_or_default(),
         caption: m.caption.clone().unwrap_or_default(),
         copyright: m.copyright.clone().unwrap_or_default(),
-        copyright_status: lightcraft_catalog::CopyrightStatus::from_marked(m.copyright_marked),
+        copyright_status: dac_catalog::CopyrightStatus::from_marked(m.copyright_marked),
         usage_terms: m.usage_terms.clone().unwrap_or_default(),
         copyright_url: m.copyright_url.clone().unwrap_or_default(),
         creator: m.artist.clone().unwrap_or_default(),
@@ -46,9 +46,9 @@ fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
 /// Lens corrections embedded in a raw's `OpcodeList3` (`WarpRectilinear`, `FixVignetteRadial`: a DNG's own, or the
 /// raw reader's equivalent of the camera's correction, e.g. Panasonic / Leica RW2 distortion), re-expressed for the
 /// default-cropped, EXIF-oriented image. These are the only "profile" corrections LightCraft applies.
-pub fn embedded_lens(raw: &lightcraft_raw::RawInfo) -> Option<lightcraft_develop::EmbeddedLens> {
-    use lightcraft_develop::{EmbeddedLens, EmbeddedVignette, EmbeddedWarp};
-    use lightcraft_geom::Point;
+pub fn embedded_lens(raw: &dac_raw::RawInfo) -> Option<dac_develop::EmbeddedLens> {
+    use dac_develop::{EmbeddedLens, EmbeddedVignette, EmbeddedWarp};
+    use dac_geom::Point;
     let (aw, ah) = (raw.active_area.width as f64, raw.active_area.height as f64);
     if aw < 2.0 || ah < 2.0 {
         return None;
@@ -70,12 +70,12 @@ pub fn embedded_lens(raw: &lightcraft_raw::RawInfo) -> Option<lightcraft_develop
     let mut lens = EmbeddedLens::default();
     for op in &raw.opcodes.list3 {
         match op {
-            lightcraft_raw::Opcode::WarpRectilinear { planes, center } if !planes.is_empty() && lens.warp.is_none() => {
+            dac_raw::Opcode::WarpRectilinear { planes, center } if !planes.is_empty() && lens.warp.is_none() => {
                 let (center, radius) = centre(*center);
                 let p = |i: usize| planes[i.min(planes.len() - 1)];
                 lens.warp = Some(EmbeddedWarp { planes: [p(0), p(1), p(2)], center, radius });
             }
-            lightcraft_raw::Opcode::FixVignetteRadial { k, center } if lens.vignette.is_none() => {
+            dac_raw::Opcode::FixVignetteRadial { k, center } if lens.vignette.is_none() => {
                 let (center, radius) = centre(*center);
                 lens.vignette = Some(EmbeddedVignette { k: *k, center, radius });
             }
@@ -85,7 +85,7 @@ pub fn embedded_lens(raw: &lightcraft_raw::RawInfo) -> Option<lightcraft_develop
     if lens.warp.is_none() && lens.vignette.is_none() {
         return None;
     }
-    Some(lightcraft_pipeline::optics::reorient_lens(&lens, raw.orientation, cw, ch))
+    Some(dac_pipeline::optics::reorient_lens(&lens, raw.orientation, cw, ch))
 }
 
 fn ext_upper(name: &str) -> String {
@@ -93,15 +93,15 @@ fn ext_upper(name: &str) -> String {
 }
 
 /// Probe a file's bytes: kind, dimensions (oriented), metadata. No pixel data is decompressed:
-/// raws are described from their headers ([`lightcraft_raw::probe_info`]), other images too
-/// ([`lightcraft_codecs::read_header`], which refuses truncated files but can't see damage inside
+/// raws are described from their headers ([`dac_raw::probe_info`]), other images too
+/// ([`dac_codecs::read_header`], which refuses truncated files but can't see damage inside
 /// compressed data that is all there: such a file imports and shows as unreadable when rendered).
 pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
-    let content_hash = Some(lightcraft_preview::hash_bytes(bytes).to_string());
-    let m = lightcraft_meta::extract(bytes);
+    let content_hash = Some(dac_preview::hash_bytes(bytes).to_string());
+    let m = dac_meta::extract(bytes);
     let (meta, captured) = meta_of(&m);
-    if lightcraft_raw::probe(bytes).is_some() {
-        let raw = match lightcraft_raw::probe_info(bytes).map_err(|e| preview_reason(bytes, e)) {
+    if dac_raw::probe(bytes).is_some() {
+        let raw = match dac_raw::probe_info(bytes).map_err(|e| preview_reason(bytes, e)) {
             Ok(r) => r,
             Err(Ok(why)) => {
                 // a raw variant we can't decode yet: describe it from its embedded preview
@@ -116,7 +116,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
                     meta,
                     as_shot_wb: None,
                     content_hash,
-                    xmp: lightcraft_meta::embedded(bytes).xmp,
+                    xmp: dac_meta::embedded(bytes).xmp,
                     preview_only: Some(why),
                     ..Default::default()
                 });
@@ -130,9 +130,9 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         if raw.orientation.swaps_axes() {
             std::mem::swap(&mut w, &mut h);
         }
-        let (t, tint) = xy_to_temp_tint(lightcraft_raw::color::as_shot_white_xy_of(&raw));
+        let (t, tint) = xy_to_temp_tint(dac_raw::color::as_shot_white_xy_of(&raw));
         // Vendor RGB multipliers do not identify an absolute illuminant without camera calibration.
-        let relative = crate::camera_preview::file_local_look(raw.format) && !lightcraft_raw::color::has_matrix(&raw.color);
+        let relative = crate::camera_preview::file_local_look(raw.format) && !dac_raw::color::has_matrix(&raw.color);
         let as_shot_wb = Some(if relative { (6500.0, 0.0) } else { (t.round(), tint.round()) });
         let embedded_lens = embedded_lens(&raw);
         return Ok(ProbeInfo {
@@ -146,16 +146,16 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
             meta,
             as_shot_wb,
             content_hash,
-            xmp: lightcraft_meta::embedded(bytes).xmp,
+            xmp: dac_meta::embedded(bytes).xmp,
             preview_only: None,
         });
     }
-    let fmt = lightcraft_codecs::sniff(bytes).ok_or("unrecognized file format")?;
+    let fmt = dac_codecs::sniff(bytes).ok_or("unrecognized file format")?;
     if !fmt.can_decode() {
         return Err(format!("{fmt:?} files are not supported yet"));
     }
     // headers only (issue #367: decoding the pixels was nearly all of an import's CPU time)
-    let header = lightcraft_codecs::read_header(bytes).map_err(|e| e.to_string())?;
+    let header = dac_codecs::read_header(bytes).map_err(|e| e.to_string())?;
     let o = Orientation::from_exif(header.orientation);
     let (mut w, mut h) = (header.width, header.height);
     if o.swaps_axes() {
@@ -187,11 +187,11 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
 /// decoder is verified on few bodies, and every CR3 opened from its embedded JPEG before it existed.
 /// So does any other failure of a recognised raw (damaged or oversized raw data, unreadable TIFF
 /// structure): its preview may still be intact. Only a file that is not a raw reports an error.
-fn preview_reason(bytes: &[u8], e: lightcraft_raw::RawError) -> Result<String, String> {
-    use lightcraft_raw::RawError;
+fn preview_reason(bytes: &[u8], e: dac_raw::RawError) -> Result<String, String> {
+    use dac_raw::RawError;
     match e {
         RawError::Unsupported(why) => Ok(why),
-        e if lightcraft_raw::probe(bytes) == Some(lightcraft_raw::RawFormat::Cr3) => Ok(format!("CR3 {e}")),
+        e if dac_raw::probe(bytes) == Some(dac_raw::RawFormat::Cr3) => Ok(format!("CR3 {e}")),
         RawError::NotRaw => Err(RawError::NotRaw.to_string()),
         e => Ok(e.to_string()),
     }
@@ -206,7 +206,7 @@ const HIGHLIGHT_CLIP: f32 = 0.99;
 /// cost of Bayer's, so 3× is accepted down to 75 % (a 24 MP X-Trans preview is then ~2000 px
 /// instead of a ~1.2 s full demosaic; zooming in still uses the full-size source).
 /// `None` = demosaic at full size.
-pub fn bin_factor(raw: &lightcraft_raw::RawImage, max_edge: usize) -> Option<usize> {
+pub fn bin_factor(raw: &dac_raw::RawImage, max_edge: usize) -> Option<usize> {
     let c = raw.crop.clipped(raw.active_area.width, raw.active_area.height);
     let long = if c.width > 1 && c.height > 1 { c.width.max(c.height) } else { raw.active_area.width.max(raw.active_area.height) };
     let need = (max_edge.saturating_mul(9) / 10).max(1);
@@ -239,8 +239,8 @@ pub fn load_vec_pair(bytes: Vec<u8>, max_edge: usize, spec: &DenoiseSpec) -> Res
 /// The denoised camera RGB of `raw` from its cached product, as the plain development would have it: the default
 /// crop, and `factor` × `factor` blocks averaged into one pixel when the plain one was binned. `None` when the product
 /// is missing, damaged, made from something else or not the size of this raw's active area.
-fn denoised_camera_rgb(raw: &lightcraft_raw::RawImage, spec: &DenoiseSpec, factor: usize) -> Option<Rgb32f> {
-    use lightcraft_denoise::product::{self, Window};
+fn denoised_camera_rgb(raw: &dac_raw::RawImage, spec: &DenoiseSpec, factor: usize) -> Option<Rgb32f> {
+    use dac_denoise::product::{self, Window};
     let a = raw.active_area;
     let header = product::read_header_at(&spec.product).ok()?;
     if header.key != spec.key || (header.width, header.height) != (a.width, a.height) {
@@ -262,8 +262,8 @@ fn load_bytes_now(
     max_edge: usize,
     denoise: Option<&DenoiseSpec>,
 ) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> {
-    if lightcraft_raw::probe(&bytes).is_some() {
-        let mut raw = match lightcraft_raw::decode(&bytes).map_err(|e| preview_reason(&bytes, e)) {
+    if dac_raw::probe(&bytes).is_some() {
+        let mut raw = match dac_raw::decode(&bytes).map_err(|e| preview_reason(&bytes, e)) {
             Ok(r) => r,
             Err(Ok(why)) => {
                 // show the camera's embedded JPEG (rendered, not raw) until the variant is supported
@@ -277,8 +277,8 @@ fn load_bytes_now(
         // (removed before the camera look's binned sensor proxy too, which needs an empty `OpcodeList3`).
         let lens = embedded_lens(&raw.info());
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
-        let xy = lightcraft_raw::color::as_shot_white_xy(&raw);
-        let t = lightcraft_raw::color::camera_transform(&raw, xy);
+        let xy = dac_raw::color::as_shot_white_xy(&raw);
+        let t = dac_raw::color::camera_transform(&raw, xy);
         // the source's segmentation mattes (DNG semantic masks), read while the preview is fitted
         let (camera_look, mattes) = rayon::join(|| crate::camera_preview::fit_preview(&raw, &bytes, &t), || dng_mattes(&bytes, &raw));
         drop(bytes);
@@ -294,26 +294,26 @@ fn load_bytes_now(
         let img = match binned {
             Some(img) => img,
             None => {
-                let method = if max_edge <= 600 { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd };
+                let method = if max_edge <= 600 { dac_raw::Method::Bilinear } else { dac_raw::Method::Ahd };
                 raw.develop(method).map_err(|e| e.to_string())?
             }
         };
         // the same development from the denoised mosaic, when the photo has been denoised
         let twin = denoise.and_then(|spec| denoised_camera_rgb(&raw, spec, factor)).filter(|d| d.width == img.width && d.height == img.height);
         // the samples aren't needed any more (the colour model below reads only the tags)
-        raw.data = lightcraft_raw::RawData::U16(Vec::new());
+        raw.data = dac_raw::RawData::U16(Vec::new());
         let wb = t.wb;
         let m = camera_look.as_ref().map(|p| p.matrix.mul(&t.matrix)).unwrap_or(t.matrix).to_f32();
         let hue_sat = camera_look.as_ref().and_then(|p| p.hue_sat.as_ref()).and_then(crate::camera_preview::HueSat::new);
         let gain = 2f32.powf(t.baseline_exposure as f32);
         // A DNG's own profile look (hue/saturation map, look table), DNG spec chapter 6.
-        let tables = lightcraft_raw::profile::ProfileTables::new(&raw.color.profile, lightcraft_raw::color::illuminant_weight(&raw.color, xy));
+        let tables = dac_raw::profile::ProfileTables::new(&raw.color.profile, dac_raw::color::illuminant_weight(&raw.color, xy));
         // camera RGB → what the pipeline takes: clipped highlights rebuilt, white balance and the colour model applied,
         // fitted to `max_edge` and upright (the same for the plain and the denoised picture)
         let finish = |mut img: Rgb32f| {
             let mut stages = vec![("develop", t0.elapsed())];
             stages.push(("transform", t0.elapsed()));
-            lightcraft_raw::highlight::reconstruct(&mut img, wb, HIGHLIGHT_CLIP);
+            dac_raw::highlight::reconstruct(&mut img, wb, HIGHLIGHT_CLIP);
             stages.push(("highlights", t0.elapsed()));
             img.map_in_place(|p| {
                 let c = [p[0] * wb[0], p[1] * wb[1], p[2] * wb[2]];
@@ -336,7 +336,7 @@ fn load_bytes_now(
             (img, stages)
         };
         let (img, stages) = finish(img);
-        if lightcraft_pipeline::profiling() {
+        if dac_pipeline::profiling() {
             let mut prev = std::time::Duration::ZERO;
             let parts: Vec<String> = stages
                 .iter()
@@ -354,8 +354,8 @@ fn load_bytes_now(
         // White balance re-evaluates the file's own colour model (when it has one and no
         // file-local look matrix sits on top of it)
         let camera_color = (!t.matrix_is_fallback && camera_look.is_none()).then(|| {
-            let tags = lightcraft_raw::ColorData { profile: Default::default(), ..raw.color.clone() };
-            Arc::new(lightcraft_pipeline::CameraColor { tags, developed_for: xy })
+            let tags = dac_raw::ColorData { profile: Default::default(), ..raw.color.clone() };
+            Arc::new(dac_pipeline::CameraColor { tags, developed_for: xy })
         });
         let camera_tone = camera_look.as_ref().map(|p| p.tone).or_else(|| raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve));
         let local_tone = local_tone(&raw);
@@ -376,7 +376,7 @@ fn load_bytes_now(
             },
         ));
     }
-    let d = lightcraft_codecs::decode(&bytes, fit_box(max_edge)).map_err(|e| e.to_string())?;
+    let d = dac_codecs::decode(&bytes, fit_box(max_edge)).map_err(|e| e.to_string())?;
     drop(bytes);
     let img = d.to_working();
     let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
@@ -385,26 +385,26 @@ fn load_bytes_now(
 
 /// The raw's gain table map with where its developed picture (the default crop, oriented) sits in
 /// the active area: rendered when the photo's "Camera local tone mapping" option is on.
-fn local_tone(raw: &lightcraft_raw::RawImage) -> Option<Arc<lightcraft_pipeline::local_tone::LocalTone>> {
+fn local_tone(raw: &dac_raw::RawImage) -> Option<Arc<dac_pipeline::local_tone::LocalTone>> {
     let map = raw.color.profile.gain_table_map.clone()?;
     let a = raw.active_area;
     let (aw, ah) = (a.width.max(1) as f64, a.height.max(1) as f64);
     let c = raw.develop_crop(a.width, a.height);
     let rect = [c.x as f64 / aw, c.y as f64 / ah, c.width as f64 / aw, c.height as f64 / ah];
-    let placement = lightcraft_raw::gaintable::SourcePlacement { rect, orientation: raw.orientation };
-    Some(Arc::new(lightcraft_pipeline::local_tone::LocalTone { map, placement }))
+    let placement = dac_raw::gaintable::SourcePlacement { rect, orientation: raw.orientation };
+    Some(Arc::new(dac_pipeline::local_tone::LocalTone { map, placement }))
 }
 
 /// The semantic masks of a DNG that AI masks understand, over the developed image (default crop,
 /// oriented like it). Person mattes without a confidently selected pixel are left out (the
 /// Subject mask then falls back to its heuristic); a sky matte counts even when empty (no sky).
-fn dng_mattes(bytes: &[u8], raw: &lightcraft_raw::RawImage) -> Option<Arc<lightcraft_pipeline::masks::Mattes>> {
-    use lightcraft_pipeline::masks::{MatteKind, Mattes};
-    if raw.format != lightcraft_raw::RawFormat::Dng {
+fn dng_mattes(bytes: &[u8], raw: &dac_raw::RawImage) -> Option<Arc<dac_pipeline::masks::Mattes>> {
+    use dac_pipeline::masks::{MatteKind, Mattes};
+    if raw.format != dac_raw::RawFormat::Dng {
         return None;
     }
     let mut mattes = Mattes::default();
-    for m in lightcraft_raw::semantic_masks(bytes) {
+    for m in dac_raw::semantic_masks(bytes) {
         let Some(kind) = matte_kind(&m.name) else { continue };
         let Some(img) = m.developed(raw.active_area, raw.crop) else { continue };
         if kind != MatteKind::Sky && !img.data.iter().any(|&v| v >= 128) {
@@ -417,8 +417,8 @@ fn dng_mattes(bytes: &[u8], raw: &lightcraft_raw::RawImage) -> Option<Arc<lightc
 
 /// What a semantic mask selects, by its `SemanticName`: Apple's (iPhone ProRAW) are named after
 /// their auxiliary image types, `urn:com:apple:photo:<year>:aux:<type>`. Other names: `None`.
-fn matte_kind(name: &str) -> Option<lightcraft_pipeline::masks::MatteKind> {
-    use lightcraft_pipeline::masks::MatteKind::*;
+fn matte_kind(name: &str) -> Option<dac_pipeline::masks::MatteKind> {
+    use dac_pipeline::masks::MatteKind::*;
     let kind = name.strip_prefix("urn:com:apple:photo:")?.rsplit(':').next()?;
     Some(match kind {
         "semanticskymatte" => Sky,
@@ -434,12 +434,12 @@ fn matte_kind(name: &str) -> Option<lightcraft_pipeline::masks::MatteKind> {
 /// A DNG `ProfileToneCurve` (linear in, linear out, 1.0 = white after exposure compensation) as the
 /// finish stage's camera tone curve: 32 knots, log-spaced over 12 stops below white; above white
 /// the camera tone's shoulder continues it.
-pub(crate) fn dng_tone_curve(curve: &lightcraft_raw::profile::ToneCurve) -> Option<lightcraft_pipeline::tone::CameraTone> {
+pub(crate) fn dng_tone_curve(curve: &dac_raw::profile::ToneCurve) -> Option<dac_pipeline::tone::CameraTone> {
     let knots: [[f32; 2]; 32] = std::array::from_fn(|i| {
         let x = 2f32.powf(-12.0 + 12.0 * i as f32 / 31.0);
         [x, curve.eval(x).min(0.9995)]
     });
-    lightcraft_pipeline::tone::CameraTone::new(knots)
+    dac_pipeline::tone::CameraTone::new(knots)
 }
 
 /// Orientation for an embedded preview: its own EXIF orientation when it has one, else the raw file's.
@@ -447,42 +447,41 @@ fn preview_orientation(raw_bytes: &[u8], jpeg_orientation: u16) -> Orientation {
     if jpeg_orientation > 1 {
         return Orientation::from_exif(jpeg_orientation);
     }
-    lightcraft_meta::extract(raw_bytes).orientation.unwrap_or(Orientation::Normal)
+    dac_meta::extract(raw_bytes).orientation.unwrap_or(Orientation::Normal)
 }
 
 /// What stands in for a raw file we can't decode: its largest embedded JPEG, else, for a TIFF-based
 /// raw, the file's own first image when the TIFF reader can show it (a reduced RGB copy: the only
-/// preview some containers carry). Returns image bytes for [`lightcraft_codecs::decode`].
+/// preview some containers carry). Returns image bytes for [`dac_codecs::decode`].
 fn stand_in_image(bytes: &[u8]) -> Option<std::borrow::Cow<'_, [u8]>> {
-    if let Some(jpeg) = lightcraft_raw::embedded_preview(bytes) {
+    if let Some(jpeg) = dac_raw::embedded_preview(bytes) {
         return Some(std::borrow::Cow::Owned(jpeg));
     }
-    let undecodable = lightcraft_raw::probe(bytes).is_some_and(|f| !f.is_supported());
-    (undecodable && lightcraft_codecs::sniff(bytes).is_some_and(|f| f == lightcraft_codecs::Format::Tiff))
-        .then_some(std::borrow::Cow::Borrowed(bytes))
+    let undecodable = dac_raw::probe(bytes).is_some_and(|f| !f.is_supported());
+    (undecodable && dac_codecs::sniff(bytes).is_some_and(|f| f == dac_codecs::Format::Tiff)).then_some(std::borrow::Cow::Borrowed(bytes))
 }
 
 /// Shared colour interpretation for quick previews, unsupported RAW fallback and camera-look fitting.
-pub(crate) fn decode_raw_preview(bytes: &[u8], opts: lightcraft_codecs::DecodeOptions) -> Option<lightcraft_codecs::Decoded> {
+pub(crate) fn decode_raw_preview(bytes: &[u8], opts: dac_codecs::DecodeOptions) -> Option<dac_codecs::Decoded> {
     let jpeg = stand_in_image(bytes)?;
     // the colour space is a property of the JPEG; a TIFF stand-in is read by the TIFF reader
     let is_jpeg = matches!(jpeg, std::borrow::Cow::Owned(_));
-    match lightcraft_raw::embedded_preview_color_space(bytes).filter(|_| is_jpeg) {
+    match dac_raw::embedded_preview_color_space(bytes).filter(|_| is_jpeg) {
         Some(space) => {
             let space = match space {
-                lightcraft_raw::PreviewColorSpace::Srgb => lightcraft_codecs::NamedSpace::Srgb,
-                lightcraft_raw::PreviewColorSpace::AdobeRgb => lightcraft_codecs::NamedSpace::AdobeRgb,
+                dac_raw::PreviewColorSpace::Srgb => dac_codecs::NamedSpace::Srgb,
+                dac_raw::PreviewColorSpace::AdobeRgb => dac_codecs::NamedSpace::AdobeRgb,
             };
-            lightcraft_codecs::decode_jpeg_with_fallback(&jpeg, opts, space).ok()
+            dac_codecs::decode_jpeg_with_fallback(&jpeg, opts, space).ok()
         }
-        None => lightcraft_codecs::decode(&jpeg, opts).ok(),
+        None => dac_codecs::decode(&jpeg, opts).ok(),
     }
 }
 
 /// Oriented size of the embedded preview of a raw file.
 fn embedded_preview_size(bytes: &[u8]) -> Option<(u32, u32)> {
     let jpeg = stand_in_image(bytes)?;
-    let d = lightcraft_codecs::decode(&jpeg, lightcraft_codecs::DecodeOptions::fit(64, 64)).ok()?;
+    let d = dac_codecs::decode(&jpeg, dac_codecs::DecodeOptions::fit(64, 64)).ok()?;
     let (mut w, mut h) = (d.source_width, d.source_height);
     if preview_orientation(bytes, d.orientation).swaps_axes() {
         std::mem::swap(&mut w, &mut h);
@@ -500,7 +499,7 @@ pub fn load_embedded_preview(bytes: &[u8], max_edge: usize) -> Option<(Rgb32f, S
 
 /// The embedded preview of a raw file for display (sRGB, oriented, no larger than `max_edge`): the
 /// loupe and grid show it until the raw itself has been developed ([`crate::media::QuickJob`]).
-pub fn embedded_preview_srgb(bytes: &[u8], max_edge: usize) -> Option<lightcraft_raster::Rgba8> {
+pub fn embedded_preview_srgb(bytes: &[u8], max_edge: usize) -> Option<dac_raster::Rgba8> {
     let mut d = decode_raw_preview(bytes, fit_box(max_edge))?;
     if d.image.width.max(d.image.height) > max_edge {
         d.image = fit(&d.image, max_edge, max_edge, Filter::Box);
@@ -512,9 +511,9 @@ pub fn embedded_preview_srgb(bytes: &[u8], max_edge: usize) -> Option<lightcraft
 
 /// Decode options fitting into a `max_edge` square; `usize::MAX` (a full-size load) or any edge past
 /// `u32::MAX` asks for the largest box rather than wrapping to a small one.
-fn fit_box(max_edge: usize) -> lightcraft_codecs::DecodeOptions {
+fn fit_box(max_edge: usize) -> dac_codecs::DecodeOptions {
     let e = u32::try_from(max_edge).unwrap_or(u32::MAX);
-    lightcraft_codecs::DecodeOptions::fit(e, e)
+    dac_codecs::DecodeOptions::fit(e, e)
 }
 
 /// Filesystem-backed embedded-preview hook (native).
@@ -588,7 +587,7 @@ impl crate::Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    use dac_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
 
     /// Issue #367: probes read headers, not pixels, and report what the decode-based probe did:
     /// oriented dimensions (EXIF orientation 6 swaps them), metadata, the error for a truncated
@@ -599,14 +598,14 @@ mod tests {
         let rgb: Vec<u8> = (0..w * h * 3).map(|i| (i * 7 % 251) as u8).collect();
         let img = EncodeImage::new(w, h, 3, Samples::U8(&rgb));
         for o in [None, Some(1), Some(6), Some(3), Some(8)] {
-            let exif = o.map(lightcraft_codecs::exif::minimal_exif);
+            let exif = o.map(dac_codecs::exif::minimal_exif);
             let meta = EncodeMeta { exif: exif.as_deref(), ..Default::default() };
             let jpeg = encode_jpeg(&img, 90, ChromaSubsampling::S420, &meta).unwrap();
-            let png = lightcraft_codecs::encode_png(&img, &meta).unwrap();
+            let png = dac_codecs::encode_png(&img, &meta).unwrap();
             for (name, bytes) in [("a.jpg", &jpeg), ("a.png", &png)] {
                 let p = probe_bytes(name, bytes).unwrap();
                 // what the probe computed from a decode before
-                let d = lightcraft_codecs::decode(bytes, lightcraft_codecs::DecodeOptions::fit(64, 64)).unwrap();
+                let d = dac_codecs::decode(bytes, dac_codecs::DecodeOptions::fit(64, 64)).unwrap();
                 let swap = Orientation::from_exif(d.orientation).swaps_axes();
                 let want = if swap { (d.source_height, d.source_width) } else { (d.source_width, d.source_height) };
                 assert_eq!((p.width, p.height), want, "{name} {o:?}");
@@ -623,17 +622,17 @@ mod tests {
 
     #[test]
     fn cached_denoise_uses_the_same_white_balance_profile_and_orientation_as_plain_raw() {
-        use lightcraft_denoise::product;
-        use lightcraft_raw::{DngWriteOptions, Method, Orientation, profile::HsvTable, write_dng};
+        use dac_denoise::product;
+        use dac_raw::{DngWriteOptions, Method, Orientation, profile::HsvTable, write_dng};
         let dir = crate::tests_xmp::temp_dir("denoise-color-finish");
         let fixture = crate::tests_xmp::synthetic_dng_with(None, Default::default());
-        let mut raw = lightcraft_raw::decode(&fixture).unwrap();
+        let mut raw = dac_raw::decode(&fixture).unwrap();
         raw.orientation = Orientation::Rotate90;
         raw.color.baseline_exposure = 0.5;
         raw.color.profile.look_table =
             Some(HsvTable { hue_divisions: 1, sat_divisions: 2, val_divisions: 1, data: vec![[23.0, 0.65, 0.8]; 2], srgb_value: false });
         let bytes = write_dng(&raw, &DngWriteOptions::default()).unwrap();
-        let decoded = lightcraft_raw::decode(&bytes).unwrap();
+        let decoded = dac_raw::decode(&bytes).unwrap();
         assert!(decoded.color.profile.look_table.is_some());
         // A cache containing the ordinary demosaic must undergo the identical downstream finish.
         let camera_rgb = decoded.develop(Method::Ahd).unwrap();
@@ -732,12 +731,10 @@ mod tests {
             let (src, info) = load_bytes(&bytes, 2 * EDGE).unwrap();
             assert_eq!(info.lens, probed.embedded_lens, "{name}: probe and decode disagree");
             // Convert to DNG keeps it: the same correction, as the DNG's own `WarpRectilinear`
-            let dng = lightcraft_raw::write_dng(&lightcraft_raw::decode(&bytes).unwrap(), &Default::default()).unwrap();
+            let dng = dac_raw::write_dng(&dac_raw::decode(&bytes).unwrap(), &Default::default()).unwrap();
             assert_eq!(probe_bytes("x.dng", &dng).unwrap().embedded_lens, probed.embedded_lens, "{name}: lost in the DNG");
-            let mut s = lightcraft_develop::DevelopSettings::default();
-            let render = |s: &lightcraft_develop::DevelopSettings| {
-                lightcraft_pipeline::render(&src, &info, s, &lightcraft_pipeline::RenderRequest::fit(EDGE, EDGE)).image
-            };
+            let mut s = dac_develop::DevelopSettings::default();
+            let render = |s: &dac_develop::DevelopSettings| dac_pipeline::render(&src, &info, s, &dac_pipeline::RenderRequest::fit(EDGE, EDGE)).image;
             let before = render(&s);
             s.optics.lens_profile = true;
             let after = render(&s);
@@ -748,9 +745,9 @@ mod tests {
             let (cw, ch) = (cam.width as f64, cam.height as f64);
             let (sw, sh) = if cw / ch > w as f64 / h as f64 { (ch * w as f64 / h as f64, ch) } else { (cw, cw * h as f64 / w as f64) };
             let cam = cam.crop(((cw - sw) / 2.0).round() as usize, ((ch - sh) / 2.0).round() as usize, sw.round() as usize, sh.round() as usize);
-            let cam = lightcraft_raster::resample::resize(&cam, w, h, Filter::Mitchell);
+            let cam = dac_raster::resample::resize(&cam, w, h, Filter::Mitchell);
             let lin = |v: u8| (v as f32 / 255.0).powf(2.2);
-            let lum8 = |im: &lightcraft_raster::Rgba8, x: usize, y: usize| {
+            let lum8 = |im: &dac_raster::Rgba8, x: usize, y: usize| {
                 let p = im.data[y * im.width + x];
                 0.3 * lin(p[0]) + 0.6 * lin(p[1]) + 0.1 * lin(p[2])
             };
@@ -815,8 +812,8 @@ mod tests {
     #[test]
     fn corrupt_cr3_falls_back_to_embedded_preview() {
         let b = cr3_with_corrupt_raw(48, 32);
-        let err = lightcraft_raw::decode(&b).expect_err("the fixture's raw data is corrupt");
-        assert!(!matches!(err, lightcraft_raw::RawError::Unsupported(_)), "{err}");
+        let err = dac_raw::decode(&b).expect_err("the fixture's raw data is corrupt");
+        assert!(!matches!(err, dac_raw::RawError::Unsupported(_)), "{err}");
         let p = probe_bytes("x.cr3", &b).unwrap();
         assert_eq!((p.width, p.height, p.kind, p.format.as_str()), (48, 32, MediaKind::Raw, "CR3"));
         assert!(p.preview_only.is_some_and(|why| why.contains("CR3")));
@@ -833,9 +830,9 @@ mod tests {
     /// applied when it's developed — Lightroom-converted DNGs rendered flat and muted without it.
     #[test]
     fn dng_profile_look_is_applied() {
-        use lightcraft_raw::profile::{HsvTable, ProfileLook, ToneCurve};
+        use dac_raw::profile::{HsvTable, ProfileLook, ToneCurve};
         let plain = crate::tests_xmp::synthetic_dng_with(None, Default::default());
-        let mut raw = lightcraft_raw::decode(&plain).unwrap();
+        let mut raw = dac_raw::decode(&plain).unwrap();
         let sat = |img: &Rgb32f| {
             img.data.iter().map(|p| (p[0].max(p[1]).max(p[2]) - p[0].min(p[1]).min(p[2])) / p[0].max(p[1]).max(p[2]).max(1e-6)).sum::<f32>()
                 / img.data.len() as f32
@@ -851,7 +848,7 @@ mod tests {
             tone_curve: ToneCurve::from_tag(&[0.0, 0.0, 0.18, 0.3, 1.0, 1.0]),
             gain_table_map: None,
         };
-        let with = lightcraft_raw::write_dng(&raw, &Default::default()).unwrap();
+        let with = dac_raw::write_dng(&raw, &Default::default()).unwrap();
         let (after, info) = load_bytes(&with, 64).unwrap();
         assert!(sat(&after) < 1e-3, "saturation {} → {}", sat(&before), sat(&after));
         // a saturation-only map keeps brightness roughly (HSV value is kept in ProPhoto RGB)
@@ -864,7 +861,7 @@ mod tests {
             look_table: Some(HsvTable { hue_divisions: 1, sat_divisions: 2, val_divisions: 1, data: vec![[0.0, 1.0, 0.5]; 2], srgb_value: false }),
             ..Default::default()
         };
-        let (dim, _) = load_bytes(&lightcraft_raw::write_dng(&raw, &Default::default()).unwrap(), 64).unwrap();
+        let (dim, _) = load_bytes(&dac_raw::write_dng(&raw, &Default::default()).unwrap(), 64).unwrap();
         assert!((mean(&dim) / mean(&before) - 0.5).abs() < 0.02, "{} vs {}", mean(&dim), mean(&before));
     }
 
@@ -873,10 +870,10 @@ mod tests {
     /// heuristic would never look) is used; a matte with an unknown name is ignored.
     #[test]
     fn dng_sky_matte_drives_the_sky_mask() {
-        use lightcraft_develop::{DevelopSettings, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
-        use lightcraft_pipeline::{RenderRequest, render};
-        use lightcraft_tiff::tags::{self as t, photometric};
-        use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+        use dac_develop::{DevelopSettings, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
+        use dac_pipeline::{RenderRequest, render};
+        use dac_tiff::tags::{self as t, photometric};
+        use dac_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
         let (w, h) = (16u32, 8u32);
         let image = |ifd: &mut IfdBuilder, w: u32, h: u32, cpp: u16, bits: u16, data: Vec<u8>| {
             ifd.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
@@ -938,16 +935,16 @@ mod tests {
     /// from the Bradford adaptation it replaces.
     #[test]
     fn dng_white_balance_uses_the_camera_colour_model() {
-        use lightcraft_pipeline::{RenderRequest, render};
+        use dac_pipeline::{RenderRequest, render};
         let dng = crate::tests_xmp::synthetic_dng_with(None, Default::default());
-        let raw = lightcraft_raw::decode(&dng).unwrap();
+        let raw = dac_raw::decode(&dng).unwrap();
         let (img, info) = load_bytes(&dng, 64).unwrap();
         let cc = info.camera_color.as_ref().expect("a DNG with a colour matrix");
-        assert_eq!(cc.developed_for, lightcraft_raw::color::as_shot_white_xy(&raw));
+        assert_eq!(cc.developed_for, dac_raw::color::as_shot_white_xy(&raw));
         assert!(cc.tags.profile.is_empty());
         assert_eq!(cc.tags.color_matrix, raw.color.color_matrix);
-        let mut s = lightcraft_develop::DevelopSettings::default();
-        (s.wb.mode, s.wb.temp, s.wb.tint) = (lightcraft_develop::WbMode::Custom, 3000.0, 20.0);
+        let mut s = dac_develop::DevelopSettings::default();
+        (s.wb.mode, s.wb.temp, s.wb.tint) = (dac_develop::WbMode::Custom, 3000.0, 20.0);
         let req = RenderRequest::fit(32, 32);
         let camera = render(&img, &info, &s, &req).image;
         let adapted = render(&img, &SourceInfo { camera_color: None, ..info.clone() }, &s, &req).image;
@@ -959,10 +956,10 @@ mod tests {
     /// changes nothing.
     #[test]
     fn dng_gain_table_map_is_not_rendered() {
-        use lightcraft_raw::gaintable::GainTableMap;
+        use dac_raw::gaintable::GainTableMap;
         let plain = crate::tests_xmp::synthetic_dng_with(None, Default::default());
-        let mut raw = lightcraft_raw::decode(&plain).unwrap();
-        let (before, _) = load_bytes(&lightcraft_raw::write_dng(&raw, &Default::default()).unwrap(), 64).unwrap();
+        let mut raw = dac_raw::decode(&plain).unwrap();
+        let (before, _) = load_bytes(&dac_raw::write_dng(&raw, &Default::default()).unwrap(), 64).unwrap();
         raw.color.profile.gain_table_map = Some(GainTableMap {
             points_v: 1,
             points_h: 1,
@@ -975,8 +972,8 @@ mod tests {
             gamma: 1.0,
             gains: vec![2.0],
         });
-        let with_map = lightcraft_raw::write_dng(&raw, &Default::default()).unwrap();
-        assert!(lightcraft_raw::decode(&with_map).unwrap().color.profile.gain_table_map.is_some(), "the map is kept");
+        let with_map = dac_raw::write_dng(&raw, &Default::default()).unwrap();
+        assert!(dac_raw::decode(&with_map).unwrap().color.profile.gain_table_map.is_some(), "the map is kept");
         let (after, _) = load_bytes(&with_map, 64).unwrap();
         assert_eq!(before.data, after.data);
     }
@@ -985,10 +982,10 @@ mod tests {
     /// active area, whatever the photo's orientation), and only when it's on.
     #[test]
     fn dng_gain_table_map_renders_when_asked() {
-        use lightcraft_pipeline::{RenderRequest, render};
-        use lightcraft_raw::gaintable::GainTableMap;
+        use dac_pipeline::{RenderRequest, render};
+        use dac_raw::gaintable::GainTableMap;
         let plain = crate::tests_xmp::synthetic_dng_with(None, Default::default());
-        let mut raw = lightcraft_raw::decode(&plain).unwrap();
+        let mut raw = dac_raw::decode(&plain).unwrap();
         // ×1 at the active area's left edge rising to ×4 at its right edge, whatever the colour
         raw.color.profile.gain_table_map = Some(GainTableMap {
             points_v: 1,
@@ -1002,12 +999,12 @@ mod tests {
             gamma: 1.0,
             gains: vec![1.0, 4.0],
         });
-        let with_map = lightcraft_raw::write_dng(&raw, &Default::default()).unwrap();
+        let with_map = dac_raw::write_dng(&raw, &Default::default()).unwrap();
         let (img, info) = load_bytes(&with_map, 64).unwrap();
         let (_, plain_info) = load_bytes(&plain, 64).unwrap();
         assert!(info.local_tone.is_some() && plain_info.local_tone.is_none());
         let req = RenderRequest::fit(64, 64);
-        let mut s = lightcraft_develop::DevelopSettings::default();
+        let mut s = dac_develop::DevelopSettings::default();
         // (darker, so that ×4 never reaches white)
         s.light.exposure = -3.0;
         let off = render(&img, &info, &s, &req).image;
@@ -1016,13 +1013,13 @@ mod tests {
         assert!(s.to_json().to_string().contains("camera_local_tone"), "the option is part of the settings (and their hash)");
         let on = render(&img, &info, &s, &req).image;
         // brightness gained, per column: none at the left edge, most at the right
-        let column = |im: &lightcraft_raster::Rgba8, x: usize| (0..im.height).map(|y| im.data[y * im.width + x][1] as f32).sum::<f32>();
+        let column = |im: &dac_raster::Rgba8, x: usize| (0..im.height).map(|y| im.data[y * im.width + x][1] as f32).sum::<f32>();
         let gain = |x: usize| column(&on, x) / column(&off, x).max(1.0);
         let last = on.width - 1;
         assert!((gain(0) - 1.0).abs() < 0.08, "left ×{}", gain(0));
         assert!(gain(last) > 1.4 && gain(last) > gain(last / 2) && gain(last / 2) > gain(0), "{} {} {}", gain(0), gain(last / 2), gain(last));
         // the photo turned upside down: the map follows the raw, so the brightened side swaps
-        s.orientation = lightcraft_geom::Orientation::Rotate180;
+        s.orientation = dac_geom::Orientation::Rotate180;
         s.profile.camera_local_tone = false;
         let off = render(&img, &info, &s, &req).image;
         s.profile.camera_local_tone = true;
@@ -1031,7 +1028,7 @@ mod tests {
         assert!(gain(0) > 1.4 && (gain(last) - 1.0).abs() < 0.08, "rotated: {} … {}", gain(0), gain(last));
         // a rendered (non-raw) source never gets it
         let jpeg = SourceInfo { raw: false, ..info.clone() };
-        assert!(!lightcraft_pipeline::local_tone::enabled(&jpeg, &s));
+        assert!(!dac_pipeline::local_tone::enabled(&jpeg, &s));
     }
 
     #[test]
@@ -1064,7 +1061,7 @@ mod tests {
         let scan = s.execute("library.importPreview", &json!({"paths": [path.to_string_lossy()]})).unwrap();
         assert!(scan["candidates"][0]["previewOnly"].as_str().is_some_and(|w| !w.is_empty()), "{scan}");
         let r = s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
-        let id = lightcraft_catalog::PhotoId(r["imported"][0].as_u64().unwrap());
+        let id = dac_catalog::PhotoId(r["imported"][0].as_u64().unwrap());
         let p = s.catalog.photo(id).unwrap().clone();
         let why = p.preview_only.clone().expect("marked preview only");
         assert!(why.to_uppercase().contains("CR3"), "the decoder's reason: {why}");
@@ -1072,7 +1069,7 @@ mod tests {
         assert!(!p.develops_raw());
         // rendered like the JPEG it is: relative white balance, display tone curve, no raw defaults
         assert_eq!(crate::media::source_info(&p), SourceInfo::default());
-        assert_eq!(*p.develop, lightcraft_develop::DevelopSettings::default());
+        assert_eq!(*p.develop, dac_develop::DevelopSettings::default());
         assert!(s.render_job(id, 48, 48, false, true).unwrap().run().rendered.is_ok());
         // agents see it
         let q = s.execute("catalog.query", &json!({"filter": {}})).unwrap();
@@ -1086,7 +1083,7 @@ mod tests {
         s.open_library(&lib, false).unwrap();
         assert_eq!(s.catalog.photo(id).unwrap().preview_only.as_deref(), Some(why.as_str()));
         // the file decodes now (here: replaced by a DNG): Reload clears it, undo brings it back
-        std::fs::write(&path, crate::tests_xmp::synthetic_dng_with(None, lightcraft_meta::Metadata::default())).unwrap();
+        std::fs::write(&path, crate::tests_xmp::synthetic_dng_with(None, dac_meta::Metadata::default())).unwrap();
         let r = s.execute("photo.reload", &json!({"ids": [id.0]})).unwrap();
         assert_eq!(r["reloaded"], json!([id.0]), "{r}");
         assert!(s.catalog.photo(id).unwrap().develops_raw());
@@ -1095,7 +1092,7 @@ mod tests {
         assert_eq!(s.catalog.photo(id).unwrap().preview_only.as_deref(), Some(why.as_str()));
         // relinking to a file that decodes clears it too
         let dng = files.join("DSC_0001.dng");
-        std::fs::write(&dng, crate::tests_xmp::synthetic_dng_with(None, lightcraft_meta::Metadata::default())).unwrap();
+        std::fs::write(&dng, crate::tests_xmp::synthetic_dng_with(None, dac_meta::Metadata::default())).unwrap();
         s.execute("photo.relink", &json!({"id": id.0, "path": dng.to_string_lossy()})).unwrap();
         assert_eq!(s.catalog.photo(id).unwrap().preview_only, None);
         drop(s);
@@ -1105,7 +1102,7 @@ mod tests {
     /// A raw whose TIFF shell holds only a small RGB image (IFD0) next to a private block, as Exif
     /// declares a picture 25x its size.
     fn tiff_shell(w: u32, h: u32, shell: bool) -> Vec<u8> {
-        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+        use dac_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
         let mut ifd0 = IfdBuilder::new();
         ifd0.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
         ifd0.set(t::IMAGE_LENGTH, Value::Long(vec![h]));
@@ -1142,7 +1139,7 @@ mod tests {
         // the same pixels without the private block are a small ordinary image
         let plain = probe_bytes("small.tif", &tiff_shell(24, 16, false)).unwrap();
         assert_eq!((plain.kind, plain.preview_only, plain.width, plain.height), (MediaKind::Image, None, 24, 16));
-        assert!(lightcraft_raw::probe(&tiff_shell(24, 16, false)).is_none());
+        assert!(dac_raw::probe(&tiff_shell(24, 16, false)).is_none());
     }
 
     /// Recognised raw containers we don't decode (Minolta MRW here: the preview's first byte is
@@ -1170,12 +1167,12 @@ mod tests {
     /// CR3 keeps its own wording.
     #[test]
     fn decode_failures_of_recognised_raws_may_fall_back_to_the_preview() {
-        use lightcraft_raw::RawError;
+        use dac_raw::RawError;
         let cr3 = b"\0\0\0\x18ftypcrx \0\0\0\x01";
         assert_eq!(preview_reason(b"x", RawError::Unsupported("x".into())), Ok("x".to_string()));
         assert!(preview_reason(b"x", RawError::Corrupt("bad strip".into())).is_ok_and(|w| w.contains("bad strip")));
         assert!(preview_reason(b"x", RawError::Limit("too big")).is_ok());
-        assert!(preview_reason(b"x", RawError::Tiff(lightcraft_tiff::TiffError::MissingTag(256))).is_ok());
+        assert!(preview_reason(b"x", RawError::Tiff(dac_tiff::TiffError::MissingTag(256))).is_ok());
         assert!(preview_reason(b"x", RawError::NotRaw).is_err());
         assert!(preview_reason(cr3, RawError::Corrupt("bad".into())).is_ok_and(|w| w.starts_with("CR3 ")));
     }
@@ -1189,7 +1186,7 @@ mod tests {
         std::fs::write(&path, cr3_with_preview(96, 64)).unwrap();
         let mut s = crate::Session::new().with_fs();
         let r = s.execute("library.import", &serde_json::json!({"paths": [path.to_string_lossy()]})).unwrap();
-        let id = lightcraft_catalog::PhotoId(r["imported"][0].as_u64().unwrap());
+        let id = dac_catalog::PhotoId(r["imported"][0].as_u64().unwrap());
         // loupe: an unedited raw opens on its embedded preview…
         let q = s.quick_view_job(id, 1600, true).unwrap().run();
         assert_eq!(q.quick, Some(QuickSource::Embedded));

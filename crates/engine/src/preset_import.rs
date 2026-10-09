@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use lightcraft_develop::Preset;
+use dac_develop::Preset;
 use serde_json::{Map, Value};
 
 use crate::crs::Props;
@@ -526,7 +526,7 @@ pub fn read_presets(name: &str, bytes: &[u8], group: Option<String>) -> Result<V
         }
         "xmp" => {
             let text = String::from_utf8_lossy(bytes);
-            let d = lightcraft_meta::parse_xmp(text.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?;
+            let d = dac_meta::parse_xmp(text.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?;
             let props = &d.properties;
             let name = props.get("crs:Name").and_then(|v| v.first()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or(stem);
             build(props, &d.values, name, group, false).map(|i| vec![i]).ok_or_else(|| "no develop settings in this XMP file".into())
@@ -534,7 +534,7 @@ pub fn read_presets(name: &str, bytes: &[u8], group: Option<String>) -> Result<V
         // a photo carrying its edits (mobile "DNG presets", edited JPEG / TIFF)
         "dng" | "jpg" | "jpeg" | "tif" | "tiff" => {
             let xmp = embedded_xmp(bytes).ok_or("this photo carries no edits (no XMP)")?;
-            let d = lightcraft_meta::parse_xmp(&xmp).map_err(|e| e.to_string())?;
+            let d = dac_meta::parse_xmp(&xmp).map_err(|e| e.to_string())?;
             build(&d.properties, &d.values, stem, group, true).map(|i| vec![i]).ok_or_else(|| "this photo carries no edits we can use".into())
         }
         _ => crate::presets::parse_preset_file(name, bytes).map(|v| {
@@ -656,7 +656,7 @@ text]], z = ZSTR "loc" }"#,
         assert!((c[0]["y"].as_f64().unwrap() - 20.0 / 255.0).abs() < 1e-9);
         assert_eq!(v[0].unmapped, vec!["CameraProfile".to_string()], "profiles are ours; the rest is mapped or bookkeeping");
         // it parses into real develop settings
-        let d = lightcraft_develop::DevelopSettings::default().merged(&p.settings).expect("valid develop settings");
+        let d = dac_develop::DevelopSettings::default().merged(&p.settings).expect("valid develop settings");
         assert_eq!(d.light.exposure, 0.35);
     }
 

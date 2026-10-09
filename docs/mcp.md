@@ -3,7 +3,7 @@
 `lightcraft-cli mcp` exposes LightCraft to AI agents through the
 [Model Context Protocol](https://modelcontextprotocol.io): newline-delimited JSON-RPC 2.0 over
 stdio (protocol revision `2025-06-18`; `2025-03-26` and `2024-11-05` clients are accepted). The
-server lives in `crates/mcp` (`lightcraft-mcp`, layer L5) and is hand-written: no async runtime,
+server lives in `crates/mcp` (`dac-mcp`, layer L5) and is hand-written: no async runtime,
 no C dependencies.
 
 It runs in one of two modes:
@@ -27,7 +27,7 @@ Logs go to stderr; stdout carries only protocol messages.
 
 ## Wiring it into a client
 
-Build once: `cargo build --release -p lightcraft-cli` (binary: `target/release/lightcraft-cli`).
+Build once: `cargo build --release -p dac-cli` (binary: `target/release/lightcraft-cli`).
 
 ### Claude Code
 
@@ -68,7 +68,7 @@ Every stdio MCP client takes the same shape: a `command` plus `args`. For exampl
 }
 ```
 
-During development you can also point the client at `cargo run --release -p lightcraft-cli -- mcp`
+During development you can also point the client at `cargo run --release -p dac-cli -- mcp`
 (with `"cwd"` set to the repository), at the cost of a slower start.
 
 ## Shared core tools
@@ -217,7 +217,7 @@ lightcraft-cli calibrate --max 300 ~/Pictures/2026   # camera colour profiles (d
 - `crates/mcp/tests/e2e.rs` — M0.9 acceptance: over the stdio framing, set exposure and render;
   checks the decoded PNG gets brighter/darker. Runs headless and through the TCP transport
   (`Remote`) against a stand-in control server; also import → render → JPEG export of a real file.
-- `apps/lightcraft-cli/tests/cli.rs` — spawns `lightcraft-cli mcp` with real pipes; `render`;
+- `apps/cli/tests/cli.rs` — spawns `lightcraft-cli mcp` with real pipes; `render`;
   `commands`.
 
 ## Export progress and cancellation

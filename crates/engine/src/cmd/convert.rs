@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use lightcraft_catalog::{MediaKind, Op, Source};
+use dac_catalog::{MediaKind, Op, Source};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, bad, cmd, has_active, has_selection};
@@ -35,23 +35,21 @@ pub(crate) fn write_dng_with(file_bytes: Option<&crate::merge::ByteReader>, path
         Some(r) => r(path)?,
         None => std::fs::read(path).map_err(|e| format!("{path}: {e}"))?,
     };
-    let raw = lightcraft_raw::decode(&bytes).map_err(|e| format!("{path}: {e}"))?;
+    let raw = dac_raw::decode(&bytes).map_err(|e| format!("{path}: {e}"))?;
     drop(bytes);
-    let dng = lightcraft_raw::write_dng(&raw, &lightcraft_raw::DngWriteOptions { xmp: (!packet.is_empty()).then_some(packet), ..Default::default() })
+    let dng = dac_raw::write_dng(&raw, &dac_raw::DngWriteOptions { xmp: (!packet.is_empty()).then_some(packet), ..Default::default() })
         .map_err(|e| e.to_string())?;
-    let back = lightcraft_raw::decode(&dng).map_err(|e| format!("{path}: the DNG written for it doesn't decode ({e}); the raw is kept"))?;
+    let back = dac_raw::decode(&dng).map_err(|e| format!("{path}: the DNG written for it doesn't decode ({e}); the raw is kept"))?;
     let same = match (&back.data, &raw.data) {
-        (lightcraft_raw::RawData::U16(a), lightcraft_raw::RawData::U16(b)) => a == b,
-        (lightcraft_raw::RawData::F32(a), lightcraft_raw::RawData::F32(b)) => {
-            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
-        }
+        (dac_raw::RawData::U16(a), dac_raw::RawData::U16(b)) => a == b,
+        (dac_raw::RawData::F32(a), dac_raw::RawData::F32(b)) => a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits()),
         _ => false,
     };
     if (back.width, back.height, back.cpp) != (raw.width, raw.height, raw.cpp) || !same {
         return Err(format!("{path}: the DNG written for it doesn't hold the same raw data; the raw is kept"));
     }
     drop((raw, back));
-    let out = lightcraft_catalog::safe_file::write_new_unique(&mut dng_names(path), &dng)
+    let out = dac_catalog::safe_file::write_new_unique(&mut dng_names(path), &dng)
         .map_err(|e| format!("{path}: could not write its DNG ({e}); the raw is kept"))?;
     Ok(out.to_string_lossy().to_string())
 }
@@ -134,10 +132,10 @@ fn edit_external(s: &mut Session, p: &Value) -> Result<Value> {
         },
     };
     let space = match super::str_param(p, "colorSpace").unwrap_or("adobeRgb") {
-        "srgb" => lightcraft_pipeline::OutputSpace::Srgb,
-        "displayP3" => lightcraft_pipeline::OutputSpace::DisplayP3,
-        "prophoto" | "proPhoto" => lightcraft_pipeline::OutputSpace::ProPhoto,
-        _ => lightcraft_pipeline::OutputSpace::AdobeRgb,
+        "srgb" => dac_pipeline::OutputSpace::Srgb,
+        "displayP3" => dac_pipeline::OutputSpace::DisplayP3,
+        "prophoto" | "proPhoto" => dac_pipeline::OutputSpace::ProPhoto,
+        _ => dac_pipeline::OutputSpace::AdobeRgb,
     };
     let opts = crate::export::ExportOptions {
         format: crate::export::ExportFormat::Tiff,
@@ -161,14 +159,14 @@ fn edit_external(s: &mut Session, p: &Value) -> Result<Value> {
     let new = r["imported"].get(0).and_then(Value::as_u64).ok_or_else(|| bad(C, "the edit copy could not be added"))?;
     // stack: the edit on top of the original, expanded so both show
     let _ = s.execute("stack.group", &json!({"ids": [new, id.0], "top": new, "collapsed": false}));
-    s.selection = crate::Selection::single(lightcraft_catalog::PhotoId(new));
+    s.selection = crate::Selection::single(dac_catalog::PhotoId(new));
     Ok(json!({"path": out, "id": new, "original": id.0}))
 }
 
 /// The op that brings a photo up to date with what its file is now (`info`, a fresh probe), or
 /// `None` when nothing changed. Covers a raw that became decodable (or stopped being: a different
-/// file relinked), i.e. a change of [`lightcraft_catalog::Photo::preview_only`].
-pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: crate::media::ProbeInfo) -> Option<Op> {
+/// file relinked), i.e. a change of [`dac_catalog::Photo::preview_only`].
+pub(crate) fn content_op(id: dac_catalog::PhotoId, ph: &dac_catalog::Photo, info: crate::media::ProbeInfo) -> Option<Op> {
     let same = info.content_hash == ph.content_hash
         && info.file_size == ph.file_size
         && (info.width, info.height) == (ph.width, ph.height)
@@ -184,7 +182,7 @@ pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalo
 }
 
 /// Ops that fill a photo's empty camera fields (camera, lens, exposure, GPS, capture time) from a fresh probe.
-fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Vec<Op> {
+fn fill_missing_meta(id: dac_catalog::PhotoId, ph: &dac_catalog::Photo, info: &crate::media::ProbeInfo) -> Vec<Op> {
     let (mut m, src) = (ph.meta.clone(), &info.meta);
     let before = m.clone();
     if m.camera.is_empty() {
@@ -214,7 +212,7 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
 /// dimensions and content hash, cached sources dropped. → {reloaded: [ids]}
 fn reload(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = s.targets(p);
-    let paths: Vec<(lightcraft_catalog::PhotoId, String)> = ids
+    let paths: Vec<(dac_catalog::PhotoId, String)> = ids
         .iter()
         .filter_map(|id| match s.catalog.photo(*id).map(|ph| ph.source.clone()) {
             Some(Source::File { path }) => Some((*id, path)),
@@ -335,7 +333,7 @@ pub fn edit_specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_catalog::{Photo, PhotoId, Source};
+    use dac_catalog::{Photo, PhotoId, Source};
 
     /// Reload fills camera fields a photo lacks (a CR3 imported before CR3 metadata was read) and keeps
     /// everything already set.

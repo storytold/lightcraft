@@ -1,4 +1,4 @@
-# lightcraft-codecs (L1)
+# dac-codecs (L1)
 
 Standard image formats for LightCraft: format sniffing, decoding to **linear light** with colour
 management, fast thumbnails, and encoders with metadata embedding. Pure Rust, no C dependencies,
@@ -32,7 +32,7 @@ a different source budget. Oversized sources return `Error::TooLarge`; embedded
 JPEG previews can still be used without decoding the full source image.
 
 `Format::RawTiffLike` (DNG, CR2, NEF, ARW, PEF, ORF, RW2, SRW, …) and `Format::RawOther` (CR3, RAF,
-CRW, MRW, X3F) are detected so the engine can route them to `lightcraft-raw`; `decode` returns
+CRW, MRW, X3F) are detected so the engine can route them to `dac-raw`; `decode` returns
 `Error::Unsupported` for them.
 
 ## Formats
@@ -41,7 +41,7 @@ CRW, MRW, X3F) are detected so the engine can route them to `lightcraft-raw`; `d
 |---|---|---|---|
 | JPEG | yes (zune-jpeg; jpeg-decoder for DCT scaling, CMYK/YCCK, 12-bit, non-interleaved scans) | yes (jpeg-encoder, baseline, 4:4:4/4:2:2/4:2:0) | EXIF (APP1), XMP (APP1, ≤ 64 KiB), ICC (APP2, multi-chunk), Adobe APP14, MPF previews |
 | PNG | yes, 1–16-bit, palette, tRNS, interlaced | 8/16-bit, gray/GA/RGB/RGBA | iCCP, eXIf, iTXt XMP; sRGB/cICP/cHRM/gAMA honoured when no ICC |
-| TIFF | 8/16-bit int (32/64-bit int kept to 16 bits), 16/32/64-bit float, gray/RGB/CMYK/palette, alpha (assoc./unassoc.), planar, LZW/Deflate/PackBits/JPEG | 8/16-bit, 32-bit float; none/LZW/Deflate/PackBits | ICC (34675), XMP (700), Orientation; first IFD only; EXIF not written (use `lightcraft-tiff`) |
+| TIFF | 8/16-bit int (32/64-bit int kept to 16 bits), 16/32/64-bit float, gray/RGB/CMYK/palette, alpha (assoc./unassoc.), planar, LZW/Deflate/PackBits/JPEG | 8/16-bit, 32-bit float; none/LZW/Deflate/PackBits | ICC (34675), XMP (700), Orientation; first IFD only; EXIF not written (use `dac-tiff`) |
 | WebP | lossy + lossless, alpha, first frame of animations | lossless only | ICCP/EXIF/XMP chunks |
 | GIF / BMP | yes (first GIF frame) | — | via `image` |
 | PSD / PSB | merged composite: 8/16/32-bit gray, RGB, CMYK, indexed, duotone (as gray); raw/RLE | — | ICC (1039), EXIF (1058), XMP (1060); ZIP-compressed composite, Lab and 1-bit unsupported |
@@ -87,7 +87,7 @@ jpegxl-rs / imagequant (GPL / C), dav1d / libheif (C).
 
 ## Performance (Apple M-series, release, synthetic 24 MP JPEG q90 4:2:0)
 
-Run `cargo test --release -p lightcraft-codecs --test bench -- --ignored --nocapture`.
+Run `cargo test --release -p dac-codecs --test bench -- --ignored --nocapture`.
 
 | Operation | Time |
 |---|---|

@@ -1,9 +1,9 @@
 //! `read_header` (import probes) agrees with a decode on dimensions and orientation, refuses what a
 //! decode refuses (truncated files included), and returns errors — never panics — on hostile input.
 
-use lightcraft_codecs::exif::minimal_exif;
-use lightcraft_codecs::*;
-use lightcraft_raster::Rgba8;
+use dac_codecs::exif::minimal_exif;
+use dac_codecs::*;
+use dac_raster::Rgba8;
 
 fn pixels(w: usize, h: usize) -> Rgba8 {
     Rgba8::from_fn(w, h, |x, y| [(x * 37 % 256) as u8, (y * 53 % 256) as u8, ((x ^ y) * 9 % 256) as u8, (128 + x % 100) as u8])

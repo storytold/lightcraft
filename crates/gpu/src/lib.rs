@@ -1,8 +1,8 @@
 //! The LightCraft develop pipeline on the GPU (wgpu compute, WGSL kernels).
 //!
-//! The CPU pipeline (`lightcraft-pipeline`) is the reference: every kernel here is a port of a CPU
-//! stage, both read the same resolved parameters ([`lightcraft_pipeline::Plan`],
-//! [`lightcraft_pipeline::finish::FinishParams`]), and the equivalence tests (`tests/`) render the
+//! The CPU pipeline (`dac-pipeline`) is the reference: every kernel here is a port of a CPU
+//! stage, both read the same resolved parameters ([`dac_pipeline::Plan`],
+//! [`dac_pipeline::finish::FinishParams`]), and the equivalence tests (`tests/`) render the
 //! same settings on both and bound the difference in 8-bit sRGB. Stages without a kernel run on the
 //! CPU inside the same render (per-stage hybrid); see `docs/gpu-pipeline.md`.
 //!
@@ -21,9 +21,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use lightcraft_develop::DevelopSettings;
-use lightcraft_pipeline::{RenderRequest, Rendered, SourceInfo, StageCache};
-use lightcraft_raster::Rgb32f;
+use dac_develop::DevelopSettings;
+use dac_pipeline::{RenderRequest, Rendered, SourceInfo, StageCache};
+use dac_raster::Rgb32f;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod backend;
@@ -337,7 +337,7 @@ pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
         let effective = s.effective();
         let s: &DevelopSettings = &effective;
         // the kernel writes 8-bit output: high-bit-depth exports (and soft proofs) render on the CPU
-        if !enabled() || req.depth != lightcraft_pipeline::OutputDepth::U8 || req.proof.is_some() {
+        if !enabled() || req.depth != dac_pipeline::OutputDepth::U8 || req.proof.is_some() {
             return None;
         }
         let gpu = device()?;

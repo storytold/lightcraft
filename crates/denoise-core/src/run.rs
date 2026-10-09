@@ -6,7 +6,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use lightcraft_raster::Rgb32f;
+use dac_raster::Rgb32f;
 use rayon::prelude::*;
 
 use crate::bayer::{Layout, pack_tile};

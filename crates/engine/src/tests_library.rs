@@ -59,7 +59,7 @@ fn edits_survive_restart_without_close() {
 fn threshold_compaction_runs_in_the_background() {
     let dir = temp_dir("bg-compact");
     let mut s = open(&dir, true);
-    s.library.as_mut().unwrap().journal_mut().policy = lightcraft_catalog::SnapshotPolicy { max_records: 8, max_bytes: u64::MAX };
+    s.library.as_mut().unwrap().journal_mut().policy = dac_catalog::SnapshotPolicy { max_records: 8, max_bytes: u64::MAX };
     let ids: Vec<_> = s.catalog.photos().map(|p| p.id).collect();
     let mut background = 0;
     for k in 0..60usize {
@@ -217,16 +217,9 @@ fn the_shown_library_folder_survives_reopen() {
     let dir = temp_dir("libfolder");
     let mut s = open(&dir, true);
     let id = s.catalog.alloc_photo_id();
-    let p = lightcraft_catalog::Photo::new(
-        id,
-        lightcraft_catalog::Source::File { path: "/pics/trip/a.jpg".into() },
-        "a.jpg",
-        "JPEG",
-        60,
-        40,
-        "2026-01-01T10:00:00",
-    );
-    s.commit("Add", lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let p =
+        dac_catalog::Photo::new(id, dac_catalog::Source::File { path: "/pics/trip/a.jpg".into() }, "a.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00");
+    s.commit("Add", dac_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
     s.execute("library.source", &json!({"kind": "libraryFolder", "path": "/pics/trip"})).unwrap();
     s.save_view();
     drop(s);
@@ -266,8 +259,8 @@ fn smart_album_rule_sets() {
             ]}}}),
         )
         .unwrap();
-    let id = lightcraft_catalog::AlbumId(r["id"].as_u64().unwrap());
-    let want = s.catalog.photos().filter(|p| !p.deleted && p.rating >= 4 && p.flag != lightcraft_catalog::Flag::Reject).count();
+    let id = dac_catalog::AlbumId(r["id"].as_u64().unwrap());
+    let want = s.catalog.photos().filter(|p| !p.deleted && p.rating >= 4 && p.flag != dac_catalog::Flag::Reject).count();
     assert!(want > 0);
     assert_eq!(s.catalog.album_count(id), want);
     // live: a new 5-star photo joins
@@ -285,7 +278,7 @@ fn smart_album_rule_sets() {
 /// The filter bar's label multi-select: any of the chosen labels.
 #[test]
 fn filter_any_of_several_labels() {
-    use lightcraft_catalog::ColorLabel;
+    use dac_catalog::ColorLabel;
     let mut s = crate::Session::with_demo();
     let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
     for (id, l) in ids.iter().zip(["red", "yellow", "green"]) {
@@ -321,7 +314,7 @@ fn quick_collection_and_target_album() {
     let alb = s.execute("album.create", &serde_json::json!({"name": "Picks"})).unwrap()["id"].as_u64().unwrap();
     s.execute("album.setTarget", &serde_json::json!({"id": alb})).unwrap();
     s.execute("album.toggleTarget", &serde_json::json!({"ids": [ids[2]]})).unwrap();
-    assert_eq!(s.catalog.album_count(lightcraft_catalog::AlbumId(alb)), 1);
+    assert_eq!(s.catalog.album_count(dac_catalog::AlbumId(alb)), 1);
     assert_eq!(s.catalog.album_count(quick), 2, "the Quick Collection is untouched");
     let smart = s.execute("album.createSmart", &serde_json::json!({"name": "S", "rules": {"rating": 3}})).unwrap()["id"].as_u64().unwrap();
     assert!(s.execute("album.setTarget", &serde_json::json!({"id": smart})).is_err());
@@ -330,12 +323,12 @@ fn quick_collection_and_target_album() {
     assert_eq!(s.catalog.album_count(quick), 0);
 }
 
-/// Scaling check (ignored: `cargo test --release -p lightcraft-engine -- --ignored scale --nocapture`):
+/// Scaling check (ignored: `cargo test --release -p dac-engine -- --ignored scale --nocapture`):
 /// the per-frame / per-click library queries on a 100k-photo catalog.
 #[test]
 #[ignore]
 fn scale_100k_library_queries() {
-    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+    use dac_catalog::{Op, Photo, PhotoId, Source};
     use std::time::Instant;
     let mut s = crate::Session::new();
     let n = 100_000u64;
@@ -394,7 +387,7 @@ fn scale_100k_library_queries() {
     });
     let alb = s.execute("album.createSmart", &serde_json::json!({"name": "S", "rules": {"rating": 5}})).unwrap()["id"].as_u64().unwrap();
     m("smart album count", &mut || {
-        let _ = s.catalog.album_count(lightcraft_catalog::AlbumId(alb));
+        let _ = s.catalog.album_count(dac_catalog::AlbumId(alb));
     });
     m("albums.list", &mut || {
         let _ = s.execute("albums.list", &serde_json::json!({})).unwrap();

@@ -13,7 +13,7 @@
 //! - automatic straightening: the world "up" is the direction most perpendicular to every
 //!   camera's x axis.
 
-use lightcraft_geom::{Homography, Point};
+use dac_geom::{Homography, Point};
 use rayon::prelude::*;
 
 use crate::features::{self, Features};

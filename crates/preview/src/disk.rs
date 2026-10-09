@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use lightcraft_raster::Rgba8;
+use dac_raster::Rgba8;
 
 use crate::Hash128;
 

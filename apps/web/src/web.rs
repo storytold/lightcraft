@@ -6,10 +6,10 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use lightcraft_engine::Session;
-use lightcraft_engine::catalog::Source;
-use lightcraft_engine::library::LibraryStores;
-use lightcraft_ui_egui::{LightcraftApp, Services, UiState};
+use dac_engine::Session;
+use dac_engine::catalog::Source;
+use dac_engine::library::LibraryStores;
+use dac_ui_egui::{DacApp, Services, UiState};
 use serde_json::json;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -218,8 +218,8 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
         write: Some(Box::new(download)),
         // downloads happen on the main thread: exports run in the foreground on the web
         write_shared: None,
-        png: Some(Box::new(|img: &lightcraft_raster::Rgba8| {
-            lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
+        png: Some(Box::new(|img: &dac_raster::Rgba8| {
+            dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(img), &dac_codecs::EncodeMeta::default()).unwrap_or_default()
         })),
         reveal: None,
         log_file: None,
@@ -360,7 +360,7 @@ async fn boot(opts: Options) -> Boot {
 }
 
 struct WebApp {
-    app: LightcraftApp,
+    app: DacApp,
     originals: Originals,
     files: Files,
     backend: Option<Backend>,
@@ -405,9 +405,9 @@ impl WebApp {
                 log::error!("opening the library failed: {e}");
                 session = Session::new();
                 originals.install(&mut session);
-                problem = Some(lightcraft_ui_egui::panels::library_problem::LibraryProblem {
+                problem = Some(dac_ui_egui::panels::library_problem::LibraryProblem {
                     can_retry: false,
-                    ..lightcraft_ui_egui::panels::library_problem::LibraryProblem::new(
+                    ..dac_ui_egui::panels::library_problem::LibraryProblem::new(
                         "the browser's storage for this page",
                         format!("{e}. Reload the page to try again."),
                     )
@@ -423,7 +423,7 @@ impl WebApp {
         // previews are large (≤ 2560 px, f32): keep few in a 32-bit address space
         session.media.preview_capacity = 3;
         let frozen = Rc::new(Cell::new(false));
-        let mut app = LightcraftApp::new(session, services(originals.clone(), backend.clone(), files.clone(), frozen.clone(), cc.egui_ctx.clone()))
+        let mut app = DacApp::new(session, services(originals.clone(), backend.clone(), files.clone(), frozen.clone(), cc.egui_ctx.clone()))
             .with_chinese_font(chinese_font);
         let ui_written = files.get("ui.json").unwrap_or_default();
         if let Ok(ui) = serde_json::from_slice::<UiState>(&ui_written) {
@@ -452,7 +452,7 @@ impl WebApp {
         }
         log::info!("lightcraft: {n} render workers");
         CTX.with(|c| *c.borrow_mut() = Some(cc.egui_ctx.clone()));
-        let origin = lightcraft_ui_egui::now_ms() - perf_now();
+        let origin = dac_ui_egui::now_ms() - perf_now();
         WebApp {
             app,
             originals,

@@ -17,8 +17,8 @@ fn temp_dir(tag: &str) -> std::path::PathBuf {
 fn write_png(path: &Path, seed: u8) {
     let (w, h) = (48usize, 32usize);
     let data: Vec<[u8; 4]> = (0..w * h).map(|i| [(i % w * 5) as u8, (i / w * 7) as u8, seed, 255]).collect();
-    let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
-    let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    let img = dac_raster::Rgba8 { width: w, height: h, data };
+    let bytes = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).unwrap();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, bytes).unwrap();
 }
@@ -72,7 +72,7 @@ fn copy_into_library_and_persist() {
         .catalog
         .photos()
         .map(|p| match &p.source {
-            lightcraft_catalog::Source::File { path } => path.clone(),
+            dac_catalog::Source::File { path } => path.clone(),
             _ => panic!(),
         })
         .collect();
@@ -109,7 +109,7 @@ fn browsing_a_folder_lists_its_photos_without_adding_them() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("sub")).unwrap();
     let png = |p: &std::path::Path, seed: u8| {
-        let img = lightcraft_raster::Rgba8::from_fn(16, 12, |x, y| [(x * 9) as u8, (y * 11) as u8, seed, 255]);
+        let img = dac_raster::Rgba8::from_fn(16, 12, |x, y| [(x * 9) as u8, (y * 11) as u8, seed, 255]);
         let b = crate::export::encode_image(&img, &crate::export::ExportOptions { format: crate::export::ExportFormat::Png, ..Default::default() })
             .unwrap();
         std::fs::write(p, b).unwrap();
@@ -232,8 +232,8 @@ fn find_missing_plan_is_rechecked_when_applied() {
     assert_eq!(r["found"].as_array().map(Vec::len), Some(0), "{r}");
     assert_eq!(r["ambiguous"].as_array().map(Vec::len), Some(0), "c isn't missing any more: {r}");
     assert_eq!(r["missing"], 1, "b stays missing: its file is c's now: {r}");
-    let path_of = |id: lightcraft_catalog::PhotoId| match &s.catalog.photo(id).unwrap().source {
-        lightcraft_catalog::Source::File { path } => path.clone(),
+    let path_of = |id: dac_catalog::PhotoId| match &s.catalog.photo(id).unwrap().source {
+        dac_catalog::Source::File { path } => path.clone(),
         _ => String::new(),
     };
     assert_eq!(path_of(a.id), dir.join("a-elsewhere.png").to_string_lossy());
@@ -248,7 +248,7 @@ fn missing_files_are_found_and_relinked() {
     std::fs::create_dir_all(dir.join("old")).unwrap();
     std::fs::create_dir_all(dir.join("moved/deeper")).unwrap();
     let png = |p: &std::path::Path, seed: u8| {
-        let img = lightcraft_raster::Rgba8::from_fn(16, 12, |x, y| [(x * 9) as u8, (y * 11) as u8, seed, 255]);
+        let img = dac_raster::Rgba8::from_fn(16, 12, |x, y| [(x * 9) as u8, (y * 11) as u8, seed, 255]);
         let b = crate::export::encode_image(&img, &crate::export::ExportOptions { format: crate::export::ExportFormat::Png, ..Default::default() })
             .unwrap();
         std::fs::write(p, b).unwrap();
@@ -289,7 +289,7 @@ fn recently_added_covers_recent_imports_newest_first() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let png = |name: &str, seed: u8| {
-        let img = lightcraft_raster::Rgba8::from_fn(16, 12, |x, y| [(x * 9) as u8, (y * 11) as u8, seed, 255]);
+        let img = dac_raster::Rgba8::from_fn(16, 12, |x, y| [(x * 9) as u8, (y * 11) as u8, seed, 255]);
         let b = crate::export::encode_image(&img, &crate::export::ExportOptions { format: crate::export::ExportFormat::Png, ..Default::default() })
             .unwrap();
         std::fs::write(dir.join(name), b).unwrap();
@@ -345,7 +345,7 @@ fn copy_with_destination_organize_rename_and_metadata_preset() {
         .unwrap();
     assert_eq!(ids(&r, "imported"), 1, "{r}");
     let p = s.catalog.photos().find(|p| p.file_name == "c.png").unwrap();
-    let lightcraft_catalog::Source::File { path } = &p.source else { panic!() };
+    let dac_catalog::Source::File { path } = &p.source else { panic!() };
     let rel = Path::new(path).strip_prefix(&dest2).unwrap();
     assert_eq!(rel.components().count(), 3, "YYYY/YYYY-MM/c.png: {rel:?}");
     assert_eq!(rel.parent().unwrap().file_name().unwrap().len(), 7);
@@ -464,7 +464,7 @@ fn damaged_smart_previews_are_rebuilt_and_failed_writes_leave_none() {
     let dir = s.media.smart_dir.clone().unwrap();
     let file = dir.join(crate::smart::file_name(s.catalog.photo(id).unwrap()));
     {
-        let _fault = lightcraft_catalog::safe_file::fail_writes_after(64);
+        let _fault = dac_catalog::safe_file::fail_writes_after(64);
         let r = s.execute("library.smartPreviews", &json!({})).unwrap();
         assert_eq!((r["built"].as_u64(), r["failed"].as_array().map(Vec::len)), (Some(0), Some(1)), "{r}");
     }
@@ -534,7 +534,7 @@ fn cube_luts_become_profiles() {
     let base = s.render_now(photo, 48, 32).unwrap().image;
     s.execute("develop.profile", &json!({"id": id, "amount": 100})).unwrap();
     let warm = s.render_now(photo, 48, 32).unwrap().image;
-    let mean = |img: &lightcraft_raster::Rgba8, k: usize| img.data.iter().map(|p| p[k] as f64).sum::<f64>() / img.data.len() as f64;
+    let mean = |img: &dac_raster::Rgba8, k: usize| img.data.iter().map(|p| p[k] as f64).sum::<f64>() / img.data.len() as f64;
     assert!(
         mean(&warm, 0) > mean(&base, 0) && mean(&warm, 2) < mean(&base, 2),
         "warmer: R {} → {}, B {} → {}",
@@ -550,15 +550,15 @@ fn cube_luts_become_profiles() {
     assert!(s.profile_favorites.contains(&id));
     // the library keeps it
     drop(s);
-    lightcraft_pipeline::lut::unregister(&id);
+    dac_pipeline::lut::unregister(&id);
     let mut s = Session::new().with_fs();
     s.open_library(&lib, false).unwrap();
     assert!(s.lut_profiles.iter().any(|p| p.id == id));
     assert!(s.profile_favorites.contains(&id), "imported LUT favorite survives reopen");
     assert_eq!(s.profile_info(&id), Some(("Warm Test", "Film Looks")));
-    assert!(lightcraft_pipeline::lut::get(&id).is_some(), "registered again on open");
+    assert!(dac_pipeline::lut::get(&id).is_some(), "registered again on open");
     s.execute("profile.deleteImported", &json!({"id": id})).unwrap();
-    assert!(lightcraft_pipeline::lut::get(&id).is_none());
+    assert!(dac_pipeline::lut::get(&id).is_none());
     let _ = std::fs::remove_dir_all(&src);
     let _ = std::fs::remove_dir_all(&lib);
 }
@@ -582,7 +582,7 @@ fn folders_rename_and_move_with_their_photos() {
     let b = root.join("Italy 2026");
     assert!(b.join("one.png").exists() && b.join("one.xmp").exists() && !a.exists());
     let path = |s: &Session| match &s.catalog.photo(id).unwrap().source {
-        lightcraft_catalog::Source::File { path } => path.clone(),
+        dac_catalog::Source::File { path } => path.clone(),
         _ => panic!(),
     };
     assert_eq!(path(&s), b.join("one.png").to_string_lossy());
@@ -608,7 +608,7 @@ fn folder_rename_and_move_undo_and_redo_on_disk() {
     s.execute("library.import", &json!({"paths": [a.to_string_lossy()]})).unwrap();
     let id = s.active().unwrap();
     let path = |s: &Session| match &s.catalog.photo(id).unwrap().source {
-        lightcraft_catalog::Source::File { path } => path.clone(),
+        dac_catalog::Source::File { path } => path.clone(),
         _ => panic!(),
     };
     let undo0 = s.undo.len();
@@ -664,8 +664,8 @@ fn folder_rename_and_move_undo_and_redo_on_disk() {
 #[test]
 fn assisted_culling_groups_bursts_and_scores_focus() {
     let dir = temp_dir("cull");
-    let scene = lightcraft_scenes::demo_library()[0].render(480, 320);
-    let soften = |img: &lightcraft_raster::Rgb32f, r: usize| {
+    let scene = dac_scenes::demo_library()[0].render(480, 320);
+    let soften = |img: &dac_raster::Rgb32f, r: usize| {
         let (w, h) = (img.width, img.height);
         let mut out = img.clone();
         for y in 0..h {
@@ -683,17 +683,17 @@ fn assisted_culling_groups_bursts_and_scores_focus() {
         }
         out
     };
-    let save = |img: &lightcraft_raster::Rgb32f, name: &str| {
+    let save = |img: &dac_raster::Rgb32f, name: &str| {
         let data: Vec<[u8; 4]> = img
             .data
             .iter()
             .map(|c| {
-                let e = |v: f32| (lightcraft_color::transfer::linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8;
+                let e = |v: f32| (dac_color::transfer::linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8;
                 [e(c[0]), e(c[1]), e(c[2]), 255]
             })
             .collect();
-        let png = lightcraft_codecs::encode_png(
-            &lightcraft_codecs::EncodeImage::rgba8(&lightcraft_raster::Rgba8 { width: img.width, height: img.height, data }),
+        let png = dac_codecs::encode_png(
+            &dac_codecs::EncodeImage::rgba8(&dac_raster::Rgba8 { width: img.width, height: img.height, data }),
             &Default::default(),
         )
         .unwrap();
@@ -702,17 +702,17 @@ fn assisted_culling_groups_bursts_and_scores_focus() {
     save(&soften(&scene, 3), "a_soft.png");
     save(&scene, "b_sharp.png");
     save(&soften(&scene, 6), "c_softer.png");
-    save(&lightcraft_scenes::demo_library()[7].render(480, 320), "d_other.png");
+    save(&dac_scenes::demo_library()[7].render(480, 320), "d_other.png");
     let mut s = Session::new().with_fs();
     let r = s.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
     let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().filter_map(Value::as_u64).collect();
     let by_name = |s: &Session, n: &str| s.catalog.photos().find(|p| p.file_name == n).unwrap().id;
     for (i, n) in ["a_soft.png", "b_sharp.png", "c_softer.png"].iter().enumerate() {
         let id = by_name(&s, n);
-        s.commit("t", lightcraft_catalog::Op::SetCaptured { id, captured: Some(format!("2026-05-01T10:00:0{i}")) }).unwrap();
+        s.commit("t", dac_catalog::Op::SetCaptured { id, captured: Some(format!("2026-05-01T10:00:0{i}")) }).unwrap();
     }
     let other = by_name(&s, "d_other.png");
-    s.commit("t", lightcraft_catalog::Op::SetCaptured { id: other, captured: Some("2026-05-01T10:00:04".into()) }).unwrap();
+    s.commit("t", dac_catalog::Op::SetCaptured { id: other, captured: Some("2026-05-01T10:00:04".into()) }).unwrap();
     let r = s.execute("photo.analyze", &json!({"ids": ids, "rejectBelow": 0.0, "pickBest": true})).unwrap();
     assert_eq!(r["groups"], 1, "{r}");
     let a = |s: &Session, n: &str| s.catalog.photo(by_name(s, n)).unwrap().analysis.unwrap();
@@ -721,11 +721,11 @@ fn assisted_culling_groups_bursts_and_scores_focus() {
     assert!(sharp.sharpness > soft.sharpness && soft.sharpness > softer.sharpness);
     assert!(sharp.best && !soft.best && sharp.group.is_some() && sharp.group == softer.group);
     assert!(odd.group.is_none(), "an unrelated photo isn't in the burst");
-    assert_eq!(s.catalog.photo(by_name(&s, "b_sharp.png")).unwrap().flag, lightcraft_catalog::Flag::Pick);
+    assert_eq!(s.catalog.photo(by_name(&s, "b_sharp.png")).unwrap().flag, dac_catalog::Flag::Pick);
     // reject the blurry ones (by score), as a rule too
     let cut = (soft.sharpness + sharp.sharpness) / 2.0;
     s.execute("photo.analyze", &json!({"ids": ids, "rejectBelow": cut})).unwrap();
-    assert_eq!(s.catalog.photo(by_name(&s, "c_softer.png")).unwrap().flag, lightcraft_catalog::Flag::Reject);
+    assert_eq!(s.catalog.photo(by_name(&s, "c_softer.png")).unwrap().flag, dac_catalog::Flag::Reject);
     s.execute("library.filter", &json!({"ruleSet": {"rules": [{"field": "bestOfGroup", "op": "is", "value": true}]}})).unwrap();
     let vis = s.visible_cloned();
     assert!(vis.contains(&by_name(&s, "b_sharp.png")) && !vis.contains(&by_name(&s, "a_soft.png")) && vis.contains(&other));
@@ -749,11 +749,7 @@ fn dust_spots_are_found_and_healed() {
             [b, b, (b as f32 * 1.15).min(255.0) as u8, 255]
         })
         .collect();
-    let png = lightcraft_codecs::encode_png(
-        &lightcraft_codecs::EncodeImage::rgba8(&lightcraft_raster::Rgba8 { width: w, height: h, data }),
-        &Default::default(),
-    )
-    .unwrap();
+    let png = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&dac_raster::Rgba8 { width: w, height: h, data }), &Default::default()).unwrap();
     std::fs::write(dir.join("sky.png"), png).unwrap();
     let mut s = Session::new().with_fs();
     s.execute("library.import", &json!({"paths": [dir.join("sky.png").to_string_lossy()]})).unwrap();
@@ -762,7 +758,7 @@ fn dust_spots_are_found_and_healed() {
     let r = s.execute("spot.findDust", &json!({})).unwrap();
     assert_eq!(r["added"], 2, "{r}");
     let after = s.render_now(id, 900, 600).unwrap().image;
-    let at = |img: &lightcraft_raster::Rgba8, x: usize, y: usize| img.data[y * 900 + x][0] as i32;
+    let at = |img: &dac_raster::Rgba8, x: usize, y: usize| img.data[y * 900 + x][0] as i32;
     for (cx, cy) in spots {
         assert!(at(&after, cx as usize, cy as usize) > at(&before, cx as usize, cy as usize) + 6, "the spot at {cx},{cy} is lifted");
     }
@@ -840,7 +836,7 @@ fn smart_previews_folder_is_chosen_per_library() {
 /// records (and a deleted photo) checks — and lists, and counts — the library files alone.
 #[test]
 fn missing_photos_skip_local_browse_records() {
-    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+    use dac_catalog::{Op, Photo, PhotoId, Source};
     let gone = std::env::temp_dir().join(format!("lc-missing-scope-{}", std::process::id()));
     let mut s = Session::new();
     let mut ops = Vec::new();
@@ -885,7 +881,7 @@ fn duplicate_in_recently_deleted_is_reported_as_such() {
     assert_eq!(ids(&r, "imported"), 0, "{r}");
     assert_eq!(r["duplicates"][0]["existing"], id, "{r}");
     assert_eq!(r["duplicates"][0]["existingDeleted"], true, "{r}");
-    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().deleted, "default: left in the trash");
+    assert!(s.catalog.photo(dac_catalog::PhotoId(id)).unwrap().deleted, "default: left in the trash");
     let _ = std::fs::remove_dir_all(&src);
 }
 
@@ -895,7 +891,7 @@ fn import_can_restore_a_duplicate_from_recently_deleted() {
     let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()], "onDeleted": "restore"})).unwrap();
     assert_eq!(r["restored"], json!([id]), "{r}");
     assert_eq!(ids(&r, "duplicates"), 0, "{r}");
-    let p = s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap();
+    let p = s.catalog.photo(dac_catalog::PhotoId(id)).unwrap();
     assert!(!p.deleted && p.rating == 4, "restored with its edits");
     let _ = std::fs::remove_dir_all(&src);
 }
@@ -907,8 +903,8 @@ fn import_can_replace_a_duplicate_from_recently_deleted() {
     assert_eq!(ids(&r, "imported"), 1, "{r}");
     let new = r["imported"][0].as_u64().unwrap();
     assert_ne!(new, id);
-    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(id)).is_none(), "the trashed record is gone");
-    let p = s.catalog.photo(lightcraft_catalog::PhotoId(new)).unwrap();
+    assert!(s.catalog.photo(dac_catalog::PhotoId(id)).is_none(), "the trashed record is gone");
+    let p = s.catalog.photo(dac_catalog::PhotoId(new)).unwrap();
     assert!(!p.deleted && p.rating == 0, "a new photo without the old edits");
     assert_eq!(s.catalog.len(), 1);
     let _ = std::fs::remove_dir_all(&src);
@@ -929,8 +925,8 @@ fn empty_recently_deleted_removes_only_trashed_photos() {
     let keep = r["imported"][0].as_u64().unwrap();
     let r = s.execute("library.emptyRecentlyDeleted", &json!({})).unwrap();
     assert_eq!(r["deleted"], 1, "{r}");
-    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(id)).is_none());
-    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(keep)).is_some());
+    assert!(s.catalog.photo(dac_catalog::PhotoId(id)).is_none());
+    assert!(s.catalog.photo(dac_catalog::PhotoId(keep)).is_some());
     // nothing to empty is not an error
     assert_eq!(s.execute("library.emptyRecentlyDeleted", &json!({})).unwrap()["deleted"], 0);
     s.execute("edit.undo", &json!({})).unwrap();
@@ -960,12 +956,12 @@ fn emptying_trashed_photos_of_one_album_and_stack_leaves_nothing_dangling() {
     let r = s.execute("library.emptyRecentlyDeleted", &json!({})).unwrap();
     assert_eq!(r["deleted"], 2, "{r}");
     assert_eq!(s.catalog.len(), 0);
-    assert!(s.catalog.album(lightcraft_catalog::AlbumId(al)).unwrap().photos.is_empty(), "album still lists a removed photo");
-    assert!(ids.iter().all(|i| s.catalog.stack_of(lightcraft_catalog::PhotoId(*i)).is_none()));
+    assert!(s.catalog.album(dac_catalog::AlbumId(al)).unwrap().photos.is_empty(), "album still lists a removed photo");
+    assert!(ids.iter().all(|i| s.catalog.stack_of(dac_catalog::PhotoId(*i)).is_none()));
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(s.catalog.len(), 2, "one undo step brings both back");
-    assert_eq!(s.catalog.album(lightcraft_catalog::AlbumId(al)).unwrap().photos.len(), 2);
-    assert!(s.catalog.stack_of(lightcraft_catalog::PhotoId(ids[0])).is_some());
+    assert_eq!(s.catalog.album(dac_catalog::AlbumId(al)).unwrap().photos.len(), 2);
+    assert!(s.catalog.stack_of(dac_catalog::PhotoId(ids[0])).is_some());
     assert!(s.catalog.photos().all(|p| p.deleted), "back in Recently Deleted");
     let _ = std::fs::remove_dir_all(&src);
 }
@@ -975,7 +971,7 @@ fn deleting_several_photos_permanently_leaves_nothing_dangling() {
     let (mut s, src, ids, al) = two_trashed_in_album_and_stack("trash-perm-refs");
     s.execute("library.select", &json!({"ids": ids})).unwrap();
     s.execute("photo.deletePermanently", &json!({"ids": ids})).unwrap();
-    assert!(s.catalog.album(lightcraft_catalog::AlbumId(al)).unwrap().photos.is_empty());
+    assert!(s.catalog.album(dac_catalog::AlbumId(al)).unwrap().photos.is_empty());
     let _ = std::fs::remove_dir_all(&src);
 }
 
@@ -984,8 +980,8 @@ fn fresh_import_of_two_trashed_photos_in_one_album_and_stack_works() {
     let (mut s, src, ids, al) = two_trashed_in_album_and_stack("trash-fresh-refs");
     let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()], "onDeleted": "fresh"})).unwrap();
     assert_eq!(ids_len(&r), 2, "{r}");
-    assert!(s.catalog.album(lightcraft_catalog::AlbumId(al)).unwrap().photos.is_empty());
-    assert!(ids.iter().all(|i| s.catalog.photo(lightcraft_catalog::PhotoId(*i)).is_none()));
+    assert!(s.catalog.album(dac_catalog::AlbumId(al)).unwrap().photos.is_empty());
+    assert!(ids.iter().all(|i| s.catalog.photo(dac_catalog::PhotoId(*i)).is_none()));
     let _ = std::fs::remove_dir_all(&src);
 }
 
@@ -999,7 +995,7 @@ fn restore_import_applies_the_album_to_restored_photos() {
     let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()], "onDeleted": "restore", "albumName": "Back"})).unwrap();
     assert_eq!(r["restored"], json!(ids), "{r}");
     let album = r["album"].as_u64().expect("album created for the restored photos");
-    assert_eq!(s.catalog.album(lightcraft_catalog::AlbumId(album)).unwrap().photos.len(), 1);
+    assert_eq!(s.catalog.album(dac_catalog::AlbumId(album)).unwrap().photos.len(), 1);
     let _ = std::fs::remove_dir_all(&src);
 }
 
@@ -1067,7 +1063,7 @@ fn expand_stops_at_the_walk_limits() {
 /// (the extensions are in `import::EXTENSIONS`; the files differ so none is a duplicate) and import as preview only.
 #[test]
 fn folder_import_picks_up_undecodable_raw_containers_as_preview_only() {
-    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    use dac_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
     let src = temp_dir("preview-only-exts");
     let px: Vec<u8> = (0..40 * 30).flat_map(|i| [(i % 251) as u8, 128, 200]).collect();
     let jpeg = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
@@ -1102,6 +1098,6 @@ fn folder_import_picks_up_undecodable_raw_containers_as_preview_only() {
     assert_eq!(r["scanned"], 7, "{r}");
     assert_eq!(ids(&r, "imported"), 7, "{r}");
     assert_eq!(ids(&r, "failed"), 0, "{r}");
-    assert!(s.catalog.photos().all(|p| p.preview_only.is_some() && p.kind == lightcraft_catalog::MediaKind::Raw && (p.width, p.height) == (40, 30)));
+    assert!(s.catalog.photos().all(|p| p.preview_only.is_some() && p.kind == dac_catalog::MediaKind::Raw && (p.width, p.height) == (40, 30)));
     let _ = std::fs::remove_dir_all(&src);
 }

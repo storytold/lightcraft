@@ -207,12 +207,12 @@ pub fn builtin_label(source: &str, builtin: bool) -> &str {
 /// A profile's name for display: a built-in profile's is translated, an imported LUT's is shown as
 /// its file named it (it may happen to match a message, like "Vivid").
 pub fn profile_label<'a>(id: &str, name: &'a str) -> &'a str {
-    builtin_label(name, lightcraft_engine::presets::profile(id).is_some())
+    builtin_label(name, dac_engine::presets::profile(id).is_some())
 }
 
 /// An Activity (history) step for display. The step's stored label stays English; generated steps
 /// are translated around the names they carry, and a user preset's name is kept verbatim.
-pub fn history_label(source: &str, presets: &[lightcraft_develop::Preset]) -> String {
+pub fn history_label(source: &str, presets: &[dac_develop::Preset]) -> String {
     if let Some(name) = source.strip_prefix("Preset: ") {
         // A user preset may share a stock preset's name: then the step could be either, so it
         // keeps the name as written.
@@ -230,16 +230,16 @@ pub fn history_label(source: &str, presets: &[lightcraft_develop::Preset]) -> St
 
 /// A library source's heading (All Photos, Recently Deleted…) in the UI language; an album's
 /// name is the user's and stays verbatim.
-pub fn source_label(source: lightcraft_engine::LibrarySource, catalog: &lightcraft_catalog::Catalog) -> String {
+pub fn source_label(source: dac_engine::LibrarySource, catalog: &dac_catalog::Catalog) -> String {
     let label = source.label(catalog);
-    if matches!(source, lightcraft_engine::LibrarySource::Album(id) if catalog.album(id).is_some()) { label } else { tr(&label).to_string() }
+    if matches!(source, dac_engine::LibrarySource::Album(id) if catalog.album(id).is_some()) { label } else { tr(&label).to_string() }
 }
 
 /// What the grid is titled for the session's source: [`source_label`], or a library folder's last
 /// two names (`photos/travel`; the folder's name is the user's and stays verbatim).
-pub fn source_title(session: &lightcraft_engine::Session) -> String {
+pub fn source_title(session: &dac_engine::Session) -> String {
     match (session.source, session.library_folder.as_deref()) {
-        (lightcraft_engine::LibrarySource::LibraryFolder, Some(path)) => lightcraft_catalog::folders::folder_label(path),
+        (dac_engine::LibrarySource::LibraryFolder, Some(path)) => dac_catalog::folders::folder_label(path),
         (source, _) => source_label(source, &session.catalog),
     }
 }
@@ -249,7 +249,7 @@ pub fn source_title(session: &lightcraft_engine::Session) -> String {
 /// catalog's own wording; every other language formats it with its `*-formats.json` date
 /// patterns and weekday names. The grouping keys themselves never change.
 pub fn date_group_label(key: &str, short: bool) -> String {
-    let label = lightcraft_catalog::dates::group_label(key);
+    let label = dac_catalog::dates::group_label(key);
     if language() == Locale::En {
         return if short {
             match key.len() {
@@ -274,7 +274,7 @@ pub fn date_group_label(key: &str, short: bool) -> String {
         return if short { tr_format!("{month}", month = month) } else { tr_format!("{month} {year}", month = month, year = year) };
     }
     if key.len() == 10
-        && let Some(weekday) = lightcraft_catalog::dates::weekday(key)
+        && let Some(weekday) = dac_catalog::dates::weekday(key)
         && let Some(day) = key.get(8..10).and_then(|d| d.parse::<u32>().ok())
     {
         let weekday = tr(weekday);
@@ -290,8 +290,8 @@ pub fn date_group_label(key: &str, short: bool) -> String {
 /// A capture time for display in the UI language (English: "March 30, 2022 at 10:11:11 PM");
 /// the metadata itself is never rewritten, and a value that doesn't parse is shown as it is.
 pub fn display_time(iso: &str) -> String {
-    if language() == Locale::En || lightcraft_catalog::dates::normalize_iso(iso).is_none() {
-        return lightcraft_catalog::dates::display_time(iso);
+    if language() == Locale::En || dac_catalog::dates::normalize_iso(iso).is_none() {
+        return dac_catalog::dates::display_time(iso);
     }
     let date = date_group_label(iso.get(..10).unwrap_or(iso), false);
     match iso.get(11..).filter(|time| !time.is_empty()) {
@@ -301,16 +301,16 @@ pub fn display_time(iso: &str) -> String {
 }
 
 /// Built-in colour names are translated; custom label names are user data.
-pub fn color_label(catalog: &lightcraft_catalog::Catalog, label: lightcraft_catalog::ColorLabel) -> String {
+pub fn color_label(catalog: &dac_catalog::Catalog, label: dac_catalog::ColorLabel) -> String {
     catalog.custom_label_name(label).map_or_else(|| tr(&catalog.label_name(label)).to_string(), str::to_string)
 }
 
 /// A legacy smart-album filter summary, using the same display labels as filter chips.
-pub fn filter_label(filter: &lightcraft_catalog::Filter, catalog: &lightcraft_catalog::Catalog) -> String {
+pub fn filter_label(filter: &dac_catalog::Filter, catalog: &dac_catalog::Catalog) -> String {
     if language() == Locale::En {
         filter.describe()
     } else {
-        lightcraft_engine::filter_chips(filter, catalog)
+        dac_engine::filter_chips(filter, catalog)
             .iter()
             .map(|chip| crate::panels::chips::display_label(chip, filter, catalog))
             .collect::<Vec<_>>()
@@ -319,9 +319,9 @@ pub fn filter_label(filter: &lightcraft_catalog::Filter, catalog: &lightcraft_ca
 }
 
 /// A rule summary for display, keeping free-text rule values verbatim.
-pub fn rules_label(rules: &lightcraft_catalog::RuleSet) -> String {
-    fn describe(rules: &lightcraft_catalog::RuleSet, depth: usize) -> String {
-        use lightcraft_catalog::{
+pub fn rules_label(rules: &dac_catalog::RuleSet) -> String {
+    fn describe(rules: &dac_catalog::RuleSet, depth: usize) -> String {
+        use dac_catalog::{
             Match, Rule,
             rules::{FIELDS, Kind, ops_for},
         };
@@ -511,7 +511,7 @@ mod tests {
     #[test]
     fn catalog_characters_are_paintable() {
         let ctx = egui::Context::default();
-        ctx.set_fonts(crate::theme::font_definitions(lightcraft_engine::CRAFT_FONTS));
+        ctx.set_fonts(crate::theme::font_definitions(dac_engine::CRAFT_FONTS));
         let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
         out.textures_delta.clear();
         for language in Locale::ALL {
@@ -521,8 +521,7 @@ mod tests {
             }
             // The faces this language's script needs; a language the craft-fonts input does not
             // cover (a translation added ahead of its font) is reported, not failed.
-            let mut faces: Vec<&str> =
-                lightcraft_engine::CRAFT_FONTS.iter().filter(|font| font.serves(language.script())).map(|font| font.family).collect();
+            let mut faces: Vec<&str> = dac_engine::CRAFT_FONTS.iter().filter(|font| font.serves(language.script())).map(|font| font.family).collect();
             faces.dedup();
             if faces.is_empty() {
                 eprintln!("skipped {}: built without a craft-fonts face for {}", language.code(), language.script());
@@ -554,7 +553,7 @@ mod tests {
     #[test]
     fn interface_symbols_are_paintable() {
         let ctx = egui::Context::default();
-        ctx.set_fonts(crate::theme::font_definitions(lightcraft_engine::CRAFT_FONTS));
+        ctx.set_fonts(crate::theme::font_definitions(dac_engine::CRAFT_FONTS));
         let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
         out.textures_delta.clear();
         // ⌥ and ⌫ come from egui's bundled fonts; ▸ and ▾ are in neither (measured 2026-10-07).
@@ -633,15 +632,15 @@ mod tests {
     /// language, and the translations catch up at their own pace.
     #[test]
     fn display_label_gaps_are_reported() {
-        let mut labels: Vec<&str> = lightcraft_engine::command_specs().iter().map(|spec| spec.label).collect();
+        let mut labels: Vec<&str> = dac_engine::command_specs().iter().map(|spec| spec.label).collect();
         labels.extend(crate::menus::ui_commands().map(|command| command.1).filter(|label| !Locale::ALL.iter().any(|locale| locale.name() == *label)));
-        labels.extend(lightcraft_develop::CONTROLS.iter().map(|control| control.label));
-        for (_, label, kind) in lightcraft_catalog::rules::FIELDS {
+        labels.extend(dac_develop::CONTROLS.iter().map(|control| control.label));
+        for (_, label, kind) in dac_catalog::rules::FIELDS {
             labels.push(label);
-            labels.extend(lightcraft_catalog::rules::ops_for(*kind).iter().map(|(_, label)| *label));
+            labels.extend(dac_catalog::rules::ops_for(*kind).iter().map(|(_, label)| *label));
         }
-        labels.extend(lightcraft_engine::rename::TOKENS.iter().map(|token| token.meaning));
-        labels.extend(lightcraft_engine::rename::TEMPLATE_NOTES);
+        labels.extend(dac_engine::rename::TOKENS.iter().map(|token| token.meaning));
+        labels.extend(dac_engine::rename::TEMPLATE_NOTES);
         let ui_labels = labels.len();
         for line in crate::panels::dialogs::WHATS_NEW.lines().map(str::trim) {
             if line.is_empty() || line.starts_with("# ") {
@@ -674,7 +673,7 @@ mod tests {
     #[test]
     fn german_switches_via_menu_and_control_persists_and_formats_dates() {
         use crate::control::{ControlRequest, Outcome};
-        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        let mut app = crate::DacApp::new(dac_engine::Session::with_demo(), Default::default());
         app.run("app.language.german", serde_json::json!({})).unwrap();
         assert_eq!(app.ui.language, Locale::De);
         assert_eq!(tr("File"), "Datei");
@@ -699,15 +698,12 @@ mod tests {
         assert_eq!(builtin_label("Warm Glow", false), "Warm Glow");
         assert_eq!(builtin_label("Warm Glow", true), "Warmer Glanz");
         assert_eq!(tr("my-photo.jpg"), "my-photo.jpg");
-        let rules = lightcraft_catalog::RuleSet {
-            mode: lightcraft_catalog::Match::All,
-            rules: vec![lightcraft_catalog::Rule::Field { field: "keywords".into(), op: "contains".into(), value: serde_json::json!("Color") }],
+        let rules = dac_catalog::RuleSet {
+            mode: dac_catalog::Match::All,
+            rules: vec![dac_catalog::Rule::Field { field: "keywords".into(), op: "contains".into(), value: serde_json::json!("Color") }],
         };
         assert_eq!(rules_label(&rules), "Stichwörter enthält Color");
-        let filter = lightcraft_catalog::Filter {
-            labels: vec![lightcraft_catalog::ColorLabel::Red, lightcraft_catalog::ColorLabel::Blue],
-            ..Default::default()
-        };
+        let filter = dac_catalog::Filter { labels: vec![dac_catalog::ColorLabel::Red, dac_catalog::ColorLabel::Blue], ..Default::default() };
         assert_eq!(filter_label(&filter, &app.session.catalog), "Farbmarkierung: Rot oder Blau");
         app.run("label.setNames", serde_json::json!({"names": {"red": "Color"}})).unwrap();
         assert_eq!(filter_label(&filter, &app.session.catalog), "Farbmarkierung: Color oder Blau");
@@ -717,7 +713,7 @@ mod tests {
     #[test]
     fn german_panels_dialogs_and_glyphs_are_painted_without_extra_fonts() {
         let ctx = fonts_ctx(&[]);
-        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        let mut app = crate::DacApp::new(dac_engine::Session::with_demo(), Default::default());
         app.ui.left_panel = true;
         let text = painted_text(&ctx, &mut app, Locale::De);
         assert!(text.contains("Meine Fotos") && text.contains("Alle Fotos"), "{text}");
@@ -754,7 +750,7 @@ mod tests {
         }
         let ctx = fonts_ctx(&[]);
         let services = crate::Services { pick_folder: Some(Box::new(|| None)), ..Default::default() };
-        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+        let mut app = crate::DacApp::new(dac_engine::Session::with_demo(), services);
         app.ui.language = Locale::De;
         let mut bounds = Vec::new();
         for export in [false, true] {
@@ -806,7 +802,7 @@ mod tests {
     }
 
     /// The text the whole window paints over a few frames in `language`.
-    fn painted_text(ctx: &egui::Context, app: &mut crate::LightcraftApp, language: Locale) -> String {
+    fn painted_text(ctx: &egui::Context, app: &mut crate::DacApp, language: Locale) -> String {
         fn collect(shape: &egui::epaint::Shape, text: &mut String) {
             match shape {
                 egui::epaint::Shape::Text(shape) => {
@@ -841,9 +837,9 @@ mod tests {
     fn every_language_is_painted_and_menu_ids_stay_the_same() {
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx);
-        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        let mut app = crate::DacApp::new(dac_engine::Session::with_demo(), Default::default());
         app.ui.left_panel = true;
-        let ids = |app: &crate::LightcraftApp| crate::menus::menu_entries(app).into_iter().map(|entry| entry.id).collect::<Vec<_>>();
+        let ids = |app: &crate::DacApp| crate::menus::menu_entries(app).into_iter().map(|entry| entry.id).collect::<Vec<_>>();
         let english_ids = ids(&app);
         for language in Locale::ALL {
             let text = painted_text(&ctx, &mut app, *language);
@@ -863,7 +859,7 @@ mod tests {
     }
 
     /// The UI families, after one frame so the font definitions are loaded.
-    fn fonts_ctx(craft: &'static [lightcraft_engine::CraftFont]) -> egui::Context {
+    fn fonts_ctx(craft: &'static [dac_engine::CraftFont]) -> egui::Context {
         let ctx = egui::Context::default();
         ctx.set_fonts(crate::theme::font_definitions(craft));
         let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
@@ -877,12 +873,12 @@ mod tests {
     fn craft_fonts_render_cjk_in_the_ui() {
         let samples = [(Locale::Ja, "日本語の文字"), (Locale::ZhHans, "简体中文字"), (Locale::ZhHant, "繁體中文字")];
         for (language, sample) in samples {
-            if !lightcraft_engine::CRAFT_FONTS.iter().any(|font| font.serves(language.script())) {
+            if !dac_engine::CRAFT_FONTS.iter().any(|font| font.serves(language.script())) {
                 eprintln!("skipped {}: built without a craft-fonts face for {}", language.code(), language.script());
                 continue;
             }
             set_language(language);
-            let ctx = fonts_ctx(lightcraft_engine::CRAFT_FONTS);
+            let ctx = fonts_ctx(dac_engine::CRAFT_FONTS);
             ctx.fonts_mut(|fonts| {
                 for family in
                     [egui::FontFamily::Proportional, egui::FontFamily::Name(crate::theme::FONT_SEMIBOLD.into()), egui::FontFamily::Monospace]
@@ -913,7 +909,7 @@ mod tests {
                 assert!("LightCraft".chars().all(|ch| fonts.has_glyph(&font, ch)), "{font:?}");
             }
         });
-        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        let mut app = crate::DacApp::new(dac_engine::Session::with_demo(), Default::default());
         for language in Locale::ALL {
             app.ui.language = *language;
             for frame in 0..3 {
@@ -933,12 +929,12 @@ mod tests {
     #[test]
     fn traditional_chinese_switches_through_menu_and_control_and_persists() {
         use crate::control::{ControlRequest, Outcome};
-        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        let mut app = crate::DacApp::new(dac_engine::Session::with_demo(), Default::default());
         app.run("app.language.traditionalChinese", serde_json::json!({})).unwrap();
         assert_eq!(app.ui.language, Locale::ZhHant);
         // Applied at once, not on the next frame.
         assert_eq!(tr("File"), "檔案");
-        assert_eq!(source_label(lightcraft_engine::LibrarySource::All, &app.session.catalog), "所有照片");
+        assert_eq!(source_label(dac_engine::LibrarySource::All, &app.session.catalog), "所有照片");
         assert_eq!(date_group_label("2026-09-20", false), "2026年9月20日 星期日");
         assert_eq!(date_group_label("2026-09-20", true), "20日 星期日");
         assert_eq!(date_group_label("2026-09", false), "2026年9月");
@@ -972,7 +968,7 @@ mod tests {
         let Outcome::Done(reply) = crate::control::handle(&mut app, &ctx, &req) else { panic!("expected a reply") };
         assert_eq!(reply["ok"], false);
         assert_eq!(app.ui.language, Locale::ZhHant);
-        let ids = |app: &crate::LightcraftApp| crate::menus::menu_entries(app).into_iter().map(|entry| entry.id).collect::<Vec<_>>();
+        let ids = |app: &crate::DacApp| crate::menus::menu_entries(app).into_iter().map(|entry| entry.id).collect::<Vec<_>>();
         let chinese_ids = ids(&app);
         app.run("app.language.english", serde_json::json!({})).unwrap();
         assert_eq!(tr("File"), "File");
@@ -986,7 +982,7 @@ mod tests {
         assert_eq!(date_group_label("2026-09-20", false), "Sunday, 20 September 2026");
         assert_eq!(date_group_label("2026-09-20", true), "Sunday, 20");
         assert_eq!(date_group_label("2026-09", true), "September");
-        assert_eq!(display_time("2026-09-20T16:04:05"), lightcraft_catalog::dates::display_time("2026-09-20T16:04:05"));
+        assert_eq!(display_time("2026-09-20T16:04:05"), dac_catalog::dates::display_time("2026-09-20T16:04:05"));
         set_language(Locale::Ja);
         assert_eq!(date_group_label("2026-09-20", false), "2026年9月20日（日曜日）");
         assert_eq!(date_group_label("2026-09", true), "9月");
@@ -1009,10 +1005,10 @@ mod tests {
     fn traditional_chinese_presets_and_panel_headers_are_painted() {
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx);
-        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        let mut app = crate::DacApp::new(dac_engine::Session::with_demo(), Default::default());
         app.ui.presets = true;
         let builtin = app.session.presets.iter().find(|p| p.name == "Warm Glow").unwrap().clone();
-        app.session.presets.push(lightcraft_develop::Preset { id: "user.test".into(), builtin: false, ..builtin });
+        app.session.presets.push(dac_develop::Preset { id: "user.test".into(), builtin: false, ..builtin });
         for (panel, title) in [(crate::state::RightPanel::Activity, "歷史紀錄"), (crate::state::RightPanel::Versions, "版本")] {
             app.ui.right = panel;
             let text = painted_text(&ctx, &mut app, Locale::ZhHant);

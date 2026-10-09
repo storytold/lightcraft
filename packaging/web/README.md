@@ -12,8 +12,8 @@ static site in `lightcraft-web-<version>/`:
 | File | What it is |
 |---|---|
 | `index.html` | The page. It loads everything through relative URLs. |
-| `lightcraft_web.js` | wasm-bindgen glue (generated, ES module) |
-| `lightcraft_web_bg.wasm` | The app, about 13 MB (about 3 MB with brotli) |
+| `dac_web.js` | wasm-bindgen glue (generated, ES module) |
+| `dac_web_bg.wasm` | The app, about 13 MB (about 3 MB with brotli) |
 | `worker.js` | Starts the render workers (each runs the same module) |
 | `lightcraft_zh_hans.otf` | Simplified Chinese UI font, included when built with `CRAFT_FONTS_DIR` |
 | `OFL-noto-sans-cjk-sc.txt` | The bundled Chinese font's SIL Open Font License |

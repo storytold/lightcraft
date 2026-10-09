@@ -1,5 +1,5 @@
 [package]
-name = "lightcraft-heif"
+name = "dac-heif"
 description = "Optional HEIF/HEIC still-image decoder for LightCraft (a thin, panic-guarded wrapper around heic-rs)"
 version.workspace = true
 edition.workspace = true

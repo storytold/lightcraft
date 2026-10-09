@@ -52,7 +52,7 @@ impl PreviewBuild {
 
 /// The jobs that build `id`'s previews: the largest grid thumbnail, then the view render at
 /// `edge` (`None` = 1:1, the photo's full size).
-fn jobs_for(s: &mut Session, id: lightcraft_catalog::PhotoId, edge: Option<usize>) -> Vec<RenderJob> {
+fn jobs_for(s: &mut Session, id: dac_catalog::PhotoId, edge: Option<usize>) -> Vec<RenderJob> {
     let Some(p) = s.catalog.photo(id) else { return Vec::new() };
     let full = p.width.max(p.height) as usize;
     let e = edge.unwrap_or(full).min(full.max(1)).max(1);
@@ -110,7 +110,7 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
 /// One photo's smart preview to build or discard: (photo, its file in the smart previews folder,
 /// how to load the original at preview size).
 #[cfg(not(target_arch = "wasm32"))]
-type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>);
+type SmartJob = (dac_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>);
 
 /// What Build / Discard Smart Previews did.
 #[cfg(not(target_arch = "wasm32"))]
@@ -167,7 +167,7 @@ fn smart_run(
                     .ok_or_else(|| "nothing to build from".to_string())
                     .and_then(|s| s.load_source())
                     .and_then(|src| crate::smart::encode(&src.image, src.info_or(Default::default()).camera_tone.as_ref()))
-                    .and_then(|b| lightcraft_catalog::safe_file::write_atomic(&path, &b).map_err(|e| format!("{}: {e}", path.display())));
+                    .and_then(|b| dac_catalog::safe_file::write_atomic(&path, &b).map_err(|e| format!("{}: {e}", path.display())));
                 match r {
                     Ok(()) => {
                         n.built += 1;
@@ -210,7 +210,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     let mut jobs: Vec<SmartJob> = Vec::new();
     for id in ids {
         let Some(ph) = s.catalog.photo(id).cloned() else { continue };
-        if !matches!(ph.source, lightcraft_catalog::Source::File { .. }) {
+        if !matches!(ph.source, dac_catalog::Source::File { .. }) {
             continue;
         }
         let path = dir.join(crate::smart::file_name(&ph));
@@ -303,7 +303,7 @@ fn smart_location(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Whether photo `id` has a smart preview.
-pub fn has_smart_preview(s: &Session, id: lightcraft_catalog::PhotoId) -> bool {
+pub fn has_smart_preview(s: &Session, id: dac_catalog::PhotoId) -> bool {
     match (&s.media.smart_dir, s.catalog.photo(id)) {
         (Some(dir), Some(p)) => crate::smart::is_valid(&dir.join(crate::smart::file_name(p))),
         _ => false,
@@ -335,7 +335,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "photo.smartPreview", "Smart Preview Status", [], None, "{id?} → {smartPreview: bool, originalOnline: bool}", always, |s, p| {
             let id = s.targets(p).first().copied().ok_or_else(|| bad("photo.smartPreview", "no photo"))?;
             let online = match s.catalog.photo(id).map(|p| p.source.clone()) {
-                Some(lightcraft_catalog::Source::File { path }) => std::path::Path::new(&path).exists(),
+                Some(dac_catalog::Source::File { path }) => std::path::Path::new(&path).exists(),
                 _ => true,
             };
             Ok(json!({"smartPreview": has_smart_preview(s, id), "originalOnline": online}))

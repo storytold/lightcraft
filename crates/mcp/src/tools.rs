@@ -424,7 +424,7 @@ fn activate(b: &mut dyn Backend, args: &Value) -> Result<(), String> {
 
 fn temp_path(tag: &str) -> std::path::PathBuf {
     static N: AtomicU64 = AtomicU64::new(0);
-    std::env::temp_dir().join(format!("lightcraft-mcp-{}-{}-{tag}.png", std::process::id(), N.fetch_add(1, Ordering::Relaxed)))
+    std::env::temp_dir().join(format!("dac-mcp-{}-{}-{tag}.png", std::process::id(), N.fetch_add(1, Ordering::Relaxed)))
 }
 
 /// Read a PNG the backend wrote, optionally downscale / re-encode as JPEG, and wrap it as image
@@ -440,10 +440,10 @@ fn image_result(file: &std::path::Path, max: Option<u32>, format: &str, save_to:
     let too_big = max.is_some_and(|m| w.max(h) > m);
     let (bytes, w, h) = if jpeg || too_big {
         let opts = match max {
-            Some(m) => lightcraft_codecs::DecodeOptions::fit(m, m),
-            None => lightcraft_codecs::DecodeOptions::default(),
+            Some(m) => dac_codecs::DecodeOptions::fit(m, m),
+            None => dac_codecs::DecodeOptions::default(),
         };
-        let d = match lightcraft_codecs::decode(&bytes, opts) {
+        let d = match dac_codecs::decode(&bytes, opts) {
             Ok(d) => d,
             Err(e) => return ToolResult::error(format!("cannot decode rendered image: {e}")),
         };
@@ -456,7 +456,7 @@ fn image_result(file: &std::path::Path, max: Option<u32>, format: &str, save_to:
         (bytes, w, h)
     };
     if let Some(p) = save_to
-        && let Err(e) = lightcraft_engine::export::write_file(p, &bytes)
+        && let Err(e) = dac_engine::export::write_file(p, &bytes)
     {
         return ToolResult::error(e);
     }

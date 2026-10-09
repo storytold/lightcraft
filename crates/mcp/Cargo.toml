@@ -1,5 +1,5 @@
 [package]
-name = "lightcraft-mcp"
+name = "dac-mcp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,8 +9,8 @@ description = "LightCraft MCP server (L5): JSON-RPC 2.0 over stdio, driving a ru
 workspace = true
 
 [dependencies]
-lightcraft-engine = { workspace = true }
-lightcraft-codecs = { workspace = true }
-lightcraft-raster = { workspace = true }
+dac-engine = { workspace = true }
+dac-codecs = { workspace = true }
+dac-raster = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }

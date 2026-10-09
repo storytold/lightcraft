@@ -1,14 +1,14 @@
 //! The port against the reference implementation (Hugging Face `transformers`, fp32).
 //!
 //! Needs the checkpoint and a reference file made by `tools/sam3_reference.py`:
-//! `LIGHTCRAFT_SAM3_DIR=<model dir> LIGHTCRAFT_SAM3_REF=<ref.safetensors> cargo test -p lightcraft-segment --release -- --nocapture`.
+//! `LIGHTCRAFT_SAM3_DIR=<model dir> LIGHTCRAFT_SAM3_REF=<ref.safetensors> cargo test -p dac-segment --release -- --nocapture`.
 //! Skipped (passes) when either is missing.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use candle_core::{Device, IndexOp, Tensor};
-use lightcraft_segment::{Click, Sam3, tokenizer::Tokenizer};
+use dac_segment::{Click, Sam3, tokenizer::Tokenizer};
 
 fn setup() -> Option<(PathBuf, HashMap<String, Tensor>)> {
     let dir = PathBuf::from(std::env::var_os("LIGHTCRAFT_SAM3_DIR")?);

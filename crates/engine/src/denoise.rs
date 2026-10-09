@@ -21,13 +21,13 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, SystemTime};
 
-use lightcraft_catalog::{Photo, PhotoId, Source};
-use lightcraft_denoise::bayer::Layout;
-use lightcraft_denoise::manifest::DenoiserManifest;
-use lightcraft_denoise::run::{Control, Params, TileRunner, denoise_bayer};
-use lightcraft_denoise::{Error as RunError, product};
-use lightcraft_develop::DevelopSettings;
-use lightcraft_preview::Hasher128;
+use dac_catalog::{Photo, PhotoId, Source};
+use dac_denoise::bayer::Layout;
+use dac_denoise::manifest::DenoiserManifest;
+use dac_denoise::run::{Control, Params, TileRunner, denoise_bayer};
+use dac_denoise::{Error as RunError, product};
+use dac_develop::DevelopSettings;
+use dac_preview::Hasher128;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -149,7 +149,7 @@ fn worth_retrying(why: &str) -> bool {
 /// it keeps working; a tile it gets wrong is run on the CPU, so a photo is always finished.
 #[cfg(feature = "denoise")]
 struct Network {
-    cpu: lightcraft_denoise::runtime::CpuRunner,
+    cpu: dac_denoise::runtime::CpuRunner,
     path: PathBuf,
     tile: usize,
     gpu: OnceLock<Result<GpuSide, String>>,
@@ -262,11 +262,11 @@ fn card_tile_ms(runner: &dyn TileRunner, input: &[f32]) -> f64 {
 
 /// Set the card up for the model at `path`: kernels built, the check tile run on both and compared, both timed.
 #[cfg(feature = "denoise")]
-fn make_gpu(cpu: &lightcraft_denoise::runtime::CpuRunner, path: &Path, tile: usize) -> Result<GpuSide, String> {
-    let input = Arc::new(lightcraft_denoise::runtime::check_tile(tile));
+fn make_gpu(cpu: &dac_denoise::runtime::CpuRunner, path: &Path, tile: usize) -> Result<GpuSide, String> {
+    let input = Arc::new(dac_denoise::runtime::check_tile(tile));
     let (on_card, net) = (input.clone(), cpu.net().clone());
     let card = move || -> Result<_, String> {
-        let runner = lightcraft_gpu::nn::runner(&net, tile)?;
+        let runner = dac_gpu::nn::runner(&net, tile)?;
         let got = runner.run(&on_card).map_err(|e| format!("the GPU could not run the check tile: {e}"))?;
         let card_ms = card_tile_ms(&runner, &on_card);
         Ok((runner, got, card_ms))
@@ -307,7 +307,7 @@ impl Network {
             Some(Err(why)) => return Err(why.clone()),
             Some(Ok(g)) => g,
         };
-        if let Some(why) = lightcraft_gpu::nn::broken_reason() {
+        if let Some(why) = dac_gpu::nn::broken_reason() {
             return Err(format!("the graphics card stopped working ({why})"));
         }
         if self.fallbacks.load(Ordering::Relaxed) >= GPU_MAX_FALLBACKS {
@@ -412,7 +412,7 @@ pub(crate) fn default_loader() -> Loader {
     #[cfg(feature = "denoise")]
     {
         Arc::new(|path, manifest| {
-            let cpu = lightcraft_denoise::runtime::CpuRunner::load(path, manifest).map_err(|e| e.to_string())?;
+            let cpu = dac_denoise::runtime::CpuRunner::load(path, manifest).map_err(|e| e.to_string())?;
             Ok(Arc::new(Network {
                 cpu,
                 path: path.to_path_buf(),
@@ -525,11 +525,11 @@ pub(crate) fn installed_models(dir: &Path) -> Vec<Installed> {
         let p = e.path();
         let Some(name) = p.file_name().and_then(|n| n.to_str()).map(str::to_string) else { continue };
         let onnx = p.join("model.onnx");
-        if !lightcraft_denoise::licence::valid_id(&name) || !p.is_dir() || !onnx.is_file() {
+        if !dac_denoise::licence::valid_id(&name) || !p.is_dir() || !onnx.is_file() {
             continue;
         }
-        let Some(m) = read_capped(&p.join("denoise-model.json"), lightcraft_denoise::manifest::MAX_MANIFEST_BYTES)
-            .and_then(|b| lightcraft_denoise::manifest::parse(&b).ok())
+        let Some(m) =
+            read_capped(&p.join("denoise-model.json"), dac_denoise::manifest::MAX_MANIFEST_BYTES).and_then(|b| dac_denoise::manifest::parse(&b).ok())
         else {
             continue;
         };
@@ -685,7 +685,7 @@ fn loaded(spec: &JobSpec) -> Result<Arc<dyn Model>, MakeError> {
 }
 
 /// The cell `[(0,0), (1,0), (0,1), (1,1)]` colours of a Bayer mosaic and so its layout.
-fn layout_of(cfa: &lightcraft_raw::Cfa) -> Option<Layout> {
+fn layout_of(cfa: &dac_raw::Cfa) -> Option<Layout> {
     Layout::from_cell([cfa.color_at(0, 0), cfa.color_at(1, 0), cfa.color_at(0, 1), cfa.color_at(1, 1)])
 }
 
@@ -708,16 +708,16 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
     // the decode and the normalised mosaic wait their turn at the process-wide memory gate, as every decode does
     let (mosaic, layout) = {
         let _held = crate::memory::work_gate().acquire(bytes.len().saturating_mul(4));
-        if lightcraft_raw::probe(&bytes).is_none() {
+        if dac_raw::probe(&bytes).is_none() {
             return Err(MakeError::Unsupported("not a raw file".into()));
         }
-        let raw = match lightcraft_raw::decode(&bytes) {
+        let raw = match dac_raw::decode(&bytes) {
             Ok(r) => r,
-            Err(lightcraft_raw::RawError::Unsupported(why)) => return Err(MakeError::Unsupported(why)),
+            Err(dac_raw::RawError::Unsupported(why)) => return Err(MakeError::Unsupported(why)),
             Err(e) => return Err(MakeError::Failed(e.to_string())),
         };
         drop(bytes);
-        if raw.cpp != 1 || !raw.cfa.as_ref().is_some_and(lightcraft_raw::Cfa::is_bayer) {
+        if raw.cpp != 1 || !raw.cfa.as_ref().is_some_and(dac_raw::Cfa::is_bayer) {
             return Err(MakeError::Unsupported(
                 "only Bayer raw files can be denoised (this one has another sensor layout or is already demosaiced)".into(),
             ));
@@ -1410,7 +1410,7 @@ impl Session {
 #[cfg(all(test, feature = "denoise"))]
 mod gpu_tests {
     use super::*;
-    use lightcraft_denoise::manifest::{Domain, Gain};
+    use dac_denoise::manifest::{Domain, Gain};
 
     /// A folder of the test's own: the card's set-up leaves its marker beside the model.
     fn folder(name: &str) -> PathBuf {
@@ -1421,9 +1421,9 @@ mod gpu_tests {
     }
 
     /// The model file is read again when the card is set up (for the first photo), so it stays until the test ends.
-    fn model(name: &str, tile: u64) -> (Arc<dyn Model>, lightcraft_denoise::runtime::CpuRunner, PathBuf) {
+    fn model(name: &str, tile: u64) -> (Arc<dyn Model>, dac_denoise::runtime::CpuRunner, PathBuf) {
         let path = folder(name).join("model.onnx");
-        std::fs::write(&path, lightcraft_denoise::synthetic::unet_onnx(tile, 8, 2, 7)).unwrap();
+        std::fs::write(&path, dac_denoise::synthetic::unet_onnx(tile, 8, 2, 7)).unwrap();
         let manifest = DenoiserManifest {
             id: "synthetic".into(),
             name: "Synthetic".into(),
@@ -1439,7 +1439,7 @@ mod gpu_tests {
             gain: Gain::MatchMean { nominal: 1.0, max_deviation: 0.05 },
         };
         let loaded = default_loader()(&path, &manifest).unwrap();
-        let cpu = lightcraft_denoise::runtime::CpuRunner::load(&path, &manifest).unwrap();
+        let cpu = dac_denoise::runtime::CpuRunner::load(&path, &manifest).unwrap();
         (loaded, cpu, path)
     }
 
@@ -1452,7 +1452,7 @@ mod gpu_tests {
     #[test]
     fn a_tile_on_the_card_is_the_cpus_tile() {
         let (model, cpu, path) = model("same", 64);
-        let (input, _) = lightcraft_denoise::runtime::test_tile(64);
+        let (input, _) = dac_denoise::runtime::test_tile(64);
         let want = cpu.run(&input).unwrap();
         let (runner, at_once) = model.runner(RunOn::Gpu, 16);
         assert!(worst(&want, &runner.run(&input).unwrap()) < 1e-3);
@@ -1477,7 +1477,7 @@ mod gpu_tests {
     #[test]
     fn with_the_processor_chosen_everything_runs_on_the_cpu() {
         let (model, cpu, path) = model("cpu", 64);
-        let (input, _) = lightcraft_denoise::runtime::test_tile(64);
+        let (input, _) = dac_denoise::runtime::test_tile(64);
         let (runner, at_once) = model.runner(RunOn::Cpu, 16);
         assert_eq!(runner.run(&input).unwrap(), cpu.run(&input).unwrap(), "the CPU path is the CPU runner, bit for bit");
         assert_eq!(at_once, 16, "the threads asked for are the threads used");
@@ -1521,7 +1521,7 @@ mod gpu_tests {
             fallbacks: AtomicUsize::new(0),
             last_threads: AtomicUsize::new(0),
         };
-        let (input, _) = lightcraft_denoise::runtime::test_tile(64);
+        let (input, _) = dac_denoise::runtime::test_tile(64);
         let want = cpu.run(&input).unwrap();
         let (runner, at_once) = model.runner(RunOn::Auto, 8);
         assert_eq!(at_once, GPU_PARALLEL, "the (fast) card is chosen");

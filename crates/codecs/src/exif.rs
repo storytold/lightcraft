@@ -1,5 +1,5 @@
 //! Minimal, bounds-checked TIFF/EXIF walking: just what decoding needs (orientation, embedded
-//! thumbnail, colour-space hint). Full EXIF parsing lives in `lightcraft-meta`.
+//! thumbnail, colour-space hint). Full EXIF parsing lives in `dac-meta`.
 
 /// Byte-order aware reader over a TIFF-structured blob.
 #[derive(Clone, Copy)]

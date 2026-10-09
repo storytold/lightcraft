@@ -1,5 +1,5 @@
 [package]
-name = "lightcraft-cli"
+name = "dac-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,32 +7,32 @@ publish = false
 description = "LightCraft command-line tool: headless render, command listing and the MCP server"
 
 [[bin]]
-name = "lightcraft-cli"
+name = "app-cli"
 path = "src/main.rs"
 
 [lints]
 workspace = true
 
 [dependencies]
-lightcraft-engine = { workspace = true }
-lightcraft-sysmem = { workspace = true }
-lightcraft-mcp = { workspace = true }
-lightcraft-ui-egui = { workspace = true }
-lightcraft-codecs = { workspace = true }
-lightcraft-raster = { workspace = true }
-lightcraft-merge = { workspace = true }
+dac-engine = { workspace = true }
+dac-sysmem = { workspace = true }
+dac-mcp = { workspace = true }
+dac-ui-egui = { workspace = true }
+dac-codecs = { workspace = true }
+dac-raster = { workspace = true }
+dac-merge = { workspace = true }
 serde_json = { workspace = true }
 dhat = { workspace = true, optional = true }
 
 [features]
 default = ["denoise"]
-denoise = ["lightcraft-engine/denoise"]
-rawnind-model = ["denoise", "lightcraft-engine/rawnind-model"]
-# Heap profiling: `cargo run --release -p lightcraft-cli --features dhat-heap -- snapshot …` counts
+denoise = ["dac-engine/denoise"]
+rawnind-model = ["denoise", "dac-engine/rawnind-model"]
+# Heap profiling: `cargo run --release -p dac-cli --features dhat-heap -- snapshot …` counts
 # every allocation (live/peak bytes in `library.memory` / `ui.inspect`) and writes dhat-heap.json
 # (open it in DHAT's viewer: allocation sites by bytes at the peak). Slows allocation-heavy work.
 dhat-heap = ["dep:dhat"]
 
-# Open HEIC/HEIF photos (the optional lightcraft-heif crate). Not default so distributors choose
+# Open HEIC/HEIF photos (the optional dac-heif crate). Not default so distributors choose
 # it (HEVC patents); build with `--features heif` to include it.
-heif = ["lightcraft-codecs/heif"]
+heif = ["dac-codecs/heif"]

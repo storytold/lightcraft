@@ -28,7 +28,7 @@ Toda tradução de formato é verificada por `format!` do Rust no build. Referen
 consuma o argumento correspondente com `{:.0}` — um texto com precisão 0 não imprime nada.
 
 Aparência, fontes, troca de idioma, persistência da preferência e estabilidade dos IDs de comando são
-verificadas por `cargo test -p lightcraft-ui-egui i18n::tests` (a checagem de glifos só roda com
+verificadas por `cargo test -p dac-ui-egui i18n::tests` (a checagem de glifos só roda com
 `CRAFT_FONTS_DIR`). Para visualizar o idioma, renderize sem interface gráfica:
 
 ```sh

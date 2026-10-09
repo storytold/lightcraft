@@ -1,7 +1,7 @@
 //! Library-wide keyword commands: list (tree with counts), suggestions, rename, delete, merge;
 //! keyword sets (nine keywords a keystroke away: ⌥1–⌥9) and Recent Keywords.
 
-use lightcraft_catalog::keywords::{clean, is_under};
+use dac_catalog::keywords::{clean, is_under};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd, str_param};
@@ -17,9 +17,9 @@ fn strs(p: &Value, key: &str) -> Vec<String> {
 
 /// Commit a keyword batch; returns how many photos changed. The keyword filter follows a renamed
 /// keyword and is cleared when its keyword is deleted.
-fn commit_keywords(s: &mut Session, label: &str, op: lightcraft_catalog::Op, follow: impl Fn(&str) -> Option<String>) -> Result<Value> {
+fn commit_keywords(s: &mut Session, label: &str, op: dac_catalog::Op, follow: impl Fn(&str) -> Option<String>) -> Result<Value> {
     let n = match &op {
-        lightcraft_catalog::Op::Batch { ops } => ops.len(),
+        dac_catalog::Op::Batch { ops } => ops.len(),
         _ => 1,
     };
     if n > 0 {

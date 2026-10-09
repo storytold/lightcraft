@@ -1176,6 +1176,410 @@ dependencies = [
 ]
 
 [[package]]
+name = "dac-app"
+version = "0.4.0"
+dependencies = [
+ "dac-codecs",
+ "dac-engine",
+ "dac-raster",
+ "dac-sysmem",
+ "dac-ui-egui",
+ "eframe",
+ "egui",
+ "log",
+ "muda",
+ "rfd",
+ "serde_json",
+ "winresource",
+]
+
+[[package]]
+name = "dac-catalog"
+version = "0.4.0"
+dependencies = [
+ "crc32fast",
+ "dac-develop",
+ "dac-meta",
+ "log",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "web-time",
+]
+
+[[package]]
+name = "dac-cli"
+version = "0.4.0"
+dependencies = [
+ "dac-codecs",
+ "dac-engine",
+ "dac-mcp",
+ "dac-merge",
+ "dac-raster",
+ "dac-sysmem",
+ "dac-ui-egui",
+ "dhat",
+ "serde_json",
+]
+
+[[package]]
+name = "dac-codecs"
+version = "0.4.0"
+dependencies = [
+ "bytemuck",
+ "dac-color",
+ "dac-geom",
+ "dac-heif",
+ "dac-raster",
+ "image",
+ "image-webp",
+ "jpeg-decoder",
+ "jpeg-encoder",
+ "jxl-oxide",
+ "moxcms 0.9.1",
+ "png",
+ "proptest",
+ "ravif",
+ "rayon",
+ "serde",
+ "thiserror 2.0.21",
+ "tiff",
+ "zune-core",
+ "zune-jpeg",
+]
+
+[[package]]
+name = "dac-color"
+version = "0.4.0"
+dependencies = [
+ "dac-geom",
+ "proptest",
+ "serde",
+]
+
+[[package]]
+name = "dac-denoise"
+version = "0.4.0"
+dependencies = [
+ "dac-denoise-core",
+ "dac-raster",
+ "faer-core",
+ "miniz_oxide 0.8.9",
+ "proptest",
+ "rayon",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
+ "web-time",
+]
+
+[[package]]
+name = "dac-denoise-core"
+version = "0.4.0"
+dependencies = [
+ "dac-raster",
+ "miniz_oxide 0.8.9",
+ "proptest",
+ "rayon",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
+ "web-time",
+]
+
+[[package]]
+name = "dac-develop"
+version = "0.4.0"
+dependencies = [
+ "dac-color",
+ "dac-geom",
+ "miniz_oxide 0.8.9",
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "dac-engine"
+version = "0.4.0"
+dependencies = [
+ "ab_glyph",
+ "dac-catalog",
+ "dac-codecs",
+ "dac-color",
+ "dac-denoise",
+ "dac-denoise-core",
+ "dac-develop",
+ "dac-faces",
+ "dac-fetch",
+ "dac-geom",
+ "dac-gpu",
+ "dac-merge",
+ "dac-meta",
+ "dac-pipeline",
+ "dac-preview",
+ "dac-raster",
+ "dac-raw",
+ "dac-scenes",
+ "dac-segment",
+ "dac-tiff",
+ "harfrust",
+ "libc",
+ "log",
+ "miniz_oxide 0.8.9",
+ "rayon",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "unicode-segmentation",
+ "web-time",
+]
+
+[[package]]
+name = "dac-faces"
+version = "0.4.0"
+dependencies = [
+ "matrixmultiply",
+ "ndarray",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
+ "web-time",
+]
+
+[[package]]
+name = "dac-fetch"
+version = "0.4.0"
+dependencies = [
+ "log",
+ "rustls",
+ "rustls-rustcrypto",
+ "sha2",
+ "webpki-roots",
+]
+
+[[package]]
+name = "dac-geom"
+version = "0.4.0"
+dependencies = [
+ "proptest",
+ "serde",
+]
+
+[[package]]
+name = "dac-gpu"
+version = "0.4.0"
+dependencies = [
+ "bytemuck",
+ "dac-color",
+ "dac-denoise",
+ "dac-develop",
+ "dac-geom",
+ "dac-pipeline",
+ "dac-raster",
+ "dac-scenes",
+ "log",
+ "pollster 1.0.1",
+ "wgpu",
+]
+
+[[package]]
+name = "dac-heif"
+version = "0.4.0"
+dependencies = [
+ "heic-rs",
+]
+
+[[package]]
+name = "dac-mcp"
+version = "0.4.0"
+dependencies = [
+ "dac-codecs",
+ "dac-engine",
+ "dac-raster",
+ "log",
+ "serde_json",
+]
+
+[[package]]
+name = "dac-merge"
+version = "0.4.0"
+dependencies = [
+ "dac-codecs",
+ "dac-color",
+ "dac-geom",
+ "dac-meta",
+ "dac-raster",
+ "dac-raw",
+ "dac-scenes",
+ "rayon",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "dac-meta"
+version = "0.4.0"
+dependencies = [
+ "dac-geom",
+ "dac-tiff",
+ "proptest",
+ "quick-xml 0.38.4",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "dac-pipeline"
+version = "0.4.0"
+dependencies = [
+ "dac-color",
+ "dac-develop",
+ "dac-geom",
+ "dac-raster",
+ "dac-raw",
+ "dac-scenes",
+ "image",
+ "proptest",
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "dac-preview"
+version = "0.4.0"
+dependencies = [
+ "dac-raster",
+ "jpeg-encoder",
+ "log",
+ "siphasher",
+ "zune-core",
+ "zune-jpeg",
+]
+
+[[package]]
+name = "dac-raster"
+version = "0.4.0"
+dependencies = [
+ "dac-color",
+ "dac-geom",
+ "libc",
+ "proptest",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "dac-raw"
+version = "0.4.0"
+dependencies = [
+ "dac-color",
+ "dac-geom",
+ "dac-meta",
+ "dac-raster",
+ "dac-tiff",
+ "jpeg-encoder",
+ "jxl-oxide",
+ "miniz_oxide 0.8.9",
+ "proptest",
+ "rayon",
+ "serde",
+ "sha2",
+ "thiserror 2.0.21",
+ "zune-core",
+ "zune-jpeg",
+ "zune-jpegxl",
+]
+
+[[package]]
+name = "dac-scenes"
+version = "0.4.0"
+dependencies = [
+ "dac-color",
+ "dac-raster",
+ "image",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "dac-segment"
+version = "0.4.0"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "dac-fetch",
+ "log",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "dac-sysmem"
+version = "0.4.0"
+
+[[package]]
+name = "dac-tiff"
+version = "0.4.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "dac-ui-egui"
+version = "0.4.0"
+dependencies = [
+ "dac-catalog",
+ "dac-codecs",
+ "dac-color",
+ "dac-denoise",
+ "dac-develop",
+ "dac-engine",
+ "dac-faces",
+ "dac-geom",
+ "dac-meta",
+ "dac-pipeline",
+ "dac-preview",
+ "dac-raster",
+ "egui",
+ "log",
+ "serde",
+ "serde_json",
+ "toml",
+ "web-time",
+]
+
+[[package]]
+name = "dac-web"
+version = "0.4.0"
+dependencies = [
+ "crc32fast",
+ "dac-codecs",
+ "dac-engine",
+ "dac-preview",
+ "dac-raster",
+ "dac-ui-egui",
+ "eframe",
+ "egui",
+ "js-sys",
+ "log",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2972,410 +3376,6 @@ dependencies = [
  "libc",
  "plain",
  "redox_syscall 0.9.4",
-]
-
-[[package]]
-name = "lightcraft"
-version = "0.4.0"
-dependencies = [
- "eframe",
- "egui",
- "lightcraft-codecs",
- "lightcraft-engine",
- "lightcraft-raster",
- "lightcraft-sysmem",
- "lightcraft-ui-egui",
- "log",
- "muda",
- "rfd",
- "serde_json",
- "winresource",
-]
-
-[[package]]
-name = "lightcraft-catalog"
-version = "0.4.0"
-dependencies = [
- "crc32fast",
- "lightcraft-develop",
- "lightcraft-meta",
- "log",
- "proptest",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "web-time",
-]
-
-[[package]]
-name = "lightcraft-cli"
-version = "0.4.0"
-dependencies = [
- "dhat",
- "lightcraft-codecs",
- "lightcraft-engine",
- "lightcraft-mcp",
- "lightcraft-merge",
- "lightcraft-raster",
- "lightcraft-sysmem",
- "lightcraft-ui-egui",
- "serde_json",
-]
-
-[[package]]
-name = "lightcraft-codecs"
-version = "0.4.0"
-dependencies = [
- "bytemuck",
- "image",
- "image-webp",
- "jpeg-decoder",
- "jpeg-encoder",
- "jxl-oxide",
- "lightcraft-color",
- "lightcraft-geom",
- "lightcraft-heif",
- "lightcraft-raster",
- "moxcms 0.9.1",
- "png",
- "proptest",
- "ravif",
- "rayon",
- "serde",
- "thiserror 2.0.21",
- "tiff",
- "zune-core",
- "zune-jpeg",
-]
-
-[[package]]
-name = "lightcraft-color"
-version = "0.4.0"
-dependencies = [
- "lightcraft-geom",
- "proptest",
- "serde",
-]
-
-[[package]]
-name = "lightcraft-denoise"
-version = "0.4.0"
-dependencies = [
- "faer-core",
- "lightcraft-denoise-core",
- "lightcraft-raster",
- "miniz_oxide 0.8.9",
- "proptest",
- "rayon",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.21",
- "web-time",
-]
-
-[[package]]
-name = "lightcraft-denoise-core"
-version = "0.4.0"
-dependencies = [
- "lightcraft-raster",
- "miniz_oxide 0.8.9",
- "proptest",
- "rayon",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.21",
- "web-time",
-]
-
-[[package]]
-name = "lightcraft-develop"
-version = "0.4.0"
-dependencies = [
- "lightcraft-color",
- "lightcraft-geom",
- "miniz_oxide 0.8.9",
- "proptest",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "lightcraft-engine"
-version = "0.4.0"
-dependencies = [
- "ab_glyph",
- "harfrust",
- "libc",
- "lightcraft-catalog",
- "lightcraft-codecs",
- "lightcraft-color",
- "lightcraft-denoise",
- "lightcraft-denoise-core",
- "lightcraft-develop",
- "lightcraft-faces",
- "lightcraft-fetch",
- "lightcraft-geom",
- "lightcraft-gpu",
- "lightcraft-merge",
- "lightcraft-meta",
- "lightcraft-pipeline",
- "lightcraft-preview",
- "lightcraft-raster",
- "lightcraft-raw",
- "lightcraft-scenes",
- "lightcraft-segment",
- "lightcraft-tiff",
- "log",
- "miniz_oxide 0.8.9",
- "rayon",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "unicode-segmentation",
- "web-time",
-]
-
-[[package]]
-name = "lightcraft-faces"
-version = "0.4.0"
-dependencies = [
- "matrixmultiply",
- "ndarray",
- "proptest",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.21",
- "web-time",
-]
-
-[[package]]
-name = "lightcraft-fetch"
-version = "0.4.0"
-dependencies = [
- "log",
- "rustls",
- "rustls-rustcrypto",
- "sha2",
- "webpki-roots",
-]
-
-[[package]]
-name = "lightcraft-geom"
-version = "0.4.0"
-dependencies = [
- "proptest",
- "serde",
-]
-
-[[package]]
-name = "lightcraft-gpu"
-version = "0.4.0"
-dependencies = [
- "bytemuck",
- "lightcraft-color",
- "lightcraft-denoise",
- "lightcraft-develop",
- "lightcraft-geom",
- "lightcraft-pipeline",
- "lightcraft-raster",
- "lightcraft-scenes",
- "log",
- "pollster 1.0.1",
- "wgpu",
-]
-
-[[package]]
-name = "lightcraft-heif"
-version = "0.4.0"
-dependencies = [
- "heic-rs",
-]
-
-[[package]]
-name = "lightcraft-mcp"
-version = "0.4.0"
-dependencies = [
- "lightcraft-codecs",
- "lightcraft-engine",
- "lightcraft-raster",
- "log",
- "serde_json",
-]
-
-[[package]]
-name = "lightcraft-merge"
-version = "0.4.0"
-dependencies = [
- "lightcraft-codecs",
- "lightcraft-color",
- "lightcraft-geom",
- "lightcraft-meta",
- "lightcraft-raster",
- "lightcraft-raw",
- "lightcraft-scenes",
- "rayon",
- "serde",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "lightcraft-meta"
-version = "0.4.0"
-dependencies = [
- "lightcraft-geom",
- "lightcraft-tiff",
- "proptest",
- "quick-xml 0.38.4",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "lightcraft-pipeline"
-version = "0.4.0"
-dependencies = [
- "image",
- "lightcraft-color",
- "lightcraft-develop",
- "lightcraft-geom",
- "lightcraft-raster",
- "lightcraft-raw",
- "lightcraft-scenes",
- "proptest",
- "rayon",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "lightcraft-preview"
-version = "0.4.0"
-dependencies = [
- "jpeg-encoder",
- "lightcraft-raster",
- "log",
- "siphasher",
- "zune-core",
- "zune-jpeg",
-]
-
-[[package]]
-name = "lightcraft-raster"
-version = "0.4.0"
-dependencies = [
- "libc",
- "lightcraft-color",
- "lightcraft-geom",
- "proptest",
- "rayon",
- "serde",
-]
-
-[[package]]
-name = "lightcraft-raw"
-version = "0.4.0"
-dependencies = [
- "jpeg-encoder",
- "jxl-oxide",
- "lightcraft-color",
- "lightcraft-geom",
- "lightcraft-meta",
- "lightcraft-raster",
- "lightcraft-tiff",
- "miniz_oxide 0.8.9",
- "proptest",
- "rayon",
- "serde",
- "sha2",
- "thiserror 2.0.21",
- "zune-core",
- "zune-jpeg",
- "zune-jpegxl",
-]
-
-[[package]]
-name = "lightcraft-scenes"
-version = "0.4.0"
-dependencies = [
- "image",
- "lightcraft-color",
- "lightcraft-raster",
- "rayon",
- "serde",
-]
-
-[[package]]
-name = "lightcraft-segment"
-version = "0.4.0"
-dependencies = [
- "candle-core",
- "candle-nn",
- "lightcraft-fetch",
- "log",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "lightcraft-sysmem"
-version = "0.4.0"
-
-[[package]]
-name = "lightcraft-tiff"
-version = "0.4.0"
-dependencies = [
- "proptest",
- "serde",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "lightcraft-ui-egui"
-version = "0.4.0"
-dependencies = [
- "egui",
- "lightcraft-catalog",
- "lightcraft-codecs",
- "lightcraft-color",
- "lightcraft-denoise",
- "lightcraft-develop",
- "lightcraft-engine",
- "lightcraft-faces",
- "lightcraft-geom",
- "lightcraft-meta",
- "lightcraft-pipeline",
- "lightcraft-preview",
- "lightcraft-raster",
- "log",
- "serde",
- "serde_json",
- "toml",
- "web-time",
-]
-
-[[package]]
-name = "lightcraft-web"
-version = "0.4.0"
-dependencies = [
- "crc32fast",
- "eframe",
- "egui",
- "js-sys",
- "lightcraft-codecs",
- "lightcraft-engine",
- "lightcraft-preview",
- "lightcraft-raster",
- "lightcraft-ui-egui",
- "log",
- "serde",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]

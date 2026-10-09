@@ -4,8 +4,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use lightcraft_catalog::MediaKind;
-use lightcraft_develop::Preset;
+use dac_catalog::MediaKind;
+use dac_develop::Preset;
 use serde_json::json;
 
 use crate::Session;
@@ -28,19 +28,19 @@ fn with_presets(s: &mut Session) {
 }
 
 fn dng(dir: &Path, name: &str, make: &str, model: &str) {
-    let meta = lightcraft_meta::Metadata { make: Some(make.into()), model: Some(model.into()), ..Default::default() };
+    let meta = dac_meta::Metadata { make: Some(make.into()), model: Some(model.into()), ..Default::default() };
     std::fs::write(dir.join(name), crate::tests_xmp::synthetic_dng_with(None, meta)).unwrap();
 }
 
 fn png(path: &Path) {
     let (w, h) = (24usize, 16usize);
     let data: Vec<[u8; 4]> = (0..w * h).map(|i| [(i * 7) as u8, (i * 3) as u8, 90, 255]).collect();
-    let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
-    let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    let img = dac_raster::Rgba8 { width: w, height: h, data };
+    let bytes = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).unwrap();
     std::fs::write(path, bytes).unwrap();
 }
 
-fn photo_named<'a>(s: &'a Session, name: &str) -> &'a lightcraft_catalog::Photo {
+fn photo_named<'a>(s: &'a Session, name: &str) -> &'a dac_catalog::Photo {
     s.catalog.photos().find(|p| p.file_name == name).unwrap_or_else(|| panic!("{name} not imported"))
 }
 
@@ -147,7 +147,7 @@ fn default_copyright_and_creator_fill_gaps_on_import() {
     let lib = dir.join("lib");
     png(&dir.join("plain.png"));
     // a DNG that names its own artist keeps it
-    let meta = lightcraft_meta::Metadata { artist: Some("Someone Else".into()), ..Default::default() };
+    let meta = dac_meta::Metadata { artist: Some("Someone Else".into()), ..Default::default() };
     std::fs::write(dir.join("own.dng"), crate::tests_xmp::synthetic_dng_with(None, meta)).unwrap();
     let mut s = Session::new().with_fs();
     s.open_library(&lib, false).unwrap();
@@ -271,8 +271,8 @@ fn resizing_the_disk_cache_keeps_the_cache_and_its_thumbnails() {
     let mut s = Session::new().with_fs();
     s.open_library(&lib, false).unwrap();
     let cache = s.media.rendered.clone();
-    let key = lightcraft_preview::hash_bytes(b"thumbnail");
-    let img = lightcraft_raster::Rgba8 { width: 4, height: 4, data: vec![[10, 20, 30, 255]; 16] };
+    let key = dac_preview::hash_bytes(b"thumbnail");
+    let img = dac_raster::Rgba8 { width: 4, height: 4, data: vec![[10, 20, 30, 255]; 16] };
     cache.put(key, Arc::new(img));
     let generation = cache.generation();
     s.execute("library.preferences", &json!({"cacheMb": 300})).unwrap();
@@ -299,8 +299,8 @@ fn reopening_a_library_retires_the_old_cache_so_its_jobs_cannot_write_after_a_cl
     let job = s.thumb_job(id, 128).unwrap();
     let (old, key) = job.cache.clone().unwrap();
     // a thumbnail written before the reopen is still valid afterwards
-    let kept = lightcraft_preview::hash_bytes(b"kept thumbnail");
-    let img = lightcraft_raster::Rgba8 { width: 4, height: 4, data: vec![[10, 20, 30, 255]; 16] };
+    let kept = dac_preview::hash_bytes(b"kept thumbnail");
+    let img = dac_raster::Rgba8 { width: 4, height: 4, data: vec![[10, 20, 30, 255]; 16] };
     old.put(kept, Arc::new(img.clone()));
     s.open_library(&lib, false).unwrap();
     assert!(!Arc::ptr_eq(&old, &s.media.rendered));
@@ -310,7 +310,7 @@ fn reopening_a_library_retires_the_old_cache_so_its_jobs_cannot_write_after_a_cl
     let r = job.run();
     assert!(r.rendered.is_ok());
     old.put(kept, Arc::new(img));
-    let fresh = lightcraft_preview::PreviewCache::with_disk(1 << 20, &lib.join("thumbs"), 1 << 30);
+    let fresh = dac_preview::PreviewCache::with_disk(1 << 20, &lib.join("thumbs"), 1 << 30);
     assert!(fresh.get(key).is_none(), "stale thumbnail written through the replaced cache");
     assert!(fresh.get(kept).is_none(), "stale put through the replaced cache");
     assert!(s.media.rendered.get(key).is_none());

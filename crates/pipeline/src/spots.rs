@@ -6,9 +6,9 @@
 //! - **Remove** is Heal with an automatically chosen source: candidate offsets on rings around the
 //!   spot are scored by how well the source's surrounding annulus matches the target's.
 
-use lightcraft_develop::{Spot, SpotMode};
-use lightcraft_geom::Point;
-use lightcraft_raster::Rgb32f;
+use dac_develop::{Spot, SpotMode};
+use dac_geom::Point;
+use dac_raster::Rgb32f;
 
 use crate::geometry::Frame;
 
@@ -80,13 +80,7 @@ pub fn auto_source(img: &Rgb32f, target: (f32, f32), r: f32) -> (f32, f32) {
 /// A source offset (normalized, as [`Spot::source_offset`]) for `spot` on `src` developed with
 /// `s`: the best match, or with `avoid` (the current offset) the best one at least a spot radius
 /// away from it ("refresh source"). `None` when no candidate fits in the image.
-pub fn pick_source(
-    src: &Rgb32f,
-    info: &crate::SourceInfo,
-    s: &lightcraft_develop::DevelopSettings,
-    spot: &Spot,
-    avoid: Option<Point>,
-) -> Option<Point> {
+pub fn pick_source(src: &Rgb32f, info: &crate::SourceInfo, s: &dac_develop::DevelopSettings, spot: &Spot, avoid: Option<Point>) -> Option<Point> {
     let frame = crate::frame_for(src, info, s, true);
     let (w, h) = frame.fit(512, 512);
     if w == 0 || h == 0 {
@@ -118,7 +112,7 @@ const MAX_DABS_CONSIDERED: usize = 200_000;
 /// search up to 4.2 radii around themselves. Growth that would pass [`MAX_SPOT_SPAN`] pixels is not
 /// done (the window comes back as asked; see [`window_for_reads_checked`] to know).
 pub fn window_for_reads(
-    s: &lightcraft_develop::DevelopSettings,
+    s: &dac_develop::DevelopSettings,
     frame: &Frame,
     full_w: usize,
     full_h: usize,
@@ -132,7 +126,7 @@ pub fn window_for_reads(
 /// [`MAX_SPOT_SPAN`] pixels along an axis: a caller that can show something else (the loupe's
 /// whole-frame render) must, because the window alone would come out wrong.
 pub fn window_for_reads_checked(
-    s: &lightcraft_develop::DevelopSettings,
+    s: &dac_develop::DevelopSettings,
     frame: &Frame,
     full_w: usize,
     full_h: usize,
@@ -140,13 +134,13 @@ pub fn window_for_reads_checked(
     win: crate::PixelWindow,
 ) -> Option<crate::PixelWindow> {
     let spots = &s.spots;
-    let autos: Vec<&lightcraft_develop::BrushStroke> = s
+    let autos: Vec<&dac_develop::BrushStroke> = s
         .masks
         .iter()
         .filter(|m| m.visible)
         .flat_map(|m| &m.components)
         .filter_map(|c| match &c.shape {
-            lightcraft_develop::MaskShape::Brush { strokes } => Some(strokes),
+            dac_develop::MaskShape::Brush { strokes } => Some(strokes),
             _ => None,
         })
         .flatten()
@@ -302,9 +296,9 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
                 height: bh,
                 data: tgt.iter().zip(&src).zip(&outside).map(|((t, s), m)| [(t[0] - s[0]) * m, (t[1] - s[1]) * m, (t[2] - s[2]) * m]).collect(),
             };
-            let wts = lightcraft_raster::Plane { width: bw, height: bh, data: outside };
+            let wts = dac_raster::Plane { width: bw, height: bh, data: outside };
             let sigma = (r * 0.6).max(1.0);
-            let (bd, bm) = (lightcraft_raster::blur::gaussian(&diff, sigma), lightcraft_raster::blur::gaussian(&wts, sigma));
+            let (bd, bm) = (dac_raster::blur::gaussian(&diff, sigma), dac_raster::blur::gaussian(&wts, sigma));
             Some(Rgb32f {
                 width: bw,
                 height: bh,
@@ -343,7 +337,7 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_develop::DevelopSettings;
+    use dac_develop::DevelopSettings;
 
     #[test]
     fn remove_erases_a_dot() {
@@ -429,7 +423,7 @@ mod tests {
     #[test]
     fn a_window_grows_to_hold_an_auto_mask_stroke() {
         use crate::PixelWindow;
-        use lightcraft_develop::{BrushStroke, Mask, MaskComponent, MaskOp, MaskShape};
+        use dac_develop::{BrushStroke, Mask, MaskComponent, MaskOp, MaskShape};
         let frame = Frame::new(4000, 3000, &DevelopSettings::default(), true);
         let ppl = frame.px_per_long(4000);
         let win = PixelWindow { x: 1000, y: 1000, w: 400, h: 300 };

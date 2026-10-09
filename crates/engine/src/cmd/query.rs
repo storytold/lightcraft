@@ -1,7 +1,7 @@
 //! Read-only queries (not journaled): catalog, photos, develop state, controls, presets, albums.
 
-use lightcraft_catalog::{Album, Photo, PhotoId};
-use lightcraft_develop::{CONTROLS, controls};
+use dac_catalog::{Album, Photo, PhotoId};
+use dac_develop::{CONTROLS, controls};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd, has_active};
@@ -31,7 +31,7 @@ pub fn photo_summary(p: &Photo) -> Value {
     })
 }
 
-fn album_json(a: &Album, all: &[Album], cat: &lightcraft_catalog::Catalog) -> Value {
+fn album_json(a: &Album, all: &[Album], cat: &dac_catalog::Catalog) -> Value {
     let mut v = json!({
         "id": a.id.0,
         "name": a.name,
@@ -77,8 +77,8 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({
                 "photos": all.len(),
                 "edited": all.iter().filter(|p| p.is_edited()).count(),
-                "picks": all.iter().filter(|p| p.flag == lightcraft_catalog::Flag::Pick).count(),
-                "rejects": all.iter().filter(|p| p.flag == lightcraft_catalog::Flag::Reject).count(),
+                "picks": all.iter().filter(|p| p.flag == dac_catalog::Flag::Pick).count(),
+                "rejects": all.iter().filter(|p| p.flag == dac_catalog::Flag::Reject).count(),
                 "deleted": s.catalog.photos().filter(|p| p.deleted).count(),
                 "albums": s.catalog.albums().filter(|a| !a.folder).count(),
                 "byDate": s.catalog.date_groups(),
@@ -87,7 +87,7 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!(query "library.state", "Library State", [], None, "{}", always, |s, _| {
             let label = match (s.source, s.library_folder.as_deref()) {
-                (LibrarySource::LibraryFolder, Some(path)) => lightcraft_catalog::folders::folder_label(path),
+                (LibrarySource::LibraryFolder, Some(path)) => dac_catalog::folders::folder_label(path),
                 _ => s.source.label(&s.catalog),
             };
             let n = s.visible().len();
@@ -109,7 +109,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "photo.allMetadata", "All Metadata", [], None, "{id?} → {exif: [{group, tag, name, value}], xmp: [{name, value}]} — every EXIF / TIFF / GPS tag of the file and its XMP properties", always, |s, p| {
             let id = photo_arg(s, p, "photo.allMetadata")?;
             let ph = s.catalog.photo(id).ok_or_else(|| super::bad("photo.allMetadata", "no such photo"))?.clone();
-            let lightcraft_catalog::Source::File { path } = &ph.source else {
+            let dac_catalog::Source::File { path } = &ph.source else {
                 return Ok(json!({"exif": [], "xmp": [], "note": "a generated demo photo has no file"}));
             };
             let bytes = match &s.media.file_bytes {
@@ -117,14 +117,14 @@ pub fn specs() -> Vec<CommandSpec> {
                 None => std::fs::read(path).map_err(|e| format!("{path}: {e}")),
             }
             .map_err(|e| super::bad("photo.allMetadata", e))?;
-            let exif: Vec<Value> = lightcraft_meta::file_tag_rows(&bytes)
+            let exif: Vec<Value> = dac_meta::file_tag_rows(&bytes)
                 .into_iter()
                 .map(|r| json!({"group": r.group, "tag": r.tag, "name": r.name, "value": r.value}))
                 .collect();
             // XMP: the sidecar if there is one, else the file's own packet
-            let packet = crate::sidecar::read_packet(path, ph.kind, s.sidecar_naming(ph.id)).map(|(x, _)| x).or_else(|| lightcraft_meta::embedded(&bytes).xmp);
+            let packet = crate::sidecar::read_packet(path, ph.kind, s.sidecar_naming(ph.id)).map(|(x, _)| x).or_else(|| dac_meta::embedded(&bytes).xmp);
             let xmp: Vec<Value> = packet
-                .and_then(|x| lightcraft_meta::parse_xmp(&x).ok())
+                .and_then(|x| dac_meta::parse_xmp(&x).ok())
                 .map(|d| d.properties.into_iter().filter(|(k, _)| !k.starts_with("lc:")).map(|(k, v)| json!({"name": k, "value": v.join("; ")})).collect())
                 .unwrap_or_default();
             Ok(json!({"exif": exif, "xmp": xmp}))
@@ -155,7 +155,7 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!(query "develop.controls", "List Develop Controls", [], None, "{section?} — every slider with range, default and current value", always, |s, p| {
             let d = s.active().and_then(|id| s.develop_of(id)).unwrap_or_default();
-            let sec = p.get("section").and_then(|v| serde_json::from_value::<lightcraft_develop::Section>(v.clone()).ok());
+            let sec = p.get("section").and_then(|v| serde_json::from_value::<dac_develop::Section>(v.clone()).ok());
             Ok(Value::Array(
                 CONTROLS
                     .iter()
@@ -197,14 +197,14 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!(query "app.gpu", "GPU Rendering", [], None, "{enabled?: bool} — allow/forbid GPU rendering (CPU fallback; LIGHTCRAFT_GPU=0 forbids it for the process); returns {enabled, available, adapter, reason (why the GPU is off), lastFallback (latest render redone on the CPU, and why)}", always, |_, p| {
             if let Some(on) = p.get("enabled").and_then(Value::as_bool) {
-                lightcraft_gpu::set_enabled(on);
+                dac_gpu::set_enabled(on);
             }
             Ok(json!({
-                "enabled": lightcraft_gpu::enabled(),
-                "available": lightcraft_gpu::available(),
-                "adapter": lightcraft_gpu::adapter_name(),
-                "reason": lightcraft_gpu::unavailable_reason(),
-                "lastFallback": lightcraft_gpu::last_fallback(),
+                "enabled": dac_gpu::enabled(),
+                "available": dac_gpu::available(),
+                "adapter": dac_gpu::adapter_name(),
+                "reason": dac_gpu::unavailable_reason(),
+                "lastFallback": dac_gpu::last_fallback(),
             }))
         }),
         cmd!(query "library.memory", "Memory Usage", [], None, "{} — bytes held by each cache (decoded sources, rendered previews, GPU buffers; heap when instrumented)", always, |s, _| {

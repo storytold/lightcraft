@@ -1,5 +1,5 @@
 [package]
-name = "lightcraft-merge"
+name = "dac-merge"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,13 +9,13 @@ description = "LightCraft Photo Merge: HDR merge (align, deghost) and panorama s
 workspace = true
 
 [dependencies]
-lightcraft-geom = { workspace = true }
-lightcraft-color = { workspace = true }
-lightcraft-raster = { workspace = true }
-lightcraft-raw = { workspace = true }
-lightcraft-codecs = { workspace = true }
-lightcraft-meta = { workspace = true }
-lightcraft-scenes = { workspace = true }
+dac-geom = { workspace = true }
+dac-color = { workspace = true }
+dac-raster = { workspace = true }
+dac-raw = { workspace = true }
+dac-codecs = { workspace = true }
+dac-meta = { workspace = true }
+dac-scenes = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 rayon = { workspace = true }

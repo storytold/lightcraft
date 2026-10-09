@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use lightcraft_develop::Preset;
+use dac_develop::Preset;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -497,7 +497,7 @@ mod tests {
 
     #[test]
     fn builtin_presets_parse_and_apply() {
-        let base = lightcraft_develop::DevelopSettings::default();
+        let base = dac_develop::DevelopSettings::default();
         let mut ids = std::collections::HashSet::new();
         for pr in builtin() {
             assert!(ids.insert(pr.id.clone()));

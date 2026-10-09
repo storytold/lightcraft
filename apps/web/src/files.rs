@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::io;
 use std::sync::{Arc, Mutex};
 
-use lightcraft_engine::catalog::Store;
+use dac_engine::catalog::Store;
 
 /// What has to be written for a dirty file.
 #[derive(Clone, Debug, PartialEq)]
@@ -201,8 +201,8 @@ pub const LIBRARY_FILES: [&str; 6] = ["catalog.snap", "catalog.log", "presets.js
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_engine::Session;
-    use lightcraft_engine::library::LibraryStores;
+    use dac_engine::Session;
+    use dac_engine::library::LibraryStores;
     use serde_json::json;
 
     /// Apply flush ops to a "disk" map, as the backend would.
@@ -263,7 +263,7 @@ mod tests {
         flush(&files, &mut disk);
         files.set_error(Some("QuotaExceededError".into()));
         let r = s.execute("photo.rate", &json!({"rating": 5}));
-        assert!(matches!(r, Err(lightcraft_engine::EngineError::NotSaved(_))), "{r:?}");
+        assert!(matches!(r, Err(dac_engine::EngineError::NotSaved(_))), "{r:?}");
         let (ops, why) = s.unsaved().unwrap();
         assert!(ops > 0 && why.contains("QuotaExceeded"), "{why}");
         files.set_error(None);

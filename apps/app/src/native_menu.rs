@@ -1,12 +1,12 @@
 //! The native macOS menu bar (via `muda`, pure Rust over AppKit), generated from the same model as
-//! the in-window menus ([`lightcraft_ui_egui::menubar`]): the registry's menu paths, shortcuts,
+//! the in-window menus ([`dac_ui_egui::menubar`]): the registry's menu paths, shortcuts,
 //! enabled and checked state, and live labels ("Undo Exposure").
 //!
 //! Key handling: AppKit offers a key press to the menu bar only when it carries ⌘ or ⌃, or is a
 //! function key (F1…). Every other key (`E`, `1`, `⇧P`, `⌥Y`…) goes straight to the window, whose
 //! winit view always takes it, so a menu item never fires from it. Hence
 //! - shortcuts the menu bar really receives ([`menu_delivers`]) are listed in
-//!   `LightcraftApp::native_shortcuts` and skipped by the egui shortcut handler (nothing fires
+//!   `DacApp::native_shortcuts` and skipped by the egui shortcut handler (nothing fires
 //!   twice); the others stay on their menu items for display and egui runs them;
 //! - while a text field has keyboard focus, accelerators without ⌘ (`G`, `1`, `Delete`…) and the
 //!   text-editing ones (⌘A/⌘C/⌘V/⌘X/⌘Z) are removed, so typing and text editing work; they come
@@ -15,8 +15,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{Receiver, channel};
 
-use lightcraft_ui_egui::LightcraftApp;
-use lightcraft_ui_egui::menubar::{MenuNode, menu_bar};
+use dac_ui_egui::DacApp;
+use dac_ui_egui::menubar::{MenuNode, menu_bar};
 use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use serde_json::Value;
@@ -159,14 +159,14 @@ fn menu_delivers(sc: &str) -> bool {
     sc.split('+').any(|part| matches!(part, "Cmd" | "Ctrl") || part.strip_prefix('F').is_some_and(|n| n.parse::<u8>().is_ok()))
 }
 
-/// The shortcuts the menu bar runs itself, for `LightcraftApp::native_shortcuts`.
+/// The shortcuts the menu bar runs itself, for `DacApp::native_shortcuts`.
 fn owned_by_menu<'a>(installed: impl Iterator<Item = &'a str>, text_focus: bool) -> HashSet<String> {
     installed.filter(|sc| menu_delivers(sc) && !(text_focus && yields_to_text(sc))).map(str::to_string).collect()
 }
 
 /// `&` marks a mnemonic in muda labels.
 fn label_text(s: &str) -> String {
-    lightcraft_ui_egui::i18n::tr(s).replace('&', "&&")
+    dac_ui_egui::i18n::tr(s).replace('&', "&&")
 }
 
 fn structure_of(bar: &[(String, Vec<MenuNode>)]) -> String {
@@ -189,7 +189,7 @@ fn structure_of(bar: &[(String, Vec<MenuNode>)]) -> String {
             out.push(';');
         }
     }
-    let mut s = format!("{};", lightcraft_ui_egui::i18n::language().code());
+    let mut s = format!("{};", dac_ui_egui::i18n::language().code());
     for (t, items) in bar {
         s.push_str(t);
         walk(items, &mut s);
@@ -207,7 +207,7 @@ fn tidy_separators(mut nodes: Vec<MenuNode>) -> Vec<MenuNode> {
 
 impl NativeMenu {
     /// Build the menu bar and install it as the application menu (main thread, after launch).
-    pub fn install(app: &mut LightcraftApp, ctx: &egui::Context) -> NativeMenu {
+    pub fn install(app: &mut DacApp, ctx: &egui::Context) -> NativeMenu {
         let (tx, rx) = channel::<String>();
         let repaint = ctx.clone();
         MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
@@ -220,7 +220,7 @@ impl NativeMenu {
         m
     }
 
-    fn rebuild(&mut self, app: &mut LightcraftApp) {
+    fn rebuild(&mut self, app: &mut DacApp) {
         let bar = menu_bar(app);
         self.structure = structure_of(&bar);
         self.menu = Menu::new();
@@ -228,19 +228,19 @@ impl NativeMenu {
 
         // the application menu
         let app_menu = Submenu::new("LightCraft", true);
-        let about = MenuItem::with_id("app.about", lightcraft_ui_egui::i18n::tr("About LightCraft"), true, None);
-        let settings = MenuItem::with_id(SETTINGS, lightcraft_ui_egui::i18n::tr("Settings…"), true, accelerator(SETTINGS_KEY));
-        let quit = MenuItem::with_id(QUIT, lightcraft_ui_egui::i18n::tr("Quit LightCraft"), true, accelerator("Cmd+Q"));
+        let about = MenuItem::with_id("app.about", dac_ui_egui::i18n::tr("About LightCraft"), true, None);
+        let settings = MenuItem::with_id(SETTINGS, dac_ui_egui::i18n::tr("Settings…"), true, accelerator(SETTINGS_KEY));
+        let quit = MenuItem::with_id(QUIT, dac_ui_egui::i18n::tr("Quit LightCraft"), true, accelerator("Cmd+Q"));
         let _ = app_menu.append_items(&[
             &about,
             &PredefinedMenuItem::separator(),
             &settings,
             &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::services(Some(lightcraft_ui_egui::i18n::tr("Services"))),
+            &PredefinedMenuItem::services(Some(dac_ui_egui::i18n::tr("Services"))),
             &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::hide(Some(lightcraft_ui_egui::i18n::tr("Hide LightCraft"))),
-            &PredefinedMenuItem::hide_others(Some(lightcraft_ui_egui::i18n::tr("Hide Others"))),
-            &PredefinedMenuItem::show_all(Some(lightcraft_ui_egui::i18n::tr("Show All"))),
+            &PredefinedMenuItem::hide(Some(dac_ui_egui::i18n::tr("Hide LightCraft"))),
+            &PredefinedMenuItem::hide_others(Some(dac_ui_egui::i18n::tr("Hide Others"))),
+            &PredefinedMenuItem::show_all(Some(dac_ui_egui::i18n::tr("Show All"))),
             &PredefinedMenuItem::separator(),
             &quit,
         ]);
@@ -250,8 +250,8 @@ impl NativeMenu {
             let sub = Submenu::new(label_text(title), true);
             if title == "Window" {
                 let _ = sub.append_items(&[
-                    &PredefinedMenuItem::minimize(Some(lightcraft_ui_egui::i18n::tr("Minimize"))),
-                    &PredefinedMenuItem::maximize(Some(lightcraft_ui_egui::i18n::tr("Zoom"))),
+                    &PredefinedMenuItem::minimize(Some(dac_ui_egui::i18n::tr("Minimize"))),
+                    &PredefinedMenuItem::maximize(Some(dac_ui_egui::i18n::tr("Zoom"))),
                     &PredefinedMenuItem::separator(),
                 ]);
             }
@@ -267,13 +267,13 @@ impl NativeMenu {
                 // ⌘W, the system's own item
                 let _ = sub.append_items(&[
                     &PredefinedMenuItem::separator(),
-                    &PredefinedMenuItem::close_window(Some(lightcraft_ui_egui::i18n::tr("Close Window"))),
+                    &PredefinedMenuItem::close_window(Some(dac_ui_egui::i18n::tr("Close Window"))),
                 ]);
             }
             if title == "Window" {
                 let _ = sub.append_items(&[
                     &PredefinedMenuItem::separator(),
-                    &PredefinedMenuItem::bring_all_to_front(Some(lightcraft_ui_egui::i18n::tr("Bring All to Front"))),
+                    &PredefinedMenuItem::bring_all_to_front(Some(dac_ui_egui::i18n::tr("Bring All to Front"))),
                 ]);
                 sub.set_as_windows_menu_for_nsapp();
             }
@@ -309,7 +309,7 @@ impl NativeMenu {
                         Some(c) => {
                             let it = CheckMenuItem::with_id(
                                 key.clone(),
-                                lightcraft_ui_egui::menubar::display_item_label(id, params, label).replace('&', "&&"),
+                                dac_ui_egui::menubar::display_item_label(id, params, label).replace('&', "&&"),
                                 *enabled,
                                 *c,
                                 accel,
@@ -320,7 +320,7 @@ impl NativeMenu {
                         None => {
                             let it = MenuItem::with_id(
                                 key.clone(),
-                                lightcraft_ui_egui::menubar::display_item_label(id, params, label).replace('&', "&&"),
+                                dac_ui_egui::menubar::display_item_label(id, params, label).replace('&', "&&"),
                                 *enabled,
                                 accel,
                             );
@@ -347,7 +347,7 @@ impl NativeMenu {
     }
 
     /// Tell the egui shortcut handler which shortcuts the menu bar currently owns.
-    fn publish_shortcuts(&self, app: &mut LightcraftApp) {
+    fn publish_shortcuts(&self, app: &mut DacApp) {
         let installed = self.items.values().filter(|i| i.accel.is_some()).filter_map(|i| i.shortcut.as_deref());
         // (none while the keymap editor records a shortcut: every key goes to it)
         app.native_shortcuts = if self.capturing { HashSet::new() } else { owned_by_menu(installed, self.text_focus) };
@@ -358,8 +358,8 @@ impl NativeMenu {
     /// accelerators with the app state. Returns whether Quit was chosen: the caller saves
     /// everything and exits the process itself (closing the viewport while AppKit terminates the
     /// app can crash in winit's teardown, PR #444).
-    pub fn update(&mut self, app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
-        lightcraft_ui_egui::i18n::set_language(app.ui.language);
+    pub fn update(&mut self, app: &mut DacApp, ctx: &egui::Context) -> bool {
+        dac_ui_egui::i18n::set_language(app.ui.language);
         let mut quit = false;
         while let Ok(key) = self.rx.try_recv() {
             if key == QUIT {
@@ -372,7 +372,7 @@ impl NativeMenu {
             }
             if let Some(it) = self.items.get(&key) {
                 let (cmd, params) = (it.cmd.clone(), it.params.clone());
-                let _ = lightcraft_ui_egui::menubar::run_item(app, &cmd, params);
+                let _ = dac_ui_egui::menubar::run_item(app, &cmd, params);
             }
         }
         let bar = menu_bar(app);
@@ -388,8 +388,8 @@ impl NativeMenu {
                         let Some(it) = items.get_mut(&MenuNode::key(id, params)) else { continue };
                         if it.label != *label {
                             match &it.handle {
-                                Handle::Plain(h) => h.set_text(lightcraft_ui_egui::menubar::display_item_label(id, params, label).replace('&', "&&")),
-                                Handle::Check(h) => h.set_text(lightcraft_ui_egui::menubar::display_item_label(id, params, label).replace('&', "&&")),
+                                Handle::Plain(h) => h.set_text(dac_ui_egui::menubar::display_item_label(id, params, label).replace('&', "&&")),
+                                Handle::Check(h) => h.set_text(dac_ui_egui::menubar::display_item_label(id, params, label).replace('&', "&&")),
                             }
                             it.label = label.clone();
                         }
@@ -445,8 +445,8 @@ mod tests {
     /// languages — must change the structure key.
     #[test]
     fn switching_language_rebuilds_native_menu_structure() {
-        use lightcraft_ui_egui::i18n::{Locale, set_language};
-        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        use dac_ui_egui::i18n::{Locale, set_language};
+        let app = DacApp::new(dac_engine::Session::with_demo(), Default::default());
         set_language(Locale::En);
         let bar = menu_bar(&app);
         let mut seen = std::collections::BTreeSet::new();
@@ -470,7 +470,7 @@ mod tests {
         assert!(yields_to_text("G") && yields_to_text("Delete") && yields_to_text("Cmd+V"));
         assert!(!yields_to_text("Cmd+Shift+E"));
         // every registry shortcut that a menu shows maps (or is deliberately left to egui)
-        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        let app = DacApp::new(dac_engine::Session::with_demo(), Default::default());
         fn all(n: &[MenuNode], out: &mut Vec<String>) {
             for x in n {
                 match x {
@@ -495,7 +495,7 @@ mod tests {
     fn single_key_shortcuts_stay_with_egui() {
         assert!(menu_delivers("Cmd+Shift+H") && menu_delivers("Ctrl+H") && menu_delivers("F2") && menu_delivers("Cmd+F11"));
         assert!(!menu_delivers("E") && !menu_delivers("Shift+P") && !menu_delivers("Alt+Y") && !menu_delivers("1") && !menu_delivers("F"));
-        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        let app = DacApp::new(dac_engine::Session::with_demo(), Default::default());
         fn all(n: &[MenuNode], out: &mut Vec<String>) {
             for x in n {
                 match x {

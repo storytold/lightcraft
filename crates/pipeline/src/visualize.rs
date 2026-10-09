@@ -12,11 +12,11 @@
 
 use std::borrow::Cow;
 
-use lightcraft_color::perceptual::{lab_to_lch, oklab_from_2020};
-use lightcraft_color::transfer::srgb_to_linear;
-use lightcraft_color::{REC2020, SRGB};
-use lightcraft_develop::DevelopSettings;
-use lightcraft_raster::{Plane, Rgba8};
+use dac_color::perceptual::{lab_to_lch, oklab_from_2020};
+use dac_color::transfer::srgb_to_linear;
+use dac_color::{REC2020, SRGB};
+use dac_develop::DevelopSettings;
+use dac_raster::{Plane, Rgba8};
 
 use crate::colorops::PointK;
 use crate::{Plan, for_rows};
@@ -30,7 +30,7 @@ pub enum Overlay {
     PointColorRange(u8),
     /// Visualize Spots with a threshold 0..100 (higher = more sensitive).
     Spots(u8),
-    /// The evaluated alpha of mask `id` (a [`lightcraft_develop::Mask`] id), drawn as `view` in
+    /// The evaluated alpha of mask `id` (a [`dac_develop::Mask`] id), drawn as `view` in
     /// `color` at `opacity` (0..100; the colour views only).
     Mask { id: u16, view: MaskView, color: [u8; 3], opacity: u8 },
 }
@@ -138,7 +138,7 @@ impl Overlay {
     }
 
     /// The mask an [`Overlay::Mask`] shows (if it exists in `s` and has components).
-    pub fn mask(self, s: &DevelopSettings) -> Option<&lightcraft_develop::Mask> {
+    pub fn mask(self, s: &DevelopSettings) -> Option<&dac_develop::Mask> {
         match self {
             Overlay::Mask { id, .. } => s.masks.iter().find(|m| m.id == id as u32 && !m.components.is_empty()),
             _ => None,
@@ -215,11 +215,11 @@ fn spots(img: &mut Rgba8, t: u8, ppl: f64) {
     if w == 0 || h == 0 {
         return;
     }
-    let l = lightcraft_raster::Plane::from_fn(w, h, |x, y| {
+    let l = dac_raster::Plane::from_fn(w, h, |x, y| {
         let p = img.data[y * w + x];
         (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0
     });
-    let b = lightcraft_raster::blur::gaussian(&l, (SPOT_SIGMA * ppl).max(0.8) as f32);
+    let b = dac_raster::blur::gaussian(&l, (SPOT_SIGMA * ppl).max(0.8) as f32);
     let thr = spot_threshold(t);
     for (i, px) in img.data.iter_mut().enumerate() {
         let v = if (l.data[i] - b.data[i]).abs() > thr { 255 } else { 0 };
@@ -249,8 +249,8 @@ fn point_color_range(img: &mut Rgba8, k: &PointK) {
 mod tests {
     use super::*;
     use crate::{RenderRequest, SourceInfo, render};
-    use lightcraft_develop::PointColor;
-    use lightcraft_raster::Rgb32f;
+    use dac_develop::PointColor;
+    use dac_raster::Rgb32f;
 
     #[test]
     fn spots_view_marks_specks_at_any_size() {
@@ -304,8 +304,8 @@ mod tests {
 
     #[test]
     fn mask_overlay_shows_the_evaluated_alpha() {
-        use lightcraft_develop::{Mask, MaskComponent, MaskOp, MaskShape};
-        use lightcraft_geom::Point;
+        use dac_develop::{Mask, MaskComponent, MaskOp, MaskShape};
+        use dac_geom::Point;
         let src = Rgb32f::from_fn(80, 40, |x, _| if x < 40 { [0.18, 0.18, 0.18] } else { [0.05, 0.1, 0.3] });
         let info = SourceInfo::default();
         let shape = MaskShape::Radial { center: Point::new(0.25, 0.5), rx: 0.15, ry: 0.15, angle: 0.0, feather: 10.0, invert: false };

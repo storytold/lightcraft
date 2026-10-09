@@ -1,7 +1,7 @@
 //! Organizing commands: smart albums, stacks, virtual copies — through `Session::execute`, with
 //! undo and a persistent library (journal replay must reproduce the live state).
 
-use lightcraft_catalog::Flag;
+use dac_catalog::Flag;
 use serde_json::json;
 
 use crate::{LibrarySource, Session};
@@ -45,11 +45,11 @@ fn smart_album_from_view_updates_live_and_persists() {
     assert!(s.execute("album.addPhotos", &json!({"id": id, "ids": [want[0].0]})).is_err());
     // edit rules (merge), rename; undo the rename
     s.execute("album.setRules", &json!({"id": id, "rules": {"flag": "pick"}})).unwrap();
-    let rules = s.catalog.album(lightcraft_catalog::AlbumId(id)).unwrap().smart.clone().unwrap();
+    let rules = s.catalog.album(dac_catalog::AlbumId(id)).unwrap().smart.clone().unwrap();
     assert_eq!((rules.rating, rules.flag), (4, Some(Flag::Pick)));
     s.execute("album.rename", &json!({"id": id, "name": "Best picks"})).unwrap();
     s.execute("edit.undo", &json!({})).unwrap();
-    assert_eq!(s.catalog.album(lightcraft_catalog::AlbumId(id)).unwrap().name, "Four plus");
+    assert_eq!(s.catalog.album(dac_catalog::AlbumId(id)).unwrap().name, "Four plus");
     // rules via params: camera + lens + date range
     let r2 = s
         .execute("album.createSmart", &json!({"name": "Range", "rules": {"dateFrom": "2000-01-01", "dateTo": "2100", "lens": "", "edited": true}}))
@@ -64,7 +64,7 @@ fn smart_album_from_view_updates_live_and_persists() {
     assert_eq!(s2.catalog.to_snapshot(), expect);
     // deleting the smart album
     s2.execute("album.delete", &json!({"id": id})).unwrap();
-    assert!(s2.catalog.album(lightcraft_catalog::AlbumId(id)).is_none());
+    assert!(s2.catalog.album(dac_catalog::AlbumId(id)).is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -76,7 +76,7 @@ fn smart_album_from_smart_album_view_keeps_its_rules() {
     s.execute("library.filter", &json!({"rating": 3})).unwrap();
     let r = s.view_rules();
     assert_eq!((r.flag, r.rating, r.album), (Some(Flag::Pick), 3, None));
-    assert_eq!(s.source, LibrarySource::Album(lightcraft_catalog::AlbumId(id)));
+    assert_eq!(s.source, LibrarySource::Album(dac_catalog::AlbumId(id)));
 }
 
 #[test]
@@ -91,9 +91,9 @@ fn virtual_copies_are_independent_and_persist() {
     let undo_before = s.undo.len();
     let r = s.execute("photo.virtualCopy", &json!({})).unwrap();
     assert_eq!(s.undo.len(), undo_before + 1);
-    let c1 = lightcraft_catalog::PhotoId(r["ids"][0].as_u64().unwrap());
+    let c1 = dac_catalog::PhotoId(r["ids"][0].as_u64().unwrap());
     let r2 = s.execute("photo.virtualCopy", &json!({"ids": [src.0]})).unwrap();
-    let c2 = lightcraft_catalog::PhotoId(r2["ids"][0].as_u64().unwrap());
+    let c2 = dac_catalog::PhotoId(r2["ids"][0].as_u64().unwrap());
     let (p, a, b) = (s.catalog.photo(src).unwrap().clone(), s.catalog.photo(c1).unwrap().clone(), s.catalog.photo(c2).unwrap().clone());
     assert_eq!((a.copy_of, a.copy_name.as_deref()), (Some(src), Some("Copy 1")));
     assert_eq!(b.copy_name.as_deref(), Some("Copy 2"));
@@ -101,7 +101,7 @@ fn virtual_copies_are_independent_and_persist() {
     assert_eq!(a.develop.light.exposure, 0.5, "starts from the current settings");
     // a copy of a copy names itself after the master
     let r3 = s.execute("photo.virtualCopy", &json!({"ids": [c1.0]})).unwrap();
-    let c3 = s.catalog.photo(lightcraft_catalog::PhotoId(r3["ids"][0].as_u64().unwrap())).unwrap().clone();
+    let c3 = s.catalog.photo(dac_catalog::PhotoId(r3["ids"][0].as_u64().unwrap())).unwrap().clone();
     assert_eq!((c3.copy_of, c3.copy_name.as_deref()), (Some(src), Some("Copy 3")));
     // independent settings
     s.execute("library.select", &json!({"ids": [c1.0]})).unwrap();
@@ -109,7 +109,7 @@ fn virtual_copies_are_independent_and_persist() {
     assert_eq!(s.catalog.photo(src).unwrap().develop.light.exposure, 0.5);
     assert_eq!(s.catalog.photo(c1).unwrap().develop.light.exposure, -1.0);
     // same album, stacked (expanded) with the original, visible in the grid
-    assert!(s.catalog.album(lightcraft_catalog::AlbumId(album)).unwrap().photos.starts_with(&[src, c2, c1, c3.id]));
+    assert!(s.catalog.album(dac_catalog::AlbumId(album)).unwrap().photos.starts_with(&[src, c2, c1, c3.id]));
     assert_eq!(s.catalog.stack_of(c1).unwrap().photos, vec![src, c2, c1, c3.id]);
     assert!(s.visible_cloned().contains(&c2));
     let found = s.execute("catalog.query", &json!({"filter": {"text": "copy:yes"}})).unwrap();
@@ -191,12 +191,12 @@ fn album_source_reports_in_library_state_and_persists_the_view() {
     // the reported source is what `library.source` takes
     s.execute("library.source", &json!({"kind": "all"})).unwrap();
     s.execute("library.source", &st["source"]).unwrap();
-    assert_eq!(s.source, LibrarySource::Album(lightcraft_catalog::AlbumId(id)));
+    assert_eq!(s.source, LibrarySource::Album(dac_catalog::AlbumId(id)));
     assert_eq!(s.execute("library.state", &json!({})).unwrap()["source"], json!({"kind": "album", "id": id}));
     s.close_library().unwrap();
     drop(s);
     let s2 = open(&dir);
-    assert_eq!(s2.source, LibrarySource::Album(lightcraft_catalog::AlbumId(id)));
+    assert_eq!(s2.source, LibrarySource::Album(dac_catalog::AlbumId(id)));
     assert_eq!(serde_json::to_value(s2.sort).unwrap()["key"], "fileName", "the rest of the view is restored too");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -214,7 +214,7 @@ fn filters_are_not_restored_when_a_library_reopens() {
     s.close_library().unwrap();
     drop(s);
     let mut s2 = open(&dir);
-    assert_eq!(s2.filter, lightcraft_catalog::Filter::default());
+    assert_eq!(s2.filter, dac_catalog::Filter::default());
     assert_eq!(s2.visible_cloned().len(), all);
     assert_eq!(serde_json::to_value(s2.sort).unwrap()["key"], "fileName", "the rest of the view is restored");
     let _ = std::fs::remove_dir_all(&dir);
@@ -252,7 +252,7 @@ fn random_sort_persists_with_the_view() {
     s.close_library().unwrap();
     drop(s);
     let s2 = open(&dir);
-    assert_eq!(s2.sort.key, lightcraft_catalog::SortKey::Random);
+    assert_eq!(s2.sort.key, dac_catalog::SortKey::Random);
     assert_eq!(s2.sort.seed, 123_456_789);
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -1,7 +1,7 @@
 //! Organizing commands: stacks (group, ungroup, set top, expand/collapse, auto-stack by capture
 //! time) and virtual copies.
 
-use lightcraft_catalog::{HistoryStep, Op, PhotoId, Stack, StackId};
+use dac_catalog::{HistoryStep, Op, PhotoId, Stack, StackId};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, bool_or, cmd, f64_or, has_selection, str_param};

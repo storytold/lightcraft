@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use lightcraft_develop::DevelopSettings;
+use dac_develop::DevelopSettings;
 
 use crate::*;
 

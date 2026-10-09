@@ -1,7 +1,7 @@
 //! Ordering albums by hand: `album.reorder` puts an album (or folder) before a sibling, or last of
 //! its kind, in one undo step, also when it changes folder; `album.sort` goes back to by name.
 
-use lightcraft_catalog::AlbumId;
+use dac_catalog::AlbumId;
 use serde_json::{Value, json};
 
 use crate::Session;

@@ -3,8 +3,8 @@
 //! step from the command to the moment the new loupe texture is ready. Results go to the log
 //! (the browser console on the web) as one `lightcraft-bench {…json…}` line.
 
-use lightcraft_ui_egui::LightcraftApp;
-use lightcraft_ui_egui::render::Slot;
+use dac_ui_egui::DacApp;
+use dac_ui_egui::render::Slot;
 use serde_json::{Value, json};
 
 const STEPS: usize = 8;
@@ -39,7 +39,7 @@ pub struct Bench {
 }
 
 impl Bench {
-    /// `start_ms`: the page's time origin in the same clock as [`lightcraft_ui_egui::now_ms`].
+    /// `start_ms`: the page's time origin in the same clock as [`dac_ui_egui::now_ms`].
     pub fn new(start_ms: f64) -> Self {
         Bench {
             phase: Phase::Idle,
@@ -54,13 +54,13 @@ impl Bench {
         }
     }
 
-    fn main_key(app: &LightcraftApp) -> Option<u64> {
+    fn main_key(app: &DacApp) -> Option<u64> {
         app.renderer.textures.get(&Slot::Main).map(|t| t.key)
     }
 
-    /// Call once per frame after `LightcraftApp::logic`. Returns the report when finished.
-    pub fn step(&mut self, app: &mut LightcraftApp) -> Option<Value> {
-        let now = lightcraft_ui_egui::now_ms();
+    /// Call once per frame after `DacApp::logic`. Returns the report when finished.
+    pub fn step(&mut self, app: &mut DacApp) -> Option<Value> {
+        let now = dac_ui_egui::now_ms();
         self.frames += 1;
         if self.first_frame_ms.is_none() && self.frames > 1 {
             self.first_frame_ms = Some(now - self.start_ms);
@@ -113,14 +113,14 @@ impl Bench {
         None
     }
 
-    fn issue(&mut self, app: &mut LightcraftApp, i: usize, now: f64) {
+    fn issue(&mut self, app: &mut DacApp, i: usize, now: f64) {
         let key = Self::main_key(app).unwrap_or(0);
         let v = 0.15 * (i as f64 + 1.0);
         let _ = app.run("develop.set", json!({"control": "light.exposure", "value": v}));
         self.phase = Phase::Step { i, t0: now, key };
     }
 
-    fn report(&self, app: &LightcraftApp) -> Value {
+    fn report(&self, app: &DacApp) -> Value {
         let mut d = self.drafts.clone();
         d.sort_by(f64::total_cmp);
         let median = d.get(d.len() / 2).copied().unwrap_or(0.0);

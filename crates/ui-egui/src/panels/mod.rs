@@ -30,7 +30,7 @@ pub mod unnamed;
 
 use egui::{Align2, Rect, pos2, vec2};
 
-use crate::LightcraftApp;
+use crate::DacApp;
 use crate::theme::Tokens;
 
 /// Show a side panel the user resizes by dragging its inner edge. `width` (in [`crate::UiState`],
@@ -66,7 +66,7 @@ pub fn resizable_side(
 }
 
 /// The HUD toast at the bottom centre of the canvas.
-pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn toast(app: &mut DacApp, ctx: &egui::Context) {
     let now = ctx.input(|i| i.time);
     let Some((text, until, label)) = app.ui.toast.clone() else { return };
     if now > until {

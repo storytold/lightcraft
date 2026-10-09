@@ -12,7 +12,7 @@ are in [`localization-zh-hans.md`](localization-zh-hans.md), [`localization-zh-h
 1. **Translate the two catalogs.** Copy `locales/ja.json` and `locales/ja-formats.json` to
    `locales/<code>.json` and `locales/<code>-formats.json`, then translate the values. Keys are the
    English source strings and must stay byte-for-byte identical. The plain catalog may grow at its
-   own pace: a message it lacks shows in English, and `cargo test -p lightcraft-ui-egui i18n::tests
+   own pace: a message it lacks shows in English, and `cargo test -p dac-ui-egui i18n::tests
    -- --nocapture` lists the gaps (it fails on an empty entry or mismatched placeholders). The
    formats catalog must carry every message (the build fails otherwise; a message copied in English,
    value equal to its key, is an untranslated placeholder until someone translates it), including the date
@@ -69,8 +69,8 @@ tr_format!("Added {n} photo{} to “{}”", if n == 1 { "" } else { "s" }, album
 ## Testing and looking at it
 
 ```sh
-cargo test -p lightcraft-ui-egui i18n::tests                       # catalogs, keys, placeholders, commands
-CRAFT_FONTS_DIR=../craft-fonts cargo test -p lightcraft-ui-egui i18n::tests   # + glyph coverage
+cargo test -p dac-ui-egui i18n::tests                       # catalogs, keys, placeholders, commands
+CRAFT_FONTS_DIR=../craft-fonts cargo test -p dac-ui-egui i18n::tests   # + glyph coverage
 ```
 
 The glyph tests are skipped without `CRAFT_FONTS_DIR` (there are no CJK faces to check then).

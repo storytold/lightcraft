@@ -13,11 +13,11 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
-use lightcraft_engine::catalog::Source;
-use lightcraft_engine::develop::{DevelopSettings, EmbeddedLens};
-use lightcraft_engine::media::{DecodedSource, MediaCache, RenderJob, SourceLevel, SourceRef};
-use lightcraft_engine::pipeline::{Quality, RenderRequest, Rendered, SourceInfo, StageCache};
-use lightcraft_preview::{Hash128, Lru, PreviewCache};
+use dac_engine::catalog::Source;
+use dac_engine::develop::{DevelopSettings, EmbeddedLens};
+use dac_engine::media::{DecodedSource, MediaCache, RenderJob, SourceLevel, SourceRef};
+use dac_engine::pipeline::{Quality, RenderRequest, Rendered, SourceInfo, StageCache};
+use dac_preview::{Hash128, Lru, PreviewCache};
 use serde::{Deserialize, Serialize};
 
 use crate::store::hash_of_path;
@@ -107,12 +107,12 @@ impl WireJob {
             max_h: self.max_h,
             quality: if self.draft { Quality::Draft } else { Quality::Full },
             apply_crop: self.apply_crop,
-            overlay: lightcraft_engine::pipeline::Overlay::from_parts(self.overlay.0, self.overlay.1),
+            overlay: dac_engine::pipeline::Overlay::from_parts(self.overlay.0, self.overlay.1),
             // workers render previews (exports run in-process)
-            space: lightcraft_engine::pipeline::OutputSpace::Srgb,
-            depth: lightcraft_engine::pipeline::OutputDepth::U8,
+            space: dac_engine::pipeline::OutputSpace::Srgb,
+            depth: dac_engine::pipeline::OutputDepth::U8,
             proof: None,
-            window: self.window.map(|[x, y, w, h]| lightcraft_engine::pipeline::PixelWindow { x, y, w, h }),
+            window: self.window.map(|[x, y, w, h]| dac_engine::pipeline::PixelWindow { x, y, w, h }),
         }
     }
 
@@ -171,7 +171,7 @@ impl WorkerCore {
             None => {
                 let src = match (&job.origin, original) {
                     (Source::File { .. }, Some(bytes)) => {
-                        let (image, info) = lightcraft_engine::files::load_bytes(bytes, job.max_edge)?;
+                        let (image, info) = dac_engine::files::load_bytes(bytes, job.max_edge)?;
                         DecodedSource::new(Arc::new(image), Some(info))
                     }
                     (Source::File { path }, None) => return Err(format!("{path}: original not found in browser storage")),
@@ -186,9 +186,9 @@ impl WorkerCore {
         Ok(match &job.stages {
             Some(view) => {
                 let st = self.stages.entry(view.clone()).or_default().clone();
-                lightcraft_engine::pipeline::render_cached(&src.image, &info, &job.settings, &job.request(), &st)
+                dac_engine::pipeline::render_cached(&src.image, &info, &job.settings, &job.request(), &st)
             }
-            None => lightcraft_engine::pipeline::render(&src.image, &info, &job.settings, &job.request()),
+            None => dac_engine::pipeline::render(&src.image, &info, &job.settings, &job.request()),
         })
     }
 }
@@ -218,7 +218,7 @@ impl ThumbIndex {
         if self.namespace == 0 {
             return key.to_string();
         }
-        lightcraft_preview::Hasher128::new().str(&key.to_string()).str("cleared").u64(self.namespace).finish().to_string()
+        dac_preview::Hasher128::new().str(&key.to_string()).str("cleared").u64(self.namespace).finish().to_string()
     }
 
     pub fn invalidate(&mut self) -> Vec<String> {
@@ -334,11 +334,11 @@ impl CacheWatch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_engine::Session;
+    use dac_engine::Session;
 
     #[test]
     fn clearing_index_changes_disk_namespace_and_survives_restart() {
-        let key = lightcraft_preview::hash_bytes(b"thumbnail");
+        let key = dac_preview::hash_bytes(b"thumbnail");
         let mut index = ThumbIndex::default();
         let old = index.cache_key(key);
         assert_eq!(old, key.to_string());
@@ -356,7 +356,7 @@ mod tests {
     // Issue #323: a worker given a zoomed view's window renders that window, not the whole frame
     #[test]
     fn a_window_job_crosses_the_wire_and_renders_the_same_window() {
-        use lightcraft_engine::pipeline::PixelWindow;
+        use dac_engine::pipeline::PixelWindow;
         let mut s = Session::with_demo();
         let id = s.visible_cloned()[0];
         let win = PixelWindow { x: 300, y: 200, w: 160, h: 120 };
@@ -458,7 +458,7 @@ mod tests {
 
     #[test]
     fn clearing_previews_before_the_first_request_invalidates_stored_thumbnails() {
-        let key = lightcraft_preview::hash_bytes(b"thumbnail");
+        let key = dac_preview::hash_bytes(b"thumbnail");
         let (mut index, old) = persisted_index(key);
         let cache = Arc::new(PreviewCache::memory(1 << 20));
         let mut watch = CacheWatch::new(&cache);
@@ -483,7 +483,7 @@ mod tests {
 
     #[test]
     fn replacing_the_cache_before_the_first_request_invalidates_stored_thumbnails() {
-        let key = lightcraft_preview::hash_bytes(b"thumbnail");
+        let key = dac_preview::hash_bytes(b"thumbnail");
         let (mut index, old) = persisted_index(key);
         let first = Arc::new(PreviewCache::memory(1 << 20));
         let mut watch = CacheWatch::new(&first);
@@ -493,7 +493,7 @@ mod tests {
 
     #[test]
     fn a_normal_start_keeps_stored_thumbnails() {
-        let key = lightcraft_preview::hash_bytes(b"thumbnail");
+        let key = dac_preview::hash_bytes(b"thumbnail");
         let (mut index, old) = persisted_index(key);
         let cache = Arc::new(PreviewCache::memory(1 << 20));
         let mut watch = CacheWatch::new(&cache);

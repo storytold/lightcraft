@@ -20,8 +20,8 @@ use std::io::{BufReader, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
-use lightcraft_engine::Session;
-use lightcraft_mcp::{Backend, DEFAULT_ADDR, Headless, Remote, Server, expand_paths};
+use dac_engine::Session;
+use dac_mcp::{Backend, DEFAULT_ADDR, Headless, Remote, Server, expand_paths};
 use serde_json::{Value, json};
 
 const USAGE: &str = "\
@@ -110,9 +110,9 @@ fn library_warnings(session: &mut Session, who: &str) {
     }
 }
 
-fn library_error(dir: &str, e: lightcraft_engine::EngineError) -> String {
+fn library_error(dir: &str, e: dac_engine::EngineError) -> String {
     match e {
-        lightcraft_engine::EngineError::LibraryInUse(why) => format!(
+        dac_engine::EngineError::LibraryInUse(why) => format!(
             "{dir}: {why}\nTo work with the library while the app has it open, start the app with `--control PORT` and use `lightcraft-cli mcp --connect 127.0.0.1:PORT`."
         ),
         e => format!("{dir}: {e}"),
@@ -125,16 +125,16 @@ fn main() -> ExitCode {
     #[cfg(feature = "dhat-heap")]
     let _heap = {
         let file = std::env::var("LIGHTCRAFT_DHAT_FILE").unwrap_or_else(|_| "dhat-heap.json".into());
-        lightcraft_engine::memory::set_heap_stats(|| {
+        dac_engine::memory::set_heap_stats(|| {
             let s = dhat::HeapStats::get();
-            lightcraft_engine::memory::HeapUsage { current: s.curr_bytes as u64, peak: s.max_bytes as u64 }
+            dac_engine::memory::HeapUsage { current: s.curr_bytes as u64, peak: s.max_bytes as u64 }
         });
         dhat::Profiler::builder().file_name(file).build()
     };
     alloc_release::install();
     // Warnings (a GPU render redone on the CPU, an unknown backend name) on stderr; LIGHTCRAFT_LOG
     // or RUST_LOG picks another level (#168).
-    lightcraft_engine::logging::install("lightcraft-cli");
+    dac_engine::logging::install("dac-cli");
     let args: Vec<String> = std::env::args().skip(1).collect();
     let r = match args.first().map(String::as_str) {
         Some("run") => run(&args[1..]),
@@ -217,15 +217,15 @@ fn calibrate(args: &[String]) -> Result<(), String> {
         files = (0..max).filter_map(|k| files.get(k * found / max).cloned()).collect();
     }
     eprintln!("calibrate: {} of {found} raw files", files.len());
-    let dir = out.or_else(lightcraft_engine::camera_profiles::dir).ok_or("no profiles folder: pass --out DIR")?;
+    let dir = out.or_else(dac_engine::camera_profiles::dir).ok_or("no profiles folder: pass --out DIR")?;
     let workers = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 6);
     let next = std::sync::atomic::AtomicUsize::new(0);
     let done = std::sync::atomic::AtomicUsize::new(0);
-    let pools: Vec<lightcraft_engine::camera_profiles::Pool> = std::thread::scope(|scope| {
+    let pools: Vec<dac_engine::camera_profiles::Pool> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..workers)
             .map(|_| {
                 scope.spawn(|| {
-                    let mut pool = lightcraft_engine::camera_profiles::Pool::default();
+                    let mut pool = dac_engine::camera_profiles::Pool::default();
                     while let Some(path) = files.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
                         let result = std::fs::read(path).map_err(|e| e.to_string()).and_then(|bytes| pool.add(&bytes));
                         let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
@@ -241,7 +241,7 @@ fn calibrate(args: &[String]) -> Result<(), String> {
             .collect();
         handles.into_iter().filter_map(|h| h.join().ok()).collect()
     });
-    let mut pool = lightcraft_engine::camera_profiles::Pool::default();
+    let mut pool = dac_engine::camera_profiles::Pool::default();
     for p in pools {
         pool.merge(p);
     }
@@ -249,7 +249,7 @@ fn calibrate(args: &[String]) -> Result<(), String> {
     for result in pool.fit(5) {
         match result {
             Ok(profile) => {
-                let path = lightcraft_engine::camera_profiles::save(&profile, &dir)?;
+                let path = dac_engine::camera_profiles::save(&profile, &dir)?;
                 println!(
                     "{}: {} photos, {} colour pairs, hue/saturation table {} → {}",
                     profile.model,
@@ -399,8 +399,8 @@ fn merge(args: &[String]) -> Result<(), String> {
     ids.sort_by_key(|id| {
         paths.iter().position(|f| {
             s.catalog
-                .photo(lightcraft_engine::catalog::PhotoId(*id))
-                .is_some_and(|ph| matches!(&ph.source, lightcraft_engine::catalog::Source::File { path } if path == f))
+                .photo(dac_engine::catalog::PhotoId(*id))
+                .is_some_and(|ph| matches!(&ph.source, dac_engine::catalog::Source::File { path } if path == f))
         })
     });
     p.insert("ids".into(), json!(ids));
@@ -427,22 +427,20 @@ fn synth_merge(args: &[String]) -> Result<(), String> {
     let mut written = Vec::new();
     match kind {
         "hdr" => {
-            for (k, b) in lightcraft_merge::synth::bracket_dngs(1800, 1200, &[-2.0, 0.0, 2.0]).map_err(|e| e.to_string())?.into_iter().enumerate() {
+            for (k, b) in dac_merge::synth::bracket_dngs(1800, 1200, &[-2.0, 0.0, 2.0]).map_err(|e| e.to_string())?.into_iter().enumerate() {
                 let p = Path::new(&dir).join(format!("bracket-{k}.dng"));
                 std::fs::write(&p, b).map_err(|e| e.to_string())?;
                 written.push(p);
             }
         }
         "panorama" | "pano" => {
-            for (k, v) in lightcraft_merge::synth::pano_views(1200, 900, 1000.0, &[-50.0, -25.0, 0.0, 25.0, 50.0])
-                .map_err(|e| e.to_string())?
-                .into_iter()
-                .enumerate()
+            for (k, v) in
+                dac_merge::synth::pano_views(1200, 900, 1000.0, &[-50.0, -25.0, 0.0, 25.0, 50.0]).map_err(|e| e.to_string())?.into_iter().enumerate()
             {
                 let p = Path::new(&dir).join(format!("view-{k}.png"));
                 let img = v.to_srgb8();
-                let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default())
-                    .map_err(|e| e.to_string())?;
+                let png =
+                    dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).map_err(|e| e.to_string())?;
                 std::fs::write(&p, png).map_err(|e| e.to_string())?;
                 written.push(p);
             }
@@ -562,7 +560,7 @@ fn run(args: &[String]) -> Result<(), String> {
                     Some(dir) => {
                         let mut h = Headless::default();
                         h.session.open_library(dir, demo).map_err(|e| library_error(dir, e))?;
-                        library_warnings(&mut h.session, "lightcraft-cli");
+                        library_warnings(&mut h.session, "dac-cli");
                         h
                     }
                     None if demo => Headless::demo(),
@@ -667,7 +665,7 @@ fn render(args: &[String]) -> Result<(), String> {
     if !values.is_empty() {
         run(&mut s, "develop.set", json!({"values": values}))?;
     }
-    use lightcraft_engine::export::{ExportFormat, ExportOptions, export_photo};
+    use dac_engine::export::{ExportFormat, ExportOptions, export_photo};
     let mut p = json!({"quality": quality});
     if let Some(n) = size {
         p["longEdge"] = json!(n);
@@ -681,7 +679,7 @@ fn render(args: &[String]) -> Result<(), String> {
         o.format = ExportFormat::parse(&ext)
             .ok_or_else(|| format!("{output}: unknown extension (use .jpg .png .tif .webp .avif .dng or --opt format=…)"))?;
     }
-    let e = export_photo(&mut s, lightcraft_engine::catalog::PhotoId(id), &o, 1)?;
+    let e = export_photo(&mut s, dac_engine::catalog::PhotoId(id), &o, 1)?;
     // never over the input (or its sidecar), however it is spelled: `render IMG.jpg -o IMG.jpg`
     let sidecars: Vec<(String, &Vec<u8>)> =
         e.sidecars.iter().map(|(ext, bytes)| (Path::new(&output).with_extension(ext).to_string_lossy().to_string(), bytes)).collect();
@@ -689,9 +687,9 @@ fn render(args: &[String]) -> Result<(), String> {
     for p in std::iter::once(&output).chain(sidecars.iter().map(|(p, _)| p)) {
         guard.check(Path::new(p)).map_err(|err| format!("render: {err}"))?;
     }
-    lightcraft_engine::export::write_file(&output, &e.bytes)?;
+    dac_engine::export::write_file(&output, &e.bytes)?;
     for (sc, bytes) in &sidecars {
-        lightcraft_engine::export::write_file(sc, bytes)?;
+        dac_engine::export::write_file(sc, bytes)?;
         eprintln!("lightcraft-cli: wrote {sc}");
     }
     eprintln!("lightcraft-cli: wrote {output} ({}×{})", e.width, e.height);
@@ -699,7 +697,7 @@ fn render(args: &[String]) -> Result<(), String> {
 }
 
 fn snapshot(args: &[String]) -> Result<(), String> {
-    use lightcraft_ui_egui::headless::Headless;
+    use dac_ui_egui::headless::Headless;
     use std::time::{Duration, Instant};
     let mut library: Option<String> = None;
     let mut script: Option<String> = None;
@@ -728,7 +726,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
     if script.is_none() && output.is_none() {
         return Err("snapshot: give -o OUT.png and/or --script FILE".into());
     }
-    lightcraft_ui_egui::headless::viewport_pixels(size, scale).map_err(|e| format!("snapshot: bad --size/--scale: {e}"))?;
+    dac_ui_egui::headless::viewport_pixels(size, scale).map_err(|e| format!("snapshot: bad --size/--scale: {e}"))?;
     let t0 = Instant::now();
     let mut session = match &library {
         Some(dir) => {
@@ -747,15 +745,15 @@ fn snapshot(args: &[String]) -> Result<(), String> {
         let n = r["imported"].as_array().map_or(0, Vec::len);
         eprintln!("lightcraft-cli snapshot: imported {n} files in {:.0} ms", ti.elapsed().as_secs_f64() * 1e3);
     }
-    let services = lightcraft_ui_egui::Services {
-        write_shared: Some(std::sync::Arc::new(lightcraft_engine::export::write_file)),
-        write: Some(Box::new(lightcraft_engine::export::write_file)),
-        png: Some(Box::new(|img: &lightcraft_raster::Rgba8| {
-            lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
+    let services = dac_ui_egui::Services {
+        write_shared: Some(std::sync::Arc::new(dac_engine::export::write_file)),
+        write: Some(Box::new(dac_engine::export::write_file)),
+        png: Some(Box::new(|img: &dac_raster::Rgba8| {
+            dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(img), &dac_codecs::EncodeMeta::default()).unwrap_or_default()
         })),
         ..Default::default()
     };
-    let mut app = lightcraft_ui_egui::LightcraftApp::new(session, services);
+    let mut app = dac_ui_egui::DacApp::new(session, services);
     // Snapshot sessions promise no GPU: disable photo compute as well as the compositor
     // before the first frame can start background adapter discovery.
     // This UI state is session-local: the CLI neither loads nor saves desktop ui.json.

@@ -1,14 +1,14 @@
 //! Synthetic DNG round trips: every storage variant we decode is written with our own TIFF writer (and LJ92
 //! encoder) and must decode bit-exactly.
 
-use lightcraft_color::{D65, Mat3, Xy};
-use lightcraft_raw::opcodes::{Area, Opcode};
-use lightcraft_raw::{
+use dac_color::{D65, Mat3, Xy};
+use dac_raw::opcodes::{Area, Opcode};
+use dac_raw::{
     BlackLevel, Cfa, ColorData, DngCompression, DngWriteOptions, Method, OpcodeLists, Orientation, RawData, RawFormat, RawImage, Rect, decode,
     embedded_preview, probe, write_dng,
 };
-use lightcraft_tiff::tags::{self as t, compression, photometric};
-use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+use dac_tiff::tags::{self as t, compression, photometric};
+use dac_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
 
 fn scene_value(x: usize, y: usize, c: u8, max: f32) -> f32 {
     let base = [0.55, 0.8, 0.4][c as usize];
@@ -42,7 +42,7 @@ fn synthetic(w: usize, h: usize, cfa: Option<Cfa>, cpp: usize) -> RawImage {
         baseline_sharpness: Some(1.5),
         ..Default::default()
     };
-    let metadata = lightcraft_meta::Metadata { make: Some("Synth".into()), model: Some("Cam 1".into()), rating: Some(3), ..Default::default() };
+    let metadata = dac_meta::Metadata { make: Some("Synth".into()), model: Some("Cam 1".into()), rating: Some(3), ..Default::default() };
     RawImage {
         format: RawFormat::Dng,
         width: w,
@@ -103,7 +103,7 @@ fn writer_roundtrip_all_layouts() {
                     let back = decode(&bytes).unwrap();
                     assert_same(&raw, &back);
                     // the header-only probe describes the same image
-                    assert_eq!(lightcraft_raw::probe_info(&bytes).unwrap(), back.info());
+                    assert_eq!(dac_raw::probe_info(&bytes).unwrap(), back.info());
                 }
             }
         }
@@ -138,10 +138,10 @@ fn deflate_roundtrips_integer_and_float() {
             assert!((a - b).abs() <= tol, "{a} vs {b} (half: {half})");
         }
     }
-    assert_eq!(lightcraft_raw::dngwrite::f32_to_f16(1.0), 0x3c00);
-    assert_eq!(lightcraft_raw::dngwrite::f32_to_f16(-2.0), 0xc000);
-    assert_eq!(lightcraft_raw::dngwrite::f32_to_f16(1e9), 0x7c00);
-    assert_eq!(lightcraft_raw::dngwrite::f32_to_f16(2f32.powi(-24)), 0x0001);
+    assert_eq!(dac_raw::dngwrite::f32_to_f16(1.0), 0x3c00);
+    assert_eq!(dac_raw::dngwrite::f32_to_f16(-2.0), 0xc000);
+    assert_eq!(dac_raw::dngwrite::f32_to_f16(1e9), 0x7c00);
+    assert_eq!(dac_raw::dngwrite::f32_to_f16(2f32.powi(-24)), 0x0001);
 }
 
 #[test]
@@ -384,7 +384,7 @@ fn lj92_strips_and_levels_and_linearization() {
     let px = pattern(w, h, 1, 12);
     let mut raw = base_ifd(w, h, 12, 1, true);
     raw.set(t::COMPRESSION, Value::Short(vec![compression::JPEG]));
-    let strips: Vec<Vec<u8>> = px.chunks(w * 5).map(|c| lightcraft_raw::ljpeg::encode(c, w, c.len() / w, 1, 12, 6, 0)).collect();
+    let strips: Vec<Vec<u8>> = px.chunks(w * 5).map(|c| dac_raw::ljpeg::encode(c, w, c.len() / w, 1, 12, 6, 0)).collect();
     raw.set_image(ImageData::Strips { rows_per_strip: 5, strips });
     let table: Vec<u16> = (0..4096u32).map(|i| (i * i / 4096) as u16).collect();
     raw.set(t::LINEARIZATION_TABLE, Value::Short(table.clone()));
@@ -443,14 +443,14 @@ fn preview_and_probe() {
 #[test]
 fn colour_transform_from_decoded_dng() {
     let raw = decode(&write_dng(&synthetic(16, 16, Some(Cfa::bayer("RGGB").unwrap()), 1), &DngWriteOptions::default()).unwrap()).unwrap();
-    let xy = lightcraft_raw::color::as_shot_white_xy(&raw);
-    let t = lightcraft_raw::color::camera_transform(&raw, xy);
+    let xy = dac_raw::color::as_shot_white_xy(&raw);
+    let t = dac_raw::color::camera_transform(&raw, xy);
     assert!(!t.matrix_is_fallback);
     // as-shot neutral (0.5, 1, 0.7) → multipliers (2, 1, 1/0.7) up to normalisation
     assert!((t.wb[0] / t.wb[1] - 2.0).abs() < 1e-3, "{:?}", t.wb);
     assert!((t.wb[2] / t.wb[1] - 1.0 / 0.7).abs() < 1e-3);
     assert!((t.baseline_exposure - 0.35).abs() < 1e-6);
-    let (m, _) = lightcraft_raw::color::camera_to_rec2020(&raw, D65);
+    let (m, _) = dac_raw::color::camera_to_rec2020(&raw, D65);
     let o = m.apply([1.0; 3]);
     assert!(o.iter().all(|v| (v - 1.0).abs() < 1e-9));
 }
@@ -462,9 +462,9 @@ fn vendor_white_balance_survives_dng_conversion() {
     let mut raw = synthetic(16, 16, Some(Cfa::bayer("RGGB").unwrap()), 1);
     raw.color = ColorData::default();
     raw.wb_multipliers = Some([2.25, 1.0, 1.7421875]);
-    let before = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
+    let before = dac_raw::color::camera_transform(&raw, dac_raw::color::as_shot_white_xy(&raw));
     let back = decode(&write_dng(&raw, &DngWriteOptions::default()).unwrap()).unwrap();
-    let after = lightcraft_raw::color::camera_transform(&back, lightcraft_raw::color::as_shot_white_xy(&back));
+    let after = dac_raw::color::camera_transform(&back, dac_raw::color::as_shot_white_xy(&back));
     for c in 0..3 {
         assert!((before.wb[c] - after.wb[c]).abs() < 1e-3, "{:?} vs {:?}", before.wb, after.wb);
     }
@@ -478,7 +478,7 @@ fn rejects_unsupported_and_broken() {
     raw.set(t::COMPRESSION, Value::Short(vec![compression::LOSSY_JPEG]));
     raw.set_image(ImageData::Strips { rows_per_strip: 8, strips: vec![vec![0; 10]] });
     // lossy JPEG DNGs decode now; a strip that isn't a JPEG is reported as corrupt
-    assert!(matches!(decode(&dng(raw, ByteOrder::Little)), Err(lightcraft_raw::RawError::Corrupt(_))));
+    assert!(matches!(decode(&dng(raw, ByteOrder::Little)), Err(dac_raw::RawError::Corrupt(_))));
     let mut raw = base_ifd(w, h, 16, 1, true);
     raw.set(t::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 3, 1]));
     raw.set(t::COMPRESSION, Value::Short(vec![1]));
@@ -525,7 +525,7 @@ fn profile_look_tags_are_read_from_ifd0() {
         assert_eq!(look.data[2 * 4 * 2], [0.0, 1.0, 0.9]);
         assert_eq!(p.tone_curve.as_ref().unwrap().points.len(), 4);
         // the header-only probe sees the same profile
-        assert_eq!(lightcraft_raw::probe_info(&bytes).unwrap().color.profile, *p);
+        assert_eq!(dac_raw::probe_info(&bytes).unwrap().color.profile, *p);
         // our DNG writer keeps the look with the data (conversions, smart previews)
         let again = decode(&write_dng(&img, &DngWriteOptions::default()).unwrap()).unwrap();
         assert_eq!(again.color.profile, *p);
@@ -615,7 +615,7 @@ fn jpeg_xl_tiles_decode_bit_exactly() {
     let img = decode(&bytes).unwrap();
     assert_eq!((img.width, img.height, img.cpp), (w, h, 3));
     assert_eq!(img.data, RawData::U16(px));
-    assert_eq!(lightcraft_raw::probe_info(&bytes).unwrap(), img.info());
+    assert_eq!(dac_raw::probe_info(&bytes).unwrap(), img.info());
     // CFA 1 × 8/12/14-bit
     for bits in [8u32, 12, 14] {
         let px = pattern(w, h, 1, bits);
@@ -635,7 +635,7 @@ fn jpeg_xl_tiles_decode_bit_exactly() {
 
 #[test]
 fn malformed_jpeg_xl_tiles_are_errors() {
-    use lightcraft_raw::RawError;
+    use dac_raw::RawError;
     let (w, h) = (16, 16);
     let px = pattern(w, h, 1, 12);
     let good = jxl_encode(&px, w, h, 1, false);
@@ -655,7 +655,7 @@ fn malformed_jpeg_xl_tiles_are_errors() {
         if let Ok(img) = decode(&bytes) {
             assert_eq!(img.data, RawData::U16(px.clone()), "truncated to {n}");
         }
-        let _ = lightcraft_raw::probe_info(&bytes);
+        let _ = dac_raw::probe_info(&bytes);
     }
     for i in 0..good.len() {
         let mut b = good.clone();
@@ -666,13 +666,13 @@ fn malformed_jpeg_xl_tiles_are_errors() {
     let small = jxl_encode(&px[..w * 8], w, 8, 1, false);
     assert!(matches!(decode(&one(small, 1)), Err(RawError::Corrupt(_))));
     assert!(matches!(decode(&one(good.clone(), 3)), Err(RawError::Corrupt(_))));
-    assert!(matches!(lightcraft_raw::probe_info(&one(good, 3)), Err(RawError::Corrupt(_))));
+    assert!(matches!(dac_raw::probe_info(&one(good, 3)), Err(RawError::Corrupt(_))));
 }
 
 /// One undecodable tile makes the whole image an error: it is never returned with a black tile.
 #[test]
 fn a_jpeg_xl_tile_that_fails_is_an_error_for_the_image() {
-    use lightcraft_raw::RawError;
+    use dac_raw::RawError;
     let (w, h) = (32, 16);
     let px = pattern(w, h, 1, 12);
     let tile = |x0: usize| -> Vec<u16> { (0..16).flat_map(|y| px[y * w + x0..y * w + x0 + 16].to_vec()).collect() };
@@ -694,7 +694,7 @@ fn a_jpeg_xl_tile_that_fails_is_an_error_for_the_image() {
 /// for. The same samples without the alpha channel decode.
 #[test]
 fn jpeg_xl_tiles_beyond_their_decode_budget_are_errors() {
-    use lightcraft_raw::RawError;
+    use dac_raw::RawError;
     use zune_core::bit_depth::BitDepth;
     use zune_core::colorspace::ColorSpace;
     use zune_core::options::EncoderOptions;
@@ -790,7 +790,7 @@ fn gain_table_maps_follow_dng_precedence() {
         assert_eq!((map.points_v, map.points_h, map.points_n, map.gamma), (2, 2, 4, 1.0));
         assert_eq!((map.spacing_v, map.origin_h, map.weights[1]), (0.5, 0.25, 1.0));
         assert_eq!(map.gains[5], 1.5);
-        assert_eq!(lightcraft_raw::probe_info(&apple).unwrap().color.profile, img.color.profile);
+        assert_eq!(dac_raw::probe_info(&apple).unwrap().color.profile, img.color.profile);
         // our DNG writer keeps it
         let again = decode(&write_dng(&img, &DngWriteOptions::default()).unwrap()).unwrap();
         assert_eq!(again.color.profile.gain_table_map.as_ref(), Some(&map));
@@ -834,7 +834,7 @@ fn malformed_gain_table_maps_are_ignored() {
     }
 }
 
-/// The map is read in the file's byte order, else big-endian (`lightcraft_raw::gaintable`): a
+/// The map is read in the file's byte order, else big-endian (`dac_raw::gaintable`): a
 /// big-endian payload in a little-endian file is read, a little-endian one in a big-endian file
 /// is not.
 #[test]
@@ -868,7 +868,7 @@ fn mask_ifd(w: usize, h: usize, name: &str, px: Vec<u8>) -> IfdBuilder {
 /// developed image (default crop of the active area), and doesn't disturb the raw decode.
 #[test]
 fn semantic_masks_are_read_and_placed() {
-    use lightcraft_raw::semantic::MaskSubArea;
+    use dac_raw::semantic::MaskSubArea;
     for order in [ByteOrder::Little, ByteOrder::Big] {
         let bytes = profile_dng(order, |ifd0| {
             // a 4 × 2 crop at (top 1, left 2) of an 8 × 4 mask over the 8 × 6 image
@@ -881,7 +881,7 @@ fn semantic_masks_are_read_and_placed() {
         });
         let raw = decode(&bytes).unwrap();
         assert_eq!((raw.width, raw.height, raw.cpp), (8, 6, 3), "the masks are not the raw image");
-        let masks = lightcraft_raw::semantic_masks(&bytes);
+        let masks = dac_raw::semantic_masks(&bytes);
         assert_eq!(masks.len(), 2);
         let (sky, skin) = (&masks[0], &masks[1]);
         assert_eq!((sky.name.as_str(), sky.instance_id.as_deref(), sky.width, sky.height), ("sky", None, 4, 2));
@@ -935,7 +935,7 @@ fn malformed_semantic_masks_are_skipped() {
         ifd0.add_sub_ifd(outside);
     });
     assert_eq!(decode(&bytes).unwrap().cpp, 3);
-    let masks = lightcraft_raw::semantic_masks(&bytes);
+    let masks = dac_raw::semantic_masks(&bytes);
     let names: Vec<&str> = masks.iter().map(|m| m.name.as_str()).collect();
     assert_eq!(names, ["short strip", "sub area too small"]);
     assert!(masks.iter().all(|m| m.sub_area.is_none()), "sub areas the mask doesn't fit are ignored");
@@ -945,7 +945,7 @@ fn malformed_semantic_masks_are_skipped() {
         assert!(m.developed(Rect::new(0, 0, 8, 6), Rect::new(8, 6, 0, 0)).is_none());
     }
     // not a TIFF at all
-    assert!(lightcraft_raw::semantic_masks(b"not a dng").is_empty());
+    assert!(dac_raw::semantic_masks(b"not a dng").is_empty());
 }
 
 /// Only the first `MAX_MASKS` mask IFDs are decoded, malformed ones included, so a file full of
@@ -953,7 +953,7 @@ fn malformed_semantic_masks_are_skipped() {
 /// the valid masks after them are never looked at.
 #[test]
 fn semantic_mask_ifds_past_the_cap_are_not_decoded() {
-    use lightcraft_raw::semantic::MAX_MASKS;
+    use dac_raw::semantic::MAX_MASKS;
     let with = |undecodable: usize, valid: usize| {
         profile_dng(ByteOrder::Little, |ifd0| {
             for i in 0..undecodable {
@@ -968,9 +968,9 @@ fn semantic_mask_ifds_past_the_cap_are_not_decoded() {
     };
     let bytes = with(MAX_MASKS, 3 * MAX_MASKS);
     assert_eq!(decode(&bytes).unwrap().cpp, 3);
-    assert!(lightcraft_raw::semantic_masks(&bytes).is_empty());
+    assert!(dac_raw::semantic_masks(&bytes).is_empty());
     // one fewer undecodable mask leaves room for exactly one valid one
-    let names: Vec<String> = lightcraft_raw::semantic_masks(&with(MAX_MASKS - 1, 3 * MAX_MASKS)).into_iter().map(|m| m.name).collect();
+    let names: Vec<String> = dac_raw::semantic_masks(&with(MAX_MASKS - 1, 3 * MAX_MASKS)).into_iter().map(|m| m.name).collect();
     assert_eq!(names, ["valid 0"]);
 }
 

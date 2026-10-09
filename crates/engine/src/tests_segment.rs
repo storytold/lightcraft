@@ -171,7 +171,7 @@ fn background_requests_never_wait_and_failures_come_back_as_messages() {
     // the Object mask is there, without a selection; no Describe mask was made from nothing
     let d = s.develop_of(id).unwrap();
     assert_eq!(d.masks.len(), 1);
-    assert!(matches!(&d.masks[0].components[0].shape, lightcraft_develop::MaskShape::Object { seg: None, .. }));
+    assert!(matches!(&d.masks[0].components[0].shape, dac_develop::MaskShape::Object { seg: None, .. }));
     assert!(!s.segmenter.busy() && !s.segmenter.loaded());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -193,7 +193,7 @@ fn waiting_requests_with_a_damaged_model_are_errors() {
     assert!(s.develop_of(id).unwrap().masks.is_empty());
     assert!(!s.segmenter.busy());
     // a stored segmentation needs no model at all (replayed or pasted masks)
-    let seg = serde_json::to_value(lightcraft_develop::SegMask::from_logits(4, &[5.0; 16])).unwrap();
+    let seg = serde_json::to_value(dac_develop::SegMask::from_logits(4, &[5.0; 16])).unwrap();
     s.segmenter.dir = None;
     s.execute("mask.add", &json!({"kind": "prompt", "text": "sky", "seg": seg})).unwrap();
     assert_eq!(s.develop_of(id).unwrap().masks.len(), 1);
@@ -212,14 +212,14 @@ fn object_clicks_are_capped() {
     s.segmenter.dir = Some(dir.clone());
     let id = s.active().unwrap();
     let mut d = (*s.develop_of(id).unwrap()).clone();
-    let many = vec![lightcraft_geom::Point::new(0.5, 0.5); crate::segment::MAX_CLICKS];
-    d.masks.push(lightcraft_develop::Mask {
+    let many = vec![dac_geom::Point::new(0.5, 0.5); crate::segment::MAX_CLICKS];
+    d.masks.push(dac_develop::Mask {
         id: 1,
-        components: vec![lightcraft_develop::MaskComponent {
+        components: vec![dac_develop::MaskComponent {
             name: None,
-            op: lightcraft_develop::MaskOp::Add,
+            op: dac_develop::MaskOp::Add,
             invert: false,
-            shape: lightcraft_develop::MaskShape::Object { hint: many, exclude: vec![], seg: None, detail: vec![], edge: 0.0 },
+            shape: dac_develop::MaskShape::Object { hint: many, exclude: vec![], seg: None, detail: vec![], edge: 0.0 },
         }],
         ..Default::default()
     });

@@ -1,10 +1,10 @@
 //! Render every demo scene into a contact sheet PNG (simple clamp + sRGB encode, no develop).
-//! `cargo run --release -p lightcraft-scenes --example contact_sheet -- out.png`
-use lightcraft_color::{REC2020, SRGB, transfer::encode_srgb8};
+//! `cargo run --release -p dac-scenes --example contact_sheet -- out.png`
+use dac_color::{REC2020, SRGB, transfer::encode_srgb8};
 
 fn main() {
     let out = std::env::args().nth(1).unwrap_or_else(|| "contact.png".into());
-    let lib = lightcraft_scenes::demo_library();
+    let lib = dac_scenes::demo_library();
     let (cw, ch, cols) = (360usize, 240usize, 6usize);
     let rows = lib.len().div_ceil(cols);
     let mut sheet = image::RgbImage::new((cw * cols) as u32, (ch * rows) as u32);

@@ -111,7 +111,7 @@ impl LightroomArchiveFinalization {
         if bytes.len() > MAX_INDEX_BYTES {
             return Err(error("Lightroom import index exceeds 16 MiB"));
         }
-        lightcraft_catalog::safe_file::write_atomic(&path, &bytes).map_err(|e| error(e.to_string()))
+        dac_catalog::safe_file::write_atomic(&path, &bytes).map_err(|e| error(e.to_string()))
     }
 
     pub fn path(&self) -> Option<&Path> {
@@ -361,8 +361,8 @@ mod tests {
         let first = commit_prepared(&mut session, prepared).unwrap();
         assert_eq!(first.report["mapping"]["1"].as_u64(), Some(1));
         assert_eq!(session.undo.len(), 1);
-        let id = lightcraft_catalog::PhotoId(1);
-        let mut personal = lightcraft_develop::DevelopSettings::default();
+        let id = dac_catalog::PhotoId(1);
+        let mut personal = dac_develop::DevelopSettings::default();
         personal.light.exposure = 1.5;
         session.set_develop(id, personal, "Personal").unwrap();
         let before = session.catalog.photo(id).map(|photo| photo.develop.clone());

@@ -18,8 +18,8 @@ fn temp_dir(tag: &str) -> PathBuf {
 fn write_png(path: &Path, seed: u8) {
     let (w, h) = (40usize, 24usize);
     let data: Vec<[u8; 4]> = (0..w * h).map(|i| [(i % w * 5) as u8, (i / w * 7) as u8, seed, 255]).collect();
-    let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
-    let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    let img = dac_raster::Rgba8 { width: w, height: h, data };
+    let bytes = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).unwrap();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, bytes).unwrap();
 }
@@ -55,7 +55,7 @@ fn photo_paths(s: &Session) -> Vec<String> {
         .catalog
         .photos()
         .filter_map(|p| match &p.source {
-            lightcraft_catalog::Source::File { path } => Some(path.clone()),
+            dac_catalog::Source::File { path } => Some(path.clone()),
             _ => None,
         })
         .collect();
@@ -218,11 +218,11 @@ fn copy_is_verified_against_the_probe_hash() {
     // larger than one 1 MB read, not a multiple of it
     let bytes: Vec<u8> = (0..(3 << 20) + 12_345u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
     std::fs::write(&src, &bytes).unwrap();
-    let good = lightcraft_preview::hash_bytes(&bytes);
+    let good = dac_preview::hash_bytes(&bytes);
     copy_verified(&src, &base.join("ok.bin"), Some(good)).unwrap();
     assert_eq!(std::fs::read(base.join("ok.bin")).unwrap(), bytes);
     // a hash that doesn't match: refused (a byte compare with the source would have passed)
-    let stale = lightcraft_preview::hash_bytes(b"what the probe read earlier");
+    let stale = dac_preview::hash_bytes(b"what the probe read earlier");
     let e = copy_verified(&src, &base.join("stale.bin"), Some(stale)).unwrap_err();
     assert!(e.to_string().contains("differs"), "{e}");
     assert!(!base.join("stale.bin").exists(), "the refused copy is removed");
@@ -382,7 +382,7 @@ fn move_into_the_library_is_saved_before_sources_go() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// Timing for issue #134 (not a pass/fail test): `cargo test -p lightcraft-engine --release
+/// Timing for issue #134 (not a pass/fail test): `cargo test -p dac-engine --release
 /// write_policy_timing -- --ignored --nocapture`. Writes N export-sized files durably (temp +
 /// sync + rename) and atomically only, and copies N files verified byte for byte and against the
 /// probe hash, alternating so a loaded machine affects both alike. `LIGHTCRAFT_BENCH_DIR` puts
@@ -391,7 +391,7 @@ fn move_into_the_library_is_saved_before_sources_go() {
 #[ignore]
 fn write_policy_timing() {
     use crate::import_move::copy_verified;
-    use lightcraft_catalog::safe_file::{write_atomic, write_atomic_nosync};
+    use dac_catalog::safe_file::{write_atomic, write_atomic_nosync};
     use std::time::{Duration, Instant};
     let root = std::env::var_os("LIGHTCRAFT_BENCH_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
     let base = root.join(format!("lc-write-policy-{}", std::process::id()));
@@ -417,7 +417,7 @@ fn write_policy_timing() {
         .map(|i| {
             let b = data(size, 7 * i as u32);
             std::fs::write(card.join(format!("{i}.raw")), &b).unwrap();
-            lightcraft_preview::hash_bytes(&b)
+            dac_preview::hash_bytes(&b)
         })
         .collect();
     let (mut bytewise, mut hashed) = (Duration::ZERO, Duration::ZERO);
@@ -496,7 +496,7 @@ fn copies_run_side_by_side_with_the_same_outcome() {
     let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
     assert!(ids.windows(2).all(|w| w[0] < w[1]), "{ids:?}");
     assert_eq!(r["duplicates"][0]["existing"], ids[8], "{r}");
-    let first = s.catalog.photo(lightcraft_catalog::PhotoId(ids[0])).unwrap();
+    let first = s.catalog.photo(dac_catalog::PhotoId(ids[0])).unwrap();
     assert_eq!(first.file_name, "IMG_1.png");
     let _ = std::fs::remove_dir_all(&base);
 }

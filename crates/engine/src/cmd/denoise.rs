@@ -9,11 +9,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError, mpsc};
 
-use lightcraft_catalog::PhotoId;
-use lightcraft_denoise::archive;
-use lightcraft_denoise::hash::sha256_file;
-use lightcraft_denoise::known::{self, Known};
-use lightcraft_denoise::manifest::{self, DenoiserManifest, MAX_MANIFEST_BYTES, MAX_MODEL_BYTES};
+use dac_catalog::PhotoId;
+use dac_denoise::archive;
+use dac_denoise::hash::sha256_file;
+use dac_denoise::known::{self, Known};
+use dac_denoise::manifest::{self, DenoiserManifest, MAX_MANIFEST_BYTES, MAX_MODEL_BYTES};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, bool_or, cmd, str_param};
@@ -51,7 +51,7 @@ fn row(m: &DenoiserManifest, download_host: Option<String>, installed: bool, sel
 }
 
 fn host_of(k: &Known) -> Option<String> {
-    k.download.as_ref().map(|d| lightcraft_denoise::known::host(&d.url).to_string())
+    k.download.as_ref().map(|d| dac_denoise::known::host(&d.url).to_string())
 }
 
 fn list(s: &mut Session, _: &Value) -> Result<Value> {
@@ -367,7 +367,7 @@ fn download(s: &mut Session, p: &Value) -> Result<Value> {
     if installed_models(&dir).iter().any(|i| i.manifest.id == spec.id) {
         return Err(bad(C, "that model is already installed"));
     }
-    let host = lightcraft_denoise::known::host(&spec.url).to_string();
+    let host = dac_denoise::known::host(&spec.url).to_string();
     s.denoise.downloads.start(spec, &dir).map_err(|e| bad(C, e))?;
     Ok(json!({"started": id, "from": host}))
 }
@@ -421,7 +421,7 @@ fn remove(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "denoise.models.remove";
     let id = str_param(p, "id").ok_or_else(|| bad(C, "missing `id`"))?;
     let dir = models_dir(s, C)?;
-    if !lightcraft_denoise::licence::valid_id(id) {
+    if !dac_denoise::licence::valid_id(id) {
         return Err(bad(C, "not a model id"));
     }
     let home = dir.join(id);
@@ -634,7 +634,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "denoise.models.list", "Denoise Models", [], None, "{} → {dir, productsDir, model, runtime, auto, cacheGb, threads, runOn, models: [{id, name, version, licence{name, commercial, url, notice}, provenance, source, sizeBytes, sha256, tile, known, downloadHost, installed, selected, accepted}]}", always, list),
         cmd!(query "denoise.models.inspect", "Inspect Denoise Model", [], None, "{path} → model terms from an adjacent manifest; never executes the file", always, inspect),
         cmd!(query "denoise.models.install", "Install Denoise Model", [], None, "{path, acknowledged: true, activate?: true, background?: false} → {installed, model} or {started} — install a denoise model from a file: an .onnx with a denoise-model.json beside it, or an archive LightCraft knows (the darktable `.dtmodel`). `acknowledged` must be true: the user has been shown the model's licence and accepted it. Unless `activate` is false it becomes the model in use", always, install),
-        cmd!(query "denoise.models.download", "Download Denoise Model", [], None, "{id, acknowledged: true} → {started, from} — fetch a model LightCraft has a pinned address for (see `downloadHost` in the list) in the background over HTTPS with lightcraft-fetch. `acknowledged` must be true: the user has been shown the model's terms and accepted them. It is checked against its size and SHA-256, installed and chosen by itself; `denoise.models.downloads` shows how far it is", always, download),
+        cmd!(query "denoise.models.download", "Download Denoise Model", [], None, "{id, acknowledged: true} → {started, from} — fetch a model LightCraft has a pinned address for (see `downloadHost` in the list) in the background over HTTPS with dac-fetch. `acknowledged` must be true: the user has been shown the model's terms and accepted them. It is checked against its size and SHA-256, installed and chosen by itself; `denoise.models.downloads` shows how far it is", always, download),
         cmd!(query "denoise.models.downloads", "Denoise Model Downloads", [], None, "{} → {running, downloads: [{id, state: running | done | installed | failed | cancelled, bytes, total, error, from}]} — also installs any download that has arrived", always, downloads),
         cmd!(query "denoise.models.downloadCancel", "Cancel Denoise Model Download", [], None, "{id} → {discarded} — stop a download, or delete a finished one that was not installed", always, download_cancel),
         cmd!(query "denoise.models.test", "Test Denoise Model", [], None, "{id} → {ok, result} — load an installed model and check it gives sensible pictures; needs the denoise runtime", always, test),

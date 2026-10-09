@@ -40,7 +40,7 @@
 //! `MapPointsV` / `MapPointsH` is below 256 (their product is at most [`MAX_TABLES`]), so swapped
 //! it is at least 2^24 and the size checks reject it. We write in the file's byte order.
 
-use lightcraft_tiff::ByteOrder;
+use dac_tiff::ByteOrder;
 use serde::{Deserialize, Serialize};
 
 /// Upper bound on `MapPointsV × MapPointsH` (Apple uses 6 × 8).
@@ -282,7 +282,7 @@ pub struct SourcePlacement {
     /// x, y, width, height of the developed crop, relative to the active area.
     pub rect: [f64; 4],
     /// The EXIF orientation applied to the developed crop.
-    pub orientation: lightcraft_geom::Orientation,
+    pub orientation: dac_geom::Orientation,
 }
 
 impl SourcePlacement {
@@ -532,19 +532,19 @@ mod tests {
     #[test]
     fn placement_undoes_crop_and_orientation() {
         // the source is the right half of the active area, rotated 90° clockwise
-        let p = SourcePlacement { rect: [0.5, 0.0, 0.5, 1.0], orientation: lightcraft_geom::Orientation::Rotate90 };
+        let p = SourcePlacement { rect: [0.5, 0.0, 0.5, 1.0], orientation: dac_geom::Orientation::Rotate90 };
         // the oriented source's top-left came from the crop's bottom-left
         let (x, y) = p.active(0.0, 0.0);
         assert!((x - 0.5).abs() < 1e-12 && (y - 1.0).abs() < 1e-12, "{x} {y}");
         // its top-right came from the crop's top-left
         let (x, y) = p.active(1.0, 0.0);
         assert!((x - 0.5).abs() < 1e-12 && y.abs() < 1e-12, "{x} {y}");
-        let plain = SourcePlacement { rect: [0.0, 0.0, 1.0, 1.0], orientation: lightcraft_geom::Orientation::Normal };
+        let plain = SourcePlacement { rect: [0.0, 0.0, 1.0, 1.0], orientation: dac_geom::Orientation::Normal };
         assert_eq!(plain.active(0.25, 0.75), (0.25, 0.75));
     }
 }
 
-/// `GTM_FILE=photo.dng cargo test --release -p lightcraft-raw gain_throughput -- --ignored --nocapture`:
+/// `GTM_FILE=photo.dng cargo test --release -p dac-raw gain_throughput -- --ignored --nocapture`:
 /// the cost of [`GainEval::gain`] per pixel on a real file's map.
 #[cfg(test)]
 mod bench {

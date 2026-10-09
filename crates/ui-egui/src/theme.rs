@@ -9,8 +9,8 @@ pub const FONT_SEMIBOLD: &str = "semibold";
 const WEB_CHINESE_FONT: &str = "web Noto Sans CJK SC";
 
 /// Shared colour-label palette for badges, thumbnail surrounds and feedback.
-pub fn label_color(label: lightcraft_catalog::ColorLabel) -> Color32 {
-    use lightcraft_catalog::ColorLabel;
+pub fn label_color(label: dac_catalog::ColorLabel) -> Color32 {
+    use dac_catalog::ColorLabel;
     match label {
         ColorLabel::Red => Color32::from_rgb(222, 72, 72),
         ColorLabel::Yellow => Color32::from_rgb(232, 196, 58),
@@ -21,12 +21,12 @@ pub fn label_color(label: lightcraft_catalog::ColorLabel) -> Color32 {
 }
 
 /// A translucent label colour over thumbnail chrome; selection remains brighter.
-pub fn label_background(base: Color32, label: Option<lightcraft_catalog::ColorLabel>, selected: bool) -> Color32 {
+pub fn label_background(base: Color32, label: Option<dac_catalog::ColorLabel>, selected: bool) -> Color32 {
     label.map_or(base, |l| base.lerp_to_gamma(label_color(l), if selected { 0.32 } else { 0.22 }))
 }
 
 /// Label confirmations use a pale colour and dark text, distinct from neutral/error HUDs.
-pub fn label_toast_colors(label: lightcraft_catalog::ColorLabel) -> (Color32, Color32) {
+pub fn label_toast_colors(label: dac_catalog::ColorLabel) -> (Color32, Color32) {
     (Color32::WHITE.lerp_to_gamma(label_color(label), 0.3), Color32::from_rgb(36, 24, 24))
 }
 
@@ -135,28 +135,25 @@ pub fn install_fonts(ctx: &egui::Context) {
 
 /// Install the browser's separately downloaded Chinese face alongside the embedded faces.
 pub fn install_fonts_with_chinese(ctx: &egui::Context, chinese: Option<&Arc<FontData>>) {
-    ctx.set_fonts(font_definitions_with_chinese(lightcraft_engine::CRAFT_FONTS, chinese));
+    ctx.set_fonts(font_definitions_with_chinese(dac_engine::CRAFT_FONTS, chinese));
 }
 
 /// Inter remains the default UI face. Egui's default faces and craft-fonts cover other scripts;
 /// the browser's separate Chinese face precedes Japanese faces within the CJK fallback list.
 /// Without craft-fonts or that separate face, CJK text shows boxes.
-pub fn font_definitions(craft: &'static [lightcraft_engine::CraftFont]) -> FontDefinitions {
+pub fn font_definitions(craft: &'static [dac_engine::CraftFont]) -> FontDefinitions {
     font_definitions_with_chinese(craft, None)
 }
 
 /// The web build keeps the large Simplified Chinese face outside the size-limited WASM module.
 /// Prefer it for Chinese UI text, including Traditional Chinese until it has its own face.
-pub fn font_definitions_with_chinese(craft: &'static [lightcraft_engine::CraftFont], chinese: Option<&Arc<FontData>>) -> FontDefinitions {
+pub fn font_definitions_with_chinese(craft: &'static [dac_engine::CraftFont], chinese: Option<&Arc<FontData>>) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert("Inter".into(), Arc::new(FontData::from_static(include_bytes!("../../../assets/fonts/Inter-Regular.ttf"))));
     fonts.font_data.insert("Inter-SemiBold".into(), Arc::new(FontData::from_static(include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf"))));
     // Craft-fonts faces in preference order for a family drawn in `style`.
     let fallback = |style: &str| {
-        lightcraft_engine::fonts::cjk_fallback(craft, crate::i18n::language().script(), style)
-            .into_iter()
-            .map(craft_font_name)
-            .collect::<Vec<String>>()
+        dac_engine::fonts::cjk_fallback(craft, crate::i18n::language().script(), style).into_iter().map(craft_font_name).collect::<Vec<String>>()
     };
     let (mut regular, mut bold) = (fallback("Regular"), fallback("Bold"));
     for name in regular.iter().chain(bold.iter()) {
@@ -200,7 +197,7 @@ pub fn font_definitions_with_chinese(craft: &'static [lightcraft_engine::CraftFo
 /// The font families used by this app instance, including the browser's separately loaded face.
 pub fn font_credits(chinese_loaded: bool) -> String {
     let mut families = vec!["Inter"];
-    for f in lightcraft_engine::CRAFT_FONTS {
+    for f in dac_engine::CRAFT_FONTS {
         if !families.contains(&f.family) {
             families.push(f.family);
         }
@@ -211,7 +208,7 @@ pub fn font_credits(chinese_loaded: bool) -> String {
     families.join(" / ")
 }
 
-fn craft_font_name(f: &lightcraft_engine::CraftFont) -> String {
+fn craft_font_name(f: &dac_engine::CraftFont) -> String {
     format!("craft-fonts {} {}", f.family, f.style)
 }
 
@@ -266,14 +263,14 @@ mod tests {
 
     #[test]
     fn native_chinese_face_falls_back_after_default_faces() {
-        static FACES: &[lightcraft_engine::CraftFont] = &[
-            lightcraft_engine::CraftFont {
+        static FACES: &[dac_engine::CraftFont] = &[
+            dac_engine::CraftFont {
                 family: "BIZ UDPGothic",
                 style: "Regular",
                 scripts: &["Jpan", "Latn"],
                 bytes: include_bytes!("../../../assets/fonts/Inter-Regular.ttf"),
             },
-            lightcraft_engine::CraftFont {
+            dac_engine::CraftFont {
                 family: "Noto Sans CJK SC",
                 style: "Regular",
                 scripts: &["Hans", "Latn"],
@@ -302,13 +299,13 @@ mod tests {
     fn separate_web_chinese_face_is_available_in_every_ui_family() {
         // Simulate the WASM build, which embeds only the Japanese face. The Chinese face arrives
         // as a separate file and must precede that face when the UI uses Chinese.
-        static JAPANESE: &[lightcraft_engine::CraftFont] = &[lightcraft_engine::CraftFont {
+        static JAPANESE: &[dac_engine::CraftFont] = &[dac_engine::CraftFont {
             family: "BIZ UDPGothic",
             style: "Regular",
             scripts: &["Jpan", "Latn"],
             bytes: include_bytes!("../../../assets/fonts/Inter-Regular.ttf"),
         }];
-        let embedded = lightcraft_engine::CRAFT_FONTS.iter().find(|font| font.family == "Noto Sans CJK SC" && font.style == "Regular");
+        let embedded = dac_engine::CRAFT_FONTS.iter().find(|font| font.family == "Noto Sans CJK SC" && font.style == "Regular");
         let fallback: &'static [u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
         let source = embedded.map_or(fallback, |font| font.bytes);
         let chinese = Arc::new(FontData::from_static(source));

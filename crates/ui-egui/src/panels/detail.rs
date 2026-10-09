@@ -1,14 +1,14 @@
 //! The Detail (loupe) view: the developed photo, before/after, zoom & pan, the filmstrip, and the
 //! on-canvas tools (crop, brush/gradient masks, remove spots, white-balance picker).
 
+use dac_catalog::PhotoId;
+use dac_develop::{DevelopSettings, MaskShape};
+use dac_geom::{Affine, Point};
+use dac_pipeline::geometry::Frame;
 use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
-use lightcraft_catalog::PhotoId;
-use lightcraft_develop::{DevelopSettings, MaskShape};
-use lightcraft_geom::{Affine, Point};
-use lightcraft_pipeline::geometry::Frame;
 use serde_json::json;
 
-use crate::LightcraftApp;
+use crate::DacApp;
 use crate::render::Slot;
 use crate::state::{BeforeAfter, RightPanel, Zoom};
 use crate::theme::Tokens;
@@ -30,7 +30,7 @@ pub enum Gesture {
     },
     CropHandle {
         handle: u8,
-        start: lightcraft_geom::Rect,
+        start: dac_geom::Rect,
         angle: f64,
     },
     /// Straighten tool: a line drawn along something that should be level (or plumb).
@@ -147,14 +147,14 @@ fn bounded_pan(area: Rect, size: egui::Vec2, pan: (f32, f32)) -> (f32, f32) {
     (bound(area.width(), size.x, pan.0), bound(area.height(), size.y, pan.1))
 }
 
-pub(crate) fn pan_image(app: &mut LightcraftApp, area: Rect, img: Rect, delta: egui::Vec2) {
+pub(crate) fn pan_image(app: &mut DacApp, area: Rect, img: Rect, delta: egui::Vec2) {
     let centre = area.center() - img.min - delta;
     let pan = bounded_pan(area, img.size(), (centre.x / img.width().max(1.0), centre.y / img.height().max(1.0)));
     let _ = app.run("view.navigate", json!({"pan": pan}));
 }
 
 /// Native pinch (also modifier-wheel zoom) and two-finger scroll, scoped to this image view.
-pub(crate) fn navigate_gesture(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, area: Rect, img: Rect, native: [usize; 2]) -> bool {
+pub(crate) fn navigate_gesture(app: &mut DacApp, ui: &mut egui::Ui, resp: &egui::Response, area: Rect, img: Rect, native: [usize; 2]) -> bool {
     if !resp.hovered() {
         return false;
     }
@@ -247,7 +247,7 @@ struct WindowView {
 
 /// Ask for the window of `v` that holds what is on screen; remember it so its texture can be
 /// drawn where it belongs. `None`: no window is wanted (or possible) for this view.
-fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowView) -> Option<crate::region::RegionView> {
+fn request_window(app: &mut DacApp, c: &WindowCtx, v: &WindowView) -> Option<crate::region::RegionView> {
     let frame_edge = c.frame_edge?;
     // while a pinch or scroll runs the windows there are keep being drawn, magnified: no new one
     // per frame (zooming out would ask for ever wider ones)
@@ -267,7 +267,7 @@ fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowView) -> Opt
     );
     let win = crate::region::window_for(fw, fh, visible, crate::region::max_span(c.texture_side))?;
     // the Before side waits for the original the After is decoding (see `defer_before_window`)
-    let original_held = app.session.media.has_source(c.id, lightcraft_engine::SourceLevel::for_size(fw.max(fh)));
+    let original_held = app.session.media.has_source(c.id, dac_engine::SourceLevel::for_size(fw.max(fh)));
     if crate::region::defer_before_window(v.before, app.renderer.is_pending(Slot::Region), original_held) {
         return app.region_before_view.filter(|w| w.photo == c.id);
     }
@@ -295,7 +295,7 @@ fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowView) -> Opt
 
 /// Draw `v`'s window texture over the whole-frame render, if it is the one asked for (or, in a
 /// drag, an earlier draft of it).
-fn draw_window(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx, v: &WindowView, wanted: &crate::region::RegionView) {
+fn draw_window(p: &egui::Painter, app: &DacApp, c: &WindowCtx, v: &WindowView, wanted: &crate::region::RegionView) {
     let Some(tex) = app.renderer.textures.get(&v.slot).filter(|t| t.photo == c.id) else { return };
     let Some(tile) = app.region_tiles.get(&(v.before, tex.key)).filter(|t| t.is_current(c.id, wanted.full, wanted.settings, c.interacting)) else {
         return;
@@ -306,7 +306,7 @@ fn draw_window(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx, v: &Window
     p.image(tex.tex.id(), dst, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
 }
 
-pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.max_rect();
     let fullscreen = app.ui.fullscreen;
@@ -401,7 +401,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         native_long,
         texture_side,
         draft_scale: scale,
-        windows: !app.ui.soft_proof && view_overlay(app, &d) == lightcraft_pipeline::Overlay::None,
+        windows: !app.ui.soft_proof && view_overlay(app, &d) == dac_pipeline::Overlay::None,
     };
     let mut plan = crate::region::plan(&app.ui.settings, sizes);
     if plan.window_edge.is_some_and(|edge| app.window_refused == Some((id, look, edge))) {
@@ -474,7 +474,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // the frame's).
     let plain_view = hover_key.is_none()
         && !app.ui.soft_proof
-        && view_overlay(app, &d) == lightcraft_pipeline::Overlay::None
+        && view_overlay(app, &d) == dac_pipeline::Overlay::None
         && crate::region::same_aspect(display_aspect, aspect);
     let window_ctx = WindowCtx {
         id,
@@ -704,7 +704,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
 /// The info overlay at the canvas' top left (`view.infoOverlay`): file name with the capture date
 /// and size, or with the camera and exposure.
-fn info_overlay(app: &LightcraftApp, p: &egui::Painter, canvas: Rect, photo: &lightcraft_catalog::Photo) {
+fn info_overlay(app: &DacApp, p: &egui::Painter, canvas: Rect, photo: &dac_catalog::Photo) {
     use crate::state::InfoOverlay;
     let lines: Vec<String> = match app.ui.info_overlay {
         InfoOverlay::Off => return,
@@ -755,7 +755,7 @@ enum RegionEdit {
     /// The × was clicked.
     Remove(usize),
     /// A handle drag ended: the region's new box (normalized, upright frame).
-    Resize(usize, lightcraft_geom::Rect),
+    Resize(usize, dac_geom::Rect),
     /// A name was typed or picked for the face.
     Name(usize, String),
     /// The name box's offer to set up face recognition was pressed.
@@ -783,8 +783,8 @@ fn region_overlay(
     ui: &egui::Ui,
     p: &egui::Painter,
     map: &CanvasMap,
-    photo: &lightcraft_catalog::Photo,
-    orient: lightcraft_geom::Orientation,
+    photo: &dac_catalog::Photo,
+    orient: dac_geom::Orientation,
     hints: Option<&super::faces::Hints>,
     people: &[String],
     editing: &mut Option<crate::state::NameEdit>,
@@ -795,7 +795,7 @@ fn region_overlay(
     let pointer = ui.input(|i| i.pointer.hover_pos());
     // the box being dragged: (region index, its box so far)
     let drag_key = egui::Id::new("region-drag");
-    let live: Option<(usize, lightcraft_geom::Rect)> = ui.data(|d| d.get_temp(drag_key));
+    let live: Option<(usize, dac_geom::Rect)> = ui.data(|d| d.get_temp(drag_key));
     let mut edit = None;
     for (index, r) in photo.meta.regions.iter().enumerate() {
         let dragging = live.filter(|(i, _)| *i == index);
@@ -830,7 +830,7 @@ fn region_overlay(
                         n.max.y = pp.y.max(n.min.y + 12.0);
                     }
                     let (a, b) = (map.norm(n.min), map.norm(n.max));
-                    let shown = lightcraft_geom::Rect {
+                    let shown = dac_geom::Rect {
                         x0: a.x.min(b.x).clamp(0.0, 1.0),
                         y0: a.y.min(b.y).clamp(0.0, 1.0),
                         x1: a.x.max(b.x).clamp(0.0, 1.0),
@@ -842,10 +842,10 @@ fn region_overlay(
                     ui.ctx().request_repaint();
                 }
                 if resp.drag_stopped() {
-                    if let Some((i, new)) = ui.data(|d| d.get_temp::<(usize, lightcraft_geom::Rect)>(drag_key)) {
+                    if let Some((i, new)) = ui.data(|d| d.get_temp::<(usize, dac_geom::Rect)>(drag_key)) {
                         edit = Some(RegionEdit::Resize(i, new));
                     }
-                    ui.data_mut(|d| d.remove_temp::<(usize, lightcraft_geom::Rect)>(drag_key));
+                    ui.data_mut(|d| d.remove_temp::<(usize, dac_geom::Rect)>(drag_key));
                 }
             }
         }
@@ -865,7 +865,7 @@ fn region_overlay(
             }
         }
         // what the label says: the name, a guess to confirm ("Jane Doe?"), or on hover an invitation to name the face
-        let is_face = r.kind == lightcraft_meta::RegionKind::Face;
+        let is_face = r.kind == dac_meta::RegionKind::Face;
         let hint = hints.and_then(|h| h.by_index.get(&index));
         let hovered = pointer.is_some_and(|h| rect.expand(3.0).contains(h));
         let editing_this = editing.as_ref().is_some_and(|e| e.photo == photo.id.0 && e.index == index);
@@ -923,8 +923,8 @@ fn region_overlay(
 /// A small pill at the loupe's top left naming the active filters: the filmstrip and Next / Previous
 /// follow them, so a filter must never be invisible here. A click clears them all. It sits in the
 /// canvas margin, so the photo does not move.
-fn filter_pill(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect) {
-    let chips = lightcraft_engine::filter_chips(&app.session.filter, &app.session.catalog);
+fn filter_pill(app: &mut DacApp, ui: &mut egui::Ui, canvas: Rect) {
+    let chips = dac_engine::filter_chips(&app.session.filter, &app.session.catalog);
     if chips.is_empty() {
         return;
     }
@@ -976,7 +976,7 @@ const NAV_W: f32 = 180.0;
 
 /// The Navigator: while zoomed in, a mini map of the photo at the canvas' bottom right with the
 /// visible region outlined; click or drag on it to pan.
-fn navigator(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, img: Rect, id: PhotoId) {
+fn navigator(app: &mut DacApp, ui: &mut egui::Ui, canvas: Rect, img: Rect, id: PhotoId) {
     let zoomed = img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0;
     if !app.ui.navigator || !zoomed || app.ui.fullscreen {
         return;
@@ -1014,8 +1014,8 @@ fn navigator(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, img: Rect
 /// Neighbour prefetch: below on-screen thumbnails, above background thumbnail refreshes.
 const PREFETCH_PRIORITY: u32 = 4;
 
-fn quick_name(q: lightcraft_engine::media::QuickSource) -> &'static str {
-    use lightcraft_engine::media::QuickSource;
+fn quick_name(q: dac_engine::media::QuickSource) -> &'static str {
+    use dac_engine::media::QuickSource;
     match q {
         QuickSource::Cached => "cached",
         QuickSource::Embedded => "embedded",
@@ -1026,7 +1026,7 @@ fn quick_name(q: lightcraft_engine::media::QuickSource) -> &'static str {
 /// Targeted adjustment tool: dragging up/down on the photo raises/lowers the tone-curve region or
 /// the colour-mixer bands under the press point (`develop.targeted`, one call per whole step, all
 /// in one interaction = one undo step).
-fn targeted_drag(app: &mut LightcraftApp, resp: &egui::Response, map: &CanvasMap, target: &str) {
+fn targeted_drag(app: &mut DacApp, resp: &egui::Response, map: &CanvasMap, target: &str) {
     if resp.drag_started()
         && let Some(q) = resp.interact_pointer_pos()
     {
@@ -1056,8 +1056,8 @@ fn targeted_drag(app: &mut LightcraftApp, resp: &egui::Response, map: &CanvasMap
 
 /// The diagnostic overlay the loupe shows (the selected mask, Point Color's visualized range,
 /// Visualize Spots).
-pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcraft_pipeline::Overlay {
-    use lightcraft_pipeline::{MaskView, Overlay};
+pub(crate) fn view_overlay(app: &DacApp, d: &DevelopSettings) -> dac_pipeline::Overlay {
+    use dac_pipeline::{MaskView, Overlay};
     if app.ui.fullscreen {
         return Overlay::None;
     }
@@ -1083,7 +1083,7 @@ pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcra
     Overlay::None
 }
 
-fn clipping_overlay(app: &LightcraftApp, p: &egui::Painter, r: Rect) {
+fn clipping_overlay(app: &DacApp, p: &egui::Painter, r: Rect) {
     // Highlight clipped regions using the histogram's extremes isn't spatial; show a subtle frame hint.
     if let Some(h) = app.renderer.textures.get(&Slot::Main).and_then(|t| t.histogram.as_ref()) {
         let (lo, hi) = h.clipping();
@@ -1096,7 +1096,7 @@ fn clipping_overlay(app: &LightcraftApp, p: &egui::Painter, r: Rect) {
     }
 }
 
-fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img: Rect, canvas: Rect) {
+fn general_cursor(app: &DacApp, ui: &egui::Ui, resp: &egui::Response, img: Rect, canvas: Rect) {
     // A panel or overlay under the pointer keeps its own cursor.
     if !resp.dragged() && !resp.hovered() {
         return;
@@ -1117,7 +1117,7 @@ fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img
 }
 
 fn general_interaction(
-    app: &mut LightcraftApp,
+    app: &mut DacApp,
     ui: &mut egui::Ui,
     resp: &egui::Response,
     map: &CanvasMap,
@@ -1187,7 +1187,7 @@ fn general_interaction(
 
 // ------------------------------------------------------------------------ crop
 
-fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, frame: &Frame, d: &DevelopSettings, id: PhotoId) {
+fn crop_overlay(app: &mut DacApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, frame: &Frame, d: &DevelopSettings, id: PhotoId) {
     if app.ui.tool == "guidedUpright" {
         guided_overlay(app, ui, resp, map, frame, d);
         return;
@@ -1287,7 +1287,7 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
         match app.gesture.clone() {
             Some(Gesture::CropHandle { handle, start, angle }) => {
                 // The crop model decides what the drag does (anchor, aspect lock, image bounds): see
-                // `lightcraft_geom::drag_crop`; the UI only reports where the pointer started and is.
+                // `dac_geom::drag_crop`; the UI only reports where the pointer started and is.
                 let n = to_straight(map.norm(q), angle, frame);
                 let orig = ui.input(|i| i.pointer.press_origin()).map(|q0| to_straight(map.norm(q0), angle, frame)).unwrap_or(n);
                 let _ = app.run(
@@ -1313,7 +1313,7 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
 
 /// Guided Upright: draw up to four guides along lines that should be vertical or horizontal. Guides are
 /// stored in lens-corrected (pre-perspective) coordinates, so they stay attached to the image as it warps.
-fn guided_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, frame: &Frame, d: &DevelopSettings) {
+fn guided_overlay(app: &mut DacApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, frame: &Frame, d: &DevelopSettings) {
     let p = ui.painter_at(map.rect.expand(8.0));
     let col = Color32::from_rgb(255, 196, 40);
     let draw = |a: Pos2, b: Pos2| {
@@ -1453,7 +1453,7 @@ fn radial_body_contains(shape: &MaskShape, at: Point, map: &CanvasMap) -> bool {
 /// The Masking tool on the photo: outlines and handles of the selected mask, a pin per mask
 /// component (click selects its mask, drag moves the component), and brush painting. The mask
 /// itself shows as a rendered overlay ([`view_overlay`]).
-fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
+fn mask_overlay(app: &mut DacApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
     let tint = {
         let [r, g, b] = app.ui.mask_overlay_color;
         Color32::from_rgba_unmultiplied(r, g, b, 110)
@@ -1680,7 +1680,7 @@ fn pin(p: &egui::Painter, c: Pos2, sel: bool) {
 
 /// The Remove tool on the photo: every spot's outline and pin (the selected one with its source),
 /// click a pin to select its spot, drag a target or source to move it, paint elsewhere to add one.
-fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
+fn remove_overlay(app: &mut DacApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
     let long = (map.rect.width().max(map.rect.height())) as f64;
     let p = ui.painter_at(app.canvas_rect.unwrap_or(map.rect));
     let active = app.session.active_spot.filter(|i| *i < d.spots.len());
@@ -1795,7 +1795,7 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
 // ------------------------------------------------------------------------ red eye
 
 /// Red Eye tool: drag an ellipse over an eye (a new correction), click one to select it.
-fn eye_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
+fn eye_overlay(app: &mut DacApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
     // screen points per long-edge unit
     let o = map.screen(Point::new(0.0, 0.0));
     let (sx, sy) = (map.screen(Point::new(1.0, 0.0)).distance(o), map.screen(Point::new(0.0, 1.0)).distance(o));
@@ -1858,7 +1858,7 @@ fn film_label(name: &str) -> String {
     if name.chars().nth(14).is_some() { format!("{}…", name.chars().take(13).collect::<String>()) } else { name.to_string() }
 }
 
-pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
+pub(crate) fn filmstrip(app: &mut DacApp, ui: &mut egui::Ui, r: Rect) {
     let t = Tokens::get(ui.ctx());
     ui.painter().rect_filled(r, 0.0, t.canvas);
     ui.painter().rect_filled(Rect::from_min_size(r.min, vec2(r.width(), 4.0)), 0.0, Color32::from_gray(0x20));
@@ -1892,10 +1892,10 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
             let resp = ui.interact(cr, egui::Id::new(("film", id.0)), Sense::click());
             register(ui.ctx(), format!("film:{}", id.0), cr);
             let state = app.session.selection.state_of(*id);
-            let sel = state == lightcraft_engine::SelectionState::Active;
+            let sel = state == dac_engine::SelectionState::Active;
             let p = ui.painter();
             let label = app.session.catalog.photo(*id).and_then(|ph| ph.label);
-            let selected = state != lightcraft_engine::SelectionState::NotSelected;
+            let selected = state != dac_engine::SelectionState::NotSelected;
             let base = if selected {
                 t.cell_selected
             } else if resp.hovered() {
@@ -1919,7 +1919,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 p.image(tex.tex.id(), fr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
                 if sel {
                     p.rect_stroke(fr, 0.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Outside);
-                } else if state == lightcraft_engine::SelectionState::Selected {
+                } else if state == dac_engine::SelectionState::Selected {
                     p.rect_stroke(fr, 0.0, Stroke::new(1.5, Color32::from_gray(170)), StrokeKind::Outside);
                 }
                 if app.ui.settings.film_badges
@@ -1955,9 +1955,9 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
 }
 
 /// Rating, flag and edited badges along a filmstrip thumbnail's bottom edge (Settings → Interface).
-fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog::Photo) {
+fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &dac_catalog::Photo) {
     use crate::icons::{Icon, paint};
-    use lightcraft_catalog::Flag;
+    use dac_catalog::Flag;
     let edited = ph.is_edited();
     if ph.rating == 0 && ph.flag == Flag::None && !edited {
         return;
@@ -2010,7 +2010,7 @@ mod preview_geometry_tests {
 /// Straighten tool: drag along a horizon (or a vertical) to set the crop angle; double-click = Auto.
 /// The image is shown unrotated in the crop view, so the line's on-screen angle is its image angle.
 /// `held`: drawn with ⌘ held in the crop tool, which stays active afterwards.
-fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, held: bool) {
+fn straighten_overlay(app: &mut DacApp, ui: &mut egui::Ui, resp: &egui::Response, held: bool) {
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     if !held && resp.double_clicked() {
         let _ = app.run("crop.autoStraighten", json!({}));

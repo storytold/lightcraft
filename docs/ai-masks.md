@@ -49,7 +49,7 @@ a Mac runs SAM 3. Build both ends from the same revision. On the Mac, install th
 as described below, then run:
 
 ```sh
-cargo build --release --locked -p lightcraft-segment --bin lightcraft-sam3-worker
+cargo build --release --locked -p dac-segment --bin lightcraft-sam3-worker
 target/release/lightcraft-sam3-worker "$HOME/Library/Application Support/LightCraft/models/sam3" 127.0.0.1:8793
 ```
 
@@ -210,10 +210,10 @@ wait and return the result (when built with the `sam` feature; the default CLI h
   with 2-D RoPE and windowed attention, the feature pyramids, the SAM 2-style prompt encoder and
   two-way mask decoder for clicks, and the CLIP text encoder, DETR encoder/decoder (box
   relative-position bias, presence token) and pixel decoder for text. The CLIP tokenizer is a
-  small BPE in `tokenizer.rs`. The downloader (original code) is the `lightcraft-fetch` crate, shared by any model that is downloaded; `fetch/` here says what SAM 3 needs.
+  small BPE in `tokenizer.rs`. The downloader (original code) is the `dac-fetch` crate, shared by any model that is downloaded; `fetch/` here says what SAM 3 needs.
 - candle is pinned at 0.9.2: later releases make `candle-core` depend on `tokenizers` with the
   Oniguruma C library, and the product is pure Rust. Weights are read with positional reads (no
-  memory map: `unsafe` stays in `lightcraft-sysmem`), only the tensors a path needs, and every
+  memory map: `unsafe` stays in `dac-sysmem`), only the tensors a path needs, and every
   tensor's byte range is checked against the file's length when it is opened (a truncated or
   damaged file is an error, never a crash).
 - The engine (`crates/engine/src/segment/`) owns one worker thread with the model and the last
@@ -234,5 +234,5 @@ wait and return the result (when built with the `sam` feature; the default CLI h
 ```sh
 python3 -m venv .venv-sam3 && .venv-sam3/bin/pip install -r tools/requirements-sam3-reference.txt
 .venv-sam3/bin/python tools/sam3_reference.py photo.jpg ref.safetensors
-LIGHTCRAFT_SAM3_DIR=<model dir> LIGHTCRAFT_SAM3_REF=ref.safetensors cargo test -p lightcraft-segment --release -- --nocapture
+LIGHTCRAFT_SAM3_DIR=<model dir> LIGHTCRAFT_SAM3_REF=ref.safetensors cargo test -p dac-segment --release -- --nocapture
 ```

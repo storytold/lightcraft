@@ -1,9 +1,9 @@
 //! Resume a denoise request after model setup, bound to its original photo and library.
 
 use crate::i18n::tr;
-use crate::{LightcraftApp, state::Dialog};
-use lightcraft_catalog::{PhotoId, Source};
-use lightcraft_engine::denoise::PhotoState;
+use crate::{DacApp, state::Dialog};
+use dac_catalog::{PhotoId, Source};
+use dac_engine::denoise::PhotoState;
 use serde_json::{Value, json};
 
 struct Request {
@@ -13,12 +13,12 @@ struct Request {
 }
 
 impl Request {
-    fn capture(app: &LightcraftApp, id: PhotoId) -> Result<Self, String> {
+    fn capture(app: &DacApp, id: PhotoId) -> Result<Self, String> {
         let photo = app.session.catalog.photo(id).filter(|p| !p.deleted).ok_or("the requested photo is no longer available")?;
         Ok(Self { library: app.session.library_generation(), photo: id, source: photo.source.clone() })
     }
 
-    fn valid(&self, app: &LightcraftApp) -> bool {
+    fn valid(&self, app: &DacApp) -> bool {
         self.library == app.session.library_generation()
             && app.session.catalog.photo(self.photo).is_some_and(|p| !p.deleted && p.source == self.source)
     }
@@ -30,11 +30,11 @@ pub(crate) struct Pending {
     next_check: f64,
 }
 
-pub(crate) fn denoise_requested(app: &LightcraftApp, id: PhotoId) -> bool {
+pub(crate) fn denoise_requested(app: &DacApp, id: PhotoId) -> bool {
     app.model_setup.denoise.as_ref().is_some_and(|r| r.photo == id && r.valid(app))
 }
 
-pub(crate) fn intercept(app: &mut LightcraftApp, command: &str, params: &Value) -> Option<Result<Value, String>> {
+pub(crate) fn intercept(app: &mut DacApp, command: &str, params: &Value) -> Option<Result<Value, String>> {
     if matches!(command, "app.openLibrary" | "file.restoreLibrary") {
         app.model_setup = Pending::default();
         return None;
@@ -91,7 +91,7 @@ pub(crate) fn intercept(app: &mut LightcraftApp, command: &str, params: &Value) 
     }))
 }
 
-pub(crate) fn notice(app: &mut LightcraftApp, ui: &mut egui::Ui, kind: &str) {
+pub(crate) fn notice(app: &mut DacApp, ui: &mut egui::Ui, kind: &str) {
     if kind != "denoise" || !app.model_setup.denoise.as_ref().is_some_and(|r| r.valid(app)) {
         return;
     }
@@ -104,7 +104,7 @@ pub(crate) fn notice(app: &mut LightcraftApp, ui: &mut egui::Ui, kind: &str) {
     ui.add_space(6.0);
 }
 
-pub(crate) fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub(crate) fn pump(app: &mut DacApp, ctx: &egui::Context) {
     if app.model_setup.denoise.is_none() {
         return;
     }

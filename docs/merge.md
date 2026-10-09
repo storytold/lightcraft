@@ -43,7 +43,7 @@ push–pull diffusion. Output: 16-bit integer DNG (16-bit float for HDR panorama
 scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB), other sources get
 `ColorMatrix1`/`ForwardMatrix1` of their RGB space.
 
-## Measured (synthetic tests, `cargo test -p lightcraft-merge`)
+## Measured (synthetic tests, `cargo test -p dac-merge`)
 
 - HDR, 3 brackets ±2 EV with 14-bit noise and handheld shifts: alignment error < 0.3 px, exposure
   error < 0.02 EV, radiance median log error < 0.03 (noise-limited, bias < 0.01), recovered

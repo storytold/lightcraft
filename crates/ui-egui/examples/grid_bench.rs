@@ -1,5 +1,5 @@
 //! Unchanged-frame cost of the photo grid (issue #35), on synthetic libraries:
-//! `cargo run --release -p lightcraft-ui-egui --example grid_bench`
+//! `cargo run --release -p dac-ui-egui --example grid_bench`
 //! (`SIZES=200,10000,85000` photos, `FRAMES=60` measured frames per scenario).
 //!
 //! Each scenario builds a library of N photos (mixed aspect ratios, ~40 photos per capture day,
@@ -13,11 +13,11 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::time::{Duration, Instant};
 
-use lightcraft_catalog::{Op, Photo, PhotoId, Source, Stack, StackId};
-use lightcraft_engine::{Browse, LibrarySource, Session};
-use lightcraft_ui_egui::headless::Headless;
-use lightcraft_ui_egui::state::ViewMode;
-use lightcraft_ui_egui::{LightcraftApp, Services};
+use dac_catalog::{Op, Photo, PhotoId, Source, Stack, StackId};
+use dac_engine::{Browse, LibrarySource, Session};
+use dac_ui_egui::headless::Headless;
+use dac_ui_egui::state::ViewMode;
+use dac_ui_egui::{DacApp, Services};
 
 /// Counts allocations made by the current thread (the UI thread is the one measured).
 struct Counting;
@@ -109,7 +109,7 @@ fn scenario(n: usize, view: ViewMode, local: bool, frames: usize) {
     let t0 = Instant::now();
     let session = library(n, local);
     let services = Services { png: None, ..Default::default() };
-    let app = LightcraftApp::new(session, services);
+    let app = DacApp::new(session, services);
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     h.app.ui.view = view;
     h.app.ui.thumb_size = 160.0;

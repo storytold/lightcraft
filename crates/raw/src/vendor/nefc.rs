@@ -49,7 +49,7 @@
 
 use super::pef::{Bits, Huffman, diff};
 use crate::{MAX_SAMPLES, RawError, Result};
-use lightcraft_tiff::ByteOrder;
+use dac_tiff::ByteOrder;
 
 /// A table code word whose symbol was never observed (see the module docs).
 const UNSEEN: u8 = u8::MAX;
@@ -452,8 +452,8 @@ mod tests {
     /// A minimal NEF: CFA SubIFD with one compressed strip, Exif maker note (`Nikon\0` v2 header + embedded TIFF in
     /// `mn_order`) holding the linearization table.
     fn nef_file(strip: Vec<u8>, w: u32, h: u32, bits: u16, table: Vec<u8>, mn_order: ByteOrder) -> Vec<u8> {
-        use lightcraft_tiff::tags::{self as t, photometric};
-        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+        use dac_tiff::tags::{self as t, photometric};
+        use dac_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
         let mut mn = IfdBuilder::new();
         mn.set(0x0096, Value::Undefined(table));
         let mut note = b"Nikon\0\x02\x10\0\0".to_vec();

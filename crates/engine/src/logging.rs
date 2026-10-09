@@ -99,8 +99,8 @@ mod tests {
     fn rust_log_directives_set_lightcraft_s_level() {
         assert_eq!(level_from(None, Some("lightcraft=debug,wgpu=warn")), LevelFilter::Debug);
         assert_eq!(level_from(None, Some("wgpu_core=trace")), LevelFilter::Warn, "other crates' directives don't apply");
-        assert_eq!(level_from(None, Some("error,lightcraft_gpu=info")), LevelFilter::Info);
-        assert_eq!(level_from(None, Some("lightcraft_gpu=info,lightcraft_engine=trace")), LevelFilter::Trace);
+        assert_eq!(level_from(None, Some("error,dac_gpu=info")), LevelFilter::Info);
+        assert_eq!(level_from(None, Some("dac_gpu=info,dac_engine=trace")), LevelFilter::Trace);
         assert_eq!(level_from(None, Some("info,naga=off")), LevelFilter::Info);
     }
 
@@ -109,10 +109,10 @@ mod tests {
         let log = StderrLog::new("test", LevelFilter::Debug);
         let meta = |level, target| Metadata::builder().level(level).target(target).build();
         assert!(log.enabled(&meta(Level::Warn, "wgpu_core::device")));
-        assert!(log.enabled(&meta(Level::Debug, "lightcraft_gpu::ctx")));
+        assert!(log.enabled(&meta(Level::Debug, "dac_gpu::ctx")));
         assert!(!log.enabled(&meta(Level::Info, "wgpu_core::device")));
-        assert!(!log.enabled(&meta(Level::Trace, "lightcraft_gpu::ctx")));
+        assert!(!log.enabled(&meta(Level::Trace, "dac_gpu::ctx")));
         let quiet = StderrLog::new("test", LevelFilter::Off);
-        assert!(!quiet.enabled(&meta(Level::Error, "lightcraft_engine")));
+        assert!(!quiet.enabled(&meta(Level::Error, "dac_engine")));
     }
 }

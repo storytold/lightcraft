@@ -3,7 +3,7 @@
 //! is compared with the local texture so detail doesn't trigger it, and each candidate blob
 //! must be small and roughly round.
 
-use lightcraft_raster::{Plane, Rgba8, blur::gaussian};
+use dac_raster::{Plane, Rgba8, blur::gaussian};
 
 /// A found spot: centre (0..1 of the image's width / height) and radius (fraction of the long
 /// edge), with how much darker it is (0..1).
@@ -113,12 +113,12 @@ mod tests {
 
     #[test]
     fn textured_scenes_give_few_false_spots() {
-        let img = lightcraft_scenes::demo_library()[2].render(600, 400);
+        let img = dac_scenes::demo_library()[2].render(600, 400);
         let data = img
             .data
             .iter()
             .map(|c| {
-                let e = |v: f32| (lightcraft_color::transfer::linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0) as u8;
+                let e = |v: f32| (dac_color::transfer::linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0) as u8;
                 [e(c[0]), e(c[1]), e(c[2]), 255]
             })
             .collect();

@@ -2,17 +2,17 @@
 //! (longitude/latitude map) and photographed by pinhole cameras with known rotations and focal
 //! length. The stitch must recover the geometry and reproduce the environment without seams.
 
-use lightcraft_merge::frame::Frame;
-use lightcraft_merge::linalg::{self, M3};
-use lightcraft_merge::no_progress;
-use lightcraft_merge::pano::{PanoOptions, Projection, stitch};
-use lightcraft_raster::Rgb32f;
+use dac_merge::frame::Frame;
+use dac_merge::linalg::{self, M3};
+use dac_merge::no_progress;
+use dac_merge::pano::{PanoOptions, Projection, stitch};
+use dac_raster::Rgb32f;
 
 const THETA: f64 = 200.0; // degrees of longitude covered by the environment map
 const PHI: f64 = 70.0;
 
 fn env() -> Rgb32f {
-    let scene = lightcraft_scenes::demo_library().into_iter().find(|s| s.kind == lightcraft_scenes::Kind::Canyon).unwrap();
+    let scene = dac_scenes::demo_library().into_iter().find(|s| s.kind == dac_scenes::Kind::Canyon).unwrap();
     let img = scene.render(2400, 840);
     let mut l: Vec<f32> = img.data.iter().map(|p| p[1]).collect();
     l.sort_by(|a, b| a.total_cmp(b));
@@ -61,7 +61,7 @@ struct Shot {
     gain: f32,
 }
 
-fn run(shots: &[Shot], f: f64, opts: &PanoOptions) -> (lightcraft_merge::pano::PanoResult, Vec<M3>, Rgb32f) {
+fn run(shots: &[Shot], f: f64, opts: &PanoOptions) -> (dac_merge::pano::PanoResult, Vec<M3>, Rgb32f) {
     let e = env();
     let rs: Vec<M3> = shots.iter().map(|s| rot(s.yaw, s.pitch, s.roll)).collect();
     let frames: Vec<Frame> = shots.iter().zip(&rs).map(|(s, r)| shoot(&e, r, f, 800, 600, s.gain)).collect();
@@ -84,7 +84,7 @@ fn run(shots: &[Shot], f: f64, opts: &PanoOptions) -> (lightcraft_merge::pano::P
 
 /// Check the recovered geometry and compare the panorama with the environment rendered through the
 /// recovered projection; returns (median, p99) of the log error over covered pixels.
-fn check(res: &lightcraft_merge::pano::PanoResult, rs: &[M3], e: &Rgb32f, f: f64) -> (f32, f32, f32) {
+fn check(res: &dac_merge::pano::PanoResult, rs: &[M3], e: &Rgb32f, f: f64) -> (f32, f32, f32) {
     let cams: Vec<_> = res.cameras.iter().map(|c| c.expect("all frames used")).collect();
     for c in &cams {
         assert!((c.f - f).abs() / f < 0.01, "focal {} vs {f}", c.f);
@@ -113,7 +113,7 @@ fn check(res: &lightcraft_merge::pano::PanoResult, rs: &[M3], e: &Rgb32f, f: f64
     let (bx, by) = res.origin;
     // the environment rendered through the recovered geometry (alpha 0 where it has no data)
     let mut truth = Rgb32f::new(w, h);
-    let mut talpha = lightcraft_raster::Plane::new(w, h);
+    let mut talpha = dac_raster::Plane::new(w, h);
     for y in 0..h {
         for x in 0..w {
             let d = res.projection.inverse(x as f64 + 0.5 + bx, y as f64 + 0.5 + by, scale);
@@ -167,7 +167,7 @@ fn ppm(path: &str, img: &Rgb32f) {
 }
 
 /// Per column: mean change of log luminance to the next column (where both are covered).
-fn column_steps(img: &Rgb32f, alpha: &lightcraft_raster::Plane) -> Vec<Option<f32>> {
+fn column_steps(img: &Rgb32f, alpha: &dac_raster::Plane) -> Vec<Option<f32>> {
     let (w, h) = (img.width, img.height);
     (0..w - 1)
         .map(|x| {
@@ -241,7 +241,7 @@ fn auto_projection_and_finishing() {
 
 #[test]
 fn unrelated_photos_do_not_stitch() {
-    let a = lightcraft_scenes::demo_library();
+    let a = dac_scenes::demo_library();
     let frames: Vec<Frame> = a.iter().take(2).map(|s| Frame::from_linear_rec2020(s.render(400, 300), None)).collect();
     assert!(stitch(frames, &PanoOptions::default(), &no_progress).is_err());
 }

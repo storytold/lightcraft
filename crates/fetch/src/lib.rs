@@ -10,7 +10,7 @@
 //! resumes from where it stopped. A file that fails its check is deleted, never kept.
 //!
 //! What to download and where from belongs to the caller: it passes the [`FileSpec`]s and the
-//! default mirrors (see [`mirrors`]). `lightcraft-segment` does so for the SAM 3 weights, which
+//! default mirrors (see [`mirrors`]). `dac-segment` does so for the SAM 3 weights, which
 //! are never part of LightCraft (SAM License, see docs/ai-masks.md).
 //!
 //! Native only: on wasm32 this crate is empty (the web build downloads no models).

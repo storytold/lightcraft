@@ -1,5 +1,5 @@
 [package]
-name = "lightcraft-catalog"
+name = "dac-catalog"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,8 +9,8 @@ description = "LightCraft library: photos, albums, ratings/flags, search/filter/
 workspace = true
 
 [dependencies]
-lightcraft-develop = { workspace = true }
-lightcraft-meta = { workspace = true }
+dac-develop = { workspace = true }
+dac-meta = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

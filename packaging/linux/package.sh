@@ -42,7 +42,7 @@ BASENAME="lightcraft-$VERSION-linux-$ARCH"
 echo "==> LightCraft $VERSION for Linux $ARCH ($FORMATS)"
 
 if [ "$SKIP_BUILD" = 0 ]; then
-  (cd "$ROOT" && cargo build --release --locked -p lightcraft -p lightcraft-cli)
+  (cd "$ROOT" && cargo build --release --locked -p dac-app -p dac-cli)
 fi
 BIN="$CARGO_TARGET_DIR/release"
 WORK="$CARGO_TARGET_DIR/linux-package"

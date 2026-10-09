@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use lightcraft_develop::DevelopSettings;
+use dac_develop::DevelopSettings;
 
 use super::*;
 
@@ -23,7 +23,7 @@ fn apply_and_inverse_roundtrip() {
         Op::SetLabel { id: a, label: Some(ColorLabel::Red) },
         Op::SetDevelop {
             id: a,
-            settings: Arc::new(DevelopSettings { treatment: lightcraft_develop::Treatment::Bw, ..Default::default() }),
+            settings: Arc::new(DevelopSettings { treatment: dac_develop::Treatment::Bw, ..Default::default() }),
             label: "B&W".into(),
             edited: Some("x".into()),
         },
@@ -312,7 +312,7 @@ fn folder_identity_ignores_spelling() {
 /// first; pets and unnamed faces are not people; the `person` filter and `person:` token match.
 #[test]
 fn people_from_named_face_regions() {
-    use lightcraft_meta::{Rect, Region, RegionKind};
+    use dac_meta::{Rect, Region, RegionKind};
     let region = |name: Option<&str>, kind: RegionKind| Region {
         rect: Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 },
         kind,
@@ -381,9 +381,9 @@ fn empty_regions_are_not_serialized_and_default_when_missing() {
     let back: Meta = serde_json::from_value(v).unwrap();
     assert!(back.regions.is_empty());
     let mut with = m.clone();
-    with.regions.push(lightcraft_meta::Region {
-        rect: lightcraft_meta::Rect { x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.2 },
-        kind: lightcraft_meta::RegionKind::Face,
+    with.regions.push(dac_meta::Region {
+        rect: dac_meta::Rect { x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.2 },
+        kind: dac_meta::RegionKind::Face,
         name: Some("A".into()),
         description: None,
     });

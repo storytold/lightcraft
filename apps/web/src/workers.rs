@@ -16,13 +16,13 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use dac_engine::catalog::PhotoId;
+use dac_engine::media::{RenderJob, RenderResult, SourceLevel};
+use dac_engine::pipeline::Rendered;
+use dac_preview::{Hash128, PreviewCache};
+use dac_raster::{Histogram, Rgba8};
+use dac_ui_egui::render::{RenderOffload, Slot};
 use js_sys::{Array, Object, Reflect, Uint8Array, Uint32Array};
-use lightcraft_engine::catalog::PhotoId;
-use lightcraft_engine::media::{RenderJob, RenderResult, SourceLevel};
-use lightcraft_engine::pipeline::Rendered;
-use lightcraft_preview::{Hash128, PreviewCache};
-use lightcraft_raster::{Histogram, Rgba8};
-use lightcraft_ui_egui::render::{RenderOffload, Slot};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
@@ -94,7 +94,7 @@ async fn handle(scope: &web_sys::DedicatedWorkerGlobalScope, backend: Option<Bac
         if job.thumb_cached
             && let (Some(b), Some(key)) = (&backend, job.thumb_key())
         {
-            match b.read(&key).await.ok().flatten().and_then(|bytes| lightcraft_preview::decode_jpeg(&bytes)) {
+            match b.read(&key).await.ok().flatten().and_then(|bytes| dac_preview::decode_jpeg(&bytes)) {
                 Some(image) => {
                     let histogram = Histogram::of_srgb8(&image);
                     return Ok((Rendered { image, histogram, deep: None }, 0));
@@ -113,7 +113,7 @@ async fn handle(scope: &web_sys::DedicatedWorkerGlobalScope, backend: Option<Bac
         let rendered = CORE.with(|c| c.borrow_mut().render(&job, original.as_deref()))?;
         let mut stored = 0;
         if let (Some(b), Some(key)) = (&backend, job.thumb_key())
-            && let Some(jpeg) = lightcraft_preview::encode_jpeg(&rendered.image)
+            && let Some(jpeg) = dac_preview::encode_jpeg(&rendered.image)
         {
             match b.write(&key, &jpeg).await {
                 Ok(()) => stored = jpeg.len() as u32,

@@ -1,4 +1,4 @@
-// The per-pixel stage: a straight port of `lightcraft_pipeline::finish` (keep in step with it).
+// The per-pixel stage: a straight port of `dac_pipeline::finish` (keep in step with it).
 // Bindings: img (rgb, pre-exposure), log_l, base, clar, tex, dark, masks (NMASK planes, then the
 // blurred chromaticity when HAS_CHROMA), aux
 // (tone LUT | chroma curve | sRGB LUT | curve LUTs | mask terms), out (packed RGBA8).

@@ -1,7 +1,7 @@
 //! Exif / TIFF tags → [`Metadata`] (CIPA DC-008 Exif 2.32, TIFF 6.0, DNG 1.7 tag semantics).
 
 use crate::{DateTime, Flash, Gps, Metadata, Orientation};
-use lightcraft_tiff::{Ifd, Tiff, TiffError, tags as t};
+use dac_tiff::{Ifd, Tiff, TiffError, tags as t};
 
 /// Strip an `Exif\0\0` (or `Exif\0\xff`) prefix as found in JPEG APP1 and some WebP `EXIF` chunks.
 pub fn strip_exif_header(b: &[u8]) -> &[u8] {
@@ -101,8 +101,8 @@ pub fn from_tiff(tiff: &Tiff) -> Metadata {
     if let Some(iptc) = ifd0.and_then(|i| i.value(t::IPTC_NAA)) {
         // IPTC-NAA is often typed LONG; re-serialise to bytes in file order.
         let bytes = match iptc {
-            lightcraft_tiff::Value::Byte(b) | lightcraft_tiff::Value::Undefined(b) => b.clone(),
-            other => lightcraft_tiff::writer::encode(tiff.order, other),
+            dac_tiff::Value::Byte(b) | dac_tiff::Value::Undefined(b) => b.clone(),
+            other => dac_tiff::writer::encode(tiff.order, other),
         };
         m.fill_missing(&crate::parse_iptc(&bytes));
     }
@@ -141,7 +141,7 @@ fn read_gps(g: &Ifd) -> Option<Gps> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
+    use dac_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
 
     pub(crate) fn sample_exif(order: ByteOrder) -> Vec<u8> {
         let mut exif = IfdBuilder::new();
@@ -258,8 +258,8 @@ pub(crate) mod tests {
 /// `Exif\0\0` prefix): IFD0 (make, model, software, artist, copyright, description, orientation,
 /// date), the Exif IFD (capture settings, lens) and, when present, the GPS IFD.
 pub fn write_exif(meta: &Metadata) -> Vec<u8> {
-    use lightcraft_tiff::writer::{rational, srational};
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
+    use dac_tiff::writer::{rational, srational};
+    use dac_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
     let ascii = |s: &Option<String>| s.as_ref().filter(|v| !v.is_empty()).map(|v| Value::Ascii(v.clone()));
     let mut ifd0 = IfdBuilder::new();
     for (tag, v) in [

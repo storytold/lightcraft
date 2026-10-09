@@ -1,6 +1,6 @@
 //! Background export: the Export dialog, File → Export with Preset and Export with Previous hand
 //! their batch to a worker thread so the window stays responsive. Photos are prepared on the UI
-//! thread ([`lightcraft_engine::export::prepare_export`]: cheap, needs the session) and rendered,
+//! thread ([`dac_engine::export::prepare_export`]: cheap, needs the session) and rendered,
 //! encoded and written on the worker; a progress panel shows the count and a Cancel button.
 //!
 //! Needs [`crate::Services::write_shared`] (a thread-safe writer); without it (web) the batch runs
@@ -10,11 +10,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 
+use dac_engine::export::{Destination, ExportOptions, PreparedExport, run_batch};
 use egui::Align2;
-use lightcraft_engine::export::{Destination, ExportOptions, PreparedExport, run_batch};
 use serde_json::{Value, json};
 
-use crate::LightcraftApp;
+use crate::DacApp;
 use crate::theme::Tokens;
 
 pub struct ExportTask {
@@ -34,7 +34,7 @@ impl ExportTask {
 }
 
 /// Start exporting `items` in the background. Errors per photo are collected, not fatal.
-pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOptions, to: Destination) -> Result<Value, String> {
+pub fn start(app: &mut DacApp, items: Vec<PreparedExport>, opts: ExportOptions, to: Destination) -> Result<Value, String> {
     if app.export.is_some() {
         return Err("an export is already running".into());
     }
@@ -63,7 +63,7 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
 }
 
 /// Per frame: draw the progress panel; when the batch finishes, report it.
-pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn poll(app: &mut DacApp, ctx: &egui::Context) {
     let Some(task) = &app.export else { return };
     match task.rx.try_recv() {
         Ok(r) => {

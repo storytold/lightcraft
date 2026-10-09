@@ -1,28 +1,32 @@
 [package]
-name = "lightcraft"
+name = "dac-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-default-run = "lightcraft"
+default-run = "app"
+
+[[bin]]
+name = "app"
+path = "src/main.rs"
 
 [lints]
 workspace = true
 
 [features]
 default = ["denoise"]
-denoise = ["lightcraft-engine/denoise"]
-rawnind-model = ["denoise", "lightcraft-engine/rawnind-model"]
-# Open HEIC/HEIF photos (the optional lightcraft-heif crate). Not default so distributors choose
+denoise = ["dac-engine/denoise"]
+rawnind-model = ["denoise", "dac-engine/rawnind-model"]
+# Open HEIC/HEIF photos (the optional dac-heif crate). Not default so distributors choose
 # it (HEVC patents); build with `--features heif` to include it.
-heif = ["lightcraft-codecs/heif"]
+heif = ["dac-codecs/heif"]
 
 [dependencies]
-lightcraft-engine = { workspace = true, features = ["sam"] }
-lightcraft-sysmem = { workspace = true }
-lightcraft-ui-egui = { workspace = true }
-lightcraft-codecs = { workspace = true }
-lightcraft-raster = { workspace = true }
+dac-engine = { workspace = true, features = ["sam"] }
+dac-sysmem = { workspace = true }
+dac-ui-egui = { workspace = true }
+dac-codecs = { workspace = true }
+dac-raster = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
 egui = { workspace = true }
 serde_json = { workspace = true }

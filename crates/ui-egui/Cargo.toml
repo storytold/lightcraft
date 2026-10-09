@@ -1,5 +1,5 @@
 [package]
-name = "lightcraft-ui-egui"
+name = "dac-ui-egui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,25 +9,25 @@ description = "LightCraft egui frontend (Lightroom-style UI); swappable — noth
 workspace = true
 
 [dependencies]
-lightcraft-geom = { workspace = true }
-lightcraft-meta = { workspace = true }
-lightcraft-color = { workspace = true }
-lightcraft-raster = { workspace = true }
-lightcraft-develop = { workspace = true }
-lightcraft-pipeline = { workspace = true }
-lightcraft-catalog = { workspace = true }
+dac-geom = { workspace = true }
+dac-meta = { workspace = true }
+dac-color = { workspace = true }
+dac-raster = { workspace = true }
+dac-develop = { workspace = true }
+dac-pipeline = { workspace = true }
+dac-catalog = { workspace = true }
 web-time = { workspace = true }
-lightcraft-engine = { workspace = true }
-lightcraft-preview = { workspace = true }
+dac-engine = { workspace = true }
+dac-preview = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]
-lightcraft-denoise = { workspace = true, features = ["runtime"] }
-lightcraft-codecs = { workspace = true }
-lightcraft-faces = { workspace = true }
+dac-denoise = { workspace = true, features = ["runtime"] }
+dac-codecs = { workspace = true }
+dac-faces = { workspace = true }
 
 [build-dependencies]
 serde_json = { workspace = true }

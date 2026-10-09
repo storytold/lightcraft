@@ -7,9 +7,9 @@
 //! - [`Remote`] talks to a running desktop app through its loopback JSON-lines control channel
 //!   (`lightcraft --control 7980`): one `{"id","method","params"}` line in, one
 //!   `{"id","ok","result"|"error"}` line out (see `docs/control-protocol.md`).
-//! - [`Headless`] hosts an in-process [`lightcraft_engine::Session`] and answers the same
+//! - [`Headless`] hosts an in-process [`dac_engine::Session`] and answers the same
 //!   control-channel method names itself (rendering with the engine's pipeline and encoding with
-//!   `lightcraft-codecs`), so agents can develop photos and look at the result without a window.
+//!   `dac-codecs`), so agents can develop photos and look at the result without a window.
 //!
 //! Entry points: [`Server::serve`] (stdio loop) and [`Server::handle_line`] (one message).
 #![forbid(unsafe_code)]

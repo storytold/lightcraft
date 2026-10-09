@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
 
-const BIN: &str = env!("CARGO_BIN_EXE_lightcraft-cli");
+const BIN: &str = env!("CARGO_BIN_EXE_app-cli");
 
 fn tmp(name: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("lightcraft-cli-test-{}", std::process::id()));
@@ -14,8 +14,8 @@ fn tmp(name: &str) -> std::path::PathBuf {
 }
 
 fn gradient_png(path: &std::path::Path) {
-    let img = lightcraft_raster::Rgba8::from_fn(120, 80, |x, y| [(x * 2) as u8, (y * 3) as u8, 100, 255]);
-    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap();
+    let img = dac_raster::Rgba8::from_fn(120, 80, |x, y| [(x * 2) as u8, (y * 3) as u8, 100, 255]);
+    let png = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap();
     std::fs::write(path, png).unwrap();
 }
 
@@ -33,7 +33,7 @@ fn calibrate_reads_raf_inputs_and_reports_bad_files() {
 }
 
 fn mean(path: &std::path::Path) -> f64 {
-    let d = lightcraft_codecs::decode(&std::fs::read(path).unwrap(), Default::default()).unwrap();
+    let d = dac_codecs::decode(&std::fs::read(path).unwrap(), Default::default()).unwrap();
     let img = d.to_srgb8();
     img.data.iter().map(|p| (p[0] as u32 + p[1] as u32 + p[2] as u32) as f64).sum::<f64>() / (3 * img.data.len()) as f64
 }
@@ -88,9 +88,9 @@ fn render_subcommand() {
         .status()
         .unwrap();
     assert!(st.success());
-    let d = lightcraft_codecs::decode(&std::fs::read(&out).unwrap(), Default::default()).unwrap();
+    let d = dac_codecs::decode(&std::fs::read(&out).unwrap(), Default::default()).unwrap();
     assert_eq!((d.width, d.height), (60, 40));
-    let d = lightcraft_codecs::decode(&std::fs::read(&plain).unwrap(), Default::default()).unwrap();
+    let d = dac_codecs::decode(&std::fs::read(&plain).unwrap(), Default::default()).unwrap();
     assert_eq!((d.width, d.height), (120, 80));
     assert!(mean(&out) > mean(&plain) + 10.0);
     // Bad control id fails cleanly.
@@ -128,9 +128,9 @@ fn render_export_options() {
         .status()
         .unwrap();
     assert!(st.success());
-    let d = lightcraft_codecs::decode(&std::fs::read(&out).unwrap(), Default::default()).unwrap();
+    let d = dac_codecs::decode(&std::fs::read(&out).unwrap(), Default::default()).unwrap();
     assert_eq!((d.width, d.height), (60, 40));
-    assert_eq!(d.space.named, Some(lightcraft_codecs::NamedSpace::DisplayP3));
+    assert_eq!(d.space.named, Some(dac_codecs::NamedSpace::DisplayP3));
     // original + sidecar named after the output
     let out = tmp("o-copy.png");
     let st = Command::new(BIN)
@@ -188,7 +188,7 @@ fn snapshot_subcommand_renders_the_ui_headlessly() {
     assert_eq!(replies.len(), 6);
     assert!(replies.iter().all(|r| r["ok"] == true), "{replies:?}");
     for (p, dimmed) in [(&a, false), (&b, true)] {
-        let d = lightcraft_codecs::decode(&std::fs::read(p).unwrap(), Default::default()).unwrap();
+        let d = dac_codecs::decode(&std::fs::read(p).unwrap(), Default::default()).unwrap();
         assert_eq!((d.width, d.height), (640, 400));
         // the export dialog dims everything around it
         assert_eq!(mean(p) < mean(&a) - 2.0, dimmed, "{}", p.display());
@@ -196,7 +196,7 @@ fn snapshot_subcommand_renders_the_ui_headlessly() {
     // no script: one settled screenshot, at 2× scale
     let o = Command::new(BIN).args(["snapshot", "-o", a.to_str().unwrap(), "--size", "320x240", "--scale", "2"]).output().unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-    let d = lightcraft_codecs::decode(&std::fs::read(&a).unwrap(), Default::default()).unwrap();
+    let d = dac_codecs::decode(&std::fs::read(&a).unwrap(), Default::default()).unwrap();
     assert_eq!((d.width, d.height), (640, 480));
 }
 
@@ -229,7 +229,7 @@ fn snapshot_script_failure_exits_non_zero() {
     assert!(replies[0]["error"].as_str().unwrap_or("").contains("grid"), "{replies:?}");
     assert_eq!(replies[1]["ok"], true, "{replies:?}");
     // continue-and-report: the final screenshot is still written
-    let d = lightcraft_codecs::decode(&std::fs::read(&out).unwrap(), Default::default()).unwrap();
+    let d = dac_codecs::decode(&std::fs::read(&out).unwrap(), Default::default()).unwrap();
     assert_eq!((d.width, d.height), (320, 200));
 }
 
@@ -251,7 +251,7 @@ fn snapshot_ui_zoom_keeps_requested_pixel_dimensions() {
         let replies: Vec<Value> = String::from_utf8_lossy(&o.stdout).lines().map(|line| serde_json::from_str(line).unwrap()).collect();
         assert!(replies.iter().all(|reply| reply["ok"] == true), "{replies:?}");
         assert!(replies[1]["result"]["pixelsPerPoint"].as_f64().unwrap() > scale.parse::<f64>().unwrap());
-        let decoded = lightcraft_codecs::decode(&std::fs::read(out).unwrap(), Default::default()).unwrap();
+        let decoded = dac_codecs::decode(&std::fs::read(out).unwrap(), Default::default()).unwrap();
         assert_eq!((decoded.width, decoded.height), expected);
     }
 }
@@ -281,7 +281,7 @@ fn snapshot_defaults_to_cpu_without_gpu_environment_overrides() {
     assert_eq!(gpu["available"], false, "{gpu}");
     assert_eq!(gpu["adapter"], Value::Null, "no device is created: {gpu}");
     assert!(gpu["reason"].as_str().is_some_and(|reason| reason.contains("preference")), "{gpu}");
-    let decoded = lightcraft_codecs::decode(&std::fs::read(image).unwrap(), Default::default()).unwrap();
+    let decoded = dac_codecs::decode(&std::fs::read(image).unwrap(), Default::default()).unwrap();
     assert_eq!((decoded.width, decoded.height), (480, 320));
 }
 
@@ -316,7 +316,7 @@ fn snapshot_starts_without_a_gpu() {
         assert_eq!(gpu["available"], false, "{var}: {gpu}");
         assert_eq!(gpu["adapter"], Value::Null, "{var}: no device was created: {gpu}");
         assert!(gpu["reason"].as_str().is_some_and(|r| r.contains(reason)), "{var}: {gpu}");
-        let d = lightcraft_codecs::decode(&std::fs::read(&out).unwrap(), Default::default()).unwrap();
+        let d = dac_codecs::decode(&std::fs::read(&out).unwrap(), Default::default()).unwrap();
         assert_eq!((d.width, d.height), (480, 320));
     }
 }
@@ -484,7 +484,7 @@ fn snapshot_preserves_fractional_scale_rounding() {
     let output =
         Command::new(BIN).env("LIGHTCRAFT_GPU", "0").args(["snapshot", "--size", "345x200", "--scale", "0.9", "-o"]).arg(&image).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let decoded = lightcraft_codecs::decode(&std::fs::read(image).unwrap(), Default::default()).unwrap();
+    let decoded = dac_codecs::decode(&std::fs::read(image).unwrap(), Default::default()).unwrap();
     assert_eq!((decoded.width, decoded.height), (311, 180));
 }
 
@@ -494,14 +494,14 @@ fn snapshot_preserves_fractional_scale_rounding() {
 fn snapshot_leaves_desktop_gpu_preferences_untouched() {
     let dir = tmp("snapshot-desktop-preferences");
     let library = dir.join("library");
-    let mut session = lightcraft_engine::Session::new().with_fs();
+    let mut session = dac_engine::Session::new().with_fs();
     session.open_library(&library, true).unwrap();
     drop(session);
     let config = dir.join("config");
     let app_config = config.join("lightcraft");
     std::fs::create_dir_all(&app_config).unwrap();
     let ui_path = app_config.join("ui.json");
-    let mut ui = lightcraft_ui_egui::UiState::default();
+    let mut ui = dac_ui_egui::UiState::default();
     ui.settings.gpu = true;
     let saved = serde_json::to_vec_pretty(&ui).unwrap();
     std::fs::write(&ui_path, &saved).unwrap();

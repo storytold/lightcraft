@@ -20,7 +20,7 @@ it on that connection runs. This keeps an HTTP request (for example a web page's
 UI thread, and at most 16 connections are served at once (further ones get an error line and are closed). Clients
 that hit an error reply should reconnect. The port has no authentication, so only enable it when you need it. The MCP server's connect
 mode ([mcp.md](mcp.md)) is a thin layer over this channel. Implementation:
-`crates/ui-egui/src/control.rs` (methods) and `apps/lightcraft/src/control_server.rs` (transport).
+`crates/ui-egui/src/control.rs` (methods) and `apps/app/src/control_server.rs` (transport).
 
 ## Methods
 

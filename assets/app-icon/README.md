@@ -32,9 +32,9 @@ craftrules `assets/logo-options/_tools/vectorize_tile.py`. The source drawing st
 | `lightcraft.svg` | canonical vector, traced at 2048 px (about 770 KB) |
 | `lightcraft-small.svg` | lighter vector, traced at 1024 px (about 360 KB) |
 | `lightcraft-1024.png` | 1024 px render (store listings, docs) |
-| `lightcraft-macos-512.png` | runtime window/Dock icon on macOS (embedded by `apps/lightcraft/src/main.rs`) |
+| `lightcraft-macos-512.png` | runtime window/Dock icon on macOS (embedded by `apps/app/src/main.rs`) |
 | `lightcraft.icns` | macOS bundle icon (`CFBundleIconFile`) |
-| `lightcraft.ico` | Windows icon, 16-256 px, embedded in `lightcraft.exe` by `apps/lightcraft/build.rs` |
+| `lightcraft.ico` | Windows icon, 16-256 px, embedded in `lightcraft.exe` by `apps/app/build.rs` |
 | `hicolor/<n>x<n>/apps/ai.storyteller.lightcraft.png` | Linux icon theme, 16-512 px; the 256 px one is also the runtime window icon on Windows and Linux |
 | `hicolor/scalable/apps/ai.storyteller.lightcraft.svg` | Linux scalable icon (the small SVG) |
 

@@ -20,9 +20,9 @@ pub mod pool;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 
+use dac_raster::Rgba8;
 pub use disk::{DiskCache, decode_jpeg, encode_jpeg};
 pub use hash::{Hash128, Hasher128, hash_bytes};
-use lightcraft_raster::Rgba8;
 pub use lru::{Lru, next_tick};
 pub use pool::JobPool;
 

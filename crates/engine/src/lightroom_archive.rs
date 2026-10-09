@@ -214,7 +214,7 @@ fn next_destination(directory: &Path, mut index: u64) -> Result<PathBuf, String>
 }
 
 fn write_archive(path: &Path, data: &CatalogImport) -> Result<(), String> {
-    lightcraft_catalog::safe_file::write_atomic_with(path, &mut |raw| {
+    dac_catalog::safe_file::write_atomic_with(path, &mut |raw| {
         let mut bounded = BoundedWriter { inner: raw, total: 0 };
         bounded.write_all(HEADER)?;
         let mut compressor = ZlibWriter::new(&mut bounded);

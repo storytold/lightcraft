@@ -10,11 +10,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
-use lightcraft_catalog::Op;
-use lightcraft_develop::DevelopSettings;
-use lightcraft_faces::known::YUNET_ID;
-use lightcraft_faces::yunet::{Detector, Face, Options};
-use lightcraft_meta::{Region, RegionKind};
+use dac_catalog::Op;
+use dac_develop::DevelopSettings;
+use dac_faces::known::YUNET_ID;
+use dac_faces::yunet::{Detector, Face, Options};
+use dac_meta::{Region, RegionKind};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, bad, cmd, has_selection};
@@ -87,7 +87,7 @@ pub(crate) fn is_detected(r: &Region) -> bool {
 
 /// The photo as the faces see it: upright, uncropped, default settings, as 8-bit RGB with its size, its long edge at
 /// most `edge`.
-pub(crate) fn render_rgb(s: &mut Session, id: lightcraft_catalog::PhotoId, edge: usize) -> std::result::Result<(Vec<u8>, usize, usize), String> {
+pub(crate) fn render_rgb(s: &mut Session, id: dac_catalog::PhotoId, edge: usize) -> std::result::Result<(Vec<u8>, usize, usize), String> {
     let settings = DevelopSettings::default();
     let job = s.preview_job(id, edge, edge, false, &settings).ok_or("no such photo")?;
     let image = job.run().rendered?.image;
@@ -127,7 +127,7 @@ fn detect(s: &mut Session, p: &Value) -> Result<Value> {
             let fresh: Vec<&Face> = faces.iter().filter(|f| !overlaps_existing(f, &meta.regions)).collect();
             for f in fresh {
                 meta.regions.push(Region {
-                    rect: lightcraft_geom::Rect { x0: f64::from(f.x0), y0: f64::from(f.y0), x1: f64::from(f.x1), y1: f64::from(f.y1) },
+                    rect: dac_geom::Rect { x0: f64::from(f.x0), y0: f64::from(f.y0), x1: f64::from(f.x1), y1: f64::from(f.y1) },
                     kind: RegionKind::Face,
                     name: None,
                     description: Some(format!("{MARK}{LABEL}")),
@@ -166,7 +166,7 @@ mod tests {
         Face { x0, y0, x1, y1, score: 0.9, landmarks: [(0.0, 0.0); 5] }
     }
     fn region(x0: f64, y0: f64, x1: f64, y1: f64) -> Region {
-        Region { rect: lightcraft_geom::Rect { x0, y0, x1, y1 }, kind: RegionKind::Face, name: Some("Ann".into()), description: None }
+        Region { rect: dac_geom::Rect { x0, y0, x1, y1 }, kind: RegionKind::Face, name: Some("Ann".into()), description: None }
     }
 
     #[test]

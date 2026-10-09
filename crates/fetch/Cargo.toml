@@ -1,5 +1,5 @@
 [package]
-name = "lightcraft-fetch"
+name = "dac-fetch"
 version.workspace = true
 edition.workspace = true
 license = "Apache-2.0"

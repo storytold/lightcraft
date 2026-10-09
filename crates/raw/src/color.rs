@@ -12,7 +12,7 @@
 //! "camera RGB ≈ linear sRGB" model and are flagged with `matrix_is_fallback`.
 
 use crate::{ColorData, Mat3, RawImage};
-use lightcraft_color::{D50, D65, REC2020, SRGB, Xy, bradford, cct};
+use dac_color::{D50, D65, REC2020, SRGB, Xy, bradford, cct};
 use serde::{Deserialize, Serialize};
 
 /// Correlated colour temperature (K) of an Exif `LightSource` / DNG `CalibrationIlluminant` code.
@@ -231,7 +231,7 @@ pub fn camera_to_rec2020(raw: &RawImage, wb_xy: Xy) -> (Mat3, [f32; 3]) {
 }
 
 /// Grey-world white balance estimate (multipliers, min 1) from camera RGB, ignoring clipped and very dark pixels.
-pub fn grey_world(img: &lightcraft_raster::Rgb32f) -> [f32; 3] {
+pub fn grey_world(img: &dac_raster::Rgb32f) -> [f32; 3] {
     let mut s = [0f64; 3];
     let step = (img.data.len() / 200_000).max(1);
     for p in img.data.iter().step_by(step) {
@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn grey_world_balances() {
-        let img = lightcraft_raster::Rgb32f::from_fn(20, 20, |x, _| {
+        let img = dac_raster::Rgb32f::from_fn(20, 20, |x, _| {
             let v = 0.2 + 0.02 * x as f32;
             [v * 0.5, v, v * 0.8]
         });

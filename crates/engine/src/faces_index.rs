@@ -20,7 +20,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use lightcraft_geom::Rect;
+use dac_geom::Rect;
 
 const MAGIC: &[u8; 4] = b"LCFE";
 const VERSION: u8 = 2;
@@ -412,7 +412,7 @@ mod tests {
 #[derive(Default)]
 pub(crate) struct FacesState {
     /// `<model id>@<sha256>` and the loaded model.
-    pub embedder: Option<(String, Arc<lightcraft_faces::runtime::Embedder>)>,
+    pub embedder: Option<(String, Arc<dac_faces::runtime::Embedder>)>,
     pub index: Index,
     /// When the models folder was last looked at (the per-frame pump trusts a look for a second).
     pub checked: Option<std::time::Instant>,
@@ -422,9 +422,9 @@ pub(crate) struct FacesState {
     /// After a failure to load the chosen model, the background pump leaves it alone until then.
     pub retry_at: Option<std::time::Instant>,
     /// Photos the worker is busy with.
-    pub in_flight: std::collections::HashSet<lightcraft_catalog::PhotoId>,
+    pub in_flight: std::collections::HashSet<dac_catalog::PhotoId>,
     /// Photos still to hand to the worker, and the catalog revision this list was made at.
-    pub queue: Vec<lightcraft_catalog::PhotoId>,
+    pub queue: Vec<dac_catalog::PhotoId>,
     pub queue_stamp: Option<u64>,
     /// When the index was last written to its cache file by the background pump.
     pub saved_at: Option<std::time::Instant>,
