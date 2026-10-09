@@ -1,0 +1,12 @@
+[package]
+name = "dac-brand"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Brand (L0): the product name and identity, generated at build time from brand.toml. No dependencies."
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[dependencies]

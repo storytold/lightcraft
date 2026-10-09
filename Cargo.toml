@@ -11,6 +11,7 @@ repository = "https://github.com/storytold/lightcraft"
 
 [workspace.dependencies]
 # internal
+dac-brand = { path = "crates/brand" }
 dac-denoise-core = { path = "crates/denoise-core" }
 dac-denoise = { path = "crates/denoise", default-features = false }
 dac-geom = { path = "crates/geom" }

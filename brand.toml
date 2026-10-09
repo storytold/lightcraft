@@ -1,0 +1,38 @@
+# Changing anything in [product] is safe at any time: rebuild and repackage.
+[product]
+display_name   = "NoNameYet"            # window title, menus, About, dialogs, docs
+short_name     = "NoNameYet"            # macOS menu bar, taskbar, notifications
+tagline        = "Photo library and raw development"
+vendor         = "NoNameYet contributors"
+homepage       = "https://example.invalid"
+repository     = "https://example.invalid/repo"
+binary         = "nonameyet"            # desktop executable name in packages
+cli_binary     = "nonameyet-cli"
+env_prefix     = "NONAMEYET"            # NONAMEYET_LOG, NONAMEYET_GPU, …
+mcp_server     = "nonameyet"            # MCP server id shown to agents
+icon_svg       = "brand/icon.svg"       # source for every generated icon
+logo_svg       = "brand/logo.svg"       # identity plate default, About box
+
+# Identifiers stored in users' files and OS registrations. Changing these is allowed, but the old
+# values MUST be appended to [legacy] in the same commit, so existing installs keep working.
+[identity]
+app_id          = "org.example.NoNameYet"   # reverse-DNS: bundle id, Flatpak id, MIME/desktop ids
+settings_dir    = "NoNameYet"               # ~/.config/<x>, ~/Library/Application Support/<x>, %APPDATA%\<x>
+library_default = "NoNameYet Library"       # default catalog folder name under Pictures
+catalog_ext     = "nnycat"
+preset_ext      = "nnypreset"
+url_scheme      = "nonameyet"               # nonameyet:// deep links, OAuth redirects
+
+# Never derived from the product name: these stay valid across renames forever.
+[stable]
+xmp_namespace_uri    = "https://ns.example.invalid/develop/1.0/"
+xmp_namespace_prefix = "nnyd"
+catalog_magic        = "PHOTO-CATALOG"      # file-format magic; neutral on purpose
+
+# Previous identities, read on startup for migration (settings, catalogs, presets, env vars).
+[legacy]
+settings_dirs = ["LightCraft"]
+env_prefixes  = ["LIGHTCRAFT"]
+preset_exts   = ["lcpreset"]
+catalog_exts  = []
+app_ids       = []

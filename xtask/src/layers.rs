@@ -33,6 +33,7 @@ impl Class {
 /// The layering table. Names are package names without the `dac-`
 /// prefix.
 pub const TABLE: &[(&str, Class)] = &[
+    ("brand", Class::Layer(0)),
     ("geom", Class::Layer(0)),
     ("color", Class::Layer(0)),
     ("raster", Class::Layer(0)),

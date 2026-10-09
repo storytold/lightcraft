@@ -1194,6 +1194,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dac-brand"
+version = "0.4.0"
+
+[[package]]
 name = "dac-catalog"
 version = "0.4.0"
 dependencies = [
