@@ -39,6 +39,9 @@ fn zeros_then_one(bits: &mut Bits<'_>, source_bits: usize) -> Result<u32> {
 
 /// Decode one coefficient line of `width.div_ceil(4)` sets (RDD 34 §6.3.6) and return exactly `width` values.
 pub(crate) fn vld_decode_line(bits: &mut Bits<'_>, source_bits: usize, width: usize) -> Result<Vec<i32>> {
+    if width == 0 {
+        return Ok(Vec::new()); // no sets: the state machine below would never terminate
+    }
     let sets = width.div_ceil(4);
     let (mut abs, mut dpt, mut cnt, mut dpts) = ([0u32; 4], 0u32, sets, 0u8);
     let (mut abs_v, mut abs_e, mut dpt_v, mut dpt_e, mut zr) = (false, false, true, false, 0u64);
@@ -204,6 +207,12 @@ mod tests {
         assert_eq!(used, 2);
     }
     #[test]
+    fn width_zero_returns_empty_line() {
+        let (v, used) = line("1111", 0);
+        assert!(v.is_empty());
+        assert_eq!(used, 0);
+    }
+    #[test]
     fn hostile_input_errors_instead_of_panicking() {
         let mut climb = vec![0u8; 64];
         climb[0] = 0x80; // "1 0 0^n 1" with n > MAX_DPT
@@ -215,7 +224,7 @@ mod tests {
     }
     proptest::proptest! {
         #[test]
-        fn random_bits_never_panic(src in proptest::collection::vec(proptest::num::u8::ANY, 0..256), width in 1usize..300) {
+        fn random_bits_never_panic(src in proptest::collection::vec(proptest::num::u8::ANY, 0..256), width in 0usize..300) {
             let mut b = Bits::new(&src);
             let _ = vld_decode_line(&mut b, src.len() * 8, width);
         }
