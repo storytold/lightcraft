@@ -290,7 +290,7 @@ fn build_stream(halves: &[(Vec<u8>, Vec<u32>)]) -> Vec<u8> {
 /// clipped order (spec *Frame geometry*), then add index tables, stream headers and the tile header.
 pub(crate) fn encode_tile(t: &TileSpec) -> Vec<u8> {
     let (vs, s) = (t.m.height, i32::from(t.s));
-    let ntu = vs.div_ceil(16);
+    let ntu = crate::vendor::arw6::tu_count(vs, t.s);
     let p1 = s % 2;
     let p2 = ((2 + s - p1) / 2) % 2;
     let k3 = ((6 + s) % 8 - p1) / 2;
@@ -410,4 +410,51 @@ pub(crate) fn arw6_file(tiles: &[(usize, usize, usize, usize, Vec<u8>)], width: 
     ifd0.set(t::ORIENTATION, Value::Short(vec![1]));
     ifd0.add_sub_ifd(raw);
     TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()
+}
+
+/// A tile whose bands are random quantised integers `q` (level 1 wider), `v = dequant(q, qi)`, planes by
+/// `reconstruct3` (so `quantize` in the encoder is exact on them); LL3 is random around 2048, the residual
+/// `dequant(q, qi.res)`.
+pub(crate) fn one_tile_quantised(w: usize, h: usize, s: u8, qi: Qis) -> (Vec<u8>, TileSpec) {
+    use crate::llvc::{dequant, reconstruct3};
+    let (w2, vs) = (w / 2, h / 2);
+    let ph = crate::vendor::arw6::phases(s);
+    let mut x = 0x9e37_79b9_7f4a_7c15u64;
+    let mut rnd = |span: i32, centre: i32, q: u32| -> i32 {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        let v = (x % (2 * span as u64 + 1)) as i32 - span;
+        if centre == 0 { dequant(v, q) } else { centre + v }
+    };
+    let mut plane = |wd: usize, ht: usize, span: i32, centre: i32, q: u32| Plane {
+        width: wd,
+        height: ht,
+        data: (0..wd * ht).map(|_| rnd(span, centre, q)).collect(),
+    };
+    let mut comps = Vec::new();
+    for c in 0..3 {
+        let (n1l, n1h) = band_rows(vs, ph[0]);
+        let (n2l, n2h) = band_rows(n1l, ph[1]);
+        let (n3l, n3h) = band_rows(n2l, ph[2]);
+        let (w1, w2b, w3) = (w2 / 2, w2 / 4, w2 / 8);
+        let (a, b, d) = (qi.l1[c], qi.l2[c], qi.l3[c]);
+        let bands = Bands3 {
+            ll3: plane(w3, n3l, 60, 2048, 0),
+            hl3: plane(w3, n3l, 7, 0, d[0]),
+            lh3: plane(w3, n3h, 7, 0, d[1]),
+            hh3: plane(w3, n3h, 7, 0, d[2]),
+            hl2: plane(w2b, n2l, 7, 0, b[0]),
+            lh2: plane(w2b, n2h, 7, 0, b[1]),
+            hh2: plane(w2b, n2h, 7, 0, b[2]),
+            hl1: plane(w1, n1l, 15, 0, a[0]),
+            lh1: plane(w1, n1h, 15, 0, a[1]),
+            hh1: plane(w1, n1h, 15, 0, a[2]),
+        };
+        comps.push(reconstruct3(&bands, ph).unwrap());
+    }
+    let res = plane(w2, vs, 7, 0, qi.res);
+    let (m, c1, c2) = (comps.remove(0), comps.remove(0), comps.remove(0));
+    let t = TileSpec { s, qi, m, c1, c2, res };
+    (encode_tile(&t), t)
 }

@@ -8,7 +8,11 @@
 // Consumed by the geometry and `decode` tasks that follow.
 #![allow(dead_code)]
 
+use crate::llvc::{Bands3, Plane, band_rows, dequant, reconstruct3, vld_decode_line};
+use crate::vendor::pef::Bits;
 use crate::{RawError, Result};
+use rayon::prelude::*;
+use std::ops::Range;
 
 fn corrupt(why: &str) -> RawError {
     RawError::Corrupt(format!("ARW6: {why}"))
@@ -116,7 +120,6 @@ pub(crate) struct StreamRef {
 pub(crate) struct TileHeader {
     pub hs: usize,
     pub vs: usize,
-    pub ntu: usize,
     /// File order: g0 c0..2, g1 c0..2, g2 c0..2, g3 c0..2, g4 c0.
     pub streams: Vec<StreamRef>,
 }
@@ -167,7 +170,7 @@ pub(crate) fn parse_tile_header(tile: &[u8], tw: usize, th: usize) -> Result<Til
             word = end;
         }
     }
-    Ok(TileHeader { hs, vs, ntu: vs.div_ceil(16), streams })
+    Ok(TileHeader { hs, vs, streams })
 }
 
 /// One half-TU of a stream: `len` bytes at byte `start` of the tile, quantiser index per band
@@ -215,6 +218,233 @@ pub(crate) fn stream_halves(tile: &[u8], s: &StreamRef, ntu: usize) -> Result<Ve
         }
     }
     Ok(halves)
+}
+
+// ---- sensor-anchored frame geometry and tile reconstruction (spec *Frame geometry*) ----
+
+/// Halves of `vs` plane rows are anchored to the sensor: half `n` covers plane rows `8n - 6 + s .. 8n + 1 + s`, so
+/// `ceil((vs - 2 - s) / 8) + 1` halves are needed, two per TU (controller ruling, spec *Frame geometry*).
+pub(crate) fn tu_count(vs: usize, s: u8) -> usize {
+    let halves = vs.saturating_sub(2usize.saturating_add(usize::from(s))).div_ceil(8).saturating_add(1);
+    halves.div_ceil(2)
+}
+
+/// Lifting phases of levels 1..=3 for anchor offset `s` (`plan/arw6/scratch/assemble.py::geometry`):
+/// FF (s = 0) gives [0, 1, 1], the APS-C crop (s = 3) [1, 0, 0].
+pub(crate) fn phases(s: u8) -> [u8; 3] {
+    let s = i32::from(s);
+    let p1 = s % 2;
+    let p2 = ((2 + s - p1) / 2) % 2;
+    let k3 = ((6 + s) % 8 - p1).div_euclid(2);
+    let p3 = (k3 - p2).div_euclid(2).rem_euclid(2);
+    [p1 as u8, p2 as u8, p3 as u8]
+}
+
+/// Plane rows of half `n`: `8n - 6 + s .. 8n + 2 + s`, clipped to `0..rows` (empty when disjoint).
+pub(crate) fn half_rows(n: usize, s: u8, rows: usize) -> Range<usize> {
+    let base = n.saturating_mul(8).saturating_add(usize::from(s));
+    base.saturating_sub(6).min(rows)..base.saturating_add(2).min(rows)
+}
+
+/// First half's frame rows `lines - 2`, read before the TU count is known from g4's first index entry alone
+/// (index table at word `g4.word + 1`, entry 0's `A` = big-endian u16; its bytes start after the index table).
+/// Residual lines are decoded while at least 8 bits remain and fewer than 8 lines were read (spec *Frame geometry*).
+pub(crate) fn first_half_shift(tile: &[u8], g4: &StreamRef, width2: usize) -> Result<u8> {
+    let idx = g4.word.checked_add(1).and_then(|w| w.checked_mul(16)).ok_or_else(|| corrupt("stream position"))?;
+    let data = g4.index_words.checked_mul(16).and_then(|l| l.checked_add(idx)).ok_or_else(|| corrupt("stream position"))?;
+    let a = u16_be(tile, idx).ok_or_else(|| corrupt("index table outside the tile"))?;
+    let bytes = tile.get(data..data.checked_add(a).ok_or_else(|| corrupt("stream position"))?).ok_or_else(|| corrupt("half outside the tile"))?;
+    let total = bytes.len() * 8;
+    let mut bits = Bits::new(bytes);
+    let mut lines = 0usize;
+    while lines < 8 && total.saturating_sub(bits.consumed_bits()) >= 8 {
+        vld_decode_line(&mut bits, total, width2)?;
+        lines += 1;
+    }
+    match lines.checked_sub(2) {
+        Some(s @ 0..=5) => Ok(s as u8),
+        _ => Err(unsupported("first-half row count outside 2..=7")),
+    }
+}
+
+/// Band rows of one half: plane rows `t` and the rows they land on at each level (`split`).
+struct HalfRows {
+    t: Range<usize>,
+    l1: Vec<usize>,
+    h1: Vec<usize>,
+    l2: Vec<usize>,
+    h2: Vec<usize>,
+    l3: Vec<usize>,
+    h3: Vec<usize>,
+}
+
+/// Rows with `t % 2 == p` go to the low band at `(t - p) / 2`, the others to the high band at `(t - (1 - p)) / 2`.
+fn split(rows: &[usize], p: u8) -> (Vec<usize>, Vec<usize>) {
+    let p = usize::from(p);
+    let (mut lo, mut hi) = (Vec::new(), Vec::new());
+    for &t in rows {
+        if t % 2 == p {
+            lo.push(t.saturating_sub(p) / 2);
+        } else {
+            hi.push(t.saturating_sub(1 - p) / 2);
+        }
+    }
+    (lo, hi)
+}
+
+fn half_layout(n: usize, s: u8, vs: usize, ph: [u8; 3]) -> HalfRows {
+    let t = half_rows(n, s, vs);
+    let rows: Vec<usize> = t.clone().collect();
+    let (l1, h1) = split(&rows, ph[0]);
+    let (l2, h2) = split(&l1, ph[1]);
+    let (l3, h3) = split(&l2, ph[2]);
+    HalfRows { t, l1, h1, l2, h2, l3, h3 }
+}
+
+/// Lines a half holds in group `g`: g0 LL3 rows; g1 HL3 + LH3 + HH3; g2 HL2 + LH2 + HH2; g3 HL1 + LH1 + HH1; g4 residual.
+fn line_count(g: u8, r: &HalfRows) -> usize {
+    match g {
+        0 => r.l3.len(),
+        1 => r.l3.len() + 2 * r.h3.len(),
+        2 => r.l2.len() + 2 * r.h2.len(),
+        3 => r.l1.len() + 2 * r.h1.len(),
+        _ => r.t.len(),
+    }
+}
+
+/// Line width of group `g`: level-`l` bands are `(tw / 2) >> l` wide (g0, g1: level 3; g2: 2; g3: 1; g4: the plane).
+fn line_width(g: u8, w2: usize) -> usize {
+    match g {
+        0 | 1 => w2 >> 3,
+        2 => w2 >> 2,
+        3 => w2 >> 1,
+        _ => w2,
+    }
+}
+
+/// A half with its decoded (still quantised) lines.
+type HalfLines = (Half, Vec<Vec<i32>>);
+
+/// Index the stream's halves and VLD-decode exactly the lines each holds; a line running past its half is `Corrupt`.
+fn decode_stream(tile: &[u8], st: &StreamRef, ntu: usize, w2: usize, layouts: &[HalfRows]) -> Result<Vec<HalfLines>> {
+    let halves = stream_halves(tile, st, ntu)?;
+    let width = line_width(st.group, w2);
+    halves
+        .into_iter()
+        .zip(layouts)
+        .map(|(half, rows)| {
+            let end = half.start.checked_add(half.len).ok_or_else(|| corrupt("half position"))?;
+            let bytes = tile.get(half.start..end).ok_or_else(|| corrupt("half outside the tile"))?;
+            let total = bytes.len() * 8;
+            let mut bits = Bits::new(bytes);
+            let mut lines = Vec::with_capacity(line_count(st.group, rows));
+            for _ in 0..line_count(st.group, rows) {
+                lines.push(vld_decode_line(&mut bits, total, width)?);
+                if bits.consumed_bits() > total {
+                    return Err(corrupt("line runs past its half"));
+                }
+            }
+            Ok((half, lines)) // bytes beyond the last line are ignored
+        })
+        .collect()
+}
+
+/// Dequantise `line` into band row `row`.
+fn put(plane: &mut Plane, row: usize, line: &[i32], mut f: impl FnMut(i32) -> i32) -> Result<()> {
+    let start = row.checked_mul(plane.width).ok_or_else(|| corrupt("band row"))?;
+    let dst = plane.data.get_mut(start..start.saturating_add(plane.width)).ok_or_else(|| corrupt("band row outside its band"))?;
+    for (d, &v) in dst.iter_mut().zip(line) {
+        *d = f(v);
+    }
+    Ok(())
+}
+
+/// Lay a half's lines into (band, rows, QI) in order: the natural clipped assignment of spec *Frame geometry*.
+fn fill(set: [(&mut Plane, &[usize], u32); 3], lines: &[Vec<i32>]) -> Result<()> {
+    let mut it = lines.iter();
+    for (plane, rows, qi) in set {
+        for &r in rows {
+            put(plane, r, it.next().ok_or_else(|| corrupt("half holds fewer lines than rows"))?, |q| dequant(q, qi))?;
+        }
+    }
+    Ok(())
+}
+
+/// One colour component: its ten bands from streams g0..g3 (component `c`), then the 3-level inverse.
+fn component(c: usize, streams: &[Vec<HalfLines>], layouts: &[HalfRows], vs: usize, w2: usize, ph: [u8; 3]) -> Result<Plane> {
+    let (n1l, n1h) = band_rows(vs, ph[0]);
+    let (n2l, n2h) = band_rows(n1l, ph[1]);
+    let (n3l, n3h) = band_rows(n2l, ph[2]);
+    let (w1, w2b, w3) = (w2 >> 1, w2 >> 2, w2 >> 3);
+    let z = Plane::zeros;
+    let mut b = Bands3 {
+        ll3: z(w3, n3l),
+        hl3: z(w3, n3l),
+        lh3: z(w3, n3h),
+        hh3: z(w3, n3h),
+        hl2: z(w2b, n2l),
+        lh2: z(w2b, n2h),
+        hh2: z(w2b, n2h),
+        hl1: z(w1, n1l),
+        lh1: z(w1, n1h),
+        hh1: z(w1, n1h),
+    };
+    let grp = |g: usize, n: usize| streams.get(3 * g + c).and_then(|s| s.get(n)).ok_or_else(|| corrupt("missing half"));
+    for (n, r) in layouts.iter().enumerate() {
+        let (h0, l0) = grp(0, n)?;
+        // LL3: the nibble must be 0 (Phase 0: never seen otherwise); lines are DPCM from 2048 (spec *Container*).
+        if h0.qi[0] != 0 {
+            return Err(unsupported("LL3 quantiser index"));
+        }
+        for (&row, line) in r.l3.iter().zip(l0) {
+            let mut acc = 2048i32;
+            put(&mut b.ll3, row, line, |d| {
+                acc = acc.saturating_add(d);
+                acc
+            })?;
+        }
+        let (h1, l1) = grp(1, n)?;
+        fill([(&mut b.hl3, &r.l3, h1.qi[0]), (&mut b.lh3, &r.h3, h1.qi[1]), (&mut b.hh3, &r.h3, h1.qi[2])], l1)?;
+        let (h2, l2) = grp(2, n)?;
+        fill([(&mut b.hl2, &r.l2, h2.qi[0]), (&mut b.lh2, &r.h2, h2.qi[1]), (&mut b.hh2, &r.h2, h2.qi[2])], l2)?;
+        let (h3, l3) = grp(3, n)?;
+        fill([(&mut b.hl1, &r.l1, h3.qi[0]), (&mut b.lh1, &r.h1, h3.qi[1]), (&mut b.hh1, &r.h1, h3.qi[2])], l3)?;
+    }
+    reconstruct3(&b, ph)
+}
+
+/// A decoded tile: the three wavelet planes (green mean, two chroma) and the green residual, each `tw/2 x th/2`.
+pub(crate) struct TilePlanes {
+    pub m: Plane,
+    pub c1: Plane,
+    pub c2: Plane,
+    pub res: Plane,
+}
+
+/// Decode a tile to its planes: header, `s` from g4's first half, TU count, all 13 streams (in parallel), band
+/// assembly and the 3-level inverse per component (in parallel).
+pub(crate) fn decode_tile_planes(tile: &[u8], tw: usize, th: usize) -> Result<TilePlanes> {
+    let h = parse_tile_header(tile, tw, th)?;
+    let (w2, vs) = (tw / 2, h.vs);
+    if vs == 0 || !tw.is_multiple_of(2) || !w2.is_multiple_of(8) || w2.checked_mul(vs).is_none_or(|a| a > crate::MAX_SAMPLES) {
+        return Err(unsupported("tile geometry"));
+    }
+    let g4 = h.streams.get(12).ok_or_else(|| corrupt("missing residual stream"))?;
+    let s = first_half_shift(tile, g4, w2)?;
+    let (ntu, ph) = (tu_count(vs, s), phases(s));
+    let layouts: Vec<HalfRows> = (0..2 * ntu).map(|n| half_layout(n, s, vs, ph)).collect();
+    let streams = h.streams.par_iter().map(|st| decode_stream(tile, st, ntu, w2, &layouts)).collect::<Result<Vec<_>>>()?;
+    let comps = (0..3).into_par_iter().map(|c| component(c, &streams, &layouts, vs, w2, ph)).collect::<Result<Vec<_>>>()?;
+    // Residual: g4's lines are the half's plane rows, dequantised with the half's nibble.
+    let mut res = Plane::zeros(w2, vs);
+    for ((half, lines), r) in streams.get(12).ok_or_else(|| corrupt("missing residual stream"))?.iter().zip(&layouts) {
+        for (row, line) in r.t.clone().zip(lines) {
+            put(&mut res, row, line, |q| dequant(q, half.qi[0]))?;
+        }
+    }
+    let mut it = comps.into_iter();
+    let (Some(m), Some(c1), Some(c2)) = (it.next(), it.next(), it.next()) else { return Err(corrupt("missing component")) };
+    Ok(TilePlanes { m, c1, c2, res })
 }
 
 #[cfg(test)]
@@ -287,15 +517,17 @@ mod tests {
     fn tile_header_and_streams() {
         let (tile, _) = one_tile(64, 48, 3, Qis::REAL);
         let h = parse_tile_header(&tile, 64, 48).unwrap();
-        assert_eq!((h.hs, h.vs, h.ntu, h.streams.len()), (64, 24, 2, 13));
+        assert_eq!((h.hs, h.vs, h.streams.len()), (64, 24, 13));
+        let ntu = tu_count(24, 3);
+        assert_eq!(ntu, 2);
         assert_eq!(
             h.streams.iter().map(|s| (s.group, s.comp)).collect::<Vec<_>>(),
             [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2), (2, 0), (2, 1), (2, 2), (3, 0), (3, 1), (3, 2), (4, 0)]
         );
-        let g3 = stream_halves(&tile, &h.streams[9], h.ntu).unwrap();
+        let g3 = stream_halves(&tile, &h.streams[9], ntu).unwrap();
         assert_eq!(g3.len(), 4);
         assert_eq!(g3[0].qi, [1, 1, 2]);
-        let g4 = stream_halves(&tile, &h.streams[12], h.ntu).unwrap();
+        let g4 = stream_halves(&tile, &h.streams[12], ntu).unwrap();
         assert_eq!(g4[1].qi, [2, 2, 2]);
         assert!(g4[3].start + g4[3].len <= tile.len());
         let mut bad = tile.clone();
@@ -373,9 +605,9 @@ mod tests {
         let mut bad_half = tile.clone();
         let idx_start = (s.word + 1) * 16;
         bad_half[idx_start..idx_start + 2].copy_from_slice(&[0xff, 0xff]); // A past the data area
-        assert!(stream_halves(&bad_half, s, h.ntu).is_err());
+        assert!(stream_halves(&bad_half, s, tu_count(24, 0)).is_err());
         let outside = StreamRef { index_words: 0xffff, ..s.clone() };
-        assert!(stream_halves(&tile, &outside, h.ntu).is_err());
+        assert!(stream_halves(&tile, &outside, tu_count(24, 0)).is_err());
     }
 
     #[test]
@@ -384,11 +616,12 @@ mod tests {
             let (tile, spec) = one_tile(64, 48, s, Qis::REAL);
             assert_eq!(tile.len() % 4096, 0);
             let h = parse_tile_header(&tile, 64, 48).unwrap();
+            let ntu = tu_count(24, s);
             for st in &h.streams {
-                assert_eq!(stream_halves(&tile, st, h.ntu).unwrap().len(), 2 * h.ntu);
+                assert_eq!(stream_halves(&tile, st, ntu).unwrap().len(), 2 * ntu);
             }
             // the residual stream's halves decode to the clipped, quantised rows 8n-6+s ..= 8n+1+s
-            let g4 = stream_halves(&tile, &h.streams[12], h.ntu).unwrap();
+            let g4 = stream_halves(&tile, &h.streams[12], ntu).unwrap();
             for (n, half) in g4.iter().enumerate() {
                 let bytes = &tile[half.start..half.start + half.len];
                 let mut bits = Bits::new(bytes);
@@ -411,5 +644,86 @@ mod tests {
         let bytes = w.finish();
         let mut b = Bits::new(&bytes);
         assert_eq!(crate::llvc::vld_decode_line(&mut b, bytes.len() * 8, 100).unwrap(), vals);
+    }
+
+    #[test]
+    fn phases_and_half_rows_match_the_spec() {
+        assert_eq!(phases(0), [0, 1, 1]);
+        assert_eq!(phases(3), [1, 0, 0]);
+        assert_eq!(half_rows(0, 0, 1668), 0..2);
+        assert_eq!(half_rows(209, 0, 1668), 1666..1668);
+        assert_eq!(half_rows(1, 0, 1668), 2..10);
+        assert_eq!(half_rows(0, 3, 2186), 0..5);
+        assert_eq!(half_rows(273, 3, 2186), 2181..2186);
+        assert_eq!(half_rows(300, 3, 2186), 2186..2186);
+    }
+
+    #[test]
+    fn tu_count_covers_every_row() {
+        assert_eq!((tu_count(1668, 0), tu_count(2186, 3), tu_count(24, 3), tu_count(48, 0)), (105, 137, 2, 4));
+        for s in 0u8..=5 {
+            for vs in 1usize..200 {
+                let last = half_rows(2 * tu_count(vs, s) - 1, s, vs);
+                assert!(last.end == vs || (2 * tu_count(vs, s) - 1) * 8 + usize::from(s) + 2 >= vs, "s {s} vs {vs}");
+                assert_eq!((0..2 * tu_count(vs, s)).map(|n| half_rows(n, s, vs).len()).sum::<usize>(), vs, "s {s} vs {vs}");
+            }
+        }
+    }
+
+    #[test]
+    fn first_half_shift_is_read_from_the_stream() {
+        for s in [0u8, 3, 5] {
+            let (tile, _) = one_tile(64, 48, s, Qis::REAL);
+            let h = parse_tile_header(&tile, 64, 48).unwrap();
+            assert_eq!(first_half_shift(&tile, &h.streams[12], 32).unwrap(), s);
+        }
+    }
+
+    #[test]
+    fn round_trip_every_shift() {
+        for s in 0u8..=5 {
+            for (w, h) in [(64usize, 48usize), (80, 96), (64, 36)] {
+                let (tile, spec) = one_tile(w, h, s, Qis::ZERO); // QI 0: lossless, planes must come back exactly
+                let p = decode_tile_planes(&tile, w, h).unwrap_or_else(|e| panic!("s={s} {w}x{h}: {e}"));
+                assert_eq!(p.m, spec.m, "s={s} {w}x{h} m");
+                assert_eq!(p.c1, spec.c1);
+                assert_eq!(p.c2, spec.c2);
+                assert_eq!(p.res, spec.res);
+            }
+        }
+    }
+
+    #[test]
+    fn round_trip_with_real_quantisers() {
+        // bands drawn as quantised integers q, planes = reconstruct3(dequant(q)); the encoder must reproduce them bit for bit
+        for s in [0u8, 3] {
+            let (tile, spec) = one_tile_quantised(96, 64, s, Qis::REAL);
+            let p = decode_tile_planes(&tile, 96, 64).unwrap();
+            assert_eq!(p.m, spec.m);
+            assert_eq!(p.c1, spec.c1);
+            assert_eq!(p.c2, spec.c2);
+            assert_eq!(p.res, spec.res);
+        }
+    }
+
+    #[test]
+    fn half_too_short_is_corrupt() {
+        let (mut tile, _) = one_tile(64, 48, 0, Qis::ZERO);
+        let h = parse_tile_header(&tile, 64, 48).unwrap();
+        let w = h.streams[9].word * 16 + 16; // first index entry of g3 c0: shrink A by 1 byte
+        let a = u16::from_be_bytes([tile[w], tile[w + 1]]) - 1;
+        tile[w..w + 2].copy_from_slice(&a.to_be_bytes());
+        assert!(matches!(decode_tile_planes(&tile, 64, 48), Err(RawError::Corrupt(_))));
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn mutated_tiles_never_panic(flips in proptest::collection::vec((proptest::num::usize::ANY, proptest::num::u8::ANY), 1..12), cut in proptest::num::usize::ANY) {
+            let (mut tile, _) = one_tile(64, 48, 3, Qis::REAL);
+            for (i, b) in flips { let i = i % tile.len(); tile[i] ^= b; }
+            let n = cut % (tile.len() + 1);
+            let _ = decode_tile_planes(&tile[..n], 64, 48);
+            let _ = decode_tile_planes(&tile, 64, 48);
+        }
     }
 }
