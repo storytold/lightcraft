@@ -1904,6 +1904,41 @@ mod tests {
         assert_eq!(h.app.ui.right, crate::state::RightPanel::Edit, "no-op outside tools");
     }
 
+    /// Issue #534: outside the crop box the system pointer gives way to a drawn rotate arrow (there is
+    /// no system rotate cursor, and egui's `Alias` stand-in is a plain arrow on Windows); dragging
+    /// there rotates the crop.
+    #[test]
+    fn crop_shows_a_rotate_pointer_outside_the_box() {
+        let mut h = demo([1200.0, 800.0]);
+        let t = Duration::from_secs(10);
+        h.request("ui.set", json!({"view": "detail", "filmstrip": false}), t);
+        h.request("engine.execute", json!({"command": "panel.crop"}), t);
+        h.settle(SETTLE);
+        let img = h.app.image_rect.unwrap();
+        let cursor_at = |h: &mut Headless, p: egui::Pos2| {
+            h.request("ui.move", json!({"x": p.x, "y": p.y}), t);
+            let raw = HeadlessView::raw_input(h.size, h.pixels_per_point, h.time, Vec::new());
+            let mut cursor = egui::CursorIcon::Default;
+            h.view.run(raw, |ui| {
+                h.app.logic(ui.ctx());
+                h.app.ui(ui);
+                cursor = ui.ctx().output(|output| output.cursor_icon);
+            });
+            h.time += FRAME_DT;
+            cursor
+        };
+        assert_eq!(cursor_at(&mut h, img.center()), egui::CursorIcon::Move);
+        assert_eq!(cursor_at(&mut h, img.left_top()), egui::CursorIcon::ResizeNwSe);
+        let outside = img.right_center() + egui::vec2(18.0, 0.0);
+        assert_eq!(cursor_at(&mut h, outside), egui::CursorIcon::None, "the rotate arrow is drawn instead");
+        let angle = |h: &Headless| h.app.session.develop_of(h.app.session.active().unwrap()).unwrap().crop.geometry.angle;
+        assert_eq!(angle(&h), 0.0);
+        let r = h.request("ui.drag", json!({"x": outside.x, "y": outside.y, "toX": outside.x, "toY": outside.y + 80.0, "steps": 12}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert!(angle(&h) > 1.0, "dragging down on the right turns the crop clockwise: {}", angle(&h));
+    }
+
     /// ⌘Q (File → Quit LightCraft) closes the window.
     #[test]
     fn cmd_q_quits() {

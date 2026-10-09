@@ -117,6 +117,8 @@
 ### Editing
 - Type an exact value into any slider (issue #322): click the number next to its name, type (`1.5`, `-20`, `5600`)
   and press Return; Esc keeps the old value.
+- Crop & Rotate: outside the crop box the pointer becomes a curved double arrow (it was a plain arrow on Windows), so
+  it shows where a drag rotates the crop, and the angle is shown next to it while you rotate (issue #534).
 
 ### Editing
 - The eye on the Light, Color and Detail section headers now hides their adjustments, as it already did for Effects,

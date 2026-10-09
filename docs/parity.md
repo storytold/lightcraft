@@ -28,7 +28,7 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
 | F. Edit panel — global adjustments (EDIT) | 42 | 2 | 4 | 1 | 28/28 (100%) | 13/14 (93%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
-| H. Crop & rotate (CROP) | 9 | 0 | 0 | 1 | 6/6 (100%) | 3/3 (100%) |
+| H. Crop & rotate (CROP) | 10 | 0 | 0 | 1 | 7/7 (100%) | 3/3 (100%) |
 | I. Remove / healing (REM) | 7 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
 | J. Red eye (EYE) | 2 | 0 | 0 | 0 | — | 1/1 (100%) |
 | K. Masking (MASK) | 14 | 4 | 5 | 0 | 8/8 (100%) | 5/5 (100%) |
@@ -48,9 +48,9 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | Y. Menus | 82 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
 | Lightroom Classic extras | 32 | 11 | 39 | 9 | — | 22/24 (92%) |
-| **Total** | 394 | 38 | 84 | 36 | 193/200 (97%) | 142/152 (93%) |
+| **Total** | 395 | 38 | 84 | 36 | 194/201 (97%) | 142/152 (93%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **80.0%** of 516 in-scope rows — P0 98.2% of 200 · P1 95.7% of 152 · P2 42.9% of 163.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **80.1%** of 517 in-scope rows — P0 98.3% of 201 · P1 95.7% of 152 · P2 42.9% of 163.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -310,7 +310,8 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-CROP-ASPECT | Aspect ratios | P0 | ✅ | `cmd:crop.aspect`, `cmd:crop.rotateAspect`, `crates/ui-egui/src/panels/right.rs` | menu with presets + custom W × H, visible Lock toggle (also A), button names the active ratio; every handle honours the lock and the drag stops at the image edge instead of shifting the frame (issue #295); "Original" is the photo's own shape (no separate As Shot) |
 | LR-CROP-STRAIGHTEN | Straighten tool | P0 | ✅ | `cmd:crop.straighten`, `cmd:crop.autoStraighten` | Straighten Tool button: drag along a horizon/vertical; double-click or Auto levels automatically |
 | LR-CROP-AUTO | Auto straighten | P1 | ✅ | `cmd:crop.autoStraighten` | crop-angle leveling from detected horizon/plumb lines (consensus required) |
-| LR-CROP-ANGLE | Angle slider | P0 | ✅ | `ctl:crop.angle` | |
+| LR-CROP-ANGLE | Angle slider | P0 | ✅ | `ctl:crop.angle` | click its value to type an exact angle (issue #322) |
+| LR-CROP-ROTATE-DRAG | Rotate by dragging outside the crop | P0 | ✅ | `cmd:crop.straighten`, `crates/ui-egui/src/panels/detail.rs` (`rotate_cursor_shape`) | dragging outside the box turns the crop about the photo's centre; the pointer there is a drawn curved double arrow (no system rotate cursor exists, and egui's `Alias` stand-in is a plain arrow on Windows) and the angle is shown next to it while dragging; issue #534 |
 | LR-CROP-ROTATE90 | Rotate 90° | P0 | ✅ | `cmd:photo.rotateLeft`, `cmd:photo.rotateRight` | |
 | LR-CROP-FLIP | Flip | P0 | ✅ | `cmd:photo.flipHorizontal`, `cmd:photo.flipVertical` | |
 | LR-CROP-OVERLAY | Crop overlays | P1 | ✅ | `cmd:view.cropOverlay`, `cmd:view.cropOverlayOrientation`, `crates/ui-egui/src/panels/crop_overlay.rs` | thirds, grid, golden ratio, diagonal, triangle, golden spiral (mirrored with ⇧O while cropping); no aspect-ratio overlays |

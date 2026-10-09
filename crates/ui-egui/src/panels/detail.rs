@@ -1248,16 +1248,24 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
         let s = to_straight(n, d.crop.geometry.angle, frame);
         d.crop.geometry.rect.contains(Point::new(s.x.clamp(-1.0, 2.0), s.y))
     };
+    // outside the box a drag rotates: there is no system rotate cursor (egui's stand-in, `Alias`, is a
+    // plain arrow on Windows), so the pointer is hidden and a curved double arrow drawn instead (issue #534)
+    let rotating = matches!(app.gesture, Some(Gesture::CropRotate { .. }));
+    let mut rotate_cursor_at = None;
     if let Some(hq) = resp.hover_pos() {
         let near = handles.iter().position(|h| h.distance(hq) < 12.0);
         ui.ctx().set_cursor_icon(match near {
+            _ if rotating => egui::CursorIcon::None,
             Some(0 | 2) => egui::CursorIcon::ResizeNwSe,
             Some(1 | 3) => egui::CursorIcon::ResizeNeSw,
             Some(4 | 6) => egui::CursorIcon::ResizeVertical,
             Some(_) => egui::CursorIcon::ResizeHorizontal,
             None if inside(hq) => egui::CursorIcon::Move,
-            None => egui::CursorIcon::Alias,
+            None => egui::CursorIcon::None,
         });
+        if rotating || (near.is_none() && !inside(hq)) {
+            rotate_cursor_at = Some(hq);
+        }
     }
     // double-click inside the crop box applies the crop (same as Return / Done)
     if resp.double_clicked()
@@ -1281,9 +1289,13 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
             }
         });
     }
+    let mut angle = d.crop.geometry.angle;
     if resp.dragged()
         && let Some(q) = resp.interact_pointer_pos()
     {
+        if rotating {
+            rotate_cursor_at = Some(q);
+        }
         match app.gesture.clone() {
             Some(Gesture::CropHandle { handle, start, angle }) => {
                 // The crop model decides what the drag does (anchor, aspect lock, image bounds): see
@@ -1299,9 +1311,22 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
                 let c = map.screen(Point::new(0.5, 0.5));
                 let a = (q - c).angle();
                 let ang = (start_angle + (a - a0).to_degrees() as f64).clamp(-45.0, 45.0);
-                let _ = app.run("crop.straighten", json!({"angle": (ang * 100.0).round() / 100.0}));
+                angle = (ang * 100.0).round() / 100.0;
+                let _ = app.run("crop.straighten", json!({"angle": angle}));
             }
             _ => {}
+        }
+    }
+    if let Some(q) = rotate_cursor_at {
+        let p = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, ui.id().with("cropRotateCursor")));
+        paint_rotate_cursor(&p, q, map.screen(Point::new(0.5, 0.5)));
+        // while rotating, the angle next to the pointer (type an exact one in the Straighten slider)
+        if rotating {
+            let text = format!("{angle:.2}°");
+            let galley = p.layout_no_wrap(text, egui::FontId::proportional(12.0), Color32::WHITE);
+            let r = Rect::from_min_size(q + vec2(16.0, 14.0), galley.size()).expand2(vec2(5.0, 2.0));
+            p.rect_filled(r, 3.0, Color32::from_black_alpha(170));
+            p.galley(r.min + vec2(5.0, 2.0), galley, Color32::WHITE);
         }
     }
     if resp.drag_stopped() {
@@ -1309,6 +1334,36 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
         let _ = app.run("develop.endInteraction", json!({}));
     }
     let _ = id;
+}
+
+/// The crop tool's rotate pointer at `at`: a short arc with arrowheads at both ends, bulging away
+/// from `center` (the point the crop turns about), white on a dark outline so it reads on any photo.
+/// Original artwork drawn in code (assets/ATTRIBUTION.md).
+fn rotate_cursor_shape(at: Pos2, center: Pos2) -> Vec<Vec<Pos2>> {
+    let away = at - center;
+    let dir = if away.length() > 1e-3 { away.normalized() } else { vec2(1.0, 0.0) };
+    let (radius, span) = (10.0_f32, 0.95_f32);
+    let o = at - dir * radius;
+    let base = dir.angle();
+    let pt = |t: f32| o + vec2((base + t).cos(), (base + t).sin()) * radius;
+    let arc: Vec<Pos2> = (0..=12).map(|i| pt(-span + 2.0 * span * i as f32 / 12.0)).collect();
+    // arrowheads: back along the arc's tangent at each end, splayed to both sides
+    let head = |t: f32, sign: f32| {
+        let tip = pt(t);
+        let tangent = vec2(-(base + t).sin(), (base + t).cos()) * sign;
+        let normal = vec2(-tangent.y, tangent.x);
+        vec![tip - tangent * 4.5 + normal * 4.5, tip, tip - tangent * 4.5 - normal * 4.5]
+    };
+    vec![arc, head(span, 1.0), head(-span, -1.0)]
+}
+
+fn paint_rotate_cursor(p: &egui::Painter, at: Pos2, center: Pos2) {
+    let lines = rotate_cursor_shape(at, center);
+    for (width, color) in [(3.5, Color32::from_black_alpha(200)), (1.5, Color32::WHITE)] {
+        for line in &lines {
+            p.add(egui::Shape::line(line.clone(), Stroke::new(width, color)));
+        }
+    }
 }
 
 /// Guided Upright: draw up to four guides along lines that should be vertical or horizontal. Guides are
@@ -2028,7 +2083,8 @@ fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
 
 #[cfg(test)]
 mod tests {
-    use super::film_label;
+    use super::{film_label, rotate_cursor_shape};
+    use egui::{Pos2, pos2};
 
     #[test]
     fn film_labels_cut_on_characters_not_bytes() {
@@ -2040,5 +2096,23 @@ mod tests {
         assert_eq!(film_label("IMG_20240712_153012"), "IMG_20240712_…");
         assert_eq!(film_label("DSC_0001"), "DSC_0001");
         assert_eq!(film_label(""), "");
+    }
+
+    /// Issue #534: the rotate pointer is an arc through the pointer, bent around the crop's centre,
+    /// with an arrowhead at each end, and stays finite when the pointer sits on the centre.
+    #[test]
+    fn rotate_pointer_bends_around_the_crop_centre() {
+        let (at, centre) = (pos2(500.0, 100.0), pos2(500.0, 400.0));
+        let lines = rotate_cursor_shape(at, centre);
+        assert_eq!(lines.len(), 3, "arc + two arrowheads");
+        let arc = &lines[0];
+        let mid = arc[arc.len() / 2];
+        assert!(mid.distance(at) < 0.01, "the arc passes through the pointer: {mid:?}");
+        let (a, b) = (arc[0], arc[arc.len() - 1]);
+        assert!((a.x - 500.0).abs() > 5.0 && (a.x - 500.0) * (b.x - 500.0) < 0.0, "ends either side: {a:?} {b:?}");
+        assert!(a.distance(centre) < at.distance(centre) && b.distance(centre) < at.distance(centre), "bulges away from the centre");
+        assert!(lines[1][1].distance(b) < 0.01 && lines[2][1].distance(a) < 0.01, "an arrowhead on each end");
+        let all = |lines: &[Vec<Pos2>]| lines.iter().flatten().all(|p| p.x.is_finite() && p.y.is_finite());
+        assert!(all(&rotate_cursor_shape(centre, centre)));
     }
 }
