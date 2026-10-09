@@ -565,7 +565,11 @@ mod tests {
     }
 
     fn one_tile(w: usize, h: usize, s: u8, qi: Qis) -> (Vec<u8>, TileSpec) {
-        let (m, c1, c2, res) = planes(w / 2, h / 2, 7);
+        seeded_tile(w, h, s, qi, 7)
+    }
+
+    fn seeded_tile(w: usize, h: usize, s: u8, qi: Qis, seed: u64) -> (Vec<u8>, TileSpec) {
+        let (m, c1, c2, res) = planes(w / 2, h / 2, seed);
         let t = TileSpec { s, qi, m, c1, c2, res };
         (encode_tile(&t), t)
     }
@@ -951,8 +955,9 @@ mod tests {
     fn four_tiles_place_correctly_and_arw_reports_doubled_levels() {
         let tiles: Vec<_> = [(0, 0), (64, 0), (0, 48), (64, 48)]
             .iter()
-            .map(|&(x, y)| {
-                let (t, _) = one_tile(64, 48, 0, Qis::ZERO);
+            .enumerate()
+            .map(|(i, &(x, y))| {
+                let (t, _) = seeded_tile(64, 48, 0, Qis::ZERO, 11 + i as u64 * 17); // a different image per tile
                 (x, y, 64, 48, t)
             })
             .collect();
@@ -963,8 +968,12 @@ mod tests {
         assert_eq!(img.white, vec![30720.0]);
         assert_eq!(img.cfa.as_ref().map(|c| c.pattern.clone()), Some(vec![0, 1, 1, 2]));
         let crate::RawData::U16(d) = img.data else { panic!() };
-        let single = decode(strip_of(&arw6_file(&tiles[..1], 64, 48)), 64, 48, crate::Mode::Full).unwrap();
-        assert_eq!(&d[..64], &single[..64]); // tile 0's first row lands at (0, 0)
+        for (x, y, w, h, bytes) in &tiles {
+            let want = decode_tile(bytes, *w, *h).unwrap();
+            for r in 0..*h {
+                assert_eq!(&d[(y + r) * 128 + x..(y + r) * 128 + x + w], &want[r * w..(r + 1) * w], "tile at ({x},{y}) row {r}");
+            }
+        }
         assert_eq!(crate::probe_info(&file).unwrap().width, 128); // header mode: tile tables and headers only
     }
 }
