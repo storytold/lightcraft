@@ -336,13 +336,19 @@ fn decode_stream(tile: &[u8], st: &StreamRef, ntu: usize, w2: usize, layouts: &[
             let total = bytes.len() * 8;
             let mut bits = Bits::new(bytes);
             let mut lines = Vec::with_capacity(line_count(st.group, rows));
-            for _ in 0..line_count(st.group, rows) {
+            let n = line_count(st.group, rows);
+            for _ in 0..n {
                 lines.push(vld_decode_line(&mut bits, total, width)?);
                 if bits.consumed_bits() > total {
                     return Err(corrupt("line runs past its half"));
                 }
             }
-            Ok((half, lines)) // bytes beyond the last line are ignored
+            // Phase 0 measurement: in all 3562 halves of the 8 real files the lines end within the half's last
+            // byte (`len*8 - 8 < consumed <= len*8`); garbage that decodes to fewer bits is corruption.
+            if n > 0 && bits.consumed_bits() <= total.saturating_sub(8) {
+                return Err(corrupt("half ends early"));
+            }
+            Ok((half, lines))
         })
         .collect()
 }
@@ -877,6 +883,20 @@ mod tests {
             let _ = decode(&strip[..n], 64, 48, crate::Mode::Full);
             let _ = decode(&strip[..n], 64, 48, crate::Mode::Header);
         }
+    }
+
+    #[test]
+    fn garbage_streams_import_then_fail() {
+        let (mut tile, _) = one_tile(64, 48, 0, Qis::REAL);
+        let h = parse_tile_header(&tile, 64, 48).unwrap();
+        let st = &h.streams[9]; // g3 c0
+        let start = (st.word + 1 + st.index_words) * 16;
+        for (i, b) in tile[start..start + st.data_words * 16].iter_mut().enumerate() {
+            *b = (i as u8).wrapping_mul(97) ^ 0xa5;
+        }
+        let strip = strip_of(&arw6_file(&[(0, 0, 64, 48, tile)], 64, 48)).to_vec();
+        assert!(decode(&strip, 64, 48, crate::Mode::Header).is_ok());
+        assert!(matches!(decode(&strip, 64, 48, crate::Mode::Full), Err(RawError::Corrupt(_))));
     }
 
     #[test]
