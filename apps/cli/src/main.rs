@@ -1,15 +1,15 @@
-//! `lightcraft-cli`: headless LightCraft.
+//! The command-line tool (`dac_brand::CLI_BINARY`): the app, headless.
 //!
 //! ```text
-//! lightcraft-cli run [--demo | --library DIR | --connect [ADDR]] [--import PATH]… CMD [key=value…]…
-//! lightcraft-cli mcp [--connect [ADDR]] [--demo] [--compact] [FILES/FOLDERS…]
-//! lightcraft-cli render <in> -o <out> [--set control=value]… [--settings FILE.json] [--preset ID] [--size N] [--quality Q]
-//! lightcraft-cli snapshot [--library DIR | --demo] [--script FILE.jsonl] [-o OUT.png] [--size WxH] [--scale S] [FILES…]
-//! lightcraft-cli merge hdr|panorama|hdr-panorama [OPTIONS] FILES…
-//! lightcraft-cli synth-merge hdr|panorama -o DIR
-//! lightcraft-cli commands [--json]
-//! lightcraft-cli controls [--json]
-//! lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
+//! <cli> run [--demo | --library DIR | --connect [ADDR]] [--import PATH]… CMD [key=value…]…
+//! <cli> mcp [--connect [ADDR]] [--demo] [--compact] [FILES/FOLDERS…]
+//! <cli> render <in> -o <out> [--set control=value]… [--settings FILE.json] [--preset ID] [--size N] [--quality Q]
+//! <cli> snapshot [--library DIR | --demo] [--script FILE.jsonl] [-o OUT.png] [--size WxH] [--scale S] [FILES…]
+//! <cli> merge hdr|panorama|hdr-panorama [OPTIONS] FILES…
+//! <cli> synth-merge hdr|panorama -o DIR
+//! <cli> commands [--json]
+//! <cli> controls [--json]
+//! <cli> calibrate [--max N] [--out DIR] FOLDERS/FILES…
 //! ```
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -24,33 +24,34 @@ use dac_engine::Session;
 use dac_mcp::{Backend, DEFAULT_ADDR, Headless, Remote, Server, expand_paths};
 use serde_json::{Value, json};
 
+/// `--help` text; `{cli}`, `{bin}`, `{app}` and `{P}` are filled by [`usage`].
 const USAGE: &str = "\
-lightcraft-cli — headless LightCraft (photo library + raw developer)
+{cli} — headless {app} (photo library + raw developer)
 
 USAGE:
-  lightcraft-cli run [OPTIONS] COMMAND [key=value | '{json}']… [COMMAND …]…
+  {cli} run [OPTIONS] COMMAND [key=value | '{json}']… [COMMAND …]…
       Run one or more commands (ids from `commands`, or control-protocol methods such as
       engine.commands / ui.inspect / ui.screenshot) and print one JSON line per command:
       {\"command\", \"ok\", \"result\" | \"error\", \"ms\"}. A word without `=` starts the next
       command; values are JSON when they parse (1, true, [1,2], {…}), else strings. Exit status
       is non-zero when a command fails. Example:
-        lightcraft-cli run --import ~/Photos/a.jpg develop.set control=light.exposure value=0.7 \\
+        {cli} run --import ~/Photos/a.jpg develop.set control=light.exposure value=0.7 \\
             develop.auto app.export path=/tmp/a.jpg longEdge=1600
       Options:
         --demo            headless, the procedural demo library
-        --library DIR     headless, open (or create) a LightCraft library; edits are saved
+        --library DIR     headless, open (or create) a {app} library; edits are saved
         --import PATH     headless, import a file or folder first (repeatable)
-        --connect [ADDR]  drive the running app (`lightcraft --control 7980`; default 127.0.0.1:7980)
+        --connect [ADDR]  drive the running app (`{bin} --control 7980`; default 127.0.0.1:7980)
         --script FILE|-   also run JSON lines {\"command\": id, \"params\": {…}} (or {\"method\": …})
         --keep-going      continue after a failed command
-  lightcraft-cli mcp [OPTIONS] [FILES/FOLDERS…]
+  {cli} mcp [OPTIONS] [FILES/FOLDERS…]
       MCP server (JSON-RPC 2.0 over stdio). Headless by default: an in-process session with the
       given files imported. Options:
-        --connect [ADDR]  drive a running app instead (`lightcraft --control 7980`; default 127.0.0.1:7980)
+        --connect [ADDR]  drive a running app instead (`{bin} --control 7980`; default 127.0.0.1:7980)
         --demo            headless: start with the procedurally generated demo library
-        --library DIR     headless: open (or create) a persistent LightCraft library; edits are saved
+        --library DIR     headless: open (or create) a persistent {app} library; edits are saved
         --compact         list only the helper tools (every command stays reachable via run_command)
-  lightcraft-cli render <IN> -o <OUT> [OPTIONS]
+  {cli} render <IN> -o <OUT> [OPTIONS]
       Develop one file and export it (.jpg, .png, .tif, .webp, .avif or .dng by extension) with the
       same encoder as the app's Export dialog. Options:
         --set CONTROL=VALUE  set a develop slider, repeatable (e.g. --set light.exposure=0.5)
@@ -62,11 +63,11 @@ USAGE:
                              string), e.g. --opt colorSpace=displayP3 --opt bitDepth=16
                              --opt percent=50 --opt shortEdge=1080 --opt ppi=300
                              --opt format=original (copy + XMP sidecar) --opt metadata=none
-  lightcraft-cli snapshot [OPTIONS] [FILES/FOLDERS…]
+  {cli} snapshot [OPTIONS] [FILES/FOLDERS…]
       Run the full app UI headlessly (no window, no GPU: CPU-rasterized egui) and write PNGs.
       Options:
         --demo            the procedural demo library (default unless --library or FILES)
-        --library DIR     open (or create) a LightCraft library
+        --library DIR     open (or create) a {app} library
         --script FILE     JSON-lines control-protocol requests (docs/control-protocol.md), one
                           per line: {\"method\": \"ui.set\", \"params\": {\"view\": \"detail\"}}.
                           Replies go to stdout. `ui.screenshot` without a path writes -o (then
@@ -76,25 +77,34 @@ USAGE:
         -o, --output OUT  PNG path (a final screenshot is written here if the script took none)
         --size WxH        window size in points (default 1600x1000)
         --scale S         pixels per point (default 1)
-  lightcraft-cli merge hdr|panorama|hdr-panorama [OPTIONS] FILES…
+  {cli} merge hdr|panorama|hdr-panorama [OPTIONS] FILES…
       Photo Merge: writes <first>-HDR.dng / -Pano.dng / -HDR-Pano.dng next to the first file and
       prints the result as JSON. Options:
         --deghost none|low|medium|high   --no-align   --bracket N (HDR panorama)
         --projection auto|spherical|cylindrical|perspective   --boundary-warp 0..100
         --auto-crop   --fill-edges   --no-auto-settings
         --preview OUT.png   only render a ≤ 1024 px preview (nothing written next to the files)
-  lightcraft-cli synth-merge hdr|panorama -o DIR
+  {cli} synth-merge hdr|panorama -o DIR
       Write synthetic merge inputs (procedural scene; bracketed DNGs or overlapping PNG views).
-  lightcraft-cli commands [--json]   list every command id with its parameters
-  lightcraft-cli controls [--json]   list every develop control id with its range
-  lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
+  {cli} commands [--json]   list every command id with its parameters
+  {cli} controls [--json]   list every develop control id with its range
+  {cli} calibrate [--max N] [--out DIR] FOLDERS/FILES…
       Fit a colour profile per camera model from raw files and their embedded camera JPEGs
       (Sony ARW, Nikon NEF, Fujifilm RAF): up to N files spread over the folders (default 300; 0 = all), pooled per
-      model, written as <model>.json to DIR (default: the profiles folder LightCraft reads,
-      <config>/camera-profiles, or $LIGHTCRAFT_CAMERA_PROFILES). Raws of a profiled model then
+      model, written as <model>.json to DIR (default: the profiles folder {app} reads,
+      <config>/camera-profiles, or ${P}_CAMERA_PROFILES). Raws of a profiled model then
       take their colour from the profile and only their tone from their own JPEG.
-  lightcraft-cli --version | --help
+  {cli} --version | --help
 ";
+
+fn usage() -> String {
+    USAGE.replace("{cli}", CLI).replace("{bin}", dac_brand::BINARY).replace("{P}", dac_brand::ENV_PREFIX).replace("{app}", APP)
+}
+
+/// The command name shown in messages and `--help`.
+const CLI: &str = dac_brand::CLI_BINARY;
+const APP: &str = dac_brand::DISPLAY_NAME;
+const BIN: &str = dac_brand::BINARY;
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]
@@ -113,7 +123,7 @@ fn library_warnings(session: &mut Session, who: &str) {
 fn library_error(dir: &str, e: dac_engine::EngineError) -> String {
     match e {
         dac_engine::EngineError::LibraryInUse(why) => format!(
-            "{dir}: {why}\nTo work with the library while the app has it open, start the app with `--control PORT` and use `lightcraft-cli mcp --connect 127.0.0.1:PORT`."
+            "{dir}: {why}\nTo work with the library while the app has it open, start the app with `--control PORT` and use `{CLI} mcp --connect 127.0.0.1:PORT`."
         ),
         e => format!("{dir}: {e}"),
     }
@@ -121,10 +131,10 @@ fn library_error(dir: &str, e: dac_engine::EngineError) -> String {
 
 fn main() -> ExitCode {
     // `--features dhat-heap`: count allocations; the profile is written when `_heap` drops
-    // (LIGHTCRAFT_DHAT_FILE, default dhat-heap.json).
+    // (<PREFIX>_DHAT_FILE, default dhat-heap.json).
     #[cfg(feature = "dhat-heap")]
     let _heap = {
-        let file = std::env::var("LIGHTCRAFT_DHAT_FILE").unwrap_or_else(|_| "dhat-heap.json".into());
+        let file = dac_brand::env("DHAT_FILE").unwrap_or_else(|| "dhat-heap.json".into());
         dac_engine::memory::set_heap_stats(|| {
             let s = dhat::HeapStats::get();
             dac_engine::memory::HeapUsage { current: s.curr_bytes as u64, peak: s.max_bytes as u64 }
@@ -132,9 +142,17 @@ fn main() -> ExitCode {
         dhat::Profiler::builder().file_name(file).build()
     };
     alloc_release::install();
-    // Warnings (a GPU render redone on the CPU, an unknown backend name) on stderr; LIGHTCRAFT_LOG
+    // Warnings (a GPU render redone on the CPU, an unknown backend name) on stderr; <PREFIX>_LOG
     // or RUST_LOG picks another level (#168).
     dac_engine::logging::install("dac-cli");
+    // first start under this name: copy the settings folder of a previous name (never moved)
+    if !dac_brand::env_is_set("NO_PREFS") {
+        match dac_brand::migrate_legacy_settings() {
+            Ok(Some(from)) => log::info!("settings copied from {}", from.display()),
+            Ok(None) => {}
+            Err(e) => log::warn!("could not copy the previous settings folder: {e}"),
+        }
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let r = match args.first().map(String::as_str) {
         Some("run") => run(&args[1..]),
@@ -147,19 +165,19 @@ fn main() -> ExitCode {
         Some("controls") => controls(&args[1..]),
         Some("calibrate") => calibrate(&args[1..]),
         Some("--version" | "-V" | "version") => {
-            println!("lightcraft-cli {}", env!("CARGO_PKG_VERSION"));
+            println!("{CLI} {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         Some("--help" | "-h" | "help") | None => {
-            print!("{USAGE}");
+            print!("{}", usage());
             Ok(())
         }
-        Some(other) => Err(format!("unknown subcommand `{other}`\n\n{USAGE}")),
+        Some(other) => Err(format!("unknown subcommand `{other}`\n\n{}", usage())),
     };
     match r {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("lightcraft-cli: {e}");
+            eprintln!("{CLI}: {e}");
             ExitCode::FAILURE
         }
     }
@@ -310,11 +328,11 @@ fn mcp(args: &[String]) -> Result<(), String> {
             }
             match Remote::connect(&addr) {
                 Ok(r) => {
-                    eprintln!("lightcraft-cli mcp: connected to LightCraft at {addr}");
+                    eprintln!("{CLI} mcp: connected to {APP} at {addr}");
                     Box::new(r)
                 }
                 Err(e) => {
-                    eprintln!("lightcraft-cli mcp: LightCraft is not reachable at {addr} yet ({e}); will retry on each call");
+                    eprintln!("{CLI} mcp: {APP} is not reachable at {addr} yet ({e}); will retry on each call");
                     Box::new(Remote::lazy(&addr))
                 }
             }
@@ -324,8 +342,8 @@ fn mcp(args: &[String]) -> Result<(), String> {
                 Some(dir) => {
                     let mut h = Headless::default();
                     let r = h.session.open_library(dir, demo).map_err(|e| library_error(dir, e))?;
-                    eprintln!("lightcraft-cli mcp: opened library {dir} ({r:?})");
-                    library_warnings(&mut h.session, "lightcraft-cli mcp");
+                    eprintln!("{CLI} mcp: opened library {dir} ({r:?})");
+                    library_warnings(&mut h.session, &format!("{CLI} mcp"));
                     h
                 }
                 None if demo => Headless::demo(),
@@ -334,12 +352,12 @@ fn mcp(args: &[String]) -> Result<(), String> {
             if !files.is_empty() {
                 let paths = expand_paths(&files);
                 let r = h.session.execute("library.import", &json!({"paths": paths})).map_err(|e| e.to_string())?;
-                eprintln!("lightcraft-cli mcp: imported {} photo(s)", r["imported"].as_array().map_or(0, Vec::len));
+                eprintln!("{CLI} mcp: imported {} photo(s)", r["imported"].as_array().map_or(0, Vec::len));
             }
             Box::new(h)
         }
     };
-    eprintln!("lightcraft-cli mcp: serving MCP on stdio ({})", backend.describe());
+    eprintln!("{CLI} mcp: serving MCP on stdio ({})", backend.describe());
     let mut server = Server::new(backend).with_command_tools(!compact);
     let stdin = std::io::stdin();
     server.serve(BufReader::new(stdin), std::io::stdout()).map_err(|e| e.to_string())
@@ -453,7 +471,7 @@ fn synth_merge(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// One step of `lightcraft-cli run`: a command id (or control-protocol method) and its params.
+/// One step of `<cli> run`: a command id (or control-protocol method) and its params.
 #[derive(Debug, PartialEq)]
 struct Step {
     id: String,
@@ -543,42 +561,42 @@ fn run(args: &[String]) -> Result<(), String> {
         }
     }
     if steps.is_empty() {
-        return Err("run: no command given (see `lightcraft-cli commands`)".into());
+        return Err(format!("run: no command given (see `{CLI} commands`)"));
     }
-    let mut backend: Box<dyn Backend> =
-        match connect {
-            Some(addr) => {
-                if demo || library.is_some() || !imports.is_empty() {
-                    return Err("--demo, --library and --import apply to headless mode only".into());
-                }
-                Box::new(Remote::connect(&addr).map_err(|e| {
-                    format!("LightCraft is not reachable at {addr} ({e}); start it with `lightcraft --control {}`", connect_port(&addr))
-                })?)
+    let mut backend: Box<dyn Backend> = match connect {
+        Some(addr) => {
+            if demo || library.is_some() || !imports.is_empty() {
+                return Err("--demo, --library and --import apply to headless mode only".into());
             }
-            None => {
-                let mut h = match &library {
-                    Some(dir) => {
-                        let mut h = Headless::default();
-                        h.session.open_library(dir, demo).map_err(|e| library_error(dir, e))?;
-                        library_warnings(&mut h.session, "dac-cli");
-                        h
-                    }
-                    None if demo => Headless::demo(),
-                    None => Headless::default(),
-                };
-                if !imports.is_empty() {
-                    let paths = expand_paths(&imports);
-                    let r = h.session.execute("library.import", &json!({"paths": paths})).map_err(|e| e.to_string())?;
-                    // what follows acts on the imported photos (already-known files are reported as duplicates)
-                    let mut ids: Vec<Value> = r["imported"].as_array().cloned().unwrap_or_default();
-                    ids.extend(r["duplicates"].as_array().into_iter().flatten().filter_map(|d| d.get("existing").filter(|v| v.is_u64()).cloned()));
-                    if let Some(first) = ids.first().cloned() {
-                        h.session.execute("library.select", &json!({"ids": ids, "active": first})).map_err(|e| e.to_string())?;
-                    }
+            Box::new(
+                Remote::connect(&addr)
+                    .map_err(|e| format!("{APP} is not reachable at {addr} ({e}); start it with `{BIN} --control {}`", connect_port(&addr)))?,
+            )
+        }
+        None => {
+            let mut h = match &library {
+                Some(dir) => {
+                    let mut h = Headless::default();
+                    h.session.open_library(dir, demo).map_err(|e| library_error(dir, e))?;
+                    library_warnings(&mut h.session, "dac-cli");
+                    h
                 }
-                Box::new(h)
+                None if demo => Headless::demo(),
+                None => Headless::default(),
+            };
+            if !imports.is_empty() {
+                let paths = expand_paths(&imports);
+                let r = h.session.execute("library.import", &json!({"paths": paths})).map_err(|e| e.to_string())?;
+                // what follows acts on the imported photos (already-known files are reported as duplicates)
+                let mut ids: Vec<Value> = r["imported"].as_array().cloned().unwrap_or_default();
+                ids.extend(r["duplicates"].as_array().into_iter().flatten().filter_map(|d| d.get("existing").filter(|v| v.is_u64()).cloned()));
+                if let Some(first) = ids.first().cloned() {
+                    h.session.execute("library.select", &json!({"ids": ids, "active": first})).map_err(|e| e.to_string())?;
+                }
             }
-        };
+            Box::new(h)
+        }
+    };
     let mut out = std::io::stdout().lock();
     let mut failed = 0;
     for s in &steps {
@@ -690,9 +708,9 @@ fn render(args: &[String]) -> Result<(), String> {
     dac_engine::export::write_file(&output, &e.bytes)?;
     for (sc, bytes) in &sidecars {
         dac_engine::export::write_file(sc, bytes)?;
-        eprintln!("lightcraft-cli: wrote {sc}");
+        eprintln!("{CLI}: wrote {sc}");
     }
-    eprintln!("lightcraft-cli: wrote {output} ({}×{})", e.width, e.height);
+    eprintln!("{CLI}: wrote {output} ({}×{})", e.width, e.height);
     Ok(())
 }
 
@@ -743,7 +761,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
         let ti = Instant::now();
         let r = session.execute("library.import", &json!({"paths": expand_paths(&files)})).map_err(|e| e.to_string())?;
         let n = r["imported"].as_array().map_or(0, Vec::len);
-        eprintln!("lightcraft-cli snapshot: imported {n} files in {:.0} ms", ti.elapsed().as_secs_f64() * 1e3);
+        eprintln!("{CLI} snapshot: imported {n} files in {:.0} ms", ti.elapsed().as_secs_f64() * 1e3);
     }
     let services = dac_ui_egui::Services {
         write_shared: Some(std::sync::Arc::new(dac_engine::export::write_file)),
@@ -819,11 +837,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
             }
             writeln!(out, "{reply}").map_err(|e| e.to_string())?;
             if method == "ui.screenshot" {
-                eprintln!(
-                    "lightcraft-cli snapshot: {} ({:.0} ms)",
-                    reply["result"]["path"].as_str().unwrap_or("?"),
-                    ts.elapsed().as_secs_f64() * 1000.0
-                );
+                eprintln!("{CLI} snapshot: {} ({:.0} ms)", reply["result"]["path"].as_str().unwrap_or("?"), ts.elapsed().as_secs_f64() * 1000.0);
             }
             if h.quit_requested() {
                 break;
@@ -835,18 +849,18 @@ fn snapshot(args: &[String]) -> Result<(), String> {
         if r["ok"] != true {
             return Err(format!("screenshot failed: {}", r["error"]));
         }
-        eprintln!("lightcraft-cli snapshot: wrote {path} ({}×{})", r["result"]["width"], r["result"]["height"]);
+        eprintln!("{CLI} snapshot: wrote {path} ({}×{})", r["result"]["width"], r["result"]["height"]);
     }
     // a background export started by the script finishes before we exit (its files would be cut off)
     if h.app.export.is_some() {
-        eprintln!("lightcraft-cli snapshot: waiting for the background export");
+        eprintln!("{CLI} snapshot: waiting for the background export");
         let te = std::time::Instant::now();
         while h.app.export.is_some() && te.elapsed() < std::time::Duration::from_secs(3600) {
             h.step();
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
     }
-    eprintln!("lightcraft-cli snapshot: done in {:.2} s ({} frames)", t0.elapsed().as_secs_f64(), h.frames());
+    eprintln!("{CLI} snapshot: done in {:.2} s ({} frames)", t0.elapsed().as_secs_f64(), h.frames());
     if failed > 0 { Err(format!("{failed} scripted request(s) failed")) } else { Ok(()) }
 }
 

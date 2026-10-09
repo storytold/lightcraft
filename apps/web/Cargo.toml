@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "LightCraft in the browser: the egui UI compiled to WASM (build with `cargo xtask web`)"
+description = "The app in the browser: the egui UI compiled to WASM (build with `cargo xtask web`)"
 
 [lints]
 workspace = true
@@ -13,6 +13,7 @@ workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+dac-brand = { workspace = true }
 dac-engine = { workspace = true }
 dac-ui-egui = { workspace = true }
 dac-codecs = { workspace = true }

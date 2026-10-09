@@ -10,10 +10,10 @@ use serde_json::{Value, json};
 
 use crate::Session;
 
-/// File extension of LightCraft preset files.
-pub const LCPRESET_EXT: &str = "lcpreset";
+/// File extension of the app's preset files (legacy extensions are read too, see [`dac_brand::preset_exts`]).
+pub const LCPRESET_EXT: &str = dac_brand::PRESET_EXT;
 /// The `format` tag of a `.lcpreset` file.
-pub const LCPRESET_FORMAT: &str = "lightcraft.preset";
+pub const LCPRESET_FORMAT: &str = crate::legacy::PRESET_FORMAT;
 
 /// A `.lcpreset` file: one or more presets with their groups.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -50,7 +50,7 @@ pub fn parse_preset_file(name: &str, bytes: &[u8]) -> Result<Vec<Preset>, String
     let ext = Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
     let text = String::from_utf8_lossy(bytes);
     let text = text.trim_start_matches('\u{feff}');
-    if ext == "xmp" || (ext != LCPRESET_EXT && text.trim_start().starts_with('<')) {
+    if ext == "xmp" || (!dac_brand::preset_exts().any(|e| e == ext) && text.trim_start().starts_with('<')) {
         return crate::crs::preset_from_xmp(text, &stem).map(|p| vec![p]).ok_or_else(|| "no develop settings in this XMP file".into());
     }
     let v: Value = serde_json::from_str(text).map_err(|e| format!("not a preset file: {e}"))?;
@@ -88,7 +88,7 @@ pub fn parse_preset_file(name: &str, bytes: &[u8]) -> Result<Vec<Preset>, String
 pub fn expand_preset_paths(paths: &[String]) -> Vec<String> {
     let preset_file = |p: &Path| {
         let ext = p.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-        ext == LCPRESET_EXT || ["xmp", "lrtemplate", "zip", "lmp", "mplumpack"].contains(&ext.as_str())
+        dac_brand::preset_exts().any(|e| e == ext) || ["xmp", "lrtemplate", "zip", "lmp", "mplumpack"].contains(&ext.as_str())
     };
     let mut out = Vec::new();
     for p in paths {
@@ -562,7 +562,7 @@ mod tests {
         let path = d.join("mine");
         let r = s.execute("preset.export", &json!({"path": path.to_string_lossy()})).unwrap();
         assert_eq!(r["count"], 2);
-        let file = d.join("mine.lcpreset");
+        let file = d.join(format!("mine.{}", dac_brand::PRESET_EXT));
         assert!(file.is_file());
         let one = d.join("travel.lcpreset");
         s.execute("preset.export", &json!({"path": one.to_string_lossy(), "group": "Travel"})).unwrap();

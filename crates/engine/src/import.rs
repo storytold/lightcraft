@@ -30,10 +30,10 @@ use serde::{Deserialize, Serialize};
 use crate::Session;
 use crate::media::ProbeInfo;
 
-/// File extensions LightCraft imports (lower case).
+/// File extensions the app imports (lower case).
 pub const EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "png", "tif", "tiff", "webp", "dng", "cr2", "cr3", "nef", "nrw", "arw", "raf", "orf", "rw2", "rwl", "raw", "pef", "srw", "psd",
-    "jxl", "gif", "bmp", "heic", "avif", // containers LightCraft cannot decode but imports as preview only (their embedded JPEG)
+    "jxl", "gif", "bmp", "heic", "avif", // containers the app cannot decode but imports as preview only (their embedded JPEG)
     "iiq", "crw", "mrw", "x3f", "kdc", "mos", "erf", "3fr", "fff",
 ];
 
@@ -235,7 +235,7 @@ pub fn has_import_look(p: &Photo) -> bool {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ImportDefaults {
-    /// Preset applied to raw files (`None` = the LightCraft default).
+    /// Preset applied to raw files (`None` = the the app default).
     pub raw_preset: Option<String>,
     /// Use a camera's own default (below) when the photo's camera has one.
     pub per_camera: bool,
@@ -263,7 +263,7 @@ pub struct ImportDefaults {
 pub struct CameraDefault {
     /// Make + model (`Meta::camera`).
     pub camera: String,
-    /// Preset id; `None` = the LightCraft default for this camera.
+    /// Preset id; `None` = the the app default for this camera.
     pub preset: Option<String>,
 }
 
@@ -1393,8 +1393,8 @@ mod prepared_tests {
     #[test]
     fn revalidate_add_only_converts_matching_ready_item() {
         let mut s = Session::new();
-        let existing_path = std::env::temp_dir().join("lightcraft-revalidate-existing.jpg");
-        let other_path = std::env::temp_dir().join("lightcraft-revalidate-other.jpg");
+        let existing_path = std::env::temp_dir().join("app-revalidate-existing.jpg");
+        let other_path = std::env::temp_dir().join("app-revalidate-other.jpg");
         let existing = Photo::new(PhotoId(1), Source::File { path: existing_path.to_string_lossy().into() }, "existing.jpg", "JPG", 1, 1, "now");
         s.commit("existing", Op::AddPhoto { photo: Box::new(existing) }).unwrap();
         let ready = |path: &Path| ReadyFile {

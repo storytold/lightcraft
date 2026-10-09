@@ -1,6 +1,6 @@
 # README showcase
 
-The screenshots in `docs/images/` are captured by driving LightCraft over its control channel.
+The screenshots in `docs/images/` are captured by driving the app over its control channel.
 
 ```sh
 # public-domain set (downloaded into the gitignored corpus/, see assets/ATTRIBUTION.md for sources)

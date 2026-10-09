@@ -907,7 +907,7 @@ fn versions(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId) {
             let _ = app.run("version.create", json!({}));
         }
         ui.add_space(8.0);
-        // Named (made by you) and Auto (made by LightCraft) versions
+        // Named (made by you) and Auto (made by the app) versions
         let tab_id = egui::Id::new("versions-tab");
         let mut auto: bool = ui.data(|d| d.get_temp(tab_id)).unwrap_or(false);
         let named_n = p.versions.iter().filter(|v| !v.auto).count();

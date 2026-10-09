@@ -1,5 +1,8 @@
 # AI Denoise
 
+> Names in angle brackets (`<app>`, `<binary>`, `<cli>`, `<PREFIX>`, `<settings_dir>`, …) are the values set in
+> [`brand.toml`](../brand.toml); see the README.
+
 Edit ▸ Detail ▸ **AI Denoise** is a per-photo switch above **Amount** (0–100).
 Turning it on starts at 50, or preserves an already positive Amount. Turning it off
 preserves Amount and mixes none of the cleaned picture. It affects only the requesting
@@ -15,7 +18,7 @@ An active slider gesture finishes before the pending action resumes.
 ## Models and terms
 
 **No model weights are bundled.** Models live in the per-user `denoise-models` folder
-(override with `LIGHTCRAFT_DENOISE_MODELS`). Settings provides **Install from file…**
+(override with `<PREFIX>_DENOISE_MODELS`). Settings provides **Install from file…**
 for a user-supplied ONNX file with a `denoise-model.json` beside it. The default build
 offers no model downloads. The separate `rawnind-model` Cargo feature enables the
 pinned RawNIND offer only when a release's model policy permits it.

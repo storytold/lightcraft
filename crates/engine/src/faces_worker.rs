@@ -75,7 +75,7 @@ impl Pace {
 }
 
 /// How many photos are worked on at once at `pace` on a machine with `cores` threads (as the system reports them, which
-/// respects container limits and affinity). `cap` is a limit the user set (`LIGHTCRAFT_FACE_THREADS`). Memory is not
+/// respects container limits and affinity). `cap` is a limit the user set (`{ENV_PREFIX}_FACE_THREADS`). Memory is not
 /// decided here: decodes wait at the process-wide memory gate ([`crate::memory::work_gate`]), sized from the RAM.
 pub(crate) fn workers_for(cores: usize, pace: Pace, cap: Option<usize>) -> usize {
     let n = match pace {
@@ -93,17 +93,17 @@ fn cores() -> usize {
 }
 
 fn cap_from_env() -> Option<usize> {
-    std::env::var("LIGHTCRAFT_FACE_THREADS").ok().and_then(|v| v.trim().parse::<usize>().ok())
+    dac_brand::env("FACE_THREADS").and_then(|v| v.trim().parse::<usize>().ok())
 }
 
 /// The most photos the memory budget can hold in progress at once: half of it (the rest is the window's, the caches',
-/// the renders'), a worker at a time. Raising the budget (`LIGHTCRAFT_MEMORY_MB`) raises this.
+/// the renders'), a worker at a time. Raising the budget (`{ENV_PREFIX}_MEMORY_MB`) raises this.
 fn memory_workers() -> usize {
     (crate::memory::budget() / 2 / WORKER_BYTES).max(1)
 }
 
 /// Photos to work on at once at `pace` on this machine: by the processor's threads and the pace, and never more than
-/// the memory allows. A limit the user sets (`LIGHTCRAFT_FACE_THREADS`) replaces the memory one.
+/// the memory allows. A limit the user sets (`{ENV_PREFIX}_FACE_THREADS`) replaces the memory one.
 pub(crate) fn target_workers(pace: Pace) -> usize {
     workers_for(cores(), pace, Some(cap_from_env().unwrap_or_else(memory_workers)))
 }

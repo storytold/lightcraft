@@ -13,7 +13,7 @@ use crate::backend::{Backend, ProgressHook};
 /// File extensions recognised as photos when expanding folders.
 pub const PHOTO_EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "png", "tif", "tiff", "webp", "dng", "cr2", "cr3", "nef", "arw", "raf", "orf", "rw2", "rwl", "raw", "pef", "srw", "psd", "jxl",
-    "gif", "bmp", "avif", // containers LightCraft cannot decode but imports as preview only (their embedded JPEG)
+    "gif", "bmp", "avif", // containers the app cannot decode but imports as preview only (their embedded JPEG)
     "iiq", "crw", "mrw", "x3f", "kdc", "mos", "erf", "3fr", "fff",
 ];
 
@@ -148,7 +148,7 @@ impl Backend for Headless {
             }
             "app.export" => self.export(&p),
             m if m.starts_with("ui.") || m == "app.quit" => {
-                Err(format!("`{m}` needs the desktop app: start `lightcraft --control 7980` and run the MCP server with `--connect`"))
+                Err(format!("`{m}` needs the desktop app: start `{} --control 7980` and run the MCP server with `--connect`", dac_brand::BINARY))
             }
             other => Err(format!("unknown method `{other}`")),
         }

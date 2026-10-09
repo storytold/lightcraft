@@ -111,7 +111,7 @@ pub struct LoadReport {
 }
 
 /// Where persistence time goes (reported by `library.info` → `persistence`; printed to stderr
-/// per write under `LIGHTCRAFT_PROFILE`). Times are wall-clock milliseconds on the calling
+/// per write under `{ENV_PREFIX}_PROFILE`). Times are wall-clock milliseconds on the calling
 /// thread, i.e. how long the caller (the UI thread, for the app) was blocked.
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -159,10 +159,10 @@ pub struct SnapshotTiming {
     pub records: u64,
 }
 
-/// `LIGHTCRAFT_PROFILE` is set: print persistence timings to stderr.
+/// `{ENV_PREFIX}_PROFILE` is set: print persistence timings to stderr.
 fn profiling() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LIGHTCRAFT_PROFILE").is_some())
+    *ON.get_or_init(|| dac_brand::env_is_set("PROFILE"))
 }
 
 fn ms_since(t: web_time::Instant) -> f64 {
@@ -226,7 +226,7 @@ pub fn decode_record(line: &str) -> Option<(u64, Op)> {
 enum Line {
     Record(u64, Op),
     /// The CRC matches — the line is exactly what was written — but the op doesn't parse: it
-    /// was written by a newer LightCraft (an op or field this version doesn't know), not damaged.
+    /// was written by a newer version of the app (an op or field this version doesn't know), not damaged.
     Newer(u64),
     /// Malformed or a CRC mismatch: torn or damaged.
     Bad,
@@ -250,7 +250,7 @@ fn decode_line(line: &str) -> Line {
     }
 }
 
-/// The error for a library written by a newer LightCraft.
+/// The error for a library written by a newer version of the app.
 fn newer(what: String) -> CatalogError {
     CatalogError::Newer(format!("{what}; this version reads catalog format v{VERSION} and older"))
 }
@@ -317,7 +317,7 @@ impl Journal {
                 // the header first: a newer snapshot may not parse as this version's catalog
                 let h: SnapHeader = serde_json::from_slice(&bytes).map_err(|e| CatalogError::Corrupt(format!("{SNAPSHOT}: {e}")))?;
                 if h.format != FORMAT {
-                    return Err(CatalogError::Corrupt(format!("{SNAPSHOT}: not a LightCraft catalog (format {:?})", h.format)));
+                    return Err(CatalogError::Corrupt(format!("{SNAPSHOT}: not a {} catalog (format {:?})", dac_brand::DISPLAY_NAME, h.format)));
                 }
                 if h.version > VERSION {
                     return Err(newer(format!("{SNAPSHOT} is catalog format v{}", h.version)));

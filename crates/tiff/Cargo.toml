@@ -3,12 +3,13 @@ name = "dac-tiff"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft TIFF/IFD reader and writer (L0)"
+description = "TIFF/IFD reader and writer (L0)"
 
 [lints]
 workspace = true
 
 [dependencies]
+dac-brand = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 

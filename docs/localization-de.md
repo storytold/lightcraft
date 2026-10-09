@@ -1,4 +1,6 @@
-# LightCraft auf Deutsch
+# Deutsche Oberfläche
+
+> `<PREFIX>`, `<cli>`, `<binary>`: [`brand.toml`](../brand.toml).
 
 Wähle **Bearbeiten → Sprache → Deutsch** oder **Einstellungen → Allgemein → Sprache**.
 Die Auswahl gilt sofort und wird für den nächsten Start gespeichert (`language: "de"` in `ui.json`).
@@ -20,13 +22,16 @@ unverändert an das Modell übergeben; die Beispiele verwenden dessen englische 
 
 Feste Texte: `crates/ui-egui/locales/de.json`. Meldungen mit Werten:
 `crates/ui-egui/locales/de-formats.json`. Die englischen Schlüssel bleiben unverändert;
+(Platzhalter für den Produktnamen: `{app}`, Programmname der Kommandozeile: `{cli}`, Präfix der
+Umgebungsvariablen: `{env}`; sie kommen aus `brand.toml`, bleiben in jeder Übersetzung unverändert
+stehen und werden nicht dekliniert, z. B. `"About {app}"` → `"Über {app}"`.)
 Platzhalter werden beim Build durch Rust geprüft. Englische Pluralendungen werden dort,
 wo sie nicht passen, mit `{:.0}` ausgeblendet; mengenabhängige Meldungen verwenden neutrale
 Formulierungen. Das Datum erscheint beispielsweise als `Sonntag, 20.09.2026`.
 
 ```sh
 cargo test -p dac-ui-egui i18n::tests
-LIGHTCRAFT_LANGUAGE=de lightcraft-cli snapshot --demo -o deutsch.png --size 1600x1000
+<PREFIX>_LANGUAGE=de <cli> snapshot --demo -o deutsch.png --size 1600x1000
 ```
 
 Die Tests prüfen Katalogabdeckung, Platzhalter, Sprachwechsel per Menü und Steuerkanal,

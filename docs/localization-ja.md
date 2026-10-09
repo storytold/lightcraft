@@ -1,6 +1,8 @@
-# LightCraft 日本語表示
+# 日本語表示
 
-LightCraft は日本語・簡体字中国語・英語（English）の表示に対応しています。
+> `<PREFIX>`, `<cli>`, `<binary>`: [`brand.toml`](../brand.toml).
+
+本アプリは日本語・簡体字中国語・英語（English）の表示に対応しています。
 言語設定は `ui.json` の `language` に保存します。
 
 - 「編集 → 言語」または「設定 → 一般 → 言語」で切り替えます。選択は次回起動にも引き継ぎます。
@@ -18,11 +20,13 @@ LightCraft は日本語・簡体字中国語・英語（English）の表示に�
 
 静的な表示文言は `crates/ui-egui/locales/ja.json`、可変値を含む表示文言は
 `crates/ui-egui/locales/ja-formats.json` にあります。英文をキーにして翻訳を管理します。
+製品名は訳文に書かず、プレースホルダー `{app}`（`brand.toml` の表示名）を使います。コマンドライン名は `{cli}`、
+環境変数の接頭辞は `{env}` です。訳文でもそのまま残します（例: `About {app}` → `{app}について`）。
 
 可変文言の訳文はすべてビルド時にRustの `format!` 検査を受けます。値は名前（`{n}`）または
 位置（`{0}`、`{1}`）で参照し、`{:.1}` などの書式指定は英文と同じものを使います。
 英語の単複数語尾を日本語で省略する場合、対応する文字列引数は `{:.0}` で空にします。
-`LIGHTCRAFT_LANGUAGE=ja lightcraft-cli snapshot ...` で日本語の画面を描画できます。
+`<PREFIX>_LANGUAGE=ja <cli> snapshot ...` で日本語の画面を描画できます。
 
 表示・フォント・言語の切り替え・設定の保存・コマンドIDの保持は
 `cargo test -p dac-ui-egui i18n::tests` で検証します（グリフの検査は `CRAFT_FONTS_DIR` 指定時のみ実行）。

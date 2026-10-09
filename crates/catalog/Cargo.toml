@@ -3,12 +3,13 @@ name = "dac-catalog"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft library: photos, albums, ratings/flags, search/filter/sort, op-log persistence (L3)"
+description = "Library: photos, albums, ratings/flags, search/filter/sort, op-log persistence (L3)"
 
 [lints]
 workspace = true
 
 [dependencies]
+dac-brand = { workspace = true }
 dac-develop = { workspace = true }
 dac-meta = { workspace = true }
 serde = { workspace = true }

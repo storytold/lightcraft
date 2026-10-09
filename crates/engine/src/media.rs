@@ -796,7 +796,7 @@ impl RenderJob {
 
 /// Render `src`: on the GPU when `gpu` is set and a GPU is available (`dac_gpu`), else on
 /// the CPU, reusing `stages` either way. Both produce the same image within 1–3 LSB (see
-/// `docs/gpu-pipeline.md`); `LIGHTCRAFT_GPU=0` or [`dac_gpu::set_enabled`] forces the CPU.
+/// `docs/gpu-pipeline.md`); `{ENV_PREFIX}_GPU=0` or [`dac_gpu::set_enabled`] forces the CPU.
 pub fn develop(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>, gpu: bool) -> Rendered {
     // LUT profiles have no GPU stage: they render on the CPU
     if gpu

@@ -53,8 +53,10 @@ macro_rules! language_table {
                 // A malformed catalog logs and comes back empty: a broken translation degrades to
                 // English text, it never takes the app down.
                 let parse = |catalog: Option<&'static str>| match catalog {
-                    Some(json) => match serde_json::from_str(json) {
-                        Ok(messages) => messages,
+                    Some(json) => match serde_json::from_str::<BTreeMap<String, String>>(json) {
+                        // Keys stay as written (`{app}` and all) so source text finds them; values are
+                        // shown, so the brand placeholders are filled in once, here.
+                        Ok(messages) => messages.into_iter().map(|(key, value)| (key, brand_fill(&value))).collect(),
                         Err(error) => {
                             log::error!("Invalid message catalog for {}: {error}", self.code());
                             BTreeMap::new()
@@ -145,9 +147,9 @@ thread_local! {
     static LOCALE: std::cell::Cell<Locale> = const { std::cell::Cell::new(Locale::En) };
 }
 
-/// The UI language from the environment (`LIGHTCRAFT_LANGUAGE=zh-hans`), for headless runs.
+/// The UI language from the environment (`<ENV_PREFIX>_LANGUAGE=zh-hans`), for headless runs.
 pub fn default_language() -> Locale {
-    std::env::var("LIGHTCRAFT_LANGUAGE").ok().and_then(|value| Locale::parse_tag(&value)).unwrap_or(Locale::En)
+    dac_brand::env("LANGUAGE").and_then(|value| Locale::parse_tag(&value)).unwrap_or(Locale::En)
 }
 
 pub fn set_language(language: Locale) {
@@ -168,15 +170,37 @@ pub fn tr(source: &str) -> &str {
 /// out for as long as the `'static` key it was looked up by.
 fn tr_in(language: Locale, source: &str) -> &str {
     if language.catalog().is_empty() {
-        return source;
+        return filled_source(source);
     }
     thread_local! {
         static VERBATIM: RefCell<BTreeMap<Locale, BTreeMap<String, &'static str>>> = const { RefCell::new(BTreeMap::new()) };
     }
     VERBATIM.with_borrow_mut(|cache| {
         let verbatim = cache.entry(language).or_insert_with(|| catalog_verbatim(language));
-        verbatim.get(source).copied().unwrap_or(source)
+        verbatim.get(source).copied().unwrap_or_else(|| filled_source(source))
     })
+}
+
+/// Fills the brand placeholders of catalog and source text: `{app}` (the display name, via
+/// [`dac_brand::fill`]), `{cli}` (the command-line binary) and `{env}` (the environment variable prefix).
+pub fn brand_fill(text: &str) -> String {
+    if !text.contains('{') {
+        return text.to_string();
+    }
+    dac_brand::fill(text).replace("{cli}", dac_brand::CLI_BINARY).replace("{env}", dac_brand::ENV_PREFIX)
+}
+
+/// Source text with its brand placeholders filled in. Text without a placeholder is returned as is;
+/// filled text is interned (the set of built-in messages is bounded), so it can be handed out like
+/// the source.
+fn filled_source(source: &str) -> &str {
+    if !(source.contains("{app}") || source.contains("{cli}") || source.contains("{env}")) {
+        return source;
+    }
+    thread_local! {
+        static FILLED: RefCell<BTreeMap<String, &'static str>> = const { RefCell::new(BTreeMap::new()) };
+    }
+    FILLED.with_borrow_mut(|cache| *cache.entry(source.to_string()).or_insert_with(|| Box::leak(brand_fill(source).into_boxed_str())))
 }
 
 /// One language's catalog keyed for lookup, with values that outlive the catalog's own borrow.
@@ -194,10 +218,10 @@ include!(concat!(env!("OUT_DIR"), "/tr-formats.rs"));
 /// (issue #260), in the UI language: the error and, when there is one, the log file to look in.
 pub fn startup_failed_message(error: &str, log_file: Option<&str>) -> (String, String) {
     let text = match log_file {
-        Some(path) => tr_format!("LightCraft could not open its window: {e}\n\nThe log file has the details: {path}", e = error, path = path),
-        None => tr_format!("LightCraft could not open its window: {e}", e = error),
+        Some(path) => tr_format!("{app} could not open its window: {e}\n\nThe log file has the details: {path}", e = error, path = path),
+        None => tr_format!("{app} could not open its window: {e}", e = error),
     };
-    (tr("LightCraft could not start").to_string(), text)
+    (tr("{app} could not start").to_string(), text)
 }
 
 pub fn builtin_label(source: &str, builtin: bool) -> &str {
@@ -394,7 +418,11 @@ mod tests {
             let mut rest = text;
             while let Some(start) = rest.find('{') {
                 let Some(end) = rest[start..].find('}') else { break };
-                out.push(rest[start + 1..start + end].split(':').next().unwrap_or("").to_string());
+                let name = rest[start + 1..start + end].split(':').next().unwrap_or("").to_string();
+                // brand placeholders are filled in at load time, so only the key still has them
+                if !matches!(name.as_str(), "app" | "cli" | "env") {
+                    out.push(name);
+                }
                 rest = &rest[start + end + 1..];
             }
             out.sort();
@@ -419,9 +447,10 @@ mod tests {
     /// file, in the UI language.
     #[test]
     fn startup_failure_message_names_the_error_and_the_log() {
-        let (title, text) = startup_failed_message("no adapter", Some("/home/a/.config/lightcraft/logs/lightcraft.log"));
-        assert_eq!(title, "LightCraft could not start");
-        assert!(text.contains("no adapter") && text.ends_with("lightcraft.log"), "{text}");
+        let log = format!("/home/a/.config/app/logs/{}.log", dac_brand::BINARY);
+        let (title, text) = startup_failed_message("no adapter", Some(&log));
+        assert_eq!(title, format!("{} could not start", dac_brand::DISPLAY_NAME));
+        assert!(text.contains("no adapter") && text.ends_with(&log), "{text}");
         assert!(!startup_failed_message("no adapter", None).1.contains("log file"));
     }
 
@@ -720,7 +749,8 @@ mod tests {
         app.ui.view = crate::state::ViewMode::People;
         let text = painted_text(&ctx, &mut app, Locale::De);
         assert!(text.contains("Benannte Personen"), "{text}");
-        for (command, title) in [("app.about", "Über LightCraft"), ("app.shortcuts", "Tastenkürzel"), ("app.settings", "Einstellungen")] {
+        let about = format!("Über {}", dac_brand::DISPLAY_NAME);
+        for (command, title) in [("app.about", about.as_str()), ("app.shortcuts", "Tastenkürzel"), ("app.settings", "Einstellungen")] {
             app.ui.dialog = None;
             app.run(command, serde_json::json!({})).unwrap();
             let text = painted_text(&ctx, &mut app, Locale::De);
@@ -906,7 +936,7 @@ mod tests {
             // replacement-glyph face, which there is Hack, the face that draws Latin.)
             for family in [egui::FontFamily::Proportional, egui::FontFamily::Name(crate::theme::FONT_SEMIBOLD.into())] {
                 let font = egui::FontId::new(13.0, family);
-                assert!("LightCraft".chars().all(|ch| fonts.has_glyph(&font, ch)), "{font:?}");
+                assert!(dac_brand::DISPLAY_NAME.chars().all(|ch| fonts.has_glyph(&font, ch)), "{font:?}");
             }
         });
         let mut app = crate::DacApp::new(dac_engine::Session::with_demo(), Default::default());

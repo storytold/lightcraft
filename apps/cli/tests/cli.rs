@@ -1,4 +1,4 @@
-//! End-to-end tests of the `lightcraft-cli` binary: `mcp` over real stdio pipes, `render`, `commands`.
+//! End-to-end tests of the command-line binary: `mcp` over real stdio pipes, `render`, `commands`.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 const BIN: &str = env!("CARGO_BIN_EXE_app-cli");
 
 fn tmp(name: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("lightcraft-cli-test-{}", std::process::id()));
+    let d = std::env::temp_dir().join(format!("app-cli-test-{}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
     d.join(name)
 }
@@ -267,8 +267,8 @@ fn snapshot_defaults_to_cpu_without_gpu_environment_overrides() {
     .unwrap();
     let image = tmp("default-cpu.png");
     let output = Command::new(BIN)
-        .env_remove("LIGHTCRAFT_GPU")
-        .env_remove("LIGHTCRAFT_GPU_BACKEND")
+        .env_remove(dac_brand::env_var("GPU"))
+        .env_remove(dac_brand::env_var("GPU_BACKEND"))
         .env_remove("WGPU_BACKEND")
         .args(["snapshot", "--demo", "--script", script.to_str().unwrap(), "-o", image.to_str().unwrap(), "--size", "480x320"])
         .output()
@@ -300,12 +300,13 @@ fn snapshot_starts_without_a_gpu() {
         ),
     )
     .unwrap();
-    for (var, value, reason) in [("LIGHTCRAFT_GPU", "0", "LIGHTCRAFT_GPU=0"), ("LIGHTCRAFT_GPU_BACKEND", "off", "LIGHTCRAFT_GPU_BACKEND=off")] {
+    for (var, value) in [(dac_brand::env_var("GPU"), "0"), (dac_brand::env_var("GPU_BACKEND"), "off")] {
+        let reason = format!("{var}={value}");
         let out = tmp(&format!("nogpu-{var}.png"));
         let o = Command::new(BIN)
-            .env_remove("LIGHTCRAFT_GPU")
-            .env_remove("LIGHTCRAFT_GPU_BACKEND")
-            .env(var, value)
+            .env_remove(dac_brand::env_var("GPU"))
+            .env_remove(dac_brand::env_var("GPU_BACKEND"))
+            .env(&var, value)
             .args(["snapshot", "--demo", "--script", script.to_str().unwrap(), "-o", out.to_str().unwrap(), "--size", "480x320"])
             .output()
             .unwrap();
@@ -315,7 +316,7 @@ fn snapshot_starts_without_a_gpu() {
         let gpu = &replies[1]["result"];
         assert_eq!(gpu["available"], false, "{var}: {gpu}");
         assert_eq!(gpu["adapter"], Value::Null, "{var}: no device was created: {gpu}");
-        assert!(gpu["reason"].as_str().is_some_and(|r| r.contains(reason)), "{var}: {gpu}");
+        assert!(gpu["reason"].as_str().is_some_and(|r| r.contains(&reason)), "{var}: {gpu}");
         let d = dac_codecs::decode(&std::fs::read(&out).unwrap(), Default::default()).unwrap();
         assert_eq!((d.width, d.height), (480, 320));
     }
@@ -387,7 +388,7 @@ fn devices_are_listed_and_imported_from() {
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(base.join("CARD/DCIM/100TEST")).unwrap();
     gradient_png(&base.join("CARD/DCIM/100TEST/IMG_0001.png"));
-    let o = Command::new(BIN).env("LIGHTCRAFT_DEVICE_ROOTS", &base).args(["run", "--demo", "library.devices"]).output().unwrap();
+    let o = Command::new(BIN).env(dac_brand::env_var("DEVICE_ROOTS"), &base).args(["run", "--demo", "library.devices"]).output().unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let line: Value = serde_json::from_slice(o.stdout.split(|b| *b == b'\n').next().unwrap()).unwrap();
     let dev = &line["result"][0];
@@ -418,7 +419,7 @@ fn a_library_open_in_another_process_is_refused() {
     }
     let (ok, _, stderr) = run_cli(&["--library", lib_s, "library.info"], None);
     assert!(!ok);
-    assert!(stderr.contains("already open in lightcraft-cli") && stderr.contains(&format!("process {}", holder.id())), "{stderr}");
+    assert!(stderr.contains("already open in ") && stderr.contains(&format!("process {}", holder.id())), "{stderr}");
     assert!(stderr.contains("mcp --connect"), "{stderr}");
 
     drop(holder.stdin.take()); // EOF: the server exits and lets go of the library
@@ -449,10 +450,10 @@ fn warnings_are_logged_on_stderr() {
     let run = |level: &str| {
         let o = Command::new(BIN)
             .args(["render", input.to_str().unwrap(), "-o", out.to_str().unwrap()])
-            .env("LIGHTCRAFT_GPU_BACKEND", "bogus")
+            .env(dac_brand::env_var("GPU_BACKEND"), "bogus")
             .env("RUST_LOG", level)
-            .env_remove("LIGHTCRAFT_LOG")
-            .env_remove("LIGHTCRAFT_GPU")
+            .env_remove(dac_brand::env_var("LOG"))
+            .env_remove(dac_brand::env_var("GPU"))
             .output()
             .unwrap();
         let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
@@ -460,7 +461,7 @@ fn warnings_are_logged_on_stderr() {
         stderr
     };
     let warn = run("warn");
-    assert!(warn.contains("LIGHTCRAFT_GPU_BACKEND=bogus names no known backend"), "{warn}");
+    assert!(warn.contains(&format!("{}=bogus names no known backend", dac_brand::env_var("GPU_BACKEND"))), "{warn}");
     let off = run("off");
     assert!(!off.contains("names no known backend"), "{off}");
 }
@@ -481,8 +482,12 @@ fn snapshot_rejects_invalid_dimensions_before_creating_an_image() {
 #[test]
 fn snapshot_preserves_fractional_scale_rounding() {
     let image = tmp("fractional-scale-rounding.png");
-    let output =
-        Command::new(BIN).env("LIGHTCRAFT_GPU", "0").args(["snapshot", "--size", "345x200", "--scale", "0.9", "-o"]).arg(&image).output().unwrap();
+    let output = Command::new(BIN)
+        .env(dac_brand::env_var("GPU"), "0")
+        .args(["snapshot", "--size", "345x200", "--scale", "0.9", "-o"])
+        .arg(&image)
+        .output()
+        .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let decoded = dac_codecs::decode(&std::fs::read(image).unwrap(), Default::default()).unwrap();
     assert_eq!((decoded.width, decoded.height), (311, 180));
@@ -498,7 +503,7 @@ fn snapshot_leaves_desktop_gpu_preferences_untouched() {
     session.open_library(&library, true).unwrap();
     drop(session);
     let config = dir.join("config");
-    let app_config = config.join("lightcraft");
+    let app_config = config.join(dac_brand::settings_dir_name(dac_brand::SETTINGS_DIR));
     std::fs::create_dir_all(&app_config).unwrap();
     let ui_path = app_config.join("ui.json");
     let mut ui = dac_ui_egui::UiState::default();
@@ -514,9 +519,12 @@ fn snapshot_leaves_desktop_gpu_preferences_untouched() {
     for gpu_environment in [None, Some("1")] {
         let image = dir.join(format!("{}.png", gpu_environment.unwrap_or("default")));
         let mut cmd = Command::new(BIN);
-        cmd.env("XDG_CONFIG_HOME", &config).env_remove("LIGHTCRAFT_GPU").env_remove("LIGHTCRAFT_GPU_BACKEND").env_remove("WGPU_BACKEND");
+        cmd.env("XDG_CONFIG_HOME", &config)
+            .env_remove(dac_brand::env_var("GPU"))
+            .env_remove(dac_brand::env_var("GPU_BACKEND"))
+            .env_remove("WGPU_BACKEND");
         if let Some(value) = gpu_environment {
-            cmd.env("LIGHTCRAFT_GPU", value);
+            cmd.env(dac_brand::env_var("GPU"), value);
         }
         let output = cmd
             .args(["snapshot", "--library"])

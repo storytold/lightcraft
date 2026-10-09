@@ -1,4 +1,7 @@
-# LightCraft in the browser
+# The app in the browser
+
+> Names in angle brackets (`<app>`, `<binary>`, `<cli>`, `<PREFIX>`, `<settings_dir>`, …) are the values set in
+> [`brand.toml`](../brand.toml); see the README.
 
 `apps/web` runs the same egui UI as the desktop app (`crates/ui-egui`) in the browser,
 compiled to WebAssembly and drawn with WebGL2 (eframe's `glow` backend).
@@ -56,7 +59,7 @@ gzip size (5.25 MB). `wasm-opt -Oz`, when installed, shrinks it further.
 [craft-fonts](https://github.com/storytold/craft-fonts), the optional `CRAFT_FONTS_DIR` build
 input (`CRAFT_FONTS_DIR=../craft-fonts cargo xtask web`; release builds always set it). On wasm32
 `crates/engine/build.rs` embeds only BIZ UDPGothic Regular (UI and watermark fallback). The web
-bundle also ships Noto Sans CJK SC Regular as `lightcraft_zh_hans.otf` and loads it before the UI
+bundle also ships Noto Sans CJK SC Regular as `<binary>_zh_hans.otf` and loads it before the UI
 starts. Keeping the 16 MB Chinese face separate leaves the module under Cloudflare's 25 MiB
 per-file limit (the older Japanese-only module measured 21.8 MB). Without `CRAFT_FONTS_DIR`, the
 web build still works, but Chinese and Japanese text lack glyphs.
@@ -122,8 +125,8 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
     2 s until it works (`web.stats` → `saveError`).
   - A picked or dropped photo whose bytes can't be stored is not added (it would be gone after
     a reload); a notice says why.
-  - One tab at a time: the page holds a Web Lock (`navigator.locks`, `lightcraft-library`); a
-    second tab or window shows "LightCraft is already open in another tab" instead of loading
+  - One tab at a time: the page holds a Web Lock (`navigator.locks`, `<binary>-library`); a
+    second tab or window shows "the app is already open in another tab" instead of loading
     its own copy (two copies would overwrite each other's saves). Browsers without Web Locks, or
     that refuse the lock request, aren't protected: the app starts without the guard.
   - If the stored library can't be opened, a notice says the session is temporary and nothing
@@ -148,7 +151,7 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
 - **Export downloads the file.** *Export…* (<kbd>⌘⇧E</kbd>) runs the same `app.export` path as
   the desktop app (`dac_engine::export`: JPEG/PNG/TIFF/WebP, sizing, naming). The host's
   `write` service hands each file to the browser as a download instead of writing it to disk.
-- **Automation.** `await lightcraft.command("library.info", "{}")` runs any engine or UI command
+- **Automation.** `await app.command("library.info", "{}")` runs any engine or UI command
   by id on the next frame and resolves to the JSON result (`web.stats` reports storage, workers
   and the render queue). This is how the headless-Chrome checks drive the page.
 
@@ -181,7 +184,7 @@ Open `http://127.0.0.1:8080/?bench` to run a scripted measurement:
 The page then logs one console line:
 
 ```
-lightcraft-bench {"first_frame_ms":…,"thumbs_done_ms":…,"slider_draft_ms":[…],"slider_draft_median_ms":…,"slider_job_ms":[…],"release_full_ms":…}
+<binary>-bench {"first_frame_ms":…,"thumbs_done_ms":…,"slider_draft_ms":[…],"slider_draft_median_ms":…,"slider_job_ms":[…],"release_full_ms":…}
 ```
 
 - `slider_draft_ms`: time from the `develop.set` command until the new loupe texture is ready.

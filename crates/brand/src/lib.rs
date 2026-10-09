@@ -13,7 +13,7 @@ use std::sync::Mutex;
 
 include!(concat!(env!("OUT_DIR"), "/brand.rs"));
 
-/// `{prefix}_{name}`, e.g. `env_var("LOG")` is `NONAMEYET_LOG`.
+/// `{prefix}_{name}`, e.g. `env_var("LOG")` is `<ENV_PREFIX>_LOG`.
 pub fn env_var(name: &str) -> String {
     format!("{ENV_PREFIX}_{name}")
 }
@@ -68,7 +68,7 @@ fn config_root() -> Option<PathBuf> {
 }
 
 /// The folder name for `name` on this platform: as written on macOS and Windows, lower-case on other
-/// Unixes (`~/.config/nonameyet`).
+/// Unixes (`~/.config/<settings_dir>`).
 pub fn settings_dir_name(name: &str) -> String {
     if cfg!(any(target_os = "macos", windows)) { name.to_string() } else { name.to_lowercase() }
 }

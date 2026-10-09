@@ -2,7 +2,7 @@
 //! last view state and the preview cache.
 //!
 //! ```text
-//! LightCraft Library/
+//! <Name> Library/
 //!   catalog.snap   catalog.log      (dac-catalog journal)
 //!   presets.json   view.json        (user presets + favourites; last source/sort/selection)
 //!   prefs.json     (library preferences: XMP sidecars, import defaults, cache size, last export)
@@ -30,16 +30,27 @@ use serde::{Deserialize, Serialize};
 use crate::{EngineError, LibrarySource, Result, Selection, Session};
 
 /// Library directory name inside the user's Pictures folder.
-pub const DEFAULT_NAME: &str = "LightCraft Library";
+pub const DEFAULT_NAME: &str = dac_brand::LIBRARY_DEFAULT;
 
-/// The default library location: `$LIGHTCRAFT_LIBRARY` if set, else `~/Pictures/LightCraft Library`
-/// (`%USERPROFILE%\Pictures\LightCraft Library` on Windows).
+/// The default library location: `{ENV_PREFIX}_LIBRARY` if set, else `~/Pictures/<`[`DEFAULT_NAME`]`>`
+/// (`%USERPROFILE%\Pictures\…` on Windows). When that folder doesn't exist but a library under a
+/// previous default name does ([`dac_brand::library_default_names`]), that one is used, so an
+/// existing library keeps opening after a rename.
 pub fn default_dir() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("LIGHTCRAFT_LIBRARY").filter(|p| !p.is_empty()) {
+    if let Some(p) = dac_brand::env_os("LIBRARY").filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(p));
     }
     let home = if cfg!(windows) { std::env::var_os("USERPROFILE") } else { std::env::var_os("HOME") }?;
-    Some(PathBuf::from(home).join("Pictures").join(DEFAULT_NAME))
+    Some(default_in(&PathBuf::from(home).join("Pictures")))
+}
+
+/// The default library folder inside `pictures`: the current name, unless only a previous one exists.
+pub fn default_in(pictures: &Path) -> PathBuf {
+    let current = pictures.join(DEFAULT_NAME);
+    if current.exists() {
+        return current;
+    }
+    dac_brand::library_default_names().into_iter().skip(1).map(|n| pictures.join(n)).find(|p| p.is_dir()).unwrap_or(current)
 }
 
 pub struct Library {
@@ -191,11 +202,12 @@ fn same_dir(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// This program, for the lock owner note ("LightCraft", "dac-cli").
+/// This program, for the lock owner note (the app's display name, or the executable's name).
 fn program_name() -> String {
     let exe = std::env::current_exe().ok().and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()));
     match exe.as_deref() {
-        Some("lightcraft") | None => "LightCraft".into(),
+        None => dac_brand::DISPLAY_NAME.into(),
+        Some(n) if n == dac_brand::BINARY || n == crate::legacy::BINARY => dac_brand::DISPLAY_NAME.into(),
         Some(other) => other.to_string(),
     }
 }
@@ -220,7 +232,7 @@ impl SettingsLoad {
                 log::error!("library: {name}: {e}");
                 self.blocked.push(name);
                 self.warnings.push(format!(
-                    "{name} couldn't be read ({e}). LightCraft uses the defaults for now and won't overwrite the file; reopen the library to try again."
+                    "{name} couldn't be read ({e}). the app uses the defaults for now and won't overwrite the file; reopen the library to try again."
                 ));
                 return None;
             }
@@ -237,7 +249,7 @@ impl SettingsLoad {
             Err(w) => {
                 self.blocked.push(name);
                 self.warnings.push(format!(
-                    "{name} is damaged ({err}) and couldn't be set aside ({w}). LightCraft uses the defaults and won't overwrite the file."
+                    "{name} is damaged ({err}) and couldn't be set aside ({w}). the app uses the defaults and won't overwrite the file."
                 ));
             }
         }
@@ -645,7 +657,7 @@ impl Session {
 fn unlocked_warning(lock: Option<&LibraryLock>) -> Option<String> {
     lock.filter(|l| !l.held()).map(|_| {
         "This library could not be locked (its catalog.lock file can't be locked where it is stored, e.g. on some network \
-         shares), so it is open without protection against a second program: use it in one LightCraft app or command at \
+         shares), so it is open without protection against a second program: use it in one app or command at \
          a time, or changes made in one of them can be lost."
             .to_string()
     })

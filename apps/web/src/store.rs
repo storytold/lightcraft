@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     fn download_names() {
-        assert_eq!(download_name("dir/x-lightcraft.png"), "x-lightcraft.png");
+        assert_eq!(download_name("dir/x-edit.png"), "x-edit.png");
         assert_eq!(download_name("y.png"), "y.png");
         assert_eq!(mime_for("a.JPG"), "image/jpeg");
         assert_eq!(mime_for("a"), "application/octet-stream");

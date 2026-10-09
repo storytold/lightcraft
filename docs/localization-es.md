@@ -1,7 +1,9 @@
-# LightCraft en español
+# Interfaz en español
+
+> `<PREFIX>`, `<cli>`, `<binary>`: [`brand.toml`](../brand.toml).
 
 Elegir **Editar → Idioma → Español** o **Ajustes → General → Idioma**. El cambio se aplica al
-momento y se conserva para el próximo inicio (`language: "es"` en `ui.json`). `LIGHTCRAFT_LANGUAGE`
+momento y se conserva para el próximo inicio (`language: "es"` en `ui.json`). `<PREFIX>_LANGUAGE`
 acepta cualquier variante del español (`es`, `es-ES`, `es_MX.UTF-8`, `es-419`…).
 
 El catálogo en español cubre los menús, los métodos abreviados de teclado, la biblioteca, el
@@ -31,6 +33,8 @@ tratamiento de usted. Algunos términos que conviene mantener coherentes:
 | Pick / Reject | Seleccionada / Rechazada |
 | Upright | Vertical |
 | Lens Corrections | Correcciones de lente |
+| `{app}` (nombre del producto, de `brand.toml`) | `{app}` (no se traduce; p. ej. `About {app}` → `Acerca de {app}`) |
+| `{cli}`, `{env}` (programa de línea de comandos, prefijo de variables) | sin cambios |
 
 Las correcciones de hablantes nativos son bienvenidas: abrir un issue o un pull request con el
 texto inglés, la traducción actual y la propuesta.
@@ -43,5 +47,5 @@ comprueba los marcadores al compilar. Las terminaciones de plural del inglés se
 
 ```sh
 cargo test -p dac-ui-egui i18n::tests -- --nocapture
-LIGHTCRAFT_LANGUAGE=es lightcraft-cli snapshot --demo -o espanol.png --size 1600x1000
+<PREFIX>_LANGUAGE=es <cli> snapshot --demo -o espanol.png --size 1600x1000
 ```

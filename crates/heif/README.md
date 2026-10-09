@@ -1,6 +1,6 @@
 # dac-heif
 
-The optional HEIF / HEIC decoder of LightCraft: iPhone and Mac photos. A thin, panic-guarded wrapper
+The optional HEIF / HEIC decoder of the app: iPhone and Mac photos. A thin, panic-guarded wrapper
 around [`heic-rs`](https://github.com/tbraun96/heic-rs), a pure-Rust HEVC still-picture decoder
 (no `unsafe`, MIT OR Apache-2.0): single pictures and grid-tiled photos, 8- and 10-bit (10-bit
 decodes to 16-bit), alpha auxiliary images, the container's rotation/mirror/crop, ICC, EXIF and XMP.
@@ -30,4 +30,4 @@ one set of regression fixtures.
   opening one is a clear "HEIC/HEIF support isn't included in this build" error — the same policy
   as PhotoCraft.
 
-The crate depends on no other LightCraft crate; `codecs` → `heif` is the only edge between them.
+The crate depends on no other workspace crate; `codecs` → `heif` is the only edge between them.

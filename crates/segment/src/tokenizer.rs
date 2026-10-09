@@ -1,7 +1,7 @@
 //! The CLIP byte-pair-encoding tokenizer (lower-cased, `</w>` word ends), padded to the
 //! 32-token context SAM 3's text encoder takes.
 //!
-//! Modified work (Apache License 2.0, §4(b)): ported by the LightCraft contributors in 2026 from
+//! Modified work (Apache License 2.0, §4(b)): ported by the project contributors in 2026 from
 //! the Python/PyTorch SAM 3 code of Hugging Face Transformers (the CLIP tokenizer used by `models/sam3`), Copyright The HuggingFace
 //! Team and Meta Platforms, Inc.; translated to Rust on candle and restructured. See NOTICE.
 

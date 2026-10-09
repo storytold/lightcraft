@@ -1,0 +1,35 @@
+# Throw-away brand for `cargo xtask brand test` (CI job "brand"): the app is built with
+# BRAND_FILE=xtask/test-brand.toml and must show this name, and no other, everywhere.
+[product]
+display_name   = "Zzyzx Test"
+short_name     = "Zzyzx"
+tagline        = "Throw-away brand for the brand test"
+vendor         = "Zzyzx Test contributors"
+homepage       = "https://zzyzx.example.invalid"
+repository     = "https://zzyzx.example.invalid/repo"
+binary         = "zzyzx"
+cli_binary     = "zzyzx-cli"
+env_prefix     = "ZZYZX"
+mcp_server     = "zzyzx"
+icon_svg       = "brand/icon.svg"
+logo_svg       = "brand/logo.svg"
+
+[identity]
+app_id          = "org.example.ZzyzxTest"
+settings_dir    = "ZzyzxTest"
+library_default = "Zzyzx Library"
+catalog_ext     = "zzcat"
+preset_ext      = "zzpreset"
+url_scheme      = "zzyzx"
+
+[stable]
+xmp_namespace_uri    = "https://ns.example.invalid/develop/1.0/"
+xmp_namespace_prefix = "nnyd"
+catalog_magic        = "PHOTO-CATALOG"
+
+[legacy]
+settings_dirs = []
+env_prefixes  = []
+preset_exts   = []
+catalog_exts  = []
+app_ids       = []

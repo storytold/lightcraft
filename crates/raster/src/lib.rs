@@ -1,4 +1,4 @@
-//! Image buffers and basic raster operations for LightCraft.
+//! Image buffers and basic raster operations.
 //!
 //! - [`Image<T>`]: interleaved, row-major pixels (`Rgb32f = Image<[f32; 3]>`, `Rgba8 = Image<[u8; 4]>`,
 //!   `Plane = Image<f32>`).

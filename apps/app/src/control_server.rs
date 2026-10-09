@@ -1,5 +1,5 @@
 //! Loopback JSON-lines control server: one request per line, one reply per line.
-//! This is the transport the MCP server (`lightcraft-cli mcp --connect`) wraps.
+//! This is the transport the MCP server (`<cli> mcp --connect`) wraps.
 //!
 //! The server only ever reads requests: a line that is not a JSON object with a string `method`
 //! (an HTTP request line from a browser's cross-origin `fetch`, a stray `nc`, binary junk) gets

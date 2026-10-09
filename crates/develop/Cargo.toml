@@ -3,12 +3,13 @@ name = "dac-develop"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft develop settings: the non-destructive edit model, control specs, presets (L1)"
+description = "Develop settings: the non-destructive edit model, control specs, presets (L1)"
 
 [lints]
 workspace = true
 
 [dependencies]
+dac-brand = { workspace = true }
 dac-geom = { workspace = true }
 dac-color = { workspace = true }
 serde = { workspace = true }

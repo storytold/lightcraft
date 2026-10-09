@@ -23,7 +23,7 @@ fn library() -> Session {
     let mut s = Session::new();
     for i in 0..N {
         let (w, h) = if i % 5 == 4 { (4000, 6000) } else { (6000, 4000) };
-        let path = format!("/lightcraft-grid-test/IMG_{i:05}.jpg");
+        let path = format!("/app-grid-test/IMG_{i:05}.jpg");
         let mut p = Photo::new(PhotoId(i + 1), Source::File { path }, &format!("IMG_{i:05}.jpg"), "JPEG", w, h, "2026-01-01T00:00:00");
         let day = i / 40;
         p.captured = Some(format!("2026-{:02}-{:02}T{:02}:00:00", 12 - day / 28, 28 - day % 28, 8 + i % 40 / 4));

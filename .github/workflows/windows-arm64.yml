@@ -53,7 +53,7 @@ jobs:
         run: ./packaging/windows/package.ps1 -Arch arm64
       - uses: actions/upload-artifact@v4
         with:
-          name: lightcraft-windows-arm64
+          name: app-windows-arm64
           path: dist/arm64/*
           if-no-files-found: error
           retention-days: 7
@@ -64,19 +64,24 @@ jobs:
     runs-on: windows-11-arm
     timeout-minutes: 30
     steps:
+      # for brand.toml and packaging/windows/brand.ps1 (the product name lives only there)
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: lightcraft-windows-arm64
+          name: app-windows-arm64
           path: dist
       - name: Install the MSI, check it, run it, uninstall it
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          . ./packaging/windows/brand.ps1
+          $appExe = "$($Brand.binary).exe"
+          $cliExe = "$($Brand.cli_binary).exe"
           $msi = (Get-ChildItem dist/*.msi | Select-Object -First 1).FullName
           $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/l*v', 'install.log' -Wait -PassThru
           if ($p.ExitCode -ne 0) { Get-Content install.log -Tail 60; throw "msiexec /i exited $($p.ExitCode)" }
-          $dir = Join-Path $env:ProgramFiles 'LightCraft'
-          foreach ($exe in 'lightcraft.exe', 'lightcraft-cli.exe') {
+          $dir = Join-Path $env:ProgramFiles $Brand.display_name
+          foreach ($exe in $appExe, $cliExe) {
             $path = Join-Path $dir $exe
             if (-not (Test-Path $path)) { throw "$exe not installed in $dir" }
             $bytes = [System.IO.File]::ReadAllBytes($path)
@@ -85,11 +90,11 @@ jobs:
             Write-Output "ok $path (ARM64)"
           }
           # The installed CLI runs natively on ARM64.
-          $cli = Join-Path $dir 'lightcraft-cli.exe'
+          $cli = Join-Path $dir $cliExe
           $out = & $cli --version 2>&1 | Out-String
-          if ($LASTEXITCODE -ne 0) { Write-Output $out; throw "lightcraft-cli --version exited $LASTEXITCODE" }
-          Write-Output "ok lightcraft-cli --version: $($out.Trim())"
+          if ($LASTEXITCODE -ne 0) { Write-Output $out; throw "$cliExe --version exited $LASTEXITCODE" }
+          Write-Output "ok $cliExe --version: $($out.Trim())"
           $p = Start-Process msiexec.exe -ArgumentList '/x', "`"$msi`"", '/qn' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "msiexec /x exited $($p.ExitCode)" }
-          if (Test-Path (Join-Path $dir 'lightcraft.exe')) { throw 'uninstall left lightcraft.exe behind' }
+          if (Test-Path (Join-Path $dir $appExe)) { throw "uninstall left $appExe behind" }
           Write-Output 'ok uninstalled'

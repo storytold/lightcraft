@@ -13,7 +13,7 @@ use std::process::Command;
 use crate::{cargo, metadata, root, run as step};
 
 const TARGET: &str = "wasm32-unknown-unknown";
-const CHINESE_FONT_FILE: &str = "lightcraft_zh_hans.otf";
+const CHINESE_FONT_FILE: &str = "app_zh_hans.otf";
 const CHINESE_FONT_LICENSE_FILE: &str = "OFL-noto-sans-cjk-sc.txt";
 
 /// Files copied from `apps/web/` into the bundle as they are.
@@ -37,7 +37,7 @@ fn chinese_font_in_manifest(manifest: &str) -> Option<(&str, &str)> {
 
 fn copy_chinese_font(out: &Path) -> Result<bool, String> {
     // A previous font-enabled build must not leave an unlicensed/stale asset in a font-free one.
-    for name in [CHINESE_FONT_FILE, CHINESE_FONT_LICENSE_FILE, "lightcraft_zh_hans.otf.gz", "lightcraft_zh_hans.otf.br"] {
+    for name in [CHINESE_FONT_FILE, CHINESE_FONT_LICENSE_FILE, "app_zh_hans.otf.gz", "app_zh_hans.otf.br"] {
         let path = out.join(name);
         match std::fs::remove_file(&path) {
             Ok(()) => (),

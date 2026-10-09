@@ -1,6 +1,8 @@
-# LightCraft em português do Brasil
+# Interface em português do Brasil
 
-O LightCraft pode ser exibido em inglês, chinês simplificado, chinês tradicional (Taiwan), japonês e
+> `<PREFIX>`, `<cli>`, `<binary>`: [`brand.toml`](../brand.toml).
+
+O aplicativo pode ser exibido em inglês, chinês simplificado, chinês tradicional (Taiwan), japonês e
 português do Brasil. A preferência de idioma é gravada em `language` no `ui.json`.
 
 - Troque em **Editar → Idioma** ou em **Configurações → Geral → Idioma**. A escolha é mantida nas
@@ -21,6 +23,9 @@ português do Brasil. A preferência de idioma é gravada em `language` no `ui.j
 
 Os textos fixos ficam em `crates/ui-egui/locales/pt-br.json` e os textos com valores variáveis em
 `crates/ui-egui/locales/pt-br-formats.json`. O inglês é usado como chave.
+O nome do produto nunca aparece nas traduções: use `{app}` (nome de exibição em `brand.toml`), `{cli}`
+(programa de linha de comando) e `{env}` (prefixo das variáveis de ambiente), sem traduzir, por exemplo
+`About {app}` → `Sobre o {app}`.
 
 Toda tradução de formato é verificada por `format!` do Rust no build. Referencie os valores por nome
 (`{n}`) ou por posição (`{0}`, `{1}`) e use as mesmas especificações de formato do inglês
@@ -32,5 +37,5 @@ verificadas por `cargo test -p dac-ui-egui i18n::tests` (a checagem de glifos s�
 `CRAFT_FONTS_DIR`). Para visualizar o idioma, renderize sem interface gráfica:
 
 ```sh
-LIGHTCRAFT_LANGUAGE=pt-br lightcraft-cli snapshot --demo --script tour.jsonl -o out.png --size 1600x1000
+<PREFIX>_LANGUAGE=pt-br <cli> snapshot --demo --script tour.jsonl -o out.png --size 1600x1000
 ```

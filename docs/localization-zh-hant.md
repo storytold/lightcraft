@@ -1,7 +1,9 @@
-# LightCraft 繁體中文（台灣）介面
+# 繁體中文（台灣）介面
+
+> `<PREFIX>`, `<cli>`, `<binary>`: [`brand.toml`](../brand.toml).
 
 從「編輯 → 語言 → 繁體中文（台灣）」切換，或開啟「設定 → 一般 → 語言」選擇。
-macOS 的設定也可由「LightCraft → 設定…」或 `⌘,` 開啟。
+macOS 的設定也可由「應用程式選單 → 設定…」或 `⌘,` 開啟。
 語言立即生效，並儲存在應用程式設定的 `ui.json`，下次啟動會沿用。
 英文、簡體中文、繁體中文與日文可隨時互相切換。
 
@@ -26,7 +28,7 @@ Web 建置在 WASM 中嵌入 BIZ UDPGothic Regular，並另外載入 Noto Sans C
 
 ## 自動化與維護
 
-`LIGHTCRAFT_LANGUAGE=zh-hant lightcraft-cli snapshot --demo -o zh-hant.png` 可繪製繁中畫面。
+`<PREFIX>_LANGUAGE=zh-hant <cli> snapshot --demo -o zh-hant.png` 可繪製繁中畫面。
 接受 `zh-hant`、`zh-Hant`、`zh-TW`、`zh_TW.UTF-8` 與 `zh-HK`；儲存時統一使用 `zh-hant`。
 控制通道可切換語言：
 
@@ -37,7 +39,7 @@ Web 建置在 WASM 中嵌入 BIZ UDPGothic Regular，並另外載入 Noto Sans C
 
 靜態文案位於 `crates/ui-egui/locales/zh-hant.json`，含變數的訊息位於
 `crates/ui-egui/locales/zh-hant-formats.json`。動態訊息由 Rust 在建置時檢查格式參數，
-所有 `*-formats.json` 須保持相同英文鍵。新增語言的方法見 [`localization.md`](localization.md)。`{:.0}` 消耗英文複數字尾引數，繁中不顯示該字尾。
+所有 `*-formats.json` 須保持相同英文鍵。產品名稱不寫入譯文，改用 `{app}`（`brand.toml` 的顯示名稱）、`{cli}`（命令列程式名稱）與 `{env}`（環境變數前綴），譯文原樣保留，例如 `About {app}` 譯為 `關於 {app}`。新增語言的方法見 [`localization.md`](localization.md)。`{:.0}` 消耗英文複數字尾引數，繁中不顯示該字尾。
 
 ```sh
 CRAFT_FONTS_DIR=../craft-fonts cargo test -p dac-ui-egui i18n::tests

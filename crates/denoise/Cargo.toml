@@ -3,7 +3,7 @@ name = "dac-denoise"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft AI denoise (L1): denoise-model manifests, Bayer packing, tiling and blending, the cache file, and pure-Rust CPU inference"
+description = "AI denoise (L1): denoise-model manifests, Bayer packing, tiling and blending, the cache file, and pure-Rust CPU inference"
 
 [lints]
 workspace = true
@@ -15,6 +15,7 @@ runtime = ["dep:faer"]
 rawnind-model = ["dac-denoise-core/rawnind-model"]
 
 [dependencies]
+dac-brand = { workspace = true }
 dac-denoise-core = { workspace = true }
 # Safe matrix views over the pure-Rust GEMM backend; no BLAS, cc/build scripts
 # or inner thread pool. Its dependencies include architecture-specific assembly.

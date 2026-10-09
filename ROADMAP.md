@@ -1,4 +1,4 @@
-# LightCraft roadmap
+# Roadmap
 
 Milestones toward full Adobe Lightroom parity (cloud Lightroom first, then every Lightroom Classic module), with wall-clock
 estimates for continuous (24/7) agent-driven development with 4–6 parallel agents. Estimates are calibrated on the sibling
@@ -197,13 +197,13 @@ own chart-based calibration (M11.4). Adobe matrices are never used.
 
 File → Import Lightroom Catalog… reads `.lrcat` plus committed WAL pages directly through a pure-Rust
 SQLite reader. Originals stay in place; ratings, flags, labels, XMP metadata, hierarchical keywords,
-collections/sets, virtual copies and supported develop settings migrate into LightCraft. Existing edits
+collections/sets, virtual copies and supported develop settings migrate into the app. Existing edits
 are preserved by default, reimport identities are persistent, and source settings/history/snapshots are
 archived before catalog mutation. Missing originals remain available for relinking.
 
 Rendering is approximate: unsupported Adobe profiles/AI/process settings are reported and archived;
 history/snapshots remain source data, and smart collections import current membership. The Lightroom
-database is read-only; LightCraft owns subsequent edits. See `docs/lightroom-catalog-import.md`.
+database is read-only; the app owns subsequent edits. See `docs/lightroom-catalog-import.md`.
 
 ## Log
 - 2026-09-30: roadmap created; M0 in progress; research docs (Lightroom reference, Rust imaging ecosystem) complete.

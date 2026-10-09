@@ -130,7 +130,7 @@ const GPU_MAX_FALLBACKS: usize = 3;
 pub(crate) const GPU_SETUP_MARKER: &str = "gpu-setup.marker";
 /// Why the card is not tried when a set-up marker is found.
 #[cfg(feature = "denoise")]
-const GPU_CRASHED: &str = "LightCraft closed while it was setting up the graphics card for AI Denoise last time";
+const GPU_CRASHED: &str = "The app closed while it was setting up the graphics card for AI Denoise last time";
 /// Why the card is not used when its set-up ran out of time (the start of it).
 #[cfg(feature = "denoise")]
 const GPU_SLOW: &str = "setting up the graphics card took longer than";
@@ -196,7 +196,7 @@ impl Drop for SetUpEnded {
 
 /// Set the graphics card up with `card` on a thread of its own while `meanwhile` runs here, and give up on the card when
 /// it takes longer than `limit` (a driver building kernels for minutes, or stuck). The `marker` file exists while `card`
-/// runs: one found before it starts was left by a LightCraft that closed during a set-up (a driver crash takes the app
+/// runs: one found before it starts was left by a the app that closed during a set-up (a driver crash takes the app
 /// with it), so the card is not tried again until the user chooses where denoise runs (`denoise.settings {runOn}`).
 #[cfg(feature = "denoise")]
 fn set_up_card<T: Send + 'static, R>(
@@ -543,7 +543,7 @@ pub(crate) fn installed_models(dir: &Path) -> Vec<Installed> {
     out
 }
 
-/// Forget that setting the graphics card up for a model closed LightCraft before (the markers [`set_up_card`] leaves):
+/// Forget that setting the graphics card up for a model closed the app before (the markers [`set_up_card`] leaves):
 /// the user chose where denoise runs, so the card may be tried again.
 pub(crate) fn forget_gpu_set_ups(dir: &Path) {
     for i in installed_models(dir) {
@@ -768,7 +768,7 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
     }
     let ran = began.elapsed();
     product::write(&spec.product, &rgb, &spec.key).map_err(|e| MakeError::Failed(format!("could not save the denoised picture: {e}")))?;
-    if std::env::var_os("LIGHTCRAFT_PROFILE").is_some() {
+    if dac_brand::env_os("PROFILE").is_some() {
         eprintln!(
             "[denoise] read + decode {:.0} ms, model (set-up, tiles, blend) {:.0} ms, write {:.0} ms",
             decoded.as_secs_f64() * 1e3,
@@ -1597,7 +1597,7 @@ mod gpu_tests {
         assert!(!marker.exists());
         let r = set_up_card(&marker, Duration::from_secs(10), || -> Result<(), String> { panic!("driver") }, || ());
         assert!(r.is_err() && !marker.exists(), "{r:?}");
-        // a marker found before the set-up starts means the last one took LightCraft down: the card is not touched
+        // a marker found before the set-up starts means the last one took the app down: the card is not touched
         std::fs::write(&marker, "left behind").unwrap();
         let touched = Arc::new(AtomicBool::new(false));
         let t = touched.clone();

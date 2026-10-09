@@ -3,12 +3,13 @@ name = "dac-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft engine: session, command registry, history, render jobs, view-models (L4)"
+description = "Engine: session, command registry, history, render jobs, view-models (L4)"
 
 [lints]
 workspace = true
 
 [dependencies]
+dac-brand = { workspace = true }
 dac-geom = { workspace = true }
 dac-color = { workspace = true }
 dac-raster = { workspace = true }

@@ -1179,6 +1179,7 @@ dependencies = [
 name = "dac-app"
 version = "0.4.0"
 dependencies = [
+ "dac-brand",
  "dac-codecs",
  "dac-engine",
  "dac-raster",
@@ -1202,6 +1203,7 @@ name = "dac-catalog"
 version = "0.4.0"
 dependencies = [
  "crc32fast",
+ "dac-brand",
  "dac-develop",
  "dac-meta",
  "log",
@@ -1216,6 +1218,7 @@ dependencies = [
 name = "dac-cli"
 version = "0.4.0"
 dependencies = [
+ "dac-brand",
  "dac-codecs",
  "dac-engine",
  "dac-mcp",
@@ -1224,6 +1227,7 @@ dependencies = [
  "dac-sysmem",
  "dac-ui-egui",
  "dhat",
+ "log",
  "serde_json",
 ]
 
@@ -1232,6 +1236,7 @@ name = "dac-codecs"
 version = "0.4.0"
 dependencies = [
  "bytemuck",
+ "dac-brand",
  "dac-color",
  "dac-geom",
  "dac-heif",
@@ -1257,6 +1262,7 @@ dependencies = [
 name = "dac-color"
 version = "0.4.0"
 dependencies = [
+ "dac-brand",
  "dac-geom",
  "proptest",
  "serde",
@@ -1266,6 +1272,7 @@ dependencies = [
 name = "dac-denoise"
 version = "0.4.0"
 dependencies = [
+ "dac-brand",
  "dac-denoise-core",
  "dac-raster",
  "faer-core",
@@ -1283,6 +1290,7 @@ dependencies = [
 name = "dac-denoise-core"
 version = "0.4.0"
 dependencies = [
+ "dac-brand",
  "dac-raster",
  "miniz_oxide 0.8.9",
  "proptest",
@@ -1298,6 +1306,7 @@ dependencies = [
 name = "dac-develop"
 version = "0.4.0"
 dependencies = [
+ "dac-brand",
  "dac-color",
  "dac-geom",
  "miniz_oxide 0.8.9",
@@ -1311,6 +1320,7 @@ name = "dac-engine"
 version = "0.4.0"
 dependencies = [
  "ab_glyph",
+ "dac-brand",
  "dac-catalog",
  "dac-codecs",
  "dac-color",
@@ -1346,6 +1356,7 @@ dependencies = [
 name = "dac-faces"
 version = "0.4.0"
 dependencies = [
+ "dac-brand",
  "matrixmultiply",
  "ndarray",
  "proptest",
@@ -1360,6 +1371,7 @@ dependencies = [
 name = "dac-fetch"
 version = "0.4.0"
 dependencies = [
+ "dac-brand",
  "log",
  "rustls",
  "rustls-rustcrypto",
@@ -1371,6 +1383,7 @@ dependencies = [
 name = "dac-geom"
 version = "0.4.0"
 dependencies = [
+ "dac-brand",
  "proptest",
  "serde",
 ]
@@ -1380,6 +1393,7 @@ name = "dac-gpu"
 version = "0.4.0"
 dependencies = [
  "bytemuck",
+ "dac-brand",
  "dac-color",
  "dac-denoise",
  "dac-develop",
@@ -1396,6 +1410,7 @@ dependencies = [
 name = "dac-heif"
 version = "0.4.0"
 dependencies = [
+ "dac-brand",
  "heic-rs",
 ]
 
@@ -1403,6 +1418,7 @@ dependencies = [
 name = "dac-mcp"
 version = "0.4.0"
 dependencies = [
+ "dac-brand",
  "dac-codecs",
  "dac-engine",
  "dac-raster",
@@ -1414,6 +1430,7 @@ dependencies = [
 name = "dac-merge"
 version = "0.4.0"
 dependencies = [
+ "dac-brand",
  "dac-codecs",
  "dac-color",
  "dac-geom",
@@ -1430,6 +1447,7 @@ dependencies = [
 name = "dac-meta"
 version = "0.4.0"
 dependencies = [
+ "dac-brand",
  "dac-geom",
  "dac-tiff",
  "proptest",
@@ -1442,6 +1460,7 @@ dependencies = [
 name = "dac-pipeline"
 version = "0.4.0"
 dependencies = [
+ "dac-brand",
  "dac-color",
  "dac-develop",
  "dac-geom",
@@ -1459,6 +1478,7 @@ dependencies = [
 name = "dac-preview"
 version = "0.4.0"
 dependencies = [
+ "dac-brand",
  "dac-raster",
  "jpeg-encoder",
  "log",
@@ -1471,6 +1491,7 @@ dependencies = [
 name = "dac-raster"
 version = "0.4.0"
 dependencies = [
+ "dac-brand",
  "dac-color",
  "dac-geom",
  "libc",
@@ -1483,6 +1504,7 @@ dependencies = [
 name = "dac-raw"
 version = "0.4.0"
 dependencies = [
+ "dac-brand",
  "dac-color",
  "dac-geom",
  "dac-meta",
@@ -1505,6 +1527,7 @@ dependencies = [
 name = "dac-scenes"
 version = "0.4.0"
 dependencies = [
+ "dac-brand",
  "dac-color",
  "dac-raster",
  "image",
@@ -1518,6 +1541,7 @@ version = "0.4.0"
 dependencies = [
  "candle-core",
  "candle-nn",
+ "dac-brand",
  "dac-fetch",
  "log",
  "serde",
@@ -1528,11 +1552,15 @@ dependencies = [
 [[package]]
 name = "dac-sysmem"
 version = "0.4.0"
+dependencies = [
+ "dac-brand",
+]
 
 [[package]]
 name = "dac-tiff"
 version = "0.4.0"
 dependencies = [
+ "dac-brand",
  "proptest",
  "serde",
  "thiserror 2.0.21",
@@ -1542,6 +1570,7 @@ dependencies = [
 name = "dac-ui-egui"
 version = "0.4.0"
 dependencies = [
+ "dac-brand",
  "dac-catalog",
  "dac-codecs",
  "dac-color",
@@ -1567,6 +1596,7 @@ name = "dac-web"
 version = "0.4.0"
 dependencies = [
  "crc32fast",
+ "dac-brand",
  "dac-codecs",
  "dac-engine",
  "dac-preview",

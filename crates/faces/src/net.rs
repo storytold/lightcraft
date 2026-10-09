@@ -1,4 +1,4 @@
-//! A small CPU interpreter for the convolutional networks LightCraft bundles (the YuNet face detector).
+//! A small CPU interpreter for the convolutional networks the app bundles (the YuNet face detector).
 //!
 //! It runs checked convolution, affine/activation, broadcast, pooling, matrix and shape operators on
 //! float32 tensors. Unsupported semantics fail at load time. Dense convolutions use bounded im2col and
@@ -99,7 +99,7 @@ impl Net {
         shape::tensor(&input.shape, input.data.len(), &input.data)?;
         self.validate_input(&input.shape)?;
         let mut scratch = kernels::Scratch::default();
-        let profile = std::env::var_os("LIGHTCRAFT_PROFILE").is_some();
+        let profile = dac_brand::env_is_set("PROFILE");
         let g = &self.graph;
         let Some((input_name, _)) = g.inputs.first() else { return shape_err("the model has no input") };
         // when each value is last read, so big intermediates are dropped as soon as nothing needs them

@@ -34,11 +34,11 @@ const UTF8: u16 = 0x0800;
 /// 1980-01-01 00:00 in MS-DOS format (date, time).
 const DOS_DATE: u16 = (1 << 5) | 1;
 
-/// The readme inside every backup.
-pub const README: &str = "LightCraft library backup (browser version)\n\n\
+/// The readme inside every backup (`{app}` is filled with [`dac_brand::fill`]).
+pub const README: &str = "{app} library backup (browser version)\n\n\
 library/      the catalog (catalog.snap + catalog.log), presets, view state and preferences\n\
 originals/    every imported photo, as originals/<content hash>/<file name>\n\n\
-Restore it in LightCraft for the web with File > Restore Library from Backup...\n\
+Restore it in {app} for the web with File > Restore Library from Backup...\n\
 The photos in originals/ are the untouched files you imported; edits live in the catalog.\n";
 
 /// Is `name` a safe library folder name (`library` or `library-<letters, digits, ->`)?
@@ -234,7 +234,7 @@ pub fn data_offset(entry: &ZipEntry, local: &[u8]) -> Result<u64, String> {
 /// Check an entry's bytes.
 pub fn verify(entry: &ZipEntry, data: &[u8]) -> Result<(), String> {
     if entry.method != 0 {
-        return Err(format!("{}: compressed entries are not supported (not a LightCraft backup?)", entry.name));
+        return Err(format!("{}: compressed entries are not supported (not a {} backup?)", entry.name, dac_brand::DISPLAY_NAME));
     }
     if data.len() as u64 != entry.size || crc32fast::hash(data) != entry.crc {
         return Err(format!("{}: damaged (checksum mismatch)", entry.name));

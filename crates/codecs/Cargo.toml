@@ -3,12 +3,13 @@ name = "dac-codecs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft standard image codecs: sniffing, decode to linear light, ICC, encoders (L1)"
+description = "Standard image codecs: sniffing, decode to linear light, ICC, encoders (L1)"
 
 [lints]
 workspace = true
 
 [dependencies]
+dac-brand = { workspace = true }
 dac-geom = { workspace = true }
 dac-color = { workspace = true }
 dac-raster = { workspace = true }

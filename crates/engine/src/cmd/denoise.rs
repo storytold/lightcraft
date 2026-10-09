@@ -42,7 +42,7 @@ fn row(m: &DenoiserManifest, download_host: Option<String>, installed: bool, sel
         "sha256": m.sha256,
         "tile": m.tile,
         "known": known::find(&m.id).is_some(),
-        // a pinned address LightCraft can fetch it from (the user presses Download), and which site that is
+        // a pinned address the app can fetch it from (the user presses Download), and which site that is
         "downloadHost": download_host,
         "installed": installed,
         "selected": selected,
@@ -104,7 +104,7 @@ fn identify(path: &Path, c: &str, sha_known: Option<&str>) -> Result<Source> {
         None => sha256_file(path).map_err(|e| fail(&format!("could not read {}", path.display()), e))?,
     };
     let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    // an archive LightCraft knows (the file darktable publishes the model in)
+    // an archive the app knows (the file darktable publishes the model in)
     if let Some(k) = known::all().into_iter().find(|k| k.download.as_ref().is_some_and(|d| d.sha256 == sha256)) {
         return Ok(Source { manifest: k.manifest, entry: k.entry, file_name });
     }
@@ -122,8 +122,8 @@ fn identify(path: &Path, c: &str, sha_known: Option<&str>) -> Result<Source> {
     }
     Err(bad(
         c,
-        "LightCraft does not know this file. A denoise model is an .onnx file with a denoise-model.json beside it that says how to use it \
-         (see docs/denoise.md), or an archive LightCraft can fetch itself (`denoise.models.download`)",
+        "The app does not know this file. A denoise model is an .onnx file with a denoise-model.json beside it that says how to use it \
+         (see docs/denoise.md), or an archive the app can fetch itself (`denoise.models.download`)",
     ))
 }
 
@@ -353,8 +353,8 @@ fn download(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "denoise.models.download";
     let id = str_param(p, "id").ok_or_else(|| bad(C, "missing `id`"))?;
     let dir = models_dir(s, C)?;
-    let k = known::find(id).ok_or_else(|| bad(C, "LightCraft has no download for that model: get the file from its page, then add it"))?;
-    let spec = k.download.clone().ok_or_else(|| bad(C, "LightCraft has no download for that model: get the file from its page, then add it"))?;
+    let k = known::find(id).ok_or_else(|| bad(C, "The app has no download for that model: get the file from its page, then add it"))?;
+    let spec = k.download.clone().ok_or_else(|| bad(C, "The app has no download for that model: get the file from its page, then add it"))?;
     if !cfg!(feature = "denoise") {
         return Err(bad(C, "this build cannot run denoise models, so there is nothing to download for it"));
     }
@@ -633,14 +633,14 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "denoise.models.list", "Denoise Models", [], None, "{} → {dir, productsDir, model, runtime, auto, cacheGb, threads, runOn, models: [{id, name, version, licence{name, commercial, url, notice}, provenance, source, sizeBytes, sha256, tile, known, downloadHost, installed, selected, accepted}]}", always, list),
         cmd!(query "denoise.models.inspect", "Inspect Denoise Model", [], None, "{path} → model terms from an adjacent manifest; never executes the file", always, inspect),
-        cmd!(query "denoise.models.install", "Install Denoise Model", [], None, "{path, acknowledged: true, activate?: true, background?: false} → {installed, model} or {started} — install a denoise model from a file: an .onnx with a denoise-model.json beside it, or an archive LightCraft knows (the darktable `.dtmodel`). `acknowledged` must be true: the user has been shown the model's licence and accepted it. Unless `activate` is false it becomes the model in use", always, install),
-        cmd!(query "denoise.models.download", "Download Denoise Model", [], None, "{id, acknowledged: true} → {started, from} — fetch a model LightCraft has a pinned address for (see `downloadHost` in the list) in the background over HTTPS with dac-fetch. `acknowledged` must be true: the user has been shown the model's terms and accepted them. It is checked against its size and SHA-256, installed and chosen by itself; `denoise.models.downloads` shows how far it is", always, download),
+        cmd!(query "denoise.models.install", "Install Denoise Model", [], None, "{path, acknowledged: true, activate?: true, background?: false} → {installed, model} or {started} — install a denoise model from a file: an .onnx with a denoise-model.json beside it, or an archive the app knows (the darktable `.dtmodel`). `acknowledged` must be true: the user has been shown the model's licence and accepted it. Unless `activate` is false it becomes the model in use", always, install),
+        cmd!(query "denoise.models.download", "Download Denoise Model", [], None, "{id, acknowledged: true} → {started, from} — fetch a model the app has a pinned address for (see `downloadHost` in the list) in the background over HTTPS with dac-fetch. `acknowledged` must be true: the user has been shown the model's terms and accepted them. It is checked against its size and SHA-256, installed and chosen by itself; `denoise.models.downloads` shows how far it is", always, download),
         cmd!(query "denoise.models.downloads", "Denoise Model Downloads", [], None, "{} → {running, downloads: [{id, state: running | done | installed | failed | cancelled, bytes, total, error, from}]} — also installs any download that has arrived", always, downloads),
         cmd!(query "denoise.models.downloadCancel", "Cancel Denoise Model Download", [], None, "{id} → {discarded} — stop a download, or delete a finished one that was not installed", always, download_cancel),
         cmd!(query "denoise.models.test", "Test Denoise Model", [], None, "{id} → {ok, result} — load an installed model and check it gives sensible pictures; needs the denoise runtime", always, test),
         cmd!(query "denoise.models.remove", "Remove Denoise Model", [], None, "{id} → {removed, model} — delete an installed model (its cached pictures stay until they are evicted)", always, remove),
         cmd!(query "denoise.models.select", "Choose Denoise Model", [], None, "{id: installed model | null} → {model} — null switches denoise off", always, select),
-        cmd!(query "denoise.settings", "Denoise Settings", [], None, "{auto?: bool, cacheGb?: 1..10000, threads?: 1..64 | null, runOn?: auto | gpu | cpu} → the settings — `auto`: make the picture of the photos being looked at that have a Denoise amount; `cacheGb`: how much the cached pictures may take; `threads`: most tiles run at once; `runOn`: where the model runs — `auto` (the default) the graphics card where it is faster than the processor (both timed on this computer when the card is set up), `gpu` the card whenever it can run the model, `cpu` the processor. Setting `runOn` also lets the card be tried again after a set-up that failed or closed LightCraft", always, settings),
+        cmd!(query "denoise.settings", "Denoise Settings", [], None, "{auto?: bool, cacheGb?: 1..10000, threads?: 1..64 | null, runOn?: auto | gpu | cpu} → the settings — `auto`: make the picture of the photos being looked at that have a Denoise amount; `cacheGb`: how much the cached pictures may take; `threads`: most tiles run at once; `runOn`: where the model runs — `auto` (the default) the graphics card where it is faster than the processor (both timed on this computer when the card is set up), `gpu` the card whenever it can run the model, `cpu` the processor. Setting `runOn` also lets the card be tried again after a set-up that failed or closed the app", always, settings),
         cmd!(
             "denoise.toggle",
             "AI Denoise",

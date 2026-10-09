@@ -1,5 +1,5 @@
 # Release pipeline: every push to `release` builds platform artifacts (signed where credentials
-# are configured) and creates or updates the draft GitHub Release "LightCraft v<version>".
+# are configured) and creates or updates the draft GitHub Release "<display_name> v<version>".
 # See docs/releasing.md.
 #
 # The signing jobs (macOS, Windows) and the draft-release job run in the `release` environment
@@ -31,7 +31,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: 1
-  LIGHTCRAFT_BUILD_SHA: ${{ github.sha }}
+  BUILD_SHA: ${{ github.sha }}
   INPUT_VERSION: ${{ inputs.version }}
 
 jobs:
@@ -43,6 +43,11 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       date: ${{ steps.v.outputs.date }}
       prerelease: ${{ steps.v.outputs.prerelease }}
+      # brand.toml (the product name lives only there)
+      display_name: ${{ steps.v.outputs.display_name }}
+      binary: ${{ steps.v.outputs.binary }}
+      cli_binary: ${{ steps.v.outputs.cli_binary }}
+      app_id: ${{ steps.v.outputs.app_id }}
     steps:
       - uses: actions/checkout@v4
       - id: v
@@ -60,8 +65,12 @@ jobs:
             echo "version=$v"
             echo "date=$(date -u +%Y-%m-%d)"
             echo "prerelease=$pre"
+            echo "display_name=$BRAND_DISPLAY_NAME"
+            echo "binary=$BRAND_BINARY"
+            echo "cli_binary=$BRAND_CLI_BINARY"
+            echo "app_id=$BRAND_APP_ID"
           } >>"$GITHUB_OUTPUT"
-          echo "### LightCraft v$v (\`${GITHUB_SHA::9}\`)" >>"$GITHUB_STEP_SUMMARY"
+          echo "### $BRAND_DISPLAY_NAME v$v (\`${GITHUB_SHA::9}\`)" >>"$GITHUB_STEP_SUMMARY"
 
   macos:
     name: macOS universal
@@ -69,8 +78,8 @@ jobs:
     runs-on: macos-15-xlarge  # M2 Pro larger runner; use only in release.yml (actions_macos_xl budget caps spend)
     environment: release
     env:
-      LIGHTCRAFT_VERSION: ${{ needs.version.outputs.version }}
-      LIGHTCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      PACKAGE_VERSION: ${{ needs.version.outputs.version }}
+      BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
       - uses: actions/checkout@v4
       # Fonts (optional build input; required for releases): see craftrules standards/fonts.md.
@@ -87,7 +96,7 @@ jobs:
           key: release-macos-universal
       - name: Apply version override
         if: inputs.version != ''
-        run: cargo xtask version set "$LIGHTCRAFT_VERSION"
+        run: cargo xtask version set "$PACKAGE_VERSION"
       - name: Import signing certificate
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -127,8 +136,8 @@ jobs:
           # .github/workflows/windows-arm64.yml installs and runs it on ARM64 hardware.
           - { arch: arm64, target: aarch64-pc-windows-msvc }
     env:
-      LIGHTCRAFT_VERSION: ${{ needs.version.outputs.version }}
-      LIGHTCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      PACKAGE_VERSION: ${{ needs.version.outputs.version }}
+      BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
       - uses: actions/checkout@v4
       # Fonts (optional build input; required for releases): see craftrules standards/fonts.md.
@@ -146,7 +155,7 @@ jobs:
       - name: Apply version override
         if: inputs.version != ''
         shell: bash
-        run: cargo xtask version set "$LIGHTCRAFT_VERSION"
+        run: cargo xtask version set "$PACKAGE_VERSION"
       - name: Install WiX
         shell: pwsh
         run: dotnet tool install --global wix --version 5.0.2
@@ -183,8 +192,8 @@ jobs:
           - { arch: x86_64, runner: ubuntu-22.04, deb: amd64 }
           - { arch: aarch64, runner: ubuntu-22.04-arm, deb: arm64 }
     env:
-      LIGHTCRAFT_VERSION: ${{ needs.version.outputs.version }}
-      LIGHTCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      PACKAGE_VERSION: ${{ needs.version.outputs.version }}
+      BUILD_DATE: ${{ needs.version.outputs.date }}
       NFPM_VERSION: 2.47.0
     steps:
       - uses: actions/checkout@v4
@@ -209,7 +218,7 @@ jobs:
           key: release-linux-${{ matrix.arch }}
       - name: Apply version override
         if: inputs.version != ''
-        run: cargo xtask version set "$LIGHTCRAFT_VERSION"
+        run: cargo xtask version set "$PACKAGE_VERSION"
       - name: Build and package (AppImage, deb, rpm, tar.gz)
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
@@ -218,9 +227,11 @@ jobs:
       - name: Check the packages
         run: |
           dpkg-deb --info dist/release/*.deb
-          dpkg-deb --contents dist/release/*.deb | grep -E 'usr/bin/lightcraft$|metainfo|applications'
-          ldd target/release/lightcraft
-          python3 -c "import yaml; m = yaml.safe_load(open('packaging/linux/flatpak/ai.storyteller.lightcraft.yml')); assert m['id'] == 'ai.storyteller.lightcraft'"
+          . packaging/env.sh
+          dpkg-deb --contents dist/release/*.deb | grep -E "usr/bin/$BRAND_BINARY\$|metainfo|applications"
+          ldd target/release/app
+          cargo xtask package --render-only
+          python3 -c "import yaml, os; a = os.environ['BRAND_APP_ID']; m = yaml.safe_load(open(f'target/package/linux/flatpak/{a}.yml')); assert m['id'] == a"
           for appimage in dist/release/*.AppImage; do
             chmod +x "$appimage"
             APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" --version
@@ -247,8 +258,8 @@ jobs:
           - { arch: x86_64, runner: ubuntu-24.04 }
           - { arch: aarch64, runner: ubuntu-24.04-arm }
     env:
-      LIGHTCRAFT_VERSION: ${{ needs.version.outputs.version }}
-      LIGHTCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      PACKAGE_VERSION: ${{ needs.version.outputs.version }}
+      BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -264,7 +275,7 @@ jobs:
           # Ubuntu 24.04's AppArmor blocks the unprivileged user namespaces bubblewrap needs.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Build the Flatpak bundle
-        run: packaging/linux/flatpak-bundle.sh "dist/linux/lightcraft-$LIGHTCRAFT_VERSION-linux-${{ matrix.arch }}.tar.gz"
+        run: packaging/linux/flatpak-bundle.sh "dist/linux/${{ needs.version.outputs.binary }}-$PACKAGE_VERSION-linux-${{ matrix.arch }}.tar.gz"
       - uses: actions/upload-artifact@v4
         with:
           name: release-flatpak-${{ matrix.arch }}
@@ -279,8 +290,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
-      LIGHTCRAFT_VERSION: ${{ needs.version.outputs.version }}
-      LIGHTCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      PACKAGE_VERSION: ${{ needs.version.outputs.version }}
+      BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
       - uses: actions/checkout@v4
       # Fonts (optional build input; required for releases): see craftrules standards/fonts.md.
@@ -298,7 +309,7 @@ jobs:
           cpu: 4
           mem: 12288
           # Passed into the VM by name; never templated into the script below.
-          envs: "LIGHTCRAFT_VERSION LIGHTCRAFT_BUILD_DATE LIGHTCRAFT_BUILD_SHA INPUT_VERSION"
+          envs: "PACKAGE_VERSION BUILD_DATE BUILD_SHA INPUT_VERSION"
           # The FreeBSD CI packages, plus bash for the packaging script.
           prepare: |
             pkg install -y bash git curl pkgconf cmake python3 libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2 alsa-lib
@@ -309,13 +320,14 @@ jobs:
             git config --global --add safe.directory "$PWD"
             # Build outside the checkout so only dist/ is copied back out of the VM (copying the
             # target dir back fails on large builds). 4 jobs: more runs the VM out of memory.
-            export CARGO_TARGET_DIR=/var/tmp/lightcraft-target CARGO_BUILD_JOBS=4
-            if [ -n "$INPUT_VERSION" ]; then cargo xtask version set "$LIGHTCRAFT_VERSION"; fi
+            export CARGO_TARGET_DIR=/var/tmp/app-target CARGO_BUILD_JOBS=4
+            if [ -n "$INPUT_VERSION" ]; then cargo xtask version set "$PACKAGE_VERSION"; fi
             # craft-fonts was checked out next to the sources and synced into the VM with them.
             export CRAFT_FONTS_DIR="$PWD/craft-fonts" CRAFT_FONTS_REQUIRED=1
             bash packaging/freebsd/package.sh
-            tar -tzf dist/release/lightcraft-*-freebsd-x86_64.tar.gz \
-              | grep -E '/bin/lightcraft$|/bin/lightcraft-cli$|/share/applications/ai\.storyteller\.lightcraft\.desktop$|/share/doc/lightcraft/LICENSE-MIT$'
+            . packaging/env.sh
+            tar -tzf "dist/release/$BRAND_BINARY-"*-freebsd-x86_64.tar.gz \
+              | grep -E "/bin/$BRAND_BINARY\$|/bin/$BRAND_CLI_BINARY\$|/share/applications/$BRAND_APP_ID\.desktop\$|/share/doc/$BRAND_BINARY/LICENSE\$"
       - uses: actions/upload-artifact@v4
         with:
           name: release-freebsd-x86_64
@@ -327,8 +339,8 @@ jobs:
     needs: version
     runs-on: ubuntu-latest
     env:
-      LIGHTCRAFT_VERSION: ${{ needs.version.outputs.version }}
-      LIGHTCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      PACKAGE_VERSION: ${{ needs.version.outputs.version }}
+      BUILD_DATE: ${{ needs.version.outputs.date }}
       WASM_BINDGEN_VERSION: 0.2.129
     steps:
       - uses: actions/checkout@v4
@@ -353,7 +365,7 @@ jobs:
           wasm-bindgen --version
       - name: Apply version override
         if: inputs.version != ''
-        run: cargo xtask version set "$LIGHTCRAFT_VERSION"
+        run: cargo xtask version set "$PACKAGE_VERSION"
       - name: Build and zip
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
@@ -391,7 +403,7 @@ jobs:
         working-directory: artifacts
         run: |
           tag="v$VERSION"
-          title="LightCraft v$VERSION"
+          title="${{ needs.version.outputs.display_name }} v$VERSION"
           pre=()
           if [ "$PRERELEASE" = true ]; then pre=(--prerelease); fi
           if draft="$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)"; then

@@ -20,7 +20,7 @@ fn initialize_negotiates_version() {
     let mut s = server();
     let r = rpc(&mut s, 1, "initialize", json!({"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}));
     assert_eq!(r["result"]["protocolVersion"], "2025-03-26");
-    assert_eq!(r["result"]["serverInfo"]["name"], "lightcraft");
+    assert_eq!(r["result"]["serverInfo"]["name"], dac_brand::MCP_SERVER);
     assert!(r["result"]["capabilities"]["tools"].is_object());
     let r = rpc(&mut s, 2, "initialize", json!({"protocolVersion": "1999-01-01"}));
     assert_eq!(r["result"]["protocolVersion"], PROTOCOL_VERSION);
@@ -121,7 +121,7 @@ fn path_writes_never_replace_an_original() {
 }
 
 /// Issue #181: a misspelled or unreadable `app.export` param is an error through the headless
-/// backend (what `lightcraft-cli run` and the MCP `export` tool use), not a silent default.
+/// backend (what the CLI `run` and the MCP `export` tool use), not a silent default.
 #[test]
 fn export_refuses_unknown_params_and_bad_values() {
     let mut b = Headless::demo();
@@ -235,7 +235,7 @@ fn resources() {
         let text = r["result"]["contents"][0]["text"].as_str().unwrap_or_else(|| panic!("{uri}: {r}"));
         serde_json::from_str::<Value>(text).unwrap();
     }
-    assert_eq!(rpc(&mut s, 99, "resources/read", json!({"uri": "lightcraft://nope"}))["error"]["code"], -32002);
+    assert_eq!(rpc(&mut s, 99, "resources/read", json!({"uri": "dac://nope"}))["error"]["code"], -32002);
 }
 
 /// `select_photos` with an id that is not in the library is a tool error, and the photo that was
@@ -289,11 +289,11 @@ fn core_tools_have_hints_and_reject_unknown_keys() {
         for key in dac_engine::export::OPTION_PARAMS.iter().chain(dac_engine::export::TARGET_PARAMS) {
             assert!(export["inputSchema"]["properties"].get(*key).is_some(), "missing export argument {key}");
         }
-        let before = rpc(&mut s, 2, "resources/read", json!({"uri":"lightcraft://library"}));
+        let before = rpc(&mut s, 2, "resources/read", json!({"uri":"dac://library"}));
         let image = rpc(&mut s, 2, "tools/call", json!({"name":"render_preview","arguments":{"max_side":64}}));
         assert_eq!(image["result"]["isError"], false, "{image}");
         assert!(image["result"]["content"].as_array().unwrap().iter().any(|c| c["type"] == "image"));
-        assert_eq!(before, rpc(&mut s, 2, "resources/read", json!({"uri":"lightcraft://library"})));
+        assert_eq!(before, rpc(&mut s, 2, "resources/read", json!({"uri":"dac://library"})));
         let batch = json!({"steps":[{"id":"catalog.stats"},{"id":"no.such"},{"id":"catalog.stats"}],"stop_on_error":false});
         let r = rpc(&mut s, 3, "tools/call", json!({"name":"command_batch","arguments":batch}));
         assert_eq!(r["result"]["isError"], true);
@@ -312,7 +312,7 @@ fn core_resources_match_tools_after_parse_error() {
     assert_eq!(bad["error"]["code"], -32700);
     assert!(bad["id"].is_null());
     let list = rpc(&mut s, 1, "resources/list", json!({}));
-    for (uri, tool) in [("lightcraft://document", "doc_inspect"), ("lightcraft://commands", "command_list")] {
+    for (uri, tool) in [("dac://document", "doc_inspect"), ("dac://commands", "command_list")] {
         assert!(list["result"]["resources"].as_array().unwrap().iter().any(|r| r["uri"] == uri));
         let resource = rpc(&mut s, 2, "resources/read", json!({"uri":uri}));
         let call = rpc(&mut s, 3, "tools/call", json!({"name":tool,"arguments":{}}));
@@ -320,7 +320,7 @@ fn core_resources_match_tools_after_parse_error() {
         let b: Value = serde_json::from_str(call["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(a, b);
     }
-    let old = rpc(&mut s, 4, "resources/read", json!({"uri":"lightcraft://library"}));
+    let old = rpc(&mut s, 4, "resources/read", json!({"uri":"dac://library"}));
     assert!(old["result"]["contents"].is_array(), "{old}");
 }
 
@@ -361,7 +361,7 @@ fn modern_requests_receive_result_and_cache_fields() {
         ("tools/list", json!({})),
         ("resources/list", json!({})),
         ("resources/templates/list", json!({})),
-        ("resources/read", json!({"uri":"lightcraft://library"})),
+        ("resources/read", json!({"uri":"dac://library"})),
     ] {
         params["_meta"] = meta.clone();
         let r = rpc(&mut s, 1, method, params);

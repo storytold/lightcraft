@@ -1,4 +1,4 @@
-//! Colour science for LightCraft.
+//! Colour science.
 //!
 //! - [`Mat3`] and RGB colour spaces defined by primaries + white point ([`RgbSpace`]).
 //! - Chromatic adaptation (Bradford), correlated colour temperature ↔ chromaticity, and the

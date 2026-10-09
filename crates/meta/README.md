@@ -10,7 +10,7 @@ Photo metadata: EXIF, XMP (read + write), IPTC-IIM, and the containers that carr
 | `from_tiff(&Tiff) -> Metadata` | Same, from an already parsed stream (used by `dac-raw`). |
 | `embedded(&[u8]) -> Embedded` | Sniffs JPEG / PNG / WebP / TIFF and returns the Exif, XMP (+ extended XMP), ICC and IPTC blocks. `jpeg_segments`, `png_chunks`, `webp_chunks` are the per-container walkers. |
 | `parse_xmp(&str) -> Result<XmpData>` | Metadata + the opaque `lc:settings` JSON + every property (`prefix:name`, structs flattened as `a:b/c:d`). |
-| `write_xmp(&Metadata, Option<&str>) -> String` | Complete `<?xpacket?>` packet; the second argument is LightCraft's full develop settings JSON. |
+| `write_xmp(&Metadata, Option<&str>) -> String` | Complete `<?xpacket?>` packet; the second argument is the app's full develop settings JSON. |
 | `parse_iptc(&[u8]) -> Metadata` | IIM record 2: title (2:5), keywords (2:25), by-line (2:80), copyright (2:116), caption (2:120), date/time created (2:55/2:60). |
 | `extract(&[u8]) -> Metadata` | Everything for a whole file. Precedence: EXIF → IPTC fills gaps → XMP overrides user fields (rating, label, title, caption, artist, copyright, keywords, GPS) and fills the rest. |
 

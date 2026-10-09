@@ -49,11 +49,11 @@ pub fn confirm(text: &str) -> bool {
 /// Cover the page with a message (the app can't continue, or must not start).
 pub fn show_blocking(text: &str) {
     let Some(doc) = document() else { return };
-    let el = match doc.get_element_by_id("lightcraft_blocking") {
+    let el = match doc.get_element_by_id("app_blocking") {
         Some(el) => el,
         None => {
             let Ok(el) = doc.create_element("div") else { return };
-            el.set_id("lightcraft_blocking");
+            el.set_id("app_blocking");
             let _ = el.set_attribute(
                 "style",
                 "position:fixed;inset:0;z-index:10;display:flex;align-items:center;justify-content:center;padding:32px;\
@@ -66,7 +66,7 @@ pub fn show_blocking(text: &str) {
         }
     };
     el.set_text_content(Some(text));
-    if let Some(loading) = doc.get_element_by_id("lightcraft_loading") {
+    if let Some(loading) = doc.get_element_by_id("app_loading") {
         loading.remove();
     }
 }
@@ -81,16 +81,17 @@ pub fn install_panic_hook() {
             _ => "unknown error".into(),
         };
         let at = info.location().map(|l| format!(" at {}:{}", l.file(), l.line())).unwrap_or_default();
-        log::error!("LightCraft panicked{at}: {msg}");
+        log::error!("{} panicked{at}: {msg}", dac_brand::DISPLAY_NAME);
         show_blocking(&format!(
-            "LightCraft stopped after an internal error:\n{msg}\n\nThe library saved in this browser is kept. Reload the page to continue.\n\
-             If it happens again right away, a photo may be the cause: reload with ?workers=0 or report the error."
+            "{app} stopped after an internal error:\n{msg}\n\nThe library saved in this browser is kept. Reload the page to continue.\n\
+             If it happens again right away, a photo may be the cause: reload with ?workers=0 or report the error.",
+            app = dac_brand::DISPLAY_NAME
         ));
     }));
 }
 
 /// The name of the lock that keeps a library to one tab.
-const TAB_LOCK: &str = "lightcraft-library";
+const TAB_LOCK: &str = crate::legacy::TAB_LOCK;
 
 /// Hold the library lock for as long as this page lives (Web Locks API). `Some(true)`: ours;
 /// `Some(false)`: another tab of this site has it; `None`: the browser can't tell (no Web Locks, or
@@ -163,7 +164,7 @@ pub async fn backup(files: Files, backend: Backend, names: HashMap<String, Strin
         bytes += (header.len() + data.len()) as f64;
         Ok(())
     };
-    add(&mut zip, "README.txt", README.as_bytes())?;
+    add(&mut zip, "README.txt", dac_brand::fill(README).as_bytes())?;
     for name in LIBRARY_FILES {
         if let Some(d) = files.get(name) {
             add(&mut zip, &format!("library/{name}"), &d)?;
@@ -190,7 +191,7 @@ pub async fn backup(files: Files, backend: Backend, names: HashMap<String, Strin
     opts.set_type("application/zip");
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts).map_err(|e| format!("{e:?}"))?;
     let day: String = String::from(js_sys::Date::new_0().to_iso_string()).chars().take(10).collect();
-    download_blob(&format!("lightcraft-library-backup-{day}.zip"), &blob)?;
+    download_blob(&format!("{}-library-backup-{day}.zip", dac_brand::BINARY), &blob)?;
     Ok((originals, bytes + tail.len() as f64))
 }
 
@@ -210,7 +211,7 @@ pub async fn restore(file: web_sys::File, backend: Backend) -> Result<String, St
     let cd = read_range(&file, cd_offset, cd_offset + cd_size).await?;
     let entries = parse_central(&cd)?;
     if !entries.iter().any(|e| e.name == "library/catalog.snap" || e.name == "library/catalog.log") {
-        return Err("this isn't a LightCraft library backup (no library/catalog files)".into());
+        return Err(format!("this isn't a {} library backup (no library/catalog files)", dac_brand::DISPLAY_NAME));
     }
     let dir = restored_dir_name(js_sys::Date::now());
     let mut written = 0usize;
@@ -231,16 +232,16 @@ pub async fn restore(file: web_sys::File, backend: Backend) -> Result<String, St
         written += 1;
     }
     backend.write(ACTIVE_LIBRARY, dir.as_bytes()).await?;
-    log::info!("lightcraft: restored {written} files into {dir}");
+    log::info!("app: restored {written} files into {dir}");
     Ok(dir)
 }
 
 /// File ▸ Restore Library from Backup…: confirm, pick the zip, restore, reload.
 pub fn pick_and_restore(backend: Backend, before_reload: impl FnOnce() + 'static) {
-    let ok = confirm(
-        "Restore a LightCraft library backup?\n\nThe backup becomes the library in this browser and the page reloads. \
+    let ok = confirm(&dac_brand::fill(
+        "Restore a {app} library backup?\n\nThe backup becomes the library in this browser and the page reloads. \
          The current library is not deleted: it stays in browser storage.",
-    );
+    ));
     if !ok {
         return;
     }

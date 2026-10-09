@@ -433,7 +433,7 @@ pub fn group_from_dir(dir: &str) -> Option<String> {
         "presets",
         "settings",
         "lcpreset",
-        "lightcraft",
+        crate::legacy::NAME_WORD,
         "user",
         "develop",
         "files",

@@ -88,14 +88,15 @@ fn generate() -> Result<String, Box<dyn std::error::Error>> {
     ));
     for english in all {
         let en = serde_json::to_string(english)?;
+        let en_filled = serde_json::to_string(&brand_fill(english))?;
         source.push_str(&format!("    ({en} $(, $($args:tt)*)?) => {{\n        match $crate::i18n::language() {{\n"));
         for (_, variant, messages) in &catalogs {
             if let Some(translated) = messages.get(english) {
-                let translated = serde_json::to_string(translated)?;
+                let translated = serde_json::to_string(&brand_fill(translated))?;
                 source.push_str(&format!("            $crate::i18n::Locale::{variant} => format!({translated} $(, $($args)*)?),\n"));
             }
         }
-        source.push_str(&format!("            _ => format!({en} $(, $($args)*)?),\n        }}\n    }};\n"));
+        source.push_str(&format!("            _ => format!({en_filled} $(, $($args)*)?),\n        }}\n    }};\n"));
     }
     source.push_str(concat!(
         "}\n",
@@ -105,6 +106,13 @@ fn generate() -> Result<String, Box<dyn std::error::Error>> {
         "pub(crate) use tr_format;\n",
     ));
     Ok(source)
+}
+
+/// The brand placeholders (`{app}`, `{cli}`, `{env}`) are filled in here, at build time: they are not
+/// `format!` arguments. The name is escaped for `format!` (`{` → `{{`).
+fn brand_fill(text: &str) -> String {
+    let esc = |s: &str| s.replace('{', "{{").replace('}', "}}");
+    text.replace("{app}", &esc(dac_brand::DISPLAY_NAME)).replace("{cli}", &esc(dac_brand::CLI_BINARY)).replace("{env}", &esc(dac_brand::ENV_PREFIX))
 }
 
 /// The About window's credits tables.

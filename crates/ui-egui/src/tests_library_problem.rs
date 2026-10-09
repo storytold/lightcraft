@@ -28,7 +28,7 @@ fn unopenable_library_asks_instead_of_running_a_demo() {
     std::fs::write(&photo, png).unwrap();
 
     // another program has the library open: the launch fails like the desktop host's would
-    let held = dac_catalog::LibraryLock::acquire(&lib, "another LightCraft").unwrap();
+    let held = dac_catalog::LibraryLock::acquire(&lib, "another program").unwrap();
     let mut session = dac_engine::Session::new().with_fs();
     let err = session.open_library(&lib, true).unwrap_err().to_string();
     let png = |img: &dac_raster::Rgba8| {
@@ -51,13 +51,13 @@ fn unopenable_library_asks_instead_of_running_a_demo() {
     for b in ["button:libraryRetry", "button:libraryChoose", "button:libraryTemporary", "button:libraryQuit"] {
         assert!(has(&h, b), "{b}");
     }
-    if let Some(p) = std::env::var_os("LIGHTCRAFT_TEST_SHOTS") {
+    if let Some(p) = dac_brand::env_os("TEST_SHOTS") {
         let r = h.request("ui.screenshot", json!({"path": std::path::Path::new(&p).join("dialog.png").to_string_lossy(), "headless": true}), T);
         assert_eq!(r["ok"], true, "{r}");
     }
     let inspect = h.request("ui.inspect", json!({}), T);
     let p = &inspect["result"]["libraryProblem"];
-    assert!(p["error"].as_str().unwrap().contains("already open in another LightCraft"), "{p}");
+    assert!(p["error"].as_str().unwrap().contains("already open in another program"), "{p}");
     assert_eq!(p["temporarySession"], false);
 
     // still locked: Try Again keeps the window, with the error
@@ -78,7 +78,7 @@ fn unopenable_library_asks_instead_of_running_a_demo() {
     // imported on the import worker (issue #374: never synchronously on the UI thread)
     h.step_until(T, |h| h.app.import.is_none() && h.app.session.catalog.len() == 1);
     assert_eq!(h.app.session.catalog.len(), 1, "the command-line photo is imported into the temporary session");
-    if let Some(p) = std::env::var_os("LIGHTCRAFT_TEST_SHOTS") {
+    if let Some(p) = dac_brand::env_os("TEST_SHOTS") {
         let r = h.request("ui.screenshot", json!({"path": std::path::Path::new(&p).join("banner.png").to_string_lossy(), "headless": true}), T);
         assert_eq!(r["ok"], true, "{r}");
     }

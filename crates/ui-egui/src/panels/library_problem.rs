@@ -110,9 +110,9 @@ pub fn show(app: &mut DacApp, ctx: &egui::Context) {
             ui.set_width(440.0);
             ui.spacing_mut().item_spacing.y = 8.0;
             if problem.path.is_empty() {
-                ui.label(RichText::new(crate::i18n::tr("LightCraft couldn't find where to keep your library.")).color(t.text));
+                ui.label(RichText::new(crate::i18n::tr("{app} couldn't find where to keep your library.")).color(t.text));
             } else {
-                ui.label(RichText::new(crate::i18n::tr("LightCraft couldn't open the library at")).color(t.text_label));
+                ui.label(RichText::new(crate::i18n::tr("{app} couldn't open the library at")).color(t.text_label));
                 ui.label(RichText::new(&problem.path).font(t.semibold(12.5)).color(t.text));
             }
             ui.add(egui::Label::new(RichText::new(&problem.error).color(t.caution)).wrap());

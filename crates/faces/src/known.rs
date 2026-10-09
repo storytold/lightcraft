@@ -1,14 +1,14 @@
-//! The models LightCraft recognises by their SHA-256, with what is honestly known about each.
+//! The models the app recognises by their SHA-256, with what is honestly known about each.
 //!
 //! The licence and provenance texts here are what the user reads before enabling a model, so they say what
-//! is *not* known too. Weights are never part of LightCraft: every model is an opt-in the user installs.
+//! is *not* known too. Weights are never part of the app: every model is an opt-in the user installs.
 
 use crate::manifest::{Colour, Commercial, InputSpec, Licence, ModelManifest, OutputSpec, Resize, Role, Thresholds};
 
-/// Detector output decoders built into LightCraft.
+/// Detector output decoders built into the app.
 pub const DECODERS: &[&str] = &["yunet-v2"];
 
-/// The id of the face detector LightCraft runs (see [`yunet`]).
+/// The id of the face detector the app runs (see [`yunet`]).
 pub const YUNET_ID: &str = "yunet-2023mar";
 pub const YUNET_SHA256: &str = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4";
 pub const SFACE_SHA256: &str = "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79";
@@ -133,7 +133,7 @@ const SOURCES: &[(&str, &str, &str)] = &[
     ("auraface-v1", "https://huggingface.co/fal/AuraFace-v1/resolve/af6d057c9b0ec4071d4c49c80e3539258798b609/glintr100.onnx", "glintr100.onnx"),
 ];
 
-/// How to download the model with this id, if LightCraft offers to.
+/// How to download the model with this id, if the app offers to.
 pub fn download(id: &str) -> Option<Download> {
     let (_, url, file_name) = SOURCES.iter().find(|(i, _, _)| *i == id)?;
     let m = all().into_iter().find(|m| m.id == id)?;

@@ -164,7 +164,7 @@ impl Cr3Track {
     }
 }
 
-/// The parts of a CR3 file LightCraft reads.
+/// The parts of a CR3 file the app reads.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Cr3<'a> {
     /// `CMT1`…`CMT4` (index 0…3).

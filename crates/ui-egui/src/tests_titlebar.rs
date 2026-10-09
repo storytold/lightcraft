@@ -11,7 +11,7 @@ use crate::{DacApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 
-/// Given LightCraft with the integrated title bar (macOS) in a 1200×800 window.
+/// Given the app with the integrated title bar (macOS) in a 1200×800 window.
 fn integrated() -> Headless {
     let services = Services { png: None, ..Default::default() };
     let mut app = DacApp::new(dac_engine::Session::with_demo(), services);

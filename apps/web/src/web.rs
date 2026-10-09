@@ -1,5 +1,5 @@
 //! Browser host: opens the library in browser storage, starts the render workers and eframe on
-//! `<canvas id="lightcraft_canvas">`, wires the file picker and drag-and-drop, and turns exports
+//! `<canvas id="app_canvas">`, wires the file picker and drag-and-drop, and turns exports
 //! into downloads.
 
 use std::cell::Cell;
@@ -45,7 +45,7 @@ fn perf_now() -> f64 {
 }
 
 fn set_status(text: &str) {
-    if let Some(el) = window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id("lightcraft_status")) {
+    if let Some(el) = window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id("app_status")) {
         el.set_text_content(Some(text));
     }
 }
@@ -240,7 +240,7 @@ async fn flush(files: Files, backend: Backend, dir: String, flushing: Rc<Cell<bo
         let ops = files.take_dirty();
         if ops.is_empty() {
             if files.error().is_some() {
-                log::info!("lightcraft: saving works again");
+                log::info!("app: saving works again");
             }
             files.set_error(None);
             break;
@@ -291,17 +291,17 @@ async fn boot(opts: Options) -> Boot {
     if let Some(b) = &backend {
         if opts.reset {
             // everything this site keeps in the browser, photos included: never without asking
-            let ok = safety::confirm(
-                "?reset deletes the LightCraft library stored in this browser, including every imported photo. \
+            let ok = safety::confirm(&dac_brand::fill(
+                "?reset deletes the {app} library stored in this browser, including every imported photo. \
                  This can't be undone. Delete it?",
-            );
+            ));
             if ok {
                 match b.clear().await {
-                    Ok(()) => log::info!("lightcraft: storage cleared (?reset)"),
+                    Ok(()) => log::info!("app: storage cleared (?reset)"),
                     Err(e) => log::error!("clearing storage: {e}"),
                 }
             } else {
-                log::info!("lightcraft: ?reset declined; storage kept");
+                log::info!("app: ?reset declined; storage kept");
             }
         }
         // a restored backup lives in its own folder (see `backup`)
@@ -323,10 +323,10 @@ async fn boot(opts: Options) -> Boot {
         }
         crate::backend::request_persistence(|granted| {
             if !granted {
-                notice(
-                    "This browser may delete LightCraft's library when it runs short of space (persistent storage wasn't granted). \
+                notice(&dac_brand::fill(
+                    "This browser may delete {app}'s library when it runs short of space (persistent storage wasn't granted). \
                      Keep your original photos elsewhere and use File ▸ Back Up Library… now and then.",
-                );
+                ));
             }
         });
         // thumbnails stored without an index entry (index saved late, or lost): delete them
@@ -350,7 +350,7 @@ async fn boot(opts: Options) -> Boot {
         }
     }
     log::info!(
-        "lightcraft: storage {} opened in {:.0} ms ({} thumbnails indexed, {:.1} MB)",
+        "app: storage {} opened in {:.0} ms ({} thumbnails indexed, {:.1} MB)",
         backend.as_ref().map_or("memory", |b| b.kind()),
         perf_now() - t0,
         index.len(),
@@ -393,7 +393,7 @@ impl WebApp {
         let mut problem = None;
         match session.open_library_in(stores, true).cloned() {
             Ok(r) => log::info!(
-                "lightcraft: library {} in {:.0} ms ({} photos; snapshot seq {}, {} ops replayed)",
+                "app: library {} in {:.0} ms ({} photos; snapshot seq {}, {} ops replayed)",
                 if r.created { "created" } else { "loaded" },
                 perf_now() - t,
                 session.catalog.len(),
@@ -415,10 +415,10 @@ impl WebApp {
             }
         }
         if backend.is_some() {
-            notice(
-                "LightCraft in the browser is experimental. Your library is kept in this browser's storage: keep your original photos \
+            notice(&dac_brand::fill(
+                "{app} in the browser is experimental. Your library is kept in this browser's storage: keep your original photos \
                  elsewhere and back up with File ▸ Back Up Library….",
-            );
+            ));
         }
         // previews are large (≤ 2560 px, f32): keep few in a 32-bit address space
         session.media.preview_capacity = 3;
@@ -450,7 +450,7 @@ impl WebApp {
         if let Some(w) = &workers {
             app.renderer.set_offload(Box::new(w.clone()));
         }
-        log::info!("lightcraft: {n} render workers");
+        log::info!("app: {n} render workers");
         CTX.with(|c| *c.borrow_mut() = Some(cc.egui_ctx.clone()));
         let origin = dac_ui_egui::now_ms() - perf_now();
         WebApp {
@@ -632,9 +632,9 @@ impl eframe::App for WebApp {
         if let Some(b) = self.bench.as_mut()
             && let Some(report) = b.step(&mut self.app)
         {
-            log::info!("lightcraft-bench {report}");
+            log::info!("app-bench {report}");
             if let Some((alive, ready, remote, inline)) = self.workers.as_ref().map(Workers::stats) {
-                log::info!("lightcraft-workers {{\"alive\":{alive},\"ready\":{ready},\"remote_jobs\":{remote},\"inline_jobs\":{inline}}}");
+                log::info!("app-workers {{\"alive\":{alive},\"ready\":{ready},\"remote_jobs\":{remote},\"inline_jobs\":{inline}}}");
             }
             set_status(&format!("bench: {report}"));
             self.bench = None;
@@ -652,7 +652,7 @@ impl eframe::App for WebApp {
         self.app.ui(ui);
         if !self.first_frame_logged && !self.app.widgets.is_empty() {
             self.first_frame_logged = true;
-            log::info!("lightcraft first UI frame at {:.0} ms after navigation start", perf_now());
+            log::info!("app first UI frame at {:.0} ms after navigation start", perf_now());
         }
     }
 }
@@ -662,26 +662,33 @@ impl eframe::App for WebApp {
 pub fn start(chinese_font: Vec<u8>) {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
     safety::install_panic_hook();
-    log::info!("lightcraft: wasm instantiated at {:.0} ms", perf_now());
+    log::info!("app: wasm instantiated at {:.0} ms", perf_now());
+    // index.html is static: the page title and loading text come from the brand
+    if let Some(doc) = window().and_then(|w| w.document()) {
+        doc.set_title(dac_brand::DISPLAY_NAME);
+        if let Some(el) = doc.get_element_by_id("app_loading") {
+            el.set_text_content(Some(&format!("Loading {}…", dac_brand::DISPLAY_NAME)));
+        }
+    }
     if chinese_font.is_empty() {
-        log::warn!("lightcraft: no Simplified Chinese font supplied; Chinese-only glyphs will show as boxes");
+        log::warn!("app: no Simplified Chinese font supplied; Chinese-only glyphs will show as boxes");
     }
     let opts = Options::from_url();
     wasm_bindgen_futures::spawn_local(async move {
         // one tab per library: two would each keep their own copy and overwrite each other's saves
         if opts.store != "memory" && safety::acquire_tab_lock().await == Some(false) {
-            safety::show_blocking(
-                "LightCraft is already open in another tab or window of this browser.\n\n\
+            safety::show_blocking(&dac_brand::fill(
+                "{app} is already open in another tab or window of this browser.\n\n\
                  Switch to that tab, or close it and reload this page. (Two tabs would overwrite each other's changes.)",
-            );
+            ));
             return;
         }
         let Some(canvas) = window()
             .and_then(|w| w.document())
-            .and_then(|d| d.get_element_by_id("lightcraft_canvas"))
+            .and_then(|d| d.get_element_by_id("app_canvas"))
             .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
         else {
-            log::error!("missing <canvas id=\"lightcraft_canvas\">");
+            log::error!("missing <canvas id=\"app_canvas\">");
             return;
         };
         let boot = boot(opts).await;
@@ -689,13 +696,13 @@ pub fn start(chinese_font: Vec<u8>) {
         let r = runner.start(canvas, eframe::WebOptions::default(), Box::new(move |cc| Ok(Box::new(WebApp::new(cc, boot, chinese_font))))).await;
         match r {
             Ok(()) => {
-                if let Some(el) = window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id("lightcraft_loading")) {
+                if let Some(el) = window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id("app_loading")) {
                     el.remove();
                 }
             }
             Err(e) => {
-                log::error!("LightCraft failed to start: {e:?}");
-                set_status(&format!("LightCraft failed to start: {e:?}"));
+                log::error!("{} failed to start: {e:?}", dac_brand::DISPLAY_NAME);
+                set_status(&format!("{} failed to start: {e:?}", dac_brand::DISPLAY_NAME));
             }
         }
     });

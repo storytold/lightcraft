@@ -635,7 +635,7 @@ fn settings_are_checked_saved_and_a_paused_pump_starts_nothing() {
     (st.run_on, st.gpu) = (None, Some(false));
     crate::denoise::write_settings(&models, &st).unwrap();
     assert_eq!(x.s.execute("denoise.models.list", &json!({})).unwrap()["runOn"], "cpu");
-    // choosing where it runs lets the card be tried again after a set-up that closed LightCraft
+    // choosing where it runs lets the card be tried again after a set-up that closed the app
     let onnx = crate::denoise::installed_models(&models).first().unwrap().onnx.clone();
     let marker = onnx.with_file_name(crate::denoise::GPU_SETUP_MARKER);
     std::fs::write(&marker, "setting up").unwrap();

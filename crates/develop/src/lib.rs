@@ -1,4 +1,4 @@
-//! The non-destructive edit model of LightCraft.
+//! The non-destructive edit model of the app.
 //!
 //! [`DevelopSettings`] is the complete description of a photo's look: pure, serializable data.
 //! The pipeline evaluates it; the catalog stores it; presets, copy/paste, sync, versions and history

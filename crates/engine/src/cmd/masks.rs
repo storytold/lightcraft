@@ -449,7 +449,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Download AI Mask Model",
             [],
             None,
-            "{acknowledged: true} — download the SAM 3 model (about 3.4 GB, Meta's SAM License, not LightCraft's) in the background, from the configured mirrors; only after the user agreed to it. Watch segment.model.status; segment.model.cancel stops it (it resumes later) → {started, installed, downloading}",
+            "{acknowledged: true} — download the SAM 3 model (about 3.4 GB, Meta's SAM License, not the app's) in the background, from the configured mirrors; only after the user agreed to it. Watch segment.model.status; segment.model.cancel stops it (it resumes later) → {started, installed, downloading}",
             super::always,
             |s, p| {
                 let c = "segment.model.download";

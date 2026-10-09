@@ -191,7 +191,7 @@ impl MergeJob {
                 self.sources.iter().map(|(_, p)| std::path::Path::new(p).file_name().and_then(|n| n.to_str()).unwrap_or(p)).collect();
             metadata.caption = Some(format!("Merged from {}", names.join(", ")));
         }
-        metadata.software = Some("LightCraft Photo Merge".into());
+        metadata.software = Some(format!("{} Photo Merge", dac_brand::DISPLAY_NAME));
         let dng = dac_merge::write_linear_dng(&image, &color, orientation, &metadata, baseline, samples).map_err(err)?;
         info["width"] = json!(image.width);
         info["height"] = json!(image.height);

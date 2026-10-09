@@ -3,12 +3,13 @@ name = "dac-mcp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft MCP server (L5): JSON-RPC 2.0 over stdio, driving a running app or a headless session"
+description = "MCP server (L5): JSON-RPC 2.0 over stdio, driving a running app or a headless session"
 
 [lints]
 workspace = true
 
 [dependencies]
+dac-brand = { workspace = true }
 dac-engine = { workspace = true }
 dac-codecs = { workspace = true }
 dac-raster = { workspace = true }

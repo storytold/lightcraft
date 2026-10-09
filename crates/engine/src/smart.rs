@@ -89,7 +89,7 @@ pub fn check_writable(dir: &Path) -> Result<(), String> {
         }
         std::fs::create_dir(dir).map_err(|e| format!("can't create {}: {e}", dir.display()))?;
     }
-    let probe = dir.join(format!(".lightcraft-write-test-{}", std::process::id()));
+    let probe = dir.join(format!(".app-write-test-{}", std::process::id()));
     std::fs::write(&probe, b"x").map_err(|e| format!("{} is not writable (is the drive full or read-only?): {e}", dir.display()))?;
     let _ = std::fs::remove_file(&probe);
     Ok(())

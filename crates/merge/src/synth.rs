@@ -41,7 +41,7 @@ pub fn bracket_dngs(w: usize, h: usize, evs: &[f64]) -> Result<Vec<Vec<u8>>> {
                 q.map(|v| (v * k).clamp(0.0, 1.0))
             });
             let meta = Metadata {
-                make: Some("LightCraft".into()),
+                make: Some(dac_brand::DISPLAY_NAME.into()),
                 model: Some("Synthetic Bracket".into()),
                 exposure_time: Some(2f64.powf(*ev) / 125.0),
                 f_number: Some(8.0),

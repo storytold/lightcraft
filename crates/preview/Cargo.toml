@@ -3,12 +3,13 @@ name = "dac-preview"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft preview cache: content hashing, memory LRU, disk thumbnail cache, prioritized job pool (L3)"
+description = "Preview cache: content hashing, memory LRU, disk thumbnail cache, prioritized job pool (L3)"
 
 [lints]
 workspace = true
 
 [dependencies]
+dac-brand = { workspace = true }
 dac-raster = { workspace = true }
 siphasher = { workspace = true }
 jpeg-encoder = { workspace = true }

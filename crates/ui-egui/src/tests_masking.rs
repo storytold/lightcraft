@@ -739,7 +739,7 @@ fn ai_masks_without_the_model_offer_the_download() {
         assert_eq!(r["ok"], false, "{r}");
         let r = h.request("ui.dialog.confirm", json!({}), T);
         assert_eq!(r["ok"], false, "{r}");
-        assert!(r["error"].as_str().unwrap_or_default().contains("LIGHTCRAFT_SAM3_MIRRORS"), "{r}");
+        assert!(r["error"].as_str().unwrap_or_default().contains(&dac_brand::env_var("SAM3_MIRRORS")), "{r}");
         assert!(matches!(h.app.ui.dialog, Some(Dialog::SamModel { .. })), "stays open");
     } else {
         // with a mirror: Download starts it in the background (here it fails: nothing listens)

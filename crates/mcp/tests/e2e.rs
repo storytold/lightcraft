@@ -1,4 +1,4 @@
-//! M0.9 acceptance: drive LightCraft over MCP (stdio framing), set exposure and render an image.
+//! M0.9 acceptance: drive the app over MCP (stdio framing), set exposure and render an image.
 //! Runs against the headless backend directly and through the TCP control-channel transport
 //! (`Remote`) to a stand-in control server.
 
@@ -43,7 +43,7 @@ fn exposure_roundtrip(server: &mut Server) {
         ],
     );
     assert_eq!(replies.len(), 3, "notifications get no reply");
-    assert_eq!(replies[0]["result"]["serverInfo"]["name"], "lightcraft");
+    assert_eq!(replies[0]["result"]["serverInfo"]["name"], dac_brand::MCP_SERVER);
     let tools: Vec<&str> = replies[1]["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert!(tools.contains(&"set_develop") && tools.contains(&"render_photo") && tools.contains(&"cmd_develop_set"));
     let id = replies[2]["result"]["structuredContent"]["photos"][0]["id"].as_u64().expect("a photo");

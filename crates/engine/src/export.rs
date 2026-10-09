@@ -1252,7 +1252,7 @@ pub fn export_metadata(photo: &dac_catalog::Photo, o: &ExportOptions) -> Option<
         usage_terms: text(&m.usage_terms),
         copyright_url: text(&m.copyright_url),
         artist: text(&m.creator),
-        software: Some("LightCraft".into()),
+        software: Some(dac_brand::DISPLAY_NAME.into()),
         ..Default::default()
     };
     match o.metadata {
@@ -1663,7 +1663,7 @@ mod tests {
         for p in img.data.iter_mut() {
             *p = [0, 0, 0, 255];
         }
-        let o = ExportOptions::from_json(&serde_json::json!({"watermark": {"text": "LightCraft", "size": 0.08, "opacity": 1.0, "shadow": false}}));
+        let o = ExportOptions::from_json(&serde_json::json!({"watermark": {"text": "The app", "size": 0.08, "opacity": 1.0, "shadow": false}}));
         let wm = o.watermark.clone().unwrap();
         draw_watermark(&mut img, &wm);
         let lit = |x0: usize, x1: usize, y0: usize, y1: usize| {
@@ -1697,7 +1697,7 @@ mod tests {
     #[test]
     fn watermarks_work_without_craft_fonts() {
         assert_eq!(watermark_fonts(&[]).len(), 1, "Inter only");
-        for wm in [vertical_japanese(), Watermark { text: "LightCraft 日本語".into(), ..Watermark::default() }] {
+        for wm in [vertical_japanese(), Watermark { text: "The app 日本語".into(), ..Watermark::default() }] {
             let mut covered = 0usize;
             watermark_coverage(400, 300, &wm, &[], |_, _, k, _| covered += usize::from(k > 0.0));
             assert!(covered > 0, "{:?} draws something", wm.text);

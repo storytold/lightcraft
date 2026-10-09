@@ -268,7 +268,7 @@ fn fs_store_background_snapshot() {
         edit(&mut j, &mut live, k);
     }
     // a previous crash mid-snapshot left a partial temp file
-    std::fs::write(dir.join(format!("{SNAPSHOT}.tmp")), b"{\"format\":\"lightcraft-catal").unwrap();
+    std::fs::write(dir.join(format!("{SNAPSHOT}.tmp")), b"{\"format\":\"dac-catal").unwrap();
     let (mut j2, c2, r) = Journal::open(Box::new(FsStore::open(&dir).unwrap())).unwrap();
     assert_eq!((c2.to_snapshot(), r.snapshot_seq), (live.to_snapshot(), 0));
     drop(j);

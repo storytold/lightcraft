@@ -385,7 +385,7 @@ fn move_into_the_library_is_saved_before_sources_go() {
 /// Timing for issue #134 (not a pass/fail test): `cargo test -p dac-engine --release
 /// write_policy_timing -- --ignored --nocapture`. Writes N export-sized files durably (temp +
 /// sync + rename) and atomically only, and copies N files verified byte for byte and against the
-/// probe hash, alternating so a loaded machine affects both alike. `LIGHTCRAFT_BENCH_DIR` puts
+/// probe hash, alternating so a loaded machine affects both alike. `{ENV_PREFIX}_BENCH_DIR` puts
 /// the files on another volume (a USB drive or a NAS is where the difference shows).
 #[test]
 #[ignore]
@@ -393,7 +393,7 @@ fn write_policy_timing() {
     use crate::import_move::copy_verified;
     use dac_catalog::safe_file::{write_atomic, write_atomic_nosync};
     use std::time::{Duration, Instant};
-    let root = std::env::var_os("LIGHTCRAFT_BENCH_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    let root = dac_brand::env_os("BENCH_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
     let base = root.join(format!("lc-write-policy-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();

@@ -3,12 +3,13 @@ name = "dac-gpu"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft GPU develop pipeline: wgpu compute (WGSL) twin of the CPU pipeline, which stays the reference (L3)"
+description = "GPU develop pipeline: wgpu compute (WGSL) twin of the CPU pipeline, which stays the reference (L3)"
 
 [lints]
 workspace = true
 
 [dependencies]
+dac-brand = { workspace = true }
 dac-denoise = { workspace = true, optional = true }
 dac-geom = { workspace = true }
 dac-color = { workspace = true }

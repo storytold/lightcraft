@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "LightCraft command-line tool: headless render, command listing and the MCP server"
+description = "Command-line tool: headless render, command listing and the MCP server"
 
 [[bin]]
 name = "app-cli"
@@ -14,9 +14,11 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+dac-brand = { workspace = true }
 dac-engine = { workspace = true }
 dac-sysmem = { workspace = true }
 dac-mcp = { workspace = true }
+log = { workspace = true }
 dac-ui-egui = { workspace = true }
 dac-codecs = { workspace = true }
 dac-raster = { workspace = true }

@@ -1,4 +1,4 @@
-//! LightCraft's egui frontend: a Lightroom-style UI over `dac-engine`.
+//! The app's egui frontend: a Lightroom-style UI over `dac-engine`.
 //!
 //! The UI is thin: every action goes through [`DacApp::run`], which handles UI commands
 //! (views, panels, zoom — see [`menus::ui_commands`]) and forwards everything else to the engine.
@@ -128,8 +128,8 @@ pub struct Services {
     pub png: Option<PngEncode>,
     /// Show a file in the system file manager (desktop only).
     pub reveal: Option<RevealFn>,
-    /// The host's current log file (`<settings>/logs/lightcraft.log`), which Help ▸ Open Log
-    /// Folder reveals (#260). None where no log is kept: the web, `--memory`, `LIGHTCRAFT_NO_PREFS`.
+    /// The host's current log file (`<settings>/logs/<binary>.log`), which Help ▸ Open Log
+    /// Folder reveals (#260). None where no log is kept: the web, `--memory`, `<ENV_PREFIX>_NO_PREFS`.
     pub log_file: Option<String>,
     /// Choose a folder (Settings → General → Open Library…; desktop only).
     pub pick_folder: Option<PickFolder>,
@@ -448,7 +448,7 @@ impl DacApp {
                 let t = ctx.input(|i| i.time);
                 self.ui.toast = Some((
                     crate::i18n::tr_format!(
-                        "{n} change{} saved in memory but not written to disk: {e} — LightCraft will retry",
+                        "{n} change{} saved in memory but not written to disk: {e} — {app} will retry",
                         if n == 1 { "" } else { "s" },
                         n = n,
                         e = e

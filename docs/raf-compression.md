@@ -1,6 +1,6 @@
 # Fujifilm compressed RAF
 
-LightCraft decodes uncompressed, lossless compressed and lossy compressed RAF sensor data in pure Rust. The shared RAW decoder serves import, desktop previews, editing, CLI rendering, web and export. These files no longer enter the embedded-JPEG-only fallback. After restarting with the updated build, existing imported preview-only photos need **Photo → Reload from Disk** to refresh their status; edits are retained.
+The app decodes uncompressed, lossless compressed and lossy compressed RAF sensor data in pure Rust. The shared RAW decoder serves import, desktop previews, editing, CLI rendering, web and export. These files no longer enter the embedded-JPEG-only fallback. After restarting with the updated build, existing imported preview-only photos need **Photo → Reload from Disk** to refresh their status; edits are retained.
 
 Fujifilm now uses a guarded colour/tone estimate from each file’s own embedded JPEG when the reference is usable, plus relative as-shot WB and bundled pooled profiles for X-H2S and X-T4. Output pixels still come from the sensor. A rejected profile fit retries the per-file colour fit; if both fail, the neutral fallback remains. Measured sensor calibration and Lightroom fidelity remain separate gaps. See [camera colour verification](camera-preview-colour.md#fujifilm-raf).
 

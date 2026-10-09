@@ -83,7 +83,7 @@ impl Drop for LightroomTask {
 
 #[cfg(target_arch = "wasm32")]
 fn unsupported_wasm() -> Result<Value, String> {
-    Err("Lightroom catalog import is unavailable in browser builds; open the catalog in the native LightCraft app".into())
+    Err("Lightroom catalog import is unavailable in browser builds; open the catalog in the native app".into())
 }
 
 /// Whether a Lightroom task currently owns the catalog transition.

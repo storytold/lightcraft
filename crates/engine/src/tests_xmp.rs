@@ -437,7 +437,7 @@ fn all_metadata_lists_exif_and_xmp() {
 /// photo relinked and its edits kept; undo goes back to the original; non-raws are skipped.
 #[test]
 fn convert_raw_to_dng() {
-    let corpus = std::env::var_os("LIGHTCRAFT_CORPUS")
+    let corpus = dac_brand::env_os("CORPUS")
         .map(PathBuf::from)
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
         .join("raw/nef-nikon-d5100-uncompressed.nef");
@@ -629,7 +629,7 @@ fn gps_typed_in_is_saved_to_xmp() {
 /// DNG export compression: lossless, zip and none all decode; none is the biggest.
 #[test]
 fn dng_export_compression_choices() {
-    let corpus = std::env::var_os("LIGHTCRAFT_CORPUS")
+    let corpus = dac_brand::env_os("CORPUS")
         .map(PathBuf::from)
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
         .join("raw/nef-nikon-d5100-uncompressed.nef");
@@ -854,7 +854,7 @@ fn saving_merges_into_another_apps_sidecar() {
     s.execute("develop.set", &json!({"control": "effects.clarity", "value": 0})).unwrap();
     s.execute("photo.readMetadataFromFile", &json!({})).unwrap();
     assert_eq!(s.catalog.photo(id).unwrap().develop, saved);
-    // saving again keeps one LightCraft description and the other app's data
+    // saving again keeps one the app description and the other app's data
     s.execute("photo.rate", &json!({"rating": 3})).unwrap();
     s.execute("photo.saveMetadataToFile", &json!({})).unwrap();
     let again = std::fs::read_to_string(src.join("shot.xmp")).unwrap();

@@ -221,12 +221,10 @@ const LAYOUT: &[(&str, &[&str])] = &[
     (
         "Help",
         &[
-            "app.discord",
             "app.feedback",
             "---",
             "app.website",
             "app.github",
-            "app.artcraft",
             "---",
             "app.whatsNew",
             "app.shortcuts",
@@ -1166,7 +1164,8 @@ mod tests {
         assert!(!crate::menus::ui_enabled(&app, "app.openLogFolder"));
         assert!(run_item(&mut app, "app.openLogFolder", Value::Null).is_err());
         assert!(shown.lock().unwrap().is_empty());
-        let log = "/home/a/.config/lightcraft/logs/lightcraft.log";
+        let log = format!("/home/a/.config/app/logs/{}.log", dac_brand::BINARY);
+        let log = log.as_str();
         app.services.log_file = Some(log.into());
         assert!(crate::menus::ui_enabled(&app, "app.openLogFolder"));
         assert!(matches!(find(&help(&app), "app.openLogFolder"), Some(MenuNode::Item { enabled: true, .. })));

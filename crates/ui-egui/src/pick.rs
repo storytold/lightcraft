@@ -1,6 +1,6 @@
 //! Native file dialogs for commands, off the UI thread (#191). A synchronous dialog blocks the
 //! thread that shows it, and on the desktop that was the UI thread: the window stopped answering
-//! the compositor (GNOME marked LightCraft "not responding" and offered to kill it), the menu the
+//! the compositor (GNOME marked the app "not responding" and offered to kill it), the menu the
 //! command came from stayed drawn, and the control channel went quiet until the dialog closed.
 //!
 //! A host that can run a dialog elsewhere installs a [`Picker`] in `Services`: it starts the
@@ -262,7 +262,7 @@ mod tests {
         h.app.run("file.exportPresets", json!({"group": "Mine"})).unwrap();
         let req = asked.lock().unwrap().last().map(|(r, _)| r.clone()).unwrap();
         assert_eq!(req.kind, PickKind::Save);
-        assert_eq!(req.file_name.as_deref(), Some("Mine.lcpreset"));
+        assert_eq!(req.file_name.as_deref(), Some(format!("Mine.{}", dac_brand::PRESET_EXT).as_str()));
         let p = with_answer(&json!({"group": "Mine"}), "path", PickKind::Save, &["/tmp/Mine.lcpreset".to_string(), "/tmp/other".to_string()]);
         assert_eq!(p, json!({"group": "Mine", "path": "/tmp/Mine.lcpreset"}));
         assert_eq!(with_answer(&Value::Null, "paths", PickKind::Files, &["a".to_string(), "b".to_string()]), json!({"paths": ["a", "b"]}));

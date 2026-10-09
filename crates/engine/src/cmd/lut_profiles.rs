@@ -109,7 +109,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             }
             None => {
                 // no library on disk: remember the original (the in-memory session ends with the app)
-                let f = std::env::temp_dir().join(format!("lightcraft-{}.cube", id.trim_start_matches("lut:")));
+                let f = std::env::temp_dir().join(format!("app-{}.cube", id.trim_start_matches("lut:")));
                 std::fs::write(&f, &text).map_err(|e| bad(C, e.to_string()))?;
                 f.to_string_lossy().to_string()
             }

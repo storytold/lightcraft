@@ -1154,7 +1154,7 @@ mod tests {
     /// download or an unfinished codec cannot make this test claim a successful RAW calibration.
     #[test]
     fn corpus_cr3_gets_a_framing_aligned_camera_look() {
-        let path = std::env::var_os("LIGHTCRAFT_CORPUS")
+        let path = dac_brand::env_os("CORPUS")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
             .join("raw/cr3-canon-r100-raw.cr3");
@@ -1186,7 +1186,7 @@ mod tests {
     /// balance is relative to the as-shot look.
     #[test]
     fn corpus_nef_gets_a_camera_look() {
-        let path = std::env::var_os("LIGHTCRAFT_CORPUS")
+        let path = dac_brand::env_os("CORPUS")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
             .join("raw/nef-nikon-d7500-lossless14.nef");
@@ -1203,7 +1203,7 @@ mod tests {
     /// while the embedded JPEG shows the whole sensor; the look is still fitted, against the matching part of it.
     #[test]
     fn corpus_rw2_with_an_in_camera_crop_gets_a_camera_look() {
-        let path = std::env::var_os("LIGHTCRAFT_CORPUS")
+        let path = dac_brand::env_os("CORPUS")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
             .join("raw/rw2-panasonic-fz1000m2-4x3.rw2");
@@ -1222,7 +1222,7 @@ mod tests {
     /// (held-out RMS 0.113): it used to open grey with the neutral fallback.
     #[test]
     fn corpus_arw_with_a_lens_corrected_preview_gets_a_camera_look() {
-        let path = std::env::var_os("LIGHTCRAFT_CORPUS")
+        let path = dac_brand::env_os("CORPUS")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
             .join("raw/arw-sony-a7rm2-12bit-uncompressed.arw");
@@ -1285,7 +1285,7 @@ mod tests {
     /// corpus files.
     #[test]
     fn corpus_raf_colour_and_white_balance() {
-        let dir = std::env::var_os("LIGHTCRAFT_CORPUS")
+        let dir = dac_brand::env_os("CORPUS")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
             .join("raw");

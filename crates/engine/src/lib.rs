@@ -1,4 +1,4 @@
-//! The LightCraft engine façade.
+//! The the app engine façade.
 //!
 //! Every user-visible action is a command with a stable id (`photo.rate`, `develop.set`,
 //! `album.create`, `mask.add`…) and JSON parameters. The egui UI, the CLI, the control channel and
@@ -35,6 +35,7 @@ pub mod fonts;
 pub mod guard;
 pub mod import;
 mod import_move;
+pub mod legacy;
 pub mod library;
 mod lightroom_archive;
 pub mod lightroom_catalog;
@@ -79,9 +80,9 @@ pub enum EngineError {
     Catalog(#[from] dac_catalog::CatalogError),
     /// The command's change is applied (in memory, undoable) but its journal records could not
     /// be written. They stay queued and are written by the next successful save.
-    #[error("saved in memory but not written to disk: {0}; LightCraft will retry")]
+    #[error("saved in memory but not written to disk: {0}; the app will retry")]
     NotSaved(String),
-    /// Another process (the app, `lightcraft-cli`, another computer) has the library open.
+    /// Another process (the app, the CLI, another computer) has the library open.
     #[error("{0}")]
     LibraryInUse(String),
     #[error("{0}")]
@@ -450,7 +451,7 @@ impl Session {
         rect
     }
 
-    /// Apply an op that is LightCraft's own bookkeeping rather than something the user did (faces found by the background
+    /// Apply an op that is the app's own bookkeeping rather than something the user did (faces found by the background
     /// scan): journaled like any op, but not an undo step, and it leaves the redo stack alone.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn apply_system(&mut self, op: Op) -> Result<()> {

@@ -89,7 +89,7 @@ fn assert_refused_untouched(m: &MemStore) {
     let e = Journal::open(Box::new(m.clone())).err().expect("refused");
     assert!(matches!(e, CatalogError::Newer(_)), "{e:?}");
     let msg = e.to_string();
-    assert!(msg.contains("newer version of LightCraft") && msg.contains("left unchanged"), "{msg}");
+    assert!(msg.contains("newer version of the app") && msg.contains("left unchanged"), "{msg}");
     assert_eq!(*m.files.lock().unwrap(), before, "nothing modified, nothing renamed");
 }
 

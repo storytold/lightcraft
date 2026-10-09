@@ -3,12 +3,13 @@ name = "dac-geom"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft geom (L0)"
+description = "Geom (L0)"
 
 [lints]
 workspace = true
 
 [dependencies]
+dac-brand = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]

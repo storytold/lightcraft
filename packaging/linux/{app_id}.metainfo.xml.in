@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata (software centres, Flathub). Template: `cargo xtask package`, package.sh and
+     the Flatpak build fill the {{…}} placeholders from brand.toml, Cargo.toml and the build date. -->
+<component type="desktop-application">
+  <id>{{app_id}}</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT AND Apache-2.0</project_license>
+  <name>{{display_name}}</name>
+  <summary>{{tagline}}</summary>
+  <developer id="{{app_id}}">
+    <name>{{vendor}}</name>
+  </developer>
+  <description>
+    <p>
+      {{display_name}} is a photo library and raw developer. Organise photos and develop raw files, non-destructively.
+    </p>
+  </description>
+  <launchable type="desktop-id">{{app_id}}.desktop</launchable>
+  <icon type="stock">{{app_id}}</icon>
+  <!-- Only url types known to appstream 0.15 (Ubuntu 22.04, where CI validates): no vcs-browser. -->
+  <url type="homepage">{{homepage}}</url>
+  <url type="bugtracker">{{repository}}/issues</url>
+  <url type="help">{{repository}}</url>
+  <categories>
+    <category>Graphics</category>
+    <category>RasterGraphics</category>
+    <category>Photography</category>
+  </categories>
+  <keywords>
+    <keyword>photo</keyword>
+    <keyword>raw</keyword>
+    <keyword>library</keyword>
+    <keyword>develop</keyword>
+  </keywords>
+  <branding>
+    <color type="primary" scheme_preference="light">#9fd0ff</color>
+    <color type="primary" scheme_preference="dark">#1f64ba</color>
+  </branding>
+  <requires>
+    <display_length compare="ge">760</display_length>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>tablet</control>
+  </supports>
+  <provides>
+    <binary>{{binary}}</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="{{version}}" date="{{date}}"/>
+  </releases>
+</component>

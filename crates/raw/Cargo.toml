@@ -3,12 +3,13 @@ name = "dac-raw"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft RAW decoding, demosaicing and DNG colour model (L1)"
+description = "RAW decoding, demosaicing and DNG colour model (L1)"
 
 [lints]
 workspace = true
 
 [dependencies]
+dac-brand = { workspace = true }
 dac-tiff = { workspace = true }
 dac-meta = { workspace = true }
 dac-raster = { workspace = true }

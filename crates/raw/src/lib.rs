@@ -1,4 +1,4 @@
-//! RAW decoding for LightCraft.
+//! RAW decoding.
 //!
 //! - [`probe`] recognises raw containers; [`decode`] turns a file into a [`RawImage`] (sensor data + everything
 //!   needed to render it: CFA, black/white levels, active area, default crop, orientation, DNG colour tags,

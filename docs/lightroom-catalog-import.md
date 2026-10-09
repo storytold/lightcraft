@@ -1,26 +1,29 @@
 # Lightroom Classic catalog import
 
+> Names in angle brackets (`<app>`, `<binary>`, `<cli>`, `<PREFIX>`, `<settings_dir>`, …) are the values set in
+> [`brand.toml`](../brand.toml); see the README.
+
 File → Import Lightroom Catalog… opens `.lrcat` directly. Lightroom, Python, DNG conversion
 and a C SQLite runtime are not required. The source database is read-only, including committed
-`-wal` pages; a catalog that changes during the read is rejected. LightCraft owns subsequent edits.
+`-wal` pages; a catalog that changes during the read is rejected. The app owns subsequent edits.
 
 Equivalent commands:
 
 ```text
-lightcraft-cli run --library "LightCraft Library" library.inspectLightroom path="Lightroom Catalog.lrcat"
-lightcraft-cli run --library "LightCraft Library" library.importLightroom path="Lightroom Catalog.lrcat"
+<cli> run --library "<app> Library" library.inspectLightroom path="Lightroom Catalog.lrcat"
+<cli> run --library "<app> Library" library.importLightroom path="Lightroom Catalog.lrcat"
 ```
 
 Original files are referenced in place. Ratings, picks/rejects, color labels, XMP metadata,
 hierarchical keywords, regular collections/collection sets, virtual copies and mapped develop
-settings are imported. Missing originals remain catalogued for relinking. Existing LightCraft
+settings are imported. Missing originals remain catalogued for relinking. Existing
 edits are preserved by default; `updateExisting=true` explicitly replaces them. Persistent import
 identity prevents reimport from duplicating virtual copies and collections. One undo step reverses
 catalog changes; any saved recovery archives remain available.
 
 Before changing records, the importer attempts to save source image records, decoded XMP,
 verbatim develop settings, history, snapshots and collection content to compressed
-`Interop/lightroom-import-N.lca` recovery archives in the LightCraft library. Archiving is
+`Interop/lightroom-import-N.lca` recovery archives in the app's library. Archiving is
 best-effort: a size limit or write failure produces a warning and does not prevent photo import.
 Unchanged source data reuses its existing archive. Opaque SQL BLOBs are skipped. Each archive is
 capped at 32 MiB (uncompressed and on disk), with at most eight archives and 128 MiB total
@@ -40,10 +43,10 @@ mask structures remain editable, but this is approximate rendering: camera profi
 models, some masking/retouch fields and process-version algorithms are not reproduced. Unmapped
 fields are reported. When a recovery archive is saved, it retains source settings/history/snapshots
 and original smart-collection rules. Smart collections become regular albums with current
-membership. Archived history and snapshots are source data, not native LightCraft history yet.
+membership. Archived history and snapshots are source data, not native history yet.
 Lightroom's `-999999` deferred-adjustment sentinel is omitted from both catalog and XMP mappings;
 it is reported, included in any saved archive, and never clamped into a real slider value. Deferred Adobe Auto Tone
-is not evaluated by the importer; LightCraft's Auto control remains available after migration.
+is not evaluated by the importer; the app's Auto control remains available after migration.
 
 Native desktop inspection/import runs on a cancellable background worker with progress. Only
 prepared catalog operations commit on the owner thread; archive index writing stays on a worker.
@@ -56,4 +59,4 @@ Recovery readers must cap decompression at 32 MiB. JSON retains source identitie
 settings, decoded XMP, keywords, history, snapshots, collection definitions and membership.
 
 The importer uses shared Rust code on macOS, Windows and Linux. If originals move between
-computers or volumes, use LightCraft's missing-photo relinking tools to update their paths.
+computers or volumes, use the app's missing-photo relinking tools to update their paths.

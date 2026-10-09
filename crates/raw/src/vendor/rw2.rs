@@ -72,7 +72,7 @@
 //! Lens distortion (tag `0x0119`, ExifTool name DistortionInfo; ExifTool's names for its words were the only outside
 //! input, their meaning below is our own measurement). The tag holds 16 little-endian 16-bit words. The camera's
 //! own correction, which its embedded JPEG shows, is applied as an `OpcodeList3` `WarpRectilinear` (the DNG form
-//! LightCraft already applies under "Enable Profile Corrections"):
+//! The app already applies under "Enable Profile Corrections"):
 //!
 //! - Word 7, low 4 bits: 1 = correction on [0 on the DMC-GH1, whose JPEG matches the uncorrected render].
 //! - Word 12: the normalisation radius in pixels, the half diagonal of the active area [2870 for 4592 × 3448

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub enum Commercial {
     Yes,
-    /// Research or personal use only. Never bundled or redistributed by LightCraft.
+    /// Research or personal use only. Never bundled or redistributed by the app.
     No,
     /// The licence or the training data is unclear: the user is told so before installing.
     Unknown,

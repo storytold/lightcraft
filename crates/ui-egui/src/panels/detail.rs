@@ -777,7 +777,7 @@ const REGION_HANDLES: [(f32, f32, egui::CursorIcon); 8] = [
 /// Face/pet/focus regions read from XMP (MWG-RS), drawn as boxes over the photo. Hovering a box shows
 /// a × in its corner and eight resize handles. A drag previews the new box live and is reported once,
 /// on release (one undo step); the × reports the region to remove. Both are catalog-only edits:
-/// LightCraft doesn't write regions to XMP. Regions are stored on the upright (EXIF-oriented) photo;
+/// The app doesn't write regions to XMP. Regions are stored on the upright (EXIF-oriented) photo;
 /// `orient` is the user's Rotate / Flip on top of it, which the loupe's normalized frame includes.
 fn region_overlay(
     ui: &egui::Ui,

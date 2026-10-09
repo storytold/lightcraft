@@ -2,7 +2,7 @@
 //! the CPU ([`crate::softpaint`]) — no window, no GPU, no compositor.
 //!
 //! Two users:
-//! - [`Headless`]: a complete windowless app session (`lightcraft-cli snapshot`, tests). It plays
+//! - [`Headless`]: a complete windowless app session (`<cli> snapshot`, tests). It plays
 //!   the role eframe plays for the desktop app: builds [`egui::RawInput`], runs `logic` + `ui`,
 //!   keeps a CPU mirror of the textures, executes viewport commands (`Screenshot` is answered with
 //!   a CPU-rendered frame, `InnerSize` resizes, `Close` quits). Control-protocol requests go
@@ -730,7 +730,7 @@ mod tests {
     }
 
     /// Adding a face model: the dialog shows the file's terms, the model is installed only once they are
-    /// accepted, and a file LightCraft cannot use only says why.
+    /// accepted, and a file the app cannot use only says why.
     #[test]
     fn adding_a_face_model_shows_its_terms_and_installs_only_once_accepted() {
         use crate::state::Dialog;
@@ -1904,7 +1904,7 @@ mod tests {
         assert_eq!(h.app.ui.right, crate::state::RightPanel::Edit, "no-op outside tools");
     }
 
-    /// ⌘Q (File → Quit LightCraft) closes the window.
+    /// ⌘Q (File → Quit) closes the window.
     #[test]
     fn cmd_q_quits() {
         let mut h = demo([900.0, 600.0]);

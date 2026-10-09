@@ -220,7 +220,7 @@ pub(crate) const SCAN_TAG: &str = "yunet-2023mar";
 /// Largest record file we read.
 const SCAN_MAX_FILE: u64 = 64 << 20;
 
-/// The photos the detector has already searched for faces, so each is searched once, however many times LightCraft
+/// The photos the detector has already searched for faces, so each is searched once, however many times the app
 /// starts. Kept beside the library (`face-scanned.bin`: a header naming the detector, then photo ids, appended to).
 #[derive(Default)]
 pub(crate) struct Scanned {

@@ -117,9 +117,9 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
         ifd.set(t::MODEL, Value::Ascii(model.clone()));
     }
     let unique = format!("{make} {model}").trim().to_string();
-    ifd.set(t::UNIQUE_CAMERA_MODEL, Value::Ascii(if unique.is_empty() { "LightCraft".into() } else { unique }));
+    ifd.set(t::UNIQUE_CAMERA_MODEL, Value::Ascii(if unique.is_empty() { dac_brand::DISPLAY_NAME.into() } else { unique }));
     ifd.set(t::ORIENTATION, Value::Short(vec![raw.orientation.to_exif()]));
-    ifd.set(t::SOFTWARE, Value::Ascii("LightCraft".into()));
+    ifd.set(t::SOFTWARE, Value::Ascii(dac_brand::DISPLAY_NAME.into()));
     let xmp = opts.xmp.clone().unwrap_or_else(|| dac_meta::write_xmp(&raw.metadata, None));
     ifd.set(t::XMP, Value::Byte(xmp.into_bytes()));
 

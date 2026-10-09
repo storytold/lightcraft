@@ -302,10 +302,10 @@ impl Gpu {
         if let Some((binding, buffer)) = limits_override() {
             limits.max_storage_buffer_binding_size = limits.max_storage_buffer_binding_size.min(binding);
             limits.max_buffer_size = limits.max_buffer_size.min(buffer);
-            log::info!("gpu: LIGHTCRAFT_GPU_LIMITS: storage bindings ≤ {} MiB, buffers ≤ {} MiB", binding >> 20, buffer >> 20);
+            log::info!("gpu: {}: storage bindings ≤ {} MiB, buffers ≤ {} MiB", dac_brand::env_var("GPU_LIMITS"), binding >> 20, buffer >> 20);
         }
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("lightcraft"),
+            label: Some(dac_brand::BINARY),
             required_limits: limits.clone(),
             ..Default::default()
         }))
@@ -575,11 +575,11 @@ impl Gpu {
 /// normally reset a hung GPU much sooner).
 const READBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// `LIGHTCRAFT_GPU_LIMITS`: lower the device limits, e.g. to reproduce a smaller adapter.
+/// `{ENV_PREFIX}_GPU_LIMITS`: lower the device limits, e.g. to reproduce a smaller adapter.
 /// `webgpu` / `downlevel` = 128 MiB storage bindings and 256 MiB buffers (the WebGPU defaults),
 /// `<n>` = n MiB storage bindings and 2n MiB buffers. Returns (binding bytes, buffer bytes).
 fn limits_override() -> Option<(u64, u64)> {
-    parse_limits(&std::env::var("LIGHTCRAFT_GPU_LIMITS").ok()?)
+    parse_limits(&dac_brand::env("GPU_LIMITS")?)
 }
 
 fn parse_limits(v: &str) -> Option<(u64, u64)> {

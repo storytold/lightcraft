@@ -1,6 +1,9 @@
-# LightCraft MCP server
+# MCP server
 
-`lightcraft-cli mcp` exposes LightCraft to AI agents through the
+> Names in angle brackets (`<app>`, `<binary>`, `<cli>`, `<PREFIX>`, `<settings_dir>`, …) are the values set in
+> [`brand.toml`](../brand.toml); see the README.
+
+`<cli> mcp` exposes the app to AI agents through the
 [Model Context Protocol](https://modelcontextprotocol.io): newline-delimited JSON-RPC 2.0 over
 stdio (protocol revision `2025-06-18`; `2025-03-26` and `2024-11-05` clients are accepted). The
 server lives in `crates/mcp` (`dac-mcp`, layer L5) and is hand-written: no async runtime,
@@ -10,14 +13,14 @@ It runs in one of two modes:
 
 | Mode | Command | What it drives |
 |---|---|---|
-| **Headless** (default) | `lightcraft-cli mcp [--demo] [FILES/FOLDERS…]` | An in-process engine `Session`. Develop, render and export without a window. |
-| **Connect** | `lightcraft-cli mcp --connect [127.0.0.1:7980]` | A running desktop app started with `lightcraft --control 7980`, through its loopback JSON-lines control channel ([control-protocol.md](control-protocol.md)). Adds the UI tools (screenshot, clicks, keys, pointer gestures). |
+| **Headless** (default) | `<cli> mcp [--demo] [FILES/FOLDERS…]` | An in-process engine `Session`. Develop, render and export without a window. |
+| **Connect** | `<cli> mcp --connect [127.0.0.1:7980]` | A running desktop app started with `<binary> --control 7980`, through its loopback JSON-lines control channel ([control-protocol.md](control-protocol.md)). Adds the UI tools (screenshot, clicks, keys, pointer gestures). |
 
-Options: `--library DIR` opens (or creates) a persistent LightCraft library — the same crash-safe
-format the desktop app uses (`~/Pictures/LightCraft Library` by default there) — so ratings, edits and albums
+Options: `--library DIR` opens (or creates) a persistent library — the same crash-safe
+format the desktop app uses (`~/Pictures/<app> Library` by default there) — so ratings, edits and albums
 survive between sessions (with `--demo`, a new library is seeded with the demo photos). A library
 is open in one program at a time (`catalog.lock` in the library folder): while the desktop app has
-it open, `--library` on the same folder fails with "This library is already open in LightCraft
+it open, `--library` on the same folder fails with "This library is already open in the app
 (process N …)" — use connect mode to work with the running app instead;
 `--demo` starts the headless session with the procedurally generated demo library;
 `--compact` lists only the helper tools (see below). In connect mode the server starts even when
@@ -27,16 +30,16 @@ Logs go to stderr; stdout carries only protocol messages.
 
 ## Wiring it into a client
 
-Build once: `cargo build --release -p dac-cli` (binary: `target/release/lightcraft-cli`).
+Build once: `cargo build --release -p dac-cli` (binary: `target/release/<cli>`).
 
 ### Claude Code
 
 ```sh
 # headless, with a folder of photos imported at start
-claude mcp add lightcraft -- /path/to/lightcraft/target/release/lightcraft-cli mcp ~/Pictures/shoot
+claude mcp add <mcp_server> -- /path/to/repo/target/release/app-cli mcp ~/Pictures/shoot
 
-# or: drive the running desktop app (start it with `lightcraft --control 7980`)
-claude mcp add lightcraft-app -- /path/to/lightcraft/target/release/lightcraft-cli mcp --connect 127.0.0.1:7980
+# or: drive the running desktop app (start it with `<binary> --control 7980`)
+claude mcp add <mcp_server>-app -- /path/to/repo/target/release/app-cli mcp --connect 127.0.0.1:7980
 ```
 
 Or check a project-scoped `.mcp.json` into your repo:
@@ -44,8 +47,8 @@ Or check a project-scoped `.mcp.json` into your repo:
 ```json
 {
   "mcpServers": {
-    "lightcraft": {
-      "command": "/path/to/lightcraft/target/release/lightcraft-cli",
+    "<mcp_server>": {
+      "command": "/path/to/repo/target/release/app-cli",
       "args": ["mcp", "--connect", "127.0.0.1:7980"]
     }
   }
@@ -60,8 +63,8 @@ Every stdio MCP client takes the same shape: a `command` plus `args`. For exampl
 ```json
 {
   "mcpServers": {
-    "lightcraft": {
-      "command": "/path/to/lightcraft/target/release/lightcraft-cli",
+    "<mcp_server>": {
+      "command": "/path/to/repo/target/release/app-cli",
       "args": ["mcp", "--demo"]
     }
   }
@@ -100,7 +103,7 @@ export options) is preserved. Escaped tool panics return `isError: true`, and th
 serving; backend panics during resource reads or tool listing return an internal error.
 The headless backend owns its session directly, without a session mutex.
 
-`lightcraft://document` and `lightcraft://commands` contain JSON matching `doc_inspect` and
+`<scheme>://document` and `<scheme>://commands` contain JSON matching `doc_inspect` and
 `command_list`. Existing resources remain available. Requests declaring MCP 2026-07-28 in
 per-request `_meta` receive `resultType: complete` and list/read cache hints; reads are not cached.
 
@@ -140,7 +143,7 @@ In headless mode these return a tool error explaining how to start the app.
 
 ### One tool per command
 
-Everything is a command in LightCraft, so `tools/list` also contains one tool per entry of the
+Everything is a command in the app, so `tools/list` also contains one tool per entry of the
 command registry (engine commands, plus the app's UI commands such as `view.detail` when
 connected): the id with `.` replaced by `_` and a `cmd_` prefix — `photo.rate` → `cmd_photo_rate`,
 `develop.set` → `cmd_develop_set`, `edit.undo` → `cmd_edit_undo`. Arguments are the command's
@@ -154,17 +157,17 @@ still reaches every command.
 
 | URI | Content |
 |---|---|
-| `lightcraft://library` | Source, filter, sort, selection, undo/redo labels (`library.state`) |
-| `lightcraft://photos` | Photos in the current view (`catalog.query`) |
-| `lightcraft://photo/active` | Everything about the active photo (`photo.inspect`) |
-| `lightcraft://develop/active` | The active photo's develop settings (`develop.get`) |
-| `lightcraft://controls` | Every develop control with its current value (`develop.controls`) |
+| `<scheme>://library` | Source, filter, sort, selection, undo/redo labels (`library.state`) |
+| `<scheme>://photos` | Photos in the current view (`catalog.query`) |
+| `<scheme>://photo/active` | Everything about the active photo (`photo.inspect`) |
+| `<scheme>://develop/active` | The active photo's develop settings (`develop.get`) |
+| `<scheme>://controls` | Every develop control with its current value (`develop.controls`) |
 
 ## Example session
 
 ```text
 → {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"me","version":"1"}}}
-← {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{…},"resources":{…}},"serverInfo":{"name":"lightcraft",…},"instructions":"…"}}
+← {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{…},"resources":{…}},"serverInfo":{"name":"<mcp_server>",…},"instructions":"…"}}
 → {"jsonrpc":"2.0","method":"notifications/initialized"}
 → {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"set_develop","arguments":{"values":{"light.exposure":0.7}}}}
 ← {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{…}"}],"isError":false,"structuredContent":{"ok":true,"controls":[{"id":"light.exposure","value":0.7}]}}}
@@ -178,10 +181,10 @@ standard error codes (-32700 parse, -32600 invalid request, -32601 method not fo
 invalid params, -32002 resource not found).
 
 With `--library`, a command whose change can't be written to disk (disk full, …) is an error too:
-`saved in memory but not written to disk: <reason>; LightCraft will retry` — the change is applied in the session and
+`saved in memory but not written to disk: <reason>; the app will retry` — the change is applied in the session and
 written by the next successful save (see [control-protocol.md](control-protocol.md#when-the-library-cant-be-saved)).
 
-## One-shot commands: `lightcraft-cli run`
+## One-shot commands: `<cli> run`
 
 For agents that prefer a shell over an MCP session: run any chain of commands in one process and read one JSON
 line per command (`{"command", "ok", "result" | "error", "ms"}`; non-zero exit status on failure). A word without
@@ -190,26 +193,26 @@ JSON object into the params. Quote values with brackets or spaces for your shell
 
 ```sh
 # headless: import, edit, export
-lightcraft-cli run --import ~/Pictures/a.dng develop.set control=light.exposure value=0.7 \
+<cli> run --import ~/Pictures/a.dng develop.set control=light.exposure value=0.7 \
     develop.auto app.export path=/tmp/a.jpg shortEdge=1080 colorSpace=displayP3
 # a persistent library: edits are saved, later invocations see them
-lightcraft-cli run --library ~/lc-lib --import ~/Pictures/shoot library.info
-lightcraft-cli run --library ~/lc-lib library.select ids=[3] develop.get
+<cli> run --library ~/lc-lib --import ~/Pictures/shoot library.info
+<cli> run --library ~/lc-lib library.select ids=[3] develop.get
 # the running app (same commands, plus ui.* methods)
-lightcraft-cli run --connect ui.set view=detail ui.screenshot path=/tmp/ui.png
+<cli> run --connect ui.set view=detail ui.screenshot path=/tmp/ui.png
 # JSON lines from a file or stdin: {"command": id, "params": {…}} or {"method": "ui.inspect"}
-lightcraft-cli run --demo --script steps.jsonl --keep-going
+<cli> run --demo --script steps.jsonl --keep-going
 ```
 
 ## Other CLI subcommands
 
 ```sh
-lightcraft-cli render in.dng -o out.tif --opt colorSpace=displayP3 --opt bitDepth=16 --opt percent=50
-lightcraft-cli render in.dng -o out.jpg --set light.exposure=0.5 --set light.contrast=20 --size 2048
-lightcraft-cli render in.jpg -o out.png --settings look.json --preset <presetId>
-lightcraft-cli commands [--json]   # the command registry
-lightcraft-cli controls [--json]   # develop control ids and ranges
-lightcraft-cli calibrate --max 300 ~/Pictures/2026   # camera colour profiles (docs/camera-preview-colour.md)
+<cli> render in.dng -o out.tif --opt colorSpace=displayP3 --opt bitDepth=16 --opt percent=50
+<cli> render in.dng -o out.jpg --set light.exposure=0.5 --set light.contrast=20 --size 2048
+<cli> render in.jpg -o out.png --settings look.json --preset <presetId>
+<cli> commands [--json]   # the command registry
+<cli> controls [--json]   # develop control ids and ranges
+<cli> calibrate --max 300 ~/Pictures/2026   # camera colour profiles (docs/camera-preview-colour.md)
 ```
 
 ## Tests
@@ -217,7 +220,7 @@ lightcraft-cli calibrate --max 300 ~/Pictures/2026   # camera colour profiles (d
 - `crates/mcp/tests/e2e.rs` — M0.9 acceptance: over the stdio framing, set exposure and render;
   checks the decoded PNG gets brighter/darker. Runs headless and through the TCP transport
   (`Remote`) against a stand-in control server; also import → render → JPEG export of a real file.
-- `apps/cli/tests/cli.rs` — spawns `lightcraft-cli mcp` with real pipes; `render`;
+- `apps/cli/tests/cli.rs` — spawns `<cli> mcp` with real pipes; `render`;
   `commands`.
 
 ## Export progress and cancellation

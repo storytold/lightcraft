@@ -1,5 +1,5 @@
 //! Corpus test over `corpus/raw/**` (git-ignored CC0 samples from raw.pixls.us, fetched with
-//! `cargo xtask corpus --download`; `LIGHTCRAFT_CORPUS` overrides the corpus root). Skips cleanly when absent.
+//! `cargo xtask corpus --download`; `{ENV_PREFIX}_CORPUS` overrides the corpus root). Skips cleanly when absent.
 //!
 //! Every file must be recognised, carry an embedded JPEG preview (optional for DNG, older Panasonic RAW and HEVC-preview CR3), and either decode to a valid image or report
 //! `Unsupported` for one of the variants we know we don't decode yet. Prints decode times
@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 fn corpus_root() -> PathBuf {
-    std::env::var_os("LIGHTCRAFT_CORPUS").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
+    dac_brand::env_os("CORPUS").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
 }
 
 /// Variants known not to decode yet (see the crate docs): matched against the lower-case file name.

@@ -9,7 +9,7 @@ use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{FileSystemDirectoryHandle, FileSystemFileHandle, FileSystemGetDirectoryOptions, FileSystemGetFileOptions, IdbDatabase};
 
-const IDB_NAME: &str = "lightcraft";
+const IDB_NAME: &str = crate::legacy::IDB_NAME;
 const IDB_STORE: &str = "files";
 
 #[derive(Clone)]
@@ -339,7 +339,7 @@ pub fn request_persistence(on_result: impl FnOnce(bool) + 'static) {
                 Ok(p) => JsFuture::from(p).await.ok().is_some_and(|v| v.is_truthy()),
                 Err(_) => false,
             };
-        log::info!("lightcraft: persistent storage {}", if granted { "granted" } else { "not granted" });
+        log::info!("app: persistent storage {}", if granted { "granted" } else { "not granted" });
         on_result(granted);
     });
 }

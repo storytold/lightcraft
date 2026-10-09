@@ -3,8 +3,8 @@
 //!
 //! The runner has a device of its own, so a denoise job and the interactive renders are separate contexts that the
 //! driver time-slices, and a failure of one never takes the other down. It respects the same switches as GPU rendering
-//! (`LIGHTCRAFT_GPU`, `LIGHTCRAFT_GPU_BACKEND`, the GPU preference) and the same crash sentinel around device creation.
-//! `LIGHTCRAFT_GPU_ADAPTER` picks an adapter by (part of) its name, e.g. to try another card.
+//! (`{ENV_PREFIX}_GPU`, `{ENV_PREFIX}_GPU_BACKEND`, the GPU preference) and the same crash sentinel around device creation.
+//! `{ENV_PREFIX}_GPU_ADAPTER` picks an adapter by (part of) its name, e.g. to try another card.
 //!
 //! Every failure is an `Err` (never a panic), and a device that errs or is lost stops being used: callers then run the
 //! CPU runner. The kernels (`wgsl/nn_conv.wgsl`, `wgsl/nn_pool.wgsl`) are tested against the plain-loop reference
@@ -67,7 +67,7 @@ fn dev() -> Result<&'static Dev, String> {
 }
 
 fn create_device() -> Result<Dev, String> {
-    let Some(backends) = crate::backend::compute_backends() else { return Err("disabled by LIGHTCRAFT_GPU_BACKEND=off".into()) };
+    let Some(backends) = crate::backend::compute_backends() else { return Err(format!("disabled by {}=off", dac_brand::env_var("GPU_BACKEND"))) };
     crate::backend::with_init_marker(backends, || {
         std::panic::catch_unwind(|| make_device(backends)).unwrap_or_else(|_| Err("device creation panicked".into()))
     })
@@ -79,7 +79,7 @@ fn make_device(backends: wgpu::Backends) -> Result<Dev, String> {
     // DX12 shaders compile with FXC (issue #471)
     desc.backend_options = crate::backend::backend_options();
     let instance = wgpu::Instance::new(desc);
-    let wanted = std::env::var("LIGHTCRAFT_GPU_ADAPTER").ok().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
+    let wanted = dac_brand::env("GPU_ADAPTER").map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
     let adapter = match &wanted {
         Some(w) => {
             let all = pollster::block_on(instance.enumerate_adapters(backends));

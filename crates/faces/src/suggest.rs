@@ -94,7 +94,7 @@ pub fn suggest_with(info: &OnnxInfo, sha256: &str, size: u64, file_name: &str, e
             name: "Unknown".into(),
             commercial: Commercial::Unknown,
             url: None,
-            notice: "LightCraft does not know where this model came from or what its licence allows. Use it only if its licence allows what you are doing, and do not redistribute it.".into(),
+            notice: "The app does not know where this model came from or what its licence allows. Use it only if its licence allows what you are doing, and do not redistribute it.".into(),
         },
         source: None,
         sha256: Some(sha256.to_string()).filter(|h| h.len() == 64),

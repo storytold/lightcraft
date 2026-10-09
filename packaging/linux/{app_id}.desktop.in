@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name={{display_name}}
+GenericName=Photo Library and Raw Developer
+Comment={{tagline}}
+Exec={{binary}} %F
+Icon={{app_id}}
+Terminal=false
+Categories=Graphics;2DGraphics;RasterGraphics;Photography;
+Keywords=photo;raw;camera;library;develop;
+StartupWMClass={{app_id}}
+MimeType=image/jpeg;image/png;image/tiff;image/webp;image/x-adobe-dng;image/x-sony-arw;image/x-canon-cr2;image/x-canon-cr3;image/x-nikon-nef;image/x-fuji-raf;image/x-olympus-orf;image/x-panasonic-rw2;image/x-panasonic-rw;image/x-pentax-pef;

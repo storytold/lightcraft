@@ -1,5 +1,6 @@
 *~
-plan/
+# plan/ is committed; only private observation notes about the reference app stay local
+/plan/observations/
 /target
 /target-*/
 /dist

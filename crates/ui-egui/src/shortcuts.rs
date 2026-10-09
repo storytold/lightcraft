@@ -502,7 +502,7 @@ mod tests {
         for id in 1..=4 {
             let photo = Photo::new(
                 PhotoId(id),
-                Source::File { path: format!("/lightcraft-shortcuts/{id}.jpg") },
+                Source::File { path: format!("/app-shortcuts/{id}.jpg") },
                 &format!("{id}.jpg"),
                 "JPEG",
                 100,

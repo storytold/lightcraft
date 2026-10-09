@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn oversized_history_archive_keeps_prepared_import_successful_with_warning() {
-        let archive_dir = std::env::temp_dir().join(format!("lightcraft-lr-prepared-scale-{}", std::process::id()));
+        let archive_dir = std::env::temp_dir().join(format!("app-lr-prepared-scale-{}", std::process::id()));
         let mut data = empty_data();
         data.photos = (0..5_000)
             .map(|source_id| {
@@ -429,7 +429,7 @@ mod tests {
 
     #[test]
     fn execute_fn_import_does_not_rewrite_source_sidecar() {
-        let dir = std::env::temp_dir().join(format!("lightcraft-lr-job-sidecar-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("app-lr-job-sidecar-{}", std::process::id()));
         let path = dir.join("source.jpg");
         let sidecar = dir.join("source.xmp");
         std::fs::create_dir_all(&dir).unwrap();

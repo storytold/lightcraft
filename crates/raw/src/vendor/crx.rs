@@ -1062,7 +1062,7 @@ mod tests {
 
     #[test]
     fn optional_cc0_samples_match_external_oracle() {
-        let Some(directory) = std::env::var_os("LIGHTCRAFT_CR3_CORPUS") else { return };
+        let Some(directory) = dac_brand::env_os("CR3_CORPUS") else { return };
         for (name, expected) in [
             ("cr3-canon-r100-raw.cr3", 0xcbe5299ab9c52630u64),
             ("cr3-canon-m50-raw.cr3", 0x62261f0ba81cfcd2u64),

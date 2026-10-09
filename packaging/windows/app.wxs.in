@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MSI template (WiX Toolset v5: `dotnet tool install -g wix`). package.ps1 fills the {{…}}
+  placeholders from brand.toml, then runs:
+
+    wix build app.wxs -arch x64 -d Version=1.2.3 -d BinDir=... -d IconPath=... -o out.msi
+
+  Per-machine install into Program Files and a Start Menu shortcut. The UpgradeCode identifies the
+  product to Windows Installer across versions: keep it when renaming, so upgrades still replace
+  the installed version.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="{{display_name}}"
+      Manufacturer="{{vendor}}"
+      Version="$(var.Version)"
+      UpgradeCode="6F1C2E0A-3B7D-4D52-9E61-8A4C0B9D27F3"
+      Scope="perMachine"
+      Compressed="yes"
+      Language="1033">
+    <SummaryInformation Description="{{display_name}}: {{tagline}}" Manufacturer="{{vendor}}" />
+    <!-- Same-version upgrades let successive pre-releases of one X.Y.Z replace each other
+         (MSI versions are numeric, so 1.2.3-rc.1 and 1.2.3-rc.2 are both 1.2.3). -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of {{display_name}} is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="AppIcon.ico" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="{{homepage}}" />
+    <Property Id="ARPURLUPDATEINFO" Value="{{homepage}}" />
+    <Property Id="ARPHELPLINK" Value="{{repository}}" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="{{display_name}}" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="{{display_name}}" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Component Id="DacApp" Guid="8A1D3A39-F7C1-47B1-97AE-40C80BF82F4A">
+        <File Id="AppExe" Source="$(var.BinDir)\{{binary}}.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="{{display_name}}"
+              Description="{{display_name}}: {{tagline}}" WorkingDirectory="INSTALLFOLDER" Advertise="yes"
+              Icon="AppIcon.ico" IconIndex="0" />
+        </File>
+
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\{{binary}}.exe" Value="[#AppExe]" Type="string" />
+      </Component>
+
+      <Component Id="AppCli">
+        <File Id="AppCliExe" Source="$(var.BinDir)\{{cli_binary}}.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

@@ -1,6 +1,9 @@
 # Control protocol
 
-`lightcraft --control 7980` (or `LIGHTCRAFT_CONTROL_PORT=7980`) starts a JSON-lines server on
+> Names in angle brackets (`<app>`, `<binary>`, `<cli>`, `<PREFIX>`, `<settings_dir>`, …) are the values set in
+> [`brand.toml`](../brand.toml); see the README.
+
+`<binary> --control 7980` (or `<PREFIX>_CONTROL_PORT=7980`) starts a JSON-lines server on
 `127.0.0.1:7980` (loopback only). One request per line, one reply per line, in order:
 
 ```text
@@ -59,7 +62,7 @@ views, and only apply over their image areas. Panning stops at the image edges.
 
 With a persistent library, every command that changes something is written to the catalog journal (fsynced) before
 it replies. If that write fails (disk full, volume gone, permissions), the command replies `ok: false` with
-`"saved in memory but not written to disk: <reason>; LightCraft will retry"`. The change itself **is** applied (and
+`"saved in memory but not written to disk: <reason>; the app will retry"`. The change itself **is** applied (and
 undoable) and stays queued: the next command, and the app's frame loop every couple of seconds, retry the write, so
 nothing is lost once the disk is writable again — unless the app quits first. Meanwhile `ui.inspect` → `unsaved`
 is `{ops, error}` (else `null`), `library.info` reports `unsavedOps` / `unsavedError`, and the top bar's cloud icon
@@ -85,15 +88,15 @@ scissor clipping as egui's GPU backends, so the image matches the window (minus 
 - **In the running app:** `{"method": "ui.screenshot", "params": {"path": "a.png", "headless": true}}`.
   The UI is drawn into an offscreen context from the app's logic tick, which keeps running when the
   window is occluded or the display sleeps/locks. Windowed screenshots fall back to this after 2 s.
-- **Without any app window:** `lightcraft-cli snapshot` runs a whole app session headlessly.
+- **Without any app window:** `<cli> snapshot` runs a whole app session headlessly.
   Photo development also defaults to the CPU, so the initial frames do not discover a GPU adapter
-  or load a graphics driver. `LIGHTCRAFT_GPU=1` does not opt snapshots back into GPU rendering.
+  or load a graphics driver. `<PREFIX>_GPU=1` does not opt snapshots back into GPU rendering.
   This applies only to the snapshot session: even `--library DIR` leaves the desktop app's saved
   `ui.json` preferences untouched. It answers the same control requests (same handler) from a JSON-lines script:
 
 ```text
-lightcraft-cli snapshot --demo -o grid.png --size 1600x1000 [--scale 2]
-lightcraft-cli snapshot --library DIR --script tour.jsonl -o shot.png
+<cli> snapshot --demo -o grid.png --size 1600x1000 [--scale 2]
+<cli> snapshot --library DIR --script tour.jsonl -o shot.png
 ```
 
 Headless screenshot dimensions must be finite and at least one logical point, with a finite,

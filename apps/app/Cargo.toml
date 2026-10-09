@@ -22,6 +22,7 @@ rawnind-model = ["denoise", "dac-engine/rawnind-model"]
 heif = ["dac-codecs/heif"]
 
 [dependencies]
+dac-brand = { workspace = true }
 dac-engine = { workspace = true, features = ["sam"] }
 dac-sysmem = { workspace = true }
 dac-ui-egui = { workspace = true }
@@ -33,7 +34,8 @@ serde_json = { workspace = true }
 log = { workspace = true }
 
 [build-dependencies]
-# Icon + VERSIONINFO for lightcraft.exe; build.rs only uses it when targeting Windows.
+# Icon + VERSIONINFO for the desktop executable; build.rs only uses it when targeting Windows.
+dac-brand = { workspace = true }
 winresource = "0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

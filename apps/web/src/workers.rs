@@ -240,15 +240,15 @@ impl Workers {
             inline_done: 0,
             inline_this_frame: false,
         })));
-        let module = get(&js_sys::global(), "lightcraftModule");
+        let module = get(&js_sys::global(), "appModule");
         if module.is_undefined() {
-            log::warn!("render workers: no compiled module on the page (window.lightcraftModule); rendering on the main thread");
+            log::warn!("render workers: no compiled module on the page (window.appModule); rendering on the main thread");
             return w;
         }
         for i in 0..n {
             let opts = web_sys::WorkerOptions::new();
             opts.set_type(web_sys::WorkerType::Module);
-            opts.set_name(&format!("lightcraft-render-{i}"));
+            opts.set_name(&format!("{}-render-{i}", dac_brand::BINARY));
             let worker = match web_sys::Worker::new_with_options("./worker.js", &opts) {
                 Ok(x) => x,
                 Err(e) => {

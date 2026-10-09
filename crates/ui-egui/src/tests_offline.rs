@@ -44,11 +44,11 @@ impl Calls {
 fn offline_library(calls: &Calls) -> Session {
     let mut s = Session::new();
     for i in 0..N {
-        let path = format!("/lightcraft-offline-nas/IMG_{i:03}.jpg");
+        let path = format!("/app-offline-nas/IMG_{i:03}.jpg");
         let p = Photo::new(PhotoId(i + 1), Source::File { path }, &format!("IMG_{i:03}.jpg"), "JPEG", 600, 400, "2026-01-01T00:00:00");
         s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
-    s.media.smart_dir = Some(std::env::temp_dir().join("lightcraft-offline-smart-previews-none"));
+    s.media.smart_dir = Some(std::env::temp_dir().join("app-offline-smart-previews-none"));
     let c = calls.clone();
     s.media.availability.set_probe(Arc::new(move |_| {
         c.record();

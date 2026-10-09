@@ -1,4 +1,4 @@
-//! LightCraft in the browser: the same egui UI as the desktop app, compiled to WASM.
+//! The app in the browser: the same egui UI as the desktop app, compiled to WASM.
 //!
 //! Build with `cargo xtask web` (→ `target/web/`), then serve that folder over HTTP (see
 //! `docs/web.md`). Differences from the desktop host:
@@ -24,6 +24,8 @@ pub mod wire;
 
 #[cfg(target_arch = "wasm32")]
 mod backend;
+#[cfg(target_arch = "wasm32")]
+mod legacy;
 #[cfg(target_arch = "wasm32")]
 mod safety;
 #[cfg(target_arch = "wasm32")]

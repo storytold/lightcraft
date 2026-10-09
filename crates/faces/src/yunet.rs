@@ -1,4 +1,4 @@
-//! The YuNet face detector (232 KB, MIT, downloaded by the user in Settings ▸ Faces), run by LightCraft's own small
+//! The YuNet face detector (232 KB, MIT, downloaded by the user in Settings ▸ Faces), run by the app's own small
 //! interpreter ([`crate::net`]): no extra runtime.
 //!
 //! A photo is letterboxed (aspect ratio kept, padded at the right and bottom) into the network's square

@@ -1,5 +1,8 @@
 # Photo Merge (HDR, Panorama, HDR Panorama)
 
+> Names in angle brackets (`<app>`, `<binary>`, `<cli>`, `<PREFIX>`, `<settings_dir>`, …) are the values set in
+> [`brand.toml`](../brand.toml); see the README.
+
 `crates/merge` (layer L3, no UI dependencies) implements the algorithms; `crates/engine/src/merge.rs`
 plans, runs and finishes merges in the library; the desktop UI shows a dialog with a live preview.
 All algorithms are our own implementations from published papers (cited in the module docs).
@@ -15,8 +18,8 @@ All algorithms are our own implementations from published papers (cited in the m
   - `merge.hdr {ids?, align=true, deghost=none|low|medium|high, autoSettings=true, stack=false, preview=false, showOverlay=false, previewPath?}`
   - `merge.panorama {ids?, projection=auto|spherical|cylindrical|perspective, boundaryWarp=0..100, autoCrop=false, fillEdges=false, autoSettings=true, maxMegapixels=40, preview, previewPath?}`
   - `merge.hdrPanorama {ids?, bracket=0 (from EXIF), …both sets of options}`
-- **CLI:** `lightcraft-cli merge hdr|panorama|hdr-panorama [options] FILES…`;
-  `lightcraft-cli synth-merge hdr|panorama -o DIR` writes synthetic inputs (procedural scene).
+- **CLI:** `<cli> merge hdr|panorama|hdr-panorama [options] FILES…`;
+  `<cli> synth-merge hdr|panorama -o DIR` writes synthetic inputs (procedural scene).
 
 ## What it does
 

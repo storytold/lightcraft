@@ -68,7 +68,7 @@ fn status_and_model_commands_without_the_model() {
     s.segmenter.mirrors_file = Some(dir.join("none.txt"));
     if s.segmenter.mirrors().is_empty() {
         let e = s.execute("segment.model.download", &json!({"acknowledged": true})).unwrap_err().to_string();
-        assert!(e.contains("LIGHTCRAFT_SAM3_MIRRORS"), "{e}");
+        assert!(e.contains(&dac_brand::env_var("SAM3_MIRRORS")), "{e}");
     }
     assert!(!s.segmenter.download_status().running);
 }

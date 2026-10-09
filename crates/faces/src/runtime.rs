@@ -1,4 +1,4 @@
-//! Installed recognition models on LightCraft's own checked, single-thread float32 CPU engine.
+//! Installed recognition models on the app's own checked, single-thread float32 CPU engine.
 //! The detector and recognisers share graph validation and convolution kernels.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};

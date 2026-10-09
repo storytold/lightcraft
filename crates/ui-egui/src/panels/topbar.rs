@@ -151,7 +151,7 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
             // saving is failing: the cloud icon turns into a warning until a save succeeds
             let unsaved = app.session.unsaved().map(|(n, e)| {
                 crate::i18n::tr_format!(
-                    "{n} change{} saved in memory but not written to disk: {e}\nLightCraft retries automatically; quitting now would lose {}.",
+                    "{n} change{} saved in memory but not written to disk: {e}\n{app} retries automatically; quitting now would lose {}.",
                     if n == 1 { "" } else { "s" },
                     if n == 1 { "it" } else { "them" },
                     e = e,
@@ -160,7 +160,6 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
             });
             let cloud_tip = unsaved.as_deref().unwrap_or("Local library — no cloud account needed");
             for (id, icon, tip, cmd) in [
-                ("discord", Icon::Chat, "Join the ArtCraft community on Discord", "app.discord"),
                 ("cloud", Icon::Cloud, cloud_tip, ""),
                 ("help", Icon::Help, "Keyboard shortcuts", "app.shortcuts"),
                 ("share", Icon::Share, "Export", "dialog.export"),

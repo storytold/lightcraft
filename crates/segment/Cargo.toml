@@ -3,12 +3,13 @@ name = "dac-segment"
 version.workspace = true
 edition.workspace = true
 license = "Apache-2.0"
-description = "LightCraft segmentation: SAM 3 (Segment Anything with Concepts) inference in pure Rust (L3)"
+description = "Segmentation: SAM 3 (Segment Anything with Concepts) inference in pure Rust (L3)"
 
 [lints]
 workspace = true
 
 [dependencies]
+dac-brand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

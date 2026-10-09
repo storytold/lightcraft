@@ -2,11 +2,11 @@
 //!
 //! A raw file without colour matrices (Sony ARW, Nikon NEF, Fujifilm RAF) gets its look fitted to its own embedded camera
 //! JPEG (`camera_preview`), but one photo shows too little of some colours: a lime shirt covering a
-//! few dozen proxy pixels next to a hillside of foliage at the same hue. `lightcraft-cli calibrate`
+//! few dozen proxy pixels next to a hillside of foliage at the same hue. the CLI's `calibrate`
 //! pools the colour pairs of many photos per model and fits one matrix and hue/saturation/value
 //! table; photos of that model then only fit their tone and chroma curves.
 //!
-//! Profiles are JSON files (`<model>.json`) in [`dir`]: `LIGHTCRAFT_CAMERA_PROFILES`, else
+//! Profiles are JSON files (`<model>.json`) in [`dir`]: `{ENV_PREFIX}_CAMERA_PROFILES`, else
 //! `<config>/camera-profiles`; a local profile replaces the one built in ([`BUNDLED`], from
 //! `assets/camera-profiles/`). They are read once per process; a damaged or hostile file is
 //! ignored with a warning. They hold aggregate colour statistics only, never image content.
@@ -22,7 +22,7 @@ const VERSION: u32 = 1;
 /// Largest profile file read (a 5 × 72 × 5 table is ~60 KB of JSON).
 const MAX_FILE: u64 = 4 << 20;
 
-/// Profiles built into LightCraft (`assets/camera-profiles/`, see `assets/ATTRIBUTION.md`):
+/// Profiles built into the app (`assets/camera-profiles/`, see `assets/ATTRIBUTION.md`):
 /// `(model, JSON)`.
 pub const BUNDLED: &[(&str, &str)] = &[
     ("ILCE-7M4", include_str!("../../../assets/camera-profiles/ILCE-7M4.json")),
@@ -65,12 +65,12 @@ impl CameraProfile {
     }
 }
 
-/// LightCraft's configuration folder (settings, GPU marker, camera profiles); one helper for the app.
+/// The app's configuration folder (settings, GPU marker, camera profiles); one helper for the app.
 pub use crate::config::config_dir;
 
 /// Where camera profiles are read from and written to.
 pub fn dir() -> Option<PathBuf> {
-    std::env::var_os("LIGHTCRAFT_CAMERA_PROFILES").map(PathBuf::from).or_else(|| config_dir().map(|d| d.join("camera-profiles")))
+    dac_brand::env_os("CAMERA_PROFILES").map(PathBuf::from).or_else(|| config_dir().map(|d| d.join("camera-profiles")))
 }
 
 /// File name of `model`'s profile: letters, digits, `-` and `_` kept, anything else `_`.
@@ -101,7 +101,7 @@ fn parse(json: &[u8], origin: &str) -> Result<CameraProfile, String> {
 /// The built-in profile for `model`, if any.
 fn bundled(model: &str) -> Option<CameraProfile> {
     let (_, json) = BUNDLED.iter().find(|(m, _)| *m == model)?;
-    parse(json.as_bytes(), &format!("built-in profile {model}")).inspect_err(|e| eprintln!("lightcraft: ignoring camera profile {e}")).ok()
+    parse(json.as_bytes(), &format!("built-in profile {model}")).inspect_err(|e| eprintln!("{}: ignoring camera profile {e}", dac_brand::BINARY)).ok()
 }
 
 /// Write `profile` to `dir` (created if needed) as `<model>.json`; returns the path.
@@ -135,11 +135,11 @@ pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
         Some(path) if path.is_file() => match load(&path) {
             Ok(p) if p.model.trim() == model => Some(Arc::new(p)),
             Ok(p) => {
-                eprintln!("lightcraft: ignoring camera profile {}: it is for {:?}, not {model:?}", path.display(), p.model);
+                eprintln!("{}: ignoring camera profile {}: it is for {:?}, not {model:?}", dac_brand::BINARY, path.display(), p.model);
                 None
             }
             Err(e) => {
-                eprintln!("lightcraft: ignoring camera profile {e}");
+                eprintln!("{}: ignoring camera profile {e}", dac_brand::BINARY);
                 None
             }
         },

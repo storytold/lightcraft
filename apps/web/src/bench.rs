@@ -1,7 +1,7 @@
 //! Scripted in-app measurement (`?bench`): open the first photo in Detail, then drive the Exposure
 //! control exactly like a slider drag (begin interaction → N `develop.set` → end) and time each
 //! step from the command to the moment the new loupe texture is ready. Results go to the log
-//! (the browser console on the web) as one `lightcraft-bench {…json…}` line.
+//! (the browser console on the web) as one `app-bench {…json…}` line.
 
 use dac_ui_egui::DacApp;
 use dac_ui_egui::render::Slot;

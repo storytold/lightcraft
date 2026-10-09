@@ -5,9 +5,9 @@ name: Packaging lint
 on:
   push:
     branches: [main, release]
-    paths: [".github/workflows/**", "packaging/**", "assets/app-icon/**"]
+    paths: [".github/workflows/**", "packaging/**", "assets/app-icon/**", "brand.toml"]
   pull_request:
-    paths: [".github/workflows/**", "packaging/**", "assets/app-icon/**"]
+    paths: [".github/workflows/**", "packaging/**", "assets/app-icon/**", "brand.toml"]
   workflow_dispatch:
 
 permissions:
@@ -44,22 +44,33 @@ jobs:
             if ($errors) { $errors | ForEach-Object { Write-Output "::error file=$($f.Name)::$_" }; exit 1 }
             Write-Output "ok $($f.Name)"
           }
+      - name: Render the packaging templates (brand.toml)
+        run: |
+          . packaging/env.sh
+          OUT="$RUNNER_TEMP/pkg"
+          for t in packaging/linux/*.in packaging/linux/flatpak/*.in packaging/macos/*.in packaging/windows/*.in; do
+            rel="${t#packaging/}"; rel="${rel%.in}"; rel="${rel//\{app_id\}/$BRAND_APP_ID}"
+            brand_render "$t" "$OUT/$rel"
+          done
+          echo "OUT=$OUT" >>"$GITHUB_ENV"
+          echo "APP_ID=$BRAND_APP_ID" >>"$GITHUB_ENV"
+          echo "APP_BINARY=$BRAND_BINARY" >>"$GITHUB_ENV"
       - name: XML, desktop entry, AppStream, Flatpak manifest
         run: |
-          xmllint --noout packaging/windows/lightcraft.wxs packaging/macos/*.plist* packaging/linux/*.xml*
+          xmllint --noout "$OUT"/windows/app.wxs "$OUT"/macos/*.plist "$OUT"/linux/*.xml packaging/macos/entitlements.plist
           # Windows Installer needs Icon ids ending in .ico or .exe, or shortcuts show a blank icon.
-          if grep -oE '<Icon Id="[^"]*"' packaging/windows/lightcraft.wxs | grep -vE '\.(ico|exe)"$'; then
+          if grep -oE '<Icon Id="[^"]*"' "$OUT/windows/app.wxs" | grep -vE '\.(ico|exe)"$'; then
             echo "::error::Icon Id must end in .ico or .exe"; exit 1
           fi
-          desktop-file-validate packaging/linux/ai.storyteller.lightcraft.desktop
-          sed -e 's/@VERSION@/0.0.0/' -e 's/@DATE@/2026-01-01/' packaging/linux/ai.storyteller.lightcraft.metainfo.xml.in >"$RUNNER_TEMP/ai.storyteller.lightcraft.metainfo.xml"
-          appstreamcli validate --no-net --explain "$RUNNER_TEMP/ai.storyteller.lightcraft.metainfo.xml"
+          desktop-file-validate "$OUT/linux/$APP_ID.desktop"
+          appstreamcli validate --no-net --explain "$OUT/linux/$APP_ID.metainfo.xml"
           python3 - <<'EOF'
-          import yaml
-          src = yaml.safe_load(open("packaging/linux/flatpak/ai.storyteller.lightcraft.yml"))
-          bundle = yaml.safe_load(open("packaging/linux/flatpak/ai.storyteller.lightcraft.bundle.yml"))
+          import os, yaml
+          out, app_id, binary = os.environ["OUT"], os.environ["APP_ID"], os.environ["APP_BINARY"]
+          src = yaml.safe_load(open(f"{out}/linux/flatpak/{app_id}.yml"))
+          bundle = yaml.safe_load(open(f"{out}/linux/flatpak/{app_id}.bundle.yml"))
           for m in (src, bundle):
-              assert m["id"] == "ai.storyteller.lightcraft" and m["command"] == "lightcraft", m["id"]
+              assert m["id"] == app_id and m["command"] == binary, m["id"]
           for key in ("runtime", "runtime-version", "sdk", "finish-args"):
               assert src[key] == bundle[key], f"Flatpak manifests disagree on {key}: {src[key]} vs {bundle[key]}"
           print("Flatpak manifests ok")

@@ -1,7 +1,7 @@
 //! End-to-end render benchmark (min of N runs, robust to a loaded machine):
 //! `cargo run --release -p dac-engine --example render_bench -- corpus/raw/arw-sony-a7m3-compressed.arw`
 //! (`N=9` runs per scenario, `RAYON_NUM_THREADS=1` for algorithmic comparisons,
-//! `LIGHTCRAFT_PROFILE=1` for per-stage timings).
+//! `{ENV_PREFIX}_PROFILE=1` for per-stage timings).
 //!
 //! Without a file argument a procedural 6000×4000 source is used. Scenarios: a ~2.5 MP loupe render
 //! of the 2560 px preview (cold, and with a warm stage cache while a slider is dragged), a draft,
@@ -9,7 +9,7 @@
 //! export of each (decode + render + encode). Prints minimum wall-clock and minimum process CPU
 //! time: on a shared machine the CPU time shows the work done, wall-clock also the wait for cores.
 //! Each scenario runs on the CPU pipeline and, when a GPU adapter exists, on `dac-gpu`
-//! (second column; `LIGHTCRAFT_GPU=0` for the CPU only).
+//! (second column; `{ENV_PREFIX}_GPU=0` for the CPU only).
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -141,7 +141,7 @@ fn main() {
     };
     let full = Arc::new(full);
     println!("source {}×{} ({:.1} MP), {n} runs each", full.width, full.height, (full.width * full.height) as f64 / 1e6);
-    // GPU column: `LIGHTCRAFT_GPU=0` (or no adapter) prints only the CPU column.
+    // GPU column: `{ENV_PREFIX}_GPU=0` (or no adapter) prints only the CPU column.
     let t = Instant::now();
     let gpu = dac_engine::gpu::available();
     match dac_engine::gpu::adapter_name().filter(|_| gpu) {

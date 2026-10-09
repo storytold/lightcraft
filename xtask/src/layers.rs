@@ -71,6 +71,14 @@ pub const TABLE: &[(&str, Class)] = &[
 /// L0: `raster` builds on `color` and `geom`; `color` uses `geom` for matrices.
 /// L1: `raw` and `codecs` read metadata through `meta`; `develop` uses `meta` for XMP.
 pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
+    // `brand` (the product name) has no dependencies and may be used by every L0 crate
+    &["brand", "geom"],
+    &["brand", "color"],
+    &["brand", "raster"],
+    &["brand", "tiff"],
+    &["brand", "sysmem"],
+    &["brand", "fetch"],
+    &["brand", "heif"],
     &["geom", "color", "raster"],
     &["tiff", "raster"],
     &["denoise-core", "denoise"],

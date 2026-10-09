@@ -121,7 +121,7 @@ pub fn specs() -> Vec<CommandSpec> {
 /// File extension of exported curve presets (JSON).
 pub const CURVE_PRESET_EXT: &str = "lccurve";
 /// `format` tag of an exported curve-preset file.
-const FILE_FORMAT: &str = "lightcraft.curvePresets";
+const FILE_FORMAT: &str = crate::legacy::CURVE_PRESETS_FORMAT;
 
 /// A named set of point curves (master + red/green/blue, points in 0..1; empty = linear).
 /// Built-ins ship with the app; the user's are saved with the library preferences.

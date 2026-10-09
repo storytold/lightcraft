@@ -5,9 +5,9 @@ members = ["crates/*", "apps/*", "xtask"]
 [workspace.package]
 version = "0.4.0"
 edition = "2024"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 rust-version = "1.90"
-repository = "https://github.com/storytold/lightcraft"
+repository = "https://example.invalid/repo"
 
 [workspace.dependencies]
 # internal
@@ -49,7 +49,7 @@ bytemuck = { version = "1", features = ["derive"] }
 crc32fast = "1"
 siphasher = "1"
 libc = "0.2" # dev-only: process CPU time in benches
-dhat = "0.3" # opt-in heap profiling (lightcraft-cli --features dhat-heap); never in default builds
+dhat = "0.3" # opt-in heap profiling (dac-cli --features dhat-heap); never in default builds
 
 # formats
 quick-xml = "0.38"

@@ -24,7 +24,7 @@ const INVALID_PARAMS: i64 = -32602;
 const INTERNAL_ERROR: i64 = -32603;
 const RESOURCE_NOT_FOUND: i64 = -32002;
 
-const INSTRUCTIONS: &str = "LightCraft is a non-destructive photo library and raw developer (a Lightroom alternative). \
+const INSTRUCTIONS: &str = "is a non-destructive photo library and raw developer (a Lightroom alternative). \
 Photos have integer ids; most editing acts on the *active* photo (tools that take `id` make that photo active first). \
 Typical loop: query_photos → select_photos (or pass id) → list_controls → set_develop {values: {\"light.exposure\": 0.5}} → \
 render_preview to look at the result → export. Positions (crop rects, mask points, brush strokes) are normalized image \
@@ -32,13 +32,13 @@ coordinates 0..1 with the origin at the top-left. Every action is a command: com
 docs; command_run {id, params} runs any of them; command_batch runs steps in order. Inspect with doc_inspect. Edits are undoable (undo / redo).";
 
 /// Resource URIs.
-pub const DOCUMENT_URI: &str = "lightcraft://document";
-pub const COMMANDS_URI: &str = "lightcraft://commands";
-pub const LIBRARY_URI: &str = "lightcraft://library";
-pub const PHOTOS_URI: &str = "lightcraft://photos";
-pub const PHOTO_URI: &str = "lightcraft://photo/active";
-pub const DEVELOP_URI: &str = "lightcraft://develop/active";
-pub const CONTROLS_URI: &str = "lightcraft://controls";
+pub const DOCUMENT_URI: &str = "dac://document";
+pub const COMMANDS_URI: &str = "dac://commands";
+pub const LIBRARY_URI: &str = "dac://library";
+pub const PHOTOS_URI: &str = "dac://photos";
+pub const PHOTO_URI: &str = "dac://photo/active";
+pub const DEVELOP_URI: &str = "dac://develop/active";
+pub const CONTROLS_URI: &str = "dac://controls";
 
 /// An MCP server bound to one backend.
 pub struct Server {
@@ -166,8 +166,8 @@ impl Server {
                 Ok(json!({
                     "protocolVersion": version,
                     "capabilities": {"tools": {"listChanged": false}, "resources": {"subscribe": false, "listChanged": false}},
-                    "serverInfo": {"name": "lightcraft", "title": "LightCraft", "version": env!("CARGO_PKG_VERSION")},
-                    "instructions": format!("{INSTRUCTIONS} Backend: {}.", self.backend.describe()),
+                    "serverInfo": {"name": dac_brand::MCP_SERVER, "title": dac_brand::DISPLAY_NAME, "version": env!("CARGO_PKG_VERSION")},
+                    "instructions": format!("{} {INSTRUCTIONS} Backend: {}.", dac_brand::DISPLAY_NAME, self.backend.describe()),
                 }))
             }
             "ping" => Ok(json!({})),

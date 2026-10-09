@@ -3,7 +3,7 @@
 Runs the Hugging Face transformers implementation (fp32, CPU) on one photo and writes the
 shared pixel input plus intermediate and final outputs of the click (tracker) and text
 (detector) paths. Usage (needs torch, torchvision, transformers, pillow, safetensors):
-    LIGHTCRAFT_SAM3_DIR=<model dir> python tools/sam3_reference.py photo.jpg ref.safetensors
+    <PREFIX>_SAM3_DIR=<model dir> (PREFIX = env_prefix in brand.toml) python tools/sam3_reference.py photo.jpg ref.safetensors
 The text prompts below suit a photo of the moon in a blue sky; change them for other photos.
 """
 import os, sys, time
@@ -13,7 +13,20 @@ from PIL import Image
 from safetensors.torch import save_file
 from transformers import Sam3TrackerModel, Sam3Model, CLIPTokenizer
 
-MODEL = os.environ.get("LIGHTCRAFT_SAM3_DIR", os.path.expanduser("~/Library/Application Support/LightCraft/models/sam3"))
+def _brand(key):
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "brand.toml")
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            k, _, v = line.partition("=")
+            if k.strip() == key:
+                return v.split("#")[0].strip().strip('"')
+    raise KeyError(key)
+
+
+MODEL = os.environ.get(
+    _brand("env_prefix") + "_SAM3_DIR",
+    os.path.expanduser("~/Library/Application Support/" + _brand("settings_dir") + "/models/sam3"),
+)
 img_path, out_path = sys.argv[1], sys.argv[2]
 torch.set_grad_enabled(False)
 

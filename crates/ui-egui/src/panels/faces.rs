@@ -3,7 +3,7 @@
 //!
 //! Adding a model is: pick or drop a `.onnx` file → the engine inspects it (`faces.models.inspect`) →
 //! this dialog shows what it is and its terms → the user ticks "I accept" → `faces.models.install`.
-//! LightCraft fetches a model only when the user presses Download on a model it has a pinned address for: the
+//! The app fetches a model only when the user presses Download on a model it has a pinned address for: the
 //! same dialog shows its terms first, and accepting them downloads it (`faces.models.download`: checked against its
 //! size and SHA-256), installs it, starts using it and switches recognition on, with no further question. "Open
 //! page" opens the model's own page in the browser for anything else.
@@ -396,7 +396,7 @@ pub fn model_dialog(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, info: &Valu
         ui.label(RichText::new("This file cannot be used yet").font(t.semibold(13.5)).color(t.caution));
         ui.add(
             egui::Label::new(
-                RichText::new(sentence(info["reason"].as_str().unwrap_or("It is not a face recognition model LightCraft understands")))
+                RichText::new(sentence(crate::i18n::tr(info["reason"].as_str().unwrap_or("It is not a face recognition model {app} understands"))))
                     .color(t.text_label),
             )
             .wrap(),
@@ -419,8 +419,9 @@ pub fn model_dialog(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, info: &Valu
         ui.add(
             egui::Label::new(
                 RichText::new(format!(
-                    "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it{}.",
-                    if detector { "" } else { ", starts using it and turns face recognition on" }
+                    "Downloads from {host}. Once it has arrived and checked out, {app} installs it{}.",
+                    if detector { "" } else { ", starts using it and turns face recognition on" },
+                    app = dac_brand::DISPLAY_NAME
                 ))
                 .color(t.text_label),
             )
@@ -439,7 +440,7 @@ pub fn model_dialog(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, info: &Valu
     }
     if kind == "draft" {
         ui.add_space(2.0);
-        ui.label(RichText::new("LightCraft does not know this model, so it assumed:").color(t.text_label));
+        ui.label(RichText::new(crate::i18n::tr("{app} does not know this model, so it assumed:")).color(t.text_label));
         for a in info["assumptions"].as_array().into_iter().flatten().filter_map(Value::as_str) {
             ui.add(egui::Label::new(RichText::new(format!("•  {a}")).font(t.font(12.0)).color(t.text_dim)).wrap());
         }
@@ -454,11 +455,11 @@ pub fn model_dialog(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, info: &Valu
     ui.add_space(4.0);
     check(ui, "faceModel.accept", accepted, "I have read these terms and accept them for my own use");
     let closing = if download {
-        "Nothing is fetched until you accept. The model is kept on this computer only; LightCraft never uploads or shares it."
+        "Nothing is fetched until you accept. The model is kept on this computer only; {app} never uploads or shares it."
     } else {
-        "The model is kept on this computer only. LightCraft never uploads or shares it."
+        "The model is kept on this computer only. {app} never uploads or shares it."
     };
-    ui.label(RichText::new(closing).font(t.font(11.5)).color(t.text_dim));
+    ui.label(RichText::new(crate::i18n::tr(closing)).font(t.font(11.5)).color(t.text_dim));
 }
 
 /// Pressing Download: the model's terms first, in the same dialog as a model file. Accepting them starts the download;

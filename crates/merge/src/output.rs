@@ -1,5 +1,5 @@
 //! Merge results as linear DNGs (`PhotometricInterpretation = LinearRaw`, three samples per
-//! pixel), written with LightCraft's own TIFF/DNG writer.
+//! pixel), written with the app's own TIFF/DNG writer.
 //!
 //! - Pixel values are scaled so the brightest pixel sits just below 1.0 (the white level); the
 //!   scale is carried in `BaselineExposure`, so a default rendering looks like the reference frame.

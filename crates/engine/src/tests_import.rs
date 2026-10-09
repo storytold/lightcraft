@@ -1059,7 +1059,7 @@ fn expand_stops_at_the_walk_limits() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
-/// Raw containers LightCraft cannot decode but shows by their embedded JPEG are picked up from a folder
+/// Raw containers the app cannot decode but shows by their embedded JPEG are picked up from a folder
 /// (the extensions are in `import::EXTENSIONS`; the files differ so none is a duplicate) and import as preview only.
 #[test]
 fn folder_import_picks_up_undecodable_raw_containers_as_preview_only() {

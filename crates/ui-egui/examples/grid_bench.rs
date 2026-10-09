@@ -64,7 +64,7 @@ fn allocs() -> (u64, u64) {
     (ALLOCS.with(Cell::get), BYTES.with(Cell::get))
 }
 
-const ROOT: &str = "/lightcraft-grid-bench/root";
+const ROOT: &str = "/app-grid-bench/root";
 
 fn library(n: usize, local: bool) -> Session {
     let mut s = Session::new();

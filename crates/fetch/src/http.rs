@@ -458,9 +458,10 @@ impl Response {
 /// Send `GET url` with extra `headers` and read the status line and headers.
 pub fn get(url: &Url, headers: &[(&str, String)], limits: &Limits) -> Result<Response, HttpError> {
     let mut req = format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: LightCraft/{}\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n",
+        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: {}/{}\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n",
         url.path,
         url.host_header(),
+        dac_brand::BINARY,
         env!("CARGO_PKG_VERSION")
     );
     for (k, v) in headers {

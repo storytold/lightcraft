@@ -1,4 +1,4 @@
-//! The LightCraft develop pipeline (CPU reference implementation).
+//! The develop pipeline (CPU reference implementation).
 //!
 //! Input: a scene-referred, linear Rec.2020 source image (already EXIF-oriented) at any resolution
 //! (full size or a proxy), plus [`DevelopSettings`]. Output: a display-encoded sRGB image at the
@@ -594,13 +594,13 @@ pub(crate) fn is_bw(s: &DevelopSettings) -> bool {
     s.treatment == Treatment::Bw || s.profile.id == "lc.mono" || s.profile.id.starts_with("lc.bw.")
 }
 
-/// `LIGHTCRAFT_PROFILE` is set: print per-stage timings to stderr.
+/// `{ENV_PREFIX}_PROFILE` is set: print per-stage timings to stderr.
 pub fn profiling() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LIGHTCRAFT_PROFILE").is_some())
+    *ON.get_or_init(|| dac_brand::env_is_set("PROFILE"))
 }
 
-/// Run `f`, printing its duration under `LIGHTCRAFT_PROFILE`.
+/// Run `f`, printing its duration under `{ENV_PREFIX}_PROFILE`.
 pub(crate) fn timed<R>(what: &str, f: impl FnOnce() -> R) -> R {
     if !profiling() {
         return f();

@@ -549,7 +549,7 @@ impl Default for Optics {
 /// (`WarpRectilinear`, `FixVignetteRadial`), or a raw reader's equivalent of the camera's own correction (Panasonic /
 /// Leica RW2 distortion, `dac_raw`'s `vendor/rw2.rs`). This is camera/file data (stored on the photo record, not in the develop
 /// settings); "Enable Profile Corrections" applies it, scaled by the profile distortion/vignetting amounts.
-/// LightCraft never uses Adobe LCP lens profiles.
+/// The app never uses Adobe LCP lens profiles.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EmbeddedLens {
