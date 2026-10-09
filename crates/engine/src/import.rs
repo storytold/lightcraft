@@ -198,6 +198,48 @@ pub struct ImportReport {
     pub scanned: usize,
     /// Photos whose metadata/develop settings were read from an XMP sidecar (or embedded XMP).
     pub sidecars: usize,
+    /// Per-photo diagnostics from foreign XMP develop settings that could not be fully carried over.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ImportWarning>,
+}
+
+/// A structured diagnostic from foreign XMP develop settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ImportWarningCode {
+    /// A named camera profile was found but cannot be applied as Lightroom does.
+    CameraProfile,
+    /// Lightroom geometry data was found but its saved transform is not retained.
+    UprightGeometry,
+    /// One or more other XMP develop fields have no LightCraft mapping.
+    UnmappedXmp,
+}
+
+/// The saved Lightroom Upright mode associated with a foreign geometry transform.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ImportUprightMode {
+    Off,
+    Auto,
+    Level,
+    Vertical,
+    Full,
+    Guided,
+    Unknown,
+}
+
+/// One actionable XMP import diagnostic. `path` is filled when its photo is committed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportWarning {
+    pub path: String,
+    pub code: ImportWarningCode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<ImportUprightMode>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<String>,
 }
 
 /// A file moved by an import.
@@ -1235,6 +1277,10 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 if let Some(sc) = &sidecar {
                     crate::sidecar::merge_into(&mut p, sc, &now);
                     report.sidecars += 1;
+                    report.warnings.extend(sc.warnings.iter().cloned().map(|mut warning| {
+                        warning.path = path.clone();
+                        warning
+                    }));
                 }
                 if let Some(mp) = opts.metadata_preset.as_ref().and_then(|n| s.metadata_presets.iter().find(|m| m.name.eq_ignore_ascii_case(n))) {
                     crate::cmd::metadata::apply_to(&mut p.meta, &mp.fields);

@@ -395,11 +395,17 @@ fn auto_import_watched_folder() {
     s.execute("library.autoImport", &json!({"folder": dir.to_string_lossy(), "album": "Tethered"})).unwrap();
     assert_eq!(s.execute("library.autoImportScan", &json!({})).unwrap()["imported"], json!([]));
     write_png(&dir.join("one.png"), 1);
+    std::fs::write(
+        dir.join("one.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:CameraProfile="Color" crs:Exposure2012="0.5"/></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
     std::fs::write(dir.join("notes.txt"), "not a photo").unwrap();
     // first sight: wait (it may still be copying)
     assert_eq!(s.execute("library.autoImportScan", &json!({})).unwrap()["imported"], json!([]));
     let r = s.execute("library.autoImportScan", &json!({})).unwrap();
     assert_eq!(r["imported"].as_array().unwrap().len(), 1, "{r}");
+    assert!(r["warnings"].as_array().unwrap().iter().any(|w| w["code"] == "cameraProfile" && w["profile"] == "Color"), "{r}");
     let album = s.catalog.albums().find(|a| a.name == "Tethered").expect("album").id;
     assert_eq!(s.catalog.album_count(album), 1);
     assert!(s.selection.ids.is_empty(), "arrivals don't take the selection");

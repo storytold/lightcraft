@@ -37,6 +37,10 @@ used — on import (it then also files a copied photo in its date folder) and by
 `xmp:Rating="-1"` (the XMP convention for rejected) sets the reject flag. Develop settings come from
 `lc:settings` when present (exact); otherwise from the `crs:` fields below (approximate).
 
+When foreign `crs:` settings are only partly transferable, `library.import` includes per-photo `warnings` in its
+report. Warnings identify unsupported profile names, saved Upright geometry that will be recalculated, and other
+unmapped adjustments; they do not change the source packet or become catalog edits.
+
 ## Saving into an existing sidecar
 
 A sidecar may already hold another application's data — e.g. its `crs:` develop settings and `xmpMM:History` — often
@@ -133,12 +137,14 @@ names are read (e.g. `Exposure2012`, not the older `Exposure`).
 | `DefringePurple/GreenAmount/HueLo/HueHi` | `optics.defringe_*` | |
 | `ShadowTint`, `RedHue/Saturation`, `GreenHue/Saturation`, `BlueHue/Saturation` | `calibration.shadows_tint`, `calibration.red_hue/red_sat`, … | Calibration panel, 1:1 |
 | `PerspectiveVertical/Horizontal/Rotate/Scale/Aspect/X/Y` | `geometry.vertical/horizontal/rotate/scale/aspect/offset_x/offset_y` | |
-| `PerspectiveUpright` | `geometry.upright` | 0 off, 1 auto, 2 level, 3 vertical, 4 full, 5 guided |
+| `PerspectiveUpright` | `geometry.upright` | 0 off, 1 auto, 2 level, 3 vertical, 4 full, 5 guided; saved `UprightTransform_*` matrices are not imported, so photo import reports that Lightroom geometry was not preserved and the selected mode will be recalculated |
 | `HasCrop`, `CropLeft/Top/Right/Bottom`, `CropAngle` | `crop.geometry` | normalized edges → rect; angle in degrees; `HasCrop="False"` → no crop |
 
 Values pass through our control specs, so anything outside our slider ranges gets clamped.
 
-**Not mapped:** camera profiles and looks (`CameraProfile`, `Look`; we have our own profile set), local adjustments
+`crs:CameraProfile` is retained as its selected name in the photo import warning metadata, while active profile
+settings stay unchanged: the name carries no rendering data and does not select an Adobe profile. Photo import
+reports that the profile could not be applied and colours may differ from Lightroom. Camera profiles and looks (`Look`; we have our own profile set), local adjustments
 (masks, gradients, brushes), spot removal, red eye, lens blur, process-version 2010 field names, and AI features.
 
 ## Local corrections (masks)

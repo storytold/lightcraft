@@ -416,6 +416,22 @@ pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values
     (out, unmapped)
 }
 
+/// The selected camera profile name from an XMP packet. The name is metadata only: it does not
+/// identify or carry the profile's rendering data.
+pub fn camera_profile_name(props: &Props) -> Option<&str> {
+    first(props, "crs:CameraProfile")
+}
+
+/// Whether an XMP packet contains a saved Lightroom Upright matrix. Lightroom's matrix uses a
+/// coordinate convention that LightCraft does not currently import.
+pub fn has_saved_upright_transform(props: &Props) -> bool {
+    props.keys().any(|key| {
+        key.strip_prefix("crs:").is_some_and(|name| {
+            name.starts_with("UprightTransform_") && props.get(key).is_some_and(|values| values.iter().any(|v| !v.trim().is_empty()))
+        })
+    })
+}
+
 /// Read an XMP preset (`crs:` fields + `crs:Name` / `crs:Group`) into one of our presets.
 /// Returns `None` when the packet has no adjustments we understand.
 pub fn preset_from_xmp(xmp: &str, fallback_name: &str) -> Option<Preset> {

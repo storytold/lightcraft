@@ -35,11 +35,13 @@ fn read(s: &mut Session, p: &Value) -> Result<Value> {
     let mut ops = Vec::new();
     let mut read = Vec::new();
     let mut failed = Vec::new();
+    let mut warnings = Vec::new();
     for id in s.targets(p) {
-        match s.read_sidecar_op(id) {
-            Ok(Some((op, from))) => {
+        match s.read_sidecar_op_with_warnings(id) {
+            Ok(Some((op, from, mut photo_warnings))) => {
                 ops.push(op);
                 read.push(json!({"id": id.0, "from": from.display().to_string()}));
+                warnings.append(&mut photo_warnings);
             }
             Ok(None) => failed.push(json!({"id": id.0, "error": "no XMP sidecar or embedded XMP"})),
             Err(e) => failed.push(json!({"id": id.0, "error": e.to_string()})),
@@ -48,7 +50,11 @@ fn read(s: &mut Session, p: &Value) -> Result<Value> {
     if !ops.is_empty() {
         s.commit("Read Metadata from File", Op::Batch { ops })?;
     }
-    Ok(json!({"read": read, "failed": failed}))
+    let mut result = json!({"read": read, "failed": failed});
+    if !warnings.is_empty() {
+        result["warnings"] = serde_json::to_value(warnings).unwrap_or_default();
+    }
+    Ok(result)
 }
 
 fn prefs(s: &mut Session, p: &Value) -> Result<Value> {
@@ -84,7 +90,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Read Metadata from File",
             ["Photo"],
             None,
-            "{ids?} — reads each photo's XMP sidecar (or a raw/DNG's embedded XMP): metadata and develop settings, one undo step → {read, failed}",
+            "{ids?} — reads each photo's XMP sidecar (or a raw/DNG's embedded XMP): metadata and develop settings, one undo step → {read, failed, warnings?: [{path, code, profile?, mode?, fields?}]}",
             has_selection,
             read
         ),

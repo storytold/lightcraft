@@ -104,6 +104,9 @@ pub struct SidecarData {
     /// `xmp:CreateDate` (first found). Used only when the file itself has no capture time.
     pub captured: Option<String>,
     pub develop: Option<DevelopPatch>,
+    /// Actionable diagnostics for foreign develop settings that were not fully carried over.
+    /// These are surfaced in the photo import report and never persisted in the catalog.
+    pub warnings: Vec<crate::import::ImportWarning>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -162,7 +165,61 @@ pub fn parse_sidecar(xmp: &str, raw: bool) -> std::result::Result<SidecarData, S
     out.develop = match full {
         Some(s) => Some(DevelopPatch::Full(Box::new(s))),
         None if crate::crs::has_adjustments(&d.properties) => {
-            Some(DevelopPatch::Partial(crate::crs::to_partial_report(&d.properties, Some(&d.values), Some(raw), crate::crs_masks::DEFAULT_ASPECT).0))
+            let (partial, unmapped) = crate::crs::to_partial_report(&d.properties, Some(&d.values), Some(raw), crate::crs_masks::DEFAULT_ASPECT);
+            let profile = crate::crs::camera_profile_name(&d.properties).map(str::to_string);
+            if let Some(name) = profile {
+                out.warnings.push(crate::import::ImportWarning {
+                    path: String::new(),
+                    code: crate::import::ImportWarningCode::CameraProfile,
+                    profile: Some(name),
+                    mode: None,
+                    fields: Vec::new(),
+                });
+            }
+            let upright = crate::crs::has_saved_upright_transform(&d.properties);
+            if upright {
+                let mode = d
+                    .properties
+                    .get("crs:PerspectiveUpright")
+                    .and_then(|values| values.first())
+                    .map(String::as_str)
+                    .map(|mode| match mode {
+                        "0" => crate::import::ImportUprightMode::Off,
+                        "1" => crate::import::ImportUprightMode::Auto,
+                        "2" => crate::import::ImportUprightMode::Level,
+                        "3" => crate::import::ImportUprightMode::Vertical,
+                        "4" => crate::import::ImportUprightMode::Full,
+                        "5" => crate::import::ImportUprightMode::Guided,
+                        _ => crate::import::ImportUprightMode::Unknown,
+                    })
+                    .unwrap_or(crate::import::ImportUprightMode::Unknown);
+                out.warnings.push(crate::import::ImportWarning {
+                    path: String::new(),
+                    code: crate::import::ImportWarningCode::UprightGeometry,
+                    profile: None,
+                    mode: Some(mode),
+                    fields: Vec::new(),
+                });
+            }
+            let other: Vec<&str> = unmapped
+                .iter()
+                .map(String::as_str)
+                .filter(|name| {
+                    *name != "CameraProfile"
+                        && !name.starts_with("UprightTransform_")
+                        && !matches!(*name, "UprightTransformCount" | "UprightCenterNormX" | "UprightCenterNormY" | "UprightVersion")
+                })
+                .collect();
+            if !other.is_empty() {
+                out.warnings.push(crate::import::ImportWarning {
+                    path: String::new(),
+                    code: crate::import::ImportWarningCode::UnmappedXmp,
+                    profile: None,
+                    mode: None,
+                    fields: other.into_iter().map(str::to_string).collect(),
+                });
+            }
+            Some(DevelopPatch::Partial(partial))
         }
         None => None,
     };
@@ -472,12 +529,21 @@ impl Session {
 
     /// The op that applies a photo's sidecar (or embedded XMP) to the catalog, if there is one.
     pub fn read_sidecar_op(&self, id: PhotoId) -> Result<Option<(Op, PathBuf)>> {
+        self.read_sidecar_op_with_warnings(id).map(|result| result.map(|(op, from, _)| (op, from)))
+    }
+
+    /// Like [`Session::read_sidecar_op`], retaining transient diagnostics for the command report.
+    pub fn read_sidecar_op_with_warnings(&self, id: PhotoId) -> Result<Option<(Op, PathBuf, Vec<crate::import::ImportWarning>)>> {
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let Some(orig) = file_path(p) else { return Ok(None) };
         let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_naming(id)) else { return Ok(None) };
         let sc = parse_sidecar(&packet, p.kind == MediaKind::Raw)
             .map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?
             .resolve_label(&self.catalog);
+        let mut warnings = sc.warnings.clone();
+        for warning in &mut warnings {
+            warning.path = orig.to_string();
+        }
         let mut q = (**p).clone();
         let develop_changed = merge_into(&mut q, &sc, &(self.clock)());
         let mut ops = vec![
@@ -492,7 +558,7 @@ impl Session {
         if develop_changed {
             ops.extend(self.develop_op(id, (*q.develop).clone(), "Read Metadata from File"));
         }
-        Ok(Some((Op::Batch { ops }, from)))
+        Ok(Some((Op::Batch { ops }, from, warnings)))
     }
 
     /// Auto-write: sidecars for photos changed by `ops` (errors are logged, not returned).
