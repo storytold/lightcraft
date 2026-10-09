@@ -146,6 +146,34 @@ fn for_targets(s: &mut Session, p: &Value, label: &str, f: impl Fn(PhotoId) -> O
     Ok(json!({"changed": n}))
 }
 
+/// Choose which photo to select after deleting `targets`:
+/// The next visible photo immediately following the deleted photos; if the deleted photo was the
+/// last in the list, the previous visible photo; if no photos remain, an empty selection.
+fn select_after_delete(vis_before: &[PhotoId], targets: &[PhotoId], active_before: Option<PhotoId>, vis_after: &[PhotoId]) -> Selection {
+    if vis_after.is_empty() {
+        return Selection::default();
+    }
+    let anchor_idx = active_before
+        .filter(|a| targets.contains(a))
+        .and_then(|a| vis_before.iter().position(|v| *v == a))
+        .or_else(|| targets.iter().filter_map(|t| vis_before.iter().position(|v| v == t)).max());
+
+    if let Some(idx) = anchor_idx {
+        if let Some(after) = vis_before.get(idx + 1..)
+            && let Some(next) = after.iter().find(|id| vis_after.contains(id))
+        {
+            return Selection::single(*next);
+        }
+        if let Some(before) = vis_before.get(..idx)
+            && let Some(prev) = before.iter().rev().find(|id| vis_after.contains(id))
+        {
+            return Selection::single(*prev);
+        }
+    }
+
+    vis_after.first().map(|f| Selection::single(*f)).unwrap_or_default()
+}
+
 fn advance_if(s: &mut Session, p: &Value) {
     if bool_or(p, "advance", false) {
         let _ = step(s, 1);
@@ -661,9 +689,12 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         // ---- delete / restore
         cmd!("photo.delete", "Delete Photo", ["Photo"], Some("Delete"), "{ids?} — moves to Recently Deleted", has_selection, |s, p| {
+            let vis_before = s.visible_cloned();
+            let targets = s.targets(p);
+            let active_before = s.selection.active;
             let v = for_targets(s, p, "Delete", |id| Some(Op::SetDeleted { id, deleted: true }))?;
-            let vis = s.visible_cloned();
-            s.selection = vis.first().map(|f| Selection::single(*f)).unwrap_or_default();
+            let vis_after = s.visible_cloned();
+            s.selection = select_after_delete(&vis_before, &targets, active_before, &vis_after);
             Ok(v)
         }),
         cmd!("photo.restore", "Restore", ["Photo"], None, "{ids?}", has_selection, |s, p| for_targets(s, p, "Restore", |id| Some(Op::SetDeleted {
@@ -689,11 +720,14 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!("photo.deletePermanently", "Delete Permanently", ["Photo"], None, "{ids?}", has_selection, |s, p| {
-            let t = s.targets(p);
-            let op = s.catalog.delete_photos_permanently_ops(&t);
+            let vis_before = s.visible_cloned();
+            let targets = s.targets(p);
+            let active_before = s.selection.active;
+            let op = s.catalog.delete_photos_permanently_ops(&targets);
             s.commit("Delete Permanently", op)?;
-            s.selection = Selection::default();
-            Ok(json!({"deleted": t.len()}))
+            let vis_after = s.visible_cloned();
+            s.selection = select_after_delete(&vis_before, &targets, active_before, &vis_after);
+            Ok(json!({"deleted": targets.len()}))
         }),
         // ---- metadata
         cmd!(

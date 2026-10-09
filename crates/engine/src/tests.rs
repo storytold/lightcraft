@@ -158,6 +158,41 @@ fn filters_and_delete_restore() {
 }
 
 #[test]
+fn delete_advances_selection_to_next_photo() {
+    let mut s = demo();
+    let vis = s.visible_cloned();
+    assert!(vis.len() >= 5);
+    let (p0, p1, p2, p3, p4) = (vis[0], vis[1], vis[2], vis[3], vis[4]);
+
+    // Deleting photo in the middle (p2): selection advances to next photo (p3)
+    s.execute("library.select", &json!({"ids": [p2.0]})).unwrap();
+    assert_eq!(s.selection.active, Some(p2));
+    s.execute("photo.delete", &json!({})).unwrap();
+    assert_eq!(s.selection.active, Some(p3));
+    assert_eq!(s.selection.ids, vec![p3]);
+
+    // Deleting multiple photos (p3, p4): selection advances to next photo
+    let p5 = s.visible_cloned().into_iter().find(|p| *p != p0 && *p != p1 && *p != p3 && *p != p4).unwrap();
+    s.execute("library.select", &json!({"ids": [p3.0, p4.0]})).unwrap();
+    s.execute("photo.delete", &json!({})).unwrap();
+    assert_eq!(s.selection.active, Some(p5));
+
+    // Deleting the last photo: selection moves to the previous (new last) photo
+    let last = *s.visible_cloned().last().unwrap();
+    let second_to_last = s.visible_cloned()[s.visible_cloned().len() - 2];
+    s.execute("library.select", &json!({"ids": [last.0]})).unwrap();
+    s.execute("photo.delete", &json!({})).unwrap();
+    assert_eq!(s.selection.active, Some(second_to_last));
+
+    // Deleting all remaining photos clears selection
+    let all: Vec<u64> = s.visible_cloned().into_iter().map(|p| p.0).collect();
+    s.execute("library.select", &json!({"ids": all})).unwrap();
+    s.execute("photo.delete", &json!({})).unwrap();
+    assert_eq!(s.selection.active, None);
+    assert!(s.selection.ids.is_empty());
+}
+
+#[test]
 fn masks_crop_and_render() {
     let mut s = demo();
     s.execute("mask.add", &json!({"kind": "radial", "center": [0.5, 0.5]})).unwrap();
