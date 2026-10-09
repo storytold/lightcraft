@@ -233,6 +233,8 @@ JPEG XL DNG camera samples are decoded in their declared linear RGB space withou
 
 ## G. Profiles (PROF)
 
+Camera tone fitting retains valid shadows separately from normalized colour estimation while preserving holdout and acceptance gates. Nikon declared crop metadata is checked before dark-column active-area estimation. Lightroom fidelity remains under measurement.
+
 Embedded preview colour fallback is applied before resizing. ICC and explicit EXIF sRGB/Adobe RGB declarations take precedence; orientation-only EXIF does not block a camera-declared colour space.
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |

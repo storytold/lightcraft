@@ -34,7 +34,8 @@ use lightcraft_raw::{
 /// 7: the sensor proxy follows the file's lens warp when the camera JPEG is lens-corrected.
 /// 8: the bundled NIKON Z 6_2 profile.
 /// 9: the bundled NIKON Z 8 and NIKON D5300 profiles.
-pub const LOOK_VERSION: u32 = 9;
+/// 10: fork preview-colour and shadow-tone rules on the current upstream profiles.
+pub const LOOK_VERSION: u32 = 10;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
@@ -820,7 +821,7 @@ pub(crate) fn profile_pairs(raw: &RawImage, bytes: &[u8], lens: Option<&LensGeom
     let to_camera = transform.matrix.inverse()?;
     // clipped sensor pixels don't record the scene's colour (see `fit_look`)
     let sensor = without_clipped(&sensor, &clipped).unwrap_or(sensor);
-    let (pairs, _) = collect_pairs(&sensor, &reference, 0.05, None, false)?;
+    let (pairs, _, _) = collect_pairs(&sensor, &reference, 0.05, None, false)?;
     Some(pairs.into_iter().map(|(x, y)| (to_camera.apply(x), y)).collect())
 }
 
@@ -982,19 +983,20 @@ fn local_contrast(image: &Rgb32f, i: usize) -> f32 {
     if hi.is_finite() { hi / lo.max(1e-4) } else { f32::INFINITY }
 }
 
-/// Training pairs (sensor → JPEG, unclipped midtones) and the wider set including highlights
-/// (for the chroma curve); `None` when too few, or the photo has too little colour. With
+/// Colour pairs (sensor → JPEG, unclipped midtones), chroma pairs including highlights, and
+/// tone training pairs including shadows; `None` when too few colour pairs, or too little colour. With
 /// `edge_limit`, pixels whose 3×3 neighbourhood in either proxy spans a larger luminance ratio
 /// are left out: there a small geometric mismatch between the raw and its JPEG pairs unrelated
 /// colours (see [`EDGE_CONTRAST`]).
 type Pairs = Vec<([f64; 3], [f64; 3])>;
-fn collect_pairs(sensor: &Rgb32f, reference: &Rgb32f, min_chroma: f32, edge_limit: Option<f32>, dark: bool) -> Option<(Pairs, Pairs)> {
+fn collect_pairs(sensor: &Rgb32f, reference: &Rgb32f, min_chroma: f32, edge_limit: Option<f32>, dark: bool) -> Option<(Pairs, Pairs, Pairs)> {
     if (sensor.width, sensor.height) != (reference.width, reference.height) || sensor.data.len() != reference.data.len() {
         return None;
     }
     let mut pairs = Vec::new();
     // Highlights too (camera JPEGs bleach colours toward white there), for the chroma curve only.
     let mut bright = Vec::new();
+    let mut tone = Vec::new();
     let mut colour = 0;
     for (i, (input, output)) in sensor.data.iter().zip(&reference.data).enumerate() {
         if edge_limit.is_some_and(|limit| local_contrast(sensor, i) > limit || local_contrast(reference, i) > limit) {
@@ -1008,7 +1010,17 @@ fn collect_pairs(sensor: &Rgb32f, reference: &Rgb32f, min_chroma: f32, edge_limi
             bright.push((input.map(f64::from), output.map(f64::from)));
         }
         let floors = if dark { DARK_FLOOR } else { (0.015, 0.004) };
-        if !colour_pair_above(*input, *output, floors) {
+        let colour_pair = colour_pair_above(*input, *output, floors);
+        // Normalised colour fitting excludes shadows, but the tone curve must learn their
+        // luminance instead of extrapolating from the midtones. Keep the colour fit's existing
+        // holdout identities: every third colour pair cannot train the tone. Other eligible
+        // pixels use their original proxy index for a deterministic training split. Edge and
+        // clipped-sensor exclusions above apply to all three sets.
+        let training = if colour_pair { pairs.len() % 3 != 0 } else { i % 3 != 0 };
+        if training && output.iter().all(|v| *v < 0.98) {
+            tone.push((input.map(f64::from), output.map(f64::from)));
+        }
+        if !colour_pair {
             continue;
         }
         let min = output.iter().copied().fold(f32::INFINITY, f32::min);
@@ -1016,7 +1028,7 @@ fn collect_pairs(sensor: &Rgb32f, reference: &Rgb32f, min_chroma: f32, edge_limi
         colour += usize::from(max - min > min_chroma);
         pairs.push((input.map(f64::from), output.map(f64::from)));
     }
-    (pairs.len() >= 256 && colour >= pairs.len() / 20).then_some((pairs, bright))
+    (pairs.len() >= 256 && colour >= pairs.len() / 20).then_some((pairs, bright, tone))
 }
 
 /// The original colour-pair eligibility, also used to preserve its held-out split in tone fitting.
@@ -1043,9 +1055,11 @@ fn fit_tone_with_shadows(
     reference: &Rgb32f,
     edge_limit: Option<f32>,
     colour: impl Fn([f64; 3]) -> [f64; 3],
+    baseline: Option<CameraTone>,
 ) -> Option<CameraTone> {
     let luminances = |x: [f64; 3], y: [f64; 3]| (luma(colour(x).map(|v| v.max(0.0))), luma(y));
-    let original = fit.fit(pairs.iter().enumerate().filter(|(i, _)| i % 3 != 0).map(|(_, (x, y))| luminances(*x, *y)).collect());
+    // Keep this fork's already measured shadow training as the fallback and comparison.
+    let original = baseline.or_else(|| fit.fit(pairs.iter().enumerate().filter(|(i, _)| i % 3 != 0).map(|(_, (x, y))| luminances(*x, *y)).collect()));
     let mut eligible = Vec::new();
     let (mut colour_index, mut extra_index) = (0, 0);
     for (i, (input, output)) in sensor.data.iter().zip(&reference.data).enumerate() {
@@ -1206,7 +1220,7 @@ fn fit_pairs_on(
 ) -> Option<CameraLook> {
     // A known colour model needs enough signal for tone fitting, not a scene rich enough to
     // learn a new colour matrix. Still reject monochrome references.
-    let (pairs, bright) = collect_pairs(sensor, reference, if colour.is_some() { 0.005 } else { 0.05 }, edge_limit, dark)?;
+    let (pairs, bright, tone_training) = collect_pairs(sensor, reference, if colour.is_some() { 0.005 } else { 0.05 }, edge_limit, dark)?;
     let candidates = match colour {
         Some(given) => vec![given],
         None => {
@@ -1224,7 +1238,10 @@ fn fit_pairs_on(
             let p = matrix.apply(x);
             correction.as_ref().map_or(p, |c| c.apply(p.map(|v| v as f32)).map(f64::from))
         };
-        let Some(curve) = fit_tone_with_shadows(tone_fit, &pairs, sensor, reference, edge_limit, colour) else { continue };
+        let tone_pairs: Vec<_> =
+            tone_training.iter().map(|(x, y)| (luma(colour(*x).map(|v| v.max(0.0))), luma(*y))).filter(|(x, _)| x.is_finite() && *x > 0.0).collect();
+        let original = tone_fit.fit(tone_pairs);
+        let Some(curve) = fit_tone_with_shadows(tone_fit, &pairs, sensor, reference, edge_limit, colour, original) else { continue };
         let mut look = CameraLook { matrix, tone: curve, hue_sat: hue_sat.clone() };
         if let Some(tone) = fit_chroma(&bright, &look) {
             look.tone = tone;
@@ -1350,7 +1367,7 @@ fn fit_partial(sensor: &Rgb32f, reference: &Rgb32f) -> Option<CameraLook> {
 
 fn fit_partial_on(sensor: &Rgb32f, reference: &Rgb32f, edge_limit: Option<f32>) -> Option<CameraLook> {
     // as for a known colour model: enough signal for the tone, but no monochrome reference
-    let (pairs, bright) = collect_pairs(sensor, reference, 0.005, edge_limit, false)?;
+    let (pairs, bright, tone_training) = collect_pairs(sensor, reference, 0.005, edge_limit, false)?;
     let related = rank_correlation(&pairs);
     if related < PARTIAL_MIN_RANK_CORRELATION {
         if lightcraft_pipeline::profiling() {
@@ -1366,7 +1383,13 @@ fn fit_partial_on(sensor: &Rgb32f, reference: &Rgb32f, edge_limit: Option<f32>) 
         })),
         None => Mat3::IDENTITY,
     };
-    let tone = fit_tone_with_shadows(ToneFit::Quantile, &pairs, sensor, reference, edge_limit, |x| matrix.apply(x))?;
+    let tone_pairs: Vec<_> = tone_training
+        .iter()
+        .map(|(x, y)| (luma(matrix.apply(*x).map(|v| v.max(0.0))), luma(*y)))
+        .filter(|(x, _)| x.is_finite() && *x > 0.0)
+        .collect();
+    let original = fit_tone(tone_pairs);
+    let tone = fit_tone_with_shadows(ToneFit::Quantile, &pairs, sensor, reference, edge_limit, |x| matrix.apply(x), original)?;
     let mut look = CameraLook { matrix, tone, hue_sat: None };
     if let Some(tone) = fit_chroma(&bright, &look) {
         look.tone = tone;
@@ -1459,7 +1482,7 @@ fn fit_tone_only(sensor: &Rgb32f, reference: &Rgb32f, colour: Option<(Mat3, Opti
 
 fn fit_tone_only_on(sensor: &Rgb32f, reference: &Rgb32f, colour: &Option<(Mat3, Option<HsvTable>)>, edge_limit: Option<f32>) -> Option<CameraLook> {
     // every pair counts: the JPEG has no colour to require
-    let (pairs, _) = collect_pairs(sensor, reference, f32::NEG_INFINITY, edge_limit, false)?;
+    let (pairs, _, _) = collect_pairs(sensor, reference, f32::NEG_INFINITY, edge_limit, false)?;
     let related = rank_correlation_ties(&pairs);
     if related < PARTIAL_MIN_RANK_CORRELATION {
         if lightcraft_pipeline::profiling() {
@@ -1473,7 +1496,7 @@ fn fit_tone_only_on(sensor: &Rgb32f, reference: &Rgb32f, colour: &Option<(Mat3, 
         let p = matrix.apply(x);
         correction.as_ref().map_or(p, |c| c.apply(p.map(|v| v as f32)).map(f64::from))
     };
-    let tone = fit_tone_with_shadows(ToneFit::Quantile, &pairs, sensor, reference, edge_limit, coloured)?;
+    let tone = fit_tone_with_shadows(ToneFit::Quantile, &pairs, sensor, reference, edge_limit, coloured, None)?;
     let look = CameraLook { matrix, tone, hue_sat: hue_sat.clone() };
     let (tone, neutral) = (ToneMap::camera(&look.tone, 0.0, 0.0, 0.0), ToneMap::new(0.0, 0.0, 0.0));
     let encoded = |v: f64| v.max(0.0).powf(1.0 / 2.2);
@@ -1898,8 +1921,8 @@ mod tests {
     fn colour_holdouts_stay_out_of_the_wider_tone_training() {
         let (sensor, reference) = steep_toe_scene();
         let fit = |reference: &Rgb32f| {
-            let (pairs, _) = collect_pairs(&sensor, reference, 0.005, None, false).unwrap();
-            fit_tone_with_shadows(ToneFit::Quantile, &pairs, &sensor, reference, None, |x| x).unwrap()
+            let (pairs, _, _) = collect_pairs(&sensor, reference, 0.005, None, false).unwrap();
+            fit_tone_with_shadows(ToneFit::Quantile, &pairs, &sensor, reference, None, |x| x, None).unwrap()
         };
         let expected = fit(&reference);
         let mut changed = reference.clone();
@@ -1955,7 +1978,7 @@ mod tests {
                 *dst = [y * slope; 3];
                 assert_eq!(colour_pair(*src, *dst), i >= 600);
             }
-            let (pairs, _) = collect_pairs(&sensor, &reference, f32::NEG_INFINITY, None, false).unwrap();
+            let (pairs, _, _) = collect_pairs(&sensor, &reference, f32::NEG_INFINITY, None, false).unwrap();
             let original = fit_tone(pairs.iter().enumerate().filter(|(i, _)| i % 3 != 0).map(|(_, (x, y))| (luma(*x), luma(*y))).collect()).unwrap();
             // Both sample sets start at a multiple of three, so this split matches
             // the helper's separate colour and extra-sample indices.
@@ -1979,7 +2002,7 @@ mod tests {
                 held.iter().map(|(x, y)| (f64::from(tone.apply(luma(*x) as f32)).powf(1.0 / 2.2) - luma(*y).powf(1.0 / 2.2)).powi(2)).sum::<f64>()
             };
             assert_ne!(candidate, original);
-            let selected = fit_tone_with_shadows(ToneFit::Quantile, &pairs, &sensor, &reference, None, |x| x).unwrap();
+            let selected = fit_tone_with_shadows(ToneFit::Quantile, &pairs, &sensor, &reference, None, |x| x, None).unwrap();
             if holdout_matches_original {
                 assert!(error(&candidate) > error(&original) + 0.1);
                 assert_eq!(selected, original, "a correlated but misleading training set must keep the original curve");
@@ -2108,6 +2131,114 @@ mod tests {
         assert!(luma(p) > 1.0);
         assert!(tone.apply(0.2) < tone.apply(0.4));
     }
+    fn shadow_dominated_reference() -> (Rgb32f, Rgb32f) {
+        let mut sensor = Rgb32f::new(96, 64);
+        let mut reference = sensor.clone();
+        for (i, (src, dst)) in sensor.data.iter_mut().zip(&mut reference.data).enumerate() {
+            // The camera maps luminance y to y². Most sensor shadows have too little display
+            // signal for normalised colour fitting, but are valid tone observations.
+            let ev = if i % 10 == 0 { 0.25 + (i % 97) as f32 * 0.004 } else { 0.006 + (i % 101) as f32 * 0.001 };
+            *src = [ev * (0.7 + (i % 13) as f32 * 0.04), ev, ev * (0.7 + (i % 17) as f32 * 0.03)];
+            let y = luminance_2020(*src);
+            *dst = src.map(|v| v * y);
+        }
+        (sensor, reference)
+    }
+
+    fn assert_shadow_tone(look: &CameraLook, sensor: &Rgb32f, reference: &Rgb32f) {
+        let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+        let errors: Vec<_> = sensor
+            .data
+            .iter()
+            .zip(&reference.data)
+            .filter(|(_, target)| luminance_2020(**target) < 0.015)
+            .map(|(src, target)| f64::from(tone.apply(luminance_2020(*src)) - luminance_2020(*target)).powi(2))
+            .collect();
+        assert!(!errors.is_empty());
+        let rms = (errors.iter().sum::<f64>() / errors.len() as f64).sqrt();
+        assert!(rms < 0.0001, "shadow RMS {rms}");
+        // A stop in the scene gives two stops in this known camera curve. Extrapolating from
+        // colour midtones instead gives one stop and erases that shadow contrast.
+        let ratio = tone.apply(0.06) / tone.apply(0.03);
+        assert!((3.8..4.2).contains(&ratio), "shadow contrast {ratio}");
+        assert_eq!(tone.apply(0.0), 0.0);
+        assert!(tone.apply(2.0) > tone.apply(1.0), "unobserved sensor headroom survives");
+    }
+
+    #[test]
+    fn both_tone_fits_use_shadows_without_changing_the_given_colour_model() {
+        let (sensor, reference) = shadow_dominated_reference();
+        let original = sensor.clone();
+        for tone_fit in [ToneFit::Quantile, ToneFit::ConditionalMedian] {
+            let look =
+                fit_pairs_on(&sensor, &reference, Some((Mat3::IDENTITY, None)), None, tone_fit).expect("the known model passes unchanged gates");
+            assert_eq!(look.matrix, Mat3::IDENTITY);
+            assert!(look.hue_sat.is_none());
+            assert_shadow_tone(&look, &sensor, &reference);
+        }
+        assert_eq!(sensor.data, original.data, "tone calibration does not alter scene-linear samples");
+        let (look, attempt) = search_ordered(&sensor, &reference, Some((Mat3::IDENTITY, None)), TONE_FITS).unwrap();
+        assert_eq!(attempt, Attempt { tone: ToneFit::Quantile, profile: true, away_from_edges: false });
+        assert_shadow_tone(&look, &sensor, &reference);
+    }
+
+    #[test]
+    fn partial_look_tone_keeps_valid_shadows_and_existing_colour_gates() {
+        let (sensor, reference) = shadow_dominated_reference();
+        let look = fit_partial_on(&sensor, &reference, None).expect("a related reference passes unchanged partial gates");
+        assert!(look.hue_sat.is_none());
+        assert_shadow_tone(&look, &sensor, &reference);
+        let mut unrelated = reference.clone();
+        unrelated.data.fill([0.2; 3]);
+        assert!(fit_partial_on(&sensor, &unrelated, None).is_none(), "extra tone pairs do not admit a monochrome reference");
+    }
+
+    #[test]
+    fn broader_tone_training_excludes_colour_holdout_and_invalid_samples() {
+        let (mut sensor, mut reference) = shadow_dominated_reference();
+        sensor.data[1] = [f32::NAN, 0.2, 0.3];
+        sensor.data[2] = [0.0, 0.2, 0.3];
+        sensor.data[3] = [1.6, 0.2, 0.3];
+        reference.data[4] = [f32::INFINITY, 0.2, 0.3];
+        reference.data[5] = [-0.01, 0.2, 0.3];
+        reference.data[6] = [1.0, 0.2, 0.3];
+        let (colour, _, tone) = collect_pairs(&sensor, &reference, 0.005, None).unwrap();
+        for pair in colour.iter().step_by(3) {
+            assert!(!tone.contains(pair), "a colour holdout pixel cannot train the tone curve");
+        }
+        assert!(tone.iter().any(|(_, target)| luma(*target) < 0.015), "reference shadows train the curve");
+        assert!(tone.iter().all(|(source, target)| {
+            source.iter().all(|v| v.is_finite() && *v > 0.001 && *v < 1.5) && target.iter().all(|v| v.is_finite() && *v >= 0.0 && *v < 0.98)
+        }));
+    }
+
+    #[test]
+    fn broader_tone_training_respects_edges_and_clipped_sensor_exclusions() {
+        let mut sensor = Rgb32f::new(96, 64);
+        let mut reference = sensor.clone();
+        for (i, (src, dst)) in sensor.data.iter_mut().zip(&mut reference.data).enumerate() {
+            let (x, y) = ((i % 96) as f32, (i / 96) as f32);
+            let ev = if x < 32.0 { 0.008 + 0.001 * x + 0.00004 * y } else { 0.3 + 0.001 * x + 0.00004 * y };
+            *src = [ev * (0.7 + 0.001 * y), ev, ev * (1.3 + 0.0005 * x)];
+            *dst = src.map(|v| v * luminance_2020(*src));
+        }
+        let pair_at = |i: usize| (sensor.data[i].map(f64::from), reference.data[i].map(f64::from));
+        let (_, _, all_tone) = collect_pairs(&sensor, &reference, 0.005, None).unwrap();
+        let (clipped_pixel, edge_pixel) = (8, 31);
+        assert!(all_tone.contains(&pair_at(clipped_pixel)) && all_tone.contains(&pair_at(edge_pixel)));
+        let mut clipped = vec![false; sensor.data.len()];
+        clipped[clipped_pixel] = true;
+        let masked = without_clipped(&sensor, &clipped).unwrap();
+        let (_, _, unclipped_tone) = collect_pairs(&masked, &reference, 0.005, None).unwrap();
+        assert!(!unclipped_tone.contains(&pair_at(clipped_pixel)), "clip masking applies to shadow tone samples too");
+        let (colour, _, tone) = collect_pairs(&masked, &reference, 0.005, Some(EDGE_CONTRAST)).unwrap();
+        assert!(!tone.contains(&pair_at(edge_pixel)), "the same edge gate applies to shadow tone samples");
+        assert!(tone.iter().any(|(_, target)| luma(*target) < 0.015));
+        for pair in colour.iter().step_by(3) {
+            assert!(!tone.contains(pair), "holdout split is preserved after edge and clip filtering");
+        }
+    }
+
     #[test]
     fn accepts_a_much_better_fit_despite_local_camera_processing() {
         // The camera JPEG departs from any global matrix + curve (local tone, vignetting): ±0.12

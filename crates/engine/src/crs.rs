@@ -298,7 +298,10 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     }
 
     // ---- Treatment + B&W mix
-    if let Some(bw) = boolean(props, "crs:ConvertToGrayscale") {
+    // Monochrome profiles can save the conversion in their Look parameters without an
+    // outer treatment flag. Carry over that explicit switch while the profile itself
+    // (its table, curve and other parameters) remains unsupported.
+    if let Some(bw) = boolean(props, "crs:ConvertToGrayscale").or_else(|| boolean(props, "crs:Look/crs:Parameters/crs:ConvertToGrayscale")) {
         put(o, "treatment", json!(if bw { "bw" } else { "color" }));
     }
     for (band, crs) in MIXER_BANDS.iter().zip(CRS_BANDS) {
@@ -543,6 +546,45 @@ pub fn preset_from_xmp(xmp: &str, fallback_name: &str) -> Option<Preset> {
 mod tests {
     use super::*;
     use lightcraft_develop::{DevelopSettings, Upright, VignetteStyle, WbMode, apply_partial};
+
+    #[test]
+    fn monochrome_look_carries_only_explicit_grayscale_conversion() {
+        for look in [
+            r#"<crs:Look><rdf:Description crs:Name="Procedural look"><crs:Parameters><rdf:Description crs:ConvertToGrayscale="True" crs:Exposure2012="3" crs:Clarity2012="50" crs:LookTable="procedural-unsupported-table"/></crs:Parameters></rdf:Description></crs:Look>"#,
+            r#"<crs:Look rdf:parseType="Resource"><crs:Name>Procedural look</crs:Name><crs:Parameters rdf:parseType="Resource"><crs:ConvertToGrayscale>True</crs:ConvertToGrayscale><crs:Exposure2012>3</crs:Exposure2012><crs:Clarity2012>50</crs:Clarity2012><crs:LookTable>procedural-unsupported-table</crs:LookTable></crs:Parameters></crs:Look>"#,
+        ] {
+            let xml = format!(
+                r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:GrayMixerBlue="-35">{look}</rdf:Description>"#
+            );
+            let packet = lightcraft_meta::parse_xmp(&xml).unwrap();
+            let (partial, unmapped) = to_partial_report(&packet.properties, Some(&packet.values), Target::RawAbsolute, 1.5);
+            let settings = apply_partial(&DevelopSettings::default(), &partial, 1.0);
+            assert_eq!(settings.treatment, lightcraft_develop::Treatment::Bw);
+            assert_eq!(settings.bw_mix.blue, -35.0);
+            assert_eq!(settings.light.exposure, 0.0, "profile parameters must not become global edits");
+            assert_eq!(settings.effects.clarity, 0.0);
+            assert!(unmapped.iter().any(|k| k == "Look"), "unsupported profile details remain visible");
+            assert!(has_adjustments(&packet.properties));
+        }
+    }
+
+    #[test]
+    fn outer_grayscale_setting_wins_without_guessing_profile_names() {
+        for (outer, nested, name, expected) in [
+            (Some("False"), Some("True"), "Procedural look", Some("color")),
+            (Some("True"), Some("False"), "Procedural look", Some("bw")),
+            (None, Some("False"), "Procedural look", Some("color")),
+            (None, None, "Adobe Monochrome", None),
+        ] {
+            let outer = outer.map_or(String::new(), |v| format!(r#"crs:ConvertToGrayscale="{v}""#));
+            let nested = nested.map_or(String::new(), |v| format!(r#"crs:ConvertToGrayscale="{v}""#));
+            let xml = format!(
+                r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" {outer}><crs:Look><rdf:Description crs:Name="{name}"><crs:Parameters><rdf:Description {nested}/></crs:Parameters></rdf:Description></crs:Look></rdf:Description>"#
+            );
+            let partial = to_partial(&props(&xml), Target::RawAbsolute);
+            assert_eq!(partial.get("treatment").and_then(Value::as_str), expected);
+        }
+    }
 
     #[test]
     fn saved_named_and_auto_white_balance_keep_resolved_numeric_values() {
