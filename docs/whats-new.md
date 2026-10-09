@@ -108,6 +108,10 @@
   Auto use the same model. Custom white balances on these photos render slightly differently than before.
 - Crop (issue #295): a Lock toggle keeps the aspect ratio on every handle, Custom takes your own ratio (Apply), and
   dragging a handle into the image edge stops there instead of pushing the crop out of shape.
+- iPhone ProRAW: Exposure, Contrast, Highlights, Shadows, Whites and Blacks now work as they do in Lightroom Classic,
+  and the file's own tone curve applies to colour, not only brightness. Against Lightroom Classic's export of a CC0
+  iPhone 12 Pro file the unedited photo comes from mean ΔE2000 2.9 to 1.1, and the tone sliders from 3.7 to 1.2.
+  Other photos, including other DNGs with a tone curve, render exactly as before. ProRAW thumbnails re-render once.
 
 ### Library and views
 - Trackpads: pinch to zoom around the pointer and scroll with two fingers to pan the photo; panning keeps the photo

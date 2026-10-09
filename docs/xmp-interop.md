@@ -95,7 +95,10 @@ write them, from sidecars and from XMP embedded in the file. Named faces become 
 Many raw developers store edits as `crs:` properties (`http://ns.adobe.com/camera-raw-settings/1.0/`) in sidecars, in
 DNG files and in XMP presets. LightCraft reads the common ones and maps them to its own controls. We implemented this
 from the public XMP specification and by observing what each field does; no third-party code or preset files were used.
-Our pipeline renders differently, so **values carry over but the look is approximate**.
+Our pipeline renders differently, so **values carry over but the look is approximate**. One exception: on Apple
+ProRAW the Light sliders (Exposure, Contrast, Highlights, Shadows, Whites, Blacks) run Lightroom Classic's own tone
+chain, fitted to its renders of a CC0 iPhone 12 Pro file (`docs/parity.md` → LR-BEHAV-RENDER-FIDELITY), so there
+their values give Lightroom's look closely.
 
 We read these fields; we never write them. Only fields in the packet are applied: the result is a partial settings
 object that gets merged like a preset, so everything else keeps its current or default value. Packets marked

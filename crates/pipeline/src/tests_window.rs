@@ -341,3 +341,36 @@ fn auto_mask_strokes_match_the_whole_render() {
     };
     check_noisy("auto mask", &s, PixelWindow { x: 400, y: 300, w: 300, h: 250 }, 2, 0.1);
 }
+
+// ---- Apple ProRAW: Lightroom's Highlights / Shadows read a neighbourhood wider than a window ----
+
+/// Lightroom's Highlights / Shadows on Apple ProRAW read a Gaussian neighbourhood of 6.4 % of the
+/// long edge: a zoomed window holds a small part of it, so it comes from the whole frame at
+/// reduced size. Here the window sits in a dark area next to a bright one it doesn't show.
+#[test]
+fn proraw_highlights_and_shadows_at_depth_match_the_whole_render() {
+    let knots: Vec<[f32; 2]> = (0..crate::tone::CAMERA_TONE_KNOTS)
+        .map(|i| {
+            let x = 2f32.powf(-12.0 + 12.0 * i as f32 / 127.0);
+            [x, (x.powf(0.6) * 0.98).min(0.9995)]
+        })
+        .collect();
+    let tone = crate::tone::CameraTone::from_knots(&knots).unwrap().per_channel().with_baseline_exposure(-0.3).with_key(Some(-4.0));
+    let info = SourceInfo { raw: true, camera_tone: Some(tone), proraw: true, ..Default::default() };
+    assert!(crate::finish::lr_tone(&info));
+    let src = Rgb32f::from_fn(600, 400, |x, y| {
+        let l = if x < 300 { 0.03 } else { 0.8 };
+        let t = 1.0 + 0.3 * (((x * 7 + y * 13) % 11) as f32 / 10.0 - 0.5);
+        [l * t * 1.05, l * t, l * t * 0.9]
+    });
+    let mut s = DevelopSettings::default();
+    controls::set(&mut s, "light.shadows", 80.0);
+    controls::set(&mut s, "light.highlights", -80.0);
+    let req = RenderRequest::fit(BIG_W, BIG_H);
+    let f = render(&src, &info, &s, &req).image;
+    // (the bright half starts at x 3840)
+    let win = PixelWindow { x: 3200, y: 2400, w: 512, h: 384 };
+    let w = render(&src, &info, &s, &RenderRequest { window: Some(win), ..req }).image;
+    let (max, mean) = compare(&f, &w, win);
+    assert!(max <= 3 && mean <= 0.6, "max {max}, mean {mean:.3}");
+}

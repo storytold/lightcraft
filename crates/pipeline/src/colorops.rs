@@ -27,6 +27,9 @@ fn wrap(a: f32) -> f32 {
     (a + PI).rem_euclid(TAU) - PI
 }
 
+/// Luminance weights of linear ProPhoto RGB (D50).
+pub const PROPHOTO_LUMA: [f32; 3] = [0.288_040_2, 0.711_874_1, 0.000_085_7];
+
 /// Partition-of-unity weights of hue `h` over the 8 bands (raised cosine between neighbours).
 #[inline]
 pub fn band_weights(h: f32) -> [f32; 8] {

@@ -357,7 +357,20 @@ fn load_bytes_now(
             let tags = lightcraft_raw::ColorData { profile: Default::default(), ..raw.color.clone() };
             Arc::new(lightcraft_pipeline::CameraColor { tags, developed_for: xy })
         });
-        let camera_tone = camera_look.as_ref().map(|p| p.tone).or_else(|| raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve));
+        // Apple ProRAW's profile curve renders in Lightroom's chain, whose Contrast adapts to the
+        // image as decoded (at its own exposure, before any edit); other DNG profile curves render
+        // on luminance like any camera curve (only ProRAW was measured)
+        let proraw = camera_look.is_none() && is_apple_proraw(&raw);
+        let camera_tone = camera_look.as_ref().map(|p| p.tone).or_else(|| {
+            let curve = raw.color.profile.tone_curve.as_ref()?;
+            if !proraw {
+                return dng_tone_curve::<32>(curve);
+            }
+            let tone = dng_tone_curve::<{ lightcraft_pipeline::tone::CAMERA_TONE_KNOTS }>(curve)?
+                .per_channel()
+                .with_baseline_exposure(t.baseline_exposure as f32);
+            Some(tone.with_key(lightcraft_pipeline::tone::lr_key(&img.data, tone.baseline_exposure())))
+        });
         let local_tone = local_tone(&raw);
         let (temp, tint) = if relative { (6500.0, 0.0) } else { (temp.round(), tint.round()) };
         return Ok((
@@ -373,6 +386,7 @@ fn load_bytes_now(
                 camera_tone,
                 mattes,
                 local_tone,
+                proraw,
             },
         ));
     }
@@ -431,15 +445,27 @@ fn matte_kind(name: &str) -> Option<lightcraft_pipeline::masks::MatteKind> {
     })
 }
 
+/// Apple ProRAW: a DNG whose EXIF `Make` is Apple and that carries a `ProfileToneCurve`, the one
+/// camera Lightroom's tone operators were measured on (`lightcraft_pipeline::finish::lr_tone`).
+fn is_apple_proraw(raw: &lightcraft_raw::RawImage) -> bool {
+    raw.format == lightcraft_raw::RawFormat::Dng
+        && raw.color.profile.tone_curve.is_some()
+        && raw.metadata.make.as_deref().is_some_and(|m| m.trim().eq_ignore_ascii_case("apple"))
+}
+
 /// A DNG `ProfileToneCurve` (linear in, linear out, 1.0 = white after exposure compensation) as the
-/// finish stage's camera tone curve: 32 knots, log-spaced over 12 stops below white; above white
-/// the camera tone's shoulder continues it.
-pub(crate) fn dng_tone_curve(curve: &lightcraft_raw::profile::ToneCurve) -> Option<lightcraft_pipeline::tone::CameraTone> {
-    let knots: [[f32; 2]; 32] = std::array::from_fn(|i| {
-        let x = 2f32.powf(-12.0 + 12.0 * i as f32 / 31.0);
+/// finish stage's camera tone curve: `N` knots, log-spaced over 12 stops below white; above white
+/// the camera tone's shoulder continues it. Apple ProRAW's takes
+/// [`CAMERA_TONE_KNOTS`](lightcraft_pipeline::tone::CAMERA_TONE_KNOTS) (within 0.03 L* of its
+/// 257-point curve) and is then applied per channel, inside Lightroom's own tone chain (see
+/// `lightcraft_pipeline::tone`); other DNGs' take 32 and stay luminance curves.
+pub(crate) fn dng_tone_curve<const N: usize>(curve: &lightcraft_raw::profile::ToneCurve) -> Option<lightcraft_pipeline::tone::CameraTone> {
+    let last = N.saturating_sub(1).max(1) as f32;
+    let knots: [[f32; 2]; N] = std::array::from_fn(|i| {
+        let x = 2f32.powf(-12.0 + 12.0 * i as f32 / last);
         [x, curve.eval(x).min(0.9995)]
     });
-    lightcraft_pipeline::tone::CameraTone::new(knots)
+    lightcraft_pipeline::tone::CameraTone::from_knots(&knots)
 }
 
 /// Orientation for an embedded preview: its own EXIF orientation when it has one, else the raw file's.
@@ -827,6 +853,43 @@ mod tests {
         let mut dng = crate::tests_xmp::synthetic_dng_with(None, Default::default());
         dng.truncate(dng.len() / 2);
         assert!(load_bytes(&dng, 24).is_err());
+    }
+
+    /// Lightroom's tone operators were measured on Apple ProRAW only: a DNG from another camera
+    /// with a `ProfileToneCurve` keeps the camera-curve path it had (the curve at 32 knots on
+    /// luminance, the sliders after it), and so does a per-channel curve whose source isn't known
+    /// as ProRAW.
+    #[test]
+    fn only_apple_proraw_takes_lightrooms_tone() {
+        use lightcraft_pipeline::{RenderRequest, finish::lr_tone, render};
+        use lightcraft_raw::profile::{ProfileLook, ToneCurve};
+        let mut raw = lightcraft_raw::decode(&crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+        raw.color.profile = ProfileLook { tone_curve: ToneCurve::from_tag(&[0.0, 0.0, 0.18, 0.3, 1.0, 1.0]), ..Default::default() };
+        let load = |raw: &lightcraft_raw::RawImage, make: &str| {
+            let mut raw = raw.clone();
+            raw.metadata.make = Some(make.into());
+            load_bytes(&lightcraft_raw::write_dng(&raw, &Default::default()).unwrap(), 64).unwrap()
+        };
+        let ((img, other), (_, apple)) = (load(&raw, "Leica Camera AG"), load(&raw, "Apple"));
+        assert!(!other.proraw && !lr_tone(&other), "{other:?}");
+        let luminance = raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve::<32>);
+        assert!(luminance.is_some_and(|t| !t.is_per_channel()));
+        assert_eq!(other.camera_tone, luminance, "the profile curve on luminance, as before");
+        assert!(apple.proraw && lr_tone(&apple) && apple.camera_tone.is_some_and(|t| t.is_per_channel()));
+        let mut s = lightcraft_develop::DevelopSettings::default();
+        s.light.contrast = 40.0;
+        s.light.shadows = 30.0;
+        let req = RenderRequest::fit(64, 64);
+        let shown = |info: &SourceInfo| render(&img, info, &s, &req).image;
+        assert_ne!(shown(&apple), shown(&other), "Lightroom's chain on ProRAW");
+        let unknown = SourceInfo { proraw: false, ..apple.clone() };
+        assert!(!lr_tone(&unknown));
+        let on_luminance = SourceInfo { camera_tone: apple.camera_tone.map(|t| t.on_luminance()), ..unknown.clone() };
+        assert_eq!(shown(&unknown), shown(&on_luminance), "the camera-curve path");
+        // no profile curve: no camera tone, whatever the make
+        raw.color.profile = ProfileLook::default();
+        let (_, plain) = load(&raw, "Apple");
+        assert!(!plain.proraw && plain.camera_tone.is_none());
     }
 
     /// Issue #138: a DNG's own profile look (hue/saturation map, look table, tone curve) is

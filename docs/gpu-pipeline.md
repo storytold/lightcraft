@@ -108,7 +108,12 @@ walks the drive.
   settings, frame, output size, stage-cache keys), `Frame::sample_plan`, `local::{wb_matrix_for,
   nr_params, plane_sigmas, guided_fast_step, airlight_of}`, `finish::{FinishParams, mask_terms}`,
   `masks::brush_dabs`; exact tables (tone LUT, sRGB LUT, curve LUTs, resample taps) and the OkLab
-  matrices are uploaded / generated into the WGSL prelude from the CPU values.
+  matrices are uploaded / generated into the WGSL prelude from the CPU values. On Apple ProRAW the
+  tone map's Lightroom stages (`tone::ToneStages`: base operator, Whites, Blacks, profile curve,
+  Contrast) are more tone tables in `aux`, and Highlights / Shadows (`tone::LrHs`) are their curves
+  sampled on the `tone::LR_KNOTS` grid in the parameter block: both sides interpolate the same
+  values. A windowed render's Highlights / Shadows neighbourhood comes from the CPU
+  (`local::context_window`, the whole frame at reduced size) and is uploaded as the base plane.
 - Buffers, not textures: images are `array<f32>` with the CPU's interleaved layout (RGB, 1–3
   channels), so upload / readback are plain copies of `Rgb32f` / `Plane` / `Rgba8` data.
 - Kernels (`crates/gpu/src/wgsl/`): `geom` (orientation pixel map, bilinear through the
