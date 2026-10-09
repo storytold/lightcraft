@@ -366,7 +366,10 @@ mod tests {
         assert_eq!(wire.request().window, Some(win));
         let mut core = WorkerCore::default();
         let a = core.render(&wire, None).unwrap();
-        let b = job.run().rendered.unwrap();
+        // Workers use the CPU pipeline. A native job may use the GPU, whose permitted rounding
+        // differences do not belong in this exact serialization/source-window comparison.
+        let source = job.source.load_source().unwrap();
+        let b = lightcraft_engine::pipeline::render(&source.image, &source.info_or(job.info), &job.settings, &job.request);
         assert_eq!((a.image.width, a.image.height), (160, 120));
         assert_eq!(a.image.data, b.image.data);
     }
