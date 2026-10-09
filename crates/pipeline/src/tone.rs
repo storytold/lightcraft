@@ -8,6 +8,10 @@
 //! neutral settings (an unedited JPEG renders exactly as the file), with contrast/whites/blacks as
 //! S-curve adjustments in a gamma-2.2 perceptual domain and a short shoulder above 0.95.
 
+use std::sync::LazyLock;
+
+use lightcraft_color::{D50, D65, Mat3, PROPHOTO, REC2020, bradford};
+
 pub const GREY: f32 = 0.18;
 /// The tone LUT spans `LUT_MIN_EV..LUT_MAX_EV` around grey in `LUT_N` steps.
 pub const LUT_MIN_EV: f32 = -14.0;
@@ -91,6 +95,18 @@ impl CameraTone {
 pub struct ToneMap {
     lut: Vec<f32>,
     chroma: [f32; CHROMA_N],
+}
+
+/// Linear Rec.2020 D65 → linear ProPhoto D50, and back.
+static PROPHOTO_MATRICES: LazyLock<([[f32; 3]; 3], [[f32; 3]; 3])> = LazyLock::new(|| {
+    let to: Mat3 = PROPHOTO.from_xyz().mul(&bradford(D65, D50)).mul(&REC2020.to_xyz());
+    (to.to_f32(), to.inverse().unwrap_or(Mat3::IDENTITY).to_f32())
+});
+
+/// Linear Rec.2020 D65 → linear ProPhoto D50, and back (Vibrance and Saturation work in linear
+/// ProPhoto, see [`crate::colorops::VIBRANCE_POS`]).
+pub fn prophoto_matrices() -> ([[f32; 3]; 3], [[f32; 3]; 3]) {
+    *PROPHOTO_MATRICES
 }
 
 impl ToneMap {

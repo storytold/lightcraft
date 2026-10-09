@@ -251,7 +251,28 @@ fn constants() -> String {
         crate::params::CURVE_N
     );
     s += &format!("const POINT_WORDS: u32 = {}u;\n", lightcraft_pipeline::colorops::POINT_WORDS);
+    {
+        use lightcraft_pipeline::colorops::{SATURATION_POS, SKIN_HUE, VIBRANCE_FADE, VIBRANCE_NEG, VIBRANCE_POS};
+        let (to_pp, from_pp) = lightcraft_pipeline::tone::prophoto_matrices();
+        for (name, m) in [("PP_TO", to_pp), ("PP_FROM", from_pp)] {
+            let rows: Vec<String> = m.iter().map(|r| format!("vec3<f32>({:?}, {:?}, {:?})", r[0], r[1], r[2])).collect();
+            s += &format!("const {name} = array<vec3<f32>, 3>({});\n", rows.join(", "));
+        }
+        for (name, v) in [("VIB_P", VIBRANCE_POS), ("VIB_N", VIBRANCE_NEG)] {
+            for (i, x) in v.iter().enumerate() {
+                s += &format!("const {name}{i}: f32 = {x:?};\n");
+            }
+        }
+        s += &format!("const VIB_FADE: f32 = {VIBRANCE_FADE:?};\n");
+        s += &format!("const SKIN_H: f32 = {:?};\nconst SKIN_W: f32 = {:?};\n", SKIN_HUE[0], SKIN_HUE[1]);
+        s += &format!("const SAT_P0: f32 = {:?};\nconst SAT_P1: f32 = {:?};\n", SATURATION_POS[0], SATURATION_POS[1]);
+    }
     s += &format!("const EYE_WORDS: u32 = {}u;\n", lightcraft_pipeline::redeye::EYE_WORDS);
+    use lightcraft_pipeline::colorops::PROPHOTO_LUMA;
+    s += &format!(
+        "const PP_LUMA_R: f32 = {:?};\nconst PP_LUMA_G: f32 = {:?};\nconst PP_LUMA_B: f32 = {:?};\n",
+        PROPHOTO_LUMA[0], PROPHOTO_LUMA[1], PROPHOTO_LUMA[2]
+    );
     use lightcraft_pipeline::masks::{AUTO_TOL_CHROMA, AUTO_TOL_EV};
     s += &format!("const AUTO_TOL_EV: f32 = {AUTO_TOL_EV:?};\nconst AUTO_TOL_CHROMA: f32 = {AUTO_TOL_CHROMA:?};\n");
     s += &format!("const SHADOW_TINT_K: f32 = {:?};\n", lightcraft_pipeline::colorops::SHADOW_TINT);

@@ -1,10 +1,11 @@
-//! Colour tools in OkLCh on display-linear Rec.2020 values: vibrance, saturation, the 8-band colour
-//! mixer, B&W mix, and 3-way colour grading; plus the camera-calibration matrix (scene linear).
+//! Colour tools on display-linear Rec.2020 values: vibrance and saturation in linear ProPhoto (see
+//! [`VIBRANCE_POS`]), the 8-band colour mixer, B&W mix and 3-way colour grading in OkLCh; plus the
+//! camera-calibration matrix (scene linear).
 
 use std::f32::consts::{PI, TAU};
 use std::sync::OnceLock;
 
-use lightcraft_color::perceptual::{hsv_to_rgb, lab_to_lch, lch_to_lab, oklab_from_2020, oklab_to_2020};
+use lightcraft_color::perceptual::{hsv_to_rgb, lab_to_lch, lch_to_lab, oklab_from_2020, oklab_to_2020, rgb_to_hsv};
 use lightcraft_color::{Mat3, REC2020, SRGB};
 use lightcraft_develop::{Calibration, DevelopSettings, MIXER_HUES, PointColor};
 
@@ -26,6 +27,9 @@ pub fn band_hues() -> &'static [f32; 8] {
 fn wrap(a: f32) -> f32 {
     (a + PI).rem_euclid(TAU) - PI
 }
+
+/// Luminance weights of linear ProPhoto RGB (D50).
+pub const PROPHOTO_LUMA: [f32; 3] = [0.288_040_2, 0.711_874_1, 0.000_085_7];
 
 /// Partition-of-unity weights of hue `h` over the 8 bands (raised cosine between neighbours).
 #[inline]
@@ -128,6 +132,62 @@ impl PointK {
     }
 }
 
+// ---- Vibrance and Saturation, fitted to Lightroom Classic 15.6 renders of a synthetic chart
+// carrying an Apple ProRAW's own colour tags (at ±25 / ±50 / ±100), on display-linear ProPhoto.
+// Vibrance scales HSV saturation, more for weakly saturated colours, raising (or lowering) value a
+// little, and positive amounts spare skin tones (mean ΔE00 0.4 / 0.8 / 1.5 at +25 / +50 / +100,
+// 1.0 / 2.3 at −25 / −50). Saturation scales the chroma around ProPhoto luminance, −100 giving
+// exactly that grey (1.1 / 0.9 at −25 / −100, 1.0 / 1.9 at +25 / +50).
+
+/// Vibrance > 0: ln saturation gain at +100, exponent of (1 − S), log2 value gain, skin weight.
+pub const VIBRANCE_POS: [f32; 4] = [0.751, 0.736, 0.15, 0.391];
+/// Vibrance < 0: ln saturation gain at −100, exponent of (1 − S), log2 value gain, exponent of S
+/// on the value gain.
+pub const VIBRANCE_NEG: [f32; 4] = [1.288, 0.323, 0.608, 0.263];
+/// Below this HSV saturation Vibrance's value gain fades out linearly: Lightroom leaves greys'
+/// brightness alone (chart grey ramp: log2 change ≤ 0.004 at ±100). Fitted on the chart's patches
+/// under S 0.25, which the gains above leave out; on them mean ΔE00 0.77 / 1.49 / 2.61 → 0.62 /
+/// 1.20 / 2.03 at +25 / +50 / +100 and 0.64 / 1.46 / 3.85 → 0.22 / 0.76 / 2.76 at −25 / −50 / −100,
+/// greys 0.4–1.8 → under 0.14. Without it exact greys kept their value and near greys took the full
+/// gain: a step at the neutral axis.
+pub const VIBRANCE_FADE: f32 = 0.3;
+/// Skin tones Vibrance spares: HSV hue of linear ProPhoto and half-width (degrees).
+pub const SKIN_HUE: [f32; 2] = [20.0, 35.0];
+/// Saturation: chroma scale per unit at +100 and its (1 − S) exponent; at −100 the chroma goes.
+pub const SATURATION_POS: [f32; 2] = [0.927, 0.076];
+
+/// Vibrance (−1..1) on linear ProPhoto `p`.
+#[inline]
+pub fn vibrance(p: [f32; 3], a: f32) -> [f32; 3] {
+    let [h, s, v] = rgb_to_hsv(p);
+    if v <= 0.0 || s <= 0.0 {
+        return p;
+    }
+    let rest = (1.0 - s).max(0.0);
+    let fade = (s / VIBRANCE_FADE).min(1.0);
+    let (e, dv) = if a > 0.0 {
+        let d = (h - SKIN_HUE[0] + 180.0).rem_euclid(360.0) - 180.0;
+        let skin = 1.0 - VIBRANCE_POS[3] * (-(d / SKIN_HUE[1]).powi(2)).exp();
+        (a * VIBRANCE_POS[0] * rest.powf(VIBRANCE_POS[1]) * skin, a * VIBRANCE_POS[2] * skin * fade)
+    } else {
+        (a * VIBRANCE_NEG[0] * rest.powf(VIBRANCE_NEG[1]), a * VIBRANCE_NEG[2] * s.min(1.0).powf(VIBRANCE_NEG[3]) * fade)
+    };
+    hsv_to_rgb(h, (s * e.exp()).min(s.max(1.0)), v * dv.exp2())
+}
+
+/// Saturation (−1..1) on linear ProPhoto `p`.
+#[inline]
+pub fn saturation(p: [f32; 3], a: f32) -> [f32; 3] {
+    let y = PROPHOTO_LUMA[0] * p[0] + PROPHOTO_LUMA[1] * p[1] + PROPHOTO_LUMA[2] * p[2];
+    let f = if a > 0.0 {
+        let s = rgb_to_hsv(p)[1].clamp(0.0, 1.0);
+        1.0 + a * SATURATION_POS[0] * (1.0 - s).powf(SATURATION_POS[1])
+    } else {
+        (1.0 + a).max(0.0)
+    };
+    p.map(|c| y + (c - y) * f)
+}
+
 /// The colour tools' parameters, resolved once per render (fields are read by the GPU kernel).
 #[derive(Clone, Debug)]
 pub struct ColorOps {
@@ -142,8 +202,6 @@ pub struct ColorOps {
     pub bw: Option<[f32; 8]>,
     /// Wheels (shadows, midtones, highlights, global), blending, balance.
     pub grading: Option<([WheelK; 4], f32, f32)>,
-    /// OkLCh hue of skin tones (protected by vibrance).
-    pub skin: f32,
 }
 
 fn wheel(w: &lightcraft_develop::Wheel) -> WheelK {
@@ -176,7 +234,6 @@ impl ColorOps {
                     (g.balance / 100.0) as f32,
                 )
             }),
-            skin: oklch_hue_of_srgb_hue(25.0),
         }
     }
 
@@ -184,58 +241,76 @@ impl ColorOps {
         self.vibrance == 0.0 && self.saturation == 0.0 && !self.mixer && self.points.is_empty() && self.bw.is_none() && self.grading.is_none()
     }
 
-    /// `local_sat` (−1..1) and `local_hue` (radians) come from masks.
+    /// The colour tools in order: the mixer and Point Color (OkLCh), Vibrance and Saturation
+    /// (linear ProPhoto, see [`VIBRANCE_POS`]), then a mask's saturation / hue, the B&W mix and
+    /// colour grading (OkLCh). `local_sat` (−1..1) and `local_hue` (radians) come from masks.
     #[inline]
     pub fn apply(&self, rgb: [f32; 3], local_sat: f32, local_hue: f32) -> [f32; 3] {
         if self.is_identity() && local_sat == 0.0 && local_hue == 0.0 {
             return rgb;
         }
+        if self.vibrance == 0.0 && self.saturation == 0.0 {
+            return self.oklch(rgb, true, true, local_sat, local_hue);
+        }
+        let rgb = self.oklch(rgb, true, false, 0.0, 0.0);
+        let rgb = self.prophoto(rgb);
+        self.oklch(rgb, false, true, local_sat, local_hue)
+    }
+
+    /// Vibrance and Saturation on display-linear Rec.2020 `rgb`, in linear ProPhoto.
+    #[inline]
+    fn prophoto(&self, rgb: [f32; 3]) -> [f32; 3] {
+        let (to, from) = crate::tone::prophoto_matrices();
+        let mut p: [f32; 3] = std::array::from_fn(|i| to[i][0] * rgb[0] + to[i][1] * rgb[1] + to[i][2] * rgb[2]);
+        if self.vibrance != 0.0 {
+            p = vibrance(p, self.vibrance);
+        }
+        if self.saturation != 0.0 {
+            p = saturation(p, self.saturation);
+        }
+        std::array::from_fn(|i| from[i][0] * p[0] + from[i][1] * p[1] + from[i][2] * p[2])
+    }
+
+    /// The OkLCh tools: the mixer and Point Color when `pre`; a mask's saturation / hue, the B&W
+    /// mix and colour grading when `post`. Returns `rgb` when none of them has work to do.
+    #[inline]
+    fn oklch(&self, rgb: [f32; 3], pre: bool, post: bool, local_sat: f32, local_hue: f32) -> [f32; 3] {
+        let pre = pre && (self.mixer || !self.points.is_empty());
+        let post = post && (self.bw.is_some() || self.grading.is_some() || local_sat != 0.0 || local_hue != 0.0);
+        if !pre && !post {
+            return rgb;
+        }
         let lab = oklab_from_2020(rgb);
-        // only chroma changes (vibrance / saturation, maybe grading): scale a, b directly — the same
-        // result as the OkLCh round trip without its sin / cos (and atan2 unless vibrance needs the hue)
-        if !self.mixer && self.points.is_empty() && self.bw.is_none() && local_hue == 0.0 {
-            let mut lab = lab;
-            let c0 = (lab[1] * lab[1] + lab[2] * lab[2]).sqrt();
-            let mut c = c0;
-            if self.vibrance != 0.0 {
-                let low = 1.0 - (c / 0.22).clamp(0.0, 1.0);
-                let skin = if self.vibrance > 0.0 { 1.0 - 0.6 * (-(wrap(lab[2].atan2(lab[1]) - self.skin) / 0.35).powi(2)).exp() } else { 1.0 };
-                c *= (1.0 + self.vibrance * low * low * skin * 1.2).max(0.0);
-            }
-            if self.saturation != 0.0 || local_sat != 0.0 {
-                c *= (1.0 + self.saturation + local_sat).max(0.0);
-            }
-            if c0 > 0.0 {
-                let k = c / c0;
-                lab[1] *= k;
-                lab[2] *= k;
-            }
-            return self.grade(lab);
+        // only a chroma change (a mask's saturation, maybe grading): scale a, b directly — the same
+        // result as the OkLCh round trip without its sin / cos / atan2
+        if !pre && self.bw.is_none() && local_hue == 0.0 {
+            let k = (1.0 + local_sat).max(0.0);
+            return self.grade([lab[0], lab[1] * k, lab[2] * k]);
         }
         let [mut l, mut c, mut h] = lab_to_lch(lab);
-        if self.mixer {
-            let w = band_weights(h);
-            let (mut dh, mut ds, mut dl) = (0.0, 0.0, 0.0);
-            for i in 0..8 {
-                dh += w[i] * self.hue[i];
-                ds += w[i] * self.sat[i];
-                dl += w[i] * self.lum[i];
+        if pre {
+            if self.mixer {
+                let w = band_weights(h);
+                let (mut dh, mut ds, mut dl) = (0.0, 0.0, 0.0);
+                for i in 0..8 {
+                    dh += w[i] * self.hue[i];
+                    ds += w[i] * self.sat[i];
+                    dl += w[i] * self.lum[i];
+                }
+                let chroma_w = (c / 0.12).min(1.0);
+                h += dh * chroma_w;
+                c *= (1.0 + ds).max(0.0);
+                l += dl * chroma_w * l.max(0.05).sqrt();
             }
-            let chroma_w = (c / 0.12).min(1.0);
-            h += dh * chroma_w;
-            c *= (1.0 + ds).max(0.0);
-            l += dl * chroma_w * l.max(0.05).sqrt();
+            for p in &self.points {
+                [l, c, h] = p.apply([l, c, h]);
+            }
         }
-        for p in &self.points {
-            [l, c, h] = p.apply([l, c, h]);
+        if !post {
+            return oklab_to_2020(lch_to_lab([l, c, h]));
         }
-        if self.vibrance != 0.0 {
-            let low = 1.0 - (c / 0.22).clamp(0.0, 1.0);
-            let skin = if self.vibrance > 0.0 { 1.0 - 0.6 * (-(wrap(h - self.skin) / 0.35).powi(2)).exp() } else { 1.0 };
-            c *= (1.0 + self.vibrance * low * low * skin * 1.2).max(0.0);
-        }
-        if self.saturation != 0.0 || local_sat != 0.0 {
-            c *= (1.0 + self.saturation + local_sat).max(0.0);
+        if local_sat != 0.0 {
+            c *= (1.0 + local_sat).max(0.0);
         }
         h += local_hue;
         if let Some(bw) = &self.bw {
@@ -346,6 +421,72 @@ mod tests {
         let ops = ColorOps::new(&DevelopSettings::default());
         assert!(ops.is_identity());
         assert_eq!(ops.apply([0.2, 0.3, 0.4], 0.0, 0.0), [0.2, 0.3, 0.4]);
+    }
+
+    #[test]
+    fn vibrance_is_continuous_at_the_neutral_axis() {
+        // an exact grey and one a rounding error off it come out alike: the value gain fades out
+        // towards neutral (without the fade it would apply in full to every colour but an exact grey)
+        for a in [-1.0, -0.4, 0.4, 1.0] {
+            for v in [0.05f32, 0.5, 1.0] {
+                let grey = vibrance([v, v, v], a);
+                assert_eq!(grey, [v, v, v]);
+                for tint in [[1.0, 1.0, 1.0 + 1e-4], [1.0 + 1e-4, 1.0, 1.0], [1.0, 1.0 - 1e-4, 1.0]] {
+                    let near = vibrance(std::array::from_fn(|i| v * tint[i]), a);
+                    assert!((0..3).all(|c| (near[c] - grey[c]).abs() < 1e-3 * v), "a {a}, v {v}: {near:?} vs {grey:?}");
+                }
+            }
+        }
+        // saturated colours keep the full gain
+        let [_, _, v0] = rgb_to_hsv([0.6, 0.2, 0.1]);
+        let [_, _, v1] = rgb_to_hsv(vibrance([0.6, 0.2, 0.1], 1.0));
+        assert!(v1 > v0 * 1.05, "{v0} -> {v1}");
+    }
+
+    #[test]
+    fn vibrance_favours_muted_colours_and_spares_skin() {
+        let sat = |p: [f32; 3]| rgb_to_hsv(p)[1];
+        // a muted blue gains more saturation (relative) than a vivid one
+        let (muted, vivid) = ([0.3, 0.35, 0.45], [0.05, 0.15, 0.6]);
+        let gain = |p: [f32; 3]| sat(vibrance(p, 0.6)) / sat(p);
+        assert!(gain(muted) > gain(vivid) * 1.1, "{} vs {}", gain(muted), gain(vivid));
+        // positive Vibrance spares skin tones (HSV hue ~20° in linear ProPhoto)
+        let skin = hsv_to_rgb(SKIN_HUE[0], 0.4, 0.5);
+        let other = hsv_to_rgb(SKIN_HUE[0] + 180.0, 0.4, 0.5);
+        assert!(gain(skin) < gain(other) - 0.05, "{} vs {}", gain(skin), gain(other));
+        // negative Vibrance desaturates, without the skin protection
+        let neg = |p: [f32; 3]| sat(vibrance(p, -0.6)) / sat(p);
+        assert!(neg(skin) < 0.8 && (neg(skin) - neg(other)).abs() < 1e-4, "{} {}", neg(skin), neg(other));
+    }
+
+    #[test]
+    fn saturation_keeps_prophoto_luminance() {
+        let y = |p: [f32; 3]| PROPHOTO_LUMA[0] * p[0] + PROPHOTO_LUMA[1] * p[1] + PROPHOTO_LUMA[2] * p[2];
+        let p = [0.5, 0.2, 0.1];
+        for a in [-1.0, -0.5, 0.5, 1.0] {
+            assert!((y(saturation(p, a)) - y(p)).abs() < 1e-6, "{a}");
+        }
+        // −100 gives exactly that grey; a grey stays put at any amount
+        let g = saturation(p, -1.0);
+        assert!(g.iter().all(|c| (c - y(p)).abs() < 1e-6), "{g:?}");
+        assert!(saturation([0.3, 0.3, 0.3], 1.0).iter().all(|c| (c - 0.3).abs() < 1e-6));
+        // positive amounts raise weakly saturated colours a little more
+        let spread = |p: [f32; 3], a| (saturation(p, a)[0] - y(p)) / (p[0] - y(p));
+        assert!(spread([0.3, 0.25, 0.25], 0.5) > spread([0.6, 0.05, 0.05], 0.5));
+    }
+
+    #[test]
+    fn vibrance_and_saturation_leave_the_other_tools_in_order() {
+        // the mixer still acts first (on the unmodified colour) and a mask's saturation last
+        let mut s = DevelopSettings::default();
+        s.mixer.blue.sat = -100.0;
+        let blue = [0.02, 0.05, 0.4];
+        let base = ColorOps::new(&s).apply(blue, 0.5, 0.0);
+        s.color.saturation = 1.0;
+        let tiny = ColorOps::new(&s).apply(blue, 0.5, 0.0);
+        assert!((0..3).all(|i| (tiny[i] - base[i]).abs() < 2e-3), "{base:?} vs {tiny:?}");
+        let c = lab_to_lch(oklab_from_2020(ColorOps::new(&s).apply(blue, -1.0, 0.0)))[1];
+        assert!(c < 1e-3, "{c}");
     }
 
     #[test]
