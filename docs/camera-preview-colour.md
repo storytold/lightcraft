@@ -92,6 +92,13 @@ matrix, so SRW takes the same fit, gates and relative white balance.
 
 ### Canon CR2 and Pentax PEF
 
+Canon CR2 black levels use the median of the masked border at each CFA site. Some EOS 760D
+borders contain illuminated columns next to the active area: an arithmetic mean over those
+columns overestimated the pedestal by 197–409 sample units in a private backlit frame, leaving
+61% of normalized sensor samples nonpositive before development. The median rejects that
+minority contamination while preserving the four CFA-site pedestals. No model-specific offset
+or private image is embedded in the decoder. Other vendors retain their existing estimators.
+
 CR2 and PEF decode without a camera colour matrix too, but were left out of the fit until issue #310 (CR2 files opening
 flat and desaturated: the camera's preview first, then the neutral fallback). They now use the same fit, gates and
 relative white balance. This change was not measured on the corpus: the gates keep the fallback for any file whose fit

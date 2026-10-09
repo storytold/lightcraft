@@ -21,13 +21,45 @@
 
 mod sraw;
 
-use super::{black_from_columns, white_from_data};
+use super::white_from_data;
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result, ljpeg};
 use lightcraft_geom::Orientation;
 use lightcraft_tiff::image::chunk_bytes;
 use lightcraft_tiff::{ByteOrder, Ifd, Tiff, Value, makernote, tags as t};
 
 const CR2_SLICE: u16 = 0xc640;
+
+/// The border next to the active sensor can contain illuminated pixels (EOS 760D).
+/// A median per CFA site keeps those outliers from raising the pedestal and clipping shadows.
+fn black_from_columns(data: &[u16], width: usize, cols: std::ops::Range<usize>, rows: std::ops::Range<usize>, active: Rect) -> BlackLevel {
+    if width == 0 {
+        return BlackLevel::uniform(0.0);
+    }
+    let mut samples: [Vec<u16>; 4] = std::array::from_fn(|_| Vec::new());
+    for y in rows.start..rows.end.min(data.len() / width) {
+        for x in cols.start..cols.end.min(width) {
+            let site = (((y & 1) ^ (active.y & 1)) * 2) + ((x & 1) ^ (active.x & 1));
+            if let Some(sample) = y.checked_mul(width).and_then(|offset| offset.checked_add(x)).and_then(|offset| data.get(offset))
+                && let Some(bucket) = samples.get_mut(site)
+            {
+                bucket.push(*sample);
+            }
+        }
+    }
+    if samples.iter().any(Vec::is_empty) {
+        return BlackLevel::uniform(0.0);
+    }
+    let values = samples
+        .iter_mut()
+        .map(|bucket| {
+            bucket.sort_unstable();
+            let upper = bucket.get(bucket.len() / 2).copied().unwrap_or(0);
+            let lower = bucket.get((bucket.len() - 1) / 2).copied().unwrap_or(upper);
+            (f32::from(lower) + f32::from(upper)) * 0.5
+        })
+        .collect();
+    BlackLevel { repeat_rows: 2, repeat_cols: 2, values, delta_h: Vec::new(), delta_v: Vec::new() }
+}
 const SRAW_TYPE: u16 = 0xc6c5;
 /// `SRAW_TYPE` value of the YCbCr frames of sRAW / mRAW (IFD2's preview image carries 3).
 const SRAW_YCC: u32 = 4;
@@ -267,6 +299,28 @@ pub(crate) mod tests {
         assert_eq!(name(Some(0)), None);
         assert_eq!(name(Some(7)), None);
         assert_eq!(name(None), None);
+    }
+
+    #[test]
+    fn illuminated_border_does_not_crush_shadows() {
+        let width = 100;
+        let active = Rect::new(85, 3, 15, 7);
+        let pedestal = [2040u16, 2048, 2052, 2044];
+        let mut data = vec![0u16; width * 10];
+        for y in 0..10 {
+            for x in 0..width {
+                let site = (((y & 1) ^ (active.y & 1)) * 2) + ((x & 1) ^ (active.x & 1));
+                data[y * width + x] = pedestal[site] + if x >= 60 { 4000 } else { 0 };
+            }
+        }
+        let black = black_from_columns(&data, width, 2..83, 3..10, active);
+        assert_eq!(black.values, pedestal.map(f32::from));
+        // Shadows just above the true pedestal must stay positive after subtraction.
+        for (measured, expected) in black.values.iter().zip(pedestal) {
+            assert!(f32::from(expected + 10) - measured > 0.0);
+        }
+        assert_eq!(black_from_columns(&[], 0, 0..1, 0..1, active).values, vec![0.0]);
+        assert_eq!(black_from_columns(&data, width, 0..0, 0..10, active).values, vec![0.0]);
     }
 
     #[test]
