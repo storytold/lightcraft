@@ -146,6 +146,18 @@ fn for_targets(s: &mut Session, p: &Value, label: &str, f: impl Fn(PhotoId) -> O
     Ok(json!({"changed": n}))
 }
 
+/// After a delete, select the surviving photo now at the deleted photo's former index — the
+/// nearest photo after what was removed — so the grid keeps its scroll position. `anchor` is the
+/// deleted photo's index in the pre-delete visible list; `None` (nothing visible, or the target
+/// wasn't in the list) picks the first. The list is re-read after the commit.
+fn select_after_delete(s: &mut Session, anchor: Option<usize>) {
+    let vis = s.visible_cloned();
+    s.selection = match vis.len() {
+        0 => Selection::default(),
+        n => Selection::single(vis[anchor.unwrap_or(0).min(n - 1)]),
+    };
+}
+
 fn advance_if(s: &mut Session, p: &Value) {
     if bool_or(p, "advance", false) {
         let _ = step(s, 1);
@@ -661,9 +673,11 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         // ---- delete / restore
         cmd!("photo.delete", "Delete Photo", ["Photo"], Some("Delete"), "{ids?} — moves to Recently Deleted", has_selection, |s, p| {
+            let before = s.visible_cloned();
+            let targets = s.targets(p);
+            let anchor = targets.iter().filter_map(|id| before.iter().position(|x| x == id)).min();
             let v = for_targets(s, p, "Delete", |id| Some(Op::SetDeleted { id, deleted: true }))?;
-            let vis = s.visible_cloned();
-            s.selection = vis.first().map(|f| Selection::single(*f)).unwrap_or_default();
+            select_after_delete(s, anchor);
             Ok(v)
         }),
         cmd!("photo.restore", "Restore", ["Photo"], None, "{ids?}", has_selection, |s, p| for_targets(s, p, "Restore", |id| Some(Op::SetDeleted {
@@ -684,15 +698,17 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 let op = s.catalog.delete_photos_permanently_ops(&ids);
                 s.commit("Empty Recently Deleted", op)?;
-                s.selection = Selection::default();
+                select_after_delete(s, None);
                 Ok(json!({"deleted": ids.len()}))
             }
         ),
         cmd!("photo.deletePermanently", "Delete Permanently", ["Photo"], None, "{ids?}", has_selection, |s, p| {
+            let before = s.visible_cloned();
             let t = s.targets(p);
+            let anchor = t.iter().filter_map(|id| before.iter().position(|x| x == id)).min();
             let op = s.catalog.delete_photos_permanently_ops(&t);
             s.commit("Delete Permanently", op)?;
-            s.selection = Selection::default();
+            select_after_delete(s, anchor);
             Ok(json!({"deleted": t.len()}))
         }),
         // ---- metadata

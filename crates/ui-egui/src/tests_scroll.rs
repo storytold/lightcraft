@@ -42,8 +42,12 @@ fn film_x(h: &Headless) -> f32 {
     h.app.film_scroll.expect("filmstrip drawn")
 }
 
+fn widget_opt(h: &Headless, id: &str) -> Option<egui::Rect> {
+    h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r)
+}
+
 fn widget(h: &Headless, id: &str) -> egui::Rect {
-    h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"))
+    widget_opt(h, id).unwrap_or_else(|| panic!("no widget {id}"))
 }
 
 #[test]
@@ -82,6 +86,40 @@ fn grid_keeps_the_users_scroll_position() {
     let cell = widget(&h, &format!("thumb:{second}"));
     assert!(canvas.contains_rect(cell) || cell.intersects(canvas), "the new active photo is in view ({cell:?} vs {canvas:?})");
     assert!(grid_y(&h) < y2, "scrolled up to the second photo");
+}
+
+/// Issue #441: deleting a photo keeps the grid where the user scrolled (it selects the next
+/// photo, which sits where the deleted one was, instead of jumping back to the top).
+#[test]
+fn grid_keeps_its_position_after_delete() {
+    let mut h = demo("photoGrid");
+    let canvas = h.app.canvas_rect.expect("grid canvas");
+    h.request("ui.move", json!({"x": canvas.center().x, "y": canvas.center().y}), T);
+    for _ in 0..4 {
+        h.request("ui.scroll", json!({"dy": -300.0}), T);
+    }
+    idle(&mut h, 60);
+    let y = grid_y(&h);
+    assert!(y > 600.0, "the wheel scrolled the grid ({y})");
+
+    // a photo in view, and the one after it (which should end up active)
+    let vis = h.app.session.visible_cloned();
+    let (i, target) = vis
+        .iter()
+        .enumerate()
+        .find(|(i, id)| *i + 1 < vis.len() && widget_opt(&h, &format!("thumb:{}", id.0)).is_some_and(|r| r.intersects(canvas)))
+        .map(|(i, id)| (i, *id))
+        .expect("a photo is in view");
+    let next = vis[i + 1];
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [target.0]}}), T);
+    let r = h.request("engine.execute", json!({"command": "photo.delete"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    idle(&mut h, 60);
+
+    assert_eq!(h.app.session.active(), Some(next), "the next photo became active");
+    let y2 = grid_y(&h);
+    assert!(y2 > 0.0, "the grid jumped back to the top after deleting ({y2})");
+    assert!((y2 - y).abs() < 600.0, "the grid moved too far ({y} → {y2})");
 }
 
 #[test]

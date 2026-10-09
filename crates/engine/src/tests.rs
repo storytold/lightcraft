@@ -157,6 +157,34 @@ fn filters_and_delete_restore() {
     assert_eq!(s.visible().len(), 24);
 }
 
+/// Issue #441: deleting the active photo selects the next surviving one, not the top of the
+/// grid, so the grid keeps its scroll position.
+#[test]
+fn delete_selects_the_next_photo() {
+    let mut s = demo();
+    let vis = s.visible_cloned();
+    assert!(vis.len() > 6);
+
+    // a photo in the middle: deleting it makes the one that followed it active
+    s.execute("library.select", &json!({"ids": [vis[5].0]})).unwrap();
+    s.execute("photo.delete", &json!({})).unwrap();
+    assert_eq!(s.active(), Some(vis[6]), "delete picked the top instead of the next photo");
+
+    // a contiguous range: the photo after the range becomes active
+    let vis = s.visible_cloned();
+    let range: Vec<u64> = vec![vis[2].0, vis[3].0, vis[4].0];
+    s.execute("library.select", &json!({"ids": range})).unwrap();
+    s.execute("photo.delete", &json!({})).unwrap();
+    assert_eq!(s.active(), Some(vis[5]));
+
+    // the last photo: the new last (its predecessor) becomes active, not the top
+    let vis = s.visible_cloned();
+    let last = *vis.last().unwrap();
+    s.execute("library.select", &json!({"ids": [last.0]})).unwrap();
+    s.execute("photo.delete", &json!({})).unwrap();
+    assert_eq!(s.active(), Some(vis[vis.len() - 2]));
+}
+
 #[test]
 fn masks_crop_and_render() {
     let mut s = demo();
