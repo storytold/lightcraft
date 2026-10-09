@@ -65,6 +65,8 @@ pub struct Tex {
     pub quick: Option<QuickSource>,
     /// CPU copy of the pixels (only with [`Renderer::keep_pixels`]; for headless screenshots).
     pub pixels: Option<std::sync::Arc<egui::ColorImage>>,
+    /// An HDR render's HDR values (HDR display), painted instead of the 8-bit image.
+    pub hdr: Option<std::sync::Arc<crate::hdr_view::HdrPixels>>,
 }
 
 /// Runs render jobs outside this thread's job pool (the browser build: Web Workers, each with its
@@ -618,6 +620,7 @@ impl Renderer {
                 self.textures.remove(&Slot::ThumbQuick(id));
             }
             let img = &rendered.image;
+            let hdr = rendered.deep.as_ref().and_then(|d| crate::hdr_view::HdrPixels::of(r.key, d)).map(std::sync::Arc::new);
             let color = std::sync::Arc::new(color_image(img));
             let pixels = self.keep_pixels.then(|| color.clone());
             let name = format!("{slot:?}");
@@ -631,6 +634,7 @@ impl Renderer {
                     t.histogram = Some(rendered.histogram);
                     t.ms = ms;
                     t.quick = r.quick;
+                    t.hdr = hdr;
                 }
                 None => {
                     let tex = ctx.load_texture(name, color, egui::TextureOptions::LINEAR);
@@ -645,6 +649,7 @@ impl Renderer {
                             ms,
                             quick: r.quick,
                             pixels,
+                            hdr,
                         },
                     );
                 }

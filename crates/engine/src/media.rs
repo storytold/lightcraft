@@ -21,7 +21,7 @@ use std::sync::{Arc, Weak};
 
 use lightcraft_catalog::{MediaKind, Photo, PhotoId, Source};
 use lightcraft_develop::DevelopSettings;
-use lightcraft_pipeline::{Quality, RenderRequest, Rendered, SourceInfo, StageCache};
+use lightcraft_pipeline::{OutputDepth, Quality, RenderRequest, Rendered, SourceInfo, StageCache};
 use lightcraft_preview::{Hash128, Hasher128, Lru, PreviewCache};
 use lightcraft_raster::{Histogram, Rgb32f, Rgba8};
 use serde::{Deserialize, Serialize};
@@ -708,6 +708,26 @@ impl RenderJob {
         }
         // a diagnostic view (visualized range / spots) must never become the photo's cached preview
         if overlay != lightcraft_pipeline::Overlay::None {
+            self.view_cache = None;
+        }
+        self
+    }
+
+    /// For an HDR display: an HDR edit renders its HDR values too ([`OutputDepth::F32Hdr`] in
+    /// sRGB primaries, [`Rendered::deep`]; the 8-bit image stays its SDR view). Gets its own
+    /// result key, never comes from or goes to the cached previews (they are 8-bit), and is
+    /// left alone for SDR edits and for overlays and proofs (those draw on the 8-bit image).
+    pub fn with_hdr_display(mut self, on: bool) -> Self {
+        let wanted = on
+            && self.settings.light.hdr
+            && self.request.overlay == lightcraft_pipeline::Overlay::None
+            && self.request.proof.is_none()
+            && self.request.depth == OutputDepth::U8;
+        if wanted {
+            self.request.depth = OutputDepth::F32Hdr;
+            self.request.space = lightcraft_pipeline::OutputSpace::Srgb;
+            self.key ^= 0x5851_f42d_4c95_7f2d;
+            self.cache = None;
             self.view_cache = None;
         }
         self

@@ -25,6 +25,7 @@
 mod alloc_release;
 mod control_server;
 mod dialog_filter;
+mod hdr_present;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
@@ -85,8 +86,11 @@ impl eframe::App for App {
 /// alone on Windows unless `LIGHTCRAFT_GPU_BACKEND` / `WGPU_BACKEND` say otherwise (issue #136:
 /// with Vulkan in the set, wgpu loads the Vulkan driver even when it then picks DX12) — and DX12
 /// shaders compiled with FXC, never a stray `dxcompiler.dll` (issue #471).
-fn window_wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
+/// `hdr`: ask for an HDR (scRGB) window surface (the patched egui-wgpu in `vendor/` takes it
+/// when the system offers one; see `hdr_present`).
+fn window_wgpu_options(hdr: bool) -> eframe::egui_wgpu::WgpuConfiguration {
     let mut c = eframe::egui_wgpu::WgpuConfiguration::default();
+    c.surface.prefer_hdr = hdr;
     if let eframe::egui_wgpu::WgpuSetup::CreateNew(n) = &mut c.wgpu_setup {
         n.instance_descriptor.backends = lightcraft_engine::gpu::backend::window_backends();
         n.instance_descriptor.backend_options = lightcraft_engine::gpu::backend::backend_options();
@@ -655,6 +659,12 @@ fn main() -> eframe::Result {
     let gpu_crash = gpu_crash_check(in_memory);
     let gpu_on = prefs.as_ref().is_none_or(|u| u.settings.gpu) && gpu_crash.is_none();
     lightcraft_engine::gpu::set_enabled(gpu_on);
+    // HDR display: the preference, unless LIGHTCRAFT_HDR_DISPLAY says 0 / 1
+    let hdr_display = match std::env::var("LIGHTCRAFT_HDR_DISPLAY").ok().as_deref() {
+        Some("0") => false,
+        Some("1") => true,
+        _ => prefs.as_ref().is_none_or(|u| u.settings.hdr_display),
+    };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("LightCraft")
@@ -667,7 +677,7 @@ fn main() -> eframe::Result {
             .with_icon(app_icon())
             // Wayland matches the window to packaging/linux/ai.storyteller.lightcraft.desktop by this id
             .with_app_id(APP_ID),
-        wgpu_options: window_wgpu_options(),
+        wgpu_options: window_wgpu_options(hdr_display),
         ..Default::default()
     };
     // the app's copy: `log_file` is still named in the message of a start that fails
@@ -689,6 +699,10 @@ fn main() -> eframe::Result {
             }
             lightcraft_ui_egui::i18n::set_language(app.ui.language);
             app.integrated_titlebar = cfg!(target_os = "macos");
+            if hdr_display {
+                app.hdr_presenter = hdr_present::presenter(cc.wgpu_render_state.as_ref());
+                log::info!("HDR display: {}", if app.hdr_presenter.is_some() { "on (scRGB window)" } else { "not offered by this window" });
+            }
             app.notices.extend(prefs_warning);
             app.notices.extend(launch_notices);
             // what's on disk now: only changes are written
@@ -895,7 +909,7 @@ mod tests {
     /// Issue #136: Windows windows render with DX12 alone (no Vulkan driver loaded) by default.
     #[test]
     fn window_backends_follow_the_platform_default() {
-        let eframe::egui_wgpu::WgpuSetup::CreateNew(n) = window_wgpu_options().wgpu_setup else { panic!("expected CreateNew") };
+        let eframe::egui_wgpu::WgpuSetup::CreateNew(n) = window_wgpu_options(false).wgpu_setup else { panic!("expected CreateNew") };
         let b = n.instance_descriptor.backends;
         if std::env::var_os("LIGHTCRAFT_GPU_BACKEND").is_none() && std::env::var_os("WGPU_BACKEND").is_none() {
             if cfg!(windows) {
@@ -911,7 +925,7 @@ mod tests {
     /// `dxcompiler.dll` on the search path, and one without `dxil.dll` kept the window from opening.
     #[test]
     fn window_compiles_dx12_shaders_with_fxc() {
-        let eframe::egui_wgpu::WgpuSetup::CreateNew(n) = window_wgpu_options().wgpu_setup else { panic!("expected CreateNew") };
+        let eframe::egui_wgpu::WgpuSetup::CreateNew(n) = window_wgpu_options(false).wgpu_setup else { panic!("expected CreateNew") };
         if std::env::var_os("WGPU_DX12_COMPILER").is_none() {
             assert!(matches!(n.instance_descriptor.backend_options.dx12.shader_compiler, eframe::wgpu::Dx12Compiler::Fxc));
         }

@@ -206,6 +206,7 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
                 "removeLocation": {"type": "boolean"},
                 "colorSpace": {"type": "string", "enum": ["srgb", "displayP3", "adobeRgb", "proPhoto", "rec2020"], "description": "Output colour space (default sRGB; AVIF is always sRGB). adobeRgb = Adobe RGB (1998) compatible; the embedded ICC profile is generated from the published primaries"},
                 "bitDepth": {"type": "integer", "enum": [8, 10, 16, 32], "description": "Bits per channel: PNG 8|16 (default 8), TIFF 8|16|32 (default 16; 32 = linear float with a linear profile), AVIF 8|10; JPEG/WebP are 8-bit"},
+                "hdr": {"type": "boolean", "description": "HDR Output: photos edited in HDR (develop.hdr) are written as HDR files: JPEG with a gain map (SDR base + gain map), 10-bit PQ AVIF / 16-bit PQ PNG (Rec.2020, or Display P3 when colorSpace is displayP3), 32-bit float linear TIFF. Other photos and WebP export as usual"},
                 "watermark": {"description": "Text, or {text, vertical (boolean; defaults to false: upright columns right to left), size (text height as a fraction of the short edge, 0.005..0.5; default 0.035), opacity (0..1; default 0.7), anchor (topLeft|top|topRight|left|center|right|bottomLeft|bottom|bottomRight), inset (margin as a fraction of the short edge, 0..0.4; default 0.025), color [r,g,b] (sRGB 0..255), shadow (boolean), image (path of a graphic drawn instead of the text), imageWidth (fraction of the photo's width, 0.01..1; default 0.2)}. Unknown keys and out-of-range sizes are errors"}
             }),
             &[],
@@ -581,6 +582,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
                         "watermark",
                         "colorSpace",
                         "bitDepth",
+                        "hdr",
                     ],
                 ),
             )

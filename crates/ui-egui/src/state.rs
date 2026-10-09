@@ -140,6 +140,9 @@ pub struct AppSettings {
     pub confirm_delete: bool,
     /// GPU rendering allowed (`app.gpu`).
     pub gpu: bool,
+    /// Show HDR edits in HDR on an HDR display (needs a restart: the window's surface is chosen
+    /// when it is created).
+    pub hdr_display: bool,
     /// Largest long edge (pixels) the user lets the loupe render at; 0 = Automatic (the size it is
     /// drawn at, up to the photo's own pixels and [`LOUPE_EDGE_CEILING`]). Not the old
     /// `previewEdge` key: its 2560 px default was the soft-image bug (issue #323).
@@ -165,6 +168,7 @@ impl Default for AppSettings {
             startup_view: StartupView::Last,
             confirm_delete: false,
             gpu: true,
+            hdr_display: true,
             preview_limit: 0,
             external_editor: String::new(),
             memory_mb: 0,
@@ -425,6 +429,8 @@ pub struct UiState {
     pub point_color: usize,
     /// Point Color "Visualize range": the selected sample's range in colour, the rest grey.
     pub point_color_visualize: bool,
+    /// Light panel "Visualize HDR range" (HDR edits): tones above SDR white coloured by stops.
+    pub hdr_visualize: bool,
     /// Red Eye panel: selected correction, and whether new ones are pet eyes.
     pub eye: usize,
     pub eye_pet: bool,
@@ -748,6 +754,7 @@ impl Default for UiState {
             remove_opacity: 100.0,
             point_color: 0,
             point_color_visualize: false,
+            hdr_visualize: false,
             eye: 0,
             eye_pet: false,
             visualize_spots: false,

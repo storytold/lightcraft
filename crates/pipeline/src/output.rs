@@ -192,6 +192,10 @@ pub enum OutputDepth {
     U16,
     /// 32-bit float *linear* RGB (target primaries, 0..1) in [`crate::Rendered::deep`].
     F32Linear,
+    /// HDR exports: for HDR edits, 32-bit float display-linear RGB (target primaries) where 1 is
+    /// SDR white and values reach [`crate::hdr::HDR_PEAK`] ([`DeepImage::hdr`] set); SDR edits
+    /// render exactly as [`OutputDepth::F32Linear`].
+    F32Hdr,
 }
 
 /// High-bit-depth RGB samples (3 per pixel, interleaved, row-major).
@@ -201,17 +205,20 @@ pub enum DeepSamples {
     F32(Vec<f32>),
 }
 
-/// A high-bit-depth render ([`OutputDepth::U16`] / [`OutputDepth::F32Linear`]).
+/// A high-bit-depth render ([`OutputDepth::U16`] / [`OutputDepth::F32Linear`] / [`OutputDepth::F32Hdr`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeepImage {
     pub width: usize,
     pub height: usize,
     pub space: OutputSpace,
     pub samples: DeepSamples,
+    /// The float samples are HDR: display-linear, 1 = SDR white, up to [`crate::hdr::HDR_PEAK`].
+    pub hdr: bool,
 }
 
 impl DeepImage {
-    /// The same image reduced to 8 bits, display-encoded with the space's curve.
+    /// The same image reduced to 8 bits, display-encoded with the space's curve (HDR images: their
+    /// SDR view, [`crate::hdr::to_sdr`], as the preview shows them).
     pub fn to_rgba8(&self) -> lightcraft_raster::Rgba8 {
         let mut out = lightcraft_raster::Rgba8::new(self.width, self.height);
         let trc = self.space.trc();
@@ -223,7 +230,8 @@ impl DeepImage {
             }
             DeepSamples::F32(v) => {
                 for (p, c) in out.data.iter_mut().zip(v.as_chunks::<3>().0) {
-                    *p = [c[0], c[1], c[2]].map(|x| (trc.encode(x) * 255.0 + 0.5) as u8).into_rgba();
+                    let c = if self.hdr { crate::hdr::to_sdr([c[0], c[1], c[2]]) } else { [c[0], c[1], c[2]] };
+                    *p = c.map(|x| (trc.encode(x) * 255.0 + 0.5) as u8).into_rgba();
                 }
             }
         }

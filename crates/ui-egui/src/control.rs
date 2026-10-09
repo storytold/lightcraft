@@ -85,6 +85,11 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "window": [r.width(), r.height()],
         "pixelsPerPoint": ctx.pixels_per_point(),
         "canvasRect": app.canvas_rect.map(rect_json),
+        // HDR display: the window is HDR, and the loupe currently paints HDR values
+        "hdrDisplay": {
+            "active": app.hdr_presenter.is_some(),
+            "loupeHdr": app.renderer.textures.get(&crate::render::Slot::Main).is_some_and(|t| t.hdr.is_some()),
+        },
         "imageRect": app.image_rect.map(rect_json),
         "scroll": {"grid": app.grid_scroll, "filmstrip": app.film_scroll},
         "active": app.session.active().map(|p| p.0),

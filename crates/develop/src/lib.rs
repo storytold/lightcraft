@@ -237,4 +237,20 @@ mod tests {
         s.reset_section(Section::Detail);
         assert_eq!(s.enhance.denoise_on, None);
     }
+
+    #[test]
+    fn hdr_headroom_defaults_to_the_whole_range_and_is_clamped() {
+        // settings saved before the limit existed load with the whole range, not 0
+        let old: DevelopSettings = serde_json::from_value(json!({"light": {"exposure": 1.0, "hdr": true}})).unwrap();
+        assert_eq!(old.light.hdr_max, 4.0);
+        assert!(old.light.hdr && old.light.exposure == 1.0);
+        let mut s = DevelopSettings::default();
+        assert!(controls::set(&mut s, "light.hdrMax", 0.2));
+        assert_eq!(s.light.hdr_max, 1.0);
+        controls::set(&mut s, "light.hdrMax", 2.5);
+        assert_eq!(controls::get(&s, "light.hdrMax"), Some(2.5));
+        s.reset_section(Section::Light);
+        assert_eq!(s.light.hdr_max, 4.0);
+        assert!(DevelopSettings::default().is_unedited());
+    }
 }

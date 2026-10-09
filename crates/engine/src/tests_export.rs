@@ -370,3 +370,56 @@ fn exports_are_atomic_without_a_sync() {
     assert!(syncs_on_this_thread() > before, "the durable writer syncs");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn hdr_output_writes_hdr_files_for_hdr_edits_only() {
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    let opts = |format: &str| ExportOptions::from_json(&json!({"format": format, "longEdge": 160, "hdr": true}));
+    // not edited in HDR: HDR Output changes nothing
+    let plain = export_photo(&mut s, id, &opts("jpeg"), 1).unwrap();
+    assert!(!plain.bytes.windows(4).any(|w| w == b"MPF\0"));
+    assert_eq!(plain.bytes, export_photo(&mut s, id, &ExportOptions::from_json(&json!({"format": "jpeg", "longEdge": 160})), 1).unwrap().bytes);
+
+    s.execute("develop.hdr", &json!({"on": true})).unwrap();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 1.5})).unwrap();
+    // JPEG: an SDR base plus a gain map, linked by MPF and described in XMP
+    let jpeg = export_photo(&mut s, id, &opts("jpeg"), 1).unwrap().bytes;
+    let text = String::from_utf8_lossy(&jpeg);
+    assert!(jpeg.windows(4).any(|w| w == b"MPF\0") && text.contains("hdrgm:GainMapMax") && text.contains("Item:Semantic=\"GainMap\""));
+    assert!(jpeg.windows(2).filter(|w| *w == [0xFF, 0xD8]).count() >= 2, "two JPEG images");
+    // AVIF: PQ, Rec. 2020 unless Display P3 is chosen
+    let avif = export_photo(&mut s, id, &opts("avif"), 1).unwrap().bytes;
+    let at = avif.windows(8).position(|w| w == b"colrnclx").expect("colr");
+    assert_eq!((avif[at + 9], avif[at + 11]), (9, 16), "BT.2020 primaries, PQ transfer");
+    let p3 = ExportOptions::from_json(&json!({"format": "avif", "longEdge": 160, "hdr": true, "colorSpace": "displayP3"}));
+    let avif = export_photo(&mut s, id, &p3, 1).unwrap().bytes;
+    let at = avif.windows(8).position(|w| w == b"colrnclx").unwrap();
+    assert_eq!(avif[at + 9], 12, "Display P3");
+    // PNG: 16-bit PQ with cICP
+    let png = export_photo(&mut s, id, &opts("png"), 1).unwrap().bytes;
+    let at = png.windows(4).position(|w| w == b"cICP").expect("cICP");
+    assert_eq!(&png[at + 4..at + 8], &[9, 16, 0, 1]);
+    assert_eq!(png[24], 16, "16-bit");
+    // TIFF: float samples brighter than SDR white survive
+    let tiff = export_photo(&mut s, id, &opts("tiff"), 1).unwrap().bytes;
+    let dec = lightcraft_codecs::decode(&tiff, Default::default()).unwrap();
+    let brightest = dec.image.data.iter().map(|c| c[0].max(c[1]).max(c[2])).fold(0.0f32, f32::max);
+    assert!(brightest > 1.2, "{brightest}");
+    // HDR Output off: the same HDR edit exports its SDR view
+    let sdr = export_photo(&mut s, id, &ExportOptions::from_json(&json!({"format": "png", "longEdge": 160})), 1).unwrap().bytes;
+    assert!(!sdr.windows(4).any(|w| w == b"cICP"));
+    // and WebP can't carry HDR: plain file
+    let webp = export_photo(&mut s, id, &opts("webp"), 1).unwrap();
+    assert!(!webp.bytes.is_empty());
+}
+
+#[test]
+fn hdr_option_is_validated_and_round_trips() {
+    assert!(ExportOptions::validate("app.export", &json!({"hdr": true})).is_ok());
+    assert!(ExportOptions::validate("app.export", &json!({"hdr": "yes"})).is_err());
+    let o = ExportOptions::from_json(&json!({"format": "avif", "hdr": true}));
+    assert!(o.hdr);
+    assert_eq!(ExportOptions::from_json(&o.to_json()), o);
+    assert!(!ExportOptions::from_json(&json!({})).hdr);
+}

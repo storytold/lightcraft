@@ -9,6 +9,9 @@
 //! - **Mask overlay** (Masking): the evaluated alpha of one mask, drawn as a colour tint, a colour
 //!   tint on a black-and-white image, the image on black / white, or the alpha as white on black
 //!   ([`MaskView`]). Both renderers hand the same alpha plane (the one the render used) to [`apply`].
+//! - **Visualize HDR range** (HDR edits): tones above SDR white coloured by how many stops above
+//!   it they are ([`crate::hdr::visualize`]); SDR tones keep their colours. It needs the HDR values, so the
+//!   per-pixel stage draws it (CPU; HDR edits don't render on the GPU); [`apply`] has nothing to do.
 
 use std::borrow::Cow;
 
@@ -33,6 +36,8 @@ pub enum Overlay {
     /// The evaluated alpha of mask `id` (a [`lightcraft_develop::Mask`] id), drawn as `view` in
     /// `color` at `opacity` (0..100; the colour views only).
     Mask { id: u16, view: MaskView, color: [u8; 3], opacity: u8 },
+    /// Visualize HDR range (HDR edits only; SDR edits render as without it).
+    HdrRange,
 }
 
 /// How [`Overlay::Mask`] draws the mask.
@@ -114,6 +119,7 @@ impl Overlay {
             Overlay::PointColorRange(i) => (1, i as f64),
             Overlay::Spots(t) => (2, t as f64),
             Overlay::Mask { id, view, color, opacity } => (3, pack_mask(id, view, color, opacity) as f64),
+            Overlay::HdrRange => (4, 0.0),
         }
     }
 
@@ -123,6 +129,7 @@ impl Overlay {
             1 => Overlay::PointColorRange(v as u8),
             2 => Overlay::Spots(v.clamp(0.0, 100.0) as u8),
             3 if v.is_finite() && v >= 0.0 => unpack_mask(v as u64),
+            4 => Overlay::HdrRange,
             _ => Overlay::None,
         }
     }
@@ -134,6 +141,7 @@ impl Overlay {
             Overlay::PointColorRange(i) => 0x1000 + i as u64,
             Overlay::Spots(t) => 0x2000 + t as u64,
             Overlay::Mask { id, view, color, opacity } => 3 << 60 | pack_mask(id, view, color, opacity),
+            Overlay::HdrRange => 0x4000,
         }
     }
 
@@ -162,7 +170,8 @@ pub fn adjust_settings(o: Overlay, s: &mut Cow<'_, DevelopSettings>) {
 /// an [`Overlay::Mask`] shows, at the image's size (see [`Overlay::mask`]).
 pub fn apply(img: &mut Rgba8, o: Overlay, plan: &Plan<'_>, mask: Option<&Plane>) {
     match o {
-        Overlay::None => {}
+        // (drawn by the per-pixel stage, which has the HDR values)
+        Overlay::None | Overlay::HdrRange => {}
         Overlay::PointColorRange(i) => {
             if let Some(p) = plan.settings.point_colors.get(i as usize) {
                 point_color_range(img, &PointK::new(p));

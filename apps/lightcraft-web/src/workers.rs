@@ -127,11 +127,7 @@ async fn handle(scope: &web_sys::DedicatedWorkerGlobalScope, backend: Option<Bac
         Ok((r, stored)) => {
             let rgba = Uint8Array::from(r.image.as_bytes().as_ref());
             let h = &r.histogram;
-            let hist = Uint32Array::new_with_length(4 * 256 + 1);
-            for (i, ch) in [&h.r, &h.g, &h.b, &h.luma].into_iter().enumerate() {
-                hist.subarray((i * 256) as u32, ((i + 1) * 256) as u32).copy_from(ch);
-            }
-            hist.set_index(1024, h.total);
+            let hist = Uint32Array::from(h.to_words().as_slice());
             set(&out, "ok", &true.into());
             set(&out, "w", &(r.image.width as u32).into());
             set(&out, "h", &(r.image.height as u32).into());
@@ -316,12 +312,8 @@ impl Workers {
             let (wd, ht) = (get(&data, "w").as_f64().unwrap_or(0.0) as usize, get(&data, "h").as_f64().unwrap_or(0.0) as usize);
             let rgba = Uint8Array::new(&get(&data, "rgba")).to_vec();
             let hist = Uint32Array::new(&get(&data, "hist")).to_vec();
-            match Rgba8::from_bytes(wd, ht, &rgba) {
-                Some(image) if hist.len() == 1025 => {
-                    let ch = |k: usize| hist[k * 256..(k + 1) * 256].to_vec();
-                    let histogram = Histogram { r: ch(0), g: ch(1), b: ch(2), luma: ch(3), total: hist[1024] };
-                    Ok(Rendered { image, histogram, deep: None })
-                }
+            match (Rgba8::from_bytes(wd, ht, &rgba), Histogram::from_words(&hist)) {
+                (Some(image), Some(histogram)) => Ok(Rendered { image, histogram, deep: None }),
                 _ => Err("render worker: bad image".to_string()),
             }
         } else {

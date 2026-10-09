@@ -10,7 +10,7 @@
 //!   decoding pixels (import probes).
 //! - [`decode_thumbnail`] is the fast path for grid thumbnails (EXIF thumbnail or DCT-scaled decode).
 //! - [`encode`] writes JPEG, PNG, TIFF, lossless WebP and (native, feature `avif`) AVIF, embedding
-//!   ICC/EXIF/XMP. [`icc::write_matrix_trc`] builds profiles for export.
+//!   ICC/EXIF/XMP; [`hdr`] writes HDR files (PQ AVIF / PNG, JPEG with a gain map). [`icc::write_matrix_trc`] builds profiles for export.
 //!
 //! No decoder panics on malformed input (property-tested).
 #![forbid(unsafe_code)]
@@ -19,6 +19,7 @@
 mod convert;
 pub mod encode;
 pub mod exif;
+pub mod hdr;
 mod heif;
 pub mod icc;
 mod jpeg;

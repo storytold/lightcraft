@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
+# upstream crates carried with a patch (see vendor/README.md): not workspace members
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.4.0"
@@ -68,6 +70,9 @@ moxcms = { version = "0.9", default-features = false, features = ["lut"] }
 jxl-oxide = { version = "0.12", default-features = false }
 zune-jpegxl = { version = "0.5", default-features = false, features = ["std"] } # MIT/Apache-2.0/Zlib lossless JXL encoder (test fixtures only)
 ravif = { version = "0.13", default-features = false, features = ["threading"] } # no "asm": it needs nasm (non-Rust)
+# HDR AVIF (PQ / BT.2020 tagging, which ravif hard-codes to sRGB): the encoder and muxer ravif uses
+rav1e = { version = "0.8.1", default-features = false, features = ["threading"] } # no "asm" (nasm)
+avif-serialize = "0.8.6"
 
 # gpu (crates/gpu; native backends only, no GL: everything stays pure Rust)
 # SAM 3 inference (lightcraft-segment). 0.9.2: later releases pull `tokenizers` with the
@@ -147,3 +152,8 @@ jpeg-decoder = { opt-level = 3 }
 jpeg-encoder = { opt-level = 3 }
 png = { opt-level = 3 }
 miniz_oxide = { opt-level = 3 }
+
+# egui-wgpu with HDR window support (an Rgba16Float / scRGB surface when asked and offered);
+# see vendor/README.md
+[patch.crates-io]
+egui-wgpu = { path = "vendor/egui-wgpu" }

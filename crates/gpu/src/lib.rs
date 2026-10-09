@@ -336,8 +336,9 @@ pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
         // sections switched off with their eye render as if at their defaults (issue #316)
         let effective = s.effective();
         let s: &DevelopSettings = &effective;
-        // the kernel writes 8-bit output: high-bit-depth exports (and soft proofs) render on the CPU
-        if !enabled() || req.depth != lightcraft_pipeline::OutputDepth::U8 || req.proof.is_some() {
+        // the kernel writes 8-bit SDR output: high-bit-depth exports, soft proofs and HDR edits
+        // render on the CPU
+        if !enabled() || req.depth != lightcraft_pipeline::OutputDepth::U8 || req.proof.is_some() || s.light.hdr {
             return None;
         }
         let gpu = device()?;

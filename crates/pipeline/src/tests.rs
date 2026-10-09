@@ -435,3 +435,115 @@ fn custom_white_balance_redevelops_in_camera_space() {
     s.wb.mode = WbMode::AsShot;
     assert!(wb_matrix_for(&info, &s).is_none());
 }
+
+#[test]
+fn hdr_edit_keeps_highlights_above_sdr_white() {
+    // a raw-like ramp from deep shadow to 6 stops above grey's white point
+    let src = Rgb32f::from_fn(128, 8, |x, _| [0.001 * 1.09f32.powi(x as i32); 3]);
+    let info = SourceInfo { raw: true, ..SourceInfo::default() };
+    let req = RenderRequest::fit(128, 8);
+    let sdr = render(&src, &info, &DevelopSettings::default(), &req);
+    assert!(sdr.histogram.hdr.is_none());
+    let mut s = DevelopSettings::default();
+    s.light.hdr = true;
+    let hdr = render(&src, &info, &s, &req);
+    let bins = hdr.histogram.hdr.expect("an HDR edit has an HDR histogram");
+    assert!(hdr.histogram.above_sdr() > 0.1, "{}", hdr.histogram.above_sdr());
+    assert!(hdr.histogram.luma[bins.from..].iter().any(|&n| n > 0));
+    // shadows render alike; the SDR view stays monotone along the ramp
+    assert!((sdr.image.get(4, 4)[1] as i32 - hdr.image.get(4, 4)[1] as i32).abs() <= 3);
+    let row: Vec<u8> = (0..128).map(|x| hdr.image.get(x, 4)[1]).collect();
+    assert!(row.windows(2).all(|w| w[1] as i32 + 1 >= w[0] as i32), "{row:?}");
+    // more exposure moves more of the image into the HDR range
+    s.light.exposure = 1.5;
+    let brighter = render(&src, &info, &s, &req);
+    assert!(brighter.histogram.above_sdr() > hdr.histogram.above_sdr());
+    // exports match the preview: the deep render is the same SDR view
+    let deep = render(&src, &info, &s, &RenderRequest { depth: crate::OutputDepth::U16, ..req });
+    let (a, b) = (deep.image.get(100, 4), brighter.image.get(100, 4));
+    assert!((a[1] as i32 - b[1] as i32).abs() <= 1, "{a:?} vs {b:?}");
+}
+
+#[test]
+fn hdr_edit_of_a_rendered_source_survives_extreme_settings() {
+    let src = scene();
+    let mut s = DevelopSettings::default();
+    s.light.hdr = true;
+    for c in controls::CONTROLS.iter().filter(|c| c.id.starts_with("light.") || c.id.starts_with("effects.") || c.id.starts_with("vignette.")) {
+        for v in [c.min, c.max] {
+            let mut s = s.clone();
+            controls::set(&mut s, c.id, v);
+            let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(64, 64));
+            assert!(r.histogram.hdr.is_some() && r.histogram.total > 0, "{}", c.id);
+        }
+    }
+}
+
+#[test]
+fn f32_hdr_renders_keep_hdr_values_only_for_hdr_edits() {
+    let src = Rgb32f::from_fn(128, 8, |x, _| [0.001 * 1.09f32.powi(x as i32); 3]);
+    let info = SourceInfo { raw: true, ..SourceInfo::default() };
+    let req = RenderRequest { depth: crate::OutputDepth::F32Hdr, ..RenderRequest::fit(128, 8) };
+    let floats = |r: &crate::Rendered| match &r.deep.as_ref().unwrap().samples {
+        crate::DeepSamples::F32(v) => v.clone(),
+        _ => panic!("float samples"),
+    };
+    // an SDR edit: exactly the linear float render
+    let sdr = render(&src, &info, &DevelopSettings::default(), &req);
+    assert!(!sdr.deep.as_ref().unwrap().hdr);
+    let lin = render(&src, &info, &DevelopSettings::default(), &RenderRequest { depth: crate::OutputDepth::F32Linear, ..req });
+    assert_eq!(floats(&sdr), floats(&lin));
+    // an HDR edit: values above SDR white, bounded by the peak; the 8-bit image is the SDR view
+    let mut s = DevelopSettings::default();
+    s.light.hdr = true;
+    let hdr = render(&src, &info, &s, &req);
+    assert!(hdr.deep.as_ref().unwrap().hdr);
+    let v = floats(&hdr);
+    let top = v.iter().copied().fold(0.0f32, f32::max);
+    assert!(top > 2.0 && top <= crate::hdr::HDR_PEAK, "{top}");
+    let preview = render(&src, &info, &s, &RenderRequest::fit(128, 8));
+    let (a, b) = (hdr.image.get(120, 4), preview.image.get(120, 4));
+    assert!((a[1] as i32 - b[1] as i32).abs() <= 1, "{a:?} vs {b:?}");
+    // and its histogram is the HDR one, as the preview's
+    assert!(hdr.histogram.hdr.is_some() && hdr.histogram.above_sdr() > 0.0);
+    assert!((hdr.histogram.above_sdr() - preview.histogram.above_sdr()).abs() < 0.05);
+}
+
+#[test]
+fn hdr_headroom_limit_caps_the_hdr_values() {
+    let src = Rgb32f::from_fn(128, 8, |x, _| [0.001 * 1.09f32.powi(x as i32); 3]);
+    let info = SourceInfo { raw: true, ..SourceInfo::default() };
+    let req = RenderRequest { depth: crate::OutputDepth::F32Hdr, ..RenderRequest::fit(128, 8) };
+    let top = |hdr_max: f64| {
+        let mut s = DevelopSettings::default();
+        (s.light.hdr, s.light.hdr_max) = (true, hdr_max);
+        match &render(&src, &info, &s, &req).deep.unwrap().samples {
+            crate::DeepSamples::F32(v) => v.iter().copied().fold(0.0f32, f32::max),
+            _ => panic!("float samples"),
+        }
+    };
+    let (two, four) = (top(2.0), top(4.0));
+    assert!(two > 2.0 && two <= 4.0 + 1e-4, "2 stops: {two}");
+    assert!(four > two, "{four} vs {two}");
+}
+
+#[test]
+fn visualize_hdr_range_colours_only_hdr_tones() {
+    let src = Rgb32f::from_fn(128, 8, |x, _| [0.001 * 1.09f32.powi(x as i32); 3]);
+    let info = SourceInfo { raw: true, ..SourceInfo::default() };
+    let viz = RenderRequest { overlay: crate::Overlay::HdrRange, ..RenderRequest::fit(128, 8) };
+    let mut s = DevelopSettings::default();
+    s.light.hdr = true;
+    let r = render(&src, &info, &s, &viz);
+    let normal = render(&src, &info, &s, &RenderRequest::fit(128, 8));
+    let (dark, bright) = (r.image.get(10, 4), r.image.get(125, 4));
+    assert_eq!(dark, normal.image.get(10, 4), "SDR tones render as without the overlay");
+    let spread = bright[..3].iter().max().unwrap() - bright[..3].iter().min().unwrap();
+    assert!(spread > 60, "HDR tones coloured: {bright:?}");
+    // the histogram still describes the photo, not the overlay
+    assert_eq!(r.histogram, normal.histogram);
+    // an SDR edit has no HDR range: the overlay changes nothing
+    let plain = DevelopSettings::default();
+    assert_eq!(render(&src, &info, &plain, &viz).image.data, render(&src, &info, &plain, &RenderRequest::fit(128, 8)).image.data);
+    assert_eq!(crate::Overlay::from_parts(crate::Overlay::HdrRange.to_parts().0, 0.0), crate::Overlay::HdrRange);
+}

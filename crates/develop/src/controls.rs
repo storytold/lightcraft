@@ -140,6 +140,7 @@ controls! {
     "light.shadows" => light.shadows, "Shadows", Light, -100, 100, 0, 1, 0, Centered;
     "light.whites" => light.whites, "Whites", Light, -100, 100, 0, 1, 0, Centered;
     "light.blacks" => light.blacks, "Blacks", Light, -100, 100, 0, 1, 0, Centered;
+    "light.hdrMax" => light.hdr_max, "HDR Headroom", Light, 1, 4, 4, 0.1, 1, Plain;
     "curve.highlights" => curve.highlights, "Highlights", Curve, -100, 100, 0, 1, 0, Centered;
     "curve.lights" => curve.lights, "Lights", Curve, -100, 100, 0, 1, 0, Centered;
     "curve.darks" => curve.darks, "Darks", Curve, -100, 100, 0, 1, 0, Centered;

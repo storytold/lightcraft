@@ -168,7 +168,7 @@ impl Default for WhiteBalance {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Light {
     pub exposure: f64,
@@ -177,6 +177,18 @@ pub struct Light {
     pub shadows: f64,
     pub whites: f64,
     pub blacks: f64,
+    /// HDR editing: tones may extend above SDR white (up to the pipeline's HDR headroom) instead
+    /// of rolling off at it. Lightroom's Light panel "HDR" button (`crs:HDREditMode`).
+    pub hdr: bool,
+    /// HDR headroom limit: how many stops above SDR white an HDR edit may reach (1..4; the
+    /// tone map aims its white point at this peak, so highlights are compressed below it).
+    pub hdr_max: f64,
+}
+
+impl Default for Light {
+    fn default() -> Self {
+        Self { exposure: 0.0, contrast: 0.0, highlights: 0.0, shadows: 0.0, whites: 0.0, blacks: 0.0, hdr: false, hdr_max: 4.0 }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

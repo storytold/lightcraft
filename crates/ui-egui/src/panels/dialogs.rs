@@ -533,7 +533,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         opts.bit_depth = Some(bd);
                     }
                     if !rendered {
-                    } else if opts.format == F::Avif {
+                    } else if opts.format == F::Avif && !opts.hdr {
                         ui.label(egui::RichText::new(crate::i18n::tr("Color space: sRGB (AVIF)")).color(t.text_dim));
                     } else {
                         use lightcraft_engine::export::OutputSpace as C;
@@ -550,6 +550,20 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             ],
                             &mut opts.color_space,
                         );
+                    }
+                    if rendered && lightcraft_engine::export::ExportOptions::hdr_capable(opts.format) {
+                        ui.checkbox(&mut opts.hdr, crate::i18n::tr("HDR Output")).on_hover_text(crate::i18n::tr(
+                            "Photos edited in HDR are written as HDR files; other photos export as usual",
+                        ));
+                        if opts.hdr {
+                            let note = match opts.format {
+                                F::Jpeg => "HDR edits: an SDR JPEG with a gain map (HDR displays show the highlights, others the SDR image).",
+                                F::Avif => "HDR edits: 10-bit PQ AVIF in Rec.2020 (P3 when chosen).",
+                                F::Png => "HDR edits: 16-bit PQ PNG in Rec.2020 (P3 when chosen).",
+                                _ => "HDR edits: 32-bit float, linear; values above 1 are brighter than SDR white.",
+                            };
+                            ui.label(egui::RichText::new(crate::i18n::tr(note)).color(t.text_dim));
+                        }
                     }
                     if matches!(opts.format, F::Jpeg | F::Avif) {
                         let mut q = opts.quality as f64;

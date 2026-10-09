@@ -380,6 +380,14 @@ fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         format!("GPU: {}", gpu::adapter_name().unwrap_or_else(|| "starting…".into()))
     };
     hint(ui, t, &status);
+    check(ui, "settings.hdrDisplay", &mut app.ui.settings.hdr_display, "Show HDR photos in HDR on HDR displays");
+    let hdr_status = match (app.hdr_presenter.is_some(), app.ui.settings.hdr_display) {
+        (true, true) => crate::i18n::tr("HDR display active: HDR edits show their highlights brighter than SDR white."),
+        (true, false) => crate::i18n::tr("Turns off after a restart."),
+        (false, true) => crate::i18n::tr("This window isn't HDR (no HDR display or system support, or turned on since the start: restart)."),
+        (false, false) => crate::i18n::tr("Applies after a restart."),
+    };
+    hint(ui, t, hdr_status);
     row(ui, t, crate::i18n::tr("Preview size"), |ui| {
         let opts: Vec<(u32, String)> =
             PREVIEW_LIMITS.iter().map(|e| (*e, if *e == 0 { crate::i18n::tr("Automatic").to_string() } else { format!("{e} px") })).collect();

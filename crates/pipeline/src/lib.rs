@@ -10,6 +10,7 @@
 //! 2. scene-linear — white balance, exposure, dehaze, local tone (highlights/shadows), texture,
 //!    clarity, local adjustments (masks)
 //! 3. tone map — contrast / whites / blacks filmic curve on luminance, highlight desaturation
+//!    (HDR edits keep tones above SDR white, see [`hdr`])
 //! 4. colour — vibrance, saturation, colour mixer, colour grading, B&W (OkLCh)
 //! 5. display — gamut map to the output space (sRGB unless [`RenderRequest::space`] says otherwise), encode, tone curves (parametric + point), vignette, grain
 //!
@@ -29,6 +30,7 @@ pub mod cull;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
+pub mod hdr;
 pub mod local;
 pub mod lut;
 pub mod masks;
@@ -512,19 +514,25 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     if req.depth != OutputDepth::U8 {
         let deep = finish::finish_deep(&prep, s, frame, info, req.space, req.depth, req.proof);
         let image = deep.to_rgba8();
-        let histogram = Histogram::of_srgb8(&image);
+        // HDR renders (an HDR display's loupe): the histogram of the HDR values
+        let histogram = match &deep.samples {
+            DeepSamples::F32(v) if deep.hdr => Histogram::of_hdr(v.as_chunks::<3>().0, hdr::HDR_STOPS),
+            _ => Histogram::of_srgb8(&image),
+        };
         lap("finish (deep)", &mut t);
         return Rendered { image, histogram, deep: Some(deep) };
     }
-    let image = finish::finish(&prep, s, frame, info, req.space, req.proof);
+    let (image, hdr_histogram) = finish::finish(&prep, s, frame, info, req.space, req.proof, req.overlay == Overlay::HdrRange);
     lap("finish", &mut t);
     let cut = |i: &Rgba8| match plan.keep {
         Some(k) => i.crop(k.x, k.y, k.w, k.h),
         None => i.clone(),
     };
-    let histogram = match plan.keep {
-        Some(_) => Histogram::of_srgb8(&cut(&image)),
-        None => Histogram::of_srgb8(&image),
+    // (an HDR histogram of a windowed render includes its margin: close enough for a zoomed view)
+    let histogram = match (hdr_histogram, plan.keep) {
+        (Some(h), _) => h,
+        (None, Some(_)) => Histogram::of_srgb8(&cut(&image)),
+        (None, None) => Histogram::of_srgb8(&image),
     };
     lap("histogram", &mut t);
     let mut image = image;
