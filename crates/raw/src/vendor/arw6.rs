@@ -396,12 +396,12 @@ fn component(c: usize, streams: &[Vec<HalfLines>], layouts: &[HalfRows], vs: usi
     let grp = |g: usize, n: usize| streams.get(3 * g + c).and_then(|s| s.get(n)).ok_or_else(|| corrupt("missing half"));
     for (n, r) in layouts.iter().enumerate() {
         let (h0, l0) = grp(0, n)?;
-        // LL3: the nibble must be 0 (Phase 0: never seen otherwise); lines are DPCM from 2048 (spec *Container*).
+        // LL3: the nibble must be 0 (Phase 0: never seen otherwise); lines are DPCM from 2048 for the green mean (c = 0) and from 0 for the base-free chroma planes (spec *Container*).
         if h0.qi[0] != 0 {
             return Err(unsupported("LL3 quantiser index"));
         }
         for (&row, line) in r.l3.iter().zip(l0) {
-            let mut acc = 2048i32;
+            let mut acc = if c == 0 { 2048i32 } else { 0 };
             put(&mut b.ll3, row, line, |d| {
                 acc = acc.saturating_add(d);
                 acc
@@ -897,6 +897,40 @@ mod tests {
         let strip = strip_of(&arw6_file(&[(0, 0, 64, 48, tile)], 64, 48)).to_vec();
         assert!(decode(&strip, 64, 48, crate::Mode::Header).is_ok());
         assert!(matches!(decode(&strip, 64, 48, crate::Mode::Full), Err(RawError::Corrupt(_))));
+    }
+
+    #[test]
+    fn chroma_planes_are_base_free() {
+        let (w2, h2) = (32, 24);
+        let flat = |v: i32| Plane { width: w2, height: h2, data: vec![v; w2 * h2] };
+        let (m, _, _, res) = planes(w2, h2, 7);
+        for (c1, c2) in [(0, 0), (5, -3)] {
+            let t = TileSpec { s: 0, qi: Qis::ZERO, m: m.clone(), c1: flat(c1), c2: flat(c2), res: res.clone() };
+            let tile = encode_tile(&t);
+            let p = decode_tile_planes(&tile, 64, 48).unwrap();
+            assert!(p.c1.data.iter().all(|&v| v == c1) && p.c2.data.iter().all(|&v| v == c2));
+            if c1 == 0 {
+                // zero chroma: R = B = (G1 + G2) >> 1 at every cell (no 2048 base, no saturation)
+                let out = decode_tile(&tile, 64, 48).unwrap();
+                for j in 0..h2 {
+                    for x in 0..w2 {
+                        let at = |dy: usize, dx: usize| out[(2 * j + dy) * 64 + 2 * x + dx];
+                        assert_eq!(at(0, 0), at(1, 1), "R == B at ({x},{j})");
+                        assert!(at(0, 0) < 39002);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn data_derived_white_is_not_doubled() {
+        let (tile, _) = one_tile(64, 48, 0, Qis::ZERO);
+        let file = arw6_file_no_white(&[(0, 0, 64, 48, tile)], 64, 48);
+        let img = crate::decode(&file).unwrap();
+        let crate::RawData::U16(ref d) = img.data else { panic!() };
+        assert_eq!(img.white, vec![super::super::white_from_data(d, 16)]);
+        assert!(img.white[0] <= 65535.0);
     }
 
     #[test]

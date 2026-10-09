@@ -312,7 +312,7 @@ pub(crate) fn encode_tile(t: &TileSpec) -> Vec<u8> {
             let dpcm = {
                 let mut ll = quantised_rows(&b.ll3, &low3, 0);
                 for l in &mut ll {
-                    let mut prev = 2048;
+                    let mut prev = if c == 0 { 2048 } else { 0 };
                     for v in l.iter_mut() {
                         (*v, prev) = (*v - prev, *v);
                     }
@@ -378,6 +378,15 @@ pub(crate) fn encode_tile(t: &TileSpec) -> Vec<u8> {
 /// A little-endian ARW6 TIFF: IFD0 (Sony, ILCE-7RM6) + a SubIFD with the strip = tile table, zero padding to 512,
 /// then the tiles `(x, y, w, h, bytes)` back to back.
 pub(crate) fn arw6_file(tiles: &[(usize, usize, usize, usize, Vec<u8>)], width: usize, height: usize) -> Vec<u8> {
+    arw6_file_with(tiles, width, height, true)
+}
+
+/// [`arw6_file`] without the WhiteLevel tag.
+pub(crate) fn arw6_file_no_white(tiles: &[(usize, usize, usize, usize, Vec<u8>)], width: usize, height: usize) -> Vec<u8> {
+    arw6_file_with(tiles, width, height, false)
+}
+
+fn arw6_file_with(tiles: &[(usize, usize, usize, usize, Vec<u8>)], width: usize, height: usize, white: bool) -> Vec<u8> {
     let mut strip = (tiles.len() as u32).to_le_bytes().to_vec();
     strip.extend([0; 4]);
     let mut offset = 512u64;
@@ -402,7 +411,9 @@ pub(crate) fn arw6_file(tiles: &[(usize, usize, usize, usize, Vec<u8>)], width: 
     raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
     raw.set(t::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 1, 2]));
     raw.set(0x7310, Value::Short(vec![512; 4]));
-    raw.set(t::WHITE_LEVEL, Value::Long(vec![15360]));
+    if white {
+        raw.set(t::WHITE_LEVEL, Value::Long(vec![15360]));
+    }
     raw.set_image(ImageData::Strips { rows_per_strip: height as u32, strips: vec![strip] });
     let mut ifd0 = IfdBuilder::new();
     ifd0.set(t::MAKE, Value::Ascii("SONY".into()));
@@ -413,7 +424,7 @@ pub(crate) fn arw6_file(tiles: &[(usize, usize, usize, usize, Vec<u8>)], width: 
 }
 
 /// A tile whose bands are random quantised integers `q` (level 1 wider), `v = dequant(q, qi)`, planes by
-/// `reconstruct3` (so `quantize` in the encoder is exact on them); LL3 is random around 2048, the residual
+/// `reconstruct3` (so `quantize` in the encoder is exact on them); LL3 is random around 2048 (green mean) or 0 (chroma), the residual
 /// `dequant(q, qi.res)`.
 pub(crate) fn one_tile_quantised(w: usize, h: usize, s: u8, qi: Qis) -> (Vec<u8>, TileSpec) {
     use crate::llvc::{dequant, reconstruct3};
@@ -425,7 +436,13 @@ pub(crate) fn one_tile_quantised(w: usize, h: usize, s: u8, qi: Qis) -> (Vec<u8>
         x ^= x >> 7;
         x ^= x << 17;
         let v = (x % (2 * span as u64 + 1)) as i32 - span;
-        if centre == 0 { dequant(v, q) } else { centre + v }
+        if centre == i32::MIN {
+            v
+        } else if centre == 0 {
+            dequant(v, q)
+        } else {
+            centre + v
+        }
     };
     let mut plane = |wd: usize, ht: usize, span: i32, centre: i32, q: u32| Plane {
         width: wd,
@@ -440,7 +457,7 @@ pub(crate) fn one_tile_quantised(w: usize, h: usize, s: u8, qi: Qis) -> (Vec<u8>
         let (w1, w2b, w3) = (w2 / 2, w2 / 4, w2 / 8);
         let (a, b, d) = (qi.l1[c], qi.l2[c], qi.l3[c]);
         let bands = Bands3 {
-            ll3: plane(w3, n3l, 60, 2048, 0),
+            ll3: plane(w3, n3l, 60, if c == 0 { 2048 } else { i32::MIN }, 0),
             hl3: plane(w3, n3l, 7, 0, d[0]),
             lh3: plane(w3, n3h, 7, 0, d[1]),
             hh3: plane(w3, n3h, 7, 0, d[2]),

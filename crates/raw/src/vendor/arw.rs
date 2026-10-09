@@ -517,15 +517,14 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         }
         _ => BlackLevel::uniform(sr2_black(bytes, ifd0, tiff.order).filter(|_| scale_bits >= 14).unwrap_or(default_black)),
     };
+    // ARW6 samples are in 2 x 14-bit units, so the file's 14-bit levels double (a data-derived white is already in them)
+    let unit = if info.compression == 32766 { 2.0 } else { 1.0 };
     let white = if linear_rgb {
         16383.0
     } else {
-        raw.f64(t::WHITE_LEVEL).map(|v| v as f32).filter(|v| *v > 0.0).unwrap_or_else(|| super::white_from_data(samples, scale_bits))
+        raw.f64(t::WHITE_LEVEL).map(|v| v as f32 * unit).filter(|v| *v > 0.0).unwrap_or_else(|| super::white_from_data(samples, scale_bits))
     };
-    // ARW6 samples are in 2 x 14-bit units, so the file's 14-bit levels double
-    let unit = if info.compression == 32766 { 2.0 } else { 1.0 };
     let black = BlackLevel { values: black.values.iter().map(|v| v * unit).collect(), ..black };
-    let white = white * unit;
     let model = ifd0.string(t::MODEL).unwrap_or_default();
     let mn = tiff
         .exif()
