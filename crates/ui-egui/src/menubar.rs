@@ -784,10 +784,11 @@ fn nodes_ui(ui: &mut egui::Ui, nodes: &[MenuNode], mac: bool, clicked: &mut Opti
         // below the fold on compact tablets and portrait windows.
         ui.small(egui::RichText::new("↕ Swipe to scroll").color(crate::theme::Tokens::get(ui.ctx()).text_dim));
         let screen_height = ui.ctx().content_rect().height();
-        let max_height = (screen_height - 96.0).max(180.0);
+        let max_height = (screen_height * 0.65 - 32.0).max(40.0);
         egui::ScrollArea::vertical()
-            .id_salt(("android-menu", nodes.as_ptr() as usize))
+            .id_salt("android-menu-scroll")
             .max_height(max_height)
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
             .auto_shrink([false, false])
             .show(ui, |ui| nodes_ui_inner(ui, nodes, mac, clicked));
     }
