@@ -57,7 +57,9 @@ workflow, and bump it (in `release.yml`, five jobs, and `freebsd.yml`) whenever 
 shipped language needs: a stale pin still builds, it just ships tofu (issue #319: v0.4.0 pinned a revision
 from before Noto Sans CJK SC, so Simplified Chinese had no glyphs). Before a release, check the pin against
 craft-fonts' `fonts/manifest.txt` and run `CRAFT_FONTS_DIR=../craft-fonts cargo test -p lightcraft-ui-egui i18n`,
-whose glyph-coverage test fails when a language's characters have no face.
+whose glyph-coverage test checks the characters in available faces. `CRAFT_FONTS_REQUIRED=1` now also makes
+the native build fail if the pinned manifest lacks Noto Sans CJK SC Regular (`Hans`) or BIZ UDPGothic Regular;
+the web build requires BIZ UDPGothic Regular and packages Noto Sans CJK SC as a separate asset.
 
 ## Signing credentials
 

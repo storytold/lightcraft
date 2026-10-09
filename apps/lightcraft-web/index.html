@@ -24,13 +24,21 @@
   <script type="module">
     import init, { start, command } from "./lightcraft_web.js";
     (async () => {
+      // The Chinese font is a separate file: embedding it would exceed the host's WASM size limit.
+      // Font-free development builds can still run, with the same missing-glyph warning as before.
+      const chineseFont = fetch("./lightcraft_zh_hans.otf")
+        .then(async response => response.ok ? new Uint8Array(await response.arrayBuffer()) : new Uint8Array())
+        .catch(() => new Uint8Array());
       // Compile once; the render workers (worker.js) instantiate the same compiled module.
-      const module = await WebAssembly.compileStreaming(fetch("./lightcraft_web_bg.wasm"));
+      const [module, font] = await Promise.all([
+        WebAssembly.compileStreaming(fetch("./lightcraft_web_bg.wasm")),
+        chineseFont,
+      ]);
       globalThis.lightcraftModule = module;
       await init({ module_or_path: module });
       // automation: `await lightcraft.command("library.info", "{}")` → JSON text
       globalThis.lightcraft = { command };
-      start();
+      start(font);
     })().catch((e) => {
       console.error(e);
       const el = document.getElementById("lightcraft_loading");

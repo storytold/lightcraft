@@ -756,7 +756,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         _ => {
                             ui.label(egui::RichText::new("LightCraft").font(t.semibold(20.0)).color(t.text));
                             ui.label(crate::i18n::tr_format!("Version {} — a clean-room, pure-Rust photo library and raw developer.", env!("CARGO_PKG_VERSION")));
-                            ui.label(crate::i18n::tr_format!("MIT OR Apache-2.0. Fonts: {} (OFL). Icons: original.", crate::theme::font_credits()));
+                            ui.label(crate::i18n::tr_format!(
+                                "MIT OR Apache-2.0. Fonts: {} (OFL). Icons: original.",
+                                crate::theme::font_credits(app.chinese_font.is_some())
+                            ));
                             ui.add_space(10.0);
                             let discord = egui::Button::new(egui::RichText::new(crate::i18n::tr("Join the ArtCraft Discord")).font(t.semibold(15.0)).color(egui::Color32::WHITE))
                                 .fill(t.accent)

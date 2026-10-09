@@ -200,6 +200,8 @@ pub struct LightcraftApp {
     /// The language the installed fonts were built for: the CJK fallback order follows the UI
     /// language's script, so switching language reinstalls them.
     font_language: i18n::Locale,
+    /// Browser font loaded separately from WASM so the module stays below its host's size limit.
+    chinese_font: Option<std::sync::Arc<egui::FontData>>,
     fonts_ready: bool,
     last_time: f64,
     /// Rect of the photo canvas and the displayed image (screen points) from the last frame.
@@ -285,6 +287,7 @@ impl LightcraftApp {
             synthetic_mods_release: false,
             styled: false,
             font_language: i18n::Locale::En,
+            chinese_font: None,
             fonts_ready: false,
             last_time: 0.0,
             canvas_rect: None,
@@ -313,6 +316,14 @@ impl LightcraftApp {
             memory_applied: None,
             library_problem: None,
         }
+    }
+
+    /// Supply the browser's separately downloaded Simplified Chinese font before the first frame.
+    pub fn with_chinese_font(mut self, bytes: Vec<u8>) -> Self {
+        if !bytes.is_empty() {
+            self.chinese_font = Some(std::sync::Arc::new(egui::FontData::from_owned(bytes)));
+        }
+        self
     }
 
     pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
@@ -664,7 +675,7 @@ impl LightcraftApp {
 
     fn logic_inner(&mut self, ctx: &egui::Context) {
         if !self.styled {
-            theme::install_fonts(ctx);
+            theme::install_fonts_with_chinese(ctx, self.chinese_font.as_ref());
             theme::apply(ctx);
             // File → Add from Device lists cards scanned in the background: show hot-plugs
             let repaint = ctx.clone();
@@ -678,7 +689,7 @@ impl LightcraftApp {
         } else if self.font_language != self.ui.language {
             // Shared Han characters take the active language's forms (Japanese faces for 日本語,
             // the Simplified Chinese face for 简体中文): rebuild the fallback order.
-            theme::install_fonts(ctx);
+            theme::install_fonts_with_chinese(ctx, self.chinese_font.as_ref());
             self.font_language = self.ui.language;
         } else {
             self.fonts_ready = true;
