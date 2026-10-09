@@ -1,4 +1,4 @@
-//! Sony ARW6 ("Compressed RAW 2" / HQ, TIFF Compression 32766): container parsing.
+//! Sony ARW6 ("Compressed RAW 2" / HQ, TIFF Compression 32766): container parsing, geometry, colour and decode.
 //!
 //! Clean-room. The layout comes from SMPTE RDD 34 (Picture_info in word 0) and from Phase 0 black-box
 //! inspection of real ILCE-7RM6 files (tile table, group size words, stream headers and index entries), each rule
@@ -259,6 +259,8 @@ pub(crate) fn first_half_shift(tile: &[u8], g4: &StreamRef, width2: usize) -> Re
         vld_decode_line(&mut bits, total, width2)?;
         lines += 1;
     }
+    // The stop rule is sound because a residual line costs at least 8 bits: an all-zero line of width w costs
+    // 1 + ceil(log2(ceil(w/4) + 1)) bits, >= 8 for w >= 253, and real plane widths are >= 2496.
     match lines.checked_sub(2) {
         Some(s @ 0..=5) => Ok(s as u8),
         _ => Err(unsupported("first-half row count outside 2..=7")),
@@ -465,7 +467,7 @@ pub(crate) fn curve(code12: i32) -> u16 {
 /// Colour reconstruction (spec *Colour reconstruction*, checked against Phase 0 oracle output): the planes give a
 /// `(2 W2) x (2 H2)` mosaic with R at (0,0), G1 (0,1), G2 (1,0), B (1,1) of every 2x2 cell, each value passed through
 /// [`curve`]. G1 comes from the green mean minus a residual average, G2 is predicted from the (unclipped) G1 plus the
-/// residual, and R/B are chroma plus the mean of the greens clipped to 12 bits.
+/// residual, and R/B are chroma plus the mean of the greens clamped to 0..=4095.
 pub(crate) fn colour(p: &TilePlanes) -> Result<Vec<u16>> {
     let (w2, h2) = (p.m.width, p.m.height);
     let len = w2.checked_mul(h2).ok_or_else(|| corrupt("tile size"))?;
@@ -493,7 +495,7 @@ pub(crate) fn colour(p: &TilePlanes) -> Result<Vec<u16>> {
         for x in 0..w2 {
             let xp = x.saturating_sub(1);
             let g2 = ((g(j, xp) + g(j, x) + g(jn, xp) + g(jn, x)) >> 2) + at(&p.res, j, x);
-            let mean = (g(j, x).min(4095) + g2.min(4095)) >> 1;
+            let mean = (g(j, x).clamp(0, 4095) + g2.clamp(0, 4095)) >> 1;
             let r = 2 * at(&p.c1, j, x) + mean;
             let b = 2 * at(&p.c2, j, x) + mean;
             let cells = [(0, r), (1, g(j, x)), (mw, g2), (mw + 1, b)];
@@ -821,8 +823,8 @@ mod tests {
             let (mut tile, _) = one_tile(64, 48, 3, Qis::REAL);
             for (i, b) in flips { let i = i % tile.len(); tile[i] ^= b; }
             let n = cut % (tile.len() + 1);
-            let _ = decode_tile_planes(&tile[..n], 64, 48);
-            let _ = decode_tile_planes(&tile, 64, 48);
+            let _ = decode_tile(&tile[..n], 64, 48);
+            let _ = decode_tile(&tile, 64, 48);
         }
     }
 
@@ -877,6 +879,25 @@ mod tests {
     }
 
     #[test]
+    fn colour_clamps_negative_greens() {
+        let p = TilePlanes {
+            m: plane(2, &[10, 2048, 2048, 2048]),
+            res: plane(2, &[100, 100, 0, 0]),
+            c1: plane(2, &[7, 0, 0, 0]),
+            c2: plane(2, &[-3, 0, 0, 0]),
+        };
+        let g1_00 = 10 - ((400 + 4) >> 3); // -40
+        let g1_10 = 2048 - ((200 + 4) >> 3);
+        let g2_00 = ((2 * g1_00 + 2 * g1_10) >> 2) + 100;
+        assert!(g1_00 < 0);
+        let mean = g2_00.clamp(0, 4095) >> 1; // G1 contributes 0
+        let out = colour(&p).unwrap();
+        assert_eq!(out[0], curve(14 + mean));
+        assert_eq!(out[1], curve(0)); // G1 itself clamps
+        assert_eq!(out[2 * 2 + 1], curve(-6 + mean)); // B at (0,0): row 1, col 1 of a 4-wide mosaic
+    }
+
+    #[test]
     fn decode_header_and_full_and_truncations() {
         let (tile, _) = one_tile(64, 48, 3, Qis::REAL);
         let file = arw6_file(&[(0, 0, 64, 48, tile)], 64, 48);
@@ -928,13 +949,26 @@ mod tests {
     }
 
     #[test]
-    fn data_derived_white_is_not_doubled() {
+    fn arw6_white_without_tag_is_32766() {
         let (tile, _) = one_tile(64, 48, 0, Qis::ZERO);
         let file = arw6_file_no_white(&[(0, 0, 64, 48, tile)], 64, 48);
         let img = crate::decode(&file).unwrap();
-        let crate::RawData::U16(ref d) = img.data else { panic!() };
-        assert_eq!(img.white, vec![super::super::white_from_data(d, 16)]);
-        assert!(img.white[0] <= 65535.0);
+        assert_eq!(img.white, [32766.0]);
+    }
+
+    #[test]
+    fn twelve_bit_mode_is_unsupported() {
+        let (tile, _) = one_tile(64, 48, 0, Qis::ZERO);
+        let file = arw6_file_bits(&[(0, 0, 64, 48, tile)], 64, 48, 12);
+        assert!(matches!(crate::decode(&file), Err(RawError::Unsupported(_))));
+    }
+
+    #[test]
+    fn shift_out_of_range_is_unsupported() {
+        let (w2, h2) = (32, 24);
+        let (m, c1, c2, res) = planes(w2, h2, 7);
+        let tile = encode_tile(&TileSpec { s: 6, qi: Qis::ZERO, m, c1, c2, res });
+        assert!(matches!(decode_tile_planes(&tile, 64, 48), Err(RawError::Unsupported(_))));
     }
 
     #[test]

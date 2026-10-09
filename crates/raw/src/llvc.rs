@@ -216,7 +216,7 @@ fn inverse_1d(l: &[i32], h: &[i32], phase: u8) -> Result<Vec<i32>> {
     Ok(x)
 }
 
-/// Gathers the lines of `a` along one axis (columns when `vertical`), applies `f`, and scatters back.
+/// Gathers the lines of the `low`/`high` pair along one axis (columns when `vertical`), transforms them, and scatters back.
 fn lines(low: &Plane, high: &Plane, phase: u8, vertical: bool) -> Result<Plane> {
     if !low.ok() || !high.ok() {
         return Err(RawError::Corrupt("ARW6 wavelet: plane size mismatch".into()));

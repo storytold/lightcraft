@@ -485,10 +485,13 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             }
         },
         32766 if chunks.len() == 1 => {
+            if bits != 14 {
+                return Err(RawError::Unsupported("ARW6 12-bit mode (no sample to verify)".into()));
+            }
             let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("raw strip outside file".into()))?;
             (RawData::U16(arw6::decode(src, w, h, mode)?), 16)
         }
-        32766 => return Err(RawError::Unsupported("ARW6 with more than one strip".into())),
+        32766 => return Err(RawError::Unsupported("ARW6 without exactly one strip".into())),
         1 => {
             let packing = if strip_len >= (w * h * 2) as u64 { Packing::Word16 } else { Packing::Msb };
             (read_image_in(mode, bytes, &info, tiff.order, packing)?, bits)
@@ -517,12 +520,18 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         }
         _ => BlackLevel::uniform(sr2_black(bytes, ifd0, tiff.order).filter(|_| scale_bits >= 14).unwrap_or(default_black)),
     };
-    // ARW6 samples are in 2 x 14-bit units, so the file's 14-bit levels double (a data-derived white is already in them)
+    // ARW6 samples are in 2 x 14-bit units, so the file's 14-bit levels double; without the tag the white is the
+    // companding table's knot, 2 x 16383
     let unit = if info.compression == 32766 { 2.0 } else { 1.0 };
     let white = if linear_rgb {
         16383.0
     } else {
-        raw.f64(t::WHITE_LEVEL).map(|v| v as f32 * unit).filter(|v| *v > 0.0).unwrap_or_else(|| super::white_from_data(samples, scale_bits))
+        let tag = raw.f64(t::WHITE_LEVEL).map(|v| v as f32 * unit).filter(|v| *v > 0.0);
+        match (tag, info.compression) {
+            (Some(v), _) => v,
+            (None, 32766) => 32766.0,
+            (None, _) => super::white_from_data(samples, scale_bits),
+        }
     };
     let black = BlackLevel { values: black.values.iter().map(|v| v * unit).collect(), ..black };
     let model = ifd0.string(t::MODEL).unwrap_or_default();

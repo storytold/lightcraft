@@ -378,15 +378,20 @@ pub(crate) fn encode_tile(t: &TileSpec) -> Vec<u8> {
 /// A little-endian ARW6 TIFF: IFD0 (Sony, ILCE-7RM6) + a SubIFD with the strip = tile table, zero padding to 512,
 /// then the tiles `(x, y, w, h, bytes)` back to back.
 pub(crate) fn arw6_file(tiles: &[(usize, usize, usize, usize, Vec<u8>)], width: usize, height: usize) -> Vec<u8> {
-    arw6_file_with(tiles, width, height, true)
+    arw6_file_with(tiles, width, height, true, 14)
+}
+
+/// [`arw6_file`] with another BitsPerSample.
+pub(crate) fn arw6_file_bits(tiles: &[(usize, usize, usize, usize, Vec<u8>)], width: usize, height: usize, bits: u16) -> Vec<u8> {
+    arw6_file_with(tiles, width, height, true, bits)
 }
 
 /// [`arw6_file`] without the WhiteLevel tag.
 pub(crate) fn arw6_file_no_white(tiles: &[(usize, usize, usize, usize, Vec<u8>)], width: usize, height: usize) -> Vec<u8> {
-    arw6_file_with(tiles, width, height, false)
+    arw6_file_with(tiles, width, height, false, 14)
 }
 
-fn arw6_file_with(tiles: &[(usize, usize, usize, usize, Vec<u8>)], width: usize, height: usize, white: bool) -> Vec<u8> {
+fn arw6_file_with(tiles: &[(usize, usize, usize, usize, Vec<u8>)], width: usize, height: usize, white: bool, bits: u16) -> Vec<u8> {
     let mut strip = (tiles.len() as u32).to_le_bytes().to_vec();
     strip.extend([0; 4]);
     let mut offset = 512u64;
@@ -405,7 +410,7 @@ fn arw6_file_with(tiles: &[(usize, usize, usize, usize, Vec<u8>)], width: usize,
     raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
     raw.set(t::IMAGE_WIDTH, Value::Long(vec![width as u32]));
     raw.set(t::IMAGE_LENGTH, Value::Long(vec![height as u32]));
-    raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![14]));
+    raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![bits]));
     raw.set(t::COMPRESSION, Value::Short(vec![32766]));
     raw.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::CFA]));
     raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
