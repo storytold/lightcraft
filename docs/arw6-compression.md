@@ -104,4 +104,13 @@ Unconditional synthetic tests (encode -> decode round trips for both geometries,
 
 ## Timings
 
-pending
+Raw decode only (`lightcraft_raw::decode`, release build, 4 CPUs, best of 3 wall-clock, 2026-10-10):
+
+| File | Size | Sensor | Decode |
+|---|---|---|---|
+| ILCE-7RM6 FF, Compressed (HQ) | 63.5 MB | 10016x6672 | 0.78 s |
+| ILCE-7RM6 FF, Compressed | 63.8 MB | 10016x6672 | 0.78 s |
+| ILCE-7RM6 APS-C, Compressed (HQ) | 29.7 MB | 6592x4372 | 0.49 s |
+| ILCE-7RM6 APS-C, Compressed | 30.9 MB | 6592x4372 | 0.42 s |
+
+The 1.0 s budget for the full-frame file is met. Parallelised: rayon over the tiles, over the 13 streams of each tile and over its 3 components.
