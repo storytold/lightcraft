@@ -41,6 +41,7 @@ pub mod lightroom_catalog;
 pub mod lightroom_job;
 mod lightroom_sqlite;
 pub mod logging;
+pub mod map;
 pub mod media;
 pub mod memory;
 pub mod merge;
