@@ -58,7 +58,18 @@ fn albums_and_folders() {
     let a = photo(&mut c, "a.jpg", "2026-04-01");
     let f = c.alloc_album_id();
     c.apply(Op::AddAlbum {
-        album: Album { id: f, name: "Trips".into(), parent: None, folder: true, photos: vec![], cover: None, smart: None, quick: false, order: None },
+        album: Album {
+            id: f,
+            name: "Trips".into(),
+            parent: None,
+            folder: true,
+            photos: vec![],
+            cover: None,
+            smart: None,
+            quick: false,
+            order: None,
+            creation: None,
+        },
     })
     .unwrap();
     let al = c.alloc_album_id();
@@ -73,6 +84,7 @@ fn albums_and_folders() {
             smart: None,
             quick: false,
             order: None,
+            creation: None,
         },
     })
     .unwrap();
