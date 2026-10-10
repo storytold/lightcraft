@@ -108,6 +108,12 @@
   Auto use the same model. Custom white balances on these photos render slightly differently than before.
 - Crop (issue #295): a Lock toggle keeps the aspect ratio on every handle, Custom takes your own ratio (Apply), and
   dragging a handle into the image edge stops there instead of pushing the crop out of shape.
+- Calibration renders closer to Lightroom Classic: the red, green and blue primary sliders are a matrix in linear
+  ProPhoto fitted to Lightroom's renders, and Shadows Tint takes light away in the shadows as Lightroom's does
+  (positive cuts green, negative cuts red and blue). Shadows Tint now leaves JPEGs and other rendered files unchanged,
+  as in Lightroom; it acts on raws only. On eleven photos (camera JPEGs, DNGs, NEF / ARW / RAF / PEF / ORF / CR2
+  raws) the tool's effect is now within mean ΔE00 2.5 of Lightroom's, from 4.5. Photos with calibration edits look
+  different, and cached thumbnails re-render once.
 
 ### Library and views
 - Trackpads: pinch to zoom around the pointer and scroll with two fingers to pan the photo; panning keeps the photo

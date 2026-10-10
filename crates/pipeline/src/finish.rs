@@ -222,7 +222,8 @@ impl FinishParams {
         let calibration = s.section_enabled("calibration");
         FinishParams {
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
-            shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
+            // Lightroom's Shadows Tint acts on raw files only (a JPEG renders unchanged with it)
+            shadow_tint: if calibration && info.raw { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
             tone: if let Some(curve) = info.camera_tone.as_ref().filter(|_| info.raw) {
                 ToneMap::camera(curve, s.light.contrast, s.light.whites, s.light.blacks)
             } else if info.raw {

@@ -435,3 +435,17 @@ fn custom_white_balance_redevelops_in_camera_space() {
     s.wb.mode = WbMode::AsShot;
     assert!(wb_matrix_for(&info, &s).is_none());
 }
+
+#[test]
+fn shadows_tint_acts_on_raw_files_only() {
+    // Lightroom renders a JPEG unchanged by the calibration panel's Shadows Tint
+    let src = Rgb32f::filled(16, 16, [0.06; 3]);
+    let mut s = DevelopSettings::default();
+    s.calibration.shadows_tint = 60.0;
+    let req = RenderRequest::fit(16, 16);
+    let rendered = SourceInfo::default();
+    assert_eq!(render(&src, &rendered, &s, &req).image, render(&src, &rendered, &DevelopSettings::default(), &req).image);
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    let d = max_diff(&render(&src, &raw, &s, &req).image, &render(&src, &raw, &DevelopSettings::default(), &req).image);
+    assert!(d > 2, "raw shadows tint moved {d} levels");
+}

@@ -26,7 +26,7 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | C. Views & navigation (VIEW) | 15 | 1 | 1 | 0 | 8/9 (89%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 42 | 2 | 4 | 1 | 28/28 (100%) | 13/14 (93%) |
+| F. Edit panel — global adjustments (EDIT) | 41 | 3 | 4 | 1 | 28/28 (100%) | 12/14 (86%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 9 | 0 | 0 | 1 | 6/6 (100%) | 3/3 (100%) |
 | I. Remove / healing (REM) | 7 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
@@ -47,10 +47,10 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | X. Cross-cutting behaviours (BEHAV) | 18 | 5 | 1 | 1 | 8/8 (100%) | 6/8 (75%) |
 | Y. Menus | 82 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
-| Lightroom Classic extras | 32 | 11 | 39 | 9 | — | 22/24 (92%) |
-| **Total** | 394 | 38 | 84 | 36 | 193/200 (97%) | 142/152 (93%) |
+| Lightroom Classic extras | 31 | 12 | 39 | 9 | — | 21/24 (88%) |
+| **Total** | 392 | 40 | 84 | 36 | 193/200 (97%) | 140/152 (92%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **80.0%** of 516 in-scope rows — P0 98.2% of 200 · P1 95.7% of 152 · P2 42.9% of 163.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.8%** of 516 in-scope rows — P0 98.2% of 200 · P1 95.1% of 152 · P2 42.9% of 163.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -282,7 +282,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-EDIT-GEOM-CONSTRAIN | Constrain crop | P1 | ✅ | `crates/ui-egui/src/panels/right.rs` (checkbox → `cmd:develop.merge`) | |
 | LR-EDIT-GEOM-GRID | Grid while transforming | P2 | ✅ | `crates/ui-egui/src/panels/detail.rs` | a fine grid over the photo while a geometry slider is dragged |
 | LR-EDIT-LENSBLUR | Lens blur | P2 | ⬜ | | settings field reserved, not rendered |
-| LR-EDIT-CALIB | Calibration [Classic] | P1 | ✅ | `ctl:calibration.*` | shadows tint, red/green/blue primary hue and saturation; read/written in XMP |
+| LR-EDIT-CALIB | Calibration [Classic] | P1 | 🟡 | `ctl:calibration.*`, `crates/pipeline/src/colorops.rs` | shadows tint, red/green/blue primary hue and saturation; read/written in XMP; the primaries are a linear-ProPhoto matrix fitted to Lightroom Classic renders (`CALIB_COEF`; every primary slider at ±50 / ±100 within mean ΔE00 1.2 of Lightroom on the fitted chart) and the shadows tint is subtractive like Lightroom's, on raw files only (Lightroom leaves a JPEG unchanged by it). Measured effect vs Lightroom on 11 photos (3 camera JPEGs, 2 DNGs, NEF / ARW / RAF / PEF / ORF / CR2): mean ΔE00 2.5 for all six primaries moved, 0.7 for Shadows Tint +40; still off where our unedited raw render is far from Lightroom's (Lightroom's primaries are relative to its camera profile) |
 | LR-EDIT-SECTION-TOGGLE | Section on/off | P1 | ✅ | `cmd:develop.sectionEnabled`, `crates/develop/src/lib.rs` (`effective`) | the eye on a section header hides its adjustments: Light (with the curve), Color (white balance, presence, mixers, grading, point colour), Effects, Detail, Optics, Geometry, Calibration; masks stay on (issue #316 fixed Light, Color and Detail, which had no effect) |
 | LR-EDIT-RESET | Reset all / section / slider | P0 | ✅ | `cmd:develop.reset`, `cmd:develop.resetSection`, `cmd:develop.resetControl`, `crates/ui-egui/src/widgets.rs` (double-click) | no "reset to open" |
 | LR-EDIT-SHOWORIG | Show original | P0 | ✅ | `cmd:view.showOriginal` | |
@@ -766,7 +766,7 @@ From `08-lightroom-classic-extras.md` (Classic-only features) and part 2 of `06-
 | LRC-DEV-SOFTPROOF | Soft proofing | P2 | 🟡 | `cmd:view.softProof`, `crates/pipeline/src/output.rs` (`Proof`), `crates/ui-egui/src/panels/edit.rs` (`soft_proofing`) | S in the loupe (in grids S stays Expand/Collapse Stack): paper-white surround and "Proof Preview", proof profile (sRGB / Display P3 / Adobe RGB / ProPhoto / Rec. 2020), destination (red) and display (blue) gamut warnings, Create Proof Copy (a named virtual copy). Missing: printer ICC profiles, rendering intent, Simulate Paper & Ink |
 | LRC-DEV-AUTOSYNC | Sync / auto sync / paste previous | P1 | ✅ | `cmd:develop.sync`, `cmd:develop.autoSync`, `cmd:develop.pastePrevious` | Edit ▸ Sync Settings / Auto Sync (⌥⇧⌘A): only the changed settings carry over, one undo step, slider drags sync on release, spots / red eye stay per photo; Edit panel banner |
 | LRC-DEV-MATCHEXP | Match total exposures | P2 | ✅ | `cmd:develop.matchExposure` | Photo ▸ Match Total Exposures: the selected photos' Exposure set so shutter × ISO ÷ aperture² plus the slider matches the active photo's |
-| LRC-DEV-CALIB | Calibration panel | P1 | ✅ | `ctl:calibration.*` | |
+| LRC-DEV-CALIB | Calibration panel | P1 | 🟡 | `ctl:calibration.*` | see LR-EDIT-CALIB: a linear-ProPhoto matrix fitted to Lightroom renders and a raw-only shadows tint; not camera primaries |
 | LRC-DEV-TAT | Targeted adjustment tools | P1 | ✅ | `cmd:develop.targeted` (`target`: curve / hue / sat / lum) | |
 | LRC-DEV-DEFAULTS | Per-camera raw defaults | P1 | ✅ | `cmd:library.preferences` (`camera`, `import.perCamera`), `crates/ui-egui/src/panels/settings.rs` | Settings → Import: raw default and per-camera presets |
 | LRC-DEV-VIEWOPTIONS | Develop view options | P2 | ⬜ | | |
