@@ -86,6 +86,8 @@ fn make_device(backends: wgpu::Backends) -> Result<Dev, String> {
     desc.backends = backends;
     // DX12 shaders compile with FXC (issue #471)
     desc.backend_options = crate::backend::backend_options();
+    // no indirect-call validation pipeline: Intel Metal fails to compile it (#250)
+    desc.flags = crate::backend::instance_flags_from_env(desc.flags);
     let instance = wgpu::Instance::new(desc);
     let wanted = std::env::var("LIGHTCRAFT_GPU_ADAPTER").ok().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
     let adapter = match &wanted {

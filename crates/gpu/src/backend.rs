@@ -145,6 +145,25 @@ pub fn backend_options() -> wgpu::BackendOptions {
     o
 }
 
+/// wgpu's instance flags for every instance LightCraft creates, from `flags` (wgpu's defaults with its
+/// environment variables applied) without `VALIDATION_INDIRECT_CALL`, unless
+/// `WGPU_VALIDATION_INDIRECT_CALL` asks for it (any value but `0`). That validation builds an internal
+/// compute pipeline when each device is created; Intel Macs' Metal compiler fails on it ("Compiler
+/// encountered an internal error"), the device is lost and the window never opens (#250). It only
+/// guards indirect draws and dispatches, which neither LightCraft nor egui issue.
+pub fn instance_flags(flags: wgpu::InstanceFlags, env: Option<&str>) -> wgpu::InstanceFlags {
+    if env.is_some_and(|v| v != "0") {
+        flags | wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL
+    } else {
+        flags - wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL
+    }
+}
+
+/// [`instance_flags`] with `WGPU_VALIDATION_INDIRECT_CALL` read from the environment.
+pub fn instance_flags_from_env(flags: wgpu::InstanceFlags) -> wgpu::InstanceFlags {
+    instance_flags(flags, std::env::var("WGPU_VALIDATION_INDIRECT_CALL").ok().as_deref())
+}
+
 /// `LIGHTCRAFT_GPU_BACKEND=off`.
 pub(crate) fn env_off() -> bool {
     env_choice() == BackendChoice::Off
@@ -195,6 +214,17 @@ pub fn read_init_marker(path: &std::path::Path) -> Option<String> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+
+    /// #250: the indirect-call validation pipeline is off unless asked for; other flags are kept.
+    #[test]
+    fn indirect_call_validation_is_off_unless_asked_for() {
+        use wgpu::InstanceFlags as F;
+        let base = F::VALIDATION_INDIRECT_CALL | F::DEBUG;
+        assert_eq!(instance_flags(base, None), F::DEBUG);
+        assert_eq!(instance_flags(base, Some("0")), F::DEBUG);
+        assert_eq!(instance_flags(F::empty(), Some("1")), F::VALIDATION_INDIRECT_CALL);
+        assert_eq!(instance_flags(F::empty(), None), F::empty());
+    }
     use super::*;
 
     #[test]

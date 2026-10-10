@@ -98,6 +98,8 @@ fn window_wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
     if let eframe::egui_wgpu::WgpuSetup::CreateNew(n) = &mut c.wgpu_setup {
         n.instance_descriptor.backends = lightcraft_engine::gpu::backend::window_backends();
         n.instance_descriptor.backend_options = lightcraft_engine::gpu::backend::backend_options();
+        // no indirect-call validation pipeline: Intel Metal fails to compile it and the window never opens (#250)
+        n.instance_descriptor.flags = lightcraft_engine::gpu::backend::instance_flags_from_env(n.instance_descriptor.flags);
     }
     c
 }
@@ -996,6 +998,16 @@ mod tests {
         let eframe::egui_wgpu::WgpuSetup::CreateNew(n) = window_wgpu_options().wgpu_setup else { panic!("expected CreateNew") };
         if std::env::var_os("WGPU_DX12_COMPILER").is_none() {
             assert!(matches!(n.instance_descriptor.backend_options.dx12.shader_compiler, eframe::wgpu::Dx12Compiler::Fxc));
+        }
+    }
+
+    /// Issue #250: the window's device is created without wgpu's indirect-call validation pipeline,
+    /// which Intel Macs' Metal compiler fails to build (the device was lost, the window never opened).
+    #[test]
+    fn window_has_no_indirect_call_validation_pipeline() {
+        let eframe::egui_wgpu::WgpuSetup::CreateNew(n) = window_wgpu_options().wgpu_setup else { panic!("expected CreateNew") };
+        if std::env::var_os("WGPU_VALIDATION_INDIRECT_CALL").is_none() {
+            assert!(!n.instance_descriptor.flags.contains(eframe::wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL));
         }
     }
 
