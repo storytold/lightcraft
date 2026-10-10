@@ -55,6 +55,34 @@ fn curve_luts(c: &ToneCurve, fades: [Option<(f64, f64)>; 4]) -> Option<[Lut1; 3]
     Some(std::array::from_fn(|i| if chans[i] { point_lut(per[i], fades[i + 1]).compose(&base) } else { base.clone() }))
 }
 
+/// An imported profile is an independent encoded-domain function after the global curves.
+/// Amount mixes the composed master/channel function with identity, without changing saved
+/// curves or involving the global curve panel's bypass and Refine Saturation controls.
+fn profile_curve_luts(s: &DevelopSettings) -> Option<[Lut1; 3]> {
+    let look = s.profile.imported_look()?;
+    // Serialized profiles are checked on load. Public in-process structs must not introduce
+    // nonfinite samples or overflow when Amount extrapolates to 200%.
+    if look.validate().is_err() {
+        return None;
+    }
+    let k = (s.profile.amount / 100.0).clamp(0.0, 2.0);
+    let per = [&look.red, &look.green, &look.blue];
+    if !k.is_finite() || k == 0.0 || (look.master.is_identity() && per.iter().all(|c| c.is_identity())) {
+        return None;
+    }
+    let master = look.master.render_lut();
+    Some(std::array::from_fn(|i| {
+        let mut lut = if per[i].is_identity() { master.clone() } else { per[i].render_lut().compose(&master) };
+        if k != 1.0 {
+            for (j, v) in lut.v.iter_mut().enumerate() {
+                let x = j as f64 / (POINT_CURVE_LUT_SIZE - 1) as f64;
+                *v = (x + k * (f64::from(*v) - x)) as f32;
+            }
+        }
+        lut
+    }))
+}
+
 /// Resolve profile output levels without fitting a blended function back through sparse handles.
 fn point_lut(curve: &PointCurve, fade: Option<(f64, f64)>) -> Lut1 {
     let Some((black, white)) = fade else { return curve.render_lut() };
@@ -174,6 +202,9 @@ pub struct FinishParams {
     pub shadow_tint: f32,
     /// Tone curves (parametric ∘ point, per channel) on encoded values, 1024 entries each.
     pub curves: Option<[Lut1; 3]>,
+    /// Imported profile master/channel curves and Amount, after global curves/refinement and
+    /// before grain. Same sRGB encoding domain as the global curves, independent of their bypass.
+    pub profile_curves: Option<[Lut1; 3]>,
     /// Refine Saturation as 0..1 (1 = the curves' own saturation).
     pub refine_sat: f32,
     pub vig: Option<Vig>,
@@ -247,6 +278,7 @@ impl FinishParams {
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
             ops: ColorOps::new(s),
             curves: curve_luts(&s.curve, crate::profiles::curve_fades(s)),
+            profile_curves: profile_curve_luts(s),
             refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
             vig: if effects { vignette(s) } else { None },
             to_out: space.from_working(),
@@ -659,6 +691,13 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                     e = refine_saturation(e0, e, fp.refine_sat);
                 }
             }
+            if let Some(l) = &fp.profile_curves {
+                e = if hdr {
+                    std::array::from_fn(|k| if e[k] > 1.0 { l[k].eval(1.0) + (e[k] - 1.0) } else { l[k].eval(e[k]) })
+                } else {
+                    [l[0].eval(e[0]), l[1].eval(e[1]), l[2].eval(e[2])]
+                };
+            }
             if let Some((amt, cell, rough, seed)) = *grain {
                 let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
                 let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32, (n.y * fp.oh) as f32 / long as f32);
@@ -882,6 +921,53 @@ mod tests {
         for endpoint in [0.0, 1.0] {
             let curve = a.blend(&b, endpoint).unwrap();
             assert_eq!(curve.render_lut().v, if endpoint == 0.0 { a.render_lut().v } else { b.render_lut().v });
+        }
+        let mut s = DevelopSettings::default();
+        s.profile.id = lightcraft_develop::IMPORTED_LOOK_ID.into();
+        s.profile.imported = Some(lightcraft_develop::ImportedLook { master: a.clone(), red: b.clone(), ..Default::default() });
+        s.set_section_enabled("light", false);
+        s.set_section_enabled("curve", false);
+        s.curve.refine_saturation = 0.0;
+        for amount in [0.0, 50.0, 100.0, 200.0] {
+            s.profile.amount = amount;
+            let lut = profile_curve_luts(&s);
+            if amount == 0.0 {
+                assert!(lut.is_none());
+                continue;
+            }
+            let lut = lut.unwrap();
+            let master = a.render_lut();
+            let red = b.render_lut();
+            for i in 0..POINT_CURVE_LUT_SIZE {
+                let x = i as f32 / (POINT_CURVE_LUT_SIZE - 1) as f32;
+                let k = amount as f32 / 100.0;
+                assert!((lut[0].eval(x) - (x + k * (red.eval(master.v[i]) - x))).abs() < 1e-6);
+                assert!((lut[1].eval(x) - (x + k * (master.v[i] - x))).abs() < 1e-6);
+                assert_eq!(lut[1].v[i], lut[2].v[i]);
+            }
+        }
+        // Verify the actual finish ordering after a nonidentity global curve and saturation
+        // refinement, not merely the construction of the independent profile tables.
+        s.set_section_enabled("light", true);
+        s.set_section_enabled("curve", true);
+        s.curve.master = b;
+        let src = lightcraft_raster::Rgb32f::filled(16, 8, [0.1, 0.2, 0.05]);
+        let mut req = crate::RenderRequest::fit(16, 8);
+        req.depth = OutputDepth::F32Linear;
+        let rendered = |settings: &DevelopSettings| {
+            let deep = crate::render(&src, &SourceInfo::default(), settings, &req).deep.unwrap();
+            let DeepSamples::F32(samples) = deep.samples else { panic!("expected float samples") };
+            samples
+        };
+        s.profile.amount = 0.0;
+        let before = rendered(&s);
+        s.profile.amount = 100.0;
+        let after = rendered(&s);
+        let luts = profile_curve_luts(&s).unwrap();
+        assert_ne!(before, after);
+        for (i, (&before, after)) in before.iter().zip(after).enumerate() {
+            let want = lightcraft_color::transfer::srgb_to_linear(luts[i % 3].eval(linear_to_srgb(before)).clamp(0.0, 1.0));
+            assert!((after - want).abs() < 1e-6, "profile must follow global curves and refinement: {after} != {want}");
         }
     }
 }

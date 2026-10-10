@@ -33,21 +33,24 @@ impl DevelopSettings {
         s
     }
 
-    /// Ensure newly authored function curves declare the schema that can retain them.
-    pub fn normalize_schema(&mut self) {
-        if [&self.curve.master, &self.curve.red, &self.curve.green, &self.curve.blue].iter().any(|c| c.is_function()) {
-            self.version = SCHEMA_VERSION;
+    /// Minimum wire schema needed by the authored features; legacy markers remain unchanged.
+    pub fn required_schema_version(&self) -> u32 {
+        if self.profile.imported.is_some() {
+            IMPORTED_LOOK_SCHEMA_VERSION
+        } else if [&self.curve.master, &self.curve.red, &self.curve.green, &self.curve.blue].iter().any(|c| c.is_function()) {
+            POINT_CURVE_SCHEMA_VERSION
+        } else {
+            0
         }
     }
 
+    /// Promote only settings that need a newer feature schema; never downgrade saved markers.
+    pub fn normalize_schema(&mut self) {
+        self.version = self.version.max(self.required_schema_version());
+    }
+
     pub fn to_json(&self) -> Value {
-        let mut value = serde_json::to_value(self).unwrap_or(Value::Null);
-        if [&self.curve.master, &self.curve.red, &self.curve.green, &self.curve.blue].iter().any(|c| c.is_function())
-            && let Some(object) = value.as_object_mut()
-        {
-            object.insert("version".into(), Value::from(SCHEMA_VERSION));
-        }
-        value
+        serde_json::to_value(self).unwrap_or(Value::Null)
     }
 
     pub fn from_json(v: &Value) -> Result<DevelopSettings, serde_json::Error> {
@@ -61,7 +64,7 @@ impl DevelopSettings {
     /// partial from before the scale existed, or one that never said, must not become Kelvin by landing on
     /// Kelvin settings. Out-of-range values are brought back into range ([`DevelopSettings::keep_in_range`]).
     pub fn merged(&self, partial: &Value) -> Result<DevelopSettings, serde_json::Error> {
-        let mut v = self.to_json();
+        let mut v = serde_json::to_value(self)?;
         presets::deep_merge(&mut v, partial);
         let mut out = DevelopSettings::from_json(&v)?;
         if let Some(wb) = partial.get("wb").and_then(Value::as_object)
@@ -226,6 +229,20 @@ mod tests {
         let back = DevelopSettings::from_json(&v).unwrap();
         assert_eq!(back, s);
         assert_ne!(back.hash64(), DevelopSettings::default().hash64());
+
+        s.profile.id = IMPORTED_LOOK_ID.into();
+        s.profile.imported = Some(ImportedLook { contrast: 25.0, shadows: -15.0, ..Default::default() });
+        // Catalogs serialize the struct directly; stale markers still cannot hide new features.
+        let direct = serde_json::to_value(&s).unwrap();
+        assert_eq!(direct["version"], IMPORTED_LOOK_SCHEMA_VERSION);
+        let loaded: DevelopSettings = serde_json::from_value(direct).unwrap();
+        s.normalize_schema();
+        assert_eq!(loaded, s);
+        assert_eq!(loaded.light.exposure, 1.25);
+        assert_eq!(loaded.profile.imported_look(), s.profile.imported.as_ref());
+        s.profile.imported = None;
+        assert!(serde_json::to_value(&s).is_err());
+        assert!(s.merged(&json!({"light":{"exposure":2.0}})).is_err());
     }
 
     #[test]
@@ -295,6 +312,22 @@ mod tests {
         let s = DevelopSettings::from_json(&json!({"light": {"exposure": 0.5}, "futureThing": 3})).unwrap();
         assert_eq!(s.light.exposure, 0.5);
         assert_eq!(s.grading.blending, 50.0);
+        assert_eq!(serde_json::to_value(Profile::default()).unwrap(), json!({"id":"lc.color","amount":100.0}));
+        assert!(ImportedLook::default().validate().is_ok());
+        for bad in [
+            json!({"name":"x".repeat(MAX_IMPORTED_LOOK_TEXT_BYTES + 1)}),
+            json!({"source_id":"bad\nidentifier"}),
+            json!({"highlights":101.0}),
+            json!({"clarity":null}),
+            json!({"master":[{"x":0.0,"y":-0.1},{"x":1.0,"y":1.0}]}),
+            json!({"unknown_table":[]}),
+        ] {
+            assert!(serde_json::from_value::<ImportedLook>(bad).is_err());
+        }
+        assert!(serde_json::from_value::<Profile>(json!({"id":IMPORTED_LOOK_ID})).is_err());
+        assert!(serde_json::from_value::<Profile>(json!({"id":IMPORTED_LOOK_ID,"imported":null})).is_err());
+        let invalid = ImportedLook { contrast: f64::NAN, ..Default::default() };
+        assert!(serde_json::to_value(&invalid).is_err());
     }
 
     #[test]
@@ -315,6 +348,21 @@ mod tests {
         assert_eq!(m.light.contrast, 20.0);
         assert_eq!(m.effects.clarity, 10.0);
         assert_eq!(m.light.exposure, 0.0);
+
+        let imported = s.merged(&json!({"profile":{"id":IMPORTED_LOOK_ID,"imported":{"name":"First","contrast":20.0}}})).unwrap();
+        assert_eq!(imported.profile.imported_look().unwrap().contrast, 20.0);
+        let amount = imported.merged(&json!({"profile":{"amount":75.0}})).unwrap();
+        assert_eq!(amount.profile.imported, imported.profile.imported);
+        let replaced = imported.merged(&json!({"profile":{"imported":{"name":"Second","clarity":10.0}}})).unwrap();
+        assert_eq!(replaced.profile.imported_look().unwrap().contrast, 0.0);
+        assert_eq!(replaced.profile.imported_look().unwrap().clarity, 10.0);
+        for patch in [json!({"profile":{"id":"lc.color"}}), json!({"profile":{"id":"lc.color","imported":null}})] {
+            let builtin = imported.merged(&patch).unwrap();
+            assert_eq!(builtin.profile, Profile::default());
+            assert!(builtin.profile.imported_look().is_none());
+        }
+        assert!(imported.merged(&json!({"profile":{"imported":null}})).is_err());
+        assert_eq!(imported.profile.imported_look().unwrap().contrast, 20.0);
     }
 
     #[test]

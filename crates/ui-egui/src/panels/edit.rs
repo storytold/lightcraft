@@ -490,6 +490,10 @@ fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
     let heading = |ui: &mut egui::Ui, s: &str| {
         ui.label(egui::RichText::new(crate::i18n::tr(s)).font(t.semibold(11.5)).color(t.text_dim));
     };
+    if let Some(look) = d.profile.imported_look() {
+        item(ui, "current", lightcraft_develop::IMPORTED_LOOK_ID, &look.name, &mut pick);
+        ui.separator();
+    }
     for (title, key, ids) in [("Favorites", "fav", app.session.profile_favorites.clone()), ("Recent", "recent", app.session.profile_recent.clone())] {
         let list: Vec<_> = ids.iter().filter_map(|id| app.session.profile_info(id).map(|(name, _)| (id.as_str(), name))).collect();
         if list.is_empty() {
@@ -525,7 +529,9 @@ fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
         register(ui.ctx(), format!("profileMenu:lutGroupMenu:{g}"), r.response.rect);
     }
     ui.separator();
-    if let Some((name, _)) = app.session.profile_info(cur) {
+    if cur != lightcraft_develop::IMPORTED_LOOK_ID
+        && let Some((name, _)) = app.session.profile_info(cur)
+    {
         let fav = app.session.profile_favorites.iter().any(|f| f == cur);
         let label = if fav {
             crate::i18n::tr_format!("Remove “{}” from Favorites", crate::i18n::profile_label(cur, name))
@@ -550,6 +556,7 @@ fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
     {
         let mut s = d.clone();
         s.profile.id = hovered_id.clone();
+        s.profile.imported = None;
         s.profile.amount = 100.0;
         app.hover_preview =
             Some(crate::HoverPreview { label: crate::i18n::tr_format!("Profile: {}", crate::i18n::profile_label(hovered_id, name)), settings: s });

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::borrow::Cow;
 
-use crate::{DevelopSettings, PointCurve, PointCurveError};
+use crate::{DevelopSettings, PointCurve, PointCurveError, Profile};
 use std::fmt;
 
 #[derive(Debug)]
@@ -172,14 +172,38 @@ pub fn extract_groups(s: &DevelopSettings, groups: &[SettingsGroup]) -> Value {
             }
         }
     }
-    if out.get("curve").is_some_and(|curve| ["master", "red", "green", "blue"].iter().any(|key| curve.get(*key).is_some_and(function_wire))) {
-        out.insert("version".into(), Value::from(crate::settings::SCHEMA_VERSION));
+    if out.get("profile").and_then(|profile| profile.get("imported")).is_some_and(|look| !look.is_null()) {
+        out.insert("version".into(), Value::from(crate::settings::IMPORTED_LOOK_SCHEMA_VERSION));
+    } else if out.get("curve").is_some_and(|curve| ["master", "red", "green", "blue"].iter().any(|key| curve.get(*key).is_some_and(function_wire))) {
+        out.insert("version".into(), Value::from(crate::settings::POINT_CURVE_SCHEMA_VERSION));
     }
     Value::Object(out)
 }
 
 /// Recursively merge `patch` into `base` (objects merge; everything else replaces).
 pub fn deep_merge(base: &mut Value, patch: &Value) {
+    deep_merge_inner(base, patch, true);
+}
+
+// A profile's imported definition is one checked value. A newly selected id cannot inherit the
+// previous profile's definition, while changing only Amount keeps it verbatim.
+fn merge_profile(base: &mut Value, patch: &Value) {
+    if let (Some(b), Some(p)) = (base.as_object_mut(), patch.as_object()) {
+        if let Some(id) = p.get("id")
+            && !p.contains_key("imported")
+            && (id.as_str() != Some(crate::IMPORTED_LOOK_ID) || b.get("id") != Some(id))
+        {
+            b.remove("imported");
+        }
+        for (key, value) in p {
+            b.insert(key.clone(), value.clone());
+        }
+    } else {
+        *base = patch.clone();
+    }
+}
+
+fn deep_merge_inner(base: &mut Value, patch: &Value, root: bool) {
     // A function is one checked model, not a partial settings group. Inheriting omitted model
     // fields from an old function would silently accept an incomplete replacement.
     if function_wire(base) || function_wire(patch) {
@@ -190,7 +214,8 @@ pub fn deep_merge(base: &mut Value, patch: &Value) {
         (Value::Object(b), Value::Object(p)) => {
             for (k, v) in p {
                 match b.get_mut(k) {
-                    Some(bv) if bv.is_object() && v.is_object() => deep_merge(bv, v),
+                    Some(bv) if root && k == "profile" => merge_profile(bv, v),
+                    Some(bv) if bv.is_object() && v.is_object() => deep_merge_inner(bv, v, false),
                     _ => {
                         b.insert(k.clone(), v.clone());
                     }
@@ -253,6 +278,23 @@ pub fn try_apply_partial(s: &DevelopSettings, partial: &Value, amount: f64) -> R
     }
     let base = serde_json::to_value(s)?;
     let mut rest = partial.clone();
+    let profile = if let Some(patch) = rest.as_object_mut().and_then(|rest| rest.remove("profile")) {
+        let mut target = serde_json::to_value(&s.profile)?;
+        merge_profile(&mut target, &patch);
+        // Validate even below the selection threshold, so a malformed definition is never
+        // accepted merely because this particular Amount would leave it inactive.
+        let target: Profile = serde_json::from_value(target)?;
+        let mut chosen = if amount >= 0.5 { target.clone() } else { s.profile.clone() };
+        if amount != 1.0 && patch.get("amount").is_some() {
+            chosen.amount = s.profile.amount + (target.amount - s.profile.amount) * amount;
+            if !chosen.amount.is_finite() {
+                return Err(PresetError::InvalidAmount);
+            }
+        }
+        Some(chosen)
+    } else {
+        None
+    };
     let mut channels: [Option<PointCurve>; 4] = [None, None, None, None];
     if let Some(curve) = rest.get_mut("curve").and_then(Value::as_object_mut) {
         for ((name, source), slot) in [("master", &s.curve.master), ("red", &s.curve.red), ("green", &s.curve.green), ("blue", &s.curve.blue)]
@@ -267,6 +309,9 @@ pub fn try_apply_partial(s: &DevelopSettings, partial: &Value, amount: f64) -> R
     }
     let patch = if amount == 1.0 { rest } else { scale_patch(&base, &rest, amount) };
     let mut out = s.merged(&patch)?;
+    if let Some(profile) = profile {
+        out.profile = profile;
+    }
     for (destination, value) in [&mut out.curve.master, &mut out.curve.red, &mut out.curve.green, &mut out.curve.blue].into_iter().zip(channels) {
         if let Some(value) = value {
             *destination = value;
@@ -369,6 +414,23 @@ mod tests {
         assert_eq!(b.light.exposure, 1.0);
         assert_eq!(b.effects.clarity, 30.0);
         assert_eq!(b.crop.geometry.angle, 0.0);
+
+        a.profile.id = crate::IMPORTED_LOOK_ID.into();
+        a.profile.imported = Some(crate::ImportedLook {
+            name: "Synthetic look".into(),
+            source_id: "test-look".into(),
+            contrast: 20.0,
+            master: curve(&[(0.0, 0.1), (1.0, 0.9)]),
+            ..Default::default()
+        });
+        let profile = extract_groups(&a, &[SettingsGroup::Profile]);
+        assert_eq!(profile["version"], crate::IMPORTED_LOOK_SCHEMA_VERSION);
+        assert!(profile.get("light").is_none());
+        let applied = try_apply_partial(&b, &profile, 1.0).unwrap();
+        assert_eq!(applied.profile, a.profile);
+        assert_eq!(applied.light, b.light);
+        assert_eq!(applied.curve, b.curve);
+        assert_eq!(applied.version, crate::IMPORTED_LOOK_SCHEMA_VERSION);
     }
 
     #[test]
@@ -383,6 +445,31 @@ mod tests {
         // clamped through specs
         let lots = apply_partial(&base, &json!({"light": {"exposure": 4.0}}), 2.0);
         assert_eq!(lots.light.exposure, 5.0);
+
+        let mut base = base;
+        base.profile.id = crate::IMPORTED_LOOK_ID.into();
+        base.profile.imported = Some(crate::ImportedLook { contrast: 20.0, name: "First".into(), ..Default::default() });
+        let target = json!({"profile":{"id":crate::IMPORTED_LOOK_ID,"amount":160.0,"imported":{"name":"Second","clarity":30.0}}});
+        for amount in [0.3, 0.5, 1.0, 2.0] {
+            let out = try_apply_partial(&base, &target, amount).unwrap();
+            let look = out.profile.imported_look().unwrap();
+            assert_eq!(look.name, if amount < 0.5 { "First" } else { "Second" });
+            assert_eq!(look.contrast, if amount < 0.5 { 20.0 } else { 0.0 });
+            assert_eq!(look.clarity, if amount < 0.5 { 0.0 } else { 30.0 });
+            assert_eq!(out.profile.amount, (100.0 + 60.0 * amount).min(200.0));
+            assert_eq!(out.light, base.light);
+        }
+        let builtin = json!({"profile":{"id":"lc.vivid"}});
+        assert_eq!(try_apply_partial(&base, &builtin, 0.3).unwrap().profile, base.profile);
+        let switched = try_apply_partial(&base, &builtin, 0.5).unwrap();
+        assert_eq!(switched.profile.id, "lc.vivid");
+        assert!(switched.profile.imported.is_none());
+        let amount_only = try_apply_partial(&base, &json!({"profile":{"amount":60.0}}), 0.5).unwrap();
+        assert_eq!(amount_only.profile.imported, base.profile.imported);
+        assert_eq!(amount_only.profile.amount, 80.0);
+        for bad in [json!({"id":crate::IMPORTED_LOOK_ID}), json!({"id":crate::IMPORTED_LOOK_ID,"imported":{"clarity":101.0}})] {
+            assert!(try_apply_partial(&DevelopSettings::default(), &json!({"profile":bad}), 0.3).is_err());
+        }
     }
 
     /// A preset with the Grain group (its seed is an integer) used to do nothing at any amount
@@ -462,10 +549,10 @@ mod tests {
         let mut target = base.clone();
         target.curve.master = a.blend(&b, 0.8).unwrap();
         let partial = extract_groups(&target, &[SettingsGroup::ToneCurve]);
-        assert_eq!(partial["version"], crate::settings::SCHEMA_VERSION);
+        assert_eq!(partial["version"], crate::settings::POINT_CURVE_SCHEMA_VERSION);
         assert!(extract_groups(&target, &[SettingsGroup::Light]).get("version").is_none());
         let result = try_apply_partial(&base, &partial, 0.4).unwrap();
-        assert_eq!(result.version, crate::settings::SCHEMA_VERSION);
+        assert_eq!(result.version, crate::settings::POINT_CURVE_SCHEMA_VERSION);
         for i in 0..=128 {
             let x = i as f64 / 128.0;
             let av = base.curve.master.eval(x).unwrap();

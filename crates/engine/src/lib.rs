@@ -1249,8 +1249,25 @@ pub fn json_delta(old: &Value, new: &Value) -> Option<Value> {
     }
     match (old, new) {
         (Value::Object(a), Value::Object(b)) => {
-            let m: serde_json::Map<String, Value> =
-                b.iter().filter_map(|(k, nv)| json_delta(a.get(k).unwrap_or(&Value::Null), nv).map(|d| (k.clone(), d))).collect();
+            let m: serde_json::Map<String, Value> = b
+                .iter()
+                .filter_map(|(k, nv)| {
+                    let ov = a.get(k).unwrap_or(&Value::Null);
+                    if k == "profile"
+                        && (ov.get("imported") != nv.get("imported")
+                            || (ov.get("id") != nv.get("id") && nv.get("imported").is_some_and(|v| !v.is_null())))
+                    {
+                        // A profile asset is replaced whole. Explicit null also removes a payload
+                        // omitted by serialization when switching back to a built-in profile.
+                        let mut profile = nv.clone();
+                        if let Value::Object(fields) = &mut profile {
+                            fields.entry("imported").or_insert(Value::Null);
+                        }
+                        return Some((k.clone(), profile));
+                    }
+                    json_delta(ov, nv).map(|d| (k.clone(), d))
+                })
+                .collect();
             (!m.is_empty()).then_some(Value::Object(m))
         }
         (a, b) if a == b => None,

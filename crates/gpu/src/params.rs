@@ -78,6 +78,8 @@ const FIELDS: &[(&str, usize)] = &[
     // first row of a band dispatch (the kernel runs over rows Y0.., see `render`)
     ("Y0", 1),
     ("TONE_SATURATION", 3),
+    ("PROFILE_CURVE_OFF", 1),
+    ("PROFILE_CURVES", 1),
 ];
 
 /// `(name, index)` of every field (for the WGSL constants).
@@ -143,7 +145,7 @@ pub struct Present {
     pub chroma: bool,
 }
 
-/// The `finish` kernel's parameter block and auxiliary table (tone LUT | chroma curve | sRGB LUT | curve LUTs |
+/// The `finish` kernel's parameter block and auxiliary table (tone LUT | chroma curve | sRGB LUT | global/profile curve LUTs |
 /// mask terms) for `fp` with `masks` (their local adjustments' terms).
 pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present) -> (Vec<u32>, Vec<f32>) {
     let mut aux: Vec<f32> = fp.tone.lut().to_vec();
@@ -154,6 +156,12 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     if let Some(c) = &fp.curves {
         for l in c {
             assert_eq!(l.v.len(), CURVE_N as usize);
+            aux.extend_from_slice(&l.v);
+        }
+    }
+    let profile_curve_off = aux.len();
+    if let Some(c) = &fp.profile_curves {
+        for l in c {
             aux.extend_from_slice(&l.v);
         }
     }
@@ -170,6 +178,8 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.u("SRGB_OFF", srgb_off as u32);
     p.u("CURVE_OFF", curve_off as u32);
     p.b("CURVES", fp.curves.is_some());
+    p.u("PROFILE_CURVE_OFF", profile_curve_off as u32);
+    p.b("PROFILE_CURVES", fp.profile_curves.is_some());
     p.f("REFINE_SAT", fp.refine_sat);
     p.f("GAIN", fp.gain);
     p.f("EV", fp.ev);

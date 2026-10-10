@@ -178,7 +178,8 @@ stored edits; it does not establish a Lightroom pixel match.
 | `Vibrance`, `Saturation` | `color.vibrance`, `color.saturation` | 1:1 |
 | `Texture`, `Clarity2012`, `Dehaze` | `effects.texture`, `effects.clarity`, `effects.dehaze` | 1:1 |
 | `HueAdjustment<Band>`, `SaturationAdjustment<Band>`, `LuminanceAdjustment<Band>` | `mixer.<band>.hue/sat/lum` | bands Red, Orange, Yellow, Green, Aqua, Blue, Purple, Magenta |
-| `ConvertToGrayscale` | `treatment` | Either this flag or `Look/Parameters/ConvertToGrayscale` being `True` → B&W; an outer `False` does not undo a monochrome profile. Verified against a Lightroom export. Attribute and child-element fields are both accepted, including `rdf:parseType="Resource"` attributes. Other Look parameters remain unsupported. |
+| `ConvertToGrayscale` | `treatment` | Either this flag or `Look/Parameters/ConvertToGrayscale` being `True` → B&W; an outer `False` does not undo a monochrome profile. Verified against a Lightroom export. Attribute and child-element fields are both accepted, including `rdf:parseType="Resource"` attributes. Supported profile curves and parameters remain separate from the global controls (below). |
+| `Look/Parameters/ToneCurvePV2012`, `…Red/Green/Blue`; `Contrast2012`, `Highlights2012`, `Shadows2012`, `Clarity2012` | `profile.imported` | Checked per-photo profile definition with its own name and Amount (0..200%). Profile curves follow global curves and Refine Saturation; four scalar deltas affect effective rendering without moving the saved sliders. Amount blends the profile function with identity. This is a measured approximation; opaque tables and other profile parameters remain unsupported and `Look` stays in the diagnostic report. |
 | `GrayMixer<Band>` | `bw_mix.<band>` | |
 | `ParametricShadows`, `ParametricDarks`, `ParametricLights`, `ParametricHighlights` | `curve.shadows/darks/lights/highlights` | |
 | `ParametricShadowSplit`, `ParametricMidtoneSplit`, `ParametricHighlightSplit` | `curve.split_shadows/split_mid/split_highlights` | |
@@ -217,10 +218,11 @@ own (`Adobe Color` → Color, `Adobe Neutral`, `Adobe Vivid`, `Adobe Landscape`,
 `Modern 10`, `Vintage 02`) can't be used here, and a third-party profile not imported yet leaves the photo's profile as it
 is; import reports either per preset (`Profile “Name” (Lightroom's own)` / `(not imported yet)` in `unmapped`).
 References are resolved again whenever profiles are imported or deleted, so a pack's profiles and presets can come in
-either order. The look's embedded `Parameters` are not read.
+either order. Supported embedded `Parameters` are read as described above.
 
-**Not mapped:** camera profiles and looks (`CameraProfile`, `Look`; we have our own profile set), red eye, lens blur,
-and AI features. Legacy process-version 2010 controls use the approximations described above. Local adjustments and spot removal are read as described below.
+**Not mapped:** SDR rendition controls and extended HDR curves (`SDR*`, `ExtendedToneCurve*`); camera profiles (`CameraProfile`), opaque Look tables and parameters outside the subset above, unsupported mask
+types and payloads (supported local corrections are listed below), red eye, lens blur, and AI features
+such as saved Denoise filters. Legacy process-version 2010 controls use the approximations described above.
 
 ## Spot removal
 
@@ -240,6 +242,13 @@ sidecar written for a healed photo contains.
 
 A spot whose mask is any other kind is reported as `Spot: <kind>`. Sizes are clamped to our spot range. A sidecar's
 spots replace the photo's, as its masks do.
+
+The imported Look stage is partial, not a Lightroom appearance guarantee. Native D3500 comparisons improved
+B&W11 (mean DeltaE00 6.23 → 4.77) and B&W12 at Amount50 (12.44 → 11.39), but B&W10 worsened (5.63 → 7.32).
+An isolated B&W10 curve applied to Lightroom's baseline matched the parameters-only reference within mean0.20;
+this does not remove the underlying camera/tone error or the missing table. A saved HDR color case measured22.56,
+while its controlled SDR counterpart measured7.54: the legacy SDR curve is not a substitute for its extended HDR edit.
+These measurements use matching native RGB16 exports and exact native sample coordinates, without alignment or fitting.
 
 Enhanced DNG pixels take priority over the original raw image. If their header or compression is unsupported,
 import/render/export reports an error rather than silently replacing the enhanced image with an embedded JPEG.

@@ -262,13 +262,13 @@ fn curve_and_hdr_presets_keep_integer_fields_and_captured_process_contract() {
 
 #[test]
 fn future_schema_and_duplicate_wire_markers_remain_checked_with_process_enabled() {
-    for version in [json!(3), json!(u64::MAX), json!(-1), json!(1.5)] {
+    for version in [json!(crate::SCHEMA_VERSION + 1), json!(u64::MAX), json!(-1), json!(1.5)] {
         let wire = json!({"version": version, "process": 77, "light": {"exposure": 1.0}});
         assert!(DevelopSettings::from_json(&wire).is_err());
         assert!(serde_json::from_str::<DevelopSettings>(&wire.to_string()).is_err());
         assert!(try_apply_partial(&DevelopSettings::default(), &wire, 1.0).is_err());
     }
-    for wire in [r#"{"version":3,"version":1,"process":77}"#, r#"{"version":1,"version":3,"process":77}"#] {
+    for wire in [r#"{"version":4,"version":1,"process":77}"#, r#"{"version":1,"version":4,"process":77}"#] {
         assert!(serde_json::from_str::<DevelopSettings>(wire).is_err());
     }
     let raw = DevelopSettings::for_raw(5210.0, -4.0);

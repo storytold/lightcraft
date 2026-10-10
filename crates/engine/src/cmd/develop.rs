@@ -484,10 +484,13 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!("develop.profile", "Set Profile", [], None, "{id: profile id (see profiles.list), amount?: 0..200}", has_active, |s, p| {
             let id = str_param(p, "id").ok_or_else(|| bad("develop.profile", "missing id"))?.to_string();
-            if !crate::presets::PROFILES.iter().any(|x| x.id == id) && !s.lut_profiles.iter().any(|x| x.id == id) {
+            if s.profile_info(&id).is_none() {
                 return Err(bad("develop.profile", format!("unknown profile `{id}`")));
             }
             edit(s, "develop.profile", "Profile", |d| {
+                if id != lightcraft_develop::IMPORTED_LOOK_ID {
+                    d.profile.imported = None;
+                }
                 d.profile.id = id.clone();
                 d.profile.amount = f64_or(p, "amount", d.profile.amount).clamp(0.0, 200.0);
                 Ok(())

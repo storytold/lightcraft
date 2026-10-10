@@ -51,8 +51,9 @@
 //! | 6 | folder labels | `Op::SetFolderRecord`, `Catalog.folder_records` |
 //! | 7 | Kelvin white balance for raws whose camera has matrices (#730) | `Op::SetAsShotWb`, `WhiteBalance.scale` |
 //! | 8 | History cursor: Go to History Step adds no step | `Op::SetHistoryCursor`, `Photo.history_cursor` |
-//! | 9 | preview-only recheck | `Photo.preview_checked`, `Op::SetContent.preview_checked` |
-//! | 10 | combined saved-edit diagnostics | `Op::SetUnsupportedEdits`, `Photo.unsupported_edits` |
+//! | 9 | combined saved-edit diagnostics | `Op::SetUnsupportedEdits`, `Photo.unsupported_edits` |
+//! | 10 | combined imported profile adjustments | Independent Look parameters and curves (schema 3) |
+//! | upstream 9 (combined 14) | preview-only recheck | `Photo.preview_checked`, `Op::SetContent.preview_checked` |
 //!
 //! Earlier fork writers used v3 and v7 for saved-edit diagnostics, and v4 for function curves.
 //! Their diagnostic payloads remain readable alongside upstream v3-v7 fields, including Kelvin WB.
@@ -82,7 +83,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 9;
+pub const VERSION: u32 = 10;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]

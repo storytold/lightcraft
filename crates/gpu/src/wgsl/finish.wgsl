@@ -1,7 +1,7 @@
 // The per-pixel stage: a straight port of `lightcraft_pipeline::finish` (keep in step with it).
 // Bindings: img (rgb, pre-exposure), log_l, base, clar, tex, dark, masks (NMASK planes, then the
 // blurred chromaticity when HAS_CHROMA), aux
-// (tone LUT | chroma curve | sRGB LUT | curve LUTs | mask terms), out (packed RGBA8).
+// (tone LUT | chroma curve | sRGB LUT | global/profile curve LUTs | mask terms), out (packed RGBA8).
 
 fn tone_apply(y: f32) -> f32 {
     if (y <= 0.0) {
@@ -50,6 +50,14 @@ fn encode_srgb(v: f32) -> f32 {
 
 fn curve(ch: u32, x: f32) -> f32 {
     let o = pu(F_CURVE_OFF) + ch * CURVE_N;
+    let f = clamp(x, 0.0, 1.0) * f32(CURVE_N - 1u);
+    let i = min(u32(f), CURVE_N - 2u);
+    let t = f - f32(i);
+    return aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * t;
+}
+
+fn profile_curve(ch: u32, x: f32) -> f32 {
+    let o = pu(F_PROFILE_CURVE_OFF) + ch * CURVE_N;
     let f = clamp(x, 0.0, 1.0) * f32(CURVE_N - 1u);
     let i = min(u32(f), CURVE_N - 2u);
     let t = f - f32(i);
@@ -515,6 +523,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (rs < 1.0) {
             e = refine_saturation(e0, e, rs);
         }
+    }
+    if (pu(F_PROFILE_CURVES) != 0u) {
+        e = vec3<f32>(profile_curve(0u, e.x), profile_curve(1u, e.y), profile_curve(2u, e.z));
     }
     if (pu(F_GRAIN) != 0u) {
         let px = f32(x) + 0.5;

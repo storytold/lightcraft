@@ -563,16 +563,24 @@ pub fn profile(id: &str) -> Option<&'static ProfileInfo> {
 pub const RECENT_PROFILES: usize = 5;
 
 impl Session {
-    /// A profile by id, looking up built-in profiles first and imported LUT profiles second.
+    /// A profile by id, including the active photo's embedded profile definition.
     pub fn profile_info(&self, id: &str) -> Option<(&str, &str)> {
         if let Some(p) = profile(id) {
             return Some((p.name, p.group));
+        }
+        if id == lightcraft_develop::IMPORTED_LOOK_ID {
+            let p = self.catalog.photo(self.active()?)?;
+            return p.develop.profile.imported_look().map(|look| (look.name.as_str(), "Imported"));
         }
         self.lut_profiles.iter().find(|p| p.id == id).map(|p| (p.name.as_str(), p.group.as_str()))
     }
 
     /// Remember `id` as the most recently applied profile.
     pub fn note_profile_used(&mut self, id: &str) {
+        // This id identifies a definition on one photo, not an asset in the shared library.
+        if id == lightcraft_develop::IMPORTED_LOOK_ID {
+            return;
+        }
         self.profile_recent.retain(|p| p != id);
         self.profile_recent.insert(0, id.to_string());
         self.profile_recent.truncate(RECENT_PROFILES);
@@ -593,6 +601,9 @@ impl Session {
             .into_iter()
             .map(|g| json!({"name": g, "profiles": PROFILES.iter().filter(|p| p.group == g).map(item).collect::<Vec<_>>()}))
             .collect();
+        if let Some((name, group)) = self.profile_info(lightcraft_develop::IMPORTED_LOOK_ID) {
+            groups.insert(0, json!({"name": group, "profiles": [{"id": lightcraft_develop::IMPORTED_LOOK_ID, "name": name, "group": group, "favorite": false, "photoSpecific": true}]}));
+        }
         // imported LUT profiles, by their groups
         let mut lut_groups: Vec<&str> = self.lut_profiles.iter().map(|p| p.group.as_str()).collect();
         lut_groups.sort_unstable();
@@ -687,6 +698,31 @@ mod tests {
         assert_eq!(same, *before, "only the profile changed");
         let looked = s.render_now(id, 96, 96).unwrap().image;
         assert_ne!(plain.as_bytes(), looked.as_bytes());
+
+        let imported = lightcraft_develop::try_apply_partial(
+            &after,
+            &json!({"profile": {
+                "id": lightcraft_develop::IMPORTED_LOOK_ID, "amount": 120,
+                "imported": {"name": "Own curve", "contrast": 8, "master": [{"x":0,"y":0.1},{"x":1,"y":1}]}
+            }}),
+            1.0,
+        )
+        .unwrap();
+        s.set_develop(id, imported.clone(), "Import profile").unwrap();
+        assert_eq!(s.profile_info(lightcraft_develop::IMPORTED_LOOK_ID), Some(("Own curve", "Imported")));
+        assert!(s.execute("profiles.list", &json!({})).unwrap().as_array().unwrap().iter().any(|p| p["name"] == "Own curve"));
+        s.execute("develop.profile", &json!({"id": lightcraft_develop::IMPORTED_LOOK_ID, "amount": 50})).unwrap();
+        let scaled = s.develop_of(id).unwrap();
+        assert_eq!(scaled.profile.amount, 50.0);
+        assert_eq!(scaled.profile.imported, imported.profile.imported);
+        assert_eq!(scaled.light, imported.light);
+        assert_eq!(scaled.curve, imported.curve);
+        s.execute("develop.profile", &json!({"id": "lc.color"})).unwrap();
+        let replaced = s.develop_of(id).unwrap();
+        assert!(replaced.profile.imported.is_none());
+        let delta = crate::json_delta(&scaled.to_json(), &replaced.to_json()).unwrap();
+        let synced = lightcraft_develop::try_apply_partial(&scaled, &delta, 1.0).unwrap();
+        assert_eq!(synced, *replaced, "sync must remove the old profile payload too");
     }
 
     #[test]

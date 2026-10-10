@@ -1,11 +1,13 @@
 //! Base rendering profiles. A profile is a look applied *underneath* the user's sliders (the sliders
-//! stay at their displayed values); `profile.amount` (0–200 %) scales it. All looks are our own.
+//! stay at their displayed values); `profile.amount` (0–200 %) scales it. Built-in looks are our own;
+//! imported profiles carry only checked scalar settings and point curves from photo metadata.
 //!
 //! Every look is a set of *deltas* on the user's settings, each multiplied by the amount: slider
 //! offsets (contrast, saturation, colour mixer, B&W mix…), colour-grading wheels (added as colour
 //! vectors to the user's wheels) and point-curve fades (black/white output levels composed after
 //! the user's point curves). The CPU pipeline and the GPU path both render [`effective`]
-//! settings, so a profile needs no kernel of its own. No look adds grain.
+//! settings. Imported scalar looks use that same path; their independent point curves run after
+//! the user's curves and Refine Saturation in the shared finish stage. No look adds grain.
 
 use std::borrow::Cow;
 
@@ -67,6 +69,16 @@ pub fn effective(s: &DevelopSettings) -> Cow<'_, DevelopSettings> {
     }
     let mut e = s.clone();
     let add = |v: &mut f64, d: f64| *v = (*v + d * k).clamp(-100.0, 100.0);
+    if let Some(look) = s.profile.imported_look() {
+        if !k.is_finite() || look.validate().is_err() {
+            return Cow::Borrowed(s);
+        }
+        add(&mut e.light.contrast, look.contrast);
+        add(&mut e.light.highlights, look.highlights);
+        add(&mut e.light.shadows, look.shadows);
+        add(&mut e.effects.clarity, look.clarity);
+        return Cow::Owned(e);
+    }
     match id {
         // ---- Basic
         "lc.neutral" => {
@@ -296,6 +308,24 @@ mod tests {
             assert_eq!(full.grain, s.grain, "{id} adds no grain");
             assert_eq!(full.profile, s.profile, "{id}");
         }
+        s.profile.id = lightcraft_develop::IMPORTED_LOOK_ID.into();
+        s.profile.imported =
+            Some(lightcraft_develop::ImportedLook { contrast: 20.0, highlights: -30.0, shadows: 40.0, clarity: 60.0, ..Default::default() });
+        let saved = s.clone();
+        for amount in [0.0, 50.0, 100.0, 200.0] {
+            s.profile.amount = amount;
+            let e = effective(&s);
+            let k = amount / 100.0;
+            assert_eq!(e.light.contrast, 5.0 + 20.0 * k);
+            assert_eq!(e.light.highlights, -30.0 * k);
+            assert_eq!(e.light.shadows, 40.0 * k);
+            assert_eq!(e.effects.clarity, (60.0 * k).min(100.0));
+            assert_eq!(e.profile, s.profile);
+            assert_eq!(e.curve, s.curve);
+            assert_eq!(e.grain, s.grain);
+        }
+        s.profile.amount = saved.profile.amount;
+        assert_eq!(s, saved, "rendering a profile must preserve the displayed user settings");
     }
 
     #[test]

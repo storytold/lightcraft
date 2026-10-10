@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use lightcraft_develop::{MIXER_BANDS, Preset, ToneCurve};
+use lightcraft_develop::{IMPORTED_LOOK_ID, ImportedLook, MIXER_BANDS, Preset, ToneCurve};
 use lightcraft_geom::Point;
 use serde_json::{Map, Value, json};
 
@@ -186,6 +186,67 @@ fn curve(props: &Props, k: &str) -> Option<Value> {
     Some(if ToneCurve::point_curve_is_identity(&pts) { json!([]) } else { json!(pts) })
 }
 
+/// Keep the supported portion of a saved Look separate from the user's controls. Opaque
+/// tables and other parameters remain reported as unsupported; no bundled profile is used.
+fn imported_look(props: &Props) -> Option<Value> {
+    if !props.keys().any(|key| key == "crs:Look" || key.starts_with("crs:Look/")) {
+        return None;
+    }
+    let mut payload = json!({
+        "name": first(props, "crs:Look/crs:Name").unwrap_or("Imported profile"),
+        "source_id": first(props, "crs:Look/crs:UUID").unwrap_or("")
+    });
+    for (field, target) in [("Contrast2012", "contrast"), ("Highlights2012", "highlights"), ("Shadows2012", "shadows"), ("Clarity2012", "clarity")] {
+        let key = format!("crs:Look/crs:Parameters/crs:{field}");
+        if props.contains_key(&key) {
+            let Some(v) = num(props, &key).filter(|v| (-100.0..=100.0).contains(v)) else {
+                skipped("Look (invalid profile parameter)");
+                return None;
+            };
+            payload[target] = json!(v);
+        }
+    }
+    for (field, target) in
+        [("ToneCurvePV2012", "master"), ("ToneCurvePV2012Red", "red"), ("ToneCurvePV2012Green", "green"), ("ToneCurvePV2012Blue", "blue")]
+    {
+        let key = format!("crs:Look/crs:Parameters/crs:{field}");
+        if props.contains_key(&key) {
+            // Bound before constructing the JSON; the native curve reader validates knots too.
+            let valid_points = |points: &&Vec<String>| {
+                points.len() <= lightcraft_develop::MAX_POINT_CURVE_POINTS
+                    && points.iter().all(|point| {
+                        point
+                            .split_once(',')
+                            .is_some_and(|(x, y)| [x, y].iter().all(|v| v.trim().parse::<f64>().is_ok_and(|v| (0.0..=255.0).contains(&v))))
+                    })
+            };
+            let Some(v) = props.get(&key).filter(valid_points).and_then(|_| curve(props, &key)) else {
+                skipped("Look (invalid profile curve)");
+                return None;
+            };
+            payload[target] = v;
+        }
+    }
+    // An explicitly replaced Look with only unsupported components still replaces the old
+    // supported definition with a neutral subset. Otherwise rereading a table-only profile
+    // would leave the previous profile's curves active. The unmapped Look warning remains.
+    let amount_key = "crs:Look/crs:Amount";
+    let amount = if props.contains_key(amount_key) {
+        let Some(v) = num(props, amount_key).filter(|v| (0.0..=2.0).contains(v)) else {
+            skipped("Look (invalid profile amount)");
+            return None;
+        };
+        v * 100.0
+    } else {
+        100.0
+    };
+    let Ok(look) = serde_json::from_value::<ImportedLook>(payload) else {
+        skipped("Look (invalid profile definition)");
+        return None;
+    };
+    Some(json!({"id": IMPORTED_LOOK_ID, "amount": amount, "imported": look}))
+}
+
 /// Map the `crs:` fields of an XMP packet to a partial develop-settings JSON object.
 ///
 /// `target` decides how the white balance is read (see [`Target`]).
@@ -313,11 +374,14 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     // ---- Treatment + B&W mix
     // A monochrome Look still converts when the outer treatment flag is false (verified
     // against a Lightroom export). Either explicit conversion makes the result B&W;
-    // the profile's table, curve and other parameters remain unsupported.
+    // the profile's supported parameters remain independent of global controls.
     let treatment = boolean(props, "crs:ConvertToGrayscale");
     let profile_treatment = boolean(props, "crs:Look/crs:Parameters/crs:ConvertToGrayscale");
     if let Some(bw) = treatment.zip(profile_treatment).map(|(a, b)| a || b).or(treatment).or(profile_treatment) {
         put(o, "treatment", json!(if bw { "bw" } else { "color" }));
+    }
+    if let Some(profile) = imported_look(props) {
+        put(o, "profile", profile);
     }
     for (band, crs) in MIXER_BANDS.iter().zip(CRS_BANDS) {
         n(o, &format!("HueAdjustment{crs}"), &format!("mixer.{band}.hue"));
@@ -593,7 +657,7 @@ mod tests {
     }
 
     #[test]
-    fn monochrome_look_carries_only_explicit_grayscale_conversion() {
+    fn monochrome_look_keeps_supported_profile_parameters_separate() {
         for look in [
             r#"<crs:Look rdf:parseType="Resource" crs:Name="Procedural look"><crs:Parameters rdf:parseType="Resource" crs:ConvertToGrayscale="True" crs:Exposure2012="3" crs:Clarity2012="50" crs:LookTable="procedural-unsupported-table"/></crs:Look>"#,
             r#"<crs:Look><rdf:Description crs:Name="Procedural look"><crs:Parameters><rdf:Description crs:ConvertToGrayscale="True" crs:Exposure2012="3" crs:Clarity2012="50" crs:LookTable="procedural-unsupported-table"/></crs:Parameters></rdf:Description></crs:Look>"#,
@@ -609,9 +673,21 @@ mod tests {
             assert_eq!(settings.bw_mix.blue, -35.0);
             assert_eq!(settings.light.exposure, 0.0, "profile parameters must not become global edits");
             assert_eq!(settings.effects.clarity, 0.0);
+            assert_eq!(settings.profile.imported_look().unwrap().clarity, 50.0);
+            assert_eq!(settings.profile.amount, 100.0);
             assert!(unmapped.iter().any(|k| k == "Look"), "unsupported profile details remain visible");
             assert!(has_adjustments(&packet.properties));
         }
+        let mut fields = Props::from([("crs:Look/crs:Parameters/crs:Contrast2012".into(), vec!["20".into()])]);
+        let before = apply_partial(&DevelopSettings::default(), &to_partial(&fields, Target::RawAbsolute), 1.0);
+        fields.clear();
+        fields.insert("crs:Look/crs:Name".into(), vec!["Other table-only look".into()]);
+        let replaced = apply_partial(&before, &to_partial(&fields, Target::RawAbsolute), 1.0);
+        assert_eq!(replaced.profile.imported_look().unwrap().contrast, 0.0, "an explicit Look replaces the prior definition");
+        fields.insert("crs:Look/crs:Parameters/crs:ToneCurvePV2012".into(), vec!["0,0".into(), "255,510".into()]);
+        let (partial, unmapped) = to_partial_report(&fields, None, Target::RawAbsolute, 1.5);
+        assert!(partial.get("profile").is_none(), "invalid profile knots must not silently clamp into a replacement");
+        assert!(unmapped.iter().any(|s| s == "Look (invalid profile curve)"));
     }
 
     #[test]

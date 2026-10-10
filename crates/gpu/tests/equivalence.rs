@@ -109,6 +109,11 @@ fn function_curves_profiles_bypass_and_cached_gpu_match_cpu() {
         (0.5, "lc.film.faded-slide", false),
         (0.5, "lc.film.faded-slide", true),
         (0.5, "lc.film.faded-slide", false),
+        (0.0, lightcraft_develop::IMPORTED_LOOK_ID, false),
+        (0.5, lightcraft_develop::IMPORTED_LOOK_ID, false),
+        (1.0, lightcraft_develop::IMPORTED_LOOK_ID, true),
+        (2.0, lightcraft_develop::IMPORTED_LOOK_ID, false),
+        (0.5, "lc.color", false),
     ] {
         for (i, curve) in
             [&mut settings.curve.master, &mut settings.curve.red, &mut settings.curve.green, &mut settings.curve.blue].into_iter().enumerate()
@@ -120,6 +125,18 @@ fn function_curves_profiles_bypass_and_cached_gpu_match_cpu() {
             *curve = source.blend(&target, amount).unwrap();
         }
         settings.profile.id = profile.into();
+        settings.profile.imported = (profile == lightcraft_develop::IMPORTED_LOOK_ID).then(|| lightcraft_develop::ImportedLook {
+            contrast: 8.0,
+            highlights: -12.0,
+            shadows: 10.0,
+            clarity: 15.0,
+            master: vec![Point::new(0.0, 0.02), Point::new(0.45, 0.65), Point::new(1.0, 0.98)].into(),
+            red: vec![Point::new(0.0, 0.0), Point::new(0.7, 0.6), Point::new(1.0, 1.0)].into(),
+            blue: vec![Point::new(0.0, 0.01), Point::new(1.0, 0.95)].into(),
+            ..Default::default()
+        });
+        settings.profile.amount = if settings.profile.imported.is_some() { amount * 100.0 } else { 100.0 };
+        settings.curve.refine_saturation = if settings.profile.imported.is_some() { 0.0 } else { 100.0 };
         settings.set_section_enabled("curve", !bypass);
         let cpu = render(&src, &info, &settings, &request).image;
         let warm = lightcraft_gpu::render(&src, &info, &settings, &request, Some(&cache)).expect("gpu").image;

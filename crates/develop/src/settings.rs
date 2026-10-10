@@ -7,7 +7,9 @@ use crate::PointCurve;
 use lightcraft_geom::{CropGeometry, Homography, Orientation, Point};
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const POINT_CURVE_SCHEMA_VERSION: u32 = 2;
+pub const IMPORTED_LOOK_SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = IMPORTED_LOOK_SCHEMA_VERSION;
 
 fn deserialize_schema_version<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
     let version = u32::deserialize(deserializer)?;
@@ -112,7 +114,7 @@ impl Process {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct DevelopSettings {
     /// Schema version of this structure (not the rendering process, see `process`).
@@ -155,6 +157,51 @@ pub struct DevelopSettings {
     pub calibration: Calibration,
     /// Section on/off toggles (the "eye" buttons on panel headers): section id → enabled.
     pub disabled_sections: Vec<String>,
+}
+
+impl Serialize for DevelopSettings {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        if self.profile.id == IMPORTED_LOOK_ID && self.profile.imported.is_none() {
+            return Err(serde::ser::Error::custom("an imported profile requires its look definition"));
+        }
+        // Keep the existing field order and omission rules: old settings retain their hashes.
+        let fields = 26 + usize::from(!self.process.is_legacy()) + usize::from(!self.hdr.is_default());
+        let mut out = serializer.serialize_struct("DevelopSettings", fields)?;
+        out.serialize_field("version", &self.version.max(self.required_schema_version()))?;
+        if !self.process.is_legacy() {
+            out.serialize_field("process", &self.process)?;
+        }
+        out.serialize_field("profile", &self.profile)?;
+        out.serialize_field("treatment", &self.treatment)?;
+        out.serialize_field("wb", &self.wb)?;
+        out.serialize_field("light", &self.light)?;
+        if !self.hdr.is_default() {
+            out.serialize_field("hdr", &self.hdr)?;
+        }
+        out.serialize_field("curve", &self.curve)?;
+        out.serialize_field("color", &self.color)?;
+        out.serialize_field("mixer", &self.mixer)?;
+        out.serialize_field("point_colors", &self.point_colors)?;
+        out.serialize_field("bw_mix", &self.bw_mix)?;
+        out.serialize_field("grading", &self.grading)?;
+        out.serialize_field("effects", &self.effects)?;
+        out.serialize_field("vignette", &self.vignette)?;
+        out.serialize_field("grain", &self.grain)?;
+        out.serialize_field("detail", &self.detail)?;
+        out.serialize_field("optics", &self.optics)?;
+        out.serialize_field("geometry", &self.geometry)?;
+        out.serialize_field("crop", &self.crop)?;
+        out.serialize_field("orientation", &self.orientation)?;
+        out.serialize_field("masks", &self.masks)?;
+        out.serialize_field("spots", &self.spots)?;
+        out.serialize_field("red_eye", &self.red_eye)?;
+        out.serialize_field("lens_blur", &self.lens_blur)?;
+        out.serialize_field("enhance", &self.enhance)?;
+        out.serialize_field("calibration", &self.calibration)?;
+        out.serialize_field("disabled_sections", &self.disabled_sections)?;
+        out.end()
+    }
 }
 
 impl Default for DevelopSettings {
@@ -201,8 +248,119 @@ pub enum Treatment {
     Bw,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+/// The profile id for a look whose checked definition travels with the settings.
+pub const IMPORTED_LOOK_ID: &str = "lc.imported";
+pub const MAX_IMPORTED_LOOK_TEXT_BYTES: usize = 256;
+
+/// A profile's own parameters, independent of the user's global sliders and curves.
+/// Only the supported scalar/curve subset is stored here; opaque table payloads stay unsupported.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ImportedLook {
+    #[serde(deserialize_with = "deserialize_look_text")]
+    pub name: String,
+    #[serde(deserialize_with = "deserialize_look_text")]
+    pub source_id: String,
+    #[serde(deserialize_with = "deserialize_look_scalar")]
+    pub contrast: f64,
+    #[serde(deserialize_with = "deserialize_look_scalar")]
+    pub highlights: f64,
+    #[serde(deserialize_with = "deserialize_look_scalar")]
+    pub shadows: f64,
+    #[serde(deserialize_with = "deserialize_look_scalar")]
+    pub clarity: f64,
+    #[serde(deserialize_with = "deserialize_look_curve")]
+    pub master: PointCurve,
+    #[serde(deserialize_with = "deserialize_look_curve")]
+    pub red: PointCurve,
+    #[serde(deserialize_with = "deserialize_look_curve")]
+    pub green: PointCurve,
+    #[serde(deserialize_with = "deserialize_look_curve")]
+    pub blue: PointCurve,
+}
+
+fn valid_look_text(text: &str) -> bool {
+    text.len() <= MAX_IMPORTED_LOOK_TEXT_BYTES && !text.chars().any(char::is_control)
+}
+
+fn deserialize_look_text<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    struct Text;
+    impl serde::de::Visitor<'_> for Text {
+        type Value = String;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("an imported-look name or identifier of at most 256 bytes, without control characters")
+        }
+        fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<String, E> {
+            if !valid_look_text(text) {
+                return Err(E::custom("invalid imported-look name or identifier"));
+            }
+            Ok(text.to_string())
+        }
+    }
+    deserializer.deserialize_str(Text)
+}
+
+fn deserialize_look_scalar<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    let value = f64::deserialize(deserializer)?;
+    if !value.is_finite() || !(-100.0..=100.0).contains(&value) {
+        return Err(serde::de::Error::custom("imported-look scalar must be finite and between -100 and 100"));
+    }
+    Ok(value)
+}
+
+fn validate_look_curve(curve: &PointCurve) -> Result<(), String> {
+    curve.effective_function().map_err(|e| e.to_string())?;
+    if curve.sparse_points().is_some_and(|points| points.iter().any(|p| !(0.0..=1.0).contains(&p.x) || !(0.0..=1.0).contains(&p.y))) {
+        return Err("imported-look curve points must be between zero and one".into());
+    }
+    if curve.render_lut().v.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
+        return Err("imported-look curve outputs must be finite and between zero and one".into());
+    }
+    Ok(())
+}
+
+fn deserialize_look_curve<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<PointCurve, D::Error> {
+    let curve = PointCurve::deserialize(deserializer)?;
+    validate_look_curve(&curve).map_err(serde::de::Error::custom)?;
+    Ok(curve)
+}
+
+impl ImportedLook {
+    /// Validate a definition built in-process before applying or persisting it.
+    pub fn validate(&self) -> Result<(), String> {
+        if !valid_look_text(&self.name) || !valid_look_text(&self.source_id) {
+            return Err("invalid imported-look name or identifier".into());
+        }
+        if [self.contrast, self.highlights, self.shadows, self.clarity].iter().any(|v| !v.is_finite() || !(-100.0..=100.0).contains(v)) {
+            return Err("imported-look scalar must be finite and between -100 and 100".into());
+        }
+        for curve in [&self.master, &self.red, &self.green, &self.blue] {
+            validate_look_curve(curve)?;
+        }
+        Ok(())
+    }
+}
+
+impl Serialize for ImportedLook {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        self.validate().map_err(serde::ser::Error::custom)?;
+        let mut out = serializer.serialize_struct("ImportedLook", 10)?;
+        out.serialize_field("name", &self.name)?;
+        out.serialize_field("source_id", &self.source_id)?;
+        out.serialize_field("contrast", &self.contrast)?;
+        out.serialize_field("highlights", &self.highlights)?;
+        out.serialize_field("shadows", &self.shadows)?;
+        out.serialize_field("clarity", &self.clarity)?;
+        out.serialize_field("master", &self.master)?;
+        out.serialize_field("red", &self.red)?;
+        out.serialize_field("green", &self.green)?;
+        out.serialize_field("blue", &self.blue)?;
+        out.end()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Profile {
     /// Profile id from the profile registry (e.g. `lc.color`, `lc.vivid`, `lc.mono`).
     pub id: String,
@@ -213,11 +371,43 @@ pub struct Profile {
     /// settings without it keep their JSON (and hash).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub camera_local_tone: bool,
+    /// An imported profile definition, kept with the edit instead of baked into global controls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub imported: Option<ImportedLook>,
 }
 
 impl Default for Profile {
     fn default() -> Self {
-        Self { id: "lc.color".into(), amount: 100.0, camera_local_tone: false }
+        Self { id: "lc.color".into(), amount: 100.0, camera_local_tone: false, imported: None }
+    }
+}
+
+impl Profile {
+    pub fn imported_look(&self) -> Option<&ImportedLook> {
+        if self.id == IMPORTED_LOOK_ID { self.imported.as_ref() } else { None }
+    }
+}
+
+impl<'de> Deserialize<'de> for Profile {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(default)]
+        struct Wire {
+            id: String,
+            amount: f64,
+            camera_local_tone: bool,
+            imported: Option<ImportedLook>,
+        }
+        impl Default for Wire {
+            fn default() -> Self {
+                Self { id: "lc.color".into(), amount: 100.0, camera_local_tone: false, imported: None }
+            }
+        }
+        let value = Wire::deserialize(deserializer)?;
+        if value.id == IMPORTED_LOOK_ID && value.imported.is_none() {
+            return Err(serde::de::Error::custom("an imported profile requires its look definition"));
+        }
+        Ok(Self { id: value.id, amount: value.amount, camera_local_tone: value.camera_local_tone, imported: value.imported })
     }
 }
 
