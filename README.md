@@ -21,9 +21,9 @@
 > | 0 Fork, brand config and foundations | 12–22 | 2 | Done | 1.5 |
 > | 1 Classic shell, catalog, Immich link | 50–85 | 8 | Done | ~9 |
 > | U Upstream tracking | 8–14 | 1 | Done (follow-ups ongoing) | ~2 |
-> | 3 Output modules | 72–124 | 12 | In progress | |
-> | 4 Workflow power features, Immich two-way | 60–105 | 10 | In progress | |
-> | 6 Hardening | 30–50 | 5 | | |
+> | 3 Output modules | 72–124 | 12 | Done (slideshow video export after release) | ~4 (with 4) |
+> | 4 Workflow power features, Immich two-way | 60–105 | 10 | Done (People, .lrcat v2 after release; real-camera checks pending) | ~4 (with 3) |
+> | 6 Hardening | 30–50 | 5 | In progress | |
 > | **Public: open for pull requests and bug reports.** From here on, every change to a crate shared with upstream goes upstream as a PR. | | | | |
 > | 2 Quality and camera coverage | 110–180 | 18 | | |
 > | 5 AI, HDR, video | 100–200 | 20 | | |
