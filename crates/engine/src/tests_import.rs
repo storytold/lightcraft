@@ -309,6 +309,27 @@ fn recently_added_covers_recent_imports_newest_first() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn recently_added_keeps_an_import_batch_in_file_order() {
+    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+    let mut s = Session::new();
+    // one import batch: one `imported` string, ids running opposite to the names
+    let mut by_name = Vec::new();
+    for (n, name) in ["IMG_0001.png", "IMG_0002.png", "IMG_0003.png", "IMG_0004.png"].iter().enumerate() {
+        let id = PhotoId(5000 - n as u64);
+        let p = Photo::new(id, Source::File { path: name.to_string() }, name, "PNG", 16, 12, "2026-09-30T09:00:00");
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        by_name.push(name.to_string());
+    }
+    s.clock = Box::new(|| "2026-10-01T09:00:00".to_string());
+    for ascending in [true, false] {
+        s.execute("library.sort", &serde_json::json!({"key": "captureDate", "ascending": ascending})).unwrap();
+        s.execute("library.source", &serde_json::json!({"kind": "recentlyAdded"})).unwrap();
+        let names: Vec<String> = s.visible_cloned().iter().map(|id| s.catalog.photo(*id).unwrap().file_name.clone()).collect();
+        assert_eq!(names, by_name, "ascending: {ascending}");
+    }
+}
+
 /// Copy imports: a destination folder, flat / by-month folders, renamed copies (numbered in
 /// import order), and a metadata preset on every photo.
 #[test]

@@ -747,7 +747,14 @@ impl Session {
                 let cat = &self.catalog;
                 visible.sort_by(|a, b| {
                     let key = |id: &PhotoId| cat.photo(*id).map(|p| p.imported.clone()).unwrap_or_default();
-                    key(b).cmp(&key(a)).then(a.cmp(b))
+                    // a stable sort keeps `query`'s order within an import, but a descending sort
+                    // reverses it, so ties go by file name (what cameras number), then id, here
+                    let name = |id: &PhotoId| cat.photo(*id).map(|p| p.file_name.as_str());
+                    let by_name = match (name(a), name(b)) {
+                        (Some(x), Some(y)) => lightcraft_catalog::query::cmp_name(x, y),
+                        _ => std::cmp::Ordering::Equal,
+                    };
+                    key(b).cmp(&key(a)).then(by_name).then(a.cmp(b))
                 });
             }
             if self.source == LibrarySource::Missing {
