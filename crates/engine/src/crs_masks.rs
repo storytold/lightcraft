@@ -224,6 +224,120 @@ pub fn masks(values: &Values, aspect: f64) -> (Vec<Value>, Vec<String>) {
     (out, skipped)
 }
 
+/// The containers spot removal is stored in: `RetouchAreas` (current, one struct per spot with a
+/// mask component) and `RetouchInfo` (older, one `key = value, …` line per spot; still written
+/// beside `RetouchAreas` for older readers and read on its own when that is all there is).
+pub const SPOT_CONTAINERS: [&str; 2] = ["crs:RetouchAreas", "crs:RetouchInfo"];
+
+/// One `RetouchAreas` item → a [`Spot`](lightcraft_develop::Spot) as JSON. `aspect` = width /
+/// height of the target: horizontal sizes are stored as fractions of the width, ours of the long
+/// edge. Returns the component kind it can't carry over.
+fn spot(item: &XmpValue, aspect: f64) -> Result<Value, String> {
+    let mode = match text(item, "crs:SpotType") {
+        Some("clone") => "clone",
+        _ => "heal",
+    };
+    let comps = item.field("crs:Masks").map(XmpValue::items).unwrap_or_default();
+    let Some(m) = comps.first() else { return Err("spot without a mask".into()) };
+    let width_to_long = aspect.min(1.0);
+    let (points, size) = match text(m, "crs:What").unwrap_or("") {
+        // a circle: centre + half-sizes in image fractions
+        "Mask/Ellipse" => {
+            let (Some(x), Some(y), Some(sx)) = (num(m, "crs:X"), num(m, "crs:Y"), num(m, "crs:SizeX")) else {
+                return Err("ellipse spot".into());
+            };
+            (vec![pt(x, y)], sx * width_to_long)
+        }
+        // the shape exiftool's schema also allows for a spot
+        "Mask/CircularGradient" => {
+            let (Some(t), Some(l), Some(b), Some(r)) = (num(m, "crs:Top"), num(m, "crs:Left"), num(m, "crs:Bottom"), num(m, "crs:Right")) else {
+                return Err("circular spot".into());
+            };
+            (vec![pt((l + r) / 2.0, (t + b) / 2.0)], (r - l).abs() / 2.0 * width_to_long)
+        }
+        // a brushed removal: the dabs are the path
+        "Mask/Paint" => {
+            let pts: Vec<Value> = m
+                .field("crs:Dabs")
+                .map(XmpValue::items)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(XmpValue::text)
+                .filter_map(|d| {
+                    let mut it = d.split_whitespace().skip(1).filter_map(|v| v.parse::<f64>().ok());
+                    Some(pt(it.next()?, it.next()?))
+                })
+                .collect();
+            if pts.is_empty() {
+                return Err("empty brushed spot".into());
+            }
+            (pts, num(m, "crs:Radius").unwrap_or(0.02))
+        }
+        other => return Err(if other.is_empty() { "unknown spot".into() } else { other.trim_start_matches("Mask/").to_string() }),
+    };
+    let size = size.clamp(0.001, 0.25);
+    // the source is stored as its absolute position (`SourceX`, and `OffsetY` despite the name);
+    // ours is the offset from the target; anything but an explicit source leaves it automatic
+    let explicit = text(item, "crs:SourceState").is_none_or(|s| s == "sourceSetExplicitly");
+    let source_offset = match (explicit, num(item, "crs:SourceX"), num(item, "crs:OffsetY"), points.first()) {
+        (true, Some(sx), Some(sy), Some(p)) => {
+            let (Some(x), Some(y)) = (p["x"].as_f64(), p["y"].as_f64()) else { return Err("spot centre".into()) };
+            let (dx, dy) = (sx - x, sy - y);
+            (dx.is_finite() && dy.is_finite() && (dx != 0.0 || dy != 0.0)).then(|| pt(dx, dy))
+        }
+        _ => None,
+    };
+    let feather = (num(item, "crs:Feather").unwrap_or(0.0) * 100.0).clamp(0.0, 100.0);
+    let opacity = (num(item, "crs:Opacity").unwrap_or(1.0) * 100.0).clamp(0.0, 100.0);
+    Ok(json!({"mode": mode, "points": points, "size": size, "feather": feather, "opacity": opacity, "source_offset": source_offset}))
+}
+
+/// One `RetouchInfo` line (`centerX = 0.5, centerY = 0.5, radius = 0.01, sourceState = …,
+/// sourceX = …, sourceY = …, spotType = heal`) → a spot as JSON.
+fn legacy_spot(line: &str, aspect: f64) -> Option<Value> {
+    let mut kv = BTreeMap::new();
+    for part in line.split(',') {
+        if let Some((k, v)) = part.split_once('=') {
+            kv.insert(k.trim().to_string(), v.trim().to_string());
+        }
+    }
+    let f = |k: &str| kv.get(k).and_then(|s| s.parse::<f64>().ok()).filter(|x| x.is_finite());
+    let (x, y, r) = (f("centerX")?, f("centerY")?, f("radius")?);
+    let mode = if kv.get("spotType").is_some_and(|s| s == "clone") { "clone" } else { "heal" };
+    let explicit = kv.get("sourceState").is_none_or(|s| s == "sourceSetExplicitly");
+    let source_offset = match (explicit, f("sourceX"), f("sourceY")) {
+        (true, Some(sx), Some(sy)) if sx != x || sy != y => Some(pt(sx - x, sy - y)),
+        _ => None,
+    };
+    let opacity = (f("opacity").unwrap_or(1.0) * 100.0).clamp(0.0, 100.0);
+    Some(
+        json!({"mode": mode, "points": [pt(x, y)], "size": (r * aspect.min(1.0)).clamp(0.001, 0.25), "feather": 0.0, "opacity": opacity, "source_offset": source_offset}),
+    )
+}
+
+/// Spot removal in `values` (JSON for `DevelopSettings::spots`), plus the kinds of spot that
+/// couldn't be carried over. `aspect` = width / height of the target (presets: assume 3:2).
+pub fn spots(values: &Values, aspect: f64) -> (Vec<Value>, Vec<String>) {
+    let mut out = Vec::new();
+    let mut skipped = Vec::new();
+    if let Some(list) = values.get("crs:RetouchAreas") {
+        for item in list.items() {
+            match spot(item, aspect) {
+                Ok(v) => out.push(v),
+                Err(kind) => skipped.push(kind),
+            }
+        }
+    }
+    if out.is_empty()
+        && let Some(list) = values.get("crs:RetouchInfo")
+    {
+        out.extend(list.items().iter().filter_map(XmpValue::text).filter_map(|l| legacy_spot(l, aspect)));
+    }
+    skipped.sort();
+    skipped.dedup();
+    (out, skipped)
+}
+
 /// A `.lrtemplate` Lua value as an XMP value (field names get the `crs:` prefix).
 pub fn from_lua(v: &crate::preset_import::Lua) -> XmpValue {
     use crate::preset_import::Lua;
@@ -375,5 +489,92 @@ mod tests {
         let s = &v["masks"][0]["components"][0]["shape"];
         assert!((s["rx"].as_f64().unwrap() - 0.3).abs() < 1e-9);
         assert!((s["ry"].as_f64().unwrap() - 0.3).abs() < 1e-9, "square photo: y radius = its box half-height");
+    }
+
+    /// Spot removal in the shape Lightroom Classic writes it (values written for this test):
+    /// a healed circle with an explicit source, a cloned circle with an automatic source, a
+    /// brushed removal, a circular-gradient spot, one without a mask, and the legacy list.
+    const SPOTS: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="0.1">
+ <crs:RetouchInfo><rdf:Seq>
+  <rdf:li>centerX = 0.4, centerY = 0.3, radius = 0.01, sourceState = sourceSetExplicitly, sourceX = 0.45, sourceY = 0.3, spotType = heal</rdf:li>
+ </rdf:Seq></crs:RetouchInfo>
+ <crs:RetouchAreas><rdf:Seq>
+  <rdf:li><rdf:Description crs:SpotType="heal" crs:SourceState="sourceSetExplicitly" crs:Method="poisson" crs:SourceX="0.45" crs:OffsetY="0.3" crs:Opacity="1" crs:Feather="0" crs:Seed="1">
+   <crs:Masks><rdf:Seq><rdf:li crs:What="Mask/Ellipse" crs:MaskActive="true" crs:MaskValue="1" crs:X="0.4" crs:Y="0.3" crs:SizeX="0.01" crs:SizeY="0.015"/></rdf:Seq></crs:Masks>
+  </rdf:Description></rdf:li>
+  <rdf:li><rdf:Description crs:SpotType="clone" crs:SourceState="sourceAutoComputed" crs:Opacity="0.5" crs:Feather="0.25">
+   <crs:Masks><rdf:Seq><rdf:li crs:What="Mask/Ellipse" crs:X="0.7" crs:Y="0.6" crs:SizeX="0.02" crs:SizeY="0.02"/></rdf:Seq></crs:Masks>
+  </rdf:Description></rdf:li>
+  <rdf:li><rdf:Description crs:SpotType="heal" crs:SourceState="sourceSetExplicitly" crs:SourceX="0.2" crs:OffsetY="0.9">
+   <crs:Masks><rdf:Seq><rdf:li crs:What="Mask/Paint" crs:Radius="0.03" crs:MaskValue="1">
+    <crs:Dabs><rdf:Seq><rdf:li>d 0.1 0.8</rdf:li><rdf:li>d 0.12 0.82</rdf:li><rdf:li>d 0.14 0.84</rdf:li></rdf:Seq></crs:Dabs></rdf:li></rdf:Seq></crs:Masks>
+  </rdf:Description></rdf:li>
+  <rdf:li><rdf:Description crs:SpotType="heal" crs:SourceX="0.6" crs:OffsetY="0.5">
+   <crs:Masks><rdf:Seq><rdf:li crs:What="Mask/CircularGradient" crs:Top="0.48" crs:Left="0.49" crs:Bottom="0.52" crs:Right="0.51"/></rdf:Seq></crs:Masks>
+  </rdf:Description></rdf:li>
+  <rdf:li><rdf:Description crs:SpotType="heal">
+   <crs:Masks><rdf:Seq><rdf:li crs:What="Mask/Gradient" crs:FullX="0" crs:FullY="0" crs:ZeroX="1" crs:ZeroY="1"/></rdf:Seq></crs:Masks>
+  </rdf:Description></rdf:li>
+ </rdf:Seq></crs:RetouchAreas>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#;
+
+    #[test]
+    fn retouch_areas_become_spots() {
+        use lightcraft_develop::SpotMode;
+        let d = lightcraft_meta::parse_xmp(SPOTS).unwrap();
+        let (partial, unmapped) = crate::crs::to_partial_report(&d.properties, Some(&d.values), crate::crs::Target::Any, 1.5);
+        let s = DevelopSettings::default().merged(&partial).expect("valid settings");
+        assert_eq!(s.light.exposure, 0.1, "global settings still map");
+        assert_eq!(s.spots.len(), 4, "the gradient 'spot' is skipped: {:?}", s.spots);
+        let heal = &s.spots[0];
+        assert_eq!((heal.mode, heal.points.len(), heal.opacity, heal.feather), (SpotMode::Heal, 1, 100.0, 0.0));
+        assert!((heal.points[0].x - 0.4).abs() < 1e-9 && (heal.points[0].y - 0.3).abs() < 1e-9);
+        assert!((heal.size - 0.01).abs() < 1e-9, "a landscape target: width fractions are long-edge fractions");
+        let src = heal.source_offset.expect("explicit source");
+        assert!((src.x - 0.05).abs() < 1e-9 && src.y.abs() < 1e-9, "source stored absolute, ours an offset: {src:?}");
+        let clone = &s.spots[1];
+        assert_eq!((clone.mode, clone.opacity, clone.feather, clone.source_offset), (SpotMode::Clone, 50.0, 25.0, None));
+        let brushed = &s.spots[2];
+        assert_eq!((brushed.points.len(), brushed.size), (3, 0.03));
+        let src = brushed.source_offset.expect("explicit source");
+        assert!((src.x - 0.1).abs() < 1e-9 && (src.y - 0.1).abs() < 1e-9);
+        let circ = &s.spots[3];
+        assert!((circ.points[0].x - 0.5).abs() < 1e-9 && (circ.points[0].y - 0.5).abs() < 1e-9 && (circ.size - 0.01).abs() < 1e-9);
+        assert_eq!(unmapped, vec!["Spot: Gradient".to_string()], "{unmapped:?}");
+    }
+
+    #[test]
+    fn portrait_target_scales_spot_sizes() {
+        let d = lightcraft_meta::parse_xmp(SPOTS).unwrap();
+        let (partial, _) = crate::crs::to_partial_report(&d.properties, Some(&d.values), crate::crs::Target::Any, 2.0 / 3.0);
+        let s = DevelopSettings::default().merged(&partial).unwrap();
+        assert!((s.spots[0].size - 0.01 * 2.0 / 3.0).abs() < 1e-9, "a width fraction on a portrait target: {}", s.spots[0].size);
+    }
+
+    #[test]
+    fn legacy_retouch_info_is_read_on_its_own() {
+        let packet = SPOTS.replace("crs:RetouchAreas", "crs:Ignored");
+        let d = lightcraft_meta::parse_xmp(&packet).unwrap();
+        let (partial, unmapped) = crate::crs::to_partial_report(&d.properties, Some(&d.values), crate::crs::Target::Any, 1.5);
+        let s = DevelopSettings::default().merged(&partial).unwrap();
+        assert_eq!(s.spots.len(), 1, "{:?}", s.spots);
+        assert_eq!(s.spots[0].mode, lightcraft_develop::SpotMode::Heal);
+        assert!((s.spots[0].points[0].x - 0.4).abs() < 1e-9 && (s.spots[0].size - 0.01).abs() < 1e-9);
+        assert!(s.spots[0].source_offset.is_some_and(|o| (o.x - 0.05).abs() < 1e-9));
+        assert!(unmapped.iter().any(|u| u == "Ignored"), "{unmapped:?}");
+        assert!(!unmapped.iter().any(|u| u == "RetouchInfo"), "{unmapped:?}");
+    }
+
+    #[test]
+    fn spots_render() {
+        let d = lightcraft_meta::parse_xmp(SPOTS).unwrap();
+        let (partial, _) = crate::crs::to_partial_report(&d.properties, Some(&d.values), crate::crs::Target::Any, 1.5);
+        let s = DevelopSettings::default().merged(&partial).unwrap();
+        let img = lightcraft_scenes::demo_library()[0].render(96, 64);
+        let render = |d: &DevelopSettings| {
+            lightcraft_pipeline::render(&img, &Default::default(), d, &lightcraft_pipeline::RenderRequest::fit(96, 64)).image.data
+        };
+        assert_ne!(render(&DevelopSettings { light: s.light, ..Default::default() }), render(&s), "the spots change the picture");
     }
 }

@@ -140,8 +140,27 @@ application's renderer and is ignored: the photo keeps LightCraft's own process,
 
 Values pass through our control specs, so anything outside our slider ranges gets clamped.
 
-**Not mapped:** camera profiles and looks (`CameraProfile`, `Look`; we have our own profile set), local adjustments
-(masks, gradients, brushes), spot removal, red eye, lens blur, process-version 2010 field names, and AI features.
+**Not mapped:** camera profiles and looks (`CameraProfile`, `Look`; we have our own profile set), red eye, lens blur,
+process-version 2010 field names, and AI features. Local adjustments and spot removal are read as described below.
+
+## Spot removal
+
+Heal and clone spots stored as `crs:RetouchAreas` (one structure per spot, a mask component inside) and the older
+`crs:RetouchInfo` list (one `key = value, …` line per spot; read on its own when it is all a packet has) become our
+spots (`crates/engine/src/crs_masks.rs`, `spots`). Implemented from the public data model and by observing what a
+sidecar written for a healed photo contains.
+
+| Field | Ours | Notes |
+|---|---|---|
+| `SpotType` | `mode` | `heal` (default) or `clone`; the removal method (`Method`) is ours |
+| `Masks` → `Mask/Ellipse` (`X`, `Y`, `SizeX`) | a circle spot | centre in image fractions; `SizeX` is a fraction of the width, our size of the long edge |
+| `Masks` → `Mask/CircularGradient` (`Top/Left/Bottom/Right`) | a circle spot | the box's centre and half-width |
+| `Masks` → `Mask/Paint` (`Dabs`, `Radius`) | a brushed spot | the dabs are the path |
+| `SourceX`, `OffsetY` | `source_offset` | the source's **absolute** x and y (despite the name); ours is the offset from the target. Only with `SourceState="sourceSetExplicitly"` (or no state); anything else leaves the source automatic |
+| `Opacity`, `Feather` | `opacity`, `feather` | 0..1 → 0..100 |
+
+A spot whose mask is any other kind is reported as `Spot: <kind>`. Sizes are clamped to our spot range. A sidecar's
+spots replace the photo's, as its masks do.
 
 ## Local corrections (masks)
 
