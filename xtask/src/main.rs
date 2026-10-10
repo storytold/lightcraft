@@ -14,6 +14,7 @@ mod layers;
 mod parity;
 mod rename;
 mod stats;
+mod upstream;
 mod version;
 mod web;
 
@@ -66,6 +67,14 @@ commands:
                   assets, deny, wasm (stops at first failure)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite and CC0 raw samples (raw.pixls.us) into corpus/ and checks their sha256
+  upstream-merge [--ref REF] [--no-ci]
+                  merge upstream (default upstream/main) on merge/upstream-YYYYMMDD, keep our version of owned
+                  paths (upstream-owned.txt), write target/upstream/review-YYYYMMDD.md, map crate names, run ci
+  upstream-pr <branch> <commit>...
+                  replay commits onto a new branch off upstream/main with upstream crate names (never pushes)
+  shared-check [--strict]
+                  commits since the last upstream merge that change shared paths without `UPSTREAM-PR:`
+                  (warns; --strict fails)
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
 ";
 
@@ -92,6 +101,9 @@ fn main() -> ExitCode {
         Some("web") => web::run(&rest),
         Some("ci") => cmd_ci(),
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
+        Some("upstream-merge") => upstream::merge(&root(), &rest),
+        Some("upstream-pr") => upstream::pr(&root(), &rest),
+        Some("shared-check") => upstream::shared_check(&root(), &rest, false),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
@@ -302,7 +314,7 @@ fn cmd_deny() -> Result<(), String> {
     run(c, "cargo deny check licenses")
 }
 
-fn cmd_ci() -> Result<(), String> {
+pub fn cmd_ci() -> Result<(), String> {
     type Step = (&'static str, Box<dyn Fn() -> Result<(), String>>);
     let steps: Vec<Step> = vec![
         (
@@ -344,6 +356,7 @@ fn cmd_ci() -> Result<(), String> {
             }),
         ),
         ("parity", Box::new(|| parity::run(&root(), false))),
+        ("shared-check", Box::new(|| upstream::shared_check(&root(), &[], true))),
         ("layers", Box::new(cmd_layers)),
         ("assets", Box::new(|| assets::run(&root()))),
         ("deny", Box::new(cmd_deny)),
