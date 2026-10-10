@@ -1431,5 +1431,11 @@
   "Use the Quick Collection as the target again": "Снова использовать быструю коллекцию как цель",
   "Import Collection Definition…": "Импорт определения коллекции…",
   "Export Collection Definition…": "Экспорт определения коллекции…",
-  "Collection definitions and keyword lists": "Определения коллекций и списки ключевых слов"
+  "Collection definitions and keyword lists": "Определения коллекций и списки ключевых слов",
+  "Keyword Tags": "Ключевые слова",
+  "Click here to add keywords": "Нажмите, чтобы добавить ключевые слова",
+  "None yet": "Пока нет",
+  "Keyword Shortcut (⇧K)": "Быстрое ключевое слово (⇧K)",
+  "Add Keyword Shortcut": "Добавить быстрое ключевое слово",
+  "Set Keyword Shortcut": "Задать быстрое ключевое слово"
 }

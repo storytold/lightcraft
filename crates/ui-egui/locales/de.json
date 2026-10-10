@@ -1912,5 +1912,11 @@
   "Use the Quick Collection as the target again": "Wieder die Schnellsammlung als Ziel verwenden",
   "Import Collection Definition…": "Sammlungsdefinition importieren…",
   "Export Collection Definition…": "Sammlungsdefinition exportieren…",
-  "Collection definitions and keyword lists": "Sammlungsdefinitionen und Stichwortlisten"
+  "Collection definitions and keyword lists": "Sammlungsdefinitionen und Stichwortlisten",
+  "Keyword Tags": "Stichwort-Tags",
+  "Click here to add keywords": "Hier klicken, um Stichwörter hinzuzufügen",
+  "None yet": "Noch keine",
+  "Keyword Shortcut (⇧K)": "Stichwort-Kurzbefehl (⇧K)",
+  "Add Keyword Shortcut": "Stichwort-Kurzbefehl hinzufügen",
+  "Set Keyword Shortcut": "Stichwort-Kurzbefehl festlegen"
 }

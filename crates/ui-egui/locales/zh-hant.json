@@ -1757,5 +1757,11 @@
   "Use the Quick Collection as the target again": "重新將快速收藏集作為目標",
   "Import Collection Definition…": "匯入收藏集定義…",
   "Export Collection Definition…": "匯出收藏集定義…",
-  "Collection definitions and keyword lists": "收藏集定義和關鍵字清單"
+  "Collection definitions and keyword lists": "收藏集定義和關鍵字清單",
+  "Keyword Tags": "關鍵字標記",
+  "Click here to add keywords": "按一下這裡加入關鍵字",
+  "None yet": "尚無",
+  "Keyword Shortcut (⇧K)": "關鍵字快速鍵 (⇧K)",
+  "Add Keyword Shortcut": "加入關鍵字快速鍵",
+  "Set Keyword Shortcut": "設定關鍵字快速鍵"
 }

@@ -166,6 +166,8 @@ pub struct Session {
     pub keyword_sets: Vec<cmd::keywords::KeywordSet>,
     pub keyword_set: Option<String>,
     pub recent_keywords: Vec<String>,
+    /// The keyword ⇧K toggles on the selected photos (Keywording ▸ keyword shortcut).
+    pub keyword_shortcut: Option<String>,
     /// Before/After: the "before" settings chosen per photo (this session; default: the photo's
     /// import state). See `cmd/before.rs`.
     pub before: std::collections::HashMap<PhotoId, Arc<DevelopSettings>>,
@@ -253,6 +255,7 @@ impl Session {
             keyword_sets: Vec::new(),
             keyword_set: None,
             recent_keywords: Vec::new(),
+            keyword_shortcut: None,
             before: Default::default(),
             import_probes: Default::default(),
             preview_build: None,

@@ -104,6 +104,25 @@ fn collections_panel_shows_and_clears_the_target() {
     assert_eq!(h.app.session.target_album, None);
 }
 
+/// Keywording: the tags field, suggestions (a click adds to every selected photo), the keyword
+/// set grid and the shortcut field are on screen.
+#[test]
+fn keywording_panel_adds_suggestions_to_the_selection() {
+    let mut h = demo();
+    h.app.ui.hidden_panels = vec![PanelId::QuickDevelop];
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    run(&mut h, "library.select", json!({"ids": ids}));
+    assert!(has(&h, "field:keywordTags") && has(&h, "field:keywordAdd") && has(&h, "field:keywordShortcut"));
+    let k = h.app.widgets.iter().find_map(|(w, _)| w.strip_prefix("kwdSuggest:").map(str::to_string)).expect("a suggestion");
+    click(&mut h, &format!("kwdSuggest:{k}"));
+    for id in &ids {
+        assert!(
+            h.app.session.catalog.photo(dac_catalog::PhotoId(*id)).unwrap().meta.keywords.iter().any(|x| x.eq_ignore_ascii_case(&k)),
+            "{k} on {id}"
+        );
+    }
+}
+
 /// Library's columns are Classic panel stacks: every panel has a foldable header, Solo Mode
 /// keeps one open per side, hidden panels go away, and the order is the user's.
 #[test]

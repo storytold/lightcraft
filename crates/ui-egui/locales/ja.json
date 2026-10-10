@@ -1757,5 +1757,11 @@
   "Use the Quick Collection as the target again": "クイックコレクションを再びターゲットにする",
   "Import Collection Definition…": "コレクション定義を読み込む…",
   "Export Collection Definition…": "コレクション定義を書き出す…",
-  "Collection definitions and keyword lists": "コレクション定義とキーワードリスト"
+  "Collection definitions and keyword lists": "コレクション定義とキーワードリスト",
+  "Keyword Tags": "キーワードタグ",
+  "Click here to add keywords": "ここをクリックしてキーワードを追加",
+  "None yet": "まだありません",
+  "Keyword Shortcut (⇧K)": "キーワードショートカット (⇧K)",
+  "Add Keyword Shortcut": "キーワードショートカットを追加",
+  "Set Keyword Shortcut": "キーワードショートカットを設定"
 }

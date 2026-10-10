@@ -211,3 +211,30 @@ fn volumes_list_the_disks_with_their_space() {
     assert!(list.iter().any(|x| x["total"].as_u64().unwrap_or(0) > 0), "{v}");
     assert_eq!(crate::cmd::folders::disk_space("/definitely/not/here"), None);
 }
+
+/// Keywording: built-in keyword sets can be used (⌥1–⌥9) but not deleted, a user set of the same
+/// name replaces one; the keyword shortcut (⇧K) toggles its keyword on the selection.
+#[test]
+fn builtin_keyword_sets_and_the_keyword_shortcut() {
+    let (mut s, ids) = demo_with(2);
+    let sets = s.execute("keyword.sets", &json!({})).unwrap();
+    assert!(sets["sets"].as_array().unwrap().iter().any(|x| x["name"] == "Outdoor Photography" && x["builtin"] == true), "{sets}");
+    s.execute("keyword.useSet", &json!({"name": "outdoor photography"})).unwrap();
+    assert_eq!(crate::cmd::keywords::current_keywords(&s).first().map(String::as_str), Some("Landscape"));
+    let r = s.execute("keyword.toggleFromSet", &json!({"index": 1})).unwrap();
+    assert_eq!(r["keyword"], "Landscape");
+    assert!(s.execute("keyword.deleteSet", &json!({"name": "Outdoor Photography"})).is_err(), "built-in sets stay");
+    s.execute("keyword.saveSet", &json!({"name": "Outdoor Photography", "keywords": ["Hike"]})).unwrap();
+    assert_eq!(crate::cmd::keywords::current_keywords(&s), ["Hike"]);
+    s.execute("keyword.deleteSet", &json!({"name": "Outdoor Photography"})).unwrap();
+    // the shortcut
+    assert!(s.execute("keyword.toggleShortcut", &json!({})).is_err(), "none set yet");
+    s.execute("keyword.setShortcut", &json!({"keyword": " Travel|Rome "})).unwrap();
+    let has = |s: &Session, k: &str| ids.iter().all(|i| s.catalog.photo(dac_catalog::PhotoId(*i)).unwrap().meta.keywords.iter().any(|x| x == k));
+    s.execute("keyword.toggleShortcut", &json!({})).unwrap();
+    assert!(has(&s, "Travel|Rome"));
+    s.execute("keyword.toggleShortcut", &json!({})).unwrap();
+    assert!(!has(&s, "Travel|Rome"));
+    s.execute("keyword.setShortcut", &json!({"keyword": ""})).unwrap();
+    assert_eq!(s.keyword_shortcut, None);
+}

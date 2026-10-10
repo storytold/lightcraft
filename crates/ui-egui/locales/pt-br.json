@@ -1757,5 +1757,11 @@
   "Use the Quick Collection as the target again": "Usar novamente a coleção rápida como destino",
   "Import Collection Definition…": "Importar definição de coleção…",
   "Export Collection Definition…": "Exportar definição de coleção…",
-  "Collection definitions and keyword lists": "Definições de coleção e listas de palavras-chave"
+  "Collection definitions and keyword lists": "Definições de coleção e listas de palavras-chave",
+  "Keyword Tags": "Tags de palavras-chave",
+  "Click here to add keywords": "Clique aqui para adicionar palavras-chave",
+  "None yet": "Nenhuma ainda",
+  "Keyword Shortcut (⇧K)": "Atalho de palavra-chave (⇧K)",
+  "Add Keyword Shortcut": "Adicionar atalho de palavra-chave",
+  "Set Keyword Shortcut": "Definir atalho de palavra-chave"
 }

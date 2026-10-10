@@ -1757,5 +1757,11 @@
   "Use the Quick Collection as the target again": "重新将快捷收藏夹用作目标",
   "Import Collection Definition…": "导入收藏夹定义…",
   "Export Collection Definition…": "导出收藏夹定义…",
-  "Collection definitions and keyword lists": "收藏夹定义和关键字列表"
+  "Collection definitions and keyword lists": "收藏夹定义和关键字列表",
+  "Keyword Tags": "关键字标记",
+  "Click here to add keywords": "单击此处添加关键字",
+  "None yet": "暂无",
+  "Keyword Shortcut (⇧K)": "关键字快捷键 (⇧K)",
+  "Add Keyword Shortcut": "添加关键字快捷键",
+  "Set Keyword Shortcut": "设置关键字快捷键"
 }
