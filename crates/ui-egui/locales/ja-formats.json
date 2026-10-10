@@ -216,5 +216,7 @@
   "Target: {name}": "ターゲット: {name}",
   "Collection imported: {n} photos found, {m} not in this library": "コレクションを読み込みました: {n} 枚が見つかり、{m} 枚はこのライブラリにありません",
   "{n} keywords imported": "{n} 個のキーワードを読み込みました",
-  "{n} keywords removed": "{n} 個のキーワードを削除しました"
+  "{n} keywords removed": "{n} 個のキーワードを削除しました",
+  "Only {} keys": "{} のキーのみ",
+  "{} keys": "{} のキー"
 }

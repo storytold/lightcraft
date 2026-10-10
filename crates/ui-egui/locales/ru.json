@@ -1453,5 +1453,11 @@
   "Export Synonyms": "Экспортировать синонимы",
   "Create Keyword Tag inside…": "Создать вложенное ключевое слово…",
   "Use as Keyword Shortcut (⇧K)": "Сделать быстрым ключевым словом (⇧K)",
-  "Keyword (a|b nests it under a)": "Ключевое слово (a|b вкладывает в a)"
+  "Keyword (a|b nests it under a)": "Ключевое слово (a|b вкладывает в a)",
+  "Increase Thumbnail Size": "Увеличить миниатюры",
+  "Decrease Thumbnail Size": "Уменьшить миниатюры",
+  "First Photo": "Первое фото",
+  "Last Photo": "Последнее фото",
+  "Cycle Spot Mode": "Сменить режим пятна",
+  "Auto White Balance": "Автоматический баланс белого"
 }

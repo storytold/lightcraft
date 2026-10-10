@@ -1779,5 +1779,11 @@
   "Export Synonyms": "导出同义词",
   "Create Keyword Tag inside…": "在其中创建关键字标记…",
   "Use as Keyword Shortcut (⇧K)": "用作关键字快捷键 (⇧K)",
-  "Keyword (a|b nests it under a)": "关键字（a|b 表示嵌套在 a 下）"
+  "Keyword (a|b nests it under a)": "关键字（a|b 表示嵌套在 a 下）",
+  "Increase Thumbnail Size": "增大缩览图",
+  "Decrease Thumbnail Size": "减小缩览图",
+  "First Photo": "第一张照片",
+  "Last Photo": "最后一张照片",
+  "Cycle Spot Mode": "切换污点模式",
+  "Auto White Balance": "自动白平衡"
 }

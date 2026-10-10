@@ -262,3 +262,67 @@ fn the_alternative_set_restores_the_previous_keys_and_keymaps_round_trip() {
     let back = serde_json::from_str::<crate::UiState>(&saved).unwrap();
     assert_eq!(back.settings.keymap_set, h.app.ui.settings.keymap_set);
 }
+
+/// Classic's module keys (KEYC-COMPARE / KEYC-DEVELOP): backslash is the filter bar in the Library
+/// grid and Show Original in a loupe; `=` / `-` thumbnail size; Home / End; ⌘U / ⇧⌘U in Develop.
+#[test]
+fn module_keys_are_scoped_by_module_and_view() {
+    let mut h = demo();
+    let press = |h: &mut Headless, k: &str, cmd: bool, shift: bool| {
+        let r = h.request("ui.key", json!({"key": k, "cmd": cmd, "shift": shift}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+    };
+    // Library loupe: backslash shows the original, the filter bar stays off
+    assert_eq!(h.app.ui.view, ViewMode::Detail);
+    press(&mut h, "Backslash", false, false);
+    assert!(!h.app.ui.filter_bar);
+    assert_eq!(h.app.ui.view, ViewMode::Detail);
+    // grid: backslash toggles the filter bar
+    key(&mut h, "G", false);
+    press(&mut h, "Backslash", false, false);
+    assert!(h.app.ui.filter_bar);
+    // thumbnail size
+    let size = h.app.ui.thumb_size;
+    press(&mut h, "Equals", false, false);
+    assert!(h.app.ui.thumb_size > size);
+    press(&mut h, "Minus", false, false);
+    press(&mut h, "Minus", false, false);
+    assert!(h.app.ui.thumb_size < size);
+    // Home / End
+    let vis = h.app.session.visible_cloned();
+    press(&mut h, "End", false, false);
+    assert_eq!(h.app.session.active(), vis.last().copied());
+    press(&mut h, "Home", false, false);
+    assert_eq!(h.app.session.active(), vis.first().copied());
+    // Develop: ⇧⌘U sets Auto white balance, ⌘U runs Auto (an undo step)
+    key(&mut h, "D", false);
+    h.settle(SETTLE);
+    let undo = h.app.session.undo.len();
+    press(&mut h, "U", true, true);
+    let id = h.app.session.active().unwrap();
+    assert_eq!(h.app.session.develop_of(id).unwrap().wb.mode, dac_develop::WbMode::Auto);
+    press(&mut h, "U", true, false);
+    assert!(h.app.session.undo.len() >= undo + 2, "both keys made an edit");
+    // ⇧Q without a spot is a no-op, not a crash
+    press(&mut h, "Q", false, true);
+    assert!(h.app.run("spot.cycleMode", json!({})).is_err());
+}
+
+/// ⌘/ lists the current module's keys only, unless a search looks through everything.
+#[test]
+fn the_shortcuts_list_shows_the_current_modules_keys() {
+    use crate::module::ModuleId;
+    use crate::panels::keymap::in_module;
+    assert!(in_module(ModuleId::Develop, "develop.auto"));
+    assert!(in_module(ModuleId::Develop, "app.shortcuts"));
+    assert!(!in_module(ModuleId::Develop, "album.toggleTarget"));
+    assert!(in_module(ModuleId::Library, "album.toggleTarget"));
+    let mut h = demo();
+    h.app.run("app.shortcuts", json!({})).unwrap();
+    h.step();
+    h.step();
+    // the module filter is shown and can be turned off
+    click(&mut h, "check:shortcuts.moduleOnly");
+}

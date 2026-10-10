@@ -138,6 +138,13 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("tool.keywordPainter", "Keyword Painter", None, ""),
     ("tool.painter", "Painter", Some("Cmd+Alt+K"), "Photo"),
     ("view.gridCellStyle", "Grid Cell Style", None, ""),
+    // Library's `=` / `-`, Home / End (module keys, see `crate::module::LIBRARY_KEYS`)
+    ("view.thumbLarger", "Increase Thumbnail Size", None, "View"),
+    ("view.thumbSmaller", "Decrease Thumbnail Size", None, "View"),
+    ("library.first", "First Photo", None, ""),
+    ("library.last", "Last Photo", None, ""),
+    // Develop's ⇧Q: the selected spot's mode Remove → Heal → Clone
+    ("spot.cycleMode", "Cycle Spot Mode", None, ""),
     ("metadata.panelPreset", "Metadata Panel Preset", None, ""),
     ("view.gridInfo", "Grid Info", None, ""),
     ("dialog.allMetadata", "All Metadata…", None, "Photo"),
@@ -748,6 +755,36 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
                 None => app.ui.hidden_locations.clear(),
             }
             Ok(json!({"hidden": app.ui.hidden_locations}))
+        }
+        "view.thumbLarger" | "view.thumbSmaller" => {
+            let k = if id == "view.thumbLarger" { 1.15 } else { 1.0 / 1.15 };
+            app.ui.thumb_size = (app.ui.thumb_size * k).clamp(90.0, 480.0);
+            Ok(json!({"thumbSize": app.ui.thumb_size}))
+        }
+        "library.first" | "library.last" => {
+            let vis = app.session.visible_cloned();
+            let pick = if id == "library.first" { vis.first() } else { vis.last() };
+            match pick {
+                Some(pid) => app.run("library.select", json!({"ids": [pid.0]})).map(|_| json!({"active": pid.0})),
+                None => Ok(json!({"active": null})),
+            }
+        }
+        "spot.cycleMode" => {
+            let cur = app.session.active_spot.and_then(|i| {
+                let d = app.session.active().and_then(|a| app.session.develop_of(a))?;
+                d.spots.get(i).map(|s| (i, s.mode))
+            });
+            match cur {
+                None => Err("select a spot first".to_string()),
+                Some((i, mode)) => {
+                    let next = match mode {
+                        dac_develop::SpotMode::Remove => "heal",
+                        dac_develop::SpotMode::Heal => "clone",
+                        dac_develop::SpotMode::Clone => "remove",
+                    };
+                    app.run("spot.update", json!({"index": i, "mode": next})).map(|_| json!({"mode": next}))
+                }
+            }
         }
         "view.filterBar" => {
             app.ui.filter_bar = !app.ui.filter_bar;

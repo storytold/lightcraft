@@ -1779,5 +1779,11 @@
   "Export Synonyms": "Exportar sinônimos",
   "Create Keyword Tag inside…": "Criar tag dentro…",
   "Use as Keyword Shortcut (⇧K)": "Usar como atalho de palavra-chave (⇧K)",
-  "Keyword (a|b nests it under a)": "Palavra-chave (a|b aninha em a)"
+  "Keyword (a|b nests it under a)": "Palavra-chave (a|b aninha em a)",
+  "Increase Thumbnail Size": "Aumentar miniaturas",
+  "Decrease Thumbnail Size": "Diminuir miniaturas",
+  "First Photo": "Primeira foto",
+  "Last Photo": "Última foto",
+  "Cycle Spot Mode": "Alternar modo do ponto",
+  "Auto White Balance": "Balanço de branco automático"
 }

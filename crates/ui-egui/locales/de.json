@@ -1934,5 +1934,11 @@
   "Export Synonyms": "Synonyme exportieren",
   "Create Keyword Tag inside…": "Stichwort-Tag darin erstellen…",
   "Use as Keyword Shortcut (⇧K)": "Als Stichwort-Kurzbefehl verwenden (⇧K)",
-  "Keyword (a|b nests it under a)": "Stichwort (a|b ordnet es unter a ein)"
+  "Keyword (a|b nests it under a)": "Stichwort (a|b ordnet es unter a ein)",
+  "Increase Thumbnail Size": "Miniaturen vergrößern",
+  "Decrease Thumbnail Size": "Miniaturen verkleinern",
+  "First Photo": "Erstes Foto",
+  "Last Photo": "Letztes Foto",
+  "Cycle Spot Mode": "Bereichsmodus wechseln",
+  "Auto White Balance": "Automatischer Weißabgleich"
 }

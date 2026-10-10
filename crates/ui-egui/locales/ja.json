@@ -1779,5 +1779,11 @@
   "Export Synonyms": "同義語を書き出す",
   "Create Keyword Tag inside…": "この中にキーワードタグを作成…",
   "Use as Keyword Shortcut (⇧K)": "キーワードショートカットにする (⇧K)",
-  "Keyword (a|b nests it under a)": "キーワード（a|b で a の下に入れる）"
+  "Keyword (a|b nests it under a)": "キーワード（a|b で a の下に入れる）",
+  "Increase Thumbnail Size": "サムネールを大きく",
+  "Decrease Thumbnail Size": "サムネールを小さく",
+  "First Photo": "最初の写真",
+  "Last Photo": "最後の写真",
+  "Cycle Spot Mode": "スポットモードを切り替え",
+  "Auto White Balance": "自動ホワイトバランス"
 }

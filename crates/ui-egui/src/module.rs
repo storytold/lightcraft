@@ -390,8 +390,28 @@ const DEVELOP_RIGHT: &[PanelId] = &[
     PanelId::Info,
 ];
 
-/// Library: `[` / `]` rate (Develop keeps them for the brush size).
-const LIBRARY_KEYS: &[ModuleKey] = &[("[", "photo.ratingDown", "{}"), ("]", "photo.ratingUp", "{}")];
+/// Library: `[` / `]` rate (Develop keeps them for the brush size); `\` the filter bar (in a loupe
+/// it stays Show Original, see `shortcuts::handle`); `=` / `-` thumbnail size; Home / End the first
+/// and last photo.
+pub const LIBRARY_KEYS: &[ModuleKey] = &[
+    ("[", "photo.ratingDown", "{}"),
+    ("]", "photo.ratingUp", "{}"),
+    ("\\", "view.filterBar", "{}"),
+    ("=", "view.thumbLarger", "{}"),
+    ("-", "view.thumbSmaller", "{}"),
+    ("Home", "library.first", "{}"),
+    ("End", "library.last", "{}"),
+];
+
+/// Develop: ⌘U Auto (tone), ⇧⌘U Auto white balance, ⇧Q cycles the selected spot's mode
+/// (Remove → Heal → Clone), Home / End the first and last photo.
+pub const DEVELOP_KEYS: &[ModuleKey] = &[
+    ("Cmd+U", "develop.auto", "{}"),
+    ("Cmd+Shift+U", "develop.wb", r#"{"mode": "auto"}"#),
+    ("Shift+Q", "spot.cycleMode", "{}"),
+    ("Home", "library.first", "{}"),
+    ("End", "library.last", "{}"),
+];
 
 impl Module for Library {
     fn id(&self) -> ModuleId {
@@ -431,7 +451,7 @@ impl Module for Develop {
         views(ui, app);
     }
     fn keymap(&self) -> &'static [ModuleKey] {
-        &[]
+        DEVELOP_KEYS
     }
 }
 

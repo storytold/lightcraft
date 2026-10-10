@@ -1779,5 +1779,11 @@
   "Export Synonyms": "匯出同義詞",
   "Create Keyword Tag inside…": "在其中建立關鍵字標記…",
   "Use as Keyword Shortcut (⇧K)": "用作關鍵字快速鍵 (⇧K)",
-  "Keyword (a|b nests it under a)": "關鍵字（a|b 表示巢狀於 a 下）"
+  "Keyword (a|b nests it under a)": "關鍵字（a|b 表示巢狀於 a 下）",
+  "Increase Thumbnail Size": "放大縮圖",
+  "Decrease Thumbnail Size": "縮小縮圖",
+  "First Photo": "第一張照片",
+  "Last Photo": "最後一張照片",
+  "Cycle Spot Mode": "切換污點模式",
+  "Auto White Balance": "自動白平衡"
 }

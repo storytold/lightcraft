@@ -216,5 +216,7 @@
   "Target: {name}": "Цель: {name}",
   "Collection imported: {n} photos found, {m} not in this library": "Коллекция импортирована: найдено фото: {n}, нет в библиотеке: {m}",
   "{n} keywords imported": "Импортировано ключевых слов: {n}",
-  "{n} keywords removed": "Удалено ключевых слов: {n}"
+  "{n} keywords removed": "Удалено ключевых слов: {n}",
+  "Only {} keys": "Только клавиши модуля {}",
+  "{} keys": "Клавиши модуля {}"
 }
