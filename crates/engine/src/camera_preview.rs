@@ -23,7 +23,8 @@ use lightcraft_raw::{RawFormat, RawImage, color::CameraTransform, profile::HsvTa
 ///
 /// 1: the fit as of #499's follow-up; 2: Sony DRO (tone curve lowered to Sony's curve without DRO)
 /// and the ILCE-7CR profile (#528, #583, #568, #616).
-pub const LOOK_VERSION: u32 = 2;
+/// 3: measured camera colour can refine an otherwise tone-only partial look.
+pub const LOOK_VERSION: u32 = 3;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
@@ -105,7 +106,7 @@ pub(crate) fn fit_preview(raw: &RawImage, bytes: &[u8], transform: &CameraTransf
     // try its colour first and fit tone/chroma per photo (picture styles vary).
     let profile = raw.metadata.model.as_deref().and_then(crate::camera_profiles::get);
     let colour = profile.as_ref().and_then(|p| Some((p.matrix().mul(&transform.matrix.inverse()?), p.hue_sat.clone())));
-    let look = fit_look(&sensor, &reference, &clipped, colour)?;
+    let look = fit_look_with_fallback(&sensor, &reference, &clipped, colour, || spectral_correction(raw, transform))?;
     // Sony's Dynamic Range Optimizer (on by default) brightens the camera JPEG's darker regions,
     // not the raw: keep the colour fitted to the JPEG, take the tone curve without DRO.
     let dro = lightcraft_raw::embedded_preview_dynamic_range_optimized(bytes) == Some(true);
@@ -127,6 +128,11 @@ pub(crate) fn fit_preview(raw: &RawImage, bytes: &[u8], transform: &CameraTransf
 /// the render's highlight reconstruction.
 const SENSOR_CLIP: f32 = 0.99;
 
+#[cfg(test)]
+fn fit_look(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool], colour: Option<(Mat3, Option<HsvTable>)>) -> Option<CameraLook> {
+    fit_look_with_fallback(sensor, reference, clipped, colour, || None)
+}
+
 /// The photo's look, refitted without the proxy pixels whose sensor values are clipped.
 ///
 /// A clipped raw pixel no longer records the scene's colour: with one channel held at the clip
@@ -145,14 +151,20 @@ const SENSOR_CLIP: f32 = 0.99;
 /// replace a look fitted away from edges). A photo that had no look gets one when the search
 /// without the clipped pixels finds it, and otherwise the [`fit_partial`] look when that is clearly
 /// closer to the camera JPEG than the neutral fallback.
-fn fit_look(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool], colour: Option<(Mat3, Option<HsvTable>)>) -> Option<CameraLook> {
+fn fit_look_with_fallback(
+    sensor: &Rgb32f,
+    reference: &Rgb32f,
+    clipped: &[bool],
+    colour: Option<(Mat3, Option<HsvTable>)>,
+    fallback: impl FnOnce() -> Option<Mat3>,
+) -> Option<CameraLook> {
     let unclipped = without_clipped(sensor, clipped);
     let Some((look, attempt)) = search_ordered(sensor, reference, colour.clone(), TONE_FITS) else {
-        return unclipped
-            .as_ref()
-            .and_then(|u| search_ordered(u, reference, colour, TONE_FITS))
-            .map(|(look, _)| look)
-            .or_else(|| fit_partial(unclipped.as_ref().unwrap_or(sensor), reference));
+        return unclipped.as_ref().and_then(|u| search_ordered(u, reference, colour, TONE_FITS)).map(|(look, _)| look).or_else(|| {
+            let sensor = unclipped.as_ref().unwrap_or(sensor);
+            let partial = fit_partial(sensor, reference)?;
+            Some(refine_tone_only(sensor, reference, partial, fallback))
+        });
     };
     let Some(unclipped) = unclipped else { return Some(look) };
     let refit = fit_attempt(&unclipped, reference, &colour, attempt);
@@ -160,6 +172,62 @@ fn fit_look(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool], colour: Optio
         eprintln!("[profile] camera look: no fit without the clipped pixels on the accepted attempt, keeping the fit on all pixels");
     }
     Some(refit.unwrap_or(look))
+}
+
+/// A measured camera transform expressed as a correction of the existing proxy's working RGB.
+/// Keep the decoder's as-shot balance and exposure; this supplies colour, never a Sony/Adobe look.
+fn spectral_correction(raw: &RawImage, transform: &CameraTransform) -> Option<Mat3> {
+    let camera = lightcraft_raw::spectral::find(raw.metadata.make.as_deref(), raw.metadata.model.as_deref()?)?;
+    let mut color = raw.color.clone();
+    if !camera.fill(&mut color) || transform.wb.iter().any(|v| !v.is_finite() || *v <= 0.0) {
+        return None;
+    }
+    let neutral = transform.wb.map(|v| 1.0 / f64::from(v));
+    let white = color.as_shot_white_xy.unwrap_or_else(|| lightcraft_raw::color::neutral_to_xy(&color, neutral));
+    let measured = lightcraft_raw::color::camera_transform_of(&color, white);
+    let ratio = std::array::from_fn::<_, 3, _>(|i| f64::from(measured.wb[i] / transform.wb[i]));
+    let [r, g, b] = ratio;
+    let matrix = measured.matrix.mul(&Mat3::diag(r, g, b)).mul(&transform.matrix.inverse()?);
+    matrix.0.iter().flatten().all(|v| v.is_finite()).then_some(matrix)
+}
+
+/// A dull scene cannot determine colour. Try measured colour only after an accepted tone-only
+/// partial fit, refitting tone/chroma from scratch. Full fits and partial learned matrices keep
+/// their exact result. Keep the old partial unless the new look improves held-out encoded error
+/// without increasing linear error; the normal full-fit gates also still apply.
+fn refine_tone_only(sensor: &Rgb32f, reference: &Rgb32f, partial: CameraLook, fallback: impl FnOnce() -> Option<Mat3>) -> CameraLook {
+    if partial.matrix != Mat3::IDENTITY || partial.hue_sat.is_some() {
+        return partial;
+    }
+    let Some(matrix) = fallback() else { return partial };
+    let Some((candidate, _)) = search_ordered(sensor, reference, Some((matrix, None)), TONE_FITS) else { return partial };
+    let Some((pairs, _)) = collect_pairs(sensor, reference, 0.005, None) else { return partial };
+    let error = |look: &CameraLook| {
+        let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+        let mut linear = 0.0;
+        let mut encoded = 0.0;
+        for (x, target) in pairs.iter().step_by(3) {
+            let predicted = displayed(look.matrix.apply(*x), &tone);
+            for (a, b) in predicted.into_iter().zip(target) {
+                linear += (a - b).powi(2);
+                encoded += (a.max(0.0).powf(1.0 / 2.2) - b.max(0.0).powf(1.0 / 2.2)).powi(2);
+            }
+        }
+        (linear, encoded)
+    };
+    let (before, before_encoded) = error(&partial);
+    let (after, after_encoded) = error(&candidate);
+    if lightcraft_pipeline::profiling() {
+        eprintln!("[profile] measured candidate linear {before:.6} -> {after:.6}, encoded {before_encoded:.6} -> {after_encoded:.6}");
+    }
+    if after.is_finite() && after_encoded.is_finite() && after <= before && after_encoded < before_encoded {
+        if lightcraft_pipeline::profiling() {
+            eprintln!("[profile] camera look: measured colour refines tone-only partial ({before_encoded:.5} -> {after_encoded:.5})");
+        }
+        candidate
+    } else {
+        partial
+    }
 }
 
 /// `sensor` with its clipped pixels set to NaN (left out of every training pair), or `None` when
@@ -1190,6 +1258,10 @@ mod tests {
             let y = luminance_2020(p);
             *dst = p.map(|v| v * (1.0 - (-2.5 * y).exp()) / y);
         }
+        let clipped = vec![false; sensor.data.len()];
+        let full = fit_look(&sensor, &reference, &clipped, None).unwrap();
+        let preserved = fit_look_with_fallback(&sensor, &reference, &clipped, None, || panic!("full fit must not consult fallback")).unwrap();
+        assert_eq!((preserved.matrix, preserved.tone, preserved.hue_sat), (full.matrix, full.tone, full.hue_sat));
         let original = sensor.clone();
         let fit = fit_pairs(&sensor, &reference).unwrap();
         assert_eq!(sensor.data, original.data);
@@ -2313,5 +2385,61 @@ mod tests {
         // a black-and-white JPEG of the scene
         reference.data.iter_mut().zip(&sensor.data).for_each(|(r, s)| *r = [0.8 * luminance_2020(*s).sqrt(); 3]);
         assert!(fit_look(&sensor, &reference, &none, None).is_none(), "monochrome JPEG");
+    }
+    #[test]
+    fn measured_colour_refits_tone_only_partial_and_rejects_a_worse_model() {
+        let mut sensor = Rgb32f::new(96, 64);
+        for (i, p) in sensor.data.iter_mut().enumerate() {
+            let y = 0.01 + (i % 37) as f32 * 0.004;
+            let tint = 1.0 + (i % 5) as f32 * 0.008;
+            *p = [y * tint, y, y * (2.0 - tint)];
+        }
+        let measured = Mat3([[1.8, -0.8, 0.0], [-0.15, 1.15, 0.0], [0.0, -0.7, 1.7]]);
+        let mut reference = sensor.clone();
+        reference.map_in_place(|p| {
+            let p = measured.apply(p.map(f64::from));
+            let y = luma(p);
+            p.map(|v| (v * (1.0 - (-12.0 * y).exp()) / y) as f32)
+        });
+        let clipped = vec![false; sensor.data.len()];
+        let partial = fit_look(&sensor, &reference, &clipped, None).expect("dull scene keeps a tone-only fit");
+        assert_eq!(partial.matrix, Mat3::IDENTITY);
+        let refined = fit_look_with_fallback(&sensor, &reference, &clipped, None, || Some(measured)).unwrap();
+        assert_eq!(refined.matrix, measured, "known colour supplies what the scene cannot learn");
+        assert_ne!(refined.tone, partial.tone, "refit tone for the new transform");
+        let wrong = Mat3([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]]);
+        let rejected = fit_look_with_fallback(&sensor, &reference, &clipped, None, || Some(wrong)).unwrap();
+        assert_eq!((rejected.matrix, rejected.tone), (partial.matrix, partial.tone));
+        let missing = fit_look_with_fallback(&sensor, &reference, &clipped, None, || None).unwrap();
+        assert_eq!((missing.matrix, missing.tone), (partial.matrix, partial.tone));
+    }
+
+    #[test]
+    fn existing_learned_colour_does_not_consult_measured_fallback() {
+        let sensor = Rgb32f::new(1, 1);
+        let mut learned = dro_test_look(&std::array::from_fn(|i| 0.006 * 1.13f32.powi(i as i32)), &|x| x.sqrt());
+        learned.matrix = Mat3([[1.1, -0.1, 0.0], [0.0, 1.0, 0.0], [0.0, -0.1, 1.1]]);
+        let kept = refine_tone_only(&sensor, &sensor, learned.clone(), || panic!("learned colour must remain unchanged"));
+        assert_eq!((kept.matrix, kept.tone), (learned.matrix, learned.tone));
+    }
+
+    #[test]
+    fn spectral_correction_is_finite_and_preserves_the_decoder_balance() {
+        let mut raw = raw_of(RawFormat::Arw, "SONY", "ILCE-7RM4A", Default::default());
+        raw.wb_multipliers = Some([2.5, 1.0, 1.6]);
+        let before = raw.color.clone();
+        let transform = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
+        let correction = spectral_correction(&raw, &transform).unwrap();
+        let neutral = correction.apply(transform.matrix.apply([1.0; 3]));
+        assert!((neutral[0] - neutral[1]).abs() < 1e-4 && (neutral[1] - neutral[2]).abs() < 1e-4, "{neutral:?}");
+        assert_eq!(raw.color, before, "do not mutate the source colour while evaluating a candidate");
+        let mut invalid = transform;
+        invalid.wb[0] = f32::NAN;
+        assert!(spectral_correction(&raw, &invalid).is_none());
+        raw.color.color_matrix[0] = Some(Mat3::IDENTITY);
+        assert!(spectral_correction(&raw, &transform).is_none(), "never replace file-supplied matrices");
+        raw.color = before;
+        raw.metadata.model = Some("unknown camera".to_owned());
+        assert!(spectral_correction(&raw, &transform).is_none());
     }
 }

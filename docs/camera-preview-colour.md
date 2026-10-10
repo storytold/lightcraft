@@ -119,14 +119,27 @@ A raw starts from the first of these that is available (`camera_preview::startin
 4. the model's spectral matrices, with LightCraft's default tone curve and no JPEG fit;
 5. the neutral fallback.
 
-The spectral matrices only replace the neutral fallback: a photo whose JPEG fit is accepted (with or without a
-profile) renders exactly as before, and a covered model takes its spectral matrices only when that fit fails the
-gates or the file has no usable JPEG. White balance stays relative to the as-shot look for every raw without matrices
-of its own, as before, so the catalog's `Photo::relative_wb` and the controls are unchanged. `lightcraft-cli
-calibrate` still pools the uncorrected camera colour of covered models, so a profile can be fitted for them.
+Accepted full JPEG fits and partial fits with a learned colour matrix keep their exact result. A partial
+look with an identity matrix and no hue/saturation table can now try the model's measured spectral colour.
+The correction is expressed in the existing sensor proxy's working space, keeping the decoder's as-shot balance
+and exposure. Tone and chroma are fitted again for that matrix; the old tone is never reused under a different
+matrix. The candidate must pass the normal full-fit gates, reduce held-out gamma-encoded squared error and not
+increase linear squared error relative to the accepted partial look. Otherwise that partial look is kept.
+Clipped sensor samples remain excluded. Missing spectral coverage and file-supplied matrices are unchanged.
 
-No colour-difference measurement of the spectral matrices against the camera JPEG, or against the file-local fit,
-is recorded here yet. Whether they should come before the file-local fit for these models is open until one is.
+This addresses the partial-fit interaction reported in issue #535. On 64 private ILCE-7RM4A photos, the 63 full
+fits are byte-identical. The remaining lion frame changes from identity colour to the measured model: against
+Sony Imaging Edge Edit with DRO off, aligned central-crop CIE76 changes from 2.62 to 2.20, mean chroma ratio from
+0.416 to 0.726, and mean lightness difference from -0.35 to -0.29 L*. Against the embedded JPEG, CIE76 instead
+changes from 1.72 to 1.83; proxy squared error and full-image perceptual error are different measurements, and
+Sony Edit and the camera JPEG are different references. This is one affected private scene, not proof of
+accuracy across the 52 supported models or Lightroom parity. No private media or fitted profile is bundled.
+
+When no JPEG look is accepted, spectral matrices still use the default tone as before. White balance stays
+relative to the as-shot look for every raw without matrices of its own, so the catalog's `Photo::relative_wb`
+and the controls are unchanged. `lightcraft-cli calibrate` still pools the uncorrected camera colour of covered
+models. Look version 3 and render cache version 43 refresh cached results; this is a camera-colour source change,
+not a change to develop-setting interpretation (`docs/process-versions.md`).
 
 ## Smart previews and the look version
 
