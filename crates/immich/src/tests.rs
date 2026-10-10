@@ -502,6 +502,7 @@ fn damaged_connections_file_never_panics() {
         pinned: None,
         path_maps: vec![PathMap { container: "/usr/src/app/upload".into(), local: "/pics".into() }],
         linked_until: None,
+        sync: Default::default(),
     });
     a.save(&path).unwrap();
     let seed = std::fs::read_to_string(&path).unwrap();
