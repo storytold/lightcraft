@@ -231,7 +231,7 @@ fn sync(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
-/// Free and total bytes of the file system holding `path`, where the platform tells (Unix).
+/// Free and total bytes of the file system holding `path` (Unix, Windows; `None` elsewhere).
 pub fn disk_space(path: &str) -> Option<(u64, u64)> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
@@ -239,6 +239,13 @@ pub fn disk_space(path: &str) -> Option<(u64, u64)> {
         let unit = st.f_frsize.max(1);
         let free = st.f_bavail.saturating_mul(unit);
         let total = st.f_blocks.saturating_mul(unit);
+        return Some((free, total));
+    }
+    // Windows: GetDiskFreeSpaceExW behind fs4's safe API (no unsafe here)
+    #[cfg(windows)]
+    {
+        let free = fs4::available_space(path).ok()?;
+        let total = fs4::total_space(path).ok()?;
         return Some((free, total));
     }
     #[allow(unreachable_code)]

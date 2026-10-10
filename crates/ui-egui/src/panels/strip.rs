@@ -43,9 +43,12 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
                     }
                     let Some((id, icon, panel, tip, needs_photo)) = entry(*p) else { continue };
                     let on = app.ui.right == panel || (panel == RightPanel::Edit && app.ui.right == RightPanel::Profiles);
-                    if icon_button(ui, id, icon, sz, on, has_photo || !needs_photo, tip).clicked() {
+                    let resp = icon_button(ui, id, icon, sz, on, has_photo || !needs_photo, tip);
+                    if resp.clicked() {
                         let _ = app.run(&format!("panel.{id}"), json!({}));
                     }
+                    // the same header menu as the Classic columns: show/hide, solo, hiding mode
+                    crate::panels::classic::side_menu(app, &resp, crate::module::get(crate::module::ModuleId::Develop).right_panels());
                 }
                 separator(ui, &t);
                 if icon_button(ui, "more", Icon::More, sz, false, true, "More").clicked() {

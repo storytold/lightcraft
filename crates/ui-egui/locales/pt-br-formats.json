@@ -216,5 +216,7 @@
   "Target: {name}": "Destino: {name}",
   "Collection imported: {n} photos found, {m} not in this library": "Coleção importada: {n} fotos encontradas, {m} não estão nesta biblioteca",
   "{n} keywords imported": "{n} palavras-chave importadas",
-  "{n} keywords removed": "{n} palavras-chave removidas"
+  "{n} keywords removed": "{n} palavras-chave removidas",
+  "Only {} keys": "Somente teclas de {}",
+  "{} keys": "Teclas de {}"
 }

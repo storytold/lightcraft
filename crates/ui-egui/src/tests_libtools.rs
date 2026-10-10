@@ -152,3 +152,46 @@ fn grid_badges_for_keywords_and_collections() {
     let w = h.request("ui.widgets", json!({}), T);
     assert!(!w.to_string().contains(&format!("badge:keywords:{}", first.0)));
 }
+
+/// Feature: cropped and rotated badges, placed on the photo (inside a portrait photo's width,
+/// not the square around it); the View Options dialog and the View ▸ Grid View Style commands.
+#[test]
+fn grid_badges_for_crop_and_rotation_sit_on_the_photo() {
+    let mut h = app("squareGrid");
+    let first = h.app.session.visible_cloned()[0];
+    exec(&mut h, "library.select", json!({"ids": [first.0]}));
+    exec(&mut h, "crop.set", json!({"rect": [0.1, 0.1, 0.9, 0.9]}));
+    exec(&mut h, "photo.rotateRight", json!({"ids": [first.0]}));
+    h.settle(SETTLE);
+    center(&mut h, &format!("badge:rotated:{}", first.0));
+    center(&mut h, &format!("badge:cropped:{}", first.0));
+    // View menu entries and the dialog
+    exec(&mut h, "view.cellExpanded", json!({}));
+    assert_eq!(h.app.ui.lib.cell_style, crate::libtools::CellStyle::Expanded);
+    exec(&mut h, "view.cellIndex", json!({}));
+    assert!(h.app.ui.lib.cell_index);
+    exec(&mut h, "view.cellBadges", json!({}));
+    assert!(!h.app.ui.lib.cell_badges);
+    exec(&mut h, "dialog.viewOptions", json!({}));
+    h.step();
+    h.step();
+    assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::ViewOptions));
+    let r = h.request("ui.clickWidget", json!({"id": "check:viewOptions.badges"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert!(h.app.ui.lib.cell_badges, "the dialog's checkbox turns badges back on");
+    let r = h.request("ui.clickWidget", json!({"id": "radio:viewOptions.compact"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert_eq!(h.app.ui.lib.cell_style, crate::libtools::CellStyle::Compact);
+}
+
+#[test]
+fn cropped_ignores_an_uncropped_edit() {
+    let mut d = dac_develop::DevelopSettings::default();
+    assert!(!crate::panels::cells::cropped(&d));
+    d.crop.geometry.angle = 2.0;
+    assert!(crate::panels::cells::cropped(&d));
+}

@@ -548,7 +548,10 @@ pub fn handle(app: &mut DacApp, ctx: &egui::Context) {
         }
         // flag/rate aliases (Shift+X…) go through the culling path: active photo in Compare/Survey,
         // `advance` moves to the next candidate there
-        if matches!(id, "photo.flag" | "photo.rate" | "photo.label") {
+        if id == "view.filterBar" && !library_grid(app) {
+            // Library's backslash is the filter bar in the grids; in a loupe it stays Show Original
+            let _ = app.run("view.showOriginal", params);
+        } else if matches!(id, "photo.flag" | "photo.rate" | "photo.label") {
             let mut params = params;
             let advance = params.get("advance").and_then(serde_json::Value::as_bool).unwrap_or(false);
             if let Some(o) = params.as_object_mut() {

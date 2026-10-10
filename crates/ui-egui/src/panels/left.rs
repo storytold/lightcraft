@@ -1202,8 +1202,8 @@ fn is_within(app: &DacApp, id: dac_catalog::AlbumId, ancestor: dac_catalog::Albu
 /// "Folders": where on disk the library's photos were imported from, with photo counts (see
 /// `dac_catalog::folders`). A click makes that folder the source, like an album or a
 /// Local folder: its photos and those of the folders inside it fill the grid. The triangle opens
-/// a level. Only folders holding imported photos are
-/// listed; every folder on disk is under Local.
+/// a level. Folders holding imported photos are listed, and below them the folders on disk that
+/// hold none yet (`with_disk_folders`); every folder on disk is under Local.
 fn folders_section(app: &mut DacApp, ui: &mut egui::Ui) {
     let tree = app.caches.folder_tree(&app.session.catalog);
     if tree.is_empty() {
@@ -1421,6 +1421,64 @@ pub(crate) fn keyword_rows(app: &mut DacApp, ui: &mut egui::Ui, nodes: &[Keyword
     }
 }
 
+/// Add the folders on disk that hold no library photo yet (empty ones, a folder just made with
+/// New Folder…) under each folder that holds photos, as Classic's Folders panel lists them. Only
+/// below folders with photos of their own (a parent like `Users` would list half the disk), a few
+/// levels down, and capped, so a huge tree can't stall a frame.
+pub fn with_disk_folders(mut tree: Vec<dac_catalog::FolderNode>) -> Vec<dac_catalog::FolderNode> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut budget = MAX_DISK_FOLDERS;
+        for n in &mut tree {
+            add_disk_folders(n, 0, &mut budget);
+        }
+    }
+    tree
+}
+
+/// The most folders [`with_disk_folders`] reads or adds.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_DISK_FOLDERS: usize = 2_000;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn add_disk_folders(n: &mut dac_catalog::FolderNode, empty_depth: usize, budget: &mut usize) {
+    for c in &mut n.children {
+        add_disk_folders(c, 0, budget);
+    }
+    // a folder with photos of its own, or one this pass added (up to 3 levels)
+    let scan = !n.volume && n.selectable && (n.own > 0 || (n.count == 0 && empty_depth > 0)) && empty_depth <= 3;
+    if !scan || *budget == 0 {
+        return;
+    }
+    *budget -= 1;
+    let Ok(rd) = std::fs::read_dir(&n.path) else { return };
+    let mut added = Vec::new();
+    for e in rd.flatten() {
+        if *budget == 0 {
+            break;
+        }
+        let Ok(t) = e.file_type() else { continue };
+        if !t.is_dir() {
+            continue;
+        }
+        let name = e.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let path = format!("{}/{}", n.path.trim_end_matches(['/', '\\']), name);
+        if n.children.iter().any(|c| same_folder(&c.path, &path)) {
+            continue;
+        }
+        *budget -= 1;
+        let mut child = dac_catalog::FolderNode { name, path, count: 0, own: 0, volume: false, selectable: true, children: Vec::new() };
+        add_disk_folders(&mut child, empty_depth + 1, budget);
+        added.push(child);
+    }
+    added.sort_by_cached_key(|c| c.name.to_lowercase());
+    n.children.extend(added);
+    n.children.sort_by_cached_key(|c| c.name.to_lowercase());
+}
+
 #[cfg(test)]
 mod tests {
     use super::local_places;
@@ -1538,5 +1596,37 @@ mod tests {
         }
         let l = local_places(builtin(), &[], Some("/home/example/Pictures/Trip"), None, &["/home/example".into()]);
         assert_eq!((names(&l.places), l.owner), (vec!["Pictures"], Some(0)));
+    }
+
+    /// Folders holding no library photo (an empty one, one just created) are listed under the
+    /// folder with photos that contains them; hidden ones are not.
+    #[test]
+    fn folders_without_photos_are_listed_under_a_folder_with_photos() {
+        let d = std::env::temp_dir().join(format!("libfolders-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("new/inner")).unwrap();
+        std::fs::create_dir_all(d.join(".hidden")).unwrap();
+        std::fs::create_dir_all(d.join("shoot")).unwrap();
+        let p = d.to_string_lossy().replace('\\', "/");
+        let node = |name: &str, path: String, own: usize, children| dac_catalog::FolderNode {
+            name: name.into(),
+            path,
+            count: own,
+            own,
+            volume: false,
+            selectable: true,
+            children,
+        };
+        let tree = vec![node("root", p.clone(), 3, vec![node("shoot", format!("{p}/shoot"), 2, vec![])])];
+        let out = super::with_disk_folders(tree);
+        let names: Vec<&str> = out[0].children.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["new", "shoot"]);
+        assert_eq!(out[0].children[0].count, 0);
+        assert_eq!(out[0].children[0].children[0].name, "inner", "a level inside a new folder too");
+        assert_eq!(out[0].children[1].count, 2, "the folder with photos is kept as it was");
+        // a missing folder is no error
+        let gone = super::with_disk_folders(vec![node("gone", format!("{p}/nope"), 1, vec![])]);
+        assert!(gone[0].children.is_empty());
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

@@ -1,5 +1,6 @@
 //! Grid cell extras: the expanded Square Grid cell header, index numbers and thumbnail badges
-//! (keywords, collections, metadata out of step with the XMP sidecar, remote / Immich link).
+//! (keywords, collections, cropped, rotated, metadata out of step with the XMP sidecar, remote /
+//! Immich link), placed on the photo itself; and the View Options dialog.
 //! Styles are set with `view.gridCellStyle` ([`crate::libtools`]).
 
 use std::collections::HashMap;
@@ -69,8 +70,15 @@ pub fn extras(app: &mut DacApp, ui: &egui::Ui, id: PhotoId, r: Rect, square: boo
         register(ui.ctx(), format!("cellIndex:{}", id.0), g);
     }
     let Some(albums) = albums else { return };
-    let img = if square { image_rect(app, r) } else { r };
+    // on the photo itself, not the square around it (a portrait photo leaves bands at the sides)
+    let img = if square { super::detail::fit_texture_rect(image_rect(app, r), shown_size(&p)) } else { r };
     let mut badges: Vec<(&str, Icon, String, Color32)> = Vec::new();
+    if cropped(&p.develop) {
+        badges.push(("cropped", Icon::Crop, crate::i18n::tr("Cropped").to_string(), Color32::WHITE));
+    }
+    if p.develop.orientation != dac_geom::Orientation::Normal {
+        badges.push(("rotated", Icon::Rotate, crate::i18n::tr("Rotated or flipped").to_string(), Color32::WHITE));
+    }
     if !p.meta.keywords.is_empty() {
         let names: Vec<&str> = p.meta.keywords.iter().map(|k| k.rsplit('|').next().unwrap_or(k)).collect();
         badges.push(("keywords", Icon::Tag, format!("{}: {}", crate::i18n::tr("Keywords"), names.join(", ")), Color32::WHITE));
@@ -109,6 +117,7 @@ pub fn extras(app: &mut DacApp, ui: &egui::Ui, id: PhotoId, r: Rect, square: boo
             let panel = match key {
                 "keywords" => Some("panel.keywords"),
                 "metadataConflict" => Some("panel.info"),
+                "cropped" => Some("panel.crop"),
                 _ => None,
             };
             if let Some(cmd) = panel {
@@ -117,6 +126,64 @@ pub fn extras(app: &mut DacApp, ui: &egui::Ui, id: PhotoId, r: Rect, square: boo
         }
         x -= size + 4.0;
     }
+}
+
+/// Whether the edit crops or straightens the photo.
+pub fn cropped(d: &dac_develop::DevelopSettings) -> bool {
+    let g = &d.crop.geometry;
+    let r = &g.rect;
+    let off = |a: f64, b: f64| (a - b).abs() > 1e-6;
+    off(r.x0, 0.0) || off(r.y0, 0.0) || off(r.x1, 1.0) || off(r.y1, 1.0) || off(g.angle, 0.0)
+}
+
+/// The photo's size as shown: oriented and cropped (for placing badges on it).
+fn shown_size(p: &Photo) -> [usize; 2] {
+    let d = &p.develop;
+    let (mut w, mut h) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
+    if d.orientation.swaps_axes() {
+        std::mem::swap(&mut w, &mut h);
+    }
+    let r = &d.crop.geometry.rect;
+    let (cw, ch) = ((r.x1 - r.x0).abs(), (r.y1 - r.y0).abs());
+    if cw.is_finite() && ch.is_finite() && cw > 1e-3 && ch > 1e-3 {
+        w *= cw;
+        h *= ch;
+    }
+    [w.clamp(1.0, 1e6) as usize, h.clamp(1.0, 1e6) as usize]
+}
+
+/// Library ▸ View Options (⌘J): the grid cell style, index numbers and badges, the same settings
+/// as `view.gridCellStyle` and the View ▸ Grid View Style menu.
+pub fn view_options(app: &mut DacApp, ui: &mut egui::Ui) {
+    ui.set_min_width(320.0);
+    let lib = &app.ui.lib;
+    let (mut expanded, mut index, mut badges) = (lib.cell_style == CellStyle::Expanded, lib.cell_index, lib.cell_badges);
+    let mut names = app.ui.show_filenames;
+    ui.label(egui::RichText::new(crate::i18n::tr("Grid View Style")).strong());
+    ui.horizontal(|ui| {
+        let r = ui.radio_value(&mut expanded, false, crate::i18n::tr("Compact Cells"));
+        register(ui.ctx(), "radio:viewOptions.compact", r.rect);
+        let r = ui.radio_value(&mut expanded, true, crate::i18n::tr("Expanded Cells"));
+        register(ui.ctx(), "radio:viewOptions.expanded", r.rect);
+    });
+    ui.add_space(6.0);
+    let r = ui.checkbox(&mut index, crate::i18n::tr("Show Index Numbers"));
+    register(ui.ctx(), "check:viewOptions.index", r.rect);
+    let r = ui.checkbox(&mut badges, crate::i18n::tr("Show Thumbnail Badges"));
+    register(ui.ctx(), "check:viewOptions.badges", r.rect);
+    ui.label(
+        egui::RichText::new(crate::i18n::tr("Keywords, collections, crop, rotation, metadata status, remote link"))
+            .size(11.0)
+            .color(Tokens::get(ui.ctx()).text_dim),
+    );
+    let r = ui.checkbox(&mut names, crate::i18n::tr("Show File Names"));
+    register(ui.ctx(), "check:viewOptions.names", r.rect);
+    let lib = &app.ui.lib;
+    if expanded != (lib.cell_style == CellStyle::Expanded) || index != lib.cell_index || badges != lib.cell_badges {
+        let style = if expanded { "expanded" } else { "compact" };
+        let _ = app.run("view.gridCellStyle", json!({"style": style, "index": index, "badges": badges}));
+    }
+    app.ui.show_filenames = names;
 }
 
 /// How often a sidecar is looked at again (seconds).

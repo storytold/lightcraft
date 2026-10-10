@@ -29,6 +29,7 @@ mod model_setup;
 pub mod module;
 pub mod panels;
 pub mod pick;
+pub mod plate;
 pub mod region;
 pub mod render;
 pub mod shortcuts;
@@ -1205,7 +1206,7 @@ impl Caches {
         match &self.folder_tree {
             Some((r, t)) if *r == cat.revision => t.clone(),
             _ => {
-                let t = std::sync::Arc::new(cat.folder_tree());
+                let t = std::sync::Arc::new(crate::panels::left::with_disk_folders(cat.folder_tree()));
                 self.folder_tree = Some((cat.revision, t.clone()));
                 t
             }

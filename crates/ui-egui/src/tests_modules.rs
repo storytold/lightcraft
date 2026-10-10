@@ -128,6 +128,24 @@ fn every_module_draws_and_the_picker_hides_modules() {
     // identity plate text, capped
     run(&mut h, "view.identityPlate", json!({"text": "x".repeat(500), "mark": false}));
     assert_eq!(h.app.ui.identity_plate.text.chars().count(), 80);
+    // styled text: size (clamped), colour, bold; bad values are errors
+    let r = run(&mut h, "view.identityPlate", json!({"size": 100, "color": "#ff8000", "bold": true}));
+    assert_eq!((r["size"].as_f64(), r["color"].clone(), r["bold"].clone()), (Some(32.0), json!([255, 128, 0]), json!(true)));
+    for bad in [json!({"color": "orange"}), json!({"color": 3}), json!({"size": "big"}), json!({"image": "/no/such/plate.svg"})] {
+        let r = h.request("engine.execute", json!({"command": "view.identityPlate", "params": bad}), T);
+        assert_eq!(r["ok"], false, "{r}");
+    }
+    // a graphic plate from an SVG file, drawn in the bar; "" goes back to text
+    let svg = std::env::temp_dir().join(format!("plate-{}.svg", std::process::id()));
+    std::fs::write(&svg, r#"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="30"><circle cx="15" cy="15" r="14" fill="teal"/></svg>"#)
+        .unwrap();
+    run(&mut h, "view.identityPlate", json!({"image": svg.to_string_lossy()}));
+    h.step();
+    h.step();
+    assert!(has_widget(&h, "region:identityPlate"));
+    run(&mut h, "view.identityPlate", json!({"image": ""}));
+    assert!(h.app.ui.identity_plate.image.is_empty());
+    let _ = std::fs::remove_file(&svg);
     // F5: the module bar goes
     run(&mut h, "panel.top", json!({}));
     assert!(!has_widget(&h, "region:moduleBar"));
@@ -186,4 +204,46 @@ fn secondary_window_modes() {
         h.step();
         assert!(has_widget(&h, "view:secondWindow"), "{m}");
     }
+}
+
+/// The secondary window's own controls (here in egui's embedded window, as on the web): the mode
+/// switcher, the filter bar in Grid, the filmstrip under the loupe; clicks select photos.
+#[test]
+fn secondary_window_has_its_own_switcher_filter_and_filmstrip() {
+    let mut h = demo();
+    run(&mut h, "second.grid", json!({}));
+    h.step();
+    for m in ["grid", "loupe", "live", "locked", "compare", "survey", "slideshow"] {
+        assert!(has_widget(&h, &format!("secondMode:{m}")), "{m}");
+    }
+    assert!(has_widget(&h, "field:secondFilterText") && has_widget(&h, "secondFilterRating:3"));
+    // the filter narrows the grid: rate one photo ★★★★★, ask for 5 stars
+    let all = h.app.session.visible_cloned();
+    let star = all[2];
+    run(&mut h, "photo.rate", json!({"ids": [star.0], "rating": 5}));
+    let r = h.request("ui.clickWidget", json!({"id": "secondFilterRating:5"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert_eq!(h.app.ui.second_filter.rating, 5);
+    assert!(has_widget(&h, &format!("secondTile:{}", star.0)));
+    assert!(!has_widget(&h, &format!("secondTile:{}", all[0].0)), "filtered out");
+    // a tile click selects; the switcher's Normal button goes to the loupe with a filmstrip
+    let r = h.request("ui.clickWidget", json!({"id": format!("secondTile:{}", star.0)}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(h.app.session.active(), Some(star));
+    let r = h.request("ui.clickWidget", json!({"id": "secondMode:loupe"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert_eq!(h.app.ui.second_mode, crate::module::SecondMode::Loupe);
+    assert!(has_widget(&h, &format!("secondFilm:{}", star.0)));
+    run(&mut h, "second.filmstrip", json!({"show": false}));
+    assert!(!has_widget(&h, &format!("secondFilm:{}", star.0)));
+    // bad filter values are errors
+    let r = h.request("engine.execute", json!({"command": "second.filter", "params": {"rating": 9}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    run(&mut h, "second.filter", json!({"clear": true}));
+    assert_eq!(h.app.ui.second_filter, crate::panels::second::SecondFilter::default());
 }
