@@ -26,6 +26,8 @@ crates/immich/
 crates/text/
 crates/pdf/
 crates/layout/
+crates/book/
+crates/ui-egui/src/book.rs
 # the Classic shell
 crates/ui-egui/src/module.rs
 crates/ui-egui/src/panels/classic.rs
