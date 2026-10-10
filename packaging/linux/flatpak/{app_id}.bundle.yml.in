@@ -30,10 +30,13 @@ finish-args:
   # drag-and-drop through the document portal, so picked folders elsewhere work without broad
   # filesystem access.
   - --filesystem=xdg-pictures
-  # Deliberately not granted: home/host filesystem access, and network. The network is only for
-  # the optional SAM 3 model download (AI Object/Describe masks, docs/ai-masks.md); without it
-  # that download fails with an error and everything else works. Users who want it run
-  # `flatpak override --user --share=network {{app_id}}`.
+  # Network: map tiles, reverse geocoding, Immich, publish services, SFTP web upload, IPP printing,
+  # PTP/IP tethering and model downloads. Each is opt-in inside the app; nothing connects unasked.
+  - --share=network
+  # USB cameras for native tethering (PTP). `--device=usb` (Flatpak >= 1.15.11) is narrower but the
+  # CI builder (Ubuntu 24.04, Flatpak 1.14) rejects it, so this grants all devices; see
+  # docs/packaging.md. Deliberately not granted: home/host filesystem access.
+  - --device=all
 modules:
   - name: {{binary}}
     buildsystem: simple

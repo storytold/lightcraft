@@ -2273,5 +2273,9 @@
   "Run": "Executar",
   "Enabled": "Ativado",
   "Permissions:": "Permissões:",
-  "Log": "Registro"
+  "Log": "Registro",
+  "Saved Prints": "Impressões salvas",
+  "Create Saved Print": "Criar impressão salva",
+  "Open Saved Print": "Abrir impressão salva",
+  "Open Saved Creation": "Abrir criação salva"
 }

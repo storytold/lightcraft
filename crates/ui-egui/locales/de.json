@@ -2428,5 +2428,9 @@
   "Run": "Ausführen",
   "Enabled": "Aktiviert",
   "Permissions:": "Berechtigungen:",
-  "Log": "Protokoll"
+  "Log": "Protokoll",
+  "Saved Prints": "Gespeicherte Drucke",
+  "Create Saved Print": "Gespeicherten Druck erstellen",
+  "Open Saved Print": "Gespeicherten Druck öffnen",
+  "Open Saved Creation": "Gespeicherte Kreation öffnen"
 }

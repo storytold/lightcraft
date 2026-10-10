@@ -417,3 +417,152 @@ fn external_library_assets_link_by_mapped_path() {
 
 #[path = "tests_sync.rs"]
 mod sync_tests;
+
+#[test]
+fn share_uploads_makes_an_album_and_a_password_link() {
+    let (url, seen) = serve(|req| {
+        let path = req.target.split('?').next().unwrap_or_default().to_string();
+        match (req.method.as_str(), path.as_str()) {
+            ("POST", "/api/assets") => response("201 Created", br#"{"id":"11111111-1111-1111-1111-111111111111","status":"created"}"#),
+            ("POST", "/api/albums") => response("201 Created", br#"{"id":"22222222-2222-2222-2222-222222222222","albumName":"Trip"}"#),
+            ("PUT", p) if p.ends_with("/assets") => response("200 OK", br#"[]"#),
+            ("POST", "/api/shared-links") => response("201 Created", br#"{"id":"33333333-3333-3333-3333-333333333333","key":"abcDEF_123-x"}"#),
+            _ => response("404 Not Found", br#"{"message":"Not found"}"#),
+        }
+    });
+    let c = client(&url, KEY);
+    let items = vec![
+        crate::share::ShareItem { file_name: "a.jpg".into(), bytes: vec![0xFF, 0xD8, 0xFF, 0xD9], created: "2026-01-01T00:00:00.000Z".into() },
+        crate::share::ShareItem { file_name: "b.jpg".into(), bytes: vec![0xFF, 0xD8, 0xFF, 0xD9], created: "2026-01-02T00:00:00.000Z".into() },
+    ];
+    let o = crate::share::ShareOptions {
+        expires_at: Some("2026-12-31T00:00:00.000Z".into()),
+        password: Some("secret".into()),
+        allow_download: false,
+        show_metadata: false,
+        description: None,
+    };
+    let r = crate::share::share_photos(&c, "Trip", "test", &items, &o, &mut |_, _| true).unwrap();
+    assert_eq!(r.uploaded, 2);
+    assert_eq!(r.url, format!("{url}/share/abcDEF_123-x"));
+    {
+        let seen = seen.lock().unwrap();
+        let link = seen.iter().find(|r| r.target == "/api/shared-links").unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&link.body).unwrap();
+        assert_eq!(body["type"], "ALBUM");
+        assert_eq!(body["albumId"], "22222222-2222-2222-2222-222222222222");
+        assert_eq!(body["password"], "secret");
+        assert_eq!(body["allowDownload"], false);
+        assert_eq!(body["expiresAt"], "2026-12-31T00:00:00.000Z");
+    }
+    // nothing to share and a cancelled share are errors, not panics
+    assert!(crate::share::share_photos(&c, "Trip", "test", &[], &o, &mut |_, _| true).is_err());
+    assert!(crate::share::share_photos(&c, "Trip", "test", &items, &o, &mut |_, _| false).is_err());
+}
+
+#[test]
+fn share_rejects_a_link_without_a_usable_key() {
+    let (url, _) = serve(|_| response("201 Created", br#"{"id":"x","key":"../evil"}"#));
+    let c = client(&url, KEY);
+    assert!(c.create_shared_link("22222222-2222-2222-2222-222222222222", &crate::share::ShareOptions::default()).is_err());
+}
+
+// ---- P6.2: never crash on what a server (or a damaged settings file) sends
+
+const LIBRARIES: &str = include_str!("../tests/fixtures/libraries.json");
+
+/// Everything the app does with a server's assets: map them onto a photo, link them into a
+/// catalog, translate their paths.
+fn use_assets(assets: &[Asset]) {
+    let mut cat = Catalog::new();
+    photo(&mut cat, "a.png", Some("a9993e364706816aba3e25717850c26c9cd0d89d".into()), "2024-05-01T10:00:00", 1234);
+    let index = Index::with_path_maps(&cat, &[PathMap { container: "/usr/src/app/upload".into(), local: "/pics".into() }]);
+    let (ops, _) = link::link_ops(&cat, &index, "acct", assets, "2026-01-01T00:00:00");
+    for op in ops {
+        let _ = cat.apply(op);
+    }
+    for a in assets {
+        let (_, _, _, _) = (a.is_image(), a.file_size(), a.local_capture(), a.sha1_hex());
+        let _ = index.find(a);
+        let mut p = Photo::new(PhotoId(1), Source::File { path: "/x".into() }, "x", "JPEG", 1, 1, "2026-01-01");
+        mapping::apply(a, &mut p);
+        let _ = mapping::ops(a, &p);
+    }
+}
+
+#[test]
+fn hostile_server_json_never_panics() {
+    let seeds = [VERSION, ME, KEY_ME, PAGE1, PAGE2, ALBUMS, LIBRARIES];
+    dac_fuzzkit::run_json("immich.json", &seeds, 1500, |s| {
+        let _ = serde_json::from_str::<ServerVersion>(s);
+        let _ = serde_json::from_str::<User>(s);
+        let _ = serde_json::from_str::<ApiKeyInfo>(s);
+        let _ = serde_json::from_str::<Vec<Album>>(s);
+        let _ = serde_json::from_str::<People>(s);
+        if let Ok(libs) = serde_json::from_str::<Vec<Library>>(s) {
+            let folders = vec!["/pics".to_string(), "/".to_string(), String::new()];
+            let maps = extlib::suggest(&folders, &libs);
+            let _ = extlib::coverage(&folders, &libs, &maps);
+            for f in &folders {
+                let _ = extlib::to_container(&maps, f);
+                let _ = extlib::to_local(&maps, f);
+            }
+        }
+        if let Ok(r) = serde_json::from_str::<SearchResponse>(s) {
+            use_assets(&r.assets.items);
+        }
+    });
+}
+
+#[test]
+fn hostile_server_answers_through_the_client_never_panic() {
+    let body = Arc::new(Mutex::new(Vec::new()));
+    let b2 = body.clone();
+    let (url, _) = serve(move |_| response("200 OK", &b2.lock().unwrap()));
+    let c = client(&url, KEY);
+    let seeds = [VERSION, ME, PAGE1, ALBUMS, LIBRARIES];
+    // each iteration is a few loopback requests: a short loop (DAC_FUZZ_ITERS raises it)
+    dac_fuzzkit::run_json("immich.client", &seeds, 60, |s| {
+        *body.lock().unwrap() = s.as_bytes().to_vec();
+        let _ = c.status();
+        let _ = c.albums();
+        let _ = c.libraries();
+        let _ = c.search_all(&MetadataSearch::default(), 3, |a| {
+            use_assets(a);
+            true
+        });
+    });
+}
+
+#[test]
+fn damaged_connections_file_never_panics() {
+    let dir = std::env::temp_dir().join(format!("dac-immich-robust-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("connections.json");
+    let mut a = crate::Accounts::default();
+    a.upsert(crate::Account {
+        id: crate::Account::make_id("https://photos.example", "u1"),
+        url: "https://photos.example".into(),
+        user_id: "u1".into(),
+        user_name: "Me".into(),
+        email: "me@example.org".into(),
+        version: Some(ServerVersion { major: 3, minor: 3, patch: 1 }),
+        permissions: Some(vec!["all".into()]),
+        pinned: None,
+        path_maps: vec![PathMap { container: "/usr/src/app/upload".into(), local: "/pics".into() }],
+        linked_until: None,
+        sync: Default::default(),
+    });
+    a.save(&path).unwrap();
+    let seed = std::fs::read_to_string(&path).unwrap();
+    dac_fuzzkit::run_json("immich.connections", &[&seed], 800, |s| {
+        std::fs::write(&path, s).unwrap();
+        if let Ok(acc) = crate::Accounts::load(&path) {
+            for a in &acc.immich {
+                let _ = Client::new(&a.url, Secret::new("k"), &opts());
+                let _ = extlib::to_local(&a.path_maps, "/usr/src/app/upload/x.jpg");
+            }
+        }
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -69,6 +69,12 @@ pub struct SlideshowState {
     /// The last export's result, for the toolbar.
     #[serde(skip)]
     pub export_status: Option<String>,
+    /// An export is running on a worker thread.
+    #[serde(skip)]
+    pub export_busy: bool,
+    /// The last export's command result (or `{error}`).
+    #[serde(skip)]
+    pub export_last: Option<Value>,
 }
 
 thread_local! {
@@ -380,24 +386,32 @@ fn run_inner(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
             app.ui.slides.settings.music.tracks.clear();
             Ok(state_json(app))
         }
-        "slideshow.exportJpeg" => export_jpeg(app, p),
+        "slideshow.exportJpeg" => export(app, p, false),
+        "slideshow.exportPdf" => export(app, p, true),
         _ => Err(format!("unknown slideshow command: {id}")),
     }
 }
 
-/// `slideshow.exportJpeg {dir, width?, height?, quality?, name?}`: the JPEG sequence.
-fn export_jpeg(app: &mut DacApp, p: &Value) -> Result<Value, String> {
+/// `slideshow.exportJpeg {dir, width?, height?, quality?, name?}`: the JPEG sequence;
+/// `slideshow.exportPdf {…}`: one PDF, a page per slide. The slides are set up here and rendered,
+/// composed and written on a worker thread (Activity "export"); the result lands in
+/// `export_status` / `export_last`. Returns `{background: true, frames}`.
+fn export(app: &mut DacApp, p: &Value, pdf: bool) -> Result<Value, String> {
+    let id = if pdf { "slideshow.exportPdf" } else { "slideshow.exportJpeg" };
     let Some(dir) = p.get("dir").and_then(Value::as_str).filter(|d| !d.trim().is_empty()) else {
         let req = crate::pick::PickRequest::folder(crate::i18n::tr("Export Slideshow"));
-        return match crate::pick::ask(app, "slideshow.exportJpeg", p, "dir", req, |s| s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])) {
+        return match crate::pick::ask(app, id, p, "dir", req, |s| s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])) {
             crate::pick::Picked::Now(v) => match v.into_iter().next() {
-                Some(d) => export_jpeg(app, &crate::pick::with_answer(p, "dir", crate::pick::PickKind::Folder, &[d])),
+                Some(d) => export(app, &crate::pick::with_answer(p, "dir", crate::pick::PickKind::Folder, &[d]), pdf),
                 None => Ok(Value::Null),
             },
             crate::pick::Picked::Later => Ok(Value::Null),
-            crate::pick::Picked::Unavailable => Err("no folder dialog here: run slideshow.exportJpeg {dir}".into()),
+            crate::pick::Picked::Unavailable => Err(format!("no folder dialog here: run {id} {{dir}}")),
         };
     };
+    if app.ui.slides.export_busy {
+        return Err("a slideshow export is already running".into());
+    }
     let num = |k: &str, d: u64| p.get(k).and_then(Value::as_u64).unwrap_or(d);
     let (w, h) = (num("width", 1920) as usize, num("height", 1080) as usize);
     let quality = num("quality", 90).clamp(1, 100) as u8;
@@ -405,12 +419,39 @@ fn export_jpeg(app: &mut DacApp, p: &Value) -> Result<Value, String> {
     let ids = photos(app);
     let settings = app.ui.slides.settings.clone();
     let plate = plate_text(app);
-    let job = dac_slideshow::export::prepare(&mut app.session, &ids, &settings, w, h, quality, std::path::Path::new(dir), &name, &plate)?;
+    let prep = if pdf { dac_slideshow::export::prepare_pdf } else { dac_slideshow::export::prepare };
+    let job = prep(&mut app.session, &ids, &settings, w, h, quality, std::path::Path::new(dir), &name, &plate)?;
     let frames = job.len();
-    // synchronous: the export renders through the engine; it is bounded by MAX_PHOTOS
-    let files = job.run(&mut |_, _| true)?;
-    app.ui.slides.export_status = Some(format!("{} JPEGs in {dir}", files.len()));
-    Ok(json!({"frames": frames, "files": files}))
+    let dir = dir.to_string();
+    app.ui.slides.export_busy = true;
+    app.ui.slides.export_status = Some(crate::i18n::tr("Exporting…").to_string());
+    let started = crate::tasks::spawn(
+        app,
+        if pdf { "Exporting PDF slideshow" } else { "Exporting JPEG slideshow" },
+        Some("export"),
+        move || job.run(&mut |_, _| true),
+        move |app, ctx, r: Result<Vec<String>, String>| {
+            app.ui.slides.export_busy = false;
+            match r {
+                Ok(files) => {
+                    let msg = if pdf { format!("PDF in {dir}") } else { format!("{} JPEGs in {dir}", files.len()) };
+                    app.toast(ctx, msg.clone());
+                    app.ui.slides.export_status = Some(msg);
+                    app.ui.slides.export_last = Some(json!({"frames": frames, "files": files}));
+                }
+                Err(e) => {
+                    app.ui.slides.export_status = Some(e.clone());
+                    app.ui.slides.export_last = Some(json!({"error": e}));
+                    app.toast_error(ctx, e);
+                }
+            }
+        },
+    );
+    if let Err(e) = started {
+        app.ui.slides.export_busy = false;
+        return Err(e);
+    }
+    Ok(json!({"background": true, "frames": frames}))
 }
 
 // ---------------------------------------------------------------- painting
@@ -733,6 +774,11 @@ pub fn toolbar(app: &mut DacApp, ui: &mut egui::Ui) {
                     register(ui.ctx(), "button:slideshow.exportJpeg".to_string(), ex.rect);
                     if ex.clicked() {
                         run_reporting(app, ui.ctx(), "slideshow.exportJpeg");
+                    }
+                    let ex = ui.button(crate::i18n::tr("Export PDF…"));
+                    register(ui.ctx(), "button:slideshow.exportPdf".to_string(), ex.rect);
+                    if ex.clicked() {
+                        run_reporting(app, ui.ctx(), "slideshow.exportPdf");
                     }
                     if let Some(s) = &app.ui.slides.export_status {
                         ui.label(egui::RichText::new(s.clone()).color(t.text_dim));
@@ -1145,6 +1191,16 @@ mod tests {
         r["result"].clone()
     }
 
+    fn wait_export(h: &mut Headless) -> Value {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while h.app.ui.slides.export_busy && std::time::Instant::now() < deadline {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(!h.app.ui.slides.export_busy, "export did not finish");
+        h.app.ui.slides.export_last.take().unwrap()
+    }
+
     fn has_widget(h: &Headless, id: &str) -> bool {
         h.app.widgets.iter().any(|(w, _)| w == id)
     }
@@ -1209,7 +1265,16 @@ mod tests {
         let first = h.app.session.visible_cloned()[0].0;
         ok(&mut h, "library.select", json!({"ids": [first]}));
         let r = ok(&mut h, "slideshow.exportJpeg", json!({"dir": dir.display().to_string(), "width": 320, "height": 200}));
+        assert_eq!(r["background"], true, "{r}");
+        assert!(exec(&mut h, "slideshow.exportPdf", json!({"dir": dir.display().to_string()}))["ok"] == false, "one export at a time");
+        let r = wait_export(&mut h);
         assert_eq!(r["files"].as_array().map(Vec::len), Some(1), "{r}");
+        // PDF: one file, a page per slide
+        ok(&mut h, "slideshow.exportPdf", json!({"dir": dir.display().to_string(), "width": 320, "height": 200, "name": "Show"}));
+        let r = wait_export(&mut h);
+        let pdf = r["files"][0].as_str().unwrap_or_default().to_string();
+        assert!(pdf.ends_with("Show.pdf"), "{r}");
+        assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF-"));
         let _ = std::fs::remove_dir_all(dir);
         let img = h.snapshot(T);
         assert!(img.width() > 0);

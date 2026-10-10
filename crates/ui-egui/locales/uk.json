@@ -2124,5 +2124,9 @@
   "Run": "Виконати",
   "Enabled": "Увімкнено",
   "Permissions:": "Дозволи:",
-  "Log": "Журнал"
+  "Log": "Журнал",
+  "Saved Prints": "Збережені друки",
+  "Create Saved Print": "Створити збережений друк",
+  "Open Saved Print": "Відкрити збережений друк",
+  "Open Saved Creation": "Відкрити збережену роботу"
 }

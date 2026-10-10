@@ -1304,6 +1304,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "core-foundation"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2a6cd9ae233e7f62ba4e9353e81a88df7fc8a5987b8d445b4d90c879bd156f6"
+dependencies = [
+ "core-foundation-sys",
+ "libc",
+]
+
+[[package]]
 name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1316,7 +1326,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c07782be35f9e1140080c6b96f0d44b739e2278479f64e02fdab4e32dfd8b081"
 dependencies = [
  "bitflags 1.3.2",
- "core-foundation",
+ "core-foundation 0.9.4",
  "core-graphics-types",
  "foreign-types",
  "libc",
@@ -1329,7 +1339,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "45390e6114f68f718cc7a830514a96f903cccd70d02a8f6d9f643ac4ba45afaf"
 dependencies = [
  "bitflags 1.3.2",
- "core-foundation",
+ "core-foundation 0.9.4",
  "libc",
 ]
 
@@ -1372,7 +1382,7 @@ dependencies = [
  "jni 0.21.1",
  "js-sys",
  "libc",
- "mach2",
+ "mach2 0.4.3",
  "ndk 0.8.0",
  "ndk-context",
  "oboe",
@@ -1645,6 +1655,7 @@ dependencies = [
  "crc32fast",
  "dac-brand",
  "dac-develop",
+ "dac-fuzzkit",
  "dac-geo",
  "dac-geom",
  "dac-meta",
@@ -1721,6 +1732,7 @@ dependencies = [
  "argon2 0.5.3",
  "chacha20poly1305",
  "dac-brand",
+ "dac-fuzzkit",
  "getrandom 0.3.4",
  "log",
  "serde",
@@ -1858,9 +1870,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dac-fuzzkit"
+version = "0.5.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "dac-geo"
 version = "0.5.0"
 dependencies = [
+ "dac-fuzzkit",
  "dac-meta",
  "dac-net",
  "flate2",
@@ -1920,6 +1940,7 @@ version = "0.5.0"
 dependencies = [
  "dac-catalog",
  "dac-credentials",
+ "dac-fuzzkit",
  "dac-geom",
  "dac-hash",
  "dac-meta",
@@ -1934,6 +1955,7 @@ dependencies = [
 name = "dac-layout"
 version = "0.5.0"
 dependencies = [
+ "dac-fuzzkit",
  "dac-raster",
  "serde",
  "serde_json",
@@ -1947,9 +1969,13 @@ dependencies = [
  "dac-brand",
  "dac-codecs",
  "dac-engine",
+ "dac-hash",
  "dac-raster",
  "log",
+ "russh",
+ "russh-sftp",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -1987,6 +2013,7 @@ name = "dac-net"
 version = "0.5.0"
 dependencies = [
  "dac-brand",
+ "dac-fuzzkit",
  "flate2",
  "log",
  "rustls",
@@ -2001,6 +2028,7 @@ dependencies = [
 name = "dac-pdf"
 version = "0.5.0"
 dependencies = [
+ "dac-fuzzkit",
  "dac-text",
  "lopdf",
  "miniz_oxide 0.8.9",
@@ -2057,6 +2085,7 @@ dependencies = [
 name = "dac-print"
 version = "0.5.0"
 dependencies = [
+ "dac-brand",
  "dac-codecs",
  "dac-layout",
  "dac-pdf",
@@ -2084,6 +2113,7 @@ name = "dac-publish"
 version = "0.5.0"
 dependencies = [
  "dac-catalog",
+ "dac-fuzzkit",
  "dac-hash",
  "serde",
  "serde_json",
@@ -2157,9 +2187,11 @@ version = "0.5.0"
 dependencies = [
  "claxon",
  "cpal",
+ "dac-brand",
  "dac-catalog",
  "dac-codecs",
  "dac-engine",
+ "dac-pdf",
  "dac-pipeline",
  "dac-raster",
  "hound",
@@ -2180,6 +2212,8 @@ dependencies = [
 name = "dac-tether"
 version = "0.5.0"
 dependencies = [
+ "dac-fuzzkit",
+ "nusb",
  "serde",
  "serde_json",
 ]
@@ -2188,6 +2222,7 @@ dependencies = [
 name = "dac-text"
 version = "0.5.0"
 dependencies = [
+ "dac-fuzzkit",
  "parley",
  "serde",
  "serde_json",
@@ -4249,6 +4284,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "io-kit-sys"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06d3a048d09fbb6597dbf7c69f40d14df4a49487db1487191618c893fc3b1c26"
+dependencies = [
+ "core-foundation-sys",
+ "mach2 0.5.0",
+]
+
+[[package]]
 name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4798,6 +4843,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mach2"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a1b95cd5421ec55b445b5ae102f5ea0e768de1f82bd3001e11f426c269c3aea"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "malloc_buf"
 version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5308,6 +5362,28 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "nusb"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18ef13beb3b3a8fc16fd7aea912ebd3d45dde00a9a5b968d0742297468065845"
+dependencies = [
+ "core-foundation 0.10.1",
+ "core-foundation-sys",
+ "futures-core",
+ "io-kit-sys",
+ "js-sys",
+ "linux-raw-sys 0.12.1",
+ "log",
+ "once_cell",
+ "rustix 1.1.5",
+ "slab",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9304,7 +9380,7 @@ dependencies = [
  "calloop 0.13.0",
  "cfg_aliases",
  "concurrent-queue",
- "core-foundation",
+ "core-foundation 0.9.4",
  "core-graphics",
  "cursor-icon",
  "dpi",

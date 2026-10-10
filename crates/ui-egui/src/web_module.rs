@@ -5,6 +5,8 @@
 //!
 //! The preview is drawn by egui from the same settings (palette, columns, thumbnail size, cell
 //! numbers, borders, captions); the exported HTML is the reference (`web.preview` returns it).
+//!
+//! Export, upload and Share via Immich run on a worker thread ([`run`]: `webui.*`).
 
 use dac_webgallery::Server;
 use dac_webgallery::{GallerySettings, MetadataMode, Template};
@@ -28,6 +30,15 @@ pub struct WebUi {
     pub galleries: Vec<String>,
     pub servers: Vec<Server>,
     pub loaded: bool,
+    /// Share via Immich (IMM-SHARELINK).
+    pub share_account: String,
+    pub share_album: String,
+    pub share_days: u32,
+    pub share_password: String,
+    pub share_no_download: bool,
+    pub share_hide_metadata: bool,
+    /// The last shared link.
+    pub share_url: String,
 }
 
 fn state_id() -> egui::Id {
@@ -366,6 +377,8 @@ fn settings_column(ui: &mut egui::Ui, app: &mut DacApp, st: &mut WebUi) {
         });
     }
 
+    share_section(ui, app, st);
+
     heading(ui, "Saved Galleries");
     field(ui, "galleryName", "Name", &mut st.gallery_name);
     if ui.button(crate::i18n::tr("Save Gallery")).clicked() {
@@ -400,20 +413,76 @@ fn settings_column(ui: &mut egui::Ui, app: &mut DacApp, st: &mut WebUi) {
     }
 }
 
-/// The target photos for an export / upload: the selection when several are selected, else
-/// everything visible (the engine's rule).
-fn export(app: &mut DacApp, st: &mut WebUi) {
-    let params = json!({"settings": st.settings});
-    let req = crate::pick::PickRequest::folder(crate::i18n::tr("Export Web Gallery"));
-    match crate::pick::ask(app, "web.export", &params, "dir", req, |s| s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])) {
-        crate::pick::Picked::Now(v) => {
-            if let Some(dir) = v.into_iter().next() {
-                st.status = result_text(app.run("web.export", json!({"dir": dir, "settings": st.settings})));
-            }
-        }
-        crate::pick::Picked::Later => st.status = crate::i18n::tr("Choose a folder…").to_string(),
-        crate::pick::Picked::Unavailable => st.status = crate::i18n::tr("No folder dialog here: use web.export {dir}").to_string(),
+/// The Web module's background commands: `webui.export`, `webui.upload`, `webui.shareImmich`
+/// take the params of `web.export` / `web.upload` / `web.shareImmich` (the folder dialog opens
+/// when `webui.export` has no `dir`), set the job up on the UI thread and render, write, upload or
+/// share on a worker thread (Activity "export"). The result lands in the module's status line.
+pub fn run(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    let engine_id = match id {
+        "webui.export" => "web.export",
+        "webui.upload" => "web.upload",
+        "webui.shareImmich" => "web.shareImmich",
+        _ => return None,
+    };
+    Some(start(app, id, engine_id, p))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn start(_app: &mut DacApp, _id: &str, engine_id: &str, _p: &Value) -> Result<Value, String> {
+    Err(format!("{engine_id}: not available in the browser"))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn start(app: &mut DacApp, id: &str, engine_id: &'static str, p: &Value) -> Result<Value, String> {
+    if id == "webui.export" && p.get("dir").and_then(Value::as_str).is_none_or(|d| d.trim().is_empty()) {
+        let req = crate::pick::PickRequest::folder(crate::i18n::tr("Export Web Gallery"));
+        return match crate::pick::ask(app, id, p, "dir", req, |s| s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])) {
+            crate::pick::Picked::Now(v) => match v.into_iter().next() {
+                Some(d) => start(app, id, engine_id, &crate::pick::with_answer(p, "dir", crate::pick::PickKind::Folder, &[d])),
+                None => Ok(Value::Null),
+            },
+            crate::pick::Picked::Later => Ok(json!({"pending": "folder dialog"})),
+            crate::pick::Picked::Unavailable => Err(crate::i18n::tr("No folder dialog here: use web.export {dir}").to_string()),
+        };
     }
+    let job = dac_engine::cmd::web::prepare(&mut app.session, engine_id, p).map_err(|e| e.to_string())?;
+    let steps = job.steps();
+    let label = match engine_id {
+        "web.upload" => "Uploading web gallery",
+        "web.shareImmich" => "Sharing via Immich",
+        _ => "Exporting web gallery",
+    };
+    crate::tasks::spawn(
+        app,
+        label,
+        Some("export"),
+        move || job.run(&mut |_, _| true),
+        move |app, ctx, r: Result<Value, String>| {
+            if let Ok(v) = &r
+                && engine_id == "web.upload"
+            {
+                dac_engine::cmd::web::remember_fingerprint(&app.session, v);
+            }
+            let mut st = state(ctx);
+            if let Ok(v) = &r
+                && let Some(url) = v.get("url").and_then(Value::as_str)
+            {
+                st.share_url = url.to_string();
+            }
+            st.status = result_text(r.clone());
+            match r {
+                Ok(_) => app.toast(ctx, st.status.clone()),
+                Err(e) => app.toast_error(ctx, e),
+            }
+            st.loaded = false; // a first upload may have remembered a host key
+            store(ctx, st);
+        },
+    )?;
+    Ok(json!({"background": true, "steps": steps}))
+}
+
+fn export(app: &mut DacApp, st: &mut WebUi) {
+    st.status = background_text(app.run("webui.export", json!({"settings": st.settings})));
 }
 
 fn upload(app: &mut DacApp, st: &mut WebUi) {
@@ -424,16 +493,98 @@ fn upload(app: &mut DacApp, st: &mut WebUi) {
     if !st.password.is_empty() {
         p["password"] = json!(st.password);
     }
-    st.status = result_text(app.session.execute("web.upload", &p).map_err(|e| e.to_string()));
-    refresh_lists(app, st);
+    st.status = background_text(app.run("webui.upload", p));
+}
+
+fn share(app: &mut DacApp, st: &mut WebUi) {
+    let mut p = json!({"settings": st.settings, "allowDownload": !st.share_no_download, "showMetadata": !st.share_hide_metadata});
+    for (k, v) in [("account", &st.share_account), ("album", &st.share_album), ("password", &st.share_password)] {
+        if !v.trim().is_empty() {
+            p[k] = json!(v.trim());
+        }
+    }
+    if st.share_days > 0 {
+        p["expiresDays"] = json!(st.share_days);
+    }
+    st.share_url.clear();
+    st.status = background_text(app.run("webui.shareImmich", p));
+}
+
+fn background_text(r: Result<Value, String>) -> String {
+    match r {
+        Ok(v) if v.get("background").is_some() => crate::i18n::tr("Working… (see Activity)").to_string(),
+        Ok(v) if v.get("pending").is_some() => crate::i18n::tr("Choose a folder…").to_string(),
+        r => result_text(r),
+    }
 }
 
 fn result_text(r: Result<Value, String>) -> String {
     match r {
-        Ok(v) => match (v.get("files"), v.get("photos")) {
-            (Some(f), Some(p)) => format!("{p} photos, {f} files"),
+        Ok(v) => match (v.get("url"), v.get("files"), v.get("photos")) {
+            (Some(Value::String(u)), _, _) => format!("{} photos shared: {u}", v["uploaded"]),
+            (_, Some(f), Some(p)) => format!("{p} photos, {f} files"),
             _ => v.to_string(),
         },
         Err(e) => e,
+    }
+}
+
+/// "Share via Immich" (IMM-SHARELINK): album, expiry, password, download and metadata switches.
+fn share_section(ui: &mut egui::Ui, app: &mut DacApp, st: &mut WebUi) {
+    heading(ui, "Share via Immich");
+    field(ui, "shareAccount", "Account (blank: the connected one)", &mut st.share_account);
+    field(ui, "shareAlbum", "Album name (blank: the collection title)", &mut st.share_album);
+    ui.spacing_mut().slider_width = 90.0;
+    ui.add(egui::Slider::new(&mut st.share_days, 0..=365).text(crate::i18n::tr("Expiry (days, 0 = never)")));
+    ui.label(crate::i18n::tr("Link password (optional)"));
+    ui.add(egui::TextEdit::singleline(&mut st.share_password).password(true).desired_width(ui.available_width()));
+    let mut dl = !st.share_no_download;
+    ui.checkbox(&mut dl, crate::i18n::tr("Allow download"));
+    st.share_no_download = !dl;
+    let mut meta = !st.share_hide_metadata;
+    ui.checkbox(&mut meta, crate::i18n::tr("Show metadata"));
+    st.share_hide_metadata = !meta;
+    let b = ui.button(crate::i18n::tr("Share via Immich"));
+    register(ui.ctx(), "web:shareImmich", b.rect);
+    if b.clicked() {
+        share(app, st);
+    }
+    if !st.share_url.is_empty() {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(&st.share_url).small());
+            if ui.small_button(crate::i18n::tr("Copy URL")).clicked() {
+                ui.ctx().copy_text(st.share_url.clone());
+            }
+        });
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use serde_json::json;
+
+    use crate::DacApp;
+    use crate::headless::Headless;
+
+    #[test]
+    fn web_export_runs_in_the_background() {
+        let dir = std::env::temp_dir().join(format!("dac-webui-export-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let app = DacApp::new(dac_engine::Session::with_demo(), crate::Services::default());
+        let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+        let id = h.app.session.visible_cloned()[0].0;
+        let r = h.app.run("webui.export", json!({"dir": dir.display().to_string(), "ids": [id]})).unwrap();
+        assert_eq!(r["background"], true);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !h.app.tasks.is_empty() && std::time::Instant::now() < deadline {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(h.app.tasks.is_empty(), "export did not finish");
+        assert!(dir.join("index.html").is_file());
+        assert!(super::state(&h.view.ctx).status.contains("1 photos"), "{}", super::state(&h.view.ctx).status);
+        // set-up errors come back at once
+        assert!(h.app.run("webui.shareImmich", json!({"ids": [id]})).is_err(), "no Immich account");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

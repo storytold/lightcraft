@@ -28,6 +28,7 @@ dac-slideshow = { path = "../slideshow" }
 # the Book module (owned, Phase 3)
 dac-book = { workspace = true }
 dac-text = { workspace = true }
+dac-webgallery = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -36,7 +37,6 @@ log = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dac-immich = { workspace = true }
 dac-publish = { workspace = true }
-dac-webgallery = { workspace = true }
 dac-codecs = { workspace = true }
 # identity plate graphic from an SVG (MIT/Apache-2.0, pure Rust); no text or system fonts
 resvg = { version = "0.45", default-features = false }

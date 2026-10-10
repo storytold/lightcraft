@@ -53,7 +53,14 @@ const IDX_DAY: MultimapTableDefinition<&str, u64> = MultimapTableDefinition::new
 const STR_INDEXES: [MultimapTableDefinition<&str, u64>; 4] = [FOLDERS, KEYWORDS, IDX_CAMERA, IDX_DAY];
 
 pub(crate) fn dberr(e: impl std::fmt::Display) -> CatalogError {
-    CatalogError::Io(format!("{DB_FILE}: {e}"))
+    let msg = format!("{DB_FILE}: {e}");
+    // redb reports a damaged file (`StorageError::Corrupted`, through every wrapping error type)
+    // as "DB corrupted: …", a garbled header as "Not a redb database": that is damage the user restores from a backup, not an I/O failure
+    if msg.contains("DB corrupted") || msg.contains("Not a redb database") {
+        CatalogError::Corrupt(format!("{msg} (restore it from a backup)"))
+    } else {
+        CatalogError::Io(msg)
+    }
 }
 
 fn corrupt(what: impl std::fmt::Display) -> CatalogError {

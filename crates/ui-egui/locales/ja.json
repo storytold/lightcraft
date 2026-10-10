@@ -2275,5 +2275,9 @@
   "Run": "実行",
   "Enabled": "有効",
   "Permissions:": "権限：",
-  "Log": "ログ"
+  "Log": "ログ",
+  "Saved Prints": "保存済みプリント",
+  "Create Saved Print": "保存済みプリントを作成",
+  "Open Saved Print": "保存済みプリントを開く",
+  "Open Saved Creation": "保存済み作品を開く"
 }

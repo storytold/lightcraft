@@ -2273,5 +2273,9 @@
   "Run": "运行",
   "Enabled": "已启用",
   "Permissions:": "权限：",
-  "Log": "日志"
+  "Log": "日志",
+  "Saved Prints": "已存储的打印",
+  "Create Saved Print": "创建已存储的打印",
+  "Open Saved Print": "打开已存储的打印",
+  "Open Saved Creation": "打开已存储的作品"
 }

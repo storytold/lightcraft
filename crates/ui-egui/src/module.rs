@@ -761,6 +761,11 @@ pub const SHELL_COMMANDS: &[crate::menus::UiCommand] = &[
     ("slideshow.addMusic", "Add Slideshow Music", None, ""),
     ("slideshow.clearMusic", "Clear Slideshow Music", None, ""),
     ("slideshow.exportJpeg", "Export JPEG Slideshow…", None, "Slideshow"),
+    ("slideshow.exportPdf", "Export PDF Slideshow…", None, "Slideshow"),
+    // the Web module's background outputs (crate::web_module)
+    ("webui.export", "Export Web Gallery…", None, ""),
+    ("webui.upload", "Upload Web Gallery", None, ""),
+    ("webui.shareImmich", "Share Web Gallery via Immich", None, ""),
     // the Book module (crate::book)
     ("book.new", "New Book", None, ""),
     ("book.get", "Book Document", None, ""),
@@ -834,6 +839,9 @@ pub fn run(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Value, String
 
 fn run_inner(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
     if let Some(r) = crate::slideshow_ui::run(app, id, p) {
+        return r;
+    }
+    if let Some(r) = crate::web_module::run(app, id, p) {
         return r;
     }
     if let Some(m) = id.strip_prefix("module.").and_then(ModuleId::parse) {

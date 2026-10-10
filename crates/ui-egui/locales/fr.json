@@ -1930,5 +1930,9 @@
   "Run": "Exécuter",
   "Enabled": "Activé",
   "Permissions:": "Autorisations :",
-  "Log": "Journal"
+  "Log": "Journal",
+  "Saved Prints": "Impressions enregistrées",
+  "Create Saved Print": "Créer une impression enregistrée",
+  "Open Saved Print": "Ouvrir l’impression enregistrée",
+  "Open Saved Creation": "Ouvrir la création enregistrée"
 }

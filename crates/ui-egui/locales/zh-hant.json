@@ -2273,5 +2273,9 @@
   "Run": "執行",
   "Enabled": "已啟用",
   "Permissions:": "權限：",
-  "Log": "記錄"
+  "Log": "記錄",
+  "Saved Prints": "已儲存的列印",
+  "Create Saved Print": "建立已儲存的列印",
+  "Open Saved Print": "開啟已儲存的列印",
+  "Open Saved Creation": "開啟已儲存的作品"
 }
