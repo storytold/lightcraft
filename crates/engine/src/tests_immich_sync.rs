@@ -66,7 +66,11 @@ fn handle(state: &Shared, down: &AtomicBool, m: &str, t: &str, key: Option<&str>
         ("GET", "/api/api-keys/me") => json(json!({"permissions": ["all"]})),
         ("POST", "/api/search/metadata") => {
             let after = b["updatedAfter"].as_str().unwrap_or("");
-            let items: Vec<Value> = if b["page"].as_u64().unwrap_or(1) == 1 {
+            let album: Option<Vec<String>> =
+                b["albumIds"][0].as_str().map(|a| st.albums.iter().find(|x| x.0 == a).map(|x| x.2.clone()).unwrap_or_default());
+            let items: Vec<Value> = if let Some(ids) = album {
+                ids.iter().map(|i| json!({"id": i})).collect()
+            } else if b["page"].as_u64().unwrap_or(1) == 1 {
                 st.assets.iter().filter(|a| a["updatedAt"].as_str().unwrap_or("") > after).cloned().collect()
             } else {
                 vec![]

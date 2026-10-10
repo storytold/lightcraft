@@ -405,19 +405,15 @@ impl Client {
         Ok(())
     }
 
-    /// `GET /albums/{id}` with its asset ids.
+    /// The album's asset ids (a metadata search by album: v3's `GET /albums/{id}` leaves them out).
     pub fn album_assets(&self, album: &str) -> Result<Vec<String>, ImmichError> {
-        #[derive(serde::Deserialize)]
-        struct A {
-            #[serde(default)]
-            assets: Vec<Id>,
-        }
-        #[derive(serde::Deserialize)]
-        struct Id {
-            id: String,
-        }
-        let a: A = self.get(&format!("/albums/{}", path_id(album)?), true)?;
-        Ok(a.assets.into_iter().map(|x| x.id).collect())
+        let q = MetadataSearch { size: Some(1000), album_ids: Some(vec![path_id(album)?.to_string()]), ..Default::default() };
+        let mut out = Vec::new();
+        self.search_all(&q, 1000, |p| {
+            out.extend(p.iter().map(|a| a.id.clone()));
+            true
+        })?;
+        Ok(out)
     }
 
     /// `POST /stacks`: stack the assets, the first on top. Needs `stack.create`.
