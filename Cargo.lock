@@ -1391,6 +1391,7 @@ dependencies = [
  "dac-merge",
  "dac-meta",
  "dac-pipeline",
+ "dac-plugins",
  "dac-preview",
  "dac-raster",
  "dac-raw",
