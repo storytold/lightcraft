@@ -277,7 +277,7 @@ pub fn show(app: &mut DacApp, ctx: &egui::Context) {
                     let n = app.session.targets(&json!({})).len();
                     field(ui, "Change", |ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
-                        for (i, (label, m)) in [("Set date & time", "set"), ("Shift by", "shift"), ("Time zone", "zone")].iter().enumerate() {
+                        for (i, (label, m)) in [("Set date & time", "set"), ("Shift by", "shift"), ("Time zone", "zone"), ("File date", "file")].iter().enumerate() {
                             if crate::widgets::text_button(ui, &format!("captureMode-{i}"), label, mode == m).clicked() {
                                 *mode = m.to_string();
                             }
@@ -299,6 +299,13 @@ pub fn show(app: &mut DacApp, ctx: &egui::Context) {
                             });
                             json!({"shift": *days as i64 * 86_400 + *hours as i64 * 3600 + *minutes as i64 * 60})
                         }
+                        "file" => {
+                            ui.label(
+                                egui::RichText::new(crate::i18n::tr("Each photo gets its original file's modification date (UTC)."))
+                                    .color(t.text_label),
+                            );
+                            json!({"fromFile": true})
+                        }
                         _ => {
                             field(ui, "Hours", |ui| ui.add(egui::DragValue::new(zone).range(-26.0..=26.0).speed(0.25).fixed_decimals(2)));
                             json!({"hours": zone})
@@ -311,12 +318,14 @@ pub fn show(app: &mut DacApp, ctx: &egui::Context) {
                             "set" => dac_catalog::dates::normalize_iso(time)
                                 .and_then(|t| Some(dac_catalog::dates::iso_seconds(&t)? - dac_catalog::dates::iso_seconds(&cur)?)),
                             "shift" => params["shift"].as_i64(),
+                            "file" => None,
                             _ => Some((*zone as f64 * 3600.0).round() as i64),
                         };
                         let after = delta.and_then(|d| dac_catalog::dates::shift_iso(&cur, d));
                         ui.label(
                             egui::RichText::new(match after {
                                 Some(a) => format!("{name}: {} → {}", cur.replace('T', " "), a.replace('T', " ")),
+                                None if mode == "file" => String::new(),
                                 None => "Enter a date as YYYY-MM-DD HH:MM:SS".into(),
                             })
                             .color(t.text_label),
@@ -1039,6 +1048,7 @@ pub fn confirm_dialog(app: &mut DacApp, dlg: &Dialog) -> Result<serde_json::Valu
             match mode.as_str() {
                 "set" => json!({"time": time}),
                 "shift" => json!({"shift": *days as i64 * 86_400 + *hours as i64 * 3600 + *minutes as i64 * 60}),
+                "file" => json!({"fromFile": true}),
                 _ => json!({"hours": zone}),
             },
         ),

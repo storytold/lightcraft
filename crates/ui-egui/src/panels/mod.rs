@@ -1,6 +1,7 @@
 //! Window regions and panels.
 
 pub mod bottombar;
+pub mod cells;
 pub mod chips;
 pub mod compare;
 #[cfg(not(target_arch = "wasm32"))]
@@ -17,6 +18,7 @@ pub mod keymap;
 pub mod left;
 pub mod library_problem;
 pub mod masking;
+pub mod metadata;
 pub mod navigator;
 pub mod notices;
 pub mod people;

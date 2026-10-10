@@ -110,6 +110,32 @@ fn path_of(s: &Session, id: u64) -> String {
     }
 }
 
+/// Edit Capture Time ▸ Change to File's Modification Date: each photo gets its original's mtime
+/// (plus an optional zone shift); photos without a file are counted, never crash.
+#[test]
+fn capture_time_from_file_date() {
+    let src = temp_dir("filedate-src");
+    let lib = temp_dir("filedate-lib");
+    write_png(&src.join("a.png"), 1);
+    let mtime = std::fs::metadata(src.join("a.png")).unwrap().modified().unwrap();
+    let secs = mtime.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
+    let id = r["imported"][0].as_u64().unwrap();
+    s.execute("photo.setCaptureTime", &json!({"ids": [id], "time": "2001-01-01T00:00:00", "each": true})).unwrap();
+    let r = s.execute("photo.setCaptureTime", &json!({"ids": [id], "fromFile": true})).unwrap();
+    assert_eq!(r["changed"], 1, "{r}");
+    assert_eq!(captured(&s, id), Some(dac_catalog::dates::civil(secs)));
+    s.execute("photo.setCaptureTime", &json!({"ids": [id], "fromFile": true, "hours": 2})).unwrap();
+    assert_eq!(captured(&s, id), Some(dac_catalog::dates::civil(secs + 7200)));
+    // a removed original: an error, not a panic
+    std::fs::remove_file(src.join("a.png")).unwrap();
+    assert!(s.execute("photo.setCaptureTime", &json!({"ids": [id], "fromFile": true})).is_err());
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
 /// Batch rename on disk: collisions with existing files and within the batch get suffixes, sidecars
 /// move along, virtual copies follow, undo/redo move the files back and forth, a failed move rolls
 /// the batch back, and the op log replays the new paths.

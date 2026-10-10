@@ -150,6 +150,14 @@ fn auto_tag_tracklog(s: &mut crate::Session, p: &Value) -> Result<Value> {
     }))
 }
 
+/// The original file's modification time as an ISO time (UTC), if it has a readable file.
+fn file_time(p: &dac_catalog::Photo) -> Option<String> {
+    let dac_catalog::Source::File { path } = &p.source else { return None };
+    let t = std::fs::metadata(path).and_then(|m| m.modified()).ok()?;
+    let secs = i64::try_from(t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs()).ok()?;
+    Some(dac_catalog::dates::civil(secs))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "photo.renameTokens", "Rename Template Tags", [], None, "{} → {tokens: [{tag, aliases, meaning, example}], dateDirectives: [{directive, meaning}], notes: [..], sample} — the file-name template tags shared by photo.rename, library.import (rename) and app.export (naming); examples are for a sample photo", always, |_, _| {
@@ -178,7 +186,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Capture Time",
             [],
             None,
-            "{ids?, time?: `2026-09-30T14:05:00` (the active photo gets it, the others shift by the same amount), each?: bool (every photo gets `time`), shift?: seconds, hours?: time-zone shift in hours} → {changed, captured: [..]}",
+            "{ids?, time?: `2026-09-30T14:05:00` (the active photo gets it, the others shift by the same amount), each?: bool (every photo gets `time`), fromFile?: bool (each photo gets its original file's modification time, UTC), shift?: seconds, hours?: time-zone shift in hours} → {changed, captured: [..], noFile}",
             has_selection,
             |s, p| {
                 use dac_catalog::dates::{iso_seconds, normalize_iso, shift_iso};
@@ -201,12 +209,23 @@ pub fn specs() -> Vec<CommandSpec> {
                         delta += iso_seconds(&t).unwrap_or(from) - from;
                     }
                 }
+                let from_file = bool_or(p, "fromFile", false);
                 let mut ops = Vec::new();
                 let mut out = Vec::new();
+                let mut no_file = 0usize;
                 for id in &targets {
-                    let new = match &each {
-                        Some(t) => shift_iso(t, delta),
-                        None => shift_iso(&base(s, *id), delta),
+                    let new = if from_file {
+                        // the original's modification time (UTC; `hours` moves it to the camera's zone)
+                        let Some(t) = s.catalog.photo(*id).and_then(|p| file_time(p)) else {
+                            no_file += 1;
+                            continue;
+                        };
+                        shift_iso(&t, delta)
+                    } else {
+                        match &each {
+                            Some(t) => shift_iso(t, delta),
+                            None => shift_iso(&base(s, *id), delta),
+                        }
                     };
                     let Some(new) = new else { continue };
                     out.push(json!(new));
@@ -218,7 +237,10 @@ pub fn specs() -> Vec<CommandSpec> {
                 if n > 0 {
                     s.commit("Edit Capture Time", Op::Batch { ops })?;
                 }
-                Ok(json!({"changed": n, "captured": out}))
+                if from_file && out.is_empty() {
+                    return Err(bad(c, "none of the photos has a readable original file"));
+                }
+                Ok(json!({"changed": n, "captured": out, "noFile": no_file}))
             }
         ),
         cmd!(

@@ -13,6 +13,7 @@ pub mod headless;
 pub mod i18n;
 pub mod icons;
 pub mod import;
+pub mod libtools;
 pub mod lightroom_import;
 pub mod links;
 pub mod menu_level;
@@ -45,6 +46,8 @@ mod tests_keymap;
 mod tests_labels;
 #[cfg(test)]
 mod tests_library_problem;
+#[cfg(test)]
+mod tests_libtools;
 #[cfg(test)]
 mod tests_masking;
 #[cfg(test)]

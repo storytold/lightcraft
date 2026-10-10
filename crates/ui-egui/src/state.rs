@@ -517,9 +517,8 @@ pub struct UiState {
     /// The grid cell under the pointer (the secondary window's Live loupe).
     #[serde(skip)]
     pub hovered_photo: Option<u64>,
-    /// The keyword painter: clicking a photo in the grid toggles this keyword on it.
-    #[serde(skip)]
-    pub keyword_painter: Option<String>,
+    /// Painter, grid cell style, Metadata panel preset ([`crate::libtools`]).
+    pub lib: crate::libtools::LibTools,
     /// A running slideshow (full screen): seconds per photo, when the next one is due (egui
     /// time), paused.
     #[serde(skip)]
@@ -845,7 +844,7 @@ impl Default for UiState {
             second_mode: Default::default(),
             second_locked: None,
             hovered_photo: None,
-            keyword_painter: None,
+            lib: Default::default(),
             info_overlay: InfoOverlay::Off,
             navigator: true,
             settings: AppSettings::default(),

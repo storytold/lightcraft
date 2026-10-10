@@ -75,6 +75,8 @@ pub struct GridCache {
     stacks: Option<(u64, Arc<StackIndex>)>,
     /// How many of the photos are browsed (Local) ones, by generation.
     local: Option<(u64, usize)>,
+    /// Collections (plain albums) holding each photo, by generation (the collection badge).
+    albums: Option<(u64, Arc<HashMap<PhotoId, usize>>)>,
 }
 
 impl GridCache {
@@ -98,6 +100,23 @@ impl GridCache {
                 let s = Arc::new(cat.stack_index());
                 self.stacks = Some((generation, s.clone()));
                 s
+            }
+        }
+    }
+
+    fn albums(&mut self, cat: &Catalog, generation: u64) -> Arc<HashMap<PhotoId, usize>> {
+        match &self.albums {
+            Some((g, m)) if *g == generation => m.clone(),
+            _ => {
+                let mut m: HashMap<PhotoId, usize> = HashMap::new();
+                for al in cat.albums().filter(|a| !a.is_smart() && !a.folder) {
+                    for p in &al.photos {
+                        *m.entry(*p).or_default() += 1;
+                    }
+                }
+                let m = Arc::new(m);
+                self.albums = Some((generation, m.clone()));
+                m
             }
         }
     }
@@ -170,6 +189,8 @@ fn show_inner(app: &mut DacApp, ui: &mut egui::Ui) {
         }
     }
     super::chips::show(app, ui, &chips);
+    crate::libtools::end_stroke(app, ui);
+    crate::libtools::painter_bar(app, ui);
     if app.ui.filter_bar {
         super::filterbar::show(app, ui);
     }
@@ -225,6 +246,7 @@ fn show_inner(app: &mut DacApp, ui: &mut egui::Ui) {
         }
     };
     let stacks = app.caches.grid.stacks(stats, &app.session.catalog, generation);
+    let albums = if app.ui.lib.cell_badges { Some(app.caches.grid.albums(&app.session.catalog, generation)) } else { None };
     let total_h = lay.height + 12.0;
     let active = app.session.selection.active;
     // bring the active photo into view when it changes (keyboard, click, command) or the grid
@@ -255,7 +277,10 @@ fn show_inner(app: &mut DacApp, ui: &mut egui::Ui) {
                 visible_ids.insert(id);
                 let r = rect.translate(origin.to_vec2());
                 let onscreen = rect.intersects(viewport);
-                cell(app, ui, id, r, square, onscreen, ppp);
+                cell(app, ui, id, r, square, onscreen, ppp, i);
+                if onscreen {
+                    super::cells::extras(app, ui, id, r, square, i, albums.as_deref());
+                }
                 if let Some((sid, pos)) = stacks.get(&id) {
                     stack_badge(app, ui, id, *sid, *pos, r, square);
                 }
@@ -476,7 +501,8 @@ pub fn request_thumb(app: &mut DacApp, id: PhotoId, size: usize, priority: u32) 
 /// Rendered thumbnails replacing embedded previews: after everything on screen.
 pub const BACKGROUND_THUMB_PRIORITY: u32 = 3;
 
-fn cell(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool, onscreen: bool, ppp: f32) {
+#[allow(clippy::too_many_arguments)]
+fn cell(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool, onscreen: bool, ppp: f32, index: usize) {
     let t = Tokens::get(ui.ctx());
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return };
     let resp = ui.interact(r, egui::Id::new(("cell", id.0)), Sense::click_and_drag());
@@ -506,7 +532,7 @@ fn cell(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool,
     let img_rect = if square {
         let base = if selected { t.cell_selected } else { t.cell };
         p.rect_filled(r, 0.0, crate::theme::label_background(base, photo.label, selected));
-        Rect::from_min_max(r.min + vec2(10.0, 24.0), r.max - vec2(10.0, 10.0))
+        super::cells::image_rect(app, r)
     } else {
         r
     };
@@ -538,7 +564,9 @@ fn cell(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool,
         }
     }
     // labels and badges
-    if square && app.ui.show_filenames {
+    if square && app.ui.lib.cell_style == crate::libtools::CellStyle::Expanded {
+        super::cells::expanded_header(app, ui, &photo, r, index);
+    } else if square && app.ui.show_filenames {
         let m = &photo.meta;
         let name = match app.ui.grid_info.as_str() {
             "exposure" => {
@@ -565,11 +593,13 @@ fn cell(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool,
         p.rect_filled(br, 2.0, Color32::from_gray(26));
         p.galley(br.min + vec2(4.0, 1.5), g, t.text_label);
     }
-    let show_badges = match app.ui.settings.grid_badges {
-        crate::state::GridBadges::Auto => resp.hovered() || selected || photo.rating > 0 || photo.flag != Flag::None || photo.label.is_some(),
-        crate::state::GridBadges::Always => true,
-        crate::state::GridBadges::Never => false,
-    };
+    let expanded = square && app.ui.lib.cell_style == crate::libtools::CellStyle::Expanded;
+    let show_badges = expanded
+        || match app.ui.settings.grid_badges {
+            crate::state::GridBadges::Auto => resp.hovered() || selected || photo.rating > 0 || photo.flag != Flag::None || photo.label.is_some(),
+            crate::state::GridBadges::Always => true,
+            crate::state::GridBadges::Never => false,
+        };
     let badge_bar = Rect::from_min_max(pos2(img_rect.left(), img_rect.bottom() - 24.0), img_rect.right_bottom());
     if !square && photo.label.is_some() {
         // Justified photos fill the whole cell, so the label shows as a translucent tinted footer
@@ -636,16 +666,8 @@ fn cell(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool,
         p.rect_filled(img_rect, 0.0, Color32::from_black_alpha(110));
     }
     // interaction
-    if let Some(k) = app.ui.keyword_painter.clone() {
-        // painting: a click toggles the keyword on this photo
-        if resp.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-        }
-        if resp.clicked() {
-            let has = photo.meta.keywords.iter().any(|x| x.eq_ignore_ascii_case(&k));
-            let key = if has { "removeKeywords" } else { "addKeywords" };
-            let _ = app.run("photo.setMeta", json!({"ids": [id.0], key: [k]}));
-        }
+    // painting: a click or a drag sprays the painter's value instead of selecting
+    if crate::libtools::paint_cell(app, ui, &resp, id) {
         return;
     }
     if resp.clicked() {
