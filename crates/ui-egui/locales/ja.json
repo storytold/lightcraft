@@ -2205,5 +2205,8 @@
   "Nothing (keep this catalog's version)": "何もしない（このカタログの内容を保持）",
   "Develop settings only": "現像設定のみ",
   "Metadata only": "メタデータのみ",
-  "Metadata and develop settings": "メタデータと現像設定"
+  "Metadata and develop settings": "メタデータと現像設定",
+  "Linked": "リンク済み",
+  "Probably Linked": "おそらくリンク済み",
+  "Not Linked": "未リンク"
 }

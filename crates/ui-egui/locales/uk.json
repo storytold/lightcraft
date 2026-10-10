@@ -2050,5 +2050,12 @@
   "Stopped by an error (see the log)": "Зупинено через помилку (див. журнал)",
   "Not saved": "Не збережено",
   "A folder is being synchronized": "Тека синхронізується",
-  "Wait for the import to finish": "Дочекайтеся завершення імпорту"
+  "Wait for the import to finish": "Дочекайтеся завершення імпорту",
+  "Immich": "Immich",
+  "Linked": "Пов’язано",
+  "Probably Linked": "Ймовірно, пов’язано",
+  "Not Linked": "Не пов’язано",
+  "Sublocation": "Місце",
+  "Width (pixels)": "Ширина (пікселі)",
+  "Height (pixels)": "Висота (пікселі)"
 }

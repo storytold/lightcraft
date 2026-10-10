@@ -2203,5 +2203,8 @@
   "Nothing (keep this catalog's version)": "Nada (manter a versão deste catálogo)",
   "Develop settings only": "Somente configurações de revelação",
   "Metadata only": "Somente metadados",
-  "Metadata and develop settings": "Metadados e configurações de revelação"
+  "Metadata and develop settings": "Metadados e configurações de revelação",
+  "Linked": "Vinculada",
+  "Probably Linked": "Provavelmente vinculada",
+  "Not Linked": "Não vinculada"
 }

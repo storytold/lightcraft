@@ -2203,5 +2203,8 @@
   "Nothing (keep this catalog's version)": "不取代（保留此目錄的版本）",
   "Develop settings only": "僅編輯設定",
   "Metadata only": "僅中繼資料",
-  "Metadata and develop settings": "中繼資料和編輯設定"
+  "Metadata and develop settings": "中繼資料和編輯設定",
+  "Linked": "已連結",
+  "Probably Linked": "可能已連結",
+  "Not Linked": "未連結"
 }

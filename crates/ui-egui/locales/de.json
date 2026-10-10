@@ -2358,5 +2358,8 @@
   "Nothing (keep this catalog's version)": "Nichts (Version dieses Katalogs behalten)",
   "Develop settings only": "Nur Entwicklungseinstellungen",
   "Metadata only": "Nur Metadaten",
-  "Metadata and develop settings": "Metadaten und Entwicklungseinstellungen"
+  "Metadata and develop settings": "Metadaten und Entwicklungseinstellungen",
+  "Linked": "Verknüpft",
+  "Probably Linked": "Wahrscheinlich verknüpft",
+  "Not Linked": "Nicht verknüpft"
 }

@@ -2203,5 +2203,8 @@
   "Nothing (keep this catalog's version)": "不替换（保留此目录的版本）",
   "Develop settings only": "仅修改照片设置",
   "Metadata only": "仅元数据",
-  "Metadata and develop settings": "元数据和修改照片设置"
+  "Metadata and develop settings": "元数据和修改照片设置",
+  "Linked": "已关联",
+  "Probably Linked": "可能已关联",
+  "Not Linked": "未关联"
 }

@@ -39,7 +39,8 @@ fn zoom_shortcuts_zoom_the_photo_and_leave_the_interface_scale_alone() {
     let scale = h.view.ctx.zoom_factor();
     // Cmd+= (Ctrl+= on Windows / Linux) is View ▸ Zoom In: the photo, not the UI
     key(&mut h, "=");
-    assert_eq!(h.app.ui.zoom, Zoom::Percent(50.0), "{:?}", h.app.ui.zoom);
+    // (the fork zooms by Lightroom Classic's fixed levels: from Fit in this window the next is 1:3)
+    assert_eq!(h.app.ui.zoom, Zoom::Percent(100.0 / 3.0), "{:?}", h.app.ui.zoom);
     assert_eq!(h.view.ctx.zoom_factor(), scale, "Cmd+= scaled the interface");
     // Cmd+Plus (a keypad or layout that reports `+`) is egui's other interface-zoom key
     key(&mut h, "Plus");

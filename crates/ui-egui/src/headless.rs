@@ -1566,14 +1566,14 @@ mod tests {
         // clicks land on last frame's layout: let the keyword list settle first (on a loaded machine a
         // row could still move, and the click then hit its neighbour, e.g. "sunrise")
         h.settle(SETTLE);
-        let r = h.request("ui.clickWidget", json!({"id": "keywordList:travel"}), t);
+        let r = h.request("ui.clickWidget", json!({"id": "keywordShow:travel"}), t);
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(h.app.session.filter.keyword.as_deref(), Some("travel"));
         assert_eq!(h.app.session.visible_cloned().len(), 3);
         // open the level, filter by the child
-        h.request("ui.clickWidget", json!({"id": "keywordListToggle:travel"}), t);
+        h.request("ui.clickWidget", json!({"id": "keywordRowToggle:travel"}), t);
         h.settle(SETTLE);
-        let r = h.request("ui.clickWidget", json!({"id": "keywordList:travel|italy"}), t);
+        let r = h.request("ui.clickWidget", json!({"id": "keywordShow:travel|italy"}), t);
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(h.app.session.visible_cloned().len(), 2);
         h.app.ui.dialog = Some(crate::state::Dialog::RenameKeyword { from: "travel".into(), to: "trips".into() });

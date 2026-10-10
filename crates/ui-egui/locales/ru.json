@@ -2167,5 +2167,8 @@
   "Nothing (keep this catalog's version)": "Ничего (оставить версию этого каталога)",
   "Develop settings only": "Только настройки обработки",
   "Metadata only": "Только метаданные",
-  "Metadata and develop settings": "Метаданные и настройки обработки"
+  "Metadata and develop settings": "Метаданные и настройки обработки",
+  "Linked": "Связано",
+  "Probably Linked": "Вероятно, связано",
+  "Not Linked": "Не связано"
 }

@@ -1856,5 +1856,12 @@
   "Stopped by an error (see the log)": "Arrêté par une erreur (voir le journal)",
   "Not saved": "Non enregistré",
   "A folder is being synchronized": "Un dossier est en cours de synchronisation",
-  "Wait for the import to finish": "Attendez la fin de l'importation"
+  "Wait for the import to finish": "Attendez la fin de l'importation",
+  "Immich": "Immich",
+  "Linked": "Liée",
+  "Probably Linked": "Probablement liée",
+  "Not Linked": "Non liée",
+  "Sublocation": "Lieu précis",
+  "Width (pixels)": "Largeur (pixels)",
+  "Height (pixels)": "Hauteur (pixels)"
 }

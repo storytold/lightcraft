@@ -411,12 +411,10 @@ const DEVELOP_RIGHT: &[PanelId] = &[
     PanelId::Info,
 ];
 
-/// Library: `[` / `]` rate (Develop keeps them for the brush size); `\` the filter bar (in a loupe
+/// Library: (`[` / `]` rate in the grids, see `shortcuts::grid_bracket_command`); `\` the filter bar (in a loupe
 /// it stays Show Original, see `shortcuts::handle`); `=` / `-` thumbnail size; Home / End the first
 /// and last photo.
 pub const LIBRARY_KEYS: &[ModuleKey] = &[
-    ("[", "photo.ratingDown", "{}"),
-    ("]", "photo.ratingUp", "{}"),
     ("\\", "view.filterBar", "{}"),
     ("=", "view.thumbLarger", "{}"),
     ("-", "view.thumbSmaller", "{}"),
@@ -737,8 +735,6 @@ pub const SHELL_COMMANDS: &[crate::menus::UiCommand] = &[
     ("second.slideshow", "Secondary Slideshow", None, "Window>Secondary Display"),
     ("second.filter", "Secondary Window Filter", None, ""),
     ("second.filmstrip", "Secondary Filmstrip", None, "Window>Secondary Display"),
-    ("photo.ratingUp", "Increase Rating", None, "Photo>Set Rating"),
-    ("photo.ratingDown", "Decrease Rating", None, "Photo>Set Rating"),
     ("photo.flagToggle", "Toggle Flagged Status", None, "Photo>Set Flag"),
 ];
 
@@ -748,7 +744,7 @@ pub fn enabled(app: &DacApp, id: &str) -> Option<bool> {
         return None;
     }
     Some(match id {
-        "module.develop" | "view.loupe" | "photo.ratingUp" | "photo.ratingDown" | "photo.flagToggle" => {
+        "module.develop" | "view.loupe" | "photo.flagToggle" => {
             app.session.active().is_some() || (id == "module.develop" && !app.session.catalog.is_empty())
         }
         "module.previous" => app.ui.previous_module.is_some(),
@@ -964,12 +960,6 @@ fn run_inner(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
                 }
             }
             Ok(json!(app.ui.identity_plate))
-        }
-        "photo.ratingUp" | "photo.ratingDown" => {
-            let active = app.session.active().ok_or("no photo selected")?;
-            let now = app.session.catalog.photo(active).map(|ph| ph.rating).unwrap_or(0);
-            let next = if id == "photo.ratingUp" { now.saturating_add(1).min(5) } else { now.saturating_sub(1) };
-            app.run("photo.rate", json!({"rating": next}))
         }
         "photo.flagToggle" => {
             let active = app.session.active().ok_or("no photo selected")?;
