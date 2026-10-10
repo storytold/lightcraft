@@ -1381,6 +1381,7 @@ name = "dac-engine"
 version = "0.5.0"
 dependencies = [
  "ab_glyph",
+ "dac-actions",
  "dac-brand",
  "dac-catalog",
  "dac-codecs",
@@ -1400,6 +1401,7 @@ dependencies = [
  "dac-meta",
  "dac-pipeline",
  "dac-preview",
+ "dac-psd",
  "dac-raster",
  "dac-raw",
  "dac-scenes",
@@ -1415,6 +1417,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "tiff",
  "unicode-segmentation",
  "web-time",
 ]

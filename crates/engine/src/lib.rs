@@ -214,6 +214,8 @@ pub struct Session {
     pub profile_recent: Vec<String>,
     /// Executed commands (actions / debugging / replay).
     pub journal: Vec<(String, Value)>,
+    /// Actions and Edit In presets (P4.4/P4.5, [`cmd::actions`]).
+    pub workflow: cmd::actions::Workflow,
     /// Ops applied since the last `drain_log` (for persistence).
     pending_log: Vec<Op>,
     pub media: media::MediaCache,
@@ -335,6 +337,7 @@ impl Session {
             profile_favorites: Vec::new(),
             profile_recent: Vec::new(),
             journal: Vec::new(),
+            workflow: Default::default(),
             pending_log: Vec::new(),
             media: media::MediaCache::default(),
             clock: Box::new(|| "2026-09-30T12:00:00".to_string()),
@@ -923,6 +926,8 @@ mod tests_classic;
 mod tests_color;
 #[cfg(test)]
 mod tests_denoise;
+#[cfg(test)]
+mod tests_edit_in;
 #[cfg(test)]
 mod tests_export;
 #[cfg(test)]
