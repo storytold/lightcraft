@@ -91,3 +91,69 @@ fn lock_holder_child() {
     std::fs::write(std::path::Path::new(&dir).join("child-locked"), b"").unwrap();
     std::thread::sleep(std::time::Duration::from_secs(120));
 }
+
+/// Issue #680: a process spawned by any thread holds a copy of every descriptor until it execs
+/// (close-on-exec only closes them then), and `flock` lasts while any copy of the descriptor is
+/// open. Dropping the `LibraryLock` must still free the library, so it releases explicitly rather
+/// than relying on its handle closing. A `try_clone` of the descriptor stands in for the child's
+/// copy: it refers to the same open file description, which is exactly what the child gets.
+#[cfg(unix)]
+#[test]
+fn the_library_is_free_once_dropped_even_if_a_child_holds_a_copy() {
+    let dir = temp_dir("copy");
+    let first = LibraryLock::acquire(&dir, "LightCraft").unwrap();
+    let copy = first.descriptor_copy().unwrap();
+    drop(first);
+    let again = LibraryLock::acquire(&dir, "lightcraft-cli").expect("the library is free once its LibraryLock is dropped");
+    assert!(again.held());
+    drop((again, copy));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Issue #680, as it happens in practice: one thread spawns cheap children while another acquires,
+/// drops and re-acquires the lock on its own directory. Every acquire must succeed (before the fix
+/// a few per cent were refused with `InUse(None)`). Bounded: about two seconds of cycles, pass or fail.
+#[cfg(unix)]
+#[test]
+fn dropping_the_lock_frees_the_library_while_another_thread_spawns_processes() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let dir = temp_dir("spawn");
+    let stop = Arc::new(AtomicBool::new(false));
+    let spawner = {
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            let mut spawned = 0usize;
+            while !stop.load(Ordering::Relaxed) {
+                if let Ok(mut c) =
+                    std::process::Command::new("/bin/true").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn()
+                {
+                    let _ = c.wait();
+                    spawned += 1;
+                }
+            }
+            spawned
+        })
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let mut cycles = 0usize;
+    let mut refused = Vec::new();
+    while cycles < 200_000 && std::time::Instant::now() < deadline {
+        match LibraryLock::acquire(&dir, "LightCraft") {
+            Ok(l) => assert!(l.held()), // dropped here: the next cycle must get it back
+            Err(e) => refused.push(format!("cycle {cycles}: {e:?}")),
+        }
+        cycles += 1;
+    }
+    stop.store(true, Ordering::Relaxed);
+    let spawned = spawner.join().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(spawned > 0, "the spawning thread never got a child off the ground");
+    assert!(
+        refused.is_empty(),
+        "{} of {cycles} re-acquires refused while {spawned} children were spawned: {:?}",
+        refused.len(),
+        &refused[..refused.len().min(3)]
+    );
+}
