@@ -41,6 +41,8 @@ mod tests_activity;
 #[cfg(test)]
 mod tests_album_picker;
 #[cfg(test)]
+mod tests_appearance;
+#[cfg(test)]
 mod tests_crop_rotate;
 #[cfg(test)]
 mod tests_curve;
@@ -122,6 +124,11 @@ pub type OpenWithFn = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
 /// storage); the work may finish asynchronously.
 pub type HostAction = Box<dyn FnMut(&mut Session) -> Result<Value, String>>;
 
+/// The system's dark/light appearance where egui doesn't report one (Linux desktops whose
+/// windowing layer says nothing, e.g. many Wayland compositors). The host answers from what it
+/// last heard and wakes the UI itself when that changes; it is never polled for changes.
+pub type SystemThemeFn = Box<dyn Fn(&egui::Context) -> Option<egui::Theme>>;
+
 /// Platform services injected by the host app (desktop or web).
 #[derive(Default)]
 pub struct Services {
@@ -175,6 +182,8 @@ pub struct Services {
     pub backup_library: Option<HostAction>,
     /// File ▸ Restore Library from Backup… (web only; keeps the current library).
     pub restore_library: Option<HostAction>,
+    /// The system appearance for Appearance Mode ▸ Auto, ahead of egui's own report.
+    pub system_theme: Option<SystemThemeFn>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -696,6 +705,20 @@ impl LightcraftApp {
         }
     }
 
+    /// The system's appearance: the host's answer first, then egui's (none: unknown).
+    pub fn system_theme(&self, ctx: &egui::Context) -> Option<egui::Theme> {
+        self.services.system_theme.as_ref().and_then(|read| read(ctx)).or_else(|| ctx.system_theme())
+    }
+
+    /// Restyle `ctx` when the theme the settings select (Appearance Mode, the dark and light
+    /// themes, the system's appearance in Auto) is not the one it shows. A no-op otherwise.
+    pub fn sync_theme(&mut self, ctx: &egui::Context) {
+        let wanted = self.ui.settings.theme(self.system_theme(ctx));
+        if theme::current(ctx) != Some(wanted) {
+            theme::apply_kind(ctx, wanted);
+        }
+    }
+
     /// Draw the UI into an offscreen context at the window's size; with `capture`, rasterize it
     /// on the CPU (photo textures come from the renderer's CPU copies).
     pub fn headless_screenshot(&mut self, main: &egui::Context, capture: bool) -> Option<egui::ColorImage> {
@@ -799,6 +822,7 @@ impl LightcraftApp {
         } else {
             self.fonts_ready = true;
         }
+        self.sync_theme(ctx);
         panels::notices::logic(self);
         // closing the window (or Quit) with changes only in memory: retry, else ask first
         if ctx.input(|i| i.viewport().close_requested()) && !panels::notices::may_close(self) {

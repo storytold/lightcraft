@@ -2,6 +2,14 @@
 
 ## October 2026
 
+### Appearance
+- Settings ▸ Interface ▸ Appearance Mode: Sync with System, Dark Mode or Light Mode, above a light
+  and a dark theme card, each previewing its theme (dark: Charcoal, the look so far, or Midnight;
+  light: Silver or Paper). New and existing installs stay dark; following the system is opt-in.
+- The top bar's appearance button cycles Auto, Light, Dark (a monitor, sun or moon), and View ▸
+  Appearance lists the modes and themes. On Linux, Auto follows the desktop portal's colour scheme
+  as it changes, without polling.
+
 ### Activity stack
 - Long-running tasks show in one place, top left under the top bar, as in Lightroom Classic (issue #345): imports and
   folder scans, exports (and the contact sheet PDF), Synchronize Folder, Build / Smart Previews, Lightroom catalog import, Photo Merge, model downloads, the face scan,

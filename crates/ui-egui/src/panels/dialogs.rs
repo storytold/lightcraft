@@ -127,11 +127,19 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     // own so the size it is given doesn't carry over to the other dialogs. Its content scrolls
     // rather than growing the window when the options below the grid get taller (e.g. Copy).
     let import = matches!(dlg, Dialog::Import { .. });
-    let window_id = egui::Id::new(if import { "lightcraft-import-dialog" } else { "lightcraft-dialog" });
+    let settings = matches!(dlg, Dialog::Settings { .. });
+    let window_id = egui::Id::new(if import {
+        "lightcraft-import-dialog"
+    } else if settings {
+        "lightcraft-settings-dialog"
+    } else {
+        "lightcraft-dialog"
+    });
     let shown = egui::Window::new(crate::i18n::tr(&title)).id(window_id)
         .collapsible(false)
         .resizable(import)
-        .vscroll(import)
+        .vscroll(import || settings)
+        .max_size(if settings { (ctx.content_rect().size() - egui::vec2(48.0, 80.0)).max(egui::vec2(240.0, 180.0)) } else { egui::Vec2::splat(f32::INFINITY) })
         .resize(|r| if import { r.default_height(crate::import::DIALOG_SIZE[1]) } else { r })
         .frame(frame)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])

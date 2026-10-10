@@ -53,7 +53,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if app.integrated_titlebar {
                 window_handle(app, ui, full, left as f32, 12.0);
             }
-            let mut sw = 640.0f32.min(full.width() - 460.0).max(200.0);
+            // room for the filter icon and the six icons on the right
+            let mut sw = 640.0f32.min(full.width() - 540.0).max(200.0);
             if !app.native_menu {
                 // leave room for the in-window menus left of the (centred) search field
                 let menus_right = full.left() + 140.0 + crate::menubar::bar_width(ui) + 24.0;
@@ -187,6 +188,26 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 }
                 x -= 40.0;
             }
+            // Appearance Mode: a click steps Auto → Light → Dark → Auto; the icon shows the mode
+            let (icon, mode) = appearance_icon(app.ui.settings.appearance_mode);
+            let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
+            let tip = format!("{}: {}", crate::i18n::tr("Appearance Mode"), crate::i18n::tr(mode));
+            let resp = ui.interact(r, egui::Id::new(("top", "appearance")), Sense::click()).on_hover_text(tip);
+            register(ui.ctx(), "icon:appearance", r);
+            paint(ui.painter(), r.shrink(5.0), icon, if resp.hovered() { t.text } else { t.icon });
+            if resp.clicked() {
+                let _ = app.run("view.appearance", json!({}));
+            }
             let _ = Align2::CENTER_CENTER;
         });
+}
+
+/// The appearance button's icon and the mode's name for its tooltip.
+pub fn appearance_icon(mode: crate::state::AppearanceMode) -> (Icon, &'static str) {
+    use crate::state::AppearanceMode;
+    match mode {
+        AppearanceMode::Auto => (Icon::Monitor, "Sync with System"),
+        AppearanceMode::Light => (Icon::Sun, "Light Mode"),
+        AppearanceMode::Dark => (Icon::Moon, "Dark Mode"),
+    }
 }

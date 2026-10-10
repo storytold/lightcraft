@@ -127,6 +127,67 @@ impl InfoOverlay {
     }
 }
 
+/// Whether the interface uses the dark or the light theme (Settings ▸ Interface ▸ Appearance).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AppearanceMode {
+    /// Follow the operating system's dark/light setting (dark when it gives no answer).
+    Auto,
+    /// The dark theme, whatever the system says (the default: LightCraft's look so far).
+    #[default]
+    Dark,
+    Light,
+}
+
+impl AppearanceMode {
+    /// The header button's order: Auto, Light, Dark, then Auto again.
+    pub fn next(self) -> AppearanceMode {
+        match self {
+            AppearanceMode::Auto => AppearanceMode::Light,
+            AppearanceMode::Light => AppearanceMode::Dark,
+            AppearanceMode::Dark => AppearanceMode::Auto,
+        }
+    }
+}
+
+/// The theme the dark appearance uses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DarkTheme {
+    #[default]
+    Charcoal,
+    Midnight,
+}
+
+/// The theme the light appearance uses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LightTheme {
+    #[default]
+    Silver,
+    Paper,
+}
+
+impl DarkTheme {
+    pub const ALL: [DarkTheme; 2] = [DarkTheme::Charcoal, DarkTheme::Midnight];
+    pub fn kind(self) -> crate::theme::ThemeKind {
+        match self {
+            DarkTheme::Charcoal => crate::theme::ThemeKind::Charcoal,
+            DarkTheme::Midnight => crate::theme::ThemeKind::Midnight,
+        }
+    }
+}
+
+impl LightTheme {
+    pub const ALL: [LightTheme; 2] = [LightTheme::Silver, LightTheme::Paper];
+    pub fn kind(self) -> crate::theme::ThemeKind {
+        match self {
+            LightTheme::Silver => crate::theme::ThemeKind::Silver,
+            LightTheme::Paper => crate::theme::ThemeKind::Paper,
+        }
+    }
+}
+
 /// App-level preferences (Settings dialog). They belong to the app, not a library, and are
 /// saved with the UI state in the app's config folder (`ui.json`, key `settings`); library
 /// preferences (import defaults, XMP, cache size) live in the library's `prefs.json`.
@@ -156,6 +217,12 @@ pub struct AppSettings {
     pub grid_badges: GridBadges,
     /// Shortcuts the user changed (Help ▸ Keyboard Shortcuts): command id → shortcut, `""` = none.
     pub keymap: crate::shortcuts::Keymap,
+    /// Auto (follow the system), Dark or Light.
+    pub appearance_mode: AppearanceMode,
+    /// The theme of the dark appearance.
+    pub dark_theme: DarkTheme,
+    /// The theme of the light appearance.
+    pub light_theme: LightTheme,
     /// The monitor's ICC profile previews are shown through (`app.displayProfile`; "" = none:
     /// the display is treated as sRGB).
     pub display_profile: String,
@@ -175,6 +242,9 @@ impl Default for AppSettings {
             film_badges: true,
             grid_badges: GridBadges::Auto,
             keymap: Default::default(),
+            appearance_mode: AppearanceMode::Dark,
+            dark_theme: DarkTheme::Charcoal,
+            light_theme: LightTheme::Silver,
             display_profile: String::new(),
         }
     }
@@ -200,6 +270,29 @@ pub const LOUPE_EDGE_STEP: usize = 64;
 pub const STANDARD_PREVIEW_EDGE: u32 = 2560;
 
 impl AppSettings {
+    /// The theme to show: the light theme in Light mode, or in Auto when `system` is light; the
+    /// dark theme otherwise (Auto with no answer from the system included).
+    pub fn theme(&self, system: Option<egui::Theme>) -> crate::theme::ThemeKind {
+        let light = match self.appearance_mode {
+            AppearanceMode::Light => true,
+            AppearanceMode::Dark => false,
+            AppearanceMode::Auto => system == Some(egui::Theme::Light),
+        };
+        if light { self.light_theme.kind() } else { self.dark_theme.kind() }
+    }
+
+    /// Pick `kind` and fix the mode to its family (the View ▸ Theme items).
+    pub fn select_theme(&mut self, kind: crate::theme::ThemeKind) {
+        use crate::theme::ThemeKind;
+        match kind {
+            ThemeKind::Charcoal => self.dark_theme = DarkTheme::Charcoal,
+            ThemeKind::Midnight => self.dark_theme = DarkTheme::Midnight,
+            ThemeKind::Silver => self.light_theme = LightTheme::Silver,
+            ThemeKind::Paper => self.light_theme = LightTheme::Paper,
+        }
+        self.appearance_mode = if kind.is_dark() { AppearanceMode::Dark } else { AppearanceMode::Light };
+    }
+
     /// Long edge (pixels) to render the loupe at when it is drawn `wanted_px` wide on screen:
     /// that size (rounded up to [`LOUPE_EDGE_STEP`], so resizing a window doesn't re-render at
     /// every pixel), never above the photo's own `native_long_edge`, the user's limit, the ceiling

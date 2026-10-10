@@ -2990,6 +2990,7 @@ dependencies = [
  "rfd",
  "serde_json",
  "winresource",
+ "zbus",
 ]
 
 [[package]]

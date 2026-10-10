@@ -59,6 +59,12 @@ scrolling pans in both axes and respects the operating system's scrolling direct
 These gestures work in Detail (including editing tools and full-screen preview), Compare and Reference
 views, and only apply over their image areas. Panning stops at the image edges.
 
+The interface theme is `view.appearance {mode?: "auto" | "light" | "dark"}` (no mode: the next one,
+Auto → Light → Dark → Auto, like the top bar's `icon:appearance` button) and `view.theme {theme:
+"charcoal" | "midnight" | "silver" | "paper"}`, which picks a theme and fixes the mode to its family.
+Both reply `{mode, darkTheme, lightTheme}`; the same values are `settings.appearanceMode`,
+`settings.darkTheme` and `settings.lightTheme` in `ui.set`. Auto follows the system (on Linux the
+XDG desktop portal, watched for changes rather than polled) and is dark when the system says nothing.
 Mask brushing uses the UI command `tool.brush` through `engine.execute`. With `{}` it activates
 painting on the current mask. `{"new": true}` creates a separate brush mask; `{"op": "add"}` or
 `{"op": "subtract"}` appends a brush component to the selected mask. Creating either starts in

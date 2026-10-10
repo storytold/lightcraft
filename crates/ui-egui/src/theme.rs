@@ -1,5 +1,9 @@
 //! Design tokens (colours, sizes, fonts). Values measured from black-box observation of the
 //! reference app's dark theme (see plan/lightroom/10-observed-ui.md); everything is our own code.
+//!
+//! Themes come in two families, picked by the Appearance Mode setting (Settings ▸ Interface):
+//! - dark: **Charcoal** (the default, the observed dark look) and **Midnight** (near black);
+//! - light: **Silver** (light grey chrome) and **Paper** (near white).
 
 use std::sync::Arc;
 
@@ -75,6 +79,44 @@ pub struct Tokens {
     pub film_h: f32,
 }
 
+/// An interface theme. Each belongs to the dark or the light family.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ThemeKind {
+    #[default]
+    Charcoal,
+    Midnight,
+    Silver,
+    Paper,
+}
+
+impl ThemeKind {
+    pub const ALL: [ThemeKind; 4] = [ThemeKind::Charcoal, ThemeKind::Midnight, ThemeKind::Silver, ThemeKind::Paper];
+
+    pub fn is_dark(self) -> bool {
+        matches!(self, ThemeKind::Charcoal | ThemeKind::Midnight)
+    }
+
+    /// The theme's id (settings value and command suffix).
+    pub fn id(self) -> &'static str {
+        match self {
+            ThemeKind::Charcoal => "charcoal",
+            ThemeKind::Midnight => "midnight",
+            ThemeKind::Silver => "silver",
+            ThemeKind::Paper => "paper",
+        }
+    }
+
+    /// The English display name.
+    pub fn label(self) -> &'static str {
+        match self {
+            ThemeKind::Charcoal => "Charcoal",
+            ThemeKind::Midnight => "Midnight",
+            ThemeKind::Silver => "Silver",
+            ThemeKind::Paper => "Paper",
+        }
+    }
+}
+
 impl Default for Tokens {
     fn default() -> Self {
         Tokens {
@@ -118,6 +160,92 @@ impl Default for Tokens {
 }
 
 impl Tokens {
+    /// The tokens of `kind`. Metrics are shared; only colours change.
+    pub fn for_kind(kind: ThemeKind) -> Tokens {
+        let rgb = |v: u32| Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8);
+        let base = Tokens::default();
+        match kind {
+            ThemeKind::Charcoal => base,
+            ThemeKind::Midnight => Tokens {
+                chrome: rgb(0x1e1e1e),
+                canvas: rgb(0x121212),
+                grid_bg: rgb(0x080808),
+                cell: rgb(0x121212),
+                cell_selected: rgb(0x262626),
+                divider: rgb(0x0e0e0e),
+                inset: rgb(0x181818),
+                field: rgb(0x161616),
+                field_border: rgb(0x333333),
+                button: rgb(0x191919),
+                button_border: rgb(0x404040),
+                hover: rgb(0x2e2e2e),
+                pressed: rgb(0x343434),
+                tool_active: rgb(0x343434),
+                ..base
+            },
+            ThemeKind::Silver => Tokens {
+                chrome: rgb(0xe6e6e6),
+                canvas: rgb(0xcfcfcf),
+                grid_bg: rgb(0xd9d9d9),
+                cell: rgb(0xcbcbcb),
+                cell_selected: rgb(0xb4b4b4),
+                divider: rgb(0xc4c4c4),
+                inset: rgb(0xdcdcdc),
+                field: rgb(0xf6f6f6),
+                field_border: rgb(0xb8b8b8),
+                button: rgb(0xf2f2f2),
+                button_border: rgb(0xb0b0b0),
+                hover: rgb(0xd2d2d2),
+                pressed: rgb(0xc4c4c4),
+                tool_active: rgb(0xcacaca),
+                text: rgb(0x1c1c1c),
+                text_label: rgb(0x383838),
+                text_dim: rgb(0x6a6a6a),
+                text_disabled: rgb(0xa2a2a2),
+                icon: rgb(0x555555),
+                track: rgb(0xa8a8a8),
+                thumb: rgb(0x5e5e5e),
+                thumb_hover: rgb(0x262626),
+                accent: rgb(0x0a62d0),
+                star: rgb(0x3a3a3a),
+                pick: rgb(0x2a2a2a),
+                reject: rgb(0xc83434),
+                caution: rgb(0xb0761a),
+                ..base
+            },
+            ThemeKind::Paper => Tokens {
+                chrome: rgb(0xfafafa),
+                canvas: rgb(0xececec),
+                grid_bg: rgb(0xf2f2f2),
+                cell: rgb(0xe8e8e8),
+                cell_selected: rgb(0xd2d2d2),
+                divider: rgb(0xe0e0e0),
+                inset: rgb(0xf0f0f0),
+                field: rgb(0xffffff),
+                field_border: rgb(0xcccccc),
+                button: rgb(0xffffff),
+                button_border: rgb(0xc6c6c6),
+                hover: rgb(0xebebeb),
+                pressed: rgb(0xdedede),
+                tool_active: rgb(0xe2e2e2),
+                text: rgb(0x161616),
+                text_label: rgb(0x343434),
+                text_dim: rgb(0x707070),
+                text_disabled: rgb(0xababab),
+                icon: rgb(0x585858),
+                track: rgb(0xbdbdbd),
+                thumb: rgb(0x606060),
+                thumb_hover: rgb(0x202020),
+                accent: rgb(0x0a62d0),
+                star: rgb(0x3a3a3a),
+                pick: rgb(0x2a2a2a),
+                reject: rgb(0xc83434),
+                caution: rgb(0xb0761a),
+                ..base
+            },
+        }
+    }
+
     pub fn get(ctx: &egui::Context) -> Tokens {
         ctx.data(|d| d.get_temp::<Tokens>(egui::Id::NULL)).unwrap_or_default()
     }
@@ -215,15 +343,32 @@ fn craft_font_name(f: &lightcraft_engine::CraftFont) -> String {
     format!("craft-fonts {} {}", f.family, f.style)
 }
 
+fn theme_id() -> egui::Id {
+    egui::Id::new("lightcraft-theme")
+}
+
+/// The theme `ctx` is styled with (none before the first [`apply_kind`]).
+pub fn current(ctx: &egui::Context) -> Option<ThemeKind> {
+    ctx.data(|d| d.get_temp::<ThemeKind>(theme_id()))
+}
+
+/// Style `ctx` with the default theme.
 pub fn apply(ctx: &egui::Context) {
-    // Cmd+= / Cmd+- / Cmd+0 (Ctrl on Windows and Linux) are View ▸ Zoom In / Zoom Out / Zoom to Fit
-    // for the photo. egui would take the same keys at the end of every frame for its browser-style
-    // interface zoom (issue #566); on macOS the native menu bar got them first, elsewhere the whole
-    // UI scaled.
+    apply_kind(ctx, ThemeKind::default());
+}
+
+/// Style `ctx` with `kind`. The visuals go to both of egui's styles, so egui following the
+/// system's dark/light setting on its own never swaps in its stock look.
+pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
+    // Keep photo zoom shortcuts from resizing egui itself.
     ctx.options_mut(|o| o.zoom_with_keyboard = false);
-    let t = Tokens::default();
-    ctx.data_mut(|d| d.insert_temp(egui::Id::NULL, t));
-    let mut v = Visuals::dark();
+    let t = Tokens::for_kind(kind);
+    ctx.data_mut(|d| {
+        d.insert_temp(egui::Id::NULL, t);
+        d.insert_temp(theme_id(), kind);
+    });
+    let dark = kind.is_dark();
+    let mut v = if dark { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = t.chrome;
     v.window_fill = t.chrome;
     v.extreme_bg_color = t.field;
@@ -234,8 +379,9 @@ pub fn apply(ctx: &egui::Context) {
     v.selection.bg_fill = t.accent.gamma_multiply(0.6);
     v.selection.stroke = Stroke::new(1.0, t.accent);
     v.override_text_color = Some(t.text_label);
-    v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(140) };
-    v.window_shadow = egui::epaint::Shadow { offset: [0, 8], blur: 30, spread: 0, color: Color32::from_black_alpha(160) };
+    let (popup, window) = if dark { (140, 160) } else { (50, 60) };
+    v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(popup) };
+    v.window_shadow = egui::epaint::Shadow { offset: [0, 8], blur: 30, spread: 0, color: Color32::from_black_alpha(window) };
     let w = &mut v.widgets;
     for (wv, fill) in [
         (&mut w.noninteractive, t.chrome),
@@ -251,8 +397,10 @@ pub fn apply(ctx: &egui::Context) {
     }
     w.noninteractive.bg_stroke = Stroke::new(1.0, t.divider);
     w.inactive.bg_stroke = Stroke::new(1.0, t.button_border);
-    ctx.set_visuals(v);
-    ctx.global_style_mut(|s| {
+    ctx.set_visuals_of(egui::Theme::Dark, v.clone());
+    ctx.set_visuals_of(egui::Theme::Light, v);
+    ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
+    ctx.all_styles_mut(|s| {
         s.spacing.item_spacing = egui::vec2(6.0, 4.0);
         s.spacing.button_padding = egui::vec2(8.0, 3.0);
         s.spacing.interact_size.y = 22.0;
