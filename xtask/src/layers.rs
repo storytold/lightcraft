@@ -61,6 +61,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("preview", Class::Layer(3)),
     ("export", Class::Layer(3)),
     ("layout", Class::Layer(3)),
+    ("print", Class::Layer(3)),
     ("merge", Class::Layer(3)),
     ("segment", Class::Layer(3)),
     ("engine", Class::Layer(4)),
@@ -100,6 +101,8 @@ pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     &["text", "pdf"],
     // L3: the Immich client writes remote links into the catalog
     &["catalog", "immich"],
+    // L3: the print back end lays out pages with `layout`
+    &["layout", "print"],
 ];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {

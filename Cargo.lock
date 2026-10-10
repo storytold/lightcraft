@@ -1701,6 +1701,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "dac-print"
+version = "0.5.0"
+dependencies = [
+ "dac-codecs",
+ "dac-layout",
+ "dac-pdf",
+ "dac-raster",
+ "dac-text",
+ "lopdf",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "dac-raster"
 version = "0.5.0"
 dependencies = [

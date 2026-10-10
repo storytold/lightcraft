@@ -43,6 +43,7 @@ dac-heif = { path = "crates/heif" }
 dac-segment = { path = "crates/segment" }
 dac-text = { path = "crates/text" }
 dac-pdf = { path = "crates/pdf" }
+dac-print = { path = "crates/print" }
 
 # foundation
 thiserror = "2"
