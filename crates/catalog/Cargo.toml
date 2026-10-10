@@ -12,6 +12,7 @@ workspace = true
 dac-brand = { workspace = true }
 dac-develop = { workspace = true }
 dac-meta = { workspace = true }
+dac-geo = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

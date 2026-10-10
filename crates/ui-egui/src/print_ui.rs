@@ -14,8 +14,6 @@
 //! path, printer}`, `printui.printOne`, `printui.printers {server}`, `printui.saveTemplate {name}`,
 //! `printui.state`.
 
-use std::collections::HashMap;
-
 use dac_catalog::PhotoId;
 use dac_layout::tokens::{PhotoInfo, expand};
 use dac_layout::{Align, CellKind, Document, Fit};
@@ -114,40 +112,7 @@ fn ids_text(ids: &[PhotoId]) -> Vec<String> {
 
 /// Token values of a catalog photo.
 fn info_of(app: &DacApp, id: &str) -> PhotoInfo {
-    let Some(p) = id.parse::<u64>().ok().and_then(|n| app.session.catalog.photo(PhotoId(n))) else { return PhotoInfo::default() };
-    let m = &p.meta;
-    let (folder, filename) = match p.file_name.rsplit_once(['/', '\\']) {
-        Some((f, n)) => (f.to_string(), n.to_string()),
-        None => (String::new(), p.file_name.clone()),
-    };
-    PhotoInfo {
-        filename,
-        folder,
-        date: p.captured.clone().unwrap_or_default(),
-        title: m.title.clone(),
-        caption: m.caption.clone(),
-        creator: m.creator.clone(),
-        copyright: m.copyright.clone(),
-        camera: m.camera.clone(),
-        lens: m.lens.clone(),
-        iso: m.iso,
-        aperture: m.aperture.map(f64::from),
-        focal: m.focal_mm.map(f64::from),
-        shutter: parse_shutter(&m.shutter),
-        rating: Some(p.rating),
-        keywords: m.keywords.clone(),
-        dimensions: Some((p.width, p.height)),
-        ..PhotoInfo::default()
-    }
-}
-
-fn parse_shutter(s: &str) -> Option<f64> {
-    let s = s.trim().trim_end_matches('s').trim();
-    match s.split_once('/') {
-        Some((a, b)) => Some(a.trim().parse::<f64>().ok()? / b.trim().parse::<f64>().ok().filter(|v| *v != 0.0)?),
-        None => s.parse().ok(),
-    }
-    .filter(|v: &f64| v.is_finite() && *v > 0.0)
+    id.parse::<u64>().ok().and_then(|n| app.session.catalog.photo(PhotoId(n))).map(|p| dac_engine::creations::photo_info(p)).unwrap_or_default()
 }
 
 /// The document for the current settings and photos.
@@ -362,25 +327,14 @@ fn start(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
     let doc = settings.build(&ids_text(&ids)).map_err(|e| e.to_string())?;
     // draft mode prints from preview-sized renders
     let dpi = if settings.job.draft { settings.job.dpi.min(150.0) } else { settings.job.dpi };
-    let mut jobs = Vec::new();
-    let mut infos = HashMap::new();
-    for (pid, long) in dac_print::output::needed_sizes(&doc, dpi) {
-        let Ok(n) = pid.parse::<u64>() else { continue };
-        let job = app.session.export_job(PhotoId(n), long, long, dac_pipeline::OutputSpace::Srgb, dac_pipeline::OutputDepth::U8)?;
-        infos.insert(pid.clone(), info_of(app, &pid));
-        jobs.push((pid, job));
-    }
+    let (jobs, infos) = dac_engine::creations::prepare_jobs(&mut app.session, &doc, dpi)?;
     let pages = doc.pages.len();
     let title = app.print.template.clone().unwrap_or_else(|| "Print".into());
     let write = app.services.write_shared.clone();
     app.print.busy = true;
     let dest = settings.destination.clone();
     let work = move || -> Result<Value, String> {
-        let mut src = dac_print::output::MapSource { infos, ..Default::default() };
-        for (pid, job) in jobs {
-            let img = job.run().rendered?.image;
-            src.images.insert(pid, img);
-        }
+        let src = dac_engine::creations::run_jobs(jobs, infos)?;
         let text = dac_print::text::ShapedText::with_system_fonts();
         let progress = &mut |_: usize, _: usize| true;
         let write_file = |path: &str, bytes: &[u8]| -> Result<(), String> {
@@ -1119,13 +1073,5 @@ mod tests {
         assert!(bytes.lock().unwrap().starts_with(b"%PDF-"));
         // printer destination without a printer is refused up front
         assert!(h.app.run("printui.print", json!({"destination": "printer"})).is_err());
-    }
-
-    #[test]
-    fn shutter_text_parses() {
-        assert_eq!(parse_shutter("1/250"), Some(0.004));
-        assert_eq!(parse_shutter("2s"), Some(2.0));
-        assert_eq!(parse_shutter("1/0"), None);
-        assert_eq!(parse_shutter("abc"), None);
     }
 }

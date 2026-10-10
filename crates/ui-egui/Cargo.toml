@@ -17,6 +17,7 @@ dac-raster = { workspace = true }
 dac-develop = { workspace = true }
 dac-pipeline = { workspace = true }
 dac-catalog = { workspace = true }
+dac-geo = { workspace = true }
 web-time = { workspace = true }
 dac-engine = { workspace = true }
 dac-layout = { workspace = true }
@@ -35,6 +36,7 @@ dac-codecs = { workspace = true }
 resvg = { version = "0.45", default-features = false }
 
 [dev-dependencies]
+image = { workspace = true }
 dac-denoise = { workspace = true, features = ["runtime"] }
 dac-codecs = { workspace = true }
 dac-faces = { workspace = true }

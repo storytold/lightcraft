@@ -31,6 +31,7 @@ pub mod keywords;
 pub mod library;
 pub mod lut_profiles;
 pub mod manage;
+pub mod map;
 mod masks;
 mod merge;
 pub mod metadata;
@@ -144,6 +145,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(organize::specs());
         v.extend(keywords::specs());
         v.extend(manage::specs());
+        v.extend(map::specs());
         v.extend(previews::specs());
         v.extend(lut_profiles::specs());
         v.extend(cull::specs());
@@ -158,6 +160,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(preset_files::specs());
         v.extend(prefs::specs());
         v.extend(export::specs());
+        v.extend(crate::creations::specs());
         v.extend(before::specs());
         v.extend(browse::specs());
         v.extend(folders::specs());

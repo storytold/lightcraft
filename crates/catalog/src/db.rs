@@ -76,6 +76,9 @@ struct Head {
     /// What the library keeps about its folders (format version 5).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     folder_records: BTreeMap<String, crate::FolderRecord>,
+    /// The Map module's saved locations (format version 6).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    saved_locations: BTreeMap<String, dac_geo::SavedLocation>,
 }
 
 impl Head {
@@ -88,6 +91,7 @@ impl Head {
             browsed: c.browsed.clone(),
             keyword_list: c.keyword_list.clone(),
             folder_records: c.folder_records.clone(),
+            saved_locations: c.saved_locations.clone(),
         }
     }
 }
@@ -267,6 +271,7 @@ impl CatalogDb {
             cat.browsed = head.browsed;
             cat.keyword_list = head.keyword_list;
             cat.folder_records = head.folder_records;
+            cat.saved_locations = head.saved_locations;
         }
 
         // settings first: photos refer to them

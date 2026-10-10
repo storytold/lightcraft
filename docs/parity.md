@@ -41,16 +41,17 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | R. Video (VID) | 0 | 0 | 5 | 1 | — | 0/2 (0%) |
 | S. Export (EXP) | 15 | 2 | 1 | 0 | 7/7 (100%) | 7/7 (100%) |
 | T. Share (SHARE) | 0 | 0 | 0 | 4 | — | — |
-| U. Map & location (MAP) | 0 | 1 | 1 | 0 | — | 0/1 (0%) |
-| V. Preferences (PREF) | 7 | 1 | 2 | 2 | 1/1 (100%) | 5/5 (100%) |
+| U. Map & location (MAP) | 0 | 2 | 0 | 0 | — | 0/1 (0%) |
+| V. Preferences (PREF) | 6 | 2 | 2 | 2 | 1/1 (100%) | 4/5 (80%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 18 | 6 | 1 | 1 | 8/8 (100%) | 6/9 (67%) |
 | Y. Menus | 82 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
-| Lightroom Classic extras | 32 | 11 | 39 | 9 | — | 22/24 (92%) |
-| **Total** | 393 | 39 | 84 | 36 | 192/200 (96%) | 142/152 (93%) |
+| Lightroom Classic extras | 60 | 16 | 47 | 0 | — | 33/37 (89%) |
+| IMM. Immich integration | 4 | 0 | 6 | 0 | — | 4/6 (67%) |
+| **Total** | 428 | 51 | 90 | 27 | 192/200 (96%) | 157/173 (91%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.9%** of 516 in-scope rows — P0 98.0% of 200 · P1 95.7% of 152 · P2 42.9% of 163.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.7%** of 569 in-scope rows — P0 98.0% of 200 · P1 93.9% of 173 · P2 48.2% of 195.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -476,7 +477,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
 | LR-MAP-INFO | Location in the info panel | P1 | 🟡 | `cmd:photo.setMeta` (`location`, `city`, `state`, `country`, `gps`), `crates/ui-egui/src/panels/right.rs` | location, city, state/province, country and GPS editable; Show on Map (OpenStreetMap in the browser); no map in the panel |
-| LR-MAP-MODULE | Map module [Classic] | P2 | ⬜ | | |
+| LR-MAP-MODULE | Map module [Classic] | P2 | 🟡 | `cmd:module.map`, `cmd:map.view`, `crates/ui-egui/src/map/mod.rs`, `crates/geo/src/lib.rs` | P3.3: slippy map (OSM default, terrain, satellite, user XYZ servers; disk tile cache with size limit and expiry; attribution always shown), pins/clusters, drag-to-geotag, tracks, saved locations, filter bar, search, opt-in reverse geocoding. No Immich ghost pins, no box multi-select |
 
 ## V. Preferences (PREF)
 
@@ -776,12 +777,12 @@ PLAN.md §2 carry the status of that survey ("unverified" where it said so) unti
 | LRC-DEV-PROCESS | Process versions, Update to Current Process | P1 | ✅ | `cmd:develop.updateProcess`, `cmd:develop.reset`, `cmd:develop.get`, `crates/develop/src/settings.rs`, `crates/pipeline/src/finish.rs`, `docs/process-versions.md` | each photo records the rendering process its settings are interpreted by: settings saved before this existed load as V1, new photos and Reset get the latest, virtual copies inherit, copy / paste / sync / presets keep each photo's own; Photo ▸ Update to Current Process (one undo step, enabled while a selected photo is on an older process); a number from a newer version of the app is kept and renders with the newest known process. Only V1 exists so far: this is what lets a retuned default tone (#146) or stronger Light sliders (#196) ship without changing existing edits |
 | LRC-DEV-VIEWOPTIONS | Develop view options | P2 | ⬜ | | |
 | LRC-DEV-VIDEO | Video frame capture | P2 | ⬜ | | |
-| LRC-MAP-VIEW | Map view | P2 | ⬜ | | |
-| LRC-MAP-GEOTAG | Drag photos onto the map | P2 | ⬜ | | |
-| LRC-MAP-LOCATIONS | Saved locations | P2 | ⬜ | | |
-| LRC-MAP-TRACKLOG | GPS track logs | P2 | ✅ | `cmd:photo.autoTagTracklog`, `cmd:photo.tagFromTracklog`, `crates/meta/src/gpx.rs` | Photo ▸ Auto-Tag from Tracklog…: a GPX 1.0 / 1.1 track log sets the GPS of the selected photos by capture time — interpolated between the points of a track segment, else the nearest point within `maxGap` (10 min); never across segment breaks. The camera's time zone comes from the photo (Exif offset) or is asked for; photos that already have a location keep it unless `replace`; `dryRun` previews; one undo step. No track drawn on a map (no Map module) |
-| LRC-MAP-FILTER | Location filter bar | P2 | ⬜ | | |
-| LRC-MAP-REVGEO | Reverse geocoding | P2 | ⬜ | | reopened 2026-10-10: opt-in online service or offline GeoNames data (CC-BY, as a separate data file); Phase 3 |
+| LRC-MAP-VIEW | Map view | P2 | 🟡 | `cmd:map.view`, `cmd:map.style`, `cmd:map.addServer`, `cmd:map.fit`, `cmd:map.search`, `crates/ui-egui/src/map/view.rs`, `crates/geo/src/fetch.rs` | pan, wheel/double-click zoom around the pointer, zoom buttons, scale bar; style picker with user-added XYZ servers; on-screen tiles only (OSM tile policy), coarser tiles stand in while loading; search: lat/lon, saved locations, Nominatim with consent. No animated zoom |
+| LRC-MAP-GEOTAG | Drag photos onto the map | P2 | ✅ | `cmd:map.geotag`, `cmd:map.geotagAt`, `crates/ui-egui/src/map/view.rs` | drag from the filmstrip or grid onto the map; drag pins to move their photos; right-click ▸ Geotag Selected Photos Here; one undo step each |
+| LRC-MAP-LOCATIONS | Saved locations | P2 | ✅ | `cmd:map.saveLocation`, `cmd:map.deleteLocation`, `cmd:map.locations`, `crates/geo/src/places.rs` | name, centre, radius circle, photo counts, rename; stored in the catalog (format 6, undoable); private locations: photos inside are exported without GPS and location fields |
+| LRC-MAP-TRACKLOG | GPS track logs | P2 | ✅ | `cmd:photo.autoTagTracklog`, `cmd:photo.tagFromTracklog`, `crates/meta/src/gpx.rs` | Photo ▸ Auto-Tag from Tracklog…: a GPX 1.0 / 1.1 track log sets the GPS of the selected photos by capture time — interpolated between the points of a track segment, else the nearest point within `maxGap` (10 min); never across segment breaks. The camera's time zone comes from the photo (Exif offset) or is asked for; photos that already have a location keep it unless `replace`; `dryRun` previews; one undo step. Map module: GPX/KML/GeoJSON tracks drawn, Auto-Tag Selected Photos, offset from one photo at a known point (`cmd:map.trackOffset`) |
+| LRC-MAP-FILTER | Location filter bar | P2 | ✅ | `cmd:map.filter`, `cmd:map.pins` | Visible on Map / Tagged / Untagged / by saved location, with counts |
+| LRC-MAP-REVGEO | Reverse geocoding | P2 | ✅ | `cmd:map.reverseGeocode`, `cmd:map.geonamesDownload`, `cmd:map.geocodeStatus`, `crates/geo/src/geocode.rs` | opt-in (off by default): offline GeoNames cities15000 (CC-BY 4.0, downloaded on request, attributed) or a Nominatim-compatible endpoint (consent required, 1 request/s); fills Sublocation/City/State/Country (the ISO code is returned but the catalog has no field for it) |
 | LRC-BOOK-SETTINGS | Book settings | P2 | ⬜ | | |
 | LRC-BOOK-AUTOLAYOUT | Book auto layout | P2 | ⬜ | | |
 | LRC-BOOK-PAGE | Book pages & templates | P2 | ⬜ | | |
@@ -816,7 +817,7 @@ PLAN.md §2 carry the status of that survey ("unverified" where it said so) unti
 | LRC-WEB-IMAGEINFO | Web gallery image info | P2 | ⬜ | | reopened 2026-10-10: the Web module is in scope (PLAN.md §2.11, Phase 3) |
 | LRC-WEB-OUTPUT | Web gallery output | P2 | ⬜ | | reopened 2026-10-10: the Web module is in scope (PLAN.md §2.11, Phase 3) |
 | LRC-WEB-UPLOAD | Web gallery upload | P2 | ⬜ | | reopened 2026-10-10: the Web module is in scope (PLAN.md §2.11, Phase 3) |
-| LRC-SHELL-MODULES | Module picker (Library, Develop, Map, Book, Slideshow, Print, Web), hide modules | P1 | ✅ | `cmd:module.switch`, `cmd:module.library`, `cmd:module.develop`, `cmd:module.previous`, `cmd:module.setVisible` | P1.2: `Module` trait (`crates/ui-egui/src/module.rs`); module bar with picker (right-click hides/shows modules); Library re-homes grid/loupe/compare/survey/people, Develop the loupe with editing panels and the reference view; Map/Book/Slideshow/Print/Web are placeholders until Phase 3. Switching keeps selection and filmstrip |
+| LRC-SHELL-MODULES | Module picker (Library, Develop, Map, Book, Slideshow, Print, Web), hide modules | P1 | ✅ | `cmd:module.switch`, `cmd:module.library`, `cmd:module.develop`, `cmd:module.previous`, `cmd:module.setVisible` | P1.2: `Module` trait (`crates/ui-egui/src/module.rs`); module bar with picker (right-click hides/shows modules); Library re-homes grid/loupe/compare/survey/people, Develop the loupe with editing panels and the reference view; Map is the Map module (P3.3); Book/Slideshow/Print/Web are placeholders until Phase 3. Switching keeps selection and filmstrip |
 | LRC-SHELL-PANELS | Panel system: four sides, auto hide/show, solo mode, toolbar toggle | P1 | ✅ | `cmd:panel.toggle`, `cmd:panel.sides`, `cmd:panel.all`, `cmd:panel.toolbar`, `cmd:panel.autoShow`, `cmd:panel.autoHide`, `cmd:panel.solo`, `cmd:panel.show`, `cmd:panel.order`, `crates/ui-egui/src/panels/classic.rs` | P1.2: top (module bar), left, right and bottom (filmstrip) edges plus toolbar, saved per module in `ui.json`; auto show at the window edge; right group order and hidden panels per module. P1.4: Library's left and right columns are Classic panel stacks (`crates/ui-egui/src/panels/classic.rs`): Navigator, Catalog, Folders, Collections | Quick Develop, Keywording, Keyword List, Metadata, each under a foldable header (`classicPanel:<id>`), Solo Mode keeps one open per side, the header's context menu shows/hides panels, toggles Solo Mode and expands/collapses all; order follows `panel.order`; dragging a header up or down its side moves the panel (insertion line, then `panel.order`). The same header menu sits on the Develop tool strip buttons, and offers the side's hiding mode: Manual, Auto Hide (`panel.autoHide`: a click at the window edge brings the hidden side back) or Auto Hide & Show (`panel.autoShow`: resting the pointer there), saved per module |
 | LRC-SHELL-SCREENMODES | Screen modes and lights out (dim / off) | P2 | ✅ | `cmd:view.screenMode`, `cmd:view.screenModeNormal`, `cmd:view.lightsOut` | P1.2: normal, full screen with menu bar, full screen, full screen hiding panels; lights out dim (80 %) / black |
 | LRC-SHELL-SECONDWINDOW-MODES | Secondary display: live / locked loupe, grid, compare, survey, slideshow | P2 | ✅ | `cmd:second.filter`, `cmd:second.filmstrip`, `cmd:second.grid`, `cmd:second.loupe`, `cmd:second.live`, `cmd:second.locked`, `cmd:second.compare`, `cmd:second.survey`, `cmd:second.slideshow` | P1.2: all seven modes in the egui second viewport (a native window, or egui's floating window where there are none: web, headless). In the window: a mode switcher (Grid · Normal / Live / Locked · Compare · Survey · Slideshow), its own filter bar in Grid (file name, minimum rating, picks only; `second.filter`, applies to its grid, filmstrip and slideshow, not the main window), and a filmstrip under the loupe / compare / survey (`second.filmstrip`); grid tiles and filmstrip thumbnails select the photo (`crates/ui-egui/src/panels/second.rs`) |
@@ -836,7 +837,7 @@ PLAN.md §2 carry the status of that survey ("unverified" where it said so) unti
 | LRC-LIB-PROCESSVERSION | Find previous process version, update DNG previews | P2 | ⬜ |  |  |
 | LRC-LIB-LAYERS | Open as layers in an external editor (layered round trip) | P2 | ⬜ |  | external editor works (LR-EXP-PSD); layered round trip missing |
 | LRC-DEV-HISTOGRAM-DRAG | Drag on the histogram to adjust tone regions | P2 | ⬜ |  |  |
-| LRC-MAP-PINS | Map pins, clusters and hover previews | P2 | ⬜ |  | Phase 3 |
+| LRC-MAP-PINS | Map pins, clusters and hover previews | P2 | ✅ | `cmd:map.pins`, `crates/geo/src/cluster.rs`, `crates/ui-egui/src/map/view.rs` | grid clusters per zoom with counts, selected pins highlighted, click selects, hover shows thumbnail + count |
 | LRC-BOOK-SAVED | Saved books | P2 | ⬜ |  | special collection type, Phase 3 |
 | LRC-SS-SAVED | Saved slideshows | P2 | ⬜ |  | special collection type, Phase 3 |
 | LRC-PRINT-PAGESETUP | Page setup, printer settings, print one copy | P2 | ⬜ |  | Phase 3 |

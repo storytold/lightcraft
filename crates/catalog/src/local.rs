@@ -302,12 +302,14 @@ impl Op {
             | Op::RenameAlbum { .. }
             | Op::MoveAlbum { .. }
             | Op::SetAlbumOrder { .. }
+            | Op::SetAlbumCreation { .. }
             | Op::SetAlbumRules { .. }
             | Op::RemoveStack { .. }
             | Op::SetLabelName { .. }
             | Op::SetKeyword { .. }
             | Op::SetBrowsed { .. }
-            | Op::SetFolderRecord { .. } => {}
+            | Op::SetFolderRecord { .. }
+            | Op::SetSavedLocation { .. } => {}
         }
     }
 }
