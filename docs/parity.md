@@ -42,15 +42,16 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | S. Export (EXP) | 15 | 2 | 1 | 0 | 7/7 (100%) | 7/7 (100%) |
 | T. Share (SHARE) | 0 | 0 | 0 | 4 | — | — |
 | U. Map & location (MAP) | 0 | 1 | 1 | 0 | — | 0/1 (0%) |
-| V. Preferences (PREF) | 7 | 1 | 2 | 2 | 1/1 (100%) | 5/5 (100%) |
+| V. Preferences (PREF) | 6 | 2 | 2 | 2 | 1/1 (100%) | 4/5 (80%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 18 | 6 | 1 | 1 | 8/8 (100%) | 6/9 (67%) |
 | Y. Menus | 82 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
-| Lightroom Classic extras | 32 | 11 | 39 | 9 | — | 22/24 (92%) |
-| **Total** | 393 | 39 | 84 | 36 | 192/200 (96%) | 142/152 (93%) |
+| Lightroom Classic extras | 64 | 17 | 42 | 0 | — | 33/37 (89%) |
+| IMM. Immich integration | 4 | 0 | 6 | 0 | — | 4/6 (67%) |
+| **Total** | 432 | 51 | 86 | 27 | 192/200 (96%) | 157/173 (91%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.9%** of 516 in-scope rows — P0 98.0% of 200 · P1 95.7% of 152 · P2 42.9% of 163.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **80.4%** of 569 in-scope rows — P0 98.0% of 200 · P1 93.9% of 173 · P2 50.3% of 195.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -782,16 +783,16 @@ PLAN.md §2 carry the status of that survey ("unverified" where it said so) unti
 | LRC-MAP-TRACKLOG | GPS track logs | P2 | ✅ | `cmd:photo.autoTagTracklog`, `cmd:photo.tagFromTracklog`, `crates/meta/src/gpx.rs` | Photo ▸ Auto-Tag from Tracklog…: a GPX 1.0 / 1.1 track log sets the GPS of the selected photos by capture time — interpolated between the points of a track segment, else the nearest point within `maxGap` (10 min); never across segment breaks. The camera's time zone comes from the photo (Exif offset) or is asked for; photos that already have a location keep it unless `replace`; `dryRun` previews; one undo step. No track drawn on a map (no Map module) |
 | LRC-MAP-FILTER | Location filter bar | P2 | ⬜ | | |
 | LRC-MAP-REVGEO | Reverse geocoding | P2 | ⬜ | | reopened 2026-10-10: opt-in online service or offline GeoNames data (CC-BY, as a separate data file); Phase 3 |
-| LRC-BOOK-SETTINGS | Book settings | P2 | ⬜ | | |
-| LRC-BOOK-AUTOLAYOUT | Book auto layout | P2 | ⬜ | | |
-| LRC-BOOK-PAGE | Book pages & templates | P2 | ⬜ | | |
-| LRC-BOOK-GUIDES | Book guides | P2 | ⬜ | | |
-| LRC-BOOK-CELL | Book cell padding | P2 | ⬜ | | |
-| LRC-BOOK-TEXT | Book photo/page text | P2 | ⬜ | | |
-| LRC-BOOK-TYPE | Book typography | P2 | ⬜ | | |
-| LRC-BOOK-BG | Book backgrounds | P2 | ⬜ | | |
-| LRC-BOOK-VIEWS | Book views | P2 | ⬜ | | |
-| LRC-BOOK-EXPORT | Book export (PDF/JPEG) | P2 | ⬜ | | |
+| LRC-BOOK-SETTINGS | Book settings | P2 | ✅ | `cmd:book.settings` | P3.5: PDF/JPEG, 6 sizes + custom, cover type, paper note, JPEG quality, resolution, sharpening, bleed (`crates/book/src/model.rs`); colour profile sRGB only |
+| LRC-BOOK-AUTOLAYOUT | Book auto layout | P2 | ✅ | `cmd:book.autoLayout`, `cmd:book.clearLayout` | P3.5: presets (one per page, left blank, with text, fill, two, four) |
+| LRC-BOOK-PAGE | Book pages & templates | P2 | ✅ | `cmd:book.addPage`, `cmd:book.template`, `cmd:book.favorite`, `cmd:book.pageNumbers` | P3.5: 26 own templates by photo count, favourites, blank pages, page numbers (position, hide, apply to all) |
+| LRC-BOOK-GUIDES | Book guides | P2 | ✅ | `cmd:book.guides` | P3.5: bleed, text safe area, photo cells, filler text |
+| LRC-BOOK-CELL | Book cell padding | P2 | ✅ | `cmd:book.cell`, `cmd:book.swap` | P3.5: padding linked/per side, zoom, pan (Alt-drag), fill/fit, drag to swap, drag from filmstrip |
+| LRC-BOOK-TEXT | Book photo/page text | P2 | ✅ | `cmd:book.photoText`, `cmd:book.pageText`, `cmd:book.text` | P3.5: tokens or custom text, above/below/over with offset; page text top/bottom |
+| LRC-BOOK-TYPE | Book typography | P2 | 🟡 | `cmd:book.type`, `cmd:book.textPreset` | P3.5: font, style, size, opacity, colour, tracking, baseline, leading, kerning mode, columns, gutter, alignment, presets via dac-text; no per-pair manual kerning; PDF text ignores opacity |
+| LRC-BOOK-BG | Book backgrounds | P2 | ✅ | `cmd:book.background` | P3.5: colour, photo with opacity, our own graphics, global or per page |
+| LRC-BOOK-VIEWS | Book views | P2 | ✅ | `cmd:book.view` | P3.5: multi-page, spread, single, zoomed |
+| LRC-BOOK-EXPORT | Book export (PDF/JPEG) | P2 | ✅ | `cmd:book.export` | P3.5: one PDF (embedded subset fonts, sRGB ICC, trim/bleed boxes) or a JPEG per page |
 | LRC-SS-TEMPLATES | Slideshow templates | P2 | ⬜ | | |
 | LRC-SS-OPTIONS | Slideshow options | P2 | ⬜ | | |
 | LRC-SS-LAYOUT | Slideshow layout | P2 | ⬜ | | |
@@ -837,7 +838,7 @@ PLAN.md §2 carry the status of that survey ("unverified" where it said so) unti
 | LRC-LIB-LAYERS | Open as layers in an external editor (layered round trip) | P2 | ⬜ |  | external editor works (LR-EXP-PSD); layered round trip missing |
 | LRC-DEV-HISTOGRAM-DRAG | Drag on the histogram to adjust tone regions | P2 | ⬜ |  |  |
 | LRC-MAP-PINS | Map pins, clusters and hover previews | P2 | ⬜ |  | Phase 3 |
-| LRC-BOOK-SAVED | Saved books | P2 | ⬜ |  | special collection type, Phase 3 |
+| LRC-BOOK-SAVED | Saved books | P2 | 🟡 | `cmd:book.save`, `cmd:book.open` | P3.5: JSON files in the settings folder; to move to saved creations (catalog) |
 | LRC-SS-SAVED | Saved slideshows | P2 | ⬜ |  | special collection type, Phase 3 |
 | LRC-PRINT-PAGESETUP | Page setup, printer settings, print one copy | P2 | ⬜ |  | Phase 3 |
 | LRC-WEB-SAVED | Saved web galleries | P2 | ⬜ |  | special collection type, Phase 3 |
