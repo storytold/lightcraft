@@ -4,7 +4,7 @@
 //! A global matrix can't follow the camera's hue-dependent rendering (the best matrix rendered a
 //! lime shirt olive that the camera kept lime): a hue/saturation table fitted to the residuals
 //! (applied like a DNG `ProfileHueSatMap`) corrects that when it also improves the held-out pixels.
-use lightcraft_color::{D50, D65, Mat3, PROPHOTO, REC2020, Xy, bradford, luminance_2020};
+use lightcraft_color::{ADOBE_RGB, D50, D65, Mat3, PROPHOTO, REC2020, SRGB, Xy, bradford, luminance_2020};
 use lightcraft_pipeline::tone::{CameraTone, ToneMap};
 use lightcraft_raster::{
     Rgb32f,
@@ -22,8 +22,10 @@ use lightcraft_raw::{RawFormat, RawImage, color::CameraTransform, profile::HsvTa
 /// that leave the fitted look alone. `RENDER_CACHE_VERSION` covers renders; this covers proxies.
 ///
 /// 1: the fit as of #499's follow-up; 2: Sony DRO (tone curve lowered to Sony's curve without DRO)
-/// and the ILCE-7CR profile (#528, #583, #568, #616).
-pub const LOOK_VERSION: u32 = 2;
+/// and the ILCE-7CR profile (#528, #583, #568, #616); 3: tone curves of low-contrast scenes
+/// (range limit 1.2, with the bright-area check for curves under 1.5, #699); 4: the partial look's
+/// second attempt with the bright pairs (#631's bird).
+pub const LOOK_VERSION: u32 = 4;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
@@ -105,10 +107,10 @@ pub(crate) fn fit_preview(raw: &RawImage, bytes: &[u8], transform: &CameraTransf
     // try its colour first and fit tone/chroma per photo (picture styles vary).
     let profile = raw.metadata.model.as_deref().and_then(crate::camera_profiles::get);
     let colour = profile.as_ref().and_then(|p| Some((p.matrix().mul(&transform.matrix.inverse()?), p.hue_sat.clone())));
-    let look = fit_look(&sensor, &reference, &clipped, colour)?;
     // Sony's Dynamic Range Optimizer (on by default) brightens the camera JPEG's darker regions,
     // not the raw: keep the colour fitted to the JPEG, take the tone curve without DRO.
     let dro = lightcraft_raw::embedded_preview_dynamic_range_optimized(bytes) == Some(true);
+    let look = fit_look_with(&sensor, &reference, &clipped, colour, dro)?;
     let look = if dro { with_dro_off_tone(look) } else { look };
     if lightcraft_pipeline::profiling() {
         eprintln!(
@@ -126,6 +128,12 @@ pub(crate) fn fit_preview(raw: &RawImage, bytes: &[u8], transform: &CameraTransf
 /// Sensor level (normalised, white = 1) at or above which a raw channel counts as clipped, as in
 /// the render's highlight reconstruction.
 const SENSOR_CLIP: f32 = 0.99;
+
+/// [`fit_look_with`] for a photo without Sony's DRO.
+#[cfg(test)]
+fn fit_look(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool], colour: Option<(Mat3, Option<HsvTable>)>) -> Option<CameraLook> {
+    fit_look_with(sensor, reference, clipped, colour, false)
+}
 
 /// The photo's look, refitted without the proxy pixels whose sensor values are clipped.
 ///
@@ -145,17 +153,19 @@ const SENSOR_CLIP: f32 = 0.99;
 /// replace a look fitted away from edges). A photo that had no look gets one when the search
 /// without the clipped pixels finds it, and otherwise the [`fit_partial`] look when that is clearly
 /// closer to the camera JPEG than the neutral fallback.
-fn fit_look(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool], colour: Option<(Mat3, Option<HsvTable>)>) -> Option<CameraLook> {
+fn fit_look_with(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool], colour: Option<(Mat3, Option<HsvTable>)>, dro: bool) -> Option<CameraLook> {
     let unclipped = without_clipped(sensor, clipped);
-    let Some((look, attempt)) = search_ordered(sensor, reference, colour.clone(), TONE_FITS) else {
+    // from the proxies as they are: the retries' filters (clipped pixels, edges) don't remove them
+    let bright = HighlightCheck { pairs: highlights(sensor, reference), clipped: clipped_highlights(sensor, reference, clipped), dro };
+    let Some((look, attempt)) = search_ordered(sensor, reference, colour.clone(), TONE_FITS, &bright) else {
         return unclipped
             .as_ref()
-            .and_then(|u| search_ordered(u, reference, colour, TONE_FITS))
+            .and_then(|u| search_ordered(u, reference, colour, TONE_FITS, &bright))
             .map(|(look, _)| look)
-            .or_else(|| fit_partial(unclipped.as_ref().unwrap_or(sensor), reference));
+            .or_else(|| fit_partial(unclipped.as_ref().unwrap_or(sensor), reference, &bright));
     };
     let Some(unclipped) = unclipped else { return Some(look) };
-    let refit = fit_attempt(&unclipped, reference, &colour, attempt);
+    let refit = fit_attempt(&unclipped, reference, &colour, attempt, &bright);
     if refit.is_none() && lightcraft_pipeline::profiling() {
         eprintln!("[profile] camera look: no fit without the clipped pixels on the accepted attempt, keeping the fit on all pixels");
     }
@@ -214,8 +224,14 @@ fn sony_dro_off_tone() -> Option<CameraTone> {
 /// curve is brighter than the photo's own (the 1″ compacts map raw values darker), the photo keeps
 /// its own. Its colour (matrix, hue/saturation table and chroma curve) stays as fitted.
 fn with_dro_off_tone(look: CameraLook) -> CameraLook {
-    let Some(dro_off) = sony_dro_off_tone() else { return look };
-    let own = look.tone.knots();
+    CameraLook { tone: dro_off(&look.tone), ..look }
+}
+
+/// The curve of [`with_dro_off_tone`]: `own` lowered to Sony's without DRO wherever that is darker,
+/// or `own` unchanged when it can't be.
+fn dro_off(own_tone: &CameraTone) -> CameraTone {
+    let Some(dro_off) = sony_dro_off_tone() else { return *own_tone };
+    let own = own_tone.knots();
     let mut knots = own.map(|[x, y]| [x, y.min(dro_off.apply(x))]);
     // Past its last knot a curve goes on as a shoulder whose rate comes from its last two knots
     // (`CameraTone::apply`): lowering the second-last knot more than the last steepens it, and the
@@ -225,11 +241,11 @@ fn with_dro_off_tone(look: CameraLook) -> CameraLook {
     let rate = ((b[1] - a[1]) / (b[0] - a[0])).clamp(0.1, 16.0) / (1.0 - b[1]).max(0.01);
     let floor = last[1] - rate * (1.0 - last[1]).max(0.01) * (b[0] - a[0]);
     knots[30][1] = knots[30][1].max(floor).min(last[1]);
-    let Some(tone) = CameraTone::new(knots).and_then(|tone| tone.with_chroma(*look.tone.chroma())) else { return look };
-    if !at_most(&tone, &look.tone) {
-        return look;
+    let Some(tone) = CameraTone::new(knots).and_then(|tone| tone.with_chroma(*own_tone.chroma())) else { return *own_tone };
+    if !at_most(&tone, own_tone) {
+        return *own_tone;
     }
-    CameraLook { tone, ..look }
+    tone
 }
 
 /// Whether curve `a` is nowhere brighter than `b` over the scene luminances the finish stage's tone
@@ -526,7 +542,8 @@ fn local_contrast(image: &Rgb32f, i: usize) -> f32 {
 /// `edge_limit`, pixels whose 3×3 neighbourhood in either proxy spans a larger luminance ratio
 /// are left out: there a small geometric mismatch between the raw and its JPEG pairs unrelated
 /// colours (see [`EDGE_CONTRAST`]).
-type Pairs = Vec<([f64; 3], [f64; 3])>;
+type Pair = ([f64; 3], [f64; 3]);
+type Pairs = Vec<Pair>;
 fn collect_pairs(sensor: &Rgb32f, reference: &Rgb32f, min_chroma: f32, edge_limit: Option<f32>) -> Option<(Pairs, Pairs)> {
     if (sensor.width, sensor.height) != (reference.width, reference.height) || sensor.data.len() != reference.data.len() {
         return None;
@@ -610,7 +627,8 @@ fn fit_pairs_with(sensor: &Rgb32f, reference: &Rgb32f, colour: Option<(Mat3, Opt
 /// The look from [`search_ordered`] without its attempt.
 #[cfg(test)]
 fn fit_pairs_ordered(sensor: &Rgb32f, reference: &Rgb32f, colour: Option<(Mat3, Option<HsvTable>)>, order: &[ToneFit]) -> Option<CameraLook> {
-    search_ordered(sensor, reference, colour, order).map(|(look, _)| look)
+    search_ordered(sensor, reference, colour, order, &HighlightCheck { pairs: highlights(sensor, reference), clipped: Vec::new(), dro: false })
+        .map(|(look, _)| look)
 }
 
 /// The tone fits the search tries, in order: the first whose look passes the acceptance gates is
@@ -638,21 +656,33 @@ struct Attempt {
 /// valid when the camera JPEG's geometry differs slightly from the raw's (issue #232). The whole
 /// search runs with one tone fit before the next is tried, so the conditional-median fallback
 /// accepts exactly what the previous releases accepted.
-fn search_ordered(sensor: &Rgb32f, reference: &Rgb32f, colour: Option<(Mat3, Option<HsvTable>)>, order: &[ToneFit]) -> Option<(CameraLook, Attempt)> {
+fn search_ordered(
+    sensor: &Rgb32f,
+    reference: &Rgb32f,
+    colour: Option<(Mat3, Option<HsvTable>)>,
+    order: &[ToneFit],
+    bright: &HighlightCheck,
+) -> Option<(CameraLook, Attempt)> {
     let profiles: &[bool] = if colour.is_some() { &[true, false] } else { &[false] };
     order.iter().find_map(|&tone| {
         profiles.iter().find_map(|&profile| {
             [false, true].into_iter().find_map(|away_from_edges| {
                 let attempt = Attempt { tone, profile, away_from_edges };
-                fit_attempt(sensor, reference, &colour, attempt).map(|look| (look, attempt))
+                fit_attempt(sensor, reference, &colour, attempt, bright).map(|look| (look, attempt))
             })
         })
     })
 }
 
-fn fit_attempt(sensor: &Rgb32f, reference: &Rgb32f, colour: &Option<(Mat3, Option<HsvTable>)>, attempt: Attempt) -> Option<CameraLook> {
+fn fit_attempt(
+    sensor: &Rgb32f,
+    reference: &Rgb32f,
+    colour: &Option<(Mat3, Option<HsvTable>)>,
+    attempt: Attempt,
+    bright: &HighlightCheck,
+) -> Option<CameraLook> {
     let colour = if attempt.profile { colour.clone() } else { None };
-    fit_pairs_on(sensor, reference, colour, attempt.away_from_edges.then_some(EDGE_CONTRAST), attempt.tone)
+    fit_pairs_on(sensor, reference, colour, attempt.away_from_edges.then_some(EDGE_CONTRAST), attempt.tone, bright)
 }
 
 fn fit_pairs_on(
@@ -661,6 +691,7 @@ fn fit_pairs_on(
     colour: Option<(Mat3, Option<HsvTable>)>,
     edge_limit: Option<f32>,
     tone_fit: ToneFit,
+    highlights: &HighlightCheck,
 ) -> Option<CameraLook> {
     // A known colour model needs enough signal for tone fitting, not a scene rich enough to
     // learn a new colour matrix. Still reject monochrome references.
@@ -690,6 +721,9 @@ fn fit_pairs_on(
             look.tone = tone;
         }
         let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+        if !highlights_hold(&look.tone, highlights, colour) {
+            continue;
+        }
         let (mut linear, mut perceptual, mut samples) = (0.0, 0.0, 0);
         for (x, target) in pairs.iter().step_by(3) {
             let corrected = displayed(colour(*x), &tone);
@@ -772,13 +806,51 @@ fn rank_correlation(pairs: &[([f64; 3], [f64; 3])]) -> f64 {
 /// and in gamma-encoded display values, and when the JPEG shows the same picture
 /// ([`PARTIAL_MIN_RANK_CORRELATION`]). There is no limit on its own error: it only has to be clearly
 /// closer to the camera JPEG than what the photo would get otherwise.
-fn fit_partial(sensor: &Rgb32f, reference: &Rgb32f) -> Option<CameraLook> {
-    [None, Some(EDGE_CONTRAST)].into_iter().find_map(|edge_limit| fit_partial_on(sensor, reference, edge_limit))
+///
+/// When that fails, it is tried once more with the frame's bright, unclipped pixels in the tone fit
+/// and in the held-out check ([`bright_tone_pairs`]). The fits leave out camera JPEG luminance 0.85
+/// and up, where the camera bleaches colour; for tone alone those pixels are good evidence, and a
+/// frame that is mostly bright overcast sky has too few midtones to fit a curve that matches its sky
+/// (issue #631: a bird against cloud, 92% of the frame above the cut, 473 midtone pairs). Only a
+/// photo that would otherwise get no look at all gets this one.
+fn fit_partial(sensor: &Rgb32f, reference: &Rgb32f, highlights: &HighlightCheck) -> Option<CameraLook> {
+    let attempt = |bright_tone: bool| {
+        [None, Some(EDGE_CONTRAST)].into_iter().find_map(|edge_limit| fit_partial_on(sensor, reference, edge_limit, highlights, bright_tone))
+    };
+    attempt(false).or_else(|| attempt(true))
 }
 
-fn fit_partial_on(sensor: &Rgb32f, reference: &Rgb32f, edge_limit: Option<f32>) -> Option<CameraLook> {
+/// The bright pairs [`fit_partial`]'s second attempt adds to its tone fit: camera JPEG luminance 0.85
+/// and up, not clipped in the JPEG ([`jpeg_clipped`]: a clipped JPEG pixel only bounds the curve),
+/// from `bright`, which has no clipped sensor pixels when the clipped ones were left out of the
+/// proxy.
+fn bright_tone_pairs(bright: &[Pair]) -> Vec<Pair> {
+    bright.iter().filter(|(_, y)| luma(*y) >= 0.85 && !jpeg_clipped(*y)).copied().collect()
+}
+
+/// Whether a camera JPEG pixel (linear Rec.2020, as the reference proxy holds it) has a channel at
+/// or near its maximum in the JPEG's own encoding, sRGB or Adobe RGB (camera JPEGs are one or the
+/// other). Such a channel no longer shows the scene's level, while in Rec.2020 it can read as
+/// little as 0.96 (a red channel clipped in sRGB, Codex review of #631's bird).
+fn jpeg_clipped(y: [f64; 3]) -> bool {
+    static SPACES: std::sync::OnceLock<[Mat3; 2]> = std::sync::OnceLock::new();
+    let spaces = SPACES.get_or_init(|| [SRGB.from_xyz().mul(&REC2020.to_xyz()), ADOBE_RGB.from_xyz().mul(&REC2020.to_xyz())]);
+    spaces.iter().any(|m| m.apply(y).iter().any(|v| *v >= 0.98))
+}
+
+fn fit_partial_on(
+    sensor: &Rgb32f,
+    reference: &Rgb32f,
+    edge_limit: Option<f32>,
+    highlights: &HighlightCheck,
+    bright_tone: bool,
+) -> Option<CameraLook> {
     // as for a known colour model: enough signal for the tone, but no monochrome reference
     let (pairs, bright) = collect_pairs(sensor, reference, 0.005, edge_limit)?;
+    let extra = if bright_tone { bright_tone_pairs(&bright) } else { Vec::new() };
+    if bright_tone && extra.is_empty() {
+        return None;
+    }
     let related = rank_correlation(&pairs);
     if related < PARTIAL_MIN_RANK_CORRELATION {
         if lightcraft_pipeline::profiling() {
@@ -794,28 +866,50 @@ fn fit_partial_on(sensor: &Rgb32f, reference: &Rgb32f, edge_limit: Option<f32>) 
         })),
         None => Mat3::IDENTITY,
     };
-    let tone_pairs: Vec<_> =
-        pairs.iter().enumerate().filter(|(i, _)| i % 3 != 0).map(|(_, (x, y))| (luma(matrix.apply(*x).map(|v| v.max(0.0))), luma(*y))).collect();
+    let tone_pairs: Vec<_> = pairs
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| i % 3 != 0)
+        .chain(extra.iter().enumerate().filter(|(i, _)| i % 3 != 0))
+        .map(|(_, (x, y))| (luma(matrix.apply(*x).map(|v| v.max(0.0))), luma(*y)))
+        .collect();
     let mut look = CameraLook { matrix, tone: fit_tone(tone_pairs)?, hue_sat: None };
     if let Some(tone) = fit_chroma(&bright, &look) {
         look.tone = tone;
     }
     let (tone, neutral) = (ToneMap::camera(&look.tone, 0.0, 0.0, 0.0), ToneMap::new(0.0, 0.0, 0.0));
+    let kept = if bright_tone {
+        let colour = |x: [f64; 3]| matrix.apply(x);
+        keeps_highlights(&look.tone, highlights, colour) && keeps(&look.tone, highlights.dro, &highlights.clipped, colour)
+    } else {
+        highlights_hold(&look.tone, highlights, |x| matrix.apply(x))
+    };
+    if !kept {
+        return None;
+    }
     let encoded = |v: f64| v.max(0.0).powf(1.0 / 2.2);
     let (mut before, mut after, mut before_encoded, mut after_encoded, mut samples) = (0.0, 0.0, 0.0, 0.0, 0);
-    for (x, target) in pairs.iter().step_by(3) {
+    // the held-out midtones alone (gamma-encoded): the second attempt mustn't buy its sky with them
+    let (mut mid_before, mut mid_after, mut mid_samples) = (0.0, 0.0, 0usize);
+    let midtones = pairs.len().div_ceil(3);
+    for (n, (x, target)) in pairs.iter().step_by(3).chain(extra.iter().step_by(3)).enumerate() {
         let (fallback, partial) = (displayed(*x, &neutral), displayed(matrix.apply(*x), &tone));
         for c in 0..3 {
             before += (fallback[c] - target[c]).powi(2);
             after += (partial[c] - target[c]).powi(2);
-            before_encoded += (encoded(fallback[c]) - encoded(target[c])).powi(2);
-            after_encoded += (encoded(partial[c]) - encoded(target[c])).powi(2);
+            let (b, a) = ((encoded(fallback[c]) - encoded(target[c])).powi(2), (encoded(partial[c]) - encoded(target[c])).powi(2));
+            before_encoded += b;
+            after_encoded += a;
             samples += 1;
+            if n < midtones {
+                (mid_before, mid_after, mid_samples) = (mid_before + b, mid_after + a, mid_samples + 1);
+            }
         }
     }
     if lightcraft_pipeline::profiling() {
         eprintln!(
-            "[profile] camera look partial (tone{}{}) holdout RMS {:.5} -> {:.5} ({samples} channels{})",
+            "[profile] camera look partial (tone{}{}{}) holdout RMS {:.5} -> {:.5} ({samples} channels{})",
+            if bright_tone { " with bright pairs" } else { "" },
             if look.tone.chroma().iter().any(|k| *k != 1.0) { ", chroma" } else { "" },
             if matrix != Mat3::IDENTITY { ", damped matrix" } else { "" },
             (before / samples.max(1) as f64).sqrt(),
@@ -825,8 +919,20 @@ fn fit_partial_on(sensor: &Rgb32f, reference: &Rgb32f, edge_limit: Option<f32>) 
     }
     let better =
         after.is_finite() && after_encoded.is_finite() && after < before * MIN_IMPROVEMENT && after_encoded < before_encoded * MIN_IMPROVEMENT;
-    (samples > 0 && better).then_some(look)
+    let rms = |e: f64| (e / mid_samples.max(1) as f64).sqrt();
+    let midtones_kept = !bright_tone || rms(mid_after) <= rms(mid_before) + MAX_MIDTONE_LOSS;
+    if bright_tone && lightcraft_pipeline::profiling() {
+        eprintln!("[profile] camera look partial with bright pairs: midtones (encoded) RMS {:.5} -> {:.5}", rms(mid_before), rms(mid_after));
+    }
+    (samples > 0 && better && midtones_kept).then_some(look)
 }
+
+/// How much further from the camera JPEG than the neutral fallback (gamma-encoded RMS over the
+/// held-out midtones) [`fit_partial`]'s second attempt may leave them: its bright pairs can make the
+/// sky alone meet the gates, and the midtones must not pay for it. A small allowance, not none,
+/// because on a frame the fallback already renders right in the midtones a curve through the sky
+/// moves them a little.
+const MAX_MIDTONE_LOSS: f64 = 0.02;
 
 /// Linear Rec.2020 D65 → linear ProPhoto RGB D50, the space DNG hue/saturation tables work in.
 fn to_prophoto() -> Mat3 {
@@ -1047,6 +1153,109 @@ impl ToneFit {
     }
 }
 
+/// The bright areas a narrow tone curve is checked against ([`highlights_hold`]): every proxy pixel
+/// whose camera JPEG luminance is 0.85 or more, with its sensor value as developed (for a clipped
+/// pixel a lower bound of the scene). Taken from the proxies before any training filter (clipped
+/// pixels, edges, the sensor value range of [`collect_pairs`]), so no retry of the search can
+/// leave them out.
+fn highlights(sensor: &Rgb32f, reference: &Rgb32f) -> Pairs {
+    if sensor.data.len() != reference.data.len() {
+        return Vec::new();
+    }
+    sensor
+        .data
+        .iter()
+        .zip(&reference.data)
+        .filter(|(x, y)| x.iter().chain(y.iter()).all(|v| v.is_finite() && *v >= 0.0) && luminance_2020(**y) >= 0.85)
+        .map(|(x, y)| (x.map(f64::from), y.map(f64::from)))
+        .collect()
+}
+
+/// The [`highlights`] whose sensor pixel is clipped (`clipped`, the proxy's clip mask).
+fn clipped_highlights(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool]) -> Pairs {
+    if sensor.data.len() != reference.data.len() || clipped.len() != sensor.data.len() {
+        return Vec::new();
+    }
+    sensor
+        .data
+        .iter()
+        .zip(&reference.data)
+        .zip(clipped)
+        .filter(|((x, y), c)| **c && x.iter().chain(y.iter()).all(|v| v.is_finite() && *v >= 0.0) && luminance_2020(**y) >= 0.85)
+        .map(|((x, y), _)| (x.map(f64::from), y.map(f64::from)))
+        .collect()
+}
+
+/// Smallest ratio between the scene luminance of the brightest and of the darkest 1/32 of the
+/// pairs a tone curve is fitted to (its last and first knot). Below it the training pairs are
+/// nearly uniform (under 0.26 EV from their darker to their brighter parts): the curve would be
+/// fitted to a sliver of the tone range and the rest of it extrapolated. Above it the acceptance
+/// gates judge the curve. This was 1.5, which rejected low-contrast scenes the curve fits very
+/// well: in a hazy ILCE-7RM4 burst the frames at 1.46–1.49 opened with the neutral fallback (no full or partial
+/// look, 18 L* darker than the camera JPEG) while the frame at 1.51 fitted at a held-out RMS of
+/// 0.013, as the others do once allowed (issue #631). Across 135 public Sony files the lowest is 4.0.
+/// A curve under [`NARROW_TONE_RANGE`] must also pass [`highlights_hold`].
+const MIN_TONE_RANGE: f32 = 1.2;
+
+/// [`MIN_TONE_RANGE`] before issue #631. A curve fitted to a narrower range than this must also
+/// render the photo's bright areas no further from the camera JPEG than the neutral fallback does
+/// ([`highlights_hold`]). Neither the fit nor the held-out gates see those areas (camera JPEG
+/// luminance 0.85 and up, left out of the training pairs by [`collect_pairs`]), and a curve fitted
+/// to a sliver of the tone range extrapolates them: in review, a synthetic frame whose curve passed
+/// the gates at a held-out RMS of 0.0004 rendered its bright sky at 0.29 where the camera JPEG has
+/// 0.93.
+const NARROW_TONE_RANGE: f32 = 1.5;
+
+/// What a narrow tone curve is checked against ([`highlights_hold`]).
+struct HighlightCheck {
+    /// The frame's [`highlights`].
+    pairs: Pairs,
+    /// Those of them whose sensor pixel is clipped ([`clipped_highlights`]). [`fit_partial`]'s
+    /// second attempt checks them on their own: its fit leaves them out, and the rest of a sky it
+    /// fits well could otherwise outweigh them getting darker.
+    clipped: Pairs,
+    /// The photo's curve will be lowered to Sony's without DRO ([`with_dro_off_tone`]) after the
+    /// fit, so the check looks at it lowered.
+    dro: bool,
+}
+
+/// Whether a look with this `tone` and `colour` (sensor value to the finish stage's input) keeps
+/// the frame's [`highlights`] (camera JPEG luminance 0.85 and up, left out of the fit) no further
+/// from the camera JPEG than the neutral fallback does, with the tone curve as the photo will get
+/// it (lowered for DRO). Only asked of curves narrower than [`NARROW_TONE_RANGE`]: true for wider
+/// ones, and for frames without such pixels.
+fn highlights_hold(tone: &CameraTone, check: &HighlightCheck, colour: impl Fn([f64; 3]) -> [f64; 3]) -> bool {
+    let knots = tone.knots();
+    knots[31][0] >= knots[0][0] * NARROW_TONE_RANGE || keeps_highlights(tone, check, colour)
+}
+
+/// The comparison of [`highlights_hold`], whatever the curve's range: [`fit_partial`]'s second
+/// attempt asks it of every curve, as its bright pairs widen the curve while the clipped part of a
+/// sky stays out of them.
+fn keeps_highlights(tone: &CameraTone, check: &HighlightCheck, colour: impl Fn([f64; 3]) -> [f64; 3]) -> bool {
+    keeps(tone, check.dro, &check.pairs, colour)
+}
+
+/// [`keeps_highlights`] for one set of bright pairs.
+fn keeps(tone: &CameraTone, dro: bool, pairs: &[Pair], colour: impl Fn([f64; 3]) -> [f64; 3]) -> bool {
+    // the curve as the photo will get it
+    let used = if dro { dro_off(tone) } else { *tone };
+    let (map, neutral) = (ToneMap::camera(&used, 0.0, 0.0, 0.0), ToneMap::new(0.0, 0.0, 0.0));
+    let (mut look, mut fallback) = (0.0, 0.0);
+    for (x, target) in pairs {
+        let (rendered, base) = (displayed(colour(*x), &map), displayed(*x, &neutral));
+        for c in 0..3 {
+            look += (rendered[c] - target[c]).powi(2);
+            fallback += (base[c] - target[c]).powi(2);
+        }
+    }
+    let hold = look.is_finite() && look <= fallback;
+    if !hold && lightcraft_pipeline::profiling() {
+        eprintln!("[profile] camera look: the tone curve renders bright areas worse than the fallback ({look:.3} > {fallback:.3})");
+    }
+    hold
+}
+
 /// The camera's tone curve from scene/JPEG luminance pairs, by quantile matching: knot `i` pairs
 /// the median of the `i`-th 1/32 of the sorted scene luminances with the median of the `i`-th
 /// 1/32 of the sorted JPEG luminances. A tone curve is monotone, so it maps each quantile of the
@@ -1074,7 +1283,7 @@ fn fit_tone(pairs: Vec<(f64, f64)>) -> Option<CameraTone> {
         let mid = a + (b - a) / 2;
         *knot = [*xs.get(mid)? as f32, *ys.get(mid)? as f32];
     }
-    if knots[31][0] < knots[0][0] * 1.5 {
+    if knots[31][0] < knots[0][0] * MIN_TONE_RANGE {
         return None;
     }
     CameraTone::new(knots)
@@ -1102,7 +1311,7 @@ fn fit_tone_conditional(mut pairs: Vec<(f64, f64)>) -> Option<CameraTone> {
         let mut ys: Vec<_> = bin.iter().map(|p| p.1).collect();
         *knot = [median(&mut xs)? as f32, median(&mut ys)? as f32];
     }
-    if knots[31][0] < knots[0][0] * 1.5 {
+    if knots[31][0] < knots[0][0] * MIN_TONE_RANGE {
         return None;
     }
     // Pool adjacent violating bins (isotonic regression): no reversals or arbitrary polynomial.
@@ -2172,7 +2381,8 @@ mod tests {
         let none = fit_look(&sensor, &reference, &vec![false; sensor.data.len()], None).unwrap();
         assert_eq!((none.matrix.0, none.tone), (all.matrix.0, all.tone));
         // without clipped pixels the refit keeps the accepted attempt (here: all pixels, own colour, quantile tone)
-        let (_, attempt) = search_ordered(&sensor, &reference, None, TONE_FITS).unwrap();
+        let check = HighlightCheck { pairs: highlights(&sensor, &reference), clipped: Vec::new(), dro: false };
+        let (_, attempt) = search_ordered(&sensor, &reference, None, TONE_FITS, &check).unwrap();
         assert_eq!(attempt, Attempt { tone: ToneFit::Quantile, profile: false, away_from_edges: false });
         assert!(without_clipped(&sensor, &[true; 3]).is_none(), "a mask of another size is ignored");
     }
@@ -2289,6 +2499,102 @@ mod tests {
         assert!(lightness(&neutral) < target * 0.6, "the neutral fallback is far darker");
     }
 
+    /// Issue #631's bird: a frame that is mostly bright overcast sky (here 90%, camera JPEG about
+    /// 0.93, above the fits' 0.85 cut) and dark, nearly colourless branches that the camera renders
+    /// like the neutral fallback. On the midtones alone no look is clearly better than the fallback;
+    /// with the bright, unclipped pairs the partial look takes the sky from the camera.
+    #[test]
+    fn a_mostly_bright_frame_gets_its_sky_from_the_bright_pairs() {
+        let (w, h) = (96usize, 64usize);
+        let neutral = ToneMap::new(0.0, 0.0, 0.0);
+        let (mut sensor, mut reference) = (Rgb32f::new(w, h), Rgb32f::new(w, h));
+        for (i, (s, r)) in sensor.data.iter_mut().zip(&mut reference.data).enumerate() {
+            if i % 10 != 0 {
+                // the sky: unclipped, varied, near white in the camera JPEG
+                let k = (i * 7919 % 5521) as f32 / 5521.0;
+                *s = [0.40 + 0.10 * k; 3];
+                *r = [0.91 + 0.04 * k; 3];
+            } else {
+                // the branches: dark, a few tinted, as the fallback renders them
+                let ev = 0.02 + (i % 37) as f32 * 0.0011;
+                let tint = if i % 30 == 0 { 1.3 } else { 1.0 };
+                *s = [ev * tint, ev, ev * (2.0 - tint)];
+                *r = displayed(s.map(f64::from), &neutral).map(|v| v as f32);
+            }
+        }
+        let none = vec![false; w * h];
+        let check = HighlightCheck { pairs: highlights(&sensor, &reference), clipped: Vec::new(), dro: false };
+        let midtones_only = [None, Some(EDGE_CONTRAST)].into_iter().find_map(|e| fit_partial_on(&sensor, &reference, e, &check, false));
+        assert!(midtones_only.is_none(), "on the midtones alone the look is no clear gain");
+        let look = fit_look(&sensor, &reference, &none, None).expect("a partial look from the bright pairs");
+        let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+        let sky = luma(displayed(look.matrix.apply([0.42; 3]), &tone));
+        let fallback = luma(displayed([0.42; 3], &neutral));
+        assert!((sky - 0.92).abs() < 0.04, "the sky as the camera renders it: {sky} (fallback {fallback})");
+        assert!(fallback < 0.85, "the fallback is visibly darker: {fallback}");
+    }
+
+    /// Codex review of #631's bird: the second attempt (with bright pairs) must not buy its sky with
+    /// the midtones (here darker branches the fallback already renders right, and a dimmer sky), must
+    /// not darken a clipped sky its bright pairs leave out, and must not take a JPEG pixel clipped in
+    /// its own encoding for tone evidence.
+    #[test]
+    fn the_bright_pairs_attempt_keeps_midtones_clipped_sky_and_clipping() {
+        let (w, h) = (96usize, 64usize);
+        let neutral = ToneMap::new(0.0, 0.0, 0.0);
+        let encoded = |v: f64| v.max(0.0).powf(1.0 / 2.2);
+        // (sky sensor range, share of the sky that is clipped)
+        for (case, sky_lo, sky_hi, clipped_share) in [
+            ("dim sky", 0.10, 0.20, 0usize),
+            ("half the sky clipped", 0.40, 0.50, 2),
+            ("clipped sky below brighter unclipped sky", 1.20, 1.40, 2),
+            ("a small clipped region", 1.20, 1.40, 9),
+        ] {
+            let (mut sensor, mut reference) = (Rgb32f::new(w, h), Rgb32f::new(w, h));
+            let mut clipped = vec![false; w * h];
+            for (i, (s, r)) in sensor.data.iter_mut().zip(&mut reference.data).enumerate() {
+                if i % 10 != 0 {
+                    let k = (i * 7919 % 5521) as f32 / 5521.0;
+                    if clipped_share > 0 && i % clipped_share == 0 {
+                        *s = [1.0; 3];
+                        clipped[i] = true;
+                        *r = [0.93; 3];
+                    } else {
+                        *s = [sky_lo + (sky_hi - sky_lo) * k; 3];
+                        *r = [0.91 + 0.04 * k; 3];
+                    }
+                } else {
+                    let ev = 0.02 + (i % 37) as f32 * 0.0017;
+                    let tint = if i % 30 == 0 { 1.3 } else { 1.0 };
+                    *s = [ev * tint, ev, ev * (2.0 - tint)];
+                    *r = displayed(s.map(f64::from), &neutral).map(|v| v as f32);
+                }
+            }
+            let Some(look) = fit_look(&sensor, &reference, &clipped, None) else { continue };
+            let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+            let render = |x: [f64; 3]| displayed(look.matrix.apply(x), &tone);
+            // midtones: no further from the camera than the fallback, beyond the allowance
+            let (mut fallback, mut kept, mut n) = (0.0, 0.0, 0.0);
+            for (x, y) in sensor.data.iter().zip(&reference.data).step_by(10) {
+                let (x, y) = (x.map(f64::from), y.map(f64::from));
+                for c in 0..3 {
+                    fallback += (encoded(displayed(x, &neutral)[c]) - encoded(y[c])).powi(2);
+                    kept += (encoded(render(x)[c]) - encoded(y[c])).powi(2);
+                    n += 1.0;
+                }
+            }
+            assert!((kept / n).sqrt() <= (fallback / n).sqrt() + MAX_MIDTONE_LOSS + 0.005, "{case}: midtones paid for the sky");
+            // a clipped sky no darker than the fallback renders it
+            let sky = luma(render([1.0; 3]));
+            assert!(sky >= luma(displayed([1.0; 3], &neutral)) - 0.01, "{case}: clipped sky darkened to {sky}");
+        }
+        // clipped in the JPEG's sRGB, though no Rec.2020 channel reaches 0.98
+        let to_2020 = REC2020.from_xyz().mul(&SRGB.to_xyz());
+        let red_clipped = to_2020.apply([1.0, 0.9, 0.8]);
+        assert!(red_clipped.iter().all(|v| *v < 0.98) && jpeg_clipped(red_clipped), "{red_clipped:?}");
+        assert!(!jpeg_clipped(to_2020.apply([0.94, 0.93, 0.92])), "a bright, unclipped JPEG pixel");
+    }
+
     /// When the neutral fallback already matches the camera JPEG, or the JPEG is unrelated or
     /// monochrome, the partial look isn't clearly better and the photo keeps the neutral fallback.
     #[test]
@@ -2304,7 +2610,8 @@ mod tests {
         let neutral = ToneMap::new(0.0, 0.0, 0.0);
         let mut reference = sensor.clone();
         reference.map_in_place(|p| displayed(p.map(f64::from), &neutral).map(|v| v as f32));
-        assert!(fit_partial(&sensor, &reference).is_none(), "no clear gain over the fallback");
+        let check = HighlightCheck { pairs: highlights(&sensor, &reference), clipped: Vec::new(), dro: false };
+        assert!(fit_partial(&sensor, &reference, &check).is_none(), "no clear gain over the fallback");
         // an unrelated picture
         for (i, p) in reference.data.iter_mut().enumerate() {
             *p = [0.05 + (i % 7) as f32 * 0.07, 0.05 + (i % 19) as f32 * 0.02, 0.05 + (i % 29) as f32 * 0.01];
@@ -2313,5 +2620,140 @@ mod tests {
         // a black-and-white JPEG of the scene
         reference.data.iter_mut().zip(&sensor.data).for_each(|(r, s)| *r = [0.8 * luminance_2020(*s).sqrt(); 3]);
         assert!(fit_look(&sensor, &reference, &none, None).is_none(), "monochrome JPEG");
+    }
+
+    /// Pairs whose scene luminance spans `ratio` from the darkest to the brightest pixel, mapped
+    /// to the JPEG through a steep camera curve (a hazy scene the camera stretches).
+    fn low_contrast_pairs(ratio: f64) -> Vec<(f64, f64)> {
+        (0..4096).map(|i| 0.08 * ratio.powf(i as f64 / 4095.0)).map(|x| (x, (0.2 + (x - 0.08) * 3.0).min(0.95))).collect()
+    }
+
+    /// The ratio the tone fits test: scene luminance at the middle of the brightest 1/32 over that
+    /// of the darkest 1/32 (their last and first knots).
+    fn knot_range(mut scene: Vec<f64>) -> f64 {
+        scene.sort_by(f64::total_cmp);
+        let n = scene.len();
+        scene[31 * n / 32 + n / 64] / scene[n / 64]
+    }
+
+    /// Issue #631: a low-contrast scene (its darker and brighter parts under 1.5× apart) still gets
+    /// a tone curve; only a nearly uniform one doesn't. Both tone fits use the same limit.
+    #[test]
+    fn tone_fits_accept_low_contrast_scenes() {
+        for fit in [fit_tone, fit_tone_conditional] {
+            let pairs = low_contrast_pairs(1.47);
+            let range = knot_range(pairs.iter().map(|p| p.0).collect());
+            assert!((1.4..1.5).contains(&range), "the scene sits just below the old limit of 1.5: {range}");
+            let curve = fit(pairs).expect("a low-contrast scene, as in the burst of issue #631");
+            assert!((curve.apply(0.1) - 0.26).abs() < 0.01, "follows the camera curve: {}", curve.apply(0.1));
+            assert!(fit(low_contrast_pairs(1.1)).is_none(), "a nearly uniform frame");
+        }
+    }
+
+    /// The same scene end to end: colour varies, luminance spans under 1.5×, and the camera
+    /// stretches it; the look is accepted and lands on the JPEG instead of the neutral fallback.
+    #[test]
+    fn a_low_contrast_scene_gets_a_camera_look() {
+        let known = Mat3([[1.8, -0.4, -0.1], [-0.2, 1.5, -0.1], [-0.05, -0.3, 1.7]]);
+        let mut sensor = Rgb32f::new(96, 64);
+        let mut reference = sensor.clone();
+        for (i, (src, dst)) in sensor.data.iter_mut().zip(&mut reference.data).enumerate() {
+            let ev = 0.06 + (i % 31) as f32 * 0.0008;
+            *src = [ev * (0.8 + (i % 11) as f32 * 0.025), ev, ev * (0.8 + (i % 17) as f32 * 0.014)];
+            let p = known.apply_f32(*src);
+            let y = luminance_2020(p);
+            *dst = p.map(|v| v * (0.2 + (y - 0.07) * 3.0) / y);
+        }
+        let look = fit_pairs(&sensor, &reference).expect("a camera look, not the neutral fallback");
+        let range = knot_range(sensor.data.iter().map(|x| luma(look.matrix.apply(x.map(f64::from)))).collect());
+        assert!(range < 1.5, "the scene sits below the old limit of 1.5: {range}");
+        let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+        let error: f64 = sensor
+            .data
+            .iter()
+            .zip(&reference.data)
+            .map(|(x, y)| {
+                let p = displayed(look.matrix.apply(x.map(f64::from)), &tone);
+                (0..3).map(|c| (p[c] - f64::from(y[c])).powi(2)).sum::<f64>() / 3.0
+            })
+            .sum::<f64>()
+            / sensor.data.len() as f64;
+        assert!(error.sqrt() < 0.02, "{}", error.sqrt());
+    }
+
+    /// Codex review of #631: a low-contrast scene's curve is fitted to its midtones only, and the
+    /// camera JPEG's bright areas (luminance 0.85 and up) are in neither the fit nor the held-out
+    /// gates. With 1.2 alone, this frame's curve passed the gates and rendered its bright sky
+    /// (camera JPEG 0.93) at about 0.28. The second review found the same through the retries'
+    /// filters: a clipped sky (left out by the refit without clipped pixels), scattered bright
+    /// pixels (left out away from edges) and sensor values over 1.5 (out of the pairs' range).
+    #[test]
+    fn a_narrow_curve_that_darkens_the_bright_areas_is_refused() {
+        let known = Mat3([[1.8, -0.4, -0.1], [-0.2, 1.5, -0.1], [-0.05, -0.3, 1.7]]);
+        for (case, sky_value, is_sky) in [
+            ("bright sky", 0.9, &(|i: usize| i < 5600) as &dyn Fn(usize) -> bool),
+            ("clipped sky", 1.0, &|i: usize| i < 5600),
+            ("scattered bright pixels", 0.9, &|i: usize| i.is_multiple_of(8)),
+            ("sky over the pairs' range", 1.6, &|i: usize| i < 5600),
+        ] {
+            let mut sensor = Rgb32f::new(96, 64);
+            let mut reference = sensor.clone();
+            let mut clipped = vec![false; sensor.data.len()];
+            for (i, (src, dst)) in sensor.data.iter_mut().zip(&mut reference.data).enumerate() {
+                if is_sky(i) {
+                    // bright, nearly white in the camera JPEG
+                    *src = [sky_value; 3];
+                    *dst = [0.93; 3];
+                    clipped[i] = case == "clipped sky";
+                    continue;
+                }
+                let ev = 0.06 + (i % 31) as f32 * 0.0008;
+                *src = [ev * (0.8 + (i % 11) as f32 * 0.025), ev, ev * (0.8 + (i % 17) as f32 * 0.014)];
+                let p = known.apply_f32(*src);
+                let y = luminance_2020(p);
+                // nearly flat midtones: the fitted curve's extrapolation can't reach the sky
+                *dst = p.map(|v| v * (0.2 + (y - 0.07) * 0.05) / y);
+            }
+            let Some(look) = fit_look(&sensor, &reference, &clipped, None) else { continue };
+            let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+            let correction = look.hue_sat.as_ref().and_then(HueSat::new);
+            let p = look.matrix.apply([f64::from(sky_value); 3]);
+            let p = correction.as_ref().map_or(p, |c| c.apply(p.map(|v| v as f32)).map(f64::from));
+            let sky = luma(displayed(p, &tone));
+            assert!(sky > 0.8, "{case}: an accepted look must not darken what the camera renders at 0.93: {sky}");
+        }
+    }
+
+    /// Third Codex review of #631: for a Sony photo shot with DRO, the fitted curve is lowered to
+    /// Sony's without DRO after the fit, so it must be checked as lowered. On this frame the
+    /// fitted curve keeps the sky (0.81 against the fallback's 0.79), and lowered it rendered the
+    /// sky at 0.61 where the camera JPEG has 0.93.
+    #[test]
+    fn a_narrow_curve_is_checked_as_lowered_for_dro() {
+        let known = Mat3([[1.8, -0.4, -0.1], [-0.2, 1.5, -0.1], [-0.05, -0.3, 1.7]]);
+        let mut sensor = Rgb32f::new(96, 64);
+        let mut reference = sensor.clone();
+        for (i, (src, dst)) in sensor.data.iter_mut().zip(&mut reference.data).enumerate() {
+            if i < 5600 {
+                *src = [0.9; 3];
+                *dst = [0.93; 3];
+                continue;
+            }
+            let ev = 0.06 + (i % 31) as f32 * 0.0008;
+            *src = [ev * (0.8 + (i % 11) as f32 * 0.025), ev, ev * (0.8 + (i % 17) as f32 * 0.014)];
+            let p = known.apply_f32(*src);
+            let y = luminance_2020(p);
+            *dst = p.map(|v| v * (0.6 + (y - 0.07) * 0.25) / y);
+        }
+        let neutral = luma(displayed([0.9; 3], &ToneMap::new(0.0, 0.0, 0.0)));
+        if let Some(look) = fit_look_with(&sensor, &reference, &vec![false; sensor.data.len()], None, true) {
+            let look = with_dro_off_tone(look);
+            let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+            let correction = look.hue_sat.as_ref().and_then(HueSat::new);
+            let p = look.matrix.apply([0.9; 3]);
+            let p = correction.as_ref().map_or(p, |c| c.apply(p.map(|v| v as f32)).map(f64::from));
+            let sky = luma(displayed(p, &tone));
+            assert!(sky > neutral - 0.02, "the DRO-lowered curve must not darken the sky past the fallback ({neutral}): {sky}");
+        }
     }
 }
