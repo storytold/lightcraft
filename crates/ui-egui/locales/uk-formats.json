@@ -233,5 +233,12 @@
   "{n} keywords imported": "Імпортовано ключових слів: {n}",
   "{n} keywords removed": "Видалено ключових слів: {n}",
   "Only {} keys": "Лише клавіші {}",
-  "{} keys": "Клавіші {}"
+  "{} keys": "Клавіші {}",
+  "{done} of {total}": "{done} з {total}",
+  "{done} of {total} MB": "{done} з {total} МБ",
+  "{pct} %": "{pct} %",
+  "+{n} more": "+{n} ще",
+  "1 task is still running: {names}. Quitting stops it.": "1 завдання ще виконується: {names}. Вихід зупинить його.",
+  "{n} tasks are still running: {names}. Quitting stops them.": "Ще виконуються завдання ({n}): {names}. Вихід зупинить їх.",
+  "{what} merge cancelled": "Об’єднання {what} скасовано"
 }

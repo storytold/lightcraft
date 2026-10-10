@@ -2206,5 +2206,20 @@
   "Metadata and develop settings": "元数据和修改照片设置",
   "Linked": "已关联",
   "Probably Linked": "可能已关联",
-  "Not Linked": "未关联"
+  "Not Linked": "未关联",
+  "Show less": "收起",
+  "Quit while tasks are running?": "要在任务运行时退出吗？",
+  "Exporting contact sheet": "正在导出联系表",
+  "Reading folder": "正在读取文件夹",
+  "Scanning folder": "正在扫描文件夹",
+  "Building previews": "正在构建预览",
+  "Building smart previews": "正在构建智能预览",
+  "Discarding smart previews": "正在丢弃智能预览",
+  "Importing Lightroom catalog": "正在导入 Lightroom 目录",
+  "Reading Lightroom catalog": "正在读取 Lightroom 目录",
+  "Merging": "正在合并",
+  "Downloading model": "正在下载模型",
+  "Finding faces": "正在查找人脸",
+  "Synchronizing folder": "正在同步文件夹",
+  "Looking for changes": "正在查找更改"
 }

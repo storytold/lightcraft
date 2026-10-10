@@ -635,11 +635,11 @@ mod tests {
 
     #[test]
     fn resolves_rename_only_hunks() {
-        let map = |t: &str| t.replace("lightcraft_", "dac_");
-        let text = "a\n<<<<<<< HEAD\nuse dac_x;\n||||||| base\nuse lightcraft_x;\n=======\nuse lightcraft_x::y;\n>>>>>>> upstream/main\nb\n<<<<<<< HEAD\nours\n||||||| base\nbase\n=======\ntheirs\n>>>>>>> upstream/main\nc\n<<<<<<< HEAD\nmine\n||||||| base\nold\n=======\nold\n>>>>>>> upstream/main\n";
+        let map = |t: &str| t.replace("up_", "dac_");
+        let text = "a\n<<<<<<< HEAD\nuse dac_x;\n||||||| base\nuse up_x;\n=======\nuse up_x::y;\n>>>>>>> upstream/main\nb\n<<<<<<< HEAD\nours\n||||||| base\nbase\n=======\ntheirs\n>>>>>>> upstream/main\nc\n<<<<<<< HEAD\nmine\n||||||| base\nold\n=======\nold\n>>>>>>> upstream/main\n";
         let (out, resolved, left) = resolve_hunks(text, &map);
         assert_eq!((resolved, left), (2, 1));
-        assert_eq!(out, "a\nuse lightcraft_x::y;\nb\n<<<<<<< HEAD\nours\n||||||| base\nbase\n=======\ntheirs\n>>>>>>> upstream/main\nc\nmine\n");
+        assert_eq!(out, "a\nuse up_x::y;\nb\n<<<<<<< HEAD\nours\n||||||| base\nbase\n=======\ntheirs\n>>>>>>> upstream/main\nc\nmine\n");
     }
 
     #[test]

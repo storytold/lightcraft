@@ -721,6 +721,42 @@ fn build_previews_fills_the_cache() {
     assert!(s.execute("library.buildPreviews", &json!({"size": "huge"})).is_err());
 }
 
+/// Wait (at most a minute) until no background task is listed.
+fn wait_activity_empty(s: &Session) {
+    let t0 = std::time::Instant::now();
+    while !s.activity.list().is_empty() {
+        assert!(t0.elapsed().as_secs() < 60, "tasks still listed: {:?}", s.activity.list());
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// Issue #345: a background preview build is a row in the activity stack while it runs.
+#[test]
+fn preview_build_shows_in_activity_until_it_finishes() {
+    let mut s = demo();
+    let ids: Vec<u64> = s.catalog.photos().take(4).map(|p| p.id.0).collect();
+    let r = s.execute("library.buildPreviews", &json!({"ids": ids, "size": "standard", "edge": 256})).unwrap();
+    let tasks = s.activity.list();
+    assert_eq!(tasks.first().map(|t| (t.kind, t.total, t.label.as_str())), Some(("previews", 4, "Building previews")), "{tasks:?} {r}");
+    assert!(tasks[0].cancellable);
+    wait_activity_empty(&s);
+    assert_eq!(s.execute("library.previewProgress", &json!({})).unwrap()["running"], false);
+}
+
+/// Issue #345: `activity.cancel` stops a preview build like `library.cancelPreviews`.
+#[test]
+fn activity_cancel_stops_a_preview_build() {
+    let mut s = demo();
+    let ids: Vec<u64> = s.catalog.photos().map(|p| p.id.0).collect();
+    s.execute("library.buildPreviews", &json!({"ids": ids, "size": "full"})).unwrap();
+    let id = s.activity.list().first().map(|t| t.id).expect("a previews row");
+    s.execute("activity.cancel", &json!({"id": id})).unwrap();
+    wait_activity_empty(&s);
+    let p = s.execute("library.previewProgress", &json!({})).unwrap();
+    assert_eq!(p["cancelled"], true, "{p}");
+    assert!(p["done"].as_u64() < p["total"].as_u64(), "stopped part-way: {p}");
+}
+
 /// Colour range: a click samples the colour under it, so the mask selects that colour (white
 /// in the mask view) and not a different one; ⇧ adds samples, up to five.
 #[test]

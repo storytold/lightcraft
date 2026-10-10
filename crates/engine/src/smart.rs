@@ -24,6 +24,10 @@ pub fn file_name(p: &Photo) -> String {
 /// The most header [`is_valid`] reads (the JSON line before the JPEG).
 const HEADER_MAX: u64 = 4096;
 
+/// The header field that records which version of the camera-look fit (`camera_preview::LOOK_VERSION`)
+/// wrote the proxy's pixels (colour matrix and profile are baked into them) and stored tone curve.
+const LOOK_FIELD: &str = "look_version";
+
 /// Encode a source image (and the decoder's camera tone curve, if any) as a smart preview.
 pub fn encode(img: &Rgb32f, tone: Option<&CameraTone>) -> Result<Vec<u8>, String> {
     // scale so all but the brightest 0.05 % fit into 0..1
@@ -48,7 +52,7 @@ pub fn encode(img: &Rgb32f, tone: Option<&CameraTone>) -> Result<Vec<u8>, String
     let jpg = dac_codecs::encode_jpeg(&dac_codecs::EncodeImage::rgba8(&rgba), 92, dac_codecs::ChromaSubsampling::S444, &Default::default())
         .map_err(|e| e.to_string())?;
     let mut out = MAGIC.to_vec();
-    let mut head = serde_json::json!({"w": img.width, "h": img.height, "scale": scale});
+    let mut head = serde_json::json!({"w": img.width, "h": img.height, "scale": scale, LOOK_FIELD: crate::camera_preview::LOOK_VERSION});
     if let Some(t) = tone {
         head["tone"] = serde_json::to_value(t).map_err(|e| e.to_string())?;
     }
@@ -178,6 +182,56 @@ pub fn is_valid(path: &Path) -> bool {
     }
     let mut end = [0u8; 2];
     f.seek(SeekFrom::End(-2)).is_ok() && f.read_exact(&mut end).is_ok() && end == [0xFF, 0xD9]
+}
+
+/// The fit version a header records: a missing, negative, fractional or otherwise malformed value
+/// counts as 0 (older than any real version).
+fn header_look_version(head: &serde_json::Value) -> u64 {
+    head.get(LOOK_FIELD).and_then(serde_json::Value::as_u64).unwrap_or(0)
+}
+
+/// Whether the complete proxy at `path` was written by an older camera-look fit than this build's
+/// (so its stored curve, and the colour baked into its pixels, are out of date). A proxy from a
+/// newer build is left alone (rebuilding it here would only undo that build's work), as is one
+/// that can't be read: those are [`is_valid`]'s business.
+pub fn is_stale(path: &Path) -> bool {
+    use std::io::Read;
+    if !is_valid(path) {
+        return false;
+    }
+    let Ok(f) = std::fs::File::open(path) else { return false };
+    let mut head = Vec::with_capacity(1024);
+    if f.take(HEADER_MAX).read_to_end(&mut head).is_err() {
+        return false;
+    }
+    let Some(rest) = head.strip_prefix(MAGIC) else { return false };
+    let Some(nl) = rest.iter().position(|b| *b == b'\n') else { return false };
+    rest.get(..nl)
+        .and_then(|h| serde_json::from_slice::<serde_json::Value>(h).ok())
+        .is_some_and(|h| header_look_version(&h) < u64::from(crate::camera_preview::LOOK_VERSION))
+}
+
+/// The marker file in a smart previews folder: the `LOOK_VERSION` its proxies were last checked
+/// at ([`look_checked`]).
+const LOOK_MARKER: &str = "look-version";
+
+/// Whether the smart previews folder `dir` has been checked for stale proxies at this build's
+/// camera-look fit version (or a newer one). A missing or unreadable marker counts as not.
+pub fn look_checked(dir: &Path) -> bool {
+    use std::io::Read;
+    let Ok(f) = std::fs::File::open(dir.join(LOOK_MARKER)) else { return false };
+    let mut text = String::new();
+    if f.take(64).read_to_string(&mut text).is_err() {
+        return false;
+    }
+    text.trim().parse::<u64>().is_ok_and(|v| v >= u64::from(crate::camera_preview::LOOK_VERSION))
+}
+
+/// Record that the proxies in `dir` were checked at this build's camera-look fit version.
+pub fn mark_look_checked(dir: &Path) -> Result<(), String> {
+    let path = dir.join(LOOK_MARKER);
+    dac_catalog::safe_file::write_atomic(&path, format!("{}\n", crate::camera_preview::LOOK_VERSION).as_bytes())
+        .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Load the proxy at `path`.

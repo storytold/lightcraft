@@ -2206,5 +2206,20 @@
   "Metadata and develop settings": "Metadatos y ajustes de revelado",
   "Linked": "Vinculada",
   "Probably Linked": "Probablemente vinculada",
-  "Not Linked": "No vinculada"
+  "Not Linked": "No vinculada",
+  "Show less": "Mostrar menos",
+  "Quit while tasks are running?": "¿Salir con tareas en curso?",
+  "Exporting contact sheet": "Exportando hoja de contactos",
+  "Reading folder": "Leyendo carpeta",
+  "Scanning folder": "Explorando carpeta",
+  "Building previews": "Generando vistas previas",
+  "Building smart previews": "Generando vistas previas inteligentes",
+  "Discarding smart previews": "Descartando vistas previas inteligentes",
+  "Importing Lightroom catalog": "Importando catálogo de Lightroom",
+  "Reading Lightroom catalog": "Leyendo catálogo de Lightroom",
+  "Merging": "Combinando",
+  "Downloading model": "Descargando modelo",
+  "Finding faces": "Buscando caras",
+  "Synchronizing folder": "Sincronizando carpeta",
+  "Looking for changes": "Buscando cambios"
 }

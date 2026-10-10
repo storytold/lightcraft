@@ -464,7 +464,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         ),
                     ));
                 }
-                let started = s.segmenter.start_download().map_err(ai_err)?;
+                let started = s.segmenter.start_download(&s.activity).map_err(ai_err)?;
                 Ok(json!({"started": started, "installed": s.segmenter.installed(), "downloading": s.segmenter.download_status().running}))
             }
         ),
