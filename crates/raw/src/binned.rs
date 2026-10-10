@@ -8,9 +8,13 @@
 //! interpolation, so there are no demosaicing artefacts; the colour planes are offset by less than
 //! one output pixel, which is invisible at these scales.
 //!
-//! Clipping is preserved for [`crate::highlight::reconstruct`]: a channel whose block contains a
-//! sample at or above `clip` takes that block's maximum sample of the colour (instead of a mean that
-//! would fall just below the clip level and escape reconstruction).
+//! Clipping is decided per sample, before averaging. [`RawImage::develop_binned_masked`] keeps every
+//! channel the mean of its samples and says, per output pixel, which colours had a sample at or above
+//! `clip` (for [`crate::highlight::reconstruct_masked`], which rebuilds them with the mean as a lower
+//! bound). A specular point that clips one green sample of the 32 in an 8 × 8 block thus counts as
+//! partly clipped without the block's green jumping to the clip level, which would read as a green
+//! speckle once reconstructed. [`RawImage::develop_binned`] instead gives such a channel the block's
+//! maximum sample of the colour, so that plain value thresholds see it as clipped.
 
 use crate::{Normalized, RawData, RawImage, Result, Rgb32f};
 use rayon::prelude::*;
@@ -31,6 +35,19 @@ impl RawImage {
     /// not oriented). `None` when the data cannot be binned ([`RawImage::can_bin`]) or carries an
     /// `OpcodeList3` (whose operations are defined at full resolution); callers then demosaic.
     pub fn develop_binned(&self, k: usize, clip: f32) -> Result<Option<Rgb32f>> {
+        Ok(self.bin(k, clip, true)?.map(|(img, _)| img))
+    }
+
+    /// Like [`RawImage::develop_binned`], with every channel the mean of its block's samples, and the
+    /// clip mask: per output pixel, bits [`crate::highlight::CLIPPED_R`] / `_G` / `_B` for the colours
+    /// with a sample at or above `clip` in the block. Hand both to [`crate::highlight::reconstruct_masked`].
+    pub fn develop_binned_masked(&self, k: usize, clip: f32) -> Result<Option<(Rgb32f, Vec<u8>)>> {
+        self.bin(k, clip, false)
+    }
+
+    /// The binned image and its clip mask; `keep_max`: a channel with a clipped sample takes the
+    /// block's maximum sample of the colour instead of the mean.
+    fn bin(&self, k: usize, clip: f32, keep_max: bool) -> Result<Option<(Rgb32f, Vec<u8>)>> {
         self.validate()?;
         if !self.can_bin(k) || !self.opcodes.list3.is_empty() {
             return Ok(None);
@@ -63,7 +80,8 @@ impl RawImage {
             .collect();
         let wlen = bw * k;
         let mut out = Rgb32f::new(bw, bh);
-        out.data.par_chunks_mut(bw).enumerate().for_each(|(by, row)| {
+        let mut mask = vec![0u8; bw * bh];
+        out.data.par_chunks_mut(bw).zip(mask.par_chunks_mut(bw)).enumerate().for_each(|(by, (row, mrow))| {
             // the block row's k sample rows, normalised
             let mut rows = vec![0f32; k * wlen];
             for dy in 0..k {
@@ -86,7 +104,7 @@ impl RawImage {
                 }
             }
             let py = (c.y + by * k) % ph;
-            for (bx, px) in row.iter_mut().enumerate() {
+            for (bx, (px, m)) in row.iter_mut().zip(mrow.iter_mut()).enumerate() {
                 let (layout, inv) = &layouts[py * pw + (c.x + bx * k) % pw];
                 let (mut sum, mut max) = ([0f32; 3], [f32::MIN; 3]);
                 for dy in 0..k {
@@ -98,11 +116,13 @@ impl RawImage {
                     }
                 }
                 for ch in 0..3 {
-                    px[ch] = if max[ch] >= clip { max[ch] } else { sum[ch] * inv[ch] };
+                    let clipped = max[ch] >= clip;
+                    px[ch] = if clipped && keep_max { max[ch] } else { sum[ch] * inv[ch] };
+                    *m |= u8::from(clipped) << ch;
                 }
             }
         });
-        Ok(Some(out))
+        Ok(Some((out, mask)))
     }
 }
 
@@ -175,6 +195,44 @@ mod tests {
         let xb = x.develop_binned(3, 0.99).unwrap().unwrap();
         assert_eq!((xb.width, xb.height), (8, 6));
         assert!((xb.get(4, 3)[2] - 0.3).abs() < 2e-3);
+    }
+
+    /// Issue #548: specular points that clip one green sample in some 8 × 8 blocks of a grey surface.
+    /// Taking the block's maximum makes those blocks' green the clip level, which reconstruction then
+    /// keeps (a green speckle); the masked binning keeps the mean and marks the green as clipped.
+    #[test]
+    fn clipping_is_decided_before_averaging() {
+        let img = Rgb32f::filled(64, 64, [0.3, 0.3, 0.3]);
+        let mut raw = raw_from(&mosaic_from_rgb(&img, &Cfa::bayer("RGGB").unwrap()), 0.0, 4095.0);
+        if let RawData::U16(d) = &mut raw.data {
+            // one green sample (RGGB: odd column of an even row) in every other block
+            for by in 0..8 {
+                for bx in (by % 2..8).step_by(2) {
+                    d[(by * 8 + 2) * 64 + bx * 8 + 3] = 4095;
+                }
+            }
+        }
+        let wb = [1.0f32; 3];
+        let (mut masked, mask) = raw.develop_binned_masked(8, 0.99).unwrap().unwrap();
+        assert_eq!(mask.len(), 64);
+        assert_eq!(mask.iter().filter(|&&m| m == highlight::CLIPPED_G).count(), 32);
+        assert!(mask.iter().all(|&m| m & (highlight::CLIPPED_R | highlight::CLIPPED_B) == 0));
+        // the clipped block's green is its mean: (31 · 0.3 + 1) / 32
+        assert!((masked.get(0, 0)[1] - (31.0 * 0.3 + 1.0) / 32.0).abs() < 1e-3, "{:?}", masked.get(0, 0));
+        assert_eq!(highlight::reconstruct_masked(&mut masked, wb, 0.99, [1.0; 3], &mask), 32);
+        let green = |img: &Rgb32f| img.data.iter().map(|p| p[1] / p[0]).fold(0.0f32, f32::max);
+        // (no more than the mean itself: the clipped sample counts at the clip level)
+        assert!(green(&masked) < 1.08, "green excess {}", green(&masked));
+        // the maximum rule: a green speckle at the clip level
+        let mut max = raw.develop_binned(8, 0.99).unwrap().unwrap();
+        assert!(max.get(0, 0)[1] >= 0.99);
+        highlight::reconstruct(&mut max, wb, 0.99);
+        assert!(green(&max) > 3.0, "{}", green(&max));
+        // without clipped samples both are the same plain means, and the mask is empty
+        let clean = raw_from(&mosaic_from_rgb(&img, &Cfa::bayer("RGGB").unwrap()), 0.0, 4095.0);
+        let (a, m) = clean.develop_binned_masked(8, 0.99).unwrap().unwrap();
+        assert!(m.iter().all(|&v| v == 0));
+        assert!(a.data == clean.develop_binned(8, 0.99).unwrap().unwrap().data);
     }
 
     #[test]

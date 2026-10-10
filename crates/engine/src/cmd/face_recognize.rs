@@ -515,6 +515,21 @@ mod imp {
         }))
     }
 
+    /// The scan's row in the activity stack: there while `pending` photos are left, its whole the most that were left at
+    /// once since the scan last finished (which it returns; 0 when none are left). It can't be stopped from there: the
+    /// scan is switched off in Settings.
+    fn track(s: &mut Session, pending: u64) -> u64 {
+        if pending == 0 {
+            s.faces.task = None;
+            s.faces.peak = 0;
+            return 0;
+        }
+        s.faces.peak = s.faces.peak.max(pending);
+        let task = s.faces.task.get_or_insert_with(|| s.activity.start("faces", "Finding faces", crate::activity::Cancel::No));
+        task.progress(s.faces.peak.saturating_sub(pending), s.faces.peak);
+        s.faces.peak
+    }
+
     /// `faces.pump`: cheap to call every frame. Takes in what the background worker has finished and, when it is idle,
     /// hands it the next photo with faces to embed. Does nothing (and says so) until recognition is switched on in
     /// Settings with a model chosen.
@@ -528,14 +543,17 @@ mod imp {
         finish_downloads(s);
         let enabled = s.face_models_dir.clone().is_some_and(|d| enabled_cached(s, &d));
         if !enabled {
+            track(s, 0);
             return Ok(json!({"active": false}));
         }
         if s.faces.retry_at.is_some_and(|t| Instant::now() < t) {
+            track(s, 0);
             return Ok(json!({"active": false}));
         }
         let Ok(embedder) = current_with(s, C, false) else {
             // the chosen model is gone or broken: look again in a few seconds, not every frame
             s.faces.retry_at = Some(Instant::now() + Duration::from_secs(3));
+            track(s, 0);
             return Ok(json!({"active": false}));
         };
         s.faces.retry_at = None;
@@ -573,10 +591,13 @@ mod imp {
                 break;
             }
         }
+        let pending = s.faces.queue.len() + s.faces.in_flight.len();
+        let peak = track(s, pending as u64);
         Ok(json!({
             "active": true,
             "inFlight": s.faces.in_flight.len(),
-            "pendingPhotos": s.faces.queue.len() + s.faces.in_flight.len(),
+            "pendingPhotos": pending,
+            "peak": peak,
             "indexedFaces": s.faces.index.len(),
             "searchedPhotos": s.faces.scanned.len(),
             "workers": target,

@@ -233,5 +233,12 @@
   "{n} keywords imported": "{n} Stichwörter importiert",
   "{n} keywords removed": "{n} Stichwörter entfernt",
   "Only {} keys": "Nur Tasten für {}",
-  "{} keys": "Tasten für {}"
+  "{} keys": "Tasten für {}",
+  "{done} of {total}": "{done} von {total}",
+  "{done} of {total} MB": "{done} von {total} MB",
+  "{pct} %": "{pct} %",
+  "+{n} more": "+{n} weitere",
+  "1 task is still running: {names}. Quitting stops it.": "1 Aufgabe läuft noch: {names}. Beenden bricht sie ab.",
+  "{n} tasks are still running: {names}. Quitting stops them.": "{n} Aufgaben laufen noch: {names}. Beenden bricht sie ab.",
+  "{what} merge cancelled": "{what}-Zusammenfügung abgebrochen"
 }

@@ -233,5 +233,12 @@
   "{n} keywords imported": "{n} 個のキーワードを読み込みました",
   "{n} keywords removed": "{n} 個のキーワードを削除しました",
   "Only {} keys": "{} のキーのみ",
-  "{} keys": "{} のキー"
+  "{} keys": "{} のキー",
+  "{done} of {total}": "{total}件中{done}件",
+  "{done} of {total} MB": "{done} / {total} MB",
+  "{pct} %": "{pct}%",
+  "+{n} more": "ほか{n}件",
+  "1 task is still running: {names}. Quitting stops it.": "1件のタスクが実行中です：{names}。終了すると停止します。",
+  "{n} tasks are still running: {names}. Quitting stops them.": "{n}件のタスクが実行中です：{names}。終了すると停止します。",
+  "{what} merge cancelled": "{what}合成をキャンセルしました"
 }

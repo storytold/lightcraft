@@ -1676,6 +1676,7 @@ dependencies = [
  "dac-faces",
  "dac-geom",
  "dac-immich",
+ "dac-merge",
  "dac-meta",
  "dac-pipeline",
  "dac-preview",

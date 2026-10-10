@@ -233,5 +233,12 @@
   "{n} keywords imported": "{n} mots-clés importés",
   "{n} keywords removed": "{n} mots-clés supprimés",
   "Only {} keys": "Touches {} uniquement",
-  "{} keys": "Touches {}"
+  "{} keys": "Touches {}",
+  "{done} of {total}": "{done} sur {total}",
+  "{done} of {total} MB": "{done} sur {total} Mo",
+  "{pct} %": "{pct} %",
+  "+{n} more": "+{n} autres",
+  "1 task is still running: {names}. Quitting stops it.": "1 tâche est encore en cours : {names}. Quitter l'arrête.",
+  "{n} tasks are still running: {names}. Quitting stops them.": "{n} tâches sont encore en cours : {names}. Quitter les arrête.",
+  "{what} merge cancelled": "Fusion {what} annulée"
 }
