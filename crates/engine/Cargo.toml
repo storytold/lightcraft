@@ -59,3 +59,7 @@ rawnind-model = ["denoise", "dac-denoise/rawnind-model", "dac-denoise-core/rawni
 [dev-dependencies]
 libc = { workspace = true }
 dac-tiff = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# free space on Windows (the Folders panel); its own unsafe FFI stays inside the crate
+fs4 = { version = "1", default-features = false, features = ["sync"] }
