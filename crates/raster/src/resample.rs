@@ -7,6 +7,8 @@ pub enum Filter {
     Box,
     Bilinear,
     Mitchell,
+    /// Bicubic with a = −0.5 (Catmull-Rom): sharper than Mitchell, interpolating.
+    CatmullRom,
     Lanczos3,
 }
 
@@ -15,7 +17,7 @@ impl Filter {
         match self {
             Filter::Box => 0.5,
             Filter::Bilinear => 1.0,
-            Filter::Mitchell => 2.0,
+            Filter::Mitchell | Filter::CatmullRom => 2.0,
             Filter::Lanczos3 => 3.0,
         }
     }
@@ -36,6 +38,15 @@ impl Filter {
                     ((12.0 - 9.0 * b - 6.0 * c) * x * x * x + (-18.0 + 12.0 * b + 6.0 * c) * x * x + (6.0 - 2.0 * b)) / 6.0
                 } else if x < 2.0 {
                     ((-b - 6.0 * c) * x * x * x + (6.0 * b + 30.0 * c) * x * x + (-12.0 * b - 48.0 * c) * x + (8.0 * b + 24.0 * c)) / 6.0
+                } else {
+                    0.0
+                }
+            }
+            Filter::CatmullRom => {
+                if x < 1.0 {
+                    1.5 * x * x * x - 2.5 * x * x + 1.0
+                } else if x < 2.0 {
+                    -0.5 * x * x * x + 2.5 * x * x - 4.0 * x + 2.0
                 } else {
                     0.0
                 }
@@ -180,7 +191,7 @@ mod tests {
     #[test]
     fn constant_image_stays_constant() {
         let img = Image::<f32>::filled(37, 21, 0.42);
-        for f in [Filter::Box, Filter::Bilinear, Filter::Mitchell, Filter::Lanczos3] {
+        for f in [Filter::Box, Filter::Bilinear, Filter::Mitchell, Filter::CatmullRom, Filter::Lanczos3] {
             for (w, h) in [(10, 7), (80, 40), (37, 21), (1, 1)] {
                 let r = resize(&img, w, h, f);
                 assert!(r.data.iter().all(|v| (v - 0.42).abs() < 1e-5), "{f:?} {w}x{h}");

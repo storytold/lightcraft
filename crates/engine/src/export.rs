@@ -1358,11 +1358,50 @@ pub struct Exported {
 
 /// Output size of photo `p` under `o` (its cropped full size when `o.resize` is `None`).
 pub fn output_size(p: &lightcraft_catalog::Photo, o: &ExportOptions) -> (usize, usize) {
-    let (w, h) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
     match &o.resize {
-        Some(r) => r.apply(w, h),
-        None => ((w.round() as usize).max(1), (h.round() as usize).max(1)),
+        Some(r) => {
+            let (w, h) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
+            r.apply(w, h)
+        }
+        None => full_size(p),
     }
+}
+
+/// The cropped size of photo `p` at its own resolution.
+fn full_size(p: &lightcraft_catalog::Photo) -> (usize, usize) {
+    let (w, h) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
+    ((w.round() as usize).max(1), (h.round() as usize).max(1))
+}
+
+/// How much larger than an export (smaller than the photo) it is rendered before being downsized,
+/// as Lightroom renders exports at full size and downsizes them (sharpening and noise reduction act
+/// at a higher resolution than the export). Twice the export size comes close to a full-size
+/// render at a fraction of its memory and time. Only exports of at most half the photo's size are
+/// rendered larger ([`intermediate_size`]): up to ~1280 px the 2× render comes from the
+/// preview-sized source and costs about the same; at 2000 px of a 24 MP photo it needs the full
+/// decode (a 24 MP JPEG: 3.3 s CPU / 0.75 GB peak on the GPU path, against 1.7 s / 0.26 GB at
+/// 2000 px; a 24 MP ARW measured 3.9 s / 1.23 GB against 1.3 s / 0.35 GB on the CPU). An 8-bit
+/// export keeps an 8-bit intermediate so it stays on the GPU.
+#[cfg(not(target_arch = "wasm32"))]
+const EXPORT_SUPERSAMPLE: f64 = 2.0;
+/// The browser build renders exports at their own size (its memory is the tightest).
+#[cfg(target_arch = "wasm32")]
+const EXPORT_SUPERSAMPLE: f64 = 1.0;
+
+/// The size an export of `out` (cropped photo `full`) is rendered at before being downsized to
+/// `out`: [`EXPORT_SUPERSAMPLE`] times `out` when `out` is at most half of `full`, else `out`.
+fn intermediate_size(full: (usize, usize), out: (usize, usize)) -> (usize, usize) {
+    let (fl, ol) = (full.0.max(full.1).max(1) as f64, out.0.max(out.1) as f64);
+    // more than half the photo: rendered at its own size (a full-size render would cost up to
+    // 4× the pixels for an export that is already close to it)
+    if ol * 2.0 > fl {
+        return out;
+    }
+    let f = (EXPORT_SUPERSAMPLE * ol / fl).min(1.0);
+    if f * fl <= ol {
+        return out;
+    }
+    (((full.0 as f64 * f).round() as usize).max(1), ((full.1 as f64 * f).round() as usize).max(1))
 }
 
 /// Render photo `id` at the requested size and encode it (or copy / convert its original for
@@ -1391,6 +1430,9 @@ struct RenderWork {
     hdr_job: Option<crate::media::RenderJob>,
     meta: Option<Metadata>,
     opts: ExportOptions,
+    /// The size to downsize the larger intermediate render to ([`intermediate_size`],
+    /// [`lightcraft_pipeline::DeepImage::downscaled`]).
+    downscale: Option<(usize, usize)>,
 }
 
 enum Work {
@@ -1447,10 +1489,19 @@ fn prepare_guarded(
         let (w, h) = output_size(p, o);
         let meta = export_metadata(p, &session.catalog, o);
         let gain_map = o.hdr_output() && o.format == ExportFormat::Jpeg;
-        let job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
-        let weight = render_weight(full_px, long, job.level, w.saturating_mul(h));
+        // Rendered larger and downsized ([`intermediate_size`]), except HDR samples (they go past
+        // 1). A gain map JPEG's SDR base is downsized like the SDR export, its HDR rendition is
+        // rendered at the export size (both come out at the same size).
+        let (rw, rh) = if o.effective_depth() == OutputDepth::F32Hdr { (w, h) } else { intermediate_size(full_size(p), (w, h)) };
+        let downscale = (rw.max(rh) > w.max(h)).then(|| {
+            let req = lightcraft_pipeline::RenderRequest::fit(w, h);
+            lightcraft_pipeline::output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop, &req)
+        });
+        // an 8-bit intermediate keeps an 8-bit export on the GPU; downsizing it averages its rounding away
+        let job = session.export_job(id, rw, rh, o.effective_space(), o.effective_depth())?;
+        let weight = render_weight(full_px, long, job.level, rw.saturating_mul(rh));
         let hdr_job = if gain_map { Some(session.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr)?) } else { None };
-        (Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts: o.clone() })), weight)
+        (Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts: o.clone(), downscale })), weight)
     } else {
         let lightcraft_catalog::Source::File { path } = &p.source else {
             return Err(format!("{} is a generated demo photo: it has no original file to export", p.file_name));
@@ -1487,8 +1538,11 @@ impl PreparedExport {
         let file_name = self.file_name;
         match self.work {
             Work::Render(w) => {
-                let RenderWork { job, hdr_job, meta, opts } = *w;
-                let r = job.run().rendered?;
+                let RenderWork { job, hdr_job, meta, opts, downscale } = *w;
+                let mut r = job.run().rendered?;
+                if let Some((dw, dh)) = downscale {
+                    r = r.downscaled(dw, dh, opts.effective_space());
+                }
                 let bytes = match hdr_job {
                     Some(hj) => {
                         let hr = hj.run().rendered?;
@@ -1881,6 +1935,42 @@ impl<'a> Placer<'a> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn downsized_exports_come_out_at_their_own_size() {
+        // 8-bit exports render an 8-bit intermediate (no deep samples), 16-bit ones a deep one:
+        // both are downsized to the asked size, not left at the intermediate's
+        let mut s = crate::Session::with_demo();
+        let id = s.catalog.photos().next().map(|p| p.id).unwrap();
+        let p = s.catalog.photo(id).unwrap().clone();
+        let long = (p.width.max(p.height) / 4).max(8) as f32;
+        for (format, bit_depth) in [(ExportFormat::Jpeg, None), (ExportFormat::Tiff, Some(16))] {
+            let o = ExportOptions { format, bit_depth, resize: Some(Resize { value: long, ..Resize::default() }), ..ExportOptions::default() };
+            let (w, h) = output_size(&p, &o);
+            assert!(intermediate_size(full_size(&p), (w, h)).0 > w || cfg!(target_arch = "wasm32"), "{format:?}: rendered larger");
+            let e = export_photo(&mut s, id, &o, 1).unwrap();
+            assert_eq!((e.width, e.height), (w, h), "{format:?}");
+            let d = lightcraft_codecs::decode(&e.bytes, Default::default()).unwrap();
+            assert_eq!((d.image.width, d.image.height), (w, h), "{format:?} file");
+        }
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn exports_render_at_twice_their_size_at_most_full_size() {
+        let full = (6000, 4000);
+        // a small export: twice its size, same aspect
+        assert_eq!(intermediate_size(full, (1000, 667)), (2000, 1333));
+        // exactly half the photo: the full-size render
+        assert_eq!(intermediate_size(full, (3000, 2000)), full);
+        // more than half: rendered at its own size
+        assert_eq!(intermediate_size(full, (4500, 3000)), (4500, 3000));
+        // full size and beyond (upscaling): rendered at the export size, nothing to downsize
+        assert_eq!(intermediate_size(full, full), full);
+        assert_eq!(intermediate_size(full, (9000, 6000)), (9000, 6000));
+        // degenerate sizes don't divide by zero
+        assert_eq!(intermediate_size((0, 0), (1, 1)), (1, 1));
+    }
 
     fn test_image() -> Rgba8 {
         let mut img = Rgba8::new(96, 64);
