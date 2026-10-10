@@ -110,6 +110,13 @@
   into the display's own gamut; thumbnails and other previews are converted to it. Histograms, the preview caches
   and exports don't change. Agents use `app.displayProfile`. See [display profiles](display-profiles.md).
 
+### Highlights and Shadows (process 2)
+- Highlights and Shadows keep the fine detail of the tones they move (issue #632): pulling Highlights down on a bright
+  sky no longer flattens the twigs, lines and texture in it, and lifting Shadows keeps the texture of dark areas, much
+  as Exposure would; the edges between bright and dark regions stay as sharp as before. This is rendering process 2:
+  new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update to Current
+  Process. See [process versions](process-versions.md).
+
 ### Masking
 - Drag anywhere inside the selected radial gradient's ellipse to move it, including rotated
   ellipses and radial components in compound masks. Edge and rotation handles keep their existing

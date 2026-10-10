@@ -279,7 +279,8 @@ impl FinishParams {
 pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     let l = &s.light;
     match s.process.process() {
-        Process::V1 => match info.camera_tone.as_ref().filter(|_| info.raw && peak <= 1.0) {
+        // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
+        Process::V1 | Process::V2 => match info.camera_tone.as_ref().filter(|_| info.raw && peak <= 1.0) {
             Some(curve) => ToneMap::camera(curve, l.contrast, l.whites, l.blacks),
             None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),

@@ -8,6 +8,7 @@ use lightcraft_develop::DevelopSettings;
 use lightcraft_geom::Orientation;
 use lightcraft_pipeline::finish::{FinishParams, MASK_TERMS, mask_terms};
 use lightcraft_pipeline::geometry::SampleMode;
+use lightcraft_pipeline::local::plane_at;
 use lightcraft_pipeline::{Plan, RenderRequest, Rendered, SourceInfo, local};
 use lightcraft_raster::resample::Filter;
 use lightcraft_raster::{Histogram, Plane, Rgb32f, Rgba8};
@@ -40,7 +41,7 @@ struct Entry {
 struct Planes {
     key: u64,
     log_l: Option<Arc<Buf>>,
-    base: Option<(u32, Arc<Buf>)>,
+    base: Option<(local::BaseKey, Arc<Buf>)>,
     clarity: Option<(u32, Arc<Buf>)>,
     texture: Option<(u32, Arc<Buf>)>,
     dark: Option<(u32, Arc<Buf>, f32)>,
@@ -310,6 +311,28 @@ fn guided_coeffs(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, sigma: f32, eps: 
     let ab = cx.gpu.buffer(2 * n);
     map(cx, "guided_ab", n, &[eps.to_bits()], [Some(&m), None, None], &ab);
     gaussian(cx, &ab, w, h, 2, sigma)
+}
+
+/// Separable median of a plane (`local::median_hv`).
+fn median_hv(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, r: usize) -> Buf {
+    if r == 0 || w * h == 0 {
+        return cx.copy(p);
+    }
+    let pr = [w as u32, h as u32, 1, r.min(local::BASE_DETAIL_MAX) as u32];
+    let tmp = cx.gpu.buffer(w * h);
+    cx.run("median_h", &pr, &[Some(p), Some(&tmp)], groups2(w, h, [16, 16]));
+    let out = cx.gpu.buffer(w * h);
+    cx.run("median_v", &pr, &[Some(&tmp), Some(&out)], groups2(w, h, [16, 16]));
+    out
+}
+
+/// The highlights/shadows base (`local::tone_base`; `detail` 0: V1, no median).
+fn tone_base(cx: &mut Cx<'_>, l: &Buf, w: usize, h: usize, sigma: f32, detail: usize) -> Buf {
+    if detail == 0 {
+        return guided_fast(cx, l, w, h, sigma, local::BASE_EPS);
+    }
+    let m = median_hv(cx, l, w, h, detail);
+    guided_fast(cx, &m, w, h, sigma, local::BASE_EPS)
 }
 
 /// Fast guided filter (`local::guided_fast`): coefficients on a subsampled grid.
@@ -805,17 +828,6 @@ struct Prep {
     air: f32,
 }
 
-fn plane_at(slot: &mut Option<(u32, Arc<Buf>)>, sigma: f32, f: impl FnOnce() -> Buf) -> Arc<Buf> {
-    match slot {
-        Some((k, p)) if *k == sigma.to_bits() => p.clone(),
-        _ => {
-            let p = Arc::new(f());
-            *slot = Some((sigma.to_bits(), p.clone()));
-            p
-        }
-    }
-}
-
 /// The spatial planes (`local::prepare`), reusing those in `planes`.
 fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, planes: &mut Planes) -> Prep {
     let (w, h) = (plan.w, plan.h);
@@ -832,11 +844,14 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, pla
         }
     };
     let base = match sig.base {
-        Some(sg) => plane_at(&mut planes.base, sg, || guided_fast(cx, &log_l, w, h, sg, local::BASE_EPS)),
+        Some(sg) => {
+            let key = local::base_key(&plan.settings, sg, sig.base_detail);
+            plane_at(&mut planes.base, key, || tone_base(cx, &log_l, w, h, sg, sig.base_detail))
+        }
         None => log_l.clone(),
     };
-    let clarity = sig.clarity.map(|sg| plane_at(&mut planes.clarity, sg, || guided_fast(cx, &log_l, w, h, sg, local::CLARITY_EPS)));
-    let texture = sig.texture.map(|sg| plane_at(&mut planes.texture, sg, || gaussian(cx, &log_l, w, h, 1, sg)));
+    let clarity = sig.clarity.map(|sg| plane_at(&mut planes.clarity, sg.to_bits(), || guided_fast(cx, &log_l, w, h, sg, local::CLARITY_EPS)));
+    let texture = sig.texture.map(|sg| plane_at(&mut planes.texture, sg.to_bits(), || gaussian(cx, &log_l, w, h, 1, sg)));
     let (dark, air) = match sig.dark {
         None => (None, 1.0),
         Some(sg) => match &planes.dark {
@@ -858,7 +873,7 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, pla
         },
     };
     let chroma = sig.chroma.map(|sg| {
-        plane_at(&mut planes.chroma, sg, || {
+        plane_at(&mut planes.chroma, sg.to_bits(), || {
             let ch = cx.gpu.buffer(n * 3);
             map(cx, "chroma_k", n, &[], [Some(lin), None, None], &ch);
             gaussian(cx, &ch, w, h, 3, sg)

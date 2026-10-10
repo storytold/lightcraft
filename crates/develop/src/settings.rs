@@ -81,16 +81,20 @@ impl ProcessVersion {
 pub enum Process {
     /// The rendering of LightCraft before process versions existed (2026-10).
     V1,
+    /// Highlights and Shadows keep the local contrast of the tones they move: their edge-aware base
+    /// is taken of a fine median of log luminance (issue #632).
+    V2,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 1] = [Process::V1];
-    pub const LATEST: Process = Process::V1;
+    pub const ALL: [Process; 2] = [Process::V1, Process::V2];
+    pub const LATEST: Process = Process::V2;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
             Process::V1 => ProcessVersion(1),
+            Process::V2 => ProcessVersion(2),
         }
     }
 }
