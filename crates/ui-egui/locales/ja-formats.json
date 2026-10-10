@@ -222,5 +222,12 @@
   "Exported {n} keyword{}": "{n}件のキーワードを書き出しました{:.0}",
   " — Capture One won't import a list with ; , < or > in a keyword: {names}": " — Capture One は ; , < > を含むキーワードがあるリストを読み込みません: {names}",
   " — left out, as a keyword list can't hold them: {names}": " — キーワードリストに書けないため省略: {names}",
+  "{done} of {total}": "{total}件中{done}件",
+  "{done} of {total} MB": "{done} / {total} MB",
+  "{pct} %": "{pct}%",
+  "+{n} more": "ほか{n}件",
+  "1 task is still running: {names}. Quitting stops it.": "1件のタスクが実行中です：{names}。終了すると停止します。",
+  "{n} tasks are still running: {names}. Quitting stops them.": "{n}件のタスクが実行中です：{names}。終了すると停止します。",
+  "{what} merge cancelled": "{what}合成をキャンセルしました",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "ローカル写真{n}枚をスキップしました{0:.0}：アルバムに入れられるのはライブラリの写真です（先にマイフォトに追加してください）"
 }

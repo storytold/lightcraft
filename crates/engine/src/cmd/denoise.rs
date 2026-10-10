@@ -368,7 +368,7 @@ fn download(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, "that model is already installed"));
     }
     let host = lightcraft_denoise::known::host(&spec.url).to_string();
-    s.denoise.downloads.start(spec, &dir).map_err(|e| bad(C, e))?;
+    s.denoise.downloads.start(spec, &dir, &s.activity, &k.manifest.name).map_err(|e| bad(C, e))?;
     Ok(json!({"started": id, "from": host}))
 }
 
@@ -614,6 +614,7 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
 /// `denoise.pump {pace?}`: cheap to call every frame. Takes in what the background job has finished and keeps one going.
 fn pump(s: &mut Session, p: &Value) -> Result<Value> {
     s.denoise_pump(Pace::parse(p.get("pace").and_then(Value::as_str)));
+    s.denoise_track();
     Ok(json!({
         "active": s.denoise.active.is_some(),
         "running": s.denoise_running_json(),

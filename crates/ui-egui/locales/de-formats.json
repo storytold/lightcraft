@@ -222,5 +222,12 @@
   "Exported {n} keyword{}": "Stichwörter exportiert: {n}{:.0}",
   " — Capture One won't import a list with ; , < or > in a keyword: {names}": " — Capture One importiert keine Liste mit ; , < oder > in einem Stichwort: {names}",
   " — left out, as a keyword list can't hold them: {names}": " — ausgelassen, weil eine Stichwortliste sie nicht aufnehmen kann: {names}",
+  "{done} of {total}": "{done} von {total}",
+  "{done} of {total} MB": "{done} von {total} MB",
+  "{pct} %": "{pct} %",
+  "+{n} more": "+{n} weitere",
+  "1 task is still running: {names}. Quitting stops it.": "1 Aufgabe läuft noch: {names}. Beenden bricht sie ab.",
+  "{n} tasks are still running: {names}. Quitting stops them.": "{n} Aufgaben laufen noch: {names}. Beenden bricht sie ab.",
+  "{what} merge cancelled": "{what}-Zusammenfügung abgebrochen",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Übersprungen: {n} lokale Fotos{0:.0} – Alben enthalten Bibliotheksfotos (zuerst zu „Meine Fotos“ hinzufügen)"
 }

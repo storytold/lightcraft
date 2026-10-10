@@ -223,6 +223,12 @@ impl CameraColourModel<'_> {
         lightcraft_raw::highlight::reconstruct_with(img, self.wb, HIGHLIGHT_CLIP, clipped_white(&self.matrix));
     }
 
+    /// [`Self::rebuild_highlights`] for a binned image whose clipped channels `mask` tells
+    /// ([`lightcraft_raw::RawImage::develop_binned_masked`]).
+    pub fn rebuild_highlights_masked(&self, img: &mut Rgb32f, mask: &[u8]) {
+        lightcraft_raw::highlight::reconstruct_masked(img, self.wb, HIGHLIGHT_CLIP, clipped_white(&self.matrix), mask);
+    }
+
     /// White balance, matrix, tables and baseline exposure, in place.
     pub fn apply(&self, img: &mut Rgb32f) {
         let (wb, m, gain) = (self.wb, self.matrix.to_f32(), self.gain);
@@ -319,8 +325,9 @@ pub fn load_vec_pair(bytes: Vec<u8>, max_edge: usize, spec: &DenoiseSpec) -> Res
 }
 
 /// The denoised camera RGB of `raw` from its cached product, as the plain development would have it: the default
-/// crop, and `factor` × `factor` blocks averaged into one pixel when the plain one was binned. `None` when the product
-/// is missing, damaged, made from something else or not the size of this raw's active area.
+/// crop, and `factor` × `factor` blocks averaged into one pixel when the plain one was binned (plain means: the
+/// plain development's clip mask tells highlight reconstruction which of them held clipped samples). `None` when
+/// the product is missing, damaged, made from something else or not the size of this raw's active area.
 fn denoised_camera_rgb(raw: &lightcraft_raw::RawImage, spec: &DenoiseSpec, factor: usize) -> Option<Rgb32f> {
     use lightcraft_denoise::product::{self, Window};
     let a = raw.active_area;
@@ -331,7 +338,7 @@ fn denoised_camera_rgb(raw: &lightcraft_raw::RawImage, spec: &DenoiseSpec, facto
     if raw.opcodes.list3.is_empty() {
         let c = raw.develop_crop(a.width, a.height);
         let window = Window { x: c.x, y: c.y, width: c.width, height: c.height };
-        product::read_window(&spec.product, &spec.key, Some(window), factor, Some(HIGHLIGHT_CLIP)).ok()
+        product::read_window(&spec.product, &spec.key, Some(window), factor, None).ok()
     } else {
         // (the plain development is not binned either when the file has opcodes of this kind: `factor` is 1)
         let whole = product::read(&spec.product, &spec.key, 1).ok()?;
@@ -357,27 +364,29 @@ fn load_bytes_now(
         };
         // Embedded lens corrections are applied by the pipeline ("Enable Profile Corrections"), not baked in
         // (removed before the camera look's binned sensor proxy too, which needs an empty `OpcodeList3`).
-        let lens = embedded_lens(&raw.info());
+        let info = raw.info();
+        let lens = embedded_lens(&info);
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
-        let xy = lightcraft_raw::color::as_shot_white_xy(&raw);
-        let t = lightcraft_raw::color::camera_transform(&raw, xy);
-        // the source's segmentation mattes (DNG semantic masks), read while the preview is fitted
-        let (camera_look, mattes) = rayon::join(|| crate::camera_preview::fit_preview(&raw, &bytes, &t), || dng_mattes(&bytes, &raw));
+        // Without colour matrices of its own, white balance is relative to the as-shot look (`Photo::relative_wb`).
+        let own_matrix = lightcraft_raw::color::has_matrix(&raw.color);
+        // the source's segmentation mattes (DNG semantic masks), read while the starting colour is fitted
+        let ((xy, t, camera_look), mattes) = rayon::join(|| crate::camera_preview::starting_colour(&mut raw, &bytes), || dng_mattes(&bytes, &info));
         drop(bytes);
         // Previews and thumbnails bin the mosaic straight to (about) the size they need; only
         // larger levels (exports, 1:1) demosaic the whole sensor.
         let t0 = web_time::Instant::now();
         let bin = bin_factor(&raw, max_edge);
+        // (binned: block means, and which colours had a clipped sample in each block)
         let binned = match bin {
-            Some(k) => raw.develop_binned(k, HIGHLIGHT_CLIP).map_err(|e| e.to_string())?,
+            Some(k) => raw.develop_binned_masked(k, HIGHLIGHT_CLIP).map_err(|e| e.to_string())?,
             None => None,
         };
         let factor = if binned.is_some() { bin.unwrap_or(1) } else { 1 };
-        let img = match binned {
-            Some(img) => img,
+        let (img, clip_mask) = match binned {
+            Some((img, mask)) => (img, Some(mask)),
             None => {
                 let method = if max_edge <= 600 { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd };
-                raw.develop(method).map_err(|e| e.to_string())?
+                (raw.develop(method).map_err(|e| e.to_string())?, None)
             }
         };
         // the same development from the denoised mosaic, when the photo has been denoised
@@ -399,7 +408,10 @@ fn load_bytes_now(
         let finish = |mut img: Rgb32f| {
             let mut stages = vec![("develop", t0.elapsed())];
             stages.push(("transform", t0.elapsed()));
-            colour.rebuild_highlights(&mut img);
+            match &clip_mask {
+                Some(mask) => colour.rebuild_highlights_masked(&mut img, mask),
+                None => colour.rebuild_highlights(&mut img),
+            }
             stages.push(("highlights", t0.elapsed()));
             colour.apply(&mut img);
             stages.push(("colour", t0.elapsed()));
@@ -424,7 +436,7 @@ fn load_bytes_now(
         }
         let twin = twin.map(|picture| finish(picture).0);
         let (temp, tint) = xy_to_temp_tint(xy);
-        let relative = crate::camera_preview::file_local_look(raw.format) && t.matrix_is_fallback;
+        let relative = crate::camera_preview::file_local_look(raw.format) && !own_matrix;
         // White balance re-evaluates the file's own colour model (when it has one and no
         // file-local look matrix sits on top of it)
         let camera_color = (!t.matrix_is_fallback && camera_look.is_none()).then(|| {
@@ -472,7 +484,7 @@ fn local_tone(raw: &lightcraft_raw::RawImage) -> Option<Arc<lightcraft_pipeline:
 /// The semantic masks of a DNG that AI masks understand, over the developed image (default crop,
 /// oriented like it). Person mattes without a confidently selected pixel are left out (the
 /// Subject mask then falls back to its heuristic); a sky matte counts even when empty (no sky).
-fn dng_mattes(bytes: &[u8], raw: &lightcraft_raw::RawImage) -> Option<Arc<lightcraft_pipeline::masks::Mattes>> {
+fn dng_mattes(bytes: &[u8], raw: &lightcraft_raw::RawInfo) -> Option<Arc<lightcraft_pipeline::masks::Mattes>> {
     use lightcraft_pipeline::masks::{MatteKind, Mattes};
     if raw.format != lightcraft_raw::RawFormat::Dng {
         return None;
@@ -706,6 +718,37 @@ mod tests {
             }
         }
         assert!(probe_bytes("x.jpg", b"not an image").is_err());
+    }
+
+    /// Issue #548: a small preview bins the mosaic by 8; specular points that clip a single green sample
+    /// of a block on a grey surface must not become green speckles (the block's green used to take the
+    /// clip level, which highlight reconstruction then kept).
+    #[test]
+    fn coarse_binning_keeps_specular_points_neutral() {
+        let (w, h) = (256usize, 192usize);
+        // grey after the file's white balance (as-shot neutral 0.5 : 1 : 0.7), brighter to the right
+        let neutral = [0.5f32, 1.0, 0.7];
+        let cfa = lightcraft_raw::Cfa::bayer("RGGB").unwrap();
+        let mut data: Vec<u16> = (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                let v = (0.3 + 0.2 * x as f32 / w as f32) * neutral[cfa.color_at(x, y).min(2) as usize];
+                (256.0 + v * (16000.0 - 256.0)).round() as u16
+            })
+            .collect();
+        // one clipped green sample (RGGB: even row, odd column) in every other 8 × 8 block
+        for by in 0..h / 8 {
+            for bx in (by % 2..w / 8).step_by(2) {
+                data[(by * 8 + 4) * w + bx * 8 + 5] = 16000;
+            }
+        }
+        let bytes = crate::tests_xmp::synthetic_dng_of(w, h, "RGGB", data, None, Default::default());
+        let raw = lightcraft_raw::decode(&bytes).unwrap();
+        assert_eq!(bin_factor(&raw, 32), Some(8));
+        let (img, _) = load_bytes(&bytes, 32).unwrap();
+        assert_eq!((img.width, img.height), (32, 24));
+        let worst = img.data.iter().map(|p| p[1] / ((p[0] + p[2]) / 2.0).max(1e-6)).fold(0.0f32, f32::max);
+        assert!(worst < 1.12, "green speckles: green {worst:.2}× the other channels");
     }
 
     #[test]
@@ -1464,6 +1507,26 @@ mod tests {
         let plain = probe_bytes("small.tif", &tiff_shell(24, 16, false)).unwrap();
         assert_eq!((plain.kind, plain.preview_only, plain.width, plain.height), (MediaKind::Image, None, 24, 16));
         assert!(lightcraft_raw::probe(&tiff_shell(24, 16, false)).is_none());
+
+        // TIFFs preserving camera Make tags (SONY, NIKON, etc.) are ordinary images, not raws (#281)
+        for make in ["SONY", "NIKON CORPORATION", "PENTAX", "RICOH", "SAMSUNG"] {
+            use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+            let mut ifd0 = IfdBuilder::new();
+            ifd0.set(t::IMAGE_WIDTH, Value::Long(vec![24]));
+            ifd0.set(t::IMAGE_LENGTH, Value::Long(vec![16]));
+            ifd0.set(t::BITS_PER_SAMPLE, Value::Short(vec![8, 8, 8]));
+            ifd0.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![3]));
+            ifd0.set(t::PHOTOMETRIC, Value::Short(vec![2]));
+            ifd0.set(t::COMPRESSION, Value::Short(vec![1]));
+            ifd0.set(t::MAKE, Value::Ascii(make.into()));
+            let px: Vec<u8> = (0..24 * 16).flat_map(|i| [(i % 251) as u8, 128, 200]).collect();
+            ifd0.set_image(ImageData::Strips { rows_per_strip: 16, strips: vec![px] });
+            let bytes = TiffWriter::default().write(&[ifd0]).unwrap();
+            let p = probe_bytes("photo.tif", &bytes).unwrap();
+            assert_eq!((p.kind, p.preview_only, p.width, p.height), (MediaKind::Image, None, 24, 16), "make: {make}");
+            let (img, src) = load_bytes(&bytes, 24).unwrap();
+            assert_eq!((img.width, img.height, src.raw), (24, 16, false), "make: {make}");
+        }
     }
 
     /// Recognised raw containers we don't decode (Minolta MRW here: the preview's first byte is

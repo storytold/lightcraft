@@ -497,6 +497,12 @@ fn damaged_smart_previews_are_rebuilt_and_failed_writes_leave_none() {
     };
     assert_eq!((r["done"].as_u64(), r["failed"].as_u64(), r["repaired"].as_u64()), (Some(1), Some(0), Some(1)), "{r}");
     assert_eq!(std::fs::read(&file).unwrap(), full, "rebuilt whole in the background");
+    // its row in the activity stack (issue #345) goes with it
+    let t0 = std::time::Instant::now();
+    while !s.activity.list().is_empty() && t0.elapsed() < std::time::Duration::from_secs(10) {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(s.activity.list().is_empty(), "{:?}", s.activity.list());
     let _ = std::fs::remove_dir_all(&src);
     let _ = std::fs::remove_dir_all(&lib);
 }
@@ -1123,6 +1129,212 @@ fn folder_import_picks_up_undecodable_raw_containers_as_preview_only() {
     assert_eq!(ids(&r, "failed"), 0, "{r}");
     assert!(s.catalog.photos().all(|p| p.preview_only.is_some() && p.kind == lightcraft_catalog::MediaKind::Raw && (p.width, p.height) == (40, 30)));
     let _ = std::fs::remove_dir_all(&src);
+}
+
+/// Rewrite the JSON header line of the smart preview at `file`.
+fn edit_smart_header(file: &Path, edit: impl FnOnce(&mut Value)) {
+    let bytes = std::fs::read(file).unwrap();
+    let start = b"LCSP1\n".len();
+    let nl = start + bytes[start..].iter().position(|b| *b == b'\n').unwrap();
+    let mut head: Value = serde_json::from_slice(&bytes[start..nl]).unwrap();
+    edit(&mut head);
+    let mut out = bytes[..start].to_vec();
+    out.extend_from_slice(head.to_string().as_bytes());
+    out.extend_from_slice(&bytes[nl..]);
+    std::fs::write(file, out).unwrap();
+}
+
+fn smart_header(file: &Path) -> Value {
+    let bytes = std::fs::read(file).unwrap();
+    let start = b"LCSP1\n".len();
+    let nl = start + bytes[start..].iter().position(|b| *b == b'\n').unwrap();
+    serde_json::from_slice(&bytes[start..nl]).unwrap()
+}
+
+/// A camera tone curve with a recognisable shape (`k` changes it).
+fn test_tone(k: f32) -> lightcraft_pipeline::tone::CameraTone {
+    lightcraft_pipeline::tone::CameraTone::new(std::array::from_fn(|i| {
+        let x = 0.004 * 1.17f32.powi(i as i32);
+        [x, 0.95 * (1.0 - (-k * x).exp())]
+    }))
+    .unwrap()
+}
+
+/// `plain`, but reporting `tone` as the camera look the (current) fit gives the file; counts its calls.
+fn look_loader(
+    plain: crate::media::FileLoader,
+    tone: lightcraft_pipeline::tone::CameraTone,
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) -> crate::media::FileLoader {
+    std::sync::Arc::new(move |path, max_edge| {
+        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let (img, mut info) = plain(path, max_edge)?;
+        info.camera_tone = Some(tone);
+        Ok((img, info))
+    })
+}
+
+/// The follow-up to the camera tone curve change (#499): a smart preview keeps the look the fit
+/// gave it, so one written by an older fit is rebuilt when its original is online, kept while the
+/// original is offline, and not rebuilt again once current. Only raws that take the per-file
+/// camera look go stale (a PNG's proxy never does), and the opening scan runs once per fit version.
+#[test]
+fn smart_previews_from_an_older_look_fit_are_refreshed() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let src = temp_dir("smartlook-src");
+    let lib = temp_dir("smartlook-lib");
+    write_png(&src.join("a.png"), 3);
+    write_png(&src.join("b.png"), 9);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy(), src.join("b.png").to_string_lossy()]})).unwrap();
+    let find = |s: &Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().id;
+    let (id, png) = (find(&s, "a.png"), find(&s, "b.png"));
+    // `a` stands for a raw that takes the per-file camera look (the test loader decodes its pixels)
+    let mut raw = (**s.catalog.photo(id).unwrap()).clone();
+    raw.format = "ARW".into();
+    raw.kind = lightcraft_catalog::MediaKind::Raw;
+    s.catalog.apply(lightcraft_catalog::Op::RemovePhoto { id }).unwrap();
+    s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(raw) }).unwrap();
+    assert!(s.catalog.photo(id).unwrap().relative_wb() && !s.catalog.photo(png).unwrap().relative_wb());
+    s.execute("library.select", &json!({"ids": [id.0, png.0], "active": id.0})).unwrap();
+    let dir = s.media.smart_dir.clone().unwrap();
+    let file = dir.join(crate::smart::file_name(s.catalog.photo(id).unwrap()));
+    let png_file = dir.join(crate::smart::file_name(s.catalog.photo(png).unwrap()));
+    let (old, new) = (test_tone(1.5), test_tone(3.5));
+    let calls = std::sync::Arc::new(AtomicUsize::new(0));
+    let plain = s.media.file_loader.clone().unwrap();
+    s.media.file_loader = Some(look_loader(plain.clone(), old, calls.clone()));
+    let r = s.execute("library.smartPreviews", &json!({})).unwrap();
+    assert_eq!((r["built"].as_u64(), r["refreshed"].as_u64()), (Some(2), Some(0)), "{r}");
+    assert_eq!(smart_header(&file)["look_version"], json!(crate::camera_preview::LOOK_VERSION), "the writer stamps the fit version");
+    assert!(!crate::smart::is_stale(&file));
+
+    // current header: kept as it is, the original is not even read
+    let before = std::fs::read(&file).unwrap();
+    calls.store(0, Ordering::SeqCst);
+    s.media.file_loader = Some(look_loader(plain.clone(), new, calls.clone()));
+    let r = s.execute("library.smartPreviews", &json!({})).unwrap();
+    assert_eq!((r["built"].as_u64(), r["refreshed"].as_u64()), (Some(2), Some(0)), "{r}");
+    assert!(std::fs::read(&file).unwrap() == before, "a current proxy is not rebuilt");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    // old headers (no field), originals offline: kept unchanged, and still marked stale
+    for f in [&file, &png_file] {
+        edit_smart_header(f, |h| {
+            h.as_object_mut().unwrap().remove("look_version");
+        });
+    }
+    assert!(crate::smart::is_stale(&file), "no field = version 0");
+    let old_bytes = std::fs::read(&file).unwrap();
+    let png_bytes = std::fs::read(&png_file).unwrap();
+    std::fs::rename(&src, src.with_extension("offline")).unwrap();
+    s.media.forget(id);
+    s.media.forget(png);
+    let r = s.execute("library.smartPreviews", &json!({})).unwrap();
+    assert_eq!((r["built"].as_u64(), r["refreshed"].as_u64(), r["staleKept"].as_u64()), (Some(2), Some(0), Some(1)), "{r}");
+    assert!(r["failed"].as_array().unwrap().is_empty(), "{r}");
+    assert!(std::fs::read(&file).unwrap() == old_bytes, "offline: the stored preview and curve are untouched");
+    assert!(crate::smart::is_stale(&file), "and it stays marked for the next time");
+    assert_eq!(crate::smart::decode(&old_bytes).unwrap().1, Some(old), "the old look is still there");
+    // ... and the opening refresh keeps it too, then marks the folder checked
+    assert!(!crate::smart::look_checked(&dir));
+    crate::cmd::previews::refresh_stale_smart_previews(&mut s).unwrap().join().unwrap();
+    assert!(std::fs::read(&file).unwrap() == old_bytes);
+    assert!(crate::smart::look_checked(&dir));
+
+    // the original comes back: the scan has run at this version, so the next opening leaves it;
+    // Build Smart Previews rebuilds it with the current look
+    std::fs::rename(src.with_extension("offline"), &src).unwrap();
+    calls.store(0, Ordering::SeqCst);
+    assert!(crate::cmd::previews::refresh_stale_smart_previews(&mut s).is_none(), "checked once per version");
+    assert!(std::fs::read(&file).unwrap() == old_bytes);
+    let r = s.execute("library.smartPreviews", &json!({})).unwrap();
+    assert_eq!((r["refreshed"].as_u64(), calls.load(Ordering::SeqCst)), (Some(1), 1), "{r}");
+    assert_eq!(smart_header(&file)["look_version"], json!(crate::camera_preview::LOOK_VERSION));
+    assert_eq!(crate::smart::decode(&std::fs::read(&file).unwrap()).unwrap().1, Some(new), "rebuilt with the current look");
+    assert!(!crate::smart::is_stale(&file));
+    assert!(std::fs::read(&png_file).unwrap() == png_bytes, "a PNG's proxy is never rebuilt for the look");
+
+    // a folder checked at an older version (or not at all) is scanned once at the next opening
+    edit_smart_header(&file, |h| h["look_version"] = json!(0));
+    std::fs::write(dir.join("look-version"), b"0\n").unwrap();
+    assert!(!crate::smart::look_checked(&dir));
+    s.media.forget(id);
+    calls.store(0, Ordering::SeqCst);
+    crate::cmd::previews::refresh_stale_smart_previews(&mut s).unwrap().join().unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "only the raw's original is read");
+    assert!(!crate::smart::is_stale(&file));
+    assert!(std::fs::read(&png_file).unwrap() == png_bytes);
+    assert!(crate::smart::look_checked(&dir));
+    // once only
+    let rebuilt = std::fs::read(&file).unwrap();
+    assert!(crate::cmd::previews::refresh_stale_smart_previews(&mut s).is_none());
+    let r = s.execute("library.smartPreviews", &json!({})).unwrap();
+    assert_eq!((r["refreshed"].as_u64(), calls.load(Ordering::SeqCst)), (Some(0), 1), "{r}");
+    assert!(std::fs::read(&file).unwrap() == rebuilt);
+
+    // Build Smart Previews refreshes a stale one the same way
+    edit_smart_header(&file, |h| h["look_version"] = json!(0));
+    s.media.file_loader = Some(plain);
+    let r = s.execute("library.smartPreviews", &json!({})).unwrap();
+    assert_eq!(r["refreshed"], 1, "{r}");
+    assert_eq!(crate::smart::decode(&std::fs::read(&file).unwrap()).unwrap().1, None, "this fit gives no curve: none is kept");
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// The look marker: missing, damaged or older than this build's fit version counts as unchecked.
+#[test]
+fn smart_preview_look_marker_is_read_safely() {
+    let dir = temp_dir("smartlook-marker");
+    assert!(!crate::smart::look_checked(&dir), "no marker");
+    let cur = crate::camera_preview::LOOK_VERSION;
+    for (text, checked) in [
+        (String::new(), false),
+        ("banana".into(), false),
+        ("-1".into(), false),
+        (format!("{}", cur.saturating_sub(1)), false),
+        ("9".repeat(200), false),
+        (format!("{cur}\n"), true),
+        (format!(" {}\n", cur + 1), true),
+    ] {
+        std::fs::write(dir.join("look-version"), &text).unwrap();
+        assert_eq!(crate::smart::look_checked(&dir), checked, "{text:?}");
+    }
+    std::fs::remove_file(dir.join("look-version")).unwrap();
+    crate::smart::mark_look_checked(&dir).unwrap();
+    assert!(crate::smart::look_checked(&dir));
+    assert!(crate::smart::mark_look_checked(&dir.join("missing")).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A hostile or damaged `look_version` never panics: anything that is not a non-negative integer
+/// counts as 0 (rebuilt when the original is online); a version from a newer build is left alone.
+#[test]
+fn malformed_smart_preview_look_versions_are_handled() {
+    let dir = temp_dir("smartlook-bad");
+    let img = lightcraft_scenes::demo_library()[0].render(32, 20);
+    let file = dir.join("a.lcsp");
+    std::fs::write(&file, crate::smart::encode(&img, None).unwrap()).unwrap();
+    let cur = u64::from(crate::camera_preview::LOOK_VERSION);
+    for bad in [json!("1"), json!(-1), json!(1.5), json!(null), json!([]), json!({}), json!(true), json!(1e30), json!(-0.0)] {
+        let shown = bad.to_string();
+        edit_smart_header(&file, |h| h["look_version"] = bad);
+        assert!(crate::smart::is_valid(&file), "{shown}");
+        assert!(crate::smart::is_stale(&file), "{shown} counts as version 0");
+        assert!(crate::smart::decode(&std::fs::read(&file).unwrap()).is_ok(), "{shown}");
+    }
+    for fine in [json!(cur), json!(cur + 1), json!(u64::MAX)] {
+        let shown = fine.to_string();
+        edit_smart_header(&file, |h| h["look_version"] = fine);
+        assert!(!crate::smart::is_stale(&file), "{shown}");
+    }
+    // not a header at all, or missing
+    assert!(!crate::smart::is_stale(&dir.join("missing.lcsp")));
+    std::fs::write(&file, b"LCSP1\n{not json\n\xFF\xD8").unwrap();
+    assert!(!crate::smart::is_stale(&file));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

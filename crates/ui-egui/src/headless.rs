@@ -1787,6 +1787,8 @@ mod tests {
         assert!(h.app.export.is_some(), "running in the background");
         let running = h.request("ui.inspect", json!({}), t);
         assert_eq!(running["result"]["export"]["running"]["total"], 3, "{}", running["result"]["export"]);
+        // …and as a row in the activity stack (issue #345)
+        assert_eq!(running["result"]["activity"][0]["kind"], "export", "{}", running["result"]["activity"]);
         let t0 = Instant::now();
         while h.app.export.is_some() && t0.elapsed() < Duration::from_secs(60) {
             h.step();
@@ -1795,7 +1797,9 @@ mod tests {
         let w = written.lock().unwrap().clone();
         assert_eq!(w.len(), 3, "{w:?}");
         assert!(w.iter().all(|p| p.starts_with("/lc-test-out/")));
-        let last = h.request("ui.inspect", json!({}), t)["result"]["export"]["last"].clone();
+        let after = h.request("ui.inspect", json!({}), t)["result"].clone();
+        assert_eq!(after["activity"], json!([]), "the row is gone");
+        let last = after["export"]["last"].clone();
         assert_eq!(last["files"].as_array().map(Vec::len), Some(3), "{last}");
         assert!(last["files"][0]["width"].as_u64().is_some_and(|w| w <= 64));
     }
@@ -2434,9 +2438,14 @@ mod tests {
         assert!(!h.app.scan.as_ref().unwrap().copy, "the running scan keeps its options");
         let r = h.request("ui.inspect", json!({}), t);
         assert!(r["result"]["scan"].is_object(), "{r}");
-        let r = h.request("ui.clickWidget", json!({"id": "button:scanCancel"}), t);
+        // Cancel is the ✕ of the scan's row in the activity stack (shown once it is half a second old)
+        let id = h.app.session.activity.list().first().map(|t| t.id).expect("a scan row");
+        let cross = format!("activity:cancel:{id}");
+        assert!(h.step_until(t, |h| h.app.widgets.iter().any(|(w, _)| *w == cross)), "the row shows");
+        let r = h.request("ui.clickWidget", json!({"id": cross}), t);
         assert_eq!(r["ok"], true, "{r}");
-        assert!(h.app.scan.is_none(), "Cancel closes the scan at once");
+        h.step();
+        assert!(h.app.scan.is_none(), "✕ closes the scan at once");
         gate.store(true, std::sync::atomic::Ordering::Relaxed);
         h.settle(SETTLE);
         assert!(h.app.ui.dialog.is_none(), "a cancelled scan opens no review");

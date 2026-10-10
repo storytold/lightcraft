@@ -890,6 +890,8 @@ pub(crate) struct State {
     pub generation: u64,
     /// Photos made since the session started.
     made: u64,
+    /// AI Denoise's row in the activity stack, while a photo is being made or waits its turn.
+    task: Option<crate::activity::TaskGuard>,
 }
 
 impl Default for State {
@@ -909,6 +911,7 @@ impl Default for State {
             failed: HashMap::new(),
             generation: 0,
             made: 0,
+            task: None,
         }
     }
 }
@@ -1352,6 +1355,31 @@ impl Session {
     /// Is a picture being made, or waiting for its turn with a model to make it? (Headless runs wait for this.)
     pub fn denoise_busy(&self) -> bool {
         self.denoise.running.is_some() || (!self.denoise.queue.is_empty() && self.denoise.active.is_some())
+    }
+
+    /// Keep AI Denoise's row in the activity stack up to date (each `denoise.pump`): there while a photo is being made or
+    /// waits its turn, with the running photo's tiles and its file name; gone when the queue is idle. It has no ✕: what is
+    /// made follows the photos' Denoise amounts and Settings ▸ AI Denoise.
+    pub(crate) fn denoise_track(&mut self) {
+        if !self.denoise_busy() {
+            self.denoise.task = None;
+            return;
+        }
+        let task = self.denoise.task.get_or_insert_with(|| {
+            let t = self.activity.start("denoise", "AI Denoise", crate::activity::Cancel::No);
+            t.set_unit(crate::activity::Unit::Percent);
+            t
+        });
+        match &self.denoise.running {
+            Some(r) => {
+                task.progress(r.progress.done.load(Ordering::Relaxed) as u64, r.progress.total.load(Ordering::Relaxed) as u64);
+                task.detail(self.catalog.photo(r.photo).map_or("", |p| p.file_name.as_str()));
+            }
+            None => {
+                task.progress(0, 0);
+                task.detail("");
+            }
+        }
     }
 
     /// Seconds the running job has been going, and its progress.

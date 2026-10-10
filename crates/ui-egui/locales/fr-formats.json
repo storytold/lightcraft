@@ -222,5 +222,12 @@
   "Exported {n} keyword{}": "Mots-clés exportés : {n}{:.0}",
   " — Capture One won't import a list with ; , < or > in a keyword: {names}": " — Capture One n’importe pas une liste dont un mot-clé contient ; , < ou > : {names}",
   " — left out, as a keyword list can't hold them: {names}": " — omis, car une liste de mots-clés ne peut pas les contenir : {names}",
+  "{done} of {total}": "{done} sur {total}",
+  "{done} of {total} MB": "{done} sur {total} Mo",
+  "{pct} %": "{pct} %",
+  "+{n} more": "+{n} autres",
+  "1 task is still running: {names}. Quitting stops it.": "1 tâche est encore en cours : {names}. Quitter l'arrête.",
+  "{n} tasks are still running: {names}. Quitting stops them.": "{n} tâches sont encore en cours : {names}. Quitter les arrête.",
+  "{what} merge cancelled": "Fusion {what} annulée",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Photos locales ignorées : {n}{0:.0} — les albums contiennent des photos de la bibliothèque (ajoutez-les d’abord à Mes photos)"
 }

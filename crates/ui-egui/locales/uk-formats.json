@@ -222,5 +222,12 @@
   "Exported {n} keyword{}": "Експортовано ключових слів: {n}{:.0}",
   " — Capture One won't import a list with ; , < or > in a keyword: {names}": " — Capture One не імпортує список, у якому ключове слово містить ; , < або >: {names}",
   " — left out, as a keyword list can't hold them: {names}": " — пропущено, бо список ключових слів не може їх містити: {names}",
+  "{done} of {total}": "{done} з {total}",
+  "{done} of {total} MB": "{done} з {total} МБ",
+  "{pct} %": "{pct} %",
+  "+{n} more": "+{n} ще",
+  "1 task is still running: {names}. Quitting stops it.": "1 завдання ще виконується: {names}. Вихід зупинить його.",
+  "{n} tasks are still running: {names}. Quitting stops them.": "Ще виконуються завдання ({n}): {names}. Вихід зупинить їх.",
+  "{what} merge cancelled": "Об’єднання {what} скасовано",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Пропущено локальних фото: {n}{0:.0} — в альбомах лише фото з бібліотеки (спершу додайте їх до моїх фото)"
 }

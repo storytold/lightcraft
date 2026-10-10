@@ -248,7 +248,7 @@ Turning recognition on starts a scan of the whole library, once, in the backgrou
   the running ones, so a worker that finishes has its next photo at once.
 - **Earlier scan speed (a different runner).** A mixed raw and JPEG library of 184 photos (the raws read through their embedded previews, 73 photos searched
   for faces) took about 29 seconds on that machine at full pace: roughly 6 photos a second, so the first scan of 10,000 photos
-  is a matter of half an hour; after that only new photos are looked at. Settings ▸ Faces shows how many are left, with a progress bar. After you accept a model's terms
+  is a matter of half an hour; after that only new photos are looked at. Settings ▸ Faces shows how many are left, with a progress bar, and the activity stack shows "Finding faces" meanwhile. After you accept a model's terms
   you are returned to that tab, so the download and then the scan can be watched there; the main window has no status bar.
 - Opening another library starts a fresh scan state; nothing learned about one library is used in another.
 
