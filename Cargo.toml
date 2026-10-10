@@ -31,6 +31,10 @@ dac-catalog = { path = "crates/catalog" }
 dac-preview = { path = "crates/preview" }
 dac-merge = { path = "crates/merge" }
 dac-engine = { path = "crates/engine" }
+dac-engine-core = { path = "crates/engine-core" }
+dac-engine-library = { path = "crates/engine-library" }
+dac-engine-develop = { path = "crates/engine-develop" }
+dac-engine-export = { path = "crates/engine-export" }
 dac-ui-egui = { path = "crates/ui-egui" }
 dac-mcp = { path = "crates/mcp" }
 dac-fetch = { path = "crates/fetch" }

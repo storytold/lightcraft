@@ -1,0 +1,19 @@
+[package]
+name = "dac-engine-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Engine core: errors, undo entries, memory budget, availability, guard, logging (L4)"
+
+[lints]
+workspace = true
+
+[dependencies]
+dac-brand = { workspace = true }
+dac-catalog = { workspace = true }
+dac-develop = { workspace = true }
+dac-gpu = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
