@@ -645,4 +645,6 @@ mod tests_hdr;
 #[cfg(test)]
 mod tests_local;
 #[cfg(test)]
+mod tests_tone;
+#[cfg(test)]
 mod tests_window;

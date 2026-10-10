@@ -5,7 +5,10 @@ Every photo's develop settings record the **rendering process** they are interpr
 this the process version. It lets the look of LightCraft improve (a new default tone curve, issue #146;
 stronger Light sliders, issue #196) without changing a single photo someone has already edited.
 
-Today there is one process, **V1**: LightCraft's rendering from before process versions existed.
+| Process | What it changes |
+|---|---|
+| **V1** | LightCraft's rendering from before process versions existed. Frozen. |
+| **V2** (the latest) | Highlights and Shadows keep fine detail (issue #632): their base layer (`local::tone_base`) is the edge-aware filter of a separable median of log luminance (radius 0.15 % of the long edge, at most 24 px, `local::BASE_DETAIL`) instead of log luminance itself, so twigs, lines and texture take their surroundings' shift and keep their contrast; region edges stay sharp. CPU (`local::prepare`) and GPU prepare branch on `local::tone_base_detail` (0 = no median under V1); the base plane is cached per process (`local::BaseKey`). Renders without Highlights or Shadows (global or local) are the same as V1's. Tone map unchanged. |
 
 ## The rule
 
