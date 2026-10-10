@@ -192,3 +192,59 @@ fn saved_locations_filter_and_tracks() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// P6.1 budget probe (`cargo test --release -p dac-ui-egui map_50k -- --ignored --nocapture`):
+/// 50,000 geotagged photos spread over Europe; prints the clustering time per zoom step and the
+/// steady-state frame time of the Map view (pins cached) at a few zooms. Numbers go in docs/perf.md.
+#[test]
+#[ignore = "perf probe"]
+fn map_50k_pins_frame_time() {
+    use dac_catalog::{Op, Photo, Source};
+    use std::time::Instant;
+    let port = fake_tiles();
+    let mut h = demo();
+    for i in 0..50_000u64 {
+        let id = h.app.session.catalog.alloc_photo_id();
+        let mut p = Photo::new(id, Source::File { path: format!("/x/{i}.jpg") }, &format!("{i}.jpg"), "JPEG", 6000, 4000, "2026-01-01T00:00:00");
+        // deterministic scatter over 36..60 N, -10..30 E
+        let a = (i.wrapping_mul(2_654_435_761) % 10_000) as f64 / 10_000.0;
+        let b = (i.wrapping_mul(40_503) % 10_007) as f64 / 10_007.0;
+        p.meta.gps = Some((36.0 + 24.0 * a, -10.0 + 40.0 * b));
+        h.app.session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    run(&mut h, "module.map", json!({}));
+    run(&mut h, "map.addServer", json!({"name": "Fake", "url": format!("http://127.0.0.1:{port}/{{z}}/{{x}}/{{y}}.png"), "attribution": "© Fake"}));
+    for zoom in [3.0, 5.0, 8.0, 12.0] {
+        run(&mut h, "map.view", json!({"lat": 48.0, "lon": 10.0, "zoom": zoom}));
+        h.settle(SETTLE);
+        h.app.map.pins_cache = None;
+        let t = Instant::now();
+        let pins = h.app.map.pins(&mut h.app.session);
+        let cluster_ms = t.elapsed().as_secs_f64() * 1e3;
+        h.step();
+        let frames = 30;
+        let t = Instant::now();
+        for _ in 0..frames {
+            h.step();
+        }
+        let frame_ms = t.elapsed().as_secs_f64() * 1e3 / f64::from(frames);
+        let t = Instant::now();
+        for _ in 0..frames {
+            drop(h.app.map.pins(&mut h.app.session));
+        }
+        let cached_us = t.elapsed().as_secs_f64() * 1e6 / f64::from(frames);
+        println!(
+            "map 50k zoom {zoom}: {} pins, {} drawn, cluster {cluster_ms:.1} ms, cached pins {cached_us:.1} µs, frame {frame_ms:.2} ms",
+            pins.len(),
+            h.app.map.drawn.len()
+        );
+    }
+    // the same frame loop outside the Map (what the rest of the shell costs with 50k photos)
+    run(&mut h, "module.library", json!({}));
+    h.settle(SETTLE);
+    let t = Instant::now();
+    for _ in 0..30 {
+        h.step();
+    }
+    println!("library 50k: frame {:.2} ms", t.elapsed().as_secs_f64() * 1e3 / 30.0);
+}

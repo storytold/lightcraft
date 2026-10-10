@@ -384,25 +384,53 @@ impl Plan {
             }
             done += 1;
         }
-        for job in self.jobs {
+        // renders run a few at a time (P6.1: one at a time left most cores idle between the decode's
+        // serial parts); uploads stay in order on this thread, as the service needs `&mut`
+        let width = render_width();
+        let mut jobs = self.jobs.into_iter().peekable();
+        while jobs.peek().is_some() {
             if !progress(done, total) {
                 out.cancelled = true;
                 return out;
             }
-            let r = job.prepared.run().and_then(|x| {
-                let up =
-                    Upload { photo: job.photo, file_name: &x.file_name, bytes: &x.bytes, sidecars: &x.sidecars, previous: job.previous.as_deref() };
-                svc.publish(&up).map_err(|e| e.to_string())
-            });
-            match r {
-                Ok(p) => out.published.push((job.photo, p.remote_id, job.fingerprint)),
-                Err(e) => out.failed.push((job.photo, e)),
+            let (batch, prepared): (Vec<_>, Vec<_>) = jobs.by_ref().take(width).map(|j| ((j.photo, j.previous, j.fingerprint), j.prepared)).unzip();
+            let rendered = render_batch(prepared);
+            for ((photo, previous, fingerprint), r) in batch.into_iter().zip(rendered) {
+                if !progress(done, total) {
+                    out.cancelled = true;
+                    return out;
+                }
+                let r = r.and_then(|x| {
+                    let up = Upload { photo, file_name: &x.file_name, bytes: &x.bytes, sidecars: &x.sidecars, previous: previous.as_deref() };
+                    svc.publish(&up).map_err(|e| e.to_string())
+                });
+                match r {
+                    Ok(p) => out.published.push((photo, p.remote_id, fingerprint)),
+                    Err(e) => out.failed.push((photo, e)),
+                }
+                done += 1;
             }
-            done += 1;
         }
         progress(done, total);
         out
     }
+}
+
+/// How many publish renders run at once: a quarter of the cores, 1..=4 (each 24 MP render holds
+/// a few hundred MB, and a render is already multi-threaded inside).
+pub(crate) fn render_width() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| n.get() / 4).clamp(1, 4)
+}
+
+/// Render `batch` concurrently, results in input order; a render thread that dies is that photo's error.
+fn render_batch(batch: Vec<crate::export::PreparedExport>) -> Vec<std::result::Result<crate::export::Exported, String>> {
+    if batch.len() <= 1 || cfg!(target_arch = "wasm32") {
+        return batch.into_iter().map(|p| p.run()).collect();
+    }
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = batch.into_iter().map(|p| scope.spawn(move || p.run())).collect();
+        handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("the render stopped unexpectedly".to_string()))).collect()
+    })
 }
 
 /// Record a run's links (app bookkeeping, not an undo step).

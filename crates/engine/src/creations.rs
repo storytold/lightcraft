@@ -114,9 +114,23 @@ pub fn prepare_jobs(
 
 /// Runs the jobs from [`prepare_jobs`].
 pub fn run_jobs(jobs: Vec<(String, RenderJob)>, infos: HashMap<String, PhotoInfo>) -> std::result::Result<PreparedPhotos, String> {
+    // a few renders at once (P6.1: a contact sheet's 20 photos one by one took 8 s)
+    let width = crate::cmd::publish::render_width();
     let mut images = HashMap::with_capacity(jobs.len());
-    for (key, job) in jobs {
-        images.insert(key, job.run().rendered?.image);
+    let mut jobs = jobs.into_iter().peekable();
+    while jobs.peek().is_some() {
+        let batch: Vec<(String, RenderJob)> = jobs.by_ref().take(width).collect();
+        let done: Vec<(String, std::result::Result<Rgba8, String>)> = if batch.len() <= 1 || cfg!(target_arch = "wasm32") {
+            batch.into_iter().map(|(k, j)| (k, j.run().rendered.map(|r| r.image))).collect()
+        } else {
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = batch.into_iter().map(|(k, j)| (k, scope.spawn(move || j.run().rendered.map(|r| r.image)))).collect();
+                handles.into_iter().map(|(k, h)| (k, h.join().unwrap_or_else(|_| Err("the render stopped unexpectedly".to_string())))).collect()
+            })
+        };
+        for (key, image) in done {
+            images.insert(key, image?);
+        }
     }
     Ok(PreparedPhotos { images, infos })
 }
