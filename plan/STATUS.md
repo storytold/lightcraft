@@ -19,8 +19,8 @@ All tracks 1.1–1.8 are merged on main with `cargo xtask ci` green; exit-gate d
 - 1.4: Folders lists only folders with photos, no Windows free space; grid View Options panel.
 - 1.5: lazy photo loading / grid paging (1M photos 2.3 GB); migration progress; unfiltered sort at 500k borderline.
 - 1.6: tile Compare and Reference views; measure slider drags at ≥1:1 (`profile_slider_drag`); run corpus-raw 1:1 test.
-- 1.7/1.8: FileStore credentials in the UI (macOS/Windows); Immich source inside the Import dialog; link-only file kind
-  after original download; translations for new strings; `immich.connect` off the UI thread.
+- 1.7/1.8: translations for the new Immich/key-storage strings; native macOS/Windows keychains (FFI helper crate); a
+  Library menu (Immich commands sit in File ▸ Immich until it exists).
 
 ## Phase 0 checklist
 

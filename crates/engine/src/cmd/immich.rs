@@ -792,7 +792,8 @@ fn adopt_original(s: &mut Session, id: PhotoId, account: &str, path: &Path) -> R
 /// The folders of library photos (distinct parents), at most `cap`.
 fn photo_folders(s: &Session, cap: usize) -> Vec<String> {
     let mut set = BTreeSet::new();
-    for p in s.catalog.photos().filter(|p| p.in_library()) {
+    // (link-only previews live in the app's cache, not in a library folder)
+    for p in s.catalog.photos().filter(|p| p.in_library() && p.preview_only.as_deref() != Some(LINK_ONLY)) {
         if let Source::File { path } = &p.source
             && let Some(parent) = Path::new(path).parent()
         {
