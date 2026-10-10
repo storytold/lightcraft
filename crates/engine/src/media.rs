@@ -62,7 +62,7 @@ impl SettingsHashes {
 }
 
 /// Bump when the pipeline's output changes, to invalidate cached thumbnails.
-pub const RENDER_CACHE_VERSION: u64 = 22;
+pub const RENDER_CACHE_VERSION: u64 = 23;
 
 /// Thumbnails render at one of these long edges (so window/cell size changes reuse the cache).
 pub const THUMB_SIZES: [usize; 4] = [128, 256, 384, 512];
@@ -167,16 +167,18 @@ impl Twin {
 pub struct DecodedSource {
     pub image: Arc<Rgb32f>,
     pub info: Option<SourceInfo>,
-    /// A smart preview's stored camera tone curve: the one decoder fact its pixels need that the
-    /// catalog's header facts lack (used when `info` is `None`).
+    /// A smart preview's stored camera tone curve and whether its source is Apple ProRAW: the
+    /// decoder facts its pixels need that the catalog's header facts lack (used when `info` is
+    /// `None`).
     pub camera_tone: Option<lightcraft_pipeline::tone::CameraTone>,
+    pub proraw: bool,
     /// The same picture developed from the AI-denoised mosaic, when the photo has one cached.
     pub denoised: Option<Arc<Twin>>,
 }
 
 impl DecodedSource {
     pub fn new(image: Arc<Rgb32f>, info: Option<SourceInfo>) -> Self {
-        DecodedSource { image, info, camera_tone: None, denoised: None }
+        DecodedSource { image, info, camera_tone: None, proraw: false, denoised: None }
     }
 
     /// The picture to develop for a Denoise `amount` (0 to 1, see [`DevelopSettings::denoise_amount`]): the plain one,
@@ -216,7 +218,11 @@ impl DecodedSource {
     /// What to render these pixels against: the decoder's facts, else `header` (the catalog's)
     /// with any stored camera tone curve.
     pub fn info_or(&self, header: SourceInfo) -> SourceInfo {
-        self.info.clone().unwrap_or_else(|| SourceInfo { camera_tone: self.camera_tone.or(header.camera_tone), ..header })
+        self.info.clone().unwrap_or_else(|| SourceInfo {
+            camera_tone: self.camera_tone.or(header.camera_tone),
+            proraw: self.proraw || header.proraw,
+            ..header
+        })
     }
 }
 
@@ -276,6 +282,7 @@ impl SourceRef {
                                     image: Arc::new(image),
                                     info: Some(info),
                                     camera_tone: None,
+                                    proraw: false,
                                     denoised: twin.map(|t| Arc::new(Twin::new(Arc::new(t)))),
                                 })
                             })

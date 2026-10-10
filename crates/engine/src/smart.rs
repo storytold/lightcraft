@@ -2,8 +2,9 @@
 //! kept in the library, so photos stay editable — and exportable at proxy size — while their
 //! originals are offline (an unplugged drive). The proxy is the scene-linear source scaled into
 //! 0..1 by a stored factor, sRGB-encoded and saved as a JPEG after a one-line header. The header
-//! also keeps the decoder's file-local camera tone curve (Sony ARW camera look), which is applied
-//! at render time and is not baked into the pixels.
+//! also keeps the decoder's file-local camera tone curve (Sony ARW camera look, a DNG profile tone
+//! curve), which is applied at render time and is not baked into the pixels, and whether the
+//! source is Apple ProRAW (its tone renders as Lightroom's, `lightcraft_pipeline::finish::lr_tone`).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -21,11 +22,13 @@ pub fn file_name(p: &Photo) -> String {
     format!("{:032x}.lcsp", h.0)
 }
 
-/// The most header [`is_valid`] reads (the JSON line before the JPEG).
-const HEADER_MAX: u64 = 4096;
+/// The most header [`is_valid`] reads (the JSON line before the JPEG; Apple ProRAW's camera tone
+/// curve alone takes about 4 KB).
+const HEADER_MAX: u64 = 16384;
 
-/// Encode a source image (and the decoder's camera tone curve, if any) as a smart preview.
-pub fn encode(img: &Rgb32f, tone: Option<&CameraTone>) -> Result<Vec<u8>, String> {
+/// Encode a source image (and the decoder's camera tone curve, if any, and whether the source is
+/// Apple ProRAW) as a smart preview.
+pub fn encode(img: &Rgb32f, tone: Option<&CameraTone>, proraw: bool) -> Result<Vec<u8>, String> {
     // scale so all but the brightest 0.05 % fit into 0..1
     let mut lum: Vec<f32> = img.data.iter().map(|c| c[0].max(c[1]).max(c[2])).filter(|v| v.is_finite()).collect();
     let scale = if lum.is_empty() {
@@ -57,25 +60,29 @@ pub fn encode(img: &Rgb32f, tone: Option<&CameraTone>) -> Result<Vec<u8>, String
     if let Some(t) = tone {
         head["tone"] = serde_json::to_value(t).map_err(|e| e.to_string())?;
     }
+    if proraw {
+        head["proraw"] = serde_json::Value::Bool(true);
+    }
     out.extend_from_slice(head.to_string().as_bytes());
     out.push(b'\n');
     out.extend_from_slice(&jpg);
     Ok(out)
 }
 
-/// Decode a smart preview back into a source image and its stored camera tone curve (an invalid
-/// curve is ignored, like a missing one).
-pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>), String> {
+/// Decode a smart preview back into a source image, its stored camera tone curve (an invalid
+/// curve is ignored, like a missing one) and whether its source is Apple ProRAW.
+pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>, bool), String> {
     let rest = bytes.strip_prefix(MAGIC).ok_or("not a smart preview")?;
     let nl = rest.iter().position(|b| *b == b'\n').ok_or("bad smart preview")?;
     let head: serde_json::Value = serde_json::from_slice(&rest[..nl]).map_err(|e| e.to_string())?;
     let scale = head["scale"].as_f64().unwrap_or(1.0) as f32;
     let tone = head.get("tone").and_then(|t| serde_json::from_value::<CameraTone>(t.clone()).ok());
+    let proraw = head.get("proraw").and_then(serde_json::Value::as_bool).unwrap_or(false);
     let d = lightcraft_codecs::decode(&rest[nl + 1..], Default::default()).map_err(|e| e.to_string())?;
     // the decoder undoes the sRGB encoding; the values are the source's own primaries
     let mut img = d.image;
     img.data.iter_mut().for_each(|c| *c = c.map(|v| v * scale));
-    Ok((img, tone))
+    Ok((img, tone, proraw))
 }
 
 /// Where a library keeps its smart previews.
@@ -190,7 +197,13 @@ pub fn is_valid(path: &Path) -> bool {
 /// Load the proxy at `path`.
 pub fn load(path: &Path) -> Result<crate::media::DecodedSource, String> {
     let b = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    decode(&b).map(|(image, camera_tone)| crate::media::DecodedSource { image: Arc::new(image), info: None, camera_tone, denoised: None })
+    decode(&b).map(|(image, camera_tone, proraw)| crate::media::DecodedSource {
+        image: Arc::new(image),
+        info: None,
+        camera_tone,
+        proraw,
+        denoised: None,
+    })
 }
 
 #[cfg(test)]
@@ -241,7 +254,7 @@ mod tests {
         std::fs::create_dir_all(&a).unwrap();
         std::fs::create_dir_all(&b).unwrap();
         let img = lightcraft_scenes::demo_library()[0].render(64, 40);
-        let good = encode(&img, None).unwrap();
+        let good = encode(&img, None, false).unwrap();
         std::fs::write(a.join("1.lcsp"), &good).unwrap();
         assert!(is_valid(&a.join("1.lcsp")));
         for cut in [good.len() - 1, good.len() / 2, 10, 0] {
@@ -263,15 +276,16 @@ mod tests {
         }))
         .unwrap();
         let img = lightcraft_scenes::demo_library()[0].render(64, 40);
-        let bytes = encode(&img, Some(&tone)).unwrap();
+        let bytes = encode(&img, Some(&tone), false).unwrap();
         assert_eq!(decode(&bytes).unwrap().1, Some(tone));
+        assert!(!decode(&bytes).unwrap().2, "not ProRAW unless said so");
         let dir = temp("tone");
         let path = dir.join("t.lcsp");
         std::fs::write(&path, &bytes).unwrap();
         // the longer header is still read by the validity check, and the curve by `load`
         assert!(is_valid(&path));
         let loaded = load(&path).unwrap();
-        assert_eq!(loaded.camera_tone, Some(tone));
+        assert_eq!((loaded.camera_tone, loaded.proraw), (Some(tone), false));
         let header = lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() };
         assert_eq!(loaded.info_or(header).camera_tone, Some(tone));
         // a hostile curve (reversing knots) is ignored, not trusted
@@ -283,17 +297,44 @@ mod tests {
         let mut hostile = MAGIC.to_vec();
         hostile.extend_from_slice(head.to_string().as_bytes());
         hostile.extend_from_slice(&bytes[nl..]);
-        let (pixels, tone) = decode(&hostile).unwrap();
+        let (pixels, tone, _) = decode(&hostile).unwrap();
         assert_eq!((pixels.width, tone), (img.width, None));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Apple ProRAW's tone (Lightroom's chain) needs the source known as ProRAW, and its finer
+    /// curve (128 knots, with the file's BaselineExposure and Contrast key) makes a longer header
+    /// that the validity check still reads whole.
+    #[test]
+    fn proraw_tone_travels_with_the_proxy() {
+        let knots: Vec<[f32; 2]> = (0..lightcraft_pipeline::tone::CAMERA_TONE_KNOTS)
+            .map(|i| {
+                let x = 2f32.powf(-12.0 + 12.0 * i as f32 / 127.0);
+                [x, (x.powf(0.45) * 0.987_654_3).min(0.9995)]
+            })
+            .collect();
+        let tone = CameraTone::from_knots(&knots).unwrap().per_channel().with_baseline_exposure(-0.302).with_key(Some(-4.0812));
+        let img = lightcraft_scenes::demo_library()[0].render(64, 40);
+        let bytes = encode(&img, Some(&tone), true).unwrap();
+        let header = bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
+        assert!(header > 3000, "a long header ({header} bytes)");
+        let dir = temp("proraw");
+        let path = dir.join("p.lcsp");
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(is_valid(&path));
+        let loaded = load(&path).unwrap();
+        assert_eq!((loaded.camera_tone, loaded.proraw), (Some(tone), true));
+        let info = loaded.info_or(lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() });
+        assert!(info.proraw && lightcraft_pipeline::finish::lr_tone(&info));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn roundtrip_keeps_the_picture() {
         let img = lightcraft_scenes::demo_library()[0].render(160, 100);
-        let (back, tone) = decode(&encode(&img, None).unwrap()).unwrap();
+        let (back, tone, proraw) = decode(&encode(&img, None, false).unwrap()).unwrap();
         assert_eq!((back.width, back.height), (img.width, img.height));
-        assert!(tone.is_none());
+        assert!(tone.is_none() && !proraw);
         let mut err = 0.0f64;
         for (a, b) in img.data.iter().zip(&back.data) {
             for k in 0..3 {

@@ -87,6 +87,10 @@ pub struct SourceInfo {
     /// The raw's own local tone mapping (DNG `ProfileGainTableMap`), rendered only when the
     /// photo's Profile option asks for it ([`local_tone`]).
     pub local_tone: Option<Arc<local_tone::LocalTone>>,
+    /// Apple ProRAW (a DNG from an Apple camera with a `ProfileToneCurve`): the one camera
+    /// Lightroom's tone operators were measured on, so the only source that takes them
+    /// ([`finish::lr_tone`]).
+    pub proraw: bool,
 }
 
 impl Default for SourceInfo {
@@ -101,6 +105,7 @@ impl Default for SourceInfo {
             camera_tone: None,
             mattes: None,
             local_tone: None,
+            proraw: false,
         }
     }
 }
@@ -364,10 +369,19 @@ pub struct Plan<'a> {
     pub keep: Option<PixelWindow>,
     /// The source's segmentation mattes ([`SourceInfo::mattes`]).
     pub mattes: Option<Arc<masks::Mattes>>,
+    /// Tone sliders as Lightroom applies them on Apple ProRAW ([`finish::lr_tone`]).
+    pub lr_tone: bool,
+    /// The whole frame's neighbourhood for Lightroom's Highlights / Shadows on Apple ProRAW, at
+    /// reduced size, for a windowed render (whose pixels hold a small part of it; see
+    /// [`local::frame_context`]).
+    pub frame_context: Option<Plane>,
 }
 
 /// Long edge of the small render a windowed render estimates the whole frame's airlight from.
 const AIRLIGHT_PROXY_EDGE: usize = 384;
+/// Long edge of the small render a windowed render on Apple ProRAW reads Lightroom's Highlights /
+/// Shadows neighbourhood from ([`local::frame_context`]).
+const CONTEXT_PROXY_EDGE: usize = 512;
 
 /// Resolve `s` against `src` for `req` (see [`Plan`]).
 pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &RenderRequest) -> Plan<'a> {
@@ -390,15 +404,24 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let (full_w, full_h) = frame.fit(req.max_w, req.max_h);
     // sizes and scale are those of the whole output; a window only narrows what is drawn
     let px_per_long = frame.px_per_long(full_w);
+    let lr_tone = finish::lr_tone(info);
     let mut fixed_air = None;
+    let mut frame_context = None;
     let mut keep = None;
     let (frame, w, h) = match req.window {
         Some(win) => {
             let win = win.clamped(full_w, full_h);
+            let proxy = |edge: usize| {
+                let k = (edge as f64 / full_w.max(full_h) as f64).min(1.0);
+                (((full_w as f64 * k).round() as usize).max(1), ((full_h as f64 * k).round() as usize).max(1))
+            };
             if s.section_enabled("effects") && (s.effects.dehaze != 0.0 || s.masks.iter().any(|m| m.adjust.dehaze != 0.0)) {
-                let k = (AIRLIGHT_PROXY_EDGE as f64 / full_w.max(full_h) as f64).min(1.0);
-                let (pw, ph) = (((full_w as f64 * k).round() as usize).max(1), ((full_h as f64 * k).round() as usize).max(1));
+                let (pw, ph) = proxy(AIRLIGHT_PROXY_EDGE);
                 fixed_air = Some(local::frame_airlight(src, info, s, &frame, pw, ph));
+            }
+            if lr_tone && local::plane_sigmas(s, px_per_long, req.quality, true).base.is_some() {
+                let (pw, ph) = proxy(CONTEXT_PROXY_EDGE);
+                frame_context = Some(local::frame_context(src, info, s, &frame, pw, ph));
             }
             // (spots grow the rendered window; only 8-bit renders are cut back to the request)
             let work = if req.depth == OutputDepth::U8 { spots::window_for_reads(s, &frame, full_w, full_h, px_per_long, win) } else { win };
@@ -426,7 +449,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         src_long,
     ));
-    Plan { settings, frame, w, h, px_per_long, src_long, geo, lin_key, eyes, fixed_air, keep, mattes: info.mattes.clone() }
+    Plan { settings, frame, w, h, px_per_long, src_long, geo, lin_key, eyes, fixed_air, keep, mattes: info.mattes.clone(), lr_tone, frame_context }
 }
 
 /// Whether the scene-linear stage needs work only the CPU does (defringe, spot removal).
@@ -481,7 +504,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Src::Shared(a) => a,
     };
     let plan = plan(src_img, info, s, req);
-    let Plan { ref frame, w, h, px_per_long, src_long, geo, lin_key, .. } = plan;
+    let Plan { ref frame, w, h, src_long, geo, lin_key, .. } = plan;
     let s = &*plan.settings;
 
     let shared = match (&src, cache) {
@@ -510,7 +533,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Some(p) if p.key == lin_key => p,
         _ => local::Planes { key: lin_key, ..Default::default() },
     };
-    let mut prep = local::prepare(lin.clone(), s, frame, px_per_long, req.quality, &mut planes, plan.mattes.as_deref());
+    let mut prep = local::prepare(lin.clone(), &plan, req.quality, &mut planes);
     if let Some(a) = plan.fixed_air {
         prep.air = a;
     }

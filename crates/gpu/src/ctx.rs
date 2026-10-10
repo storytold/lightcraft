@@ -244,6 +244,8 @@ fn constants() -> String {
         "const TONE_MIN_EV: f32 = {LUT_MIN_EV:?};\nconst TONE_MAX_EV: f32 = {LUT_MAX_EV:?};\nconst TONE_N: u32 = {LUT_N}u;\nconst CHROMA_N: u32 = {CHROMA_N}u;\n"
     );
     s += &format!("const TONE_MIN_GAIN: f32 = {:?};\n", 2f32.powf(LUT_MIN_EV));
+    use lightcraft_pipeline::tone::{LR_KNOT_STEP, LR_KNOT0, LR_KNOTS};
+    s += &format!("const LR_K0: f32 = {LR_KNOT0:?};\nconst LR_KSTEP: f32 = {LR_KNOT_STEP:?};\nconst LR_KN: u32 = {LR_KNOTS}u;\n");
     let b = lightcraft_pipeline::geometry::BLANK;
     s += &format!("const BLANK_R: f32 = {:?};\nconst BLANK_G: f32 = {:?};\nconst BLANK_B: f32 = {:?};\n", b[0], b[1], b[2]);
     s += &format!(
@@ -252,6 +254,11 @@ fn constants() -> String {
     );
     s += &format!("const POINT_WORDS: u32 = {}u;\n", lightcraft_pipeline::colorops::POINT_WORDS);
     s += &format!("const EYE_WORDS: u32 = {}u;\n", lightcraft_pipeline::redeye::EYE_WORDS);
+    use lightcraft_pipeline::colorops::PROPHOTO_LUMA;
+    s += &format!(
+        "const PP_LUMA_R: f32 = {:?};\nconst PP_LUMA_G: f32 = {:?};\nconst PP_LUMA_B: f32 = {:?};\n",
+        PROPHOTO_LUMA[0], PROPHOTO_LUMA[1], PROPHOTO_LUMA[2]
+    );
     use lightcraft_pipeline::masks::{AUTO_TOL_CHROMA, AUTO_TOL_EV};
     s += &format!("const AUTO_TOL_EV: f32 = {AUTO_TOL_EV:?};\nconst AUTO_TOL_CHROMA: f32 = {AUTO_TOL_CHROMA:?};\n");
     s += &format!("const SHADOW_TINT_K: f32 = {:?};\n", lightcraft_pipeline::colorops::SHADOW_TINT);

@@ -169,8 +169,14 @@ pub struct FinishParams {
     pub out_trc: OutputTrc,
     /// Soft proofing (CPU only; the GPU path declines proof renders).
     pub proof: Option<crate::output::ProofParams>,
+    /// Global Highlights / Shadows (−1..1) of the scene-linear local tone step; 0 when they run
+    /// as Lightroom applies them instead (`lr_hs`).
     pub hl: f32,
     pub sh: f32,
+    /// Highlights / Shadows after the tone map, as Lightroom applies them on Apple ProRAW
+    /// ([`crate::tone::LrHs`], [`lr_tone`]); the base plane is then the neighbourhood blur
+    /// ([`crate::tone::LR_CONTEXT_SIGMA`]).
+    pub lr_hs: Option<crate::tone::LrHs>,
     pub clar: f32,
     pub tex: f32,
     pub dehaze: f32,
@@ -220,16 +226,23 @@ impl FinishParams {
             ((s.grain.amount / 100.0) as f32 * 0.13, cell.max(0.6), (s.grain.roughness / 100.0) as f32, s.grain.seed)
         });
         let calibration = s.section_enabled("calibration");
+        let lr_tone = lr_tone(info);
+        let lr_hs = if lr_tone { crate::tone::LrHs::new(s.light.highlights, s.light.shadows) } else { None };
+        let tone = if let Some(curve) = info.camera_tone.as_ref().filter(|_| info.raw) {
+            // a per-channel curve outside Lightroom's measured camera renders as the other
+            // cameras' curves do (on luminance, the sliders after it)
+            let curve = if lr_tone { *curve } else { curve.on_luminance() };
+            // Highlights / Shadows run before Contrast, as in Lightroom
+            ToneMap::camera_split(&curve, s.light.exposure, s.light.contrast, s.light.whites, s.light.blacks, lr_hs.is_some())
+        } else if info.raw {
+            ToneMap::new(s.light.contrast, s.light.whites, s.light.blacks)
+        } else {
+            ToneMap::display(s.light.contrast, s.light.whites, s.light.blacks)
+        };
         FinishParams {
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
-            tone: if let Some(curve) = info.camera_tone.as_ref().filter(|_| info.raw) {
-                ToneMap::camera(curve, s.light.contrast, s.light.whites, s.light.blacks)
-            } else if info.raw {
-                ToneMap::new(s.light.contrast, s.light.whites, s.light.blacks)
-            } else {
-                ToneMap::display(s.light.contrast, s.light.whites, s.light.blacks)
-            },
+            tone,
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
             ops: ColorOps::new(s),
             curves: curve_luts(&s.curve),
@@ -239,8 +252,9 @@ impl FinishParams {
             out_luma: space.luma(),
             out_trc: space.trc(),
             proof: None,
-            hl: (s.light.highlights / 100.0) as f32,
-            sh: (s.light.shadows / 100.0) as f32,
+            hl: if lr_tone { 0.0 } else { (s.light.highlights / 100.0) as f32 },
+            sh: if lr_tone { 0.0 } else { (s.light.shadows / 100.0) as f32 },
+            lr_hs,
             clar,
             tex,
             dehaze,
@@ -260,6 +274,14 @@ impl FinishParams {
             view: frame.view.map_or([0.0, 0.0, w as f32, h as f32], |v| [v.x as f32, v.y as f32, v.full_w as f32, v.full_h as f32]),
         }
     }
+}
+
+/// Whether the source's tone runs as Lightroom's on Apple ProRAW (its base operator, Contrast /
+/// Blacks / Whites in the tone map around the DNG profile tone curve, Highlights / Shadows after
+/// it; see [`crate::tone`] and [`crate::tone::LrHs`]). Only Apple ProRAW was measured: other DNGs
+/// with a `ProfileToneCurve` take the usual camera-curve path.
+pub fn lr_tone(info: &SourceInfo) -> bool {
+    info.raw && info.proraw && info.camera_tone.is_some_and(|c| c.is_per_channel())
 }
 
 pub(crate) fn finish(p: &Prepared, s: &DevelopSettings, frame: &Frame, info: &SourceInfo, space: OutputSpace, proof: Option<crate::Proof>) -> Rgba8 {
@@ -484,18 +506,42 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 c = crate::colorops::calibrate(c, fp.calib.as_ref(), fp.shadow_tint);
             }
 
-            // --- tone map on luminance, highlight desaturation
-            let yl = luminance_2020(c);
-            let o = tone.apply(yl);
-            let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
-            let k = tone.chroma_scale(o);
-            if k != 1.0 {
-                d = d.map(|v| o + (v - o) * k);
-            }
-            let mx = d[0].max(d[1]).max(d[2]);
-            if mx > 1.0 {
-                let t = ((mx - 1.0) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
-                d = d.map(|v| v + (o - v) * t);
+            // --- tone map: on luminance with highlight desaturation, or (Apple ProRAW's profile
+            // tone curve) per channel, hue-preserving. Highlights / Shadows as Lightroom applies
+            // them there: a luminance gain from the pixel's and its neighbourhood's display
+            // luminance, before Whites / Blacks (inside the map when those are set) and Contrast
+            // (Lightroom's order)
+            let hs = fp.lr_hs.as_ref().map(|lr| (lr, tone.apply_context(crate::tone::GREY * base.exp2()).max(1e-6).log2()));
+            let inside = hs.is_some() && tone.hs_inside();
+            let mut d = if tone.per_channel() {
+                match hs.filter(|_| inside) {
+                    Some((lr, ctx)) => tone.apply_rgb_hs(c, |y| lr.gain(y.max(1e-6).log2(), ctx)),
+                    None => tone.apply_rgb(c),
+                }
+            } else {
+                let yl = luminance_2020(c);
+                let o = tone.apply(yl);
+                let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
+                let k = tone.chroma_scale(o);
+                if k != 1.0 {
+                    d = d.map(|v| o + (v - o) * k);
+                }
+                let mx = d[0].max(d[1]).max(d[2]);
+                if mx > 1.0 {
+                    let t = ((mx - 1.0) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
+                    d = d.map(|v| v + (o - v) * t);
+                }
+                d
+            };
+            if let Some((lr, ctx)) = hs {
+                if !inside {
+                    let k = lr.gain(luminance_2020(d).max(1e-6).log2(), ctx);
+                    if k != 0.0 {
+                        let g = k.exp2();
+                        d = d.map(|v| v * g);
+                    }
+                }
+                d = tone.apply_contrast_rgb(d);
             }
 
             // --- colour

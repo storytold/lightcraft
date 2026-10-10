@@ -69,6 +69,41 @@ const FIELDS: &[(&str, usize)] = &[
     ("CALIB", 1),
     ("CALIB_M", 9),
     ("SHADOW_TINT", 1),
+    // Apple ProRAW's profile tone curve applied per channel (`ToneMap::apply_rgb`): on, and linear
+    // Rec.2020 → ProPhoto and back
+    ("TONE_RGB", 1),
+    ("TONE_TO", 9),
+    ("TONE_FROM", 9),
+    // Lightroom's tone in stages (`tone::ToneStages`: Whites / Blacks set on ProRAW): on, the stage
+    // tables' offsets in `aux`, and the Blacks / Whites luminance-gain share
+    ("TONE_STAGED", 1),
+    ("TONE_PRE_OFF", 1),
+    ("TONE_BK", 1),
+    ("TONE_BK_OFF", 1),
+    ("TONE_KB", 1),
+    ("TONE_WH", 1),
+    ("TONE_WH_OFF", 1),
+    ("TONE_KW", 1),
+    ("TONE_POST_OFF", 1),
+    // Contrast as its own stage after Highlights / Shadows (`ToneMap::apply_contrast_rgb`): on,
+    // and its table's offset in `aux`
+    ("TONE_CON", 1),
+    ("TONE_CON_OFF", 1),
+    // Highlights / Shadows inside the staged map (`ToneMap::apply_rgb_hs`): on, the profile curve,
+    // its inverse and the neighbourhood (base operator + curve) tables' offsets in `aux`
+    ("TONE_HS_IN", 1),
+    ("TONE_PROF_OFF", 1),
+    ("TONE_PROFINV_OFF", 1),
+    ("TONE_CTX_OFF", 1),
+    // Highlights / Shadows after the tone map (`tone::LrHs`): on, then per slider its amount
+    // (relative to the reference), pixel / neighbourhood blend and table
+    ("LR_HS", 1),
+    ("LR_HL", 1),
+    ("LR_HL_ALPHA", 1),
+    ("LR_HL_TAB", lightcraft_pipeline::tone::LR_KNOTS),
+    ("LR_SH", 1),
+    ("LR_SH_ALPHA", 1),
+    ("LR_SH_TAB", lightcraft_pipeline::tone::LR_KNOTS),
     ("OUT_M", 9),
     ("OUT_Y", 3),
     ("OUT_TRC", 1),
@@ -138,8 +173,8 @@ pub struct Present {
     pub chroma: bool,
 }
 
-/// The `finish` kernel's parameter block and auxiliary table (tone LUT | chroma curve | sRGB LUT | curve LUTs |
-/// mask terms) for `fp` with `masks` (their local adjustments' terms).
+/// The `finish` kernel's parameter block and auxiliary table (tone LUT | chroma curve | sRGB LUT |
+/// curve LUTs | tone stage LUTs | mask terms) for `fp` with `masks` (their local adjustments' terms).
 pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present) -> (Vec<u32>, Vec<f32>) {
     let mut aux: Vec<f32> = fp.tone.lut().to_vec();
     aux.extend_from_slice(fp.tone.chroma_lut());
@@ -152,6 +187,17 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
             aux.extend_from_slice(&l.v);
         }
     }
+    let mut push = |t: &[f32]| {
+        let off = aux.len() as u32;
+        aux.extend_from_slice(t);
+        off
+    };
+    let stages = fp
+        .tone
+        .stages()
+        .map(|s| (push(&s.pre), s.blacks.as_ref().map(|(t, k)| (push(t), *k)), s.whites.as_ref().map(|(t, k)| (push(t), *k)), push(&s.post)));
+    let contrast_off = fp.tone.contrast_table().map(&mut push);
+    let hs_in = fp.tone.stages().filter(|_| fp.tone.hs_inside()).map(|s| (push(&s.profile), push(&s.profile_inv), push(&s.context)));
     let mask_off = aux.len();
     for m in masks {
         aux.extend_from_slice(m);
@@ -228,6 +274,46 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         p.fs("CALIB_M", m.as_flattened());
     }
     p.f("SHADOW_TINT", fp.shadow_tint);
+    if fp.tone.per_channel() {
+        let (to, from) = lightcraft_pipeline::tone::prophoto_matrices();
+        p.b("TONE_RGB", true);
+        p.fs("TONE_TO", to.as_flattened());
+        p.fs("TONE_FROM", from.as_flattened());
+    }
+    if let Some(off) = contrast_off {
+        p.b("TONE_CON", true);
+        p.u("TONE_CON_OFF", off);
+    }
+    if let Some((prof, inv, ctx)) = hs_in {
+        p.b("TONE_HS_IN", true);
+        p.u("TONE_PROF_OFF", prof);
+        p.u("TONE_PROFINV_OFF", inv);
+        p.u("TONE_CTX_OFF", ctx);
+    }
+    if let Some((pre, blacks, whites, post)) = stages {
+        p.b("TONE_STAGED", true);
+        p.u("TONE_PRE_OFF", pre);
+        p.u("TONE_POST_OFF", post);
+        if let Some((off, k)) = blacks {
+            p.b("TONE_BK", true);
+            p.u("TONE_BK_OFF", off);
+            p.f("TONE_KB", k);
+        }
+        if let Some((off, k)) = whites {
+            p.b("TONE_WH", true);
+            p.u("TONE_WH_OFF", off);
+            p.f("TONE_KW", k);
+        }
+    }
+    if let Some(lr) = &fp.lr_hs {
+        p.b("LR_HS", true);
+        p.f("LR_HL", lr.hl.1);
+        p.f("LR_HL_ALPHA", lr.hl.0.alpha);
+        p.fs("LR_HL_TAB", &lr.hl.0.tab);
+        p.f("LR_SH", lr.sh.1);
+        p.f("LR_SH_ALPHA", lr.sh.0.alpha);
+        p.fs("LR_SH_TAB", &lr.sh.0.tab);
+    }
     p.fs("OUT_M", fp.to_out.as_flattened());
     p.fs("OUT_Y", &fp.out_luma);
     let (trc, gamma) = fp.out_trc.code();

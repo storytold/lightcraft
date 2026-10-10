@@ -41,6 +41,18 @@ fn camera_tone_and_relative_wb() {
     s.wb.mode = WbMode::Custom;
     s.wb.temp = 8000.0;
     check("camera tone edited", &src, &info, &s, &RenderRequest::fit(320, 240));
+    // Apple ProRAW's profile tone curve: per channel, hue-preserving, inside Lightroom's chain
+    let info = SourceInfo { camera_tone: Some(curve.per_channel().with_key(Some(-4.0))), proraw: true, relative_wb: false, ..info };
+    check("camera tone per channel edited", &src, &info, &s, &RenderRequest::fit(320, 240));
+    check("camera tone per channel neutral", &src, &info, &DevelopSettings::default(), &RenderRequest::fit(320, 240));
+    let mut lr = s.clone();
+    (lr.light.highlights, lr.light.shadows, lr.light.whites, lr.light.blacks) = (-36.0, 39.0, -28.0, 22.0);
+    check("ProRAW tone sliders", &src, &info, &lr, &RenderRequest::fit(320, 240));
+    (lr.light.contrast, lr.light.whites, lr.light.blacks) = (0.0, 0.0, 0.0);
+    check("ProRAW highlights / shadows", &src, &info, &lr, &RenderRequest::fit(320, 240));
+    // the same curve on a DNG not known as ProRAW: the camera-curve path
+    check("camera tone per channel, not ProRAW", &src, &SourceInfo { proraw: false, ..info.clone() }, &lr, &RenderRequest::fit(320, 240));
+    let info = SourceInfo { camera_tone: Some(curve), proraw: false, relative_wb: true, ..info };
     // a camera chroma curve: richer shadows, highlights bleached toward white
     let curve = curve.with_chroma([1.4, 1.3, 1.1, 1.0, 0.7, 0.4, 0.25, 0.2]).unwrap();
     let info = SourceInfo { camera_tone: Some(curve), ..info };
@@ -700,6 +712,16 @@ fn windows_match() {
     s.vignette.midpoint = 10.0;
     let corner = RenderRequest { window: Some(PixelWindow { x: 2360, y: 1520, w: 640, h: 480 }), ..RenderRequest::fit(3000, 2000) };
     check("window: vignette corner", &src, &info, &s, &corner);
+    // Apple ProRAW: Highlights / Shadows read the whole frame's neighbourhood
+    let curve = lightcraft_pipeline::tone::CameraTone::new(std::array::from_fn(|i| {
+        let x = 0.004 * 1.18f32.powi(i as i32);
+        [x, 1.0 - (-2.0 * x).exp()]
+    }))
+    .unwrap();
+    let proraw = SourceInfo { camera_tone: Some(curve.per_channel().with_key(Some(-4.0))), proraw: true, ..info };
+    let mut s = DevelopSettings::default();
+    (s.light.contrast, s.light.highlights, s.light.shadows, s.light.whites) = (25.0, -60.0, 60.0, -20.0);
+    check("window: ProRAW highlights / shadows", &src, &proraw, &s, &req);
 }
 
 /// Issue #323: a window of a 24 MP photo is cut from a source of 288 MB on the device. Keeping that
