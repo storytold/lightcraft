@@ -572,10 +572,12 @@ fn paint_show(app: &mut DacApp, ui: &egui::Ui, frame: Rect) -> bool {
         }
     }
     // manual playback holds each slide until a key moves on
-    if s.playback.manual && pl.paused_at.is_none() && f.next.is_some() {
-        if let Some(p) = app.ui.slides.playing.as_mut() {
-            p.paused_at = Some(t);
-        }
+    if s.playback.manual
+        && pl.paused_at.is_none()
+        && f.next.is_some()
+        && let Some(p) = app.ui.slides.playing.as_mut()
+    {
+        p.paused_at = Some(t);
     }
     if f.done {
         return false;
@@ -786,10 +788,10 @@ fn left_column(app: &mut DacApp, ui: &mut egui::Ui) {
     let mut draft: String = ui.data(|d| d.get_temp(draft_id)).unwrap_or_default();
     ui.horizontal(|ui| {
         ui.add(egui::TextEdit::singleline(&mut draft).desired_width(120.0).hint_text(crate::i18n::tr("Name")));
-        if ui.button(crate::i18n::tr("Save Template")).clicked() {
-            if let Err(e) = app.run("slideshow.saveTemplate", json!({"name": draft})) {
-                app.toast_error(ui.ctx(), e);
-            }
+        if ui.button(crate::i18n::tr("Save Template")).clicked()
+            && let Err(e) = app.run("slideshow.saveTemplate", json!({"name": draft}))
+        {
+            app.toast_error(ui.ctx(), e);
         }
     });
     ui.add_space(10.0);
