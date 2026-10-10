@@ -26,6 +26,13 @@ crates/immich/
 # Immich engine wiring (IMM-SYNC / IMM-PEOPLE / IMM-SEARCH)
 crates/engine/src/cmd/immich_sync.rs
 crates/engine/src/tests_immich_sync.rs
+crates/publish/
+crates/tether/
+crates/engine/src/cmd/publish.rs
+crates/engine/src/cmd/publish_tests.rs
+crates/engine/src/cmd/tether.rs
+crates/ui-egui/src/panels/publish.rs
+crates/ui-egui/src/panels/tether_bar.rs
 # the Classic shell
 crates/ui-egui/src/module.rs
 crates/ui-egui/src/panels/classic.rs

@@ -62,6 +62,7 @@ pub fn title(p: PanelId) -> &'static str {
         PanelId::Catalog => "Catalog",
         PanelId::Folders => "Folders",
         PanelId::Collections => "Collections",
+        PanelId::Publish => "Publish Services",
         PanelId::QuickDevelop => "Quick Develop",
         PanelId::Keywording => "Keywording",
         PanelId::KeywordList => "Keyword List",
