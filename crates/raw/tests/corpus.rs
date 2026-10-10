@@ -931,3 +931,75 @@ fn sony_embedded_distortion_is_limited_to_validated_models() {
     }
     eprintln!("Sony distortion model boundary: {checked} corpus files checked");
 }
+
+/// Fujifilm RAF lens tables (`0xf00b` distortion, `0xf010` vignetting) become a warp and a vignette gain for the
+/// cameras whose geometry was checked against the camera JPEG (docs/fuji-lens-corrections.md). Reads `LIGHTCRAFT_FUJI` (a folder
+/// of RAFs or of per-model folders, e.g. the CC0 pixls set) or the corpus' `raf-fuji-*` files; skips when absent.
+#[test]
+fn fuji_embedded_lens_tables_follow_the_validated_models() {
+    fn collect(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() && depth < 2 {
+                collect(&p, depth + 1, out);
+            } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("raf")) {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    match std::env::var_os("LIGHTCRAFT_FUJI") {
+        Some(dir) => collect(Path::new(&dir), 0, &mut files),
+        None => {
+            collect(&corpus_root().join("raw"), 1, &mut files);
+            files.retain(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("raf-fuji-")));
+        }
+    }
+    files.sort();
+    // Bodies whose tables did not match the camera JPEG (or have no usable geometry sample): never corrected.
+    let unvalidated = ["FinePix F550EXR", "FinePix S1", "FinePix SL1000", "X10", "XF1", "XQ1"];
+    let (mut warped, mut vignetted, mut checked) = (0, 0, 0);
+    for path in &files {
+        let Ok(bytes) = std::fs::read(path) else { continue };
+        if lightcraft_raw::probe(&bytes) != Some(RawFormat::Raf) {
+            continue;
+        }
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let Ok(full) = decode(&bytes) else { continue };
+        assert_eq!(probe_info(&bytes).unwrap(), full.info(), "{name}: header and full decode agree");
+        let model = full.metadata.model.clone().unwrap_or_default();
+        let ops = &full.opcodes.list3;
+        if unvalidated.contains(&model.as_str()) {
+            assert!(ops.is_empty(), "{name} ({model}) is not a validated model");
+        }
+        for op in ops {
+            match op {
+                lightcraft_raw::Opcode::WarpRectilinear { planes, center } => {
+                    assert_eq!(*center, [0.5, 0.5], "{name}");
+                    assert_eq!(planes.len(), 1, "{name}: lateral CA is not applied");
+                    // a sane radial mapping: close to 1 at the centre, monotone, never folding
+                    let k = planes[0];
+                    assert!((0.85..1.15).contains(&k[0]), "{name}: {k:?}");
+                    let source = |r: f64| r * (k[0] + r * r * (k[1] + r * r * (k[2] + r * r * k[3])));
+                    assert!((0..100).all(|i| source((i + 1) as f64 / 100.0) > source(i as f64 / 100.0)), "{name}");
+                    warped += 1;
+                }
+                lightcraft_raw::Opcode::FixVignetteRadial { k, center } => {
+                    assert_eq!(*center, [0.5, 0.5], "{name}");
+                    let gain = 1.0 + k.iter().enumerate().map(|(i, c)| c * 1.0f64.powi(2 * i as i32 + 2)).sum::<f64>();
+                    assert!((1.0..3.0).contains(&gain), "{name}: corner gain {gain}");
+                    vignetted += 1;
+                }
+                other => panic!("{name}: unexpected opcode {other:?}"),
+            }
+        }
+        eprintln!(
+            "{model}: {} opcode(s) {}",
+            ops.len(),
+            if ops.iter().any(|o| matches!(o, lightcraft_raw::Opcode::WarpRectilinear { .. })) { "warp" } else { "no warp" }
+        );
+        checked += 1;
+    }
+    eprintln!("Fuji lens tables: {checked} RAFs, {warped} warps, {vignetted} vignette gains");
+}

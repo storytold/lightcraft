@@ -92,6 +92,13 @@ fn raw_ifd(raw: &[u8]) -> Result<Ifd> {
     Ok(ifd)
 }
 
+/// The camera name in the file header (bytes 28..60, NUL padded): the Exif `Model` of every sample.
+fn camera_name(b: &[u8]) -> String {
+    let name = b.get(28..60).unwrap_or_default();
+    let end = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+    String::from_utf8_lossy(name.get(..end).unwrap_or_default()).trim().to_string()
+}
+
 /// The CFA: X-Trans from the (reversed) layout record, else RGGB.
 fn cfa(h: &Header) -> Cfa {
     match record(h, XTRANS_LAYOUT) {
@@ -205,7 +212,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         color: ColorData::default(),
         wb_multipliers: wb,
         linearized: false,
-        opcodes: OpcodeLists::default(),
+        opcodes: OpcodeLists { list3: super::raf_lens::corrections(&camera_name(bytes), &ifd, active), ..Default::default() },
         metadata,
     };
     img.validate_for(mode)?;
@@ -223,35 +230,69 @@ pub(super) mod tests {
 
     /// [`raf`] with the raw IFD's `0xf006` flag set to `words32`.
     pub(crate) fn raf_flagged(w: u32, h: u32, bits: u32, strip: Vec<u8>, layout: Option<[u8; 36]>, jpeg: &[u8], words32: u32) -> Vec<u8> {
+        raf_full(w, h, bits, strip, layout, jpeg, words32, "TEST", &[])
+    }
+
+    /// [`raf_flagged`] with the camera name in the header and extra raw-IFD entries of signed rationals.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn raf_full(
+        w: u32,
+        h: u32,
+        bits: u32,
+        strip: Vec<u8>,
+        layout: Option<[u8; 36]>,
+        jpeg: &[u8],
+        words32: u32,
+        model: &str,
+        extra: &[(u16, Vec<(i32, i32)>)],
+    ) -> Vec<u8> {
         let mut block = b"II*\0\x08\0\0\0".to_vec();
         let sub_off: u32 = 8 + 2 + 12 + 4;
         block.extend_from_slice(&1u16.to_le_bytes());
         block.extend_from_slice(&[0x00, 0xf0, 13, 0, 1, 0, 0, 0]);
         block.extend_from_slice(&sub_off.to_le_bytes());
         block.extend_from_slice(&0u32.to_le_bytes());
-        let n = 8u32;
+        let n = 8u32 + extra.len() as u32;
         let wb_off = sub_off + 2 + 12 * n + 4;
-        let strip_off = wb_off + 12;
-        let entries: [(u16, u32, u32); 8] = [
-            (0xf001, 1, w),
-            (0xf002, 1, h),
-            (0xf003, 1, bits),
-            (0xf006, 1, words32),
-            (0xf007, 1, strip_off),
-            (0xf008, 1, strip.len() as u32),
-            (0xf00a, 1, 64),
-            (0xf00e, 3, wb_off),
+        // out-of-line data after the white balance: each extra table in turn, then the strip
+        let mut next = wb_off + 12;
+        let mut table_at = Vec::new();
+        for (_, v) in extra {
+            table_at.push(next);
+            next += 8 * v.len() as u32;
+        }
+        let strip_off = next;
+        // (tag, type, count, value or offset), in tag order
+        let mut entries: Vec<(u16, u16, u32, u32)> = vec![
+            (0xf001, 4, 1, w),
+            (0xf002, 4, 1, h),
+            (0xf003, 4, 1, bits),
+            (0xf006, 4, 1, words32),
+            (0xf007, 4, 1, strip_off),
+            (0xf008, 4, 1, strip.len() as u32),
+            (0xf00a, 4, 1, 64),
+            (0xf00e, 4, 3, wb_off),
         ];
+        for ((tag, v), at) in extra.iter().zip(&table_at) {
+            entries.push((*tag, 10, v.len() as u32, *at));
+        }
+        entries.sort_by_key(|e| e.0);
         block.extend_from_slice(&(n as u16).to_le_bytes());
-        for (tag, count, v) in entries {
+        for (tag, ty, count, v) in entries {
             block.extend_from_slice(&tag.to_le_bytes());
-            block.extend_from_slice(&4u16.to_le_bytes());
+            block.extend_from_slice(&ty.to_le_bytes());
             block.extend_from_slice(&count.to_le_bytes());
             block.extend_from_slice(&v.to_le_bytes());
         }
         block.extend_from_slice(&0u32.to_le_bytes());
         for v in [300u32, 600, 450] {
             block.extend_from_slice(&v.to_le_bytes());
+        }
+        for (_, v) in extra {
+            for (num, den) in v {
+                block.extend_from_slice(&num.to_le_bytes());
+                block.extend_from_slice(&den.to_le_bytes());
+            }
         }
         block.extend_from_slice(&strip);
         let mut recs: Vec<u8> = Vec::new();
@@ -270,7 +311,8 @@ pub(super) mod tests {
         }
         let mut dir = nrec.to_be_bytes().to_vec();
         dir.extend_from_slice(&recs);
-        let mut out = b"FUJIFILMCCD-RAW 0201FF000000TEST".to_vec();
+        let mut out = b"FUJIFILMCCD-RAW 0201FF000000".to_vec();
+        out.extend_from_slice(model.as_bytes());
         out.resize(108, 0);
         if strip.starts_with(b"IS") {
             let compression = if strip.get(2) == Some(&0) { 3u32 } else { 2u32 };
@@ -372,6 +414,46 @@ pub(super) mod tests {
         assert_ne!(decode(raf_flagged(w, h, 12, le, None, b"", 0)), RawData::U16(px.clone()));
         // flag clear: the LSB-first stream still decodes
         assert_eq!(decode(raf_flagged(w, h, 12, pack(&px, 12), None, b"", 0)), RawData::U16(px));
+    }
+
+    /// The lens tables of the raw IFD reach `Mode::Header` and `Mode::Full` alike, only for validated cameras,
+    /// and survive a DNG round trip. The frame is 12 × 4 after the crop records (4, 2).
+    #[test]
+    fn lens_tables_become_opcodes_for_validated_cameras() {
+        let (w, h) = (16u32, 6u32);
+        let half = 12.0f64.hypot(4.0) / 2.0;
+        let rat = |v: &[f64]| -> Vec<(i32, i32)> { v.iter().map(|x| ((x * 1.0e6).round() as i32, 1_000_000)).collect() };
+        let knots = [0.3535211268, 0.5, 0.6126760563, 0.7070422535, 0.7908450704, 0.8661971831, 0.9352112676, 1.0, 1.06056338];
+        let table = |values: &[f64]| {
+            let mut v = vec![half / 9.0];
+            v.extend_from_slice(&knots);
+            v.extend_from_slice(values);
+            rat(&v)
+        };
+        let dist = [-1.2, -2.4, -3.5, -4.4, -5.3, -5.9, -6.3, -6.4, -6.4];
+        let vig = [98.5, 96.9, 94.9, 91.0, 84.7, 78.4, 73.0, 67.5, 67.5];
+        // the colour-plane table is present in real files and ignored
+        let ca = [-0.00003, -0.00009, -0.00015, -0.0002, -0.00027, -0.00034, -0.00046, -0.0006, -0.0006];
+        let extra = vec![(0xf00b, table(&dist)), (0xf00f, table(&ca)), (0xf010, table(&vig))];
+        for (model, expected) in [("X-T4", 2), ("GFX 100", 2), ("X-T6", 0), ("X-T4 II", 0), ("", 0)] {
+            let bytes = raf_full(w, h, 16, pack(&[1000; 96], 16), None, b"", 0, model, &extra);
+            let header = decode(&bytes, Mode::Header).unwrap();
+            let full = crate::decode(&bytes).unwrap();
+            assert_eq!(header.info(), full.info(), "{model}");
+            assert_eq!(full.opcodes.list3.len(), expected, "{model}");
+            let Some(crate::Opcode::WarpRectilinear { planes, center }) = full.opcodes.list3.first() else { continue };
+            assert_eq!((planes.len(), *center), (1, [0.5, 0.5]), "{model}");
+            assert!(matches!(full.opcodes.list3[1], crate::Opcode::FixVignetteRadial { .. }));
+            let dng = crate::write_dng(&full, &Default::default()).unwrap();
+            assert_eq!(crate::decode(&dng).unwrap().opcodes.list3, full.opcodes.list3, "{model}");
+        }
+        // a table in another scale is left alone, and so is a file without tables
+        let wrong: Vec<(u16, Vec<(i32, i32)>)> =
+            extra.iter().map(|(t, v)| (*t, v.iter().map(|&(n, d)| if n == v[0].0 { (n * 2, d) } else { (n, d) }).collect())).collect();
+        let bytes = raf_full(w, h, 16, pack(&[1000; 96], 16), None, b"", 0, "X-T4", &wrong);
+        assert!(crate::decode(&bytes).unwrap().opcodes.list3.iter().all(|o| !matches!(o, crate::Opcode::WarpRectilinear { .. })));
+        let bytes = raf_full(w, h, 16, pack(&[1000; 96], 16), None, b"", 0, "X-T4", &[]);
+        assert!(crate::decode(&bytes).unwrap().opcodes.list3.is_empty());
     }
 
     #[test]
