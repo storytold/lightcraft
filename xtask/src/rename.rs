@@ -67,7 +67,7 @@ fn rewrite(text: &str, old: &str, new: &str, accept: impl Fn(&[u8], u8) -> bool)
 }
 
 /// Workspace package names (from `cargo metadata`).
-fn packages() -> Result<Vec<String>, String> {
+pub(crate) fn packages() -> Result<Vec<String>, String> {
     let meta = crate::metadata()?;
     let pkgs = meta["packages"].as_array().ok_or("cargo metadata: no packages")?;
     Ok(pkgs.iter().filter_map(|p| p["name"].as_str().map(str::to_string)).collect())
@@ -88,7 +88,7 @@ fn valid_prefix(p: &str) -> bool {
     !p.is_empty() && p.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()) && p.as_bytes()[0].is_ascii_lowercase()
 }
 
-fn git_lines(root: &Path, args: &[&str]) -> Result<Vec<String>, String> {
+pub(crate) fn git_lines(root: &Path, args: &[&str]) -> Result<Vec<String>, String> {
     let out = Command::new("git").current_dir(root).args(args).output().map_err(|e| format!("git {}: {e}", args.join(" ")))?;
     if !out.status.success() {
         return Err(format!("git {} failed: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim()));
@@ -97,7 +97,7 @@ fn git_lines(root: &Path, args: &[&str]) -> Result<Vec<String>, String> {
 }
 
 /// Rewrites `files` with `f`; returns how many changed. Binary, missing and allowlisted files are skipped.
-fn apply(root: &Path, files: &[String], f: impl Fn(&str) -> String) -> Result<Vec<String>, String> {
+pub(crate) fn apply(root: &Path, files: &[String], f: impl Fn(&str) -> String) -> Result<Vec<String>, String> {
     let mut changed = Vec::new();
     for rel in files {
         if crate::brand::is_allowed(rel) {

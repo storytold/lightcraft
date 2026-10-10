@@ -37,9 +37,11 @@ upstream quickly**. Both only work if the code we share stays close to upstream'
 | `brand.toml`, `crates/brand`, `brand/` | the fork's identity |
 | `crates/catalog` | catalog v4 (redb store, multiple catalogs, transfer); upstream fixes are reviewed and ported by hand |
 | `crates/net`, `crates/credentials`, `crates/hash`, `crates/immich` | new crates (Immich, network, key storage) |
-| `crates/ui-egui`: `module.rs`, `panels/classic.rs`, `navigator.rs`, `metadata.rs`, `cells.rs`, `libtools.rs`, `connections.rs`, `second.rs`, `plate.rs`, `catalog_ui.rs` | the Classic shell: modules, panels, keymap, identity plate, secondary window |
+| `crates/ui-egui`: `module.rs`, `libtools.rs`, `plate.rs`, `catalog_ui.rs`, `panels/classic.rs`, `panels/navigator.rs`, `panels/metadata.rs`, `panels/cells.rs`, `panels/connections.rs`, `panels/second.rs` | the Classic shell: modules, panels, keymap, identity plate, secondary window |
 | `docs/catalog.md`, `docs/immich.md`, `plan/`, `PLAN*.md` | our docs and plans |
-| `xtask/` brand, immich and bench-catalog commands | our tooling |
+| `xtask/` brand, immich, upstream and bench-catalog commands | our tooling |
+
+The machine-readable list is [`upstream-owned.txt`](../upstream-owned.txt).
 
 Everything else is **shared**: `geom`, `color`, `raster`, `tiff`, `raw`, `codecs`, `meta`, `develop`, `pipeline`,
 `gpu`, `preview`, `denoise*`, `segment`, `faces`, `merge`, `fetch`, `engine` (and the `engine-*` crates as upstream

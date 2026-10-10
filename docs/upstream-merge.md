@@ -16,7 +16,36 @@ git remote -v                    # upstream = the LightCraft repository, origin 
 git remote add upstream ../lightcraft   # only if it is missing
 ```
 
-## The routine
+## One-time setup
+
+```sh
+git config rerere.enabled true   # git records conflict resolutions and replays them in later merges
+```
+
+## The commands
+
+Owned paths (where we diverge on purpose, `plan/upstream.md` → *What we own*) are listed in
+[`upstream-owned.txt`](../upstream-owned.txt), together with the regenerated files (`Cargo.lock`, the
+`docs/parity.md` summary, `*.md` rendered from `*.md.in`) and the paths exempt from the shared-code check.
+
+- **`cargo xtask upstream-merge [--ref upstream/main] [--no-ci]`** automates steps 1–3 below and checks step 4:
+  refuses on a dirty tree, fetches, creates `merge/upstream-YYYYMMDD` from the current HEAD, runs
+  `git merge --no-ff --no-commit`, then puts back our version of every owned path (conflicted ones too; files
+  upstream added under an owned path are dropped). Git's `merge=ours` attribute is not enough: it only applies when
+  both sides changed a file. Upstream commits that touched owned paths go into `target/upstream/review-YYYYMMDD.md`
+  (hash, subject, files with line counts): they were set aside, review them for anything worth porting by hand.
+  It then runs `rename-crates --upstream --since HEAD`, prints `brand check` findings, lists remaining conflicts
+  (exit non-zero), and otherwise leaves the merge staged but uncommitted and runs `cargo xtask ci`. Continue at
+  step 4.
+- **`cargo xtask upstream-pr <branch> <commit>...`** creates `<branch>` off `upstream/main` and replays the commits
+  (`git am --3way`) with our crate names mapped back to upstream's (`dac-x` → upstream's prefix, `-p dac-app` →
+  upstream's app package), in the patches and the touched files. It never pushes: it prints the push/PR steps. Our
+  copy of the commit then carries `UPSTREAM-PR: <link>` in its message.
+- **`cargo xtask shared-check [--strict]`** (a warning step in `cargo xtask ci`) lists commits since the last
+  upstream merge (else the `fork-base` tag) that change shared paths without an `UPSTREAM-PR:` line. It warns and
+  exits 0 unless `--strict`; without the `upstream` remote or the tag it warns and skips.
+
+## The routine by hand (what `upstream-merge` automates)
 
 1. **Fetch.**
    ```sh
