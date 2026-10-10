@@ -404,7 +404,6 @@ pub trait Module: Sync {
 
 struct Library;
 struct Develop;
-struct Placeholder(ModuleId);
 
 /// Library's Classic columns.
 pub const LIBRARY_LEFT: &[PanelId] = &[PanelId::Navigator, PanelId::Catalog, PanelId::Folders, PanelId::Collections, PanelId::Publish];
@@ -481,38 +480,6 @@ impl Module for Develop {
     }
     fn keymap(&self) -> &'static [ModuleKey] {
         DEVELOP_KEYS
-    }
-}
-
-impl Module for Placeholder {
-    fn id(&self) -> ModuleId {
-        self.0
-    }
-    fn left_panels(&self) -> &'static [PanelId] {
-        &[]
-    }
-    fn right_panels(&self) -> &'static [PanelId] {
-        &[]
-    }
-    fn toolbar(&self, _ui: &mut egui::Ui, _app: &mut DacApp) {}
-    fn center(&self, ui: &mut egui::Ui, app: &mut DacApp) {
-        let t = Tokens::get(ui.ctx());
-        let mut area = ui.available_rect_before_wrap();
-        // the filmstrip stays across modules
-        if edge_visible(app, Edge::Bottom) {
-            let film = Rect::from_min_max(pos2(area.left(), area.bottom() - t.film_h), area.max);
-            area.max.y = film.top();
-            crate::panels::detail::filmstrip(app, ui, film);
-        }
-        app.canvas_rect = Some(area);
-        ui.allocate_rect(area, Sense::hover());
-        register(ui.ctx(), format!("view:module:{}", self.0.key()), area);
-        let p = ui.painter();
-        p.text(area.center() - vec2(0.0, 14.0), Align2::CENTER_CENTER, crate::i18n::tr(self.0.label()), t.font(28.0), t.text);
-        p.text(area.center() + vec2(0.0, 20.0), Align2::CENTER_CENTER, crate::i18n::tr("Coming in Phase 3"), t.font(14.0), t.text_dim);
-    }
-    fn keymap(&self) -> &'static [ModuleKey] {
-        &[]
     }
 }
 
