@@ -11,8 +11,10 @@
 //!
 //! Use [`render`]: it returns `None` when the GPU is unavailable, disabled (`LIGHTCRAFT_GPU=0`,
 //! `LIGHTCRAFT_GPU_BACKEND=off` or [`set_enabled`]), the render does not fit the device, or the device reported an error, ran out
-//! of memory or returned an incomplete image — callers then render on the CPU. [`unavailable_reason`]
-//! and [`last_fallback`] say why (`ui.inspect` → `perf.gpuReason` / `perf.gpuFallback`).
+//! of memory or returned an incomplete image — callers then render on the CPU. [`try_render`] is
+//! the same call reporting why *this* render fell back ([`Fallback`]); [`unavailable_reason`] and
+//! [`last_fallback`] (the latest fallback in the process) feed the status displays (`ui.inspect` →
+//! `perf.gpuReason` / `perf.gpuFallback`).
 //! The browser build has no GPU path yet (WebGPU device creation is asynchronous): everything here
 //! compiles to the CPU fallback on wasm32.
 //!
@@ -88,6 +90,9 @@ pub fn unavailable_reason() -> Option<String> {
         let r = BROKEN_REASON.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_else(|| "device error".into());
         return Some(format!("stopped after a GPU failure: {r}"));
     }
+    if let Some(r) = broken_here() {
+        return Some(format!("stopped after a GPU failure: {r}"));
+    }
     #[cfg(not(target_arch = "wasm32"))]
     {
         match GPU.get() {
@@ -101,10 +106,33 @@ pub fn unavailable_reason() -> Option<String> {
     }
 }
 
-/// The latest render that fell back from the GPU to the CPU and why (device limit, out of memory,
-/// device error, incomplete or blank result), if any.
+/// The latest render in the process that fell back from the GPU to the CPU and why (device limit,
+/// out of memory, device error, incomplete or blank result), if any. A diagnostic for status
+/// displays (`ui.inspect` → `perf.gpuFallback`): renders on other threads overwrite it, so a caller
+/// that wants the reason for *its own* render uses [`try_render`], which returns it.
 pub fn last_fallback() -> Option<String> {
     LAST_FALLBACK.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Why [`try_render`] made no GPU image: the caller renders on the CPU.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Fallback {
+    /// The GPU was not tried: it is unavailable, disabled or closing ([`unavailable_reason`]), or
+    /// the request is one only the CPU renders (high bit depth, soft proof, HDR range overlay).
+    NotTried,
+    /// The render was tried on the GPU and failed, for this reason (the same text
+    /// [`last_fallback`] reports). The CPU renders it instead.
+    Failed(String),
+}
+
+impl Fallback {
+    /// The failure's reason; `None` when the GPU was not tried.
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            Fallback::NotTried => None,
+            Fallback::Failed(r) => Some(r),
+        }
+    }
 }
 
 /// A simulated GPU failure for the next [`render`] on this thread (tests of the CPU fallback).
@@ -122,9 +150,15 @@ pub enum Fault {
 
 thread_local! {
     static FAULT: std::cell::Cell<Option<Fault>> = const { std::cell::Cell::new(None) };
+    /// Why a simulated failure ([`inject_fault`]) stopped GPU use on this thread. A simulated
+    /// fatal failure behaves like a real one for the thread that asked for it — [`render`] returns
+    /// `None`, [`available`] is false, [`unavailable_reason`] says why — but leaves the rest of
+    /// the process on the GPU: tests of the fallback run beside other tests rendering on it.
+    static BROKEN_HERE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Make the next [`render`] on this thread fail with `f` (tests).
+/// Make the next [`render`] on this thread fail with `f` (tests). A fatal `f` then stops GPU use
+/// on this thread only, until [`reset_failures`].
 #[doc(hidden)]
 pub fn inject_fault(f: Fault) {
     FAULT.with(|c| c.set(Some(f)));
@@ -135,12 +169,27 @@ fn take_fault() -> Option<Fault> {
     FAULT.with(|c| c.take())
 }
 
-/// Use the GPU again after a failure (tests that inject faults).
+/// Stop using the GPU on this thread (a simulated fatal failure).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn mark_broken_here(reason: &str) {
+    let _ = BROKEN_HERE.try_with(|b| {
+        let mut b = b.borrow_mut();
+        if b.is_none() {
+            *b = Some(reason.to_string());
+        }
+    });
+}
+
+/// Why a simulated failure stopped GPU use on this thread, if one did.
+fn broken_here() -> Option<String> {
+    BROKEN_HERE.try_with(|b| b.borrow().clone()).ok().flatten()
+}
+
+/// Use the GPU again on this thread after a simulated failure ([`inject_fault`]; tests). Real
+/// failures are not undone: the process stays on the CPU, and nothing another thread did changes.
 #[doc(hidden)]
 pub fn reset_failures() {
-    BROKEN.store(false, Ordering::Relaxed);
-    *BROKEN_REASON.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    *LAST_FALLBACK.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    let _ = BROKEN_HERE.try_with(|b| *b.borrow_mut() = None);
 }
 
 /// Allow or forbid GPU rendering at runtime (a preference). `LIGHTCRAFT_GPU=0` forbids it for the
@@ -149,9 +198,10 @@ pub fn set_enabled(on: bool) {
     ENABLED.store(on, Ordering::Relaxed);
 }
 
-/// Whether GPU rendering is allowed (environment, preference, no earlier failure).
+/// Whether GPU rendering is allowed (environment, preference, no earlier failure — real, or
+/// simulated on this thread).
 pub fn enabled() -> bool {
-    ENABLED.load(Ordering::Relaxed) && !BROKEN.load(Ordering::Relaxed) && !env_disabled()
+    ENABLED.load(Ordering::Relaxed) && !BROKEN.load(Ordering::Relaxed) && !env_disabled() && broken_here().is_none()
 }
 
 /// The process is about to end: no GPU work starts from now on, on any thread. [`render`] returns
@@ -378,8 +428,22 @@ pub fn stage_bytes(stages: &StageCache) -> usize {
 }
 
 /// Render `src` with `s` on the GPU, reusing the device-resident stages kept with `stages` (the
-/// view's CPU stage cache). `None`: render on the CPU instead.
+/// view's CPU stage cache). `None`: render on the CPU instead. [`try_render`] also says why.
 pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>) -> Option<Rendered> {
+    try_render(src, info, s, req, stages).ok()
+}
+
+/// [`render`], reporting why this render made no GPU image: [`Fallback::NotTried`] when the GPU
+/// was not used (callers can ask [`unavailable_reason`]), [`Fallback::Failed`] with the reason
+/// when the GPU render failed and the CPU must render it. The reason belongs to this call, unlike
+/// [`last_fallback`], which the latest render on any thread overwrites.
+pub fn try_render(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    stages: Option<&StageCache>,
+) -> Result<Rendered, Fallback> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         // sections switched off with their eye render as if at their defaults (issue #316)
@@ -392,14 +456,16 @@ pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
             || req.proof.is_some()
             || req.overlay == lightcraft_pipeline::Overlay::HdrRange
         {
-            return None;
+            return Err(Fallback::NotTried);
         }
         let s = &*lightcraft_pipeline::settings_for(s, req);
-        // in flight until this returns; `None` once the process is ending (issue #620)
-        let _work = exit::enter()?;
-        let gpu = device()?;
+        // in flight until this returns; not tried once the process is ending (issue #620)
+        let _work = exit::enter().ok_or(Fallback::NotTried)?;
+        let gpu = device().ok_or(Fallback::NotTried)?;
         let ext = stages.map(|c| c.extension::<GpuStages>());
         let fault = take_fault();
+        // A simulated failure stops GPU use on this thread only (see `BROKEN_HERE`).
+        let stop = |reason: &str| if fault.is_some() { mark_broken_here(reason) } else { mark_broken(reason) };
         let _ = ctx::take_failure(); // nothing left over from an earlier render on this thread
         let (r, scoped) = {
             let _scope = ctx::RenderScope::new(gpu);
@@ -413,12 +479,11 @@ pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
             (Some(f), _) if f.kind == ctx::FailKind::Limit => Some(f),
             (f, scoped) => scoped.or(f),
         };
-        match (r, failure) {
+        let reason = match (r, failure) {
             (Err(_), _) => {
                 log::error!("gpu: render failed; using the CPU pipeline from now on");
-                mark_broken("a GPU render panicked");
-                record_fallback("a GPU render panicked; the GPU is not used again".into());
-                None
+                stop("a GPU render panicked");
+                "a GPU render panicked; the GPU is not used again".to_string()
             }
             (Ok(r), Some(f)) => {
                 // the view's cached device stages may hold results of the failed passes
@@ -431,7 +496,7 @@ pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
                 };
                 let reason = match f.kind {
                     ctx::FailKind::Fatal => {
-                        mark_broken(&f.reason);
+                        stop(&f.reason);
                         format!("{what}: {}; the GPU is not used again", f.reason)
                     }
                     ctx::FailKind::OutOfMemory => {
@@ -444,20 +509,23 @@ pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
                 if render::profiling() {
                     eprintln!("  gpu fallback to the CPU: {reason}");
                 }
-                record_fallback(reason);
-                None
+                reason
             }
             // a device error on another thread or a lost device during the render
             (Ok(Some(_)), None) if BROKEN.load(Ordering::Relaxed) => {
-                record_fallback(format!("device failure during the render: {}", unavailable_reason().unwrap_or_default()));
-                None
+                format!("device failure during the render: {}", unavailable_reason().unwrap_or_default())
             }
-            (Ok(r), None) => r,
-        }
+            (Ok(Some(r)), None) => return Ok(r),
+            // every path of `render::render` that gives up records a failure first; should one
+            // not, the CPU renders it rather than nothing
+            (Ok(None), None) => "GPU render: no image came back".to_string(),
+        };
+        record_fallback(reason.clone());
+        Err(Fallback::Failed(reason))
     }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = (src, info, s, req, stages);
-        None
+        Err(Fallback::NotTried)
     }
 }

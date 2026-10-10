@@ -190,10 +190,19 @@ redone on the CPU and why, e.g. `"6000×4000: the GPU returned an incomplete ima
 24000000 pixels unwritten); the GPU is not used again"`). The same in `app.gpu` (`reason`,
 `lastFallback`), Help ▸ System Info and Settings ▸ Performance. `LIGHTCRAFT_PROFILE=1` prints the
 fallback with the stage timings; `RUST_LOG=warn` logs it.
+`perf.gpuFallback` is one value for the whole process, overwritten by the latest render on any
+thread. A render's *own* reason comes from `lightcraft_gpu::try_render` (`Err(Fallback::Failed(why))`;
+`Fallback::NotTried` when the GPU was not used at all), which `lightcraft_engine::media::develop_reporting`
+passes on as `RenderResult::gpu_fallback`; an export carries it as `Exported::gpu_fallback`, and
+each file of an `app.export` batch result has `gpuFallback` when its render fell back (issue #675).
 **Reproducing a smaller GPU:** `LIGHTCRAFT_GPU_LIMITS=webgpu` (or `downlevel`) creates the device
 with 128 MiB storage bindings / 256 MiB buffers, `LIGHTCRAFT_GPU_LIMITS=<n>` with n MiB / 2n MiB.
 Tests inject failures with `lightcraft_gpu::inject_fault` (`crates/gpu/tests/fallback.rs`,
-`export_falls_back_to_the_cpu_when_gpu_work_is_lost`).
+`export_falls_back_to_the_cpu_when_gpu_work_is_lost`). The fault is thread-local, and so are its
+consequences: a simulated fatal failure stops GPU use on the injecting thread only (`available()`
+false, `unavailable_reason()` set there), until `reset_failures()`, which undoes nothing else — a
+real failure still stops the whole process. Such a test asserts on its own render's reason, not on
+`last_fallback()`, so it can run beside other tests rendering on the GPU (issue #675).
 
 ## Correctness: CPU oracle and equivalence tests
 `crates/gpu/tests/equivalence.rs` renders the same settings on both and compares 8-bit sRGB:

@@ -685,6 +685,9 @@ pub struct RenderResult {
     pub level: SourceLevel,
     pub key: u64,
     pub rendered: Result<Rendered, String>,
+    /// Set when this job's render was tried on the GPU and fell back to the CPU: why
+    /// ([`lightcraft_gpu::Fallback::Failed`]). The result is the CPU render either way.
+    pub gpu_fallback: Option<String>,
     /// A source that was loaded by this job (to be inserted into the cache).
     pub loaded: Option<DecodedSource>,
     /// Set for a [`QuickJob`]'s stand-in: where the image came from.
@@ -767,6 +770,7 @@ impl RenderJob {
                 level: self.level,
                 key: self.key,
                 rendered: Ok(Rendered { image, histogram, deep: None }),
+                gpu_fallback: None,
                 loaded: None,
                 quick: None,
                 display: None,
@@ -788,7 +792,7 @@ impl RenderJob {
                 // Thumbnails (many small jobs side by side) stay on the CPU; views and exports use
                 // the GPU when there is one.
                 let gpu = self.cache.is_none();
-                let mut rendered = develop(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu);
+                let (mut rendered, gpu_fallback) = develop_reporting(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu);
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB
                 let mut srgb = None;
@@ -820,6 +824,7 @@ impl RenderJob {
                     level: self.level,
                     key: self.key,
                     rendered: Ok(rendered),
+                    gpu_fallback,
                     loaded: (!was_loaded).then_some(source),
                     quick: None,
                     display,
@@ -832,6 +837,7 @@ impl RenderJob {
                 level: self.level,
                 key: self.key,
                 rendered: Err(e),
+                gpu_fallback: None,
                 loaded: None,
                 quick: None,
                 display: None,
@@ -844,19 +850,39 @@ impl RenderJob {
 /// the CPU, reusing `stages` either way. Both produce the same image within 1–3 LSB (see
 /// `docs/gpu-pipeline.md`); `LIGHTCRAFT_GPU=0` or [`lightcraft_gpu::set_enabled`] forces the CPU.
 pub fn develop(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>, gpu: bool) -> Rendered {
+    develop_reporting(src, info, s, req, stages, gpu).0
+}
+
+/// [`develop`], also saying why the render fell back from the GPU to the CPU when it did (`None`:
+/// it rendered on the GPU, or the GPU was not tried). The reason is this render's own, not the
+/// process-wide [`lightcraft_gpu::last_fallback`].
+pub fn develop_reporting(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    stages: Option<&StageCache>,
+    gpu: bool,
+) -> (Rendered, Option<String>) {
     // LUT profiles have no GPU stage: they render on the CPU
-    if gpu
+    let fallback = if gpu
         && !lightcraft_pipeline::lut::is_lut_profile(&s.profile.id)
         && !s.masks.iter().any(|m| m.visible && m.refine > 0.0)
         && req.proof.is_none()
-        && let Some(r) = lightcraft_gpu::render(src, info, s, req, stages)
     {
-        return r;
-    }
-    match stages {
+        match lightcraft_gpu::try_render(src, info, s, req, stages) {
+            Ok(r) => return (r, None),
+            Err(lightcraft_gpu::Fallback::Failed(why)) => Some(why),
+            Err(lightcraft_gpu::Fallback::NotTried) => None,
+        }
+    } else {
+        None
+    };
+    let rendered = match stages {
         Some(st) => lightcraft_pipeline::render_cached(src, info, s, req, st),
         None => lightcraft_pipeline::render(src, info, s, req),
-    }
+    };
+    (rendered, fallback)
 }
 
 /// Where a [`QuickJob`]'s stand-in image came from.
@@ -897,6 +923,7 @@ impl QuickJob {
             level: SourceLevel::Thumb,
             key,
             rendered,
+            gpu_fallback: None,
             loaded: None,
             quick,
             display: None,
