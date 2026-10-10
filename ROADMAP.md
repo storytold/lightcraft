@@ -192,6 +192,18 @@ packed formats 2, 5 and 7, the 16-bit words of the 2005–2007 bodies; all recov
 Not decoded yet — preview only (no permissively licensed description; black-box analysis incomplete):
 - **Olympus compressed ORF**, **Canon CR3 unverified CRX variants** (M11.1), **Canon sRAW/mRAW**.
 
+*Starting point for a clean-room compressed ORF decoder* (see the closed #240, the open #360 and the maintainer's stance
+there: derive it from the files and prose, never from dcraw-family code). Two Olympus patents by Takashi Ishikawa describe
+the *method* in prose, not the ORF file layout, and none of them names ORF:
+- [US7333035B2](https://patents.google.com/patent/US7333035): lossless RAW compression for SLR cameras: median-edge-detector
+  prediction from the left, upper and upper-left neighbours, a separately coded sign, Golomb-Rice codes whose parameter `k`
+  comes from flatness run counters, counters reset per line.
+- [US7715639B2](https://patents.google.com/patent/US7715639B2/en): a sibling with predictor variants, `k` derived from
+  neighbouring positions, raw low-order bits and a correction filter.
+
+They give the algorithm's shape; constants, the bit layout and the stream header still have to be established from CC0
+sample files. This is a pointer for contributors, not legal advice.
+
 **Camera colour matrices:** ARW, NEF, RW2, RAF, CR3, CR2, PEF, Samsung SRW and Olympus ORF files can use guarded, separate chromaticity and tone estimates from their own embedded JPEG (see `docs/camera-preview-colour.md`); this is a per-file camera-look estimate with relative WB, not measured calibration or absolute-Kelvin WB. 52 models whose fit is rejected (or that have no usable JPEG) start from matrices fitted to their measured spectral sensitivities instead (rawtoaces-data, Apache-2.0; `crates/raw/src/spectral.rs`). Other non-DNG raws and rejected fits use the documented neutral fallback (camera RGB ≈ linear sRGB, flagged
 `matrix_is_fallback`) with the file's as-shot white-balance multipliers. Clean sources to evaluate next: manufacturer
 matrices stored in the files themselves (Olympus ImageProcessing `ColorMatrix`, Pentax equivalents; Panasonic RW2 files carry none) and our

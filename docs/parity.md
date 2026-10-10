@@ -67,7 +67,7 @@ Take the first one nobody is working on.
 2. **LR-IMP-FORMATS** (P0): CR3 lossless Bayer and version 0x100/0x200 C-RAW now decodes (M50/R100/R8 full sensor exact). Remaining unverified CRX variants, compressed RAF / ORF, Nikon
    Canon sRAW; AVIF decode (HEIC decodes behind the codecs' non-default `heif` feature:
    the optional `lightcraft-heif` crate on heic-rs, the same decoder and policy as PhotoCraft). Clean-room, from prose descriptions only (see
-   `crates/raw/src/vendor/nefc.rs` for how compressed NEF was done). Until decoded, such photos are `preview_only`.
+   `crates/raw/src/vendor/nefc.rs` for how compressed NEF was done). Until decoded, such photos are `preview_only`. Compressed ORF: the method is described in two Olympus patents (US7333035B2, US7715639B2), see ROADMAP.md → "Not decoded yet".
 3. **LR-IMP-CAMERA-COVERAGE** (P0): per-model verification; grow the CC0 corpus and fix per-model bugs (like the CR2
    colour-filter layout, fixed in #85 by reading the file's own tag).
 4. **LR-BEHAV-RENDER-FIDELITY** (P1): a side-by-side fidelity suite against Lightroom renders (kept local in `plan/`),
