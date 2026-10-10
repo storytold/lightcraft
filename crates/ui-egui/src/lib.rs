@@ -240,8 +240,8 @@ pub struct DacApp {
     /// What the loupe drew last frame: photo and source ("render", "cached", "embedded", "small",
     /// "thumb", "none").
     pub loupe_shown: Option<(dac_catalog::PhotoId, &'static str)>,
-    /// The window render the loupe asked for last, by job key (see [`region`]); kept for the few
-    /// windows whose textures can be on screen, and for the inspector.
+    /// The zoomed view the loupe asked tiles for last (see [`region`]): the frame, the part its
+    /// on-screen tiles cover and their look; for drawing while a pinch runs, and the inspector.
     pub region_view: Option<region::RegionView>,
     /// The same for the Before side of a Before/After view.
     pub region_before_view: Option<region::RegionView>,
@@ -249,7 +249,8 @@ pub struct DacApp {
     pub(crate) size_hold: region::SizeHold,
     /// (photo, look, window frame size) a window was refused for: it reads more than one render holds.
     pub(crate) window_refused: Option<(dac_catalog::PhotoId, u64, usize)>,
-    pub(crate) region_tiles: std::collections::HashMap<(bool, u64), region::RegionView>,
+    /// (photo, look) whose 1:1 preview was last asked to be read from disk (see `detail`).
+    pub(crate) full_preview_loaded: Option<(dac_catalog::PhotoId, u64)>,
     /// Photo Merge dialog previews and background merges.
     pub merge: merge::MergeState,
     /// An import in progress (the import review dialog's batches).
@@ -330,7 +331,7 @@ impl DacApp {
             region_before_view: None,
             size_hold: Default::default(),
             window_refused: None,
-            region_tiles: Default::default(),
+            full_preview_loaded: None,
             merge: merge::MergeState::default(),
             import: None,
             scan: None,

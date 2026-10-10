@@ -70,13 +70,17 @@
 
 `cargo test --release -p dac-engine --lib pan_at_one_to_one -- --ignored --nocapture` (2026-10-10, Ryzen AI Max+
 PRO 395 / Radeon 8060S, Linux): an 8256 × 5504 procedural photo with exposure and clarity, a 2560 × 1440 canvas at
-1:1, panned 40 px a frame for 180 frames. The loupe draws the window it has every frame (a texture moved by the
-GPU, so the frame rate does not depend on the photo) and renders a new one (snapped to 256 px, 512 px margin, about
-3584 × 2560) only when the view leaves it: 7 window renders in 180 frames.
+1:1, panned 40 px a frame for 180 frames, with the tile grid: 1024 px tiles rendered with a 512 px margin and
+cropped back, the view and a ring of one tile around it asked for. The loupe draws the tiles it has every frame
+(textures moved by the GPU, so the frame rate does not depend on the photo); the pan renders only the 20 tiles it
+moves onto. The first view (25 tiles incl. the ring) takes 0.95 s on the CPU with one worker (the app runs up to 6;
+a built 1:1 preview shows at once in the meantime).
 
-| path | mean window render | worst | sharp panning up to |
-|------|--------------------|-------|---------------------|
-| CPU  | 95.5 ms | 99.9 ms | ≈ 270 fps |
-| GPU  | 39.0 ms | 128.1 ms (first, cold) | ≈ 660 fps |
+| path | mean tile render | worst | sharp panning up to (one worker) |
+|------|------------------|-------|----------------------------------|
+| CPU  | 29.0 ms | 43.1 ms | ≈ 308 fps |
+| GPU  | 77.8 ms | 92.5 ms | ≈ 115 fps |
 
-Both stay well above the 30 fps target: a window render takes less than the 25 frames its margin covers.
+Both stay well above the 30 fps target. Tiles render without stage caches, so per tile the GPU's fixed costs dominate
+and it is slower than the CPU here (the earlier one-window design: CPU 95.5 ms / GPU 39.0 ms per 3584 × 2560
+window, ≈ 270 / 660 fps).

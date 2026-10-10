@@ -214,27 +214,29 @@ fn animated_rect(ctx: &egui::Context, anim: &mut bool, target: Rect) -> Rect {
     r
 }
 
-/// What a window render of the loupe needs to know about the view it belongs to.
+/// What the tiles of the loupe need to know about the view they belong to.
 struct WindowCtx {
     id: PhotoId,
-    /// Long edge of the frame the windows are cut from (`None`: no windows).
+    /// Long edge of the frame the tiles are cut from (`None`: no tiles).
     frame_edge: Option<usize>,
-    drawn_long: f32,
     aspect: f32,
-    ppp: f32,
     texture_side: usize,
     crop_tool: bool,
     interacting: bool,
     /// Hash of the photo's develop settings.
     look: u64,
-    /// A pinch or two-finger scroll is running: keep the windows there are.
+    /// A pinch or two-finger scroll is running: keep the tiles there are.
     holding: bool,
+    /// What the whole-frame render shows over the photo (a mask, a range…): the tiles show it too.
+    overlay: dac_pipeline::Overlay,
+    proof: Option<dac_pipeline::Proof>,
+    /// The photo's 1:1 preview, when held: tiles are cut from it until they are rendered.
+    full_preview: Option<std::sync::Arc<dac_raster::Rgba8>>,
 }
 
-/// One side of the loupe that gets a window render.
+/// One side of the loupe that gets tiles.
 #[derive(Clone, Copy)]
 struct WindowView {
-    slot: Slot,
     /// The Before side (the photo without its edits).
     before: bool,
     /// The rect the photo is drawn in.
@@ -245,65 +247,121 @@ struct WindowView {
     visible: Rect,
 }
 
-/// Ask for the window of `v` that holds what is on screen; remember it so its texture can be
-/// drawn where it belongs. `None`: no window is wanted (or possible) for this view.
-fn request_window(app: &mut DacApp, c: &WindowCtx, v: &WindowView) -> Option<crate::region::RegionView> {
+/// Priority of on-screen tiles (just below the whole-frame render) and of the ring around them.
+const TILE_PRIORITY: u32 = 99;
+const TILE_RING_PRIORITY: u32 = 70;
+
+/// What of a `full` frame drawn in `rect` (points) is inside `visible`, in frame pixels.
+fn visible_px(full: (usize, usize), rect: Rect, visible: Rect) -> (f32, f32, f32, f32) {
+    let sx = full.0 as f32 / rect.width().max(1e-3);
+    let sy = full.1 as f32 / rect.height().max(1e-3);
+    (
+        sx * (visible.left() - rect.left()),
+        sy * (visible.top() - rect.top()),
+        sx * (visible.right() - rect.left()),
+        sy * (visible.bottom() - rect.top()),
+    )
+}
+
+/// Ask for the tiles of `v` that are on screen (and a ring around them), nearest the centre first;
+/// put a 1:1 preview's part in place of each until it is rendered. `None`: no tiles are wanted (or
+/// possible) for this view. `wanted` collects the tile slots asked for.
+fn request_window(app: &mut DacApp, c: &WindowCtx, v: &WindowView, wanted: &mut Vec<Slot>, ctx: &egui::Context) -> Option<crate::region::RegionView> {
     let frame_edge = c.frame_edge?;
-    // while a pinch or scroll runs the windows there are keep being drawn, magnified: no new one
-    // per frame (zooming out would ask for ever wider ones)
+    let held = |app: &DacApp| if v.before { app.region_before_view } else { app.region_view }.filter(|w| w.photo == c.id);
+    // while a pinch or scroll runs the tiles there are keep being drawn, magnified: none asked for
+    // per frame (zooming out would ask for ever more)
     if c.holding {
-        return if v.before { app.region_before_view } else { app.region_view }.filter(|w| w.photo == c.id);
+        return held(app);
     }
     let (fw, fh) =
         if c.aspect >= 1.0 { (frame_edge as f32, frame_edge as f32 / c.aspect) } else { (frame_edge as f32 * c.aspect, frame_edge as f32) };
-    let (fw, fh) = (fw.round().max(1.0) as usize, fh.round().max(1.0) as usize);
-    // what is on screen, in pixels of the window's frame (the drawn frame, scaled)
-    let to_px = c.ppp * frame_edge as f32 / c.drawn_long.max(1.0);
-    let visible = (
-        to_px * (v.visible.left() - v.target.left()),
-        to_px * (v.visible.top() - v.target.top()),
-        to_px * (v.visible.right() - v.target.left()),
-        to_px * (v.visible.bottom() - v.target.top()),
-    );
-    let win = crate::region::window_for(fw, fh, visible, crate::region::max_span(c.texture_side))?;
-    // the Before side waits for the original the After is decoding (see `defer_before_window`)
-    let original_held = app.session.media.has_source(c.id, dac_engine::SourceLevel::for_size(fw.max(fh)));
-    if crate::region::defer_before_window(v.before, app.renderer.is_pending(Slot::Region), original_held) {
-        return app.region_before_view.filter(|w| w.photo == c.id);
+    let full = (fw.round().max(1.0) as usize, fh.round().max(1.0) as usize);
+    let side = crate::region::tile_side(c.texture_side);
+    // (a ring of tiles around the view is prepared for a pan, but not drafted in a slider drag)
+    let tiles = crate::region::tiles_for(full, side, visible_px(full, v.target, v.visible), if c.interacting { 0 } else { 1 });
+    if !tiles.iter().any(|t| t.1) {
+        return None;
     }
-    let job = if v.before {
-        app.session.region_job_before(c.id, fw, fh, win, !c.crop_tool)
-    } else {
-        app.session.region_job(c.id, fw, fh, win, !c.crop_tool)
+    // the look every tile of this view shares: the key of a job for a fixed window (photo, side,
+    // frame size, settings, overlay, proof and quality all go into it)
+    let job_for = |app: &mut DacApp, win: dac_engine::pipeline::PixelWindow| {
+        let job = if v.before {
+            app.session.region_job_before(c.id, full.0, full.1, win, !c.crop_tool)
+        } else {
+            app.session.region_job(c.id, full.0, full.1, win, !c.crop_tool)
+        }?;
+        let job = if c.interacting { job.draft() } else { job };
+        let (overlay, proof) = if v.before { (dac_pipeline::Overlay::None, None) } else { (c.overlay, c.proof) };
+        Some(job.with_overlay(overlay).with_proof(proof))
     };
-    // refused: what the window reads (a spot's source, an Auto Mask stroke) is too far for one
-    // render, so the whole frame is rendered at the drawn size instead (see `region::plan`)
-    let Some(job) = job else {
+    let probe = dac_engine::pipeline::PixelWindow { x: 0, y: 0, w: 1, h: 1 };
+    let Some(look) = job_for(app, probe).map(|j| j.key) else {
         app.window_refused = Some((c.id, c.look, frame_edge));
         return None;
     };
-    // a drag renders drafts of the window, as it does of the whole frame
-    let job = if c.interacting { job.draft() } else { job };
-    let look = job.settings.hash64();
-    let view = crate::region::RegionView { photo: c.id, before: v.before, key: job.key, full: (fw, fh), window: win, settings: look };
-    // windows of other photos, looks and zooms of this side can't be drawn any more
-    app.region_tiles.retain(|(before, _), t| *before != v.before || t.is_current(c.id, (fw, fh), look, c.interacting));
-    app.region_tiles.insert((v.before, job.key), view);
-    app.renderer.request(v.slot, job, 99);
-    Some(view)
+    // the original is decoded once: until it is held, one tile at a time asks for it (each worker
+    // would decode its own copy), the After side first
+    let original_held = app.session.media.has_source(c.id, dac_engine::SourceLevel::for_size(full.0.max(full.1)));
+    let mut budget = if original_held {
+        usize::MAX
+    } else if app.renderer.tiles_pending() > 0 || (v.before && app.region_view.is_some_and(|w| w.photo == c.id)) {
+        0
+    } else {
+        1
+    };
+    let placeholder =
+        c.full_preview.as_ref().filter(|p| !v.before && c.overlay == dac_pipeline::Overlay::None && c.proof.is_none() && (p.width, p.height) == full);
+    let mut cover: Option<(usize, usize, usize, usize)> = None;
+    for &(tile, on_screen) in &tiles {
+        let Some(rect) = crate::region::tile_rect(full, side, tile) else { continue };
+        let key = crate::region::TileKey { photo: c.id, before: v.before, full, tile, look };
+        if on_screen {
+            let (x1, y1) = (rect.x + rect.w, rect.y + rect.h);
+            cover = Some(cover.map_or((rect.x, rect.y, x1, y1), |(a, b, cc, d)| (a.min(rect.x), b.min(rect.y), cc.max(x1), d.max(y1))));
+            if let Some(p) = placeholder
+                && !c.interacting
+                && let Some(part) = crate::region::crop_tile(p, dac_engine::pipeline::PixelWindow { x: 0, y: 0, w: p.width, h: p.height }, rect)
+            {
+                app.renderer.tile_placeholder(ctx, key, &part);
+            }
+        }
+        if app.renderer.tiles.has_render(&key) {
+            continue;
+        }
+        let slot = Slot::Tile { before: v.before, col: tile.col, row: tile.row };
+        if budget == 0 {
+            continue;
+        }
+        let window = crate::region::tile_render_window(full, rect);
+        // refused: what the tile reads (a spot's source, an Auto Mask stroke) is too far for one
+        // render, so the whole frame is rendered at the drawn size instead (see `region::plan`)
+        let Some(job) = job_for(app, window) else {
+            app.window_refused = Some((c.id, c.look, frame_edge));
+            return None;
+        };
+        budget -= 1;
+        wanted.push(slot);
+        app.renderer.request_tile(key, job, window, rect, if on_screen { TILE_PRIORITY } else { TILE_RING_PRIORITY });
+    }
+    let (x0, y0, x1, y1) = cover?;
+    let window = dac_engine::pipeline::PixelWindow { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    Some(crate::region::RegionView { photo: c.id, before: v.before, key: look, full, window, settings: look, tile: side })
 }
 
-/// Draw `v`'s window texture over the whole-frame render, if it is the one asked for (or, in a
-/// drag, an earlier draft of it).
-fn draw_window(p: &egui::Painter, app: &DacApp, c: &WindowCtx, v: &WindowView, wanted: &crate::region::RegionView) {
-    let Some(tex) = app.renderer.textures.get(&v.slot).filter(|t| t.photo == c.id) else { return };
-    let Some(tile) = app.region_tiles.get(&(v.before, tex.key)).filter(|t| t.is_current(c.id, wanted.full, wanted.settings, c.interacting)) else {
-        return;
-    };
-    let (fw, fh) = (tile.full.0 as f32, tile.full.1 as f32);
-    let at = v.img.min + vec2(tile.window.x as f32 / fw * v.img.width(), tile.window.y as f32 / fh * v.img.height());
-    let dst = Rect::from_min_size(at, vec2(tile.window.w as f32 / fw * v.img.width(), tile.window.h as f32 / fh * v.img.height()));
-    p.image(tex.tex.id(), dst, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+/// Draw the tiles of `view` that are on screen over the whole-frame render: each its own render,
+/// or (in a drag) the newest of its place, or its part of the 1:1 preview.
+fn draw_window(p: &egui::Painter, app: &mut DacApp, c: &WindowCtx, v: &WindowView, view: &crate::region::RegionView) {
+    let full = view.full;
+    for (tile, _) in crate::region::tiles_for(full, view.tile, visible_px(full, v.img, v.visible), 0) {
+        let Some(rect) = crate::region::tile_rect(full, view.tile, tile) else { continue };
+        let key = crate::region::TileKey { photo: c.id, before: v.before, full, tile, look: view.settings };
+        let Some(tex) = app.renderer.tiles.draw(&key, c.interacting || c.holding) else { continue };
+        let (fw, fh) = (full.0 as f32, full.1 as f32);
+        let at = v.img.min + vec2(rect.x as f32 / fw * v.img.width(), rect.y as f32 / fh * v.img.height());
+        let dst = Rect::from_min_size(at, vec2(rect.w as f32 / fw * v.img.width(), rect.h as f32 / fh * v.img.height()));
+        p.image(tex.tex.id(), dst, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    }
 }
 
 pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
@@ -401,7 +459,7 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
         native_long,
         texture_side,
         draft_scale: scale,
-        windows: !app.ui.soft_proof && view_overlay(app, &d) == dac_pipeline::Overlay::None,
+        windows: true,
     };
     let mut plan = crate::region::plan(&app.ui.settings, sizes);
     if plan.window_edge.is_some_and(|edge| app.window_refused == Some((id, look, edge))) {
@@ -467,61 +525,75 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
     {
         app.renderer.request(Slot::Before, job, 90);
     }
-    // zoomed past what the whole-frame render holds: also render the part on screen, at no more
-    // than 100 % (the GPU magnifies beyond that), for each side that is shown. Not while hovering a
-    // look or showing an overlay (those draw another image), nor where the shown picture isn't the
-    // frame's own (an unsupported raw's embedded JPEG with another crop: window coordinates are
-    // the frame's).
-    let plain_view = hover_key.is_none()
-        && !app.ui.soft_proof
-        && view_overlay(app, &d) == dac_pipeline::Overlay::None
-        && crate::region::same_aspect(display_aspect, aspect);
+    // zoomed past what the whole-frame render holds: also render the tiles on screen, at no more
+    // than 100 % (the GPU magnifies beyond that), for each side that is shown, with the overlay
+    // or soft proof the whole frame has. Not while hovering a look (that draws another image),
+    // nor where the shown picture isn't the frame's own (an unsupported raw's embedded JPEG with
+    // another crop: tile coordinates are the frame's).
+    let plain_view = hover_key.is_none() && crate::region::same_aspect(display_aspect, aspect);
+    let overlay = view_overlay(app, &d);
+    let frame_edge = plan.window_edge.filter(|_| plain_view);
+    // the 1:1 preview, when it is the zoomed frame (Build 1:1 Previews), stands in for the tiles
+    // (one held only on disk is read in the background, once per photo and look)
+    let full_preview = frame_edge.filter(|e| *e >= native_long).and_then(|_| {
+        let load = app.full_preview_loaded != Some((id, look));
+        app.full_preview_loaded = Some((id, look));
+        app.session.full_preview_in_memory(id, load)
+    });
     let window_ctx = WindowCtx {
         id,
-        frame_edge: plan.window_edge.filter(|_| plain_view),
-        drawn_long,
+        frame_edge,
         aspect,
-        ppp,
         texture_side,
         crop_tool,
         interacting,
         look,
         holding: navigating || app.size_hold.holding(now),
+        overlay,
+        proof: app.ui.soft_proof.then_some(app.ui.proof),
+        full_preview,
     };
     // (slot, before side?, rect to draw in, rect it is requested for, area whose pixels show)
     let mut window_views: Vec<WindowView> = Vec::new();
     if window_ctx.frame_edge.is_some() {
-        let before_rect = |r: Rect, area: Rect| WindowView { slot: Slot::RegionBefore, before: true, img: r, target: r, visible: area };
-        let after = WindowView { slot: Slot::Region, before: false, img: img_rect, target: target_rect, visible: main_area };
+        let before_rect = |r: Rect, area: Rect| WindowView { before: true, img: r, target: r, visible: area };
+        let after = WindowView { before: false, img: img_rect, target: target_rect, visible: main_area };
         if split {
             let br = fit_rect(areas[0], aspect, app.ui.zoom, native, ppp, app.ui.pan);
             window_views.push(before_rect(br, areas[0]));
             window_views.push(after);
         } else if show_before {
-            window_views.push(WindowView { slot: Slot::RegionBefore, before: true, img: img_rect, target: target_rect, visible: canvas });
+            window_views.push(WindowView { before: true, img: img_rect, target: target_rect, visible: canvas });
         } else if split_view {
-            window_views.push(WindowView { slot: Slot::RegionBefore, before: true, img: img_rect, target: target_rect, visible: canvas });
+            window_views.push(WindowView { before: true, img: img_rect, target: target_rect, visible: canvas });
             window_views.push(WindowView { visible: canvas, ..after });
         } else {
             window_views.push(WindowView { visible: canvas, ..after });
         }
     }
     let mut windows: Vec<(WindowView, crate::region::RegionView)> = Vec::new();
+    // (the After first: until the original is decoded, it is the one that asks for it)
+    window_views.sort_by_key(|v| v.before);
+    let mut wanted_tiles = Vec::new();
     for v in window_views {
-        if let Some(view) = request_window(app, &window_ctx, &v) {
+        if let Some(view) = request_window(app, &window_ctx, &v, &mut wanted_tiles, ui.ctx()) {
             windows.push((v, view));
         }
     }
-    for (slot, before) in [(Slot::Region, false), (Slot::RegionBefore, true)] {
+    // tiles scrolled away before their turn came are not rendered
+    if !window_ctx.holding {
+        app.renderer.cancel_tiles(|s| wanted_tiles.contains(&s));
+    }
+    for before in [false, true] {
         let shown = windows.iter().find(|(v, _)| v.before == before).map(|(_, view)| *view);
         if before {
             app.region_before_view = shown;
         } else {
             app.region_view = shown;
         }
+        // a side no longer shown zoomed frees its tiles
         if shown.is_none() {
-            app.region_tiles.retain(|(b, _), _| *b != before);
-            app.renderer.release(slot);
+            app.renderer.tiles.retain(|k| k.before != before);
         }
     }
     let p = ui.painter_at(canvas);

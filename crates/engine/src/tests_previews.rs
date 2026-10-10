@@ -44,6 +44,23 @@ fn check_one_to_one(s: &mut Session, id: dac_catalog::PhotoId) {
         let d = max_diff(&export, &part, win, visible);
         assert!(d <= 2, "1:1 window {win:?} differs from the export by {d} levels");
     }
+    // the loupe's tile grid (`region::tiles_for` in the UI): each 1024 px tile is rendered with its
+    // margin and cropped back; across a tile boundary — the seam between two renders — the pixels
+    // on both sides still equal the export's
+    let tile = 1024usize;
+    if w > tile && h > tile {
+        let (row_y, seam_x) = ((h / tile).saturating_sub(1).min(1) * tile, tile);
+        for col in [0usize, 1] {
+            let t = PixelWindow { x: col * tile, y: row_y, w: tile.min(w - col * tile), h: tile.min(h - row_y) };
+            let (wx, wy) = (t.x.saturating_sub(margin), t.y.saturating_sub(margin));
+            let win = PixelWindow { x: wx, y: wy, w: (t.x + t.w + margin).min(w) - wx, h: (t.y + t.h + margin).min(h) - wy };
+            let part = s.region_job(id, w, h, win, true).expect("a tile of the 1:1 view").run().rendered.unwrap().image;
+            // the 64 px strip of this tile that touches the seam
+            let strip = if col == 0 { PixelWindow { x: seam_x - 64, w: 64, ..t } } else { PixelWindow { x: seam_x, w: 64.min(t.w), ..t } };
+            let d = max_diff(&export, &part, win, strip);
+            assert!(d <= 2, "tile {col} at the seam x = {seam_x} differs from the export by {d} levels");
+        }
+    }
 }
 
 // Given a procedural photo with edits, every 1:1 window equals the full-resolution export
@@ -118,14 +135,17 @@ fn preview_settings_are_validated_and_applied() {
     assert_eq!(s.preview_prefs.standard_edge(), 1440, "a refused change leaves the settings");
 }
 
-/// Panning at 1:1 on a 45 MP photo (8256 × 5504) in a 2560 × 1440 canvas: the loupe draws the
-/// window it has every frame (the GPU moves it) and renders a new window, snapped to a 256 px
-/// grid with a margin, only when the view leaves the one it has. Measures each window render,
-/// CPU and GPU. Opt in (release build recommended):
+/// Panning at 1:1 on a 45 MP photo (8256 × 5504) in a 2560 × 1440 canvas with the loupe's tile
+/// grid (`region` in the UI): 1024 px tiles, each rendered with its margin of context and cropped
+/// back, kept in a cache; the view and a ring of one tile around it are asked for, so a pan finds
+/// the tiles it moves onto ready. Every frame the loupe draws the tiles it has (textures moved by
+/// the GPU); this measures the tile renders a pan needs, CPU and GPU, and the pan speed (in frames
+/// per second at 40 px a frame) one render worker keeps sharp. Opt in (release build recommended):
 /// `cargo test --release -p dac-engine --lib pan_at_one_to_one -- --ignored --nocapture`
 #[test]
 #[ignore]
 fn pan_at_one_to_one_on_45_megapixels() {
+    use std::collections::HashSet;
     use std::sync::Arc;
     let scene = dac_scenes::demo_library().into_iter().next().unwrap();
     let (fw, fh) = (8256usize, 5504usize);
@@ -136,49 +156,64 @@ fn pan_at_one_to_one_on_45_megapixels() {
     d.effects.clarity = 20.0;
     let (cw, ch) = (2560usize, 1440usize);
     let margin = ((fw.max(fh) as f64 * 0.045).min(768.0) as usize).div_ceil(256).max(1) * 256;
-    let window_for = |cx: usize, cy: usize| {
-        let snap = |lo: usize, hi: usize, full: usize| {
-            let a = lo.saturating_sub(margin) / 256 * 256;
-            let b = (hi + margin).div_ceil(256) * 256;
-            (a, b.min(full))
-        };
-        let (x0, x1) = snap(cx, cx + cw, fw);
-        let (y0, y1) = snap(cy, cy + ch, fh);
+    let tile = 1024usize;
+    let (cols, rows) = (fw.div_ceil(tile), fh.div_ceil(tile));
+    // the view's tiles and a ring of one around them
+    let wanted = |cx: usize, cy: usize| {
+        let (c0, c1) = ((cx / tile).saturating_sub(1), ((cx + cw - 1) / tile + 1).min(cols - 1));
+        let (r0, r1) = ((cy / tile).saturating_sub(1), ((cy + ch - 1) / tile + 1).min(rows - 1));
+        (r0..=r1).flat_map(move |r| (c0..=c1).map(move |c| (c, r))).collect::<Vec<_>>()
+    };
+    let render_window = |c: usize, r: usize| {
+        let (x, y) = (c * tile, r * tile);
+        let (x0, y0) = (x.saturating_sub(margin), y.saturating_sub(margin));
+        let (x1, y1) = ((x + tile + margin).min(fw), (y + tile + margin).min(fh));
         PixelWindow { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
     };
     for gpu in [false, true] {
         if gpu && !dac_gpu::available() {
-            eprintln!("gpu: not available");
+            eprintln!("gpu: not available, skipped");
             continue;
         }
-        let stages = dac_pipeline::StageCache::default();
-        // a brisk pan: 40 px a frame for 3 s at 60 fps
-        let (mut cur, mut renders, mut total, mut worst) = (None::<PixelWindow>, 0usize, 0.0f64, 0.0f64);
-        let frames = 180;
-        for f in 0..frames {
-            let cx = (1000 + f * 40).min(fw - cw);
-            // the window there is still covers the view while the visible pixels are inside it
-            if cur.is_some_and(|w| cx >= w.x && cx + cw <= w.x + w.w) {
-                continue;
-            }
-            let want = window_for(cx, 2000);
+        let mut held: HashSet<(usize, usize)> = HashSet::new();
+        let render = |c: usize, r: usize| {
+            let want = render_window(c, r);
             let req = dac_pipeline::RenderRequest { window: Some(want), ..dac_pipeline::RenderRequest::fit(fw, fh) };
             let t = std::time::Instant::now();
-            let r = crate::media::develop(&src, &info, &d, &req, Some(&stages), gpu);
-            let ms = t.elapsed().as_secs_f64() * 1e3;
-            assert_eq!((r.image.width, r.image.height), (want.w, want.h));
-            total += ms;
-            worst = worst.max(ms);
-            renders += 1;
-            cur = Some(want);
+            let out = crate::media::develop(&src, &info, &d, &req, None, gpu);
+            assert_eq!((out.image.width, out.image.height), (want.w, want.h));
+            t.elapsed().as_secs_f64() * 1e3
+        };
+        // zooming in: the first view and its ring (not part of the pan)
+        let (start_x, y) = (1000usize, 2000usize);
+        let t0 = std::time::Instant::now();
+        let mut first = 0;
+        for (c, r) in wanted(start_x, y) {
+            render(c, r);
+            held.insert((c, r));
+            first += 1;
+        }
+        let first_ms = t0.elapsed().as_secs_f64() * 1e3;
+        // a brisk pan: 40 px a frame for 3 s at 60 fps
+        let (mut renders, mut total, mut worst) = (0usize, 0.0f64, 0.0f64);
+        let frames = 180;
+        for f in 1..frames {
+            let cx = (start_x + f * 40).min(fw - cw);
+            for (c, r) in wanted(cx, y) {
+                if held.insert((c, r)) {
+                    let ms = render(c, r);
+                    total += ms;
+                    worst = worst.max(ms);
+                    renders += 1;
+                }
+            }
         }
         let mean = total / renders.max(1) as f64;
-        // windows render in the background while the one there is drawn moved: the view stays
-        // sharp as long as a render finishes within the frames the margin buys
-        let frames_per_render = frames as f64 / renders.max(1) as f64;
-        let sharp_fps = 1000.0 / mean * frames_per_render;
+        // the tiles render in the background while the ones there are drawn moved: the view stays
+        // sharp while the renders a pan needs take less time than the frames they span
+        let sharp_fps = (frames - 1) as f64 / (total / 1000.0).max(1e-9);
         eprintln!(
-            "{}: {renders} window renders in {frames} frames (margin {margin} px), mean {mean:.1} ms, worst {worst:.1} ms → sharp up to {sharp_fps:.0} fps at 40 px/frame",
+            "{}: first view {first} tiles in {first_ms:.0} ms; pan: {renders} tile renders in {frames} frames (tile {tile} px, margin {margin} px), mean {mean:.1} ms, worst {worst:.1} ms → sharp up to {sharp_fps:.0} fps at 40 px/frame (one worker)",
             if gpu { "gpu" } else { "cpu" }
         );
     }

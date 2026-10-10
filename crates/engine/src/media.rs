@@ -1180,6 +1180,27 @@ impl crate::Session {
         }
     }
 
+    /// The photo's 1:1 preview (Library → Previews → Build 1:1 Previews) for its current look, if
+    /// it is held in memory: what a zoomed loupe shows at once while its tiles render. With
+    /// `load`, one held only on disk is read into memory on a background thread for next time.
+    pub fn full_preview_in_memory(&self, id: PhotoId, load: bool) -> Option<Arc<dac_raster::Rgba8>> {
+        let p = self.catalog.photo(id)?;
+        let key = Self::full_view_key(p);
+        if let Some(img) = self.media.rendered.get_in_memory(key) {
+            return Some(img);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if load && self.media.rendered.contains(key) {
+            let cache = self.media.rendered.clone();
+            if std::thread::Builder::new().name("full-preview-load".into()).spawn(move || drop(cache.get(key))).is_err() {
+                log::warn!("could not start a preview loader thread");
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = load;
+        None
+    }
+
     /// Something to show in the loupe right away for `id` (see [`QuickJob`]): its cached view
     /// render, else the embedded preview of an unedited raw, else a cached or fresh thumbnail.
     pub fn quick_view_job(&mut self, id: PhotoId, max_edge: usize, apply_crop: bool) -> Option<QuickJob> {

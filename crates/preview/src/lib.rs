@@ -53,6 +53,14 @@ impl PreviewCache {
         self.get_at(self.generation(), key)
     }
 
+    /// `key` if it is held in memory (never reads the disk).
+    pub fn get_in_memory(&self, key: Hash128) -> Option<Arc<Rgba8>> {
+        if self.generation.read().unwrap_or_else(std::sync::PoisonError::into_inner).is_none() {
+            return None;
+        }
+        self.mem.lock().unwrap_or_else(|e| e.into_inner()).get(&key).cloned()
+    }
+
     /// Changes when explicitly cleared; jobs captured before that clear cannot repopulate it.
     /// A retired cache reports `u64::MAX`, which no job's generation matches.
     pub fn generation(&self) -> u64 {
