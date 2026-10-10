@@ -378,19 +378,21 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         delta += cl * 0.85 * det * (0.35 + 0.65 * mid);
     }
     let tx = pf(F_TEX) + lt[8];
-    let sp = lt[13] * 0.6 + pf(F_SHARPEN);
-    if ((tx != 0.0 || sp != 0.0) && pu(F_HAS_TEX) != 0u) {
+    if (tx != 0.0 && pu(F_HAS_TEX) != 0u) {
         let det = l_pre - tex[i];
         let tame = 1.0 - 0.6 * sstep(0.4, 1.6, abs(det));
         delta += tx * 1.1 * clamp(det, -1.0, 1.0) * tame;
-        if (sp != 0.0) {
-            let sm = pf(F_SHARPEN_MASK);
-            var mk = 1.0;
-            if (sm > 0.0) {
-                mk = sstep(sm * 0.25, sm * 0.25 + 0.15, abs(det));
-            }
-            delta += sp * 1.3 * clamp(det, -0.8, 0.8) * mk;
+    }
+    // sharpening: unsharp mask on the pixel-scale band (`sharpen_term` on the CPU)
+    let sp = (lt[13] * 0.6 + pf(F_SHARPEN)) * pf(F_SHARPEN_FADE);
+    if (sp != 0.0 && pu(F_HAS_SHP) != 0u) {
+        let det = l_pre - tex[pu(F_SHP_OFF) + i];
+        let sm = pf(F_SHARPEN_MASK);
+        var mk = 1.0;
+        if (sm > 0.0) {
+            mk = sstep(sm * 0.1, sm * 0.1 + 0.06, abs(det));
         }
+        delta += sp * 7.0 * mk * det / (1.0 + abs(det) / pf(F_SHARPEN_LIMIT));
     }
     // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
     if (l_noise != 0.0 && pu(F_HAS_TEX) != 0u) {
