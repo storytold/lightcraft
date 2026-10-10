@@ -1,0 +1,16 @@
+ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff
+ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff
+ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff
+ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff
+ffffff 6d6d6d 787878 787878 787878 6d6d6d 737373 787878 787878 777777 6b6b6b 767676 787878 787878 747474 f3f3f3
+ffffff 272727 282828 262626 171717 1e1e1e 272727 282828 232323 161616 232323 282828 282828 1e1e1e 181818 ededed
+ffffff 282828 232323 151515 242424 282828 282828 1e1e1e 171717 262626 282828 272727 181818 1c1c1c 272727 eeeeee
+ffffff 1e1e1e 181818 262626 282828 272727 191919 1d1d1d 272727 282828 242424 161616 222222 282828 282828 eeeeee
+ffffff 1c1c1c 272727 282828 252525 161616 222222 282828 282828 212121 161616 262626 282828 272727 1b1b1b ececec
+ffffff 282828 282828 202020 161616 252525 282828 272727 1b1b1b 1a1a1a 272727 282828 262626 171717 202020 eeeeee
+ffffff 272727 1b1b1b 1b1b1b 272727 282828 262626 161616 202020 282828 282828 222222 151515 242424 282828 eeeeee
+ffffff 6a6a6a 6c6c6c 737373 737373 737373 666666 707070 737373 737373 707070 666666 737373 737373 737373 f4f4f4
+ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff
+ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff
+ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff
+ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff ffffff

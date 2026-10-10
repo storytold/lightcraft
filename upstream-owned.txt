@@ -25,6 +25,7 @@ crates/hash/
 crates/immich/
 crates/text/
 crates/pdf/
+crates/layout/
 # the Classic shell
 crates/ui-egui/src/module.rs
 crates/ui-egui/src/panels/classic.rs
