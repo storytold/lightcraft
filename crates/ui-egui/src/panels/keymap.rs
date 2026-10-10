@@ -58,7 +58,9 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     rows.sort_by_cached_key(|(b, _)| crate::i18n::tr(b.label).to_lowercase());
 
     // a fixed height, so the dialog doesn't jump around while the search narrows the list
-    egui::ScrollArea::vertical().max_height(400.0).min_scrolled_height(400.0).auto_shrink([false, false]).id_salt("shortcuts-list").show(ui, |ui| {
+    // (shorter on a short window, so the dialog fits it)
+    let h = crate::panels::dialogs::list_height(ui, 400.0);
+    egui::ScrollArea::vertical().max_height(h).min_scrolled_height(h).auto_shrink([false, false]).id_salt("shortcuts-list").show(ui, |ui| {
         egui::Grid::new("shortcuts").striped(true).num_columns(4).spacing([12.0, 4.0]).show(ui, |ui| {
             for (b, sc) in &rows {
                 row(app, ui, t, b, sc.as_deref(), mac);

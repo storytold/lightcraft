@@ -266,7 +266,8 @@ pub fn contributors_ui(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let list = sorted(CONTRIBUTORS, v.names, v.key, v.ascending);
     ui.label(RichText::new(crate::i18n::tr_format!("{} contributors · {} commits", list.len(), group(TOTAL_COMMITS))).small().color(t.text_dim));
     ui.separator();
-    egui::ScrollArea::both().id_salt("credits_scroll").max_height(LIST_HEIGHT).auto_shrink([false, true]).show(ui, |ui| {
+    let list_h = crate::panels::dialogs::list_height(ui, LIST_HEIGHT);
+    egui::ScrollArea::both().id_salt("credits_scroll").max_height(list_h).auto_shrink([false, true]).show(ui, |ui| {
         if list.is_empty() {
             ui.label(crate::i18n::tr("No contributor data was built into this copy."));
         } else if v.table {
@@ -326,7 +327,8 @@ pub fn models_ui(ui: &mut egui::Ui) {
         return;
     }
     let assisted: u64 = MODELS.iter().map(|m| m.commits).max().unwrap_or(0).max(1);
-    egui::ScrollArea::both().id_salt("credits_models_scroll").max_height(LIST_HEIGHT).auto_shrink([false, true]).show(ui, |ui| {
+    let list_h = crate::panels::dialogs::list_height(ui, LIST_HEIGHT);
+    egui::ScrollArea::both().id_salt("credits_models_scroll").max_height(list_h).auto_shrink([false, true]).show(ui, |ui| {
         egui::Grid::new("credits_models").striped(true).num_columns(6).show(ui, |ui| {
             for h in ["Company", "Model", "Version", "Commits", "% of all commits", "Lines +/−"] {
                 ui.label(RichText::new(crate::i18n::tr(h)).strong());

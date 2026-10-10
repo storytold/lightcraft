@@ -2,6 +2,12 @@
 
 ## October 2026
 
+### Dialogs fit the window
+- A dialog taller than the window no longer runs off it (issue #781): on a 1366×768 screen the Export dialog's title
+  and its Cancel / OK buttons were off screen, so it couldn't be confirmed. Now its options scroll and the title and
+  buttons stay visible. Long lists in dialogs (What's New, All Metadata, Keyboard Shortcuts) get shorter to fit.
+  Dialogs that fit look as before.
+
 ### Activity stack
 - Long-running tasks show in one place, top left under the top bar, as in Lightroom Classic (issue #345): imports and
   folder scans, exports (and the contact sheet PDF), Synchronize Folder, Build / Smart Previews, Lightroom catalog import, Photo Merge, model downloads, the face scan,
