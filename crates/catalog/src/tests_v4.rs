@@ -259,9 +259,37 @@ fn v3_library_is_migrated_with_a_backup() {
     std::fs::write(s.path().join(SNAPSHOT), &snap).unwrap();
     std::fs::write(s.path().join(LOG), &log).unwrap();
 
+    assert!(library::needs_migration(s.path()));
+    // progress is visible from another thread while it runs (other tests may migrate too: only
+    // this library's reports count)
+    let ours = s.path().display().to_string();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let watcher = {
+        let (stop, ours) = (stop.clone(), ours.clone());
+        std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Some(p) = crate::progress::migration().filter(|p| p.library == ours) {
+                    assert!((0.0..=1.0).contains(&p.fraction()), "{p:?}");
+                    assert!(!p.describe().is_empty());
+                    if seen.last() != Some(&p.phase) {
+                        seen.push(p.phase);
+                    }
+                }
+                std::thread::yield_now();
+            }
+            seen
+        })
+    };
     let t = std::time::Instant::now();
     let (j, got, r) = open(s.path());
     eprintln!("migrated {n} photos in {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let seen = watcher.join().unwrap();
+    eprintln!("migration phases seen: {seen:?}");
+    assert!(!seen.is_empty(), "no progress reported");
+    assert!(crate::progress::migration().is_none_or(|p| p.library != ours), "progress left behind");
+    assert!(!library::needs_migration(s.path()));
     assert_eq!(r.upgraded_from, Some(3));
     assert_eq!(got.to_snapshot(), c.to_snapshot());
     assert_eq!(j.seq(), n + 5);

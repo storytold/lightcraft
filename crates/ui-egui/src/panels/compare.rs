@@ -157,7 +157,7 @@ fn photo_tile(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId, slot: Slot, area
         photo.height.max(1) as usize,
         &photo.develop,
         true,
-        photo.embedded_lens.as_ref(),
+        photo.embedded_lens.as_deref(),
     );
     let aspect = frame.aspect() as f32;
     let native = super::detail::output_px(&frame);

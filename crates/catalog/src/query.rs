@@ -131,6 +131,148 @@ fn par_filter<'a>(v: &[&'a Photo], keep: &(dyn Fn(&&Photo) -> bool + Sync)) -> V
     v.iter().copied().filter(|p| keep(p)).collect()
 }
 
+/// `f(position, item)` over `v`, on up to 16 threads (one on the web).
+fn par_each<'a>(v: &[&'a Photo], f: &(dyn Fn(usize, &&'a Photo) + Sync)) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 16);
+        let chunk = v.len().div_ceil(threads).max(1);
+        let done: Option<Vec<()>> = std::thread::scope(|s| {
+            let jobs: Vec<_> =
+                v.chunks(chunk).enumerate().map(|(k, c)| s.spawn(move || c.iter().enumerate().for_each(|(i, p)| f(k * chunk + i, p)))).collect();
+            jobs.into_iter().map(|j| j.join().ok()).collect()
+        });
+        if done.is_some() {
+            return;
+        }
+        // a worker panicked (it can't): run here instead (marking twice is harmless)
+    }
+    v.iter().enumerate().for_each(|(i, p)| f(i, p));
+}
+
+/// One bit per rank, set from several threads.
+struct RankMarks(Vec<std::sync::atomic::AtomicU64>);
+
+impl RankMarks {
+    fn new(n: usize) -> RankMarks {
+        RankMarks((0..n.div_ceil(64)).map(|_| std::sync::atomic::AtomicU64::new(0)).collect())
+    }
+    fn set(&self, r: usize) {
+        if let Some(w) = self.0.get(r / 64) {
+            w.fetch_or(1 << (r % 64), std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    fn get(&self, r: usize) -> bool {
+        self.0.get(r / 64).is_some_and(|w| w.load(std::sync::atomic::Ordering::Relaxed) & (1 << (r % 64)) != 0)
+    }
+}
+
+/// The whole catalog in one sort order, ascending (descending is its exact reverse: ids break
+/// every tie).
+pub(crate) struct Sorted {
+    key: SortKey,
+    seed: u64,
+    structural: u64,
+    other: u64,
+    len: usize,
+    /// Photo ids by rank.
+    order: Vec<PhotoId>,
+    /// Rank of each photo, by its position in the catalog (id order).
+    rank: Vec<u32>,
+}
+
+/// Sort orders of the whole catalog kept between queries, so a query only filters: the grid's
+/// default (all photos by capture date) no longer sorts 500 000 photos on every refresh. Ops that
+/// change a sort key bump an epoch ([`Catalog::apply`]), which retires the orders built before.
+/// Capture date, import date and random orders survive everything but added or removed photos and
+/// capture-time changes, so editing never re-sorts them. At most two orders are kept (about 12
+/// bytes a photo each).
+#[derive(Default)]
+pub(crate) struct SortCache {
+    /// Photos added or removed, or a capture time changed.
+    structural: u64,
+    /// Any other sort key changed (rating, edit time, file name, file size).
+    other: u64,
+    entries: std::sync::Mutex<Vec<std::sync::Arc<Sorted>>>,
+}
+
+impl Clone for SortCache {
+    fn clone(&self) -> Self {
+        SortCache::default()
+    }
+}
+
+impl PartialEq for SortCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for SortCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SortCache")
+    }
+}
+
+/// Orders worth keeping: below this a sort is cheaper than the bookkeeping.
+const CACHE_SORT_FROM: usize = 2_000;
+
+impl SortCache {
+    /// An op is about to change sort keys: `structural` = which photos exist or a capture time.
+    pub(crate) fn bump(&mut self, structural: bool) {
+        if structural {
+            self.structural = self.structural.wrapping_add(1);
+        } else {
+            self.other = self.other.wrapping_add(1);
+        }
+    }
+
+    fn valid(&self, e: &Sorted, key: SortKey, seed: u64, len: usize) -> bool {
+        let only_structural = matches!(key, SortKey::CaptureDate | SortKey::ImportDate | SortKey::Random);
+        e.key == key
+            && (key != SortKey::Random || e.seed == seed)
+            && e.len == len
+            && e.structural == self.structural
+            && (only_structural || e.other == self.other)
+    }
+
+    /// The order of `all` (the catalog's photos in id order) by `sort`, built when missing. `None`
+    /// for small catalogs (sorted directly).
+    fn sorted(&self, sort: &Sort, all: &[&Photo]) -> Option<std::sync::Arc<Sorted>> {
+        if all.len() < CACHE_SORT_FROM || u32::try_from(all.len()).is_err() {
+            return None;
+        }
+        {
+            let entries = self.entries.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(e) = entries.iter().find(|e| self.valid(e, sort.key, sort.seed, all.len())) {
+                return Some(e.clone());
+            }
+        }
+        let order = sort_photos(all.to_vec(), &Sort { ascending: true, ..*sort });
+        // ranks back in id order, which is `all`'s
+        let mut by_id: Vec<(PhotoId, u32)> = order.iter().enumerate().map(|(r, id)| (*id, r as u32)).collect();
+        by_id.sort_unstable();
+        if by_id.len() != all.len() || by_id.iter().zip(all).any(|((id, _), p)| *id != p.id) {
+            return None;
+        }
+        let rank: Vec<u32> = by_id.into_iter().map(|(_, r)| r).collect();
+        let e = std::sync::Arc::new(Sorted {
+            key: sort.key,
+            seed: sort.seed,
+            structural: self.structural,
+            other: self.other,
+            len: all.len(),
+            order,
+            rank,
+        });
+        let mut entries = self.entries.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        entries.retain(|x| self.valid(x, x.key, x.seed, all.len()) && !(x.key == e.key && x.seed == e.seed));
+        entries.insert(0, e.clone());
+        entries.truncate(2);
+        Some(e)
+    }
+}
+
 /// A string's sort key, 24 bytes: its first 23 bytes (zero-padded, big-endian) and a tag, 0 for
 /// no string, else 1 + its length capped at 24. Keys order exactly like the strings except that
 /// two strings longer than 23 bytes with the same start (tag 25 both) must be compared as
@@ -550,9 +692,36 @@ impl Filter {
 impl Catalog {
     /// Photos matching `filter`, in `sort` order (ties broken by id for stability).
     pub fn query(&self, filter: &Filter, sort: &Sort) -> Vec<PhotoId> {
+        self.query_with(filter, sort, true)
+    }
+
+    /// [`Self::query`], with or without the kept sort orders (tests compare both).
+    pub(crate) fn query_with(&self, filter: &Filter, sort: &Sort, cached: bool) -> Vec<PhotoId> {
         let root = filter.library_root();
         let keep = |p: &&Photo| filter.matches_in(p, self, root.as_deref());
         let all: Vec<&Photo> = self.photos().map(|p| p.as_ref()).collect();
+        if cached && let Some(sorted) = self.sort_cache.sorted(sort, &all) {
+            // the whole catalog's order is known: mark the matches by rank, read them off in order
+            let marks = RankMarks::new(all.len());
+            let mark = |pos: usize, p: &&Photo| {
+                if keep(p)
+                    && let Some(r) = sorted.rank.get(pos)
+                {
+                    marks.set(*r as usize);
+                }
+            };
+            if all.len() >= PARALLEL_FROM && !filter.depends_on_now() {
+                par_each(&all, &mark);
+            } else {
+                all.iter().enumerate().for_each(|(i, p)| mark(i, p));
+            }
+            let pick = |(r, id): (usize, &PhotoId)| marks.get(r).then_some(*id);
+            return if sort.ascending {
+                sorted.order.iter().enumerate().filter_map(pick).collect()
+            } else {
+                sorted.order.iter().enumerate().rev().filter_map(pick).collect()
+            };
+        }
         // large libraries: filter on several threads (not when a rule reads the thread's clock)
         let v: Vec<&Photo> =
             if all.len() >= PARALLEL_FROM && !filter.depends_on_now() { par_filter(&all, &keep) } else { all.into_iter().filter(keep).collect() };

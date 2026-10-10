@@ -486,7 +486,12 @@ impl CatalogDb {
                     unindex(&old, &mut tables)?;
                 }
             }
-            for ((id, json), p) in records.iter().zip(&changed) {
+            let report = crate::progress::active();
+            let total = records.len() as u64;
+            for (i, ((id, json), p)) in records.iter().zip(&changed).enumerate() {
+                if report && i % 4096 == 0 {
+                    crate::progress::phase(crate::progress::MigrationPhase::Writing, i as u64, total);
+                }
                 pt.insert(*id, json.as_slice()).map_err(dberr)?;
                 for (def, k) in str_keys(p) {
                     if let Some(t) = tables.get_mut(def) {

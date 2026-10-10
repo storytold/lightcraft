@@ -101,3 +101,47 @@ fn unopenable_library_asks_instead_of_running_a_demo() {
     drop(h);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A library in an older catalog format is upgraded on a worker thread with a progress window,
+/// then opened (command-line files imported after).
+#[test]
+fn old_catalog_is_upgraded_with_progress_then_opened() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-libupgrade-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let lib = dir.join("lib");
+    std::fs::create_dir_all(&lib).unwrap();
+    let mut c = dac_catalog::Catalog::new();
+    for i in 0..3 {
+        let id = c.alloc_photo_id();
+        let p = dac_catalog::Photo::new(
+            id,
+            dac_catalog::Source::File { path: format!("/nowhere/{i}.jpg") },
+            &format!("{i}.jpg"),
+            "JPEG",
+            8,
+            8,
+            "2026-01-01T00:00:00",
+        );
+        c.apply(dac_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    let snap = format!("{{\"format\":\"dac-catalog\",\"version\":3,\"seq\":3,\"catalog\":{}}}\n", c.to_snapshot());
+    std::fs::write(lib.join("catalog.snap"), snap).unwrap();
+    assert!(dac_engine::library::needs_migration(&lib));
+
+    let mut app = DacApp::new(dac_engine::Session::new().with_fs(), Services::default());
+    crate::panels::library_problem::start_upgrade(&mut app, lib.clone(), Vec::new());
+    assert!(app.library_problem.as_ref().is_some_and(|p| p.upgrading));
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+    let t0 = std::time::Instant::now();
+    while h.app.session.library.is_none() {
+        assert!(t0.elapsed() < T, "the upgrade never finished: {:?}", h.app.library_problem);
+        h.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    h.step();
+    assert!(h.app.library_problem.is_none(), "{:?}", h.app.library_problem);
+    assert_eq!(h.app.session.catalog.len(), 3);
+    assert!(!dac_engine::library::needs_migration(&lib));
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}

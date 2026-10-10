@@ -46,9 +46,27 @@ which dominates the worst case) and opened in 0.69–0.72 s with 1 050 MB peak R
 Migration v3 → v4 of 500 000 photos (`--backend v3 --migrate`, same load): 34 s on the first open (loading the JSON
 snapshot is half of it), peak RSS that of a v3 open; the next open takes 1.0 s. It happens once.
 
-Against the Phase 1 targets (500k photos: open < 2 s, filter < 100 ms, RSS < 2 GB): open and memory are met with room
-to spare; filtering is met for every filtered view and is at the limit for the unfiltered sort of all 500k photos on a
-loaded machine. 1M photos stays usable (1.6 s open, 0.3 s worst filter), but above 2 GB.
+### v4 with kept sort orders and compact records — 2026-10-10 (Phase 1.5 close)
+
+Same machine, still busy (load average about 20 on 32 threads). New columns: *first view* = the first query of the
+session (all photos by capture date), which builds the kept sort order; *RSS after open* and *peak RSS* (the peak
+includes the first view and the filter runs).
+
+| photos | open | first view | filter (worst, then) | RSS after open | peak RSS | first snapshot | after 1000 edits | disk |
+|---|---|---|---|---|---|---|---|---|
+| 250 000 | 1.1 s | 131 ms | 27 ms | 537 MB | 595 MB | 5.6 s | 599 ms | 0.55 GB |
+| 500 000 | 0.75 s | 131 ms | 24 ms | 892 MB | 996 MB | 5.5 s | 193 ms | 1.1 GB |
+| 1 000 000 | 1.5 s | 253 ms | 47 ms | 1 653 MB | 1 918 MB | 10.1 s | 436 ms | 2.2 GB |
+
+What changed: queries keep whole-catalog sort orders instead of sorting on every call (below), which took the
+unfiltered capture-date sort from 110–230 ms to 18–35 ms and removed about 400 MB of per-query garbage that stayed
+resident at 1M photos; and the photo record shrank from 1 176 to 936 bytes (the rarely present embedded lens
+corrections are boxed), 240 MB less at 1M photos. (The open and snapshot times vary with the machine's load: the
+250k open above ran during a busier moment than the 500k one.)
+
+Against the Phase 1 targets (500k photos: open < 2 s, filter < 100 ms, RSS < 2 GB): met — 500k opens in 0.75 s (0.9 s
+with the first view), every filter including the unfiltered capture-date sort of all photos answers in under 25 ms,
+and the process peaks under 1 GB. 1M photos opens in 1.5 s, filters in under 50 ms and peaks at 1.9 GB.
 
 ## Design (v4)
 
@@ -80,7 +98,12 @@ fast (below), not about leaving photos on disk.
 - **secondary indexes** (`folders`, `keywords`, `idx_camera`, `idx_captured_day`) serve lookups straight from the file
   (`CatalogDb::ids_where`), as do `read_photo` and `page_ids` (grid paging by id) — for tools and a future paging
   grid. Rating and flag have too few values for an index to beat a scan. The in-memory filter bar instead filters on
-  several threads and sorts with keys held inline (`query.rs`), which is what keeps it under 100 ms;
+  several threads against **kept sort orders** (`query.rs`, `SortCache`): the first query by a sort key sorts the whole
+  catalog once (keys held inline, on several threads) and keeps the order (ids by rank, and each photo's rank by its
+  position: about 12 bytes a photo, at most two orders kept); every later query marks its matches by rank in a bitset
+  and reads them off in order, so no query sorts. Ops that change a sort key bump an epoch that retires the stale
+  orders; capture-date, import-date and random orders survive everything but added or removed photos and capture-time
+  changes, so rating, flagging and editing never re-sort them;
 - redb panics on some damaged files: every call into it is wrapped (`guarded`), so a damaged store is an error
   ("restore it from a backup"), never a crash (`tests_v4::damaged_or_missing_store_is_an_error_not_a_crash` flips and
   truncates bytes).
@@ -176,8 +199,25 @@ both). Photos match by file path and virtual-copy name, so a photo whose origina
 - **Previous Export** source (`library.source {kind: previousExport}`): the photos of the last export, kept with the
   view (`view.json`).
 
+## Paging and migration progress
+
+- **Paging the view**: `Session::visible_page(offset, limit)` (and `visible_position`) hand out a window of the
+  visible photos; `catalog.query` without a filter pages the current view that way instead of copying the whole list.
+  The grid reads the shared `Arc<[PhotoId]>` (`Session::visible_shared`) and draws only the rows on screen; a million
+  ids are 8 MB.
+- **Migration progress**: `dac_catalog::progress::migration()` reports the running v3 → v4 migration (backup,
+  reading, encoding, writing *n* of *total* photos, finishing; process-wide, so another thread can show it).
+  `library::needs_migration(dir)` tells whether an open will migrate, `library::migrate(dir)` (the engine's
+  `library::migrate_library`, under the library lock) migrates without loading. The desktop app migrates an older
+  library on a worker task after its window shows, behind an "Upgrading your library" progress window
+  (`progress:libraryUpgrade`; `ui.inspect` → `libraryProblem.upgrade`), then opens it; the CLI prints the phases to
+  stderr before `run`, `mcp` and `snapshot` open the library.
+
 ## Not done yet
 
-- The grid still takes the full id list from `Catalog::query`; paging it through `CatalogDb::page_ids` (and leaving
-  photo records on disk until shown) needs the engine to read photos through a cache instead of `&Arc<Photo>`.
-- Migration of a 500k-photo v3 library takes tens of seconds and the RAM of a v3 open, once; no progress is reported.
+- Photo records all stay in memory (compact, with shared develop settings): about 1.65 KB a photo with the
+  benchmark's metadata. Evicting cold records to the store (a bounded cache over `CatalogDb::read_photo`) would need
+  the engine to read photos as owned `Arc<Photo>`s through a cache instead of `&Arc<Photo>` (about 575 call sites)
+  and a compact in-memory index of every field filters and smart-album rules read; it is not needed for the Phase 1
+  targets. Libraries with long History on many photos cost more (each distinct History state is kept once).
+- Migration of a 500k-photo v3 library still takes tens of seconds and the RAM of a v3 open, once.

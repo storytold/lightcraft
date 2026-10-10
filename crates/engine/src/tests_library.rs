@@ -458,3 +458,23 @@ fn a_library_open_elsewhere_is_refused() {
     assert_eq!(other.catalog.to_snapshot(), expect);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The view pages: a window of the visible photos without copying them all, and
+/// `catalog.query` pages the current view the same way.
+#[test]
+fn visible_photos_page_by_offset_and_limit() {
+    let mut s = Session::with_demo();
+    let all = s.visible_cloned();
+    assert!(all.len() > 3);
+    assert_eq!(s.visible_page(1, 2), (all.len(), all[1..3].to_vec()));
+    assert_eq!(s.visible_page(all.len() - 1, 10), (all.len(), vec![all[all.len() - 1]]));
+    assert_eq!(s.visible_page(usize::MAX, 10), (all.len(), vec![]));
+    assert_eq!(s.visible_position(all[2]), Some(2));
+    let r = s.execute("catalog.query", &json!({"offset": 1, "limit": 2})).unwrap();
+    assert_eq!(r["total"], all.len());
+    let ids: Vec<u64> = r["photos"].as_array().unwrap().iter().map(|p| p["id"].as_u64().unwrap()).collect();
+    assert_eq!(ids, vec![all[1].0, all[2].0]);
+    // a hostile offset is an empty page, not a crash
+    let r = s.execute("catalog.query", &json!({"offset": u64::MAX, "limit": u64::MAX})).unwrap();
+    assert_eq!(r["photos"].as_array().map(Vec::len), Some(0));
+}
