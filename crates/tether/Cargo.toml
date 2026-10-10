@@ -1,0 +1,13 @@
+[package]
+name = "dac-tether"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Tethered capture (L3): studio capture (a watched folder imported as shots arrive, with a session, naming, presets and a target collection); native PTP later"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
