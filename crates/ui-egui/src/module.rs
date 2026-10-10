@@ -363,14 +363,8 @@ const DEVELOP_RIGHT: &[PanelId] = &[
     PanelId::Info,
 ];
 
-/// Library: `[` / `]` rate, `\` filter bar, ⇧⌘C / ⇧⌘V copy and paste metadata.
-const LIBRARY_KEYS: &[ModuleKey] = &[
-    ("[", "photo.ratingDown", "{}"),
-    ("]", "photo.ratingUp", "{}"),
-    ("\\", "view.filterBar", "{}"),
-    ("Cmd+Shift+C", "photo.copyMetadata", "{}"),
-    ("Cmd+Shift+V", "photo.pasteMetadata", "{}"),
-];
+/// Library: `[` / `]` rate (Develop keeps them for the brush size).
+const LIBRARY_KEYS: &[ModuleKey] = &[("[", "photo.ratingDown", "{}"), ("]", "photo.ratingUp", "{}")];
 
 impl Module for Library {
     fn id(&self) -> ModuleId {
@@ -750,7 +744,7 @@ fn run_inner(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
             Ok(edges_json(app))
         }
         "panel.all" => {
-            let on = bool_param(p, "show").unwrap_or(!Edge::ALL.iter().any(|e| edge_shown(app, *e)));
+            let on = bool_param(p, "show").unwrap_or(!Edge::ALL.iter().all(|e| edge_shown(app, *e)));
             for e in Edge::ALL {
                 set_edge(app, e, on);
             }
@@ -809,6 +803,9 @@ fn run_inner(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
         "view.loupe" => {
             if app.ui.module != ModuleId::Library {
                 switch(app, ModuleId::Library)?;
+            }
+            if app.ui.right.is_edit_tool() {
+                app.ui.right = RightPanel::None;
             }
             app.ui.view = ViewMode::Detail;
             Ok(json!({"module": app.ui.module}))

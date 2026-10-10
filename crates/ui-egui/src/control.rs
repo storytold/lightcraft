@@ -67,8 +67,8 @@ pub fn all_commands(app: &DacApp) -> Value {
             v
         })
         .collect();
-    for (id, label, sc, menu) in crate::menus::ui_commands() {
-        let sc = crate::shortcuts::binding(keymap, id, *sc);
+    for (id, label, _, menu) in crate::menus::ui_commands() {
+        let sc = crate::shortcuts::shortcut_of(keymap, id);
         v.push(json!({"id": id, "label": label, "shortcut": sc, "menu": [menu], "enabled": crate::menus::ui_enabled(app, id), "ui": true}));
     }
     Value::Array(v)

@@ -24,6 +24,7 @@ pub const TABS: &[(&str, &str)] = &[
     ("interface", "Interface"),
     ("faces", "Faces"),
     ("denoise", "AI Denoise"),
+    ("shortcuts", "Shortcuts"),
 ];
 
 /// Thumbnail cache sizes offered (MB).
@@ -52,6 +53,7 @@ pub fn body(app: &mut DacApp, ui: &mut egui::Ui, tab: &mut String) {
         "interface" => interface_tab(app, ui, &t),
         "faces" => super::faces::settings_tab(app, ui, &t),
         "denoise" => super::denoise::settings_tab(app, ui, &t),
+        "shortcuts" => shortcuts_tab(app, ui, &t),
         _ => general_tab(app, ui, &t),
     }
 }
@@ -94,6 +96,30 @@ pub(super) fn choices<V: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, options:
         }
     }
     changed
+}
+
+// ----------------------------------------------------------------------------------- Shortcuts
+
+/// The shortcut editor (the command registry, with conflict handling), the keymap set and
+/// keymap file import/export.
+fn shortcuts_tab(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens) {
+    use crate::shortcuts::KeymapSet;
+    let mut set = app.ui.settings.keymap_set;
+    row(ui, t, "Keymap", |ui| {
+        if choices(ui, "keymapSet", &[(KeymapSet::Classic, "Classic"), (KeymapSet::Alternative, "Alternative")], &mut set) {
+            let key = if set == KeymapSet::Classic { "classic" } else { "alternative" };
+            let _ = app.run("app.keymapSet", serde_json::json!({"set": key}));
+        }
+    });
+    row(ui, t, "Keymap file", |ui| {
+        if crate::widgets::text_button(ui, "keymapImport", "Import…", false).clicked() {
+            let _ = app.run("app.keymapImport", serde_json::json!({}));
+        }
+        if crate::widgets::text_button(ui, "keymapExport", "Export…", false).clicked() {
+            let _ = app.run("app.keymapExport", serde_json::json!({}));
+        }
+    });
+    super::keymap::body(app, ui, t);
 }
 
 // ------------------------------------------------------------------------------------- General

@@ -59,6 +59,7 @@ fn rebound_shortcut_fires_and_the_old_key_does_not() {
 #[test]
 fn the_editor_records_a_key_and_esc_cancels_without_closing() {
     let mut h = demo();
+    h.app.ui.settings.keymap_set = crate::shortcuts::KeymapSet::Alternative;
     h.app.run("app.shortcuts", json!({})).unwrap();
     h.step();
     h.step();
@@ -145,4 +146,119 @@ fn modifiers_wait_for_their_key_and_clipboard_keys_record() {
     assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "view.survey"), Some("Cmd+Alt+C"));
     // a saved modifier-only shortcut (from the bug) means no shortcut
     assert_eq!(crate::shortcuts::parse("Cmd+SuperLeft"), None);
+}
+
+// ----------------------------------------------------------------------------------- Classic set (P1.3)
+
+/// In the Classic set no two commands share a key (except the declared contextual partners), and
+/// every Classic entry names a bindable command and parses.
+#[test]
+fn classic_keys_parse_and_do_not_conflict() {
+    use crate::shortcuts::{CLASSIC, CONTEXTUAL, KeymapSet, bindable, default_in, find_bindable, parse};
+    for (id, sc) in CLASSIC {
+        assert!(find_bindable(id).is_some(), "{id} is a command");
+        if let Some(sc) = sc {
+            assert!(parse(sc).is_some(), "{sc} parses");
+        }
+    }
+    let keys: Vec<(&str, (egui::Modifiers, egui::Key))> =
+        bindable().iter().filter_map(|b| default_in(KeymapSet::Classic, b).and_then(parse).map(|k| (b.id, k))).collect();
+    for (i, (a, k)) in keys.iter().enumerate() {
+        for (b, k2) in &keys[i + 1..] {
+            let partners = CONTEXTUAL.iter().any(|(x, y)| (x == a && y == b) || (x == b && y == a));
+            assert!(k != k2 || partners, "{a} and {b} share a key in the Classic set");
+        }
+    }
+}
+
+#[test]
+fn classic_keys_switch_modules_views_and_panels() {
+    let mut h = demo();
+    assert_eq!(h.app.ui.settings.keymap_set, crate::shortcuts::KeymapSet::Classic, "Classic is the default");
+    // G grid, E loupe (Library), D Develop
+    key(&mut h, "G", false);
+    assert!(matches!(h.app.ui.view, ViewMode::PhotoGrid | ViewMode::SquareGrid));
+    key(&mut h, "E", false);
+    assert_eq!((h.app.ui.view, h.app.ui.module), (ViewMode::Detail, crate::module::ModuleId::Library));
+    key(&mut h, "D", false);
+    assert_eq!(h.app.ui.module, crate::module::ModuleId::Develop);
+    // R crop, Q remove, ⇧W masking
+    key(&mut h, "R", false);
+    assert_eq!(h.app.ui.right, crate::state::RightPanel::Crop);
+    key(&mut h, "Q", false);
+    assert_eq!(h.app.ui.right, crate::state::RightPanel::Remove);
+    key(&mut h, "W", true);
+    assert_eq!(h.app.ui.right, crate::state::RightPanel::Masking);
+    // ⌘⌥1…7 and ⌘⌥↑
+    let r = h.request("ui.key", json!({"key": "3", "cmd": true, "alt": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert_eq!(h.app.ui.module, crate::module::ModuleId::Map);
+    h.request("ui.key", json!({"key": "ArrowUp", "cmd": true, "alt": true}), T);
+    h.step();
+    h.step();
+    assert_eq!(h.app.ui.module, crate::module::ModuleId::Develop);
+    // Tab hides both side panels, F5 the module bar, T the toolbar, L lights out
+    key(&mut h, "Tab", false);
+    assert!(!h.app.ui.left_panel && !h.app.ui.right_edge);
+    key(&mut h, "F5", false);
+    assert!(!h.app.ui.module_bar);
+    key(&mut h, "T", false);
+    assert!(!h.app.ui.toolbar);
+    key(&mut h, "L", false);
+    assert_eq!(h.app.ui.lights_out, crate::module::LightsOut::Dim);
+    key(&mut h, "Tab", true);
+    assert!(h.app.ui.left_panel && h.app.ui.right_edge && h.app.ui.module_bar, "⇧Tab shows all");
+    // G: the Library grid; [ / ] rate there, ` toggles the flag
+    key(&mut h, "G", false);
+    let id = h.app.session.active().unwrap();
+    h.app.run("photo.rate", json!({"rating": 2})).unwrap();
+    key(&mut h, "]", false);
+    assert_eq!(h.app.session.catalog.photo(id).unwrap().rating, 3);
+    key(&mut h, "[", false);
+    key(&mut h, "[", false);
+    assert_eq!(h.app.session.catalog.photo(id).unwrap().rating, 1);
+    key(&mut h, "`", false);
+    assert_eq!(h.app.session.catalog.photo(id).unwrap().flag, dac_catalog::Flag::Pick);
+    key(&mut h, "C", false);
+    assert_eq!(h.app.ui.view, ViewMode::Compare);
+    // ⇧E: the secondary window's loupe (not Export)
+    key(&mut h, "E", true);
+    assert!(h.app.ui.second_window && h.app.ui.dialog.is_none());
+}
+
+#[test]
+fn the_alternative_set_restores_the_previous_keys_and_keymaps_round_trip() {
+    let mut h = demo();
+    h.app.run("app.keymapSet", json!({"set": "alternative"})).unwrap();
+    assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "view.detail"), Some("D"));
+    assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "panel.crop"), Some("C"));
+    h.app.run("app.keymapSet", json!({"set": "classic"})).unwrap();
+    assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "panel.crop"), Some("R"));
+    assert!(h.app.run("app.keymapSet", json!({"set": "emacs"})).is_err());
+    // export / import a keymap file
+    h.app.run("app.setShortcut", json!({"id": "view.survey", "shortcut": "Cmd+Shift+K"})).unwrap();
+    let dir = std::env::temp_dir().join(format!("keymap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("keys.json");
+    h.app.run("app.keymapExport", json!({"path": path.to_str().unwrap()})).unwrap();
+    h.app.run("app.resetShortcuts", json!({})).unwrap();
+    h.app.run("app.keymapSet", json!({"set": "alternative"})).unwrap();
+    let r = h.app.run("app.keymapImport", json!({"path": path.to_str().unwrap()})).unwrap();
+    assert_eq!(r["set"], "classic");
+    assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "view.survey"), Some("Cmd+Shift+K"));
+    // hostile files are errors or skipped entries, never panics
+    std::fs::write(&path, b"{\"keymap\": {\"no.such\": \"K\", \"view.survey\": 7, \"view.people\": \"Hyper+X\"}}").unwrap();
+    let r = h.app.run("app.keymapImport", json!({"path": path.to_str().unwrap()})).unwrap();
+    assert_eq!(r["skipped"].as_array().unwrap().len(), 3);
+    std::fs::write(&path, b"not json").unwrap();
+    assert!(h.app.run("app.keymapImport", json!({"path": path.to_str().unwrap()})).is_err());
+    std::fs::write(&path, b"[1,2]").unwrap();
+    assert!(h.app.run("app.keymapImport", json!({"path": path.to_str().unwrap()})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+    // the set survives a save/load of ui.json
+    let saved = serde_json::to_string(&h.app.ui).unwrap();
+    let back = serde_json::from_str::<crate::UiState>(&saved).unwrap();
+    assert_eq!(back.settings.keymap_set, h.app.ui.settings.keymap_set);
 }

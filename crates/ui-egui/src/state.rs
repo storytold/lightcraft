@@ -156,6 +156,8 @@ pub struct AppSettings {
     pub grid_badges: GridBadges,
     /// Shortcuts the user changed (Help ▸ Keyboard Shortcuts): command id → shortcut, `""` = none.
     pub keymap: crate::shortcuts::Keymap,
+    /// The keymap set the user's changes apply over (Classic by default).
+    pub keymap_set: crate::shortcuts::KeymapSet,
 }
 
 impl Default for AppSettings {
@@ -172,6 +174,7 @@ impl Default for AppSettings {
             film_badges: true,
             grid_badges: GridBadges::Auto,
             keymap: Default::default(),
+            keymap_set: Default::default(),
         }
     }
 }

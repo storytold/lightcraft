@@ -47,11 +47,11 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | X. Cross-cutting behaviours (BEHAV) | 18 | 5 | 1 | 1 | 8/8 (100%) | 6/8 (75%) |
 | Y. Menus | 82 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
-| Lightroom Classic extras | 34 | 24 | 62 | 0 | — | 23/34 (68%) |
+| Lightroom Classic extras | 43 | 18 | 59 | 0 | — | 25/34 (74%) |
 | IMM. Immich integration | 0 | 0 | 10 | 0 | — | 0/6 (0%) |
-| **Total** | 396 | 51 | 117 | 27 | 193/200 (97%) | 143/168 (85%) |
+| **Total** | 405 | 45 | 114 | 27 | 193/200 (97%) | 145/168 (86%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **74.7%** of 564 in-scope rows — P0 98.2% of 200 · P1 89.0% of 168 · P2 38.2% of 195.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **75.8%** of 564 in-scope rows — P0 98.2% of 200 · P1 89.9% of 168 · P2 40.5% of 195.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -116,7 +116,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | Create Version | ⌘⇧S (+ ⇧M) | ⇧M (Windows: Ctrl+⇧S) | — |
 | Select None | ⌘⇧A (+ ⌘D) | ⌘D | — |
 
-**Library culling (KEYC-RATING):** `0–5`, `6–9` and `P/X/U` reach egui on macOS even when displayed in the native menu (adapted from PR #261; issue #283). `Shift+0–9` applies and advances once; `Shift+P` picks and advances in Photo Grid / Square Grid and retains Presets elsewhere. See [library shortcuts](library-shortcuts.md) for the verified Classic mapping and regression coverage. Remaining Classic gaps: rating `[` / `]`, flag cycling and filter-bar keys.
+**Library culling (KEYC-RATING):** `0–5`, `6–9` and `P/X/U` reach egui on macOS even when displayed in the native menu (adapted from PR #261; issue #283). `Shift+0–9` applies and advances once; `Shift+P` picks and advances in Photo Grid / Square Grid and retains Presets elsewhere. See [library shortcuts](library-shortcuts.md) for the verified Classic mapping and regression coverage. The Classic keymap (P1.3) adds `[` / `]` rating steps and the backtick flag toggle; filter-bar keys remain.
 
 **Still missing / broken:**
 - No command yet: F1 help (verify the rest of the old list: full screen, settings, stacks,
@@ -815,7 +815,7 @@ PLAN.md §2 carry the status of that survey ("unverified" where it said so) unti
 | LRC-SHELL-PANELS | Panel system: four sides, auto hide/show, solo mode, toolbar toggle | P1 | 🟡 | `cmd:panel.toggle`, `cmd:panel.sides`, `cmd:panel.all`, `cmd:panel.toolbar`, `cmd:panel.autoShow`, `cmd:panel.solo`, `cmd:panel.show`, `cmd:panel.order` | P1.2: top (module bar), left, right and bottom (filmstrip) edges plus toolbar, saved per module in `ui.json`; auto show at the window edge; right group order and hidden panels per module. Missing: drag-to-reorder UI and a panel-header context menu (order/visibility are commands only); Classic's two auto-hide variants are one mode |
 | LRC-SHELL-SCREENMODES | Screen modes and lights out (dim / off) | P2 | ✅ | `cmd:view.screenMode`, `cmd:view.screenModeNormal`, `cmd:view.lightsOut` | P1.2: normal, full screen with menu bar, full screen, full screen hiding panels; lights out dim (80 %) / black |
 | LRC-SHELL-SECONDWINDOW-MODES | Secondary display: live / locked loupe, grid, compare, survey, slideshow | P2 | 🟡 | `cmd:second.grid`, `cmd:second.loupe`, `cmd:second.live`, `cmd:second.locked`, `cmd:second.compare`, `cmd:second.survey`, `cmd:second.slideshow` | P1.2: all seven modes in the egui second viewport. Missing: its own filmstrip and filter bar, and a mode switcher inside the window (modes are commands and keys) |
-| LRC-SHELL-KEYMAP | Classic keymap layer (switchable) | P1 | 🟡 |  | several keys deliberately differ today (see the shortcuts section); add a Classic layer |
+| LRC-SHELL-KEYMAP | Classic keymap layer (switchable) | P1 | ✅ | `cmd:app.keymapSet`, `cmd:app.keymapExport`, `cmd:app.keymapImport`, `cmd:app.setShortcut` | P1.3: Classic set (default) and the previous keys as the Alternative set; module-local keys over global ones; Settings ▸ Shortcuts edits keys (conflicting keys move), picks the set and imports/exports a keymap file |
 | LRC-SHELL-IDPLATE | Identity plate (styled text or graphic) and activity centre | P2 | 🟡 | `cmd:view.identityPlate` | P1.2: the module bar shows the brand mark (drawn in code after `brand/logo.svg`) and the app name, or the user's text; the status line is its activity area. Missing: an image file as plate and font/colour styling (needs an SVG/raster loader and the shared text engine) |
 | LRC-SHELL-PREFS | Classic preference groups (presets, external editing, file handling, display, network) | P2 | 🟡 |  | partial; see V. Preferences |
 | LRC-SHELL-PLUGINS | Plug-in manager and SDK (sandboxed) | P2 | ⬜ |  | PLAN.md §2.1; Phase 4 |
@@ -840,18 +840,18 @@ PLAN.md §2 carry the status of that survey ("unverified" where it said so) unti
 | LRC-EXP-POSTPROCESS | Post-processing after export (open in app, export actions) | P2 | 🟡 |  | unverified |
 | LRC-AUTO-ACTIONS | Recordable actions / batch scripts | P2 | ⬜ |  | beyond Lightroom; PLAN.md §2.15 |
 | LRC-VID-FRAME | Capture video frame as a still | P2 | ⬜ |  | see LRC-DEV-VIDEO and R. Video |
-| KEYC-PANELS | Classic panel keys (Tab, ⇧Tab, T, F5–F8, solo) | P2 | ⬜ | | |
-| KEYC-MODULES | Classic module switching (⌘⌥1–7) | P1 | ⬜ | | reopened 2026-10-10: the Classic module shell is Phase 1 (PLAN.md §2.1); was out of scope upstream, which has no modules |
-| KEYC-VIEWS | Classic view keys (E, G, C, N, L, F, I, ⇧R, ⌘⌥0) | P2 | 🟡 | `cmd:view.photoGrid`, `cmd:view.zoom100` | G works; E opens Edit (not loupe); no compare/survey/lights-out/screen modes |
-| KEYC-SECONDWINDOW | Classic secondary-window keys | P2 | ⬜ | | |
+| KEYC-PANELS | Classic panel keys (Tab, ⇧Tab, T, F5–F8, solo) | P2 | ✅ | `cmd:panel.sides`, `cmd:panel.all`, `cmd:panel.toolbar`, `cmd:panel.top`, `cmd:panel.bottom`, `cmd:panel.left`, `cmd:panel.right`, `cmd:panel.solo` | P1.3 Classic set: Tab sides, ⇧Tab all, T toolbar, F5 module bar, F6 filmstrip, F7 left, F8 right; Tab outside a text field no longer moves focus. Solo is a command/menu item (no Classic key) |
+| KEYC-MODULES | Classic module switching (⌘⌥1–7) | P1 | ✅ | `cmd:module.library`, `cmd:module.develop`, `cmd:module.previous` | P1.3: ⌘⌥1–7 (Ctrl+Alt elsewhere), ⌘⌥↑ previous module, D Develop |
+| KEYC-VIEWS | Classic view keys (E, G, C, N, L, F, I, ⇧R, ⌘⌥0) | P2 | ✅ | `cmd:view.loupe`, `cmd:view.gridToggle`, `cmd:view.compare`, `cmd:view.survey`, `cmd:view.lightsOut`, `cmd:view.screenMode`, `cmd:view.zoom100` | P1.3 Classic set: E Library loupe, G grid, C compare, N survey, L lights out, F full-screen preview, ⇧F screen modes, ⌘⌥F normal, I info, ⇧R reference, ⌘⌥0 1:1 |
+| KEYC-SECONDWINDOW | Classic secondary-window keys | P2 | ✅ | `cmd:second.grid`, `cmd:second.loupe`, `cmd:second.compare`, `cmd:second.survey`, `cmd:second.slideshow`, `cmd:view.secondWindow` | P1.3: ⇧G grid, ⇧E loupe, ⇧C compare, ⇧N survey, ⌘⇧↩ slideshow, ⌘F11 open |
 | KEYC-CATALOG | Classic photo/catalog keys (⇧⌘I, ⌘', ⌘R, F2, ⌫, ⇧⌘E…) | P2 | ✅ | `cmd:library.import`, `cmd:photo.delete`, `cmd:photo.virtualCopy`, `cmd:app.showInFinder`, `cmd:dialog.rename`, `cmd:photo.editInExternal` | ⇧⌘I add, ⌘' virtual copy, ⌘R show in Finder, F2 rename, ⌫ delete, ⇧⌘E external editor |
 | KEYC-COMPARE | Classic grid/compare keys (Z, Home/End, =/−, ⌘⇧D, S…) | P2 | 🟡 | `cmd:view.zoomToggle` | Z toggles zoom; no compare, stacks, thumbnail-size keys |
-| KEYC-RATING | Classic rating/flag keys (1–5, ⇧1–5, 6–9, P, X, U, ⇧X, ⇧U, `[` `]`, \`) | P2 | 🟡 | `cmd:photo.rate`, `cmd:photo.pick`, `cmd:photo.flag` | 0–5 / Shift+0–5 and 6–9 / Shift+6–9; P/X/U, Shift+X/U and grid Shift+P work; tests cover batch/undo, active Compare candidate and text focus. Missing: Shift+P outside grids (Presets), rating `[` / `]`, flag cycle and filter-bar keys |
-| KEYC-COLLECTIONS | Classic collection keys (⌘N, B…) | P2 | 🟡 | `cmd:dialog.newAlbum` | ⌘N new album; no quick collection |
-| KEYC-METADATA | Classic keyword/metadata keys (⌘K, ⌘S, ⌘⌥⇧C/V…) | P2 | 🟡 | `cmd:photo.saveMetadataToFile` | ⌘S saves metadata; no keyword sets, metadata copy/paste |
-| KEYC-DEVELOP | Classic develop keys (V, ⌘U, ⇧⌘U, R, Q, K, M, ⇧M, ⇧W, ⇧J, ⇧Q…) | P2 | 🟡 | `cmd:develop.treatment`, `cmd:develop.reset`, `cmd:crop.reset` | V, ⇧⌘R, ⌥⌘R, W, J, Y, ⇧Y, \ match; R/K/M/⇧M differ; no Classic keymap layer |
+| KEYC-RATING | Classic rating/flag keys (1–5, ⇧1–5, 6–9, P, X, U, ⇧X, ⇧U, `[` `]`, \`) | P2 | ✅ | `cmd:photo.rate`, `cmd:photo.pick`, `cmd:photo.flag`, `cmd:photo.ratingUp`, `cmd:photo.ratingDown`, `cmd:photo.flagToggle` | 0–5 / Shift+0–5 and 6–9 / Shift+6–9; P/X/U, Shift+X/U and grid Shift+P; P1.3: `[` / `]` rate down/up in Library (brush size in Develop), \` toggles the pick flag. Caps Lock auto-advance is not detected (egui reports no Caps Lock state): use Photo ▸ Auto Advance |
+| KEYC-COLLECTIONS | Classic collection keys (⌘N, B…) | P2 | ✅ | `cmd:dialog.newAlbum`, `cmd:album.toggleTarget` | ⌘N new album; P1.3: B adds to / removes from the target collection everywhere (brush is K) |
+| KEYC-METADATA | Classic keyword/metadata keys (⌘K, ⌘S, ⌘⌥⇧C/V…) | P2 | ✅ | `cmd:photo.saveMetadataToFile`, `cmd:photo.copyMetadata`, `cmd:photo.pasteMetadata`, `cmd:panel.keywords`, `cmd:keyword.toggleFromSet` | ⌘S saves metadata; P1.3: ⌘K keywords, ⌘⌥⇧C / ⌘⌥⇧V copy/paste metadata, ⌥1–9 keyword set (the plan's Ctrl+Alt+0–9 would collide with module switching; Classic uses ⌥) |
+| KEYC-DEVELOP | Classic develop keys (V, ⌘U, ⇧⌘U, R, Q, K, M, ⇧M, ⇧W, ⇧J, ⇧Q…) | P2 | 🟡 | `cmd:develop.treatment`, `cmd:develop.reset`, `cmd:crop.reset`, `cmd:panel.crop`, `cmd:panel.remove`, `cmd:tool.brush`, `cmd:tool.linear`, `cmd:tool.radial`, `cmd:panel.masking` | P1.3 Classic set: R crop, Q remove, K brush, M linear, ⇧M radial, ⇧W masking (Classic's key; the plan said ⇧T, which Classic uses for Guided Upright), ⇧T guided upright; V, ⇧⌘R, ⌥⌘R, W, J, Y, ⇧Y, \ match. Missing: ⌘U / ⇧⌘U auto tone keys, ⇧J, ⇧Q |
 | KEYC-MODULE-OUTPUT | Book / slideshow / print / map / web keys | P2 | ⬜ | | modules not implemented |
-| KEYC-HELP | Classic help keys (⌘/, F1) | P2 | 🟡 | `cmd:app.shortcuts` | ⌘/ only |
+| KEYC-HELP | Classic help keys (⌘/, F1) | P2 | ✅ | `cmd:app.shortcuts`, `cmd:app.help` | F1 help, ⌘/ the shortcut list (all commands of the active set; not filtered to the module) |
 
 ### Japanese text watermarks
 

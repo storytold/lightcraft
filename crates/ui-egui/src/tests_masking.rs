@@ -370,6 +370,8 @@ fn smart_album_rule_editor_creates_and_edits() {
 #[test]
 fn g_toggles_grids_and_shift_g_starts_guided_upright() {
     let mut h = detail("panel.edit");
+    // the Alternative set's keys (tests_keymap covers Classic)
+    h.app.ui.settings.keymap_set = crate::shortcuts::KeymapSet::Alternative;
     let key = |h: &mut Headless, shift: bool| {
         let r = h.request("ui.key", json!({"key": "g", "shift": shift}), T);
         assert_eq!(r["ok"], true, "{r}");
@@ -416,6 +418,8 @@ fn luminance_range_controls_and_map() {
 #[test]
 fn b_adds_to_quick_collection_in_the_grid_and_brushes_in_edit() {
     let mut h = detail("panel.edit");
+    // the Alternative set's keys (tests_keymap covers Classic)
+    h.app.ui.settings.keymap_set = crate::shortcuts::KeymapSet::Alternative;
     // in the loupe B is the masking brush
     let r = h.request("ui.key", json!({"key": "b"}), T);
     assert_eq!(r["ok"], true, "{r}");

@@ -184,6 +184,10 @@ pub struct DacApp {
     /// The keyboard shortcuts editor is waiting for a key press for this command: no shortcut
     /// fires (the native menu bar drops its accelerators too) until it gets one or is cancelled.
     pub recording_shortcut: Option<String>,
+    /// A text field had the keyboard last frame (Tab then moves focus as usual).
+    pub text_focus: bool,
+    /// Tab presses held back from egui's focus navigation (their shift state): they toggle panels.
+    pub deferred_tabs: Vec<egui::Modifiers>,
     /// The host is [`headless::Headless`] (it answers viewport screenshot commands itself).
     pub headless_host: bool,
     /// Warnings to show one at a time (damaged settings files…, issue #103).
@@ -282,6 +286,8 @@ impl DacApp {
             native_menu: false,
             native_shortcuts: Default::default(),
             recording_shortcut: None,
+            text_focus: false,
+            deferred_tabs: Vec::new(),
             headless_host: false,
             notices: vec![],
             quit_prompt: None,
@@ -345,6 +351,7 @@ impl DacApp {
 
     /// Run a UI or engine command by id. The single entry point for every frontend path.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        shortcuts::set_active(self.ui.settings.keymap_set);
         if let Some(result) = model_setup::intercept(self, id, &params) {
             return result;
         }
@@ -857,6 +864,7 @@ impl DacApp {
             raw.events.push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
         }
         if self.synthetic.is_empty() {
+            self.defer_tabs(raw);
             return;
         }
         let n = match self.synthetic[0] {
@@ -882,10 +890,29 @@ impl DacApp {
             self.synthetic_mods_release = ends;
         }
         raw.events.extend(self.synthetic.drain(..n));
+        self.defer_tabs(raw);
+    }
+
+    /// Tab outside a text field toggles panels (Classic): keep it from moving egui's focus.
+    fn defer_tabs(&mut self, raw: &mut egui::RawInput) {
+        if self.text_focus || self.recording_shortcut.is_some() {
+            return;
+        }
+        let deferred = &mut self.deferred_tabs;
+        raw.events.retain(|e| match e {
+            egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, .. } => {
+                if *pressed {
+                    deferred.push(*modifiers);
+                }
+                false
+            }
+            _ => true,
+        });
     }
 
     /// Frame timings once layout is done (`t0`: when layout started).
     fn end_frame(&mut self, t0: f64) {
+        self.text_focus = self.tasks.repaint.as_ref().is_some_and(|c| c.egui_wants_keyboard_input());
         self.perf.frame_ms = now_ms() - t0;
         self.perf.update_ms = self.perf.logic_ms + self.perf.frame_ms;
         self.perf.max_update_ms = self.perf.max_update_ms.max(self.perf.update_ms);
@@ -895,6 +922,7 @@ impl DacApp {
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         i18n::set_language(self.ui.language);
         let ctx = ui.ctx().clone();
+        shortcuts::set_active(self.ui.settings.keymap_set);
         if !self.fonts_ready {
             ctx.request_repaint();
             return;
