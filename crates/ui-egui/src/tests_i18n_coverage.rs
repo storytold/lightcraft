@@ -10,7 +10,12 @@ fn catalog(code: &str, formats: bool) -> BTreeMap<String, String> {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("locales");
     let name = if formats { format!("{code}-formats.json") } else { format!("{code}.json") };
     let text = std::fs::read_to_string(dir.join(&name)).unwrap_or_else(|e| panic!("{name}: {e}"));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{name}: {e}"))
+    let mut messages: BTreeMap<String, String> = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{name}: {e}"));
+    // the fork's rows (`locales/fork/`), merged over upstream's as the app does
+    if let Ok(text) = std::fs::read_to_string(dir.join("fork").join(&name)) {
+        messages.extend(serde_json::from_str::<BTreeMap<String, String>>(&text).unwrap_or_else(|e| panic!("fork/{name}: {e}")));
+    }
+    messages
 }
 
 fn translated() -> impl Iterator<Item = Locale> {

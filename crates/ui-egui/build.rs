@@ -26,6 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     // The directory itself, so a catalog added or removed reruns this script.
     println!("cargo:rerun-if-changed=locales");
+    println!("cargo:rerun-if-changed=locales/fork");
     let out = PathBuf::from(env::var("OUT_DIR")?);
     fs::write(out.join("tr-formats.rs"), generate()?)?;
     let (json, people) = credits::load();
@@ -61,8 +62,9 @@ fn generate() -> Result<String, Box<dyn std::error::Error>> {
         let Some(code) = name.strip_suffix("-formats.json").filter(|code| *code != "en") else { continue };
         println!("cargo:rerun-if-changed=locales/{name}");
         let variant = variant_for(code)?;
-        let messages: BTreeMap<String, String> =
+        let mut messages: BTreeMap<String, String> =
             serde_json::from_str(&fs::read_to_string(&path)?).map_err(|error| format!("locales/{name}: {error}"))?;
+        messages.extend(fork_overlay(&name)?);
         catalogs.push((code.to_string(), variant, messages));
     }
     catalogs.sort_by(|a, b| a.0.cmp(&b.0));
@@ -213,4 +215,14 @@ mod credits {
         let _ = writeln!(o, "];");
         o
     }
+}
+
+/// The fork's own messages for a catalog (`locales/fork/<name>`, fork-owned), over upstream's.
+fn fork_overlay(name: &str) -> Result<BTreeMap<String, String>, Box<dyn std::error::Error>> {
+    let path = PathBuf::from("locales/fork").join(name);
+    if !path.exists() {
+        return Ok(BTreeMap::new());
+    }
+    println!("cargo:rerun-if-changed=locales/fork/{name}");
+    Ok(serde_json::from_str(&fs::read_to_string(&path)?).map_err(|error| format!("locales/fork/{name}: {error}"))?)
 }
