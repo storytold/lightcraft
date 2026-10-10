@@ -55,15 +55,73 @@ fn hdr_merge_command_creates_and_imports_a_dng() {
     assert_eq!(st.photos[1..].iter().map(|p| p.0).collect::<Vec<_>>(), ids);
     assert!(st.collapsed);
     assert_eq!(s.visible_cloned(), vec![id]);
-    // the second merge doesn't overwrite the first
-    let r2 = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false})).unwrap();
-    assert!(r2["path"].as_str().unwrap().ends_with("IMG_0-HDR-2.dng"));
-    let id2 = lightcraft_catalog::PhotoId(r2["id"].as_u64().unwrap());
-    assert!(s.catalog.stack_of(id2).is_none(), "no stack without the option");
+    // A repeated deterministic merge reuses the existing content instead of publishing an
+    // unimported uniquely named orphan.
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.73})).unwrap();
+    let edited = s.develop_of(id).unwrap().as_ref().clone();
+    let stack_before = s.catalog.stack_of(id).unwrap().clone();
+    let undo_before = s.undo.len();
+    let r2 = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": true, "stack": true})).unwrap();
+    assert_eq!(r2["id"].as_u64(), Some(id.0));
+    assert_eq!(r2["path"].as_str(), Some(path));
+    assert!(!dir.join("IMG_0-HDR-2.dng").exists(), "duplicate merge left an orphan");
+    assert_eq!(s.catalog.photos().count(), 4);
+    assert_eq!(s.undo.len(), undo_before, "reusing merge content added an undo step");
+    assert_eq!(s.develop_of(id).unwrap().as_ref(), &edited, "reusing merge content changed edits");
+    assert_eq!(s.catalog.stack_of(id), Some(&stack_before), "reusing merge content changed stack");
     // the type filter finds merge results (and only them)
     s.execute("library.filter", &json!({"merged": "hdr"})).unwrap();
     let found: std::collections::HashSet<_> = s.catalog.query(&s.filter, &Default::default()).into_iter().collect();
-    assert_eq!(found, [id, id2].into_iter().collect());
+    assert_eq!(found, [id].into_iter().collect());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn hdr_merge_refuses_stale_result_before_writing() {
+    let dir = temp_dir("hdr-stale");
+    let mut paths = Vec::new();
+    for (i, b) in lightcraft_merge::synth::bracket_dngs(240, 160, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
+        let p = dir.join(format!("IMG_{i}.dng"));
+        std::fs::write(&p, b).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths.clone());
+    let first = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false})).unwrap();
+    let id = lightcraft_catalog::PhotoId(first["id"].as_u64().unwrap());
+    let path = first["path"].as_str().unwrap().to_string();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.73})).unwrap();
+    let edited = s.develop_of(id).unwrap().as_ref().clone();
+    let stack_before = s.catalog.stack_of(id).cloned();
+
+    std::fs::remove_file(&path).unwrap();
+    let undo_before = s.undo.len();
+    let missing = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": true}));
+    assert!(missing.as_ref().unwrap_err().to_string().contains("missing or changed"));
+    assert!(!std::path::Path::new(&path).exists());
+    assert!(!dir.join("IMG_0-HDR-2.dng").exists());
+    assert_eq!(s.undo.len(), undo_before);
+    assert_eq!(s.develop_of(id).unwrap().as_ref(), &edited, "repair changed edits");
+    assert_eq!(s.catalog.stack_of(id).cloned(), stack_before);
+
+    std::fs::write(&path, std::fs::read(&paths[0]).unwrap()).unwrap();
+    let changed_bytes = std::fs::read(&path).unwrap();
+    let changed = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": true}));
+    assert!(changed.as_ref().unwrap_err().to_string().contains("missing or changed"));
+    assert_eq!(std::fs::read(&path).unwrap(), changed_bytes);
+    assert!(!dir.join("IMG_0-HDR-2.dng").exists());
+    assert_eq!(s.undo.len(), undo_before);
+    assert_eq!(s.develop_of(id).unwrap().as_ref(), &edited, "changed-source repair changed edits");
+    assert_eq!(s.catalog.stack_of(id).cloned(), stack_before);
+
+    s.execute("photo.delete", &json!({"ids": [id.0]})).unwrap();
+    let deleted_bytes = std::fs::read(&path).unwrap();
+    let undo_after_delete = s.undo.len();
+    let failed = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false}));
+    assert!(failed.as_ref().unwrap_err().to_string().contains("deleted"));
+    assert_eq!(std::fs::read(&path).unwrap(), deleted_bytes);
+    assert!(!dir.join("IMG_0-HDR-3.dng").exists(), "failed import left an orphan");
+    assert_eq!(s.undo.len(), undo_after_delete);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
