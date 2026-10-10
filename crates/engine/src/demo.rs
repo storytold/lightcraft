@@ -8,6 +8,9 @@ use lightcraft_develop::DevelopSettings;
 use crate::Session;
 
 pub fn load(s: &mut Session) {
+    // The demo is always loaded into a new session, so its ids are 1..N on a fresh catalog; docs/showcase
+    // and the `--demo` workflows rely on that.
+    s.catalog.use_sequential_ids();
     let scenes = lightcraft_scenes::demo_library();
     let mut ids = Vec::new();
     let mut ops = Vec::new();
@@ -324,6 +327,45 @@ mod tests {
 
     fn small_scene() -> lightcraft_scenes::Scene {
         lightcraft_scenes::demo_library().swap_remove(0)
+    }
+
+    /// Demo ids are referenced by `docs/showcase` and the documented `--demo` workflows: 1..N.
+    #[test]
+    fn demo_ids_are_sequential_even_after_switching_to_random_ids() {
+        let n = lightcraft_scenes::demo_library().len() as u64;
+        for random in [false, true] {
+            let mut s = Session::new();
+            if random {
+                s.catalog.use_random_ids();
+            }
+            load(&mut s);
+            let mut photos: Vec<u64> = s.catalog.photos().map(|p| p.id.0).collect();
+            photos.sort_unstable();
+            assert_eq!(photos, (1..=n).collect::<Vec<_>>(), "random: {random}");
+            let mut albums: Vec<u64> = s.catalog.albums().map(|a| a.id.0).collect();
+            albums.sort_unstable();
+            assert_eq!(albums, (1..=albums.len() as u64).collect::<Vec<_>>(), "random: {random}");
+            assert_eq!(albums.len(), 7, "the folder and six albums");
+        }
+    }
+
+    #[test]
+    fn showcase_script_photo_ids_exist_in_the_demo_library() {
+        let script = include_str!("../../../docs/showcase/demo.jsonl");
+        let mut referenced = Vec::new();
+        for line in script.lines().filter(|l| !l.starts_with('#')) {
+            let mut rest = line;
+            while let Some(at) = rest.find("\"ids\":[") {
+                rest = &rest[at + 7..];
+                let list = rest.split(']').next().unwrap_or("");
+                referenced.extend(list.split(',').filter_map(|n| n.trim().parse::<u64>().ok()));
+            }
+        }
+        assert!(!referenced.is_empty(), "the script selects photos by id");
+        let s = Session::with_demo();
+        for id in referenced {
+            assert!(s.catalog.photo(lightcraft_catalog::PhotoId(id)).is_some(), "docs/showcase/demo.jsonl uses photo {id}");
+        }
     }
 
     #[test]

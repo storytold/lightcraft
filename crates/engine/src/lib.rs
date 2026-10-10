@@ -770,11 +770,17 @@ impl Session {
                 }
             }
             if self.source == LibrarySource::RecentlyAdded {
-                // newest import first, whatever the sort (the grid groups by import day)
+                // newest import first, whatever the sort direction (the grid groups by import day);
+                // a batch stays in file order (name, then id)
                 let cat = &self.catalog;
                 visible.sort_by(|a, b| {
                     let key = |id: &PhotoId| cat.photo(*id).map(|p| p.imported.clone()).unwrap_or_default();
-                    key(b).cmp(&key(a)).then(a.cmp(b))
+                    let name = |id: &PhotoId| cat.photo(*id).map(|p| p.file_name.as_str());
+                    let by_name = match (name(a), name(b)) {
+                        (Some(x), Some(y)) => lightcraft_catalog::query::cmp_name(x, y),
+                        _ => std::cmp::Ordering::Equal,
+                    };
+                    key(b).cmp(&key(a)).then(by_name).then(a.cmp(b))
                 });
             }
             if self.source == LibrarySource::Missing {

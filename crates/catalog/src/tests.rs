@@ -673,3 +673,139 @@ fn undated_photos_group_under_unknown_date_and_sort_together() {
     let filter_year = Filter { date: Some("2026".into()), ..Default::default() };
     assert_eq!(c.query(&filter_year, &Sort { key: SortKey::CaptureDate, ascending: false, ..Default::default() }), vec![p_dated2, p_dated1]);
 }
+
+#[test]
+fn new_catalog_allocates_sequential_ids() {
+    let mut c = Catalog::new();
+    assert_eq!([c.alloc_photo_id(), c.alloc_photo_id(), c.alloc_photo_id()], [PhotoId(1), PhotoId(2), PhotoId(3)]);
+    assert_eq!([c.alloc_album_id(), c.alloc_album_id()], [AlbumId(1), AlbumId(2)]);
+    assert_eq!([c.alloc_stack_id(), c.alloc_stack_id()], [StackId(1), StackId(2)]);
+    assert!(!c.random_ids());
+}
+
+#[test]
+fn sequential_allocation_continues_after_a_reload() {
+    let mut c = Catalog::new();
+    for name in ["a.jpg", "b.jpg"] {
+        photo(&mut c, name, "2026-04-01T10:00:00");
+    }
+    let mut back = Catalog::from_snapshot(&c.to_snapshot()).unwrap();
+    assert_eq!(back.alloc_photo_id(), PhotoId(3));
+    assert_eq!(back.alloc_album_id(), AlbumId(1));
+}
+
+#[test]
+fn random_ids_are_opt_in_and_in_json_safe_range() {
+    let mut c = Catalog::new();
+    c.use_random_ids();
+    assert!(c.random_ids());
+    let a = photo(&mut c, "a.jpg", "2026-04-01T10:00:00");
+    let b = photo(&mut c, "b.jpg", "2026-04-01T10:00:00");
+    assert_ne!(a, b);
+    for id in [a.0, b.0, c.alloc_album_id().0, c.alloc_stack_id().0] {
+        assert!((1..crate::ids::MAX_ID).contains(&id), "{id}");
+    }
+    // Not a counter: two consecutive photos are not 1 and 2.
+    assert!(!(a.0 == 1 && b.0 == 2));
+}
+
+#[test]
+fn switching_back_to_sequential_resumes_the_counters() {
+    let mut c = Catalog::new();
+    photo(&mut c, "a.jpg", "2026-04-01T10:00:00");
+    c.use_random_ids();
+    c.use_sequential_ids();
+    assert!(!c.random_ids());
+    assert_eq!(c.alloc_photo_id(), PhotoId(2));
+}
+
+#[test]
+fn ids_allocated_before_applying_are_distinct() {
+    // Import allocates every id of a batch before applying it.
+    let mut c = Catalog::new();
+    c.use_random_ids();
+    let ids: std::collections::BTreeSet<PhotoId> = (0..1000).map(|_| c.alloc_photo_id()).collect();
+    assert_eq!(ids.len(), 1000);
+}
+
+#[test]
+fn counter_id_library_keeps_working() {
+    // A library from before random ids: photos 1, 2, 3.
+    let mut c = Catalog::new();
+    for n in 1..=3 {
+        let p = Photo::new(PhotoId(n), Source::Demo { scene: 1 }, "x.jpg", "JPEG", 10, 10, "2026-09-30T10:00:00");
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    c.use_random_ids();
+    let new = photo(&mut c, "new.jpg", "2026-04-01T10:00:00");
+    assert!(!(1..=3).contains(&new.0));
+    assert_eq!(c.photos().count(), 4);
+}
+
+#[test]
+fn seeded_catalog_redraws_an_id_already_in_use() {
+    let mut probe = Catalog::new();
+    probe.seed_ids(9);
+    let first = probe.alloc_photo_id();
+
+    let mut c = Catalog::new();
+    let p = Photo::new(first, Source::Demo { scene: 1 }, "x.jpg", "JPEG", 10, 10, "2026-09-30T10:00:00");
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    c.seed_ids(9);
+    assert_ne!(c.alloc_photo_id(), first);
+}
+
+#[test]
+fn id_generator_is_not_serialized() {
+    let mut c = Catalog::new();
+    c.use_random_ids();
+    photo(&mut c, "a.jpg", "2026-04-01T10:00:00");
+    let json = serde_json::to_string(&c).unwrap();
+    assert!(!json.contains("\"ids\""), "{json}");
+    let back: Catalog = serde_json::from_str(&json).unwrap();
+    // (`revision` is not saved either, so compare what is)
+    assert_eq!(back.to_snapshot(), c.to_snapshot());
+}
+
+/// Photos with one import time and capture time, as one import batch or a burst gives them, added
+/// with ids that run opposite to their names.
+fn batch_with_reversed_ids(c: &mut Catalog) -> Vec<PhotoId> {
+    let names = ["DSC_0001.ARW", "DSC_0002.ARW", "DSC_0003.ARW", "DSC_0004.ARW"];
+    let mut ids = Vec::new();
+    for (n, name) in names.iter().enumerate() {
+        let id = PhotoId(1000 - n as u64);
+        let mut p = Photo::new(id, Source::Demo { scene: 1 }, name, "ARW", 10, 10, "2026-10-10T09:00:00");
+        p.captured = Some("2026-10-01T12:00:00".into());
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        ids.push(id);
+    }
+    ids // in name order
+}
+
+#[test]
+fn one_import_batch_sorts_by_file_name_not_id() {
+    let mut c = Catalog::new();
+    let by_name = batch_with_reversed_ids(&mut c);
+    let sort = Sort { key: SortKey::ImportDate, ascending: true, ..Default::default() };
+    assert_eq!(c.query(&Filter::default(), &sort), by_name);
+}
+
+#[test]
+fn burst_in_one_second_sorts_by_file_name_not_id() {
+    let mut c = Catalog::new();
+    let by_name = batch_with_reversed_ids(&mut c);
+    let sort = Sort { key: SortKey::CaptureDate, ascending: true, ..Default::default() };
+    assert_eq!(c.query(&Filter::default(), &sort), by_name);
+}
+
+#[test]
+fn cmp_name_ignores_case_without_allocating() {
+    use crate::query::cmp_name;
+    use std::cmp::Ordering::*;
+    assert_eq!(cmp_name("IMG_1.JPG", "img_1.jpg"), Equal);
+    assert_eq!(cmp_name("Ärger.jpg", "ärger.jpg"), Equal);
+    assert_eq!(cmp_name("a", "B"), Less);
+    assert_eq!(cmp_name("B", "a"), Greater);
+    assert_eq!(cmp_name("DSC_0001", "DSC_0002"), Less);
+    assert_eq!(cmp_name("a", "ab"), Less);
+}

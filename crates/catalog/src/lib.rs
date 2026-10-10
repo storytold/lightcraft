@@ -15,6 +15,7 @@
 
 pub mod dates;
 pub mod folders;
+pub mod ids;
 pub mod journal;
 pub mod keywords;
 pub mod local;
@@ -268,6 +269,12 @@ pub struct Catalog {
     /// Increments on every applied op.
     #[serde(skip)]
     pub revision: u64,
+    /// How new photo/album/stack ids are chosen (see [`ids`]): counters unless the catalog opted in
+    /// to random ids. Not catalog data: never saved, ignored by equality. `Clone` copies the
+    /// generator state, so a random-mode clone draws the same ids as the original: re-seed
+    /// ([`Catalog::seed_ids`]) a clone that will allocate independently.
+    #[serde(skip)]
+    ids: ids::IdGen,
 }
 
 impl Catalog {
@@ -277,20 +284,60 @@ impl Catalog {
 
     // ---- ids
 
+    /// A new photo id: the next counter value, or in random mode a random one in `[1, 2^53)` not
+    /// used by this catalog (see [`ids`]).
     pub fn alloc_photo_id(&mut self) -> PhotoId {
+        let photos = &self.photos;
+        if let Some(v) = self.ids.draw(|v| photos.contains_key(&PhotoId(v))) {
+            return PhotoId(v);
+        }
         let id = PhotoId(self.next_photo.max(1));
         self.next_photo = id.0 + 1;
         id
     }
+
     pub fn alloc_album_id(&mut self) -> AlbumId {
+        let albums = &self.albums;
+        if let Some(v) = self.ids.draw(|v| albums.contains_key(&AlbumId(v))) {
+            return AlbumId(v);
+        }
         let id = AlbumId(self.next_album.max(1));
         self.next_album = id.0 + 1;
         id
     }
+
     pub fn alloc_stack_id(&mut self) -> StackId {
+        let stacks = &self.stacks;
+        if let Some(v) = self.ids.draw(|v| stacks.contains_key(&StackId(v))) {
+            return StackId(v);
+        }
         let id = StackId(self.next_stack.max(1));
         self.next_stack = id.0 + 1;
         id
+    }
+
+    /// Allocate random ids from now on (seeded from the OS's randomness), for a catalog shared
+    /// between machines. Ids already handed out stay as they are. Not yet safe to enable: keyword
+    /// and person spelling and the duplicate-import "existing" photo still follow id order (issue #294 follow-up).
+    pub fn use_random_ids(&mut self) {
+        self.ids = ids::IdGen::random();
+    }
+
+    /// Allocate counter ids again (the default), continuing from the counters, which sit above every
+    /// id applied so far (not from 1), even after random ids were applied.
+    pub fn use_sequential_ids(&mut self) {
+        self.ids = ids::IdGen::Sequential;
+    }
+
+    /// Whether new ids are random (see [`Catalog::use_random_ids`]).
+    #[cfg(test)]
+    pub fn random_ids(&self) -> bool {
+        self.ids.is_random()
+    }
+
+    /// Random ids from a fixed seed, so they are reproducible (tests, benchmarks).
+    pub fn seed_ids(&mut self, seed: u64) {
+        self.ids = ids::IdGen::seeded(seed);
     }
 
     // ---- reads
