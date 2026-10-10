@@ -1496,6 +1496,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dac-layout"
+version = "0.5.0"
+dependencies = [
+ "dac-raster",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "dac-mcp"
 version = "0.5.0"
 dependencies = [
