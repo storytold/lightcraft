@@ -58,28 +58,38 @@ pub(crate) fn black_from_columns(data: &[u16], width: usize, cols: Range<usize>,
 }
 
 /// White level estimate: the saturation plateau if a noticeable number of samples sit at the maximum value,
-/// otherwise the full `bits` range.
+/// otherwise the full `bits` range. A few stray samples above the plateau (hot pixels, e.g. on a Canon EOS 70D
+/// CR2) don't hide it.
 pub(crate) fn white_from_data(data: &[u16], bits: u32) -> f32 {
-    let full = ((1u32 << bits.clamp(1, 16)) - 1) as f32;
+    let full_level = (1u32 << bits.clamp(1, 16)) - 1;
+    let full = full_level as f32;
+    let step = (data.len() / 2_000_000).max(1);
     // samples above the nominal range are padding / invalid (e.g. 0xFFFF fill), not saturation
-    let Some(&mx) = data.iter().filter(|&&v| v as f32 <= full).max() else { return full };
+    let mut hist = vec![0usize; full_level as usize + 1];
+    for &v in data.iter().step_by(step) {
+        if let Some(h) = hist.get_mut(v as usize) {
+            *h += 1;
+        }
+    }
+    let min_plateau = (data.len() / 20_000).max(16);
+    // the top of the data, skipping up to half a plateau's worth of strays so a real plateau can't be skipped
+    let strays = min_plateau / 2;
+    let mut above = 0usize;
+    let Some(mx) = hist.iter().enumerate().rev().find_map(|(v, &n)| {
+        above += n * step;
+        (above > strays).then_some(v as u32)
+    }) else {
+        return full;
+    };
     let band = (mx / 256).max(1);
     let near = mx.saturating_sub(band);
     let below = near.saturating_sub(band);
-    let step = (data.len() / 2_000_000).max(1);
-    let (mut top, mut under) = (0usize, 0usize);
-    for &v in data.iter().step_by(step) {
-        if v as f32 > full {
-            continue;
-        }
-        if v >= near {
-            top += 1;
-        } else if v >= below {
-            under += 1;
-        }
-    }
+    let count = |from: u32, to: u32| hist.get(from as usize..to as usize).map_or(0, |h| h.iter().sum::<usize>());
+    // the strays count as saturated too
+    let top = count(near, full_level + 1);
+    let under = count(below, near);
     // a saturation plateau is a spike: many more samples in the top band than in the band just below it
-    if mx as f32 > full * 0.5 && top * step >= (data.len() / 20_000).max(16) && top >= 4 * under + 4 {
+    if mx as f32 > full * 0.5 && top * step >= min_plateau && top >= 4 * under + 4 {
         // plateau: use its lower edge so everything at saturation maps to ≥ 1.0
         near as f32
     } else {
@@ -115,5 +125,16 @@ mod tests {
         let w = white_from_data(&d, 14);
         assert!((14900.0..=15000.0).contains(&w), "{w}");
         assert_eq!(white_from_data(&[], 12), 4095.0);
+    }
+
+    /// A Canon EOS 70D CR2 saturates at 13583 but has a handful of samples up to 14426 (out of ~20M): the plateau
+    /// is still found instead of falling back to 16383 (≈0.3 EV too dark, highlights never seen as clipped).
+    #[test]
+    fn white_plateau_with_strays_above() {
+        let mut d: Vec<u16> = (0..100_000).map(|i| (2048 + i % 10000) as u16).collect();
+        d.extend(std::iter::repeat_n(13583u16, 5000));
+        d.extend([13700, 13900, 14100, 14426]);
+        let w = white_from_data(&d, 14);
+        assert!((13500.0..=13583.0).contains(&w), "{w}");
     }
 }
