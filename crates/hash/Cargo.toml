@@ -1,0 +1,12 @@
+[package]
+name = "dac-hash"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Streaming content hashes (L0): SHA-1 of originals, as remote services such as Immich store them"
+
+[dependencies]
+sha1 = { version = "0.10", default-features = false }
+
+[lints]
+workspace = true
