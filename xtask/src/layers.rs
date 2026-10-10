@@ -43,7 +43,6 @@ pub const TABLE: &[(&str, Class)] = &[
     ("net", Class::Layer(0)),
     ("credentials", Class::Layer(0)),
     ("hash", Class::Layer(0)),
-    ("fuzzkit", Class::Layer(0)),
     ("denoise-core", Class::Layer(1)),
     ("denoise", Class::Layer(1)),
     ("heif", Class::Layer(0)),
@@ -71,6 +70,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("ui-egui", Class::Layer(5)),
     ("mcp", Class::Layer(5)),
     ("testkit", Class::Testkit),
+    ("fuzzkit", Class::Testkit),
     // L6 apps and tooling
     ("app", Class::Exempt),
     ("cli", Class::Exempt),

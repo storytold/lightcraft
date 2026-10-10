@@ -3,7 +3,7 @@ name = "dac-fuzzkit"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Deterministic, seeded mutation fuzzing for never-crash tests that run in plain `cargo test` (L0, test-only)"
+description = "Deterministic, seeded mutation fuzzing for never-crash tests that run in plain `cargo test` (test tooling, dev-dependency only)"
 
 [dependencies]
 serde_json = { workspace = true }
