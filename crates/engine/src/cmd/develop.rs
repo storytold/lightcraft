@@ -501,7 +501,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Drag Crop Handle",
             [],
             None,
-            "{handle: topLeft|topRight|bottomRight|bottomLeft|top|right|bottom|left|move | 0..8, from: [x,y], to: [x,y] (normalized, straightened frame), start?: [x0,y0,x1,y1] (default: the current crop)} — drags a crop handle; stops at the image edge, keeps the opposite edges, honours the aspect lock",
+            "{handle: topLeft|topRight|bottomRight|bottomLeft|top|right|bottom|left|move | 0..8, from: [x,y], to: [x,y] (normalized, straightened frame), start?: [x0,y0,x1,y1] (default: the current crop), keepRatio?: bool (default false)} — drags a crop handle; stops at the image edge, keeps the opposite edges, honours the aspect lock; keepRatio holds the frame's current proportions for this drag even with the lock off (the UI sends it while Shift is held)",
             has_active,
             |s, p| {
                 let id = active(s, "crop.drag")?;
@@ -526,11 +526,13 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     _ => return Err(bad("crop.drag", "`start` needs 4 numbers")),
                 };
+                let keep_ratio = bool_or(p, "keepRatio", false);
                 edit(s, "crop.drag", "Crop", |d| {
                     let start = CropGeometry { rect: given.unwrap_or(d.crop.geometry.rect), angle: d.crop.geometry.angle };
                     // A locked crop keeps the shape it has: the lock stores a width:height tuple whose
                     // orientation is reinterpreted per image, so the frame itself is the truth.
-                    let ratio = d.crop.aspect.and(Some(start.rect_px(w, h).aspect())).filter(|a| a.is_finite() && *a > 0.0);
+                    // `keepRatio` (Shift held) asks for the same thing for one drag without touching the lock.
+                    let ratio = (d.crop.aspect.is_some() || keep_ratio).then(|| start.rect_px(w, h).aspect()).filter(|a| a.is_finite() && *a > 0.0);
                     d.crop.geometry = drag_crop(start, handle, from, to, w, h, ratio);
                     Ok(())
                 })

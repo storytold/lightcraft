@@ -530,6 +530,36 @@ fn crop_drag_keeps_a_locked_ratio_on_every_handle() {
     }
 }
 
+// Feature: Shift while dragging keeps the current proportions (issue 614)
+#[test]
+fn crop_drag_keep_ratio_holds_the_shape_with_the_lock_off() {
+    let mut s = demo();
+    s.execute("crop.set", &json!({"rect": [0.1, 0.2, 0.7, 0.6]})).unwrap();
+    assert!(active_dev(&s).crop.aspect.is_none(), "lock is off");
+    let r = active_dev(&s).crop.geometry.rect;
+    let want = r.aspect();
+    for (handle, to) in [("left", [r.x0 + 0.1, 0.5]), ("top", [0.5, r.y0 + 0.05]), ("bottomRight", [1.3, 1.3]), ("right", [0.9, 0.5])] {
+        s.execute("crop.drag", &json!({"handle": handle, "from": [0.5, 0.5], "to": to, "start": [r.x0, r.y0, r.x1, r.y1], "keepRatio": true}))
+            .unwrap();
+        let g = active_dev(&s).crop.geometry.rect;
+        assert!((g.aspect() - want).abs() < 1e-6, "{handle}: {} vs {want}", g.aspect());
+        assert!(active_dev(&s).crop.aspect.is_none(), "the lock toggle is untouched");
+    }
+}
+
+#[test]
+fn crop_drag_without_keep_ratio_and_lock_off_is_free() {
+    let mut s = demo();
+    s.execute("crop.set", &json!({"rect": [0.1, 0.2, 0.7, 0.6]})).unwrap();
+    let r = active_dev(&s).crop.geometry.rect;
+    let want = r.aspect();
+    s.execute("crop.drag", &json!({"handle": "right", "from": [0.7, 0.4], "to": [0.9, 0.4], "start": [r.x0, r.y0, r.x1, r.y1]})).unwrap();
+    assert!((active_dev(&s).crop.geometry.rect.aspect() - want).abs() > 1e-3, "ratio changes freely");
+    s.execute("crop.drag", &json!({"handle": "right", "from": [0.7, 0.4], "to": [0.9, 0.4], "start": [r.x0, r.y0, r.x1, r.y1], "keepRatio": false}))
+        .unwrap();
+    assert!((active_dev(&s).crop.geometry.rect.aspect() - want).abs() > 1e-3, "keepRatio false is the same");
+}
+
 #[test]
 fn crop_drag_rejects_unknown_handles_and_bad_points() {
     let mut s = demo();
