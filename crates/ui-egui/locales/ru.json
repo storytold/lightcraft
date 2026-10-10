@@ -1410,5 +1410,10 @@
   "Keyword List": "Список ключевых слов",
   "Solo Mode": "Режим соло",
   "Expand All Panels": "Развернуть все панели",
-  "Collapse All Panels": "Свернуть все панели"
+  "Collapse All Panels": "Свернуть все панели",
+  "Saved Preset": "Сохранённый пресет",
+  "Crop Ratio": "Пропорции кадрирования",
+  "Tone Control": "Управление тоном",
+  "Auto Tone": "Автотон",
+  "Reset the selected photos' edits": "Сбросить правки выбранных фото"
 }

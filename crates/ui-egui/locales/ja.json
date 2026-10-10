@@ -1736,5 +1736,10 @@
   "Keyword List": "キーワードリスト",
   "Solo Mode": "ソロモード",
   "Expand All Panels": "すべてのパネルを展開",
-  "Collapse All Panels": "すべてのパネルを折りたたむ"
+  "Collapse All Panels": "すべてのパネルを折りたたむ",
+  "Saved Preset": "保存済みプリセット",
+  "Crop Ratio": "切り抜き比率",
+  "Tone Control": "階調コントロール",
+  "Auto Tone": "自動補正",
+  "Reset the selected photos' edits": "選択した写真の編集をリセット"
 }

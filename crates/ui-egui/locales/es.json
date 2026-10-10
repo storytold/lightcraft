@@ -1736,5 +1736,10 @@
   "Keyword List": "Lista de palabras clave",
   "Solo Mode": "Modo individual",
   "Expand All Panels": "Expandir todos los paneles",
-  "Collapse All Panels": "Contraer todos los paneles"
+  "Collapse All Panels": "Contraer todos los paneles",
+  "Saved Preset": "Ajuste preestablecido guardado",
+  "Crop Ratio": "Proporción de recorte",
+  "Tone Control": "Control de tono",
+  "Auto Tone": "Tono automático",
+  "Reset the selected photos' edits": "Restablecer las ediciones de las fotos seleccionadas"
 }

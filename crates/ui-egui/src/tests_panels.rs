@@ -176,6 +176,10 @@ fn a_narrow_window_shrinks_the_panels_without_forgetting_their_width() {
 #[test]
 fn sidebar_sections_collapse_and_remember_it() {
     let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true, "right": "none"}));
+    // the Keyword List alone in Library's right column, at its top
+    h.app.ui.hidden_panels = vec![crate::module::PanelId::QuickDevelop, crate::module::PanelId::Keywording];
+    h.step();
+    h.step();
     let has = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
     let click = |h: &mut Headless, id: &str| {
         let r = h.request("ui.clickWidget", json!({"id": id}), T);

@@ -44,6 +44,29 @@ pub(crate) fn click(h: &mut Headless, id: &str) {
     h.step();
 }
 
+/// Quick Develop: a step button adds to every selected photo's own value in one undo step; the
+/// menus set a choice on each.
+#[test]
+fn quick_develop_steps_every_selected_photo() {
+    let mut h = demo();
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    run(&mut h, "library.select", json!({"ids": ids}));
+    assert!(has(&h, "button:qd-light.exposure-3"), "the exposure row is on screen");
+    let exposure = |h: &Headless, id: u64| h.app.session.develop_of(dac_catalog::PhotoId(id)).unwrap().light.exposure;
+    let before: Vec<f64> = ids.iter().map(|i| exposure(&h, *i)).collect();
+    let undo = h.app.session.undo.len();
+    click(&mut h, "button:qd-light.exposure-3");
+    for (i, id) in ids.iter().enumerate() {
+        assert!((exposure(&h, *id) - before[i] - 1.0).abs() < 1e-9, "+1 stop on photo {id}");
+    }
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one undo step");
+    run(&mut h, "develop.quickSet", json!({"treatment": "bw"}));
+    for id in &ids {
+        assert_eq!(h.app.session.develop_of(dac_catalog::PhotoId(*id)).unwrap().treatment, dac_develop::Treatment::Bw);
+    }
+    assert!(has(&h, "button:qd-crop") && has(&h, "button:qd-wb") && has(&h, "button:qd-autoTone"));
+}
+
 /// Library's columns are Classic panel stacks: every panel has a foldable header, Solo Mode
 /// keeps one open per side, hidden panels go away, and the order is the user's.
 #[test]

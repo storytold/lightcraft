@@ -1736,5 +1736,10 @@
   "Keyword List": "關鍵字清單",
   "Solo Mode": "單獨模式",
   "Expand All Panels": "展開所有面板",
-  "Collapse All Panels": "收合所有面板"
+  "Collapse All Panels": "收合所有面板",
+  "Saved Preset": "儲存的預設集",
+  "Crop Ratio": "裁切比例",
+  "Tone Control": "色調控制",
+  "Auto Tone": "自動色調",
+  "Reset the selected photos' edits": "重設所選相片的編輯"
 }

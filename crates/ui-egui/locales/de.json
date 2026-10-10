@@ -1891,5 +1891,10 @@
   "Keyword List": "Stichwortliste",
   "Solo Mode": "Solomodus",
   "Expand All Panels": "Alle Bedienfelder einblenden",
-  "Collapse All Panels": "Alle Bedienfelder ausblenden"
+  "Collapse All Panels": "Alle Bedienfelder ausblenden",
+  "Saved Preset": "Gespeicherte Vorgabe",
+  "Crop Ratio": "Freistellungsverhältnis",
+  "Tone Control": "Tonwertsteuerung",
+  "Auto Tone": "Auto-Tonwert",
+  "Reset the selected photos' edits": "Bearbeitungen der ausgewählten Fotos zurücksetzen"
 }

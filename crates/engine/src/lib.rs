@@ -746,6 +746,8 @@ mod tests;
 #[cfg(test)]
 mod tests_album_order;
 #[cfg(test)]
+mod tests_classic;
+#[cfg(test)]
 mod tests_color;
 #[cfg(test)]
 mod tests_denoise;

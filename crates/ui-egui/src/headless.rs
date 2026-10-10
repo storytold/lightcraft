@@ -1340,6 +1340,8 @@ mod tests {
         ex(&mut h, "photo.setMeta", json!({"ids": [vis[0], vis[1]], "addKeywords": ["travel|italy"]}));
         ex(&mut h, "photo.setMeta", json!({"ids": [vis[2]], "addKeywords": ["travel|france"]}));
         h.request("ui.set", json!({"leftPanel": true, "right": "none"}), t);
+        // the Keyword List alone in Library's right column, at its top
+        h.app.ui.hidden_panels = vec![crate::module::PanelId::QuickDevelop, crate::module::PanelId::Keywording];
         // clicks land on last frame's layout: let the keyword list settle first (on a loaded machine a
         // row could still move, and the click then hit its neighbour, e.g. "sunrise")
         h.settle(SETTLE);
