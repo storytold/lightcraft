@@ -26,6 +26,7 @@ crates/immich/
 crates/text/
 crates/pdf/
 crates/layout/
+crates/geo/
 # the Classic shell
 crates/ui-egui/src/module.rs
 crates/ui-egui/src/panels/classic.rs
@@ -37,6 +38,8 @@ crates/ui-egui/src/panels/connections.rs
 crates/ui-egui/src/panels/second.rs
 crates/ui-egui/src/plate.rs
 crates/ui-egui/src/catalog_ui.rs
+crates/ui-egui/src/map/
+crates/engine/src/cmd/map.rs
 # our docs and plans
 docs/catalog.md
 docs/immich.md
