@@ -638,11 +638,19 @@ impl Session {
         }
         let Some(old) = self.develop_of(id) else { return Vec::new() };
         let Some(mut delta) = json_delta(&old.to_json(), &new.to_json()) else { return Vec::new() };
+        // Section eyes are independent switches, not a replacement of every target's list.
+        let section_changes: Vec<_> = old
+            .disabled_sections
+            .iter()
+            .chain(&new.disabled_sections)
+            .filter(|section| old.section_enabled(section) != new.section_enabled(section))
+            .map(|section| (section.as_str(), new.section_enabled(section)))
+            .collect();
         if let Some(o) = delta.as_object_mut() {
-            for k in ["spots", "red_eye", "version"] {
+            for k in ["spots", "red_eye", "version", "disabled_sections"] {
                 o.remove(k);
             }
-            if o.is_empty() {
+            if o.is_empty() && section_changes.is_empty() {
                 return Vec::new();
             }
         }
@@ -652,7 +660,10 @@ impl Session {
             .filter(|x| **x != id)
             .filter_map(|x| self.develop_of(*x).map(|d| (*x, d)))
             .filter_map(|(x, d)| {
-                let synced = lightcraft_develop::apply_partial(&d, &delta, 1.0);
+                let mut synced = lightcraft_develop::apply_partial(&d, &delta, 1.0);
+                for &(section, enabled) in &section_changes {
+                    synced.set_section_enabled(section, enabled);
+                }
                 (synced != *d).then(|| self.develop_op(x, synced, label)).flatten()
             })
             .collect()

@@ -195,7 +195,8 @@ pub struct FinishParams {
 }
 
 impl FinishParams {
-    /// Parameters for a `w × h` render into `space`; `ev`/`air_pre` as in [`crate::Prepared`].
+    /// Parameters for a `w × h` render into `space`, using the effective settings from
+    /// [`crate::plan`]; `ev`/`air_pre` as in [`crate::Prepared`].
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         s: &DevelopSettings,
@@ -207,15 +208,12 @@ impl FinishParams {
         air_pre: f32,
         space: OutputSpace,
     ) -> FinishParams {
-        let effects = s.section_enabled("effects");
-        let (clar, tex, dehaze) = if effects {
-            ((s.effects.clarity / 100.0) as f32, (s.effects.texture / 100.0) as f32, (s.effects.dehaze / 100.0) as f32)
-        } else {
-            (0.0, 0.0, 0.0)
-        };
+        // The plan has already bypassed user edits. Profile texture and clarity remain active
+        // even when the Effects panel is disabled.
+        let (clar, tex, dehaze) = ((s.effects.clarity / 100.0) as f32, (s.effects.texture / 100.0) as f32, (s.effects.dehaze / 100.0) as f32);
         let ev = s.light.exposure as f32;
         let gain = 2f32.powf(ev);
-        let grain = (s.grain.amount > 0.0 && effects).then(|| {
+        let grain = (s.grain.amount > 0.0).then(|| {
             let cell = (0.0006 + (s.grain.size / 100.0) as f32 * 0.0024) * px_per_long as f32;
             ((s.grain.amount / 100.0) as f32 * 0.13, cell.max(0.6), (s.grain.roughness / 100.0) as f32, s.grain.seed)
         });
@@ -234,7 +232,7 @@ impl FinishParams {
             ops: ColorOps::new(s),
             curves: curve_luts(&s.curve),
             refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
-            vig: if effects { vignette(s) } else { None },
+            vig: vignette(s),
             to_out: space.from_working(),
             out_luma: space.luma(),
             out_trc: space.trc(),

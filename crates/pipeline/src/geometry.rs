@@ -76,7 +76,9 @@ impl Frame {
             warp: (!warp.is_identity()).then_some(warp),
             view: None,
         };
-        if apply_crop && s.geometry.constrain_crop {
+        // Sizing and UI callers can pass stored settings; honor the toggle just as the render
+        // plan does when it neutralizes Geometry, while keeping the independent crop and optics.
+        if apply_crop && s.section_enabled("geometry") && s.geometry.constrain_crop {
             f.constrain_to_image();
         }
         f

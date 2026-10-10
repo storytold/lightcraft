@@ -68,28 +68,48 @@ impl DevelopSettings {
         !self.disabled_sections.iter().any(|s| s == section)
     }
 
-    /// The settings as rendered: an Edit-panel section whose eye is off contributes nothing (issue
-    /// #316). Light (with its tone curve), Color (white balance, presence, the mixers, colour grading
-    /// and point colour) and Detail are reset to their defaults here; Effects, Optics, Geometry and
-    /// Calibration the pipeline switches off where it applies them. Borrowed when every section is on.
+    /// The settings as rendered: bypass disabled user adjustments on a temporary copy before
+    /// adding independent profile deltas. Light includes Curve, Color includes WB, Mixer,
+    /// Point Color and Grading, and Effects includes Vignette and Grain. Treatment, profile,
+    /// crop, masks and retouching stay active; stored edits return when a section is enabled.
+    /// Borrowed when every section is on. Both CPU and GPU resolve this in the shared plan.
     pub fn effective(&self) -> std::borrow::Cow<'_, DevelopSettings> {
-        let off = |section: &str| !self.section_enabled(section);
-        if !(off("light") || off("color") || off("detail")) {
+        if self.disabled_sections.is_empty() {
             return std::borrow::Cow::Borrowed(self);
         }
         let mut d = self.clone();
-        if off("light") {
-            d.reset_section(Section::Light);
-            d.reset_section(Section::Curve);
-        }
-        if off("color") {
-            for section in [Section::Color, Section::Mixer, Section::BwMix, Section::Grading, Section::PointColor] {
-                d.reset_section(section);
+        for section in &d.disabled_sections {
+            match section.as_str() {
+                "light" => {
+                    d.light = Light::default();
+                    d.curve = ToneCurve::default();
+                }
+                "curve" => d.curve = ToneCurve::default(),
+                "color" => {
+                    d.wb = WhiteBalance::default();
+                    d.color = ColorAdj::default();
+                    d.mixer = Mixer::default();
+                    d.bw_mix = BwMix::default();
+                    d.point_colors.clear();
+                    d.grading = ColorGrading::default();
+                }
+                "mixer" => d.mixer = Mixer::default(),
+                "bwMix" => d.bw_mix = BwMix::default(),
+                "pointColor" => d.point_colors.clear(),
+                "grading" => d.grading = ColorGrading::default(),
+                "effects" => {
+                    d.effects = Effects::default();
+                    d.vignette = Vignette::default();
+                    d.grain = Grain::default();
+                }
+                "vignette" => d.vignette = Vignette::default(),
+                "grain" => d.grain = Grain::default(),
+                "detail" => d.detail = Detail::default(),
+                "optics" => d.optics = Optics::default(),
+                "geometry" => d.geometry = Geometry::default(),
+                "calibration" => d.calibration = Calibration::default(),
+                _ => {}
             }
-            d.point_colors.clear();
-        }
-        if off("detail") {
-            d.reset_section(Section::Detail);
         }
         std::borrow::Cow::Owned(d)
     }
@@ -188,6 +208,50 @@ mod tests {
         assert!(!s.is_unedited());
         s.reset_section(Section::Light);
         assert!(s.is_unedited());
+    }
+
+    #[test]
+    fn disabled_panel_groups_neutralize_every_nested_control() {
+        let base = DevelopSettings::default();
+        let mut edited = base.clone();
+        for c in CONTROLS {
+            controls::set(&mut edited, c.id, if c.max == c.default { c.min } else { c.max });
+        }
+        edited.wb.mode = WbMode::Custom;
+        edited.curve.master = vec![lightcraft_geom::Point::new(0.0, 0.2), lightcraft_geom::Point::new(1.0, 0.8)];
+        edited.point_colors.push(PointColor { hue_shift: 50.0, ..Default::default() });
+        for group in ["light", "color", "effects", "detail", "optics", "calibration"] {
+            let mut stored = edited.clone();
+            stored.set_section_enabled(group, false);
+            let rendered = stored.effective();
+            for c in CONTROLS {
+                let panel = match c.section {
+                    Section::Light | Section::Curve => "light",
+                    Section::Color | Section::Mixer | Section::BwMix | Section::Grading | Section::PointColor => "color",
+                    Section::Effects | Section::Vignette | Section::Grain => "effects",
+                    Section::Detail => "detail",
+                    Section::Optics => "optics",
+                    Section::Calibration => "calibration",
+                    _ => "other",
+                };
+                // AI Denoise blends decoded sources through denoise_amount(), retaining its saved slider value.
+                let expected = if panel == group && c.id != "enhance.denoise" { &base } else { &stored };
+                assert_eq!(controls::get(&rendered, c.id), controls::get(expected, c.id), "{group}: {}", c.id);
+            }
+            assert_eq!(rendered.denoise_amount(), if group == "detail" { 0.0 } else { stored.denoise_amount() });
+            assert_eq!(rendered.enhance, stored.enhance, "render-time bypass preserves the saved AI Denoise settings");
+            if group == "light" {
+                assert_eq!(rendered.curve, base.curve);
+            }
+            if group == "color" {
+                assert_eq!(rendered.wb.mode, WbMode::AsShot);
+                assert!(rendered.point_colors.is_empty());
+            } else {
+                assert_eq!(rendered.point_colors, stored.point_colors);
+            }
+            stored.set_section_enabled(group, true);
+            assert_eq!(stored, edited, "{group}: the stored adjustments survive render-time bypass");
+        }
     }
 
     #[test]
