@@ -15,7 +15,12 @@ pub trait Backend {
     fn has_ui(&self) -> bool;
     /// Short human description ("headless", "remote 127.0.0.1:7980").
     fn describe(&self) -> String;
+    /// Progress/cancellation for the next headless batch export. Other backends ignore it.
+    fn set_progress(&mut self, _hook: Option<ProgressHook>) {}
 }
+
+/// `(completed photos, total photos, next filename)`; false stops before the next photo.
+pub type ProgressHook = Box<dyn FnMut(usize, usize, &str) -> bool + Send>;
 
 /// A running LightCraft app, reached through its loopback control port.
 pub struct Remote {

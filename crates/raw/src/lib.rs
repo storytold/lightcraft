@@ -16,9 +16,8 @@
 //! `jxl` feature, on by default), tiled/stripped, CFA and LinearRaw),
 //! Canon CR2 / CR3 (lossless CRX Bayer and version 0x100/0x200 C-RAW), Nikon NEF/NRW (uncompressed, Huffman lossless / lossy compressed), Sony ARW (uncompressed, ARW2, lossless), Fujifilm RAF (uncompressed Bayer
 //! and X-Trans, lossless and lossy compressed), Panasonic RW2 / Leica RWL / Panasonic RAW (every raw format: compressed 4 and 6, the prefix-coded strips of 8,
-//! packed 2/5/7, the 16-bit words of the oldest bodies), Pentax PEF (uncompressed, Huffman), Olympus ORF (uncompressed).
-//! [`embedded_preview`] covers these containers' JPEG previews. Variants we can't decode yet (Nikon "lossy after split" NEF,
-//! compressed ORF, CR3 unverified marker families / C-RAW configurations) return [`RawError::Unsupported`]; each vendor module documents its sources
+//! packed 2/5/7, the 16-bit words of the oldest bodies), Pentax PEF (uncompressed, Huffman), Olympus ORF (uncompressed: 16-bit words, 12-bit XZ-2 words, 12-bit 16-byte blocks of the E-300/E-330/E-500).
+//! [`embedded_preview`] covers these containers' JPEG previews. Variants we can't decode yet (compressed ORF, CR3 unverified marker families / C-RAW configurations) return [`RawError::Unsupported`]; each vendor module documents its sources
 //! (public specifications, tag-name documentation, black-box analysis of CC0 samples) and gaps. Non-DNG files carry no
 //! colour matrix: [`color`] falls back to a documented neutral model. The decoders never panic on malformed input.
 #![forbid(unsafe_code)]
@@ -37,6 +36,7 @@ pub mod ljpeg;
 pub mod opcodes;
 mod preview;
 pub mod profile;
+mod saturation;
 pub mod semantic;
 mod tiffraw;
 mod unpack;
@@ -49,7 +49,7 @@ pub use lightcraft_geom::Orientation;
 pub use lightcraft_meta::Metadata;
 pub use lightcraft_raster::Rgb32f;
 pub use opcodes::{Opcode, OpcodeLists};
-pub use preview::{PreviewColorSpace, embedded_preview, embedded_preview_color_space};
+pub use preview::{PreviewColorSpace, embedded_preview, embedded_preview_color_space, embedded_preview_dynamic_range_optimized};
 pub use semantic::{SemanticMask, semantic_masks};
 
 use lightcraft_color::Xy;
@@ -324,7 +324,7 @@ pub(crate) enum Mode {
 
 fn decode_with(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     match probe(bytes).ok_or(RawError::NotRaw)? {
-        RawFormat::Dng => dng::decode(bytes, mode),
+        RawFormat::Dng => dng::decode(bytes, mode).map(lift_clipped),
         RawFormat::Cr2 => vendor::cr2::decode(bytes, mode),
         RawFormat::Cr3 => vendor::cr3::decode(bytes, mode),
         RawFormat::Nef | RawFormat::Nrw => vendor::nef::decode(bytes),
@@ -333,11 +333,18 @@ fn decode_with(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         RawFormat::Rw2 => vendor::rw2::decode(bytes, mode),
         RawFormat::Pef => vendor::pef::decode(bytes, mode),
         RawFormat::Orf => vendor::orf::decode(bytes, mode),
-        RawFormat::CfaTiff => dng::decode_as(bytes, mode, RawFormat::CfaTiff),
+        RawFormat::CfaTiff => dng::decode_as(bytes, mode, RawFormat::CfaTiff).map(lift_clipped),
         RawFormat::Srw => vendor::srw::decode(bytes, mode),
         RawFormat::OtherTiff => Err(RawError::Unsupported(other_tiff_reason(bytes))),
         other => Err(RawError::Unsupported(format!("{other:?} files are not decoded yet"))),
     }
+}
+
+/// DNG writers state a white level the sensor may never reach; samples stuck at the real saturation point are
+/// raised to the white level so they count as clipped (see [`RawImage::lift_clipped_samples`]).
+fn lift_clipped(mut r: RawImage) -> RawImage {
+    r.lift_clipped_samples();
+    r
 }
 
 /// A raw file's description without its samples (see [`probe_info`]).
@@ -552,7 +559,8 @@ pub struct ColorData {
     pub baseline_sharpness: Option<f64>,
     /// The file's own camera-profile look (`ProfileHueSatMap*`, `ProfileLookTable*`,
     /// `ProfileToneCurve`), applied by [`color`]'s users at render time, and its
-    /// `ProfileGainTableMap*`, kept (a DNG export writes it back) but not rendered.
+    /// `ProfileGainTableMap*`, kept (a DNG export writes it back) and rendered only when a photo's
+    /// "Camera local tone mapping" option asks for it (`lightcraft_pipeline::local_tone`).
     #[serde(default)]
     pub profile: profile::ProfileLook,
 }
@@ -939,6 +947,32 @@ mod tests {
         // no pointer and no sub-IFDs: just a broken TIFF
         let g = write(&[IfdBuilder::new().with(t::MAKE, Value::Ascii("KODAK".into()))]);
         assert_eq!(probe(&g), None);
+    }
+
+    /// A GoPro GPR (a DNG with VC-5 coded raw data, Compression 9) is refused by the full decode with
+    /// a reason that names the format, whatever its tile bytes hold; the header probe still
+    /// describes it (so it imports).
+    #[test]
+    fn gopro_vc5_dng_is_unsupported_with_a_clear_reason() {
+        let mut ifd = IfdBuilder::new();
+        ifd.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
+        ifd.set(t::IMAGE_WIDTH, Value::Long(vec![32]));
+        ifd.set(t::IMAGE_LENGTH, Value::Long(vec![16]));
+        ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+        ifd.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![1]));
+        ifd.set(t::PHOTOMETRIC, Value::Short(vec![32803]));
+        ifd.set(t::COMPRESSION, Value::Short(vec![9]));
+        ifd.set(t::DNG_VERSION, Value::Byte(vec![1, 4, 0, 0]));
+        ifd.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
+        ifd.set(t::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 1, 2]));
+        ifd.set_image(ImageData::Tiles { tile_width: 32, tile_height: 16, tiles: vec![vec![0x5au8; 400]] });
+        let bytes = write(&[ifd]);
+        assert_eq!(probe(&bytes), Some(RawFormat::Dng));
+        let want = "DNG compression 9 (GoPro VC-5) is not decoded yet";
+        let Err(RawError::Unsupported(why)) = decode(&bytes) else { panic!("expected Unsupported from decode") };
+        assert_eq!(why, want);
+        let info = probe_info(&bytes).expect("header probe describes the file");
+        assert_eq!((info.width, info.height), (32, 16));
     }
 
     /// Compression 99 (not a registered TIFF value; Leaf MOS tiles) marks a raw even without a CFA tag.

@@ -974,8 +974,27 @@ fn emptying_trashed_photos_of_one_album_and_stack_leaves_nothing_dangling() {
 fn deleting_several_photos_permanently_leaves_nothing_dangling() {
     let (mut s, src, ids, al) = two_trashed_in_album_and_stack("trash-perm-refs");
     s.execute("library.select", &json!({"ids": ids})).unwrap();
+    let files = [src.join("a.png"), src.join("b.png")].map(|path| {
+        let bytes = std::fs::read(&path).unwrap();
+        (path, bytes)
+    });
+    let snapshot = s.catalog.to_snapshot();
+    s.drain_log();
     s.execute("photo.deletePermanently", &json!({"ids": ids})).unwrap();
     assert!(s.catalog.album(lightcraft_catalog::AlbumId(al)).unwrap().photos.is_empty());
+    assert!(ids.iter().all(|i| s.catalog.photo(lightcraft_catalog::PhotoId(*i)).is_none()));
+    let removed = s.catalog.to_snapshot();
+    let log: String = s.drain_log().iter().map(lightcraft_catalog::Catalog::op_to_log_line).collect();
+    let mut reopened = lightcraft_catalog::Catalog::from_snapshot(&snapshot).unwrap();
+    reopened.replay(&log).unwrap();
+    assert_eq!(reopened.to_snapshot(), removed);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.to_snapshot(), snapshot, "one undo restores photos, album and stack");
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.catalog.to_snapshot(), removed);
+    for (path, bytes) in files {
+        assert_eq!(std::fs::read(path).unwrap(), bytes, "permanent deletion only removes catalog records");
+    }
     let _ = std::fs::remove_dir_all(&src);
 }
 
@@ -1103,5 +1122,56 @@ fn folder_import_picks_up_undecodable_raw_containers_as_preview_only() {
     assert_eq!(ids(&r, "imported"), 7, "{r}");
     assert_eq!(ids(&r, "failed"), 0, "{r}");
     assert!(s.catalog.photos().all(|p| p.preview_only.is_some() && p.kind == lightcraft_catalog::MediaKind::Raw && (p.width, p.height) == (40, 30)));
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn a_file_gone_since_the_import_review_is_not_imported() {
+    let src = temp_dir("gone-since-review");
+    write_png(&src.join("a.png"), 1);
+    write_png(&src.join("b.png"), 2);
+    let mut s = Session::new().with_fs();
+    s.execute("library.importPreview", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    std::fs::remove_file(src.join("b.png")).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy(), src.join("b.png").to_string_lossy()]})).unwrap();
+    assert_eq!((ids(&r, "imported"), ids(&r, "failed")), (1, 1), "{r}");
+    assert_eq!(s.catalog.len(), 1, "no photo for a file that isn't there");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A HEIC laid out like an iPhone's (a grid of HEVC pictures, a Display P3 profile, a quarter turn
+/// in the container, a thumbnail) imports as a normal photo that develops and exports upright like
+/// a JPEG. In a build without the codecs' `heif` feature it is reported as failed, saying why.
+#[test]
+fn heic_imports_as_a_normal_photo_or_says_why_not() {
+    use lightcraft_heif::testdata::{Prop, Spec, build};
+    let src = temp_dir("heic");
+    let photo = |x: u32, y: u32| [((x * 7 + y * 13) % 200 + 30) as u16, 110, 150];
+    let p3 = lightcraft_codecs::icc::write_named(lightcraft_codecs::NamedSpace::DisplayP3);
+    let bytes = build(&Spec { props: vec![Prop::Icc(p3), Prop::Irot(1)], thumbnail: Some(&photo), ..Spec::new(96, 64, &photo) });
+    std::fs::write(src.join("IMG_0001.HEIC"), &bytes).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    if !lightcraft_codecs::Format::Heif.can_decode() {
+        assert_eq!((ids(&r, "imported"), ids(&r, "failed")), (0, 1), "{r}");
+        assert!(r["failed"].to_string().contains("isn't included in this build"), "{r}");
+        let _ = std::fs::remove_dir_all(&src);
+        return;
+    }
+    assert_eq!((ids(&r, "imported"), ids(&r, "failed")), (1, 0), "{r}");
+    let p = s.catalog.photos().next().unwrap();
+    let id = p.id;
+    // Upright (the container's turn applied) and not preview-only.
+    assert_eq!((p.kind, p.preview_only.clone(), p.width, p.height), (lightcraft_catalog::MediaKind::Image, None, 64, 96));
+    s.execute("library.select", &json!({"ids": [id.0], "active": id.0})).unwrap();
+    let plain = crate::export::export_photo(&mut s, id, &crate::export::ExportOptions::from_json(&json!({"format": "png"})), 1).unwrap();
+    assert_eq!((plain.width, plain.height), (64, 96));
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 1.0})).unwrap();
+    let brighter = crate::export::export_photo(&mut s, id, &crate::export::ExportOptions::from_json(&json!({"format": "png"})), 1).unwrap();
+    let mean = |png: &[u8]| {
+        let d = lightcraft_codecs::decode(png, Default::default()).unwrap();
+        d.image.data.iter().map(|p| p[1]).sum::<f32>() / d.image.data.len() as f32
+    };
+    assert!(mean(&brighter.bytes) > mean(&plain.bytes) * 1.3, "exposure +1 brightens the HEIC");
     let _ = std::fs::remove_dir_all(&src);
 }

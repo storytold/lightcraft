@@ -210,6 +210,25 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     ops
 }
 
+/// Ops that give a photo the lens data its file carries now (`info`, a fresh probe), or none when
+/// it already has them. A catalog from before the lens data was read at import has none, so such a
+/// photo's correction stayed off. When the photo gains lens data and its develop settings are still
+/// what import gave it, the lens correction is turned on as import would; an edited photo keeps
+/// its settings.
+pub(crate) fn lens_ops(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Vec<Op> {
+    if info.embedded_lens == ph.embedded_lens {
+        return Vec::new();
+    }
+    let mut ops = vec![Op::SetEmbeddedLens { id, lens: info.embedded_lens.map(Box::new) }];
+    // (a photo with a default-preset look keeps it: that look is its import state)
+    if ph.embedded_lens.is_none() && info.embedded_lens.is_some() && ph.import_look.is_none() && !ph.is_edited() && !ph.develop.optics.lens_profile {
+        let mut d = (*ph.develop).clone();
+        d.optics.lens_profile = true;
+        ops.push(Op::SetDevelop { id, settings: std::sync::Arc::new(d), label: "Lens Corrections".into(), edited: ph.edited.clone() });
+    }
+    ops
+}
+
 /// Re-read photos whose files changed on disk (an external editor saved them): new size,
 /// dimensions and content hash, cached sources dropped. → {reloaded: [ids]}
 fn reload(s: &mut Session, p: &Value) -> Result<Value> {
@@ -229,21 +248,19 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
         // camera fields the catalog lacks (e.g. a raw imported before its format was read) are filled in;
         // nothing already set is overwritten
         let meta_ops = fill_missing_meta(id, ph, &info);
-        let Some(op) = content_op(id, ph, info.clone()) else {
-            if !meta_ops.is_empty() {
-                ops.extend(meta_ops);
-                reloaded.push(id);
-            }
-            continue;
-        };
-        ops.push(op);
-        ops.extend(meta_ops);
+        let mut mine: Vec<Op> = content_op(id, ph, info.clone()).into_iter().chain(meta_ops).chain(lens_ops(id, ph, &info)).collect();
+        if !mine.is_empty() {
+            ops.append(&mut mine);
+            reloaded.push(id);
+        }
         // virtual copies share the file
         for c in s.catalog.photos().filter(|c| c.copy_of == Some(id)) {
-            ops.extend(content_op(c.id, c, info.clone()));
-            reloaded.push(c.id);
+            let theirs: Vec<Op> = content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, &info)).collect();
+            if !theirs.is_empty() {
+                ops.extend(theirs);
+                reloaded.push(c.id);
+            }
         }
-        reloaded.push(id);
     }
     for id in &reloaded {
         s.media.forget(*id);
@@ -316,7 +333,7 @@ pub fn edit_specs() -> Vec<CommandSpec> {
             "Reload from Disk",
             ["Photo"],
             None,
-            "{ids?} — re-read photos whose files changed on disk (e.g. saved by an external editor), or raws shown from their embedded preview that can be decoded now; camera fields the catalog lacks are filled in → {reloaded}",
+            "{ids?} — re-read photos whose files changed on disk (e.g. saved by an external editor), or raws shown from their embedded preview that can be decoded now; camera fields the catalog lacks are filled in, and so is the lens data the file carries (an untouched photo then gets its lens correction turned on as import would; an edited one keeps its settings) → {reloaded}",
             has_selection,
             reload
         ),
@@ -358,5 +375,103 @@ mod tests {
         ph.meta = (**meta).clone();
         ph.captured = Some("2026-10-04T08:16:11".into());
         assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty());
+    }
+
+    fn lens() -> lightcraft_develop::EmbeddedLens {
+        lightcraft_develop::EmbeddedLens {
+            warp: Some(lightcraft_develop::EmbeddedWarp { planes: [[1.0, -0.1, 0.03, 0.0, 0.0, 0.0]; 3], ..Default::default() }),
+            vignette: None,
+        }
+    }
+    fn old_rw2() -> lightcraft_catalog::Photo {
+        // as an older build catalogued it: no lens data, correction off
+        lightcraft_catalog::Photo::new(
+            lightcraft_catalog::PhotoId(1),
+            Source::File { path: "/x.rw2".into() },
+            "x.rw2",
+            "RW2",
+            4592,
+            3448,
+            "2026-10-06T00:00:00",
+        )
+    }
+
+    #[test]
+    fn reload_adds_lens_data_and_turns_the_correction_on_for_an_untouched_photo() {
+        let ph = old_rw2();
+        let info = crate::media::ProbeInfo { embedded_lens: Some(lens()), ..Default::default() };
+        let ops = lens_ops(ph.id, &ph, &info);
+        assert!(matches!(ops.first(), Some(Op::SetEmbeddedLens { lens: Some(_), .. })), "{ops:?}");
+        let Some(Op::SetDevelop { settings, .. }) = ops.get(1) else { panic!("{ops:?}") };
+        assert!(settings.optics.lens_profile);
+        // once applied, the photo is still "unedited" and has what import would have given it
+        let mut c = lightcraft_catalog::Catalog::default();
+        c.apply(Op::AddPhoto { photo: Box::new(ph) }).unwrap();
+        for op in ops {
+            c.apply(op).unwrap();
+        }
+        let after = c.photo(lightcraft_catalog::PhotoId(1)).unwrap();
+        assert_eq!(after.embedded_lens, Some(lens()));
+        assert!(!after.is_edited());
+        assert_eq!(*after.develop, after.camera_defaults());
+        assert!(lens_ops(after.id, after, &info).is_empty(), "nothing more to do the second time");
+    }
+
+    #[test]
+    fn reload_adds_lens_data_but_keeps_an_edited_photos_settings() {
+        let mut ph = old_rw2();
+        let mut d = (*ph.develop).clone();
+        d.light.exposure = 0.7;
+        ph.develop = std::sync::Arc::new(d);
+        assert!(ph.is_edited());
+        let info = crate::media::ProbeInfo { embedded_lens: Some(lens()), ..Default::default() };
+        let ops = lens_ops(ph.id, &ph, &info);
+        assert!(matches!(ops.as_slice(), [Op::SetEmbeddedLens { lens: Some(_), .. }]), "{ops:?}");
+    }
+
+    #[test]
+    fn reload_leaves_a_photo_whose_user_switched_the_correction_off_alone() {
+        let mut ph = old_rw2();
+        ph.embedded_lens = Some(lens());
+        let mut d = ph.camera_defaults();
+        d.optics.lens_profile = false;
+        ph.develop = std::sync::Arc::new(d);
+        let info = crate::media::ProbeInfo { embedded_lens: Some(lens()), ..Default::default() };
+        assert!(lens_ops(ph.id, &ph, &info).is_empty());
+    }
+
+    /// End to end on a public Panasonic raw (skipped without the corpus): a catalog from before the lens data was read
+    /// gets it on Reload, the render changes to the corrected one, and Undo takes it all back.
+    #[test]
+    fn corpus_reload_corrects_an_rw2_catalogued_without_lens_data() {
+        let root = std::env::var_os("LIGHTCRAFT_CORPUS")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"));
+        let f = root.join("raw/rw2-panasonic-gx80.rw2");
+        if !f.exists() {
+            eprintln!("skip: {} absent", f.display());
+            return;
+        }
+        let mut s = Session::new().with_fs();
+        s.execute("library.import", &json!({"paths": [f.to_string_lossy()]})).unwrap();
+        let id = s.active().unwrap();
+        let ph = s.catalog.photo(id).unwrap().clone();
+        assert!(ph.embedded_lens.is_some() && ph.develop.optics.lens_profile, "import reads it");
+        // back to how 0.4.0 catalogued it
+        let mut old = (*ph.develop).clone();
+        old.optics.lens_profile = false;
+        s.catalog.apply(Op::SetEmbeddedLens { id, lens: None }).unwrap();
+        s.catalog.apply(Op::SetDevelop { id, settings: std::sync::Arc::new(old), label: "x".into(), edited: None }).unwrap();
+        s.media.forget(id);
+        let before = s.render_now(id, 160, 120).unwrap().image.data;
+        let r = s.execute("photo.reload", &json!({"ids": [id.0]})).unwrap();
+        assert_eq!(r["reloaded"], json!([id.0]));
+        let now = s.catalog.photo(id).unwrap().clone();
+        assert_eq!(now.embedded_lens, ph.embedded_lens);
+        assert!(now.develop.optics.lens_profile && !now.is_edited());
+        assert_ne!(s.render_now(id, 160, 120).unwrap().image.data, before, "the corrected render differs");
+        s.execute("edit.undo", &json!({})).unwrap();
+        let undone = s.catalog.photo(id).unwrap();
+        assert!(undone.embedded_lens.is_none() && !undone.develop.optics.lens_profile, "one undo step");
     }
 }

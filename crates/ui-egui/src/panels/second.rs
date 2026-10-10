@@ -39,7 +39,7 @@ fn body(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let ppp = ui.ctx().pixels_per_point();
     let side = super::detail::texture_side(ui.ctx()).clamp(64, 4096);
     let (w, h) = (((area.width() * ppp) as usize).clamp(64, side), ((area.height() * ppp) as usize).clamp(64, side));
-    if let Some(job) = app.session.loupe_job(id, w, h, true)
+    if let Some(job) = app.session.loupe_job(id, w, h, true).map(|j| app.renderer.job_for(Slot::Second, j))
         && app.renderer.textures.get(&Slot::Second).is_none_or(|t| t.key != job.key)
         && !app.renderer.is_pending(Slot::Second)
     {

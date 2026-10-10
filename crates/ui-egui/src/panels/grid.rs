@@ -717,10 +717,33 @@ fn folder_header(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &lightcraft_engi
     header.response.rect
 }
 
+/// The folders a breadcrumb shows for `path`: each name with the path that opens it, spelled as
+/// in `path` (its separators, a leading `/` or a UNC `\\server\share`; issue #538). A bare drive
+/// (`C:`) gets its separator back: on its own it means the current folder on that drive.
+pub(crate) fn crumbs(path: &str) -> Vec<(&str, String)> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    for (i, c) in path.char_indices().chain(std::iter::once((path.len(), '/'))) {
+        if c != '/' && c != '\\' {
+            continue;
+        }
+        if let Some(part) = path.get(start..i).filter(|p| !p.is_empty()) {
+            let mut to = path.get(..i).unwrap_or(path).to_string();
+            if out.is_empty() && part.ends_with(':') && to == part {
+                to.push(if path.contains('\\') { '\\' } else { '/' });
+            }
+            out.push((part, to));
+        }
+        start = i + c.len_utf8();
+    }
+    out
+}
+
 fn folder_breadcrumbs(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str) {
     let t = Tokens::get(ui.ctx());
     ui.spacing_mut().item_spacing.x = 4.0;
-    let parts: Vec<&str> = path.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+    let crumbs = crumbs(path);
+    let parts: Vec<&str> = crumbs.iter().map(|(name, _)| *name).collect();
     // With all sidebars open even four ellipses and their separators can exceed the row.
     // Prefer the current folder, showing more ancestors as space permits.
     let visible = ((ui.available_width() / 80.0) as usize).clamp(1, 4);
@@ -741,9 +764,10 @@ fn folder_breadcrumbs(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str) {
             if r.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
-            if r.clicked() {
-                let prefix = if path.starts_with('/') { format!("/{}", parts[..=i].join("/")) } else { parts[..=i].join("/") };
-                let _ = app.run("library.browse", json!({"path": prefix}));
+            if r.clicked()
+                && let Some((_, to)) = crumbs.get(i)
+            {
+                let _ = app.run("library.browse", json!({"path": to}));
             }
             ui.label(egui::RichText::new("›").size(13.0).color(t.text_dim));
         }
@@ -777,9 +801,20 @@ pub fn drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
 
 pub use super::filterbar::label_color;
 
-/// "Set Color Label" items (coloured dot + the label's name), shared by context menus.
+/// "Set Color Label" items for the active photo, shared by context menus.
 pub fn label_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let current = app.session.active().and_then(|id| app.session.catalog.photo(id)).and_then(|p| p.label);
+    if let Some(l) = label_items(app, ui, current, "photoLabel") {
+        let _ = app.run("photo.label", json!({"label": label_param(l)}));
+        ui.close();
+    }
+}
+
+/// The colour label items of a menu (coloured dot + the label's name, then None and Edit Label
+/// Names…), `current` checked; each colour is widget `<widget>:<colour>` (`<widget>:none`) for
+/// the control channel. Returns the choice (`Some(None)`: None).
+pub fn label_items(app: &mut LightcraftApp, ui: &mut egui::Ui, current: Option<ColorLabel>, widget: &str) -> Option<Option<ColorLabel>> {
+    let mut chosen = None;
     for l in ColorLabel::ALL {
         let name = crate::i18n::color_label(&app.session.catalog, l);
         let resp = ui.horizontal(|ui| {
@@ -787,18 +822,26 @@ pub fn label_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.painter().circle_filled(r.center(), 5.0, label_color(l));
             ui.selectable_label(current == Some(l), name)
         });
+        register(ui.ctx(), format!("{widget}:{}", label_param(Some(l))), resp.inner.rect);
         if resp.inner.clicked() {
-            let _ = app.run("photo.label", json!({"label": format!("{l:?}").to_lowercase()}));
-            ui.close();
+            chosen = Some(Some(l));
         }
     }
-    if ui.selectable_label(current.is_none(), crate::i18n::tr("None")).clicked() {
-        let _ = app.run("photo.label", json!({"label": "none"}));
+    let none = ui.selectable_label(current.is_none(), crate::i18n::tr("None"));
+    register(ui.ctx(), format!("{widget}:none"), none.rect);
+    if none.clicked() {
+        chosen = Some(None);
     }
     ui.separator();
     if ui.button(crate::i18n::tr("Edit Label Names…")).clicked() {
         let _ = app.run("dialog.labelNames", json!({}));
     }
+    chosen
+}
+
+/// A label as the `label` parameter of `photo.label` / `folder.label` names it.
+pub fn label_param(l: Option<ColorLabel>) -> String {
+    l.map_or_else(|| "none".to_string(), |l| format!("{l:?}").to_lowercase())
 }
 
 /// Stack badge at the cell's top-left: the photo count on a collapsed stack's top, `i/n` on the

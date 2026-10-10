@@ -2,10 +2,123 @@
 
 ## October 2026
 
+### Smart album rules
+- The rule editor's field menu is grouped: Rating, Pick Flag, Color Label and Any Searchable Text at the top, then
+  submenus for Source, File, Date, Keywords & People, Description, Camera Info, Location, Size, Develop and Assisted
+  Culling.
+- New fields: Keyword Count ("2 or more", "exactly 2"…), People and People Count (named faces), Shutter Speed (written
+  as 1/250), File Extension, Video Duration, Copy Name, In a Stack, Alt Text, City, State / Province, Country, Long
+  Edge, Short Edge, Aspect Ratio (landscape / portrait / square), Cropped and Treatment (in color / black & white).
+  Size rules measure the photo as shown: Megapixels now counts the cropped photo, like Long Edge, Short Edge and
+  Aspect Ratio (a 24 MP photo cropped to a square is 16 MP).
+- Choice values read as words in every language: "Public Domain", "Picked", "Black & White" rather than ids like
+  `publicDomain` (rules and agents keep using the ids; `album.ruleFields` adds `choiceLabels`).
+- Rule values are checked: a rating of 9, a date like 2026-13 or "banana", a "between" whose dates are the wrong
+  way round, "in the last 0 days", a colour label that doesn't exist, "contains" with nothing to look for, an
+  album that is gone, or an empty group is reported with its rule ("rule 2.1: no rating 0–5 is 9")
+  instead of quietly matching nothing or everything. New date rules start at the current year.
+- A smart album can include or exclude another smart album: "Keywords contain travel" and "Album isn't Excluded Photos"
+  leaves out whatever Excluded Photos matches, as its rules change. The album picker shows your albums as in the sidebar
+  (folders open on click) or finds them as you type part of a name or folder (↑ / ↓ and Enter to pick); albums that
+  can't be picked, such as one that would make an album include itself, are greyed with the reason. Esc with a dropdown or calendar open in a dialog
+  closes just that.
+- Date rules have a calendar button: pick a day, a month or a whole year (Year / Month / Day), in your language; the
+  two dates of a "between" can't be picked out of order; Esc closes just the calendar. It picks dates, not times (a
+  time is typed, and picking a day replaces one). Typing still works, and "2026-10-01 10:00" (a space for the
+  T) now matches.
+- Rule problems are shown in your language and name the field the way the menu does ("Title: needs something to look
+  for").
+- A smart album whose rules no longer check (an album they test was deleted) is marked ⚠ in the sidebar; its tooltip
+  says what to fix, and `albums.list` reports `problems`.
+- Editing a smart album's name and rules is one step: both or neither, and one undo takes both back
+  (`album.setRules` takes `name`).
+- The rule editor marks each rule that needs fixing right under it and keeps OK disabled until they are fixed. An
+  Album rule is "is" or "isn't" an album, picked with the album picker.
+- Yes/no fields (Has Edits, Cropped, Has GPS…) read Yes / No instead of true / false. A rule sent as `"false"` now
+  means no (it used to count as yes), and a value that is neither yes nor no is refused.
+- Any Searchable Text also finds the state / province, alt text, people and a virtual copy's name.
+
+### Keyword lists
+- File ▸ Import Keywords… and Export Keywords… read and write keyword list files as Lightroom Classic does (a keyword
+  a line, a tab per level, synonyms in braces, keywords left out of export in brackets). Capture One, darktable, Adobe
+  Bridge and Photo Supreme (its Formatted Vocabulary File) use the same files, so keyword lists move between them and
+  LightCraft. Importing adds the keywords you don't have, in one undo step; a file it can't read says which line, or
+  to save it as UTF-8. Exporting warns about keywords Capture One won't import, and names any keyword the format can't
+  hold (such as a name in brackets), which it leaves out so the file always reads back.
+
+### Keyword sets
+- Keyword Set ▸ Edit Set… edits a set's nine keywords in place, one field per ⌥ key, and renames it (or saves the edits as a new
+  set). An empty field leaves its key empty instead of moving the keywords after it; editing Recent Keywords and naming
+  them saves a new set.
+
+### Keywording box
+- The chips at the top of the Keywords panel are the keywords of every selected photo, not only the active one's; a
+  keyword only some of them have is marked with an asterisk (hover: how many). Only the × removes a keyword, from
+  every selected photo; a chip's menu acts on the selection (add to all, remove, show photos, edit) and no longer
+  deletes a keyword from the whole library.
+- Switch to & Containing to see the keywords with the keywords containing them, or to Will Export to see what
+  exported files will carry for the selection.
+- The keyword set's buttons and the suggestions follow the selection too; the typing boxes get the Cut / Copy / Paste
+  menu, and Return in the painter's box starts painting.
+
+### Keyword List
+- The Keywords panel ends with a Keyword List, as in Lightroom Classic: every keyword with its photo count, those no
+  photo has yet too. Filter it, tick a keyword to give it to the selected photos (a dash: only some have it), or click
+  the arrow to see its photos.
+- Create keywords with + (inside the one you picked, with synonyms, and given to the selection if you like), edit one
+  by double-clicking it, delete one with − after a confirmation. Right-click for more: create inside, Put New Keywords
+  Inside This Keyword, Purge Unused Keywords.
+- Drag a keyword onto another to nest it, or onto the list's title to bring it back to the top level; photos dragged
+  from the grid onto a keyword get it.
+- Right-click ▸ Put New Keywords Inside This Keyword: new keywords, made with + or typed in the box above, go inside
+  it. The list is there with no photo selected too, to set up keywords first.
+- Keyword tag options decide what exported files carry: Include on Export, Export Containing Keywords, Export
+  Synonyms. Exports now write keyword names to `dc:subject` and their paths to `lr:hierarchicalSubject`, and keywords
+  imported from files (or read from sidecars) keep the hierarchy `lr:hierarchicalSubject` gives them.
+
+### Text fields
+- Right-click Search Photos, a slider's typed value, the Info panel's fields, the name field of New Album, Rename
+  Album, New Smart Album, Rename Keyword, Merge Keywords and similar dialogs, or the name field under unnamed faces for
+  Cut, Copy, Paste and Select All. Esc in them gives back the text from before you started typing (in the Info panel it
+  no longer saves it). Return in those dialogs now confirms them, and their name opens selected. More fields will
+  follow.
+- On Windows and Linux, Ctrl+C outside a text field copies edit settings and Ctrl+V pastes them (⇧Ctrl+V: Paste
+  Selected Settings). Ctrl+V only reaches LightCraft while the system clipboard holds text; otherwise use Edit ▸ Paste Edit
+  Settings.
+
+### Synchronize Folder
+- Right-click a folder (or a disk other than the startup disk) in the sidebar's Folders section ▸ Synchronize
+  Folder…. The folder and the folders inside it are scanned in the background for photos added on disk, photos whose
+  file is gone, photos whose file was renamed or moved within the folder, and XMP sidecars changed by other apps; then
+  choose what to do: import the new photos and relink the moved ones (the defaults), move the missing ones to Recently
+  Deleted, read the metadata updates. A folder on a disk that isn't connected is reported as such. Synchronizing
+  runs in the background with a progress window and Cancel; everything it does is one undo step, and no file on disk
+  is touched. Agents use `folder.scanChanges` and `folder.synchronize`.
+
+### Folder colour labels
+- Right-click a folder (or a disk other than the startup disk) in the sidebar's Folders section ▸ Set Color Label ▸ a colour or None. The row
+  shows the label's dot before its photo count. Agents use `folder.label` (`path`, `label`); `library.folders`
+  reports each row's `label`.
+- A label follows its folder when it is renamed or moved in LightCraft, together with the labels of the folders
+  inside it; undo and redo carry them back and forth.
+- The catalog format is now version 4 (`Catalog.folder_records`, `Op::SetFolderRecord`). Once this version has
+  opened a library, older versions refuse it, as with every format change.
+
+### Monitor profiles
+- Settings ▸ Display ▸ Choose Profile… shows photos through your monitor's ICC profile (matrix/TRC or LUT-based), so
+  colours are right on wide-gamut and calibrated displays instead of oversaturated. The Detail view renders straight
+  into the display's own gamut; thumbnails and other previews are converted to it. Histograms, the preview caches
+  and exports don't change. Agents use `app.displayProfile`. See [display profiles](display-profiles.md).
+
 ### Masking
 - Drag anywhere inside the selected radial gradient's ellipse to move it, including rotated
   ellipses and radial components in compound masks. Edge and rotation handles keep their existing
   functions, and one Undo restores the entire drag.
+
+### Crop rotation
+- Outside the crop box, where dragging rotates the photo, the pointer is a curved double arrow, and the angle is shown
+  next to it while you rotate (issue #534). For an exact angle, type it in the new Angle field under Straighten and press Return
+  (Esc keeps the old angle; a decimal comma works too), or click the Straighten value; hovering any slider's value now says it can be typed.
 
 ### Albums tree
 - Album folders fold with the same disclosure triangle as Local, By Date, Folders and Keywords.
@@ -37,9 +150,17 @@
   belonged to another command moves to the new one. Menus show the new keys; agents use `app.setShortcut`.
 
 ### RAW decoding
+- Olympus ORF raws get the starting look fitted to the camera's own JPEG too, instead of opening flat and grey (the
+  E-1, E-400 and XZ-2 corpus files: all accepted), with white balance relative to the as-shot look as for the other
+  formats. On an E-1 photo the starting render moved from ΔE00 11.3 to 8.3 against Lightroom's. Photos already
+  imported pick it up when re-rendered.
 - Samsung SRW files without compression now open as raws: NX5, NX10, NX11, NX20, NX200, NX210, NX1000, NX1100, EX1
   and WB2000. The compressed ones (NX1, NX30, NX300, NX500, NX2000, NX3000, NX3300, NX mini) still open from their
   camera JPEG. Photos already imported pick the change up on Reload.
+- Canon CR2 raws no longer open too dark with blocked-up shadows: the black level was measured over border columns
+  that light already reaches (left of the image area Canon records), 4 % of the range too high on the EOS 6D. It is
+  now measured on the masked columns alone (8 corpus bodies, EOS 40D to 5DS R). On a 6D photo the starting render
+  moved from ΔE00 7.6 to 5.2 against Lightroom's.
 - Canon CR2 and Pentax PEF raws get the same starting look fitted to the camera's own JPEG as ARW, NEF, RW2, RAF
   and CR3, instead of opening flat and desaturated (issue #310). Photos already imported pick it up when re-rendered.
 - JPEG XL compressed DNGs (DNG 1.7) now open: lossless tiles decode sample for sample (checked on synthetic files);
@@ -47,7 +168,9 @@
   preview, with the reason, instead of showing a black tile. A JPEG XL preview stored in the DNG is used like an
   embedded JPEG.
 - Apple ProRAW's gain table map (its local tone mapping, `ProfileGainTableMap`) is now read and kept when a photo is
-  exported or converted to DNG. It is not applied to the render: Lightroom Classic renders ProRAW without it.
+  exported or converted to DNG. It is not applied by default: Lightroom Classic renders ProRAW without it. To see a
+  ProRAW the way the iPhone renders it, turn on Profile ▸ Camera local tone mapping (shown for photos that carry the
+  map); the option is per photo, so presets and Copy Settings carry it.
 - iPhone ProRAW and other DNGs that carry their own segmentation mattes (DNG semantic masks) use them for the Select
   Sky, Subject and Background masks instead of our heuristics, so the sky is selected where the camera found it
   (checked on one CC0 iPhone 12 Pro ProRAW). Photos without mattes are unchanged.
@@ -81,6 +204,12 @@
 - HEIC / HEIF photos (iPhone and Mac) open now: the optional `lightcraft-heif` crate (heic-rs, pure Rust) behind
   codecs' `heif` feature — 8- and 10-bit, alpha, grid tiles, the container's rotation/mirror/crop, ICC, EXIF and XMP.
   Off by default (HEVC patents are the distributor's call, same as PhotoCraft); official builds pass `--features heif`.
+- HEIC colours now match libheif to within one code value (they were up to ~10 off): the HEVC stream's own
+  full-range/matrix signalling is honoured (iPhone photos are full range), chroma is upsampled like libheif, grids
+  take their tiles' ICC profile, and `imir` mirrors the way libheif writes it. Importing a HEIC reads its size from
+  the container instead of decoding it; small previews use the file's embedded thumbnail. The release packages
+  (macOS, Windows, Linux, FreeBSD, Nix) now really are built with HEIC support; a build without it reports
+  "HEIC/HEIF support isn't included in this build" for each `.heic`/`.heif` at import.
 
 ### Presets and profiles
 - Import presets from other editors: XMP presets, classic `.lrtemplate` files, "DNG presets" from mobile apps and `.zip`
@@ -92,7 +221,8 @@
   white, empty Point Color slots…) as settings that couldn't be carried over.
 - A preset whose lens-profile switch is off no longer turns off the lens corrections built into a DNG (iPhone ProRAW
   and other files with embedded distortion / vignetting corrections), matching what the preset does elsewhere.
-- A red / green / blue curve in an XMP preset without the master curve is ignored, as Lightroom ignores it.
+- XMP presets apply their red / green / blue curves only when they also have the master curve and all three channel
+  curves, as Lightroom does: a preset with just one channel curve (or no master curve) leaves the channels alone.
 - Imported `.cube` LUT profiles appear in the Profile menu and the profile browser, grouped by their folder, and stay
   favourites across restarts (issue #328).
 
@@ -138,6 +268,10 @@
 )
 
 ### Reliability
+- The Windows installer asks where to install LightCraft (Program Files by default; upgrades keep the folder you
+  chose) and ends on a page saying it was installed, with a "Launch LightCraft" box. It used to finish without a word,
+  so a successful install looked like nothing had happened (issues #18, #399). Silent installs (`/qn`, `/passive`)
+  show no dialogs and take `INSTALLFOLDER=...`.
 - If the desktop app can't open its window (for example when no graphics device can be used), it now says so in a
   message box that names the log file, instead of quitting without a trace (issue #260).
 - On macOS, single-key shortcuts that appear in the menu bar now work: E, C, H, M, ⇧P, I, K, D, ratings 0–5,

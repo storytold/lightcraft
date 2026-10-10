@@ -7,6 +7,46 @@ use serde_json::{Value, json};
 
 const BIN: &str = env!("CARGO_BIN_EXE_lightcraft-cli");
 
+#[test]
+fn contact_sheet_exports_pdf_and_protects_originals() {
+    let input = tmp("contact-sheet-input.png");
+    gradient_png(&input);
+    let out = tmp("contact-sheet.pdf");
+    let (ok, lines, err) = run_cli(
+        &[
+            "--import",
+            input.to_str().unwrap(),
+            "export.contactSheet",
+            &format!("path={}", out.display()),
+            "paper=letter",
+            "landscape=true",
+            "columns=2",
+            "rows=3",
+        ],
+        None,
+    );
+    assert!(ok, "{err}: {lines:?}");
+    assert_eq!(lines[0]["result"]["pages"], 1);
+    assert_eq!(lines[0]["result"]["photos"], 1);
+    let bytes = std::fs::read(&out).unwrap();
+    assert!(bytes.starts_with(b"%PDF-1.4"));
+    assert!(String::from_utf8_lossy(&bytes).contains("/MediaBox [0 0 792.00 612.00]"));
+    let before = std::fs::read(&input).unwrap();
+    for target in [input.clone(), input.with_extension("xmp")] {
+        if target != input {
+            std::fs::write(&target, b"existing sidecar").unwrap();
+        }
+        let (ok, _, _) = run_cli(&["--import", input.to_str().unwrap(), "export.contactSheet", &format!("path={}", target.display())], None);
+        assert!(!ok, "overwrote protected file");
+    }
+    assert_eq!(std::fs::read(&input).unwrap(), before);
+    assert_eq!(std::fs::read(input.with_extension("xmp")).unwrap(), b"existing sidecar");
+    let prior = std::fs::read(&out).unwrap();
+    let (ok, _, _) = run_cli(&["--import", input.to_str().unwrap(), "export.contactSheet", &format!("path={}", out.display()), "columns=0"], None);
+    assert!(!ok);
+    assert_eq!(std::fs::read(&out).unwrap(), prior, "failed export changed prior output");
+}
+
 fn tmp(name: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("lightcraft-cli-test-{}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
@@ -236,11 +276,8 @@ fn snapshot_script_failure_exits_non_zero() {
 #[test]
 fn snapshot_ui_zoom_keeps_requested_pixel_dimensions() {
     let script = tmp("snap-ui-zoom.jsonl");
-    std::fs::write(
-        &script,
-        format!("{}\n{}\n", json!({"method": "ui.key", "params": {"key": "Plus", "cmd": true}}), json!({"method": "ui.inspect"})),
-    )
-    .unwrap();
+    std::fs::write(&script, format!("{}\n{}\n", json!({"method": "ui.zoomFactor", "params": {"factor": 1.1}}), json!({"method": "ui.inspect"})))
+        .unwrap();
     for (size, scale, expected) in [("400x240", "1", (400, 240)), ("345x200", "0.9", (311, 180))] {
         let out = tmp(&format!("snap-ui-zoom-{scale}.png"));
         let o = Command::new(BIN)

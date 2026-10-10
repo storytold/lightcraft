@@ -62,7 +62,7 @@ impl SettingsHashes {
 }
 
 /// Bump when the pipeline's output changes, to invalidate cached thumbnails.
-pub const RENDER_CACHE_VERSION: u64 = 22;
+pub const RENDER_CACHE_VERSION: u64 = 37;
 
 /// Thumbnails render at one of these long edges (so window/cell size changes reuse the cache).
 pub const THUMB_SIZES: [usize; 4] = [128, 256, 384, 512];
@@ -209,6 +209,7 @@ impl DecodedSource {
     /// Cache cost: the picture, its segmentation mattes, its denoised twin and room for the lazy mix.
     pub fn bytes(&self) -> usize {
         let mattes = self.info.as_ref().and_then(|i| i.mattes.as_ref()).map_or(0, |m| m.bytes());
+        let mattes = mattes + self.info.as_ref().and_then(|i| i.local_tone.as_ref()).map_or(0, |t| t.map.gains.len() * 4);
         self.image.data.len() * 12 + 64 + std::mem::size_of::<SourceInfo>() + mattes + self.denoised.as_ref().map_or(0, |t| t.bytes())
     }
 
@@ -250,7 +251,7 @@ impl SourceRef {
     pub fn load_source(&self) -> Result<DecodedSource, String> {
         let image = match self {
             SourceRef::Loaded(a) => return Ok((**a).clone()),
-            SourceRef::Demo { scene, max_edge } => crate::demo::scene_pixels(scene, *max_edge),
+            SourceRef::Demo { scene, max_edge } => crate::demo::scene_pixels(scene, *max_edge)?,
             SourceRef::File { path, max_edge, loader, fallback, denoise } => {
                 let plain = || match loader {
                     Some(l) => l(path, *max_edge).map(|(image, info)| DecodedSource::new(Arc::new(image), Some(info))),
@@ -673,6 +674,8 @@ pub struct RenderJob {
     pub stages: Option<Arc<StageCache>>,
     /// Keep a full-quality result here as the photo's view preview ([`crate::Session::loupe_job`]).
     pub view_cache: Option<(Arc<PreviewCache>, Hash128)>,
+    /// Render for this monitor profile ([`Self::with_display`]).
+    pub display: Option<Arc<crate::display::Display>>,
 }
 
 pub struct RenderResult {
@@ -686,6 +689,9 @@ pub struct RenderResult {
     pub loaded: Option<DecodedSource>,
     /// Set for a [`QuickJob`]'s stand-in: where the image came from.
     pub quick: Option<QuickSource>,
+    /// The display profile (id) the image is encoded for; `None`: sRGB (see
+    /// [`crate::display::present`]).
+    pub display: Option<u64>,
 }
 
 impl RenderJob {
@@ -733,6 +739,21 @@ impl RenderJob {
         self
     }
 
+    /// Render for a monitor profile: into the display's primaries (its gamut, not sRGB's), ready
+    /// to show ([`RenderResult::display`]). The histogram and the cached view preview stay sRGB.
+    /// Gets its own result key. Thumbnail jobs (rendered-thumbnail cache) are left as they are:
+    /// [`crate::display::present`] converts their sRGB results.
+    pub fn with_display(mut self, display: Option<Arc<crate::display::Display>>) -> Self {
+        if self.cache.is_some() || self.request.depth != lightcraft_pipeline::OutputDepth::U8 {
+            return self;
+        }
+        let k = |d: &Option<Arc<crate::display::Display>>| d.as_ref().map_or(0, |d| d.id()).wrapping_mul(0xd6e8_feb8_6659_fd93);
+        self.key ^= k(&self.display) ^ k(&display);
+        self.request.display = display.as_ref().map(|d| d.space);
+        self.display = display;
+        self
+    }
+
     pub fn run(self) -> RenderResult {
         if let Some((cache, key)) = &self.cache
             && let Some(img) = cache.get_at(self.cache_generation, *key)
@@ -748,10 +769,18 @@ impl RenderJob {
                 rendered: Ok(Rendered { image, histogram, deep: None }),
                 loaded: None,
                 quick: None,
+                display: None,
             };
         }
         let was_loaded = matches!(self.source, SourceRef::Loaded(_));
-        match self.source.load_source() {
+        // The app is closing (issue #620): nobody is left to show this, and quitting waits for the
+        // jobs that are running. Without this, one that lost the GPU mid-way would render on the CPU.
+        let closing = || lightcraft_gpu::shutting_down().then(|| "LightCraft is closing".to_string());
+        let source = match closing() {
+            Some(e) => Err(e),
+            None => self.source.load_source().and_then(|s| closing().map_or(Ok(s), Err)),
+        };
+        match source {
             Ok(source) => {
                 // the plain picture, or (Denoise amount above 0 and a denoised picture cached) the mix the amount asks for
                 let src = &source.image_for(self.settings.denoise_amount());
@@ -759,14 +788,30 @@ impl RenderJob {
                 // Thumbnails (many small jobs side by side) stay on the CPU; views and exports use
                 // the GPU when there is one.
                 let gpu = self.cache.is_none();
-                let rendered = develop(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu);
+                let mut rendered = develop(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu);
+                // for a display profile: the image goes to the display's values, the histogram
+                // and the cached view preview stay sRGB
+                let mut srgb = None;
+                let display = match (&self.display, self.request.display) {
+                    (Some(d), Some(_)) => {
+                        let keep = self.view_cache.is_some() && self.request.quality == Quality::Full;
+                        let (s, h) = crate::display::finish_render(&mut rendered.image, d, keep);
+                        if let Some(h) = h {
+                            rendered.histogram = h;
+                        }
+                        srgb = s;
+                        Some(d.id())
+                    }
+                    _ => None,
+                };
                 if let Some((cache, key)) = &self.cache {
                     cache.put_at(self.cache_generation, *key, Arc::new(rendered.image.clone()));
                 }
                 if let Some((cache, key)) = &self.view_cache
                     && self.request.quality == Quality::Full
+                    && (display.is_none() || srgb.is_some())
                 {
-                    cache.put_deferred_at(self.cache_generation, *key, Arc::new(rendered.image.clone()));
+                    cache.put_deferred_at(self.cache_generation, *key, Arc::new(srgb.unwrap_or_else(|| rendered.image.clone())));
                 }
                 RenderResult {
                     request_id: self.request_id,
@@ -777,6 +822,7 @@ impl RenderJob {
                     rendered: Ok(rendered),
                     loaded: (!was_loaded).then_some(source),
                     quick: None,
+                    display,
                 }
             }
             Err(e) => RenderResult {
@@ -788,6 +834,7 @@ impl RenderJob {
                 rendered: Err(e),
                 loaded: None,
                 quick: None,
+                display: None,
             },
         }
     }
@@ -852,6 +899,7 @@ impl QuickJob {
             rendered,
             loaded: None,
             quick,
+            display: None,
         };
         let rendered = |image: Rgba8| {
             let histogram = Histogram::of_srgb8(&image);
@@ -971,6 +1019,7 @@ impl crate::Session {
             cache,
             stages: None,
             view_cache: None,
+            display: None,
         })
     }
 
@@ -1021,6 +1070,7 @@ impl crate::Session {
             cache: Some((self.media.rendered.clone(), ck)),
             stages: None,
             view_cache: None,
+            display: None,
         })
     }
 
@@ -1066,6 +1116,7 @@ impl crate::Session {
             cache: Some((self.media.rendered.clone(), ck)),
             stages: None,
             view_cache: None,
+            display: None,
         })
     }
 

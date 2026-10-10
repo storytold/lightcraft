@@ -66,7 +66,7 @@ fn tool(name: &str, title: &str, description: &str, properties: Value, required:
         "name": name,
         "title": title,
         "description": description,
-        "inputSchema": {"type": "object", "properties": properties, "required": required},
+        "inputSchema": {"type": "object", "properties": properties, "required": required, "additionalProperties": false},
     })
 }
 
@@ -78,6 +78,51 @@ fn ids_schema(what: &str) -> Value {
 pub fn helper_tools(has_ui: bool) -> Vec<Value> {
     let photo_id = json!({"type": "integer", "description": "Photo id (default: the active photo). Makes that photo active first."});
     let mut v = vec![
+        tool(
+            "command_list",
+            "List commands",
+            "Every command (engine + UI when connected) with id, label, menu, shortcut, parameter doc and whether it is enabled now. Each id is also callable as tool `cmd_<id with . replaced by _>` or via command_run.",
+            json!({
+                "filter": {"type": "string", "description": "Only commands whose id or label contains this text (case-insensitive)"},
+                "enabled_only": {"type": "boolean", "description": "Only commands that are enabled now"}
+            }),
+            &[],
+        ),
+        tool(
+            "command_run",
+            "Run command",
+            "Run any LightCraft command by id with JSON params (see command_list for ids and parameter docs), e.g. {id: \"photo.rate\", params: {rating: 4}}.",
+            json!({"id": {"type": "string", "description": "Command id"}, "params": {"type": "object", "description": "Command parameters", "additionalProperties": true}}),
+            &["id"],
+        ),
+        tool(
+            "command_batch",
+            "Run commands",
+            "Run several commands in order: {steps: [{id, params?}], stop_on_error?: true}. Returns {completed, failed, results: [{ok, result | error}]}.",
+            json!({
+                "steps": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "params": {"type": "object", "additionalProperties": true}}, "required": ["id"], "additionalProperties": false}},
+                "stop_on_error": {"type": "boolean", "description": "Stop at the first failing step (default true)"}
+            }),
+            &["steps"],
+        ),
+        tool(
+            "doc_inspect",
+            "Inspect library",
+            "The library as JSON: current source, filter, sort, selection, active photo and undo/redo labels (library.state) plus counts (catalog.stats).",
+            json!({}),
+            &[],
+        ),
+        tool(
+            "render_preview",
+            "Render preview",
+            "Render a photo with its current develop settings (cropped) and return it as an image (`max_side` is the long edge; does not change selection or save a file).",
+            json!({
+                "id": {"type": "integer", "description": "Photo id (default: the active photo); selection is unchanged"},
+                "max_side": {"type": "integer", "description": "Long edge in pixels (default 1024, max 4096)"},
+                "format": {"type": "string", "enum": ["png", "jpeg"], "description": "Image encoding (default png; jpeg is smaller)"},
+            }),
+            &[],
+        ),
         tool(
             "list_commands",
             "List commands",
@@ -187,6 +232,13 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
                 "ids": {"type": "array", "items": {"type": "integer"}, "description": "Photos to export (default: the given/active photo)"},
                 "path": {"type": "string"},
                 "dir": {"type": "string"},
+                "preset": {"type": "string", "description": "Export preset id or name"},
+                "background": {"type": "boolean", "description": "Desktop background export (headless exports remain blocking)"},
+                "resize": {"type": "object", "description": "Full Resize options; alternatively use the size helpers below"},
+                "subfolder": {"type": "string"},
+                "conflict": {"type": "string", "enum": ["unique", "overwrite", "skip"]},
+                "tiffCompression": {"type": "string", "enum": ["none", "lzw", "zip"]},
+                "dngCompression": {"type": "string", "enum": ["lossless", "deflate", "uncompressed"]},
                 "format": {"type": "string", "enum": ["jpeg", "png", "tiff", "webp", "avif", "original", "dng"], "description": "original = the file as is + an XMP sidecar with the edits; dng = raw photos as DNG with the edits embedded"},
                 "longEdge": {"type": "integer", "description": "Output long edge in px. When no size param is given: 3000; 0 = full size (cropped, native resolution)"},
                 "shortEdge": {"type": "integer", "description": "Output short edge in px"},
@@ -206,6 +258,7 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
                 "removeLocation": {"type": "boolean"},
                 "colorSpace": {"type": "string", "enum": ["srgb", "displayP3", "adobeRgb", "proPhoto", "rec2020"], "description": "Output colour space (default sRGB; AVIF is always sRGB). adobeRgb = Adobe RGB (1998) compatible; the embedded ICC profile is generated from the published primaries"},
                 "bitDepth": {"type": "integer", "enum": [8, 10, 16, 32], "description": "Bits per channel: PNG 8|16 (default 8), TIFF 8|16|32 (default 16; 32 = linear float with a linear profile), AVIF 8|10; JPEG/WebP are 8-bit"},
+                "hdr": {"type": "boolean", "description": "HDR output for photos edited in HDR (develop.hdr): JPEG as an ISO 21496-1 gain map JPEG, AVIF as 10-bit Rec. 2020 PQ, 32-bit TIFF with highlights above 1; other formats and SDR edits export as usual"},
                 "watermark": {"description": "Text, or {text, vertical (boolean; defaults to false: upright columns right to left), size (text height as a fraction of the short edge, 0.005..0.5; default 0.035), opacity (0..1; default 0.7), anchor (topLeft|top|topRight|left|center|right|bottomLeft|bottom|bottomRight), inset (margin as a fraction of the short edge, 0..0.4; default 0.025), color [r,g,b] (sRGB 0..255), shadow (boolean), image (path of a graphic drawn instead of the text), imageWidth (fraction of the photo's width, 0.01..1; default 0.2)}. Unknown keys and out-of-range sizes are errors"}
             }),
             &[],
@@ -213,6 +266,9 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
     ];
     if has_ui {
         v.extend([
+            tool("ui_inspect", "Inspect UI", "UI state and selection (same as inspect_ui).", json!({}), &[]),
+            tool("ui_screenshot", "Screenshot", "Return the window as an image without saving a file.",
+                json!({"maxSize": {"type": "integer"}, "format": {"type": "string", "enum": ["png", "jpeg"]}}), &[]),
             tool(
                 "screenshot",
                 "Screenshot",
@@ -250,6 +306,13 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
                 &["key"],
             ),
             tool("type_text", "Type text", "Type text into the focused field.", json!({"text": {"type": "string"}}), &["text"]),
+            tool(
+                "clipboard",
+                "Cut, copy or paste",
+                "Cut, copy or paste in the focused text field (click one first), as ⌘X / ⌘C / ⌘V do; cut and copy write the system clipboard. `paste` pastes `text`, or what the system clipboard holds without it. inspect_ui → `copied` is the text the app last copied.",
+                json!({"action": {"type": "string", "enum": ["cut", "copy", "paste"]}, "text": {"type": "string"}}),
+                &["action"],
+            ),
             tool(
                 "pointer_gesture",
                 "Pointer gesture",
@@ -298,11 +361,59 @@ pub fn command_tools(backend: &mut dyn Backend) -> Vec<Value> {
         .collect()
 }
 
+/// Conservative hints: generated command tools may edit; optional output paths make a helper a writer.
+fn annotations(name: &str, title: &str) -> Value {
+    let read_only = matches!(
+        name,
+        "command_list"
+            | "list_commands"
+            | "doc_inspect"
+            | "render_preview"
+            | "query_photos"
+            | "list_controls"
+            | "get_develop"
+            | "inspect_ui"
+            | "list_widgets"
+            | "ui_inspect"
+            | "ui_screenshot"
+    );
+    let files = matches!(name, "export" | "render_photo" | "screenshot");
+    json!({"title": title, "readOnlyHint": read_only, "destructiveHint": !read_only && !files,
+        "idempotentHint": read_only || matches!(name, "render_photo" | "screenshot"), "openWorldHint": false})
+}
+
+/// Helpers have fixed keys; generated command tools retain the registry's free-form params.
+pub(crate) fn check_args(name: &str, args: &Value) -> Result<(), String> {
+    if args.is_null() {
+        return Ok(());
+    }
+    let Some(m) = args.as_object() else {
+        return Err("tool arguments must be an object".into());
+    };
+    let defs = helper_tools(true);
+    let Some(def) = defs.iter().find(|t| t["name"] == name) else {
+        return Ok(());
+    };
+    let Some(props) = def["inputSchema"]["properties"].as_object() else {
+        return Ok(());
+    };
+    if let Some(bad) = m.keys().find(|k| !props.contains_key(*k)) {
+        let accepted: Vec<&str> = props.keys().map(String::as_str).collect();
+        return Err(format!("unknown argument \"{bad}\" for {name}; expected: {}", accepted.join(", ")));
+    }
+    Ok(())
+}
+
 /// All tools: helpers, plus the generated command tools when `with_commands`.
 pub fn tool_definitions(backend: &mut dyn Backend, with_commands: bool) -> Vec<Value> {
     let mut v = helper_tools(backend.has_ui());
     if with_commands {
         v.extend(command_tools(backend));
+    }
+    for t in &mut v {
+        let name = t["name"].as_str().unwrap_or_default().to_string();
+        let title = t["title"].as_str().unwrap_or(&name).to_string();
+        t["annotations"] = annotations(&name, &title);
     }
     v
 }
@@ -445,21 +556,66 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
         return ToolResult::from(exec(b, &rest.replace('_', "."), args.clone()));
     }
     match name {
-        "list_commands" => {
+        "list_commands" | "command_list" => {
             let filter = s("filter").unwrap_or("").to_lowercase();
+            let enabled_only = args.get("enabled_only").and_then(Value::as_bool).unwrap_or(false);
             ToolResult::from(b.call("engine.commands", json!({})).map(|v| {
                 match v {
-                    Value::Array(a) if !filter.is_empty() => Value::Array(
+                    Value::Array(a) => Value::Array(
                         a.into_iter()
                             .filter(|c| {
-                                c["id"].as_str().unwrap_or("").to_lowercase().contains(&filter)
+                                filter.is_empty()
+                                    || c["id"].as_str().unwrap_or("").to_lowercase().contains(&filter)
                                     || c["label"].as_str().unwrap_or("").to_lowercase().contains(&filter)
                             })
+                            .filter(|c| !enabled_only || c["enabled"].as_bool() != Some(false))
                             .collect(),
                     ),
                     v => v,
                 }
             }))
+        }
+        "command_run" => match s("id") {
+            Some(c) => ToolResult::from(exec(b, c, args.get("params").cloned().filter(|p| !p.is_null()).unwrap_or(json!({})))),
+            None => ToolResult::error("missing `id`"),
+        },
+        "command_batch" => {
+            let Some(steps) = args.get("steps").and_then(Value::as_array) else { return ToolResult::error("missing `steps`") };
+            let stop = args.get("stop_on_error").and_then(Value::as_bool).unwrap_or(true);
+            let (mut completed, mut failed, mut results) = (0, 0, Vec::new());
+            for st in steps {
+                let Some(id) = st["id"].as_str() else {
+                    failed += 1;
+                    results.push(json!({"ok": false, "error": "step without `id`"}));
+                    if stop {
+                        break;
+                    }
+                    continue;
+                };
+                match exec(b, id, st.get("params").cloned().filter(|p| !p.is_null()).unwrap_or(json!({}))) {
+                    Ok(r) => {
+                        completed += 1;
+                        results.push(json!({"ok": true, "result": r}));
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        results.push(json!({"ok": false, "error": e}));
+                        if stop {
+                            break;
+                        }
+                    }
+                }
+            }
+            let r = json!({"completed": completed, "failed": failed, "results": results});
+            if failed > 0 { ToolResult { is_error: true, ..ToolResult::json(r) } } else { ToolResult::json(r) }
+        }
+        "doc_inspect" => ToolResult::from(doc_inspect(b)),
+        "render_preview" => {
+            let mut a = obj(args, &["id", "format"]);
+            if let Some(m) = args.get("max_side") {
+                a["size"] = m.clone();
+            }
+            render_photo(b, &a)
         }
         "run_command" => match s("command") {
             Some(c) => ToolResult::from(exec(b, c, args.get("params").cloned().filter(|p| !p.is_null()).unwrap_or(json!({})))),
@@ -581,12 +737,20 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
                         "watermark",
                         "colorSpace",
                         "bitDepth",
+                        "hdr",
+                        "preset",
+                        "background",
+                        "resize",
+                        "subfolder",
+                        "conflict",
+                        "tiffCompression",
+                        "dngCompression",
                     ],
                 ),
             )
         })),
-        "screenshot" => screenshot(b, args),
-        "inspect_ui" => ToolResult::from(b.call("ui.inspect", json!({}))),
+        "screenshot" | "ui_screenshot" => screenshot(b, args),
+        "inspect_ui" | "ui_inspect" => ToolResult::from(b.call("ui.inspect", json!({}))),
         "set_ui" => ToolResult::from(b.call("ui.set", args.get("state").cloned().unwrap_or(json!({})))),
         "list_widgets" => ToolResult::from(b.call("ui.widgets", obj(args, &["filter"]))),
         "click" => {
@@ -602,7 +766,15 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
         }
         "press_key" => ToolResult::from(b.call("ui.key", obj(args, &["key", "cmd", "shift", "alt", "ctrl"]))),
         "type_text" => ToolResult::from(b.call("ui.text", obj(args, &["text"]))),
+        "clipboard" => ToolResult::from(b.call("ui.clipboard", obj(args, &["action", "text"]))),
         "pointer_gesture" => ToolResult::from(b.call("ui.pointer", obj(args, &["events", "alt", "shift", "cmd"]))),
         other => ToolResult::error(format!("unknown tool `{other}` (see tools/list)")),
     }
+}
+
+/// The canonical document resource and tool share the same snapshot.
+pub(crate) fn doc_inspect(b: &mut dyn Backend) -> Result<Value, String> {
+    let library = exec(b, "library.state", json!({}))?;
+    let stats = exec(b, "catalog.stats", json!({}))?;
+    Ok(json!({"library": library, "stats": stats}))
 }

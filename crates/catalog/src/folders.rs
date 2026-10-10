@@ -23,15 +23,21 @@
 //! (`/Volumes/Macintosh HD/Users/me` and `/Users/me`, `/media/me/usb` and `/run/media/me/usb`) is
 //! two rows. Each row is still consistent: choosing it shows exactly the photos it counts.
 //!
+//! A folder is otherwise only where photos are, but the library can also keep a
+//! [`FolderRecord`] about it (its colour label), stored under the folder's identity
+//! ([`crate::query::folder_key`]). A record follows its folder when the folder is renamed or moved
+//! here ([`Catalog::folder_records_follow`]); one about a folder that no longer holds a photo is
+//! kept (undo can bring the photos back) and shows again when the folder does.
+//!
 //! This is the library's own view of its photos; browsing any folder on disk without importing
 //! is Local's job (see [`crate::local`]).
 
 use std::collections::{BTreeMap, HashMap};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-use crate::query::{folder_key, folder_within, split_path};
-use crate::{Catalog, Source};
+use crate::query::{folder_key, folder_rest, folder_within, key_within, split_path};
+use crate::{Catalog, ColorLabel, Op, Source};
 
 /// Folder levels kept per photo. No real path comes near it; a deeper one is counted at its
 /// ancestor this many levels down, which bounds the tree's depth (and so every walk of it)
@@ -58,7 +64,33 @@ pub struct FolderNode {
     /// so for the startup disk and for folders that hold other disks (`/Volumes`, `/mnt`…): their
     /// path covers those disks' photos too, so choosing them is not offered.
     pub selectable: bool,
+    /// The folder's colour label (see [`FolderRecord`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<ColorLabel>,
     pub children: Vec<FolderNode>,
+}
+
+/// What the library keeps about one of its folders beyond the photos in it. A record with
+/// nothing in it is not kept.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FolderRecord {
+    /// A colour label, as a photo has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<ColorLabel>,
+}
+
+impl FolderRecord {
+    /// Whether the record says nothing (and so is not kept).
+    pub fn is_empty(&self) -> bool {
+        self.label.is_none()
+    }
+}
+
+/// The identity a folder's record is kept under: its [`folder_key`]; `None` for a path that
+/// names no folder (empty, relative, `.`).
+pub(crate) fn record_key(path: &str) -> Option<String> {
+    let key = folder_key(path);
+    (split_path(path, true).absolute && !key.is_empty()).then_some(key)
 }
 
 /// A folder while the tree is being built (children by identity key).
@@ -151,6 +183,53 @@ pub fn folder_label(path: &str) -> String {
 }
 
 impl Catalog {
+    /// What the library keeps about folder `path`, however it is spelled.
+    pub fn folder_record(&self, path: &str) -> Option<&FolderRecord> {
+        record_key(path).and_then(|k| self.folder_records.get(&k))
+    }
+
+    /// The colour label of folder `path`, however it is spelled.
+    pub fn folder_color_label(&self, path: &str) -> Option<ColorLabel> {
+        self.folder_record(path).and_then(|r| r.label)
+    }
+
+    /// The op that gives folder `path` colour label `label` (`None`: takes it off), keeping the
+    /// rest of its record. Applying it checks the path.
+    pub fn folder_label_op(&self, path: &str, label: Option<ColorLabel>) -> Op {
+        let mut record = self.folder_record(path).cloned().unwrap_or_default();
+        record.label = label;
+        Op::SetFolderRecord { folder: path.to_string(), record: Some(record) }
+    }
+
+    /// The ops that carry the records of folder `from` and the folders inside it over to `to`
+    /// (the same place below it), for a folder renamed or moved on disk: commit them with the
+    /// photos' relinks so undo puts both back. Records already at or below `to` are left from a
+    /// folder that is no longer there and are dropped (undo restores them). Empty when there is
+    /// nothing to carry or drop.
+    pub fn folder_records_follow(&self, from: &str, to: &str) -> Vec<Op> {
+        let (Some(root), Some(dest)) = (record_key(from), record_key(to)) else { return Vec::new() };
+        if root == dest {
+            return Vec::new();
+        }
+        let moved: Vec<(String, FolderRecord)> = self
+            .folder_records
+            .iter()
+            .filter(|(k, _)| key_within(k, &root))
+            .filter_map(|(k, r)| {
+                let rest = folder_rest(k, &root)?;
+                let base = dest.trim_end_matches('/');
+                let path = if rest.is_empty() { dest.clone() } else { format!("{base}/{}", rest.join("/")) };
+                Some((folder_key(&path), r.clone()))
+            })
+            .collect();
+        // what was known at the old place goes, and so does what is left at the new one (also
+        // when the moved folder carries nothing: the folder now there is not the one it was about)
+        let stale = self.folder_records.keys().filter(|k| key_within(k, &root) || key_within(k, &dest));
+        let mut ops: Vec<Op> = stale.map(|k| Op::SetFolderRecord { folder: k.clone(), record: None }).collect();
+        ops.extend(moved.into_iter().map(|(k, r)| Op::SetFolderRecord { folder: k, record: Some(r) }));
+        ops
+    }
+
     /// The library's volumes with their folders and photo counts: volumes by name
     /// (case-insensitive), each folder with its subfolders the same way.
     pub fn folder_tree(&self) -> Vec<FolderNode> {
@@ -196,7 +275,7 @@ impl Catalog {
                 l.own += n;
             }
         }
-        let mut tree: Vec<FolderNode> = roots.iter().filter_map(|k| build(k, &levels)).collect();
+        let mut tree: Vec<FolderNode> = roots.iter().filter_map(|k| build(k, &levels, &self.folder_records)).collect();
         sort(&mut tree);
         // a folder that holds another disk's mount covers that disk's photos too
         let mounts: Vec<String> = tree.iter().filter(|v| v.path != "/").map(|v| v.path.clone()).collect();
@@ -206,12 +285,21 @@ impl Catalog {
 }
 
 /// The node for `key` with everything below it (at most [`MAX_DEPTH`] deep).
-fn build(key: &str, levels: &HashMap<String, Level>) -> Option<FolderNode> {
+fn build(key: &str, levels: &HashMap<String, Level>, records: &BTreeMap<String, FolderRecord>) -> Option<FolderNode> {
     let l = levels.get(key)?;
-    let mut children: Vec<FolderNode> = l.children.iter().filter_map(|k| build(k, levels)).collect();
+    let mut children: Vec<FolderNode> = l.children.iter().filter_map(|k| build(k, levels, records)).collect();
     sort(&mut children);
     let count = l.own + children.iter().map(|c| c.count).sum::<usize>();
-    Some(FolderNode { name: l.name.clone(), path: l.path.clone(), count, own: l.own, volume: l.volume, selectable: true, children })
+    Some(FolderNode {
+        name: l.name.clone(),
+        path: l.path.clone(),
+        count,
+        own: l.own,
+        volume: l.volume,
+        selectable: true,
+        label: records.get(key).and_then(|r| r.label),
+        children,
+    })
 }
 
 fn mark_selectable(nodes: &mut [FolderNode], mounts: &[String]) {

@@ -268,7 +268,11 @@ fn cmd_ci() -> Result<(), String> {
                 run(c, "cargo clippy -p lightcraft-codecs --features heif --all-targets -- -D warnings")?;
                 let mut c = cargo();
                 c.args(["test", "-p", "lightcraft-codecs", "-p", "lightcraft-heif", "--features", "lightcraft-codecs/heif"]);
-                run(c, "cargo test -p lightcraft-codecs -p lightcraft-heif --features lightcraft-codecs/heif")
+                run(c, "cargo test -p lightcraft-codecs -p lightcraft-heif --features lightcraft-codecs/heif")?;
+                // the engine's HEIC import test, with the decoder (the workspace run checks the error)
+                let mut c = cargo();
+                c.args(["test", "-p", "lightcraft-engine", "--lib", "--features", "lightcraft-codecs/heif", "heic"]);
+                run(c, "cargo test -p lightcraft-engine --lib --features lightcraft-codecs/heif heic")
             }),
         ),
         (
@@ -340,7 +344,30 @@ const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "https://raw.pixls.us/data/Sony/ILCE-7M4/ILCE-7M4_DSC06676_FullFrame-LossLess-Compressed-Small.ARW",
         "cbbd0930c7d8706dff84c68a2004454266e6fd0d8354f5f76a106b5d776e0223",
     ),
-    // pre-2017 bodies: white balance only in the enciphered maker note, black level only in the SR2SubIFD (#148)
+    // ILCE-7CR (61 MP), one scene in three codings: lossless compressed L (2×2 CFA cells per LJ92 sample) and M
+    // (subsampled YCbCr), and compressed ARW2
+    (
+        "arw-sony-a7cr-lossless-l.arw",
+        "https://raw.pixls.us/data/Sony/ILCE-7CR/DSC00795.ARW",
+        "3e1642f3a1ae7c9f93228c5f09f27e362608e6a4ca1b3e5d8dd9eb8fae576997",
+    ),
+    (
+        "arw-sony-a7cr-lossless-m.arw",
+        "https://raw.pixls.us/data/Sony/ILCE-7CR/DSC00796.ARW",
+        "5bcba4acc52a5b902074581b4a2f5fb3c79ec56bd0fdc1746b9e2c0f9d3e9c88",
+    ),
+    (
+        "arw-sony-a7cr-compressed.arw",
+        "https://raw.pixls.us/data/Sony/ILCE-7CR/DSC00798.ARW",
+        "f5096e8fbccf0842c8a57763cabd2836608f019eb7fd54f7b22260c2f5bc4da5",
+    ),
+    // a dusk sky clipped in green behind a poplar: the clipped-highlight colour of issue #523
+    (
+        "arw-sony-a7rm4-14bit-compressed.arw",
+        "https://raw.pixls.us/getfile.php/3480/nice/Sony%20-%20ILCE-7RM4%20-%2014bit%2014bit%20compressed%20%283:2%29.ARW",
+        "e6dafe42643f69ab9d1fd00414b7a1f5104df354bb589201600ac934b29b5e4a",
+    ),
+    // pre-2017 bodies: white balance and black level only in the encrypted SR2SubIFD (#148)
     (
         "arw-sony-rx100m3.arw",
         "https://raw.pixls.us/data/Sony/DSC-RX100M3/DSC00734.ARW",
@@ -355,6 +382,43 @@ const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "arw-sony-a7rm2-12bit-uncompressed.arw",
         "https://raw.pixls.us/data/Sony/ILCE-7RM2/12-bit-uncompressed.ARW",
         "71e0888396ef52c7e6a990b4e72ebb4d8413a1fc1c35bada449870539cef6e39",
+    ),
+    // older DSLRs whose SR2SubIFD keeps the black level elsewhere than the bodies above (#535): A500 (27152-byte
+    // layout, like the A450/A550), A700 (62112 bytes)
+    (
+        "arw-sony-a500.arw",
+        "https://raw.pixls.us/data/Sony/DSLR-A500/DSC02421.ARW",
+        "1407fb596a391df67c15b90026a1a76702a2e7386dbdff2f0815b903ea49cead",
+    ),
+    (
+        "arw-sony-a700.arw",
+        "https://raw.pixls.us/data/Sony/DSLR-A700/DSC07249.ARW",
+        "3159e28892bf0771d01525cd4b6190f9c15bbb19fa2fab6d2515ced0594e8f40",
+    ),
+    // SR2SubIFD white balance (#535): the A500 and A700 above, a third layout of a body that had none before
+    // (SLT-A33, 29000 bytes), and two shots whose maker-note gains differ from the preset applied (5600 K, Shade)
+    ("arw-sony-a33.arw", "https://raw.pixls.us/data/Sony/SLT-A33/DSC01867.ARW", "1a59856394f10d4fadb40f5ab9c6d1c89f473f4dbcdefd216fbbbbf1ad8d21f9"),
+    (
+        "arw-sony-a3500-5600k.arw",
+        "https://raw.pixls.us/data/Sony/ILCE-3500/DSC06923.ARW",
+        "04c4fe04425c3e6fff7c8af0f811923c35e750300373357bd54342150c5505d8",
+    ),
+    (
+        "arw-sony-a7s-shade.arw",
+        "https://raw.pixls.us/data/Sony/ILCE-7S/DSC04125.ARW",
+        "7cc338a0abc8fdad32d61006f1f8f412297b93e040c7efba572eb2bd8f8e8be2",
+    ),
+    // pre-2017 bodies in the camera's 16:9 mode (#535): the ILCE-7SM2 records it in FullImageSize, the DSLR-A580 only
+    // in the Exif image size
+    (
+        "arw-sony-a7sm2-16x9.arw",
+        "https://raw.pixls.us/data/Sony/ILCE-7SM2/DSC01005.ARW",
+        "46044fb6a9c805f2b4915cd4970316b4d04b0566bcf5287afaad3ef648d7a3db",
+    ),
+    (
+        "arw-sony-a580-16x9.arw",
+        "https://raw.pixls.us/data/Sony/DSLR-A580/RAW_SONY_A580.ARW",
+        "5b0924d39151239dce19e92e08318f4f62a5a8ac276bd7180ec8463d2cfee709",
     ),
     // CR2 colour-filter layouts differ by model (issue #85): CR2CFAPattern 3 (GBRG) and 1 (RGGB) samples
     (
@@ -502,6 +566,16 @@ const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "nef-nikon-d7500-lossless14.nef",
         "https://raw.pixls.us/getfile.php/1534/nice/Nikon%20-%20D7500%20-%2014bit%2014bit%20compressed%20%28Lossless%29%20%283:2%29.NEF",
         "430b4f1be4e53a011861b63294ad19fdc0353ec3ea62104f77d4c193e3dd3fc8",
+    ),
+    (
+        "nef-nikon-zf-he.nef",
+        "https://raw.pixls.us/download/data/Nikon/Z%20f/DSC_0043.NEF",
+        "98d6ca8e6c98048ca7ffed68ccaeda7b2b9f03807f0d320d97d5678db21748c2",
+    ),
+    (
+        "nef-nikon-zf-lossless.nef",
+        "https://raw.pixls.us/download/data/Nikon/Z%20f/DSC_0040.NEF",
+        "83c82be0be8865d796096dfbcc8ef2abf5af1bd37db44dfad6715070b0c99d15",
     ),
     (
         "nrw-nikon-b700-uncompressed.nrw",

@@ -88,6 +88,13 @@ from a check tile; this estimate can choose imperfectly on unmeasured hardware.
 Settings offers Automatic, Graphics card and Processor. GPU tests cover supported
 synthetic networks against the scalar executor; a real-model test compares CPU/GPU.
 
+The convolution kernel stores its shared input tile as scalar elements, each with
+one writer, and gathers vectors after a workgroup barrier. Writing separate lanes
+of the same shared vector from different invocations is not safe under WGSL
+([component references](https://www.w3.org/TR/WGSL/#vector-component-reference));
+this caused incorrect Metal results (issue #479). Synthetic equivalence tests include
+repeated partial tiles and concurrent calls, and reject non-finite outputs.
+
 ### Historical performance, measured 2026-10-07
 
 These are the contributor's measurements **before the current upstream integration**,

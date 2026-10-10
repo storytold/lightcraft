@@ -153,3 +153,115 @@ fn remote_unreachable_is_a_tool_error() {
     assert_eq!(r[0]["result"]["isError"], true);
     assert!(r[0]["result"]["content"][0]["text"].as_str().unwrap().contains("not reachable"));
 }
+
+/// Real stdio framing and real atomic exports: progress, ping during a batch, cancellation
+/// between complete photos, unrelated output preservation, and a usable session afterwards.
+#[test]
+fn export_progress_and_cancel() {
+    let dir = std::env::temp_dir().join(format!("lc-mcp-progress-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (input, mut send) = std::io::pipe().unwrap();
+    let (output, write) = std::io::pipe().unwrap();
+    let server = std::thread::spawn(move || Server::new(Box::new(Headless::demo())).serve(BufReader::new(input), write).unwrap());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(output).lines() {
+            let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
+            if tx.send(value).is_err() {
+                break;
+            }
+        }
+    });
+    let next = || rx.recv_timeout(std::time::Duration::from_secs(30)).expect("MCP reply/progress");
+    writeln!(send, "{}", call(1, "query_photos", json!({"limit":8}))).unwrap();
+    let query = next();
+    let ids: Vec<_> = query["result"]["structuredContent"]["photos"].as_array().unwrap().iter().map(|p| p["id"].clone()).collect();
+    assert_eq!(ids.len(), 8);
+    let mut request = call(2, "export", json!({"ids":ids,"dir":dir.join("complete"),"longEdge":1200,"format":"png"}));
+    request["params"]["_meta"] = json!({"progressToken":"photos","io.modelcontextprotocol/protocolVersion":"2026-07-28"});
+    writeln!(send, "{request}").unwrap();
+    let (mut last, mut notes, mut asked, mut answered) = (-1.0, 0, false, false);
+    loop {
+        let value = next();
+        if value["method"] == "notifications/progress" {
+            assert_eq!(value["params"]["progressToken"], "photos");
+            let progress = value["params"]["progress"].as_f64().unwrap();
+            assert!(progress > last && progress <= 8.0, "{value}");
+            assert_eq!(value["params"]["total"], 8);
+            last = progress;
+            notes += 1;
+            if !asked {
+                writeln!(send, "{}", json!({"jsonrpc":"2.0","id":3,"method":"ping"})).unwrap();
+                asked = true;
+            }
+        } else if value["id"] == 3 {
+            answered = true;
+        } else {
+            assert_eq!(value["id"], 2, "{value}");
+            assert_eq!(value["result"]["isError"], false, "{value}");
+            assert_eq!(value["result"]["resultType"], "complete");
+            break;
+        }
+    }
+    assert!(notes >= 2 && answered, "{notes} progress messages; ping answered {answered}");
+    assert_eq!(last, 8.0);
+    let out = dir.join("cancelled");
+    std::fs::create_dir_all(&out).unwrap();
+    let decoy = out.join("photo999.png");
+    std::fs::write(&decoy, b"unrelated existing output").unwrap();
+    let mut request = call(4, "command_run", json!({"id":"app.export","params":{"ids":ids,"dir":out,"longEdge":1200,"format":"png"}}));
+    request["params"]["_meta"] = json!({"progressToken":44});
+    writeln!(send, "{request}").unwrap();
+    loop {
+        let value = next();
+        assert_ne!(value["id"], 4, "must be cancellable before completion: {value}");
+        assert_eq!(value["params"]["progressToken"], 44, "{value}");
+        if value["params"]["progress"].as_f64().unwrap() > 0.0 {
+            break;
+        }
+    }
+    writeln!(send, "{}", json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":4}})).unwrap();
+    writeln!(send, "{}", call(5, "doc_inspect", json!({}))).unwrap();
+    loop {
+        let value = next();
+        if value["method"] == "notifications/progress" {
+            continue;
+        }
+        assert_eq!(value["id"], 5, "cancelled request must not reply: {value}");
+        assert_eq!(value["result"]["isError"], false);
+        break;
+    }
+    assert_eq!(std::fs::read(&decoy).unwrap(), b"unrelated existing output");
+    let photos: Vec<_> = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().path()).filter(|p| *p != decoy).collect();
+    assert!(!photos.is_empty() && photos.len() < ids.len(), "only completed photos remain: {photos:?}");
+    for path in &photos {
+        lightcraft_codecs::decode(&std::fs::read(path).unwrap(), Default::default()).expect("complete image, no partial/temp file");
+    }
+    assert_eq!(std::fs::read_dir(dir.join("complete")).unwrap().count(), 8, "earlier export retained");
+    drop(send);
+    server.join().unwrap();
+    reader.join().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn export_without_token_finishes_after_eof() {
+    let dir = std::env::temp_dir().join(format!("lc-mcp-eof-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut headless = Headless::demo();
+    let ids: Vec<_> = headless.session.visible_cloned().iter().take(2).map(|id| id.0).collect();
+    let request = call(1, "cmd_app_export", json!({"ids":ids,"dir":dir,"longEdge":64,"format":"png"}));
+    // Headless sessions remain movable to a worker after installing progress support.
+    let replies = std::thread::spawn(move || {
+        let mut s = Server::new(Box::new(headless));
+        session(&mut s, &[request, call(2, "doc_inspect", json!({}))])
+    })
+    .join()
+    .unwrap();
+    assert_eq!(replies.len(), 2, "no token means no notifications");
+    assert_eq!(replies[0]["result"]["isError"], false, "{replies:?}");
+    assert_eq!(replies[1]["id"], 2, "queued request survives EOF");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+    std::fs::remove_dir_all(dir).unwrap();
+}

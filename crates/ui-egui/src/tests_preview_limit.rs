@@ -352,6 +352,28 @@ mod in_the_loupe {
         }
     }
 
+    // Issue #652: given a canvas wider than 2048 px on a desktop GPU (which reports its texture
+    // limit to egui once, in the first frame), when I zoom to 1:1, then the window render covers
+    // the whole canvas: no strip of the magnified whole-frame render beside it
+    #[test]
+    fn a_window_covers_a_canvas_wider_than_2048_px() {
+        let (mut h, native) = detail_in([2600.0, 1200.0]);
+        assert!(native > 2600, "the photo is wider than the canvas at 1:1: {native}");
+        h.request("engine.execute", json!({"command": "view.zoom100"}), T);
+        h.settle(SETTLE);
+        let canvas = h.app.canvas_rect.expect("the loupe was drawn");
+        let image = h.app.image_rect.expect("the photo was drawn");
+        let region = h.app.region_view.expect("a window");
+        // the canvas in pixels of the window's frame (scale 1, at 100 %: a point is a pixel)
+        let to_px = region.full.0 as f32 / image.width();
+        let (left, right) = (to_px * (canvas.left() - image.left()), to_px * (canvas.right() - image.left()));
+        assert!(right - left > 2048.0, "the canvas shows more than 2048 px: {left}..{right}");
+        let (x0, x1) = (region.window.x as f32, (region.window.x + region.window.w) as f32);
+        assert!(x0 <= left + 0.5 && x1 >= right - 0.5, "the window {x0}..{x1} leaves part of the canvas {left}..{right} to the preview");
+        let (w, _) = region_tile(&h).expect("the window rendered");
+        assert_eq!(w, region.window.w, "and that is the texture drawn");
+    }
+
     // Given 400 % on a big photo, when a slider is dragged, then the work per frame follows the
     // canvas, not the zoom: a draft of the whole frame at canvas scale and a draft of the window
     #[test]

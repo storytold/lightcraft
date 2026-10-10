@@ -30,6 +30,7 @@ pub mod dust;
 pub mod finish;
 pub mod geometry;
 pub mod local;
+pub mod local_tone;
 pub mod lut;
 pub mod masks;
 pub mod optics;
@@ -42,7 +43,7 @@ pub mod transform;
 pub mod upright;
 pub mod visualize;
 
-pub use output::{DeepImage, DeepSamples, OutputDepth, OutputSpace, OutputTrc, Proof};
+pub use output::{DeepImage, DeepSamples, DisplaySpace, OutputDepth, OutputSpace, OutputTrc, Proof};
 pub use visualize::{MaskView, Overlay};
 
 use lightcraft_develop::{DevelopSettings, Treatment};
@@ -83,6 +84,9 @@ pub struct SourceInfo {
     pub camera_tone: Option<tone::CameraTone>,
     /// Segmentation mattes stored in the file (DNG semantic masks): AI masks use them.
     pub mattes: Option<Arc<masks::Mattes>>,
+    /// The raw's own local tone mapping (DNG `ProfileGainTableMap`), rendered only when the
+    /// photo's Profile option asks for it ([`local_tone`]).
+    pub local_tone: Option<Arc<local_tone::LocalTone>>,
 }
 
 impl Default for SourceInfo {
@@ -96,6 +100,7 @@ impl Default for SourceInfo {
             camera_color: None,
             camera_tone: None,
             mattes: None,
+            local_tone: None,
         }
     }
 }
@@ -127,6 +132,9 @@ pub struct RenderRequest {
     /// Render only this window of the output that `max_w × max_h` describes (a zoomed view):
     /// the result is that window's pixels, as in the whole render. See [`PixelWindow`].
     pub window: Option<PixelWindow>,
+    /// Previews for a monitor with a display profile: render 8-bit into its primaries instead of
+    /// `space` (see [`DisplaySpace`]; ignored by deep renders).
+    pub display: Option<DisplaySpace>,
 }
 
 /// A window of the (virtual) full output, in its pixels: what a zoomed view needs, rendered
@@ -163,6 +171,7 @@ impl RenderRequest {
             depth: OutputDepth::U8,
             proof: None,
             window: None,
+            display: None,
         }
     }
 }
@@ -416,6 +425,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         format!("{eyes:?}"),
         // defringe runs in this stage
         format!("{:?}", s.optics),
+        // and the local tone mapping
+        local_tone::enabled(info, s),
         [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         src_long,
     ));
@@ -423,20 +434,29 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
 }
 
 /// Whether the scene-linear stage needs work only the CPU does (defringe, spot removal).
-pub fn lin_needs_cpu(s: &DevelopSettings) -> bool {
+pub fn lin_needs_cpu(s: &DevelopSettings, info: &SourceInfo) -> bool {
     let o = &s.optics;
     let defringe = s.section_enabled("optics") && (o.defringe_purple_amount > 0.0 || o.defringe_green_amount > 0.0);
-    defringe || !s.spots.is_empty()
+    defringe || !s.spots.is_empty() || local_tone::enabled(info, s)
 }
 
 /// The white-balanced, defringed, retouched image (before noise reduction): the CPU part of the
 /// scene-linear stage, in place.
 pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     let s = &*p.settings;
+    // (before the white balance: the gain's input is the as-shot development, as in the file)
+    local_tone::apply(img, info, p);
     local::white_balance(img, info, s);
     optics::defringe(img, s, p.px_per_long / optics::DEFRINGE_REF_LONG);
     spots::apply(img, &s.spots, &p.frame, p.px_per_long);
     redeye::apply(img, &p.eyes);
+}
+
+/// The settings a render of `s` for `req` uses: the HDR edit for an [`OutputDepth::F32Hdr`]
+/// render, otherwise its SDR rendition (see [`DevelopSettings::sdr_rendition`]). Every renderer
+/// (CPU and GPU) goes through this, so an SDR render of an HDR edit looks the same everywhere.
+pub fn settings_for<'a>(s: &'a DevelopSettings, req: &RenderRequest) -> std::borrow::Cow<'a, DevelopSettings> {
+    if req.depth == OutputDepth::F32Hdr { std::borrow::Cow::Borrowed(s) } else { s.sdr_rendition() }
 }
 
 /// Render `src` with settings `s`.
@@ -458,7 +478,9 @@ enum Src<'a> {
 fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: Option<&StageCache>) -> Rendered {
     // sections switched off with their eye render as if at their defaults (issue #316)
     let effective = s.effective();
-    let s: &DevelopSettings = &effective;
+    let edit: &DevelopSettings = &effective;
+    let rendition = settings_for(edit, req);
+    let s: &DevelopSettings = &rendition;
     // `Instant::now()` panics on wasm32-unknown-unknown: only read the clock when profiling.
     let lap = |what: &str, t: &mut Option<std::time::Instant>| {
         if let Some(t) = t {
@@ -516,7 +538,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         lap("finish (deep)", &mut t);
         return Rendered { image, histogram, deep: Some(deep) };
     }
-    let image = finish::finish(&prep, s, frame, info, req.space, req.proof);
+    let image = finish::finish(&prep, s, frame, info, req.space, req.display.as_ref(), req.proof);
     lap("finish", &mut t);
     let cut = |i: &Rgba8| match plan.keep {
         Some(k) => i.crop(k.x, k.y, k.w, k.h),
@@ -530,7 +552,15 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     let mut image = image;
     let mask = overlay_alpha(req.overlay, &plan, &prep);
     visualize::apply(&mut image, req.overlay, &plan, mask.as_ref());
-    let image = if plan.keep.is_some() { cut(&image) } else { image };
+    let mut image = if plan.keep.is_some() { cut(&image) } else { image };
+    if req.overlay == Overlay::HdrRange && edit.hdr.enabled {
+        // the HDR rendition of the same request says how far above SDR white each pixel goes
+        let hreq = RenderRequest { depth: OutputDepth::F32Hdr, overlay: Overlay::None, proof: None, ..*req };
+        if let Some(hdr) = render(src_img, info, edit, &hreq).deep {
+            visualize::hdr_range(&mut image, &hdr, req.space.luma());
+        }
+        lap("visualize hdr", &mut t);
+    }
     Rendered { image, histogram, deep: None }
 }
 
@@ -574,9 +604,9 @@ fn overlay_alpha(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Plane> 
 }
 
 /// Convenience: render a before/after pair side by side is up to the UI; this renders "before"
-/// (default look, keeping the crop so framing matches).
+/// (default look, keeping the crop so framing matches, under the photo's own rendering process).
 pub fn before_settings(s: &DevelopSettings) -> DevelopSettings {
-    let mut b = DevelopSettings { crop: s.crop, orientation: s.orientation, ..DevelopSettings::default() };
+    let mut b = DevelopSettings { crop: s.crop, orientation: s.orientation, process: s.process, ..DevelopSettings::default() };
     b.wb = lightcraft_develop::WhiteBalance { mode: lightcraft_develop::WbMode::AsShot, ..b.wb };
     b
 }
@@ -610,6 +640,8 @@ pub(crate) fn for_rows<T: Send>(data: &mut [T], w: usize, f: impl Fn(usize, &mut
 mod tests;
 #[cfg(test)]
 mod tests_geometry;
+#[cfg(test)]
+mod tests_hdr;
 #[cfg(test)]
 mod tests_local;
 #[cfg(test)]

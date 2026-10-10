@@ -639,7 +639,10 @@ pub fn render(
     lap("masks", &mut t, &mut cx);
 
     // 5. per-pixel stage
-    let fp = FinishParams::new(s, &plan.frame, info, w, h, plan.px_per_long, prep.air, req.space);
+    let mut fp = FinishParams::new(s, &plan.frame, info, w, h, plan.px_per_long, prep.air, req.space);
+    if let Some(d) = &req.display {
+        fp.for_display(d, None);
+    }
     let present = Present {
         clarity: prep.clarity.is_some(),
         texture: prep.texture.is_some(),
@@ -738,8 +741,8 @@ fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, ho
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
     let s = &*plan.settings;
-    let img = if lightcraft_pipeline::lin_needs_cpu(s) {
-        // defringe / spot removal: CPU
+    let img = if lightcraft_pipeline::lin_needs_cpu(s, info) {
+        // defringe / spot removal / local tone mapping: CPU
         let mut img = match host.sampled.take() {
             Some(i) => i,
             None => cx.read_rgb(sampled, w, h),

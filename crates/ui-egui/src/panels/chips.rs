@@ -37,7 +37,7 @@ pub(crate) fn display_label(chip: &FilterChip, filter: &lightcraft_catalog::Filt
     if chip.clear.get("ruleSet").is_some()
         && let Some(rules) = &filter.rule_set
     {
-        return format!("{}: {}", tr("Rules"), rules_label(rules));
+        return format!("{}: {}", tr("Rules"), rules_label(rules, catalog));
     }
     if chip.clear.get("label").is_some() {
         let mut labels = filter.labels.clone();

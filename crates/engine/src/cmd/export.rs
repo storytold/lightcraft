@@ -80,6 +80,17 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        cmd!(query "export.contactSheet", "Export Contact Sheet PDF", [], None,
+            "{path, ids?: photo ids (default selection), paper?: a4|letter, landscape?: bool, columns?: 1..8, rows?: 1..10, captions?: bool} → {path, pages, photos, bytes}; replaces an existing output, never an original",
+            always, |s, p| {
+                let path = p.get("path").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).ok_or_else(|| bad("export.contactSheet", "missing path"))?;
+                s.check_write_target(path).map_err(|e| bad("export.contactSheet", e))?;
+                let doc = crate::contact_sheet::prepare(s, p).and_then(|work| work.run(&mut |_, _| true)).map_err(|e| bad("export.contactSheet", e))?;
+                s.check_write_target(path).map_err(|e| bad("export.contactSheet", e))?;
+                crate::export::write_file(path, &doc.bytes).map_err(|e| bad("export.contactSheet", e))?;
+                Ok(json!({"path": path, "pages": doc.pages, "photos": doc.photos, "bytes": doc.bytes.len()}))
+            }
+        ),
         cmd!(
             "export.presets",
             "Export Presets",

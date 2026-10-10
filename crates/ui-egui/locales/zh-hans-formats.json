@@ -206,5 +206,20 @@
   "In line for AI Denoise ({ahead} ahead)…": "In line for AI Denoise ({ahead} ahead)…",
   "Running on {}.": "Running on {}.",
   "{file} · {size}": "{file} · {size}",
-  "•  {assumption}": "•  {assumption}"
+  "•  {assumption}": "•  {assumption}",
+  "Put inside “{parent}”": "放入“{parent}”中",
+  "Delete the keyword “{name}”?": "要删除关键字“{name}”吗？",
+  "It is taken off {count} photo{}, with the keywords below it. Undo brings it back.": "将从 {count} 张照片中移除，其下的关键字也一并移除。撤销可恢复。{:.0}",
+  "Create Keyword Tag Inside “{name}”…": "在“{name}”中创建关键字标记…",
+  "“{parent}” has a “{name}” already. Merge the two?": "“{parent}”中已有“{name}”。要合并两者吗？",
+  "There is a “{name}” at the top level already. Merge the two?": "顶层已有“{name}”。要合并两者吗？",
+  "Added “{keyword}” to {n} photo{}": "已将“{keyword}”添加到 {n} 张照片{:.0}",
+  "On {have} of {of} selected photos": "所选 {of} 张照片中的 {have} 张",
+  "Remove “{name}”": "移除“{name}”",
+  "There is a keyword set “{name}” already": "已有关键字集“{name}”",
+  "Added {n} keyword{}": "已添加 {n} 个关键字{:.0}",
+  "; {n} gained synonyms": "；{n} 个获得了同义词",
+  "Exported {n} keyword{}": "已导出 {n} 个关键字{:.0}",
+  " — Capture One won't import a list with ; , < or > in a keyword: {names}": " — Capture One 不会导入关键字中含有 ; , < 或 > 的列表：{names}",
+  " — left out, as a keyword list can't hold them: {names}": " — 已省略，关键字列表无法容纳: {names}"
 }

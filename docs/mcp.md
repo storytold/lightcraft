@@ -52,6 +52,53 @@ Or check a project-scoped `.mcp.json` into your repo:
 }
 ```
 
+### Codex
+
+The macOS release includes a separate `lightcraft-cli-<version>-macos-universal.zip`;
+unpack it alongside the desktop app if you do not want to build from source. Use the CLI
+and app from the same release. Verify both downloads against that release's `SHA256SUMS.txt`.
+
+Register the CLI's stdio server with Codex using its **absolute** installed path:
+
+```sh
+# Headless: a persistent library whose edits survive MCP restarts.
+codex mcp add lightcraft -- "/absolute/path/lightcraft-cli" mcp --library "/absolute/path/library"
+
+# Live desktop: start the app on the matching loopback port first.
+"/absolute/path/LightCraft.app/Contents/MacOS/LightCraft" --library "/absolute/path/library" --control 7980
+codex mcp add lightcraft-app -- "/absolute/path/lightcraft-cli" mcp --connect 127.0.0.1:7980
+```
+
+Choose one mode for a library: a headless server cannot open a library already locked by
+the desktop app. Connect mode edits the window's actual library and reconnects after the
+app restarts. An external library path keeps the catalog on that drive. Copy/move imports
+default to the library's `Originals/` folder; add-mode imports keep the originals at their
+existing paths. The library path does not relocate settings, logs or optional models (see
+the README's settings/log locations). Make sure an external drive is mounted before
+starting either process.
+
+`codex mcp list` confirms registration, not a successful tool call. After adding the server,
+restart the client's MCP connections and verify `doc_inspect` or `query_photos` against the
+expected library before editing. Configuration options are in the
+[Codex MCP documentation](https://developers.openai.com/codex/mcp/).
+
+### From an installed release
+
+The release packages ship `lightcraft-cli` alongside the desktop app, so no build is needed:
+
+| Install | CLI |
+|---|---|
+| Windows (MSI) | `C:\Program Files\LightCraft\lightcraft-cli.exe` by default (wherever you installed it otherwise), not on `PATH` |
+| Linux (deb, rpm) | `/usr/bin/lightcraft-cli` |
+| macOS | the separate `lightcraft-cli-<version>-macos-<arch>.zip` release asset (the `.app` holds only the desktop app) |
+
+```sh
+# Windows, default install folder
+claude mcp add lightcraft -- "C:\Program Files\LightCraft\lightcraft-cli.exe" mcp
+# Linux, or macOS with the CLI unzipped onto PATH
+claude mcp add lightcraft -- lightcraft-cli mcp
+```
+
 ### Other clients (Claude Desktop, Cursor, …)
 
 Every stdio MCP client takes the same shape: a `command` plus `args`. For example
@@ -71,6 +118,39 @@ Every stdio MCP client takes the same shape: a `command` plus `args`. For exampl
 During development you can also point the client at `cargo run --release -p lightcraft-cli -- mcp`
 (with `"cwd"` set to the repository), at the cost of a slower start.
 
+## Shared core tools
+
+These follow the same conventions as [filmcraft #28](https://github.com/storytold/filmcraft/pull/28).
+They are listed in both full and compact mode; existing documented helpers remain listed too.
+There are no hidden compatibility aliases.
+
+| Tool | Arguments | Result |
+|---|---|---|
+| `command_list` | `filter?`, `enabled_only?` | Command catalog |
+| `command_run` | `id`, `params?` | Command result |
+| `command_batch` | `steps: [{id, params?}]`, `stop_on_error?` | Counts and per-step results; stops on error by default |
+| `doc_inspect` | none | Library state and catalog counts |
+| `render_preview` | `id?`, `max_side?`, `format?` | Image; neither changes selection nor saves a file |
+
+Each edit in a batch has its own undo step. Connect mode also lists `ui_inspect` and
+`ui_screenshot` (the latter has no output-path argument). The existing `inspect_ui`,
+`screenshot`, `list_commands`, `run_command` and `render_photo` keep their documented arguments.
+Ports and connect mode are unchanged.
+
+Every listed tool has a title and all four MCP hints. Generated command tools are conservatively
+marked as edits. Helpers with optional output paths are marked as writers; `export` is not
+idempotent because the default conflict policy chooses a new filename on repeated calls.
+Unknown helper argument keys return JSON-RPC `-32602` naming the key and accepted arguments.
+Generated `cmd_*` tools and nested command params remain free-form: the registry has prose
+parameter docs, not machine-readable schemas. Existing command validation (including strict
+export options) is preserved. Escaped tool panics return `isError: true`, and the session keeps
+serving; backend panics during resource reads or tool listing return an internal error.
+The headless backend owns its session directly, without a session mutex.
+
+`lightcraft://document` and `lightcraft://commands` contain JSON matching `doc_inspect` and
+`command_list`. Existing resources remain available. Requests declaring MCP 2026-07-28 in
+per-request `_meta` receive `resultType: complete` and list/read cache hints; reads are not cached.
+
 ## Tools
 
 ### Helpers
@@ -83,7 +163,7 @@ During development you can also point the client at `cargo run --release -p ligh
 | `query_photos {filter?, sort?, offset?, limit?}` | Photos in the current view (or matching a catalog `Filter`) |
 | `select_photos {ids, active?, mode?}` | Set the selection / active photo. Every id (and `active`) must be in the library: an unknown id is a tool error (`no such photo 9999`) and the selection and active photo are left as they were |
 | `list_controls {section?}` | Every develop slider: id (`light.exposure`…), range, default, current value |
-| `get_develop {id?}` | Full develop-settings JSON |
+| `get_develop {id?}` | Full develop-settings JSON, with `process`: the rendering process the photo is on ([process-versions.md](process-versions.md)) |
 | `set_develop {id?, values?, settings?, label?}` | `values`: `{controlId: number}`; `settings`: partial develop JSON deep-merged. Undoable |
 | `apply_preset {preset, amount?, ids?}` | Apply a preset (ids from `cmd_presets_list`) |
 | `crop {id?, rect?, angle?, reset?}` | Normalized crop rect `[x0,y0,x1,y1]` and straighten angle; at least one of `rect`, `angle`, `reset: true` |
@@ -99,8 +179,9 @@ Tools taking `id` make that photo active first; without it they act on the activ
 | `screenshot {maxSize?, format?, path?}` | The app window as an image, after pending renders finish |
 | `inspect_ui` | View, panel, window/image rects, selection, status |
 | `set_ui {state}` | Merge UI state, e.g. `{"view": "detail"}` |
-| `list_widgets {filter?}` / `click {widget \| x,y, count?}` | Widgets by automation id; real egui clicks |
+| `list_widgets {filter?}` / `click {widget \| x,y, count?, button?}` | Widgets by automation id; real egui clicks (`button: "right"` right-clicks) |
 | `press_key {key, cmd?, shift?, alt?}` / `type_text {text}` | Keyboard input (shortcuts) |
+| `clipboard {action, text?}` | Cut, copy or paste in the focused text field (⌘X / ⌘C / ⌘V; refused when none has the focus; cut and copy write the system clipboard); `inspect_ui` → `copied` is what was copied |
 | `pointer_gesture {events}` | Gestures in normalized image coordinates (brush strokes, gradients, crop handles) |
 
 In headless mode these return a tool error explaining how to start the app.
@@ -186,3 +267,20 @@ lightcraft-cli calibrate --max 300 ~/Pictures/2026   # camera colour profiles (d
   (`Remote`) against a stand-in control server; also import → render → JPEG export of a real file.
 - `apps/lightcraft-cli/tests/cli.rs` — spawns `lightcraft-cli mcp` with real pipes; `render`;
   `commands`.
+
+## Export progress and cancellation
+
+Headless direct `export`, `command_run` / `run_command` with `app.export`, and `cmd_app_export`
+calls report photo-count progress when `params._meta.progressToken` is a string or number.
+Notifications are strictly increasing, at most ten per second plus the final total. No token
+means no notifications. `ping` is answered at photo boundaries; other requests wait in order
+until the export ends. EOF lets a pending export finish and preserves queued requests.
+
+`notifications/cancelled` with `params.requestId` stops the matching export before its next
+photo, suppressing its response. Unknown/completed request ids are ignored. A photo already
+being processed finishes first: completed photos remain, each written with the existing atomic
+file writer, and there are no partial files to delete. Unrelated outputs and earlier exports
+are untouched. A failed export is an `isError` tool result. Transport mutexes recover poisoning.
+
+Connect mode and exports inside `command_batch` remain synchronous and do not report MCP
+progress or cancellation. Use a direct headless export call for this behavior.

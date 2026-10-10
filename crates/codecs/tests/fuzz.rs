@@ -36,6 +36,17 @@ fn try_all(bytes: &[u8]) {
     let _ = read_header(bytes);
     let _ = decode_thumbnail_with(bytes, &ThumbnailOptions { max_pixels: small_opts().max_pixels, ..ThumbnailOptions::new(16) });
     let _ = lightcraft_codecs::icc::parse(bytes);
+    let _ = lightcraft_codecs::gainmap::read_jpeg(bytes);
+    let _ = lightcraft_codecs::gainmap::is_gain_map_jpeg(bytes);
+}
+
+fn gain_map_jpeg(meta: &EncodeMeta) -> Vec<u8> {
+    use lightcraft_codecs::gainmap::{GainMapOptions, compute, encode_jpeg};
+    let hdr: Vec<[f32; 3]> = (0..24 * 16).map(|i| [i as f32 * 0.02; 3]).collect();
+    let sdr: Vec<[f32; 3]> = hdr.iter().map(|p| p.map(|v| v / (1.0 + v))).collect();
+    let (g, m) = compute(&sdr, &hdr, 24, 16, [0.2126, 0.7152, 0.0722], &GainMapOptions::default()).unwrap();
+    let base: Vec<u8> = sdr.iter().flat_map(|p| p.map(|v| (v * 255.0) as u8)).collect();
+    encode_jpeg(&EncodeImage::new(24, 16, 3, Samples::U8(&base)), &g, &m, 80, ChromaSubsampling::S420, meta).unwrap()
 }
 
 #[test]
@@ -91,6 +102,7 @@ fn seeds() -> &'static Vec<Vec<u8>> {
             encode_tiff(&e, TiffCompression::Lzw, &meta).unwrap(),
             encode_tiff(&EncodeImage::new(24, 16, 3, Samples::F32(&f32s)), TiffCompression::Deflate, &meta).unwrap(),
             encode_webp_lossless(&e, &meta).unwrap(),
+            gain_map_jpeg(&meta),
         ]
     })
 }
@@ -106,7 +118,7 @@ proptest! {
     }
 
     #[test]
-    fn mutated_valid_files(which in 0usize..6, flips in proptest::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 1..12), cut in any::<prop::sample::Index>()) {
+    fn mutated_valid_files(which in 0usize..7, flips in proptest::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 1..12), cut in any::<prop::sample::Index>()) {
         let mut b = seeds()[which].clone();
         for (i, v) in flips {
             let i = i.index(b.len());
