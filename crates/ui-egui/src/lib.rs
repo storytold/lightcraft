@@ -24,6 +24,7 @@ pub mod import;
 pub mod libtools;
 pub mod lightroom_import;
 pub mod links;
+pub mod map;
 pub mod menu_level;
 pub mod menubar;
 pub mod menus;
@@ -357,6 +358,8 @@ pub struct DacApp {
     pub immich: panels::connections::ImmichUi,
     /// The activity stack shows every task, not just the first few ("+N more" was clicked).
     pub activity_expanded: bool,
+    /// The Map module's view state (P3.3).
+    pub map: map::MapUi,
 }
 
 impl DacApp {
@@ -367,6 +370,7 @@ impl DacApp {
             session,
             #[cfg(not(target_arch = "wasm32"))]
             immich: Default::default(),
+            map: Default::default(),
             ui: UiState::default(),
             services,
             renderer: render::Renderer::default(),
