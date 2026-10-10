@@ -163,7 +163,17 @@ impl Journal {
     /// (JSON snapshot + log) first: its files are copied to `backups/before-v4-<time>/`, the
     /// store is built in a temporary file and renamed into place only once complete, so a crash
     /// at any point leaves either the v3 library (migrated again next time) or the v4 one.
-    pub fn open_v4(mut store: Box<dyn Store>, dir: &Path) -> Result<(Journal, Catalog, LoadReport)> {
+    ///
+    /// A damaged store is a [`CatalogError::Corrupt`] that names where this catalog's backups are
+    /// (the newest one, when there is one), so the user can restore it.
+    pub fn open_v4(store: Box<dyn Store>, dir: &Path) -> Result<(Journal, Catalog, LoadReport)> {
+        Self::open_v4_inner(store, dir).map_err(|e| match e {
+            CatalogError::Corrupt(m) => CatalogError::Corrupt(format!("{m}. {}", backup_hint(dir))),
+            e => e,
+        })
+    }
+
+    fn open_v4_inner(mut store: Box<dyn Store>, dir: &Path) -> Result<(Journal, Catalog, LoadReport)> {
         let db_path = dir.join(DB_FILE);
         let mut report = LoadReport::default();
         // (a v3 snapshot can be gigabytes: only its start is looked at, and not kept)
@@ -196,6 +206,26 @@ impl Journal {
         write_entry_if_missing(dir);
         let log = store.read(LOG).map_err(ioe)?;
         Self::open_from_db(store, log, catalog, seq, report, db)
+    }
+}
+
+/// The newest backup of the library in `dir` (a folder in its backup root holding a store or a
+/// v3 snapshot), by name: backup folders are named by their sortable UTC time.
+pub fn latest_backup(dir: &Path) -> Option<PathBuf> {
+    let root = CatalogSettings::load(dir).backup_root(dir);
+    std::fs::read_dir(&root)
+        .ok()?
+        .take(100_000)
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.join(DB_FILE).is_file() || p.join(SNAPSHOT).is_file())
+        .max_by(|a, b| a.file_name().cmp(&b.file_name()))
+}
+
+/// Where to restore the library in `dir` from, for an error message.
+pub fn backup_hint(dir: &Path) -> String {
+    match latest_backup(dir) {
+        Some(b) => format!("The newest backup of this catalog is in {}", b.display()),
+        None => format!("No backup of this catalog was found in {}", CatalogSettings::load(dir).backup_root(dir).display()),
     }
 }
 

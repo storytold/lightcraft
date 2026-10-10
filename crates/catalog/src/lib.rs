@@ -1029,6 +1029,8 @@ mod tests_local;
 #[cfg(test)]
 mod tests_lock;
 #[cfg(test)]
+mod tests_robust;
+#[cfg(test)]
 mod tests_sort_cache;
 #[cfg(test)]
 mod tests_torn_append;
