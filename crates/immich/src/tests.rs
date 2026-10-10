@@ -417,3 +417,52 @@ fn external_library_assets_link_by_mapped_path() {
 
 #[path = "tests_sync.rs"]
 mod sync_tests;
+
+#[test]
+fn share_uploads_makes_an_album_and_a_password_link() {
+    let (url, seen) = serve(|req| {
+        let path = req.target.split('?').next().unwrap_or_default().to_string();
+        match (req.method.as_str(), path.as_str()) {
+            ("POST", "/api/assets") => response("201 Created", br#"{"id":"11111111-1111-1111-1111-111111111111","status":"created"}"#),
+            ("POST", "/api/albums") => response("201 Created", br#"{"id":"22222222-2222-2222-2222-222222222222","albumName":"Trip"}"#),
+            ("PUT", p) if p.ends_with("/assets") => response("200 OK", br#"[]"#),
+            ("POST", "/api/shared-links") => response("201 Created", br#"{"id":"33333333-3333-3333-3333-333333333333","key":"abcDEF_123-x"}"#),
+            _ => response("404 Not Found", br#"{"message":"Not found"}"#),
+        }
+    });
+    let c = client(&url, KEY);
+    let items = vec![
+        crate::share::ShareItem { file_name: "a.jpg".into(), bytes: vec![0xFF, 0xD8, 0xFF, 0xD9], created: "2026-01-01T00:00:00.000Z".into() },
+        crate::share::ShareItem { file_name: "b.jpg".into(), bytes: vec![0xFF, 0xD8, 0xFF, 0xD9], created: "2026-01-02T00:00:00.000Z".into() },
+    ];
+    let o = crate::share::ShareOptions {
+        expires_at: Some("2026-12-31T00:00:00.000Z".into()),
+        password: Some("secret".into()),
+        allow_download: false,
+        show_metadata: false,
+        description: None,
+    };
+    let r = crate::share::share_photos(&c, "Trip", "test", &items, &o, &mut |_, _| true).unwrap();
+    assert_eq!(r.uploaded, 2);
+    assert_eq!(r.url, format!("{url}/share/abcDEF_123-x"));
+    {
+        let seen = seen.lock().unwrap();
+        let link = seen.iter().find(|r| r.target == "/api/shared-links").unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&link.body).unwrap();
+        assert_eq!(body["type"], "ALBUM");
+        assert_eq!(body["albumId"], "22222222-2222-2222-2222-222222222222");
+        assert_eq!(body["password"], "secret");
+        assert_eq!(body["allowDownload"], false);
+        assert_eq!(body["expiresAt"], "2026-12-31T00:00:00.000Z");
+    }
+    // nothing to share and a cancelled share are errors, not panics
+    assert!(crate::share::share_photos(&c, "Trip", "test", &[], &o, &mut |_, _| true).is_err());
+    assert!(crate::share::share_photos(&c, "Trip", "test", &items, &o, &mut |_, _| false).is_err());
+}
+
+#[test]
+fn share_rejects_a_link_without_a_usable_key() {
+    let (url, _) = serve(|_| response("201 Created", br#"{"id":"x","key":"../evil"}"#));
+    let c = client(&url, KEY);
+    assert!(c.create_shared_link("22222222-2222-2222-2222-222222222222", &crate::share::ShareOptions::default()).is_err());
+}
