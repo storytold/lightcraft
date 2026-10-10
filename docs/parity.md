@@ -254,7 +254,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-EDIT-LIGHT-CURVE-REFINESAT | Curve saturation compensation | P1 | ✅ | `ctl:curve.refineSaturation` | |
 | LR-EDIT-LIGHT-CURVE-TAT | Drag-on-image curve adjust | P1 | ✅ | `cmd:develop.targeted` (`target: curve`) | |
 | LR-EDIT-COLOR-WB-PRESET | White-balance presets | P0 | ✅ | `cmd:develop.wb` | |
-| LR-EDIT-COLOR-WB-PICKER | White-balance eyedropper | P0 | ✅ | `cmd:tool.wbPicker`, `cmd:develop.wbPick` | no magnified loupe while picking |
+| LR-EDIT-COLOR-WB-PICKER | White-balance eyedropper | P0 | ✅ | `cmd:tool.wbPicker`, `cmd:develop.wbPick`, `crates/ui-egui/src/tests_wb_selector.rs` | the Edit panel's selector button does what W does (from Compare, Survey or the grid it opens the photo in Detail); no magnified loupe while picking |
 | LR-EDIT-COLOR-TEMP | Temperature | P0 | ✅ | `ctl:wb.temp`, `crates/pipeline/src/local.rs` (`wb_matrix_for`), `crates/raw/src/color.rs` (`rebalance`) | relative scale for non-raw in the UI; raws with a colour matrix (DNG and other raws without a file-local look) are re-developed for the chosen white through the camera's own matrices (camera-space white balance, as Lightroom), and the eyedropper / Auto invert the same model; other photos are adapted (Bradford) |
 | LR-EDIT-COLOR-TINT | Tint | P0 | ✅ | `ctl:wb.tint`, `docs/tint-direction.md` | DNG / Lightroom sign: negative (left) adds green, positive (right) magenta; XMP `crs:Tint` values render as in Lightroom (issue #188); CPU/GPU regression tests |
 | LR-EDIT-COLOR-VIBRANCE | Vibrance | P0 | ✅ | `ctl:color.vibrance` | |
