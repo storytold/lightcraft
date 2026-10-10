@@ -175,6 +175,15 @@ pub struct MetadataSearch {
     pub library_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub order: Option<String>,
+    /// Text recognised in the image (servers with OCR).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ocr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub city: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "type")]
     pub kind: Option<String>,
@@ -220,6 +229,8 @@ pub struct Person {
     pub name: String,
     #[serde(default)]
     pub is_hidden: bool,
+    #[serde(default)]
+    pub birth_date: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -269,4 +280,79 @@ pub struct UploadCheckResult {
 pub struct UploadCheckResponse {
     #[serde(default)]
     pub results: Vec<UploadCheckResult>,
+}
+
+/// `PUT /assets/{id}` body (IMM-SYNC): only the fields that change are sent. `rating: Some(None)`
+/// clears the rating (Immich refuses 0); `-1` is "rejected".
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetUpdate {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rating: Option<Option<i32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_favorite: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latitude: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub longitude: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date_time_original: Option<String>,
+    /// `timeline` or `archive` (never `locked` / `hidden`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<String>,
+}
+
+impl AssetUpdate {
+    pub fn is_empty(&self) -> bool {
+        *self == AssetUpdate::default()
+    }
+}
+
+/// A tag as `GET /tags` / `PUT /tags` return it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagInfo {
+    pub id: String,
+    #[serde(default)]
+    pub value: String,
+}
+
+/// One face of `GET /faces?id=<assetId>`: a box in pixels of an image `image_width` × `image_height`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Face {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub bounding_box_x1: f64,
+    #[serde(default)]
+    pub bounding_box_y1: f64,
+    #[serde(default)]
+    pub bounding_box_x2: f64,
+    #[serde(default)]
+    pub bounding_box_y2: f64,
+    #[serde(default)]
+    pub image_width: f64,
+    #[serde(default)]
+    pub image_height: f64,
+    #[serde(default)]
+    pub person: Option<Person>,
+    #[serde(default)]
+    pub source_type: Option<String>,
+}
+
+/// `POST /search/smart` body: a natural-language query (CLIP), plus paging.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SmartSearch {
+    pub query: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
 }

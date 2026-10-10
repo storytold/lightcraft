@@ -281,6 +281,119 @@ impl Client {
         self.send(Method::Put, "/jobs/sidecar", Some(&body), true).map(|_| ())
     }
 
+    // ---- sync (IMM-SYNC)
+
+    /// `PUT /assets/{id}`: change an asset's rating, favourite, description, location, date or
+    /// visibility. The one place the (v3-deprecated) single-asset update is called, so the switch
+    /// to its replacement stays local. Needs `asset.update`.
+    pub fn update_asset(&self, id: &str, u: &AssetUpdate) -> Result<Asset, ImmichError> {
+        let v = serde_json::to_value(u).map_err(|e| ImmichError::Protocol(e.to_string()))?;
+        let path = format!("/assets/{}", path_id(id)?);
+        self.send(Method::Put, &path, Some(&v), true)?.json().map_err(|e| ImmichError::Protocol(format!("{path}: {e}")))
+    }
+
+    /// `PUT /tags`: create the tags (hierarchical values `a/b/c`) that don't exist yet → all of
+    /// them with their ids. Needs `tag.create`.
+    pub fn upsert_tags(&self, values: &[String]) -> Result<Vec<TagInfo>, ImmichError> {
+        let mut out = Vec::new();
+        for chunk in values.chunks(500) {
+            let v = serde_json::json!({ "tags": chunk });
+            let r: Vec<TagInfo> =
+                self.send(Method::Put, "/tags", Some(&v), true)?.json().map_err(|e| ImmichError::Protocol(format!("/tags: {e}")))?;
+            out.extend(r);
+        }
+        Ok(out)
+    }
+
+    /// `PUT /tags/{id}/assets`: tag the assets. Needs `tag.asset`.
+    pub fn tag_assets(&self, tag: &str, ids: &[String]) -> Result<(), ImmichError> {
+        for chunk in ids.chunks(500) {
+            self.send(Method::Put, &format!("/tags/{}/assets", path_id(tag)?), Some(&serde_json::json!({ "ids": chunk })), true)?;
+        }
+        Ok(())
+    }
+
+    /// `DELETE /tags/{id}/assets`: untag the assets. Needs `tag.asset`.
+    pub fn untag_assets(&self, tag: &str, ids: &[String]) -> Result<(), ImmichError> {
+        for chunk in ids.chunks(500) {
+            self.send(Method::Delete, &format!("/tags/{}/assets", path_id(tag)?), Some(&serde_json::json!({ "ids": chunk })), true)?;
+        }
+        Ok(())
+    }
+
+    /// `GET /tags`: every tag of the user.
+    pub fn tags(&self) -> Result<Vec<TagInfo>, ImmichError> {
+        self.get("/tags", true)
+    }
+
+    /// `DELETE /assets` (not forced): the assets go to Immich's trash, never a hard delete.
+    pub fn trash_assets(&self, ids: &[String]) -> Result<(), ImmichError> {
+        for chunk in ids.chunks(500) {
+            for id in chunk {
+                path_id(id)?;
+            }
+            self.send(Method::Delete, "/assets", Some(&serde_json::json!({ "ids": chunk, "force": false })), true)?;
+        }
+        Ok(())
+    }
+
+    // ---- people (IMM-PEOPLE)
+
+    /// Every person, hidden ones included (names, birth dates, hidden flag).
+    pub fn people_all(&self) -> Result<Vec<Person>, ImmichError> {
+        let mut out = Vec::new();
+        for page in 1..=200u32 {
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Page {
+                #[serde(default)]
+                people: Vec<Person>,
+                #[serde(default)]
+                has_next_page: bool,
+            }
+            let p: Page = self.get(&format!("/people?withHidden=true&page={page}&size=1000"), true)?;
+            let n = p.people.len();
+            out.extend(p.people);
+            if !p.has_next_page || n == 0 {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// `GET /faces?id=<assetId>`: the asset's faces with their people. Needs `face.read`.
+    pub fn faces(&self, asset: &str) -> Result<Vec<Face>, ImmichError> {
+        self.get(&format!("/faces?id={}", path_id(asset)?), true)
+    }
+
+    /// `PUT /people`: rename people (`(id, name)`). Needs `person.update`.
+    pub fn rename_people(&self, names: &[(String, String)]) -> Result<(), ImmichError> {
+        for chunk in names.chunks(500) {
+            let mut people = Vec::new();
+            for (id, name) in chunk {
+                people.push(serde_json::json!({ "id": path_id(id)?, "name": name }));
+            }
+            self.send(Method::Put, "/people", Some(&serde_json::json!({ "people": people })), true)?;
+        }
+        Ok(())
+    }
+
+    /// `POST /people/{id}/merge`: merge `others` into `into`. Needs `person.merge`.
+    pub fn merge_people(&self, into: &str, others: &[String]) -> Result<(), ImmichError> {
+        for o in others {
+            path_id(o)?;
+        }
+        self.send(Method::Post, &format!("/people/{}/merge", path_id(into)?), Some(&serde_json::json!({ "ids": others })), true).map(|_| ())
+    }
+
+    // ---- search (IMM-SEARCH)
+
+    /// One page of `POST /search/smart` (Immich's CLIP search; needs its machine learning).
+    pub fn smart_search(&self, q: &SmartSearch) -> Result<AssetPage, ImmichError> {
+        let r: SearchResponse = self.post("/search/smart", q)?;
+        Ok(r.assets)
+    }
+
     /// `DELETE /libraries/{id}` (its assets leave Immich; the files stay).
     pub fn delete_library(&self, id: &str) -> Result<(), ImmichError> {
         self.send(Method::Delete, &format!("/libraries/{}", path_id(id)?), None, true).map(|_| ())
@@ -322,6 +435,9 @@ pub const FEATURE_PERMISSIONS: &[(&str, &[&str])] = &[
     ("link", &["asset.read"]),
     ("import", &["asset.read", "asset.view", "asset.download", "album.read", "person.read"]),
     ("externalLibraries", &["library.read"]),
+    ("sync", &["asset.read", "asset.update", "tag.read", "tag.create", "tag.asset"]),
+    ("people", &["person.read", "face.read"]),
+    ("smartSearch", &["asset.read"]),
 ];
 
 /// The features a key with `perms` can't use, with the permissions each lacks.

@@ -29,6 +29,13 @@ pub struct Account {
     /// The newest `updatedAt` the link pass has seen (incremental listing).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub linked_until: Option<String>,
+    /// Two-way metadata sync settings (IMM-SYNC).
+    #[serde(skip_serializing_if = "is_default_sync")]
+    pub sync: crate::sync::SyncConfig,
+}
+
+fn is_default_sync(c: &crate::sync::SyncConfig) -> bool {
+    *c == crate::sync::SyncConfig::default()
 }
 
 impl Account {
@@ -64,6 +71,9 @@ impl Accounts {
             }
             if a.linked_until.is_none() {
                 a.linked_until = old.linked_until.take();
+            }
+            if is_default_sync(&a.sync) {
+                a.sync = std::mem::take(&mut old.sync);
             }
             *old = a;
         } else {

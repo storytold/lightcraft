@@ -8,6 +8,8 @@
 //! - [`link`]: match assets to catalog photos by SHA-1, else by name + capture time + size
 //!   ("probable"), and the remote-link ops to write.
 //! - [`mapping`]: Immich metadata → catalog metadata on import (one way).
+//! - [`sync`]: two-way metadata sync (IMM-SYNC): snapshots, the three-way merge, conflicts.
+//! - [`people`]: Immich faces → face regions, names back to Immich people (IMM-PEOPLE).
 //! - [`extlib`]: path mapping between Immich's container paths and local folders.
 //! - [`accounts`]: the connected accounts as kept in settings (never the API key).
 //!
@@ -20,6 +22,8 @@ pub mod accounts;
 pub mod extlib;
 pub mod link;
 pub mod mapping;
+pub mod people;
+pub mod sync;
 pub mod types;
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -8,6 +8,8 @@ description = "Immich client (L3): typed API calls written from the public API d
 [dependencies]
 dac-catalog = { workspace = true }
 dac-hash = { workspace = true }
+dac-geom = { workspace = true }
+dac-meta = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
