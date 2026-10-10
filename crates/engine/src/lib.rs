@@ -758,6 +758,21 @@ impl Session {
         self.visible().to_vec()
     }
 
+    /// One page of the visible photos: how many there are in all, and up to `limit` of them from
+    /// `offset` on (past the end: none). What a frontend that shows a window of a large view asks
+    /// for, instead of copying the whole list (a million ids at the unfiltered view of a large
+    /// library).
+    pub fn visible_page(&mut self, offset: usize, limit: usize) -> (usize, Vec<PhotoId>) {
+        let all = self.visible();
+        let page = all.get(offset.min(all.len())..).unwrap_or(&[]);
+        (all.len(), page.iter().take(limit).copied().collect())
+    }
+
+    /// Where `id` is in the visible photos (the page to ask for to show it).
+    pub fn visible_position(&mut self, id: PhotoId) -> Option<usize> {
+        self.visible().iter().position(|x| *x == id)
+    }
+
     /// The visible photos without copying them, with their generation: equal generations mean
     /// the very same list (same catalog revision, source, filter, sort), so a frontend can cache
     /// whatever it derives from the list under that number.

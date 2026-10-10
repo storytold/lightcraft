@@ -426,7 +426,7 @@ impl DacApp {
         }
         let now = ctx.input(|i| i.time);
         if now >= due {
-            let vis = self.session.visible_cloned();
+            let (_, vis) = self.session.visible_shared();
             if let Some(cur) = self.session.active()
                 && !vis.is_empty()
             {

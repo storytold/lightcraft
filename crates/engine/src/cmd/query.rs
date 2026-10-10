@@ -60,17 +60,19 @@ fn photo_arg(s: &Session, p: &Value, c: &str) -> crate::Result<PhotoId> {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "catalog.query", "Query Photos", [], None, "{filter?: Filter, sort?: Sort, offset?, limit?} — omit filter to list the current view", always, |s, p| {
-            let ids = if p.get("filter").is_some() || p.get("sort").is_some() {
+            let off = usize::try_from(p.get("offset").and_then(Value::as_u64).unwrap_or(0)).unwrap_or(usize::MAX);
+            let lim = usize::try_from(p.get("limit").and_then(Value::as_u64).unwrap_or(200)).unwrap_or(usize::MAX);
+            let (total, ids) = if p.get("filter").is_some() || p.get("sort").is_some() {
                 let f = p.get("filter").map(|f| serde_json::from_value(f.clone())).transpose().map_err(|e| bad("catalog.query", e.to_string()))?.unwrap_or_default();
                 let so = p.get("sort").map(|f| serde_json::from_value(f.clone())).transpose().map_err(|e| bad("catalog.query", e.to_string()))?.unwrap_or_default();
-                s.catalog.query(&f, &so)
+                let ids = s.catalog.query(&f, &so);
+                (ids.len(), ids.into_iter().skip(off).take(lim).collect())
             } else {
-                s.visible_cloned()
+                // the current view: only the page is copied
+                s.visible_page(off, lim)
             };
-            let off = p.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
-            let lim = p.get("limit").and_then(Value::as_u64).unwrap_or(200) as usize;
-            let items: Vec<Value> = ids.iter().skip(off).take(lim).filter_map(|id| s.catalog.photo(*id)).map(|p| photo_summary(p)).collect();
-            Ok(json!({"total": ids.len(), "photos": items}))
+            let items: Vec<Value> = ids.iter().filter_map(|id| s.catalog.photo(*id)).map(|p| photo_summary(p)).collect();
+            Ok(json!({"total": total, "photos": items}))
         }),
         cmd!(query "catalog.stats", "Catalog Statistics", [], None, "{}", always, |s, _| {
             let all: Vec<_> = s.catalog.photos().filter(|p| p.in_library()).collect();
