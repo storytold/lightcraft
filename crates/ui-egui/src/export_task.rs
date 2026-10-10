@@ -140,6 +140,10 @@ pub fn poll(app: &mut DacApp, ctx: &egui::Context) {
                     if cancelled {
                         m += " · cancelled";
                     }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if sheet.is_none() {
+                        crate::panels::plugins::after_export(app, ctx, &files); // P4.3: plug-in export hooks
+                    }
                     app.last_export_result = Some(json!({"files": files, "cancelled": cancelled}));
                     m
                 }

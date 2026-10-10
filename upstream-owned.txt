@@ -30,6 +30,11 @@ crates/geo/
 crates/engine/src/cmd/immich_sync.rs
 crates/engine/src/tests_immich_sync.rs
 crates/engine/src/cmd/immich_publish.rs
+crates/plugins/
+sdk/
+docs/plugins.md
+crates/engine/src/cmd/plugins.rs
+crates/ui-egui/src/panels/plugins.rs
 crates/publish/
 crates/tether/
 crates/engine/src/cmd/publish.rs

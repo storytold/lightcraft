@@ -45,6 +45,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("hash", Class::Layer(0)),
     ("psd", Class::Standalone),
     ("actions", Class::Standalone),
+    ("plugins", Class::Layer(1)),
     ("denoise-core", Class::Layer(1)),
     ("denoise", Class::Layer(1)),
     ("heif", Class::Layer(0)),

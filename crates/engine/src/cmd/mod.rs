@@ -39,6 +39,8 @@ mod merge;
 pub mod metadata;
 pub mod missing;
 mod organize;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod plugins;
 mod prefs;
 mod preset_files;
 pub mod previews;
@@ -192,6 +194,8 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(credentials::specs());
         v.extend(actions::specs());
         v.extend(edit_in::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(plugins::specs());
         v.extend(activity::specs());
         v
     })

@@ -40,6 +40,7 @@ dac-hash = { path = "crates/hash" }
 dac-layout = { path = "crates/layout" }
 dac-immich = { path = "crates/immich" }
 dac-geo = { path = "crates/geo" }
+dac-plugins = { path = "crates/plugins" }
 dac-publish = { path = "crates/publish" }
 dac-tether = { path = "crates/tether" }
 dac-webgallery = { path = "crates/webgallery" }
