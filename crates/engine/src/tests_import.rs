@@ -1387,3 +1387,74 @@ fn heic_imports_as_a_normal_photo_or_says_why_not() {
     assert!(mean(&brighter.bytes) > mean(&plain.bytes) * 1.3, "exposure +1 brightens the HEIC");
     let _ = std::fs::remove_dir_all(&src);
 }
+
+/// Issue #705: Nikon (and most cameras) write `.JPG` and `.NEF`, and a user may rename to `.Jpg`.
+/// The folder scan, `library.browse` and the sidecar lookup match extensions in any letter
+/// case. (The file dialog's filters, the one place that was case-sensitive on Linux before
+/// #342, are checked in `apps/lightcraft/src/dialog_filter.rs`.)
+#[test]
+fn upper_and_mixed_case_extensions_are_found_by_import_browse_and_sidecar_lookup() {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let src = temp_dir("upper-exts");
+    let jpeg = |seed: u8| {
+        let px: Vec<u8> = (0..40 * 30).flat_map(|i| [(i % 251) as u8, seed, 200]).collect();
+        encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap()
+    };
+    std::fs::write(src.join("a.JPG"), jpeg(1)).unwrap();
+    std::fs::write(src.join("b.Jpg"), jpeg(2)).unwrap();
+    std::fs::write(src.join("c.JPEG"), jpeg(3)).unwrap();
+    write_png(&src.join("d.PNG"), 4);
+    // a raw container LightCraft shows by its embedded JPEG (a TIFF whose IFD0 points at one)
+    let nef = {
+        let j = jpeg(5);
+        let off = 8 + 2 + 24 + 4;
+        let mut f = b"II*\0\x08\0\0\0\x02\0".to_vec();
+        for (tag, v) in [(513u16, off as u32), (514, j.len() as u32)] {
+            f.extend_from_slice(&tag.to_le_bytes());
+            f.extend_from_slice(&[4, 0, 1, 0, 0, 0]);
+            f.extend_from_slice(&v.to_le_bytes());
+        }
+        f.extend_from_slice(&[0, 0, 0, 0]);
+        f.extend_from_slice(&j);
+        f
+    };
+    std::fs::write(src.join("e.NEF"), nef).unwrap();
+    std::fs::write(src.join("notes.TXT"), "not a photo").unwrap();
+    // sidecars: stem-named with an upper-case extension, and full-named beside a mixed-case photo
+    let sidecar = |rating: u8| {
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="{rating}"/></rdf:RDF></x:xmpmeta>"#
+        )
+    };
+    std::fs::write(src.join("a.XMP"), sidecar(4)).unwrap();
+    std::fs::write(src.join("b.Jpg.xmp"), sidecar(2)).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(r["scanned"], 5, "{r}"); // the five photos; notes.TXT is not one
+    assert_eq!(ids(&r, "imported"), 5, "{r}");
+    assert_eq!(ids(&r, "failed"), 0, "{r}");
+    assert_eq!(r["sidecars"], 2, "{r}");
+    let names: Vec<(String, String, u8)> = s.catalog.photos().map(|p| (p.file_name.clone(), p.format.clone(), p.rating)).collect();
+    let by_name = |n: &str| names.iter().find(|(f, _, _)| f == n).cloned().unwrap_or_else(|| panic!("{n} missing from {names:?}"));
+    assert_eq!(by_name("a.JPG").2, 4, "a.XMP read");
+    assert_eq!(by_name("b.Jpg").2, 2, "b.Jpg.xmp read");
+    assert_eq!(by_name("c.JPEG").1, "JPEG");
+    assert_eq!(by_name("d.PNG").1, "PNG");
+    let nef = s.catalog.photos().find(|p| p.file_name == "e.NEF").unwrap();
+    assert!(nef.kind == lightcraft_catalog::MediaKind::Raw && nef.preview_only.is_some(), "{nef:?}");
+
+    // Browse Folder (the Local section) lists the same five, without adding them to the library
+    let mut b = Session::new().with_fs();
+    let r = b.execute("library.browse", &json!({"path": src.to_string_lossy()})).unwrap();
+    assert_eq!(r["photos"], 5, "{r}");
+    assert_eq!(r["new"], 5, "{r}");
+    assert_eq!(r["failed"], 0, "{r}");
+    let visible = b.visible_cloned();
+    let shown: Vec<String> = visible.iter().filter_map(|id| b.catalog.photo(*id).map(|p| p.file_name.clone())).collect();
+    for n in ["a.JPG", "b.Jpg", "c.JPEG", "d.PNG", "e.NEF"] {
+        assert!(shown.iter().any(|f| f == n), "{n} not shown: {shown:?}");
+    }
+    let _ = std::fs::remove_dir_all(&src);
+}

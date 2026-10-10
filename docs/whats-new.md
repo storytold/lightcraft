@@ -215,6 +215,10 @@
   fields are reported, and the original Lightroom database stays read-only. Rendering is approximate.
 
 ### Formats
+- File extensions match whatever their letter case: `IMG_0001.JPG` and `DSC_0002.NEF` as Nikon writes them, `.Jpg`
+  after a rename, an `.XMP` sidecar. Adding photos or a folder, Browse Folder (Local), drag-and-drop, the CLI and the
+  sidecar lookup always did; the Add Photos dialog on Linux did not until 0.5.0 (GTK and the desktop portal match
+  `*.jpg` case-sensitively, so `.JPG` and `.NEF` files were hidden — issues #342 and #705).
 - HEIC / HEIF photos (iPhone and Mac) open now: the optional `lightcraft-heif` crate (heic-rs, pure Rust) behind
   codecs' `heif` feature — 8- and 10-bit, alpha, grid tiles, the container's rotation/mirror/crop, ICC, EXIF and XMP.
   Off by default (HEVC patents are the distributor's call, same as PhotoCraft); official builds pass `--features heif`.
