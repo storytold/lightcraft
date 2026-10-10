@@ -1,0 +1,23 @@
+[package]
+name = "dac-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "HTTP(S) client in pure Rust (L0): JSON, multipart upload, resumable verified downloads, proxy, per-connection trust"
+
+[dependencies]
+dac-brand = { workspace = true }
+
+[lints]
+workspace = true
+
+# Native only: on wasm32 the crate is empty (the web build makes no requests through it).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+rustls-rustcrypto = "0.0.2-alpha"
+webpki-roots = "1"
+sha2 = { version = "0.10", default-features = false, features = ["std"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
