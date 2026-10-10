@@ -568,9 +568,13 @@ fn tone_table(f: impl Fn(f32) -> f32) -> Vec<f32> {
         .collect()
 }
 
-/// The inverse of the increasing map `f` as a tone table (bisection in log2).
+/// The inverse of the increasing map `f` as a tone table (bisection in log2). Values above `f`'s
+/// largest output map to where `f` first reaches it, not to the grid's top: a curve that ends
+/// at 1 would otherwise send its brightest values (clipped highlights) far off the grid.
 fn inverse_table(f: impl Fn(f32) -> f32) -> Vec<f32> {
+    let top = f(GREY * LUT_MAX_EV.exp2());
     tone_table(|y| {
+        let y = y.min(top);
         let (mut a, mut b) = (LUT_MIN_EV - 10.0, LUT_MAX_EV);
         for _ in 0..40 {
             let m = 0.5 * (a + b);
@@ -1103,6 +1107,24 @@ mod tests {
                 prev = o;
             }
         }
+    }
+
+    /// A pixel at the top of a profile curve that ends at 1 (a clipped sky) read as a hair above 1
+    /// by rounding inverts to the curve's top, not to the grid's end: Highlights inside the map
+    /// divided by that and turned clipped skies black.
+    #[test]
+    fn inverting_past_the_curve_top_stays_on_the_curve() {
+        let curve = |x: f32| (x / (x + 0.1) * 1.1).min(1.0);
+        let inv = inverse_table(curve);
+        let at_top = tone_eval(&inv, 1.0);
+        for y in [1.0f32 + 1e-6, 1.0001, 1.5] {
+            let got = tone_eval(&inv, y);
+            // (within the grid's step around white, ~0.4 %)
+            assert!((got - at_top).abs() <= 1e-2 * at_top, "inverse at {y}: {got} vs {at_top} at 1");
+        }
+        // and a gain read just below it stays near 1
+        let g = tone_eval(&inv, (1.0 + 1e-6) * (-0.05f32).exp2()) / tone_eval(&inv, 1.0 + 1e-6);
+        assert!(g > 0.5 && g < 1.0, "{g}");
     }
 
     #[test]
