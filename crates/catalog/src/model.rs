@@ -485,12 +485,44 @@ pub struct Album {
     /// hand (see [`crate::Catalog::album_children`]); `None`: listed by name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order: Option<u32>,
+    /// A saved creation (Saved Print / Book / Slideshow / Web Gallery): the album holds its photos
+    /// and this its layout document. Format version 7.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creation: Option<Creation>,
 }
+
+/// The layout attached to a saved-creation album.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Creation {
+    /// `print`, `book`, `slideshow` or `web` (the layout crate's kind names).
+    pub kind: String,
+    /// The layout document as JSON (the layout crate's `Document`; opaque to the catalog).
+    pub document: String,
+}
+
+/// Largest layout document stored in an album (bytes).
+pub const MAX_CREATION_BYTES: usize = 16 * 1024 * 1024;
+/// The kinds of saved creation.
+pub const CREATION_KINDS: &[&str] = &["print", "book", "slideshow", "web"];
 
 impl Album {
     /// A regular (manual) album.
     pub fn new(id: AlbumId, name: impl Into<String>) -> Album {
-        Album { id, name: name.into(), parent: None, folder: false, photos: Vec::new(), cover: None, smart: None, quick: false, order: None }
+        Album {
+            id,
+            name: name.into(),
+            parent: None,
+            folder: false,
+            photos: Vec::new(),
+            cover: None,
+            smart: None,
+            quick: false,
+            order: None,
+            creation: None,
+        }
+    }
+    pub fn is_creation(&self) -> bool {
+        self.creation.is_some()
     }
     pub fn is_smart(&self) -> bool {
         self.smart.is_some()

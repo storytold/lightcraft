@@ -89,6 +89,15 @@ pub struct ImmichUi {
     /// The last `credentials.status`, refreshed every few frames (it is cheap).
     cred: Value,
     cred_at: f64,
+    /// Accounts whose Sync section is open, and each one's last `immich.syncStatus` +
+    /// `immich.syncConflicts` (refreshed on open, after an action, and while a sync runs).
+    sync_open: BTreeSet<String>,
+    sync_view: HashMap<String, (Value, Value, f64)>,
+    /// The filter bar's Immich smart search: the query, a search in flight (account, results),
+    /// and the last message.
+    smart_query: String,
+    smart_pending: Option<(String, Slot<Result<Vec<String>, String>>)>,
+    smart_note: Option<String>,
 }
 
 #[cfg(test)]
@@ -584,6 +593,20 @@ fn account_card(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, i: usize, a: &V
                 app.immich.maps.insert(id.clone(), rows);
                 app.immich.libraries.insert(id.clone(), v);
             }
+            if text_button(ui, &format!("immichSync-{i}"), crate::i18n::tr("Sync Now"), false).clicked() {
+                let _ = app.run("immich.sync", json!({"account": id, "background": true}));
+                app.immich.sync_open.insert(id.clone());
+                app.immich.sync_view.remove(&id);
+            }
+            let open = app.immich.sync_open.contains(&id);
+            if text_button(ui, &format!("immichSyncPanel-{i}"), crate::i18n::tr("Sync…"), open).clicked() {
+                if open {
+                    app.immich.sync_open.remove(&id);
+                } else {
+                    app.immich.sync_open.insert(id.clone());
+                    app.immich.sync_view.remove(&id);
+                }
+            }
             if text_button(ui, &format!("immichImport-{i}"), crate::i18n::tr("Import…"), false).clicked() {
                 open_import(app, Some(id.clone()));
             }
@@ -594,6 +617,9 @@ fn account_card(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, i: usize, a: &V
         });
         if app.immich.libraries.contains_key(&id) {
             extlib(app, ui, t, &id);
+        }
+        if app.immich.sync_open.contains(&id) {
+            sync_section(app, ui, t, i, &id);
         }
     });
     register(ui.ctx(), format!("immichAccount:{i}"), r.response.rect);
@@ -1103,5 +1129,276 @@ fn asset_cell(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, i: usize, a: &Val
     let resp = resp.on_hover_text(format!("{name}\n{}", a["captured"].as_str().unwrap_or_default()));
     if resp.clicked() && !have && !app.immich.selected.remove(&id) {
         app.immich.selected.insert(id);
+    }
+}
+
+/// The fields of IMM-SYNC, as `immich.setSync` names them, with their labels.
+const SYNC_FIELDS: &[(&str, &str)] = &[
+    ("rating", "Star rating ↔ rating"),
+    ("favorite", "Pick ↔ favourite"),
+    ("archived", "Reject ↔ archived"),
+    ("description", "Caption ↔ description"),
+    ("keywords", "Keywords ↔ tags"),
+    ("location", "GPS ↔ location"),
+    ("captured", "Capture time ↔ date"),
+];
+const DIRECTIONS: &[(&str, &str)] = &[("twoWay", "Two-way"), ("toImmich", "To Immich"), ("fromImmich", "From Immich"), ("off", "Off")];
+const POLICIES: &[(&str, &str)] = &[("newest", "Newest wins"), ("catalog", "Catalog wins"), ("immich", "Immich wins"), ("ask", "Ask")];
+
+fn label_of(list: &[(&str, &'static str)], v: &str) -> &'static str {
+    list.iter().find(|(k, _)| *k == v).map(|(_, l)| *l).unwrap_or("?")
+}
+
+/// Settings → Connections → an account → Sync…: status and activity, per-field rules, the
+/// schedule, Sync Conflicts (both values, keep one) and the deletion queue.
+fn sync_section(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, i: usize, id: &str) {
+    let now = ui.input(|x| x.time);
+    let stale = match app.immich.sync_view.get(id) {
+        None => true,
+        Some((st, _, at)) => st["running"] == true && now - at > 0.5,
+    };
+    if stale {
+        let st = app.session.execute("immich.syncStatus", &json!({"account": id, "log": 5})).unwrap_or_default();
+        let cf = app.session.execute("immich.syncConflicts", &json!({"account": id})).unwrap_or_default();
+        app.immich.sync_view.insert(id.to_string(), (st, cf, now));
+    }
+    let Some((st, cf, _)) = app.immich.sync_view.get(id).cloned() else { return };
+    if st["running"] == true {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(300));
+    }
+    let mut changed = false;
+    ui.separator();
+    ui.label(RichText::new(crate::i18n::tr("Metadata sync")).font(t.semibold(12.0)).color(t.text));
+    let last = &st["last"];
+    let line = if st["running"] == true {
+        crate::i18n::tr("Syncing…").to_string()
+    } else if last.is_null() {
+        crate::i18n::tr("Not synced in this session.").to_string()
+    } else if last["ok"] == false {
+        last["error"]["message"].as_str().unwrap_or("failed").to_string()
+    } else {
+        trf!(
+            "Last sync: {} checked, {} from Immich, {} to Immich, {} conflicts",
+            last["checked"].as_u64().unwrap_or(0),
+            last["pulled"].as_u64().unwrap_or(0),
+            last["pushed"].as_u64().unwrap_or(0),
+            last["conflicts"].as_u64().unwrap_or(0)
+        )
+    };
+    let l = ui.label(RichText::new(line).color(if last["ok"] == false { t.caution } else { t.text_label }));
+    register(ui.ctx(), format!("label:immichSyncStatus-{i}"), l.rect);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if text_button(ui, &format!("immichSyncDry-{i}"), crate::i18n::tr("Preview Changes"), false).clicked() {
+            if let Ok(v) = app.session.execute("immich.sync", &json!({"account": id, "dryRun": true})) {
+                app.immich.result = Some(v);
+            }
+            changed = true;
+        }
+        if text_button(ui, &format!("immichSyncAlbums-{i}"), crate::i18n::tr("Sync Albums"), false).clicked() {
+            let _ = app.run("immich.syncAlbums", json!({"account": id}));
+        }
+        if text_button(ui, &format!("immichPeople-{i}"), crate::i18n::tr("Import People"), false).clicked() {
+            let _ = app.run("immich.importPeople", json!({"account": id}));
+        }
+        if text_button(ui, &format!("immichPushPeople-{i}"), crate::i18n::tr("Send Names"), false).clicked() {
+            let _ = app.run("immich.pushPeople", json!({"account": id}));
+        }
+    });
+    // rules
+    let cfg = &st["config"];
+    let mut patch = serde_json::Map::new();
+    egui::Grid::new(("immich-sync-rules", i)).num_columns(3).spacing([8.0, 2.0]).show(ui, |ui| {
+        for (row, rule) in st["rules"].as_array().into_iter().flatten().enumerate() {
+            let field = rule["field"].as_str().unwrap_or_default();
+            let dir = rule["rule"]["direction"].as_str().unwrap_or("twoWay").to_string();
+            let pol = rule["rule"]["policy"].as_str().unwrap_or("newest").to_string();
+            ui.label(RichText::new(crate::i18n::tr(label_of(SYNC_FIELDS, field))).color(t.text_label));
+            let (mut d2, mut p2) = (dir.clone(), pol.clone());
+            egui::ComboBox::from_id_salt(("immich-dir", i, row)).width(110.0).selected_text(crate::i18n::tr(label_of(DIRECTIONS, &dir))).show_ui(
+                ui,
+                |ui| {
+                    for (k, l) in DIRECTIONS {
+                        ui.selectable_value(&mut d2, k.to_string(), crate::i18n::tr(l));
+                    }
+                },
+            );
+            egui::ComboBox::from_id_salt(("immich-pol", i, row)).width(110.0).selected_text(crate::i18n::tr(label_of(POLICIES, &pol))).show_ui(
+                ui,
+                |ui| {
+                    for (k, l) in POLICIES {
+                        ui.selectable_value(&mut p2, k.to_string(), crate::i18n::tr(l));
+                    }
+                },
+            );
+            ui.end_row();
+            if d2 != dir || p2 != pol {
+                patch.insert(field.to_string(), json!({"direction": d2, "policy": p2}));
+            }
+        }
+    });
+    let mut cfg_patch = serde_json::Map::new();
+    if !patch.is_empty() {
+        cfg_patch.insert("rules".into(), Value::Object(patch));
+    }
+    ui.horizontal(|ui| {
+        let mut fav = cfg["favorite"].as_str().unwrap_or("pick").to_string();
+        ui.label(RichText::new(crate::i18n::tr("Favourite means")).color(t.text_label));
+        let before = fav.clone();
+        egui::ComboBox::from_id_salt(("immich-fav", i))
+            .width(90.0)
+            .selected_text(crate::i18n::tr(if fav == "fiveStars" { "5 stars" } else { "Pick" }))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut fav, "pick".to_string(), crate::i18n::tr("Pick"));
+                ui.selectable_value(&mut fav, "fiveStars".to_string(), crate::i18n::tr("5 stars"));
+            });
+        if fav != before {
+            cfg_patch.insert("favorite".into(), json!(fav));
+        }
+        let mut minutes = cfg["intervalMinutes"].as_u64().unwrap_or(0) as u32;
+        ui.label(RichText::new(crate::i18n::tr("Every (minutes, 0 = manual)")).color(t.text_label));
+        if ui.add(egui::DragValue::new(&mut minutes).range(0..=1440)).changed() {
+            cfg_patch.insert("intervalMinutes".into(), json!(minutes));
+        }
+    });
+    if !cfg_patch.is_empty() {
+        let _ = app.run("immich.setSync", json!({"account": id, "config": Value::Object(cfg_patch)}));
+        changed = true;
+    }
+    // conflicts
+    let conflicts = cf["conflicts"].as_array().cloned().unwrap_or_default();
+    if !conflicts.is_empty() {
+        ui.label(RichText::new(trf!("Sync conflicts ({})", conflicts.len())).font(t.semibold(12.0)).color(t.caution));
+        egui::ScrollArea::vertical().id_salt(("immich-conflicts", i)).max_height(160.0).show(ui, |ui| {
+            for (n, c) in conflicts.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    let field = c["field"].as_str().unwrap_or_default();
+                    ui.label(
+                        RichText::new(format!("{} · {}", c["fileName"].as_str().unwrap_or_default(), crate::i18n::tr(label_of(SYNC_FIELDS, field))))
+                            .color(t.text),
+                    );
+                    ui.label(RichText::new(trf!("catalog: {}", c["catalog"])).color(t.text_label));
+                    ui.label(RichText::new(trf!("Immich: {}", c["immich"])).color(t.text_label));
+                    for (side, label) in [("catalog", "Keep Catalog"), ("immich", "Keep Immich")] {
+                        if text_button(ui, &format!("immichConflict-{i}-{n}-{side}"), crate::i18n::tr(label), c["decided"] == side).clicked() {
+                            let _ = app.run("immich.resolveConflict", json!({"account": id, "assetId": c["assetId"], "field": field, "keep": side}));
+                            changed = true;
+                        }
+                    }
+                });
+            }
+        });
+        ui.horizontal(|ui| {
+            if text_button(ui, &format!("immichConflictsApply-{i}"), crate::i18n::tr("Apply Decisions"), false).clicked() {
+                let _ = app.run("immich.sync", json!({"account": id, "background": true}));
+                changed = true;
+            }
+        });
+    }
+    // deletions
+    let dels = st["deletions"].as_array().cloned().unwrap_or_default();
+    if !dels.is_empty() {
+        ui.label(RichText::new(trf!("Deleted on one side ({})", dels.len())).font(t.semibold(12.0)).color(t.caution));
+        for (n, d) in dels.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let what = if d["side"] == "immich" { crate::i18n::tr("in Immich's trash") } else { crate::i18n::tr("deleted in the catalog") };
+                ui.label(RichText::new(format!("{} — {what}", d["fileName"].as_str().unwrap_or_default())).color(t.text));
+                let apply = if d["side"] == "immich" { "Delete Here Too" } else { "Trash in Immich" };
+                if text_button(ui, &format!("immichDeletion-{i}-{n}-apply"), crate::i18n::tr(apply), false).clicked() {
+                    let _ = app.run("immich.resolveDeletion", json!({"account": id, "assets": [d["asset"]], "action": "apply"}));
+                    changed = true;
+                }
+                if text_button(ui, &format!("immichDeletion-{i}-{n}-keep"), crate::i18n::tr("Keep"), false).clicked() {
+                    let _ = app.run("immich.resolveDeletion", json!({"account": id, "assets": [d["asset"]], "action": "keep"}));
+                    changed = true;
+                }
+            });
+        }
+    }
+    // activity
+    for l in st["log"].as_array().into_iter().flatten() {
+        let errs = l["errors"].as_array().map(Vec::len).unwrap_or(0);
+        ui.label(
+            RichText::new(trf!(
+                "{} {}: {} ↓ {} ↑ {} conflicts, {} errors",
+                l["finished"].as_str().unwrap_or_default().chars().take(16).collect::<String>(),
+                if l["dryRun"] == true { crate::i18n::tr("(preview)") } else { "" },
+                l["pulled"].as_u64().unwrap_or(0),
+                l["pushed"].as_u64().unwrap_or(0),
+                l["conflicts"].as_u64().unwrap_or(0),
+                errs
+            ))
+            .size(11.0)
+            .color(t.text_dim),
+        );
+    }
+    if changed {
+        app.immich.sync_view.remove(id);
+    }
+}
+
+/// The filter bar's "Immich smart search" box (IMM-SEARCH): a natural-language query sent to the
+/// connected server on a worker; the linked photos it finds become the grid's temporary collection
+/// (`filter.only`, cleared with the filter bar's other filters). Shown only with one account.
+pub fn smart_search_box(app: &mut DacApp, ui: &mut egui::Ui) {
+    let account = match app.session.immich_accounts().map(|a| a.immich.iter().map(|x| x.id.clone()).collect::<Vec<_>>()) {
+        Ok(v) if v.len() == 1 => v.into_iter().next().unwrap_or_default(),
+        _ => return,
+    };
+    if let Some((acc, slot)) = &app.immich.smart_pending
+        && let Some(r) = take(slot)
+    {
+        let acc = acc.clone();
+        app.immich.smart_pending = None;
+        match r {
+            Ok(ids) => {
+                let mut photos: Vec<dac_catalog::PhotoId> = Vec::new();
+                for a in &ids {
+                    if let Some(p) = app.session.catalog.photo_of_remote(dac_immich::link::SERVICE, &acc, a)
+                        && !photos.contains(&p)
+                    {
+                        photos.push(p);
+                    }
+                }
+                app.immich.smart_note = Some(trf!("{} photos", photos.len()));
+                app.session.filter.only = if photos.is_empty() { vec![dac_catalog::PhotoId(u64::MAX)] } else { photos };
+            }
+            Err(e) => app.immich.smart_note = Some(e),
+        }
+    }
+    let t = Tokens::get(ui.ctx());
+    let busy = app.immich.smart_pending.is_some();
+    let r = ui.add(egui::TextEdit::singleline(&mut app.immich.smart_query).hint_text(crate::i18n::tr("Immich smart search")).desired_width(170.0));
+    register(ui.ctx(), "field:immichSmartSearch", r.rect);
+    if busy {
+        ui.spinner();
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+    } else if let Some(n) = &app.immich.smart_note {
+        ui.label(RichText::new(n.as_str()).size(11.0).color(t.text_dim));
+    }
+    let q = app.immich.smart_query.trim().to_string();
+    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !busy {
+        if q.is_empty() {
+            app.session.filter.only.clear();
+            app.immich.smart_note = None;
+            return;
+        }
+        let client = match app.session.immich_client(&account) {
+            Ok((_, c)) => c,
+            Err(e) => {
+                app.immich.smart_note = Some(e.to_string());
+                return;
+            }
+        };
+        let slot: Slot<Result<Vec<String>, String>> = Arc::new(Mutex::new(None));
+        let out = slot.clone();
+        std::thread::spawn(move || {
+            let q = dac_immich::types::SmartSearch { query: q, size: Some(250), kind: Some("IMAGE".into()), ..Default::default() };
+            let r = client.smart_search(&q).map(|p| p.items.into_iter().map(|a| a.id).collect()).map_err(|e| e.to_string());
+            *out.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
+        });
+        app.immich.smart_pending = Some((account, slot));
     }
 }

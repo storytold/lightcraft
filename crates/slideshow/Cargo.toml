@@ -1,0 +1,31 @@
+[package]
+name = "dac-slideshow"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Slideshow module logic (L4): settings and templates, timeline, slide compositor, music decode, JPEG-sequence export"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Play music through the sound card with cpal. On Linux cpal links the system ALSA library (alsa-sys,
+# libasound found with pkg-config), a C library, so the feature is off by default: without it slideshows
+# play silently (music still sets the timing for "fit to music").
+audio-out = ["dep:cpal"]
+
+[dependencies]
+dac-raster = { workspace = true }
+dac-catalog = { workspace = true }
+dac-pipeline = { workspace = true }
+dac-engine = { workspace = true }
+dac-codecs = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Music decode, pure Rust and permissive (symphonia is MPL-2.0, which deny.toml rejects):
+hound = "3.5" # WAV, Apache-2.0
+claxon = "0.4" # FLAC, Apache-2.0
+lewton = "0.10" # Ogg Vorbis, MIT OR Apache-2.0
+cpal = { version = "0.15", optional = true } # Apache-2.0; links ALSA on Linux

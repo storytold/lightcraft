@@ -10,8 +10,9 @@
 //! Library and Develop re-home the existing views: Library shows the grids, the loupe, Compare,
 //! Survey and People; Develop is the loupe with an editing panel (Edit, Crop, Remove, Masking, Red
 //! Eye) or the Reference view. Opening an editing panel from Library therefore *is* entering
-//! Develop, and going back to a grid is entering Library ([`sync`]). Map is [`crate::map`]; Book,
-//! Slideshow, Print and Web are placeholders until Phase 3, so the module picker is complete.
+//! Develop, and going back to a grid is entering Library ([`sync`]). Map is [`crate::map`]; Print
+//! is [`crate::print_ui`]; Slideshow is `crate::slideshow_ui`; Web is `crate::web_module`; Book is a
+//! placeholder until its module lands.
 
 use egui::{Align2, Color32, Rect, Sense, pos2, vec2};
 use serde::{Deserialize, Serialize};
@@ -394,11 +395,15 @@ pub trait Module: Sync {
     fn center(&self, ui: &mut egui::Ui, app: &mut DacApp);
     /// Module-local keys, layered over the global keymap (Classic set only).
     fn keymap(&self) -> &'static [ModuleKey];
+    /// The module draws its own side columns in [`Module::center`] (the window's Library / Develop
+    /// side panels stay away).
+    fn own_sides(&self) -> bool {
+        false
+    }
 }
 
 struct Library;
 struct Develop;
-struct Placeholder(ModuleId);
 
 /// Library's Classic columns.
 pub const LIBRARY_LEFT: &[PanelId] = &[PanelId::Navigator, PanelId::Catalog, PanelId::Folders, PanelId::Collections, PanelId::Publish];
@@ -478,9 +483,19 @@ impl Module for Develop {
     }
 }
 
-impl Module for Placeholder {
+static LIBRARY: Library = Library;
+static DEVELOP: Develop = Develop;
+static SLIDESHOW: SlideshowModule = SlideshowModule;
+
+/// Slideshow (`crate::slideshow_ui`): templates and saved slideshows left, the slide preview,
+/// the slide settings right. ↩ plays full screen, ⌥↩ previews in place.
+struct SlideshowModule;
+
+const SLIDESHOW_KEYS: &[ModuleKey] = &[("Enter", "slideshow.play", "{}"), ("Alt+Enter", "slideshow.preview", "{}")];
+
+impl Module for SlideshowModule {
     fn id(&self) -> ModuleId {
-        self.0
+        ModuleId::Slideshow
     }
     fn left_panels(&self) -> &'static [PanelId] {
         &[]
@@ -488,41 +503,28 @@ impl Module for Placeholder {
     fn right_panels(&self) -> &'static [PanelId] {
         &[]
     }
-    fn toolbar(&self, _ui: &mut egui::Ui, _app: &mut DacApp) {}
+    fn toolbar(&self, ui: &mut egui::Ui, app: &mut DacApp) {
+        crate::slideshow_ui::toolbar(app, ui);
+    }
     fn center(&self, ui: &mut egui::Ui, app: &mut DacApp) {
-        let t = Tokens::get(ui.ctx());
-        let mut area = ui.available_rect_before_wrap();
-        // the filmstrip stays across modules
-        if edge_visible(app, Edge::Bottom) {
-            let film = Rect::from_min_max(pos2(area.left(), area.bottom() - t.film_h), area.max);
-            area.max.y = film.top();
-            crate::panels::detail::filmstrip(app, ui, film);
-        }
-        app.canvas_rect = Some(area);
-        ui.allocate_rect(area, Sense::hover());
-        register(ui.ctx(), format!("view:module:{}", self.0.key()), area);
-        let p = ui.painter();
-        p.text(area.center() - vec2(0.0, 14.0), Align2::CENTER_CENTER, crate::i18n::tr(self.0.label()), t.font(28.0), t.text);
-        p.text(area.center() + vec2(0.0, 20.0), Align2::CENTER_CENTER, crate::i18n::tr("Coming in Phase 3"), t.font(14.0), t.text_dim);
+        crate::slideshow_ui::center(app, ui);
     }
     fn keymap(&self) -> &'static [ModuleKey] {
-        &[]
+        SLIDESHOW_KEYS
+    }
+    fn own_sides(&self) -> bool {
+        true
     }
 }
-
-static LIBRARY: Library = Library;
-static DEVELOP: Develop = Develop;
-static BOOK: Placeholder = Placeholder(ModuleId::Book);
-static SLIDESHOW: Placeholder = Placeholder(ModuleId::Slideshow);
-static PRINT: Placeholder = Placeholder(ModuleId::Print);
-static WEB: Placeholder = Placeholder(ModuleId::Web);
+static PRINT: crate::print_ui::PrintModule = crate::print_ui::PrintModule;
+use crate::web_module::WEB;
 
 pub fn get(id: ModuleId) -> &'static dyn Module {
     match id {
         ModuleId::Library => &LIBRARY,
         ModuleId::Develop => &DEVELOP,
         ModuleId::Map => &crate::map::MAP,
-        ModuleId::Book => &BOOK,
+        ModuleId::Book => &crate::book::BOOK,
         ModuleId::Slideshow => &SLIDESHOW,
         ModuleId::Print => &PRINT,
         ModuleId::Web => &WEB,
@@ -739,10 +741,68 @@ pub const SHELL_COMMANDS: &[crate::menus::UiCommand] = &[
     ("second.filter", "Secondary Window Filter", None, ""),
     ("second.filmstrip", "Secondary Filmstrip", None, "Window>Secondary Display"),
     ("photo.flagToggle", "Toggle Flagged Status", None, "Photo>Set Flag"),
+    // the Slideshow module (crate::slideshow_ui)
+    ("slideshow.get", "Slideshow Settings", None, ""),
+    ("slideshow.set", "Set Slideshow Settings", None, ""),
+    ("slideshow.reset", "Reset Slideshow Settings", None, ""),
+    ("slideshow.applyTemplate", "Apply Slideshow Template", None, ""),
+    ("slideshow.saveTemplate", "Save Slideshow Template", None, "Slideshow"),
+    ("slideshow.deleteTemplate", "Delete Slideshow Template", None, ""),
+    ("slideshow.saveSlideshow", "Create Saved Slideshow", None, "Slideshow"),
+    ("slideshow.openSaved", "Open Saved Slideshow", None, ""),
+    ("slideshow.closeSaved", "Close Saved Slideshow", None, ""),
+    ("slideshow.deleteSaved", "Delete Saved Slideshow", None, ""),
+    ("slideshow.play", "Run Slideshow", None, "Slideshow"),
+    ("slideshow.preview", "Preview Slideshow", None, "Slideshow"),
+    ("slideshow.stop", "End Slideshow", None, ""),
+    ("slideshow.pause", "Pause Slideshow", None, ""),
+    ("slideshow.next", "Next Slide", None, "Slideshow"),
+    ("slideshow.previous", "Previous Slide", None, "Slideshow"),
+    ("slideshow.addMusic", "Add Slideshow Music", None, ""),
+    ("slideshow.clearMusic", "Clear Slideshow Music", None, ""),
+    ("slideshow.exportJpeg", "Export JPEG Slideshow…", None, "Slideshow"),
+    // the Book module (crate::book)
+    ("book.new", "New Book", None, ""),
+    ("book.get", "Book Document", None, ""),
+    ("book.autoLayout", "Auto Layout", None, ""),
+    ("book.clearLayout", "Clear Layout", None, ""),
+    ("book.addPage", "Add Page", None, ""),
+    ("book.removePage", "Remove Page", None, ""),
+    ("book.movePage", "Move Page", None, ""),
+    ("book.template", "Change Page Template", None, ""),
+    ("book.place", "Place Photo", None, ""),
+    ("book.swap", "Swap Photos", None, ""),
+    ("book.text", "Set Cell Text", None, ""),
+    ("book.pageText", "Page Text", None, ""),
+    ("book.textPreset", "Text Style Preset", None, ""),
+    ("book.guides", "Guides", None, ""),
+    ("book.favorite", "Favorite Template", None, ""),
+    ("book.templates", "Page Templates", None, ""),
+    ("book.presets", "Auto Layout Presets", None, ""),
+    ("book.settings", "Book Settings", None, ""),
+    ("book.cell", "Cell Settings", None, ""),
+    ("book.photoText", "Photo Text", None, ""),
+    ("book.type", "Type", None, ""),
+    ("book.background", "Background", None, ""),
+    ("book.pageNumbers", "Page Numbers", None, ""),
+    ("book.undo", "Undo Book Edit", None, ""),
+    ("book.redo", "Redo Book Edit", None, ""),
+    ("book.view", "Book View", None, ""),
+    ("book.go", "Go to Book Page", None, ""),
+    ("book.select", "Select Book Cell", None, ""),
+    ("book.export", "Export Book…", None, ""),
+    ("book.exportStatus", "Book Export Status", None, ""),
+    ("book.save", "Save Book", None, ""),
+    ("book.open", "Open Saved Book", None, ""),
+    ("book.saved", "Saved Books", None, ""),
+    ("book.deleteSaved", "Delete Saved Book", None, ""),
 ];
 
 /// Is `id` a shell command, and is it enabled?
 pub fn enabled(app: &DacApp, id: &str) -> Option<bool> {
+    if let Some(e) = crate::print_ui::enabled(app, id) {
+        return Some(e);
+    }
     if !SHELL_COMMANDS.iter().any(|c| c.0 == id) {
         return None;
     }
@@ -757,16 +817,25 @@ pub fn enabled(app: &DacApp, id: &str) -> Option<bool> {
 
 /// Run a shell command; `None`: not one.
 pub fn run(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    if let Some(r) = crate::print_ui::run(app, id, p) {
+        return Some(r);
+    }
     if let Some(r) = crate::map::run(app, id, p) {
         return Some(r);
     }
     if !SHELL_COMMANDS.iter().any(|c| c.0 == id) {
         return None;
     }
+    if crate::book::is_book_command(id) {
+        return Some(crate::book::run(app, id, p));
+    }
     Some(run_inner(app, id, p))
 }
 
 fn run_inner(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
+    if let Some(r) = crate::slideshow_ui::run(app, id, p) {
+        return r;
+    }
     if let Some(m) = id.strip_prefix("module.").and_then(ModuleId::parse) {
         return switch(app, m);
     }
@@ -1020,6 +1089,15 @@ pub fn edge_visible(app: &DacApp, e: Edge) -> bool {
         Edge::Top | Edge::Bottom => true,
     };
     has && (edge_shown(app, e) || app.ui.peek.get(e))
+}
+
+/// Whether a module that draws its own side columns (Print) shows the column at edge `e`: the
+/// edge is shown or peeking, as [`edge_visible`] decides for modules with declared panels.
+pub fn module_edge(app: &DacApp, e: Edge) -> bool {
+    if app.ui.screen_mode == ScreenMode::FullScreenHidePanels {
+        return app.ui.peek.get(e);
+    }
+    edge_shown(app, e) || app.ui.peek.get(e)
 }
 
 /// Auto show: a hidden edge marked auto-show appears while the pointer is at the window's edge and

@@ -20,6 +20,8 @@ dac-gpu = { workspace = true }
 dac-catalog = { workspace = true }
 dac-geo = { workspace = true }
 dac-hash = { workspace = true }
+dac-layout = { workspace = true }
+dac-print = { workspace = true }
 web-time = { workspace = true }
 dac-preview = { workspace = true }
 dac-codecs = { workspace = true }
@@ -30,6 +32,9 @@ dac-meta = { workspace = true }
 dac-faces = { workspace = true }
 miniz_oxide = { workspace = true }
 dac-merge = { workspace = true }
+dac-psd = { workspace = true }
+dac-actions = { workspace = true }
+tiff = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -48,6 +53,8 @@ dac-immich = { workspace = true }
 dac-publish = { workspace = true }
 dac-tether = { workspace = true }
 dac-credentials = { workspace = true }
+dac-webgallery = { workspace = true, features = ["sftp"] }
+dac-plugins = { workspace = true }
 
 # free disk space of a volume (Folders panel)
 [target.'cfg(all(unix, not(target_arch = "wasm32")))'.dependencies]
@@ -64,6 +71,7 @@ rawnind-model = ["denoise", "dac-denoise/rawnind-model", "dac-denoise-core/rawni
 dac-heif = { workspace = true, features = ["testdata"] }
 libc = { workspace = true }
 dac-tiff = { workspace = true }
+wat = "1.228" # P4.3: plug-in test modules
 
 [target.'cfg(windows)'.dependencies]
 # free space on Windows (the Folders panel); its own unsafe FFI stays inside the crate

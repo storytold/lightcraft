@@ -54,6 +54,11 @@ fn status_ok(mut c: Command, what: &str) -> Result<(), String> {
 }
 
 fn up(root: &Path, url: &str) -> Result<(), String> {
+    // made here, by the user: docker would create the bind-mounted folder as root, and `seed`
+    // could then not write the key or the fixtures next to it
+    for d in host_dirs(root, std::env::var("IMMICH_EXTLIB_DIR").ok().as_deref()) {
+        std::fs::create_dir_all(&d).map_err(|e| format!("create {}: {e}", d.display()))?;
+    }
     let mut c = compose(root);
     c.args(["up", "-d"]);
     status_ok(c, "docker compose up")?;
@@ -71,6 +76,19 @@ fn up(root: &Path, url: &str) -> Result<(), String> {
         }
         std::thread::sleep(Duration::from_secs(2));
     }
+}
+
+/// The host folders `up` creates before compose runs: `target/immich`, its `fixtures`, and the
+/// external-library mount (`IMMICH_EXTLIB_DIR`, relative to the compose file's folder, or
+/// `target/immich/extlib`).
+pub fn host_dirs(root: &Path, extlib: Option<&str>) -> Vec<PathBuf> {
+    let base = root.join("target/immich");
+    let ext = match extlib.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(p) if Path::new(p).is_absolute() => PathBuf::from(p),
+        Some(p) => root.join("xtask/immich").join(p),
+        None => base.join("extlib"),
+    };
+    vec![base.clone(), base.join("fixtures"), ext]
 }
 
 fn down(root: &Path, volumes: bool) -> Result<(), String> {
@@ -364,6 +382,15 @@ mod tests {
             assert!(all.iter().skip(i + 1).all(|b| b != a), "fixture {i} repeats");
         }
         assert!(png_rgb8(2, 2, &[0; 3]).is_err());
+    }
+
+    #[test]
+    fn host_dirs_cover_the_bind_mount() {
+        let root = Path::new("/r");
+        assert_eq!(host_dirs(root, None)[2], Path::new("/r/target/immich/extlib"));
+        assert_eq!(host_dirs(root, Some("../../x"))[2], Path::new("/r/xtask/immich/../../x"));
+        assert_eq!(host_dirs(root, Some("/abs"))[2], Path::new("/abs"));
+        assert_eq!(host_dirs(root, Some(" "))[0], Path::new("/r/target/immich"));
     }
 
     #[test]

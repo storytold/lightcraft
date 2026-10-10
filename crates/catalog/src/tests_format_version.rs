@@ -74,6 +74,42 @@ fn v3_library_loads_and_is_upgraded() {
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
 }
 
+/// A format-5 library (before saved locations and creations) opens as it was and is rewritten in the current format.
+#[test]
+fn v5_library_loads_and_is_upgraded() {
+    let (base, log, full) = legacy_parts();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"dac-catalog\",\"version\":5,\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
+    m.set(LOG, log.into_bytes());
+    let (_, c, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(c.to_snapshot(), full.to_snapshot());
+    assert_eq!((r.replayed, r.upgraded_from), (1, Some(5)));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+}
+
+/// A saved creation survives the journal, undo restores the plain album, and bad input is refused.
+#[test]
+fn saved_creation_round_trips_and_undoes() {
+    let m = MemStore::new();
+    let (mut j, mut c, _) = Journal::open(Box::new(m.clone())).unwrap();
+    let id = AlbumId(77);
+    let add = Op::AddAlbum { album: crate::Album::new(id, "Holiday Book") };
+    c.apply(add.clone()).unwrap();
+    j.append(std::slice::from_ref(&add)).unwrap();
+    let creation = crate::Creation { kind: "book".into(), document: "{\"kind\":\"book\"}".into() };
+    let set = Op::SetAlbumCreation { id, creation: Some(creation.clone()) };
+    let undo = c.apply(set.clone()).unwrap();
+    j.append(std::slice::from_ref(&set)).unwrap();
+    drop(j);
+    let (_, loaded, _) = Journal::open(Box::new(m)).unwrap();
+    assert_eq!(loaded.albums.get(&id).and_then(|a| a.creation.clone()), Some(creation));
+    c.apply(undo).unwrap();
+    assert!(c.albums.get(&id).is_some_and(|a| a.creation.is_none()));
+    let bad = crate::Creation { kind: "poster".into(), document: String::new() };
+    assert!(c.apply(Op::SetAlbumCreation { id, creation: Some(bad) }).is_err());
+    assert!(c.apply(Op::SetAlbumCreation { id: AlbumId(999), creation: None }).is_err());
+}
+
 #[test]
 fn versionless_log_only_library_is_upgraded() {
     let mut c = Catalog::new();
@@ -204,8 +240,9 @@ fn op_variants_are_versioned() {
             Op::SetSha1 { .. } | Op::SetKind { .. } | Op::SetXmpStamp { .. } | Op::SetRemote { .. } | Op::SetPreview { .. } => 4,
             Op::SetEmbeddedLens { .. } | Op::SetKeyword { .. } | Op::SetFolderRecord { .. } => 5,
             Op::SetSavedLocation { .. } => 6,
+            Op::SetAlbumCreation { .. } => 7,
         }
     }
-    let newest = since(&Op::SetSavedLocation { name: "x".into(), location: None });
+    let newest = since(&Op::SetAlbumCreation { id: AlbumId(1), creation: None });
     assert_eq!(newest, VERSION, "the newest op's version must be the current format version");
 }

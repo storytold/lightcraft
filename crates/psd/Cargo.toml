@@ -1,0 +1,27 @@
+[package]
+name = "dac-psd"
+description = "Faithful, lossless reader and writer for Adobe Photoshop PSD (v1) and PSB (v2) files (L0; ported from PhotoCraft's psd crate)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "dac_psd"
+path = "src/lib.rs"
+
+[features]
+default = []
+testgen = []
+serde = ["dep:serde"]
+
+[dependencies]
+thiserror = { workspace = true }
+serde = { workspace = true, optional = true }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+[dev-dependencies]
+proptest = { workspace = true }
+dac-psd = { path = ".", features = ["testgen"] }
+
+[lints]
+workspace = true

@@ -79,3 +79,36 @@ Immich* (`immich.scanLibraries`) starts a scan of the libraries covering mapped 
   generated photos (the compose file mounts `target/immich/extlib` at `/mnt/extlib`, override with
   `IMMICH_EXTLIB_DIR`), scanned, linked by path, then rating, description and a keyword written as XMP and read back
   from Immich.
+
+## Sync (IMM-SYNC)
+
+`immich.sync {dryRun?, full?, background?}` syncs the metadata of linked photos both ways: stars ↔ rating, pick (or
+5★) ↔ favourite, reject ↔ archived (off by default), caption (or title) ↔ description, keywords ↔ tags (merged as
+sets; export-excluded keywords are never sent), GPS ↔ location and capture time ↔ date (these two ask). Each field
+is compared against the value both sides had at the last sync: a one-sided change flows to the other side; when both
+changed, the field's policy decides (`catalog`, `immich`, `newest` — the default —, or `ask`). Settings:
+`immich.setSync {config}` (per-field `direction` and `policy`, `favorite`, `description`, `intervalMinutes`).
+Unresolved conflicts: `immich.syncConflicts`, decided with `immich.resolveConflict {keep}`. Deletions are never
+synced on their own: they wait in a queue (`immich.syncStatus` → `deletions`, `immich.resolveDeletion
+{action: apply|keep}`; Immich assets go to its trash, never a hard delete). The state between runs and the activity
+log live in `<library>/Immich/sync/<account>.json`; offline / bad-key failures change nothing and a scheduled sync
+retries with backoff.
+
+## People and smart search (IMM-PEOPLE, IMM-SEARCH)
+
+`immich.importPeople` reads Immich's faces into face regions marked `immich:<personId>` (the People view shows their
+names); `immich.confirmFaces` confirms them, `immich.pushPeople {merge?}` sends names back (renames, merges).
+`immich.smartSearch {query, mode: smart|ocr|description|place, show?, saveAs?}` maps the server's results to linked
+photos; `show` makes them a temporary collection, `saveAs` an album.
+
+## Publish (IMM-PUBLISH) and albums
+
+An Immich publish service (`publish.createService {kind: "immich", settings: {account, send: rendered|original|both,
+deleteRemoved}}`) publishes each collection to the Immich album of the same name (created when missing). Every
+upload is checked by SHA-1 first, so Immich never stores a duplicate; an original already linked to an Immich asset
+(including external-library files) is never uploaded. `both` stacks the render on top of the original. Re-publishing
+uploads the new render, moves album membership and sends the old render to Immich's trash; removing a photo from the
+collection takes it out of the album (its render goes to the trash only with `deleteRemoved`).
+
+`immich.linkAlbum {album}` links a catalog album with an Immich album; `immich.syncAlbums` then keeps the same linked
+photos in both (added or removed on one side since the last sync: the same on the other).

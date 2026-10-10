@@ -4,6 +4,7 @@
 //! delete), `album.*`, `develop.*` (settings), `crop.*`, `mask.*`, `preset.*`, `version.*`,
 //! `edit.*` (undo/redo), and queries (`catalog.query`, `photo.inspect`, `develop.get`…).
 
+pub mod actions;
 mod activity;
 mod before;
 pub(crate) mod browse;
@@ -19,6 +20,7 @@ pub mod curves;
 pub(crate) mod denoise;
 mod develop;
 mod edit;
+pub mod edit_in;
 mod export;
 pub(crate) mod face_detect;
 mod face_models;
@@ -37,6 +39,8 @@ mod merge;
 pub mod metadata;
 pub mod missing;
 mod organize;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod plugins;
 mod prefs;
 mod preset_files;
 pub mod previews;
@@ -47,6 +51,8 @@ mod quick;
 mod sync;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tether;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod web;
 mod xmp;
 
 use serde::Serialize;
@@ -164,6 +170,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(preset_files::specs());
         v.extend(prefs::specs());
         v.extend(export::specs());
+        v.extend(crate::creations::specs());
         v.extend(before::specs());
         v.extend(browse::specs());
         v.extend(folders::specs());
@@ -182,7 +189,13 @@ pub fn command_specs() -> &'static [CommandSpec] {
         #[cfg(not(target_arch = "wasm32"))]
         v.extend(tether::specs());
         #[cfg(not(target_arch = "wasm32"))]
+        v.extend(web::specs());
+        #[cfg(not(target_arch = "wasm32"))]
         v.extend(credentials::specs());
+        v.extend(actions::specs());
+        v.extend(edit_in::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(plugins::specs());
         v.extend(activity::specs());
         v
     })

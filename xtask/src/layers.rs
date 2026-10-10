@@ -43,6 +43,9 @@ pub const TABLE: &[(&str, Class)] = &[
     ("net", Class::Layer(0)),
     ("credentials", Class::Layer(0)),
     ("hash", Class::Layer(0)),
+    ("psd", Class::Standalone),
+    ("actions", Class::Standalone),
+    ("plugins", Class::Layer(1)),
     ("denoise-core", Class::Layer(1)),
     ("denoise", Class::Layer(1)),
     ("heif", Class::Layer(0)),
@@ -61,12 +64,16 @@ pub const TABLE: &[(&str, Class)] = &[
     ("immich", Class::Layer(3)),
     ("publish", Class::Layer(3)),
     ("tether", Class::Layer(3)),
+    ("webgallery", Class::Layer(1)),
     ("preview", Class::Layer(3)),
     ("export", Class::Layer(3)),
     ("layout", Class::Layer(3)),
+    ("print", Class::Layer(3)),
+    ("book", Class::Layer(3)),
     ("merge", Class::Layer(3)),
     ("segment", Class::Layer(3)),
     ("engine", Class::Layer(4)),
+    ("slideshow", Class::Layer(4)),
     ("ui-egui", Class::Layer(5)),
     ("mcp", Class::Layer(5)),
     ("testkit", Class::Testkit),
@@ -104,6 +111,14 @@ pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     // L3: the Immich client writes remote links into the catalog
     &["catalog", "immich"],
     &["catalog", "publish"],
+    // L3: the print back end lays out pages with `layout`
+    &["layout", "print"],
+    // L4: the Slideshow module renders and encodes through the engine
+    &["engine", "slideshow"],
+    // L3: books are laid out with the shared page model
+    &["layout", "book"],
+    // IMM-PUBLISH: the Immich publish service implements the publish trait
+    &["publish", "immich"],
 ];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {

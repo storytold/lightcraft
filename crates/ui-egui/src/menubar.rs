@@ -45,7 +45,7 @@ impl MenuNode {
 
 /// User-defined names in parameterized menus are data, not message keys.
 pub fn display_item_label<'a>(id: &str, params: &Value, label: &'a str) -> &'a str {
-    if matches!(id, "metadata.applyPreset" | "album.addPhotos" | "label.applySet" | "catalog.openRecent")
+    if matches!(id, "metadata.applyPreset" | "album.addPhotos" | "label.applySet" | "catalog.openRecent" | "plugins.runItem")
         || (id == "app.export" && params.get("preset").is_some())
     {
         label
@@ -89,6 +89,9 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "dialog.export",
             "app.exportPrevious",
             "@Export with Preset",
+            "---",
+            "plugins.manager",
+            "@Plug-in Extras",
             "---",
             "library.toggleAutoWriteXmp",
             "---",
@@ -541,6 +544,8 @@ fn expanded(app: &DacApp, name: &str) -> Option<Vec<MenuNode>> {
             v.extend(groups.into_iter().map(|(label, g, k)| item("library.sort", json!({"group": k}), label, None, true, Some(cur.group == g))));
             v
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        "Plug-in Extras" => crate::panels::plugins::menu_items(app).into_iter().map(|(id, p, label)| item(&id, p, label, None, true, None)).collect(),
         "Open Recent Catalog" => {
             let mut v: Vec<MenuNode> =
                 crate::catalog_ui::recent_items(app).into_iter().map(|(label, p)| item("catalog.openRecent", p, label, None, true, None)).collect();

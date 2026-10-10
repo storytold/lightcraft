@@ -49,6 +49,7 @@
 //! | 4 | catalog v4 | `Op::SetSha1`, `Op::SetKind`, `Op::SetXmpStamp`, `Op::SetRemote`, `Op::SetPreview`, `Photo.sha1`, `Photo.xmp`, `Catalog.remote`, `Catalog.previews`; native libraries in a folder move to the v4 store ([`crate::db`]) |
 //! | 5 | upstream merge: Reload reads lens data, the keyword list, folder labels (upstream's 4–6) | `Op::SetEmbeddedLens`, `Op::SetKeyword`, `Catalog.keyword_list`, `Op::SetFolderRecord`, `Catalog.folder_records` |
 //! | 6 | the Map module | `Op::SetSavedLocation`, `Catalog.saved_locations` |
+//! | 7 | saved creations (Print / Book / Slideshow / Web) | `Op::SetAlbumCreation`, `Album.creation` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -73,7 +74,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "dac-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 7;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]

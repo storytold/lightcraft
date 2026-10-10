@@ -25,8 +25,16 @@ crates/hash/
 crates/immich/
 crates/text/
 crates/pdf/
-crates/layout/
 crates/geo/
+# Immich engine wiring (IMM-SYNC / IMM-PEOPLE / IMM-SEARCH)
+crates/engine/src/cmd/immich_sync.rs
+crates/engine/src/tests_immich_sync.rs
+crates/engine/src/cmd/immich_publish.rs
+crates/plugins/
+sdk/
+docs/plugins.md
+crates/engine/src/cmd/plugins.rs
+crates/ui-egui/src/panels/plugins.rs
 crates/publish/
 crates/tether/
 crates/engine/src/cmd/publish.rs
@@ -34,6 +42,21 @@ crates/engine/src/cmd/publish_tests.rs
 crates/engine/src/cmd/tether.rs
 crates/ui-egui/src/panels/publish.rs
 crates/ui-egui/src/panels/tether_bar.rs
+crates/layout/
+crates/print/
+crates/webgallery/
+crates/engine/src/cmd/web.rs
+crates/ui-egui/src/web_module.rs
+crates/slideshow/
+crates/psd/
+crates/actions/
+crates/engine/src/cmd/edit_in.rs
+crates/engine/src/cmd/actions.rs
+crates/engine/src/tests_edit_in.rs
+apps/cli/src/run_action.rs
+crates/ui-egui/src/edit_in.rs
+crates/book/
+crates/ui-egui/src/book.rs
 # the Classic shell
 crates/ui-egui/src/module.rs
 crates/ui-egui/src/panels/classic.rs
@@ -45,6 +68,7 @@ crates/ui-egui/src/panels/connections.rs
 crates/ui-egui/src/panels/second.rs
 crates/ui-egui/src/plate.rs
 crates/ui-egui/src/catalog_ui.rs
+crates/ui-egui/src/print_ui.rs
 crates/ui-egui/src/map/
 crates/engine/src/cmd/map.rs
 # our docs and plans

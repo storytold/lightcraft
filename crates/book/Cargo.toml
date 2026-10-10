@@ -1,0 +1,19 @@
+[package]
+name = "dac-book"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Photo books (L3): book settings, page templates, auto layout, cells, photo and page text with type controls, backgrounds, page numbers, and export to PDF or one JPEG per page"
+
+[lints]
+workspace = true
+
+[dependencies]
+dac-layout = { workspace = true }
+dac-raster = { workspace = true }
+dac-text = { workspace = true }
+dac-pdf = { workspace = true }
+dac-codecs = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

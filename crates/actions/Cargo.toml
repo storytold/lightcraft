@@ -1,0 +1,13 @@
+[package]
+name = "dac-actions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Actions (L0 standalone): recorded, parameterised command sequences, their file format and replay planning"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

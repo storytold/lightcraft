@@ -70,6 +70,7 @@ fn service_json(cat: &Catalog, svc: &ServiceConfig) -> Value {
         .collect();
     let caps = match svc.kind.as_str() {
         dac_publish::KIND_HARD_DRIVE => json!({"comments": false, "likes": false}),
+        dac_publish::KIND_IMMICH => json!({"comments": false, "likes": true}),
         _ => json!(null),
     };
     json!({
@@ -85,7 +86,7 @@ fn services(s: &Session) -> Result<Value> {
 
 /// Check a service's settings and export params.
 fn check(kind: &str, settings: &Value, export: &Value, c: &str) -> Result<()> {
-    if !dac_publish::KINDS.contains(&kind) {
+    if !dac_publish::KINDS.contains(&kind) && !plugin_kind(kind) {
         return Err(bad(c, format!("unknown kind `{kind}` (known: {})", dac_publish::KINDS.join(", "))));
     }
     if kind == dac_publish::KIND_HARD_DRIVE {
@@ -94,6 +95,9 @@ fn check(kind: &str, settings: &Value, export: &Value, c: &str) -> Result<()> {
         if !std::path::Path::new(dir).is_absolute() {
             return Err(bad(c, format!("`{dir}` is not an absolute folder path")));
         }
+    }
+    if kind == dac_publish::KIND_IMMICH {
+        super::immich::publish::check_settings(settings).map_err(|e| bad(c, e))?;
     }
     if !export.is_object() {
         return Err(bad(c, "`export` must be an object of app.export params"));
@@ -296,6 +300,8 @@ pub struct Plan {
     pub removals: Vec<(PhotoId, String)>,
     /// Photos that couldn't be prepared (missing original, …).
     pub failed: Vec<(PhotoId, String)>,
+    /// Opens a service the session had to set up (Immich: its key and per-photo data).
+    pub open: Option<super::immich::publish::Opener>,
 }
 
 /// What a run did, for [`apply`].
@@ -329,7 +335,9 @@ pub fn plan(s: &mut Session, album: AlbumId) -> Result<Plan> {
         }
     }
     let removals = st.to_remove.iter().filter_map(|id| link(&s.catalog, *id).map(|l| (*id, l.remote_id))).collect();
-    Ok(Plan { service: svc, collection: coll, jobs, removals, failed })
+    let photos: Vec<PhotoId> = jobs.iter().map(|j: &Job| j.photo).collect();
+    let open = super::immich::publish::opener(s, &svc, &coll, &photos).map_err(|e| bad(C, e))?;
+    Ok(Plan { service: svc, collection: coll, jobs, removals, failed, open })
 }
 
 impl Plan {
@@ -353,7 +361,11 @@ impl Plan {
             failed: self.failed,
             cancelled: false,
         };
-        let mut svc = match dac_publish::open_service(&self.service, &self.collection) {
+        let opened = match self.open {
+            Some(open) => open(),
+            None => open_any(&self.service, &self.collection),
+        };
+        let mut svc = match opened {
             Ok(x) => x,
             Err(e) => {
                 out.failed.extend(self.jobs.iter().map(|j| (j.photo, e.to_string())));
@@ -457,7 +469,7 @@ fn comments(s: &mut Session, p: &Value) -> Result<Value> {
     let Some(link) = s.catalog.remote_links().get(&(id, dac_publish::SERVICE.to_string(), acct)).cloned() else {
         return Ok(json!({"comments": [], "supported": true, "published": false}));
     };
-    let mut service = dac_publish::open_service(&svc, &coll).map_err(|e| bad(C, e.to_string()))?;
+    let mut service = open_any(&svc, &coll).map_err(|e| bad(C, e.to_string()))?;
     let caps = service.capabilities();
     let list = service.comments(&link.remote_id).map_err(|e| bad(C, e.to_string()))?;
     Ok(json!({"comments": list, "supported": caps.comments, "published": true}))
@@ -542,6 +554,26 @@ pub fn specs() -> Vec<CommandSpec> {
             "{collection: albumId, id?: photo (default active)} → {comments: [{author, text, date}], supported, published}",
             always, comments),
     ]
+}
+
+// P4.3: plug-in publish services (`plugin:<id>` kinds, see `cmd::plugins`).
+#[cfg(not(target_arch = "wasm32"))]
+fn plugin_kind(kind: &str) -> bool {
+    super::plugins::is_plugin_kind(kind)
+}
+#[cfg(target_arch = "wasm32")]
+fn plugin_kind(_: &str) -> bool {
+    false
+}
+fn open_any(
+    svc: &dac_publish::ServiceConfig,
+    coll: &dac_publish::CollectionConfig,
+) -> std::result::Result<Box<dyn dac_publish::PublishService>, dac_publish::PublishError> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(r) = super::plugins::open_plugin_service(svc) {
+        return r;
+    }
+    dac_publish::open_service(svc, coll)
 }
 
 #[cfg(test)]

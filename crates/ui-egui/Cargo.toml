@@ -20,7 +20,15 @@ dac-catalog = { workspace = true }
 dac-geo = { workspace = true }
 web-time = { workspace = true }
 dac-engine = { workspace = true }
+dac-layout = { workspace = true }
+dac-pdf = { workspace = true }
+dac-print = { workspace = true }
 dac-preview = { workspace = true }
+dac-slideshow = { path = "../slideshow" }
+# the Book module (owned, Phase 3)
+dac-book = { workspace = true }
+dac-text = { workspace = true }
+dac-webgallery = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

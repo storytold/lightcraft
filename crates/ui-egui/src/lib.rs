@@ -7,6 +7,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod album_picker;
+pub mod book;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod catalog_ui;
 #[cfg(target_arch = "wasm32")]
@@ -15,6 +16,7 @@ pub mod catalog_ui;
 pub mod control;
 pub mod credits;
 pub mod date_picker;
+mod edit_in;
 pub mod export_task;
 pub mod headless;
 pub mod i18n;
@@ -33,9 +35,11 @@ pub mod module;
 pub mod panels;
 pub mod pick;
 pub mod plate;
+pub mod print_ui;
 pub mod region;
 pub mod render;
 pub mod shortcuts;
+pub mod slideshow_ui;
 pub mod softpaint;
 pub mod state;
 pub mod sync;
@@ -43,6 +47,7 @@ pub mod tasks;
 pub mod text_field;
 pub mod theme;
 pub mod titlebar;
+pub mod web_module;
 pub mod widgets;
 
 #[cfg(test)]
@@ -355,6 +360,8 @@ pub struct DacApp {
     /// Immich: Connections settings, the Import dialog's Immich source, background pump state.
     #[cfg(not(target_arch = "wasm32"))]
     pub immich: panels::connections::ImmichUi,
+    /// The Print module's settings and job state.
+    pub print: print_ui::PrintUi,
     /// The activity stack shows every task, not just the first few ("+N more" was clicked).
     pub activity_expanded: bool,
     /// The Map module's view state (P3.3).
@@ -369,6 +376,7 @@ impl DacApp {
             session,
             #[cfg(not(target_arch = "wasm32"))]
             immich: Default::default(),
+            print: Default::default(),
             map: Default::default(),
             ui: UiState::default(),
             services,
@@ -456,10 +464,16 @@ impl DacApp {
         if let Some(result) = model_setup::intercept(self, id, &params) {
             return result;
         }
+        if let Some(r) = edit_in::intercept(self, id, &params) {
+            return r;
+        }
         if let Some(r) = menus::run_ui_command(self, id, &params) {
             return r;
         }
         let r = self.session.execute(id, &params).map_err(|e| e.to_string());
+        if let Ok(v) = &r {
+            edit_in::after_command(self, id, v);
+        }
         if r.is_ok() && id == "mask.adjust" {
             // Judge local adjustments on the photo, without the selection overlay obscuring them.
             // Keep it hidden after release; O / the overlay eye can show it again.
@@ -927,6 +941,7 @@ impl DacApp {
         panels::faces::pump(self, ctx);
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);
+        edit_in::show(self, ctx);
         if self.fonts_ready {
             shortcuts::handle(self, ctx);
         }
@@ -1112,7 +1127,7 @@ impl DacApp {
             module::module_bar(self, ui);
         }
         panels::library_problem::banner(self, ui);
-        if module::edge_visible(self, module::Edge::Right) {
+        if module::edge_visible(self, module::Edge::Right) && !m.own_sides() {
             panels::strip::show(self, ui);
             // Library's right column is its Classic panels, unless a Library panel of the strip
             // (Info, Keywords, Versions, Activity) was opened in its place
@@ -1125,7 +1140,7 @@ impl DacApp {
                 panels::presets::show(self, ui);
             }
         }
-        if module::edge_visible(self, module::Edge::Left) {
+        if module::edge_visible(self, module::Edge::Left) && !m.own_sides() {
             panels::left::show(self, ui);
         }
         if self.ui.toolbar && self.ui.screen_mode != module::ScreenMode::FullScreenHidePanels {
@@ -1144,6 +1159,8 @@ impl DacApp {
         panels::notices::show(self, &ctx);
         panels::dialogs::show(self, &ctx);
         catalog_ui::show(self, &ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        panels::plugins::show(self, &ctx);
         panels::library_problem::show(self, &ctx);
         export_task::poll(self, &ctx);
         panels::activity::show(self, &ctx);

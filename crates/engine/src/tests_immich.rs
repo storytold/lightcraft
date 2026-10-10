@@ -530,3 +530,6 @@ fn live_external_library_links_by_path_and_reads_sidecars() {
     assert_eq!(a.exif_info.and_then(|e| e.rating), Some(4));
     cleanup(&c);
 }
+
+#[path = "tests_immich_sync.rs"]
+mod sync_tests;

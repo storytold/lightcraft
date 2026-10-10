@@ -531,6 +531,8 @@ pub struct UiState {
     #[serde(skip)]
     pub lights_out: crate::module::LightsOut,
     pub identity_plate: crate::module::IdentityPlate,
+    /// The Book module's book and view (Phase 3, `crate::book`).
+    pub book: crate::book::BookUi,
     /// What the secondary window shows, and the photo a locked loupe holds.
     pub second_mode: crate::module::SecondMode,
     pub second_locked: Option<u64>,
@@ -557,6 +559,8 @@ pub struct UiState {
     /// time), paused.
     #[serde(skip)]
     pub slideshow: Option<(f64, f64, bool)>,
+    /// The Slideshow module (templates, saved slideshows, the slide settings).
+    pub slides: crate::slideshow_ui::SlideshowState,
     /// Info overlay on the loupe.
     pub info_overlay: InfoOverlay,
     /// Navigator mini map in the loupe while zoomed in.
@@ -943,6 +947,7 @@ impl Default for UiState {
             auto_advance: false,
             fullscreen: false,
             slideshow: None,
+            slides: Default::default(),
             second_window: false,
             module: Default::default(),
             previous_module: None,
@@ -960,6 +965,7 @@ impl Default for UiState {
             screen_mode: Default::default(),
             lights_out: Default::default(),
             identity_plate: Default::default(),
+            book: Default::default(),
             second_mode: Default::default(),
             second_locked: None,
             second_filter: Default::default(),

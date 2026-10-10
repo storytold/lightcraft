@@ -60,6 +60,7 @@ fn op_for(c: &mut Catalog, kind: u8, a: u8, b: u8) -> Op {
                     smart: None,
                     quick: false,
                     order: None,
+                    creation: None,
                 },
             }
         }

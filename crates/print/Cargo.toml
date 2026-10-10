@@ -1,0 +1,22 @@
+[package]
+name = "dac-print"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Print module back end (L3): print jobs (single image / contact sheet, picture package, custom package) on dac-layout, shaped text over dac-text, PDF and JPEG output, and IPP printing to CUPS"
+
+[lints]
+workspace = true
+
+[dependencies]
+dac-codecs = { workspace = true }
+dac-layout = { workspace = true }
+dac-pdf = { workspace = true }
+dac-raster = { workspace = true }
+dac-text = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+lopdf = { version = "0.45", default-features = false }

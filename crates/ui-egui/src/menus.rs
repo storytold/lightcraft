@@ -29,8 +29,24 @@ pub const LANGUAGE_COMMANDS: &[UiCommand] = &[
 /// Every UI command: the languages, then everything else. `xtask parity` reads both tables from
 /// this file, so an id listed in `docs/parity.md` is checked wherever it is declared.
 pub fn ui_commands() -> impl Iterator<Item = &'static UiCommand> {
-    LANGUAGE_COMMANDS.iter().chain(UI_COMMANDS).chain(crate::module::SHELL_COMMANDS).chain(crate::map::COMMANDS)
+    LANGUAGE_COMMANDS
+        .iter()
+        .chain(UI_COMMANDS)
+        .chain(crate::module::SHELL_COMMANDS)
+        .chain(crate::map::COMMANDS)
+        .chain(crate::print_ui::COMMANDS)
+        .chain(PLUGIN_COMMANDS)
 }
+
+/// P4.3: the Plug-in Manager (`crate::panels::plugins`); native only, so the web build lists none.
+#[cfg(not(target_arch = "wasm32"))]
+const PLUGIN_COMMANDS: &[UiCommand] = &[
+    ("plugins.manager", "Plug-in Manager…", None, "File"),
+    ("plugins.install", "Install Plug-in…", None, ""),
+    ("plugins.runItem", "Run Plug-in Command", None, ""),
+];
+#[cfg(target_arch = "wasm32")]
+const PLUGIN_COMMANDS: &[UiCommand] = &[];
 
 /// The language a Language-menu command selects, if the id is one. The engine and the UI both go
 /// through here, so the menu, the settings row and the control channel agree on the mapping.
@@ -169,6 +185,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.contactSheet", "Contact Sheet PDF…", None, "File"),
     ("app.contactSheet", "Export Contact Sheet PDF", None, ""),
     ("photo.editInExternal", "Edit in External Editor", Some("Cmd+Shift+E"), "Photo"),
+    ("dialog.editInPresets", "Edit In Presets…", None, "Photo>Edit In"),
+    ("panel.actions", "Actions", None, "Window"),
     ("dialog.mergeHdr", "HDR…", Some("Ctrl+H"), "Photo>Photo Merge"),
     ("dialog.mergePanorama", "Panorama…", Some("Ctrl+M"), "Photo>Photo Merge"),
     ("dialog.mergeHdrPanorama", "HDR Panorama…", None, "Photo>Photo Merge"),
@@ -313,6 +331,10 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
         return Some(r);
     }
     if let Some(r) = crate::catalog_ui::run(app, id, p) {
+        return Some(r);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(r) = crate::panels::plugins::run(app, id, p) {
         return Some(r);
     }
     #[cfg(not(target_arch = "wasm32"))]
