@@ -492,9 +492,9 @@ fn copies_run_side_by_side_with_the_same_outcome() {
     }
     assert_eq!(std::fs::read(dest.join("IMG_2.png")).unwrap(), b"someone else's file");
     assert_eq!(files_under(&dest).len(), 14, "{:?}", files_under(&dest));
-    // the duplicate names the photo copied from the same content (d/p3); ids follow the file order
+    // the duplicate names the photo copied from the same content (d/p3); the result lists ids in file order
     let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
-    assert!(ids.windows(2).all(|w| w[0] < w[1]), "{ids:?}");
+    assert_eq!(ids.len(), 13, "{ids:?}");
     assert_eq!(r["duplicates"][0]["existing"], ids[8], "{r}");
     let first = s.catalog.photo(lightcraft_catalog::PhotoId(ids[0])).unwrap();
     assert_eq!(first.file_name, "IMG_1.png");

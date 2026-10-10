@@ -683,7 +683,7 @@ fn soft_proofing_flags_out_of_gamut_colours_and_makes_proof_copies() {
     let r = h.request("ui.clickWidget", json!({"id": "button:createProofCopy"}), T);
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(h.app.session.catalog.photos().count(), n + 1);
-    let copy = (**h.app.session.catalog.photos().max_by_key(|p| p.id.0).unwrap()).clone();
+    let copy = (**h.app.session.catalog.photos().find(|p| p.copy_name.is_some()).expect("the proof copy")).clone();
     assert_eq!(copy.copy_name.as_deref(), Some("Proof Copy (sRGB)"));
     // S again turns it off; in a grid S is Expand/Collapse Stack (the copy made a stack)
     h.request("ui.key", json!({"key": "s"}), T);
