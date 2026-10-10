@@ -87,7 +87,7 @@ pub enum LockError {
 pub struct LibraryLock {
     dir: PathBuf,
     /// `None` when the file system can't lock (the library is open unlocked).
-    _file: Option<File>,
+    file: Option<File>,
     held: bool,
 }
 
@@ -96,7 +96,7 @@ impl LibraryLock {
     pub fn acquire(dir: &Path, program: &str) -> Result<LibraryLock, LockError> {
         let unlocked = |why: io::Error| {
             log::warn!("library {}: can't lock {LOCK} ({why}); opening it without protection against a second program", dir.display());
-            LibraryLock { dir: dir.to_path_buf(), _file: None, held: false }
+            LibraryLock { dir: dir.to_path_buf(), file: None, held: false }
         };
         let file = match OpenOptions::new().read(true).write(true).create(true).truncate(false).open(dir.join(LOCK)) {
             Ok(f) => f,
@@ -116,7 +116,7 @@ impl LibraryLock {
         {
             log::warn!("library {}: can't write {OWNER}: {e}", dir.display());
         }
-        Ok(LibraryLock { dir: dir.to_path_buf(), _file: Some(file), held: true })
+        Ok(LibraryLock { dir: dir.to_path_buf(), file: Some(file), held: true })
     }
 
     /// The OS lock is held (`false`: the file system can't lock; opened unprotected).
@@ -127,14 +127,28 @@ impl LibraryLock {
     pub fn dir(&self) -> &Path {
         &self.dir
     }
+
+    /// Another descriptor on the locked file, like the copy a process spawned by another thread
+    /// holds between fork and exec (tests).
+    #[cfg(test)]
+    pub(crate) fn descriptor_copy(&self) -> Option<File> {
+        self.file.as_ref().and_then(|f| f.try_clone().ok())
+    }
 }
 
 impl Drop for LibraryLock {
     /// Remove the owner note while still holding the lock (so it can't delete the next holder's),
-    /// then the file handle closes and the OS releases the lock.
+    /// then release the lock explicitly: closing the handle isn't enough on Unix, where `flock`
+    /// lasts while any copy of the descriptor is open, and a process another thread is spawning
+    /// holds a copy of every descriptor until it execs (issue #680).
     fn drop(&mut self) {
         if self.held {
             let _ = std::fs::remove_file(self.dir.join(OWNER));
+            if let Some(f) = &self.file
+                && let Err(e) = f.unlock()
+            {
+                log::warn!("library {}: can't release {LOCK}: {e}", self.dir.display());
+            }
         }
     }
 }

@@ -35,6 +35,22 @@ fn second_opener_is_refused_until_the_first_lets_go() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A process spawned by any thread holds a copy of every descriptor until it execs (close-on-exec
+/// only closes them then), and `flock` lasts while any copy is open: dropping the LibraryLock must
+/// still free the library (issue #680).
+#[cfg(unix)]
+#[test]
+fn the_library_is_free_once_dropped_even_if_a_child_holds_a_copy() {
+    let dir = temp_dir("copy");
+    let first = LibraryLock::acquire(&dir, "LightCraft").unwrap();
+    let copy = first.descriptor_copy().unwrap(); // what a child between fork and exec holds
+    drop(first);
+    let again = LibraryLock::acquire(&dir, "lightcraft-cli").expect("the library is free once its LibraryLock is dropped");
+    assert!(again.held());
+    drop((again, copy));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Files left behind by a crash (lock file + owner note) don't lock anyone out.
 #[test]
 fn leftover_lock_files_are_not_a_lock() {
