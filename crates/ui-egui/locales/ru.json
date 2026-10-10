@@ -1459,5 +1459,16 @@
   "First Photo": "Первое фото",
   "Last Photo": "Последнее фото",
   "Cycle Spot Mode": "Сменить режим пятна",
-  "Auto White Balance": "Автоматический баланс белого"
+  "Auto White Balance": "Автоматический баланс белого",
+  "View Options…": "Параметры вида…",
+  "Library View Options": "Параметры вида библиотеки",
+  "Grid View Style": "Стиль сетки",
+  "Compact Cells": "Компактные ячейки",
+  "Expanded Cells": "Расширенные ячейки",
+  "Show Index Numbers": "Показывать номера",
+  "Show Thumbnail Badges": "Показывать значки на миниатюрах",
+  "Show File Names": "Показывать имена файлов",
+  "Cropped": "Кадрировано",
+  "Rotated or flipped": "Повёрнуто или отражено",
+  "Keywords, collections, crop, rotation, metadata status, remote link": "Ключевые слова, коллекции, кадрирование, поворот, состояние метаданных, удалённая связь"
 }

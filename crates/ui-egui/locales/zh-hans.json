@@ -1785,5 +1785,16 @@
   "First Photo": "第一张照片",
   "Last Photo": "最后一张照片",
   "Cycle Spot Mode": "切换污点模式",
-  "Auto White Balance": "自动白平衡"
+  "Auto White Balance": "自动白平衡",
+  "View Options…": "视图选项…",
+  "Library View Options": "图库视图选项",
+  "Grid View Style": "网格视图样式",
+  "Compact Cells": "紧凑单元格",
+  "Expanded Cells": "扩展单元格",
+  "Show Index Numbers": "显示索引编号",
+  "Show Thumbnail Badges": "显示缩览图标记",
+  "Show File Names": "显示文件名",
+  "Cropped": "已裁剪",
+  "Rotated or flipped": "已旋转或翻转",
+  "Keywords, collections, crop, rotation, metadata status, remote link": "关键字、收藏夹、裁剪、旋转、元数据状态、远程链接"
 }

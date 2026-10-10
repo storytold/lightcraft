@@ -1785,5 +1785,16 @@
   "First Photo": "最初の写真",
   "Last Photo": "最後の写真",
   "Cycle Spot Mode": "スポットモードを切り替え",
-  "Auto White Balance": "自動ホワイトバランス"
+  "Auto White Balance": "自動ホワイトバランス",
+  "View Options…": "表示オプション…",
+  "Library View Options": "ライブラリの表示オプション",
+  "Grid View Style": "グリッド表示スタイル",
+  "Compact Cells": "コンパクトセル",
+  "Expanded Cells": "拡張セル",
+  "Show Index Numbers": "インデックス番号を表示",
+  "Show Thumbnail Badges": "サムネールバッジを表示",
+  "Show File Names": "ファイル名を表示",
+  "Cropped": "切り抜き済み",
+  "Rotated or flipped": "回転または反転済み",
+  "Keywords, collections, crop, rotation, metadata status, remote link": "キーワード、コレクション、切り抜き、回転、メタデータの状態、リモートリンク"
 }

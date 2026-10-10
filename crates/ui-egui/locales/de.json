@@ -1940,5 +1940,16 @@
   "First Photo": "Erstes Foto",
   "Last Photo": "Letztes Foto",
   "Cycle Spot Mode": "Bereichsmodus wechseln",
-  "Auto White Balance": "Automatischer Weißabgleich"
+  "Auto White Balance": "Automatischer Weißabgleich",
+  "View Options…": "Ansichtsoptionen …",
+  "Library View Options": "Bibliothek-Ansichtsoptionen",
+  "Grid View Style": "Rasteransichtsstil",
+  "Compact Cells": "Kompakte Zellen",
+  "Expanded Cells": "Erweiterte Zellen",
+  "Show Index Numbers": "Indexnummern anzeigen",
+  "Show Thumbnail Badges": "Miniatur-Symbole anzeigen",
+  "Show File Names": "Dateinamen anzeigen",
+  "Cropped": "Freigestellt",
+  "Rotated or flipped": "Gedreht oder gespiegelt",
+  "Keywords, collections, crop, rotation, metadata status, remote link": "Stichwörter, Sammlungen, Freistellung, Drehung, Metadatenstatus, Remote-Verknüpfung"
 }

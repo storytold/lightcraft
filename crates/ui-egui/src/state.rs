@@ -737,6 +737,8 @@ pub enum Dialog {
     },
     About,
     Shortcuts,
+    /// Library ▸ View Options (⌘J): grid cell style, index numbers, badges.
+    ViewOptions,
 }
 
 impl Default for UiState {

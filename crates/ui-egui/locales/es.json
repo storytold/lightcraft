@@ -1785,5 +1785,16 @@
   "First Photo": "Primera foto",
   "Last Photo": "Última foto",
   "Cycle Spot Mode": "Cambiar modo de punto",
-  "Auto White Balance": "Balance de blancos automático"
+  "Auto White Balance": "Balance de blancos automático",
+  "View Options…": "Opciones de vista…",
+  "Library View Options": "Opciones de vista de Biblioteca",
+  "Grid View Style": "Estilo de cuadrícula",
+  "Compact Cells": "Celdas compactas",
+  "Expanded Cells": "Celdas ampliadas",
+  "Show Index Numbers": "Mostrar números de índice",
+  "Show Thumbnail Badges": "Mostrar distintivos de miniatura",
+  "Show File Names": "Mostrar nombres de archivo",
+  "Cropped": "Recortada",
+  "Rotated or flipped": "Girada o volteada",
+  "Keywords, collections, crop, rotation, metadata status, remote link": "Palabras clave, colecciones, recorte, rotación, estado de metadatos, enlace remoto"
 }

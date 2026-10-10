@@ -108,6 +108,7 @@ pub fn show(app: &mut DacApp, ctx: &egui::Context) {
         Dialog::SamModel { .. } => "Download the SAM 3 Model?",
         Dialog::About => "About {app}",
         Dialog::Shortcuts => "Keyboard Shortcuts",
+        Dialog::ViewOptions => "Library View Options",
     }
     .to_string();
     let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::symmetric(16, 12));
@@ -790,12 +791,13 @@ pub fn show(app: &mut DacApp, ctx: &egui::Context) {
                     }
                 }
                 Dialog::Shortcuts => crate::panels::keymap::body(app, ui, &t),
+                Dialog::ViewOptions => crate::panels::cells::view_options(app, ui),
             }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 // a model file the app cannot use has nothing to confirm
                 let unusable_model = matches!(&dlg, Dialog::DenoiseModel { info, .. } | Dialog::FaceModel { info, .. } if info["kind"] == "unsupported");
-                let informational = unusable_model || matches!(dlg, Dialog::About | Dialog::Shortcuts | Dialog::Settings { .. });
+                let informational = unusable_model || matches!(dlg, Dialog::About | Dialog::Shortcuts | Dialog::ViewOptions | Dialog::Settings { .. });
                 let sam = &app.session.segmenter;
                 let (sam_installed, sam_running, sam_failed) = (sam.installed(), sam.download_status().running, sam.download_status().error.is_some());
                 // no download location in this build: nothing to offer but the manual install
@@ -1112,7 +1114,7 @@ pub fn confirm_dialog(app: &mut DacApp, dlg: &Dialog) -> Result<serde_json::Valu
         Dialog::Import { opts } => crate::import::start(app, opts),
         Dialog::ConfirmDelete { .. } => app.run("photo.delete", json!({})),
         Dialog::RemoveFolder { path, disk, .. } => app.run("library.removeFolder", json!({"path": path, "disk": disk})),
-        Dialog::About | Dialog::Shortcuts | Dialog::Settings { .. } => Ok(serde_json::Value::Null),
+        Dialog::About | Dialog::Shortcuts | Dialog::ViewOptions | Dialog::Settings { .. } => Ok(serde_json::Value::Null),
     }
 }
 

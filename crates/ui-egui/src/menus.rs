@@ -138,6 +138,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("tool.keywordPainter", "Keyword Painter", None, ""),
     ("tool.painter", "Painter", Some("Cmd+Alt+K"), "Photo"),
     ("view.gridCellStyle", "Grid Cell Style", None, ""),
+    ("dialog.viewOptions", "View Options…", Some("Cmd+J"), "View"),
+    ("view.cellCompact", "Compact Cells", None, "View>Grid View Style"),
+    ("view.cellExpanded", "Expanded Cells", None, "View>Grid View Style"),
+    ("view.cellIndex", "Show Index Numbers", None, "View>Grid View Style"),
+    ("view.cellBadges", "Show Thumbnail Badges", None, "View>Grid View Style"),
     // Library's `=` / `-`, Home / End (module keys, see `crate::module::LIBRARY_KEYS`)
     ("view.thumbLarger", "Increase Thumbnail Size", None, "View"),
     ("view.thumbSmaller", "Decrease Thumbnail Size", None, "View"),
@@ -755,6 +760,26 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
                 None => app.ui.hidden_locations.clear(),
             }
             Ok(json!({"hidden": app.ui.hidden_locations}))
+        }
+        "dialog.viewOptions" => {
+            app.ui.dialog = Some(Dialog::ViewOptions);
+            Ok(Value::Null)
+        }
+        "view.cellCompact" | "view.cellExpanded" => {
+            let style = if id == "view.cellCompact" { "compact" } else { "expanded" };
+            let r = app.run("view.gridCellStyle", json!({"style": style}));
+            if r.is_ok() && !matches!(app.ui.view, ViewMode::PhotoGrid | ViewMode::SquareGrid) {
+                app.ui.view = ViewMode::SquareGrid;
+            }
+            r
+        }
+        "view.cellIndex" => {
+            let on = !app.ui.lib.cell_index;
+            app.run("view.gridCellStyle", json!({"index": on}))
+        }
+        "view.cellBadges" => {
+            let on = !app.ui.lib.cell_badges;
+            app.run("view.gridCellStyle", json!({"badges": on}))
         }
         "view.thumbLarger" | "view.thumbSmaller" => {
             let k = if id == "view.thumbLarger" { 1.15 } else { 1.0 / 1.15 };
