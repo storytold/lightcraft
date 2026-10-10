@@ -141,7 +141,7 @@ pub fn parse(md: &str) -> Doc {
 /// commands live in their own table, which the Language menu builds from the i18n language list.
 pub fn ui_command_ids(menus_rs: &str) -> Vec<String> {
     let mut ids = Vec::new();
-    for table in ["pub const UI_COMMANDS", "pub const LANGUAGE_COMMANDS", "pub const SHELL_COMMANDS"] {
+    for table in ["pub const UI_COMMANDS", "pub const LANGUAGE_COMMANDS", "pub const SHELL_COMMANDS", "pub const COMMANDS"] {
         let Some(start) = menus_rs.find(table) else { continue };
         let body = &menus_rs[start..];
         let body = &body[..body.find("];").unwrap_or(body.len())];
@@ -287,6 +287,9 @@ pub fn run(root: &Path, write: bool) -> Result<(), String> {
     // the module shell's commands (crates/ui-egui/src/module.rs)
     let shell = std::fs::read_to_string(root.join("crates/ui-egui/src/module.rs")).map_err(|e| format!("module.rs: {e}"))?;
     commands.extend(ui_command_ids(&shell));
+    // the Map module's commands (crates/ui-egui/src/map/mod.rs)
+    let map = std::fs::read_to_string(root.join("crates/ui-egui/src/map/mod.rs")).map_err(|e| format!("map/mod.rs: {e}"))?;
+    commands.extend(ui_command_ids(&map));
     let controls = registry("controls")?;
     let problems = check(&doc, &commands, &controls, |p| {
         let full = root.join(p);

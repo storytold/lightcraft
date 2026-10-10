@@ -31,6 +31,7 @@ pub mod keywords;
 pub mod library;
 pub mod lut_profiles;
 pub mod manage;
+pub mod map;
 mod masks;
 mod merge;
 pub mod metadata;
@@ -39,9 +40,13 @@ mod organize;
 mod prefs;
 mod preset_files;
 pub mod previews;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod publish;
 mod query;
 mod quick;
 mod sync;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod tether;
 mod xmp;
 
 use serde::Serialize;
@@ -144,6 +149,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(organize::specs());
         v.extend(keywords::specs());
         v.extend(manage::specs());
+        v.extend(map::specs());
         v.extend(previews::specs());
         v.extend(lut_profiles::specs());
         v.extend(cull::specs());
@@ -171,6 +177,10 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(face_recognize::specs());
         #[cfg(not(target_arch = "wasm32"))]
         v.extend(immich::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(publish::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(tether::specs());
         #[cfg(not(target_arch = "wasm32"))]
         v.extend(credentials::specs());
         v.extend(activity::specs());

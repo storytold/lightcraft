@@ -37,9 +37,15 @@ dac-fetch = { path = "crates/fetch" }
 dac-net = { path = "crates/net" }
 dac-credentials = { path = "crates/credentials" }
 dac-hash = { path = "crates/hash" }
+dac-layout = { path = "crates/layout" }
 dac-immich = { path = "crates/immich" }
+dac-geo = { path = "crates/geo" }
+dac-publish = { path = "crates/publish" }
+dac-tether = { path = "crates/tether" }
 dac-heif = { path = "crates/heif" }
 dac-segment = { path = "crates/segment" }
+dac-text = { path = "crates/text" }
+dac-pdf = { path = "crates/pdf" }
 
 # foundation
 thiserror = "2"

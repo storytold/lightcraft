@@ -1,0 +1,19 @@
+[package]
+name = "dac-pdf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "PDF 1.7 writer (L1): multi-page, subset-embedded OpenType/TrueType fonts, JPEG and Flate images, ICC colour and OutputIntent, page boxes, vector paths, metadata"
+
+[lints]
+workspace = true
+
+[dependencies]
+dac-text = { workspace = true }
+pdf-writer = "0.15"
+subsetter = { version = "0.2", default-features = false }
+skrifa = "0.44"
+miniz_oxide = { workspace = true }
+
+[dev-dependencies]
+lopdf = { version = "0.45", default-features = false }

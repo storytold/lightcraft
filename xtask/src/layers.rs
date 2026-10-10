@@ -52,12 +52,18 @@ pub const TABLE: &[(&str, Class)] = &[
     ("develop", Class::Layer(1)),
     ("faces", Class::Layer(1)),
     ("scenes", Class::Layer(1)),
+    ("text", Class::Layer(1)),
+    ("pdf", Class::Layer(1)),
     ("pipeline", Class::Layer(2)),
+    ("geo", Class::Layer(2)),
     ("gpu", Class::Layer(3)),
     ("catalog", Class::Layer(3)),
     ("immich", Class::Layer(3)),
+    ("publish", Class::Layer(3)),
+    ("tether", Class::Layer(3)),
     ("preview", Class::Layer(3)),
     ("export", Class::Layer(3)),
+    ("layout", Class::Layer(3)),
     ("merge", Class::Layer(3)),
     ("segment", Class::Layer(3)),
     ("engine", Class::Layer(4)),
@@ -93,8 +99,11 @@ pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     &["meta", "develop"],
     &["develop", "scenes"],
     &["codecs", "raw"],
+    // the PDF writer embeds fonts laid out by the type engine
+    &["text", "pdf"],
     // L3: the Immich client writes remote links into the catalog
     &["catalog", "immich"],
+    &["catalog", "publish"],
 ];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {

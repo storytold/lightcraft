@@ -29,7 +29,7 @@ pub const LANGUAGE_COMMANDS: &[UiCommand] = &[
 /// Every UI command: the languages, then everything else. `xtask parity` reads both tables from
 /// this file, so an id listed in `docs/parity.md` is checked wherever it is declared.
 pub fn ui_commands() -> impl Iterator<Item = &'static UiCommand> {
-    LANGUAGE_COMMANDS.iter().chain(UI_COMMANDS).chain(crate::module::SHELL_COMMANDS)
+    LANGUAGE_COMMANDS.iter().chain(UI_COMMANDS).chain(crate::module::SHELL_COMMANDS).chain(crate::map::COMMANDS)
 }
 
 /// The language a Language-menu command selects, if the id is one. The engine and the UI both go
@@ -320,6 +320,10 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
         return Some(r);
     }
     if let Some(r) = crate::libtools::run(app, id, p) {
+        return Some(r);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(r) = crate::panels::tether_bar::run(app, id, p) {
         return Some(r);
     }
     // the app's own context: a toast's time comes from its clock (a fresh context's clock is at 0,

@@ -10,8 +10,8 @@
 //! Library and Develop re-home the existing views: Library shows the grids, the loupe, Compare,
 //! Survey and People; Develop is the loupe with an editing panel (Edit, Crop, Remove, Masking, Red
 //! Eye) or the Reference view. Opening an editing panel from Library therefore *is* entering
-//! Develop, and going back to a grid is entering Library ([`sync`]). Map, Book, Slideshow, Print and
-//! Web are placeholders until Phase 3, so the module picker is complete.
+//! Develop, and going back to a grid is entering Library ([`sync`]). Map is [`crate::map`]; Book,
+//! Slideshow, Print and Web are placeholders until Phase 3, so the module picker is complete.
 
 use egui::{Align2, Color32, Rect, Sense, pos2, vec2};
 use serde::{Deserialize, Serialize};
@@ -68,7 +68,8 @@ impl ModuleId {
         ModuleId::ALL.into_iter().find(|m| m.key().eq_ignore_ascii_case(s) || m.label().eq_ignore_ascii_case(s))
     }
 
-    /// Map … Web: shown in the picker, filled in Phase 3.
+    /// Map … Web: modules with views of their own (Map since P3.3; the others are placeholders
+    /// filled in Phase 3). Like a placeholder, they stay until a view or panel changes under them.
     pub fn is_placeholder(self) -> bool {
         !matches!(self, ModuleId::Library | ModuleId::Develop)
     }
@@ -176,6 +177,8 @@ pub enum PanelId {
     Folders,
     /// Library left: collections, collection sets and smart collections.
     Collections,
+    /// Library left: publish services and their published collections.
+    Publish,
     /// Library right: relative develop adjustments for the selection.
     QuickDevelop,
     /// Library right: the selected photos' keywords, suggestions and keyword sets.
@@ -213,6 +216,7 @@ impl PanelId {
             | PanelId::Catalog
             | PanelId::Folders
             | PanelId::Collections
+            | PanelId::Publish
             | PanelId::QuickDevelop
             | PanelId::Keywording
             | PanelId::KeywordList
@@ -397,7 +401,7 @@ struct Develop;
 struct Placeholder(ModuleId);
 
 /// Library's Classic columns.
-pub const LIBRARY_LEFT: &[PanelId] = &[PanelId::Navigator, PanelId::Catalog, PanelId::Folders, PanelId::Collections];
+pub const LIBRARY_LEFT: &[PanelId] = &[PanelId::Navigator, PanelId::Catalog, PanelId::Folders, PanelId::Collections, PanelId::Publish];
 pub const LIBRARY_RIGHT: &[PanelId] = &[PanelId::QuickDevelop, PanelId::Keywording, PanelId::KeywordList, PanelId::Metadata];
 const DEVELOP_RIGHT: &[PanelId] = &[
     PanelId::Edit,
@@ -508,7 +512,6 @@ impl Module for Placeholder {
 
 static LIBRARY: Library = Library;
 static DEVELOP: Develop = Develop;
-static MAP: Placeholder = Placeholder(ModuleId::Map);
 static BOOK: Placeholder = Placeholder(ModuleId::Book);
 static SLIDESHOW: Placeholder = Placeholder(ModuleId::Slideshow);
 static PRINT: Placeholder = Placeholder(ModuleId::Print);
@@ -518,7 +521,7 @@ pub fn get(id: ModuleId) -> &'static dyn Module {
     match id {
         ModuleId::Library => &LIBRARY,
         ModuleId::Develop => &DEVELOP,
-        ModuleId::Map => &MAP,
+        ModuleId::Map => &crate::map::MAP,
         ModuleId::Book => &BOOK,
         ModuleId::Slideshow => &SLIDESHOW,
         ModuleId::Print => &PRINT,
@@ -754,6 +757,9 @@ pub fn enabled(app: &DacApp, id: &str) -> Option<bool> {
 
 /// Run a shell command; `None`: not one.
 pub fn run(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    if let Some(r) = crate::map::run(app, id, p) {
+        return Some(r);
+    }
     if !SHELL_COMMANDS.iter().any(|c| c.0 == id) {
         return None;
     }

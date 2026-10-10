@@ -18,6 +18,7 @@ dac-scenes = { workspace = true }
 dac-pipeline = { workspace = true }
 dac-gpu = { workspace = true }
 dac-catalog = { workspace = true }
+dac-geo = { workspace = true }
 dac-hash = { workspace = true }
 web-time = { workspace = true }
 dac-preview = { workspace = true }
@@ -44,6 +45,8 @@ dac-segment = { workspace = true, optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dac-fetch = { workspace = true }
 dac-immich = { workspace = true }
+dac-publish = { workspace = true }
+dac-tether = { workspace = true }
 dac-credentials = { workspace = true }
 
 # free disk space of a volume (Folders panel)
