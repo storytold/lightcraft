@@ -7,7 +7,8 @@
 //! - [`RawImage::normalized`] subtracts black, scales white to 1.0 and crops to the active area (applying DNG
 //!   `OpcodeList1`/`OpcodeList2`); [`demosaic`] turns CFA data into camera-RGB [`Rgb32f`];
 //!   [`RawImage::develop`] does all of it plus `OpcodeList3` and the default crop; [`RawImage::develop_binned`]
-//!   produces the same at 1/k of the size straight from the mosaic (previews, thumbnails).
+//!   produces the same at 1/k of the size straight from the mosaic (previews, thumbnails;
+//!   [`RawImage::develop_binned_masked`] with the mask of blocks holding clipped samples, for [`highlight`]).
 //! - [`color`] implements the DNG colour model (dual-illuminant interpolation, forward matrices, white balance)
 //!   and produces camera → linear Rec.2020 D65 matrices; [`profile`] reads and applies a DNG's own profile
 //!   look tables and tone curve, and [`gaintable`] its gain table map (Apple ProRAW's local tone mapping).
@@ -16,11 +17,11 @@
 //! `jxl` feature, on by default), tiled/stripped, CFA and LinearRaw),
 //! Canon CR2 / CR3 (lossless CRX Bayer and version 0x100/0x200 C-RAW), Nikon NEF/NRW (uncompressed, Huffman lossless / lossy compressed), Sony ARW (uncompressed, ARW2, lossless), Fujifilm RAF (uncompressed Bayer
 //! and X-Trans, lossless and lossy compressed), Panasonic RW2 / Leica RWL / Panasonic RAW (every raw format: compressed 4 and 6, the prefix-coded strips of 8,
-//! packed 2/5/7, the 16-bit words of the oldest bodies), Pentax PEF (uncompressed, Huffman), Olympus ORF (uncompressed).
-//! [`embedded_preview`] covers these containers' JPEG previews. Variants we can't decode yet (Nikon "lossy after split" NEF,
-//! compressed ORF, CR3 unverified marker families / C-RAW configurations) return [`RawError::Unsupported`]; each vendor module documents its sources
+//! packed 2/5/7, the 16-bit words of the oldest bodies), Pentax PEF (uncompressed, Huffman), Olympus ORF (uncompressed: 16-bit words, 12-bit XZ-2 words, 12-bit 16-byte blocks of the E-300/E-330/E-500).
+//! [`embedded_preview`] covers these containers' JPEG previews. Variants we can't decode yet (compressed ORF, CR3 unverified marker families / C-RAW configurations) return [`RawError::Unsupported`]; each vendor module documents its sources
 //! (public specifications, tag-name documentation, black-box analysis of CC0 samples) and gaps. Non-DNG files carry no
-//! colour matrix: [`color`] falls back to a documented neutral model. The decoders never panic on malformed input.
+//! colour matrix: [`spectral`] has matrices fitted to measured spectral sensitivities for 52 models, and
+//! otherwise [`color`] falls back to a documented neutral model. The decoders never panic on malformed input.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -37,7 +38,9 @@ pub mod ljpeg;
 pub mod opcodes;
 mod preview;
 pub mod profile;
+mod saturation;
 pub mod semantic;
+pub mod spectral;
 mod tiffraw;
 mod unpack;
 mod vendor;
@@ -49,7 +52,7 @@ pub use lightcraft_geom::Orientation;
 pub use lightcraft_meta::Metadata;
 pub use lightcraft_raster::Rgb32f;
 pub use opcodes::{Opcode, OpcodeLists};
-pub use preview::{PreviewColorSpace, embedded_preview, embedded_preview_color_space};
+pub use preview::{PreviewColorSpace, embedded_preview, embedded_preview_color_space, embedded_preview_dynamic_range_optimized};
 pub use semantic::{SemanticMask, semantic_masks};
 
 use lightcraft_color::Xy;
@@ -159,23 +162,28 @@ pub fn probe(bytes: &[u8]) -> Option<RawFormat> {
     }
     let make = t.find(lightcraft_tiff::tags::MAKE).and_then(|e| e.value.as_str()).unwrap_or_default().to_ascii_uppercase();
     let has_cfa = has_raw_ifd(&t);
+    // Pentax's reader takes the layout from the Exif `CFAPattern` when no IFD has a CFA photometric (uncompressed
+    // and PackBits PEFs), so for the Pentax family that tag counts as raw evidence too
+    let pentax_raw = has_cfa || t.exif().is_some_and(|e| e.contains(vendor::EXIF_CFA_PATTERN));
+    // Samsung's raw IFD uses private compressions 32769..=32773 (`vendor::srw`), 32773 being PackBits elsewhere
+    let samsung_raw = has_cfa || t.all_ifds().iter().any(|i| i.u16(lightcraft_tiff::tags::COMPRESSION).is_some_and(|c| (32769..=32773).contains(&c)));
     if make.starts_with("CANON") && t.ifds.len() >= 4 && t.ifds[3].u16(lightcraft_tiff::tags::COMPRESSION) == Some(6) {
         return Some(RawFormat::Cr2);
     }
-    if make.starts_with("NIKON") {
-        return Some(if has_cfa || t.all_ifds().len() > 1 { RawFormat::Nef } else { RawFormat::Nrw });
+    if make.starts_with("NIKON") && has_cfa {
+        return Some(if t.all_ifds().len() > 1 { RawFormat::Nef } else { RawFormat::Nrw });
     }
-    if make.starts_with("SONY") {
+    if make.starts_with("SONY") && has_cfa {
         return Some(RawFormat::Arw);
     }
-    if make.starts_with("PENTAX") || make.starts_with("RICOH") {
+    if (make.starts_with("PENTAX") || make.starts_with("RICOH")) && pentax_raw {
         return Some(RawFormat::Pef);
     }
     // a Samsung-branded body built on a Pentax design writes a Pentax-style maker note (the note's own magic)
-    if make.starts_with("SAMSUNG") && has_pentax_maker_note(&t, bytes) {
+    if make.starts_with("SAMSUNG") && pentax_raw && has_pentax_maker_note(&t, bytes) {
         return Some(RawFormat::Pef);
     }
-    if make.starts_with("SAMSUNG") {
+    if make.starts_with("SAMSUNG") && samsung_raw {
         return Some(RawFormat::Srw);
     }
     if dng::is_plain_cfa_tiff(&t, bytes) {
@@ -194,11 +202,15 @@ fn has_pentax_maker_note(t: &Tiff, bytes: &[u8]) -> bool {
 }
 
 /// Whether some IFD is marked as raw: CFA photometric, or a raw-only compression value (99 is not a
-/// registered TIFF compression; Leaf MOS files use it for their tiled 16-bit lossless-JPEG raw).
+/// registered TIFF compression; Leaf MOS files use it for their tiled 16-bit lossless-JPEG raw),
+/// or vendor-specific raw tags (Sony tone curve, CFA pattern, or Pentax compression 65535).
 fn has_raw_ifd(t: &Tiff) -> bool {
     t.all_ifds().iter().any(|i| {
         i.u16(lightcraft_tiff::tags::PHOTOMETRIC) == Some(lightcraft_tiff::tags::photometric::CFA)
-            || i.u16(lightcraft_tiff::tags::COMPRESSION).is_some_and(|c| c == 34713 || c == 32767 || c == 32769 || c == 32770 || c == 99)
+            || i.u16(lightcraft_tiff::tags::COMPRESSION).is_some_and(|c| matches!(c, 34713 | 32767 | 32769 | 32770 | 99 | 65535))
+            || i.contains(0x7010)
+            || i.contains(lightcraft_tiff::tags::CFA_PATTERN_EP)
+            || i.contains(lightcraft_tiff::tags::CFA_REPEAT_PATTERN_DIM)
     })
 }
 
@@ -324,7 +336,7 @@ pub(crate) enum Mode {
 
 fn decode_with(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     match probe(bytes).ok_or(RawError::NotRaw)? {
-        RawFormat::Dng => dng::decode(bytes, mode),
+        RawFormat::Dng => dng::decode(bytes, mode).map(lift_clipped),
         RawFormat::Cr2 => vendor::cr2::decode(bytes, mode),
         RawFormat::Cr3 => vendor::cr3::decode(bytes, mode),
         RawFormat::Nef | RawFormat::Nrw => vendor::nef::decode(bytes),
@@ -333,11 +345,18 @@ fn decode_with(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         RawFormat::Rw2 => vendor::rw2::decode(bytes, mode),
         RawFormat::Pef => vendor::pef::decode(bytes, mode),
         RawFormat::Orf => vendor::orf::decode(bytes, mode),
-        RawFormat::CfaTiff => dng::decode_as(bytes, mode, RawFormat::CfaTiff),
+        RawFormat::CfaTiff => dng::decode_as(bytes, mode, RawFormat::CfaTiff).map(lift_clipped),
         RawFormat::Srw => vendor::srw::decode(bytes, mode),
         RawFormat::OtherTiff => Err(RawError::Unsupported(other_tiff_reason(bytes))),
         other => Err(RawError::Unsupported(format!("{other:?} files are not decoded yet"))),
     }
+}
+
+/// DNG writers state a white level the sensor may never reach; samples stuck at the real saturation point are
+/// raised to the white level so they count as clipped (see [`RawImage::lift_clipped_samples`]).
+fn lift_clipped(mut r: RawImage) -> RawImage {
+    r.lift_clipped_samples();
+    r
 }
 
 /// A raw file's description without its samples (see [`probe_info`]).
@@ -903,6 +922,25 @@ mod tests {
         assert_eq!(probe(&padded(&[rgb_ifd(16, 12), rgb_ifd(400, 300)])), None);
         // no dimensions at all
         assert_eq!(probe(&padded(&[IfdBuilder::new().with(t::MAKE, Value::Ascii("X".into()))])), None);
+        // raw evidence without a CFA photometric: Pentax's Exif `CFAPattern` (uncompressed / PackBits PEFs) and
+        // Samsung's private compressions (here 32773, PackBits elsewhere: NX1, NX500)
+        let mut pef = rgb_ifd(400, 300);
+        pef.set(t::MAKE, Value::Ascii("PENTAX Corporation".into()));
+        let mut exif = exif_size(400, 300);
+        exif.set(vendor::EXIF_CFA_PATTERN, Value::Undefined(vec![0, 2, 0, 2, 0, 1, 1, 2]));
+        pef.set_child(t::EXIF_IFD, exif);
+        assert_eq!(probe(&padded(&[pef])), Some(RawFormat::Pef));
+        let mut srw = rgb_ifd(400, 300);
+        srw.set(t::MAKE, Value::Ascii("SAMSUNG".into()));
+        srw.set(t::COMPRESSION, Value::Short(vec![32773]));
+        assert_eq!(probe(&padded(&[srw])), Some(RawFormat::Srw));
+        // camera-authored or exported TIFFs preserving camera Make tags remain ordinary images
+        for make in ["SONY", "NIKON CORPORATION", "PENTAX", "RICOH", "SAMSUNG"] {
+            let mut cam = rgb_ifd(400, 300);
+            cam.set(t::MAKE, Value::Ascii(make.into()));
+            cam.set_child(t::EXIF_IFD, exif_size(400, 300));
+            assert_eq!(probe(&padded(&[cam])), None, "{make} TIFF should not be probed as raw");
+        }
     }
 
     // --- containers that are recognised but not decoded, with a preview ---
@@ -940,6 +978,32 @@ mod tests {
         // no pointer and no sub-IFDs: just a broken TIFF
         let g = write(&[IfdBuilder::new().with(t::MAKE, Value::Ascii("KODAK".into()))]);
         assert_eq!(probe(&g), None);
+    }
+
+    /// A GoPro GPR (a DNG with VC-5 coded raw data, Compression 9) is refused by the full decode with
+    /// a reason that names the format, whatever its tile bytes hold; the header probe still
+    /// describes it (so it imports).
+    #[test]
+    fn gopro_vc5_dng_is_unsupported_with_a_clear_reason() {
+        let mut ifd = IfdBuilder::new();
+        ifd.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
+        ifd.set(t::IMAGE_WIDTH, Value::Long(vec![32]));
+        ifd.set(t::IMAGE_LENGTH, Value::Long(vec![16]));
+        ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+        ifd.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![1]));
+        ifd.set(t::PHOTOMETRIC, Value::Short(vec![32803]));
+        ifd.set(t::COMPRESSION, Value::Short(vec![9]));
+        ifd.set(t::DNG_VERSION, Value::Byte(vec![1, 4, 0, 0]));
+        ifd.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
+        ifd.set(t::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 1, 2]));
+        ifd.set_image(ImageData::Tiles { tile_width: 32, tile_height: 16, tiles: vec![vec![0x5au8; 400]] });
+        let bytes = write(&[ifd]);
+        assert_eq!(probe(&bytes), Some(RawFormat::Dng));
+        let want = "DNG compression 9 (GoPro VC-5) is not decoded yet";
+        let Err(RawError::Unsupported(why)) = decode(&bytes) else { panic!("expected Unsupported from decode") };
+        assert_eq!(why, want);
+        let info = probe_info(&bytes).expect("header probe describes the file");
+        assert_eq!((info.width, info.height), (32, 16));
     }
 
     /// Compression 99 (not a registered TIFF value; Leaf MOS tiles) marks a raw even without a CFA tag.
@@ -1044,22 +1108,36 @@ mod tests {
         assert_eq!(r.cfa.unwrap().name(), "RGGB");
     }
 
-    /// A lossless-JPEG scan whose predictor selection value is outside 0 to 7 (the 3FR/FFF files use 8) is
-    /// not a coding the lossless decoder knows: the file stays an undecodable raw, with that as the reason,
-    /// and keeps the stand-in preview an unsupported container gets.
+    /// Hasselblad's own lossless-JPEG coding (selection value 8, as in FFF and most compressed 3FR files) of the
+    /// same layout decodes: the file is read like the uncompressed one.
+    #[test]
+    fn selection_value_8_cfa_tiff_decodes() {
+        let strip = ljpeg::tests::encode_hasselblad(&cfa_samples(), 8, 6);
+        let bytes = plain_cfa_tiff(7, strip, None);
+        assert_eq!(probe(&bytes), Some(RawFormat::CfaTiff));
+        let r = decode(&bytes).unwrap();
+        assert_eq!((r.format, r.width, r.height), (RawFormat::CfaTiff, 8, 6));
+        assert_eq!(r.data, RawData::U16(cfa_samples()));
+        assert_eq!(r.cfa.unwrap().name(), "RGGB");
+        assert_eq!(probe_info(&bytes).unwrap().format, RawFormat::CfaTiff);
+    }
+
+    /// A lossless-JPEG scan whose predictor selection value is neither 0 to 7 (T.81) nor 8 (Hasselblad) is not a
+    /// coding the lossless decoder knows: the file stays an undecodable raw, with that as the reason, and keeps the
+    /// stand-in preview an unsupported container gets.
     #[test]
     fn cfa_tiff_with_an_unknown_predictor_stays_undecodable() {
         let mut strip = ljpeg::encode(&cfa_samples(), 8, 6, 1, 16, 1, 0);
         let sos = strip.windows(2).position(|w| w == [0xff, 0xda]).unwrap();
         let ss = sos + 2 + 2 + 1 + 2;
         assert_eq!(strip[ss], 1, "selection value byte");
-        strip[ss] = 8;
-        assert!(matches!(ljpeg::decode(&strip, 1 << 20), Err(RawError::Unsupported(w)) if w.contains("selection value 8")));
+        strip[ss] = 9;
+        assert!(matches!(ljpeg::decode(&strip, 1 << 20), Err(RawError::Unsupported(w)) if w.contains("selection value 9")));
         let bytes = plain_cfa_tiff(7, strip, None);
         assert_eq!(probe(&bytes), Some(RawFormat::OtherTiff));
         assert!(!RawFormat::OtherTiff.is_supported());
         let Err(RawError::Unsupported(why)) = decode(&bytes) else { panic!("expected Unsupported") };
-        assert!(why.contains("lossless JPEG") && why.contains("selection value 8"), "{why}");
+        assert!(why.contains("lossless JPEG") && why.contains("selection value 9"), "{why}");
     }
 
     /// Other codings of a CFA IFD (here Deflate) are not claimed by the plain reader.
@@ -1073,17 +1151,23 @@ mod tests {
     /// Samsung file stays with the Samsung format.
     #[test]
     fn samsung_make_with_a_pentax_maker_note_is_pef() {
-        let with_note = |note: &[u8]| {
+        let with_note = |note: &[u8], cfa: bool| {
             let mut ifd = rgb_ifd(16, 12);
+            if cfa {
+                ifd.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::CFA]));
+            }
             ifd.set(t::MAKE, Value::Ascii("SAMSUNG TECHWIN".into()));
             let mut exif = IfdBuilder::new();
             exif.set(t::MAKER_NOTE, Value::Undefined(note.to_vec()));
             ifd.set_child(t::EXIF_IFD, exif);
             write(&[ifd])
         };
-        assert_eq!(probe(&with_note(b"AOC\0MM\0\x01\0\0\0\0\0\0")), Some(RawFormat::Pef));
-        assert_eq!(probe(&with_note(b"PENTAX \0MM\0\0\0\0\0\0\0")), Some(RawFormat::Pef));
-        assert_eq!(probe(&with_note(b"STMN100\0\0\0\0\0\0\0\0\0")), Some(RawFormat::Srw));
+        assert_eq!(probe(&with_note(b"AOC\0MM\0\x01\0\0\0\0\0\0", true)), Some(RawFormat::Pef));
+        assert_eq!(probe(&with_note(b"PENTAX \0MM\0\0\0\0\0\0\0", true)), Some(RawFormat::Pef));
+        assert_eq!(probe(&with_note(b"STMN100\0\0\0\0\0\0\0\0\0", true)), Some(RawFormat::Srw));
+        // without raw evidence (an RGB image from such a body) neither reader claims it (#281)
+        assert_eq!(probe(&with_note(b"AOC\0MM\0\x01\0\0\0\0\0\0", false)), None);
+        assert_eq!(probe(&with_note(b"STMN100\0\0\0\0\0\0\0\0\0", false)), None);
     }
 
     #[test]

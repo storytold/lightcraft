@@ -924,6 +924,29 @@ fn right_click_opens_a_folders_menu_from_the_triangle_too() {
     assert!(!popup_open(&h), "the startup disk offers nothing");
 }
 
+/// Right-click a folder ▸ Set Color Label ▸ a colour: the folder's row shows the label's dot (a
+/// row without a label shows none), and None takes it off again.
+#[test]
+fn a_folder_takes_a_colour_label_from_its_menu() {
+    let mut h = folders_app(&["/pics/trip/a.jpg", "/pics/home/b.jpg"]);
+    click(&mut h, "libraryFolderToggle:/pics");
+    assert!(!has(&h, "labelMark:libfolder:/pics/trip"), "no label, no dot");
+    right_click(&mut h, "source:libfolder:/pics/trip");
+    click(&mut h, "folderLabelMenu");
+    click(&mut h, "folderLabel:red");
+    assert_eq!(h.app.session.catalog.folder_color_label("/pics/trip"), Some(lightcraft_catalog::ColorLabel::Red));
+    assert!(!popup_open(&h), "choosing closes the menu");
+    h.step();
+    assert!(has(&h, "labelMark:libfolder:/pics/trip"), "the row shows its label");
+    assert!(!has(&h, "labelMark:libfolder:/pics/home"), "its neighbour does not");
+    right_click(&mut h, "source:libfolder:/pics/trip");
+    click(&mut h, "folderLabelMenu");
+    click(&mut h, "folderLabel:none");
+    assert_eq!(h.app.session.catalog.folder_color_label("/pics/trip"), None);
+    h.step();
+    assert!(!has(&h, "labelMark:libfolder:/pics/trip"));
+}
+
 #[test]
 fn removing_a_disk_from_the_library_asks_first() {
     use crate::state::Dialog;
@@ -991,7 +1014,7 @@ fn tooltip_shown(h: &Headless) -> bool {
     h.view.ctx.memory(|m| m.areas().visible_layer_ids().into_iter().any(|l| l.order == egui::Order::Tooltip))
 }
 
-const LONG_NAME: &str = "Aliah Ira Polanco-Grylls and a name much longer than any sidebar row can show";
+const LONG_NAME: &str = "Lake Como Wedding-Day and a name much longer than any sidebar row can show";
 
 /// A name never runs past the photo count: it is cut with an ellipsis, in full on hover.
 #[test]
@@ -1095,4 +1118,67 @@ fn date_and_keyword_rows_show_their_photos_from_any_source() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert_eq!(h.app.session.filter, lightcraft_catalog::Filter::default(), "{key}");
+}
+
+/// Issue #501: use the actual context-menu button on the populated demo folder.
+#[test]
+fn deleting_a_populated_album_folder_from_its_menu_is_undoable() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let folder = h.app.session.catalog.albums().find(|a| a.folder && a.name == "Travel 2026").unwrap().id;
+    assert!(!h.app.session.catalog.album_children(Some(folder)).is_empty());
+    let before = h.app.session.catalog.to_snapshot();
+    let photo_count = h.app.session.catalog.photos().count();
+    right_click(&mut h, &format!("source:folder:{}", folder.0));
+    click(&mut h, &format!("albumDelete:{}", folder.0));
+    assert!(h.app.session.catalog.album(folder).is_none());
+    assert_eq!(h.app.session.catalog.photos().count(), photo_count);
+    assert!(!popup_open(&h));
+    h.app.run("edit.undo", json!({})).unwrap();
+    h.step();
+    h.step();
+    assert_eq!(h.app.session.catalog.to_snapshot(), before);
+    assert!(has(&h, &format!("source:folder:{}", folder.0)));
+}
+
+/// A menu command's toast shows, however long the app has been running: commands made their
+/// toasts with a fresh context, whose clock is at 0, so by the app's clock they were already over
+/// (Auto Advance On, Imported presets, …).
+#[test]
+fn a_menu_commands_toast_shows_after_a_while() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = crate::headless::Headless::new(app, [1000.0, 700.0], 1.0);
+    for _ in 0..600 {
+        h.step();
+    }
+    let r = h.request("engine.execute", serde_json::json!({"command": "view.autoAdvance"}), std::time::Duration::from_secs(10));
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.starts_with("Auto Advance")), "{:?}", h.app.ui.toast);
+}
+
+/// Auto-Tag from Tracklog's toast shows too: it was stamped by a clock of its own, which starts at
+/// zero, so a while into a session it had always already expired.
+#[test]
+fn the_tracklog_toast_shows_after_a_while() {
+    let dir = std::env::temp_dir().join(format!("lc-tracklog-toast-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let gpx = dir.join("walk.gpx");
+    std::fs::write(
+        &gpx,
+        r#"<?xml version="1.0"?><gpx version="1.1" creator="test" xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg><trkpt lat="46.0" lon="7.0"><time>2026-05-01T10:00:00Z</time></trkpt></trkseg></trk></gpx>"#,
+    )
+    .unwrap();
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = crate::headless::Headless::new(app, [1000.0, 700.0], 1.0);
+    for _ in 0..600 {
+        h.step();
+    }
+    let p = serde_json::json!({"command": "photo.tagFromTracklog", "params": {"path": gpx.to_string_lossy(), "offset": 0}});
+    let r = h.request("engine.execute", p, std::time::Duration::from_secs(10));
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.starts_with("Tagged")), "{:?}", h.app.ui.toast);
+    let _ = std::fs::remove_dir_all(&dir);
 }

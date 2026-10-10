@@ -60,6 +60,17 @@ up (`gpu::warm_up` from the first frame's settings), and never while GPU renderi
 Settings ▸ Performance ▸ *Use the GPU for rendering* unchecked (applied before the window opens),
 `LIGHTCRAFT_GPU=0` or `LIGHTCRAFT_GPU_BACKEND=off`, no GPU driver is loaded for rendering at all.
 
+**Quitting.** The devices are never dropped, and renders run on worker threads: a render still inside
+the driver while the process exits crashes there (a SIGSEGV in the NVIDIA Vulkan driver on Linux,
+issue #620), which no panic hook catches. So every entry into a device counts as work in flight
+(`crates/gpu/src/exit.rs`), and the desktop app ends with `LightcraftApp::shutdown` (from `on_exit`,
+after settings and library are saved): `gpu::begin_shutdown()` — from then on `gpu::render` returns
+`None`, no device is created, denoise tiles fail over and a render job gives up instead of rendering
+on the CPU — then the render pool stops (queued jobs dropped, running ones waited for) and
+`gpu::wait_idle` waits for GPU work on other threads (export, denoise, the device warm-up). One
+deadline of 2 s covers it all; past it the app quits anyway. A job pool that is dropped (headless
+hosts, tests) waits for its running jobs the same way (`JobPool::shutdown`, `crates/preview/src/pool.rs`).
+
 **Crash sentinel.** The desktop app writes `gpu-init.marker` into its settings folder (next to
 `ui.json`: `%APPDATA%\LightCraft`, `~/Library/Application Support/LightCraft`,
 `~/.config/lightcraft`) just before the compute device is created and removes it as soon as creation

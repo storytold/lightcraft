@@ -55,6 +55,7 @@ pub enum Icon {
     Pencil,
     Photos,
     Clock,
+    Calendar,
     Trash,
     Curve,
     ProfileGrid,
@@ -67,6 +68,8 @@ pub enum Icon {
     Subject,
     Picker,
     Rotate,
+    /// A curved line with an arrow at both ends: drag to rotate, either way (the crop tool's pointer).
+    RotateDrag,
     Flip,
     Invert,
     Dots,
@@ -359,6 +362,14 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             pen.circle(10.0, 10.0, 7.0);
             pen.line(&[(10.0, 5.5), (10.0, 10.0), (13.5, 11.5)]);
         }
+        Calendar => {
+            // a page with a binding bar, two rings and a marked day
+            pen.rect(3.0, 4.5, 17.0, 17.0, 1.5);
+            pen.line(&[(3.0, 8.5), (17.0, 8.5)]);
+            pen.line(&[(7.0, 2.5), (7.0, 6.0)]);
+            pen.line(&[(13.0, 2.5), (13.0, 6.0)]);
+            pen.rect(11.0, 11.5, 14.0, 14.5, 0.5);
+        }
         Trash => {
             pen.line(&[(3.0, 5.5), (17.0, 5.5)]);
             pen.line(&[(8.0, 5.5), (8.0, 3.0), (12.0, 3.0), (12.0, 5.5)]);
@@ -427,6 +438,12 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
         Rotate => {
             pen.arc(10.0, 10.0, 6.5, 200.0, 470.0);
             pen.line(&[(3.0, 5.5), (4.0, 9.0), (7.5, 8.0)]);
+        }
+        RotateDrag => {
+            // the upper arc of a circle, an arrowhead at each end pointing along it
+            pen.arc(10.0, 14.0, 7.5, 200.0, 340.0);
+            pen.line(&[(0.8, 9.6), (3.0, 11.9), (6.1, 11.0)]);
+            pen.line(&[(19.2, 9.6), (17.0, 11.9), (13.9, 11.0)]);
         }
         Flip => {
             pen.line(&[(10.0, 2.5), (10.0, 17.5)]);

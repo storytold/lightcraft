@@ -197,12 +197,25 @@ fn water(p: &P, x: f32, v: f32, wl: f32, calm: f32, above: &dyn Fn(f32, f32) -> 
 }
 
 pub fn render(kind: Kind, seed: u32, w: usize, h: usize) -> Rgb32f {
+    render_rows(kind, seed, w, h, true)
+}
+
+/// [`render`] on the calling thread alone, without rayon: the same pixels, for a caller that must
+/// not run other queued work while it waits for rows (see `lightcraft_engine::demo`).
+pub fn render_serial(kind: Kind, seed: u32, w: usize, h: usize) -> Rgb32f {
+    render_rows(kind, seed, w, h, false)
+}
+
+fn render_rows(kind: Kind, seed: u32, w: usize, h: usize, parallel: bool) -> Rgb32f {
+    let mut img = Rgb32f::new(w, h);
+    if w == 0 || h == 0 {
+        return img;
+    }
     let aspect = w as f32 / h as f32;
     let p = P { seed, aspect };
     let ss = if w * h <= 300_000 { 2 } else { 1 };
     let to2020 = SRGB.to_space(&REC2020).to_f32();
-    let mut img = Rgb32f::new(w, h);
-    img.data.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+    let paint = |(y, row): (usize, &mut [[f32; 3]])| {
         for (xi, px) in row.iter_mut().enumerate() {
             let mut acc = [0.0f32; 3];
             for sy in 0..ss {
@@ -220,7 +233,12 @@ pub fn render(kind: Kind, seed: u32, w: usize, h: usize) -> Rgb32f {
                 (m[2][0] * c[0] + m[2][1] * c[1] + m[2][2] * c[2]).max(0.0),
             ];
         }
-    });
+    };
+    if parallel {
+        img.data.par_chunks_mut(w).enumerate().for_each(paint);
+    } else {
+        img.data.chunks_mut(w).enumerate().for_each(paint);
+    }
     img
 }
 

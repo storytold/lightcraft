@@ -5,7 +5,8 @@
 //! chosen folder, filed by day, by month, into one folder or by a custom folder template,
 //! optionally renamed), an album (existing or new), a preset and keywords to apply. Importing
 //! runs on a worker thread (files are probed, copied or moved there) and its batches join the
-//! catalog between frames, with a progress window and Cancel; the whole import is one undo step.
+//! catalog between frames, with a row and ✕ in the activity stack (issue #345); the whole import is
+//! one undo step.
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use lightcraft_engine::import::{ImportCandidate, ScanInput, ScanOutput, ScanProgress, scan_with};
@@ -235,6 +236,8 @@ pub struct ImportTask {
     /// Auto Import: the selection to keep.
     keep_selection: Option<lightcraft_engine::Selection>,
     run: Option<ImportRun>,
+    /// The import's row in the activity stack (its ✕ and `activity.cancel` set the run's cancel flag).
+    guard: Option<lightcraft_engine::activity::TaskGuard>,
 }
 
 impl ImportTask {
@@ -391,6 +394,20 @@ pub struct ScanTask {
     browse: bool,
     /// What is being scanned (the review's source).
     sources: Vec<String>,
+    /// The scan's row in the activity stack (its ✕ and `activity.cancel` set `progress.cancel`).
+    guard: lightcraft_engine::activity::TaskGuard,
+}
+
+/// The activity row of a scan: the review's ("Scanning folder") or the Local view's ("Reading folder").
+fn scan_guard(app: &LightcraftApp, progress: &ScanProgress, browse: bool) -> lightcraft_engine::activity::TaskGuard {
+    let label = if browse { "Reading folder" } else { "Scanning folder" };
+    app.session.activity.start("scan", label, lightcraft_engine::activity::Cancel::Flag(progress.cancel.clone()))
+}
+
+/// An import and a Synchronize Folder never run at once: each readies its files against the
+/// library as it was when it started, so both could add the same file.
+pub(crate) fn busy_synchronizing(app: &LightcraftApp) -> Result<(), String> {
+    if app.sync_run.is_some() { Err(crate::i18n::tr("A folder is being synchronized").to_string()) } else { Ok(()) }
 }
 
 /// Scan `paths` in the background, then open the review dialog (see [`poll_scan`]).
@@ -410,7 +427,8 @@ pub fn open(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String
     std::thread::spawn(job);
     #[cfg(target_arch = "wasm32")]
     job();
-    app.scan = Some(ScanTask { progress, rx, copy: false, browse: false, sources });
+    let guard = scan_guard(app, &progress, false);
+    app.scan = Some(ScanTask { progress, rx, copy: false, browse: false, sources, guard });
     Ok(json!({"scanning": true}))
 }
 
@@ -471,7 +489,8 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
     std::thread::spawn(job);
     #[cfg(target_arch = "wasm32")]
     job();
-    app.scan = Some(ScanTask { progress, rx, copy: false, browse: true, sources: Vec::new() });
+    let guard = scan_guard(app, &progress, true);
+    app.scan = Some(ScanTask { progress, rx, copy: false, browse: true, sources: Vec::new(), guard });
     app.renderer.forget_imports();
     Ok(json!({"path": dir_s, "subfolders": subfolders, "scanning": true}))
 }
@@ -482,7 +501,18 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
     let out = match task.rx.try_recv() {
         Ok(o) => o,
-        Err(std::sync::mpsc::TryRecvError::Empty) => return,
+        Err(std::sync::mpsc::TryRecvError::Empty) => {
+            if task.guard.is_cancelled() {
+                // ✕: the worker stops at its next file; don't wait for it (a NAS read can take a while)
+                app.scan = None;
+                return;
+            }
+            let (total, done) = (task.progress.total.load(Ordering::Relaxed), task.progress.done.load(Ordering::Relaxed));
+            task.guard.progress(done as u64, total as u64);
+            // while the folders are listed the total isn't known: say what is happening instead
+            task.guard.detail(if total == 0 { crate::i18n::tr("Looking for photos…") } else { "" });
+            return;
+        }
         Err(_) => {
             app.scan = None;
             app.toast(ctx, crate::i18n::tr("Scan failed"));
@@ -525,37 +555,6 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
     app.ui.dialog = Some(crate::state::Dialog::Import { opts: Box::new(d) });
 }
 
-/// The progress window while a folder is being scanned.
-pub fn scan_progress(app: &mut LightcraftApp, ctx: &egui::Context) {
-    let Some(task) = &app.scan else { return };
-    let t = Tokens::get(ctx);
-    let total = task.progress.total.load(Ordering::Relaxed);
-    let done = task.progress.done.load(Ordering::Relaxed);
-    let text = if total == 0 {
-        if task.browse { "Reading folder…" } else { "Looking for photos…" }.to_string()
-    } else {
-        crate::i18n::tr_format!("Reading photos… {done} of {total}", done = done, total = total)
-    };
-    let mut cancel = false;
-    egui::Window::new(crate::i18n::tr("Scanning"))
-        .title_bar(false)
-        .resizable(false)
-        .anchor(Align2::CENTER_BOTTOM, [0.0, -80.0])
-        .fixed_size([340.0, 80.0])
-        .show(ctx, |ui| {
-            ui.label(egui::RichText::new(text).color(t.text));
-            ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32).desired_width(320.0));
-            let r = ui.button(crate::i18n::tr("Cancel"));
-            register(ui.ctx(), "button:scanCancel", r.rect);
-            cancel = r.clicked();
-        });
-    if cancel {
-        // the worker stops at its next file; don't wait for it (a NAS read can take a while)
-        task.progress.cancel.store(true, Ordering::Relaxed);
-        app.scan = None;
-    }
-}
-
 impl ScanTask {
     /// `{done, total}` for `ui.inspect` (total is 0 while the folders are still being listed).
     pub fn status(&self) -> Value {
@@ -565,6 +564,7 @@ impl ScanTask {
 
 /// Start importing the dialog's checked files (the dialog's OK / `ui.dialog.confirm`).
 pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String> {
+    busy_synchronizing(app)?;
     let queue = d.selected_paths();
     if queue.is_empty() {
         return Err("no photos selected".into());
@@ -616,6 +616,7 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
 
 /// Start importing `paths` (files or folders) in the background, e.g. dropped on the window.
 pub fn start_paths(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String> {
+    busy_synchronizing(app)?;
     if app.import.is_some() || app.scan.as_ref().is_some_and(|t| !t.browse) {
         return Err("an import is running".into());
     }
@@ -640,7 +641,11 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
             task.keep_selection = Some(app.session.selection.clone());
         }
         match started {
-            Ok(run) => task.run = Some(run),
+            Ok(run) => {
+                let label = if task.browse { "Reading folder" } else { "Importing" };
+                task.guard = Some(app.session.activity.start("import", label, lightcraft_engine::activity::Cancel::Flag(run.cancel.clone())));
+                task.run = Some(run);
+            }
             Err(e) => {
                 log::warn!("import: {e}");
                 app.toast(ctx, crate::i18n::tr_format!("Import failed: {e}", e = e));
@@ -662,6 +667,13 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
     if let Some(run) = &task.run {
         task.total = run.total.load(Ordering::Relaxed).max(task.total);
         task.done = run.done.load(Ordering::Relaxed);
+    }
+    if let Some(guard) = &task.guard {
+        guard.progress(task.done as u64, task.total as u64);
+        // ✕ in the stack (or `activity.cancel`): no further files are started
+        if guard.is_cancelled() {
+            task.cancelled = true;
+        }
     }
     if !finished {
         app.import = Some(task);
@@ -802,40 +814,6 @@ fn show_existing(app: &mut LightcraftApp, ctx: &egui::Context, existing: &[u64])
     };
     app.toast_for(ctx, msg, 6.0);
     true
-}
-
-/// The progress window while an import runs, with Cancel (files already copied or added stay;
-/// nothing new is started).
-pub fn progress(app: &mut LightcraftApp, ctx: &egui::Context) {
-    let Some(task) = &app.import else { return };
-    let t = Tokens::get(ctx);
-    let frac = task.done as f32 / task.total.max(1) as f32;
-    let text = if task.cancelled {
-        crate::i18n::tr("Stopping…").to_string()
-    } else if task.browse {
-        crate::i18n::tr_format!("Reading photos… {} of {}", task.done, task.total)
-    } else {
-        crate::i18n::tr_format!("Adding photos… {} of {}", task.done, task.total)
-    };
-    let mut cancel = false;
-    egui::Window::new(crate::i18n::tr("Importing"))
-        .title_bar(false)
-        .resizable(false)
-        .anchor(Align2::CENTER_BOTTOM, [0.0, -80.0])
-        .fixed_size([340.0, 80.0])
-        .show(ctx, |ui| {
-            ui.label(egui::RichText::new(text).color(t.text));
-            ui.add(egui::ProgressBar::new(frac).desired_width(320.0));
-            let r = ui.add_enabled(!task.cancelled, egui::Button::new(crate::i18n::tr("Cancel")));
-            register(ui.ctx(), "button:importCancel", r.rect);
-            cancel = r.clicked();
-        });
-    if cancel && let Some(task) = app.import.as_mut() {
-        task.cancelled = true;
-        if let Some(run) = &task.run {
-            run.cancel.store(true, Ordering::Relaxed);
-        }
-    }
 }
 
 /// The dialog body: options, then the candidate grid.

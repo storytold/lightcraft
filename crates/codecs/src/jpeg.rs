@@ -25,6 +25,17 @@ pub(crate) struct Markers {
     pub adobe_transform: Option<u8>,
     /// Offset of the MPF TIFF header within the file and its bytes.
     pub mpf: Option<(usize, Vec<u8>)>,
+    /// The ISO 21496-1 APP2 payload after its URN: 4 bytes (versions only) on a primary image
+    /// that has a gain map, the full metadata on the gain map image itself.
+    pub iso_gainmap: Option<Vec<u8>>,
+}
+
+impl Markers {
+    /// This image is a gain map (ISO 21496-1 metadata or Adobe `hdrgm` gain parameters), not a
+    /// picture: never a preview, never the image to show.
+    pub fn is_gain_map(&self) -> bool {
+        self.iso_gainmap.as_ref().is_some_and(|p| p.len() > 4) || self.xmp.as_deref().is_some_and(|x| x.contains("hdrgm:GainMapMax"))
+    }
 }
 
 pub(crate) fn parse_markers(b: &[u8]) -> Option<Markers> {
@@ -88,6 +99,10 @@ pub(crate) fn parse_markers(b: &[u8]) -> Option<Markers> {
                     icc_chunks.push((seg[12], &seg[14..]));
                 } else if seg.starts_with(b"MPF\0") && m.mpf.is_none() {
                     m.mpf = Some((start + 4, seg[4..].to_vec()));
+                } else if let Some(p) = seg.strip_prefix(crate::gainmap::ISO_URN)
+                    && m.iso_gainmap.is_none()
+                {
+                    m.iso_gainmap = Some(p.to_vec());
                 }
             }
             0xEE if seg.starts_with(b"Adobe") && seg.len() >= 12 => {
@@ -260,8 +275,11 @@ pub(crate) fn embedded_thumbnail(bytes: &[u8], max_edge: u32, min_edge: u32) -> 
     if let (Some(ex), Some((o, l))) = (m.exif.as_deref(), summary.thumbnail) {
         candidates.push((&ex[o..o + l], ThumbnailSource::ExifThumbnail));
     }
-    for (o, l) in mpf_images(&m) {
-        if let Some(s) = bytes.get(o..o.saturating_add(l)) {
+    for e in mpf_images(&m) {
+        if e.kind == MPF_GAIN_MAP {
+            continue;
+        }
+        if let Some(s) = bytes.get(e.offset..e.offset.saturating_add(e.len)) {
             candidates.push((s, ThumbnailSource::MpfPreview));
         }
     }
@@ -269,6 +287,10 @@ pub(crate) fn embedded_thumbnail(bytes: &[u8], max_edge: u32, min_edge: u32) -> 
     let mut best: Option<(u32, &[u8], ThumbnailSource)> = None;
     for (data, src) in candidates {
         let Some(pm) = parse_markers(data) else { continue };
+        // a gain map (also when its MPF entry doesn't say so) is greyscale gain data, not a preview
+        if pm.is_gain_map() {
+            continue;
+        }
         let long = pm.width.max(pm.height);
         // Previews must have the main image's aspect ratio (within 2%), else they are letterboxed/cropped.
         let aspect_ok = m.width > 0
@@ -290,8 +312,21 @@ pub(crate) fn embedded_thumbnail(bytes: &[u8], max_edge: u32, min_edge: u32) -> 
     Some(Thumbnail { image: d.to_srgb8(), orientation, source, source_width: m.width, source_height: m.height })
 }
 
-/// (file offset, length) of MPF-listed images other than the primary.
-fn mpf_images(m: &Markers) -> Vec<(usize, usize)> {
+/// MP type code of a gain map image (CIPA DC-007 entry attribute, low 24 bits).
+pub(crate) const MPF_GAIN_MAP: u32 = 0x05_0000;
+
+/// An MPF-listed image other than the primary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MpfEntry {
+    /// File offset and length of the image.
+    pub offset: usize,
+    pub len: usize,
+    /// MP type code (attribute low 24 bits).
+    pub kind: u32,
+}
+
+/// The MPF-listed images other than the primary.
+pub(crate) fn mpf_images(m: &Markers) -> Vec<MpfEntry> {
     let Some((base, data)) = &m.mpf else { return vec![] };
     let Some(t) = exif::Tiff::new(data) else { return vec![] };
     let Some(ifd) = t.first_ifd() else { return vec![] };
@@ -307,12 +342,32 @@ fn mpf_images(m: &Markers) -> Vec<(usize, usize)> {
             let a = [rec[o], rec[o + 1], rec[o + 2], rec[o + 3]];
             if data.starts_with(b"II") { u32::from_le_bytes(a) } else { u32::from_be_bytes(a) }
         };
-        let (size, off) = (rd(4) as usize, rd(8) as usize);
+        let (attr, size, off) = (rd(0), rd(4) as usize, rd(8) as usize);
         if size > 0 && off > 0 {
-            out.push((base + off, size));
+            out.push(MpfEntry { offset: base.saturating_add(off), len: size, kind: attr & 0x00FF_FFFF });
         }
     }
     out
+}
+
+/// Decode to the file's 8-bit samples as stored (no colour management): 1 channel for greyscale
+/// files, else 3 (RGB). For data images such as gain maps, whose values are codes, not colours.
+pub(crate) fn decode_codes8(bytes: &[u8]) -> Result<(usize, usize, usize, Vec<u8>)> {
+    let m = parse_markers(bytes).ok_or_else(|| Error::Malformed(F, "missing SOI".into()))?;
+    if m.components == 0 {
+        return Err(Error::Malformed(F, "no frame header".into()));
+    }
+    check_size(F, m.width as u64, m.height as u64, &DecodeOptions::default())?;
+    if !matches!(m.components, 1 | 3) || m.precision != 8 {
+        return Err(Error::Malformed(F, "expected an 8-bit greyscale or RGB image".into()));
+    }
+    let non_interleaved = matches!(m.sof, 0xC0 | 0xC1) && m.first_scan_components < m.components;
+    let raw = if non_interleaved { decode_jpeg_decoder(bytes, &m, None)? } else { decode_zune(bytes, &m)? };
+    let ch = raw.model.channels();
+    match raw.buf {
+        Buf::U8(v) if v.len() >= raw.width * raw.height * ch => Ok((raw.width, raw.height, ch, v)),
+        _ => Err(Error::Malformed(F, "unexpected sample format".into())),
+    }
 }
 
 #[cfg(test)]

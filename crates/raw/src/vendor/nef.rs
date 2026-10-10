@@ -3,8 +3,10 @@
 //! Sources: TIFF 6.0 (the raw image is a standard CFA SubIFD), Laurent Clévy's NEF structure notes (prose: IFD
 //! layout, SubIFDs, maker note header) and the ExifTool Nikon tag-name documentation (`0x000c` WB_RBLevels,
 //! `0x003d` BlackLevel, `0x0096` NEFLinearizationTable). The Huffman-compressed data (compression 34713) is decoded
-//! by [`super::nefc`], which documents its clean-room sources; files it can't decode yet ("lossy after split")
-//! are reported as [`RawError::Unsupported`] and their embedded previews still work.
+//! by [`super::nefc`], which documents its clean-room sources; "lossy after split" files are decoded when their strip follows the
+//! rule documented there; files it can't decode are reported as [`RawError::Unsupported`] and their embedded previews still work. So are High Efficiency NEFs
+//! (HE / HE★, Z 8, Z 9, Z 6III, Z f): they keep compression 34713 but carry a wavelet codestream that starts with
+//! the JPEG XS markers SOC + CAP (ISO/IEC 21122-1, `FF10 FF50`) and have no `0x0096` table (issue #193).
 
 use super::{nefc, white_from_data};
 use crate::tiffraw::{Packing, read_image};
@@ -18,6 +20,11 @@ const WB_RB_LEVELS: u16 = 0x000c;
 const BLACK_LEVEL: u16 = 0x003d;
 const LINEARIZATION_TABLE: u16 = 0x0096;
 const CROP_AREA: u16 = 0x0045;
+/// JPEG XS start of codestream (SOC, `FF10`) followed by its mandatory capabilities marker (CAP, `FF50`).
+const JPEG_XS_START: [u8; 4] = [0xff, 0x10, 0xff, 0x50];
+/// Why a High Efficiency NEF shows its embedded preview: the UI shows the part before " (".
+pub(crate) const HIGH_EFFICIENCY: &str =
+    "Nikon High Efficiency NEF (HE / HE★, a JPEG XS-based codec with no public specification; shoot RAW Lossless compressed to edit the raw data)";
 /// Maker note `0x0014`, the "NRW" data block of Coolpix raws: `"NRW "` + a 4-character version, then fields. In
 /// version `0104` the `u32` at byte `0x20` is the black level in sample units (200 in the four 12-bit files here
 /// that have 200 as their darkest samples, 0 in the one whose samples reach 0).
@@ -166,6 +173,13 @@ fn uncompressed(bytes: &[u8], info: &ImageInfo, order: ByteOrder, mn: Option<&ma
 
 /// Nikon Huffman-compressed strip (see [`super::nefc`]); the decode table is maker note `0x0096`.
 fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>) -> Result<RawData> {
+    let starts_with = |magic: &[u8]| {
+        let start = info.chunks(bytes.len() as u64).first().and_then(|c| usize::try_from(c.offset).ok());
+        start.and_then(|o| bytes.get(o..o.checked_add(magic.len())?)) == Some(magic)
+    };
+    if starts_with(&JPEG_XS_START) {
+        return Err(RawError::Unsupported(HIGH_EFFICIENCY.into()));
+    }
     // (some Z bodies label uncompressed, row-padded data 34713 without a table: not handled here yet)
     let table = mn
         .and_then(|m| Some((m.ifd.bytes(LINEARIZATION_TABLE)?, m.order)))
@@ -354,6 +368,24 @@ mod tests {
     #[test]
     fn compressed_without_table_is_unsupported() {
         let bytes = nef(34713, 14, vec![vec![0; 64]], 8, 8, 8);
-        assert!(matches!(crate::decode(&bytes), Err(RawError::Unsupported(_))));
+        let Err(RawError::Unsupported(why)) = crate::decode(&bytes) else { panic!("expected unsupported") };
+        assert!(why.contains("linearization table"), "{why}");
+    }
+
+    /// Issue #193: a High Efficiency NEF (Z f, Z 8: compression 34713, no `0x0096` table, a JPEG XS codestream) is
+    /// named as such instead of being blamed on the missing table, and the header probe reports the same reason.
+    #[test]
+    fn high_efficiency_nef_is_named() {
+        let mut strip = vec![0xff, 0x10, 0xff, 0x50, 0x00, 0x22];
+        strip.resize(64, 0);
+        let bytes = nef(34713, 14, vec![strip], 8, 8, 8);
+        for result in [crate::decode(&bytes).map(|_| ()), crate::probe_info(&bytes).map(|_| ())] {
+            let Err(RawError::Unsupported(why)) = result else { panic!("expected unsupported") };
+            assert_eq!(why, HIGH_EFFICIENCY);
+            assert!(why.starts_with("Nikon High Efficiency NEF ("), "{why}");
+        }
+        // a strip too short to hold the markers is still the missing-table case, not a panic
+        let short = nef(34713, 14, vec![vec![0xff, 0x10]], 1, 1, 1);
+        assert!(matches!(crate::decode(&short), Err(RawError::Unsupported(w)) if w.contains("linearization table")));
     }
 }

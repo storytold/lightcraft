@@ -33,7 +33,10 @@ use crate::media::ProbeInfo;
 /// File extensions LightCraft imports (lower case).
 pub const EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "png", "tif", "tiff", "webp", "dng", "cr2", "cr3", "nef", "nrw", "arw", "raf", "orf", "rw2", "rwl", "raw", "pef", "srw", "psd",
-    "jxl", "gif", "bmp", "heic", "avif", // containers LightCraft cannot decode but imports as preview only (their embedded JPEG)
+    "jxl", "gif", "bmp",
+    // Decoded when built with the codecs' `heif` feature; otherwise the import reports them as
+    // failed with the reason ("HEIC/HEIF support isn't included in this build").
+    "heic", "heif", "avif", // no AV1 decoder yet: reported as failed, like a HEIC without the feature
     "iiq", "crw", "mrw", "x3f", "kdc", "mos", "erf", "3fr", "fff",
 ];
 
@@ -498,7 +501,8 @@ pub struct ScanProgress {
     /// Files to probe, set once the folders are expanded.
     pub total: std::sync::atomic::AtomicUsize,
     pub done: std::sync::atomic::AtomicUsize,
-    pub cancel: std::sync::atomic::AtomicBool,
+    /// Shared with the scan's row in the activity stack (its ✕ sets it).
+    pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// The result of [`scan_with`]: the candidates, and the probes to keep for the import that follows.
@@ -850,8 +854,17 @@ impl ImportJob {
             }
         }
 
-        // files a preceding scan already probed are not read again (a network share is slow to read)
-        let cached: Vec<Option<ProbeInfo>> = todo.iter().map(|f| self.cache.remove(f)).collect();
+        // files a preceding scan already probed are not read again (a network share is slow to read),
+        // as long as they are still there, as they were: a file gone or changed since is probed again
+        let cached: Vec<Option<ProbeInfo>> = todo
+            .iter()
+            .map(|f| {
+                // (the web's files are not std::fs files: kept as probed)
+                self.cache
+                    .remove(f)
+                    .filter(|info| cfg!(target_arch = "wasm32") || std::fs::metadata(f).is_ok_and(|m| m.is_file() && m.len() == info.file_size))
+            })
+            .collect();
         let missing: Vec<String> = todo.iter().zip(&cached).filter(|(_, c)| c.is_none()).map(|(f, _)| f.clone()).collect();
         let progress = ScanProgress::default();
         let mut fresh = probe_all(self.probe.as_ref(), &missing, &progress).into_iter();
@@ -899,7 +912,8 @@ impl ImportJob {
             let packet = crate::sidecar::find_sidecar(&path, self.naming)
                 .and_then(|f| std::fs::read_to_string(f).ok())
                 .or_else(|| info.xmp.clone().filter(|_| raw));
-            let sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, raw) {
+            let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some());
+            let sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
                 Ok(sc) => Some(sc),
                 Err(e) => {
                     log::warn!("import {path}: XMP: {e}");
@@ -1044,7 +1058,7 @@ fn name_family(name: &str) -> String {
 
 /// Threads for `jobs` file reads (probes, copies) at once.
 #[cfg(not(target_arch = "wasm32"))]
-fn workers(jobs: usize) -> usize {
+pub(crate) fn workers(jobs: usize) -> usize {
     std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 8).min(jobs.max(1))
 }
 
@@ -1371,6 +1385,7 @@ impl Session {
             cache: None,
             stages: None,
             view_cache: None,
+            display: None,
         };
         let embedded = match (&self.media.preview_loader, c.kind) {
             (Some(l), MediaKind::Raw) => Some((c.path.clone(), l.clone(), edge)),

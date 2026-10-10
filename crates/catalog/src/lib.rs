@@ -31,7 +31,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub use dates::{DateRun, GroupBy};
-pub use folders::FolderNode;
+pub use folders::{FolderNode, FolderRecord};
 pub use journal::{Journal, LoadReport, PersistStats, SnapshotPolicy, SnapshotTiming};
 pub use keywords::KeywordNode;
 use lightcraft_develop::DevelopSettings;
@@ -53,6 +53,9 @@ pub enum CatalogError {
     NoStack(StackId),
     #[error("invalid: {0}")]
     Invalid(String),
+    /// A keyword of that name is there already: moving or renaming onto it would merge the two.
+    #[error("there is a keyword “{0}” already")]
+    KeywordExists(String),
     #[error("corrupt catalog data: {0}")]
     Corrupt(String),
     #[error("catalog storage: {0}")]
@@ -207,6 +210,11 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         preview_only: Option<String>,
     },
+    /// The lens data a photo's file carries (what Reload finds when it was read after import).
+    SetEmbeddedLens {
+        id: PhotoId,
+        lens: Option<Box<lightcraft_develop::EmbeddedLens>>,
+    },
     /// The name shown for a colour label (`None` = its colour's name).
     SetLabelName {
         label: ColorLabel,
@@ -217,6 +225,18 @@ pub enum Op {
     SetBrowsed {
         folder: String,
         at: Option<String>,
+    },
+    /// List a keyword in the library's keyword list with these attributes, or take it off the list
+    /// (`None`; photos that carry it keep it). Format version 4.
+    SetKeyword {
+        path: String,
+        info: Option<keywords::KeywordInfo>,
+    },
+    /// What the library keeps about one of its folders (see [`folders::FolderRecord`]), under
+    /// its identity ([`query::folder_key`]); `None` or an empty record = keep nothing.
+    SetFolderRecord {
+        folder: String,
+        record: Option<FolderRecord>,
     },
     /// Several ops as one step (undo applies the inverses in reverse).
     Batch {
@@ -240,6 +260,12 @@ pub struct Catalog {
     /// When each Local folder was last browsed (folder path → ISO 8601), see [`local`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     browsed: BTreeMap<String, String>,
+    /// Keywords listed on their own or given attributes, by lower-case path (see [`keywords`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    keyword_list: BTreeMap<String, keywords::ListedKeyword>,
+    /// What the library keeps about its folders (folder identity → record), see [`folders`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    folder_records: BTreeMap<String, FolderRecord>,
     /// Increments on every applied op.
     #[serde(skip)]
     pub revision: u64,
@@ -335,10 +361,55 @@ impl Catalog {
     /// no smart album).
     pub fn album_contains(&self, id: AlbumId, p: &Photo) -> bool {
         match self.albums.get(&id) {
-            Some(Album { smart: Some(rules), .. }) => !p.deleted && rules.matches(p, self),
+            // guarded: a smart album testing smart albums can't loop or recurse without end
+            Some(Album { smart: Some(rules), .. }) => !p.deleted && rules::smart_album_holds(id, p.id, || rules.matches(p, self)),
             Some(a) => a.photos.contains(&p.id),
             None => false,
         }
+    }
+
+    /// Whether smart album `from` tests `to`, directly or through the smart albums it tests (the
+    /// rules of `from` would then change when those of `to` do). Loops in saved rules end the
+    /// search, they don't repeat it.
+    pub fn album_reaches(&self, from: AlbumId, to: AlbumId) -> bool {
+        let mut seen: std::collections::HashSet<AlbumId> = std::collections::HashSet::new();
+        let mut next = vec![from];
+        while let Some(a) = next.pop() {
+            if !seen.insert(a) {
+                continue;
+            }
+            let tested = self.albums.get(&a).and_then(|al| al.smart.as_deref()).map(Filter::albums_tested).unwrap_or_default();
+            if tested.contains(&to) {
+                return true;
+            }
+            next.extend(tested);
+        }
+        false
+    }
+
+    /// What is wrong with a saved smart album's rules now (`RuleSet::check`, after
+    /// `RuleSet::upgrade`): typically a rule testing an album that has since been deleted. Empty
+    /// for a sound smart album, a plain album or no album.
+    pub fn smart_album_problems(&self, id: AlbumId) -> Vec<rules::Problem> {
+        let Some(filter) = self.albums.get(&id).and_then(|a| a.smart.as_deref()) else { return Vec::new() };
+        let mut out: Vec<rules::Problem> = self.album_filter_problem(filter, Some(id)).into_iter().collect();
+        if let Some(mut rules) = filter.rule_set.clone() {
+            rules.upgrade();
+            out.extend(rules.check_for(self, Some(id)));
+        }
+        out
+    }
+
+    /// A loop through `filter`'s own album field (not its rules): smart album `owner` filtered to
+    /// itself, or to an album that leads back to it.
+    pub fn album_filter_problem(&self, filter: &Filter, owner: Option<AlbumId>) -> Option<rules::Problem> {
+        let (a, owner) = (filter.album?, owner?);
+        (a == owner || self.album_reaches(a, owner)).then(|| rules::Problem {
+            path: Vec::new(),
+            field: Some("album".into()),
+            issue: rules::Issue::AlbumLoop,
+            message: format!("its album filter (album {}) would make this album include itself", a.0),
+        })
     }
 
     /// The photos of an album: the stored list, or a smart album's current matches (id order).
@@ -377,6 +448,18 @@ impl Catalog {
     pub fn label_name(&self, l: ColorLabel) -> String {
         self.label_names.get(&l).cloned().unwrap_or_else(|| format!("{l:?}"))
     }
+    /// A listed keyword's attributes (any case), `None` when it isn't listed.
+    pub fn keyword_info(&self, path: &str) -> Option<&keywords::KeywordInfo> {
+        self.keyword_list.get(&keywords::clean(path).to_lowercase()).map(|k| &k.info)
+    }
+    /// How the keyword list spells a listed keyword (any case), `None` when it isn't listed.
+    pub fn listed_path(&self, path: &str) -> Option<&str> {
+        self.keyword_list.get(&keywords::clean(path).to_lowercase()).map(|k| k.path.as_str())
+    }
+    /// The keyword list: keywords listed on their own or given attributes, by path.
+    pub fn listed_keywords(&self) -> impl Iterator<Item = &keywords::ListedKeyword> {
+        self.keyword_list.values()
+    }
     /// The custom name of a colour label, if any.
     pub fn custom_label_name(&self, l: ColorLabel) -> Option<&str> {
         self.label_names.get(&l).map(String::as_str)
@@ -384,7 +467,9 @@ impl Catalog {
     /// The label a name stands for: a custom name first, then a colour's own name (any case).
     pub fn label_from_name(&self, name: &str) -> Option<ColorLabel> {
         let name = name.trim();
-        self.label_names.iter().find(|(_, n)| n.trim().eq_ignore_ascii_case(name)).map(|(l, _)| *l).or_else(|| ColorLabel::parse(name))
+        // any case, accents included (Été / été), as rules compare names
+        let name_lower = name.to_lowercase();
+        self.label_names.iter().find(|(_, n)| n.trim().to_lowercase() == name_lower).map(|(l, _)| *l).or_else(|| ColorLabel::parse(name))
     }
 
     // ---- writes
@@ -607,6 +692,10 @@ impl Catalog {
                     preview_only: std::mem::replace(&mut p.preview_only, preview_only),
                 }
             }
+            Op::SetEmbeddedLens { id, lens } => {
+                let p = self.photo_mut(id)?;
+                Op::SetEmbeddedLens { id, lens: std::mem::replace(&mut p.embedded_lens, lens.map(|l| *l)).map(Box::new) }
+            }
             Op::SetFile { id, file_name, source } => {
                 if file_name.trim().is_empty() {
                     return Err(CatalogError::Invalid("empty file name".into()));
@@ -623,6 +712,21 @@ impl Catalog {
                 };
                 Op::SetLabelName { label, name: old }
             }
+            Op::SetKeyword { path, info } => {
+                let path = keywords::clean(&path);
+                if path.is_empty() {
+                    return Err(CatalogError::Invalid("keyword names can't be empty".into()));
+                }
+                let key = path.to_lowercase();
+                let old = match info {
+                    Some(info) => self.keyword_list.insert(key, keywords::ListedKeyword { path: path.clone(), info }),
+                    None => self.keyword_list.remove(&key),
+                };
+                match old {
+                    Some(old) => Op::SetKeyword { path: old.path, info: Some(old.info) },
+                    None => Op::SetKeyword { path, info: None },
+                }
+            }
             Op::SetBrowsed { folder, at } => {
                 let folder = crate::query::folder_key(&folder);
                 let old = match at {
@@ -630,6 +734,14 @@ impl Catalog {
                     None => self.browsed.remove(&folder),
                 };
                 Op::SetBrowsed { folder, at: old }
+            }
+            Op::SetFolderRecord { folder, record } => {
+                let key = folders::record_key(&folder).ok_or_else(|| CatalogError::Invalid(format!("not a folder: {folder}")))?;
+                let old = match record.filter(|r| !r.is_empty()) {
+                    Some(r) => self.folder_records.insert(key.clone(), r),
+                    None => self.folder_records.remove(&key),
+                };
+                Op::SetFolderRecord { folder: key, record: old }
             }
             Op::Batch { ops } => {
                 let mut inverses = Vec::with_capacity(ops.len());
@@ -731,6 +843,8 @@ mod tests;
 mod tests_album_order;
 #[cfg(test)]
 mod tests_background;
+#[cfg(test)]
+mod tests_folder_records;
 #[cfg(test)]
 mod tests_folders;
 #[cfg(test)]

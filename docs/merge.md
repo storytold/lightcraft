@@ -9,7 +9,7 @@ All algorithms are our own implementations from published papers (cited in the m
 - **App:** select the photos, then *Photo Merge ▸ HDR…* (`Ctrl+H`), *Panorama…* (`Ctrl+M`) or
   *HDR Panorama…* from the photo context menu (or the `dialog.merge*` commands). The dialog previews
   the merge at ≤ 1024 px and re-runs the preview when an option changes; *Merge* runs the full merge
-  in the background (progress in a toast). The result is written next to the first photo as
+  in the background (a row in the activity stack shows its progress, with ✕ to stop it). The result is written next to the first photo as
   `<name>-HDR.dng`, `-Pano.dng` or `-HDR-Pano.dng`, imported and selected.
 - **Commands** (CLI, MCP, control channel):
   - `merge.hdr {ids?, align=true, deghost=none|low|medium|high, autoSettings=true, stack=false, preview=false, showOverlay=false, previewPath?}`

@@ -127,25 +127,10 @@ pub(crate) fn header(b: &[u8]) -> Result<(u32, u32, u16)> {
 }
 
 fn container_hint(info: &png::Info) -> Option<SourceSpace> {
-    if let Some(c) = &info.coding_independent_code_points {
-        let named = match c.color_primaries {
-            1 => Some(NamedSpace::Srgb),
-            9 => Some(NamedSpace::Rec2020),
-            12 => Some(NamedSpace::DisplayP3),
-            _ => None,
-        };
-        let trc = match c.transfer_function {
-            13 => Some(Trc::Srgb),
-            1 | 6 | 14 | 15 => Some(Trc::Rec709),
-            8 => Some(Trc::Linear),
-            4 => Some(Trc::Gamma(2.2)),
-            _ => None,
-        };
-        if let (Some(n), Some(t)) = (named, trc) {
-            let mut s = SourceSpace::named(n, SpaceOrigin::Container);
-            s.trc = Some([t.clone(), t.clone(), t]);
-            return Some(s);
-        }
+    if let Some(s) =
+        info.coding_independent_code_points.as_ref().and_then(|c| SourceSpace::from_cicp(c.color_primaries.into(), c.transfer_function.into()))
+    {
+        return Some(s);
     }
     if info.srgb.is_some() {
         return Some(SourceSpace::named(NamedSpace::Srgb, SpaceOrigin::Container));

@@ -201,6 +201,119 @@ fn pool_runs_inline() {
     assert_eq!(p.try_recv().map(|d| d.result), Some(1));
 }
 
+/// A pool with one worker that is inside a job until the returned sender is used or dropped.
+fn pool_with_a_running_job() -> (JobPool<u8, ()>, std::sync::mpsc::Sender<()>) {
+    let mut p: JobPool<u8, ()> = JobPool::new(1);
+    let (started, has_started) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    p.submit(
+        1,
+        0,
+        1,
+        Box::new(move || {
+            let _ = started.send(());
+            let _ = released.recv_timeout(std::time::Duration::from_secs(60));
+        }),
+    );
+    has_started.recv().unwrap();
+    (p, release)
+}
+
+#[test]
+fn pool_drop_waits_for_running_job() {
+    // issue #620: a job that outlives its pool can still be inside the GPU driver when the process exits
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let mut p: JobPool<u8, ()> = JobPool::new(1);
+    let (started, has_started) = std::sync::mpsc::channel();
+    let (finished, queued_ran) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+    let f = finished.clone();
+    p.submit(
+        1,
+        0,
+        9,
+        Box::new(move || {
+            let _ = started.send(());
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            f.store(true, Ordering::SeqCst);
+        }),
+    );
+    has_started.recv().unwrap();
+    let q = queued_ran.clone();
+    p.submit(2, 0, 1, Box::new(move || q.store(true, Ordering::SeqCst)));
+    drop(p);
+    assert!(finished.load(Ordering::SeqCst), "drop returned while the job was still running");
+    assert!(!queued_ran.load(Ordering::SeqCst), "a job that had not started is discarded");
+}
+
+#[test]
+fn pool_shutdown_reports_workers_and_drop_does_not_wait_again() {
+    let (mut p, release) = pool_with_a_running_job();
+    assert_eq!(p.live_workers(), 1);
+    let t0 = std::time::Instant::now();
+    assert!(!p.shutdown(std::time::Duration::from_millis(100)), "the job is still running");
+    let waited = t0.elapsed();
+    assert!(waited >= std::time::Duration::from_millis(100) && waited < std::time::Duration::from_secs(30), "{waited:?}");
+    assert_eq!(p.live_workers(), 1);
+    // stopped: nothing new is queued, and the job that ends is noticed
+    p.submit(2, 0, 1, Box::new(|| ()));
+    assert_eq!(p.queued(), 0);
+    drop(release);
+    assert!(p.shutdown(std::time::Duration::from_secs(30)));
+    assert_eq!(p.live_workers(), 0);
+
+    let (mut p, _release) = pool_with_a_running_job();
+    assert!(!p.shutdown(std::time::Duration::ZERO));
+    let t0 = std::time::Instant::now();
+    drop(p);
+    assert!(t0.elapsed() < std::time::Duration::from_secs(1), "dropped after a shutdown: no second wait");
+}
+
+#[test]
+fn pool_drop_is_bounded_when_a_job_never_ends() {
+    // a job blocked on something its owner holds must not hang the owner (it would hang quitting)
+    let (p, _release) = pool_with_a_running_job();
+    let t0 = std::time::Instant::now();
+    drop(p);
+    let waited = t0.elapsed();
+    assert!(waited >= std::time::Duration::from_secs(1) && waited < std::time::Duration::from_secs(30), "{waited:?}");
+}
+
+#[test]
+fn pool_stops_after_a_job_panicked_and_when_dropped_by_its_own_job() {
+    // a worker that unwound is not waited for
+    let mut p: JobPool<u8, ()> = JobPool::new(1);
+    p.submit(1, 0, 1, Box::new(|| panic!("a job panics (expected in this test)")));
+    while p.live_workers() > 0 {
+        std::thread::yield_now();
+    }
+    assert!(p.shutdown(std::time::Duration::from_secs(30)));
+
+    // the last owner of a pool is one of its jobs: the worker must not wait for (or join) itself
+    let slot: Arc<std::sync::Mutex<Option<JobPool<u8, ()>>>> = Arc::new(std::sync::Mutex::new(None));
+    let (dropped, has_dropped) = std::sync::mpsc::channel();
+    let mut p: JobPool<u8, ()> = JobPool::new(1);
+    let s = slot.clone();
+    p.submit(
+        1,
+        0,
+        1,
+        Box::new(move || {
+            let own = loop {
+                if let Some(p) = s.lock().unwrap().take() {
+                    break p;
+                }
+                std::thread::yield_now();
+            };
+            let t0 = std::time::Instant::now();
+            drop(own);
+            let _ = dropped.send(t0.elapsed());
+        }),
+    );
+    *slot.lock().unwrap() = Some(p);
+    let waited = has_dropped.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+    assert!(waited < std::time::Duration::from_secs(1), "{waited:?}");
+}
+
 #[test]
 fn disk_cache_never_touches_foreign_files() {
     // issue #98: a library opened on a folder that already has a `thumbs/` folder

@@ -13,6 +13,8 @@
 
   Needs: Rust (MSVC toolchain + the target), the Windows SDK (rc.exe, signtool.exe),
   and WiX v5: dotnet tool install --global wix --version 5.0.2
+  The WiX UI and Util extensions (installer dialogs, "Launch LightCraft" on Finish) are added to
+  the global WiX extension cache by this script (wix extension add -g ..., needs network once).
 
 .EXAMPLE
   pwsh packaging/windows/package.ps1 -Arch x64
@@ -30,6 +32,29 @@ function Invoke-Native([string] $What, [scriptblock] $Block) {
   Write-Output "==> $What"
   & $Block
   if ($LASTEXITCODE -ne 0) { throw "$What failed with exit code $LASTEXITCODE" }
+}
+
+# A 24-bit BMP of two flat colours: $SplitX pixels of $Left, then $Right (colours as R,G,B).
+# Used for the installer's side/banner bitmaps so the MSI ships no third-party artwork.
+function New-PanelBitmap([string] $Path, [int] $Width, [int] $Height, [int] $SplitX, [byte[]] $Left, [byte[]] $Right) {
+  $stride = [int][Math]::Ceiling($Width * 3 / 4) * 4
+  $row = New-Object byte[] $stride
+  for ($x = 0; $x -lt $Width; $x++) {
+    $c = if ($x -lt $SplitX) { $Left } else { $Right }
+    $row[$x * 3] = $c[2]; $row[$x * 3 + 1] = $c[1]; $row[$x * 3 + 2] = $c[0]   # BMP pixels are B,G,R
+  }
+  $pixels = $stride * $Height
+  $ms = [IO.MemoryStream]::new()
+  $w = [IO.BinaryWriter]::new($ms)
+  $w.Write([byte]0x42); $w.Write([byte]0x4D)                                # 'BM'
+  $w.Write([uint32](54 + $pixels)); $w.Write([uint32]0); $w.Write([uint32]54)
+  $w.Write([uint32]40); $w.Write([int32]$Width); $w.Write([int32]$Height)   # BITMAPINFOHEADER
+  $w.Write([uint16]1); $w.Write([uint16]24); $w.Write([uint32]0); $w.Write([uint32]$pixels)
+  $w.Write([int32]2835); $w.Write([int32]2835); $w.Write([uint32]0); $w.Write([uint32]0)
+  for ($y = 0; $y -lt $Height; $y++) { $w.Write($row) }
+  $w.Flush()
+  [IO.File]::WriteAllBytes($Path, $ms.ToArray())
+  $w.Dispose()
 }
 
 # The version lives in one place: [workspace.package] version in the root Cargo.toml.
@@ -62,7 +87,7 @@ if (-not $SkipBuild) {
   [Environment]::SetEnvironmentVariable($flagVar, '-C target-feature=+crt-static')
   # Fail the build (rather than warn) if the icon/VERSIONINFO can't be embedded.
   $env:LIGHTCRAFT_REQUIRE_WINRES = '1'
-  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p lightcraft -p lightcraft-cli --target $Target }
+  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p lightcraft -p lightcraft-cli --features lightcraft/heif,lightcraft-cli/heif --target $Target }
 }
 
 $Bin = Join-Path $TargetDir "$Target\release"
@@ -91,10 +116,26 @@ Copy-Item (Join-Path $Bin 'lightcraft.exe'), (Join-Path $Bin 'lightcraft-cli.exe
 & (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'lightcraft.exe') (Join-Path $Stage 'lightcraft-cli.exe')
 
 # ---- MSI ---------------------------------------------------------------------------------------
+# Extensions must match the WiX tool version (5.0.2, see release.yml). Re-adding is harmless.
+$WixVersion = '5.0.2'
+$WixExtensions = 'WixToolset.UI.wixext', 'WixToolset.Util.wixext'
+foreach ($ext in $WixExtensions) {
+  Invoke-Native "wix extension add $ext/$WixVersion" { wix extension add -g "$ext/$WixVersion" }
+}
+$ExtArgs = foreach ($ext in $WixExtensions) { '-ext'; "$ext/$WixVersion" }
+
+# Installer dialog bitmaps (WixUI sizes): a brand-blue side panel on the welcome/finish pages and
+# a plain white banner on the inner pages. Generated here, never committed.
+$UiDialogBmp = Join-Path $Stage 'ui-dialog.bmp'
+$UiBannerBmp = Join-Path $Stage 'ui-banner.bmp'
+New-PanelBitmap $UiDialogBmp 493 312 164 ([byte[]](0x4E, 0x7B, 0xFB)) ([byte[]](0xFF, 0xFF, 0xFF))
+New-PanelBitmap $UiBannerBmp 493 58 0 ([byte[]](0xFF, 0xFF, 0xFF)) ([byte[]](0xFF, 0xFF, 0xFF))
+
 $Msi = Join-Path $Dist "lightcraft-$Version-windows-$Arch.msi"
 Invoke-Native 'wix build' {
-  wix build (Join-Path $PSScriptRoot 'lightcraft.wxs') -arch $Arch `
+  wix build (Join-Path $PSScriptRoot 'lightcraft.wxs') -arch $Arch -culture en-us @ExtArgs `
     -d "Version=$MsiVersion" -d "BinDir=$Stage" -d "IconPath=$(Join-Path $Root 'assets\app-icon\lightcraft.ico')" `
+    -d "UiDialogBmp=$UiDialogBmp" -d "UiBannerBmp=$UiBannerBmp" `
     -o $Msi
 }
 # wix writes its debug symbols (.wixpdb) next to the MSI; keep them out of the release assets.

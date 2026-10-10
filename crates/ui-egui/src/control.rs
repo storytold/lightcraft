@@ -103,8 +103,9 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         })),
         "hoverPreview": app.hover_preview.as_ref().map(|h| h.label.clone()),
         "status": app.ui.status,
+        "copied": app.copied,
         "notices": app.notices,
-        "quitPrompt": app.quit_prompt,
+        "quitPrompt": app.quit_prompt.as_ref().map(crate::QuitPrompt::text),
         // how hard the background face scan may work right now, and why it is judged so (see `panels::faces::scan_pace`)
         "faceScan": {"pace": app.caches.faces_pace, "focused": app.caches.faces_in_front, "pending": app.caches.faces_pending, "indexed": app.caches.faces_indexed},
         "unsaved": app.session.unsaved().map(|(n, e)| json!({"ops": n, "error": e})),
@@ -113,6 +114,8 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "export": {"running": app.export.as_ref().map(crate::export_task::ExportTask::status), "last": app.last_export_result},
         "import": app.import.as_ref().map(crate::import::ImportTask::status),
         "tasks": app.tasks.labels(),
+        // every long-running task in flight, as the activity stack shows them (`activity.list`)
+        "activity": app.session.activity.list(),
         // commands waiting on a native file dialog shown off the UI thread (`pick`)
         "fileDialogs": app.pending_picks.iter().map(|p| p.command.clone()).collect::<Vec<_>>(),
         "memory": memory(app),
@@ -200,10 +203,11 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                 app.synthetic.push(egui::Event::PointerMoved(at));
             } else if req.method == "ui.clickWidget" {
                 let n = p.get("count").and_then(Value::as_u64).unwrap_or(1);
+                let button = if s("button") == Some("right") { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
                 app.synthetic.push(egui::Event::PointerMoved(at));
                 for _ in 0..n {
-                    app.synthetic.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: m });
-                    app.synthetic.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: m });
+                    app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: true, modifiers: m });
+                    app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: false, modifiers: m });
                 }
             } else {
                 let to = egui::pos2(
@@ -273,6 +277,26 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
             ctx.request_repaint();
             ok(Value::Null)
         }
+        // what the system does for ⌘X / ⌘C / ⌘V in a text field: paste `text`, or (without it)
+        // what the system clipboard holds
+        "ui.clipboard" => {
+            // outside a text field ⌘C / ⌘V are the app's shortcuts (and the macOS menu bar's):
+            // agents run those as commands (`develop.copy`, `develop.paste`)
+            if !ctx.text_edit_focused() {
+                return err("ui.clipboard: no text field has the focus (click one first)");
+            }
+            match s("action") {
+                Some("cut") => app.synthetic.push(egui::Event::Cut),
+                Some("copy") => app.synthetic.push(egui::Event::Copy),
+                Some("paste") => match s("text") {
+                    Some(text) => app.synthetic.push(egui::Event::Paste(text.to_string())),
+                    None => ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste),
+                },
+                _ => return err("ui.clipboard: `action` is cut, copy or paste"),
+            }
+            ctx.request_repaint();
+            ok(Value::Null)
+        }
         "ui.scroll" => {
             app.synthetic.push(egui::Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Point,
@@ -310,8 +334,12 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         "ui.dialog.confirm" => match app.ui.dialog.take() {
             Some(d) => {
                 let r = crate::panels::dialogs::confirm_dialog(app, &d);
-                // the import review stays open on an error, as with its button
-                if (r.is_err() && matches!(d, crate::state::Dialog::Import { .. } | crate::state::Dialog::SamModel { .. }))
+                // the import review and the rule editor stay open on an error, as with their buttons
+                if (r.is_err()
+                    && matches!(
+                        d,
+                        crate::state::Dialog::Import { .. } | crate::state::Dialog::SamModel { .. } | crate::state::Dialog::SmartRules { .. }
+                    ))
                     || (r.is_ok() && crate::panels::dialogs::keeps_open(app, &d))
                 {
                     app.ui.dialog = Some(d);
@@ -340,6 +368,14 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
             ok(Value::Null)
         }
+        "ui.zoomFactor" => match f("factor") {
+            // egui's interface scale (its keyboard shortcuts are off: Cmd+= / Cmd+- zoom the photo)
+            Some(factor) if factor.is_finite() && (0.5..=3.0).contains(&factor) => {
+                ctx.set_zoom_factor(factor as f32);
+                ok(Value::Null)
+            }
+            _ => err("ui.zoomFactor: factor must be a number from 0.5 to 3"),
+        },
         "ui.screenshot" => {
             // never over a photo's original
             if let Some(Err(e)) = s("path").map(|path| app.session.check_write_target(path)) {

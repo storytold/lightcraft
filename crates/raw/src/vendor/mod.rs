@@ -1,6 +1,7 @@
 //! Vendor raw formats (TIFF-based) and helpers shared by them.
 
 pub mod arw;
+mod arw_lens;
 pub mod cr2;
 pub mod cr3;
 pub mod crx;
@@ -12,6 +13,7 @@ pub mod pef;
 pub mod raf;
 mod rafc;
 pub mod rw2;
+mod sr2;
 pub mod srw;
 
 use crate::{BlackLevel, Cfa, Rect};

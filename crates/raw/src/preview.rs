@@ -31,6 +31,21 @@ pub fn embedded_preview_color_space(bytes: &[u8]) -> Option<PreviewColorSpace> {
     }
 }
 
+/// Whether the camera optimised its embedded JPEG's dynamic range with local tone mapping that the raw data doesn't
+/// carry: Sony's Dynamic Range Optimizer (maker note `0xb025`, see `vendor::arw`). Such a JPEG is brighter in its
+/// darker regions than the raw developed with the camera's global tone curve. `Some(false)` when the file says it
+/// was off, `None` when it doesn't say (other makers, notes without the tag, undocumented values).
+pub fn embedded_preview_dynamic_range_optimized(bytes: &[u8]) -> Option<bool> {
+    let tiff = Tiff::parse(bytes).ok()?;
+    let make = tiff.ifds.first()?.string(t::MAKE)?;
+    if !make.trim().to_ascii_uppercase().starts_with("SONY") {
+        return None;
+    }
+    let e = tiff.exif()?.get(t::MAKER_NOTE)?;
+    let mn = makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make)?;
+    crate::vendor::arw::dynamic_range_optimizer(&mn)
+}
+
 /// Whether `b` looks like a displayable (DCT) JPEG: SOI, and the first SOF marker is not lossless.
 fn is_dct_jpeg(b: &[u8]) -> bool {
     if b.len() < 4 || b[0] != 0xff || b[1] != 0xd8 {

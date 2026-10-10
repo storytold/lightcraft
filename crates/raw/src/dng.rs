@@ -19,6 +19,76 @@ pub(crate) fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
         .max_by_key(|i| i.u64(t::IMAGE_WIDTH).unwrap_or(0).saturating_mul(i.u64(t::IMAGE_LENGTH).unwrap_or(0)))
 }
 
+/// Undo the DNG 1.7 row/column interleave, which reorders the stored raster without changing its
+/// size: with `RowInterleaveFactor = n` the rows are stored as `n` consecutive fields, field `g`
+/// holding rows `g, g+n, g+2n, …` of the image (and likewise for columns).
+///
+/// The tag counts fields, not a divisor of the raster — see [`field_map`] — so a dimension the
+/// factor does not divide is decoded, with the trailing fields short, rather than refused.
+///
+/// Left alone, a file like this decodes as `n × m` scaled-down copies of the scene, one per
+/// field, with the CFA pattern then read across permuted samples — so it is not merely misplaced,
+/// it is the wrong colour as well (`RowInterleaveFactor = ColumnInterleaveFactor = 2` is what DNG
+/// 1.7 JPEG XL files from Adobe's converter carry).
+fn deinterleave(data: &mut RawData, w: usize, h: usize, cpp: usize, rows: usize, cols: usize) -> Result<()> {
+    if rows <= 1 && cols <= 1 {
+        return Ok(());
+    }
+    // The spec sets no bound on the value (it is only "the number of interleaved fields"); this
+    // caps the field table we build and the permutation, and rejects a hostile tag.
+    if !(1..=16).contains(&rows) || !(1..=16).contains(&cols) {
+        return Err(RawError::Unsupported(format!("interleave factors {rows} × {cols}")));
+    }
+    let (map_r, map_c) = (field_map(h, rows), field_map(w, cols));
+    let dest = |r: usize, c: usize| map_r[r] * w + map_c[c];
+    match data {
+        RawData::U16(v) => permute(v, w, h, cpp, dest),
+        RawData::F32(v) => permute(v, w, h, cpp, dest),
+    }
+}
+
+/// The stored-line → image-line map for one axis: a factor of `n` splits `len` lines into `n`
+/// interleaved fields, field `g` holding lines `g, g+n, g+2n, …`. The fields are stored
+/// consecutively, so field `g` starts at stored line `offs[g]` and its `k`-th line is image line
+/// `g + n*k`. Field sizes follow from the round-robin split — field `g` has `ceil((len - g) / n)`
+/// lines — so when `n` does not divide `len` the trailing fields are short, and when `n` exceeds
+/// `len` the trailing fields are empty.
+fn field_map(len: usize, n: usize) -> Vec<usize> {
+    let mut offs = Vec::with_capacity(n + 1);
+    let mut acc = 0usize;
+    for g in 0..=n {
+        offs.push(acc);
+        if g < n && g < len {
+            acc += (len - 1 - g) / n + 1;
+        }
+    }
+    let mut map = vec![0usize; len];
+    for g in 0..n {
+        for (k, i) in (offs[g]..offs[g + 1]).enumerate() {
+            map[i] = g + n * k;
+        }
+    }
+    map
+}
+
+/// Move every `cpp`-sample pixel of `v` from its stored position to `dest(r, c)`, the image
+/// position it belongs at. The permutation is not its own inverse, so it needs a destination.
+fn permute<T: Copy + Default, F: Fn(usize, usize) -> usize>(v: &mut Vec<T>, w: usize, h: usize, cpp: usize, dest: F) -> Result<()> {
+    let n = w.checked_mul(h).and_then(|n| n.checked_mul(cpp)).ok_or_else(|| RawError::Corrupt("image too large".into()))?;
+    if v.len() != n {
+        return Err(RawError::Corrupt("mosaic size does not match the image".into()));
+    }
+    let mut out = vec![T::default(); n];
+    for r in 0..h {
+        for c in 0..w {
+            let (from, to) = ((r * w + c) * cpp, dest(r, c) * cpp);
+            out[to..to + cpp].copy_from_slice(&v[from..from + cpp]);
+        }
+    }
+    *v = out;
+    Ok(())
+}
+
 fn mat3(v: Option<Vec<f64>>) -> Option<Mat3> {
     let v = v?;
     if v.len() != 9 || v.iter().any(|x| !x.is_finite()) {
@@ -125,6 +195,15 @@ pub(crate) fn decode_as(bytes: &[u8], mode: Mode, format: RawFormat) -> Result<R
     let tiff = Tiff::parse(bytes)?;
     let ifd0 = &tiff.ifds[0];
     let raw = raw_ifd(&tiff).ok_or_else(|| RawError::Corrupt("DNG without a raw image IFD".into()))?;
+    // GoPro's GPR: a DNG whose raw data is VC-5 coded, which is not decoded (yet). Named here, before
+    // the generic "TIFF compression 9" of the chunk decoder. Header mode still describes the file
+    // (a GPR has no embedded preview, and a library keeps the photo with this reason shown, as it
+    // does for any file whose pixels fail to decode, rather than refusing to import it).
+    if mode == Mode::Full
+        && let Some(c) = raw.u16(t::COMPRESSION).filter(|&c| c == t::compression::VC5)
+    {
+        return Err(RawError::Unsupported(format!("DNG compression {c} (GoPro VC-5) is not decoded yet")));
+    }
     let info = raw.image()?;
     let (w, h, cpp) = (info.width as usize, info.height as usize, info.samples_per_pixel as usize);
     if !(1..=4).contains(&cpp) {
@@ -132,6 +211,13 @@ pub(crate) fn decode_as(bytes: &[u8], mode: Mode, format: RawFormat) -> Result<R
     }
     let mut data = read_image_in(mode, bytes, &info, tiff.order, Packing::Msb)?;
     let bits = info.bits() as u32;
+
+    // DNG 1.7 interleaved storage: the raster is a permutation of the mosaic, so undo it before
+    // anything reads a sample as a pixel.
+    if mode == Mode::Full {
+        let factor = |tag| raw.u16(tag).map(usize::from).unwrap_or(1);
+        deinterleave(&mut data, w, h, cpp, factor(t::ROW_INTERLEAVE_FACTOR), factor(t::COLUMN_INTERLEAVE_FACTOR))?;
+    }
 
     // linearization table (integer data only)
     let mut linearized = false;
@@ -237,4 +323,108 @@ pub(crate) fn decode_as(bytes: &[u8], mode: Mode, format: RawFormat) -> Result<R
     };
     img.validate_for(mode)?;
     Ok(img)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Store `image` the way DNG 1.7 interleaves it: row `r` of the image is written to stored row
+    /// `(r % rows) * (h / rows) + r / rows`, and columns likewise. This is the inverse of
+    /// [`deinterleave`]'s destination map for a raster the factor divides, i.e. what a writer
+    /// produces (the short-trailing-field case is covered by the hand-written fixtures below).
+    fn interleave(image: &[u16], w: usize, h: usize, rows: usize, cols: usize) -> Vec<u16> {
+        let (gh, gw) = (h / rows, w / cols);
+        let mut out = vec![0u16; w * h];
+        for r in 0..h {
+            for c in 0..w {
+                out[((r % rows) * gh + r / rows) * w + (c % cols) * gw + c / cols] = image[r * w + c];
+            }
+        }
+        out
+    }
+
+    fn samples(d: &RawData) -> Vec<u16> {
+        match d {
+            RawData::U16(v) => v.clone(),
+            RawData::F32(_) => Vec::new(),
+        }
+    }
+
+    /// The image `image` laid out in stored order, given the image line each stored row and column
+    /// holds. Written out by hand from the tag's plain reading, so it does not share a formula with
+    /// the code under test.
+    fn store(image: &[u16], w: usize, rows_img: &[usize], cols_img: &[usize]) -> Vec<u16> {
+        let mut out = vec![0u16; image.len()];
+        for (sr, &ir) in rows_img.iter().enumerate() {
+            for (sc, &ic) in cols_img.iter().enumerate() {
+                out[sr * w + sc] = image[ir * w + ic];
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn deinterleaves_an_interleaved_raster() {
+        // 3×3 rather than 2×2 on purpose: the 2×2 permutation is its own inverse, so a 2×2 fixture
+        // would pass even with the direction of the permutation reversed. This is the shape a DNG
+        // 1.7 file caught in the wild carried (JPEG XL, `RowInterleaveFactor`/`ColumnInterleaveFactor`
+        // both 2) — its real-file ground truth is that it renders bit-identical to its
+        // non-interleaved twin.
+        let (w, h, rows, cols) = (12, 9, 3, 3);
+        let image: Vec<u16> = (0..w * h).map(|i| i as u16).collect();
+        let mut data = RawData::U16(interleave(&image, w, h, rows, cols));
+        assert_ne!(samples(&data), image, "the fixture has to actually be permuted");
+        deinterleave(&mut data, w, h, 1, rows, cols).unwrap();
+        assert_eq!(samples(&data), image);
+
+        // 2×2 as well, the shape Adobe's converter writes.
+        let (w2, h2) = (12, 8);
+        let image2: Vec<u16> = (0..w2 * h2).map(|i| i as u16).collect();
+        let mut two = RawData::U16(interleave(&image2, w2, h2, 2, 2));
+        deinterleave(&mut two, w2, h2, 1, 2, 2).unwrap();
+        assert_eq!(samples(&two), image2);
+    }
+
+    #[test]
+    fn deinterleave_pins_the_field_direction() {
+        // Hand-computed ground truth for the tag's plain reading ("field g holds lines g, g+n,
+        // g+2n, …"). The 3×3 test above round-trips against a helper written from the same reading
+        // of the tag, so it fixes consistency but not the direction; and a 2×2 fixture cannot tell
+        // the two directions apart, being its own inverse. These maps are written out literally so
+        // a reversed permutation fails here. 3 row fields of h = 9 start at stored rows 0, 3, 6 and
+        // hold image rows [0,3,6,1,4,7,2,5,8]; 2 column fields of w = 4 give [0,2,1,3].
+        let (w, h) = (4, 9);
+        let image: Vec<u16> = (0..(w * h) as u16).collect();
+        let mut data = RawData::U16(store(&image, w, &[0, 3, 6, 1, 4, 7, 2, 5, 8], &[0, 2, 1, 3]));
+        assert_ne!(samples(&data), image, "the fixture has to actually be permuted");
+        deinterleave(&mut data, w, h, 1, 3, 2).unwrap();
+        assert_eq!(samples(&data), image);
+    }
+
+    #[test]
+    fn deinterleaves_a_raster_the_factor_does_not_divide() {
+        // The spec fixes the number of fields, not that the size is a multiple of it: h = 7 over 3
+        // row fields is 3 + 2 + 2 (the round-robin split), so field 0 starts at stored row 0 holding
+        // image rows 0, 3, 6; field 1 at stored row 3 holding 1, 4; field 2 at stored row 5 holding
+        // 2, 5. Columns: w = 5 over 2 fields is 3 + 2 → image columns [0,2,4,1,3].
+        let (w, h) = (5, 7);
+        let image: Vec<u16> = (0..(w * h) as u16).collect();
+        let mut data = RawData::U16(store(&image, w, &[0, 3, 6, 1, 4, 2, 5], &[0, 2, 4, 1, 3]));
+        assert_ne!(samples(&data), image, "the fixture has to actually be permuted");
+        deinterleave(&mut data, w, h, 1, 3, 2).unwrap();
+        assert_eq!(samples(&data), image);
+    }
+
+    #[test]
+    fn deinterleave_is_a_no_op_at_one_and_refuses_a_hostile_factor() {
+        let image: Vec<u16> = (0..48).collect();
+        let mut plain = RawData::U16(image.clone());
+        deinterleave(&mut plain, 8, 6, 1, 1, 1).unwrap();
+        assert_eq!(samples(&plain), image);
+
+        // A hostile factor is an error, not a scrambled image.
+        let mut hostile = RawData::U16(image);
+        assert!(deinterleave(&mut hostile, 8, 6, 1, 1 << 20, 1).is_err());
+    }
 }

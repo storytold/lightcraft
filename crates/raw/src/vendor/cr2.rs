@@ -13,7 +13,9 @@
 //!   read per file (no model table); files without the tag fall back to RGGB (issue #85). The parity of the
 //!   `SensorInfo` borders does *not* predict it (RGGB files come with both even and odd top borders).
 //! - `SensorInfo` (maker note `0x00e0`): sensor width/height and the left/top/right/bottom borders of the image
-//!   area; the masked columns left of it give the black level.
+//!   area. Light already reaches some columns left of that border (EOS 6D: masked columns 0–70, border 84; 10–36
+//!   such columns on every corpus body), so the masked columns that give the black level are measured from the
+//!   data ([`masked_columns`]) rather than taken as the whole border.
 //! - `ColorBalance` (maker note `0x4001`): as-shot `RGGB` levels at a model-dependent offset; we probe the known
 //!   offsets and accept the first plausible quadruple. The array is 16-bit words; some models store it as UNDEFINED
 //!   bytes (ColorData versions -3 and -4), which are paired up in the maker note's byte order first.
@@ -26,6 +28,7 @@ use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, Ra
 use lightcraft_geom::Orientation;
 use lightcraft_tiff::image::chunk_bytes;
 use lightcraft_tiff::{ByteOrder, Ifd, Tiff, Value, makernote, tags as t};
+use std::ops::Range;
 
 const CR2_SLICE: u16 = 0xc640;
 const SRAW_TYPE: u16 = 0xc6c5;
@@ -77,6 +80,38 @@ fn wb_from_color_balance(v: &[u64]) -> Option<[f32; 3]> {
         }
     }
     None
+}
+
+/// The optically black columns left of the image area: from column 2 up to two columns before the first column
+/// whose mean (over the image rows) rises above the leftmost columns' level by more than 1/256 of the remaining
+/// range (at least 16), else up to two columns before the image area. Empty when the border is too narrow.
+fn masked_columns(data: &[u16], width: usize, active: Rect, white: f32) -> Range<usize> {
+    let limit = active.x.saturating_sub(2).min(width);
+    if limit < 4 || active.height == 0 {
+        return 0..0;
+    }
+    let step = (active.height / 256).max(1);
+    let column_mean = |x: usize| {
+        let (mut sum, mut n) = (0.0, 0usize);
+        for y in (active.y..active.y.saturating_add(active.height)).step_by(step) {
+            if let Some(&v) = y.checked_mul(width).and_then(|i| data.get(i.checked_add(x)?)) {
+                sum += f64::from(v);
+                n += 1;
+            }
+        }
+        (n > 0).then(|| sum / n as f64)
+    };
+    let means: Vec<f64> = (2..limit).map_while(column_mean).collect();
+    let mut first: Vec<f64> = means.iter().take(8).copied().collect();
+    first.sort_by(f64::total_cmp);
+    let Some(&level) = first.get(first.len() / 2) else { return 0..0 };
+    let tolerance = ((f64::from(white) - level) / 256.0).max(16.0);
+    let end = match means.iter().position(|&m| m > level + tolerance) {
+        // `means[k]` is column `2 + k`: stop two columns before it
+        Some(k) => k,
+        None => 2 + means.len(),
+    };
+    2..end.max(2)
 }
 
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
@@ -154,12 +189,11 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     }
     let wb = mn.as_ref().and_then(|m| m.ifd.value(COLOR_BALANCE).map(|v| words(v, m.order))).and_then(|v| wb_from_color_balance(&v));
     let cfa = cfa_from_tag(raw.u64(CR2_CFA_PATTERN)).unwrap_or_else(|| Cfa::bayer_static("RGGB"));
-    let black = if active.x >= 8 {
-        black_from_columns(&data, width, 2..active.x - 2, active.y..active.y + active.height, active)
-    } else {
-        BlackLevel::uniform(0.0)
-    };
     let white = white_from_data(&data, prec as u32);
+    let black = match masked_columns(&data, width, active, white) {
+        cols if cols.len() >= 2 => black_from_columns(&data, width, cols, active.y..active.y + active.height, active),
+        _ => BlackLevel::uniform(0.0),
+    };
     let mut metadata = lightcraft_meta::from_tiff(&tiff);
     metadata.width = Some(active.width as u32);
     metadata.height = Some(active.height as u32);
@@ -297,6 +331,25 @@ pub(crate) mod tests {
         // SHORT values pass through, an odd trailing byte is ignored
         assert_eq!(words(&Value::Short(vec![1, 2, 3]), ByteOrder::Little), vec![1, 2, 3]);
         assert_eq!(words(&Value::Undefined(vec![1, 0, 2]), ByteOrder::Little), vec![1]);
+    }
+
+    /// Light reaches columns left of the `SensorInfo` border (as on the EOS 6D): the black level comes from the
+    /// masked columns only, not from the image columns between them and the border.
+    #[test]
+    fn black_from_masked_columns_only() {
+        let (w, h, border, light) = (40, 12, 20, 14);
+        let data: Vec<u16> = (0..w * h).map(|i| if i % w < light { 2048 + (i % 2) as u16 } else { 6000 }).collect();
+        let active = Rect::new(border, 2, w - border, h - 2);
+        let cols = masked_columns(&data, w, active, 15000.0);
+        assert_eq!(cols, 2..light - 2);
+        let black = black_from_columns(&data, w, cols, 2..h, active);
+        assert!(black.values.iter().all(|v| (2048.0..=2049.0).contains(v)), "{:?}", black.values);
+        // the whole border masked: every column but the two next to the image
+        let dark: Vec<u16> = (0..w * h).map(|i| if i % w < border { 2048 } else { 6000 }).collect();
+        assert_eq!(masked_columns(&dark, w, active, 15000.0), 2..border - 2);
+        // too narrow a border, or no samples (headers-only decode): none
+        assert!(masked_columns(&dark, w, Rect::new(5, 0, 30, h), 15000.0).is_empty());
+        assert!(masked_columns(&[], w, active, 15000.0).is_empty());
     }
 
     /// A maker note holding only `ColorData` (`0x4001`) as `ty` (3 = SHORT, 7 = UNDEFINED) with `n` values, a plain

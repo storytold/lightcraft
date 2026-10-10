@@ -255,7 +255,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         }
                     };
                     let m = &mut masks[i];
-                    if let Some(MaskComponent { name: None, shape: MaskShape::Brush { strokes }, .. }) =
+                    if let Some(MaskComponent { shape: MaskShape::Brush { strokes }, .. }) =
                         m.components.iter_mut().rev().find(|c| matches!(c.shape, MaskShape::Brush { .. }))
                     {
                         strokes.push(stroke);
@@ -464,7 +464,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         ),
                     ));
                 }
-                let started = s.segmenter.start_download().map_err(ai_err)?;
+                let started = s.segmenter.start_download(&s.activity).map_err(ai_err)?;
                 Ok(json!({"started": started, "installed": s.segmenter.installed(), "downloading": s.segmenter.download_status().running}))
             }
         ),

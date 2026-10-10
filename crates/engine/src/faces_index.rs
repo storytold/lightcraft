@@ -434,6 +434,10 @@ pub(crate) struct FacesState {
     pub scanned: Scanned,
     /// Photos that could not be searched this session (unreadable files): left alone until the next launch.
     pub scan_failed: std::collections::HashSet<u64>,
+    /// The scan's row in the activity stack, while photos are left.
+    pub task: Option<crate::activity::TaskGuard>,
+    /// The most photos left at once since the scan last finished (the row's whole).
+    pub peak: u64,
 }
 
 impl FacesState {

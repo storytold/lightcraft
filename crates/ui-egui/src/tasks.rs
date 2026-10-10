@@ -1,7 +1,8 @@
 //! Background tasks for commands whose file-system work can take long on a slow or offline drive
 //! (Find Missing Photos walking a folder, listing the auto-import folder…): the work runs on a
 //! worker thread and its result is applied on the UI thread between frames, so the window keeps
-//! answering. Imports, scans, exports and preview builds have their own tasks with progress.
+//! answering. Imports, scans, exports and preview builds have their own tasks with progress. A task the user started
+//! (Find Missing Photos) shows in the activity stack while it runs; quiet ones (the auto-import listing) don't.
 
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
@@ -13,6 +14,8 @@ type Finish = Box<dyn FnOnce(&mut LightcraftApp, &egui::Context) + Send>;
 struct Task {
     label: String,
     rx: Receiver<Finish>,
+    /// Its row in the activity stack (none for quiet tasks); goes with the task.
+    _guard: Option<lightcraft_engine::activity::TaskGuard>,
 }
 
 /// The background tasks in flight.
@@ -39,10 +42,12 @@ impl Tasks {
 }
 
 /// Run `work` on a worker thread, then `done(app, ctx, result)` on the UI thread (in the browser
-/// build, which has no threads, `work` runs at once and `done` on the next frame).
+/// build, which has no threads, `work` runs at once and `done` on the next frame). With `kind`, the
+/// activity stack shows `label` meanwhile, without a count and without ✕ (the work can't be stopped).
 pub fn spawn<T: Send + 'static>(
     app: &mut LightcraftApp,
     label: &str,
+    kind: Option<&'static str>,
     work: impl FnOnce() -> T + Send + 'static,
     done: impl FnOnce(&mut LightcraftApp, &egui::Context, T) + Send + 'static,
 ) -> Result<(), String> {
@@ -59,7 +64,8 @@ pub fn spawn<T: Send + 'static>(
     std::thread::Builder::new().name(format!("lc-task-{label}")).spawn(job).map_err(|e| format!("{label}: could not start: {e}"))?;
     #[cfg(target_arch = "wasm32")]
     job();
-    app.tasks.running.push(Task { label: label.to_string(), rx });
+    let guard = kind.map(|k| app.session.activity.start(k, label, lightcraft_engine::activity::Cancel::No));
+    app.tasks.running.push(Task { label: label.to_string(), rx, _guard: guard });
     Ok(())
 }
 

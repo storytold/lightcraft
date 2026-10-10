@@ -1,5 +1,6 @@
 //! Window regions and panels.
 
+pub mod activity;
 pub mod bottombar;
 pub mod chips;
 pub mod compare;
@@ -12,6 +13,8 @@ pub mod faces;
 pub mod filterbar;
 pub mod grid;
 pub mod keymap;
+pub mod keyword_list;
+pub mod keywording;
 pub mod left;
 pub mod library_problem;
 pub mod masking;

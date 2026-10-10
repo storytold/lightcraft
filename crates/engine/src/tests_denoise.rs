@@ -757,3 +757,35 @@ fn the_denoise_switch_validates_arguments_and_accepts_explicit_targets_without_s
     drop(x.s);
     let _ = std::fs::remove_dir_all(x.dir);
 }
+
+#[test]
+fn denoise_row_while_queue_is_busy() {
+    let mut x = setup("activity", true);
+    let rows = |s: &Session| s.activity.list().into_iter().filter(|t| t.kind == "denoise").collect::<Vec<_>>();
+    let r = x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
+    assert!(rows(&x.s).is_empty(), "nothing to make, no row: {r}");
+    set_amount(&mut x.s, 100.0);
+    let mut shown = false;
+    for _ in 0..600 {
+        let r = x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
+        let rows = rows(&x.s);
+        // (what the pump left running or queued is what the row reflects until the next pump)
+        if x.s.denoise_busy() {
+            assert_eq!(rows.len(), 1, "{r}");
+            assert_eq!((rows[0].label.as_str(), rows[0].cancellable, rows[0].unit), ("AI Denoise", false, crate::activity::Unit::Percent), "{r}");
+            if !r["running"].is_null() {
+                assert_eq!(rows[0].detail, "ramp.dng", "{r}");
+            }
+            shown = true;
+        } else {
+            assert!(rows.is_empty(), "{r}");
+        }
+        if r["ready"].as_u64() >= Some(1) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(shown, "the photo never showed a row");
+    assert!(rows(&x.s).is_empty(), "the row goes once the photo is made");
+    let _ = std::fs::remove_dir_all(&x.dir);
+}
