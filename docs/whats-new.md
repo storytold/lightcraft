@@ -288,6 +288,11 @@
   show no dialogs and take `INSTALLFOLDER=...`.
 - If the desktop app can't open its window (for example when no graphics device can be used), it now says so in a
   message box that names the log file, instead of quitting without a trace (issue #260).
+- On Linux and FreeBSD, file dialogs (Import Photos…, Open Library, Export, presets, keyword lists…) are children of
+  the LightCraft window. The xdg-desktop-portal picker used to open as a separate top-level window on Wayland
+  ("Failed to associate portal window with parent window" in the portal's log): tiling compositors put it beside the
+  app, and with LightCraft fullscreen it was hidden altogether, so Import Photos… looked like a hang until the
+  dialog was found and closed.
 - On macOS, single-key shortcuts that appear in the menu bar now work: E, C, H, M, ⇧P, I, K, D, ratings 0–5,
   labels 6–9, P / U and the rest did nothing, because macOS only passes ⌘ / ⌃ combinations and function keys
   to the menu bar and the app ignored those keys, assuming the menu bar would handle them. Keys outside the menus
