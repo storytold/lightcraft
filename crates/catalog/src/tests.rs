@@ -476,6 +476,27 @@ fn set_embedded_lens_is_undoable_and_journaled() {
     assert_eq!(c.photo(a).unwrap().embedded_lens, None);
 }
 
+/// A decode or Reload stores the as-shot white a raw reads through its camera's matrices; the inverse (through the
+/// journal's JSON) takes it back, and a value that is not a number is refused.
+#[test]
+fn set_as_shot_wb_is_undoable_journaled_and_checked() {
+    let mut c = Catalog::default();
+    let a = c.alloc_photo_id();
+    let mut p = Photo::new(a, Source::File { path: "/x.arw".into() }, "x.arw", "ARW", 4000, 3000, "2026-10-06T00:00:00");
+    p.as_shot_wb = Some((6500.0, 0.0));
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let op = Op::SetAsShotWb { id: a, wb: Some((4986.0, -2.0)) };
+    let op: Op = serde_json::from_str(&serde_json::to_string(&op).unwrap()).unwrap();
+    let inv = c.apply(op).unwrap();
+    assert_eq!(c.photo(a).unwrap().as_shot_wb, Some((4986.0, -2.0)));
+    let inv: Op = serde_json::from_str(&serde_json::to_string(&inv).unwrap()).unwrap();
+    c.apply(inv).unwrap();
+    assert_eq!(c.photo(a).unwrap().as_shot_wb, Some((6500.0, 0.0)));
+    assert!(c.apply(Op::SetAsShotWb { id: a, wb: Some((f64::NAN, 0.0)) }).is_err());
+    assert!(c.apply(Op::SetAsShotWb { id: PhotoId(999), wb: None }).is_err());
+    assert_eq!(c.photo(a).unwrap().as_shot_wb, Some((6500.0, 0.0)));
+}
+
 /// A saved smart album whose rules no longer check (the album a rule tests was deleted) is found,
 /// with its problems; a good one has none; an old album operator is read as it was meant.
 #[test]

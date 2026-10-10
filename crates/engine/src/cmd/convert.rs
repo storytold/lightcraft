@@ -229,6 +229,14 @@ pub(crate) fn lens_ops(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog:
     ops
 }
 
+/// The op that gives a raw the as-shot white balance its file reads now (`info`, a fresh probe), or none when the
+/// catalog already has it or the photo is not a raw edited in Kelvin. A raw imported before its camera's matrices
+/// gave it a Kelvin scale keeps the relative scale's 6500 / 0 until a decode or Reload reads the file (issue #730).
+pub(crate) fn as_shot_wb_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Option<Op> {
+    let read = info.as_shot_wb.filter(|(t, tint)| t.is_finite() && tint.is_finite())?;
+    (ph.develops_raw() && !ph.relative_wb() && ph.as_shot_wb != Some(read)).then_some(Op::SetAsShotWb { id, wb: Some(read) })
+}
+
 /// Re-read photos whose files changed on disk (an external editor saved them): new size,
 /// dimensions and content hash, cached sources dropped. → {reloaded: [ids]}
 fn reload(s: &mut Session, p: &Value) -> Result<Value> {
@@ -248,14 +256,16 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
         // camera fields the catalog lacks (e.g. a raw imported before its format was read) are filled in;
         // nothing already set is overwritten
         let meta_ops = fill_missing_meta(id, ph, &info);
-        let mut mine: Vec<Op> = content_op(id, ph, info.clone()).into_iter().chain(meta_ops).chain(lens_ops(id, ph, &info)).collect();
+        let mut mine: Vec<Op> =
+            content_op(id, ph, info.clone()).into_iter().chain(meta_ops).chain(lens_ops(id, ph, &info)).chain(as_shot_wb_op(id, ph, &info)).collect();
         if !mine.is_empty() {
             ops.append(&mut mine);
             reloaded.push(id);
         }
         // virtual copies share the file
         for c in s.catalog.photos().filter(|c| c.copy_of == Some(id)) {
-            let theirs: Vec<Op> = content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, &info)).collect();
+            let theirs: Vec<Op> =
+                content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, &info)).chain(as_shot_wb_op(c.id, c, &info)).collect();
             if !theirs.is_empty() {
                 ops.extend(theirs);
                 reloaded.push(c.id);

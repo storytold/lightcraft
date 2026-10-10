@@ -242,7 +242,13 @@ impl WbMode {
             WbMode::Custom => "Custom",
         }
     }
-    /// Preset temperature/tint for raw files (K, tint).
+    /// Preset temperature/tint for raw files with a Kelvin scale (K, tint): the CIE daylight series D55 / D65 /
+    /// D75 (5503, 6504, 7504 K; CIE 15:2004) for Daylight / Cloudy / Shade, CIE Illuminant A (2856 K) for
+    /// Tungsten, a typical cool-white fluorescent (CIE F2, 4230 K, is the lamp; 3800 K with a magenta correction
+    /// is what a camera's preset neutralises) and a flash at daylight; the tints are the small magenta
+    /// corrections daylight-series whites need above the Planckian locus, as Lightroom's presets of the same
+    /// names show them in its panel (observed values, no Adobe data). On the relative scale (rendered files, raws
+    /// without matrices) `develop.wb` scales them around 6500 K = as shot.
     pub fn preset(self) -> Option<(f64, f64)> {
         match self {
             WbMode::Daylight => Some((5500.0, 10.0)),
@@ -256,9 +262,35 @@ impl WbMode {
     }
 }
 
-/// White balance. For raw files `temp` is the scene illuminant in Kelvin; for rendered files
-/// (JPEG etc.) the image is assumed D65-balanced and `temp`/`tint` are the same model with an
-/// "as shot" of 6500 K / 0 (the UI shows a relative −100..100 scale for those, like Lightroom).
+/// Which scale a [`WhiteBalance`]'s `temp` / `tint` were written on.
+///
+/// Raws whose camera has colour matrices (in the file, or measured for the model) edit white balance in Kelvin;
+/// before that, raws without matrices in the file were all edited relative to their as-shot look, where 6500 K / 0
+/// means *as shot*. Settings written then carry no scale and keep that meaning (`Legacy`): the pipeline turns them
+/// into the same colour change on the Kelvin scale (`lightcraft_pipeline::local::legacy_to_kelvin`), so no photo's
+/// look changes. Settings written on the Kelvin scale say so (`Kelvin`). The scale is irrelevant on files the
+/// Kelvin scale does not reach (rendered photos, raws without matrices): their values keep the relative meaning.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WbScale {
+    /// Written before the scale existed, or by a preset / partial JSON without one: relative (6500 K / 0 = as shot)
+    /// on a raw developed from a fitted look, Kelvin on a raw whose file carries matrices. Not written.
+    #[default]
+    Legacy,
+    /// Absolute Kelvin and tint, as Lightroom writes them for raws.
+    Kelvin,
+}
+
+impl WbScale {
+    fn is_legacy(&self) -> bool {
+        *self == WbScale::Legacy
+    }
+}
+
+/// White balance. For raw files with colour matrices `temp` is the scene illuminant in Kelvin (`scale` says the
+/// values were written on that scale); for rendered files (JPEG etc.) and raws without matrices the image is
+/// assumed D65-balanced and `temp`/`tint` are the same model with an "as shot" of 6500 K / 0 (the UI shows a
+/// relative −100..100 scale for those, like Lightroom).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WhiteBalance {
@@ -266,11 +298,17 @@ pub struct WhiteBalance {
     pub temp: f64,
     /// Correction direction: negative adds green, positive adds magenta.
     pub tint: f64,
+    /// The scale `temp` / `tint` were written on; left out of the JSON when [`WbScale::Legacy`], so settings
+    /// from before it existed read and write unchanged.
+    #[serde(skip_serializing_if = "WbScale::is_legacy")]
+    pub scale: WbScale,
 }
 
 impl Default for WhiteBalance {
     fn default() -> Self {
-        Self { mode: WbMode::AsShot, temp: 6500.0, tint: 0.0 }
+        // (`Legacy`, like an absent field: a default photo's settings JSON stays what it was; the engine marks the
+        // scale when white balance is written on a raw that has one, `lightcraft_pipeline::local::normalize_wb`)
+        Self { mode: WbMode::AsShot, temp: 6500.0, tint: 0.0, scale: WbScale::Legacy }
     }
 }
 

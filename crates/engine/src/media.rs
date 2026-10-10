@@ -19,7 +19,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Weak};
 
-use lightcraft_catalog::{MediaKind, Photo, PhotoId, Source};
+use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
 use lightcraft_develop::DevelopSettings;
 use lightcraft_pipeline::{Quality, RenderRequest, Rendered, SourceInfo, StageCache};
 use lightcraft_preview::{Hash128, Hasher128, Lru, PreviewCache};
@@ -940,8 +940,18 @@ pub fn source_info(p: &Photo) -> SourceInfo {
     // A raw shown from its embedded preview is a rendered (display-referred) JPEG: relative white
     // balance and the display tone curve, like any other rendered file.
     if p.develops_raw() {
-        let (temp, tint) = if p.relative_wb() { (6500.0, 0.0) } else { p.as_shot_wb.unwrap_or((5500.0, 0.0)) };
-        SourceInfo { raw: true, as_shot_temp: temp, as_shot_tint: tint, lens: p.embedded_lens, relative_wb: p.relative_wb(), ..Default::default() }
+        let relative = p.relative_wb();
+        let (temp, tint) = if relative { (6500.0, 0.0) } else { p.as_shot_wb.unwrap_or((5500.0, 0.0)) };
+        SourceInfo {
+            raw: true,
+            as_shot_temp: temp,
+            as_shot_tint: tint,
+            lens: p.embedded_lens,
+            relative_wb: relative,
+            // (a fitted-look raw edited in Kelvin: its camera's matrices give the scale, see `files::WbScaleOf`)
+            legacy_relative_wb: p.fitted_look() && !relative,
+            ..Default::default()
+        }
     } else {
         SourceInfo::default()
     }
@@ -1254,12 +1264,35 @@ impl crate::Session {
         })
     }
 
-    /// Accept a finished job's loaded source into the cache.
+    /// Accept a finished job's loaded source into the cache. What the decode learnt about the file that the catalog
+    /// has wrong is corrected too ([`Self::learn_as_shot_wb`]).
     pub fn accept(&mut self, r: &RenderResult) {
         if let Some(src) = &r.loaded
             && r.source_key.is_none_or(|key| self.catalog.photo(r.photo).is_some_and(|p| Hasher128::new().str(&content_key(p)).finish() == key))
         {
+            if let Some(info) = &src.info {
+                self.learn_as_shot_wb(r.photo, info);
+            }
             self.media.insert_source(r.photo, r.level, src.clone());
+        }
+    }
+
+    /// Record the as-shot white balance a decode of photo `id`'s file read (`info`) when the catalog has another:
+    /// a raw imported before its camera's matrices gave it a Kelvin scale keeps 6500 / 0 (the relative scale's
+    /// reference) until its file is next decoded (issue #730). Bookkeeping, not an undo step; the look does not
+    /// change (the pipeline reads the stored settings against the real as-shot white either way), only what As Shot
+    /// says and what a smart preview renders with. Only for raws edited in Kelvin.
+    fn learn_as_shot_wb(&mut self, id: PhotoId, info: &SourceInfo) {
+        let Some(p) = self.catalog.photo(id) else { return };
+        if !(info.raw && !info.relative_wb && p.develops_raw() && !p.relative_wb()) {
+            return;
+        }
+        let read = (info.as_shot_temp, info.as_shot_tint);
+        if !(read.0.is_finite() && read.1.is_finite()) || p.as_shot_wb == Some(read) {
+            return;
+        }
+        if let Err(e) = self.apply_system(Op::SetAsShotWb { id, wb: Some(read) }) {
+            log::warn!("photo {}: as-shot white balance not recorded: {e}", id.0);
         }
     }
 
@@ -1322,6 +1355,9 @@ impl crate::Session {
         let p = self.catalog.photo(id).ok_or("no such photo")?.clone();
         let r = self.media.source_ref(&p, level).load_source()?;
         let image = r.image.clone();
+        if let Some(info) = &r.info {
+            self.learn_as_shot_wb(id, info);
+        }
         self.media.insert_source(id, level, r);
         Ok(image)
     }
@@ -1356,7 +1392,6 @@ pub type FileProbe = Arc<dyn Fn(&str) -> Result<ProbeInfo, String> + Send + Sync
 #[cfg(test)]
 mod thumbnail_hash_tests {
     use super::*;
-    use lightcraft_catalog::Op;
 
     fn session() -> crate::Session {
         let mut s = crate::Session::new();
@@ -1502,6 +1537,81 @@ mod tests {
         assert_eq!(r.rendered.unwrap().image.data, again.rendered.unwrap().image.data);
         s.media.forget(id);
         assert!(s.media.get_source(id, r.level).is_none());
+    }
+
+    /// Issue #730: an ILCE-7M3 ARW from an older catalog (white balance relative to the as-shot look, 6500 / 0 as
+    /// its as-shot white, a Custom value on that scale) renders pixel for pixel as it did once the camera's matrices
+    /// give it a Kelvin scale; the decode teaches the catalog the real as-shot white (bookkeeping, not an undo step),
+    /// and the panel then reads As Shot in Kelvin while the stored settings keep their look.
+    #[test]
+    fn old_relative_white_balance_on_a_kelvin_camera_keeps_its_look_and_learns_the_as_shot_white() {
+        use lightcraft_develop::{WbMode, WbScale};
+        let mut s = crate::Session::new();
+        let id = s.catalog.alloc_photo_id();
+        let mut p = Photo::new(id, Source::File { path: "/photos/DSC00001.ARW".into() }, "DSC00001.ARW", "ARW", 64, 64, "2026-01-01T00:00:00");
+        p.kind = MediaKind::Raw;
+        p.meta.camera = "SONY ILCE-7M3".into();
+        p.as_shot_wb = Some((6500.0, 0.0));
+        let mut d = lightcraft_develop::DevelopSettings::for_raw(6500.0, 0.0);
+        (d.wb.mode, d.wb.temp, d.wb.tint) = (WbMode::Custom, 5800.0, 3.0);
+        assert_eq!(d.wb.scale, WbScale::Legacy);
+        p.develop = Arc::new(d.clone());
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        s.selection.ids = vec![id];
+        s.selection.active = Some(id);
+        // the catalog's view of the source before the file is read: Kelvin scale, as-shot white not yet known
+        let header = s.source_info(id);
+        assert!(header.raw && !header.relative_wb && header.legacy_relative_wb);
+        assert_eq!((header.as_shot_temp, header.as_shot_tint), (6500.0, 0.0));
+        // the decode: what `files::load_bytes` reports for this camera (the as-shot white through its matrices)
+        let decoded = SourceInfo { raw: true, legacy_relative_wb: true, as_shot_temp: 4986.0, as_shot_tint: -2.0, ..Default::default() };
+        let mut pixels = Rgb32f::new(64, 64);
+        for (i, px) in pixels.data.iter_mut().enumerate() {
+            let v = (i % 64) as f32 / 64.0;
+            *px = [0.05 + 0.6 * v, 0.04 + 0.4 * v, 0.03 + 0.3 * v];
+        }
+        let mut job = s.render_job(id, 64, 64, false, true).unwrap();
+        let (loaded_info, loaded_pixels) = (decoded.clone(), pixels.clone());
+        job.source = SourceRef::File {
+            path: "/photos/DSC00001.ARW".into(),
+            max_edge: 64,
+            loader: Some(Arc::new(move |_, _| Ok((loaded_pixels.clone(), loaded_info.clone())))),
+            fallback: None,
+            denoise: None,
+        };
+        let undo_before = s.undo.len();
+        let request = job.request;
+        let r = job.run();
+        let new = r.rendered.as_ref().unwrap().image.data.clone();
+        // the old pipeline: the same settings against the relative-scale source facts of an older build
+        let old_info = SourceInfo { raw: true, relative_wb: true, as_shot_temp: 6500.0, as_shot_tint: 0.0, ..Default::default() };
+        let old = lightcraft_pipeline::render(&pixels, &old_info, &d, &request).image.data;
+        assert_eq!(new, old, "the look of an existing edit changed");
+        assert_ne!(
+            new,
+            lightcraft_pipeline::render(&pixels, &decoded, &lightcraft_develop::DevelopSettings::for_raw(4986.0, -2.0), &request).image.data
+        );
+        // accepting the result records the as-shot white, journaled but not undoable, and the settings are untouched
+        s.accept(&r);
+        let p = s.catalog.photo(id).unwrap();
+        assert_eq!(p.as_shot_wb, Some((4986.0, -2.0)));
+        assert_eq!(*p.develop, d);
+        assert_eq!(s.undo.len(), undo_before);
+        assert!(s.pending_log.iter().any(|op| matches!(op, Op::SetAsShotWb { id: i, wb: Some((4986.0, -2.0)) } if *i == id)));
+        assert!(!p.is_edited() || p.develop.wb.mode == WbMode::Custom);
+        // the panel reads the white balance in effect in Kelvin: the value the relative edit renders as
+        let info = s.source_info(id);
+        assert_eq!((info.as_shot_temp, info.as_shot_tint), (4986.0, -2.0));
+        let shown = lightcraft_pipeline::local::effective_wb(&info, &d);
+        assert_eq!(shown, lightcraft_pipeline::local::legacy_to_kelvin(5800.0, 3.0, (4986.0, -2.0)));
+        assert!(shown.0 < 4986.0 && shown.0 > 4000.0, "{shown:?}");
+        // accepting again changes nothing more
+        let log = s.pending_log.len();
+        s.accept(&r);
+        assert_eq!(s.pending_log.len(), log);
+        // a catalog-only (proxy) render of the same settings before the decode gave the same pixels too
+        let proxy = lightcraft_pipeline::render(&pixels, &header, &d, &request).image.data;
+        assert_eq!(proxy, old, "a smart preview of an existing edit changed");
     }
 
     #[test]

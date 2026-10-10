@@ -121,3 +121,102 @@ fn targeted_adjustment_on_curve_and_mixer() {
     assert!(o.values().all(|v| v.as_f64().unwrap() < 0.0));
     assert!(s.execute("develop.targeted", &json!({"target": "nope", "x": 0.5, "y": 0.5, "delta": 1})).is_err());
 }
+
+/// Issue #730: on a raw whose camera has measured colour matrices the white-balance commands write Kelvin, mark
+/// the scale, resolve the presets to their real temperatures, and turn a value still on the old relative scale into
+/// the Custom Kelvin value that renders the same before applying an edit on top of it.
+#[test]
+fn white_balance_commands_write_kelvin_on_raws_whose_camera_has_matrices() {
+    use lightcraft_catalog::{MediaKind, Op, Photo, Source};
+    use lightcraft_develop::{DevelopSettings, WbMode, WbScale};
+    let mut s = Session::new();
+    let add = |s: &mut Session, name: &str, camera: &str, as_shot: (f64, f64)| {
+        let id = s.catalog.alloc_photo_id();
+        let mut p = Photo::new(id, Source::File { path: format!("/photos/{name}") }, name, "ARW", 64, 64, "2026-01-01T00:00:00");
+        p.kind = MediaKind::Raw;
+        p.meta.camera = camera.into();
+        p.as_shot_wb = Some(as_shot);
+        p.develop = std::sync::Arc::new(p.camera_defaults());
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        id
+    };
+    let kelvin = add(&mut s, "a.arw", "SONY ILCE-7M3", (4986.0, -2.0));
+    let relative = add(&mut s, "b.arw", "SONY ILCE-7M2", (6500.0, 0.0));
+    let dev = |s: &Session, id| (*s.develop_of(id).unwrap()).clone();
+    assert_eq!((dev(&s, kelvin).wb.scale, dev(&s, relative).wb.scale), (WbScale::Kelvin, WbScale::Legacy));
+
+    // presets are real temperatures on the Kelvin raw, scaled around 6500 K = as shot on the other
+    s.execute("library.select", &json!({"ids": [kelvin.0], "active": kelvin.0})).unwrap();
+    let r = s.execute("develop.wb", &json!({"mode": "cloudy"})).unwrap();
+    assert_eq!((r["temp"].as_f64(), r["tint"].as_f64()), (Some(6500.0), Some(10.0)));
+    let d = dev(&s, kelvin);
+    assert_eq!((d.wb.mode, d.wb.temp, d.wb.tint, d.wb.scale), (WbMode::Cloudy, 6500.0, 10.0, WbScale::Kelvin));
+    s.execute("develop.wb", &json!({"mode": "tungsten"})).unwrap();
+    assert_eq!(dev(&s, kelvin).wb.temp, 2850.0);
+    s.execute("library.select", &json!({"ids": [relative.0], "active": relative.0})).unwrap();
+    let r = s.execute("develop.wb", &json!({"mode": "cloudy"})).unwrap();
+    assert!((r["temp"].as_f64().unwrap() - 6500.0 * 6500.0 / 5500.0).abs() < 1e-6, "{r}");
+    assert_eq!(dev(&s, relative).wb.scale, WbScale::Legacy);
+
+    // a slider edit on the Kelvin raw is Kelvin; the stored value says so
+    s.execute("library.select", &json!({"ids": [kelvin.0], "active": kelvin.0})).unwrap();
+    s.execute("develop.wb", &json!({"mode": "asShot"})).unwrap();
+    s.execute("develop.set", &json!({"control": "wb.temp", "value": 5200})).unwrap();
+    let d = dev(&s, kelvin);
+    assert_eq!((d.wb.mode, d.wb.temp, d.wb.tint, d.wb.scale), (WbMode::Custom, 5200.0, -2.0, WbScale::Kelvin));
+    let info = s.source_info(kelvin);
+    assert_eq!(lightcraft_engine_effective(&info, &d), (5200.0, -2.0));
+
+    // settings from an older catalog on the Kelvin raw: a relative Custom value (6500 = as shot) with no scale
+    let mut old = DevelopSettings::for_raw(6500.0, 0.0);
+    (old.wb.mode, old.wb.temp, old.wb.tint) = (WbMode::Custom, 5800.0, 3.0);
+    s.set_develop(kelvin, old.clone(), "old").unwrap();
+    let shown = lightcraft_engine_effective(&info, &old);
+    let expect = lightcraft_pipeline::local::legacy_to_kelvin(5800.0, 3.0, (4986.0, -2.0));
+    assert_eq!(shown, expect);
+    assert!(shown.0 < 4986.0, "a warm relative shift is a lower Kelvin than as shot: {shown:?}");
+    // nudging the tint converts the temperature to the Kelvin it rendered as, then applies the nudge
+    s.execute("develop.adjust", &json!({"control": "wb.tint", "delta": 5})).unwrap();
+    let d = dev(&s, kelvin);
+    assert_eq!((d.wb.mode, d.wb.scale), (WbMode::Custom, WbScale::Kelvin));
+    assert!((d.wb.temp - expect.0).abs() < 1e-6 && (d.wb.tint - (expect.1 + 5.0)).abs() < 1e-6, "{:?} vs {expect:?}", d.wb);
+    // a relative preset value from an older catalog becomes a Custom value with its old look, not the preset's Kelvin
+    let mut old = DevelopSettings::for_raw(6500.0, 0.0);
+    (old.wb.mode, old.wb.temp, old.wb.tint) = (WbMode::Cloudy, 6500.0 * 6500.0 / 5500.0, 10.0);
+    s.set_develop(kelvin, old.clone(), "old preset").unwrap();
+    assert_eq!(lightcraft_engine_effective(&info, &old), lightcraft_pipeline::local::legacy_to_kelvin(old.wb.temp, 10.0, (4986.0, -2.0)));
+    s.execute("develop.set", &json!({"control": "wb.tint", "value": 0})).unwrap();
+    let d = dev(&s, kelvin);
+    assert_eq!((d.wb.mode, d.wb.tint, d.wb.scale), (WbMode::Custom, 0.0, WbScale::Kelvin));
+    assert!(d.wb.temp != 6500.0 && (d.wb.temp - lightcraft_pipeline::local::legacy_to_kelvin(old.wb.temp, 10.0, (4986.0, -2.0)).0).abs() < 1e-6);
+    // a partial without a scale (an old preset, `develop.merge`) keeps the relative meaning on the Kelvin raw
+    s.execute("develop.merge", &json!({"settings": {"wb": {"mode": "custom", "temp": 6500.0, "tint": 0.0}}})).unwrap();
+    let d = dev(&s, kelvin);
+    assert_eq!(d.wb.scale, WbScale::Legacy);
+    assert_eq!(lightcraft_engine_effective(&info, &d), (4986.0, -2.0), "6500 / 0 without a scale is as shot");
+    // Quick Develop on old settings: As Shot from an older catalog (no scale) nudges the Kelvin as-shot white, a
+    // relative Custom value is converted to the Kelvin it rendered as first (never a Kelvin number read as relative)
+    let mut old = DevelopSettings::for_raw(6500.0, 0.0);
+    old.wb.mode = WbMode::AsShot;
+    s.set_develop(kelvin, old, "old as shot").unwrap();
+    s.execute("develop.quickAdjust", &json!({"control": "wb.temp", "delta": 100})).unwrap();
+    let d = dev(&s, kelvin);
+    assert_eq!((d.wb.mode, d.wb.temp, d.wb.tint, d.wb.scale), (WbMode::Custom, 5086.0, -2.0, WbScale::Kelvin));
+    let mut old = DevelopSettings::for_raw(6500.0, 0.0);
+    (old.wb.mode, old.wb.temp, old.wb.tint) = (WbMode::Custom, 5800.0, 3.0);
+    s.set_develop(kelvin, old, "old custom").unwrap();
+    s.execute("develop.quickAdjust", &json!({"control": "wb.tint", "delta": 5})).unwrap();
+    let d = dev(&s, kelvin);
+    assert_eq!((d.wb.mode, d.wb.scale), (WbMode::Custom, WbScale::Kelvin));
+    assert!((d.wb.temp - expect.0).abs() < 1e-6 && (d.wb.tint - (expect.1 + 5.0)).abs() < 1e-6, "{:?} vs {expect:?}", d.wb);
+
+    // reset: As Shot, on the Kelvin scale
+    s.execute("develop.reset", &json!({})).unwrap();
+    let d = dev(&s, kelvin);
+    assert_eq!((d.wb.mode, d.wb.scale), (WbMode::AsShot, WbScale::Kelvin));
+    assert!(!s.catalog.photo(kelvin).unwrap().is_edited());
+}
+
+fn lightcraft_engine_effective(info: &lightcraft_pipeline::SourceInfo, d: &lightcraft_develop::DevelopSettings) -> (f64, f64) {
+    lightcraft_pipeline::local::effective_wb(info, d)
+}

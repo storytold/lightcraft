@@ -168,9 +168,12 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 let label = if vals.len() == 1 { controls::find(&vals[0].0).map(|c| c.label).unwrap_or("Edit").to_string() } else { "Edit".into() };
                 let apply = |d: &mut DevelopSettings, info: &lightcraft_pipeline::SourceInfo| {
-                    if d.wb.mode == WbMode::AsShot && vals.iter().any(|(k, _)| k == "wb.temp" || k == "wb.tint") {
-                        d.wb.temp = info.as_shot_temp;
-                        d.wb.tint = info.as_shot_tint;
+                    if vals.iter().any(|(k, _)| k == "wb.temp" || k == "wb.tint") {
+                        lightcraft_pipeline::local::normalize_wb(d, info);
+                        if d.wb.mode == WbMode::AsShot {
+                            d.wb.temp = info.as_shot_temp;
+                            d.wb.tint = info.as_shot_tint;
+                        }
                     }
                     for (k, v) in &vals {
                         controls::set(d, k, *v);
@@ -209,6 +212,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let info = s.source_info(active(s, "develop.adjust")?);
             edit(s, "develop.adjust", spec.label, |d| {
                 if c == "wb.temp" || c == "wb.tint" {
+                    lightcraft_pipeline::local::normalize_wb(d, &info);
                     if d.wb.mode == WbMode::AsShot {
                         d.wb.temp = info.as_shot_temp;
                         d.wb.tint = info.as_shot_tint;
@@ -240,10 +244,17 @@ pub fn specs() -> Vec<CommandSpec> {
                         Some(l) => (*l).clone(),
                         None => {
                             let info = s.source_info(id);
-                            DevelopSettings {
-                                wb: lightcraft_develop::WhiteBalance { mode: WbMode::AsShot, temp: info.as_shot_temp, tint: info.as_shot_tint },
+                            let mut fresh = DevelopSettings {
+                                wb: lightcraft_develop::WhiteBalance {
+                                    mode: WbMode::AsShot,
+                                    temp: info.as_shot_temp,
+                                    tint: info.as_shot_tint,
+                                    ..Default::default()
+                                },
                                 ..Default::default()
-                            }
+                            };
+                            lightcraft_pipeline::local::normalize_wb(&mut fresh, &info);
+                            fresh
                         }
                     };
                     // a fresh start renders with the current process (a section or slider reset doesn't change it)
@@ -377,7 +388,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     m => m
                         .preset()
                         .map(|(t, ti)| {
-                            // presets are relative to daylight for rendered files
+                            // presets are Kelvin on raws with that scale, relative to daylight (6500 K = as shot) elsewhere
                             if info.raw && !info.relative_wb { (t, ti) } else { (6500.0 * t / 5500.0, ti) }
                         })
                         .unwrap_or((info.as_shot_temp, info.as_shot_tint)),
@@ -387,6 +398,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 // The resolved temperature/tint is stored, so rendering never depends on the mode; the
                 // mode is kept for the UI's WB dropdown.
                 edit(s, "develop.wb", "White Balance", |d| {
+                    lightcraft_pipeline::local::normalize_wb(d, &info);
                     d.wb.mode = mode;
                     d.wb.temp = t.clamp(2000.0, 50000.0);
                     d.wb.tint = tint.clamp(-150.0, 150.0);
@@ -416,6 +428,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let patch = lightcraft_raster::Rgb32f::filled(4, 4, acc);
             let (t, tint) = lightcraft_pipeline::auto::auto_wb(&patch, &info);
             edit(s, "develop.wbPick", "White Balance", |d| {
+                lightcraft_pipeline::local::normalize_wb(d, &info);
                 d.wb.mode = WbMode::Custom;
                 d.wb.temp = t;
                 d.wb.tint = tint;
@@ -847,10 +860,14 @@ pub fn specs() -> Vec<CommandSpec> {
                     .filter_map(|id| s.develop_of(id).map(|d| (id, d)))
                     .filter_map(|(id, d)| {
                         let mut nd = (*d).clone();
-                        if nd.wb.mode == WbMode::AsShot && (ctl == "wb.temp" || ctl == "wb.tint") {
+                        if ctl == "wb.temp" || ctl == "wb.tint" {
+                            // each photo on its own scale: Kelvin (an old relative value converted first) or relative
                             let info = s.source_info(id);
-                            nd.wb.temp = info.as_shot_temp;
-                            nd.wb.tint = info.as_shot_tint;
+                            lightcraft_pipeline::local::normalize_wb(&mut nd, &info);
+                            if nd.wb.mode == WbMode::AsShot {
+                                nd.wb.temp = info.as_shot_temp;
+                                nd.wb.tint = info.as_shot_tint;
+                            }
                         }
                         let v = controls::get(&nd, &ctl).unwrap_or(spec.default);
                         controls::set(&mut nd, &ctl, v + delta);

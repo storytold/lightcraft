@@ -47,7 +47,11 @@ A Custom white balance on a raw LightCraft develops relative to its as-shot look
 RAF, CR3, CR2, PEF, SRW; Lightroom names them all `RAW`) can't be taken as Kelvin: the catalog keeps no
 as-shot white for Custom photos, so the photo stays As Shot and `Temperature, Tint` are reported
 (issue #510; a DNG keeps the Kelvin value, and an XMP packet with `crs:AsShotTemperature` is
-shifted by the same mired difference, see [xmp-interop.md](xmp-interop.md)).
+shifted by the same mired difference, see [xmp-interop.md](xmp-interop.md)). A raw whose camera has
+measured colour matrices (`lightcraft_raw::spectral`: ILCE-7M3, D850, EOS 5D Mark III…) edits in Kelvin
+and keeps the Kelvin value too (issue #730) — when its file was found and probed, since the camera is
+read from the file, not from the Lightroom catalog; a missing file is treated as a relative-scale raw
+until Reload reads it.
 Lightroom's `-999999` deferred-adjustment sentinel is omitted from both catalog and XMP mappings;
 it is reported, included in any saved archive, and never clamped into a real slider value. Deferred Adobe Auto Tone
 is not evaluated by the importer; LightCraft's Auto control remains available after migration.

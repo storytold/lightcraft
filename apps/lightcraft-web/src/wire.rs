@@ -36,6 +36,8 @@ pub struct WireJob {
     pub raw: bool,
     #[serde(default)]
     pub relative_wb: bool,
+    #[serde(default)]
+    pub legacy_relative_wb: bool,
     pub as_shot_temp: f64,
     pub as_shot_tint: f64,
     pub lens: Option<EmbeddedLens>,
@@ -74,6 +76,7 @@ impl WireJob {
             max_edge,
             raw: job.info.raw,
             relative_wb: job.info.relative_wb,
+            legacy_relative_wb: job.info.legacy_relative_wb,
             as_shot_temp: job.info.as_shot_temp,
             as_shot_tint: job.info.as_shot_tint,
             lens: job.info.lens,
@@ -97,6 +100,7 @@ impl WireJob {
             as_shot_tint: self.as_shot_tint,
             lens: self.lens,
             relative_wb: self.relative_wb,
+            legacy_relative_wb: self.legacy_relative_wb,
             ..Default::default()
         }
     }
@@ -421,6 +425,7 @@ mod tests {
             max_edge: 512,
             raw: false,
             relative_wb: false,
+            legacy_relative_wb: false,
             as_shot_temp: 6500.0,
             as_shot_tint: 0.0,
             lens: None,

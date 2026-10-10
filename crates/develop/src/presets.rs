@@ -187,6 +187,7 @@ fn scale_patch(base: &Value, patch: &Value, t: f64) -> Value {
 pub fn apply_partial(s: &DevelopSettings, partial: &Value, amount: f64) -> DevelopSettings {
     let base = s.to_json();
     let patch = if (amount - 1.0).abs() < 1e-9 { partial.clone() } else { scale_patch(&base, partial, amount) };
+    // (a white balance without a scale keeps its old meaning: `DevelopSettings::merged`)
     let mut out = s.merged(&patch).unwrap_or_else(|_| s.clone());
     for c in crate::controls::CONTROLS {
         if let Some(v) = crate::controls::get(&out, c.id) {

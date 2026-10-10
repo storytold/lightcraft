@@ -1,7 +1,7 @@
 //! Scene-linear preparation: white balance + exposure, and the spatial planes the per-pixel stage
 //! needs (edge-aware base layer for highlights/shadows, clarity/texture bands, dehaze veil).
 
-use lightcraft_color::cct::{temp_tint_to_xy, wb_matrix};
+use lightcraft_color::cct::{temp_tint_to_xy, wb_matrix, xy_to_temp_tint};
 use lightcraft_color::{REC2020, luminance_2020};
 use lightcraft_develop::DevelopSettings;
 use lightcraft_raster::blur::gaussian;
@@ -37,7 +37,7 @@ pub fn wb_matrix_for(info: &SourceInfo, s: &DevelopSettings) -> Option<[[f32; 3]
     {
         return Some(m.to_f32());
     }
-    let set = wb_matrix(&REC2020, temp_tint_to_xy(t, tint));
+    let set = wb_matrix(&REC2020, effective_white(info, s));
     let shot = wb_matrix(&REC2020, temp_tint_to_xy(info.as_shot_temp, info.as_shot_tint));
     let m = set.mul(&shot.inverse().unwrap_or(lightcraft_color::Mat3::IDENTITY));
     // Normalize so neutral luminance is preserved (WB shouldn't change exposure).
@@ -64,14 +64,100 @@ fn wb_gain(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings, gain: f32) 
     });
 }
 
-/// The white balance actually in effect (presets resolve to their Kelvin values for raw files).
+/// The white balance actually in effect (presets resolve to their Kelvin values for raw files; settings written on
+/// the relative scale before a raw's camera matrices reached its white balance give the same colour change on the
+/// Kelvin scale, see [`legacy_to_kelvin`]).
 pub fn effective_wb(info: &SourceInfo, s: &DevelopSettings) -> (f64, f64) {
     use lightcraft_develop::WbMode;
     match s.wb.mode {
         WbMode::AsShot => (info.as_shot_temp, info.as_shot_tint),
+        _ if legacy_wb(info, s) => legacy_to_kelvin(s.wb.temp, s.wb.tint, (info.as_shot_temp, info.as_shot_tint)),
         m if info.raw && !info.relative_wb => m.preset().unwrap_or((s.wb.temp, s.wb.tint)),
         _ => (s.wb.temp, s.wb.tint),
     }
+}
+
+/// The source white the render adapts from the as-shot white to: [`effective_wb`] as a chromaticity, except that a
+/// white balance still on the relative scale is composed exactly ([`legacy_white`]) rather than read back through
+/// its rounded Kelvin / tint.
+fn effective_white(info: &SourceInfo, s: &DevelopSettings) -> lightcraft_color::Xy {
+    if legacy_wb(info, s)
+        && s.wb.mode != lightcraft_develop::WbMode::AsShot
+        && let Some(xy) = legacy_white(s.wb.temp, s.wb.tint, (info.as_shot_temp, info.as_shot_tint))
+    {
+        return xy;
+    }
+    let (t, tint) = effective_wb(info, s);
+    temp_tint_to_xy(t, tint)
+}
+
+/// Whether `s` holds a white balance written on the relative scale for a source that is edited in Kelvin today.
+fn legacy_wb(info: &SourceInfo, s: &DevelopSettings) -> bool {
+    info.raw && !info.relative_wb && info.legacy_relative_wb && s.wb.scale == lightcraft_develop::WbScale::Legacy
+}
+
+/// The white that renders exactly as `(temp, tint)` did on the relative scale, where 6500 K / 0 meant *as shot* and
+/// the source's real as-shot white is `as_shot`.
+///
+/// The relative render adapted the picture from 6500 K / 0 to `(temp, tint)` (Bradford, [`wb_matrix_for`]); the
+/// Kelvin render adapts it from `as_shot` to the result. Bradford adaptations are von Kries scalings in one cone
+/// space, so they compose exactly: the new white's cone response is the old target's times the as-shot white's
+/// over the old reference's, and the two renders give the same matrix (up to the scale the luminance
+/// normalisation removes). `None` when the arithmetic has nowhere to go (a non-finite input, a white outside the
+/// chromaticity plane).
+pub fn legacy_white(temp: f64, tint: f64, as_shot: (f64, f64)) -> Option<lightcraft_color::Xy> {
+    use lightcraft_color::{BRADFORD, Xy};
+    if !(temp.is_finite() && tint.is_finite() && as_shot.0.is_finite() && as_shot.1.is_finite()) {
+        return None;
+    }
+    let cones = |t: f64, tint: f64| BRADFORD.apply(temp_tint_to_xy(t, tint).to_xyz());
+    let (old, reference, shot) = (cones(temp, tint), cones(6500.0, 0.0), cones(as_shot.0, as_shot.1));
+    let inverse = BRADFORD.inverse()?;
+    let mut new = [0.0; 3];
+    for i in 0..3 {
+        if reference[i].abs() < 1e-12 {
+            return None;
+        }
+        new[i] = old[i] * shot[i] / reference[i];
+    }
+    let xy = Xy::from_xyz(inverse.apply(new));
+    (xy.x.is_finite() && xy.y.is_finite() && xy.y > 0.0).then_some(xy)
+}
+
+/// The Kelvin / tint of [`legacy_white`]: what a white balance written on the relative scale reads as, and becomes
+/// when it is next edited ([`normalize_wb`]). Exact wherever the white has a Kelvin value (1000–50000 K after the
+/// composition; the relative slider reached 2000–13550 K around 6500 K, so only a far-blue as-shot white pushed
+/// to the slider's blue end lands beyond, and clamps), to the precision of the Kelvin / tint parametrisation
+/// (better than 0.01 % away from its 4000 K seam). Unchanged when the arithmetic has nowhere to go.
+pub fn legacy_to_kelvin(temp: f64, tint: f64, as_shot: (f64, f64)) -> (f64, f64) {
+    if temp == 6500.0 && tint == 0.0 && as_shot.0.is_finite() && as_shot.1.is_finite() {
+        // the relative scale's as-shot reference, exactly (a Custom value left where As Shot was stays as shot)
+        return as_shot;
+    }
+    match legacy_white(temp, tint, as_shot).map(xy_to_temp_tint) {
+        Some((t, tint)) if t.is_finite() && tint.is_finite() => (t, tint),
+        _ => (temp, tint),
+    }
+}
+
+/// Bring the white balance of `d` onto the scale `info` is edited on, before a new value is written into it: on a
+/// raw with a Kelvin scale the values are marked Kelvin, and ones still on the relative scale become the Custom
+/// Kelvin / tint that renders the same ([`legacy_to_kelvin`]; a preset mode's look is kept as that custom
+/// value, since the preset's Kelvin value would be a different look). Elsewhere the scale is cleared, so values
+/// edited on a rendered photo or a raw without matrices never pass for Kelvin when pasted onto one that has them.
+pub fn normalize_wb(d: &mut DevelopSettings, info: &SourceInfo) {
+    use lightcraft_develop::{WbMode, WbScale};
+    if !(info.raw && !info.relative_wb) {
+        d.wb.scale = WbScale::Legacy;
+        return;
+    }
+    if legacy_wb(info, d) && d.wb.mode != WbMode::AsShot {
+        let (t, tint) = legacy_to_kelvin(d.wb.temp, d.wb.tint, (info.as_shot_temp, info.as_shot_tint));
+        d.wb.temp = t;
+        d.wb.tint = tint;
+        d.wb.mode = WbMode::Custom;
+    }
+    d.wb.scale = WbScale::Kelvin;
 }
 
 /// Self-guided filter (He et al.) on a single plane with Gaussian windows of `sigma` px.

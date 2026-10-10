@@ -51,6 +51,14 @@ mode ([mcp.md](mcp.md)) is a thin layer over this channel. Implementation:
 | `ui.render` | `{id?, size?, path?}` | Render a photo (PNG to `path`), `{width, height}` |
 | `app.quit` | — | Close the app |
 
+White balance (`develop.set` with `wb.temp` / `wb.tint`, `develop.wb`, `develop.wbPick`) is in Kelvin and tint on
+raws with colour matrices — in the file (DNG) or measured for the camera model (`lightcraft_raw::spectral`; issue
+#730) — where As Shot reads the file's as-shot white; rendered files and raws without matrices use a relative scale
+whose 6500 K / 0 is the as-shot look (the Edit panel shows it as −100..+100). The stored `wb` of such a Kelvin raw
+says `"scale": "kelvin"`; a partial settings JSON given to `develop.merge` or a preset whose `wb` sets `temp` / `tint`
+**without** `scale` keeps the relative meaning it always had (6500 = as shot) on every raw, so agents that mean
+Kelvin on a Kelvin raw pass `"scale": "kelvin"` or use `develop.set` / `develop.wb`.
+
 Image navigation is also available directly as the UI command `view.navigate`, with
 `{zoom?: "fit" | "fill" | {"percent": number}, pan?: [x, y]}`. Percentage zoom accepts fractional
 values greater than 0 and at most 800; pan is the normalized image centre, with coordinates from 0 to 1.

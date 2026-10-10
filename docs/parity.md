@@ -42,15 +42,15 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | S. Export (EXP) | 15 | 2 | 1 | 0 | 7/7 (100%) | 7/7 (100%) |
 | T. Share (SHARE) | 0 | 0 | 0 | 4 | — | — |
 | U. Map & location (MAP) | 0 | 1 | 1 | 0 | — | 0/1 (0%) |
-| V. Preferences (PREF) | 7 | 1 | 2 | 2 | 1/1 (100%) | 5/5 (100%) |
+| V. Preferences (PREF) | 6 | 2 | 2 | 2 | 1/1 (100%) | 4/5 (80%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 18 | 6 | 1 | 1 | 8/8 (100%) | 6/9 (67%) |
 | Y. Menus | 82 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
-| Lightroom Classic extras | 32 | 11 | 39 | 9 | — | 22/24 (92%) |
-| **Total** | 393 | 39 | 84 | 36 | 192/200 (96%) | 142/152 (93%) |
+| Lightroom Classic extras | 33 | 15 | 35 | 9 | — | 23/25 (92%) |
+| **Total** | 397 | 49 | 73 | 36 | 192/200 (96%) | 143/155 (92%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.9%** of 516 in-scope rows — P0 98.0% of 200 · P1 95.7% of 152 · P2 42.9% of 163.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **81.2%** of 519 in-scope rows — P0 98.0% of 200 · P1 95.2% of 155 · P2 47.2% of 163.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -255,7 +255,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-EDIT-LIGHT-CURVE-TAT | Drag-on-image curve adjust | P1 | ✅ | `cmd:develop.targeted` (`target: curve`) | |
 | LR-EDIT-COLOR-WB-PRESET | White-balance presets | P0 | ✅ | `cmd:develop.wb` | |
 | LR-EDIT-COLOR-WB-PICKER | White-balance eyedropper | P0 | ✅ | `cmd:tool.wbPicker`, `cmd:develop.wbPick` | no magnified loupe while picking |
-| LR-EDIT-COLOR-TEMP | Temperature | P0 | ✅ | `ctl:wb.temp`, `crates/pipeline/src/local.rs` (`wb_matrix_for`), `crates/raw/src/color.rs` (`rebalance`) | relative scale for non-raw in the UI; raws with a colour matrix (DNG and other raws without a file-local look) are re-developed for the chosen white through the camera's own matrices (camera-space white balance, as Lightroom), and the eyedropper / Auto invert the same model; other photos are adapted (Bradford) |
+| LR-EDIT-COLOR-TEMP | Temperature | P0 | ✅ | `ctl:wb.temp`, `crates/pipeline/src/local.rs` (`wb_matrix_for`, `legacy_white`), `crates/raw/src/color.rs` (`rebalance`), `crates/raw/src/spectral.rs` (`find_camera`), `crates/catalog/src/model.rs` (`relative_wb_camera`) | Kelvin (2000–50000 K, As Shot read from the file) on raws with colour matrices: in the file (DNG: re-developed for the chosen white through the camera's own matrices, camera-space white balance as Lightroom; the eyedropper / Auto invert the same model) or measured for the camera model (`lightcraft_raw::spectral`, 52 bodies, issue #730: the matrices turn the as-shot multipliers into Kelvin and the slider back, the look stays the file's fit, and the picture is adapted from the as-shot white, Bradford); raws without matrices anywhere and rendered files use the relative −100..+100 scale (6500 K / 0 = as shot). Settings written on the relative scale before a camera's matrices reached it keep their look (`WbScale`). Not verified against Lightroom's Kelvin: on the ILCE-7M3 the matrices read 7–10 % below Sony's dial (issue #730), and whether the matrices or the dial are off is open |
 | LR-EDIT-COLOR-TINT | Tint | P0 | ✅ | `ctl:wb.tint`, `docs/tint-direction.md` | DNG / Lightroom sign: negative (left) adds green, positive (right) magenta; XMP `crs:Tint` values render as in Lightroom (issue #188); CPU/GPU regression tests |
 | LR-EDIT-COLOR-VIBRANCE | Vibrance | P0 | ✅ | `ctl:color.vibrance` | |
 | LR-EDIT-COLOR-SATURATION | Saturation | P0 | ✅ | `ctl:color.saturation` | |

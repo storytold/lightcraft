@@ -49,6 +49,7 @@
 //! | 4 | Reload reads lens data | `Op::SetEmbeddedLens` |
 //! | 5 | the keyword list | `Op::SetKeyword`, `Catalog.keyword_list` |
 //! | 6 | folder labels | `Op::SetFolderRecord`, `Catalog.folder_records` |
+//! | 7 | Kelvin white balance for raws whose camera has matrices (#730) | `Op::SetAsShotWb`, `WhiteBalance.scale` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -73,7 +74,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 7;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]

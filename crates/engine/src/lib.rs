@@ -471,8 +471,8 @@ impl Session {
     }
 
     /// Apply an op that is LightCraft's own bookkeeping rather than something the user did (faces found by the background
-    /// scan): journaled like any op, but not an undo step, and it leaves the redo stack alone.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// scan, a raw's as-shot white read by a decode): journaled like any op, but not an undo step, and it leaves the
+    /// redo stack alone.
     pub(crate) fn apply_system(&mut self, op: Op) -> Result<()> {
         let fwd = op.clone();
         self.catalog.apply(op)?;

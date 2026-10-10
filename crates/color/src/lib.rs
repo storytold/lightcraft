@@ -149,7 +149,8 @@ impl RgbSpace {
     }
 }
 
-const BRADFORD: Mat3 = Mat3([[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]]);
+/// The Bradford cone-response matrix (XYZ → sharpened cones) that [`bradford`] adapts in.
+pub const BRADFORD: Mat3 = Mat3([[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]]);
 
 /// Bradford chromatic adaptation matrix (XYZ → XYZ) from white `src` to white `dst`.
 pub fn bradford(src: Xy, dst: Xy) -> Mat3 {
