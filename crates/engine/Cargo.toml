@@ -45,6 +45,7 @@ dac-segment = { workspace = true, optional = true }
 dac-fetch = { workspace = true }
 dac-immich = { workspace = true }
 dac-credentials = { workspace = true }
+dac-plugins = { workspace = true }
 
 # free disk space of a volume (Folders panel)
 [target.'cfg(all(unix, not(target_arch = "wasm32")))'.dependencies]
