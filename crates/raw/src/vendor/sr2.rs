@@ -33,9 +33,17 @@
 //!    (8 bytes at position 2510, issue #148, from the plain black levels of the DSC-RX100M6 and ILCE-7M3) and the
 //!    positional tables the black level was read with until issue #535; the unit tests pin all of them.
 //!
-//! Only that key is supported. The one other key seen, in a DSC-R1 SR2 file, gives a different keystream that obeys
-//! the same recurrence from its own first 127 words, but one sample per key cannot show how a seed follows from a
-//! key, so files with another key get `None`.
+//!
+//! **Keys other than `11 22 33 44`: the seed derivation is a recalled scheme (generic memory, no code copied),
+//! confirmed because it reproduces [`SEED`] — the keystream #575 measured from 126 CC0 files — exactly, and because
+//! it turns the DSC-R1's block (another key) into a valid directory.** [`seed_from_key`] takes the key as the
+//! little-endian `u32` of tag `0x7221`, fills 128 state words from the linear congruential generator
+//! `k ← k·48828125 + 1` (four words, the fourth then shifted left one bit with the top bit of `w0 ^ w2` shifted in),
+//! extends them with `w[i] = (w[i−4] ⊕ w[i−2]) << 1 | (w[i−3] ⊕ w[i−1]) >> 31` to word 126, and the first 127 words of
+//! `w[i & 127] = w[(i+1) & 127] ⊕ w[(i+65) & 127]` from `i = 127` are the seed of the recurrence above. For key
+//! `11 22 33 44` that is [`SEED`], word for word (unit test `seed_derivation_reproduces_the_measured_seed`; chance
+//! of an accident 2⁻⁴⁰⁶⁴). For the DSC-R1's key `63 be 01 3e` the 11932-byte block becomes a well-formed 101-entry
+//! directory (black `0x7300`, white balance `0x7303`, crop `0x74c3`).
 
 use lightcraft_tiff::{ByteOrder, Ifd, ParseOptions, tags as t};
 
@@ -67,10 +75,42 @@ const SEED: [u32; 127] = [
     0xcdc6a2de, 0x26e6b330, 0x6c073d46, 0x058e2f27, 0x43833f30, 0x46d1382e, 0x5f0804ec,
 ];
 
-/// XOR `block` with the keystream from its first byte on (whole 4-byte words; a shorter tail stays as it is).
-/// Encrypts and decrypts alike.
+/// The seed (first 127 keystream words) for `key`, the little-endian `u32` of tag `0x7221`; see the module docs.
+fn seed_from_key(key: u32) -> [u32; 127] {
+    let mut p = [0u32; 128];
+    let mut k = key;
+    for w in p.iter_mut().take(4) {
+        k = k.wrapping_mul(48_828_125).wrapping_add(1);
+        *w = k;
+    }
+    p[3] = (p[3] << 1) | ((p[0] ^ p[2]) >> 31);
+    for i in 4..127 {
+        p[i] = ((p[i - 4] ^ p[i - 2]) << 1) | ((p[i - 3] ^ p[i - 1]) >> 31);
+    }
+    let mut seed = [0u32; 127];
+    for (j, out) in seed.iter_mut().enumerate() {
+        let i = 127 + j;
+        p[i & 127] = p[(i + 1) & 127] ^ p[(i + 65) & 127];
+        *out = p[i & 127];
+    }
+    seed
+}
+
+/// The seed for the four key bytes stored in the file: the measured [`SEED`] for [`KEY`], else the derived one.
+fn seed_for(key: [u8; 4]) -> [u32; 127] {
+    if key == KEY { SEED } else { seed_from_key(u32::from_le_bytes(key)) }
+}
+
+/// XOR `block` with the keystream of [`KEY`] from its first byte on (whole 4-byte words; a shorter tail stays as
+/// it is). Encrypts and decrypts alike.
+#[cfg(test)]
 fn apply_keystream(block: &mut [u8]) {
-    let mut ring = SEED;
+    apply_keystream_with(block, SEED);
+}
+
+/// [`apply_keystream`] for the keystream starting with `seed`.
+fn apply_keystream_with(block: &mut [u8], seed: [u32; 127]) {
+    let mut ring = seed;
     for (n, word) in block.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         // `ring[i]` holds k[n − 127] until it is replaced by k[n]; k[n − 63] sits at (n − 63) mod 127
         let i = n % SEED.len();
@@ -93,26 +133,30 @@ pub(crate) struct SubIfd {
 
 impl SubIfd {
     /// Find and decrypt the file's `SR2SubIFD`; `None` when it has none, it lies outside the file, is larger than
-    /// [`MAX_LEN`] or uses another key than [`KEY`].
+    /// [`MAX_LEN`].
     pub(crate) fn read(bytes: &[u8], ifd0: &Ifd, order: ByteOrder) -> Option<Self> {
         let at = order.read_u32(ifd0.bytes(t::DNG_PRIVATE_DATA)?, 0)?;
         let opts = ParseOptions { max_ifds: 1, max_depth: 0, follow_children: false, ..Default::default() };
         let (private, _) = lightcraft_tiff::parse_ifd_at(bytes, u64::from(at), order, 0, false, &opts).ok()?;
-        if private.bytes(SUBIFD_KEY)? != KEY {
-            return None;
-        }
+        let key: [u8; 4] = private.bytes(SUBIFD_KEY)?.try_into().ok()?;
         let start = usize::try_from(private.u64(SUBIFD_OFFSET)?).ok()?;
         let len = usize::try_from(private.u64(SUBIFD_LENGTH)?).ok()?;
         if len > MAX_LEN {
             return None;
         }
-        Some(Self::decrypt(bytes.get(start..start.checked_add(len)?)?, start, order))
+        Some(Self::decrypt_keyed(bytes.get(start..start.checked_add(len)?)?, start, order, key))
     }
 
     /// Decrypt `block`, the encrypted directory found at file offset `start`.
+    #[cfg(test)]
     pub(crate) fn decrypt(block: &[u8], start: usize, order: ByteOrder) -> Self {
+        Self::decrypt_keyed(block, start, order, KEY)
+    }
+
+    /// [`SubIfd::decrypt`] for a block stored with `key` (tag `0x7221`).
+    pub(crate) fn decrypt_keyed(block: &[u8], start: usize, order: ByteOrder, key: [u8; 4]) -> Self {
         let mut plain = block.to_vec();
-        apply_keystream(&mut plain);
+        apply_keystream_with(&mut plain, seed_for(key));
         Self { start, plain, order }
     }
 
@@ -182,6 +226,14 @@ pub(crate) mod tests {
         plain
     }
 
+    /// [`block`] encrypted with another `key`.
+    pub(crate) fn block_keyed(start: usize, entries: &[(u16, u16, &[u16])], order: ByteOrder, key: [u8; 4]) -> Vec<u8> {
+        let mut b = block(start, entries, order);
+        apply_keystream(&mut b); // undo the default key
+        apply_keystream_with(&mut b, seed_for(key));
+        b
+    }
+
     /// Encrypt (or decrypt) `block` in place, as a file stores an `SR2SubIFD` at its first byte.
     pub(crate) fn encrypt(block: &mut [u8]) {
         apply_keystream(block);
@@ -233,6 +285,32 @@ pub(crate) mod tests {
             apply_keystream(&mut block);
             let got: Vec<i16> = block[at..at + 8].chunks(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
             assert_eq!(got, levels, "{file}");
+        }
+    }
+
+    /// The proof of the recalled scheme: derived from key `11 22 33 44`, the seed is exactly the keystream #575
+    /// measured from the CC0 files.
+    #[test]
+    fn seed_derivation_reproduces_the_measured_seed() {
+        assert_eq!(seed_from_key(u32::from_le_bytes(KEY)), SEED);
+        assert_ne!(seed_from_key(u32::from_le_bytes(KEY)), seed_from_key(u32::from_le_bytes(KEY) ^ 1));
+        assert_eq!(seed_for(KEY), SEED);
+    }
+
+    #[test]
+    fn another_key_decrypts_a_block() {
+        // the DSC-R1's key and layout: black 0x7300, WB 0x7303 (G, R, B, G), crop 0x74c3
+        let key = [0x63, 0xbe, 0x01, 0x3e];
+        let entries: [(u16, u16, &[u16]); 3] =
+            [(0x7300, SHORT, &[514, 511, 512, 513]), (0x7303, SHORT, &[256, 500, 385, 256]), (0x74c3, SHORT, &[16, 8, 3904, 2600])];
+        for order in [Little, Big] {
+            let enc = block_keyed(230812, &entries, order, key);
+            let sub = SubIfd::decrypt_keyed(&enc, 230812, order, key);
+            assert_eq!(sub.shorts(0x7300), Some(vec![514.0, 511.0, 512.0, 513.0]), "{order:?}");
+            assert_eq!(sub.shorts(0x7303), Some(vec![256.0, 500.0, 385.0, 256.0]));
+            assert_eq!(sub.shorts(0x74c3), Some(vec![16.0, 8.0, 3904.0, 2600.0]));
+            // the wrong key (or the default one) gives noise
+            assert_eq!(SubIfd::decrypt(&enc, 230812, order).shorts(0x7300), None);
         }
     }
 
