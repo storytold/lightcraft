@@ -244,7 +244,8 @@ pub struct Catalog {
     #[serde(skip)]
     pub revision: u64,
     /// Where new photo/album/stack ids come from (see [`ids`]). Not catalog data: never saved,
-    /// ignored by equality.
+    /// ignored by equality. `Clone` copies the generator state, so a clone draws the same ids as the
+    /// original: re-seed ([`Catalog::seed_ids`]) a clone that will allocate independently.
     #[serde(skip)]
     ids: ids::IdGen,
 }

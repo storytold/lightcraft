@@ -22,7 +22,8 @@ impl IdGen {
         IdGen { state: seed }
     }
 
-    /// The next id in `[1, MAX_ID)` that `taken` doesn't reject.
+    /// The next id in `[1, MAX_ID)` that `taken` doesn't reject. `taken` must leave some id free:
+    /// this loops until it finds one.
     pub fn draw(&mut self, taken: impl Fn(u64) -> bool) -> u64 {
         loop {
             let id = self.next() >> 11; // top 53 bits: [0, 2^53)
