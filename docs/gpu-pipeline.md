@@ -256,7 +256,9 @@ A view's stages keep an uploaded source only up to 96 MB (a Preview-level source
   `/usr/bin/time -l lightcraft-cli snapshot <files> --script steps.jsonl -o out.png` → "maximum
   resident set size" and "peak memory footprint". Run it several times: the high-water mark is
   noisy (allocator caching, scheduling). On Apple silicon GPU buffers count in the footprint.
-- Imports read raw headers only (`lightcraft_raw::probe_info`): no pixel data is decompressed.
+- Imports read raw headers only (`lightcraft_raw::probe_info`): no pixel data is decompressed,
+  except the first rows a few vendor formats need for facts their headers lack (Nikon NEF: the
+  first 128 rows for the masked trailing columns, issue #708).
 - One budget (`memory::budget`, default min(25 % of RAM, 1.5 GiB); `LIGHTCRAFT_MEMORY_MB` or
   `app.memoryBudget {mb}`): half for the engine caches (decoded thumbnail / preview / full
   sources and rendered previews, evicted least recently used *across* them; the photo on screen
