@@ -1869,6 +1869,47 @@ mod tests {
         let _ = std::fs::remove_dir_all(&out);
     }
 
+    /// Codex review of #643: the progress line while Photos imports was translated on the export's
+    /// worker thread, whose language is always English.
+    #[test]
+    fn the_photos_progress_line_is_in_the_users_language() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let mut h = demo([1200.0, 900.0]);
+        let t = Duration::from_secs(10);
+        let out = std::env::temp_dir().join(format!("lc-photos-language-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        h.app.ui.language = crate::i18n::Locale::De;
+        crate::i18n::set_language(crate::i18n::Locale::De);
+        h.app.services.write_shared = Some(Arc::new(|p: &str, bytes: &[u8]| lightcraft_engine::export::write_file(p, bytes)));
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let held = std::sync::Mutex::new(held);
+        h.app.session.apple_photos = Some(Arc::new(move |_: &[String], _| {
+            let _ = held.lock().unwrap().recv_timeout(Duration::from_secs(30));
+            Ok(lightcraft_engine::apple_photos::Output { status: Some(0), stdout: "ID\n".into(), stderr: String::new() })
+        }));
+        let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(1).map(|p| p.0).collect();
+        let params = json!({"ids": ids, "dir": out, "longEdge": 48, "addToPhotos": true, "background": true});
+        let r = h.request("engine.execute", json!({"command": "app.export", "params": params}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        let t0 = Instant::now();
+        let current = loop {
+            h.step();
+            let current = h.app.export.as_ref().map(|e| e.progress.lock().unwrap().1.clone()).unwrap_or_default();
+            if current.contains("Apple") || t0.elapsed() > Duration::from_secs(60) {
+                break current;
+            }
+        };
+        assert_eq!(current, "Wird zu Apple Fotos hinzugefügt…");
+        release.send(()).unwrap();
+        while h.app.export.is_some() && t0.elapsed() < Duration::from_secs(90) {
+            h.step();
+        }
+        crate::i18n::set_language(crate::i18n::Locale::En);
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
     /// Issue #236 review: control requests run on the UI thread, which must not wait minutes for
     /// Photos. `export.addToPhotos` and `app.export {addToPhotos}` without `background` answer at
     /// once with the running job; the app announces the outcome when Photos is done.

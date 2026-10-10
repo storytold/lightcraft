@@ -4,9 +4,9 @@ An export can hand the files it wrote to Apple Photos, optionally into an album 
 `LR-EXP-PHOTOS`). macOS only: on other platforms the option is hidden in the Export dialog and refused by
 `app.export`. The web build doesn't include it.
 
-> **Status: not yet tested end to end.** The code and its tests (which use a stand-in for osascript) are in
-> place, but no import into a real Photos library has been run yet, and the AppleScript has never been run.
-> Please try the [manual test](#manual-test) below, with the packaged app, and report what happens.
+> **Tested end to end** on macOS 26.6.2 with Photos 11.0, using the ad-hoc-signed packaged app and a new, empty
+> Photos library: the [manual test](#manual-test) below, except the two `lightcraft-cli` steps (11 and 12). Please
+> run it again after changing the script or the packaging.
 
 ## Using it
 
@@ -16,8 +16,9 @@ An export can hand the files it wrote to Apple Photos, optionally into an album 
 - **Export with Previous** and saved export presets repeat it (the setting is part of the export options).
 - **Agents and scripts:** `app.export {…, addToPhotos: true, photosAlbum?: "Name"}` (desktop app, MCP `export`
   tool, `lightcraft-cli run`); `lightcraft-cli render in.dng -o out.jpg --opt addToPhotos=true --opt
-  photosAlbum=Name`. The export's result carries `applePhotos` (below). A failed Photos step does not fail
-  the export: the files are written either way.
+  photosAlbum=Name`. The export's result carries `applePhotos` (below). The files are written either way: a
+  failed Photos step doesn't fail `app.export` (its `applePhotos` has the `error`), while `lightcraft-cli render`
+  says the file was written and exits with the error.
 - **Files already on disk:** `export.addToPhotos {paths: [absolute paths], album?, wait?}`.
 - **How an import went:** `export.photosImports` lists this session's imports, oldest first;
   `export.photosImports {job}` gives one.
@@ -65,7 +66,9 @@ Settings ▸ General ▸ *Copy items to the Photos library*. When it references 
 LightCraft runs `/usr/bin/osascript` with a constant AppleScript (`SCRIPT` in
 `crates/engine/src/apple_photos.rs`) that asks Photos, through its scripting interface, to import the files:
 `import … into album … skip check duplicates false`. The album is found or made first ([Which
-album](#which-album)). The script returns the new media items' ids.
+album](#which-album)). The script returns the new media items' ids. Files go to Photos 200 at a time (each path is an osascript argument, and
+macOS limits a program's arguments to 1 MiB), one run after another within the import's time limit; the first
+run makes the album when it is missing.
 
 This is Apple Events to Photos' own import command. It is not the OS-level synthetic input that AGENTS.md
 forbids: nothing is typed or clicked, and no other window is touched.
@@ -91,8 +94,9 @@ not only files it exported. So any client of the control port or the MCP server 
 video on the Mac into the user's Photos library, and from there into iCloud Photos when that is on. macOS asks
 for the Automation permission once per app, not per import, so after the first Allow nothing asks again. The
 control port listens on 127.0.0.1 only and has no authentication ([control-protocol.md](control-protocol.md)),
-and the MCP server answers the program that started it, so this reaches programs already running as the user.
-Treat giving an agent the MCP server or the control port as giving it this too.
+so any program on this Mac that can connect to it can do this, including programs of other users logged in to
+the Mac. The MCP server talks only to the program that started it (stdio). Treat giving an agent the MCP server
+or the control port as giving it this too, and turn the control port on only when you need it.
 
 ## When it doesn't work
 
@@ -102,7 +106,7 @@ Treat giving an agent the MCP server or the control port as giving it this too.
 | "Apple Photos couldn't be found…" | Photos isn't installed or couldn't be opened (`-600`, `-10810`, `-10814`, or no `/System/Applications/Photos.app`). |
 | "The import was cancelled in Photos." | Someone pressed Cancel in a Photos dialog (`-128`). |
 | "More than one album at the top level of Photos is named …" | Several top-level albums have that name; nothing was added. Rename one in Photos, or use another name. |
-| "Photos didn't finish adding the photos within N s…" / "didn't answer in time" | LightCraft waits a minute plus five seconds a file (at most two hours), then stops osascript. Photos may still be importing: look in Photos before trying again. |
+| "Photos didn't finish adding the photos within N s…" / "didn't answer in time" | LightCraft waits ten minutes plus five seconds a file (at most two hours), then stops osascript. The ten minutes leave time to answer macOS's permission prompt and Photos' duplicates question. Photos may still be importing: look in Photos before trying again. |
 | "Apple Photos is still adding N file(s) from an earlier request (import K)…" / "An export is about to add its files to Apple Photos (import K)…" | One import at a time: wait for import K (`export.photosImports {job: K}`), then try again. |
 | "Photos added 2 of 3 files…" | A partial import: Photos skipped files it found to be duplicates (it may ask first) or couldn't read. |
 | "Apple Photos is only available on macOS" | The setting came from a Mac (a preset or Export with Previous); the Export dialog drops it on other platforms. |

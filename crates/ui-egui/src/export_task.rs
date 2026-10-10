@@ -48,6 +48,8 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = channel();
     let (p, c) = (progress.clone(), cancel.clone());
+    // translated here: the language is the UI thread's, and the worker would show English
+    let adding = crate::i18n::tr("Adding to Apple Photos…").to_string();
     let work = move || {
         let mut w = |path: &str, bytes: &[u8]| write(path, bytes);
         let r = run_batch(items, &opts, &to, &mut w, &|path| std::path::Path::new(path).exists(), false, &mut |done, name| {
@@ -60,7 +62,7 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
             if !after.is_none()
                 && let Ok(mut g) = p.lock()
             {
-                g.1 = crate::i18n::tr("Adding to Apple Photos…").to_string();
+                g.1 = adding;
             }
             let photos = after.run(&files, c.load(Ordering::Relaxed));
             (files, photos)

@@ -203,10 +203,12 @@ pub fn explain_run_error(e: &RunError) -> String {
     }
 }
 
-/// How long one import may take: a minute, plus five seconds a file, at most two hours (the first
-/// import also waits for the user to answer the permission prompt).
+/// How long one import may take: ten minutes, plus five seconds a file, at most two hours. The ten
+/// minutes are for a person: the first import waits for the user to answer macOS's permission
+/// prompt, and Photos may ask about duplicates; a first try with one minute timed out while the
+/// prompt was still up.
 pub fn timeout_for(files: usize) -> Duration {
-    Duration::from_secs(60u64.saturating_add(5u64.saturating_mul(files as u64)).min(7200))
+    Duration::from_secs(600u64.saturating_add(5u64.saturating_mul(files as u64)).min(7200))
 }
 
 /// What an import gave.
@@ -258,13 +260,37 @@ pub fn check(paths: &[String], album: &str) -> Result<String, String> {
     Ok(album.to_string())
 }
 
-/// Run osascript for a checked request (`album` trimmed; see [`check`]).
+/// Files per osascript run. The paths are arguments, and macOS limits a process's arguments to
+/// 1 MiB in all: 200 paths of the longest length macOS opens (1,024 bytes; [`check`] finds no
+/// file at a longer one) stay below a quarter of that.
+pub const BATCH: usize = 200;
+
+/// Run osascript for a checked request (`album` trimmed; see [`check`]): [`BATCH`] files at a
+/// time, all within [`timeout_for`] the whole request. The first run makes the album when it is
+/// missing; the others find it.
 fn execute(runner: &Runner, paths: &[String], album: &str) -> Result<Imported, String> {
-    let out = runner(&osascript_args(album, paths), timeout_for(paths.len())).map_err(|e| explain_run_error(&e))?;
-    if out.status != Some(0) {
-        return Err(explain(&out, album));
+    let limit = timeout_for(paths.len());
+    let deadline = std::time::Instant::now() + limit;
+    let mut ids = Vec::new();
+    for (i, batch) in paths.chunks(BATCH).enumerate() {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        let out = if left.is_zero() { Err(RunError::Timeout(limit)) } else { runner(&osascript_args(album, batch), left) };
+        let failed = match out {
+            Ok(out) if out.status == Some(0) => {
+                ids.extend(parse_ids(&out.stdout));
+                continue;
+            }
+            Ok(out) => explain(&out, album),
+            // the request's limit, not what was left of it for this batch
+            Err(RunError::Timeout(_)) => explain_run_error(&RunError::Timeout(limit)),
+            Err(e) => explain_run_error(&e),
+        };
+        if i == 0 {
+            return Err(failed);
+        }
+        return Err(format!("{failed} (Photos had added {} of the {} files before that.)", ids.len(), paths.len()));
     }
-    Ok(Imported { ids: parse_ids(&out.stdout), requested: paths.len(), album: (!album.is_empty()).then(|| album.to_string()) })
+    Ok(Imported { ids, requested: paths.len(), album: (!album.is_empty()).then(|| album.to_string()) })
 }
 
 /// Add `paths` (absolute paths of existing files) to Photos, into `album` when it isn't blank,
@@ -845,9 +871,66 @@ mod tests {
         // a failed run is the mapped message
         let (runner, _) = fake(Ok(failed("execution error: Not authorized to send Apple events to Photos. (-1743)")));
         assert!(import(&runner, &paths, "x").unwrap_err().contains("Automation"));
+        // a timeout names the request's limit
         let (runner, _) = fake(Err(RunError::Timeout(Duration::from_secs(70))));
-        assert!(import(&runner, &paths, "x").unwrap_err().contains("70 s"));
+        assert!(import(&runner, &paths, "x").unwrap_err().contains(&format!("{} s", timeout_for(2).as_secs())));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Codex review of #643: every path was an argument of one osascript run, so a big export
+    /// (10,000 files) went over macOS's 1 MiB argument limit and Photos got nothing.
+    #[test]
+    fn big_imports_run_in_batches_within_the_argument_limit() {
+        let long = format!("/{}", "d/".repeat(500)); // about 1,000 bytes, near the longest path macOS opens
+        let paths: Vec<String> = (0..10_000).map(|i| format!("{long}{i:05}.jpg")).collect();
+        let runs = Arc::new(Mutex::new(Vec::<(usize, usize, Duration)>::new()));
+        let r = runs.clone();
+        let runner: Runner = Arc::new(move |args: &[String], limit| {
+            let files = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 2;
+            r.lock().unwrap().push((files, args.iter().map(|a| a.len() + 1).sum(), limit));
+            Ok(Output { status: Some(0), stdout: (0..files).map(|i| format!("ID-{i}\n")).collect(), stderr: String::new() })
+        });
+        let got = execute(&runner, &paths, "Big").unwrap();
+        assert_eq!((got.ids.len(), got.requested, got.warning()), (10_000, 10_000, None));
+        let runs = runs.lock().unwrap().clone();
+        assert_eq!(runs.len(), 10_000 / BATCH);
+        assert!(runs.iter().all(|&(files, _, _)| files == BATCH));
+        let biggest = runs.iter().map(|&(_, bytes, _)| bytes).max().unwrap();
+        assert!(biggest < 1 << 18, "{biggest} bytes of arguments in one run");
+        // every run gets what is left of the request's limit, never more
+        assert!(runs.iter().all(|&(_, _, limit)| limit <= timeout_for(10_000)));
+
+        // a later batch failing: the error says how far Photos got
+        let calls = Arc::new(Mutex::new(0));
+        let c = calls.clone();
+        let runner: Runner = Arc::new(move |args: &[String], _| {
+            let mut n = c.lock().unwrap();
+            *n += 1;
+            let files = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 2;
+            if *n == 2 {
+                return Ok(failed("execution error: Photos got an error: User canceled. (-128)"));
+            }
+            Ok(Output { status: Some(0), stdout: (0..files).map(|i| format!("ID-{i}\n")).collect(), stderr: String::new() })
+        });
+        let e = execute(&runner, &paths[..450], "Big").unwrap_err();
+        assert!(e.contains("cancelled") && e.contains("200 of the 450 files"), "{e}");
+        assert_eq!(*calls.lock().unwrap(), 2, "nothing more is sent after a failed batch");
+
+        // the batches share the request's one deadline: time a batch takes comes off the next one's
+        let limits = Arc::new(Mutex::new(Vec::<Duration>::new()));
+        let l = limits.clone();
+        let runner: Runner = Arc::new(move |args: &[String], limit| {
+            l.lock().unwrap().push(limit);
+            std::thread::sleep(Duration::from_millis(300));
+            let files = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 2;
+            Ok(Output { status: Some(0), stdout: (0..files).map(|i| format!("ID-{i}\n")).collect(), stderr: String::new() })
+        });
+        execute(&runner, &paths[..450], "Big").unwrap();
+        let limits = limits.lock().unwrap().clone();
+        assert_eq!(limits.len(), 3);
+        let whole = timeout_for(450);
+        assert!(limits[0] <= whole && limits[0] > whole - Duration::from_millis(250), "{limits:?}");
+        assert!(limits[1] <= whole - Duration::from_millis(300) && limits[2] <= whole - Duration::from_millis(600), "{limits:?}");
     }
 
     #[test]
@@ -1106,8 +1189,8 @@ mod tests {
 
     #[test]
     fn timeouts_grow_with_the_batch_and_stay_bounded() {
-        assert_eq!(timeout_for(1), Duration::from_secs(65));
-        assert_eq!(timeout_for(100), Duration::from_secs(560));
+        assert_eq!(timeout_for(1), Duration::from_secs(605));
+        assert_eq!(timeout_for(100), Duration::from_secs(1100));
         assert_eq!(timeout_for(usize::MAX), Duration::from_secs(7200));
     }
 }
