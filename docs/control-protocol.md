@@ -299,3 +299,14 @@ A center `move` can include `before` (panel ID or null to append) for tab order.
 The equivalent `{"action": ...}` form accepts a serialized shared docking action;
 this is also the form emitted by the renderer. Protected-canvas and app-specific panel
 rules apply equally to both forms.
+
+## Curve point edits
+
+`develop.curve` replaces a channel with a complete sparse `points: [[x,y], ...]` array. To keep an existing
+continuous curve produced by preset Amount, use `develop.curvePoint` with `channel` (`master`, `red`, `green`,
+`blue`) and `action` (`add`, `move`, `remove`). Add/move take finite `x` and `y` in `0..=1`; move/remove also take an integer
+`index` into the visible handles. The response contains `{channel, index, curve}`; use its index when continuing
+a drag. Function curves expose endpoint handles plus explicitly added corrections, not thousands of cubic samples.
+Wrap a drag in `develop.beginInteraction` and `develop.endInteraction` for one undo step; `develop.cancelInteraction`
+restores the starting model. Invalid indices, duplicate inputs, unsupported blends and oversized models fail
+without replacing the saved curve. Endpoint handles move vertically and cannot be removed.

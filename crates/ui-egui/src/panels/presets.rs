@@ -55,6 +55,7 @@ struct PresetAmountState {
     context: PresetAmountContext,
     owns_undo_step: bool,
     applied: AppliedPreset,
+    baseline: Vec<std::sync::Arc<lightcraft_develop::DevelopSettings>>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -90,6 +91,7 @@ impl PresetAmountState {
     }
 
     fn apply(app: &mut LightcraftApp, preset: Preset, amount: f64) -> Option<Self> {
+        let baseline = app.session.targets(&json!({})).into_iter().filter_map(|id| app.session.develop_of(id)).collect();
         let before = app.session.catalog.revision;
         if app.run("preset.apply", json!({"id": preset.id, "amount": amount})).is_err() {
             return None;
@@ -102,7 +104,7 @@ impl PresetAmountState {
             return None;
         }
         let applied = AppliedPreset::new(&app.session, preset.id.clone(), amount);
-        Some(Self { preset, amount, context, owns_undo_step, applied })
+        Some(Self { preset, amount, context, owns_undo_step, applied, baseline })
     }
 
     fn change(self, app: &mut LightcraftApp, amount: f64) -> Option<Self> {
@@ -111,6 +113,14 @@ impl PresetAmountState {
         }
         if amount == self.amount {
             return Some(self);
+        }
+        // A bounded curve blend can fail (piece cap or unrepresentable extrapolation). Validate
+        // against the same baseline before removing the currently visible, valid preset step.
+        for settings in &self.baseline {
+            if let Err(error) = self.preset.try_apply(settings, amount / 100.0) {
+                app.ui.status = error.to_string();
+                return Some(self);
+            }
         }
         if self.owns_undo_step && app.run("edit.undo", json!({})).is_err() {
             return None;
@@ -246,7 +256,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     } else if resp.hovered() {
                         ui.painter().rect_filled(r, 0.0, t.hover.gamma_multiply(0.7));
                     }
-                    let look = if thumbs || resp.hovered() { current.as_ref().map(|d| pr.apply(d, 1.0)) } else { None };
+                    let look = if thumbs || resp.hovered() { current.as_ref().and_then(|d| pr.try_apply(d, 1.0).ok()) } else { None };
                     let mut text_x = r.left() + 40.0;
                     if thumbs && let (Some(id), Some(s)) = (active, look.as_ref()) {
                         let tr = Rect::from_min_size(pos2(r.left() + 36.0, r.top() + 5.0), vec2(66.0, row_h - 10.0));
@@ -345,8 +355,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 && let Some((saved_id, saved_preset, saved_label)) =
                     ui.data(|d| d.get_temp::<(lightcraft_catalog::PhotoId, Preset, String)>(last_hover_id))
                 && saved_id == id
+                && let Ok(settings) = saved_preset.try_apply(curr, 1.0)
             {
-                app.hover_preview = Some(HoverPreview { label: saved_label, settings: saved_preset.apply(curr, 1.0) });
+                app.hover_preview = Some(HoverPreview { label: saved_label, settings });
             }
         } else {
             ui.data_mut(|d| d.remove::<(lightcraft_catalog::PhotoId, Preset, String)>(last_hover_id));

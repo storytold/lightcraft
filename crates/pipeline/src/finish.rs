@@ -3,7 +3,7 @@
 use lightcraft_color::luminance_2020;
 use lightcraft_color::spline::{Lut1, MonotoneCurve};
 use lightcraft_color::transfer::linear_to_srgb;
-use lightcraft_develop::{DevelopSettings, LocalAdjustments, Process, ToneCurve, VignetteStyle};
+use lightcraft_develop::{DevelopSettings, LocalAdjustments, POINT_CURVE_LUT_SIZE, PointCurve, Process, ToneCurve, VignetteStyle};
 use lightcraft_geom::Point;
 use lightcraft_raster::Rgba8;
 
@@ -21,14 +21,14 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
 }
 
 /// Parametric region curve (encoded domain) composed with the master point curve.
-fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
+fn curve_luts(c: &ToneCurve, fades: [Option<(f64, f64)>; 4]) -> Option<[Lut1; 3]> {
     let parametric = c.highlights != 0.0 || c.lights != 0.0 || c.darks != 0.0 || c.shadows != 0.0;
-    let master = !ToneCurve::point_curve_is_identity(&c.master);
-    let chans = [&c.red, &c.green, &c.blue].map(|p| !ToneCurve::point_curve_is_identity(p));
+    let master = !c.master.is_identity() || fades[0].is_some();
+    let chans = std::array::from_fn::<_, 3, _>(|i| ![&c.red, &c.green, &c.blue][i].is_identity() || fades[i + 1].is_some());
     if !parametric && !master && !chans.iter().any(|b| *b) {
         return None;
     }
-    const N: usize = 1024;
+    const N: usize = POINT_CURVE_LUT_SIZE;
     let (s1, s2, s3) = ((c.split_shadows / 100.0) as f32, (c.split_mid / 100.0) as f32, (c.split_highlights / 100.0) as f32);
     let regions = [(0.0, s1, c.shadows), (s1, s2, c.darks), (s2, s3, c.lights), (s3, 1.0, c.highlights)];
     let mut base = Lut1::from_fn(N, |x| {
@@ -48,12 +48,27 @@ fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     for i in 1..N {
         base.v[i] = base.v[i].max(base.v[i - 1]);
     }
-    let to_pts = |p: &[Point]| p.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>();
     if master {
-        base = MonotoneCurve::new(&to_pts(&c.master)).to_lut(N).compose(&base);
+        base = point_lut(&c.master, fades[0]).compose(&base);
     }
     let per = [&c.red, &c.green, &c.blue];
-    Some(std::array::from_fn(|i| if chans[i] { MonotoneCurve::new(&to_pts(per[i])).to_lut(N).compose(&base) } else { base.clone() }))
+    Some(std::array::from_fn(|i| if chans[i] { point_lut(per[i], fades[i + 1]).compose(&base) } else { base.clone() }))
+}
+
+/// Resolve profile output levels without fitting a blended function back through sparse handles.
+fn point_lut(curve: &PointCurve, fade: Option<(f64, f64)>) -> Lut1 {
+    let Some((black, white)) = fade else { return curve.render_lut() };
+    if let Some(points) = curve.sparse_points() {
+        // Preserve the existing sparse-curve profile result bit-for-bit.
+        let points = if points.len() < 2 { vec![Point::new(0.0, 0.0), Point::new(1.0, 1.0)] } else { points.to_vec() };
+        let points: Vec<_> = points.iter().map(|p| (p.x, black + p.y.clamp(0.0, 1.0) * (white - black))).collect();
+        return MonotoneCurve::new(&points).to_lut(POINT_CURVE_LUT_SIZE);
+    }
+    let mut lut = curve.render_lut();
+    for value in &mut lut.v {
+        *value = (black + f64::from(*value).clamp(0.0, 1.0) * (white - black)) as f32;
+    }
+    lut
 }
 
 /// Vignette (post-crop) parameters.
@@ -231,7 +246,7 @@ impl FinishParams {
             tone: base_tone(s, info, peak),
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
             ops: ColorOps::new(s),
-            curves: curve_luts(&s.curve),
+            curves: curve_luts(&s.curve, crate::profiles::curve_fades(s)),
             refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
             vig: if effects { vignette(s) } else { None },
             to_out: space.from_working(),
@@ -811,17 +826,15 @@ mod tests {
     #[test]
     fn interior_diagonal_curve_clamps_ends_continuously() {
         use lightcraft_geom::Point;
-        let mut c = ToneCurve { master: vec![Point::new(0.25, 0.25), Point::new(0.75, 0.75)], ..Default::default() };
-        let original = curve_luts(&c).unwrap();
+        let mut c = ToneCurve { master: vec![Point::new(0.25, 0.25), Point::new(0.75, 0.75)].into(), ..Default::default() };
+        let original = curve_luts(&c, [None; 4]).unwrap();
         for lut in &original {
             assert!((lut.eval(0.0) - 0.25).abs() < 1e-6);
             assert!((lut.eval(0.5) - 0.5).abs() < 1e-6);
             assert!((lut.eval(1.0) - 0.75).abs() < 1e-6);
         }
-        for p in &mut c.master {
-            p.y += 1e-6;
-        }
-        let moved = curve_luts(&c).unwrap();
+        c.master = c.master.sparse_points().unwrap().iter().map(|p| Point::new(p.x, p.y + 1e-6)).collect::<Vec<_>>().into();
+        let moved = curve_luts(&c, [None; 4]).unwrap();
         for (a, b) in original.iter().zip(moved.iter()) {
             for x in [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0] {
                 assert!((a.eval(x) - b.eval(x)).abs() < 2e-6);
@@ -844,5 +857,31 @@ mod tests {
         assert!(hdr.saturation_anchor().is_none());
         assert_eq!(hdr.lut(), ToneMap::hdr(0.0, 0.0, 0.0, 8.0).lut());
         assert!(hdr.apply(16.0) > 1.0);
+    }
+    #[test]
+    fn blended_functions_render_continuously_and_profile_fades_keep_sparse_compatibility() {
+        let a = PointCurve::from(vec![Point::new(0.0, 0.0), Point::new(0.3, 0.15), Point::new(1.0, 1.0)]);
+        let b = PointCurve::from(vec![Point::new(0.0, 0.1), Point::new(0.6, 0.85), Point::new(1.0, 0.95)]);
+        for amount in [0.25, 0.5, 0.75, 1.5, 2.0] {
+            let blended = a.blend(&b, amount).unwrap();
+            let c = ToneCurve { master: blended.clone(), ..Default::default() };
+            let lut = curve_luts(&c, [None; 4]).unwrap();
+            for i in 0..POINT_CURVE_LUT_SIZE {
+                let x = i as f64 / (POINT_CURVE_LUT_SIZE - 1) as f64;
+                let want = a.eval(x).unwrap() + amount * (b.eval(x).unwrap() - a.eval(x).unwrap());
+                assert!((f64::from(lut[0].eval(x as f32)) - want).abs() < 1e-6, "amount{amount},x{x}");
+            }
+            let faded = point_lut(&blended, Some((0.08, 0.96)));
+            for (actual, source) in faded.v.iter().zip(blended.render_lut().v) {
+                assert!((f64::from(*actual) - (0.08 + f64::from(source).clamp(0.0, 1.0) * 0.88)).abs() < 1e-7);
+            }
+        }
+        let faded = point_lut(&a, Some((0.08, 0.96)));
+        let legacy = MonotoneCurve::new(&[(0.0, 0.08), (0.3, 0.08 + 0.15 * (0.96 - 0.08)), (1.0, 0.96)]).to_lut(POINT_CURVE_LUT_SIZE);
+        assert_eq!(faded.v, legacy.v, "legacy sparse profile pixels are unchanged");
+        for endpoint in [0.0, 1.0] {
+            let curve = a.blend(&b, endpoint).unwrap();
+            assert_eq!(curve.render_lut().v, if endpoint == 0.0 { a.render_lut().v } else { b.render_lut().v });
+        }
     }
 }

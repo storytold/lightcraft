@@ -40,8 +40,8 @@ fn develop(h: &Headless) -> lightcraft_develop::DevelopSettings {
     (*h.app.session.develop_of(id).unwrap_or_default()).clone()
 }
 
-fn pts(v: &[lightcraft_geom::Point]) -> Vec<(f64, f64)> {
-    v.iter().map(|p| (p.x, p.y)).collect()
+fn pts(v: &lightcraft_develop::PointCurve) -> Vec<(f64, f64)> {
+    v.editable_points().iter().map(|p| (p.x, p.y)).collect()
 }
 
 /// Side of the (square) curve graph in screen points.
@@ -102,8 +102,8 @@ fn double_clicking_a_channel_resets_only_that_channel() {
     h.step();
     click_widget(&mut h, "curveChannel:green", 2);
     let c = develop(&h).curve;
-    assert!(c.green.is_empty(), "green resets: {:?}", c.green);
-    assert_eq!(c.master.len(), 4, "the other channels stay");
+    assert_eq!(c.green, lightcraft_develop::PointCurve::default(), "green resets");
+    assert_eq!(pts(&c.master).len(), 4, "the other channels stay");
     assert_eq!(h.app.ui.curve_channel, "green");
 }
 
@@ -126,8 +126,9 @@ fn point_curve_preset_dropdown_applies_and_saves() {
     click_widget(&mut h, "dropdown:curvePreset", 1);
     click_widget(&mut h, "curvePreset:Medium Contrast", 1);
     let c = develop(&h).curve;
-    assert_eq!(c.master.len(), 5, "the preset's S-curve: {:?}", c.master);
-    assert!(c.master[1].y < 0.25 && c.master[3].y > 0.75);
+    let points = pts(&c.master);
+    assert_eq!(points.len(), 5, "the preset's S-curve: {:?}", c.master);
+    assert!(points[1].1 < 0.25 && points[3].1 > 0.75);
     // shape it further, then save it from the dropdown (name prompt)
     exec(&mut h, "develop.curve", json!({"channel": "blue", "points": [[0.0, 0.08], [1.0, 1.0]]}));
     h.step();
@@ -148,10 +149,11 @@ fn point_curve_preset_dropdown_applies_and_saves() {
     click_widget(&mut h, "dropdown:curvePreset", 1);
     click_widget(&mut h, "curvePreset:Linear", 1);
     let c = develop(&h).curve;
-    assert!(c.master.is_empty() && c.blue.is_empty());
+    assert_eq!(c.master, lightcraft_develop::PointCurve::default());
+    assert_eq!(c.blue, lightcraft_develop::PointCurve::default());
     click_widget(&mut h, "dropdown:curvePreset", 1);
     click_widget(&mut h, "curvePreset:Cool Shadows", 1);
-    assert_eq!(develop(&h).curve.blue.len(), 2);
+    assert_eq!(pts(&develop(&h).curve.blue).len(), 2);
 }
 
 #[test]
@@ -229,12 +231,12 @@ fn dragging_an_import_sized_close_curve_knot_does_not_panic_or_cross() {
     exec(&mut h, "develop.curve", json!({"channel": "master", "points": [[0.0, 0.0], [0.499, 0.25], [0.5, 0.5], [0.501, 0.75], [1.0, 1.0]]}));
     h.step();
     let side = curve_side(&mut h);
-    let before = develop(&h).curve.master;
+    let before = develop(&h).curve.master.editable_points();
     let undo_before = h.app.session.undo.len();
     let r = h.request("ui.dragWidget", json!({"id": "curve", "fx": 0.5, "fy": 0.5, "dx": 0.1 * side, "dy": -0.2 * side, "steps": 12}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
-    let after = develop(&h).curve.master;
+    let after = develop(&h).curve.master.editable_points();
     assert_eq!(after.len(), before.len());
     assert!(after[2].x > after[1].x && after[2].x < after[3].x);
     assert!(after[2].y > 0.6, "vertical movement remains functional: {after:?}");
@@ -242,4 +244,58 @@ fn dragging_an_import_sized_close_curve_knot_does_not_panic_or_cross() {
         assert_eq!(after[i], before[i], "only the selected knot changes");
     }
     assert_eq!(h.app.session.undo.len(), undo_before + 1);
+}
+
+#[test]
+fn dragging_empty_space_adds_a_function_adjustment_without_replacing_its_base() {
+    use lightcraft_develop::PointCurve;
+    use lightcraft_geom::Point;
+    let mut h = curve_open("master");
+    let base: PointCurve = vec![Point::new(0.0, 0.05), Point::new(0.3, 0.15), Point::new(0.75, 0.9), Point::new(1.0, 0.95)].into();
+    let target: PointCurve = vec![Point::new(0.0, 0.1), Point::new(0.65, 0.4), Point::new(1.0, 1.0)].into();
+    let original = base.blend(&target, 0.37).unwrap();
+    let original_wire = serde_json::to_value(&original).unwrap();
+    let id = h.app.session.active().unwrap();
+    let mut settings = develop(&h);
+    settings.curve.master = original.clone();
+    h.app.session.set_develop(id, settings, "Function fixture").unwrap();
+    h.step();
+    let side = curve_side(&mut h);
+    let undo_before = h.app.session.undo.len();
+    let r = h.request("ui.dragWidget", json!({"id":"curve", "fx":0.5, "fy":0.5, "dx":0.1 * side, "dy":-0.15 * side, "steps":12}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let after = develop(&h).curve.master;
+    assert!(after.is_function());
+    assert_eq!(serde_json::to_value(&after).unwrap()["base"], original_wire["base"]);
+    let handles = after.editable_points();
+    assert_eq!(handles.len(), 3, "only the new handle joins the two endpoints");
+    assert!((handles[1].x - 0.6).abs() < 0.03 && (handles[1].y - 0.65).abs() < 0.03, "{handles:?}");
+    assert_eq!(h.app.session.undo.len(), undo_before + 1, "adding and dragging remain one undo step");
+    exec(&mut h, "edit.undo", json!({}));
+    assert_eq!(develop(&h).curve.master, original, "undo restores the full original function");
+    exec(&mut h, "edit.redo", json!({}));
+    assert_eq!(develop(&h).curve.master, after);
+    let handle = after.editable_points()[1];
+    let depth = h.app.session.undo.len();
+    let r = h.request("ui.clickWidget", json!({"id":"curve", "fx":handle.x, "fy":1.0-handle.y, "count":2}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let removed = develop(&h).curve.master;
+    assert!(removed.is_function(), "removing a correction must retain the function model");
+    assert_eq!(serde_json::to_value(&removed).unwrap()["base"], original_wire["base"]);
+    assert_eq!(removed.editable_points().len(), 2);
+    let original_lut = original.render_lut();
+    let removed_lut = removed.render_lut();
+    for i in 0..=256 {
+        let x = i as f32 / 256.0;
+        assert!((original_lut.eval(x) - removed_lut.eval(x)).abs() < 1e-6, "the original function returns at {x}");
+    }
+    assert_eq!(h.app.session.undo.len(), depth + 1);
+    exec(&mut h, "edit.undo", json!({}));
+    assert_eq!(develop(&h).curve.master, after);
+    click_widget(&mut h, "button:curveReset", 1);
+    assert_eq!(develop(&h).curve, lightcraft_develop::ToneCurve::default(), "reset clears the entire function model");
+    exec(&mut h, "edit.undo", json!({}));
+    assert_eq!(develop(&h).curve.master, after, "undo reset restores the base and all corrections");
 }

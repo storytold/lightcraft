@@ -12,7 +12,44 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::borrow::Cow;
 
-use crate::DevelopSettings;
+use crate::{DevelopSettings, PointCurve, PointCurveError};
+use std::fmt;
+
+#[derive(Debug)]
+pub enum PresetError {
+    InvalidAmount,
+    InvalidVersion,
+    Settings(serde_json::Error),
+    Curve(PointCurveError),
+    MaskIdExhausted,
+}
+impl fmt::Display for PresetError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidAmount => f.write_str("preset amount must be finite"),
+            Self::InvalidVersion => f.write_str("unsupported develop settings version in preset"),
+            Self::Settings(e) => e.fmt(f),
+            Self::Curve(e) => e.fmt(f),
+            Self::MaskIdExhausted => f.write_str("the photo has no free mask identifiers"),
+        }
+    }
+}
+impl std::error::Error for PresetError {}
+impl From<serde_json::Error> for PresetError {
+    fn from(value: serde_json::Error) -> Self {
+        Self::Settings(value)
+    }
+}
+impl From<PointCurveError> for PresetError {
+    fn from(value: PointCurveError) -> Self {
+        Self::Curve(value)
+    }
+}
+type Result<T> = std::result::Result<T, PresetError>;
+
+fn function_wire(value: &Value) -> bool {
+    value.get("kind").and_then(Value::as_str) == Some("function")
+}
 
 /// Groups shown in "Choose settings to copy" / "Create preset" (Lightroom's checklist).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -135,11 +172,20 @@ pub fn extract_groups(s: &DevelopSettings, groups: &[SettingsGroup]) -> Value {
             }
         }
     }
+    if out.get("curve").is_some_and(|curve| ["master", "red", "green", "blue"].iter().any(|key| curve.get(*key).is_some_and(function_wire))) {
+        out.insert("version".into(), Value::from(crate::settings::SCHEMA_VERSION));
+    }
     Value::Object(out)
 }
 
 /// Recursively merge `patch` into `base` (objects merge; everything else replaces).
 pub fn deep_merge(base: &mut Value, patch: &Value) {
+    // A function is one checked model, not a partial settings group. Inheriting omitted model
+    // fields from an old function would silently accept an incomplete replacement.
+    if function_wire(base) || function_wire(patch) {
+        *base = patch.clone();
+        return;
+    }
     match (base, patch) {
         (Value::Object(b), Value::Object(p)) => {
             for (k, v) in p {
@@ -158,17 +204,22 @@ pub fn deep_merge(base: &mut Value, patch: &Value) {
 /// Interpolate numbers in `patch` towards/away from `base` by `t` (1 = patch as-is); non-numeric
 /// values are taken from the patch when `t >= 0.5`.
 fn scale_patch(base: &Value, patch: &Value, t: f64) -> Value {
+    // Tone-curve channels are handled as typed functions in try_apply_partial. Never recursively
+    // scale a tagged function should one occur in another partial payload.
+    if function_wire(base) || function_wire(patch) {
+        return if t >= 0.5 { patch.clone() } else { base.clone() };
+    }
     match (base, patch) {
         (Value::Object(b), Value::Object(p)) => {
             let mut out = Map::new();
             for (k, pv) in p {
                 let bv = b.get(k).unwrap_or(&Value::Null);
-                out.insert(k.clone(), scale_patch(bv, pv, t));
+                out.insert(k.clone(), if k == "version" { pv.clone() } else { scale_patch(bv, pv, t) });
             }
             Value::Object(out)
         }
-        // Integer fields (the grain seed, ids) are discrete like strings: an interpolated seed would
-        // not deserialize as an integer, and the whole preset would silently not apply.
+        // Integer fields (grain seed, identifiers) remain discrete: fractional JSON would
+        // fail their integer deserialization and reject the entire otherwise valid preset.
         (Value::Number(b), Value::Number(p)) if b.is_f64() || p.is_f64() => {
             let (b, p) = (b.as_f64().unwrap_or(0.0), p.as_f64().unwrap_or(0.0));
             serde_json::Number::from_f64(b + (p - b) * t).map(Value::Number).unwrap_or(Value::Null)
@@ -186,9 +237,48 @@ fn scale_patch(base: &Value, patch: &Value, t: f64) -> Value {
 /// Apply a partial settings object with an amount (1.0 = 100 %). Out-of-range values are clamped
 /// through the control specs, as every merge does ([`DevelopSettings::merged`]).
 pub fn apply_partial(s: &DevelopSettings, partial: &Value, amount: f64) -> DevelopSettings {
-    let patch = if (amount - 1.0).abs() < 1e-9 { Cow::Borrowed(partial) } else { Cow::Owned(scale_patch(&s.to_json(), partial, amount)) };
-    // (a white balance without a scale keeps its old meaning: `DevelopSettings::merged`)
-    s.merged(&patch).unwrap_or_else(|_| s.clone())
+    try_apply_partial(s, partial, amount).unwrap_or_else(|_| s.clone())
+}
+
+/// Checked counterpart for command/import paths: invalid curve models remain an actionable error.
+pub fn try_apply_partial(s: &DevelopSettings, partial: &Value, amount: f64) -> Result<DevelopSettings> {
+    if !amount.is_finite() {
+        return Err(PresetError::InvalidAmount);
+    }
+    if amount == 0.0 {
+        return Ok(s.clone());
+    }
+    if partial.get("version").is_some_and(|v| v.as_u64().is_none_or(|v| v > u64::from(crate::settings::SCHEMA_VERSION))) {
+        return Err(PresetError::InvalidVersion);
+    }
+    let base = serde_json::to_value(s)?;
+    let mut rest = partial.clone();
+    let mut channels: [Option<PointCurve>; 4] = [None, None, None, None];
+    if let Some(curve) = rest.get_mut("curve").and_then(Value::as_object_mut) {
+        for ((name, source), slot) in [("master", &s.curve.master), ("red", &s.curve.red), ("green", &s.curve.green), ("blue", &s.curve.blue)]
+            .into_iter()
+            .zip(channels.iter_mut())
+        {
+            if let Some(wire) = curve.remove(name) {
+                let target: PointCurve = serde_json::from_value(wire)?;
+                *slot = Some(source.blend(&target, amount)?);
+            }
+        }
+    }
+    let patch = if amount == 1.0 { rest } else { scale_patch(&base, &rest, amount) };
+    let mut out = s.merged(&patch)?;
+    for (destination, value) in [&mut out.curve.master, &mut out.curve.red, &mut out.curve.green, &mut out.curve.blue].into_iter().zip(channels) {
+        if let Some(value) = value {
+            *destination = value;
+        }
+    }
+    for c in crate::controls::CONTROLS {
+        if let Some(v) = crate::controls::get(&out, c.id) {
+            crate::controls::set(&mut out, c.id, v);
+        }
+    }
+    out.normalize_schema();
+    Ok(out)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -232,29 +322,33 @@ impl Preset {
     /// Apply at `amount` (1.0 = 100 %). Masks in the preset are added to the photo's own (ones it
     /// already has are skipped), their effect scaled by the amount.
     pub fn apply(&self, s: &DevelopSettings, amount: f64) -> DevelopSettings {
+        self.try_apply(s, amount).unwrap_or_else(|_| s.clone())
+    }
+    /// Apply atomically, preserving errors from curve validation and malformed preset settings.
+    pub fn try_apply(&self, s: &DevelopSettings, amount: f64) -> Result<DevelopSettings> {
         if amount == 0.0 {
-            return s.clone();
+            return Ok(s.clone());
         }
         let Some(masks) = self.settings.get("masks").and_then(Value::as_array).filter(|m| !m.is_empty()) else {
-            return apply_partial(s, &self.settings, amount);
+            return try_apply_partial(s, &self.settings, amount);
         };
         let mut rest = self.settings.clone();
         if let Some(o) = rest.as_object_mut() {
             o.remove("masks");
         }
-        let mut out = apply_partial(s, &rest, amount);
+        let mut out = try_apply_partial(s, &rest, amount)?;
         let mut next = out.masks.iter().map(|m| m.id).max().unwrap_or(0);
         for m in masks {
-            let Ok(mut m) = serde_json::from_value::<crate::Mask>(m.clone()) else { continue };
+            let mut m = serde_json::from_value::<crate::Mask>(m.clone())?;
             if out.masks.iter().any(|q| q.name == m.name && q.components == m.components) {
                 continue;
             }
-            next += 1;
+            next = next.checked_add(1).ok_or(PresetError::MaskIdExhausted)?;
             m.id = next;
             m.adjust.amount = (m.adjust.amount * amount).clamp(0.0, 200.0);
             out.masks.push(m);
         }
-        out
+        Ok(out)
     }
 }
 
@@ -315,5 +409,93 @@ mod tests {
         let mut a = json!({"x": {"a": 1, "b": 2}, "y": [1]});
         deep_merge(&mut a, &json!({"x": {"b": 3}, "y": [2, 3]}));
         assert_eq!(a, json!({"x": {"a": 1, "b": 3}, "y": [2, 3]}));
+    }
+    fn curve(points: &[(f64, f64)]) -> PointCurve {
+        points.iter().map(|&(x, y)| lightcraft_geom::Point::new(x, y)).collect::<Vec<_>>().into()
+    }
+
+    #[test]
+    fn all_curve_channels_blend_continuously_and_omitted_channels_stay_exact() {
+        let mut base = DevelopSettings::default();
+        let a = curve(&[(0.0, 0.0), (0.27, 0.1), (0.68, 0.85), (1.0, 1.0)]);
+        let b = curve(&[(0.0, 0.12), (0.51, 0.74), (1.0, 0.95)]);
+        base.curve.master = a.clone();
+        base.curve.red = a.clone();
+        base.curve.green = a.clone();
+        base.curve.blue = a.clone();
+        let mut target = base.clone();
+        target.curve.master = b.clone();
+        target.curve.red = b.clone();
+        target.curve.green = b.clone();
+        target.curve.blue = b.clone();
+        target.curve.highlights = 40.0;
+        let partial = extract_groups(&target, &[SettingsGroup::ToneCurve]);
+        assert_eq!(try_apply_partial(&base, &partial, 0.0).unwrap(), base);
+        assert_eq!(try_apply_partial(&base, &partial, 1.0).unwrap().curve, target.curve);
+        for amount in [0.49999, 0.5, 0.50001, 0.9999, 1.5] {
+            let result = try_apply_partial(&base, &partial, amount).unwrap();
+            assert!((result.curve.highlights - 40.0 * amount).abs() < 1e-10);
+            for channel in [&result.curve.master, &result.curve.red, &result.curve.green, &result.curve.blue] {
+                assert!(channel.is_function());
+                for i in 0..=128 {
+                    let x = i as f64 / 128.0;
+                    let expected = a.eval(x).unwrap() + amount * (b.eval(x).unwrap() - a.eval(x).unwrap());
+                    assert!((channel.eval(x).unwrap() - expected).abs() < 1e-11);
+                }
+            }
+        }
+        let only_master = json!({"curve":{"master":serde_json::to_value(&b).unwrap()}});
+        let changed = try_apply_partial(&base, &only_master, 0.5).unwrap();
+        assert_eq!(changed.curve.red, base.curve.red);
+        assert_eq!(changed.curve.green, base.curve.green);
+        assert_eq!(changed.curve.blue, base.curve.blue);
+        let reset = json!({"curve":{"master":[]}});
+        assert!(try_apply_partial(&base, &reset, 1.0).unwrap().curve.master.is_identity());
+    }
+
+    #[test]
+    fn function_presets_are_typed_and_version_markers_are_not_interpolated() {
+        let mut base = DevelopSettings::default();
+        let a = curve(&[(0.0, 0.0), (0.3, 0.2), (1.0, 1.0)]);
+        let b = curve(&[(0.0, 0.1), (0.7, 0.9), (1.0, 0.97)]);
+        base.curve.master = a.blend(&b, 0.3).unwrap();
+        let mut target = base.clone();
+        target.curve.master = a.blend(&b, 0.8).unwrap();
+        let partial = extract_groups(&target, &[SettingsGroup::ToneCurve]);
+        assert_eq!(partial["version"], crate::settings::SCHEMA_VERSION);
+        assert!(extract_groups(&target, &[SettingsGroup::Light]).get("version").is_none());
+        let result = try_apply_partial(&base, &partial, 0.4).unwrap();
+        assert_eq!(result.version, crate::settings::SCHEMA_VERSION);
+        for i in 0..=128 {
+            let x = i as f64 / 128.0;
+            let av = base.curve.master.eval(x).unwrap();
+            let bv = target.curve.master.eval(x).unwrap();
+            assert!((result.curve.master.eval(x).unwrap() - (av + 0.4 * (bv - av))).abs() < 1e-11);
+        }
+        let roundtrip = DevelopSettings::from_json(&result.to_json()).unwrap();
+        assert_eq!(roundtrip, result);
+        assert_eq!(roundtrip.hash64(), result.hash64());
+        assert_eq!(scale_patch(&json!({"version":1}), &json!({"version":2}), 0.3), json!({"version":2}));
+        let before = base.clone();
+        assert!(try_apply_partial(&base, &json!({"version":999}), 0.5).is_err());
+        assert!(try_apply_partial(&base, &partial, f64::NAN).is_err());
+        assert_eq!(base, before);
+    }
+
+    #[test]
+    fn malformed_function_replacements_and_masks_return_errors_without_partial_edits() {
+        let mut base = DevelopSettings::default();
+        base.curve.master = PointCurve::default().blend(&curve(&[(0.0, 0.1), (1.0, 0.9)]), 0.5).unwrap();
+        let malformed = json!({"light":{"exposure":2.0},"curve":{"master":{"kind":"function","version":1}}});
+        let before = base.clone();
+        assert!(try_apply_partial(&base, &malformed, 0.3).is_err());
+        assert!(base.merged(&malformed).is_err());
+        assert_eq!(try_apply_partial(&base, &malformed, 0.0).unwrap(), base);
+        assert_eq!(base, before);
+        base.masks.push(crate::Mask { id: u32::MAX, name: "existing".into(), ..Default::default() });
+        let mut preset = Preset::from_settings("p", "P", "User", &DevelopSettings::default(), &[]);
+        preset.settings = json!({"masks":[{"name":"new"}]});
+        assert!(matches!(preset.try_apply(&base, 1.0), Err(PresetError::MaskIdExhausted)));
+        assert_eq!(base.masks.len(), 1);
     }
 }

@@ -840,10 +840,11 @@ mod tests {
         assert_eq!(s.mixer.blue.sat, -22.0);
         assert_eq!(s.mixer.aqua.lum, 13.0);
         assert_eq!((s.curve.shadows, s.curve.highlights, s.curve.split_mid), (5.0, -8.0, 55.0));
-        assert_eq!(s.curve.master.len(), 4);
+        let master = s.curve.master.sparse_points().unwrap();
+        assert_eq!(master.len(), 4);
         assert_eq!(s.curve.refine_saturation, 40.0);
-        assert!((s.curve.master[1].x - 64.0 / 255.0).abs() < 1e-9 && (s.curve.master[1].y - 52.0 / 255.0).abs() < 1e-9);
-        assert!(s.curve.red.is_empty(), "identity channel curve maps to no curve");
+        assert!((master[1].x - 64.0 / 255.0).abs() < 1e-9 && (master[1].y - 52.0 / 255.0).abs() < 1e-9);
+        assert!(s.curve.red.sparse_points().unwrap().is_empty(), "identity channel curve maps to no curve");
         assert_eq!((s.grading.shadows.hue, s.grading.shadows.sat), (210.0, 14.0));
         assert_eq!((s.grading.highlights.hue, s.grading.highlights.sat), (40.0, 9.0));
         assert_eq!((s.grading.midtones.hue, s.grading.midtones.sat), (120.0, 6.0));
@@ -1130,26 +1131,27 @@ mod tests {
     #[test]
     fn legacy_and_modern_identity_curves_reset_existing_points() {
         let mut before = DevelopSettings::default();
-        before.curve.master = vec![lightcraft_geom::Point::new(0.0, 0.1), lightcraft_geom::Point::new(1.0, 0.9)];
+        before.curve.master = vec![lightcraft_geom::Point::new(0.0, 0.1), lightcraft_geom::Point::new(1.0, 0.9)].into();
         for key in ["crs:ToneCurve", "crs:ToneCurvePV2012"] {
             let p = Props::from([(key.to_string(), vec!["0, 0".into(), "255, 255".into()])]);
             let patch = to_partial(&p, Target::RawAbsolute);
             assert_eq!(patch["curve"]["master"], json!([]));
-            assert!(apply_partial(&before, &patch, 1.0).curve.master.is_empty(), "{key}");
+            assert!(apply_partial(&before, &patch, 1.0).curve.master.sparse_points().unwrap().is_empty(), "{key}");
         }
         let p = Props::from([
             ("crs:ToneCurve".into(), vec!["0, 0".into(), "255, 255".into()]),
             ("crs:ToneCurvePV2012".into(), vec!["0, 10".into(), "255, 240".into()]),
         ]);
         let s = apply_partial(&before, &to_partial(&p, Target::RawAbsolute), 1.0);
-        assert_eq!(s.curve.master.len(), 2);
-        assert!((s.curve.master[0].y - 10.0 / 255.0).abs() < 1e-12, "modern curve still wins");
+        let master = s.curve.master.sparse_points().unwrap();
+        assert_eq!(master.len(), 2);
+        assert!((master[0].y - 10.0 / 255.0).abs() < 1e-12, "modern curve still wins");
     }
 
     #[test]
     fn malformed_curve_keeps_valid_exposure_and_existing_curve() {
         let mut before = DevelopSettings::default();
-        before.curve.master = vec![lightcraft_geom::Point::new(0.0, 0.1), lightcraft_geom::Point::new(1.0, 0.9)];
+        before.curve.master = vec![lightcraft_geom::Point::new(0.0, 0.1), lightcraft_geom::Point::new(1.0, 0.9)].into();
         for bad in ["NaN, 128", "128, NaN", "inf, 128", "128, -inf"] {
             let p = Props::from([
                 ("crs:Exposure2012".into(), vec!["2".into()]),

@@ -84,6 +84,46 @@ impl MonotoneCurve {
     pub fn points(&self) -> Vec<(f64, f64)> {
         self.xs.iter().copied().zip(self.ys.iter().copied()).collect()
     }
+
+    /// Preserve this spline as a bounded cubic function on `0..1`, including constant tails
+    /// when the first/last knots are interior. Reuses these already computed limited tangents.
+    /// Malformed deserialized spline arrays are rejected before any indexing or evaluation.
+    pub fn to_function(&self) -> Result<crate::CurveFunction, crate::CurveError> {
+        use crate::{CubicPiece, CurveError, CurveFunction, MAX_CURVE_PIECES};
+        let n = self.xs.len();
+        if n < 2 || self.ys.len() != n || self.ms.len() != n {
+            return Err(CurveError::InvalidSpline);
+        }
+        if n > MAX_CURVE_PIECES + 1 {
+            return Err(CurveError::TooManyPieces);
+        }
+        if self.xs.iter().chain(&self.ys).chain(&self.ms).any(|v| !v.is_finite()) || self.xs.windows(2).any(|w| !matches!(w, [a, b] if a < b)) {
+            return Err(CurveError::InvalidSpline);
+        }
+        let (&first_x, &first_y) = self.xs.first().zip(self.ys.first()).ok_or(CurveError::InvalidSpline)?;
+        let (&last_x, &last_y) = self.xs.last().zip(self.ys.last()).ok_or(CurveError::InvalidSpline)?;
+        let mut pieces = Vec::new();
+        if first_x > 0.0 {
+            pieces.push(CubicPiece::new(first_x.min(1.0), [first_y, first_y, 0.0, 0.0])?);
+        }
+        for ((xs, ys), ms) in self.xs.windows(2).zip(self.ys.windows(2)).zip(self.ms.windows(2)) {
+            let ([x0, x1], [y0, y1], [m0, m1]) = (xs, ys, ms) else { return Err(CurveError::InvalidSpline) };
+            let (start, end) = (x0.max(0.0), x1.min(1.0));
+            if start >= end {
+                continue;
+            }
+            let width = x1 - x0;
+            if !width.is_finite() {
+                return Err(CurveError::InvalidSpline);
+            }
+            let piece = CubicPiece::new(1.0, [*y0, *y1, width * m0, width * m1])?;
+            pieces.push(piece.restricted((start - x0) / width, (end - x0) / width, end)?);
+        }
+        if last_x < 1.0 {
+            pieces.push(CubicPiece::new(1.0, [last_y, last_y, 0.0, 0.0])?);
+        }
+        CurveFunction::from_pieces(pieces)
+    }
 }
 
 /// A 1-D lookup table over `0..1` with linear interpolation; inputs outside clamp.

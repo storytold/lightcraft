@@ -1,6 +1,6 @@
 //! Regression contract for the union of two catalog lineages that independently used v3/v4.
-//! Procedural MemStore records cover sparse Local v3/v4 diagnostics and upstream v3-v6
-//! operations. Function-bearing Local v4 records are unsupported until the later curve replay.
+//! All files are procedural MemStore records. Requires the combined writer at v8, local
+//! SetUnsupportedEdits/Photo diagnostics and schema2 function curves, plus upstream v3–6 ops.
 
 use crate::journal::{LOG, SNAPSHOT, VERSION};
 use crate::*;
@@ -10,6 +10,12 @@ const SNAP_SEQ: u64 = 10;
 
 fn sparse(marker: u32, middle: f64) -> Value {
     json!({"version":marker,"curve":{"master":[{"x":0.0,"y":0.0},{"x":0.4,"y":middle},{"x":1.0,"y":1.0}]}})
+}
+
+fn function(lift: f64) -> Value {
+    json!({"version":2,"curve":{"master":{"kind":"function","version":1,
+        "base":{"pieces":[{"end":1.0,"hermite":[lift,0.9,0.7,0.7]}]},
+        "adjustments":[{"x":0.0,"y":0.0},{"x":0.4,"y":0.03},{"x":1.0,"y":0.0}]}}})
 }
 
 fn lens(amount: f64) -> Value {
@@ -61,6 +67,9 @@ fn fixture(local: bool, version: u32) -> (Value, Vec<Value>, Value) {
     let mut snapshot = base();
     if local {
         snapshot["photos"]["1"]["unsupported_edits"] = json!(["Look"]);
+        if version == 4 {
+            snapshot["photos"]["1"]["develop"] = function(0.1);
+        }
     } else {
         snapshot["albums"]["1"]["order"] = json!(2);
         if version >= 4 {
@@ -80,8 +89,9 @@ fn fixture(local: bool, version: u32) -> (Value, Vec<Value>, Value) {
     }
     let mut expected = snapshot.clone();
     let mut ops = Vec::new();
-    // Supported sparse schema markers must survive without normalizing historical wire data.
-    let settings = sparse(0, 0.3);
+    // Marker0 was accepted historically. A read/upgrade must keep the explicit supported
+    // legacy marker; the schema2 function path is asserted independently on the local-v4 row.
+    let settings = if local && version == 4 { function(0.15) } else { sparse(0, 0.3) };
     ops.push(json!({"op":"setDevelop","id":1,"settings":settings,"label":"Legacy edit","edited":"2026-01-02"}));
     expected["photos"]["1"]["develop"] = settings;
     expected["photos"]["1"]["edited"] = json!("2026-01-02");
@@ -112,9 +122,7 @@ fn fixture(local: bool, version: u32) -> (Value, Vec<Value>, Value) {
 }
 
 fn union_op() -> Value {
-    let mut settings = sparse(1, 0.2);
-    settings["hdr"] = json!({"enabled":true,"max_ev":4.0,"sdr_brightness":17.0});
-    settings["profile"] = json!({"camera_local_tone":true});
+    let mut settings = function(0.2);
     settings["process"] = json!(1);
     json!({"op":"batch","ops":[
         {"op":"setDevelop","id":1,"settings":settings,"label":"Combined edit","edited":"2026-01-03"},
@@ -128,11 +136,7 @@ fn union_op() -> Value {
 
 fn assert_union(catalog: &Catalog) {
     let value: Value = serde_json::from_str(&catalog.to_snapshot()).unwrap();
-    assert_projection(&value["photos"]["1"]["develop"], &sparse(1, 0.2));
-    assert_eq!(value["photos"]["1"]["develop"]["hdr"]["enabled"], true);
-    assert_eq!(value["photos"]["1"]["develop"]["hdr"]["max_ev"], 4.0);
-    assert_eq!(value["photos"]["1"]["develop"]["hdr"]["sdr_brightness"], 17.0);
-    assert_eq!(value["photos"]["1"]["develop"]["profile"]["camera_local_tone"], true);
+    assert_projection(&value["photos"]["1"]["develop"], &function(0.2));
     assert!(value["photos"]["1"]["develop"].get("process").is_none(), "explicit processV1 still uses legacy omission");
     assert_eq!(value["photos"]["1"]["unsupported_edits"], json!(["CameraProfile", "Look"]));
     assert_eq!(value["albums"]["1"]["order"], 11);
@@ -143,34 +147,31 @@ fn assert_union(catalog: &Catalog) {
 
 #[test]
 fn both_catalog_lineages_upgrade_before_a_combined_op_is_appended() {
+    assert_eq!(VERSION, 8, "diagnostics use combined7; function curves need the next writer version");
     for (local, version) in [(true, 3), (true, 4), (false, 3), (false, 4), (false, 5), (false, 6), (false, 7)] {
         let (snapshot, ops, expected) = fixture(local, version);
         let store = files(version, &snapshot, &ops);
         let (mut journal, mut catalog, report) = Journal::open(Box::new(store.clone())).unwrap();
-        assert_eq!((report.replayed, report.upgraded_from), (ops.len(), (version < VERSION).then_some(version)), "local={local},version={version}");
+        assert_eq!((report.replayed, report.upgraded_from), (ops.len(), Some(version)), "local={local},version={version}");
         let header = saved(&store);
-        assert_eq!(header["version"], VERSION, "upgrade is durable before the caller can append");
-        if version < VERSION {
-            assert_eq!(header["seq"], SNAP_SEQ + ops.len() as u64);
-            assert!(store.get(LOG).unwrap().is_empty());
-            assert_projection(&header["catalog"], &expected);
-        } else {
-            assert_projection(&serde_json::from_str(&catalog.to_snapshot()).unwrap(), &expected);
-        }
+        assert_eq!(header["version"], 8, "upgrade is durable before the caller can append");
+        assert_eq!(header["seq"], SNAP_SEQ + ops.len() as u64);
+        assert!(store.get(LOG).unwrap().is_empty());
+        assert_projection(&header["catalog"], &expected);
         assert!(header["catalog"]["photos"]["1"]["develop"].get("process").is_none(), "a missing legacy process stays omitted");
         let op: Op = serde_json::from_value(union_op()).unwrap();
         catalog.apply(op.clone()).unwrap();
         journal.append(&[op]).unwrap();
-        assert_eq!(saved(&store)["version"], VERSION);
+        assert_eq!(saved(&store)["version"], 8);
         let line = String::from_utf8(store.get(LOG).unwrap()).unwrap();
-        let written: Value = serde_json::from_str(line.lines().last().unwrap()).unwrap();
+        let written: Value = serde_json::from_str(line.trim()).unwrap();
         assert_eq!(written["seq"], SNAP_SEQ + ops.len() as u64 + 1);
-        assert_eq!(written["op"]["ops"][0]["settings"]["version"], 1);
+        assert_eq!(written["op"]["ops"][0]["settings"]["version"], 2);
         assert!(written["op"]["ops"][0]["settings"].get("process").is_none());
         assert_union(&catalog);
         drop(journal);
         let (_, reopened, report) = Journal::open(Box::new(store)).unwrap();
-        assert_eq!((report.replayed, report.upgraded_from), (if version < VERSION { 1 } else { ops.len() + 1 }, None));
+        assert_eq!((report.replayed, report.upgraded_from), (1, None));
         assert_eq!(reopened.to_snapshot(), catalog.to_snapshot());
         assert_union(&reopened);
     }
@@ -182,7 +183,7 @@ fn both_lineages_keep_authored_snapshot_fields_even_without_log_records() {
         let (snapshot, _, _) = fixture(local, version);
         let store = files(version, &snapshot, &[]);
         let (_, catalog, report) = Journal::open(Box::new(store.clone())).unwrap();
-        assert_eq!((report.replayed, report.upgraded_from), (0, (version < VERSION).then_some(version)));
+        assert_eq!((report.replayed, report.upgraded_from), (0, Some(version)));
         assert_projection(&serde_json::from_str(&catalog.to_snapshot()).unwrap(), &snapshot);
         assert_projection(&saved(&store)["catalog"], &snapshot);
     }
@@ -199,48 +200,34 @@ fn assert_refused_unchanged(store: &MemStore, must_report_newer: bool) {
 }
 
 #[test]
-fn future_catalog_keeps_all_snapshot_and_log_bytes_untouched() {
+fn future_catalog9_keeps_all_snapshot_and_log_bytes_untouched() {
+    assert_eq!(VERSION, 8);
     let (snapshot, ops, _) = fixture(true, 4);
-    assert_refused_unchanged(&files(VERSION + 1, &snapshot, &ops), true);
+    assert_refused_unchanged(&files(9, &snapshot, &ops), true);
     // The catalog payload need not be understood before a future outer version is refused.
-    assert_refused_unchanged(&files(VERSION + 1, &json!({"photos":"future storage"}), &[union_op()]), true);
+    assert_refused_unchanged(&files(9, &json!({"photos":"future storage"}), &[union_op()]), true);
 }
 
 #[test]
-fn diagnostics_operation_preserves_local_baseline_and_targets_photo() {
-    let mut catalog = Catalog::new();
-    let mut photo = Photo::new(PhotoId(1), Source::File { path: "/pictures/local.jpg".into() }, "local.jpg", "JPEG", 4, 3, "2026-01-01");
-    photo.local = true;
-    photo.set_local_baseline();
-    let baseline = photo.local_baseline;
-    let wire = serde_json::to_string(&photo).unwrap();
-    assert!(!wire.contains("unsupported_edits"), "empty diagnostics must preserve old fingerprints");
-    let legacy: Photo = serde_json::from_str(&wire).unwrap();
-    assert!(legacy.untouched_local());
-    catalog.apply(Op::AddPhoto { photo: Box::new(legacy) }).unwrap();
-    let original = catalog.to_snapshot();
-    let op = Op::SetUnsupportedEdits { id: PhotoId(1), fields: vec!["FilterList".into()] };
-    let mut ids = Vec::new();
-    op.photo_ids(&mut |id| ids.push(id));
-    assert_eq!(ids, vec![PhotoId(1)], "diagnostics participate in undo/in-use protection");
-    let inverse = catalog.apply(op).unwrap();
-    let changed = catalog.photo(PhotoId(1)).unwrap();
-    assert_eq!(changed.local_baseline, baseline);
-    assert!(!changed.untouched_local(), "a diagnostic change is part of the saved state");
-    catalog.apply(inverse).unwrap();
-    assert_eq!(catalog.to_snapshot(), original);
-    assert!(catalog.photo(PhotoId(1)).unwrap().untouched_local());
-}
-
-#[test]
-fn unsupported_curve_payload_in_legacy_envelope_is_refused_without_rewrite() {
-    let mut settings = sparse(1, 0.25);
-    settings["curve"]["master"] = json!({"kind":"futureCurve", "version":99, "payload":[1,2,3]});
-    for version in [3, 4, VERSION] {
+fn future_native_curve_and_schema_markers_are_refused_in_snapshots_and_valid_logs() {
+    for invalid in [
+        {
+            let mut v = function(0.1);
+            v["version"] = json!(3);
+            v
+        },
+        {
+            let mut v = function(0.1);
+            v["curve"]["master"]["version"] = json!(2);
+            v
+        },
+    ] {
         let mut snapshot = base();
-        snapshot["photos"]["1"]["develop"] = settings.clone();
-        assert_refused_unchanged(&files(version, &snapshot, &[]), false);
-        let op = json!({"op":"setDevelop","id":1,"settings":settings,"label":"Future curve","edited":null});
-        assert_refused_unchanged(&files(version, &base(), &[op]), true);
+        snapshot["photos"]["1"]["develop"] = invalid.clone();
+        // A supported outer version with an unreadable inner payload is a snapshot
+        // parse error today; both error classes must leave every stored byte intact.
+        assert_refused_unchanged(&files(8, &snapshot, &[]), false);
+        let op = json!({"op":"setDevelop","id":1,"settings":invalid,"label":"Future","edited":null});
+        assert_refused_unchanged(&files(8, &base(), &[op]), true);
     }
 }

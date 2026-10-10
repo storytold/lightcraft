@@ -117,6 +117,71 @@ fn v2_library_upgrades_before_recording_unsupported_edits() {
     assert_eq!((report.replayed, report.upgraded_from), (1, None));
 }
 
+fn function_settings() -> serde_json::Value {
+    serde_json::json!({"curve":{"master":{"kind":"function","version":1,"base":{"pieces":[{"end":1.0,"hermite":[0.1,0.9,0.8,0.8]}]},"adjustments":[{"x":0.0,"y":0.0},{"x":0.4,"y":0.03},{"x":1.0,"y":0.0}]}}})
+}
+
+#[test]
+fn v3_library_upgrades_before_recording_function_curves_and_reopens_exactly() {
+    use std::sync::Arc;
+    let mut base = Catalog::new();
+    let op = photo(&mut base);
+    base.apply(op).unwrap();
+    let id = base.photos().next().unwrap().id;
+    let legacy =
+        lightcraft_develop::DevelopSettings::from_json(&serde_json::json!({"version":1,"curve":{"red":[{"x":0.0,"y":0.1},{"x":1.0,"y":0.9}]}}))
+            .unwrap();
+    base.apply(Op::SetDevelop { id, settings: Arc::new(legacy), label: "Sparse".into(), edited: None }).unwrap();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":3,\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
+    m.set(LOG, Vec::new());
+    let (mut journal, mut loaded, report) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(report.upgraded_from, Some(3));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+    assert_eq!(loaded.to_snapshot(), base.to_snapshot(), "legacy sparse edits survive the upgrade");
+    let settings = Arc::new(lightcraft_develop::DevelopSettings::from_json(&function_settings()).unwrap());
+    let op = Op::SetDevelop { id, settings: settings.clone(), label: "Continuous".into(), edited: None };
+    loaded.apply(op.clone()).unwrap();
+    journal.append(&[op]).unwrap();
+    drop(journal);
+    let (_, reopened, report) = Journal::open(Box::new(m)).unwrap();
+    assert_eq!((report.replayed, report.upgraded_from), (1, None));
+    assert_eq!(reopened.photo(id).unwrap().develop, settings);
+    assert_eq!(reopened.to_snapshot(), loaded.to_snapshot());
+}
+
+#[test]
+fn future_function_versions_in_snapshot_and_crc_valid_log_are_refused_untouched() {
+    use std::sync::Arc;
+    let mut catalog = Catalog::new();
+    let op = photo(&mut catalog);
+    catalog.apply(op).unwrap();
+    let id = catalog.photos().next().unwrap().id;
+    let settings = Arc::new(lightcraft_develop::DevelopSettings::from_json(&function_settings()).unwrap());
+    let op = Op::SetDevelop { id, settings, label: "Continuous".into(), edited: None };
+    let mut future_op = serde_json::to_value(&op).unwrap();
+    future_op["settings"]["curve"]["master"]["version"] = serde_json::json!(2);
+    let body = future_op.to_string();
+    let m = MemStore::new();
+    m.set(
+        SNAPSHOT,
+        format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":1,\"catalog\":{}}}\n", catalog.to_snapshot()).into_bytes(),
+    );
+    m.set(LOG, format!("{{\"seq\":2,\"crc\":{},\"op\":{body}}}\n", crc32fast::hash(body.as_bytes())).into_bytes());
+    assert_refused_untouched(&m);
+
+    catalog.apply(op).unwrap();
+    // Restrict this replacement to the function's exact serialized discriminator/version pair.
+    let snapshot = catalog.to_snapshot().replace("\"kind\":\"function\",\"version\":1", "\"kind\":\"function\",\"version\":2");
+    assert_ne!(snapshot, catalog.to_snapshot());
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":2,\"catalog\":{snapshot}}}\n").into_bytes());
+    m.set(LOG, Vec::new());
+    let before = m.files.lock().unwrap().clone();
+    assert!(Journal::open(Box::new(m.clone())).is_err());
+    assert_eq!(*m.files.lock().unwrap(), before);
+}
+
 #[test]
 fn versionless_log_only_library_is_upgraded() {
     let mut c = Catalog::new();
@@ -257,12 +322,16 @@ fn bad_crc_is_still_a_torn_tail() {
 fn op_variants_are_versioned() {
     fn since(op: &Op) -> u32 {
         match op {
+            Op::SetDevelop { settings, .. }
+                if [&settings.curve.master, &settings.curve.red, &settings.curve.green, &settings.curve.blue].iter().any(|c| c.is_function()) =>
+            {
+                9
+            }
             Op::AddPhoto { .. }
             | Op::RemovePhoto { .. }
             | Op::SetRating { .. }
             | Op::SetFlag { .. }
             | Op::SetLabel { .. }
-            | Op::SetDevelop { .. }
             | Op::SetMeta { .. }
             | Op::SetDeleted { .. }
             | Op::SetLocal { .. }
@@ -294,12 +363,17 @@ fn op_variants_are_versioned() {
             Op::SetAsShotWb { .. } => 7,
             Op::SetHistoryCursor { .. } => 8,
             Op::SetUnsupportedEdits { .. } => 9,
+            Op::SetDevelop { .. } => 1,
         }
     }
-    /// v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`.
-    const NEWEST_FIELDS: u32 = 9;
-    let newest = since(&Op::SetUnsupportedEdits { id: PhotoId(1), fields: Vec::new() });
-    assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
+    assert_eq!(since(&Op::SetUnsupportedEdits { id: PhotoId(1), fields: Vec::new() }), 8);
+    let newest = since(&Op::SetDevelop {
+        id: PhotoId(1),
+        settings: Arc::new(lightcraft_develop::DevelopSettings::from_json(&function_settings()).unwrap()),
+        label: "function".into(),
+        edited: None,
+    });
+    assert_eq!(newest, VERSION, "the newest op payload's version must be the current format version");
 }
 
 #[path = "tests_format_diagnostics.rs"]

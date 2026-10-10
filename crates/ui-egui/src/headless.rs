@@ -1924,6 +1924,26 @@ mod tests {
         h.step();
     }
 
+    /// Exercise the upstream value label and shared text field, rather than the track or a
+    /// direct engine command. Editing text must not mutate the catalog before it is committed.
+    fn type_preset_amount(h: &mut Headless, text: &str, ending: &str) {
+        let t = Duration::from_secs(10);
+        let before = amount_photo(h).clone();
+        let revision = h.app.session.catalog.revision;
+        let depth = h.app.session.undo.len();
+        assert_eq!(h.request("ui.clickWidget", json!({"id":"sliderValue:presetAmount"}), t)["ok"], true);
+        h.step();
+        h.step();
+        let widgets = h.request("ui.widgets", json!({"filter":"sliderField:presetAmount"}), t);
+        assert!(widgets["result"].as_array().unwrap().iter().any(|w| w["id"] == "sliderField:presetAmount"), "{widgets}");
+        assert_eq!(h.request("ui.key", json!({"key":"a", "cmd":true}), t)["ok"], true);
+        assert_eq!(h.request("ui.text", json!({"text":text}), t)["ok"], true);
+        assert_eq!(amount_photo(h), &before, "typing alone leaves the current edit intact");
+        assert_eq!((h.app.session.catalog.revision, h.app.session.undo.len()), (revision, depth));
+        assert_eq!(h.request("ui.key", json!({"key":ending}), t)["ok"], true);
+        h.step();
+    }
+
     fn amount_photo(h: &Headless) -> &lightcraft_catalog::Photo {
         h.app.session.catalog.photo(h.app.session.active().unwrap()).unwrap()
     }
@@ -1949,6 +1969,113 @@ mod tests {
             assert_eq!(amount_photo(&h).unsupported_edits, ["CameraProfile", "FilterList"]);
             assert_eq!(h.app.session.undo.len(), baseline_depth + 1);
         }
+    }
+
+    #[test]
+    fn typed_preset_amount_blends_curves_from_the_pinned_baseline_and_preserves_undo() {
+        use lightcraft_develop::{DevelopSettings, PointCurve, SettingsGroup};
+        use lightcraft_geom::Point;
+        let mut h = preset_amount_fixture();
+        h.app.session.execute("develop.curve", &json!({"channel":"master", "points":[[0.0,0.05],[0.3,0.15],[0.75,0.9],[1.0,0.95]]})).unwrap();
+        let baseline = amount_photo(&h).develop.clone();
+        let baseline_depth = h.app.session.undo.len();
+        let baseline_rating = amount_photo(&h).rating;
+        let target: PointCurve = vec![Point::new(0.0, 0.1), Point::new(0.65, 0.4), Point::new(1.0, 1.0)].into();
+        let mut target_settings = DevelopSettings::default();
+        target_settings.light.exposure = 3.0;
+        target_settings.curve.master = target.clone();
+        let preset = h.app.session.presets.iter_mut().find(|p| p.id == "test.amount").unwrap();
+        preset.settings = lightcraft_develop::extract_groups(&target_settings, &[SettingsGroup::Light, SettingsGroup::ToneCurve]);
+        h.step();
+        let t = Duration::from_secs(10);
+        assert_eq!(h.request("ui.clickWidget", json!({"id":"preset:test.amount"}), t)["ok"], true);
+        assert_eq!(amount_photo(&h).develop.curve.master, target);
+        let base_lut = baseline.curve.master.render_lut();
+        let target_lut = target.render_lut();
+        let mut samples = Vec::new();
+        for amount in [49, 50, 51, 0, 100] {
+            type_preset_amount(&mut h, &amount.to_string(), "Enter");
+            let photo = amount_photo(&h);
+            let current = &photo.develop;
+            assert!((current.light.exposure - (1.0 + 2.0 * f64::from(amount) / 100.0)).abs() < 1e-9);
+            assert_eq!(photo.rating, baseline_rating, "typed digits are not rating shortcuts");
+            assert_eq!(h.app.session.undo.len(), baseline_depth + usize::from(amount != 0), "one replaceable preset step at {amount}%");
+            if amount == 0 {
+                assert_eq!(current, &baseline, "0% restores the exact pre-preset model");
+                assert_eq!(photo.unsupported_edits, ["CameraProfile"]);
+            } else {
+                assert_eq!(photo.unsupported_edits, ["CameraProfile", "FilterList"]);
+                if amount == 100 {
+                    assert_eq!(current.curve.master, target, "100% retains the target sparse model");
+                } else {
+                    assert!(current.curve.master.is_function(), "unequal knots blend continuously at {amount}%");
+                    let lut = current.curve.master.render_lut();
+                    for x in [0.2, 0.5, 0.8] {
+                        let expected = base_lut.eval(x) + (target_lut.eval(x) - base_lut.eval(x)) * amount as f32 / 100.0;
+                        assert!((lut.eval(x) - expected).abs() < 2e-4, "{amount}% at {x}");
+                    }
+                    samples.push(lut.eval(0.5));
+                }
+            }
+        }
+        assert!((samples[2] - samples[0]).abs() < 0.02, "crossing 50% must not switch the curve model");
+        let before = amount_photo(&h).clone();
+        let revision = h.app.session.catalog.revision;
+        for (text, ending) in [("0", "Escape"), ("not a number", "Enter")] {
+            type_preset_amount(&mut h, text, ending);
+            assert_eq!(amount_photo(&h), &before);
+            assert_eq!(h.app.session.catalog.revision, revision);
+            assert_eq!(h.app.session.undo.len(), baseline_depth + 1);
+        }
+        h.app.session.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(amount_photo(&h).develop, baseline);
+        assert_eq!(amount_photo(&h).unsupported_edits, ["CameraProfile"]);
+        h.app.session.execute("edit.redo", &json!({})).unwrap();
+        assert_eq!(amount_photo(&h), &before, "redo preserves the complete valid step");
+    }
+
+    #[test]
+    fn preset_amount_failed_curve_blend_keeps_the_visible_step_and_undo() {
+        use lightcraft_color::{CubicPiece, CurveFunction, MAX_CURVE_PIECES};
+        use lightcraft_develop::PointCurve;
+        let make = |shift: f64, lift: f64| {
+            let mut start = 0.0;
+            let pieces: Vec<_> = (1..=MAX_CURVE_PIECES)
+                .map(|i| {
+                    let end = if i == MAX_CURVE_PIECES { 1.0 } else { (i as f64 - shift) / MAX_CURVE_PIECES as f64 };
+                    let slope = (end - start) * (1.0 - lift);
+                    let piece = CubicPiece::new(end, [lift + start * (1.0 - lift), lift + end * (1.0 - lift), slope, slope]).unwrap();
+                    start = end;
+                    piece
+                })
+                .collect();
+            PointCurve::from_function(CurveFunction::from_pieces(pieces).unwrap(), Vec::new()).unwrap()
+        };
+        let mut h = preset_amount_fixture();
+        let id = h.app.session.active().unwrap();
+        let mut before = (*h.app.session.develop_of(id).unwrap()).clone();
+        before.curve.master = make(0.0, 0.0);
+        h.app.session.set_develop(id, before, "Source curve").unwrap();
+        let mut target = lightcraft_develop::DevelopSettings::default();
+        target.curve.master = make(0.5, 0.1);
+        let preset = h.app.session.presets.iter_mut().find(|p| p.id == "test.amount").unwrap();
+        preset.settings = lightcraft_develop::extract_groups(&target, &[lightcraft_develop::SettingsGroup::ToneCurve]);
+        h.step();
+        let t = Duration::from_secs(10);
+        assert_eq!(h.request("ui.clickWidget", json!({"id":"preset:test.amount"}), t)["ok"], true);
+        let valid = amount_photo(&h).develop.clone();
+        let depth = h.app.session.undo.len();
+        click_preset_amount(&mut h, 50.0);
+        assert_eq!(amount_photo(&h).develop, valid, "failed blend must not first undo the 100% preset");
+        assert_eq!(h.app.session.undo.len(), depth);
+        assert!(h.app.ui.status.contains("4096"), "{}", h.app.ui.status);
+        let before = amount_photo(&h).clone();
+        let revision = h.app.session.catalog.revision;
+        let redo = h.app.session.redo.len();
+        type_preset_amount(&mut h, "51", "Enter");
+        assert_eq!(amount_photo(&h), &before, "typed failure also keeps all diagnostics and the current model");
+        assert_eq!((h.app.session.catalog.revision, h.app.session.undo.len(), h.app.session.redo.len()), (revision, depth, redo));
+        assert!(h.app.ui.status.contains("4096"), "{}", h.app.ui.status);
     }
 
     #[test]

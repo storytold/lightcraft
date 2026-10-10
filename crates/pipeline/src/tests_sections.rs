@@ -19,7 +19,7 @@ fn section_bypass_matches_neutral_render_and_restores_cached_edits() {
             "light" => {
                 s.light.exposure = 1.0;
                 s.light.shadows = 40.0;
-                s.curve.master = vec![Point::new(0.0, 0.05), Point::new(1.0, 0.9)];
+                s.curve.master = vec![Point::new(0.0, 0.05), Point::new(1.0, 0.9)].into();
             }
             "color" => {
                 s.wb.mode = WbMode::Custom;
@@ -33,7 +33,7 @@ fn section_bypass_matches_neutral_render_and_restores_cached_edits() {
                 s.detail.nr_luminance = 60.0;
                 s.detail.sharpen_amount = 100.0;
             }
-            "curve" => s.curve.master = vec![Point::new(0.0, 0.1), Point::new(1.0, 0.8)],
+            "curve" => s.curve.master = vec![Point::new(0.0, 0.1), Point::new(1.0, 0.8)].into(),
             "mixer" => s.mixer.red.lum = 60.0,
             "grading" => s.grading.shadows.sat = 80.0,
             "grain" => s.grain.amount = 100.0,
@@ -94,7 +94,7 @@ fn disabled_sections_stay_bypassed_after_creative_profile_deltas() {
         s.profile.amount = 150.0;
         s.light.exposure = 1.0;
         s.color.saturation = 30.0;
-        s.curve.master = vec![Point::new(0.0, 0.1), Point::new(1.0, 0.85)];
+        s.curve.master = vec![Point::new(0.0, 0.1), Point::new(1.0, 0.85)].into();
         s.set_section_enabled("light", false);
         s.set_section_enabled("color", false);
         let saved = s.clone();

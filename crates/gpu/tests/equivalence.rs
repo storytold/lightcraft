@@ -79,7 +79,7 @@ fn disabled_develop_sections_use_the_shared_render_plan() {
     let src = scene(2, 320, 240);
     let mut s = DevelopSettings::default();
     s.light.exposure = 2.0;
-    s.curve.master = vec![Point::new(0.0, 0.15), Point::new(1.0, 0.8)];
+    s.curve.master = vec![Point::new(0.0, 0.15), Point::new(1.0, 0.8)].into();
     s.color.saturation = -80.0;
     s.wb.mode = WbMode::Custom;
     s.wb.temp = 9000.0;
@@ -88,6 +88,45 @@ fn disabled_develop_sections_use_the_shared_render_plan() {
     for section in ["light", "color", "detail"] {
         s.set_section_enabled(section, false);
         check(section, &src, &SourceInfo::default(), &s, &RenderRequest::fit(320, 240));
+    }
+}
+
+#[test]
+fn function_curves_profiles_bypass_and_cached_gpu_match_cpu() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(2, 320, 240);
+    let info = SourceInfo::default();
+    let request = RenderRequest::fit(320, 240);
+    let cache = StageCache::default();
+    let mut settings = DevelopSettings::default();
+    for (amount, profile, bypass) in [
+        (0.25, "lc.color", false),
+        (0.5, "lc.color", false),
+        (0.75, "lc.color", false),
+        (1.5, "lc.muted.matte-soft", false),
+        (0.5, "lc.film.faded-slide", false),
+        (0.5, "lc.film.faded-slide", true),
+        (0.5, "lc.film.faded-slide", false),
+    ] {
+        for (i, curve) in
+            [&mut settings.curve.master, &mut settings.curve.red, &mut settings.curve.green, &mut settings.curve.blue].into_iter().enumerate()
+        {
+            let source =
+                lightcraft_develop::PointCurve::from(vec![Point::new(0.0, 0.0), Point::new(0.25 + i as f64 * 0.03, 0.15), Point::new(1.0, 1.0)]);
+            let target =
+                lightcraft_develop::PointCurve::from(vec![Point::new(0.0, 0.05), Point::new(0.7 - i as f64 * 0.03, 0.85), Point::new(1.0, 0.95)]);
+            *curve = source.blend(&target, amount).unwrap();
+        }
+        settings.profile.id = profile.into();
+        settings.set_section_enabled("curve", !bypass);
+        let cpu = render(&src, &info, &settings, &request).image;
+        let warm = lightcraft_gpu::render(&src, &info, &settings, &request, Some(&cache)).expect("gpu").image;
+        let (mean, max, _) = diff(&cpu, &warm);
+        assert!(mean < MEAN_LSB && max <= MAX_LSB, "amount{amount}, profile{profile}, bypass{bypass}: mean{mean},max{max}");
+        let cold = lightcraft_gpu::render(&src, &info, &settings, &request, None).expect("gpu").image;
+        assert_eq!(warm.data, cold.data, "stale cached function curve");
     }
 }
 
@@ -268,11 +307,11 @@ fn cases() -> Vec<(&'static str, Edit)> {
         ("tone curves", |s| {
             s.curve.highlights = -30.0;
             s.curve.shadows = 25.0;
-            s.curve.master = vec![Point::new(0.0, 0.05), Point::new(0.5, 0.55), Point::new(1.0, 0.95)];
-            s.curve.blue = vec![Point::new(0.0, 0.0), Point::new(0.5, 0.45), Point::new(1.0, 1.0)];
+            s.curve.master = vec![Point::new(0.0, 0.05), Point::new(0.5, 0.55), Point::new(1.0, 0.95)].into();
+            s.curve.blue = vec![Point::new(0.0, 0.0), Point::new(0.5, 0.45), Point::new(1.0, 1.0)].into();
         }),
         ("tone curves + refine saturation", |s| {
-            s.curve.master = vec![Point::new(0.0, 0.0), Point::new(0.25, 0.15), Point::new(0.75, 0.88), Point::new(1.0, 1.0)];
+            s.curve.master = vec![Point::new(0.0, 0.0), Point::new(0.25, 0.15), Point::new(0.75, 0.88), Point::new(1.0, 1.0)].into();
             s.curve.lights = 30.0;
             s.curve.refine_saturation = 20.0;
         }),

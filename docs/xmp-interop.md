@@ -62,8 +62,29 @@ packets without `lc:unsupportedEdits` preserve diagnostics already in the catalo
 metadata is rejected, preserves existing names, and adds `InvalidSavedEditDiagnostics`. Limits are 66,305 bytes of encoded
 JSON, 256 names and 256 UTF-8 bytes per name; the UI abbreviates long lists and names.
 
-Catalog format 7 stores these diagnostics alongside the upstream format-3–6 operations.
+Catalog format 8 stores continuous point curves and these diagnostics alongside the upstream format-3–6 operations.
 Existing compatible libraries upgrade on open; older LightCraft builds refuse the new format. For comparison with older builds, use a disposable library or a separately backed-up copy.
+
+## Continuous curves and older versions
+
+Develop schema 2 retains both legacy sparse point arrays and continuous function curves. Partial preset Amount
+blends each channel's evaluated curve, even when their knot positions differ; exact 0% and 100% retain the endpoint
+models. Function curves store an immutable piecewise cubic base and sparse signed corrections, so moving a handle
+does not replace the blended shape with a newly fitted handful of points. Native XMP, history, copy/paste and sync
+retain that complete model. Sparse settings keep their supported wire version on read, so existing Local-photo
+baseline fingerprints remain valid. New sparse settings use version 1; authoring function curves promotes them
+to version 2. Edited/default comparisons ignore only this version marker.
+
+New function preset files use `lightcraft.preset.v2` and curve presets use a version-2 `curves` envelope. Their old
+readers reject those formats; legacy sparse preset files remain readable. Older LightCraft versions that predate
+native-settings validation can still misread newer XMP and fall back to old CRS fields, so use a separate library
+and sidecar copies when comparing builds. A newer catalog format is always refused by older catalog readers.
+
+Curve models are bounded to 1,024 handles and 4,096 cubic pieces. A blend that exceeds those bounds or its numeric
+range fails before the edit is committed. Legacy sparse curves with outputs outside 0..1 retain their exact
+load/render and 0%/100% behavior, but partial Amount is currently unsupported: their old profile fade clips handles
+before fitting, which cannot be reproduced by clipping an arbitrary blended function. LightCraft reports the
+limitation and keeps the current edit and undo history. This is not a claim of Lightroom pixel parity.
 
 ## Saving into an existing sidecar
 

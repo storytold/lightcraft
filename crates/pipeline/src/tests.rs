@@ -398,7 +398,8 @@ fn refine_saturation_tames_a_contrast_curve() {
         lightcraft_geom::Point::new(0.3, 0.15),
         lightcraft_geom::Point::new(0.7, 0.85),
         lightcraft_geom::Point::new(1.0, 1.0),
-    ];
+    ]
+    .into();
     let full = render(&src, &info, &s, &req).image.data[0];
     s.curve.refine_saturation = 0.0;
     let refined = render(&src, &info, &s, &req).image.data[0];

@@ -2,7 +2,7 @@
 //! Medium / Strong Contrast plus the user's, saved with the library preferences, imported and
 //! exported as small JSON files).
 
-use lightcraft_develop::ToneCurve;
+use lightcraft_develop::{PointCurve, ToneCurve};
 use lightcraft_geom::Point;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -20,19 +20,19 @@ pub fn reset_channel(c: &mut ToneCurve, channel: &str) -> std::result::Result<()
     match channel {
         "all" => *c = d,
         "point" => {
-            c.master.clear();
-            c.red.clear();
-            c.green.clear();
-            c.blue.clear();
+            c.master.reset();
+            c.red.reset();
+            c.green.reset();
+            c.blue.reset();
         }
         "parametric" => {
             (c.highlights, c.lights, c.darks, c.shadows) = (d.highlights, d.lights, d.darks, d.shadows);
             (c.split_shadows, c.split_mid, c.split_highlights) = (d.split_shadows, d.split_mid, d.split_highlights);
         }
-        "master" | "rgb" | "luma" => c.master.clear(),
-        "red" => c.red.clear(),
-        "green" => c.green.clear(),
-        "blue" => c.blue.clear(),
+        "master" | "rgb" | "luma" => c.master.reset(),
+        "red" => c.red.reset(),
+        "green" => c.green.reset(),
+        "blue" => c.blue.reset(),
         other => return Err(format!("unknown channel `{other}` (one of {})", RESET_CHANNELS.join(", "))),
     }
     Ok(())
@@ -49,8 +49,58 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"channel": channel}))
 }
 
+/// The point-curve channel; aliases always report the canonical master name.
+pub(crate) fn channel_mut<'a>(curve: &'a mut ToneCurve, channel: &str) -> std::result::Result<(&'static str, &'a mut PointCurve), String> {
+    match channel {
+        "master" | "rgb" | "luma" => Ok(("master", &mut curve.master)),
+        "red" => Ok(("red", &mut curve.red)),
+        "green" => Ok(("green", &mut curve.green)),
+        "blue" => Ok(("blue", &mut curve.blue)),
+        other => Err(format!("unknown point-curve channel `{other}` (master, red, green or blue)")),
+    }
+}
+
+fn edit_point(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "develop.curvePoint";
+    let id = s.active().ok_or_else(|| bad(C, "no active photo"))?;
+    let mut settings = (*s.develop_of(id).unwrap_or_default()).clone();
+    let (channel, curve) = channel_mut(&mut settings.curve, str_param(p, "channel").unwrap_or("master")).map_err(|e| bad(C, e))?;
+    let index =
+        || p.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(C, "index must be a nonnegative integer"));
+    let point = || {
+        let number = |key| {
+            p.get(key)
+                .and_then(Value::as_f64)
+                .filter(|v| v.is_finite() && (0.0..=1.0).contains(v))
+                .ok_or_else(|| bad(C, format!("{key} must be a finite number in 0..1")))
+        };
+        Ok::<_, crate::EngineError>(Point::new(number("x")?, number("y")?))
+    };
+    let selected = match str_param(p, "action") {
+        Some("add") => Some(curve.try_add_point(point()?).map_err(|e| bad(C, e.to_string()))?),
+        Some("move") => Some(curve.try_move_point(index()?, point()?).map_err(|e| bad(C, e.to_string()))?),
+        Some("remove") => {
+            curve.try_remove_point(index()?).map_err(|e| bad(C, e.to_string()))?;
+            None
+        }
+        _ => return Err(bad(C, "action must be add, move or remove")),
+    };
+    let result = json!({"channel":channel, "index":selected, "curve":curve});
+    s.set_develop(id, settings, "Tone Curve")?;
+    Ok(result)
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        cmd!(
+            "develop.curvePoint",
+            "Edit Point Curve Handle",
+            [],
+            None,
+            "{channel?: master|red|green|blue, action: add|move|remove, index?: nonnegative integer, x?, y?} — add/move use x,y in 0..1; move/remove use the editable handle index; preserves the curve's base function → {channel, index, curve}",
+            has_active,
+            edit_point
+        ),
         cmd!(
             "curve.reset",
             "Reset Tone Curve",
@@ -65,7 +115,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Point Curve Presets",
             [],
             None,
-            "{} → {presets: [{name, master, red, green, blue: [[x,y],...], builtin?}], current: name of the preset the active photo's point curves match, or null}",
+            "{} → {presets: [{name, master, red, green, blue: point pairs or tagged function, builtin?}], current: name of the preset the active photo's point curves match, or null}",
             always,
             |s, _| Ok(list(s))
         ),
@@ -101,7 +151,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import Point Curve Presets",
             [],
             None,
-            "{path | paths: [file]} — .lccurve JSON files ({format, version, presets: [...]}, an array of presets, or one preset); same-named user presets are replaced → {imported: [name], failed: [[file, error]]}",
+            "{path | paths: [file]} — .lccurve JSON files (v2 curves or legacy v1 presets envelope, a bare array, or one preset); same-named user presets are replaced → {imported: [name], failed: [[file, error]]}",
             always,
             import_presets
         ),
@@ -126,13 +176,17 @@ const FILE_FORMAT: &str = "lightcraft.curvePresets";
 /// A named set of point curves (master + red/green/blue, points in 0..1; empty = linear).
 /// Built-ins ship with the app; the user's are saved with the library preferences.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct CurvePreset {
     pub name: String,
-    pub master: Vec<[f64; 2]>,
-    pub red: Vec<[f64; 2]>,
-    pub green: Vec<[f64; 2]>,
-    pub blue: Vec<[f64; 2]>,
+    #[serde(with = "preset_channel")]
+    pub master: PointCurve,
+    #[serde(with = "preset_channel")]
+    pub red: PointCurve,
+    #[serde(with = "preset_channel")]
+    pub green: PointCurve,
+    #[serde(with = "preset_channel")]
+    pub blue: PointCurve,
     /// Built-in presets can't be deleted or overwritten (never stored).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub builtin: bool,
@@ -155,46 +209,90 @@ fn from_points(v: &[Point]) -> Vec<[f64; 2]> {
     normalize(&v.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>())
 }
 
-fn to_points(v: &[[f64; 2]]) -> Vec<Point> {
-    normalize(v).iter().map(|p| Point::new(p[0], p[1])).collect()
+/// Curve-preset files historically use pair arrays, while DevelopSettings uses Point objects.
+/// Preserve that sparse wire shape; a function curve keeps its complete tagged model.
+mod preset_channel {
+    use super::*;
+
+    pub fn serialize<S: serde::Serializer>(curve: &PointCurve, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        match curve.sparse_points() {
+            Some(points) => from_points(points).serialize(serializer),
+            None => curve.serialize(serializer),
+        }
+    }
+
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<PointCurve, D::Error> {
+        struct Channel;
+        impl<'de> serde::de::Visitor<'de> for Channel {
+            type Value = PointCurve;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("an array of point pairs or a tagged curve function")
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error> {
+                let mut pairs = Vec::new();
+                while pairs.len() < lightcraft_develop::MAX_POINT_CURVE_POINTS {
+                    match seq.next_element::<[f64; 2]>()? {
+                        Some(pair) => pairs.push(pair),
+                        None => return Ok(normalize(&pairs).into_iter().map(|p| Point::new(p[0], p[1])).collect::<Vec<_>>().into()),
+                    }
+                }
+                struct Excess;
+                impl<'de> Deserialize<'de> for Excess {
+                    fn deserialize<D: serde::Deserializer<'de>>(_: D) -> std::result::Result<Self, D::Error> {
+                        Err(serde::de::Error::custom("too many point-curve handles"))
+                    }
+                }
+                let _ = seq.next_element::<Excess>()?;
+                Ok(normalize(&pairs).into_iter().map(|p| Point::new(p[0], p[1])).collect::<Vec<_>>().into())
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> std::result::Result<Self::Value, A::Error> {
+                PointCurve::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+            }
+        }
+        deserializer.deserialize_any(Channel)
+    }
 }
 
 impl CurvePreset {
     /// The point curves of `c` under `name`.
     pub fn from_curve(name: &str, c: &ToneCurve) -> CurvePreset {
-        CurvePreset {
-            name: name.into(),
-            master: from_points(&c.master),
-            red: from_points(&c.red),
-            green: from_points(&c.green),
-            blue: from_points(&c.blue),
-            builtin: false,
-        }
+        CurvePreset { name: name.into(), master: c.master.clone(), red: c.red.clone(), green: c.green.clone(), blue: c.blue.clone(), builtin: false }
     }
     /// Set the four point curves of `c` (the parametric curve and Refine Saturation stay).
     pub fn apply(&self, c: &mut ToneCurve) {
-        c.master = to_points(&self.master);
-        c.red = to_points(&self.red);
-        c.green = to_points(&self.green);
-        c.blue = to_points(&self.blue);
+        c.master = self.master.clone();
+        c.red = self.red.clone();
+        c.green = self.green.clone();
+        c.blue = self.blue.clone();
     }
     /// Does `c` carry exactly this preset's point curves?
     pub fn matches(&self, c: &ToneCurve) -> bool {
-        let same = |a: &[[f64; 2]], b: &[Point]| {
-            let (a, b) = (normalize(a), from_points(b));
-            a.len() == b.len() && a.iter().zip(&b).all(|(p, q)| (p[0] - q[0]).abs() < 1e-6 && (p[1] - q[1]).abs() < 1e-6)
+        let same = |a: &PointCurve, b: &PointCurve| match (a.sparse_points(), b.sparse_points()) {
+            (Some(a), Some(b)) => {
+                let (a, b) = (from_points(a), from_points(b));
+                a.len() == b.len() && a.iter().zip(&b).all(|(p, q)| (p[0] - q[0]).abs() < 1e-6 && (p[1] - q[1]).abs() < 1e-6)
+            }
+            _ => a == b,
         };
         same(&self.master, &c.master) && same(&self.red, &c.red) && same(&self.green, &c.green) && same(&self.blue, &c.blue)
     }
     fn is_linear(&self) -> bool {
-        [&self.master, &self.red, &self.green, &self.blue].iter().all(|v| normalize(v).is_empty())
+        [&self.master, &self.red, &self.green, &self.blue].iter().all(|v| v.is_identity())
     }
 }
 
 /// The presets that ship with the app: a linear curve and two symmetric S-curves (our own
 /// values: the quarter-tones pulled 0.05 / 0.11 towards the ends, midpoint fixed).
 pub fn builtin_presets() -> Vec<CurvePreset> {
-    let s = |name: &str, master: Vec<[f64; 2]>| CurvePreset { name: name.into(), master, builtin: true, ..Default::default() };
+    let s = |name: &str, master: Vec<[f64; 2]>| CurvePreset {
+        name: name.into(),
+        master: master.into_iter().map(|p| Point::new(p[0], p[1])).collect::<Vec<_>>().into(),
+        builtin: true,
+        ..Default::default()
+    };
     vec![
         s("Linear", Vec::new()),
         s("Medium Contrast", vec![[0.0, 0.0], [0.25, 0.2], [0.5, 0.5], [0.75, 0.8], [1.0, 1.0]]),
@@ -278,16 +376,46 @@ fn delete_preset(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(list(s))
 }
 
-/// Presets in a curve-preset file: `{format, version, presets: [...]}`, a bare array, or one preset.
+/// Presets in a curve-preset file: a v2 `curves` envelope, legacy v1 `presets`, a bare array or preset.
 pub fn parse_file(bytes: &[u8]) -> std::result::Result<Vec<CurvePreset>, String> {
-    let v: Value = serde_json::from_slice(bytes).map_err(|e| format!("not a curve preset file: {e}"))?;
-    let items = match &v {
-        Value::Object(o) if o.contains_key("presets") => o["presets"].clone(),
-        Value::Array(_) => v.clone(),
-        Value::Object(_) => Value::Array(vec![v.clone()]),
-        _ => return Err("not a curve preset file".into()),
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Legacy {
+        format: String,
+        version: u32,
+        presets: Vec<CurvePreset>,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Current {
+        format: String,
+        version: u32,
+        curves: Vec<CurvePreset>,
+    }
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum File {
+        Legacy(Legacy),
+        Current(Current),
+        Bare(Box<CurvePreset>),
+        List(Vec<CurvePreset>),
+    }
+    let list = match serde_json::from_slice::<File>(bytes).map_err(|e| format!("not a curve preset file: {e}"))? {
+        File::Legacy(file) => {
+            if file.format != FILE_FORMAT || file.version != 1 {
+                return Err("unsupported legacy curve-preset format or version".into());
+            }
+            file.presets
+        }
+        File::Current(file) => {
+            if file.format != FILE_FORMAT || file.version != 2 {
+                return Err("unsupported curve-preset format or version".into());
+            }
+            file.curves
+        }
+        File::Bare(preset) => vec![*preset],
+        File::List(presets) => presets,
     };
-    let list: Vec<CurvePreset> = serde_json::from_value(items).map_err(|e| format!("not a curve preset file: {e}"))?;
     let list: Vec<CurvePreset> = list.into_iter().filter(|p| !p.name.trim().is_empty()).collect();
     if list.is_empty() {
         return Err("no curve presets in the file".into());
@@ -298,7 +426,7 @@ pub fn parse_file(bytes: &[u8]) -> std::result::Result<Vec<CurvePreset>, String>
 /// The JSON of a curve-preset file holding `presets`.
 pub fn to_file(presets: &[CurvePreset]) -> String {
     let presets: Vec<CurvePreset> = presets.iter().map(|p| CurvePreset { builtin: false, ..p.clone() }).collect();
-    serde_json::to_string_pretty(&json!({"format": FILE_FORMAT, "version": 1, "presets": presets})).unwrap_or_default()
+    serde_json::to_string_pretty(&json!({"format": FILE_FORMAT, "version": 2, "curves": presets})).unwrap_or_default()
 }
 
 fn import_presets(s: &mut Session, p: &Value) -> Result<Value> {
@@ -355,3 +483,7 @@ fn export_presets(s: &mut Session, p: &Value) -> Result<Value> {
     crate::export::write_file_durable(&target, to_file(&chosen).as_bytes()).map_err(crate::EngineError::Other)?;
     Ok(json!({"path": path.display().to_string(), "count": chosen.len()}))
 }
+
+#[cfg(test)]
+#[path = "curves_tests.rs"]
+mod tests;

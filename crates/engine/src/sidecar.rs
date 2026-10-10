@@ -427,7 +427,7 @@ pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_
     if remove_location {
         (meta.sublocation, meta.city, meta.state, meta.country, meta.gps) = (None, None, None, None, None);
     }
-    let settings = serde_json::to_string(&*p.develop).unwrap_or_default();
+    let settings = serde_json::to_string(&p.develop.to_json()).unwrap_or_default();
     let flag = match p.flag {
         Flag::None => "none",
         Flag::Pick => "pick",
@@ -1258,5 +1258,33 @@ mod native_authority_tests {
             assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod native_function_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn function_sidecar_declares_schema2_and_keeps_upstream_process_hdr() {
+        let mut settings = DevelopSettings::from_json(&json!({
+            "version":2,"process":77,"hdr":{"enabled":true,"max_ev":4.0},
+            "curve":{"master":{"kind":"function","version":1,"base":{"pieces":[{"end":1.0,"hermite":[0.1,0.9,0.8,0.8]}]},"adjustments":[]}}
+        }))
+        .unwrap();
+        // Even an in-process caller that retained an older marker must write the new boundary.
+        settings.version = 1;
+        let mut photo = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "test", "PNG", 8, 8, "now");
+        photo.develop = Arc::new(settings.clone());
+        photo.unsupported_edits = vec!["Look".into()];
+        let packet = sidecar_packet(&photo, &lightcraft_catalog::Catalog::new());
+        let sc = parse_sidecar(&packet, crate::crs::Target::Rendered).unwrap();
+        let Some(DevelopPatch::Full(loaded)) = sc.develop else { panic!("function settings must remain native") };
+        assert_eq!(loaded.version, 2);
+        assert_eq!(loaded.curve, settings.curve);
+        assert_eq!(loaded.process, settings.process);
+        assert_eq!(loaded.hdr, settings.hdr);
+        assert_eq!(sc.unsupported_edits, Some(vec!["Look".into()]));
     }
 }

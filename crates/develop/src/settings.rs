@@ -3,10 +3,23 @@
 //! Declared future schemas are refused before settings can be applied or rewritten.
 //! The rendering process is independent: a missing or unreadable `process` stays V1.
 
+use crate::PointCurve;
 use lightcraft_geom::{CropGeometry, Homography, Orientation, Point};
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
+
+fn deserialize_schema_version<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    let version = u32::deserialize(deserializer)?;
+    if version > SCHEMA_VERSION {
+        return Err(serde::de::Error::custom(format!(
+            "develop settings version {version} requires a newer LightCraft (supported: {SCHEMA_VERSION})"
+        )));
+    }
+    // Preserve the wire marker: Local photo baselines include serialized settings. Merely
+    // reading an older catalog must not change its fingerprint or bless an edited baseline.
+    Ok(version)
+}
 
 /// The rendering process a photo's settings are interpreted by (what Lightroom calls the process
 /// version). A change that would alter how existing settings render ships as a new process, so a
@@ -99,16 +112,6 @@ impl Process {
     }
 }
 
-fn deserialize_schema_version<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
-    let version = u32::deserialize(deserializer)?;
-    if version > SCHEMA_VERSION {
-        return Err(serde::de::Error::custom(format!(
-            "develop settings version {version} requires a newer LightCraft (supported: {SCHEMA_VERSION})"
-        )));
-    }
-    Ok(version)
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DevelopSettings {
@@ -157,7 +160,8 @@ pub struct DevelopSettings {
 impl Default for DevelopSettings {
     fn default() -> Self {
         Self {
-            version: SCHEMA_VERSION,
+            // Sparse curves retain the legacy marker; authored functions require schema2.
+            version: 1,
             process: ProcessVersion::LATEST,
             profile: Profile::default(),
             treatment: Treatment::Color,
@@ -350,10 +354,10 @@ pub struct ToneCurve {
     pub split_mid: f64,
     pub split_highlights: f64,
     /// Point curves in 0..1 (identity = empty or [(0,0),(1,1)]).
-    pub master: Vec<Point>,
-    pub red: Vec<Point>,
-    pub green: Vec<Point>,
-    pub blue: Vec<Point>,
+    pub master: PointCurve,
+    pub red: PointCurve,
+    pub green: PointCurve,
+    pub blue: PointCurve,
     /// Refine Saturation 0..100: 100 keeps the saturation a curve produces, lower values pull it
     /// back towards the saturation before the curve (strong contrast curves oversaturate).
     pub refine_saturation: f64,
@@ -369,10 +373,10 @@ impl Default for ToneCurve {
             split_shadows: 25.0,
             split_mid: 50.0,
             split_highlights: 75.0,
-            master: Vec::new(),
-            red: Vec::new(),
-            green: Vec::new(),
-            blue: Vec::new(),
+            master: PointCurve::default(),
+            red: PointCurve::default(),
+            green: PointCurve::default(),
+            blue: PointCurve::default(),
             refine_saturation: 100.0,
         }
     }

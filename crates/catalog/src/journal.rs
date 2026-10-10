@@ -56,7 +56,8 @@
 //!
 //! Earlier fork writers used v3 and v7 for saved-edit diagnostics, and v4 for function curves.
 //! Their diagnostic payloads remain readable alongside upstream v3-v7 fields, including Kelvin WB.
-//! Function curves are not supported by this writer; their payloads fail before any rewrite.
+//! | 9 | combined continuous point curves | Function point curves in develop settings (schema 2) |
+//! Compatible function curves from the earlier fork v4/v8 lineage remain readable.
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a

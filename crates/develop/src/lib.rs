@@ -7,13 +7,15 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod controls;
+pub mod point_curve;
 pub mod presets;
 pub mod segmask;
 pub mod settings;
 pub mod unsupported_edits;
 
 pub use controls::{CONTROLS, ControlSpec, Section, Track};
-pub use presets::{Preset, SettingsGroup, apply_partial, extract_groups};
+pub use point_curve::{FunctionCurve, MAX_POINT_CURVE_POINTS, POINT_CURVE_LUT_SIZE, PointCurve, PointCurveError};
+pub use presets::{Preset, PresetError, SettingsGroup, apply_partial, extract_groups, try_apply_partial};
 pub use segmask::SegMask;
 pub use settings::*;
 
@@ -31,12 +33,27 @@ impl DevelopSettings {
         s
     }
 
+    /// Ensure newly authored function curves declare the schema that can retain them.
+    pub fn normalize_schema(&mut self) {
+        if [&self.curve.master, &self.curve.red, &self.curve.green, &self.curve.blue].iter().any(|c| c.is_function()) {
+            self.version = SCHEMA_VERSION;
+        }
+    }
+
     pub fn to_json(&self) -> Value {
-        serde_json::to_value(self).unwrap_or(Value::Null)
+        let mut value = serde_json::to_value(self).unwrap_or(Value::Null);
+        if [&self.curve.master, &self.curve.red, &self.curve.green, &self.curve.blue].iter().any(|c| c.is_function())
+            && let Some(object) = value.as_object_mut()
+        {
+            object.insert("version".into(), Value::from(SCHEMA_VERSION));
+        }
+        value
     }
 
     pub fn from_json(v: &Value) -> Result<DevelopSettings, serde_json::Error> {
-        serde_json::from_value(v.clone())
+        let mut settings: DevelopSettings = serde_json::from_value(v.clone())?;
+        settings.normalize_schema();
+        Ok(settings)
     }
 
     /// Merge a partial JSON object into these settings (fields not mentioned are kept). A white balance that
@@ -92,6 +109,13 @@ impl DevelopSettings {
         h
     }
 
+    /// Compare edit values independently of the supported wire schema marker.
+    pub fn same_values(&self, other: &Self) -> bool {
+        let mut current = self.clone();
+        current.version = other.version;
+        current == *other
+    }
+
     /// True if nothing differs from a fresh default (ignoring white balance "as shot" values, and
     /// the rendering process: that is not an edit).
     pub fn is_unedited(&self) -> bool {
@@ -99,6 +123,7 @@ impl DevelopSettings {
         let d = DevelopSettings::default();
         a.wb = d.wb;
         a.process = d.process;
+        a.version = d.version;
         a == d
     }
 

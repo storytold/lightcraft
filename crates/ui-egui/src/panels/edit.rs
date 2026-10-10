@@ -1056,35 +1056,29 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
         control(app, ui, d, "curve.refineSaturation", true);
         return;
     }
-    let pts_of = |d: &DevelopSettings| -> Vec<Point> {
-        let v = match ch.as_str() {
-            "red" => &d.curve.red,
-            "green" => &d.curve.green,
-            "blue" => &d.curve.blue,
-            _ => &d.curve.master,
-        };
-        // in the order the curve is drawn (points from a sidecar, a preset or an agent can come
-        // unsorted or not finite): the drag below keeps each point between its neighbours
-        let mut v: Vec<Point> = v.iter().copied().filter(|q| q.x.is_finite() && q.y.is_finite()).collect();
-        v.sort_by(|a, b| a.x.total_cmp(&b.x));
-        if v.len() < 2 { vec![Point::new(0.0, 0.0), Point::new(1.0, 1.0)] } else { v }
+    let model = match ch.as_str() {
+        "red" => &d.curve.red,
+        "green" => &d.curve.green,
+        "blue" => &d.curve.blue,
+        _ => &d.curve.master,
     };
-    let pts = pts_of(d);
-    let curve = lightcraft_color::spline::MonotoneCurve::new(&pts.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>());
+    let pts = model.editable_points();
+    let curve = model.render_lut();
     let color = match ch.as_str() {
         "red" => hex("#dd3333"),
         "green" => hex("#33bb55"),
         "blue" => hex("#3377ee"),
         _ => Color32::from_gray(225),
     };
-    let line: Vec<Pos2> = (0..=96).map(|i| to_screen(i as f64 / 96.0, curve.eval(i as f64 / 96.0).clamp(0.0, 1.0))).collect();
+    let line: Vec<Pos2> = (0..=256).map(|i| to_screen(i as f64 / 256.0, curve.eval(i as f32 / 256.0).clamp(0.0, 1.0) as f64)).collect();
     p.add(egui::Shape::line(line, Stroke::new(2.0, color)));
     // interaction: drag a point (both axes, between its neighbours; ⌥ = fine), drag empty space to add and
     // drag a new point, click empty space to add, double-click a point to delete it
     let drag_id = egui::Id::new(("curve-drag", &ch));
     // the point being dragged (stored as `Option<usize>` so a stale value can be cleared)
     let mut dragging: Option<usize> = ui.data(|dd| dd.get_temp::<Option<usize>>(drag_id)).flatten();
-    let nearest = |q: Pos2| pts.iter().enumerate().map(|(i, p)| (i, to_screen(p.x, p.y).distance(q))).min_by(|a, b| a.1.total_cmp(&b.1));
+    let nearest =
+        |q: Pos2| pts.iter().enumerate().map(|(i, p)| (i, to_screen(p.x, p.y.clamp(0.0, 1.0)).distance(q))).min_by(|a, b| a.1.total_cmp(&b.1));
     let hovered = resp.hover_pos().and_then(nearest).filter(|(_, dist)| *dist < 10.0).map(|(i, _)| i);
     if dragging.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -1092,7 +1086,7 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
     }
     for (i, q) in pts.iter().enumerate() {
-        let c = to_screen(q.x, q.y);
+        let c = to_screen(q.x, q.y.clamp(0.0, 1.0));
         if dragging == Some(i) || (dragging.is_none() && hovered == Some(i)) {
             p.circle_filled(c, 5.5, color);
             p.circle_stroke(c, 5.5, Stroke::new(1.0, t.canvas));
@@ -1110,17 +1104,17 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
             t.text_dim,
         );
     }
-    let mut new_pts = None;
+    let mut command = None;
+    let mut select_result = false;
     if resp.double_clicked()
         && let Some(q) = resp.interact_pointer_pos()
         && let Some((i, dist)) = nearest(q)
         && dist < 10.0
         && i != 0
-        && i != pts.len() - 1
+        && i.checked_add(1) != Some(pts.len())
     {
-        let mut v = pts.clone();
-        v.remove(i);
-        new_pts = Some(v);
+        command = Some(json!({"channel":ch, "action":"remove", "index":i}));
+        select_result = true;
     } else if resp.drag_started()
         && let Some(q) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
     {
@@ -1130,11 +1124,8 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
             Some((i, dist)) if dist < 10.0 => dragging = Some(i),
             _ => {
                 let (x, y) = from_screen(q);
-                let mut v = pts.clone();
-                let i = v.iter().position(|p| p.x > x).unwrap_or(v.len());
-                v.insert(i, Point::new(x, y));
-                dragging = Some(i);
-                new_pts = Some(v);
+                command = Some(json!({"channel":ch, "action":"add", "x":x, "y":y}));
+                select_result = true;
             }
         }
     } else if resp.dragged()
@@ -1150,26 +1141,27 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
             }
             _ => from_screen(q),
         };
-        if let Some(point) = dragged_curve_point(&pts, i, Point::new(x, y)) {
-            let mut v = pts.clone();
-            if let Some(target) = v.get_mut(i) {
-                *target = point;
-                new_pts = Some(v);
+        if let Some(mut point) = dragged_curve_point(&pts, i, Point::new(x, y)) {
+            if (i == 0 || i.checked_add(1) == Some(pts.len()))
+                && let Some(endpoint) = pts.get(i)
+            {
+                point.x = endpoint.x;
             }
+            command = Some(json!({"channel":ch, "action":"move", "index":i, "x":point.x, "y":point.y}));
+            select_result = true;
         }
     } else if resp.clicked()
         && let Some(q) = resp.interact_pointer_pos()
         && nearest(q).is_none_or(|(_, dist)| dist >= 10.0)
     {
         let (x, y) = from_screen(q);
-        let mut v = pts.clone();
-        let i = v.iter().position(|p| p.x > x).unwrap_or(v.len());
-        v.insert(i, Point::new(x, y));
-        new_pts = Some(v);
+        command = Some(json!({"channel":ch, "action":"add", "x":x, "y":y}));
     }
-    if let Some(v) = new_pts {
-        let arr: Vec<[f64; 2]> = v.iter().map(|p| [p.x, p.y]).collect();
-        let _ = app.run("develop.curve", json!({"channel": ch, "points": arr}));
+    if let Some(params) = command {
+        let result = app.run("develop.curvePoint", params);
+        if select_result {
+            dragging = result.ok().and_then(|r| r.get("index").and_then(Value::as_u64)).and_then(|i| usize::try_from(i).ok());
+        }
     }
     if resp.drag_stopped() {
         dragging = None;

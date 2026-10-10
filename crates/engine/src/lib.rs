@@ -881,7 +881,8 @@ impl Session {
 
     /// Change a photo's develop settings. During an interaction the change is previewed without an
     /// undo step; otherwise it is committed with a history entry.
-    pub fn set_develop(&mut self, id: PhotoId, settings: DevelopSettings, label: &str) -> Result<()> {
+    pub fn set_develop(&mut self, id: PhotoId, mut settings: DevelopSettings, label: &str) -> Result<()> {
+        settings.normalize_schema();
         let now = (self.clock)();
         let settings = Arc::new(settings);
         if let Some(i) = &self.interaction
@@ -890,49 +891,53 @@ impl Session {
             return self.apply_silent(Op::SetDevelop { id, settings, label: label.into(), edited: Some(now) });
         }
         let mut ops = vec![self.develop_op(id, (*settings).clone(), label).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?];
-        ops.extend(self.auto_sync_ops(id, &settings, label));
+        ops.extend(self.auto_sync_ops(id, &settings, label)?);
         let op = if ops.len() == 1 { ops.remove(0) } else { Op::Batch { ops } };
         self.commit(label, op)
     }
 
     /// With Auto Sync on, the ops that carry an edit of the active photo `id` (to `new`) over to the
     /// other selected photos: only the settings that changed; never spot removal or red eye (they
-    /// belong to one photo's pixels), nor the rendering process (Sync doesn't carry it either), nor
-    /// history / snapshot restores.
-    fn auto_sync_ops(&self, id: PhotoId, new: &DevelopSettings, label: &str) -> Vec<Op> {
+    /// belong to one photo's pixels), nor the rendering process, nor history / snapshot restores.
+    fn auto_sync_ops(&self, id: PhotoId, new: &DevelopSettings, label: &str) -> Result<Vec<Op>> {
+        let Some(old) = self.develop_of(id) else { return Ok(Vec::new()) };
+        self.auto_sync_ops_from(id, &old, new, label)
+    }
+
+    fn auto_sync_ops_from(&self, id: PhotoId, old: &DevelopSettings, new: &DevelopSettings, label: &str) -> Result<Vec<Op>> {
         if !self.auto_sync
             || self.active() != Some(id)
             || self.selection.ids.len() < 2
             || label.starts_with("History:")
             || label.starts_with("Restore ")
         {
-            return Vec::new();
+            return Ok(Vec::new());
         }
-        let Some(old) = self.develop_of(id) else { return Vec::new() };
-        let Some(mut delta) = json_delta(&old.to_json(), &new.to_json()) else { return Vec::new() };
+        let Some(mut delta) = json_delta(&old.to_json(), &new.to_json()) else { return Ok(Vec::new()) };
         if let Some(o) = delta.as_object_mut() {
             for k in ["spots", "red_eye", "version", "process"] {
                 o.remove(k);
             }
             if o.is_empty() {
-                return Vec::new();
+                return Ok(Vec::new());
             }
         }
-        self.selection
-            .ids
-            .iter()
-            .filter(|x| **x != id)
-            .filter_map(|x| self.develop_of(*x).map(|d| (*x, d)))
-            .filter_map(|(x, d)| {
-                let synced = lightcraft_develop::apply_partial(&d, &delta, 1.0);
-                (synced != *d).then(|| self.develop_op(x, synced, label)).flatten()
-            })
-            .collect()
+        let mut ops = Vec::new();
+        for id in self.selection.ids.iter().copied().filter(|x| *x != id) {
+            if let Some(settings) = self.develop_of(id) {
+                let synced = lightcraft_develop::try_apply_partial(&settings, &delta, 1.0).map_err(|e| EngineError::Other(e.to_string()))?;
+                if synced != *settings {
+                    ops.extend(self.develop_op(id, synced, label));
+                }
+            }
+        }
+        Ok(ops)
     }
 
     /// The op that sets a photo's develop settings and appends a History entry (for batches).
-    pub fn develop_op(&self, id: PhotoId, settings: DevelopSettings, label: &str) -> Option<Op> {
+    pub fn develop_op(&self, id: PhotoId, mut settings: DevelopSettings, label: &str) -> Option<Op> {
         self.catalog.photo(id)?;
+        settings.normalize_schema();
         let settings = Arc::new(settings);
         let step = lightcraft_catalog::HistoryStep { label: label.into(), settings: settings.clone() };
         Some(Op::Batch {
@@ -952,14 +957,24 @@ impl Session {
 
     /// Commit the interaction as one undo step (no-op if nothing changed).
     pub fn end_interaction(&mut self) -> Result<()> {
-        let Some(i) = self.interaction.take() else { return Ok(()) };
-        let Some(cur) = self.develop_of(i.photo) else { return Ok(()) };
+        let Some(i) = self.interaction.clone() else { return Ok(()) };
+        let Some(cur) = self.develop_of(i.photo) else {
+            self.interaction = None;
+            return Ok(());
+        };
         if *cur == *i.original {
+            self.interaction = None;
             return Ok(());
         }
+        // Validate sync against the pre-drag settings before removing the visible preview.
+        // On failure the interaction remains available to retry or explicitly cancel.
+        let mut ops = vec![self.develop_op(i.photo, (*cur).clone(), &i.label).ok_or(lightcraft_catalog::CatalogError::NoPhoto(i.photo))?];
+        ops.extend(self.auto_sync_ops_from(i.photo, &i.original, &cur, &i.label)?);
+        self.interaction = None;
         // Restore the original silently, then commit the final value as one step.
         self.apply_silent(Op::SetDevelop { id: i.photo, settings: i.original.clone(), label: i.label.clone(), edited: None })?;
-        self.set_develop(i.photo, (*cur).clone(), &i.label)
+        let op = if ops.len() == 1 { ops.remove(0) } else { Op::Batch { ops } };
+        self.commit(&i.label, op)
     }
 
     pub fn cancel_interaction(&mut self) -> Result<()> {
@@ -1229,6 +1244,9 @@ pub const AUTO_VERSIONS: usize = 20;
 
 /// The parts of `new` that differ from `old` (objects recurse; anything else is taken whole).
 pub fn json_delta(old: &Value, new: &Value) -> Option<Value> {
+    if old.get("kind").and_then(Value::as_str) == Some("function") || new.get("kind").and_then(Value::as_str) == Some("function") {
+        return (old != new).then(|| new.clone());
+    }
     match (old, new) {
         (Value::Object(a), Value::Object(b)) => {
             let m: serde_json::Map<String, Value> =

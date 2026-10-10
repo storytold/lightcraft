@@ -509,7 +509,7 @@ impl Photo {
         if self.develop.wb.mode == WbMode::AsShot && defaults.wb.mode == WbMode::AsShot {
             defaults.wb = self.develop.wb;
         }
-        *self.develop != defaults && !self.develop.is_unedited()
+        !self.develop.same_values(&defaults) && !self.develop.is_unedited()
     }
     /// Capture time if known, else import time (sort key).
     pub fn date(&self) -> &str {

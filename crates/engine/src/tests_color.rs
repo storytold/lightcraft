@@ -108,11 +108,12 @@ fn targeted_adjustment_on_curve_and_mixer() {
     // point curve: a point appears at the sampled input, raised by delta levels
     s.execute("develop.targeted", &json!({"target": "curve", "channel": "master", "x": 0.5, "y": 0.35, "delta": 12.75})).unwrap();
     let m = active_dev(&s).curve.master;
+    let m = m.sparse_points().unwrap();
     assert_eq!(m.len(), 3);
     assert!((m[1].y - m[1].x - 0.05).abs() < 1e-6, "{m:?}");
     // a second step moves the same point
     s.execute("develop.targeted", &json!({"target": "curve", "channel": "master", "x": 0.5, "y": 0.35, "delta": 12.75})).unwrap();
-    assert_eq!(active_dev(&s).curve.master.len(), 3);
+    assert_eq!(active_dev(&s).curve.master.sparse_points().unwrap().len(), 3);
     // colour mixer: the purple sky's bands lose saturation, the dominant one by the full delta
     let r = s.execute("develop.targeted", &json!({"target": "sat", "x": 0.5, "y": 0.1, "delta": -30})).unwrap();
     let o = r.as_object().unwrap();
