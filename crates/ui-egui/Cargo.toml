@@ -27,7 +27,6 @@ dac-preview = { workspace = true }
 dac-slideshow = { path = "../slideshow" }
 # the Book module (owned, Phase 3)
 dac-book = { workspace = true }
-dac-layout = { workspace = true }
 dac-text = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }
