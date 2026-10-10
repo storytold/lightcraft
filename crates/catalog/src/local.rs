@@ -308,7 +308,8 @@ impl Op {
             | Op::SetLabelName { .. }
             | Op::SetKeyword { .. }
             | Op::SetBrowsed { .. }
-            | Op::SetFolderRecord { .. } => {}
+            | Op::SetFolderRecord { .. }
+            | Op::SetSavedLocation { .. } => {}
         }
     }
 }

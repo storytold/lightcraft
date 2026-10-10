@@ -164,7 +164,7 @@ pub enum Op {
         id: AlbumId,
         cover: Option<PhotoId>,
     },
-    /// Attach, replace or remove an album's saved-creation layout. Format version 6.
+    /// Attach, replace or remove an album's saved-creation layout. Format version 7.
     SetAlbumCreation {
         id: AlbumId,
         creation: Option<Creation>,
@@ -284,6 +284,12 @@ pub enum Op {
         folder: String,
         record: Option<FolderRecord>,
     },
+    /// A saved location of the Map module, by name (case-insensitive); `None` = delete it.
+    /// Format version 6.
+    SetSavedLocation {
+        name: String,
+        location: Option<dac_geo::SavedLocation>,
+    },
     /// Several ops as one step (undo applies the inverses in reverse).
     Batch {
         ops: Vec<Op>,
@@ -318,6 +324,9 @@ pub struct Catalog {
     /// What the library keeps about its folders (folder identity → record), see [`folders`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     folder_records: BTreeMap<String, FolderRecord>,
+    /// The Map module's saved locations, by lower-case name (format version 6).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    saved_locations: BTreeMap<String, dac_geo::SavedLocation>,
     /// Increments on every applied op.
     #[serde(skip)]
     pub revision: u64,
@@ -327,6 +336,20 @@ pub struct Catalog {
 }
 
 impl Catalog {
+    /// The Map module's saved locations, by name.
+    pub fn saved_locations(&self) -> impl Iterator<Item = &dac_geo::SavedLocation> {
+        self.saved_locations.values()
+    }
+
+    pub fn saved_location(&self, name: &str) -> Option<&dac_geo::SavedLocation> {
+        self.saved_locations.get(&name.trim().to_lowercase())
+    }
+
+    /// Is a photo position inside a private saved location (its location is left out on export)?
+    pub fn is_private_location(&self, gps: (f64, f64)) -> bool {
+        self.saved_locations.values().any(|l| l.private && l.contains(dac_geo::LatLon::new(gps.0, gps.1)))
+    }
+
     pub fn new() -> Catalog {
         Catalog { next_photo: 1, next_album: 1, next_stack: 1, ..Default::default() }
     }
@@ -883,6 +906,21 @@ impl Catalog {
                     None => self.folder_records.remove(&key),
                 };
                 Op::SetFolderRecord { folder: key, record: old }
+            }
+            Op::SetSavedLocation { name, location } => {
+                let key = name.trim().to_lowercase();
+                if key.is_empty() {
+                    return Err(CatalogError::Invalid("a saved location needs a name".into()));
+                }
+                let old = match location {
+                    Some(l) => {
+                        let l = dac_geo::SavedLocation::new(&l.name, l.lat, l.lon, l.radius, l.private)
+                            .map_err(|e| CatalogError::Invalid(e.to_string()))?;
+                        self.saved_locations.insert(key, l)
+                    }
+                    None => self.saved_locations.remove(&key),
+                };
+                Op::SetSavedLocation { name, location: old }
             }
             Op::Batch { ops } => {
                 let mut inverses = Vec::with_capacity(ops.len());

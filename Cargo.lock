@@ -1238,6 +1238,7 @@ dependencies = [
  "crc32fast",
  "dac-brand",
  "dac-develop",
+ "dac-geo",
  "dac-geom",
  "dac-meta",
  "log",
@@ -1383,6 +1384,7 @@ dependencies = [
  "dac-develop",
  "dac-faces",
  "dac-fetch",
+ "dac-geo",
  "dac-geom",
  "dac-gpu",
  "dac-hash",
@@ -1436,6 +1438,19 @@ dependencies = [
  "rustls-rustcrypto",
  "sha2",
  "webpki-roots",
+]
+
+[[package]]
+name = "dac-geo"
+version = "0.5.0"
+dependencies = [
+ "dac-meta",
+ "dac-net",
+ "flate2",
+ "image",
+ "log",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1684,6 +1699,7 @@ dependencies = [
  "dac-develop",
  "dac-engine",
  "dac-faces",
+ "dac-geo",
  "dac-geom",
  "dac-immich",
  "dac-meta",
@@ -1691,6 +1707,7 @@ dependencies = [
  "dac-preview",
  "dac-raster",
  "egui",
+ "image",
  "log",
  "resvg",
  "serde",

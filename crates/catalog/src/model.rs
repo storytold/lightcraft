@@ -486,7 +486,7 @@ pub struct Album {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order: Option<u32>,
     /// A saved creation (Saved Print / Book / Slideshow / Web Gallery): the album holds its photos
-    /// and this its layout document. Format version 6.
+    /// and this its layout document. Format version 7.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub creation: Option<Creation>,
 }

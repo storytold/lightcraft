@@ -74,7 +74,7 @@ fn v3_library_loads_and_is_upgraded() {
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
 }
 
-/// A format-5 library (before saved creations) opens as it was and is rewritten in format 6.
+/// A format-5 library (before saved locations and creations) opens as it was and is rewritten in the current format.
 #[test]
 fn v5_library_loads_and_is_upgraded() {
     let (base, log, full) = legacy_parts();
@@ -239,7 +239,8 @@ fn op_variants_are_versioned() {
             Op::SetAlbumOrder { .. } => 3,
             Op::SetSha1 { .. } | Op::SetKind { .. } | Op::SetXmpStamp { .. } | Op::SetRemote { .. } | Op::SetPreview { .. } => 4,
             Op::SetEmbeddedLens { .. } | Op::SetKeyword { .. } | Op::SetFolderRecord { .. } => 5,
-            Op::SetAlbumCreation { .. } => 6,
+            Op::SetSavedLocation { .. } => 6,
+            Op::SetAlbumCreation { .. } => 7,
         }
     }
     let newest = since(&Op::SetAlbumCreation { id: AlbumId(1), creation: None });

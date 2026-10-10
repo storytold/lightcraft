@@ -685,3 +685,20 @@ fn undated_photos_group_under_unknown_date_and_sort_together() {
     let filter_year = Filter { date: Some("2026".into()), ..Default::default() };
     assert_eq!(c.query(&filter_year, &Sort { key: SortKey::CaptureDate, ascending: false, ..Default::default() }), vec![p_dated2, p_dated1]);
 }
+
+#[test]
+fn saved_locations_apply_undo_and_privacy() {
+    let mut c = Catalog::new();
+    let home = dac_geo::SavedLocation::new("Home", 48.85, 2.35, 300.0, true).unwrap();
+    let inv = c.apply(Op::SetSavedLocation { name: "home".into(), location: Some(home.clone()) }).unwrap();
+    assert_eq!(c.saved_location("HOME"), Some(&home));
+    assert!(c.is_private_location((48.851, 2.351)));
+    assert!(!c.is_private_location((48.9, 2.35)));
+    c.apply(inv).unwrap();
+    assert!(c.saved_location("home").is_none());
+    assert!(!c.is_private_location((48.851, 2.351)));
+    // invalid locations are refused, not stored
+    let bad = dac_geo::SavedLocation { radius: f64::NAN, ..home };
+    assert!(c.apply(Op::SetSavedLocation { name: "x".into(), location: Some(bad) }).is_err());
+    assert!(c.apply(Op::SetSavedLocation { name: " ".into(), location: None }).is_err());
+}
