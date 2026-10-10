@@ -40,6 +40,64 @@ pub fn rewrite_known(text: &str, old: &str, new: &str, suffixes: &[String]) -> S
     })
 }
 
+/// Everything `rename-crates --upstream` rewrites in one file: known crate paths, `-p lightcraft` (the upstream app
+/// package), feature paths of that package (`lightcraft/heif` -> `<prefix>-app/heif`) and type names built from the
+/// prefix (`LightcraftApp` -> `DacApp`).
+pub fn rewrite_upstream(text: &str, current: &str, suffixes: &[String]) -> String {
+    let out = rewrite_known(text, UPSTREAM_PREFIX, current, suffixes).replace(&format!("-p {UPSTREAM_PREFIX} "), &format!("-p {current}-app "));
+    let out = rewrite_feature_paths(&out, UPSTREAM_PREFIX, &format!("{current}-app"));
+    rewrite_type_names(&out, &capitalize(UPSTREAM_PREFIX), &capitalize(current))
+}
+
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_ascii_uppercase().to_string() + c.as_str()).unwrap_or_default()
+}
+
+/// `old/<feature>` (a Cargo feature path of the package `old`) after a space, quote, `=`, `,` or `[`.
+fn rewrite_feature_paths(text: &str, old: &str, new: &str) -> String {
+    let pat = format!("{old}/");
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    let mut from = 0;
+    while let Some(i) = text.get(from..).and_then(|t| t.find(&pat)) {
+        let at = from + i;
+        let end = at + pat.len();
+        from = end;
+        let before = at.checked_sub(1).and_then(|b| text.as_bytes().get(b)).copied();
+        let after = text.as_bytes().get(end).copied();
+        if matches!(before, Some(b' ' | b'"' | b'=' | b',' | b'[')) && after.is_some_and(|c| c.is_ascii_lowercase()) {
+            out.push_str(text.get(last..at).unwrap_or_default());
+            out.push_str(new);
+            out.push('/');
+            last = end;
+        }
+    }
+    out.push_str(text.get(last..).unwrap_or_default());
+    out
+}
+
+/// `OldX` -> `NewX` for an identifier that starts with `Old` followed by an upper-case letter.
+fn rewrite_type_names(text: &str, old: &str, new: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    let mut from = 0;
+    while let Some(i) = text.get(from..).and_then(|t| t.find(old)) {
+        let at = from + i;
+        let end = at + old.len();
+        from = end;
+        let boundary = at == 0 || bytes.get(at - 1).is_some_and(|b| !is_word(*b));
+        if boundary && bytes.get(end).is_some_and(u8::is_ascii_uppercase) {
+            out.push_str(text.get(last..at).unwrap_or_default());
+            out.push_str(new);
+            last = end;
+        }
+    }
+    out.push_str(text.get(last..).unwrap_or_default());
+    out
+}
+
 fn rewrite(text: &str, old: &str, new: &str, accept: impl Fn(&[u8], u8) -> bool) -> String {
     let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
@@ -179,9 +237,7 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
         let mut files: BTreeSet<String> = git_lines(root, &["diff", "--name-only", &since])?.into_iter().collect();
         files.extend(git_lines(root, &["diff", "--name-only", "--diff-filter=U"])?);
         let files: Vec<String> = files.into_iter().collect();
-        let app_old = format!("-p {UPSTREAM_PREFIX} ");
-        let app_new = format!("-p {current}-app ");
-        let changed = apply(root, &files, |t| rewrite_known(t, UPSTREAM_PREFIX, &current, &suffixes).replace(&app_old, &app_new))?;
+        let changed = apply(root, &files, |t| rewrite_upstream(t, &current, &suffixes))?;
         println!(
             "rename-crates --upstream: {UPSTREAM_PREFIX}-* -> {current}-* in {} of {} file(s) changed since {since}",
             changed.len(),
@@ -237,6 +293,17 @@ mod tests {
         let out = rewrite_known(src, "lightcraft", "dac", &suffixes);
         assert_eq!(out, "dac-denoise-core dac_ui_egui::x dac-cli lightcraft_zh_hans.otf lightcraft-0.2.tar.gz LightCraft");
         assert_eq!(rewrite_known("lightcraft-denoise-extra", "lightcraft", "dac", &suffixes), "lightcraft-denoise-extra");
+    }
+
+    #[test]
+    fn upstream_rewrites_type_names_and_feature_paths() {
+        let suffixes = vec!["ui-egui".to_string()];
+        let src = "use lightcraft_ui_egui::LightcraftApp;\ncargo run -p lightcraft --features lightcraft/heif\nf = [\"lightcraft/heif\"]\nLightCraft Lightcraft github.com/x/lightcraft/y";
+        let out = rewrite_upstream(src, "dac", &suffixes);
+        assert_eq!(
+            out,
+            "use dac_ui_egui::DacApp;\ncargo run -p dac-app --features dac-app/heif\nf = [\"dac-app/heif\"]\nLightCraft Lightcraft github.com/x/lightcraft/y"
+        );
     }
 
     #[test]
