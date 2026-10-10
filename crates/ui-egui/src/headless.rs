@@ -1601,7 +1601,7 @@ mod tests {
     fn info_fields_keep_typing_and_save() {
         let mut h = demo([1300.0, 1000.0]);
         let t = Duration::from_secs(10);
-        h.request("ui.set", json!({"view": "detail", "right": "info"}), t);
+        h.request("ui.set", json!({"view": "detail", "right": "info", "moduleBar": false}), t);
         h.settle(SETTLE);
         for (key, text) in [("altText", "A lake at dawn"), ("usageTerms", "Editorial use only"), ("city", "Zermatt")] {
             let r = h.request("ui.clickWidget", json!({"id": format!("field:{key}")}), t);
@@ -2111,7 +2111,7 @@ mod tests {
         let t = Duration::from_secs(10);
         let id = h.app.session.visible_cloned()[0];
         h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0]}}), t);
-        h.request("ui.set", json!({"view": "detail", "right": "info"}), t);
+        h.request("ui.set", json!({"view": "detail", "right": "info", "moduleBar": false}), t);
         let before = h.app.session.catalog.photo(id).unwrap().captured.clone().unwrap();
         let r = h.request("ui.clickWidget", json!({"id": "icon:editCaptureTime"}), t);
         assert_eq!(r["ok"], true, "{r}");

@@ -721,7 +721,8 @@ fn folders_app_sized(paths: &[&str], size: [f32; 2]) -> Headless {
     }
     let app = DacApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, size, 1.0);
-    let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true}), T);
+    // (the module bar off: these layouts were sized before it existed)
+    let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true, "moduleBar": false}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     h

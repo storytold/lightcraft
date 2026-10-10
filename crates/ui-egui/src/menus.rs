@@ -27,7 +27,7 @@ pub const LANGUAGE_COMMANDS: &[UiCommand] = &[
 /// Every UI command: the languages, then everything else. `xtask parity` reads both tables from
 /// this file, so an id listed in `docs/parity.md` is checked wherever it is declared.
 pub fn ui_commands() -> impl Iterator<Item = &'static UiCommand> {
-    LANGUAGE_COMMANDS.iter().chain(UI_COMMANDS)
+    LANGUAGE_COMMANDS.iter().chain(UI_COMMANDS).chain(crate::module::SHELL_COMMANDS)
 }
 
 /// The language a Language-menu command selects, if the id is one. The engine and the UI both go
@@ -182,6 +182,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.shortcuts", "Keyboard Shortcuts", Some("Cmd+/"), "Help"),
     ("app.setShortcut", "Set Keyboard Shortcut", None, ""),
     ("app.resetShortcuts", "Reset All Keyboard Shortcuts", None, ""),
+    ("app.keymapSet", "Keymap Set", None, ""),
+    ("app.keymapExport", "Export Keymap…", None, "Help"),
+    ("app.keymapImport", "Import Keymap…", None, "Help"),
     ("app.export", "Export Now", None, ""),
     ("app.showInFinder", "Show in Finder", Some("Cmd+R"), "Photo"),
     ("dialog.rename", "Rename Photos…", Some("F2"), "Photo"),
@@ -197,6 +200,9 @@ fn panel(app: &mut DacApp, ctx: &egui::Context, p: RightPanel, name: &str) {
         app.toast(ctx, crate::i18n::tr_format!("{name} Off", name = crate::i18n::tr(name)));
     } else {
         app.ui.right = p;
+        // opening a panel brings its edge back (F8 / Tab hid it)
+        app.ui.right_edge = true;
+        app.ui.hidden_panels.retain(|h| h.right_panel() != Some(p));
         app.toast(ctx, crate::i18n::tr_format!("{name} On", name = crate::i18n::tr(name)));
         if p.is_edit_tool() && !matches!(app.ui.view, ViewMode::Detail) {
             app.ui.view = ViewMode::Detail;
@@ -264,6 +270,9 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
         // (menus rebuilt from it, toasts) are already in the new language.
         crate::i18n::set_language(app.ui.language);
         return Some(Ok(json!(app.ui.language)));
+    }
+    if let Some(r) = crate::module::run(app, id, p) {
+        return Some(r);
     }
     let ctx = egui::Context::default();
     let r: Result<Value, String> = match id {
@@ -1050,6 +1059,42 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
             Ok(Value::Null)
         }
         "app.setShortcut" => crate::shortcuts::set_shortcut(app, p),
+        "app.keymapSet" => crate::shortcuts::choose_set(app, p),
+        "app.keymapExport" => {
+            let path = match p.get("path").and_then(Value::as_str) {
+                Some(x) => x.to_string(),
+                None => {
+                    let name = format!("{} Keymap.json", dac_brand::DISPLAY_NAME);
+                    let req = PickRequest::save(crate::i18n::tr("Export Keymap"), crate::i18n::tr("Keymap"), &["json"], name);
+                    match crate::pick::ask(app, id, p, "path", req, |_| None) {
+                        Picked::Now(v) => match v.into_iter().next() {
+                            Some(x) => x,
+                            None => return Some(Ok(Value::Null)),
+                        },
+                        Picked::Later => return Some(Ok(Value::Null)),
+                        Picked::Unavailable => return Some(Err("no file dialog on this platform: pass {path}".into())),
+                    }
+                }
+            };
+            crate::shortcuts::export_file(app, &path)
+        }
+        "app.keymapImport" => {
+            let path = match p.get("path").and_then(Value::as_str) {
+                Some(x) => x.to_string(),
+                None => {
+                    let req = PickRequest::file(crate::i18n::tr("Import Keymap"), crate::i18n::tr("Keymap"), &["json"]);
+                    match crate::pick::ask(app, id, p, "path", req, |_| None) {
+                        Picked::Now(v) => match v.into_iter().next() {
+                            Some(x) => x,
+                            None => return Some(Ok(Value::Null)),
+                        },
+                        Picked::Later => return Some(Ok(Value::Null)),
+                        Picked::Unavailable => return Some(Err("no file dialog on this platform: pass {path}".into())),
+                    }
+                }
+            };
+            crate::shortcuts::import_file(app, &path)
+        }
         "app.resetShortcuts" => {
             app.ui.settings.keymap.clear();
             Ok(Value::Null)
@@ -1460,6 +1505,9 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
 }
 
 pub fn ui_enabled(app: &DacApp, id: &str) -> bool {
+    if let Some(e) = crate::module::enabled(app, id) {
+        return e;
+    }
     match id {
         s if s.starts_with("panel.") || s.starts_with("tool.") || s.starts_with("section.") => app.session.active().is_some() || s == "panel.close",
         "app.export" | "dialog.export" | "dialog.createPreset" | "dialog.rename" | "dialog.captureTime" | "dialog.copySettings" => {
@@ -1505,11 +1553,11 @@ pub struct MenuEntry {
 pub fn menu_entries(app: &DacApp) -> Vec<MenuEntry> {
     let mut v: Vec<MenuEntry> = ui_commands()
         .filter(|c| !c.3.is_empty())
-        .map(|(id, label, sc, m)| MenuEntry {
+        .map(|(id, label, _, m)| MenuEntry {
             id: id.to_string(),
             label: label.to_string(),
             menu: m.split('>').map(str::to_string).collect(),
-            shortcut: crate::shortcuts::binding(&app.ui.settings.keymap, id, *sc).map(str::to_string),
+            shortcut: crate::shortcuts::shortcut_of(&app.ui.settings.keymap, id).map(str::to_string),
             enabled: ui_enabled(app, id),
         })
         .collect();

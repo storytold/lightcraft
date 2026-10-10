@@ -46,7 +46,7 @@ pub fn body(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens) {
     let needle = search.trim().to_lowercase();
     let mut rows: Vec<(&'static Bindable, Option<String>)> = shortcuts::bindable()
         .iter()
-        .map(|b| (b, shortcuts::binding(&app.ui.settings.keymap, b.id, b.default).map(str::to_string)))
+        .map(|b| (b, shortcuts::binding(&app.ui.settings.keymap, b.id, b.default()).map(str::to_string)))
         .filter(|(b, sc)| show_all || sc.is_some() || app.recording_shortcut.as_deref() == Some(b.id))
         .filter(|(b, sc)| {
             needle.is_empty()
@@ -111,7 +111,7 @@ fn row(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, b: &Bindable, sc: Option
         if r.clicked() {
             apply(app, ui.ctx(), serde_json::json!({"id": b.id, "shortcut": null}));
         }
-        let r = ui.add_enabled(changed, egui::Button::new("↺").small()).on_hover_text(match b.default {
+        let r = ui.add_enabled(changed, egui::Button::new("↺").small()).on_hover_text(match b.default() {
             Some(d) => crate::i18n::tr_format!("Restore {}", menu_text(d, mac)),
             None => crate::i18n::tr("Restore (no shortcut)").to_string(),
         });

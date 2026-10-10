@@ -156,6 +156,8 @@ pub struct AppSettings {
     pub grid_badges: GridBadges,
     /// Shortcuts the user changed (Help ▸ Keyboard Shortcuts): command id → shortcut, `""` = none.
     pub keymap: crate::shortcuts::Keymap,
+    /// The keymap set the user's changes apply over (Classic by default).
+    pub keymap_set: crate::shortcuts::KeymapSet,
 }
 
 impl Default for AppSettings {
@@ -172,6 +174,7 @@ impl Default for AppSettings {
             film_badges: true,
             grid_badges: GridBadges::Auto,
             keymap: Default::default(),
+            keymap_set: Default::default(),
         }
     }
 }
@@ -483,6 +486,37 @@ pub struct UiState {
     pub fullscreen: bool,
     /// Window ▸ Second Window.
     pub second_window: bool,
+    /// The Classic module on screen, the one before it (⌘⌥↑), and every other module's saved
+    /// panel layout (see [`crate::module`]).
+    pub module: crate::module::ModuleId,
+    pub previous_module: Option<crate::module::ModuleId>,
+    pub layouts: std::collections::BTreeMap<crate::module::ModuleId, crate::module::ModuleLayout>,
+    /// Modules hidden from the picker (its context menu).
+    pub hidden_modules: Vec<crate::module::ModuleId>,
+    /// While a placeholder module is on screen: the view it was entered from (a view change leaves it).
+    #[serde(skip)]
+    pub placeholder_from: Option<(ViewMode, RightPanel)>,
+    /// The module bar (F5), the right panel group (F8) and the toolbar (T).
+    pub module_bar: bool,
+    pub right_edge: bool,
+    pub toolbar: bool,
+    /// Edges that auto-show at the window edge when hidden, and those peeking now.
+    pub auto_show: crate::module::EdgeFlags,
+    #[serde(skip)]
+    pub peek: crate::module::EdgeFlags,
+    /// The right group's order and hidden panels for the module on screen.
+    pub panel_order: Vec<crate::module::PanelId>,
+    pub hidden_panels: Vec<crate::module::PanelId>,
+    pub screen_mode: crate::module::ScreenMode,
+    #[serde(skip)]
+    pub lights_out: crate::module::LightsOut,
+    pub identity_plate: crate::module::IdentityPlate,
+    /// What the secondary window shows, and the photo a locked loupe holds.
+    pub second_mode: crate::module::SecondMode,
+    pub second_locked: Option<u64>,
+    /// The grid cell under the pointer (the secondary window's Live loupe).
+    #[serde(skip)]
+    pub hovered_photo: Option<u64>,
     /// The keyword painter: clicking a photo in the grid toggles this keyword on it.
     #[serde(skip)]
     pub keyword_painter: Option<String>,
@@ -793,6 +827,24 @@ impl Default for UiState {
             fullscreen: false,
             slideshow: None,
             second_window: false,
+            module: Default::default(),
+            previous_module: None,
+            layouts: Default::default(),
+            hidden_modules: Vec::new(),
+            placeholder_from: None,
+            module_bar: true,
+            right_edge: true,
+            toolbar: true,
+            auto_show: Default::default(),
+            peek: Default::default(),
+            panel_order: Vec::new(),
+            hidden_panels: Vec::new(),
+            screen_mode: Default::default(),
+            lights_out: Default::default(),
+            identity_plate: Default::default(),
+            second_mode: Default::default(),
+            second_locked: None,
+            hovered_photo: None,
             keyword_painter: None,
             info_overlay: InfoOverlay::Off,
             navigator: true,

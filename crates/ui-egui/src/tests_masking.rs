@@ -16,7 +16,7 @@ fn detail(panel: &str) -> Headless {
     let services = Services { png: None, ..Default::default() };
     let app = DacApp::new(dac_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
-    let r = h.request("ui.set", json!({"view": "detail"}), T);
+    let r = h.request("ui.set", json!({"view": "detail", "moduleBar": false}), T);
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("engine.execute", json!({"command": panel}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -370,6 +370,8 @@ fn smart_album_rule_editor_creates_and_edits() {
 #[test]
 fn g_toggles_grids_and_shift_g_starts_guided_upright() {
     let mut h = detail("panel.edit");
+    // the Alternative set's keys (tests_keymap covers Classic)
+    h.app.ui.settings.keymap_set = crate::shortcuts::KeymapSet::Alternative;
     let key = |h: &mut Headless, shift: bool| {
         let r = h.request("ui.key", json!({"key": "g", "shift": shift}), T);
         assert_eq!(r["ok"], true, "{r}");
@@ -416,6 +418,8 @@ fn luminance_range_controls_and_map() {
 #[test]
 fn b_adds_to_quick_collection_in_the_grid_and_brushes_in_edit() {
     let mut h = detail("panel.edit");
+    // the Alternative set's keys (tests_keymap covers Classic)
+    h.app.ui.settings.keymap_set = crate::shortcuts::KeymapSet::Alternative;
     // in the loupe B is the masking brush
     let r = h.request("ui.key", json!({"key": "b"}), T);
     assert_eq!(r["ok"], true, "{r}");

@@ -310,7 +310,7 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.max_rect();
     let fullscreen = app.ui.fullscreen;
-    let show_film = app.ui.filmstrip && !fullscreen;
+    let show_film = crate::module::edge_visible(app, crate::module::Edge::Bottom) && !fullscreen;
     let film_h = if show_film { t.film_h } else { 0.0 };
     let canvas = Rect::from_min_max(full.min, pos2(full.right(), full.bottom() - film_h));
     app.canvas_rect = Some(canvas);

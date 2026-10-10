@@ -28,48 +28,48 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
                 if icon_button(ui, "presets", Icon::Presets, sz, app.ui.presets, has_photo, "Presets (Shift+P)").clicked() {
                     let _ = app.run("panel.presets", json!({}));
                 }
-                for (id, icon, panel, tip) in [
-                    ("edit", Icon::Sliders, RightPanel::Edit, "Edit (E)"),
-                    ("crop", Icon::Crop, RightPanel::Crop, "Crop & Rotate (C)"),
-                    ("remove", Icon::Eraser, RightPanel::Remove, "Remove (H)"),
-                    ("masking", Icon::Mask, RightPanel::Masking, "Masking (M)"),
-                    ("redeye", Icon::Eye, RightPanel::RedEye, "Red Eye"),
-                ] {
-                    let on = app.ui.right == panel || (panel == RightPanel::Edit && app.ui.right == RightPanel::Profiles);
-                    if icon_button(ui, id, icon, sz, on, has_photo, tip).clicked() {
-                        let _ = app.run(&format!("panel.{id}"), json!({}));
+                // the module's right group in the user's order, then the other panels (Library offers
+                // the editing tools as a way into Develop)
+                let mut order = crate::module::right_group(app);
+                for p in crate::module::get(crate::module::ModuleId::Develop).right_panels() {
+                    if !order.contains(p) && !app.ui.hidden_panels.contains(p) {
+                        order.push(*p);
                     }
-                    if id == "edit" {
+                }
+                let group = order.len().min(crate::module::get(app.ui.module).right_panels().len());
+                for (i, p) in order.iter().enumerate() {
+                    if i == group && i > 0 {
                         separator(ui, &t);
+                    }
+                    let Some((id, icon, panel, tip, needs_photo)) = entry(*p) else { continue };
+                    let on = app.ui.right == panel || (panel == RightPanel::Edit && app.ui.right == RightPanel::Profiles);
+                    if icon_button(ui, id, icon, sz, on, has_photo || !needs_photo, tip).clicked() {
+                        let _ = app.run(&format!("panel.{id}"), json!({}));
                     }
                 }
                 separator(ui, &t);
-                if icon_button(ui, "versions", Icon::Versions, sz, app.ui.right == RightPanel::Versions, has_photo, "Versions (Shift+V)").clicked() {
-                    let _ = app.run("panel.versions", json!({}));
-                }
-                if icon_button(ui, "activity", Icon::Activity, sz, app.ui.right == RightPanel::Activity, true, "History & Activity (Y)").clicked() {
-                    let _ = app.run("panel.activity", json!({}));
-                }
                 if icon_button(ui, "more", Icon::More, sz, false, true, "More").clicked() {
                     app.ui.dialog = Some(crate::state::Dialog::About);
                 }
             });
-            // bottom icons
-            let bottom = ui.max_rect().bottom();
-            let mut child = ui.new_child(
-                egui::UiBuilder::new()
-                    .max_rect(egui::Rect::from_min_max(egui::pos2(ui.max_rect().left(), bottom - 96.0), ui.max_rect().right_bottom())),
-            );
-            child.vertical_centered(|ui| {
-                let sz = vec2(t.strip_w, 40.0);
-                if icon_button(ui, "keywords", Icon::Tag, sz, app.ui.right == RightPanel::Keywords, has_photo, "Keywords (K)").clicked() {
-                    let _ = app.run("panel.keywords", json!({}));
-                }
-                if icon_button(ui, "info", Icon::Info, sz, app.ui.right == RightPanel::Info, has_photo, "Info (I)").clicked() {
-                    let _ = app.run("panel.info", json!({}));
-                }
-            });
         });
+}
+
+/// The strip button of a right-group panel: (widget id, icon, panel, tooltip, needs a photo).
+fn entry(p: crate::module::PanelId) -> Option<(&'static str, Icon, RightPanel, &'static str, bool)> {
+    use crate::module::PanelId as P;
+    Some(match p {
+        P::Edit => ("edit", Icon::Sliders, RightPanel::Edit, "Edit", true),
+        P::Crop => ("crop", Icon::Crop, RightPanel::Crop, "Crop & Rotate", true),
+        P::Remove => ("remove", Icon::Eraser, RightPanel::Remove, "Remove", true),
+        P::Masking => ("masking", Icon::Mask, RightPanel::Masking, "Masking", true),
+        P::RedEye => ("redeye", Icon::Eye, RightPanel::RedEye, "Red Eye", true),
+        P::Versions => ("versions", Icon::Versions, RightPanel::Versions, "Versions", true),
+        P::Activity => ("activity", Icon::Activity, RightPanel::Activity, "History & Activity", false),
+        P::Keywords => ("keywords", Icon::Tag, RightPanel::Keywords, "Keywords", true),
+        P::Info => ("info", Icon::Info, RightPanel::Info, "Info", true),
+        P::Sources | P::Presets => return None,
+    })
 }
 
 fn separator(ui: &mut egui::Ui, t: &Tokens) {

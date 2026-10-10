@@ -480,6 +480,10 @@ fn cell(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool,
     let t = Tokens::get(ui.ctx());
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return };
     let resp = ui.interact(r, egui::Id::new(("cell", id.0)), Sense::click_and_drag());
+    if resp.hovered() {
+        // the secondary window's Live loupe follows the pointer
+        app.ui.hovered_photo = Some(id.0);
+    }
     register(ui.ctx(), format!("thumb:{}", id.0), r);
     let state = app.session.selection.state_of(id);
     let selected = state != dac_engine::SelectionState::NotSelected;
