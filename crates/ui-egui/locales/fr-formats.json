@@ -268,6 +268,8 @@
   "{name} opened in the other editor": "{name} ouvert dans l’autre éditeur",
   "{n} originals opened in the other editor": "{n} originaux ouverts dans l’autre éditeur",
   "· {in_source} identical copies": "· {in_source} copies identiques",
+  "Backed up the library to {}": "Bibliothèque sauvegardée dans {}",
+  "The library was not backed up: {}": "La bibliothèque n’a pas été sauvegardée : {}",
   "{count} more warnings.": "{count} avertissements supplémentaires.",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} images du catalogue n’ont pas été importées, car leurs entrées dans le catalogue sont incomplètes.",
   "{photos} catalog records processed; {collections} collections.": "{photos} entrées du catalogue traitées ; {collections} collections.",

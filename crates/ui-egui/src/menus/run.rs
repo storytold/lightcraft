@@ -149,6 +149,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     if matches!(id, "ui.dock" | "ui.dock.reset") {
         return Some(crate::docking::command(app, id == "ui.dock.reset", p));
     }
+    if id == "library.backup" && p.get("background").is_none() {
+        // In the app a backup runs while the library stays in use (its row is in the activity
+        // stack, and a toast says how it ended); the engine's own default is to return when it
+        // is made, which is what a script needs.
+        let mut params = p.as_object().cloned().unwrap_or_default();
+        params.insert("background".into(), Value::Bool(true));
+        return Some(app.session.execute(id, &Value::Object(params)).map_err(|e| e.to_string()));
+    }
     if matches!(id, "library.inspectLightroom" | "library.importLightroom") {
         // the app's own context: a fresh one's repaints reach no window and its clock starts at zero
         let ctx = app.tasks.repaint.clone().unwrap_or_default();
@@ -550,7 +558,10 @@ fn ui_commands_4(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             let action = if id == "file.backupLibrary" { app.services.backup_library.as_mut() } else { app.services.restore_library.as_mut() };
             match action {
                 Some(f) => f(&mut app.session),
-                None => Err("not available here: on the desktop the library is a folder; back it up with your other files".into()),
+                None => {
+                    Err("not available here: on the desktop the library is a folder; File ▸ Back Up Library (`library.backup`) backs up its catalog"
+                        .into())
+                }
             }
         }
         "view.filmstrip" => {

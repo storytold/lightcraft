@@ -136,6 +136,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "@Open Recent Library",
             "file.backupLibrary",
             "file.restoreLibrary",
+            "library.backup",
             "---",
             "dialog.newAlbum",
             "dialog.newFolder",
@@ -361,6 +362,8 @@ fn host_supports(app: &LightcraftApp, id: &str) -> bool {
     match id {
         "file.backupLibrary" => app.services.backup_library.is_some(),
         "file.restoreLibrary" => app.services.restore_library.is_some(),
+        // a library that is a folder on disk is backed up to a folder (the browser's has its own backup, above)
+        "library.backup" => app.session.library.as_ref().is_some_and(|l| l.on_disk),
         "photo.restore" | "photo.deletePermanently" => selection_deleted(app),
         "photo.delete" => !selection_deleted(app),
         // only in an album that holds its photos (not a smart one)

@@ -208,6 +208,9 @@ impl Library {
 #[serde(default, rename_all = "camelCase")]
 struct PrefsFile {
     xmp: crate::sidecar::XmpPrefs,
+    /// Where the library's backups go (`library.backupPreferences`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backup_dir: Option<PathBuf>,
     /// Parameters of the last export (for Export with Previous).
     #[serde(alias = "last_export")]
     last_export: Option<serde_json::Value>,
@@ -528,6 +531,7 @@ impl Session {
         // preferences
         let prefs = settings.read::<PrefsFile>(files.as_mut(), "prefs.json").unwrap_or_default();
         self.xmp = prefs.xmp;
+        self.backup_dir = prefs.backup_dir;
         self.last_export = prefs.last_export;
         self.last_merge = prefs.last_merge;
         self.export_presets = prefs.export_presets;
@@ -809,6 +813,7 @@ impl Session {
     pub fn save_prefs(&mut self) -> Result<()> {
         let v = serde_json::to_vec_pretty(&PrefsFile {
             xmp: self.xmp,
+            backup_dir: self.backup_dir.clone(),
             last_export: self.last_export.clone(),
             last_merge: self.last_merge.clone(),
             export_presets: self.export_presets.clone(),

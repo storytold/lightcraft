@@ -231,7 +231,7 @@ fn fresh_name(first: PhotoId, seq: u64, taken: &std::collections::BTreeSet<Strin
 }
 
 /// Only names this module gives: nothing outside the library folder, no other file of it.
-fn valid_name(name: &str) -> bool {
+pub(crate) fn valid_name(name: &str) -> bool {
     name.strip_prefix(SEGMENT_PREFIX)
         .and_then(|rest| rest.strip_suffix(SEGMENT_SUFFIX))
         .is_some_and(|stem| !stem.is_empty() && stem.len() <= 64 && stem.bytes().all(|b| b.is_ascii_digit() || b == b'-'))
@@ -486,7 +486,7 @@ pub(crate) fn discard_unlisted(store: &mut dyn Store, segments: &[Segment]) {
 }
 
 /// A segment list a snapshot may state: this module's file names, each once, in id order.
-fn check_list(segments: &[Segment]) -> Result<(), String> {
+pub(crate) fn check_list(segments: &[Segment]) -> Result<(), String> {
     let mut names = std::collections::BTreeSet::new();
     let mut last: Option<PhotoId> = None;
     for s in segments {

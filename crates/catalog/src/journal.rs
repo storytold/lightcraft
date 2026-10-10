@@ -100,7 +100,7 @@ use crate::{Catalog, CatalogError, Op, PhotoId, Result};
 pub const SNAPSHOT: &str = "catalog.snap";
 pub const LOG: &str = "catalog.log";
 pub use crate::segments::{SEGMENT_DIR, SEGMENT_PREFIX, SEGMENT_SUFFIX, segment_file};
-const FORMAT: &str = "lightcraft-catalog";
+pub(crate) const FORMAT: &str = "lightcraft-catalog";
 /// One catalog format: a number in `catalog.snap` that says how the library beside it is written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Format {
