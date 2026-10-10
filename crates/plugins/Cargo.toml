@@ -20,3 +20,4 @@ dac-net = { workspace = true }
 [dev-dependencies]
 # WebAssembly text -> binary for the hostile-module fixtures (Apache-2.0 WITH LLVM-exception).
 wat = "1.228"
+dac-fuzzkit = { workspace = true }

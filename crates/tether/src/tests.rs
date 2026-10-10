@@ -77,3 +77,24 @@ fn session_file_round_trips_and_damage_is_reported() {
     assert!(names.iter().any(|p| p.ends_with("f.jpg")) && !names.iter().any(|p| p.ends_with(".hidden")));
     assert!(list_folder(&d.join("nope")).is_err());
 }
+
+/// P6.2: a full disk while saving `tether.json` is an error that leaves the old file and no
+/// partial temp file behind.
+#[test]
+fn full_disk_save_leaves_no_temp_file() {
+    let d = std::env::temp_dir().join(format!("dac-tether-full-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    let s = StudioSession::new("A", "/w");
+    StudioSession::save(Some(&s), &d).unwrap();
+    let before = std::fs::read(d.join(FILE)).unwrap();
+    let r = crate::write_atomic(&d.join(FILE), b"{\"name\":\"B\",\"folder\":\"/x\"}", &mut |f, b| {
+        std::io::Write::write_all(f, &b[..b.len() / 2])?;
+        Err(std::io::Error::new(std::io::ErrorKind::StorageFull, "No space left on device"))
+    });
+    assert!(r.is_err());
+    assert_eq!(std::fs::read(d.join(FILE)).unwrap(), before);
+    let names: Vec<_> = std::fs::read_dir(&d).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(names.len(), 1, "{names:?}");
+    let _ = std::fs::remove_dir_all(&d);
+}

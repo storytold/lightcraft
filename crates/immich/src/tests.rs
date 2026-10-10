@@ -517,3 +517,24 @@ fn damaged_connections_file_never_panics() {
     });
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// P6.2: a full disk while saving `connections.json` is an error that leaves the old file and
+/// no partial temp file behind.
+#[test]
+fn full_disk_connections_save_leaves_no_temp_file() {
+    let dir = std::env::temp_dir().join(format!("dac-immich-full-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("connections.json");
+    crate::Accounts::default().save(&path).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let mut a = crate::Accounts::default();
+    a.upsert(crate::Account { id: "x".into(), url: "https://h".into(), user_name: "a long enough name to overflow".into(), ..Default::default() });
+    {
+        let _full = dac_catalog::safe_file::fail_writes_after(8);
+        assert!(a.save(&path).is_err());
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
