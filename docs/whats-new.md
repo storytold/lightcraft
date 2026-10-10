@@ -2,6 +2,12 @@
 
 ## October 2026
 
+### Colour in partial camera looks
+- When a photo's JPEG fit can supply tone but cannot learn a colour matrix, LightCraft can try the camera's
+  existing measured spectral colour and refit tone and chroma. It keeps the partial look unless the candidate
+  passes the fit gates and improves held-out error. Successful full fits are unchanged (issue #535).
+
+
 ### Activity stack
 - Long-running tasks show in one place, top left under the top bar, as in Lightroom Classic (issue #345): imports and
   folder scans, exports (and the contact sheet PDF), Synchronize Folder, Build / Smart Previews, Lightroom catalog import, Photo Merge, model downloads, the face scan,
