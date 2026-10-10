@@ -557,6 +557,8 @@ pub struct UiState {
     /// time), paused.
     #[serde(skip)]
     pub slideshow: Option<(f64, f64, bool)>,
+    /// The Slideshow module (templates, saved slideshows, the slide settings).
+    pub slides: crate::slideshow_ui::SlideshowState,
     /// Info overlay on the loupe.
     pub info_overlay: InfoOverlay,
     /// Navigator mini map in the loupe while zoomed in.
@@ -943,6 +945,7 @@ impl Default for UiState {
             auto_advance: false,
             fullscreen: false,
             slideshow: None,
+            slides: Default::default(),
             second_window: false,
             module: Default::default(),
             previous_module: None,

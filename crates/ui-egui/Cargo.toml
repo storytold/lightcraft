@@ -24,6 +24,7 @@ dac-layout = { workspace = true }
 dac-pdf = { workspace = true }
 dac-print = { workspace = true }
 dac-preview = { workspace = true }
+dac-slideshow = { path = "../slideshow" }
 egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

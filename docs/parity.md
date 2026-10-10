@@ -793,15 +793,15 @@ PLAN.md §2 carry the status of that survey ("unverified" where it said so) unti
 | LRC-BOOK-BG | Book backgrounds | P2 | ⬜ | | |
 | LRC-BOOK-VIEWS | Book views | P2 | ⬜ | | |
 | LRC-BOOK-EXPORT | Book export (PDF/JPEG) | P2 | ⬜ | | |
-| LRC-SS-TEMPLATES | Slideshow templates | P2 | ⬜ | | |
-| LRC-SS-OPTIONS | Slideshow options | P2 | ⬜ | | |
-| LRC-SS-LAYOUT | Slideshow layout | P2 | ⬜ | | |
-| LRC-SS-OVERLAYS | Slideshow overlays | P2 | ⬜ | | |
-| LRC-SS-BACKDROP | Slideshow backdrop | P2 | ⬜ | | |
-| LRC-SS-TITLES | Slideshow titles | P2 | ⬜ | | |
-| LRC-SS-MUSIC | Slideshow music | P2 | ⬜ | | |
-| LRC-SS-PLAYBACK | Slideshow playback | P2 | ⬜ | | |
-| LRC-SS-EXPORT | Slideshow export | P2 | ⬜ | | |
+| LRC-SS-TEMPLATES | Slideshow templates | P2 | ✅ | `cmd:slideshow.applyTemplate`, `cmd:slideshow.saveTemplate`, `cmd:slideshow.deleteTemplate` | P3.4: Template Browser with 6 built-in templates (own designs) plus user templates saved in `ui.json`; `crates/ui-egui/src/slideshow_ui.rs` |
+| LRC-SS-OPTIONS | Slideshow options | P2 | ✅ | `cmd:slideshow.set` | P3.4: zoom to fill, stroke border (width, colour), cast shadow (opacity, offset, radius, angle); `crates/slideshow/src/compose.rs`; `crates/ui-egui/src/slideshow_ui.rs` |
+| LRC-SS-LAYOUT | Slideshow layout | P2 | ✅ | `cmd:slideshow.set` | P3.4: guides, margins linked or per side, aspect preview (screen, 16:9, 4:3); `crates/ui-egui/src/slideshow_ui.rs` |
+| LRC-SS-OVERLAYS | Slideshow overlays | P2 | 🟡 | `cmd:slideshow.set` | P3.4: identity plate (text), rating stars, text watermark, text overlays with tokens anchored to frame or photo, text shadow. Missing: graphic identity plate, dragging overlays; `crates/ui-egui/src/slideshow_ui.rs` |
+| LRC-SS-BACKDROP | Slideshow backdrop | P2 | 🟡 | `cmd:slideshow.set` | P3.4: colour, colour wash with angle/opacity, background image with opacity (the image is drawn in export only; the live preview shows colour and wash); `crates/ui-egui/src/slideshow_ui.rs` |
+| LRC-SS-TITLES | Slideshow titles | P2 | ✅ | `cmd:slideshow.set` | P3.4: intro and ending screens with colour, text and identity plate; `crates/ui-egui/src/slideshow_ui.rs` |
+| LRC-SS-MUSIC | Slideshow music | P2 | 🟡 | `cmd:slideshow.addMusic`, `cmd:slideshow.clearMusic` | P3.4: several tracks, fit slide durations to music, volume and balance; decodes WAV/FLAC/Ogg Vorbis (hound/claxon/lewton; symphonia is MPL-2.0, rejected). No MP3/AAC. Sound output only with the `audio-out` feature of `dac-slideshow` (cpal, links ALSA on Linux), off by default; `crates/ui-egui/src/slideshow_ui.rs` |
+| LRC-SS-PLAYBACK | Slideshow playback | P2 | ✅ | `cmd:slideshow.play`, `cmd:slideshow.preview`, `cmd:slideshow.pause`, `cmd:slideshow.next`, `cmd:slideshow.previous`, `cmd:slideshow.stop` | P3.4: manual or automatic, slide/fade durations, colour fade, random order, repeat, pan and zoom with amount; full screen (Enter) or preview in place (Alt+Enter); Space pauses, arrows step, Esc ends. Playback draws thumbnails (draft flag stored only); `crates/ui-egui/src/slideshow_ui.rs` |
+| LRC-SS-EXPORT | Slideshow export | P2 | 🟡 | `cmd:slideshow.exportJpeg` | P3.4: JPEG sequence (one composed slide per photo plus title screens) through the engine encoder. PDF and video still to do; `crates/ui-egui/src/slideshow_ui.rs` |
 | LRC-PRINT-LAYOUTSTYLE | Print layout styles | P2 | 🟡 | `cmd:dialog.contactSheet`, `cmd:export.contactSheet`, `crates/engine/src/contact_sheet.rs` | paginated contact sheets; single-image/custom package layouts missing |
 | LRC-PRINT-IMAGESETTINGS | Print image settings | P2 | ⬜ | | |
 | LRC-PRINT-LAYOUT | Print layout | P2 | 🟡 | `cmd:export.contactSheet`, `crates/ui-egui/src/panels/dialogs.rs` | A4/Letter, portrait/landscape, 1–8 columns and 1–10 rows; fixed margins and spacing |
@@ -839,7 +839,7 @@ PLAN.md §2 carry the status of that survey ("unverified" where it said so) unti
 | LRC-DEV-HISTOGRAM-DRAG | Drag on the histogram to adjust tone regions | P2 | ⬜ |  |  |
 | LRC-MAP-PINS | Map pins, clusters and hover previews | P2 | ✅ | `cmd:map.pins`, `crates/geo/src/cluster.rs`, `crates/ui-egui/src/map/view.rs` | grid clusters per zoom with counts, selected pins highlighted, click selects, hover shows thumbnail + count |
 | LRC-BOOK-SAVED | Saved books | P2 | ⬜ |  | special collection type, Phase 3 |
-| LRC-SS-SAVED | Saved slideshows | P2 | ⬜ |  | special collection type, Phase 3 |
+| LRC-SS-SAVED | Saved slideshows | P2 | ✅ | `cmd:slideshow.saveSlideshow`, `cmd:slideshow.openSaved`, `cmd:slideshow.deleteSaved` | P3.4: settings plus photo list, kept in `ui.json` (not yet catalog collections); `crates/ui-egui/src/slideshow_ui.rs` |
 | LRC-PRINT-PAGESETUP | Page setup, printer settings, print one copy | P2 | ⬜ |  | Phase 3 |
 | LRC-WEB-SAVED | Saved web galleries | P2 | ⬜ |  | special collection type, Phase 3 |
 | LRC-EXP-EMAIL | Email photos | P2 | ⬜ |  | low priority |
