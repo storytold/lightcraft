@@ -41,6 +41,8 @@ crates/publish/
 crates/tether/
 crates/engine/src/cmd/publish.rs
 crates/engine/src/cmd/publish_tests.rs
+crates/engine/src/cmd/publish_sftp.rs
+crates/mcp/tests/session_e2e.rs
 crates/engine/src/cmd/tether.rs
 crates/engine/src/cmd/tether_tests.rs
 docs/tethering.md

@@ -40,4 +40,6 @@ pub const KIND_HARD_DRIVE: &str = "hardDrive";
 /// Service kinds this build can publish with.
 /// Immich (IMM-PUBLISH): opened by the engine, which holds the account's key (`dac_immich::publish`).
 pub const KIND_IMMICH: &str = "immich";
-pub const KINDS: &[&str] = &[KIND_HARD_DRIVE, KIND_IMMICH];
+/// SFTP: a folder on a server per collection; opened by the engine, which holds the login.
+pub const KIND_SFTP: &str = "sftp";
+pub const KINDS: &[&str] = &[KIND_HARD_DRIVE, KIND_IMMICH, KIND_SFTP];

@@ -1969,9 +1969,13 @@ dependencies = [
  "dac-brand",
  "dac-codecs",
  "dac-engine",
+ "dac-hash",
  "dac-raster",
  "log",
+ "russh",
+ "russh-sftp",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
