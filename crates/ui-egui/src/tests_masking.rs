@@ -1116,3 +1116,61 @@ fn ai_masks_without_the_model_offer_the_download() {
     assert!(develop(&h).masks.is_empty());
     assert!(t.elapsed() < SETTLE, "{:?}", t.elapsed());
 }
+
+/// Issue #517: a fast brush stroke (pointer samples several brush widths apart) shows on the photo
+/// while the button is held as the continuous, feathered band it will be once committed, not as
+/// separate dabs at the samples with gaps between them.
+#[test]
+fn a_fast_brush_stroke_shows_without_gaps_before_the_button_is_released() {
+    let mut h = detail("panel.masking");
+    h.settle(SETTLE);
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    let r = h.request("ui.set", json!({"brushSize": 0.03, "brushFeather": 50.0, "brushFlow": 100.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    // the photo before painting, and where a normalized image point is on screen
+    pointer(&mut h, json!([{"kind": "move", "x": 0.02, "y": 0.02}]));
+    h.settle(SETTLE);
+    let photo = h.paint();
+    let img = h.app.image_rect.expect("the photo is on screen");
+    let ppp = h.pixels_per_point;
+    let px = |im: &egui::ColorImage, x: f32, y: f32| {
+        let (sx, sy) = (((img.left() + x * img.width()) * ppp) as usize, ((img.top() + y * img.height()) * ppp) as usize);
+        let c = im.pixels[sy * im.size[0] + sx];
+        [c.r() as f32, c.g() as f32, c.b() as f32]
+    };
+    // a drag that starts (past egui's drag threshold, at `a`) and then moves fast: samples far
+    // apart, button held
+    let (a, b, c) = ((0.17_f32, 0.4_f32), (0.5_f32, 0.4_f32), (0.85_f32, 0.4_f32));
+    pointer(
+        &mut h,
+        json!([{"kind": "down", "x": 0.15, "y": a.1}, {"kind": "drag", "x": a.0, "y": a.1}, {"kind": "drag", "x": b.0, "y": b.1}, {"kind": "drag", "x": c.0, "y": c.1}]),
+    );
+    assert!(matches!(h.app.gesture, Some(crate::panels::detail::Gesture::Brush { .. })), "still painting");
+    let held = h.paint();
+    let [r0, g0, b0] = h.app.ui.mask_overlay_color.map(|v| v as f32);
+    let op = h.app.ui.mask_overlay_opacity / 100.0;
+    // along the centreline between the samples (away from the cursor ring at the last one), the
+    // overlay colour at full coverage over the photo
+    let mut gaps = vec![];
+    for i in 1..=74 {
+        let x = a.0 + (c.0 - a.0) * i as f32 / 80.0;
+        let p = px(&photo, x, a.1);
+        let want = [p[0] + (r0 - p[0]) * op, p[1] + (g0 - p[1]) * op, p[2] + (b0 - p[2]) * op];
+        let got = px(&held, x, a.1);
+        if (0..3).any(|k| (got[k] - want[k]).abs() > 12.0) {
+            gaps.push((x, got, want));
+        }
+    }
+    assert!(gaps.is_empty(), "the live stroke has gaps: {} of 74 points, first {:?}", gaps.len(), gaps.first());
+    pointer(&mut h, json!([{"kind": "up", "x": c.0, "y": c.1}]));
+    let d = develop(&h);
+    let MaskShape::Brush { strokes } = &d.masks[0].components[0].shape else { panic!("brush") };
+    assert!(strokes[0].points.len() >= 3, "{strokes:?}");
+    // committed: the rendered overlay covers what the live stroke did, feather included
+    h.settle(SETTLE);
+    let done = h.paint();
+    for (x, y) in [(0.3, a.1), (0.6, a.1), (0.3, a.1 + 0.02), (0.6, a.1 - 0.025), (0.45, a.1 + 0.06)] {
+        let (l, k) = (px(&held, x, y), px(&done, x, y));
+        assert!((0..3).all(|i| (l[i] - k[i]).abs() < 24.0), "live {l:?} vs committed {k:?} at ({x}, {y})");
+    }
+}

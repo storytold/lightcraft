@@ -7,6 +7,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod album_picker;
+pub mod brush_live;
 pub mod control;
 pub mod credits;
 pub mod date_picker;
@@ -271,6 +272,8 @@ pub struct LightcraftApp {
     pub widgets: Vec<(String, egui::Rect)>,
     /// In-progress on-canvas gesture (brush stroke points, gradient drag…).
     pub gesture: Option<panels::detail::Gesture>,
+    /// The brush stroke being painted, as drawn on the photo until it's committed (issue #517).
+    pub brush_live: Option<brush_live::LiveStroke>,
     /// What the loupe drew last frame: photo and source ("render", "cached", "embedded", "small",
     /// "thumb", "none").
     pub loupe_shown: Option<(lightcraft_catalog::PhotoId, &'static str)>,
@@ -365,6 +368,7 @@ impl LightcraftApp {
             film_scroll: None,
             widgets: vec![],
             gesture: None,
+            brush_live: None,
             loupe_shown: None,
             region_view: None,
             region_before_view: None,
