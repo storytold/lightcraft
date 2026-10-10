@@ -169,6 +169,7 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
     let restore_backend = backend.clone();
     Services {
         picker: None,
+        pick_display_profile: None,
         backup_library: Some(Box::new(move |session: &mut Session| {
             let Some(b) = backup_backend.clone() else { return Err("nothing is stored in this browser session (?store=memory)".into()) };
             // the photos' own names for the originals in the zip
@@ -213,6 +214,8 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
         // Face models need a folder to live in; the web has none.
         pick_model_file: None,
         save_preset_file: None,
+        pick_keyword_list: None,
+        save_keyword_list: None,
         pick_curve_preset_files: None,
         save_curve_preset_file: None,
         write: Some(Box::new(download)),

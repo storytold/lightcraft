@@ -206,5 +206,20 @@
   "In line for AI Denoise ({ahead} ahead)…": "In line for AI Denoise ({ahead} ahead)…",
   "Running on {}.": "Running on {}.",
   "{file} · {size}": "{file} · {size}",
-  "•  {assumption}": "•  {assumption}"
+  "•  {assumption}": "•  {assumption}",
+  "Put inside “{parent}”": "In „{parent}“ einfügen",
+  "Delete the keyword “{name}”?": "Das Stichwort „{name}“ löschen?",
+  "It is taken off {count} photo{}, with the keywords below it. Undo brings it back.": "Es wird von {count} Foto{} entfernt, mit den Stichwörtern darunter. Rückgängig stellt es wieder her.",
+  "Create Keyword Tag Inside “{name}”…": "Stichwort in „{name}“ erstellen…",
+  "“{parent}” has a “{name}” already. Merge the two?": "„{parent}“ enthält bereits „{name}“. Beide zusammenführen?",
+  "There is a “{name}” at the top level already. Merge the two?": "Auf der obersten Ebene gibt es bereits „{name}“. Beide zusammenführen?",
+  "Added “{keyword}” to {n} photo{}": "„{keyword}“ zu {n} Foto{} hinzugefügt",
+  "On {have} of {of} selected photos": "Auf {have} von {of} ausgewählten Fotos",
+  "Remove “{name}”": "„{name}“ entfernen",
+  "There is a keyword set “{name}” already": "Es gibt bereits einen Stichwortsatz „{name}“",
+  "Added {n} keyword{}": "Stichwörter hinzugefügt: {n}{:.0}",
+  "; {n} gained synonyms": "; mit neuen Synonymen: {n}",
+  "Exported {n} keyword{}": "Stichwörter exportiert: {n}{:.0}",
+  " — Capture One won't import a list with ; , < or > in a keyword: {names}": " — Capture One importiert keine Liste mit ; , < oder > in einem Stichwort: {names}",
+  " — left out, as a keyword list can't hold them: {names}": " — ausgelassen, weil eine Stichwortliste sie nicht aufnehmen kann: {names}"
 }

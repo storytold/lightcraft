@@ -8,6 +8,11 @@
 //! * Removing a folder from the library moves its photos to Recently Deleted (one undo step) and
 //!   leaves every file where it is.
 //! * Renaming or moving a folder on disk keeps the chosen folder chosen.
+//! * Given a folder of the library, an agent gives it a colour label with `folder.label`; the
+//!   folder list shows it, undo takes it back, and only folders the library holds photos in can
+//!   be labelled.
+//! * A labelled folder keeps its label when it is renamed or moved on disk, and so do the folders
+//!   inside it; undo puts the labels back where they were.
 
 use lightcraft_catalog::{Op, Photo, Source};
 use serde_json::json;
@@ -462,4 +467,100 @@ fn a_blank_folder_filter_is_no_filter() {
     let mut s = session();
     s.execute("library.filter", &json!({"libraryFolder": "  "})).unwrap();
     assert_eq!(s.filter, lightcraft_catalog::Filter::default(), "no hidden 'filters active' state");
+}
+
+/// The label `library.folders` reports for the row at `path`.
+fn listed_label(s: &mut Session, path: &str) -> Option<String> {
+    fn find(rows: &serde_json::Value, key: &str) -> Option<serde_json::Value> {
+        rows.as_array()?.iter().find_map(|r| {
+            if r["path"].as_str().map(lightcraft_catalog::query::folder_key).as_deref() == Some(key) {
+                Some(r.clone())
+            } else {
+                find(&r["children"], key)
+            }
+        })
+    }
+    let rows = s.execute("library.folders", &json!({})).unwrap();
+    let row = find(&rows, &lightcraft_catalog::query::folder_key(path)).unwrap_or_else(|| panic!("no row for {path}: {rows}"));
+    row["label"].as_str().map(str::to_string)
+}
+
+#[test]
+fn a_labelled_folder_shows_its_label_in_the_folder_list_until_undone() {
+    let mut s = session();
+    s.execute("folder.label", &json!({"path": "/pics/trip", "label": "green"})).unwrap();
+    assert_eq!(listed_label(&mut s, "/pics/trip").as_deref(), Some("green"));
+    assert_eq!(listed_label(&mut s, "/pics/home"), None, "its neighbour has none");
+    s.execute("folder.label", &json!({"path": "/pics/trip", "label": "none"})).unwrap();
+    assert_eq!(listed_label(&mut s, "/pics/trip"), None);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(listed_label(&mut s, "/pics/trip").as_deref(), Some("green"), "undo puts the label back");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(listed_label(&mut s, "/pics/trip"), None);
+}
+
+#[test]
+fn only_a_folder_of_the_library_takes_a_known_label() {
+    let mut s = session();
+    let before = s.catalog.to_snapshot();
+    for (p, why) in [
+        (json!({"path": "/pics/trip", "label": "mauve"}), "unknown label"),
+        (json!({"path": "/pics/trip"}), "missing label"),
+        (json!({"label": "red"}), "missing path"),
+        (json!({"path": "  ", "label": "red"}), "blank path"),
+        (json!({"path": "/elsewhere", "label": "red"}), "no photo was imported from it"),
+        (json!({"path": "pics/trip", "label": "red"}), "a relative path"),
+    ] {
+        assert!(s.execute("folder.label", &p).is_err(), "{why}");
+    }
+    assert_eq!(s.catalog.to_snapshot(), before, "nothing changed");
+}
+
+#[test]
+fn labels_follow_a_renamed_folder_and_undo_puts_them_back() {
+    let dir = Scratch::new("label-rename");
+    std::fs::create_dir_all(dir.0.join("trip/day1")).unwrap();
+    let (trip, day1) = (dir.path("trip"), dir.path("trip/day1"));
+    let mut s = Session::new();
+    add(&mut s, &format!("{trip}/a.jpg"));
+    add(&mut s, &format!("{day1}/b.jpg"));
+    s.execute("folder.label", &json!({"path": trip, "label": "red"})).unwrap();
+    s.execute("folder.label", &json!({"path": day1, "label": "blue"})).unwrap();
+    s.execute("folder.rename", &json!({"path": trip, "name": "holiday"})).unwrap();
+    assert_eq!(listed_label(&mut s, &dir.path("holiday")).as_deref(), Some("red"));
+    assert_eq!(listed_label(&mut s, &dir.path("holiday/day1")).as_deref(), Some("blue"), "the folder inside goes along");
+    assert_eq!(s.catalog.folder_record(&trip), None, "nothing stays behind");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(listed_label(&mut s, &trip).as_deref(), Some("red"));
+    assert_eq!(listed_label(&mut s, &day1).as_deref(), Some("blue"));
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(listed_label(&mut s, &dir.path("holiday")).as_deref(), Some("red"), "redo carries them again");
+}
+
+#[test]
+fn labels_follow_a_moved_folder() {
+    let dir = Scratch::new("label-move");
+    std::fs::create_dir_all(dir.0.join("trip")).unwrap();
+    std::fs::create_dir_all(dir.0.join("archive")).unwrap();
+    let trip = dir.path("trip");
+    let mut s = Session::new();
+    add(&mut s, &format!("{trip}/a.jpg"));
+    s.execute("folder.label", &json!({"path": trip, "label": "yellow"})).unwrap();
+    s.execute("folder.move", &json!({"path": trip, "into": dir.path("archive")})).unwrap();
+    assert_eq!(listed_label(&mut s, &dir.path("archive/trip")).as_deref(), Some("yellow"));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(listed_label(&mut s, &trip).as_deref(), Some("yellow"), "undo moves it back with the folder");
+    assert_eq!(s.catalog.folder_record(&dir.path("archive/trip")), None);
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(listed_label(&mut s, &dir.path("archive/trip")).as_deref(), Some("yellow"));
+}
+
+#[test]
+fn a_label_comes_off_a_folder_whose_photos_are_gone() {
+    let mut s = session();
+    s.execute("folder.label", &json!({"path": "/pics/trip", "label": "red"})).unwrap();
+    s.execute("library.removeFolder", &json!({"path": "/pics/trip"})).unwrap();
+    s.execute("folder.label", &json!({"path": "/pics/trip", "label": "none"})).unwrap();
+    assert_eq!(s.catalog.folder_record("/pics/trip"), None);
+    assert!(s.execute("folder.label", &json!({"path": "/pics/trip", "label": "red"})).is_err(), "but a new one needs photos");
 }

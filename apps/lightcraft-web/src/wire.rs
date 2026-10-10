@@ -113,6 +113,7 @@ impl WireJob {
             depth: lightcraft_engine::pipeline::OutputDepth::U8,
             proof: None,
             window: self.window.map(|[x, y, w, h]| lightcraft_engine::pipeline::PixelWindow { x, y, w, h }),
+            display: None,
         }
     }
 

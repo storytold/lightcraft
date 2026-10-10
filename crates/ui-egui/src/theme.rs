@@ -360,6 +360,8 @@ pub fn apply(ctx: &egui::Context) {
 /// Style `ctx` with `kind`. The visuals go to both of egui's styles, so egui following the
 /// system's dark/light setting on its own never swaps in its stock look.
 pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
+    // Keep photo zoom shortcuts from resizing egui itself.
+    ctx.options_mut(|o| o.zoom_with_keyboard = false);
     let t = Tokens::for_kind(kind);
     ctx.data_mut(|d| {
         d.insert_temp(egui::Id::NULL, t);

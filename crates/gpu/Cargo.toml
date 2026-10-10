@@ -30,3 +30,4 @@ denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime"]
 
 [dev-dependencies]
 lightcraft-scenes = { workspace = true }
+lightcraft-raw = { workspace = true }

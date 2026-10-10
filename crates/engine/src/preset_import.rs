@@ -464,7 +464,7 @@ pub fn group_from_dir(dir: &str) -> Option<String> {
 }
 
 pub(crate) fn build(props: &Props, values: &crate::crs_masks::Values, name: String, group: Option<String>, from_photo: bool) -> Option<Imported> {
-    let (mut settings, unmapped) = crate::crs::to_partial_report(props, Some(values), None, crate::crs_masks::DEFAULT_ASPECT);
+    let (mut settings, unmapped) = crate::crs::to_partial_report(props, Some(values), crate::crs::Target::Any, crate::crs_masks::DEFAULT_ASPECT);
     if from_photo && let Some(o) = settings.as_object_mut() {
         // a photo's own framing and absolute white balance don't belong in a look
         o.remove("crop");

@@ -1,16 +1,18 @@
 //! HEIF / HEIC (the iPhone and Mac photo format), read-only.
 //!
 //! Decoding lives in the optional `lightcraft-heif` crate (heic-rs, a pure-Rust HEVC
-//! still-picture decoder), enabled by this crate's `heif` feature — off by default because HEVC
-//! is patent-encumbered and whether a build carries an HEVC decoder is the distributor's call
-//! (the same policy as the sibling PhotoCraft). Without the feature, HEIF files are still
-//! detected and opening one is an [`Error::Unsupported`] error, never a panic.
+//! still-picture decoder, plus a libheif-matching colour conversion), enabled by this crate's
+//! `heif` feature — off by default because HEVC is patent-encumbered and whether a build carries
+//! an HEVC decoder is the distributor's call (the same policy as the sibling PhotoCraft). Without
+//! the feature, HEIF files are still detected and opening one is an [`Error::Unsupported`] error
+//! saying so, never a panic.
 //!
 //! HEIF records orientation in the container (`irot`/`imir`, plus a `clap` crop), not in EXIF,
 //! so the decoder applies them and `orientation` is reported as 1: the EXIF Orientation tag only
 //! mirrors what the container says, and applying it as well would turn the photo twice.
-//! The samples come back in the container's own primaries with its ICC profile (if any); like
-//! every decoder here, the colour interpretation happens in [`crate::convert::finish`].
+//! The samples come back as 16-bit RGB in the container's own primaries, with its ICC profile
+//! (iPhones: Display P3) or, without one, its `nclx` / VUI colour description; like every decoder
+//! here, the colour interpretation happens in [`crate::convert::finish`].
 
 #[cfg(feature = "heif")]
 use crate::convert::{Buf, Meta, Model, Raw, finish};
@@ -22,24 +24,30 @@ const F: Format = Format::Heif;
 #[cfg(not(feature = "heif"))]
 pub(crate) const NOT_IN_BUILD: &str = "HEIC/HEIF support isn't included in this build of LightCraft";
 
-/// The reason a HEIF file that no build can open is refused (this crate decodes HEVC stills
-/// only; the wrapper names the exact construct in its own errors).
-#[cfg(feature = "heif")]
-const NOT_DECODED: &str = "the image is not a decodable HEVC still (image sequence, overlay, alpha-less grid or AVIF-coded item)";
-
 #[cfg(not(feature = "heif"))]
 pub(crate) fn decode(_bytes: &[u8], _opts: &DecodeOptions) -> Result<Decoded> {
+    Err(Error::Unsupported(F, NOT_IN_BUILD))
+}
+
+#[cfg(not(feature = "heif"))]
+pub(crate) fn header(_bytes: &[u8]) -> Result<(u32, u32, u16)> {
     Err(Error::Unsupported(F, NOT_IN_BUILD))
 }
 
 #[cfg(feature = "heif")]
 fn err(e: lightcraft_heif::Error) -> Error {
     match e {
-        // This crate's Unsupported takes a fixed reason; the dynamic wording lives in the
-        // lightcraft-heif error itself.
-        lightcraft_heif::Error::Unsupported(_) => Error::Unsupported(F, NOT_DECODED),
+        lightcraft_heif::Error::Unsupported(why) => Error::Unsupported(F, why),
         lightcraft_heif::Error::Limit(m) | lightcraft_heif::Error::Malformed(m) => Error::Malformed(F, m),
     }
+}
+
+/// The displayed size (container transforms applied, so orientation 1), from the container
+/// alone: no picture is decoded.
+#[cfg(feature = "heif")]
+pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
+    let info = lightcraft_heif::probe(bytes).map_err(err)?;
+    Ok((info.width, info.height, 1))
 }
 
 #[cfg(feature = "heif")]
@@ -50,16 +58,22 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
         return Err(Error::TooLarge(info.width as u64, info.height as u64));
     }
     let options = lightcraft_heif::Options { max_pixels: opts.max_pixels, apply_transforms: true };
-    let decoded = lightcraft_heif::decode(bytes, &options).map_err(err)?;
-    // The decoder re-reads the container; trust its output's shape, not the probe's.
-    let buf = if decoded.sixteen_bit {
-        let mut v = Vec::with_capacity(decoded.data.len() / 2);
-        for pair in decoded.data.as_chunks::<2>().0 {
-            v.push(u16::from_ne_bytes(*pair));
+    // A small decode (a thumbnail or a cataloguing probe) uses the file's own thumbnail image when
+    // it is at least as large as asked: iPhones store one of 320 × 240, and decoding it is a
+    // hundredth of the work of the 12 MP photo.
+    let thumb = match opts.max_size {
+        Some((mw, mh)) if mw > 0 && mh > 0 && mw.max(mh) < info.width.max(info.height) => {
+            lightcraft_heif::decode_thumbnail(bytes, mw.max(mh), &options).ok().flatten().filter(|t| {
+                // Only a thumbnail of the same picture: same orientation and aspect within 1 %.
+                let aspect = |w: u32, h: u32| w as f64 / h.max(1) as f64;
+                (aspect(t.width, t.height) / aspect(info.width, info.height) - 1.0).abs() < 0.01
+            })
         }
-        Buf::U16(v)
-    } else {
-        Buf::U8(decoded.data)
+        _ => None,
+    };
+    let mut decoded = match thumb {
+        Some(t) => t,
+        None => lightcraft_heif::decode(bytes, &options).map_err(err)?,
     };
     let raw = Raw {
         width: decoded.width as usize,
@@ -67,11 +81,20 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
         model: Model::Rgb,
         alpha: decoded.has_alpha,
         premultiplied: false,
-        buf,
-        bit_depth: if decoded.sixteen_bit { 16 } else { 8 },
+        buf: Buf::U16(std::mem::take(&mut decoded.data)),
+        bit_depth: decoded.bit_depth,
     };
-    let meta = Meta { icc: decoded.icc, exif: decoded.exif, xmp: decoded.xmp, orientation: Some(1), ..Default::default() };
-    finish(F, raw, meta, (decoded.width, decoded.height), opts)
+    let c = decoded.colour;
+    let meta = Meta {
+        icc: decoded.icc,
+        exif: decoded.exif,
+        xmp: decoded.xmp,
+        orientation: Some(1),
+        // Used when there is no (usable) ICC profile.
+        hint: crate::space::SourceSpace::from_cicp(c.primaries, c.transfer),
+        ..Default::default()
+    };
+    finish(F, raw, meta, (info.width, info.height), opts)
 }
 
 #[cfg(test)]
@@ -96,6 +119,8 @@ mod tests {
     fn without_the_feature_heif_is_a_clear_unsupported_error() {
         let r = crate::decode(HEIC_HEADER, crate::DecodeOptions::default());
         assert!(matches!(&r, Err(crate::Error::Unsupported(Format::Heif, why)) if why.contains("isn't included in this build")), "{r:?}");
+        let h = crate::read_header(HEIC_HEADER);
+        assert!(matches!(&h, Err(crate::Error::Unsupported(Format::Heif, why)) if why.contains("isn't included in this build")), "{h:?}");
     }
 
     /// Found by PhotoCraft's `decode_heif` fuzz target: a malformed box makes heic-rs 0.1.1 slice
@@ -113,6 +138,7 @@ mod tests {
     fn a_heic_rs_panic_is_a_malformed_error() {
         let r = crate::decode(&HEIC_RS_BOX_PANIC, crate::DecodeOptions::default());
         assert!(matches!(&r, Err(crate::Error::Malformed(Format::Heif, _))), "{r:?}");
+        assert!(crate::read_header(&HEIC_RS_BOX_PANIC).is_err());
     }
 
     #[cfg(feature = "heif")]
@@ -120,6 +146,6 @@ mod tests {
     fn an_image_sequence_is_unsupported() {
         // An ftyp with no meta box: a video track, not a still.
         let r = crate::decode(b"\0\0\0\x18ftypmsf1\0\0\0\0msf1hevc", crate::DecodeOptions::default());
-        assert!(matches!(&r, Err(crate::Error::Unsupported(Format::Heif, _))), "{r:?}");
+        assert!(matches!(&r, Err(crate::Error::Unsupported(Format::Heif, why)) if why.contains("sequence")), "{r:?}");
     }
 }

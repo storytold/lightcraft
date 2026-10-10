@@ -80,7 +80,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             });
             // search field (centred on the window)
             let sr = Rect::from_center_size(pos2(full.center().x, full.center().y), vec2(sw, 28.0));
-            let id = egui::Id::new("search-field");
+            let id = crate::text_field::id("field:search");
             if std::mem::take(&mut app.ui.focus_search) {
                 ui.memory_mut(|m| m.request_focus(id));
             }
@@ -92,7 +92,6 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 Stroke::new(1.0, if focused { t.accent } else { t.field_border }),
                 StrokeKind::Inside,
             );
-            register(ui.ctx(), "field:search", sr);
             let mut child =
                 ui.new_child(egui::UiBuilder::new().max_rect(sr.shrink2(vec2(10.0, 4.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
             let empty = app.ui.search.is_empty();
@@ -103,14 +102,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 paint(child.painter(), Rect::from_min_size(pos2(x0, sr.center().y - 8.0), vec2(16.0, 16.0)), Icon::Search, t.text_dim);
                 child.painter().galley(pos2(x0 + 24.0, sr.center().y - g.size().y / 2.0), g, t.text_dim);
             }
-            let resp = child.add(
-                egui::TextEdit::singleline(&mut app.ui.search)
-                    .id(id)
-                    .frame(egui::Frame::NONE)
-                    .desired_width(sr.width() - 20.0)
-                    .font(t.font(13.5))
-                    .text_color(t.text),
-            );
+            let resp = crate::text_field::TextField::singleline("field:search", &mut app.ui.search)
+                .frame(false)
+                .width(sr.width() - 20.0)
+                .font(t.font(13.5))
+                .text_color(t.text)
+                .show(&mut child)
+                .response;
             if resp.changed() {
                 let q = app.ui.search.clone();
                 let _ = app.run("library.filter", json!({"text": q}));

@@ -70,9 +70,20 @@ impl Scene {
 
     /// Render fitting within `max_edge` on the long side.
     pub fn render_fit(&self, max_edge: usize) -> Rgb32f {
+        let (w, h) = self.fit(max_edge);
+        self.render(w, h)
+    }
+
+    /// [`Scene::render_fit`] on the calling thread alone, without rayon (the same pixels).
+    pub fn render_fit_serial(&self, max_edge: usize) -> Rgb32f {
+        let (w, h) = self.fit(max_edge);
+        paint::render_serial(self.kind, self.seed, w, h)
+    }
+
+    fn fit(&self, max_edge: usize) -> (usize, usize) {
         let a = self.aspect();
         let (w, h) = if a >= 1.0 { (max_edge, (max_edge as f32 / a).round() as usize) } else { ((max_edge as f32 * a).round() as usize, max_edge) };
-        self.render(w.max(1), h.max(1))
+        (w.max(1), h.max(1))
     }
 }
 
@@ -201,6 +212,19 @@ mod tests {
         let img = s.render_fit(200);
         let max = img.data.iter().map(|p| p[0]).fold(0.0f32, f32::max);
         assert!(max > 2.0, "{max}");
+    }
+
+    /// The serial render is the parallel one, pixel for pixel (both with and without supersampling), and
+    /// an empty size is an empty image.
+    #[test]
+    fn the_serial_render_is_the_same_picture() {
+        for s in demo_library().iter().take(3) {
+            for edge in [40, 700] {
+                assert_eq!(s.render_fit_serial(edge), s.render_fit(edge), "{} at {edge}", s.name);
+            }
+        }
+        assert!(paint::render_serial(Kind::Dunes, 1, 0, 5).data.is_empty());
+        assert!(demo_library()[0].render(0, 0).data.is_empty());
     }
 
     #[test]

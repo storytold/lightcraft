@@ -67,6 +67,11 @@ impl CameraTone {
         &self.chroma
     }
 
+    /// The (scene, display) luminance knots, in increasing order.
+    pub fn knots(&self) -> &[[f32; 2]; 32] {
+        &self.knots
+    }
+
     pub fn apply(&self, y: f32) -> f32 {
         if !y.is_finite() || y <= 0.0 {
             return 0.0;
@@ -86,6 +91,9 @@ impl CameraTone {
         1.0 - (1.0 - b[1]) * (-(y - b[0]) * slope / (1.0 - b[1]).max(0.01)).exp()
     }
 }
+
+/// Scene EV over grey where [`ToneMap::hdr`] starts lifting highlights above the SDR curve.
+const HDR_FROM_EV: f32 = 1.5;
 
 #[derive(Clone, Debug)]
 pub struct ToneMap {
@@ -108,6 +116,16 @@ impl ToneMap {
     }
     /// `contrast`, `whites`, `blacks` in −100..100 (Lightroom slider units).
     pub fn new(contrast: f64, whites: f64, blacks: f64) -> ToneMap {
+        ToneMap::hdr(contrast, whites, blacks, 1.0)
+    }
+
+    /// [`ToneMap::new`] for an HDR render reaching `peak` (linear, SDR white = 1; 1 = SDR exactly).
+    /// Below about half of SDR white the curve is the SDR one; above, the highlights gain up to
+    /// `peak − 1` more along a smoothstep in scene EV, from 1.5 EV over grey to one stop past the
+    /// white point moved up by the headroom, so the result stays monotone, never exceeds `peak`,
+    /// and reaches it there (within the table's range).
+    pub fn hdr(contrast: f64, whites: f64, blacks: f64, peak: f32) -> ToneMap {
+        let peak = if peak.is_finite() { peak.max(1.0) } else { 1.0 };
         let c = (contrast / 100.0) as f32;
         let slope = if c >= 0.0 { 1.0 + 0.55 * c } else { 1.0 + 0.4 * c };
         // White point: scene luminance (after contrast) that maps to display 1.0.
@@ -133,7 +151,11 @@ impl ToneMap {
                     let k = b * 0.03;
                     o = k + (1.0 - k) * o;
                 }
-                o.clamp(0.0, 1.0)
+                if peak > 1.0 {
+                    let top = (white_ev + peak.log2() + 1.0).max(HDR_FROM_EV + 0.5);
+                    o += (peak - 1.0) * smooth(HDR_FROM_EV, top, ev * slope);
+                }
+                o.clamp(0.0, peak)
             })
             .collect();
         ToneMap { lut, chroma: NO_CHROMA }
@@ -141,6 +163,14 @@ impl ToneMap {
 
     /// Tone map for display-referred sources: identity at neutral settings.
     pub fn display(contrast: f64, whites: f64, blacks: f64) -> ToneMap {
+        ToneMap::display_hdr(contrast, whites, blacks, 1.0)
+    }
+
+    /// [`ToneMap::display`] for an HDR render reaching `peak`: values above SDR white (an HDR
+    /// source, e.g. a decoded gain-map image) pass through and roll off softly towards `peak`
+    /// instead of clipping at 1; SDR sources (≤ 1) render as with [`ToneMap::display`].
+    pub fn display_hdr(contrast: f64, whites: f64, blacks: f64, peak: f32) -> ToneMap {
+        let peak = if peak.is_finite() { peak.max(1.0) } else { 1.0 };
         let c = (contrast / 100.0) as f32;
         let w = (whites / 100.0) as f32;
         let b = (blacks / 100.0) as f32;
@@ -163,11 +193,15 @@ impl ToneMap {
                 }
                 let mut o = p.max(0.0).powf(2.2);
                 // short shoulder: slope 1 at 0.95, reaching 1.0 at 1.05
-                if o > 0.95 {
+                if peak > 1.0 && o > 0.95 {
+                    // exponential shoulder: slope 1 at 0.95, asymptote at `peak`
+                    let r = peak - 0.95;
+                    o = 0.95 + r * (1.0 - (-(o - 0.95) / r).exp());
+                } else if o > 0.95 {
                     let d = (o - 0.95).min(0.1);
                     o = 0.95 + d - d * d / 0.2;
                 }
-                o.clamp(0.0, 1.0)
+                o.clamp(0.0, peak)
             })
             .collect();
         ToneMap { lut, chroma: NO_CHROMA }
@@ -289,6 +323,51 @@ mod tests {
                 prev = o;
             }
         }
+    }
+
+    #[test]
+    fn hdr_is_sdr_at_peak_one_and_reaches_peak() {
+        for (c, w, b) in [(0.0, 0.0, 0.0), (100.0, 100.0, -100.0), (-100.0, -100.0, 100.0), (50.0, -30.0, -40.0)] {
+            assert_eq!(ToneMap::hdr(c, w, b, 1.0).lut(), ToneMap::new(c, w, b).lut());
+            for peak in [2.0f32, 8.0, 32.0] {
+                let sdr = ToneMap::new(c, w, b);
+                let t = ToneMap::hdr(c, w, b, peak);
+                let mut prev = -1.0;
+                for i in 0..2400 {
+                    let y = 1e-5 * 1.01f32.powi(i);
+                    let o = t.apply(y);
+                    assert!((0.0..=peak).contains(&o), "{c} {w} {b} {peak} at {y}: {o}");
+                    assert!(o >= prev - 1e-6, "{c} {w} {b} {peak} at {y}: {o} < {prev}");
+                    prev = o;
+                    if y <= GREY * 2f32.powf(0.9) {
+                        assert!((o - sdr.apply(y)).abs() < 1e-6, "midtones differ at {y}");
+                    }
+                }
+                assert!(t.apply(4.0) > sdr.apply(4.0));
+                if (c, w, b) == (0.0, 0.0, 0.0) {
+                    assert!(t.apply(GREY * 2f32.powf(LUT_MAX_EV)) > peak * 0.99, "{peak}");
+                }
+            }
+        }
+        // a broken peak falls back to SDR
+        assert_eq!(ToneMap::hdr(0.0, 0.0, 0.0, f32::NAN).lut(), ToneMap::new(0.0, 0.0, 0.0).lut());
+    }
+
+    #[test]
+    fn display_hdr_passes_hdr_sources_and_keeps_sdr() {
+        assert_eq!(ToneMap::display_hdr(20.0, 10.0, -5.0, 1.0).lut(), ToneMap::display(20.0, 10.0, -5.0).lut());
+        let t = ToneMap::display_hdr(0.0, 0.0, 0.0, 8.0);
+        for i in 1..=90 {
+            let y = i as f32 / 100.0;
+            assert!((t.apply(y) - y).abs() < 2e-3, "{y} -> {}", t.apply(y));
+        }
+        let mut prev = 0.0;
+        for i in 1..2000 {
+            let o = t.apply(i as f32 / 100.0);
+            assert!(o >= prev - 1e-6 && o <= 8.0);
+            prev = o;
+        }
+        assert!(t.apply(3.0) > 2.0 && t.apply(3.0) < 3.0);
     }
 
     #[test]

@@ -293,6 +293,7 @@ impl Workers {
                     rendered: Err(msg),
                     loaded: None,
                     quick: None,
+                    display: None,
                 };
                 g.done.push((b.slot, r, 0.0));
             }
@@ -379,6 +380,7 @@ impl Workers {
                 rendered,
                 loaded: None,
                 quick: None,
+                display: None,
             },
             ms,
         ));
@@ -431,6 +433,7 @@ impl RenderOffload for Workers {
                 rendered: Ok(Rendered { image, histogram, deep: None }),
                 loaded: None,
                 quick: None,
+                display: None,
             };
             g.done.push((slot, r, 0.0));
             return None;

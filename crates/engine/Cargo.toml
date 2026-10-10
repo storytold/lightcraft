@@ -49,5 +49,7 @@ denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime", "lightcraft-g
 rawnind-model = ["denoise", "lightcraft-denoise/rawnind-model", "lightcraft-denoise-core/rawnind-model"]
 
 [dev-dependencies]
+# Lossless synthetic HEIC files (the import test; decoded when the codecs' `heif` feature is on).
+lightcraft-heif = { workspace = true, features = ["testdata"] }
 libc = { workspace = true }
 lightcraft-tiff = { workspace = true }

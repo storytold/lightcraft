@@ -132,14 +132,14 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let n = selected.len();
         ui.label(RichText::new(if n == 1 { "1 face selected".to_string() } else { format!("{n} faces selected") }).color(t.text));
         let hint = suggested.clone().unwrap_or_else(|| "Name…".to_string());
-        let edit = ui.add(egui::TextEdit::singleline(&mut app.ui.unnamed_name).hint_text(hint).desired_width(240.0));
-        register(ui.ctx(), "field:unnamedName", edit.rect);
+        let field = crate::text_field::TextField::singleline("field:unnamedName", &mut app.ui.unnamed_name).hint(hint).width(240.0).show(ui);
+        let edit = &field.response;
         if std::mem::take(&mut app.ui.unnamed_focus) {
             edit.request_focus();
         }
         let typed = app.ui.unnamed_name.trim().to_string();
         let chosen = if typed.is_empty() { suggested.clone().unwrap_or_default() } else { typed.clone() };
-        if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !chosen.is_empty() {
+        if field.ending == Some(crate::text_field::Ending::Return) && !chosen.is_empty() {
             submit = Some(chosen.clone());
         }
         let label = if n == 1 { "Name face".to_string() } else { format!("Name {n} faces") };
@@ -150,7 +150,7 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
         let c = ui.button("Clear");
         register(ui.ctx(), "unnamed:clear", c.rect);
-        clear = c.clicked() || (edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)));
+        clear = c.clicked() || field.cancelled();
     });
     // the people already named, matching what is typed (a click names the faces)
     let typed = app.ui.unnamed_name.trim().to_lowercase();

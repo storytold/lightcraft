@@ -206,5 +206,20 @@
   "In line for AI Denoise ({ahead} ahead)…": "In line for AI Denoise ({ahead} ahead)…",
   "Running on {}.": "Running on {}.",
   "{file} · {size}": "{file} · {size}",
-  "•  {assumption}": "•  {assumption}"
+  "•  {assumption}": "•  {assumption}",
+  "Put inside “{parent}”": "Colocar dentro de “{parent}”",
+  "Delete the keyword “{name}”?": "Excluir a palavra-chave “{name}”?",
+  "It is taken off {count} photo{}, with the keywords below it. Undo brings it back.": "Ela é removida de {count} foto{}, com as palavras-chave abaixo dela. Desfazer a traz de volta.",
+  "Create Keyword Tag Inside “{name}”…": "Criar palavra-chave dentro de “{name}”…",
+  "“{parent}” has a “{name}” already. Merge the two?": "“{parent}” já tem “{name}”. Mesclar as duas?",
+  "There is a “{name}” at the top level already. Merge the two?": "Já existe “{name}” no nível superior. Mesclar as duas?",
+  "Added “{keyword}” to {n} photo{}": "“{keyword}” adicionada a {n} foto{}",
+  "On {have} of {of} selected photos": "Em {have} de {of} fotos selecionadas",
+  "Remove “{name}”": "Remover “{name}”",
+  "There is a keyword set “{name}” already": "Já existe um conjunto de palavras-chave “{name}”",
+  "Added {n} keyword{}": "Palavras-chave adicionadas: {n}{:.0}",
+  "; {n} gained synonyms": "; {n} receberam sinônimos",
+  "Exported {n} keyword{}": "Palavras-chave exportadas: {n}{:.0}",
+  " — Capture One won't import a list with ; , < or > in a keyword: {names}": " — O Capture One não importa uma lista com ; , < ou > em uma palavra-chave: {names}",
+  " — left out, as a keyword list can't hold them: {names}": " — omitidas, pois uma lista de palavras-chave não pode contê-las: {names}"
 }
