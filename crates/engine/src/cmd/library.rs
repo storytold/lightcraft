@@ -1315,7 +1315,7 @@ pub fn specs() -> Vec<CommandSpec> {
             s.compact_library()?;
             ok()
         }),
-        cmd!("library.clearPreviews", "Clear Preview Cache", ["File"], None, "{}", always, |s, _| {
+        cmd!("library.clearPreviews", "Clear Preview Cache", ["Library", "Previews"], None, "{}", always, |s, _| {
             s.media.rendered.clear();
             s.media.clear_sources();
             ok()

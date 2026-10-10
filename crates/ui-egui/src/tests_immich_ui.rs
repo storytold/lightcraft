@@ -89,20 +89,20 @@ fn key_file_prompt_creates_and_unlocks_the_file() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// Feature: the engine's Immich commands are in the menus (File ▸ Immich).
+// Feature: the engine's Immich commands are in the menus (Library ▸ Immich).
 #[test]
-fn immich_commands_are_in_file_immich() {
+fn immich_commands_are_in_library_immich() {
     let dir = std::env::temp_dir().join(format!("dac-immich-ui-menu-{}", std::process::id()));
     let h = app(&dir);
     let bar = crate::menubar::menu_bar(&h.app);
-    let (_, file) = bar.iter().find(|(t, _)| t == "File").unwrap();
+    let (_, file) = bar.iter().find(|(t, _)| t == "Library").unwrap();
     let sub = file
         .iter()
         .find_map(|n| match n {
             crate::menubar::MenuNode::Submenu { label, children } if label == "Immich" => Some(children),
             _ => None,
         })
-        .expect("File ▸ Immich");
+        .expect("Library ▸ Immich");
     let ids: Vec<&str> = sub
         .iter()
         .filter_map(|n| match n {

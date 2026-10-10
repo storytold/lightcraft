@@ -938,7 +938,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             "immich.link",
             "Link Photos with Immich",
-            ["File", "Immich"],
+            ["Library", "Immich"],
             None,
             "{account?, full?: bool} — start a background pass that lists the server's assets (incremental by updatedAt) and links them to catalog photos by SHA-1, else as probable by name + capture time + size → {started}",
             always,
@@ -947,7 +947,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             "immich.confirmLink",
             "Confirm Immich Link",
-            ["File", "Immich"],
+            ["Library", "Immich"],
             None,
             "{ids?, account?} — confirm probable links of the photos (default: selection) → {confirmed}",
             always,
@@ -956,7 +956,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             "immich.unlink",
             "Remove Immich Link",
-            ["File", "Immich"],
+            ["Library", "Immich"],
             None,
             "{ids?, account?} — remove the photos' Immich links → {removed}",
             always,
@@ -977,7 +977,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             "immich.fetchOriginal",
             "Download Original from Immich",
-            ["File", "Immich"],
+            ["Library", "Immich"],
             None,
             "{id?} — download a link-only photo's original (in the background) → {started}",
             always,
@@ -996,7 +996,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             "immich.writeSidecars",
             "Write XMP for Immich",
-            ["File", "Immich"],
+            ["Library", "Immich"],
             None,
             "{account?, refresh?: bool = true} — write XMP sidecars for photos in mapped external-library folders and ask Immich to re-read the linked ones (refresh-metadata), so it shows their ratings, descriptions and keywords → {written, failed, refreshed?, refreshError?}",
             always,
@@ -1005,7 +1005,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             "immich.scanLibraries",
             "Rescan Immich External Libraries",
-            ["File", "Immich"],
+            ["Library", "Immich"],
             None,
             "{account?, library?} — ask Immich to rescan the external libraries covering mapped folders (or `library`), so it reads new files and XMP sidecars → {ok, scanned: [library ids]}",
             always,
