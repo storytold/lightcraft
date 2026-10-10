@@ -383,6 +383,11 @@ fn max_radius(cx: f64, cy: f64, w: f64, h: f64) -> f64 {
     [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)].iter().map(|&(x, y)| (x - cx).hypot(y - cy)).fold(0.0, f64::max).max(1e-9)
 }
 
+/// Most pixels one bad-pixel opcode repairs (the list is 64 MB, `fix_pixels`' set about twice that). Uncapped, a
+/// mosaic equal to `FixBadPixelsConstant`'s constant, or one `FixBadPixelsList` rectangle over the image, lists
+/// every pixel: tens of GB at [`crate::MAX_SAMPLES`]. Pixels past the cap, in list order, are left as they are.
+const MAX_BAD_PIXELS: usize = 1 << 22;
+
 /// Apply a list to an interleaved `w × h × cpp` buffer. `cfa` (when the data is a mosaic) is used by the
 /// bad-pixel opcodes. `scale` is the value of 1.0 in the buffer: 65535 for list 1 (raw 16-bit values), 1 for
 /// lists 2 and 3 (normalised values).
@@ -449,20 +454,21 @@ pub fn apply_list(list: &[Opcode], buf: &mut [f32], w: usize, h: usize, cpp: usi
             Opcode::FixBadPixelsConstant { constant, .. } => {
                 let c = (*constant as f64 / 65535.0 * scale as f64) as f32;
                 let bad: Vec<(usize, usize)> =
-                    (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).filter(|&(x, y)| cpp == 1 && buf[y * w + x] == c).collect();
+                    (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).filter(|&(x, y)| cpp == 1 && buf[y * w + x] == c).take(MAX_BAD_PIXELS).collect();
                 fix_pixels(buf, w, h, cpp, cfa, &bad);
             }
             Opcode::FixBadPixelsList { points, rects, .. } => {
-                let mut bad: Vec<(usize, usize)> = points.iter().map(|&(r, c)| (c as usize, r as usize)).filter(|&(x, y)| x < w && y < h).collect();
-                for r in rects {
+                let mut bad: Vec<(usize, usize)> =
+                    points.iter().map(|&(r, c)| (c as usize, r as usize)).filter(|&(x, y)| x < w && y < h).take(MAX_BAD_PIXELS).collect();
+                'rects: for r in rects {
                     let [t, l, b, rr] = r.map(|v| v as usize);
                     for y in t..b.min(h) {
                         for x in l..rr.min(w) {
+                            if bad.len() >= MAX_BAD_PIXELS {
+                                break 'rects;
+                            }
                             bad.push((x, y));
                         }
-                    }
-                    if bad.len() > 1 << 22 {
-                        break;
                     }
                 }
                 fix_pixels(buf, w, h, cpp, cfa, &bad);
@@ -648,6 +654,33 @@ pub(crate) mod tests {
         img[2 * 6 + 2] = 7.0;
         apply_list(&list, &mut img, 6, 6, 1, Some(&cfa), 65535.0);
         assert_eq!(img[2 * 6 + 2], 102.0);
+    }
+
+    /// A mosaic equal to the bad-pixel constant, or one rectangle over the whole image, used to list every pixel as
+    /// bad: w × h entries (plus a set of them), tens of GB at the decoder's size limit. Here the rows between a good
+    /// first row (500) and a good last row (900) are bad: 2052 rows of 2048 pixels, four rows more than the 1 << 22
+    /// cap. Row 1, within the cap, is repaired from the first row; the second-last row, past the cap, must be left
+    /// as it is (uncapped, it was rewritten from the last row).
+    fn assert_bad_pixels_capped(op: Opcode) {
+        let (w, h) = (2048, 2054);
+        let mut buf = vec![0.0f32; w * h];
+        buf[..w].fill(500.0);
+        buf[(h - 1) * w..].fill(900.0);
+        apply_list(&[op], &mut buf, w, h, 1, None, 65535.0);
+        assert!(buf[w..2 * w].iter().all(|&v| v == 500.0), "row 1 (within the cap) not repaired: {:?}", &buf[w..w + 4]);
+        let past = &buf[(h - 2) * w..(h - 1) * w];
+        assert!(past.iter().all(|&v| v == 0.0), "a row past the cap was rewritten: {:?}", &past[..4]);
+    }
+
+    #[test]
+    fn bad_pixels_constant_is_capped() {
+        assert_bad_pixels_capped(Opcode::FixBadPixelsConstant { constant: 0, bayer_phase: 0 });
+    }
+
+    #[test]
+    fn bad_pixels_list_is_capped_inside_a_rectangle() {
+        // top, left, bottom, right: every row but the first and the last
+        assert_bad_pixels_capped(Opcode::FixBadPixelsList { bayer_phase: 0, points: vec![], rects: vec![[1, 0, 2053, 2048]] });
     }
 
     #[test]
