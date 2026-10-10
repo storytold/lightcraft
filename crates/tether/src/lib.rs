@@ -7,7 +7,10 @@
 //! This crate keeps the session ([`StudioSession`], saved as `tether.json` in the library folder)
 //! and decides which files are ready ([`StudioSession::fresh`]: a file is imported once its size
 //! held still between two scans, so a shot still being written waits). The engine's `tether.*`
-//! commands turn ready files into a `library.import`. Native PTP capture comes later.
+//! commands turn ready files into a `library.import`.
+//!
+//! Second stage: **native tethering** ([`ptp`]: PTP over USB and PTP/IP, a simulated camera for
+//! tests) and the connected camera ([`link`]), whose shots download into the session's folder.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -17,6 +20,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+pub mod link;
+pub mod ptp;
 
 #[cfg(test)]
 mod tests;
@@ -56,6 +62,9 @@ pub struct StudioSession {
     /// The newest imported shot (photo id).
     pub newest: Option<u64>,
     pub shots: usize,
+    /// Give each new shot the develop settings of the shot before it (as Classic's "Same as
+    /// Previous").
+    pub same_as_previous: bool,
     /// Source files already taken (imported, or tried and refused): never imported twice.
     taken: BTreeSet<String>,
     /// Files seen at the last scan and their sizes then.
@@ -207,6 +216,7 @@ impl StudioSession {
             "active": self.active,
             "newest": self.newest,
             "shots": self.shots,
+            "sameAsPrevious": self.same_as_previous,
         })
     }
 }
