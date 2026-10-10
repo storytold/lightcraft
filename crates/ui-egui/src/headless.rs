@@ -175,6 +175,19 @@ impl HeadlessView {
     }
 
     /// Every piece of text the last frame painted (labels, tooltips, values), in paint order.
+    /// Every shape of the last frame, with `Shape::Vec` flattened.
+    pub fn painted_shapes(&self) -> Vec<egui::epaint::Shape> {
+        fn flat(shape: &egui::epaint::Shape, out: &mut Vec<egui::epaint::Shape>) {
+            match shape {
+                egui::epaint::Shape::Vec(shapes) => shapes.iter().for_each(|shape| flat(shape, out)),
+                other => out.push(other.clone()),
+            }
+        }
+        let mut out = Vec::new();
+        self.shapes.iter().for_each(|s| flat(&s.shape, &mut out));
+        out
+    }
+
     pub fn painted_text(&self) -> Vec<String> {
         fn texts(shape: &egui::epaint::Shape, out: &mut Vec<String>) {
             match shape {

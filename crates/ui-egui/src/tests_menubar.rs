@@ -145,3 +145,39 @@ fn click_outside_and_escape_close_the_open_menu() {
     h.settle(SETTLE);
     assert_eq!(open_menu(&h), None, "Escape");
 }
+
+// ---- a scrolled menu draws no scrollbar over its rows (issue #691)
+
+/// egui's floating scrollbar sat on the rows' right edge, where the shortcut text ends, and in
+/// its wide (hovered) state its background hid the last character. With the pointer resting on
+/// the menu, no tall narrow rectangle (a bar's handle or track) is painted along the level's
+/// right edge, in a menu that scrolls as in one that fits, and the level is as wide in both.
+#[test]
+fn a_scrolled_menu_draws_no_scrollbar_over_its_shortcuts() {
+    let mut widths = Vec::new();
+    for (size, scrolls) in [([1600.0, 700.0], true), ([1600.0, 1400.0], false)] {
+        let what = format!("{} pt window", size[1]);
+        let mut h = app(size);
+        go(&mut h, "ui.clickWidget", "menu:View");
+        go(&mut h, "ui.hoverWidget", "menu-level:1");
+        let level = widget(&h, "menu-level:1").unwrap_or_else(|| panic!("{what}: no View menu"));
+        let rows = widgets_with(&h, "menusub:");
+        assert!(!rows.is_empty(), "{what}: no submenu rows registered");
+        assert_eq!(rows.iter().any(|(_, r)| !level.contains_rect(*r)), scrolls, "{what}: scrolls = {scrolls}, level {level:?}");
+        widths.push(level.width());
+        // a row's hover highlight spans the level; a separator is one point tall; the ▸ of a
+        // submenu row and the text are not rectangles: only a scrollbar is tall and narrow there
+        let bars: Vec<egui::Rect> = h
+            .view
+            .painted_shapes()
+            .iter()
+            .filter_map(|s| match s {
+                egui::epaint::Shape::Rect(r) => Some(r.rect),
+                _ => None,
+            })
+            .filter(|r| r.width() <= 14.0 && r.height() > 30.0 && r.left() >= level.right() - 16.0 && r.right() <= level.right() + 0.5)
+            .collect();
+        assert!(bars.is_empty(), "{what}: a scrollbar is drawn along the menu's right edge: {bars:?}");
+    }
+    assert!((widths[0] - widths[1]).abs() < 0.5, "a scrolled menu is as wide as one that fits: {widths:?}");
+}
