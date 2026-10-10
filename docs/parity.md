@@ -47,11 +47,11 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | X. Cross-cutting behaviours (BEHAV) | 18 | 6 | 1 | 1 | 8/8 (100%) | 6/9 (67%) |
 | Y. Menus | 82 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
-| Lightroom Classic extras | 72 | 24 | 27 | 0 | — | 33/37 (89%) |
+| Lightroom Classic extras | 75 | 24 | 25 | 0 | — | 33/37 (89%) |
 | IMM. Immich integration | 9 | 1 | 0 | 0 | — | 5/6 (83%) |
-| **Total** | 445 | 60 | 64 | 27 | 192/200 (96%) | 158/173 (91%) |
+| **Total** | 448 | 60 | 62 | 27 | 192/200 (96%) | 158/173 (91%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.5%** of 569 in-scope rows — P0 98.0% of 200 · P1 94.8% of 173 · P2 58.5% of 195.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.9%** of 570 in-scope rows — P0 98.0% of 200 · P1 94.8% of 173 · P2 59.7% of 196.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -837,9 +837,10 @@ PLAN.md §2 carry the status of that survey ("unverified" where it said so) unti
 | LRC-DEV-HISTOGRAM-DRAG | Drag on the histogram to adjust tone regions | P2 | ⬜ |  |  |
 | LRC-MAP-PINS | Map pins, clusters and hover previews | P2 | ✅ | `cmd:map.pins`, `crates/geo/src/cluster.rs`, `crates/ui-egui/src/map/view.rs` | grid clusters per zoom with counts, selected pins highlighted, click selects, hover shows thumbnail + count |
 | LRC-BOOK-SAVED | Saved books | P2 | ✅ | `cmd:book.save`, `cmd:book.open`, `crates/book/src/layoutdoc.rs` | P3.5: saved as a book collection (saved creation, layout document) plus a lossless book file in the settings folder; opening a collection uses the file when present, else rebuilds the book from the layout |
-| LRC-SS-SAVED | Saved slideshows | P2 | ⬜ |  | special collection type, Phase 3 |
+| LRC-SS-SAVED | Saved slideshows | P2 | ✅ | `cmd:slideshow.saveSlideshow`, `cmd:slideshow.openSaved`, `cmd:creation.open`, `cmd:creation.save`, `crates/engine/src/creations.rs`, `crates/ui-egui/src/creations_ui.rs` | P3.7: a saved creation in the catalog (collection of kind slideshow holding the settings and its photos), listed in Collections with its own icon; double-click opens it in Slideshow with its photos; saved slideshows older builds kept in `ui.json` move into the catalog |
 | LRC-PRINT-PAGESETUP | Page setup, printer settings, print one copy | P2 | 🟡 | `crates/ui-egui/src/print_ui.rs`, `crates/print/src/ipp.rs` | P3.2/P3.8: Page Setup lists the standard papers and, once a printer is chosen, the paper sizes it reports over IPP (`media-col-database`; `printui.media`, `printui.pageSetup {media}`); orientation; Print One. Opt-in CUPS test (`<PREFIX>_CUPS_TEST_PRINTER`, docs/print.md → CUPS test printer). Missing: printer margins are shown by the printer list only, not applied to the page; Windows spooler |
-| LRC-WEB-SAVED | Saved web galleries | P2 | ⬜ |  | special collection type, Phase 3 |
+| LRC-WEB-SAVED | Saved web galleries | P2 | ✅ | `cmd:web.saveGallery`, `cmd:web.galleries`, `cmd:creation.open`, `crates/engine/src/cmd/web.rs`, `crates/ui-egui/src/creations_ui.rs` | P3.7: a saved creation in the catalog (collection of kind web holding the gallery settings and its photos), listed in Collections with its own icon; double-click opens it in Web with its photos; galleries older builds kept in `<settings_dir>/web.json` move into the catalog (upload servers stay there) |
+| LRC-PRINT-SAVED | Saved prints | P2 | ✅ | `cmd:printui.saveCreation`, `cmd:printui.openCreation`, `cmd:creation.open`, `crates/ui-egui/src/print_ui.rs` | P3.7: Print ▸ Saved Prints ▸ Create Saved Print: a collection holding the photos, the page layout and the print settings, listed in Collections with a printer icon; double-click (or the Saved Prints list) reopens it in Print with its photos and settings |
 | LRC-EXP-EMAIL | Email photos | P2 | ⬜ |  | low priority |
 | LRC-EXP-POSTPROCESS | Post-processing after export (open in app, export actions) | P2 | 🟡 |  | unverified |
 | LRC-AUTO-ACTIONS | Recordable actions / batch scripts | P2 | 🟡 | `cmd:actions.record`, `cmd:actions.stop`, `cmd:actions.play`, `cmd:actions.save`, `crates/engine/src/cmd/actions.rs` | record from the journal, parameters (`{{name}}`), per-photo replay on a selection, `app-cli run-action`, MCP via run_command; no Actions panel and stored shortcuts are not bound in the desktop app yet |

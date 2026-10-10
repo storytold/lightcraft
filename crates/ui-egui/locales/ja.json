@@ -2317,5 +2317,9 @@
   "removed": "削除",
   "to remove": "削除予定",
   "Publish": "公開",
-  "Publishing…": "公開中…"
+  "Publishing…": "公開中…",
+  "Saved Prints": "保存済みプリント",
+  "Create Saved Print": "保存済みプリントを作成",
+  "Open Saved Print": "保存済みプリントを開く",
+  "Open Saved Creation": "保存済み作品を開く"
 }

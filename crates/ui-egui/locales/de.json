@@ -2470,5 +2470,9 @@
   "removed": "entfernt",
   "to remove": "zu entfernen",
   "Publish": "Veröffentlichen",
-  "Publishing…": "Wird veröffentlicht…"
+  "Publishing…": "Wird veröffentlicht…",
+  "Saved Prints": "Gespeicherte Drucke",
+  "Create Saved Print": "Gespeicherten Druck erstellen",
+  "Open Saved Print": "Gespeicherten Druck öffnen",
+  "Open Saved Creation": "Gespeicherte Kreation öffnen"
 }

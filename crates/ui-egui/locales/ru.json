@@ -2281,5 +2281,9 @@
   "removed": "удалено",
   "to remove": "к удалению",
   "Publish": "Опубликовать",
-  "Publishing…": "Публикация…"
+  "Publishing…": "Публикация…",
+  "Saved Prints": "Сохранённые печати",
+  "Create Saved Print": "Создать сохранённую печать",
+  "Open Saved Print": "Открыть сохранённую печать",
+  "Open Saved Creation": "Открыть сохранённую работу"
 }

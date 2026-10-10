@@ -2315,5 +2315,9 @@
   "removed": "已移除",
   "to remove": "待移除",
   "Publish": "發佈",
-  "Publishing…": "正在發佈…"
+  "Publishing…": "正在發佈…",
+  "Saved Prints": "已儲存的列印",
+  "Create Saved Print": "建立已儲存的列印",
+  "Open Saved Print": "開啟已儲存的列印",
+  "Open Saved Creation": "開啟已儲存的作品"
 }

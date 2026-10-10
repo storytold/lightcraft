@@ -400,6 +400,10 @@ pub struct Document {
     pub page: Page,
     #[serde(default)]
     pub pages: Vec<PageLayout>,
+    /// The module's own settings for a creation that isn't a page layout (a saved slideshow's or
+    /// web gallery's settings); its photos are the collection's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<serde_json::Value>,
 }
 
 fn doc_version() -> u32 {
@@ -408,7 +412,7 @@ fn doc_version() -> u32 {
 
 impl Document {
     pub fn new(kind: CreationKind, page: Page) -> Document {
-        Document { version: DOCUMENT_VERSION, kind, page, pages: Vec::new() }
+        Document { version: DOCUMENT_VERSION, kind, page, pages: Vec::new(), settings: None }
     }
     pub fn validate(&self) -> Result<()> {
         if self.version > DOCUMENT_VERSION {

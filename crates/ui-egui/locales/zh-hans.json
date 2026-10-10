@@ -2315,5 +2315,9 @@
   "removed": "已移除",
   "to remove": "待移除",
   "Publish": "发布",
-  "Publishing…": "正在发布…"
+  "Publishing…": "正在发布…",
+  "Saved Prints": "已存储的打印",
+  "Create Saved Print": "创建已存储的打印",
+  "Open Saved Print": "打开已存储的打印",
+  "Open Saved Creation": "打开已存储的作品"
 }

@@ -14,6 +14,7 @@ pub mod catalog_ui;
 #[path = "catalog_ui_web.rs"]
 pub mod catalog_ui;
 pub mod control;
+pub mod creations_ui;
 pub mod credits;
 pub mod date_picker;
 mod edit_in;

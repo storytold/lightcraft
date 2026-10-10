@@ -45,6 +45,32 @@ fn state_id() -> egui::Id {
     egui::Id::new("dac-web-module")
 }
 
+thread_local! {
+    /// A saved gallery (collection id) to load into the module on its next frame (`creation.open`).
+    static PENDING: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Opens a saved web gallery (a saved creation of kind `web`): its settings load into the module
+/// on the next frame; its photos are the collection's (the caller shows that collection).
+pub fn open_creation(app: &mut DacApp, id: u64) -> Result<Value, String> {
+    let c = dac_engine::creations::creations_of(&app.session, Some(dac_layout::CreationKind::Web))
+        .into_iter()
+        .find(|c| c.id.0 == id)
+        .ok_or("not a saved web gallery")?;
+    PENDING.with(|p| p.set(Some(id)));
+    Ok(json!({"opened": c.name, "id": id, "photos": c.photos.len()}))
+}
+
+/// Loads a pending saved gallery into `st`.
+fn take_pending(app: &mut DacApp, st: &mut WebUi) {
+    let Some(id) = PENDING.with(std::cell::Cell::take) else { return };
+    if let Some(c) = dac_engine::creations::creations_of(&app.session, Some(dac_layout::CreationKind::Web)).into_iter().find(|c| c.id.0 == id) {
+        st.settings = GallerySettings::default().merged(&c.settings).unwrap_or_default();
+        st.gallery_name = c.name;
+        st.loaded = false;
+    }
+}
+
 pub fn state(ctx: &egui::Context) -> WebUi {
     ctx.data(|d| d.get_temp::<WebUi>(state_id())).unwrap_or_default()
 }
@@ -83,6 +109,7 @@ impl Module for WebModule {
         app.canvas_rect = Some(area);
         register(ui.ctx(), "view:module:web", area);
         let mut st = state(ui.ctx());
+        take_pending(app, &mut st);
         if !st.loaded {
             refresh_lists(app, &mut st);
             st.loaded = true;

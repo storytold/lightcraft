@@ -12,7 +12,8 @@
 //! `printui.set {settings}` (merged into the current settings), `printui.pageSetup {paper,
 //! landscape}`, `printui.page {page | delta}`, `printui.guides {...}`, `printui.print {destination,
 //! path, printer}`, `printui.printOne`, `printui.printers {server}`, `printui.saveTemplate {name}`,
-//! `printui.state`.
+//! `printui.state`, `printui.saveCreation {name}` (a Saved Print: a collection holding the photos,
+//! the page layout and these settings), `printui.openCreation {id}`.
 
 use dac_catalog::PhotoId;
 use dac_layout::tokens::{PhotoInfo, expand};
@@ -54,6 +55,8 @@ pub struct PrintUi {
     pub output_path: String,
     pub busy: bool,
     pub last: Option<Value>,
+    /// The Saved Print (collection) last saved or opened.
+    pub creation: Option<u64>,
     /// Paper sizes the chosen printer reports (IPP `media-col-database` / `media-supported`).
     pub media: Vec<dac_print::ipp::Media>,
     /// `<config>/print.json` has been read.
@@ -81,6 +84,7 @@ impl Default for PrintUi {
             output_path: String::new(),
             busy: false,
             last: None,
+            creation: None,
             media: Vec::new(),
             loaded: false,
             stored: None,
@@ -102,6 +106,8 @@ pub const COMMANDS: &[crate::menus::UiCommand] = &[
     ("printui.deleteTemplate", "Delete Print Template", None, ""),
     ("printui.media", "Printer Paper Sizes", None, ""),
     ("printui.state", "Print State", None, ""),
+    ("printui.saveCreation", "Create Saved Print", None, ""),
+    ("printui.openCreation", "Open Saved Print", None, ""),
 ];
 
 /// The photos a print takes: the selection when it has more than one photo, else every photo in
@@ -265,6 +271,7 @@ fn state_json(app: &mut DacApp) -> Value {
         "printer": pu.printer_uri,
         "printers": pu.printers.iter().map(|p| json!({"name": p.name, "uri": p.uri, "info": p.info})).collect::<Vec<_>>(),
         "busy": pu.busy,
+        "creation": pu.creation,
         "last": pu.last,
         "templates": builtin_templates().into_iter().map(|t| t.0).chain(pu.user_templates.iter().map(|t| t.0.clone())).collect::<Vec<_>>(),
         "userTemplates": pu.user_templates.iter().map(|t| t.0.clone()).collect::<Vec<_>>(),
@@ -407,6 +414,49 @@ fn run_inner(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
             return Err("printing is not available in the browser".into());
         }
         "printui.print" | "printui.printOne" => return start(app, id, p),
+        "printui.saveCreation" => {
+            let name = p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).ok_or("missing name")?.to_string();
+            let (mut doc, ids) = document(app)?;
+            if ids.is_empty() {
+                return Err("no photos to save in the print".into());
+            }
+            doc.settings = Some(serde_json::to_value(&app.print.settings).map_err(|e| e.to_string())?);
+            let document = serde_json::to_value(&doc).map_err(|e| e.to_string())?;
+            // the Saved Print open keeps its collection when saved under its own name again
+            let same = app.print.creation.filter(|c| {
+                app.session
+                    .catalog
+                    .album(dac_catalog::AlbumId(*c))
+                    .is_some_and(|a| a.name == name && a.creation.as_ref().is_some_and(|k| k.kind == "print"))
+            });
+            let cid = match same {
+                Some(c) => {
+                    app.run("creation.update", json!({"id": c, "document": document}))?;
+                    c
+                }
+                None => app
+                    .run("creation.save", json!({"kind": "print", "name": name, "document": document}))?
+                    .get("id")
+                    .and_then(Value::as_u64)
+                    .ok_or("the print was not saved")?,
+            };
+            app.print.creation = Some(cid);
+        }
+        "printui.openCreation" => {
+            let cid = p.get("id").and_then(Value::as_u64).ok_or("missing id")?;
+            let r = app.run("creation.get", json!({"id": cid}))?;
+            if r["kind"] != "print" {
+                return Err("not a Saved Print".into());
+            }
+            // a print saved from this module carries its settings; one made from a template (MCP)
+            // keeps the current settings
+            if let Some(st) = r["document"].get("settings").filter(|v| v.is_object()) {
+                app.print.settings = PrintSettings::from_json(&st.to_string()).map_err(|e| e.to_string())?;
+                app.print.template = None;
+            }
+            app.print.creation = Some(cid);
+            app.print.page = 0;
+        }
         _ => {}
     }
     Ok(state_json(app))
@@ -692,6 +742,28 @@ fn template_browser(ui: &mut egui::Ui, app: &mut DacApp) {
             register(&ctx, "print:saveTemplate", b.rect);
             if b.clicked() && !name.trim().is_empty() {
                 cmd(app, &ctx, "printui.saveTemplate", json!({"name": name}));
+                ui.data_mut(|d| d.insert_temp(id, String::new()));
+            }
+        });
+        heading(ui, "Saved Prints");
+        let open = app.print.creation;
+        for c in dac_engine::creations::creations_of(&app.session, Some(dac_layout::CreationKind::Print)) {
+            let r = ui.selectable_label(open == Some(c.id.0), format!("{} ({})", c.name, c.photos.len()));
+            register(&ctx, format!("print:creation:{}", c.id.0), r.rect);
+            if r.clicked() {
+                cmd(app, &ctx, "creation.open", json!({"id": c.id.0}));
+            }
+        }
+        ui.horizontal(|ui| {
+            let id = egui::Id::new("print-new-creation");
+            let mut name: String = ui.data_mut(|d| d.get_temp(id)).unwrap_or_default();
+            let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text(crate::i18n::tr("Name")).desired_width(120.0));
+            app.text_focus |= r.has_focus();
+            ui.data_mut(|d| d.insert_temp(id, name.clone()));
+            let b = ui.button(crate::i18n::tr("Create Saved Print"));
+            register(&ctx, "print:saveCreation", b.rect);
+            if b.clicked() && !name.trim().is_empty() {
+                cmd(app, &ctx, "printui.saveCreation", json!({"name": name}));
                 ui.data_mut(|d| d.insert_temp(id, String::new()));
             }
         });

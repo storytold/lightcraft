@@ -11,8 +11,11 @@
 //! - `web.servers` / `web.saveServer` / `web.deleteServer`: upload presets; passwords and key
 //!   passphrases go to the keychain (service [`SFTP_SERVICE`]), never into the presets file.
 //!
-//! Saved galleries and servers live in `<config>/web.json` next to `connections.json`. Commands
-//! that take a secret are not journaled and no result contains one.
+//! Saved galleries are saved creations in the catalog (collections of kind `web` holding the
+//! gallery settings and its photos; they show in the Collections panel). Upload servers live in
+//! `<config>/web.json` next to `connections.json`; galleries an older build kept there move into
+//! the catalog the first time the gallery commands run. Commands that take a secret are not
+//! journaled and no result contains one.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -25,13 +28,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd, str_param};
+use crate::creations;
 use crate::export::{ExportFormat, ExportOptions, MetadataPolicy, Resize, ResizeMode, SharpenFor, Watermark};
 use crate::{Result, Session};
+use dac_layout::CreationKind;
 
 /// Keychain service for SFTP passwords / key passphrases (account = `user@host:port`).
 pub const SFTP_SERVICE: &str = "web-sftp";
 
-/// A saved gallery: a name, its settings and (optionally) the photos it was made from.
+/// A saved gallery as older builds kept it in `web.json` (read once, to move it into the catalog).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SavedGallery {
@@ -90,17 +95,44 @@ fn save(s: &Session, st: &WebStore) -> std::result::Result<(), String> {
     crate::export::write_file_durable(&path.to_string_lossy(), &bytes)
 }
 
-/// `settings` param (partial objects merge over the defaults), or a saved gallery by `gallery` name.
-fn settings_param(s: &Session, p: &Value, c: &str) -> Result<GallerySettings> {
-    let base = match str_param(p, "gallery") {
-        Some(name) => {
-            let st = load(s).map_err(|e| bad(c, e))?;
-            st.galleries
-                .into_iter()
-                .find(|g| g.name.eq_ignore_ascii_case(name.trim()))
-                .map(|g| g.settings)
-                .ok_or_else(|| bad(c, format!("no saved web gallery `{name}`")))?
+/// Moves galleries an older build kept in `web.json` into the catalog (once; servers stay).
+fn migrate_galleries(s: &mut Session, c: &str) -> Result<()> {
+    let mut st = load(s).map_err(|e| bad(c, e))?;
+    if st.galleries.is_empty() {
+        return Ok(());
+    }
+    for g in std::mem::take(&mut st.galleries) {
+        if g.name.trim().is_empty() || creations::find_creation(s, CreationKind::Web, &g.name).is_some() {
+            continue;
         }
+        let photos = g.ids.iter().map(|i| PhotoId(*i)).filter(|i| s.catalog.photo(*i).is_some()).collect();
+        let settings = serde_json::to_value(&g.settings).map_err(|e| bad(c, e.to_string()))?;
+        creations::save_settings(s, CreationKind::Web, &g.name, settings, photos)?;
+    }
+    save(s, &st).map_err(|e| bad(c, e))
+}
+
+/// A saved gallery's settings (merged over the defaults: a damaged one reads as the defaults).
+fn gallery_settings(v: &Value) -> GallerySettings {
+    GallerySettings::default().merged(v).unwrap_or_default()
+}
+
+/// The saved gallery a `gallery` param names: a collection id, or a name.
+fn find_gallery(s: &Session, p: &Value, c: &str) -> Result<Option<creations::SavedCreation>> {
+    let found = match p.get("gallery") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::Number(n)) => creations::creations_of(s, Some(CreationKind::Web)).into_iter().find(|g| Some(g.id.0) == n.as_u64()),
+        Some(Value::String(name)) => creations::find_creation(s, CreationKind::Web, name),
+        Some(_) => return Err(bad(c, "`gallery` is a saved gallery's name or id")),
+    };
+    found.map(Some).ok_or_else(|| bad(c, format!("no saved web gallery {}", p["gallery"])))
+}
+
+/// `settings` param (partial objects merge over the defaults), or a saved gallery by `gallery`
+/// (name or collection id).
+fn settings_param(s: &Session, p: &Value, c: &str) -> Result<GallerySettings> {
+    let base = match find_gallery(s, p, c)? {
+        Some(g) => gallery_settings(&g.settings),
         None => GallerySettings::default(),
     };
     match p.get("settings") {
@@ -110,8 +142,20 @@ fn settings_param(s: &Session, p: &Value, c: &str) -> Result<GallerySettings> {
     }
 }
 
-/// Target photos: `ids`, else the selection, else every visible photo.
+/// Target photos: `ids`, else a saved `gallery`'s photos, else the selection, else every visible
+/// photo.
 fn photo_ids(s: &mut Session, p: &Value) -> Vec<PhotoId> {
+    if !super::names_photos(p)
+        && let Ok(Some(g)) = find_gallery(s, p, "web")
+        && !g.photos.is_empty()
+    {
+        return g
+            .photos
+            .into_iter()
+            .filter(|id| s.catalog.photo(*id).is_some_and(|ph| !ph.deleted))
+            .take(dac_webgallery::site::MAX_PHOTOS.saturating_add(1))
+            .collect();
+    }
     let t = s.targets(p);
     let t = if t.len() > 1 || super::names_photos(p) { t } else { s.visible().to_vec() };
     t.into_iter().filter(|id| s.catalog.photo(*id).is_some_and(|ph| !ph.deleted)).take(dac_webgallery::site::MAX_PHOTOS.saturating_add(1)).collect()
@@ -424,8 +468,17 @@ fn run_now(s: &mut Session, c: &str, p: &Value) -> Result<Value> {
     job.run(&mut |_, _| true).map_err(|e| bad(c, e))
 }
 
-fn galleries_json(st: &WebStore) -> Value {
-    json!(st.galleries)
+fn galleries_json(s: &Session) -> Value {
+    let v: Vec<Value> = creations::creations_of(s, Some(CreationKind::Web))
+        .into_iter()
+        .map(|g| json!({"id": g.id.0, "name": g.name, "settings": gallery_settings(&g.settings), "ids": g.photos.iter().map(|i| i.0).collect::<Vec<_>>()}))
+        .collect();
+    json!(v)
+}
+
+fn galleries(s: &mut Session, _: &Value) -> Result<Value> {
+    migrate_galleries(s, "web.galleries")?;
+    Ok(galleries_json(s))
 }
 
 fn servers_json(st: &WebStore) -> Value {
@@ -436,28 +489,25 @@ fn save_gallery(s: &mut Session, p: &Value) -> Result<Value> {
     const ID: &str = "web.saveGallery";
     let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad(ID, "missing `name`"))?.to_string();
     let settings = settings_param(s, p, ID)?;
-    let ids = if super::names_photos(p) { s.targets(p).into_iter().map(|i| i.0).collect() } else { Vec::new() };
-    let mut st = load(s).map_err(|e| bad(ID, e))?;
-    let g = SavedGallery { name: name.clone(), settings, ids };
-    match st.galleries.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&name)) {
-        Some(x) => *x = g,
-        None => st.galleries.push(g),
+    migrate_galleries(s, ID)?;
+    let ids: Option<Vec<PhotoId>> = super::names_photos(p).then(|| s.targets(p).into_iter().filter(|i| s.catalog.photo(*i).is_some()).collect());
+    let settings = serde_json::to_value(&settings).map_err(|e| bad(ID, e.to_string()))?;
+    match creations::find_creation(s, CreationKind::Web, &name) {
+        Some(g) => creations::update_settings(s, g.id, CreationKind::Web, settings, ids)?,
+        None => {
+            creations::save_settings(s, CreationKind::Web, &name, settings, ids.unwrap_or_default())?;
+        }
     }
-    save(s, &st).map_err(|e| bad(ID, e))?;
-    Ok(galleries_json(&st))
+    Ok(galleries_json(s))
 }
 
 fn delete_gallery(s: &mut Session, p: &Value) -> Result<Value> {
     const ID: &str = "web.deleteGallery";
     let name = str_param(p, "name").ok_or_else(|| bad(ID, "missing `name`"))?;
-    let mut st = load(s).map_err(|e| bad(ID, e))?;
-    let before = st.galleries.len();
-    st.galleries.retain(|x| !x.name.eq_ignore_ascii_case(name.trim()));
-    if st.galleries.len() == before {
-        return Err(bad(ID, format!("no saved web gallery `{name}`")));
-    }
-    save(s, &st).map_err(|e| bad(ID, e))?;
-    Ok(galleries_json(&st))
+    migrate_galleries(s, ID)?;
+    let g = creations::find_creation(s, CreationKind::Web, name).ok_or_else(|| bad(ID, format!("no saved web gallery `{name}`")))?;
+    s.commit("Delete Web Gallery", dac_catalog::Op::RemoveAlbum { id: g.id })?;
+    Ok(galleries_json(s))
 }
 
 fn save_server(s: &mut Session, p: &Value) -> Result<Value> {
@@ -508,14 +558,13 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "web.shareImmich", "Share via Immich", [], None,
             "{account?: connected Immich account (default: the only one), album?: album name (default: the collection or site title), expiresDays?: 1…3650, password?, allowDownload?: true, showMetadata?: true, settings?, gallery?, ids?} — renders the gallery's large images, uploads them to a new Immich album and creates a shared link (IMM-SHARELINK) → {album, albumId, url, uploaded, photos, expiresAt}",
             always, |s, p| run_now(s, "web.shareImmich", p)),
-        cmd!(query "web.galleries", "Saved Web Galleries", [], None, "{} → [{name, settings, ids}]", always,
-            |s, _| Ok(galleries_json(&load(s).map_err(|e| bad("web.galleries", e))?))),
+        cmd!(query "web.galleries", "Saved Web Galleries", [], None, "{} → [{id, name, settings, ids}] (saved creations of kind web)", always, galleries),
         cmd!(
             "web.saveGallery",
             "Save Web Gallery",
             [],
             None,
-            "{name, settings?, gallery?, ids?} — adds or replaces a saved gallery (ids only when given) → galleries",
+            "{name, settings?, gallery?, ids?} — adds or replaces a saved gallery: a collection holding the settings and its photos (replaced only when ids are given) → galleries",
             always,
             save_gallery
         ),
@@ -641,5 +690,29 @@ mod tests {
         let r = s.execute("web.upload", &json!({"server": {"host": "127.0.0.1", "port": 1, "user": "u", "path": "g"}, "password": "x"}));
         assert!(r.is_err());
         assert!(s.execute("web.upload", &json!({"server": {"host": "127.0.0.1", "user": "u"}})).is_err(), "no password");
+    }
+
+    #[test]
+    fn galleries_are_catalog_creations_and_old_ones_move_in() {
+        let (mut s, dir) = session("migrate");
+        let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
+        let old = json!({"galleries": [{"name": "Old", "settings": {"site": {"title": "Old"}}, "ids": ids}], "servers": [{"name": "Home", "host": "example.org", "user": "ann", "path": "/www"}]});
+        std::fs::write(dir.join("web.json"), old.to_string()).unwrap();
+        let g = s.execute("web.galleries", &json!({})).unwrap();
+        assert_eq!(g[0]["name"], "Old");
+        assert_eq!(g[0]["ids"].as_array().unwrap().len(), 2);
+        let id = g[0]["id"].as_u64().unwrap();
+        let a = s.catalog.album(dac_catalog::AlbumId(id)).unwrap();
+        assert_eq!(a.creation.as_ref().unwrap().kind, "web");
+        // moved: the file keeps the server only, a second call adds nothing
+        let file = std::fs::read_to_string(dir.join("web.json")).unwrap();
+        assert!(!file.contains("\"Old\"") && file.contains("example.org"), "{file}");
+        assert_eq!(s.execute("web.galleries", &json!({})).unwrap().as_array().unwrap().len(), 1);
+        // a saved gallery's photos are the gallery's
+        let v = s.execute("web.preview", &json!({"gallery": id})).unwrap();
+        assert_eq!(v["photos"].as_array().map(Vec::len), Some(2));
+        assert_eq!(v["settings"]["site"]["title"], "Old");
+        s.execute("web.deleteGallery", &json!({"name": "old"})).unwrap();
+        assert!(s.catalog.album(dac_catalog::AlbumId(id)).is_none());
     }
 }

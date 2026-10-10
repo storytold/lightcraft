@@ -3,8 +3,11 @@
 //! creations (albums carrying a layout document, catalog format 7).
 //!
 //! Commands: `layout.templates`, `print.render` / `book.render` (headless page rendering to
-//! JPEG/PNG; PDF output arrives with the `pdf` crate), `creation.save`, `creation.get`,
-//! `creation.update`.
+//! JPEG/PNG/PDF), `creation.save`, `creation.get`, `creation.update`, `creation.list`.
+//!
+//! Print and Book creations store a page layout (their photos follow its cells). Slideshow and
+//! Web Gallery creations store the module's settings (`Document::settings`, no pages) and keep
+//! their photos as the collection's photos, as Classic's saved slideshows and web galleries do.
 //!
 //! Sources: own design.
 
@@ -13,7 +16,7 @@ use std::collections::HashMap;
 use dac_catalog::{Album, AlbumId, Creation, Op, Photo, PhotoId};
 use dac_layout::render::{PhotoSource, RenderOptions, Rendered, render_page};
 use dac_layout::tokens::PhotoInfo;
-use dac_layout::{CellKind, CreationKind, Document, Template, builtin_templates};
+use dac_layout::{CellKind, CreationKind, Document, Page, Size, Template, builtin_templates};
 use dac_pipeline::{OutputDepth, OutputSpace};
 use dac_raster::Rgba8;
 use serde_json::{Value, json};
@@ -149,7 +152,8 @@ pub fn render_document(s: &mut Session, doc: &Document, opt: &RenderOptions) -> 
         .collect()
 }
 
-fn kind_name(k: CreationKind) -> &'static str {
+/// The catalog name of a creation kind (`Creation::kind`).
+pub fn kind_name(k: CreationKind) -> &'static str {
     match k {
         CreationKind::Print => "print",
         CreationKind::Book => "book",
@@ -256,6 +260,12 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
     let c = "creation.save";
     let kind = creation_kind(c, p)?;
     let name = p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad(c, "missing name"))?;
+    if settings_kind(kind) && p.get("document").is_none() && p.get("template").is_none() {
+        let settings = p.get("settings").cloned().unwrap_or_else(|| json!({}));
+        let photos = s.targets(p).into_iter().filter(|i| s.catalog.photo(*i).is_some()).collect();
+        let id = save_settings(s, kind, name, settings, photos)?;
+        return Ok(json!({"id": id.0, "kind": kind_name(kind), "pages": 0}));
+    }
     let doc = document_from(s, c, p, Some(kind))?;
     let mut photos: Vec<PhotoId> = Vec::new();
     for key in doc.photos() {
@@ -284,7 +294,8 @@ fn get(s: &mut Session, p: &Value) -> Result<Value> {
     let a = s.catalog.album(id).ok_or_else(|| bad(c, "no such collection"))?;
     let cr = a.creation.as_ref().ok_or_else(|| bad(c, "not a saved creation"))?;
     let doc: Value = serde_json::from_str(&cr.document).map_err(|e| bad(c, format!("the stored layout is damaged: {e}")))?;
-    Ok(json!({"id": id.0, "name": a.name, "kind": cr.kind, "document": doc}))
+    let photos: Vec<u64> = a.photos.iter().map(|p| p.0).collect();
+    Ok(json!({"id": id.0, "name": a.name, "kind": cr.kind, "document": doc, "photos": photos}))
 }
 
 fn update(s: &mut Session, p: &Value) -> Result<Value> {
@@ -295,10 +306,23 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
         let cr = a.creation.as_ref().ok_or_else(|| bad(c, "not a saved creation"))?;
         creation_kind(c, &json!({"kind": cr.kind}))?
     };
+    if p.get("document").is_none() && settings_kind(kind) {
+        let settings = p.get("settings").cloned().ok_or_else(|| bad(c, "missing document or settings"))?;
+        let photos = ids_param(s, p);
+        update_settings(s, id, kind, settings, photos)?;
+        return Ok(json!({"id": id.0, "pages": 0}));
+    }
     let d = p.get("document").ok_or_else(|| bad(c, "missing document"))?;
     let doc = Document::from_json(&serde_json::to_string(d).map_err(|e| bad(c, e.to_string()))?).map_err(|e| bad(c, e.to_string()))?;
     if doc.kind != kind {
         return Err(bad(c, "the document's kind differs from the creation's"));
+    }
+    if doc.pages.is_empty() && settings_kind(kind) {
+        // a settings creation given as a whole document: the photos stay unless `ids` are given
+        let settings = doc.settings.clone().unwrap_or_else(|| json!({}));
+        let photos = ids_param(s, p);
+        update_settings(s, id, kind, settings, photos)?;
+        return Ok(json!({"id": id.0, "pages": 0}));
     }
     let mut photos: Vec<PhotoId> = Vec::new();
     for key in doc.photos() {
@@ -312,6 +336,98 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
         vec![Op::SetAlbumCreation { id, creation: Some(Creation { kind: kind_name(kind).into(), document }) }, Op::SetAlbumPhotos { id, photos }];
     s.commit(&format!("Edit {}", kind.label()), Op::Batch { ops })?;
     Ok(json!({"id": id.0, "pages": doc.pages.len()}))
+}
+
+/// Kinds whose creations store module settings rather than a page layout.
+pub fn settings_kind(k: CreationKind) -> bool {
+    matches!(k, CreationKind::Slideshow | CreationKind::Web)
+}
+
+/// The kind a catalog `Creation::kind` names.
+pub fn kind_of(name: &str) -> Option<CreationKind> {
+    match name {
+        "print" => Some(CreationKind::Print),
+        "book" => Some(CreationKind::Book),
+        "slideshow" => Some(CreationKind::Slideshow),
+        "web" => Some(CreationKind::Web),
+        _ => None,
+    }
+}
+
+fn settings_document(kind: CreationKind, settings: Value) -> Result<String> {
+    let mut d = Document::new(kind, Page::new(Size { w: 960.0, h: 540.0 }));
+    d.settings = Some(settings);
+    d.to_json().map_err(|e| bad("creation.save", e.to_string()))
+}
+
+/// A saved creation, as listed by [`creations_of`].
+#[derive(Clone, Debug)]
+pub struct SavedCreation {
+    pub id: AlbumId,
+    pub name: String,
+    pub kind: CreationKind,
+    /// The module settings of a slideshow / web creation (`null` when missing or damaged).
+    pub settings: Value,
+    pub photos: Vec<PhotoId>,
+}
+
+/// Every saved creation (of `kind`, when given), in catalog order.
+pub fn creations_of(s: &Session, kind: Option<CreationKind>) -> Vec<SavedCreation> {
+    s.catalog
+        .albums()
+        .filter_map(|a| {
+            let cr = a.creation.as_ref()?;
+            let k = kind_of(&cr.kind)?;
+            if kind.is_some_and(|want| want != k) {
+                return None;
+            }
+            let settings = serde_json::from_str::<Value>(&cr.document).ok().and_then(|d| d.get("settings").cloned()).unwrap_or(Value::Null);
+            Some(SavedCreation { id: a.id, name: a.name.clone(), kind: k, settings, photos: a.photos.clone() })
+        })
+        .collect()
+}
+
+/// The saved creation of `kind` named `name` (case-insensitive), if any.
+pub fn find_creation(s: &Session, kind: CreationKind, name: &str) -> Option<SavedCreation> {
+    let name = name.trim();
+    creations_of(s, Some(kind)).into_iter().find(|c| c.name.eq_ignore_ascii_case(name))
+}
+
+/// Saves a slideshow / web creation: a new collection holding `photos` and the settings.
+pub fn save_settings(s: &mut Session, kind: CreationKind, name: &str, settings: Value, photos: Vec<PhotoId>) -> Result<AlbumId> {
+    let document = settings_document(kind, settings)?;
+    let id = s.catalog.alloc_album_id();
+    let album = Album { photos, creation: Some(Creation { kind: kind_name(kind).into(), document }), ..Album::new(id, name.trim()) };
+    s.commit(&format!("Save {}", kind.label()), Op::AddAlbum { album })?;
+    Ok(id)
+}
+
+/// Replaces a slideshow / web creation's settings (and its photos, when given).
+pub fn update_settings(s: &mut Session, id: AlbumId, kind: CreationKind, settings: Value, photos: Option<Vec<PhotoId>>) -> Result<()> {
+    let document = settings_document(kind, settings)?;
+    let mut ops = vec![Op::SetAlbumCreation { id, creation: Some(Creation { kind: kind_name(kind).into(), document }) }];
+    if let Some(photos) = photos {
+        ops.push(Op::SetAlbumPhotos { id, photos });
+    }
+    s.commit(&format!("Edit {}", kind.label()), Op::Batch { ops })
+}
+
+/// The `ids` a call gives (photos not in the catalog dropped); `None` without `ids`.
+fn ids_param(s: &Session, p: &Value) -> Option<Vec<PhotoId>> {
+    let a = p.get("ids")?.as_array()?;
+    Some(a.iter().filter_map(Value::as_u64).map(PhotoId).filter(|i| s.catalog.photo(*i).is_some()).collect())
+}
+
+fn list(s: &mut Session, p: &Value) -> Result<Value> {
+    let kind = match p.get("kind").and_then(Value::as_str) {
+        Some(k) => Some(kind_of(k).ok_or_else(|| bad("creation.list", format!("unknown kind {k:?} (print, book, slideshow or web)")))?),
+        None => None,
+    };
+    let v: Vec<Value> = creations_of(s, kind)
+        .into_iter()
+        .map(|c| json!({"id": c.id.0, "name": c.name, "kind": kind_name(c.kind), "photos": c.photos.len()}))
+        .collect();
+    Ok(json!({"creations": v}))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -328,17 +444,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Save Creation",
             [],
             None,
-            "{kind (print|book|slideshow|web), name, template + ids? or document} → {id, kind, pages}: a collection holding the photos and the layout",
+            "{kind (print|book|slideshow|web), name, template + ids? or document; slideshow/web: settings + ids? (else the selection)} → {id, kind, pages}: a collection holding the photos and the layout or settings",
             always,
             save
         ),
-        cmd!(query "creation.get", "Get Creation", [], None, "{id} → {id, name, kind, document}", always, get),
+        cmd!(query "creation.get", "Get Creation", [], None, "{id} → {id, name, kind, document, photos}", always, get),
+        cmd!(query "creation.list", "Saved Creations", [], None, "{kind?: print|book|slideshow|web} → {creations: [{id, name, kind, photos}]}", always, list),
         cmd!(
             "creation.update",
             "Update Creation",
             [],
             None,
-            "{id, document} → {id, pages}: replaces the layout; the collection's photos follow it",
+            "{id, document | settings (slideshow/web), ids?} → {id, pages}: replaces the layout (the photos follow it) or the settings (the photos change only with ids)",
             always,
             update
         ),
@@ -404,5 +521,33 @@ mod tests {
         assert!(s.execute("creation.save", &json!({"kind": "poster", "name": "x", "template": "Triptych"})).is_err());
         assert!(s.execute("creation.get", &json!({"id": 999_999})).is_err());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn slideshow_and_web_creations_keep_settings_and_photos() {
+        let mut s = Session::with_demo();
+        let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
+        let saved =
+            s.execute("creation.save", &json!({"kind": "slideshow", "name": "Trip", "settings": {"timing": {"slide": 3.0}}, "ids": ids})).unwrap();
+        let id = saved["id"].as_u64().unwrap();
+        assert_eq!(s.catalog.album(AlbumId(id)).unwrap().photos.len(), 3);
+        let got = s.execute("creation.get", &json!({"id": id})).unwrap();
+        assert_eq!(got["kind"], "slideshow");
+        assert_eq!(got["document"]["settings"]["timing"]["slide"], 3.0);
+        assert_eq!(got["photos"].as_array().unwrap().len(), 3);
+        // new settings keep the photos; ids replace them
+        s.execute("creation.update", &json!({"id": id, "settings": {"timing": {"slide": 5.0}}})).unwrap();
+        assert_eq!(s.catalog.album(AlbumId(id)).unwrap().photos.len(), 3);
+        s.execute("creation.update", &json!({"id": id, "settings": {}, "ids": [ids[0]]})).unwrap();
+        assert_eq!(s.catalog.album(AlbumId(id)).unwrap().photos, vec![PhotoId(ids[0])]);
+        s.execute("creation.save", &json!({"kind": "web", "name": "Site", "ids": ids})).unwrap();
+        let all = s.execute("creation.list", &json!({})).unwrap();
+        assert_eq!(all["creations"].as_array().unwrap().len(), 2, "{all}");
+        let web = s.execute("creation.list", &json!({"kind": "web"})).unwrap();
+        assert_eq!(web["creations"][0]["name"], "Site");
+        assert_eq!(web["creations"][0]["photos"], 3);
+        assert!(s.execute("creation.list", &json!({"kind": "poster"})).is_err());
+        // a print creation still needs a layout
+        assert!(s.execute("creation.update", &json!({"id": id})).is_err());
     }
 }
