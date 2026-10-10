@@ -100,3 +100,15 @@ retries with backoff.
 names); `immich.confirmFaces` confirms them, `immich.pushPeople {merge?}` sends names back (renames, merges).
 `immich.smartSearch {query, mode: smart|ocr|description|place, show?, saveAs?}` maps the server's results to linked
 photos; `show` makes them a temporary collection, `saveAs` an album.
+
+## Publish (IMM-PUBLISH) and albums
+
+An Immich publish service (`publish.createService {kind: "immich", settings: {account, send: rendered|original|both,
+deleteRemoved}}`) publishes each collection to the Immich album of the same name (created when missing). Every
+upload is checked by SHA-1 first, so Immich never stores a duplicate; an original already linked to an Immich asset
+(including external-library files) is never uploaded. `both` stacks the render on top of the original. Re-publishing
+uploads the new render, moves album membership and sends the old render to Immich's trash; removing a photo from the
+collection takes it out of the album (its render goes to the trash only with `deleteRemoved`).
+
+`immich.linkAlbum {album}` links a catalog album with an Immich album; `immich.syncAlbums` then keeps the same linked
+photos in both (added or removed on one side since the last sync: the same on the other).

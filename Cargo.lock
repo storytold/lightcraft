@@ -1494,6 +1494,7 @@ dependencies = [
  "dac-hash",
  "dac-meta",
  "dac-net",
+ "dac-publish",
  "log",
  "serde",
  "serde_json",
