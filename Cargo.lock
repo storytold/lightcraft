@@ -1822,6 +1822,7 @@ dependencies = [
  "dac-pipeline",
  "dac-preview",
  "dac-raster",
+ "dac-slideshow",
  "egui",
  "log",
  "resvg",

@@ -35,6 +35,7 @@ pub mod plate;
 pub mod region;
 pub mod render;
 pub mod shortcuts;
+pub mod slideshow_ui;
 pub mod softpaint;
 pub mod state;
 pub mod sync;
@@ -1089,7 +1090,7 @@ impl DacApp {
             module::module_bar(self, ui);
         }
         panels::library_problem::banner(self, ui);
-        if module::edge_visible(self, module::Edge::Right) {
+        if module::edge_visible(self, module::Edge::Right) && !m.own_sides() {
             panels::strip::show(self, ui);
             // Library's right column is its Classic panels, unless a Library panel of the strip
             // (Info, Keywords, Versions, Activity) was opened in its place
@@ -1102,7 +1103,7 @@ impl DacApp {
                 panels::presets::show(self, ui);
             }
         }
-        if module::edge_visible(self, module::Edge::Left) {
+        if module::edge_visible(self, module::Edge::Left) && !m.own_sides() {
             panels::left::show(self, ui);
         }
         if self.ui.toolbar && self.ui.screen_mode != module::ScreenMode::FullScreenHidePanels {

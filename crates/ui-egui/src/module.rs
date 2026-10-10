@@ -10,8 +10,9 @@
 //! Library and Develop re-home the existing views: Library shows the grids, the loupe, Compare,
 //! Survey and People; Develop is the loupe with an editing panel (Edit, Crop, Remove, Masking, Red
 //! Eye) or the Reference view. Opening an editing panel from Library therefore *is* entering
-//! Develop, and going back to a grid is entering Library ([`sync`]). Map, Book, Slideshow, Print and
-//! Web are placeholders until Phase 3, so the module picker is complete.
+//! Develop, and going back to a grid is entering Library ([`sync`]). Slideshow is
+//! `crate::slideshow_ui`; Map, Book, Print and Web are placeholders until Phase 3, so the module
+//! picker is complete.
 
 use egui::{Align2, Color32, Rect, Sense, pos2, vec2};
 use serde::{Deserialize, Serialize};
@@ -390,6 +391,11 @@ pub trait Module: Sync {
     fn center(&self, ui: &mut egui::Ui, app: &mut DacApp);
     /// Module-local keys, layered over the global keymap (Classic set only).
     fn keymap(&self) -> &'static [ModuleKey];
+    /// The module draws its own side columns in [`Module::center`] (the window's Library / Develop
+    /// side panels stay away).
+    fn own_sides(&self) -> bool {
+        false
+    }
 }
 
 struct Library;
@@ -510,7 +516,37 @@ static LIBRARY: Library = Library;
 static DEVELOP: Develop = Develop;
 static MAP: Placeholder = Placeholder(ModuleId::Map);
 static BOOK: Placeholder = Placeholder(ModuleId::Book);
-static SLIDESHOW: Placeholder = Placeholder(ModuleId::Slideshow);
+static SLIDESHOW: SlideshowModule = SlideshowModule;
+
+/// Slideshow (`crate::slideshow_ui`): templates and saved slideshows left, the slide preview,
+/// the slide settings right. ↩ plays full screen, ⌥↩ previews in place.
+struct SlideshowModule;
+
+const SLIDESHOW_KEYS: &[ModuleKey] = &[("Enter", "slideshow.play", "{}"), ("Alt+Enter", "slideshow.preview", "{}")];
+
+impl Module for SlideshowModule {
+    fn id(&self) -> ModuleId {
+        ModuleId::Slideshow
+    }
+    fn left_panels(&self) -> &'static [PanelId] {
+        &[]
+    }
+    fn right_panels(&self) -> &'static [PanelId] {
+        &[]
+    }
+    fn toolbar(&self, ui: &mut egui::Ui, app: &mut DacApp) {
+        crate::slideshow_ui::toolbar(app, ui);
+    }
+    fn center(&self, ui: &mut egui::Ui, app: &mut DacApp) {
+        crate::slideshow_ui::center(app, ui);
+    }
+    fn keymap(&self) -> &'static [ModuleKey] {
+        SLIDESHOW_KEYS
+    }
+    fn own_sides(&self) -> bool {
+        true
+    }
+}
 static PRINT: Placeholder = Placeholder(ModuleId::Print);
 static WEB: Placeholder = Placeholder(ModuleId::Web);
 
@@ -736,6 +772,26 @@ pub const SHELL_COMMANDS: &[crate::menus::UiCommand] = &[
     ("second.filter", "Secondary Window Filter", None, ""),
     ("second.filmstrip", "Secondary Filmstrip", None, "Window>Secondary Display"),
     ("photo.flagToggle", "Toggle Flagged Status", None, "Photo>Set Flag"),
+    // the Slideshow module (crate::slideshow_ui)
+    ("slideshow.get", "Slideshow Settings", None, ""),
+    ("slideshow.set", "Set Slideshow Settings", None, ""),
+    ("slideshow.reset", "Reset Slideshow Settings", None, ""),
+    ("slideshow.applyTemplate", "Apply Slideshow Template", None, ""),
+    ("slideshow.saveTemplate", "Save Slideshow Template", None, "Slideshow"),
+    ("slideshow.deleteTemplate", "Delete Slideshow Template", None, ""),
+    ("slideshow.saveSlideshow", "Create Saved Slideshow", None, "Slideshow"),
+    ("slideshow.openSaved", "Open Saved Slideshow", None, ""),
+    ("slideshow.closeSaved", "Close Saved Slideshow", None, ""),
+    ("slideshow.deleteSaved", "Delete Saved Slideshow", None, ""),
+    ("slideshow.play", "Run Slideshow", None, "Slideshow"),
+    ("slideshow.preview", "Preview Slideshow", None, "Slideshow"),
+    ("slideshow.stop", "End Slideshow", None, ""),
+    ("slideshow.pause", "Pause Slideshow", None, ""),
+    ("slideshow.next", "Next Slide", None, "Slideshow"),
+    ("slideshow.previous", "Previous Slide", None, "Slideshow"),
+    ("slideshow.addMusic", "Add Slideshow Music", None, ""),
+    ("slideshow.clearMusic", "Clear Slideshow Music", None, ""),
+    ("slideshow.exportJpeg", "Export JPEG Slideshow…", None, "Slideshow"),
 ];
 
 /// Is `id` a shell command, and is it enabled?
@@ -761,6 +817,9 @@ pub fn run(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Value, String
 }
 
 fn run_inner(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
+    if let Some(r) = crate::slideshow_ui::run(app, id, p) {
+        return r;
+    }
     if let Some(m) = id.strip_prefix("module.").and_then(ModuleId::parse) {
         return switch(app, m);
     }
