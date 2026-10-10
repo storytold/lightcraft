@@ -63,6 +63,9 @@ contents:
   - src: ${STAGE}/usr/share/
     dst: /usr/share/
     type: tree
+  - src: ${STAGE}/usr/lib/udev/rules.d/
+    dst: /usr/lib/udev/rules.d/
+    type: tree
 
 scripts:
   postinstall: packaging/linux/postinst.sh
