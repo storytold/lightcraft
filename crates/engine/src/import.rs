@@ -1073,17 +1073,26 @@ impl ImportJob {
             // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
             // and names the copy when the file itself has none
             let raw = info.kind == MediaKind::Raw;
-            let packet = crate::sidecar::find_sidecar(&path, self.naming)
-                .and_then(|f| std::fs::read_to_string(f).ok())
-                .or_else(|| info.xmp.clone().filter(|_| raw));
             let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);
-            let sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
-                Ok(sc) => Some(sc),
+            let packet = match crate::sidecar::find_sidecar(&path, self.naming) {
+                Some(file) => match std::fs::read_to_string(&file) {
+                    Ok(x) => Some(x),
+                    Err(e) => {
+                        self.done.fetch_add(1, Relaxed);
+                        plan.slots.push(Slot::Item(PreparedItem::Failed(path, format!("cannot read XMP {}: {e}", file.display()))));
+                        continue;
+                    }
+                },
+                None => info.xmp.clone().filter(|_| raw),
+            };
+            let sidecar = match packet.as_deref().map(|x| crate::sidecar::parse_sidecar(x, target)).transpose() {
+                Ok(sc) => sc,
                 Err(e) => {
-                    log::warn!("import {path}: XMP: {e}");
-                    None
+                    self.done.fetch_add(1, Relaxed);
+                    plan.slots.push(Slot::Item(PreparedItem::Failed(path, format!("cannot read XMP: {e}"))));
+                    continue;
                 }
-            });
+            };
             if info.captured.is_none() {
                 info.captured = sidecar.as_ref().and_then(|sc| sc.captured.clone());
             }

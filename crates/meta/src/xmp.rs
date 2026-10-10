@@ -68,6 +68,9 @@ pub struct XmpData {
     pub metadata: Metadata,
     /// The opaque `lc:settings` JSON string, if present.
     pub lc_settings: Option<String>,
+    /// Number of top-level native-settings properties, including structured/empty occurrences.
+    /// A consumer must not accept a scalar that hid a duplicate authoritative property.
+    pub lc_settings_count: usize,
     /// Every property found, keyed `prefix:name` (struct fields as `prefix:name/prefix:field`); arrays keep
     /// item order, language alternatives put `x-default` first.
     pub properties: BTreeMap<String, Vec<String>>,
@@ -470,7 +473,11 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     find_descriptions(&tree, &mut descs);
     let mut props = BTreeMap::new();
     let mut values = BTreeMap::new();
+    let mut lc_settings_count = 0usize;
     for d in descs {
+        lc_settings_count = lc_settings_count
+            .saturating_add(d.attrs.iter().filter(|(name, _)| name == "lc:settings").count())
+            .saturating_add(d.children.iter().filter(|node| node.name == "lc:settings").count());
         collect_description(d, "", &mut props);
         if let XmpValue::Struct(m) = node_struct(d) {
             values.extend(m);
@@ -552,7 +559,7 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     }
     m.regions = values.get("mwg-rs:Regions").map(parse_regions).unwrap_or_default();
     let lc_settings = props.get("lc:settings").and_then(|v| v.first()).cloned();
-    Ok(XmpData { metadata: m, lc_settings, properties: props, values })
+    Ok(XmpData { metadata: m, lc_settings, lc_settings_count, properties: props, values })
 }
 
 fn frac(v: f64) -> String {

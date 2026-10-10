@@ -273,6 +273,17 @@ mod tests {
     }
 
     #[test]
+    fn future_schema_is_rejected_by_direct_and_value_deserialization() {
+        let future = json!({"version": SCHEMA_VERSION + 1, "light": {"exposure": 0.5}});
+        assert!(DevelopSettings::from_json(&future).is_err());
+        assert!(serde_json::from_value::<DevelopSettings>(future.clone()).is_err());
+        assert!(serde_json::from_str::<DevelopSettings>(&future.to_string()).is_err());
+        for legacy in [json!({}), json!({"version": 0}), json!({"version": SCHEMA_VERSION})] {
+            assert!(serde_json::from_value::<DevelopSettings>(legacy).is_ok());
+        }
+    }
+
+    #[test]
     fn merge_partial() {
         let s = DevelopSettings::default();
         let m = s.merged(&json!({"light": {"contrast": 20}, "effects": {"clarity": 10}})).unwrap();

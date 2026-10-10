@@ -1,7 +1,7 @@
 //! The develop settings schema. Every field has a neutral default; serde uses `#[serde(default)]` so
-//! older/newer files load (unknown fields are ignored, missing fields take defaults). The one
-//! exception is `process`: missing (or unreadable), it is V1, the rendering those older files were
-//! made with.
+//! older files load (unknown fields in supported schemas are ignored, missing fields take defaults).
+//! Declared future schemas are refused before settings can be applied or rewritten.
+//! The rendering process is independent: a missing or unreadable `process` stays V1.
 
 use lightcraft_geom::{CropGeometry, Homography, Orientation, Point};
 use serde::{Deserialize, Serialize};
@@ -99,10 +99,21 @@ impl Process {
     }
 }
 
+fn deserialize_schema_version<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    let version = u32::deserialize(deserializer)?;
+    if version > SCHEMA_VERSION {
+        return Err(serde::de::Error::custom(format!(
+            "develop settings version {version} requires a newer LightCraft (supported: {SCHEMA_VERSION})"
+        )));
+    }
+    Ok(version)
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DevelopSettings {
     /// Schema version of this structure (not the rendering process, see `process`).
+    #[serde(deserialize_with = "deserialize_schema_version")]
     pub version: u32,
     /// The rendering process ([`ProcessVersion`]): the latest for new settings, V1 for settings
     /// saved without the field (the field-level default: not the struct's `Default`) or with a

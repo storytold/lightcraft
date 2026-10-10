@@ -171,6 +171,43 @@ fn newer_snapshot_is_refused_untouched() {
     assert!(e.contains(&format!("v{}", VERSION + 1)), "{e}");
 }
 
+#[test]
+fn future_develop_schema_in_snapshots_and_valid_log_records_is_refused_untouched() {
+    use lightcraft_develop::DevelopSettings;
+    use std::sync::Arc;
+    let future = Arc::new(DevelopSettings { version: lightcraft_develop::SCHEMA_VERSION + 1, ..Default::default() });
+    for field in ["develop", "import", "version", "history"] {
+        let mut c = Catalog::new();
+        let mut p = Photo::new(c.alloc_photo_id(), Source::File { path: "/own.png".into() }, "own.png", "PNG", 2, 2, "today");
+        match field {
+            "develop" => p.develop = future.clone(),
+            "import" => p.import_look = Some(future.clone()),
+            "version" => p.versions.push(Version { name: "Saved".into(), created: "today".into(), settings: future.clone(), auto: false }),
+            _ => p.history.push(HistoryStep { label: "Saved".into(), settings: future.clone() }),
+        }
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        let m = MemStore::new();
+        m.set(
+            SNAPSHOT,
+            format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":1,\"catalog\":{}}}\n", c.to_snapshot()).into_bytes(),
+        );
+        m.set(LOG, Vec::new());
+        let before = m.files.lock().unwrap().clone();
+        assert!(Journal::open(Box::new(m.clone())).is_err(), "future settings in {field} were accepted");
+        assert_eq!(*m.files.lock().unwrap(), before, "{field} modified the stored catalog");
+    }
+    let (base, log, _) = legacy_parts();
+    let id = base.photos().next().unwrap().id;
+    let future_op = Op::SetDevelop { id, settings: future, label: "Future edit".into(), edited: None };
+    let m = MemStore::new();
+    m.set(
+        SNAPSHOT,
+        format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes(),
+    );
+    m.set(LOG, format!("{log}{}\n", encode_record(4, &future_op)).into_bytes());
+    assert_refused_untouched(&m);
+}
+
 /// A log record with a valid CRC whose op this version doesn't know: refused, not taken for a
 /// torn tail (truncated) or damage (renamed) — wherever it is in the log.
 #[test]

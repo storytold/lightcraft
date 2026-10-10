@@ -70,6 +70,48 @@ fn imported_preset_round_trip_apply_union_zero_and_undo_redo() {
 }
 
 #[test]
+fn diagnostics_only_preset_auto_writes_apply_undo_and_redo() {
+    let dir = dir("diagnostics-auto-write");
+    let image = dir.join("photo.png");
+    let sidecar = dir.join("photo.xmp");
+    png(&image);
+    let original_bytes = std::fs::read(&image).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths":[image]})).unwrap();
+    let id = s.active().unwrap();
+    let pid = imported(&mut s, &dir);
+    s.execute("develop.set", &json!({"control":"light.exposure","value":1})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({})).unwrap();
+    let before = s.develop_of(id).unwrap();
+    let saved_fields = || {
+        crate::sidecar::parse_sidecar(&std::fs::read_to_string(&sidecar).unwrap(), crate::crs::Target::Rendered).unwrap().unsupported_edits.unwrap()
+    };
+    assert!(saved_fields().is_empty());
+    s.execute("library.xmpPreferences", &json!({"autoWrite":true})).unwrap();
+
+    let undo_before = s.undo.len();
+    s.execute("preset.apply", &json!({"id":pid,"amount":100})).unwrap();
+    assert_eq!(s.develop_of(id).unwrap(), before, "only the diagnostic provenance changes");
+    assert_eq!(s.undo.len(), undo_before + 1);
+    assert_eq!(fields(&s, id), FIELDS);
+    assert_eq!(saved_fields(), FIELDS, "diagnostics-only apply must update the sidecar");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(fields(&s, id).is_empty());
+    assert!(saved_fields().is_empty(), "diagnostics-only undo must update the sidecar");
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(fields(&s, id), FIELDS);
+    assert_eq!(saved_fields(), FIELDS, "diagnostics-only redo must update the sidecar");
+
+    let sidecar_bytes = std::fs::read(&sidecar).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({})).unwrap();
+    assert_eq!(fields(&s, id), FIELDS, "reloading cannot erase the preset diagnostics");
+    assert_eq!(s.develop_of(id).unwrap(), before);
+    assert_eq!(std::fs::read(&sidecar).unwrap(), sidecar_bytes, "a metadata read still must not auto-write");
+    assert_eq!(std::fs::read(&image).unwrap(), original_bytes);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn import_preset_and_import_defaults_report_final_merged_names() {
     for default in [false, true] {
         let dir = dir(if default { "default" } else { "import" });

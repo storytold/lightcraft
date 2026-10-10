@@ -417,6 +417,145 @@ fn reading_foreign_metadata_does_not_auto_write_the_source_sidecar() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+fn invalid_native_packets() -> Vec<String> {
+    [
+        "<lc:settings>{broken</lc:settings>",
+        "<lc:settings>{\"light\":false}</lc:settings>",
+        "<lc:settings>{\"version\":999}</lc:settings>",
+        "<lc:settings>[]</lc:settings>",
+        "<lc:settings>null</lc:settings>",
+        "<lc:settings>{}</lc:settings><lc:settings>{\"version\":999}</lc:settings>",
+        "<lc:settings>{\"version\":999,\"version\":1}</lc:settings>",
+        "<lc:settings><rdf:Seq/></lc:settings><lc:settings>{}</lc:settings>",
+        "<lc:settings rdf:parseType=\"Resource\"><lc:future>1</lc:future></lc:settings><lc:settings>{}</lc:settings>",
+        "<lc:settings/>",
+        "<lc:settings><rdf:Seq/></lc:settings>",
+        "<lc:settings rdf:parseType=\"Resource\"><lc:future>1</lc:future></lc:settings>",
+    ]
+    .into_iter()
+    .map(|native| format!(r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:lc="http://ns.lightcraft.app/lc/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="-2">{native}</rdf:Description>"#))
+    .collect()
+}
+
+#[test]
+fn invalid_native_metadata_read_and_write_preserve_saved_edits() {
+    for (i, packet) in invalid_native_packets().into_iter().enumerate() {
+        let src = temp_dir(&format!("native-invalid-read-{i}"));
+        let original = src.join("photo.png");
+        let sidecar = src.join("photo.xmp");
+        write_png(&original, 4);
+        let original_bytes = std::fs::read(&original).unwrap();
+        let mut s = Session::new().with_fs();
+        s.execute("library.import", &json!({"paths":[original]})).unwrap();
+        s.execute("develop.set", &json!({"control":"light.exposure","value":1})).unwrap();
+        std::fs::write(&sidecar, &packet).unwrap();
+        let modified = std::fs::metadata(&sidecar).unwrap().modified().unwrap();
+        let before = s.catalog.photo(only(&s)).unwrap().clone();
+        let undo_before = s.undo.len();
+        s.execute("library.xmpPreferences", &json!({"autoWrite":true})).unwrap();
+        let read = s.execute("photo.readMetadataFromFile", &json!({})).unwrap();
+        assert_eq!(read["failed"].as_array().unwrap().len(), 1, "case {i}: {read}");
+        assert!(read["read"].as_array().unwrap().is_empty());
+        assert_eq!(s.catalog.photo(before.id).unwrap().develop, before.develop);
+        assert_eq!(s.undo.len(), undo_before);
+        let saved = s.execute("photo.saveMetadataToFile", &json!({})).unwrap();
+        assert_eq!(saved["failed"].as_array().unwrap().len(), 1, "case {i}: {saved}");
+        assert!(saved["written"].as_array().unwrap().is_empty());
+        s.execute("photo.rate", &json!({"rating":5})).unwrap();
+        assert_eq!(std::fs::read_to_string(&sidecar).unwrap(), packet, "even auto-write must preserve unsupported native settings");
+        assert_eq!(std::fs::metadata(&sidecar).unwrap().modified().unwrap(), modified);
+        assert_eq!(std::fs::read(&original).unwrap(), original_bytes);
+        let _ = std::fs::remove_dir_all(src);
+    }
+}
+
+#[test]
+fn invalid_native_metadata_blocks_import_before_copy_or_move() {
+    for (i, packet) in invalid_native_packets().into_iter().enumerate() {
+        for mode in ["add", "copy", "move"] {
+            let src = temp_dir(&format!("native-invalid-import-{i}-{mode}"));
+            let original = src.join("photo.png");
+            let sidecar = src.join("photo.xmp");
+            let destination = src.join("destination");
+            std::fs::create_dir(&destination).unwrap();
+            write_png(&original, 4);
+            let original_bytes = std::fs::read(&original).unwrap();
+            std::fs::write(&sidecar, &packet).unwrap();
+            let mut s = Session::new().with_fs();
+            s.open_library(src.join("library"), false).unwrap();
+            let result = s.execute("library.import", &json!({"paths":[original],"mode":mode,"destination":destination})).unwrap();
+            assert_eq!(result["failed"].as_array().unwrap().len(), 1, "{i}/{mode}: {result}");
+            assert!(result["imported"].as_array().unwrap().is_empty());
+            assert_eq!(s.catalog.photos().count(), 0);
+            assert_eq!(std::fs::read(&original).unwrap(), original_bytes);
+            assert_eq!(std::fs::read_to_string(&sidecar).unwrap(), packet);
+            assert_eq!(std::fs::read_dir(&destination).unwrap().count(), 0);
+            s.close_library().unwrap();
+            let _ = std::fs::remove_dir_all(src);
+        }
+    }
+}
+
+#[test]
+fn invalid_native_metadata_cannot_be_shadowed_by_a_new_sidecar() {
+    for (i, alternative) in ["photo.xmp", "photo.XMP", "photo.png.xmp"].into_iter().enumerate() {
+        let src = temp_dir(&format!("native-alternate-{i}"));
+        let original = src.join("photo.png");
+        write_png(&original, 4);
+        let mut s = Session::new().with_fs();
+        s.execute("library.import", &json!({"paths":[original]})).unwrap();
+        let packet = &invalid_native_packets()[2];
+        std::fs::write(src.join(alternative), packet).unwrap();
+        let (naming, target) = if i == 2 { ("stem", "photo.xmp") } else { ("full", "photo.png.xmp") };
+        s.execute("library.xmpPreferences", &json!({"autoWrite":true,"naming":naming})).unwrap();
+        s.execute("photo.rate", &json!({"rating":5})).unwrap();
+        let r = s.execute("photo.saveMetadataToFile", &json!({})).unwrap();
+        assert_eq!(r["failed"].as_array().unwrap().len(), 1, "{r}");
+        assert!(!src.join(target).exists());
+        assert_eq!(std::fs::read_to_string(src.join(alternative)).unwrap(), *packet);
+        let _ = std::fs::remove_dir_all(src);
+    }
+
+    let src = temp_dir("native-embedded-protect");
+    let original = src.join("photo.dng");
+    std::fs::write(&original, synthetic_dng(FOREIGN)).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths":[original]})).unwrap();
+    // Model a previously catalogued file updated by a newer writer.
+    let bytes = synthetic_dng(&invalid_native_packets()[2]);
+    std::fs::write(&original, &bytes).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite":true})).unwrap();
+    s.execute("photo.rate", &json!({"rating":5})).unwrap();
+    let r = s.execute("photo.saveMetadataToFile", &json!({})).unwrap();
+    assert_eq!(r["failed"].as_array().unwrap().len(), 1, "{r}");
+    assert!(!src.join("photo.xmp").exists());
+    assert_eq!(std::fs::read(&original).unwrap(), bytes);
+    let _ = std::fs::remove_dir_all(src);
+}
+
+#[test]
+fn invalid_embedded_native_or_unreadable_sidecar_cannot_fall_back_on_import() {
+    let src = temp_dir("native-embedded-import");
+    let original = src.join("photo.dng");
+    let bytes = synthetic_dng(&invalid_native_packets()[2]);
+    std::fs::write(&original, &bytes).unwrap();
+    let mut s = Session::new().with_fs();
+    let result = s.execute("library.import", &json!({"paths":[original]})).unwrap();
+    assert_eq!(result["failed"].as_array().unwrap().len(), 1, "{result}");
+    assert_eq!(s.catalog.photos().count(), 0);
+    assert_eq!(std::fs::read(&original).unwrap(), bytes);
+
+    // An unreadable adjacent sidecar must not select otherwise valid embedded CRS.
+    std::fs::write(&original, synthetic_dng(FOREIGN)).unwrap();
+    let sidecar = src.join("photo.xmp");
+    std::fs::write(&sidecar, [0xff, 0xfe]).unwrap();
+    let result = s.execute("library.import", &json!({"paths":[original]})).unwrap();
+    assert_eq!(result["failed"].as_array().unwrap().len(), 1, "{result}");
+    assert_eq!(s.catalog.photos().count(), 0);
+    assert_eq!(std::fs::read(&sidecar).unwrap(), [0xff, 0xfe]);
+    let _ = std::fs::remove_dir_all(src);
+}
+
 #[test]
 fn reading_embedded_metadata_does_not_create_a_sidecar_with_auto_write_enabled() {
     let src = temp_dir("read-embedded-no-auto-write");

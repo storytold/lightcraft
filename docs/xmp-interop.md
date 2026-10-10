@@ -37,6 +37,11 @@ has none, the sidecar's `exif:DateTimeOriginal`, else `photoshop:DateCreated`, e
 used — on import (it then also files a copied photo in its date folder) and by `photo.readMetadataFromFile` (undoable).
 `xmp:Rating="-1"` (the XMP convention for rejected) sets the reject flag. Develop settings come from
 `lc:settings` when present (exact); otherwise from the `crs:` fields below (approximate).
+Present native settings must be one valid JSON settings object in a supported schema. Invalid, structured,
+duplicate or explicitly newer native settings cause an error; they never fall back to preserved, potentially
+older CRS edits. A failed metadata read leaves that photo's catalog settings unchanged. An unreadable or invalid
+sidecar fails that file's import before Copy or Move places it; other valid files in the batch can still import.
+Declared future develop schemas are also refused when loading catalog settings, saved versions or history.
 
 Browsing or importing a path already in the catalog keeps its stored settings. After an import-parser fix,
 previously imported photos therefore retain their earlier interpretation until explicitly reloaded. Select the
@@ -80,6 +85,11 @@ the only copy of those edits outside that application's catalog. Saving never dr
 - A sidecar that can't be read as XMP (not well-formed, not UTF-8, no `rdf:RDF`) is first copied to
   `<name>.xmp.bak-<date><time>` (`-1`, `-2`… if taken — a backup is never overwritten), then replaced. A sidecar that
   can't be read at all (permissions) is left alone and the save fails.
+- Well-formed XMP containing invalid or newer native settings is left unchanged and the save fails. This also
+  prevents creating a preferred sidecar that would hide such settings in an alternate sidecar or embedded raw
+  packet. Automatic writes obey the same guard (failures are logged); explicit Save Metadata reports the error.
+  A declared schema version is required to detect newer formats; unknown fields in the current schema retain
+  the existing ignore-on-read behavior. Older released builds do not gain these checks retroactively.
 
 Limits: LightCraft writes keywords to `dc:subject` only, so another application's `lr:hierarchicalSubject` is kept as
 it was and may still list keywords removed in LightCraft. LightCraft doesn't write `crs:`: the other application's
