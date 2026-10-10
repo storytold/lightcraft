@@ -531,6 +531,8 @@ pub struct UiState {
     #[serde(skip)]
     pub lights_out: crate::module::LightsOut,
     pub identity_plate: crate::module::IdentityPlate,
+    /// The Book module's book and view (Phase 3, `crate::book`).
+    pub book: crate::book::BookUi,
     /// What the secondary window shows, and the photo a locked loupe holds.
     pub second_mode: crate::module::SecondMode,
     pub second_locked: Option<u64>,
@@ -963,6 +965,7 @@ impl Default for UiState {
             screen_mode: Default::default(),
             lights_out: Default::default(),
             identity_plate: Default::default(),
+            book: Default::default(),
             second_mode: Default::default(),
             second_locked: None,
             second_filter: Default::default(),

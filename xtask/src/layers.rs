@@ -68,6 +68,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("export", Class::Layer(3)),
     ("layout", Class::Layer(3)),
     ("print", Class::Layer(3)),
+    ("book", Class::Layer(3)),
     ("merge", Class::Layer(3)),
     ("segment", Class::Layer(3)),
     ("engine", Class::Layer(4)),
@@ -113,6 +114,8 @@ pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     &["layout", "print"],
     // L4: the Slideshow module renders and encodes through the engine
     &["engine", "slideshow"],
+    // L3: books are laid out with the shared page model
+    &["layout", "book"],
 ];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {

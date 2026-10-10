@@ -50,6 +50,7 @@ dac-pdf = { path = "crates/pdf" }
 dac-print = { path = "crates/print" }
 dac-psd = { path = "crates/psd" }
 dac-actions = { path = "crates/actions" }
+dac-book = { path = "crates/book" }
 
 # foundation
 thiserror = "2"

@@ -47,11 +47,11 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | X. Cross-cutting behaviours (BEHAV) | 18 | 6 | 1 | 1 | 8/8 (100%) | 6/9 (67%) |
 | Y. Menus | 82 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
-| Lightroom Classic extras | 60 | 16 | 47 | 0 | — | 33/37 (89%) |
+| Lightroom Classic extras | 70 | 17 | 36 | 0 | — | 33/37 (89%) |
 | IMM. Immich integration | 4 | 0 | 6 | 0 | — | 4/6 (67%) |
-| **Total** | 428 | 51 | 90 | 27 | 192/200 (96%) | 157/173 (91%) |
+| **Total** | 438 | 52 | 79 | 27 | 192/200 (96%) | 157/173 (91%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.7%** of 569 in-scope rows — P0 98.0% of 200 · P1 93.9% of 173 · P2 48.2% of 195.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **81.5%** of 569 in-scope rows — P0 98.0% of 200 · P1 93.9% of 173 · P2 53.6% of 195.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -783,25 +783,25 @@ PLAN.md §2 carry the status of that survey ("unverified" where it said so) unti
 | LRC-MAP-TRACKLOG | GPS track logs | P2 | ✅ | `cmd:photo.autoTagTracklog`, `cmd:photo.tagFromTracklog`, `crates/meta/src/gpx.rs` | Photo ▸ Auto-Tag from Tracklog…: a GPX 1.0 / 1.1 track log sets the GPS of the selected photos by capture time — interpolated between the points of a track segment, else the nearest point within `maxGap` (10 min); never across segment breaks. The camera's time zone comes from the photo (Exif offset) or is asked for; photos that already have a location keep it unless `replace`; `dryRun` previews; one undo step. Map module: GPX/KML/GeoJSON tracks drawn, Auto-Tag Selected Photos, offset from one photo at a known point (`cmd:map.trackOffset`) |
 | LRC-MAP-FILTER | Location filter bar | P2 | ✅ | `cmd:map.filter`, `cmd:map.pins` | Visible on Map / Tagged / Untagged / by saved location, with counts |
 | LRC-MAP-REVGEO | Reverse geocoding | P2 | ✅ | `cmd:map.reverseGeocode`, `cmd:map.geonamesDownload`, `cmd:map.geocodeStatus`, `crates/geo/src/geocode.rs` | opt-in (off by default): offline GeoNames cities15000 (CC-BY 4.0, downloaded on request, attributed) or a Nominatim-compatible endpoint (consent required, 1 request/s); fills Sublocation/City/State/Country (the ISO code is returned but the catalog has no field for it) |
-| LRC-BOOK-SETTINGS | Book settings | P2 | ⬜ | | |
-| LRC-BOOK-AUTOLAYOUT | Book auto layout | P2 | ⬜ | | |
-| LRC-BOOK-PAGE | Book pages & templates | P2 | ⬜ | | |
-| LRC-BOOK-GUIDES | Book guides | P2 | ⬜ | | |
-| LRC-BOOK-CELL | Book cell padding | P2 | ⬜ | | |
-| LRC-BOOK-TEXT | Book photo/page text | P2 | ⬜ | | |
-| LRC-BOOK-TYPE | Book typography | P2 | ⬜ | | |
-| LRC-BOOK-BG | Book backgrounds | P2 | ⬜ | | |
-| LRC-BOOK-VIEWS | Book views | P2 | ⬜ | | |
-| LRC-BOOK-EXPORT | Book export (PDF/JPEG) | P2 | ⬜ | | |
-| LRC-SS-TEMPLATES | Slideshow templates | P2 | ✅ | `cmd:slideshow.applyTemplate`, `cmd:slideshow.saveTemplate`, `cmd:slideshow.deleteTemplate` | P3.4: Template Browser with 6 built-in templates (own designs) plus user templates saved in `ui.json`; `crates/ui-egui/src/slideshow_ui.rs` |
-| LRC-SS-OPTIONS | Slideshow options | P2 | ✅ | `cmd:slideshow.set` | P3.4: zoom to fill, stroke border (width, colour), cast shadow (opacity, offset, radius, angle); `crates/slideshow/src/compose.rs`; `crates/ui-egui/src/slideshow_ui.rs` |
-| LRC-SS-LAYOUT | Slideshow layout | P2 | ✅ | `cmd:slideshow.set` | P3.4: guides, margins linked or per side, aspect preview (screen, 16:9, 4:3); `crates/ui-egui/src/slideshow_ui.rs` |
-| LRC-SS-OVERLAYS | Slideshow overlays | P2 | 🟡 | `cmd:slideshow.set` | P3.4: identity plate (text), rating stars, text watermark, text overlays with tokens anchored to frame or photo, text shadow. Missing: graphic identity plate, dragging overlays; `crates/ui-egui/src/slideshow_ui.rs` |
-| LRC-SS-BACKDROP | Slideshow backdrop | P2 | 🟡 | `cmd:slideshow.set` | P3.4: colour, colour wash with angle/opacity, background image with opacity (the image is drawn in export only; the live preview shows colour and wash); `crates/ui-egui/src/slideshow_ui.rs` |
-| LRC-SS-TITLES | Slideshow titles | P2 | ✅ | `cmd:slideshow.set` | P3.4: intro and ending screens with colour, text and identity plate; `crates/ui-egui/src/slideshow_ui.rs` |
-| LRC-SS-MUSIC | Slideshow music | P2 | 🟡 | `cmd:slideshow.addMusic`, `cmd:slideshow.clearMusic` | P3.4: several tracks, fit slide durations to music, volume and balance; decodes WAV/FLAC/Ogg Vorbis (hound/claxon/lewton; symphonia is MPL-2.0, rejected). No MP3/AAC. Sound output only with the `audio-out` feature of `dac-slideshow` (cpal, links ALSA on Linux), off by default; `crates/ui-egui/src/slideshow_ui.rs` |
-| LRC-SS-PLAYBACK | Slideshow playback | P2 | ✅ | `cmd:slideshow.play`, `cmd:slideshow.preview`, `cmd:slideshow.pause`, `cmd:slideshow.next`, `cmd:slideshow.previous`, `cmd:slideshow.stop` | P3.4: manual or automatic, slide/fade durations, colour fade, random order, repeat, pan and zoom with amount; full screen (Enter) or preview in place (Alt+Enter); Space pauses, arrows step, Esc ends. Playback draws thumbnails (draft flag stored only); `crates/ui-egui/src/slideshow_ui.rs` |
-| LRC-SS-EXPORT | Slideshow export | P2 | 🟡 | `cmd:slideshow.exportJpeg` | P3.4: JPEG sequence (one composed slide per photo plus title screens) through the engine encoder. PDF and video still to do; `crates/ui-egui/src/slideshow_ui.rs` |
+| LRC-BOOK-SETTINGS | Book settings | P2 | ✅ | `cmd:book.settings` | P3.5: PDF/JPEG, 6 sizes + custom, cover type, paper note, JPEG quality, resolution, sharpening, bleed (`crates/book/src/model.rs`); colour profile sRGB only |
+| LRC-BOOK-AUTOLAYOUT | Book auto layout | P2 | ✅ | `cmd:book.autoLayout`, `cmd:book.clearLayout` | P3.5: presets (one per page, left blank, with text, fill, two, four) |
+| LRC-BOOK-PAGE | Book pages & templates | P2 | ✅ | `cmd:book.addPage`, `cmd:book.template`, `cmd:book.favorite`, `cmd:book.pageNumbers` | P3.5: 26 own templates by photo count, favourites, blank pages, page numbers (position, hide, apply to all) |
+| LRC-BOOK-GUIDES | Book guides | P2 | ✅ | `cmd:book.guides` | P3.5: bleed, text safe area, photo cells, filler text |
+| LRC-BOOK-CELL | Book cell padding | P2 | ✅ | `cmd:book.cell`, `cmd:book.swap` | P3.5: padding linked/per side, zoom, pan (Alt-drag), fill/fit, drag to swap, drag from filmstrip |
+| LRC-BOOK-TEXT | Book photo/page text | P2 | ✅ | `cmd:book.photoText`, `cmd:book.pageText`, `cmd:book.text` | P3.5: tokens or custom text, above/below/over with offset; page text top/bottom |
+| LRC-BOOK-TYPE | Book typography | P2 | 🟡 | `cmd:book.type`, `cmd:book.textPreset` | P3.5: font, style, size, opacity, colour, tracking, baseline, leading, kerning mode, columns, gutter, alignment, presets via dac-text; no per-pair manual kerning; PDF text ignores opacity |
+| LRC-BOOK-BG | Book backgrounds | P2 | ✅ | `cmd:book.background` | P3.5: colour, photo with opacity, our own graphics, global or per page |
+| LRC-BOOK-VIEWS | Book views | P2 | ✅ | `cmd:book.view` | P3.5: multi-page, spread, single, zoomed |
+| LRC-BOOK-EXPORT | Book export (PDF/JPEG) | P2 | ✅ | `cmd:book.export` | P3.5: one PDF (embedded subset fonts, sRGB ICC, trim/bleed boxes) or a JPEG per page |
+| LRC-SS-TEMPLATES | Slideshow templates | P2 | ⬜ | | |
+| LRC-SS-OPTIONS | Slideshow options | P2 | ⬜ | | |
+| LRC-SS-LAYOUT | Slideshow layout | P2 | ⬜ | | |
+| LRC-SS-OVERLAYS | Slideshow overlays | P2 | ⬜ | | |
+| LRC-SS-BACKDROP | Slideshow backdrop | P2 | ⬜ | | |
+| LRC-SS-TITLES | Slideshow titles | P2 | ⬜ | | |
+| LRC-SS-MUSIC | Slideshow music | P2 | ⬜ | | |
+| LRC-SS-PLAYBACK | Slideshow playback | P2 | ⬜ | | |
+| LRC-SS-EXPORT | Slideshow export | P2 | ⬜ | | |
 | LRC-PRINT-LAYOUTSTYLE | Print layout styles | P2 | 🟡 | `cmd:dialog.contactSheet`, `cmd:export.contactSheet`, `crates/engine/src/contact_sheet.rs` | paginated contact sheets; single-image/custom package layouts missing |
 | LRC-PRINT-IMAGESETTINGS | Print image settings | P2 | ⬜ | | |
 | LRC-PRINT-LAYOUT | Print layout | P2 | 🟡 | `cmd:export.contactSheet`, `crates/ui-egui/src/panels/dialogs.rs` | A4/Letter, portrait/landscape, 1–8 columns and 1–10 rows; fixed margins and spacing |
@@ -838,8 +838,8 @@ PLAN.md §2 carry the status of that survey ("unverified" where it said so) unti
 | LRC-LIB-LAYERS | Open as layers in an external editor (layered round trip) | P2 | ✅ | `cmd:photo.openAsLayers`, `cmd:photo.editIn`, `cmd:editIn.savePreset`, `crates/engine/src/cmd/edit_in.rs` | layered 16-bit PSD (dac-psd, PhotoCraft's writer) from the selection, stacked; Edit In presets (app, args, TIFF/PSD, colour space, bit depth, copy-with-adjustments / copy / original, naming, stack) and PhotoCraft's control channel; no preset editor dialog yet (commands only) |
 | LRC-DEV-HISTOGRAM-DRAG | Drag on the histogram to adjust tone regions | P2 | ⬜ |  |  |
 | LRC-MAP-PINS | Map pins, clusters and hover previews | P2 | ✅ | `cmd:map.pins`, `crates/geo/src/cluster.rs`, `crates/ui-egui/src/map/view.rs` | grid clusters per zoom with counts, selected pins highlighted, click selects, hover shows thumbnail + count |
-| LRC-BOOK-SAVED | Saved books | P2 | ⬜ |  | special collection type, Phase 3 |
-| LRC-SS-SAVED | Saved slideshows | P2 | ✅ | `cmd:slideshow.saveSlideshow`, `cmd:slideshow.openSaved`, `cmd:slideshow.deleteSaved` | P3.4: settings plus photo list, kept in `ui.json` (not yet catalog collections); `crates/ui-egui/src/slideshow_ui.rs` |
+| LRC-BOOK-SAVED | Saved books | P2 | ✅ | `cmd:book.save`, `cmd:book.open`, `crates/book/src/layoutdoc.rs` | P3.5: saved as a book collection (saved creation, layout document) plus a lossless book file in the settings folder; opening a collection uses the file when present, else rebuilds the book from the layout |
+| LRC-SS-SAVED | Saved slideshows | P2 | ⬜ |  | special collection type, Phase 3 |
 | LRC-PRINT-PAGESETUP | Page setup, printer settings, print one copy | P2 | ⬜ |  | Phase 3 |
 | LRC-WEB-SAVED | Saved web galleries | P2 | ⬜ |  | special collection type, Phase 3 |
 | LRC-EXP-EMAIL | Email photos | P2 | ⬜ |  | low priority |
