@@ -233,5 +233,12 @@
   "{n} keywords imported": "Импортировано ключевых слов: {n}",
   "{n} keywords removed": "Удалено ключевых слов: {n}",
   "Only {} keys": "Только клавиши модуля {}",
-  "{} keys": "Клавиши модуля {}"
+  "{} keys": "Клавиши модуля {}",
+  "{done} of {total}": "{done} из {total}",
+  "{done} of {total} MB": "{done} из {total} МБ",
+  "{pct} %": "{pct} %",
+  "+{n} more": "ещё {n}",
+  "1 task is still running: {names}. Quitting stops it.": "Ещё выполняется задача: {names}. Выход прервёт её.",
+  "{n} tasks are still running: {names}. Quitting stops them.": "Ещё выполняется задач: {n} — {names}. Выход прервёт их.",
+  "{what} merge cancelled": "{what}: слияние отменено"
 }

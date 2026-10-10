@@ -1,7 +1,7 @@
 //! Export as Catalog / Import from Another Catalog.
 //!
 //! **Export** writes a subset of the library (photos with their settings, History, Versions,
-//! metadata, remote links and, optionally, their previews index entries and original files) as a
+//! metadata, remote links, the keyword list, the records of their folders and, optionally, their previews index entries and original files) as a
 //! new catalog folder, with the albums, smart albums and stacks that concern them.
 //!
 //! **Import** reads another catalog without modifying it ([`load_readonly`]), matches its photos
@@ -18,6 +18,7 @@ use serde::Serialize;
 use crate::db::{CatalogDb, DB_FILE};
 use crate::journal::{LOG, SNAPSHOT, decode_record};
 use crate::library;
+use crate::query::folder_within;
 use crate::store::{MemStore, Store};
 use crate::{Album, AlbumId, Catalog, CatalogError, Journal, Op, Photo, PhotoId, Result, Source, Stack};
 
@@ -112,6 +113,19 @@ pub fn subset(cat: &Catalog, opts: &ExportOptions) -> Catalog {
         out.previews = cat.previews.iter().filter(|(id, _)| keep.contains(id)).map(|(k, v)| (*k, v.clone())).collect();
     }
     out.label_names = cat.label_names.clone();
+    // the keyword list is the library's vocabulary: all of it goes along, like the label names
+    out.keyword_list = cat.keyword_list.clone();
+    // what the library keeps about the folders the exported photos are in (and those above them)
+    let files: Vec<&str> = out
+        .photos
+        .values()
+        .filter_map(|p| match &p.source {
+            Source::File { path } => Some(path.as_str()),
+            _ => None,
+        })
+        .collect();
+    out.folder_records =
+        cat.folder_records.iter().filter(|(k, _)| files.iter().any(|f| folder_within(f, k))).map(|(k, r)| (k.clone(), r.clone())).collect();
     out.saved_locations = cat.saved_locations.clone();
     out.next_photo = cat.next_photo;
     out.next_album = cat.next_album;
@@ -397,6 +411,17 @@ impl ImportPlan {
                     here_albums.insert(path, id);
                     ops.push(Op::AddAlbum { album: n });
                 }
+            }
+        }
+        // keywords and folder records this library doesn't have yet (what it says already wins)
+        for l in other.keyword_list.values() {
+            if cat.keyword_info(&l.path).is_none() {
+                ops.push(Op::SetKeyword { path: l.path.clone(), info: Some(l.info.clone()) });
+            }
+        }
+        for (folder, r) in &other.folder_records {
+            if cat.folder_record(folder).is_none() {
+                ops.push(Op::SetFolderRecord { folder: folder.clone(), record: Some(r.clone()) });
             }
         }
         // stacks made only of new photos

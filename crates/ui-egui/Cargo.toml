@@ -37,6 +37,7 @@ image = { workspace = true }
 dac-denoise = { workspace = true, features = ["runtime"] }
 dac-codecs = { workspace = true }
 dac-faces = { workspace = true }
+dac-merge = { workspace = true }
 
 [build-dependencies]
 dac-brand = { workspace = true }

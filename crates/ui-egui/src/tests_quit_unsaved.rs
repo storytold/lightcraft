@@ -79,7 +79,7 @@ fn quitting_with_unsaved_changes_asks_first() {
     assert_eq!(r["ok"], false, "{r}");
     assert!(!crate::panels::notices::may_close(&mut h.app), "retried, still failing: ask");
     h.step();
-    let prompt = h.app.quit_prompt.clone().unwrap();
+    let prompt = h.app.quit_prompt.clone().unwrap().text().to_string();
     assert!(prompt.contains("1 change couldn't be written to disk") && prompt.contains("drive unplugged"), "{prompt}");
     for b in ["button:quitRetry", "button:quitAnyway", "button:quitCancel"] {
         assert!(has(&h, b), "{b}");
