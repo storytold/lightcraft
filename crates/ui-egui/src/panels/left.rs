@@ -260,6 +260,8 @@ fn library_columns(app: &mut DacApp, ui: &mut egui::Ui, viewport: Rect, total: u
                     super::collections::footer(app, ui);
                 }
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            PanelId::Publish => super::publish::show(app, ui, side),
             _ => {}
         }
     }

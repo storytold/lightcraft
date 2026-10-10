@@ -31,12 +31,16 @@ pub mod people;
 pub mod person;
 pub mod presets;
 pub mod profiles;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod publish;
 pub mod quick_develop;
 pub mod right;
 pub mod rules_editor;
 pub mod second;
 pub mod settings;
 pub mod strip;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod tether_bar;
 pub mod topbar;
 pub mod unnamed;
 
