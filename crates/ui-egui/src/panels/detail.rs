@@ -2030,7 +2030,12 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                     p.galley(pos2(br.min.x + 17.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
                 }
             }
-            if resp.clicked() {
+            if resp.clicked() && app.ui.view == crate::state::ViewMode::Compare {
+                // Compare: the clicked photo replaces the active side (or swaps with the other one)
+                if let Err(e) = app.run("compare.set", json!({"id": id.0})) {
+                    app.toast(ui.ctx(), e);
+                }
+            } else if resp.clicked() {
                 let m = ui.input(|i| i.modifiers);
                 let mode = if m.command {
                     "toggle"
