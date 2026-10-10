@@ -233,5 +233,12 @@
   "{n} keywords imported": "已导入 {n} 个关键字",
   "{n} keywords removed": "已移除 {n} 个关键字",
   "Only {} keys": "仅显示 {} 的按键",
-  "{} keys": "{} 按键"
+  "{} keys": "{} 按键",
+  "{done} of {total}": "{done}／{total}",
+  "{done} of {total} MB": "{done}／{total} MB",
+  "{pct} %": "{pct}%",
+  "+{n} more": "还有 {n} 项",
+  "1 task is still running: {names}. Quitting stops it.": "仍有 1 个任务在运行：{names}。退出将停止它。",
+  "{n} tasks are still running: {names}. Quitting stops them.": "仍有 {n} 个任务在运行：{names}。退出将停止它们。",
+  "{what} merge cancelled": "已取消 {what} 合并"
 }

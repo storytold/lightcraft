@@ -123,7 +123,8 @@ fn import_reads_files_off_the_ui_thread_and_can_be_cancelled() {
     let dir = std::env::temp_dir().join(format!("lc-ui-slow-import-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let n = 40;
+    // enough files that the import is still running when its activity row shows (after 0.5 s)
+    let n = 120;
     for i in 0..n {
         std::fs::write(dir.join(format!("IMG_{i:03}.jpg")), format!("not really a jpeg {i}")).unwrap();
     }
@@ -157,8 +158,11 @@ fn import_reads_files_off_the_ui_thread_and_can_be_cancelled() {
     assert!(h.app.import.is_some(), "still importing");
     let status = h.app.import.as_ref().map(crate::import::ImportTask::status).unwrap_or_default();
     assert!(status["total"].as_u64().unwrap_or(0) >= 8, "{status}");
-    // Cancel: the files being read finish, nothing new starts
-    let r = h.request("ui.clickWidget", json!({"id": "button:importCancel"}), Duration::from_secs(10));
+    // Cancel (the ✕ of its row in the activity stack): the files being read finish, nothing new starts
+    let id = h.app.session.activity.list().first().map(|t| t.id).expect("an import row");
+    let cross = format!("activity:cancel:{id}");
+    assert!(h.step_until(Duration::from_secs(10), |h| h.app.widgets.iter().any(|(w, _)| *w == cross)), "the row shows");
+    let r = h.request("ui.clickWidget", json!({"id": cross}), Duration::from_secs(10));
     assert_eq!(r["ok"], true, "{r}");
     let t0 = Instant::now();
     while h.app.import.is_some() && t0.elapsed() < Duration::from_secs(60) {
