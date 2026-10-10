@@ -1390,6 +1390,7 @@ dependencies = [
  "dac-hash",
  "dac-heif",
  "dac-immich",
+ "dac-layout",
  "dac-merge",
  "dac-meta",
  "dac-pipeline",
