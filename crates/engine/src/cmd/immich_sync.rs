@@ -114,9 +114,8 @@ fn save_state(s: &mut Session, account: &str) -> std::result::Result<(), String>
     if let Some(d) = path.parent() {
         std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
     }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))
+    // temp file + rename; a failed write (full disk) removes the temp file
+    dac_catalog::safe_file::write_atomic(&path, &json).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 fn config_of(s: &mut Session, account: &str) -> SyncConfig {

@@ -19,5 +19,6 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+dac-fuzzkit = { workspace = true }
 lopdf = { version = "0.45", default-features = false }
 dac-brand = { workspace = true }

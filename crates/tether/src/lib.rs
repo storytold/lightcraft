@@ -71,6 +71,23 @@ pub struct StudioSession {
     seen: BTreeMap<String, u64>,
 }
 
+/// Replace `path` with `body` through a temp file beside it (`write` fills it: a seam for tests
+/// that simulate a full disk). On any failure the temp file is removed and `path` is untouched.
+pub(crate) fn write_atomic(path: &Path, body: &[u8], write: &mut dyn FnMut(&mut std::fs::File, &[u8]) -> std::io::Result<()>) -> Result<(), String> {
+    let tmp = path.with_extension("json.tmp");
+    let r = (|| {
+        let mut f = std::fs::File::create(&tmp)?;
+        write(&mut f, body)?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, path)
+    })();
+    r.map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("{}: {e}", path.display())
+    })
+}
+
 /// A name usable as a folder or in a file name: separators, braces and control characters become
 /// `_`; never empty.
 pub fn safe_session_name(s: &str) -> String {
@@ -114,9 +131,7 @@ impl StudioSession {
     pub fn save(session: Option<&StudioSession>, dir: &Path) -> Result<(), String> {
         let path = dir.join(FILE);
         let body = serde_json::to_vec_pretty(&session).map_err(|e| e.to_string())?;
-        let tmp = dir.join(format!("{FILE}.tmp"));
-        std::fs::write(&tmp, &body).map_err(|e| format!("{}: {e}", tmp.display()))?;
-        std::fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))
+        write_atomic(&path, &body, &mut |f, b| std::io::Write::write_all(f, b))
     }
 
     /// The files of `listing` ready to import: not taken yet, not empty, and the same size as at

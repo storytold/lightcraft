@@ -45,3 +45,5 @@ pub use types::{Asset, MIN_VERSION, ServerVersion};
 
 #[cfg(test)]
 mod tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_robust;

@@ -333,8 +333,11 @@ pub fn save(path: &Path, actions: &[Action]) -> Result<()> {
         std::fs::create_dir_all(dir).map_err(|e| format!("can't create {}: {e}", dir.display()))?;
     }
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &bytes).map_err(|e| format!("can't write {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("can't write {}: {e}", path.display()))
+    // a failed write (full disk) must not leave a partial temp file behind
+    std::fs::write(&tmp, &bytes).and_then(|()| std::fs::rename(&tmp, path)).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("can't write {}: {e}", path.display())
+    })
 }
 
 /// A recording in progress.

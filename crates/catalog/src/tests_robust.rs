@@ -17,6 +17,16 @@ fn sample() -> (Catalog, Vec<Op>) {
     let m = MemStore::new();
     let (mut j, mut c, _) = Journal::open(Box::new(m.clone())).unwrap();
     fill(&mut j, &mut c, 8);
+    // format 7: a saved creation (its layout document is opaque JSON to the catalog)
+    let id = c.alloc_album_id();
+    let mut album = Album::new(id, "Book");
+    album.photos = c.photos().map(|p| p.id).take(2).collect();
+    let doc = r#"{"version":1,"kind":"book","page":{"size":{"w":612,"h":792}},"pages":[{"cells":[{"rect":{"x":0,"y":0,"w":1,"h":1},"photo":"1"}]}]}"#;
+    let ops = vec![Op::AddAlbum { album }, Op::SetAlbumCreation { id, creation: Some(Creation { kind: "book".into(), document: doc.into() }) }];
+    for op in &ops {
+        c.apply(op.clone()).unwrap();
+    }
+    j.append(&ops).unwrap();
     let log = String::from_utf8(m.get(LOG).unwrap()).unwrap();
     let ops = log.lines().filter_map(decode_record).map(|(_, op)| op).collect();
     (c, ops)
@@ -333,4 +343,70 @@ fn full_disk_during_settings_backup_and_catalog_export() {
         assert!(transfer::load_readonly(&rep.entry).is_ok());
     }
     drop(j.backup(&c, &s.path().join("bk"), 1));
+}
+
+/// Format 7: saved creations with hostile kinds and documents are refused or stored opaquely,
+/// survive the v4 store and a reopen, never a panic.
+#[test]
+fn hostile_creations_never_panic() {
+    let s = v4_library("robust-creation");
+    let (mut j, mut c, _) = open_dir(s.path()).unwrap();
+    let folder = c.albums().find(|a| a.folder).map(|a| a.id);
+    let id = c.alloc_album_id();
+    let add = Op::AddAlbum { album: Album::new(id, "C") };
+    c.apply(add.clone()).unwrap();
+    j.append(&[add]).unwrap();
+    let big = "x".repeat(MAX_CREATION_BYTES + 1);
+    let deep = "[".repeat(10_000);
+    let docs = ["", "{", "null", "\u{0}", big.as_str(), deep.as_str()];
+    for kind in ["book", "print", "slideshow", "web", "", "BOOK", "../x"] {
+        for doc in docs {
+            for target in [Some(id), folder, Some(AlbumId(u64::MAX))].into_iter().flatten() {
+                let op = Op::SetAlbumCreation { id: target, creation: Some(Creation { kind: kind.into(), document: doc.to_string() }) };
+                if c.apply(op.clone()).is_ok() {
+                    j.append(&[op]).unwrap();
+                }
+            }
+        }
+    }
+    j.snapshot(&c).unwrap();
+    drop(j);
+    let (_, c2, _) = open_dir(s.path()).unwrap();
+    assert_eq!(c2.album(id).and_then(|a| a.creation.clone()), c.album(id).and_then(|a| a.creation.clone()));
+}
+
+/// Regression (found by `log_records_with_valid_crcs_never_panic`): an op adding a photo, album
+/// or stack with the largest id overflowed the next-id counter (a panic in debug builds, a
+/// wrapped counter and colliding ids in release). It is refused now.
+#[test]
+fn largest_ids_are_refused_not_overflowed() {
+    let mut c = Catalog::new();
+    let p = Photo::new(PhotoId(u64::MAX), Source::File { path: "/x.jpg".into() }, "x.jpg", "JPEG", 2, 2, "2026-01-01");
+    assert!(matches!(c.apply(Op::AddPhoto { photo: Box::new(p) }), Err(CatalogError::Invalid(_))));
+    assert!(matches!(c.apply(Op::AddAlbum { album: Album::new(AlbumId(u64::MAX), "a") }), Err(CatalogError::Invalid(_))));
+    let id = c.alloc_photo_id();
+    let p = Photo::new(id, Source::File { path: "/y.jpg".into() }, "y.jpg", "JPEG", 2, 2, "2026-01-01");
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let stack = Stack { id: StackId(u64::MAX), photos: vec![id], collapsed: false };
+    assert!(c.apply(Op::AddStack { stack }).is_err());
+    // the largest id below the limit still works, and the counter saturates instead of wrapping
+    c.apply(Op::AddAlbum { album: Album::new(AlbumId(u64::MAX - 1), "b") }).unwrap();
+    assert_eq!(c.alloc_album_id(), AlbumId(u64::MAX));
+}
+
+/// Regression (found by `snapshots_of_every_format_never_panic`): a snapshot claiming the last
+/// op sequence number made the next append overflow it. The append is an error now and the
+/// library is left as it was.
+#[test]
+fn exhausted_sequence_is_an_error() {
+    let (c, _) = sample();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, snap_file(VERSION, u64::MAX, &c).into_bytes());
+    let (mut j, mut c, _) = Journal::open(Box::new(m.clone())).unwrap();
+    let id = c.alloc_photo_id();
+    let op = Op::AddPhoto { photo: Box::new(Photo::new(id, Source::File { path: "/z.jpg".into() }, "z.jpg", "JPEG", 2, 2, "2026-01-01")) };
+    c.apply(op.clone()).unwrap();
+    assert!(matches!(j.append(&[op]), Err(CatalogError::Corrupt(_))));
+    drop(j);
+    assert!(Journal::open(Box::new(m)).is_ok());
 }

@@ -88,9 +88,9 @@ fn save_links(s: &Session, account: &str, l: &AlbumLinks) -> std::result::Result
     if let Some(d) = p.parent() {
         std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
     }
-    let tmp = p.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec(l).map_err(|e| e.to_string())?).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, &p).map_err(|e| format!("{}: {e}", p.display()))
+    // temp file + rename; a failed write (full disk) removes the temp file
+    let body = serde_json::to_vec(l).map_err(|e| e.to_string())?;
+    dac_catalog::safe_file::write_atomic(&p, &body).map_err(|e| format!("{}: {e}", p.display()))
 }
 
 /// The set three-way merge: kept when both have it, or one side added it since `base`.

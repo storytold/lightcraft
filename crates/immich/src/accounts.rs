@@ -101,8 +101,7 @@ impl Accounts {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, json).map_err(|e| format!("{}: {e}", tmp.display()))?;
-        std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
+        // temp file + sync + rename; a failed write (full disk) removes the temp file
+        dac_catalog::safe_file::write_atomic(path, &json).map_err(|e| format!("{}: {e}", path.display()))
     }
 }
