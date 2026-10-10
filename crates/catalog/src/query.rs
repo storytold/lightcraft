@@ -344,7 +344,7 @@ impl Filter {
 }
 
 impl Catalog {
-    /// Photos matching `filter`, in `sort` order (ties broken by id for stability).
+    /// Photos matching `filter`, in `sort` order (ties broken by file name, then id).
     pub fn query(&self, filter: &Filter, sort: &Sort) -> Vec<PhotoId> {
         let root = filter.library_root();
         let mut v: Vec<&Photo> = self.photos().map(|p| p.as_ref()).filter(|p| filter.matches_in(p, self, root.as_deref())).collect();
@@ -358,6 +358,9 @@ impl Catalog {
                 SortKey::FileSize => a.file_size.cmp(&b.file_size),
                 SortKey::Random => shuffle_rank(sort.seed, a.id).cmp(&shuffle_rank(sort.seed, b.id)),
             }
+            // Ties (one import batch, a burst within a second) in file name order, which is the
+            // order cameras number them; ids are random, so they only make the order stable.
+            .then_with(|| a.file_name.to_lowercase().cmp(&b.file_name.to_lowercase()))
             .then(a.id.cmp(&b.id));
             if sort.ascending { o } else { o.reverse() }
         });
