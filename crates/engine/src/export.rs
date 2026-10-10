@@ -605,6 +605,10 @@ pub struct ExportOptions {
     /// not applied), AVIF as 10-bit Rec. 2020 PQ, 32-bit float TIFF with the highlights above SDR
     /// white kept. Other formats, and photos without an HDR edit, are SDR.
     pub hdr: bool,
+    /// After the export, add the files written to Apple Photos (macOS only; see [`AfterExport`]).
+    pub add_to_photos: bool,
+    /// The Photos album they go into, made when missing (empty = none).
+    pub photos_album: String,
 }
 
 impl Default for ExportOptions {
@@ -629,6 +633,8 @@ impl Default for ExportOptions {
             color_space: OutputSpace::Srgb,
             bit_depth: None,
             hdr: false,
+            add_to_photos: false,
+            photos_album: String::new(),
         }
     }
 }
@@ -665,7 +671,15 @@ pub const OPTION_PARAMS: &[&str] = &[
     "colorSpace",
     "bitDepth",
     "hdr",
+    "addToPhotos",
+    "photosAlbum",
 ];
+
+/// Why an export can't add its files to Apple Photos on this platform (`None`: it can, when the
+/// session has the runner; see [`crate::Session::after_export`]).
+pub fn apple_photos_unsupported() -> Option<&'static str> {
+    (!cfg!(target_os = "macos")).then_some("Apple Photos is only available on macOS")
+}
 
 /// The keys of a `watermark` object ([`Watermark`], camelCase).
 pub const WATERMARK_PARAMS: &[&str] = &["text", "vertical", "size", "opacity", "anchor", "inset", "color", "shadow", "image", "imageWidth"];
@@ -799,6 +813,18 @@ impl ExportOptions {
                 "dontEnlarge" | "removeLocation" | "background" | "hdr" => {
                     boolean(k, v)?;
                 }
+                "addToPhotos" => {
+                    if boolean(k, v)?
+                        && let Some(why) = apple_photos_unsupported()
+                    {
+                        return Err(bad(format!("`{k}`: {why}")));
+                    }
+                }
+                "photosAlbum" => {
+                    if string(cmd, k, v)?.contains('\0') {
+                        return Err(bad(format!("`{k}` can't contain a NUL character")));
+                    }
+                }
                 "naming" | "subfolder" | "path" | "dir" | "preset" => {
                     string(cmd, k, v)?;
                 }
@@ -884,7 +910,8 @@ impl ExportOptions {
     }
 
     /// Read options from command params (`format`, `quality`, `limitKb`, `sharpen`, `sharpenAmount`,
-    /// `naming`, `metadata`, `removeLocation`, `watermark`, `colorSpace`, `bitDepth`, `ppi`) and the
+    /// `naming`, `metadata`, `removeLocation`, `watermark`, `colorSpace`, `bitDepth`, `ppi`,
+    /// `addToPhotos`, `photosAlbum`) and the
     /// size: one of `longEdge`, `shortEdge`, `width`, `height` (both = fit inside W × H),
     /// `megapixels`, `percent` (absent or 0 = full size), or a [`Resize`] object as `resize`; plus
     /// `dontEnlarge` (default true).
@@ -930,6 +957,8 @@ impl ExportOptions {
             color_space: s("colorSpace").and_then(OutputSpace::parse).unwrap_or(d.color_space),
             bit_depth: u("bitDepth").filter(|b| matches!(b, 8 | 10 | 16 | 32)).map(|b| b as u8),
             hdr: p.get("hdr").and_then(Value::as_bool).unwrap_or(d.hdr),
+            add_to_photos: p.get("addToPhotos").and_then(Value::as_bool).unwrap_or(d.add_to_photos),
+            photos_album: s("photosAlbum").map_or(d.photos_album, |a| a.trim().to_string()),
         }
     }
 
@@ -1545,6 +1574,104 @@ pub enum DngCompression {
 pub struct Destination {
     pub dir: String,
     pub exact: Option<String>,
+}
+
+/// What happens after an export has written its files (Lightroom's Post-Processing): nothing, or
+/// adding them to Apple Photos ([`ExportOptions::add_to_photos`]). Made by
+/// [`crate::Session::after_export`] before the export starts, so an export asking for something
+/// this session can't do fails before writing anything; for Photos it holds the import slot
+/// (a [`crate::apple_photos::Reservation`]) until the files are handed over, and frees it when
+/// dropped unused (the export failed or never ran). `Send`: a background export takes it to its
+/// worker.
+#[derive(Default)]
+pub struct AfterExport {
+    #[cfg(not(target_arch = "wasm32"))]
+    apple_photos: Option<crate::apple_photos::Reservation>,
+}
+
+impl AfterExport {
+    /// Add the files to Apple Photos with `runner`, into `album` when it isn't blank, reserving
+    /// the import slot of `imports` now. (Front ends get this from
+    /// [`crate::Session::after_export`], which checks the platform first.)
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn apple_photos(runner: crate::apple_photos::Runner, album: &str, imports: &crate::apple_photos::Imports) -> Result<Self, String> {
+        Ok(Self { apple_photos: Some(imports.reserve(runner, album)?) })
+    }
+
+    /// Nothing to do.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn is_none(&self) -> bool {
+        self.apple_photos.is_none()
+    }
+
+    /// Nothing to do.
+    #[cfg(target_arch = "wasm32")]
+    pub fn is_none(&self) -> bool {
+        true
+    }
+
+    /// Do it now for an export's per-photo results ([`run_batch`]'s: only the files written
+    /// count), waiting for Photos: for a worker thread (the app's background export) or a caller
+    /// without a window (MCP, lightcraft-cli). `None` when there was nothing to do, else the
+    /// outcome to report as the export's `applePhotos`: the finished job (`{job, running: false,
+    /// requested, album}` with `{imported, ids, warning?}`, `{error}`, or `{skipped}` when the
+    /// export was cancelled or wrote nothing). Never fails the export: its files are written
+    /// either way.
+    pub fn run(self, files: &[serde_json::Value], cancelled: bool) -> Option<serde_json::Value> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(r) = self.apple_photos {
+            return Some(r.run(files, cancelled));
+        }
+        let _ = (files, cancelled);
+        None
+    }
+
+    /// Like [`AfterExport::run`], without waiting: Photos works on a worker thread and the
+    /// outcome is the running job (`{job, running: true, requested, album}`; its result comes
+    /// from `export.photosImports`, and the desktop app announces it). For a caller on the UI
+    /// thread, which must not wait minutes for Photos.
+    pub fn start(self, files: &[serde_json::Value]) -> Option<serde_json::Value> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(r) = self.apple_photos {
+            return Some(r.start(files));
+        }
+        let _ = files;
+        None
+    }
+
+    /// [`AfterExport::start`] where the session answers on a UI thread
+    /// ([`crate::Session::apple_photos_background`]), else [`AfterExport::run`].
+    pub fn finish(self, s: &crate::Session, files: &[serde_json::Value]) -> Option<serde_json::Value> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if s.apple_photos_background {
+            return self.start(files);
+        }
+        let _ = s;
+        self.run(files, false)
+    }
+}
+
+impl crate::Session {
+    /// What an export with `o` does after writing its files; an error, before anything is written,
+    /// when it asks for Apple Photos and this platform or session has no way to reach it, or
+    /// another import is reserved or running. For Photos the import slot is reserved from now on.
+    pub fn after_export(&self, o: &ExportOptions) -> Result<AfterExport, String> {
+        if !o.add_to_photos {
+            return Ok(AfterExport::default());
+        }
+        if let Some(why) = apple_photos_unsupported() {
+            return Err(why.into());
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let runner = self.apple_photos.clone().ok_or_else(|| crate::apple_photos::unavailable().to_string())?;
+            let mut after = AfterExport::apple_photos(runner, &o.photos_album, &self.apple_photos_imports)?;
+            after.apple_photos = after.apple_photos.map(|r| r.shown_in(self.activity.clone()));
+            Ok(after)
+        }
+        #[cfg(target_arch = "wasm32")]
+        Err("Apple Photos is only available on macOS".into())
+    }
 }
 
 /// Export `ids` in order ([`prepare_batch`] + [`run_batch`]), stopping at the first error.
@@ -2497,6 +2624,22 @@ mod tests {
             j[k] = v;
         }
         assert_eq!(ExportOptions::from_params(&j).unwrap(), full);
+        // Add to Apple Photos (issue #236): a switch and an album name; on only where Photos is
+        assert!(err(json!({"addToPhotos": "yes"})).contains("`addToPhotos` must be true or false"));
+        assert!(err(json!({"photosAlbum": 3})).contains("`photosAlbum` must be a string"));
+        assert!(err(json!({"photosAlbum": "a\0b"})).contains("NUL"));
+        assert!(err(json!({"photosAlbm": "x"})).contains("did you mean `photosAlbum`"));
+        let album = ExportOptions { photos_album: "Trip “2026” \\ \"x\"".into(), ..Default::default() };
+        assert_eq!(ExportOptions::from_params(&album.to_json()).unwrap(), album);
+        let on = ExportOptions { add_to_photos: true, ..album };
+        if cfg!(target_os = "macos") {
+            assert_eq!(ExportOptions::from_params(&on.to_json()).unwrap(), on);
+        } else {
+            assert!(err(on.to_json()).contains("Apple Photos is only available on macOS"));
+            // stored settings (a preset or Export with Previous made on a Mac) still read
+            assert!(ExportOptions::from_json(&on.to_json()).add_to_photos);
+        }
+        assert_eq!(ExportOptions::from_json(&json!({"photosAlbum": "  Trip  "})).photos_album, "Trip");
         assert_eq!(ExportOptions::from_params(&ExportOptions::default().to_json()).unwrap(), ExportOptions::default());
         // null is "not given", as a dropped key is
         ExportOptions::from_params(&json!({"quality": 92, "longEdge": null, "watermark": null})).unwrap();

@@ -12,7 +12,7 @@ use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 
 use lightcraft_engine::activity::{Cancel, TaskGuard};
-use lightcraft_engine::export::{Destination, ExportOptions, PreparedExport, run_batch};
+use lightcraft_engine::export::{AfterExport, Destination, ExportOptions, PreparedExport, run_batch};
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
@@ -22,7 +22,9 @@ pub struct ExportTask {
     /// Photos started so far and the file in progress.
     pub progress: Arc<Mutex<(usize, String)>>,
     pub cancel: Arc<AtomicBool>,
-    rx: Receiver<Result<Vec<Value>, String>>,
+    /// The files (per-photo results), what [`AfterExport`] did with them (`applePhotos`) and
+    /// whether the export was cancelled (as the worker saw it when the batch ended).
+    rx: Receiver<Result<(Vec<Value>, Option<Value>, bool), String>>,
     /// The export's row in the activity stack (`activity.cancel` sets `cancel`).
     guard: TaskGuard,
 }
@@ -35,8 +37,9 @@ impl ExportTask {
     }
 }
 
-/// Start exporting `items` in the background. Errors per photo are collected, not fatal.
-pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOptions, to: Destination) -> Result<Value, String> {
+/// Start exporting `items` in the background, then do `after` with the files written (Add to Apple
+/// Photos). Errors per photo are collected, not fatal.
+pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOptions, to: Destination, after: AfterExport) -> Result<Value, String> {
     if app.export.is_some() {
         return Err("an export is already running".into());
     }
@@ -46,6 +49,11 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = channel();
     let (p, c) = (progress.clone(), cancel.clone());
+    let guard = app.session.activity.start("export", "Exporting", Cancel::Flag(cancel.clone()));
+    guard.progress(0, total as u64);
+    let row = guard.handle();
+    // translated here: the language is the UI thread's, and the worker would show English
+    let adding = crate::i18n::tr("Adding to Apple Photos…").to_string();
     let work = move || {
         let mut w = |path: &str, bytes: &[u8]| write(path, bytes);
         let r = run_batch(items, &opts, &to, &mut w, &|path| std::path::Path::new(path).exists(), false, &mut |done, name| {
@@ -54,14 +62,25 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
             }
             !c.load(Ordering::Relaxed)
         });
+        let r = r.map(|files| {
+            if !after.is_none() {
+                // Photos can't be stopped once asked: no ✕ from here, before the last look at
+                // the cancel flag, so a cancel either stops the export before Photos or is refused
+                row.set_cancellable(false);
+                if let Ok(mut g) = p.lock() {
+                    g.1 = adding;
+                }
+            }
+            let cancelled = c.load(Ordering::Relaxed);
+            let photos = after.run(&files, cancelled);
+            (files, photos, cancelled)
+        });
         let _ = tx.send(r);
     };
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::Builder::new().name("export".into()).spawn(work).map_err(|e| e.to_string())?;
     #[cfg(target_arch = "wasm32")]
     work();
-    let guard = app.session.activity.start("export", "Exporting", Cancel::Flag(cancel.clone()));
-    guard.progress(0, total as u64);
     app.export = Some(ExportTask { total, progress, cancel, rx, guard });
     Ok(json!({"background": true, "total": total}))
 }
@@ -100,7 +119,8 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
                 }
                 Ok(vec![json!({"path": path, "pages": doc.pages, "photos": doc.photos, "bytes": doc.bytes.len(), "contactSheet": true})])
             });
-        let _ = tx.send(result);
+        // a PDF isn't something Photos imports: contact sheets never add to Apple Photos
+        let _ = tx.send(result.map(|files| (files, None, c.load(Ordering::Relaxed))));
     };
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::Builder::new().name("contact-sheet".into()).spawn(work).map_err(|e| e.to_string())?;
@@ -112,16 +132,65 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
     Ok(json!({"background": true, "total": total}))
 }
 
+/// The toast's account of [`AfterExport::run`]'s Apple Photos outcome.
+pub fn apple_photos_note(outcome: &Value) -> String {
+    if let Some(e) = outcome.get("error").and_then(Value::as_str) {
+        return crate::i18n::tr_format!("not added to Apple Photos: {e}", e = e);
+    }
+    if let Some(why) = outcome.get("skipped").and_then(Value::as_str) {
+        if why.contains("cancelled") {
+            return crate::i18n::tr("not added to Apple Photos (cancelled)").to_string();
+        }
+        return crate::i18n::tr_format!("not added to Apple Photos: {e}", e = why);
+    }
+    let n = outcome.get("imported").and_then(Value::as_u64).unwrap_or(0);
+    let mut m = match outcome.get("album").and_then(Value::as_str) {
+        Some(album) => crate::i18n::tr_format!("{n} added to Apple Photos album “{album}”", n = n, album = album),
+        None => crate::i18n::tr_format!("{n} added to Apple Photos", n = n),
+    };
+    if let Some(w) = outcome.get("warning").and_then(Value::as_str) {
+        m += &format!(" ({w})");
+    }
+    m
+}
+
+/// Per frame: when an Apple Photos import that no export task reports finishes (`app.export`
+/// without `background`, `export.addToPhotos`), say how it went.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn poll_photos(app: &mut LightcraftApp, ctx: &egui::Context) {
+    let jobs = app.session.apple_photos_imports.all();
+    if jobs.iter().any(|j| !j.finished()) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(250));
+    }
+    for job in jobs {
+        if job.take_announcement() {
+            let outcome = job.json();
+            let msg = apple_photos_note(&outcome);
+            if outcome.get("error").is_some() {
+                app.toast_for(ctx, msg, 15.0);
+            } else {
+                app.toast(ctx, msg);
+            }
+        }
+    }
+}
+
+/// No Apple Photos on the web.
+#[cfg(target_arch = "wasm32")]
+pub fn poll_photos(_: &mut LightcraftApp, _: &egui::Context) {}
+
 /// Per frame: keep the activity row up to date; when the batch finishes, report it.
 pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(task) = &app.export else { return };
     match task.rx.try_recv() {
         Ok(r) => {
-            let cancelled = task.cancel.load(Ordering::Relaxed);
+            let cancelled = matches!(&r, Ok((_, _, true)));
             let total = task.total;
             app.export = None;
+            // Photos refused (permission, not installed…): leave the way out on screen longer
+            let photos_failed = matches!(&r, Ok((_, Some(p), _)) if p.get("error").is_some());
             let msg = match r {
-                Ok(files) => {
+                Ok((files, photos, _)) => {
                     let sheet = files.first().filter(|f| f["contactSheet"] == true);
                     let ok = files.iter().filter(|f| f.get("path").is_some()).count();
                     let failed: Vec<&Value> = files.iter().filter(|f| f.get("error").is_some()).collect();
@@ -140,12 +209,20 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     if cancelled {
                         m += " · cancelled";
                     }
-                    app.last_export_result = Some(json!({"files": files, "cancelled": cancelled}));
+                    if let Some(photos) = &photos {
+                        m += " · ";
+                        m += &apple_photos_note(photos);
+                    }
+                    app.last_export_result = Some(json!({"files": files, "cancelled": cancelled, "applePhotos": photos}));
                     m
                 }
                 Err(e) => e,
             };
-            app.toast(ctx, msg);
+            if photos_failed {
+                app.toast_for(ctx, msg, 15.0);
+            } else {
+                app.toast(ctx, msg);
+            }
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => {
             let (done, current) = task.progress.lock().map(|g| g.clone()).unwrap_or_default();
@@ -246,5 +323,26 @@ mod contact_sheet_tests {
         app.export.as_ref().unwrap().cancel.store(true, Ordering::Relaxed);
         let task = app.export.take().unwrap();
         assert!(task.rx.recv_timeout(Duration::from_secs(20)).unwrap().is_err());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The toast's Apple Photos part (issue #236): the count and album, a partial import's
+    /// warning, an error with what to do, a cancelled export.
+    #[test]
+    fn apple_photos_outcomes_read_well() {
+        assert_eq!(apple_photos_note(&json!({"imported": 3, "requested": 3, "ids": [], "album": null})), "3 added to Apple Photos");
+        assert_eq!(apple_photos_note(&json!({"imported": 1, "album": "Trip"})), "1 added to Apple Photos album “Trip”");
+        let partial = apple_photos_note(&json!({"imported": 1, "requested": 2, "warning": "Photos added 1 of 2 files"}));
+        assert_eq!(partial, "1 added to Apple Photos (Photos added 1 of 2 files)");
+        let denied = apple_photos_note(
+            &json!({"error": "LightCraft isn't allowed to control Photos. Allow it in System Settings › Privacy & Security › Automation"}),
+        );
+        assert!(denied.starts_with("not added to Apple Photos: ") && denied.contains("Automation"), "{denied}");
+        assert_eq!(apple_photos_note(&json!({"skipped": "the export was cancelled"})), "not added to Apple Photos (cancelled)");
+        assert_eq!(apple_photos_note(&json!({"skipped": "the export wrote no files"})), "not added to Apple Photos: the export wrote no files");
     }
 }

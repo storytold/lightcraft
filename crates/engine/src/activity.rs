@@ -73,7 +73,7 @@ impl Unit {
 pub struct TaskInfo {
     pub id: u64,
     /// A stable id: `import`, `export`, `scan`, `previews`, `smartPreviews`, `lightroom`, `merge`, `download`,
-    /// `faces`, `denoise`, `findMissing`.
+    /// `faces`, `denoise`, `findMissing`, `applePhotos`.
     pub kind: &'static str,
     /// English; the frontend translates it.
     pub label: String,
@@ -100,6 +100,12 @@ struct Entry {
     detail: Mutex<String>,
     cancel: Option<Arc<AtomicBool>>,
     cancellable: AtomicBool,
+    /// Held while a cancel is decided ([`Activity::cancel`], [`Activity::cancel_all`]) and while
+    /// cancelling is switched ([`TaskGuard::set_cancellable`], [`TaskHandle::set_cancellable`]): a
+    /// step that turns it off and then reads the cancel flag either sees a cancel that was
+    /// accepted, or makes the cancel fail. Without it a cancel could pass the check, the step
+    /// start, and the flag be set after the step's last look at it: accepted but ignored.
+    gate: Mutex<()>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -111,6 +117,23 @@ fn capped(text: &str) -> String {
 }
 
 impl Entry {
+    fn set_cancellable(&self, yes: bool) {
+        let _gate = lock(&self.gate);
+        self.cancellable.store(yes, Ordering::Relaxed);
+    }
+
+    /// Set the cancel flag if the task can be cancelled now (see [`Entry::gate`]).
+    fn try_cancel(&self) -> bool {
+        let _gate = lock(&self.gate);
+        match &self.cancel {
+            Some(flag) if self.is_cancellable() => {
+                flag.store(true, Ordering::Relaxed);
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn is_cancellable(&self) -> bool {
         self.cancel.is_some() && self.cancellable.load(Ordering::Relaxed)
     }
@@ -165,6 +188,7 @@ impl Activity {
             detail: Mutex::new(String::new()),
             cancellable: AtomicBool::new(cancel.is_some()),
             cancel,
+            gate: Mutex::new(()),
         });
         lock(&self.inner.tasks).push(entry.clone());
         TaskGuard { activity: self.clone(), entry }
@@ -180,26 +204,13 @@ impl Activity {
     pub fn cancel(&self, id: u64) -> Result<(), String> {
         let tasks = lock(&self.inner.tasks);
         let entry = tasks.iter().find(|e| e.id == id).ok_or_else(|| format!("no task {id}"))?;
-        match (&entry.cancel, entry.is_cancellable()) {
-            (Some(flag), true) => {
-                flag.store(true, Ordering::Relaxed);
-                Ok(())
-            }
-            _ => Err(format!("{} can't be cancelled", entry.label)),
-        }
+        if entry.try_cancel() { Ok(()) } else { Err(format!("{} can't be cancelled", entry.label)) }
     }
 
     /// Ask every cancellable task to stop; returns how many were asked.
     pub fn cancel_all(&self) -> usize {
         let tasks = lock(&self.inner.tasks);
-        let mut n = 0;
-        for e in tasks.iter().filter(|e| e.is_cancellable()) {
-            if let Some(flag) = &e.cancel {
-                flag.store(true, Ordering::Relaxed);
-                n += 1;
-            }
-        }
-        n
+        tasks.iter().filter(|e| e.try_cancel()).count()
     }
 
     /// Tasks that quitting would cut short: cancellable ones not already stopping.
@@ -235,7 +246,7 @@ impl TaskGuard {
 
     /// A step that must not be cut short (the Lightroom import's commit) turns cancelling off for its duration.
     pub fn set_cancellable(&self, yes: bool) {
-        self.entry.cancellable.store(yes, Ordering::Relaxed);
+        self.entry.set_cancellable(yes);
     }
 
     pub fn cancel_flag(&self) -> Option<Arc<AtomicBool>> {
@@ -282,6 +293,13 @@ impl TaskHandle {
 
     pub fn is_cancelled(&self) -> bool {
         self.entry.is_cancelled()
+    }
+
+    /// [`TaskGuard::set_cancellable`] from the worker, at the moment its step starts (an export
+    /// handing its files to Apple Photos, which can't be stopped once asked). Read the cancel flag
+    /// after turning it off: a cancel accepted before is seen then, any later one is refused.
+    pub fn set_cancellable(&self, yes: bool) {
+        self.entry.set_cancellable(yes);
     }
 }
 
@@ -378,6 +396,35 @@ mod tests {
         assert!(a.inner.tasks.is_poisoned());
         let _g = a.start("export", "E", Cancel::Yes);
         assert_eq!(a.list().len(), 1);
+    }
+
+    /// Codex review of #643: a worker that turns cancelling off and then reads the cancel flag
+    /// (an export handing its files to Apple Photos) must either see a cancel that was accepted or
+    /// make it fail, never let one be accepted and then ignored. Here the test holds the task's gate
+    /// as a cancel does while it decides: the worker's switch waits for it, and then sees the cancel.
+    #[test]
+    fn a_step_that_turns_cancelling_off_sees_or_refuses_every_cancel() {
+        let a = Activity::default();
+        let flag = Arc::new(AtomicBool::new(false));
+        let g = a.start("export", "Exporting", Cancel::Flag(flag.clone()));
+        let handle = g.handle();
+        let gate = lock(&g.entry.gate); // a cancel deciding
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (h, f) = (handle.clone(), flag.clone());
+        let worker = std::thread::spawn(move || {
+            h.set_cancellable(false);
+            tx.send(f.load(Ordering::Relaxed)).unwrap();
+        });
+        assert!(rx.recv_timeout(std::time::Duration::from_millis(100)).is_err(), "the switch waits for the cancel");
+        flag.store(true, Ordering::Relaxed); // the cancel goes through...
+        drop(gate);
+        assert!(rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap(), "...and the step sees it");
+        worker.join().unwrap();
+        // once it is off, cancels are refused
+        let g2 = a.start("export", "Exporting", Cancel::Yes);
+        g2.handle().set_cancellable(false);
+        assert!(a.cancel(g2.id()).is_err());
+        assert_eq!(a.cancel_all(), 0, "{:?}", a.list());
     }
 
     #[test]

@@ -1,9 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Hardened-runtime entitlements for Lightcraft. Deliberately empty: the app is pure Rust,
+<!-- Hardened-runtime entitlements for Lightcraft. Deliberately minimal: the app is pure Rust,
      loads no unsigned code, needs no JIT, and is not sandboxed (it opens files by path, from the
      command line and drag-and-drop). Add exceptions here only with a reason in a comment. -->
 <plist version="1.0">
 <dict>
+  <!-- Export > Add to Apple Photos (crates/engine/src/apple_photos.rs) runs /usr/bin/osascript to
+       send Apple Events to Photos' import command. Under the hardened runtime macOS refuses those
+       events (error -1743, without asking the user) unless the app has this entitlement; the
+       prompt shows NSAppleEventsUsageDescription from Info.plist. -->
+  <key>com.apple.security.automation.apple-events</key>
+  <true/>
 </dict>
 </plist>

@@ -1876,5 +1876,10 @@
   "Downloading model": "Téléchargement du modèle",
   "Finding faces": "Recherche des visages",
   "Synchronizing folder": "Synchronisation du dossier",
-  "Looking for changes": "Recherche des modifications"
+  "Looking for changes": "Recherche des modifications",
+  "Add to Apple Photos": "Ajouter à Apple Photos",
+  "Adding to Apple Photos…": "Ajout à Apple Photos…",
+  "not added to Apple Photos (cancelled)": "non ajouté à Apple Photos (annulé)",
+  "The first time, macOS asks whether LightCraft may control Photos.": "La première fois, macOS demande si LightCraft peut contrôler Photos.",
+  "Adding to Apple Photos": "Ajout à Apple Photos"
 }

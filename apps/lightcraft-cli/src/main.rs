@@ -62,6 +62,8 @@ USAGE:
                              string), e.g. --opt colorSpace=displayP3 --opt bitDepth=16
                              --opt percent=50 --opt shortEdge=1080 --opt ppi=300
                              --opt format=original (copy + XMP sidecar) --opt metadata=none
+                             --opt addToPhotos=true --opt photosAlbum=NAME (macOS: then add
+                             the file to Apple Photos, into that album)
   lightcraft-cli snapshot [OPTIONS] [FILES/FOLDERS…]
       Run the full app UI headlessly (no window, no GPU: CPU-rasterized egui) and write PNGs.
       Options:
@@ -681,6 +683,8 @@ fn render(args: &[String]) -> Result<(), String> {
         o.format = ExportFormat::parse(&ext)
             .ok_or_else(|| format!("{output}: unknown extension (use .jpg .png .tif .webp .avif .dng or --opt format=…)"))?;
     }
+    // Add to Apple Photos: refused before anything is written when it can't be done
+    let after = s.after_export(&o)?;
     let e = export_photo(&mut s, lightcraft_engine::catalog::PhotoId(id), &o, 1)?;
     // never over the input (or its sidecar), however it is spelled: `render IMG.jpg -o IMG.jpg`
     let sidecars: Vec<(String, &Vec<u8>)> =
@@ -695,6 +699,12 @@ fn render(args: &[String]) -> Result<(), String> {
         eprintln!("lightcraft-cli: wrote {sc}");
     }
     eprintln!("lightcraft-cli: wrote {output} ({}×{})", e.width, e.height);
+    if let Some(photos) = after.run(&[json!({"path": output})], false) {
+        if let Some(err) = photos.get("error").and_then(Value::as_str) {
+            return Err(format!("render: {output} was written, but {err}"));
+        }
+        eprintln!("lightcraft-cli: added to Apple Photos: {photos}");
+    }
     Ok(())
 }
 

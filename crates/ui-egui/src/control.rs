@@ -468,13 +468,23 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
         return Err(NO_EXPORT_FOLDER.into());
     }
     let to = Destination { dir: dir.clone(), exact };
+    // Add to Apple Photos: refused here, before anything is written, when it can't be done
+    let after = app.session.after_export(&opts)?;
     let background = p.get("background").and_then(Value::as_bool).unwrap_or(false) && app.services.write_shared.is_some();
     let out = if background {
         let items = lightcraft_engine::export::prepare_batch(&mut app.session, &ids, &opts)?;
-        crate::export_task::start(app, items, opts, to)?
+        crate::export_task::start(app, items, opts, to, after)?
     } else {
         let w = app.services.write.as_mut().ok_or("no writer")?;
-        json!({"files": export_batch(&mut app.session, &ids, &opts, &to, &mut |path, bytes| w(path, bytes), &|path| std::path::Path::new(path).exists())?})
+        let files = export_batch(&mut app.session, &ids, &opts, &to, &mut |path, bytes| w(path, bytes), &|path| std::path::Path::new(path).exists())?;
+        let mut out = json!({"files": files});
+        // Photos may take minutes (and waits for the permission prompt): in the desktop app on a
+        // worker, never on this (UI) thread; the app announces the outcome and
+        // `export.photosImports` reports it. A window-less run (snapshot scripts) waits.
+        if let Some(photos) = after.finish(&app.session, &files) {
+            out["applePhotos"] = photos;
+        }
+        out
     };
     // remember for Export with Previous (and to prefill the dialog)
     let mut last = p.clone();

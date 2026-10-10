@@ -2,6 +2,15 @@
 
 ## October 2026
 
+### Add to Apple Photos (macOS)
+- The Export dialog has **Add to Apple Photos**, with an optional album. The files are exported to your folder as
+  usual and then added to Photos, into a top-level album of that name (made when it's missing). The toast says how
+  many Photos added, or why it added none. Export with Previous and export presets repeat it.
+- The first time, macOS asks whether LightCraft may control Photos. Photos may ask about duplicates; files it skips
+  show as a partial import.
+- Agents: `app.export {addToPhotos, photosAlbum}`, `export.addToPhotos {paths}` for files already on disk, and
+  `export.photosImports`. See [Add to Apple Photos](apple-photos.md).
+
 ### Activity stack
 - Long-running tasks show in one place, top left under the top bar, as in Lightroom Classic (issue #345): imports and
   folder scans, exports (and the contact sheet PDF), Synchronize Folder, Build / Smart Previews, Lightroom catalog import, Photo Merge, model downloads, the face scan,

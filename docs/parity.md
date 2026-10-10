@@ -39,18 +39,18 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | P. Enhance (ENH) | 0 | 0 | 2 | 0 | — | — |
 | Q. HDR (HDR) | 2 | 3 | 0 | 0 | — | — |
 | R. Video (VID) | 0 | 0 | 5 | 1 | — | 0/2 (0%) |
-| S. Export (EXP) | 15 | 2 | 1 | 0 | 7/7 (100%) | 7/7 (100%) |
+| S. Export (EXP) | 15 | 3 | 0 | 0 | 7/7 (100%) | 7/7 (100%) |
 | T. Share (SHARE) | 0 | 0 | 0 | 4 | — | — |
 | U. Map & location (MAP) | 0 | 1 | 1 | 0 | — | 0/1 (0%) |
-| V. Preferences (PREF) | 7 | 1 | 2 | 2 | 1/1 (100%) | 5/5 (100%) |
+| V. Preferences (PREF) | 6 | 2 | 2 | 2 | 1/1 (100%) | 4/5 (80%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 18 | 6 | 1 | 1 | 8/8 (100%) | 6/9 (67%) |
 | Y. Menus | 82 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
-| Lightroom Classic extras | 32 | 11 | 39 | 9 | — | 22/24 (92%) |
-| **Total** | 393 | 39 | 84 | 36 | 192/200 (96%) | 142/152 (93%) |
+| Lightroom Classic extras | 33 | 15 | 35 | 9 | — | 23/25 (92%) |
+| **Total** | 397 | 50 | 72 | 36 | 192/200 (96%) | 143/155 (92%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.9%** of 516 in-scope rows — P0 98.0% of 200 · P1 95.7% of 152 · P2 42.9% of 163.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **81.3%** of 519 in-scope rows — P0 98.0% of 200 · P1 95.2% of 155 · P2 47.5% of 163.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -463,7 +463,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-EXP-PREVIOUS | Export with previous settings | P0 | ✅ | `cmd:app.exportPrevious`, `cmd:dialog.export` | last options persist in prefs.json; dialog prefilled; no named export presets yet |
 | LR-EXP-DNGOPT | DNG options | P2 | 🟡 | `cmd:app.export` (`dngCompression`), `crates/engine/src/export.rs` | compression: lossless JPEG (default), ZIP or none; no embedded JPEG preview size, no lossy DNG output |
 | LR-EXP-ORIGINAL | Original + XMP | P1 | ✅ | `cmd:app.export` (`format: original`), `crates/engine/src/tests_export.rs` | file copied byte for byte, sidecar named after the output and subject to the conflict policy |
-| LR-EXP-PHOTOS | Export to the system photo library | P2 | ⬜ | | |
+| LR-EXP-PHOTOS | Export to the system photo library | P2 | 🟡 | `cmd:app.export` (`addToPhotos`, `photosAlbum`), `cmd:export.addToPhotos`, `cmd:export.photosImports`, `crates/engine/src/apple_photos.rs`, `crates/ui-egui/src/panels/dialogs.rs`, `packaging/macos/entitlements.plist`, `docs/apple-photos.md` | macOS: the exported files go to Apple Photos through Apple Events to its import command (a constant AppleScript run by `/usr/bin/osascript`; album names and paths are separate arguments), into a top-level album of exactly that name, made when missing (several of that name: refused); the Export dialog's Add to Apple Photos, Export with Previous, presets, MCP and `lightcraft-cli` all reach it; imports are jobs, off the UI thread in the desktop app and awaited in one-shot headless runs, one at a time, reserved by an export before it writes; permission, missing Photos, timeouts and partial imports are reported; the packaged app carries the Apple Events entitlement and usage text. Tested end to end with the packaged app on macOS 26.6.2 / Photos 11.0 (manual steps in `docs/apple-photos.md`). Other platforms' photo libraries are not covered |
 | LR-EXP-PSD | Round trip to an external editor | P2 | ✅ | `cmd:photo.editExternal`, `cmd:photo.editInExternal`, `crates/engine/src/cmd/convert.rs` | a 16-bit TIFF `-Edit` copy with the edits (Adobe RGB / ProPhoto / P3 / sRGB) next to the original, added stacked on top of it and opened in the editor set in Settings ▸ General (or the system default) |
 
 ## T. Share (SHARE)

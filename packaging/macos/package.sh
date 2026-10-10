@@ -158,7 +158,10 @@ CLI_DIR="$WORK/lightcraft-cli-$VERSION-macos-$ARCH"
 mkdir -p "$CLI_DIR"
 cp "$WORK/bin/lightcraft-cli" "$CLI_DIR/"
 copy_docs "$CLI_DIR"
-sign --options runtime "$CLI_DIR/lightcraft-cli"
+# Same entitlements as the app: `--opt addToPhotos=true` / `app.export {addToPhotos}` send Apple
+# Events to Photos through osascript too (macOS asks about the app that started the CLI, usually
+# the terminal).
+sign --options runtime --entitlements "$HERE/entitlements.plist" "$CLI_DIR/lightcraft-cli"
 codesign --verify --strict --verbose=2 "$CLI_DIR/lightcraft-cli"
 rm -f "$CLI_ZIP"
 ditto -c -k --keepParent "$CLI_DIR" "$CLI_ZIP"

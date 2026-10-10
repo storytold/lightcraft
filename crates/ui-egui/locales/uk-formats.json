@@ -228,5 +228,8 @@
   "+{n} more": "+{n} ще",
   "1 task is still running: {names}. Quitting stops it.": "1 завдання ще виконується: {names}. Вихід зупинить його.",
   "{n} tasks are still running: {names}. Quitting stops them.": "Ще виконуються завдання ({n}): {names}. Вихід зупинить їх.",
-  "{what} merge cancelled": "Об’єднання {what} скасовано"
+  "{what} merge cancelled": "Об’єднання {what} скасовано",
+  "not added to Apple Photos: {e}": "не додано до Apple Фото: {e}",
+  "{n} added to Apple Photos album “{album}”": "Додано до альбому Apple Фото «{album}»: {n}",
+  "{n} added to Apple Photos": "Додано до Apple Фото: {n}"
 }
