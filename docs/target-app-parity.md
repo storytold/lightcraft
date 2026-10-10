@@ -106,6 +106,20 @@ neutral output is unchanged. CPU/GPU checks and exact legacy-output gates pass. 
 supports this curve-domain correction for in-gamut SDR colours, Refine Saturation 100 and profile
 Amount 1; it does not validate gamut / proof ordering, arbitrary curves, other Amount values or HDR.
 
+The Nikon D5000's verified full-image 12-bit GBRG NEF mode now uses the measured
+4288×2848 default crop at sensor origin (11,10), preserving the complete sensor/CFA
+until after demosaicing. One calibration photograph and two photographs from separate
+withheld folders agreed against native Lightroom NEF / full-sensor DNG renders. Valid
+declared crops still take precedence; other modes and malformed declarations keep their
+previous behavior. This fixes framing, not colour or tone parity. As a decoder correction
+it affects both rendering processes; saved adjustments are not rewritten. Render caches
+and camera-look proxies are versioned, while offline proxies retain their old pixels until
+the original becomes available. Existing catalog dimensions refresh through photo reload. A saved B&W holdout
+now matches Lightroom's native dimensions. Its stride-16 mean ΔE00 changes slightly
+worse, 4.32055 → 4.35502, while p95 improves 11.22721 → 11.08583; five of nine
+native regions worsen. The camera-preview fit also changes with the corrected
+coordinates. This result supports the framing correction, not a tone improvement.
+
 Five saved-photo comparisons remain mixed: three B&W results are unchanged within rounding, while
 the SDR colour case shifts **7.54237 → 7.57388** mean ΔE00 and the HDR-origin case
 **22.56467 → 22.70120**. These use a fixed stride-16 grid of native renders; the HDR-origin edit has

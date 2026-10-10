@@ -186,6 +186,34 @@ pub(crate) fn pixel_aspect_of(raw: &Ifd) -> f32 {
     }
 }
 
+/// Measured full-image D5000 framing when the file supplies no crop rectangle.
+/// Three independent NEF / full-sensor DNG pairs rendered by Lightroom agreed on
+/// this origin. It is not a centred crop: keep the odd column offset out of the
+/// CFA/black-level phase and apply it only after demosaicing, like CropArea.
+fn measured_d5000_crop(ifd0: &Ifd, raw: &Ifd, mn: Option<&makernote::MakerNote>, cfa: &Cfa) -> Option<Rect> {
+    let mn = mn?;
+    if ifd0.string(t::MAKE).as_deref() != Some("NIKON CORPORATION")
+        || ifd0.string(t::MODEL).as_deref() != Some("NIKON D5000")
+        || raw.u32(t::IMAGE_WIDTH) != Some(4352)
+        || raw.u32(t::IMAGE_LENGTH) != Some(2868)
+        || raw.u64s(t::BITS_PER_SAMPLE).as_deref() != Some(&[12])
+        || raw.u16(t::COMPRESSION) != Some(t::compression::NIKON)
+        || raw.u16(t::SAMPLES_PER_PIXEL).unwrap_or(1) != 1
+        || raw.u32(t::NEW_SUBFILE_TYPE).unwrap_or(0) != 0
+        || cfa.width != 2
+        || cfa.height != 2
+        || cfa.pattern != [1, 2, 0, 1]
+        || [t::DEFAULT_CROP_ORIGIN, t::DEFAULT_CROP_SIZE, t::ACTIVE_AREA].iter().any(|&tag| raw.contains(tag))
+        || mn.ifd.contains(CROP_AREA)
+        || mn.ifd.contains(0x0016) // ImageBoundary; do not override even a malformed declaration.
+        // CropHiSpeed (ExifTool Nikon tag documentation): only the observed full-image mode.
+        || mn.ifd.u64s(0x001b).as_deref() != Some(&[0, 4352, 2868, 4352, 2868, 0, 0])
+    {
+        return None;
+    }
+    Some(Rect::new(11, 10, 4288, 2848))
+}
+
 fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
     tiff.all_ifds()
         .into_iter()
@@ -274,7 +302,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         (None, Mode::Full) => white_from_data(samples, bits),
         (None, Mode::Header) => ((1u32 << bits.clamp(1, 16)) - 1) as f32,
     };
-    let (active_area, crop) = match default_crop(mn.as_ref(), w, h) {
+    let (active_area, crop) = match default_crop(mn.as_ref(), w, h).or_else(|| measured_d5000_crop(ifd0, raw, mn.as_ref(), &cfa)) {
         Some(crop) => (Rect::new(0, 0, w, h), crop),
         None => {
             let active_w = trailing_masked_columns(samples, w, bits);
@@ -712,6 +740,47 @@ mod tests {
         assert_eq!(trailing_masked_columns(&d[..w - 1], w, 14), w, "less than a row of samples leaves the width alone");
         assert_eq!(trailing_masked_columns(&[0; 64], 64, 14), 64, "narrow images are left alone");
         assert_eq!(trailing_masked_columns(&[], 0, 14), 0);
+    }
+
+    #[test]
+    fn measured_d5000_crop_requires_the_verified_sensor_mode_and_no_declared_crop() {
+        let mut note = IfdBuilder::new();
+        note.set(0x001b, Value::Short(vec![0, 4352, 2868, 4352, 2868, 0, 0]));
+        // Metadata-only fixture: no 12 MP allocation or fabricated compressed image needed.
+        let bytes = nef_with_note(t::compression::NIKON, 12, vec![vec![0]], 4352, 2868, 2868, Some(note));
+        let parsed = Tiff::parse(&bytes).unwrap();
+        let mut root = parsed.ifds[0].clone();
+        root.entries.iter_mut().find(|e| e.tag == t::MODEL).unwrap().value = Value::Ascii("NIKON D5000".into());
+        let raw = raw_ifd(&parsed).unwrap();
+        let entry = parsed.exif().unwrap().get(t::MAKER_NOTE).unwrap();
+        let mn = makernote::parse_makernote(&bytes, entry.offset, entry.count() as u64, parsed.order, "NIKON CORPORATION").unwrap();
+        let cfa = Cfa::bayer_static("GBRG");
+        assert_eq!(measured_d5000_crop(&root, raw, Some(&mn), &cfa), Some(Rect::new(11, 10, 4288, 2848)));
+        assert_eq!(measured_d5000_crop(&root, raw, None, &cfa), None);
+        assert_eq!(measured_d5000_crop(&root, raw, Some(&mn), &Cfa::bayer_static("RGGB")), None);
+        for (tag, value) in [(t::MAKE, "OTHER"), (t::MODEL, "NIKON D3500")] {
+            let mut other = root.clone();
+            other.entries.iter_mut().find(|e| e.tag == tag).unwrap().value = Value::Ascii(value.into());
+            assert_eq!(measured_d5000_crop(&other, raw, Some(&mn), &cfa), None);
+        }
+        for (tag, value) in [
+            (t::IMAGE_WIDTH, Value::Long(vec![4288])),
+            (t::IMAGE_LENGTH, Value::Long(vec![2848])),
+            (t::BITS_PER_SAMPLE, Value::Short(vec![14])),
+            (t::COMPRESSION, Value::Short(vec![1])),
+            (t::NEW_SUBFILE_TYPE, Value::Long(vec![1])),
+        ] {
+            let mut other = raw.clone();
+            other.entries.iter_mut().find(|e| e.tag == tag).unwrap().value = value;
+            assert_eq!(measured_d5000_crop(&root, &other, Some(&mn), &cfa), None);
+        }
+        for (tag, value) in [(0x001b, vec![1, 4352, 2868, 4352, 2868, 0, 0]), (CROP_AREA, vec![0]), (0x0016, vec![0])] {
+            let mut other = mn.clone();
+            // A supplied crop/boundary, even malformed, must keep the old path.
+            other.ifd.entries[0].tag = tag;
+            other.ifd.entries[0].value = Value::Short(value);
+            assert_eq!(measured_d5000_crop(&root, raw, Some(&other), &cfa), None);
+        }
     }
 
     #[test]
