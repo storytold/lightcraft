@@ -98,6 +98,21 @@ impl std::fmt::Display for CredError {
 
 impl std::error::Error for CredError {}
 
+impl CredError {
+    /// A stable, machine-readable name (`unsupported`, `unavailable`, `locked`, `wrongPassphrase`,
+    /// `corrupt`, `io`) for UIs and agents.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            CredError::Unsupported(_) => "unsupported",
+            CredError::Unavailable(_) => "unavailable",
+            CredError::Locked => "locked",
+            CredError::WrongPassphrase => "wrongPassphrase",
+            CredError::Corrupt(_) => "corrupt",
+            CredError::Io(_) => "io",
+        }
+    }
+}
+
 /// A place to keep secrets.
 pub trait SecretStore: Send + Sync {
     /// Short description for settings ("Secret Service", "encrypted file").
@@ -107,6 +122,12 @@ pub trait SecretStore: Send + Sync {
     fn set(&self, key: &Key, secret: &Secret) -> Result<(), CredError>;
     /// `true` when something was deleted.
     fn delete(&self, key: &Key) -> Result<bool, CredError>;
+    /// Ask the store to unlock itself, showing its own prompt if it has one (the Secret Service's
+    /// keyring dialog). Blocks until the user answers: call it off the UI thread. A store that is
+    /// never locked returns `Ok` at once; a dismissed prompt is [`CredError::Locked`].
+    fn unlock(&self) -> Result<(), CredError> {
+        Ok(())
+    }
 }
 
 /// The platform keychain, or why there is none.

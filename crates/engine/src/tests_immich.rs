@@ -360,3 +360,80 @@ impl RemoteOf for Photo {
         cat.remote_of(self.id).next().map(|r| r.remote_id.clone())
     }
 }
+
+// Feature: Connect and Check run off the UI thread; their results come through `remote.pump`.
+#[test]
+fn background_connect_and_check_report_through_the_pump() {
+    let (url, _) = serve(Fake { assets: vec![] });
+    let mut s = session();
+    let r = s.execute("immich.connect", &json!({"url": url, "apiKey": "wrong", "background": true})).unwrap();
+    assert_eq!(r["started"], true);
+    pump_until(&mut s, |_, v| v["connecting"] == false);
+    let st = s.execute("immich.status", &json!({})).unwrap();
+    assert_eq!(st["connected"]["error"]["kind"], "badKey", "{st}");
+    assert!(s.immich_accounts().unwrap().immich.is_empty());
+
+    s.execute("immich.connect", &json!({"url": url, "apiKey": KEY, "background": true})).unwrap();
+    pump_until(&mut s, |_, v| v["connecting"] == false);
+    let st = s.execute("immich.status", &json!({"check": true, "background": true})).unwrap();
+    assert_eq!(st["connected"]["ok"], true, "{st}");
+    let account = st["connected"]["account"].as_str().unwrap().to_string();
+    assert_eq!(st["accounts"][0]["id"], account.as_str());
+    pump_until(&mut s, |_, v| v["checking"].as_array().is_some_and(Vec::is_empty));
+    let st = s.execute("immich.status", &json!({})).unwrap();
+    assert_eq!(st["accounts"][0]["server"]["ok"], true, "{st}");
+    assert_eq!(st["accounts"][0]["server"]["version"], "3.3.1");
+    assert!(!st.to_string().contains(KEY));
+    assert!(!format!("{:?}", s.journal).contains(KEY));
+}
+
+// Feature: without a usable keychain, keys live in an encrypted file unlocked once per session.
+#[test]
+fn encrypted_key_file_is_unlocked_once_and_keeps_keys() {
+    let dir = temp_dir("keyfile");
+    let (url, _) = serve(Fake { assets: vec![] });
+    let fresh = || {
+        let mut s = Session::new().with_fs();
+        s.remote.secrets_file = Some(dir.join("credentials.enc"));
+        s.remote.credentials_prefs = Some(dir.join("credentials.json"));
+        s.remote.connections_path = Some(dir.join("connections.json"));
+        s
+    };
+    let mut s = fresh();
+    s.execute("credentials.useStore", &json!({"store": "file"})).unwrap();
+    let st = s.execute("credentials.status", &json!({})).unwrap();
+    assert_eq!(st["needsPassphrase"], true, "{st}");
+    assert_eq!(st["file"]["exists"], false);
+    // locked: connecting says how to unlock, never panics
+    let e = s.execute("immich.connect", &json!({"url": url, "apiKey": KEY})).unwrap_err().to_string();
+    assert!(e.contains("passphrase"), "{e}");
+    assert!(s.execute("credentials.unlock", &json!({"passphrase": "short"})).is_err(), "too short for a new file");
+    let r = s.execute("credentials.unlock", &json!({"passphrase": "correct horse battery"})).unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(r["created"], true);
+    assert_eq!(s.execute("immich.connect", &json!({"url": url, "apiKey": KEY})).unwrap()["ok"], true);
+    let st = s.execute("credentials.status", &json!({})).unwrap();
+    assert_eq!(st["active"], "encrypted file");
+    assert_eq!(st["needsPassphrase"], false);
+    let on_disk = std::fs::read_to_string(dir.join("credentials.enc")).unwrap();
+    assert!(!on_disk.contains(KEY), "the key is encrypted");
+    for f in ["connections.json", "credentials.json"] {
+        let txt = std::fs::read_to_string(dir.join(f)).unwrap();
+        assert!(!txt.contains(KEY) && !txt.contains("correct horse"), "{f} has no secrets");
+    }
+    assert!(!format!("{:?}", s.journal).contains("correct horse"));
+
+    // the next session: a wrong passphrase is refused, the right one (in the background) opens it
+    let mut s = fresh();
+    let r = s.execute("credentials.unlock", &json!({"passphrase": "wrong horse battery"})).unwrap();
+    assert_eq!(r["error"]["kind"], "wrongPassphrase");
+    let account = s.immich_accounts().unwrap().immich[0].id.clone();
+    assert!(s.immich_client(&account).is_err(), "still locked");
+    assert_eq!(s.execute("credentials.unlock", &json!({"passphrase": "correct horse battery", "background": true})).unwrap()["started"], true);
+    pump_until(&mut s, |_, v| v["unlocking"] == false);
+    let (_, c) = s.immich_client(&account).unwrap();
+    assert_eq!(c.me().unwrap().name, "Me");
+    s.execute("credentials.lock", &json!({})).unwrap();
+    assert!(s.immich_client(&account).is_err(), "locked again");
+    let _ = std::fs::remove_dir_all(&dir);
+}

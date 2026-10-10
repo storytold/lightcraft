@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use dac_catalog::{PhotoId, Source};
-use dac_credentials::SecretStore;
+use dac_credentials::{CredError, SecretStore};
 use dac_immich::{Account, Accounts, Asset, ImmichError};
 
 /// Files hashed per back-fill batch (one worker thread).
@@ -22,10 +22,39 @@ pub(crate) const SHA1_BATCH: usize = 32;
 /// A unit of finished background work.
 pub(crate) enum Msg {
     Sha1(Vec<(PhotoId, String, Option<String>)>),
-    LinkPage { account: String, assets: Vec<Asset> },
-    LinkDone { account: String, result: Result<Option<String>, ImmichError> },
+    LinkPage {
+        account: String,
+        assets: Vec<Asset>,
+    },
+    LinkDone {
+        account: String,
+        result: Result<Option<String>, ImmichError>,
+    },
     Downloaded(Box<Downloaded>),
-    Original { photo: PhotoId, account: String, result: Result<PathBuf, ImmichError> },
+    Original {
+        photo: PhotoId,
+        account: String,
+        result: Result<PathBuf, ImmichError>,
+    },
+    /// `immich.connect {background}`: the server answered (or not); the key goes to the store.
+    Connected(Box<Result<Probed, ImmichError>>),
+    /// `immich.status {check, background}`: one account's server status.
+    Checked {
+        account: String,
+        result: Result<dac_immich::ServerStatus, ImmichError>,
+    },
+    /// `credentials.unlock {background}`: the encrypted file opened (or not).
+    FileUnlocked(Result<dac_credentials::FileStore, CredError>),
+    /// `credentials.unlockSystem`: the keychain's own unlock prompt was answered.
+    SystemUnlocked(Result<(), CredError>),
+}
+
+/// A server that answered `immich.connect`'s probe, with the key that opened it.
+pub(crate) struct Probed {
+    pub base: String,
+    pub status: dac_immich::ServerStatus,
+    pub pinned: Option<String>,
+    pub key: dac_credentials::Secret,
 }
 
 /// What an import download job brings back.
@@ -85,6 +114,24 @@ pub struct State {
     pub(crate) import: ImportProgress,
     pub(crate) fetching: HashSet<PhotoId>,
     pub(crate) fetch_errors: HashMap<PhotoId, String>,
+    /// The encrypted key file ([`dac_credentials::FileStore`]), used where the system keychain is
+    /// missing or locked, or when the user prefers it (`None`: no settings folder, as in tests).
+    pub secrets_file: Option<PathBuf>,
+    /// Where the store preference (`credentials.json`) lives.
+    pub credentials_prefs: Option<PathBuf>,
+    /// `system` (default) or `file`, loaded on first use.
+    pub(crate) store_pref: Option<String>,
+    /// Why the system keychain can't be used (probed once per session, or on `refresh`).
+    pub(crate) system_error: Option<Option<CredError>>,
+    /// Background credential work: an unlock running; the last unlock's error.
+    pub(crate) unlocking: bool,
+    pub(crate) unlock_error: Option<CredError>,
+    /// `immich.connect {background}`: running; its last result (never with the key).
+    pub(crate) connecting: bool,
+    pub(crate) connected: Option<serde_json::Value>,
+    /// `immich.status {check, background}`: accounts being checked; each one's last server status.
+    pub(crate) checking: HashSet<String>,
+    pub(crate) checks: HashMap<String, serde_json::Value>,
 }
 
 impl Default for State {
@@ -105,6 +152,16 @@ impl Default for State {
             import: ImportProgress::default(),
             fetching: HashSet::new(),
             fetch_errors: HashMap::new(),
+            secrets_file: None,
+            credentials_prefs: None,
+            store_pref: None,
+            system_error: None,
+            unlocking: false,
+            unlock_error: None,
+            connecting: false,
+            connected: None,
+            checking: HashSet::new(),
+            checks: HashMap::new(),
         }
     }
 }
@@ -150,6 +207,9 @@ pub(crate) fn spawn_sha1(tx: Sender<Msg>, batch: Vec<(PhotoId, String)>) {
 /// on the server until the photo is opened in Develop.
 pub const LINK_ONLY: &str = "Immich link only: the original is downloaded when the photo is opened in Develop";
 
+/// What [`crate::Session::secret_store`] says when the keys need the encrypted file's passphrase.
+pub const NEEDS_PASSPHRASE: &str = "unlock the encrypted key file with its passphrase (Settings → Connections)";
+
 /// A secret store kept in memory (tests, and hosts that must not touch the keychain).
 #[derive(Default)]
 pub struct MemorySecrets(std::sync::Mutex<HashMap<dac_credentials::Key, dac_credentials::Secret>>);
@@ -175,6 +235,8 @@ impl crate::Session {
     pub fn with_default_connections(mut self) -> Self {
         self.remote.connections_path = crate::config::config_dir().map(|d| d.join("connections.json"));
         self.remote.cache_dir = crate::config::config_dir().map(|d| d.join("immich"));
+        self.remote.secrets_file = crate::config::config_dir().map(|d| d.join("credentials.enc"));
+        self.remote.credentials_prefs = crate::config::config_dir().map(|d| d.join("credentials.json"));
         self
     }
 
@@ -200,13 +262,57 @@ impl crate::Session {
         a.save(&path)
     }
 
+    /// The secret store: one set by the host or unlocked this session, else the system keychain
+    /// (unless the user prefers the encrypted file). The error says what to do: unlock the
+    /// encrypted file in Settings → Connections (`credentials.unlock`).
     pub(crate) fn secret_store(&mut self) -> Result<Arc<dyn SecretStore>, String> {
         if let Some(s) = &self.remote.store {
             return Ok(s.clone());
         }
-        let s: Arc<dyn SecretStore> = Arc::from(dac_credentials::os_store().map_err(|e| e.to_string())?);
-        self.remote.store = Some(s.clone());
-        Ok(s)
+        if self.store_pref() == "file" {
+            return Err(NEEDS_PASSPHRASE.into());
+        }
+        match dac_credentials::os_store() {
+            Ok(s) => {
+                let s: Arc<dyn SecretStore> = Arc::from(s);
+                self.remote.system_error = Some(None);
+                self.remote.store = Some(s.clone());
+                Ok(s)
+            }
+            Err(e) => {
+                let msg = format!("{e}; {NEEDS_PASSPHRASE}");
+                self.remote.system_error = Some(Some(e));
+                Err(msg)
+            }
+        }
+    }
+
+    /// `system` or `file`: where the user wants keys kept.
+    pub(crate) fn store_pref(&mut self) -> String {
+        if self.remote.store_pref.is_none() {
+            let v = self
+                .remote
+                .credentials_prefs
+                .as_ref()
+                .and_then(|p| std::fs::read(p).ok())
+                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                .and_then(|v| v["store"].as_str().map(str::to_string))
+                .filter(|s| s == "file")
+                .unwrap_or_else(|| "system".into());
+            self.remote.store_pref = Some(v);
+        }
+        self.remote.store_pref.clone().unwrap_or_else(|| "system".into())
+    }
+
+    pub(crate) fn set_store_pref(&mut self, pref: &str) -> Result<(), String> {
+        self.remote.store_pref = Some(pref.to_string());
+        let Some(p) = self.remote.credentials_prefs.clone() else { return Ok(()) };
+        if let Some(d) = p.parent() {
+            std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+        }
+        let tmp = p.with_extension("json.tmp");
+        std::fs::write(&tmp, serde_json::json!({"store": pref}).to_string()).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, &p).map_err(|e| format!("{}: {e}", p.display()))
     }
 
     /// A client for a connected account, with its stored key.

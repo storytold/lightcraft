@@ -111,14 +111,42 @@ fn test(_: &mut Session, p: &Value) -> Result<Value> {
 
 fn connect(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "immich.connect";
+    if bool_or(p, "background", false) {
+        // the probe runs on a worker; `remote.pump` stores the key and the account
+        let url = str_param(p, "url").ok_or_else(|| bad(C, "missing `url`"))?.to_string();
+        let key = str_param(p, "apiKey").map(str::trim).filter(|k| !k.is_empty()).ok_or_else(|| bad(C, "missing `apiKey`"))?.to_string();
+        let pinned = str_param(p, "pinned").map(str::to_string).filter(|f| !f.is_empty());
+        if s.remote.connecting {
+            return Ok(json!({"started": false, "reason": "a connection attempt is already running"}));
+        }
+        // fail now (not after the server answered) when there is nowhere to keep the key
+        s.secret_store().map_err(|e| bad(C, format!("can't store the API key: {e}")))?;
+        s.remote.connecting = true;
+        s.remote.connected = None;
+        let tx = s.remote.sender();
+        std::thread::spawn(move || {
+            let opts = dac_immich::ServerOptions { pinned: pinned.clone(), ..dac_immich::ServerOptions::default() };
+            let key = Secret::new(key);
+            let r = dac_immich::Client::new(&url, key.clone(), &opts)
+                .and_then(|cl| cl.status().map(|st| remote::Probed { base: cl.base().to_string(), status: st, pinned, key }));
+            let _ = tx.send(Msg::Connected(Box::new(r)));
+        });
+        return Ok(json!({"started": true}));
+    }
     let (base, st, pinned) = match probe(p, C)? {
         Ok(x) => x,
         Err(e) => return Ok(failure(&e)),
     };
     let key = str_param(p, "apiKey").map(str::trim).unwrap_or_default().to_string();
+    adopt(s, remote::Probed { base, status: st, pinned, key: Secret::new(key) }).map_err(|e| bad(C, e))
+}
+
+/// Store a probed server's key and account → the `immich.connect` result.
+fn adopt(s: &mut Session, pr: remote::Probed) -> std::result::Result<Value, String> {
+    let remote::Probed { base, status: st, pinned, key } = pr;
     let id = Account::make_id(&base, &st.user.id);
-    let store = s.secret_store().map_err(|e| bad(C, format!("can't store the API key: {e}")))?;
-    store.set(&dac_immich::accounts::secret_key(&id), &Secret::new(key)).map_err(|e| bad(C, format!("can't store the API key: {e}")))?;
+    let store = s.secret_store().map_err(|e| format!("can't store the API key: {e}"))?;
+    store.set(&dac_immich::accounts::secret_key(&id), &key).map_err(|e| format!("can't store the API key: {e}"))?;
     let acc = Account {
         id: id.clone(),
         url: base.clone(),
@@ -130,8 +158,8 @@ fn connect(s: &mut Session, p: &Value) -> Result<Value> {
         pinned,
         ..Account::default()
     };
-    s.immich_accounts().map_err(|e| bad(C, e))?.upsert(acc);
-    s.save_accounts().map_err(|e| bad(C, e))?;
+    s.immich_accounts()?.upsert(acc);
+    s.save_accounts()?;
     let mut v = status_json(&base, &st);
     v["account"] = json!(id);
     Ok(v)
@@ -164,10 +192,27 @@ fn disconnect(s: &mut Session, p: &Value) -> Result<Value> {
 fn status(s: &mut Session, p: &Value) -> Result<Value> {
     let accs = s.immich_accounts().map_err(|e| bad("immich.status", e))?.immich.clone();
     let check = bool_or(p, "check", false);
+    let background = bool_or(p, "background", false);
     let mut out = Vec::new();
     for a in &accs {
         let mut v = account_json(s, a);
-        if check {
+        if check && background {
+            if !s.remote.checking.contains(&a.id) {
+                match s.immich_client(&a.id) {
+                    Ok((_, c)) => {
+                        s.remote.checking.insert(a.id.clone());
+                        let tx = s.remote.sender();
+                        let account = a.id.clone();
+                        std::thread::spawn(move || {
+                            let _ = tx.send(Msg::Checked { account, result: c.status() });
+                        });
+                    }
+                    Err(e) => {
+                        s.remote.checks.insert(a.id.clone(), failure(&e));
+                    }
+                }
+            }
+        } else if check {
             v["server"] = match s.immich_client(&a.id).and_then(|(_, c)| c.status()) {
                 Ok(st) => {
                     if let Some(acc) = s.immich_accounts().ok().and_then(|x| x.get_mut(&a.id)) {
@@ -179,13 +224,22 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
                 Err(e) => failure(&e),
             };
         }
+        if v.get("server").is_none()
+            && let Some(c) = s.remote.checks.get(&a.id)
+        {
+            v["server"] = c.clone();
+        }
+        v["checking"] = json!(s.remote.checking.contains(&a.id));
         out.push(v);
     }
-    if check {
+    if check && !background {
         let _ = s.save_accounts();
     }
-    let st = s.secret_store().map(|x| x.name()).unwrap_or("unavailable");
-    Ok(json!({"accounts": out, "secretStore": st}))
+    let st = match &s.remote.store {
+        Some(x) => x.name(),
+        None => s.secret_store().map(|x| x.name()).unwrap_or("unavailable"),
+    };
+    Ok(json!({"accounts": out, "secretStore": st, "connecting": s.remote.connecting, "connected": s.remote.connected}))
 }
 
 /// Start a link pass for `account` (incremental from its last complete pass unless `full`).
@@ -494,7 +548,38 @@ fn fetch_original(s: &mut Session, p: &Value) -> Result<Value> {
 pub fn pump(s: &mut Session, p: &Value) -> Result<Value> {
     let now = (s.clock)();
     for m in s.remote.drain() {
+        let Some(m) = super::credentials::take_in(s, m) else { continue };
         match m {
+            Msg::FileUnlocked(_) | Msg::SystemUnlocked(_) => {}
+            Msg::Connected(r) => {
+                s.remote.connecting = false;
+                let v = match *r {
+                    Ok(pr) => adopt(s, pr).unwrap_or_else(|e| json!({"ok": false, "error": {"kind": "keyStorage", "message": e, "retryable": true}})),
+                    Err(e) => failure(&e),
+                };
+                s.remote.connected = Some(v);
+            }
+            Msg::Checked { account, result } => {
+                s.remote.checking.remove(&account);
+                let v = match result {
+                    Ok(st) => {
+                        let url = match s.immich_accounts().ok().and_then(|x| x.get_mut(&account)) {
+                            Some(acc) => {
+                                acc.version = Some(st.version);
+                                acc.permissions = st.permissions.clone();
+                                acc.url.clone()
+                            }
+                            None => String::new(),
+                        };
+                        if let Err(e) = s.save_accounts() {
+                            log::warn!("could not save the Immich accounts: {e}");
+                        }
+                        status_json(&url, &st)
+                    }
+                    Err(e) => failure(&e),
+                };
+                s.remote.checks.insert(account, v);
+            }
             Msg::Sha1(done) => {
                 s.remote.sha1_busy = false;
                 for (id, path, h) in done {
@@ -587,6 +672,9 @@ pub fn pump(s: &mut Session, p: &Value) -> Result<Value> {
         "import": s.remote.import,
         "fetching": s.remote.fetching.iter().map(|i| i.0).collect::<Vec<_>>(),
         "fetchErrors": s.remote.fetch_errors.iter().map(|(k, v)| json!({"id": k.0, "error": v})).collect::<Vec<_>>(),
+        "connecting": s.remote.connecting,
+        "checking": s.remote.checking.iter().collect::<Vec<_>>(),
+        "unlocking": s.remote.unlocking,
     }))
 }
 
@@ -779,7 +867,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "remote.pump", "Remote Work", [], None, "{sha1?: bool} — cheap, every frame: takes in finished background work (SHA-1 back-fill of originals, Immich link passes, imports, original downloads) and starts the next SHA-1 batch → {sha1, links, import, fetching, fetchErrors}", always, pump),
         cmd!(query "immich.test", "Test Immich Connection", [], None, "{url, apiKey, pinned?} — contact the server (not saved; never journaled) → {ok, url, version, user, permissions, missingPermissions} or {ok: false, error: {kind, message, retryable, fingerprint?}}", always, test),
-        cmd!(query "immich.connect", "Connect Immich Server", [], None, "{url, apiKey, pinned?: certificate fingerprint the user confirmed} — check the server (version ≥ 3.0) and key, store the key in the system keychain and the account in settings (never journaled) → {ok, account, …} or {ok: false, error}", always, connect),
+        cmd!(query "immich.connect", "Connect Immich Server", [], None, "{url, apiKey, pinned?: certificate fingerprint the user confirmed, background?: bool} — check the server (version ≥ 3.0) and key, store the key in the secret store (system keychain or the unlocked key file) and the account in settings (never journaled) → {ok, account, …} or {ok: false, error}; background → {started}, the result arrives as immich.status `connected`", always, connect),
         cmd!(
             "immich.disconnect",
             "Disconnect Immich Server",
@@ -789,7 +877,7 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             disconnect
         ),
-        cmd!(query "immich.status", "Immich Status", [], None, "{check?: bool — also contact each server} → {accounts: [{id, url, userName, version, permissions, linked, probable, link}], secretStore}", always, status),
+        cmd!(query "immich.status", "Immich Status", [], None, "{check?: bool — also contact each server, background?: bool — do that on workers (results in later calls' `server`)} → {accounts: [{id, url, userName, version, permissions, linked, probable, link, server?, checking}], secretStore, connecting, connected?}", always, status),
         cmd!(
             "immich.link",
             "Link Photos with Immich",

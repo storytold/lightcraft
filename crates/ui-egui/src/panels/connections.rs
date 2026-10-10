@@ -81,6 +81,15 @@ pub struct ImmichUi {
     fetch_tried: HashSet<u64>,
     last_pump: f64,
     last: Value,
+    /// Waiting for a background `immich.connect` (its result arrives in `immich.status`).
+    awaiting_connect: bool,
+    /// The key file's passphrase as typed (cleared once handed to `credentials.unlock`), and its
+    /// confirmation when the file is new.
+    passphrase: String,
+    passphrase2: String,
+    /// The last `credentials.status`, refreshed every few frames (it is cheap).
+    cred: Value,
+    cred_at: f64,
 }
 
 // ------------------------------------------------------------------------------------- pump
@@ -97,7 +106,10 @@ pub fn pump(app: &mut DacApp, ctx: &egui::Context) {
     let busy = v["sha1"]["active"] == true
         || v["import"]["active"] == true
         || v["links"].as_object().is_some_and(|m| m.values().any(|l| l["active"] == true))
-        || v["fetching"].as_array().is_some_and(|a| !a.is_empty());
+        || v["fetching"].as_array().is_some_and(|a| !a.is_empty())
+        || v["connecting"] == true
+        || v["unlocking"] == true
+        || v["checking"].as_array().is_some_and(|a| !a.is_empty());
     // an import that just finished: say so
     if app.immich.last["import"]["active"] == true && v["import"]["active"] == false {
         let n = v["import"]["imported"].as_u64().unwrap_or(0);
@@ -201,10 +213,20 @@ fn row<R>(ui: &mut egui::Ui, t: &Tokens, label: &str, add: impl FnOnce(&mut egui
     .inner
 }
 
-/// Run `immich.test` or `immich.connect` on a worker thread with its own session-free client.
-/// (`immich.connect` must store the key through the session, so it runs on the UI thread after a
-/// successful test, against a server that just answered.)
+/// Test the form's server on a worker thread (`immich.test` in a session of its own), or connect
+/// in the background (`immich.connect {background}`: the probe runs on a worker, `remote.pump`
+/// stores the key; the result shows up in `immich.status`).
 fn start_test(app: &mut DacApp, connect: bool) {
+    if connect {
+        let params = json!({"url": app.immich.url, "apiKey": app.immich.key, "pinned": app.immich.pinned, "background": true});
+        app.immich.result = None;
+        match app.session.execute("immich.connect", &params) {
+            Ok(r) if r["started"] == true => app.immich.awaiting_connect = true,
+            Ok(r) => app.immich.result = Some(json!({"ok": false, "error": {"message": r["reason"].as_str().unwrap_or("busy")}})),
+            Err(e) => app.immich.result = Some(json!({"ok": false, "error": {"kind": "keyStorage", "message": e.to_string()}})),
+        }
+        return;
+    }
     let slot: Slot<Value> = Arc::new(Mutex::new(None));
     let out = slot.clone();
     let params = json!({"url": app.immich.url, "apiKey": app.immich.key, "pinned": app.immich.pinned});
@@ -219,43 +241,39 @@ fn start_test(app: &mut DacApp, connect: bool) {
 
 pub fn settings_tab(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens) {
     // a finished test
-    if let Some((connect, slot)) = &app.immich.pending
+    if let Some((_, slot)) = &app.immich.pending
         && let Some(v) = take(slot)
     {
-        let connect = *connect;
         app.immich.pending = None;
-        if connect && v["ok"] == true {
-            let params = json!({"url": app.immich.url, "apiKey": app.immich.key, "pinned": app.immich.pinned});
-            let r = app.session.execute("immich.connect", &params).unwrap_or_else(|e| json!({"ok": false, "error": {"message": e.to_string()}}));
-            if r["ok"] == true {
-                app.immich.key.clear();
-                app.immich.url.clear();
-                app.immich.pinned = None;
-                if let Some(a) = r["account"].as_str() {
-                    let _ = app.session.execute("immich.link", &json!({"account": a}));
-                }
-            }
-            app.immich.result = Some(r);
-        } else {
-            app.immich.result = Some(v);
-        }
+        app.immich.result = Some(v);
     }
-    if app.immich.pending.is_some() {
+    if app.immich.pending.is_some() || app.immich.awaiting_connect {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
     }
-
+    key_storage(app, ui, t);
+    ui.add_space(8.0);
     super::settings::heading(ui, t, "Immich servers");
     let st = app.session.execute("immich.status", &json!({})).unwrap_or_default();
+    // a background connect that finished
+    if app.immich.awaiting_connect && st["connecting"] == false {
+        app.immich.awaiting_connect = false;
+        let r = st["connected"].clone();
+        if r["ok"] == true {
+            app.immich.key.clear();
+            app.immich.url.clear();
+            app.immich.pinned = None;
+            if let Some(a) = r["account"].as_str() {
+                let _ = app.session.execute("immich.link", &json!({"account": a}));
+            }
+        }
+        app.immich.result = Some(r);
+    }
     let accounts = st["accounts"].as_array().cloned().unwrap_or_default();
     if accounts.is_empty() {
         super::settings::hint(ui, t, "No server connected. Add one below to link your library with Immich and import from it.");
     }
     for (i, a) in accounts.iter().enumerate() {
         account_card(app, ui, t, i, a);
-    }
-    if let Some(store) = st["secretStore"].as_str().filter(|s| *s == "unavailable") {
-        let _ = store;
-        ui.label(RichText::new(crate::i18n::tr("No system keychain is available: API keys can't be stored on this computer.")).color(t.caution));
     }
 
     ui.add_space(8.0);
@@ -283,9 +301,10 @@ pub fn settings_tab(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens) {
     super::settings::hint(
         ui,
         t,
-        "The key needs asset.read, asset.view and asset.download to link and import, album.read and person.read to browse, library.read for external libraries. It is kept in the system keychain.",
+        "The key needs asset.read, asset.view and asset.download to link and import, album.read and person.read to browse, library.read for external libraries. It is kept in the key storage above, never in settings.",
     );
-    let ready = !app.immich.url.trim().is_empty() && !app.immich.key.trim().is_empty() && app.immich.pending.is_none();
+    let ready =
+        !app.immich.url.trim().is_empty() && !app.immich.key.trim().is_empty() && app.immich.pending.is_none() && !app.immich.awaiting_connect;
     ui.horizontal(|ui| {
         ui.add_space(124.0);
         if ui.add_enabled_ui(ready, |ui| text_button(ui, "immichTest", crate::i18n::tr("Test"), false)).inner.clicked() {
@@ -294,13 +313,149 @@ pub fn settings_tab(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens) {
         if ui.add_enabled_ui(ready, |ui| text_button(ui, "immichConnect", crate::i18n::tr("Connect"), false)).inner.clicked() {
             start_test(app, true);
         }
-        if app.immich.pending.is_some() {
+        if app.immich.pending.is_some() || app.immich.awaiting_connect {
             ui.spinner();
+            let what = if app.immich.awaiting_connect { "Connecting…" } else { "Testing…" };
+            ui.label(RichText::new(crate::i18n::tr(what)).color(t.text_dim));
         }
     });
     if let Some(r) = app.immich.result.clone() {
         result_box(app, ui, t, &r);
     }
+}
+
+/// `credentials.status`, refreshed at most twice a second.
+fn cred_status(app: &mut DacApp, ctx: &egui::Context) -> Value {
+    let now = ctx.input(|i| i.time);
+    if app.immich.cred.is_null() || now - app.immich.cred_at > 0.5 || app.immich.cred["unlocking"] == true {
+        app.immich.cred = app.session.execute("credentials.status", &json!({})).unwrap_or_default();
+        app.immich.cred_at = now;
+    }
+    app.immich.cred.clone()
+}
+
+/// Settings → Connections → Key storage: where API keys are kept (the system keychain or an
+/// encrypted file), and the passphrase prompt that unlocks the file once per session.
+fn key_storage(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens) {
+    super::settings::heading(ui, t, "Key storage");
+    let st = cred_status(app, ui.ctx());
+    let system_ok = st["system"]["state"] == "ok";
+    let pref = st["preference"].as_str().unwrap_or("system").to_string();
+    row(ui, t, "Keep keys in", |ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let sys = text_button(ui, "credStoreSystem", crate::i18n::tr("System Keychain"), pref == "system");
+        if sys.clicked() {
+            let _ = app.session.execute("credentials.useStore", &json!({"store": "system"}));
+            app.immich.cred = Value::Null;
+        }
+        if text_button(ui, "credStoreFile", crate::i18n::tr("Encrypted File"), pref == "file").clicked() {
+            let _ = app.session.execute("credentials.useStore", &json!({"store": "file"}));
+            app.immich.cred = Value::Null;
+        }
+    });
+    if !system_ok {
+        let why = match st["system"]["state"].as_str() {
+            Some("locked") => "The system keychain is locked.",
+            Some("unsupported") => "This build can't use this system's keychain, so keys go into an encrypted file.",
+            _ => "The system keychain can't be reached, so keys go into an encrypted file.",
+        };
+        super::settings::hint(ui, t, why);
+    }
+    if st["system"]["state"] == "locked" || st["error"]["kind"] == "locked" {
+        ui.horizontal(|ui| {
+            ui.add_space(124.0);
+            if ui
+                .add_enabled_ui(st["unlocking"] != true, |ui| text_button(ui, "credUnlockSystem", crate::i18n::tr("Unlock Keychain…"), false))
+                .inner
+                .clicked()
+            {
+                let _ = app.session.execute("credentials.unlockSystem", &json!({}));
+                app.immich.cred = Value::Null;
+            }
+        });
+    }
+    if st["needsPassphrase"] == true {
+        unlock_box(app, ui, t, &st);
+    } else {
+        let active = st["active"].as_str().unwrap_or("none");
+        let label = if active == "encrypted file" {
+            crate::i18n::tr("Keys are in the encrypted file (unlocked for this session).").to_string()
+        } else {
+            trf!("Keys are in the system keychain ({}).", active)
+        };
+        ui.horizontal(|ui| {
+            ui.add_space(124.0);
+            let l = ui.label(RichText::new(label).color(t.text_label));
+            register(ui.ctx(), "label:credStore", l.rect);
+            if st["file"]["unlocked"] == true && text_button(ui, "credLock", crate::i18n::tr("Lock"), false).clicked() {
+                let _ = app.session.execute("credentials.lock", &json!({}));
+                app.immich.cred = Value::Null;
+            }
+        });
+    }
+}
+
+/// The passphrase prompt of the encrypted key file (create it when there is none yet).
+pub(crate) fn unlock_box(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, st: &Value) {
+    let exists = st["file"]["exists"] == true;
+    let frame = egui::Frame::NONE.stroke(egui::Stroke::new(1.0, t.caution.gamma_multiply(0.5))).corner_radius(6.0).inner_margin(8);
+    let r = frame.show(ui, |ui| {
+        let title = if exists { "Unlock the key file" } else { "Create an encrypted key file" };
+        ui.label(RichText::new(crate::i18n::tr(title)).font(t.semibold(12.5)).color(t.text));
+        let hint = if exists {
+            "Your Immich keys are in a file encrypted with your passphrase. It is asked once per session."
+        } else {
+            "Choose a passphrase (at least 8 characters). Keys you add are encrypted with it; you give it once per session. It can't be recovered."
+        };
+        ui.label(RichText::new(crate::i18n::tr(hint)).size(11.5).color(t.text_label));
+        let mut submit = false;
+        row(ui, t, "Passphrase", |ui| {
+            let r = ui.add(egui::TextEdit::singleline(&mut app.immich.passphrase).password(true).desired_width(240.0));
+            register(ui.ctx(), "field:credPassphrase", r.rect);
+            submit |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        });
+        if !exists {
+            row(ui, t, "Repeat", |ui| {
+                let r = ui.add(egui::TextEdit::singleline(&mut app.immich.passphrase2).password(true).desired_width(240.0));
+                register(ui.ctx(), "field:credPassphrase2", r.rect);
+                submit |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            });
+        }
+        let long = app.immich.passphrase.chars().count() >= if exists { 1 } else { 8 };
+        let same = exists || app.immich.passphrase == app.immich.passphrase2;
+        let busy = st["unlocking"] == true;
+        ui.horizontal(|ui| {
+            ui.add_space(124.0);
+            let label = if exists { "Unlock" } else { "Create" };
+            let clicked = ui.add_enabled_ui(long && same && !busy, |ui| text_button(ui, "credUnlock", crate::i18n::tr(label), true)).inner.clicked();
+            if (clicked || submit) && long && same && !busy {
+                let pass = std::mem::take(&mut app.immich.passphrase);
+                app.immich.passphrase2.clear();
+                match app.session.execute("credentials.unlock", &json!({"passphrase": pass, "background": true})) {
+                    Ok(r) if r["started"] == true => {}
+                    Ok(r) => app.toast(ui.ctx(), r["reason"].as_str().unwrap_or("busy")),
+                    Err(e) => app.toast(ui.ctx(), e.to_string()),
+                }
+                app.immich.cred = Value::Null;
+            }
+            if busy {
+                ui.spinner();
+            }
+        });
+        if !exists && !same && !app.immich.passphrase2.is_empty() {
+            ui.label(RichText::new(crate::i18n::tr("The passphrases differ.")).size(11.0).color(t.caution));
+        }
+        let err = match st["error"]["kind"].as_str() {
+            Some("wrongPassphrase") => Some(crate::i18n::tr("Wrong passphrase.").to_string()),
+            Some("locked") | None => None,
+            Some(_) => st["error"]["message"].as_str().map(str::to_string),
+        };
+        if let Some(e) = err {
+            let l = ui.label(RichText::new(e).color(t.caution));
+            register(ui.ctx(), "label:credError", l.rect);
+        }
+    });
+    register(ui.ctx(), "credUnlockBox", r.response.rect);
 }
 
 fn result_box(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, r: &Value) {
@@ -377,6 +532,18 @@ fn account_card(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, i: usize, a: &V
             RichText::new(trf!("{} ({})", a["userName"].as_str().unwrap_or_default(), a["email"].as_str().unwrap_or_default())).color(t.text_label),
         );
         permissions(ui, t, a);
+        if a["checking"] == true {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(RichText::new(crate::i18n::tr("Checking the server…")).color(t.text_dim));
+            });
+        } else if a["server"]["ok"] == false {
+            let l = ui.label(RichText::new(a["server"]["error"]["message"].as_str().unwrap_or("failed")).color(t.caution));
+            register(ui.ctx(), format!("label:immichCheck-{i}"), l.rect);
+        } else if a["server"]["ok"] == true {
+            let l = ui.label(RichText::new(crate::i18n::tr("The server answers; the key works.")).color(t.text_label));
+            register(ui.ctx(), format!("label:immichCheck-{i}"), l.rect);
+        }
         let link = &a["link"];
         let status = if link["active"] == true {
             trf!("Linking… {} assets checked", link["seen"].as_u64().unwrap_or(0))
@@ -393,7 +560,7 @@ fn account_card(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, i: usize, a: &V
                 let _ = app.run("immich.link", json!({"account": id}));
             }
             if text_button(ui, &format!("immichRecheck-{i}"), crate::i18n::tr("Check"), false).clicked() {
-                let _ = app.run("immich.status", json!({"check": true}));
+                let _ = app.session.execute("immich.status", &json!({"check": true, "background": true}));
             }
             if text_button(ui, &format!("immichLibraries-{i}"), crate::i18n::tr("External Libraries…"), false).clicked() {
                 let v = app
