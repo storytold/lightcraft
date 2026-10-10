@@ -326,12 +326,30 @@ pub struct IdentityPlate {
     pub text: String,
     /// Draw the brand mark before the text.
     pub mark: bool,
+    /// A graphical plate: an SVG, PNG or JPEG file shown instead of the mark and text (empty =
+    /// the styled text plate).
+    pub image: String,
+    /// The text plate's font size (points).
+    pub size: f32,
+    /// The text plate's colour (`None` = the theme's text colour).
+    pub color: Option<[u8; 3]>,
+    pub bold: bool,
 }
 
 impl Default for IdentityPlate {
     fn default() -> Self {
-        IdentityPlate { text: String::new(), mark: true }
+        IdentityPlate { text: String::new(), mark: true, image: String::new(), size: 17.0, color: None, bold: false }
     }
+}
+
+/// `#rrggbb` (or `rrggbb`) → RGB.
+fn parse_hex(s: &str) -> Option<[u8; 3]> {
+    let h = s.trim().trim_start_matches('#');
+    if h.len() != 6 || !h.is_ascii() {
+        return None;
+    }
+    let c = |i: usize| h.get(i..i + 2).and_then(|x| u8::from_str_radix(x, 16).ok());
+    Some([c(0)?, c(2)?, c(4)?])
 }
 
 /// What the secondary window shows (⇧G / ⇧E / ⇧C / ⇧N, ⌘⇧↩).
@@ -703,6 +721,7 @@ pub const SHELL_COMMANDS: &[crate::menus::UiCommand] = &[
     ("view.screenModeNormal", "Normal", None, "Window>Screen Mode"),
     ("view.lightsOut", "Next Lights Out Mode", None, "Window>Lights Out"),
     ("view.identityPlate", "Identity Plate", None, ""),
+    ("dialog.identityPlateImage", "Choose Identity Plate Image…", None, ""),
     ("second.grid", "Secondary Grid", None, "Window>Secondary Display"),
     ("second.loupe", "Secondary Loupe", None, "Window>Secondary Display"),
     ("second.live", "Secondary Loupe – Live", None, "Window>Secondary Display"),
@@ -874,6 +893,17 @@ fn run_inner(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
             };
             Ok(json!({"lightsOut": app.ui.lights_out}))
         }
+        "dialog.identityPlateImage" => {
+            let req = crate::pick::PickRequest::file(crate::i18n::tr("Identity Plate"), crate::i18n::tr("Images"), &["svg", "png", "jpg", "jpeg"]);
+            match crate::pick::ask(app, "view.identityPlate", p, "image", req, |_| None) {
+                crate::pick::Picked::Now(v) => match v.into_iter().next() {
+                    Some(path) => app.run("view.identityPlate", json!({"image": path})),
+                    None => Ok(Value::Null),
+                },
+                crate::pick::Picked::Later => Ok(Value::Null),
+                crate::pick::Picked::Unavailable => Err("no file dialog on this platform: run view.identityPlate {image: path}".into()),
+            }
+        }
         "view.identityPlate" => {
             if let Some(t) = p.get("text").and_then(Value::as_str) {
                 // a name, not a document: cap it
@@ -881,6 +911,31 @@ fn run_inner(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
             }
             if let Some(m) = bool_param(p, "mark") {
                 app.ui.identity_plate.mark = m;
+            }
+            if let Some(v) = p.get("size") {
+                let s = v.as_f64().filter(|s| s.is_finite()).ok_or("view.identityPlate: size must be a number")?;
+                app.ui.identity_plate.size = (s as f32).clamp(9.0, 32.0);
+            }
+            match p.get("color") {
+                None => {}
+                Some(Value::Null) => app.ui.identity_plate.color = None,
+                Some(Value::String(s)) if s.is_empty() => app.ui.identity_plate.color = None,
+                Some(Value::String(s)) => {
+                    app.ui.identity_plate.color = Some(parse_hex(s).ok_or_else(|| format!("view.identityPlate: color `{s}` is not #rrggbb"))?)
+                }
+                Some(_) => return Err("view.identityPlate: color is \"#rrggbb\" or null".into()),
+            }
+            if let Some(b) = bool_param(p, "bold") {
+                app.ui.identity_plate.bold = b;
+            }
+            if let Some(path) = p.get("image").and_then(Value::as_str) {
+                if path.is_empty() {
+                    app.ui.identity_plate.image.clear();
+                } else {
+                    // checked now, so a bad file is an answer, not a silently empty plate
+                    crate::plate::load(path)?;
+                    app.ui.identity_plate.image = path.to_string();
+                }
             }
             Ok(json!(app.ui.identity_plate))
         }
@@ -976,6 +1031,29 @@ pub fn auto_show(app: &mut DacApp, ctx: &egui::Context) {
     }
 }
 
+/// The identity plate's context menu: a graphic from a file, back to text, the brand mark, bold.
+fn plate_menu(app: &mut DacApp, ui: &mut egui::Ui, plate: Rect) {
+    let resp = ui.interact(plate, egui::Id::new("identity-plate"), Sense::click());
+    resp.context_menu(|ui| {
+        if ui.button(crate::i18n::tr("Choose Plate Image…")).clicked() {
+            let _ = app.run("dialog.identityPlateImage", json!({}));
+            ui.close();
+        }
+        if !app.ui.identity_plate.image.is_empty() && ui.button(crate::i18n::tr("Use Text Plate")).clicked() {
+            let _ = app.run("view.identityPlate", json!({"image": ""}));
+            ui.close();
+        }
+        let mut mark = app.ui.identity_plate.mark;
+        if ui.checkbox(&mut mark, crate::i18n::tr("Show Brand Mark")).changed() {
+            let _ = app.run("view.identityPlate", json!({"mark": mark}));
+        }
+        let mut bold = app.ui.identity_plate.bold;
+        if ui.checkbox(&mut bold, crate::i18n::tr("Bold")).changed() {
+            let _ = app.run("view.identityPlate", json!({"bold": bold}));
+        }
+    });
+}
+
 /// The module bar (top edge): identity plate, activity, module picker.
 pub fn module_bar(app: &mut DacApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
@@ -991,18 +1069,34 @@ pub fn module_bar(app: &mut DacApp, ui: &mut egui::Ui) {
             let full = ui.max_rect();
             register(ui.ctx(), "region:moduleBar", full);
             // identity plate
-            let mut x = full.left();
-            if app.ui.identity_plate.mark {
-                let r = Rect::from_center_size(pos2(x + 13.0, full.center().y), vec2(24.0, 24.0));
-                paint_mark(ui.painter(), r);
-                x += 32.0;
-            }
-            let text =
-                if app.ui.identity_plate.text.trim().is_empty() { dac_brand::DISPLAY_NAME.to_string() } else { app.ui.identity_plate.text.clone() };
-            let g = ui.painter().layout_no_wrap(text, t.font(17.0), t.text);
-            let plate = Rect::from_min_size(pos2(full.left(), full.center().y - 12.0), vec2(x - full.left() + g.size().x, 24.0));
-            ui.painter().galley(pos2(x, full.center().y - g.size().y / 2.0), g, t.text);
+            let ip = app.ui.identity_plate.clone();
+            let image = (!ip.image.is_empty()).then(|| crate::plate::texture(ui.ctx(), &ip.image)).flatten();
+            let plate = if let Some(tex) = image {
+                // a graphical plate: the file, 32 px tall, instead of the mark and text
+                let [w, h] = tex.size();
+                let height = 32.0;
+                let width = (w as f32 * height / h.max(1) as f32).min(full.width() * 0.4);
+                let r = Rect::from_min_size(pos2(full.left(), full.center().y - height / 2.0), vec2(width, height));
+                ui.painter().image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
+                r
+            } else {
+                let mut x = full.left();
+                if ip.mark {
+                    let r = Rect::from_center_size(pos2(x + 13.0, full.center().y), vec2(24.0, 24.0));
+                    paint_mark(ui.painter(), r);
+                    x += 32.0;
+                }
+                let text = if ip.text.trim().is_empty() { dac_brand::DISPLAY_NAME.to_string() } else { ip.text.clone() };
+                let color = ip.color.map_or(t.text, |[r, g, b]| egui::Color32::from_rgb(r, g, b));
+                let size = if ip.size.is_finite() { ip.size.clamp(9.0, 32.0) } else { 17.0 };
+                let font = if ip.bold { t.semibold(size) } else { t.font(size) };
+                let g = ui.painter().layout_no_wrap(text, font, color);
+                let plate = Rect::from_min_size(pos2(full.left(), full.center().y - 12.0), vec2(x - full.left() + g.size().x, 24.0));
+                ui.painter().galley(pos2(x, full.center().y - g.size().y / 2.0), g, color);
+                plate
+            };
             register(ui.ctx(), "region:identityPlate", plate);
+            plate_menu(app, ui, plate);
             // activity: the status line (imports, exports, builds report here)
             if !app.ui.status.is_empty() {
                 let w = (full.width() * 0.3).max(120.0);

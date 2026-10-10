@@ -128,6 +128,24 @@ fn every_module_draws_and_the_picker_hides_modules() {
     // identity plate text, capped
     run(&mut h, "view.identityPlate", json!({"text": "x".repeat(500), "mark": false}));
     assert_eq!(h.app.ui.identity_plate.text.chars().count(), 80);
+    // styled text: size (clamped), colour, bold; bad values are errors
+    let r = run(&mut h, "view.identityPlate", json!({"size": 100, "color": "#ff8000", "bold": true}));
+    assert_eq!((r["size"].as_f64(), r["color"].clone(), r["bold"].clone()), (Some(32.0), json!([255, 128, 0]), json!(true)));
+    for bad in [json!({"color": "orange"}), json!({"color": 3}), json!({"size": "big"}), json!({"image": "/no/such/plate.svg"})] {
+        let r = h.request("engine.execute", json!({"command": "view.identityPlate", "params": bad}), T);
+        assert_eq!(r["ok"], false, "{r}");
+    }
+    // a graphic plate from an SVG file, drawn in the bar; "" goes back to text
+    let svg = std::env::temp_dir().join(format!("plate-{}.svg", std::process::id()));
+    std::fs::write(&svg, r#"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="30"><circle cx="15" cy="15" r="14" fill="teal"/></svg>"#)
+        .unwrap();
+    run(&mut h, "view.identityPlate", json!({"image": svg.to_string_lossy()}));
+    h.step();
+    h.step();
+    assert!(has_widget(&h, "region:identityPlate"));
+    run(&mut h, "view.identityPlate", json!({"image": ""}));
+    assert!(h.app.ui.identity_plate.image.is_empty());
+    let _ = std::fs::remove_file(&svg);
     // F5: the module bar goes
     run(&mut h, "panel.top", json!({}));
     assert!(!has_widget(&h, "region:moduleBar"));

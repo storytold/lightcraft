@@ -1796,5 +1796,12 @@
   "Show File Names": "顯示檔案名稱",
   "Cropped": "已裁切",
   "Rotated or flipped": "已旋轉或翻轉",
-  "Keywords, collections, crop, rotation, metadata status, remote link": "關鍵字、收藏集、裁切、旋轉、中繼資料狀態、遠端連結"
+  "Keywords, collections, crop, rotation, metadata status, remote link": "關鍵字、收藏集、裁切、旋轉、中繼資料狀態、遠端連結",
+  "Choose Plate Image…": "選擇身分識別圖像…",
+  "Choose Identity Plate Image…": "選擇身分識別圖像…",
+  "Use Text Plate": "使用文字識別",
+  "Show Brand Mark": "顯示品牌標誌",
+  "Bold": "粗體",
+  "Identity Plate": "身分識別",
+  "Images": "圖像"
 }

@@ -1796,5 +1796,12 @@
   "Show File Names": "Mostrar nombres de archivo",
   "Cropped": "Recortada",
   "Rotated or flipped": "Girada o volteada",
-  "Keywords, collections, crop, rotation, metadata status, remote link": "Palabras clave, colecciones, recorte, rotación, estado de metadatos, enlace remoto"
+  "Keywords, collections, crop, rotation, metadata status, remote link": "Palabras clave, colecciones, recorte, rotación, estado de metadatos, enlace remoto",
+  "Choose Plate Image…": "Elegir imagen de placa…",
+  "Choose Identity Plate Image…": "Elegir imagen de la placa de identidad…",
+  "Use Text Plate": "Usar placa de texto",
+  "Show Brand Mark": "Mostrar marca",
+  "Bold": "Negrita",
+  "Identity Plate": "Placa de identidad",
+  "Images": "Imágenes"
 }

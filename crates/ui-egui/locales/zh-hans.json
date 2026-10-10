@@ -1796,5 +1796,12 @@
   "Show File Names": "显示文件名",
   "Cropped": "已裁剪",
   "Rotated or flipped": "已旋转或翻转",
-  "Keywords, collections, crop, rotation, metadata status, remote link": "关键字、收藏夹、裁剪、旋转、元数据状态、远程链接"
+  "Keywords, collections, crop, rotation, metadata status, remote link": "关键字、收藏夹、裁剪、旋转、元数据状态、远程链接",
+  "Choose Plate Image…": "选择身份标识图像…",
+  "Choose Identity Plate Image…": "选择身份标识图像…",
+  "Use Text Plate": "使用文字标识",
+  "Show Brand Mark": "显示品牌标志",
+  "Bold": "粗体",
+  "Identity Plate": "身份标识",
+  "Images": "图像"
 }

@@ -1796,5 +1796,12 @@
   "Show File Names": "ファイル名を表示",
   "Cropped": "切り抜き済み",
   "Rotated or flipped": "回転または反転済み",
-  "Keywords, collections, crop, rotation, metadata status, remote link": "キーワード、コレクション、切り抜き、回転、メタデータの状態、リモートリンク"
+  "Keywords, collections, crop, rotation, metadata status, remote link": "キーワード、コレクション、切り抜き、回転、メタデータの状態、リモートリンク",
+  "Choose Plate Image…": "プレート画像を選択…",
+  "Choose Identity Plate Image…": "ID プレート画像を選択…",
+  "Use Text Plate": "テキストプレートを使用",
+  "Show Brand Mark": "ブランドマークを表示",
+  "Bold": "太字",
+  "Identity Plate": "ID プレート",
+  "Images": "画像"
 }

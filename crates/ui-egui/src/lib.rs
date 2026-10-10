@@ -29,6 +29,7 @@ mod model_setup;
 pub mod module;
 pub mod panels;
 pub mod pick;
+pub mod plate;
 pub mod region;
 pub mod render;
 pub mod shortcuts;

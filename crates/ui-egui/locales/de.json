@@ -1951,5 +1951,12 @@
   "Show File Names": "Dateinamen anzeigen",
   "Cropped": "Freigestellt",
   "Rotated or flipped": "Gedreht oder gespiegelt",
-  "Keywords, collections, crop, rotation, metadata status, remote link": "Stichwörter, Sammlungen, Freistellung, Drehung, Metadatenstatus, Remote-Verknüpfung"
+  "Keywords, collections, crop, rotation, metadata status, remote link": "Stichwörter, Sammlungen, Freistellung, Drehung, Metadatenstatus, Remote-Verknüpfung",
+  "Choose Plate Image…": "Erkennungstafel-Bild wählen …",
+  "Choose Identity Plate Image…": "Bild für Erkennungstafel wählen …",
+  "Use Text Plate": "Texttafel verwenden",
+  "Show Brand Mark": "Markenzeichen anzeigen",
+  "Bold": "Fett",
+  "Identity Plate": "Erkennungstafel",
+  "Images": "Bilder"
 }

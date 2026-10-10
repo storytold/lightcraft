@@ -1470,5 +1470,12 @@
   "Show File Names": "Показывать имена файлов",
   "Cropped": "Кадрировано",
   "Rotated or flipped": "Повёрнуто или отражено",
-  "Keywords, collections, crop, rotation, metadata status, remote link": "Ключевые слова, коллекции, кадрирование, поворот, состояние метаданных, удалённая связь"
+  "Keywords, collections, crop, rotation, metadata status, remote link": "Ключевые слова, коллекции, кадрирование, поворот, состояние метаданных, удалённая связь",
+  "Choose Plate Image…": "Выбрать изображение таблички…",
+  "Choose Identity Plate Image…": "Выбрать изображение фирменной таблички…",
+  "Use Text Plate": "Использовать текстовую табличку",
+  "Show Brand Mark": "Показывать знак",
+  "Bold": "Жирный",
+  "Identity Plate": "Фирменная табличка",
+  "Images": "Изображения"
 }
