@@ -1411,6 +1411,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "unicode-segmentation",
+ "wat",
  "web-time",
 ]
 

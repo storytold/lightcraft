@@ -11,9 +11,9 @@ plug-ins are not supported.
 | Menu commands, optionally with a dialog | `commands: [{id, label, menu, dialog}]` | `{"hook":"command","command","args","selection"}` |
 | Export post-processing | `hooks.export: true` | `{"hook":"export","files":[{path, photo}]}`; the exported files are lent to the call for reading and writing |
 | Metadata and keyword suggestions | `hooks.metadata: true` | `{"hook":"metadata","photos":[photo.inspect JSON]}` → `{"suggestions":[{photo, fields?, keywords?}]}` |
-| A publish service | `publish: {id, name}` | `{"hook":"publish.upload","service","item":{path, photo, title, caption, keywords, remoteId?}}` → `{remoteId, url?}`; `{"hook":"publish.delete","service","remoteId"}` |
+| A publish service (kind `plugin:<id>` in `publish.addService`) | `publish: {id, name}` | `{"hook":"publish.upload","service","item":{path, photo, title, caption, keywords, remoteId?}}` → `{remoteId, url?}`; `{"hook":"publish.delete","service","remoteId"}` |
 
-Commands run as the engine command `plugin.run {plugin, command, args?, ids?}`. The UI, CLI,
+Commands appear under File ▸ Plug-in Extras and run as the engine command `plugin.run {plugin, command, args?, ids?}`. The UI, CLI,
 control channel and MCP all use this command. `plugin.commands` lists the commands so front
 ends can build menus and dialogs. Dialog fields are `{key, label, type}`, where `type` is one of
 `text` (`default`), `number` (`min`, `max`, `default`), `bool` (`default`) or `choice`
@@ -22,8 +22,10 @@ the plug-in sees them.
 
 ## Permissions
 
-A plug-in gets nothing it did not ask for in `permissions`. On install, the user grants all of
-the requested permissions or some of them. The Plugin Manager can revoke a permission at any
+A plug-in gets nothing it did not ask for in `permissions`, and nothing the user did not approve.
+Installing shows every requested permission with a checkbox, unticked, and grants only the ones the
+user ticks; an update shows what it newly asks for and keeps nothing beyond the previous grant
+unless approved. Through the engine, `plugin.install` without `grant` grants nothing new. The Plugin Manager can revoke a permission at any
 time, and the change applies from the next call. In every call, the plug-in's effective rights
 are the granted permissions intersected with the requested ones.
 
@@ -108,9 +110,6 @@ disabled and with no permissions granted.
 
 ## Not done yet
 
-- Export hooks are not yet called automatically when an export finishes. Front ends call
-  `plugin.postExport` with the written files.
-- The `publish` crate does not wrap `dac_plugins::publish::PluginPublisher` in its service trait
-  yet.
-- There is no binary file I/O for plug-ins yet (only text), and no WebDAV example plug-in.
-- Plug-in commands appear in the Plugin Manager, not yet as items in the main menus.
+- Export hooks run after exports from the app's Export dialog (synchronously, on the UI thread);
+  the CLI's and MCP's exports don't call them yet (`plugin.postExport` does it by hand).
+- No binary file I/O for plug-ins yet (only text), and no WebDAV example plug-in.

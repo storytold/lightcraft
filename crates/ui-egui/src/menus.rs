@@ -29,8 +29,18 @@ pub const LANGUAGE_COMMANDS: &[UiCommand] = &[
 /// Every UI command: the languages, then everything else. `xtask parity` reads both tables from
 /// this file, so an id listed in `docs/parity.md` is checked wherever it is declared.
 pub fn ui_commands() -> impl Iterator<Item = &'static UiCommand> {
-    LANGUAGE_COMMANDS.iter().chain(UI_COMMANDS).chain(crate::module::SHELL_COMMANDS)
+    LANGUAGE_COMMANDS.iter().chain(UI_COMMANDS).chain(crate::module::SHELL_COMMANDS).chain(PLUGIN_COMMANDS)
 }
+
+/// P4.3: the Plug-in Manager (`crate::panels::plugins`); native only, so the web build lists none.
+#[cfg(not(target_arch = "wasm32"))]
+const PLUGIN_COMMANDS: &[UiCommand] = &[
+    ("plugins.manager", "Plug-in Manager…", None, "File"),
+    ("plugins.install", "Install Plug-in…", None, ""),
+    ("plugins.runItem", "Run Plug-in Command", None, ""),
+];
+#[cfg(target_arch = "wasm32")]
+const PLUGIN_COMMANDS: &[UiCommand] = &[];
 
 /// The language a Language-menu command selects, if the id is one. The engine and the UI both go
 /// through here, so the menu, the settings row and the control channel agree on the mapping.
@@ -180,7 +190,6 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("file.importLightroom", "Import Lightroom Catalog…", None, "File"),
     ("file.importImmich", "Import from Immich…", None, "File"),
     ("immich.connections", "Immich Connections…", None, "Library>Immich"),
-    ("plugins.manager", "Plug-in Manager…", None, "File"),
     ("file.addFromDevice", "Import from Device", None, ""),
     ("file.findMissing", "Find Missing Photos…", None, "Library"),
     ("file.backupLibrary", "Back Up Library…", None, "File"),
