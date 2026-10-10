@@ -183,3 +183,13 @@ fn pan_at_one_to_one_on_45_megapixels() {
         );
     }
 }
+
+/// An absurd export size is refused, not a multiply overflow (it panicked before the fix).
+#[test]
+fn huge_export_size_is_an_error() {
+    let mut s = Session::with_demo();
+    let id = s.catalog.photos().next().unwrap().id;
+    let huge = usize::MAX >> 8;
+    assert!(s.render_export(id, huge, huge, OutputSpace::Srgb, OutputDepth::U8).is_err());
+    assert!(s.render_export(id, 70_000, 10, OutputSpace::Srgb, OutputDepth::U8).is_err());
+}

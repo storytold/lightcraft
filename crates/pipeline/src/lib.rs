@@ -156,6 +156,21 @@ impl PixelWindow {
     }
 }
 
+/// The longest output side a render may be asked for (TIFF/PNG/JPEG all fit within it).
+pub const MAX_OUTPUT_SIDE: usize = 65_535;
+/// The most output pixels a render may be asked for (the box it fits into, ≈ 1.07 Gpx).
+pub const MAX_OUTPUT_PIXELS: usize = 1 << 30;
+
+/// Rejects an output box past [`MAX_OUTPUT_SIDE`] or [`MAX_OUTPUT_PIXELS`] before anything is
+/// sized from it.
+pub fn check_output_size(max_w: usize, max_h: usize) -> Result<(), String> {
+    let pixels = max_w.checked_mul(max_h);
+    if max_w > MAX_OUTPUT_SIDE || max_h > MAX_OUTPUT_SIDE || pixels.is_none_or(|n| n > MAX_OUTPUT_PIXELS) {
+        return Err(format!("output size {max_w}×{max_h} is too large (at most {MAX_OUTPUT_SIDE} px per side and {MAX_OUTPUT_PIXELS} pixels)"));
+    }
+    Ok(())
+}
+
 impl RenderRequest {
     pub fn fit(max_w: usize, max_h: usize) -> Self {
         Self {
