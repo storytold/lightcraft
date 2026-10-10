@@ -103,10 +103,10 @@ walks the drive.
 
 ## Where it is used
 - `lightcraft_engine::media::develop` (called by every `RenderJob`): loupe / before / compare views,
-  `render_now` (CLI, MCP, control channel renders) and full-size 8-bit exports render on the GPU when
-  one is available; grid/filmstrip thumbnails (many small jobs in parallel) stay on the CPU, and so
-  do high-bit-depth renders, which includes every desktop export smaller than the photo (its
-  16-bit intermediate is downsized, `DeepImage::downscaled`).
+  `render_now` (CLI, MCP, control channel renders) and 8-bit exports render on the GPU when one is
+  available (an export of at most half the photo's size renders its 8-bit intermediate there at
+  twice the size, then is downsized on the CPU, `lightcraft_pipeline::output::downscale_rgba8`);
+  grid/filmstrip thumbnails (many small jobs in parallel) and high-bit-depth renders stay on the CPU.
 - Anything the GPU path cannot do returns `None` and the CPU renders instead: no adapter (CI
   machines, software-only adapters), `LIGHTCRAFT_GPU=0` or `LIGHTCRAFT_GPU_BACKEND=off` (whole
   process; see [Backends](#backends-environment-variables-and-troubleshooting-issue-136)), the `app.gpu {enabled}`

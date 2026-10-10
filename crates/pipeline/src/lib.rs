@@ -191,6 +191,19 @@ impl Rendered {
         let histogram = Histogram::of_srgb8(&image);
         Rendered { image, histogram, deep: Some(deep) }
     }
+
+    /// This render resized to `w × h` as an export is downsized ([`DeepImage::downscaled`]): its
+    /// deep samples when it has them, else its 8-bit image (encoded in `space`).
+    pub fn downscaled(&self, w: usize, h: usize, space: OutputSpace) -> Rendered {
+        match &self.deep {
+            Some(deep) => Rendered::from_deep(deep.downscaled(w, h)),
+            None => {
+                let image = output::downscale_rgba8(&self.image, space, w, h);
+                let histogram = Histogram::of_srgb8(&image);
+                Rendered { image, histogram, deep: None }
+            }
+        }
+    }
 }
 
 /// Everything the per-pixel stage needs, precomputed at output resolution.
