@@ -38,6 +38,7 @@ dac-net = { path = "crates/net" }
 dac-credentials = { path = "crates/credentials" }
 dac-hash = { path = "crates/hash" }
 dac-immich = { path = "crates/immich" }
+dac-webgallery = { path = "crates/webgallery" }
 dac-heif = { path = "crates/heif" }
 dac-segment = { path = "crates/segment" }
 
