@@ -2105,7 +2105,15 @@ pub(crate) fn filmstrip(app: &mut DacApp, ui: &mut egui::Ui, r: Rect) {
             if !local.intersects(vp.expand2(vec2(cell_w * 4.0, 0.0))) {
                 continue;
             }
-            let resp = ui.interact(cr, egui::Id::new(("film", id.0)), Sense::click());
+            // in the Map module photos are dragged from the strip onto the map to geotag them
+            let map = app.ui.module == crate::module::ModuleId::Map;
+            let resp = ui.interact(cr, egui::Id::new(("film", id.0)), if map { Sense::click_and_drag() } else { Sense::click() });
+            if map && resp.drag_started() {
+                if !app.session.selection.contains(*id) {
+                    let _ = app.run("library.select", json!({"ids": [id.0]}));
+                }
+                app.ui.dragging_photos = Some(app.session.selection.ids.iter().map(|p| p.0).collect());
+            }
             register(ui.ctx(), format!("film:{}", id.0), cr);
             let state = app.session.selection.state_of(*id);
             let sel = state == dac_engine::SelectionState::Active;

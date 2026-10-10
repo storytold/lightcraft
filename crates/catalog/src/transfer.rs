@@ -112,6 +112,7 @@ pub fn subset(cat: &Catalog, opts: &ExportOptions) -> Catalog {
         out.previews = cat.previews.iter().filter(|(id, _)| keep.contains(id)).map(|(k, v)| (*k, v.clone())).collect();
     }
     out.label_names = cat.label_names.clone();
+    out.saved_locations = cat.saved_locations.clone();
     out.next_photo = cat.next_photo;
     out.next_album = cat.next_album;
     out.next_stack = cat.next_stack;

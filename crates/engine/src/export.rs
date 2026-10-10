@@ -1316,7 +1316,9 @@ pub fn export_metadata(photo: &dac_catalog::Photo, catalog: &dac_catalog::Catalo
     out.caption = text(&m.caption);
     out.alt_text = text(&m.alt_text);
     out.extended_description = text(&m.extended_description);
-    if !o.remove_location {
+    // a photo inside a private saved location (Map module) is exported without its location
+    let remove_location = o.remove_location || m.gps.is_some_and(|g| catalog.is_private_location(g));
+    if !remove_location {
         out.sublocation = text(&m.location);
         out.city = text(&m.city);
         out.state = text(&m.state);
@@ -1329,7 +1331,7 @@ pub fn export_metadata(photo: &dac_catalog::Photo, catalog: &dac_catalog::Catalo
     out.rating = (photo.rating > 0).then_some(photo.rating as i8);
     // Pixels are exported upright: orientation is baked in.
     out.orientation = Some(dac_meta::Orientation::Normal);
-    if !o.remove_location {
+    if !remove_location {
         out.gps = m.gps.map(|(latitude, longitude)| Gps { latitude, longitude, altitude: None });
     }
     if o.metadata == MetadataPolicy::All {

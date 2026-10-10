@@ -203,8 +203,9 @@ fn op_variants_are_versioned() {
             Op::SetAlbumOrder { .. } => 3,
             Op::SetSha1 { .. } | Op::SetKind { .. } | Op::SetXmpStamp { .. } | Op::SetRemote { .. } | Op::SetPreview { .. } => 4,
             Op::SetEmbeddedLens { .. } | Op::SetKeyword { .. } | Op::SetFolderRecord { .. } => 5,
+            Op::SetSavedLocation { .. } => 6,
         }
     }
-    let newest = since(&Op::SetFolderRecord { folder: "/".into(), record: None });
+    let newest = since(&Op::SetSavedLocation { name: "x".into(), location: None });
     assert_eq!(newest, VERSION, "the newest op's version must be the current format version");
 }

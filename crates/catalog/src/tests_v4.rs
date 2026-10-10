@@ -84,6 +84,8 @@ fn fill(j: &mut Journal, c: &mut Catalog, n: u64) {
     // format version 5 (upstream's keyword list and folder records): kept in the store's head record
     ops.push(Op::SetKeyword { path: "People|Anna".into(), info: Some(keywords::KeywordInfo { person: true, ..Default::default() }) });
     ops.push(c.folder_label_op("/pics/2020", Some(ColorLabel::Green)));
+    // format version 6 (the Map module's saved locations): also in the head record
+    ops.push(Op::SetSavedLocation { name: "Home".into(), location: Some(dac_geo::SavedLocation::new("Home", 48.85, 2.35, 300.0, true).unwrap()) });
     for op in &ops {
         c.apply(op.clone()).unwrap();
     }
