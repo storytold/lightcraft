@@ -89,6 +89,8 @@ mod tests_titlebar;
 #[cfg(test)]
 mod tests_unsaved;
 #[cfg(test)]
+mod tests_wb_selector;
+#[cfg(test)]
 mod tests_zoom;
 #[cfg(test)]
 mod tests_zoom_keys;
