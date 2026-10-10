@@ -726,7 +726,7 @@ From `06-shortcuts.md` part 1. Evidence is our binding; conflicts are explained 
 | KEY-SHORTCUTS | Shortcut list — ⌘/ | P1 | ✅ | `cmd:app.shortcuts` | |
 | KEY-HELP | Help — F1 | P2 | ✅ | `cmd:app.help` | |
 | KEY-VIDEO-PLAY | Play/pause video — Space | P1 | ⬜ | | |
-| KEY-ESC | Leave tool / view — Esc | P0 | ✅ | `cmd:view.back`, `crates/ui-egui/src/icons.rs` (`navigation_arrowheads_have_both_halves`) | top-bar navigation arrowheads render both halves at 1× and 2× scale |
+| KEY-ESC | Leave tool / view — Esc | P0 | ✅ | `cmd:view.back`, `crates/ui-egui/src/icons.rs` (`navigation_arrowheads_have_both_halves`), `crates/ui-egui/src/tests_crop_tool.rs` | top-bar navigation arrowheads render both halves at 1× and 2× scale; in the crop tool Esc closes the tool first (the crop stays), the next Esc goes back to the grid; Esc that ends an edit in a text field does nothing else |
 | KEY-COMMIT | Commit tool — Return | P1 | ✅ | `cmd:tool.done` | Return closes Crop / Remove / Red Eye / Masking back to Edit (edits apply live, as in Lightroom) |
 | KEY-DELETE-PIN | Delete selected pin — ⌫ | P0 | ✅ | `cmd:mask.delete`, `cmd:spot.delete` | ⌫ deletes the active mask (Masking) or the selected spot (Remove), never the photo while retouching |
 | KEY-HIDEPINS | Hide pins — H | P2 | ⬜ | | H = Remove panel |

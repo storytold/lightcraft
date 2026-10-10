@@ -43,6 +43,8 @@ mod tests_album_picker;
 #[cfg(test)]
 mod tests_crop_rotate;
 #[cfg(test)]
+mod tests_crop_tool;
+#[cfg(test)]
 mod tests_curve;
 #[cfg(test)]
 mod tests_date_picker;
@@ -229,6 +231,9 @@ pub struct LightcraftApp {
     /// The keyboard shortcuts editor is waiting for a key press for this command: no shortcut
     /// fires (the native menu bar drops its accelerators too) until it gets one or is cancelled.
     pub recording_shortcut: Option<String>,
+    /// A text field had the keyboard at the end of the last frame. egui drops the focus as Esc
+    /// arrives, before the shortcuts are read, so this is how Esc there stays the field's own.
+    pub text_focus: bool,
     /// The host is [`headless::Headless`] (it answers viewport screenshot commands itself).
     pub headless_host: bool,
     /// Warnings to show one at a time (damaged settings files…, issue #103).
@@ -341,6 +346,7 @@ impl LightcraftApp {
             native_menu: false,
             native_shortcuts: Default::default(),
             recording_shortcut: None,
+            text_focus: false,
             headless_host: false,
             notices: vec![],
             quit_prompt: None,
@@ -1074,6 +1080,7 @@ impl LightcraftApp {
         panels::keyword_list::drag_feedback(self, &ctx);
         panels::toast(self, &ctx);
         self.widgets = widgets::take_registry(&ctx);
+        self.text_focus = ctx.egui_wants_keyboard_input();
         self.end_frame(&ctx, t0);
     }
 }

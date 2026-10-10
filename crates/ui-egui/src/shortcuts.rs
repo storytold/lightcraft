@@ -319,6 +319,8 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     // an open popup (a menu, a date picker's calendar) closes on Esc itself: Esc's command (Back,
     // which also closes dialogs) waits until nothing is open
     let popup_open = egui::Popup::is_any_open(ctx);
+    // Esc that just took a text field's focus away (it gives back the field's text) does nothing else
+    let popup_open = popup_open || app.text_focus;
     ctx.input(|i| {
         for b in bindable() {
             if let Some(sc) = binding(keymap, b.id, b.default)
