@@ -870,8 +870,8 @@ fn missing_photos_skip_local_browse_records() {
     assert_eq!(s.visible_cloned().len(), 4, "the view lists what the count counts");
 }
 
-/// Import a file that is in Recently Deleted (issue #298): by default it is skipped but the
-/// report says it is in the trash; `onDeleted: restore` brings it back with its edits;
+/// Import a file that is in Recently Deleted (issues #298, #706): by default the photo comes
+/// back with its edits; `onDeleted: skip` leaves it there but the report says it is in the trash;
 /// `onDeleted: fresh` replaces the trashed record with a new one.
 fn trashed_photo(tag: &str) -> (Session, std::path::PathBuf, u64) {
     let src = temp_dir(tag);
@@ -884,14 +884,115 @@ fn trashed_photo(tag: &str) -> (Session, std::path::PathBuf, u64) {
     (s, src, id)
 }
 
+/// Issue #706: import a photo, delete it, import the same file again. Before, the import skipped
+/// it as "already in the library" (a duplicate by path) while the grid showed it deleted, and the
+/// user was stuck. Now the photo is restored: it is back in All Photos, with its edits.
+#[test]
+fn importing_a_deleted_photo_again_brings_it_back() {
+    let (mut s, src, id) = trashed_photo("trash-reimport");
+    assert_eq!(s.visible_cloned().len(), 0, "deleted: not in All Photos");
+    let r = s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
+    assert_eq!(r["restored"], json!([id]), "{r}");
+    assert_eq!(ids(&r, "duplicates"), 0, "not reported as a duplicate: {r}");
+    let p = s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap();
+    assert!(!p.deleted && p.rating == 4, "back with its edits");
+    assert_eq!(s.catalog.len(), 1, "no second record");
+    assert_eq!(s.visible_cloned(), vec![lightcraft_catalog::PhotoId(id)], "shown again in All Photos");
+    // undo puts it back in Recently Deleted
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().deleted);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// The same sequence with the library on disk and a restart between the delete and the import:
+/// the trashed record is read back from the catalog and restored, not refused.
+#[test]
+fn importing_a_deleted_photo_again_after_reopening_the_library_brings_it_back() {
+    let src = temp_dir("trash-reimport-reopen");
+    write_png(&src.join("a.png"), 1);
+    let lib = src.join("library");
+    let id = {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
+        let r = s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()], "albumName": "Trip"})).unwrap();
+        let id = r["imported"][0].as_u64().unwrap();
+        s.execute("photo.rate", &json!({"ids": [id], "rating": 2})).unwrap();
+        s.execute("photo.delete", &json!({"ids": [id]})).unwrap();
+        s.close_library().unwrap();
+        id
+    };
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().deleted, "deleted state persisted");
+    let r = s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
+    assert_eq!(r["restored"], json!([id]), "{r}");
+    assert_eq!(ids(&r, "duplicates"), 0, "{r}");
+    let p = s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap();
+    assert!(!p.deleted && p.rating == 2, "restored with its edits");
+    let album = s.catalog.albums().find(|a| a.name == "Trip").unwrap();
+    assert_eq!(album.photos, vec![lightcraft_catalog::PhotoId(id)], "still in its album");
+    assert_eq!(s.visible_cloned().len(), 1);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A deleted photo whose file was moved meanwhile: importing the file from its new place restores
+/// the photo and points it at the file (matched by content), instead of bringing back a record
+/// whose file is missing.
+#[test]
+fn importing_a_deleted_photo_from_its_new_place_restores_and_relinks_it() {
+    let (mut s, src, id) = trashed_photo("trash-reimport-moved");
+    std::fs::create_dir_all(src.join("moved")).unwrap();
+    std::fs::rename(src.join("a.png"), src.join("moved/b.png")).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [src.join("moved/b.png").to_string_lossy()]})).unwrap();
+    assert_eq!(r["restored"], json!([id]), "{r}");
+    let p = s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap();
+    assert!(!p.deleted && p.rating == 4);
+    assert_eq!(p.source, lightcraft_catalog::Source::File { path: src.join("moved/b.png").to_string_lossy().to_string() });
+    assert_eq!(p.file_name, "b.png");
+    assert_eq!(s.catalog.len(), 1);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// Only an import brings a deleted photo back. Looking at its folder in Local, and Auto Import
+/// seeing its file again in the watched folder (a copy: the source is not a path the library
+/// knows), leave it in Recently Deleted.
+#[test]
+fn browsing_and_auto_import_never_restore_a_deleted_photo() {
+    let (mut s, src, id) = trashed_photo("trash-no-silent-restore");
+    let r = s.execute("library.browse", &json!({"path": src.to_string_lossy()})).unwrap();
+    assert_eq!(r["new"], 0, "{r}");
+    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().deleted, "browsing only looks");
+    assert_eq!(s.catalog.len(), 1);
+    // auto import in copy mode: the trashed photo's copy is in the library's folder, so the watched
+    // folder's file is new by path and a duplicate by content
+    let lib = src.join("library");
+    let watched = src.join("watched");
+    write_png(&watched.join("w.png"), 7);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [watched.join("w.png").to_string_lossy()], "mode": "copy"})).unwrap();
+    let copied = r["imported"][0].as_u64().unwrap();
+    s.execute("photo.delete", &json!({"ids": [copied]})).unwrap();
+    s.execute("library.autoImport", &json!({"folder": watched.to_string_lossy(), "copy": true})).unwrap();
+    for _ in 0..3 {
+        let r = s.execute("library.autoImportScan", &json!({})).unwrap();
+        assert_eq!(r["imported"], json!([]), "{r}");
+    }
+    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(copied)).unwrap().deleted, "still deleted");
+    assert_eq!(s.catalog.len(), 1, "no second copy");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// `onDeleted: skip` keeps the old behaviour for callers that want it: nothing imported, the
+/// duplicate reported with `existingDeleted`.
 #[test]
 fn duplicate_in_recently_deleted_is_reported_as_such() {
     let (mut s, src, id) = trashed_photo("trash-report");
-    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()], "onDeleted": "skip"})).unwrap();
     assert_eq!(ids(&r, "imported"), 0, "{r}");
     assert_eq!(r["duplicates"][0]["existing"], id, "{r}");
     assert_eq!(r["duplicates"][0]["existingDeleted"], true, "{r}");
-    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().deleted, "default: left in the trash");
+    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().deleted, "skip: left in the trash");
     let _ = std::fs::remove_dir_all(&src);
 }
 

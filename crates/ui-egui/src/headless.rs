@@ -2595,9 +2595,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The import review offers what to do with files that are in Recently Deleted (issue #298):
-    /// they are unchecked until Restore or Import as new is chosen; then confirming restores the
-    /// photo (with its edits) or imports the file afresh.
+    /// The import review offers what to do with files that are in Recently Deleted (issues #298,
+    /// #706): they are checked, to be restored, by default; Leave them unchecks them; confirming
+    /// restores the photo (with its edits) or, with Import as new, imports the file afresh.
     #[test]
     fn import_review_offers_recently_deleted_files() {
         for (choice, tag) in [("restore", "r"), ("fresh", "f")] {
@@ -2624,9 +2624,12 @@ mod tests {
             h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [dir.to_string_lossy()]}}), t);
             h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })));
             let Some(crate::state::Dialog::Import { opts }) = &mut h.app.ui.dialog else { panic!("no import review") };
-            assert_eq!(opts.selected_paths().len(), 1, "only the new file: the trashed one waits for a choice");
+            assert_eq!(opts.on_deleted, "restore", "the default brings a deleted photo back");
+            assert_eq!(opts.selected_paths().len(), 2, "the trashed file is checked from the start: it will be restored");
+            opts.set_on_deleted("");
+            assert_eq!(opts.selected_paths().len(), 1, "Leave them: only the new file");
             opts.set_on_deleted(choice);
-            assert_eq!(opts.selected_paths().len(), 2, "the trashed file is checked once a choice is made");
+            assert_eq!(opts.selected_paths().len(), 2, "the trashed file is checked again once a choice is made");
             // a per-cell choice survives switching between the two options, and "Leave them" unchecks
             let trashed = (0..opts.candidates.len()).find(|i| opts.is_trashed(*i)).unwrap();
             opts.checked[trashed] = false;
@@ -2711,9 +2714,10 @@ mod tests {
         assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })), "still open");
     }
 
-    /// Adding a file again that is in Recently Deleted shows it there (side panel opened, photo
-    /// selected) instead of only saying "duplicate skipped"; its menus offer Restore, and once
-    /// restored a re-add selects it in All Photos.
+    /// Adding a file again (dropped on the window, no review) whose photo is in Recently Deleted
+    /// brings the photo back, selected in All Photos, and says so (issue #706) — it is not
+    /// skipped as a duplicate; the trash view's menus offer Restore and Delete Permanently, and a
+    /// re-add of a photo that is in the library selects it in All Photos.
     #[test]
     fn readding_a_deleted_photo_shows_it_in_recently_deleted() {
         let dir = std::env::temp_dir().join(format!("lc-ui-readd-{}", std::process::id()));
@@ -2740,6 +2744,7 @@ mod tests {
         crate::import::start_paths(&mut h.app, paths.clone()).unwrap();
         h.settle(SETTLE);
         let id = h.app.session.selection.active.expect("imported photo selected");
+        let n0 = h.app.session.catalog.len();
         h.request("engine.execute", json!({"command": "photo.delete", "params": {"ids": [id.0]}}), t);
         assert!(h.app.session.catalog.photo(id).unwrap().deleted);
         let photo_items = |app: &LightcraftApp| -> Vec<String> {
@@ -2749,14 +2754,22 @@ mod tests {
         };
         assert!(!photo_items(&h.app).contains(&"photo.restore".to_string()), "Restore only for deleted photos");
 
-        h.app.ui.left_panel = false;
         crate::import::start_paths(&mut h.app, paths.clone()).unwrap();
         finish_import(&mut h);
-        assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::RecentlyDeleted);
-        assert_eq!(h.app.session.selection.ids, vec![id]);
-        assert!(h.app.ui.left_panel, "the side panel listing Recently Deleted is opened");
+        assert!(!h.app.session.catalog.photo(id).unwrap().deleted, "re-adding the file restores the photo");
+        assert_eq!(h.app.session.catalog.len(), n0, "no second record");
+        assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::All);
+        assert_eq!(h.app.session.selection.ids, vec![id], "the restored photo is selected");
         let toast = h.app.ui.toast.clone().expect("toast").0;
-        assert!(toast.contains("Recently Deleted") && toast.contains("Restore"), "{toast}");
+        assert!(toast.contains("Restored 1 photo from Recently Deleted"), "{toast}");
+        assert!(!photo_items(&h.app).contains(&"photo.restore".to_string()));
+        // undo of the re-add puts it back in Recently Deleted; the trash view's menus offer Restore
+        h.request("engine.execute", json!({"command": "edit.undo"}), t);
+        assert!(h.app.session.catalog.photo(id).unwrap().deleted, "one undo step");
+        h.request("engine.execute", json!({"command": "library.source", "params": {"kind": "recentlyDeleted"}}), t);
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0]}}), t);
+        h.settle(SETTLE);
+        assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::RecentlyDeleted);
         let items = photo_items(&h.app);
         assert!(items.contains(&"photo.restore".to_string()) && items.contains(&"photo.deletePermanently".to_string()), "{items:?}");
         assert!(!items.contains(&"photo.delete".to_string()), "{items:?}");

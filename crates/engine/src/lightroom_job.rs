@@ -141,7 +141,8 @@ pub struct LightroomJob {
 impl LightroomJob {
     /// Snapshot session state only.  This constructor performs no filesystem work.
     pub fn new(s: &mut crate::Session, path: PathBuf, update_existing: bool) -> crate::Result<Self> {
-        let opts = ImportOptions { mode: ImportMode::Add, ..ImportOptions::default() };
+        // a photo deleted here stays deleted: the catalog's record is matched, not restored
+        let opts = ImportOptions { mode: ImportMode::Add, on_deleted: crate::import::OnDeleted::Skip, ..ImportOptions::default() };
         let import = ImportJob::new(s, opts)?;
         let archive_dir = s.library.as_ref().filter(|library| library.on_disk).map(|library| library.dir.join("Interop"));
         Ok(Self { path, update_existing, import, token: LightroomLibraryToken::capture(s), archive_dir })
@@ -242,7 +243,7 @@ pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) 
 
     let undo0 = s.undo.len();
     prepared.normal.revalidate_add(s);
-    let options = ImportOptions { mode: ImportMode::Add, ..ImportOptions::default() };
+    let options = ImportOptions { mode: ImportMode::Add, on_deleted: crate::import::OnDeleted::Skip, ..ImportOptions::default() };
     let now = prepared.now.clone();
     let files = crate::import::commit_prepared(s, &options, &now, prepared.normal)?;
     let applied = lightroom_catalog::apply_prepared(
