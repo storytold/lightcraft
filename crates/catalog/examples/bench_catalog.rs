@@ -89,8 +89,17 @@ fn filters() -> Vec<(&'static str, Filter)> {
 
 /// Peak resident set size of this process (MB), where the OS says it.
 fn peak_rss_mb() -> Option<f64> {
+    status_mb("VmHWM:")
+}
+
+/// Current resident set size of this process (MB), where the OS says it.
+fn rss_mb() -> Option<f64> {
+    status_mb("VmRSS:")
+}
+
+fn status_mb(key: &str) -> Option<f64> {
     let s = std::fs::read_to_string("/proc/self/status").ok()?;
-    let line = s.lines().find(|l| l.starts_with("VmHWM:"))?;
+    let line = s.lines().find(|l| l.starts_with(key))?;
     let kb: f64 = line.split_whitespace().nth(1)?.parse().ok()?;
     Some(kb / 1024.0)
 }
@@ -156,8 +165,13 @@ fn open_phase(backend: &str, dir: &Path) -> R<()> {
     let t = Instant::now();
     let (_j, cat) = open_journal(backend, dir)?;
     let open_ms = ms(t);
+    let open_rss = rss_mb();
     let mut q = serde_json::Map::new();
     let sort = Sort::default();
+    // the first query of a session sorts every photo once (kept for the next ones)
+    let t = Instant::now();
+    std::hint::black_box(cat.query(&Filter::default(), &sort).len());
+    let first_ms = ms(t);
     for (name, f) in filters() {
         // the first run warms caches; the median of 3 is reported
         let mut v: Vec<f64> = (0..3)
@@ -171,7 +185,10 @@ fn open_phase(backend: &str, dir: &Path) -> R<()> {
         v.sort_by(f64::total_cmp);
         q.insert(name.into(), serde_json::json!(v.get(1).copied().unwrap_or(0.0)));
     }
-    println!("{}", serde_json::json!({"photos": cat.len(), "open_ms": open_ms, "peak_rss_mb": peak_rss_mb(), "filter_ms": q}));
+    println!(
+        "{}",
+        serde_json::json!({"photos": cat.len(), "open_ms": open_ms, "first_query_ms": first_ms, "peak_rss_mb": peak_rss_mb(), "rss_after_open_mb": open_rss, "rss_mb": rss_mb(), "filter_ms": q})
+    );
     Ok(())
 }
 

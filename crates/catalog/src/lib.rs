@@ -282,6 +282,9 @@ pub struct Catalog {
     /// Increments on every applied op.
     #[serde(skip)]
     pub revision: u64,
+    /// Whole-catalog sort orders kept between queries (see [`query::SortCache`]).
+    #[serde(skip)]
+    sort_cache: query::SortCache,
 }
 
 impl Catalog {
@@ -457,6 +460,13 @@ impl Catalog {
     }
 
     fn apply_inner(&mut self, op: Op) -> Result<Op> {
+        match &op {
+            Op::AddPhoto { .. } | Op::RemovePhoto { .. } | Op::SetCaptured { .. } => self.sort_cache.bump(true),
+            Op::SetRating { .. } | Op::SetDevelop { .. } | Op::SetFile { .. } | Op::Relink { .. } | Op::SetContent { .. } => {
+                self.sort_cache.bump(false)
+            }
+            _ => {}
+        }
         Ok(match op {
             Op::AddPhoto { photo } => {
                 if self.photos.contains_key(&photo.id) {
@@ -854,6 +864,8 @@ mod tests_journal;
 mod tests_local;
 #[cfg(test)]
 mod tests_lock;
+#[cfg(test)]
+mod tests_sort_cache;
 #[cfg(test)]
 mod tests_torn_append;
 #[cfg(test)]
