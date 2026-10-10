@@ -162,8 +162,11 @@ fn photo_tile(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId, slot: Slot, area
     let aspect = frame.aspect() as f32;
     let native = super::detail::output_px(&frame);
     let mut img = super::detail::fit_rect(img_area, aspect, zoom, native, ppp, app.ui.pan);
-    if matches!(app.ui.view, ViewMode::Compare | ViewMode::Reference) {
+    let side_by_side = matches!(app.ui.view, ViewMode::Compare | ViewMode::Reference);
+    let mut gesturing = false;
+    if side_by_side {
         if super::detail::navigate_gesture(app, ui, &resp, img_area, img, native) {
+            gesturing = true;
             img = super::detail::fit_rect(img_area, aspect, app.ui.zoom, native, ppp, app.ui.pan);
         } else if resp.dragged() {
             super::detail::pan_image(app, img_area, img, resp.drag_delta());
@@ -181,16 +184,23 @@ fn photo_tile(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId, slot: Slot, area
     let p = ui.painter_at(img_area);
     let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
     let mut display = img;
+    let mut own_aspect = None;
     if let Some(tex) = app.renderer.textures.get(&slot).filter(|x| x.photo == id) {
         let texture_aspect = tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32;
         display = super::detail::fit_rect(img_area, texture_aspect, zoom, native, ppp, app.ui.pan);
         p.image(tex.tex.id(), display, uv, Color32::WHITE);
+        own_aspect = Some(texture_aspect);
     } else if let Some(tex) = app.renderer.textures.get(&Slot::Thumb(id)) {
         let texture_aspect = tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32;
         display = super::detail::fit_rect(img_area, texture_aspect, zoom, native, ppp, app.ui.pan);
         p.image(tex.tex.id(), display, uv, Color32::WHITE);
     } else {
         p.rect_filled(img.intersect(img_area), 0.0, Color32::from_gray(38));
+    }
+    // zoomed in: the tiles on screen at up to 100 %, sharp like the loupe's (Compare, Reference)
+    if side_by_side && let Slot::Compare(i) = slot {
+        let pane = crate::render::PANE_COMPARE.saturating_add(i);
+        zoomed_tiles(app, ui.ctx(), &p, id, pane, photo.develop.hash64(), aspect, native, display, img_area, own_aspect, gesturing);
     }
     if photo.flag == Flag::Reject {
         p.rect_filled(display, 0.0, Color32::from_black_alpha(110));
@@ -370,4 +380,73 @@ pub fn show_reference(app: &mut DacApp, ui: &mut egui::Ui) {
     });
     let mid = area.center().x;
     ui.painter().line_segment([pos2(mid, area.top()), pos2(mid, area.bottom())], Stroke::new(1.0, Tokens::get(ui.ctx()).divider));
+}
+
+/// A Compare / Reference photo zoomed past what its whole-frame render holds: the tiles on screen
+/// (and a drag window while its sliders drag) over it, as the loupe has (see
+/// [`super::detail::request_window`]). `shown_aspect` is the aspect of the picture drawn: tiles
+/// are cut from the frame, so they go only over a picture that is the frame.
+#[allow(clippy::too_many_arguments)]
+fn zoomed_tiles(
+    app: &mut DacApp,
+    ctx: &egui::Context,
+    p: &egui::Painter,
+    id: PhotoId,
+    pane: u8,
+    look: u64,
+    aspect: f32,
+    native: [usize; 2],
+    img: Rect,
+    area: Rect,
+    shown_aspect: Option<f32>,
+    holding: bool,
+) {
+    use super::detail::{WindowCtx, WindowView};
+    let ppp = ctx.pixels_per_point();
+    let texture_side = super::detail::texture_side(ctx);
+    let sizes = crate::region::ViewSizes {
+        drawn_long: img.width().max(img.height()) * ppp,
+        canvas_long: area.width().max(area.height()) * ppp,
+        native_long: native[0].max(native[1]),
+        texture_side,
+        draft_scale: 1.0,
+        windows: true,
+    };
+    let frame_edge = crate::region::plan(&app.ui.settings, sizes)
+        .window_edge
+        .filter(|edge| app.window_refused != Some((id, look, *edge)))
+        .filter(|_| shown_aspect.is_some_and(|a| crate::region::same_aspect(a, aspect)));
+    let memory_id = egui::Id::new(("cull-region", pane));
+    let c = WindowCtx {
+        id,
+        frame_edge,
+        aspect,
+        texture_side,
+        crop_tool: false,
+        // (sliders edit the active photo: in the Reference view, its pane drafts while they drag)
+        interacting: app.session.interaction.is_some() && app.session.active() == Some(id),
+        look,
+        holding,
+        overlay: dac_pipeline::Overlay::None,
+        proof: None,
+        full_preview: None,
+    };
+    let v = WindowView { pane, before: false, img, target: img, visible: area };
+    let prev = ctx.data(|d| d.get_temp::<crate::region::RegionView>(memory_id));
+    let mut wanted = Vec::new();
+    let view = super::detail::request_window(app, &c, &v, prev, &mut wanted, ctx);
+    if !holding {
+        app.renderer.cancel_tiles(|s| !matches!(s, Slot::Tile { pane: q, .. } if q == pane) || wanted.contains(&s));
+    }
+    match view {
+        Some(view) => {
+            ctx.data_mut(|d| d.insert_temp(memory_id, view));
+            super::detail::draw_window(p, app, &c, &v, &view);
+        }
+        None => {
+            ctx.data_mut(|d| d.remove::<crate::region::RegionView>(memory_id));
+            app.renderer.tiles.retain(|k| k.pane != pane);
+            app.renderer.release(Slot::Window(pane));
+        }
+    }
 }

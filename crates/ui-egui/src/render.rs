@@ -30,11 +30,10 @@ pub enum Slot {
     /// A thumbnail's stand-in (embedded preview of an unedited raw).
     ThumbQuick(PhotoId),
     Main,
-    /// The loupe zoomed past what `Main` can hold: the window of the frame that is on screen,
-    /// rendered at the zoom scale and drawn over `Main` (see [`crate::region`]).
-    Region,
-    /// The Before side of a Before/After view zoomed the same way (see [`Slot::Region`]).
-    RegionBefore,
+    /// A zoomed view while a slider drags: the window of the frame that is on screen, rendered in
+    /// one draft job with its own stage cache (each tile apart would redo every stage per tile) and
+    /// drawn over `Main` until the tiles of the final look arrive. By pane ([`PANE_AFTER`]…).
+    Window(u8),
     /// The loupe's stand-in until `Main` has the photo.
     Preview,
     Before,
@@ -52,13 +51,31 @@ pub enum Slot {
     Import(u32),
     /// The second window's view of the active photo.
     Second,
-    /// A tile of a zoomed view (see [`crate::region::TileCache`]): its side of a Before/After view
-    /// and its place in the grid. Its result goes to [`Renderer::tiles`], not [`Renderer::textures`].
+    /// A tile of a zoomed view (see [`crate::region::TileCache`]): the pane it is shown in
+    /// ([`PANE_AFTER`]…) and its place in the grid. Its result goes to [`Renderer::tiles`], not
+    /// [`Renderer::textures`].
     Tile {
-        before: bool,
+        pane: u8,
         col: u16,
         row: u16,
     },
+}
+
+/// The panes a zoomed view's tiles and drag windows belong to: the loupe (its After and Before
+/// sides) and the Compare / Reference views' two photos.
+pub const PANE_AFTER: u8 = 0;
+pub const PANE_BEFORE: u8 = 1;
+/// The first Compare / Reference pane (`PANE_COMPARE + i` for [`Slot::Compare`]`(i)`).
+pub const PANE_COMPARE: u8 = 2;
+
+/// Where a [`Slot::Window`] render sits: the photo, the zoomed frame, the window of it rendered,
+/// and the develop settings' hash it was asked for with.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowGeom {
+    pub photo: PhotoId,
+    pub full: (usize, usize),
+    pub window: dac_engine::pipeline::PixelWindow,
+    pub look: u64,
 }
 
 pub struct Tex {
@@ -123,9 +140,9 @@ pub(crate) fn stage_trim_order(sizes: &[(Slot, usize)], budget: usize) -> Vec<Sl
         _ => 5,
     };
     let view_rank = |s: Slot| match s {
-        Slot::RegionBefore => Some(0),
+        Slot::Window(PANE_BEFORE) => Some(0),
         Slot::Before => Some(1),
-        Slot::Region => Some(2),
+        Slot::Window(_) => Some(2),
         _ => None,
     };
     let is_view = |s: Slot| matches!(s, Slot::Main) || view_rank(s).is_some();
@@ -222,6 +239,11 @@ pub struct Renderer {
     pub tiles: crate::region::TileCache<Tex>,
     /// Tile slot → (job key, what it shows, window rendered, tile within it) of its request.
     tile_meta: HashMap<Slot, (u64, crate::region::TileKey, dac_engine::pipeline::PixelWindow, dac_engine::pipeline::PixelWindow)>,
+    /// Request id → where a [`Slot::Window`] request's pixels go (a late draft is still shown, so
+    /// each request keeps its own; bounded).
+    window_req: HashMap<u64, WindowGeom>,
+    /// Where each [`Slot::Window`] texture's pixels go.
+    window_shown: HashMap<Slot, WindowGeom>,
     /// Since when nothing has been pending, and whether the GPU pool was trimmed since.
     #[cfg(not(target_arch = "wasm32"))]
     idle: Option<(std::time::Instant, bool)>,
@@ -235,7 +257,7 @@ impl Slot {
     /// An interactive view of the open photo: slider drags redo only the stages they feed, and a
     /// draft that finishes late still replaces older pixels.
     pub fn is_view(self) -> bool {
-        matches!(self, Slot::Main | Slot::Region | Slot::RegionBefore | Slot::Before | Slot::Hover)
+        matches!(self, Slot::Main | Slot::Window(_) | Slot::Before | Slot::Hover)
     }
 }
 
@@ -271,6 +293,8 @@ impl Renderer {
             stages: HashMap::new(),
             tiles: Default::default(),
             tile_meta: HashMap::new(),
+            window_req: HashMap::new(),
+            window_shown: HashMap::new(),
             quick_tried: HashMap::new(),
             failed: HashMap::new(),
             catalog_rev: 0,
@@ -331,6 +355,7 @@ impl Renderer {
     pub fn release(&mut self, slot: Slot) {
         self.textures.remove(&slot);
         self.stages.remove(&slot);
+        self.window_shown.remove(&slot);
     }
 
     /// Run jobs through `offload` from now on (instead of the job pool / inline).
@@ -419,6 +444,32 @@ impl Renderer {
         self.queue.clear();
         self.tiles.clear();
         self.tile_meta.clear();
+        self.window_req.clear();
+        self.window_shown.clear();
+    }
+
+    /// Ask for the drag window of `pane` ([`Slot::Window`]): `job` renders `geom.window` of the
+    /// frame, with the pane's own stage cache, so a drag redoes only the stages it feeds.
+    pub fn request_window(&mut self, pane: u8, job: RenderJob, geom: WindowGeom, priority: u32) {
+        let slot = Slot::Window(pane);
+        self.request(slot, job, priority);
+        if let Some(&id) = self.request_ids.get(&slot) {
+            if self.window_req.len() >= 32 {
+                // the oldest requests go: their results are superseded by now
+                let mut ids: Vec<u64> = self.window_req.keys().copied().collect();
+                ids.sort_unstable();
+                for old in ids.into_iter().take(16) {
+                    self.window_req.remove(&old);
+                }
+            }
+            self.window_req.insert(id, geom);
+        }
+    }
+
+    /// The drag window `pane` shows, and where its pixels go.
+    pub fn window_texture(&self, pane: u8) -> Option<(&Tex, WindowGeom)> {
+        let slot = Slot::Window(pane);
+        Some((self.textures.get(&slot)?, *self.window_shown.get(&slot)?))
     }
 
     /// Ask for tile `key`: `job` renders `window` of the frame, of which `tile` is kept. Nothing
@@ -434,7 +485,7 @@ impl Renderer {
         if self.tiles.has_render(&key) {
             return;
         }
-        let slot = Slot::Tile { before: key.before, col: key.tile.col, row: key.tile.row };
+        let slot = Slot::Tile { pane: key.pane, col: key.tile.col, row: key.tile.row };
         self.tile_meta.insert(slot, (job.key, key, window, tile));
         self.request(slot, job, priority);
     }
@@ -451,7 +502,7 @@ impl Renderer {
     fn tile_tex(&self, ctx: &egui::Context, key: crate::region::TileKey, img: &dac_raster::Rgba8, ms: f64) -> Tex {
         let color = std::sync::Arc::new(color_image(img));
         let pixels = self.keep_pixels.then(|| color.clone());
-        let tex = ctx.load_texture(format!("tile {:?} {:?}", key.tile, key.before), color, egui::TextureOptions::LINEAR);
+        let tex = ctx.load_texture(format!("tile {:?} {:?}", key.tile, key.pane), color, egui::TextureOptions::LINEAR);
         Tex { key: key.look, photo: key.photo, tex, size: [img.width, img.height], histogram: None, ms, quick: None, pixels }
     }
 
@@ -673,6 +724,14 @@ impl Renderer {
             };
             if matches!(slot, Slot::Prefetch(_)) {
                 continue;
+            }
+            if let Slot::Window(_) = slot {
+                match self.window_req.get(&r.request_id) {
+                    Some(g) => {
+                        self.window_shown.insert(slot, *g);
+                    }
+                    None => continue,
+                }
             }
             if let Slot::Tile { .. } = slot {
                 if let Some(&(key, tile_key, window, tile)) = self.tile_meta.get(&slot)
@@ -1257,7 +1316,7 @@ mod stage_budget_tests {
     // Given stage caches within the budget, nothing is cleared
     #[test]
     fn nothing_is_trimmed_within_the_budget() {
-        let sizes = [(Slot::Main, 300 * MB), (Slot::Region, 100 * MB)];
+        let sizes = [(Slot::Main, 300 * MB), (Slot::Window(PANE_AFTER), 100 * MB)];
         assert_eq!(stage_trim_order(&sizes, 512 * MB), vec![]);
     }
 
@@ -1281,10 +1340,10 @@ mod stage_budget_tests {
     // caches, never the whole-frame view's.
     #[test]
     fn the_open_photos_views_are_trimmed_only_in_a_runaway_and_never_the_whole_frame() {
-        let views = [(Slot::Main, 400 * MB), (Slot::Region, 500 * MB), (Slot::RegionBefore, 500 * MB), (Slot::Before, 100 * MB)];
+        let views = [(Slot::Main, 400 * MB), (Slot::Window(PANE_AFTER), 500 * MB), (Slot::Window(PANE_BEFORE), 500 * MB), (Slot::Before, 100 * MB)];
         assert_eq!(stage_trim_order(&views, 400 * MB), vec![], "1.5 GB against a 400 MB budget is a busy Before/After, not a runaway");
         // against a 100 MB budget (HARD_FACTOR 4 = 400 MB) it is: the before side goes first, then the window
-        assert_eq!(stage_trim_order(&views, 100 * MB), vec![Slot::RegionBefore, Slot::Before, Slot::Region]);
+        assert_eq!(stage_trim_order(&views, 100 * MB), vec![Slot::Window(PANE_BEFORE), Slot::Before, Slot::Window(PANE_AFTER)]);
         let mut with_idle = views.to_vec();
         with_idle.push((Slot::Hover, 50 * MB));
         assert_eq!(stage_trim_order(&with_idle, 400 * MB), vec![Slot::Hover]);

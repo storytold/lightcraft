@@ -211,7 +211,7 @@ mod in_the_loupe {
             .renderer
             .tiles
             .iter()
-            .filter(|(k, _)| k.before == before && k.photo == view.photo && k.full == view.full && k.look == view.settings)
+            .filter(|(k, _)| k.before() == before && k.photo == view.photo && k.full == view.full && k.look == view.settings)
             .map(|(k, t)| (*k, t))
             .collect()
     }
@@ -269,24 +269,27 @@ mod in_the_loupe {
         h.settle(SETTLE);
         let view = h.app.region_view.expect("a window render");
         let tiles = side_tiles(&h, false);
-        let (key, tex) = tiles.iter().max_by_key(|(_, t)| t.size[0] * t.size[1]).expect("a tile");
-        let tile = tex.pixels.clone().expect("tile pixels");
-        let window = crate::region::tile_rect(view.full, view.tile, key.tile).expect("inside the frame");
+        assert!(!tiles.is_empty(), "a tile");
         let main = h.app.renderer.textures.get(&Slot::Main).and_then(|t| t.pixels.clone()).expect("main pixels");
+        // (over every tile: one alone can sit on detail the canvas-sized render cannot hold)
         let (mut sum, mut n) = (0.0f32, 0.0f32);
-        for j in (8..tile.size[1] - 8).step_by(37) {
-            for i in (8..tile.size[0] - 8).step_by(37) {
-                // the same point of the frame in the whole-frame render
-                let u = (window.x + i) as f32 / view.full.0 as f32;
-                let v = (window.y + j) as f32 / view.full.1 as f32;
-                let (mx, my) =
-                    (((u * main.size[0] as f32) as usize).min(main.size[0] - 1), ((v * main.size[1] as f32) as usize).min(main.size[1] - 1));
-                let (a, b) = (tile.pixels[j * tile.size[0] + i], main.pixels[my * main.size[0] + mx]);
-                sum += (0..3).map(|k| (a.to_array()[k] as f32 - b.to_array()[k] as f32).abs()).sum::<f32>() / 3.0;
-                n += 1.0;
+        for (key, tex) in &tiles {
+            let tile = tex.pixels.clone().expect("tile pixels");
+            let window = crate::region::tile_rect(view.full, view.tile, key.tile).expect("inside the frame");
+            for j in (8..tile.size[1].saturating_sub(8)).step_by(37) {
+                for i in (8..tile.size[0].saturating_sub(8)).step_by(37) {
+                    // the same point of the frame in the whole-frame render
+                    let u = (window.x + i) as f32 / view.full.0 as f32;
+                    let v = (window.y + j) as f32 / view.full.1 as f32;
+                    let (mx, my) =
+                        (((u * main.size[0] as f32) as usize).min(main.size[0] - 1), ((v * main.size[1] as f32) as usize).min(main.size[1] - 1));
+                    let (a, b) = (tile.pixels[j * tile.size[0] + i], main.pixels[my * main.size[0] + mx]);
+                    sum += (0..3).map(|k| (a.to_array()[k] as f32 - b.to_array()[k] as f32).abs()).sum::<f32>() / 3.0;
+                    n += 1.0;
+                }
             }
         }
-        assert!(sum / n < 6.0, "mean difference {:.2} / 255 between the window and the frame render", sum / n);
+        assert!(sum / n < 6.0, "mean difference {:.2} / 255 between the tiles and the frame render", sum / n);
     }
 
     // Given a Fit view, a slider drag (whose Main draft is at 0.6 scale) does not start window renders
@@ -387,7 +390,8 @@ mod in_the_loupe {
         assert!(main <= 1000 && main * 4 < native, "the whole-frame draft is {main} px for a {native} px photo");
         let region = h.app.region_view.expect("the window is drafted too");
         assert_eq!(region.full.0.max(region.full.1), native, "at 100 %, magnified by the GPU");
-        assert!(region_tile(&h).is_some(), "a tile draft");
+        let (_, g) = h.app.renderer.window_texture(crate::render::PANE_AFTER).expect("a window draft");
+        assert_eq!(g.window, region.window);
         let w = region.window;
         assert!(w.w * w.h <= 4 * crate::region::TILE * crate::region::TILE, "{w:?}: the tiles hold what is on screen, not the frame");
         assert_eq!(h.app.renderer.tiles_pending(), 0, "no ring of tiles around the view is drafted");
@@ -521,7 +525,11 @@ mod in_the_loupe {
                 );
                 assert_eq!(r["ok"], true);
                 let mut frames = 0;
-                while (h.app.renderer.is_pending(Slot::Main) || h.app.renderer.tiles_pending() > 0) && frames < 2000 {
+                while (h.app.renderer.is_pending(Slot::Main)
+                    || h.app.renderer.is_pending(Slot::Window(crate::render::PANE_AFTER))
+                    || h.app.renderer.tiles_pending() > 0)
+                    && frames < 2000
+                {
                     h.step();
                     std::thread::sleep(std::time::Duration::from_micros(200));
                     frames += 1;
@@ -529,9 +537,9 @@ mod in_the_loupe {
                 ms.push(t0.elapsed().as_secs_f64() * 1e3);
             }
             ms.sort_by(|a, b| a.total_cmp(b));
-            let (w, hh) = region_tile(&h).unwrap_or((0, 0));
+            let (w, hh) = h.app.renderer.window_texture(crate::render::PANE_AFTER).map_or((0, 0), |(_, g)| (g.window.w, g.window.h));
             eprintln!(
-                "PROFILE {}x{} canvas, {percent:>4}% (0 = fit) of {native} px: tick→shown median {:.1} ms, p90 {:.1} ms, max {:.1} ms; whole-frame render {} px, window tile {w}×{hh}",
+                "PROFILE {}x{} canvas, {percent:>4}% (0 = fit) of {native} px: tick→shown median {:.1} ms, p90 {:.1} ms, max {:.1} ms; whole-frame render {} px, drag window {w}×{hh}",
                 size[0],
                 size[1],
                 ms[ms.len() / 2],
@@ -541,8 +549,70 @@ mod in_the_loupe {
             );
             eprintln!("        {}", h.app.renderer.memory());
             let job_ms = |slot| h.app.renderer.textures.get(&slot).map_or(0.0, |t| t.ms);
-            let tile_ms = side_tiles(&h, false).iter().map(|(_, t)| t.ms).fold(0.0, f64::max);
-            eprintln!("        last job times: whole frame {:.1} ms, slowest tile {tile_ms:.1} ms", job_ms(Slot::Main));
+            eprintln!(
+                "        last job times: whole frame {:.1} ms, drag window {:.1} ms",
+                job_ms(Slot::Main),
+                job_ms(Slot::Window(crate::render::PANE_AFTER))
+            );
+        }
+    }
+
+    // Given a slider drag at 1:1, the window on screen is drafted as one job with its own stage
+    // cache (not a job per tile with none: 10-15x slower), drawn over the tiles; once the drag
+    // ends, the tiles of the final look are rendered and the drag window goes under them
+    #[test]
+    fn a_drag_at_one_to_one_drafts_one_window_not_every_tile() {
+        let (mut h, _) = detail();
+        h.request("engine.execute", json!({"command": "view.zoom100"}), T);
+        h.settle(SETTLE);
+        assert!(!h.app.renderer.tiles.is_empty(), "the tiles at rest");
+        let before: Vec<_> = h.app.renderer.tiles.keys().copied().collect();
+        h.app.session.begin_interaction("Exposure").unwrap();
+        for tick in 1..4 {
+            h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": tick as f64 * 0.1}}), T);
+            h.step();
+            assert_eq!(h.app.renderer.tiles_pending(), 0, "no tile is drafted in a drag");
+        }
+        h.settle(SETTLE);
+        let (_, g) = h.app.renderer.window_texture(crate::render::PANE_AFTER).expect("the drag window arrived");
+        let view = h.app.region_view.expect("a zoomed view");
+        assert_eq!((g.full, g.window), (view.full, view.window));
+        let new_tiles: Vec<_> = h.app.renderer.tiles.keys().filter(|k| !before.contains(k)).collect();
+        assert!(new_tiles.is_empty(), "drafted tiles: {new_tiles:?}");
+        assert!(!drawn(&h, Slot::Window(crate::render::PANE_AFTER)).is_empty(), "the drag window is drawn");
+        h.app.session.end_interaction().unwrap();
+        h.settle(SETTLE);
+        let view = h.app.region_view.expect("a zoomed view");
+        assert!(h.app.renderer.tiles.keys().any(|k| k.look == view.settings), "the tiles of the final look");
+    }
+
+    // Given Compare and Reference views at 1:1, each photo gets its own sharp tiles over its
+    // canvas-sized render (as the loupe does), kept apart by pane
+    #[test]
+    fn compare_and_reference_at_one_to_one_are_tiled() {
+        for view in ["compare", "reference"] {
+            let (mut h, _) = detail();
+            let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
+            if view == "reference" {
+                h.app.ui.reference = Some(ids[0]);
+                h.app.session.selection.active = Some(dac_catalog::PhotoId(ids[1]));
+                h.app.ui.view = crate::state::ViewMode::Reference;
+            } else {
+                h.app.ui.compare = Some((ids[0], ids[1]));
+                h.app.ui.view = crate::state::ViewMode::Compare;
+            }
+            h.app.ui.zoom = crate::state::Zoom::Percent(100.0);
+            h.settle(SETTLE);
+            for pane in [crate::render::PANE_COMPARE, crate::render::PANE_COMPARE + 1] {
+                let tiles: Vec<_> = h.app.renderer.tiles.keys().filter(|k| k.pane == pane).collect();
+                assert!(!tiles.is_empty(), "{view}: pane {pane} has tiles");
+                let photo = h.app.session.catalog.photo(tiles[0].photo).unwrap();
+                assert_eq!(tiles[0].full.0.max(tiles[0].full.1), photo.width.max(photo.height) as usize, "{view}: at 100 %");
+            }
+            // back to Fit: no tiles kept for the panes
+            h.app.ui.zoom = crate::state::Zoom::Fit;
+            h.settle(SETTLE);
+            assert!(h.app.renderer.tiles.keys().all(|k| k.pane < crate::render::PANE_COMPARE), "{view}: fit frees the tiles");
         }
     }
 
@@ -556,14 +626,14 @@ mod in_the_loupe {
         h.app.session.begin_interaction("Exposure").unwrap();
         let mut ticks = 0;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-        while h.app.renderer.tiles.is_empty() && std::time::Instant::now() < deadline {
+        while h.app.renderer.window_texture(crate::render::PANE_AFTER).is_none() && std::time::Instant::now() < deadline {
             let v = (ticks % 40) as f64 * 0.02;
             h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": v}}), T);
             h.step();
             ticks += 1;
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        assert!(!h.app.renderer.tiles.is_empty(), "a tile arrived");
+        assert!(h.app.renderer.window_texture(crate::render::PANE_AFTER).is_some(), "a drag window arrived");
         assert!(h.app.session.memory_report().full_source.bytes > 0, "the original stayed in the cache while the drag went on");
     }
 
@@ -575,7 +645,7 @@ mod in_the_loupe {
 
     /// The meshes the last frame drew with one side's tiles.
     fn drawn_tiles(h: &Headless, before: bool) -> Vec<(usize, egui::Rect, egui::Rect)> {
-        let ids: Vec<_> = h.app.renderer.tiles.iter().filter(|(k, _)| k.before == before).map(|(_, t)| t.tex.id()).collect();
+        let ids: Vec<_> = h.app.renderer.tiles.iter().filter(|(k, _)| k.before() == before).map(|(_, t)| t.tex.id()).collect();
         drawn_with(h, &ids)
     }
 
@@ -736,11 +806,14 @@ mod in_the_loupe {
             let m = h.app.renderer.memory();
             (m["stageCaches"]["gpuBytes"].as_u64().unwrap() + m["stageCaches"]["cpuBytes"].as_u64().unwrap()) as usize
         };
+        // (the drag window's cache is made by the first tick of a drag)
+        h.app.session.begin_interaction("Exposure").unwrap();
+        h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.05}}), T);
+        h.settle(SETTLE);
         let before = held(&h);
         assert!(before > 3, "the views hold something ({before} bytes)");
         // a third of it is the budget: over it, but inside the runaway limit (four times)
         h.app.renderer.stage_budget_override = Some(before / 3);
-        h.app.session.begin_interaction("Exposure").unwrap();
         for tick in 0..8 {
             h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": tick as f64 * 0.1}}), T);
             h.settle(SETTLE);

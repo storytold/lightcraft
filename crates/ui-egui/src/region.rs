@@ -319,21 +319,27 @@ pub fn tiles_for(full: (usize, usize), side: usize, visible: (f32, f32, f32, f32
     out
 }
 
-/// What a tile's pixels are: the photo, its side of a Before/After view, the zoomed frame, the
-/// place in it, and the look (develop settings, overlay, proof and quality, hashed).
+/// What a tile's pixels are: the photo, the pane it is shown in (the loupe's After or Before side,
+/// a Compare / Reference photo: [`crate::render::PANE_AFTER`]…), the zoomed frame, the place in
+/// it, and the look (develop settings, overlay, proof and quality, hashed).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TileKey {
     pub photo: dac_catalog::PhotoId,
-    pub before: bool,
+    pub pane: u8,
     pub full: (usize, usize),
     pub tile: TileId,
     pub look: u64,
 }
 
 impl TileKey {
+    /// The Before side of the loupe's Before/After view.
+    pub fn before(&self) -> bool {
+        self.pane == crate::render::PANE_BEFORE
+    }
+
     /// The same tile with any look.
     fn same_place(&self, o: &TileKey) -> bool {
-        self.photo == o.photo && self.before == o.before && self.full == o.full && self.tile == o.tile
+        self.photo == o.photo && self.pane == o.pane && self.full == o.full && self.tile == o.tile
     }
 }
 
@@ -825,7 +831,7 @@ mod tests {
     }
 
     fn key(col: u16, look: u64) -> TileKey {
-        TileKey { photo: dac_catalog::PhotoId(1), before: false, full: (8256, 5504), tile: TileId { col, row: 0 }, look }
+        TileKey { photo: dac_catalog::PhotoId(1), pane: 0, full: (8256, 5504), tile: TileId { col, row: 0 }, look }
     }
 
     // Given a 45 MP frame, the tiles cover it exactly: none overlap, none spill past the edge
