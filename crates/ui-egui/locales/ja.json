@@ -1729,5 +1729,12 @@
   "Pending photo action cancelled": "Pending photo action cancelled",
   "Pending photo action cancelled because its library or photo changed": "Pending photo action cancelled because its library or photo changed",
   "ONNX model": "ONNX model",
-  "commercial use subject to GPL conditions": "commercial use subject to GPL conditions"
+  "commercial use subject to GPL conditions": "commercial use subject to GPL conditions",
+  "Catalog": "カタログ",
+  "Collections": "コレクション",
+  "Keywording": "キーワード",
+  "Keyword List": "キーワードリスト",
+  "Solo Mode": "ソロモード",
+  "Expand All Panels": "すべてのパネルを展開",
+  "Collapse All Panels": "すべてのパネルを折りたたむ"
 }

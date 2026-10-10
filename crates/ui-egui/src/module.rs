@@ -168,6 +168,22 @@ pub enum PanelId {
     Activity,
     Keywords,
     Info,
+    /// Library left (Classic): the loupe's overview and zoom presets.
+    Navigator,
+    /// Library left: All Photographs, Quick Collection, Previous Import, Missing …
+    Catalog,
+    /// Library left: disks and the folders photos were imported from.
+    Folders,
+    /// Library left: collections, collection sets and smart collections.
+    Collections,
+    /// Library right: relative develop adjustments for the selection.
+    QuickDevelop,
+    /// Library right: the selected photos' keywords, suggestions and keyword sets.
+    Keywording,
+    /// Library right: every keyword in the library with counts and attributes.
+    KeywordList,
+    /// Library right: the selected photos' metadata.
+    Metadata,
 }
 
 impl PanelId {
@@ -191,7 +207,16 @@ impl PanelId {
             PanelId::Activity => RightPanel::Activity,
             PanelId::Keywords => RightPanel::Keywords,
             PanelId::Info => RightPanel::Info,
-            PanelId::Sources | PanelId::Presets => return None,
+            PanelId::Sources
+            | PanelId::Presets
+            | PanelId::Navigator
+            | PanelId::Catalog
+            | PanelId::Folders
+            | PanelId::Collections
+            | PanelId::QuickDevelop
+            | PanelId::Keywording
+            | PanelId::KeywordList
+            | PanelId::Metadata => return None,
         })
     }
 }
@@ -350,7 +375,9 @@ struct Library;
 struct Develop;
 struct Placeholder(ModuleId);
 
-const LIBRARY_RIGHT: &[PanelId] = &[PanelId::Info, PanelId::Keywords, PanelId::Versions, PanelId::Activity];
+/// Library's Classic columns.
+pub const LIBRARY_LEFT: &[PanelId] = &[PanelId::Navigator, PanelId::Catalog, PanelId::Folders, PanelId::Collections];
+pub const LIBRARY_RIGHT: &[PanelId] = &[PanelId::QuickDevelop, PanelId::Keywording, PanelId::KeywordList, PanelId::Metadata];
 const DEVELOP_RIGHT: &[PanelId] = &[
     PanelId::Edit,
     PanelId::Crop,
@@ -371,7 +398,7 @@ impl Module for Library {
         ModuleId::Library
     }
     fn left_panels(&self) -> &'static [PanelId] {
-        &[PanelId::Sources]
+        LIBRARY_LEFT
     }
     fn right_panels(&self) -> &'static [PanelId] {
         LIBRARY_RIGHT

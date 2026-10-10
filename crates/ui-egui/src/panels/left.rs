@@ -7,6 +7,7 @@ use serde_json::json;
 
 use crate::DacApp;
 use crate::icons::{Icon, paint};
+use crate::module::PanelId;
 use crate::theme::Tokens;
 use crate::widgets::{icon_button, register};
 
@@ -169,12 +170,11 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
     let width = app.ui.left_width;
     let resized = super::resizable_side(ui, true, "left_panel", frame, width, crate::state::LEFT_WIDTH, 0.0, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
-        // Library: the Navigator heads the column (Classic layout)
-        if app.ui.module == crate::module::ModuleId::Library {
-            super::navigator::show(app, ui);
+        let library = app.ui.module == crate::module::ModuleId::Library;
+        if !library {
+            let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover());
+            ui.painter().text(pos2(hr.left() + 18.0, hr.center().y), Align2::LEFT_CENTER, crate::i18n::tr("My Photos"), t.semibold(15.0), t.text);
         }
-        let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover());
-        ui.painter().text(pos2(hr.left() + 18.0, hr.center().y), Align2::LEFT_CENTER, crate::i18n::tr("My Photos"), t.semibold(15.0), t.text);
         let counts = app.caches.counts(&app.session.catalog);
         let (total, picks, deleted) = (counts.total, counts.picks, counts.deleted);
         egui::ScrollArea::both().id_salt("left-scroll").auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
@@ -188,102 +188,18 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
                 // where the visible part of the content ends (screen x), for what stays at the edge
                 d.insert_temp(egui::Id::new("left-visible-right"), ui.cursor().left() + viewport.max.x);
             });
-            let src = app.session.source;
-            let quick = app.session.catalog.quick_collection().map(|q| app.session.catalog.album_count(q)).unwrap_or(0);
-            for (id, icon, label, count, s) in [
-                ("all", Icon::Photos, "All Photos", Some(total), LibrarySource::All),
-                ("quickCollection", Icon::Album, "Quick Collection", Some(quick), LibrarySource::QuickCollection),
-                ("previousImport", Icon::Clock, "Previous Import", None, LibrarySource::PreviousImport),
-                ("recentlyAdded", Icon::Clock, "Recently Added", None, LibrarySource::RecentlyAdded),
-                ("picks", Icon::FlagPick, "Picks", Some(picks), LibrarySource::Picks),
-            ] {
-                if row(app, ui, id, icon, label, count, src == s, 0.0).clicked() {
-                    let _ = app.run("library.source", json!({"kind": id}));
-                }
-            }
-            // photos whose files can't be found (checked every few seconds, not every frame)
-            let missing = missing_count(app, ui);
-            if (missing > 0 || src == LibrarySource::Missing)
-                && row(app, ui, "missing", Icon::Folder, "Missing Photos", Some(missing), src == LibrarySource::Missing, 0.0).clicked()
-            {
-                let _ = app.run("library.source", json!({"kind": "missing"}));
-            }
-            ui.add_space(10.0);
-            // Albums header
-            let (ar, albums_open) = sidebar_section_header(app, ui, "albums", "Albums");
-            top_level_drop_target(app, ui, ar);
-            // the + stays at the visible edge when the sidebar is scrolled sideways
-            let plus_right = (ar.left() + viewport.max.x).min(ar.right());
-            let mut hdr = ui.new_child(
-                egui::UiBuilder::new()
-                    .max_rect(Rect::from_min_max(pos2(plus_right - 50.0, ar.top()), pos2(plus_right, ar.bottom())))
-                    .layout(egui::Layout::right_to_left(egui::Align::Center)),
-            );
-            let plus = icon_button(&mut hdr, "albumNew", Icon::Plus, vec2(26.0, 26.0), false, true, "Create Album");
-            egui::Popup::menu(&plus).show(|ui| {
-                if ui.button(crate::i18n::tr("Create Album…")).clicked() {
-                    app.ui.dialog = Some(crate::state::Dialog::NewAlbum { name: String::new(), folder: false, parent: None });
-                }
-                if ui.button(crate::i18n::tr("Create Smart Album…")).clicked() {
-                    app.ui.dialog = Some(crate::state::Dialog::SmartRules {
-                        id: None,
-                        name: String::new(),
-                        rules: dac_catalog::RuleSet { rules: vec![crate::panels::rules_editor::new_rule()], ..Default::default() },
-                        parent: None,
-                    });
-                }
-                if ui.button(crate::i18n::tr("Create Smart Album from Filter…")).clicked() {
-                    app.ui.dialog = Some(crate::state::Dialog::NewSmartAlbum { name: String::new(), parent: None });
-                }
-                if ui.button(crate::i18n::tr("Create Folder…")).clicked() {
-                    app.ui.dialog = Some(crate::state::Dialog::NewAlbum { name: String::new(), folder: true, parent: None });
-                }
-                // only once the albums were put in an order by hand
-                if app.session.catalog.album_children_are_ordered(None) {
-                    ui.separator();
-                    if ui.button(crate::i18n::tr("Sort Albums A–Z")).on_hover_text(crate::i18n::tr("Go back to listing them by name")).clicked() {
-                        let _ = app.run("album.sort", json!({}));
-                    }
-                }
-            });
-            // the album just made: the folders down to it open, once (also when the section is shut)
-            let reveal = app.ui.reveal_album.take();
-            if albums_open {
-                let kids: AlbumKids =
-                    app.session.catalog.album_children_by_parent().into_iter().map(|(k, v)| (k, v.into_iter().cloned().collect())).collect();
-                let cat = &app.session.catalog;
-                let mut open_to = Vec::new();
-                let mut cur = reveal.map(AlbumId).and_then(|id| cat.album(id)).and_then(|a| a.parent);
-                while let Some(p) = cur.filter(|p| !open_to.contains(p) && open_to.len() < 64) {
-                    open_to.push(p);
-                    cur = cat.album(p).and_then(|a| a.parent);
-                }
-                albums_tree(app, ui, &kids, None, 0.0, &open_to);
-            }
-            ui.add_space(10.0);
-            local_section(app, ui);
-            // By date
-            let (_, dates_open) = sidebar_section_header(app, ui, "byDate", "By Date");
-            let groups = if dates_open { app.caches.date_groups(&app.session.catalog) } else { Default::default() };
-            for g in groups.iter() {
-                // year → month → day; a click filters by that prefix, the triangle opens a level
-                if date_row(app, ui, &g.year, &crate::i18n::date_group_label(&g.year, true), g.count, 0.0) {
-                    for (m, n) in &g.months {
-                        let label = crate::i18n::date_group_label(m, true);
-                        if date_row(app, ui, m, &label, *n, 16.0) {
-                            for (d, n) in g.days.iter().filter(|(d, _)| d.starts_with(m.as_str())) {
-                                let label = crate::i18n::date_group_label(d, true);
-                                date_row(app, ui, d, &label, *n, 32.0);
-                            }
-                        }
-                    }
-                }
-            }
-            folders_section(app, ui);
-            keywords_section(app, ui);
-            ui.add_space(10.0);
-            if row(app, ui, "recentlyDeleted", Icon::Trash, "Recently Deleted", Some(deleted), src == LibrarySource::RecentlyDeleted, 0.0).clicked() {
-                let _ = app.run("library.source", json!({"kind": "recentlyDeleted"}));
+            if library {
+                library_columns(app, ui, viewport, total, picks, deleted);
+            } else {
+                catalog_section(app, ui, total, picks, deleted, false);
+                albums_section(app, ui, viewport, None);
+                ui.add_space(10.0);
+                local_section(app, ui);
+                dates_section(app, ui);
+                folders_section(app, ui);
+                keywords_section(app, ui);
+                ui.add_space(10.0);
+                recently_deleted_row(app, ui, deleted);
             }
             // what the rows asked for becomes next frame's width
             let next = ui.data(|d| d.get_temp::<f32>(egui::Id::new("left-content-width-next"))).unwrap_or(0.0);
@@ -295,6 +211,172 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
     });
     if let Some(w) = resized {
         app.ui.left_width = w;
+    }
+}
+
+/// Library's Classic left column: Navigator, Catalog, Folders, Collections, each under a
+/// collapsible header (see [`super::classic`]), in the user's order.
+fn library_columns(app: &mut DacApp, ui: &mut egui::Ui, viewport: Rect, total: usize, picks: usize, deleted: usize) {
+    let side = crate::module::LIBRARY_LEFT;
+    for p in super::classic::ordered(app, side) {
+        match p {
+            PanelId::Navigator => {
+                super::navigator::show(app, ui);
+                ui.add_space(4.0);
+            }
+            PanelId::Catalog => {
+                if super::classic::header(app, ui, p, side).1 {
+                    catalog_section(app, ui, total, picks, deleted, true);
+                    dates_section(app, ui);
+                }
+            }
+            PanelId::Folders => {
+                let (r, open) = super::classic::header(app, ui, p, side);
+                super::folders::header_buttons(app, ui, r, viewport);
+                if open {
+                    super::folders::volumes(app, ui);
+                    local_section(app, ui);
+                    folders_body(app, ui);
+                }
+            }
+            PanelId::Collections => {
+                let (r, open) = super::classic::header(app, ui, p, side);
+                collections_plus(app, ui, r, viewport);
+                top_level_drop_target(app, ui, r);
+                if open {
+                    albums_body(app, ui);
+                    super::collections::footer(app, ui);
+                }
+            }
+            _ => {}
+        }
+    }
+    ui.add_space(10.0);
+}
+
+/// All Photos, Quick Collection, Previous Import, Recently Added, Picks, Missing (and, in the
+/// Classic Catalog panel, Recently Deleted).
+fn catalog_section(app: &mut DacApp, ui: &mut egui::Ui, total: usize, picks: usize, deleted: usize, with_deleted: bool) {
+    let src = app.session.source;
+    let quick = app.session.catalog.quick_collection().map(|q| app.session.catalog.album_count(q)).unwrap_or(0);
+    for (id, icon, label, count, s) in [
+        ("all", Icon::Photos, "All Photos", Some(total), LibrarySource::All),
+        ("quickCollection", Icon::Album, "Quick Collection", Some(quick), LibrarySource::QuickCollection),
+        ("previousImport", Icon::Clock, "Previous Import", None, LibrarySource::PreviousImport),
+        ("recentlyAdded", Icon::Clock, "Recently Added", None, LibrarySource::RecentlyAdded),
+        ("picks", Icon::FlagPick, "Picks", Some(picks), LibrarySource::Picks),
+    ] {
+        if row(app, ui, id, icon, label, count, src == s, 0.0).clicked() {
+            let _ = app.run("library.source", json!({"kind": id}));
+        }
+    }
+    // photos whose files can't be found (checked every few seconds, not every frame)
+    let missing = missing_count(app, ui);
+    if (missing > 0 || src == LibrarySource::Missing)
+        && row(app, ui, "missing", Icon::Folder, "Missing Photos", Some(missing), src == LibrarySource::Missing, 0.0).clicked()
+    {
+        let _ = app.run("library.source", json!({"kind": "missing"}));
+    }
+    if with_deleted {
+        recently_deleted_row(app, ui, deleted);
+    }
+    ui.add_space(6.0);
+}
+
+fn recently_deleted_row(app: &mut DacApp, ui: &mut egui::Ui, deleted: usize) {
+    let src = app.session.source;
+    if row(app, ui, "recentlyDeleted", Icon::Trash, "Recently Deleted", Some(deleted), src == LibrarySource::RecentlyDeleted, 0.0).clicked() {
+        let _ = app.run("library.source", json!({"kind": "recentlyDeleted"}));
+    }
+}
+
+/// By Date: year → month → day rows.
+fn dates_section(app: &mut DacApp, ui: &mut egui::Ui) {
+    // By date
+    let (_, dates_open) = sidebar_section_header(app, ui, "byDate", "By Date");
+    let groups = if dates_open { app.caches.date_groups(&app.session.catalog) } else { Default::default() };
+    for g in groups.iter() {
+        // year → month → day; a click filters by that prefix, the triangle opens a level
+        if date_row(app, ui, &g.year, &crate::i18n::date_group_label(&g.year, true), g.count, 0.0) {
+            for (m, n) in &g.months {
+                let label = crate::i18n::date_group_label(m, true);
+                if date_row(app, ui, m, &label, *n, 16.0) {
+                    for (d, n) in g.days.iter().filter(|(d, _)| d.starts_with(m.as_str())) {
+                        let label = crate::i18n::date_group_label(d, true);
+                        date_row(app, ui, d, &label, *n, 32.0);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The Albums section (sidebar layout): its header with the + menu, and the tree.
+fn albums_section(app: &mut DacApp, ui: &mut egui::Ui, viewport: Rect, _parent: Option<AlbumId>) {
+    ui.add_space(10.0);
+    let (ar, albums_open) = sidebar_section_header(app, ui, "albums", "Albums");
+    top_level_drop_target(app, ui, ar);
+    collections_plus(app, ui, ar, viewport);
+    if albums_open {
+        albums_body(app, ui);
+    } else {
+        app.ui.reveal_album = None;
+    }
+}
+
+/// The + menu at the right end of an albums / collections header.
+fn collections_plus(app: &mut DacApp, ui: &mut egui::Ui, ar: Rect, viewport: Rect) {
+    // the + stays at the visible edge when the sidebar is scrolled sideways
+    let plus_right = (ar.left() + viewport.max.x).min(ar.right());
+    let mut hdr = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(Rect::from_min_max(pos2(plus_right - 50.0, ar.top()), pos2(plus_right, ar.bottom())))
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+    );
+    let plus = icon_button(&mut hdr, "albumNew", Icon::Plus, vec2(26.0, 26.0), false, true, "Create Album");
+    egui::Popup::menu(&plus).show(|ui| {
+        if ui.button(crate::i18n::tr("Create Album…")).clicked() {
+            app.ui.dialog = Some(crate::state::Dialog::NewAlbum { name: String::new(), folder: false, parent: None });
+        }
+        if ui.button(crate::i18n::tr("Create Smart Album…")).clicked() {
+            app.ui.dialog = Some(crate::state::Dialog::SmartRules {
+                id: None,
+                name: String::new(),
+                rules: dac_catalog::RuleSet { rules: vec![crate::panels::rules_editor::new_rule()], ..Default::default() },
+                parent: None,
+            });
+        }
+        if ui.button(crate::i18n::tr("Create Smart Album from Filter…")).clicked() {
+            app.ui.dialog = Some(crate::state::Dialog::NewSmartAlbum { name: String::new(), parent: None });
+        }
+        if ui.button(crate::i18n::tr("Create Folder…")).clicked() {
+            app.ui.dialog = Some(crate::state::Dialog::NewAlbum { name: String::new(), folder: true, parent: None });
+        }
+        // only once the albums were put in an order by hand
+        if app.session.catalog.album_children_are_ordered(None) {
+            ui.separator();
+            if ui.button(crate::i18n::tr("Sort Albums A–Z")).on_hover_text(crate::i18n::tr("Go back to listing them by name")).clicked() {
+                let _ = app.run("album.sort", json!({}));
+            }
+        }
+    });
+}
+
+/// The album tree (opening the folders down to an album just made).
+fn albums_body(app: &mut DacApp, ui: &mut egui::Ui) {
+    // the album just made: the folders down to it open, once (also when the section is shut)
+    let reveal = app.ui.reveal_album.take();
+    {
+        let kids: AlbumKids =
+            app.session.catalog.album_children_by_parent().into_iter().map(|(k, v)| (k, v.into_iter().cloned().collect())).collect();
+        let cat = &app.session.catalog;
+        let mut open_to = Vec::new();
+        let mut cur = reveal.map(AlbumId).and_then(|id| cat.album(id)).and_then(|a| a.parent);
+        while let Some(p) = cur.filter(|p| !open_to.contains(p) && open_to.len() < 64) {
+            open_to.push(p);
+            cur = cat.album(p).and_then(|a| a.parent);
+        }
+        albums_tree(app, ui, &kids, None, 0.0, &open_to);
     }
 }
 
@@ -1120,6 +1202,13 @@ fn folders_section(app: &mut DacApp, ui: &mut egui::Ui) {
     }
 }
 
+/// The Classic Folders panel's tree (no section header of its own).
+fn folders_body(app: &mut DacApp, ui: &mut egui::Ui) {
+    let tree = app.caches.folder_tree(&app.session.catalog);
+    reveal_chosen(app, ui, &tree);
+    folder_rows(app, ui, &tree, 0.0);
+}
+
 /// Whenever the shown folder changes (a click, an agent, a rename or its undo), open the rows
 /// above it so it is on screen; folding one by hand afterwards sticks until the choice changes.
 fn reveal_chosen(app: &DacApp, ui: &egui::Ui, tree: &[FolderNode]) {
@@ -1260,7 +1349,7 @@ fn folder_menu_for_library(app: &mut DacApp, resp: &egui::Response, n: &FolderNo
 /// "Keywords": the library's keyword tree with photo counts (`a|b|c` keywords nest). A click
 /// filters the grid by the keyword (children included), the triangle opens a level, and the
 /// context menu renames, merges or deletes the keyword across the library.
-fn keywords_section(app: &mut DacApp, ui: &mut egui::Ui) {
+pub(crate) fn keywords_section(app: &mut DacApp, ui: &mut egui::Ui) {
     let tree = app.caches.keyword_tree(&app.session.catalog);
     if tree.is_empty() {
         return;
@@ -1271,7 +1360,7 @@ fn keywords_section(app: &mut DacApp, ui: &mut egui::Ui) {
     }
 }
 
-fn keyword_rows(app: &mut DacApp, ui: &mut egui::Ui, nodes: &[KeywordNode], indent: f32) {
+pub(crate) fn keyword_rows(app: &mut DacApp, ui: &mut egui::Ui, nodes: &[KeywordNode], indent: f32) {
     for n in nodes {
         let open_id = egui::Id::new(("kw-open", n.path.to_lowercase()));
         let mut open: bool = ui.data(|d| d.get_temp(open_id)).unwrap_or(false);

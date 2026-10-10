@@ -68,7 +68,7 @@ fn entry(p: crate::module::PanelId) -> Option<(&'static str, Icon, RightPanel, &
         P::Activity => ("activity", Icon::Activity, RightPanel::Activity, "History & Activity", false),
         P::Keywords => ("keywords", Icon::Tag, RightPanel::Keywords, "Keywords", true),
         P::Info => ("info", Icon::Info, RightPanel::Info, "Info", true),
-        P::Sources | P::Presets => return None,
+        _ => return None,
     })
 }
 

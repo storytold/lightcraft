@@ -45,6 +45,26 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
     }
 }
 
+/// The Classic Metadata panel (Library's right column).
+pub fn metadata_panel(app: &mut DacApp, ui: &mut egui::Ui) {
+    match app.session.active() {
+        Some(id) => info(app, ui, id),
+        None => {
+            ui.label(crate::i18n::tr("No photo selected"));
+        }
+    }
+}
+
+/// The Classic Keywording panel's body (Library's right column).
+pub fn keywords_panel(app: &mut DacApp, ui: &mut egui::Ui) {
+    match app.session.active() {
+        Some(id) => keywords(app, ui, id),
+        None => {
+            ui.label(crate::i18n::tr("No photo selected"));
+        }
+    }
+}
+
 pub fn header(ui: &mut egui::Ui, title: &str) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());

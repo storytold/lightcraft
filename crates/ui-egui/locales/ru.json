@@ -1403,5 +1403,12 @@
   "Pending photo action cancelled": "Pending photo action cancelled",
   "Pending photo action cancelled because its library or photo changed": "Pending photo action cancelled because its library or photo changed",
   "ONNX model": "ONNX model",
-  "commercial use subject to GPL conditions": "commercial use subject to GPL conditions"
+  "commercial use subject to GPL conditions": "commercial use subject to GPL conditions",
+  "Catalog": "Каталог",
+  "Collections": "Коллекции",
+  "Keywording": "Ключевые слова",
+  "Keyword List": "Список ключевых слов",
+  "Solo Mode": "Режим соло",
+  "Expand All Panels": "Развернуть все панели",
+  "Collapse All Panels": "Свернуть все панели"
 }

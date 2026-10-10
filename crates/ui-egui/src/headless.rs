@@ -1339,7 +1339,7 @@ mod tests {
         let ex = |h: &mut Headless, c: &str, p: Value| h.request("engine.execute", json!({"command": c, "params": p}), Duration::from_secs(10));
         ex(&mut h, "photo.setMeta", json!({"ids": [vis[0], vis[1]], "addKeywords": ["travel|italy"]}));
         ex(&mut h, "photo.setMeta", json!({"ids": [vis[2]], "addKeywords": ["travel|france"]}));
-        h.request("ui.set", json!({"leftPanel": true}), t);
+        h.request("ui.set", json!({"leftPanel": true, "right": "none"}), t);
         // clicks land on last frame's layout: let the keyword list settle first (on a loaded machine a
         // row could still move, and the click then hit its neighbour, e.g. "sunrise")
         h.settle(SETTLE);
@@ -1698,7 +1698,7 @@ mod tests {
         };
         let ids = |h: &mut Headless| -> Vec<String> { rects(h).into_iter().map(|(id, _)| id).collect() };
         h.request("ui.set", json!({"leftPanel": true}), t);
-        h.app.ui.toggle_sidebar_section("navigator");
+        h.app.ui.toggle_sidebar_section("panel:navigator");
         h.hide_home_above(&dir);
         // Browse Folder… browses the picked folder and keeps it in Local within one frame; a
         // request runs frames, so keep it first (no frame sees it browsed but not yet kept)

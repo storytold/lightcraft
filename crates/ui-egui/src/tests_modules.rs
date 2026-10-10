@@ -73,7 +73,7 @@ fn switching_modules_keeps_selection_and_filmstrip() {
 fn panel_state_is_per_module_and_persists() {
     let mut h = demo();
     run(&mut h, "panel.left", json!({"show": true}));
-    run(&mut h, "panel.order", json!({"order": ["activity", "info"]}));
+    run(&mut h, "panel.order", json!({"order": ["keywordList", "quickDevelop"]}));
     run(&mut h, "module.develop", json!({}));
     // Develop starts from what was on screen; hide its left and right groups and the toolbar
     run(&mut h, "panel.sides", json!({"show": false}));
@@ -83,7 +83,7 @@ fn panel_state_is_per_module_and_persists() {
     assert!(!has_widget(&h, "panel:left_panel"));
     run(&mut h, "module.library", json!({}));
     assert!(h.app.ui.left_panel && h.app.ui.right_edge && h.app.ui.toolbar, "Library keeps its own panels");
-    assert_eq!(crate::module::right_group(&h.app).first(), Some(&crate::module::PanelId::Activity), "panel order is the user's");
+    assert_eq!(crate::module::right_group(&h.app).first(), Some(&crate::module::PanelId::KeywordList), "panel order is the user's");
     run(&mut h, "module.develop", json!({}));
     assert!(!h.app.ui.left_panel && !h.app.ui.right_edge && h.app.ui.auto_show.left);
     // across a save/load of ui.json

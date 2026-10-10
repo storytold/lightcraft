@@ -67,9 +67,9 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
     let title = Rect::from_min_max(hr.min, pos2(hr.left() + 110.0, hr.bottom()));
     register(ui.ctx(), "sidebarSection:navigator", title);
     if ui.interact(title, egui::Id::new("navigator-title"), Sense::click()).clicked() {
-        app.ui.toggle_sidebar_section("navigator");
+        super::classic::toggle(app, crate::module::PanelId::Navigator);
     }
-    let open = !app.ui.sidebar_section_collapsed("navigator");
+    let open = super::classic::is_open(app, crate::module::PanelId::Navigator);
     triangle(ui.painter(), pos2(hr.left() + 22.0, hr.center().y), open, t.text_dim);
     ui.painter().text(pos2(hr.left() + 30.0, hr.center().y), Align2::LEFT_CENTER, crate::i18n::tr("Navigator"), t.semibold(12.0), t.text);
     let custom = custom_level(ui.ctx());

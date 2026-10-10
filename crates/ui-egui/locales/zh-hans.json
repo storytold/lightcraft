@@ -1729,5 +1729,12 @@
   "Pending photo action cancelled": "Pending photo action cancelled",
   "Pending photo action cancelled because its library or photo changed": "Pending photo action cancelled because its library or photo changed",
   "ONNX model": "ONNX model",
-  "commercial use subject to GPL conditions": "commercial use subject to GPL conditions"
+  "commercial use subject to GPL conditions": "commercial use subject to GPL conditions",
+  "Catalog": "目录",
+  "Collections": "收藏夹",
+  "Keywording": "关键字",
+  "Keyword List": "关键字列表",
+  "Solo Mode": "单独模式",
+  "Expand All Panels": "展开所有面板",
+  "Collapse All Panels": "折叠所有面板"
 }

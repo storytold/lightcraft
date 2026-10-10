@@ -442,7 +442,7 @@ fn local_folder_tree_expands_and_browses() {
     std::fs::create_dir_all(base.join(".hidden")).unwrap();
     let mut h = detail("panel.edit");
     exec(&mut h, "view.leftPanel", json!({"show": true}));
-    h.app.ui.toggle_sidebar_section("navigator");
+    h.app.ui.toggle_sidebar_section("panel:navigator");
     h.hide_home_above(&base);
     exec(&mut h, "local.addRoot", json!({"path": base.to_string_lossy()}));
     exec(&mut h, "library.browse", json!({"path": base.to_string_lossy()}));

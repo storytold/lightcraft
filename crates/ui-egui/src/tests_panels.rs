@@ -17,7 +17,7 @@ fn demo(size: [f32; 2], ui: serde_json::Value) -> Headless {
     let app = DacApp::new(dac_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, size, 1.0);
     // these tests measure the sources list: the Navigator above it is folded
-    h.app.ui.toggle_sidebar_section("navigator");
+    h.app.ui.toggle_sidebar_section("panel:navigator");
     let r = h.request("ui.set", ui, T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
@@ -175,7 +175,7 @@ fn a_narrow_window_shrinks_the_panels_without_forgetting_their_width() {
 /// is part of the saved UI state.
 #[test]
 fn sidebar_sections_collapse_and_remember_it() {
-    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true, "right": "none"}));
     let has = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
     let click = |h: &mut Headless, id: &str| {
         let r = h.request("ui.clickWidget", json!({"id": id}), T);
@@ -189,7 +189,7 @@ fn sidebar_sections_collapse_and_remember_it() {
     assert!(year_rows(&h) > 0, "the demo library has dated photos");
     click(&mut h, "sidebarSection:byDate");
     assert_eq!(year_rows(&h), 0, "folded");
-    assert!(h.app.ui.sidebar_section_collapsed("byDate") && !h.app.ui.sidebar_section_collapsed("albums"));
+    assert!(h.app.ui.sidebar_section_collapsed("byDate") && !h.app.ui.sidebar_section_collapsed("panel:collections"));
     assert!(has(&h, "sidebarSection:byDate"), "the header stays so it can be reopened");
     // the choice survives a save/load of the UI state
     let saved = serde_json::to_value(&h.app.ui).unwrap();
@@ -198,17 +198,17 @@ fn sidebar_sections_collapse_and_remember_it() {
     click(&mut h, "sidebarSection:byDate");
     assert!(year_rows(&h) > 0, "unfolded again");
     // Albums folds too, and the plus button inside its header still works on its own
-    click(&mut h, "sidebarSection:albums");
-    assert!(h.app.ui.sidebar_section_collapsed("albums"));
+    click(&mut h, "classicPanel:collections");
+    assert!(h.app.ui.sidebar_section_collapsed("panel:collections"));
     assert!(has(&h, "icon:albumNew"), "the Create Album button stays in the header");
-    click(&mut h, "sidebarSection:albums");
-    assert!(!h.app.ui.sidebar_section_collapsed("albums"));
+    click(&mut h, "classicPanel:collections");
+    assert!(!h.app.ui.sidebar_section_collapsed("panel:collections"));
     // Keywords and Local fold their rows too
     let rows = |h: &Headless, prefix: &str| h.app.widgets.iter().filter(|(w, _)| w.starts_with(prefix)).count();
     assert!(rows(&h, "source:keyword:") > 0, "the demo library has keywords");
-    click(&mut h, "sidebarSection:keywords");
+    click(&mut h, "classicPanel:keywordList");
     assert_eq!(rows(&h, "source:keyword:"), 0, "keywords folded");
-    click(&mut h, "sidebarSection:keywords");
+    click(&mut h, "classicPanel:keywordList");
     assert!(rows(&h, "source:keyword:") > 0);
     if has(&h, "sidebarSection:local") {
         click(&mut h, "sidebarSection:local");
@@ -219,7 +219,7 @@ fn sidebar_sections_collapse_and_remember_it() {
     }
     // a click on the plus is the button's, not the header's
     click(&mut h, "icon:albumNew");
-    assert!(!h.app.ui.sidebar_section_collapsed("albums"), "the plus does not fold Albums");
+    assert!(!h.app.ui.sidebar_section_collapsed("panel:collections"), "the plus does not fold Collections");
 }
 
 /// Albums nest in folders like the other sidebar trees: a folder row has a disclosure triangle
@@ -368,6 +368,9 @@ struct AlbumTree {
 
 fn album_tree() -> AlbumTree {
     let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    // the Collections panel's tree is what these tests drag in: the panels above it are folded
+    h.app.ui.toggle_sidebar_section("panel:catalog");
+    h.app.ui.toggle_sidebar_section("panel:folders");
     let make = |h: &mut Headless, params: serde_json::Value| h.app.session.execute("album.create", &params).unwrap()["id"].as_u64().unwrap();
     let archive = make(&mut h, json!({"name": "Archive", "folder": true}));
     let trips = make(&mut h, json!({"name": "Trips", "folder": true}));
@@ -387,7 +390,7 @@ impl AlbumTree {
     }
     /// The middle of the "Albums" header, where an album is dropped to take it to the top level.
     fn albums_header(&self) -> egui::Pos2 {
-        widget(&self.h, "sidebarSection:albums").center()
+        widget(&self.h, "classicPanel:collections").center()
     }
     fn parent(&self, id: u64) -> Option<u64> {
         self.h.app.session.catalog.album(dac_catalog::AlbumId(id)).unwrap().parent.map(|p| p.0)
@@ -630,7 +633,7 @@ fn a_dragged_album_scrolls_the_sidebar_at_its_edges() {
     hold(&mut t, egui::pos2(cx, bottom - 6.0));
     let scrolled = t.row(last).top();
     assert!(scrolled < start - 100.0, "the bottom edge scrolls down: {start} -> {scrolled}");
-    hold(&mut t, egui::pos2(cx, top + 70.0));
+    hold(&mut t, egui::pos2(cx, top + 26.0));
     let back = t.row(last).top();
     assert!(back > scrolled + 100.0, "the top edge scrolls back up: {scrolled} -> {back}");
     assert!(t.h.app.ui.dragging_album.is_none());
@@ -724,7 +727,7 @@ fn folders_app_sized(paths: &[&str], size: [f32; 2]) -> Headless {
     }
     let app = DacApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, size, 1.0);
-    h.app.ui.toggle_sidebar_section("navigator");
+    h.app.ui.toggle_sidebar_section("panel:navigator");
     // (the module bar off: these layouts were sized before it existed)
     let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true, "moduleBar": false}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -762,9 +765,9 @@ fn folders_section_lists_where_photos_were_imported_from_and_fills_the_grid() {
     click(&mut h, "source:all");
     assert_eq!(h.app.session.visible().len(), 3, "All Photos shows everything again");
     // the section folds like the others
-    click(&mut h, "sidebarSection:folders");
+    click(&mut h, "classicPanel:folders");
     assert!(!has(&h, "source:libfolder:/pics"), "folded");
-    click(&mut h, "sidebarSection:folders");
+    click(&mut h, "classicPanel:folders");
     assert!(has(&h, "source:libfolder:/pics"));
 }
 
@@ -1107,7 +1110,7 @@ fn date_and_keyword_rows_show_their_photos_from_any_source() {
 #[test]
 fn navigator_panel_presets_and_click_to_pan() {
     let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
-    h.app.ui.toggle_sidebar_section("navigator");
+    h.app.ui.toggle_sidebar_section("panel:navigator");
     h.step();
     h.step();
     let r = h.request("ui.clickWidget", json!({"id": "navigator:1:1"}), T);
