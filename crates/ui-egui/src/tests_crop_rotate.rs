@@ -31,6 +31,17 @@ fn angle(h: &Headless) -> f64 {
     h.app.session.catalog.photo(id).expect("the photo").develop.crop.geometry.angle
 }
 
+/// The crop box lies inside the rotated photo (issue #742: a typed or slid angle shrinks it to fit,
+/// as the rotate handle does).
+fn crop_fits(h: &Headless) -> bool {
+    let id = h.app.session.active().expect("a photo");
+    let p = h.app.session.catalog.photo(id).expect("the photo");
+    let (w, h) = (p.width as f64, p.height as f64);
+    let (w, h) = if p.develop.orientation.swaps_axes() { (h, w) } else { (w, h) };
+    let g = p.develop.crop.geometry;
+    g.rect != lightcraft_geom::Rect::UNIT && g.is_within_image(w, h)
+}
+
 fn hover(h: &mut Headless, p: egui::Pos2) {
     let r = h.request("ui.move", json!({"x": p.x, "y": p.y}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -88,6 +99,7 @@ fn the_straighten_value_takes_an_exact_angle() {
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert!((angle(&h) - 2.5).abs() < 1e-9, "typed 2.5°, got {}", angle(&h));
+    assert!(crop_fits(&h), "the Straighten value shrinks the crop to fit the photo");
 }
 
 /// The angle next to the pointer reads like the Straighten value, in degrees.
@@ -145,6 +157,7 @@ fn the_crop_panel_has_an_angle_field() {
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert!((angle(&h) + 3.25).abs() < 1e-9, "typed -3.25°, got {}", angle(&h));
+    assert!(crop_fits(&h), "the Angle field shrinks the crop to fit the photo");
 }
 
 /// Rotating with the pointer at the canvas's corner keeps the angle readout on the canvas (and so

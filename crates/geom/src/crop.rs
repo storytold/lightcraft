@@ -79,6 +79,22 @@ impl CropGeometry {
         let _ = best;
         CropGeometry { rect: nr.scale(1.0 / w, 1.0 / h), angle: self.angle }
     }
+
+    /// This crop turned to `angle_deg` on a `w × h` image: kept as it is when it still fits inside
+    /// the rotated image, else the largest crop of its aspect that fits, centred (Lightroom's
+    /// "Constrain to image"). Every way of setting the angle goes through here (the rotate handle,
+    /// the Straighten slider and Angle field, `crop.straighten`, `develop.set` on `crop.angle`), so
+    /// they all give the same crop (issue #742).
+    pub fn with_angle(&self, angle_deg: f64, w: f64, h: f64) -> CropGeometry {
+        let cand = CropGeometry { rect: self.rect, angle: angle_deg };
+        if cand.is_within_image(w, h) {
+            return cand;
+        }
+        let r = self.rect_px(w, h);
+        // a degenerate rect has no aspect to keep: fall back to the image's own
+        let aspect = Some(r.width() / r.height()).filter(|a| a.is_finite() && *a > 0.0);
+        crop_fit_angle(w, h, angle_deg, aspect)
+    }
 }
 
 /// Largest scale `s` such that a centred `cw·s × ch·s` rectangle fits inside a `w × h` image rotated
@@ -131,6 +147,38 @@ mod tests {
         let c = CropGeometry { rect: Rect::new(0.5, 0.5, 1.4, 1.2), angle: 12.0 };
         let k = c.constrained(300.0, 200.0);
         assert!(k.is_within_image(300.0, 200.0));
+    }
+
+    #[test]
+    fn with_angle_keeps_a_crop_that_still_fits() {
+        // a small centred crop fits at a few degrees: the angle changes, the rect does not
+        let c = CropGeometry { rect: Rect::new(0.3, 0.3, 0.7, 0.7), angle: 0.0 };
+        for ang in [-3.0, 0.5, 2.0, 5.0] {
+            let t = c.with_angle(ang, 600.0, 400.0);
+            assert_eq!(t.rect, c.rect, "{ang}°");
+            assert_eq!(t.angle, ang);
+        }
+    }
+
+    #[test]
+    fn with_angle_shrinks_a_crop_that_no_longer_fits_keeping_its_aspect() {
+        for (rect, ang) in [(Rect::UNIT, 15.0), (Rect::new(0.0, 0.1, 0.8, 0.9), -20.0), (Rect::new(0.2, 0.0, 0.8, 1.0), 45.0)] {
+            let c = CropGeometry { rect, angle: 0.0 };
+            let t = c.with_angle(ang, 600.0, 400.0);
+            assert!(t.is_within_image(600.0, 400.0), "{rect:?} at {ang}°");
+            let (a, b) = (c.rect_px(600.0, 400.0), t.rect_px(600.0, 400.0));
+            assert!((a.aspect() - b.aspect()).abs() < 1e-9, "aspect kept: {} vs {}", a.aspect(), b.aspect());
+            assert_eq!(t.angle, ang);
+        }
+    }
+
+    #[test]
+    fn with_angle_survives_a_degenerate_crop() {
+        // zero height: no aspect to keep (width / height = ∞)
+        let c = CropGeometry { rect: Rect::new(0.0, 0.5, 1.0, 0.5), angle: 0.0 };
+        let t = c.with_angle(30.0, 600.0, 400.0);
+        assert!(t.is_within_image(600.0, 400.0));
+        assert!([t.rect.x0, t.rect.y0, t.rect.x1, t.rect.y1].iter().all(|v| v.is_finite()));
     }
 
     #[test]
