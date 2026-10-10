@@ -52,7 +52,10 @@ pub use lightcraft_geom::Orientation;
 pub use lightcraft_meta::Metadata;
 pub use lightcraft_raster::Rgb32f;
 pub use opcodes::{Opcode, OpcodeLists};
-pub use preview::{PreviewColorSpace, embedded_preview, embedded_preview_color_space, embedded_preview_dynamic_range_optimized};
+pub use preview::{
+    PREVIEW_PREFIX, PreviewColorSpace, PreviewRange, bounded_preview, embedded_preview, embedded_preview_color_space,
+    embedded_preview_dynamic_range_optimized, embedded_preview_from_range,
+};
 pub use semantic::{SemanticMask, semantic_masks};
 
 use lightcraft_color::Xy;

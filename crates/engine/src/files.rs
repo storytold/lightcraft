@@ -605,15 +605,142 @@ fn fit_box(max_edge: usize) -> lightcraft_codecs::DecodeOptions {
 
 /// Filesystem-backed embedded-preview hook (native).
 ///
-/// Reads the whole file to find the preview, so it holds the memory gate for twice the file's size (the file and the
-/// decoded preview): background work (the face scan) waits for room, interactive work is counted and never waits.
+/// The quick path reads the file's header and its embedded preview and nothing else (see
+/// [`read_preview_window`]); a format whose preview the header cannot point at falls back to the
+/// whole-file path, which is what every format used to cost. The memory gate still counts the whole
+/// file, which is what the decode of one can hold.
 pub fn fs_preview_loader() -> PreviewLoader {
     Arc::new(|path: &str, max_edge: usize| {
         let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
         let gate = crate::memory::work_gate();
         let _permit = if crate::memory::is_background() { gate.acquire(len.saturating_mul(2)) } else { gate.acquire_urgent(len.saturating_mul(2)) };
+        if let Some(image) = preview_window(path).ok().flatten().and_then(|(_, window, _)| quick_image_srgb(&window, max_edge)) {
+            return Some(image);
+        }
         embedded_preview_srgb(&std::fs::read(path).ok()?, max_edge)
     })
+}
+
+/// What [`preview_window`] read from a file, so a caller can see what a preview cost.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreviewRead {
+    /// Bytes read.
+    pub read: u64,
+    /// The file's size.
+    pub total: u64,
+    /// Whether the preview came from a bounded read (`false`: the whole file was read, which is what
+    /// every preview cost before the header path existed).
+    pub header_path: bool,
+}
+
+impl PreviewRead {
+    /// The share of the file that was read, `0.0`..=`1.0`.
+    pub fn fraction(self) -> f64 {
+        if self.total == 0 {
+            return 0.0;
+        }
+        (self.read as f64 / self.total as f64).clamp(0.0, 1.0)
+    }
+}
+
+/// The file's header and its embedded preview, read without the rest of the file: `(header bytes,
+/// preview bytes, what was read)`. `None` when the header points at no preview this build can find,
+/// which is the caller's cue to read the file whole.
+///
+/// Why it exists: a 56 MB Fuji RAF keeps its JPEG in the first 5.6 MB (measured: `DSCF9492.RAF`),
+/// so reading the file whole to extract it costs ten times the bytes — and on a network share ten
+/// times the wait (measured on that file: 2.5 s local against 25.6 s over SMB). `embedded_preview`
+/// still needs the whole container, so the header comes back with the window; for a preview taken
+/// out of a container that carries no preview colour space of its own (Nikon's maker note) the
+/// whole-file fallback stays in charge.
+pub fn preview_window(path: &str) -> Result<Option<(Vec<u8>, Vec<u8>, PreviewRead)>, String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    let total = file.metadata().map_err(|e| format!("{path}: {e}"))?.len();
+    let mut prefix = read_prefix(&mut file, path, total)?;
+
+    // What the header itself declares, before the container reader is asked: it clamps a slice to
+    // the buffer it was given, so a prefix that stops inside the declared preview yields a
+    // self-consistently short range that looks trustworthy (measured on a real 56 MB DSCF9492.RAF:
+    // a 4 KiB prefix reports 3948 bytes where the file holds 5.6 MB). Reading the declared extent
+    // first costs nothing — it lives in the first bytes of every format covered here.
+    if let Some(extent) = raf_preview_extent(&prefix)
+        && extent > prefix.len() as u64
+    {
+        prefix = read_prefix_at(&mut file, path, extent.min(total))?;
+    }
+    let Some(range) = lightcraft_raw::bounded_preview(&prefix) else { return Ok(None) };
+    // A preview at the file's end may have been padded past it: clamp rather than fail.
+    let end = range.offset.saturating_add(range.window_len).min(total);
+    let len = usize::try_from(end.saturating_sub(range.offset)).map_err(|_| format!("{path}: preview too large"))?;
+    // When the prefix already covers the range (the usual case: the prefix was grown to the declared
+    // extent), take the window out of it. Reading those bytes twice would double a 5.6 MB preview.
+    let prefix_len = prefix.len() as u64;
+    let from_prefix = usize::try_from(range.offset).ok().and_then(|start| prefix.get(start..start.checked_add(len)?)).map(<[u8]>::to_vec);
+    let (window, bytes_read) = match from_prefix {
+        Some(window) => (window, prefix_len),
+        None => {
+            let mut window = vec![0u8; len];
+            file.seek(SeekFrom::Start(range.offset)).map_err(|e| format!("{path}: {e}"))?;
+            file.read_exact(&mut window).map_err(|e| format!("{path}: {e}"))?;
+            (window, prefix_len + len as u64)
+        }
+    };
+
+    // A lying pointer must not cost the user their preview: hand the caller the whole-file fallback.
+    if lightcraft_raw::embedded_preview_from_range(&window, range).is_none() {
+        return Ok(None);
+    }
+    let read = PreviewRead { read: bytes_read, total, header_path: true };
+    // On a network share the bytes are the wait, so say what this preview actually cost. A window
+    // taken from the prefix cost nothing beyond the prefix itself.
+    if lightcraft_pipeline::profiling() {
+        eprintln!("[profile] preview {path}: read {} of {} bytes (header {}, window {})", read.read, total, prefix_len, window.len());
+    }
+    Ok(Some((prefix, window, read)))
+}
+
+/// The file's first [`lightcraft_raw::PREVIEW_PREFIX`] bytes (or the whole file when it is shorter),
+/// which is what every format [`lightcraft_raw::bounded_preview`] covers keeps its pointer in.
+fn read_prefix(file: &mut std::fs::File, path: &str, total: u64) -> Result<Vec<u8>, String> {
+    let len = lightcraft_raw::PREVIEW_PREFIX.min(usize::try_from(total).unwrap_or(usize::MAX));
+    read_prefix_at(file, path, len as u64)
+}
+
+/// The file's first `len` bytes, read from the start.
+fn read_prefix_at(file: &mut std::fs::File, path: &str, len: u64) -> Result<Vec<u8>, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let len = usize::try_from(len).map_err(|_| format!("{path}: file too large"))?;
+    let mut prefix = vec![0u8; len];
+    file.seek(SeekFrom::Start(0)).map_err(|e| format!("{path}: {e}"))?;
+    file.read_exact(&mut prefix).map_err(|e| format!("{path}: {e}"))?;
+    Ok(prefix)
+}
+
+/// The end of a Fuji RAF's preview block, from the two big-endian u32s every RAF header carries at
+/// 84 (offset) and 88 (length) — the same fields `lightcraft_raw`'s RAF reader uses, read here
+/// without the rest of the file so the prefix can be made big enough first.
+fn raf_preview_extent(prefix: &[u8]) -> Option<u64> {
+    if !prefix.starts_with(b"FUJIFILMCCD-RAW") {
+        return None;
+    }
+    let u32_at = |at: usize| prefix.get(at..at + 4).map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]])).map(u64::from);
+    let (offset, len) = (u32_at(84)?, u32_at(88)?);
+    (offset > 0 && len > 0).then(|| offset.checked_add(len)).flatten()
+}
+
+/// The display-ready preview of a raw whose embedded JPEG was already located: the counterpart of
+/// [`embedded_preview_srgb`] for [`read_preview_window`], which does not re-read the container.
+/// `None` when the bytes are not a decodable image.
+fn quick_image_srgb(window: &[u8], max_edge: usize) -> Option<lightcraft_raster::Rgba8> {
+    let mut d = lightcraft_codecs::decode(window, fit_box(max_edge)).ok()?;
+    if d.image.width.max(d.image.height) > max_edge {
+        d.image = fit(&d.image, max_edge, max_edge, Filter::Box);
+        d.alpha = None;
+    }
+    // The window is the JPEG itself, so its own EXIF carries the orientation; `decode` reports it.
+    Some(d.to_srgb8().oriented(Orientation::from_exif(d.orientation)))
 }
 
 /// The filesystem-backed [`PairLoader`]: the file is read and decoded once, and developed as usual and from the photo's
@@ -688,6 +815,56 @@ mod tests {
 
     use super::*;
     use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+
+    /// A RAF whose preview pointer is in its header, then a large raw tail the reader must not need.
+    fn raf_with_embedded_jpeg(jpeg: &[u8], tail: usize) -> Vec<u8> {
+        let head = 160;
+        let mut f = vec![0u8; head];
+        f.get_mut(..16).expect("head").copy_from_slice(b"FUJIFILMCCD-RAW ");
+        f.get_mut(84..88).expect("jpeg offset").copy_from_slice(&(head as u32).to_be_bytes());
+        f.get_mut(88..92).expect("jpeg length").copy_from_slice(&(jpeg.len() as u32).to_be_bytes());
+        f.extend_from_slice(jpeg);
+        f.extend(std::iter::repeat_n(0x33u8, tail));
+        f
+    }
+
+    /// A raw's preview is read from its header and its JPEG only. Every preview used to cost a
+    /// whole-file read, which on a 56 MB RAF over a network share is ten times the bytes and ten
+    /// times the wait (measured: 2.5 s local against 25.6 s over SMB, DSCF9492.RAF). The pixels the
+    /// quick path produces must equal the whole-file path's, exactly.
+    #[test]
+    fn preview_loading_reads_only_the_header_and_the_jpeg() {
+        let (w, h) = (48u32, 32u32);
+        let rgb: Vec<u8> = (0..w * h * 3).map(|i| (i * 13 % 251) as u8).collect();
+        let img = EncodeImage::new(w, h, 3, Samples::U8(&rgb));
+        let jpeg = encode_jpeg(&img, 90, ChromaSubsampling::S420, &EncodeMeta::default()).unwrap();
+        let file = raf_with_embedded_jpeg(&jpeg, 200_000);
+        let dir = crate::tests_xmp::temp_dir("preview-window");
+        let path = dir.join("dscf0001.raf");
+        std::fs::write(&path, &file).unwrap();
+        let path = path.to_string_lossy().into_owned();
+        let max_edge = 512;
+
+        let (header, window, read) = preview_window(&path).expect("the file reads").expect("it has a preview");
+        assert_eq!(header.len(), lightcraft_raw::PREVIEW_PREFIX, "the header prefix is bounded");
+        assert!(read.header_path, "the header path is what answered");
+        assert_eq!(read.total, file.len() as u64);
+        assert!(read.fraction() < 0.5, "the read is a fraction of the file: {read:?}");
+        assert!(window.len() < file.len() / 2, "the raw tail must not be read: {} of {} bytes", window.len(), file.len());
+
+        // The quick path and the whole-file path agree byte for byte.
+        let quick = quick_image_srgb(&window, max_edge).expect("the window holds a decodable preview");
+        let whole = embedded_preview_srgb(&file, max_edge).expect("the whole file decodes too");
+        assert_eq!((quick.width, quick.height), (whole.width, whole.height), "same preview size");
+        assert_eq!(quick.data, whole.data, "byte for byte");
+
+        // A file with no locatable preview declines (the caller then reads it whole), a missing file errors.
+        let plain = dir.join("plain.jpg");
+        std::fs::write(&plain, &jpeg).unwrap();
+        assert!(preview_window(&plain.to_string_lossy()).expect("a plain file reads").is_none());
+        assert!(preview_window(&dir.join("nope.raf").to_string_lossy()).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// Issue #367: probes read headers, not pixels, and report what the decode-based probe did:
     /// oriented dimensions (EXIF orientation 6 swaps them), metadata, the error for a truncated

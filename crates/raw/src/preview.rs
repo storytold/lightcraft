@@ -167,6 +167,63 @@ pub fn embedded_preview(bytes: &[u8]) -> Option<Vec<u8>> {
 /// walking the marker segments and the entropy-coded data. `None` when it is not a complete, displayable
 /// (baseline or progressive) JPEG, so a stray `D8 FF` in other data is rejected. `*reach` is left at
 /// the furthest byte looked at (what the walk cost; see [`scan_for_jpeg`]).
+/// Where a preview lives in a file, so a caller with a seekable file can read just that part of it.
+///
+/// Why it exists: a 56 MB Fuji RAF keeps its JPEG in the first 5.6 MB (measured: DSCF9492.RAF at
+/// 5.6 MB), so a grid thumbnail or a loupe preview has no reason to pull the remaining 50 MB —
+/// which on a network share is the difference between a moment and half a minute. A caller that has
+/// only bytes (`wasm`, tests) keeps using [`embedded_preview`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreviewRange {
+    /// Byte offset of the preview in the file.
+    pub offset: u64,
+    /// Bytes to read at [`Self::offset`]: the container's declared preview extent, which may carry
+    /// padding past the preview's end-of-image marker.
+    pub window_len: u64,
+}
+
+/// The preview's range in the file, when the file's header alone locates it.
+///
+/// `bytes` is the file's first [`PREVIEW_PREFIX`] bytes (more is fine). `None` means "read the file
+/// whole and call [`embedded_preview`]": the formats not covered here (a TIFF-based raw's pointer
+/// tag can sit in an IFD the prefix cuts short; CR3 scans box by box) and files whose pointer is
+/// damaged.
+///
+/// The caller reads `[range.offset, range.offset + range.window_len)` and passes those bytes to
+/// [`embedded_preview_from_range`], which returns exactly what [`embedded_preview`] returns for the
+/// whole file.
+///
+/// Pass a prefix that actually covers the pointer's range (read [`Self::offset`] +
+/// [`Self::window_len`] bytes, or start with [`PREVIEW_PREFIX`] and grow when it is not enough):
+/// [`crate::vendor::raf::header`] clamps a slice to the buffer it was given, so a prefix that stops
+/// inside the declared extent yields a shorter `window_len` than the file really holds.
+pub fn bounded_preview(bytes: &[u8]) -> Option<PreviewRange> {
+    if !bytes.starts_with(b"FUJIFILMCCD-RAW") {
+        return None;
+    }
+    let jpeg = crate::vendor::raf::header(bytes).ok()?.jpeg?;
+    let offset = (jpeg.as_ptr() as usize).checked_sub(bytes.as_ptr() as usize)?;
+    if offset.checked_add(jpeg.len())? > bytes.len() {
+        return None;
+    }
+    Some(PreviewRange { offset: offset as u64, window_len: jpeg.len() as u64 })
+}
+
+/// The preview inside `window`, which holds the file's bytes at `[range.offset, range.offset +
+/// range.window_len)`: the counterpart of [`bounded_preview`]. Padding past the end-of-image marker
+/// is dropped, exactly as [`embedded_preview`] drops it.
+pub fn embedded_preview_from_range(window: &[u8], range: PreviewRange) -> Option<Vec<u8>> {
+    let preview = window.get(..usize::try_from(range.window_len).ok()?)?;
+    if !is_dct_jpeg(preview) {
+        return None;
+    }
+    Some(trim_eoi(preview).to_vec())
+}
+
+/// How many bytes of a raw file are enough for [`bounded_preview`]: every covered format keeps its
+/// preview pointer in a fixed header, well inside this.
+pub const PREVIEW_PREFIX: usize = 4096;
+
 fn jpeg_extent(b: &[u8], soi: usize, reach: &mut usize) -> Option<(usize, u8)> {
     let mut i = soi + 2;
     let r = walk_jpeg(b, &mut i);
@@ -320,6 +377,112 @@ mod tests {
         j.extend(std::iter::repeat_n(0x55u8, n));
         j.extend_from_slice(&[0xff, 0xd9]);
         j
+    }
+
+    /// A minimal RAF: the fixed header (JPEG offset/length at 84/88), the JPEG, then a raw tail the
+    /// caller must not have to read. `jpeg_len` is written as declared, so a test can claim more than
+    /// the JPEG holds the way a padded container does.
+    fn raf_fixture(jpeg: &[u8], gap: usize, preamble: usize, declared_len: Option<usize>) -> Vec<u8> {
+        let head = 160 + preamble;
+        let jpeg_off = head;
+        let mut f = vec![0u8; head];
+        f[..16].copy_from_slice(b"FUJIFILMCCD-RAW ");
+        f[84..88].copy_from_slice(&(jpeg_off as u32).to_be_bytes());
+        f[88..92].copy_from_slice(&(declared_len.unwrap_or(jpeg.len()) as u32).to_be_bytes());
+        // records directory and raw block are absent (offset 0), which `header` reads as "none"
+        f.extend_from_slice(jpeg);
+        f.extend(std::iter::repeat_n(0x33u8, gap));
+        f
+    }
+
+    /// A RAF's preview pointer sits at a fixed offset, so a header-sized prefix locates it and the
+    /// caller reads just that range instead of the whole file — the whole point on a network share.
+    #[test]
+    fn bounded_preview_locates_a_rafs_jpeg_from_the_header_alone() {
+        let jpeg = fake_jpeg(5000);
+        let file = raf_fixture(&jpeg, 40_000, 0, None);
+        // A prefix that covers the pointer's range: header + JPEG, and nothing of the tail.
+        let prefix_len = 8192.min(file.len());
+        let prefix = &file[..prefix_len];
+
+        let range = bounded_preview(prefix).expect("a RAF's preview is found from its header");
+        assert_eq!(range.offset, 160);
+        assert_eq!(range.window_len, jpeg.len() as u64);
+        assert!(range.offset + range.window_len <= prefix_len as u64, "the prefix covers the whole range: {range:?} of {prefix_len}");
+        assert!((range.offset + range.window_len) < file.len() as u64, "the range stops short of the tail: {range:?} of {}", file.len());
+
+        // What the caller reads, and what it holds afterwards: identical to the whole-file answer.
+        let window = prefix.get(range.offset as usize..(range.offset + range.window_len) as usize).expect("the range lies inside the prefix");
+        let bounded = embedded_preview_from_range(window, range).expect("the range holds the preview");
+        assert_eq!(Some(bounded.clone()), embedded_preview(&file));
+        assert!(bounded.ends_with(&[0xff, 0xd9]), "the preview ends at its EOI marker");
+
+        // A prefix that stops inside the declared extent is clamped by the container reader. The
+        // caller then reads a short window; what comes back is the whole JPEG it holds (the EOI
+        // marker is inside), never bytes past the window.
+        let short = &file[..2000];
+        let clipped = bounded_preview(short).expect("a pointer before the cut is still found");
+        assert!(clipped.window_len < jpeg.len() as u64, "clamped: {clipped:?}");
+        let window = short.get(clipped.offset as usize..).expect("inside");
+        let preview = embedded_preview_from_range(window, clipped).expect("the bytes are a JPEG start");
+        // No end-of-image marker inside the window: the bytes come back as they are, exactly as the
+        // whole-file path returns an unclosed JPEG. The decoder refuses it later; nothing is invented.
+        assert_eq!(preview, window, "an unclosed JPEG is handed on unchanged, never padded");
+        assert!(preview.len() <= window.len(), "never past the window");
+    }
+
+    /// The preview pointer may sit past the prefix (a long maker-note record before it), and a
+    /// container may declare padding after the JPEG: both stay correct, and the padding is dropped.
+    #[test]
+    fn bounded_preview_handles_a_late_pointer_and_padding() {
+        let jpeg = fake_jpeg(300);
+        let late = raf_fixture(&jpeg, 0, 9000, None);
+        let range = bounded_preview(&late).expect("the whole file is always a valid prefix");
+        assert_eq!(range.offset, (160 + 9000) as u64);
+        let padded = raf_fixture(&jpeg, 500, 0, Some(jpeg.len() + 500));
+        let range = bounded_preview(&padded).expect("a padded extent is still located");
+        assert_eq!(range.window_len, (jpeg.len() + 500) as u64);
+        let window = padded.get(range.offset as usize..(range.offset + range.window_len) as usize).expect("the window is inside the file");
+        let preview = embedded_preview_from_range(window, range).expect("the padding is dropped");
+        assert_eq!(preview, embedded_preview(&padded).expect("the whole-file answer agrees"));
+        assert!(preview.ends_with(&[0xff, 0xd9]));
+    }
+
+    /// Without a usable header or pointer the caller must read the file whole: the answer is `None`,
+    /// never a wrong range.
+    #[test]
+    fn bounded_preview_declines_what_the_header_cannot_answer() {
+        let jpeg = fake_jpeg(64);
+        let file = raf_fixture(&jpeg, 0, 0, None);
+        assert_eq!(bounded_preview(&jpeg), None, "not a raw at all");
+        assert_eq!(bounded_preview(b""), None);
+        if let Some(short) = file.get(..64) {
+            assert_eq!(bounded_preview(short), None, "a header cut short has not shown the pointer yet");
+        }
+        // a pointer that claims more than the file holds: `header` clamps the slice to the buffer,
+        // so the range never runs past the end (no out-of-bounds read can follow from it)
+        let mut lying = raf_fixture(&jpeg, 4096, 0, None);
+        lying[88..92].copy_from_slice(&(u32::MAX / 2).to_be_bytes());
+        let clamped = bounded_preview(&lying).expect("a pointer inside the file is still usable");
+        assert!(clamped.offset + clamped.window_len <= lying.len() as u64, "clamped to the file: {clamped:?}");
+        // a range the window cannot satisfy yields nothing
+        assert_eq!(embedded_preview_from_range(&jpeg, PreviewRange { offset: 0, window_len: u64::MAX }), None);
+        // a TIFF-based raw: its pointer tag lives in an IFD this prefix may cut short
+        let mut tiff = b"II*\0\x08\0\0\0".to_vec();
+        tiff.extend_from_slice(&[0u8; 64]);
+        assert_eq!(bounded_preview(&tiff), None);
+    }
+
+    /// A range that does not hold a JPEG yields nothing, rather than a truncated image handed on.
+    #[test]
+    fn a_range_that_does_not_hold_a_jpeg_yields_nothing() {
+        let jpeg = fake_jpeg(200);
+        let range = PreviewRange { offset: 0, window_len: jpeg.len() as u64 };
+        assert_eq!(embedded_preview_from_range(&jpeg, range).as_deref(), Some(&jpeg[..]));
+        assert_eq!(embedded_preview_from_range(&jpeg[..10], range), None, "window shorter than the range claims");
+        let not_jpeg = vec![0u8; jpeg.len()];
+        assert_eq!(embedded_preview_from_range(&not_jpeg, range), None, "not a JPEG");
+        assert_eq!(embedded_preview_from_range(&[], PreviewRange { offset: 0, window_len: 0 }), None, "empty window");
     }
 
     #[test]
