@@ -201,7 +201,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-VIEW-SLIDESHOW | Slideshow | P2 | ✅ | `cmd:view.slideshow` | View ▸ Slideshow (⌥⌘↩): the photos in view full screen, every 4 s (`interval`), wrapping; Space pauses, ←/→ step, Esc ends |
 | LR-VIEW-SECONDWINDOW | Second display window [Classic] | P2 | ✅ | `cmd:view.secondWindow`, `crates/ui-egui/src/panels/second.rs` | Window ▸ Second Window (⌘F11): the active photo fitted in its own native window with its own render (a floating panel where there are no native windows); loupe view only (no grid / compare / survey there) |
 | LR-VIEW-CLIPPING | Clipping indicators | P0 | ✅ | `cmd:view.clipping` | |
-| LR-VIEW-HISTOGRAM | Histogram | P0 | ✅ | `cmd:view.histogram`, `crates/ui-egui/src/panels/edit.rs` | no drag-to-adjust on the histogram |
+| LR-VIEW-HISTOGRAM | Histogram | P0 | ✅ | `cmd:view.histogram`, `crates/ui-egui/src/panels/edit.rs`, `crates/pipeline/src/lib.rs` (`hdr_histogram`) | HDR edits: SDR on the left half, the HDR range (0 to 5 stops above SDR white, a fixed scale) on the right with the headroom limit marked; colour bar (white, or Visualize HDR range's colours when that is on) and SDR / HDR labels; no drag-to-adjust on the histogram |
 | LR-VIEW-HDR-DISPLAY | HDR display output | P2 | ⬜ | | |
 
 ## D. Search & filter (FILT)
@@ -427,7 +427,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-HDR-EDIT | HDR editing | P2 | 🟡 | `cmd:develop.hdr`, `crates/pipeline/src/tone.rs` (`ToneMap::hdr`), `crates/pipeline/src/tests_hdr.rs` | HDR tone map (SDR curve through the midtones, highlights up to the headroom limit) and float HDR render, CPU only; no on-screen HDR display yet (LR-VIEW-HDR-DISPLAY); HDR settings not yet read from crs XMP |
 | LR-HDR-SDRPREVIEW | SDR preview of HDR | P2 | 🟡 | `ctl:hdr.sdr*` | SDR rendition sliders (brightness, contrast, highlights, shadows, whites, clarity) used by every SDR view and export; no separate SDR-preview toggle until HDR display lands |
 | LR-HDR-VISUALIZE | Visualize HDR range | P2 | ✅ | `cmd:view.visualizeHdr`, `crates/pipeline/src/visualize.rs` (`hdr_range`) | grey below SDR white, four colour bands by stops above it |
-| LR-HDR-LIMIT | HDR headroom limit | P2 | ✅ | `ctl:hdr.maxEv`, `cmd:develop.hdr` | 0 to 5 stops |
+| LR-HDR-LIMIT | HDR headroom limit | P2 | ✅ | `ctl:hdr.maxEv`, `cmd:develop.hdr` | 0 to 5 stops; marked on the HDR histogram (whose scale stays at 5 stops) |
 | LR-HDR-EXPORT | HDR export | P2 | 🟡 | `cmd:app.export`, `crates/codecs/src/gainmap.rs`, `crates/engine/src/export.rs` (`encode_gain_map_jpeg`) | `hdr` export option: ISO 21496-1 gain map JPEG (plus Adobe hdrgm and Apple XMP), 10-bit Rec. 2020 PQ AVIF, 32-bit float TIFF; no HLG yet; no HEIC (no permissive HEVC encoder) |
 
 ## R. Video (VID)

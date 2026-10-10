@@ -796,7 +796,8 @@ impl RenderJob {
                     (Some(d), Some(_)) => {
                         let keep = self.view_cache.is_some() && self.request.quality == Quality::Full;
                         let (s, h) = crate::display::finish_render(&mut rendered.image, d, keep);
-                        if let Some(h) = h {
+                        // (an HDR edit's HDR histogram stays)
+                        if let Some(h) = h.filter(|_| rendered.histogram.hdr.is_none()) {
                             rendered.histogram = h;
                         }
                         srgb = s;
@@ -844,6 +845,15 @@ impl RenderJob {
 /// the CPU, reusing `stages` either way. Both produce the same image within 1–3 LSB (see
 /// `docs/gpu-pipeline.md`); `LIGHTCRAFT_GPU=0` or [`lightcraft_gpu::set_enabled`] forces the CPU.
 pub fn develop(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>, gpu: bool) -> Rendered {
+    let mut rendered = develop_image(src, info, s, req, stages, gpu);
+    // an HDR edit's preview is its SDR rendition: its histogram shows the HDR range instead
+    if let Some(h) = lightcraft_pipeline::hdr_histogram(src, info, s, req) {
+        rendered.histogram = h;
+    }
+    rendered
+}
+
+fn develop_image(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>, gpu: bool) -> Rendered {
     // LUT profiles have no GPU stage: they render on the CPU
     if gpu
         && !lightcraft_pipeline::lut::is_lut_profile(&s.profile.id)

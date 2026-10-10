@@ -1070,3 +1070,18 @@ fn undo_and_redo_show_the_photo_they_change() {
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(s.selection, before, "a step over several photos keeps the selection");
 }
+
+#[test]
+fn hdr_edits_render_with_their_hdr_histogram() {
+    let mut s = demo();
+    let id = s.active().unwrap();
+    let plain = s.loupe_job(id, 200, 200, true).unwrap().run().rendered.unwrap();
+    assert!(plain.histogram.hdr.is_none(), "SDR edits: the image's histogram");
+    s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 3})).unwrap();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 1.0})).unwrap();
+    let r = s.loupe_job(id, 200, 200, true).unwrap().run().rendered.unwrap();
+    let bins = r.histogram.hdr.expect("an HDR edit's histogram");
+    assert_eq!(bins.stops, lightcraft_develop::Hdr::MAX_EV_LIMIT as f32, "a fixed scale");
+    assert!(r.histogram.above_sdr() > 0.0);
+    assert!(r.deep.is_none(), "the preview itself stays the 8-bit SDR rendition");
+}

@@ -12,7 +12,7 @@ pub mod blur;
 pub mod histogram;
 pub mod resample;
 
-pub use histogram::Histogram;
+pub use histogram::{HdrBins, Histogram};
 
 /// Run `f` over row chunks, in parallel when the `parallel` feature is on.
 pub fn par_rows<T: Send>(data: &mut [T], row_len: usize, f: impl Fn(usize, &mut [T]) + Sync + Send) {

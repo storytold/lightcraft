@@ -105,3 +105,36 @@ fn visualize_hdr_paints_only_what_rises_above_white() {
     let plain = render(&src, &raw(), &DevelopSettings::default(), &RenderRequest::fit(240, 240));
     assert_eq!(off.image.data, plain.image.data);
 }
+
+#[test]
+fn hdr_histogram_shows_the_range_above_sdr_white_on_a_fixed_scale() {
+    let src = sunset();
+    let req = RenderRequest::fit(240, 240);
+    // SDR edits, and requests the image's own histogram describes, have none
+    assert!(crate::hdr_histogram(&src, &raw(), &DevelopSettings::default(), &req).is_none());
+    let mut s = hdr_on(3.0);
+    s.light.exposure = 1.0;
+    for other in [
+        RenderRequest { depth: OutputDepth::U16, ..req },
+        RenderRequest { window: Some(crate::PixelWindow { x: 0, y: 0, w: 8, h: 8 }), ..req },
+        RenderRequest { proof: Some(crate::Proof::default()), ..req },
+    ] {
+        assert!(crate::hdr_histogram(&src, &raw(), &s, &other).is_none());
+    }
+    let h = crate::hdr_histogram(&src, &raw(), &s, &req).expect("an HDR edit's histogram");
+    let bins = h.hdr.expect("HDR bins");
+    assert_eq!(bins.stops, lightcraft_develop::Hdr::MAX_EV_LIMIT as f32, "the whole HDR range");
+    assert!(h.above_sdr() > 0.0, "highlights above SDR white: {}", h.above_sdr());
+    assert!(h.total > 0);
+    // the scale doesn't follow the headroom limit (a damaged one included); the content does
+    let highest = |h: &lightcraft_raster::Histogram| h.luma.iter().rposition(|&n| n > 0).unwrap_or(0);
+    let top3 = highest(&h);
+    s.hdr.max_ev = 1.5;
+    let h15 = crate::hdr_histogram(&src, &raw(), &s, &req).unwrap();
+    assert_eq!(h15.hdr.unwrap().stops, bins.stops);
+    assert!(highest(&h15) < top3, "a lower limit pulls the highlights down: {} vs {top3}", highest(&h15));
+    s.hdr.max_ev = f64::NAN;
+    assert_eq!(crate::hdr_histogram(&src, &raw(), &s, &req).unwrap().hdr.unwrap().stops, bins.stops);
+    // the SDR rendition's own histogram has nothing above white
+    assert!(render(&src, &raw(), &hdr_on(3.0), &req).histogram.hdr.is_none());
+}
