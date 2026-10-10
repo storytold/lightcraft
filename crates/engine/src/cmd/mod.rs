@@ -4,6 +4,7 @@
 //! delete), `album.*`, `develop.*` (settings), `crop.*`, `mask.*`, `preset.*`, `version.*`,
 //! `edit.*` (undo/redo), and queries (`catalog.query`, `photo.inspect`, `develop.get`…).
 
+pub mod actions;
 mod activity;
 mod before;
 pub(crate) mod browse;
@@ -19,6 +20,7 @@ pub mod curves;
 pub(crate) mod denoise;
 mod develop;
 mod edit;
+pub mod edit_in;
 mod export;
 pub(crate) mod face_detect;
 mod face_models;
@@ -188,6 +190,8 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(web::specs());
         #[cfg(not(target_arch = "wasm32"))]
         v.extend(credentials::specs());
+        v.extend(actions::specs());
+        v.extend(edit_in::specs());
         v.extend(activity::specs());
         v
     })

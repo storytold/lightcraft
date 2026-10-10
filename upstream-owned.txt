@@ -39,6 +39,13 @@ crates/webgallery/
 crates/engine/src/cmd/web.rs
 crates/ui-egui/src/web_module.rs
 crates/slideshow/
+crates/psd/
+crates/actions/
+crates/engine/src/cmd/edit_in.rs
+crates/engine/src/cmd/actions.rs
+crates/engine/src/tests_edit_in.rs
+apps/cli/src/run_action.rs
+crates/ui-egui/src/edit_in.rs
 # the Classic shell
 crates/ui-egui/src/module.rs
 crates/ui-egui/src/panels/classic.rs

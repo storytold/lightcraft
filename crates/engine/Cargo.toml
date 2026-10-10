@@ -32,6 +32,9 @@ dac-meta = { workspace = true }
 dac-faces = { workspace = true }
 miniz_oxide = { workspace = true }
 dac-merge = { workspace = true }
+dac-psd = { workspace = true }
+dac-actions = { workspace = true }
+tiff = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
