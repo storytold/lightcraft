@@ -548,6 +548,14 @@ fn cube_luts_become_profiles() {
     assert_eq!(s.profile_info(&id), Some(("Warm Test", "Film Looks")));
     s.execute("profile.favorite", &json!({"id": id})).unwrap();
     assert!(s.profile_favorites.contains(&id));
+    // `profiles.list` lists it next to the built-in profiles (#618)
+    let listed = |s: &mut Session| {
+        let list = s.execute("profiles.list", &json!({})).unwrap();
+        let list = list.as_array().unwrap();
+        assert!(list.iter().any(|p| p["id"] == "lc.color"), "built-in profiles stay listed");
+        list.iter().find(|p| p["id"] == id.as_str()).cloned()
+    };
+    assert_eq!(listed(&mut s), Some(json!({"id": id, "name": "Warm Test", "group": "Film Looks", "favorite": true, "imported": true})));
     // the library keeps it
     drop(s);
     lightcraft_pipeline::lut::unregister(&id);
@@ -557,8 +565,10 @@ fn cube_luts_become_profiles() {
     assert!(s.profile_favorites.contains(&id), "imported LUT favorite survives reopen");
     assert_eq!(s.profile_info(&id), Some(("Warm Test", "Film Looks")));
     assert!(lightcraft_pipeline::lut::get(&id).is_some(), "registered again on open");
+    assert!(listed(&mut s).is_some_and(|p| p["favorite"] == true), "listed after reopen");
     s.execute("profile.deleteImported", &json!({"id": id})).unwrap();
     assert!(lightcraft_pipeline::lut::get(&id).is_none());
+    assert_eq!(listed(&mut s), None, "a deleted profile is no longer listed");
     let _ = std::fs::remove_dir_all(&src);
     let _ = std::fs::remove_dir_all(&lib);
 }
