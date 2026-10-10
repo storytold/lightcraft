@@ -10,8 +10,9 @@
 //! Library and Develop re-home the existing views: Library shows the grids, the loupe, Compare,
 //! Survey and People; Develop is the loupe with an editing panel (Edit, Crop, Remove, Masking, Red
 //! Eye) or the Reference view. Opening an editing panel from Library therefore *is* entering
-//! Develop, and going back to a grid is entering Library ([`sync`]). Map, Book, Slideshow, Print and
-//! Web are placeholders until Phase 3, so the module picker is complete.
+//! Develop, and going back to a grid is entering Library ([`sync`]). Print is
+//! [`crate::print_ui`]; Map, Book, Slideshow and Web are placeholders until Phase 3, so the module
+//! picker is complete.
 
 use egui::{Align2, Color32, Rect, Sense, pos2, vec2};
 use serde::{Deserialize, Serialize};
@@ -511,7 +512,7 @@ static DEVELOP: Develop = Develop;
 static MAP: Placeholder = Placeholder(ModuleId::Map);
 static BOOK: Placeholder = Placeholder(ModuleId::Book);
 static SLIDESHOW: Placeholder = Placeholder(ModuleId::Slideshow);
-static PRINT: Placeholder = Placeholder(ModuleId::Print);
+static PRINT: crate::print_ui::PrintModule = crate::print_ui::PrintModule;
 static WEB: Placeholder = Placeholder(ModuleId::Web);
 
 pub fn get(id: ModuleId) -> &'static dyn Module {
@@ -740,6 +741,9 @@ pub const SHELL_COMMANDS: &[crate::menus::UiCommand] = &[
 
 /// Is `id` a shell command, and is it enabled?
 pub fn enabled(app: &DacApp, id: &str) -> Option<bool> {
+    if let Some(e) = crate::print_ui::enabled(app, id) {
+        return Some(e);
+    }
     if !SHELL_COMMANDS.iter().any(|c| c.0 == id) {
         return None;
     }
@@ -754,6 +758,9 @@ pub fn enabled(app: &DacApp, id: &str) -> Option<bool> {
 
 /// Run a shell command; `None`: not one.
 pub fn run(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    if let Some(r) = crate::print_ui::run(app, id, p) {
+        return Some(r);
+    }
     if !SHELL_COMMANDS.iter().any(|c| c.0 == id) {
         return None;
     }
@@ -1014,6 +1021,15 @@ pub fn edge_visible(app: &DacApp, e: Edge) -> bool {
         Edge::Top | Edge::Bottom => true,
     };
     has && (edge_shown(app, e) || app.ui.peek.get(e))
+}
+
+/// Whether a module that draws its own side columns (Print) shows the column at edge `e`: the
+/// edge is shown or peeking, as [`edge_visible`] decides for modules with declared panels.
+pub fn module_edge(app: &DacApp, e: Edge) -> bool {
+    if app.ui.screen_mode == ScreenMode::FullScreenHidePanels {
+        return app.ui.peek.get(e);
+    }
+    edge_shown(app, e) || app.ui.peek.get(e)
 }
 
 /// Auto show: a hidden edge marked auto-show appears while the pointer is at the window's edge and

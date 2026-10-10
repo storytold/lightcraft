@@ -32,6 +32,7 @@ pub mod module;
 pub mod panels;
 pub mod pick;
 pub mod plate;
+pub mod print_ui;
 pub mod region;
 pub mod render;
 pub mod shortcuts;
@@ -354,6 +355,8 @@ pub struct DacApp {
     /// Immich: Connections settings, the Import dialog's Immich source, background pump state.
     #[cfg(not(target_arch = "wasm32"))]
     pub immich: panels::connections::ImmichUi,
+    /// The Print module's settings and job state.
+    pub print: print_ui::PrintUi,
     /// The activity stack shows every task, not just the first few ("+N more" was clicked).
     pub activity_expanded: bool,
 }
@@ -366,6 +369,7 @@ impl DacApp {
             session,
             #[cfg(not(target_arch = "wasm32"))]
             immich: Default::default(),
+            print: Default::default(),
             ui: UiState::default(),
             services,
             renderer: render::Renderer::default(),
