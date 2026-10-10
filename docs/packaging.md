@@ -22,7 +22,7 @@
 | Web (static) | `packaging/web/package.sh` | release.yml | hosting notes in `packaging/web/HOSTING.md` |
 
 Desktop integration (Linux, FreeBSD): `<app_id>.desktop`, MIME types for the catalog and preset extensions, and
-AppStream metadata (`<app_id>.metainfo.xml.in`), which describes the seven modules and the publish, Immich,
+AppStream metadata (`<app_id>.metainfo.xml.in`), the PTP udev rule, which describes the seven modules and the publish, Immich,
 tethering, Edit In, actions and plug-in features. `packaging-lint.yml` validates the templates
 (`desktop-file-validate`, `appstreamcli`, Flatpak manifest parity). `cargo xtask install` installs locally under
 `~/.local` without a package.
@@ -32,18 +32,20 @@ tethering, Edit In, actions and plug-in features. `packaging-lint.yml` validates
 Nothing here is built or tested by this review beyond `cargo xtask package --render-only` and
 `appstreamcli validate` (one pre-existing warning: the placeholder `developer` id in `brand.toml`).
 
-1. **Flatpak has no network permission.** The manifests deliberately omit `--share=network` (it was only needed for
-   the optional SAM 3 download). The Map module's tiles and geocoding, Immich, publish services, SFTP web upload,
-   IPP printing and model downloads now all need it, so in the Flatpak they fail until the user runs
-   `flatpak override --user --share=network <app_id>`. Decide whether to grant it (and update both manifests,
-   which `packaging-lint` keeps identical) or document the override in the app's error messages.
+1. **Flatpak permissions (decided 2026-10-11).** Both manifests grant `--share=network`: Map tiles and geocoding,
+   Immich, publish services, SFTP web upload, IPP printing, PTP/IP tethering and model downloads need it, and each
+   is opt-in inside the app. For USB tethering they grant `--device=all`. That is broad (every device node, not
+   only cameras); `--device=usb` (Flatpak >= 1.15.11) would be narrower, but the CI builder (Ubuntu 24.04,
+   Flatpak 1.14) rejects it. Switch to `--device=usb` once the builder and users' Flatpak are new enough.
+   Users who want less run `flatpak override --user --nodevice=all --unshare=network <app_id>`.
 2. **Flatpak filesystem access.** Only `xdg-pictures` is granted; a tethered-capture folder or publish destination
    elsewhere works only when picked through the portal. Folders typed by hand or remembered from a previous
    session may not be reachable.
-3. **Tethering udev rule: TODO.** Native PTP/USB camera control doesn't exist yet (studio capture watches a folder),
-   so no udev rule is shipped. When the PTP agent lands, add `packaging/linux/<NN>-<binary>-ptp.rules` (camera
-   USB class `06`, `TAG+="uaccess"`), install it in `package.sh` (deb/rpm: `/usr/lib/udev/rules.d/`), document it
-   for AppImage/tarball users, and add `--device=all` (or a USB portal) to the Flatpak.
+3. **Tethering udev rule.** `packaging/linux/70-{app_id}-ptp.rules.in` (USB still-image class 06/01/01,
+   `TAG+="uaccess"`) is installed to `/usr/lib/udev/rules.d/` by the `.deb`/`.rpm` packages and the tarball tree.
+   AppImage and source users copy it by hand ([tethering.md](tethering.md) → Linux); the Flatpak cannot install
+   udev rules, so Flatpak users need the rule from the host too. FreeBSD (devd) and Windows (WinUSB driver) have no
+   equivalent shipped yet.
 4. **Not on any store or repository:** no Flathub submission, no APT/RPM repository, no Homebrew cask, no winget
    manifest, no FreeBSD port (only a tarball). The `homepage`/`repository` values in `brand.toml` are placeholders,
    which AppStream URLs and the AppImage update info inherit.

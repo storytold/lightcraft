@@ -12,7 +12,7 @@ modules, and every action a command you can also run from the command line, a sc
 3. [Catalogs](catalogs.md): where your library lives, backups, moving photos between catalogs.
 4. [Import and export](import-export.md): import, export presets, the command-line renderer.
 5. [Publish services](publish.md): keep a folder (or an Immich server) in step with a collection.
-6. [Tethered capture](tethering.md): studio sessions from a watched folder.
+6. [Tethered capture](tethering.md): studio capture from a watched folder and native PTP tethering.
 7. [Immich](../immich.md): link, sync and import with an Immich server.
 8. [Plug-ins](../plugins.md): WebAssembly plug-ins, their permissions and how to write one.
 9. [Edit In and Actions](edit-in-and-actions.md): round trips to other editors, recorded command sequences.

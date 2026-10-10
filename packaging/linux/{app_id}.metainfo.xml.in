@@ -25,7 +25,7 @@
       <li>Web: HTML galleries, exported or uploaded over SFTP</li>
     </ul>
     <p>
-      Publish services, Immich sync, tethered studio capture, Edit In external editors, recorded actions and
+      Publish services, Immich sync, tethered capture (watched folder and native PTP), Edit In external editors, recorded actions and
       WebAssembly plug-ins. Every action is also a command for the command line and AI agents.
     </p>
   </description>
