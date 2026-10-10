@@ -9,6 +9,11 @@
   Native on macOS, Windows and Linux. In the browser via WebAssembly. Drivable end to end by AI agents over MCP.
 </p>
 
+> [!WARNING]
+> **Please don't contribute yet.** This fork was published on 2026-10-10 and its initial planning and restructuring
+> are still under way, so pull requests and issues filed now are likely to conflict with work in progress. Please
+> wait about 18 hours, until 2026-10-11, before contributing.
+
 > [!NOTE]
 > The product name, binary names, settings folder and environment-variable prefix are set in one place,
 > [`brand.toml`](brand.toml). This README calls the product "the app"; `<app>`, `<binary>`, `<cli>`, `<mcp_server>`

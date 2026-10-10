@@ -1,6 +1,8 @@
 *~
-# plan/ is committed; only private observation notes about the reference app stay local
-/plan/observations/
+# Planning documents are local-only (not published)
+/plan/
+/PLAN.md
+/PLAN_phase_*.md
 /target
 /target-*/
 /dist

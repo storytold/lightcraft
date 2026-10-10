@@ -1,7 +1,7 @@
 # Immich
 
 The app links its library with one or more [Immich](https://immich.app) servers (v3.0 or later). Research notes,
-endpoints and the test server: [`plan/immich.md`](../plan/immich.md). Code: `crates/immich` (`dac-immich`, the typed
+endpoints and the test server: the local research note `plan/immich.md` (not published). Code: `crates/immich` (`dac-immich`, the typed
 client and the pure matching / mapping logic), `crates/engine/src/cmd/immich.rs` (commands),
 `crates/engine/src/remote.rs` (background work), `crates/ui-egui/src/panels/connections.rs` (UI).
 
