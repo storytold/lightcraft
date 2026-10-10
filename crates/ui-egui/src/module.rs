@@ -176,6 +176,8 @@ pub enum PanelId {
     Folders,
     /// Library left: collections, collection sets and smart collections.
     Collections,
+    /// Library left: publish services and their published collections.
+    Publish,
     /// Library right: relative develop adjustments for the selection.
     QuickDevelop,
     /// Library right: the selected photos' keywords, suggestions and keyword sets.
@@ -213,6 +215,7 @@ impl PanelId {
             | PanelId::Catalog
             | PanelId::Folders
             | PanelId::Collections
+            | PanelId::Publish
             | PanelId::QuickDevelop
             | PanelId::Keywording
             | PanelId::KeywordList
@@ -397,7 +400,7 @@ struct Develop;
 struct Placeholder(ModuleId);
 
 /// Library's Classic columns.
-pub const LIBRARY_LEFT: &[PanelId] = &[PanelId::Navigator, PanelId::Catalog, PanelId::Folders, PanelId::Collections];
+pub const LIBRARY_LEFT: &[PanelId] = &[PanelId::Navigator, PanelId::Catalog, PanelId::Folders, PanelId::Collections, PanelId::Publish];
 pub const LIBRARY_RIGHT: &[PanelId] = &[PanelId::QuickDevelop, PanelId::Keywording, PanelId::KeywordList, PanelId::Metadata];
 const DEVELOP_RIGHT: &[PanelId] = &[
     PanelId::Edit,

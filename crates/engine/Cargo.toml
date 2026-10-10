@@ -44,6 +44,8 @@ dac-segment = { workspace = true, optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dac-fetch = { workspace = true }
 dac-immich = { workspace = true }
+dac-publish = { workspace = true }
+dac-tether = { workspace = true }
 dac-credentials = { workspace = true }
 dac-plugins = { workspace = true }
 

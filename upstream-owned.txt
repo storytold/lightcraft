@@ -28,6 +28,13 @@ sdk/
 docs/plugins.md
 crates/engine/src/cmd/plugins.rs
 crates/ui-egui/src/panels/plugins.rs
+crates/publish/
+crates/tether/
+crates/engine/src/cmd/publish.rs
+crates/engine/src/cmd/publish_tests.rs
+crates/engine/src/cmd/tether.rs
+crates/ui-egui/src/panels/publish.rs
+crates/ui-egui/src/panels/tether_bar.rs
 # the Classic shell
 crates/ui-egui/src/module.rs
 crates/ui-egui/src/panels/classic.rs

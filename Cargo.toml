@@ -39,6 +39,8 @@ dac-credentials = { path = "crates/credentials" }
 dac-hash = { path = "crates/hash" }
 dac-immich = { path = "crates/immich" }
 dac-plugins = { path = "crates/plugins" }
+dac-publish = { path = "crates/publish" }
+dac-tether = { path = "crates/tether" }
 dac-heif = { path = "crates/heif" }
 dac-segment = { path = "crates/segment" }
 

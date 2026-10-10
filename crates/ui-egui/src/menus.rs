@@ -327,6 +327,10 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
     if let Some(r) = crate::libtools::run(app, id, p) {
         return Some(r);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(r) = crate::panels::tether_bar::run(app, id, p) {
+        return Some(r);
+    }
     // the app's own context: a toast's time comes from its clock (a fresh context's clock is at 0,
     // and a toast set by it was long over by the app's clock: it never showed)
     let ctx = app.tasks.repaint.clone().unwrap_or_default();

@@ -1393,10 +1393,12 @@ dependencies = [
  "dac-pipeline",
  "dac-plugins",
  "dac-preview",
+ "dac-publish",
  "dac-raster",
  "dac-raw",
  "dac-scenes",
  "dac-segment",
+ "dac-tether",
  "dac-tiff",
  "fs4",
  "harfrust",
@@ -1598,6 +1600,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dac-publish"
+version = "0.5.0"
+dependencies = [
+ "dac-catalog",
+ "dac-hash",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dac-raster"
 version = "0.5.0"
 dependencies = [
@@ -1667,6 +1679,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dac-tether"
+version = "0.5.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dac-tiff"
 version = "0.5.0"
 dependencies = [
@@ -1694,6 +1714,7 @@ dependencies = [
  "dac-meta",
  "dac-pipeline",
  "dac-preview",
+ "dac-publish",
  "dac-raster",
  "egui",
  "log",
