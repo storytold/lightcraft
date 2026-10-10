@@ -103,6 +103,8 @@ pub enum RawFormat {
     /// full-resolution CFA image with black/white levels, a default crop and `AsShotNeutral`):
     /// Hasselblad 3FR and FFF. Read by the DNG reader.
     CfaTiff,
+    /// Kodak DCS520C TIFF: a two-component lossless JPEG CFA sub-IFD with a response curve (`vendor::kodak`).
+    KodakDcs,
     /// Another TIFF-based raw (3FR, IIQ, ERF, KDC, DCR, MOS, …).
     OtherTiff,
 }
@@ -123,6 +125,7 @@ impl RawFormat {
                 | RawFormat::Pef
                 | RawFormat::CfaTiff
                 | RawFormat::Srw
+                | RawFormat::KodakDcs
         )
     }
 }
@@ -185,6 +188,9 @@ pub fn probe(bytes: &[u8]) -> Option<RawFormat> {
     }
     if make.starts_with("SAMSUNG") && samsung_raw {
         return Some(RawFormat::Srw);
+    }
+    if vendor::kodak::raw_ifd(&t, bytes).is_some() {
+        return Some(RawFormat::KodakDcs);
     }
     if dng::is_plain_cfa_tiff(&t, bytes) {
         return Some(RawFormat::CfaTiff);
@@ -347,6 +353,7 @@ fn decode_with(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         RawFormat::Orf => vendor::orf::decode(bytes, mode),
         RawFormat::CfaTiff => dng::decode_as(bytes, mode, RawFormat::CfaTiff).map(lift_clipped),
         RawFormat::Srw => vendor::srw::decode(bytes, mode),
+        RawFormat::KodakDcs => vendor::kodak::decode(bytes, mode),
         RawFormat::OtherTiff => Err(RawError::Unsupported(other_tiff_reason(bytes))),
         other => Err(RawError::Unsupported(format!("{other:?} files are not decoded yet"))),
     }

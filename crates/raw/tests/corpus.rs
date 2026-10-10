@@ -931,3 +931,47 @@ fn sony_embedded_distortion_is_limited_to_validated_models() {
     }
     eprintln!("Sony distortion model boundary: {checked} corpus files checked");
 }
+
+/// Kodak DCS520C (`crates/raw/src/vendor/kodak.rs`): the two-component lossless JPEG strip decodes through the
+/// file's response curve to a 1736 x 1160 GRBG mosaic with 12-bit white, per-position black levels and the
+/// white balance of the vendor IFD. Looks for the corpus copy, then the raw.pixls.us folder; skips without either.
+#[test]
+fn corpus_kodak_dcs520c() {
+    let name = "2573_Kodak - DCS520C - 12bit (3_2).TIF";
+    let candidates = [corpus_root().join("raw").join("kodak-dcs520c.tif"), Path::new("P:/raw-pixls/Kodak/DCS520C").join(name)];
+    let Some(bytes) = candidates.iter().find_map(|p| std::fs::read(p).ok()) else {
+        eprintln!("skip: DCS520C sample absent");
+        return;
+    };
+    assert_eq!(probe(&bytes), Some(RawFormat::KodakDcs));
+    let img = decode(&bytes).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!((img.width, img.height, img.bits), (1736, 1160, 12));
+    assert_eq!(img.cfa.as_ref().map(|c| c.name()).as_deref(), Some("GRBG"));
+    assert_eq!(img.white_at(0), 4095.0);
+    let lightcraft_raw::RawData::U16(d) = &img.data else { panic!("float data") };
+    assert_eq!(d.len(), 1736 * 1160);
+    // stored 191..=622 expands to 191..=4095
+    assert_eq!((d.iter().min().copied(), d.iter().max().copied()), (Some(191), Some(4095)));
+    // black: G and R about 220, B about 197 (the darkest 0.01% of each position)
+    let b = &img.black.values;
+    assert_eq!(b.len(), 4);
+    assert!(
+        (200.0..=235.0).contains(&b[0]) && (200.0..=235.0).contains(&b[1]) && (185.0..=210.0).contains(&b[2]) && (200.0..=235.0).contains(&b[3]),
+        "{b:?}"
+    );
+    let wb = img.wb_multipliers.expect("white balance");
+    assert!((wb[0] - 0.9587).abs() < 1e-3 && wb[1] == 1.0 && (wb[2] - 1.9913).abs() < 1e-3, "{wb:?}");
+    // no column stripes: the two greens sit in different JPEG components (G1 on even columns, G2 on odd columns), so a component mismatch would split them
+    let mean = |y0: usize, x0: usize| {
+        let (mut s, mut n) = (0f64, 0f64);
+        for y in (y0..1160).step_by(2) {
+            for x in (x0..1736).step_by(2) {
+                s += f64::from(d[y * 1736 + x]);
+                n += 1.0;
+            }
+        }
+        s / n
+    };
+    let (g1, g2) = (mean(0, 0), mean(1, 1));
+    assert!((g1 - g2).abs() < 0.01 * g1, "greens {g1} vs {g2}");
+}
