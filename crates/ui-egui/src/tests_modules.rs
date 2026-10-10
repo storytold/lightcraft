@@ -205,3 +205,45 @@ fn secondary_window_modes() {
         assert!(has_widget(&h, "view:secondWindow"), "{m}");
     }
 }
+
+/// The secondary window's own controls (here in egui's embedded window, as on the web): the mode
+/// switcher, the filter bar in Grid, the filmstrip under the loupe; clicks select photos.
+#[test]
+fn secondary_window_has_its_own_switcher_filter_and_filmstrip() {
+    let mut h = demo();
+    run(&mut h, "second.grid", json!({}));
+    h.step();
+    for m in ["grid", "loupe", "live", "locked", "compare", "survey", "slideshow"] {
+        assert!(has_widget(&h, &format!("secondMode:{m}")), "{m}");
+    }
+    assert!(has_widget(&h, "field:secondFilterText") && has_widget(&h, "secondFilterRating:3"));
+    // the filter narrows the grid: rate one photo ★★★★★, ask for 5 stars
+    let all = h.app.session.visible_cloned();
+    let star = all[2];
+    run(&mut h, "photo.rate", json!({"ids": [star.0], "rating": 5}));
+    let r = h.request("ui.clickWidget", json!({"id": "secondFilterRating:5"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert_eq!(h.app.ui.second_filter.rating, 5);
+    assert!(has_widget(&h, &format!("secondTile:{}", star.0)));
+    assert!(!has_widget(&h, &format!("secondTile:{}", all[0].0)), "filtered out");
+    // a tile click selects; the switcher's Normal button goes to the loupe with a filmstrip
+    let r = h.request("ui.clickWidget", json!({"id": format!("secondTile:{}", star.0)}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(h.app.session.active(), Some(star));
+    let r = h.request("ui.clickWidget", json!({"id": "secondMode:loupe"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert_eq!(h.app.ui.second_mode, crate::module::SecondMode::Loupe);
+    assert!(has_widget(&h, &format!("secondFilm:{}", star.0)));
+    run(&mut h, "second.filmstrip", json!({"show": false}));
+    assert!(!has_widget(&h, &format!("secondFilm:{}", star.0)));
+    // bad filter values are errors
+    let r = h.request("engine.execute", json!({"command": "second.filter", "params": {"rating": 9}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    run(&mut h, "second.filter", json!({"clear": true}));
+    assert_eq!(h.app.ui.second_filter, crate::panels::second::SecondFilter::default());
+}

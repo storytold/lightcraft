@@ -502,6 +502,9 @@ pub struct UiState {
     pub toolbar: bool,
     /// Edges that auto-show at the window edge when hidden, and those peeking now.
     pub auto_show: crate::module::EdgeFlags,
+    /// Edges that, hidden, appear on a click at the window edge (Classic's "Auto Hide") and hide
+    /// again once the pointer leaves them.
+    pub auto_hide: crate::module::EdgeFlags,
     #[serde(skip)]
     pub peek: crate::module::EdgeFlags,
     /// The right group's order and hidden panels for the module on screen.
@@ -514,6 +517,10 @@ pub struct UiState {
     /// What the secondary window shows, and the photo a locked loupe holds.
     pub second_mode: crate::module::SecondMode,
     pub second_locked: Option<u64>,
+    /// The secondary window's own filter bar (its grid and filmstrip).
+    pub second_filter: crate::panels::second::SecondFilter,
+    /// The secondary window's filmstrip.
+    pub second_filmstrip: bool,
     /// The grid cell under the pointer (the secondary window's Live loupe).
     #[serde(skip)]
     pub hovered_photo: Option<u64>,
@@ -837,6 +844,7 @@ impl Default for UiState {
             right_edge: true,
             toolbar: true,
             auto_show: Default::default(),
+            auto_hide: Default::default(),
             peek: Default::default(),
             panel_order: Vec::new(),
             hidden_panels: Vec::new(),
@@ -845,6 +853,8 @@ impl Default for UiState {
             identity_plate: Default::default(),
             second_mode: Default::default(),
             second_locked: None,
+            second_filter: Default::default(),
+            second_filmstrip: true,
             hovered_photo: None,
             lib: Default::default(),
             info_overlay: InfoOverlay::Off,

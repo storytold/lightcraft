@@ -175,3 +175,66 @@ fn library_columns_are_classic_panels_with_solo_mode() {
     let y = |h: &Headless, id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| r.top()).unwrap();
     assert!(y(&h, "classicPanel:metadata") < y(&h, "classicPanel:keywording"));
 }
+
+fn widget_center(h: &mut Headless, id: &str) -> (f64, f64) {
+    let w = h.request("ui.widgets", json!({}), T);
+    let r = w["result"].as_array().and_then(|a| a.iter().find(|x| x["id"] == id)).map(|x| x["rect"].clone()).unwrap();
+    (r[0].as_f64().unwrap() + r[2].as_f64().unwrap() / 2.0, r[1].as_f64().unwrap() + r[3].as_f64().unwrap() / 2.0)
+}
+
+#[test]
+fn reorder_moves_a_panel_to_a_slot() {
+    use PanelId::*;
+    let l = [QuickDevelop, Keywording, KeywordList, Metadata];
+    assert_eq!(classic::reorder(&l, Metadata, 0), Some(vec![Metadata, QuickDevelop, Keywording, KeywordList]));
+    assert_eq!(classic::reorder(&l, QuickDevelop, 4), Some(vec![Keywording, KeywordList, Metadata, QuickDevelop]));
+    assert_eq!(classic::reorder(&l, Keywording, 1), None, "its own slot");
+    assert_eq!(classic::reorder(&l, Keywording, 2), None, "just below itself");
+    assert_eq!(classic::reorder(&l, Info, 0), None, "not on this side");
+    assert_eq!(classic::reorder(&l, QuickDevelop, 99), Some(vec![Keywording, KeywordList, Metadata, QuickDevelop]));
+}
+
+/// Dragging a Classic panel header up its side moves the panel there.
+#[test]
+fn dragging_a_header_reorders_the_side() {
+    let mut h = demo();
+    run(&mut h, "panel.right", json!({"show": true}));
+    for p in [PanelId::QuickDevelop, PanelId::Keywording, PanelId::KeywordList, PanelId::Metadata] {
+        classic::set_open(&mut h.app, p, false);
+    }
+    h.step();
+    h.step();
+    let from = widget_center(&mut h, "classicPanel:metadata");
+    let to = widget_center(&mut h, "classicPanel:quickDevelop");
+    let r = h.request("ui.drag", json!({"x": from.0, "y": from.1, "toX": to.0, "toY": to.1 - 6.0, "steps": 8}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    let order = classic::ordered(&h.app, crate::module::LIBRARY_RIGHT);
+    assert_eq!(order.first(), Some(&PanelId::Metadata), "{order:?}");
+}
+
+/// Auto Hide: a hidden side comes back on a click at the window edge (not on hover), and the
+/// two modes exclude each other.
+#[test]
+fn auto_hide_shows_a_side_on_a_click_at_the_edge() {
+    let mut h = demo();
+    run(&mut h, "panel.left", json!({"show": false}));
+    run(&mut h, "panel.autoShow", json!({"edge": "left", "on": true}));
+    run(&mut h, "panel.autoHide", json!({"edge": "left", "on": true}));
+    assert!(h.app.ui.auto_hide.left && !h.app.ui.auto_show.left);
+    h.request("ui.move", json!({"x": 1.0, "y": 450.0}), T);
+    h.step();
+    h.step();
+    assert!(!h.app.ui.peek.left, "hovering does not show it");
+    h.request("ui.click", json!({"x": 1.0, "y": 450.0}), T);
+    h.step();
+    h.step();
+    assert!(h.app.ui.peek.left, "a click at the edge shows it");
+    h.request("ui.move", json!({"x": 900.0, "y": 450.0}), T);
+    h.step();
+    h.step();
+    assert!(!h.app.ui.peek.left, "leaving hides it again");
+    let r = h.request("engine.execute", json!({"command": "panel.autoHide", "params": {"edge": "middle"}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+}

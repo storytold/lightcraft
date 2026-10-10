@@ -229,6 +229,8 @@ pub struct ModuleLayout {
     pub shown: EdgeFlags,
     /// Edges that appear while the pointer rests at the window's edge when hidden (auto hide & show).
     pub auto_show: EdgeFlags,
+    /// Edges that appear on a click at the window's edge when hidden (auto hide).
+    pub auto_hide: EdgeFlags,
     pub toolbar: bool,
     /// The right panel open last in this module.
     pub right: RightPanel,
@@ -247,6 +249,7 @@ impl Default for ModuleLayout {
         ModuleLayout {
             shown: EdgeFlags { top: true, bottom: true, left: false, right: true },
             auto_show: EdgeFlags::default(),
+            auto_hide: EdgeFlags::default(),
             toolbar: true,
             right: RightPanel::None,
             presets: false,
@@ -553,6 +556,7 @@ fn capture(app: &DacApp) -> ModuleLayout {
     ModuleLayout {
         shown: EdgeFlags { top: u.module_bar, bottom: u.filmstrip, left: u.left_panel, right: u.right_edge },
         auto_show: u.auto_show,
+        auto_hide: u.auto_hide,
         toolbar: u.toolbar,
         right,
         presets: u.presets,
@@ -570,6 +574,7 @@ fn apply(app: &mut DacApp, l: &ModuleLayout, full: bool) {
     u.left_panel = l.shown.left;
     u.right_edge = l.shown.right;
     u.auto_show = l.auto_show;
+    u.auto_hide = l.auto_hide;
     u.toolbar = l.toolbar;
     u.single_panel = l.solo;
     u.panel_order = l.order.clone();
@@ -686,7 +691,7 @@ fn edges_json(app: &DacApp) -> Value {
     json!({
         "module": app.ui.module,
         "top": app.ui.module_bar, "bottom": app.ui.filmstrip, "left": app.ui.left_panel, "right": app.ui.right_edge,
-        "toolbar": app.ui.toolbar, "autoShow": app.ui.auto_show, "solo": app.ui.single_panel,
+        "toolbar": app.ui.toolbar, "autoShow": app.ui.auto_show, "autoHide": app.ui.auto_hide, "solo": app.ui.single_panel,
     })
 }
 
@@ -712,6 +717,7 @@ pub const SHELL_COMMANDS: &[crate::menus::UiCommand] = &[
     ("panel.all", "Toggle All Panels", None, "Window>Panels"),
     ("panel.toolbar", "Show Toolbar", None, "View"),
     ("panel.autoShow", "Auto Hide & Show", None, ""),
+    ("panel.autoHide", "Auto Hide", None, ""),
     ("panel.solo", "Solo Mode", None, "Window>Panels"),
     ("panel.show", "Show Panel", None, ""),
     ("panel.order", "Panel Order", None, ""),
@@ -729,6 +735,8 @@ pub const SHELL_COMMANDS: &[crate::menus::UiCommand] = &[
     ("second.compare", "Secondary Compare", None, "Window>Secondary Display"),
     ("second.survey", "Secondary Survey", None, "Window>Secondary Display"),
     ("second.slideshow", "Secondary Slideshow", None, "Window>Secondary Display"),
+    ("second.filter", "Secondary Window Filter", None, ""),
+    ("second.filmstrip", "Secondary Filmstrip", None, "Window>Secondary Display"),
     ("photo.ratingUp", "Increase Rating", None, "Photo>Set Rating"),
     ("photo.ratingDown", "Decrease Rating", None, "Photo>Set Rating"),
     ("photo.flagToggle", "Toggle Flagged Status", None, "Photo>Set Flag"),
@@ -769,6 +777,11 @@ fn run_inner(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
         return second(app, mode);
     }
     match id {
+        "second.filter" => crate::panels::second::set_filter(app, p),
+        "second.filmstrip" => {
+            app.ui.second_filmstrip = bool_param(p, "show").unwrap_or(!app.ui.second_filmstrip);
+            Ok(json!({"filmstrip": app.ui.second_filmstrip}))
+        }
         "module.switch" => {
             let name = p.get("module").and_then(Value::as_str).ok_or("missing module (library|develop|map|book|slideshow|print|web)")?;
             let m = ModuleId::parse(name).ok_or_else(|| format!("unknown module: {name}"))?;
@@ -825,6 +838,19 @@ fn run_inner(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
             let e = Edge::parse(name).ok_or_else(|| format!("unknown edge: {name}"))?;
             let on = bool_param(p, "on").unwrap_or(!app.ui.auto_show.get(e));
             app.ui.auto_show.set(e, on);
+            if on {
+                app.ui.auto_hide.set(e, false);
+            }
+            Ok(edges_json(app))
+        }
+        "panel.autoHide" => {
+            let name = p.get("edge").and_then(Value::as_str).ok_or("missing edge")?;
+            let e = Edge::parse(name).ok_or_else(|| format!("unknown edge: {name}"))?;
+            let on = bool_param(p, "on").unwrap_or(!app.ui.auto_hide.get(e));
+            app.ui.auto_hide.set(e, on);
+            if on {
+                app.ui.auto_show.set(e, false);
+            }
             Ok(edges_json(app))
         }
         "panel.solo" => {
@@ -1004,6 +1030,7 @@ pub fn edge_visible(app: &DacApp, e: Edge) -> bool {
 /// hides again once it leaves the panel.
 pub fn auto_show(app: &mut DacApp, ctx: &egui::Context) {
     let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) else { return };
+    let clicked = ctx.input(|i| i.pointer.primary_pressed());
     let r = ctx.content_rect();
     const AT: f32 = 4.0;
     for e in Edge::ALL {
@@ -1011,7 +1038,8 @@ pub fn auto_show(app: &mut DacApp, ctx: &egui::Context) {
             app.ui.peek.set(e, false);
             continue;
         }
-        let auto = app.ui.auto_show.get(e) || app.ui.screen_mode == ScreenMode::FullScreenHidePanels;
+        let hover = app.ui.auto_show.get(e) || app.ui.screen_mode == ScreenMode::FullScreenHidePanels;
+        let auto = hover || app.ui.auto_hide.get(e);
         if !auto {
             app.ui.peek.set(e, false);
             continue;
@@ -1023,7 +1051,8 @@ pub fn auto_show(app: &mut DacApp, ctx: &egui::Context) {
             Edge::Bottom => (pos.y >= r.bottom() - AT, pos.y >= r.bottom() - 160.0),
         };
         let peek = app.ui.peek.get(e);
-        if at_edge && !peek {
+        // auto hide & show: resting at the edge; auto hide: a click there
+        if at_edge && !peek && (hover || clicked) {
             app.ui.peek.set(e, true);
         } else if peek && !inside {
             app.ui.peek.set(e, false);

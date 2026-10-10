@@ -85,11 +85,12 @@ pub fn title(p: PanelId) -> &'static str {
 /// rect and whether the panel is open. `widget id`: `classicPanel:<key>`.
 pub fn header(app: &mut DacApp, ui: &mut egui::Ui, p: PanelId, side: &[PanelId]) -> (Rect, bool) {
     let t = Tokens::get(ui.ctx());
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::click_and_drag());
     register(ui.ctx(), format!("classicPanel:{}", p.key()), r);
     if resp.clicked() {
         toggle(app, p);
     }
+    drag_to_reorder(app, ui, p, side, r, &resp);
     let open = is_open(app, p);
     let name = crate::i18n::tr(title(p));
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, name));
@@ -104,7 +105,63 @@ pub fn header(app: &mut DacApp, ui: &mut egui::Ui, p: PanelId, side: &[PanelId])
     (r, open)
 }
 
-/// The header context menu: every panel of the side with a check (show/hide), and Solo Mode.
+/// Where each header of a side was drawn last frame (for dropping a dragged header).
+fn rect_id(p: PanelId) -> egui::Id {
+    egui::Id::new(("classic-header-rect", p.key()))
+}
+
+/// Drag a header up or down its side to move the panel: an insertion line shows where it lands;
+/// on release the side's new order goes through `panel.order`.
+fn drag_to_reorder(app: &mut DacApp, ui: &egui::Ui, p: PanelId, side: &[PanelId], r: Rect, resp: &egui::Response) {
+    ui.data_mut(|d| d.insert_temp(rect_id(p), r));
+    if !(resp.dragged() || resp.drag_stopped()) {
+        return;
+    }
+    let Some(y) = ui.ctx().pointer_latest_pos().map(|pos| pos.y) else { return };
+    let shown = ordered(app, side);
+    let rects: Vec<(PanelId, Rect)> = shown.iter().filter_map(|q| ui.data(|d| d.get_temp::<Rect>(rect_id(*q))).map(|r| (*q, r))).collect();
+    // the slot: before the first header whose middle is below the pointer, else at the end
+    let slot = rects.iter().position(|(_, r)| y < r.center().y).unwrap_or(rects.len());
+    if resp.dragged() {
+        let t = Tokens::get(ui.ctx());
+        let line_y = rects.get(slot).map(|(_, r)| r.top()).or_else(|| rects.last().map(|(_, r)| r.bottom())).unwrap_or(r.top());
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("classic-reorder")));
+        painter.line_segment([pos2(r.left(), line_y), pos2(r.right(), line_y)], Stroke::new(2.0, t.accent));
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        return;
+    }
+    let names: Vec<PanelId> = rects.iter().map(|(q, _)| *q).collect();
+    if let Some(order) = reorder(&names, p, slot) {
+        // the other sides' panels keep their place in the saved order
+        let mut full: Vec<String> = order.iter().map(|q| q.key()).collect();
+        full.extend(app.ui.panel_order.iter().filter(|q| !side.contains(q)).map(|q| q.key()));
+        let _ = app.run("panel.order", json!({"order": full}));
+    }
+}
+
+/// `list` with `p` moved to `slot` (an index into `list` before the move); `None` when it
+/// doesn't move or isn't there.
+pub fn reorder(list: &[PanelId], p: PanelId, slot: usize) -> Option<Vec<PanelId>> {
+    let from = list.iter().position(|q| *q == p)?;
+    let slot = slot.min(list.len());
+    if slot == from || slot == from + 1 {
+        return None;
+    }
+    let mut out = list.to_vec();
+    out.remove(from);
+    let at = if slot > from { slot - 1 } else { slot };
+    out.insert(at.min(out.len()), p);
+    Some(out)
+}
+
+/// The window edge a side's panels sit on.
+fn side_edge(side: &[PanelId]) -> crate::module::Edge {
+    let left = side.first().is_some_and(|p| crate::module::LIBRARY_LEFT.contains(p) || matches!(p, PanelId::Sources | PanelId::Presets));
+    if left { crate::module::Edge::Left } else { crate::module::Edge::Right }
+}
+
+/// The header context menu: every panel of the side with a check (show/hide), Solo Mode, expand /
+/// collapse all, and the side's hiding mode (manual, auto hide, auto hide & show).
 pub fn side_menu(app: &mut DacApp, resp: &egui::Response, side: &[PanelId]) {
     resp.context_menu(|ui| {
         for q in side {
@@ -127,6 +184,20 @@ pub fn side_menu(app: &mut DacApp, resp: &egui::Response, side: &[PanelId]) {
             for q in side {
                 set_open(app, *q, false);
             }
+        }
+        ui.separator();
+        let e = side_edge(side);
+        let edge = e.key();
+        let (hide, show) = (app.ui.auto_hide.get(e), app.ui.auto_show.get(e));
+        if ui.radio(!hide && !show, crate::i18n::tr("Manual")).clicked() {
+            let _ = app.run("panel.autoShow", json!({"edge": edge, "on": false}));
+            let _ = app.run("panel.autoHide", json!({"edge": edge, "on": false}));
+        }
+        if ui.radio(hide, crate::i18n::tr("Auto Hide")).clicked() {
+            let _ = app.run("panel.autoHide", json!({"edge": edge, "on": true}));
+        }
+        if ui.radio(show, crate::i18n::tr("Auto Hide & Show")).clicked() {
+            let _ = app.run("panel.autoShow", json!({"edge": edge, "on": true}));
         }
     });
 }
