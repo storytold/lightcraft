@@ -694,7 +694,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         // validated against Sony's exports with that centre. The opcode's centre is in active-area coordinates, so
         // it stays on the optical centre whichever crop frames the image.
         opcodes: OpcodeLists {
-            list3: if linear_rgb {
+            // DefaultCrop can retain native geometry while Sony's tags select an aspect crop.
+            // Both the image framing and the table geometry must stay within the validated 3:2 scope.
+            list3: if linear_rgb || crop.height == 0 || (crop.width as f64 / crop.height as f64 - 1.5).abs() > 0.005 {
                 Vec::new()
             } else {
                 let geometry = dng_default_crop(raw, w, h).unwrap_or(crop);

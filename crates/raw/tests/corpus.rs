@@ -915,6 +915,18 @@ fn sony_embedded_distortion_is_limited_to_validated_models() {
         ("arw-sony-a7rm2-12bit-uncompressed.arw", "ILCE-7RM2", 0),
         ("arw-sony-rx100.arw", "DSC-RX100", 0),
         ("arw-sony-rx100m3.arw", "DSC-RX100M3", 0),
+        ("arw-sony-a7cr-lossless-l.arw", "ILCE-7CR", 0),
+        ("arw-sony-a7cr-lossless-m.arw", "ILCE-7CR", 0),
+        ("arw-sony-a7cr-compressed.arw", "ILCE-7CR", 0),
+        ("arw-sony-a7rm4-14bit-compressed.arw", "ILCE-7RM4", 0),
+        ("arw-sony-a500.arw", "DSLR-A500", 0),
+        ("arw-sony-a700.arw", "DSLR-A700", 0),
+        ("arw-sony-a33.arw", "SLT-A33", 0),
+        ("arw-sony-a3500-5600k.arw", "ILCE-3500", 0),
+        ("arw-sony-a7s-shade.arw", "ILCE-7S", 0),
+        ("arw-sony-a7sm2-16x9.arw", "ILCE-7SM2", 0),
+        ("arw-sony-a580-16x9.arw", "DSLR-A580", 0),
+        ("arw-sony-a900-packed12.arw", "DSLR-A900", 0),
     ] {
         let path = root.join(name);
         if !path.exists() {

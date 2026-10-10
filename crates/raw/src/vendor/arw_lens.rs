@@ -194,36 +194,39 @@ mod tests {
     fn header_and_full_decode_preserve_correction_through_dng() {
         use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, tags as t};
         for (model, expected) in [("ILCE-7RM4A", 1), ("ILCE-7RM4", 0), ("ILCE-7M3", 0), ("", 0)] {
-            for order in [ByteOrder::Little, ByteOrder::Big] {
-                let mut raw = IfdBuilder::new();
-                raw.set(t::MAKE, Value::Ascii("SONY".into()));
-                raw.set(t::MODEL, Value::Ascii(model.into()));
-                raw.set(t::IMAGE_WIDTH, Value::Long(vec![32]));
-                raw.set(t::IMAGE_LENGTH, Value::Long(vec![24]));
-                raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
-                raw.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![1]));
-                raw.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::CFA]));
-                raw.set(t::COMPRESSION, Value::Short(vec![1]));
-                raw.set(t::WHITE_LEVEL, Value::Long(vec![16383]));
-                raw.set(0x74c7, Value::Long(vec![0, 2]));
-                raw.set(t::DEFAULT_CROP_ORIGIN, Value::Long(vec![2, 2]));
-                raw.set(t::DEFAULT_CROP_SIZE, Value::Long(vec![30, 20]));
-                raw.set(0x74c8, Value::Long(vec![30, 20]));
-                raw.set(DISTORTION, Value::SShort(std::iter::once(16).chain(TELE).collect()));
-                // Zero pixels have the same byte representation in both orders.
-                raw.set_image(ImageData::Strips { rows_per_strip: 24, strips: vec![vec![0; 32 * 24 * 2]] });
-                let file = TiffWriter { order, ..Default::default() }.write(&[raw]).unwrap();
-                let header = super::super::arw::decode(&file, crate::Mode::Header).unwrap();
-                let full = super::super::arw::decode(&file, crate::Mode::Full).unwrap();
-                assert_eq!(header.info(), full.info());
-                assert_eq!(full.opcodes.list3.len(), expected, "{model} {order:?}");
-                // the image keeps Sony's crop tags; the warp is centred on the DNG default crop (x 2..32 of 32)
-                assert_eq!(full.crop, Rect::new(0, 2, 30, 20));
-                if let Some(Opcode::WarpRectilinear { center, .. }) = full.opcodes.list3.first() {
-                    assert!((center[0] - 16.5 / 31.0).abs() < 1e-12 && (center[1] - 11.5 / 23.0).abs() < 1e-12, "{center:?}");
+            for (height, expected) in [(20, expected), (16, 0)] {
+                for order in [ByteOrder::Little, ByteOrder::Big] {
+                    let mut raw = IfdBuilder::new();
+                    raw.set(t::MAKE, Value::Ascii("SONY".into()));
+                    raw.set(t::MODEL, Value::Ascii(model.into()));
+                    raw.set(t::IMAGE_WIDTH, Value::Long(vec![32]));
+                    raw.set(t::IMAGE_LENGTH, Value::Long(vec![24]));
+                    raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+                    raw.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![1]));
+                    raw.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::CFA]));
+                    raw.set(t::COMPRESSION, Value::Short(vec![1]));
+                    raw.set(t::WHITE_LEVEL, Value::Long(vec![16383]));
+                    raw.set(0x74c7, Value::Long(vec![0, 2]));
+                    raw.set(t::DEFAULT_CROP_ORIGIN, Value::Long(vec![2, 2]));
+                    raw.set(t::DEFAULT_CROP_SIZE, Value::Long(vec![30, 20]));
+                    // An aspect crop must stay excluded even when DefaultCrop still describes 3:2.
+                    raw.set(0x74c8, Value::Long(vec![30, height]));
+                    raw.set(DISTORTION, Value::SShort(std::iter::once(16).chain(TELE).collect()));
+                    // Zero pixels have the same byte representation in both orders.
+                    raw.set_image(ImageData::Strips { rows_per_strip: 24, strips: vec![vec![0; 32 * 24 * 2]] });
+                    let file = TiffWriter { order, ..Default::default() }.write(&[raw]).unwrap();
+                    let header = super::super::arw::decode(&file, crate::Mode::Header).unwrap();
+                    let full = super::super::arw::decode(&file, crate::Mode::Full).unwrap();
+                    assert_eq!(header.info(), full.info());
+                    assert_eq!(full.opcodes.list3.len(), expected, "{model} {order:?} height={height}");
+                    // the image keeps Sony's crop tags; the warp is centred on the DNG default crop (x 2..32 of 32)
+                    assert_eq!(full.crop, Rect::new(0, 2, 30, height as usize));
+                    if let Some(Opcode::WarpRectilinear { center, .. }) = full.opcodes.list3.first() {
+                        assert!((center[0] - 16.5 / 31.0).abs() < 1e-12 && (center[1] - 11.5 / 23.0).abs() < 1e-12, "{center:?}");
+                    }
+                    let dng = crate::write_dng(&full, &Default::default()).unwrap();
+                    assert_eq!(crate::decode(&dng).unwrap().opcodes.list3, full.opcodes.list3);
                 }
-                let dng = crate::write_dng(&full, &Default::default()).unwrap();
-                assert_eq!(crate::decode(&dng).unwrap().opcodes.list3, full.opcodes.list3);
             }
         }
     }

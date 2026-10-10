@@ -64,7 +64,8 @@ from the interpolated file table was below 0.12 px at 1440 px. That measures app
 not agreement with an independent renderer. Camera JPEG and Apple Core Image comparisons support
 the wide-lens interpretation but are weaker evidence than same-renderer On/Off pairs.
 
-Actual LightCraft exports after crop normalization were also compared directly with Sony's corrected
+Historical validation before restoring main's image crop precedence: LightCraft exports with the
+standard default crop framing were compared directly with Sony's corrected
 TIFFs. At 2376 px wide, median / 95th-percentile feature residuals were 0.35 / 1.04 px at 24 mm,
 0.15 / 0.40 px at 200 mm, and 0.13 / 0.56 px at 600 mm (median translation below 0.024 px).
 The uncorrected medians at 200 and 600 mm were 8.63 and 10.82 px respectively. Different colour,
@@ -72,6 +73,20 @@ sharpening, and demosaicing affect feature localization; these are geometry chec
 An isolated desktop run on Apple M1 Metal detected the profile, rendered without GPU fallback or
 warnings, and exposed the existing Optics controls. Existing library edits are not reset: once the
 source has loaded, enable lens corrections if they were previously disabled.
+
+After restoring main's crop precedence, fresh 2376×1584 exports on 2026-10-10
+(main `b70ae174` plus the aspect-framing guard) measured:
+
+| Focal length | Corrected median / p95 residual | Uncorrected median | Removed translation x / y | Matches / maximum radius |
+|---|---|---|---|---|
+| 24 mm | 0.36 / 1.12 px | 5.62 px | 7.98 / −0.01 px | 1,442 / 0.95 |
+| 200 mm | 0.13 / 0.35 px | 8.65 px | 8.01 / 0.02 px | 11,606 / 0.98 |
+| 600 mm | 0.10 / 0.37 px | 10.33 px | 8.02 / 0.00 px | 12,268 / 0.97 |
+
+Residuals subtract only the median feature translation; no scale or lens coefficients are fitted to
+these reference pairs. The roughly eight-pixel horizontal translation is the retained crop-origin
+difference described above, not a claim of exact Sony framing. Maximum radius is in half diagonals.
+The distortion geometry remains aligned while every body's image framing follows main's crop order.
 
 Tests cover signedness/length rejection, zero and malformed tables, independent 600 mm reference
 geometry, barrel framing, offset crop normalization, both TIFF byte orders, header/full consistency,
@@ -84,10 +99,9 @@ model names, and every other model remain unsupported by this distortion decoder
 numbers and table lengths do not establish the scale, interpolation or crop normalization on another
 body. Support can expand after independent geometry validation; do not add model-name prefix matching.
 
-The original nine Sony samples listed by `cargo xtask corpus --download` were downloaded from its
-CC0 URLs. The manifest now also includes CC0 samples 4822 (A7R IVA / 24–105 mm) and 3989
-(A9 II / 200–600 mm), with their SHA-256 hashes recorded alongside the URLs. All eleven files
-are checked with `sony_embedded_distortion_is_limited_to_validated_models`:
+The current `cargo xtask corpus --download` manifest contains 23 Sony CC0 samples across 17 bodies,
+including samples 4822 (A7R IVA / 24–105 mm) and 3989 (A9 II / 200–600 mm). All 23 files have
+pinned SHA-256 hashes and are checked with `sony_embedded_distortion_is_limited_to_validated_models`:
 
 | Camera | Corpus samples | Raw-IFD table observed | Expected correction |
 |---|---|---|---|
@@ -98,15 +112,23 @@ are checked with `sony_embedded_distortion_is_limited_to_validated_models`:
 | ILCE-7RM2 | 12-bit uncompressed | 16 samples | None |
 | DSC-RX100 | One | No raw-IFD table | None |
 | DSC-RX100M3 | One | 11 samples | None |
+| ILCE-7CR | Compressed, lossless L/M | Not used; model excluded | None |
+| ILCE-7RM4 | 14-bit compressed | Not used; model excluded | None |
+| DSLR-A500, DSLR-A700, SLT-A33 | One each | Not used; model excluded | None |
+| ILCE-3500, ILCE-7S | 5600 K, Shade respectively | Not used; model excluded | None |
+| ILCE-7SM2, DSLR-A580 | 16:9 framing, one each | Not used; model excluded | None |
+| DSLR-A900 | Packed 12-bit | Not used; model excluded | None |
 
 These are **model-boundary regression checks, not new geometric validation of those models**. In particular,
 refusing the A7 III tables resolves the unverified corner warp identified in review. The lossless M/S
 files are linear YCbCr and remain excluded independently of the model check. Header and full decode
 must agree for every sample. Synthetic tests also verify both TIFF byte orders, exact model matching,
 that the warp is centred on the standard default crop while the image keeps Sony's crop, and that DNG export preserves an accepted warp without adding one to rejected
-models. The existing independent Sony geometry tests continue to cover the enabled A7R IVA path.
-Re-exporting the 24, 200 and 600 mm reference files after the model restriction produced byte-identical
-corrected PNGs to the earlier validated exports. Isolated headless app checks showed the A7R IVA profile
+models. A non-3:2 Sony image crop is also rejected when the standard default crop still describes
+3:2 geometry; the regression fails without the image-framing guard. The existing independent Sony
+geometry tests continue to cover the enabled A7R IVA path.
+Before restoring main's crop precedence, re-exporting the 24, 200 and 600 mm reference files after
+the model restriction produced byte-identical corrected PNGs to the earlier validated exports. Isolated headless app checks showed the A7R IVA profile
 controls present and the A7 III profile controls absent, with no notices and completed RAW renders.
 
 Before enabling another body, compare corrected and uncorrected renders against independent references
