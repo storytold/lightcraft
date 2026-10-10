@@ -28,6 +28,11 @@ crates/immich/
 crates/text/
 crates/pdf/
 crates/geo/
+# P6.1 performance budgets
+docs/perf.md
+crates/engine/examples/perf_tile.rs
+# layout/print/book engine glue (fork-created in P3.1)
+crates/engine/src/creations.rs
 # Immich engine wiring (IMM-SYNC / IMM-PEOPLE / IMM-SEARCH)
 crates/engine/src/cmd/immich_sync.rs
 crates/engine/src/tests_immich_sync.rs

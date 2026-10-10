@@ -168,7 +168,7 @@ fn canvas(app: &mut DacApp, ui: &mut egui::Ui, r: Rect) {
     let selected: std::collections::HashSet<u64> = app.session.selection.ids.iter().map(|p| p.0).collect();
     app.map.drawn.clear();
     let mut hovered: Option<(Pos2, Vec<u64>)> = None;
-    for c in &pins {
+    for c in pins.iter() {
         let at = geo_to_screen(&app.map, r, c.centre);
         if !r.expand(30.0).contains(at) {
             continue;
