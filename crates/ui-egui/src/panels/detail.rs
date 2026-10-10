@@ -218,9 +218,17 @@ fn animated_rect(ctx: &egui::Context, anim: &mut bool, target: Rect) -> Rect {
     r
 }
 
+/// Whether an overlay can be rendered on a region tile without changing what the tile means.
+/// Mask overlays are evaluated from the same mask alpha as the full render; the other diagnostic
+/// overlays either need whole-frame context or deliberately replace the loupe.
+pub(crate) fn overlay_supports_window(overlay: lightcraft_pipeline::Overlay) -> bool {
+    matches!(overlay, lightcraft_pipeline::Overlay::None | lightcraft_pipeline::Overlay::Mask { .. })
+}
+
 /// What a window render of the loupe needs to know about the view it belongs to.
 struct WindowCtx {
     id: PhotoId,
+    overlay: lightcraft_pipeline::Overlay,
     /// Long edge of the frame the windows are cut from (`None`: no windows).
     frame_edge: Option<usize>,
     drawn_long: f32,
@@ -286,9 +294,14 @@ fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowView) -> Opt
         app.window_refused = Some((c.id, c.look, frame_edge));
         return None;
     };
-    // a drag renders drafts of the window, as it does of the whole frame
+    // a drag renders drafts of the window, as it does of the whole frame. The Before tile stays
+    // plain; the After tile carries the same mask overlay as the whole-frame render.
     let job = if c.interacting { job.draft() } else { job };
-    let look = job.settings.hash64();
+    let overlay = if v.before { lightcraft_pipeline::Overlay::None } else { c.overlay };
+    let job = job.with_overlay(overlay);
+    // The overlay is part of the tile's identity too, so changing mask view/colour never leaves a
+    // stale region tile on screen while its replacement renders.
+    let look = job.settings.hash64() ^ overlay.key().rotate_left(17);
     let view = crate::region::RegionView { photo: c.id, before: v.before, key: job.key, full: (fw, fh), window: win, settings: look };
     // windows of other photos, looks and zooms of this side can't be drawn any more
     app.region_tiles.retain(|(before, _), t| *before != v.before || t.is_current(c.id, (fw, fh), look, c.interacting));
@@ -397,15 +410,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let drawn_long = target_rect.width().max(target_rect.height()) * ppp;
     // the whole frame at about canvas size; the zoomed part of it is a window render (below)
     let look = d.hash64();
-    // (modes that draw another picture over the loupe, or reads too far for one window, have the
-    // whole frame rendered at the size it is drawn, as they did before windows)
+    let overlay = view_overlay(app, &d);
+    // Diagnostic views that need whole-frame context, soft proofing, or reads too far for one
+    // window still render the whole frame at the size it is drawn. A mask overlay is window-safe.
     let sizes = crate::region::ViewSizes {
         drawn_long,
         canvas_long: canvas.width().max(canvas.height()) * ppp,
         native_long,
         texture_side,
         draft_scale: scale,
-        windows: !app.ui.soft_proof && view_overlay(app, &d) == lightcraft_pipeline::Overlay::None,
+        windows: !app.ui.soft_proof && overlay_supports_window(overlay),
     };
     let mut plan = crate::region::plan(&app.ui.settings, sizes);
     if plan.window_edge.is_some_and(|edge| app.window_refused == Some((id, look, edge))) {
@@ -424,7 +438,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let (sw, sh) = if aspect >= 1.0 { (se, (se as f32 / aspect) as usize) } else { ((se as f32 * aspect) as usize, se) };
     if let Some(job) = app.session.loupe_job(id, rw.max(8), rh.max(8), !crop_tool) {
         let job = if interacting { job.draft() } else { job };
-        let job = job.with_overlay(view_overlay(app, &d)).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
+        let job = job.with_overlay(overlay).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
         app.renderer.request(Slot::Main, job, 100);
     }
     // hovering a preset or profile: the photo with that look, shown instead of the loupe render
@@ -472,17 +486,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         app.renderer.request(Slot::Before, job, 90);
     }
     // zoomed past what the whole-frame render holds: also render the part on screen, at no more
-    // than 100 % (the GPU magnifies beyond that), for each side that is shown. Not while hovering a
-    // look or showing an overlay (those draw another image), nor where the shown picture isn't the
-    // frame's own (an unsupported raw's embedded JPEG with another crop: window coordinates are
-    // the frame's).
-    let plain_view = hover_key.is_none()
-        && !app.ui.soft_proof
-        && view_overlay(app, &d) == lightcraft_pipeline::Overlay::None
-        && crate::region::same_aspect(display_aspect, aspect);
+    // than 100 % (the GPU magnifies beyond that), for each side that is shown. Mask overlays use
+    // the same window; diagnostic overlays that need whole-frame context do not.
+    let windowable_view =
+        hover_key.is_none() && !app.ui.soft_proof && overlay_supports_window(overlay) && crate::region::same_aspect(display_aspect, aspect);
     let window_ctx = WindowCtx {
         id,
-        frame_edge: plan.window_edge.filter(|_| plain_view),
+        overlay,
+        frame_edge: plan.window_edge.filter(|_| windowable_view),
         drawn_long,
         aspect,
         ppp,

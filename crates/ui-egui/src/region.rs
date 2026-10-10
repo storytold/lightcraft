@@ -25,7 +25,7 @@ pub struct RegionView {
     pub key: u64,
     pub full: (usize, usize),
     pub window: PixelWindow,
-    /// Hash of the develop settings it was rendered with.
+    /// Hash of the render state it was rendered with (develop settings plus any window-safe overlay).
     pub settings: u64,
 }
 
@@ -72,9 +72,9 @@ pub struct ViewSizes {
     pub texture_side: usize,
     /// 1.0, or less while a slider is dragged (a draft of the whole-frame render).
     pub draft_scale: f32,
-    /// Whether a window can be drawn over the whole-frame render (not with an overlay, soft
-    /// proofing, or a read too far for one window): if not, the whole frame is rendered at the
-    /// size it is drawn.
+    /// Whether a window can be drawn over the whole-frame render (not with a diagnostic overlay
+    /// that needs whole-frame context, soft proofing, or a read too far for one window). Mask
+    /// overlays are window-safe.
     pub windows: bool,
 }
 
@@ -97,9 +97,9 @@ pub fn plan(settings: &crate::state::AppSettings, v: ViewSizes) -> LoupePlan {
     let drawn_long = if v.drawn_long.is_finite() { v.drawn_long.max(8.0) } else { canvas_long };
     let scale = if v.draft_scale.is_finite() { v.draft_scale.clamp(0.1, 1.0) } else { 1.0 };
     if !v.windows {
-        // the whole frame at the size it is drawn (an overlay or soft proof has no window); while a
-        // slider drags, a canvas-sized draft as with windows: a drag at 1:1 must not render the
-        // photo's every pixel each frame
+        // the whole frame at the size it is drawn (soft proof or a whole-frame diagnostic has no
+        // window); while a slider drags, a canvas-sized draft as with windows: a drag at 1:1 must
+        // not render the photo's every pixel each frame
         let long = if scale < 1.0 { drawn_long.min(canvas_long) } else { drawn_long };
         let main_edge = settings.loupe_edge(long * scale, v.native_long, v.texture_side);
         return LoupePlan { main_edge, window_edge: None };
@@ -281,8 +281,9 @@ mod tests {
         assert_eq!(drag.window_edge, still.window_edge);
     }
 
-    // Given no window (an overlay, soft proofing), the view at rest renders the whole frame at the
-    // size it is drawn, but a slider drag drafts at the canvas size like the windowed path
+    // Given no window (a whole-frame diagnostic or soft proofing), the view at rest renders the
+    // whole frame at the size it is drawn, but a slider drag drafts at the canvas size like the
+    // windowed path
     #[test]
     fn without_a_window_a_drag_drafts_at_the_canvas_size() {
         let no_window = |draft_scale: f32| ViewSizes { windows: false, draft_scale, ..sizes(24000.0, 2800.0, 6000) };
@@ -331,8 +332,8 @@ mod tests {
         }
     }
 
-    // Given a mode whose picture can't be a window (a mask overlay, soft proofing, a spot read too
-    // far for one render), the whole-frame render is as big as the view, as it was before windows
+    // Given a mode whose picture can't be a window (soft proofing, a whole-frame diagnostic, or a
+    // spot read too far for one render), the whole-frame render is as big as the view
     #[test]
     fn without_windows_the_whole_frame_is_rendered_at_the_drawn_size() {
         let p = plan(&auto(), ViewSizes { windows: false, ..sizes(6000.0, 2800.0, 6000) });
