@@ -937,7 +937,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             "immich.link",
             "Link Photos with Immich",
-            [],
+            ["File", "Immich"],
             None,
             "{account?, full?: bool} — start a background pass that lists the server's assets (incremental by updatedAt) and links them to catalog photos by SHA-1, else as probable by name + capture time + size → {started}",
             always,
@@ -946,13 +946,21 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             "immich.confirmLink",
             "Confirm Immich Link",
-            [],
+            ["File", "Immich"],
             None,
             "{ids?, account?} — confirm probable links of the photos (default: selection) → {confirmed}",
             always,
             confirm
         ),
-        cmd!("immich.unlink", "Remove Immich Link", [], None, "{ids?, account?} — remove the photos' Immich links → {removed}", always, unlink),
+        cmd!(
+            "immich.unlink",
+            "Remove Immich Link",
+            ["File", "Immich"],
+            None,
+            "{ids?, account?} — remove the photos' Immich links → {removed}",
+            always,
+            unlink
+        ),
         cmd!(query "immich.links", "Immich Links", [], None, "{id?} → {state: linked|probable|none, links: [{account, assetId, state, url}], linkOnly}", always, links_of),
         cmd!(query "immich.browse", "Browse Immich", [], None, "{account?, source: timeline|favorites|album|person|albums|people, id?, page?, size?} → {assets: [{id, fileName, captured, favorite, rating, inCatalog}], nextPage} | {albums} | {people}", always, browse),
         cmd!(query "immich.thumbnail", "Immich Thumbnail", [], None, "{account?, assetId, size?: thumbnail|preview, path?} — save an asset's thumbnail → {path}", always, thumbnail),
@@ -968,7 +976,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             "immich.fetchOriginal",
             "Download Original from Immich",
-            [],
+            ["File", "Immich"],
             None,
             "{id?} — download a link-only photo's original (in the background) → {started}",
             always,
@@ -987,7 +995,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             "immich.writeSidecars",
             "Write XMP for Immich",
-            [],
+            ["File", "Immich"],
             None,
             "{account?, refresh?: bool = true} — write XMP sidecars for photos in mapped external-library folders and ask Immich to re-read the linked ones (refresh-metadata), so it shows their ratings, descriptions and keywords → {written, failed, refreshed?, refreshError?}",
             always,
@@ -996,7 +1004,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             "immich.scanLibraries",
             "Rescan Immich External Libraries",
-            [],
+            ["File", "Immich"],
             None,
             "{account?, library?} — ask Immich to rescan the external libraries covering mapped folders (or `library`), so it reads new files and XMP sidecars → {ok, scanned: [library ids]}",
             always,

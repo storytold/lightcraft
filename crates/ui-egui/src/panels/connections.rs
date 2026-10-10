@@ -702,6 +702,7 @@ fn extlib(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, id: &str) {
 /// UI commands: `file.importImmich` opens the Import dialog on its Immich source.
 pub fn run(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
     match id {
+        "immich.connections" => Some(app.run("app.settings", json!({"tab": "connections"}))),
         "file.importImmich" => {
             open_import(app, p.get("account").and_then(Value::as_str).map(str::to_string));
             Some(Ok(json!({"open": true, "source": "immich", "account": app.immich.account})))

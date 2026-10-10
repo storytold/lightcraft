@@ -88,3 +88,37 @@ fn key_file_prompt_creates_and_unlocks_the_file() {
     assert!(dir.join("credentials.enc").exists() || h.app.session.execute("credentials.status", &json!({})).unwrap()["file"]["unlocked"] == true);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// Feature: the engine's Immich commands are in the menus (File ▸ Immich).
+#[test]
+fn immich_commands_are_in_file_immich() {
+    let dir = std::env::temp_dir().join(format!("dac-immich-ui-menu-{}", std::process::id()));
+    let h = app(&dir);
+    let bar = crate::menubar::menu_bar(&h.app);
+    let (_, file) = bar.iter().find(|(t, _)| t == "File").unwrap();
+    let sub = file
+        .iter()
+        .find_map(|n| match n {
+            crate::menubar::MenuNode::Submenu { label, children } if label == "Immich" => Some(children),
+            _ => None,
+        })
+        .expect("File ▸ Immich");
+    let ids: Vec<&str> = sub
+        .iter()
+        .filter_map(|n| match n {
+            crate::menubar::MenuNode::Item { id, .. } => Some(id.as_str()),
+            _ => None,
+        })
+        .collect();
+    for id in [
+        "immich.link",
+        "immich.confirmLink",
+        "immich.unlink",
+        "immich.fetchOriginal",
+        "immich.writeSidecars",
+        "immich.scanLibraries",
+        "immich.connections",
+    ] {
+        assert!(ids.contains(&id), "{id} in {ids:?}");
+    }
+}
