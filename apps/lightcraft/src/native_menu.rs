@@ -367,12 +367,12 @@ impl NativeMenu {
                 continue;
             }
             if key == "app.about" || key == SETTINGS {
-                let _ = app.run(&key, serde_json::json!({}));
+                app.act(&key, serde_json::json!({}));
                 continue;
             }
             if let Some(it) = self.items.get(&key) {
                 let (cmd, params) = (it.cmd.clone(), it.params.clone());
-                let _ = lightcraft_ui_egui::menubar::run_item(app, &cmd, params);
+                lightcraft_ui_egui::menubar::act_item(app, &cmd, params);
             }
         }
         let bar = menu_bar(app);

@@ -75,6 +75,7 @@ pub(crate) fn intercept(app: &mut LightcraftApp, command: &str, params: &Value) 
         app.model_setup.denoise = None;
         return Some(app.session.execute("denoise.toggle", &json!({"id": id.0, "enabled": false})).map_err(|e| e.to_string()));
     }
+    // refusal expected: only refreshes the model state read on the next line; this is inside `run`, which answers for denoise.toggle
     let _ = app.session.execute("denoise.status", &json!({"id": id.0}));
     if !matches!(app.session.denoise_photo_state(id), PhotoState::NoModel) {
         return None;
@@ -99,7 +100,7 @@ pub(crate) fn notice(app: &mut LightcraftApp, ui: &mut egui::Ui, kind: &str) {
     let r = ui.small_button(tr("Cancel pending action"));
     crate::widgets::register(ui.ctx(), "modelSetup:cancel:denoise", r.rect);
     if r.clicked() {
-        let _ = app.run("modelSetup.cancel", json!({"kind": "denoise"}));
+        app.act("modelSetup.cancel", json!({"kind": "denoise"}));
     }
     ui.add_space(6.0);
 }

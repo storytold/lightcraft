@@ -686,19 +686,37 @@ pub fn menu_bar(app: &LightcraftApp) -> Vec<(String, Vec<MenuNode>)> {
 /// Run a menu item. Rating, flag and label items behave like their keys (the active photo only in
 /// Compare/Survey; Auto Advance moves on).
 pub fn run_item(app: &mut LightcraftApp, id: &str, params: Value) -> Result<Value, String> {
+    clicked_item(app, id, params, LightcraftApp::run, Result::is_ok).unwrap_or(Ok(Value::Null))
+}
+
+/// [`run_item`] for a click on the item: a refusal is said in a toast ([`LightcraftApp::act`]).
+/// `None` when it was refused.
+pub fn act_item(app: &mut LightcraftApp, id: &str, params: Value) -> Option<Value> {
+    clicked_item(app, id, params, LightcraftApp::act, Option::is_some).unwrap_or(Some(Value::Null))
+}
+
+/// A menu item run by `run`, which `went` says went through; `None` when the item only opened
+/// its confirmation.
+fn clicked_item<R>(
+    app: &mut LightcraftApp,
+    id: &str,
+    params: Value,
+    run: impl FnOnce(&mut LightcraftApp, &str, Value) -> R,
+    went: impl FnOnce(&R) -> bool,
+) -> Option<R> {
     let mut params = if params.is_null() { json!({}) } else { params };
     let culling_cmd = matches!(id, "photo.rate" | "photo.flag" | "photo.label" | "photo.pick" | "photo.reject" | "photo.unflag");
     if culling_cmd {
         crate::panels::compare::target_active(app, &mut params);
     }
     if id == "photo.delete" && crate::menus::confirm_delete(app) {
-        return Ok(Value::Null);
+        return None;
     }
-    let r = app.run(id, params);
-    if culling_cmd && r.is_ok() && app.ui.auto_advance {
+    let r = run(app, id, params);
+    if culling_cmd && went(&r) && app.ui.auto_advance {
         crate::panels::compare::advance(app);
     }
-    r
+    Some(r)
 }
 
 /// Human-readable shortcut text for menus: `Cmd+Shift+Z` → `⌘⇧Z` on macOS, `Ctrl+Shift+Z` elsewhere.
@@ -795,13 +813,8 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
         });
     }
     if let Some((id, params)) = clicked {
-        let r = run_item(app, &id, params);
-        // an export that can't start (e.g. no folder) says why instead of doing nothing
-        if let Err(e) = r
-            && matches!(id.as_str(), "app.export" | "app.exportPrevious")
-        {
-            app.toast(ui.ctx(), e);
-        }
+        // an item that can't run (an export with no folder…) says why instead of doing nothing
+        act_item(app, &id, params);
     }
     ui.cursor().left() - start
 }

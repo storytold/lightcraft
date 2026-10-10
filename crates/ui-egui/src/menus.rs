@@ -234,7 +234,7 @@ fn adjust_brush(app: &mut LightcraftApp, k: f32, df: f32) -> Value {
             if df != 0.0 {
                 p["feather"] = json!(app.ui.remove_feather);
             }
-            let _ = app.run("spot.update", p);
+            app.act("spot.update", p);
         }
         json!({"size": app.ui.remove_size, "feather": app.ui.remove_feather})
     } else {
@@ -374,6 +374,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 && let Some(i) = vis.iter().position(|x| x.0 == r)
                 && let Some(next) = vis.get(i + 1).or(i.checked_sub(1).and_then(|j| vis.get(j)))
             {
+                // refusal expected: a step of view.reference, already inside `run`, which answers for the whole command
                 let _ = app.session.execute("library.select", &json!({"ids": [next.0]}));
             }
             app.ui.view = ViewMode::Reference;
@@ -424,7 +425,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 let first = app.session.visible_cloned().first().copied();
                 match first {
                     Some(f) => {
-                        let _ = app.run("library.select", json!({"ids": [f.0]}));
+                        app.act("library.select", json!({"ids": [f.0]}));
                     }
                     None => return Some(Err("no photos to show".into())),
                 }

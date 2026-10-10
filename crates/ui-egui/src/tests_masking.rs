@@ -849,11 +849,11 @@ fn geometry_slider_drag_marks_the_grid() {
     let mut h = detail("panel.crop");
     let spec = lightcraft_develop::controls::find("geometry.vertical").unwrap();
     let start = crate::widgets::SliderOut { value: None, drag_started: true, drag_stopped: false, reset: false };
-    crate::panels::edit::apply_slider_out(&mut h.app, spec, start, |_, _| Ok(serde_json::Value::Null));
+    crate::panels::edit::apply_slider_out(&mut h.app, spec, start, |_, _| Some(serde_json::Value::Null));
     assert_eq!(h.app.ui.dragging_control.as_deref(), Some("geometry.vertical"));
     h.step();
     let stop = crate::widgets::SliderOut { value: None, drag_started: false, drag_stopped: true, reset: false };
-    crate::panels::edit::apply_slider_out(&mut h.app, spec, stop, |_, _| Ok(serde_json::Value::Null));
+    crate::panels::edit::apply_slider_out(&mut h.app, spec, stop, |_, _| Some(serde_json::Value::Null));
     assert!(h.app.ui.dragging_control.is_none());
     h.settle(SETTLE);
 }

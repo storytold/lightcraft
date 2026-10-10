@@ -150,7 +150,7 @@ fn bounded_pan(area: Rect, size: egui::Vec2, pan: (f32, f32)) -> (f32, f32) {
 pub(crate) fn pan_image(app: &mut LightcraftApp, area: Rect, img: Rect, delta: egui::Vec2) {
     let centre = area.center() - img.min - delta;
     let pan = bounded_pan(area, img.size(), (centre.x / img.width().max(1.0), centre.y / img.height().max(1.0)));
-    let _ = app.run("view.navigate", json!({"pan": pan}));
+    app.act("view.navigate", json!({"pan": pan}));
 }
 
 /// Native pinch (also modifier-wheel zoom) and two-finger scroll, scoped to this image view.
@@ -181,7 +181,7 @@ pub(crate) fn navigate_gesture(app: &mut LightcraftApp, ui: &mut egui::Ui, resp:
     let point = (anchor - img.min) / img.size();
     let offset = area.center() - anchor - delta;
     let pan = bounded_pan(area, size, (point.x + offset.x / size.x.max(1.0), point.y + offset.y / size.y.max(1.0)));
-    let _ = app.run("view.navigate", json!({"zoom": zoom, "pan": pan}));
+    app.act("view.navigate", json!({"zoom": zoom, "pan": pan}));
     ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
     ui.ctx().request_repaint();
     true
@@ -649,14 +649,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 super::faces::take_step(app, ui.ctx(), setup);
             }
             Some(RegionEdit::Remove(index)) => {
-                let _ = app.run("photo.removeRegion", json!({"id": id.0, "index": index}));
+                app.act("photo.removeRegion", json!({"id": id.0, "index": index}));
             }
             Some(RegionEdit::Name(index, name)) => {
                 app.ui.name_edit = None;
-                let _ = app.run("faces.setName", json!({"id": id.0, "index": index, "name": name}));
+                app.act("faces.setName", json!({"id": id.0, "index": index, "name": name}));
             }
             Some(RegionEdit::Resize(index, r)) => {
-                let _ = app.run("photo.setRegion", json!({"id": id.0, "index": index, "rect": {"x0": r.x0, "y0": r.y0, "x1": r.x1, "y1": r.y1}}));
+                app.act("photo.setRegion", json!({"id": id.0, "index": index, "rect": {"x0": r.x0, "y0": r.y0, "x1": r.x1, "y1": r.y1}}));
             }
             None => {}
         }
@@ -697,7 +697,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ui.menu_button(crate::i18n::tr("Zoom"), |ui| {
             for (label, cmd) in [("Fit", "view.zoomFit"), ("100%", "view.zoom100"), ("Zoom In", "view.zoomIn"), ("Zoom Out", "view.zoomOut")] {
                 if ui.button(label).clicked() {
-                    let _ = app.run(cmd, json!({}));
+                    app.act(cmd, json!({}));
                 }
             }
         });
@@ -949,7 +949,7 @@ fn filter_pill(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect) {
     p.line_segment([c - vec2(m, m), c + vec2(m, m)], cross);
     p.line_segment([c - vec2(m, -m), c + vec2(m, -m)], cross);
     if resp.on_hover_text(crate::i18n::tr("Click to clear these filters")).clicked() {
-        let _ = app.run("library.clearFilter", json!({}));
+        app.act("library.clearFilter", json!({}));
     }
 }
 
@@ -1034,7 +1034,7 @@ fn targeted_drag(app: &mut LightcraftApp, resp: &egui::Response, map: &CanvasMap
     if resp.drag_started()
         && let Some(q) = resp.interact_pointer_pos()
     {
-        let _ = app.run("develop.beginInteraction", json!({"label": "Targeted Adjustment"}));
+        app.act("develop.beginInteraction", json!({"label": "Targeted Adjustment"}));
         app.gesture = Some(Gesture::Targeted { at: map.norm(q), acc: 0.0 });
     }
     if resp.dragged()
@@ -1049,12 +1049,12 @@ fn targeted_drag(app: &mut LightcraftApp, resp: &egui::Response, map: &CanvasMap
             if target == "curve" && app.ui.curve_channel != "parametric" {
                 p["channel"] = json!(app.ui.curve_channel);
             }
-            let _ = app.run("develop.targeted", p);
+            app.act("develop.targeted", p);
         }
     }
     if resp.drag_stopped() && matches!(app.gesture, Some(Gesture::Targeted { .. })) {
         app.gesture = None;
-        let _ = app.run("develop.endInteraction", json!({}));
+        app.act("develop.endInteraction", json!({}));
     }
 }
 
@@ -1138,7 +1138,7 @@ fn general_interaction(
             && let Some(q) = resp.interact_pointer_pos()
         {
             let n = map.norm(q);
-            let _ = app.run("develop.wbPick", json!({"x": n.x, "y": n.y}));
+            app.act("develop.wbPick", json!({"x": n.x, "y": n.y}));
             app.ui.tool.clear();
         }
         return;
@@ -1300,13 +1300,13 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
         && inside(q)
         && !handles.iter().any(|h| h.distance(q) < 12.0)
     {
-        let _ = app.run("tool.done", json!({}));
+        app.act("tool.done", json!({}));
         return;
     }
     if resp.drag_started()
         && let Some(q) = resp.interact_pointer_pos()
     {
-        let _ = app.run("develop.beginInteraction", json!({"label": "Crop"}));
+        app.act("develop.beginInteraction", json!({"label": "Crop"}));
         app.gesture = Some(match handles.iter().position(|h| h.distance(q) < 12.0) {
             Some(h) => Gesture::CropHandle { handle: h as u8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
             None if inside(q) => Gesture::CropHandle { handle: 8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
@@ -1325,7 +1325,7 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
                 // `lightcraft_geom::drag_crop`; the UI only reports where the pointer started and is.
                 let n = to_straight(map.norm(q), angle, frame);
                 let orig = ui.input(|i| i.pointer.press_origin()).map(|q0| to_straight(map.norm(q0), angle, frame)).unwrap_or(n);
-                let _ = app.run(
+                app.act(
                     "crop.drag",
                     json!({"handle": handle, "from": [orig.x, orig.y], "to": [n.x, n.y], "start": [start.x0, start.y0, start.x1, start.y1]}),
                 );
@@ -1335,14 +1335,14 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
                 let a = (q - c).angle();
                 let ang = (start_angle + (a - a0).to_degrees() as f64).clamp(-45.0, 45.0);
                 shown_angle = (ang * 100.0).round() / 100.0;
-                let _ = app.run("crop.straighten", json!({"angle": shown_angle}));
+                app.act("crop.straighten", json!({"angle": shown_angle}));
             }
             _ => {}
         }
     }
     if resp.drag_stopped() {
         app.gesture = None;
-        let _ = app.run("develop.endInteraction", json!({}));
+        app.act("develop.endInteraction", json!({}));
     }
     if let Some(at) = readout_at {
         // the canvas (the loupe's own rect), not the photo: rotating happens in the margin around it
@@ -1438,7 +1438,7 @@ fn guided_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
         let b = map.norm(q);
         if a.dist(b) > 0.02 {
             let (ca, cb) = (frame.transformed_to_corrected(a), frame.transformed_to_corrected(b));
-            let _ = app.run("geometry.guides", json!({"guides": [[ca.x, ca.y, cb.x, cb.y]], "add": true}));
+            app.act("geometry.guides", json!({"guides": [[ca.x, ca.y, cb.x, cb.y]], "add": true}));
         }
     }
 }
@@ -1688,7 +1688,7 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
             let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();
             // holding ⌥ (Alt) paints with the other mode: Erase while adding, Add while erasing
             let erase = app.ui.brush_erase != resp.ctx.input(|i| i.modifiers.alt);
-            let _ = app.run(
+            app.act(
                 "mask.brushStroke",
                 json!({"points": pts, "size": app.ui.brush_size, "feather": app.ui.brush_feather, "flow": app.ui.brush_flow,
                        "erase": erase, "autoMask": app.ui.brush_auto_mask}),
@@ -1711,7 +1711,7 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
         && let Some((mid, ..)) = hit(q)
         && Some(mid) != active
     {
-        let _ = app.run("mask.select", json!({"id": mid}));
+        app.act("mask.select", json!({"id": mid}));
     }
     if resp.drag_started()
         && let Some(q) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
@@ -1731,9 +1731,9 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
             && let Some(original_shape) = d.masks.iter().find(|m| m.id == mask).and_then(|m| m.components.get(comp)).map(|c| c.shape.clone())
         {
             if Some(mask) != active {
-                let _ = app.run("mask.select", json!({"id": mask}));
+                app.act("mask.select", json!({"id": mask}));
             }
-            let _ = app.run("develop.beginInteraction", json!({"label": "Edit Mask"}));
+            app.act("develop.beginInteraction", json!({"label": "Edit Mask"}));
             app.gesture = Some(Gesture::MaskHandle { mask, comp, handle, original_shape });
         }
     }
@@ -1746,11 +1746,11 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
         let dn = Point::new(n.x - n0.x, n.y - n0.y);
         let alt = ui.input(|i| i.modifiers.alt);
         let new_shape = moved_shape(&original_shape, handle, dn, n, map, alt);
-        let _ = app.run("mask.update", json!({"id": mask, "component": comp, "shape": new_shape}));
+        app.act("mask.update", json!({"id": mask, "component": comp, "shape": new_shape}));
     }
     if resp.drag_stopped() && matches!(app.gesture, Some(Gesture::MaskHandle { .. })) {
         app.gesture = None;
-        let _ = app.run("develop.endInteraction", json!({}));
+        app.act("develop.endInteraction", json!({}));
     }
 }
 
@@ -1828,9 +1828,9 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
         && let Some((spot, source, ..)) = press.and_then(hit)
     {
         if Some(spot) != active {
-            let _ = app.run("spot.select", json!({"index": spot}));
+            app.act("spot.select", json!({"index": spot}));
         }
-        let _ = app.run("develop.beginInteraction", json!({"label": "Edit Spot"}));
+        app.act("develop.beginInteraction", json!({"label": "Edit Spot"}));
         app.gesture = Some(Gesture::SpotMove { spot, source });
     }
     if let Some(Gesture::SpotMove { spot, source }) = app.gesture.clone() {
@@ -1840,19 +1840,19 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
             let (n, n0) = (map.norm(q), map.norm(q - resp.drag_delta()));
             let dn = [n.x - n0.x, n.y - n0.y];
             if dn != [0.0, 0.0] {
-                let _ = app.run("spot.update", json!({"index": spot, if source { "moveSource" } else { "move" }: dn}));
+                app.act("spot.update", json!({"index": spot, if source { "moveSource" } else { "move" }: dn}));
             }
         }
         if resp.drag_stopped() {
             app.gesture = None;
-            let _ = app.run("develop.endInteraction", json!({}));
+            app.act("develop.endInteraction", json!({}));
         }
         return;
     }
     if resp.clicked()
         && let Some((spot, ..)) = press.and_then(hit)
     {
-        let _ = app.run("spot.select", json!({"index": spot}));
+        app.act("spot.select", json!({"index": spot}));
         return;
     }
     if let Some(q) = resp.interact_pointer_pos()
@@ -1878,7 +1878,7 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
             _ => "remove",
         };
         let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();
-        let _ = app.run(
+        app.act(
             "spot.add",
             json!({"mode": mode, "points": pts, "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity}),
         );
@@ -2039,7 +2039,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 } else {
                     "replace"
                 };
-                let _ = app.run("library.select", json!({"ids": [id.0], "mode": mode}));
+                app.act("library.select", json!({"ids": [id.0], "mode": mode}));
             }
             // the same photo actions as the grid and loupe (Restore / Delete Permanently in Recently Deleted)
             resp.context_menu(|ui| super::grid::context_menu(app, ui, *id));
@@ -2106,7 +2106,7 @@ mod preview_geometry_tests {
 fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, held: bool) {
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     if !held && resp.double_clicked() {
-        let _ = app.run("crop.autoStraighten", json!({}));
+        app.act("crop.autoStraighten", json!({}));
         app.ui.tool.clear();
         app.gesture = None;
         return;
@@ -2133,7 +2133,7 @@ fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
             while deg < -45.0 {
                 deg += 90.0;
             }
-            let _ = app.run("crop.straighten", json!({"angle": (-deg * 100.0).round() / 100.0}));
+            app.act("crop.straighten", json!({"angle": (-deg * 100.0).round() / 100.0}));
         }
         if !held {
             app.ui.tool.clear();

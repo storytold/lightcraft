@@ -63,11 +63,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 if icon_button(ui, "sidebar", Icon::Sidebar, vec2(30.0, 30.0), app.ui.left_panel, true, "Show/hide My Photos panel").clicked() {
-                    let _ = app.run("view.leftPanel", json!({}));
+                    app.act("view.leftPanel", json!({}));
                 }
                 ui.add_space(8.0);
                 if icon_button(ui, "back", Icon::Back, vec2(30.0, 30.0), false, true, "Back").clicked() {
-                    let _ = app.run("view.back", json!({}));
+                    app.act("view.back", json!({}));
                 }
                 icon_button(ui, "forward", Icon::Forward, vec2(30.0, 30.0), false, false, "Forward");
                 if !app.native_menu {
@@ -110,7 +110,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 .response;
             if resp.changed() {
                 let q = app.ui.search.clone();
-                let _ = app.run("library.filter", json!({"text": q}));
+                app.act("library.filter", json!({"text": q}));
             }
             // filter icon right of the search field
             let fr = Rect::from_center_size(pos2(sr.right() + 22.0, sr.center().y), vec2(28.0, 28.0));
@@ -142,7 +142,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 "Filter bar".into()
             });
             if fresp.clicked() {
-                let _ = app.run("view.filterBar", json!({}));
+                app.act("view.filterBar", json!({}));
             }
             // right icons
             let mut x = full.right() - 18.0;
@@ -183,7 +183,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     register(ui.ctx(), "indicator:unsaved", r);
                 }
                 if resp.clicked() && !cmd.is_empty() {
-                    let _ = app.run(cmd, json!({}));
+                    app.act(cmd, json!({}));
                 }
                 x -= 40.0;
             }

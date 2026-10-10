@@ -31,7 +31,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             let r = ui.add_enabled(!app.ui.settings.keymap.is_empty(), egui::Button::new(crate::i18n::tr("Reset All")));
             register(ui.ctx(), "button:shortcutsResetAll", r.rect);
             if r.clicked() {
-                let _ = app.run("app.resetShortcuts", serde_json::json!({}));
+                app.act("app.resetShortcuts", serde_json::json!({}));
                 app.recording_shortcut = None;
             }
         });

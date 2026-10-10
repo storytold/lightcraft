@@ -565,6 +565,9 @@ fn paste_from_previous_and_copy_paste_metadata() {
     let ids: Vec<_> = s.visible().iter().copied().take(3).collect();
     s.execute("library.select", &json!({"ids": [ids[0].0]})).unwrap();
     assert!(s.execute("develop.pastePrevious", &json!({})).is_err(), "nothing before");
+    // nothing copied yet: the reason is shown to a person as it is, so it names the menu item, not a command id
+    let e = s.execute("photo.pasteMetadata", &json!({})).unwrap_err();
+    assert!(matches!(&e, crate::EngineError::BadParams { msg, .. } if msg == "nothing copied: use Copy Metadata first"), "{e}");
     s.execute("develop.set", &json!({"values": {"light.exposure": 0.8}})).unwrap();
     s.execute("photo.setMeta", &json!({"title": "Dawn", "keywords": ["sky", "red"], "creator": "Me"})).unwrap();
     s.execute("photo.copyMetadata", &json!({})).unwrap();

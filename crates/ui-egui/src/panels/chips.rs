@@ -108,7 +108,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
         ui.painter().line_segment([a, b], Stroke::new(1.3, col));
         ui.painter().line_segment([pos2(a.x, b.y), pos2(b.x, a.y)], Stroke::new(1.3, col));
         if resp.clicked() {
-            let _ = app.run("library.filter", c.clear.clone());
+            app.act("library.filter", c.clear.clone());
             if c.clear.get("text").is_some() {
                 app.ui.search.clear();
             }
@@ -132,7 +132,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
                     .on_hover_text(crate::i18n::tr("Remove this filter"))
                     .clicked()
                 {
-                    let _ = app.run("library.filter", c.clear.clone());
+                    app.act("library.filter", c.clear.clone());
                     if c.clear.get("text").is_some() {
                         app.ui.search.clear();
                     }
@@ -142,7 +142,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
     }
     if crate::widgets::text_button(&mut child, "chipsClearAll", crate::i18n::tr("Clear all"), false).clicked() {
         app.ui.search.clear();
-        let _ = app.run("library.clearFilter", json!({}));
+        app.act("library.clearFilter", json!({}));
     }
 }
 

@@ -102,14 +102,14 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, chip: &Chip) {
         r.clicked()
     };
     if !chip.on_all() && item(ui, "add", crate::i18n::tr("Add to All Selected Photos")) {
-        let _ = app.run("photo.setMeta", json!({"addKeywords": [chip.path]}));
+        app.act("photo.setMeta", json!({"addKeywords": [chip.path]}));
     }
     if item(ui, "remove", crate::i18n::tr("Remove from Selected Photos")) {
-        let _ = app.run("photo.setMeta", json!({"removeKeywords": [chip.path]}));
+        app.act("photo.setMeta", json!({"removeKeywords": [chip.path]}));
     }
     if item(ui, "show", crate::i18n::tr("Show Photos with Keyword")) {
         super::left::browse_all_photos(app, true);
-        let _ = app.run("library.filter", json!({"keyword": chip.path}));
+        app.act("library.filter", json!({"keyword": chip.path}));
     }
     ui.separator();
     if item(ui, "edit", crate::i18n::tr("Edit Keyword Tag…")) {
@@ -129,7 +129,7 @@ pub fn chip_row(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if let Some(x) = x {
                 register(ui.ctx(), format!("keywordChipRemove:{}", c.path), x.rect);
                 if x.on_hover_text(crate::i18n::tr("Remove from Selected Photos")).clicked() {
-                    let _ = app.run("photo.setMeta", json!({"removeKeywords": [c.path]}));
+                    app.act("photo.setMeta", json!({"removeKeywords": [c.path]}));
                 }
             }
             // one tooltip: the whole name (it may be cut short), and how many have it

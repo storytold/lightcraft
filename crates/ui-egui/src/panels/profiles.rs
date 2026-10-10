@@ -202,9 +202,9 @@ fn cell_ui(
     ));
     if resp.clicked() {
         if resp.interact_pointer_pos().is_some_and(|q| star.contains(q)) {
-            let _ = app.run("profile.favorite", json!({"id": p_id}));
+            app.act("profile.favorite", json!({"id": p_id}));
         } else if !applied {
-            let _ = app.run("develop.profile", json!({"id": p_id, "amount": 100}));
+            app.act("develop.profile", json!({"id": p_id, "amount": 100}));
             ui.data_mut(|m| m.remove::<(PhotoId, String)>(egui::Id::new("last-profile-hover")));
         }
     }

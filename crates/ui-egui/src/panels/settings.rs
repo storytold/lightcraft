@@ -120,7 +120,7 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Open Library…")));
         register(ui.ctx(), "button:settingsOpenLibrary", r.rect);
         if r.clicked() {
-            let _ = app.run("app.openLibrary", json!({}));
+            app.act("app.openLibrary", json!({}));
         }
         if !can {
             hint(ui, t, crate::i18n::tr("not available here"));
@@ -207,13 +207,13 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     hint(ui, t, crate::i18n::tr("Settings new raw photos start from. Changing them doesn't touch photos already in the library."));
     row(ui, t, crate::i18n::tr("Raw photos"), |ui| {
         if let Some(v) = preset_combo(app, ui, "settingsRawPreset", d.raw_preset.as_deref(), "LightCraft Default") {
-            let _ = app.run("library.preferences", json!({"import": {"rawPreset": v}}));
+            app.act("library.preferences", json!({"import": {"rawPreset": v}}));
         }
     });
     let mut per = d.per_camera;
     row(ui, t, "", |ui| {
         if check(ui, "settings.perCamera", &mut per, "Use camera-specific defaults") {
-            let _ = app.run("library.preferences", json!({"import": {"perCamera": per}}));
+            app.act("library.preferences", json!({"import": {"perCamera": per}}));
         }
     });
     if per {
@@ -259,7 +259,7 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                     });
                     register(ui.ctx(), format!("combo:{id}"), r.response.rect);
                     if let Some(c) = pick {
-                        let _ = app.run("library.preferences", json!({"camera": c}));
+                        app.act("library.preferences", json!({"camera": c}));
                     }
                 });
             }
@@ -268,7 +268,7 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     heading(ui, t, crate::i18n::tr("Other images (JPEG, PNG, TIFF, HEIC…)"));
     row(ui, t, crate::i18n::tr("Non-raw photos"), |ui| {
         if let Some(v) = preset_combo(app, ui, "settingsOtherPreset", d.other_preset.as_deref(), "None") {
-            let _ = app.run("library.preferences", json!({"import": {"otherPreset": v}}));
+            app.act("library.preferences", json!({"import": {"otherPreset": v}}));
         }
     });
     heading(ui, t, crate::i18n::tr("Metadata"));
@@ -282,7 +282,7 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             let r = ui.add(egui::TextEdit::singleline(&mut text).hint_text(hint_text).desired_width(240.0));
             register(ui.ctx(), format!("field:settings.{key}"), r.rect);
             if r.lost_focus() && text.trim() != value {
-                let _ = app.run("library.preferences", json!({"import": {key: text.trim()}}));
+                app.act("library.preferences", json!({"import": {key: text.trim()}}));
             }
             if r.has_focus() {
                 ui.data_mut(|m| m.insert_temp(id, text));
@@ -310,21 +310,21 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 });
             register(ui.ctx(), "combo:settingsMetaPreset", r.response.rect);
             if let Some(n) = pick {
-                let _ = app.run("library.preferences", json!({"import": {"metadataPreset": n}}));
+                app.act("library.preferences", json!({"import": {"metadataPreset": n}}));
             }
         });
     }
     heading(ui, t, crate::i18n::tr("XMP sidecars"));
     let mut xmp = app.session.xmp;
     if check(ui, "settings.autoWriteXmp", &mut xmp.auto_write, "Automatically write changes into XMP sidecars") {
-        let _ = app.run("library.xmpPreferences", json!({"autoWrite": xmp.auto_write}));
+        app.act("library.xmpPreferences", json!({"autoWrite": xmp.auto_write}));
     }
     row(ui, t, crate::i18n::tr("Sidecar names"), |ui| {
         use lightcraft_engine::sidecar::SidecarNaming as N;
         let mut n = xmp.naming;
         if choices(ui, "settingsXmpNaming", &[(N::Stem, "IMG_1.xmp"), (N::Full, "IMG_1.CR3.xmp")], &mut n) {
             let naming = if n == N::Full { "full" } else { "stem" };
-            let _ = app.run("library.xmpPreferences", json!({"naming": naming}));
+            app.act("library.xmpPreferences", json!({"naming": naming}));
         }
     });
     if !cfg!(target_arch = "wasm32") {
@@ -342,14 +342,14 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 app.toast(ui.ctx(), e);
             }
             if d.auto_folder.is_some() && ui.button(crate::i18n::tr("Turn Off")).clicked() {
-                let _ = app.run("library.autoImport", json!({"folder": null}));
+                app.act("library.autoImport", json!({"folder": null}));
             }
         });
         if d.auto_folder.is_some() {
             row(ui, t, "", |ui| {
                 let mut copy = d.auto_copy;
                 if ui.checkbox(&mut copy, crate::i18n::tr("Copy into the library (else use the files where they are)")).changed() {
-                    let _ = app.run("library.autoImport", json!({"copy": copy}));
+                    app.act("library.autoImport", json!({"copy": copy}));
                 }
             });
             row(ui, t, crate::i18n::tr("Album"), |ui| {
@@ -357,7 +357,7 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 let mut name = ui.data(|m| m.get_temp::<String>(id)).unwrap_or_else(|| d.auto_album.clone().unwrap_or_default());
                 let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text(crate::i18n::tr("None")).desired_width(180.0));
                 if r.lost_focus() {
-                    let _ = app.run("library.autoImport", json!({"album": name.trim()}));
+                    app.act("library.autoImport", json!({"album": name.trim()}));
                 }
                 ui.data_mut(|m| m.insert_temp(id, name));
             });
@@ -407,7 +407,7 @@ fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let opts = [(512u32, "512 MB"), (1024, "1 GB"), (2048, "2 GB"), (4096, "4 GB"), (8192, "8 GB")];
         let mut v = if CACHE_SIZES.contains(&cur) { cur } else { 2048 };
         if choices(ui, "settingsCache", &opts, &mut v) {
-            let _ = app.run("library.preferences", json!({"cacheMb": v}));
+            app.act("library.preferences", json!({"cacheMb": v}));
         }
     });
     let used = app.session.media.rendered.disk().map(|d| d.size());
@@ -416,7 +416,7 @@ fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let r = ui.button(crate::i18n::tr("Clear Cache"));
         register(ui.ctx(), "button:settingsClearCache", r.rect);
         if r.clicked() {
-            let _ = app.run("library.clearPreviews", json!({}));
+            app.act("library.clearPreviews", json!({}));
         }
     });
     heading(ui, t, crate::i18n::tr("Local folders"));
@@ -424,7 +424,7 @@ fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let opts = [(0u32, "Never"), (7, "After 7 days"), (30, "After 30 days"), (90, "After 90 days"), (365, "After a year")];
         let mut v = app.session.forget_local_days;
         if choices(ui, "settingsForgetLocal", &opts, &mut v) {
-            let _ = app.run("library.preferences", json!({"forgetLocalDays": v}));
+            app.act("library.preferences", json!({"forgetLocalDays": v}));
         }
     });
     hint(

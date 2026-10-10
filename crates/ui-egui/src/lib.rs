@@ -79,6 +79,8 @@ mod tests_preview_limit;
 #[cfg(test)]
 mod tests_quit_unsaved;
 #[cfg(test)]
+mod tests_refusals;
+#[cfg(test)]
 mod tests_scroll;
 #[cfg(test)]
 mod tests_switch_library;
@@ -102,6 +104,66 @@ pub use control::{ControlRequest, ControlResponse};
 pub use state::UiState;
 
 const TOAST_SECONDS: f64 = 1.4;
+/// How long a toast saying why a command was refused stays: a sentence to read, as
+/// [`LightcraftApp::toast_error`]'s.
+const REFUSAL_SECONDS: f64 = 6.0;
+
+/// A command that didn't run: the whole error (for agents, the log and the status) and what it
+/// says to the person who asked (the reason, without the command's id).
+struct Refusal {
+    error: String,
+    why: String,
+}
+
+impl Refusal {
+    /// An error that is already text (the interface's own commands). Mostly words for a person
+    /// as they are; a command that wraps an engine command hands on the engine's error already
+    /// turned into text, and of that only the reason is for the person. `error` stays whole.
+    fn plain(error: String) -> Refusal {
+        let why = engine_reason(&error).map(sentence).unwrap_or_else(|| error.clone());
+        Refusal { why, error }
+    }
+}
+
+/// A sentence starts with a capital, whatever the command wrote. Only when it starts with a word:
+/// a file name or a path ("img_0012.jpg is a virtual copy", "photos/a.jpg: …") is someone's
+/// spelling and stays as it is, and so does a letter whose capital is not one letter (ß).
+fn sentence(why: &str) -> String {
+    let first_word = why.split_whitespace().next().unwrap_or_default().trim_end_matches([',', ':', ';']);
+    let mut letters = why.chars();
+    match letters.next() {
+        Some(first) if first_word.chars().all(char::is_alphabetic) && first.to_uppercase().count() == 1 => {
+            first.to_uppercase().chain(letters).collect()
+        }
+        _ => why.to_string(),
+    }
+}
+
+/// The reason in an [`EngineError`](lightcraft_engine::EngineError) that is already text: what
+/// follows ``command `id` is not available right now: `` or ``invalid parameters for `id`: ``
+/// (its `Disabled` and `BadParams` formats). `None` for anything else, including text that only
+/// begins like one: the id must be a command's (letters, digits, `.`, `_`, `-`) between the
+/// backticks, so the reason is cut at the first separator and may hold colons and backticks.
+fn engine_reason(error: &str) -> Option<&str> {
+    const SHAPES: [(&str, &str); 2] = [("command `", "` is not available right now: "), ("invalid parameters for `", "`: ")];
+    SHAPES.iter().find_map(|(before, after)| {
+        let (id, reason) = error.strip_prefix(before)?.split_once(after)?;
+        let is_id = !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+        (is_id && !reason.trim().is_empty()).then_some(reason)
+    })
+}
+
+impl From<lightcraft_engine::EngineError> for Refusal {
+    fn from(e: lightcraft_engine::EngineError) -> Refusal {
+        use lightcraft_engine::EngineError;
+        let why = match &e {
+            EngineError::Disabled(_, why) => why.clone(),
+            EngineError::BadParams { msg, .. } => msg.clone(),
+            other => other.to_string(),
+        };
+        Refusal { error: e.to_string(), why: sentence(&why) }
+    }
+}
 
 pub type PickFiles = Box<dyn FnMut() -> Vec<String>>;
 /// A save dialog: suggested file name → chosen path (`None` = cancelled).
@@ -409,15 +471,47 @@ impl LightcraftApp {
         self
     }
 
-    /// Run a UI or engine command by id. The single entry point for every frontend path.
+    /// Run a UI or engine command by id. The single entry point for every frontend path: the
+    /// error comes back in full and nothing is shown, for agents (the control channel) and for
+    /// code that deals with the answer itself. A widget acting for the person uses [`Self::act`].
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        self.run_told(id, params).map_err(|refusal| refusal.error)
+    }
+
+    /// Run a command for the person at the interface (a click, a drop, a key): when it is
+    /// refused, a toast says why, so no widget has to pass that on by hand (or forget to).
+    /// `None` when it was refused: say a success of your own only on `Some`, or it writes over
+    /// the reason. `cargo xtask refusals` keeps the dropped form, `let _ = app.run(…)` (and
+    /// `let _ = app.session.execute(…)`, which goes round this), out of the interface: a widget
+    /// says which of `act`, [`Self::quiet`] and [`Self::run`] it means.
+    pub fn act(&mut self, id: &str, params: Value) -> Option<Value> {
+        match self.run_told(id, params) {
+            Ok(v) => Some(v),
+            Err(refusal) => {
+                // Native menu clicks can arrive before logic() updates last_time after an idle gap.
+                let now = self.tasks.repaint.as_ref().map(|ctx| ctx.input(|i| i.time)).unwrap_or(self.last_time);
+                self.ui.toast = Some((refusal.why, now + REFUSAL_SECONDS, None));
+                None
+            }
+        }
+    }
+
+    /// Run a command whose refusal is expected here and means nothing to the person (it is
+    /// tried on the off chance, or again on every frame of a gesture): nothing is shown. Say why
+    /// at the call. `None` when it was refused.
+    pub fn quiet(&mut self, id: &str, params: Value) -> Option<Value> {
+        self.run_told(id, params).ok()
+    }
+
+    /// [`Self::run`], keeping what a refusal says to a person apart from the whole error.
+    fn run_told(&mut self, id: &str, params: Value) -> Result<Value, Refusal> {
         if let Some(result) = model_setup::intercept(self, id, &params) {
-            return result;
+            return result.map_err(Refusal::plain);
         }
         if let Some(r) = menus::run_ui_command(self, id, &params) {
-            return r;
+            return r.map_err(Refusal::plain);
         }
-        let r = self.session.execute(id, &params).map_err(|e| e.to_string());
+        let r = self.session.execute(id, &params).map_err(Refusal::from);
         if r.is_ok() && id == "mask.adjust" {
             // Judge local adjustments on the photo, without the selection overlay obscuring them.
             // Keep it hidden after release; O / the overlay eye can show it again.
@@ -438,7 +532,7 @@ impl LightcraftApp {
             self.ui.toast = Some((text, now + TOAST_SECONDS, label));
         }
         match &r {
-            Err(e) => {
+            Err(Refusal { error: e, .. }) => {
                 log::warn!("{id}: {e}");
                 self.ui.status = e.clone();
                 // no detector yet: offer it (its terms first) instead of only saying so
@@ -470,7 +564,8 @@ impl LightcraftApp {
                 && !vis.is_empty()
             {
                 let i = vis.iter().position(|x| *x == cur).map_or(0, |i| (i + 1) % vis.len());
-                let _ = self.run("library.select", serde_json::json!({"ids": [vis[i].0]}));
+                // the slideshow moving on by itself: nobody asked, so nobody is told
+                self.quiet("library.select", serde_json::json!({"ids": [vis[i].0]}));
             }
             self.ui.slideshow = Some((interval, now + interval, false));
         }
@@ -898,7 +993,7 @@ impl LightcraftApp {
             }
             let (presets, photos): (Vec<String>, Vec<String>) = dropped.into_iter().partition(|p| is_preset_file(p));
             if !presets.is_empty() {
-                let _ = self.run("file.importPresets", serde_json::json!({"paths": presets}));
+                self.act("file.importPresets", serde_json::json!({"paths": presets}));
             }
             // read and added on a worker thread (dropped folders can be large, or on a slow drive)
             if !photos.is_empty() {
@@ -915,6 +1010,7 @@ impl LightcraftApp {
     fn apply_settings(&mut self, ctx: &egui::Context) {
         if self.gpu_applied != Some(self.ui.settings.gpu) {
             self.gpu_applied = Some(self.ui.settings.gpu);
+            // refusal expected: a saved setting applied at start-up and when it changes, nobody's command; app.gpu takes either value
             let _ = self.session.execute("app.gpu", &serde_json::json!({"enabled": self.ui.settings.gpu}));
             // GPU device + kernels off the UI thread, once the window is up and only when GPU
             // rendering is on: a broken driver must not keep the window from appearing (issue #136)
@@ -926,6 +1022,7 @@ impl LightcraftApp {
         // automatic at startup: leave the engine's default alone
         if self.memory_applied != Some(mb) && (mb > 0 || self.memory_applied.is_some()) {
             let mb = if mb == 0 { (lightcraft_engine::memory::default_budget() >> 20) as u32 } else { mb };
+            // refusal expected: a saved setting applied at start-up; out of range (a hand-edited file) the engine keeps its budget
             let _ = self.session.execute("app.memoryBudget", &serde_json::json!({"mb": mb}));
         }
         self.memory_applied = Some(mb);
@@ -1506,7 +1603,8 @@ impl Caches {
                     lightcraft_catalog::rules::set_now(Some(now.to_string()));
                 }
                 let v: std::sync::Arc<std::collections::HashMap<_, _>> =
-                    std::sync::Arc::new(cat.albums().map(|a| (a.id, cat.album_count(a.id))).collect());
+                    // folders aren't counted in the sidebar: theirs would cost a pass each
+                    std::sync::Arc::new(cat.albums().filter(|a| !a.folder).map(|a| (a.id, cat.album_count(a.id))).collect());
                 self.album_count_scans += 1;
                 self.album_counts = Some((k, v.clone()));
                 v

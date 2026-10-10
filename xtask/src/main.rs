@@ -8,6 +8,7 @@ mod bench;
 mod ico;
 mod layers;
 mod parity;
+mod refusals;
 mod stats;
 mod version;
 mod web;
@@ -33,7 +34,8 @@ commands:
   web [--serve [port]] [--dev]
                   build the browser app (apps/lightcraft-web) into <target>/web/;
                   --serve serves it on http://127.0.0.1:<port> (default 8080)
-  ci              fmt --check, clippy -D warnings, heif, test, parity refs, layers, assets, wasm (stops at first failure)
+  refusals        check that the interface drops no command's refusal (`let _ = app.run(…)`): act, quiet or deal with it
+  ci              fmt --check, clippy -D warnings, heif, test, parity refs, layers, refusals, assets, wasm (stops at first failure)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite and CC0 raw samples (raw.pixls.us) into corpus/ and checks their sha256
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
@@ -46,6 +48,7 @@ fn main() -> ExitCode {
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
         Some("layers") => cmd_layers(),
+        Some("refusals") => refusals::run(&root()),
         Some("assets") => assets::run(&root()),
         Some("bench") => bench::run(&root(), &rest),
         Some("parity") => parity::run(&root(), rest.contains(&"--write")),
@@ -285,6 +288,7 @@ fn cmd_ci() -> Result<(), String> {
         ),
         ("parity", Box::new(|| parity::run(&root(), false))),
         ("layers", Box::new(cmd_layers)),
+        ("refusals", Box::new(|| refusals::run(&root()))),
         ("assets", Box::new(|| assets::run(&root()))),
         ("wasm", Box::new(cmd_wasm)),
     ];

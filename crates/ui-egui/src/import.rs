@@ -744,7 +744,7 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
         return;
     }
     if let Some(f) = task.first {
-        let _ = app.run("library.select", json!({"ids": [f]}));
+        app.act("library.select", json!({"ids": [f]}));
     }
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     // nothing new, only files the library already has: show where they are (Recently Deleted is
@@ -799,7 +799,7 @@ fn show_existing(app: &mut LightcraftApp, ctx: &egui::Context, existing: &[u64])
     if ids.is_empty() || app.run("library.source", json!({"kind": kind})).is_err() {
         return false;
     }
-    let _ = app.run("library.select", json!({"ids": ids}));
+    app.act("library.select", json!({"ids": ids}));
     app.ui.left_panel = true;
     let n = ids.len();
     let plural = if n == 1 { "" } else { "s" };

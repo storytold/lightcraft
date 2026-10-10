@@ -232,7 +232,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     };
     if tb.clicked() {
         let key = if state == Tick::All { "removeKeywords" } else { "addKeywords" };
-        let _ = app.run("photo.setMeta", json!({key: [r.path]}));
+        app.act("photo.setMeta", json!({key: [r.path]}));
     }
     // the count, then the arrow left of it (shown on hover)
     let count = ui.painter().layout_no_wrap(r.count.to_string(), t.font(12.0), t.text_dim);
@@ -247,7 +247,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     }
     if ar.on_hover_text(crate::i18n::tr("Show Photos with Keyword")).clicked() {
         super::left::browse_all_photos(app, true);
-        let _ = app.run("library.filter", json!({"keyword": r.path}));
+        app.act("library.filter", json!({"keyword": r.path}));
     }
     // the name, cut short before the arrow
     let room = (arrow.left() - 4.0 - (x + 34.0)).max(0.0);
@@ -339,23 +339,23 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str, selection: &[Pho
     let is_default = app.session.catalog.default_keyword_parent().as_deref().is_some_and(|k| same(k, path));
     let label = format!("{}{}", if is_default { "✓ " } else { "" }, crate::i18n::tr("Put New Keywords Inside This Keyword"));
     if item(ui, "defaultParent", &label, true) {
-        let _ = app.run("keyword.setDefaultParent", json!({"keyword": if is_default { serde_json::Value::Null } else { json!(path) }}));
+        app.act("keyword.setDefaultParent", json!({"keyword": if is_default { serde_json::Value::Null } else { json!(path) }}));
     }
     ui.separator();
     let some = !selection.is_empty();
     if item(ui, "add", crate::i18n::tr("Add to Selected Photos"), some) {
-        let _ = app.run("photo.setMeta", json!({"addKeywords": [path]}));
+        app.act("photo.setMeta", json!({"addKeywords": [path]}));
     }
     if item(ui, "remove", crate::i18n::tr("Remove from Selected Photos"), some) {
-        let _ = app.run("photo.setMeta", json!({"removeKeywords": [path]}));
+        app.act("photo.setMeta", json!({"removeKeywords": [path]}));
     }
     if item(ui, "show", crate::i18n::tr("Show Photos with Keyword"), true) {
         super::left::browse_all_photos(app, true);
-        let _ = app.run("library.filter", json!({"keyword": path}));
+        app.act("library.filter", json!({"keyword": path}));
     }
     ui.separator();
     if item(ui, "purge", crate::i18n::tr("Purge Unused Keywords"), true) {
-        let _ = app.run("keyword.purgeUnused", json!({}));
+        app.act("keyword.purgeUnused", json!({}));
     }
     if item(ui, "delete", crate::i18n::tr("Delete Keyword…"), true) {
         app.ui.dialog = Some(delete_dialog(app, path));
