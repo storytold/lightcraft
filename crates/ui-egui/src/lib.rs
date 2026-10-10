@@ -21,6 +21,7 @@ mod edit_in;
 pub mod export_task;
 pub mod headless;
 pub mod i18n;
+mod i18n_fork;
 pub mod icons;
 pub mod import;
 pub mod libtools;

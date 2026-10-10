@@ -98,6 +98,8 @@ crates/ui-egui/src/menus_fork.rs
 crates/ui-egui/src/shell.rs
 apps/cli/src/catalog_migrate.rs
 apps/app/src/catalog_hooks.rs
+crates/ui-egui/src/i18n_fork.rs
+crates/ui-egui/locales/fork/
 docs/upstream-candidates.md
 # rebranding and packaging templates (brand.toml)
 xtask/src/dist.rs

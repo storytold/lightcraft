@@ -1,0 +1,20 @@
+{
+  "{app} could not open its window: {e}": "{app} не вдалося відкрити вікно: {e}",
+  "{app} could not open its window: {e}\n\nThe log file has the details: {path}": "{app} не вдалося відкрити вікно: {e}\n\nПодробиці у файлі журналу: {path}",
+  "{n} change{} saved in memory but not written to disk: {e}\n{app} retries automatically; quitting now would lose {}.": "Змін збережено в пам’яті, але не записано на диск: {n}{:.0}: {e}\n{app} повторює спроби автоматично; вихід зараз призведе до їхньої втрати.{:.0}",
+  "{n} change{} saved in memory but not written to disk: {e} — {app} will retry": "Змін збережено в пам’яті, але не записано на диск: {n}{:.0}: {e} — {app} повторить спробу",
+  "{app} can't decode this raw variant yet ({}). You're editing the camera's embedded JPEG preview, which already includes the camera's picture style (e.g. Monochrome) and white balance.": "{app} ще не може декодувати цей варіант RAW ({}). Ви редагуєте вбудований JPEG-перегляд камери, який уже містить її стиль зображення (наприклад, монохромний) і баланс білого.",
+  "Downloads from {host}. Once it has arrived and checked out, {app} installs it, {after}.": "Завантажується з {host}. Після отримання й перевірки {app} установлює модель, {after}.",
+  "Discard 1:1 Previews ({scope})": "Видалити попередні перегляди 1:1 ({scope})",
+  "{n} selected": "Вибрано: {n}",
+  "Create Folder in “{name}”": "Створити папку в «{name}»",
+  "{added} added, {missing} missing, {changed} read from changed sidecars": "Додано: {added}, відсутні: {missing}, прочитано зі змінених супровідних файлів: {changed}",
+  "{n} photos relinked": "Повторно пов’язано фото: {n}",
+  "{path} · {count} photos": "{path} · фото: {count}",
+  "Target: {name}": "Ціль: {name}",
+  "Collection imported: {n} photos found, {m} not in this library": "Колекцію імпортовано: знайдено фото: {n}, немає в цій бібліотеці: {m}",
+  "{n} keywords imported": "Імпортовано ключових слів: {n}",
+  "{n} keywords removed": "Видалено ключових слів: {n}",
+  "Only {} keys": "Лише клавіші {}",
+  "{} keys": "Клавіші {}"
+}

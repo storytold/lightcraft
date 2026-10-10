@@ -1,0 +1,20 @@
+{
+  "{app} could not open its window: {e}": "{app}のウィンドウを開けませんでした: {e}",
+  "{app} could not open its window: {e}\n\nThe log file has the details: {path}": "{app}のウィンドウを開けませんでした: {e}\n\n詳しくはログファイルをご覧ください: {path}",
+  "{n} change{} saved in memory but not written to disk: {e}\n{app} retries automatically; quitting now would lose {}.": "{n}件の変更{:.0}をディスクに保存できません：{e}\n自動で再試行します。終了すると変更が失われます{:.0}",
+  "Discard 1:1 Previews ({scope})": "1:1プレビューを破棄（{scope}）",
+  "{n} change{} saved in memory but not written to disk: {e} — {app} will retry": "{n}件の変更{:.0}はメモリに保存しましたが、ディスクには書き込めていません：{e} — {app}が再試行します",
+  "{app} can't decode this raw variant yet ({}). You're editing the camera's embedded JPEG preview, which already includes the camera's picture style (e.g. Monochrome) and white balance.": "{app}はこのRAWの形式（{}）をまだデコードできません。カメラの埋め込みJPEGプレビューを編集しています。このプレビューには、カメラのピクチャースタイル（モノクロなど）とホワイトバランスがすでに反映されています",
+  "Downloads from {host}. Once it has arrived and checked out, {app} installs it, {after}.": "Downloads from {host}. Once it has arrived and checked out, {app} installs it, {after}.",
+  "{n} selected": "{n} 件を選択",
+  "Create Folder in “{name}”": "「{name}」にフォルダーを作成",
+  "{added} added, {missing} missing, {changed} read from changed sidecars": "{added} 件追加、{missing} 件見つからず、変更されたサイドカーから {changed} 件読み込み",
+  "{n} photos relinked": "{n} 枚の写真を再リンク",
+  "{path} · {count} photos": "{path} · {count} 枚",
+  "Target: {name}": "ターゲット: {name}",
+  "Collection imported: {n} photos found, {m} not in this library": "コレクションを読み込みました: {n} 枚が見つかり、{m} 枚はこのライブラリにありません",
+  "{n} keywords imported": "{n} 個のキーワードを読み込みました",
+  "{n} keywords removed": "{n} 個のキーワードを削除しました",
+  "Only {} keys": "{} のキーのみ",
+  "{} keys": "{} のキー"
+}

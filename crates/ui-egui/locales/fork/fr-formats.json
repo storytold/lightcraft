@@ -1,0 +1,20 @@
+{
+  "{app} could not open its window: {e}": "{app} n’a pas pu ouvrir sa fenêtre : {e}",
+  "{app} could not open its window: {e}\n\nThe log file has the details: {path}": "{app} n’a pas pu ouvrir sa fenêtre : {e}\n\nConsultez le fichier journal pour plus de détails : {path}",
+  "{n} change{} saved in memory but not written to disk: {e}\n{app} retries automatically; quitting now would lose {}.": "{n} modification{} enregistrée(s) en mémoire mais non écrite(s) sur le disque : {e}\n{app} réessaiera automatiquement ; quitter maintenant entraînerait la perte de {}.",
+  "{n} change{} saved in memory but not written to disk: {e} — {app} will retry": "{n} modification{} enregistrée(s) en mémoire mais non écrite(s) sur le disque : {e} — {app} réessaiera.",
+  "{app} can't decode this raw variant yet ({}). You're editing the camera's embedded JPEG preview, which already includes the camera's picture style (e.g. Monochrome) and white balance.": "{app} ne peut pas encore décoder cette variante RAW ({}). Vous modifiez l’aperçu JPEG intégré de l’appareil photo, qui inclut déjà le style d’image (par ex. monochrome) et la balance des blancs de l’appareil.",
+  "Downloads from {host}. Once it has arrived and checked out, {app} installs it, {after}.": "Téléchargement depuis {host}. Une fois le téléchargement terminé et vérifié, {app} l’installe, {after}.",
+  "Discard 1:1 Previews ({scope})": "Supprimer les aperçus 1:1 ({scope})",
+  "{n} selected": "{n} sélectionnée(s)",
+  "Create Folder in “{name}”": "Créer un dossier dans « {name} »",
+  "{added} added, {missing} missing, {changed} read from changed sidecars": "{added} ajoutée(s), {missing} manquante(s), {changed} relue(s) depuis des fichiers annexes modifiés",
+  "{n} photos relinked": "{n} photos reliées",
+  "{path} · {count} photos": "{path} · {count} photos",
+  "Target: {name}": "Cible : {name}",
+  "Collection imported: {n} photos found, {m} not in this library": "Collection importée : {n} photos trouvées, {m} absentes de cette bibliothèque",
+  "{n} keywords imported": "{n} mots-clés importés",
+  "{n} keywords removed": "{n} mots-clés supprimés",
+  "Only {} keys": "Touches {} uniquement",
+  "{} keys": "Touches {}"
+}
