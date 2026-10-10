@@ -12,7 +12,7 @@
 > [!WARNING]
 > **Please don't contribute yet.** This fork was published on 2026-10-10 and its initial planning and restructuring
 > are still under way, so pull requests and issues filed now are likely to conflict with work in progress. Please
-> wait about 18 hours, until 2026-10-11, before contributing.
+> wait about 30 hours, until roughly 2026-10-11 15:00 UTC (the "Public" line in the timeline below), before contributing.
 >
 > Timeline (clock-hours assume continuous agent-driven development):
 >
