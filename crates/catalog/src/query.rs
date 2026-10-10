@@ -361,7 +361,7 @@ impl Filter {
     }
 }
 
-/// Case-insensitive file name order without allocating (same order as comparing `to_lowercase()`).
+/// Case-insensitive file name order without allocating (compares per-character lowercase via `char::to_lowercase`).
 pub fn cmp_name(a: &str, b: &str) -> std::cmp::Ordering {
     a.chars().flat_map(char::to_lowercase).cmp(b.chars().flat_map(char::to_lowercase))
 }
@@ -381,8 +381,9 @@ impl Catalog {
                 SortKey::FileSize => a.file_size.cmp(&b.file_size),
                 SortKey::Random => shuffle_rank(sort.seed, a.id).cmp(&shuffle_rank(sort.seed, b.id)),
             }
-            // Ties (one import batch, a burst within a second) in file name order, which is the
-            // order cameras number them; ids are random, so they only make the order stable.
+            // Ties (one import batch, a burst within a second, equal ratings) sort by file name, the
+            // order cameras number frames, so the order doesn't depend on how ids were allocated;
+            // the id only keeps it stable.
             .then_with(|| if sort.key == SortKey::FileName { Equal } else { cmp_name(&a.file_name, &b.file_name) })
             .then(a.id.cmp(&b.id));
             if sort.ascending { o } else { o.reverse() }

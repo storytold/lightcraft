@@ -501,5 +501,7 @@ fn copies_run_side_by_side_with_the_same_outcome() {
     want.extend((0..8).map(|i| format!("p{i}.png")));
     assert_eq!(names, want);
     assert_eq!(r["duplicates"][0]["existing"], ids[8], "{r}");
+    let first = s.catalog.photo(lightcraft_catalog::PhotoId(ids[0])).unwrap();
+    assert_eq!(first.file_name, "IMG_1.png");
     let _ = std::fs::remove_dir_all(&base);
 }

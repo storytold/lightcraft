@@ -317,17 +317,20 @@ impl Catalog {
     }
 
     /// Allocate random ids from now on (seeded from the OS's randomness), for a catalog shared
-    /// between machines. Ids already handed out stay as they are.
+    /// between machines. Ids already handed out stay as they are. Not yet safe to enable: keyword
+    /// and person spelling and the duplicate-import "existing" photo still follow id order (issue #294 follow-up).
     pub fn use_random_ids(&mut self) {
         self.ids = ids::IdGen::random();
     }
 
-    /// Allocate counter ids again (the default), continuing from the counters (which sit above every id applied so far).
+    /// Allocate counter ids again (the default), continuing from the counters, which sit above every
+    /// id applied so far (not from 1), even after random ids were applied.
     pub fn use_sequential_ids(&mut self) {
         self.ids = ids::IdGen::Sequential;
     }
 
     /// Whether new ids are random (see [`Catalog::use_random_ids`]).
+    #[cfg(test)]
     pub fn random_ids(&self) -> bool {
         self.ids.is_random()
     }

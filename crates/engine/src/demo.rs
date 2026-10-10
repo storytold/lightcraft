@@ -8,7 +8,8 @@ use lightcraft_develop::DevelopSettings;
 use crate::Session;
 
 pub fn load(s: &mut Session) {
-    // Demo ids are referenced by docs/showcase and the documented `--demo` workflows, so they must be 1..N.
+    // The demo is always loaded into a new session, so its ids are 1..N on a fresh catalog; docs/showcase
+    // and the `--demo` workflows rely on that.
     s.catalog.use_sequential_ids();
     let scenes = lightcraft_scenes::demo_library();
     let mut ids = Vec::new();
