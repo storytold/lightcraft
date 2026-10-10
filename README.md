@@ -13,6 +13,11 @@
 <h3 align="center">Your photos. Your pixels. Your machine.</h3>
 
 <p align="center">
+  <a href="README.md">English</a> ·
+  <a href="README.zh-hans.md">简体中文</a>
+</p>
+
+<p align="center">
   <b>Photo library and raw development; an open-source, clean-room reimplementation of Adobe Lightroom, rebuilt in pure Rust.</b><br>
   Native on macOS, Windows and Linux. In the browser via WebAssembly. Drivable end to end by AI agents over MCP.
 </p>
