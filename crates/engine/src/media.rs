@@ -1311,6 +1311,9 @@ pub struct ProbeInfo {
     /// A raw variant that can't be decoded yet: why. The file is described (and will be shown and
     /// edited) from its embedded preview; see [`dac_catalog::Photo::preview_only`].
     pub preview_only: Option<String>,
+    /// SHA-1 of the file's bytes (lowercase hex), computed in the same read pass as
+    /// `content_hash`: what Immich stores for its assets (IMM-LINK).
+    pub sha1: Option<String>,
 }
 
 pub type FileProbe = Arc<dyn Fn(&str) -> Result<ProbeInfo, String> + Send + Sync>;

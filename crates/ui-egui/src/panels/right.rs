@@ -653,6 +653,8 @@ fn info(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId) {
                 ui.label(egui::RichText::new(crate::i18n::tr(text)).color(if online { t.text_dim } else { t.accent }));
             }
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        super::connections::metadata_rows(app, ui, p.id);
         ui.add_space(10.0);
         if text_button(ui, "allMetadata", crate::i18n::tr("All Metadata…"), false)
             .on_hover_text(crate::i18n::tr("Every EXIF, GPS and XMP field in the file"))

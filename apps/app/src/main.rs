@@ -517,15 +517,22 @@ fn open_session(in_memory: bool, dir: Option<std::path::PathBuf>, seed_demo: boo
 /// and offers Try Again / Choose Another Library… / Continue Without Saving / Quit (issue #100).
 fn open_library_session(in_memory: bool, dir: Option<std::path::PathBuf>, seed_demo: bool) -> (Session, Option<LibraryProblem>) {
     if in_memory {
-        return (if seed_demo { Session::with_demo() } else { Session::new() }.with_fs().with_default_denoise_models().with_system_clock(), None);
+        return (
+            if seed_demo { Session::with_demo() } else { Session::new() }
+                .with_fs()
+                .with_default_denoise_models()
+                .with_default_connections()
+                .with_system_clock(),
+            None,
+        );
     }
-    let unopened = || Session::new().with_fs().with_default_denoise_models().with_system_clock();
+    let unopened = || Session::new().with_fs().with_default_denoise_models().with_default_connections().with_system_clock();
     let Some(dir) = dir else {
         log::warn!("no library location (set --library or {})", dac_brand::env_var("LIBRARY"));
         return (unopened(), Some(LibraryProblem::new("", "There is no home folder to keep the library in. Choose a folder for it.")));
     };
     let t0 = std::time::Instant::now();
-    let mut s = Session::new().with_fs().with_default_denoise_models().with_system_clock();
+    let mut s = Session::new().with_fs().with_default_denoise_models().with_default_connections().with_system_clock();
     match s.open_library(&dir, seed_demo) {
         Ok(r) => {
             let (replayed, torn) = (r.replayed, r.torn_bytes);

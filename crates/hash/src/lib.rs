@@ -57,6 +57,42 @@ impl Sha1Digest {
         }
         out
     }
+
+    /// Parse standard base64 (28 characters with padding, or 27 without), or 40 hex characters:
+    /// Immich answers base64 and accepts both.
+    pub fn parse(s: &str) -> Option<Sha1Digest> {
+        let s = s.trim();
+        if s.len() == 40 {
+            return Sha1Digest::from_hex(s);
+        }
+        let s = s.trim_end_matches('=');
+        if s.len() != 27 {
+            return None;
+        }
+        let val = |c: u8| -> Option<u32> {
+            Some(u32::from(match c {
+                b'A'..=b'Z' => c - b'A',
+                b'a'..=b'z' => c - b'a' + 26,
+                b'0'..=b'9' => c - b'0' + 52,
+                b'+' | b'-' => 62,
+                b'/' | b'_' => 63,
+                _ => return None,
+            }))
+        };
+        let mut bits: u32 = 0;
+        let mut nbits = 0u32;
+        let mut out = Vec::with_capacity(20);
+        for c in s.bytes() {
+            bits = (bits << 6) | val(c)?;
+            nbits += 6;
+            if nbits >= 8 {
+                nbits -= 8;
+                out.push((bits >> nbits) as u8);
+                bits &= (1 << nbits) - 1;
+            }
+        }
+        <[u8; 20]>::try_from(out.as_slice()).ok().map(Sha1Digest)
+    }
 }
 
 impl std::fmt::Display for Sha1Digest {
@@ -129,6 +165,13 @@ pub fn sha1_reader(r: impl Read) -> std::io::Result<Sha1Digest> {
     Ok(h.finish().1)
 }
 
+/// SHA-1 of a byte slice.
+pub fn sha1_bytes(bytes: &[u8]) -> Sha1Digest {
+    let mut h = Sha1::new();
+    h.update(bytes);
+    h.finish()
+}
+
 /// SHA-1 of a file's bytes.
 pub fn sha1_file(path: &Path) -> std::io::Result<Sha1Digest> {
     sha1_reader(std::io::BufReader::with_capacity(1 << 20, std::fs::File::open(path)?))
@@ -137,6 +180,16 @@ pub fn sha1_file(path: &Path) -> std::io::Result<Sha1Digest> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_base64_and_hex() {
+        let d = sha1_bytes(b"abc");
+        assert_eq!(Sha1Digest::parse(&d.to_base64()), Some(d));
+        assert_eq!(Sha1Digest::parse(&d.to_hex().to_uppercase()), Some(d));
+        assert_eq!(Sha1Digest::parse("qZk+NkcGgWq6PiVxeFDCbJzQ2J0="), Some(d));
+        assert_eq!(Sha1Digest::parse("not base64 at all, no!!!!!!"), None);
+        assert_eq!(Sha1Digest::parse(""), None);
+    }
 
     #[test]
     fn known_vectors() {

@@ -48,10 +48,10 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | Y. Menus | 82 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
 | Lightroom Classic extras | 43 | 20 | 57 | 0 | — | 25/34 (74%) |
-| IMM. Immich integration | 0 | 0 | 10 | 0 | — | 0/6 (0%) |
-| **Total** | 405 | 47 | 112 | 27 | 193/200 (97%) | 145/168 (86%) |
+| IMM. Immich integration | 1 | 3 | 6 | 0 | — | 1/6 (17%) |
+| **Total** | 406 | 50 | 108 | 27 | 193/200 (97%) | 146/168 (87%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **76.0%** of 564 in-scope rows — P0 98.2% of 200 · P1 90.5% of 168 · P2 40.5% of 195.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **76.4%** of 564 in-scope rows — P0 98.2% of 200 · P1 92.0% of 168 · P2 40.5% of 195.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -83,8 +83,8 @@ Take the first one nobody is working on.
    built-in list is empty, so today users need their own mirror or a manual install). Subject / Sky / People could
    use the same model with fixed prompts; denoise / super-resolution models remain a maintainer decision.
 8. **Classic shell** (KEYC-MODULES, LRC-SHELL-*, LRC-CAT-*): module picker, panel system and Classic keymap, and a
-   catalog that scales past 500k photos (Phase 1). Then **Immich** (IMM. Immich integration): connect, link by
-   checksum, import (Phase 1), publish and two-way sync (Phase 4).
+   catalog that scales past 500k photos (Phase 1). Then **Immich**: connect, link, import and external libraries exist (Phase 1, see
+   [immich.md](immich.md)); keychains on macOS/Windows, publish and two-way sync (Phase 4) remain.
 9. **HDR** (Q. HDR, LR-EXP-HDR), **video** (R. Video), **Classic output modules** (Map view, Book, Slideshow module,
    Print, Web, publish): large, well understood, lower priority than 1–6.
 
@@ -870,10 +870,10 @@ We only talk to Immich over its HTTP API with our own client; concepts, endpoint
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| IMM-CONNECT | Connect to one or more Immich servers (URL + API key), version check, secure key storage | P1 | ⬜ | | Phase 1 |
-| IMM-LINK | Link catalog photos to Immich assets by checksum; "in Immich" badge and filter | P1 | ⬜ | | Phase 1 |
-| IMM-IMPORT | Immich as an import source (browse albums/timeline, download originals or add as linked) | P1 | ⬜ | | Phase 1 |
-| IMM-EXTLIB | Shared-originals mode: Immich external library and catalog over the same folders, no duplicate uploads | P1 | ⬜ | | Phase 1 |
+| IMM-CONNECT | Connect to one or more Immich servers (URL + API key), version check, secure key storage | P1 | 🟡 | `cmd:immich.connect` `cmd:immich.test` `cmd:immich.disconnect` `cmd:immich.status`, `crates/immich`, Settings → Connections (`crates/ui-egui/src/panels/connections.rs`); version ≥ 3.0 check, permissions, TOFU fingerprint. Keys only in the Secret Service keychain: macOS/Windows have no safe keychain backend yet and the passphrase file store is not wired into the UI. See [immich.md](immich.md) | Phase 1 |
+| IMM-LINK | Link catalog photos to Immich assets by checksum; "in Immich" badge and filter | P1 | ✅ | `cmd:immich.link` `cmd:immich.confirmLink` `cmd:immich.unlink` `cmd:immich.links`, `cmd:remote.pump` (SHA-1 back-fill); SHA-1 else probable by name + time + size; grid badge, filter `immich`, Info "Open in Immich", smart-album field `immich` | Phase 1 |
+| IMM-IMPORT | Immich as an import source (browse albums/timeline, download originals or add as linked) | P1 | 🟡 | `cmd:immich.import` `cmd:immich.browse` `cmd:immich.fetchOriginal`, `cmd:file.importImmich` (own window, not inside the Import dialog); copy / link only (original on first Develop), one-way metadata, duplicates skipped by checksum. Link-only photos keep the preview's file kind after the original arrives; browse UI checked only without a server | Phase 1 |
+| IMM-EXTLIB | Shared-originals mode: Immich external library and catalog over the same folders, no duplicate uploads | P1 | 🟡 | `cmd:immich.libraries` `cmd:immich.setPathMaps` `cmd:immich.writeSidecars`, `crates/immich/src/extlib.rs`: coverage table, path mapping (suggested by folder name), XMP for mapped folders. Not verified against a real external library scan | Phase 1 |
 | IMM-SHARELINK | Create Immich shared links for published albums (from Web/Slideshow/Publish) | P2 | ⬜ | | Phase 3 |
 | IMM-PUBLISH | Immich publish service: collections → albums, renders and/or originals, re-publish, stacks | P1 | ⬜ | | Phase 4 |
 | IMM-SYNC | Two-way metadata sync (rating, favourite, title/description, tags ↔ keywords, albums ↔ collections, GPS, time, archive) | P1 | ⬜ | | Phase 4 |

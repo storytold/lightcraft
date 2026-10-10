@@ -156,6 +156,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("file.addPhotos", "Import Photos…", Some("Cmd+Shift+I"), "File"),
     ("file.addFolder", "Import from Folder…", None, "File"),
     ("file.importLightroom", "Import Lightroom Catalog…", None, "File"),
+    ("file.importImmich", "Import from Immich…", None, "File"),
     ("file.addFromDevice", "Import from Device", None, ""),
     ("file.findMissing", "Find Missing Photos…", None, "File"),
     ("file.backupLibrary", "Back Up Library…", None, "File"),
@@ -272,6 +273,10 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
         return Some(Ok(json!(app.ui.language)));
     }
     if let Some(r) = crate::module::run(app, id, p) {
+        return Some(r);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(r) = crate::panels::connections::run(app, id, p) {
         return Some(r);
     }
     let ctx = egui::Context::default();

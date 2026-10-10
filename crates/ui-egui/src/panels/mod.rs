@@ -3,6 +3,8 @@
 pub mod bottombar;
 pub mod chips;
 pub mod compare;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod connections;
 pub mod crop_overlay;
 pub mod denoise;
 pub mod detail;

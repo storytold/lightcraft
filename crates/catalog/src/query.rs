@@ -58,6 +58,9 @@ pub struct Filter {
     pub imported_from: Option<String>,
     /// Photo Merge results: `hdr`, `panorama`, `hdrPanorama` or `any` (see [`merged_kind`]).
     pub merged: Option<String>,
+    /// Immich link state: `linked`, `notLinked` (no confirmed link) or `probable`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub immich: Option<String>,
     /// A folder on disk: its files only (browsed ones too); `subfolders` includes everything below.
     pub folder: Option<String>,
     pub subfolders: bool,
@@ -292,6 +295,17 @@ fn merge<T>(a: Vec<T>, b: Vec<T>, cmp: Cmp<'_, T>) -> Vec<T> {
     out
 }
 
+/// Whether photo `id`'s Immich link state is `want` (`linked`, `probable`, `none` or
+/// `notLinked`: anything but a confirmed link). Unknown values match nothing.
+pub fn immich_state_is(cat: &Catalog, id: PhotoId, want: &str) -> bool {
+    let s = cat.remote_links().link_state(id, "immich");
+    match want {
+        "notLinked" | "not linked" | "unlinked" => s != "linked",
+        "none" => s == "none",
+        w => s == w,
+    }
+}
+
 /// A photo's place in the shuffle for `seed`.
 fn shuffle_rank(seed: u64, id: PhotoId) -> u64 {
     mix64(mix64(seed) ^ id.0)
@@ -455,6 +469,11 @@ impl Filter {
             return false;
         }
         if !self.only.is_empty() && !self.only.contains(&p.id) {
+            return false;
+        }
+        if let Some(want) = &self.immich
+            && !immich_state_is(cat, p.id, want)
+        {
             return false;
         }
         if let Some(want) = &self.merged {

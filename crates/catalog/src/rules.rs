@@ -81,6 +81,7 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("megapixels", "Megapixels", Kind::Number),
     ("hasGps", "Has GPS", Kind::Bool),
     ("virtualCopy", "Virtual Copy", Kind::Bool),
+    ("immich", "Immich", Kind::Choice(&["linked", "probable", "notLinked"])),
     ("album", "Album", Kind::Number),
     ("sharpness", "Focus (assisted culling)", Kind::Number),
     ("bestOfGroup", "Best of Similar Shots", Kind::Bool),
@@ -282,6 +283,10 @@ impl Rule {
             "edited" => p.is_edited() == value.as_bool().unwrap_or(true),
             "hasGps" => m.gps.is_some() == value.as_bool().unwrap_or(true),
             "virtualCopy" => p.copy_of.is_some() == value.as_bool().unwrap_or(true),
+            "immich" => {
+                let want = if want == "notlinked" { "notLinked" } else { want.as_str() };
+                crate::query::immich_state_is(cat, p.id, want) == (op == "is")
+            }
             "keywords" => match op {
                 "isEmpty" => m.keywords.is_empty(),
                 "isNotEmpty" => !m.keywords.is_empty(),

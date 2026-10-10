@@ -248,6 +248,30 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
             .map(|(l, v, e)| (l.to_string(), json!({"edited": v}), f.edited == e))
             .collect(),
     );
+    if f.immich.is_some() || !app.session.catalog.remote_links().is_empty() {
+        let current = match f.immich.as_deref() {
+            Some("linked") => "In Immich",
+            Some("probable") => "Immich: probable",
+            Some(_) => "Not in Immich",
+            None => "Immich: any",
+        };
+        picker(
+            app,
+            ui,
+            "immich",
+            current,
+            f.immich.is_some(),
+            [
+                ("Immich: any", Value::Null),
+                ("In Immich", json!("linked")),
+                ("Not in Immich", json!("notLinked")),
+                ("Immich: probable", json!("probable")),
+            ]
+            .into_iter()
+            .map(|(l, v)| (l.to_string(), json!({"immich": v.clone()}), f.immich.as_deref() == v.as_str()))
+            .collect(),
+        );
+    }
 
     // metadata pickers
     let ui: &mut egui::Ui = if two_rows { &mut row2 } else { &mut row1 };

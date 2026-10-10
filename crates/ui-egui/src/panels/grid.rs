@@ -630,6 +630,8 @@ fn cell(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool,
         ui.interact(br, egui::Id::new(("preview-only-badge", id.0)), Sense::hover())
             .on_hover_text(crate::i18n::tr_format!("Preview only — {}", crate::widgets::preview_only_explanation(why)));
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    super::connections::grid_badge(app, ui, id, img_rect);
     if photo.flag == Flag::Reject {
         p.rect_filled(img_rect, 0.0, Color32::from_black_alpha(110));
     }

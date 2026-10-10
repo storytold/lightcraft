@@ -22,6 +22,7 @@ dac-scenes = { workspace = true }
 dac-pipeline = { workspace = true }
 dac-gpu = { workspace = true }
 dac-catalog = { workspace = true }
+dac-hash = { workspace = true }
 web-time = { workspace = true }
 dac-preview = { workspace = true }
 dac-codecs = { workspace = true }
@@ -42,6 +43,8 @@ dac-segment = { workspace = true, optional = true }
 # model downloads run natively only (the web build fetches no models)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dac-fetch = { workspace = true }
+dac-immich = { workspace = true }
+dac-credentials = { workspace = true }
 
 [features]
 # AI masks with SAM 3 (Object / Describe). Off for the web and CLI builds.

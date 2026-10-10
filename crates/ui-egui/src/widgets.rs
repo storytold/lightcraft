@@ -33,6 +33,12 @@ pub fn preview_only_variant(reason: &str) -> &str {
 
 /// What a preview-only raw means for the user (see `Photo::preview_only`).
 pub fn preview_only_explanation(reason: &str) -> String {
+    if reason.starts_with("Immich link only") {
+        return crate::i18n::tr(
+            "Linked from Immich: you see the server's preview until the original is downloaded (it is when the photo is opened in Develop).",
+        )
+        .to_string();
+    }
     crate::i18n::tr_format!(
         "{app} can't decode this raw variant yet ({}). You're editing the camera's embedded JPEG preview, which already includes the camera's picture style (e.g. Monochrome) and white balance.",
         preview_only_variant(reason)

@@ -24,3 +24,11 @@ impl Session {
         self.denoise.touch();
     }
 }
+
+#[cfg(target_arch = "wasm32")]
+impl Session {
+    /// Remote accounts are native only: nothing to set up in the browser.
+    pub fn with_default_connections(self) -> Self {
+        self
+    }
+}

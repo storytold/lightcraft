@@ -25,6 +25,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+dac-immich = { workspace = true }
+dac-codecs = { workspace = true }
+
 [dev-dependencies]
 dac-denoise = { workspace = true, features = ["runtime"] }
 dac-codecs = { workspace = true }

@@ -24,6 +24,7 @@ pub const TABS: &[(&str, &str)] = &[
     ("interface", "Interface"),
     ("faces", "Faces"),
     ("denoise", "AI Denoise"),
+    ("connections", "Connections"),
     ("shortcuts", "Shortcuts"),
 ];
 
@@ -54,6 +55,8 @@ pub fn body(app: &mut DacApp, ui: &mut egui::Ui, tab: &mut String) {
         "faces" => super::faces::settings_tab(app, ui, &t),
         "denoise" => super::denoise::settings_tab(app, ui, &t),
         "shortcuts" => shortcuts_tab(app, ui, &t),
+        #[cfg(not(target_arch = "wasm32"))]
+        "connections" => super::connections::settings_tab(app, ui, &t),
         _ => general_tab(app, ui, &t),
     }
 }

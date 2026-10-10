@@ -26,6 +26,9 @@ pub enum SyncState {
     Conflict,
     /// The remote asset is gone (deleted or no longer visible to the account).
     RemoteMissing,
+    /// Matched without a checksum (file name, capture time and size agree): the user should
+    /// confirm the link before anything is synced through it.
+    Probable,
 }
 
 /// One link between a photo and an asset on a remote service.
@@ -71,6 +74,20 @@ pub struct RemoteTable {
 }
 
 impl RemoteTable {
+    /// How photo `id` is linked to `service` on any account: `linked` (a confirmed link),
+    /// `probable` (only links waiting for confirmation) or `none`.
+    pub fn link_state(&self, id: PhotoId, service: &str) -> &'static str {
+        let mut probable = false;
+        for r in self.of_photo(id).filter(|r| r.service == service) {
+            if r.sync_state == SyncState::Probable {
+                probable = true;
+            } else {
+                return "linked";
+            }
+        }
+        if probable { "probable" } else { "none" }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.by_photo.is_empty()
     }

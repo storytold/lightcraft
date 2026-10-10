@@ -98,6 +98,7 @@ fn ext_upper(name: &str) -> String {
 /// compressed data that is all there: such a file imports and shows as unreadable when rendered).
 pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     let content_hash = Some(dac_preview::hash_bytes(bytes).to_string());
+    let sha1 = Some(dac_hash::sha1_bytes(bytes).to_hex());
     let m = dac_meta::extract(bytes);
     let (meta, captured) = meta_of(&m);
     if dac_raw::probe(bytes).is_some() {
@@ -118,6 +119,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
                     content_hash,
                     xmp: dac_meta::embedded(bytes).xmp,
                     preview_only: Some(why),
+                    sha1,
                     ..Default::default()
                 });
             }
@@ -148,6 +150,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
             content_hash,
             xmp: dac_meta::embedded(bytes).xmp,
             preview_only: None,
+            sha1,
         });
     }
     let fmt = dac_codecs::sniff(bytes).ok_or("unrecognized file format")?;
@@ -179,6 +182,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         embedded_lens: None,
         xmp: None,
         preview_only: None,
+        sha1,
     })
 }
 
