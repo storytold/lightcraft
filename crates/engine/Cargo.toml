@@ -10,10 +10,6 @@ workspace = true
 
 [dependencies]
 dac-brand = { workspace = true }
-dac-engine-core = { workspace = true }
-dac-engine-develop = { workspace = true }
-dac-engine-library = { workspace = true }
-dac-engine-export = { workspace = true }
 dac-geom = { workspace = true }
 dac-color = { workspace = true }
 dac-raster = { workspace = true }
@@ -38,6 +34,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
+ab_glyph = { workspace = true }
+# Apply the font’s vertical substitutions and origins to Japanese watermarks.
+harfrust = { version = "0.12", default-features = false, features = ["std"] }
+unicode-segmentation = "1.13"
 dac-segment = { workspace = true, optional = true }
 
 # model downloads run natively only (the web build fetches no models)

@@ -47,7 +47,7 @@ fn main() {
 }
 
 /// Resolve a relative `CRAFT_FONTS_DIR` against both roots a caller might mean: a build script's
-/// cwd is the *package* root (`crates/engine-export`), while the `../craft-fonts` the README and
+/// cwd is the *package* root (`crates/engine`), while the `../craft-fonts` the README and
 /// craft-fonts' docs use is written relative to the *workspace* root and would otherwise resolve
 /// to `crates/craft-fonts`.
 fn resolve(dir: PathBuf) -> PathBuf {

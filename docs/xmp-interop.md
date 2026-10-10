@@ -149,7 +149,7 @@ Values pass through our control specs, so anything outside our slider ranges get
 ## Local corrections (masks)
 
 Masks stored as `crs:` structures are read from sidecars, DNG-embedded XMP, XMP presets and `.lrtemplate` files
-(`crates/engine-develop/src/crs_masks.rs`). Four containers hold them: `MaskGroupBasedCorrections` (current) and the older
+(`crates/engine/src/crs_masks.rs`). Four containers hold them: `MaskGroupBasedCorrections` (current) and the older
 `GradientBasedCorrections`, `CircularGradientBasedCorrections` and `PaintBasedCorrections`. Each correction becomes one
 mask: `CorrectionName` → name, `CorrectionAmount` → Amount, inactive corrections are skipped.
 

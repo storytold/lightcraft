@@ -60,10 +60,6 @@ pub const TABLE: &[(&str, Class)] = &[
     ("export", Class::Layer(3)),
     ("merge", Class::Layer(3)),
     ("segment", Class::Layer(3)),
-    ("engine-core", Class::Layer(4)),
-    ("engine-develop", Class::Layer(4)),
-    ("engine-library", Class::Layer(4)),
-    ("engine-export", Class::Layer(4)),
     ("engine", Class::Layer(4)),
     ("ui-egui", Class::Layer(5)),
     ("mcp", Class::Layer(5)),
@@ -99,8 +95,6 @@ pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     &["codecs", "raw"],
     // L3: the Immich client writes remote links into the catalog
     &["catalog", "immich"],
-    // L4: the engine façade re-exports its parts; core < develop < library < export < engine
-    &["engine-core", "engine-develop", "engine-library", "engine-export", "engine"],
 ];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {
