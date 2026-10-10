@@ -1229,6 +1229,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 p.meta = info.meta;
                 p.as_shot_wb = info.as_shot_wb;
                 p.content_hash = info.content_hash;
+                p.sha1 = info.sha1.filter(|h| h.len() == 40 && h.bytes().all(|b| b.is_ascii_hexdigit()));
                 p.embedded_lens = info.embedded_lens;
                 p.preview_only = info.preview_only.clone();
                 apply_import_defaults(s, &mut p);

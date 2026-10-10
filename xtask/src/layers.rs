@@ -55,6 +55,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("pipeline", Class::Layer(2)),
     ("gpu", Class::Layer(3)),
     ("catalog", Class::Layer(3)),
+    ("immich", Class::Layer(3)),
     ("preview", Class::Layer(3)),
     ("export", Class::Layer(3)),
     ("merge", Class::Layer(3)),
@@ -96,6 +97,8 @@ pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     &["meta", "develop"],
     &["develop", "scenes"],
     &["codecs", "raw"],
+    // L3: the Immich client writes remote links into the catalog
+    &["catalog", "immich"],
     // L4: the engine façade re-exports its parts; core < develop < library < export < engine
     &["engine-core", "engine-develop", "engine-library", "engine-export", "engine"],
 ];

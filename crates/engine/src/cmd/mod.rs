@@ -18,6 +18,8 @@ pub(crate) mod face_detect;
 mod face_models;
 mod face_recognize;
 pub mod filters;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod immich;
 pub mod keywords;
 pub mod library;
 pub mod lut_profiles;
@@ -148,6 +150,8 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(face_models::specs());
         v.extend(face_detect::specs());
         v.extend(face_recognize::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(immich::specs());
         v
     })
 }

@@ -269,6 +269,9 @@ pub struct DacApp {
     /// The library failed to open at launch: the blocking window, then the temporary-session
     /// banner (issue #100). Cleared once a library opens.
     pub library_problem: Option<panels::library_problem::LibraryProblem>,
+    /// Immich: Connections settings, the import window, background pump state.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub immich: panels::connections::ImmichUi,
 }
 
 impl DacApp {
@@ -277,6 +280,8 @@ impl DacApp {
         session.segmenter.background = true;
         Self {
             session,
+            #[cfg(not(target_arch = "wasm32"))]
+            immich: Default::default(),
             ui: UiState::default(),
             services,
             renderer: render::Renderer::default(),
@@ -751,6 +756,8 @@ impl DacApp {
         self.save_status(ctx);
         self.slideshow_tick(ctx);
         panels::faces::pump(self, ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        panels::connections::pump(self, ctx);
         // back from an external editor: pick up the files it saved
         let focused = ctx.input(|i| i.focused);
         if focused && !self.ui.was_focused && !self.ui.external_edits.is_empty() {
@@ -985,6 +992,8 @@ impl DacApp {
         panels::second::show(self, &ctx);
         panels::notices::show(self, &ctx);
         panels::dialogs::show(self, &ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        panels::connections::import_window(self, &ctx);
         panels::library_problem::show(self, &ctx);
         import::progress(self, &ctx);
         import::scan_progress(self, &ctx);

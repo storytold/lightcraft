@@ -1361,6 +1361,7 @@ dependencies = [
  "dac-catalog",
  "dac-codecs",
  "dac-color",
+ "dac-credentials",
  "dac-denoise",
  "dac-denoise-core",
  "dac-develop",
@@ -1372,6 +1373,8 @@ dependencies = [
  "dac-fetch",
  "dac-geom",
  "dac-gpu",
+ "dac-hash",
+ "dac-immich",
  "dac-merge",
  "dac-meta",
  "dac-pipeline",
@@ -1523,6 +1526,19 @@ version = "0.4.0"
 dependencies = [
  "dac-brand",
  "heic-rs",
+]
+
+[[package]]
+name = "dac-immich"
+version = "0.4.0"
+dependencies = [
+ "dac-catalog",
+ "dac-credentials",
+ "dac-hash",
+ "dac-net",
+ "log",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1705,6 +1721,7 @@ dependencies = [
  "dac-engine",
  "dac-faces",
  "dac-geom",
+ "dac-immich",
  "dac-meta",
  "dac-pipeline",
  "dac-preview",

@@ -39,6 +39,8 @@ pub mod merge;
 mod model_download;
 pub mod originals;
 pub mod presets;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod remote;
 pub mod rename;
 pub mod segment;
 pub mod sidecar;
@@ -101,6 +103,9 @@ pub struct Session {
     /// The loaded recognition model and the face embeddings made with it.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) faces: faces_index::FacesState,
+    /// Remote services: SHA-1 back-fill and Immich jobs ([`remote`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub remote: remote::State,
     /// Copied develop settings (partial JSON) for Paste.
     pub clipboard: Option<Value>,
     /// The folder on disk the [`LibrarySource::Folder`] view browses.
@@ -220,6 +225,8 @@ impl Session {
             face_catalog: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             faces: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            remote: Default::default(),
             clipboard: None,
             meta_clipboard: None,
             browse: None,
@@ -760,6 +767,8 @@ mod tests_face_recognize;
 mod tests_folders;
 #[cfg(test)]
 mod tests_forget_local;
+#[cfg(test)]
+mod tests_immich;
 #[cfg(test)]
 mod tests_import;
 #[cfg(test)]
