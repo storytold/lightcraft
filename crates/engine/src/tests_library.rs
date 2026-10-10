@@ -323,6 +323,31 @@ fn quick_collection_and_target_album() {
     assert_eq!(s.catalog.album_count(quick), 0);
 }
 
+/// Catalog panel: Quick Collection as a source (empty before it exists), ⌘⇧B saves it as an
+/// album and clears it in one undo step, Previous Import shows the latest import.
+#[test]
+fn catalog_panel_sources_and_save_quick_collection() {
+    let mut s = crate::Session::with_demo();
+    assert_eq!(s.execute("library.showQuickCollection", &serde_json::json!({})).unwrap()["count"], 0);
+    assert!(s.execute("album.saveQuick", &serde_json::json!({})).is_err(), "nothing to save");
+    let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
+    s.execute("library.select", &serde_json::json!({"ids": ids})).unwrap();
+    s.execute("album.toggleTarget", &serde_json::json!({})).unwrap();
+    assert_eq!(s.execute("library.source", &serde_json::json!({"kind": "quickCollection"})).unwrap()["count"], 2);
+    let r = s.execute("album.saveQuick", &serde_json::json!({"name": "Keepers"})).unwrap();
+    let saved = dac_catalog::AlbumId(r["id"].as_u64().unwrap());
+    let quick = s.catalog.quick_collection().unwrap();
+    assert_eq!((s.catalog.album_count(saved), s.catalog.album_count(quick)), (2, 0));
+    s.execute("edit.undo", &serde_json::json!({})).unwrap();
+    assert!(s.catalog.album(saved).is_none());
+    assert_eq!(s.catalog.album_count(quick), 2);
+    let latest = s.catalog.photos().filter(|p| p.in_library()).map(|p| p.imported.clone()).max().unwrap();
+    let want = s.catalog.photos().filter(|p| p.in_library() && !p.deleted && p.imported == latest).count();
+    let n = s.execute("library.source", &serde_json::json!({"kind": "previousImport"})).unwrap()["count"].as_u64().unwrap();
+    assert_eq!(n as usize, want);
+    assert!(n > 0);
+}
+
 /// Scaling check (ignored: `cargo test --release -p dac-engine -- --ignored scale --nocapture`):
 /// the per-frame / per-click library queries on a 100k-photo catalog.
 #[test]

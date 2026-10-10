@@ -1698,6 +1698,7 @@ mod tests {
         };
         let ids = |h: &mut Headless| -> Vec<String> { rects(h).into_iter().map(|(id, _)| id).collect() };
         h.request("ui.set", json!({"leftPanel": true}), t);
+        h.app.ui.toggle_sidebar_section("navigator");
         h.hide_home_above(&dir);
         // Browse Folder… browses the picked folder and keeps it in Local within one frame; a
         // request runs frames, so keep it first (no frame sees it browsed but not yet kept)

@@ -117,6 +117,9 @@ pub const CLASSIC: &[(&str, Option<&str>)] = &[
     // flags, collections
     ("photo.flagToggle", Some("`")),
     ("album.toggleTarget", Some("B")),
+    ("library.showQuickCollection", Some("Cmd+B")),
+    ("album.clearQuick", Some("Cmd+Alt+B")),
+    ("album.saveQuick", Some("Cmd+Shift+B")),
     ("photo.copyMetadata", Some("Cmd+Alt+Shift+C")),
     ("photo.pasteMetadata", Some("Cmd+Alt+Shift+V")),
     // secondary window
