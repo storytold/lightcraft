@@ -1216,22 +1216,9 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
     let pts: Vec<Pos2> = quad.iter().map(|q| map.screen(*q)).collect();
     let p = ui.painter();
     // darken outside the crop
-    let img = map.rect;
-    let shade = Color32::from_black_alpha(150);
-    let mut mesh = egui::epaint::Mesh::default();
-    let outer = [img.left_top(), img.right_top(), img.right_bottom(), img.left_bottom()];
-    for i in 0..4 {
-        let a = outer[i];
-        let b = outer[(i + 1) % 4];
-        let c = pts[(i + 1) % 4];
-        let dd = pts[i];
-        let base = mesh.vertices.len() as u32;
-        for v in [a, b, c, dd] {
-            mesh.vertices.push(egui::epaint::Vertex { pos: v, uv: Pos2::ZERO, color: shade });
-        }
-        mesh.indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+    if let Ok(quad) = <[Pos2; 4]>::try_from(pts.as_slice()) {
+        p.add(outside_crop_mesh(map.rect, &quad, Color32::from_black_alpha(150)));
     }
-    p.add(mesh);
     p.add(egui::Shape::closed_line(pts.clone(), Stroke::new(1.0, Color32::WHITE)));
     // overlay guides
     let lerp = |a: Pos2, b: Pos2, t: f32| a + (b - a) * t;
@@ -1449,6 +1436,62 @@ fn to_straight(n: Point, angle: f64, frame: &Frame) -> Point {
     let px = Point::new(n.x * w, n.y * h);
     let r = Affine::rotate_about(angle.to_radians(), Point::new(w / 2.0, h / 2.0)).apply(px);
     Point::new(r.x / w, r.y / h)
+}
+
+/// The dimming outside the crop box: the photo's rectangle minus the crop quad, as one mesh of
+/// non-overlapping convex pieces. The quad is a rotated rectangle, so its opposite sides are
+/// parallel and the plane outside it splits into four disjoint half-strips: outside edge `i`
+/// and inside edge `i + 1`. Each is clipped to the photo and fanned into triangles.
+///
+/// Issue #731: joining photo corner `i` to crop corner `i` with a quad per side only works while
+/// the two rectangles are aligned. Rotated, those quads cross themselves and each other, which
+/// showed as dimmed wedges inside the crop and doubly dark ones outside, growing with the angle.
+/// A degenerate quad (a point, a line, a non-finite corner) dims nothing.
+fn outside_crop_mesh(img: Rect, quad: &[Pos2; 4], color: Color32) -> egui::epaint::Mesh {
+    let mut mesh = egui::epaint::Mesh::default();
+    if !quad.iter().all(|q| q.x.is_finite() && q.y.is_finite()) || !img.is_finite() {
+        return mesh;
+    }
+    let centre = pos2((quad[0].x + quad[1].x + quad[2].x + quad[3].x) / 4.0, (quad[0].y + quad[1].y + quad[2].y + quad[3].y) / 4.0);
+    // signed distance from edge i's line, positive towards the crop's centre
+    let side = |i: usize, q: Pos2| -> Option<f32> {
+        let (a, b) = (quad[i % 4], quad[(i + 1) % 4]);
+        let n = vec2(a.y - b.y, b.x - a.x);
+        let orient = n.dot(centre - a);
+        // an edge the centre lies on: the box is flat
+        (orient.abs() > 1e-6 * n.length().max(1.0)).then(|| n.dot(q - a) * orient.signum())
+    };
+    // Sutherland–Hodgman: the part of a convex polygon where `keep` is at or above zero
+    let clip = |poly: &[Pos2], keep: &dyn Fn(Pos2) -> Option<f32>| -> Option<Vec<Pos2>> {
+        let mut out = Vec::with_capacity(poly.len() + 2);
+        for (k, &a) in poly.iter().enumerate() {
+            let b = *poly.get((k + 1) % poly.len())?;
+            let (da, db) = (keep(a)?, keep(b)?);
+            if da >= 0.0 {
+                out.push(a);
+            }
+            if (da < 0.0) != (db < 0.0) && (da - db).abs() > f32::EPSILON {
+                let t = da / (da - db);
+                out.push(a + (b - a) * t);
+            }
+        }
+        Some(out)
+    };
+    let photo = [img.left_top(), img.right_top(), img.right_bottom(), img.left_bottom()];
+    for i in 0..4 {
+        let outside = |q: Pos2| side(i, q).map(|d| -d);
+        let inside_next = |q: Pos2| side(i + 1, q);
+        let Some(strip) = clip(&photo, &outside).and_then(|poly| clip(&poly, &inside_next)) else { return egui::epaint::Mesh::default() };
+        if strip.len() < 3 {
+            continue;
+        }
+        let base = mesh.vertices.len() as u32;
+        mesh.vertices.extend(strip.iter().map(|&pos| egui::epaint::Vertex { pos, uv: Pos2::ZERO, color }));
+        for k in 1..(strip.len() as u32).saturating_sub(1) {
+            mesh.indices.extend([base, base + k, base + k + 1]);
+        }
+    }
+    mesh
 }
 
 fn frame_crop_quad(d: &DevelopSettings, frame: &Frame) -> [Point; 4] {
@@ -2143,7 +2186,94 @@ fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
 
 #[cfg(test)]
 mod tests {
-    use super::{film_label, texture_side};
+    use super::{film_label, outside_crop_mesh, texture_side};
+    use egui::{Color32, Pos2, Rect, pos2};
+
+    /// A rotated `w` × `h` box centred on `centre`.
+    fn box_at(centre: Pos2, w: f32, h: f32, angle: f32) -> [Pos2; 4] {
+        let (s, c) = angle.to_radians().sin_cos();
+        [(-w, -h), (w, -h), (w, h), (-w, h)].map(|(x, y)| pos2(centre.x + (x * c - y * s) / 2.0, centre.y + (x * s + y * c) / 2.0))
+    }
+
+    /// Signed distances from a convex polygon's edges, positive inwards (its winding either way).
+    fn sides(poly: &[Pos2], p: Pos2) -> Vec<f32> {
+        let n = poly.len() as f32;
+        let centre = pos2(poly.iter().map(|q| q.x).sum::<f32>() / n, poly.iter().map(|q| q.y).sum::<f32>() / n);
+        (0..poly.len())
+            .map(|i| {
+                let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+                let nrm = egui::vec2(a.y - b.y, b.x - a.x).normalized();
+                nrm.dot(p - a) * nrm.dot(centre - a).signum()
+            })
+            .collect()
+    }
+
+    /// Issue #731: the dimming is the photo minus the crop box at any angle. Every point of the
+    /// photo outside the box lies in exactly one of the mesh's triangles; no point inside the box
+    /// or outside the photo lies in any. (Four quads joining photo and box corners crossed and
+    /// overlapped once the box was rotated.)
+    #[test]
+    fn the_dimming_outside_a_rotated_crop_is_exactly_the_photo_minus_the_box() {
+        let img = Rect::from_min_max(pos2(100.0, 50.0), pos2(500.0, 650.0));
+        // boxes inside the photo, poking out of it, and bigger than it
+        for (w, h) in [(240.0, 360.0), (420.0, 300.0), (700.0, 900.0)] {
+            for angle in [0.0f32, 5.0, 15.0, 30.0, -45.0, 90.0, 137.0, 200.0] {
+                let quad = box_at(img.center() + egui::vec2(30.0, -20.0), w, h, angle);
+                let mesh = outside_crop_mesh(img, &quad, Color32::BLACK);
+                let tris: Vec<[Pos2; 3]> = mesh
+                    .indices
+                    .chunks(3)
+                    .map(|t| [mesh.vertices[t[0] as usize].pos, mesh.vertices[t[1] as usize].pos, mesh.vertices[t[2] as usize].pos])
+                    .collect();
+                let (mut inside, mut outside) = (0, 0);
+                let mut y = img.top() - 20.0;
+                while y < img.bottom() + 20.0 {
+                    let mut x = img.left() - 20.0;
+                    while x < img.right() + 20.0 {
+                        let p = pos2(x, y);
+                        let in_box = sides(&quad, p);
+                        let in_img = sides(&[img.left_top(), img.right_top(), img.right_bottom(), img.left_bottom()], p);
+                        // a pixel on an edge may fall either way: skip the boundaries themselves
+                        if in_box.iter().chain(&in_img).any(|d| d.abs() < 1.0) {
+                            x += 7.0;
+                            continue;
+                        }
+                        let expected = if in_img.iter().all(|d| *d > 0.0) && !in_box.iter().all(|d| *d > 0.0) { 1 } else { 0 };
+                        // a sample on the seam between two of a strip's fan triangles is in both
+                        // or in neither, depending on rounding: count it both ways
+                        let covered = |eps: f32| tris.iter().filter(|t| sides(*t, p).iter().all(|d| *d > eps)).count();
+                        let (at_least, at_most) = (covered(0.01), covered(-0.01));
+                        assert!(
+                            at_least <= expected && expected <= at_most,
+                            "{w}×{h} box at {angle}°: ({x}, {y}) lies in {at_least}..={at_most} triangle(s), not {expected}"
+                        );
+                        if expected == 1 {
+                            outside += 1
+                        } else if in_img.iter().all(|d| *d > 0.0) {
+                            inside += 1
+                        }
+                        x += 7.0;
+                    }
+                    y += 7.0;
+                }
+                // (a box bigger than the photo swallows it whole at some angles)
+                assert!(inside > 50 && (outside > 50 || w > img.width()), "{w}×{h} at {angle}°: {outside} dimmed, {inside} clear samples");
+            }
+        }
+    }
+
+    /// A flat or broken box dims nothing rather than something arbitrary (or panicking).
+    #[test]
+    fn a_degenerate_crop_box_dims_nothing() {
+        let img = Rect::from_min_max(pos2(0.0, 0.0), pos2(400.0, 300.0));
+        let point = [pos2(10.0, 10.0); 4];
+        let line = [pos2(10.0, 10.0), pos2(90.0, 10.0), pos2(90.0, 10.0), pos2(10.0, 10.0)];
+        let nan = [pos2(f32::NAN, 10.0), pos2(90.0, 10.0), pos2(90.0, 50.0), pos2(10.0, 50.0)];
+        for quad in [point, line, nan] {
+            assert!(outside_crop_mesh(img, &quad, Color32::BLACK).indices.is_empty(), "{quad:?}");
+        }
+        assert!(outside_crop_mesh(Rect::NAN, &box_at(pos2(50.0, 50.0), 20.0, 20.0, 10.0), Color32::BLACK).indices.is_empty());
+    }
 
     /// Issue #652: a native host reports the GPU's texture limit in the first frame's input only.
     /// The loupe must still know it in every later frame (it read the raw input, found nothing and

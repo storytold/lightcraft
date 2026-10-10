@@ -364,3 +364,41 @@ fn the_angle_field_writes_the_angle_like_the_readout() {
     let field = texts.iter().position(|t| t == "Angle").and_then(|i| texts.get(i + 1));
     assert_eq!(field.map(String::as_str), Some("+2.50"), "{texts:?}");
 }
+
+/// Issue #731: the dimming outside a rotated crop box stays outside it. The photo is shown
+/// unrotated under the box, so a pixel inside the box at -45° looks exactly as it does at 0°,
+/// where the box is the whole photo and nothing is dimmed; the photo's corner, outside the
+/// box, is darker. (The dimming was four quads joining photo and box corners, which crossed the
+/// box once rotated: dimmed wedges inside it, doubly dark ones outside, growing with the angle.)
+#[test]
+fn rotating_the_crop_dims_nothing_inside_the_box() {
+    let mut h = crop_tool();
+    let plain = h.paint();
+    let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "crop.angle", "value": -45.0}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(angle(&h), -45.0);
+    let rotated = h.paint();
+    let img = h.app.image_rect.expect("the photo on screen");
+    let corner = |i: usize| h.app.widgets.iter().find(|(w, _)| *w == format!("cropHandle:{i}")).map(|(_, r)| r.center()).expect("a corner handle");
+    let c = [corner(0), corner(1), corner(2), corner(3)];
+    let at = |u: f32, v: f32| c[0] + (c[1] - c[0]) * u + (c[3] - c[0]) * v;
+    let pixel = |im: &egui::ColorImage, p: egui::Pos2| im.pixels[p.y.round() as usize * im.size[0] + p.x.round() as usize];
+    let mut checked = 0;
+    for u in [0.15, 0.25, 0.5, 0.75, 0.85] {
+        for v in [0.15, 0.25, 0.5, 0.75, 0.85] {
+            let p = at(u, v);
+            // clear of the 0° guide lines (thirds of the photo) and of the photo's edge
+            let thirds = |t: f32, lo: f32, len: f32| [1.0 / 3.0, 2.0 / 3.0].iter().any(|f| (t - (lo + f * len)).abs() < 3.0);
+            if !img.shrink(4.0).contains(p) || thirds(p.x, img.left(), img.width()) || thirds(p.y, img.top(), img.height()) {
+                continue;
+            }
+            assert_eq!(pixel(&rotated, p), pixel(&plain, p), "inside the box at ({u}, {v}) = {p:?}");
+            checked += 1;
+        }
+    }
+    assert!(checked >= 12, "{checked} points inside the box compared");
+    let corner_px = img.left_top() + egui::vec2(6.0, 6.0);
+    let lum = |c: egui::Color32| u32::from(c.r()) + u32::from(c.g()) + u32::from(c.b());
+    assert!(lum(pixel(&rotated, corner_px)) < lum(pixel(&plain, corner_px)), "the photo's corner, outside the box, is dimmed");
+}
