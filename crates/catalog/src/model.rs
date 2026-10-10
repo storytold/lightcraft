@@ -475,6 +475,21 @@ pub struct Album {
 }
 
 impl Album {
+    /// The album without its photos: what it is, where it is and what it tests.
+    pub(crate) fn outline(&self) -> Album {
+        Album {
+            id: self.id,
+            name: self.name.clone(),
+            parent: self.parent,
+            folder: self.folder,
+            photos: Vec::new(),
+            cover: None,
+            smart: self.smart.clone(),
+            quick: self.quick,
+            order: self.order,
+        }
+    }
+
     /// A regular (manual) album.
     pub fn new(id: AlbumId, name: impl Into<String>) -> Album {
         Album { id, name: name.into(), parent: None, folder: false, photos: Vec::new(), cover: None, smart: None, quick: false, order: None }

@@ -435,10 +435,12 @@ impl Session {
 
     // ---------------------------------------------------------------- ops, undo
 
-    /// Apply an op as one undoable step.
+    /// Apply an op as one undoable step. A new edit: one that would make a smart album include
+    /// itself is refused here, whichever command asked ([`Catalog::apply_new`]); undo, redo and
+    /// opening a library bring back what was and are not held to that.
     pub fn commit(&mut self, label: &str, op: Op) -> Result<()> {
         let fwd = op.clone();
-        let inv = self.catalog.apply(op)?;
+        let inv = self.catalog.apply_new(op)?;
         self.pending_log.push(fwd);
         self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None });
         self.commits = self.commits.wrapping_add(1);
@@ -760,7 +762,9 @@ impl Session {
                 && self.sort.key == lightcraft_catalog::SortKey::CaptureDate
                 && let LibrarySource::Album(a) = self.source
                 && let Some(al) = self.catalog.album(a)
+                // an album's own order; a smart album and a folder of albums have none
                 && !al.is_smart()
+                && !al.folder
                 && self.filter == Filter::default()
             {
                 let order = al.photos.clone();
@@ -864,6 +868,10 @@ pub fn json_delta(old: &Value, new: &Value) -> Option<Value> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_album_folder_source;
+#[cfg(test)]
+mod tests_album_loops;
 #[cfg(test)]
 mod tests_album_order;
 #[cfg(test)]

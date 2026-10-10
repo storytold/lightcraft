@@ -220,6 +220,63 @@ fn sidebar_sections_collapse_and_remember_it() {
     assert!(!h.app.ui.sidebar_section_collapsed("albums"), "the plus does not fold Albums");
 }
 
+/// A folder of albums is a source (a collection set in Lightroom Classic): given a folder whose
+/// albums share a photo, when its row is clicked, then the grid shows their photos once each
+/// under the folder's name, and the row stays open; only the triangle folds it. A folder with
+/// nothing in it can be shown too, and shows nothing.
+#[test]
+fn clicking_an_album_folder_shows_the_photos_of_its_albums() {
+    use lightcraft_catalog::AlbumId;
+    use lightcraft_engine::LibrarySource;
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(4).map(|p| p.0).collect();
+    let all = h.app.session.visible_cloned().len();
+    let make = |h: &mut Headless, params: serde_json::Value| h.app.session.execute("album.create", &params).unwrap()["id"].as_u64().unwrap();
+    let trips = make(&mut h, json!({"name": "Trips", "folder": true}));
+    let rome = make(&mut h, json!({"name": "Rome", "parent": trips}));
+    let paris = make(&mut h, json!({"name": "Paris", "parent": trips}));
+    let empty = make(&mut h, json!({"name": "Empty", "folder": true}));
+    h.app.session.selection.ids = ids.iter().map(|i| lightcraft_catalog::PhotoId(*i)).collect();
+    h.app.session.execute("album.addPhotos", &json!({"id": rome, "ids": [ids[0], ids[1]]})).unwrap();
+    h.app.session.execute("album.addPhotos", &json!({"id": paris, "ids": [ids[1], ids[2]]})).unwrap();
+    h.step();
+    h.step();
+    assert!(all > 3, "the demo library holds more than the folder will");
+    // the triangle only folds: the grid still shows All Photos
+    click(&mut h, &format!("albumToggle:{trips}"));
+    assert!(!has(&h, &format!("source:album:{rome}")), "folded");
+    assert_eq!(h.app.session.source, LibrarySource::All);
+    click(&mut h, &format!("albumToggle:{trips}"));
+    assert_eq!(h.app.session.source, LibrarySource::All);
+    // the row is the source; what is inside stays listed
+    click(&mut h, &format!("source:folder:{trips}"));
+    assert_eq!(h.app.session.source, LibrarySource::Album(AlbumId(trips)));
+    let mut shown: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    shown.sort_unstable();
+    let mut want = ids[..3].to_vec();
+    want.sort_unstable();
+    assert_eq!(shown, want, "the shared photo once, the fourth photo not at all");
+    assert_eq!(crate::i18n::source_title(&h.app.session), "Trips");
+    assert!(has(&h, &format!("source:album:{rome}")) && has(&h, &format!("source:album:{paris}")), "a click doesn't fold it");
+    // folded, it is still what the grid shows
+    click(&mut h, &format!("albumToggle:{trips}"));
+    assert!(!has(&h, &format!("source:album:{rome}")), "folded");
+    assert_eq!(h.app.session.source, LibrarySource::Album(AlbumId(trips)));
+    assert_eq!(h.app.session.visible_cloned().len(), 3);
+    click(&mut h, &format!("albumToggle:{trips}"));
+    // an album inside is still its own source
+    click(&mut h, &format!("source:album:{rome}"));
+    assert_eq!(h.app.session.source, LibrarySource::Album(AlbumId(rome)));
+    assert_eq!(h.app.session.visible_cloned().len(), 2);
+    // a folder with nothing in it: no triangle, and nothing to show
+    click(&mut h, &format!("source:folder:{empty}"));
+    assert_eq!(h.app.session.source, LibrarySource::Album(AlbumId(empty)));
+    assert!(h.app.session.visible_cloned().is_empty());
+    // and back
+    click(&mut h, &format!("source:folder:{trips}"));
+    assert_eq!(h.app.session.visible_cloned().len(), 3);
+}
+
 /// Albums nest in folders like the other sidebar trees: a folder row has a disclosure triangle
 /// (`albumToggle:<id>`), plain albums have none, and folding a folder hides what is inside it.
 #[test]
@@ -440,6 +497,28 @@ impl AlbumTree {
         let (from, to) = (self.row(id).center(), self.row(onto).center());
         self.drag(from, &[(to, 3)]);
     }
+}
+
+/// Given a smart album that shows a folder (its view, saved), when it is dragged onto that folder
+/// or one inside it, then nothing happens (it would include itself, so the folder is no place to
+/// drop it: no outline, no refusal to read); another folder takes it.
+#[test]
+fn a_smart_album_cant_be_dropped_on_the_folder_it_shows() {
+    let mut t = album_tree();
+    t.h.app.session.execute("library.source", &json!({"kind": "album", "id": t.trips})).unwrap();
+    let view = t.h.app.session.execute("album.createSmart", &json!({"name": "Trips view"})).unwrap()["id"].as_u64().unwrap();
+    t.h.step();
+    t.h.step();
+    let steps = t.h.app.session.undo.len();
+    for folder in [t.trips, t.sub] {
+        t.drag_row(view, folder);
+        assert_eq!(t.parent(view), None);
+        assert!(t.h.app.ui.toast.is_none(), "not a drop at all: {:?}", t.h.app.ui.toast);
+        assert!(t.h.app.ui.dragging_album.is_none(), "the drag ended");
+    }
+    assert_eq!(t.h.app.session.undo.len(), steps);
+    t.drag_row(view, t.archive);
+    assert_eq!(t.parent(view), Some(t.archive));
 }
 
 /// Given albums and folders in the sidebar, when an album or folder is dragged onto a folder,

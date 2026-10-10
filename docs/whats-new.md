@@ -11,6 +11,21 @@
 - Quitting while a task that can be stopped is running asks first ("Quit Anyway" stops it).
 - Agents list and stop tasks with `activity.list` and `activity.cancel`; `ui.inspect` reports them as `activity`.
 
+### Folders of albums
+- Clicking a folder in the sidebar's Albums section shows the photos of every album and smart album inside it,
+  folders inside it included, each photo once, as a collection set does in Lightroom Classic. The grid is titled with
+  the folder's name and follows the sort and the filter bar. The triangle beside the folder opens and closes it; a
+  click on the row no longer does.
+- A folder's view can be saved as a smart album that follows the folder, also after its rules are edited (editing
+  the rules of a saved album view used to drop the album). It can't be made in, or moved into, the folder it shows
+  (it would include itself): that folder is no drop target and isn't offered under Move to, and commands say why.
+- No edit can make a smart album include itself any more, whichever command, importer or task makes it: the library
+  itself refuses it and names the album. A library that already holds such a loop still opens; each album on the loop
+  is marked ⚠ and holds nothing (it used to hold different photos depending on which album was looked at first, and
+  many of them in one folder made the folder slow to show), and moving it out or changing its rules mends it.
+- Agents show a folder with `library.source {"kind": "album", "id": <folder id>}`; `albums.list` reports a folder's
+  `count`.
+
 ### Smart album rules
 - The rule editor's field menu is grouped: Rating, Pick Flag, Color Label and Any Searchable Text at the top, then
   submenus for Source, File, Date, Keywords & People, Description, Camera Info, Location, Size, Develop and Assisted
