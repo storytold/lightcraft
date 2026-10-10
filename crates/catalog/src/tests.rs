@@ -683,8 +683,30 @@ fn undated_photos_group_under_unknown_date_and_sort_together() {
 }
 
 #[test]
-fn new_ids_are_random_and_in_json_safe_range() {
+fn new_catalog_allocates_sequential_ids() {
     let mut c = Catalog::new();
+    assert_eq!([c.alloc_photo_id(), c.alloc_photo_id(), c.alloc_photo_id()], [PhotoId(1), PhotoId(2), PhotoId(3)]);
+    assert_eq!([c.alloc_album_id(), c.alloc_album_id()], [AlbumId(1), AlbumId(2)]);
+    assert_eq!([c.alloc_stack_id(), c.alloc_stack_id()], [StackId(1), StackId(2)]);
+    assert!(!c.random_ids());
+}
+
+#[test]
+fn sequential_allocation_continues_after_a_reload() {
+    let mut c = Catalog::new();
+    for name in ["a.jpg", "b.jpg"] {
+        photo(&mut c, name, "2026-04-01T10:00:00");
+    }
+    let mut back = Catalog::from_snapshot(&c.to_snapshot()).unwrap();
+    assert_eq!(back.alloc_photo_id(), PhotoId(3));
+    assert_eq!(back.alloc_album_id(), AlbumId(1));
+}
+
+#[test]
+fn random_ids_are_opt_in_and_in_json_safe_range() {
+    let mut c = Catalog::new();
+    c.use_random_ids();
+    assert!(c.random_ids());
     let a = photo(&mut c, "a.jpg", "2026-04-01T10:00:00");
     let b = photo(&mut c, "b.jpg", "2026-04-01T10:00:00");
     assert_ne!(a, b);
@@ -696,9 +718,20 @@ fn new_ids_are_random_and_in_json_safe_range() {
 }
 
 #[test]
+fn switching_back_to_sequential_resumes_the_counters() {
+    let mut c = Catalog::new();
+    photo(&mut c, "a.jpg", "2026-04-01T10:00:00");
+    c.use_random_ids();
+    c.use_sequential_ids();
+    assert!(!c.random_ids());
+    assert_eq!(c.alloc_photo_id(), PhotoId(2));
+}
+
+#[test]
 fn ids_allocated_before_applying_are_distinct() {
     // Import allocates every id of a batch before applying it.
     let mut c = Catalog::new();
+    c.use_random_ids();
     let ids: std::collections::BTreeSet<PhotoId> = (0..1000).map(|_| c.alloc_photo_id()).collect();
     assert_eq!(ids.len(), 1000);
 }
@@ -711,6 +744,7 @@ fn counter_id_library_keeps_working() {
         let p = Photo::new(PhotoId(n), Source::Demo { scene: 1 }, "x.jpg", "JPEG", 10, 10, "2026-09-30T10:00:00");
         c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
+    c.use_random_ids();
     let new = photo(&mut c, "new.jpg", "2026-04-01T10:00:00");
     assert!(!(1..=3).contains(&new.0));
     assert_eq!(c.photos().count(), 4);
@@ -732,6 +766,7 @@ fn seeded_catalog_redraws_an_id_already_in_use() {
 #[test]
 fn id_generator_is_not_serialized() {
     let mut c = Catalog::new();
+    c.use_random_ids();
     photo(&mut c, "a.jpg", "2026-04-01T10:00:00");
     let json = serde_json::to_string(&c).unwrap();
     assert!(!json.contains("\"ids\""), "{json}");
