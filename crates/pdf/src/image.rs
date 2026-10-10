@@ -58,6 +58,11 @@ impl Image {
     /// Checks sizes, depth and component counts; returns what the writer needs.
     pub(crate) fn validate(&self) -> Result<Checked, PdfError> {
         let n = self.color.components();
+        // an ICC profile has 1 (gray), 3 (RGB/Lab) or 4 (CMYK) channels: anything else can't be
+        // written (and the PDF writer asserts on it)
+        if !matches!(n, 1 | 3 | 4) {
+            return Err(PdfError::Image(format!("an ICC colour space with {n} components (1, 3 or 4 supported)")));
+        }
         let (width, height, bits, adobe_inverted) = match &self.data {
             ImageData::Jpeg(b) => {
                 let info = jpeg_info(b)?;
