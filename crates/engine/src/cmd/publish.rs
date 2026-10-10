@@ -85,7 +85,7 @@ fn services(s: &Session) -> Result<Value> {
 
 /// Check a service's settings and export params.
 fn check(kind: &str, settings: &Value, export: &Value, c: &str) -> Result<()> {
-    if !dac_publish::KINDS.contains(&kind) {
+    if !dac_publish::KINDS.contains(&kind) && !plugin_kind(kind) {
         return Err(bad(c, format!("unknown kind `{kind}` (known: {})", dac_publish::KINDS.join(", "))));
     }
     if kind == dac_publish::KIND_HARD_DRIVE {
@@ -353,7 +353,7 @@ impl Plan {
             failed: self.failed,
             cancelled: false,
         };
-        let mut svc = match dac_publish::open_service(&self.service, &self.collection) {
+        let mut svc = match open_any(&self.service, &self.collection) {
             Ok(x) => x,
             Err(e) => {
                 out.failed.extend(self.jobs.iter().map(|j| (j.photo, e.to_string())));
@@ -457,7 +457,7 @@ fn comments(s: &mut Session, p: &Value) -> Result<Value> {
     let Some(link) = s.catalog.remote_links().get(&(id, dac_publish::SERVICE.to_string(), acct)).cloned() else {
         return Ok(json!({"comments": [], "supported": true, "published": false}));
     };
-    let mut service = dac_publish::open_service(&svc, &coll).map_err(|e| bad(C, e.to_string()))?;
+    let mut service = open_any(&svc, &coll).map_err(|e| bad(C, e.to_string()))?;
     let caps = service.capabilities();
     let list = service.comments(&link.remote_id).map_err(|e| bad(C, e.to_string()))?;
     Ok(json!({"comments": list, "supported": caps.comments, "published": true}))
@@ -542,6 +542,26 @@ pub fn specs() -> Vec<CommandSpec> {
             "{collection: albumId, id?: photo (default active)} → {comments: [{author, text, date}], supported, published}",
             always, comments),
     ]
+}
+
+// P4.3: plug-in publish services (`plugin:<id>` kinds, see `cmd::plugins`).
+#[cfg(not(target_arch = "wasm32"))]
+fn plugin_kind(kind: &str) -> bool {
+    super::plugins::is_plugin_kind(kind)
+}
+#[cfg(target_arch = "wasm32")]
+fn plugin_kind(_: &str) -> bool {
+    false
+}
+fn open_any(
+    svc: &dac_publish::ServiceConfig,
+    coll: &dac_publish::CollectionConfig,
+) -> std::result::Result<Box<dyn dac_publish::PublishService>, dac_publish::PublishError> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(r) = super::plugins::open_plugin_service(svc) {
+        return r;
+    }
+    dac_publish::open_service(svc, coll)
 }
 
 #[cfg(test)]

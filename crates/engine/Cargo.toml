@@ -64,6 +64,7 @@ rawnind-model = ["denoise", "dac-denoise/rawnind-model", "dac-denoise-core/rawni
 dac-heif = { workspace = true, features = ["testdata"] }
 libc = { workspace = true }
 dac-tiff = { workspace = true }
+wat = "1.228" # P4.3: plug-in test modules
 
 [target.'cfg(windows)'.dependencies]
 # free space on Windows (the Folders panel); its own unsafe FFI stays inside the crate

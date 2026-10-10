@@ -60,7 +60,7 @@ fn run(bytes: &[u8], limits: Limits) -> (dac_plugins::Result<Value>, Duration) {
     let mut m = Manager::in_memory();
     m.set_limits(limits.clone());
     let r = Plugin::load(bytes, limits).and_then(|_| {
-        m.install_bytes(bytes, None)?;
+        m.install_bytes(bytes, Some(all()))?;
         m.run_command("test.plugin", "go", &json!({}), &[], &mut NoHost)
     });
     (r, t.elapsed())
@@ -84,7 +84,7 @@ fn host_calls_follow_the_grant() {
     }
     let bytes = forward(r#"{"method":"catalog.stats","params":{}}"#);
     let mut m = Manager::in_memory();
-    m.install_bytes(&bytes, None).unwrap();
+    m.install_bytes(&bytes, Some(all())).unwrap();
     // the plug-in returns the host's reply envelope as its own
     assert_eq!(m.run_command("test.plugin", "go", &json!({}), &[], &mut Cat).unwrap(), json!({"photos": 3}));
     m.set_grant("test.plugin", Permissions::default()).unwrap();
@@ -149,8 +149,24 @@ fn dialog_arguments_are_checked() {
     let manifest = r#"{"id":"test.plugin","name":"Test","commands":[{"id":"go","label":"Go","dialog":[{"key":"n","label":"N","type":"number","min":0,"max":1,"default":0.5}]}]}"#;
     let bytes = module(manifest, 1, "(i64.or (i64.shl (i64.const 2) (i64.const 32)) (i64.const 8192))", "", "{}");
     let mut m = Manager::in_memory();
-    m.install_bytes(&bytes, None).unwrap();
+    m.install_bytes(&bytes, Some(all())).unwrap();
     assert!(m.run_command("test.plugin", "go", &json!({"n": "x"}), &[], &mut NoHost).is_err());
     assert!(m.run_command("test.plugin", "nope", &json!({}), &[], &mut NoHost).is_err());
     assert!(m.run_command("test.plugin", "go", &json!({"n": 7}), &[], &mut NoHost).is_ok());
+}
+
+fn all() -> Permissions {
+    Permissions { catalog: true, metadata_write: true, ..Default::default() }
+}
+
+#[test]
+fn install_grants_only_what_was_approved_and_updates_gain_nothing() {
+    let bytes = forward(r#"{"method":"catalog.stats","params":{}}"#);
+    let mut m = Manager::in_memory();
+    assert!(m.install_bytes(&bytes, None).unwrap().effective().is_empty(), "nothing approved, nothing granted");
+    m.set_grant("test.plugin", all()).unwrap();
+    // an update without a new approval keeps the old grant, never more
+    let v2 = module(&MANIFEST.replace(r#""catalog":true"#, r#""catalog":true,"metadataWrite":true"#), 1, "(i64.const 0)", "", "");
+    let g = m.install_bytes(&v2, None).unwrap().effective();
+    assert_eq!(g, Permissions { catalog: true, ..Default::default() });
 }

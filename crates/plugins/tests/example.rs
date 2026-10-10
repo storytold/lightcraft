@@ -62,7 +62,7 @@ fn example_plugin_end_to_end() {
     let Some(wasm) = build_example() else { return };
     let dir = temp("example");
     let mut m = Manager::open(&dir).unwrap();
-    let info = m.install_bytes(&wasm, None).unwrap().info();
+    let info = m.install_bytes(&wasm, Some(Permissions { catalog: true, ..Default::default() })).unwrap().info();
     assert_eq!(info["id"], "org.example.catalog-tools");
     assert_eq!(info["granted"]["catalog"], true);
     let id = "org.example.catalog-tools";

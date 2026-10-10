@@ -127,7 +127,10 @@ fn inspect_file(_: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad(C, "missing `path`"))?;
     let bytes = std::fs::read(path).map_err(|e| bad(C, format!("{path}: {e}")))?;
     let plugin = dac_plugins::Plugin::load(&bytes, dac_plugins::Limits::default()).map_err(|e| plugin_err(C, e))?;
-    serde_json::to_value(plugin.manifest()).map_err(|e| bad(C, e.to_string()))
+    let manifest = serde_json::to_value(plugin.manifest()).map_err(|e| bad(C, e.to_string()))?;
+    // an update: what is granted now, so the dialog can show what the new version adds
+    let installed = with_manager(|m| Ok(m.get(plugin.id()).map(|i| json!({"version": i.plugin.manifest().version, "granted": i.effective()}))))?;
+    Ok(json!({"manifest": manifest, "installed": installed}))
 }
 
 fn uninstall(_: &mut Session, p: &Value) -> Result<Value> {
@@ -206,15 +209,107 @@ fn post_export(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn services(_: &mut Session, _: &Value) -> Result<Value> {
     with_manager(|m| {
-        Ok(Value::Array(m.publish_services().into_iter().map(|(plugin, s)| json!({"plugin": plugin, "id": s.id, "name": s.name})).collect()))
+        Ok(Value::Array(
+            m.publish_services()
+                .into_iter()
+                .map(|(plugin, s)| json!({"kind": format!("{KIND_PREFIX}{plugin}"), "plugin": plugin, "id": s.id, "name": s.name}))
+                .collect(),
+        ))
     })
+}
+
+/// Publish-service kinds of plug-ins: `plugin:<plugin id>`.
+pub const KIND_PREFIX: &str = "plugin:";
+
+/// Is `kind` an installed, enabled plug-in publish service?
+pub fn is_plugin_kind(kind: &str) -> bool {
+    kind.strip_prefix(KIND_PREFIX).is_some_and(|id| manager().as_ref().is_some_and(|m| m.publish_services().iter().any(|(p, _)| p == id)))
+}
+
+/// Opens a `plugin:<id>` service; `None` for other kinds (the built-in ones).
+pub fn open_plugin_service(
+    svc: &dac_publish::ServiceConfig,
+) -> Option<std::result::Result<Box<dyn dac_publish::PublishService>, dac_publish::PublishError>> {
+    let id = svc.kind.strip_prefix(KIND_PREFIX)?;
+    if !is_plugin_kind(&svc.kind) {
+        return Some(Err(dac_publish::PublishError::Config(format!("plug-in {id} is not installed, enabled, or a publish service"))));
+    }
+    let dir =
+        std::env::temp_dir().join(format!("plugin-publish-{}-{}", std::process::id(), svc.id.replace(|c: char| !c.is_ascii_alphanumeric(), "_")));
+    Some(Ok(Box::new(PluginService { plugin: id.to_string(), dir })))
+}
+
+/// A plug-in's publish service as a [`dac_publish::PublishService`]: each rendered photo is
+/// written to a private temporary file, lent to the plug-in's `publish.upload` call, then deleted.
+pub struct PluginService {
+    plugin: String,
+    dir: PathBuf,
+}
+
+fn pub_err(e: dac_plugins::Error) -> dac_publish::PublishError {
+    dac_publish::PublishError::Service(e.to_string())
+}
+
+impl dac_publish::PublishService for PluginService {
+    fn kind(&self) -> &'static str {
+        "plugin"
+    }
+
+    fn publish(&mut self, up: &dac_publish::Upload<'_>) -> std::result::Result<dac_publish::Published, dac_publish::PublishError> {
+        use dac_plugins::publish::{PluginPublisher, PublishItem, PublishProvider};
+        let io = |e: std::io::Error| dac_publish::PublishError::Io(e.to_string());
+        std::fs::create_dir_all(&self.dir).map_err(io)?;
+        // only the file name, never a path the export settings could smuggle in
+        let name: String = up.file_name.rsplit(['/', '\\']).next().unwrap_or("photo").chars().filter(|c| !c.is_control()).take(200).collect();
+        let name = if name.is_empty() || name == "." || name == ".." { "photo".to_string() } else { name };
+        let path = self.dir.join(name);
+        std::fs::write(&path, up.bytes).map_err(io)?;
+        let item = PublishItem {
+            path: path.display().to_string(),
+            photo: up.photo.0.to_string(),
+            remote_id: up.previous.map(str::to_string),
+            ..Default::default()
+        };
+        let r = {
+            let mut g = manager();
+            let m = g.get_or_insert_with(Manager::in_memory);
+            PluginPublisher::new(m, &self.plugin).and_then(|mut p| p.upload(&mut dac_plugins::NoHost, &item))
+        };
+        let _ = std::fs::remove_file(&path);
+        r.map(|r| dac_publish::Published { remote_id: r.remote_id }).map_err(pub_err)
+    }
+
+    fn remove(&mut self, remote_id: &str) -> std::result::Result<(), dac_publish::PublishError> {
+        use dac_plugins::publish::{PluginPublisher, PublishProvider};
+        let mut g = manager();
+        let m = g.get_or_insert_with(Manager::in_memory);
+        PluginPublisher::new(m, &self.plugin).and_then(|mut p| p.delete(&mut dac_plugins::NoHost, remote_id)).map_err(pub_err)
+    }
+}
+
+impl Drop for PluginService {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// After an export finished: runs the enabled export hooks on the written files (`[{path, …}]`).
+/// `None` when no plug-in has an export hook (nothing ran).
+pub fn after_export(s: &mut Session, files: &[Value]) -> Option<Vec<Value>> {
+    let any = manager().as_ref().is_some_and(|m| m.list().any(|p| p.enabled && p.plugin.manifest().hooks.export));
+    let files: Vec<Value> = files.iter().filter(|f| f.get("path").and_then(Value::as_str).is_some()).cloned().collect();
+    if !any || files.is_empty() {
+        return None;
+    }
+    let mut host = SessionHost(s);
+    with_manager(|m| Ok(m.post_export(&files, &mut host))).ok()
 }
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "plugin.list", "Plug-ins", [], None, "{} → {dir, plugins: [{id, name, version, enabled, requested, granted, commands, hooks, publish}], failed}", always, list),
-        cmd!(query "plugin.inspectFile", "Inspect Plug-in File", [], None, "{path} — loads a .wasm without installing it → its manifest (the install dialog shows the requested permissions)", always, inspect_file),
-        cmd!(query "plugin.install", "Install Plug-in", [], None, "{path: .wasm, grant?: {catalog, metadataWrite, network: [hosts], fs: [{path, write}]}} — installs or updates; grant defaults to everything requested → plugin", always, install),
+        cmd!(query "plugin.inspectFile", "Inspect Plug-in File", [], None, "{path} — loads a .wasm without installing it → {manifest, installed: {version, granted} | null}; the install dialog shows each requested permission for approval", always, inspect_file),
+        cmd!(query "plugin.install", "Install Plug-in", [], None, "{path: .wasm, grant?: {catalog, metadataWrite, network: [hosts], fs: [{path, write}]}} — installs or updates with the permissions the user approved (each one shown first, see plugin.inspectFile); without `grant` nothing new is granted: none on a first install, the previous grant on an update → plugin", always, install),
         cmd!(query "plugin.uninstall", "Remove Plug-in", [], None, "{id} — removes the module and its data", always, uninstall),
         cmd!(query "plugin.enable", "Enable Plug-in", [], None, "{id, enabled?: bool = true}", always, enable),
         cmd!(query "plugin.grant", "Set Plug-in Permissions", [], None, "{id, grant} — replaces the grant (revokes what it leaves out; never more than requested) → granted", always, set_grant),
@@ -223,13 +318,51 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "plugin.run", "Run Plug-in Command", [], None, "{plugin, command, args?: dialog values, ids?} — runs a plug-in menu command on ids / the selection → its result", always, run),
         cmd!(query "plugin.suggestMetadata", "Suggest Metadata (Plug-ins)", [], None, "{ids?} — asks metadata providers about the photos → [{plugin, ok: {suggestions}} | {plugin, error}]; writes nothing", always, suggest),
         cmd!(query "plugin.postExport", "Run Export Hooks", [], None, "{files: [{path, photo?}]} — runs plug-in export post-process hooks on exported files → [{plugin, ok|error}]", always, post_export),
-        cmd!(query "plugin.publishServices", "Plug-in Publish Services", [], None, "{} → [{plugin, id, name}]", always, services),
+        cmd!(query "plugin.publishServices", "Plug-in Publish Services", [], None, "{} → [{kind: plugin:<id> (a publish.addService kind), plugin, id, name}]", always, services),
     ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A plug-in publish service whose upload answers `{remoteId: "r1"}` and whose export hook
+    /// answers `{seen: true}`.
+    fn publisher_module() -> Vec<u8> {
+        let manifest = r#"{"id":"test.pub","name":"Pub","hooks":{"export":true},"publish":{"id":"p","name":"P"}}"#;
+        let reply = r#"{"ok":{"remoteId":"r1","seen":true}}"#;
+        let esc = |s: &str| s.replace('"', "\\\"");
+        let src = format!(
+            r#"(module (memory (export "memory") 2)
+  (data (i32.const 16) "{m}") (data (i32.const 8192) "{r}")
+  (func (export "dac_abi_version") (result i32) (i32.const 1))
+  (func (export "dac_manifest") (result i64) (i64.or (i64.shl (i64.const {ml}) (i64.const 32)) (i64.const 16)))
+  (func (export "dac_alloc") (param i32) (result i32) (i32.const 65536))
+  (func (export "dac_handle") (param i32 i32) (result i64) (i64.or (i64.shl (i64.const {rl}) (i64.const 32)) (i64.const 8192))))"#,
+            m = esc(manifest),
+            r = esc(reply),
+            ml = manifest.len(),
+            rl = reply.len()
+        );
+        wat::parse_str(&src).unwrap()
+    }
+
+    #[test]
+    fn plugin_publish_service_and_export_hook() {
+        manager().get_or_insert_with(Manager::in_memory).install_bytes(&publisher_module(), None).unwrap();
+        assert!(is_plugin_kind("plugin:test.pub"));
+        assert!(!is_plugin_kind("plugin:nope") && !is_plugin_kind("hardDrive"));
+        let svc: dac_publish::ServiceConfig = serde_json::from_value(json!({"id": "svc-9", "kind": "plugin:test.pub", "name": "P"})).unwrap();
+        let mut service = open_plugin_service(&svc).unwrap().unwrap();
+        let up = dac_publish::Upload { photo: dac_catalog::PhotoId(7), file_name: "../evil/a.jpg", bytes: b"jpeg", sidecars: &[], previous: None };
+        assert_eq!(service.publish(&up).unwrap().remote_id, "r1");
+        service.remove("r1").unwrap();
+        let mut s = Session::with_demo();
+        let r = after_export(&mut s, &[json!({"path": "/tmp/x.jpg"})]).unwrap();
+        assert!(r.iter().any(|v| v["plugin"] == "test.pub" && v["ok"]["seen"] == true), "{r:?}");
+        assert!(after_export(&mut s, &[json!({"error": "failed"})]).is_none(), "no written files, no hooks");
+        manager().get_or_insert_with(Manager::in_memory).uninstall("test.pub").unwrap();
+    }
 
     #[test]
     fn plugin_commands_answer_without_plugins() {
@@ -239,7 +372,7 @@ mod tests {
         assert!(s.execute("plugin.run", &json!({"plugin": "nope", "command": "x"})).is_err());
         assert!(s.execute("plugin.install", &json!({"path": "/no/such.wasm"})).is_err());
         assert!(s.execute("plugin.grant", &json!({"id": "nope", "grant": {"bogus": 1}})).is_err());
-        assert!(s.execute("plugin.postExport", &json!({"files": []})).unwrap().as_array().is_some_and(|a| a.is_empty()));
+        assert!(s.execute("plugin.postExport", &json!({"files": []})).unwrap().is_array());
     }
 
     #[test]

@@ -132,12 +132,15 @@ impl Manager {
         self.dir.as_deref()
     }
 
-    /// Installs (or updates) a module. `grant` = what the user allowed on the install dialog;
-    /// `None` grants everything the manifest asks for. The plug-in starts enabled.
+    /// Installs (or updates) a module. `grant` = what the user approved, one by one, on the
+    /// install dialog. `None` grants nothing new: a fresh install gets no permissions, an update
+    /// keeps the previous grant (cut back to what the new version still asks for), so an update
+    /// can never gain a capability without the user approving it. The plug-in starts enabled.
     pub fn install_bytes(&mut self, bytes: &[u8], grant: Option<Permissions>) -> Result<&Installed> {
         let plugin = Plugin::load(bytes, self.limits.clone())?;
         let id = plugin.id().to_string();
-        let grant = grant.unwrap_or_else(|| plugin.manifest().permissions.clone()).intersect(&plugin.manifest().permissions);
+        let previous = self.plugins.get(&id).map(|i| i.grant.clone()).unwrap_or_default();
+        let grant = grant.unwrap_or(previous).intersect(&plugin.manifest().permissions);
         if let Some(dir) = &self.dir {
             write_atomic(&dir.join(format!("{id}.wasm")), bytes)?;
         }
