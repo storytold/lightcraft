@@ -104,6 +104,16 @@
   runs in the background with a row in the activity stack (✕ stops it); everything it does is one undo step, and no file on disk
   is touched. Agents use `folder.scanChanges` and `folder.synchronize`.
 
+### Importing a deleted photo again
+- Importing a file whose photo is in Recently Deleted brings the photo back, with its edits, rating and albums
+  (issue #706; before, the import skipped it as "already in the library" while the grid showed it deleted). The
+  import review checks such files, marks them "Will be restored" and counts them as "in Recently Deleted"; the
+  choice next to that (Restore them / Import as new / Leave them) now starts on Restore. Files dropped on the window
+  restore the photo too and say "Restored 1 photo from Recently Deleted". A deleted photo whose file was moved is
+  relinked to the file it is imported from. Browsing a folder in Local, Auto Import and a Lightroom catalog import
+  never restore anything. Agents: `library.import` → `onDeleted` defaults to `restore` (`skip` keeps the old
+  behaviour, `fresh` imports a clean copy and deletes the old record).
+
 ### Folder colour labels
 - Right-click a folder (or a disk other than the startup disk) in the sidebar's Folders section ▸ Set Color Label ▸ a colour or None. The row
   shows the label's dot before its photo count. Agents use `folder.label` (`path`, `label`); `library.folders`

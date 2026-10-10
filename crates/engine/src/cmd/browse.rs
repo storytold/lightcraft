@@ -39,7 +39,9 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
         v.sort();
         v
     };
-    let report = import_with(s, &files, &ImportOptions { mode: ImportMode::Add, local: true, ..Default::default() })?;
+    // looking at a folder never brings its deleted photos back (importing the files does)
+    let opts = ImportOptions { mode: ImportMode::Add, local: true, on_deleted: crate::import::OnDeleted::Skip, ..Default::default() };
+    let report = import_with(s, &files, &opts)?;
     stamp_browsed(s, &dir_s, &files);
     s.browse = Some(Browse { path: dir_s.clone(), subfolders });
     s.source = LibrarySource::Folder;
