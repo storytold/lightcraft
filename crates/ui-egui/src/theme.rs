@@ -153,7 +153,7 @@ pub fn font_definitions_with_chinese(craft: &'static [lightcraft_engine::CraftFo
     fonts.font_data.insert("Inter-SemiBold".into(), Arc::new(FontData::from_static(include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf"))));
     // Craft-fonts faces in preference order for a family drawn in `style`.
     let fallback = |style: &str| {
-        lightcraft_engine::fonts::cjk_fallback(craft, crate::i18n::language().script(), style)
+        lightcraft_engine::fonts::ui_fallback(craft, crate::i18n::language().script(), style)
             .into_iter()
             .map(craft_font_name)
             .collect::<Vec<String>>()
@@ -268,6 +268,23 @@ pub fn apply(ctx: &egui::Context) {
 mod tests {
     use super::*;
     use crate::i18n::{Locale, set_language};
+
+    /// #736: a Thai folder name drew boxes because only CJK craft-fonts faces were fallbacks. With a
+    /// craft-fonts build that carries a Thai face, an English UI offers it in every family.
+    #[test]
+    fn thai_face_is_a_fallback_in_every_ui_family_when_craft_fonts_carry_one() {
+        let Some(thai) = lightcraft_engine::CRAFT_FONTS.iter().find(|f| f.covers("Thai")) else {
+            eprintln!("no Thai face in craft-fonts: nothing to check");
+            return;
+        };
+        set_language(Locale::En);
+        let definitions = font_definitions(lightcraft_engine::CRAFT_FONTS);
+        let name = craft_font_name(thai);
+        assert!(definitions.font_data.contains_key(&name));
+        for family in [FontFamily::Proportional, FontFamily::Name(FONT_SEMIBOLD.into()), FontFamily::Monospace] {
+            assert!(definitions.families.get(&family).is_some_and(|names| names.contains(&name)), "{family:?} falls back on {name}");
+        }
+    }
 
     #[test]
     fn native_chinese_face_falls_back_after_default_faces() {

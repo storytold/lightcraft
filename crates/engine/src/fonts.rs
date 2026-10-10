@@ -51,11 +51,22 @@ pub fn is_cjk_script(script: &str) -> bool {
     matches!(script, "Hans" | "Hant" | "Jpan" | "Kore" | "Hang" | "Hani" | "Bopo" | "Yiii" | "Nshu" | "Tang")
 }
 
-/// The craft-fonts faces to fall back on for `script`, in preference order: the faces of that script
-/// first (for `style` when asked), then every other CJK face. One CJK face list serves every
-/// language, but Han characters are shared between them: a Chinese reader must get the Chinese
-/// forms and a Japanese reader the Japanese ones, so the active language's own script comes first.
-/// Empty without craft-fonts.
+/// The craft-fonts faces to fall back on for `script`, in preference order: the CJK faces, those of
+/// that script first (for `style` when asked), then the faces of every other non-Latin script
+/// (Thai, Arabic, ...), which file and folder names can contain whatever the interface language.
+/// One CJK face list serves every language, but Han characters are shared between them: a Chinese
+/// reader must get the Chinese forms and a Japanese reader the Japanese ones, so the active
+/// language's own script comes first. The other scripts share no characters, so their order only
+/// prefers `style`. Empty without craft-fonts.
+pub fn ui_fallback<'a>(fonts: &'a [CraftFont], script: &str, style: &str) -> Vec<&'a CraftFont> {
+    let mut faces = cjk_fallback(fonts, script, style);
+    let mut others: Vec<&CraftFont> = fonts.iter().filter(|font| !covers_cjk(font) && font.scripts.iter().any(|s| *s != "Latn")).collect();
+    others.sort_by_key(|font| font.style != style);
+    faces.extend(others);
+    faces
+}
+
+/// The CJK part of [`ui_fallback`], in the same preference order.
 pub fn cjk_fallback<'a>(fonts: &'a [CraftFont], script: &str, style: &str) -> Vec<&'a CraftFont> {
     let mut faces: Vec<&CraftFont> = fonts.iter().filter(|font| covers_cjk(font)).collect();
     faces.sort_by_key(|font| {
@@ -92,6 +103,13 @@ mod tests {
             assert!(ab_glyph::FontRef::try_from_slice(f.bytes).is_ok(), "{} {} parses", f.family, f.style);
         }
         assert!(japanese(CRAFT_FONTS).next().is_some(), "craft-fonts carries Japanese faces");
+        // Every script face that ships is a UI fallback, and has the glyphs of its script (#736).
+        use ab_glyph::Font;
+        for (script, text) in [("Thai", "ภาพถ่ายสวัสดี๑๒๓"), ("Arab", "صورة")] {
+            let Some(face) = ui_fallback(CRAFT_FONTS, "Latn", "Regular").into_iter().find(|f| f.covers(script)) else { continue };
+            let font = ab_glyph::FontRef::try_from_slice(face.bytes).expect("parses");
+            assert!(text.chars().all(|c| font.glyph_id(c).0 != 0), "{} draws {script}", face.family);
+        }
     }
 
     /// Each language's own faces come first, so shared Han keeps the language's forms, and Latin
@@ -111,5 +129,26 @@ mod tests {
         // Every CJK face is still offered to every language.
         assert_eq!(cjk_fallback(FACES, "Hans", "Regular").len(), 3);
         assert_eq!(cjk_fallback(&[], "Hans", "Regular").len(), 0);
+    }
+
+    /// Faces for other scripts (#736: Thai folder names showed boxes) follow the CJK faces in the
+    /// UI fallback whatever the language; a Latin-only face is not a fallback (Inter covers Latin).
+    #[test]
+    fn other_scripts_follow_the_cjk_faces() {
+        static FACES: &[CraftFont] = &[
+            CraftFont { family: "Noto Sans Thai", style: "Regular", scripts: &["Thai", "Latn"], bytes: &[] },
+            CraftFont { family: "Source Sans 3", style: "Regular", scripts: &["Latn"], bytes: &[] },
+            CraftFont { family: "Noto Sans CJK SC", style: "Regular", scripts: &["Hans", "Latn"], bytes: &[] },
+            CraftFont { family: "Noto Sans Arabic", style: "Bold", scripts: &["Arab"], bytes: &[] },
+            CraftFont { family: "Noto Sans Arabic", style: "Regular", scripts: &["Arab"], bytes: &[] },
+        ];
+        let families = |script: &str, style: &str| ui_fallback(FACES, script, style).iter().map(|f| (f.family, f.style)).collect::<Vec<_>>();
+        assert_eq!(
+            families("Latn", "Regular"),
+            [("Noto Sans CJK SC", "Regular"), ("Noto Sans Thai", "Regular"), ("Noto Sans Arabic", "Regular"), ("Noto Sans Arabic", "Bold")]
+        );
+        assert_eq!(families("Hans", "Bold")[0], ("Noto Sans CJK SC", "Regular"));
+        assert_eq!(families("Hans", "Bold")[1], ("Noto Sans Arabic", "Bold"));
+        assert!(ui_fallback(&[], "Thai", "Regular").is_empty());
     }
 }
