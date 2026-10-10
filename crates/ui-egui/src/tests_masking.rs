@@ -298,6 +298,32 @@ fn mask_overlay_keys_and_pins() {
     h.settle(SETTLE);
 }
 
+/// #518: holding the brush still, however long, paints the same feathered spot as a quick press.
+#[test]
+fn holding_the_brush_still_does_not_harden_the_spot() {
+    let mut h = detail("panel.masking");
+    let r = h.request("ui.set", json!({"brushSize": 0.1, "brushFeather": 80.0, "brushFlow": 100.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    // a quick press at the left, a long stationary hold (120 frames, ~2 s) at the right
+    brush_at(&mut h, 0.3, 0.5);
+    let mut hold = vec![json!({"kind": "down", "x": 0.7, "y": 0.5})];
+    hold.extend((0..120).map(|_| json!({"kind": "move", "x": 0.7, "y": 0.5})));
+    hold.push(json!({"kind": "up", "x": 0.7, "y": 0.5}));
+    pointer(&mut h, json!(hold));
+    let d = develop(&h);
+    let MaskShape::Brush { strokes } = &d.masks[0].components[0].shape else { panic!("brush") };
+    assert_eq!(strokes.len(), 2, "{strokes:?}");
+    assert_eq!(strokes[1].points.len(), 1, "a stationary hold records one sample: {:?}", strokes[1].points);
+    // the same edge profile around both spots
+    for dx in [0usize, 4, 6, 8] {
+        let (quick, held) = (mask_coverage(&h, 0, 30 + dx, 50), mask_coverage(&h, 0, 70 + dx, 50));
+        assert!((quick - held).abs() < 0.01, "{dx} px from the centre: quick {quick}, held {held}");
+    }
+    assert!(mask_coverage(&h, 0, 70 + 6, 50) < 0.9, "the edge stays feathered");
+    h.settle(SETTLE);
+}
+
 #[test]
 fn brush_strokes_carry_auto_mask() {
     let mut h = detail("panel.masking");
