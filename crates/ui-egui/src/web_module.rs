@@ -507,7 +507,8 @@ fn share_section(ui: &mut egui::Ui, app: &mut DacApp, st: &mut WebUi) {
     heading(ui, "Share via Immich");
     field(ui, "shareAccount", "Account (blank: the connected one)", &mut st.share_account);
     field(ui, "shareAlbum", "Album name (blank: the collection title)", &mut st.share_album);
-    ui.add(egui::Slider::new(&mut st.share_days, 0..=365).text(crate::i18n::tr("Expires after days (0: never)")));
+    ui.spacing_mut().slider_width = 90.0;
+    ui.add(egui::Slider::new(&mut st.share_days, 0..=365).text(crate::i18n::tr("Expiry (days, 0 = never)")));
     ui.label(crate::i18n::tr("Link password (optional)"));
     ui.add(egui::TextEdit::singleline(&mut st.share_password).password(true).desired_width(ui.available_width()));
     let mut dl = !st.share_no_download;
