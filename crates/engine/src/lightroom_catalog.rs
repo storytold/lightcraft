@@ -1231,13 +1231,13 @@ mod tests {
         let (partial, unknown) = mapped_settings(settings, crate::crs::Target::RawRelative, 1.5, Orientation::Normal, 1.5).unwrap();
         assert_eq!(partial["wb"], json!({"mode": "asShot"}), "{partial}");
         assert_eq!(partial["light"]["exposure"], 0.5);
-        assert!(unknown.iter().any(|k| k.starts_with("Temperature, Tint")), "{unknown:?}");
+        assert!(unknown.iter().any(|k| k == "WhiteBalance (missing AsShotTemperature)"), "{unknown:?}");
         let (partial, unknown) = mapped_settings(settings, crate::crs::Target::RawAbsolute, 1.5, Orientation::Normal, 1.5).unwrap();
         assert_eq!(
             (partial["wb"]["mode"].as_str(), partial["wb"]["temp"].as_f64(), partial["wb"]["tint"].as_f64()),
             (Some("custom"), Some(3578.0), Some(-5.0))
         );
-        assert!(!unknown.iter().any(|k| k.starts_with("Temperature")), "{unknown:?}");
+        assert!(!unknown.iter().any(|k| k == "WhiteBalance (missing AsShotTemperature)"), "{unknown:?}");
     }
 
     #[test]

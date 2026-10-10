@@ -247,22 +247,30 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
         "flash" => "flash",
         _ => "custom",
     });
-    let abs = num(props, "crs:Temperature").map(|t| (t, num(props, "crs:Tint")));
-    let rel = num(props, "crs:IncrementalTemperature")
-        .or(num(props, "crs:IncrementalTint").map(|_| 0.0))
-        .map(|t| (rel_to_kelvin(t), num(props, "crs:IncrementalTint")));
+    let pair = |temperature, tint| {
+        let (temperature, tint) = (num(props, temperature), num(props, tint));
+        (temperature.is_some() || tint.is_some()).then_some((temperature, tint))
+    };
+    let abs = pair("crs:Temperature", "crs:Tint");
+    let rel = pair("crs:IncrementalTemperature", "crs:IncrementalTint").map(|(t, tint)| (t.map(rel_to_kelvin), tint));
     // A Kelvin value for something we develop relative to its as-shot look: the other app's
     // as-shot white (`AsShotTemperature` / `AsShotTint`, written next to the edit) is the
     // reference, so the edit is the same mired shift from ours (issue #510).
     let shifted = || {
         let (t, tint) = abs?;
-        let as_shot = num(props, "crs:AsShotTemperature").filter(|k| *k > 0.0)?;
-        if t <= 0.0 {
-            return None;
-        }
-        let r = (1e6 / as_shot - 1e6 / t) / 0.8;
+        // A tint-only partial has no temperature to convert. Do not invent 6500 K or
+        // require an unrelated temperature reference just to preserve that tint edit.
+        let temperature = if let Some(t) = t {
+            let as_shot = num(props, "crs:AsShotTemperature").filter(|k| *k > 0.0)?;
+            if t <= 0.0 {
+                return None;
+            }
+            Some(rel_to_kelvin((1e6 / as_shot - 1e6 / t) / 0.8))
+        } else {
+            None
+        };
         let tint = tint.map(|v| v - num(props, "crs:AsShotTint").unwrap_or(0.0));
-        Some((rel_to_kelvin(r), tint))
+        Some((temperature, tint))
     };
     let wb = match target {
         Target::RawAbsolute => abs,
@@ -276,7 +284,11 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
             // Named/Auto modes also store the resolved camera-dependent white point. Preserve
             // that result instead of resolving our different preset or auto algorithm again.
             put(o, "wb.mode", json!("custom"));
-            put(o, "wb.temp", json!(t));
+            // Keep the unstated coordinate from the destination settings. Choose the
+            // source family above as a unit; never fill it from the lower-priority family.
+            if let Some(t) = t {
+                put(o, "wb.temp", json!(t));
+            }
             if let Some(tint) = tint {
                 put(o, "wb.tint", json!(tint));
             }
@@ -291,7 +303,7 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
         // the photo stays As Shot (ΔE 12 there) and the report says so
         (_, None) if target == Target::RawRelative && abs.is_some() => {
             put(o, "wb.mode", json!("asShot"));
-            skipped("Temperature, Tint (custom white balance without AsShotTemperature: kept As Shot)");
+            skipped("WhiteBalance (missing AsShotTemperature)");
         }
         (Some(m), None) => put(o, "wb.mode", json!(m)),
         (None, None) => {}
@@ -598,6 +610,141 @@ mod tests {
         }
     }
 
+    fn wb_props(fields: &str) -> Props {
+        props(&format!(
+            r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" {fields}/>"#
+        ))
+    }
+
+    #[test]
+    fn partial_white_balance_keeps_unstated_coordinates_on_each_target_scale() {
+        let mut original = DevelopSettings::for_raw(4800.0, 7.0);
+        original.wb.mode = WbMode::Custom;
+        let shifted = rel_to_kelvin((1e6 / 5000.0 - 1e6 / 5400.0) / 0.8);
+        for (target, field, value, references, coordinate, expected) in [
+            (Target::RawAbsolute, "Temperature", "5400", "", "temp", (5400.0, 7.0)),
+            (Target::RawAbsolute, "Tint", "-12", "", "tint", (4800.0, -12.0)),
+            (Target::Rendered, "IncrementalTemperature", "25", "", "temp", (rel_to_kelvin(25.0), 7.0)),
+            (Target::Rendered, "IncrementalTint", "-12", "", "tint", (4800.0, -12.0)),
+            (Target::RawRelative, "IncrementalTemperature", "25", "", "temp", (rel_to_kelvin(25.0), 7.0)),
+            (Target::RawRelative, "IncrementalTint", "-12", "", "tint", (4800.0, -12.0)),
+            (Target::RawRelative, "Temperature", "5400", r#"crs:AsShotTemperature="5000""#, "temp", (shifted, 7.0)),
+            (Target::RawRelative, "Tint", "-12", r#"crs:AsShotTint="-2""#, "tint", (4800.0, -10.0)),
+            (Target::RawRelative, "Tint", "-12", "", "tint", (4800.0, -12.0)),
+            (Target::Rendered, "Temperature", "5400", r#"crs:AsShotTemperature="5000""#, "temp", (shifted, 7.0)),
+            (Target::Rendered, "Tint", "-12", r#"crs:AsShotTint="-2""#, "tint", (4800.0, -10.0)),
+            (Target::Rendered, "Temperature", "5400", "", "temp", (5400.0, 7.0)),
+            (Target::Any, "Temperature", "5400", "", "temp", (5400.0, 7.0)),
+            (Target::Any, "Tint", "-12", "", "tint", (4800.0, -12.0)),
+            (Target::Any, "IncrementalTemperature", "25", "", "temp", (rel_to_kelvin(25.0), 7.0)),
+            (Target::Any, "IncrementalTint", "-12", "", "tint", (4800.0, -12.0)),
+        ] {
+            let fields = format!(r#"crs:{field}="{value}" {references}"#);
+            let (partial, unmapped) = to_partial_report(&wb_props(&fields), None, target, 1.5);
+            let wb = partial["wb"].as_object().unwrap();
+            assert_eq!(wb.len(), 2, "{target:?}/{field}: only mode and the stated coordinate belong in the patch");
+            assert!(wb.contains_key(coordinate));
+            assert!(unmapped.is_empty(), "{target:?}/{field}: {unmapped:?}");
+            let settings = apply_partial(&original, &partial, 1.0);
+            assert_eq!(settings.wb.mode, WbMode::Custom);
+            assert_eq!((settings.wb.temp, settings.wb.tint), expected, "{target:?}/{field}");
+            if target == Target::Any {
+                let xml = format!(
+                    r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" {fields}/>"#
+                );
+                let preset = preset_from_xmp(&xml, "One WB coordinate").expect("a one-coordinate WB preset remains importable");
+                assert_eq!(preset.apply(&original, 1.0).wb, settings.wb);
+            }
+        }
+    }
+
+    #[test]
+    fn partial_white_balance_selects_a_whole_coordinate_family_without_axis_leakage() {
+        let mut original = DevelopSettings::for_raw(4800.0, 7.0);
+        original.wb.mode = WbMode::Custom;
+        for (fields, expected) in [
+            (
+                r#"crs:Temperature="5150" crs:Tint="13" crs:IncrementalTemperature="25" crs:IncrementalTint="-6""#,
+                [(5150.0, 13.0), (5150.0, 13.0), (rel_to_kelvin(25.0), -6.0), (rel_to_kelvin(25.0), -6.0)],
+            ),
+            (
+                r#"crs:Tint="13" crs:IncrementalTemperature="25" crs:IncrementalTint="-6""#,
+                [(4800.0, 13.0), (4800.0, 13.0), (rel_to_kelvin(25.0), -6.0), (rel_to_kelvin(25.0), -6.0)],
+            ),
+            (r#"crs:Temperature="5150" crs:Tint="13" crs:IncrementalTint="-6""#, [(5150.0, 13.0), (5150.0, 13.0), (4800.0, -6.0), (4800.0, -6.0)]),
+            (
+                r#"crs:Tint="13" crs:IncrementalTemperature="25""#,
+                [(4800.0, 13.0), (4800.0, 13.0), (rel_to_kelvin(25.0), 7.0), (rel_to_kelvin(25.0), 7.0)],
+            ),
+            (r#"crs:Tint="13" crs:AsShotTint="3""#, [(4800.0, 13.0), (4800.0, 13.0), (4800.0, 10.0), (4800.0, 10.0)]),
+        ] {
+            let p = wb_props(fields);
+            for (target, expected) in [Target::RawAbsolute, Target::Any, Target::Rendered, Target::RawRelative].into_iter().zip(expected) {
+                let settings = apply_partial(&original, &to_partial(&p, target), 1.0);
+                assert_eq!((settings.wb.temp, settings.wb.tint), expected, "{target:?}: {fields}");
+                assert_eq!(settings.wb.mode, WbMode::Custom);
+            }
+        }
+        // Incremental coordinates belong to relative targets; they cannot fill an absent
+        // absolute family for a DNG or another raw with a measured illuminant.
+        for fields in [r#"crs:IncrementalTemperature="25""#, r#"crs:IncrementalTint="-6""#] {
+            assert!(to_partial(&wb_props(fields), Target::RawAbsolute).get("wb").is_none());
+        }
+    }
+
+    #[test]
+    fn partial_white_balance_as_shot_ignores_numeric_coordinates_on_all_targets() {
+        for fields in [
+            r#"crs:Temperature="5150" crs:Tint="13" crs:IncrementalTemperature="25" crs:IncrementalTint="-6""#,
+            r#"crs:Tint="13" crs:IncrementalTint="-6""#,
+            r#"crs:Temperature="5150""#,
+        ] {
+            let p = wb_props(&format!(r#"crs:WhiteBalance="As Shot" {fields}"#));
+            for target in [Target::RawAbsolute, Target::Any, Target::Rendered, Target::RawRelative] {
+                let (partial, unmapped) = to_partial_report(&p, None, target, 1.5);
+                assert_eq!(partial, json!({"wb": {"mode": "asShot"}}));
+                assert!(unmapped.is_empty(), "explicit As Shot ignores numeric coordinates: {unmapped:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn partial_named_and_auto_wb_preserve_resolved_numeric_axis_as_custom() {
+        let mut original = DevelopSettings::for_raw(4800.0, 7.0);
+        original.wb.mode = WbMode::Custom;
+        for mode in ["Auto", "Daylight", "Cloudy", "Shade", "Tungsten", "Fluorescent", "Flash", "Custom"] {
+            for (target, fields, expected) in [
+                (Target::RawAbsolute, r#"crs:Tint="13""#, (4800.0, 13.0)),
+                (Target::Any, r#"crs:Tint="13""#, (4800.0, 13.0)),
+                (Target::Rendered, r#"crs:IncrementalTint="13""#, (4800.0, 13.0)),
+                (Target::RawRelative, r#"crs:Tint="13" crs:AsShotTint="3""#, (4800.0, 10.0)),
+            ] {
+                let p = wb_props(&format!(r#"crs:WhiteBalance="{mode}" {fields}"#));
+                let settings = apply_partial(&original, &to_partial(&p, target), 1.0);
+                assert_eq!(settings.wb.mode, WbMode::Custom, "{target:?}/{mode}");
+                assert_eq!((settings.wb.temp, settings.wb.tint), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn relative_raw_temperature_without_reference_keeps_upstream_guard_and_bounded_diagnostic() {
+        for reference in ["", r#"crs:AsShotTemperature="0""#, r#"crs:AsShotTemperature="-1""#, r#"crs:AsShotTemperature="NaN""#] {
+            for tint in ["", r#"crs:Tint="13" crs:AsShotTint="3""#] {
+                let fields = format!(r#"crs:Temperature="5150" crs:Exposure2012="0.3" {reference} {tint}"#);
+                let (partial, unmapped) = to_partial_report(&wb_props(&fields), None, Target::RawRelative, 1.5);
+                assert_eq!(partial, json!({"wb": {"mode": "asShot"}, "light": {"exposure": 0.3}}));
+                assert_eq!(unmapped, ["WhiteBalance (missing AsShotTemperature)"]);
+            }
+        }
+        // Presence of an incremental tint selects that family even if the Kelvin family
+        // cannot be shifted; do not leak its temperature or its unsupported-name warning.
+        let p = wb_props(r#"crs:Temperature="5150" crs:Tint="13" crs:IncrementalTint="-6""#);
+        let (partial, unmapped) = to_partial_report(&p, None, Target::RawRelative, 1.5);
+        assert_eq!(partial, json!({"wb": {"mode": "custom", "tint": -6.0}}));
+        assert!(unmapped.is_empty());
+    }
+
     #[test]
     fn panel_enable_switches_remain_reported_without_unverified_resets() {
         let p = props(
@@ -802,8 +949,7 @@ mod tests {
         let (partial, unmapped) = to_partial_report(&p, None, Target::RawRelative, 1.5);
         assert_eq!(partial["wb"], json!({"mode": "asShot"}));
         assert_eq!(partial["light"]["exposure"], 0.3);
-        assert_eq!(unmapped.len(), 1, "{unmapped:?}");
-        assert!(unmapped[0].starts_with("Temperature, Tint"), "{unmapped:?}");
+        assert_eq!(unmapped, ["WhiteBalance (missing AsShotTemperature)"]);
         // a raw with a measured illuminant and a rendered file read it as before, and report nothing
         assert_eq!(to_partial(&p, Target::RawAbsolute)["wb"]["temp"], 3578.0);
         assert_eq!(to_partial(&p, Target::Rendered)["wb"]["temp"], 3578.0);
