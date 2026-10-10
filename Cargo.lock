@@ -1652,6 +1652,7 @@ dependencies = [
  "dac-scenes",
  "dac-segment",
  "dac-tiff",
+ "dac-webgallery",
  "fs4",
  "harfrust",
  "libc",
