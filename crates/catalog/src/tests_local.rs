@@ -60,7 +60,9 @@ fn untouched_records_of_old_folders_are_forgotten() {
 
     let dry = plan(&c, 30);
     assert_eq!((dry.local, dry.evict.len(), dry.kept_recent), (8, 5, 3), "{dry:?}");
-    assert_eq!(dry.evict, old);
+    let mut old_sorted = old.clone();
+    old_sorted.sort();
+    assert_eq!(dry.evict, old_sorted);
     assert_eq!(c.len(), 9, "a plan changes nothing");
     let done = run(&mut c, 30);
     assert_eq!(done.evict.len(), 5);
@@ -198,7 +200,9 @@ fn upgrade_without_times_forgets_nothing_then_counts_from_then() {
     let later = c.forget_local_plan("2026-11-06T10:00:00", 30, &|_| false);
     let mut evict = later.evict.clone();
     evict.sort();
-    assert_eq!(evict, vec![a, clean]);
+    let mut want = vec![a, clean];
+    want.sort();
+    assert_eq!(evict, want);
     assert_eq!(later.kept_touched, 2, "{rated:?} {with_creator:?}");
 }
 

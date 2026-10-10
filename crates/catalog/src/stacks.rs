@@ -306,10 +306,10 @@ mod tests {
         c.apply(Op::Batch { ops: c.remove_from_stacks_ops(&[d]) }).unwrap();
         assert_eq!(c.stacks().count(), 0, "a one-photo stack dissolves");
         // undo everything back to the first group's inverse state
-        let (mut c2, _) = cat(6, &[]);
-        let op = c2.group_ops(a, &[b], false).unwrap();
+        let (mut c2, ids2) = cat(6, &[]);
+        let op = c2.group_ops(ids2[0], &[ids2[1]], false).unwrap();
         c2.apply(op).unwrap();
-        c2.apply(Op::Batch { ops: c2.ungroup_ops(&[b]) }).unwrap();
+        c2.apply(Op::Batch { ops: c2.ungroup_ops(&[ids2[1]]) }).unwrap();
         assert_eq!(c2.stacks().count(), 0);
         let _ = inv;
     }
@@ -333,7 +333,7 @@ mod tests {
         // snapshot round trip keeps stacks and the id allocator
         let back = Catalog::from_snapshot(&c.to_snapshot()).unwrap();
         assert_eq!(back.stack(id), c.stack(id));
-        assert_eq!(back.clone().alloc_stack_id(), c.clone().alloc_stack_id());
+        assert_eq!(back.next_stack, c.next_stack);
     }
 
     #[test]

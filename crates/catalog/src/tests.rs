@@ -187,7 +187,9 @@ fn smart_albums_update_live() {
     c.apply(Op::SetDeleted { id: a, deleted: false }).unwrap();
     // change the rules; inverse restores
     let inv = c.apply(Op::SetAlbumRules { id, rules: Box::new(Filter { rating: 4, rating_op: RatingOp::Exactly, ..Default::default() }) }).unwrap();
-    assert_eq!(c.album_photos(id), vec![a, b, z]);
+    let mut all = vec![a, b, z];
+    all.sort();
+    assert_eq!(c.album_photos(id), all);
     c.apply(inv).unwrap();
     assert_eq!(c.album_photos(id), vec![a]);
     // smart albums hold no photos and can't nest smart rules
@@ -203,10 +205,12 @@ fn smart_albums_update_live() {
     // a smart album may narrow a manual album
     c.apply(Op::SetAlbumPhotos { id: manual, photos: vec![b, z] }).unwrap();
     c.apply(Op::SetAlbumRules { id, rules: Box::new(Filter { album: Some(manual), lens: Some(String::new()), ..Default::default() }) }).unwrap();
-    assert_eq!(c.album_photos(id), vec![b, z]);
+    let mut bz = vec![b, z];
+    bz.sort();
+    assert_eq!(c.album_photos(id), bz);
     // persisted in snapshots
     let back = Catalog::from_snapshot(&c.to_snapshot()).unwrap();
-    assert_eq!(back.album_photos(id), vec![b, z]);
+    assert_eq!(back.album_photos(id), bz);
     assert!(Filter { rating: 3, keyword: Some("sea".into()), ..Default::default() }.describe().contains("rating ≥ 3, keyword sea"));
 }
 
@@ -339,16 +343,20 @@ fn people_from_named_face_regions() {
     add("f.jpg", vec![]);
     let people = c.people();
     let summary: Vec<(&str, usize)> = people.iter().map(|p| (p.name.as_str(), p.count)).collect();
-    assert_eq!(summary, vec![("Jane Doe", 2), ("John Roe", 2), ("Sam", 1)], "once per photo, pets and unnamed faces left out");
+    // ids are random, so which spelling of Jane comes first (the lower id's) is too
+    let jane = if a < b { "Jane Doe" } else { "JANE DOE" };
+    assert_eq!(summary, vec![(jane, 2), ("John Roe", 2), ("Sam", 1)], "once per photo, pets and unnamed faces left out");
     // the picture is the person's largest face; ties go to the lower photo id
-    assert_eq!((people[0].photo, people[0].face), (a, Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 }));
+    assert_eq!((people[0].photo, people[0].face), (a.min(b), Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 }));
     assert_eq!((people[1].photo, people[1].face), (d, big), "the larger face wins over an earlier, smaller one");
 
     let q = |f: Filter| c.query(&f, &Sort::default());
     assert_eq!(q(Filter { person: Some("jane doe".into()), ..Default::default() }).len(), 2);
     let mut got = q(Filter { person: Some("John Roe".into()), ..Default::default() });
     got.sort();
-    assert_eq!(got, vec![b, d]);
+    let mut want = vec![b, d];
+    want.sort();
+    assert_eq!(got, want);
     assert!(q(Filter { person: Some("Rex".into()), ..Default::default() }).is_empty(), "a pet is not a person");
     assert_eq!(q(Filter { text: "person:SAM".into(), ..Default::default() }), vec![e], "the search token finds a person, any case");
     assert!(q(Filter { person: Some("Jane Doe".into()), ..Default::default() }).contains(&a));
@@ -500,4 +508,62 @@ fn undated_photos_group_under_unknown_date_and_sort_together() {
     assert_eq!(c.query(&filter_day, &Sort::default()), vec![]);
     let filter_year = Filter { date: Some("2026".into()), ..Default::default() };
     assert_eq!(c.query(&filter_year, &Sort { key: SortKey::CaptureDate, ascending: false, ..Default::default() }), vec![p_dated2, p_dated1]);
+}
+
+#[test]
+fn new_ids_are_random_and_in_json_safe_range() {
+    let mut c = Catalog::new();
+    let a = photo(&mut c, "a.jpg", "2026-04-01T10:00:00");
+    let b = photo(&mut c, "b.jpg", "2026-04-01T10:00:00");
+    assert_ne!(a, b);
+    for id in [a.0, b.0, c.alloc_album_id().0, c.alloc_stack_id().0] {
+        assert!((1..crate::ids::MAX_ID).contains(&id), "{id}");
+    }
+    // Not a counter: two consecutive photos are not 1 and 2.
+    assert!(!(a.0 == 1 && b.0 == 2));
+}
+
+#[test]
+fn ids_allocated_before_applying_are_distinct() {
+    // Import allocates every id of a batch before applying it.
+    let mut c = Catalog::new();
+    let ids: std::collections::BTreeSet<PhotoId> = (0..1000).map(|_| c.alloc_photo_id()).collect();
+    assert_eq!(ids.len(), 1000);
+}
+
+#[test]
+fn counter_id_library_keeps_working() {
+    // A library from before random ids: photos 1, 2, 3.
+    let mut c = Catalog::new();
+    for n in 1..=3 {
+        let p = Photo::new(PhotoId(n), Source::Demo { scene: 1 }, "x.jpg", "JPEG", 10, 10, "2026-09-30T10:00:00");
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    let new = photo(&mut c, "new.jpg", "2026-04-01T10:00:00");
+    assert!(!(1..=3).contains(&new.0));
+    assert_eq!(c.photos().count(), 4);
+}
+
+#[test]
+fn seeded_catalog_redraws_an_id_already_in_use() {
+    let mut probe = Catalog::new();
+    probe.seed_ids(9);
+    let first = probe.alloc_photo_id();
+
+    let mut c = Catalog::new();
+    let p = Photo::new(first, Source::Demo { scene: 1 }, "x.jpg", "JPEG", 10, 10, "2026-09-30T10:00:00");
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    c.seed_ids(9);
+    assert_ne!(c.alloc_photo_id(), first);
+}
+
+#[test]
+fn id_generator_is_not_serialized() {
+    let mut c = Catalog::new();
+    photo(&mut c, "a.jpg", "2026-04-01T10:00:00");
+    let json = serde_json::to_string(&c).unwrap();
+    assert!(!json.contains("\"ids\""), "{json}");
+    let back: Catalog = serde_json::from_str(&json).unwrap();
+    // (`revision` is not saved either, so compare what is)
+    assert_eq!(back.to_snapshot(), c.to_snapshot());
 }

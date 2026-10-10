@@ -84,7 +84,8 @@ fn edit(j: &mut Journal, live: &mut Catalog, k: u64) {
             let id = live.alloc_photo_id();
             Op::AddPhoto { photo: Box::new(Photo::new(id, Source::File { path: format!("/p/{}.jpg", id.0) }, "p.jpg", "JPEG", 4, 3, "t")) }
         } else {
-            Op::SetRating { id: PhotoId(1 + k % live.len() as u64), rating: (k % 6) as u8 }
+            let id = live.photos().nth((k % live.len() as u64) as usize).map(|p| p.id).unwrap();
+            Op::SetRating { id, rating: (k % 6) as u8 }
         };
         live.apply(op.clone()).unwrap();
         op

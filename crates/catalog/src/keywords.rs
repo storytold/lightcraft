@@ -222,12 +222,17 @@ mod tests {
 
     #[test]
     fn tree_counts_photos_per_level() {
-        let (c, _) = lib(&[&["travel|Italy|Rome", "beach"], &["Travel|italy"], &["travel|France", "travel|italy|rome"], &["beach"]]);
+        let (c, ids) = lib(&[&["travel|Italy|Rome", "beach"], &["Travel|italy"], &["travel|France", "travel|italy|rome"], &["beach"]]);
+        // Levels keep the spelling of the lowest-id photo that has them, and ids are random.
+        let first_of = |idx: &[usize]| *idx.iter().min_by_key(|&&i| ids[i]).unwrap();
+        let travel = ["travel", "Travel", "travel"][first_of(&[0, 1, 2])];
+        let italy = ["travel|Italy", "Travel|italy", "travel|italy"][first_of(&[0, 1, 2])];
+        let rome = ["travel|Italy|Rome", "", "travel|italy|rome"][first_of(&[0, 2])];
         let t = c.keyword_tree();
-        assert_eq!(t.iter().map(|n| (n.name.as_str(), n.count)).collect::<Vec<_>>(), vec![("beach", 2), ("travel", 3)]);
+        assert_eq!(t.iter().map(|n| (n.name.as_str(), n.count)).collect::<Vec<_>>(), vec![("beach", 2), (travel, 3)]);
         let travel = &t[1];
-        assert_eq!(travel.children.iter().map(|n| (n.path.as_str(), n.count)).collect::<Vec<_>>(), vec![("travel|France", 1), ("travel|Italy", 3)]);
-        assert_eq!(travel.children[1].children[0].path, "travel|Italy|Rome");
+        assert_eq!(travel.children.iter().map(|n| (n.path.as_str(), n.count)).collect::<Vec<_>>(), vec![("travel|France", 1), (italy, 3)]);
+        assert_eq!(travel.children[1].children[0].path, rome);
         assert_eq!(travel.children[1].children[0].count, 2);
         // filtering by a parent finds its children
         let f = Filter { keyword: Some("travel|italy".into()), ..Default::default() };

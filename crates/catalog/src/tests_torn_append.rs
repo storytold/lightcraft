@@ -83,6 +83,7 @@ fn partial_append_then_retry_loads_cleanly() {
         let first = apply(&mut c, vec![add]);
         j.append(&first).unwrap();
         let good_len = t.files.get(LOG).unwrap().len();
+        let id = c.photos().next().unwrap().id;
         let batch = apply(&mut c, vec![Op::SetRating { id, rating: 3 }, Op::SetFlag { id, flag: Flag::Pick }, Op::SetRating { id, rating: 4 }]);
         t.tear_next_append(tear);
         assert!(j.append(&batch).is_err(), "tear at {tear}");
