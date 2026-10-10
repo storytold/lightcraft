@@ -146,8 +146,35 @@ thread_local! {
 }
 
 /// The UI language from the environment (`LIGHTCRAFT_LANGUAGE=zh-hans`), for headless runs.
+/// Without it, follow the macOS preferred-languages list so a Chinese system starts in Chinese.
 pub fn default_language() -> Locale {
-    std::env::var("LIGHTCRAFT_LANGUAGE").ok().and_then(|value| Locale::parse_tag(&value)).unwrap_or(Locale::En)
+    if let Some(value) = std::env::var("LIGHTCRAFT_LANGUAGE").ok().filter(|v| !v.is_empty()) {
+        if let Some(l) = Locale::parse_tag(&value) {
+            return l;
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(l) = system_preferred_language() {
+        return l;
+    }
+    Locale::En
+}
+
+/// The first supported language in the macOS `defaults read -g AppleLanguages` list.
+#[cfg(target_os = "macos")]
+fn system_preferred_language() -> Option<Locale> {
+    let out = std::process::Command::new("/usr/bin/defaults")
+        .args(["read", "-g", "AppleLanguages"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .split(['(', ')', ',', '"', '\n'])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .find_map(Locale::parse_tag)
 }
 
 pub fn set_language(language: Locale) {
@@ -607,7 +634,8 @@ mod tests {
     #[test]
     fn preferences_round_trip_and_old_settings_remain_readable() {
         let old: crate::state::UiState = serde_json::from_str("{}").unwrap();
-        assert_eq!(old.language, Locale::En);
+        // The default follows the system language, so it isn't necessarily English.
+        assert!(Locale::ALL.contains(&old.language));
         // Settings written before the language list grew still load.
         let legacy: crate::state::UiState = serde_json::from_str(r#"{"language":"ja"}"#).unwrap();
         assert_eq!(legacy.language, Locale::Ja);

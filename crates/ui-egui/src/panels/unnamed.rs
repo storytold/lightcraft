@@ -148,7 +148,7 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if b.clicked() {
             submit = Some(chosen);
         }
-        let c = ui.button("Clear");
+        let c = ui.button(crate::i18n::tr("Clear"));
         register(ui.ctx(), "unnamed:clear", c.rect);
         clear = c.clicked() || (edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)));
     });

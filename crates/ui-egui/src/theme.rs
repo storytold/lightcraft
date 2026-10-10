@@ -134,8 +134,8 @@ pub fn install_fonts(ctx: &egui::Context) {
 
 /// Inter (bundled) for Latin text, egui's default fonts, then the craft-fonts CJK faces as the last
 /// fallback of every family — the active language's own script first, so shared Han characters keep
-/// that language's forms. Without craft-fonts (`craft` empty) CJK text has no glyphs and shows as
-/// boxes.
+/// that language's forms. A system CJK face is appended as the final fallback so builds without
+/// craft-fonts can still render Chinese, Japanese and Korean text.
 pub fn font_definitions(craft: &'static [lightcraft_engine::CraftFont]) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert("Inter".into(), Arc::new(FontData::from_static(include_bytes!("../../../assets/fonts/Inter-Regular.ttf"))));
@@ -153,17 +153,78 @@ pub fn font_definitions(craft: &'static [lightcraft_engine::CraftFont]) -> FontD
             fonts.font_data.insert(name.clone(), Arc::new(FontData::from_static(font.bytes)));
         }
     }
+    // System CJK fallback (PingFang / Heiti / Noto…) when craft-fonts are absent.
+    let system_cjk = system_cjk_font();
+    if let Some((name, data)) = &system_cjk {
+        fonts.font_data.insert(name.clone(), Arc::new(data.clone()));
+    }
+    let system_name = system_cjk.as_ref().map(|(n, _)| n.clone());
     let defaults: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let mut prop = vec!["Inter".to_string()];
     prop.extend(defaults.iter().cloned());
     prop.extend(regular);
+    if let Some(name) = &system_name {
+        prop.push(name.clone());
+    }
     fonts.families.insert(FontFamily::Proportional, prop);
     let mut semi = vec!["Inter-SemiBold".to_string()];
     semi.extend(defaults);
     semi.extend(bold);
+    if let Some(name) = &system_name {
+        semi.push(name.clone());
+    }
     fonts.families.insert(FontFamily::Name(FONT_SEMIBOLD.into()), semi);
-    fonts.families.entry(FontFamily::Monospace).or_default().extend(fallback("Regular"));
+    let mut mono = fallback("Regular");
+    if let Some(name) = &system_name {
+        mono.push(name.clone());
+    }
+    fonts.families.entry(FontFamily::Monospace).or_default().extend(mono);
     fonts
+}
+
+/// A CJK font already installed on the system, as a last-resort fallback. Tries well-known macOS
+/// paths first (PingFang, Heiti, Hiragino Sans GB), then the Linux/Windows common locations.
+/// Returns the registered name and font data, or `None` when no CJK face is found.
+fn system_cjk_font() -> Option<(String, FontData)> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let paths: &[&str] = if cfg!(target_os = "macos") {
+            &[
+                "/System/Library/Fonts/PingFang.ttc",
+                "/System/Library/Fonts/STHeiti Medium.ttc",
+                "/System/Library/Fonts/STHeiti Light.ttc",
+                "/System/Library/Fonts/Hiragino Sans GB.ttc",
+                "/System/Library/Fonts/Supplemental/Songti.ttc",
+                "/Library/Fonts/Arial Unicode.ttf",
+            ]
+        } else if cfg!(target_os = "windows") {
+            &[
+                r"C:\Windows\Fonts\msyh.ttc",
+                r"C:\Windows\Fonts\simhei.ttf",
+                r"C:\Windows\Fonts\simsun.ttc",
+            ]
+        } else {
+            &[
+                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+            ]
+        };
+        for path in paths {
+            if let Ok(bytes) = std::fs::read(path) {
+                // egui uses skrifa, which handles .ttc by face index; face 0 of these collections
+                // covers Simplified Chinese. The listed files are known CJK faces.
+                let mut data = FontData::from_owned(bytes);
+                data.index = 0;
+                return Some(("system-cjk".to_string(), data));
+            }
+        }
+        None
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
 }
 
 /// The embedded font families for the About box: Inter, plus the craft-fonts families when built

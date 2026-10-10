@@ -103,7 +103,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         ui.label(RichText::new(count).color(t.text_dim));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(PAD - 4.0);
-            let photos = ui.button("Show photos").on_hover_text("Their photos in the grid");
+            let photos = ui.button(crate::i18n::tr("Show photos")).on_hover_text(crate::i18n::tr("Their photos in the grid"));
             register(ui.ctx(), "person:photos", photos.rect);
             if photos.clicked() {
                 let _ = app.run("library.filter", json!({"person": shown_name}));
