@@ -182,6 +182,8 @@ pub struct Session {
     /// Untouched Local records of folders not browsed for this many days are forgotten when the
     /// library opens (0 = never; persisted in prefs.json). See `cmd/browse.rs`.
     pub forget_local_days: u32,
+    /// The preview store settings (persisted in prefs.json).
+    pub preview_prefs: cmd::previews::PreviewPrefs,
 }
 
 impl Default for Session {
@@ -258,6 +260,7 @@ impl Session {
             cache_mb: 0,
             smart_previews_dir: None,
             forget_local_days: dac_catalog::DEFAULT_FORGET_DAYS,
+            preview_prefs: Default::default(),
         }
     }
 
@@ -775,6 +778,8 @@ mod tests_persist;
 mod tests_prefs;
 #[cfg(test)]
 mod tests_preset_files;
+#[cfg(test)]
+mod tests_previews;
 #[cfg(test)]
 mod tests_segment;
 #[cfg(test)]

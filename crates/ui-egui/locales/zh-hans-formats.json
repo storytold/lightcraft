@@ -114,6 +114,7 @@
   "Already in the library, in Recently Deleted: {} photo{} selected · right-click ▸ Restore, or Delete Permanently to import afresh": "已在图库的“最近删除”中：已选择 {0} 张照片{1:.0} · 右键单击 → 恢复，或永久删除后重新导入",
   "Auto ({})": "自动（{}）",
   "Build 1:1 Previews ({scope})": "生成 1:1 预览（{scope}）",
+  "Discard 1:1 Previews ({scope})": "丢弃 1:1 预览（{scope}）",
   "Build Smart Previews ({scope})": "生成智能预览（{scope}）",
   "Build Standard-Sized Previews ({scope})": "生成标准尺寸预览（{scope}）",
   "Discard Smart Previews ({scope})": "丢弃智能预览（{scope}）",

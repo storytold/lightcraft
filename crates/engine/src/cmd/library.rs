@@ -112,6 +112,9 @@ pub fn import_batch_done(s: &mut Session, report: crate::import::ImportReport, m
         s.execute("album.addPhotos", &json!({"id": a, "ids": imported}))?;
         report["album"] = json!(a);
     }
+    // the previews the library builds at import (library.previewSettings atImport)
+    let ids: Vec<PhotoId> = imported.iter().map(|i| PhotoId(*i)).collect();
+    crate::cmd::previews::build_after_import(s, &ids);
     Ok(report)
 }
 

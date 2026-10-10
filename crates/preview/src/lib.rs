@@ -136,6 +136,18 @@ impl PreviewCache {
         }
     }
 
+    /// Drop one image (memory and disk); whether there was one.
+    pub fn remove(&self, key: Hash128) -> bool {
+        let in_mem = self.mem.lock().unwrap_or_else(|e| e.into_inner()).remove(&key).is_some();
+        let on_disk = self.disk.as_ref().is_some_and(|d| d.remove(key) > 0);
+        in_mem || on_disk
+    }
+
+    /// Whether `key` is held in memory or on disk (without reading it).
+    pub fn contains(&self, key: Hash128) -> bool {
+        self.mem.lock().unwrap_or_else(|e| e.into_inner()).contains(&key) || self.disk.as_ref().is_some_and(|d| d.modified(key).is_some())
+    }
+
     /// Stop this cache object for good, leaving its disk files alone: called when another cache
     /// object replaces it (a library reopened or another one opened). Jobs still holding it then
     /// can neither read nor write through it, so a later clear of the replacement's directory

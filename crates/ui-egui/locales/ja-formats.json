@@ -114,6 +114,7 @@
   "Already in the library, in Recently Deleted: {} photo{} selected · right-click ▸ Restore, or Delete Permanently to import afresh": "ライブラリの「最近削除した写真」にあります：{}枚を選択しました{:.0}・右クリック → 復元、または完全に削除してから読み込み直し",
   "Auto ({})": "自動 ({})",
   "Build 1:1 Previews ({scope})": "1:1プレビューを作成（{scope}）",
+  "Discard 1:1 Previews ({scope})": "1:1プレビューを破棄（{scope}）",
   "Build Smart Previews ({scope})": "スマートプレビューを作成（{scope}）",
   "Build Standard-Sized Previews ({scope})": "標準プレビューを作成（{scope}）",
   "Discard Smart Previews ({scope})": "スマートプレビューを破棄（{scope}）",

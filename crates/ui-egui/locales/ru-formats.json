@@ -34,6 +34,7 @@
   "Auto Sync: edits apply to {n} photos": "Автосинхронизация: правки применяются к фото: {n}",
   "Automatic ({} MB)": "Автоматически ({} МБ)",
   "Build 1:1 Previews ({scope})": "Создать просмотры 1:1 ({scope})",
+  "Discard 1:1 Previews ({scope})": "Удалить просмотры 1:1 ({scope})",
   "Build Smart Previews ({scope})": "Создать смарт-просмотры ({scope})",
   "Build Standard-Sized Previews ({scope})": "Создать просмотры стандартного размера ({scope})",
   "Building previews for {} photos…": "Создание просмотров для фото: {}…",

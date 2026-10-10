@@ -18,6 +18,7 @@
   "Auto Sync: edits apply to {n} photos": "自動同步：編輯會套用至 {n} 張照片",
   "Automatic ({} MB)": "自動（{} MB）",
   "Build 1:1 Previews ({scope})": "建立 1:1 預覽（{scope}）",
+  "Discard 1:1 Previews ({scope})": "捨棄 1:1 預覽（{scope}）",
   "Build Smart Previews ({scope})": "建立智慧型預覽（{scope}）",
   "Build Standard-Sized Previews ({scope})": "建立標準尺寸預覽（{scope}）",
   "Click {}:1": "點擊時 {}:1",

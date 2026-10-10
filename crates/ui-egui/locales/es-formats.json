@@ -32,6 +32,7 @@
   "Auto Sync: edits apply to {n} photos": "Sincronización automática: las ediciones se aplican a {n} fotos",
   "Automatic ({} MB)": "Automático ({} MB)",
   "Build 1:1 Previews ({scope})": "Generar vistas previas 1:1 ({scope})",
+  "Discard 1:1 Previews ({scope})": "Descartar vistas previas 1:1 ({scope})",
   "Build Smart Previews ({scope})": "Generar vistas previas inteligentes ({scope})",
   "Build Standard-Sized Previews ({scope})": "Generar vistas previas de tamaño estándar ({scope})",
   "Building previews for {} photos…": "Generando vistas previas de {} fotos…",

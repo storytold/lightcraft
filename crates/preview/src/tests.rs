@@ -238,3 +238,20 @@ fn disk_cache_never_touches_foreign_files() {
     assert!(!disk::is_cache_file("01", "0123456789abcdef0123456789abcdef.jpg.bak"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// Given one image discarded, only it leaves memory and disk; a missing key is a no-op
+#[test]
+fn remove_drops_one_image_from_memory_and_disk() {
+    let dir = temp_dir("remove");
+    let cache = PreviewCache::with_disk(1 << 20, &dir, 1 << 20);
+    let (a, b) = (hash_bytes(b"a"), hash_bytes(b"b"));
+    cache.put(a, Arc::new(gradient(8, 8, 0)));
+    cache.put(b, Arc::new(gradient(8, 8, 9)));
+    assert!(cache.contains(a) && cache.disk().unwrap().modified(a).is_some());
+    assert!(cache.remove(a));
+    assert!(!cache.contains(a) && cache.get(a).is_none());
+    assert!(cache.contains(b));
+    assert!(!cache.remove(a), "already gone");
+    cache.clear();
+    let _ = std::fs::remove_dir_all(&dir);
+}

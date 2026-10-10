@@ -169,6 +169,8 @@ struct PrefsFile {
     /// Days after which untouched Local records of unbrowsed folders are forgotten (missing =
     /// the default, 0 = never).
     forget_local_days: Option<u32>,
+    /// Preview store settings (standard size, 1:1 discard, previews built at import).
+    previews: crate::cmd::previews::PreviewPrefs,
 }
 
 fn presets_json(s: &Session) -> String {
@@ -352,6 +354,7 @@ impl Session {
         self.recent_keywords = prefs.recent_keywords;
         self.import_defaults = prefs.import;
         self.cache_mb = prefs.cache_mb;
+        self.preview_prefs = prefs.previews;
         self.forget_local_days = prefs.forget_local_days.unwrap_or(dac_catalog::DEFAULT_FORGET_DAYS);
         self.smart_previews_dir = prefs.smart_previews_dir.filter(|_| on_disk).map(PathBuf::from);
         if let Some(d) = &self.smart_previews_dir {
@@ -583,6 +586,7 @@ impl Session {
             cache_mb: self.cache_mb,
             smart_previews_dir: self.smart_previews_dir.as_ref().map(|d| d.to_string_lossy().to_string()),
             forget_local_days: Some(self.forget_local_days),
+            previews: self.preview_prefs,
         })
         .unwrap_or_default();
         let Some(lib) = self.library.as_mut() else { return Ok(()) };

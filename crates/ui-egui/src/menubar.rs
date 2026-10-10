@@ -374,6 +374,14 @@ fn expanded(app: &DacApp, name: &str) -> Option<Vec<MenuNode>> {
                     None,
                 ),
                 item("library.cancelPreviews", Value::Null, "Stop Building Previews", None, running, None),
+                item(
+                    "library.discardPreviews",
+                    json!({"size": "full"}),
+                    crate::i18n::tr_format!("Discard 1:1 Previews ({scope})", scope = crate::i18n::tr(scope)),
+                    None,
+                    !running,
+                    None,
+                ),
                 MenuNode::Separator,
                 // (read and written on a worker thread: the originals may be on a slow drive)
                 item(

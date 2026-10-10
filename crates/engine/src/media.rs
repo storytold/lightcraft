@@ -1082,6 +1082,13 @@ impl crate::Session {
             .finish()
     }
 
+    /// Key of the photo's 1:1 preview (Build 1:1 Previews): kept apart from the standard view
+    /// preview so it can be discarded on its own (`library.discardPreviews`).
+    pub(crate) fn full_view_key(p: &Photo) -> Hash128 {
+        let v = Self::view_key(p, true).0;
+        Hasher128::new().u64(v as u64).u64((v >> 64) as u64).str("1:1").finish()
+    }
+
     /// The loupe's render job: like [`Self::render_job`], and a full-quality result is kept as the
     /// photo's view preview (memory, and disk with a library) for [`Self::quick_view_job`].
     pub fn loupe_job(&mut self, id: PhotoId, max_w: usize, max_h: usize, apply_crop: bool) -> Option<RenderJob> {
@@ -1179,7 +1186,11 @@ impl crate::Session {
         let p = self.catalog.photo(id)?.clone();
         let small = self.thumb_job(id, THUMB_SIZES[THUMB_SIZES.len() - 1])?;
         // (the thumbnail job itself starts with the cached thumbnail, after the sharper embedded preview)
-        let cached = vec![(self.media.rendered.clone(), Self::view_key(&p, apply_crop))];
+        let mut cached = vec![(self.media.rendered.clone(), Self::view_key(&p, apply_crop))];
+        // a 1:1 preview (Build 1:1 Previews) stands in when there is no standard one
+        if apply_crop {
+            cached.push((self.media.rendered.clone(), Self::full_view_key(&p)));
+        }
         let h = Hasher128::new().str(&content_key(&p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).finish();
         let key = h.0 as u64;
         let embedded = self.embedded_of(&p).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
