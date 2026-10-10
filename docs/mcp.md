@@ -278,7 +278,7 @@ plus `{imported, ids, warning?}`, `{error}` or `{skipped}` once Photos is done; 
 way. Headless (this server, `lightcraft-cli`) waits for Photos by default; the desktop app (connect mode)
 answers with the running job and `export.photosImports {job}` gives the outcome. `export.addToPhotos {paths,
 album?, wait?}` does the same for files already on disk (`wait` defaults to true headless, false in the desktop
-app; with `wait: false` headless, the server waits for the import before it exits at end of input). One import
+app, which refuses `wait: true`; with `wait: false` headless, the server waits for the import before it exits at end of input). One import
 runs at a time, and an export adding to Photos reserves it before it writes: another is refused, naming the
 job in the way. On other platforms `addToPhotos: true` is refused before anything is written, and
 `export.addToPhotos` is disabled with the reason. The first time, macOS asks the user to allow LightCraft (or

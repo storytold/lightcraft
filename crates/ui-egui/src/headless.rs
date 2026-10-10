@@ -1885,7 +1885,10 @@ mod tests {
         h.app.services.write_shared = Some(Arc::new(|p: &str, bytes: &[u8]| lightcraft_engine::export::write_file(p, bytes)));
         let (release, held) = std::sync::mpsc::channel::<()>();
         let held = std::sync::Mutex::new(held);
+        let (entered, photos_asked) = std::sync::mpsc::channel::<()>();
+        let entered = std::sync::Mutex::new(entered);
         h.app.session.apple_photos = Some(Arc::new(move |_: &[String], _| {
+            let _ = entered.lock().unwrap().send(());
             let _ = held.lock().unwrap().recv_timeout(Duration::from_secs(30));
             Ok(lightcraft_engine::apple_photos::Output { status: Some(0), stdout: "ID\n".into(), stderr: String::new() })
         }));
@@ -1893,19 +1896,25 @@ mod tests {
         let params = json!({"ids": ids, "dir": out, "longEdge": 48, "addToPhotos": true, "background": true});
         let r = h.request("engine.execute", json!({"command": "app.export", "params": params}), t);
         assert_eq!(r["ok"], true, "{r}");
-        let t0 = Instant::now();
-        let current = loop {
-            h.step();
-            let current = h.app.export.as_ref().map(|e| e.progress.lock().unwrap().1.clone()).unwrap_or_default();
-            if current.contains("Apple") || t0.elapsed() > Duration::from_secs(60) {
-                break current;
-            }
-        };
+        // Photos has been asked, and the window hasn't drawn a frame since (Codex review of #643):
+        // the export's row already has no ✕, and a cancel is refused rather than half-honoured
+        photos_asked.recv_timeout(Duration::from_secs(60)).expect("the export asks Photos");
+        let row = h.app.session.activity.list().into_iter().find(|r| r.kind == "export").expect("the export's row");
+        assert!(!row.cancellable, "{row:?}");
+        assert!(h.app.session.activity.cancel(row.id).is_err(), "Photos can't be stopped once asked");
+        let current = h.app.export.as_ref().map(|e| e.progress.lock().unwrap().1.clone()).unwrap_or_default();
         assert_eq!(current, "Wird zu Apple Fotos hinzugefügt…");
+        // the row says so on the next frame (issue #345)
+        h.step();
+        let row = h.app.session.activity.list().into_iter().find(|r| r.kind == "export").expect("the export's row");
+        assert_eq!((row.detail.as_str(), row.cancellable), ("Wird zu Apple Fotos hinzugefügt…", false), "{row:?}");
         release.send(()).unwrap();
+        let t0 = Instant::now();
         while h.app.export.is_some() && t0.elapsed() < Duration::from_secs(90) {
             h.step();
         }
+        let last = h.app.last_export_result.clone().expect("the export reports");
+        assert_eq!((last["cancelled"].as_bool(), last["applePhotos"]["imported"].as_u64()), (Some(false), Some(1)), "{last}");
         crate::i18n::set_language(crate::i18n::Locale::En);
         let _ = std::fs::remove_dir_all(&out);
     }

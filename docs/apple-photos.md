@@ -29,11 +29,17 @@ An import can take minutes, and the first one waits for the user to answer macOS
 import is a job: `{job, running, requested, album}`, plus, once Photos is done, `{imported, ids, warning?}`,
 `{error}` or `{skipped}` (`exporting: true` while an export that will add its files is still writing them).
 
+While Photos works, the activity stack ([background-tasks.md](background-tasks.md)) shows it. An export adding its
+files keeps its own row, which reads "Adding to Apple Photos…" and loses its ✕, since Photos can't be stopped once
+asked. An import of its own (`export.addToPhotos`, or the Photos step left running after `app.export` without
+`background`) gets a row of kind `applePhotos`, "Adding to Apple Photos", with the album as its detail, no ✕ and no
+count, as Photos reports none until it is done.
+
 - In the **desktop app** nothing waits for Photos on the window's thread. The Export dialog's background export
   adds the files on its worker and reports them in its toast. `app.export` without `background` and
   `export.addToPhotos` answer at once with the running job (`running: true`); the app shows a toast when Photos
-  is done, and `export.photosImports {job}` gives the outcome. (`export.addToPhotos {wait: true}` waits there
-  too, holding the window until Photos is done.)
+  is done, and `export.photosImports {job}` gives the outcome. (`export.addToPhotos {wait: true}` is refused there:
+  the window's thread never waits for Photos.)
 - **Without a window** (the MCP server, `lightcraft-cli`, the headless snapshot) everything waits for Photos by
   default: `app.export` and `export.addToPhotos` return the finished job, so a one-shot command never ends in
   the middle of an import. `export.addToPhotos {wait: false}` returns the running job instead (for a

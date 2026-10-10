@@ -647,9 +647,12 @@ mod apple_photos {
         let all = s.execute("export.photosImports", &json!({})).unwrap();
         assert_eq!(all["imports"].as_array().map(Vec::len), Some(1));
         assert!(s.execute("export.photosImports", &json!({"job": 7})).unwrap_err().to_string().contains("no import 7"));
+        // the window's thread never waits for Photos: `wait: true` is refused here, before any import
+        let e = s.execute("export.addToPhotos", &json!({"paths": paths, "wait": true})).unwrap_err().to_string();
+        assert!(e.contains("isn't available in the desktop app"), "{e}");
         // finished: the next one may start
         go.send(()).unwrap();
-        assert_eq!(s.execute("export.addToPhotos", &json!({"paths": paths, "wait": true})).unwrap()["job"], 2);
+        assert_eq!(s.execute("export.addToPhotos", &json!({"paths": paths})).unwrap()["job"], 2);
     }
 
     /// Review of #236: an export adding to Photos reserves the import before it writes its files.

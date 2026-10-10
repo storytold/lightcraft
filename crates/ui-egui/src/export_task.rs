@@ -22,8 +22,9 @@ pub struct ExportTask {
     /// Photos started so far and the file in progress.
     pub progress: Arc<Mutex<(usize, String)>>,
     pub cancel: Arc<AtomicBool>,
-    /// The files (per-photo results) and what [`AfterExport`] did with them (`applePhotos`).
-    rx: Receiver<Result<(Vec<Value>, Option<Value>), String>>,
+    /// The files (per-photo results), what [`AfterExport`] did with them (`applePhotos`) and
+    /// whether the export was cancelled (as the worker saw it when the batch ended).
+    rx: Receiver<Result<(Vec<Value>, Option<Value>, bool), String>>,
     /// The export's row in the activity stack (`activity.cancel` sets `cancel`).
     guard: TaskGuard,
 }
@@ -48,6 +49,9 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = channel();
     let (p, c) = (progress.clone(), cancel.clone());
+    let guard = app.session.activity.start("export", "Exporting", Cancel::Flag(cancel.clone()));
+    guard.progress(0, total as u64);
+    let row = guard.handle();
     // translated here: the language is the UI thread's, and the worker would show English
     let adding = crate::i18n::tr("Adding to Apple Photos…").to_string();
     let work = move || {
@@ -59,13 +63,17 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
             !c.load(Ordering::Relaxed)
         });
         let r = r.map(|files| {
-            if !after.is_none()
-                && let Ok(mut g) = p.lock()
-            {
-                g.1 = adding;
+            if !after.is_none() {
+                // Photos can't be stopped once asked: no ✕ from here, before the last look at
+                // the cancel flag, so a cancel either stops the export before Photos or is refused
+                row.set_cancellable(false);
+                if let Ok(mut g) = p.lock() {
+                    g.1 = adding;
+                }
             }
-            let photos = after.run(&files, c.load(Ordering::Relaxed));
-            (files, photos)
+            let cancelled = c.load(Ordering::Relaxed);
+            let photos = after.run(&files, cancelled);
+            (files, photos, cancelled)
         });
         let _ = tx.send(r);
     };
@@ -73,8 +81,6 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     std::thread::Builder::new().name("export".into()).spawn(work).map_err(|e| e.to_string())?;
     #[cfg(target_arch = "wasm32")]
     work();
-    let guard = app.session.activity.start("export", "Exporting", Cancel::Flag(cancel.clone()));
-    guard.progress(0, total as u64);
     app.export = Some(ExportTask { total, progress, cancel, rx, guard });
     Ok(json!({"background": true, "total": total}))
 }
@@ -114,7 +120,7 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
                 Ok(vec![json!({"path": path, "pages": doc.pages, "photos": doc.photos, "bytes": doc.bytes.len(), "contactSheet": true})])
             });
         // a PDF isn't something Photos imports: contact sheets never add to Apple Photos
-        let _ = tx.send(result.map(|files| (files, None)));
+        let _ = tx.send(result.map(|files| (files, None, c.load(Ordering::Relaxed))));
     };
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::Builder::new().name("contact-sheet".into()).spawn(work).map_err(|e| e.to_string())?;
@@ -178,13 +184,13 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(task) = &app.export else { return };
     match task.rx.try_recv() {
         Ok(r) => {
-            let cancelled = task.cancel.load(Ordering::Relaxed);
+            let cancelled = matches!(&r, Ok((_, _, true)));
             let total = task.total;
             app.export = None;
             // Photos refused (permission, not installed…): leave the way out on screen longer
-            let photos_failed = matches!(&r, Ok((_, Some(p))) if p.get("error").is_some());
+            let photos_failed = matches!(&r, Ok((_, Some(p), _)) if p.get("error").is_some());
             let msg = match r {
-                Ok((files, photos)) => {
+                Ok((files, photos, _)) => {
                     let sheet = files.first().filter(|f| f["contactSheet"] == true);
                     let ok = files.iter().filter(|f| f.get("path").is_some()).count();
                     let failed: Vec<&Value> = files.iter().filter(|f| f.get("error").is_some()).collect();

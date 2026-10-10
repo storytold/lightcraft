@@ -28,6 +28,8 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::activity::{Activity, Cancel, TaskGuard};
+
 /// Run by osascript with `argv` = [`MARKER`], the album name (empty: none), then the files' POSIX
 /// paths. Prints the imported media items' ids, one per line.
 ///
@@ -469,7 +471,7 @@ impl Imports {
             return Err("an album name can't contain a NUL character".into());
         }
         let job = self.begin(0, album, true)?;
-        Ok(Reservation { runner, album: album.to_string(), job: Some(job) })
+        Ok(Reservation { runner, album: album.to_string(), job: Some(job), activity: None })
     }
 
     /// [`Imports::wait_idle_within`] with the [`WaitLimits::default`].
@@ -542,17 +544,39 @@ impl crate::Session {
     }
 }
 
-/// Ask Photos to import `paths` (checked; `album` trimmed) for `job`: here, or on a worker thread.
-fn launch(runner: &Runner, job: &Arc<ImportJob>, paths: Vec<String>, album: String, background: bool) {
+/// The activity stack's kind for an Apple Photos import of its own (`activity.list`).
+pub const ACTIVITY_KIND: &str = "applePhotos";
+/// ...and its label (translated by the frontend).
+pub const ACTIVITY_LABEL: &str = "Adding to Apple Photos";
+
+/// A row in the activity stack for an import that runs on its own (not as the last step of an
+/// export, whose row covers it): no ✕ (Photos can't be stopped once asked), no count (Photos
+/// reports none until it is done), the album as its detail.
+fn row(activity: Option<&Activity>, album: &str) -> Option<TaskGuard> {
+    let row = activity?.start(ACTIVITY_KIND, ACTIVITY_LABEL, Cancel::No);
+    row.progress(0, 0);
+    if !album.is_empty() {
+        row.detail(album);
+    }
+    Some(row)
+}
+
+/// Ask Photos to import `paths` (checked; `album` trimmed) for `job`: here, or on a worker thread,
+/// holding `row` (the activity stack's) until Photos is done.
+fn launch(runner: &Runner, job: &Arc<ImportJob>, paths: Vec<String>, album: String, background: bool, row: Option<TaskGuard>) {
     job.requested.store(paths.len(), Ordering::Relaxed);
     *job.started.lock().unwrap_or_else(PoisonError::into_inner) = Some(std::time::Instant::now());
     job.exporting.store(false, Ordering::Relaxed);
     if !background {
+        let _row = row;
         run_to_completion(runner, job, &paths, &album);
         return;
     }
     let (r, j) = (runner.clone(), job.clone());
-    let started = std::thread::Builder::new().name("apple-photos".into()).spawn(move || run_to_completion(&r, &j, &paths, &album));
+    let started = std::thread::Builder::new().name("apple-photos".into()).spawn(move || {
+        let _row = row;
+        run_to_completion(&r, &j, &paths, &album)
+    });
     if let Err(e) = started {
         job.finish(Outcome::Failed(format!("Couldn't start adding the photos to Apple Photos: {e}")));
     }
@@ -581,13 +605,22 @@ fn run_to_completion(runner: &Runner, job: &ImportJob, paths: &[String], album: 
 }
 
 /// Add `paths` to Photos as a job of `imports`: on a worker thread (`background`; the job is
-/// returned running, and announced by the app when it ends) or here (returned finished). An
-/// error, and no job, for a bad request or while another import is reserved or running.
-pub fn import_job(runner: &Runner, imports: &Imports, paths: Vec<String>, album: &str, background: bool) -> Result<Arc<ImportJob>, String> {
+/// returned running, and announced by the app when it ends) or here (returned finished), with a
+/// row in `activity` while Photos works. An error, and no job, for a bad request or while
+/// another import is reserved or running.
+pub fn import_job(
+    runner: &Runner,
+    imports: &Imports,
+    paths: Vec<String>,
+    album: &str,
+    background: bool,
+    activity: Option<&Activity>,
+) -> Result<Arc<ImportJob>, String> {
     let album = check(&paths, album)?;
     let job = imports.begin(paths.len(), &album, false)?;
     job.quiet.store(!background, Ordering::Relaxed);
-    launch(runner, &job, paths, album, background);
+    let row = row(activity, &album);
+    launch(runner, &job, paths, album, background, row);
     Ok(job)
 }
 
@@ -598,9 +631,18 @@ pub struct Reservation {
     runner: Runner,
     album: String,
     job: Option<Arc<ImportJob>>,
+    /// Where [`Reservation::start`]'s import shows while Photos works.
+    activity: Option<Activity>,
 }
 
 impl Reservation {
+    /// Show the import [`Reservation::start`] leaves running in `activity`. ([`Reservation::run`]
+    /// runs on the export's worker, and the export's own row covers it.)
+    pub fn shown_in(mut self, activity: Activity) -> Self {
+        self.activity = Some(activity);
+        self
+    }
+
     pub fn job(&self) -> Option<&Arc<ImportJob>> {
         self.job.as_ref()
     }
@@ -633,7 +675,7 @@ impl Reservation {
     pub fn run(mut self, files: &[Value], cancelled: bool) -> Value {
         match self.take(files, cancelled) {
             Ok((job, paths)) => {
-                launch(&self.runner, &job, paths, self.album.clone(), false);
+                launch(&self.runner, &job, paths, self.album.clone(), false, None);
                 job.json()
             }
             Err(done) => done,
@@ -646,7 +688,8 @@ impl Reservation {
         match self.take(files, false) {
             Ok((job, paths)) => {
                 job.quiet.store(false, Ordering::Relaxed);
-                launch(&self.runner, &job, paths, self.album.clone(), true);
+                let row = row(self.activity.as_ref(), &self.album);
+                launch(&self.runner, &job, paths, self.album.clone(), true, row);
                 job.json()
             }
             Err(done) => done,
@@ -984,7 +1027,7 @@ mod tests {
         let reserved = imports.reserve(runner.clone(), "Trip").unwrap();
         assert_eq!(reserved.job().map(|j| j.json()), Some(json!({"job": 1, "running": true, "exporting": true, "requested": 0, "album": "Trip"})));
         // while the export writes: other imports and exports are refused, naming it
-        let e = import_job(&runner, &imports, paths.clone(), "", false).unwrap_err();
+        let e = import_job(&runner, &imports, paths.clone(), "", false, None).unwrap_err();
         assert!(e.contains("An export is about to add its files to Apple Photos (import 1)"), "{e}");
         assert!(imports.reserve(runner.clone(), "").err().unwrap().contains("(import 1)"));
         assert!(calls.lock().unwrap().is_empty());
@@ -1003,7 +1046,7 @@ mod tests {
         assert!(out["error"].as_str().unwrap().contains("no such file"), "{out}");
         assert_eq!(calls.lock().unwrap().len(), 1);
         assert!(imports.running().is_none());
-        assert_eq!(import_job(&runner, &imports, paths, "", false).unwrap().id, 4);
+        assert_eq!(import_job(&runner, &imports, paths, "", false, None).unwrap().id, 4);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1017,11 +1060,11 @@ mod tests {
         let imports = Imports::default();
         let stopped = |j: &ImportJob| j.json()["error"].as_str().is_some_and(|e| e.contains("stopped unexpectedly"));
         // waiting here
-        let job = import_job(&panicky, &imports, paths.clone(), "", false).unwrap();
+        let job = import_job(&panicky, &imports, paths.clone(), "", false, None).unwrap();
         assert!(job.finished() && stopped(&job), "{}", job.json());
         assert!(imports.running().is_none());
         // on a worker
-        let job = import_job(&panicky, &imports, paths.clone(), "", true).unwrap();
+        let job = import_job(&panicky, &imports, paths.clone(), "", true, None).unwrap();
         let t0 = std::time::Instant::now();
         while !job.finished() {
             assert!(t0.elapsed() < Duration::from_secs(20));
@@ -1040,7 +1083,7 @@ mod tests {
         }
         assert!(stopped(&job));
         // the slot is free: the next import runs
-        assert_eq!(import_job(&good, &imports, paths, "", false).unwrap().json()["imported"], 1);
+        assert_eq!(import_job(&good, &imports, paths, "", false, None).unwrap().json()["imported"], 1);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1050,7 +1093,7 @@ mod tests {
         let (dir, paths) = files("idle", 1);
         let (runner, go) = delayed();
         let imports = Imports::default();
-        let job = import_job(&runner, &imports, paths, "", true).unwrap();
+        let job = import_job(&runner, &imports, paths, "", true, None).unwrap();
         assert!(!job.finished());
         let release = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(200));
@@ -1099,7 +1142,7 @@ mod tests {
         assert!(t0.elapsed() >= Duration::from_millis(1000), "{:?}", t0.elapsed());
         assert_eq!(exporter.join().unwrap()["imported"], 2);
         // an import past its own limit is given up on at its deadline (not the cap)
-        let job = import_job(&taking(3000), &imports, paths.clone(), "", true).unwrap();
+        let job = import_job(&taking(3000), &imports, paths.clone(), "", true, None).unwrap();
         let t0 = std::time::Instant::now();
         assert!(!imports.wait_idle_within(limits));
         let waited = t0.elapsed();
@@ -1116,7 +1159,7 @@ mod tests {
         drop(held);
         assert!(imports.wait_idle_within(limits));
         // and the cap holds over everything
-        let job = import_job(&taking(1000), &imports, paths, "", true).unwrap();
+        let job = import_job(&taking(1000), &imports, paths, "", true, None).unwrap();
         let t0 = std::time::Instant::now();
         assert!(!imports.wait_idle_within(WaitLimits { cap: Duration::from_millis(200), ..limits }));
         assert!(t0.elapsed() < Duration::from_millis(900));
@@ -1147,11 +1190,11 @@ mod tests {
         let (runner, go) = delayed();
         let imports = Imports::default();
         let t0 = std::time::Instant::now();
-        let job = import_job(&runner, &imports, paths.clone(), " Trip ", true).unwrap();
+        let job = import_job(&runner, &imports, paths.clone(), " Trip ", true, None).unwrap();
         assert!(t0.elapsed() < Duration::from_secs(5), "the caller doesn't wait for Photos");
         assert_eq!(job.json(), json!({"job": 1, "running": true, "requested": 2, "album": "Trip"}));
         assert_eq!(imports.running().map(|j| j.id), Some(1));
-        let e = import_job(&runner, &imports, paths.clone(), "", true).unwrap_err();
+        let e = import_job(&runner, &imports, paths.clone(), "", true, None).unwrap_err();
         assert!(e.contains("still adding 2 file(s) from an earlier request (import 1)"), "{e}");
         let e = imports.reserve(runner.clone(), "").err().unwrap();
         assert!(e.contains("still adding"), "{e}");
@@ -1165,7 +1208,7 @@ mod tests {
         assert_eq!((done["running"].as_bool(), done["imported"].as_u64(), done["album"].as_str()), (Some(false), Some(2), Some("Trip")), "{done}");
         // finished: the next one may start; a failed one says why
         let (fails, _) = fake(Err(RunError::Spawn("denied".into())));
-        let job = import_job(&fails, &imports, paths, "", false).unwrap();
+        let job = import_job(&fails, &imports, paths, "", false, None).unwrap();
         assert_eq!(job.id, 2);
         assert!(job.json()["error"].as_str().unwrap().contains("denied"));
         assert!(imports.running().is_none() && imports.latest().is_some_and(|j| j.id == 2));
@@ -1178,12 +1221,67 @@ mod tests {
         let (runner, _) = fake(ok("A\n"));
         let imports = Imports::default();
         for _ in 0..KEPT_JOBS + 3 {
-            import_job(&runner, &imports, paths.clone(), "", false).unwrap();
+            import_job(&runner, &imports, paths.clone(), "", false, None).unwrap();
         }
         let all = imports.all();
         assert_eq!(all.len(), KEPT_JOBS);
         assert_eq!((all[0].id, all[KEPT_JOBS - 1].id), (4, KEPT_JOBS as u64 + 3));
         assert!(imports.get(1).is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The activity stack (issue #345): an import of its own shows a row while Photos works (no ✕,
+    /// no count, the album as detail) and loses it when Photos is done; an export's own import
+    /// shows none of its own, the export's row covers it.
+    #[test]
+    fn imports_of_their_own_show_in_the_activity_stack() {
+        let (dir, paths) = files("activity", 2);
+        let activity = Activity::default();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        // Photos answers when the test lets it (`go`), so no assertion races the import's end
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        let wait = Mutex::new(wait);
+        let (a, rows) = (activity.clone(), seen.clone());
+        let runner: Runner = Arc::new(move |args: &[String], _| {
+            rows.lock().unwrap().push(a.list());
+            let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(20));
+            let n = args.len() - args.iter().position(|x| x == MARKER).unwrap() - 2;
+            Ok(Output { status: Some(0), stdout: "ID\n".repeat(n), stderr: String::new() })
+        });
+        let imports = Imports::default();
+        let ended = |job: &ImportJob| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(20);
+            while !(job.finished() && activity.list().is_empty()) {
+                assert!(std::time::Instant::now() < deadline, "the import ends and its row goes");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        // waiting for Photos here
+        go.send(()).unwrap();
+        let job = import_job(&runner, &imports, paths.clone(), "Trip", false, Some(&activity)).unwrap();
+        assert_eq!(job.json()["imported"], 2);
+        assert!(activity.list().is_empty(), "the row goes when Photos is done");
+        let during = seen.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(during.len(), 1, "{during:?}");
+        assert_eq!((during[0].kind, during[0].label.as_str(), during[0].detail.as_str()), (ACTIVITY_KIND, ACTIVITY_LABEL, "Trip"));
+        assert_eq!((during[0].cancellable, during[0].total), (false, 0), "no ✕ and no count");
+        // on a worker thread: the row stays while Photos works, and goes once the import ends
+        let job = import_job(&runner, &imports, paths.clone(), "", true, Some(&activity)).unwrap();
+        assert_eq!(activity.list().first().map(|r| r.kind), Some(ACTIVITY_KIND));
+        go.send(()).unwrap();
+        ended(&job);
+        // an export's own import: the export's row covers it
+        let exported: Vec<Value> = paths.iter().map(|p| json!({"path": p})).collect();
+        go.send(()).unwrap();
+        imports.reserve(runner.clone(), "").unwrap().shown_in(activity.clone()).run(&exported, false);
+        assert!(seen.lock().unwrap().last().unwrap().is_empty(), "no row of its own while the export's worker waits");
+        // ...unless it is left running on its own once the export is done
+        let started = imports.reserve(runner.clone(), "").unwrap().shown_in(activity.clone()).start(&exported);
+        assert_eq!(started["running"], true);
+        assert_eq!(activity.list().first().map(|r| r.kind), Some(ACTIVITY_KIND));
+        go.send(()).unwrap();
+        let job = imports.get(started["job"].as_u64().unwrap()).unwrap();
+        ended(&job);
         let _ = std::fs::remove_dir_all(dir);
     }
 

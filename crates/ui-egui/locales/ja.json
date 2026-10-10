@@ -1882,5 +1882,6 @@
   "Add to Apple Photos": "Appleの写真に追加",
   "Adding to Apple Photos…": "Appleの写真に追加中…",
   "not added to Apple Photos (cancelled)": "Appleの写真には追加されませんでした（キャンセル）",
-  "The first time, macOS asks whether LightCraft may control Photos.": "初回は、LightCraftに写真の操作を許可するかmacOSが確認します。"
+  "The first time, macOS asks whether LightCraft may control Photos.": "初回は、LightCraftに写真の操作を許可するかmacOSが確認します。",
+  "Adding to Apple Photos": "Appleの写真に追加中"
 }

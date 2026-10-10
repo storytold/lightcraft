@@ -1665,7 +1665,9 @@ impl crate::Session {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let runner = self.apple_photos.clone().ok_or_else(|| crate::apple_photos::unavailable().to_string())?;
-            AfterExport::apple_photos(runner, &o.photos_album, &self.apple_photos_imports)
+            let mut after = AfterExport::apple_photos(runner, &o.photos_album, &self.apple_photos_imports)?;
+            after.apple_photos = after.apple_photos.map(|r| r.shown_in(self.activity.clone()));
+            Ok(after)
         }
         #[cfg(target_arch = "wasm32")]
         Err("Apple Photos is only available on macOS".into())

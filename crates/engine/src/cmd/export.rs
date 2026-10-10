@@ -115,10 +115,17 @@ fn add_to_photos(s: &mut Session, p: &Value) -> Result<Value> {
     // in the middle of the import
     let wait = match p.get("wait") {
         None | Some(Value::Null) => !s.apple_photos_background,
+        // the desktop app answers on its window's thread, which never waits for Photos
+        Some(Value::Bool(true)) if s.apple_photos_background => {
+            return Err(bad(
+                ID,
+                "`wait: true` isn't available in the desktop app: the import runs in the background; its outcome comes from export.photosImports {job}",
+            ));
+        }
         Some(Value::Bool(b)) => *b,
         Some(_) => return Err(bad(ID, "`wait` must be true or false")),
     };
-    let job = crate::apple_photos::import_job(&runner, &s.apple_photos_imports, paths, album, !wait).map_err(|e| bad(ID, e))?;
+    let job = crate::apple_photos::import_job(&runner, &s.apple_photos_imports, paths, album, !wait, Some(&s.activity)).map_err(|e| bad(ID, e))?;
     match job.outcome() {
         Some(crate::apple_photos::Outcome::Failed(e)) => Err(bad(ID, e)),
         _ => Ok(job.json()),
@@ -193,7 +200,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Add to Apple Photos",
         [],
         None,
-        "{paths: [absolute file paths], album?: name (an album at the top level of Photos, made when missing; default none), wait?} → once Photos is done, {job, running: false, requested, album, imported, ids: [Photos media item ids], warning?}; with wait: false, at once {job, running: true, requested, album} and the outcome later from export.photosImports {job}. wait defaults to true without a window (lightcraft-cli, the MCP server) and to false in the desktop app (its control requests are answered on the UI thread). macOS: asks Photos to import the files (the first time, macOS asks the user to allow LightCraft to control Photos). One import runs at a time, and an export adding to Photos reserves it before writing: another is refused until it ends. app.export does this for the files it writes with `addToPhotos: true`",
+        "{paths: [absolute file paths], album?: name (an album at the top level of Photos, made when missing; default none), wait?} → once Photos is done, {job, running: false, requested, album, imported, ids: [Photos media item ids], warning?}; with wait: false, at once {job, running: true, requested, album} and the outcome later from export.photosImports {job}. wait defaults to true without a window (lightcraft-cli, the MCP server) and to false in the desktop app, where wait: true is refused (its control requests are answered on the UI thread, which never waits for Photos). macOS: asks Photos to import the files (the first time, macOS asks the user to allow LightCraft to control Photos). One import runs at a time, and an export adding to Photos reserves it before writing: another is refused until it ends. app.export does this for the files it writes with `addToPhotos: true`",
         photos_enabled,
         add_to_photos
     ));
