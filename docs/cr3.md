@@ -11,6 +11,12 @@ recommended crop, and the decoder uses it as the default crop, so the developed 
 framed (PowerShot SX70 HS, EOS 250D, PowerShot G5 X Mark II, EOS M6 Mark II and EOS M50 samples). A rectangle that
 is missing or does not fit inside the crop is ignored. The embedded JPEG still shows the whole frame.
 
+The EOS R5 Mark II's APS-C crop-mode files (5376 x 3574) state an active area that starts in dark columns
+(132..~256 sit at the black level) and stops ~130 columns short of the image, while their recommended crop
+(5088 x 3392, the camera JPEG's size) lies on the image. When the recommended crop doesn't fit inside the stated
+active area, it is used as the valid area: on raw.pixls.us 7883/7884 the render matches the camera JPEG
+(high-pass correlation 0.99, was -0.13 with a black band on the left). No other of the 110 CC0 CR3s changes.
+
 The decoder is independent Rust code shared by desktop, CLI and WebAssembly;
 it has no operating-system imaging dependency or external decoder. Its sources
 are the public prose descriptions and patents cited in

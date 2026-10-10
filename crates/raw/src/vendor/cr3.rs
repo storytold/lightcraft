@@ -108,10 +108,20 @@ fn aspect_crop(maker: Option<&Ifd>, image: Rect) -> Option<Rect> {
 fn geometry(area: Option<&Cr3ImageArea>, maker: Option<&Ifd>, width: usize, height: usize) -> (Rect, Rect) {
     let area = area.filter(|a| usize::from(a.width) == width && usize::from(a.height) == height);
     let sensor = sensor_crop(maker, width, height);
-    let active = area.and_then(|a| a.active).and_then(|b| inclusive_rect(b, width, height)).or(sensor).unwrap_or(Rect::new(0, 0, width, height));
-    // The recommended crop, when the file gives a consistent one. `AspectInfo` is measured from its origin, so it
-    // is only applied on top of that; without it (the crop doesn't fit the valid area) the whole active area stays.
-    let recommended = area.and_then(|a| inclusive_rect(a.crop, width, height)).or(sensor).and_then(|c| relative_crop(c, active));
+    let mut active = area.and_then(|a| a.active).and_then(|b| inclusive_rect(b, width, height)).or(sensor).unwrap_or(Rect::new(0, 0, width, height));
+    // The recommended crop. `AspectInfo` is measured from its origin, so it is applied on top of it.
+    let stated = area.and_then(|a| inclusive_rect(a.crop, width, height)).or(sensor);
+    let mut recommended = stated.and_then(|c| relative_crop(c, active));
+    // Some crop-mode files (EOS R5 Mark II APS-C, 5376 x 3574) state an active area that starts in the dark
+    // columns and stops short of the image, while their recommended crop lies on the image (measured: columns
+    // 132..~256 sit at the black level, the image runs to the right edge). The recommended crop is then the
+    // valid area.
+    if recommended.is_none()
+        && let Some(c) = stated.filter(|c| c.width >= 2 && c.height >= 2)
+    {
+        active = c;
+        recommended = Some(Rect::new(0, 0, c.width, c.height));
+    }
     let crop = recommended.map(|c| aspect_crop(maker, c).unwrap_or(c)).unwrap_or(Rect::new(0, 0, active.width, active.height));
     (active, crop)
 }
@@ -424,8 +434,9 @@ mod tests {
         }
     }
 
-    /// Some crop-mode files (EOS R5 Mark II 7883) record a recommended crop that reaches past their valid area. The
-    /// whole active area stays then, and `AspectInfo`, which is measured from the recommended crop, is not applied.
+    /// Some crop-mode files (EOS R5 Mark II 7883) record a recommended crop that reaches past their stated active
+    /// area, which starts in dark columns. The recommended crop is then the valid area (no black band on the left),
+    /// and `AspectInfo` applies from its origin.
     #[test]
     fn aspect_info_needs_a_consistent_recommended_crop() {
         let aspect = lightcraft_tiff::IfdBuilder::new().with(ASPECT_INFO, Value::Long(vec![13, 5088, 3392, 0, 0]));
@@ -433,8 +444,11 @@ mod tests {
         let maker = Tiff::parse(&bytes).unwrap().ifds.remove(0);
         let area =
             |crop| Cr3ImageArea { width: 5376, height: 3574, crop, active: Some([132, 160, 5243, 3567]), masked_left: [0; 4], masked_top: None };
-        // crop right edge 5359 > active right edge 5243: not a crop of the active area
-        assert_eq!(geometry(Some(&area([272, 172, 5359, 3563])), Some(&maker), 5376, 3574).1, Rect::new(0, 0, 5112, 3408));
+        // crop right edge 5359 > active right edge 5243: the recommended crop becomes the valid area
+        assert_eq!(
+            geometry(Some(&area([272, 172, 5359, 3563])), Some(&maker), 5376, 3574),
+            (Rect::new(272, 172, 5088, 3392), Rect::new(0, 0, 5088, 3392))
+        );
         // consistent crop: AspectInfo applies from its origin
         assert_eq!(geometry(Some(&area([140, 172, 5227, 3563])), Some(&maker), 5376, 3574).1, Rect::new(8, 12, 5088, 3392));
     }
