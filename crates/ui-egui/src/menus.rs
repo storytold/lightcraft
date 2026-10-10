@@ -180,6 +180,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("file.importLightroom", "Import Lightroom Catalog…", None, "File"),
     ("file.importImmich", "Import from Immich…", None, "File"),
     ("immich.connections", "Immich Connections…", None, "Library>Immich"),
+    ("plugins.manager", "Plug-in Manager…", None, "File"),
     ("file.addFromDevice", "Import from Device", None, ""),
     ("file.findMissing", "Find Missing Photos…", None, "Library"),
     ("file.backupLibrary", "Back Up Library…", None, "File"),
@@ -313,6 +314,10 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
         return Some(r);
     }
     if let Some(r) = crate::catalog_ui::run(app, id, p) {
+        return Some(r);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(r) = crate::panels::plugins::run(app, id, p) {
         return Some(r);
     }
     #[cfg(not(target_arch = "wasm32"))]

@@ -1121,6 +1121,8 @@ impl DacApp {
         panels::notices::show(self, &ctx);
         panels::dialogs::show(self, &ctx);
         catalog_ui::show(self, &ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        panels::plugins::show(self, &ctx);
         panels::library_problem::show(self, &ctx);
         import::progress(self, &ctx);
         sync::progress_window(self, &ctx);
