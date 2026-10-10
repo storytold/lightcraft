@@ -52,6 +52,35 @@ pub fn opener(s: &mut Session, svc: &ServiceConfig, coll: &CollectionConfig, pho
     Ok(Some(Box::new(move || Ok(Box::new(ImmichPublish::new(client, settings, &name, DEVICE, info)) as Box<dyn PublishService>))))
 }
 
+/// Links each original a run uploaded (or found) to its catalog photo on the service's account, so
+/// sync works without a separate `immich.link`. Photos already linked on that account are left
+/// alone. `published`: (photo, remote id `r:<render>+o:<original>`).
+pub fn original_link_ops(s: &Session, svc: &ServiceConfig, published: &[(PhotoId, String)]) -> Vec<dac_catalog::Op> {
+    if svc.kind != dac_immich::publish::KIND {
+        return Vec::new();
+    }
+    let Ok(settings) = serde_json::from_value::<PublishSettings>(svc.settings.clone()) else { return Vec::new() };
+    let now = dac_catalog::rules::now();
+    let mut ops = Vec::new();
+    for (photo, remote) in published {
+        let Some(original) = dac_immich::publish::parse_remote(remote).1 else { continue };
+        if s.catalog.photo(*photo).is_none() || s.catalog.remote_of(*photo).any(|r| r.service == SERVICE && r.account_id == settings.account) {
+            continue;
+        }
+        ops.push(dac_catalog::Catalog::link_remote_op(dac_catalog::RemoteIdentity {
+            photo_id: *photo,
+            service: SERVICE.to_string(),
+            account_id: settings.account.clone(),
+            remote_id: original.to_string(),
+            remote_checksum: None,
+            remote_updated_at: None,
+            last_synced_at: Some(now.clone()),
+            sync_state: dac_catalog::SyncState::Synced,
+        }));
+    }
+    ops
+}
+
 /// Check an Immich service's settings (`publish.createService` / `updateService`).
 pub fn check_settings(settings: &Value) -> std::result::Result<(), String> {
     let st: PublishSettings = serde_json::from_value(settings.clone()).map_err(|e| format!("Immich service settings: {e}"))?;

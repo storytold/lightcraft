@@ -432,6 +432,13 @@ pub fn apply(s: &mut Session, out: Outcome) -> Result<Value> {
             sync_state: SyncState::Synced,
         }));
     }
+    // Immich: the uploaded originals become the photos' Immich links (sync needs no immich.link)
+    if let Ok((_, cfg)) = load(s, "publish.run")
+        && let Some(svc) = cfg.service(&out.service)
+    {
+        let sent: Vec<(PhotoId, String)> = out.published.iter().map(|(p, r, _)| (*p, r.clone())).collect();
+        ops.extend(super::immich::publish::original_link_ops(s, svc, &sent));
+    }
     for photo in &out.removed {
         ops.push(Op::SetRemote { photo: *photo, service: dac_publish::SERVICE.into(), account_id: acct.clone(), record: None });
     }

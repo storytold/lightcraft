@@ -38,13 +38,16 @@ pub fn opener(s: &mut Session, svc: &ServiceConfig, coll: &CollectionConfig) -> 
     let server = crate::cmd::web::server_param(s, &svc.settings, C).map_err(|e| e.to_string())?;
     let auth = crate::cmd::web::server_auth(s, &server, None, C).map_err(|e| e.to_string())?;
     let folder = coll.folder.clone();
-    Ok(Some(Box::new(move || Ok(Box::new(SftpPublish { server, auth, folder }) as Box<dyn PublishService>))))
+    let store = crate::cmd::web::store_path_of(s);
+    Ok(Some(Box::new(move || Ok(Box::new(SftpPublish { server, auth, folder, store }) as Box<dyn PublishService>))))
 }
 
 struct SftpPublish {
     server: Server,
     auth: Auth,
     folder: String,
+    /// The web settings file, where a saved server's host key is remembered on first use.
+    store: Option<std::path::PathBuf>,
 }
 
 impl SftpPublish {
@@ -65,7 +68,12 @@ impl PublishService for SftpPublish {
         for (ext, bytes) in up.sidecars {
             files.push((dac_publish::hard_drive::with_ext(&rel, ext), bytes.clone()));
         }
-        sftp::upload(&self.server, self.auth.clone(), &files, &mut |_, _| true).map_err(PublishError::Io)?;
+        let done = sftp::upload(&self.server, self.auth.clone(), &files, &mut |_, _| true).map_err(PublishError::Io)?;
+        // trust on first use: later uploads (and runs) refuse a different host key
+        if self.server.known_fingerprint.is_empty() && !done.fingerprint.is_empty() {
+            self.server.known_fingerprint = done.fingerprint.clone();
+            crate::cmd::web::remember_fingerprint(self.store.as_deref(), &self.server.name, &done.fingerprint);
+        }
         if let Some(prev) = up.previous.filter(|p| *p != rel) {
             sftp::remove(&self.server, self.auth.clone(), &[prev.to_string()]).map_err(PublishError::Io)?;
         }

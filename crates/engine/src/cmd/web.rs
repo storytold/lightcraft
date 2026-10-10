@@ -49,6 +49,29 @@ fn store_path(s: &Session) -> Option<PathBuf> {
     s.remote.connections_path.as_ref().and_then(|p| p.parent()).map(|d| d.join("web.json"))
 }
 
+/// Trust on first use: store `fp` as the host key of the saved server `name` when it has none yet
+/// (`store`: the web settings file, [`store_path`]). Needs no session, so a publish worker can call it.
+pub(crate) fn remember_fingerprint(store: Option<&std::path::Path>, name: &str, fp: &str) {
+    let Some(path) = store else { return };
+    if fp.is_empty() || name.trim().is_empty() {
+        return;
+    }
+    let Ok(bytes) = std::fs::read(path) else { return };
+    let Ok(mut st) = serde_json::from_slice::<WebStore>(&bytes) else { return };
+    if let Some(x) = st.servers.iter_mut().find(|x| x.name.eq_ignore_ascii_case(name.trim()))
+        && x.known_fingerprint.is_empty()
+    {
+        x.known_fingerprint = fp.to_string();
+        if let Ok(b) = serde_json::to_vec_pretty(&st) {
+            let _ = crate::export::write_file_durable(&path.to_string_lossy(), &b);
+        }
+    }
+}
+
+pub(crate) fn store_path_of(s: &Session) -> Option<PathBuf> {
+    store_path(s)
+}
+
 fn load(s: &Session) -> std::result::Result<WebStore, String> {
     let Some(path) = store_path(s) else { return Ok(WebStore::default()) };
     match std::fs::read(&path) {
@@ -236,13 +259,7 @@ fn upload(s: &mut Session, p: &Value) -> Result<Value> {
     // trust on first use: remember the host key of a saved server
     if server.known_fingerprint.is_empty() && !server.name.is_empty() {
         server.known_fingerprint = done.fingerprint.clone();
-        if let Ok(mut st) = load(s)
-            && let Some(x) = st.servers.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&server.name))
-            && x.known_fingerprint.is_empty()
-        {
-            x.known_fingerprint = done.fingerprint.clone();
-            let _ = save(s, &st);
-        }
+        remember_fingerprint(store_path(s).as_deref(), &server.name, &done.fingerprint);
     }
     Ok(
         json!({"host": server.host, "path": server.path, "files": done.files, "bytes": done.bytes, "photos": ids.len(), "fingerprint": done.fingerprint}),
