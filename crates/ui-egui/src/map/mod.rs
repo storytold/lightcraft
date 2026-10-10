@@ -276,7 +276,10 @@ impl Module for MapModule {
         view::center(ui, app);
     }
     fn keymap(&self) -> &'static [ModuleKey] {
-        &[]
+        &[crate::help_overlay::KEY]
+    }
+    fn command_prefixes(&self) -> &'static [&'static str] {
+        &["map."]
     }
 }
 

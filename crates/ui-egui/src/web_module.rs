@@ -128,7 +128,10 @@ impl Module for WebModule {
         store(ui.ctx(), st);
     }
     fn keymap(&self) -> &'static [ModuleKey] {
-        &[]
+        &[crate::help_overlay::KEY]
+    }
+    fn command_prefixes(&self) -> &'static [&'static str] {
+        &["web."]
     }
 }
 
@@ -269,13 +272,16 @@ fn heading(ui: &mut egui::Ui, text: &str) {
 
 fn field(ui: &mut egui::Ui, id: &str, label: &str, text: &mut String) {
     ui.label(crate::i18n::tr(label));
-    TextField::singleline(&format!("field:web:{id}"), text).width(ui.available_width()).show(ui);
+    let r = TextField::singleline(&format!("field:web:{id}"), text).width(ui.available_width()).show(ui);
+    crate::access::label(&r.response, label);
 }
 
 fn color_row(ui: &mut egui::Ui, label: &str, hex: &mut String) {
     ui.horizontal(|ui| {
         let mut c = dac_webgallery::settings::color_rgb(hex);
-        if ui.color_edit_button_srgb(&mut c).changed() {
+        let r = ui.color_edit_button_srgb(&mut c);
+        crate::access::label(&r, label);
+        if r.changed() {
             *hex = to_hex(c);
         }
         ui.label(crate::i18n::tr(label));
@@ -350,7 +356,8 @@ fn settings_column(ui: &mut egui::Ui, app: &mut DacApp, st: &mut WebUi) {
     field(ui, "path", "Server path", &mut sv.path);
     field(ui, "keyFile", "Private key file (optional)", &mut sv.key_file);
     ui.label(crate::i18n::tr("Password or key passphrase"));
-    ui.add(egui::TextEdit::singleline(&mut st.password).password(true).desired_width(ui.available_width()));
+    let r = ui.add(egui::TextEdit::singleline(&mut st.password).password(true).desired_width(ui.available_width()));
+    crate::access::label(&r, "Password or key passphrase");
     ui.horizontal(|ui| {
         if ui.button(crate::i18n::tr("Save Server")).clicked() {
             let mut p = json!({"server": st.server});
@@ -517,8 +524,8 @@ fn background_text(r: Result<Value, String>) -> String {
 fn result_text(r: Result<Value, String>) -> String {
     match r {
         Ok(v) => match (v.get("url"), v.get("files"), v.get("photos")) {
-            (Some(Value::String(u)), _, _) => format!("{} photos shared: {u}", v["uploaded"]),
-            (_, Some(f), Some(p)) => format!("{p} photos, {f} files"),
+            (Some(Value::String(u)), _, _) => crate::i18n::tr_format!("{n} photos shared: {u}", n = v["uploaded"], u = u),
+            (_, Some(f), Some(p)) => crate::i18n::tr_format!("{p} photos, {f} files", p = p, f = f),
             _ => v.to_string(),
         },
         Err(e) => e,
@@ -533,7 +540,8 @@ fn share_section(ui: &mut egui::Ui, app: &mut DacApp, st: &mut WebUi) {
     ui.spacing_mut().slider_width = 90.0;
     ui.add(egui::Slider::new(&mut st.share_days, 0..=365).text(crate::i18n::tr("Expiry (days, 0 = never)")));
     ui.label(crate::i18n::tr("Link password (optional)"));
-    ui.add(egui::TextEdit::singleline(&mut st.share_password).password(true).desired_width(ui.available_width()));
+    let r = ui.add(egui::TextEdit::singleline(&mut st.share_password).password(true).desired_width(ui.available_width()));
+    crate::access::label(&r, "Link password (optional)");
     let mut dl = !st.share_no_download;
     ui.checkbox(&mut dl, crate::i18n::tr("Allow download"));
     st.share_no_download = !dl;

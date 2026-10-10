@@ -163,11 +163,15 @@ impl Module for BookModule {
     fn keymap(&self) -> &'static [ModuleKey] {
         BOOK_KEYS
     }
+    fn command_prefixes(&self) -> &'static [&'static str] {
+        &["book."]
+    }
 }
 
 /// Book keys over the global keymap: ⌘⇧B adds a page with the default template; ⌘Z / ⌘⇧Z undo
 /// and redo book edits (the book has its own history, separate from the catalog's).
-pub const BOOK_KEYS: &[ModuleKey] = &[("Cmd+Shift+B", "book.addPage", "{}"), ("Cmd+Z", "book.undo", "{}"), ("Cmd+Shift+Z", "book.redo", "{}")];
+pub const BOOK_KEYS: &[ModuleKey] =
+    &[("Cmd+Shift+B", "book.addPage", "{}"), ("Cmd+Z", "book.undo", "{}"), ("Cmd+Shift+Z", "book.redo", "{}"), crate::help_overlay::KEY];
 
 // ------------------------------------------------------------------ commands
 
@@ -733,6 +737,7 @@ fn draw_page(ui: &mut egui::Ui, app: &mut DacApp, r: PageRef, rect: Rect, intera
         if interactive {
             let id = ui.id().with(("book-cell", format!("{r:?}"), i));
             let resp = ui.interact(cell_rect, id, Sense::click_and_drag());
+            crate::access::named(&resp, egui::WidgetType::Button, &format!("{} {}, {}", crate::i18n::tr("Cell"), i + 1, ref_label(r)));
             register(ui.ctx(), format!("book:cell:{i}"), cell_rect);
             if resp.clicked() {
                 app.ui.book.current = r;
@@ -808,6 +813,7 @@ fn draw_page(ui: &mut egui::Ui, app: &mut DacApp, r: PageRef, rect: Rect, intera
     painter.rect_stroke(rect, 0.0, Stroke::new(if current { 2.0 } else { 1.0 }, border), StrokeKind::Outside);
     if interactive {
         let resp = ui.interact(rect, ui.id().with(("book-page", format!("{r:?}"))), Sense::click());
+        crate::access::choice(&resp, &ref_label(r), current);
         register(ui.ctx(), format!("book:page:{}", page_json(r).to_string().trim_matches('"')), rect);
         if resp.clicked() && !clicked {
             app.ui.book.current = r;
@@ -824,8 +830,19 @@ fn draw_page(ui: &mut egui::Ui, app: &mut DacApp, r: PageRef, rect: Rect, intera
 
 fn page_label(book: &Book, r: PageRef) -> String {
     match r {
-        PageRef::Page(i) if book.pages.get(i).is_some_and(|p| p.template == "blank" && p.cells.is_empty()) => format!("Page {} (blank)", i + 1),
-        _ => r.label(),
+        PageRef::Page(i) if book.pages.get(i).is_some_and(|p| p.template == "blank" && p.cells.is_empty()) => {
+            crate::i18n::tr_format!("Page {n} (blank)", n = i + 1)
+        }
+        _ => ref_label(r),
+    }
+}
+
+/// A page's name in the UI language (`Front Cover`, `Page 3`, `Back Cover`).
+fn ref_label(r: PageRef) -> String {
+    match r {
+        PageRef::Front => crate::i18n::tr("Front Cover").to_string(),
+        PageRef::Back => crate::i18n::tr("Back Cover").to_string(),
+        PageRef::Page(i) => crate::i18n::tr_format!("Page {n}", n = i + 1),
     }
 }
 
@@ -952,7 +969,7 @@ fn toolbar(ui: &mut egui::Ui, app: &mut DacApp, r: Rect) {
                 app.ui.book.current = *p;
                 app.ui.book.cell = None;
             }
-            ui.label(format!("{} / {}", app.ui.book.current.label(), app.ui.book.book.pages.len()));
+            ui.label(format!("{} / {}", ref_label(app.ui.book.current), app.ui.book.book.pages.len()));
             if ui.button("▶").clicked()
                 && let Some(p) = pos.and_then(|i| all.get(i + 1))
             {
@@ -976,10 +993,12 @@ fn toolbar(ui: &mut egui::Ui, app: &mut DacApp, r: Rect) {
                 let status = with_status(|s| s.clone());
                 if status.running {
                     ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
-                    ui.label(format!("Exporting {}/{}", status.done, status.total));
+                    ui.label(crate::i18n::tr_format!("Exporting {done}/{total}", done = status.done, total = status.total));
                 } else if let Some(r) = &status.result {
                     match r {
-                        Ok(files) => ui.label(egui::RichText::new(format!("Exported {} file(s)", files.len())).color(t.text_dim)),
+                        Ok(files) => {
+                            ui.label(egui::RichText::new(crate::i18n::tr_format!("Exported {n} file(s)", n = files.len())).color(t.text_dim))
+                        }
                         Err(e) => ui.label(egui::RichText::new(e.clone()).color(Color32::from_rgb(230, 90, 80))),
                     };
                 }
@@ -1004,6 +1023,8 @@ fn filmstrip(ui: &mut egui::Ui, app: &mut DacApp, r: Rect) {
             ui.horizontal(|ui| {
                 for id in ids.iter().take(5000) {
                     let (cell, resp) = ui.allocate_exact_size(vec2(h, h), Sense::click_and_drag());
+                    let name = app.session.catalog.photo(*id).map_or_else(|| id.0.to_string(), |p| p.file_name.clone());
+                    crate::access::named(&resp, egui::WidgetType::Button, &name);
                     if !ui.is_rect_visible(cell) {
                         continue;
                     }
@@ -1110,6 +1131,7 @@ fn templates_panel(ui: &mut egui::Ui, app: &mut DacApp) {
                 let (rect, resp) = ui.allocate_exact_size(vec2(56.0, 44.0), Sense::click());
                 let p = ui.painter();
                 let on = tpl.id == cur_tpl;
+                crate::access::choice(&resp, tpl.name, on);
                 p.rect_filled(rect, 2.0, if on { Color32::from_gray(235) } else { Color32::from_gray(200) });
                 for c in &tpl.cells {
                     let cr = Rect::from_min_size(
@@ -1159,7 +1181,8 @@ fn templates_panel(ui: &mut egui::Ui, app: &mut DacApp) {
 
 fn saved_panel(ui: &mut egui::Ui, app: &mut DacApp) {
     ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut app.ui.book.save_name).hint_text(app.ui.book.book.name.clone()).desired_width(110.0));
+        let r = ui.add(egui::TextEdit::singleline(&mut app.ui.book.save_name).hint_text(app.ui.book.book.name.clone()).desired_width(110.0));
+        crate::access::label(&r, "Book name");
         if ui.button(crate::i18n::tr("Save")).clicked() {
             let n = if app.ui.book.save_name.trim().is_empty() { app.ui.book.book.name.clone() } else { app.ui.book.save_name.clone() };
             op(app, ui.ctx(), "book.save", json!({"name": n}));
@@ -1193,10 +1216,12 @@ fn right_panels(ui: &mut egui::Ui, app: &mut DacApp, r: Rect) {
 fn combo<T: Copy + PartialEq>(ui: &mut egui::Ui, salt: &str, label: &str, cur: T, all: &[T], name: impl Fn(T) -> String) -> Option<T> {
     let mut out = None;
     ui.horizontal(|ui| {
-        ui.label(crate::i18n::tr(label));
-        egui::ComboBox::from_id_salt(salt).selected_text(name(cur)).show_ui(ui, |ui| {
+        if !label.is_empty() {
+            ui.label(crate::i18n::tr(label));
+        }
+        egui::ComboBox::from_id_salt(salt).selected_text(crate::i18n::tr(&name(cur)).to_string()).show_ui(ui, |ui| {
             for v in all {
-                if ui.selectable_label(*v == cur, name(*v)).clicked() && *v != cur {
+                if ui.selectable_label(*v == cur, crate::i18n::tr(&name(*v))).clicked() && *v != cur {
                     out = Some(*v);
                 }
             }
@@ -1264,7 +1289,9 @@ fn settings_panel(ui: &mut egui::Ui, app: &mut DacApp) {
     let mut paper = s.paper.clone();
     ui.horizontal(|ui| {
         ui.label(crate::i18n::tr("Paper"));
-        if ui.add(egui::TextEdit::singleline(&mut paper).hint_text(crate::i18n::tr("e.g. Lustre, 148 gsm"))).changed() {
+        let r = ui.add(egui::TextEdit::singleline(&mut paper).hint_text(crate::i18n::tr("e.g. Lustre, 148 gsm")));
+        crate::access::label(&r, "Paper");
+        if r.changed() {
             op(app, &ctx, "book.settings", json!({"paper": paper}));
         }
     });
@@ -1301,9 +1328,9 @@ fn auto_panel(ui: &mut egui::Ui, app: &mut DacApp) {
     let names: Vec<String> = dac_book::auto::builtin_presets().into_iter().map(|p| p.name).collect();
     ui.horizontal(|ui| {
         ui.label(crate::i18n::tr("Preset"));
-        egui::ComboBox::from_id_salt("book-preset").selected_text(app.ui.book.preset.clone()).width(170.0).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("book-preset").selected_text(crate::i18n::tr(&app.ui.book.preset).to_string()).width(170.0).show_ui(ui, |ui| {
             for n in &names {
-                if ui.selectable_label(*n == app.ui.book.preset, n).clicked() {
+                if ui.selectable_label(*n == app.ui.book.preset, crate::i18n::tr(n)).clicked() {
                     app.ui.book.preset = n.clone();
                 }
             }
@@ -1435,7 +1462,9 @@ fn text_panel(ui: &mut egui::Ui, app: &mut DacApp) {
     match selected_cell(app).map(|c| c.content) {
         Some(CellContent::Text { mut text, .. }) => {
             ui.label(crate::i18n::tr("Cell Text (tokens like {Title} work)"));
-            if ui.add(egui::TextEdit::multiline(&mut text).desired_rows(4).desired_width(f32::INFINITY)).changed() {
+            let r = ui.add(egui::TextEdit::multiline(&mut text).desired_rows(4).desired_width(f32::INFINITY));
+            crate::access::label(&r, "Cell Text");
+            if r.changed() {
                 op(app, &ctx, "book.text", json!({"text": text}));
             }
         }
@@ -1447,7 +1476,9 @@ fn text_panel(ui: &mut egui::Ui, app: &mut DacApp) {
             }
             if let Some(pt) = pt {
                 let mut text = pt.text.clone();
-                if ui.add(egui::TextEdit::singleline(&mut text).hint_text("{Title}")).changed() {
+                let r = ui.add(egui::TextEdit::singleline(&mut text).hint_text("{Title}"));
+                crate::access::label(&r, "Photo Text");
+                if r.changed() {
                     op(app, &ctx, "book.photoText", json!({"text": text}));
                 }
                 ui.horizontal_wrapped(|ui| {
@@ -1484,7 +1515,9 @@ fn text_panel(ui: &mut egui::Ui, app: &mut DacApp) {
     }
     if let Some(pt) = pt {
         let mut text = pt.text.clone();
-        if ui.add(egui::TextEdit::multiline(&mut text).desired_rows(2).desired_width(f32::INFINITY)).changed() {
+        let r = ui.add(egui::TextEdit::multiline(&mut text).desired_rows(2).desired_width(f32::INFINITY));
+        crate::access::label(&r, "Page Text");
+        if r.changed() {
             op(app, &ctx, "book.pageText", json!({"text": text}));
         }
         if let Some(pos) =
@@ -1537,17 +1570,17 @@ fn type_panel(ui: &mut egui::Ui, app: &mut DacApp) {
             }
             ui.separator();
             if ui.selectable_label(false, crate::i18n::tr("Save Current Settings as New Preset")).clicked() {
-                let name = format!("Style {}", app.ui.book.book.text_presets.len() + 1);
+                let name = crate::i18n::tr_format!("Style {n}", n = app.ui.book.book.text_presets.len() + 1);
                 op(app, &ctx, "book.textPreset", json!({"name": name, "style": s}));
             }
         });
     });
     let families = font_families();
-    let font_label = if s.font.is_empty() { "Inter (default)".to_string() } else { s.font.clone() };
+    let font_label = if s.font.is_empty() { crate::i18n::tr("Inter (default)").to_string() } else { s.font.clone() };
     ui.horizontal(|ui| {
         ui.label(crate::i18n::tr("Font"));
         egui::ComboBox::from_id_salt("book-font").selected_text(font_label).width(170.0).height(300.0).show_ui(ui, |ui| {
-            if ui.selectable_label(s.font.is_empty(), "Inter (default)").clicked() {
+            if ui.selectable_label(s.font.is_empty(), crate::i18n::tr("Inter (default)")).clicked() {
                 set(app, json!({"font": ""}));
             }
             for f in &families {
@@ -1571,7 +1604,9 @@ fn type_panel(ui: &mut egui::Ui, app: &mut DacApp) {
     let mut col = s.color;
     ui.horizontal(|ui| {
         ui.label(crate::i18n::tr("Character Color"));
-        if ui.color_edit_button_srgb(&mut col).changed() {
+        let r = ui.color_edit_button_srgb(&mut col);
+        crate::access::label(&r, "Character Color");
+        if r.changed() {
             set(app, json!({"color": col}));
         }
     });
@@ -1612,13 +1647,13 @@ fn type_panel(ui: &mut egui::Ui, app: &mut DacApp) {
         for (a, l) in
             [(dac_book::HAlign::Left, "⇤"), (dac_book::HAlign::Center, "↔"), (dac_book::HAlign::Right, "⇥"), (dac_book::HAlign::Justify, "☰")]
         {
-            if ui.selectable_label(s.align == a, l).on_hover_text(format!("{a:?}")).clicked() {
+            if ui.selectable_label(s.align == a, l).on_hover_text(crate::i18n::tr(&format!("{a:?}")).to_string()).clicked() {
                 set(app, json!({"align": enum_key(a)}));
             }
         }
         ui.separator();
         for (a, l) in [(dac_book::VAlign::Top, "⤒"), (dac_book::VAlign::Middle, "↕"), (dac_book::VAlign::Bottom, "⤓")] {
-            if ui.selectable_label(s.valign == a, l).on_hover_text(format!("{a:?}")).clicked() {
+            if ui.selectable_label(s.valign == a, l).on_hover_text(crate::i18n::tr(&format!("{a:?}")).to_string()).clicked() {
                 set(app, json!({"valign": enum_key(a)}));
             }
         }
@@ -1649,7 +1684,9 @@ fn background_panel(ui: &mut egui::Ui, app: &mut DacApp) {
     let mut col = bg.color;
     ui.horizontal(|ui| {
         ui.label(crate::i18n::tr("Background Color"));
-        if ui.color_edit_button_srgb(&mut col).changed() {
+        let r = ui.color_edit_button_srgb(&mut col);
+        crate::access::label(&r, "Background Color");
+        if r.changed() {
             set(app, json!({"color": col}));
         }
     });
@@ -1681,7 +1718,9 @@ fn background_panel(ui: &mut egui::Ui, app: &mut DacApp) {
     let mut gc = bg.graphic_color;
     ui.horizontal(|ui| {
         ui.label(crate::i18n::tr("Graphic Color"));
-        if ui.color_edit_button_srgb(&mut gc).changed() {
+        let r = ui.color_edit_button_srgb(&mut gc);
+        crate::access::label(&r, "Graphic Color");
+        if r.changed() {
             set(app, json!({"graphicColor": gc}));
         }
     });

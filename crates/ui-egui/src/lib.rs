@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod access;
 pub mod album_picker;
 pub mod book;
 #[cfg(not(target_arch = "wasm32"))]
@@ -20,6 +21,7 @@ pub mod date_picker;
 mod edit_in;
 pub mod export_task;
 pub mod headless;
+pub mod help_overlay;
 pub mod i18n;
 mod i18n_fork;
 pub mod icons;
@@ -55,6 +57,8 @@ pub mod web_module;
 pub mod widgets;
 
 #[cfg(test)]
+mod tests_access;
+#[cfg(test)]
 mod tests_activity;
 #[cfg(test)]
 mod tests_album_picker;
@@ -72,6 +76,8 @@ mod tests_date_picker;
 mod tests_filmstrip;
 #[cfg(test)]
 mod tests_grid;
+#[cfg(test)]
+mod tests_i18n_coverage;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests_immich_ui;
 #[cfg(test)]
@@ -96,6 +102,8 @@ mod tests_masking;
 mod tests_masking_layout;
 #[cfg(test)]
 mod tests_menubar;
+#[cfg(test)]
+mod tests_module_help;
 #[cfg(test)]
 mod tests_modules;
 #[cfg(test)]
@@ -370,6 +378,8 @@ pub struct DacApp {
     pub activity_expanded: bool,
     /// The Map module's view state (P3.3).
     pub map: map::MapUi,
+    /// The Classic module help sheet (⌘/, P6.3).
+    pub help: help_overlay::HelpOverlay,
 }
 
 impl DacApp {
@@ -382,6 +392,7 @@ impl DacApp {
             immich: Default::default(),
             print: Default::default(),
             map: Default::default(),
+            help: Default::default(),
             ui: UiState::default(),
             services,
             renderer: render::Renderer::default(),
@@ -1114,6 +1125,7 @@ impl DacApp {
         };
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(bg)).show(ui, |ui| m.center(ui, self));
         module::lights_out(self, &ctx);
+        help_overlay::show(self, &ctx);
         panels::second::show(self, &ctx);
         panels::notices::show(self, &ctx);
         panels::dialogs::show(self, &ctx);

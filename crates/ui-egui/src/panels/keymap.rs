@@ -164,7 +164,7 @@ pub(crate) fn in_module(module: crate::module::ModuleId, id: &str) -> bool {
         || match module {
             ModuleId::Library => has(LIBRARY),
             ModuleId::Develop => has(DEVELOP),
-            _ => false,
+            other => has(crate::module::get(other).command_prefixes()),
         }
 }
 

@@ -11,7 +11,7 @@ divergence), shared paths only:
 
 | | before U.5 | after U.5 |
 |---|---|---|
-| `git diff --numstat upstream/main HEAD` (raw, renames detected) | 28 259 (code 22 516, locales 4 411, md 1 332) | see the U.5 report (re-measured after the last commit) |
+| `git diff --numstat upstream/main HEAD` (raw, renames detected) | 28 259 (code 22 516, locales 4 411, md 1 332) | 18 351 (code 16 697, locales 322, md 1 332), before merging integ/batch4 |
 | same, upstream normalised for the crate rename (`lightcraft_*`→`dac_*`, `LightcraftApp`→`DacApp`, app dirs) and re-`rustfmt`ed | **21 310** (code 15 426, locales 4 411, md 1 473) | **11 127** (code 9 332, locales 322, md 1 473) |
 
 The normalised number is the one that predicts merge work: rename-only lines are rewritten by

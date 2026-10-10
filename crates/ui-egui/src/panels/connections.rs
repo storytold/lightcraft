@@ -146,7 +146,7 @@ pub fn pump(app: &mut DacApp, ctx: &egui::Context) {
         && app.immich.fetch_tried.insert(id.0)
     {
         match app.session.execute("immich.fetchOriginal", &json!({"id": id.0})) {
-            Ok(r) if r["started"] == true => app.toast(ctx, "Downloading the original from Immich…"),
+            Ok(r) if r["started"] == true => app.toast(ctx, crate::i18n::tr("Downloading the original from Immich…")),
             Ok(r) if r["ok"] == false => app.toast(ctx, r["error"]["message"].as_str().unwrap_or("Immich")),
             Ok(_) => {}
             Err(e) => app.toast(ctx, e.to_string()),
@@ -297,10 +297,12 @@ pub fn settings_tab(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens) {
     super::settings::heading(ui, t, "Add Immich server");
     row(ui, t, "Server URL", |ui| {
         let r = ui.add(egui::TextEdit::singleline(&mut app.immich.url).hint_text("https://photos.example.org").desired_width(300.0));
+        crate::access::label(&r, "Server URL");
         register(ui.ctx(), "field:immichUrl", r.rect);
     });
     row(ui, t, "API key", |ui| {
         let r = ui.add(egui::TextEdit::singleline(&mut app.immich.key).password(true).desired_width(300.0));
+        crate::access::label(&r, "API key");
         register(ui.ctx(), "field:immichKey", r.rect);
     });
     ui.horizontal(|ui| {
@@ -428,12 +430,14 @@ pub(crate) fn unlock_box(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, st: &V
         let mut submit = false;
         row(ui, t, "Passphrase", |ui| {
             let r = ui.add(egui::TextEdit::singleline(&mut app.immich.passphrase).password(true).desired_width(240.0));
+            crate::access::label(&r, "Passphrase");
             register(ui.ctx(), "field:credPassphrase", r.rect);
             submit |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         });
         if !exists {
             row(ui, t, "Repeat", |ui| {
                 let r = ui.add(egui::TextEdit::singleline(&mut app.immich.passphrase2).password(true).desired_width(240.0));
+                crate::access::label(&r, "Repeat");
                 register(ui.ctx(), "field:credPassphrase2", r.rect);
                 submit |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             });
@@ -661,9 +665,11 @@ fn extlib(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, id: &str) {
     let mut remove = None;
     for (n, (c, l)) in rows.iter_mut().enumerate() {
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(c).hint_text("/mnt/photos").desired_width(170.0));
+            let r = ui.add(egui::TextEdit::singleline(c).hint_text("/mnt/photos").desired_width(170.0));
+            crate::access::label(&r, "Immich path");
             ui.label("↔");
-            ui.add(egui::TextEdit::singleline(l).hint_text("/home/me/Photos").desired_width(220.0));
+            let r = ui.add(egui::TextEdit::singleline(l).hint_text("/home/me/Photos").desired_width(220.0));
+            crate::access::label(&r, "Local path");
             if text_button(ui, &format!("immichMapRemove-{n}"), "×", false).clicked() {
                 remove = Some(n);
             }
@@ -1073,6 +1079,7 @@ pub fn import_source(app: &mut DacApp, ui: &mut egui::Ui) {
             ui.label(RichText::new(crate::i18n::tr("Destination")).color(t.text_label));
             let r = ui.add(egui::TextEdit::singleline(&mut app.immich.destination).desired_width(280.0));
             register(ui.ctx(), "field:immichDestination", r.rect);
+            crate::access::label(&r, "Destination");
         }
     });
     ui.horizontal(|ui| {
@@ -1100,6 +1107,8 @@ fn asset_cell(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, i: usize, a: &Val
     register(ui.ctx(), format!("immichAsset:{i}"), r);
     let have = a["inCatalog"] == true;
     let selected = app.immich.selected.contains(&id);
+    let asset_name = a["originalFileName"].as_str().or_else(|| a["name"].as_str()).unwrap_or(&id).to_string();
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, selected, &asset_name));
     let p = ui.painter();
     p.rect_filled(r, 3.0, if selected { t.cell_selected } else { t.cell });
     let img = r.shrink(6.0);
@@ -1371,6 +1380,7 @@ pub fn smart_search_box(app: &mut DacApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let busy = app.immich.smart_pending.is_some();
     let r = ui.add(egui::TextEdit::singleline(&mut app.immich.smart_query).hint_text(crate::i18n::tr("Immich smart search")).desired_width(170.0));
+    crate::access::label(&r, "Immich smart search");
     register(ui.ctx(), "field:immichSmartSearch", r.rect);
     if busy {
         ui.spinner();
