@@ -1,4 +1,4 @@
-//! The LightCraft library (catalog).
+//! The library (catalog).
 //!
 //! State changes only through [`Op`]s. [`Catalog::apply`] returns the inverse op, which gives:
 //! - **persistence**: ops are appended to a log (JSON lines) and replayed on load after the last
@@ -14,33 +14,45 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod dates;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod db;
 pub mod folders;
 pub mod journal;
 pub mod keywords;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod library;
 pub mod local;
 pub mod lock;
 pub mod model;
+pub mod progress;
 pub mod query;
+pub mod remote;
 pub mod rules;
 pub mod safe_file;
+pub(crate) mod settings_ref;
 pub mod stacks;
 pub mod store;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod transfer;
+pub mod xmp_state;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use dac_develop::DevelopSettings;
 pub use dates::{DateRun, GroupBy};
 pub use folders::{FolderNode, FolderRecord};
 pub use journal::{Journal, LoadReport, PersistStats, SnapshotPolicy, SnapshotTiming};
 pub use keywords::KeywordNode;
-use lightcraft_develop::DevelopSettings;
 pub use local::{DEFAULT_FORGET_DAYS, ForgetPlan, folder_of};
 pub use lock::{LibraryLock, LockError, LockOwner};
 pub use model::*;
 pub use query::{DateGroup, Filter, Person, RatingOp, Sort, SortKey, mix64};
+pub use remote::{PreviewEntry, RemoteIdentity, RemoteKey, RemoteTable, SyncState};
 pub use rules::{Match, Rule, RuleSet};
 use serde::{Deserialize, Serialize};
 pub use store::{FsStore, MemStore, Store};
+pub use xmp_state::{SidecarStat, XmpStamp, XmpStatus};
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum CatalogError {
@@ -59,9 +71,9 @@ pub enum CatalogError {
     Corrupt(String),
     #[error("catalog storage: {0}")]
     Io(String),
-    /// The library was written by a newer LightCraft (a newer catalog format, or a change this
+    /// The library was written by a newer version of the app (a newer catalog format, or a change this
     /// version doesn't know). Nothing was read into the session and nothing was modified.
-    #[error("this library was written by a newer version of LightCraft ({0}); update LightCraft to open it. The library was left unchanged.")]
+    #[error("this library was written by a newer version of the app ({0}); update the app to open it. The library was left unchanged.")]
     Newer(String),
 }
 
@@ -152,6 +164,11 @@ pub enum Op {
         id: AlbumId,
         cover: Option<PhotoId>,
     },
+    /// Attach, replace or remove an album's saved-creation layout. Format version 7.
+    SetAlbumCreation {
+        id: AlbumId,
+        creation: Option<Creation>,
+    },
     /// Replace a smart album's rules.
     SetAlbumRules {
         id: AlbumId,
@@ -212,7 +229,7 @@ pub enum Op {
     /// The lens data a photo's file carries (what Reload finds when it was read after import).
     SetEmbeddedLens {
         id: PhotoId,
-        lens: Option<Box<lightcraft_develop::EmbeddedLens>>,
+        lens: Option<Box<dac_develop::EmbeddedLens>>,
     },
     /// The name shown for a colour label (`None` = its colour's name).
     SetLabelName {
@@ -225,8 +242,38 @@ pub enum Op {
         folder: String,
         at: Option<String>,
     },
+    /// What kind of file the photo is and its format, when the file behind it changed kind (a
+    /// link-only Immich photo whose raw original arrived). Format version 4.
+    SetKind {
+        id: PhotoId,
+        kind: MediaKind,
+        format: String,
+    },
+    /// The original file's SHA-1 (40 hex digits; `None` = unknown). Format version 4.
+    SetSha1 {
+        id: PhotoId,
+        sha1: Option<String>,
+    },
+    /// The state at the last XMP read/write (see [`xmp_state`]). Format version 4.
+    SetXmpStamp {
+        id: PhotoId,
+        stamp: Option<xmp_state::XmpStamp>,
+    },
+    /// Link a photo to a remote asset (`record: Some`, replacing its link on that account) or
+    /// unlink it (`None`). Format version 4.
+    SetRemote {
+        photo: PhotoId,
+        service: String,
+        account_id: String,
+        record: Option<Box<RemoteIdentity>>,
+    },
+    /// The previews index entry of a photo (`None`: no preview). Not an undo step. Format version 4.
+    SetPreview {
+        id: PhotoId,
+        entry: Option<PreviewEntry>,
+    },
     /// List a keyword in the library's keyword list with these attributes, or take it off the list
-    /// (`None`; photos that carry it keep it). Format version 4.
+    /// (`None`; photos that carry it keep it). Format version 5.
     SetKeyword {
         path: String,
         info: Option<keywords::KeywordInfo>,
@@ -236,6 +283,12 @@ pub enum Op {
     SetFolderRecord {
         folder: String,
         record: Option<FolderRecord>,
+    },
+    /// A saved location of the Map module, by name (case-insensitive); `None` = delete it.
+    /// Format version 6.
+    SetSavedLocation {
+        name: String,
+        location: Option<dac_geo::SavedLocation>,
     },
     /// Several ops as one step (undo applies the inverses in reverse).
     Batch {
@@ -259,18 +312,44 @@ pub struct Catalog {
     /// When each Local folder was last browsed (folder path → ISO 8601), see [`local`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     browsed: BTreeMap<String, String>,
+    /// Links to assets on remote services (see [`remote`]).
+    #[serde(default, skip_serializing_if = "RemoteTable::is_empty")]
+    remote: RemoteTable,
+    /// The previews index.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    previews: BTreeMap<PhotoId, PreviewEntry>,
     /// Keywords listed on their own or given attributes, by lower-case path (see [`keywords`]).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     keyword_list: BTreeMap<String, keywords::ListedKeyword>,
     /// What the library keeps about its folders (folder identity → record), see [`folders`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     folder_records: BTreeMap<String, FolderRecord>,
+    /// The Map module's saved locations, by lower-case name (format version 6).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    saved_locations: BTreeMap<String, dac_geo::SavedLocation>,
     /// Increments on every applied op.
     #[serde(skip)]
     pub revision: u64,
+    /// Whole-catalog sort orders kept between queries (see [`query::SortCache`]).
+    #[serde(skip)]
+    sort_cache: query::SortCache,
 }
 
 impl Catalog {
+    /// The Map module's saved locations, by name.
+    pub fn saved_locations(&self) -> impl Iterator<Item = &dac_geo::SavedLocation> {
+        self.saved_locations.values()
+    }
+
+    pub fn saved_location(&self, name: &str) -> Option<&dac_geo::SavedLocation> {
+        self.saved_locations.get(&name.trim().to_lowercase())
+    }
+
+    /// Is a photo position inside a private saved location (its location is left out on export)?
+    pub fn is_private_location(&self, gps: (f64, f64)) -> bool {
+        self.saved_locations.values().any(|l| l.private && l.contains(dac_geo::LatLon::new(gps.0, gps.1)))
+    }
+
     pub fn new() -> Catalog {
         Catalog { next_photo: 1, next_album: 1, next_stack: 1, ..Default::default() }
     }
@@ -279,17 +358,17 @@ impl Catalog {
 
     pub fn alloc_photo_id(&mut self) -> PhotoId {
         let id = PhotoId(self.next_photo.max(1));
-        self.next_photo = id.0 + 1;
+        self.next_photo = id.0.saturating_add(1);
         id
     }
     pub fn alloc_album_id(&mut self) -> AlbumId {
         let id = AlbumId(self.next_album.max(1));
-        self.next_album = id.0 + 1;
+        self.next_album = id.0.saturating_add(1);
         id
     }
     pub fn alloc_stack_id(&mut self) -> StackId {
         let id = StackId(self.next_stack.max(1));
-        self.next_stack = id.0 + 1;
+        self.next_stack = id.0.saturating_add(1);
         id
     }
 
@@ -306,6 +385,30 @@ impl Catalog {
     }
     pub fn is_empty(&self) -> bool {
         self.photos.is_empty()
+    }
+    /// Every remote link (see [`remote`]).
+    pub fn remote_links(&self) -> &RemoteTable {
+        &self.remote
+    }
+    /// A photo's remote links.
+    pub fn remote_of(&self, id: PhotoId) -> impl Iterator<Item = &RemoteIdentity> {
+        self.remote.of_photo(id)
+    }
+    /// The photo linked to a remote asset.
+    pub fn photo_of_remote(&self, service: &str, account_id: &str, remote_id: &str) -> Option<PhotoId> {
+        self.remote.photo_of(service, account_id, remote_id)
+    }
+    /// The op that links (or relinks) a photo to a remote asset.
+    pub fn link_remote_op(r: RemoteIdentity) -> Op {
+        Op::SetRemote { photo: r.photo_id, service: r.service.clone(), account_id: r.account_id.clone(), record: Some(Box::new(r)) }
+    }
+    /// The previews index entry of a photo.
+    pub fn preview_entry(&self, id: PhotoId) -> Option<&PreviewEntry> {
+        self.previews.get(&id)
+    }
+    /// Photos with a given SHA-1 (hex, any case).
+    pub fn photos_with_sha1(&self, sha1: &str) -> Vec<PhotoId> {
+        self.photos.values().filter(|p| p.sha1.as_deref().is_some_and(|s| s.eq_ignore_ascii_case(sha1))).map(|p| p.id).collect()
     }
     pub fn album(&self, id: AlbumId) -> Option<&Album> {
         self.albums.get(&id)
@@ -478,13 +581,22 @@ impl Catalog {
     }
 
     fn apply_inner(&mut self, op: Op) -> Result<Op> {
+        match &op {
+            Op::AddPhoto { .. } | Op::RemovePhoto { .. } | Op::SetCaptured { .. } => self.sort_cache.bump(true),
+            Op::SetRating { .. } | Op::SetDevelop { .. } | Op::SetFile { .. } | Op::Relink { .. } | Op::SetContent { .. } => {
+                self.sort_cache.bump(false)
+            }
+            _ => {}
+        }
         Ok(match op {
             Op::AddPhoto { photo } => {
                 if self.photos.contains_key(&photo.id) {
                     return Err(CatalogError::Invalid(format!("photo {:?} exists", photo.id)));
                 }
                 let id = photo.id;
-                self.next_photo = self.next_photo.max(id.0 + 1);
+                // the largest id would leave no next one (a damaged log or a hostile op)
+                let next = id.0.checked_add(1).ok_or_else(|| CatalogError::Invalid(format!("photo id {} is out of range", id.0)))?;
+                self.next_photo = self.next_photo.max(next);
                 self.photos.insert(id, Arc::new(*photo));
                 Op::RemovePhoto { id }
             }
@@ -561,7 +673,9 @@ impl Catalog {
                     self.validate_rules(rules)?;
                 }
                 let id = album.id;
-                self.next_album = self.next_album.max(id.0 + 1);
+                // the largest id would leave no next one (a damaged log or a hostile op)
+                let next = id.0.checked_add(1).ok_or_else(|| CatalogError::Invalid(format!("album id {} is out of range", id.0)))?;
+                self.next_album = self.next_album.max(next);
                 self.albums.insert(id, album);
                 Op::RemoveAlbum { id }
             }
@@ -619,6 +733,21 @@ impl Catalog {
                 let a = self.album_mut(id)?;
                 Op::SetAlbumCover { id, cover: std::mem::replace(&mut a.cover, cover) }
             }
+            Op::SetAlbumCreation { id, creation } => {
+                if let Some(c) = &creation {
+                    if !CREATION_KINDS.contains(&c.kind.as_str()) {
+                        return Err(CatalogError::Invalid(format!("unknown creation kind {:?}", c.kind)));
+                    }
+                    if c.document.len() > MAX_CREATION_BYTES {
+                        return Err(CatalogError::Invalid("the layout document is too large".into()));
+                    }
+                }
+                let a = self.album_mut(id)?;
+                if creation.is_some() && (a.folder || a.smart.is_some()) {
+                    return Err(CatalogError::Invalid("folders and smart albums can't hold a creation".into()));
+                }
+                Op::SetAlbumCreation { id, creation: std::mem::replace(&mut a.creation, creation) }
+            }
             Op::SetAlbumRules { id, rules } => {
                 self.validate_rules(&rules)?;
                 let a = self.album_mut(id)?;
@@ -633,7 +762,9 @@ impl Catalog {
                 }
                 self.validate_stack(stack.id, &stack.photos)?;
                 let id = stack.id;
-                self.next_stack = self.next_stack.max(id.0 + 1);
+                // the largest id would leave no next one (a damaged log or a hostile op)
+                let next = id.0.checked_add(1).ok_or_else(|| CatalogError::Invalid(format!("stack id {} is out of range", id.0)))?;
+                self.next_stack = self.next_stack.max(next);
                 self.stacks.insert(id, stack);
                 Op::RemoveStack { id }
             }
@@ -683,7 +814,7 @@ impl Catalog {
             }
             Op::SetEmbeddedLens { id, lens } => {
                 let p = self.photo_mut(id)?;
-                Op::SetEmbeddedLens { id, lens: std::mem::replace(&mut p.embedded_lens, lens.map(|l| *l)).map(Box::new) }
+                Op::SetEmbeddedLens { id, lens: std::mem::replace(&mut p.embedded_lens, lens) }
             }
             Op::SetFile { id, file_name, source } => {
                 if file_name.trim().is_empty() {
@@ -724,6 +855,56 @@ impl Catalog {
                 };
                 Op::SetBrowsed { folder, at: old }
             }
+            Op::SetKind { id, kind, format } => {
+                let p = self.photo_mut(id)?;
+                Op::SetKind { id, kind: std::mem::replace(&mut p.kind, kind), format: std::mem::replace(&mut p.format, format) }
+            }
+            Op::SetSha1 { id, sha1 } => {
+                if let Some(s) = &sha1
+                    && (s.len() != 40 || !s.bytes().all(|b| b.is_ascii_hexdigit()))
+                {
+                    return Err(CatalogError::Invalid(format!("not a SHA-1: {s}")));
+                }
+                let sha1 = sha1.map(|s| s.to_ascii_lowercase());
+                let p = self.photo_mut(id)?;
+                Op::SetSha1 { id, sha1: std::mem::replace(&mut p.sha1, sha1) }
+            }
+            Op::SetXmpStamp { id, stamp } => {
+                let p = self.photo_mut(id)?;
+                Op::SetXmpStamp { id, stamp: std::mem::replace(&mut p.xmp, stamp) }
+            }
+            Op::SetRemote { photo, service, account_id, record } => {
+                let key = (photo, service, account_id);
+                let old = match record {
+                    Some(r) => {
+                        if r.key() != key {
+                            return Err(CatalogError::Invalid("remote link doesn't match its key".into()));
+                        }
+                        if r.service.is_empty() || r.remote_id.is_empty() {
+                            return Err(CatalogError::Invalid("remote link without a service or remote id".into()));
+                        }
+                        if !self.photos.contains_key(&photo) {
+                            return Err(CatalogError::NoPhoto(photo));
+                        }
+                        self.remote.upsert(*r).map_err(CatalogError::Invalid)?
+                    }
+                    None => self.remote.remove(&key),
+                };
+                let (photo, service, account_id) = key;
+                Op::SetRemote { photo, service, account_id, record: old.map(Box::new) }
+            }
+            Op::SetPreview { id, entry } => {
+                let old = match entry {
+                    Some(e) => {
+                        if !self.photos.contains_key(&id) {
+                            return Err(CatalogError::NoPhoto(id));
+                        }
+                        self.previews.insert(id, e)
+                    }
+                    None => self.previews.remove(&id),
+                };
+                Op::SetPreview { id, entry: old }
+            }
             Op::SetFolderRecord { folder, record } => {
                 let key = folders::record_key(&folder).ok_or_else(|| CatalogError::Invalid(format!("not a folder: {folder}")))?;
                 let old = match record.filter(|r| !r.is_empty()) {
@@ -731,6 +912,21 @@ impl Catalog {
                     None => self.folder_records.remove(&key),
                 };
                 Op::SetFolderRecord { folder: key, record: old }
+            }
+            Op::SetSavedLocation { name, location } => {
+                let key = name.trim().to_lowercase();
+                if key.is_empty() {
+                    return Err(CatalogError::Invalid("a saved location needs a name".into()));
+                }
+                let old = match location {
+                    Some(l) => {
+                        let l = dac_geo::SavedLocation::new(&l.name, l.lat, l.lon, l.radius, l.private)
+                            .map_err(|e| CatalogError::Invalid(e.to_string()))?;
+                        self.saved_locations.insert(key, l)
+                    }
+                    None => self.saved_locations.remove(&key),
+                };
+                Op::SetSavedLocation { name, location: old }
             }
             Op::Batch { ops } => {
                 let mut inverses = Vec::with_capacity(ops.len());
@@ -762,6 +958,12 @@ impl Catalog {
             .map(|a| Op::SetAlbumPhotos { id: a.id, photos: a.photos.iter().copied().filter(|p| *p != id).collect() })
             .collect();
         ops.extend(self.remove_from_stacks_ops(&[id]));
+        for (photo, service, account_id) in self.remote.keys_of(id) {
+            ops.push(Op::SetRemote { photo, service, account_id, record: None });
+        }
+        if self.previews.contains_key(&id) {
+            ops.push(Op::SetPreview { id, entry: None });
+        }
         ops.push(Op::RemovePhoto { id });
         Op::Batch { ops }
     }
@@ -778,6 +980,14 @@ impl Catalog {
             .map(|a| Op::SetAlbumPhotos { id: a.id, photos: a.photos.iter().copied().filter(|p| !gone.contains(p)).collect() })
             .collect();
         ops.extend(self.remove_from_stacks_ops(ids));
+        for id in ids {
+            for (photo, service, account_id) in self.remote.keys_of(*id) {
+                ops.push(Op::SetRemote { photo, service, account_id, record: None });
+            }
+            if self.previews.contains_key(id) {
+                ops.push(Op::SetPreview { id: *id, entry: None });
+            }
+        }
         ops.extend(gone.iter().map(|id| Op::RemovePhoto { id: *id }));
         Op::Batch { ops }
     }
@@ -845,4 +1055,11 @@ mod tests_local;
 #[cfg(test)]
 mod tests_lock;
 #[cfg(test)]
+mod tests_robust;
+#[cfg(test)]
+mod tests_sort_cache;
+#[cfg(test)]
 mod tests_torn_append;
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod tests_v4;

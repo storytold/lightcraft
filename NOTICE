@@ -1,11 +1,18 @@
-LightCraft
-Copyright (c) 2026 ArtCraft Team and the LightCraft contributors.
-Licensed under the MIT License or the Apache License, Version 2.0, at your option
-(LICENSE-MIT, LICENSE-APACHE).
+This software is licensed under the MIT License (LICENSE), except crates/segment and
+crates/fetch, which are licensed under the Apache License 2.0 only (see LICENSE-APACHE in each
+of those crate folders).
 
-The ArtCraft name, wordmark and logos in docs/brand/ are trademarks of the ArtCraft Team. They are
-not open source and are not covered by the license above; their terms are in
-docs/brand/LICENSE-brand.txt.
+Upstream attribution
+
+This project is a fork of LightCraft (https://github.com/storytold/lightcraft),
+Copyright (c) 2026 ArtCraft Team and the LightCraft contributors, licensed under the MIT
+License or the Apache License, Version 2.0. It also includes code from PhotoCraft,
+Copyright (c) the PhotoCraft contributors. Code inherited from these projects is used here
+under the MIT License; the upstream copyright notices are kept in LICENSE and in this file.
+
+The ArtCraft name, wordmark and logos are trademarks of the ArtCraft Team and are not part of
+this project. The upstream LightCraft app icon in assets/app-icon/ is covered by its own
+licence file (assets/app-icon/LICENSE.txt).
 
 Third-party material
 
@@ -27,14 +34,15 @@ crates/segment (lightcraft-segment) ports the SAM 3 model code of Hugging Face T
 Copyright The HuggingFace Team and Meta Platforms, Inc., licensed under the Apache License 2.0.
 The port was modified by the LightCraft contributors (2026): translated from Python/PyTorch to
 Rust on candle and restructured; each ported file says so. Because of this, crates/segment is
-licensed under the Apache License 2.0 only (LICENSE-APACHE), not under the MIT option.
+licensed under the Apache License 2.0 only (crates/segment/LICENSE-APACHE), not under MIT.
+crates/fetch is likewise licensed under the Apache License 2.0 only (crates/fetch/LICENSE-APACHE).
 
-The SAM 3 weights are not part of LightCraft and are never distributed with it. A user downloads
+The SAM 3 weights are not part of this software and are never distributed with it. A user downloads
 the facebook/sam3 checkpoint only when they choose to (in the app, or by hand), under Meta's SAM
 License (https://github.com/facebookresearch/sam3/blob/main/LICENSE), a separate, non-OSI
 licence. See docs/ai-masks.md.
 
-AI denoise weights are not part of LightCraft and are never distributed with it.
+AI denoise weights are not part of this software and are never distributed with it.
 The default build offers user-supplied models only. The optional rawnind-model
 feature offers a separately downloaded RawNIND UtNet2 Bayer checkpoint under
 GPL-3.0 (https://www.gnu.org/licenses/gpl-3.0.html), after the user accepts its terms.

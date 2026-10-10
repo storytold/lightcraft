@@ -592,7 +592,7 @@ mod tests {
         assert!((c[0]["y"].as_f64().unwrap() - 0.1).abs() < 1e-9 && (c[2]["y"].as_f64().unwrap() - 0.9).abs() < 1e-9);
         assert_eq!(i.unmapped, ["AIStructure.Boost", "OrtonFilter.Amount", "Contrast.Contrast", "Screened: blend mode Screen"]);
         assert!(s["light"]["contrast"] == json!(12.0), "the screen-blended layer isn't folded in");
-        lightcraft_develop::DevelopSettings::default().merged(s).expect("valid develop settings");
+        dac_develop::DevelopSettings::default().merged(s).expect("valid develop settings");
     }
 
     #[test]

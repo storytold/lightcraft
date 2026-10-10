@@ -3,7 +3,7 @@
 //! each group's best. Scores are kept on the photos (rules / smart albums: `sharpness`,
 //! `bestOfGroup`).
 
-use lightcraft_catalog::{Analysis, Flag, Op, PhotoId};
+use dac_catalog::{Analysis, Flag, Op, PhotoId};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, cmd};
@@ -15,7 +15,7 @@ const BURST_GAP: i64 = 10;
 const SAME: f32 = 0.93;
 
 fn secs(iso: &str) -> Option<i64> {
-    let d = lightcraft_meta::DateTime::parse_iso(iso)?;
+    let d = dac_meta::DateTime::parse_iso(iso)?;
     Some(((d.year as i64 * 372 + d.month as i64 * 31 + d.day as i64) * 24 + d.hour as i64) * 3600 + d.minute as i64 * 60 + d.second as i64)
 }
 
@@ -30,7 +30,7 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
         match s.source_now(id, crate::media::SourceLevel::Thumb) {
             Ok(src) => {
                 let t = s.catalog.photo(id).and_then(|p| p.captured.as_deref().and_then(secs));
-                use lightcraft_pipeline::cull;
+                use dac_pipeline::cull;
                 rows.push((id, t, cull::sharpness(&src), cull::clipped(&src), cull::signature(&src)));
             }
             Err(e) => failed.push(json!([id.0, e])),
@@ -43,7 +43,7 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
     for i in 1..rows.len() {
         let (a, b) = (&rows[i - 1], &rows[i]);
         let close = matches!((a.1, b.1), (Some(x), Some(y)) if (y - x).abs() <= BURST_GAP);
-        if close && lightcraft_pipeline::cull::similarity(&a.4, &b.4) >= SAME {
+        if close && dac_pipeline::cull::similarity(&a.4, &b.4) >= SAME {
             let g = *group_of[i - 1].get_or_insert_with(|| {
                 next += 1;
                 next - 1
@@ -96,7 +96,7 @@ fn find_similar(s: &mut Session, p: &Value) -> Result<Value> {
             return Some(*v);
         }
         let src = s.source_now(id, crate::media::SourceLevel::Thumb).ok()?;
-        let v = lightcraft_pipeline::cull::signature(&src);
+        let v = dac_pipeline::cull::signature(&src);
         s.signatures.insert(key, v);
         Some(v)
     };
@@ -104,7 +104,7 @@ fn find_similar(s: &mut Session, p: &Value) -> Result<Value> {
     let mut hits: Vec<(PhotoId, f32)> = Vec::new();
     for q in all {
         if let Some(v) = sig(s, q) {
-            let sim = lightcraft_pipeline::cull::similarity(&me, &v);
+            let sim = dac_pipeline::cull::similarity(&me, &v);
             if sim >= min {
                 hits.push((q, sim));
             }

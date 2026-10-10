@@ -1,5 +1,5 @@
-//! `cargo xtask web`: build `apps/lightcraft-web` for wasm32 and bundle it with `wasm-bindgen`
-//! into `<target>/web/` (index.html + worker.js + lightcraft_web.js + lightcraft_web_bg.wasm),
+//! `cargo xtask web`: build `apps/web` for wasm32 and bundle it with `wasm-bindgen`
+//! into `<target>/web/` (index.html + worker.js + dac_web.js + dac_web_bg.wasm),
 //! with gzip and brotli precompressed copies (`*.gz`, `*.br`) next to each file.
 //! `--serve [port]` then serves that folder with a tiny static HTTP server (std only) that sends
 //! the cross-origin isolation headers (COOP/COEP) and the precompressed files when the browser
@@ -13,14 +13,14 @@ use std::process::Command;
 use crate::{cargo, metadata, root, run as step};
 
 const TARGET: &str = "wasm32-unknown-unknown";
-const CHINESE_FONT_FILE: &str = "lightcraft_zh_hans.otf";
+const CHINESE_FONT_FILE: &str = "app_zh_hans.otf";
 const CHINESE_FONT_LICENSE_FILE: &str = "OFL-noto-sans-cjk-sc.txt";
 
-/// Files copied from `apps/lightcraft-web/` into the bundle as they are.
+/// Files copied from `apps/web/` into the bundle as they are.
 const STATIC_FILES: [&str; 2] = ["index.html", "worker.js"];
 
 /// Bundle files that get precompressed copies.
-const COMPRESSED: [&str; 4] = ["index.html", "worker.js", "lightcraft_web.js", "lightcraft_web_bg.wasm"];
+const COMPRESSED: [&str; 4] = ["index.html", "worker.js", "dac_web.js", "dac_web_bg.wasm"];
 
 /// The Noto face is shipped beside the WASM rather than embedded in it: hosts such as Cloudflare
 /// Pages cap individual files at 25 MiB, while the complete site can contain larger assets.
@@ -37,7 +37,7 @@ fn chinese_font_in_manifest(manifest: &str) -> Option<(&str, &str)> {
 
 fn copy_chinese_font(out: &Path) -> Result<bool, String> {
     // A previous font-enabled build must not leave an unlicensed/stale asset in a font-free one.
-    for name in [CHINESE_FONT_FILE, CHINESE_FONT_LICENSE_FILE, "lightcraft_zh_hans.otf.gz", "lightcraft_zh_hans.otf.br"] {
+    for name in [CHINESE_FONT_FILE, CHINESE_FONT_LICENSE_FILE, "app_zh_hans.otf.gz", "app_zh_hans.otf.br"] {
         let path = out.join(name);
         match std::fs::remove_file(&path) {
             Ok(()) => (),
@@ -103,21 +103,21 @@ pub fn run(args: &[&str]) -> Result<(), String> {
     let profile = if dev { "dev" } else { "web" };
 
     let mut c = cargo();
-    c.args(["build", "-p", "lightcraft-web", "--lib", "--target", TARGET, "--profile", profile]);
-    step(c, &format!("cargo build -p lightcraft-web --target {TARGET} --profile {profile}"))?;
+    c.args(["build", "-p", "dac-web", "--lib", "--target", TARGET, "--profile", profile]);
+    step(c, &format!("cargo build -p dac-web --target {TARGET} --profile {profile}"))?;
 
-    let wasm = target_dir.join(TARGET).join(if dev { "debug" } else { profile }).join("lightcraft_web.wasm");
+    let wasm = target_dir.join(TARGET).join(if dev { "debug" } else { profile }).join("dac_web.wasm");
     let out = target_dir.join("web");
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
     let mut b = Command::new("wasm-bindgen");
-    b.arg(&wasm).args(["--target", "web", "--no-typescript", "--out-name", "lightcraft_web", "--out-dir"]).arg(&out);
+    b.arg(&wasm).args(["--target", "web", "--no-typescript", "--out-name", "dac_web", "--out-dir"]).arg(&out);
     if dev {
         b.arg("--debug");
     }
     step(b, &format!("wasm-bindgen {} → {}", wasm.display(), out.display()))?;
 
     // optional size pass when binaryen is installed
-    let bg = out.join("lightcraft_web_bg.wasm");
+    let bg = out.join("dac_web_bg.wasm");
     if !dev && Command::new("wasm-opt").arg("--version").output().is_ok() {
         let mut o = Command::new("wasm-opt");
         o.args(["-O2", "--enable-bulk-memory", "--enable-nontrapping-float-to-int", "--enable-sign-ext", "--enable-mutable-globals"])
@@ -129,7 +129,7 @@ pub fn run(args: &[&str]) -> Result<(), String> {
         }
     }
     for f in STATIC_FILES {
-        std::fs::copy(root().join("apps/lightcraft-web").join(f), out.join(f)).map_err(|e| format!("copy {f}: {e}"))?;
+        std::fs::copy(root().join("apps/web").join(f), out.join(f)).map_err(|e| format!("copy {f}: {e}"))?;
     }
     let chinese_font = copy_chinese_font(&out)?;
 
@@ -289,7 +289,7 @@ mod tests {
 
     #[test]
     fn wasm_mime() {
-        assert_eq!(mime(Path::new("a/lightcraft_web_bg.wasm")), "application/wasm");
+        assert_eq!(mime(Path::new("a/dac_web_bg.wasm")), "application/wasm");
         assert_eq!(mime(Path::new("index.html")), "text/html; charset=utf-8");
         assert_eq!(mime(Path::new("worker.js")), "text/javascript; charset=utf-8");
         assert_eq!(mime(Path::new(CHINESE_FONT_FILE)), "font/otf");

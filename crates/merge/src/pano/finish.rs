@@ -9,7 +9,7 @@
 //! - **Fill edges**: transparent areas are filled by push–pull diffusion of the surrounding pixels
 //!   in log space (no patch synthesis).
 
-use lightcraft_raster::{Plane, Rgb32f};
+use dac_raster::{Plane, Rgb32f};
 use rayon::prelude::*;
 
 use super::blend::{Buf, push_pull};

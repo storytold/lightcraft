@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Template: packaging/macos/package.sh substitutes @VERSION@ (full, e.g. 0.2.0-rc.1),
-     @SHORT_VERSION@ (numeric X.Y.Z) and @BUILD_SHA@. -->
+<!-- Template: packaging/macos/package.sh (and `cargo xtask package`) fill the {{…}} placeholders from
+     brand.toml, plus {{version}} (full, e.g. 0.2.0-rc.1), {{short_version}} (numeric X.Y.Z) and {{build_sha}}. -->
 <plist version="1.0">
 <dict>
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>LightCraft</string>
+  <string>{{display_name}}</string>
   <key>CFBundleName</key>
-  <string>LightCraft</string>
+  <string>{{short_name}}</string>
   <key>CFBundleExecutable</key>
-  <string>LightCraft</string>
+  <string>{{display_name}}</string>
   <key>CFBundleIdentifier</key>
-  <string>ai.storyteller.lightcraft</string>
+  <string>{{app_id}}</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundlePackageType</key>
@@ -21,15 +21,15 @@
   <key>CFBundleSignature</key>
   <string>????</string>
   <key>CFBundleShortVersionString</key>
-  <string>@SHORT_VERSION@</string>
+  <string>{{short_version}}</string>
   <key>CFBundleVersion</key>
-  <string>@SHORT_VERSION@</string>
-  <key>LightCraftVersion</key>
-  <string>@VERSION@</string>
-  <key>LightCraftBuildCommit</key>
-  <string>@BUILD_SHA@</string>
+  <string>{{short_version}}</string>
+  <key>AppFullVersion</key>
+  <string>{{version}}</string>
+  <key>AppBuildCommit</key>
+  <string>{{build_sha}}</string>
   <key>CFBundleIconFile</key>
-  <string>LightCraft</string>
+  <string>{{display_name}}</string>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.graphics-design</string>
   <!-- Must match MACOSX_DEPLOYMENT_TARGET in package.sh. Big Sur is the first release on
@@ -43,29 +43,29 @@
   <key>NSRequiresAquaSystemAppearance</key>
   <false/>
   <key>NSHumanReadableCopyright</key>
-  <string>Copyright © the LightCraft authors. MIT OR Apache-2.0.</string>
+  <string>Copyright © {{vendor}}. MIT.</string>
 
-  <!-- Lightcraft's own format. -->
+  <!-- The app's own format. -->
   <key>UTExportedTypeDeclarations</key>
   <array>
     <dict>
       <key>UTTypeIdentifier</key>
-      <string>ai.storyteller.lightcraft.document</string>
+      <string>{{app_id}}.document</string>
       <key>UTTypeDescription</key>
-      <string>LightCraft Document</string>
+      <string>{{display_name}} Document</string>
       <key>UTTypeConformsTo</key>
       <array>
         <string>public.data</string>
         <string>public.image</string>
       </array>
       <key>UTTypeIconFile</key>
-      <string>LightCraft</string>
+      <string>{{display_name}}</string>
       <key>UTTypeTagSpecification</key>
       <dict>
         <key>public.filename-extension</key>
         <array><string>pcraft</string></array>
         <key>public.mime-type</key>
-        <array><string>application/x-lightcraft</string></array>
+        <array><string>application/x-{{binary}}</string></array>
       </dict>
     </dict>
   </array>
@@ -90,7 +90,7 @@
     </dict>
     <dict>
       <key>UTTypeIdentifier</key>
-      <string>ai.storyteller.lightcraft.qoi</string>
+      <string>{{app_id}}.qoi</string>
       <key>UTTypeDescription</key>
       <string>QOI Image</string>
       <key>UTTypeConformsTo</key>

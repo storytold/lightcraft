@@ -1,13 +1,13 @@
 //! The activity stack (issue #345): every long-running task in one place, floating in the top-left corner under the
 //! top bar while something runs — a row each with its name, a progress bar, what it is working on, and ✕ for the ones
-//! that can be cancelled. The tasks come from the engine's registry ([`lightcraft_engine::activity`]); ✕ runs
+//! that can be cancelled. The tasks come from the engine's registry ([`dac_engine::activity`]); ✕ runs
 //! `activity.cancel` like any other frontend would.
 
+use dac_engine::activity::{TaskInfo, Unit};
 use egui::{Align, Layout, Margin, Rect, RichText, Sense, Stroke, pos2, vec2};
-use lightcraft_engine::activity::{TaskInfo, Unit};
 use serde_json::json;
 
-use crate::LightcraftApp;
+use crate::DacApp;
 use crate::i18n::{tr, tr_format};
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
@@ -54,7 +54,7 @@ fn detail_line(t: &TaskInfo) -> String {
 }
 
 /// Draw the stack (called every frame, after the panels and dialogs).
-pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn show(app: &mut DacApp, ctx: &egui::Context) {
     let all = app.session.activity.list();
     if all.is_empty() {
         app.activity_expanded = false;
@@ -110,8 +110,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
 }
 
 /// ✕ on task `id`'s row. The task may have just finished or stopped being cancellable: nothing to tell the user then,
-/// so the command goes to the engine directly (`LightcraftApp::run` would put its error in the status bar).
-pub(crate) fn cancel(app: &mut LightcraftApp, id: u64) {
+/// so the command goes to the engine directly (`DacApp::run` would put its error in the status bar).
+pub(crate) fn cancel(app: &mut DacApp, id: u64) {
     let _ = app.session.execute("activity.cancel", &json!({"id": id}));
 }
 

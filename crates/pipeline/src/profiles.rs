@@ -9,8 +9,8 @@
 
 use std::borrow::Cow;
 
-use lightcraft_develop::{DevelopSettings, Treatment, Wheel};
-use lightcraft_geom::Point;
+use dac_develop::{DevelopSettings, Treatment, Wheel};
+use dac_geom::Point;
 
 /// Add a colour-grading wheel (`hue` °, `sat` 0..100, `lum` −100..100) scaled by `k` to `w`, as a
 /// colour vector (so a profile's tint combines with the user's instead of replacing it).

@@ -1,6 +1,6 @@
-//! The denoise models LightCraft knows about: what each one is, who may use it, and where to fetch it.
+//! The denoise models the app knows about: what each one is, who may use it, and where to fetch it.
 //!
-//! None is part of LightCraft. A model with an address here can be downloaded when the user asks and has accepted
+//! None is part of the app. A model with an address here can be downloaded when the user asks and has accepted
 //! its terms; anything else is brought by the user as an `.onnx` file with a `denoise-model.json` beside it.
 
 #[cfg(any(feature = "rawnind-model", test))]
@@ -31,7 +31,7 @@ fn rawnind_bayer() -> Known {
             name: "GPL-3.0".into(),
             commercial: Commercial::Yes,
             url: Some("https://www.gnu.org/licenses/gpl-3.0.html".into()),
-            notice: "The weights are published under the GNU General Public License v3. LightCraft does not include them: they \
+            notice: "The weights are published under the GNU General Public License v3. The app does not include them: they \
                      are downloaded to your computer at your request and used by it only. If you pass the model file on, the \
                      GPL applies to that copy. Commercial use is subject to the GPL terms, including applicable source, licence and notice obligations on redistribution."
                 .into(),
@@ -57,7 +57,7 @@ fn rawnind_bayer() -> Known {
     Known { manifest, download: Some(download), entry: Some("model_bayer.onnx") }
 }
 
-/// Every model LightCraft knows.
+/// Every model the app knows.
 pub fn all() -> Vec<Known> {
     #[cfg(feature = "rawnind-model")]
     {

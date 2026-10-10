@@ -12,11 +12,11 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
-use lightcraft_catalog::PhotoId;
-use lightcraft_faces::align::{Rgb, align_to_template, crop_box};
-use lightcraft_faces::runtime::Embedder;
-use lightcraft_faces::yunet::{Detector, Face, Options};
-use lightcraft_geom::Rect;
+use dac_catalog::PhotoId;
+use dac_faces::align::{Rgb, align_to_template, crop_box};
+use dac_faces::runtime::Embedder;
+use dac_faces::yunet::{Detector, Face, Options};
+use dac_geom::Rect;
 
 use crate::media::{PreviewLoader, RenderJob};
 
@@ -75,7 +75,7 @@ impl Pace {
 }
 
 /// How many photos are worked on at once at `pace` on a machine with `cores` threads (as the system reports them, which
-/// respects container limits and affinity). `cap` is a limit the user set (`LIGHTCRAFT_FACE_THREADS`). Memory is not
+/// respects container limits and affinity). `cap` is a limit the user set (`{ENV_PREFIX}_FACE_THREADS`). Memory is not
 /// decided here: decodes wait at the process-wide memory gate ([`crate::memory::work_gate`]), sized from the RAM.
 pub(crate) fn workers_for(cores: usize, pace: Pace, cap: Option<usize>) -> usize {
     let n = match pace {
@@ -93,17 +93,17 @@ fn cores() -> usize {
 }
 
 fn cap_from_env() -> Option<usize> {
-    std::env::var("LIGHTCRAFT_FACE_THREADS").ok().and_then(|v| v.trim().parse::<usize>().ok())
+    dac_brand::env("FACE_THREADS").and_then(|v| v.trim().parse::<usize>().ok())
 }
 
 /// The most photos the memory budget can hold in progress at once: half of it (the rest is the window's, the caches',
-/// the renders'), a worker at a time. Raising the budget (`LIGHTCRAFT_MEMORY_MB`) raises this.
+/// the renders'), a worker at a time. Raising the budget (`{ENV_PREFIX}_MEMORY_MB`) raises this.
 fn memory_workers() -> usize {
     (crate::memory::budget() / 2 / WORKER_BYTES).max(1)
 }
 
 /// Photos to work on at once at `pace` on this machine: by the processor's threads and the pace, and never more than
-/// the memory allows. A limit the user sets (`LIGHTCRAFT_FACE_THREADS`) replaces the memory one.
+/// the memory allows. A limit the user sets (`{ENV_PREFIX}_FACE_THREADS`) replaces the memory one.
 pub(crate) fn target_workers(pace: Pace) -> usize {
     workers_for(cores(), pace, Some(cap_from_env().unwrap_or_else(memory_workers)))
 }
@@ -301,7 +301,7 @@ fn scan_pool(pace: Pace) -> Option<&'static rayon::ThreadPool> {
     cell.get_or_init(|| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(pool_threads_for(cores(), pace, cap_from_env()))
-            .thread_name(move |i| format!("lightcraft-faces-{}-{i}", pace as u8))
+            .thread_name(move |i| format!("dac-faces-{}-{i}", pace as u8))
             .build()
             .ok()
     })
@@ -339,7 +339,7 @@ impl Worker {
         let mut started = 0;
         for i in 0..threads.clamp(1, MAX_WORKERS) {
             let (rx, tx, limit) = (job_rx.clone(), done_tx.clone(), limit.clone());
-            let spawned = std::thread::Builder::new().name(format!("lightcraft-faces-{i}")).spawn(move || {
+            let spawned = std::thread::Builder::new().name(format!("dac-faces-{i}")).spawn(move || {
                 loop {
                     // the lock is held only while waiting for a job, never while working on one; the threads end when
                     // the session (the only sender) is dropped

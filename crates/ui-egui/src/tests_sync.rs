@@ -1,6 +1,6 @@
-//! Synchronize Folder in the app (see `lightcraft_engine::sync`).
+//! Synchronize Folder in the app (see `dac_engine::sync`).
 //!
-//! Scenarios, in the words of someone whose folder changed outside LightCraft:
+//! Scenarios, in the words of someone whose folder changed outside the app:
 //!
 //! * Right-click a folder in the sidebar's Folders section ▸ Synchronize Folder…: a dialog opens
 //!   at once and scans the folder without holding up the app, then says how many photos are new,
@@ -18,7 +18,7 @@ use serde_json::json;
 
 use crate::headless::Headless;
 use crate::state::Dialog;
-use crate::{LightcraftApp, Services};
+use crate::{DacApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
@@ -48,8 +48,8 @@ impl Drop for Scratch {
 fn write_png(path: &str, seed: u8) {
     let (w, h) = (24usize, 16usize);
     let data: Vec<[u8; 4]> = (0..w * h).map(|i| [(i % w * 9) as u8, (i / w * 13) as u8, seed, 255]).collect();
-    let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
-    let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    let img = dac_raster::Rgba8 { width: w, height: h, data };
+    let bytes = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).unwrap();
     std::fs::create_dir_all(std::path::Path::new(path).parent().unwrap()).unwrap();
     std::fs::write(path, bytes).unwrap();
 }
@@ -59,11 +59,11 @@ fn write_png(path: &str, seed: u8) {
 fn changed_folder(dir: &Scratch) -> Headless {
     write_png(&dir.path("trip/a.png"), 1);
     write_png(&dir.path("trip/b.png"), 2);
-    let mut session = lightcraft_engine::Session::new().with_fs();
+    let mut session = dac_engine::Session::new().with_fs();
     session.execute("library.import", &json!({"paths": [dir.path("trip")]})).unwrap();
     write_png(&dir.path("trip/c.png"), 3);
     std::fs::remove_file(dir.path("trip/b.png")).unwrap();
-    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let app = DacApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -286,7 +286,7 @@ fn the_folders_scan_shows_a_row_and_its_cross_closes_the_dialog() {
         while !g.load(std::sync::atomic::Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(5));
         }
-        Ok(lightcraft_engine::media::ProbeInfo { format: "PNG".into(), ..Default::default() })
+        Ok(dac_engine::media::ProbeInfo { format: "PNG".into(), ..Default::default() })
     }));
     crate::sync::open(&mut h.app, &dir.path("trip"), "trip", false).unwrap();
     let rows = h.app.session.activity.list();

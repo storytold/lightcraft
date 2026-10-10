@@ -284,7 +284,12 @@ impl Op {
             | Op::SetFile { id, .. }
             | Op::Relink { id, .. }
             | Op::SetContent { id, .. }
+            | Op::SetSha1 { id, .. }
+            | Op::SetKind { id, .. }
+            | Op::SetXmpStamp { id, .. }
+            | Op::SetPreview { id, .. }
             | Op::SetEmbeddedLens { id, .. } => out(*id),
+            Op::SetRemote { photo, .. } => out(*photo),
             Op::AddAlbum { album } => {
                 album.photos.iter().for_each(|p| out(*p));
                 album.cover.into_iter().for_each(&mut *out);
@@ -297,12 +302,14 @@ impl Op {
             | Op::RenameAlbum { .. }
             | Op::MoveAlbum { .. }
             | Op::SetAlbumOrder { .. }
+            | Op::SetAlbumCreation { .. }
             | Op::SetAlbumRules { .. }
             | Op::RemoveStack { .. }
             | Op::SetLabelName { .. }
             | Op::SetKeyword { .. }
             | Op::SetBrowsed { .. }
-            | Op::SetFolderRecord { .. } => {}
+            | Op::SetFolderRecord { .. }
+            | Op::SetSavedLocation { .. } => {}
         }
     }
 }

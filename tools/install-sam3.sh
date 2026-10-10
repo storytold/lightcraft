@@ -1,10 +1,10 @@
 #!/bin/sh
-# Install the SAM 3 model for LightCraft's Object and Describe masks (see docs/ai-masks.md).
+# Install the SAM 3 model for the app's Object and Describe masks (see docs/ai-masks.md).
 #
 # The desktop app offers to download the model itself when an AI mask first needs it; this script
 # is for developers (reference tests, benchmarks) and for installing from Hugging Face directly.
 #
-# The weights are not part of LightCraft: they are Meta's facebook/sam3 checkpoint on Hugging
+# The weights are not part of the app: they are Meta's facebook/sam3 checkpoint on Hugging
 # Face, under the SAM License. Access is gated: open https://huggingface.co/facebook/sam3, accept
 # the license, wait for approval, then run this with a token that can read it:
 #
@@ -14,7 +14,7 @@
 # interrupted, and the 3.4 GB weights are checked against the official SHA-256.
 #
 # Options:
-#     --dir DIR     where to install (default: the folder LightCraft looks in; or LIGHTCRAFT_SAM3_DIR)
+#     --dir DIR     where to install (default: the folder the app looks in; or <PREFIX>_SAM3_DIR, PREFIX = env_prefix in brand.toml)
 #     --repo NAME   another Hugging Face repo with the same files (default: facebook/sam3)
 #     --check       only verify an existing installation
 set -eu
@@ -25,11 +25,16 @@ SHA256="6d06f0a5f84e435071fe6603e61d0b4cc7b40e0d39d487cfd4d67d8cc11cc14a"
 SIZE=3439938512
 FILES="config.json vocab.json merges.txt tokenizer.json tokenizer_config.json special_tokens_map.json processor_config.json"
 
+# names come from brand.toml at the repository root
+brand() { sed -n "s/^$1 *= *\"\([^\"]*\)\".*/\1/p" "$(dirname "$0")/../brand.toml" | head -n 1; }
+SETTINGS_DIR="$(brand settings_dir)"
+ENV_PREFIX="$(brand env_prefix)"
 case "$(uname -s)" in
-    Darwin) DEFAULT_DIR="$HOME/Library/Application Support/LightCraft/models/sam3" ;;
-    *) DEFAULT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/lightcraft/models/sam3" ;;
+    Darwin) DEFAULT_DIR="$HOME/Library/Application Support/$SETTINGS_DIR/models/sam3" ;;
+    *) DEFAULT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/$(printf %s "$SETTINGS_DIR" | tr '[:upper:]' '[:lower:]')/models/sam3" ;;
 esac
-DIR="${LIGHTCRAFT_SAM3_DIR:-$DEFAULT_DIR}"
+ENV_DIR="$(printenv "${ENV_PREFIX}_SAM3_DIR" || true)"
+DIR="${ENV_DIR:-$DEFAULT_DIR}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -127,4 +132,4 @@ else
 fi
 
 verify
-echo "Restart LightCraft; Object and Describe in the Masking panel now use it."
+echo "Restart the app; Object and Describe in the Masking panel now use it."

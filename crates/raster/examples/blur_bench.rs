@@ -1,7 +1,7 @@
 //! Micro-benchmark for the blur/map primitives (min of N runs, wall-clock and process CPU time, so
 //! it stays meaningful on a loaded machine):
-//! `RAYON_NUM_THREADS=1 cargo run --release -p lightcraft-raster --example blur_bench`.
-use lightcraft_raster::{Plane, Rgb32f, blur::gaussian};
+//! `RAYON_NUM_THREADS=1 cargo run --release -p dac-raster --example blur_bench`.
+use dac_raster::{Plane, Rgb32f, blur::gaussian};
 use std::time::Instant;
 
 /// Process CPU time in ms (all threads). The only `unsafe` is this libc clock read, in a dev-only example.

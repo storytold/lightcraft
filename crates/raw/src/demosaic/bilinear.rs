@@ -3,7 +3,7 @@
 
 use super::Mosaic;
 use crate::Rgb32f;
-use lightcraft_raster::par_rows;
+use dac_raster::par_rows;
 
 /// Offsets (dx, dy) of same-colour neighbours for each pattern position and colour.
 pub(crate) fn neighbour_table(m: &Mosaic) -> Vec<[Vec<(isize, isize)>; 3]> {

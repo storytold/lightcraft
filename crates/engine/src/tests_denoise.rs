@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use lightcraft_denoise::manifest::{DenoiserManifest, Domain, Gain};
-use lightcraft_denoise::run::TileRunner;
+use dac_denoise::manifest::{DenoiserManifest, Domain, Gain};
+use dac_denoise::run::TileRunner;
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -22,7 +22,7 @@ struct Dim {
 }
 
 impl TileRunner for Dim {
-    fn run(&self, input: &[f32]) -> Result<Vec<f32>, lightcraft_denoise::Error> {
+    fn run(&self, input: &[f32]) -> Result<Vec<f32>, dac_denoise::Error> {
         self.runs.fetch_add(1, Ordering::Relaxed);
         let t = ((input.len() / 4) as f64).sqrt() as usize;
         let side = 2 * t;
@@ -173,7 +173,7 @@ fn setup(tag: &str, with_model: bool) -> Setup {
     Setup { dir, s, runs }
 }
 
-fn photo(s: &Session) -> lightcraft_catalog::PhotoId {
+fn photo(s: &Session) -> dac_catalog::PhotoId {
     s.catalog.photos().next().unwrap().id
 }
 
@@ -189,12 +189,12 @@ fn pump_until_ready(s: &mut Session, n: u64) -> Value {
     panic!("not ready: {}", s.execute("denoise.status", &json!({})).unwrap());
 }
 
-fn mean(img: &lightcraft_raster::Rgba8) -> f64 {
+fn mean(img: &dac_raster::Rgba8) -> f64 {
     let sum: u64 = img.data.iter().map(|p| u64::from(p[0]) + u64::from(p[1]) + u64::from(p[2])).sum();
     sum as f64 / (img.data.len() * 3) as f64
 }
 
-fn rendered_mean(s: &mut Session, id: lightcraft_catalog::PhotoId) -> f64 {
+fn rendered_mean(s: &mut Session, id: dac_catalog::PhotoId) -> f64 {
     mean(&s.render_now(id, 160, 160).unwrap().image)
 }
 
@@ -362,7 +362,7 @@ fn an_export_makes_its_picture_when_the_queue_has_not_and_never_comes_out_withou
     let id = photo(&x.s);
     let o = ExportOptions::from_json(&json!({"format": "png", "width": 160, "height": 160}));
     let decode = |bytes: &[u8]| {
-        let d = lightcraft_codecs::decode(bytes, lightcraft_codecs::DecodeOptions::fit(160, 160)).unwrap();
+        let d = dac_codecs::decode(bytes, dac_codecs::DecodeOptions::fit(160, 160)).unwrap();
         let w = d.to_working();
         w.data.iter().map(|p| f64::from(p[0] + p[1] + p[2])).sum::<f64>() / (w.data.len() * 3) as f64
     };
@@ -440,7 +440,7 @@ fn a_corrupt_cache_with_a_current_header_never_silently_exports_the_plain_photo(
         *byte ^= 0xff;
     }
     std::fs::write(&spec.product, bytes).unwrap();
-    assert!(lightcraft_denoise::product::is_current(&spec.product, &spec.key), "header/length still look current");
+    assert!(dac_denoise::product::is_current(&spec.product, &spec.key), "header/length still look current");
     x.s.media.forget(id);
     let error = export_photo(&mut x.s, id, &options, 1).err().unwrap();
     assert!(error.contains("AI Denoise picture could not be read"), "{error}");
@@ -505,7 +505,7 @@ fn files_that_cannot_be_denoised_fail_with_a_reason_and_never_a_panic() {
     // a model that gives the wrong number of values is an error from the model, not a crash
     struct Wrong;
     impl TileRunner for Wrong {
-        fn run(&self, _: &[f32]) -> Result<Vec<f32>, lightcraft_denoise::Error> {
+        fn run(&self, _: &[f32]) -> Result<Vec<f32>, dac_denoise::Error> {
             Ok(vec![0.0; 7])
         }
     }
@@ -566,7 +566,7 @@ fn two_threads_making_the_same_picture_make_it_once() {
     });
     assert_eq!(made.iter().filter(|m| **m).count(), 1, "{made:?}");
     assert_eq!(runs.load(Ordering::Relaxed), 4, "one photo's four tiles, once");
-    assert!(lightcraft_denoise::product::is_current(&spec.product, "k"));
+    assert!(dac_denoise::product::is_current(&spec.product, "k"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -635,7 +635,7 @@ fn settings_are_checked_saved_and_a_paused_pump_starts_nothing() {
     (st.run_on, st.gpu) = (None, Some(false));
     crate::denoise::write_settings(&models, &st).unwrap();
     assert_eq!(x.s.execute("denoise.models.list", &json!({})).unwrap()["runOn"], "cpu");
-    // choosing where it runs lets the card be tried again after a set-up that closed LightCraft
+    // choosing where it runs lets the card be tried again after a set-up that closed the app
     let onnx = crate::denoise::installed_models(&models).first().unwrap().onnx.clone();
     let marker = onnx.with_file_name(crate::denoise::GPU_SETUP_MARKER);
     std::fs::write(&marker, "setting up").unwrap();
@@ -675,7 +675,7 @@ fn a_photo_whose_file_changed_has_no_picture_until_it_is_made_again() {
     let p = x.s.catalog.photo(id).unwrap().clone();
     x.s.commit(
         "test",
-        lightcraft_catalog::Op::SetContent {
+        dac_catalog::Op::SetContent {
             id,
             width: p.width,
             height: p.height,

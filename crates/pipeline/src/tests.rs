@@ -1,14 +1,14 @@
-use lightcraft_develop::{DevelopSettings, controls};
-use lightcraft_raster::Rgb32f;
+use dac_develop::{DevelopSettings, controls};
+use dac_raster::Rgb32f;
 
 use crate::{RenderRequest, SourceInfo, render};
 
-fn mean_luma(img: &lightcraft_raster::Rgba8) -> f32 {
+fn mean_luma(img: &dac_raster::Rgba8) -> f32 {
     img.data.iter().map(|p| 0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32).sum::<f32>() / img.len() as f32
 }
 
 fn scene() -> Rgb32f {
-    lightcraft_scenes::demo_library()[0].render(240, 160)
+    dac_scenes::demo_library()[0].render(240, 160)
 }
 
 #[test]
@@ -78,14 +78,14 @@ fn directional_sliders() {
 #[test]
 fn resolution_independence_of_local_contrast() {
     // Clarity at two preview sizes should give similar results after downscaling.
-    let src = lightcraft_scenes::demo_library()[3].render(480, 320);
+    let src = dac_scenes::demo_library()[3].render(480, 320);
     let mut s = DevelopSettings::default();
     s.effects.clarity = 80.0;
     s.light.shadows = 60.0;
     let small = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(120, 120)).image;
     let big = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(480, 480)).image;
     let bl = big.to_linear();
-    let down = lightcraft_raster::resample::resize(&bl, small.width, small.height, lightcraft_raster::resample::Filter::Box).to_srgb8();
+    let down = dac_raster::resample::resize(&bl, small.width, small.height, dac_raster::resample::Filter::Box).to_srgb8();
     let err: f32 = small.data.iter().zip(&down.data).map(|(a, b)| (a[1] as f32 - b[1] as f32).abs()).sum::<f32>() / small.len() as f32;
     assert!(err < 9.0, "mean abs error {err}");
 }
@@ -93,15 +93,15 @@ fn resolution_independence_of_local_contrast() {
 #[test]
 fn crop_and_straighten_output_size() {
     let mut s = DevelopSettings::default();
-    s.crop.geometry = lightcraft_geom::crop_fit_angle(240.0, 160.0, 8.0, Some(1.0));
+    s.crop.geometry = dac_geom::crop_fit_angle(240.0, 160.0, 8.0, Some(1.0));
     let r = render(&scene(), &SourceInfo::default(), &s, &RenderRequest::fit(200, 200));
     assert_eq!((r.image.width, r.image.height), (200, 200));
 }
 
 #[test]
 fn mask_brightens_only_inside() {
-    use lightcraft_develop::{Mask, MaskComponent, MaskOp, MaskShape};
-    use lightcraft_geom::Point;
+    use dac_develop::{Mask, MaskComponent, MaskOp, MaskShape};
+    use dac_geom::Point;
     let src = Rgb32f::filled(100, 100, [0.1, 0.1, 0.1]);
     let mut s = DevelopSettings::default();
     s.masks.push(Mask {
@@ -111,7 +111,7 @@ fn mask_brightens_only_inside() {
             invert: false,
             shape: MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.2, ry: 0.2, angle: 0.0, feather: 10.0, invert: false },
         }],
-        adjust: lightcraft_develop::LocalAdjustments { exposure: 2.0, ..Default::default() },
+        adjust: dac_develop::LocalAdjustments { exposure: 2.0, ..Default::default() },
         ..Default::default()
     });
     let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(100, 100)).image;
@@ -121,7 +121,7 @@ fn mask_brightens_only_inside() {
 #[test]
 #[ignore]
 fn perf_report() {
-    let src = lightcraft_scenes::demo_library()[0].render(3000, 2000);
+    let src = dac_scenes::demo_library()[0].render(3000, 2000);
     let mut s = DevelopSettings::default();
     s.light.shadows = 40.0;
     s.effects.clarity = 20.0;
@@ -138,8 +138,8 @@ fn perf_report() {
 #[test]
 fn unedited_rendered_source_is_passthrough() {
     // An sRGB ramp decoded to linear Rec.2020 must render back to (almost) the same 8-bit values.
-    let src8 = lightcraft_raster::Rgba8::from_fn(256, 4, |x, y| [x as u8, (x as u8).wrapping_add(y as u8 * 40), 255 - x as u8, 255]);
-    let m = lightcraft_color::SRGB.to_space(&lightcraft_color::REC2020);
+    let src8 = dac_raster::Rgba8::from_fn(256, 4, |x, y| [x as u8, (x as u8).wrapping_add(y as u8 * 40), 255 - x as u8, 255]);
+    let m = dac_color::SRGB.to_space(&dac_color::REC2020);
     let src = src8.to_linear().map(|c| m.apply_f32(c));
     let r = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(256, 4)).image;
     let mut worst = 0i32;
@@ -165,7 +165,7 @@ fn typical_edits() -> DevelopSettings {
     s
 }
 
-fn max_diff(a: &lightcraft_raster::Rgba8, b: &lightcraft_raster::Rgba8) -> i32 {
+fn max_diff(a: &dac_raster::Rgba8, b: &dac_raster::Rgba8) -> i32 {
     assert_eq!((a.width, a.height), (b.width, b.height));
     a.data.iter().zip(&b.data).map(|(p, q)| (0..3).map(|c| (p[c] as i32 - q[c] as i32).abs()).max().unwrap_or(0)).max().unwrap_or(0)
 }
@@ -190,10 +190,10 @@ fn stage_cache_matches_uncached_render_through_a_slider_session() {
         Box::new(|s| s.effects.dehaze = 25.0),
         Box::new(|s| s.detail.nr_luminance = 60.0),
         Box::new(|s| {
-            s.wb.mode = lightcraft_develop::WbMode::Custom;
+            s.wb.mode = dac_develop::WbMode::Custom;
             s.wb.temp = 4000.0;
         }),
-        Box::new(|s| s.crop.geometry.rect = lightcraft_geom::Rect::new(0.1, 0.1, 0.9, 0.8)),
+        Box::new(|s| s.crop.geometry.rect = dac_geom::Rect::new(0.1, 0.1, 0.9, 0.8)),
         Box::new(|s| s.color.saturation = 30.0),
         // optics and geometry (merged after the stage cache): defringe lives in the cached linear stage
         Box::new(|s| s.optics.defringe_purple_amount = 10.0),
@@ -303,12 +303,8 @@ fn refine_saturation_tames_a_contrast_curve() {
     let sat = |p: [u8; 4]| p[0] as i32 - p[2] as i32;
     let mut s = DevelopSettings::default();
     let flat = render(&src, &info, &s, &req).image.data[0];
-    s.curve.master = vec![
-        lightcraft_geom::Point::new(0.0, 0.0),
-        lightcraft_geom::Point::new(0.3, 0.15),
-        lightcraft_geom::Point::new(0.7, 0.85),
-        lightcraft_geom::Point::new(1.0, 1.0),
-    ];
+    s.curve.master =
+        vec![dac_geom::Point::new(0.0, 0.0), dac_geom::Point::new(0.3, 0.15), dac_geom::Point::new(0.7, 0.85), dac_geom::Point::new(1.0, 1.0)];
     let full = render(&src, &info, &s, &req).image.data[0];
     s.curve.refine_saturation = 0.0;
     let refined = render(&src, &info, &s, &req).image.data[0];
@@ -327,8 +323,8 @@ fn soft_proof_maps_into_the_proof_gamut_and_flags_what_does_not_fit() {
     s.color.vibrance = 100.0;
     let info = SourceInfo { raw: true, ..Default::default() };
     let req = |space, proof| RenderRequest { space, proof, ..RenderRequest::fit(120, 120) };
-    let red = |img: &lightcraft_raster::Rgba8| img.data.iter().filter(|p| p[..3] == [255, 0, 0]).count();
-    let blue = |img: &lightcraft_raster::Rgba8| img.data.iter().filter(|p| p[2] == 255 && p[0] == 0 && p[1] < 80).count();
+    let red = |img: &dac_raster::Rgba8| img.data.iter().filter(|p| p[..3] == [255, 0, 0]).count();
+    let blue = |img: &dac_raster::Rgba8| img.data.iter().filter(|p| p[2] == 255 && p[0] == 0 && p[1] < 80).count();
 
     // proofing sRGB on an sRGB render changes nothing but the warning
     let plain = render(&src, &info, &s, &req(OutputSpace::Srgb, None)).image;
@@ -383,7 +379,7 @@ fn display_space_renders_like_the_matching_output_space() {
     assert!(max_diff(&srgb, &p3) > 4);
 
     // soft proofing on a display: the display gamut warning is about *this* display
-    let blue = |img: &lightcraft_raster::Rgba8| img.data.iter().filter(|p| p[2] == 255 && p[0] == 0 && p[1] < 80).count();
+    let blue = |img: &dac_raster::Rgba8| img.data.iter().filter(|p| p[2] == 255 && p[0] == 0 && p[1] < 80).count();
     let pro = Some(Proof { space: OutputSpace::ProPhoto, dest_warning: false, display_warning: true });
     let on_srgb = blue(&render(&src, &info, &s, &req(OutputSpace::Srgb, Some(DisplaySpace::of(OutputSpace::Srgb, 2).unwrap()), pro)).image);
     let on_wide = blue(&render(&src, &info, &s, &req(OutputSpace::Srgb, Some(DisplaySpace::of(OutputSpace::Rec2020, 3).unwrap()), pro)).image);
@@ -395,14 +391,14 @@ fn display_space_renders_like_the_matching_output_space() {
 #[test]
 fn display_space_rejects_degenerate_matrices() {
     use crate::DisplaySpace;
-    assert!(DisplaySpace::new(lightcraft_color::Mat3([[1.0, 1.0, 0.0], [1.0, 1.0, 0.0], [0.0, 0.0, 1.0]]), 1).is_none());
-    assert!(DisplaySpace::new(lightcraft_color::Mat3([[f64::NAN, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]), 1).is_none());
-    assert!(DisplaySpace::new(lightcraft_color::Mat3::IDENTITY, 1).is_some());
+    assert!(DisplaySpace::new(dac_color::Mat3([[1.0, 1.0, 0.0], [1.0, 1.0, 0.0], [0.0, 0.0, 1.0]]), 1).is_none());
+    assert!(DisplaySpace::new(dac_color::Mat3([[f64::NAN, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]), 1).is_none());
+    assert!(DisplaySpace::new(dac_color::Mat3::IDENTITY, 1).is_some());
 }
 
 #[test]
 fn tint_negative_is_green_and_positive_is_magenta() {
-    use lightcraft_develop::WbMode;
+    use dac_develop::WbMode;
     let src = Rgb32f::filled(16, 16, [0.18; 3]);
     // Rendered images, uncalibrated RAW and calibrated RAW with a nonzero As Shot tint.
     for info in [
@@ -429,8 +425,8 @@ fn tint_negative_is_green_and_positive_is_magenta() {
 
 /// A dual-illuminant (A / D65) camera colour model, its pixels developed for `temp` / `tint`.
 fn camera_color(temp: f64, tint: f64) -> std::sync::Arc<crate::CameraColor> {
-    use lightcraft_color::Mat3;
-    let tags = lightcraft_raw::ColorData {
+    use dac_color::Mat3;
+    let tags = dac_raw::ColorData {
         illuminant: [17, 21],
         color_matrix: [
             Some(Mat3([[0.9, 0.2, -0.15], [-0.3, 1.25, 0.08], [0.02, -0.12, 0.85]])),
@@ -438,7 +434,7 @@ fn camera_color(temp: f64, tint: f64) -> std::sync::Arc<crate::CameraColor> {
         ],
         ..Default::default()
     };
-    std::sync::Arc::new(crate::CameraColor { tags, developed_for: lightcraft_color::cct::temp_tint_to_xy(temp, tint) })
+    std::sync::Arc::new(crate::CameraColor { tags, developed_for: dac_color::cct::temp_tint_to_xy(temp, tint) })
 }
 
 /// Camera-space white balance: a raw source with its colour model is re-developed for the chosen
@@ -447,22 +443,22 @@ fn camera_color(temp: f64, tint: f64) -> std::sync::Arc<crate::CameraColor> {
 #[test]
 fn custom_white_balance_redevelops_in_camera_space() {
     use crate::local::wb_matrix_for;
-    use lightcraft_color::cct::temp_tint_to_xy;
-    use lightcraft_develop::WbMode;
+    use dac_color::cct::temp_tint_to_xy;
+    use dac_develop::WbMode;
     let cc = camera_color(5500.0, 0.0);
     let info = SourceInfo { raw: true, as_shot_temp: 5500.0, as_shot_tint: 0.0, camera_color: Some(cc.clone()), ..Default::default() };
     let mut s = DevelopSettings::default();
     (s.wb.mode, s.wb.temp, s.wb.tint) = (WbMode::Custom, 3200.0, 10.0);
     // a grey card lit by 3200 K / +10, as the camera records it, developed for the as-shot white
-    let a = lightcraft_raw::color::camera_transform_of(&cc.tags, cc.developed_for);
-    let n = lightcraft_raw::color::camera_neutral(&cc.tags, temp_tint_to_xy(3200.0, 10.0));
+    let a = dac_raw::color::camera_transform_of(&cc.tags, cc.developed_for);
+    let n = dac_raw::color::camera_neutral(&cc.tags, temp_tint_to_xy(3200.0, 10.0));
     let card = a.matrix.apply(std::array::from_fn(|i| n[i] * a.wb[i] as f64)).map(|v| v as f32);
     let apply = |m: [[f32; 3]; 3], c: [f32; 3]| -> [f32; 3] { std::array::from_fn(|r| m[r][0] * c[0] + m[r][1] * c[1] + m[r][2] * c[2]) };
     let m = wb_matrix_for(&info, &s).unwrap();
     let out = apply(m, card);
     assert!(out.iter().all(|v| (v / out[1] - 1.0).abs() < 1e-4), "{card:?} -> {out:?}");
     // the adaptation path for sources without a colour model, and for relative white balance
-    let luma = |c: [f32; 3]| lightcraft_color::luminance_2020(c);
+    let luma = |c: [f32; 3]| dac_color::luminance_2020(c);
     for other in [SourceInfo { camera_color: None, ..info.clone() }, SourceInfo { relative_wb: true, ..info.clone() }] {
         let b = wb_matrix_for(&other, &s).unwrap();
         assert_ne!(b, m);
@@ -477,12 +473,12 @@ fn custom_white_balance_redevelops_in_camera_space() {
 }
 
 /// Every stored process number renders with a process this build knows: settings saved before
-/// process versions existed exactly as V1, and a number from a newer LightCraft exactly as the
+/// process versions existed exactly as V1, and a number from a newer version of the app exactly as the
 /// latest process here (`docs/process-versions.md`). Raw (base tone curve), camera-tone and
 /// rendered sources, plain and edited, 8-bit and 16-bit.
 #[test]
 fn stored_process_numbers_render_with_a_known_process() {
-    use lightcraft_develop::{Process, ProcessVersion};
+    use dac_develop::{Process, ProcessVersion};
     let src = scene();
     let curve = crate::tone::CameraTone::new(std::array::from_fn(|i| {
         let x = 0.004 * 1.18f32.powi(i as i32);

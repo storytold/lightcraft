@@ -1,8 +1,8 @@
 //! `cargo xtask parity`: the Lightroom parity tracker (`docs/parity.md`).
 //!
 //! - **Reference check** (in `ci`): every `` `cmd:<id>` `` must be a registered command (engine command specs, as
-//!   listed by `lightcraft-cli commands --json`, or a UI command from `UI_COMMANDS`), every `` `ctl:<id>` `` a develop
-//!   control (`lightcraft-cli controls --json`), and every repository path in backticks must exist (with `:line`
+//!   listed by `app-cli commands --json`, or a UI command from `UI_COMMANDS`), every `` `ctl:<id>` `` a develop
+//!   control (`app-cli controls --json`), and every repository path in backticks must exist (with `:line`
 //!   inside the file). A trailing `*` matches an id prefix. Row ids must be unique and statuses valid.
 //! - **Summary**: per section done / partial / missing / out of scope and the share of P0 and P1 rows done;
 //!   `--write` refreshes the table between the `parity:summary` markers in the document.
@@ -58,12 +58,12 @@ pub struct Doc {
 
 fn is_row_id(s: &str) -> bool {
     let Some((prefix, rest)) = s.split_once('-') else { return false };
-    matches!(prefix, "LR" | "LRC" | "MENU" | "KEY" | "KEYC")
+    matches!(prefix, "LR" | "LRC" | "MENU" | "KEY" | "KEYC" | "IMM")
         && !rest.is_empty()
         && rest.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-')
 }
 
-/// Directories whose paths are checked (others, e.g. the local-only `plan/`, are ignored).
+/// Directories whose paths are checked (others, e.g. `plan/`, are ignored).
 const CHECKED_DIRS: &[&str] = &["crates/", "apps/", "docs/", "xtask/", "assets/"];
 
 /// A concrete id (not a placeholder such as `cmd:<id>` in prose).
@@ -141,7 +141,7 @@ pub fn parse(md: &str) -> Doc {
 /// commands live in their own table, which the Language menu builds from the i18n language list.
 pub fn ui_command_ids(menus_rs: &str) -> Vec<String> {
     let mut ids = Vec::new();
-    for table in ["pub const UI_COMMANDS", "pub const LANGUAGE_COMMANDS"] {
+    for table in ["pub const UI_COMMANDS", "pub const LANGUAGE_COMMANDS", "pub const SHELL_COMMANDS", "pub const COMMANDS"] {
         let Some(start) = menus_rs.find(table) else { continue };
         let body = &menus_rs[start..];
         let body = &body[..body.find("];").unwrap_or(body.len())];
@@ -269,14 +269,11 @@ pub fn with_summary(md: &str, table: &str) -> Option<String> {
 }
 
 fn registry(what: &str) -> Result<BTreeSet<String>, String> {
-    let out = crate::cargo()
-        .args(["run", "-q", "-p", "lightcraft-cli", "--", what, "--json"])
-        .output()
-        .map_err(|e| format!("lightcraft-cli {what}: {e}"))?;
+    let out = crate::cargo().args(["run", "-q", "-p", "dac-cli", "--", what, "--json"]).output().map_err(|e| format!("app-cli {what}: {e}"))?;
     if !out.status.success() {
-        return Err(format!("lightcraft-cli {what} --json failed:\n{}", String::from_utf8_lossy(&out.stderr)));
+        return Err(format!("app-cli {what} --json failed:\n{}", String::from_utf8_lossy(&out.stderr)));
     }
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| format!("lightcraft-cli {what}: bad JSON: {e}"))?;
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| format!("app-cli {what}: bad JSON: {e}"))?;
     Ok(v.as_array().into_iter().flatten().filter_map(|c| c["id"].as_str().map(str::to_string)).collect())
 }
 
@@ -287,6 +284,16 @@ pub fn run(root: &Path, write: bool) -> Result<(), String> {
     let menus = std::fs::read_to_string(root.join("crates/ui-egui/src/menus.rs")).map_err(|e| format!("menus.rs: {e}"))?;
     let mut commands = registry("commands")?;
     commands.extend(ui_command_ids(&menus));
+    // the module shell's commands (crates/ui-egui/src/module.rs)
+    let shell = std::fs::read_to_string(root.join("crates/ui-egui/src/module.rs")).map_err(|e| format!("module.rs: {e}"))?;
+    commands.extend(ui_command_ids(&shell));
+    // the Map module's commands (crates/ui-egui/src/map/mod.rs)
+    let map = std::fs::read_to_string(root.join("crates/ui-egui/src/map/mod.rs")).map_err(|e| format!("map/mod.rs: {e}"))?;
+    commands.extend(ui_command_ids(&map));
+    // the fork's module command tables (Print, saved creations)
+    for f in ["crates/ui-egui/src/print_ui.rs", "crates/ui-egui/src/creations_ui.rs"] {
+        commands.extend(ui_command_ids(&std::fs::read_to_string(root.join(f)).map_err(|e| format!("{f}: {e}"))?));
+    }
     let controls = registry("controls")?;
     let problems = check(&doc, &commands, &controls, |p| {
         let full = root.join(p);
@@ -305,8 +312,8 @@ pub fn run(root: &Path, write: bool) -> Result<(), String> {
     } else if with_summary(&md, &table).is_some_and(|new| new != md) {
         println!("\nnote: the summary in {DOC} is stale — run `cargo xtask parity --write`");
     }
-    // Ids from the local Lightroom reference that have no row yet (plan/ is local-only, so only a warning).
-    let catalog = root.join("plan/lightroom/03-feature-catalog.md");
+    // Ids from the Lightroom Classic feature catalog that have no row yet (only a warning).
+    let catalog = root.join("plan/lightroom-classic/feature-catalog.md");
     if let Ok(cat) = std::fs::read_to_string(&catalog) {
         let have: HashSet<&str> = doc.rows.iter().map(|r| r.id.as_str()).collect();
         let missing: Vec<&str> = cat

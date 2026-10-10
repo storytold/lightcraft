@@ -7,15 +7,17 @@ use serde_json::json;
 
 use crate::headless::Headless;
 use crate::state::{LEFT_WIDTH, MIN_PHOTO_WIDTH, RIGHT_WIDTH};
-use crate::{LightcraftApp, Services};
+use crate::{DacApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
 
 fn demo(size: [f32; 2], ui: serde_json::Value) -> Headless {
     let services = Services { png: None, ..Default::default() };
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let app = DacApp::new(dac_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, size, 1.0);
+    // these tests measure the sources list: the Navigator above it is folded
+    h.app.ui.toggle_sidebar_section("panel:navigator");
     let r = h.request("ui.set", ui, T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
@@ -173,7 +175,11 @@ fn a_narrow_window_shrinks_the_panels_without_forgetting_their_width() {
 /// is part of the saved UI state.
 #[test]
 fn sidebar_sections_collapse_and_remember_it() {
-    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true, "right": "none"}));
+    // the Keyword List alone in Library's right column, at its top
+    h.app.ui.hidden_panels = vec![crate::module::PanelId::QuickDevelop, crate::module::PanelId::Keywording];
+    h.step();
+    h.step();
     let has = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
     let click = |h: &mut Headless, id: &str| {
         let r = h.request("ui.clickWidget", json!({"id": id}), T);
@@ -187,7 +193,7 @@ fn sidebar_sections_collapse_and_remember_it() {
     assert!(year_rows(&h) > 0, "the demo library has dated photos");
     click(&mut h, "sidebarSection:byDate");
     assert_eq!(year_rows(&h), 0, "folded");
-    assert!(h.app.ui.sidebar_section_collapsed("byDate") && !h.app.ui.sidebar_section_collapsed("albums"));
+    assert!(h.app.ui.sidebar_section_collapsed("byDate") && !h.app.ui.sidebar_section_collapsed("panel:collections"));
     assert!(has(&h, "sidebarSection:byDate"), "the header stays so it can be reopened");
     // the choice survives a save/load of the UI state
     let saved = serde_json::to_value(&h.app.ui).unwrap();
@@ -196,18 +202,18 @@ fn sidebar_sections_collapse_and_remember_it() {
     click(&mut h, "sidebarSection:byDate");
     assert!(year_rows(&h) > 0, "unfolded again");
     // Albums folds too, and the plus button inside its header still works on its own
-    click(&mut h, "sidebarSection:albums");
-    assert!(h.app.ui.sidebar_section_collapsed("albums"));
+    click(&mut h, "classicPanel:collections");
+    assert!(h.app.ui.sidebar_section_collapsed("panel:collections"));
     assert!(has(&h, "icon:albumNew"), "the Create Album button stays in the header");
-    click(&mut h, "sidebarSection:albums");
-    assert!(!h.app.ui.sidebar_section_collapsed("albums"));
+    click(&mut h, "classicPanel:collections");
+    assert!(!h.app.ui.sidebar_section_collapsed("panel:collections"));
     // Keywords and Local fold their rows too
     let rows = |h: &Headless, prefix: &str| h.app.widgets.iter().filter(|(w, _)| w.starts_with(prefix)).count();
-    assert!(rows(&h, "source:keyword:") > 0, "the demo library has keywords");
-    click(&mut h, "sidebarSection:keywords");
-    assert_eq!(rows(&h, "source:keyword:"), 0, "keywords folded");
-    click(&mut h, "sidebarSection:keywords");
-    assert!(rows(&h, "source:keyword:") > 0);
+    assert!(rows(&h, "keywordList:") > 0, "the demo library has keywords");
+    click(&mut h, "classicPanel:keywordList");
+    assert_eq!(rows(&h, "keywordList:"), 0, "keywords folded");
+    click(&mut h, "classicPanel:keywordList");
+    assert!(rows(&h, "keywordList:") > 0);
     if has(&h, "sidebarSection:local") {
         click(&mut h, "sidebarSection:local");
         assert_eq!(rows(&h, "source:local:"), 0, "local folded");
@@ -217,7 +223,7 @@ fn sidebar_sections_collapse_and_remember_it() {
     }
     // a click on the plus is the button's, not the header's
     click(&mut h, "icon:albumNew");
-    assert!(!h.app.ui.sidebar_section_collapsed("albums"), "the plus does not fold Albums");
+    assert!(!h.app.ui.sidebar_section_collapsed("panel:collections"), "the plus does not fold Collections");
 }
 
 /// Albums nest in folders like the other sidebar trees: a folder row has a disclosure triangle
@@ -314,7 +320,7 @@ fn albums_are_created_inside_the_chosen_folder() {
         assert_eq!(new.len(), 1, "{command} made exactly one album: {new:?}");
         new[0]
     };
-    let parent_of = |h: &Headless, id: u64| h.app.session.catalog.album(lightcraft_catalog::AlbumId(id)).unwrap().parent.map(|p| p.0);
+    let parent_of = |h: &Headless, id: u64| h.app.session.catalog.album(dac_catalog::AlbumId(id)).unwrap().parent.map(|p| p.0);
     // fold both folders: the new rows must still be visible afterwards
     for f in [europe, trips] {
         let r = h.request("ui.clickWidget", json!({"id": format!("albumToggle:{f}")}), T);
@@ -328,10 +334,10 @@ fn albums_are_created_inside_the_chosen_folder() {
     assert!(has(&h, &format!("source:album:{album}")), "the new album is shown, its folders opened to it");
     let folder = create(&mut h, "dialog.newFolder", "Italy", Some(europe));
     assert_eq!(parent_of(&h, folder), Some(europe));
-    assert!(h.app.session.catalog.album(lightcraft_catalog::AlbumId(folder)).unwrap().folder);
+    assert!(h.app.session.catalog.album(dac_catalog::AlbumId(folder)).unwrap().folder);
     let smart = create(&mut h, "dialog.smartAlbum", "Rated", Some(folder));
     assert_eq!(parent_of(&h, smart), Some(folder));
-    assert!(h.app.session.catalog.album(lightcraft_catalog::AlbumId(smart)).unwrap().is_smart());
+    assert!(h.app.session.catalog.album(dac_catalog::AlbumId(smart)).unwrap().is_smart());
     let from_view = create(&mut h, "dialog.newSmartAlbum", "From view", Some(trips));
     assert_eq!(parent_of(&h, from_view), Some(trips));
     // without a folder they are still made at the top level
@@ -366,6 +372,9 @@ struct AlbumTree {
 
 fn album_tree() -> AlbumTree {
     let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    // the Collections panel's tree is what these tests drag in: the panels above it are folded
+    h.app.ui.toggle_sidebar_section("panel:catalog");
+    h.app.ui.toggle_sidebar_section("panel:folders");
     let make = |h: &mut Headless, params: serde_json::Value| h.app.session.execute("album.create", &params).unwrap()["id"].as_u64().unwrap();
     let archive = make(&mut h, json!({"name": "Archive", "folder": true}));
     let trips = make(&mut h, json!({"name": "Trips", "folder": true}));
@@ -385,10 +394,10 @@ impl AlbumTree {
     }
     /// The middle of the "Albums" header, where an album is dropped to take it to the top level.
     fn albums_header(&self) -> egui::Pos2 {
-        widget(&self.h, "sidebarSection:albums").center()
+        widget(&self.h, "classicPanel:collections").center()
     }
     fn parent(&self, id: u64) -> Option<u64> {
-        self.h.app.session.catalog.album(lightcraft_catalog::AlbumId(id)).unwrap().parent.map(|p| p.0)
+        self.h.app.session.catalog.album(dac_catalog::AlbumId(id)).unwrap().parent.map(|p| p.0)
     }
     /// Press at `from`, move through each `(point, frames held there)`, release at the last one.
     fn drag(&mut self, from: egui::Pos2, path: &[(egui::Pos2, usize)]) {
@@ -434,7 +443,7 @@ impl AlbumTree {
     /// The names inside `parent`, folders or albums only.
     fn kids(&self, parent: Option<u64>, folders: bool) -> Vec<String> {
         let cat = &self.h.app.session.catalog;
-        cat.album_children(parent.map(lightcraft_catalog::AlbumId)).iter().filter(|a| a.folder == folders).map(|a| a.name.clone()).collect()
+        cat.album_children(parent.map(dac_catalog::AlbumId)).iter().filter(|a| a.folder == folders).map(|a| a.name.clone()).collect()
     }
     fn drag_row(&mut self, id: u64, onto: u64) {
         let (from, to) = (self.row(id).center(), self.row(onto).center());
@@ -468,7 +477,7 @@ fn dragging_an_album_onto_a_folder_moves_it() {
     // a plain click still only opens the album
     let c = t.row(t.best).center();
     t.drag(c, &[(c, 0)]);
-    assert_eq!(t.h.app.session.source, lightcraft_engine::LibrarySource::Album(lightcraft_catalog::AlbumId(t.best)));
+    assert_eq!(t.h.app.session.source, dac_engine::LibrarySource::Album(dac_catalog::AlbumId(t.best)));
 }
 
 /// A drag ends only with the main button, and Esc abandons it: a release of another button over a
@@ -628,7 +637,7 @@ fn a_dragged_album_scrolls_the_sidebar_at_its_edges() {
     hold(&mut t, egui::pos2(cx, bottom - 6.0));
     let scrolled = t.row(last).top();
     assert!(scrolled < start - 100.0, "the bottom edge scrolls down: {start} -> {scrolled}");
-    hold(&mut t, egui::pos2(cx, top + 70.0));
+    hold(&mut t, egui::pos2(cx, top + 26.0));
     let back = t.row(last).top();
     assert!(back > scrolled + 100.0, "the top edge scrolls back up: {scrolled} -> {back}");
     assert!(t.h.app.ui.dragging_album.is_none());
@@ -708,20 +717,23 @@ fn a_dragged_album_opens_the_folder_it_hovers_over() {
 
 /// A headless app over a library of file-backed photos that exist only in the catalog.
 fn folders_app(paths: &[&str]) -> Headless {
-    folders_app_sized(paths, [1400.0, 900.0])
+    // (tall enough for the Catalog rows above the folders)
+    folders_app_sized(paths, [1400.0, 980.0])
 }
 
 fn folders_app_sized(paths: &[&str], size: [f32; 2]) -> Headless {
-    use lightcraft_catalog::{Op, Photo, Source};
-    let mut session = lightcraft_engine::Session::new();
+    use dac_catalog::{Op, Photo, Source};
+    let mut session = dac_engine::Session::new();
     for path in paths {
         let id = session.catalog.alloc_photo_id();
         let p = Photo::new(id, Source::File { path: (*path).into() }, "x.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00");
         session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
-    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let app = DacApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, size, 1.0);
-    let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true}), T);
+    h.app.ui.toggle_sidebar_section("panel:navigator");
+    // (the module bar off: these layouts were sized before it existed)
+    let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true, "moduleBar": false}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     h
@@ -751,15 +763,15 @@ fn folders_section_lists_where_photos_were_imported_from_and_fills_the_grid() {
     assert_eq!(h.app.session.visible().len(), 3);
     click(&mut h, "source:libfolder:/pics/trip");
     assert_eq!(h.app.session.visible().len(), 2, "only the photos imported from that folder");
-    assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::LibraryFolder);
+    assert_eq!(h.app.session.source, dac_engine::LibrarySource::LibraryFolder);
     assert_eq!(h.app.session.library_folder.as_deref(), Some("/pics/trip"));
-    assert_eq!(h.app.session.filter, lightcraft_catalog::Filter::default(), "a source, not a filter");
+    assert_eq!(h.app.session.filter, dac_catalog::Filter::default(), "a source, not a filter");
     click(&mut h, "source:all");
     assert_eq!(h.app.session.visible().len(), 3, "All Photos shows everything again");
     // the section folds like the others
-    click(&mut h, "sidebarSection:folders");
+    click(&mut h, "classicPanel:folders");
     assert!(!has(&h, "source:libfolder:/pics"), "folded");
-    click(&mut h, "sidebarSection:folders");
+    click(&mut h, "classicPanel:folders");
     assert!(has(&h, "source:libfolder:/pics"));
 }
 
@@ -783,7 +795,7 @@ fn disks_are_rows_of_their_own() {
 /// shown before is replaced, and the folder's own row is highlighted.
 #[test]
 fn choosing_a_library_folder_replaces_whatever_was_shown() {
-    use lightcraft_engine::LibrarySource;
+    use dac_engine::LibrarySource;
     let mut h = folders_app(&["/pics/trip/a.jpg", "/pics/home/b.jpg"]);
     click(&mut h, "libraryFolderToggle:/pics");
     for before in [LibrarySource::Picks, LibrarySource::Folder, LibrarySource::RecentlyDeleted, LibrarySource::Missing] {
@@ -801,10 +813,10 @@ fn choosing_a_library_folder_replaces_whatever_was_shown() {
 #[test]
 fn the_grid_is_titled_after_the_folder() {
     let mut h = folders_app(&["/Volumes/tokyo/photos/travel/a.jpg"]);
-    h.app.session.source = lightcraft_engine::LibrarySource::LibraryFolder;
+    h.app.session.source = dac_engine::LibrarySource::LibraryFolder;
     h.app.session.library_folder = Some("/Volumes/tokyo/photos/travel".into());
     assert_eq!(crate::i18n::source_title(&h.app.session), "photos/travel");
-    h.app.session.source = lightcraft_engine::LibrarySource::All;
+    h.app.session.source = dac_engine::LibrarySource::All;
     assert_eq!(crate::i18n::source_title(&h.app.session), "All Photos");
 }
 
@@ -859,7 +871,7 @@ fn a_folder_that_holds_other_disks_only_opens() {
 fn the_chosen_folder_is_always_in_view() {
     let mut h = folders_app(&["/pics/trip/day1/a.jpg", "/pics/trip/b.jpg", "/pics/home/c.jpg"]);
     assert!(!has(&h, "source:libfolder:/pics/trip/day1"), "folded to begin with");
-    h.app.session.source = lightcraft_engine::LibrarySource::LibraryFolder;
+    h.app.session.source = dac_engine::LibrarySource::LibraryFolder;
     h.app.session.library_folder = Some("/pics/trip/day1".into());
     h.step();
     h.step();
@@ -886,7 +898,7 @@ fn a_renamed_folder_keeps_its_place_in_the_tree() {
     // the folder tree writes paths with forward slashes, and its widget ids carry them
     let b = base.to_string_lossy().replace('\\', "/");
     let mut h = folders_app(&[&format!("{b}/pics/trip/a.jpg"), &format!("{b}/pics/home/b.jpg")]);
-    h.app.session.source = lightcraft_engine::LibrarySource::LibraryFolder;
+    h.app.session.source = dac_engine::LibrarySource::LibraryFolder;
     h.app.session.library_folder = Some(format!("{b}/pics/trip"));
     h.step();
     h.step();
@@ -934,7 +946,7 @@ fn a_folder_takes_a_colour_label_from_its_menu() {
     right_click(&mut h, "source:libfolder:/pics/trip");
     click(&mut h, "folderLabelMenu");
     click(&mut h, "folderLabel:red");
-    assert_eq!(h.app.session.catalog.folder_color_label("/pics/trip"), Some(lightcraft_catalog::ColorLabel::Red));
+    assert_eq!(h.app.session.catalog.folder_color_label("/pics/trip"), Some(dac_catalog::ColorLabel::Red));
     assert!(!popup_open(&h), "choosing closes the menu");
     h.step();
     assert!(has(&h, "labelMark:libfolder:/pics/trip"), "the row shows its label");
@@ -1002,7 +1014,7 @@ fn a_sidebar_that_fits_does_not_scroll_sideways() {
 fn a_long_folder_name_never_runs_under_the_photo_count() {
     let long = "/very/long/2024-06-12 Tripping Through The Extremely Long Named Mountains Of Somewhere";
     let mut h = folders_app_sized(&[&format!("{long}/a.jpg")], [900.0, 700.0]);
-    h.app.session.source = lightcraft_engine::LibrarySource::LibraryFolder;
+    h.app.session.source = dac_engine::LibrarySource::LibraryFolder;
     h.app.session.library_folder = Some(long.into());
     h.step();
     h.step();
@@ -1111,13 +1123,44 @@ fn date_and_keyword_rows_show_their_photos_from_any_source() {
     let r = h.request("ui.clickWidget", json!({"id": row}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
-    assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::All, "{key}");
+    assert_eq!(h.app.session.source, dac_engine::LibrarySource::All, "{key}");
     assert!(!h.app.session.visible().is_empty(), "{key}: its photos are shown");
     // choosing the row again clears it, and stays in All Photos
     let r = h.request("ui.clickWidget", json!({"id": row}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
-    assert_eq!(h.app.session.filter, lightcraft_catalog::Filter::default(), "{key}");
+    assert_eq!(h.app.session.filter, dac_catalog::Filter::default(), "{key}");
+}
+
+/// Library's Navigator panel: its 1:1 preset opens the loupe at 1:1, a click on its picture pans
+/// there, Fit goes back; folding it hides the picture.
+#[test]
+fn navigator_panel_presets_and_click_to_pan() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    h.app.ui.toggle_sidebar_section("panel:navigator");
+    h.step();
+    h.step();
+    let r = h.request("ui.clickWidget", json!({"id": "navigator:1:1"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(h.app.ui.view, crate::state::ViewMode::Detail);
+    assert_eq!(h.app.ui.zoom, crate::state::Zoom::Percent(100.0));
+    h.step();
+    h.app.ui.pan = (0.1, 0.9);
+    let r = h.request("ui.clickWidget", json!({"id": "navigator:image"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let (u, v) = h.app.ui.pan;
+    assert!((u - 0.5).abs() < 0.05 && (v - 0.5).abs() < 0.05, "a click in the middle centres the loupe: {u},{v}");
+    let r = h.request("ui.clickWidget", json!({"id": "navigator:fit"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(h.app.ui.zoom, crate::state::Zoom::Fit);
+    let r = h.request("ui.clickWidget", json!({"id": "sidebarSection:navigator"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert!(!h.app.widgets.iter().any(|(w, _)| w == "navigator:image"));
 }
 
 /// Issue #501: use the actual context-menu button on the populated demo folder.
@@ -1145,7 +1188,7 @@ fn deleting_a_populated_album_folder_from_its_menu_is_undoable() {
 /// (Auto Advance On, Imported presets, …).
 #[test]
 fn a_menu_commands_toast_shows_after_a_while() {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let app = DacApp::new(dac_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = crate::headless::Headless::new(app, [1000.0, 700.0], 1.0);
     for _ in 0..600 {
         h.step();
@@ -1169,7 +1212,7 @@ fn the_tracklog_toast_shows_after_a_while() {
         r#"<?xml version="1.0"?><gpx version="1.1" creator="test" xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg><trkpt lat="46.0" lon="7.0"><time>2026-05-01T10:00:00Z</time></trkpt></trkseg></trk></gpx>"#,
     )
     .unwrap();
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let app = DacApp::new(dac_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = crate::headless::Headless::new(app, [1000.0, 700.0], 1.0);
     for _ in 0..600 {
         h.step();

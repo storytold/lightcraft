@@ -233,7 +233,7 @@ mod tests {
         }
     }
 
-    /// Opt-in: `LC_DENOISE_DTMODEL=<rawdenoise-nind.dtmodel> cargo test -p lightcraft-denoise -- --ignored archive`
+    /// Opt-in: `LC_DENOISE_DTMODEL=<rawdenoise-nind.dtmodel> cargo test -p dac-denoise -- --ignored archive`
     #[test]
     #[ignore = "needs the real download: set LC_DENOISE_DTMODEL"]
     fn the_real_download_gives_the_model_it_should() {

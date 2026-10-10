@@ -21,7 +21,7 @@ fn import(s: &mut Session, paths: Vec<String>) -> Vec<u64> {
 fn hdr_merge_command_creates_and_imports_a_dng() {
     let dir = temp_dir("hdr");
     let mut paths = Vec::new();
-    for (i, b) in lightcraft_merge::synth::bracket_dngs(480, 320, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
+    for (i, b) in dac_merge::synth::bracket_dngs(480, 320, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
         let p = dir.join(format!("IMG_{i}.dng"));
         std::fs::write(&p, b).unwrap();
         paths.push(p.to_string_lossy().to_string());
@@ -40,10 +40,10 @@ fn hdr_merge_command_creates_and_imports_a_dng() {
     let r = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": true, "stack": true})).unwrap();
     let path = r["path"].as_str().unwrap();
     assert!(path.ends_with("IMG_0-HDR.dng"), "{path}");
-    let id = lightcraft_catalog::PhotoId(r["id"].as_u64().unwrap());
+    let id = dac_catalog::PhotoId(r["id"].as_u64().unwrap());
     let p = s.catalog.photo(id).unwrap().clone();
     assert_eq!((p.width, p.height), (480, 320));
-    assert_eq!(p.kind, lightcraft_catalog::MediaKind::Raw);
+    assert_eq!(p.kind, dac_catalog::MediaKind::Raw);
     assert_eq!(s.selection.active, Some(id));
     let d = s.develop_of(id).unwrap();
     assert!(d.light.exposure != 0.0 || d.light.highlights != 0.0, "auto settings applied");
@@ -58,7 +58,7 @@ fn hdr_merge_command_creates_and_imports_a_dng() {
     // the second merge doesn't overwrite the first
     let r2 = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false})).unwrap();
     assert!(r2["path"].as_str().unwrap().ends_with("IMG_0-HDR-2.dng"));
-    let id2 = lightcraft_catalog::PhotoId(r2["id"].as_u64().unwrap());
+    let id2 = dac_catalog::PhotoId(r2["id"].as_u64().unwrap());
     assert!(s.catalog.stack_of(id2).is_none(), "no stack without the option");
     // the type filter finds merge results (and only them)
     s.execute("library.filter", &json!({"merged": "hdr"})).unwrap();
@@ -71,9 +71,9 @@ fn hdr_merge_command_creates_and_imports_a_dng() {
 fn panorama_command_with_auto_crop() {
     let dir = temp_dir("pano");
     let mut paths = Vec::new();
-    for (i, v) in lightcraft_merge::synth::pano_views(480, 360, 420.0, &[-25.0, 0.0, 25.0]).unwrap().into_iter().enumerate() {
+    for (i, v) in dac_merge::synth::pano_views(480, 360, 420.0, &[-25.0, 0.0, 25.0]).unwrap().into_iter().enumerate() {
         let img = v.to_srgb8();
-        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        let png = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).unwrap();
         let p = dir.join(format!("P_{i}.png"));
         std::fs::write(&p, png).unwrap();
         paths.push(p.to_string_lossy().to_string());
@@ -83,7 +83,7 @@ fn panorama_command_with_auto_crop() {
     let r = s.execute("merge.panorama", &json!({"ids": ids, "projection": "cylindrical", "autoCrop": true, "autoSettings": false})).unwrap();
     assert_eq!(r["projection"], "cylindrical");
     assert_eq!(r["used"].as_array().unwrap().len(), 3);
-    let id = lightcraft_catalog::PhotoId(r["id"].as_u64().unwrap());
+    let id = dac_catalog::PhotoId(r["id"].as_u64().unwrap());
     let p = s.catalog.photo(id).unwrap().clone();
     assert!(p.width > 800 && p.height > 300, "{}×{}", p.width, p.height);
     let crop = s.develop_of(id).unwrap().crop.geometry.rect;

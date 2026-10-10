@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! LC_DENOISE_MODEL=<model_bayer.onnx> LC_DENOISE_MOSAICS=<folder> LC_DENOISE_OUT=<folder> \
-//!   cargo test --release -p lightcraft-denoise --features runtime --test real_model -- --ignored --nocapture
+//!   cargo test --release -p dac-denoise --features runtime --test real_model -- --ignored --nocapture
 //! ```
 //!
 //! `LC_DENOISE_MOSAICS` holds `<name>.mosaic.f32` (little-endian f32, normalised: black 0, white 1, not white
@@ -16,10 +16,10 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use lightcraft_denoise::bayer::Layout;
-use lightcraft_denoise::manifest::{DenoiserManifest, Domain, Gain};
-use lightcraft_denoise::run::{Control, Params, denoise_bayer};
-use lightcraft_denoise::runtime::CpuRunner;
+use dac_denoise::bayer::Layout;
+use dac_denoise::manifest::{DenoiserManifest, Domain, Gain};
+use dac_denoise::run::{Control, Params, denoise_bayer};
+use dac_denoise::runtime::CpuRunner;
 
 struct Rng(u64);
 impl Rng {
@@ -231,7 +231,7 @@ fn the_real_model_denoises_real_mosaics() {
         let s_floor = snr(&clean_bilinear, &reference, w, h, 64);
         println!(
             "{name}: {w}×{h} crop, {} tiles, parallel {parallel}, {secs:.1} s | SNR vs clean demosaic: noisy bilinear {s_noisy:.2} dB, denoised {s_den:.2} dB (clean bilinear {s_floor:.2} dB)",
-            lightcraft_denoise::run::tile_count(w, h, d.layout, 512, 64)
+            dac_denoise::run::tile_count(w, h, d.layout, 512, 64)
         );
         if let Some(out) = &out_dir {
             std::fs::create_dir_all(out).unwrap();

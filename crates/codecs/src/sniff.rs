@@ -3,7 +3,7 @@
 use crate::exif::Tiff;
 use serde::{Deserialize, Serialize};
 
-/// Image container formats LightCraft recognises.
+/// Image container formats the app recognises.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Format {
     Jpeg,
@@ -21,9 +21,9 @@ pub enum Format {
     /// Photoshop PSD / PSB (merged composite).
     Psd,
     /// TIFF-structured camera raw (DNG, CR2, NEF, ARW, PEF, ORF, RW2, SRW, 3FR, IIQ, ERF, …):
-    /// route to `lightcraft-raw`.
+    /// route to `dac-raw`.
     RawTiffLike,
-    /// Non-TIFF camera raw containers (CR3, RAF, CRW, MRW, X3F): route to `lightcraft-raw`.
+    /// Non-TIFF camera raw containers (CR3, RAF, CRW, MRW, X3F): route to `dac-raw`.
     RawOther,
 }
 
@@ -76,12 +76,12 @@ impl Format {
             #[cfg(not(feature = "heif"))]
             Format::Heif => Some(crate::heif::NOT_IN_BUILD),
             Format::Avif => Some("no pure-Rust, permissively licensed AV1 decoder yet"),
-            Format::RawTiffLike | Format::RawOther => Some("camera raw: decode with lightcraft-raw"),
+            Format::RawTiffLike | Format::RawOther => Some("camera raw: decode with dac-raw"),
             _ => None,
         }
     }
 
-    /// Camera raw formats (decode with `lightcraft-raw`).
+    /// Camera raw formats (decode with `dac-raw`).
     pub fn is_raw(self) -> bool {
         matches!(self, Format::RawTiffLike | Format::RawOther)
     }

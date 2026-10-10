@@ -4,35 +4,55 @@
 //! delete), `album.*`, `develop.*` (settings), `crop.*`, `mask.*`, `preset.*`, `version.*`,
 //! `edit.*` (undo/redo), and queries (`catalog.query`, `photo.inspect`, `develop.get`…).
 
+pub mod actions;
 mod activity;
 mod before;
 pub(crate) mod browse;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod catalog;
+mod collections;
 mod color;
 pub(crate) mod convert;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod credentials;
 mod cull;
 pub mod curves;
 pub(crate) mod denoise;
 mod develop;
 mod edit;
+pub mod edit_in;
 mod export;
 pub(crate) mod face_detect;
 mod face_models;
 mod face_recognize;
 pub mod filters;
+pub mod folders;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod immich;
 pub mod keywords;
 pub mod library;
 pub mod lut_profiles;
 pub mod manage;
+pub mod map;
 mod masks;
 mod merge;
 pub mod metadata;
 pub mod missing;
 mod organize;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod plugins;
 mod prefs;
 mod preset_files;
 pub mod previews;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod publish;
 mod query;
+mod quick;
 mod sync;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod tether;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod web;
 mod xmp;
 
 use serde::Serialize;
@@ -127,6 +147,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         let mut v = Vec::new();
         v.extend(edit::specs());
         v.extend(library::specs());
+        v.extend(collections::specs());
         v.extend(develop::specs());
         v.extend(color::specs());
         v.extend(curves::specs());
@@ -134,6 +155,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(organize::specs());
         v.extend(keywords::specs());
         v.extend(manage::specs());
+        v.extend(map::specs());
         v.extend(previews::specs());
         v.extend(lut_profiles::specs());
         v.extend(cull::specs());
@@ -141,12 +163,17 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(convert::edit_specs());
         v.extend(merge::specs());
         v.extend(query::specs());
+        v.extend(quick::specs());
         v.extend(xmp::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(catalog::specs());
         v.extend(preset_files::specs());
         v.extend(prefs::specs());
         v.extend(export::specs());
+        v.extend(crate::creations::specs());
         v.extend(before::specs());
         v.extend(browse::specs());
+        v.extend(folders::specs());
         v.extend(missing::specs());
         v.extend(sync::specs());
         v.extend(metadata::specs());
@@ -155,6 +182,20 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(face_models::specs());
         v.extend(face_detect::specs());
         v.extend(face_recognize::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(immich::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(publish::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(tether::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(web::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(credentials::specs());
+        v.extend(actions::specs());
+        v.extend(edit_in::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(plugins::specs());
         v.extend(activity::specs());
         v
     })
@@ -189,7 +230,7 @@ pub(crate) fn bool_or(p: &Value, key: &str, d: bool) -> bool {
 pub(crate) fn ok() -> Result<Value> {
     Ok(Value::Null)
 }
-pub(crate) fn point(p: &Value, key: &str) -> Option<lightcraft_geom::Point> {
+pub(crate) fn point(p: &Value, key: &str) -> Option<dac_geom::Point> {
     let a = p.get(key)?.as_array()?;
-    Some(lightcraft_geom::Point::new(a.first()?.as_f64()?, a.get(1)?.as_f64()?))
+    Some(dac_geom::Point::new(a.first()?.as_f64()?, a.get(1)?.as_f64()?))
 }

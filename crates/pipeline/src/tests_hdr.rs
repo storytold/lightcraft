@@ -1,13 +1,13 @@
 //! HDR editing: the HDR render ([`OutputDepth::F32Hdr`]) and the SDR rendition every other render uses.
 
-use lightcraft_develop::DevelopSettings;
-use lightcraft_raster::Rgb32f;
+use dac_develop::DevelopSettings;
+use dac_raster::Rgb32f;
 
 use crate::{DeepSamples, OutputDepth, RenderRequest, SourceInfo, render};
 
 fn sunset() -> Rgb32f {
-    let lib = lightcraft_scenes::demo_library();
-    let s = lib.iter().find(|s| s.kind == lightcraft_scenes::Kind::OceanSunset).map(|s| s.render(240, 160));
+    let lib = dac_scenes::demo_library();
+    let s = lib.iter().find(|s| s.kind == dac_scenes::Kind::OceanSunset).map(|s| s.render(240, 160));
     s.unwrap_or_else(|| lib[0].render(240, 160))
 }
 

@@ -6,7 +6,7 @@
 //! self-contained and `Send`: frontends run it on a worker thread; if the source wasn't cached yet
 //! the job loads it and hands it back in the [`RenderResult`] so the cache can keep it.
 //!
-//! Rendered thumbnails are cached too ([`lightcraft_preview::PreviewCache`]: memory LRU, plus a
+//! Rendered thumbnails are cached too ([`dac_preview::PreviewCache`]: memory LRU, plus a
 //! disk cache in the library's `thumbs/` folder), keyed by the photo's content hash, the develop
 //! settings hash, the size and [`RENDER_CACHE_VERSION`] — so reopening a library shows its grid
 //! without decoding a single original, and an edit simply produces a new key.
@@ -19,11 +19,11 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Weak};
 
-use lightcraft_catalog::{MediaKind, Photo, PhotoId, Source};
-use lightcraft_develop::DevelopSettings;
-use lightcraft_pipeline::{Quality, RenderRequest, Rendered, SourceInfo, StageCache};
-use lightcraft_preview::{Hash128, Hasher128, Lru, PreviewCache};
-use lightcraft_raster::{Histogram, Rgb32f, Rgba8};
+use dac_catalog::{MediaKind, Photo, PhotoId, Source};
+use dac_develop::DevelopSettings;
+use dac_pipeline::{Quality, RenderRequest, Rendered, SourceInfo, StageCache};
+use dac_preview::{Hash128, Hasher128, Lru, PreviewCache};
+use dac_raster::{Histogram, Rgb32f, Rgba8};
 use serde::{Deserialize, Serialize};
 
 const SETTINGS_HASH_ENTRIES: usize = 1024;
@@ -169,7 +169,7 @@ pub struct DecodedSource {
     pub info: Option<SourceInfo>,
     /// A smart preview's stored camera tone curve: the one decoder fact its pixels need that the
     /// catalog's header facts lack (used when `info` is `None`).
-    pub camera_tone: Option<lightcraft_pipeline::tone::CameraTone>,
+    pub camera_tone: Option<dac_pipeline::tone::CameraTone>,
     /// The same picture developed from the AI-denoised mosaic, when the photo has one cached.
     pub denoised: Option<Arc<Twin>>,
 }
@@ -198,7 +198,7 @@ impl DecodedSource {
             return img.clone();
         }
         let mut mixed = (*self.image).clone();
-        if !lightcraft_denoise::product::blend(&mut mixed, &twin.image, thousandths as f32 / 1000.0) {
+        if !dac_denoise::product::blend(&mut mixed, &twin.image, thousandths as f32 / 1000.0) {
             return self.image.clone();
         }
         let mixed = Arc::new(mixed);
@@ -224,7 +224,7 @@ impl DecodedSource {
 pub enum SourceRef {
     Loaded(Box<DecodedSource>),
     Demo {
-        scene: Box<lightcraft_scenes::Scene>,
+        scene: Box<dac_scenes::Scene>,
         max_edge: usize,
     },
     File {
@@ -307,7 +307,7 @@ pub struct MediaCache {
     settings_hashes: SettingsHashes,
     /// Decoded thumbnail-level sources (LRU by bytes).
     thumbs: Lru<PhotoId, DecodedSource>,
-    /// Decoded preview-level sources with their last use ([`lightcraft_preview::next_tick`]).
+    /// Decoded preview-level sources with their last use ([`dac_preview::next_tick`]).
     previews: Vec<(PhotoId, DecodedSource, u64)>,
     /// The last full-resolution original (exports; one at a time: ~300 MB at 24 MP).
     full: Option<(PhotoId, DecodedSource, u64)>,
@@ -326,7 +326,7 @@ pub struct MediaCache {
     /// Whether originals (and smart previews) are on disk: cached and checked off the UI thread
     /// in the app (see [`crate::availability`]).
     pub availability: crate::availability::Availability,
-    scenes: Vec<lightcraft_scenes::Scene>,
+    scenes: Vec<dac_scenes::Scene>,
     /// Rendered thumbnails (memory, plus disk once a library is attached).
     pub rendered: Arc<PreviewCache>,
     /// Which photos have a cached denoised picture, and how to read it.
@@ -488,11 +488,11 @@ impl MediaCache {
         match level {
             SourceLevel::Thumb => self.thumbs.get(&id).cloned(),
             SourceLevel::Preview => self.previews.iter_mut().find(|e| e.0 == id).map(|e| {
-                e.2 = lightcraft_preview::next_tick();
+                e.2 = dac_preview::next_tick();
                 e.1.clone()
             }),
             SourceLevel::Full => self.full.as_mut().filter(|e| e.0 == id).map(|e| {
-                e.2 = lightcraft_preview::next_tick();
+                e.2 = dac_preview::next_tick();
                 e.1.clone()
             }),
         }
@@ -519,7 +519,7 @@ impl MediaCache {
     }
 
     fn insert_source(&mut self, id: PhotoId, level: SourceLevel, img: DecodedSource) {
-        let tick = lightcraft_preview::next_tick();
+        let tick = dac_preview::next_tick();
         match level {
             SourceLevel::Thumb => {
                 let cost = img.bytes();
@@ -634,7 +634,7 @@ impl MediaCache {
         match origin {
             Source::Demo { scene } => {
                 if self.scenes.is_empty() {
-                    self.scenes = lightcraft_scenes::demo_library();
+                    self.scenes = dac_scenes::demo_library();
                 }
                 match self.scenes.iter().find(|s| s.id == *scene) {
                     Some(s) => SourceRef::Demo { scene: Box::new(s.clone()), max_edge },
@@ -706,24 +706,24 @@ impl RenderJob {
 
     /// Draw a diagnostic overlay over the result (e.g. Point Color's visualized range). Gets its
     /// own result key.
-    pub fn with_overlay(mut self, overlay: lightcraft_pipeline::Overlay) -> Self {
+    pub fn with_overlay(mut self, overlay: dac_pipeline::Overlay) -> Self {
         if self.request.overlay != overlay {
             self.key ^= self.request.overlay.key().wrapping_mul(0x9e37_79b9_7f4a_7c15);
             self.request.overlay = overlay;
             self.key ^= overlay.key().wrapping_mul(0x9e37_79b9_7f4a_7c15);
         }
         // a diagnostic view (visualized range / spots) must never become the photo's cached preview
-        if overlay != lightcraft_pipeline::Overlay::None {
+        if overlay != dac_pipeline::Overlay::None {
             self.view_cache = None;
         }
         self
     }
 
-    /// Soft-proof the result (see [`lightcraft_pipeline::Proof`]). Gets its own result key and is
+    /// Soft-proof the result (see [`dac_pipeline::Proof`]). Gets its own result key and is
     /// never kept as the photo's cached preview.
-    pub fn with_proof(mut self, proof: Option<lightcraft_pipeline::Proof>) -> Self {
+    pub fn with_proof(mut self, proof: Option<dac_pipeline::Proof>) -> Self {
         if self.request.proof != proof {
-            let k = |p: Option<lightcraft_pipeline::Proof>| p.map_or(0, |p| p.key()).wrapping_mul(0xc2b2_ae3d_27d4_eb4f);
+            let k = |p: Option<dac_pipeline::Proof>| p.map_or(0, |p| p.key()).wrapping_mul(0xc2b2_ae3d_27d4_eb4f);
             self.key ^= k(self.request.proof) ^ k(proof);
             self.request.proof = proof;
         }
@@ -744,7 +744,7 @@ impl RenderJob {
     /// Gets its own result key. Thumbnail jobs (rendered-thumbnail cache) are left as they are:
     /// [`crate::display::present`] converts their sRGB results.
     pub fn with_display(mut self, display: Option<Arc<crate::display::Display>>) -> Self {
-        if self.cache.is_some() || self.request.depth != lightcraft_pipeline::OutputDepth::U8 {
+        if self.cache.is_some() || self.request.depth != dac_pipeline::OutputDepth::U8 {
             return self;
         }
         let k = |d: &Option<Arc<crate::display::Display>>| d.as_ref().map_or(0, |d| d.id()).wrapping_mul(0xd6e8_feb8_6659_fd93);
@@ -775,7 +775,7 @@ impl RenderJob {
         let was_loaded = matches!(self.source, SourceRef::Loaded(_));
         // The app is closing (issue #620): nobody is left to show this, and quitting waits for the
         // jobs that are running. Without this, one that lost the GPU mid-way would render on the CPU.
-        let closing = || lightcraft_gpu::shutting_down().then(|| "LightCraft is closing".to_string());
+        let closing = || dac_gpu::shutting_down().then(|| "the app is closing".to_string());
         let source = match closing() {
             Some(e) => Err(e),
             None => self.source.load_source().and_then(|s| closing().map_or(Ok(s), Err)),
@@ -840,22 +840,22 @@ impl RenderJob {
     }
 }
 
-/// Render `src`: on the GPU when `gpu` is set and a GPU is available (`lightcraft_gpu`), else on
+/// Render `src`: on the GPU when `gpu` is set and a GPU is available (`dac_gpu`), else on
 /// the CPU, reusing `stages` either way. Both produce the same image within 1–3 LSB (see
-/// `docs/gpu-pipeline.md`); `LIGHTCRAFT_GPU=0` or [`lightcraft_gpu::set_enabled`] forces the CPU.
+/// `docs/gpu-pipeline.md`); `{ENV_PREFIX}_GPU=0` or [`dac_gpu::set_enabled`] forces the CPU.
 pub fn develop(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>, gpu: bool) -> Rendered {
     // LUT profiles have no GPU stage: they render on the CPU
     if gpu
-        && !lightcraft_pipeline::lut::is_lut_profile(&s.profile.id)
+        && !dac_pipeline::lut::is_lut_profile(&s.profile.id)
         && !s.masks.iter().any(|m| m.visible && m.refine > 0.0)
         && req.proof.is_none()
-        && let Some(r) = lightcraft_gpu::render(src, info, s, req, stages)
+        && let Some(r) = dac_gpu::render(src, info, s, req, stages)
     {
         return r;
     }
     match stages {
-        Some(st) => lightcraft_pipeline::render_cached(src, info, s, req, st),
-        None => lightcraft_pipeline::render(src, info, s, req),
+        Some(st) => dac_pipeline::render_cached(src, info, s, req, st),
+        None => dac_pipeline::render(src, info, s, req),
     }
 }
 
@@ -941,7 +941,14 @@ pub fn source_info(p: &Photo) -> SourceInfo {
     // balance and the display tone curve, like any other rendered file.
     if p.develops_raw() {
         let (temp, tint) = if p.relative_wb() { (6500.0, 0.0) } else { p.as_shot_wb.unwrap_or((5500.0, 0.0)) };
-        SourceInfo { raw: true, as_shot_temp: temp, as_shot_tint: tint, lens: p.embedded_lens, relative_wb: p.relative_wb(), ..Default::default() }
+        SourceInfo {
+            raw: true,
+            as_shot_temp: temp,
+            as_shot_tint: tint,
+            lens: p.embedded_lens.as_deref().copied(),
+            relative_wb: p.relative_wb(),
+            ..Default::default()
+        }
     } else {
         SourceInfo::default()
     }
@@ -1078,7 +1085,7 @@ impl crate::Session {
     /// photo's own look with its crop replaced by a square around the face (room for hair and chin),
     /// `edge` pixels across (≤ 512). The source level is the smallest that keeps the face sharp, up
     /// to the preview. Cached like [`Self::variant_job`], and `key` likewise follows the content.
-    pub fn face_job(&mut self, id: PhotoId, face: lightcraft_geom::Rect, edge: usize) -> Option<RenderJob> {
+    pub fn face_job(&mut self, id: PhotoId, face: dac_geom::Rect, edge: usize) -> Option<RenderJob> {
         let p = self.catalog.photo(id)?.clone();
         // `face` is on the upright (EXIF-oriented) photo; the crop below is in the frame after the
         // user's Rotate Left/Right, so carry the box (and the photo's size) over to it.
@@ -1092,9 +1099,9 @@ impl crate::Session {
         let (cx, cy) = ((face.x0 + face.x1) / 2.0 * w, (face.y0 + face.y1) / 2.0 * h);
         let (cx, cy) = (if cx.is_finite() { cx } else { w / 2.0 }, if cy.is_finite() { cy } else { h / 2.0 });
         let (x0, y0) = (cx.clamp(side / 2.0, w - side / 2.0) - side / 2.0, cy.clamp(side / 2.0, h - side / 2.0) - side / 2.0);
-        let rect = lightcraft_geom::Rect { x0: x0 / w, y0: y0 / h, x1: (x0 + side) / w, y1: (y0 + side) / h };
+        let rect = dac_geom::Rect { x0: x0 / w, y0: y0 / h, x1: (x0 + side) / w, y1: (y0 + side) / h };
         let mut settings = (*p.develop).clone();
-        settings.crop = lightcraft_develop::Crop { geometry: lightcraft_geom::CropGeometry { rect, angle: 0.0 }, ..Default::default() };
+        settings.crop = dac_develop::Crop { geometry: dac_geom::CropGeometry { rect, angle: 0.0 }, ..Default::default() };
         let edge = edge.clamp(16, SourceLevel::Thumb.max_edge());
         // pixels along the long edge that leave `edge` across the crop
         let needed = (edge as f64 * w.max(h) / side).ceil().min(SourceLevel::Preview.max_edge() as f64);
@@ -1132,6 +1139,13 @@ impl crate::Session {
             .finish()
     }
 
+    /// Key of the photo's 1:1 preview (Build 1:1 Previews): kept apart from the standard view
+    /// preview so it can be discarded on its own (`library.discardPreviews`).
+    pub(crate) fn full_view_key(p: &Photo) -> Hash128 {
+        let v = Self::view_key(p, true).0;
+        Hasher128::new().u64(v as u64).u64((v >> 64) as u64).str("1:1").finish()
+    }
+
     /// The loupe's render job: like [`Self::render_job`], and a full-quality result is kept as the
     /// photo's view preview (memory, and disk with a library) for [`Self::quick_view_job`].
     pub fn loupe_job(&mut self, id: PhotoId, max_w: usize, max_h: usize, apply_crop: bool) -> Option<RenderJob> {
@@ -1151,7 +1165,7 @@ impl crate::Session {
         id: PhotoId,
         full_w: usize,
         full_h: usize,
-        window: lightcraft_pipeline::PixelWindow,
+        window: dac_pipeline::PixelWindow,
         apply_crop: bool,
     ) -> Option<RenderJob> {
         self.region_job_of(id, full_w, full_h, window, apply_crop, false)
@@ -1163,7 +1177,7 @@ impl crate::Session {
         id: PhotoId,
         full_w: usize,
         full_h: usize,
-        window: lightcraft_pipeline::PixelWindow,
+        window: dac_pipeline::PixelWindow,
         apply_crop: bool,
     ) -> Option<RenderJob> {
         self.region_job_of(id, full_w, full_h, window, apply_crop, true)
@@ -1174,7 +1188,7 @@ impl crate::Session {
         id: PhotoId,
         full_w: usize,
         full_h: usize,
-        window: lightcraft_pipeline::PixelWindow,
+        window: dac_pipeline::PixelWindow,
         apply_crop: bool,
         before: bool,
     ) -> Option<RenderJob> {
@@ -1182,15 +1196,15 @@ impl crate::Session {
         // what the window's spots and Auto Mask strokes read must fit in one render: else the
         // caller keeps the whole-frame render (a window alone would come out wrong)
         let p = self.catalog.photo(id)?;
-        let frame = lightcraft_pipeline::geometry::Frame::with_lens(
+        let frame = dac_pipeline::geometry::Frame::with_lens(
             p.width.max(1) as usize,
             p.height.max(1) as usize,
             &job.settings,
             apply_crop,
-            p.embedded_lens.as_ref(),
+            p.embedded_lens.as_deref(),
         );
         let ppl = frame.px_per_long(full_w);
-        lightcraft_pipeline::spots::window_for_reads_checked(&job.settings, &frame, full_w, full_h, ppl, window.clamped(full_w, full_h))?;
+        dac_pipeline::spots::window_for_reads_checked(&job.settings, &frame, full_w, full_h, ppl, window.clamped(full_w, full_h))?;
         job.request.window = Some(window);
         job.key = Hasher128::new()
             .u64(job.key)
@@ -1223,13 +1237,38 @@ impl crate::Session {
         }
     }
 
+    /// The photo's 1:1 preview (Library → Previews → Build 1:1 Previews) for its current look, if
+    /// it is held in memory: what a zoomed loupe shows at once while its tiles render. With
+    /// `load`, one held only on disk is read into memory on a background thread for next time.
+    pub fn full_preview_in_memory(&self, id: PhotoId, load: bool) -> Option<Arc<dac_raster::Rgba8>> {
+        let p = self.catalog.photo(id)?;
+        let key = Self::full_view_key(p);
+        if let Some(img) = self.media.rendered.get_in_memory(key) {
+            return Some(img);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if load && self.media.rendered.contains(key) {
+            let cache = self.media.rendered.clone();
+            if std::thread::Builder::new().name("full-preview-load".into()).spawn(move || drop(cache.get(key))).is_err() {
+                log::warn!("could not start a preview loader thread");
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = load;
+        None
+    }
+
     /// Something to show in the loupe right away for `id` (see [`QuickJob`]): its cached view
     /// render, else the embedded preview of an unedited raw, else a cached or fresh thumbnail.
     pub fn quick_view_job(&mut self, id: PhotoId, max_edge: usize, apply_crop: bool) -> Option<QuickJob> {
         let p = self.catalog.photo(id)?.clone();
         let small = self.thumb_job(id, THUMB_SIZES[THUMB_SIZES.len() - 1])?;
         // (the thumbnail job itself starts with the cached thumbnail, after the sharper embedded preview)
-        let cached = vec![(self.media.rendered.clone(), Self::view_key(&p, apply_crop))];
+        let mut cached = vec![(self.media.rendered.clone(), Self::view_key(&p, apply_crop))];
+        // a 1:1 preview (Build 1:1 Previews) stands in when there is no standard one
+        if apply_crop {
+            cached.push((self.media.rendered.clone(), Self::full_view_key(&p)));
+        }
         let h = Hasher128::new().str(&content_key(&p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).finish();
         let key = h.0 as u64;
         let embedded = self.embedded_of(&p).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
@@ -1278,8 +1317,8 @@ impl crate::Session {
         id: PhotoId,
         max_w: usize,
         max_h: usize,
-        space: lightcraft_pipeline::OutputSpace,
-        depth: lightcraft_pipeline::OutputDepth,
+        space: dac_pipeline::OutputSpace,
+        depth: dac_pipeline::OutputDepth,
     ) -> Result<Rendered, String> {
         let r = self.export_job(id, max_w, max_h, space, depth)?.run();
         self.accept(&r);
@@ -1292,9 +1331,10 @@ impl crate::Session {
         id: PhotoId,
         max_w: usize,
         max_h: usize,
-        space: lightcraft_pipeline::OutputSpace,
-        depth: lightcraft_pipeline::OutputDepth,
+        space: dac_pipeline::OutputSpace,
+        depth: dac_pipeline::OutputDepth,
     ) -> Result<RenderJob, String> {
+        dac_pipeline::check_output_size(max_w, max_h)?;
         let mut job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
         // An export is made from the denoised picture its Denoise amount asks for, made when the job runs if the
         // background queue has not got to it. (A source kept in memory may lack the picture, so the job reads the file.)
@@ -1327,7 +1367,7 @@ impl crate::Session {
     }
 }
 
-/// What an import learns from a file header (set by the app from `lightcraft-codecs`/`-raw`).
+/// What an import learns from a file header (set by the app from `dac-codecs`/`-raw`).
 #[derive(Clone, Debug, Default)]
 pub struct ProbeInfo {
     pub width: u32,
@@ -1336,19 +1376,22 @@ pub struct ProbeInfo {
     pub kind: MediaKind,
     pub file_size: u64,
     pub captured: Option<String>,
-    pub meta: lightcraft_catalog::Meta,
+    pub meta: dac_catalog::Meta,
     pub as_shot_wb: Option<(f64, f64)>,
     /// Hash of the file's bytes (hex), for duplicate detection. When it is a 32-digit
-    /// [`lightcraft_preview::hash_bytes`] of the whole file (as the native probe computes it),
+    /// [`dac_preview::hash_bytes`] of the whole file (as the native probe computes it),
     /// Import → Copy verifies each copy against it instead of reading the source again.
     pub content_hash: Option<String>,
     /// Lens corrections embedded in the file (DNG opcodes).
-    pub embedded_lens: Option<lightcraft_develop::EmbeddedLens>,
+    pub embedded_lens: Option<dac_develop::EmbeddedLens>,
     /// The file's embedded XMP packet (raw/DNG files), for develop settings stored inside the file.
     pub xmp: Option<String>,
     /// A raw variant that can't be decoded yet: why. The file is described (and will be shown and
-    /// edited) from its embedded preview; see [`lightcraft_catalog::Photo::preview_only`].
+    /// edited) from its embedded preview; see [`dac_catalog::Photo::preview_only`].
     pub preview_only: Option<String>,
+    /// SHA-1 of the file's bytes (lowercase hex), computed in the same read pass as
+    /// `content_hash`: what Immich stores for its assets (IMM-LINK).
+    pub sha1: Option<String>,
 }
 
 pub type FileProbe = Arc<dyn Fn(&str) -> Result<ProbeInfo, String> + Send + Sync>;
@@ -1356,7 +1399,7 @@ pub type FileProbe = Arc<dyn Fn(&str) -> Result<ProbeInfo, String> + Send + Sync
 #[cfg(test)]
 mod thumbnail_hash_tests {
     use super::*;
-    use lightcraft_catalog::Op;
+    use dac_catalog::Op;
 
     fn session() -> crate::Session {
         let mut s = crate::Session::new();
@@ -1468,7 +1511,7 @@ mod tests {
 
     #[test]
     fn decoder_info_survives_render_jobs_cache_and_eviction() {
-        let tone = lightcraft_pipeline::tone::CameraTone::new(std::array::from_fn(|i| {
+        let tone = dac_pipeline::tone::CameraTone::new(std::array::from_fn(|i| {
             let x = 0.01 * (i + 1) as f32;
             [x, (x * 2.0).min(0.9)]
         }))
@@ -1493,7 +1536,7 @@ mod tests {
         job.settings = Arc::new(DevelopSettings::default());
         let r = job.clone().run();
         assert_eq!(r.loaded.as_ref().unwrap().info.as_ref(), Some(&info));
-        let expected = lightcraft_pipeline::render(&r.loaded.as_ref().unwrap().image, &info, &job.settings, &job.request);
+        let expected = dac_pipeline::render(&r.loaded.as_ref().unwrap().image, &info, &job.settings, &job.request);
         assert_eq!(r.rendered.as_ref().unwrap().image.data, expected.image.data);
         s.accept(&r);
         job.source = s.media.source_ref(s.catalog.photo(id).unwrap(), job.level);
@@ -1519,7 +1562,7 @@ mod tests {
         assert!(m.get(PhotoId(1), SourceLevel::Preview).is_some() && m.get(PhotoId(3), SourceLevel::Preview).is_some());
         // a thumbnail source and a rendered preview compete in the same budget
         m.insert(PhotoId(4), SourceLevel::Thumb, img(500));
-        m.rendered.put(Hash128(7), Arc::new(lightcraft_raster::Rgba8::new(1000, 1000)));
+        m.rendered.put(Hash128(7), Arc::new(dac_raster::Rgba8::new(1000, 1000)));
         assert!(m.held() <= 30 * mb, "{}", m.held());
         // the newest preview (the one on screen) is never evicted, even alone over budget
         m.set_budget(mb);
@@ -1581,7 +1624,7 @@ mod tests {
     // from the original, with a key of its own
     #[test]
     fn region_jobs_render_a_window_of_the_zoomed_frame() {
-        use lightcraft_pipeline::PixelWindow;
+        use dac_pipeline::PixelWindow;
         let mut s = crate::Session::with_demo();
         let p = s.catalog.photos().next().unwrap().clone();
         let (w, h) = (p.width as usize, p.height as usize);
@@ -1614,7 +1657,7 @@ mod tests {
         // the uncropped photo at 1600 px: the preview is plenty
         assert_eq!(s.render_job(id, 1600, 1600, false, true).unwrap().level, SourceLevel::Preview);
         // a crop to 30 % of each side shown 1600 px long needs 1600 / 0.3 px of the source
-        d.crop.geometry.rect = lightcraft_geom::Rect { x0: 0.2, y0: 0.2, x1: 0.5, y1: 0.5 };
+        d.crop.geometry.rect = dac_geom::Rect { x0: 0.2, y0: 0.2, x1: 0.5, y1: 0.5 };
         s.set_develop(id, d, "Crop").unwrap();
         assert_eq!(s.render_job(id, 1600, 1600, false, true).unwrap().level, SourceLevel::Full);
         // …but with the crop tool open (the whole photo shown) it does not
@@ -1626,16 +1669,16 @@ mod tests {
     // a window whose spot reads from further away than a render can hold is refused
     #[test]
     fn a_region_job_is_refused_when_a_spot_reads_beyond_what_fits() {
-        use lightcraft_pipeline::PixelWindow;
+        use dac_pipeline::PixelWindow;
         let mut s = crate::Session::with_demo();
         let id = s.active().unwrap();
         let p = s.catalog.photo(id).unwrap().clone();
         let (w, h) = (p.width as usize * 8, p.height as usize * 8);
         let mut d = (*s.develop_of(id).unwrap()).clone();
-        d.spots.push(lightcraft_develop::Spot {
-            points: vec![lightcraft_geom::Point::new(0.2, 0.5)],
+        d.spots.push(dac_develop::Spot {
+            points: vec![dac_geom::Point::new(0.2, 0.5)],
             size: 0.01,
-            source_offset: Some(lightcraft_geom::Point::new(0.6, 0.0)),
+            source_offset: Some(dac_geom::Point::new(0.6, 0.0)),
             ..Default::default()
         });
         s.set_develop(id, d, "Spot").unwrap();
@@ -1649,7 +1692,7 @@ mod tests {
     // without its edits (the crop is kept), with a key of its own
     #[test]
     fn a_before_window_shows_the_unedited_look() {
-        use lightcraft_pipeline::PixelWindow;
+        use dac_pipeline::PixelWindow;
         let mut s = crate::Session::with_demo();
         let id = s.active().unwrap();
         let p = s.catalog.photo(id).unwrap().clone();

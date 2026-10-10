@@ -1,4 +1,4 @@
-// Mask evaluation (`lightcraft_pipeline::masks`): one component shape → `c`, then combined into
+// Mask evaluation (`dac_pipeline::masks`): one component shape → `c`, then combined into
 // the mask's alpha plane. Bindings: img (rgb, pre-exposure), log_l, aux (shape data), c, alpha.
 
 // Position of output pixel (x, y) in long-edge units: P[4..10] = affine (a, b, c, d, e, f).

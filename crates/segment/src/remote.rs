@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 const CONTROL_LIMIT: usize = 16 * 1024;
 const RESPONSE_LIMIT: usize = 4 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(9 * 60);
-pub const ENV: &str = "LIGHTCRAFT_SAM3_REMOTE";
+/// Environment variable (name after the app prefix, see `dac_brand::env`) with the remote worker address.
+pub const ENV: &str = "SAM3_REMOTE";
 
 #[derive(Serialize, Deserialize)]
 pub enum Operation {
@@ -52,7 +53,7 @@ impl Request {
 }
 
 pub fn configured() -> Option<String> {
-    std::env::var(ENV).ok().filter(|v| !v.trim().is_empty())
+    dac_brand::env(ENV).filter(|v| !v.trim().is_empty())
 }
 
 pub fn read_frame(reader: &mut impl Read, limit: usize) -> io::Result<Vec<u8>> {

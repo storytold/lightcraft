@@ -1,7 +1,7 @@
 //! Library-wide keyword commands: list (tree with counts), suggestions, rename, delete, merge;
 //! keyword sets (nine keywords a keystroke away: ⌥1–⌥9) and Recent Keywords.
 
-use lightcraft_catalog::keywords::{KeywordInfo, clean, closest, is_under, reparent};
+use dac_catalog::keywords::{KeywordInfo, clean, closest, is_under, reparent};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, bool_or, cmd, str_param};
@@ -17,8 +17,8 @@ fn strs(p: &Value, key: &str) -> Vec<String> {
 
 /// Commit a keyword batch; returns `{changed: photos changed, listed: keyword list changes}`. The
 /// keyword filter follows a renamed keyword and is cleared when its keyword is deleted.
-fn commit_keywords(s: &mut Session, label: &str, op: lightcraft_catalog::Op, follow: impl Fn(&str) -> Option<String>) -> Result<Value> {
-    use lightcraft_catalog::Op;
+fn commit_keywords(s: &mut Session, label: &str, op: dac_catalog::Op, follow: impl Fn(&str) -> Option<String>) -> Result<Value> {
+    use dac_catalog::Op;
     let (photos, listed) = match &op {
         Op::Batch { ops } => {
             (ops.iter().filter(|o| matches!(o, Op::SetMeta { .. })).count(), ops.iter().filter(|o| matches!(o, Op::SetKeyword { .. })).count())
@@ -58,9 +58,9 @@ fn named_keyword(s: &Session, p: &Value, command: &str) -> Result<String> {
 }
 
 /// A catalog refusal as a command error; a taken name says how to merge.
-fn refused(command: &str, e: lightcraft_catalog::CatalogError, how_to_merge: &str) -> crate::EngineError {
+fn refused(command: &str, e: dac_catalog::CatalogError, how_to_merge: &str) -> crate::EngineError {
     match e {
-        lightcraft_catalog::CatalogError::KeywordExists(k) => bad(command, format!("there is a keyword “{k}” already{how_to_merge}")),
+        dac_catalog::CatalogError::KeywordExists(k) => bad(command, format!("there is a keyword “{k}” already{how_to_merge}")),
         e => bad(command, e.to_string()),
     }
 }
@@ -75,7 +75,7 @@ pub struct KeywordSet {
 /// Two set names (or recent keywords) are the same whatever the case of any of their letters, as
 /// keywords are.
 fn same_set(a: &str, b: &str) -> bool {
-    lightcraft_catalog::keywords::same(a.trim(), b.trim())
+    dac_catalog::keywords::same(a.trim(), b.trim())
 }
 
 /// The set name meaning "the nine most recently added keywords".
@@ -124,7 +124,7 @@ pub fn slots(typed: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for k in typed.iter().take(9) {
         let k = clean(k);
-        let twice = !k.is_empty() && out.iter().any(|x| lightcraft_catalog::keywords::same(x, &k));
+        let twice = !k.is_empty() && out.iter().any(|x| dac_catalog::keywords::same(x, &k));
         out.push(if twice { String::new() } else { k });
     }
     while out.last().is_some_and(String::is_empty) {
@@ -133,19 +133,50 @@ pub fn slots(typed: &[String]) -> Vec<String> {
     out
 }
 
+/// Keyword sets that come with the app (a user set of the same name replaces one).
+pub const BUILTIN_SETS: &[(&str, [&str; 9])] = &[
+    ("Outdoor Photography", ["Landscape", "Wildlife", "Mountains", "Forest", "Water", "Sky", "Sunrise", "Sunset", "Night"]),
+    ("Portrait Photography", ["Portrait", "Headshot", "Family", "Children", "Couple", "Group", "Studio", "Outdoors", "Candid"]),
+    ("Wedding Photography", ["Ceremony", "Reception", "Bride", "Groom", "Rings", "Dance", "Family", "Details", "Getting Ready"]),
+];
+
+/// The built-in set called `name`, if any.
+fn builtin(name: &str) -> Option<KeywordSet> {
+    BUILTIN_SETS
+        .iter()
+        .find(|(n, _)| same_set(n, name))
+        .map(|(n, k)| KeywordSet { name: (*n).to_string(), keywords: k.iter().map(|x| (*x).to_string()).collect() })
+}
+
+/// The set called `name`: the user's, else a built-in one.
+fn find_set(s: &Session, name: &str) -> Option<KeywordSet> {
+    s.keyword_sets.iter().find(|x| same_set(&x.name, name)).cloned().or_else(|| builtin(name))
+}
+
 /// The nine keywords ⌥1–⌥9 apply: the current set's, or the recent ones.
 pub fn current_keywords(s: &Session) -> Vec<String> {
-    let set = s.keyword_set.as_deref().and_then(|n| s.keyword_sets.iter().find(|x| same_set(&x.name, n)));
-    let mut v = set.map_or_else(|| s.recent_keywords.clone(), |x| x.keywords.clone());
+    let set = s.keyword_set.as_deref().and_then(|n| find_set(s, n));
+    let mut v = set.map_or_else(|| s.recent_keywords.clone(), |x| x.keywords);
     v.truncate(9);
     v
 }
 
-/// `{sets: [{name, keywords}], current, keywords}` (Recent Keywords first).
+/// `{sets: [{name, keywords, builtin}], current, keywords, shortcut}` (Recent Keywords first, then
+/// the user's sets, then the built-in ones they don't replace).
 pub fn keyword_sets_json(s: &Session) -> Value {
-    let mut sets = vec![json!({"name": RECENT, "keywords": s.recent_keywords})];
-    sets.extend(s.keyword_sets.iter().map(|x| json!({"name": x.name, "keywords": x.keywords})));
-    json!({"sets": sets, "current": s.keyword_set.clone().unwrap_or_else(|| RECENT.into()), "keywords": current_keywords(s)})
+    let mut sets = vec![json!({"name": RECENT, "keywords": s.recent_keywords, "builtin": true})];
+    sets.extend(s.keyword_sets.iter().map(|x| json!({"name": x.name, "keywords": x.keywords, "builtin": false})));
+    for (n, k) in BUILTIN_SETS {
+        if !s.keyword_sets.iter().any(|x| same_set(&x.name, n)) {
+            sets.push(json!({"name": n, "keywords": k, "builtin": true}));
+        }
+    }
+    json!({
+        "sets": sets,
+        "current": s.keyword_set.clone().unwrap_or_else(|| RECENT.into()),
+        "keywords": current_keywords(s),
+        "shortcut": s.keyword_shortcut,
+    })
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -156,14 +187,7 @@ pub fn specs() -> Vec<CommandSpec> {
             s.keyword_set = if same_set(name, RECENT) || name.is_empty() {
                 None
             } else {
-                Some(
-                    s.keyword_sets
-                        .iter()
-                        .find(|x| same_set(&x.name, name))
-                        .ok_or_else(|| bad("keyword.useSet", format!("no keyword set `{name}`")))?
-                        .name
-                        .clone(),
-                )
+                Some(find_set(s, name).ok_or_else(|| bad("keyword.useSet", format!("no keyword set `{name}`")))?.name)
             };
             s.save_prefs()?;
             Ok(keyword_sets_json(s))
@@ -231,6 +255,9 @@ pub fn specs() -> Vec<CommandSpec> {
             let before = s.keyword_sets.len();
             s.keyword_sets.retain(|x| !same_set(&x.name, name));
             if s.keyword_sets.len() == before {
+                if builtin(name).is_some() {
+                    return Err(bad("keyword.deleteSet", format!("`{name}` comes with the app and can't be deleted")));
+                }
                 return Err(bad("keyword.deleteSet", format!("no keyword set `{name}`")));
             }
             if s.keyword_set.as_deref().is_some_and(|c| same_set(c, name)) {
@@ -259,9 +286,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let ids = s.targets(p);
                 let all = !ids.is_empty()
                     && ids.iter().all(|id| {
-                        s.catalog
-                            .photo(*id)
-                            .is_some_and(|ph| ph.meta.keywords.iter().any(|x| lightcraft_catalog::keywords::same(&clean(x), &clean(&k))))
+                        s.catalog.photo(*id).is_some_and(|ph| ph.meta.keywords.iter().any(|x| dac_catalog::keywords::same(&clean(x), &clean(&k))))
                     });
                 let ids: Vec<u64> = ids.iter().map(|i| i.0).collect();
                 let key = if all { "removeKeywords" } else { "addKeywords" };
@@ -271,6 +296,40 @@ pub fn specs() -> Vec<CommandSpec> {
                 if s.keyword_set.is_none() {
                     s.recent_keywords = recent;
                 }
+                r["keyword"] = json!(k);
+                r["added"] = json!(!all);
+                Ok(r)
+            }
+        ),
+        cmd!(
+            "keyword.setShortcut",
+            "Set Keyword Shortcut",
+            [],
+            Some("Alt+Shift+K"),
+            "{keyword} (empty or null clears it) — the keyword ⇧K toggles on the selected photos → {shortcut}",
+            always,
+            |s, p| {
+                let k = str_param(p, "keyword").map(clean).filter(|k| !k.is_empty());
+                s.keyword_shortcut = k;
+                s.save_prefs()?;
+                Ok(json!({"shortcut": s.keyword_shortcut}))
+            }
+        ),
+        cmd!(
+            "keyword.toggleShortcut",
+            "Add Keyword Shortcut",
+            ["Photo"],
+            Some("Shift+K"),
+            "{ids?} — the keyword shortcut: added to the target photos, or removed when they all have it",
+            super::has_selection,
+            |s, p| {
+                let k = s.keyword_shortcut.clone().ok_or_else(|| bad("keyword.toggleShortcut", "no keyword shortcut: set one first (⌥⇧K)"))?;
+                let ids = s.targets(p);
+                let all = !ids.is_empty()
+                    && ids.iter().all(|id| s.catalog.photo(*id).is_some_and(|ph| ph.meta.keywords.iter().any(|x| x.eq_ignore_ascii_case(&k))));
+                let ids: Vec<u64> = ids.iter().map(|i| i.0).collect();
+                let key = if all { "removeKeywords" } else { "addKeywords" };
+                let mut r = s.execute("photo.setMeta", &json!({"ids": ids, key: [k.clone()]}))?;
                 r["keyword"] = json!(k);
                 r["added"] = json!(!all);
                 Ok(r)
@@ -439,7 +498,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let refuses: Vec<&str> = file
                     .written
                     .iter()
-                    .filter_map(|p| p.rsplit(lightcraft_catalog::keywords::SEP).next())
+                    .filter_map(|p| p.rsplit(dac_catalog::keywords::SEP).next())
                     .filter(|n| n.contains(CAPTURE_ONE_REFUSES))
                     .collect();
                 let mut r = json!({"keywords": file.written.len(), "captureOneRefuses": refuses, "unwritable": file.unwritable});
@@ -469,7 +528,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     (None, Some(text)) => text.to_string(),
                     (None, None) => return Err(bad("keyword.import", "give `path` or `text`")),
                 };
-                let entries = lightcraft_catalog::keywords::parse_keyword_list(&text).map_err(|e| bad("keyword.import", e.to_string()))?;
+                let entries = dac_catalog::keywords::parse_keyword_list(&text).map_err(|e| bad("keyword.import", e.to_string()))?;
                 let (op, added, updated) = s.catalog.import_keywords_ops(&entries);
                 commit_keywords(s, "Import Keywords", op, |k| Some(k.to_string()))?;
                 Ok(json!({"added": added, "updated": updated}))

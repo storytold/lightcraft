@@ -1,35 +1,35 @@
 //! Synthetic merge inputs from procedural scenes (tests, demos, UI checks — no media files):
 //! exposure brackets as linear DNGs and overlapping panorama views as PNGs.
 
-use lightcraft_geom::Orientation;
-use lightcraft_meta::Metadata;
-use lightcraft_raster::Rgb32f;
+use dac_geom::Orientation;
+use dac_meta::Metadata;
+use dac_raster::Rgb32f;
 
 use crate::frame::FrameColor;
 use crate::linalg::{self, M3};
 use crate::output::{DngSamples, write_linear_dng};
 use crate::{MergeError, Result};
 
-fn scene(kind: lightcraft_scenes::Kind) -> Result<lightcraft_scenes::Scene> {
-    lightcraft_scenes::demo_library()
+fn scene(kind: dac_scenes::Kind) -> Result<dac_scenes::Scene> {
+    dac_scenes::demo_library()
         .into_iter()
         .find(|s| s.kind == kind)
         .ok_or_else(|| MergeError::Mismatch(format!("no {kind:?} scene in the demo library")))
 }
 
 fn srgb_color() -> FrameColor {
-    FrameColor::Linear { to_xyz_d50: lightcraft_color::bradford(lightcraft_color::D65, lightcraft_color::D50).mul(&lightcraft_color::SRGB.to_xyz()) }
+    FrameColor::Linear { to_xyz_d50: dac_color::bradford(dac_color::D65, dac_color::D50).mul(&dac_color::SRGB.to_xyz()) }
 }
 
 /// Exposure brackets (`evs`, e.g. `[-2, 0, 2]`) of a sunset scene as 16-bit linear DNGs, each
 /// shifted by a few pixels (handheld) with EXIF exposure times; `w × h` pixels.
 pub fn bracket_dngs(w: usize, h: usize, evs: &[f64]) -> Result<Vec<Vec<u8>>> {
     let m = 12usize;
-    let truth = scene(lightcraft_scenes::Kind::OceanSunset)?.render(w + 2 * m, h + 2 * m);
+    let truth = scene(dac_scenes::Kind::OceanSunset)?.render(w + 2 * m, h + 2 * m);
     let mut l: Vec<f32> = truth.data.iter().map(|p| p[1]).collect();
     l.sort_by(|a, b| a.total_cmp(b));
     let s = 0.18 / l.get(l.len() / 2).copied().unwrap_or(0.0).max(1e-6);
-    let to_srgb = lightcraft_color::REC2020.to_space(&lightcraft_color::SRGB).to_f32();
+    let to_srgb = dac_color::REC2020.to_space(&dac_color::SRGB).to_f32();
     evs.iter()
         .enumerate()
         .map(|(i, ev)| {
@@ -41,7 +41,7 @@ pub fn bracket_dngs(w: usize, h: usize, evs: &[f64]) -> Result<Vec<Vec<u8>>> {
                 q.map(|v| (v * k).clamp(0.0, 1.0))
             });
             let meta = Metadata {
-                make: Some("LightCraft".into()),
+                make: Some(dac_brand::DISPLAY_NAME.into()),
                 model: Some("Synthetic Bracket".into()),
                 exposure_time: Some(2f64.powf(*ev) / 125.0),
                 f_number: Some(8.0),
@@ -56,7 +56,7 @@ pub fn bracket_dngs(w: usize, h: usize, evs: &[f64]) -> Result<Vec<Vec<u8>>> {
 /// `yaws.len()` overlapping views (degrees of yaw, small pitch/roll wobble) of a canyon scene used
 /// as a 200° × 70° spherical environment, `w × h` pixels with focal length `f`, as linear sRGB.
 pub fn pano_views(w: usize, h: usize, f: f64, yaws: &[f64]) -> Result<Vec<Rgb32f>> {
-    let env = scene(lightcraft_scenes::Kind::Canyon)?.render(2400, 840);
+    let env = scene(dac_scenes::Kind::Canyon)?.render(2400, 840);
     let mut l: Vec<f32> = env.data.iter().map(|p| p[1]).collect();
     l.sort_by(|a, b| a.total_cmp(b));
     let s = 0.25 / l.get(l.len() / 2).copied().unwrap_or(0.0).max(1e-6);

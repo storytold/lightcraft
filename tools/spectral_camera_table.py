@@ -107,7 +107,7 @@ def main(root, out):
         "// Derived from the camera spectral sensitivities of rawtoaces-data (Academy Software Foundation), licensed under\n"
         "// the Apache License 2.0 (LICENSE-APACHE); see NOTICE and assets/ATTRIBUTION.md. Do not edit by hand.\n"
         "use super::Camera;\n"
-        "use lightcraft_color::Mat3;\n\n"
+        "use dac_color::Mat3;\n\n"
         "#[rustfmt::skip]\npub(super) const CAMERAS: &[Camera] = &[\n" + "\n".join(rows) + "\n];\n\n"
         "/// `(make, model as sold, table model)`: other names of a camera in [`CAMERAS`], or of a camera with the same sensor.\n"
         "#[rustfmt::skip]\npub(super) const ALIASES: &[(&str, &str, &str)] = &[\n" + "\n".join(alias_rows) + "\n];\n"

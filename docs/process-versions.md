@@ -2,10 +2,10 @@
 
 Every photo's develop settings record the **rendering process** they are interpreted by
 (`DevelopSettings::process`, a `ProcessVersion` in `crates/develop/src/settings.rs`). Lightroom calls
-this the process version. It lets the look of LightCraft improve (a new default tone curve, issue #146;
+this the process version. It lets the look of the app improve (a new default tone curve, issue #146;
 stronger Light sliders, issue #196) without changing a single photo someone has already edited.
 
-Today there is one process, **V1**: LightCraft's rendering from before process versions existed.
+Today there is one process, **V1**: the app's rendering from before process versions existed.
 
 ## The rule
 
@@ -24,7 +24,7 @@ Today there is one process, **V1**: LightCraft's rendering from before process v
 1. Add a variant to `Process` (`V2`), append it to `Process::ALL` (oldest first), give it its number in
    `Process::version` and make it `Process::LATEST`.
 2. The compiler then points at every `match` on `Process`. The base tone map is chosen in one place,
-   `lightcraft_pipeline::finish::base_tone` (both the CPU and the GPU renderer take it from there): give
+   `dac_pipeline::finish::base_tone` (both the CPU and the GPU renderer take it from there): give
    V2 its own arm and leave V1's alone. A process that changes another stage branches there the same
    way, on `s.process.process()`; if that stage is cached (`Plan::lin_key`, the planes in `local.rs`),
    add the process to its key.
@@ -50,15 +50,15 @@ Today there is one process, **V1**: LightCraft's rendering from before process v
 
 **Copy, paste, sync and presets** never carry the process: it is in no settings group, so the photos
 they change keep their own and interpret the pasted values with it. (Lightroom offers the process
-version as a separate checkbox when syncing; LightCraft's groups are coarser and keep it out.) Partial
+version as a separate checkbox when syncing; the app's groups are coarser and keep it out.) Partial
 settings JSON that names `process` itself (`develop.merge`, a hand-written preset) sets it.
 
-**Lightroom edits** are re-interpreted by LightCraft's mapper (`crates/engine/src/crs.rs`), which is
+**Lightroom edits** are re-interpreted by the app's mapper (`crates/engine/src/crs.rs`), which is
 written against the current rendering. `crs:ProcessVersion` numbers Adobe's renderer, not ours, and is
-ignored; a photo imported with Lightroom edits is on LightCraft's latest process, and an existing
-LightCraft photo that receives them keeps its own.
+ignored; a photo imported with Lightroom edits is on the app's latest process, and an existing
+photo that receives them keeps its own.
 
-**A number this build doesn't know** (a library or sidecar written by a newer LightCraft) loads, is
+**A number this build doesn't know** (a library or sidecar written by a newer version of the app) loads, is
 kept when saved, and renders with the newest process this build has. Update to Current Process never
 moves a photo to an older process; Reset does move it to this build's latest.
 

@@ -5,13 +5,13 @@
 
 use std::time::Duration;
 
-use lightcraft_catalog::{Op, Photo, PhotoId, Source, Stack, StackId};
-use lightcraft_engine::Session;
+use dac_catalog::{Op, Photo, PhotoId, Source, Stack, StackId};
+use dac_engine::Session;
 use serde_json::json;
 
 use crate::headless::Headless;
 use crate::state::ViewMode;
-use crate::{LightcraftApp, Services};
+use crate::{DacApp, Services};
 
 const T: Duration = Duration::from_secs(30);
 const SETTLE: Duration = Duration::from_secs(120);
@@ -23,7 +23,7 @@ fn library() -> Session {
     let mut s = Session::new();
     for i in 0..N {
         let (w, h) = if i % 5 == 4 { (4000, 6000) } else { (6000, 4000) };
-        let path = format!("/lightcraft-grid-test/IMG_{i:05}.jpg");
+        let path = format!("/app-grid-test/IMG_{i:05}.jpg");
         let mut p = Photo::new(PhotoId(i + 1), Source::File { path }, &format!("IMG_{i:05}.jpg"), "JPEG", w, h, "2026-01-01T00:00:00");
         let day = i / 40;
         p.captured = Some(format!("2026-{:02}-{:02}T{:02}:00:00", 12 - day / 28, 28 - day % 28, 8 + i % 40 / 4));
@@ -38,7 +38,7 @@ fn library() -> Session {
 }
 
 fn grid(view: ViewMode) -> Headless {
-    let app = LightcraftApp::new(library(), Services { png: None, ..Default::default() });
+    let app = DacApp::new(library(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     h.app.ui.view = view;
     h.app.ui.thumb_size = 160.0;

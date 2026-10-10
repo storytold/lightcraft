@@ -2,7 +2,7 @@
 //!
 //! Other raw developers store their edits as `crs:` properties in XMP sidecars, in DNG-embedded
 //! XMP and in XMP preset files. This module maps the commonly used, documented-by-observation
-//! fields to a *partial* [`DevelopSettings`](lightcraft_develop::DevelopSettings) JSON object
+//! fields to a *partial* [`DevelopSettings`](dac_develop::DevelopSettings) JSON object
 //! (only the fields present in the packet), which is then merged like a preset. Our pipeline is
 //! not theirs, so the result is a best-effort approximation of the look, not a pixel match.
 //! The full table is in `docs/xmp-interop.md`.
@@ -12,16 +12,16 @@
 
 use std::collections::BTreeMap;
 
-use lightcraft_develop::{MIXER_BANDS, Preset};
+use dac_develop::{MIXER_BANDS, Preset};
 use serde_json::{Map, Value, json};
 
-/// Properties keyed `prefix:name` (as produced by [`lightcraft_meta::parse_xmp`]).
+/// Properties keyed `prefix:name` (as produced by [`dac_meta::parse_xmp`]).
 pub type Props = BTreeMap<String, Vec<String>>;
 
 /// What the mapped settings will develop. It decides how a `crs:` white balance is read: a raw
 /// with a measured illuminant takes `Temperature` as Kelvin; everything developed relative to its
 /// as-shot look (rendered files, and raws whose readers have no illuminant,
-/// [`lightcraft_catalog::relative_wb_format`]) needs a shift from the other app's as-shot white
+/// [`dac_catalog::relative_wb_format`]) needs a shift from the other app's as-shot white
 /// instead, because on that scale 6500 K / 0 means *as shot* (issue #510).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -33,24 +33,24 @@ pub enum Target {
     /// A raw developed with an absolute white balance (DNG and other files with a measured
     /// illuminant): Kelvin as written.
     RawAbsolute,
-    /// A raw developed relative to its as-shot look ([`lightcraft_catalog::Photo::relative_wb`]).
+    /// A raw developed relative to its as-shot look ([`dac_catalog::Photo::relative_wb`]).
     RawRelative,
 }
 
 impl Target {
     /// The target for a file of this media kind and format (its extension or Lightroom's
     /// `fileFormat` name); `preview_only` for a raw that can't be decoded yet.
-    pub fn for_file(kind: lightcraft_catalog::MediaKind, format: &str, preview_only: bool) -> Target {
-        if kind != lightcraft_catalog::MediaKind::Raw || preview_only {
+    pub fn for_file(kind: dac_catalog::MediaKind, format: &str, preview_only: bool) -> Target {
+        if kind != dac_catalog::MediaKind::Raw || preview_only {
             Target::Rendered
-        } else if lightcraft_catalog::relative_wb_format(format) {
+        } else if dac_catalog::relative_wb_format(format) {
             Target::RawRelative
         } else {
             Target::RawAbsolute
         }
     }
     /// The target for a photo in the catalog.
-    pub fn for_photo(p: &lightcraft_catalog::Photo) -> Target {
+    pub fn for_photo(p: &dac_catalog::Photo) -> Target {
         Target::for_file(p.kind, &p.format, p.preview_only.is_some())
     }
 }
@@ -492,7 +492,7 @@ pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values
 /// Read an XMP preset (`crs:` fields + `crs:Name` / `crs:Group`) into one of our presets.
 /// Returns `None` when the packet has no adjustments we understand.
 pub fn preset_from_xmp(xmp: &str, fallback_name: &str) -> Option<Preset> {
-    let d = lightcraft_meta::parse_xmp(xmp).ok()?;
+    let d = dac_meta::parse_xmp(xmp).ok()?;
     let props = &d.properties;
     let settings = to_partial(props, Target::Any);
     if settings.as_object().is_none_or(Map::is_empty) {
@@ -508,7 +508,7 @@ pub fn preset_from_xmp(xmp: &str, fallback_name: &str) -> Option<Preset> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_develop::{DevelopSettings, Upright, VignetteStyle, WbMode, apply_partial};
+    use dac_develop::{DevelopSettings, Upright, VignetteStyle, WbMode, apply_partial};
 
     /// A hand-written sidecar in attribute form (as many tools write it).
     const SIDECAR: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
@@ -540,7 +540,7 @@ mod tests {
 </x:xmpmeta>"#;
 
     fn props(x: &str) -> Props {
-        lightcraft_meta::parse_xmp(x).unwrap().properties
+        dac_meta::parse_xmp(x).unwrap().properties
     }
 
     #[test]
@@ -575,7 +575,7 @@ mod tests {
         assert_eq!(s.geometry.upright, Upright::Level);
         assert_eq!(s.geometry.vertical, -10.0);
         assert!(s.optics.remove_ca);
-        assert_eq!(s.treatment, lightcraft_develop::Treatment::Color);
+        assert_eq!(s.treatment, dac_develop::Treatment::Color);
         let cal = s.calibration;
         assert_eq!(
             (cal.shadows_tint, cal.red_hue, cal.red_sat, cal.green_hue, cal.green_sat, cal.blue_hue, cal.blue_sat),
@@ -605,7 +605,7 @@ mod tests {
           </rdf:Description></rdf:RDF></x:xmpmeta>"#;
         let p = props(x);
         let rendered = apply_partial(&DevelopSettings::default(), &to_partial(&p, Target::Rendered), 1.0);
-        assert_eq!(rendered.treatment, lightcraft_develop::Treatment::Bw);
+        assert_eq!(rendered.treatment, dac_develop::Treatment::Bw);
         assert_eq!(rendered.bw_mix.blue, -35.0);
         assert!((rendered.wb.temp - rel_to_kelvin(25.0)).abs() < 1e-6 && rendered.wb.temp > 6500.0);
         assert_eq!(rendered.wb.tint, -6.0);
@@ -673,7 +673,7 @@ mod tests {
 
     #[test]
     fn target_follows_the_file() {
-        use lightcraft_catalog::MediaKind;
+        use dac_catalog::MediaKind;
         assert_eq!(Target::for_file(MediaKind::Raw, "ARW", false), Target::RawRelative);
         assert_eq!(Target::for_file(MediaKind::Raw, "nef", false), Target::RawRelative);
         // Lightroom's `fileFormat` name for proprietary raws

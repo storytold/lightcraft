@@ -2,8 +2,13 @@
 
 pub mod activity;
 pub mod bottombar;
+pub mod cells;
 pub mod chips;
+pub mod classic;
+pub mod collections;
 pub mod compare;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod connections;
 pub mod crop_overlay;
 pub mod denoise;
 pub mod detail;
@@ -11,6 +16,7 @@ pub mod dialogs;
 pub mod edit;
 pub mod faces;
 pub mod filterbar;
+pub mod folders;
 pub mod grid;
 pub mod keymap;
 pub mod keyword_list;
@@ -18,22 +24,31 @@ pub mod keywording;
 pub mod left;
 pub mod library_problem;
 pub mod masking;
+pub mod metadata;
+pub mod navigator;
 pub mod notices;
 pub mod people;
 pub mod person;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod plugins;
 pub mod presets;
 pub mod profiles;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod publish;
+pub mod quick_develop;
 pub mod right;
 pub mod rules_editor;
 pub mod second;
 pub mod settings;
 pub mod strip;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod tether_bar;
 pub mod topbar;
 pub mod unnamed;
 
 use egui::{Align2, Rect, pos2, vec2};
 
-use crate::LightcraftApp;
+use crate::DacApp;
 use crate::theme::Tokens;
 
 /// Show a side panel the user resizes by dragging its inner edge. `width` (in [`crate::UiState`],
@@ -69,7 +84,7 @@ pub fn resizable_side(
 }
 
 /// The HUD toast at the bottom centre of the canvas.
-pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn toast(app: &mut DacApp, ctx: &egui::Context) {
     let now = ctx.input(|i| i.time);
     let Some((text, until, label)) = app.ui.toast.clone() else { return };
     if now > until {

@@ -42,10 +42,10 @@
 
 use crate::tiffraw::{Packing, check_image, read_image_in};
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result, ljpeg};
-use lightcraft_geom::Orientation;
-use lightcraft_tiff::image::{Chunk, ImageInfo, Layout, chunk_bytes};
-use lightcraft_tiff::tags::{self as t, photometric};
-use lightcraft_tiff::{Ifd, Tiff, makernote};
+use dac_geom::Orientation;
+use dac_tiff::image::{Chunk, ImageInfo, Layout, chunk_bytes};
+use dac_tiff::tags::{self as t, photometric};
+use dac_tiff::{Ifd, Tiff, makernote};
 use rayon::prelude::*;
 
 const TONE_CURVE: u16 = 0x7010;
@@ -193,7 +193,7 @@ const TAG2010_WB: &[(&[&str], usize)] = &[
 /// White balance from the maker note's enciphered `Tag2010` block, the fallback described at [`TAG2010_WB`].
 /// `model` is the Exif model; Sony appends a regional "V" to some names (SLT-A77V), which the documented lists
 /// omit.
-fn tag2010_wb(model: &str, block: &[u8], order: lightcraft_tiff::ByteOrder) -> Option<[f32; 3]> {
+fn tag2010_wb(model: &str, block: &[u8], order: dac_tiff::ByteOrder) -> Option<[f32; 3]> {
     let model = model.trim();
     let &(_, offset) = TAG2010_WB.iter().find(|(models, _)| models.iter().any(|m| model == *m || model.strip_suffix('V') == Some(*m)))?;
     let bytes: Vec<u8> = block.get(offset..offset + 6)?.iter().map(|&b| DECIPHER[b as usize]).collect();
@@ -461,7 +461,7 @@ fn sr2_black(sr2: &super::sr2::SubIfd) -> Option<f32> {
 }
 
 /// One black level from the four deciphered per-channel levels (their mean), when they are near-equal and plausible.
-fn sr2_black_levels(plain: &[u8], order: lightcraft_tiff::ByteOrder) -> Option<f32> {
+fn sr2_black_levels(plain: &[u8], order: dac_tiff::ByteOrder) -> Option<f32> {
     let levels: Vec<u16> = (0..4).filter_map(|i| order.read_u16(plain, 2 * i)).collect();
     let (&lo, &hi) = (levels.iter().min()?, levels.iter().max()?);
     (levels.len() == 4 && (64..=4096).contains(&lo) && hi - lo <= 64).then(|| levels.iter().map(|&v| f32::from(v)).sum::<f32>() / 4.0)
@@ -470,8 +470,8 @@ fn sr2_black_levels(plain: &[u8], order: lightcraft_tiff::ByteOrder) -> Option<f
 /// Byte order of 16-bit-word samples: the file's own order unless the words only fit the sample width in the other
 /// (see the DSC-R1 note at the top). Sampled across the strip; the order is swapped only when the file order leaves
 /// more than 1 % of the sampled words at or above `1 << max(bits, 14)` while the other order leaves none.
-fn word16_order(strip: &[u8], bits: u32, file: lightcraft_tiff::ByteOrder) -> lightcraft_tiff::ByteOrder {
-    use lightcraft_tiff::ByteOrder::{Big, Little};
+fn word16_order(strip: &[u8], bits: u32, file: dac_tiff::ByteOrder) -> dac_tiff::ByteOrder {
+    use dac_tiff::ByteOrder::{Big, Little};
     let other = if file == Little { Big } else { Little };
     let limit = 1u32 << bits.clamp(14, 16);
     let (mut n, mut over_file, mut over_other) = (0usize, 0usize, 0usize);
@@ -668,7 +668,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             default_crop(raw, mn.as_ref(), exif_size, w, h, packed12)
         }
     };
-    let mut metadata = lightcraft_meta::from_tiff(&tiff);
+    let mut metadata = dac_meta::from_tiff(&tiff);
     metadata.width = Some(crop.width as u32);
     metadata.height = Some(crop.height as u32);
     let img = RawImage {
@@ -714,7 +714,7 @@ mod tests {
 
     #[test]
     fn downsized_lossless_is_linear_rgb_not_cfa() {
-        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+        use dac_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
         let mut raw = IfdBuilder::new();
         raw.set(t::MAKE, Value::Ascii("SONY".into()));
         raw.set(t::MODEL, Value::Ascii("ILCE-7M4".into()));
@@ -772,7 +772,7 @@ mod tests {
 
     /// A 32767-compressed ARW whose single strip is `strip` bytes for a 32 x 4 image.
     fn arw_with_strip(strip: usize) -> Vec<u8> {
-        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+        use dac_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
         let mut raw = IfdBuilder::new();
         raw.set(t::MAKE, Value::Ascii("SONY".into()));
         raw.set(t::MODEL, Value::Ascii("DSLR-A200".into()));
@@ -803,7 +803,7 @@ mod tests {
 
     /// A 32767-compressed, 12-bit ARW of `w` x `h` whose single strip is `strip`.
     fn packed_arw(w: u32, h: u32, strip: Vec<u8>) -> Vec<u8> {
-        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+        use dac_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
         let mut raw = IfdBuilder::new();
         raw.set(t::MAKE, Value::Ascii("SONY".into()));
         raw.set(t::MODEL, Value::Ascii("DSLR-A900".into()));
@@ -940,7 +940,7 @@ mod tests {
 
     #[test]
     fn tag2010_white_balance_by_model() {
-        use lightcraft_tiff::ByteOrder::Little;
+        use dac_tiff::ByteOrder::Little;
         let mut plain = vec![0u8; 700];
         for (i, v) in [669u16, 256, 441].iter().enumerate() {
             plain[612 + 2 * i..614 + 2 * i].copy_from_slice(&v.to_le_bytes());
@@ -963,8 +963,8 @@ mod tests {
 
     /// A Sony-style file: IFD0 (`make`) → Exif → maker note `SONY DSC \0\0\0` + an IFD of `entries` (tag, type,
     /// count, inline value bytes), the layout of the camera's own notes; `count` overrides the entry count.
-    fn sony_file(order: lightcraft_tiff::ByteOrder, make: &str, entries: &[(u16, u16, u32, [u8; 4])], count: Option<u16>) -> Vec<u8> {
-        use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
+    fn sony_file(order: dac_tiff::ByteOrder, make: &str, entries: &[(u16, u16, u32, [u8; 4])], count: Option<u16>) -> Vec<u8> {
+        use dac_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
         let (u16b, u32b) = match order {
             ByteOrder::Little => (u16::to_le_bytes as fn(u16) -> [u8; 2], u32::to_le_bytes as fn(u32) -> [u8; 4]),
             ByteOrder::Big => (u16::to_be_bytes as fn(u16) -> [u8; 2], u32::to_be_bytes as fn(u32) -> [u8; 4]),
@@ -989,7 +989,7 @@ mod tests {
 
     #[test]
     fn dynamic_range_optimizer_is_read_from_the_sony_note() {
-        use lightcraft_tiff::ByteOrder::{Big, Little};
+        use dac_tiff::ByteOrder::{Big, Little};
         let long = |order, v: u32| match order {
             Little => v.to_le_bytes(),
             Big => v.to_be_bytes(),
@@ -1024,7 +1024,7 @@ mod tests {
 
     #[test]
     fn hostile_sony_notes_are_read_safely() {
-        use lightcraft_tiff::ByteOrder::Little;
+        use dac_tiff::ByteOrder::Little;
         let entry = [(MN_DYNAMIC_RANGE_OPTIMIZER, 4, 1, 3u32.to_le_bytes())];
         let good = sony_file(Little, "SONY", &entry, None);
         assert_eq!(crate::embedded_preview_dynamic_range_optimized(&good), Some(true));
@@ -1040,9 +1040,9 @@ mod tests {
         assert_eq!(crate::embedded_preview_dynamic_range_optimized(b"not a TIFF"), None);
         assert_eq!(crate::embedded_preview_dynamic_range_optimized(&[]), None);
         // a Sony file without a maker note
-        let mut ifd0 = lightcraft_tiff::IfdBuilder::new();
-        ifd0.set(t::MAKE, lightcraft_tiff::Value::Ascii("SONY".into()));
-        assert_eq!(crate::embedded_preview_dynamic_range_optimized(&lightcraft_tiff::TiffWriter::new(Little, false).write(&[ifd0]).unwrap()), None);
+        let mut ifd0 = dac_tiff::IfdBuilder::new();
+        ifd0.set(t::MAKE, dac_tiff::Value::Ascii("SONY".into()));
+        assert_eq!(crate::embedded_preview_dynamic_range_optimized(&dac_tiff::TiffWriter::new(Little, false).write(&[ifd0]).unwrap()), None);
     }
 
     #[test]
@@ -1067,7 +1067,7 @@ mod tests {
     /// (reached through `DNGPrivateData` and the `SR2Private` IFD, as Sony stores it, with `key`; black level 800)
     /// and a maker note whose `Tag2010` block (RX100 III layout) holds `WB_RGBLevels`.
     fn arw_with_wb(plain: Option<[u16; 4]>, sr2: Option<[u16; 4]>, tag2010: Option<[u16; 3]>, key: [u8; 4]) -> Vec<u8> {
-        use lightcraft_tiff::{ByteOrder::Little, IfdBuilder, ImageData, TiffWriter, Value};
+        use dac_tiff::{ByteOrder::Little, IfdBuilder, ImageData, TiffWriter, Value};
         let mut tag2010_block = vec![0u8; 700];
         for (i, v) in tag2010.unwrap_or([0; 3]).iter().enumerate() {
             tag2010_block[612 + 2 * i..614 + 2 * i].copy_from_slice(&v.to_le_bytes());
@@ -1192,7 +1192,7 @@ mod tests {
 
     #[test]
     fn sr2_black_level_decodes_and_rejects_garbage() {
-        use lightcraft_tiff::ByteOrder::Little;
+        use dac_tiff::ByteOrder::Little;
         let plain = |levels: [u16; 4]| -> Vec<u8> { levels.iter().flat_map(|v| v.to_le_bytes()).collect() };
         assert_eq!(sr2_black_levels(&plain([800; 4]), Little), Some(800.0));
         assert_eq!(sr2_black_levels(&plain([512, 512, 514, 512]), Little), Some(512.5));
@@ -1225,13 +1225,13 @@ mod tests {
     }
 
     /// [`sr2_black`] on the encrypted `SR2SubIFD` bytes `block`, which start at file offset `start`.
-    fn sr2_black_in(block: &[u8], start: usize, order: lightcraft_tiff::ByteOrder) -> Option<f32> {
+    fn sr2_black_in(block: &[u8], start: usize, order: dac_tiff::ByteOrder) -> Option<f32> {
         sr2_black(&super::super::sr2::SubIfd::decrypt(block, start, order))
     }
 
     #[test]
     fn sr2_black_level_follows_the_first_entry_to_its_layout() {
-        use lightcraft_tiff::ByteOrder::Little;
+        use dac_tiff::ByteOrder::Little;
         let start = 37584;
         // the value position of every layout seen, e.g. the DSLR-A700's (62112 bytes, value at 1638) and the
         // DSLR-A450/A500/A550's (27152 bytes, value at 2166); the first four are those of bodies without a plain 0x7310
@@ -1260,7 +1260,7 @@ mod tests {
 
     #[test]
     fn word16_byte_order_follows_the_sample_range() {
-        use lightcraft_tiff::ByteOrder::{Big, Little};
+        use dac_tiff::ByteOrder::{Big, Little};
         let be: Vec<u8> = (0..4096u16).flat_map(|i| (512 + i * 3).to_be_bytes()).collect(); // 512..12800 big-endian words
         assert_eq!(word16_order(&be, 14, Little), Big);
         let le: Vec<u8> = (0..4096u16).flat_map(|i| (512 + i * 3).to_le_bytes()).collect();

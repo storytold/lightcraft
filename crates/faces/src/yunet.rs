@@ -1,4 +1,4 @@
-//! The YuNet face detector (232 KB, MIT, downloaded by the user in Settings ▸ Faces), run by LightCraft's own small
+//! The YuNet face detector (232 KB, MIT, downloaded by the user in Settings ▸ Faces), run by the app's own small
 //! interpreter ([`crate::net`]): no extra runtime.
 //!
 //! A photo is letterboxed (aspect ratio kept, padded at the right and bottom) into the network's square
@@ -324,7 +324,7 @@ mod tests {
         }
     }
 
-    /// Opt-in: `LC_YUNET_REF=<folder> cargo test -p lightcraft-faces -- --ignored --nocapture` compares every output
+    /// Opt-in: `LC_YUNET_REF=<folder> cargo test -p dac-faces -- --ignored --nocapture` compares every output
     /// of the network with ONNX Runtime's on the same input (`input.bin`, `out_<name>.bin`, raw little-endian f32).
     #[test]
     #[ignore = "needs reference files: set LC_YUNET_REF"]

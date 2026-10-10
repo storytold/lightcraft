@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use lightcraft_catalog::{Flag, MemStore, SnapshotPolicy, Store};
+use dac_catalog::{Flag, MemStore, SnapshotPolicy, Store};
 use serde_json::json;
 
 use crate::library::LibraryStores;
@@ -79,7 +79,7 @@ fn failed_append_fails_the_command_and_is_retried() {
     assert!(matches!(e, EngineError::NotSaved(_)), "{e:?}");
     let msg = e.to_string();
     assert!(
-        msg.starts_with("saved in memory but not written to disk: ") && msg.contains("disk full") && msg.ends_with("LightCraft will retry"),
+        msg.starts_with("saved in memory but not written to disk: ") && msg.contains("disk full") && msg.ends_with("the app will retry"),
         "{msg}"
     );
     // applied in memory, undoable, queued

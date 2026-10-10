@@ -1,6 +1,6 @@
 //! Image preprocessing and mask post-processing (CPU, no model needed).
 //!
-//! Modified work (Apache License 2.0, §4(b)): ported by the LightCraft contributors in 2026 from
+//! Modified work (Apache License 2.0, §4(b)): ported by the project contributors in 2026 from
 //! the Python/PyTorch SAM 3 code of Hugging Face Transformers (`models/sam3/image_processing_sam3*.py`), Copyright The HuggingFace
 //! Team and Meta Platforms, Inc.; translated to Rust on candle and restructured. See NOTICE.
 

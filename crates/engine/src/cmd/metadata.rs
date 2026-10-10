@@ -1,7 +1,7 @@
 //! Metadata presets: named sets of descriptive fields (copyright, creator, place, keywords…)
 //! applied to photos in one step or to every import (Settings → Import). Saved with the library.
 
-use lightcraft_catalog::{CopyrightStatus, Meta};
+use dac_catalog::{CopyrightStatus, Meta};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 

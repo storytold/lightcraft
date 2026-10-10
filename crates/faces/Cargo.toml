@@ -1,9 +1,9 @@
 [package]
-name = "lightcraft-faces"
+name = "dac-faces"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft faces (L1): bounded ONNX CPU inference, face-model manifests, validation and detection"
+description = "Faces (L1): bounded ONNX CPU inference, face-model manifests, validation and detection"
 
 [lints]
 workspace = true
@@ -12,6 +12,7 @@ workspace = true
 default = []
 
 [dependencies]
+dac-brand = { workspace = true }
 ndarray = { version = "=0.17.2", default-features = false, features = ["std"] }
 # Rust intrinsics only, CPU-dispatched; no BLAS, cc/assembly or nested threading.
 matrixmultiply = { version = "=0.3.11", default-features = false, features = ["std", "avx512"] }

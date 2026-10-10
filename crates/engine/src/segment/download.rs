@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use lightcraft_segment::fetch::{self, Options, Progress};
+use dac_segment::fetch::{self, Options, Progress};
 
 use crate::activity::{Activity, Cancel, Unit};
 

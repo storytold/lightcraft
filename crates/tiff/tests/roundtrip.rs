@@ -1,6 +1,6 @@
-use lightcraft_tiff::image::{Layout, chunk_bytes};
-use lightcraft_tiff::writer::{rational, srational};
-use lightcraft_tiff::{ByteOrder, FieldType, IfdBuilder, ImageData, ParseOptions, Tiff, TiffError, TiffWriter, Value, parse_ifd_at, tags};
+use dac_tiff::image::{Layout, chunk_bytes};
+use dac_tiff::writer::{rational, srational};
+use dac_tiff::{ByteOrder, FieldType, IfdBuilder, ImageData, ParseOptions, Tiff, TiffError, TiffWriter, Value, parse_ifd_at, tags};
 use proptest::prelude::*;
 
 const ORDERS: [ByteOrder; 2] = [ByteOrder::Little, ByteOrder::Big];
@@ -350,7 +350,7 @@ fn exercise(t: &Tiff, data: &[u8]) {
         }
     }
     if let Some(e) = t.exif().and_then(|x| x.get(tags::MAKER_NOTE)) {
-        let _ = lightcraft_tiff::makernote::parse_makernote(data, e.offset, e.count() as u64, t.order, "NIKON");
+        let _ = dac_tiff::makernote::parse_makernote(data, e.offset, e.count() as u64, t.order, "NIKON");
     }
 }
 

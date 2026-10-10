@@ -3,11 +3,11 @@
 
 use std::time::Duration;
 
-use lightcraft_catalog::Rule;
+use dac_catalog::Rule;
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::{LightcraftApp, Services};
+use crate::{DacApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
@@ -49,7 +49,7 @@ struct Library {
 /// [UTILS] > Excluded (smart), Uncurated (smart); Trip; and the rule editor on a new album with one
 /// Album rule.
 fn library() -> Library {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let app = DacApp::new(dac_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     let utils = id(exec(&mut h, "album.create", json!({"name": "[UTILS]", "folder": true})));
     let excluded = id(exec(&mut h, "album.createSmart", json!({"name": "Excluded", "rules": {"rating": 1}, "parent": utils})));

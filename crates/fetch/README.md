@@ -1,4 +1,4 @@
-# lightcraft-fetch
+# dac-fetch
 
 Native model downloads in pure Rust (L0, Apache-2.0): HTTP/1.1 over std sockets and rustls with the RustCrypto provider, without ring, aws-lc, C or assembly build dependencies. The wasm32 crate is empty.
 

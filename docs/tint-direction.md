@@ -11,9 +11,9 @@ The synthetic `tint_negative_is_green_and_positive_is_magenta` regression render
 Run the evidence without private samples:
 
 ```sh
-cargo test -p lightcraft-pipeline tint_ -- --nocapture
-cargo test -p lightcraft-gpu --test equivalence tint_directions -- --nocapture
-cargo test -p lightcraft-color cct
+cargo test -p dac-pipeline tint_ -- --nocapture
+cargo test -p dac-gpu --test equivalence tint_directions -- --nocapture
+cargo test -p dac-color cct
 ```
 
 ## Why the sign changes

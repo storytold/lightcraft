@@ -62,8 +62,8 @@ fn original_export_copies_the_file_and_writes_its_edits_beside_it() {
     let e = export_photo(&mut s, id, &o, 1).unwrap();
     assert_eq!(e.file_name, "Shot.dng");
     assert!(e.sidecars.is_empty());
-    let back = lightcraft_raw::decode(&e.bytes).expect("our DNG decodes");
-    let orig = lightcraft_raw::decode(&dng).unwrap();
+    let back = dac_raw::decode(&e.bytes).expect("our DNG decodes");
+    let orig = dac_raw::decode(&dng).unwrap();
     assert_eq!((back.width, back.height), (orig.width, orig.height));
     assert_eq!(back.data, orig.data, "lossless");
     let out = dir.join("out.dng");
@@ -88,7 +88,7 @@ fn original_and_dng_need_a_file() {
 fn dng_export_rejects_non_raw_photos() {
     let dir = temp_dir("export-dng-jpeg");
     let src = dir.join("a.png");
-    let img = lightcraft_raster::Rgba8::from_fn(32, 24, |x, y| [(x * 8) as u8, (y * 10) as u8, 90, 255]);
+    let img = dac_raster::Rgba8::from_fn(32, 24, |x, y| [(x * 8) as u8, (y * 10) as u8, 90, 255]);
     std::fs::write(&src, crate::export::encode_image(&img, &ExportOptions { format: ExportFormat::Png, ..Default::default() }).unwrap()).unwrap();
     let mut s = Session::new().with_fs();
     s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
@@ -186,22 +186,22 @@ fn export_falls_back_to_the_cpu_when_gpu_work_is_lost() {
     s.execute("develop.set", &json!({"control": "effects.clarity", "value": 20})).unwrap();
     let o = ExportOptions::from_json(&json!({"format": "png"}));
     let mean = |b: &[u8]| {
-        let d = lightcraft_codecs::decode(b, Default::default()).unwrap().image;
+        let d = dac_codecs::decode(b, Default::default()).unwrap().image;
         d.data.iter().map(|p| (p[0] + p[1] + p[2]) as f64).sum::<f64>() / (3 * d.data.len()) as f64
     };
-    let gpu = lightcraft_gpu::available();
+    let gpu = dac_gpu::available();
     let healthy = mean(&export_photo(&mut s, id, &o, 1).unwrap().bytes);
-    lightcraft_gpu::inject_fault(lightcraft_gpu::Fault::DropWork);
+    dac_gpu::inject_fault(dac_gpu::Fault::DropWork);
     let faulted = export_photo(&mut s, id, &o, 1).unwrap().bytes;
     if gpu {
-        let why = lightcraft_gpu::last_fallback().unwrap_or_default();
+        let why = dac_gpu::last_fallback().unwrap_or_default();
         assert!(why.contains("incomplete"), "{why}");
         // the GPU is off for the process now: this export renders on the CPU
-        assert!(!lightcraft_gpu::available());
+        assert!(!dac_gpu::available());
     }
     let cpu = export_photo(&mut s, id, &o, 1).unwrap().bytes;
-    lightcraft_gpu::reset_failures();
-    let px = |b: &[u8]| lightcraft_codecs::decode(b, Default::default()).unwrap().image.data;
+    dac_gpu::reset_failures();
+    let px = |b: &[u8]| dac_codecs::decode(b, Default::default()).unwrap().image.data;
     assert!(px(&faulted) == px(&cpu), "the fallback is the CPU render");
     let m = mean(&faulted);
     assert!(m > 0.02, "not black: mean {m}");
@@ -209,10 +209,10 @@ fn export_falls_back_to_the_cpu_when_gpu_work_is_lost() {
 }
 
 /// A JPEG original `dir/IMG_1.jpg` imported into a library on disk.
-fn library_with_jpeg(tag: &str) -> (Session, lightcraft_catalog::PhotoId, std::path::PathBuf, std::path::PathBuf, Vec<u8>) {
+fn library_with_jpeg(tag: &str) -> (Session, dac_catalog::PhotoId, std::path::PathBuf, std::path::PathBuf, Vec<u8>) {
     let dir = temp_dir(tag);
     let src = dir.join("IMG_1.jpg");
-    let img = lightcraft_raster::Rgba8::from_fn(48, 32, |x, y| [(x * 5) as u8, (y * 7) as u8, 120, 255]);
+    let img = dac_raster::Rgba8::from_fn(48, 32, |x, y| [(x * 5) as u8, (y * 7) as u8, 120, 255]);
     let bytes = crate::export::encode_image(&img, &ExportOptions::default()).unwrap();
     std::fs::write(&src, &bytes).unwrap();
     let mut s = Session::new().with_fs();
@@ -224,7 +224,7 @@ fn library_with_jpeg(tag: &str) -> (Session, lightcraft_catalog::PhotoId, std::p
 
 fn disk_batch(
     s: &mut Session,
-    id: lightcraft_catalog::PhotoId,
+    id: dac_catalog::PhotoId,
     o: &ExportOptions,
     to: &crate::export::Destination,
 ) -> Result<Vec<serde_json::Value>, String> {
@@ -313,7 +313,7 @@ fn a_failed_export_write_keeps_the_previous_file() {
     let to = Destination { dir: out.to_string_lossy().to_string(), exact: None };
     let o = ExportOptions { conflict: Conflict::Overwrite, ..Default::default() };
     {
-        let _fault = lightcraft_catalog::safe_file::fail_writes_after(100);
+        let _fault = dac_catalog::safe_file::fail_writes_after(100);
         let err = disk_batch(&mut s, id, &o, &to).unwrap_err();
         assert!(err.contains("injected"), "{err}");
     }
@@ -355,7 +355,7 @@ fn export_protects_the_target_of_an_imported_symlink() {
 #[test]
 fn exports_are_atomic_without_a_sync() {
     use crate::export::{Conflict, Destination};
-    use lightcraft_catalog::safe_file::syncs_on_this_thread;
+    use dac_catalog::safe_file::syncs_on_this_thread;
     let (mut s, id, dir, _src, _) = library_with_jpeg("export-nosync");
     let out = dir.join("out");
     let to = Destination { dir: out.to_string_lossy().to_string(), exact: None };
@@ -372,7 +372,7 @@ fn exports_are_atomic_without_a_sync() {
 }
 
 /// The demo library's ocean sunset (a sun far above SDR white), selected and active.
-fn sunset(s: &mut Session) -> lightcraft_catalog::PhotoId {
+fn sunset(s: &mut Session) -> dac_catalog::PhotoId {
     let id = s.catalog.photos().find(|p| p.meta.title == "Golden horizon").map(|p| p.id).unwrap();
     s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
     id
@@ -380,7 +380,7 @@ fn sunset(s: &mut Session) -> lightcraft_catalog::PhotoId {
 
 #[test]
 fn hdr_jpeg_export_writes_a_gain_map_and_sdr_edits_stay_plain() {
-    use lightcraft_codecs::gainmap;
+    use dac_codecs::gainmap;
     let mut s = Session::with_demo();
     let id = sunset(&mut s);
     let o = ExportOptions::from_json(&json!({"longEdge": 320, "hdr": true}));
@@ -396,8 +396,8 @@ fn hdr_jpeg_export_writes_a_gain_map_and_sdr_edits_stay_plain() {
     let gm = gainmap::read_jpeg(&e.bytes).unwrap();
     assert!(gm.meta.alternate_headroom > 0.5 && gm.meta.alternate_headroom <= 3.05, "headroom {}", gm.meta.alternate_headroom);
     // the base is the SDR rendition: the same pixels as the SDR export (the decoders agree)
-    let a = lightcraft_codecs::decode(&e.bytes, Default::default()).unwrap();
-    let b = lightcraft_codecs::decode(&plain.bytes, Default::default()).unwrap();
+    let a = dac_codecs::decode(&e.bytes, Default::default()).unwrap();
+    let b = dac_codecs::decode(&plain.bytes, Default::default()).unwrap();
     assert_eq!((a.width, a.height), (b.width, b.height));
     let diff = a.image.data.iter().zip(&b.image.data).map(|(p, q)| (p[1] - q[1]).abs()).fold(0.0f32, f32::max);
     assert!(diff < 0.02, "base differs from the SDR export by {diff}");
@@ -414,7 +414,7 @@ fn hdr_float_tiff_keeps_highlights_above_white() {
     let max_of = |s: &mut Session, hdr: bool| {
         let o = ExportOptions::from_json(&json!({"longEdge": 240, "format": "tiff", "bitDepth": 32, "hdr": hdr}));
         let e = export_photo(s, id, &o, 1).unwrap();
-        let d = lightcraft_codecs::decode(&e.bytes, Default::default()).unwrap();
+        let d = dac_codecs::decode(&e.bytes, Default::default()).unwrap();
         d.image.data.iter().flat_map(|p| p.iter().copied()).fold(0.0f32, f32::max)
     };
     let hdr = max_of(&mut s, true);

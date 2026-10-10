@@ -4,7 +4,7 @@
 //! predictor), DNG 1.7 (predictors 34892–34895, bit packing, 16/24-bit floats), RFC 1950/1951 (zlib/deflate).
 
 use crate::{RawError, Result};
-use lightcraft_tiff::ByteOrder;
+use dac_tiff::ByteOrder;
 
 /// Unpack `out.len()` MSB-first packed samples of `bits` (1..=16) from `src` (TIFF bit order).
 pub fn unpack_msb(src: &[u8], bits: u32, out: &mut [u16]) {

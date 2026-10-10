@@ -1,4 +1,4 @@
-//! Never write over an original: exports, renders and other files LightCraft writes for the user
+//! Never write over an original: exports, renders and other files the app writes for the user
 //! must not land on a catalogued photo's own file (or its XMP sidecar), whatever the conflict
 //! setting or exact path asked for. [`OriginalGuard`] is a snapshot of the library's originals
 //! that answers "would writing here replace one?" by file identity (the same file under another
@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use lightcraft_catalog::safe_file::same_file;
-use lightcraft_catalog::{Catalog, Source};
+use dac_catalog::safe_file::same_file;
+use dac_catalog::{Catalog, Source};
 
 /// The library's originals and their sidecars, looked up by file name.
 #[derive(Debug, Default)]
@@ -55,7 +55,7 @@ impl OriginalGuard {
             for (p, what) in self.by_name.get(n).into_iter().flatten() {
                 if same_file(p, target) {
                     return Err(format!(
-                        "{} is {what} in the library: LightCraft never writes over an original (choose another folder or file name)",
+                        "{} is {what} in the library: The app never writes over an original (choose another folder or file name)",
                         target.display()
                     ));
                 }
@@ -69,7 +69,7 @@ impl OriginalGuard {
         for (p, what) in links {
             if same_file(p, target) {
                 return Err(format!(
-                    "{} is {what} in the library: LightCraft never writes over an original (choose another folder or file name)",
+                    "{} is {what} in the library: The app never writes over an original (choose another folder or file name)",
                     target.display()
                 ));
             }
@@ -98,7 +98,7 @@ impl crate::Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_catalog::{Op, Photo, PhotoId};
+    use dac_catalog::{Op, Photo, PhotoId};
 
     #[test]
     fn originals_and_their_sidecars_are_protected_by_identity() {

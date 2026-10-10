@@ -8,7 +8,7 @@ const SCALE: f32 = 8.0;
 /// Largest grid a stored segmentation may claim (hostile input caps the allocation).
 pub const MAX_SIDE: usize = 1024;
 
-/// A segmentation computed by a model (SAM 3 in `lightcraft-segment`): `side × side` logits
+/// A segmentation computed by a model (SAM 3 in `dac-segment`): `side × side` logits
 /// over the uncropped, oriented image stretched to a square (row `y`, column `x` covers
 /// normalized `((x + 0.5) / side, (y + 0.5) / side)`), quantized to `i8`, deflated and base64
 /// encoded. Coverage at a point is the sigmoid of the bilinearly sampled logit, so edges stay

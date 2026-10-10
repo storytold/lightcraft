@@ -156,6 +156,8 @@ pub struct AppSettings {
     pub grid_badges: GridBadges,
     /// Shortcuts the user changed (Help ▸ Keyboard Shortcuts): command id → shortcut, `""` = none.
     pub keymap: crate::shortcuts::Keymap,
+    /// The keymap set the user's changes apply over (Classic by default).
+    pub keymap_set: crate::shortcuts::KeymapSet,
     /// The monitor's ICC profile previews are shown through (`app.displayProfile`; "" = none:
     /// the display is treated as sRGB).
     pub display_profile: String,
@@ -175,6 +177,7 @@ impl Default for AppSettings {
             film_badges: true,
             grid_badges: GridBadges::Auto,
             keymap: Default::default(),
+            keymap_set: Default::default(),
             display_profile: String::new(),
         }
     }
@@ -217,13 +220,13 @@ impl AppSettings {
     /// source level. A full-size decode would replace the open photo's single full-resolution
     /// source in the cache, and nothing is gained by it.
     pub fn prefetch_edge(&self, wanted_px: f32, native_long_edge: usize, texture_side: usize) -> usize {
-        self.loupe_edge(wanted_px, native_long_edge, texture_side).min(lightcraft_engine::SourceLevel::Preview.max_edge())
+        self.loupe_edge(wanted_px, native_long_edge, texture_side).min(dac_engine::SourceLevel::Preview.max_edge())
     }
 
     /// Long edge for the hover (preset / profile) and Before renders, which are stand-ins drawn
     /// over the loupe: capped at the preview source level like the old default.
     pub fn stand_in_edge(&self, loupe_edge: usize, texture_side: usize) -> usize {
-        loupe_edge.min(lightcraft_engine::SourceLevel::Preview.max_edge()).min(texture_side.max(MIN_TEXTURE_SIDE))
+        loupe_edge.min(dac_engine::SourceLevel::Preview.max_edge()).min(texture_side.max(MIN_TEXTURE_SIDE))
     }
 
     /// Long edge of the zoomed frame a window render is cut from, for a photo drawn `drawn_long`
@@ -241,8 +244,45 @@ impl AppSettings {
     }
 }
 
-/// Click-zoom ratios offered (percent): 1:1, 2:1, 3:1, 4:1, 8:1.
-pub const CLICK_ZOOMS: [u32; 5] = [100, 200, 300, 400, 800];
+/// Click-zoom ratios offered (percent): 1:1, 2:1, 3:1, 4:1, 8:1, 11:1.
+pub const CLICK_ZOOMS: [u32; 6] = [100, 200, 300, 400, 800, 1100];
+
+/// The deepest zoom (percent): 11:1.
+pub const MAX_ZOOM: f32 = 1100.0;
+
+/// The fixed zoom levels below Fit and Fill, as (name, percent): what Zoom In / Out step through
+/// and `view.zoomLevel` names.
+pub const ZOOM_LEVELS: [(&str, f32); 9] = [
+    ("1:4", 25.0),
+    ("1:3", 100.0 / 3.0),
+    ("1:2", 50.0),
+    ("1:1", 100.0),
+    ("2:1", 200.0),
+    ("3:1", 300.0),
+    ("4:1", 400.0),
+    ("8:1", 800.0),
+    ("11:1", 1100.0),
+];
+
+/// The zoom a level name stands for: `fit`, `fill` or one of [`ZOOM_LEVELS`].
+pub fn zoom_level(name: &str) -> Option<Zoom> {
+    match name {
+        "fit" | "Fit" => Some(Zoom::Fit),
+        "fill" | "Fill" => Some(Zoom::Fill),
+        _ => ZOOM_LEVELS.iter().find(|(n, _)| *n == name).map(|(_, p)| Zoom::Percent(*p)),
+    }
+}
+
+/// The next fixed level after `cur` (percent) going in (`up`) or out; `None` past the last one
+/// out (Fit).
+pub fn zoom_step(cur: f32, up: bool) -> Option<f32> {
+    // (a little slack: 1:3 is not a whole percentage)
+    if up {
+        Some(ZOOM_LEVELS.iter().map(|l| l.1).find(|p| *p > cur + 0.01).unwrap_or(MAX_ZOOM))
+    } else {
+        ZOOM_LEVELS.iter().rev().map(|l| l.1).find(|p| *p < cur - 0.01)
+    }
+}
 
 /// Width limits of a side panel the user resizes (points).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -322,7 +362,7 @@ pub struct UiState {
     pub histogram: bool,
     /// Soft proofing (S in the loupe): render as `proof` would hold the photo.
     pub soft_proof: bool,
-    pub proof: lightcraft_engine::pipeline::Proof,
+    pub proof: dac_engine::pipeline::Proof,
     /// Masking: show the selected mask as a rendered overlay (O), how (`MaskView` name, ⇧O cycles),
     /// in which colour and opacity (0..100, colour views), and whether pins are drawn.
     pub mask_overlay: bool,
@@ -463,9 +503,48 @@ pub struct UiState {
     pub fullscreen: bool,
     /// Window ▸ Second Window.
     pub second_window: bool,
-    /// The keyword painter: clicking a photo in the grid toggles this keyword on it.
+    /// The Classic module on screen, the one before it (⌘⌥↑), and every other module's saved
+    /// panel layout (see [`crate::module`]).
+    pub module: crate::module::ModuleId,
+    pub previous_module: Option<crate::module::ModuleId>,
+    pub layouts: std::collections::BTreeMap<crate::module::ModuleId, crate::module::ModuleLayout>,
+    /// Modules hidden from the picker (its context menu).
+    pub hidden_modules: Vec<crate::module::ModuleId>,
+    /// While a placeholder module is on screen: the view it was entered from (a view change leaves it).
     #[serde(skip)]
-    pub keyword_painter: Option<String>,
+    pub placeholder_from: Option<(ViewMode, RightPanel)>,
+    /// The module bar (F5), the right panel group (F8) and the toolbar (T).
+    pub module_bar: bool,
+    pub right_edge: bool,
+    pub toolbar: bool,
+    /// Edges that auto-show at the window edge when hidden, and those peeking now.
+    pub auto_show: crate::module::EdgeFlags,
+    /// Edges that, hidden, appear on a click at the window edge (Classic's "Auto Hide") and hide
+    /// again once the pointer leaves them.
+    pub auto_hide: crate::module::EdgeFlags,
+    #[serde(skip)]
+    pub peek: crate::module::EdgeFlags,
+    /// The right group's order and hidden panels for the module on screen.
+    pub panel_order: Vec<crate::module::PanelId>,
+    pub hidden_panels: Vec<crate::module::PanelId>,
+    pub screen_mode: crate::module::ScreenMode,
+    #[serde(skip)]
+    pub lights_out: crate::module::LightsOut,
+    pub identity_plate: crate::module::IdentityPlate,
+    /// The Book module's book and view (Phase 3, `crate::book`).
+    pub book: crate::book::BookUi,
+    /// What the secondary window shows, and the photo a locked loupe holds.
+    pub second_mode: crate::module::SecondMode,
+    pub second_locked: Option<u64>,
+    /// The secondary window's own filter bar (its grid and filmstrip).
+    pub second_filter: crate::panels::second::SecondFilter,
+    /// The secondary window's filmstrip.
+    pub second_filmstrip: bool,
+    /// The grid cell under the pointer (the secondary window's Live loupe).
+    #[serde(skip)]
+    pub hovered_photo: Option<u64>,
+    /// Painter, grid cell style, Metadata panel preset ([`crate::libtools`]).
+    pub lib: crate::libtools::LibTools,
     /// What the Keywording box shows (Lightroom Classic's Keyword Tags views).
     pub keywording_view: KeywordingView,
     /// The Keyword List's open levels (lower-case paths).
@@ -480,6 +559,8 @@ pub struct UiState {
     /// time), paused.
     #[serde(skip)]
     pub slideshow: Option<(f64, f64, bool)>,
+    /// The Slideshow module (templates, saved slideshows, the slide settings).
+    pub slides: crate::slideshow_ui::SlideshowState,
     /// Info overlay on the loupe.
     pub info_overlay: InfoOverlay,
     /// Navigator mini map in the loupe while zoomed in.
@@ -497,7 +578,7 @@ pub struct UiState {
     pub reference: Option<u64>,
     /// Transient toast text, expiry (seconds of app time), and optional colour-label styling.
     #[serde(skip)]
-    pub toast: Option<(String, f64, Option<lightcraft_catalog::ColorLabel>)>,
+    pub toast: Option<(String, f64, Option<dac_catalog::ColorLabel>)>,
     /// The result of the last Find Missing Photos (it searches in the background).
     #[serde(skip)]
     pub last_find_missing: Option<serde_json::Value>,
@@ -510,7 +591,7 @@ pub struct UiState {
 /// Settings group ids (`SettingsGroup` serde names) a new preset includes by default: everything
 /// but crop, masks, spots and red eye.
 pub fn default_preset_groups() -> Vec<String> {
-    lightcraft_develop::SettingsGroup::default_copy().iter().filter_map(|g| serde_json::to_value(g).ok()?.as_str().map(str::to_string)).collect()
+    dac_develop::SettingsGroup::default_copy().iter().filter_map(|g| serde_json::to_value(g).ok()?.as_str().map(str::to_string)).collect()
 }
 
 impl Dialog {
@@ -534,7 +615,7 @@ pub struct NameEdit {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Dialog {
     ContactSheet {
-        options: lightcraft_engine::contact_sheet::Options,
+        options: dac_engine::contact_sheet::Options,
     },
     /// `parent`: the folder to create it in (none: the top level).
     NewAlbum {
@@ -676,7 +757,7 @@ pub enum Dialog {
     SmartRules {
         id: Option<u64>,
         name: String,
-        rules: lightcraft_catalog::RuleSet,
+        rules: dac_catalog::RuleSet,
         /// The folder a new smart album is created in (ignored when editing).
         #[serde(default)]
         parent: Option<u64>,
@@ -697,9 +778,9 @@ pub enum Dialog {
     },
     /// `resize` is used unless `full_size`; `limit_kb` 0 = no limit; `dir` empty = default export folder.
     Export {
-        opts: lightcraft_engine::export::ExportOptions,
+        opts: dac_engine::export::ExportOptions,
         full_size: bool,
-        resize: lightcraft_engine::export::Resize,
+        resize: dac_engine::export::Resize,
         /// Name typed for "Save as Preset".
         #[serde(default)]
         preset_name: String,
@@ -755,6 +836,8 @@ pub enum Dialog {
     },
     About,
     Shortcuts,
+    /// Library ▸ View Options (⌘J): grid cell style, index numbers, badges.
+    ViewOptions,
 }
 
 fn yes() -> bool {
@@ -804,7 +887,7 @@ impl Default for UiState {
             show_clipping: false,
             histogram: true,
             soft_proof: false,
-            proof: lightcraft_engine::pipeline::Proof { dest_warning: false, ..Default::default() },
+            proof: dac_engine::pipeline::Proof { dest_warning: false, ..Default::default() },
             mask_overlay: true,
             mask_overlay_mode: "color".into(),
             mask_overlay_color: [230, 30, 40],
@@ -864,8 +947,31 @@ impl Default for UiState {
             auto_advance: false,
             fullscreen: false,
             slideshow: None,
+            slides: Default::default(),
             second_window: false,
-            keyword_painter: None,
+            module: Default::default(),
+            previous_module: None,
+            layouts: Default::default(),
+            hidden_modules: Vec::new(),
+            placeholder_from: None,
+            module_bar: true,
+            right_edge: true,
+            toolbar: true,
+            auto_show: Default::default(),
+            auto_hide: Default::default(),
+            peek: Default::default(),
+            panel_order: Vec::new(),
+            hidden_panels: Vec::new(),
+            screen_mode: Default::default(),
+            lights_out: Default::default(),
+            identity_plate: Default::default(),
+            book: Default::default(),
+            second_mode: Default::default(),
+            second_locked: None,
+            second_filter: Default::default(),
+            second_filmstrip: true,
+            hovered_photo: None,
+            lib: Default::default(),
             keywording_view: KeywordingView::default(),
             keyword_list_open: Vec::new(),
             keyword_list_selected: None,

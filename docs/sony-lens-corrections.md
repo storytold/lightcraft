@@ -1,6 +1,6 @@
 # Sony embedded distortion corrections
 
-LightCraft reads the signed 16-sample distortion table in the raw image IFD (`0x7037`) of
+The app reads the signed 16-sample distortion table in the raw image IFD (`0x7037`) of
 Sony **ILCE-7RM4A (A7R IVA)** Bayer ARWs. Other camera models are deliberately left uncorrected,
 even when they contain a table with the same layout.
 It converts that table into `OpcodeList3` / `WarpRectilinear`, so the existing profile correction control,
@@ -11,7 +11,7 @@ The enabled and independently validated model is ILCE-7RM4A with the FE 24–105
 FE 200–600mm F5.6–6.3 G OSS. Linear YCbCr ARWs and non-3:2 camera crops are excluded pending validation. An aspect crop may
 retain the full-frame radial normalization; the decoder does not guess that relationship. Older files that carry
 only encrypted correction metadata, different table lengths, and rejected tables remain uncorrected.
-The camera's distortion Off setting does not erase its table. Newly imported photos use LightCraft's existing
+The camera's distortion Off setting does not erase its table. Newly imported photos use the app's existing
 embedded-profile default (enabled); the profile correction control can disable or adjust it.
 
 ## Clean-room evidence
@@ -64,7 +64,7 @@ from the interpolated file table was below 0.12 px at 1440 px. That measures app
 not agreement with an independent renderer. Camera JPEG and Apple Core Image comparisons support
 the wide-lens interpretation but are weaker evidence than same-renderer On/Off pairs.
 
-Actual LightCraft exports after crop normalization were also compared directly with Sony's corrected
+Actual exports of the app after crop normalization were also compared directly with Sony's corrected
 TIFFs. At 2376 px wide, median / 95th-percentile feature residuals were 0.35 / 1.04 px at 24 mm,
 0.15 / 0.40 px at 200 mm, and 0.13 / 0.56 px at 600 mm (median translation below 0.024 px).
 The uncorrected medians at 200 and 600 mm were 8.63 and 10.82 px respectively. Different colour,

@@ -18,7 +18,7 @@ use std::sync::mpsc::Sender;
 
 use serde_json::{Value, json};
 
-use crate::LightcraftApp;
+use crate::DacApp;
 
 pub type ControlResponse = Value;
 
@@ -53,7 +53,7 @@ fn wrap(r: Result<Value, String>) -> Outcome {
     }
 }
 
-pub fn all_commands(app: &LightcraftApp) -> Value {
+pub fn all_commands(app: &DacApp) -> Value {
     let keymap = &app.ui.settings.keymap;
     let mut v: Vec<Value> = app
         .session
@@ -67,8 +67,8 @@ pub fn all_commands(app: &LightcraftApp) -> Value {
             v
         })
         .collect();
-    for (id, label, sc, menu) in crate::menus::ui_commands() {
-        let sc = crate::shortcuts::binding(keymap, id, *sc);
+    for (id, label, _, menu) in crate::menus::ui_commands() {
+        let sc = crate::shortcuts::shortcut_of(keymap, id);
         v.push(json!({"id": id, "label": label, "shortcut": sc, "menu": [menu], "enabled": crate::menus::ui_enabled(app, id), "ui": true}));
     }
     Value::Array(v)
@@ -78,7 +78,7 @@ fn rect_json(r: egui::Rect) -> Value {
     json!([r.left(), r.top(), r.width(), r.height()])
 }
 
-pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
+pub fn inspect(app: &DacApp, ctx: &egui::Context) -> Value {
     let r = ctx.content_rect();
     json!({
         "ui": serde_json::to_value(&app.ui).unwrap_or_default(),
@@ -91,15 +91,15 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "selection": app.session.selection.ids.iter().map(|p| p.0).collect::<Vec<_>>(),
         "activeMask": app.session.active_mask,
         "widgetCount": app.widgets.len(),
-        "perf": {"frameMs": app.perf.frame_ms, "logicMs": app.perf.logic_ms, "updateMs": app.perf.update_ms, "maxUpdateMs": app.perf.max_update_ms, "fps": app.perf.fps, "lastRenderMs": app.renderer.last_main_ms, "renderQueue": app.renderer.queued(), "rendersInFlight": app.renderer.in_flight(), "pendingSlots": app.renderer.pending_slots(), "mergeRunning": app.merge.busy(), "lastMerge": app.merge.last_result, "rendersDone": app.renderer.completed, "thumbTextures": app.renderer.thumb_textures(), "variantTextures": app.renderer.variant_textures(), "gpu": (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten(), "gpuReason": lightcraft_engine::gpu::unavailable_reason(), "gpuFallback": lightcraft_engine::gpu::last_fallback()},
+        "perf": {"frameMs": app.perf.frame_ms, "logicMs": app.perf.logic_ms, "updateMs": app.perf.update_ms, "maxUpdateMs": app.perf.max_update_ms, "fps": app.perf.fps, "lastRenderMs": app.renderer.last_main_ms, "renderQueue": app.renderer.queued(), "rendersInFlight": app.renderer.in_flight(), "pendingSlots": app.renderer.pending_slots(), "mergeRunning": app.merge.busy(), "lastMerge": app.merge.last_result, "rendersDone": app.renderer.completed, "thumbTextures": app.renderer.thumb_textures(), "variantTextures": app.renderer.variant_textures(), "gpu": (dac_engine::gpu::ready() && dac_engine::gpu::available()).then(dac_engine::gpu::adapter_name).flatten(), "gpuReason": dac_engine::gpu::unavailable_reason(), "gpuFallback": dac_engine::gpu::last_fallback()},
         "loupe": app.loupe_shown.map(|(p, src)| json!({
             "photo": p.0,
             "source": src,
             "pending": app.renderer.is_pending(crate::render::Slot::Main),
             // zoomed past the whole-frame render: the window rendered at no more than 100 % (pixels of its frame)
-            "region": app.region_view.map(|r| json!({"full": [r.full.0, r.full.1], "window": [r.window.x, r.window.y, r.window.w, r.window.h], "pending": app.renderer.is_pending(crate::render::Slot::Region)})),
+            "region": app.region_view.map(|r| json!({"full": [r.full.0, r.full.1], "window": [r.window.x, r.window.y, r.window.w, r.window.h], "tile": r.tile, "pending": app.renderer.tiles_pending()})),
             // …and the same for the Before side of a Before/After view
-            "regionBefore": app.region_before_view.map(|r| json!({"full": [r.full.0, r.full.1], "window": [r.window.x, r.window.y, r.window.w, r.window.h], "pending": app.renderer.is_pending(crate::render::Slot::RegionBefore)})),
+            "regionBefore": app.region_before_view.map(|r| json!({"full": [r.full.0, r.full.1], "window": [r.window.x, r.window.y, r.window.w, r.window.h], "tile": r.tile, "pending": app.renderer.tiles_pending()})),
         })),
         "hoverPreview": app.hover_preview.as_ref().map(|h| h.label.clone()),
         "status": app.ui.status,
@@ -123,7 +123,7 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
 }
 
 /// Bytes held by the engine's caches and the renderer's (`ui.inspect` → `memory`).
-pub fn memory(app: &LightcraftApp) -> Value {
+pub fn memory(app: &DacApp) -> Value {
     let mut v = serde_json::to_value(app.session.memory_report()).unwrap_or_default();
     if let (Some(o), Value::Object(r)) = (v.as_object_mut(), app.renderer.memory()) {
         o.extend(r);
@@ -155,7 +155,7 @@ fn key_from(name: &str) -> Option<egui::Key> {
     })
 }
 
-fn push_drag(app: &mut LightcraftApp, a: egui::Pos2, b: egui::Pos2, steps: u64, m: egui::Modifiers) {
+fn push_drag(app: &mut DacApp, a: egui::Pos2, b: egui::Pos2, steps: u64, m: egui::Modifiers) {
     app.synthetic.push(egui::Event::PointerMoved(a));
     app.synthetic.push(egui::Event::PointerButton { pos: a, button: egui::PointerButton::Primary, pressed: true, modifiers: m });
     for i in 1..=steps.max(1) {
@@ -165,11 +165,11 @@ fn push_drag(app: &mut LightcraftApp, a: egui::Pos2, b: egui::Pos2, steps: u64, 
     app.synthetic.push(egui::Event::PointerButton { pos: b, button: egui::PointerButton::Primary, pressed: false, modifiers: m });
 }
 
-fn widget_rect(app: &LightcraftApp, id: &str) -> Option<egui::Rect> {
+fn widget_rect(app: &DacApp, id: &str) -> Option<egui::Rect> {
     app.widgets.iter().rev().find(|(w, _)| w == id).map(|(_, r)| *r)
 }
 
-pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
+pub fn handle(app: &mut DacApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     let s = |k: &str| p.get(k).and_then(Value::as_str);
     let f = |k: &str| p.get(k).and_then(Value::as_f64);
@@ -184,7 +184,10 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         "engine.commands" => ok(all_commands(app)),
         "ui.menu.list" => ok(serde_json::to_value(crate::menus::menu_entries(app)).unwrap_or_default()),
         "ui.menu.tree" => {
-            ok(Value::Array(crate::menubar::menu_bar(app).into_iter().map(|(title, items)| json!({"label": title, "children": items})).collect()))
+            let tree =
+                Value::Array(crate::menubar::menu_bar(app).into_iter().map(|(title, items)| json!({"label": title, "children": items})).collect());
+            // labels are source keys with `{app}` placeholders; report them as the user sees them
+            ok(serde_json::from_str(&dac_brand::fill(&tree.to_string())).unwrap_or(tree))
         }
         "ui.inspect" => ok(inspect(app, ctx)),
         "ui.widgets" => {
@@ -317,7 +320,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         }
         "ui.set" => {
             let mut v = serde_json::to_value(&app.ui).unwrap_or_default();
-            lightcraft_develop::presets::deep_merge(&mut v, p);
+            dac_develop::presets::deep_merge(&mut v, p);
             match serde_json::from_value::<crate::UiState>(v) {
                 Ok(mut u) => {
                     u.toast = app.ui.toast.clone();
@@ -385,7 +388,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
             Outcome::Screenshot { path: s("path").map(str::to_string), headless: p.get("headless").and_then(Value::as_bool).unwrap_or(false) }
         }
         "ui.render" => {
-            let id = p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId).or(app.session.active());
+            let id = p.get("id").and_then(Value::as_u64).map(dac_catalog::PhotoId).or(app.session.active());
             let Some(id) = id else { return err("no photo") };
             if let Some(Err(e)) = s("path").map(|path| app.session.check_write_target(path)) {
                 return err(e);
@@ -416,25 +419,25 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
 /// Shown when an export has nowhere to go (no folder typed or chosen, and no home folder to default to).
 pub const NO_EXPORT_FOLDER: &str = "Choose an export folder first.";
 
-/// Default export folder: `~/Pictures/LightCraft Exports` (`%USERPROFILE%\Pictures\LightCraft Exports`
+/// Default export folder: `~/Pictures/<app> Exports` (`%USERPROFILE%\Pictures\<app> Exports`
 /// on Windows, where `HOME` usually isn't set). Empty when no home folder is known.
 pub fn default_export_dir() -> String {
     let home = if cfg!(windows) { std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) } else { std::env::var_os("HOME") };
     home.filter(|h| !h.is_empty())
-        .map(|h| std::path::PathBuf::from(h).join("Pictures").join("LightCraft Exports").to_string_lossy().into_owned())
+        .map(|h| std::path::PathBuf::from(h).join("Pictures").join(format!("{} Exports", dac_brand::DISPLAY_NAME)).to_string_lossy().into_owned())
         .unwrap_or_default()
 }
 
 /// Export the selected photos (UI command `app.export`). Params: see
-/// [`lightcraft_engine::export::ExportOptions::from_json`], plus `dir` (output folder) or `path`
+/// [`dac_engine::export::ExportOptions::from_json`], plus `dir` (output folder) or `path`
 /// (exact output file, single photo), `ids` (default: the selection, else the active photo).
-pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
-    use lightcraft_engine::export::{Destination, ExportOptions, export_batch};
+pub fn export_active(app: &mut DacApp, p: &Value) -> Result<Value, String> {
+    use dac_engine::export::{Destination, ExportOptions, export_batch};
     let p = &app.session.export_params(p)?;
     let mut opts = ExportOptions::from_params(p).map_err(|e| e.to_string())?;
     if let (Some(path), None) = (p.get("path").and_then(Value::as_str), p.get("format")) {
         let ext = path.rsplit_once('.').map_or("", |(_, e)| e);
-        opts.format = lightcraft_engine::export::ExportFormat::parse(ext).unwrap_or(opts.format);
+        opts.format = dac_engine::export::ExportFormat::parse(ext).unwrap_or(opts.format);
     }
     let ids: Vec<_> = match p.get("ids").and_then(Value::as_array) {
         Some(a) => a.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect(),
@@ -470,7 +473,7 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
     let to = Destination { dir: dir.clone(), exact };
     let background = p.get("background").and_then(Value::as_bool).unwrap_or(false) && app.services.write_shared.is_some();
     let out = if background {
-        let items = lightcraft_engine::export::prepare_batch(&mut app.session, &ids, &opts)?;
+        let items = dac_engine::export::prepare_batch(&mut app.session, &ids, &opts)?;
         crate::export_task::start(app, items, opts, to)?
     } else {
         let w = app.services.write.as_mut().ok_or("no writer")?;
@@ -484,17 +487,19 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
         o.insert("dir".into(), json!(dir));
     }
     app.session.last_export = Some(last);
+    // the Previous Export source in the Library panel
+    app.session.record_export(&ids);
     let _ = app.session.save_prefs();
     Ok(out)
 }
 
-pub fn save_screenshot(app: &mut LightcraftApp, image: &egui::ColorImage, path: Option<&str>) -> Value {
+pub fn save_screenshot(app: &mut DacApp, image: &egui::ColorImage, path: Option<&str>) -> Value {
     let [w, h] = image.size;
     let Some(path) = path else {
         return json!({"ok": true, "result": {"width": w, "height": h}});
     };
     let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
-    let Some(img) = lightcraft_raster::Rgba8::from_bytes(w, h, &rgba) else {
+    let Some(img) = dac_raster::Rgba8::from_bytes(w, h, &rgba) else {
         return json!({"ok": false, "error": "bad screenshot buffer"});
     };
     let Some(png) = app.services.png.as_ref() else { return json!({"ok": false, "error": "no encoder"}) };

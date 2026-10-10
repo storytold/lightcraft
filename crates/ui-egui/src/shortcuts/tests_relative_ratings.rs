@@ -1,17 +1,17 @@
 //! Real app command dispatch using egui input, without rendering an image or linking a facade.
+use dac_catalog::{Flag, Op, Photo, PhotoId, Source};
 use egui::{Key, Modifiers};
-use lightcraft_catalog::{Flag, Op, Photo, PhotoId, Source};
 use serde_json::json;
 
-use crate::LightcraftApp;
+use crate::DacApp;
 use crate::state::{Dialog, RightPanel, ViewMode};
 
-fn app() -> lightcraft_engine::Result<LightcraftApp> {
-    let mut s = lightcraft_engine::Session::new();
+fn app() -> dac_engine::Result<DacApp> {
+    let mut s = dac_engine::Session::new();
     for (id, rating) in [(1, 0), (2, 2), (3, 5)] {
         let mut photo = Photo::new(
             PhotoId(id),
-            Source::File { path: format!("/lightcraft-relative-rating-keys/{id}.jpg") },
+            Source::File { path: format!("/app-relative-rating-keys/{id}.jpg") },
             &format!("{id}.jpg"),
             "JPEG",
             40,
@@ -23,18 +23,16 @@ fn app() -> lightcraft_engine::Result<LightcraftApp> {
     }
     s.execute("library.sort", &json!({"key": "fileName", "ascending": true}))?;
     s.execute("library.select", &json!({"ids": [1, 2, 3], "active": 2}))?;
-    Ok(LightcraftApp::new(s, crate::Services { png: None, ..Default::default() }))
+    Ok(DacApp::new(s, crate::Services { png: None, ..Default::default() }))
 }
 
-fn ratings(app: &LightcraftApp) -> lightcraft_engine::Result<Vec<u8>> {
+fn ratings(app: &DacApp) -> dac_engine::Result<Vec<u8>> {
     (1..=3)
-        .map(|id| {
-            app.session.catalog.photo(PhotoId(id)).map(|p| p.rating).ok_or_else(|| lightcraft_catalog::CatalogError::NoPhoto(PhotoId(id)).into())
-        })
+        .map(|id| app.session.catalog.photo(PhotoId(id)).map(|p| p.rating).ok_or_else(|| dac_catalog::CatalogError::NoPhoto(PhotoId(id)).into()))
         .collect()
 }
 
-fn frame(app: &mut LightcraftApp, ctx: &egui::Context, key: Option<Key>, text: Option<&mut String>) {
+fn frame(app: &mut DacApp, ctx: &egui::Context, key: Option<Key>, text: Option<&mut String>) {
     let events = key
         .map(|key| egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers: Modifiers::NONE })
         .into_iter()

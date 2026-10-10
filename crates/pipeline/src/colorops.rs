@@ -4,14 +4,14 @@
 use std::f32::consts::{PI, TAU};
 use std::sync::OnceLock;
 
-use lightcraft_color::perceptual::{hsv_to_rgb, lab_to_lch, lch_to_lab, oklab_from_2020, oklab_to_2020};
-use lightcraft_color::{Mat3, REC2020, SRGB};
-use lightcraft_develop::{Calibration, DevelopSettings, MIXER_HUES, PointColor};
+use dac_color::perceptual::{hsv_to_rgb, lab_to_lch, lch_to_lab, oklab_from_2020, oklab_to_2020};
+use dac_color::{Mat3, REC2020, SRGB};
+use dac_develop::{Calibration, DevelopSettings, MIXER_HUES, PointColor};
 
 /// OkLCh hue angle (radians) of a pure sRGB colour with HSV hue `deg`.
 pub fn oklch_hue_of_srgb_hue(deg: f64) -> f32 {
     let c = hsv_to_rgb(deg as f32, 1.0, 1.0);
-    let lin = c.map(lightcraft_color::transfer::srgb_to_linear);
+    let lin = c.map(dac_color::transfer::srgb_to_linear);
     let m = SRGB.to_space(&REC2020).apply_f32(lin);
     lab_to_lch(oklab_from_2020(m))[2]
 }
@@ -146,7 +146,7 @@ pub struct ColorOps {
     pub skin: f32,
 }
 
-fn wheel(w: &lightcraft_develop::Wheel) -> WheelK {
+fn wheel(w: &dac_develop::Wheel) -> WheelK {
     let h = oklch_hue_of_srgb_hue(w.hue);
     let s = (w.sat / 100.0) as f32 * 0.09;
     WheelK { a: s * h.cos(), b: s * h.sin(), lum: (w.lum / 100.0) as f32 * 0.12 }
@@ -166,7 +166,7 @@ impl ColorOps {
             points: if crate::is_bw(s) {
                 Vec::new()
             } else {
-                s.point_colors.iter().take(lightcraft_develop::MAX_POINT_COLORS).filter(|p| !p.is_neutral()).map(PointK::new).collect()
+                s.point_colors.iter().take(dac_develop::MAX_POINT_COLORS).filter(|p| !p.is_neutral()).map(PointK::new).collect()
             },
             bw: crate::is_bw(s).then(|| s.bw_mix.bands().map(|v| (v / 100.0) as f32)),
             grading: (!g.is_neutral()).then(|| {
@@ -308,10 +308,10 @@ pub fn calibrate(c: [f32; 3], m: Option<&[[f32; 3]; 3]>, shadow_tint: f32) -> [f
         c = std::array::from_fn(|r| (m[r][0] * c[0] + m[r][1] * c[1] + m[r][2] * c[2]).max(0.0));
     }
     if shadow_tint != 0.0 {
-        let y0 = lightcraft_color::luminance_2020(c);
+        let y0 = dac_color::luminance_2020(c);
         let w = 1.0 - smooth(-5.0, -0.5, (y0.max(1e-7) / 0.18).log2());
         c[1] *= (1.0 - SHADOW_TINT * shadow_tint * w).max(0.0);
-        let y1 = lightcraft_color::luminance_2020(c).max(1e-9);
+        let y1 = dac_color::luminance_2020(c).max(1e-9);
         c = c.map(|v| v * y0 / y1);
     }
     c
@@ -326,7 +326,7 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_color::perceptual::lab_to_lch;
+    use dac_color::perceptual::lab_to_lch;
 
     #[test]
     fn weights_partition_unity() {
@@ -354,7 +354,7 @@ mod tests {
         s.color.saturation = -100.0;
         let g = ColorOps::new(&s).apply([0.4, 0.1, 0.05], 0.0, 0.0);
         assert!((g[0] - g[1]).abs() < 1e-3 && (g[1] - g[2]).abs() < 1e-3, "{g:?}");
-        let mut s = DevelopSettings { treatment: lightcraft_develop::Treatment::Bw, ..Default::default() };
+        let mut s = DevelopSettings { treatment: dac_develop::Treatment::Bw, ..Default::default() };
         let ops = ColorOps::new(&s);
         let b = ops.apply([0.05, 0.1, 0.5], 0.0, 0.0);
         assert!((b[0] - b[2]).abs() < 1e-3);
@@ -402,7 +402,7 @@ mod tests {
         let bright = calibrate([0.8, 0.8, 0.8], None, 1.0);
         assert!(dark[1] < dark[0] * 0.85, "magenta shadows: {dark:?}");
         assert!((bright[1] - bright[0]).abs() < 1e-3, "{bright:?}");
-        let y = |c: [f32; 3]| lightcraft_color::luminance_2020(c);
+        let y = |c: [f32; 3]| dac_color::luminance_2020(c);
         assert!((y(dark) - 0.01).abs() < 1e-5);
         let green = calibrate([0.01, 0.01, 0.01], None, -1.0);
         assert!(green[1] > green[0]);
@@ -448,7 +448,7 @@ mod tests {
     #[test]
     fn grading_tints_shadows_only() {
         let mut s = DevelopSettings::default();
-        s.grading.shadows = lightcraft_develop::Wheel { hue: 220.0, sat: 60.0, lum: 0.0 };
+        s.grading.shadows = dac_develop::Wheel { hue: 220.0, sat: 60.0, lum: 0.0 };
         let ops = ColorOps::new(&s);
         let dark = ops.apply([0.01, 0.01, 0.01], 0.0, 0.0);
         let bright = ops.apply([0.8, 0.8, 0.8], 0.0, 0.0);

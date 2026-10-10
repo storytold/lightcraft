@@ -2,7 +2,7 @@
 //! features by a DETR encoder, 200 object queries refined by a DETR decoder (with box
 //! relative-position bias and a presence token), per-query masks from a pixel decoder.
 //!
-//! Modified work (Apache License 2.0, §4(b)): ported by the LightCraft contributors in 2026 from
+//! Modified work (Apache License 2.0, §4(b)): ported by the project contributors in 2026 from
 //! the Python/PyTorch SAM 3 code of Hugging Face Transformers (`models/sam3/modeling_sam3.py`), Copyright The HuggingFace
 //! Team and Meta Platforms, Inc.; translated to Rust on candle and restructured. See NOTICE.
 

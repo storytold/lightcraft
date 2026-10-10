@@ -1,10 +1,10 @@
 //! HEIC/HEIF through the codec API (feature `heif`), on lossless synthetic files from
-//! `lightcraft_heif::testdata`: an iPhone-like grid with a Display P3 profile, rotation, EXIF, a
+//! `dac_heif::testdata`: an iPhone-like grid with a Display P3 profile, rotation, EXIF, a
 //! thumbnail and an HDR gain map; `nclx`-only colour; 10-bit; and hostile input.
 #![cfg(feature = "heif")]
 
-use lightcraft_codecs::*;
-use lightcraft_heif::testdata::{Prop, Spec, build};
+use dac_codecs::*;
+use dac_heif::testdata::{Prop, Spec, build};
 
 fn grey(x: u32, y: u32) -> [u16; 3] {
     [((x * 7 + y * 13) % 220 + 20) as u16, 128, 128]

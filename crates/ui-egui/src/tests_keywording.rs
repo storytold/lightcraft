@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::{LightcraftApp, Services};
+use crate::{DacApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
@@ -14,7 +14,7 @@ const SETTLE: Duration = Duration::from_secs(120);
 /// The Library grid with the Keywords panel open and two photos selected: the first with beach and
 /// Weddings, the second with beach.
 fn two_selected() -> (Headless, Vec<u64>) {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let app = DacApp::new(dac_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1400.0, 1000.0], 1.0);
     let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
     for (method, params) in [
@@ -41,7 +41,7 @@ fn has(h: &Headless, id: &str) -> bool {
 }
 
 fn keywords_of(h: &Headless, id: u64) -> Vec<String> {
-    h.app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().meta.keywords.clone()
+    h.app.session.catalog.photo(dac_catalog::PhotoId(id)).unwrap().meta.keywords.clone()
 }
 
 /// The chips are the keywords of every selected photo, not only the active one's; a keyword only
@@ -144,7 +144,7 @@ fn the_painters_field_pastes_and_return_paints() {
     ask(&mut h, "ui.clickWidget", json!({"id": "field:keywordPainter", "button": "right"}));
     ask(&mut h, "ui.clickWidget", json!({"id": "field:keywordPainter:paste"}));
     ask(&mut h, "ui.key", json!({"key": "Enter"}));
-    assert_eq!(h.app.ui.keyword_painter.as_deref(), Some("Weddings"));
+    assert_eq!(h.app.ui.lib.painter.as_ref().map(|p| p.value.as_str()), Some("Weddings"));
 }
 
 /// Suggestions follow the selection: a keyword only some selected photos have is suggested, to give

@@ -1,7 +1,7 @@
-# LightCraft — the desktop app (`lightcraft`) and the CLI/MCP server (`lightcraft-cli`), built from
-# this repository:
+# The desktop app and the CLI/MCP server, built from this repository and named from brand.toml
+# (`binary` and `cli_binary`; cargo's own binary names are the neutral `app` and `app-cli`):
 #
-#   nix build          # → ./result/bin/lightcraft, ./result/bin/lightcraft-cli
+#   nix build          # → ./result/bin/<binary>, ./result/bin/<cli_binary>
 #
 # Kept in step with the release workflow (.github/workflows/release.yml) and packaging/env.sh:
 #   * `Cargo.lock` drives the dependencies (`cargoLock`), so there is no vendorHash to bump — only
@@ -9,9 +9,9 @@
 #   * `CRAFT_FONTS_DIR` embeds the CJK fonts from storytold/craft-fonts (the `craft-fonts`
 #     flake input); without it everything builds and runs, but Japanese and Chinese text have no glyphs;
 #   * the desktop file, hicolor icons and AppStream metadata are the same files the .deb/.rpm ship
-#     (packaging/linux/), so `apt` and NixOS users see one identical LightCraft;
+#     (packaging/linux/), so `apt` and NixOS users see one identical app;
 #   * `doCheck` runs `cargo test --workspace`, what `cargo xtask ci` runs. `nix build` runs it too;
-#     `pkgs.lightcraft.overrideAttrs { doCheck = false; }` skips it for a faster, build-only install.
+#     `pkgs.<binary>.overrideAttrs { doCheck = false; }` skips it for a faster, build-only install.
 #
 # Everything in the product is pure Rust (no C/C++ dependencies), so this needs no build system
 # beyond cargo plus the windowing headers winit's build scripts look for.
@@ -52,8 +52,32 @@ let
 
   isLinux = stdenv.hostPlatform.isLinux;
 
+  # The product name lives only in brand.toml.
+  brandToml = builtins.fromTOML (builtins.readFile (root + "/brand.toml"));
+  brand = brandToml.product // brandToml.identity // brandToml.stable;
+
   # AppStream id: also the desktop file name, and the icon name in share/icons/hicolor.
-  appId = "ai.storyteller.lightcraft";
+  appId = brand.app_id;
+
+  # packaging/**/*.in templates: {{key}} from brand.toml, plus version and date (as `cargo xtask package`).
+  vars = brand // {
+    app = brand.display_name;
+    inherit version;
+    date = buildDate;
+    short_version = builtins.head (lib.splitString "-" version);
+    build_sha = "unknown";
+  };
+  render =
+    name: template:
+    builtins.toFile name (
+      builtins.replaceStrings (map (k: "{{${k}}}") (builtins.attrNames vars)) (map toString (
+        builtins.attrValues vars
+      )) (builtins.readFile template)
+    );
+  linux = root + "/packaging/linux";
+  desktopFile = render "${appId}.desktop" (linux + "/{app_id}.desktop.in");
+  mimeFile = render "${appId}.xml" (linux + "/{app_id}.mime.xml.in");
+  metainfoFile = render "${appId}.metainfo.xml" (linux + "/{app_id}.metainfo.xml.in");
 
   # Libraries the binaries open at run time with dlopen(): nothing links them, so no RPATH points at
   # them — winit loads libxkbcommon/libxcb, wgpu the Vulkan loader (NixOS patches that loader to
@@ -69,21 +93,21 @@ let
     vulkan-loader
   ];
 
-  # The two native binaries. The wasm app (apps/lightcraft-web) is built by `cargo xtask web`, not
+  # The two native binaries. The wasm app (apps/web) is built by `cargo xtask web`, not
   # here; xtask is tooling.
   binaries = [
-    "lightcraft"
-    "lightcraft-cli"
+    brand.binary
+    brand.cli_binary
   ];
 
   # HEIC/HEIF decoding (opt-in upstream: HEVC patents are the distributor's call), as the release builds.
   buildFeatures = [
-    "lightcraft/heif"
-    "lightcraft-cli/heif"
+    "dac-app/heif"
+    "dac-cli/heif"
   ];
 in
 rustPlatform.buildRustPackage {
-  pname = "lightcraft";
+  pname = brand.binary;
   inherit version;
 
   src = lib.cleanSourceWith {
@@ -104,9 +128,9 @@ rustPlatform.buildRustPackage {
   cargoBuildFlags = [
     "--locked"
     "-p"
-    "lightcraft"
+    "dac-app"
     "-p"
-    "lightcraft-cli"
+    "dac-cli"
   ];
 
   # `cargo xtask ci` runs `cargo test --workspace`. Tests that need what the sandbox cannot have
@@ -114,7 +138,7 @@ rustPlatform.buildRustPackage {
   # equivalence tests (no adapter).
   cargoTestFlags = [ "--workspace" ];
 
-  # One test thread at a time (RUST_TEST_THREADS=1). `lightcraft-catalog`'s `tests_lock` tests share
+  # One test thread at a time (RUST_TEST_THREADS=1). `dac-catalog`'s `tests_lock` tests share
   # a process-global resource: `flock` is inherited across `fork`, so a child process that another
   # test forked keeps the parent's just-released library lock alive until its `execve` closes the
   # (CLOEXEC) fd — long enough that the sibling test sees a spurious `LockError::InUse`, on ~30 % of
@@ -154,20 +178,23 @@ rustPlatform.buildRustPackage {
   };
 
   postInstall = ''
-    # Desktop integration: byte-for-byte the files the .deb/.rpm/.AppImage install.
-    install -Dm644 packaging/linux/${appId}.desktop $out/share/applications/${appId}.desktop
-    install -Dm644 packaging/linux/${appId}.mime.xml $out/share/mime/packages/${appId}.xml
-    cp -r assets/app-icon/hicolor $out/share/icons/
-    install -d $out/share/metainfo
-    substitute packaging/linux/${appId}.metainfo.xml.in \
-      $out/share/metainfo/${appId}.metainfo.xml \
-      --subst-var-by VERSION ${version} \
-      --subst-var-by DATE ${buildDate}
+    # Brand names for cargo's neutral binaries.
+    mv $out/bin/app $out/bin/${brand.binary}
+    mv $out/bin/app-cli $out/bin/${brand.cli_binary}
+
+    # Desktop integration: the same rendered templates the .deb/.rpm/.AppImage install.
+    install -Dm644 ${desktopFile} $out/share/applications/${appId}.desktop
+    install -Dm644 ${mimeFile} $out/share/mime/packages/${appId}.xml
+    install -Dm644 ${metainfoFile} $out/share/metainfo/${appId}.metainfo.xml
+    for f in assets/app-icon/hicolor/*/apps/*; do
+      size=$(basename "$(dirname "$(dirname "$f")")")
+      install -Dm644 "$f" "$out/share/icons/hicolor/$size/apps/${appId}.''${f##*.}"
+    done
 
     # Licences for everything embedded in the binaries: Inter, the app icon, each craft font.
-    doc=$out/share/doc/lightcraft
+    doc=$out/share/doc/${brand.binary}
     install -Dm644 -t "$doc" \
-      README.md LICENSE-MIT LICENSE-APACHE NOTICE \
+      README.md LICENSE NOTICE \
       assets/ATTRIBUTION.md assets/fonts/OFL-Inter.txt
   ''
   + lib.optionalString (craft-fonts != null) ''
@@ -194,12 +221,13 @@ rustPlatform.buildRustPackage {
   meta = {
     description = "Photo library and non-destructive raw developer";
     longDescription = ''
-      LightCraft organises a photo library and develops raw files non-destructively: masks,
+      ${brand.display_name} organises a photo library and develops raw files non-destructively: masks,
       presets, colour grading, local adjustments and batch export, driven by the same command
-      layer as its UI. It ships with lightcraft-cli, a headless renderer, command runner and MCP
+      layer as its UI. It ships with ${brand.cli_binary}, a headless renderer, command runner and MCP
       server for AI agents.
     '';
-    homepage = "https://getartcraft.com/apps/lightcraft";
+    inherit (brand) homepage;
+    # MIT; crates/segment and crates/fetch are Apache-2.0
     license = with lib.licenses; [
       mit
       asl20
@@ -207,6 +235,6 @@ rustPlatform.buildRustPackage {
     sourceProvenance = with lib.sourceTypes; [ fromSource ];
     platforms = lib.platforms.linux ++ lib.platforms.darwin;
     # `nix run` and the desktop entry both start the GUI.
-    mainProgram = "lightcraft";
+    mainProgram = brand.binary;
   };
 }

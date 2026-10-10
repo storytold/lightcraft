@@ -4,7 +4,7 @@
 
 use serde_json::json;
 
-use crate::{LightcraftApp, Services};
+use crate::{DacApp, Services};
 
 #[test]
 fn opening_another_library_drops_the_old_librarys_cached_panels() {
@@ -15,13 +15,13 @@ fn opening_another_library_drops_the_old_librarys_cached_panels() {
     std::fs::create_dir_all(&b).unwrap();
 
     // library A with photos, reopened from disk (as at launch)
-    let mut session = lightcraft_engine::Session::new().with_fs();
+    let mut session = dac_engine::Session::new().with_fs();
     session.open_library(&a, true).unwrap();
     session.close_library().unwrap();
     session.open_library(&a, false).unwrap();
     assert!(!session.catalog.is_empty());
 
-    let mut app = LightcraftApp::new(session, Services::default());
+    let mut app = DacApp::new(session, Services::default());
     let (cat, caches) = (&app.session.catalog, &mut app.caches);
     assert!(caches.counts(cat).total > 0);
     assert!(!caches.keyword_tree(cat).is_empty());

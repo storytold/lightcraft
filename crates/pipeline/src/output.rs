@@ -8,7 +8,7 @@
 //! sRGB-curve-encoded values of the target primaries (identical to the sRGB path when the target is
 //! sRGB); afterwards the values are re-encoded with the target's own curve.
 
-use lightcraft_color::{ADOBE_RGB, DISPLAY_P3, Mat3, PROPHOTO, REC2020, RgbSpace, SRGB};
+use dac_color::{ADOBE_RGB, DISPLAY_P3, Mat3, PROPHOTO, REC2020, RgbSpace, SRGB};
 use serde::{Deserialize, Serialize};
 
 /// The RGB space an image is rendered into.
@@ -41,7 +41,7 @@ impl OutputTrc {
     pub fn encode(self, v: f32) -> f32 {
         let v = v.clamp(0.0, 1.0);
         match self {
-            OutputTrc::Srgb => lightcraft_color::transfer::linear_to_srgb(v),
+            OutputTrc::Srgb => dac_color::transfer::linear_to_srgb(v),
             OutputTrc::Gamma(g) => v.powf(1.0 / g),
             OutputTrc::Rec709 => {
                 if v < 0.018 {
@@ -57,7 +57,7 @@ impl OutputTrc {
     pub fn decode(self, e: f32) -> f32 {
         let e = e.clamp(0.0, 1.0);
         match self {
-            OutputTrc::Srgb => lightcraft_color::transfer::srgb_to_linear(e),
+            OutputTrc::Srgb => dac_color::transfer::srgb_to_linear(e),
             OutputTrc::Gamma(g) => e.powf(g),
             OutputTrc::Rec709 => {
                 if e < 0.081 {
@@ -142,7 +142,7 @@ impl OutputSpace {
 /// A monitor's RGB as a preview target (from its ICC display profile): previews render into the
 /// display's own primaries, gamut mapped into the display's gamut, encoded with the sRGB curve.
 /// The frontend then takes that encoding to the display's real device values
-/// (`lightcraft_codecs::display`). Exports never use it.
+/// (`dac_codecs::display`). Exports never use it.
 #[derive(Clone, Copy, Debug)]
 pub struct DisplaySpace {
     /// Linear Rec.2020 → linear display RGB, and back.
@@ -247,7 +247,7 @@ pub enum OutputDepth {
     /// 32-bit float *linear* RGB (target primaries, 0..1) in [`crate::Rendered::deep`].
     F32Linear,
     /// 32-bit float linear RGB (target primaries) of the HDR render: SDR white = 1, highlights up
-    /// to [`lightcraft_develop::Hdr::peak`]. With HDR off this is [`OutputDepth::F32Linear`].
+    /// to [`dac_develop::Hdr::peak`]. With HDR off this is [`OutputDepth::F32Linear`].
     F32Hdr,
 }
 
@@ -269,8 +269,8 @@ pub struct DeepImage {
 
 impl DeepImage {
     /// The same image reduced to 8 bits, display-encoded with the space's curve.
-    pub fn to_rgba8(&self) -> lightcraft_raster::Rgba8 {
-        let mut out = lightcraft_raster::Rgba8::new(self.width, self.height);
+    pub fn to_rgba8(&self) -> dac_raster::Rgba8 {
+        let mut out = dac_raster::Rgba8::new(self.width, self.height);
         let trc = self.space.trc();
         match &self.samples {
             DeepSamples::U16(v) => {

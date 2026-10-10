@@ -91,7 +91,7 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
         tool(
             "command_run",
             "Run command",
-            "Run any LightCraft command by id with JSON params (see command_list for ids and parameter docs), e.g. {id: \"photo.rate\", params: {rating: 4}}.",
+            "Run any app command by id with JSON params (see command_list for ids and parameter docs), e.g. {id: \"photo.rate\", params: {rating: 4}}.",
             json!({"id": {"type": "string", "description": "Command id"}, "params": {"type": "object", "description": "Command parameters", "additionalProperties": true}}),
             &["id"],
         ),
@@ -133,7 +133,7 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
         tool(
             "run_command",
             "Run command",
-            "Run any LightCraft command by id with JSON params (see list_commands for ids and parameter docs), e.g. {command: \"photo.rate\", params: {rating: 4}}.",
+            "Run any app command by id with JSON params (see list_commands for ids and parameter docs), e.g. {command: \"photo.rate\", params: {rating: 4}}.",
             json!({"command": {"type": "string"}, "params": {"type": "object", "description": "Command parameters", "additionalProperties": true}}),
             &["command"],
         ),
@@ -272,7 +272,7 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
             tool(
                 "screenshot",
                 "Screenshot",
-                "Capture the LightCraft window (after pending renders finish) and return it as an image.",
+                "Capture the app window (after pending renders finish) and return it as an image.",
                 json!({"maxSize": {"type": "integer", "description": "Downscale so the long edge is at most this (default 1600)"}, "format": {"type": "string", "enum": ["png", "jpeg"]}, "path": {"type": "string", "description": "Also save the screenshot here"}}),
                 &[],
             ),
@@ -432,7 +432,7 @@ fn activate(b: &mut dyn Backend, args: &Value) -> Result<(), String> {
 
 fn temp_path(tag: &str) -> std::path::PathBuf {
     static N: AtomicU64 = AtomicU64::new(0);
-    std::env::temp_dir().join(format!("lightcraft-mcp-{}-{}-{tag}.png", std::process::id(), N.fetch_add(1, Ordering::Relaxed)))
+    std::env::temp_dir().join(format!("dac-mcp-{}-{}-{tag}.png", std::process::id(), N.fetch_add(1, Ordering::Relaxed)))
 }
 
 /// Read a PNG the backend wrote, optionally downscale / re-encode as JPEG, and wrap it as image
@@ -448,10 +448,10 @@ fn image_result(file: &std::path::Path, max: Option<u32>, format: &str, save_to:
     let too_big = max.is_some_and(|m| w.max(h) > m);
     let (bytes, w, h) = if jpeg || too_big {
         let opts = match max {
-            Some(m) => lightcraft_codecs::DecodeOptions::fit(m, m),
-            None => lightcraft_codecs::DecodeOptions::default(),
+            Some(m) => dac_codecs::DecodeOptions::fit(m, m),
+            None => dac_codecs::DecodeOptions::default(),
         };
-        let d = match lightcraft_codecs::decode(&bytes, opts) {
+        let d = match dac_codecs::decode(&bytes, opts) {
             Ok(d) => d,
             Err(e) => return ToolResult::error(format!("cannot decode rendered image: {e}")),
         };
@@ -464,7 +464,7 @@ fn image_result(file: &std::path::Path, max: Option<u32>, format: &str, save_to:
         (bytes, w, h)
     };
     if let Some(p) = save_to
-        && let Err(e) = lightcraft_engine::export::write_file(p, &bytes)
+        && let Err(e) = dac_engine::export::write_file(p, &bytes)
     {
         return ToolResult::error(e);
     }

@@ -4,7 +4,7 @@
 //! The numbers are the caches' own bookkeeping (pixels held), not the process's resident size: the
 //! allocator keeps freed pages for reuse and the GPU driver maps device buffers, so `ps`/`time -l`
 //! report more. A binary built with a heap profiler installs [`set_heap_stats`] (e.g.
-//! `lightcraft-cli` with `--features dhat-heap`) to add live/peak heap bytes.
+//! the CLI with `--features dhat-heap`) to add live/peak heap bytes.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock};
@@ -21,9 +21,9 @@ use serde::Serialize;
 /// The rest is headroom for what isn't cached (renders in progress, textures, the UI). An export
 /// batch may, in addition, hold up to twice the budget in photos rendering side by side
 /// ([`export_gate`]): transient memory, given back when the batch ends. Default:
-/// a quarter of the machine's RAM, at most 1.5 GiB (`LIGHTCRAFT_MEMORY_MB` overrides it).
+/// a quarter of the machine's RAM, at most 1.5 GiB (`{ENV_PREFIX}_MEMORY_MB` overrides it).
 pub fn default_budget() -> usize {
-    if let Some(mb) = std::env::var("LIGHTCRAFT_MEMORY_MB").ok().and_then(|v| v.trim().parse::<usize>().ok()).filter(|m| *m >= 64) {
+    if let Some(mb) = dac_brand::env("MEMORY_MB").and_then(|v| v.trim().parse::<usize>().ok()).filter(|m| *m >= 64) {
         return mb << 20;
     }
     let cap = 3usize << 29; // 1.5 GiB
@@ -88,7 +88,7 @@ fn apply(b: usize) {
     if let Some(g) = EXPORT_GATE.get() {
         g.set_limit(export_share(b));
     }
-    lightcraft_gpu::set_pool_limit((b / 8) as u64);
+    dac_gpu::set_pool_limit((b / 8) as u64);
 }
 
 /// Share of the budget for the engine's caches.
@@ -284,7 +284,7 @@ pub fn heap_stats() -> Option<HeapUsage> {
 
 /// The GPU renderer's device buffers.
 pub fn gpu_usage() -> GpuUsage {
-    let g = lightcraft_gpu::memory();
+    let g = dac_gpu::memory();
     GpuUsage { allocated: g.allocated, pooled: g.pooled, retired: g.retired }
 }
 

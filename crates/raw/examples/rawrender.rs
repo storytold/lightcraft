@@ -1,10 +1,10 @@
-//! `cargo run --release -p lightcraft-raw --example rawrender -- IN OUT.tif [bilinear|ppg|ahd] [max_edge]`
+//! `cargo run --release -p dac-raw --example rawrender -- IN OUT.tif [bilinear|ppg|ahd] [max_edge]`
 //!
 //! Quick visual check: develop → as-shot WB + camera matrix → sRGB, oriented, box-downscaled, 8-bit TIFF.
 
-use lightcraft_color::{REC2020, SRGB, transfer::encode_srgb8};
-use lightcraft_raw::{Method, color, decode};
-use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags};
+use dac_color::{REC2020, SRGB, transfer::encode_srgb8};
+use dac_raw::{Method, color, decode};
+use dac_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags};
 
 fn main() {
     let a: Vec<String> = std::env::args().skip(1).collect();
@@ -20,7 +20,7 @@ fn main() {
     let xy = color::as_shot_white_xy(&raw);
     let t = color::camera_transform(&raw, xy);
     let wb = t.wb;
-    lightcraft_raw::highlight::reconstruct(&mut img, wb, 0.99);
+    dac_raw::highlight::reconstruct(&mut img, wb, 0.99);
     let to_srgb = REC2020.to_space(&SRGB).mul(&t.matrix);
     let gain = 2f32.powf(t.baseline_exposure as f32);
     let img = img.map(|p| {

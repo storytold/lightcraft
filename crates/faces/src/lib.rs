@@ -1,4 +1,4 @@
-//! Face models for LightCraft: what a model is ([`ModelManifest`]), whether to trust a description of one
+//! Face models: what a model is ([`ModelManifest`]), whether to trust a description of one
 //! ([`manifest::validate`]), the models we know by hash ([`known`]), and a probe that reads an unknown
 //! `.onnx` file's input and output shapes without running it ([`onnx`]), so installing a model of your
 //! own can be one drop and one licence prompt.

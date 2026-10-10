@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use lightcraft_develop::DevelopSettings;
+use dac_develop::DevelopSettings;
 
 use super::*;
 
@@ -23,7 +23,7 @@ fn apply_and_inverse_roundtrip() {
         Op::SetLabel { id: a, label: Some(ColorLabel::Red) },
         Op::SetDevelop {
             id: a,
-            settings: Arc::new(DevelopSettings { treatment: lightcraft_develop::Treatment::Bw, ..Default::default() }),
+            settings: Arc::new(DevelopSettings { treatment: dac_develop::Treatment::Bw, ..Default::default() }),
             label: "B&W".into(),
             edited: Some("x".into()),
         },
@@ -58,7 +58,18 @@ fn albums_and_folders() {
     let a = photo(&mut c, "a.jpg", "2026-04-01");
     let f = c.alloc_album_id();
     c.apply(Op::AddAlbum {
-        album: Album { id: f, name: "Trips".into(), parent: None, folder: true, photos: vec![], cover: None, smart: None, quick: false, order: None },
+        album: Album {
+            id: f,
+            name: "Trips".into(),
+            parent: None,
+            folder: true,
+            photos: vec![],
+            cover: None,
+            smart: None,
+            quick: false,
+            order: None,
+            creation: None,
+        },
     })
     .unwrap();
     let al = c.alloc_album_id();
@@ -73,6 +84,7 @@ fn albums_and_folders() {
             smart: None,
             quick: false,
             order: None,
+            creation: None,
         },
     })
     .unwrap();
@@ -312,7 +324,7 @@ fn folder_identity_ignores_spelling() {
 /// first; pets and unnamed faces are not people; the `person` filter and `person:` token match.
 #[test]
 fn people_from_named_face_regions() {
-    use lightcraft_meta::{Rect, Region, RegionKind};
+    use dac_meta::{Rect, Region, RegionKind};
     let region = |name: Option<&str>, kind: RegionKind| Region {
         rect: Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 },
         kind,
@@ -381,9 +393,9 @@ fn empty_regions_are_not_serialized_and_default_when_missing() {
     let back: Meta = serde_json::from_value(v).unwrap();
     assert!(back.regions.is_empty());
     let mut with = m.clone();
-    with.regions.push(lightcraft_meta::Region {
-        rect: lightcraft_meta::Rect { x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.2 },
-        kind: lightcraft_meta::RegionKind::Face,
+    with.regions.push(dac_meta::Region {
+        rect: dac_meta::Rect { x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.2 },
+        kind: dac_meta::RegionKind::Face,
         name: Some("A".into()),
         description: None,
     });
@@ -466,11 +478,11 @@ fn set_embedded_lens_is_undoable_and_journaled() {
         photo: Box::new(Photo::new(a, Source::File { path: "/x.rw2".into() }, "x.rw2", "RW2", 4000, 3000, "2026-10-06T00:00:00")),
     })
     .unwrap();
-    let lens = lightcraft_develop::EmbeddedLens { warp: Some(Default::default()), vignette: None };
+    let lens = dac_develop::EmbeddedLens { warp: Some(Default::default()), vignette: None };
     let op = Op::SetEmbeddedLens { id: a, lens: Some(Box::new(lens)) };
     let op: Op = serde_json::from_str(&serde_json::to_string(&op).unwrap()).unwrap();
     let inv = c.apply(op).unwrap();
-    assert_eq!(c.photo(a).unwrap().embedded_lens, Some(lens));
+    assert_eq!(c.photo(a).unwrap().embedded_lens, Some(Box::new(lens)));
     let inv: Op = serde_json::from_str(&serde_json::to_string(&inv).unwrap()).unwrap();
     c.apply(inv).unwrap();
     assert_eq!(c.photo(a).unwrap().embedded_lens, None);
@@ -672,4 +684,21 @@ fn undated_photos_group_under_unknown_date_and_sort_together() {
     assert_eq!(c.query(&filter_day, &Sort::default()), vec![]);
     let filter_year = Filter { date: Some("2026".into()), ..Default::default() };
     assert_eq!(c.query(&filter_year, &Sort { key: SortKey::CaptureDate, ascending: false, ..Default::default() }), vec![p_dated2, p_dated1]);
+}
+
+#[test]
+fn saved_locations_apply_undo_and_privacy() {
+    let mut c = Catalog::new();
+    let home = dac_geo::SavedLocation::new("Home", 48.85, 2.35, 300.0, true).unwrap();
+    let inv = c.apply(Op::SetSavedLocation { name: "home".into(), location: Some(home.clone()) }).unwrap();
+    assert_eq!(c.saved_location("HOME"), Some(&home));
+    assert!(c.is_private_location((48.851, 2.351)));
+    assert!(!c.is_private_location((48.9, 2.35)));
+    c.apply(inv).unwrap();
+    assert!(c.saved_location("home").is_none());
+    assert!(!c.is_private_location((48.851, 2.351)));
+    // invalid locations are refused, not stored
+    let bad = dac_geo::SavedLocation { radius: f64::NAN, ..home };
+    assert!(c.apply(Op::SetSavedLocation { name: "x".into(), location: Some(bad) }).is_err());
+    assert!(c.apply(Op::SetSavedLocation { name: " ".into(), location: None }).is_err());
 }

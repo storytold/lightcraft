@@ -6,10 +6,10 @@ use egui::{Align2, RichText, vec2};
 
 use crate::theme::Tokens;
 use crate::widgets::register;
-use crate::{LightcraftApp, QuitPrompt};
+use crate::{DacApp, QuitPrompt};
 
 /// Collect the library's settings-file warnings (each is shown once).
-pub fn logic(app: &mut LightcraftApp) {
+pub fn logic(app: &mut DacApp) {
     let new = app.session.take_library_warnings();
     app.notices.extend(new);
 }
@@ -17,7 +17,7 @@ pub fn logic(app: &mut LightcraftApp) {
 /// The window may close now (`true`), or the quit prompt is shown (`false`). Running tasks that
 /// can be cancelled (an import, an export…) are asked about first; then changes that couldn't be
 /// written are retried — the log, then a snapshot of everything in memory.
-pub fn may_close(app: &mut LightcraftApp) -> bool {
+pub fn may_close(app: &mut DacApp) -> bool {
     if app.quit_confirmed {
         return true;
     }
@@ -99,7 +99,7 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
     chosen
 }
 
-pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn show(app: &mut DacApp, ctx: &egui::Context) {
     if let Some(QuitPrompt::Tasks(text)) = app.quit_prompt.clone() {
         let buttons = [("quitAnyway", "Quit Anyway", Choice::QuitAnyway), ("quitCancel", "Cancel", Choice::Cancel)];
         let Some(i) = window(ctx, "quit-tasks", "Quit while tasks are running?", &text, &buttons) else { return };

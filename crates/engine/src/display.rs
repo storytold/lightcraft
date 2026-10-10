@@ -7,10 +7,10 @@
 //! for sRGB (thumbnails, cached previews, embedded camera JPEGs) is converted to it
 //! ([`present`]). Histograms and the preview caches stay sRGB, and exports never use it.
 
-pub use lightcraft_codecs::display::DisplayKind;
-use lightcraft_codecs::display::{DisplayProfile, MAX_PROFILE_BYTES};
-use lightcraft_pipeline::DisplaySpace;
-use lightcraft_raster::{Histogram, Rgba8};
+pub use dac_codecs::display::DisplayKind;
+use dac_codecs::display::{DisplayProfile, MAX_PROFILE_BYTES};
+use dac_pipeline::DisplaySpace;
+use dac_raster::{Histogram, Rgba8};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -54,7 +54,7 @@ impl Display {
 
     /// For `app.displayProfile` and Settings: path, description, kind, primaries (xy).
     pub fn describe(&self) -> Value {
-        let to_xyz = lightcraft_color::REC2020.to_xyz().mul(&self.profile.to_rec2020).0;
+        let to_xyz = dac_color::REC2020.to_xyz().mul(&self.profile.to_rec2020).0;
         let xy = |c: usize| {
             let (x, y, z) = (to_xyz[0][c], to_xyz[1][c], to_xyz[2][c]);
             let s = x + y + z;
@@ -130,7 +130,7 @@ mod tests {
     use super::*;
 
     fn p3() -> Display {
-        Display::from_bytes("p3.icc", &lightcraft_codecs::icc::write_named(lightcraft_codecs::NamedSpace::DisplayP3)).unwrap()
+        Display::from_bytes("p3.icc", &dac_codecs::icc::write_named(dac_codecs::NamedSpace::DisplayP3)).unwrap()
     }
 
     fn picture(w: usize, h: usize) -> Rgba8 {
@@ -154,10 +154,10 @@ mod tests {
 
     #[test]
     fn load_reports_and_rejects() {
-        let dir = std::env::temp_dir().join(format!("lightcraft-display-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("app-display-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let good = dir.join("p3.icc");
-        std::fs::write(&good, lightcraft_codecs::icc::write_named(lightcraft_codecs::NamedSpace::DisplayP3)).unwrap();
+        std::fs::write(&good, dac_codecs::icc::write_named(dac_codecs::NamedSpace::DisplayP3)).unwrap();
         let bad = dir.join("bad.icc");
         std::fs::write(&bad, b"not a profile").unwrap();
 

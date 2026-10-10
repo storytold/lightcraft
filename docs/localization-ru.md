@@ -1,4 +1,6 @@
-# LightCraft на русском
+# Русский интерфейс
+
+> `<PREFIX>`, `<cli>`, `<binary>`: [`brand.toml`](../brand.toml).
 
 Выберите **Правка → Язык → Русский** или **Настройки → Общие → Язык**. Выбор применяется сразу
 и сохраняется для следующего запуска (`language: "ru"` в `ui.json`).
@@ -15,9 +17,12 @@
 
 Постоянные тексты: `crates/ui-egui/locales/ru.json`. Сообщения со значениями:
 `crates/ui-egui/locales/ru-formats.json`. Английские ключи не меняются; заполнители проверяются
+(Название продукта в переводах не пишется: используйте `{app}` (отображаемое имя из `brand.toml`),
+`{cli}` (программа командной строки) и `{env}` (префикс переменных окружения) без изменений и без
+склонения, например `About {app}` → `О программе {app}`.)
 компилятором Rust при сборке. Английские окончания множественного числа скрываются через `{:.0}`.
 
 ```sh
-cargo test -p lightcraft-ui-egui i18n::tests -- --nocapture
-LIGHTCRAFT_LANGUAGE=ru lightcraft-cli snapshot --demo -o russian.png --size 1600x1000
+cargo test -p dac-ui-egui i18n::tests -- --nocapture
+<PREFIX>_LANGUAGE=ru <cli> snapshot --demo -o russian.png --size 1600x1000
 ```

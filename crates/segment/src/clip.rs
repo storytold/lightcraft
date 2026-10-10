@@ -1,7 +1,7 @@
 //! The CLIP text encoder (24 layers, 1024 wide, causal) that turns a prompt into the token
 //! features SAM 3's detector attends to.
 //!
-//! Modified work (Apache License 2.0, §4(b)): ported by the LightCraft contributors in 2026 from
+//! Modified work (Apache License 2.0, §4(b)): ported by the project contributors in 2026 from
 //! the Python/PyTorch SAM 3 code of Hugging Face Transformers (`models/sam3/modeling_sam3.py`, CLIP text model), Copyright The HuggingFace
 //! Team and Meta Platforms, Inc.; translated to Rust on candle and restructured. See NOTICE.
 

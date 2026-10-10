@@ -16,8 +16,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
 
-use lightcraft_develop::SegMask;
-use lightcraft_segment::{
+use dac_develop::SegMask;
+use dac_segment::{
     Encoded, Sam3,
     remote::{self, Operation, Request, text_logits},
 };
@@ -32,7 +32,7 @@ pub const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
 pub enum Kind {
     /// Load the model and encode the photo (so the first click is fast).
     Prepare,
-    Clicks(Vec<lightcraft_segment::Click>),
+    Clicks(Vec<dac_segment::Click>),
     Text(String),
     /// A zoomed-in pass over `region` (normalized) of the photo, rendered by the job's `render`.
     Detail {
@@ -337,8 +337,8 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
         client.key = Some(job.key);
     }
     Ok(logits.map(|l| match region {
-        Some(r) => SegMask::from_logits_in(lightcraft_segment::MASK_SIDE, &l, r),
-        None => SegMask::from_logits(lightcraft_segment::MASK_SIDE, &l),
+        Some(r) => SegMask::from_logits_in(dac_segment::MASK_SIDE, &l, r),
+        None => SegMask::from_logits(dac_segment::MASK_SIDE, &l),
     }))
 }
 
@@ -350,7 +350,7 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job) -> Result<Option<S
         }
         return result.map_err(|e| format!("Remote SAM 3 failed: {e}. Check the worker and SSH tunnel, then retry."));
     }
-    let side = lightcraft_segment::MASK_SIDE;
+    let side = dac_segment::MASK_SIDE;
     match std::mem::replace(&mut job.kind, Kind::Prepare) {
         Kind::Prepare => {
             encoded(state, shared, job)?;
@@ -379,11 +379,11 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job) -> Result<Option<S
             }
             let logits = match prompt {
                 Prompt::Clicks(clicks) => {
-                    let inside: Vec<lightcraft_segment::Click> = clicks
+                    let inside: Vec<dac_segment::Click> = clicks
                         .iter()
                         .map(|c| ((c.at.x - region[0]) / rw, (c.at.y - region[1]) / rh, c.include))
                         .filter(|(x, y, _)| (0.0..=1.0).contains(x) && (0.0..=1.0).contains(y))
-                        .map(|(x, y, positive)| lightcraft_segment::Click { x: x as f32, y: y as f32, positive })
+                        .map(|(x, y, positive)| dac_segment::Click { x: x as f32, y: y as f32, positive })
                         .collect();
                     if !inside.iter().any(|c| c.positive) {
                         return Ok(None);
@@ -452,10 +452,10 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let (jtx, jrx) = mpsc::channel();
         let clicks = |n: usize| Tag::Clicks {
-            photo: lightcraft_catalog::PhotoId(1),
+            photo: dac_catalog::PhotoId(1),
             mask: 1,
             comp: 0,
-            hint: vec![lightcraft_geom::Point::new(0.5, 0.5); n],
+            hint: vec![dac_geom::Point::new(0.5, 0.5); n],
             exclude: vec![],
         };
         for n in 1..=3 {

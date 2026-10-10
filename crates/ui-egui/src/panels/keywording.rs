@@ -2,16 +2,16 @@
 //! not only the active one's, as Lightroom Classic shows them. A keyword only some of the selected
 //! photos have is marked as such.
 
-use lightcraft_catalog::{Catalog, PhotoId};
+use dac_catalog::{Catalog, PhotoId};
 use serde_json::json;
 
-use crate::LightcraftApp;
+use crate::DacApp;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
 /// The Keywording box's view: the keywords (chips), them with the keywords containing them, or
 /// what exported files will carry.
-pub fn view_switch(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn view_switch(app: &mut DacApp, ui: &mut egui::Ui) {
     use crate::state::KeywordingView as V;
     ui.horizontal_wrapped(|ui| {
         for (view, id, label) in
@@ -28,7 +28,7 @@ pub fn view_switch(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
 /// A read-only view of the selection's keywords: with the keywords containing them, or what
 /// exported files will carry. One only some of the photos have is marked with an asterisk.
-pub fn names_row(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn names_row(app: &mut DacApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let selection = app.session.targets(&serde_json::Value::Null);
     let export = app.ui.keywording_view == crate::state::KeywordingView::WillExport;
@@ -95,7 +95,7 @@ fn chip(ui: &mut egui::Ui, path: &str, partial: bool, cross: bool) -> (egui::Res
 
 /// A chip's menu: it acts on the selected photos (deleting a keyword from the whole library is the
 /// Keyword List's).
-fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, chip: &Chip) {
+fn menu(app: &mut DacApp, ui: &mut egui::Ui, chip: &Chip) {
     let item = |ui: &mut egui::Ui, id: &str, label: &str| {
         let r = ui.button(label);
         register(ui.ctx(), format!("keywordChipMenu:{id}"), r.rect);
@@ -119,7 +119,7 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, chip: &Chip) {
 
 /// The selection's keywords as chips: the name (right-click for its menu), and × to take it off
 /// every selected photo. One only some of them have is marked with an asterisk.
-pub fn chip_row(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn chip_row(app: &mut DacApp, ui: &mut egui::Ui) {
     let selection = app.session.targets(&serde_json::Value::Null);
     let chips = app.caches.keyword_chips(&app.session.catalog, &selection);
     ui.horizontal_wrapped(|ui| {
@@ -207,7 +207,7 @@ pub(crate) fn will_export(catalog: &Catalog, photos: &[PhotoId]) -> Vec<Chip> {
 /// containing them, each with how many of the selected photos have it (itself or below it); by
 /// name.
 pub(crate) fn with_containing(catalog: &Catalog, photos: &[PhotoId]) -> Vec<Chip> {
-    use lightcraft_catalog::keywords::{SEP, clean};
+    use dac_catalog::keywords::{SEP, clean};
     let photos = distinct(catalog, photos);
     let mut have: std::collections::BTreeMap<String, (String, usize)> = Default::default();
     let mut seen = std::collections::HashSet::new();
@@ -225,7 +225,7 @@ pub(crate) fn with_containing(catalog: &Catalog, photos: &[PhotoId]) -> Vec<Chip
 }
 
 /// The selected photos, each once, those the library has: what "N of M" counts.
-pub(crate) fn distinct<'a>(catalog: &'a Catalog, photos: &[PhotoId]) -> Vec<&'a lightcraft_catalog::Photo> {
+pub(crate) fn distinct<'a>(catalog: &'a Catalog, photos: &[PhotoId]) -> Vec<&'a dac_catalog::Photo> {
     let mut seen = std::collections::HashSet::new();
     photos.iter().filter(|id| seen.insert(**id)).filter_map(|id| catalog.photo(*id).map(|p| &**p)).collect()
 }
@@ -233,7 +233,7 @@ pub(crate) fn distinct<'a>(catalog: &'a Catalog, photos: &[PhotoId]) -> Vec<&'a 
 /// The keywords of the selected `photos`, each once whatever its case, with how many of them have
 /// it; by name.
 pub(crate) fn chips(catalog: &Catalog, photos: &[PhotoId]) -> Vec<Chip> {
-    use lightcraft_catalog::keywords::clean;
+    use dac_catalog::keywords::clean;
     let photos = distinct(catalog, photos);
     // by lower-case keyword: as first seen, and the photos with it (each once)
     let mut have: std::collections::BTreeMap<String, (String, usize)> = Default::default();
@@ -254,7 +254,7 @@ pub(crate) fn chips(catalog: &Catalog, photos: &[PhotoId]) -> Vec<Chip> {
 
 #[cfg(test)]
 mod tests {
-    use lightcraft_catalog::{Op, Photo, Source};
+    use dac_catalog::{Op, Photo, Source};
 
     use super::*;
 
@@ -298,7 +298,7 @@ mod tests {
     /// selected photos carry it.
     #[test]
     fn will_export_shows_what_exported_files_carry() {
-        use lightcraft_catalog::keywords::KeywordInfo;
+        use dac_catalog::keywords::KeywordInfo;
         let (mut c, ids) = library(&[&["Places|Lisbon", "draft"], &["Places|Lisbon"]]);
         let out = KeywordInfo { include_on_export: false, ..KeywordInfo::default() };
         c.apply(Op::SetKeyword { path: "Places".into(), info: Some(out.clone()) }).unwrap();
@@ -341,7 +341,7 @@ mod tests {
     /// A keyword the Keyword List has is spelled as it spells it.
     #[test]
     fn a_listed_keyword_is_spelled_as_listed() {
-        use lightcraft_catalog::keywords::KeywordInfo;
+        use dac_catalog::keywords::KeywordInfo;
         let (mut c, ids) = library(&[&["beach"]]);
         c.apply(Op::SetKeyword { path: "Beach".into(), info: Some(KeywordInfo::default()) }).unwrap();
         assert_eq!(shown(&chips(&c, &ids)), [("Beach", 1, 1)]);

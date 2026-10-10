@@ -25,7 +25,7 @@ pub enum Role {
 #[serde(rename_all = "camelCase")]
 pub enum Commercial {
     Yes,
-    /// Research or personal use only. Never bundled or redistributed by LightCraft.
+    /// Research or personal use only. Never bundled or redistributed by the app.
     No,
     /// The licence or the training data is unclear: the user is told so before installing.
     Unknown,
@@ -204,7 +204,7 @@ fn ratio(field: &'static str, v: Option<f32>, lo: f32, hi: f32) -> Result<(), Ma
     }
 }
 
-/// Check a manifest from any source. Everything the rest of LightCraft relies on (sizes it will allocate,
+/// Check a manifest from any source. Everything the rest of the app relies on (sizes it will allocate,
 /// numbers it will divide by, text it will show) is bounded here.
 pub fn validate(m: &ModelManifest) -> Result<(), ManifestError> {
     if !valid_id(&m.id) {

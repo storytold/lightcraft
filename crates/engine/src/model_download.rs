@@ -1,7 +1,7 @@
 //! Downloading a denoise model explicitly requested after showing its terms.
 //!
-//! The transfer is [`lightcraft_fetch`] (pure-Rust HTTPS with resume, size and SHA-256 checks), on a background thread,
-//! so the UI never waits for the network. Only a model listed in [`lightcraft_denoise::known::Download`] can be fetched:
+//! The transfer is [`dac_fetch`] (pure-Rust HTTPS with resume, size and SHA-256 checks), on a background thread,
+//! so the UI never waits for the network. Only a model listed in [`dac_denoise::known::Download`] can be fetched:
 //! the address and hash come from our pinned catalog or the user's model catalog, and no token is sent with it. What arrives
 //! matches the model's recorded size and SHA-256 or it is thrown away; it then waits in a staging folder until the model
 //! is installed (`denoise.models.install`, or by itself once the user has accepted the model's terms in the download).
@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use crate::activity::{Activity, Cancel, TaskHandle, Unit};
 
-use lightcraft_denoise::known::Download;
+use dac_denoise::known::Download;
 
 /// The folder inside the models folder where a downloaded file waits to be installed. Its name starts with a dot, so it
 /// can never be a model's own folder (ids start with a letter or digit).
@@ -178,8 +178,8 @@ impl Drop for Downloads {
 
 /// What went wrong, in words the user can act on.
 #[cfg(not(target_arch = "wasm32"))]
-fn explain(e: &lightcraft_fetch::DownloadError) -> String {
-    use lightcraft_fetch::DownloadError;
+fn explain(e: &dac_fetch::DownloadError) -> String {
+    use dac_fetch::DownloadError;
     match e {
         DownloadError::AllMirrorsFailed { errors, .. } => {
             let detail: String = errors.join("; ").chars().take(300).collect();
@@ -191,9 +191,9 @@ fn explain(e: &lightcraft_fetch::DownloadError) -> String {
 
 /// Fetch `spec` from its exact URL into `staging`, check it and leave it there.
 #[cfg(not(target_arch = "wasm32"))]
-fn fetch(spec: &Download, mirror: &str, staging: &Path, shared: &Shared) -> Result<(), lightcraft_fetch::DownloadError> {
-    let file = lightcraft_fetch::FileSpec { name: &spec.file_name, size: Some(spec.size_bytes), sha256: Some(&spec.sha256), max: spec.size_bytes };
-    lightcraft_fetch::download_url(&file, mirror, staging, &lightcraft_fetch::Options::default(), &shared.cancel, &mut |p| {
+fn fetch(spec: &Download, mirror: &str, staging: &Path, shared: &Shared) -> Result<(), dac_fetch::DownloadError> {
+    let file = dac_fetch::FileSpec { name: &spec.file_name, size: Some(spec.size_bytes), sha256: Some(&spec.sha256), max: spec.size_bytes };
+    dac_fetch::download_url(&file, mirror, staging, &dac_fetch::Options::default(), &shared.cancel, &mut |p| {
         shared.set(State::Running { bytes: p.done.min(spec.size_bytes), total: spec.size_bytes });
     })
 }
@@ -210,7 +210,7 @@ fn run(spec: &Download, mirror: &str, staging: &Path, shared: &Shared) {
     match fetch(spec, mirror, staging, shared) {
         Ok(()) => shared.set(State::Done { path: target, sha256: spec.sha256.to_string() }),
         #[cfg(not(target_arch = "wasm32"))]
-        Err(lightcraft_fetch::DownloadError::Cancelled) => {
+        Err(dac_fetch::DownloadError::Cancelled) => {
             let _ = std::fs::remove_file(&part);
             shared.set(State::Cancelled);
         }
@@ -229,7 +229,7 @@ fn run(spec: &Download, mirror: &str, staging: &Path, shared: &Shared) {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
-    use lightcraft_denoise::hash::sha256_hex;
+    use dac_denoise::hash::sha256_hex;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
 

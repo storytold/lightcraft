@@ -37,7 +37,7 @@
 //! the same recurrence from its own first 127 words, but one sample per key cannot show how a seed follows from a
 //! key, so files with another key get `None`.
 
-use lightcraft_tiff::{ByteOrder, Ifd, ParseOptions, tags as t};
+use dac_tiff::{ByteOrder, Ifd, ParseOptions, tags as t};
 
 /// `SR2Private` tags.
 const SUBIFD_OFFSET: u16 = 0x7200;
@@ -97,7 +97,7 @@ impl SubIfd {
     pub(crate) fn read(bytes: &[u8], ifd0: &Ifd, order: ByteOrder) -> Option<Self> {
         let at = order.read_u32(ifd0.bytes(t::DNG_PRIVATE_DATA)?, 0)?;
         let opts = ParseOptions { max_ifds: 1, max_depth: 0, follow_children: false, ..Default::default() };
-        let (private, _) = lightcraft_tiff::parse_ifd_at(bytes, u64::from(at), order, 0, false, &opts).ok()?;
+        let (private, _) = dac_tiff::parse_ifd_at(bytes, u64::from(at), order, 0, false, &opts).ok()?;
         if private.bytes(SUBIFD_KEY)? != KEY {
             return None;
         }
@@ -152,7 +152,7 @@ impl SubIfd {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use lightcraft_tiff::ByteOrder::{Big, Little};
+    use dac_tiff::ByteOrder::{Big, Little};
 
     /// An `SR2SubIFD` block for file offset `start`, encrypted: SHORT/SSHORT entries `(tag, type, values)`, values
     /// of more than two shorts stored after the table at file offsets, as Sony does.

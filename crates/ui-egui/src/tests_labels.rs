@@ -2,25 +2,25 @@
 
 use std::time::Duration;
 
+use dac_catalog::{Op, Photo, PhotoId, Source};
 use egui::{Color32, ColorImage, Pos2};
-use lightcraft_catalog::{Op, Photo, PhotoId, Source};
 use serde_json::json;
 
 use crate::headless::Headless;
 use crate::state::ViewMode;
-use crate::{LightcraftApp, Services};
+use crate::{DacApp, Services};
 
 const SETTLE: Duration = Duration::from_secs(120);
 
 fn app(view: ViewMode) -> Headless {
-    let mut s = lightcraft_engine::Session::new();
+    let mut s = dac_engine::Session::new();
     for id in 1..=6 {
         let p = Photo::new(PhotoId(id), Source::Demo { scene: 1 }, &format!("{id}.jpg"), "JPEG", 640, 480, "2026-10-08");
         s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
     s.execute("library.sort", &json!({"key": "fileName", "ascending": true, "group": "none"})).unwrap();
     s.execute("library.select", &json!({"ids": [1]})).unwrap();
-    let mut h = Headless::new(LightcraftApp::new(s, Services { png: None, ..Default::default() }), [1200.0, 800.0], 1.0);
+    let mut h = Headless::new(DacApp::new(s, Services { png: None, ..Default::default() }), [1200.0, 800.0], 1.0);
     h.app.ui.view = view;
     h.app.ui.right = crate::state::RightPanel::None;
     h.app.ui.thumb_size = 160.0;

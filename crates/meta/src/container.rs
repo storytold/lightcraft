@@ -10,7 +10,7 @@
 //! - Canon CR3 (ISO base media file, see [`crate::cr3`]): `CMT1`/`CMT2`/`CMT4` merged into one Exif block; the
 //!   XMP `uuid` box.
 
-use lightcraft_tiff::{Tiff, tags};
+use dac_tiff::{Tiff, tags};
 
 /// Metadata blocks found in a file.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -53,8 +53,8 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
             xmp_extended: None,
             icc: ifd0.bytes(tags::ICC_PROFILE).map(|b| b.to_vec()),
             iptc: ifd0.value(tags::IPTC_NAA).map(|v| match v {
-                lightcraft_tiff::Value::Byte(b) | lightcraft_tiff::Value::Undefined(b) => b.clone(),
-                other => lightcraft_tiff::writer::encode(t.order, other),
+                dac_tiff::Value::Byte(b) | dac_tiff::Value::Undefined(b) => b.clone(),
+                other => dac_tiff::writer::encode(t.order, other),
             }),
         }
     } else {
@@ -197,7 +197,7 @@ pub fn webp_chunks(b: &[u8]) -> Embedded {
 mod tests {
     use super::*;
     use crate::exif::tests::sample_exif;
-    use lightcraft_tiff::ByteOrder;
+    use dac_tiff::ByteOrder;
 
     fn seg(marker: u8, payload: &[u8]) -> Vec<u8> {
         let mut v = vec![0xff, marker];

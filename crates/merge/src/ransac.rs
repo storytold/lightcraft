@@ -2,7 +2,7 @@
 //! Geometry", §4.4) and RANSAC (Fischler & Bolles 1981) with the adaptive iteration count.
 //! Deterministic: the sampler is a fixed-seed xorshift, so results are reproducible.
 
-use lightcraft_geom::{Homography, Point};
+use dac_geom::{Homography, Point};
 
 use crate::linalg::sym_eigen;
 

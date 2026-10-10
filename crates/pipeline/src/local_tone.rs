@@ -1,6 +1,6 @@
 //! The camera's local tone mapping: a raw's DNG `ProfileGainTableMap` (Apple ProRAW), rendered
 //! when the photo's Profile option "Camera local tone mapping" is on. Off by default: Lightroom
-//! Classic renders ProRAW without it (see `lightcraft_raw::gaintable`).
+//! Classic renders ProRAW without it (see `dac_raw::gaintable`).
 //!
 //! The map is a per-pixel gain that depends on the pixel's position in the raw's active area and
 //! on its colour after the baseline exposure (linear ProPhoto). The source the pipeline gets is
@@ -10,13 +10,13 @@
 //! that follows. Files that also carry a `ProfileLookTable` get the gain after the table instead of
 //! before it (DNG 1.7.1); Apple ProRAW has none.
 
-use lightcraft_color::{D50, D65, PROPHOTO, REC2020, bradford};
-use lightcraft_geom::Point;
-use lightcraft_raster::Rgb32f;
-use lightcraft_raw::gaintable::{GainTableMap, SourcePlacement};
+use dac_color::{D50, D65, PROPHOTO, REC2020, bradford};
+use dac_geom::Point;
+use dac_raster::Rgb32f;
+use dac_raw::gaintable::{GainTableMap, SourcePlacement};
 
 use crate::{Plan, SourceInfo};
-use lightcraft_develop::DevelopSettings;
+use dac_develop::DevelopSettings;
 
 /// A raw's gain table map and where its developed source sits in the active area.
 #[derive(Clone, Debug, PartialEq)]

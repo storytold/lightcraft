@@ -1,4 +1,4 @@
-# What's new in LightCraft
+# What's new in {app}
 
 ## October 2026
 
@@ -51,7 +51,7 @@
 - File ▸ Import Keywords… and Export Keywords… read and write keyword list files as Lightroom Classic does (a keyword
   a line, a tab per level, synonyms in braces, keywords left out of export in brackets). Capture One, darktable, Adobe
   Bridge and Photo Supreme (its Formatted Vocabulary File) use the same files, so keyword lists move between them and
-  LightCraft. Importing adds the keywords you don't have, in one undo step; a file it can't read says which line, or
+  the app. Importing adds the keywords you don't have, in one undo step; a file it can't read says which line, or
   to save it as UTF-8. Exporting warns about keywords Capture One won't import, and names any keyword the format can't
   hold (such as a name in brackets), which it leaves out so the file always reads back.
 
@@ -92,7 +92,7 @@
   no longer saves it). Return in those dialogs now confirms them, and their name opens selected. More fields will
   follow.
 - On Windows and Linux, Ctrl+C outside a text field copies edit settings and Ctrl+V pastes them (⇧Ctrl+V: Paste
-  Selected Settings). Ctrl+V only reaches LightCraft while the system clipboard holds text; otherwise use Edit ▸ Paste Edit
+  Selected Settings). Ctrl+V only reaches the app while the system clipboard holds text; otherwise use Edit ▸ Paste Edit
   Settings.
 
 ### Synchronize Folder
@@ -108,7 +108,7 @@
 - Right-click a folder (or a disk other than the startup disk) in the sidebar's Folders section ▸ Set Color Label ▸ a colour or None. The row
   shows the label's dot before its photo count. Agents use `folder.label` (`path`, `label`); `library.folders`
   reports each row's `label`.
-- A label follows its folder when it is renamed or moved in LightCraft, together with the labels of the folders
+- A label follows its folder when it is renamed or moved in the app, together with the labels of the folders
   inside it; undo and redo carry them back and forth.
 - The catalog format is now version 4 (`Catalog.folder_records`, `Op::SetFolderRecord`). Once this version has
   opened a library, older versions refuse it, as with every format change.
@@ -197,11 +197,11 @@
   M50, R100 and R8. CR3 files the decoder can't read yet still open from their embedded JPEG, as before.
 - Canon EOS R7 C-RAW files develop from their sensor data too, instead of opening from their embedded JPEG. For R7
   C-RAWs imported earlier, Photo ▸ Reload from Disk picks up the raw data.
-- Canon CRW, Minolta MRW, Sigma X3F, Kodak KDC, Leaf MOS and Epson ERF files that LightCraft can't decode yet
+- Canon CRW, Minolta MRW, Sigma X3F, Kodak KDC, Leaf MOS and Epson ERF files that {app} can't decode yet
   now import as "preview only" with their embedded JPEG instead of failing. A raw whose data is damaged but whose
   preview is intact does the same.
 - Raw files whose raw data sits in a private block of a TIFF (Phase One / Leaf IIQ, Canon EOS-1D / 1Ds and Kodak DCS
-  TIFFs) are no longer opened as a thumbnail-sized ordinary image. They are recognised as raws LightCraft can't decode
+  TIFFs) are no longer opened as a thumbnail-sized ordinary image. They are recognised as raws {app} can't decode
   yet and import as "preview only", with the reason.
 - Sony ILCE-7M4 downsized lossless ARWs now decode subsampled YCbCr tiles into linear RGB,
   preserving RAW editing & full-resolution export instead of using embedded JPEG previews.
@@ -211,11 +211,11 @@
 ### Lightroom Classic catalogs
 - File → Import Lightroom Catalog… opens `.lrcat` directly, with originals referenced in place.
   Ratings, flags, labels, keywords, collections/sets, virtual copies and supported edits migrate;
-  existing LightCraft edits are preserved by default. Source settings/history are archived, unsupported
+  existing {app} edits are preserved by default. Source settings/history are archived, unsupported
   fields are reported, and the original Lightroom database stays read-only. Rendering is approximate.
 
 ### Formats
-- HEIC / HEIF photos (iPhone and Mac) open now: the optional `lightcraft-heif` crate (heic-rs, pure Rust) behind
+- HEIC / HEIF photos (iPhone and Mac) open now: the optional `dac-heif` crate (heic-rs, pure Rust) behind
   codecs' `heif` feature — 8- and 10-bit, alpha, grid tiles, the container's rotation/mirror/crop, ICC, EXIF and XMP.
   Off by default (HEVC patents are the distributor's call, same as PhotoCraft); official builds pass `--features heif`.
 - HEIC colours now match libheif to within one code value (they were up to ~10 off): the HEVC stream's own
@@ -282,8 +282,8 @@
 )
 
 ### Reliability
-- The Windows installer asks where to install LightCraft (Program Files by default; upgrades keep the folder you
-  chose) and ends on a page saying it was installed, with a "Launch LightCraft" box. It used to finish without a word,
+- The Windows installer asks where to install the app (Program Files by default; upgrades keep the folder you
+  chose) and ends on a page saying it was installed, with a "Launch <app>" box. It used to finish without a word,
   so a successful install looked like nothing had happened (issues #18, #399). Silent installs (`/qn`, `/passive`)
   show no dialogs and take `INSTALLFOLDER=...`.
 - If the desktop app can't open its window (for example when no graphics device can be used), it now says so in a
@@ -295,25 +295,25 @@
 - `--memory` sessions keep their promise to save nothing (issues #164, #169): UI changes made in one no longer
   land in `ui.json` (where they replaced the saved settings), and the GPU crash sentinel no longer creates the
   settings folder there. The same goes for the temporary session offered when the library can't be opened.
-- The desktop app keeps a log file: `logs/lightcraft.log` in its settings folder (Linux `~/.config/lightcraft/logs/`),
+- The desktop app keeps a log file: a `logs/` folder in its settings folder,
   with the logs of the two previous runs beside it, so warnings and crashes of a run started from a desktop menu or the
-  Dock can be attached to a bug report. `LIGHTCRAFT_LOG` works as before; `RUST_LOG` takes env_logger-style
+  Dock can be attached to a bug report. `{env}_LOG` works as before; `RUST_LOG` takes env_logger-style
   directives. See README → Quick start → Logs.
 - Help → Open Log Folder shows that log file in the file manager (Finder, Explorer, or the folder on Linux), so it
   can be attached to a report without hunting for the settings folder (issue #260).
-- `lightcraft-cli` logs warnings on stderr too (issue #168); `LIGHTCRAFT_LOG` or `RUST_LOG` picks another level.
-- LightCraft no longer crashes at launch on Windows PCs whose Vulkan driver is broken (issue #136, e.g. some Intel UHD
+- `{cli}` logs warnings on stderr too (issue #168); `{env}_LOG` or `RUST_LOG` picks another level.
+- {app} no longer crashes at launch on Windows PCs whose Vulkan driver is broken (issue #136, e.g. some Intel UHD
   630 drivers): on Windows the window and GPU rendering use DirectX 12 only and never load the Vulkan driver unless
-  asked to. `LIGHTCRAFT_GPU_BACKEND=dx12 | vulkan | metal | off` (or wgpu's `WGPU_BACKEND`, which GPU rendering
+  asked to. `{env}_GPU_BACKEND=dx12 | vulkan | metal | off` (or wgpu's `WGPU_BACKEND`, which GPU rendering
   ignored before) chooses the graphics backend; `off` renders on the CPU. The GPU now starts after the window
-  is up, and only when Settings ▸ Performance ▸ Use the GPU for rendering is on; if LightCraft ever dies while
+  is up, and only when Settings ▸ Performance ▸ Use the GPU for rendering is on; if {app} ever dies while
   starting the GPU, the next launch starts with GPU rendering off and says how to turn it back on.
 - The Windows app no longer quits at launch with "Parent device is lost" when another program's `dxcompiler.dll` is
   on the DLL search path without its `dxil.dll` (issue #471): DirectX 12 shaders now always compile with the
   compiler built into Windows (FXC). `WGPU_DX12_COMPILER=dxc` uses a `dxcompiler.dll` instead.
 - Exports and renders never write over a photo's original (issue #93): exporting into the photo's own folder with
   the same name and "Overwrite" (or Export with Previous repeating it), an exact output path from the control
-  channel or MCP, a merge preview path or `lightcraft-cli render IMG.jpg -o IMG.jpg` is refused with a clear
+  channel or MCP, a merge preview path or `{cli} render IMG.jpg -o IMG.jpg` is refused with a clear
   message, and the original is left byte for byte. Ordinary earlier exports are still overwritten when asked.
   Exported files are written to a temp file and then renamed into place, so a full disk or an unplugged drive
   never leaves a truncated file; the XMP sidecar of an "Original" export follows the "If file exists" choice too.
@@ -334,19 +334,19 @@
   reading the card a third time (Move still compares byte for byte before it deletes a source); a file that changed
   on the card after Review Import is reported instead of being imported with stale details. Checking an export path
   against the library's originals no longer scans the whole library when nothing is at that path.
-- Saving metadata to an XMP sidecar another application wrote no longer replaces it (issue #92): LightCraft merges its
+- Saving metadata to an XMP sidecar another application wrote no longer replaces it (issue #92): {app} merges its
   fields in and keeps the rest — e.g. that application's develop settings and edit history — byte for byte. A
   sidecar that isn't valid XMP is copied to `<name>.xmp.bak-<time>` first. With the default stem naming, a raw and a
   JPEG with the same name (`IMG_0001.CR3` + `IMG_0001.JPG`) no longer share one sidecar: the raw keeps `IMG_0001.xmp`,
   the JPEG uses `IMG_0001.JPG.xmp`.
 - A save that fails part-way (a full disk, a network share that drops) no longer looks like a damaged catalog
-  afterwards (issue #101): the partial write is cut off before LightCraft retries, so the next launch replays every
+  afterwards (issue #101): the partial write is cut off before {app} retries, so the next launch replays every
   change. Catalogs already holding such a fragment load in full. Quitting while the catalog log can't be written
   still saves your queued changes in the closing snapshot.
-- The catalog has a format version (issue #102). Opening a library from an older LightCraft upgrades it; a library
-  written by a newer LightCraft is refused with "this library was written by a newer version of LightCraft" and left
+- The catalog has a format version (issue #102). Opening a library from an older {app} upgrades it; a library
+  written by a newer {app} is refused with "this library was written by a newer version of {app}" and left
   untouched — older versions no longer read part of it as a damaged log. Once this version has opened a library,
-  LightCraft 0.2.0 and older refuse it ("unsupported format … v2").
+  {app} 0.2.0 and older refuse it ("unsupported format … v2").
 - The control port (`--control`) closes a connection as soon as it receives anything that isn't a JSON request
   (issue #94): an HTTP request from a web page can no longer carry a command in its body. Lines are capped at
   4 MiB and connections at 16.
@@ -411,17 +411,17 @@
 - Copyright status, rights usage terms and copyright info URL in Info, metadata presets and exports.
 - Auto-Tag from Tracklog: GPS locations for your photos from a GPX track log, matched by capture time.
 - A change that can't be saved to disk (full or unplugged drive) is no longer silent: the command reports
-  "saved in memory but not written to disk", the top bar shows a warning, and LightCraft keeps retrying until the
+  "saved in memory but not written to disk", the top bar shows a warning, and {app} keeps retrying until the
   save goes through.
 - Smaller, faster catalogs: photos you only looked at in Local (never added, rated or edited) are forgotten once
   their folder has not been browsed for 30 days — your files and sidecars stay, and browsing the folder shows them
   again. Change the period (or turn it off) in Settings → Performance.
-- A library is open in one program at a time (issue #99): opening a library that LightCraft or `lightcraft-cli` already
-  has open — on this computer or another one sharing the folder — says who has it ("already open in LightCraft (process
+- A library is open in one program at a time (issue #99): opening a library that {app} or `{cli}` already
+  has open — on this computer or another one sharing the folder — says who has it ("already open in {app} (process
   123 on studio-mac)") instead of letting both write and silently drop each other's edits. A crash never leaves the
   library locked: the lock is the operating system's and goes away with the program.
 - If your library can't be opened at launch (open in another program, unreadable, on a drive that isn't connected,
-  written by a newer LightCraft), LightCraft says so and why, and offers Try Again, Choose Another Library…, Continue
+  written by a newer {app}), {app} says so and why, and offers Try Again, Choose Another Library…, Continue
   Without Saving and Quit (issue #100). It no longer quietly starts a demo session that looked like a reset library and
   lost everything at quit; a temporary session shows a banner the whole time and never writes to your library.
 
@@ -431,9 +431,9 @@
   See [remote Metal inference](ai-masks.md#remote-metal-inference).
 - AI masks with SAM 3 (Object and Describe in the Masking panel): click an object to select it (⌥-click leaves a
   part out), or type what to select ("sky", "the red car", "car, road"); both combine with other masks, have an
-  Edge setting, and get a sharper zoomed-in pass in the background. The model runs inside LightCraft in pure Rust
-  and never freezes the window. It is optional and not part of LightCraft (Meta's SAM License, about 3.4 GB): the
-  first time you use an AI mask, LightCraft asks before downloading it, shows the progress, can cancel and resume,
+  Edge setting, and get a sharper zoomed-in pass in the background. The model runs inside {app} in pure Rust
+  and never freezes the window. It is optional and not part of {app} (Meta's SAM License, about 3.4 GB): the
+  first time you use an AI mask, {app} asks before downloading it, shows the progress, can cancel and resume,
   and checks the file before using it. Masks keep their selection, so they render and export without the model.
 - Auto Sync: edits apply to every selected photo. Auto B&W mix. Automatic versions.
 - Colour-range masks: click the photo to sample. Luminance ranges: range bar, smoothness, luminance map.

@@ -10,7 +10,7 @@
 mod noise;
 mod paint;
 
-use lightcraft_raster::Rgb32f;
+use dac_raster::Rgb32f;
 use serde::Serialize;
 
 pub use paint::render_srgb_linear;
@@ -232,7 +232,7 @@ mod tests {
         let s = &demo_library()[1];
         let small = s.render(60, 40);
         let big = s.render(240, 160);
-        let down = lightcraft_raster::resample::resize(&big, 60, 40, lightcraft_raster::resample::Filter::Box);
+        let down = dac_raster::resample::resize(&big, 60, 40, dac_raster::resample::Filter::Box);
         let err: f32 = small.data.iter().zip(&down.data).map(|(a, b)| (a[1] - b[1]).abs()).sum::<f32>() / small.len() as f32;
         assert!(err < 0.08, "{err}");
     }

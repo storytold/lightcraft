@@ -5,15 +5,15 @@
 
 use std::sync::Arc;
 
-use lightcraft_catalog::{Photo, PhotoId, Source};
-use lightcraft_develop::{DevelopSettings, ProcessVersion};
+use dac_catalog::{Photo, PhotoId, Source};
+use dac_develop::{DevelopSettings, ProcessVersion};
 use serde_json::json;
 
 use crate::{EngineError, Session};
 
-/// No process is older than V1 yet: 0 (which no LightCraft writes) stands in for one.
+/// No process is older than V1 yet: 0 (which no version of the app writes) stands in for one.
 const OLDER: ProcessVersion = ProcessVersion(0);
-/// A number from a newer LightCraft.
+/// A number from a newer version of the app.
 const NEWER: ProcessVersion = ProcessVersion(ProcessVersion::LATEST.0 + 6);
 
 fn process(s: &Session, id: PhotoId) -> ProcessVersion {
@@ -65,8 +65,8 @@ fn new_photos_and_reset_get_the_latest_process() {
     look.light.contrast = 20.0;
     look.process = OLDER;
     p.import_look = Some(Arc::new(look));
-    s.catalog.apply(lightcraft_catalog::Op::RemovePhoto { id: p.id }).unwrap();
-    s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    s.catalog.apply(dac_catalog::Op::RemovePhoto { id: p.id }).unwrap();
+    s.catalog.apply(dac_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
     s.execute("develop.reset", &json!({"ids": [ids[0].0]})).unwrap();
     let d = s.develop_of(ids[0]).unwrap();
     assert_eq!((d.process, d.light.contrast), (ProcessVersion::LATEST, 20.0));
@@ -133,7 +133,7 @@ fn copy_paste_sync_presets_and_auto_sync_keep_each_photos_process() {
     put(&mut s, src, NEWER, 1.0);
     put(&mut s, b, OLDER, 0.0);
     select(&mut s, &[src]);
-    s.execute("develop.copy", &json!({"groups": lightcraft_develop::SettingsGroup::ALL})).unwrap();
+    s.execute("develop.copy", &json!({"groups": dac_develop::SettingsGroup::ALL})).unwrap();
     select(&mut s, &[a, b]);
     s.execute("develop.paste", &json!({})).unwrap();
     assert_eq!([process(&s, a), process(&s, b)], [ProcessVersion::LATEST, OLDER]);
@@ -147,7 +147,7 @@ fn copy_paste_sync_presets_and_auto_sync_keep_each_photos_process() {
     // a preset made from the photo
     select(&mut s, &[src]);
     // (not Grain: its integer seed doesn't survive scaling, a separate issue)
-    let groups: Vec<_> = lightcraft_develop::SettingsGroup::ALL.into_iter().filter(|g| *g != lightcraft_develop::SettingsGroup::Grain).collect();
+    let groups: Vec<_> = dac_develop::SettingsGroup::ALL.into_iter().filter(|g| *g != dac_develop::SettingsGroup::Grain).collect();
     let pid = s.execute("preset.create", &json!({"name": "Everything", "groups": groups})).unwrap()["id"].clone();
     put(&mut s, b, OLDER, 0.0);
     select(&mut s, &[b]);
@@ -207,7 +207,7 @@ fn sidecars_keep_the_process_and_interchange_edits_get_the_latest() {
     // a damaged process value reads as V1 and costs nothing else: the sidecar's edits still come back
     for bad in ["-1", "1.5", "\"two\"", "null", "4294967296"] {
         let json = format!(r#"{{"process": {bad}, "light": {{"exposure": 0.5}}}}"#);
-        let packet = lightcraft_meta::write_xmp(&lightcraft_meta::Metadata::default(), Some(&json));
+        let packet = dac_meta::write_xmp(&dac_meta::Metadata::default(), Some(&json));
         let Some(DevelopPatch::Full(d)) = parse_sidecar(&packet, crate::crs::Target::Rendered).unwrap().develop else {
             panic!("{bad}: the edit was dropped")
         };

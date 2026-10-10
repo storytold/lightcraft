@@ -1,4 +1,4 @@
-//! The non-destructive edit model of LightCraft.
+//! The non-destructive edit model of the app.
 //!
 //! [`DevelopSettings`] is the complete description of a photo's look: pure, serializable data.
 //! The pipeline evaluates it; the catalog stores it; presets, copy/paste, sync, versions and history
@@ -150,14 +150,7 @@ mod tests {
                 name: None,
                 op: MaskOp::Add,
                 invert: false,
-                shape: MaskShape::Radial {
-                    center: lightcraft_geom::Point::new(0.5, 0.5),
-                    rx: 0.2,
-                    ry: 0.1,
-                    angle: 10.0,
-                    feather: 50.0,
-                    invert: false,
-                },
+                shape: MaskShape::Radial { center: dac_geom::Point::new(0.5, 0.5), rx: 0.2, ry: 0.1, angle: 10.0, feather: 50.0, invert: false },
             }],
             ..Default::default()
         });

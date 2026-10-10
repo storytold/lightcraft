@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use crate::icc;
 use crate::space::Trc;
-use lightcraft_color::{D50, D65, Mat3, REC2020, bradford};
-use lightcraft_raster::Rgba8;
+use dac_color::{D50, D65, Mat3, REC2020, bradford};
+use dac_raster::Rgba8;
 use moxcms::{ColorProfile, DataColorSpace, Layout, RenderingIntent, Transform8BitExecutor, TransformOptions, Xyzd};
 
 /// Largest profile file accepted (monitor profiles are a few KB; LUT profiles up to a few MB).
@@ -225,7 +225,7 @@ fn curve_tables(trc: &[Trc; 3]) -> [[u8; 256]; 3] {
     let mut t = [[0u8; 256]; 3];
     for (k, tab) in t.iter_mut().enumerate() {
         for (i, v) in tab.iter_mut().enumerate() {
-            let lin = lightcraft_color::transfer::srgb_to_linear(i as f32 / 255.0);
+            let lin = dac_color::transfer::srgb_to_linear(i as f32 / 255.0);
             *v = (from_linear(&trc[k], lin) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
         }
     }
@@ -265,7 +265,7 @@ fn apply(x: &Arc<Transform8BitExecutor>, img: &mut Rgba8) -> Result<(), String> 
 mod tests {
     use super::*;
     use crate::space::NamedSpace;
-    use lightcraft_color::{DISPLAY_P3, SRGB};
+    use dac_color::{DISPLAY_P3, SRGB};
 
     fn img(px: &[[u8; 4]]) -> Rgba8 {
         Rgba8 { width: px.len(), height: 1, data: px.to_vec() }
@@ -321,7 +321,7 @@ mod tests {
     /// A gamma 2.2 display (Adobe RGB-like): the proxy's sRGB curve goes to the display's curve.
     #[test]
     fn gamma_display_uses_its_curve() {
-        let bytes = icc::write_matrix_trc(&lightcraft_color::ADOBE_RGB, &Trc::Gamma(2.2));
+        let bytes = icc::write_matrix_trc(&dac_color::ADOBE_RGB, &Trc::Gamma(2.2));
         let d = DisplayProfile::from_icc(&bytes).unwrap();
         assert!(d.needs_correction());
         let mut a = img(&[[0, 0, 0, 255], [255, 255, 255, 255], [10, 128, 240, 9]]);
@@ -329,7 +329,7 @@ mod tests {
         assert_eq!(a.data[0], [0, 0, 0, 255]);
         assert_eq!(a.data[1], [255, 255, 255, 255]);
         for (k, v) in [10u8, 128, 240].into_iter().enumerate() {
-            let lin = lightcraft_color::transfer::srgb_to_linear(v as f32 / 255.0);
+            let lin = dac_color::transfer::srgb_to_linear(v as f32 / 255.0);
             let want = (lin.powf(1.0 / 2.2) * 255.0).round() as i32;
             assert!((a.data[2][k] as i32 - want).abs() <= 1, "{k}: {} vs {want}", a.data[2][k]);
         }
@@ -422,7 +422,7 @@ mod tests {
         let mut a = img(&[[0, 0, 0, 255], [255, 255, 255, 255], [128, 128, 128, 200]]);
         d.correct(&mut a).unwrap();
         assert!(close(a.data[0], [0, 0, 0, 255], 1) && close(a.data[1], [255, 255, 255, 255], 1), "{:?}", a.data);
-        let lin = lightcraft_color::transfer::srgb_to_linear(128.0 / 255.0);
+        let lin = dac_color::transfer::srgb_to_linear(128.0 / 255.0);
         let g = (lin.powf(1.0 / 2.2) * 255.0).round() as u8;
         assert!(close(a.data[2], [g, g, g, 200], 2), "{:?} vs {g}", a.data[2]);
         // sRGB red → less than full red drive on a P3 panel

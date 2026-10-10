@@ -1,6 +1,6 @@
 // Element-wise kernels (one thread per pixel, 1-D on a 2-D grid). Bindings: a, b, c (inputs), dst.
 // P[0] = pixel count; further parameters per kernel. Each mirrors a CPU expression in
-// `lightcraft_pipeline::local` (named in the comment).
+// `dac_pipeline::local` (named in the comment).
 
 fn rgb_a(i: u32) -> vec3<f32> {
     return vec3<f32>(a[3u * i], a[3u * i + 1u], a[3u * i + 2u]);

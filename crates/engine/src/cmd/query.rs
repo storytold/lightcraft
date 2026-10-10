@@ -1,7 +1,7 @@
 //! Read-only queries (not journaled): catalog, photos, develop state, controls, presets, albums.
 
-use lightcraft_catalog::{Album, Photo, PhotoId};
-use lightcraft_develop::{CONTROLS, controls};
+use dac_catalog::{Album, Photo, PhotoId};
+use dac_develop::{CONTROLS, controls};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd, has_active};
@@ -31,7 +31,7 @@ pub fn photo_summary(p: &Photo) -> Value {
     })
 }
 
-fn album_json(a: &Album, all: &[Album], cat: &lightcraft_catalog::Catalog) -> Value {
+fn album_json(a: &Album, all: &[Album], cat: &dac_catalog::Catalog) -> Value {
     let mut v = json!({
         "id": a.id.0,
         "name": a.name,
@@ -62,25 +62,27 @@ fn photo_arg(s: &Session, p: &Value, c: &str) -> crate::Result<PhotoId> {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "catalog.query", "Query Photos", [], None, "{filter?: Filter, sort?: Sort, offset?, limit?} — omit filter to list the current view", always, |s, p| {
-            let ids = if p.get("filter").is_some() || p.get("sort").is_some() {
+            let off = usize::try_from(p.get("offset").and_then(Value::as_u64).unwrap_or(0)).unwrap_or(usize::MAX);
+            let lim = usize::try_from(p.get("limit").and_then(Value::as_u64).unwrap_or(200)).unwrap_or(usize::MAX);
+            let (total, ids) = if p.get("filter").is_some() || p.get("sort").is_some() {
                 let f = p.get("filter").map(|f| serde_json::from_value(f.clone())).transpose().map_err(|e| bad("catalog.query", e.to_string()))?.unwrap_or_default();
                 let so = p.get("sort").map(|f| serde_json::from_value(f.clone())).transpose().map_err(|e| bad("catalog.query", e.to_string()))?.unwrap_or_default();
-                s.catalog.query(&f, &so)
+                let ids = s.catalog.query(&f, &so);
+                (ids.len(), ids.into_iter().skip(off).take(lim).collect())
             } else {
-                s.visible_cloned()
+                // the current view: only the page is copied
+                s.visible_page(off, lim)
             };
-            let off = p.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
-            let lim = p.get("limit").and_then(Value::as_u64).unwrap_or(200) as usize;
-            let items: Vec<Value> = ids.iter().skip(off).take(lim).filter_map(|id| s.catalog.photo(*id)).map(|p| photo_summary(p)).collect();
-            Ok(json!({"total": ids.len(), "photos": items}))
+            let items: Vec<Value> = ids.iter().filter_map(|id| s.catalog.photo(*id)).map(|p| photo_summary(p)).collect();
+            Ok(json!({"total": total, "photos": items}))
         }),
         cmd!(query "catalog.stats", "Catalog Statistics", [], None, "{}", always, |s, _| {
             let all: Vec<_> = s.catalog.photos().filter(|p| p.in_library()).collect();
             Ok(json!({
                 "photos": all.len(),
                 "edited": all.iter().filter(|p| p.is_edited()).count(),
-                "picks": all.iter().filter(|p| p.flag == lightcraft_catalog::Flag::Pick).count(),
-                "rejects": all.iter().filter(|p| p.flag == lightcraft_catalog::Flag::Reject).count(),
+                "picks": all.iter().filter(|p| p.flag == dac_catalog::Flag::Pick).count(),
+                "rejects": all.iter().filter(|p| p.flag == dac_catalog::Flag::Reject).count(),
                 "deleted": s.catalog.photos().filter(|p| p.deleted).count(),
                 "albums": s.catalog.albums().filter(|a| !a.folder).count(),
                 "byDate": s.catalog.date_groups(),
@@ -89,7 +91,7 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!(query "library.state", "Library State", [], None, "{}", always, |s, _| {
             let label = match (s.source, s.library_folder.as_deref()) {
-                (LibrarySource::LibraryFolder, Some(path)) => lightcraft_catalog::folders::folder_label(path),
+                (LibrarySource::LibraryFolder, Some(path)) => dac_catalog::folders::folder_label(path),
                 _ => s.source.label(&s.catalog),
             };
             let n = s.visible().len();
@@ -111,7 +113,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "photo.allMetadata", "All Metadata", [], None, "{id?} → {exif: [{group, tag, name, value}], xmp: [{name, value}]} — every EXIF / TIFF / GPS tag of the file and its XMP properties", always, |s, p| {
             let id = photo_arg(s, p, "photo.allMetadata")?;
             let ph = s.catalog.photo(id).ok_or_else(|| super::bad("photo.allMetadata", "no such photo"))?.clone();
-            let lightcraft_catalog::Source::File { path } = &ph.source else {
+            let dac_catalog::Source::File { path } = &ph.source else {
                 return Ok(json!({"exif": [], "xmp": [], "note": "a generated demo photo has no file"}));
             };
             let bytes = match &s.media.file_bytes {
@@ -119,14 +121,14 @@ pub fn specs() -> Vec<CommandSpec> {
                 None => std::fs::read(path).map_err(|e| format!("{path}: {e}")),
             }
             .map_err(|e| super::bad("photo.allMetadata", e))?;
-            let exif: Vec<Value> = lightcraft_meta::file_tag_rows(&bytes)
+            let exif: Vec<Value> = dac_meta::file_tag_rows(&bytes)
                 .into_iter()
                 .map(|r| json!({"group": r.group, "tag": r.tag, "name": r.name, "value": r.value}))
                 .collect();
             // XMP: the sidecar if there is one, else the file's own packet
-            let packet = crate::sidecar::read_packet(path, ph.kind, s.sidecar_naming(ph.id)).map(|(x, _)| x).or_else(|| lightcraft_meta::embedded(&bytes).xmp);
+            let packet = crate::sidecar::read_packet(path, ph.kind, s.sidecar_naming(ph.id)).map(|(x, _)| x).or_else(|| dac_meta::embedded(&bytes).xmp);
             let xmp: Vec<Value> = packet
-                .and_then(|x| lightcraft_meta::parse_xmp(&x).ok())
+                .and_then(|x| dac_meta::parse_xmp(&x).ok())
                 .map(|d| d.properties.into_iter().filter(|(k, _)| !k.starts_with("lc:")).map(|(k, v)| json!({"name": k, "value": v.join("; ")})).collect())
                 .unwrap_or_default();
             Ok(json!({"exif": exif, "xmp": xmp}))
@@ -166,7 +168,7 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!(query "develop.controls", "List Develop Controls", [], None, "{section?} — every slider with range, default and current value", always, |s, p| {
             let d = s.active().and_then(|id| s.develop_of(id)).unwrap_or_default();
-            let sec = p.get("section").and_then(|v| serde_json::from_value::<lightcraft_develop::Section>(v.clone()).ok());
+            let sec = p.get("section").and_then(|v| serde_json::from_value::<dac_develop::Section>(v.clone()).ok());
             Ok(Value::Array(
                 CONTROLS
                     .iter()
@@ -206,16 +208,16 @@ pub fn specs() -> Vec<CommandSpec> {
                 "versions": ph.versions.iter().map(|v| json!({"name": v.name, "created": v.created})).collect::<Vec<_>>(),
             }))
         }),
-        cmd!(query "app.gpu", "GPU Rendering", [], None, "{enabled?: bool} — allow/forbid GPU rendering (CPU fallback; LIGHTCRAFT_GPU=0 forbids it for the process); returns {enabled, available, adapter, reason (why the GPU is off), lastFallback (latest render redone on the CPU, and why)}", always, |_, p| {
+        cmd!(query "app.gpu", "GPU Rendering", [], None, "{enabled?: bool} — allow/forbid GPU rendering (CPU fallback; `{ENV_PREFIX}_GPU=0` forbids it for the process); returns {enabled, available, adapter, reason (why the GPU is off), lastFallback (latest render redone on the CPU, and why)}", always, |_, p| {
             if let Some(on) = p.get("enabled").and_then(Value::as_bool) {
-                lightcraft_gpu::set_enabled(on);
+                dac_gpu::set_enabled(on);
             }
             Ok(json!({
-                "enabled": lightcraft_gpu::enabled(),
-                "available": lightcraft_gpu::available(),
-                "adapter": lightcraft_gpu::adapter_name(),
-                "reason": lightcraft_gpu::unavailable_reason(),
-                "lastFallback": lightcraft_gpu::last_fallback(),
+                "enabled": dac_gpu::enabled(),
+                "available": dac_gpu::available(),
+                "adapter": dac_gpu::adapter_name(),
+                "reason": dac_gpu::unavailable_reason(),
+                "lastFallback": dac_gpu::last_fallback(),
             }))
         }),
         cmd!(query "library.memory", "Memory Usage", [], None, "{} — bytes held by each cache (decoded sources, rendered previews, GPU buffers; heap when instrumented)", always, |s, _| {

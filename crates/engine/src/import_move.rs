@@ -193,11 +193,11 @@ pub(crate) fn place(src: &Path, dir: &Path, name: &str) -> Result<Placed, String
 /// of it. Returns the new path.
 ///
 /// `expect` is the content hash the import's probe computed from its full read of the source
-/// ([`lightcraft_preview::hash_bytes`]): the copy is read back and checked against it, which spares
+/// ([`dac_preview::hash_bytes`]): the copy is read back and checked against it, which spares
 /// a third read of the card (issue #134). It also catches a source that changed since the probe
 /// (whose recorded metadata and hash would be stale). Without one the copy is compared byte for
 /// byte with the source.
-pub(crate) fn copy_new(src: &Path, dir: &Path, name: &str, expect: Option<lightcraft_preview::Hash128>) -> Result<PathBuf, String> {
+pub(crate) fn copy_new(src: &Path, dir: &Path, name: &str, expect: Option<dac_preview::Hash128>) -> Result<PathBuf, String> {
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let (stem, ext) = match name.rsplit_once('.') {
         Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
@@ -293,7 +293,7 @@ fn link_or_copy(src: &Path, dst: &Path) -> io::Result<()> {
 /// Copy into a new file, sync it to disk and verify it: against `expect` (the probe's hash of the
 /// source) when given, else byte for byte against the source. On any failure the partial copy is
 /// removed.
-pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<lightcraft_preview::Hash128>) -> io::Result<()> {
+pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<dac_preview::Hash128>) -> io::Result<()> {
     let mut out = OpenOptions::new().write(true).create_new(true).open(dst)?;
     let r = (|| {
         let mut inp = File::open(src)?;
@@ -330,10 +330,10 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<lightcraft_pr
     r
 }
 
-/// [`lightcraft_preview::hash_bytes`] of a file's content, read in chunks.
-fn hash_file(path: &Path) -> io::Result<lightcraft_preview::Hash128> {
+/// [`dac_preview::hash_bytes`] of a file's content, read in chunks.
+fn hash_file(path: &Path) -> io::Result<dac_preview::Hash128> {
     let mut f = File::open(path)?;
-    let mut h = lightcraft_preview::Hasher128::new();
+    let mut h = dac_preview::Hasher128::new();
     let mut buf = vec![0u8; 1 << 20];
     loop {
         let n = fill(&mut f, &mut buf)?;

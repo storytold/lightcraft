@@ -1,0 +1,79 @@
+# Flatpak manifest for {{display_name}}, ready for a Flathub submission. A template: `cargo xtask package`
+# renders it, with the desktop entry, MIME type and metainfo it installs, into target/package/linux/.
+#
+# Flatpak builds run offline, so the crate sources must be vendored first. From the repo root:
+#
+#   cargo xtask package --render-only
+#   curl -fsSLO https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
+#   python3 flatpak-cargo-generator.py Cargo.lock -o target/package/linux/flatpak/cargo-sources.json
+#   flatpak-builder --user --install --force-clean build-flatpak target/package/linux/flatpak/{{app_id}}.yml
+#   flatpak run {{app_id}}
+#
+# For Flathub, replace the workspace `dir` source with a `git` source pinned to a release tag and commit.
+#
+# {app_id}.bundle.yml.in (same directory) builds the .flatpak attached to every
+# release from the prebuilt binaries. Keep runtime-version and finish-args identical in both
+# (packaging-lint checks this).
+id: {{app_id}}
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: {{binary}}
+finish-args:
+  # Display: Wayland first; X11 only when no Wayland compositor is running.
+  - --socket=wayland
+  - --socket=fallback-x11
+  # X11 shared memory (MIT-SHM). Without it the X11 fallback is slow or fails.
+  - --share=ipc
+  # GPU access for the wgpu renderer (Vulkan, or GL as a fallback).
+  - --device=dri
+  # The library lives in ~/Pictures/{{library_default}} by default, and imports usually come from
+  # Pictures. Open/Save dialogs go through the file-chooser portal (rfd's xdg-portal backend) and
+  # drag-and-drop through the document portal, so picked folders elsewhere work without broad
+  # filesystem access.
+  - --filesystem=xdg-pictures
+  # Network: map tiles, reverse geocoding, Immich, publish services, SFTP web upload, IPP printing,
+  # PTP/IP tethering and model downloads. Each is opt-in inside the app; nothing connects unasked.
+  - --share=network
+  # USB cameras for native tethering (PTP). `--device=usb` (Flatpak >= 1.15.11) is narrower but the
+  # CI builder (Ubuntu 24.04, Flatpak 1.14) rejects it, so this grants all devices; see
+  # docs/packaging.md. Deliberately not granted: home/host filesystem access.
+  - --device=all
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+modules:
+  - name: {{binary}}
+    buildsystem: simple
+    build-options:
+      env:
+        CARGO_HOME: /run/build/{{binary}}/cargo
+        CARGO_NET_OFFLINE: 'true'
+    build-commands:
+      - cargo --offline build --release --locked -p dac-app -p dac-cli
+      - install -Dm755 target/release/app /app/bin/{{binary}}
+      - install -Dm755 target/release/app-cli /app/bin/{{cli_binary}}
+      - install -Dm644 rendered/{{app_id}}.desktop /app/share/applications/{{app_id}}.desktop
+      - install -Dm644 rendered/{{app_id}}.mime.xml /app/share/mime/packages/{{app_id}}.xml
+      - install -Dm644 rendered/{{app_id}}.metainfo.xml /app/share/metainfo/{{app_id}}.metainfo.xml
+      - >-
+        for f in assets/app-icon/hicolor/*/apps/*; do
+        size=$(basename "$(dirname "$(dirname "$f")")");
+        install -Dm644 "$f" "/app/share/icons/hicolor/$size/apps/{{app_id}}.${f##*.}";
+        done
+    sources:
+      # the workspace (this file is rendered to target/package/linux/flatpak/)
+      - type: dir
+        path: ../../../..
+        skip:
+          - target
+          - dist
+          - corpus
+          - build-flatpak
+          - .flatpak-builder
+      # the rendered desktop entry, MIME type and metainfo (version and date filled in)
+      - type: dir
+        path: ..
+        dest: rendered
+      - cargo-sources.json

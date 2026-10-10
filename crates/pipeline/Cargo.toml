@@ -1,24 +1,25 @@
 [package]
-name = "lightcraft-pipeline"
+name = "dac-pipeline"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft develop pipeline: scene-referred, float, resolution independent (CPU reference) (L2)"
+description = "Develop pipeline: scene-referred, float, resolution independent (CPU reference) (L2)"
 
 [lints]
 workspace = true
 
 [dependencies]
-lightcraft-geom = { workspace = true }
-lightcraft-color = { workspace = true }
-lightcraft-raster = { workspace = true }
-lightcraft-develop = { workspace = true }
-lightcraft-raw = { workspace = true }
+dac-brand = { workspace = true }
+dac-geom = { workspace = true }
+dac-color = { workspace = true }
+dac-raster = { workspace = true }
+dac-develop = { workspace = true }
+dac-raw = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]
-lightcraft-scenes = { workspace = true }
+dac-scenes = { workspace = true }
 proptest = { workspace = true }
 image = { workspace = true }
 serde_json = { workspace = true }

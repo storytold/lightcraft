@@ -5,19 +5,19 @@
 
 use std::collections::BTreeMap;
 
+use dac_develop::{ControlSpec, Preset, Section, Track};
 use egui::{Align2, Color32, Rect, Sense, pos2, vec2};
-use lightcraft_develop::{ControlSpec, Preset, Section, Track};
 use serde_json::json;
 
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
 use crate::widgets::{divider, icon_button, register, slider};
-use crate::{HoverPreview, LightcraftApp};
+use crate::{DacApp, HoverPreview};
 
 /// Long edge of preset thumbnails (px).
 const THUMB_EDGE: usize = 128;
 
-pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::right("presets_panel")
         .exact_size(t.panel_w)
@@ -160,7 +160,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         if resp.clicked() {
                             let _ = app.run("preset.apply", json!({"id": pid, "amount": 100}));
                             ui.data_mut(|d| d.insert_temp(amt_id, (pid.clone(), 100.0)));
-                            ui.data_mut(|d| d.remove::<(lightcraft_catalog::PhotoId, Preset, String)>(egui::Id::new("last-preset-hover")));
+                            ui.data_mut(|d| d.remove::<(dac_catalog::PhotoId, Preset, String)>(egui::Id::new("last-preset-hover")));
                             app.toast(ui.ctx(), crate::i18n::tr_format!("Preset: {name}", name = name));
                         }
                         let (builtin, group) = (pr.builtin, pr.group.clone());
@@ -228,13 +228,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 if app.hover_preview.is_none()
                     && let (Some(id), Some(curr)) = (active, current.as_ref())
                     && let Some((saved_id, saved_preset, saved_label)) =
-                        ui.data(|d| d.get_temp::<(lightcraft_catalog::PhotoId, Preset, String)>(last_hover_id))
+                        ui.data(|d| d.get_temp::<(dac_catalog::PhotoId, Preset, String)>(last_hover_id))
                     && saved_id == id
                 {
                     app.hover_preview = Some(HoverPreview { label: saved_label, settings: saved_preset.apply(curr, 1.0) });
                 }
             } else {
-                ui.data_mut(|d| d.remove::<(lightcraft_catalog::PhotoId, Preset, String)>(last_hover_id));
+                ui.data_mut(|d| d.remove::<(dac_catalog::PhotoId, Preset, String)>(last_hover_id));
             }
         });
 }

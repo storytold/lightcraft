@@ -3,7 +3,7 @@
 //! embedded where the format allows.
 
 use crate::{Error, Result};
-use lightcraft_raster::Rgba8;
+use dac_raster::Rgba8;
 use serde::{Deserialize, Serialize};
 
 /// Interleaved sample data. Integer samples are display-encoded (0..=MAX); float samples are
@@ -225,7 +225,7 @@ pub enum TiffCompression {
 }
 
 /// Encode TIFF: 8/16-bit integer or 32-bit float, gray/RGB with optional (unassociated) alpha.
-/// ICC and XMP are embedded; EXIF is not (write it through the TIFF writer in `lightcraft-tiff`).
+/// ICC and XMP are embedded; EXIF is not (write it through the TIFF writer in `dac-tiff`).
 pub fn encode_tiff(img: &EncodeImage, compression: TiffCompression, meta: &EncodeMeta) -> Result<Vec<u8>> {
     use tiff::encoder::{Compression, DeflateLevel, TiffEncoder, colortype};
     use tiff::tags::Predictor;

@@ -1,23 +1,31 @@
 [package]
-name = "lightcraft-catalog"
+name = "dac-catalog"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft library: photos, albums, ratings/flags, search/filter/sort, op-log persistence (L3)"
+description = "Library: photos, albums, ratings/flags, search/filter/sort, op-log persistence (L3)"
 
 [lints]
 workspace = true
 
 [dependencies]
-lightcraft-develop = { workspace = true }
-lightcraft-meta = { workspace = true }
+dac-brand = { workspace = true }
+dac-develop = { workspace = true }
+dac-meta = { workspace = true }
+dac-geo = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 crc32fast = { workspace = true }
 log = { workspace = true }
 web-time = { workspace = true }
+siphasher = { workspace = true }
+
+# catalog storage v4 (pure Rust, MIT OR Apache-2.0); the web app keeps the JSON snapshot
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+redb = { workspace = true }
 
 [dev-dependencies]
-lightcraft-geom = { workspace = true }
+dac-fuzzkit = { workspace = true }
+dac-geom = { workspace = true }
 proptest = { workspace = true }

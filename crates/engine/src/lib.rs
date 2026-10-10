@@ -1,4 +1,4 @@
-//! The LightCraft engine façade.
+//! The the app engine façade.
 //!
 //! Every user-visible action is a command with a stable id (`photo.rate`, `develop.set`,
 //! `album.create`, `mask.add`…) and JSON parameters. The egui UI, the CLI, the control channel and
@@ -12,7 +12,7 @@
 
 // Model/cache types remain available without linking the optional inference crate.
 #[cfg(not(feature = "denoise"))]
-extern crate lightcraft_denoise_core as lightcraft_denoise;
+extern crate dac_denoise_core as dac_denoise;
 
 pub mod activity;
 pub mod availability;
@@ -21,6 +21,7 @@ pub mod camera_profiles;
 pub mod cmd;
 pub mod config;
 pub mod contact_sheet;
+pub mod creations;
 pub mod crs;
 pub mod crs_masks;
 pub mod demo;
@@ -38,6 +39,7 @@ pub mod fonts;
 pub mod guard;
 pub mod import;
 mod import_move;
+pub mod legacy;
 pub mod library;
 mod lightroom_archive;
 pub mod lightroom_catalog;
@@ -52,6 +54,8 @@ pub mod originals;
 pub mod preset_import;
 pub mod preset_luminar;
 pub mod presets;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod remote;
 pub mod rename;
 pub mod segment;
 pub mod sidecar;
@@ -63,13 +67,13 @@ pub mod walk;
 use std::sync::Arc;
 
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
+use dac_catalog::{Catalog, Filter, Op, PhotoId, Sort};
+use dac_develop::DevelopSettings;
 pub use fonts::{CRAFT_FONTS, CraftFont};
-use lightcraft_catalog::{Catalog, Filter, Op, PhotoId, Sort};
-use lightcraft_develop::DevelopSettings;
 pub use media::{RenderJob, SourceLevel};
 use serde_json::Value;
 pub use view::{Browse, FilterChip, LibrarySource, Selection, SelectionState, filter_chips};
-pub use {lightcraft_catalog as catalog, lightcraft_develop as develop, lightcraft_gpu as gpu, lightcraft_pipeline as pipeline};
+pub use {dac_catalog as catalog, dac_develop as develop, dac_gpu as gpu, dac_pipeline as pipeline};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -80,12 +84,12 @@ pub enum EngineError {
     #[error("invalid parameters for `{cmd}`: {msg}")]
     BadParams { cmd: String, msg: String },
     #[error("{0}")]
-    Catalog(#[from] lightcraft_catalog::CatalogError),
+    Catalog(#[from] dac_catalog::CatalogError),
     /// The command's change is applied (in memory, undoable) but its journal records could not
     /// be written. They stay queued and are written by the next successful save.
-    #[error("saved in memory but not written to disk: {0}; LightCraft will retry")]
+    #[error("saved in memory but not written to disk: {0}; the app will retry")]
     NotSaved(String),
-    /// Another process (the app, `lightcraft-cli`, another computer) has the library open.
+    /// Another process (the app, the CLI, another computer) has the library open.
     #[error("{0}")]
     LibraryInUse(String),
     #[error("{0}")]
@@ -185,10 +189,13 @@ pub struct Session {
     /// Face model downloads started this session (the staged files wait in `<face_models_dir>/.downloads`).
     pub face_downloads: face_download::Downloads,
     /// The user's own list of models to download (`catalog.json` in the models folder), as last read.
-    pub(crate) face_catalog: lightcraft_faces::catalog::Catalog,
+    pub(crate) face_catalog: dac_faces::catalog::Catalog,
     /// The loaded recognition model and the face embeddings made with it.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) faces: faces_index::FacesState,
+    /// Remote services: SHA-1 back-fill and Immich jobs ([`remote`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub remote: remote::State,
     /// Copied develop settings (partial JSON) for Paste.
     pub clipboard: Option<Value>,
     /// The folder on disk the [`LibrarySource::Folder`] view browses.
@@ -201,14 +208,16 @@ pub struct Session {
     /// The photo that was active before the current one (Paste Settings from Previous).
     pub previous_active: Option<PhotoId>,
     /// Groups last used for Copy (Lightroom remembers them).
-    pub copy_groups: Vec<lightcraft_develop::SettingsGroup>,
-    pub presets: Vec<lightcraft_develop::Preset>,
+    pub copy_groups: Vec<dac_develop::SettingsGroup>,
+    pub presets: Vec<dac_develop::Preset>,
     /// Favourite profile ids (persisted with the library, like preset favourites).
     pub profile_favorites: Vec<String>,
     /// Recently applied profile ids, newest first (at most [`presets::RECENT_PROFILES`]).
     pub profile_recent: Vec<String>,
     /// Executed commands (actions / debugging / replay).
     pub journal: Vec<(String, Value)>,
+    /// Actions and Edit In presets (P4.4/P4.5, [`cmd::actions`]).
+    pub workflow: cmd::actions::Workflow,
     /// Ops applied since the last `drain_log` (for persistence).
     pending_log: Vec<Op>,
     pub media: media::MediaCache,
@@ -229,6 +238,8 @@ pub struct Session {
     pub xmp: sidecar::XmpPrefs,
     /// Parameters of the last export (`app.export` params, minus targets), persisted in prefs.json.
     pub last_export: Option<serde_json::Value>,
+    /// The photos of the last export (the Previous Export source), persisted in view.json.
+    pub previous_export: Vec<PhotoId>,
     /// The user's export presets (built-ins: [`export::builtin_presets`]), persisted in prefs.json.
     pub export_presets: Vec<export::ExportPreset>,
     /// Metadata presets (`metadata.*`), persisted in prefs.json.
@@ -245,7 +256,7 @@ pub struct Session {
     /// Imported `.cube` LUT profiles.
     pub lut_profiles: Vec<cmd::lut_profiles::LutProfile>,
     /// The target album B adds to (`None` = the Quick Collection).
-    pub target_album: Option<lightcraft_catalog::AlbumId>,
+    pub target_album: Option<dac_catalog::AlbumId>,
     /// Auto import: files seen in the watched folder and their size then (a file is imported once
     /// its size held between two scans).
     pub auto_import_seen: std::collections::HashMap<String, u64>,
@@ -254,6 +265,10 @@ pub struct Session {
     pub keyword_sets: Vec<cmd::keywords::KeywordSet>,
     pub keyword_set: Option<String>,
     pub recent_keywords: Vec<String>,
+    /// The keyword ⇧K toggles on the selected photos (Keywording ▸ keyword shortcut).
+    pub keyword_shortcut: Option<String>,
+    /// Keyword attributes (synonyms, export options, person) and keywords created before any
+    /// photo has them, by keyword path (Keyword List).
     /// Before/After: the "before" settings chosen per photo (this session; default: the photo's
     /// import state). See `cmd/before.rs`.
     pub before: std::collections::HashMap<PhotoId, Arc<DevelopSettings>>,
@@ -276,6 +291,8 @@ pub struct Session {
     /// Untouched Local records of folders not browsed for this many days are forgotten when the
     /// library opens (0 = never; persisted in prefs.json). See `cmd/browse.rs`.
     pub forget_local_days: u32,
+    /// The preview store settings (persisted in prefs.json).
+    pub preview_prefs: cmd::previews::PreviewPrefs,
 }
 
 impl Default for Session {
@@ -313,16 +330,19 @@ impl Session {
             face_catalog: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             faces: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            remote: Default::default(),
             clipboard: None,
             meta_clipboard: None,
             browse: None,
             library_folder: None,
             previous_active: None,
-            copy_groups: lightcraft_develop::SettingsGroup::default_copy(),
+            copy_groups: dac_develop::SettingsGroup::default_copy(),
             presets: presets::builtin(),
             profile_favorites: Vec::new(),
             profile_recent: Vec::new(),
             journal: Vec::new(),
+            workflow: Default::default(),
             pending_log: Vec::new(),
             media: media::MediaCache::default(),
             clock: Box::new(|| "2026-09-30T12:00:00".to_string()),
@@ -334,6 +354,7 @@ impl Session {
             library_identity: Arc::new(()),
             xmp: sidecar::XmpPrefs::default(),
             last_export: None,
+            previous_export: Vec::new(),
             export_presets: Vec::new(),
             metadata_presets: Vec::new(),
             filter_presets: Vec::new(),
@@ -346,6 +367,7 @@ impl Session {
             keyword_sets: Vec::new(),
             keyword_set: None,
             recent_keywords: Vec::new(),
+            keyword_shortcut: None,
             before: Default::default(),
             import_probes: Default::default(),
             folder_changes: None,
@@ -354,7 +376,8 @@ impl Session {
             import_defaults: import::ImportDefaults::default(),
             cache_mb: 0,
             smart_previews_dir: None,
-            forget_local_days: lightcraft_catalog::DEFAULT_FORGET_DAYS,
+            forget_local_days: dac_catalog::DEFAULT_FORGET_DAYS,
+            preview_prefs: Default::default(),
         }
     }
 
@@ -409,7 +432,8 @@ impl Session {
         if self.depth == 0 {
             let skip = std::mem::take(&mut self.skip_auto_write);
             if r.is_ok() && !skip && self.xmp.auto_write && self.interaction.is_none() && self.pending_log.len() > log_start {
-                self.auto_write_sidecars(&self.pending_log[log_start..]);
+                let ops = self.pending_log.get(log_start..).map(<[Op]>::to_vec).unwrap_or_default();
+                self.auto_write_sidecars(&ops);
             }
         }
         if self.depth == 0 && self.library.is_some() {
@@ -461,7 +485,7 @@ impl Session {
 
     /// The box to cut a face's picture from: the detector's, when the scan has looked at the face (every face is then shown
     /// equally close, however loosely or tightly its own region was drawn), else the region's own box.
-    pub fn face_view(&self, id: PhotoId, rect: lightcraft_geom::Rect) -> lightcraft_geom::Rect {
+    pub fn face_view(&self, id: PhotoId, rect: dac_geom::Rect) -> dac_geom::Rect {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(v) = self.faces.index.view(id.0, &rect) {
             return v;
@@ -470,7 +494,7 @@ impl Session {
         rect
     }
 
-    /// Apply an op that is LightCraft's own bookkeeping rather than something the user did (faces found by the background
+    /// Apply an op that is the app's own bookkeeping rather than something the user did (faces found by the background
     /// scan): journaled like any op, but not an undo step, and it leaves the redo stack alone.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn apply_system(&mut self, op: Op) -> Result<()> {
@@ -490,8 +514,8 @@ impl Session {
         }
         let mut versions = p.versions.clone();
         let created = (self.clock)();
-        let name = lightcraft_catalog::dates::display_time(&created);
-        versions.push(lightcraft_catalog::Version { name, created, settings: p.develop.clone(), auto: true });
+        let name = dac_catalog::dates::display_time(&created);
+        versions.push(dac_catalog::Version { name, created, settings: p.develop.clone(), auto: true });
         let autos = versions.iter().filter(|v| v.auto).count();
         if autos > AUTO_VERSIONS
             && let Some(i) = versions.iter().position(|v| v.auto)
@@ -586,11 +610,11 @@ impl Session {
     fn apply_with_files(&mut self, op: &Op, folder: Option<&FolderMove>) -> Result<Op> {
         let fs = rename::RealFs;
         if let Some(f) = folder {
-            cmd::browse::rename_folder_on_disk(&f.from, &f.to).map_err(|e| EngineError::Other(format!("can't move the folder back: {e}")))?;
+            cmd::folders::folder_on_disk(&f.from, &f.to).map_err(|e| EngineError::Other(format!("can't move the folder back: {e}")))?;
         }
         let undo_folder = || {
             if let Some(f) = folder {
-                let _ = cmd::browse::rename_folder_on_disk(&f.to, &f.from);
+                let _ = cmd::folders::folder_on_disk(&f.to, &f.from);
             }
         };
         let moves = self.file_moves(op);
@@ -602,7 +626,7 @@ impl Session {
         }
         match self.catalog.apply(op.clone()) {
             Ok(inv) => {
-                if let Some(f) = folder {
+                if let Some(f) = folder.filter(|f| !f.from.is_empty() && !f.to.is_empty()) {
                     cmd::browse::follow_folder(self, &f.from, &f.to);
                 }
                 Ok(inv)
@@ -644,7 +668,7 @@ impl Session {
         {
             return self.apply_silent(Op::SetDevelop { id, settings, label: label.into(), edited: Some(now) });
         }
-        let mut ops = vec![self.develop_op(id, (*settings).clone(), label).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?];
+        let mut ops = vec![self.develop_op(id, (*settings).clone(), label).ok_or(dac_catalog::CatalogError::NoPhoto(id))?];
         ops.extend(self.auto_sync_ops(id, &settings, label));
         let op = if ops.len() == 1 { ops.remove(0) } else { Op::Batch { ops } };
         self.commit(label, op)
@@ -679,7 +703,7 @@ impl Session {
             .filter(|x| **x != id)
             .filter_map(|x| self.develop_of(*x).map(|d| (*x, d)))
             .filter_map(|(x, d)| {
-                let synced = lightcraft_develop::apply_partial(&d, &delta, 1.0);
+                let synced = dac_develop::apply_partial(&d, &delta, 1.0);
                 (synced != *d).then(|| self.develop_op(x, synced, label)).flatten()
             })
             .collect()
@@ -689,7 +713,7 @@ impl Session {
     pub fn develop_op(&self, id: PhotoId, settings: DevelopSettings, label: &str) -> Option<Op> {
         self.catalog.photo(id)?;
         let settings = Arc::new(settings);
-        let step = lightcraft_catalog::HistoryStep { label: label.into(), settings: settings.clone() };
+        let step = dac_catalog::HistoryStep { label: label.into(), settings: settings.clone() };
         Some(Op::Batch {
             ops: vec![Op::SetDevelop { id, settings, label: label.into(), edited: Some((self.clock)()) }, Op::PushHistory { id, step }],
         })
@@ -736,7 +760,7 @@ impl Session {
         }
         if self.visible_key.as_ref() != Some(&key) {
             // "in the last N days" rules count back from the session's clock
-            lightcraft_catalog::rules::set_now(Some((self.clock)()));
+            dac_catalog::rules::set_now(Some((self.clock)()));
             let mut f = self.source.to_filter(&self.filter, &self.catalog);
             if self.source == LibrarySource::Folder {
                 // no folder chosen: nothing (an empty path matches nothing)
@@ -748,6 +772,9 @@ impl Session {
                 // no folder chosen: nothing (`.` names no folder)
                 f.library_folder = Some(self.library_folder.clone().unwrap_or_else(|| ".".into()));
             }
+            if self.source == LibrarySource::PreviousExport {
+                f.only = self.previous_export_filter();
+            }
             let mut visible = self.catalog.query(&f, &self.sort);
             if visible.is_empty() && self.source == LibrarySource::LibraryFolder && !self.folder_holds_photos() {
                 // the shown folder lost its last photo (deleted, moved, removed): everything, not
@@ -757,7 +784,7 @@ impl Session {
                 return self.visible();
             }
             if matches!(self.source, LibrarySource::Album(_))
-                && self.sort.key == lightcraft_catalog::SortKey::CaptureDate
+                && self.sort.key == dac_catalog::SortKey::CaptureDate
                 && let LibrarySource::Album(a) = self.source
                 && let Some(al) = self.catalog.album(a)
                 && !al.is_smart()
@@ -792,6 +819,19 @@ impl Session {
         &self.visible
     }
 
+    /// The Previous Export source's photos as a filter (nothing exported yet: an id no photo has).
+    fn previous_export_filter(&self) -> Vec<PhotoId> {
+        if self.previous_export.is_empty() { vec![PhotoId(u64::MAX)] } else { self.previous_export.clone() }
+    }
+
+    /// Remember `ids` as the last export (the Previous Export source); saved with the view.
+    pub fn record_export(&mut self, ids: &[PhotoId]) {
+        self.previous_export = ids.iter().copied().filter(|id| self.catalog.photo(*id).is_some()).collect();
+        self.visible_key = None;
+        self.total = None;
+        self.save_view();
+    }
+
     /// Whether the library still holds a photo imported from the folder a `LibraryFolder` source
     /// shows.
     fn folder_holds_photos(&self) -> bool {
@@ -816,6 +856,9 @@ impl Session {
             if self.source == LibrarySource::LibraryFolder {
                 f.library_folder = Some(self.library_folder.clone().unwrap_or_else(|| ".".into()));
             }
+            if self.source == LibrarySource::PreviousExport {
+                f.only = self.previous_export_filter();
+            }
             let n = self.catalog.query(&f, &self.sort).len();
             self.total = Some((key, n));
         }
@@ -824,6 +867,21 @@ impl Session {
 
     pub fn visible_cloned(&mut self) -> Vec<PhotoId> {
         self.visible().to_vec()
+    }
+
+    /// One page of the visible photos: how many there are in all, and up to `limit` of them from
+    /// `offset` on (past the end: none). What a frontend that shows a window of a large view asks
+    /// for, instead of copying the whole list (a million ids at the unfiltered view of a large
+    /// library).
+    pub fn visible_page(&mut self, offset: usize, limit: usize) -> (usize, Vec<PhotoId>) {
+        let all = self.visible();
+        let page = all.get(offset.min(all.len())..).unwrap_or(&[]);
+        (all.len(), page.iter().take(limit).copied().collect())
+    }
+
+    /// Where `id` is in the visible photos (the page to ask for to show it).
+    pub fn visible_position(&mut self, id: PhotoId) -> Option<usize> {
+        self.visible().iter().position(|x| *x == id)
     }
 
     /// The visible photos without copying them, with their generation: equal generations mean
@@ -867,9 +925,15 @@ mod tests;
 #[cfg(test)]
 mod tests_album_order;
 #[cfg(test)]
+mod tests_catalog_cmds;
+#[cfg(test)]
+mod tests_classic;
+#[cfg(test)]
 mod tests_color;
 #[cfg(test)]
 mod tests_denoise;
+#[cfg(test)]
+mod tests_edit_in;
 #[cfg(test)]
 mod tests_export;
 #[cfg(test)]
@@ -881,6 +945,8 @@ mod tests_face_recognize;
 mod tests_folders;
 #[cfg(test)]
 mod tests_forget_local;
+#[cfg(test)]
+mod tests_immich;
 #[cfg(test)]
 mod tests_import;
 #[cfg(test)]
@@ -899,6 +965,8 @@ mod tests_organize;
 mod tests_persist;
 #[cfg(test)]
 mod tests_prefs;
+#[cfg(test)]
+mod tests_previews;
 #[cfg(test)]
 mod tests_process;
 #[cfg(test)]

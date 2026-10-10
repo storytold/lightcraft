@@ -1,7 +1,7 @@
 //! Safetensors weights read on demand.
 //!
 //! Tensors are read from the file when a module asks for them (positional reads, no memory
-//! map: `unsafe` stays in `lightcraft-sysmem`), so building only the point-prompt model never
+//! map: `unsafe` stays in `dac-sysmem`), so building only the point-prompt model never
 //! touches the text encoder's bytes.
 
 use std::collections::HashMap;

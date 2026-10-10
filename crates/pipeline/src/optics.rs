@@ -16,10 +16,10 @@
 
 use std::sync::Mutex;
 
-use lightcraft_color::perceptual::{oklab_from_2020, oklab_to_2020};
-use lightcraft_develop::{DevelopSettings, EmbeddedLens, EmbeddedVignette, EmbeddedWarp};
-use lightcraft_geom::{Affine, Homography, Interval, Orientation, Point, Real};
-use lightcraft_raster::{Plane, Rgb32f};
+use dac_color::perceptual::{oklab_from_2020, oklab_to_2020};
+use dac_develop::{DevelopSettings, EmbeddedLens, EmbeddedVignette, EmbeddedWarp};
+use dac_geom::{Affine, Homography, Interval, Orientation, Point, Real};
+use dac_raster::{Plane, Rgb32f};
 
 use crate::for_rows;
 
@@ -670,7 +670,7 @@ mod tests {
         let mut r = Rng(42);
         for _ in 0..2000 {
             let wp = random_warp(&mut r);
-            let a = lightcraft_geom::Affine([
+            let a = dac_geom::Affine([
                 r.range(-2.0, 2.0),
                 r.range(-2.0, 2.0),
                 r.range(-2.0, 2.0),
@@ -711,7 +711,7 @@ mod tests {
         let (mut decided, mut total) = (0, 0);
         for _ in 0..500 {
             let wp = random_warp(&mut r);
-            let a = lightcraft_geom::Affine([
+            let a = dac_geom::Affine([
                 r.range(0.5, 2.0),
                 r.range(-0.2, 0.2),
                 r.range(-0.2, 0.2),

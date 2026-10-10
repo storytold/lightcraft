@@ -1,6 +1,6 @@
-# lightcraft-heif
+# dac-heif
 
-The optional HEIF / HEIC decoder of LightCraft: iPhone and Mac photos. [`heic-rs`](https://github.com/tbraun96/heic-rs)
+The optional HEIF / HEIC decoder of the app: iPhone and Mac photos. [`heic-rs`](https://github.com/tbraun96/heic-rs)
 (pure Rust, no `unsafe`, MIT OR Apache-2.0, written from the H.265 / HEIF specifications) reads the
 container and reconstructs the HEVC pictures; this crate turns them into 16-bit RGB itself so the
 result matches libheif to within one code value:
@@ -19,29 +19,29 @@ ICC, EXIF and XMP, and the file's thumbnail item. 4:2:2 and 4:4:4 (Canon/Sony "H
 with `Error::Unsupported`: heic-rs 0.1.1 loses sync on them. Read-only.
 
 ```rust
-let info = lightcraft_heif::probe(&bytes)?;           // size, depth, alpha: check limits first
-let img = lightcraft_heif::decode(&bytes, &lightcraft_heif::Options::default())?;
+let info = dac_heif::probe(&bytes)?;           // size, depth, alpha: check limits first
+let img = dac_heif::decode(&bytes, &dac_heif::Options::default())?;
 // img.width, img.height, img.has_alpha, img.bit_depth, img.data (RGB/RGBA u16), img.colour, img.icc, img.exif, img.xmp
-let thumb = lightcraft_heif::decode_thumbnail(&bytes, 256, &Default::default())?; // Option<Decoded>
+let thumb = dac_heif::decode_thumbnail(&bytes, 256, &Default::default())?; // Option<Decoded>
 ```
 
 Errors are `Error::Unsupported` (image sequences, overlays, 4:2:2/4:4:4, …), `Error::Limit` or
 `Error::Malformed`. It never panics: every call into heic-rs runs under `catch_unwind`, and a panic
 inside it (PhotoCraft's fuzzing found two in 0.1.1) becomes `Error::Malformed`.
 
-Feature `testdata` exposes `lightcraft_heif::testdata`: lossless synthetic HEIF files (PCM-coded
+Feature `testdata` exposes `dac_heif::testdata`: lossless synthetic HEIF files (PCM-coded
 32 × 32 HEVC pictures, grids, every property above) for the tests of the crates above.
 
 ## Why it is a separate, optional crate
 
 - **A young decoder.** heic-rs is new and has a single maintainer. It is pinned exactly
   (`=0.1.1`); moving the pin is a reviewed change (re-run the crate tests and
-  `cargo test -p lightcraft-codecs --features heif`). The other permissive candidates were
+  `cargo test -p dac-codecs --features heif`). The other permissive candidates were
   rejected: heif-oxide's HEVC decoder (rust_h265) follows FFmpeg's (LGPL) code structure, and
   gamut-heic has no HEVC decoder of its own.
-- **HEVC patents are a distributor's call.** `lightcraft-codecs` uses this crate only behind its
+- **HEVC patents are a distributor's call.** `dac-codecs` uses this crate only behind its
   non-default `heif` feature; the apps forward it and the release packages enable it. Without it,
   HEIC files are still recognised and opening one is a clear "HEIC/HEIF support isn't included in
   this build" error — the same policy as PhotoCraft.
 
-The crate depends on no other LightCraft crate; `codecs` → `heif` is the only edge between them.
+The crate depends on no other workspace crate; `codecs` → `heif` is the only edge between them.

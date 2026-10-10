@@ -8,7 +8,7 @@
 //! comes from Adobe or from a GPL raw decoder. Which colour a raw starts from is the engine's choice
 //! (`docs/camera-preview-colour.md`).
 use crate::ColorData;
-use lightcraft_color::Mat3;
+use dac_color::Mat3;
 
 #[path = "spectral_table.rs"]
 mod table;
@@ -147,7 +147,7 @@ mod tests {
             // a forward matrix maps white-balanced white to D50 (DNG spec, chapter 6)
             for fm in &c.forward_matrix {
                 let w = fm.apply([1.0; 3]);
-                let d50 = lightcraft_color::D50.to_xyz();
+                let d50 = dac_color::D50.to_xyz();
                 assert!((0..3).all(|i| (w[i] - d50[i]).abs() < 1e-4), "{} {w:?}", c.model);
             }
         }

@@ -78,11 +78,16 @@ pub enum Icon {
     Edited,
     /// Targeted adjustment: a ring with a centre dot and up/down arrows (drag vertically).
     Target,
-    /// Community chat (opens the ArtCraft Discord): a speech bubble with three dots. Our own
+    /// Community chat : a speech bubble with three dots. Our own
     /// generic drawing, not any service's logo.
     Chat,
     /// Face boxes on/off: four corner brackets round a small face.
     FaceBox,
+    // saved creations (Collections panel)
+    Printer,
+    Book,
+    Slideshow,
+    Globe,
 }
 
 struct Pen<'a> {
@@ -422,6 +427,25 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             pen.circle(10.0, 7.0, 3.0);
             pen.arc(10.0, 18.0, 6.5, 200.0, 340.0);
             pen.rect(2.5, 2.5, 17.5, 17.5, 2.0);
+        }
+        Printer => {
+            pen.rect(6.0, 3.0, 14.0, 7.5, 0.5);
+            pen.rect(3.0, 7.5, 17.0, 14.0, 1.5);
+            pen.rect(6.0, 11.5, 14.0, 17.0, 0.5);
+        }
+        Book => {
+            pen.closed(&[(10.0, 5.0), (3.0, 3.5), (3.0, 15.5), (10.0, 17.0), (17.0, 15.5), (17.0, 3.5)]);
+            pen.line(&[(10.0, 5.0), (10.0, 17.0)]);
+        }
+        Slideshow => {
+            pen.rect(2.5, 3.5, 17.5, 14.5, 1.5);
+            pen.closed(&[(8.5, 6.5), (13.0, 9.0), (8.5, 11.5)]);
+            pen.line(&[(7.0, 17.5), (13.0, 17.5)]);
+        }
+        Globe => {
+            pen.circle(10.0, 10.0, 7.0);
+            pen.line(&[(3.0, 10.0), (17.0, 10.0)]);
+            pen.p.add(Shape::ellipse_stroke(pen.pt(10.0, 10.0), vec2(3.0 * pen.k, 7.0 * pen.k), pen.s));
         }
         FaceBox => {
             pen.line(&[(2.5, 7.0), (2.5, 2.5), (7.0, 2.5)]);

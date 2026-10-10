@@ -1,0 +1,27 @@
+[package]
+name = "dac-immich"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Immich client (L3): typed API calls written from the public API docs, asset matching, metadata and path mapping"
+
+[dependencies]
+dac-catalog = { workspace = true }
+dac-hash = { workspace = true }
+dac-geom = { workspace = true }
+dac-meta = { workspace = true }
+dac-publish = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
+
+# Native only: on wasm32 the client is empty (the web build talks to no servers).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+dac-net = { workspace = true }
+dac-credentials = { workspace = true }
+log = { workspace = true }
+
+[dev-dependencies]
+dac-fuzzkit = { workspace = true }

@@ -1,12 +1,12 @@
 //! Merge inputs: scene-linear frames decoded from raw files (camera RGB, before white balance) or
 //! standard images (linear light in the file's primaries), with their exposure from EXIF.
 
-use lightcraft_color::Mat3;
-use lightcraft_geom::Orientation;
-use lightcraft_meta::Metadata;
-use lightcraft_raster::Rgb32f;
-use lightcraft_raster::resample::{Filter, fit};
-use lightcraft_raw::ColorData;
+use dac_color::Mat3;
+use dac_geom::Orientation;
+use dac_meta::Metadata;
+use dac_raster::Rgb32f;
+use dac_raster::resample::{Filter, fit};
+use dac_raw::ColorData;
 
 use crate::{MergeError, Result};
 
@@ -42,7 +42,7 @@ impl Frame {
     /// A frame from linear pixels in the develop working space (linear Rec.2020), e.g. a rendered
     /// procedural scene. `exposure` as in [`Frame::exposure`].
     pub fn from_linear_rec2020(image: Rgb32f, exposure: Option<f64>) -> Frame {
-        let to_xyz_d50 = lightcraft_color::bradford(lightcraft_color::D65, lightcraft_color::D50).mul(&lightcraft_color::REC2020.to_xyz());
+        let to_xyz_d50 = dac_color::bradford(dac_color::D65, dac_color::D50).mul(&dac_color::REC2020.to_xyz());
         let clip = detect_clip(&image);
         Frame {
             image,
@@ -106,14 +106,14 @@ pub fn detect_clip(img: &Rgb32f) -> f32 {
 /// Decode a photo (raw or standard format) into a frame no larger than `max_edge` (when given).
 /// `orient` applies the EXIF orientation to the pixels.
 pub fn load_frame(bytes: &[u8], max_edge: Option<usize>, orient: bool) -> Result<Frame> {
-    let metadata = lightcraft_meta::extract(bytes);
+    let metadata = dac_meta::extract(bytes);
     let exposure = exif_exposure(&metadata);
-    if lightcraft_raw::probe(bytes).is_some() {
-        let mut raw = lightcraft_raw::decode(bytes).map_err(|e| MergeError::Decode(e.to_string()))?;
+    if dac_raw::probe(bytes).is_some() {
+        let mut raw = dac_raw::decode(bytes).map_err(|e| MergeError::Decode(e.to_string()))?;
         // geometric lens corrections stay with the develop settings ("profile corrections")
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
         let small = max_edge.is_some_and(|m| m <= 1200);
-        let method = if small { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd };
+        let method = if small { dac_raw::Method::Bilinear } else { dac_raw::Method::Ahd };
         let mut image = raw.develop(method).map_err(|e| MergeError::Decode(e.to_string()))?;
         for p in image.data.iter_mut() {
             *p = p.map(|v| v.max(0.0));
@@ -143,10 +143,10 @@ pub fn load_frame(bytes: &[u8], max_edge: Option<usize>, orient: bool) -> Result
         return Ok(f);
     }
     let opts = match max_edge {
-        Some(m) => lightcraft_codecs::DecodeOptions::fit(m as u32, m as u32),
-        None => lightcraft_codecs::DecodeOptions::default(),
+        Some(m) => dac_codecs::DecodeOptions::fit(m as u32, m as u32),
+        None => dac_codecs::DecodeOptions::default(),
     };
-    let d = lightcraft_codecs::decode(bytes, opts).map_err(|e| MergeError::Decode(e.to_string()))?;
+    let d = dac_codecs::decode(bytes, opts).map_err(|e| MergeError::Decode(e.to_string()))?;
     let mut image = d.image;
     if let Some(m) = max_edge
         && image.width.max(image.height) > m

@@ -9,9 +9,9 @@
 use crate::Rect;
 use crate::tiffraw::{Packing, read_image};
 use crate::{RawData, Result};
-use lightcraft_raster::Image;
-use lightcraft_tiff::Tiff;
-use lightcraft_tiff::tags::{self as t, photometric};
+use dac_raster::Image;
+use dac_tiff::Tiff;
+use dac_tiff::tags::{self as t, photometric};
 
 /// At most this many mask IFDs are read from one file.
 pub const MAX_MASKS: usize = 16;
@@ -55,7 +55,7 @@ pub fn semantic_masks(bytes: &[u8]) -> Vec<SemanticMask> {
         .collect()
 }
 
-fn read_mask(bytes: &[u8], tiff: &Tiff, ifd: &lightcraft_tiff::Ifd) -> Result<Option<SemanticMask>> {
+fn read_mask(bytes: &[u8], tiff: &Tiff, ifd: &dac_tiff::Ifd) -> Result<Option<SemanticMask>> {
     let Some(name) = ifd.string(t::SEMANTIC_NAME).filter(|n| !n.is_empty()) else { return Ok(None) };
     let info = ifd.image()?;
     let (w, h) = (info.width as usize, info.height as usize);
@@ -124,7 +124,7 @@ impl SemanticMask {
         }
         let (kx, ky) = (c.width as f64 / ow as f64, c.height as f64 / oh as f64);
         let mut out = Image::new(ow, oh);
-        lightcraft_raster::par_rows(&mut out.data, ow, |y, row| {
+        dac_raster::par_rows(&mut out.data, ow, |y, row| {
             let ay = c.y as f64 + (y as f64 + 0.5) * ky;
             for (x, v) in row.iter_mut().enumerate() {
                 let ax = c.x as f64 + (x as f64 + 0.5) * kx;

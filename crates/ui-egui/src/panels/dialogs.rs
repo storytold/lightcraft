@@ -1,9 +1,9 @@
 //! Modal dialogs (new album, rename, create preset, choose settings to copy, export, about, shortcuts).
 
-use lightcraft_develop::{ControlSpec, Section, SettingsGroup, Track};
+use dac_develop::{ControlSpec, Section, SettingsGroup, Track};
 use serde_json::json;
 
-use crate::LightcraftApp;
+use crate::DacApp;
 use crate::state::Dialog;
 use crate::theme::Tokens;
 
@@ -15,15 +15,15 @@ const RENAME_PREVIEW_ROWS: usize = 6;
 /// rows are planned on a worker thread, and only when the template, start number, photos or
 /// catalog change — never once per frame.
 pub(crate) fn rename_preview(
-    app: &mut LightcraftApp,
+    app: &mut DacApp,
     ctx: &egui::Context,
     template: &str,
     start: usize,
-) -> (Option<Vec<lightcraft_engine::rename::RenamePlan>>, usize) {
+) -> (Option<Vec<dac_engine::rename::RenamePlan>>, usize) {
     use std::hash::{Hash, Hasher};
-    type Rows = std::sync::Arc<std::sync::Mutex<Option<Vec<lightcraft_engine::rename::RenamePlan>>>>;
+    type Rows = std::sync::Arc<std::sync::Mutex<Option<Vec<dac_engine::rename::RenamePlan>>>>;
     let ids = app.session.targets(&json!({}));
-    let photos = lightcraft_engine::rename::rename_photos(&app.session.catalog, &ids);
+    let photos = dac_engine::rename::rename_photos(&app.session.catalog, &ids);
     let total = photos.len();
     let mut h = std::collections::hash_map::DefaultHasher::new();
     (template, start, app.session.catalog.revision, &ids).hash(&mut h);
@@ -40,7 +40,7 @@ pub(crate) fn rename_preview(
     let (out, template, repaint) = (rows.clone(), template.to_string(), ctx.clone());
     let exists = app.session.media.availability.probe();
     let work = move || {
-        let plans = lightcraft_engine::rename::plan_rename_photos(&first, &template, start, &|f| exists(f));
+        let plans = dac_engine::rename::plan_rename_photos(&first, &template, start, &|f| exists(f));
         *out.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(plans);
         repaint.request_repaint();
     };
@@ -60,7 +60,7 @@ pub const ABOUT_TABS: &[(&str, &str)] = &[("about", "About"), ("contributors", "
 /// Help ▸ What's New (docs/whats-new.md).
 pub const WHATS_NEW: &str = include_str!("../../../../docs/whats-new.md");
 
-pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn show(app: &mut DacApp, ctx: &egui::Context) {
     let Some(mut dlg) = app.ui.dialog.clone() else { return };
     let at_start = dlg.clone();
     // Esc with a popup open in the dialog (a dropdown, a date picker's calendar) closes the popup
@@ -118,8 +118,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         // (nothing to download from in this build: the dialog explains the manual install)
         Dialog::SamModel { .. } if sam_by_hand(&app.session.segmenter) => "Install the SAM 3 Model",
         Dialog::SamModel { .. } => "Download the SAM 3 Model?",
-        Dialog::About => "About LightCraft",
+        Dialog::About => "About {app}",
         Dialog::Shortcuts => "Keyboard Shortcuts",
+        Dialog::ViewOptions => "Library View Options",
     }
     .to_string();
     let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::symmetric(16, 12));
@@ -127,7 +128,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     // own so the size it is given doesn't carry over to the other dialogs. Its content scrolls
     // rather than growing the window when the options below the grid get taller (e.g. Copy).
     let import = matches!(dlg, Dialog::Import { .. });
-    let window_id = egui::Id::new(if import { "lightcraft-import-dialog" } else { "lightcraft-dialog" });
+    let window_id = egui::Id::new(if import { "app-import-dialog" } else { "app-dialog" });
     let shown = egui::Window::new(crate::i18n::tr(&title)).id(window_id)
         .collapsible(false)
         .resizable(import)
@@ -255,7 +256,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     crate::widgets::register(ui.ctx(), "field:smartName", r.rect);
                     ui.add_space(6.0);
                     // the folder an album made from a folder view carries is not in the editor, but it counts
-                    let folder = id.and_then(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(id))).and_then(|a| a.smart.as_deref().and_then(|f| f.library_folder.clone()));
+                    let folder = id.and_then(|id| app.session.catalog.album(dac_catalog::AlbumId(id))).and_then(|a| a.smart.as_deref().and_then(|f| f.library_folder.clone()));
                     // problems, count and albums: cached until the catalog or the rules change (not per frame)
                     let now = (app.session.clock)();
                     let view = app.caches.rules_view(&app.session.catalog, rules, *id, folder, &now);
@@ -290,7 +291,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     let n = app.session.targets(&json!({})).len();
                     field(ui, "Change", |ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
-                        for (i, (label, m)) in [("Set date & time", "set"), ("Shift by", "shift"), ("Time zone", "zone")].iter().enumerate() {
+                        for (i, (label, m)) in [("Set date & time", "set"), ("Shift by", "shift"), ("Time zone", "zone"), ("File date", "file")].iter().enumerate() {
                             if crate::widgets::text_button(ui, &format!("captureMode-{i}"), label, mode == m).clicked() {
                                 *mode = m.to_string();
                             }
@@ -312,6 +313,13 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             });
                             json!({"shift": *days as i64 * 86_400 + *hours as i64 * 3600 + *minutes as i64 * 60})
                         }
+                        "file" => {
+                            ui.label(
+                                egui::RichText::new(crate::i18n::tr("Each photo gets its original file's modification date (UTC)."))
+                                    .color(t.text_label),
+                            );
+                            json!({"fromFile": true})
+                        }
                         _ => {
                             field(ui, "Hours", |ui| ui.add(egui::DragValue::new(zone).range(-26.0..=26.0).speed(0.25).fixed_decimals(2)));
                             json!({"hours": zone})
@@ -321,15 +329,17 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     let active = app.session.active().and_then(|id| app.session.catalog.photo(id)).map(|p| (p.file_name.clone(), p.date().to_string()));
                     if let Some((name, cur)) = active {
                         let delta = match mode.as_str() {
-                            "set" => lightcraft_catalog::dates::normalize_iso(time)
-                                .and_then(|t| Some(lightcraft_catalog::dates::iso_seconds(&t)? - lightcraft_catalog::dates::iso_seconds(&cur)?)),
+                            "set" => dac_catalog::dates::normalize_iso(time)
+                                .and_then(|t| Some(dac_catalog::dates::iso_seconds(&t)? - dac_catalog::dates::iso_seconds(&cur)?)),
                             "shift" => params["shift"].as_i64(),
+                            "file" => None,
                             _ => Some((*zone as f64 * 3600.0).round() as i64),
                         };
-                        let after = delta.and_then(|d| lightcraft_catalog::dates::shift_iso(&cur, d));
+                        let after = delta.and_then(|d| dac_catalog::dates::shift_iso(&cur, d));
                         ui.label(
                             egui::RichText::new(match after {
                                 Some(a) => format!("{name}: {} → {}", cur.replace('T', " "), a.replace('T', " ")),
+                                None if mode == "file" => String::new(),
                                 None => "Enter a date as YYYY-MM-DD HH:MM:SS".into(),
                             })
                             .color(t.text_label),
@@ -342,7 +352,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 Dialog::LabelNames { names, save_as } => {
                     names.resize(5, String::new());
                     // start from a set
-                    let sets = lightcraft_engine::cmd::manage::label_sets_json(&app.session);
+                    let sets = dac_engine::cmd::manage::label_sets_json(&app.session);
                     field(ui, "Set", |ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
                         for set in sets["sets"].as_array().into_iter().flatten() {
@@ -352,7 +362,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             }
                         }
                     });
-                    for (i, l) in lightcraft_catalog::ColorLabel::ALL.iter().enumerate() {
+                    for (i, l) in dac_catalog::ColorLabel::ALL.iter().enumerate() {
                         let colour = format!("{l:?}");
                         field(ui, &colour, |ui| {
                             let (r, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
@@ -422,7 +432,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                 }
                 Dialog::RenameKeyword { from, to } => {
-                    let n = app.session.catalog.photos().filter(|p| p.meta.keywords.iter().any(|k| lightcraft_catalog::keywords::is_under(k, from))).count();
+                    let n = app.session.catalog.photos().filter(|p| p.meta.keywords.iter().any(|k| dac_catalog::keywords::is_under(k, from))).count();
                     if dialog_field(ui, "field:keywordName", to, "New name") {
                         confirm = true;
                     }
@@ -442,7 +452,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         .catalog
                         .keyword_suggestions(from, into, 12)
                         .into_iter()
-                        .filter(|k| !from.iter().any(|f| lightcraft_catalog::keywords::is_under(k, f)))
+                        .filter(|k| !from.iter().any(|f| dac_catalog::keywords::is_under(k, f)))
                         .collect();
                     ui.horizontal_wrapped(|ui| {
                         for k in options {
@@ -496,7 +506,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     ui.label("Choose a PDF destination after confirming. Print the PDF from your viewer.");
                 }
                 Dialog::Export { opts, full_size, resize, preset_name, limit_kb, dir } => {
-                    use lightcraft_engine::export::{Anchor as P, ExportFormat as F, MetadataPolicy as M, SharpenAmount as A, SharpenFor as S};
+                    use dac_engine::export::{Anchor as P, ExportFormat as F, MetadataPolicy as M, SharpenAmount as A, SharpenFor as S};
                     let n = app.session.selection.ids.len().max(1);
                     ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
                     // Preset: load a built-in or saved set of options into the dialog
@@ -518,7 +528,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         if let Some(name) = chosen
                             && let Ok(params) = app.session.export_params(&json!({"preset": name}))
                         {
-                            let o = lightcraft_engine::export::ExportOptions::from_json(&params);
+                            let o = dac_engine::export::ExportOptions::from_json(&params);
                             *full_size = o.resize.is_none();
                             *resize = o.resize.unwrap_or_default();
                             *limit_kb = o.limit_kb.unwrap_or(0);
@@ -547,7 +557,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         opts.bit_depth = None;
                     }
                     let rendered = opts.format.is_rendered();
-                    let depths = lightcraft_engine::export::ExportOptions::bit_depths(opts.format);
+                    let depths = dac_engine::export::ExportOptions::bit_depths(opts.format);
                     if rendered && depths.len() > 1 {
                         let mut bd = opts.bit_depth.filter(|b| depths.iter().any(|d| d.0 == *b)).unwrap_or(depths[0].0);
                         choices(ui, "Bit depth", "exportBitDepth", depths, &mut bd);
@@ -566,7 +576,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     } else if opts.format == F::Avif {
                         ui.label(egui::RichText::new(crate::i18n::tr("Color space: sRGB (AVIF)")).color(t.text_dim));
                     } else {
-                        use lightcraft_engine::export::OutputSpace as C;
+                        use dac_engine::export::OutputSpace as C;
                         choices(
                             ui,
                             "Color space",
@@ -627,7 +637,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                     let mut wm_on = opts.watermark.is_some();
                     if ui.checkbox(&mut wm_on, crate::i18n::tr("Watermark")).changed() {
-                        opts.watermark = wm_on.then(|| lightcraft_engine::export::Watermark { text: "© ".into(), ..Default::default() });
+                        opts.watermark = wm_on.then(|| dac_engine::export::Watermark { text: "© ".into(), ..Default::default() });
                     }
                     if let Some(wm) = &mut opts.watermark {
                         // text, or a graphic (a logo with transparency)
@@ -684,11 +694,11 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                     ui.add_space(4.0);
                     if opts.format == F::Tiff {
-                        use lightcraft_engine::export::TiffCompression as Z;
+                        use dac_engine::export::TiffCompression as Z;
                         choices(ui, "Compression", "exportTiffCompression", &[(Z::None, "None"), (Z::Lzw, "LZW"), (Z::Deflate, "ZIP")], &mut opts.tiff_compression);
                     }
                     if opts.format == F::Dng {
-                        use lightcraft_engine::export::DngCompression as Z;
+                        use dac_engine::export::DngCompression as Z;
                         choices(ui, "Compression", "exportDngCompression", &[(Z::Lossless, "Lossless"), (Z::Deflate, "ZIP"), (Z::Uncompressed, "None")], &mut opts.dng_compression);
                     }
                     let naming_id = egui::Id::new("export-naming");
@@ -723,7 +733,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     field(ui, "Subfolder", |ui| {
                         ui.add(egui::TextEdit::singleline(&mut opts.subfolder).hint_text(crate::i18n::tr("none")).desired_width(f32::INFINITY))
                     });
-                    use lightcraft_engine::export::Conflict as K;
+                    use dac_engine::export::Conflict as K;
                     choices(
                         ui,
                         "If file exists",
@@ -915,26 +925,16 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         1 => crate::credits::contributors_ui(app, ui),
                         2 => crate::credits::models_ui(ui),
                         _ => {
-                            ui.label(egui::RichText::new("LightCraft").font(t.semibold(20.0)).color(t.text));
+                            ui.label(egui::RichText::new(dac_brand::DISPLAY_NAME).font(t.semibold(20.0)).color(t.text));
                             ui.label(crate::i18n::tr_format!("Version {} — a clean-room, pure-Rust photo library and raw developer.", env!("CARGO_PKG_VERSION")));
                             ui.label(crate::i18n::tr_format!(
                                 "MIT OR Apache-2.0. Fonts: {} (OFL). Icons: original.",
                                 crate::theme::font_credits(app.chinese_font.is_some())
                             ));
                             ui.add_space(10.0);
-                            let discord = egui::Button::new(egui::RichText::new(crate::i18n::tr("Join the ArtCraft Discord")).font(t.semibold(15.0)).color(egui::Color32::WHITE))
-                                .fill(t.accent)
-                                .min_size(egui::vec2(260.0, 34.0));
-                            let r = ui.add(discord).on_hover_text(crate::links::DISCORD);
-                            crate::widgets::register(ui.ctx(), "button:aboutDiscord", r.rect);
-                            if r.clicked() {
-                                let _ = crate::links::open(app, crate::links::DISCORD);
-                            }
-                            ui.add_space(6.0);
                             for (label, url) in [
-                                ("LightCraft website", crate::links::APP_PAGE),
-                                ("Source code on GitHub", crate::links::GITHUB),
-                                ("ArtCraft — more creative apps", crate::links::WEBSITE),
+                                ("{app} website", crate::links::APP_PAGE),
+                                ("Source code", crate::links::GITHUB),
                             ] {
                                 let r = ui.link(crate::i18n::tr(label)).on_hover_text(url);
                                 if r.clicked() {
@@ -945,12 +945,13 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                 }
                 Dialog::Shortcuts => crate::panels::keymap::body(app, ui, &t),
+                Dialog::ViewOptions => crate::panels::cells::view_options(app, ui),
             }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                // a model file LightCraft cannot use has nothing to confirm
+                // a model file the app cannot use has nothing to confirm
                 let unusable_model = matches!(&dlg, Dialog::DenoiseModel { info, .. } | Dialog::FaceModel { info, .. } if info["kind"] == "unsupported");
-                let informational = unusable_model || matches!(dlg, Dialog::About | Dialog::Shortcuts | Dialog::Settings { .. });
+                let informational = unusable_model || matches!(dlg, Dialog::About | Dialog::Shortcuts | Dialog::ViewOptions | Dialog::Settings { .. });
                 let sam = &app.session.segmenter;
                 let (sam_installed, sam_running, sam_failed) = (sam.installed(), sam.download_status().running, sam.download_status().error.is_some());
                 // no download location in this build: nothing to offer but the manual install
@@ -970,8 +971,11 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 let add_label;
                 let ok = match &dlg {
                     Dialog::Import { opts } => {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let n = if opts.immich { crate::panels::connections::selected_count(app) } else { opts.selected_paths().len() };
+                        #[cfg(target_arch = "wasm32")]
                         let n = opts.selected_paths().len();
-                        let verb = if opts.copy && opts.move_files { "Move" } else { "Import" };
+                        let verb = if opts.copy && opts.move_files && !opts.immich { "Move" } else { "Import" };
                         add_label = crate::i18n::tr_format!("{verb} {n} Photo{}", if n == 1 { "" } else { "s" }, verb = crate::i18n::tr(verb), n = n);
                         add_label.as_str()
                     }
@@ -1004,7 +1008,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         Dialog::DenoiseModel { accepted: false, .. } | Dialog::FaceModel { accepted: false, .. } | Dialog::SynchronizeFolder { counts: None, .. }
                     )
                         // smart-album rules that can't mean anything wait to be fixed
-                        && !matches!(&dlg, Dialog::SmartRules { id, rules, .. } if !rules.check_for(&app.session.catalog, id.map(lightcraft_catalog::AlbumId)).is_empty());
+                        && !matches!(&dlg, Dialog::SmartRules { id, rules, .. } if !rules.check_for(&app.session.catalog, id.map(dac_catalog::AlbumId)).is_empty());
                 let r = (!ok.is_empty()).then(|| ui.add_enabled(can_confirm, egui::Button::new(crate::i18n::tr(ok))));
                 if let Some(r) = &r {
                     crate::widgets::register(ui.ctx(), "button:dialogOk", r.rect);
@@ -1087,29 +1091,29 @@ pub fn fmt_gap(v: f64) -> String {
 
 /// Whether a dialog stays open after its action succeeded (the SAM 3 dialog while the model
 /// downloads).
-pub fn keeps_open(app: &LightcraftApp, dlg: &Dialog) -> bool {
+pub fn keeps_open(app: &DacApp, dlg: &Dialog) -> bool {
     matches!(dlg, Dialog::SamModel { .. }) && !app.session.segmenter.installed()
 }
 
 /// No SAM 3 model, no download running and nowhere to download it from: installing it by hand is
 /// all the dialog can offer.
-fn sam_by_hand(sam: &lightcraft_engine::segment::Segmenter) -> bool {
+fn sam_by_hand(sam: &dac_engine::segment::Segmenter) -> bool {
     !sam.installed() && !sam.download_status().running && sam.mirrors().is_empty()
 }
 
 /// The model installation guide.
-const SAM_HELP: &str = "https://github.com/storytold/lightcraft/blob/main/docs/ai-masks.md#getting-the-model";
+const SAM_HELP: &str = dac_brand::REPOSITORY;
 
 /// Show the SAM 3 model folder in the file manager (created first, so there is something to show).
-fn show_model_folder(app: &mut LightcraftApp, dir: &std::path::Path) -> Result<(), String> {
+fn show_model_folder(app: &mut DacApp, dir: &std::path::Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let reveal = app.services.reveal.as_mut().ok_or("not available here")?;
     reveal(&dir.to_string_lossy())
 }
 
 /// The SAM 3 dialog: what the model is, its size and licence, and the download's progress.
-fn sam_model_body(app: &mut LightcraftApp, ui: &mut egui::Ui, error: Option<&str>) {
-    use lightcraft_engine::segment::{LICENSE_NAME, LICENSE_URL, MODEL_BYTES};
+fn sam_model_body(app: &mut DacApp, ui: &mut egui::Ui, error: Option<&str>) {
+    use dac_engine::segment::{LICENSE_NAME, LICENSE_URL, MODEL_BYTES};
     let t = Tokens::get(ui.ctx());
     let seg = &app.session.segmenter;
     let d = seg.download_status();
@@ -1119,7 +1123,7 @@ fn sam_model_body(app: &mut LightcraftApp, ui: &mut egui::Ui, error: Option<&str
     }
     let gb = |b: u64| b as f64 / 1e9;
     ui.label(crate::i18n::tr(
-        "Object and Describe masks use SAM 3, Meta's segmentation model. It isn't part of LightCraft, and everything else works without it.",
+        "Object and Describe masks use SAM 3, Meta's segmentation model. It isn't part of {app}, and everything else works without it.",
     ));
     let dir = seg.dir.as_ref().map(|d| d.display().to_string()).unwrap_or_default();
     ui.label(format!("{} {:.1} GB, {} {dir}", crate::i18n::tr("A one-time download of about"), gb(MODEL_BYTES), crate::i18n::tr("saved in")));
@@ -1127,7 +1131,7 @@ fn sam_model_body(app: &mut LightcraftApp, ui: &mut egui::Ui, error: Option<&str
         egui::RichText::new(format!(
             "{} {LICENSE_NAME} — {}",
             crate::i18n::tr("Licence:"),
-            crate::i18n::tr("Meta's terms, not LightCraft's. Downloading it means accepting them.")
+            crate::i18n::tr("Meta's terms, not {app}'s. Downloading it means accepting them.")
         ))
         .color(t.text_label),
     );
@@ -1186,7 +1190,7 @@ fn sam_model_body(app: &mut LightcraftApp, ui: &mut egui::Ui, error: Option<&str
 }
 
 /// Runs a command that creates an album and asks the Albums tree to open the folders down to it.
-fn created_in(app: &mut LightcraftApp, command: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
+fn created_in(app: &mut DacApp, command: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
     let r = app.run(command, params)?;
     app.ui.reveal_album = r.get("id").and_then(serde_json::Value::as_u64);
     Ok(r)
@@ -1194,8 +1198,8 @@ fn created_in(app: &mut LightcraftApp, command: &str, params: serde_json::Value)
 
 /// The albums an Album rule in smart album `editing` picks from, in the sidebar's order: the album
 /// itself and any smart album that tests it (testing it back would loop) are blocked, with why.
-pub(crate) fn album_entries(cat: &lightcraft_catalog::Catalog, editing: Option<u64>) -> Vec<crate::album_picker::AlbumEntry> {
-    let editing = editing.map(lightcraft_catalog::AlbumId);
+pub(crate) fn album_entries(cat: &dac_catalog::Catalog, editing: Option<u64>) -> Vec<crate::album_picker::AlbumEntry> {
+    let editing = editing.map(dac_catalog::AlbumId);
     crate::album_picker::entries_from(cat, |a| match editing {
         Some(e) if a.id == e => Some(crate::i18n::tr("This is the album you're editing").to_string()),
         Some(e) if cat.album_reaches(a.id, e) => Some(crate::i18n::tr("It tests this album, so testing it back would loop").to_string()),
@@ -1203,7 +1207,7 @@ pub(crate) fn album_entries(cat: &lightcraft_catalog::Catalog, editing: Option<u
     })
 }
 
-pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_json::Value, String> {
+pub fn confirm_dialog(app: &mut DacApp, dlg: &Dialog) -> Result<serde_json::Value, String> {
     match dlg {
         Dialog::SamModel { then, .. } => {
             if app.session.segmenter.installed() {
@@ -1233,12 +1237,13 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             match mode.as_str() {
                 "set" => json!({"time": time}),
                 "shift" => json!({"shift": *days as i64 * 86_400 + *hours as i64 * 3600 + *minutes as i64 * 60}),
+                "file" => json!({"fromFile": true}),
                 _ => json!({"hours": zone}),
             },
         ),
         Dialog::LabelNames { names, save_as } => {
             let mut m = serde_json::Map::new();
-            for (l, n) in lightcraft_catalog::ColorLabel::ALL.iter().zip(names) {
+            for (l, n) in dac_catalog::ColorLabel::ALL.iter().zip(names) {
                 m.insert(format!("{l:?}").to_lowercase(), if n.trim().is_empty() { serde_json::Value::Null } else { json!(n.trim()) });
             }
             let r = app.run("label.setNames", json!({"names": m}));
@@ -1292,12 +1297,12 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         }
         Dialog::DeleteKeyword { keyword, .. } => app.run("keyword.delete", json!({"keyword": keyword})),
         Dialog::KeywordSet { replaces, name, slots, as_new } => {
-            use lightcraft_catalog::keywords::same;
+            use dac_catalog::keywords::same;
             let name = name.trim();
             if name.is_empty() {
                 return Err(crate::i18n::tr("A keyword set needs a name").to_string());
             }
-            if same(name, lightcraft_engine::cmd::keywords::RECENT) {
+            if same(name, dac_engine::cmd::keywords::RECENT) {
                 return Err(crate::i18n::tr("Recent Keywords is built in: choose another name").to_string());
             }
             // the set it renames: none when saving as new, or when it was deleted meanwhile (then it is
@@ -1337,7 +1342,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         }
         Dialog::SmartRules { id, name, rules, parent } => {
             // refused before anything changes (not even the name)
-            if let Some(problem) = rules.check_for(&app.session.catalog, id.map(lightcraft_catalog::AlbumId)).first() {
+            if let Some(problem) = rules.check_for(&app.session.catalog, id.map(dac_catalog::AlbumId)).first() {
                 return Err(problem.to_string());
             }
             let name = if name.trim().is_empty() { "Smart Album".to_string() } else { name.trim().to_string() };
@@ -1372,28 +1377,25 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::ConfirmDelete { .. } => app.run("photo.delete", json!({})),
         Dialog::RemoveFolder { path, disk, .. } => app.run("library.removeFolder", json!({"path": path, "disk": disk})),
         d @ Dialog::SynchronizeFolder { .. } => crate::sync::confirm(app, d),
-        Dialog::About | Dialog::Shortcuts | Dialog::Settings { .. } => Ok(serde_json::Value::Null),
+        Dialog::About | Dialog::Shortcuts | Dialog::ViewOptions | Dialog::Settings { .. } => Ok(serde_json::Value::Null),
     }
 }
 
 /// Open a one-field dialog that runs `command` with `params` + `{key: typed value}`.
-pub fn prompt(app: &mut LightcraftApp, title: &str, hint: &str, value: &str, command: &str, params: serde_json::Value, key: &str) {
+pub fn prompt(app: &mut DacApp, title: &str, hint: &str, value: &str, command: &str, params: serde_json::Value, key: &str) {
     app.ui.dialog =
         Some(Dialog::TextPrompt { title: title.into(), hint: hint.into(), value: value.into(), command: command.into(), params, key: key.into() });
 }
 
 /// The Export dialog's choices as `app.export` params (without the folder).
 fn export_dialog_params(
-    opts: &lightcraft_engine::export::ExportOptions,
+    opts: &dac_engine::export::ExportOptions,
     full_size: bool,
-    resize: &lightcraft_engine::export::Resize,
+    resize: &dac_engine::export::Resize,
     limit_kb: u32,
 ) -> serde_json::Value {
-    let o = lightcraft_engine::export::ExportOptions {
-        resize: (!full_size).then_some(*resize),
-        limit_kb: (limit_kb > 0).then_some(limit_kb),
-        ..opts.clone()
-    };
+    let o =
+        dac_engine::export::ExportOptions { resize: (!full_size).then_some(*resize), limit_kb: (limit_kb > 0).then_some(limit_kb), ..opts.clone() };
     o.to_json()
 }
 
@@ -1448,8 +1450,8 @@ const START_NUMBER: ControlSpec = spec("export.startNumber", "Start number", 1.0
 const PPI: ControlSpec = spec("export.ppi", "Resolution (ppi)", 1.0, 1200.0, 240.0, 1.0);
 
 /// Image Sizing: full size, or a resize mode and its value(s), don't enlarge, ppi.
-fn export_size(ui: &mut egui::Ui, full: &mut bool, r: &mut lightcraft_engine::export::Resize, ppi: &mut u16) {
-    use lightcraft_engine::export::ResizeMode as R;
+fn export_size(ui: &mut egui::Ui, full: &mut bool, r: &mut dac_engine::export::Resize, ppi: &mut u16) {
+    use dac_engine::export::ResizeMode as R;
     const MODES: [(R, &str); 7] = [
         (R::LongEdge, "Long Edge"),
         (R::ShortEdge, "Short Edge"),

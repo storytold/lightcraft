@@ -1,10 +1,10 @@
 //! Encode → decode round trips on generated fixtures.
 
-use lightcraft_codecs::exif::minimal_exif;
-use lightcraft_codecs::icc::{self, write_named};
-use lightcraft_codecs::*;
-use lightcraft_color::{DISPLAY_P3, REC2020, transfer::srgb_to_linear};
-use lightcraft_raster::Rgba8;
+use dac_codecs::exif::minimal_exif;
+use dac_codecs::icc::{self, write_named};
+use dac_codecs::*;
+use dac_color::{DISPLAY_P3, REC2020, transfer::srgb_to_linear};
+use dac_raster::Rgba8;
 
 fn gradient(w: usize, h: usize) -> Rgba8 {
     Rgba8::from_fn(w, h, |x, y| [(x * 255 / w.max(2).saturating_sub(1).max(1)) as u8, (y * 255 / h.max(2)) as u8, ((x + y) % 256) as u8, 255])
@@ -165,12 +165,12 @@ fn p3_icc_to_working() {
 #[test]
 fn custom_matrix_icc_is_exact() {
     // A non-standard space: goes through the generic matrix/TRC path, not the named one.
-    let space = lightcraft_color::RgbSpace {
+    let space = dac_color::RgbSpace {
         name: "Custom",
-        r: lightcraft_color::Xy::new(0.66, 0.32),
-        g: lightcraft_color::Xy::new(0.25, 0.65),
-        b: lightcraft_color::Xy::new(0.14, 0.07),
-        white: lightcraft_color::D65,
+        r: dac_color::Xy::new(0.66, 0.32),
+        g: dac_color::Xy::new(0.25, 0.65),
+        b: dac_color::Xy::new(0.14, 0.07),
+        white: dac_color::D65,
     };
     let icc = icc::write_matrix_trc(&space, &Trc::Gamma(2.0));
     let data = [255u8, 0, 0];

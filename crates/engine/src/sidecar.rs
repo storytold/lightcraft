@@ -5,8 +5,8 @@
 //! creator, keywords, capture time and GPS in the standard namespaces, plus our complete develop
 //! settings (`lc:settings`, JSON), the pick/reject flag (`lc:flag`) and location (`lc:location`).
 //!
-//! An existing sidecar is never replaced wholesale (issue #92): LightCraft's properties
-//! ([`OWNED`], [`OWNED_IF_STATED`]) are merged into it ([`lightcraft_meta::merge_xmp`]) and
+//! An existing sidecar is never replaced wholesale (issue #92): The app's properties
+//! ([`OWNED`], [`OWNED_IF_STATED`]) are merged into it ([`dac_meta::merge_xmp`]) and
 //! everything else — another editor's `crs:` develop settings, `xmpMM` history, unknown
 //! namespaces — is kept byte for byte. A sidecar that can't be read as XMP is first copied to
 //! `<name>.xmp.bak-<time>` (never overwritten), then replaced. Writes are atomic (temp file,
@@ -27,8 +27,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use lightcraft_catalog::{ColorLabel, Flag, MediaKind, Op, Photo, PhotoId, Source};
-use lightcraft_develop::DevelopSettings;
+use dac_catalog::{ColorLabel, Flag, MediaKind, Op, Photo, PhotoId, SidecarStat, Source, XmpStatus};
+use dac_develop::DevelopSettings;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -99,7 +99,7 @@ pub struct SidecarData {
     pub alt_text: Option<String>,
     pub extended_description: Option<String>,
     pub keywords: Option<Vec<String>>,
-    pub regions: Option<Vec<lightcraft_meta::Region>>,
+    pub regions: Option<Vec<dac_meta::Region>>,
     /// Capture time (ISO 8601) from `exif:DateTimeOriginal`, `photoshop:DateCreated` or
     /// `xmp:CreateDate` (first found). Used only when the file itself has no capture time.
     pub captured: Option<String>,
@@ -118,7 +118,7 @@ pub enum DevelopPatch {
 /// ([`crate::crs::Target`]: absolute Kelvin for raws with a measured illuminant, a shift from the
 /// as-shot white for everything developed relative to it).
 pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Result<SidecarData, String> {
-    let d = lightcraft_meta::parse_xmp(xmp).map_err(|e| e.to_string())?;
+    let d = dac_meta::parse_xmp(xmp).map_err(|e| e.to_string())?;
     let m = &d.metadata;
     let lc = |k: &str| d.properties.get(&format!("lc:{k}")).and_then(|v| v.first()).cloned();
     let mut out = SidecarData {
@@ -136,10 +136,10 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
         alt_text: m.alt_text.clone(),
         extended_description: m.extended_description.clone(),
         keywords: (!m.keywords.is_empty() || !m.hierarchical_keywords.is_empty())
-            .then(|| lightcraft_catalog::keywords::from_file(&m.keywords, &m.hierarchical_keywords)),
+            .then(|| dac_catalog::keywords::from_file(&m.keywords, &m.hierarchical_keywords)),
         // A sidecar that has `mwg-rs:Regions` at all (even an empty list) was written by an app that
         // knows about regions, so it's authoritative: its list, empty or not, replaces the catalog's.
-        // One without it (most writers, LightCraft's own included, which keeps another app's
+        // One without it (most writers, the app's own included, which keeps another app's
         // `mwg-rs:Regions` byte for byte but never writes one) says nothing about regions, and the
         // photo's are kept.
         regions: d.values.contains_key("mwg-rs:Regions").then(|| m.regions.clone()),
@@ -207,7 +207,7 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
         }
     }
     if let Some(marked) = sc.copyright_marked {
-        m.copyright_status = lightcraft_catalog::CopyrightStatus::from_marked(Some(marked));
+        m.copyright_status = dac_catalog::CopyrightStatus::from_marked(Some(marked));
     }
     if let Some(k) = &sc.keywords {
         m.keywords = k.clone();
@@ -222,7 +222,7 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
             if p.width > 0 && p.height > 0 {
                 crate::crs_masks::refit_radials(&mut v, crate::crs_masks::DEFAULT_ASPECT, p.width as f64 / p.height as f64);
             }
-            lightcraft_develop::apply_partial(&p.develop, &v, 1.0)
+            dac_develop::apply_partial(&p.develop, &v, 1.0)
         }
         None => return false,
     };
@@ -237,7 +237,7 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
 impl SidecarData {
     /// Read the label through the catalog's label names: other editors write the label's name
     /// (a custom set's "To Do" as well as "Red"); unknown names clear the label.
-    pub fn resolve_label(mut self, cat: &lightcraft_catalog::Catalog) -> Self {
+    pub fn resolve_label(mut self, cat: &dac_catalog::Catalog) -> Self {
         if let Some(t) = &self.label_text {
             self.label = Some(if t.is_empty() { None } else { cat.label_from_name(t) });
         }
@@ -247,10 +247,10 @@ impl SidecarData {
 
 /// The sidecar packet for a photo; the colour label is written by its name in `cat` (custom
 /// label names included, as other editors do).
-pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
+pub fn sidecar_packet(p: &Photo, cat: &dac_catalog::Catalog) -> String {
     let nz = |s: &str| (!s.trim().is_empty()).then(|| s.to_string());
-    let meta = lightcraft_meta::Metadata {
-        software: Some("LightCraft".into()),
+    let meta = dac_meta::Metadata {
+        software: Some(dac_brand::DISPLAY_NAME.into()),
         title: nz(&p.meta.title),
         caption: nz(&p.meta.caption),
         alt_text: nz(&p.meta.alt_text),
@@ -267,8 +267,8 @@ pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
         keywords: p.meta.keywords.clone(),
         rating: Some(p.rating.min(5) as i8),
         label: p.label.map(|l| cat.label_name(l)),
-        capture_time: p.captured.as_deref().and_then(lightcraft_meta::DateTime::parse_iso),
-        gps: p.meta.gps.map(|(latitude, longitude)| lightcraft_meta::Gps { latitude, longitude, altitude: None }),
+        capture_time: p.captured.as_deref().and_then(dac_meta::DateTime::parse_iso),
+        gps: p.meta.gps.map(|(latitude, longitude)| dac_meta::Gps { latitude, longitude, altitude: None }),
         ..Default::default()
     };
     let settings = serde_json::to_string(&*p.develop).unwrap_or_default();
@@ -281,11 +281,11 @@ pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
     if !p.meta.location.trim().is_empty() {
         lc.push(("location", p.meta.location.as_str()));
     }
-    lightcraft_meta::write_xmp_lc(&meta, &lc)
+    dac_meta::write_xmp_lc(&meta, &lc)
 }
 
-/// The properties LightCraft writes and owns in a sidecar: replaced on every save (removed when
-/// LightCraft has no value, so clearing a field clears it in the file too). All of them are read
+/// The properties the app writes and owns in a sidecar: replaced on every save (removed when
+/// The app has no value, so clearing a field clears it in the file too). All of them are read
 /// back on import and by Read Metadata from File.
 pub const OWNED: &[&str] = &[
     "xmp:Rating",
@@ -307,14 +307,14 @@ pub const OWNED: &[&str] = &[
     "lc:*",
 ];
 
-/// Properties replaced only when LightCraft has a value (capture time; GPS, which LightCraft
-/// doesn't read from sidecars): otherwise the sidecar's own value stays. Anything else LightCraft
+/// Properties replaced only when the app has a value (capture time; GPS, which the app
+/// doesn't read from sidecars): otherwise the sidecar's own value stays. Anything else the app
 /// writes (`xmp:CreatorTool`) goes only into new sidecars.
 pub const OWNED_IF_STATED: &[&str] = &["exif:DateTimeOriginal", "photoshop:DateCreated", "exif:GPSLatitude", "exif:GPSLongitude"];
 
 /// Write `data` to `path` atomically: a temp file next to it, synced, then renamed over it.
 fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
-    lightcraft_catalog::safe_file::write_atomic(path, data)
+    dac_catalog::safe_file::write_atomic(path, data)
 }
 
 /// Copy `path` to a new `<name>.bak-<stamp>` (`-1`, `-2`… if taken; never overwriting).
@@ -360,11 +360,8 @@ fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<
     if bytes.iter().all(u8::is_ascii_whitespace) {
         return Ok((fresh, false, None));
     }
-    let rules = lightcraft_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
-    match std::str::from_utf8(&bytes)
-        .map_err(|e| e.to_string())
-        .and_then(|old| lightcraft_meta::merge_xmp(old, &fresh, rules).map_err(|e| e.to_string()))
-    {
+    let rules = dac_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
+    match std::str::from_utf8(&bytes).map_err(|e| e.to_string()).and_then(|old| dac_meta::merge_xmp(old, &fresh, rules).map_err(|e| e.to_string())) {
         Ok(merged) => Ok((merged, true, None)),
         Err(why) => {
             let b = backup(path, stamp)?;
@@ -379,7 +376,7 @@ fn stem_key(original: &str) -> String {
     sidecar_path(original, SidecarNaming::Stem).to_string_lossy().to_lowercase()
 }
 
-fn file_path(p: &Photo) -> Option<&str> {
+pub(crate) fn file_path(p: &Photo) -> Option<&str> {
     match &p.source {
         Source::File { path } => Some(path),
         Source::Demo { .. } => None,
@@ -395,7 +392,7 @@ pub fn read_packet(original: &str, kind: MediaKind, naming: SidecarNaming) -> Op
     }
     if kind == MediaKind::Raw {
         let bytes = std::fs::read(original).ok()?;
-        let x = lightcraft_meta::embedded(&bytes).xmp?;
+        let x = dac_meta::embedded(&bytes).xmp?;
         return Some((x, PathBuf::from(original)));
     }
     None
@@ -419,7 +416,7 @@ pub(crate) fn op_photos(op: &Op, out: &mut Vec<PhotoId>) {
 pub(crate) struct StemOwners(HashMap<String, PhotoId>);
 
 impl StemOwners {
-    pub(crate) fn of(cat: &lightcraft_catalog::Catalog) -> StemOwners {
+    pub(crate) fn of(cat: &dac_catalog::Catalog) -> StemOwners {
         // per stem: (raw first, then file name, then id) of the best candidate; and how many
         let mut best: HashMap<String, ((bool, String, u64), PhotoId, usize)> = HashMap::new();
         for p in cat.photos().filter(|p| p.copy_of.is_none()) {
@@ -473,7 +470,7 @@ impl Session {
     }
 
     pub(crate) fn save_sidecar_with(&self, id: PhotoId, owners: &StemOwners) -> Result<SidecarSaved> {
-        let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
+        let p = self.catalog.photo(id).ok_or(dac_catalog::CatalogError::NoPhoto(id))?;
         if p.copy_of.is_some() {
             return Err(EngineError::Other(format!("{} is a virtual copy: its settings live only in the library", p.file_name)));
         }
@@ -487,7 +484,7 @@ impl Session {
 
     /// The op that applies a photo's sidecar (or embedded XMP) to the catalog, if there is one.
     pub fn read_sidecar_op(&self, id: PhotoId) -> Result<Option<(Op, PathBuf)>> {
-        let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
+        let p = self.catalog.photo(id).ok_or(dac_catalog::CatalogError::NoPhoto(id))?;
         let Some(orig) = file_path(p) else { return Ok(None) };
         let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_naming(id)) else { return Ok(None) };
         let sc = parse_sidecar(&packet, crate::crs::Target::for_photo(p)).map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?;
@@ -497,7 +494,7 @@ impl Session {
     /// The op that applies what a sidecar says (already read and parsed, e.g. on a worker
     /// thread) to photo `id`: the sidecar wins. No file is read.
     pub fn sidecar_op(&self, id: PhotoId, sc: SidecarData) -> Result<Op> {
-        let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
+        let p = self.catalog.photo(id).ok_or(dac_catalog::CatalogError::NoPhoto(id))?;
         let sc = sc.resolve_label(&self.catalog);
         let mut q = (**p).clone();
         let develop_changed = merge_into(&mut q, &sc, &(self.clock)());
@@ -516,21 +513,64 @@ impl Session {
         Ok(Op::Batch { ops })
     }
 
+    /// What the file system says about photo `id`'s sidecar now (`None`: it has none, or isn't a file).
+    pub fn sidecar_stat(&self, id: PhotoId) -> Option<SidecarStat> {
+        let p = self.catalog.photo(id)?;
+        let orig = file_path(p)?;
+        let f = find_sidecar(orig, self.sidecar_naming(id))?;
+        let m = std::fs::metadata(f).ok()?;
+        let mtime =
+            m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).and_then(|d| i64::try_from(d.as_secs()).ok()).unwrap_or(0);
+        Some(SidecarStat { mtime, size: m.len() })
+    }
+
+    /// The metadata-vs-XMP state of photo `id` (see [`dac_catalog::xmp_state`]).
+    pub fn xmp_status(&self, id: PhotoId) -> XmpStatus {
+        match self.catalog.photo(id) {
+            Some(p) => p.xmp_status(self.sidecar_stat(id)),
+            None => XmpStatus::Unknown,
+        }
+    }
+
+    /// Record that the photos' catalog state and their sidecars are in step now (right after a
+    /// read from or write to the sidecar): app bookkeeping, journaled but not an undo step.
+    /// With `only_with_sidecar`, photos without a sidecar file are skipped.
+    pub(crate) fn record_xmp_stamps(&mut self, ids: &[PhotoId], only_with_sidecar: bool) {
+        for id in ids {
+            let stat = self.sidecar_stat(*id);
+            if only_with_sidecar && stat.is_none() {
+                continue;
+            }
+            let Some(p) = self.catalog.photo(*id) else { continue };
+            let stamp = Some(p.xmp_stamp_now(stat));
+            if p.xmp == stamp {
+                continue;
+            }
+            let op = Op::SetXmpStamp { id: *id, stamp };
+            if self.catalog.apply(op.clone()).is_ok() {
+                self.pending_log.push(op);
+            }
+        }
+    }
+
     /// Auto-write: sidecars for photos changed by `ops` (errors are logged, not returned).
-    pub(crate) fn auto_write_sidecars(&self, ops: &[Op]) {
+    pub(crate) fn auto_write_sidecars(&mut self, ops: &[Op]) {
         let mut ids = Vec::new();
         ops.iter().for_each(|o| op_photos(o, &mut ids));
         if ids.is_empty() {
             return;
         }
         let owners = StemOwners::of(&self.catalog);
+        let mut written = Vec::new();
         for id in ids {
-            if self.catalog.photo(id).is_some_and(|p| file_path(p).is_some() && p.copy_of.is_none())
-                && let Err(e) = self.save_sidecar_with(id, &owners)
-            {
-                log::warn!("auto-write XMP: {e}");
+            if self.catalog.photo(id).is_some_and(|p| file_path(p).is_some() && p.copy_of.is_none()) {
+                match self.save_sidecar_with(id, &owners) {
+                    Ok(_) => written.push(id),
+                    Err(e) => log::warn!("auto-write XMP: {e}"),
+                }
             }
         }
+        self.record_xmp_stamps(&written, false);
     }
 }
 
@@ -540,17 +580,17 @@ mod tests {
     /// gives the photo its keywords as paths.
     #[test]
     fn sidecar_keywords_keep_their_hierarchy() {
-        let m = lightcraft_meta::Metadata {
+        let m = dac_meta::Metadata {
             keywords: vec!["Lisbon".into(), "Places".into()],
             hierarchical_keywords: vec!["Places|Lisbon".into()],
             ..Default::default()
         };
-        let sc = super::parse_sidecar(&lightcraft_meta::write_xmp(&m, None), crate::crs::Target::Rendered).unwrap();
+        let sc = super::parse_sidecar(&dac_meta::write_xmp(&m, None), crate::crs::Target::Rendered).unwrap();
         assert_eq!(sc.keywords, Some(vec!["Places|Lisbon".to_string()]));
     }
 
     use super::*;
-    use lightcraft_catalog::Meta;
+    use dac_catalog::Meta;
 
     fn photo() -> Photo {
         let mut p = Photo::new(PhotoId(7), Source::File { path: "/x/IMG_1.jpg".into() }, "IMG_1.jpg", "JPEG", 40, 30, "2026-01-01T00:00:00");
@@ -572,7 +612,7 @@ mod tests {
         d.light.exposure = 0.75;
         d.effects.clarity = 22.0;
         d.crop.geometry.angle = 2.5;
-        d.masks.push(lightcraft_develop::Mask { id: 1, ..Default::default() });
+        d.masks.push(dac_develop::Mask { id: 1, ..Default::default() });
         p.develop = Arc::new(d);
         p
     }
@@ -586,7 +626,7 @@ mod tests {
     #[test]
     fn packet_roundtrip_restores_everything() {
         let p = photo();
-        let x = sidecar_packet(&p, &lightcraft_catalog::Catalog::new());
+        let x = sidecar_packet(&p, &dac_catalog::Catalog::new());
         let sc = parse_sidecar(&x, crate::crs::Target::Rendered).unwrap();
         assert_eq!(sc.rating, Some(4));
         assert_eq!(sc.flag, Some(Flag::Pick));

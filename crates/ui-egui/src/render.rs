@@ -16,12 +16,12 @@
 
 use std::collections::HashMap;
 
-use lightcraft_catalog::PhotoId;
-use lightcraft_engine::Session;
-use lightcraft_engine::media::{QuickJob, QuickSource, RenderJob, RenderResult};
-use lightcraft_engine::pipeline::StageCache;
-use lightcraft_preview::JobPool;
-use lightcraft_raster::Histogram;
+use dac_catalog::PhotoId;
+use dac_engine::Session;
+use dac_engine::media::{QuickJob, QuickSource, RenderJob, RenderResult};
+use dac_engine::pipeline::StageCache;
+use dac_preview::JobPool;
+use dac_raster::Histogram;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -30,11 +30,10 @@ pub enum Slot {
     /// A thumbnail's stand-in (embedded preview of an unedited raw).
     ThumbQuick(PhotoId),
     Main,
-    /// The loupe zoomed past what `Main` can hold: the window of the frame that is on screen,
-    /// rendered at the zoom scale and drawn over `Main` (see [`crate::region`]).
-    Region,
-    /// The Before side of a Before/After view zoomed the same way (see [`Slot::Region`]).
-    RegionBefore,
+    /// A zoomed view while a slider drags: the window of the frame that is on screen, rendered in
+    /// one draft job with its own stage cache (each tile apart would redo every stage per tile) and
+    /// drawn over `Main` until the tiles of the final look arrive. By pane ([`PANE_AFTER`]…).
+    Window(u8),
     /// The loupe's stand-in until `Main` has the photo.
     Preview,
     Before,
@@ -52,6 +51,31 @@ pub enum Slot {
     Import(u32),
     /// The second window's view of the active photo.
     Second,
+    /// A tile of a zoomed view (see [`crate::region::TileCache`]): the pane it is shown in
+    /// ([`PANE_AFTER`]…) and its place in the grid. Its result goes to [`Renderer::tiles`], not
+    /// [`Renderer::textures`].
+    Tile {
+        pane: u8,
+        col: u16,
+        row: u16,
+    },
+}
+
+/// The panes a zoomed view's tiles and drag windows belong to: the loupe (its After and Before
+/// sides) and the Compare / Reference views' two photos.
+pub const PANE_AFTER: u8 = 0;
+pub const PANE_BEFORE: u8 = 1;
+/// The first Compare / Reference pane (`PANE_COMPARE + i` for [`Slot::Compare`]`(i)`).
+pub const PANE_COMPARE: u8 = 2;
+
+/// Where a [`Slot::Window`] render sits: the photo, the zoomed frame, the window of it rendered,
+/// and the develop settings' hash it was asked for with.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowGeom {
+    pub photo: PhotoId,
+    pub full: (usize, usize),
+    pub window: dac_engine::pipeline::PixelWindow,
+    pub look: u64,
 }
 
 pub struct Tex {
@@ -87,7 +111,7 @@ struct Queued {
 /// The texture of a render: its pixels as egui wants them. Renders are opaque, so the common case
 /// is a plain copy; only a pixel with alpha pays for premultiplying. (The generic conversion, on
 /// the UI thread, was most of the time a 5 MP zoom window took to show.)
-pub(crate) fn color_image(img: &lightcraft_raster::Rgba8) -> egui::ColorImage {
+pub(crate) fn color_image(img: &dac_raster::Rgba8) -> egui::ColorImage {
     let pixels = img
         .data
         .iter()
@@ -116,9 +140,9 @@ pub(crate) fn stage_trim_order(sizes: &[(Slot, usize)], budget: usize) -> Vec<Sl
         _ => 5,
     };
     let view_rank = |s: Slot| match s {
-        Slot::RegionBefore => Some(0),
+        Slot::Window(PANE_BEFORE) => Some(0),
         Slot::Before => Some(1),
-        Slot::Region => Some(2),
+        Slot::Window(_) => Some(2),
         _ => None,
     };
     let is_view = |s: Slot| matches!(s, Slot::Main) || view_rank(s).is_some();
@@ -170,10 +194,10 @@ pub struct Renderer {
     shown_ids: HashMap<Slot, u64>,
     /// Requests made before this id belong to a library or preview cache that is gone.
     epoch: u64,
-    preview_generation: Option<(std::sync::Weak<lightcraft_preview::PreviewCache>, u64)>,
+    preview_generation: Option<(std::sync::Weak<dac_preview::PreviewCache>, u64)>,
     /// Last thumbnail inputs; weak identities do not retain photo histories or force deep clones.
     /// (photo, size bucket, job key, whether the request went through an embedded stand-in)
-    thumb_inputs: HashMap<PhotoId, (std::sync::Weak<lightcraft_catalog::Photo>, usize, u64, bool)>,
+    thumb_inputs: HashMap<PhotoId, (std::sync::Weak<dac_catalog::Photo>, usize, u64, bool)>,
     pool: JobPool<Slot, RenderResult>,
     /// Jobs run elsewhere (see [`RenderOffload`]); `queue` holds the ones not started yet.
     offload: Option<Box<dyn RenderOffload>>,
@@ -211,8 +235,17 @@ pub struct Renderer {
     /// A budget other than the memory budget's share (tests).
     #[cfg(test)]
     pub(crate) stage_budget_override: Option<usize>,
+    /// Tiles of zoomed views, by what they show (see [`crate::region`]).
+    pub tiles: crate::region::TileCache<Tex>,
+    /// Tile slot → (job key, what it shows, window rendered, tile within it) of its request.
+    tile_meta: HashMap<Slot, (u64, crate::region::TileKey, dac_engine::pipeline::PixelWindow, dac_engine::pipeline::PixelWindow)>,
+    /// Request id → where a [`Slot::Window`] request's pixels go (a late draft is still shown, so
+    /// each request keeps its own; bounded).
+    window_req: HashMap<u64, WindowGeom>,
+    /// Where each [`Slot::Window`] texture's pixels go.
+    window_shown: HashMap<Slot, WindowGeom>,
     /// The monitor profile textures are made for (`app.displayProfile`; `None`: sRGB).
-    display: Option<Arc<lightcraft_engine::display::Display>>,
+    display: Option<Arc<dac_engine::display::Display>>,
     /// Since when nothing has been pending, and whether the GPU pool was trimmed since.
     #[cfg(not(target_arch = "wasm32"))]
     idle: Option<(std::time::Instant, bool)>,
@@ -226,7 +259,7 @@ impl Slot {
     /// An interactive view of the open photo: slider drags redo only the stages they feed, and a
     /// draft that finishes late still replaces older pixels.
     pub fn is_view(self) -> bool {
-        matches!(self, Slot::Main | Slot::Region | Slot::RegionBefore | Slot::Before | Slot::Hover)
+        matches!(self, Slot::Main | Slot::Window(_) | Slot::Before | Slot::Hover)
     }
 }
 
@@ -260,6 +293,10 @@ impl Renderer {
             completed: 0,
             keep_pixels: false,
             stages: HashMap::new(),
+            tiles: Default::default(),
+            tile_meta: HashMap::new(),
+            window_req: HashMap::new(),
+            window_shown: HashMap::new(),
             quick_tried: HashMap::new(),
             failed: HashMap::new(),
             catalog_rev: 0,
@@ -279,7 +316,7 @@ impl Renderer {
 
 impl Renderer {
     /// Would asking for this thumbnail again (at `priority`) change nothing?
-    pub fn thumb_current(&self, photo: &Arc<lightcraft_catalog::Photo>, bucket: usize, priority: u32) -> bool {
+    pub fn thumb_current(&self, photo: &Arc<dac_catalog::Photo>, bucket: usize, priority: u32) -> bool {
         let Some(&(ref old, size, key, quick)) = self.thumb_inputs.get(&photo.id) else { return false };
         if old.as_ptr() != Arc::as_ptr(photo) || size != bucket {
             return false;
@@ -295,7 +332,7 @@ impl Renderer {
     }
 
     /// Remember the inputs of the thumbnail just requested (`quick`: through a stand-in).
-    pub fn remember_thumb(&mut self, photo: &Arc<lightcraft_catalog::Photo>, bucket: usize, key: u64, quick: bool) {
+    pub fn remember_thumb(&mut self, photo: &Arc<dac_catalog::Photo>, bucket: usize, key: u64, quick: bool) {
         if self.thumb_inputs.len() >= 1024 && !self.thumb_inputs.contains_key(&photo.id) {
             self.thumb_inputs.retain(|_, (p, _, _, _)| p.strong_count() > 0);
             if self.thumb_inputs.len() >= 1024
@@ -308,9 +345,9 @@ impl Renderer {
     }
 
     /// Views that render straight into the display profile's primaries (wide gamut); everything
-    /// else is rendered for sRGB and converted ([`lightcraft_engine::display::present`]).
+    /// else is rendered for sRGB and converted ([`dac_engine::display::present`]).
     fn renders_for_display(slot: Slot) -> bool {
-        matches!(slot, Slot::Main | Slot::Region | Slot::Before | Slot::RegionBefore | Slot::Hover | Slot::Compare(_) | Slot::Second)
+        matches!(slot, Slot::Main | Slot::Before | Slot::Hover | Slot::Compare(_) | Slot::Second)
     }
 
     /// `job` as [`Self::request`] would run it for `slot` (its key included): views render for
@@ -325,13 +362,13 @@ impl Renderer {
     }
 
     /// The display profile textures are made for (`None`: sRGB).
-    pub fn display(&self) -> Option<&Arc<lightcraft_engine::display::Display>> {
+    pub fn display(&self) -> Option<&Arc<dac_engine::display::Display>> {
         self.display.as_ref()
     }
 
     /// Show previews through `display` from now on (`app.displayProfile`): when it changes, every
     /// texture is made again for the new one.
-    pub fn set_display(&mut self, display: Option<Arc<lightcraft_engine::display::Display>>) {
+    pub fn set_display(&mut self, display: Option<Arc<dac_engine::display::Display>>) {
         if display.as_ref().map(|d| d.id()) != self.display_id() {
             self.forget_all();
         }
@@ -339,10 +376,10 @@ impl Renderer {
     }
 
     /// Run `job` and make its image ready for `display` (on the worker thread).
-    fn run_for(job: impl FnOnce() -> RenderResult, display: &Option<Arc<lightcraft_engine::display::Display>>) -> RenderResult {
+    fn run_for(job: impl FnOnce() -> RenderResult, display: &Option<Arc<dac_engine::display::Display>>) -> RenderResult {
         let mut r = job();
         if let Some(d) = display {
-            lightcraft_engine::display::present(&mut r, d);
+            dac_engine::display::present(&mut r, d);
         }
         r
     }
@@ -361,6 +398,7 @@ impl Renderer {
     pub fn release(&mut self, slot: Slot) {
         self.textures.remove(&slot);
         self.stages.remove(&slot);
+        self.window_shown.remove(&slot);
     }
 
     /// Run jobs through `offload` from now on (instead of the job pool / inline).
@@ -389,7 +427,7 @@ impl Renderer {
             return;
         }
         self.pending.insert(slot, (job.key, priority));
-        job.request_id = lightcraft_preview::next_tick();
+        job.request_id = dac_preview::next_tick();
         self.request_ids.insert(slot, job.request_id);
         // (an offload keeps its own per-view stage caches; the flag tells it to)
         let job = if slot.is_view() { job.with_stages(self.stages.entry(slot).or_default().clone()) } else { job };
@@ -408,7 +446,7 @@ impl Renderer {
             key,
             priority,
             Box::new(move || {
-                let run = || if background { lightcraft_engine::memory::in_background(|| job.run()) } else { job.run() };
+                let run = || if background { dac_engine::memory::in_background(|| job.run()) } else { job.run() };
                 Self::run_for(run, &display)
             }),
         );
@@ -421,7 +459,7 @@ impl Renderer {
         }
         self.quick_tried.insert(slot, job.key);
         self.pending.insert(slot, (job.key, priority));
-        job.request_id = lightcraft_preview::next_tick();
+        job.request_id = dac_preview::next_tick();
         self.request_ids.insert(slot, job.request_id);
         let key = job.key;
         let display = self.display.clone();
@@ -436,10 +474,10 @@ impl Renderer {
         }
         self.prefetched.insert(slot, job.key);
         self.pending.insert(slot, (job.key, priority));
-        job.request_id = lightcraft_preview::next_tick();
+        job.request_id = dac_preview::next_tick();
         self.request_ids.insert(slot, job.request_id);
         let key = job.key;
-        self.pool.submit(slot, key, priority, Box::new(move || lightcraft_engine::memory::in_background(|| job.run())));
+        self.pool.submit(slot, key, priority, Box::new(move || dac_engine::memory::in_background(|| job.run())));
     }
 
     /// Is a request for `slot` queued or running?
@@ -447,7 +485,7 @@ impl Renderer {
     pub fn forget_all(&mut self) {
         self.request_ids.clear();
         self.shown_ids.clear();
-        self.epoch = lightcraft_preview::next_tick();
+        self.epoch = dac_preview::next_tick();
         self.preview_generation = None;
         self.pool.reprioritize(|_, _| None);
         self.thumb_inputs.clear();
@@ -458,6 +496,93 @@ impl Renderer {
         self.prefetched.clear();
         self.pending.clear();
         self.queue.clear();
+        self.tiles.clear();
+        self.tile_meta.clear();
+        self.window_req.clear();
+        self.window_shown.clear();
+    }
+
+    /// Ask for the drag window of `pane` ([`Slot::Window`]): `job` renders `geom.window` of the
+    /// frame, with the pane's own stage cache, so a drag redoes only the stages it feeds.
+    pub fn request_window(&mut self, pane: u8, job: RenderJob, geom: WindowGeom, priority: u32) {
+        let slot = Slot::Window(pane);
+        self.request(slot, job, priority);
+        if let Some(&id) = self.request_ids.get(&slot) {
+            if self.window_req.len() >= 32 {
+                // the oldest requests go: their results are superseded by now
+                let mut ids: Vec<u64> = self.window_req.keys().copied().collect();
+                ids.sort_unstable();
+                for old in ids.into_iter().take(16) {
+                    self.window_req.remove(&old);
+                }
+            }
+            self.window_req.insert(id, geom);
+        }
+    }
+
+    /// The drag window `pane` shows, and where its pixels go.
+    pub fn window_texture(&self, pane: u8) -> Option<(&Tex, WindowGeom)> {
+        let slot = Slot::Window(pane);
+        Some((self.textures.get(&slot)?, *self.window_shown.get(&slot)?))
+    }
+
+    /// Ask for tile `key`: `job` renders `window` of the frame, of which `tile` is kept. Nothing
+    /// happens when the tile is held or already asked for.
+    pub fn request_tile(
+        &mut self,
+        key: crate::region::TileKey,
+        job: RenderJob,
+        window: dac_engine::pipeline::PixelWindow,
+        tile: dac_engine::pipeline::PixelWindow,
+        priority: u32,
+    ) {
+        if self.tiles.has_render(&key) {
+            return;
+        }
+        let slot = Slot::Tile { pane: key.pane, col: key.tile.col, row: key.tile.row };
+        self.tile_meta.insert(slot, (job.key, key, window, tile));
+        self.request(slot, job, priority);
+    }
+
+    /// Show `img` for tile `key` until its render arrives (a part of a 1:1 preview).
+    pub fn tile_placeholder(&mut self, ctx: &egui::Context, key: crate::region::TileKey, img: &dac_raster::Rgba8) {
+        if self.tiles.contains(&key) {
+            return;
+        }
+        let tex = self.tile_tex(ctx, key, img, 0.0);
+        self.tiles.insert(key, tex, img.width.saturating_mul(img.height).saturating_mul(4), true);
+    }
+
+    fn tile_tex(&self, ctx: &egui::Context, key: crate::region::TileKey, img: &dac_raster::Rgba8, ms: f64) -> Tex {
+        let color = std::sync::Arc::new(color_image(img));
+        let pixels = self.keep_pixels.then(|| color.clone());
+        let tex = ctx.load_texture(format!("tile {:?} {:?}", key.tile, key.pane), color, egui::TextureOptions::LINEAR);
+        Tex { key: key.look, photo: key.photo, tex, size: [img.width, img.height], histogram: None, ms, quick: None, pixels }
+    }
+
+    /// Drop queued tile renders `keep` says no to (tiles scrolled away). Running ones finish and
+    /// are kept: their pixels are good.
+    pub fn cancel_tiles(&mut self, keep: impl Fn(Slot) -> bool) {
+        let drop_it = |s: &Slot| matches!(s, Slot::Tile { .. }) && !keep(*s);
+        let mut dropped = self.pool.reprioritize(|s, p| if drop_it(s) { None } else { Some(p) });
+        self.queue.retain(|q| {
+            if drop_it(&q.slot) {
+                dropped.push(q.slot);
+                false
+            } else {
+                true
+            }
+        });
+        for s in dropped {
+            self.pending.remove(&s);
+            self.request_ids.remove(&s);
+            self.tile_meta.remove(&s);
+        }
+    }
+
+    /// Tile renders queued or running.
+    pub fn tiles_pending(&self) -> usize {
+        self.pending.keys().filter(|s| matches!(s, Slot::Tile { .. })).count()
     }
 
     pub fn is_pending(&self, slot: Slot) -> bool {
@@ -654,7 +779,7 @@ impl Renderer {
             }
             // (results from an offload, which doesn't know the display profile: converted here)
             if let Some(d) = &self.display {
-                lightcraft_engine::display::present(&mut r, d);
+                dac_engine::display::present(&mut r, d);
             }
             if self.pending.get(&slot).is_some_and(|p| p.0 == r.key) {
                 self.pending.remove(&slot);
@@ -673,6 +798,25 @@ impl Renderer {
                 }
             };
             if matches!(slot, Slot::Prefetch(_)) {
+                continue;
+            }
+            if let Slot::Window(_) = slot {
+                match self.window_req.get(&r.request_id) {
+                    Some(g) => {
+                        self.window_shown.insert(slot, *g);
+                    }
+                    None => continue,
+                }
+            }
+            if let Slot::Tile { .. } = slot {
+                if let Some(&(key, tile_key, window, tile)) = self.tile_meta.get(&slot)
+                    && key == r.key
+                    && let Some(img) = crate::region::crop_tile(&rendered.image, window, tile)
+                {
+                    let tex = self.tile_tex(ctx, tile_key, &img, ms);
+                    self.tiles.insert(tile_key, tex, img.width.saturating_mul(img.height).saturating_mul(4), false);
+                    changed = true;
+                }
                 continue;
             }
             if let Slot::ThumbQuick(id) = slot {
@@ -748,8 +892,8 @@ impl Renderer {
         }
         let waited = now.duration_since(since);
         if waited >= IDLE_TRIM {
-            lightcraft_engine::gpu::trim_pool(0);
-            lightcraft_engine::memory::release();
+            dac_engine::gpu::trim_pool(0);
+            dac_engine::memory::release();
             self.idle = Some((since, true));
         } else {
             ctx.request_repaint_after(IDLE_TRIM - waited);
@@ -762,12 +906,12 @@ impl Renderer {
         if let Some(b) = self.stage_budget_override {
             return b;
         }
-        lightcraft_engine::memory::budget() / STAGE_BUDGET_SHARE
+        dac_engine::memory::budget() / STAGE_BUDGET_SHARE
     }
 
     /// Clear stage caches, least useful first, until what they hold fits [`Self::stage_budget`].
     fn trim_stages(&mut self) {
-        let sizes: Vec<(Slot, usize)> = self.stages.iter().map(|(slot, c)| (*slot, c.bytes() + lightcraft_engine::gpu::stage_bytes(c))).collect();
+        let sizes: Vec<(Slot, usize)> = self.stages.iter().map(|(slot, c)| (*slot, c.bytes() + dac_engine::gpu::stage_bytes(c))).collect();
         for slot in stage_trim_order(&sizes, self.stage_budget()) {
             if let Some(c) = self.stages.get(&slot) {
                 c.clear();
@@ -779,18 +923,23 @@ impl Renderer {
     /// What the renderer holds: per-view stage caches (CPU images and GPU buffers) and textures.
     pub fn memory(&self) -> serde_json::Value {
         let cpu: usize = self.stages.values().map(|s| s.bytes()).sum();
-        let gpu: usize = self.stages.values().map(|s| lightcraft_engine::gpu::stage_bytes(s)).sum();
+        let gpu: usize = self.stages.values().map(|s| dac_engine::gpu::stage_bytes(s)).sum();
         let tex: usize = self.textures.values().map(|t| t.size[0] * t.size[1] * 4).sum();
         let copies: usize = self.textures.values().filter_map(|t| t.pixels.as_ref()).map(|p| p.pixels.len() * 4).sum();
         serde_json::json!({
-            "stageCaches": {"count": self.stages.len(), "cpuBytes": cpu, "gpuBytes": gpu, "budgetBytes": self.stage_budget(), "trimmed": self.stages_trimmed, "sharedSourceBytes": lightcraft_engine::gpu::shared_source_bytes()},
+            "stageCaches": {"count": self.stages.len(), "cpuBytes": cpu, "gpuBytes": gpu, "budgetBytes": self.stage_budget(), "trimmed": self.stages_trimmed, "sharedSourceBytes": dac_engine::gpu::shared_source_bytes()},
             "textures": {"count": self.textures.len(), "bytes": tex, "cpuCopyBytes": copies},
+            "tiles": {"count": self.tiles.len(), "bytes": self.tiles.bytes(), "budgetBytes": self.tiles.budget()},
         })
     }
 
     /// CPU copies of the current textures by id (see [`Self::keep_pixels`]).
     pub fn cpu_textures(&self) -> HashMap<egui::TextureId, crate::softpaint::CpuTexture> {
-        self.textures.values().filter_map(|t| Some((t.tex.id(), crate::softpaint::CpuTexture::linear(t.pixels.clone()?)))).collect()
+        self.textures
+            .values()
+            .chain(self.tiles.values())
+            .filter_map(|t| Some((t.tex.id(), crate::softpaint::CpuTexture::linear(t.pixels.clone()?))))
+            .collect()
     }
 
     /// Drop the import review thumbnails (a new review, or the dialog closed).
@@ -838,7 +987,7 @@ impl Renderer {
 #[cfg(test)]
 mod thumbnail_tests {
     use super::*;
-    use lightcraft_catalog::{Catalog, Op, Photo, Source};
+    use dac_catalog::{Catalog, Op, Photo, Source};
 
     struct Blocked;
     impl RenderOffload for Blocked {
@@ -862,7 +1011,7 @@ mod thumbnail_tests {
         r.pending.insert(Slot::Thumb(PhotoId(1)), (77, 10));
         assert!(r.thumb_current(&old, 384, 10));
         assert!(!r.thumb_current(&old, 512, 10));
-        let mut settings = lightcraft_develop::DevelopSettings::default();
+        let mut settings = dac_develop::DevelopSettings::default();
         settings.light.exposure = 1.0;
         let undo = catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(settings), label: "edit".into(), edited: None }).unwrap();
         assert!(!r.thumb_current(catalog.photo(PhotoId(1)).unwrap(), 384, 10));
@@ -935,17 +1084,17 @@ mod thumbnail_tests {
             std::mem::take(&mut self.0.borrow_mut().finished)
         }
     }
-    fn fixture() -> (crate::LightcraftApp, std::rc::Rc<std::cell::RefCell<Work>>, egui::Context) {
+    fn fixture() -> (crate::DacApp, std::rc::Rc<std::cell::RefCell<Work>>, egui::Context) {
         fixture_with(Session::new(), (*photo()).clone())
     }
-    fn fixture_with(mut s: Session, photo: Photo) -> (crate::LightcraftApp, std::rc::Rc<std::cell::RefCell<Work>>, egui::Context) {
+    fn fixture_with(mut s: Session, photo: Photo) -> (crate::DacApp, std::rc::Rc<std::cell::RefCell<Work>>, egui::Context) {
         s.media.file_loader = Some(Arc::new(|_, _| {
-            let mut image = lightcraft_raster::Rgb32f::new(8, 8);
+            let mut image = dac_raster::Rgb32f::new(8, 8);
             image.data.fill([0.3, 0.2, 0.1]);
             Ok((image, Default::default()))
         }));
         s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
-        let mut app = crate::LightcraftApp::new(s, crate::Services::default());
+        let mut app = crate::DacApp::new(s, crate::Services::default());
         app.renderer.keep_pixels = true;
         let work = std::rc::Rc::new(std::cell::RefCell::new(Work::default()));
         app.renderer.set_offload(Box::new(Manual(work.clone())));
@@ -956,11 +1105,11 @@ mod thumbnail_tests {
     fn take_job(work: &std::rc::Rc<std::cell::RefCell<Work>>) -> (Slot, RenderJob) {
         work.borrow_mut().jobs.pop().unwrap()
     }
-    fn finish(app: &mut crate::LightcraftApp, work: &std::rc::Rc<std::cell::RefCell<Work>>, ctx: &egui::Context, slot: Slot, result: RenderResult) {
+    fn finish(app: &mut crate::DacApp, work: &std::rc::Rc<std::cell::RefCell<Work>>, ctx: &egui::Context, slot: Slot, result: RenderResult) {
         work.borrow_mut().finished.push((slot, result, 0.0));
         app.renderer.poll(ctx, &mut app.session);
     }
-    fn request(app: &mut crate::LightcraftApp) {
+    fn request(app: &mut crate::DacApp) {
         crate::panels::grid::request_thumb(app, PhotoId(1), 256, 10);
     }
 
@@ -1034,10 +1183,10 @@ mod thumbnail_tests {
         let g = gate.clone();
         s.media.preview_loader = Some(Arc::new(move |_: &str, _| {
             drop(g.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-            Some(lightcraft_raster::Rgba8 { width: 4, height: 4, data: vec![[200, 100, 50, 255]; 16] })
+            Some(dac_raster::Rgba8 { width: 4, height: 4, data: vec![[200, 100, 50, 255]; 16] })
         }));
         let mut raw = (*photo()).clone();
-        raw.kind = lightcraft_catalog::MediaKind::Raw;
+        raw.kind = dac_catalog::MediaKind::Raw;
         raw.develop = Arc::new(raw.camera_defaults());
         let (mut app, _, ctx) = fixture_with(s, raw);
         app.renderer.set_offload(Box::new(Blocked));
@@ -1089,7 +1238,7 @@ mod thumbnail_tests {
         let (mut app, work, ctx) = fixture();
         let mut jobs = Vec::new();
         for exposure in [0.0, 1.0, 2.0] {
-            let mut edit = lightcraft_develop::DevelopSettings::default();
+            let mut edit = dac_develop::DevelopSettings::default();
             edit.light.exposure = exposure;
             app.session.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(edit), label: "drag".into(), edited: None }).unwrap();
             let job = app.session.loupe_job(PhotoId(1), 8, 8, true).unwrap().draft();
@@ -1119,10 +1268,10 @@ mod thumbnail_tests {
         let old_result = old.run();
         app.renderer.forget_all();
         let photo = app.session.catalog.photo(PhotoId(1)).unwrap().as_ref().clone();
-        app.session = lightcraft_engine::Session::new();
+        app.session = dac_engine::Session::new();
         app.session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
         app.session.media.file_loader = Some(Arc::new(|_, _| {
-            let mut image = lightcraft_raster::Rgb32f::new(8, 8);
+            let mut image = dac_raster::Rgb32f::new(8, 8);
             image.data.fill([0.1, 0.2, 0.9]);
             Ok((image, Default::default()))
         }));
@@ -1146,7 +1295,7 @@ mod thumbnail_tests {
             let (mut app, work, ctx) = fixture();
             request(&mut app);
             let (slot, old) = take_job(&work);
-            let mut edit = lightcraft_develop::DevelopSettings::default();
+            let mut edit = dac_develop::DevelopSettings::default();
             edit.light.exposure = 1.0;
             app.session.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(edit), label: "edit".into(), edited: None }).unwrap();
             request(&mut app);
@@ -1182,7 +1331,7 @@ mod thumbnail_tests {
         let key = first.key;
         finish(&mut app, &work, &ctx, slot, first.run());
         let original = app.renderer.thumb(PhotoId(1)).unwrap().pixels.clone().unwrap();
-        let mut edit = lightcraft_develop::DevelopSettings::default();
+        let mut edit = dac_develop::DevelopSettings::default();
         edit.light.exposure = 1.0;
         let undo =
             app.session.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(edit), label: "edit".into(), edited: None }).unwrap();
@@ -1212,10 +1361,8 @@ mod thumbnail_tests {
         assert_eq!(app.renderer.thumb(PhotoId(1)).unwrap().pixels.as_ref().unwrap().pixels[0].to_array(), [255, 0, 255, 255]);
         // An old job can have the SAME render key and stale decoded pixels.
         let mut old = job.clone();
-        old.source = lightcraft_engine::media::SourceRef::Loaded(Box::new(lightcraft_engine::media::DecodedSource::new(
-            Arc::new(lightcraft_raster::Rgb32f::new(8, 8)),
-            None,
-        )));
+        old.source =
+            dac_engine::media::SourceRef::Loaded(Box::new(dac_engine::media::DecodedSource::new(Arc::new(dac_raster::Rgb32f::new(8, 8)), None)));
         app.renderer.textures.clear();
         app.renderer.request(slot, old, 10);
         let (_, old) = take_job(&work);
@@ -1244,7 +1391,7 @@ mod stage_budget_tests {
     // Given stage caches within the budget, nothing is cleared
     #[test]
     fn nothing_is_trimmed_within_the_budget() {
-        let sizes = [(Slot::Main, 300 * MB), (Slot::Region, 100 * MB)];
+        let sizes = [(Slot::Main, 300 * MB), (Slot::Window(PANE_AFTER), 100 * MB)];
         assert_eq!(stage_trim_order(&sizes, 512 * MB), vec![]);
     }
 
@@ -1268,10 +1415,10 @@ mod stage_budget_tests {
     // caches, never the whole-frame view's.
     #[test]
     fn the_open_photos_views_are_trimmed_only_in_a_runaway_and_never_the_whole_frame() {
-        let views = [(Slot::Main, 400 * MB), (Slot::Region, 500 * MB), (Slot::RegionBefore, 500 * MB), (Slot::Before, 100 * MB)];
+        let views = [(Slot::Main, 400 * MB), (Slot::Window(PANE_AFTER), 500 * MB), (Slot::Window(PANE_BEFORE), 500 * MB), (Slot::Before, 100 * MB)];
         assert_eq!(stage_trim_order(&views, 400 * MB), vec![], "1.5 GB against a 400 MB budget is a busy Before/After, not a runaway");
         // against a 100 MB budget (HARD_FACTOR 4 = 400 MB) it is: the before side goes first, then the window
-        assert_eq!(stage_trim_order(&views, 100 * MB), vec![Slot::RegionBefore, Slot::Before, Slot::Region]);
+        assert_eq!(stage_trim_order(&views, 100 * MB), vec![Slot::Window(PANE_BEFORE), Slot::Before, Slot::Window(PANE_AFTER)]);
         let mut with_idle = views.to_vec();
         with_idle.push((Slot::Hover, 50 * MB));
         assert_eq!(stage_trim_order(&with_idle, 400 * MB), vec![Slot::Hover]);
@@ -1288,12 +1435,12 @@ mod stage_budget_tests {
     // Given real stage caches over the budget, the renderer clears them (the open photo's last)
     #[test]
     fn the_renderer_trims_real_stage_caches() {
-        use lightcraft_engine::pipeline::{RenderRequest, SourceInfo, render_cached};
-        let src = std::sync::Arc::new(lightcraft_raster::Rgb32f::from_fn(320, 240, |x, y| [x as f32 / 320.0, y as f32 / 240.0, 0.3]));
+        use dac_engine::pipeline::{RenderRequest, SourceInfo, render_cached};
+        let src = std::sync::Arc::new(dac_raster::Rgb32f::from_fn(320, 240, |x, y| [x as f32 / 320.0, y as f32 / 240.0, 0.3]));
         let mut r = Renderer::default();
         for slot in [Slot::Main, Slot::Hover] {
             let cache: Arc<StageCache> = Default::default();
-            let mut s = lightcraft_engine::develop::DevelopSettings::default();
+            let mut s = dac_engine::develop::DevelopSettings::default();
             s.effects.clarity = 50.0;
             render_cached(&src, &SourceInfo::default(), &s, &RenderRequest::fit(320, 240), &cache);
             assert!(cache.bytes() > 0);
@@ -1330,7 +1477,7 @@ mod color_image_tests {
     // The texture a render becomes is what egui would make of its bytes, whatever the alpha
     #[test]
     fn the_fast_conversion_equals_eguis() {
-        let img = lightcraft_raster::Rgba8::from_fn(37, 29, |x, y| {
+        let img = dac_raster::Rgba8::from_fn(37, 29, |x, y| {
             let a = match (x + y) % 5 {
                 0 => 0,
                 1 => 17,
@@ -1347,7 +1494,7 @@ mod color_image_tests {
 
     #[test]
     fn an_empty_image_is_an_empty_texture() {
-        let img = lightcraft_raster::Rgba8::new(0, 0);
+        let img = dac_raster::Rgba8::new(0, 0);
         assert!(color_image(&img).pixels.is_empty());
     }
 }

@@ -1,4 +1,4 @@
-//! The LightCraft develop pipeline (CPU reference implementation).
+//! The develop pipeline (CPU reference implementation).
 //!
 //! Input: a scene-referred, linear Rec.2020 source image (already EXIF-oriented) at any resolution
 //! (full size or a proxy), plus [`DevelopSettings`]. Output: a display-encoded sRGB image at the
@@ -46,12 +46,12 @@ pub mod visualize;
 pub use output::{DeepImage, DeepSamples, DisplaySpace, OutputDepth, OutputSpace, OutputTrc, Proof};
 pub use visualize::{MaskView, Overlay};
 
-use lightcraft_develop::{DevelopSettings, Treatment};
+use dac_develop::{DevelopSettings, Treatment};
 use std::any::Any;
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
 
-use lightcraft_raster::{Histogram, Plane, Rgb32f, Rgba8, par_rows};
+use dac_raster::{Histogram, Plane, Rgb32f, Rgba8, par_rows};
 
 pub use tone::ToneMap;
 
@@ -61,16 +61,16 @@ pub use tone::ToneMap;
 #[derive(Debug, PartialEq)]
 pub struct CameraColor {
     /// The file's colour tags (its profile look left out: it is applied at load).
-    pub tags: lightcraft_raw::ColorData,
+    pub tags: dac_raw::ColorData,
     /// The white the source pixels were developed for.
-    pub developed_for: lightcraft_color::Xy,
+    pub developed_for: dac_color::Xy,
 }
 
 /// Facts about the source the settings are interpreted against.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceInfo {
     /// Lens corrections embedded in the file (DNG opcodes), relative to the EXIF-oriented source.
-    pub lens: Option<lightcraft_develop::EmbeddedLens>,
+    pub lens: Option<dac_develop::EmbeddedLens>,
     /// Raw sources use absolute Kelvin white balance; rendered sources use a relative scale around
     /// their as-shot white.
     pub raw: bool,
@@ -157,6 +157,21 @@ impl PixelWindow {
         let y = self.y.min(fh - 1);
         PixelWindow { x, y, w: self.w.clamp(1, fw - x), h: self.h.clamp(1, fh - y) }
     }
+}
+
+/// The longest output side a render may be asked for (TIFF/PNG/JPEG all fit within it).
+pub const MAX_OUTPUT_SIDE: usize = 65_535;
+/// The most output pixels a render may be asked for (the box it fits into, ≈ 1.07 Gpx).
+pub const MAX_OUTPUT_PIXELS: usize = 1 << 30;
+
+/// Rejects an output box past [`MAX_OUTPUT_SIDE`] or [`MAX_OUTPUT_PIXELS`] before anything is
+/// sized from it.
+pub fn check_output_size(max_w: usize, max_h: usize) -> Result<(), String> {
+    let pixels = max_w.checked_mul(max_h);
+    if max_w > MAX_OUTPUT_SIDE || max_h > MAX_OUTPUT_SIDE || pixels.is_none_or(|n| n > MAX_OUTPUT_PIXELS) {
+        return Err(format!("output size {max_w}×{max_h} is too large (at most {MAX_OUTPUT_SIDE} px per side and {MAX_OUTPUT_PIXELS} pixels)"));
+    }
+    Ok(())
 }
 
 impl RenderRequest {
@@ -255,7 +270,7 @@ impl StageCache {
     }
 
     /// Per-view state of type `T` kept alongside this cache (created on first use). Lets another
-    /// renderer of the same view (e.g. `lightcraft-gpu`) keep its own stage cache with this one.
+    /// renderer of the same view (e.g. `dac-gpu`) keep its own stage cache with this one.
     pub fn extension<T: Any + Send + Sync + Default>(&self) -> Arc<T> {
         let mut g = self.ext.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(e) = g.as_ref()
@@ -276,7 +291,7 @@ impl StageCache {
     /// Bytes of the intermediate images held (each buffer counted once; the sources they were
     /// made from belong to their owner and are not counted).
     pub fn bytes(&self) -> usize {
-        fn size<T>(i: &lightcraft_raster::Image<T>) -> usize {
+        fn size<T>(i: &dac_raster::Image<T>) -> usize {
             i.data.len() * std::mem::size_of::<T>()
         }
         let mut seen: Vec<usize> = Vec::new();
@@ -344,7 +359,7 @@ fn hash_of(parts: impl std::hash::Hash) -> u64 {
 
 /// What a render resolves to before any pixel work: the effective settings (profile and Upright
 /// applied), the geometric frame, the output size and the stage-cache keys. Shared by the CPU
-/// renderer and the GPU renderer (`lightcraft-gpu`), so both key their caches identically.
+/// renderer and the GPU renderer (`dac-gpu`), so both key their caches identically.
 pub struct Plan<'a> {
     pub settings: Cow<'a, DevelopSettings>,
     pub frame: geometry::Frame,
@@ -383,7 +398,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     // a window must not choose a spot's source from the pixels it happens to hold: fix them
     // from a fixed-size render of the whole frame first
     if req.window.is_some() && settings.spots.iter().any(|sp| sp.source_offset.is_none()) {
-        let picked: Vec<Option<lightcraft_geom::Point>> =
+        let picked: Vec<Option<dac_geom::Point>> =
             settings.spots.iter().map(|sp| sp.source_offset.or_else(|| spots::pick_source(src, info, &settings, sp, None))).collect();
         for (sp, o) in settings.to_mut().spots.iter_mut().zip(picked) {
             sp.source_offset = o;
@@ -565,9 +580,9 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
 }
 
 /// The colour a colour-range mask would sample at normalized image point `p` (OkLab of the
-/// exposed scene colours, as [`MaskShape::ColorRange`](lightcraft_develop::MaskShape) compares
+/// exposed scene colours, as [`MaskShape::ColorRange`](dac_develop::MaskShape) compares
 /// them), averaged over 3 × 3 pixels of a render fitting `req`. `None` outside the image.
-pub fn color_range_sample(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, p: lightcraft_geom::Point) -> Option<[f64; 3]> {
+pub fn color_range_sample(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, p: dac_geom::Point) -> Option<[f64; 3]> {
     let plan = plan(src, info, s, req);
     let mut img = plan.frame.sample(src, plan.w, plan.h);
     lin_cpu(&mut img, info, &plan);
@@ -582,7 +597,7 @@ pub fn color_range_sample(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, 
     for y in (cy - 1).max(0)..=(cy + 1).min(plan.h as i64 - 1) {
         for x in (cx - 1).max(0)..=(cx + 1).min(plan.w as i64 - 1) {
             let c = img.data[y as usize * plan.w + x as usize].map(|v| v * gain);
-            let lab = lightcraft_color::perceptual::oklab_from_2020(masks::tonemap_for_select(c));
+            let lab = dac_color::perceptual::oklab_from_2020(masks::tonemap_for_select(c));
             for k in 0..3 {
                 acc[k] += lab[k] as f64;
             }
@@ -607,7 +622,7 @@ fn overlay_alpha(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Plane> 
 /// (default look, keeping the crop so framing matches, under the photo's own rendering process).
 pub fn before_settings(s: &DevelopSettings) -> DevelopSettings {
     let mut b = DevelopSettings { crop: s.crop, orientation: s.orientation, process: s.process, ..DevelopSettings::default() };
-    b.wb = lightcraft_develop::WhiteBalance { mode: lightcraft_develop::WbMode::AsShot, ..b.wb };
+    b.wb = dac_develop::WhiteBalance { mode: dac_develop::WbMode::AsShot, ..b.wb };
     b
 }
 
@@ -615,13 +630,13 @@ pub(crate) fn is_bw(s: &DevelopSettings) -> bool {
     s.treatment == Treatment::Bw || s.profile.id == "lc.mono" || s.profile.id.starts_with("lc.bw.")
 }
 
-/// `LIGHTCRAFT_PROFILE` is set: print per-stage timings to stderr.
+/// `{ENV_PREFIX}_PROFILE` is set: print per-stage timings to stderr.
 pub fn profiling() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LIGHTCRAFT_PROFILE").is_some())
+    *ON.get_or_init(|| dac_brand::env_is_set("PROFILE"))
 }
 
-/// Run `f`, printing its duration under `LIGHTCRAFT_PROFILE`.
+/// Run `f`, printing its duration under `{ENV_PREFIX}_PROFILE`.
 pub(crate) fn timed<R>(what: &str, f: impl FnOnce() -> R) -> R {
     if !profiling() {
         return f();

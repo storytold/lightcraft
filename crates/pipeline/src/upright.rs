@@ -18,9 +18,9 @@
 use std::borrow::Cow;
 use std::sync::Mutex;
 
-use lightcraft_develop::{Crop, DevelopSettings, Geometry, Upright};
-use lightcraft_geom::{Homography, Point};
-use lightcraft_raster::{Plane, Rgb32f};
+use dac_develop::{Crop, DevelopSettings, Geometry, Upright};
+use dac_geom::{Homography, Point};
+use dac_raster::{Plane, Rgb32f};
 
 use crate::SourceInfo;
 
@@ -78,7 +78,7 @@ pub fn detect_segments(lum: &Plane) -> Vec<Segment> {
     if w < 16 || h < 16 {
         return Vec::new();
     }
-    let img = lightcraft_raster::blur::gaussian(lum, 0.8);
+    let img = dac_raster::blur::gaussian(lum, 0.8);
     let at = |x: usize, y: usize| img.data[y * w + x];
     let n = w * h;
     let mut mag = vec![0.0f32; n];
@@ -544,7 +544,7 @@ pub fn analyze_source(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> A
     base.geometry = Geometry::default();
     base.crop = Crop::default();
     let key = crate::optics::fingerprint(src)
-        ^ lightcraft_develop::DevelopSettings { optics: s.optics, orientation: s.orientation, ..Default::default() }.hash64().rotate_left(17);
+        ^ dac_develop::DevelopSettings { optics: s.optics, orientation: s.orientation, ..Default::default() }.hash64().rotate_left(17);
     if let Ok(c) = CACHE.lock()
         && let Some((_, a)) = c.iter().find(|(k, _)| *k == key)
     {

@@ -8,19 +8,19 @@
 //! catalog between frames, with a row and ✕ in the activity stack (issue #345); the whole import is
 //! one undo step.
 
+use dac_engine::import::{ImportCandidate, ScanInput, ScanOutput, ScanProgress, scan_with};
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
-use lightcraft_engine::import::{ImportCandidate, ScanInput, ScanOutput, ScanProgress, scan_with};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::atomic::Ordering;
 
-use crate::LightcraftApp;
+use crate::DacApp;
 use crate::render::Slot;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
 /// Files per batch in the browser build (each batch joins the catalog as it is ready, so the
-/// progress window updates); the desktop's worker uses [`lightcraft_engine::import::batch_size`].
+/// progress window updates); the desktop's worker uses [`dac_engine::import::batch_size`].
 #[cfg(target_arch = "wasm32")]
 const BATCH: usize = 8;
 
@@ -88,6 +88,8 @@ pub struct ImportDialog {
     /// The candidate clicked last: where a Shift-click range starts ([`ImportDialog::click`]).
     #[serde(skip)]
     pub last_clicked: Option<usize>,
+    /// The source is a connected Immich server (browsed in the dialog) instead of the scanned files.
+    pub immich: bool,
 }
 
 /// A candidate's file type, as the review groups them: its format, or its extension when the
@@ -189,7 +191,7 @@ impl ImportDialog {
             "" => Ok(None),
             "custom" => {
                 let t = self.folder_template.trim();
-                if let Some(e) = lightcraft_engine::rename::folder_template_error(t) {
+                if let Some(e) = dac_engine::rename::folder_template_error(t) {
                     return Err(e);
                 }
                 // a plain folder name ("Imports") is a one-level template too
@@ -205,7 +207,7 @@ impl ImportDialog {
 
 /// A running import (see the module docs). The file-system work — expanding folders, probing,
 /// reading sidecars, copying or placing files — runs on a worker thread
-/// ([`lightcraft_engine::import::ImportJob`]); each batch it readies is added to the catalog on the
+/// ([`dac_engine::import::ImportJob`]); each batch it readies is added to the catalog on the
 /// UI thread between frames, so a slow drive never stalls the window.
 #[derive(Debug, Default)]
 pub struct ImportTask {
@@ -234,10 +236,10 @@ pub struct ImportTask {
     /// Auto Import (the watched folder): the selection stays as it is, a short toast when done.
     auto: bool,
     /// Auto Import: the selection to keep.
-    keep_selection: Option<lightcraft_engine::Selection>,
+    keep_selection: Option<dac_engine::Selection>,
     run: Option<ImportRun>,
     /// The import's row in the activity stack (its ✕ and `activity.cancel` set the run's cancel flag).
-    guard: Option<lightcraft_engine::activity::TaskGuard>,
+    guard: Option<dac_engine::activity::TaskGuard>,
 }
 
 impl ImportTask {
@@ -262,9 +264,9 @@ impl ImportTask {
 /// slow drives) inline, one batch per frame.
 enum Runner {
     #[cfg(not(target_arch = "wasm32"))]
-    Thread(std::sync::mpsc::Receiver<lightcraft_engine::import::Prepared>),
+    Thread(std::sync::mpsc::Receiver<dac_engine::import::Prepared>),
     #[cfg(target_arch = "wasm32")]
-    Inline { job: Box<lightcraft_engine::import::ImportJob>, queue: Vec<String>, files: Option<std::collections::VecDeque<String>> },
+    Inline { job: Box<dac_engine::import::ImportJob>, queue: Vec<String>, files: Option<std::collections::VecDeque<String>> },
 }
 
 struct ImportRun {
@@ -272,7 +274,7 @@ struct ImportRun {
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     total: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     done: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    opts: lightcraft_engine::import::ImportOptions,
+    opts: dac_engine::import::ImportOptions,
     now: String,
     album: Option<u64>,
     album_name: Option<String>,
@@ -293,7 +295,7 @@ impl Drop for ImportRun {
 
 impl ImportRun {
     fn start(
-        job: lightcraft_engine::import::ImportJob,
+        job: dac_engine::import::ImportJob,
         queue: Vec<String>,
         album: Option<u64>,
         album_name: Option<String>,
@@ -308,7 +310,7 @@ impl ImportRun {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn spawn(
-        mut job: lightcraft_engine::import::ImportJob,
+        mut job: dac_engine::import::ImportJob,
         queue: Vec<String>,
         cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
         ctx: &egui::Context,
@@ -317,11 +319,11 @@ impl ImportRun {
         let ctx = ctx.clone();
         let work = move || {
             let files = job.expand(&queue);
-            for chunk in files.chunks(lightcraft_engine::import::batch_size()) {
+            for chunk in files.chunks(dac_engine::import::batch_size()) {
                 if cancel.load(Ordering::Relaxed) {
                     break;
                 }
-                let prepared = match lightcraft_engine::guard::catch("import", || job.prepare_files(chunk.to_vec(), &cancel)) {
+                let prepared = match dac_engine::guard::catch("import", || job.prepare_files(chunk.to_vec(), &cancel)) {
                     Ok(p) => p,
                     Err(_) => break, // logged; the files readied so far are added
                 };
@@ -339,7 +341,7 @@ impl ImportRun {
 
     #[cfg(target_arch = "wasm32")]
     fn spawn(
-        job: lightcraft_engine::import::ImportJob,
+        job: dac_engine::import::ImportJob,
         queue: Vec<String>,
         _cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
         _ctx: &egui::Context,
@@ -348,7 +350,7 @@ impl ImportRun {
     }
 
     /// Readied batches (at most a few per frame). `None` once the worker is done.
-    fn next_batches(&mut self) -> Option<Vec<lightcraft_engine::import::Prepared>> {
+    fn next_batches(&mut self) -> Option<Vec<dac_engine::import::Prepared>> {
         match &mut self.runner {
             #[cfg(not(target_arch = "wasm32"))]
             Runner::Thread(rx) => {
@@ -395,23 +397,23 @@ pub struct ScanTask {
     /// What is being scanned (the review's source).
     sources: Vec<String>,
     /// The scan's row in the activity stack (its ✕ and `activity.cancel` set `progress.cancel`).
-    guard: lightcraft_engine::activity::TaskGuard,
+    guard: dac_engine::activity::TaskGuard,
 }
 
 /// The activity row of a scan: the review's ("Scanning folder") or the Local view's ("Reading folder").
-fn scan_guard(app: &LightcraftApp, progress: &ScanProgress, browse: bool) -> lightcraft_engine::activity::TaskGuard {
+fn scan_guard(app: &DacApp, progress: &ScanProgress, browse: bool) -> dac_engine::activity::TaskGuard {
     let label = if browse { "Reading folder" } else { "Scanning folder" };
-    app.session.activity.start("scan", label, lightcraft_engine::activity::Cancel::Flag(progress.cancel.clone()))
+    app.session.activity.start("scan", label, dac_engine::activity::Cancel::Flag(progress.cancel.clone()))
 }
 
 /// An import and a Synchronize Folder never run at once: each readies its files against the
 /// library as it was when it started, so both could add the same file.
-pub(crate) fn busy_synchronizing(app: &LightcraftApp) -> Result<(), String> {
+pub(crate) fn busy_synchronizing(app: &DacApp) -> Result<(), String> {
     if app.sync_run.is_some() { Err(crate::i18n::tr("A folder is being synchronized").to_string()) } else { Ok(()) }
 }
 
 /// Scan `paths` in the background, then open the review dialog (see [`poll_scan`]).
-pub fn open(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String> {
+pub fn open(app: &mut DacApp, paths: Vec<String>) -> Result<Value, String> {
     if app.scan.is_some() {
         return Err("a scan is already running".into());
     }
@@ -436,7 +438,7 @@ pub fn open(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String
 /// once, the folder is listed and read on a worker thread (a network share can take minutes),
 /// and the photos then join the view in small batches under a progress window. A browse already
 /// running is replaced; the import review's scan is not.
-pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> Result<Value, String> {
+pub fn browse(app: &mut DacApp, path: &str, subfolders: Option<bool>) -> Result<Value, String> {
     let dir = std::path::absolute(std::path::Path::new(path)).map_err(|e| e.to_string())?;
     if !dir.is_dir() {
         return Err(format!("{path}: not a folder"));
@@ -449,15 +451,15 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
     let running = app.scan.as_ref().is_some_and(|t| t.browse) || app.import.as_ref().is_some_and(|t| t.browse);
     if running && app.session.browse.as_ref().is_some_and(|b| b.path == dir_s && b.subfolders == subfolders) {
         // already reading this folder: clicking it again must not restart the progress
-        app.session.source = lightcraft_engine::LibrarySource::Folder;
+        app.session.source = dac_engine::LibrarySource::Folder;
         return Ok(json!({"path": dir_s, "subfolders": subfolders, "scanning": true}));
     }
     if let Some(t) = app.scan.take() {
         t.progress.cancel.store(true, Ordering::Relaxed);
     }
     app.import = None;
-    app.session.browse = Some(lightcraft_engine::Browse { path: dir_s.clone(), subfolders });
-    app.session.source = lightcraft_engine::LibrarySource::Folder;
+    app.session.browse = Some(dac_engine::Browse { path: dir_s.clone(), subfolders });
+    app.session.source = dac_engine::LibrarySource::Folder;
     let (input, _) = ScanInput::new(&mut app.session, std::slice::from_ref(&dir_s));
     let progress = std::sync::Arc::new(ScanProgress::default());
     let (tx, rx) = std::sync::mpsc::channel();
@@ -465,16 +467,14 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
     let root = dir_s.clone();
     let job = move || {
         let files: Vec<String> = if subfolders {
-            lightcraft_engine::import::expand(&[root], None)
+            dac_engine::import::expand(&[root], None)
         } else {
             let mut v: Vec<String> = std::fs::read_dir(&root)
                 .map(|rd| {
                     rd.flatten()
                         .map(|e| e.path())
                         .filter(|f| {
-                            f.is_file()
-                                && lightcraft_engine::import::is_supported(f)
-                                && !f.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))
+                            f.is_file() && dac_engine::import::is_supported(f) && !f.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))
                         })
                         .map(|f| f.to_string_lossy().to_string())
                         .collect()
@@ -496,7 +496,7 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
 }
 
 /// Collect a finished scan and open the review (called every frame).
-pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn poll_scan(app: &mut DacApp, ctx: &egui::Context) {
     let Some(task) = app.scan.as_ref() else { return };
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
     let out = match task.rx.try_recv() {
@@ -545,10 +545,7 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
     d.trashed = d
         .candidates
         .iter()
-        .map(|c| {
-            c.duplicate.is_some()
-                && c.existing.is_some_and(|id| app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).is_some_and(|p| p.deleted))
-        })
+        .map(|c| c.duplicate.is_some() && c.existing.is_some_and(|id| app.session.catalog.photo(dac_catalog::PhotoId(id)).is_some_and(|p| p.deleted)))
         .collect();
     d.copy = task.copy;
     d.sources = task.sources;
@@ -563,8 +560,12 @@ impl ScanTask {
 }
 
 /// Start importing the dialog's checked files (the dialog's OK / `ui.dialog.confirm`).
-pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String> {
+pub fn start(app: &mut DacApp, d: &ImportDialog) -> Result<Value, String> {
     busy_synchronizing(app)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    if d.immich {
+        return crate::panels::connections::start_import(app);
+    }
     let queue = d.selected_paths();
     if queue.is_empty() {
         return Err("no photos selected".into());
@@ -615,7 +616,7 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
 }
 
 /// Start importing `paths` (files or folders) in the background, e.g. dropped on the window.
-pub fn start_paths(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String> {
+pub fn start_paths(app: &mut DacApp, paths: Vec<String>) -> Result<Value, String> {
     busy_synchronizing(app)?;
     if app.import.is_some() || app.scan.as_ref().is_some_and(|t| !t.browse) {
         return Err("an import is running".into());
@@ -628,13 +629,13 @@ pub fn start_paths(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value,
 
 /// Advance the import in progress (called every frame): start its worker, then add the batches it
 /// has readied to the catalog.
-pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn tick(app: &mut DacApp, ctx: &egui::Context) {
     let Some(mut task) = app.import.take() else { return };
     if task.run.is_none() {
         let mut p = task.params.clone();
         p["paths"] = json!(task.queue);
-        let started = lightcraft_engine::cmd::library::import_params(&app.session, &p)
-            .and_then(|req| Ok((lightcraft_engine::import::ImportJob::new(&mut app.session, req.opts)?, req.album, req.album_name)))
+        let started = dac_engine::cmd::library::import_params(&app.session, &p)
+            .and_then(|req| Ok((dac_engine::import::ImportJob::new(&mut app.session, req.opts)?, req.album, req.album_name)))
             .map_err(|e| e.to_string())
             .and_then(|(job, album, name)| ImportRun::start(job, std::mem::take(&mut task.queue), album, name, ctx));
         if task.auto {
@@ -643,7 +644,7 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
         match started {
             Ok(run) => {
                 let label = if task.browse { "Reading folder" } else { "Importing" };
-                task.guard = Some(app.session.activity.start("import", label, lightcraft_engine::activity::Cancel::Flag(run.cancel.clone())));
+                task.guard = Some(app.session.activity.start("import", label, dac_engine::activity::Cancel::Flag(run.cancel.clone())));
                 task.run = Some(run);
             }
             Err(e) => {
@@ -683,13 +684,13 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
 }
 
 /// Add one readied batch to the catalog (an undo step merged into the import's at the end).
-fn commit_batch(app: &mut LightcraftApp, task: &mut ImportTask, prepared: lightcraft_engine::import::Prepared) {
+fn commit_batch(app: &mut DacApp, task: &mut ImportTask, prepared: dac_engine::import::Prepared) {
     let Some(run) = task.run.as_ref() else { return };
     let n = prepared.len();
     let (opts, now, album, album_name) = (&run.opts, run.now.as_str(), run.album, run.album_name.clone());
     let r = app.session.execute_fn("library.import", |s| {
-        let report = lightcraft_engine::import::commit_prepared(s, opts, now, prepared)?;
-        lightcraft_engine::cmd::library::import_batch_done(s, report, album, album_name.as_deref())
+        let report = dac_engine::import::commit_prepared(s, opts, now, prepared)?;
+        dac_engine::cmd::library::import_batch_done(s, report, album, album_name.as_deref())
     });
     match r {
         Ok(v) => {
@@ -720,7 +721,7 @@ fn commit_batch(app: &mut LightcraftApp, task: &mut ImportTask, prepared: lightc
 }
 
 /// The import is done (or cancelled): one undo step, select the first photo, say what happened.
-fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
+fn finish(app: &mut DacApp, ctx: &egui::Context, task: ImportTask) {
     let steps = app.session.undo.len().saturating_sub(task.undo0);
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     let label = if task.imported == 0 && task.restored > 0 {
@@ -780,9 +781,8 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
 }
 
 /// The photos among `ids` that are in Recently Deleted (each once).
-fn deleted_of(app: &LightcraftApp, ids: &[u64]) -> Vec<u64> {
-    let mut v: Vec<u64> =
-        ids.iter().copied().filter(|&id| app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).is_some_and(|p| p.deleted)).collect();
+fn deleted_of(app: &DacApp, ids: &[u64]) -> Vec<u64> {
+    let mut v: Vec<u64> = ids.iter().copied().filter(|&id| app.session.catalog.photo(dac_catalog::PhotoId(id)).is_some_and(|p| p.deleted)).collect();
     v.sort_unstable();
     v.dedup();
     v
@@ -790,12 +790,12 @@ fn deleted_of(app: &LightcraftApp, ids: &[u64]) -> Vec<u64> {
 
 /// Select the library photos an import skipped as duplicates of, in Recently Deleted (side panel
 /// opened, with how to get them back) or in All Photos, and say so. `false` when there are none.
-fn show_existing(app: &mut LightcraftApp, ctx: &egui::Context, existing: &[u64]) -> bool {
+fn show_existing(app: &mut DacApp, ctx: &egui::Context, existing: &[u64]) -> bool {
     let deleted = deleted_of(app, existing);
     let (kind, mut ids) = if deleted.is_empty() { ("all", existing.to_vec()) } else { ("recentlyDeleted", deleted) };
     ids.sort_unstable();
     ids.dedup();
-    ids.retain(|&id| app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).is_some());
+    ids.retain(|&id| app.session.catalog.photo(dac_catalog::PhotoId(id)).is_some());
     if ids.is_empty() || app.run("library.source", json!({"kind": kind})).is_err() {
         return false;
     }
@@ -817,8 +817,35 @@ fn show_existing(app: &mut LightcraftApp, ctx: &egui::Context, existing: &[u64])
 }
 
 /// The dialog body: options, then the candidate grid.
-pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
+pub fn body(app: &mut DacApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
     let t = Tokens::get(ui.ctx());
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // the source: files scanned from disk, or a connected Immich server
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.label(egui::RichText::new(crate::i18n::tr("Import from")).color(t.text_label));
+            if crate::widgets::text_button(ui, "importSource:files", crate::i18n::tr("Files"), !d.immich).clicked() {
+                d.immich = false;
+            }
+            if crate::widgets::text_button(ui, "importSource:immich", crate::i18n::tr("Immich"), d.immich).clicked() && !d.immich {
+                d.immich = true;
+                crate::panels::connections::open_source(app, None);
+            }
+        });
+        if d.immich {
+            crate::panels::connections::import_source(app, ui);
+            return;
+        }
+        if d.candidates.is_empty() {
+            ui.label(egui::RichText::new(crate::i18n::tr("No files chosen yet.")).color(t.text_dim));
+            if crate::widgets::text_button(ui, "importChooseFiles", crate::i18n::tr("Choose Files…"), false).clicked() {
+                app.ui.dialog = None;
+                let _ = app.run("file.addPhotos", json!({}));
+            }
+            return;
+        }
+    }
     let n = d.candidates.len();
     let dups = d.candidates.iter().filter(|c| c.duplicate.is_some()).count();
     let sel = d.selected_paths().len();
@@ -991,7 +1018,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
                 tag_help(ui, "importFolders", &mut d.folder_template, folders_id);
             }
             let t = Tokens::get(ui.ctx());
-            match lightcraft_engine::rename::folder_template_error(&d.folder_template) {
+            match dac_engine::rename::folder_template_error(&d.folder_template) {
                 Some(e) => {
                     ui.label(egui::RichText::new(e).color(t.caution));
                 }
@@ -1146,7 +1173,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
     });
 }
 
-fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog, i: usize, rect: Rect) {
+fn candidate_cell(app: &mut DacApp, ui: &mut egui::Ui, d: &mut ImportDialog, i: usize, rect: Rect) {
     let t = Tokens::get(ui.ctx());
     let c = d.candidates[i].clone();
     let ok = d.importable(i);
@@ -1180,7 +1207,7 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
         p.line_segment([cb.left_center() + vec2(3.5, 0.5), cb.center_bottom() + vec2(-1.0, -4.0)], Stroke::new(2.0, Color32::WHITE));
         p.line_segment([cb.center_bottom() + vec2(-1.0, -4.0), cb.right_top() + vec2(-3.5, 4.0)], Stroke::new(2.0, Color32::WHITE));
     }
-    let in_trash = c.existing.is_some_and(|id| app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).is_some_and(|p| p.deleted));
+    let in_trash = c.existing.is_some_and(|id| app.session.catalog.photo(dac_catalog::PhotoId(id)).is_some_and(|p| p.deleted));
     let badge = match (&c.duplicate, &c.error) {
         (Some(_), _) if in_trash && ok => Some(if d.on_deleted == "restore" { "Will be restored" } else { "Will be replaced" }),
         (Some(_), _) if in_trash => Some("In Recently Deleted"),
@@ -1236,7 +1263,7 @@ pub(crate) fn tag_toggle(ui: &mut egui::Ui, key: &str) -> bool {
 
 /// "Unknown tag {x} stays as typed" under a template field, when it has one.
 pub(crate) fn unknown_tags_warning(ui: &mut egui::Ui, template: &str) {
-    let unknown = lightcraft_engine::rename::unknown_tokens(template);
+    let unknown = dac_engine::rename::unknown_tokens(template);
     if !unknown.is_empty() {
         let s = if unknown.len() == 1 { "" } else { "s" };
         let text = crate::i18n::tr_format!(
@@ -1271,7 +1298,7 @@ pub(crate) fn insert_at_cursor(ctx: &egui::Context, edit_id: egui::Id, text: &mu
 /// meaning and an example, the `{date:…}` directives and how templates behave. Clicking a tag
 /// (`button:<key>Tag-<i>`) inserts it at the cursor of the field `edit_id`.
 pub(crate) fn tag_help(ui: &mut egui::Ui, key: &str, text: &mut String, edit_id: egui::Id) {
-    use lightcraft_engine::rename::{DATE_DIRECTIVES, TEMPLATE_NOTES, TOKENS, token_example};
+    use dac_engine::rename::{DATE_DIRECTIVES, TEMPLATE_NOTES, TOKENS, token_example};
     let t = Tokens::get(ui.ctx());
     egui::Frame::new().fill(t.inset).corner_radius(4.0).inner_margin(6.0).show(ui, |ui| {
         ui.label(
@@ -1312,15 +1339,15 @@ pub const DEFAULT_FOLDER_TEMPLATE: &str = "{date:%Y}/{date:%Y%m%d}";
 
 /// Where the first selected photo would be copied to (destination, folders, name), for the
 /// dialog's example line; `None` without a photo or with an unusable folder template.
-pub fn example_destination(app: &LightcraftApp, d: &ImportDialog) -> Option<String> {
+pub fn example_destination(app: &DacApp, d: &ImportDialog) -> Option<String> {
     let c = d.candidates.iter().zip(&d.checked).enumerate().find(|(i, (_, on))| **on && d.importable(*i)).map(|(_, (c, _))| c)?;
     let organize = match d.organize_param().ok()? {
-        Some(o) => lightcraft_engine::import::Organize::parse(&o)?,
+        Some(o) => dac_engine::import::Organize::parse(&o)?,
         None => Default::default(),
     };
-    let mut q = lightcraft_catalog::Photo::new(
-        lightcraft_catalog::PhotoId(0),
-        lightcraft_catalog::Source::File { path: c.path.clone() },
+    let mut q = dac_catalog::Photo::new(
+        dac_catalog::PhotoId(0),
+        dac_catalog::Source::File { path: c.path.clone() },
         &c.name,
         &c.format,
         0,
@@ -1333,7 +1360,7 @@ pub fn example_destination(app: &LightcraftApp, d: &ImportDialog) -> Option<Stri
     if let Some(info) = app.session.import_probes.get(&c.path) {
         q.meta = info.meta.clone();
     }
-    let name = if d.rename.trim().is_empty() { c.name.clone() } else { lightcraft_engine::rename::expand(d.rename.trim(), &q, 1) };
+    let name = if d.rename.trim().is_empty() { c.name.clone() } else { dac_engine::rename::expand(d.rename.trim(), &q, 1) };
     let root = if d.destination.trim().is_empty() {
         app.session.library.as_ref().map_or_else(|| "Originals".to_string(), |l| l.dir.join("Originals").to_string_lossy().to_string())
     } else {

@@ -3,7 +3,7 @@
 use egui::{Rect, pos2, vec2};
 use serde_json::json;
 
-use crate::{LightcraftApp, Services, headless::HeadlessView, i18n::Locale};
+use crate::{DacApp, Services, headless::HeadlessView, i18n::Locale};
 
 const LONG_NAME: &str = "The person standing beside the very long fence across the background";
 
@@ -16,7 +16,7 @@ fn text_shapes(shape: &egui::Shape, out: &mut Vec<egui::epaint::TextShape>) {
 }
 
 fn panel(width: f32, scale: f32, locale: Locale, describe: bool) -> (Vec<egui::epaint::TextShape>, Vec<(String, Rect)>) {
-    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    let mut app = DacApp::new(dac_engine::Session::with_demo(), Services::default());
     app.run("mask.add", json!({"kind": "subject", "name": LONG_NAME})).unwrap();
     app.ui.describe = describe.then(|| ("new".into(), LONG_NAME.repeat(4)));
     app.ui.detail_due = Some((100.0, 1));

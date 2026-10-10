@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use lightcraft_catalog::{ColorLabel, Flag, PhotoId};
+use dac_catalog::{ColorLabel, Flag, PhotoId};
 use serde_json::json;
 
 use crate::Session;
@@ -18,8 +18,8 @@ pub(crate) fn temp_dir(tag: &str) -> PathBuf {
 fn write_png(path: &Path, seed: u8) {
     let (w, h) = (40usize, 24usize);
     let data: Vec<[u8; 4]> = (0..w * h).map(|i| [(i % w * 6) as u8, (i / w * 9) as u8, seed, 255]).collect();
-    let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
-    let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    let img = dac_raster::Rgba8 { width: w, height: h, data };
+    let bytes = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).unwrap();
     std::fs::write(path, bytes).unwrap();
 }
 
@@ -214,7 +214,7 @@ fn regions_from_sidecar_are_read_on_import() {
     assert_eq!(p.meta.regions.len(), 1);
     let region = &p.meta.regions[0];
     assert_eq!(region.name.as_deref(), Some("Jane Doe"));
-    assert_eq!(region.kind, lightcraft_meta::RegionKind::Face);
+    assert_eq!(region.kind, dac_meta::RegionKind::Face);
     assert!((region.rect.width() - 0.3).abs() < 1e-9, "{:?}", region.rect);
     let _ = std::fs::remove_dir_all(&src);
 }
@@ -331,19 +331,19 @@ fn rereading_a_sidecar_clears_regions_only_when_it_states_them() {
 }
 
 fn synthetic_dng(xmp: &str) -> Vec<u8> {
-    synthetic_dng_with(Some(xmp), lightcraft_meta::Metadata::default())
+    synthetic_dng_with(Some(xmp), dac_meta::Metadata::default())
 }
 
 /// A tiny Bayer DNG written by our own DNG writer (optional embedded XMP, camera metadata).
-pub(crate) fn synthetic_dng_with(xmp: Option<&str>, metadata: lightcraft_meta::Metadata) -> Vec<u8> {
+pub(crate) fn synthetic_dng_with(xmp: Option<&str>, metadata: dac_meta::Metadata) -> Vec<u8> {
     let (w, h) = (32usize, 24usize);
     let data: Vec<u16> = (0..w * h).map(|i| 256 + ((i % w) * 300 + (i / w) * 200) as u16).collect();
     synthetic_dng_of(w, h, "RGGB", data, xmp, metadata)
 }
 
 /// A synthetic Bayer DNG for denoise and cache tests.
-pub(crate) fn synthetic_dng_of(w: usize, h: usize, cfa: &str, data: Vec<u16>, xmp: Option<&str>, metadata: lightcraft_meta::Metadata) -> Vec<u8> {
-    use lightcraft_raw::*;
+pub(crate) fn synthetic_dng_of(w: usize, h: usize, cfa: &str, data: Vec<u16>, xmp: Option<&str>, metadata: dac_meta::Metadata) -> Vec<u8> {
+    use dac_raw::*;
     let cfa = Cfa::bayer(cfa).unwrap();
     let raw = RawImage {
         format: RawFormat::Dng,
@@ -361,8 +361,8 @@ pub(crate) fn synthetic_dng_of(w: usize, h: usize, cfa: &str, data: Vec<u16>, xm
         color: ColorData {
             illuminant: [17, 21],
             color_matrix: [
-                Some(lightcraft_color::Mat3([[0.9, 0.2, -0.15], [-0.3, 1.25, 0.08], [0.02, -0.12, 0.85]])),
-                Some(lightcraft_color::Mat3([[0.7, 0.3, -0.1], [-0.35, 1.3, 0.1], [0.05, -0.2, 1.0]])),
+                Some(dac_color::Mat3([[0.9, 0.2, -0.15], [-0.3, 1.25, 0.08], [0.02, -0.12, 0.85]])),
+                Some(dac_color::Mat3([[0.7, 0.3, -0.1], [-0.35, 1.3, 0.1], [0.05, -0.2, 1.0]])),
             ],
             as_shot_neutral: Some([0.5, 1.0, 0.7]),
             ..Default::default()
@@ -387,7 +387,7 @@ fn dng_embedded_crs_settings_are_read_on_import() {
     let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
     assert_eq!((r["imported"].as_array().unwrap().len(), r["sidecars"].as_u64()), (1, Some(1)), "{r}");
     let p = s.catalog.photos().next().unwrap();
-    assert_eq!(p.kind, lightcraft_catalog::MediaKind::Raw);
+    assert_eq!(p.kind, dac_catalog::MediaKind::Raw);
     assert_eq!((p.develop.wb.temp, p.develop.wb.tint), (4300.0, 7.0));
     assert_eq!((p.develop.light.contrast, p.develop.effects.dehaze), (30.0, 12.0));
     assert_eq!(p.develop.detail.sharpen_amount, 40.0, "raw defaults kept for fields the XMP doesn't set");
@@ -417,10 +417,10 @@ fn demo_photos_have_no_sidecar() {
 fn all_metadata_lists_exif_and_xmp() {
     let dir = temp_dir("allmeta");
     let path = dir.join("tagged.jpg");
-    let img = lightcraft_raster::Rgba8 { width: 16, height: 8, data: vec![[90, 120, 200, 255]; 128] };
-    let exif = lightcraft_meta::write_exif(&lightcraft_meta::Metadata { make: Some("Maker".into()), iso: Some(800), ..Default::default() });
-    let meta = lightcraft_codecs::EncodeMeta { exif: Some(&exif), ..Default::default() };
-    let jpg = lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &meta).unwrap();
+    let img = dac_raster::Rgba8 { width: 16, height: 8, data: vec![[90, 120, 200, 255]; 128] };
+    let exif = dac_meta::write_exif(&dac_meta::Metadata { make: Some("Maker".into()), iso: Some(800), ..Default::default() });
+    let meta = dac_codecs::EncodeMeta { exif: Some(&exif), ..Default::default() };
+    let jpg = dac_codecs::encode_jpeg(&dac_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &meta).unwrap();
     std::fs::write(&path, jpg).unwrap();
     let mut s = Session::new().with_fs();
     s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
@@ -438,7 +438,7 @@ fn all_metadata_lists_exif_and_xmp() {
 /// photo relinked and its edits kept; undo goes back to the original; non-raws are skipped.
 #[test]
 fn convert_raw_to_dng() {
-    let corpus = std::env::var_os("LIGHTCRAFT_CORPUS")
+    let corpus = dac_brand::env_os("CORPUS")
         .map(PathBuf::from)
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
         .join("raw/nef-nikon-d5100-uncompressed.nef");
@@ -466,7 +466,7 @@ fn convert_raw_to_dng() {
     assert!(dir.join("shot.dng").exists() && nef.exists(), "the original is kept");
     assert_eq!(p.develop.light.exposure, 0.6, "edits kept");
     let bytes = std::fs::read(dir.join("shot.dng")).unwrap();
-    assert_eq!(lightcraft_raw::probe(&bytes), Some(lightcraft_raw::RawFormat::Dng));
+    assert_eq!(dac_raw::probe(&bytes), Some(dac_raw::RawFormat::Dng));
     assert!(s.render_now(id, 64, 64).is_ok(), "the DNG renders");
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(s.catalog.photo(id).unwrap().file_name, "shot.nef");
@@ -486,7 +486,7 @@ fn convert_raw_to_dng() {
     let names: Vec<String> = std::fs::read_dir(&dest).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
     assert_eq!(names, ["DSC_1.dng"]);
     assert!(card.join("DSC_1.NEF").exists(), "the card is untouched");
-    let id2 = lightcraft_catalog::PhotoId(r["imported"][0].as_u64().unwrap());
+    let id2 = dac_catalog::PhotoId(r["imported"][0].as_u64().unwrap());
     assert_eq!(s.catalog.photo(id2).unwrap().format, "DNG");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -506,10 +506,10 @@ fn convert_to_dng_is_verified_and_atomic() {
     let id = s.catalog.photos().next().unwrap().id;
     let path = raw.to_string_lossy().to_string();
     s.catalog
-        .apply(lightcraft_catalog::Op::Relink {
+        .apply(dac_catalog::Op::Relink {
             id,
             file_name: "shot.dng".into(),
-            source: lightcraft_catalog::Source::File { path: path.clone() },
+            source: dac_catalog::Source::File { path: path.clone() },
             format: Some("NEF".into()),
         })
         .unwrap();
@@ -521,21 +521,21 @@ fn convert_to_dng_is_verified_and_atomic() {
     };
     {
         // the drive fills up part-way
-        let _fault = lightcraft_catalog::safe_file::fail_writes_after(200);
+        let _fault = dac_catalog::safe_file::fail_writes_after(200);
         let r = s.execute("photo.convertToDng", &json!({})).unwrap();
         assert_eq!(r["converted"].as_array().unwrap().len(), 0, "{r}");
         assert!(r["skipped"][0][1].as_str().unwrap().contains("the raw is kept"), "{r}");
     }
     assert_eq!(names(), ["shot.dng"], "no partial DNG");
-    assert_eq!(s.catalog.photo(id).unwrap().source, lightcraft_catalog::Source::File { path: path.clone() }, "not relinked");
+    assert_eq!(s.catalog.photo(id).unwrap().source, dac_catalog::Source::File { path: path.clone() }, "not relinked");
     // a good conversion: a new name (the existing file is not replaced), decodable, relinked
     let r = s.execute("photo.convertToDng", &json!({})).unwrap();
     let out = r["converted"][0]["path"].as_str().unwrap().to_string();
     assert!(out.ends_with("shot-2.dng"), "{r}");
     assert_eq!(std::fs::read(&raw).unwrap(), bytes, "the raw is untouched");
-    let back = lightcraft_raw::decode(&std::fs::read(&out).unwrap()).unwrap();
-    assert_eq!(back.data, lightcraft_raw::decode(&bytes).unwrap().data);
-    assert_eq!(s.catalog.photo(id).unwrap().source, lightcraft_catalog::Source::File { path: out });
+    let back = dac_raw::decode(&std::fs::read(&out).unwrap()).unwrap();
+    assert_eq!(back.data, dac_raw::decode(&bytes).unwrap().data);
+    assert_eq!(s.catalog.photo(id).unwrap().source, dac_catalog::Source::File { path: out });
     assert_eq!(names(), ["shot-2.dng", "shot.dng"], "no temp file left");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -555,9 +555,9 @@ fn external_edit_copy_is_stacked() {
     let path = r["path"].as_str().unwrap().to_string();
     assert!(path.ends_with("beach-Edit.tif"), "{path}");
     let bytes = std::fs::read(&path).unwrap();
-    let d = lightcraft_codecs::decode(&bytes, Default::default()).unwrap();
+    let d = dac_codecs::decode(&bytes, Default::default()).unwrap();
     assert_eq!(d.bit_depth, 16);
-    let new = lightcraft_catalog::PhotoId(r["id"].as_u64().unwrap());
+    let new = dac_catalog::PhotoId(r["id"].as_u64().unwrap());
     assert_eq!(s.active(), Some(new));
     let st = s.catalog.stack_of(new).expect("stacked");
     assert_eq!((st.top(), st.photos.contains(&orig)), (new, true));
@@ -599,12 +599,12 @@ fn duplicate_copies_the_file_and_the_edits() {
     s.execute("photo.rate", &json!({"rating": 4})).unwrap();
     let alb = s.execute("album.create", &json!({"name": "Keep", "addSelected": true})).unwrap()["id"].as_u64().unwrap();
     let r = s.execute("photo.duplicate", &json!({})).unwrap();
-    let dup = lightcraft_catalog::PhotoId(r["ids"][0].as_u64().unwrap());
+    let dup = dac_catalog::PhotoId(r["ids"][0].as_u64().unwrap());
     let d = s.catalog.photo(dup).unwrap().clone();
     assert_eq!(d.file_name, "pic-copy.png");
     assert!(dir.join("pic-copy.png").exists());
     assert_eq!((d.develop.light.exposure, d.rating), (0.8, 4));
-    assert_eq!(s.catalog.album_count(lightcraft_catalog::AlbumId(alb)), 2);
+    assert_eq!(s.catalog.album_count(dac_catalog::AlbumId(alb)), 2);
     assert_ne!(dup, orig);
     s.execute("edit.undo", &json!({})).unwrap();
     assert!(s.catalog.photo(dup).is_none(), "one undo step");
@@ -620,7 +620,7 @@ fn gps_typed_in_is_saved_to_xmp() {
     let (la, lo) = s.catalog.photo(id).unwrap().meta.gps.unwrap();
     assert!((la - 48.8583).abs() < 1e-3 && (lo - 2.2944).abs() < 1e-3, "{la} {lo}");
     let x = crate::sidecar::sidecar_packet(s.catalog.photo(id).unwrap(), &s.catalog);
-    let back = lightcraft_meta::parse_xmp(&x).unwrap().metadata.gps.unwrap();
+    let back = dac_meta::parse_xmp(&x).unwrap().metadata.gps.unwrap();
     assert!((back.latitude - la).abs() < 1e-5 && (back.longitude - lo).abs() < 1e-5);
     assert!(s.execute("photo.setMeta", &json!({"gps": "north pole-ish"})).is_err());
     s.execute("photo.setMeta", &json!({"gps": null})).unwrap();
@@ -630,7 +630,7 @@ fn gps_typed_in_is_saved_to_xmp() {
 /// DNG export compression: lossless, zip and none all decode; none is the biggest.
 #[test]
 fn dng_export_compression_choices() {
-    let corpus = std::env::var_os("LIGHTCRAFT_CORPUS")
+    let corpus = dac_brand::env_os("CORPUS")
         .map(PathBuf::from)
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
         .join("raw/nef-nikon-d5100-uncompressed.nef");
@@ -650,7 +650,7 @@ fn dng_export_compression_choices() {
             Ok(())
         };
         crate::export::export_batch(&mut s, &[id], &o, &crate::export::Destination { dir: "x".into(), exact: None }, &mut write, &|_| false).unwrap();
-        let raw = lightcraft_raw::decode(&out).unwrap_or_else(|e| panic!("{c}: {e}"));
+        let raw = dac_raw::decode(&out).unwrap_or_else(|e| panic!("{c}: {e}"));
         assert!(raw.width > 1000, "{c}");
         sizes.push((c, out.len()));
     }
@@ -660,12 +660,10 @@ fn dng_export_compression_choices() {
 fn write_jpeg(path: &Path, capture: Option<&str>) {
     let (w, h) = (32usize, 24usize);
     let data: Vec<[u8; 4]> = (0..w * h).map(|i| [(i % w * 7) as u8, (i / w * 9) as u8, 90, 255]).collect();
-    let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
-    let exif = capture.map(|c| {
-        lightcraft_meta::write_exif(&lightcraft_meta::Metadata { capture_time: lightcraft_meta::DateTime::parse_iso(c), ..Default::default() })
-    });
-    let meta = lightcraft_codecs::EncodeMeta { exif: exif.as_deref(), ..Default::default() };
-    let bytes = lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &meta).unwrap();
+    let img = dac_raster::Rgba8 { width: w, height: h, data };
+    let exif = capture.map(|c| dac_meta::write_exif(&dac_meta::Metadata { capture_time: dac_meta::DateTime::parse_iso(c), ..Default::default() }));
+    let meta = dac_codecs::EncodeMeta { exif: exif.as_deref(), ..Default::default() };
+    let bytes = dac_codecs::encode_jpeg(&dac_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &meta).unwrap();
     std::fs::write(path, bytes).unwrap();
 }
 
@@ -694,13 +692,13 @@ fn sidecar_capture_time_fills_in_when_the_file_has_none() {
     let by_name = |s: &Session, n: &str| s.catalog.photos().find(|p| p.file_name == n).unwrap().clone();
     let sample = by_name(&s, "sample.jpg");
     assert_eq!(sample.captured.as_deref(), Some("2026-01-14T05:58:48"));
-    let lightcraft_catalog::Source::File { path } = &sample.source else { panic!("not a file") };
+    let dac_catalog::Source::File { path } = &sample.source else { panic!("not a file") };
     assert!(Path::new(path).starts_with(lib.join("Originals").join("2026").join("2026-01-14")), "{path}");
     assert_eq!(by_name(&s, "dated.jpg").captured.as_deref(), Some("2020-05-06T07:08:09"));
 
     // Read Metadata from File fills in a missing capture time too
     let id = sample.id;
-    s.catalog.apply(lightcraft_catalog::Op::SetCaptured { id, captured: None }).unwrap();
+    s.catalog.apply(dac_catalog::Op::SetCaptured { id, captured: None }).unwrap();
     std::fs::copy(src.join("sample.jpg.xmp"), format!("{path}.xmp")).unwrap();
     s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
     s.execute("photo.readMetadataFromFile", &json!({})).unwrap();
@@ -714,7 +712,7 @@ fn sidecar_capture_time_fills_in_when_the_file_has_none() {
 /// Management fields and read back on a fresh import.
 #[test]
 fn copyright_status_usage_terms_and_url_round_trip() {
-    use lightcraft_catalog::CopyrightStatus;
+    use dac_catalog::CopyrightStatus;
     let src = temp_dir("rights-src");
     let lib = temp_dir("rights-lib");
     write_png(&src.join("a.png"), 1);
@@ -848,7 +846,7 @@ fn saving_merges_into_another_apps_sidecar() {
     ] {
         assert!(out.contains(part), "lost {part:?}:\n{out}");
     }
-    let d = lightcraft_meta::parse_xmp(&out).unwrap();
+    let d = dac_meta::parse_xmp(&out).unwrap();
     assert_eq!(d.metadata.rating, Some(5), "ours replaces theirs");
     assert_eq!(d.metadata.title.as_deref(), Some("Harbour"));
     assert_eq!(d.properties.get("crs:Version"), Some(&vec!["99.0".to_string()]));
@@ -857,13 +855,13 @@ fn saving_merges_into_another_apps_sidecar() {
     s.execute("develop.set", &json!({"control": "effects.clarity", "value": 0})).unwrap();
     s.execute("photo.readMetadataFromFile", &json!({})).unwrap();
     assert_eq!(s.catalog.photo(id).unwrap().develop, saved);
-    // saving again keeps one LightCraft description and the other app's data
+    // saving again keeps one the app description and the other app's data
     s.execute("photo.rate", &json!({"rating": 3})).unwrap();
     s.execute("photo.saveMetadataToFile", &json!({})).unwrap();
     let again = std::fs::read_to_string(src.join("shot.xmp")).unwrap();
     assert_eq!(again.matches("<rdf:Description").count(), 2, "{again}");
     assert!(again.contains("other:Secret=\"keep me\"") && again.contains("crs:Exposure2012=\"+0.65\""));
-    assert_eq!(lightcraft_meta::parse_xmp(&again).unwrap().metadata.rating, Some(3));
+    assert_eq!(dac_meta::parse_xmp(&again).unwrap().metadata.rating, Some(3));
 
     // a sidecar that isn't XMP is kept as a backup before it is replaced
     std::fs::write(src.join("shot.xmp"), b"<not xmp").unwrap();
@@ -871,7 +869,7 @@ fn saving_merges_into_another_apps_sidecar() {
     let backup = r["backups"][0]["backup"].as_str().unwrap().to_string();
     assert!(backup.contains("shot.xmp.bak-"), "{r}");
     assert_eq!(std::fs::read(&backup).unwrap(), b"<not xmp");
-    assert_eq!(lightcraft_meta::parse_xmp(&std::fs::read_to_string(src.join("shot.xmp")).unwrap()).unwrap().metadata.rating, Some(3));
+    assert_eq!(dac_meta::parse_xmp(&std::fs::read_to_string(src.join("shot.xmp")).unwrap()).unwrap().metadata.rating, Some(3));
     // … and another one never overwrites the first backup
     std::fs::write(src.join("shot.xmp"), b"<still not xmp").unwrap();
     let r = s.execute("photo.saveMetadataToFile", &json!({})).unwrap();
@@ -891,7 +889,7 @@ fn files_sharing_a_stem_get_their_own_sidecars() {
     let src = temp_dir("stem");
     let lib = temp_dir("stem-lib");
     write_png(&src.join("IMG_1.png"), 1);
-    let img = lightcraft_raster::Rgba8::from_fn(40, 24, |x, y| [(x * 6) as u8, (y * 9) as u8, 7, 255]);
+    let img = dac_raster::Rgba8::from_fn(40, 24, |x, y| [(x * 6) as u8, (y * 9) as u8, 7, 255]);
     let jpg =
         crate::export::encode_image(&img, &crate::export::ExportOptions { format: crate::export::ExportFormat::Jpeg, ..Default::default() }).unwrap();
     std::fs::write(src.join("IMG_1.jpg"), jpg).unwrap();
@@ -906,7 +904,7 @@ fn files_sharing_a_stem_get_their_own_sidecars() {
     s.execute("photo.rate", &json!({"ids": [p.0], "rating": 5})).unwrap();
     let r = s.execute("photo.saveMetadataToFile", &json!({"ids": [j.0, p.0]})).unwrap();
     assert_eq!(r["written"].as_array().unwrap().len(), 2, "{r}");
-    let rating = |f: &str| lightcraft_meta::parse_xmp(&std::fs::read_to_string(src.join(f)).unwrap()).unwrap().metadata.rating;
+    let rating = |f: &str| dac_meta::parse_xmp(&std::fs::read_to_string(src.join(f)).unwrap()).unwrap().metadata.rating;
     assert_eq!(rating("IMG_1.xmp"), Some(2));
     assert_eq!(rating("IMG_1.png.xmp"), Some(5));
     // each reads its own back

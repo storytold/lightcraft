@@ -1,5 +1,5 @@
 //! Export presets: built-in ones ([`crate::export::builtin_presets`]) and the user's, saved with the
-//! library. `app.export {preset}` (desktop app, MCP, `lightcraft-cli run`) starts from a preset's
+//! library. `app.export {preset}` (desktop app, MCP, the CLI's `run`) starts from a preset's
 //! params; the call's own params override them (see [`Session::export_params`]).
 
 use serde_json::{Value, json};

@@ -1,4 +1,4 @@
-//! Photo metadata for LightCraft: EXIF (TIFF/raw files, JPEG APP1, PNG `eXIf`, WebP `EXIF`), XMP packets
+//! Photo metadata: EXIF (TIFF/raw files, JPEG APP1, PNG `eXIf`, WebP `EXIF`), XMP packets
 //! (read + write, standard namespaces plus our own `lc:` namespace) and basic IPTC-IIM.
 //!
 //! Entry points:
@@ -17,16 +17,17 @@ mod datetime;
 mod exif;
 mod gpx;
 mod iptc;
+mod legacy;
 pub mod tags;
 mod xmp;
 mod xmp_merge;
 
 pub use container::{Embedded, embedded, jpeg_segments, png_chunks, webp_chunks};
+pub use dac_geom::{Orientation, Rect};
 pub use datetime::DateTime;
 pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, write_exif};
 pub use gpx::{GpxError, Match, TrackPoint, Tracklog, parse_gpx};
 pub use iptc::parse_iptc;
-pub use lightcraft_geom::{Orientation, Rect};
 pub use tags::{TagRow, file_tag_rows, tag_rows};
 pub use xmp::{CRS_NS, LC_NS, XmpData, XmpError, XmpValue, parse_xmp, write_xmp, write_xmp_lc};
 pub use xmp_merge::{MergeRules, merge_xmp};
@@ -51,7 +52,7 @@ pub struct Flash {
 }
 
 /// A named region of interest on a photo (MWG Region Guidelines, `mwg-rs:Regions`): most often a face,
-/// drawn by Lightroom, digiKam, Picasa or similar tools. Read-only for now — LightCraft does not write
+/// drawn by Lightroom, digiKam, Picasa or similar tools. Read-only for now — the app does not write
 /// regions yet (see `docs/xmp-interop.md`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Region {
@@ -75,7 +76,7 @@ pub enum RegionKind {
     Other(String),
 }
 
-/// Everything LightCraft shows or searches about a photo. All fields are optional; unknown = `None`/empty.
+/// Everything the app shows or searches about a photo. All fields are optional; unknown = `None`/empty.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Metadata {
     // camera

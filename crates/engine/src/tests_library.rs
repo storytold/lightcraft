@@ -59,7 +59,7 @@ fn edits_survive_restart_without_close() {
 fn threshold_compaction_runs_in_the_background() {
     let dir = temp_dir("bg-compact");
     let mut s = open(&dir, true);
-    s.library.as_mut().unwrap().journal_mut().policy = lightcraft_catalog::SnapshotPolicy { max_records: 8, max_bytes: u64::MAX };
+    s.library.as_mut().unwrap().journal_mut().policy = dac_catalog::SnapshotPolicy { max_records: 8, max_bytes: u64::MAX };
     let ids: Vec<_> = s.catalog.photos().map(|p| p.id).collect();
     let mut background = 0;
     for k in 0..60usize {
@@ -73,7 +73,7 @@ fn threshold_compaction_runs_in_the_background() {
             let expect = s.catalog.to_snapshot();
             let copy = temp_dir("bg-compact-crash");
             std::fs::create_dir_all(&copy).unwrap();
-            for f in ["catalog.snap", "catalog.log"] {
+            for f in ["catalog.snap", "catalog.log", "catalog.redb"] {
                 if dir.join(f).exists() {
                     std::fs::copy(dir.join(f), copy.join(f)).unwrap();
                 }
@@ -217,16 +217,9 @@ fn the_shown_library_folder_survives_reopen() {
     let dir = temp_dir("libfolder");
     let mut s = open(&dir, true);
     let id = s.catalog.alloc_photo_id();
-    let p = lightcraft_catalog::Photo::new(
-        id,
-        lightcraft_catalog::Source::File { path: "/pics/trip/a.jpg".into() },
-        "a.jpg",
-        "JPEG",
-        60,
-        40,
-        "2026-01-01T10:00:00",
-    );
-    s.commit("Add", lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let p =
+        dac_catalog::Photo::new(id, dac_catalog::Source::File { path: "/pics/trip/a.jpg".into() }, "a.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00");
+    s.commit("Add", dac_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
     s.execute("library.source", &json!({"kind": "libraryFolder", "path": "/pics/trip"})).unwrap();
     s.save_view();
     drop(s);
@@ -298,8 +291,8 @@ fn smart_album_rule_sets() {
             ]}}}),
         )
         .unwrap();
-    let id = lightcraft_catalog::AlbumId(r["id"].as_u64().unwrap());
-    let want = s.catalog.photos().filter(|p| !p.deleted && p.rating >= 4 && p.flag != lightcraft_catalog::Flag::Reject).count();
+    let id = dac_catalog::AlbumId(r["id"].as_u64().unwrap());
+    let want = s.catalog.photos().filter(|p| !p.deleted && p.rating >= 4 && p.flag != dac_catalog::Flag::Reject).count();
     assert!(want > 0);
     assert_eq!(s.catalog.album_count(id), want);
     // live: a new 5-star photo joins
@@ -317,7 +310,7 @@ fn smart_album_rule_sets() {
 /// The filter bar's label multi-select: any of the chosen labels.
 #[test]
 fn filter_any_of_several_labels() {
-    use lightcraft_catalog::ColorLabel;
+    use dac_catalog::ColorLabel;
     let mut s = crate::Session::with_demo();
     let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
     for (id, l) in ids.iter().zip(["red", "yellow", "green"]) {
@@ -353,7 +346,7 @@ fn quick_collection_and_target_album() {
     let alb = s.execute("album.create", &serde_json::json!({"name": "Picks"})).unwrap()["id"].as_u64().unwrap();
     s.execute("album.setTarget", &serde_json::json!({"id": alb})).unwrap();
     s.execute("album.toggleTarget", &serde_json::json!({"ids": [ids[2]]})).unwrap();
-    assert_eq!(s.catalog.album_count(lightcraft_catalog::AlbumId(alb)), 1);
+    assert_eq!(s.catalog.album_count(dac_catalog::AlbumId(alb)), 1);
     assert_eq!(s.catalog.album_count(quick), 2, "the Quick Collection is untouched");
     let smart = s.execute("album.createSmart", &serde_json::json!({"name": "S", "rules": {"rating": 3}})).unwrap()["id"].as_u64().unwrap();
     assert!(s.execute("album.setTarget", &serde_json::json!({"id": smart})).is_err());
@@ -362,12 +355,37 @@ fn quick_collection_and_target_album() {
     assert_eq!(s.catalog.album_count(quick), 0);
 }
 
-/// Scaling check (ignored: `cargo test --release -p lightcraft-engine -- --ignored scale --nocapture`):
+/// Catalog panel: Quick Collection as a source (empty before it exists), ⌘⇧B saves it as an
+/// album and clears it in one undo step, Previous Import shows the latest import.
+#[test]
+fn catalog_panel_sources_and_save_quick_collection() {
+    let mut s = crate::Session::with_demo();
+    assert_eq!(s.execute("library.showQuickCollection", &serde_json::json!({})).unwrap()["count"], 0);
+    assert!(s.execute("album.saveQuick", &serde_json::json!({})).is_err(), "nothing to save");
+    let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
+    s.execute("library.select", &serde_json::json!({"ids": ids})).unwrap();
+    s.execute("album.toggleTarget", &serde_json::json!({})).unwrap();
+    assert_eq!(s.execute("library.source", &serde_json::json!({"kind": "quickCollection"})).unwrap()["count"], 2);
+    let r = s.execute("album.saveQuick", &serde_json::json!({"name": "Keepers"})).unwrap();
+    let saved = dac_catalog::AlbumId(r["id"].as_u64().unwrap());
+    let quick = s.catalog.quick_collection().unwrap();
+    assert_eq!((s.catalog.album_count(saved), s.catalog.album_count(quick)), (2, 0));
+    s.execute("edit.undo", &serde_json::json!({})).unwrap();
+    assert!(s.catalog.album(saved).is_none());
+    assert_eq!(s.catalog.album_count(quick), 2);
+    let latest = s.catalog.photos().filter(|p| p.in_library()).map(|p| p.imported.clone()).max().unwrap();
+    let want = s.catalog.photos().filter(|p| p.in_library() && !p.deleted && p.imported == latest).count();
+    let n = s.execute("library.source", &serde_json::json!({"kind": "previousImport"})).unwrap()["count"].as_u64().unwrap();
+    assert_eq!(n as usize, want);
+    assert!(n > 0);
+}
+
+/// Scaling check (ignored: `cargo test --release -p dac-engine -- --ignored scale --nocapture`):
 /// the per-frame / per-click library queries on a 100k-photo catalog.
 #[test]
 #[ignore]
 fn scale_100k_library_queries() {
-    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+    use dac_catalog::{Op, Photo, PhotoId, Source};
     use std::time::Instant;
     let mut s = crate::Session::new();
     let n = 100_000u64;
@@ -426,7 +444,7 @@ fn scale_100k_library_queries() {
     });
     let alb = s.execute("album.createSmart", &serde_json::json!({"name": "S", "rules": {"rating": 5}})).unwrap()["id"].as_u64().unwrap();
     m("smart album count", &mut || {
-        let _ = s.catalog.album_count(lightcraft_catalog::AlbumId(alb));
+        let _ = s.catalog.album_count(dac_catalog::AlbumId(alb));
     });
     m("albums.list", &mut || {
         let _ = s.execute("albums.list", &serde_json::json!({})).unwrap();
@@ -471,6 +489,26 @@ fn a_library_open_elsewhere_is_refused() {
     other.open_library(&dir, true).unwrap();
     assert_eq!(other.catalog.to_snapshot(), expect);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The view pages: a window of the visible photos without copying them all, and
+/// `catalog.query` pages the current view the same way.
+#[test]
+fn visible_photos_page_by_offset_and_limit() {
+    let mut s = Session::with_demo();
+    let all = s.visible_cloned();
+    assert!(all.len() > 3);
+    assert_eq!(s.visible_page(1, 2), (all.len(), all[1..3].to_vec()));
+    assert_eq!(s.visible_page(all.len() - 1, 10), (all.len(), vec![all[all.len() - 1]]));
+    assert_eq!(s.visible_page(usize::MAX, 10), (all.len(), vec![]));
+    assert_eq!(s.visible_position(all[2]), Some(2));
+    let r = s.execute("catalog.query", &json!({"offset": 1, "limit": 2})).unwrap();
+    assert_eq!(r["total"], all.len());
+    let ids: Vec<u64> = r["photos"].as_array().unwrap().iter().map(|p| p["id"].as_u64().unwrap()).collect();
+    assert_eq!(ids, vec![all[1].0, all[2].0]);
+    // a hostile offset is an empty page, not a crash
+    let r = s.execute("catalog.query", &json!({"offset": u64::MAX, "limit": u64::MAX})).unwrap();
+    assert_eq!(r["photos"].as_array().map(Vec::len), Some(0));
 }
 
 /// A capture-time shift from an agent can't overflow or write a date no one can read back: a
@@ -525,10 +563,10 @@ fn smart_rule_values_are_checked_by_commands() {
 /// still be edited: its rule is read as the "isn't" it always meant.
 #[test]
 fn old_album_operator_rules_stay_editable() {
-    use lightcraft_catalog::{Album, AlbumId, Op};
+    use dac_catalog::{Album, AlbumId, Op};
     let mut s = crate::Session::with_demo();
     let trip = s.execute("album.create", &serde_json::json!({"name": "Trip", "addSelected": false})).unwrap()["id"].as_u64().unwrap();
-    let rules: lightcraft_catalog::Filter =
+    let rules: dac_catalog::Filter =
         serde_json::from_value(serde_json::json!({"ruleSet": {"rules": [{"field": "album", "op": "gte", "value": trip}]}})).unwrap();
     let id = s.catalog.alloc_album_id();
     s.catalog.apply(Op::AddAlbum { album: Album { smart: Some(Box::new(rules)), ..Album::new(id, "Old") } }).unwrap();
@@ -543,7 +581,7 @@ fn old_album_operator_rules_stay_editable() {
 fn set_rules_with_a_name_is_one_step() {
     let mut s = crate::Session::with_demo();
     let id = s.execute("album.createSmart", &serde_json::json!({"name": "Old", "rules": {"rating": 3}})).unwrap()["id"].as_u64().unwrap();
-    let album = |s: &crate::Session| s.catalog.album(lightcraft_catalog::AlbumId(id)).unwrap().clone();
+    let album = |s: &crate::Session| s.catalog.album(dac_catalog::AlbumId(id)).unwrap().clone();
     let good = serde_json::json!({"ruleSet": {"rules": [{"field": "rating", "op": "gte", "value": 4}]}});
     let bad = serde_json::json!({"ruleSet": {"rules": [{"field": "captureDate", "op": "is", "value": "banana"}]}});
     // refused rules: the name stays too
@@ -601,18 +639,18 @@ fn smart_album_excluding_a_smart_album() {
         .unwrap()["id"]
         .as_u64()
         .unwrap();
-    let count = |s: &crate::Session| s.catalog.album_count(lightcraft_catalog::AlbumId(travel));
+    let count = |s: &crate::Session| s.catalog.album_count(dac_catalog::AlbumId(travel));
     let want = |s: &crate::Session| {
         s.catalog
             .photos()
             .filter(|p| !p.deleted && p.meta.keywords.iter().any(|k| k.to_lowercase().contains(&keyword.to_lowercase())))
-            .filter(|p| p.label != Some(lightcraft_catalog::ColorLabel::Red) && p.flag != lightcraft_catalog::Flag::Reject)
+            .filter(|p| p.label != Some(dac_catalog::ColorLabel::Red) && p.flag != dac_catalog::Flag::Reject)
             .count()
     };
     assert_eq!(count(&s), want(&s));
     // reject one of Travel's photos: it leaves Travel
     let before = count(&s);
-    let id = s.catalog.photos().find(|p| s.catalog.album_contains(lightcraft_catalog::AlbumId(travel), p)).map(|p| p.id).expect("a travel photo");
+    let id = s.catalog.photos().find(|p| s.catalog.album_contains(dac_catalog::AlbumId(travel), p)).map(|p| p.id).expect("a travel photo");
     s.execute("photo.flag", &serde_json::json!({"ids": [id.0], "flag": "reject"})).unwrap();
     assert_eq!(count(&s), before - 1);
     // Excluded Photos testing Travel back would include itself
@@ -636,11 +674,11 @@ fn rules_from_the_view_cant_loop() {
     let rules = serde_json::json!({"ruleSet": {"rules": [{"field": "album", "op": "isNot", "value": b}]}});
     let a = s.execute("album.createSmart", &serde_json::json!({"name": "A", "rules": rules})).unwrap()["id"].as_u64().unwrap();
     s.execute("library.source", &serde_json::json!({"kind": "album", "id": a})).unwrap();
-    let before = s.catalog.album(lightcraft_catalog::AlbumId(b)).unwrap().smart.clone();
+    let before = s.catalog.album(dac_catalog::AlbumId(b)).unwrap().smart.clone();
     let r = s.execute("album.setRules", &serde_json::json!({"id": b, "fromView": true}));
     assert!(r.is_err_and(|e| e.to_string().contains("would make this album include itself")), "refused");
-    assert_eq!(s.catalog.album(lightcraft_catalog::AlbumId(b)).unwrap().smart, before, "B unchanged");
-    assert!(s.catalog.smart_album_problems(lightcraft_catalog::AlbumId(b)).is_empty());
+    assert_eq!(s.catalog.album(dac_catalog::AlbumId(b)).unwrap().smart, before, "B unchanged");
+    assert!(s.catalog.smart_album_problems(dac_catalog::AlbumId(b)).is_empty());
 }
 
 /// A rule that stops checking later (the album it tests is deleted) doesn't lock up what doesn't
@@ -673,5 +711,5 @@ fn an_album_filter_loop_is_refused() {
     let a = s.execute("album.createSmart", &serde_json::json!({"name": "A", "rules": {"rating": 2}})).unwrap()["id"].as_u64().unwrap();
     let r = s.execute("album.setRules", &serde_json::json!({"id": a, "rules": {"album": a}}));
     assert!(r.is_err_and(|e| e.to_string().contains("include itself")), "refused");
-    assert_eq!(s.catalog.album(lightcraft_catalog::AlbumId(a)).unwrap().smart.as_ref().and_then(|f| f.album), None);
+    assert_eq!(s.catalog.album(dac_catalog::AlbumId(a)).unwrap().smart.as_ref().and_then(|f| f.album), None);
 }

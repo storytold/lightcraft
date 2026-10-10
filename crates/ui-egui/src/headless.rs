@@ -2,7 +2,7 @@
 //! the CPU ([`crate::softpaint`]) — no window, no GPU, no compositor.
 //!
 //! Two users:
-//! - [`Headless`]: a complete windowless app session (`lightcraft-cli snapshot`, tests). It plays
+//! - [`Headless`]: a complete windowless app session (`<cli> snapshot`, tests). It plays
 //!   the role eframe plays for the desktop app: builds [`egui::RawInput`], runs `logic` + `ui`,
 //!   keeps a CPU mirror of the textures, executes viewport commands (`Screenshot` is answered with
 //!   a CPU-rendered frame, `InnerSize` resizes, `Close` quits). Control-protocol requests go
@@ -21,7 +21,7 @@ use egui::{Color32, ColorImage, RawInput, TextureId, ViewportCommand, ViewportId
 use serde_json::{Value, json};
 
 use crate::softpaint::{self, CpuTexture, Layered, TextureStore};
-use crate::{ControlRequest, LightcraftApp};
+use crate::{ControlRequest, DacApp};
 
 /// Background behind the panels (eframe's default clear colour, made opaque).
 const CLEAR: Color32 = Color32::from_rgb(12, 12, 12);
@@ -83,6 +83,8 @@ pub struct HeadlessView {
     pub clipboard: String,
     /// Events the host owes the next frame (a paste request's paste, as a desktop host sends it).
     owed: Vec<egui::Event>,
+    /// The last AccessKit tree update (when `ctx.enable_accesskit()` is on): what a screen reader sees.
+    pub access: Option<egui::accesskit::TreeUpdate>,
 }
 
 impl Default for HeadlessView {
@@ -105,6 +107,7 @@ impl HeadlessView {
             frames: 0,
             clipboard: String::new(),
             owed: vec![],
+            access: None,
         }
     }
 
@@ -151,6 +154,9 @@ impl HeadlessView {
         self.textures.apply(std::mem::take(&mut out.textures_delta));
         self.shapes = std::mem::take(&mut out.shapes);
         self.pixels_per_point = out.pixels_per_point;
+        if let Some(update) = out.platform_output.accesskit_update.take() {
+            self.access = Some(update);
+        }
         for c in &out.platform_output.commands {
             if let egui::OutputCommand::CopyText(text) = c {
                 self.clipboard.clone_from(text);
@@ -211,7 +217,7 @@ impl HeadlessView {
 /// A windowless app session: the app's `logic` + `ui` driven frame by frame into a
 /// [`HeadlessView`], with control-protocol requests answered by the shared handler.
 pub struct Headless {
-    pub app: LightcraftApp,
+    pub app: DacApp,
     pub view: HeadlessView,
     /// The largest texture the pretend GPU takes (what a WebGL device may report: 2048).
     pub max_texture_side: usize,
@@ -238,7 +244,7 @@ impl Headless {
     /// Wrap `app` (its control channel is replaced by the driver's).
     /// Invalid dimensions fall back to 1600×1000 at scale 1; external callers can use
     /// [`viewport_pixels`] to reject them before constructing the session.
-    pub fn new(app: LightcraftApp, size: [f32; 2], pixels_per_point: f32) -> Self {
+    pub fn new(app: DacApp, size: [f32; 2], pixels_per_point: f32) -> Self {
         let (size, pixels_per_point) = if viewport_pixels(size, pixels_per_point).is_ok() {
             (egui::Vec2::from(size), pixels_per_point)
         } else {
@@ -391,7 +397,7 @@ impl Headless {
     #[cfg(test)]
     pub(crate) fn hide_home_above(&mut self, path: &std::path::Path) {
         let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_default();
-        if !home.is_empty() && lightcraft_catalog::query::folder_within(&path.to_string_lossy(), &home) {
+        if !home.is_empty() && dac_catalog::query::folder_within(&path.to_string_lossy(), &home) {
             let r = self.request("engine.execute", json!({"command": "local.hide", "params": {"path": home}}), Duration::from_secs(10));
             assert_eq!(r["ok"], true, "{r}");
         }
@@ -432,7 +438,7 @@ mod tests {
     #[test]
     fn detail_offers_ai_denoise_for_raw_photos_and_leads_to_its_settings() {
         use crate::state::Dialog;
-        use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
+        use dac_catalog::{MediaKind, Op, Photo, PhotoId, Source};
         let mut h = demo([1400.0, 900.0]);
         let t = Duration::from_secs(10);
         let dir = std::env::temp_dir().join(format!("lc-ui-denoise-{}", std::process::id()));
@@ -469,7 +475,7 @@ mod tests {
         assert_eq!(h.app.ui.dialog, Some(Dialog::Settings { tab: "denoise".into() }));
         h.settle(SETTLE);
         let listed = h.app.session.execute("denoise.models.list", &json!({})).unwrap();
-        assert_eq!(listed["models"].as_array().unwrap().len(), lightcraft_denoise::known::all().len(), "{listed}");
+        assert_eq!(listed["models"].as_array().unwrap().len(), dac_denoise::known::all().len(), "{listed}");
         assert!(widgets(&mut h).contains("\"denoise:installFile\""));
         h.app.ui.dialog = None;
         // a photo that is not raw: no offer
@@ -568,7 +574,7 @@ mod tests {
 
     #[test]
     fn shadow_screenshot_keeps_the_zoomed_hosts_size_and_scale() {
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        let mut app = DacApp::new(dac_engine::Session::new(), crate::Services::default());
         app.ui.settings.gpu = false;
         let mut h = Headless::new(app, [480.0, 320.0], 2.0);
         let t = Duration::from_secs(5);
@@ -586,7 +592,7 @@ mod tests {
     #[test]
     fn control_resize_uses_effective_points_after_ui_zoom() {
         for scale in [0.9, 1.0, 2.0] {
-            let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+            let mut app = DacApp::new(dac_engine::Session::new(), crate::Services::default());
             app.ui.settings.gpu = false;
             let mut h = Headless::new(app, [480.0, 320.0], scale);
             let t = Duration::from_secs(5);
@@ -605,7 +611,7 @@ mod tests {
 
     #[test]
     fn control_resize_keeps_a_minimum_width_after_zooming_out() {
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        let mut app = DacApp::new(dac_engine::Session::new(), crate::Services::default());
         app.ui.settings.gpu = false;
         let mut h = Headless::new(app, [480.0, 320.0], 1.0);
         h.view.ctx.set_zoom_factor(0.5);
@@ -620,7 +626,7 @@ mod tests {
 
     #[test]
     fn control_resize_rounds_in_native_points_after_a_fractional_zoom_out() {
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        let mut app = DacApp::new(dac_engine::Session::new(), crate::Services::default());
         app.ui.settings.gpu = false;
         let mut h = Headless::new(app, [480.0, 320.0], 0.9);
         let t = Duration::from_secs(5);
@@ -637,7 +643,7 @@ mod tests {
 
     #[test]
     fn invalid_control_resize_preserves_the_headless_viewport() {
-        let app = LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        let app = DacApp::new(dac_engine::Session::new(), crate::Services::default());
         let mut h = Headless::new(app, [480.0, 320.0], 2.0);
         h.app.ui.settings.gpu = false;
         h.step();
@@ -662,7 +668,7 @@ mod tests {
 
     fn demo(size: [f32; 2]) -> Headless {
         let services = crate::Services { png: None, ..Default::default() };
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+        let mut app = DacApp::new(dac_engine::Session::with_demo(), services);
         app.ui.view = crate::state::ViewMode::PhotoGrid;
         Headless::new(app, size, 1.0)
     }
@@ -809,8 +815,8 @@ mod tests {
     fn compare_survey_and_auto_advance_by_keyboard() {
         let mut h = demo([1000.0, 700.0]);
         let t = Duration::from_secs(10);
-        let rating = |h: &Headless, id: u64| h.app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().rating;
-        let flag = |h: &Headless, id: u64| h.app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().flag;
+        let rating = |h: &Headless, id: u64| h.app.session.catalog.photo(dac_catalog::PhotoId(id)).unwrap().rating;
+        let flag = |h: &Headless, id: u64| h.app.session.catalog.photo(dac_catalog::PhotoId(id)).unwrap().flag;
         let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
         h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]]}}), t);
         let r = h.request("engine.execute", json!({"command": "view.compare"}), t);
@@ -827,7 +833,7 @@ mod tests {
         assert_eq!(h.app.ui.compare, Some((vis[0], vis[1])));
         // Shift+X: reject and advance to the next candidate
         h.request("ui.key", json!({"key": "x", "shift": true}), t);
-        assert_eq!(flag(&h, vis[1]), lightcraft_catalog::Flag::Reject);
+        assert_eq!(flag(&h, vis[1]), dac_catalog::Flag::Reject);
         assert_eq!(h.app.ui.compare, Some((vis[0], vis[2])));
         h.request("engine.execute", json!({"command": "compare.swap"}), t);
         assert_eq!(h.app.ui.compare, Some((vis[2], vis[0])));
@@ -841,7 +847,7 @@ mod tests {
         assert!(h.app.ui.auto_advance);
         h.request("ui.key", json!({"key": "5"}), t);
         h.request("ui.key", json!({"key": "p"}), t);
-        assert_eq!((rating(&h, vis[3]), flag(&h, vis[4])), (5, lightcraft_catalog::Flag::Pick));
+        assert_eq!((rating(&h, vis[3]), flag(&h, vis[4])), (5, dac_catalog::Flag::Pick));
         assert_eq!(h.app.session.selection.active.map(|p| p.0), Some(vis[5]));
         assert_eq!(h.app.session.selection.ids.len(), 3, "the survey keeps its selection");
         let img = h.snapshot(SETTLE);
@@ -864,14 +870,14 @@ mod tests {
     #[test]
     fn naming_a_face_in_the_loupe() {
         use crate::state::NameEdit;
-        use lightcraft_catalog::Op;
+        use dac_catalog::Op;
         let mut h = demo([1400.0, 900.0]);
         let t = Duration::from_secs(10);
         let id = h.app.session.active().unwrap();
         let mut meta = h.app.session.catalog.photo(id).unwrap().meta.clone();
-        meta.regions = vec![lightcraft_meta::Region {
-            rect: lightcraft_geom::Rect { x0: 0.3, y0: 0.2, x1: 0.55, y1: 0.6 },
-            kind: lightcraft_meta::RegionKind::Face,
+        meta.regions = vec![dac_meta::Region {
+            rect: dac_geom::Rect { x0: 0.3, y0: 0.2, x1: 0.55, y1: 0.6 },
+            kind: dac_meta::RegionKind::Face,
             name: None,
             description: None,
         }];
@@ -912,7 +918,7 @@ mod tests {
     }
 
     /// Adding a face model: the dialog shows the file's terms, the model is installed only once they are
-    /// accepted, and a file LightCraft cannot use only says why.
+    /// accepted, and a file the app cannot use only says why.
     #[test]
     fn adding_a_face_model_shows_its_terms_and_installs_only_once_accepted() {
         use crate::state::Dialog;
@@ -923,7 +929,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         h.app.session.face_models_dir = Some(dir.join("models"));
         let model = dir.join("Mine.onnx");
-        std::fs::write(&model, lightcraft_faces::synthetic::tiny_embedder_model(512)).unwrap();
+        std::fs::write(&model, dac_faces::synthetic::tiny_embedder_model(512)).unwrap();
         let open = |h: &mut Headless, path: &std::path::Path| {
             h.request("engine.execute", json!({"command": "dialog.faceModel", "params": {"path": path.to_string_lossy()}}), t)
         };
@@ -1047,7 +1053,7 @@ mod tests {
     #[test]
     fn people_and_the_name_box_offer_to_set_face_recognition_up() {
         use crate::state::{Dialog, ViewMode};
-        use lightcraft_catalog::Op;
+        use dac_catalog::Op;
         let mut h = demo([1400.0, 900.0]);
         let t = Duration::from_secs(10);
         let dir = std::env::temp_dir().join(format!("lc-ui-facesetup-{}", std::process::id()));
@@ -1057,9 +1063,9 @@ mod tests {
         let runtime = h.app.session.execute("faces.models.list", &json!({})).unwrap()["runtime"] == true;
         let id = h.app.session.active().unwrap();
         let mut meta = h.app.session.catalog.photo(id).unwrap().meta.clone();
-        meta.regions = vec![lightcraft_meta::Region {
-            rect: lightcraft_geom::Rect { x0: 0.3, y0: 0.2, x1: 0.55, y1: 0.6 },
-            kind: lightcraft_meta::RegionKind::Face,
+        meta.regions = vec![dac_meta::Region {
+            rect: dac_geom::Rect { x0: 0.3, y0: 0.2, x1: 0.55, y1: 0.6 },
+            kind: dac_meta::RegionKind::Face,
             name: None,
             description: None,
         }];
@@ -1104,7 +1110,7 @@ mod tests {
 
         // a model installed but recognition off: "Turn on" does it on the spot
         let model = dir.join("Mine.onnx");
-        std::fs::write(&model, lightcraft_faces::synthetic::tiny_embedder_model(512)).unwrap();
+        std::fs::write(&model, dac_faces::synthetic::tiny_embedder_model(512)).unwrap();
         let installed = h.app.run("faces.models.install", json!({"path": model.to_string_lossy(), "acknowledged": true, "activate": false})).unwrap();
         h.app.run("faces.models.select", json!({"id": installed["installed"]["id"]})).unwrap();
         h.app.caches.faces_epoch += 1;
@@ -1130,13 +1136,13 @@ mod tests {
     #[test]
     fn a_persons_page_shows_their_faces_and_back_returns_to_everyone() {
         use crate::state::ViewMode;
-        use lightcraft_catalog::Op;
+        use dac_catalog::Op;
         let mut h = demo([1400.0, 900.0]);
         let t = Duration::from_secs(10);
         let ids: Vec<_> = h.app.session.catalog.photos().map(|p| p.id).take(3).collect();
-        let face = |x: f64, name: &str| lightcraft_meta::Region {
-            rect: lightcraft_geom::Rect { x0: x, y0: 0.2, x1: x + 0.25, y1: 0.6 },
-            kind: lightcraft_meta::RegionKind::Face,
+        let face = |x: f64, name: &str| dac_meta::Region {
+            rect: dac_geom::Rect { x0: x, y0: 0.2, x1: x + 0.25, y1: 0.6 },
+            kind: dac_meta::RegionKind::Face,
             name: Some(name.to_string()),
             description: None,
         };
@@ -1218,13 +1224,13 @@ mod tests {
     /// press Enter, and they are all named at once, in one undo step; the new person appears among the named.
     #[test]
     fn unnamed_faces_are_selected_and_named_together() {
-        use lightcraft_catalog::Op;
+        use dac_catalog::Op;
         let mut h = demo([1400.0, 900.0]);
         let t = Duration::from_secs(10);
         let ids: Vec<_> = h.app.session.catalog.photos().map(|p| p.id).take(3).collect();
-        let face = |x: f64, name: Option<&str>| lightcraft_meta::Region {
-            rect: lightcraft_geom::Rect { x0: x, y0: 0.2, x1: x + 0.2, y1: 0.55 },
-            kind: lightcraft_meta::RegionKind::Face,
+        let face = |x: f64, name: Option<&str>| dac_meta::Region {
+            rect: dac_geom::Rect { x0: x, y0: 0.2, x1: x + 0.2, y1: 0.55 },
+            kind: dac_meta::RegionKind::Face,
             name: name.map(str::to_string),
             description: None,
         };
@@ -1267,7 +1273,7 @@ mod tests {
         h.request("ui.key", json!({"key": "enter"}), t);
         h.step();
         h.step();
-        let named = |h: &Headless, id: lightcraft_catalog::PhotoId, i: usize| h.app.session.catalog.photo(id).unwrap().meta.regions[i].name.clone();
+        let named = |h: &Headless, id: dac_catalog::PhotoId, i: usize| h.app.session.catalog.photo(id).unwrap().meta.regions[i].name.clone();
         assert_eq!((named(&h, ids[1], 0), named(&h, ids[2], 0)), (Some("Ann Example".to_string()), Some("Ann Example".to_string())));
         assert_eq!(named(&h, ids[1], 1), None, "a face that was not selected stays unnamed");
         assert_eq!(h.app.session.undo.len(), undo + 1, "one step for both");
@@ -1294,14 +1300,14 @@ mod tests {
     /// clipboard's name in, and Esc leaves the field and clears the selection, as Clear does.
     #[test]
     fn the_unnamed_faces_name_field_pastes_and_escape_clears() {
-        use lightcraft_catalog::Op;
+        use dac_catalog::Op;
         let mut h = demo([1400.0, 900.0]);
         let t = Duration::from_secs(10);
         let id = h.app.session.catalog.photos().map(|p| p.id).next().unwrap();
         let mut meta = h.app.session.catalog.photo(id).unwrap().meta.clone();
-        meta.regions = vec![lightcraft_meta::Region {
-            rect: lightcraft_geom::Rect { x0: 0.3, y0: 0.2, x1: 0.5, y1: 0.55 },
-            kind: lightcraft_meta::RegionKind::Face,
+        meta.regions = vec![dac_meta::Region {
+            rect: dac_geom::Rect { x0: 0.3, y0: 0.2, x1: 0.5, y1: 0.55 },
+            kind: dac_meta::RegionKind::Face,
             name: None,
             description: None,
         }];
@@ -1333,7 +1339,7 @@ mod tests {
     /// tiles were evicted and re-requested every frame and stayed blank.
     #[test]
     fn a_screenful_of_small_faces_is_not_evicted_and_left_blank() {
-        use lightcraft_catalog::Op;
+        use dac_catalog::Op;
         let mut h = demo([1500.0, 1000.0]);
         let t = Duration::from_secs(20);
         let ids: Vec<_> = h.app.session.catalog.photos().map(|p| p.id).collect();
@@ -1341,9 +1347,9 @@ mod tests {
         for id in &ids {
             let mut meta = h.app.session.catalog.photo(*id).unwrap().meta.clone();
             meta.regions = (0..7)
-                .map(|k| lightcraft_meta::Region {
-                    rect: lightcraft_geom::Rect { x0: 0.05 + 0.12 * k as f64, y0: 0.2, x1: 0.15 + 0.12 * k as f64, y1: 0.45 },
-                    kind: lightcraft_meta::RegionKind::Face,
+                .map(|k| dac_meta::Region {
+                    rect: dac_geom::Rect { x0: 0.05 + 0.12 * k as f64, y0: 0.2, x1: 0.15 + 0.12 * k as f64, y1: 0.45 },
+                    kind: dac_meta::RegionKind::Face,
                     name: None,
                     description: None,
                 })
@@ -1500,7 +1506,7 @@ mod tests {
             assert_eq!(r["ok"], true, "{w}: {r}");
         }
         let f = h.app.session.filter.clone();
-        assert_eq!((f.rating, f.flag, f.label), (3, Some(lightcraft_catalog::Flag::Pick), None), "a second click clears the label");
+        assert_eq!((f.rating, f.flag, f.label), (3, Some(dac_catalog::Flag::Pick), None), "a second click clears the label");
         let n = h.app.session.visible_cloned().len();
         assert!(n > 0 && n < all);
         h.request("ui.clickWidget", json!({"id": "button:filterSave"}), t);
@@ -1532,7 +1538,7 @@ mod tests {
         h.app.ui.thumb_size = 120.0;
         h.settle(SETTLE);
         let vis = h.app.session.visible_cloned();
-        let month = h.app.session.catalog.date_runs(&vis, h.app.session.sort.key, lightcraft_catalog::GroupBy::Month);
+        let month = h.app.session.catalog.date_runs(&vis, h.app.session.sort.key, dac_catalog::GroupBy::Month);
         let r = h.request("ui.clickWidget", json!({"id": format!("group:{}", month[0].key)}), t);
         assert_eq!(r["ok"], true, "{r}");
         h.request("engine.execute", json!({"command": "library.sort", "params": {"group": "none"}}), t);
@@ -1560,18 +1566,20 @@ mod tests {
         let ex = |h: &mut Headless, c: &str, p: Value| h.request("engine.execute", json!({"command": c, "params": p}), Duration::from_secs(10));
         ex(&mut h, "photo.setMeta", json!({"ids": [vis[0], vis[1]], "addKeywords": ["travel|italy"]}));
         ex(&mut h, "photo.setMeta", json!({"ids": [vis[2]], "addKeywords": ["travel|france"]}));
-        h.request("ui.set", json!({"leftPanel": true}), t);
+        h.request("ui.set", json!({"leftPanel": true, "right": "none"}), t);
+        // the Keyword List alone in Library's right column, at its top
+        h.app.ui.hidden_panels = vec![crate::module::PanelId::QuickDevelop, crate::module::PanelId::Keywording];
         // clicks land on last frame's layout: let the keyword list settle first (on a loaded machine a
         // row could still move, and the click then hit its neighbour, e.g. "sunrise")
         h.settle(SETTLE);
-        let r = h.request("ui.clickWidget", json!({"id": "source:keyword:travel"}), t);
+        let r = h.request("ui.clickWidget", json!({"id": "keywordShow:travel"}), t);
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(h.app.session.filter.keyword.as_deref(), Some("travel"));
         assert_eq!(h.app.session.visible_cloned().len(), 3);
         // open the level, filter by the child
-        h.request("ui.clickWidget", json!({"id": "keywordToggle:travel"}), t);
+        h.request("ui.clickWidget", json!({"id": "keywordRowToggle:travel"}), t);
         h.settle(SETTLE);
-        let r = h.request("ui.clickWidget", json!({"id": "source:keyword:travel|italy"}), t);
+        let r = h.request("ui.clickWidget", json!({"id": "keywordShow:travel|italy"}), t);
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(h.app.session.visible_cloned().len(), 2);
         h.app.ui.dialog = Some(crate::state::Dialog::RenameKeyword { from: "travel".into(), to: "trips".into() });
@@ -1588,7 +1596,7 @@ mod tests {
         assert!(h.settle(SETTLE), "keyword suggestions did not settle");
         let r = h.request("ui.clickWidget", json!({"id": "kwSuggest:gelato"}), t);
         assert_eq!(r["ok"], true, "{r}");
-        assert!(h.app.session.catalog.photo(lightcraft_catalog::PhotoId(vis[1])).unwrap().meta.keywords.contains(&"gelato".to_string()));
+        assert!(h.app.session.catalog.photo(dac_catalog::PhotoId(vis[1])).unwrap().meta.keywords.contains(&"gelato".to_string()));
         h.settle(SETTLE);
     }
 
@@ -1601,7 +1609,7 @@ mod tests {
         let t = Duration::from_secs(10);
         let first = h.app.session.visible_cloned()[0].0;
         h.request("engine.execute", json!({"command": "photo.setMeta", "params": {"ids": [first], "addKeywords": ["travel"]}}), t);
-        let keywords = |h: &Headless| h.app.session.catalog.photo(lightcraft_catalog::PhotoId(first)).unwrap().meta.keywords.clone();
+        let keywords = |h: &Headless| h.app.session.catalog.photo(dac_catalog::PhotoId(first)).unwrap().meta.keywords.clone();
         let open = |h: &mut Headless, name: &str| {
             h.app.ui.dialog = Some(crate::state::Dialog::RenameKeyword { from: name.into(), to: name.into() });
             h.settle(SETTLE);
@@ -1662,7 +1670,7 @@ mod tests {
         confirm(&mut h, Dialog::NewSmartAlbum { name: "Smart Album".into(), parent: None }, "Everything");
         assert!(album(&h, "Everything").is_some(), "New Smart Album");
         confirm(&mut h, Dialog::MergeKeywords { from: vec!["holiday".into()], into: String::new() }, "travel");
-        let keywords = h.app.session.catalog.photo(lightcraft_catalog::PhotoId(first)).unwrap().meta.keywords.clone();
+        let keywords = h.app.session.catalog.photo(dac_catalog::PhotoId(first)).unwrap().meta.keywords.clone();
         assert!(keywords.contains(&"travel".to_string()) && !keywords.contains(&"holiday".to_string()), "Merge Keywords: {keywords:?}");
         let prompt = Dialog::TextPrompt {
             title: "Rename Album".into(),
@@ -1719,7 +1727,7 @@ mod tests {
         h.settle(SETTLE);
         let r = h.request("ui.dialog.confirm", json!({}), t);
         assert_eq!(r["ok"], true, "{r}");
-        let name = |id: u64| h.app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().file_name.clone();
+        let name = |id: u64| h.app.session.catalog.photo(dac_catalog::PhotoId(id)).unwrap().file_name.clone();
         assert!(name(vis[0]).starts_with("Trip-05."), "{}", name(vis[0]));
         assert!(name(vis[1]).starts_with("Trip-06."), "{}", name(vis[1]));
         h.settle(SETTLE);
@@ -1738,7 +1746,7 @@ mod tests {
         h.request("engine.execute", json!({"command": "dialog.export", "params": {}}), t);
         // the widest variant: watermark graphic and every optional row
         if let Some(crate::state::Dialog::Export { opts, .. }) = &mut h.app.ui.dialog {
-            let mut wm = lightcraft_engine::export::Watermark { image: "logo.png".into(), ..Default::default() };
+            let mut wm = dac_engine::export::Watermark { image: "logo.png".into(), ..Default::default() };
             wm.text.clear();
             opts.watermark = Some(wm);
         }
@@ -1779,7 +1787,7 @@ mod tests {
         h.settle(SETTLE);
         if let Some(crate::state::Dialog::Export { full_size, resize, dir, .. }) = &mut h.app.ui.dialog {
             *full_size = false;
-            *resize = lightcraft_engine::export::Resize::long_edge(64);
+            *resize = dac_engine::export::Resize::long_edge(64);
             *dir = "/lc-test-out".into();
         }
         let r = h.request("ui.dialog.confirm", json!({}), t);
@@ -1829,8 +1837,8 @@ mod tests {
         let r = h.request("ui.drag", json!({"x": x, "y": y, "toX": tx, "toY": ty, "steps": 12}), t);
         assert_eq!(r["ok"], true, "{r}");
         h.settle(SETTLE);
-        let members = h.app.session.catalog.album(lightcraft_catalog::AlbumId(album)).unwrap().photos.clone();
-        assert_eq!(members, vec![lightcraft_catalog::PhotoId(first)]);
+        let members = h.app.session.catalog.album(dac_catalog::AlbumId(album)).unwrap().photos.clone();
+        assert_eq!(members, vec![dac_catalog::PhotoId(first)]);
         assert!(h.app.ui.dragging_photos.is_none(), "the drag ended");
     }
 
@@ -1847,7 +1855,7 @@ mod tests {
         h.app
             .session
             .catalog
-            .apply(lightcraft_catalog::Op::SetContent {
+            .apply(dac_catalog::Op::SetContent {
                 id: po,
                 width: ph.width,
                 height: ph.height,
@@ -1910,7 +1918,7 @@ mod tests {
     fn info_fields_keep_typing_and_save() {
         let mut h = demo([1300.0, 1000.0]);
         let t = Duration::from_secs(10);
-        h.request("ui.set", json!({"view": "detail", "right": "info"}), t);
+        h.request("ui.set", json!({"view": "detail", "right": "info", "moduleBar": false}), t);
         h.settle(SETTLE);
         for (key, text) in [("altText", "A lake at dawn"), ("usageTerms", "Editorial use only"), ("city", "Zermatt")] {
             let r = h.request("ui.clickWidget", json!({"id": format!("field:{key}")}), t);
@@ -1983,18 +1991,18 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lc-ui-browse-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("inner")).unwrap();
-        let img = lightcraft_raster::Rgba8::from_fn(24, 16, |x, y| [(x * 9) as u8, (y * 12) as u8, 80, 255]);
-        let o = lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() };
+        let img = dac_raster::Rgba8::from_fn(24, 16, |x, y| [(x * 9) as u8, (y * 12) as u8, 80, 255]);
+        let o = dac_engine::export::ExportOptions { format: dac_engine::export::ExportFormat::Png, ..Default::default() };
         for (i, p) in [dir.join("a.png"), dir.join("inner/b.png")].iter().enumerate() {
             let mut img = img.clone();
             img.data[0][0] = i as u8; // different bytes per file
-            std::fs::write(p, lightcraft_engine::export::encode_image(&img, &o).unwrap()).unwrap();
+            std::fs::write(p, dac_engine::export::encode_image(&img, &o).unwrap()).unwrap();
         }
         let library_before = h.app.session.catalog.photos().filter(|p| !p.local).count();
         let r = h.request("engine.execute", json!({"command": "library.browse", "params": {"path": dir.to_string_lossy()}}), t);
         // the folder is read in the background: the view switches at once, the photos follow
         assert_eq!(r["result"]["scanning"], true, "{r}");
-        assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::Folder);
+        assert_eq!(h.app.session.source, dac_engine::LibrarySource::Folder);
         h.settle(SETTLE);
         assert!(h.app.scan.is_none() && h.app.import.is_none());
         assert_eq!(h.app.session.visible_cloned().len(), 1);
@@ -2051,6 +2059,7 @@ mod tests {
         };
         let ids = |h: &mut Headless| -> Vec<String> { rects(h).into_iter().map(|(id, _)| id).collect() };
         h.request("ui.set", json!({"leftPanel": true}), t);
+        h.app.ui.toggle_sidebar_section("panel:navigator");
         h.hide_home_above(&dir);
         // Browse Folder… browses the picked folder and keeps it in Local within one frame; a
         // request runs frames, so keep it first (no frame sees it browsed but not yet kept)
@@ -2190,7 +2199,7 @@ mod tests {
         assert!((exposure(&h) - 0.25).abs() < 1e-9, "{}", exposure(&h));
         let first = h.app.session.active().unwrap();
         h.request("ui.key", json!({"key": "Z", "shift": true}), t);
-        assert_eq!(h.app.session.catalog.photo(first).unwrap().flag, lightcraft_catalog::Flag::Pick);
+        assert_eq!(h.app.session.catalog.photo(first).unwrap().flag, dac_catalog::Flag::Pick);
         assert_ne!(h.app.session.active(), Some(first), "advanced");
     }
 
@@ -2279,7 +2288,7 @@ mod tests {
         assert_eq!(h.app.ui.right, crate::state::RightPanel::Edit, "no-op outside tools");
     }
 
-    /// ⌘Q (File → Quit LightCraft) closes the window.
+    /// ⌘Q (File → Quit) closes the window.
     #[test]
     fn cmd_q_quits() {
         let mut h = demo([900.0, 600.0]);
@@ -2298,10 +2307,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lc-addfolder-{}", std::process::id()));
         let sub = dir.join("day 2");
         std::fs::create_dir_all(&sub).unwrap();
-        let img = lightcraft_raster::Rgba8::from_fn(24, 16, |x, y| [(x * 9) as u8, (y * 12) as u8, 80, 255]);
-        let png = lightcraft_engine::export::encode_image(
+        let img = dac_raster::Rgba8::from_fn(24, 16, |x, y| [(x * 9) as u8, (y * 12) as u8, 80, 255]);
+        let png = dac_engine::export::encode_image(
             &img,
-            &lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() },
+            &dac_engine::export::ExportOptions { format: dac_engine::export::ExportFormat::Png, ..Default::default() },
         )
         .unwrap();
         std::fs::write(dir.join("a.png"), &png).unwrap();
@@ -2359,9 +2368,9 @@ mod tests {
         let t = Duration::from_secs(10);
         let dir = std::env::temp_dir().join(format!("lc-browse-again-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let img = lightcraft_raster::Rgba8::from_fn(8, 8, |x, y| [(x * 9) as u8, (y * 12) as u8, 80, 255]);
-        let o = lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() };
-        std::fs::write(dir.join("a.png"), lightcraft_engine::export::encode_image(&img, &o).unwrap()).unwrap();
+        let img = dac_raster::Rgba8::from_fn(8, 8, |x, y| [(x * 9) as u8, (y * 12) as u8, 80, 255]);
+        let o = dac_engine::export::ExportOptions { format: dac_engine::export::ExportFormat::Png, ..Default::default() };
+        std::fs::write(dir.join("a.png"), dac_engine::export::encode_image(&img, &o).unwrap()).unwrap();
         let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let started = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let (g, n) = (gate.clone(), started.clone());
@@ -2370,7 +2379,7 @@ mod tests {
             while !g.load(std::sync::atomic::Ordering::Relaxed) {
                 std::thread::sleep(Duration::from_millis(5));
             }
-            Ok(lightcraft_engine::media::ProbeInfo { format: "PNG".into(), ..Default::default() })
+            Ok(dac_engine::media::ProbeInfo { format: "PNG".into(), ..Default::default() })
         }));
         let browse =
             |h: &mut Headless| h.request("engine.execute", json!({"command": "library.browse", "params": {"path": dir.to_string_lossy()}}), t);
@@ -2391,10 +2400,10 @@ mod tests {
         let t = Duration::from_secs(10);
         let dir = std::env::temp_dir().join(format!("lc-scanbg-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let img = lightcraft_raster::Rgba8::from_fn(8, 8, |x, y| [(x * 9) as u8, (y * 12) as u8, 80, 255]);
-        let png = lightcraft_engine::export::encode_image(
+        let img = dac_raster::Rgba8::from_fn(8, 8, |x, y| [(x * 9) as u8, (y * 12) as u8, 80, 255]);
+        let png = dac_engine::export::encode_image(
             &img,
-            &lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() },
+            &dac_engine::export::ExportOptions { format: dac_engine::export::ExportFormat::Png, ..Default::default() },
         )
         .unwrap();
         std::fs::write(dir.join("a.png"), &png).unwrap();
@@ -2415,10 +2424,10 @@ mod tests {
         let t = Duration::from_secs(10);
         let dir = std::env::temp_dir().join(format!("lc-scancancel-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let img = lightcraft_raster::Rgba8::from_fn(8, 8, |x, y| [(x * 9) as u8, (y * 12) as u8, 80, 255]);
-        let png = lightcraft_engine::export::encode_image(
+        let img = dac_raster::Rgba8::from_fn(8, 8, |x, y| [(x * 9) as u8, (y * 12) as u8, 80, 255]);
+        let png = dac_engine::export::encode_image(
             &img,
-            &lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() },
+            &dac_engine::export::ExportOptions { format: dac_engine::export::ExportFormat::Png, ..Default::default() },
         )
         .unwrap();
         std::fs::write(dir.join("a.png"), &png).unwrap();
@@ -2429,7 +2438,7 @@ mod tests {
             while !g.load(std::sync::atomic::Ordering::Relaxed) {
                 std::thread::sleep(Duration::from_millis(5));
             }
-            Ok(lightcraft_engine::media::ProbeInfo { format: "PNG".into(), ..Default::default() })
+            Ok(dac_engine::media::ProbeInfo { format: "PNG".into(), ..Default::default() })
         }));
         let r = h.request("engine.execute", json!({"command": "file.addFolder", "params": {"path": dir.to_string_lossy()}}), t);
         assert_eq!(r["result"]["scanning"], true, "{r}");
@@ -2472,7 +2481,7 @@ mod tests {
         assert_eq!(r["ok"], true, "{r}");
         h.settle(SETTLE);
         assert_eq!(h.request("ui.dialog.confirm", json!({}), t)["ok"], true);
-        let d = h.app.session.develop_of(lightcraft_catalog::PhotoId(ids[1])).unwrap();
+        let d = h.app.session.develop_of(dac_catalog::PhotoId(ids[1])).unwrap();
         assert_eq!((d.light.exposure, d.color.vibrance), (1.0, 0.0));
         // ⌘F, then typing filters the grid by text
         h.request("ui.set", json!({"view": "grid"}), t);
@@ -2491,7 +2500,7 @@ mod tests {
         let t = Duration::from_secs(10);
         let id = h.app.session.visible_cloned()[0];
         h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0]}}), t);
-        h.request("ui.set", json!({"view": "detail", "right": "info"}), t);
+        h.request("ui.set", json!({"view": "detail", "right": "info", "moduleBar": false}), t);
         let before = h.app.session.catalog.photo(id).unwrap().captured.clone().unwrap();
         let r = h.request("ui.clickWidget", json!({"id": "icon:editCaptureTime"}), t);
         assert_eq!(r["ok"], true, "{r}");
@@ -2505,7 +2514,7 @@ mod tests {
         let r = h.request("ui.dialog.confirm", json!({}), t);
         assert_eq!(r["ok"], true, "{r}");
         let after = h.app.session.catalog.photo(id).unwrap().captured.clone().unwrap();
-        let secs = lightcraft_catalog::dates::iso_seconds;
+        let secs = dac_catalog::dates::iso_seconds;
         assert_eq!(secs(&after).unwrap() - secs(&before).unwrap(), -3 * 3600);
         h.settle(SETTLE);
     }
@@ -2521,7 +2530,7 @@ mod tests {
         h.request("ui.set", json!({"view": "detail", "right": "info"}), t);
         let r = h.request("ui.clickWidget", json!({"id": "label:green"}), t);
         assert_eq!(r["ok"], true, "{r}");
-        assert_eq!(h.app.session.catalog.photo(id).unwrap().label, Some(lightcraft_catalog::ColorLabel::Green));
+        assert_eq!(h.app.session.catalog.photo(id).unwrap().label, Some(dac_catalog::ColorLabel::Green));
         h.request("engine.execute", json!({"command": "dialog.labelNames"}), t);
         if let Some(crate::state::Dialog::LabelNames { names, .. }) = &mut h.app.ui.dialog {
             names[2] = "Approved".into();
@@ -2549,13 +2558,13 @@ mod tests {
         for i in 0..5u8 {
             let (w, h) = (40usize, 30usize);
             let data: Vec<[u8; 4]> = (0..w * h).map(|k| [(k % w * 6) as u8, i * 40, (k / w * 8) as u8, 255]).collect();
-            let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
-            let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+            let img = dac_raster::Rgba8 { width: w, height: h, data };
+            let png = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).unwrap();
             std::fs::write(dir.join(format!("img{i}.png")), png).unwrap();
         }
         std::fs::copy(dir.join("img0.png"), dir.join("img0-copy.png")).unwrap();
         let services = crate::Services { png: None, ..Default::default() };
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo().with_fs(), services);
+        let mut app = DacApp::new(dac_engine::Session::with_demo().with_fs(), services);
         app.ui.view = crate::state::ViewMode::PhotoGrid;
         let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
         let t = Duration::from_secs(10);
@@ -2606,13 +2615,12 @@ mod tests {
             std::fs::create_dir_all(&dir).unwrap();
             for i in 0..2u8 {
                 let data: Vec<[u8; 4]> = (0..40 * 30).map(|k| [(k % 40 * 6) as u8, i * 90, 7, 255]).collect();
-                let img = lightcraft_raster::Rgba8 { width: 40, height: 30, data };
-                let png =
-                    lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+                let img = dac_raster::Rgba8 { width: 40, height: 30, data };
+                let png = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).unwrap();
                 std::fs::write(dir.join(format!("img{i}.png")), png).unwrap();
             }
             let services = crate::Services { png: None, ..Default::default() };
-            let mut app = LightcraftApp::new(lightcraft_engine::Session::new().with_fs(), services);
+            let mut app = DacApp::new(dac_engine::Session::new().with_fs(), services);
             app.ui.view = crate::state::ViewMode::PhotoGrid;
             let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
             let t = Duration::from_secs(10);
@@ -2647,7 +2655,7 @@ mod tests {
             let toast = h.app.ui.toast.clone().map(|t| t.0).unwrap_or_default();
             let photos = &h.app.session.catalog;
             assert_eq!(photos.photos().filter(|p| !p.deleted).count(), 2, "{choice}");
-            let old = photos.photo(lightcraft_catalog::PhotoId(id));
+            let old = photos.photo(dac_catalog::PhotoId(id));
             if choice == "restore" {
                 assert!(toast.contains("1 restored"), "{toast}");
                 assert!(old.is_some_and(|p| !p.deleted && p.rating == 3), "restored with its edits");
@@ -2667,7 +2675,7 @@ mod tests {
         let mut h = demo([1400.0, 1000.0]);
         let t = Duration::from_secs(10);
         let candidates = (0..60)
-            .map(|i| lightcraft_engine::import::ImportCandidate {
+            .map(|i| dac_engine::import::ImportCandidate {
                 path: format!("/lc-test/img{i}.png"),
                 name: format!("img{i}.png"),
                 error: Some("not read in this test".into()),
@@ -2719,13 +2727,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lc-ui-readd-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let img = lightcraft_raster::Rgba8 { width: 16, height: 12, data: vec![[200, 120, 40, 255]; 16 * 12] };
-        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        let img = dac_raster::Rgba8 { width: 16, height: 12, data: vec![[200, 120, 40, 255]; 16 * 12] };
+        let png = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).unwrap();
         let file = dir.join("flower.png");
         std::fs::write(&file, png).unwrap();
         let paths = vec![file.to_string_lossy().to_string()];
         let services = crate::Services { png: None, ..Default::default() };
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo().with_fs(), services);
+        let mut app = DacApp::new(dac_engine::Session::with_demo().with_fs(), services);
         app.ui.view = crate::state::ViewMode::PhotoGrid;
         let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
         let t = Duration::from_secs(10);
@@ -2742,7 +2750,7 @@ mod tests {
         let id = h.app.session.selection.active.expect("imported photo selected");
         h.request("engine.execute", json!({"command": "photo.delete", "params": {"ids": [id.0]}}), t);
         assert!(h.app.session.catalog.photo(id).unwrap().deleted);
-        let photo_items = |app: &LightcraftApp| -> Vec<String> {
+        let photo_items = |app: &DacApp| -> Vec<String> {
             let bar = crate::menubar::menu_bar(app);
             let items = &bar.iter().find(|(title, _)| title == "Photo").expect("Photo menu").1;
             items.iter().filter_map(|n| if let crate::menubar::MenuNode::Item { id, .. } = n { Some(id.clone()) } else { None }).collect()
@@ -2752,7 +2760,7 @@ mod tests {
         h.app.ui.left_panel = false;
         crate::import::start_paths(&mut h.app, paths.clone()).unwrap();
         finish_import(&mut h);
-        assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::RecentlyDeleted);
+        assert_eq!(h.app.session.source, dac_engine::LibrarySource::RecentlyDeleted);
         assert_eq!(h.app.session.selection.ids, vec![id]);
         assert!(h.app.ui.left_panel, "the side panel listing Recently Deleted is opened");
         let toast = h.app.ui.toast.clone().expect("toast").0;
@@ -2777,7 +2785,7 @@ mod tests {
         assert!(!h.app.session.catalog.photo(id).unwrap().deleted, "restored");
         crate::import::start_paths(&mut h.app, paths).unwrap();
         finish_import(&mut h);
-        assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::All);
+        assert_eq!(h.app.session.source, dac_engine::LibrarySource::All);
         assert_eq!(h.app.session.selection.ids, vec![id]);
         let toast = h.app.ui.toast.clone().expect("toast").0;
         assert!(toast.contains("All Photos"), "{toast}");
@@ -2805,13 +2813,13 @@ mod tests {
         std::fs::create_dir_all(&src).unwrap();
         // more files than a batch holds (see `batch_size`)
         for i in 0..20u8 {
-            let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[i * 12, 3, 9, 255]; 64] };
-            let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+            let img = dac_raster::Rgba8 { width: 8, height: 8, data: vec![[i * 12, 3, 9, 255]; 64] };
+            let png = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).unwrap();
             std::fs::write(src.join(format!("IMG_{i:02}.png")), png).unwrap();
         }
         let dest_s = dest.to_string_lossy().to_string();
         let services = crate::Services { png: None, pick_folder: Some(Box::new(move || Some(dest_s.clone()))), ..Default::default() };
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo().with_fs(), services);
+        let mut app = DacApp::new(dac_engine::Session::with_demo().with_fs(), services);
         app.ui.view = crate::state::ViewMode::PhotoGrid;
         let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
         let t = Duration::from_secs(10);
@@ -2840,7 +2848,7 @@ mod tests {
         let mut names: Vec<String> = std::fs::read_dir(&dest).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
         names.sort();
         let want: Vec<String> = (1..=20).map(|i| format!("Trip-{i:02}.png")).collect();
-        assert_eq!(names, want, "numbered across batches of {}", lightcraft_engine::import::batch_size());
+        assert_eq!(names, want, "numbered across batches of {}", dac_engine::import::batch_size());
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -2853,15 +2861,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         let (src, dest) = (base.join("card"), base.join("out"));
         std::fs::create_dir_all(&src).unwrap();
-        let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[40, 3, 9, 255]; 64] };
-        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        let img = dac_raster::Rgba8 { width: 8, height: 8, data: vec![[40, 3, 9, 255]; 64] };
+        let png = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).unwrap();
         std::fs::write(src.join("IMG_01.png"), png).unwrap();
         let dest_s = dest.to_string_lossy().to_string();
         let services = crate::Services { png: None, pick_folder: Some(Box::new(move || Some(dest_s.clone()))), ..Default::default() };
-        let mut session = lightcraft_engine::Session::with_demo().with_fs();
+        let mut session = dac_engine::Session::with_demo().with_fs();
         // undated files are filed by the import time
         session.clock = Box::new(|| "2026-01-14T05:58:48".to_string());
-        let mut app = LightcraftApp::new(session, services);
+        let mut app = DacApp::new(session, services);
         app.ui.view = crate::state::ViewMode::PhotoGrid;
         let mut h = Headless::new(app, [1300.0, 1000.0], 1.0);
         let t = Duration::from_secs(10);
@@ -2906,15 +2914,15 @@ mod tests {
         let (src, dest) = (base.join("card"), base.join("Photos"));
         std::fs::create_dir_all(&src).unwrap();
         for i in 0..2u8 {
-            let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[40 + i, 3, 9, 255]; 64] };
-            let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+            let img = dac_raster::Rgba8 { width: 8, height: 8, data: vec![[40 + i, 3, 9, 255]; 64] };
+            let png = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).unwrap();
             std::fs::write(src.join(format!("IMG_0{i}.png")), png).unwrap();
         }
         let dest_s = dest.to_string_lossy().to_string();
         let services = crate::Services { png: None, pick_folder: Some(Box::new(move || Some(dest_s.clone()))), ..Default::default() };
-        let mut session = lightcraft_engine::Session::with_demo().with_fs();
+        let mut session = dac_engine::Session::with_demo().with_fs();
         session.clock = Box::new(|| "2026-01-14T05:58:48".to_string());
-        let mut app = LightcraftApp::new(session, services);
+        let mut app = DacApp::new(session, services);
         app.ui.view = crate::state::ViewMode::PhotoGrid;
         let mut h = Headless::new(app, [1300.0, 1000.0], 1.0);
         let t = Duration::from_secs(10);
@@ -2955,13 +2963,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lc-ui-import-tags-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[90, 3, 9, 255]; 64] };
-        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        let img = dac_raster::Rgba8 { width: 8, height: 8, data: vec![[90, 3, 9, 255]; 64] };
+        let png = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).unwrap();
         std::fs::write(dir.join("IMG_0007.png"), png).unwrap();
         let lib = dir.join("lib");
-        let mut session = lightcraft_engine::Session::with_demo().with_fs();
+        let mut session = dac_engine::Session::with_demo().with_fs();
         session.open_library(&lib, false).unwrap();
-        let mut app = LightcraftApp::new(session, crate::Services { png: None, ..Default::default() });
+        let mut app = DacApp::new(session, crate::Services { png: None, ..Default::default() });
         app.ui.view = crate::state::ViewMode::PhotoGrid;
         let mut h = Headless::new(app, [1300.0, 1000.0], 1.0);
         let t = Duration::from_secs(10);
@@ -2983,7 +2991,7 @@ mod tests {
         st.store(&h.view.ctx, id);
         let r = h.request("ui.clickWidget", json!({"id": "button:importRenameTags"}), t);
         assert_eq!(r["ok"], true, "{r}");
-        let seq3 = lightcraft_engine::rename::TOKENS.iter().position(|x| x.tag == "{seq:3}").unwrap();
+        let seq3 = dac_engine::rename::TOKENS.iter().position(|x| x.tag == "{seq:3}").unwrap();
         let r = h.request("ui.clickWidget", json!({"id": format!("button:importRenameTag-{seq3}")}), t);
         assert_eq!(r["ok"], true, "{r}");
         let Some(crate::state::Dialog::Import { opts }) = &h.app.ui.dialog else { panic!("no import dialog") };
@@ -3002,7 +3010,7 @@ mod tests {
     fn about_dialog_tabs_show_the_credits() {
         // an empty library: the dialog needs no photos, and no decodes compete with other tests
         let services = crate::Services { png: None, ..Default::default() };
-        let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::new(), services), [1300.0, 820.0], 1.0);
+        let mut h = Headless::new(DacApp::new(dac_engine::Session::new(), services), [1300.0, 820.0], 1.0);
         let t = Duration::from_secs(10);
         let r = h.request("ui.menu.invoke", json!({"id": "app.about"}), t);
         assert_eq!(r["ok"], true, "{r}");
@@ -3030,10 +3038,10 @@ mod tests {
     #[test]
     fn display_profile_converts_previews() {
         use crate::render::Slot;
-        let dir = std::env::temp_dir().join(format!("lightcraft-display-ui-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("app-display-ui-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p3 = dir.join("p3.icc");
-        std::fs::write(&p3, lightcraft_codecs::icc::write_named(lightcraft_codecs::NamedSpace::DisplayP3)).unwrap();
+        std::fs::write(&p3, dac_codecs::icc::write_named(dac_codecs::NamedSpace::DisplayP3)).unwrap();
         let bad = dir.join("bad.icc");
         std::fs::write(&bad, b"not a profile").unwrap();
         let (p3, bad) = (p3.to_string_lossy().to_string(), bad.to_string_lossy().to_string());
@@ -3050,11 +3058,8 @@ mod tests {
         };
         assert!(h.step_until(SETTLE, ready));
         h.settle(SETTLE);
-        let rgba = |c: &egui::ColorImage| lightcraft_raster::Rgba8 {
-            width: c.size[0],
-            height: c.size[1],
-            data: c.pixels.iter().map(|p| p.to_array()).collect(),
-        };
+        let rgba =
+            |c: &egui::ColorImage| dac_raster::Rgba8 { width: c.size[0], height: c.size[1], data: c.pixels.iter().map(|p| p.to_array()).collect() };
         let tex = |h: &Headless, s: Slot| rgba(h.app.renderer.textures.get(&s).and_then(|t| t.pixels.clone()).as_deref().unwrap());
         let thumb = thumb_slot(&h).unwrap();
         let (main0, thumb0) = (tex(&h, Slot::Main), tex(&h, thumb));
@@ -3071,7 +3076,7 @@ mod tests {
         let (main1, thumb1) = (tex(&h, Slot::Main), tex(&h, thumb));
         let mut want = thumb0.clone();
         d.profile.from_srgb(&mut want).unwrap();
-        let max_diff = |a: &lightcraft_raster::Rgba8, b: &lightcraft_raster::Rgba8| {
+        let max_diff = |a: &dac_raster::Rgba8, b: &dac_raster::Rgba8| {
             a.data.iter().zip(&b.data).flat_map(|(p, q)| (0..3).map(move |k| (p[k] as i32 - q[k] as i32).abs())).max().unwrap_or(0)
         };
         assert_eq!((thumb1.width, thumb1.height), (thumb0.width, thumb0.height));
@@ -3148,10 +3153,10 @@ mod tests {
         h.request("ui.clickWidget", json!({"id": "button:settingsMemory-2"}), t);
         assert_eq!(h.app.ui.settings.memory_mb, 1024);
         h.step();
-        assert_eq!(lightcraft_engine::memory::budget(), 1024 << 20, "applied through app.memoryBudget");
+        assert_eq!(dac_engine::memory::budget(), 1024 << 20, "applied through app.memoryBudget");
         h.request("ui.clickWidget", json!({"id": "button:settingsMemory-0"}), t);
         h.step();
-        assert_eq!(lightcraft_engine::memory::budget(), lightcraft_engine::memory::default_budget(), "back to automatic");
+        assert_eq!(dac_engine::memory::budget(), dac_engine::memory::default_budget(), "back to automatic");
         // Import: per-camera defaults
         h.request("ui.clickWidget", json!({"id": "button:settingsTab-import"}), t);
         h.request("ui.clickWidget", json!({"id": "check:settings.perCamera"}), t);
@@ -3335,7 +3340,7 @@ mod tests {
         assert!((edge.left() - area.left()).abs() < 0.01 && (edge.bottom() - area.bottom()).abs() < 0.01, "{edge:?} vs {area:?}");
 
         h.request("ui.zoom", json!({"factor": 1e20}), t);
-        assert_eq!(h.app.ui.zoom, Zoom::Percent(800.0));
+        assert_eq!(h.app.ui.zoom, Zoom::Percent(crate::state::MAX_ZOOM));
         h.request("ui.zoom", json!({"factor": 0.000001}), t);
         assert_eq!(h.app.ui.zoom, Zoom::Fit);
         assert_eq!(h.app.ui.pan, (0.5, 0.5));

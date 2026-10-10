@@ -1,4 +1,4 @@
-//! Build previews ahead of time: each photo's grid thumbnail and its loupe view (standard size,
+//! Build previews ahead of time: each photo's grlet ids: Vec<u64> = ids.iter().map(|id| id.0).collect(); thumbnail and its loupe view (standard size,
 //! or 1:1), rendered into the memory + disk preview cache so browsing and the loupe are instant.
 //! Runs on a background thread (the app keeps working; progress / cancel by command, and a row in
 //! the activity stack, issue #345), or inline with `wait` (CLI, MCP, tests).
@@ -15,6 +15,105 @@ use crate::{Result, Session};
 
 /// The long edge of a standard-sized preview.
 pub const STANDARD_EDGE: usize = 2048;
+
+/// When 1:1 previews are discarded on their own (the catalog setting "Automatically discard 1:1
+/// previews"): this long after they were built or last shown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DiscardAfter {
+    Day,
+    Week,
+    #[default]
+    Month,
+    Never,
+}
+
+impl DiscardAfter {
+    pub fn parse(s: &str) -> Option<DiscardAfter> {
+        Some(match s {
+            "day" => DiscardAfter::Day,
+            "week" => DiscardAfter::Week,
+            "month" => DiscardAfter::Month,
+            "never" => DiscardAfter::Never,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DiscardAfter::Day => "day",
+            DiscardAfter::Week => "week",
+            DiscardAfter::Month => "month",
+            DiscardAfter::Never => "never",
+        }
+    }
+
+    /// The age past which a 1:1 preview goes (`None`: never).
+    pub fn max_age(self) -> Option<std::time::Duration> {
+        let day = 24 * 3600;
+        match self {
+            DiscardAfter::Day => Some(std::time::Duration::from_secs(day)),
+            DiscardAfter::Week => Some(std::time::Duration::from_secs(7 * day)),
+            DiscardAfter::Month => Some(std::time::Duration::from_secs(30 * day)),
+            DiscardAfter::Never => None,
+        }
+    }
+}
+
+/// Which previews an import builds once its photos are in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ImportPreviews {
+    /// Thumbnails only, as the grid asks for them.
+    #[default]
+    Minimal,
+    Standard,
+    Full,
+}
+
+impl ImportPreviews {
+    pub fn parse(s: &str) -> Option<ImportPreviews> {
+        Some(match s {
+            "minimal" => ImportPreviews::Minimal,
+            "standard" => ImportPreviews::Standard,
+            "full" | "1:1" => ImportPreviews::Full,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ImportPreviews::Minimal => "minimal",
+            ImportPreviews::Standard => "standard",
+            ImportPreviews::Full => "full",
+        }
+    }
+}
+
+/// The preview store's settings, per library (saved in its `prefs.json`).
+// TODO(P1.5): move into the catalog's own settings once its storage rework lands.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PreviewPrefs {
+    /// Long edge of standard-sized previews (0 = [`STANDARD_EDGE`]).
+    pub standard_edge: u32,
+    pub discard_full: DiscardAfter,
+    pub at_import: ImportPreviews,
+}
+
+impl PreviewPrefs {
+    pub fn standard_edge(&self) -> usize {
+        if self.standard_edge == 0 { STANDARD_EDGE } else { (self.standard_edge as usize).clamp(256, 8192) }
+    }
+
+    pub fn json(&self) -> Value {
+        json!({
+            "standardEdge": self.standard_edge(),
+            "discardFull": self.discard_full.as_str(),
+            "atImport": self.at_import.as_str(),
+        })
+    }
+}
 
 /// A preview build in progress.
 #[derive(Debug, Default)]
@@ -54,13 +153,21 @@ impl PreviewBuild {
 
 /// The jobs that build `id`'s previews: the largest grid thumbnail, then the view render at
 /// `edge` (`None` = 1:1, the photo's full size).
-fn jobs_for(s: &mut Session, id: lightcraft_catalog::PhotoId, edge: Option<usize>) -> Vec<RenderJob> {
-    let Some(p) = s.catalog.photo(id) else { return Vec::new() };
+fn jobs_for(s: &mut Session, id: dac_catalog::PhotoId, edge: Option<usize>) -> Vec<RenderJob> {
+    let Some(p) = s.catalog.photo(id).cloned() else { return Vec::new() };
     let full = p.width.max(p.height) as usize;
     let e = edge.unwrap_or(full).min(full.max(1)).max(1);
     let mut v = Vec::new();
     v.extend(s.thumb_job(id, THUMB_SIZES[THUMB_SIZES.len() - 1]));
-    v.extend(s.loupe_job(id, e, e, true));
+    let mut view = s.loupe_job(id, e, e, true);
+    // a 1:1 preview is kept under its own key, to be discarded on its own
+    if edge.is_none()
+        && let Some(j) = view.as_mut()
+        && let Some((_, key)) = j.view_cache.as_mut()
+    {
+        *key = Session::full_view_key(&p);
+    }
+    v.extend(view);
     v
 }
 
@@ -94,13 +201,15 @@ fn run_all(jobs: Vec<Vec<RenderJob>>, state: &PreviewBuild, task: &TaskGuard) {
 fn build(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "library.buildPreviews";
     let edge = match str_param(p, "size").unwrap_or("standard") {
-        "standard" => Some(p.get("edge").and_then(Value::as_u64).map_or(STANDARD_EDGE, |e| e.clamp(256, 8192) as usize)),
+        "standard" => Some(p.get("edge").and_then(Value::as_u64).map_or(s.preview_prefs.standard_edge(), |e| e.clamp(256, 8192) as usize)),
         "full" | "1:1" => None,
         other => return Err(bad(C, format!("unknown size `{other}` (standard|full)"))),
     };
     if s.preview_build.as_ref().is_some_and(|b| !b.finished.load(Ordering::Relaxed)) {
         return Err(bad(C, "a preview build is already running"));
     }
+    // 1:1 previews past their time go first (the build may need the room)
+    auto_discard(s);
     // explicit ids, else the selection, else everything in view
     let ids = if p.get("ids").is_some() || p.get("id").is_some() || !s.selection.ids.is_empty() { s.targets(p) } else { s.visible_cloned() };
     let jobs: Vec<Vec<RenderJob>> = ids.iter().map(|id| jobs_for(s, *id, edge)).filter(|j| !j.is_empty()).collect();
@@ -124,12 +233,106 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(state.json())
 }
 
+/// What discarding 1:1 previews did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Discarded {
+    /// 1:1 previews removed.
+    pub removed: usize,
+    /// 1:1 previews still kept (of the photos looked at).
+    pub kept: usize,
+}
+
+/// Discard the 1:1 previews of `ids` (memory and disk): all of them, or with `older_than` only
+/// those not built or shown for that long. A preview held only in memory (no library on disk) has
+/// no age and is kept unless all go.
+pub fn discard_full(s: &Session, ids: &[dac_catalog::PhotoId], older_than: Option<std::time::Duration>) -> Discarded {
+    let cache = &s.media.rendered;
+    let now = std::time::SystemTime::now();
+    let mut d = Discarded::default();
+    for id in ids {
+        let Some(p) = s.catalog.photo(*id) else { continue };
+        let key = Session::full_view_key(p);
+        if !cache.contains(key) {
+            continue;
+        }
+        let stale = match older_than {
+            None => true,
+            Some(age) => cache.disk().and_then(|disk| disk.modified(key)).and_then(|m| now.duration_since(m).ok()).is_some_and(|a| a >= age),
+        };
+        if stale && cache.remove(key) {
+            d.removed += 1;
+        } else {
+            d.kept += 1;
+        }
+    }
+    d
+}
+
+/// Apply the library's "discard 1:1 previews after" setting to every photo.
+pub fn auto_discard(s: &Session) -> Discarded {
+    let Some(age) = s.preview_prefs.discard_full.max_age() else { return Discarded::default() };
+    let ids: Vec<_> = s.catalog.photos().map(|p| p.id).collect();
+    discard_full(s, &ids, Some(age))
+}
+
+fn discard(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "library.discardPreviews";
+    match str_param(p, "size").unwrap_or("full") {
+        "full" | "1:1" => {}
+        other => return Err(bad(C, format!("unknown size `{other}` (only full: standard previews go with library.clearPreviews)"))),
+    }
+    let d = if p.get("auto").and_then(Value::as_bool) == Some(true) {
+        auto_discard(s)
+    } else {
+        let ids = if p.get("ids").is_some() || p.get("id").is_some() || !s.selection.ids.is_empty() { s.targets(p) } else { s.visible_cloned() };
+        discard_full(s, &ids, None)
+    };
+    Ok(json!({"removed": d.removed, "kept": d.kept}))
+}
+
+fn settings(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "library.previewSettings";
+    let mut next = s.preview_prefs;
+    if let Some(v) = p.get("standardEdge") {
+        let e = v.as_u64().filter(|e| (256..=8192).contains(e)).ok_or_else(|| bad(C, "standardEdge must be 256–8192 px"))?;
+        next.standard_edge = e as u32;
+    }
+    if let Some(v) = p.get("discardFull") {
+        next.discard_full = v.as_str().and_then(DiscardAfter::parse).ok_or_else(|| bad(C, "discardFull must be day, week, month or never"))?;
+    }
+    if let Some(v) = p.get("atImport") {
+        next.at_import = v.as_str().and_then(ImportPreviews::parse).ok_or_else(|| bad(C, "atImport must be minimal, standard or full"))?;
+    }
+    if next != s.preview_prefs {
+        s.preview_prefs = next;
+        s.save_prefs()?;
+    }
+    Ok(s.preview_prefs.json())
+}
+
+/// The previews an import asks for ([`PreviewPrefs::at_import`]) of the photos it brought in,
+/// built in the background like Build Previews. Errors are logged: the import itself is done.
+pub fn build_after_import(s: &mut Session, ids: &[dac_catalog::PhotoId]) {
+    let size = match s.preview_prefs.at_import {
+        ImportPreviews::Minimal => return,
+        ImportPreviews::Standard => "standard",
+        ImportPreviews::Full => "full",
+    };
+    if ids.is_empty() {
+        return;
+    }
+    let ids: Vec<u64> = ids.iter().map(|id| id.0).collect();
+    if let Err(e) = build(s, &json!({"size": size, "ids": ids})) {
+        log::warn!("previews at import: {e}");
+    }
+}
+
 /// One photo's smart preview to build or discard: (photo, its file in the smart previews folder,
 /// how to load the original at preview size, whether the photo takes the per-file camera look —
-/// `camera_preview::file_local_look`, [`lightcraft_catalog::Photo::relative_wb`]: only those
+/// `camera_preview::file_local_look`, [`dac_catalog::Photo::relative_wb`]: only those
 /// proxies go stale when the fit changes).
 #[cfg(not(target_arch = "wasm32"))]
-type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, bool);
+type SmartJob = (dac_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, bool);
 
 /// Held while one proxy is checked and (re)written, so Build Smart Previews and the opening look
 /// refresh ([`refresh_stale_smart_previews`]), on their own threads, never write the same file at once.
@@ -215,7 +418,7 @@ fn smart_run(
                     .ok_or_else(|| "nothing to build from".to_string())
                     .and_then(|s| s.load_source())
                     .and_then(|src| crate::smart::encode(&src.image, src.info_or(Default::default()).camera_tone.as_ref()))
-                    .and_then(|b| lightcraft_catalog::safe_file::write_atomic(&path, &b).map_err(|e| format!("{}: {e}", path.display())));
+                    .and_then(|b| dac_catalog::safe_file::write_atomic(&path, &b).map_err(|e| format!("{}: {e}", path.display())));
                 match r {
                     Ok(()) => {
                         n.built += 1;
@@ -267,7 +470,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     let mut jobs: Vec<SmartJob> = Vec::new();
     for id in ids {
         let Some(ph) = s.catalog.photo(id).cloned() else { continue };
-        if !matches!(ph.source, lightcraft_catalog::Source::File { .. }) {
+        if !matches!(ph.source, dac_catalog::Source::File { .. }) {
             continue;
         }
         let path = dir.join(crate::smart::file_name(&ph));
@@ -314,7 +517,7 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
         return None;
     }
     let max_edge = crate::media::SourceLevel::Preview.max_edge();
-    let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, lightcraft_catalog::Source::File { .. }) && p.relative_wb()).collect();
+    let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, dac_catalog::Source::File { .. }) && p.relative_wb()).collect();
     let jobs: Vec<SmartJob> =
         photos.iter().map(|p| (p.id, dir.join(crate::smart::file_name(p)), Some(s.media.origin_ref(&p.source, max_edge)), true)).collect();
     std::thread::Builder::new()
@@ -408,7 +611,7 @@ fn smart_location(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Whether photo `id` has a smart preview.
-pub fn has_smart_preview(s: &Session, id: lightcraft_catalog::PhotoId) -> bool {
+pub fn has_smart_preview(s: &Session, id: dac_catalog::PhotoId) -> bool {
     match (&s.media.smart_dir, s.catalog.photo(id)) {
         (Some(dir), Some(p)) => crate::smart::is_valid(&dir.join(crate::smart::file_name(p))),
         _ => false,
@@ -440,7 +643,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "photo.smartPreview", "Smart Preview Status", [], None, "{id?} → {smartPreview: bool, originalOnline: bool}", always, |s, p| {
             let id = s.targets(p).first().copied().ok_or_else(|| bad("photo.smartPreview", "no photo"))?;
             let online = match s.catalog.photo(id).map(|p| p.source.clone()) {
-                Some(lightcraft_catalog::Source::File { path }) => std::path::Path::new(&path).exists(),
+                Some(dac_catalog::Source::File { path }) => std::path::Path::new(&path).exists(),
                 _ => true,
             };
             Ok(json!({"smartPreview": has_smart_preview(s, id), "originalOnline": online}))
@@ -453,6 +656,24 @@ pub fn specs() -> Vec<CommandSpec> {
             "{size?: standard (2048 px, or `edge`) | full (1:1), ids?, wait?: bool} — render the grid thumbnail and loupe view of the selected photos (else all in view) into the preview cache, in the background unless `wait` → {total, done, failed, running}",
             always,
             build
+        ),
+        cmd!(
+            "library.discardPreviews",
+            "Discard 1:1 Previews",
+            [],
+            None,
+            "{size?: full, ids?, auto?: bool} — discard the 1:1 previews of the selected photos (else all in view), or with auto those past the library's discardFull age (library.previewSettings); standard previews stay → {removed, kept}",
+            always,
+            discard
+        ),
+        cmd!(
+            "library.previewSettings",
+            "Preview Settings",
+            [],
+            None,
+            "{standardEdge?: 256–8192 px, discardFull?: day|week|month|never, atImport?: minimal|standard|full} — the library's preview store: the size of standard previews, when 1:1 previews are discarded on their own, and which previews an import builds (saved with the library) → {standardEdge, discardFull, atImport}",
+            always,
+            settings
         ),
         cmd!(query "library.previewProgress", "Preview Build Progress", [], None, "{} → {total, done, failed, repaired, running, cancelled, what, error} | null", always, |s, _| {
             Ok(s.preview_build.as_ref().map_or(Value::Null, |b| b.json()))

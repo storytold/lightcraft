@@ -7,11 +7,11 @@
 //! every face is cut from the same kind of box (the detector's, once the scan has looked at it), so faces are shown
 //! equally close. Only the rows on screen ask for a face render (the engine caches them, memory and disk).
 
+use dac_catalog::Person;
 use egui::{Align2, Color32, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
-use lightcraft_catalog::Person;
 use serde_json::json;
 
-use crate::LightcraftApp;
+use crate::DacApp;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -56,7 +56,7 @@ pub(super) fn fit(painter: &egui::Painter, text: &str, font: egui::FontId, max_w
     (1..chars.len()).rev().map(|n| chars[..n].iter().collect::<String>() + "…").find(|s| width(s) <= max_w).unwrap_or_else(|| "…".to_string())
 }
 
-pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
     if let Some(name) = app.ui.person_page.clone() {
         return super::person::show(app, ui, &name);
     }
@@ -82,7 +82,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // until face recognition is set up: what it takes, and a button that does the next step
     super::faces::setup_banner(app, ui);
     // the filters narrowing the list (a date, a keyword…), removable here
-    let chips = lightcraft_engine::filter_chips(&app.session.filter, &app.session.catalog);
+    let chips = dac_engine::filter_chips(&app.session.filter, &app.session.catalog);
     super::chips::show(app, ui, &chips);
     // what is selected below, and the box to name it with
     super::unnamed::naming_bar(app, ui);
@@ -152,7 +152,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     });
 }
 
-fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &Person, r: Rect, edge: f32, ppp: f32, selected: bool) {
+fn card(app: &mut DacApp, ui: &mut egui::Ui, person: &Person, r: Rect, edge: f32, ppp: f32, selected: bool) {
     let t = Tokens::get(ui.ctx());
     let face = Rect::from_min_size(r.min, vec2(edge, edge));
     let resp = ui.interact(r, egui::Id::new(("person-card", &person.name)), Sense::click());

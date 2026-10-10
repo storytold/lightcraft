@@ -1,24 +1,24 @@
 //! End-to-end render benchmark (min of N runs, robust to a loaded machine):
-//! `cargo run --release -p lightcraft-engine --example render_bench -- corpus/raw/arw-sony-a7m3-compressed.arw`
+//! `cargo run --release -p dac-engine --example render_bench -- corpus/raw/arw-sony-a7m3-compressed.arw`
 //! (`N=9` runs per scenario, `RAYON_NUM_THREADS=1` for algorithmic comparisons,
-//! `LIGHTCRAFT_PROFILE=1` for per-stage timings).
+//! `{ENV_PREFIX}_PROFILE=1` for per-stage timings).
 //!
 //! Without a file argument a procedural 6000×4000 source is used. Scenarios: a ~2.5 MP loupe render
 //! of the 2560 px preview (cold, and with a warm stage cache while a slider is dragged), a draft,
 //! and a full-size render + JPEG encode (export); `ONLY=batch` with several files times a full-size
 //! export of each (decode + render + encode). Prints minimum wall-clock and minimum process CPU
 //! time: on a shared machine the CPU time shows the work done, wall-clock also the wait for cores.
-//! Each scenario runs on the CPU pipeline and, when a GPU adapter exists, on `lightcraft-gpu`
-//! (second column; `LIGHTCRAFT_GPU=0` for the CPU only).
+//! Each scenario runs on the CPU pipeline and, when a GPU adapter exists, on `dac-gpu`
+//! (second column; `{ENV_PREFIX}_GPU=0` for the CPU only).
 use std::sync::Arc;
 use std::time::Instant;
 
-use lightcraft_develop::DevelopSettings;
-use lightcraft_engine::export::{ExportOptions, encode_image};
-use lightcraft_engine::media::develop;
-use lightcraft_pipeline::{Quality, RenderRequest, SourceInfo, StageCache};
-use lightcraft_raster::Rgb32f;
-use lightcraft_raster::resample::{Filter, fit};
+use dac_develop::DevelopSettings;
+use dac_engine::export::{ExportOptions, encode_image};
+use dac_engine::media::develop;
+use dac_pipeline::{Quality, RenderRequest, SourceInfo, StageCache};
+use dac_raster::Rgb32f;
+use dac_raster::resample::{Filter, fit};
 
 /// Process CPU time in ms (all threads). The only `unsafe` is this libc clock read, in a dev-only example.
 #[allow(unsafe_code)]
@@ -71,7 +71,7 @@ fn typical() -> DevelopSettings {
 }
 
 /// Max and mean |Δ| (8-bit, RGB) between two renders.
-fn diff(a: &lightcraft_raster::Rgba8, b: &lightcraft_raster::Rgba8) -> (u8, f64) {
+fn diff(a: &dac_raster::Rgba8, b: &dac_raster::Rgba8) -> (u8, f64) {
     let (mut max, mut sum) = (0u8, 0u64);
     for (p, q) in a.data.iter().zip(&b.data) {
         for c in 0..3 {
@@ -93,36 +93,32 @@ fn main() {
         for path in &args {
             let bytes = std::fs::read(path).expect("read");
             println!("{path}");
-            let mut raw = lightcraft_raw::decode(&bytes).expect("decode");
+            let mut raw = dac_raw::decode(&bytes).expect("decode");
             // as the loader does: lens corrections are applied by the pipeline, not in the raw develop
             raw.opcodes.list3.retain(|op| !op.is_lens_correction());
             println!("  {}×{} cpp {} cfa {:?}", raw.width, raw.height, raw.cpp, raw.cfa.as_ref().map(|c| c.name()));
-            println!("  {:<36} {}", "raw decode:", best(n, || drop(lightcraft_raw::decode(&bytes).expect("decode"))));
+            println!("  {:<36} {}", "raw decode:", best(n, || drop(dac_raw::decode(&bytes).expect("decode"))));
             println!("  {:<36} {}", "normalize:", best(n, || drop(raw.normalized().expect("norm"))));
             let norm = raw.normalized().expect("norm");
-            println!("  {:<36} {}", "demosaic AHD:", best(n, || drop(lightcraft_raw::demosaic(&norm, lightcraft_raw::Method::Ahd))));
-            if let Some(k) = lightcraft_engine::files::bin_factor(&raw, 2560) {
+            println!("  {:<36} {}", "demosaic AHD:", best(n, || drop(dac_raw::demosaic(&norm, dac_raw::Method::Ahd))));
+            if let Some(k) = dac_engine::files::bin_factor(&raw, 2560) {
                 println!("  {:<36} {}", format!("binned ×{k} (2560 preview):"), best(n, || drop(raw.develop_binned(k, 0.99))));
                 let img = raw.develop_binned(k, 0.99).expect("bin").expect("binnable");
-                let t = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
+                let t = dac_raw::color::camera_transform(&raw, dac_raw::color::as_shot_white_xy(&raw));
                 println!(
                     "  {:<36} {}",
                     "highlight reconstruct (binned):",
                     best(n, || {
                         let mut i = img.clone();
-                        lightcraft_raw::highlight::reconstruct(&mut i, t.wb, 0.99);
+                        dac_raw::highlight::reconstruct(&mut i, t.wb, 0.99);
                     })
                 );
                 println!("  {:<36} {}", "clone (binned):", best(n, || drop(img.clone())));
                 println!("  {:<36} {}", "fit 2560 (binned):", best(n, || drop(fit(&img, 2560, 2560, Filter::Box))));
             }
-            println!("  {:<36} {}", "embedded preview (2560):", best(n, || drop(lightcraft_engine::files::load_embedded_preview(&bytes, 2560))));
+            println!("  {:<36} {}", "embedded preview (2560):", best(n, || drop(dac_engine::files::load_embedded_preview(&bytes, 2560))));
             for edge in [512usize, 2560, usize::MAX] {
-                println!(
-                    "  {:<36} {}",
-                    format!("load_bytes({edge}):"),
-                    best(n, || drop(lightcraft_engine::files::load_bytes(&bytes, edge).expect("load")))
-                );
+                println!("  {:<36} {}", format!("load_bytes({edge}):"), best(n, || drop(dac_engine::files::load_bytes(&bytes, edge).expect("load"))));
             }
         }
         return;
@@ -131,7 +127,7 @@ fn main() {
         Some(path) => {
             let bytes = std::fs::read(path).expect("read");
             let t = Instant::now();
-            let r = lightcraft_engine::files::load_bytes(&bytes, usize::MAX).expect("decode");
+            let r = dac_engine::files::load_bytes(&bytes, usize::MAX).expect("decode");
             println!("decode full: {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
             r
         }
@@ -145,10 +141,10 @@ fn main() {
     };
     let full = Arc::new(full);
     println!("source {}×{} ({:.1} MP), {n} runs each", full.width, full.height, (full.width * full.height) as f64 / 1e6);
-    // GPU column: `LIGHTCRAFT_GPU=0` (or no adapter) prints only the CPU column.
+    // GPU column: `{ENV_PREFIX}_GPU=0` (or no adapter) prints only the CPU column.
     let t = Instant::now();
-    let gpu = lightcraft_engine::gpu::available();
-    match lightcraft_engine::gpu::adapter_name().filter(|_| gpu) {
+    let gpu = dac_engine::gpu::available();
+    match dac_engine::gpu::adapter_name().filter(|_| gpu) {
         Some(a) => println!("gpu: {a} (device + kernels: {:.0} ms)", t.elapsed().as_secs_f64() * 1e3),
         None => println!("gpu: none"),
     }
@@ -249,21 +245,21 @@ fn main() {
     if run("batch") && args.len() > 1 {
         // full-size JPEG export of all the files given (decode + render + encode), as the Export
         // dialog runs it: several photos side by side (`export_parallelism`), files discarded
-        use lightcraft_engine::export::{Destination, export_batch};
-        let mut session = lightcraft_engine::Session::new().with_fs();
+        use dac_engine::export::{Destination, export_batch};
+        let mut session = dac_engine::Session::new().with_fs();
         let r = session.execute("library.import", &serde_json::json!({"paths": args})).expect("import");
-        let ids: Vec<_> = r["imported"].as_array().expect("ids").iter().filter_map(|v| v.as_u64()).map(lightcraft_engine::catalog::PhotoId).collect();
+        let ids: Vec<_> = r["imported"].as_array().expect("ids").iter().filter_map(|v| v.as_u64()).map(dac_engine::catalog::PhotoId).collect();
         let o = ExportOptions::default();
-        let lanes = lightcraft_engine::export::export_parallelism(ids.len());
+        let lanes = dac_engine::export::export_parallelism(ids.len());
         row(&format!("batch export of {} files, {lanes} at a time (decode+render+JPEG):", ids.len()), &mut |g| {
-            lightcraft_engine::gpu::set_enabled(g);
+            dac_engine::gpu::set_enabled(g);
             let files = export_batch(&mut session, &ids, &o, &Destination::default(), &mut |_, _| Ok(()), &|_| false).expect("export");
             assert_eq!(files.len(), ids.len());
             for &id in &ids {
                 session.media.forget(id); // every original is decoded once per run
             }
         });
-        lightcraft_engine::gpu::set_enabled(true);
+        dac_engine::gpu::set_enabled(true);
         return;
     }
     if run("export") {

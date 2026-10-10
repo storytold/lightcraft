@@ -23,8 +23,8 @@
 //! lowers them, so a lookup can't clip what the scene-referred pipeline still needs.
 
 use crate::gaintable::GainTableMap;
-use lightcraft_color::transfer::{linear_to_srgb, srgb_to_linear};
-use lightcraft_color::{D50, D65, Mat3, PROPHOTO, REC2020, bradford};
+use dac_color::transfer::{linear_to_srgb, srgb_to_linear};
+use dac_color::{D50, D65, Mat3, PROPHOTO, REC2020, bradford};
 use serde::{Deserialize, Serialize};
 
 /// Upper bound on table entries (Adobe profiles use ≤ 90 × 30 × 16; guards header-driven sizes).

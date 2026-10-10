@@ -1,17 +1,17 @@
 //! Synchronize Folder in the app: the folder is scanned on a worker thread (a network share can
 //! take minutes; no frame waits for it) while its dialog is open, and the dialog then says what
 //! changed and what to do about it. Synchronize runs `folder.synchronize`, which acts on exactly
-//! the scan the dialog showed (see `lightcraft_engine::sync`). Both the scan and the run show a row in the activity
+//! the scan the dialog showed (see `dac_engine::sync`). Both the scan and the run show a row in the activity
 //! stack (issue #345); its ✕ stops them like the dialog's Cancel.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use lightcraft_engine::activity::{Cancel, TaskGuard};
-use lightcraft_engine::sync::{FolderChanges, SyncChoice, SyncCommit, SyncInput, SyncJob, SyncProgress, SyncStep, scan_with};
+use dac_engine::activity::{Cancel, TaskGuard};
+use dac_engine::sync::{FolderChanges, SyncChoice, SyncCommit, SyncInput, SyncJob, SyncProgress, SyncStep, scan_with};
 use serde_json::{Value, json};
 
-use crate::LightcraftApp;
+use crate::DacApp;
 use crate::state::{Dialog, SyncCounts};
 use crate::theme::Tokens;
 
@@ -25,7 +25,7 @@ pub struct SyncTask {
 }
 
 /// Open the dialog for folder `path` (called `name` in it) and start scanning.
-pub fn open(app: &mut LightcraftApp, path: &str, name: &str, disk: bool) -> Result<(), String> {
+pub fn open(app: &mut DacApp, path: &str, name: &str, disk: bool) -> Result<(), String> {
     cancel(app);
     let input = SyncInput::new(&mut app.session, path, disk).map_err(|e| e.to_string())?;
     let progress = Arc::new(SyncProgress::default());
@@ -57,7 +57,7 @@ pub fn open(app: &mut LightcraftApp, path: &str, name: &str, disk: bool) -> Resu
 
 /// Stop a running scan and let go of a finished one the dialog made (one an agent made with
 /// `folder.scanChanges` is the agent's).
-fn cancel(app: &mut LightcraftApp) {
+fn cancel(app: &mut DacApp) {
     if let Some(t) = app.sync.take() {
         t.progress.files.cancel.store(true, Ordering::Relaxed);
     }
@@ -68,7 +68,7 @@ fn cancel(app: &mut LightcraftApp) {
 
 /// Collect a finished scan into the dialog (called every frame). A scan whose dialog was closed
 /// is cancelled.
-pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn poll(app: &mut DacApp, ctx: &egui::Context) {
     let open_for = match &app.ui.dialog {
         Some(Dialog::SynchronizeFolder { path, .. }) => Some(path.clone()),
         _ => None,
@@ -121,12 +121,12 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
 }
 
 /// How far the scan is (files probed, of how many).
-fn progress(app: &LightcraftApp) -> Option<(usize, usize)> {
+fn progress(app: &DacApp) -> Option<(usize, usize)> {
     app.sync.as_ref().map(|t| t.progress.counts())
 }
 
 /// The dialog's body.
-pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
+pub fn body(app: &DacApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
     let Dialog::SynchronizeFolder { path, name, counts, import_new, relink_moved, remove_missing, read_metadata, .. } = dlg else { return };
     let t = Tokens::get(ui.ctx());
     ui.set_min_width(420.0);
@@ -179,7 +179,7 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
 /// Synchronize with the dialog's choices: the scan the dialog showed is handed to a worker
 /// thread at once ([`SyncRun`]); nothing is read from disk on the UI thread. A scan that went
 /// stale (the folder's photos changed meanwhile) is refused and made again, keeping the choices.
-pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
+pub fn confirm(app: &mut DacApp, dlg: &Dialog) -> Result<Value, String> {
     let Dialog::SynchronizeFolder { path, name, disk, counts: Some(_), import_new, relink_moved, remove_missing, read_metadata, .. } = dlg else {
         return Err("the folder is still being scanned".into());
     };
@@ -216,7 +216,7 @@ pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
     let job = move || {
         // (a panic in the work ends it; what was handed over is still committed, and the end
         // says it failed)
-        if lightcraft_engine::guard::catch("synchronize", || work.run(&p, |step| tx.send(step).is_ok())).is_err() {
+        if dac_engine::guard::catch("synchronize", || work.run(&p, |step| tx.send(step).is_ok())).is_err() {
             c.store(true, Ordering::Relaxed);
         }
     };
@@ -268,7 +268,7 @@ impl Drop for SyncRun {
 
 /// Commit what the worker readied (called every frame); when it is done, one undo step and a
 /// word on what happened.
-pub fn poll_run(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn poll_run(app: &mut DacApp, ctx: &egui::Context) {
     let Some(run) = app.sync_run.as_mut() else { return };
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
     if run.guard.is_cancelled() {

@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use lightcraft_catalog::{Catalog, Op, Photo, PhotoId, Source};
+use dac_catalog::{Catalog, Op, Photo, PhotoId, Source};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd, str_param};
@@ -92,7 +92,7 @@ fn stored_hash(p: &Photo) -> Option<&str> {
 
 /// The content hash of the file at `path` (as import computes it), if it can be read.
 fn file_hash(path: &str) -> Option<String> {
-    std::fs::read(path).ok().map(|b| lightcraft_preview::hash_bytes(&b).to_string())
+    std::fs::read(path).ok().map(|b| dac_preview::hash_bytes(&b).to_string())
 }
 
 /// An in-scope photo ([`checked_path`]) as Find Missing Photos sees it: its file, the size and

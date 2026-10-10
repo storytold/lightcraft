@@ -25,7 +25,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+use dac_catalog::{Op, Photo, PhotoId, Source};
 use serde::Serialize;
 
 use crate::sidecar::SidecarNaming;
@@ -545,7 +545,7 @@ fn set_file_ops_to(op: &Op, to: &HashSet<&str>, out: &mut Vec<Op>) {
 
 /// The photos among `ids` a rename handles, in order: photos sharing one file (virtual copies)
 /// rename once. No file-system calls.
-pub fn rename_photos(cat: &lightcraft_catalog::Catalog, ids: &[PhotoId]) -> Vec<std::sync::Arc<Photo>> {
+pub fn rename_photos(cat: &dac_catalog::Catalog, ids: &[PhotoId]) -> Vec<std::sync::Arc<Photo>> {
     let mut seen_paths: HashSet<String> = HashSet::new();
     ids.iter()
         .filter_map(|id| cat.photo(*id))

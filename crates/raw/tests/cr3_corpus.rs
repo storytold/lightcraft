@@ -8,11 +8,11 @@
 //! macOS oracle archive SHA256:
 //! ee70805cb60f18d5ed62548c4e595f6cee0a33407e15358eb1766a46afc1c16e.
 
-use lightcraft_raw::{RawData, RawFormat, decode, probe_info};
+use dac_raw::{RawData, RawFormat, decode, probe_info};
 use std::path::{Path, PathBuf};
 
 fn corpus() -> PathBuf {
-    std::env::var_os("LIGHTCRAFT_CORPUS").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
+    dac_brand::env_os("CORPUS").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
 }
 
 fn check(name: &str, hash: u64, sensor: (usize, usize), developed: (usize, usize)) {

@@ -21,7 +21,7 @@
 //! pale partly clipped sky, the colour of another reliable surface (bright foliage) and the sky's own faint
 //! colour, which darkening and a camera profile turned teal.
 
-use lightcraft_raster::Rgb32f;
+use dac_raster::Rgb32f;
 use rayon::prelude::*;
 
 /// Clip every channel of `wb ⊙ img` at `min_c(wb_c) · clip` — i.e. at the lowest channel's clip level after WB —
@@ -834,7 +834,7 @@ mod tests {
         assert_eq!(reconstruct(&mut empty, [1.0; 3], 0.99), 0);
     }
 
-    /// `cargo test --release -p lightcraft-raw --lib -- --ignored bench_reconstruct --nocapture`
+    /// `cargo test --release -p dac-raw --lib -- --ignored bench_reconstruct --nocapture`
     #[test]
     #[ignore]
     fn bench_reconstruct() {

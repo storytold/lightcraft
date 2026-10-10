@@ -1,6 +1,6 @@
 //! Source colour spaces, transfer curves and the conversion to the working space.
 
-use lightcraft_color::{ADOBE_RGB, D50, DISPLAY_P3, Mat3, PROPHOTO, REC2020, RgbSpace, SRGB, WORKING, bradford};
+use dac_color::{ADOBE_RGB, D50, DISPLAY_P3, Mat3, PROPHOTO, REC2020, RgbSpace, SRGB, WORKING, bradford};
 use serde::{Deserialize, Serialize};
 
 /// A transfer curve (encoded value → linear light), as found in ICC `curv`/`para` tags and container
@@ -57,7 +57,7 @@ impl Trc {
         }
         match self {
             Trc::Linear => v,
-            Trc::Srgb => lightcraft_color::transfer::linear_to_srgb(v),
+            Trc::Srgb => dac_color::transfer::linear_to_srgb(v),
             Trc::Gamma(g) => {
                 if *g > 0.0 {
                     v.powf(1.0 / g)

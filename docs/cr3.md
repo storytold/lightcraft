@@ -84,7 +84,7 @@ here. The existing guarded embedded-JPEG fitting path now includes CR3, with
 both proxies oriented identically before gathering training pairs. A bounded
 crop/translation registration of the JPEG is confirmed on held-out edge
 directions before fitting colour; the existing held-out colour acceptance gates
-are unchanged. No lens distortion correction is applied (LightCraft has no lens
+are unchanged. No lens distortion correction is applied (the app has no lens
 profiles of its own yet), so lenses whose camera JPEG is strongly
 distortion-corrected may fail the gates and keep the neutral matrix. Render
 cache version 13 invalidates earlier thumbnails. All developed pixels still come

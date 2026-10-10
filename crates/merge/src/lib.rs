@@ -1,4 +1,4 @@
-//! LightCraft Photo Merge: HDR merge and panorama stitching (layer L3, no UI dependencies).
+//! Photo Merge: HDR merge and panorama stitching (layer L3, no UI dependencies).
 //!
 //! - [`frame`]: inputs — scene-linear frames from raw files (camera RGB) or standard images.
 //! - [`hdr`]: exposure brackets → one scene-linear radiance image (auto-align, exposure

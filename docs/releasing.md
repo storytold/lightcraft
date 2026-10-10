@@ -1,4 +1,7 @@
-# Releasing LightCraft
+# Releasing the app
+
+> Names in angle brackets (`<app>`, `<binary>`, `<cli>`, `<PREFIX>`, `<settings_dir>`, …) are the values set in
+> [`brand.toml`](../brand.toml); see the README.
 
 The release pipeline is [`.github/workflows/release.yml`](../.github/workflows/release.yml).
 It runs on every push to the `release` branch. A maintainer can also dispatch it manually, with
@@ -14,7 +17,7 @@ still apply.
    marked as prereleases.
 3. Push to `release`, or dispatch the workflow on `release` (a dispatch on another branch is a dry run; see below).
 4. Check the workflow run and its artifacts. On success, the workflow creates or updates a **draft**
-   GitHub Release named `LightCraft v<version>`, targeted at the commit that triggered the run.
+   GitHub Release named `<app> v<version>`, targeted at the commit that triggered the run.
    Review the draft and its `SHA256SUMS.txt`, then publish it in GitHub Releases when ready.
 
 The workflow replaces assets when it updates an existing draft. It stops rather than overwriting a
@@ -30,17 +33,17 @@ and the WASM web app. The platform scripts in [`packaging/`](../packaging/) writ
 - Windows: MSI installer and portable ZIP for each architecture.
 - Linux: AppImage (with its `.AppImage.zsync`), `.deb`, `.rpm`, and `.tar.gz` for each
   architecture (`packaging/linux/package.sh`). Each AppImage embeds
-  `gh-releases-zsync|storytold|lightcraft|latest|lightcraft-*-linux-<arch>.AppImage.zsync`, so
+  `gh-releases-zsync|<owner>|<repo>|latest|<binary>-*-linux-<arch>.AppImage.zsync`, so
   AppImageUpdate fetches only the changed blocks from the latest published (non-pre-) release.
 - Flatpak: a single-file `.flatpak` bundle for each architecture, repackaged from that
   architecture's Linux tarball (`packaging/linux/flatpak-bundle.sh` with
-  `packaging/linux/flatpak/ai.storyteller.lightcraft.bundle.yml`; no Rust build). The from-source
-  manifest `ai.storyteller.lightcraft.yml` is for Flathub; packaging-lint keeps their runtime and
+  `packaging/linux/flatpak/<app_id>.bundle.yml`; no Rust build). The from-source
+  manifest `<app_id>.yml` is for Flathub; packaging-lint keeps their runtime and
   `finish-args` identical.
-- FreeBSD: `lightcraft-<version>-freebsd-x86_64.tar.gz`, a `/usr/local`-style tree built in a
+- FreeBSD: `<binary>-<version>-freebsd-x86_64.tar.gz`, a `/usr/local`-style tree built in a
   FreeBSD 14.3 VM (`packaging/freebsd/package.sh`, the same packages as `freebsd.yml`). Install
   with `tar -xzf <file> --strip-components 1 -C /usr/local`.
-- Web: `lightcraft-web-<version>.zip`.
+- Web: `<binary>-web-<version>.zip`.
 
 Only the macOS, Windows and draft-release jobs use the `release` environment. The others sign
 nothing, so dispatching the workflow on a branch (`gh workflow run release.yml --ref <branch>`)
@@ -56,7 +59,7 @@ revision and require it (`CRAFT_FONTS_REQUIRED=1`). Keep that pin deliberate whe
 workflow, and bump it (in `release.yml`, five jobs, and `freebsd.yml`) whenever craft-fonts adds a face a
 shipped language needs: a stale pin still builds, it just ships tofu (issue #319: v0.4.0 pinned a revision
 from before Noto Sans CJK SC, so Simplified Chinese had no glyphs). Before a release, check the pin against
-craft-fonts' `fonts/manifest.txt` and run `CRAFT_FONTS_DIR=../craft-fonts cargo test -p lightcraft-ui-egui i18n`,
+craft-fonts' `fonts/manifest.txt` and run `CRAFT_FONTS_DIR=../craft-fonts cargo test -p dac-ui-egui i18n`,
 whose glyph-coverage test checks the characters in available faces. `CRAFT_FONTS_REQUIRED=1` now also makes
 the native build fail if the pinned manifest lacks Noto Sans CJK SC Regular (`Hans`) or BIZ UDPGothic Regular;
 the web build requires BIZ UDPGothic Regular and packages Noto Sans CJK SC as a separate asset.

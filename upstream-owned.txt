@@ -1,0 +1,159 @@
+# Upstream ownership manifest (plan/upstream.md -> "What we own"; read by `cargo xtask upstream-merge`,
+# `cargo xtask shared-check`).
+#
+# Syntax (a subset of .gitignore): one path glob per line, `#` starts a comment.
+#   - `dir/`      the directory and everything below it
+#   - `*`, `?`    any run of characters / one character, within one path segment
+#   - `**`        any number of whole segments
+#   - a pattern without `/` matches the file name at any depth; with `/` it is anchored at the repo root
+# Sections: [owned] paths never take upstream changes; [regenerated] files the merge regenerates instead of
+# hand-merging; [exempt] paths that are neither owned nor "shared code" (shared-check ignores them).
+
+[owned]
+# the fork's identity
+brand.toml
+crates/brand/
+brand/
+# catalog v4: upstream fixes are reviewed and ported by hand
+crates/catalog/
+# upstream's store listing (its product name, icon and asset names): not ours to ship
+omastore.toml
+# our new crates
+crates/net/
+crates/credentials/
+crates/hash/
+crates/fuzzkit/
+apps/cli/tests/robust_catalog.rs
+crates/immich/
+crates/text/
+crates/pdf/
+crates/geo/
+# P6.1 performance budgets
+docs/perf.md
+crates/engine/examples/perf_tile.rs
+# layout/print/book engine glue (fork-created in P3.1)
+crates/engine/src/creations.rs
+# Immich engine wiring (IMM-SYNC / IMM-PEOPLE / IMM-SEARCH)
+crates/engine/src/cmd/immich_sync.rs
+crates/engine/src/tests_immich_sync.rs
+crates/engine/src/cmd/immich_publish.rs
+crates/plugins/
+sdk/
+docs/plugins.md
+crates/engine/src/cmd/plugins.rs
+crates/ui-egui/src/panels/plugins.rs
+crates/publish/
+crates/tether/
+crates/engine/src/cmd/publish.rs
+crates/engine/src/cmd/publish_tests.rs
+crates/engine/src/cmd/publish_sftp.rs
+crates/mcp/tests/session_e2e.rs
+crates/engine/src/cmd/tether.rs
+crates/engine/src/cmd/tether_tests.rs
+docs/tethering.md
+packaging/linux/70-{app_id}-ptp.rules.in
+crates/ui-egui/src/panels/publish.rs
+crates/ui-egui/src/panels/tether_bar.rs
+crates/layout/
+crates/print/
+crates/webgallery/
+crates/engine/src/cmd/web.rs
+crates/engine/src/creations.rs
+crates/ui-egui/src/web_module.rs
+crates/ui-egui/src/slideshow_ui.rs
+crates/ui-egui/src/creations_ui.rs
+crates/mcp/tests/modules.rs
+docs/print.md
+crates/slideshow/
+crates/psd/
+crates/actions/
+crates/engine/src/cmd/edit_in.rs
+crates/engine/src/cmd/actions.rs
+crates/engine/src/tests_edit_in.rs
+apps/cli/src/run_action.rs
+crates/ui-egui/src/edit_in.rs
+crates/book/
+crates/ui-egui/src/book.rs
+# U.5: fork-only files inside shared crates (no upstream counterpart, so no merge conflicts; the
+# generic ones are listed in docs/upstream-candidates.md instead and stay shared until offered)
+crates/engine/src/cmd/immich.rs
+crates/engine/src/cmd/credentials.rs
+crates/engine/src/cmd/catalog.rs
+crates/engine/src/remote.rs
+crates/engine/src/tests_immich.rs
+crates/engine/src/tests_catalog_cmds.rs
+crates/engine/src/tests_classic.rs
+crates/engine/src/legacy.rs
+crates/meta/src/legacy.rs
+apps/web/src/legacy.rs
+crates/ui-egui/src/catalog_ui_web.rs
+crates/ui-egui/src/tests_catalog_ui.rs
+crates/ui-egui/src/tests_classic.rs
+crates/ui-egui/src/tests_immich_ui.rs
+crates/ui-egui/src/tests_libtools.rs
+crates/ui-egui/src/tests_modules.rs
+crates/ui-egui/src/keymap_classic.rs
+crates/ui-egui/src/panels/classic_left.rs
+crates/ui-egui/src/menus_fork.rs
+crates/ui-egui/src/shell.rs
+apps/cli/src/catalog_migrate.rs
+apps/app/src/catalog_hooks.rs
+crates/ui-egui/src/i18n_fork.rs
+crates/ui-egui/locales/fork/
+docs/upstream-candidates.md
+# rebranding and packaging templates (brand.toml)
+xtask/src/dist.rs
+xtask/src/docs.rs
+xtask/src/rename.rs
+packaging/**/*.in
+packaging/windows/brand.ps1
+.github/workflows/brand.yml
+.gitattributes
+# the Classic shell
+crates/ui-egui/src/module.rs
+crates/ui-egui/src/panels/classic.rs
+crates/ui-egui/src/panels/navigator.rs
+crates/ui-egui/src/panels/metadata.rs
+crates/ui-egui/src/panels/cells.rs
+crates/ui-egui/src/libtools.rs
+crates/ui-egui/src/panels/connections.rs
+crates/ui-egui/src/panels/second.rs
+crates/ui-egui/src/plate.rs
+crates/ui-egui/src/catalog_ui.rs
+crates/ui-egui/src/print_ui.rs
+crates/ui-egui/src/map/
+crates/engine/src/cmd/map.rs
+# P6.3 accessibility, module help, localisation coverage
+crates/ui-egui/src/access.rs
+crates/ui-egui/src/help_overlay.rs
+crates/ui-egui/src/tests_access.rs
+crates/ui-egui/src/tests_module_help.rs
+crates/ui-egui/src/tests_i18n_coverage.rs
+docs/accessibility.md
+# our docs and plans
+docs/catalog.md
+docs/immich.md
+docs/manual/
+docs/packaging.md
+xtask/src/shortcuts.rs
+plan/
+PLAN*.md
+# our tooling
+xtask/src/brand.rs
+xtask/src/immich.rs
+xtask/src/upstream.rs
+xtask/immich/
+xtask/test-brand.toml
+upstream-owned.txt
+
+[regenerated]
+# `cargo` rewrites it after the merge
+Cargo.lock
+# summary table: `cargo xtask parity --write`
+docs/parity.md
+# rendered from *.md.in by `cargo xtask docs` (list each rendered file here)
+packaging/web/HOSTING.md
+
+[exempt]
+**/locales/
+*.md

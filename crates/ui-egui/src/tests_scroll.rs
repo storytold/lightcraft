@@ -7,14 +7,14 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::{LightcraftApp, Services};
+use crate::{DacApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
 
 fn demo(view: &str) -> Headless {
     let services = Services { png: None, ..Default::default() };
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let app = DacApp::new(dac_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     // big thumbnails: the demo library is several screens tall
     let r = h.request("ui.set", json!({"view": view, "thumbSize": 480.0}), T);

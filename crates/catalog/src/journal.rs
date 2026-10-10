@@ -1,7 +1,7 @@
 //! Crash-safe catalog persistence: an append-only op log plus periodic snapshots.
 //!
 //! Files (in a [`Store`]):
-//! - `catalog.snap` — `{"format":"lightcraft-catalog","version":V,"seq":N,"catalog":{…}}`, the
+//! - `catalog.snap` — `{"format":"dac-catalog","version":V,"seq":N,"catalog":{…}}`, the
 //!   state after op `N` in catalog format `V` ([`VERSION`]); replaced atomically (temp + fsync +
 //!   rename).
 //! - `catalog.log` — JSON lines, one per op applied after the snapshot:
@@ -46,9 +46,10 @@
 //! | 1 | up to v0.2.0 | |
 //! | 2 | after v0.2.0 | `Op::SetBrowsed`, `Catalog.browsed`, `Photo.local_baseline` |
 //! | 3 | albums by hand | `Op::SetAlbumOrder`, `Album.order` |
-//! | 4 | Reload reads lens data | `Op::SetEmbeddedLens` |
-//! | 5 | the keyword list | `Op::SetKeyword`, `Catalog.keyword_list` |
-//! | 6 | folder labels | `Op::SetFolderRecord`, `Catalog.folder_records` |
+//! | 4 | catalog v4 | `Op::SetSha1`, `Op::SetKind`, `Op::SetXmpStamp`, `Op::SetRemote`, `Op::SetPreview`, `Photo.sha1`, `Photo.xmp`, `Catalog.remote`, `Catalog.previews`; native libraries in a folder move to the v4 store ([`crate::db`]) |
+//! | 5 | upstream merge: Reload reads lens data, the keyword list, folder labels (upstream's 4–6) | `Op::SetEmbeddedLens`, `Op::SetKeyword`, `Catalog.keyword_list`, `Op::SetFolderRecord`, `Catalog.folder_records` |
+//! | 6 | the Map module | `Op::SetSavedLocation`, `Catalog.saved_locations` |
+//! | 7 | saved creations (Print / Book / Slideshow / Web) | `Op::SetAlbumCreation`, `Album.creation` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -70,10 +71,10 @@ use crate::{Catalog, CatalogError, Op, Result};
 
 pub const SNAPSHOT: &str = "catalog.snap";
 pub const LOG: &str = "catalog.log";
-const FORMAT: &str = "lightcraft-catalog";
+const FORMAT: &str = "dac-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 7;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]
@@ -114,7 +115,7 @@ pub struct LoadReport {
 }
 
 /// Where persistence time goes (reported by `library.info` → `persistence`; printed to stderr
-/// per write under `LIGHTCRAFT_PROFILE`). Times are wall-clock milliseconds on the calling
+/// per write under `{ENV_PREFIX}_PROFILE`). Times are wall-clock milliseconds on the calling
 /// thread, i.e. how long the caller (the UI thread, for the app) was blocked.
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -162,17 +163,28 @@ pub struct SnapshotTiming {
     pub records: u64,
 }
 
-/// `LIGHTCRAFT_PROFILE` is set: print persistence timings to stderr.
+/// `{ENV_PREFIX}_PROFILE` is set: print persistence timings to stderr.
 fn profiling() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LIGHTCRAFT_PROFILE").is_some())
+    *ON.get_or_init(|| dac_brand::env_is_set("PROFILE"))
 }
 
 fn ms_since(t: web_time::Instant) -> f64 {
     t.elapsed().as_secs_f64() * 1e3
 }
 
+/// The v4 store, where there is one (native libraries in a folder).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbSlot = Option<crate::db::CatalogDb>;
+#[cfg(target_arch = "wasm32")]
+pub(crate) type DbSlot = Option<()>;
+
 pub struct Journal {
+    /// The v4 store: snapshots are its checkpoints. `None` while a background checkpoint has it
+    /// (see `v4`).
+    pub(crate) db: DbSlot,
+    /// The library uses the v4 store.
+    v4: bool,
     store: Box<dyn Store>,
     /// `seq` of the last durable op.
     seq: u64,
@@ -202,7 +214,8 @@ struct Pending {
     started: web_time::Instant,
     /// Time the caller spent starting it.
     start_ms: f64,
-    worker: std::thread::JoinHandle<std::io::Result<SnapshotTiming>>,
+    /// Gives the v4 store back (it travels with a background checkpoint), and the result.
+    worker: std::thread::JoinHandle<(DbSlot, std::io::Result<SnapshotTiming>)>,
 }
 
 fn io(e: std::io::Error) -> CatalogError {
@@ -229,7 +242,7 @@ pub fn decode_record(line: &str) -> Option<(u64, Op)> {
 enum Line {
     Record(u64, Op),
     /// The CRC matches — the line is exactly what was written — but the op doesn't parse: it
-    /// was written by a newer LightCraft (an op or field this version doesn't know), not damaged.
+    /// was written by a newer version of the app (an op or field this version doesn't know), not damaged.
     Newer(u64),
     /// Malformed or a CRC mismatch: torn or damaged.
     Bad,
@@ -253,7 +266,7 @@ fn decode_line(line: &str) -> Line {
     }
 }
 
-/// The error for a library written by a newer LightCraft.
+/// The error for a library written by a newer version of the app.
 fn newer(what: String) -> CatalogError {
     CatalogError::Newer(format!("{what}; this version reads catalog format v{VERSION} and older"))
 }
@@ -266,13 +279,13 @@ fn resync(line: &[u8], last: u64) -> Option<(usize, (u64, Op))> {
     const START: &[u8] = b"{\"seq\":";
     (1..line.len().saturating_sub(START.len() - 1)).filter(|&i| line[i..].starts_with(START)).find_map(|i| {
         let rec = std::str::from_utf8(&line[i..]).ok().map(|l| l.trim_end_matches('\r')).and_then(decode_record)?;
-        (rec.0 <= last + 1).then_some((i, rec))
+        (rec.0 <= last.saturating_add(1)).then_some((i, rec))
     })
 }
 
 /// Write `catalog.snap` for the state after op `seq`, streaming the JSON into the store (no
 /// whole-file string). The bytes are exactly
-/// `{"format":"lightcraft-catalog","version":1,"seq":N,"catalog":<serde_json of the catalog>}\n`,
+/// `{"format":"dac-catalog","version":1,"seq":N,"catalog":<serde_json of the catalog>}\n`,
 /// as before streaming. Fills in the serialise / write+sync times and the size.
 fn write_snapshot(store: &mut dyn Store, seq: u64, catalog: &Catalog) -> std::io::Result<SnapshotTiming> {
     let t0 = web_time::Instant::now();
@@ -293,6 +306,14 @@ fn write_snapshot(store: &mut dyn Store, seq: u64, catalog: &Catalog) -> std::io
     Ok(SnapshotTiming { serialize_ms, write_sync_ms: (ms_since(t0) - serialize_ms).max(0.0), bytes, ..Default::default() })
 }
 
+/// A v4 checkpoint, timed like a snapshot.
+#[cfg(not(target_arch = "wasm32"))]
+fn checkpoint(db: &mut crate::db::CatalogDb, seq: u64, catalog: &Catalog) -> std::io::Result<SnapshotTiming> {
+    db.checkpoint(catalog, seq)
+        .map(|s| SnapshotTiming { serialize_ms: s.encode_ms, write_sync_ms: s.commit_ms, bytes: s.bytes, ..Default::default() })
+        .map_err(|e| std::io::Error::other(e.to_string()))
+}
+
 /// Just the identification of `catalog.snap` (read before the catalog itself).
 #[derive(serde::Deserialize)]
 struct SnapHeader {
@@ -310,17 +331,30 @@ struct SnapFile {
 impl Journal {
     /// Open (or create) the catalog in `store`: load the snapshot, replay the log, repair a torn
     /// tail. Fails only if the snapshot itself is unreadable (then nothing is modified).
-    pub fn open(mut store: Box<dyn Store>) -> Result<(Journal, Catalog, LoadReport)> {
+    ///
+    /// A store in a directory ([`Store::dir`], native) uses the v4 storage ([`crate::db`]); a v3
+    /// library there is migrated first (see [`Journal::open_v4`]). Other stores (memory, the
+    /// web's OPFS) keep the JSON snapshot.
+    pub fn open(store: Box<dyn Store>) -> Result<(Journal, Catalog, LoadReport)> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(dir) = store.dir().map(std::path::Path::to_path_buf) {
+            return Self::open_v4(store, &dir);
+        }
+        Self::open_json(store, true)
+    }
+
+    /// [`Journal::open`] with the JSON snapshot; `upgrade`: rewrite an older format's snapshot.
+    pub(crate) fn open_json(mut store: Box<dyn Store>, upgrade: bool) -> Result<(Journal, Catalog, LoadReport)> {
         let mut report = LoadReport::default();
         let snap = store.read(SNAPSHOT).map_err(io)?;
         let log = store.read(LOG).map_err(io)?;
         report.created = snap.is_none() && log.is_none();
-        let (mut catalog, snapshot_seq, snapshot_version) = match snap {
+        let (catalog, snapshot_seq, snapshot_version) = match snap {
             Some(bytes) => {
                 // the header first: a newer snapshot may not parse as this version's catalog
                 let h: SnapHeader = serde_json::from_slice(&bytes).map_err(|e| CatalogError::Corrupt(format!("{SNAPSHOT}: {e}")))?;
                 if h.format != FORMAT {
-                    return Err(CatalogError::Corrupt(format!("{SNAPSHOT}: not a LightCraft catalog (format {:?})", h.format)));
+                    return Err(CatalogError::Corrupt(format!("{SNAPSHOT}: not a {} catalog (format {:?})", dac_brand::DISPLAY_NAME, h.format)));
                 }
                 if h.version > VERSION {
                     return Err(newer(format!("{SNAPSHOT} is catalog format v{}", h.version)));
@@ -330,8 +364,37 @@ impl Journal {
             }
             None => (Catalog::new(), 0, None),
         };
+        let snapshot_version = if upgrade { snapshot_version } else { Some(VERSION) };
+        Self::open_from(store, log, catalog, snapshot_seq, snapshot_version, report, None)
+    }
+
+    /// [`Journal::open_from`] for a loaded v4 store.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn open_from_db(
+        store: Box<dyn Store>,
+        log: Option<Vec<u8>>,
+        catalog: Catalog,
+        seq: u64,
+        report: LoadReport,
+        db: crate::db::CatalogDb,
+    ) -> Result<(Journal, Catalog, LoadReport)> {
+        Self::open_from(store, log, catalog, seq, Some(VERSION), report, Some(db))
+    }
+
+    /// Replay the log over the loaded state (snapshot or v4 store) and finish opening.
+    fn open_from(
+        store: Box<dyn Store>,
+        log: Option<Vec<u8>>,
+        mut catalog: Catalog,
+        snapshot_seq: u64,
+        snapshot_version: Option<u32>,
+        mut report: LoadReport,
+        db: DbSlot,
+    ) -> Result<(Journal, Catalog, LoadReport)> {
         report.snapshot_seq = snapshot_seq;
         let mut j = Journal {
+            v4: db.is_some(),
+            db,
             store,
             seq: snapshot_seq,
             snapshot_seq,
@@ -382,7 +445,7 @@ impl Journal {
                     let _ = op;
                     report.stale += 1;
                 }
-                Some((seq, op)) if seq == j.seq + 1 => {
+                Some((seq, op)) if Some(seq) == j.seq.checked_add(1) => {
                     if catalog.apply(op).is_err() {
                         report.failed += 1;
                     } else {
@@ -435,7 +498,9 @@ impl Journal {
         // Bring an older (or new, or snapshot-less) library to this version's format before
         // anything is appended: a snapshot in this format makes older builds refuse the library
         // instead of misreading ops or dropping fields they don't know.
-        if report.created {
+        if j.has_db() {
+            // the v4 store is in this version's format already
+        } else if report.created {
             // tiny: written directly, not counted as a compaction
             let empty = format!("{{\"format\":\"{FORMAT}\",\"version\":{VERSION},\"seq\":0,\"catalog\":{}}}\n", catalog.to_snapshot());
             if let Err(e) = j.store.write_atomic(SNAPSHOT, empty.as_bytes()) {
@@ -466,7 +531,10 @@ impl Journal {
         let mut buf = String::new();
         let mut seq = self.seq;
         for op in ops {
-            seq += 1;
+            // a damaged snapshot can claim the last sequence number: refuse rather than wrap
+            seq = seq
+                .checked_add(1)
+                .ok_or_else(|| CatalogError::Corrupt("the catalog's op sequence is exhausted (restore it from a backup)".into()))?;
             buf.push_str(&encode_record(seq, op));
             buf.push('\n');
         }
@@ -517,8 +585,23 @@ impl Journal {
             log::warn!("catalog: background snapshot failed ({e}); writing one now");
         }
         let t0 = web_time::Instant::now();
-        let seq = self.seq + unlogged;
-        let mut timing = match write_snapshot(self.store.as_mut(), seq, catalog) {
+        let seq = self.seq.saturating_add(unlogged);
+        let written = if self.v4 {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                match self.db.as_mut() {
+                    Some(db) => checkpoint(db, seq, catalog),
+                    // (lost with a background worker that died: never fall back to a JSON
+                    // snapshot in a v4 folder)
+                    None => Err(std::io::Error::other("the catalog store is not available")),
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            Err(std::io::Error::other("no catalog store on the web"))
+        } else {
+            write_snapshot(self.store.as_mut(), seq, catalog)
+        };
+        let mut timing = match written {
             Ok(t) => t,
             Err(e) => {
                 // nothing lost (the log is whole); don't retry on every append
@@ -554,10 +637,29 @@ impl Journal {
             return Ok(());
         }
         let t0 = web_time::Instant::now();
-        let Some(mut writer) = self.store.background_writer() else { return self.snapshot(catalog) };
         let copy = catalog.clone();
         let seq = self.seq;
-        let spawned = std::thread::Builder::new().name("catalog-snapshot".into()).spawn(move || write_snapshot(writer.as_mut(), seq, &copy));
+        // v4: the store travels with the worker and comes back with its result
+        let spawned = if self.v4 {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let Some(mut db) = self.db.take() else { return self.snapshot(catalog) };
+                let spawned = std::thread::Builder::new().name("catalog-checkpoint".into()).spawn(move || {
+                    let r = checkpoint(&mut db, seq, &copy);
+                    (Some(db), r)
+                });
+                // a thread that couldn't start drops its closure, and the store with it: reopen
+                if spawned.is_err() {
+                    self.restore_db();
+                }
+                spawned
+            }
+            #[cfg(target_arch = "wasm32")]
+            return self.snapshot(catalog);
+        } else {
+            let Some(mut writer) = self.store.background_writer() else { return self.snapshot(catalog) };
+            std::thread::Builder::new().name("catalog-snapshot".into()).spawn(move || (None, write_snapshot(writer.as_mut(), seq, &copy)))
+        };
         let worker = match spawned {
             Ok(w) => w,
             Err(e) => {
@@ -602,7 +704,12 @@ impl Journal {
     fn finish(&mut self) -> Result<()> {
         let Some(p) = self.pending.take() else { return Ok(()) };
         let t0 = web_time::Instant::now();
-        let written = p.worker.join().unwrap_or_else(|_| Err(std::io::Error::other("snapshot thread panicked")));
+        let (db, written) = p.worker.join().unwrap_or_else(|_| (None, Err(std::io::Error::other("snapshot thread panicked"))));
+        if db.is_some() {
+            self.db = db;
+        } else if self.v4 {
+            self.restore_db();
+        }
         let mut timing = match written {
             Ok(t) => t,
             Err(e) => {
@@ -683,6 +790,36 @@ impl Journal {
     pub fn describe(&self) -> String {
         self.store.describe()
     }
+
+    /// The library uses the v4 store.
+    pub fn has_db(&self) -> bool {
+        self.v4
+    }
+
+    /// Reopen the v4 store after a background checkpoint lost it (its thread died): the next
+    /// checkpoint then works from what the file holds.
+    fn restore_db(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(dir) = self.store.dir().map(std::path::Path::to_path_buf) {
+            match crate::db::CatalogDb::open(&dir.join(crate::db::DB_FILE)).and_then(|mut db| db.load().map(|_| db)) {
+                Ok(db) => self.db = Some(db),
+                Err(e) => log::error!("catalog: can't reopen the store: {e}"),
+            }
+        }
+    }
+
+    /// The v4 store, for lazy reads ([`crate::db::CatalogDb::read_photo`], paging, indexes).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn db(&self) -> Option<&crate::db::CatalogDb> {
+        self.db.as_ref()
+    }
+
+    /// Hand the store back (for a migration that continues in another format); the journal is
+    /// left on an empty in-memory store.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn take_store(&mut self) -> Box<dyn Store> {
+        std::mem::replace(&mut self.store, Box::new(crate::store::MemStore::new()))
+    }
 }
 
 impl Drop for Journal {
@@ -691,7 +828,7 @@ impl Drop for Journal {
     /// records in it are skipped as stale on the next load.
     fn drop(&mut self) {
         if let Some(p) = self.pending.take()
-            && let Ok(Err(e)) = p.worker.join()
+            && let Ok((_, Err(e))) = p.worker.join()
         {
             log::error!("catalog: background snapshot failed: {e}");
         }

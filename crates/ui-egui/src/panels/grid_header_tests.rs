@@ -1,6 +1,6 @@
 use egui::{Rect, vec2};
 
-use crate::{LightcraftApp, Services, headless::HeadlessView, i18n::Locale};
+use crate::{DacApp, Services, headless::HeadlessView, i18n::Locale};
 
 /// Issue #538: a breadcrumb opens its folder spelled as the path is, keeping a UNC share's leading
 /// `\\` and giving a bare drive its root back.
@@ -36,8 +36,8 @@ fn local_folder_header_text_and_controls_do_not_overlap() {
                     (r"C:\Users\Photographer\Pictures\A very long folder name with many photographs to import", 2408),
                     ("/Pictures", 0),
                 ] {
-                    let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
-                    let browse = lightcraft_engine::Browse { path: path.into(), subfolders: false };
+                    let mut app = DacApp::new(dac_engine::Session::new(), Services::default());
+                    let browse = dac_engine::Browse { path: path.into(), subfolders: false };
                     let ctx = egui::Context::default();
                     crate::i18n::set_language(locale);
                     crate::theme::install_fonts(&ctx);

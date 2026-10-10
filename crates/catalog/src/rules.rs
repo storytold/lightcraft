@@ -71,10 +71,12 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("virtualCopy", "Virtual Copy", Kind::Bool),
     ("copyName", "Copy Name", Kind::Text),
     ("stacked", "In a Stack", Kind::Bool),
+    ("immich", "Immich", Kind::Choice(&[("linked", "Linked"), ("probable", "Probably Linked"), ("notLinked", "Not Linked")])),
     // File
     ("fileName", "Filename", Kind::Text),
     ("extension", "File Extension", Kind::Text),
     ("filePath", "File Path", Kind::Text),
+    ("folder", "Folder", Kind::Text),
     ("kind", "File Type", Kind::Choice(&[("image", "Image"), ("raw", "Raw"), ("video", "Video")])),
     ("format", "File Format", Kind::Text),
     ("duration", "Video Duration", Kind::Number),
@@ -93,6 +95,7 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("altText", "Alt Text", Kind::Text),
     ("creator", "Creator", Kind::Text),
     ("copyright", "Copyright", Kind::Text),
+    ("usageTerms", "Rights Usage Terms", Kind::Text),
     (
         "copyrightStatus",
         "Copyright Status",
@@ -107,6 +110,7 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("iso", "ISO Speed", Kind::Number),
     // Location
     ("location", "Location", Kind::Text),
+    ("sublocation", "Sublocation", Kind::Text),
     ("city", "City", Kind::Text),
     ("state", "State / Province", Kind::Text),
     ("country", "Country", Kind::Text),
@@ -114,6 +118,8 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     // Size
     ("longEdge", "Long Edge", Kind::Number),
     ("shortEdge", "Short Edge", Kind::Number),
+    ("width", "Width (pixels)", Kind::Number),
+    ("height", "Height (pixels)", Kind::Number),
     ("aspect", "Aspect Ratio", Kind::Choice(&[("landscape", "Landscape (wide)"), ("portrait", "Portrait (tall)"), ("square", "Square")])),
     ("megapixels", "Megapixels", Kind::Number),
     // Develop
@@ -131,14 +137,14 @@ pub const TOP_LEVEL_FIELDS: &[&str] = &["rating", "flag", "label", "text"];
 /// The field menu's submenus: (label, fields), in order. Every field of [`FIELDS`] is either here
 /// once or in [`TOP_LEVEL_FIELDS`].
 pub const FIELD_GROUPS: &[(&str, &[&str])] = &[
-    ("Source", &["album", "virtualCopy", "copyName", "stacked"]),
-    ("File", &["fileName", "extension", "filePath", "kind", "format", "duration"]),
+    ("Source", &["album", "virtualCopy", "copyName", "stacked", "immich"]),
+    ("File", &["fileName", "extension", "filePath", "folder", "kind", "format", "duration"]),
     ("Date", &["captureDate", "importDate", "editDate"]),
     ("Keywords & People", &["keywords", "keywordCount", "person", "personCount"]),
-    ("Description", &["title", "caption", "altText", "creator", "copyright", "copyrightStatus"]),
+    ("Description", &["title", "caption", "altText", "creator", "copyright", "usageTerms", "copyrightStatus"]),
     ("Camera Info", &["camera", "lens", "focalLength", "aperture", "shutterSpeed", "iso"]),
-    ("Location", &["location", "city", "state", "country", "hasGps"]),
-    ("Size", &["longEdge", "shortEdge", "aspect", "megapixels"]),
+    ("Location", &["location", "sublocation", "city", "state", "country", "hasGps"]),
+    ("Size", &["longEdge", "shortEdge", "width", "height", "aspect", "megapixels"]),
     ("Develop", &["edited", "cropped", "treatment"]),
     ("Assisted Culling", &["sharpness", "bestOfGroup"]),
 ];
@@ -363,7 +369,8 @@ pub fn rule_date(s: &str) -> Result<String, Issue> {
             _ => false,
         }
     };
-    if !shaped(&s) && !(s.get(..19).is_some_and(shaped) && s.get(19..).is_some_and(tail_ok)) {
+    let with_zone = s.get(..19).is_some_and(shaped) && s.get(19..).is_some_and(tail_ok);
+    if !shaped(&s) && !with_zone {
         return Err(Issue::NeedsDate);
     }
     let part = |a: usize, b: usize| s.get(a..b).and_then(|t| t.parse::<u32>().ok());
@@ -793,9 +800,13 @@ impl Rule {
             "virtualCopy" => yes(p.copy_of.is_some()),
             "copyName" => text(p.copy_name.as_deref().unwrap_or("")),
             "stacked" => yes(cat.stack_of(p.id).is_some()),
+            "immich" => {
+                let want = if want == "notlinked" { "notLinked" } else { want.as_str() };
+                crate::query::immich_state_is(cat, p.id, want) == (op == "is")
+            }
             "cropped" => yes(p.is_cropped()),
             "treatment" => {
-                let t = if p.develop.treatment == lightcraft_develop::Treatment::Bw { "monochrome" } else { "color" };
+                let t = if p.develop.treatment == dac_develop::Treatment::Bw { "monochrome" } else { "color" };
                 (t == want) == (op == "is")
             }
             "keywords" => names_op(op, &m.keywords, &want),
@@ -850,6 +861,25 @@ impl Rule {
             "lens" => text(&m.lens),
             "location" => text(&[m.location.as_str(), &m.city, &m.state, &m.country].join(" ")),
             "creator" => text(&m.creator),
+            "sublocation" => text(&m.location),
+            "usageTerms" => text(&m.usage_terms),
+            "folder" => {
+                let folder = match &p.source {
+                    Source::File { path } => {
+                        let path = path.replace('\\', "/");
+                        path.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default()
+                    }
+                    Source::Demo { .. } => String::new(),
+                };
+                let want = want.replace('\\', "/");
+                match op {
+                    "contains" => !want.trim().is_empty() && folder.to_lowercase().contains(want.trim()),
+                    "notContains" => want.trim().is_empty() || !folder.to_lowercase().contains(want.trim()),
+                    _ => text_op(op, &folder, &want),
+                }
+            }
+            "width" => num_op(op, Some(p.width as f64), value),
+            "height" => num_op(op, Some(p.height as f64), value),
             "copyright" => text(&m.copyright),
             "copyrightStatus" => {
                 let want = crate::CopyrightStatus::parse(&want);
@@ -1036,6 +1066,37 @@ mod tests {
         serde_json::from_value(v).unwrap()
     }
 
+    /// P1.4: the location parts, people, folder, shutter speed, size, aspect ratio and treatment
+    /// are rule fields too; nested any/all groups combine them.
+    #[test]
+    fn location_people_folder_exposure_and_shape_fields() {
+        let cat = Catalog::new();
+        let mut p = photo(1);
+        p.meta.city = "Rome".into();
+        p.meta.country = "Italy".into();
+        p.meta.shutter = "1/250".into();
+        p.meta.regions.push(dac_meta::Region {
+            rect: dac_meta::Rect { x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.2 },
+            kind: dac_meta::RegionKind::Face,
+            name: Some("Anna Rossi".into()),
+            description: None,
+        });
+        p.source = Source::File { path: "/pics/2026/Trip/IMG_0042.CR2".into() };
+        let m = |v: serde_json::Value| rs(v).matches(&p, &cat);
+        assert!(m(json!({"rules": [{"field": "city", "op": "is", "value": "rome"}, {"field": "country", "op": "contains", "value": "ital"}]})));
+        assert!(m(json!({"rules": [{"field": "person", "op": "contains", "value": "anna"}]})));
+        assert!(!m(json!({"rules": [{"field": "person", "op": "isEmpty"}]})));
+        assert!(m(json!({"rules": [{"field": "folder", "op": "endsWith", "value": "/trip"}]})));
+        assert!(m(json!({"rules": [{"field": "shutterSpeed", "op": "lt", "value": 0.01}]})));
+        assert!(m(json!({"rules": [{"field": "width", "op": "is", "value": 6000}, {"field": "aspect", "op": "is", "value": "landscape"}]})));
+        assert!(m(json!({"rules": [{"field": "treatment", "op": "is", "value": "color"}]})));
+        // all of (city is Rome, any of (person Bob, iso ≥ 800))
+        assert!(m(json!({"rules": [
+            {"field": "city", "op": "is", "value": "rome"},
+            {"group": {"match": "any", "rules": [{"field": "person", "op": "contains", "value": "bob"}, {"field": "iso", "op": "gte", "value": 800}]}}
+        ]})));
+    }
+
     #[test]
     fn fields_ops_and_groups() {
         let cat = Catalog::new();
@@ -1130,7 +1191,7 @@ mod tests {
     /// faces are not people; People Count counts each person once.
     #[test]
     fn people_rules() {
-        use lightcraft_meta::{Rect, Region, RegionKind};
+        use dac_meta::{Rect, Region, RegionKind};
         let cat = Catalog::new();
         let region = |name: Option<&str>, kind: RegionKind| Region {
             rect: Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 },
@@ -1242,8 +1303,8 @@ mod tests {
         let mut d = photo(5);
         assert!(m(&d, "cropped", "is", json!(false)) && m(&d, "treatment", "is", json!("color")));
         let mut s = (*d.develop).clone();
-        s.crop.geometry.rect = lightcraft_geom::Rect::new(0.1, 0.0, 0.9, 1.0);
-        s.treatment = lightcraft_develop::Treatment::Bw;
+        s.crop.geometry.rect = dac_geom::Rect::new(0.1, 0.0, 0.9, 1.0);
+        s.treatment = dac_develop::Treatment::Bw;
         d.develop = std::sync::Arc::new(s);
         assert!(m(&d, "cropped", "is", json!(true)) && m(&d, "treatment", "is", json!("monochrome")));
         assert!(m(&d, "treatment", "isNot", json!("color")));
@@ -1266,11 +1327,11 @@ mod tests {
         assert!(m(&p, "aspect", "is", json!("landscape")) && m(&p, "longEdge", "is", json!(6000)) && m(&p, "shortEdge", "is", json!(4000)));
         assert!(m(&p, "megapixels", "is", json!(24)));
         let mut s = (*p.develop).clone();
-        s.orientation = lightcraft_geom::Orientation::Rotate90;
+        s.orientation = dac_geom::Orientation::Rotate90;
         p.develop = std::sync::Arc::new(s.clone());
         assert!(m(&p, "aspect", "is", json!("portrait")) && m(&p, "longEdge", "is", json!(6000)));
         // a square crop of the rotated frame: 4000 wide, 4000 of its 6000 tall
-        s.crop.geometry.rect = lightcraft_geom::Rect::new(0.0, 1.0 / 6.0, 1.0, 5.0 / 6.0);
+        s.crop.geometry.rect = dac_geom::Rect::new(0.0, 1.0 / 6.0, 1.0, 5.0 / 6.0);
         p.develop = std::sync::Arc::new(s);
         assert!(m(&p, "aspect", "is", json!("square")) && m(&p, "longEdge", "is", json!(4000)));
         assert!(m(&p, "megapixels", "is", json!(16)), "a 4000 × 4000 crop is 16 MP, not the sensor's 24");
@@ -1295,9 +1356,9 @@ mod tests {
         }
         p.meta.state = "Oregon".into();
         p.meta.alt_text = "A kite".into();
-        p.meta.regions = vec![lightcraft_meta::Region {
-            rect: lightcraft_meta::Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 },
-            kind: lightcraft_meta::RegionKind::Face,
+        p.meta.regions = vec![dac_meta::Region {
+            rect: dac_meta::Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 },
+            kind: dac_meta::RegionKind::Face,
             name: Some("Ana".into()),
             description: None,
         }];
@@ -1648,15 +1709,15 @@ mod tests {
                 assert_eq!(field_group(f), Some(group), "{f}");
             }
         };
-        same(&["fileName", "extension", "filePath", "kind", "format", "duration"], "File");
+        same(&["fileName", "extension", "filePath", "folder", "kind", "format", "duration"], "File");
         same(&["album", "virtualCopy", "copyName", "stacked"], "Source");
-        same(&["longEdge", "shortEdge", "aspect", "megapixels"], "Size");
+        same(&["longEdge", "shortEdge", "width", "height", "aspect", "megapixels"], "Size");
         same(&["edited", "cropped", "treatment"], "Develop");
         same(&["camera", "lens", "focalLength", "aperture", "shutterSpeed", "iso"], "Camera Info");
         same(&["captureDate", "importDate", "editDate"], "Date");
         same(&["keywords", "keywordCount", "person", "personCount"], "Keywords & People");
-        same(&["title", "caption", "altText", "creator", "copyright", "copyrightStatus"], "Description");
-        same(&["location", "city", "state", "country", "hasGps"], "Location");
+        same(&["title", "caption", "altText", "creator", "copyright", "usageTerms", "copyrightStatus"], "Description");
+        same(&["location", "sublocation", "city", "state", "country", "hasGps"], "Location");
         for f in ["rating", "flag", "label", "text"] {
             assert_eq!(field_group(f), None, "{f} stays at the top level");
         }

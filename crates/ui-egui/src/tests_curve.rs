@@ -5,14 +5,14 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::{LightcraftApp, Services};
+use crate::{DacApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 
 /// Detail view with the Edit panel's Curve flyout open on `channel`.
 fn curve_open(channel: &str) -> Headless {
     let services = Services { png: None, ..Default::default() };
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let app = DacApp::new(dac_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, [1200.0, 1400.0], 1.0);
     let r = h.request("ui.set", json!({"view": "detail"}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -35,12 +35,12 @@ fn exec(h: &mut Headless, command: &str, params: serde_json::Value) -> serde_jso
     r["result"].clone()
 }
 
-fn develop(h: &Headless) -> lightcraft_develop::DevelopSettings {
+fn develop(h: &Headless) -> dac_develop::DevelopSettings {
     let id = h.app.session.active().expect("active photo");
     (*h.app.session.develop_of(id).unwrap_or_default()).clone()
 }
 
-fn pts(v: &[lightcraft_geom::Point]) -> Vec<(f64, f64)> {
+fn pts(v: &[dac_geom::Point]) -> Vec<(f64, f64)> {
     v.iter().map(|p| (p.x, p.y)).collect()
 }
 
@@ -100,7 +100,7 @@ fn reset_button_resets_every_curve() {
     h.step();
     click_widget(&mut h, "button:curveReset", 1);
     let c = develop(&h).curve;
-    assert_eq!(c, lightcraft_develop::ToneCurve::default());
+    assert_eq!(c, dac_develop::ToneCurve::default());
 }
 
 #[test]

@@ -1,5 +1,5 @@
 //! Relative ratings dispatch through the real engine, including history and AutoWrite.
-use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+use dac_catalog::{Op, Photo, PhotoId, Source};
 use serde_json::json;
 
 use crate::{Result, Selection, Session};
@@ -9,7 +9,7 @@ fn session() -> Result<Session> {
     for (id, rating) in [(1, 0), (2, 2), (3, 5), (4, 1)] {
         let mut photo = Photo::new(
             PhotoId(id),
-            Source::File { path: format!("/lightcraft-relative-ratings/{id}.jpg") },
+            Source::File { path: format!("/app-relative-ratings/{id}.jpg") },
             &format!("{id}.jpg"),
             "JPEG",
             40,
@@ -25,9 +25,7 @@ fn session() -> Result<Session> {
 }
 
 fn ratings(s: &Session) -> Result<Vec<u8>> {
-    (1..=4)
-        .map(|id| s.catalog.photo(PhotoId(id)).map(|p| p.rating).ok_or_else(|| lightcraft_catalog::CatalogError::NoPhoto(PhotoId(id)).into()))
-        .collect()
+    (1..=4).map(|id| s.catalog.photo(PhotoId(id)).map(|p| p.rating).ok_or_else(|| dac_catalog::CatalogError::NoPhoto(PhotoId(id)).into())).collect()
 }
 
 #[test]

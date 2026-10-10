@@ -1,9 +1,9 @@
-//! `cargo run --release -p lightcraft-raw --example rawinfo -- [--tree] FILE...`
+//! `cargo run --release -p dac-raw --example rawinfo -- [--tree] FILE...`
 //!
 //! Prints the TIFF structure (with `--tree`), decode result, timings (MP/s) and basic statistics.
 
-use lightcraft_raw::{Method, RawData, decode, embedded_preview, probe};
-use lightcraft_tiff::{Ifd, Tiff, Value};
+use dac_raw::{Method, RawData, decode, embedded_preview, probe};
+use dac_tiff::{Ifd, Tiff, Value};
 use std::time::Instant;
 
 fn short(v: &Value) -> String {
@@ -93,8 +93,8 @@ fn main() {
                     r.metadata.exposure_display(),
                     r.metadata.capture_time.map(|d| d.to_iso())
                 );
-                let xy = lightcraft_raw::color::as_shot_white_xy(&r);
-                let ct = lightcraft_raw::color::camera_transform(&r, xy);
+                let xy = dac_raw::color::as_shot_white_xy(&r);
+                let ct = dac_raw::color::camera_transform(&r, xy);
                 println!("  as-shot xy ({:.4}, {:.4}) wb {:?} fallback {}", xy.x, xy.y, ct.wb, ct.matrix_is_fallback);
                 for m in [Method::Bilinear, Method::Ppg, Method::Ahd] {
                     let t1 = Instant::now();

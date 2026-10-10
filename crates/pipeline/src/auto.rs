@@ -1,10 +1,10 @@
 //! Auto tone (a Lightroom-like recipe, see [`auto_tone`]) and auto white balance (grey-world
 //! statistics on a proxy).
 
-use lightcraft_color::cct::xy_to_temp_tint;
-use lightcraft_color::{REC2020, Xy, bradford, luminance_2020};
-use lightcraft_develop::DevelopSettings;
-use lightcraft_raster::Rgb32f;
+use dac_color::cct::xy_to_temp_tint;
+use dac_color::{REC2020, Xy, bradford, luminance_2020};
+use dac_develop::DevelopSettings;
+use dac_raster::Rgb32f;
 use serde::Serialize;
 
 use crate::SourceInfo;
@@ -58,7 +58,7 @@ pub fn scene_log_mean(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> O
     if !any {
         return None;
     }
-    let fit = |img: &Rgb32f| lightcraft_raster::resample::fit(img, 512, 512, lightcraft_raster::resample::Filter::Box);
+    let fit = |img: &Rgb32f| dac_raster::resample::fit(img, 512, 512, dac_raster::resample::Filter::Box);
     let (img, weight) = (fit(&clean), fit(&weight));
     // the mean of the valid pixels under each proxy pixel
     let kept: Vec<[f32; 3]> = img.data.iter().zip(&weight.data).filter(|(_, w)| w[0] > 1e-6).map(|(p, w)| p.map(|v| v / w[0])).collect();
@@ -107,8 +107,8 @@ pub fn auto_tone(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> AutoTo
 /// lightness — bands brighter than average get brighter, darker ones darker — so areas that
 /// differ only in colour stay apart in grey. Bands with almost no colourful pixels stay at 0.
 pub fn auto_bw_mix(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> [f64; 8] {
-    use lightcraft_color::perceptual::{lab_to_lch, oklab_from_2020};
-    let mut img = lightcraft_raster::resample::fit(src, 512, 512, lightcraft_raster::resample::Filter::Box);
+    use dac_color::perceptual::{lab_to_lch, oklab_from_2020};
+    let mut img = dac_raster::resample::fit(src, 512, 512, dac_raster::resample::Filter::Box);
     let base = DevelopSettings { wb: s.wb, light: s.light, process: s.process, ..DevelopSettings::default() };
     crate::local::scene_linear_pre(&mut img, info, &base);
     let gain = 2f32.powf(base.light.exposure as f32);
@@ -144,7 +144,7 @@ pub fn auto_bw_mix(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> [f64
 
 /// Grey-world white balance weighted towards mid-tone, low-chroma pixels. Returns (temp, tint).
 pub fn auto_wb(src: &Rgb32f, info: &SourceInfo) -> (f64, f64) {
-    let img = lightcraft_raster::resample::fit(src, 256, 256, lightcraft_raster::resample::Filter::Box);
+    let img = dac_raster::resample::fit(src, 256, 256, dac_raster::resample::Filter::Box);
     let (mut acc, mut wsum) = ([0.0f64; 3], 0.0f64);
     for c in &img.data {
         let y = luminance_2020(*c);
@@ -167,10 +167,10 @@ pub fn auto_wb(src: &Rgb32f, info: &SourceInfo) -> (f64, f64) {
     // the white that makes `avg` neutral, through the same model the white balance renders with
     // (`local::wb_matrix_for`): the camera's own colour model, else a Bradford adaptation
     let camera = info.camera_color.as_deref().filter(|_| info.raw && !info.relative_wb);
-    let seen = match camera.and_then(|cc| lightcraft_raw::color::neutral_white(&cc.tags, cc.developed_for, avg)) {
+    let seen = match camera.and_then(|cc| dac_raw::color::neutral_white(&cc.tags, cc.developed_for, avg)) {
         Some(white) => white,
         None => {
-            let shot = lightcraft_color::cct::temp_tint_to_xy(info.as_shot_temp, info.as_shot_tint);
+            let shot = dac_color::cct::temp_tint_to_xy(info.as_shot_temp, info.as_shot_tint);
             Xy::from_xyz(bradford(REC2020.white, shot).apply(REC2020.to_xyz().apply(avg)))
         }
     };
@@ -246,7 +246,7 @@ mod tests {
         let (t, _) = auto_wb(&img, &SourceInfo::default());
         assert!(t > 7000.0, "{t}");
         let mut s = DevelopSettings::default();
-        s.wb.mode = lightcraft_develop::WbMode::Custom;
+        s.wb.mode = dac_develop::WbMode::Custom;
         s.wb.temp = t;
         let (t2, tint2) = auto_wb(&img, &SourceInfo::default());
         let _ = (t2, tint2);
@@ -290,7 +290,7 @@ mod tint_tests {
             let (temp, tint) = auto_wb(&img, &info);
             assert!(tint * sign > 0.0, "{rgb:?}: temp {temp}, tint {tint}");
             let mut s = DevelopSettings::default();
-            s.wb.mode = lightcraft_develop::WbMode::Custom;
+            s.wb.mode = dac_develop::WbMode::Custom;
             s.wb.temp = temp;
             s.wb.tint = tint;
             let mut corrected = img;

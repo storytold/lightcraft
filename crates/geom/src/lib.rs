@@ -1,4 +1,4 @@
-//! Geometry for LightCraft: points, rectangles, affine and projective transforms, and the crop model.
+//! Geometry: points, rectangles, affine and projective transforms, and the crop model.
 //!
 //! Conventions: image coordinates are y-down. *Normalized* coordinates map the full (uncropped,
 //! oriented) image to `0..1` on both axes, so tools and settings are resolution independent.

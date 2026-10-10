@@ -6,13 +6,13 @@
 //! library. A model is fetched only when the user presses Download and accepts its terms.
 
 use crate::i18n::{tr, tr_format};
+use dac_catalog::PhotoId;
+use dac_engine::denoise::PhotoState;
 use egui::RichText;
-use lightcraft_catalog::PhotoId;
-use lightcraft_engine::denoise::PhotoState;
 use serde_json::{Value, json};
 
 use super::settings::{check, choices, heading, hint};
-use crate::LightcraftApp;
+use crate::DacApp;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -39,7 +39,7 @@ pub struct Ui {
 
 /// Called every frame: keeps the engine's denoise work going and asks for a redraw when a photo's picture appears (the
 /// loupe and the thumbnails then render from it) or while one is being made (the progress).
-pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn pump(app: &mut DacApp, ctx: &egui::Context) {
     watch_downloads(app, ctx);
     let now = ctx.input(|i| i.time);
     let (working, moving) = ctx.input(|i| {
@@ -83,7 +83,7 @@ pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
 }
 
 /// The engine's model list, re-read at most every [`REFRESH_SECS`], or at once after an action changed it.
-fn models(app: &mut LightcraftApp, ctx: &egui::Context) -> Value {
+fn models(app: &mut DacApp, ctx: &egui::Context) -> Value {
     let now = ctx.input(|i| i.time);
     let epoch = app.caches.denoise.epoch;
     if let Some((e, at, v)) = &app.caches.denoise.list
@@ -99,7 +99,7 @@ fn models(app: &mut LightcraftApp, ctx: &egui::Context) -> Value {
 
 /// Follows the downloads the user started: keeps redrawing while one runs (the progress bar), and says so when a
 /// model has been installed and is in use (the engine does all of that by itself).
-fn watch_downloads(app: &mut LightcraftApp, ctx: &egui::Context) {
+fn watch_downloads(app: &mut DacApp, ctx: &egui::Context) {
     if app.caches.denoise.dl_watch.is_empty() {
         return;
     }
@@ -128,7 +128,7 @@ fn watch_downloads(app: &mut LightcraftApp, ctx: &egui::Context) {
 }
 
 /// Per-photo AI Denoise switch, including a request waiting for model installation.
-pub fn detail_toggle(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, on: bool, applicable: bool) {
+pub fn detail_toggle(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId, on: bool, applicable: bool) {
     let mut enabled = on || crate::model_setup::denoise_requested(app, id);
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 2 }).show(ui, |ui| {
         let r = ui.add_enabled(applicable, egui::Checkbox::new(&mut enabled, crate::i18n::tr("AI Denoise")));
@@ -140,7 +140,7 @@ pub fn detail_toggle(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, on
 }
 
 /// The line under the Denoise slider for the photo `id`, whose Amount is `amount`.
-pub fn detail_status(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, amount: f64) {
+pub fn detail_status(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId, amount: f64) {
     let t = Tokens::get(ui.ctx());
     let state = app.session.denoise_photo_state(id);
     let pad = egui::Margin { left: 24, right: 22, top: 0, bottom: 6 };
@@ -218,7 +218,7 @@ pub fn detail_status(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, am
 }
 
 /// The Settings ▸ Denoise tab.
-pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+pub fn settings_tab(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens) {
     let list = models(app, ui.ctx());
     heading(ui, t, "AI Denoise");
     crate::model_setup::notice(app, ui, "denoise");
@@ -273,7 +273,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 }
 
 /// What the cache holds, its limit, and what is being made.
-fn work_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &Value) {
+fn work_section(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, list: &Value) {
     let status = app.session.execute("denoise.status", &json!({})).unwrap_or(Value::Null);
     if status["enabled"] != true {
         return;
@@ -391,7 +391,7 @@ fn device_line(d: &Value, run_on: &str) -> String {
     }
 }
 
-fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, dl: Option<&Value>, can_run: bool) {
+fn model_row(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, dl: Option<&Value>, can_run: bool) {
     let id = m["id"].as_str().unwrap_or("").to_string();
     let (installed, selected) = (m["installed"].as_bool() == Some(true), m["selected"].as_bool() == Some(true));
     let dl_state = if installed { None } else { dl.and_then(|d| d["state"].as_str()) };
@@ -515,7 +515,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
 
 /// Pressing Download: the model's terms first, in the licence dialog. Accepting them starts the download;
 /// nothing is fetched before.
-fn open_download_dialog(app: &mut LightcraftApp, m: &Value) {
+fn open_download_dialog(app: &mut DacApp, m: &Value) {
     let info = json!({
         "kind": "known",
         "domain": "denoise",
@@ -532,7 +532,7 @@ fn open_download_dialog(app: &mut LightcraftApp, m: &Value) {
 }
 
 /// The dialog's OK for a denoise model: start the download and watch it.
-pub fn install(app: &mut LightcraftApp, info: &Value, accepted: bool) -> Result<Value, String> {
+pub fn install(app: &mut DacApp, info: &Value, accepted: bool) -> Result<Value, String> {
     if !accepted {
         return Err(tr("Tick the box to accept the model's terms first").into());
     }
@@ -555,7 +555,7 @@ fn count(n: u64, one: &str, many: &str) -> String {
     tr_format!("{n} {noun}", n = n, noun = tr(if n == 1 { one } else { many }))
 }
 
-pub(super) fn window_pace(app: &LightcraftApp, ctx: &egui::Context, now: f64, watching: bool) -> &'static str {
+pub(super) fn window_pace(app: &DacApp, ctx: &egui::Context, now: f64, watching: bool) -> &'static str {
     let (focused, minimized) = ctx.input(|i| (i.focused, i.raw.viewports.get(&i.raw.viewport_id).and_then(|v| v.minimized).unwrap_or(false)));
     pace_for(focused, minimized, now - app.caches.last_input, now - app.caches.last_move, watching)
 }
@@ -608,21 +608,20 @@ pub(super) fn licence_line(m: &Value) -> String {
     tr_format!("{name} · {terms}", name = tr(name), terms = tr(terms))
 }
 
-pub(super) fn open_page(app: &mut LightcraftApp, url: &str) {
+pub(super) fn open_page(app: &mut DacApp, url: &str) {
     if let Some(f) = app.services.open_url.as_mut() {
         let _ = f(url);
     }
 }
 
-pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info: &Value, accepted: &mut bool) {
+pub fn model_dialog(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, info: &Value, accepted: &mut bool) {
     let kind = info["kind"].as_str().unwrap_or("unsupported");
     let file = info["fileName"].as_str().unwrap_or("");
     if kind == "unsupported" {
         ui.label(RichText::new(tr("This file cannot be used yet")).font(t.semibold(13.5)).color(t.caution));
         ui.add(
             egui::Label::new(
-                RichText::new(sentence(tr(info["reason"].as_str().unwrap_or("It is not a denoise model LightCraft understands"))))
-                    .color(t.text_label),
+                RichText::new(sentence(tr(info["reason"].as_str().unwrap_or("It is not a denoise model {app} understands")))).color(t.text_label),
             )
             .wrap(),
         );
@@ -644,7 +643,7 @@ pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info
         ui.add(
             egui::Label::new(
                 RichText::new(tr_format!(
-                    "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.",
+                    "Downloads from {host}. Once it has arrived and checked out, {app} installs it, {after}.",
                     host = host,
                     after = tr(after)
                 ))
@@ -665,7 +664,7 @@ pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info
     }
     if kind == "draft" {
         ui.add_space(2.0);
-        ui.label(RichText::new(tr("LightCraft does not know this model, so it assumed:")).color(t.text_label));
+        ui.label(RichText::new(tr("{app} does not know this model, so it assumed:")).color(t.text_label));
         for a in info["assumptions"].as_array().into_iter().flatten().filter_map(Value::as_str) {
             ui.add(egui::Label::new(RichText::new(tr_format!("•  {assumption}", assumption = tr(a))).font(t.font(12.0)).color(t.text_dim)).wrap());
         }
@@ -680,9 +679,9 @@ pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info
     ui.add_space(4.0);
     check(ui, "denoiseModel.accept", accepted, "I have read these terms and accept them for my own use");
     let closing = if download {
-        "Nothing is fetched until you accept. The model is kept on this computer only; LightCraft never uploads or shares it."
+        "Nothing is fetched until you accept. The model is kept on this computer only; {app} never uploads or shares it."
     } else {
-        "The model is kept on this computer only. LightCraft never uploads or shares it."
+        "The model is kept on this computer only. {app} never uploads or shares it."
     };
     ui.label(RichText::new(tr(closing)).font(t.font(11.5)).color(t.text_dim));
 }

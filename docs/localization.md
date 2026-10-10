@@ -1,5 +1,8 @@
 # Localization
 
+> Names in angle brackets (`<app>`, `<binary>`, `<cli>`, `<PREFIX>`, `<settings_dir>`, …) are the values set in
+> [`brand.toml`](../brand.toml); see the README.
+
 The interface ships in the language it is written in (English) plus every language in the table in
 `crates/ui-egui/src/i18n.rs`. Today that is English, Simplified Chinese (`zh-hans`), Traditional
 Chinese (`zh-hant`, Taiwan), Japanese (`ja`), Brazilian Portuguese (`pt-br`), Spanish (`es`), German (`de`), Russian (`ru`) and French (`fr`). This file is the reference for **adding or maintaining a language**; the per-language notes
@@ -12,7 +15,7 @@ are in [`localization-zh-hans.md`](localization-zh-hans.md), [`localization-zh-h
 1. **Translate the two catalogs.** Copy `locales/ja.json` and `locales/ja-formats.json` to
    `locales/<code>.json` and `locales/<code>-formats.json`, then translate the values. Keys are the
    English source strings and must stay byte-for-byte identical. The plain catalog may grow at its
-   own pace: a message it lacks shows in English, and `cargo test -p lightcraft-ui-egui i18n::tests
+   own pace: a message it lacks shows in English, and `cargo test -p dac-ui-egui i18n::tests
    -- --nocapture` lists the gaps (it fails on an empty entry or mismatched placeholders). The
    formats catalog must carry every message (the build fails otherwise; a message copied in English,
    value equal to its key, is an untranslated placeholder until someone translates it), including the date
@@ -77,18 +80,31 @@ tr_format!("Added {n} photo{} to “{}”", if n == 1 { "" } else { "s" }, album
   `tr_format!` call whose message is in no catalog does not compile: add it to every
   `*-formats.json` file.
 
+**Brand placeholders.** The product name is never written into a catalog. Source text and every
+translation use `{app}` for the display name, `{cli}` for the command-line binary and `{env}` for the
+environment-variable prefix, all filled from `brand.toml` at run time (`brand_fill` in
+`crates/ui-egui/src/i18n.rs`). Keys keep the placeholder as written (`"About {app}"`), and a translation
+must keep the same placeholders: `"About {app}"` → `"{app}について"`. Never translate, transliterate or
+inflect the placeholder, and phrase sentences so the name needs no grammatical case or gender.
+
+| Placeholder | Filled with (from `brand.toml`) | Example key |
+|---|---|---|
+| `{app}` | `display_name` | `About {app}`, `{app} could not start` |
+| `{cli}` | `cli_binary` | command-line hints |
+| `{env}` | `env_prefix` | environment-variable hints |
+
 ## Testing and looking at it
 
 ```sh
-cargo test -p lightcraft-ui-egui i18n::tests                       # catalogs, keys, placeholders, commands
-CRAFT_FONTS_DIR=../craft-fonts cargo test -p lightcraft-ui-egui i18n::tests   # + glyph coverage
+cargo test -p dac-ui-egui i18n::tests                       # catalogs, keys, placeholders, commands
+CRAFT_FONTS_DIR=../craft-fonts cargo test -p dac-ui-egui i18n::tests   # + glyph coverage
 ```
 
 The glyph tests are skipped without `CRAFT_FONTS_DIR` (there are no CJK faces to check then).
 To look at a language, render it headless:
 
 ```sh
-LIGHTCRAFT_LANGUAGE=zh-hans lightcraft-cli snapshot --demo --script tour.jsonl -o out.png --size 1600x1000
+<PREFIX>_LANGUAGE=zh-hans <cli> snapshot --demo --script tour.jsonl -o out.png --size 1600x1000
 ```
 
 or, with the app running (`--control 7980`), run the language command
@@ -97,7 +113,7 @@ or, with the app running (`--control 7980`), run the language command
 ## Language codes and settings
 
 The settings file stores the BCP-47 code, never the Rust variant name, so a language can be renamed
-in code without invalidating anyone's saved preference. `LIGHTCRAFT_LANGUAGE` accepts what a system
+in code without invalidating anyone's saved preference. `<PREFIX>_LANGUAGE` accepts what a system
 locale looks like (`zh_Hans`, `zh-CN`, `en_US`, `ja_JP.UTF-8`) and falls back to the base language
 when a region has no dedicated entry.
 

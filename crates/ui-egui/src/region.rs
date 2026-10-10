@@ -6,7 +6,7 @@
 //! grid and carry a margin, so panning by a few pixels re-uses the render and the spatial stages
 //! (clarity, dehaze…) have the context they read around the visible edge.
 
-use lightcraft_engine::pipeline::PixelWindow;
+use dac_engine::pipeline::PixelWindow;
 
 /// Windows start and end on multiples of this many pixels of the zoomed frame.
 pub const SNAP: usize = 256;
@@ -15,18 +15,20 @@ pub const MAX_MARGIN: usize = 768;
 /// The most a window may span on either axis: a bound on its texture whatever the window size.
 pub const MAX_SPAN: usize = if cfg!(target_arch = "wasm32") { 3072 } else { 6144 };
 
-/// A window render the loupe asked for: which photo, the size of the zoomed frame it is a window
-/// of, and the window. The texture that comes back is drawn at this place of the frame.
+/// A zoomed view the loupe asked tiles for: which photo and side, the size of the zoomed frame,
+/// the part of it the on-screen tiles cover, and the look they are rendered with.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RegionView {
-    pub photo: lightcraft_catalog::PhotoId,
+    pub photo: dac_catalog::PhotoId,
     /// The Before side of a Before/After view (the photo without its edits).
     pub before: bool,
     pub key: u64,
     pub full: (usize, usize),
     pub window: PixelWindow,
-    /// Hash of the develop settings it was rendered with.
+    /// The look its tiles are rendered with ([`TileKey::look`]: settings, overlay, proof, quality).
     pub settings: u64,
+    /// The side of its tiles ([`tile_side`]).
+    pub tile: usize,
 }
 
 impl RegionView {
@@ -35,7 +37,7 @@ impl RegionView {
     ///
     /// While a slider is dragged (`drafting`) a window made for an earlier value of it still
     /// belongs: drafts follow the drag, and waiting for an exact match would show none.
-    pub fn is_current(&self, photo: lightcraft_catalog::PhotoId, full: (usize, usize), settings: u64, drafting: bool) -> bool {
+    pub fn is_current(&self, photo: dac_catalog::PhotoId, full: (usize, usize), settings: u64, drafting: bool) -> bool {
         self.photo == photo && self.full == full && (drafting || self.settings == settings)
     }
 }
@@ -106,7 +108,7 @@ pub fn plan(settings: &crate::state::AppSettings, v: ViewSizes) -> LoupePlan {
     }
     // a user who chose a size above the preview source level (3840, 5120) means it; otherwise the
     // original is not decoded for the whole-frame render
-    let source_cap = if settings.preview_limit == 0 { lightcraft_engine::SourceLevel::Preview.max_edge() } else { settings.preview_limit as usize };
+    let source_cap = if settings.preview_limit == 0 { dac_engine::SourceLevel::Preview.max_edge() } else { settings.preview_limit as usize };
     let edge_at = |scale: f32| settings.loupe_edge(drawn_long.min(canvas_long) * scale, v.native_long, v.texture_side).min(source_cap);
     let main_edge = edge_at(scale);
     let frame_edge = settings.window_frame_edge(drawn_long, v.native_long);
@@ -126,7 +128,7 @@ pub const HOLD_SECS: f64 = 0.25;
 /// gesture has been quiet for [`HOLD_SECS`].
 #[derive(Clone, Debug, Default)]
 pub struct SizeHold {
-    photo: Option<lightcraft_catalog::PhotoId>,
+    photo: Option<dac_catalog::PhotoId>,
     plan: Option<LoupePlan>,
     until: f64,
 }
@@ -134,7 +136,7 @@ pub struct SizeHold {
 impl SizeHold {
     /// The plan to render this frame: `fresh` normally; the plan from before the gesture while
     /// one is running (`gesturing`) and for [`HOLD_SECS`] after. `now` is in seconds.
-    pub fn apply(&mut self, photo: lightcraft_catalog::PhotoId, now: f64, gesturing: bool, fresh: LoupePlan) -> LoupePlan {
+    pub fn apply(&mut self, photo: dac_catalog::PhotoId, now: f64, gesturing: bool, fresh: LoupePlan) -> LoupePlan {
         if self.photo != Some(photo) {
             *self = SizeHold { photo: Some(photo), plan: Some(fresh), until: f64::NEG_INFINITY };
             return fresh;
@@ -215,6 +217,267 @@ pub fn window_for(full_w: usize, full_h: usize, visible: (f32, f32, f32, f32), m
     let (x0, x1) = axis(visible.0, visible.2, full_w)?;
     let (y0, y1) = axis(visible.1, visible.3, full_h)?;
     Some(PixelWindow { x: x0, y: y0, w: x1 - x0, h: y1 - y0 })
+}
+
+// ---------------------------------------------------------------------------------------------
+// The tile grid (P1.6). A zoomed view is cut into fixed tiles of the zoomed frame: each is its own
+// render (the tile plus a margin of context, cropped back to the tile) and its own texture, kept
+// in a [`TileCache`] by photo, side, frame size, place and look. Panning re-uses every tile already
+// rendered and asks only for the ones that come into view; going back to a look (undo, a toggle)
+// finds its tiles still there while the memory bound allows.
+
+/// The side of a tile in pixels of the zoomed frame (a multiple of [`SNAP`]): small enough that a
+/// pan asks for a strip of tiles, big enough that the margin each one renders stays cheap.
+pub const TILE: usize = 1024;
+
+/// The bytes the tile textures may hold together before the least recently drawn go.
+pub const TILE_BUDGET: usize = if cfg!(target_arch = "wasm32") { 96 << 20 } else { 384 << 20 };
+
+/// The tile side on a host whose textures are at most `texture_side` px.
+pub fn tile_side(texture_side: usize) -> usize {
+    TILE.min(max_span(texture_side))
+}
+
+/// A tile of a frame: its column and row in the grid of `side`-pixel tiles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TileId {
+    pub col: u16,
+    pub row: u16,
+}
+
+/// The pixels of a `full_w × full_h` frame tile `t` covers (`None`: outside the frame).
+pub fn tile_rect(full: (usize, usize), side: usize, t: TileId) -> Option<PixelWindow> {
+    let side = side.max(1);
+    let x = (t.col as usize).checked_mul(side)?;
+    let y = (t.row as usize).checked_mul(side)?;
+    if x >= full.0 || y >= full.1 {
+        return None;
+    }
+    Some(PixelWindow { x, y, w: side.min(full.0 - x), h: side.min(full.1 - y) })
+}
+
+/// The window rendered for a tile: the tile and the margin of context the spatial stages read
+/// around it ([`margin_for`]), inside the frame.
+pub fn tile_render_window(full: (usize, usize), tile: PixelWindow) -> PixelWindow {
+    let m = margin_for(full.0.max(full.1));
+    let x0 = tile.x.saturating_sub(m);
+    let y0 = tile.y.saturating_sub(m);
+    let x1 = tile.x.saturating_add(tile.w).saturating_add(m).min(full.0);
+    let y1 = tile.y.saturating_add(tile.h).saturating_add(m).min(full.1);
+    PixelWindow { x: x0, y: y0, w: x1.saturating_sub(x0).max(1), h: y1.saturating_sub(y0).max(1) }
+}
+
+/// The most tiles one view asks for in a frame (a bound whatever the zoom and canvas).
+pub const MAX_TILES: usize = 64;
+/// The most tiles from the centre of the view, on each axis, that are looked at.
+const MAX_REACH: usize = 5;
+
+/// The tiles of a `full` frame that `visible` (frame pixels, `(x0, y0, x1, y1)`) touches, then a
+/// ring of `ring` tiles around them (asked for at a lower priority, so a pan finds them ready):
+/// `(tile, on screen?)`, nearest the centre of the view first, at most [`MAX_TILES`].
+pub fn tiles_for(full: (usize, usize), side: usize, visible: (f32, f32, f32, f32), ring: usize) -> Vec<(TileId, bool)> {
+    let side = side.max(1);
+    if full.0 == 0 || full.1 == 0 || [visible.0, visible.1, visible.2, visible.3].iter().any(|v| !v.is_finite()) {
+        return Vec::new();
+    }
+    let (cols, rows) = (full.0.div_ceil(side).min(u16::MAX as usize), full.1.div_ceil(side).min(u16::MAX as usize));
+    let range = |lo: f32, hi: f32, full: usize, n: usize| -> Option<(usize, usize)> {
+        let (lo, hi) = (lo.max(0.0), hi.min(full as f32));
+        if hi <= lo {
+            return None;
+        }
+        let a = (lo as usize / side).min(n.saturating_sub(1));
+        let b = ((hi.ceil() as usize).saturating_sub(1) / side).min(n.saturating_sub(1));
+        Some((a, b))
+    };
+    let Some((c0, c1)) = range(visible.0, visible.2, full.0, cols) else { return Vec::new() };
+    let Some((r0, r1)) = range(visible.1, visible.3, full.1, rows) else { return Vec::new() };
+    let (cx, cy) = ((visible.0 + visible.2) / 2.0, (visible.1 + visible.3) / 2.0);
+    // never more than a bounded block around the centre, whatever the view spans
+    let near = |lo: usize, hi: usize, c: f32| {
+        let mid = ((c.max(0.0) as usize) / side).clamp(lo, hi);
+        (lo.max(mid.saturating_sub(MAX_REACH)), hi.min(mid.saturating_add(MAX_REACH)))
+    };
+    let (c0, c1) = near(c0, c1, cx);
+    let (r0, r1) = near(r0, r1, cy);
+    let mut out = Vec::new();
+    let (rc0, rc1) = (c0.saturating_sub(ring), (c1 + ring).min(cols.saturating_sub(1)));
+    let (rr0, rr1) = (r0.saturating_sub(ring), (r1 + ring).min(rows.saturating_sub(1)));
+    for row in rr0..=rr1 {
+        for col in rc0..=rc1 {
+            let on = (c0..=c1).contains(&col) && (r0..=r1).contains(&row);
+            out.push((TileId { col: col as u16, row: row as u16 }, on));
+        }
+    }
+    let dist = |t: &TileId| {
+        let x = (t.col as f32 + 0.5) * side as f32 - cx;
+        let y = (t.row as f32 + 0.5) * side as f32 - cy;
+        x * x + y * y
+    };
+    out.sort_by(|a, b| b.1.cmp(&a.1).then(dist(&a.0).total_cmp(&dist(&b.0))));
+    out.truncate(MAX_TILES);
+    out
+}
+
+/// What a tile's pixels are: the photo, the pane it is shown in (the loupe's After or Before side,
+/// a Compare / Reference photo: [`crate::render::PANE_AFTER`]…), the zoomed frame, the place in
+/// it, and the look (develop settings, overlay, proof and quality, hashed).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TileKey {
+    pub photo: dac_catalog::PhotoId,
+    pub pane: u8,
+    pub full: (usize, usize),
+    pub tile: TileId,
+    pub look: u64,
+}
+
+impl TileKey {
+    /// The Before side of the loupe's Before/After view.
+    pub fn before(&self) -> bool {
+        self.pane == crate::render::PANE_BEFORE
+    }
+
+    /// The same tile with any look.
+    fn same_place(&self, o: &TileKey) -> bool {
+        self.photo == o.photo && self.pane == o.pane && self.full == o.full && self.tile == o.tile
+    }
+}
+
+struct TileEntry<T> {
+    value: T,
+    bytes: usize,
+    used: u64,
+    born: u64,
+    /// Cut from a 1:1 preview, waiting for its render.
+    placeholder: bool,
+}
+
+/// Tile textures, least recently drawn out first once they hold more than the budget.
+pub struct TileCache<T> {
+    map: std::collections::HashMap<TileKey, TileEntry<T>>,
+    bytes: usize,
+    budget: usize,
+    clock: u64,
+}
+
+impl<T> Default for TileCache<T> {
+    fn default() -> Self {
+        Self::new(TILE_BUDGET)
+    }
+}
+
+impl<T> TileCache<T> {
+    pub fn new(budget: usize) -> Self {
+        TileCache { map: Default::default(), bytes: 0, budget, clock: 0 }
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    pub fn bytes(&self) -> usize {
+        self.bytes
+    }
+
+    pub fn budget(&self) -> usize {
+        self.budget
+    }
+
+    /// Whether the rendered tile `k` is held (a placeholder does not count).
+    pub fn has_render(&self, k: &TileKey) -> bool {
+        self.map.get(k).is_some_and(|e| !e.placeholder)
+    }
+
+    /// Whether anything (render or placeholder) is held for `k`.
+    pub fn contains(&self, k: &TileKey) -> bool {
+        self.map.contains_key(k)
+    }
+
+    /// The pixels to draw for `k`: its own; else, when `any_look` (a slider drag, whose drafts
+    /// follow the drag), the newest of this place with another look. Marks it used.
+    pub fn draw(&mut self, k: &TileKey, any_look: bool) -> Option<&T> {
+        self.clock += 1;
+        let found = if self.map.contains_key(k) {
+            Some(*k)
+        } else if any_look {
+            self.map.iter().filter(|(o, _)| o.same_place(k)).max_by_key(|(_, e)| e.born).map(|(o, _)| *o)
+        } else {
+            None
+        };
+        let clock = self.clock;
+        let e = self.map.get_mut(&found?)?;
+        e.used = clock;
+        Some(&e.value)
+    }
+
+    /// Keep `value` (`bytes` of texture) for `k`; a render replaces a placeholder, never the
+    /// other way round. Evicts the least recently drawn beyond the budget (never `k` itself).
+    pub fn insert(&mut self, k: TileKey, value: T, bytes: usize, placeholder: bool) {
+        if placeholder && self.has_render(&k) {
+            return;
+        }
+        self.clock += 1;
+        if let Some(old) = self.map.insert(k, TileEntry { value, bytes, used: self.clock, born: self.clock, placeholder }) {
+            self.bytes = self.bytes.saturating_sub(old.bytes);
+        }
+        self.bytes = self.bytes.saturating_add(bytes);
+        while self.bytes > self.budget {
+            let Some(victim) = self.map.iter().filter(|(o, _)| **o != k).min_by_key(|(_, e)| e.used).map(|(o, _)| *o) else { break };
+            if let Some(e) = self.map.remove(&victim) {
+                self.bytes = self.bytes.saturating_sub(e.bytes);
+            }
+        }
+    }
+
+    /// Drop the tiles `keep` says no to.
+    pub fn retain(&mut self, mut keep: impl FnMut(&TileKey) -> bool) {
+        let mut freed = 0usize;
+        self.map.retain(|k, e| {
+            let k2 = keep(k);
+            if !k2 {
+                freed = freed.saturating_add(e.bytes);
+            }
+            k2
+        });
+        self.bytes = self.bytes.saturating_sub(freed);
+    }
+
+    pub fn clear(&mut self) {
+        self.map.clear();
+        self.bytes = 0;
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &TileKey> {
+        self.map.keys()
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &T> {
+        self.map.values().map(|e| &e.value)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&TileKey, &T)> {
+        self.map.iter().map(|(k, e)| (k, &e.value))
+    }
+}
+
+/// The part `tile` of `img`, a render of `window` (both in frame pixels): `None` when the tile
+/// is not inside the render.
+pub fn crop_tile(img: &dac_raster::Rgba8, window: PixelWindow, tile: PixelWindow) -> Option<dac_raster::Rgba8> {
+    let ox = tile.x.checked_sub(window.x)?;
+    let oy = tile.y.checked_sub(window.y)?;
+    if ox.checked_add(tile.w)? > img.width || oy.checked_add(tile.h)? > img.height || tile.w == 0 || tile.h == 0 {
+        return None;
+    }
+    let mut data = Vec::with_capacity(tile.w.checked_mul(tile.h)?);
+    for y in oy..oy + tile.h {
+        let start = y.checked_mul(img.width)?.checked_add(ox)?;
+        data.extend_from_slice(img.data.get(start..start.checked_add(tile.w)?)?);
+    }
+    Some(dac_raster::Rgba8 { width: tile.w, height: tile.h, data })
 }
 
 #[cfg(test)]
@@ -376,7 +639,7 @@ mod tests {
     // Given a pinch from fit to 400 %, the sizes of the first frame hold until the gesture is quiet
     #[test]
     fn a_pinch_holds_the_render_sizes() {
-        use lightcraft_catalog::PhotoId;
+        use dac_catalog::PhotoId;
         let (fit, zoomed) = (plan(&auto(), sizes(1400.0, 1400.0, 6000)), plan(&auto(), sizes(24000.0, 1400.0, 6000)));
         assert_ne!(fit, zoomed);
         let mut hold = SizeHold::default();
@@ -398,7 +661,7 @@ mod tests {
     // Given another photo, the held sizes are forgotten
     #[test]
     fn another_photo_is_planned_afresh() {
-        use lightcraft_catalog::PhotoId;
+        use dac_catalog::PhotoId;
         let (fit, zoomed) = (plan(&auto(), sizes(1400.0, 1400.0, 6000)), plan(&auto(), sizes(24000.0, 1400.0, 6000)));
         let mut hold = SizeHold::default();
         hold.apply(PhotoId(1), 0.0, false, fit);
@@ -494,7 +757,7 @@ mod tests {
     // Given a tile rendered for other settings, another photo or another zoom, it is not drawn
     #[test]
     fn a_tile_is_drawn_only_while_it_shows_what_the_loupe_shows() {
-        use lightcraft_catalog::PhotoId;
+        use dac_catalog::PhotoId;
         let v = RegionView {
             photo: PhotoId(1),
             before: false,
@@ -502,6 +765,7 @@ mod tests {
             full: (6000, 4000),
             window: PixelWindow { x: 0, y: 0, w: 256, h: 256 },
             settings: 11,
+            tile: TILE,
         };
         assert!(v.is_current(PhotoId(1), (6000, 4000), 11, false));
         assert!(!v.is_current(PhotoId(2), (6000, 4000), 11, false), "another photo");
@@ -542,5 +806,117 @@ mod tests {
     fn a_window_is_bounded() {
         let w = window_for(100_000, 100_000, (0.0, 0.0, 90_000.0, 90_000.0), MAX_SPAN).unwrap();
         assert!(w.w <= MAX_SPAN && w.h <= MAX_SPAN);
+    }
+
+    // Given the named zoom levels, each is found, Zoom In / Out walk them in order, and out of
+    // 1:4 is Fit
+    #[test]
+    fn zoom_levels_run_from_one_quarter_to_eleven_to_one() {
+        use crate::state::{MAX_ZOOM, ZOOM_LEVELS, Zoom, zoom_level, zoom_step};
+        assert_eq!(zoom_level("fit"), Some(Zoom::Fit));
+        assert_eq!(zoom_level("fill"), Some(Zoom::Fill));
+        assert_eq!(zoom_level("1:1"), Some(Zoom::Percent(100.0)));
+        assert_eq!(zoom_level("11:1"), Some(Zoom::Percent(MAX_ZOOM)));
+        assert_eq!(zoom_level("5:1"), None);
+        let mut up = vec![];
+        let mut cur = 20.0;
+        while cur < MAX_ZOOM {
+            cur = zoom_step(cur, true).unwrap();
+            up.push(cur);
+        }
+        assert_eq!(up, ZOOM_LEVELS.map(|l| l.1).to_vec());
+        assert_eq!(zoom_step(MAX_ZOOM, true), Some(MAX_ZOOM), "11:1 is the deepest");
+        assert_eq!(zoom_step(100.0 / 3.0, false), Some(25.0), "1:3 out is 1:4");
+        assert_eq!(zoom_step(25.0, false), None, "1:4 out is Fit");
+    }
+
+    fn key(col: u16, look: u64) -> TileKey {
+        TileKey { photo: dac_catalog::PhotoId(1), pane: 0, full: (8256, 5504), tile: TileId { col, row: 0 }, look }
+    }
+
+    // Given a 45 MP frame, the tiles cover it exactly: none overlap, none spill past the edge
+    #[test]
+    fn tiles_cover_the_frame_exactly() {
+        let full = (8256, 5504);
+        let all = tiles_for(full, TILE, (0.0, 0.0, full.0 as f32, full.1 as f32), 0);
+        assert_eq!(all.len(), 9 * 6);
+        let area: usize = all.iter().filter_map(|(t, _)| tile_rect(full, TILE, *t)).map(|r| r.w * r.h).sum();
+        assert_eq!(area, full.0 * full.1);
+        assert_eq!(tile_rect(full, TILE, TileId { col: 8, row: 5 }), Some(PixelWindow { x: 8192, y: 5120, w: 64, h: 384 }));
+        assert_eq!(tile_rect(full, TILE, TileId { col: 9, row: 0 }), None);
+    }
+
+    // Given a view, its on-screen tiles come first (nearest the centre first), then a ring
+    #[test]
+    fn on_screen_tiles_first_then_the_ring() {
+        let t = tiles_for((8256, 5504), TILE, (2100.0, 2100.0, 2600.0, 2400.0), 1);
+        assert_eq!(t[0], (TileId { col: 2, row: 2 }, true));
+        assert_eq!(t.iter().filter(|x| x.1).count(), 1);
+        assert_eq!(t.len(), 9, "one tile and the eight around it");
+        assert!(tiles_for((8256, 5504), TILE, (f32::NAN, 0.0, 1.0, 1.0), 1).is_empty());
+        assert!(tiles_for((8256, 5504), TILE, (9000.0, 0.0, 9100.0, 10.0), 1).is_empty(), "off the frame");
+        assert!(tiles_for((0, 0), TILE, (0.0, 0.0, 1.0, 1.0), 1).is_empty());
+        assert!(tiles_for((1 << 30, 1 << 30), 1, (0.0, 0.0, 1e9, 1e9), 1).len() <= MAX_TILES, "bounded whatever the zoom");
+    }
+
+    // Given a tile, it is rendered with the margin of context around it, inside the frame, and
+    // cropped back to the tile
+    #[test]
+    fn a_tile_renders_with_its_margin_and_is_cropped_back() {
+        let full = (8256, 5504);
+        let tile = tile_rect(full, TILE, TileId { col: 0, row: 1 }).unwrap();
+        let win = tile_render_window(full, tile);
+        let m = margin_for(8256);
+        assert_eq!(win, PixelWindow { x: 0, y: 1024 - m, w: 1024 + m, h: 1024 + 2 * m });
+        let img = dac_raster::Rgba8::from_fn(win.w, win.h, |x, y| [(x % 251) as u8, (y % 251) as u8, 0, 255]);
+        let part = crop_tile(&img, win, tile).unwrap();
+        assert_eq!((part.width, part.height), (1024, 1024));
+        assert_eq!(part.data[0], [0, (m % 251) as u8, 0, 255], "the tile's first pixel");
+        assert!(crop_tile(&img, PixelWindow { x: 4096, ..win }, tile).is_none(), "not inside the render");
+    }
+
+    // Given more tiles than the budget holds, the least recently drawn go and the bytes stay bounded
+    #[test]
+    fn the_tile_cache_is_bounded_and_least_recently_drawn_go_first() {
+        let mut c = TileCache::<u32>::new(3 * 100);
+        for i in 0..3 {
+            c.insert(key(i, 1), i as u32, 100, false);
+        }
+        assert!(c.draw(&key(0, 1), false).is_some(), "touch the first");
+        c.insert(key(3, 1), 3, 100, false);
+        assert_eq!(c.len(), 3);
+        assert!(c.bytes() <= 300);
+        assert!(c.contains(&key(0, 1)) && !c.contains(&key(1, 1)), "the untouched oldest went");
+        c.insert(key(9, 1), 9, 10_000, false);
+        assert!(c.contains(&key(9, 1)), "a tile larger than the budget is still kept while drawn");
+        assert_eq!(c.len(), 1);
+    }
+
+    // Given tiles of two looks, each look finds its own (undo is instant); a drag draws any look
+    #[test]
+    fn tiles_are_cached_per_look() {
+        let mut c = TileCache::<u32>::new(1 << 20);
+        c.insert(key(0, 1), 1, 10, false);
+        c.insert(key(0, 2), 2, 10, false);
+        assert_eq!(c.draw(&key(0, 1), false), Some(&1));
+        assert_eq!(c.draw(&key(0, 2), false), Some(&2));
+        assert_eq!(c.draw(&key(0, 3), false), None, "another look is not drawn at rest");
+        assert_eq!(c.draw(&key(0, 3), true), Some(&2), "a drag draws the newest of the place");
+        assert_eq!(c.draw(&key(1, 3), true), None, "never another place");
+    }
+
+    // Given a placeholder from a 1:1 preview, its render replaces it, never the other way round
+    #[test]
+    fn a_render_replaces_a_placeholder_and_not_the_reverse() {
+        let mut c = TileCache::<u32>::new(1 << 20);
+        c.insert(key(0, 1), 1, 10, true);
+        assert!(c.contains(&key(0, 1)) && !c.has_render(&key(0, 1)));
+        c.insert(key(0, 1), 2, 10, false);
+        assert!(c.has_render(&key(0, 1)));
+        c.insert(key(0, 1), 3, 10, true);
+        assert_eq!(c.draw(&key(0, 1), false), Some(&2));
+        assert_eq!(c.bytes(), 10);
+        c.retain(|_| false);
+        assert_eq!((c.len(), c.bytes()), (0, 0));
     }
 }

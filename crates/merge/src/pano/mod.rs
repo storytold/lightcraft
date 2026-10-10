@@ -19,7 +19,7 @@ pub mod camera;
 pub mod finish;
 pub mod project;
 
-use lightcraft_raster::{Plane, Rgb32f};
+use dac_raster::{Plane, Rgb32f};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -76,7 +76,7 @@ pub struct PanoResult {
     pub focal: f64,
     pub origin: (f64, f64),
     pub color: FrameColor,
-    pub metadata: lightcraft_meta::Metadata,
+    pub metadata: dac_meta::Metadata,
     pub raw: bool,
     pub baseline_exposure: f64,
 }
@@ -189,8 +189,8 @@ pub fn register(frames: &[Frame], progress: &Progress) -> Result<(Vec<Option<Cam
         }
         let ci = (sizes[p.i].0 as f64 / 2.0, sizes[p.i].1 as f64 / 2.0);
         let cj = (sizes[p.j].0 as f64 / 2.0, sizes[p.j].1 as f64 / 2.0);
-        let ti = lightcraft_geom::Homography([1.0, 0.0, ci.0, 0.0, 1.0, ci.1, 0.0, 0.0, 1.0]);
-        let tj = lightcraft_geom::Homography([1.0, 0.0, -cj.0, 0.0, 1.0, -cj.1, 0.0, 0.0, 1.0]);
+        let ti = dac_geom::Homography([1.0, 0.0, ci.0, 0.0, 1.0, ci.1, 0.0, 0.0, 1.0]);
+        let tj = dac_geom::Homography([1.0, 0.0, -cj.0, 0.0, 1.0, -cj.1, 0.0, 0.0, 1.0]);
         let hc = tj.mul(&p.h).mul(&ti);
         if let (Some(a), Some(b)) = camera::focals_from_homography(&hc) {
             fs.push((a * b).sqrt());

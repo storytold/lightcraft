@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use lightcraft_develop::DevelopSettings;
+use dac_develop::DevelopSettings;
 use proptest::prelude::*;
 
 use crate::journal::{LOG, SNAPSHOT, decode_record, encode_record};
@@ -60,6 +60,7 @@ fn op_for(c: &mut Catalog, kind: u8, a: u8, b: u8) -> Op {
                     smart: None,
                     quick: false,
                     order: None,
+                    creation: None,
                 },
             }
         }
@@ -280,6 +281,7 @@ fn fs_store_roundtrip() {
     j.snapshot(&c2).unwrap();
     assert_eq!(std::fs::metadata(dir.join(LOG)).unwrap().len(), 0);
     assert!(!dir.join(format!("{SNAPSHOT}.tmp")).exists());
+    drop(j);
     let (_, c3, r) = Journal::open(Box::new(FsStore::open(&dir).unwrap())).unwrap();
     assert_eq!((r.snapshot_seq, r.replayed), (2, 0));
     assert_eq!(c3.to_snapshot(), c.to_snapshot());
@@ -294,12 +296,8 @@ fn streamed_snapshot_keeps_the_on_disk_format() {
     let (mut j, c, _) = open(&m);
     assert_eq!(c.to_snapshot(), full.to_snapshot());
     j.snapshot(&c).unwrap();
-    let legacy = format!(
-        "{{\"format\":\"lightcraft-catalog\",\"version\":{},\"seq\":{},\"catalog\":{}}}\n",
-        crate::journal::VERSION,
-        j.seq(),
-        c.to_snapshot()
-    );
+    let legacy =
+        format!("{{\"format\":\"dac-catalog\",\"version\":{},\"seq\":{},\"catalog\":{}}}\n", crate::journal::VERSION, j.seq(), c.to_snapshot());
     assert_eq!(String::from_utf8(m.get(SNAPSHOT).unwrap()).unwrap(), legacy);
     assert_eq!(j.stats().last_snapshot.bytes, legacy.len() as u64);
 
@@ -308,7 +306,7 @@ fn streamed_snapshot_keeps_the_on_disk_format() {
     std::fs::create_dir_all(&dir).unwrap();
     // an old-style snapshot (written by a build before streaming) loads, and is rewritten the same
     std::fs::write(dir.join(SNAPSHOT), legacy.as_bytes()).unwrap();
-    let (mut fj, fc, r) = Journal::open(Box::new(FsStore::open(&dir).unwrap())).unwrap();
+    let (mut fj, fc, r) = Journal::open(Box::new(FsStore::open_json(&dir).unwrap())).unwrap();
     assert_eq!((fc.to_snapshot(), r.snapshot_seq), (c.to_snapshot(), j.seq()));
     fj.snapshot(&fc).unwrap();
     assert_eq!(std::fs::read(dir.join(SNAPSHOT)).unwrap(), legacy.as_bytes());
@@ -340,20 +338,20 @@ fn failed_streamed_write_keeps_the_old_file() {
 /// else: the photo and its edits load (`docs/process-versions.md`).
 #[test]
 fn a_damaged_process_value_loads_as_v1_with_the_edits() {
-    use lightcraft_develop::ProcessVersion;
+    use dac_develop::ProcessVersion;
     let mut c = Catalog::new();
     let id = c.alloc_photo_id();
     let mut p = Photo::new(id, Source::Demo { scene: 1 }, "a.jpg", "JPEG", 10, 10, "2026-10-09T00:00:00");
     p.develop = Arc::new(DevelopSettings {
         process: ProcessVersion(7),
-        light: lightcraft_develop::Light { exposure: 0.5, ..Default::default() },
+        light: dac_develop::Light { exposure: 0.5, ..Default::default() },
         ..Default::default()
     });
     c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     let snapshot = c.to_snapshot();
     assert!(snapshot.contains(r#""process":7"#));
     let snapshot = format!(
-        "{{\"format\":\"lightcraft-catalog\",\"version\":{},\"seq\":0,\"catalog\":{}}}\n",
+        "{{\"format\":\"dac-catalog\",\"version\":{},\"seq\":0,\"catalog\":{}}}\n",
         crate::journal::VERSION,
         snapshot.replace(r#""process":7"#, r#""process":-1"#)
     );
@@ -363,11 +361,8 @@ fn a_damaged_process_value_loads_as_v1_with_the_edits() {
     let d = &loaded.photo(id).unwrap().develop;
     assert_eq!((d.process, d.light.exposure), (ProcessVersion::V1, 0.5));
     // and in a (CRC-valid) log record
-    let edit = DevelopSettings {
-        process: ProcessVersion(7),
-        light: lightcraft_develop::Light { exposure: 0.8, ..Default::default() },
-        ..Default::default()
-    };
+    let edit =
+        DevelopSettings { process: ProcessVersion(7), light: dac_develop::Light { exposure: 0.8, ..Default::default() }, ..Default::default() };
     let op = Op::SetDevelop { id, settings: Arc::new(edit), label: "Edit".into(), edited: None };
     let body = serde_json::to_string(&op).unwrap().replace(r#""process":7"#, r#""process":"seven""#);
     assert!(body.contains("seven"));

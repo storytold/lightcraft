@@ -41,7 +41,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use lightcraft_catalog::{Catalog, Filter, Op, Photo, PhotoId, Sort, Source};
+use dac_catalog::{Catalog, Filter, Op, Photo, PhotoId, Sort, Source};
 use serde::Serialize;
 
 use crate::import::{ImportCandidate, ImportMode, ImportOptions, ScanInput, ScanProgress};
@@ -165,7 +165,7 @@ impl SyncInput {
         if path.is_empty() {
             return Err(invalid("missing `path`"));
         }
-        if lightcraft_catalog::folders::is_startup_disk(path) {
+        if dac_catalog::folders::is_startup_disk(path) {
             return Err(invalid("choose a folder, not the whole startup disk"));
         }
         let f = Filter { library_folder: Some(path.to_string()), ..Default::default() };
@@ -173,7 +173,7 @@ impl SyncInput {
         if ids.is_empty() {
             return Err(invalid(format!("{path}: no photo in the library was imported from it")));
         }
-        if !disk && (lightcraft_catalog::folders::is_disk_root(path) || crate::cmd::library::covers_other_disks(s, path, &ids)) {
+        if !disk && (dac_catalog::folders::is_disk_root(path) || crate::cmd::library::covers_other_disks(s, path, &ids)) {
             return Err(invalid(format!("{path} is a whole disk or holds disks: pass `disk: true` to synchronize it")));
         }
         let namings = s.sidecar_namings(&ids);
@@ -250,7 +250,7 @@ fn same_for_sync(a: &Arc<Photo>, b: &Arc<Photo>) -> bool {
     if Arc::ptr_eq(a, b) {
         return true;
     }
-    let meta = |p: &Photo| lightcraft_catalog::Meta { regions: Vec::new(), ..p.meta.clone() };
+    let meta = |p: &Photo| dac_catalog::Meta { regions: Vec::new(), ..p.meta.clone() };
     (&a.source, a.deleted, a.local, a.copy_of, &a.content_hash, a.file_size, a.rating, a.flag, a.label, &a.captured, &a.edited, &a.develop)
         == (&b.source, b.deleted, b.local, b.copy_of, &b.content_hash, b.file_size, b.rating, b.flag, b.label, &b.captured, &b.edited, &b.develop)
         && meta(a) == meta(b)
@@ -398,7 +398,7 @@ impl Session {
     /// gets done. Used once. (Changes elsewhere in the library don't matter.)
     pub fn take_folder_changes(&mut self, path: &str) -> Option<FolderChanges> {
         let c = self.folder_changes.take()?;
-        if lightcraft_catalog::query::folder_key(&c.path) != lightcraft_catalog::query::folder_key(path) {
+        if dac_catalog::query::folder_key(&c.path) != dac_catalog::query::folder_key(path) {
             return None;
         }
         let f = Filter { library_folder: Some(path.to_string()), ..Default::default() };
@@ -422,7 +422,7 @@ fn sidecar_has_news(labels: &Catalog, p: &Photo, naming: SidecarNaming) -> bool 
     }
     let saved = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs());
     let Some(saved) = saved.and_then(|s| i64::try_from(s).ok()) else { return false };
-    let seen = [Some(p.imported.as_str()), p.edited.as_deref()].into_iter().flatten().filter_map(lightcraft_catalog::stacks::iso_seconds).max();
+    let seen = [Some(p.imported.as_str()), p.edited.as_deref()].into_iter().flatten().filter_map(dac_catalog::stacks::iso_seconds).max();
     if seen.is_some_and(|t| saved <= t) {
         return false;
     }

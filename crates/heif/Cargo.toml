@@ -1,11 +1,12 @@
 [package]
-name = "lightcraft-heif"
-description = "Optional HEIF/HEIC still-image decoder for LightCraft (heic-rs for the container and HEVC, libheif-matching colour conversion, panic-guarded)"
+name = "dac-heif"
+description = "Optional HEIF/HEIC still-image decoder (heic-rs for the container and HEVC, libheif-matching colour conversion, panic-guarded)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+dac-brand = { workspace = true }
 # Pure Rust, no unsafe. Pinned exactly: a young, single-owner crate that parses untrusted files;
 # moving the pin is a reviewed change (re-run the heif tests and the codecs corpus tests).
 # Mirrors PhotoCraft's photocraft-heif (same team, same decision): heic-rs was chosen over the
@@ -19,7 +20,7 @@ heic-rs = { version = "=0.1.1", default-features = false, features = ["std", "pa
 rayon = { workspace = true }
 
 [features]
-# `lightcraft_heif::testdata`: lossless synthetic HEIF files, for the tests of the crates above.
+# `dac_heif::testdata`: lossless synthetic HEIF files, for the tests of the crates above.
 testdata = []
 
 [lints]

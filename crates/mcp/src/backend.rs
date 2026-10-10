@@ -22,7 +22,7 @@ pub trait Backend {
 /// `(completed photos, total photos, next filename)`; false stops before the next photo.
 pub type ProgressHook = Box<dyn FnMut(usize, usize, &str) -> bool + Send>;
 
-/// A running LightCraft app, reached through its loopback control port.
+/// A running desktop app, reached through its loopback control port.
 pub struct Remote {
     addr: String,
     conn: Option<(BufReader<TcpStream>, TcpStream)>,
@@ -95,7 +95,12 @@ impl Backend for Remote {
                 self.conn = None;
                 self.roundtrip(&line).map_err(|e| {
                     self.conn = None;
-                    format!("LightCraft app at {} is not reachable: {e} (start it with `lightcraft --control PORT`)", self.addr)
+                    format!(
+                        "{} at {} is not reachable: {e} (start it with `{} --control PORT`)",
+                        dac_brand::DISPLAY_NAME,
+                        self.addr,
+                        dac_brand::BINARY
+                    )
                 })?
             }
         };

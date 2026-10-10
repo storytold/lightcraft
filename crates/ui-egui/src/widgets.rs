@@ -2,8 +2,8 @@
 //! flyout rows, bordered buttons. Every interactive widget registers an automation id + rect
 //! ([`register`]) so the control channel can find and click it by name.
 
+use dac_develop::{ControlSpec, Track};
 use egui::{Align2, Color32, CornerRadius, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use lightcraft_develop::{ControlSpec, Track};
 
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
@@ -45,8 +45,14 @@ pub fn preview_only_variant(reason: &str) -> &str {
 
 /// What a preview-only raw means for the user (see `Photo::preview_only`).
 pub fn preview_only_explanation(reason: &str) -> String {
+    if reason.starts_with("Immich link only") {
+        return crate::i18n::tr(
+            "Linked from Immich: you see the server's preview until the original is downloaded (it is when the photo is opened in Develop).",
+        )
+        .to_string();
+    }
     crate::i18n::tr_format!(
-        "LightCraft can't decode this raw variant yet ({}). You're editing the camera's embedded JPEG preview, which already includes the camera's picture style (e.g. Monochrome) and white balance.",
+        "{app} can't decode this raw variant yet ({}). You're editing the camera's embedded JPEG preview, which already includes the camera's picture style (e.g. Monochrome) and white balance.",
         preview_only_variant(reason)
     )
 }
@@ -493,6 +499,7 @@ pub fn stars(ui: &mut Ui, id: &str, rating: u8, size: f32) -> Option<u8> {
         for i in 0..5u8 {
             let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
             register(ui.ctx(), format!("star:{id}:{}", i + 1), r);
+            crate::access::named(&resp, egui::WidgetType::RadioButton, &format!("{} {}", crate::i18n::tr("Rating"), i + 1));
             if resp.hovered() {
                 h = Some(i + 1);
             }
@@ -532,7 +539,7 @@ mod tests {
         let spec = |id, min, max, step| ControlSpec {
             id,
             label: "",
-            section: lightcraft_develop::controls::Section::Light,
+            section: dac_develop::controls::Section::Light,
             min,
             max,
             default: 0.0,
@@ -549,9 +556,9 @@ mod tests {
     /// Typed values (issue #322): signs, a decimal comma, units; on the control's steps, in range.
     #[test]
     fn typed_values_are_stepped_and_clamped() {
-        let exposure = lightcraft_develop::controls::find("light.exposure").unwrap();
-        let contrast = lightcraft_develop::controls::find("light.contrast").unwrap();
-        let temp = lightcraft_develop::controls::find("wb.temp").unwrap();
+        let exposure = dac_develop::controls::find("light.exposure").unwrap();
+        let contrast = dac_develop::controls::find("light.contrast").unwrap();
+        let temp = dac_develop::controls::find("wb.temp").unwrap();
         assert_eq!(typed_value(exposure, "1.5"), Some(1.5));
         assert_eq!(typed_value(exposure, " +0,25 "), Some(0.25));
         assert_eq!(typed_value(exposure, "-12"), Some(exposure.min), "clamped");
@@ -575,7 +582,7 @@ mod access_tests {
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx);
         ctx.enable_accesskit();
-        let spec = lightcraft_develop::controls::find("light.exposure").unwrap();
+        let spec = dac_develop::controls::find("light.exposure").unwrap();
         let mut found = Vec::new();
         for _ in 0..3 {
             let out = ctx.run_ui(egui::RawInput::default(), |ui| {

@@ -1,51 +1,40 @@
 <p align="center">
-  <a href="https://getartcraft.com/">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/brand/artcraft-logo-white.svg">
-      <img alt="ArtCraft" src="docs/brand/artcraft-logo.svg" width="200">
-    </picture>
-  </a>
+  <img alt="" src="brand/logo.svg" width="120">
 </p>
 
-
-<h1 align="center">LightCraft</h1>
-
-<h3 align="center">Your photos. Your pixels. Your machine.</h3>
+<h1 align="center">Your photos. Your pixels. Your machine.</h1>
 
 <p align="center">
   <b>Photo library and raw development; an open-source, clean-room reimplementation of Adobe Lightroom, rebuilt in pure Rust.</b><br>
   Native on macOS, Windows and Linux. In the browser via WebAssembly. Drivable end to end by AI agents over MCP.
 </p>
 
-<p align="center">
-  <img alt="Pure Rust" src="https://img.shields.io/badge/pure-Rust-f2a516?style=flat-square&logo=rust&logoColor=white">
-  <img alt="macOS, Windows, Linux and Web" src="https://img.shields.io/badge/macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20Web-8a5800?style=flat-square">
-  <img alt="MCP server included" src="https://img.shields.io/badge/MCP-ready-8a5800?style=flat-square">
-  <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-8a5800?style=flat-square">
-  <a href="ROADMAP.md"><img alt="Status: young and moving fast" src="https://img.shields.io/badge/status-young%20%26%20moving%20fast-f2a516?style=flat-square"></a>
-</p>
-
-<p align="center">
-  <a href="https://discord.gg/artcraft"><img alt="Join the ArtCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
-</p>
-
-<p align="center">
-  <a href="https://getartcraft.com/apps/lightcraft"><b>LightCraft on getartcraft.com</b></a> ·
-  <a href="https://getartcraft.com/">ArtCraft</a> ·
-  <a href="https://getartcraft.com/apps">All Crafting Apps</a>
-</p>
-
-<br>
-
-<p align="center">
-  <img src="docs/images/hero-tetons.jpg" alt="LightCraft's Edit view with Ansel Adams' The Tetons and the Snake River in the loupe, the Light and Effects panels open on the right, and the four showcase photos in the filmstrip" width="100%">
-  <br>
-  <sub><i>Ansel Adams, "The Tetons and the Snake River" (1942). Public domain, U.S. National Archives. Developed in LightCraft.</i></sub>
-</p>
+> [!NOTE]
+> **Open for contributions** (since 2026-10-11). Phases 0, 1, U, 3, 4 and 6 are done; pull requests and bug reports
+> are welcome. Changes to crates shared with the upstream project go upstream as PRs first (see
+> [`docs/upstream-merge.md`](docs/upstream-merge.md) and `upstream-owned.txt`). Especially wanted: native-speaker review
+> of the translations, tethering tests on real Canon, Nikon and Sony bodies, and printing to real CUPS printers.
+>
+> Timeline (clock-hours assume continuous agent-driven development):
+>
+> | Phase | Agent-hours<br>estimate | Clock-hours<br>estimate | Status | Clock-hours<br>actual |
+> |---|---:|---:|---|---|
+> | 0 Fork, brand config and foundations | 12–22 | 2 | Done | 1.5 |
+> | 1 Classic shell, catalog, Immich link | 50–85 | 8 | Done | ~9 |
+> | U Upstream tracking | 8–14 | 1 | Done (follow-ups ongoing) | ~2 |
+> | 3 Output modules | 72–124 | 12 | Done (slideshow video export after release) | ~4 (with 4) |
+> | 4 Workflow power features, Immich two-way | 60–105 | 10 | Done (People, .lrcat v2 after release; real-camera checks pending) | ~4 (with 3) |
+> | 6 Hardening (public-release gate) | 30–50 | 5 | Done | ~3 |
+> | **Public: open for pull requests and bug reports (reached 2026-10-11).** From here on, every change to a crate shared with upstream goes upstream as a PR. | | | | |
+> | 2 Quality and camera coverage | 110–180 | 18 | | |
+> | 5 AI, HDR, video | 100–200 | 20 | | |
+> | **Total** | **≈ 442–780** | **78** | | |
 
 > [!NOTE]
-> **ArtCraft is a community of artists from all walks of life.** Digital, generative, music,
-> games &mdash; if you make things, you're one of us. **[Come say hi on Discord](https://discord.gg/artcraft).**
+> The product name, binary names, settings folder and environment-variable prefix are set in one place,
+> [`brand.toml`](brand.toml). This README calls the product "the app"; `<app>`, `<binary>`, `<cli>`, `<mcp_server>`
+> and `<settings_dir>` stand for `display_name`, `binary`, `cli_binary`, `mcp_server` and `settings_dir`, and
+> `<PREFIX>` for `env_prefix`, from that file.
 
 <p align="center">
   <a href="#edit-like-you-mean-it">Editing</a> ·
@@ -59,15 +48,14 @@
   <a href="#feature-status">Status</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="ROADMAP.md">Roadmap</a> ·
-  <a href="#downloads">Downloads</a> ·
-  <a href="#the-crafting-apps">Crafting Apps</a>
+  <a href="#downloads">Downloads</a>
 </p>
 
 <br>
 
 ## Edit like you mean it
 
-LightCraft is a complete darkroom in a single native app. Every adjustment is **non-destructive**, so your originals
+The app is a complete darkroom in a single native app. Every adjustment is **non-destructive**, so your originals
 are never touched. Every slider renders through a **scene-referred, wide-gamut, 32-bit float pipeline**: highlights
 roll off like film, shadows open up without halos, and colour stays clean from capture to export.
 
@@ -125,7 +113,7 @@ Split-tone shadows, midtones and highlights independently with drag-anywhere col
 ## Before & after
 
 Hold <kbd>\\</kbd> to peek at the original, press <kbd>Y</kbd> for side by side, or <kbd>Shift</kbd>+<kbd>Y</kbd> for a
-split view. Every image below is a real screenshot of LightCraft, captured automatically by an agent through the
+split view. Every image below is a real screenshot of the app, captured automatically by an agent through the
 [control channel](#built-for-agents).
 
 <table>
@@ -152,7 +140,7 @@ plus an overall Amount.
 <p align="center">
   <img src="docs/images/masking.jpg" alt="Masking panel with a linear Sky mask and a radial Sun glow mask; the radial gradient is drawn as a red overlay around the sun on a lake scene" width="100%">
   <br>
-  <sub>A radial "Sun glow" mask (Temp +40, Exposure +0.50) layered over a linear "Sky" mask. <i>Photo from LightCraft's procedurally generated demo library.</i></sub>
+  <sub>A radial "Sun glow" mask (Temp +40, Exposure +0.50) layered over a linear "Sky" mask. <i>Photo from the app's procedurally generated demo library.</i></sub>
 </p>
 
 <br>
@@ -218,12 +206,12 @@ so they stay smooth whether you have forty photos or forty thousand.
 
 ## Built for agents
 
-Every menu item, slider, brush stroke, crop handle and keystroke in LightCraft is a **command** with a stable id and
+Every menu item, slider, brush stroke, crop handle and keystroke in the app is a **command** with a stable id and
 JSON parameters. The UI, the keyboard, the CLI, a JSON-lines control channel and an **MCP server** all dispatch
 through the same entry point. An agent can cull a shoot, develop it, mask a sky and export it, and *see* the result.
 
 ```sh
-lightcraft --control 7980 ~/Pictures/trip
+<binary> --control 7980 ~/Pictures/trip
 ```
 ```jsonc
 {"method": "engine.execute", "params": {"command": "photo.flag",  "params": {"flag": "pick"}}}
@@ -236,18 +224,18 @@ lightcraft --control 7980 ~/Pictures/trip
 
 - **Command registry.** `engine.commands` lists the available commands; `develop.controls` lists every slider's
   range, default and current value.
-- **MCP server.** `lightcraft-cli mcp` exposes the command registry to Claude (or any MCP client), alongside
+- **MCP server.** `<cli> mcp` exposes the command registry to Claude (or any MCP client), alongside
   helpers for import, query, develop, mask, render (returned as an image) and export. It runs headless, or attached
   to the running app with screenshots, clicks and gestures. See [docs/mcp.md](docs/mcp.md).
 
   ```sh
-  cargo build --release -p lightcraft-cli
-  claude mcp add lightcraft -- "$PWD/target/release/lightcraft-cli" mcp ~/Pictures/shoot          # headless
-  claude mcp add lightcraft-app -- "$PWD/target/release/lightcraft-cli" mcp --connect 127.0.0.1:7980  # live app
+  cargo build --release -p dac-cli
+  claude mcp add <mcp_server> -- "$PWD/target/release/app-cli" mcp ~/Pictures/shoot          # headless
+  claude mcp add <mcp_server>-app -- "$PWD/target/release/app-cli" mcp --connect 127.0.0.1:7980  # live app
   ```
-- **Scriptable CLI:** `lightcraft-cli run --import in.dng develop.set control=light.exposure value=0.7 app.export
+- **Scriptable CLI:** `<cli> run --import in.dng develop.set control=light.exposure value=0.7 app.export
   path=out.jpg longEdge=2048` runs any chain of commands (headless, on a saved library, or against the running app)
-  and prints one JSON result per command; `lightcraft-cli render in.dng -o out.jpg --set light.exposure=0.7 --preset …`.
+  and prints one JSON result per command; `<cli> render in.dng -o out.jpg --set light.exposure=0.7 --preset …`.
 - **Undo for everything**, including agent actions: a slider drag (or a scripted burst of updates) is one undo step.
 - **Contact sheets (native app / CLI):** select photos, then **File → Contact Sheet PDF…**. Choose A4 or Letter, landscape,
   rows/columns and filename captions; save a paginated PDF and print it from your PDF viewer. Exports use the
@@ -255,7 +243,7 @@ lightcraft --control 7980 ~/Pictures/trip
   supports cancellation and protects originals and XMP sidecars. From the CLI:
 
   ```sh
-  lightcraft-cli run --import ~/Pictures/shoot library.selectAll export.contactSheet path=Contact.pdf paper=a4 columns=3 rows=4 captions=true
+  <cli> run --import ~/Pictures/shoot library.selectAll export.contactSheet path=Contact.pdf paper=a4 columns=3 rows=4 captions=true
   ```
 
   `export.contactSheet` also accepts explicit `ids`, `landscape=true`, and `paper=letter`. It replaces an existing
@@ -297,7 +285,7 @@ lightcraft --control 7980 ~/Pictures/trip
 
 ## Feature status
 
-LightCraft is young and moving fast. **Where we honestly stand** (details in the [roadmap](ROADMAP.md#where-we-stand)):
+The app is young and moving fast. **Where we honestly stand** (details in the [roadmap](ROADMAP.md#where-we-stand)):
 
 - **By feature count we're at ~79%** of Lightroom (core features 98%), tracked row by row in
   [docs/parity.md](docs/parity.md).
@@ -342,15 +330,21 @@ LightCraft is young and moving fast. **Where we honestly stand** (details in the
 ## Quick start
 
 ```sh
-git clone https://github.com/storytold/lightcraft && cd lightcraft
-cargo run --release -p lightcraft                       # opens your library (~/Pictures/LightCraft Library; a new one starts with demo photos)
-cargo run --release -p lightcraft -- ~/Pictures/trip    # import your photos (folders are scanned, duplicates skipped)
-cargo run --release -p lightcraft -- --memory           # a throwaway in-memory demo session (writes nothing)
-cargo run --release -p lightcraft -- --control 7980     # with the automation channel
+git clone https://example.invalid/repo && cd repo
+cargo xtask brand check                                 # the product name lives only in brand.toml
+cargo xtask run                                         # build and open your library (~/Pictures/<app> Library; a new one starts with demo photos)
+cargo xtask run -- ~/Pictures/trip                      # import your photos (folders are scanned, duplicates skipped)
+cargo xtask run -- --memory                             # a throwaway in-memory demo session (writes nothing)
+cargo xtask run -- --control 7980                       # with the automation channel
 cargo xtask web --serve                                 # the same app in the browser: http://127.0.0.1:8080/
-cargo run --release -p lightcraft-cli -- render photo.jpg -o out.jpg --set light.exposure=0.5
+cargo run --release -p dac-cli -- render photo.jpg -o out.jpg --set light.exposure=0.5
+cargo xtask package                                     # installers and archives under the brand binary names
+cargo xtask install                                     # install the app and CLI for the current user
 cargo xtask ci                                          # fmt, clippy, tests, layering, wasm checks
 ```
+
+Inside `target/` the binaries are always called `app` and `app-cli`; `cargo xtask run`, `package` and `install`
+give them the brand names from `brand.toml`. `cargo run -p dac-app` / `-p dac-cli` also work for development.
 
 CI defaults to line-table debug information and one build job per 1.5 GB of RAM
 available when it starts (at most one per CPU; 4 if memory can't be read), so an
@@ -364,56 +358,56 @@ override these defaults. Ordinary development commands keep their own settings.
 
 ```sh
 git clone https://github.com/storytold/craft-fonts ../craft-fonts
-CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p lightcraft
+CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p dac-app
 ```
 
-Without it LightCraft builds and runs the same, but Chinese and Japanese text have no glyphs. Fonts are never committed to this
+Without it the app builds and runs the same, but Chinese and Japanese text have no glyphs. Fonts are never committed to this
 repo; see [craftrules `standards/fonts.md`](https://github.com/storytold/craftrules/blob/main/standards/fonts.md).
 
 **Interface language:** **Edit → Language** (English, 简体中文, 繁體中文（台灣）, 日本語, Português (Brasil), Español, Deutsch, Русский, Français) or **Settings → General →
 Language**; the choice applies immediately and persists. See [docs/localization.md](docs/localization.md).
 
-**Logs:** the desktop app writes its log to standard error and to `logs/lightcraft.log` in its settings folder
-(Linux `$XDG_CONFIG_HOME/lightcraft/logs/`, by default `~/.config/lightcraft/logs/`; macOS
-`~/Library/Application Support/LightCraft/logs/`; Windows `%APPDATA%\LightCraft\logs\`), never in the library. A
+**Logs:** the desktop app writes its log to standard error and to `logs/<binary>.log` in its settings folder
+(Linux `$XDG_CONFIG_HOME/<settings_dir>/logs/`, by default `~/.config/<settings_dir>/logs/`; macOS
+`~/Library/Application Support/<settings_dir>/logs/`; Windows `%APPDATA%\<settings_dir>\logs\`), never in the library. A
 launch from a desktop menu or the Dock has no terminal, so attach this file to a bug report (**Help ▸ Open Log
 Folder** shows it in the file manager). Each start moves the
-previous log to `lightcraft.1.log` and that one to `lightcraft.2.log`, so the log of a run that crashed survives the
+previous log to `<binary>.1.log` and that one to `<binary>.2.log`, so the log of a run that crashed survives the
 next start; the file stops growing at 16 MiB, `--version` and `--help` write none, and runs with
-`LIGHTCRAFT_NO_PREFS` log to standard error only. By default LightCraft's own crates log at `info` and everything else
-at `warn`. `LIGHTCRAFT_LOG=info` or `debug` works as before (that level for LightCraft's own crates, warnings and
+`<PREFIX>_NO_PREFS` log to standard error only. By default the app's own crates log at `info` and everything else
+at `warn`. `<PREFIX>_LOG=info` or `debug` works as before (that level for the app's own crates, warnings and
 errors from the rest; any other value: warnings and errors only) and wins over `RUST_LOG`, which otherwise replaces
-the default with env_logger-style directives such as `RUST_LOG=debug` or `RUST_LOG=warn,lightcraft_pipeline=trace` (a
-directive ending in `*` covers every target starting with it, as in `lightcraft*=debug`). Panics are recorded there
-too, and still in `lightcraft-panics.log` in the temp folder. The logger is `apps/lightcraft/src/logging.rs`.
+the default with env_logger-style directives such as `RUST_LOG=debug` or `RUST_LOG=warn,dac_pipeline=trace` (a
+directive ending in `*` covers every target starting with it, as in `dac*=debug`). Panics are recorded there
+too, and still in `<binary>-panics.log` in the temp folder. The logger is `apps/app/src/logging.rs`.
 
 The web build needs the `wasm32-unknown-unknown` target and the matching `wasm-bindgen` CLI
 (`cargo xtask web` prints the exact install command); see [docs/web.md](docs/web.md).
 
-**Nix** builds the desktop app and `lightcraft-cli` (the Nix build always includes the craft-fonts input, so Japanese
+**Nix** builds the desktop app and `<cli>` (the Nix build always includes the craft-fonts input, so Japanese
 text has glyphs):
 
 ```sh
-nix run github:storytold/lightcraft                    # the desktop app
-nix build github:storytold/lightcraft                  # → ./result/bin/{lightcraft,lightcraft-cli}
-nix develop github:storytold/lightcraft                # rust toolchain + native deps + fonts
+nix run <flake-url>                    # the desktop app
+nix build <flake-url>                  # → ./result/bin/{<binary>,<cli>}
+nix develop <flake-url>                # rust toolchain + native deps + fonts
 ```
 
 In a flake configuration (NixOS, home-manager, nix-darwin):
 
 ```nix
 # flake.nix
-inputs.lightcraft.url = "github:storytold/lightcraft";
-# optional: build against your own nixpkgs instead of the one LightCraft pins
-# inputs.lightcraft.inputs.nixpkgs.follows = "nixpkgs";
+inputs.app.url = "<flake-url>";
+# optional: build against your own nixpkgs instead of the one the app pins
+# inputs.app.inputs.nixpkgs.follows = "nixpkgs";
 
 # then, in a NixOS or home-manager module (where `inputs` is in scope):
-nixpkgs.overlays = [ inputs.lightcraft.overlays.default ];   # makes `pkgs.lightcraft` available
-environment.systemPackages = [ pkgs.lightcraft ];           # home-manager: home.packages = [ pkgs.lightcraft ];
+nixpkgs.overlays = [ inputs.app.overlays.default ];   # makes `pkgs.<binary>` available
+environment.systemPackages = [ pkgs.<binary> ];           # home-manager: home.packages = [ pkgs.<binary> ];
 ```
 
 `nix build` installs the same desktop file, hicolor icons and AppStream metadata as the .deb/.rpm, and runs
-`cargo test --workspace` as its check phase (skip it with `pkgs.lightcraft.overrideAttrs { doCheck = false; }`).
+`cargo test --workspace` as its check phase (skip it with `pkgs.<binary>.overrideAttrs { doCheck = false; }`).
 
 **Keyboard:** <kbd>G</kbd> grid · <kbd>D</kbd> detail · <kbd>E</kbd> edit · <kbd>C</kbd> crop · <kbd>M</kbd> masking ·
 <kbd>Shift</kbd>+<kbd>P</kbd> presets · <kbd>\\</kbd> original · <kbd>Y</kbd> before/after · <kbd>Z</kbd> zoom ·
@@ -423,8 +417,8 @@ environment.systemPackages = [ pkgs.lightcraft ];           # home-manager: home
 
 An engine-first Cargo workspace of small, tested crates with enforced layering (`cargo xtask layers`): `geom`,
 `color`, `raster`, `tiff` → `raw`, `codecs`, `meta`, `develop` → `pipeline` → `catalog` → `engine` → `ui-egui`. The
-egui frontend is one swappable crate; nothing below it knows a UI exists. `mcp` and the apps (`lightcraft`,
-`lightcraft-cli`) sit on top of `engine`.
+egui frontend is one swappable crate; nothing below it knows a UI exists. `mcp` and the apps (`app`,
+`<cli>`) sit on top of `engine`.
 
 ## Contributing
 
@@ -442,128 +436,75 @@ Humans and agents follow the same rules, so read [AGENTS.md](AGENTS.md) first. T
   `unsafe`, checked indexing on anything derived from input, and a regression test with every crash fix. Details in
   [AGENTS.md](AGENTS.md#never-crash-outranks-feature-work).
 
-Questions, ideas or a bug you'd like to talk through first? Bring them to [Discord](https://discord.gg/artcraft).
-
 <br>
 
 ## Downloads
 
-**New to LightCraft?** Download it from the [LightCraft page on getartcraft.com](https://getartcraft.com/apps/lightcraft). That's the easiest way to install it.
-
-**Want a specific build or format?** On GitHub, the [latest release](https://github.com/storytold/lightcraft/releases/latest) has every build listed below, and [all releases](https://github.com/storytold/lightcraft/releases) has earlier versions and their notes. `<ver>` in the file names is the version number, and `SHA256SUMS.txt` lists a checksum for every file.
+Release builds are listed on the project's releases page. `<ver>` in the file names is the version number,
+`<binary>`/`<cli>` are the brand binary names, and `SHA256SUMS.txt` lists a checksum for every file. Build them yourself
+with `cargo xtask package`.
 
 ### Windows
 
 | Build | Installer | Portable |
 |---|---|---|
-| x64 (64-bit Intel/AMD) | `lightcraft-<ver>-windows-x64.msi` | `lightcraft-<ver>-windows-x64-portable.zip` |
-| arm64 (Snapdragon and other ARM PCs) | `lightcraft-<ver>-windows-arm64.msi` | `lightcraft-<ver>-windows-arm64-portable.zip` |
-| x86 (32-bit) | `lightcraft-<ver>-windows-x86.msi` | `lightcraft-<ver>-windows-x86-portable.zip` |
+| x64 (64-bit Intel/AMD) | `<binary>-<ver>-windows-x64.msi` | `<binary>-<ver>-windows-x64-portable.zip` |
+| arm64 (Snapdragon and other ARM PCs) | `<binary>-<ver>-windows-arm64.msi` | `<binary>-<ver>-windows-arm64-portable.zip` |
+| x86 (32-bit) | `<binary>-<ver>-windows-x86.msi` | `<binary>-<ver>-windows-x86-portable.zip` |
 
-Installers and executables are code-signed. The installer asks where to install (`C:\Program Files\LightCraft` by
-default; upgrades stay in the folder you chose) and ends on a page confirming LightCraft was installed, with an
-option to start it. For unattended installs: `msiexec /i lightcraft-<ver>-windows-x64.msi /qn INSTALLFOLDER="D:\Apps\LightCraft\"`.
+Installers and executables are code-signed. The installer asks where to install (`C:\Program Files\<app>` by
+default; upgrades stay in the folder you chose) and ends on a page confirming the app was installed, with an
+option to start it. For unattended installs: `msiexec /i <binary>-<ver>-windows-x64.msi /qn INSTALLFOLDER="D:\Apps\<app>\"`.
 
 ### macOS
 
 | Build | File | Notes |
 |---|---|---|
-| App, universal (Apple silicon + Intel) | `lightcraft-<ver>-macos-universal.dmg` | Signed and notarized |
-| Command-line tool, universal | `lightcraft-cli-<ver>-macos-universal.zip` | Signed and notarized |
+| App, universal (Apple silicon + Intel) | `<binary>-<ver>-macos-universal.dmg` | Signed and notarized |
+| Command-line tool, universal | `<cli>-<ver>-macos-universal.zip` | Signed and notarized |
 
 ### Linux
 
 | Format | x86_64 | aarch64 (ARM64) | Notes |
 |---|---|---|---|
-| AppImage | `lightcraft-<ver>-linux-x86_64.AppImage` | `lightcraft-<ver>-linux-aarch64.AppImage` | Runs anywhere; updates itself with [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) (`.zsync` files) |
-| Flatpak | `lightcraft-<ver>-linux-x86_64.flatpak` | `lightcraft-<ver>-linux-aarch64.flatpak` | Sandboxed; `flatpak install --user <file>` |
-| Debian/Ubuntu | `lightcraft-<ver>-linux-x86_64.deb` | `lightcraft-<ver>-linux-aarch64.deb` | |
-| Fedora/RHEL/openSUSE | `lightcraft-<ver>-linux-x86_64.rpm` | `lightcraft-<ver>-linux-aarch64.rpm` | |
-| Tarball | `lightcraft-<ver>-linux-x86_64.tar.gz` | `lightcraft-<ver>-linux-aarch64.tar.gz` | Unpack anywhere |
+| AppImage | `<binary>-<ver>-linux-x86_64.AppImage` | `<binary>-<ver>-linux-aarch64.AppImage` | Runs anywhere; updates itself with [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) (`.zsync` files) |
+| Flatpak | `<binary>-<ver>-linux-x86_64.flatpak` | `<binary>-<ver>-linux-aarch64.flatpak` | Sandboxed; `flatpak install --user <file>` |
+| Debian/Ubuntu | `<binary>-<ver>-linux-x86_64.deb` | `<binary>-<ver>-linux-aarch64.deb` | |
+| Fedora/RHEL/openSUSE | `<binary>-<ver>-linux-x86_64.rpm` | `<binary>-<ver>-linux-aarch64.rpm` | |
+| Tarball | `<binary>-<ver>-linux-x86_64.tar.gz` | `<binary>-<ver>-linux-aarch64.tar.gz` | Unpack anywhere |
 
 ### FreeBSD
 
 | Build | File |
 |---|---|
-| x86_64 | `lightcraft-<ver>-freebsd-x86_64.tar.gz` |
+| x86_64 | `<binary>-<ver>-freebsd-x86_64.tar.gz` |
 
 ### Web (WebAssembly)
 
 | Build | File | Notes |
 |---|---|---|
-| Static site | `lightcraft-web-<ver>.zip` | Runs in a modern browser; host it on any static server |
-
-<br>
-
-## The Crafting Apps
-
-LightCraft is one of the **Crafting Apps**: free, open-source creative tools from the
-[ArtCraft](https://getartcraft.com/) team, each written from scratch in Rust and each able to
-stand on its own.
-
-| | App | What it's for | Code | Learn more |
-|:-:|---|---|---|---|
-| <img src="https://raw.githubusercontent.com/storytold/photocraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.photocraft.png" alt="" width="32" height="32"> | **PhotoCraft** | Image editing: layers, masks, type and real PSD files | [GitHub](https://github.com/storytold/photocraft) | [Website](https://getartcraft.com/apps/photocraft) |
-| <img src="https://raw.githubusercontent.com/storytold/vectorcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.vectorcraft.png" alt="" width="32" height="32"> | **VectorCraft** | Vector illustration | [GitHub](https://github.com/storytold/vectorcraft) | [Website](https://getartcraft.com/apps/vectorcraft) |
-| <img src="https://raw.githubusercontent.com/storytold/filmcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.filmcraft.png" alt="" width="32" height="32"> | **FilmCraft** | Video editing, color and sound | [GitHub](https://github.com/storytold/filmcraft) | [Website](https://getartcraft.com/apps/filmcraft) |
-| <img src="https://raw.githubusercontent.com/storytold/lightcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.lightcraft.png" alt="" width="32" height="32"> | **LightCraft** | **Photo library and raw development · you are here** | [GitHub](https://github.com/storytold/lightcraft) | [Website](https://getartcraft.com/apps/lightcraft) |
-| <img src="https://raw.githubusercontent.com/storytold/pdfcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.pdfcraft.png" alt="" width="32" height="32"> | **PdfCraft** | Reading, organizing and protecting PDFs | [GitHub](https://github.com/storytold/pdfcraft) | [Website](https://getartcraft.com/apps/pdfcraft) |
-| <img src="https://raw.githubusercontent.com/storytold/effectcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.effectcraft.png" alt="" width="32" height="32"> | **EffectCraft** | Motion graphics and visual effects | [GitHub](https://github.com/storytold/effectcraft) | [Website](https://getartcraft.com/apps/effectcraft) |
-| <img src="https://raw.githubusercontent.com/storytold/designcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.designcraft.png" alt="" width="32" height="32"> | **DesignCraft** | Page layout and publishing | [GitHub](https://github.com/storytold/designcraft) | [Website](https://getartcraft.com/apps/designcraft) |
-
-And [**ArtCraft**](https://getartcraft.com/) itself, our AI image and video studio for artists who want real control.
-
-<br>
-
-<p align="center">
-  <a href="https://discord.gg/artcraft"><img alt="Join the ArtCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
-</p>
-
-<h3 align="center">Come make things with us</h3>
-
-<p align="center">
-  Our Discord is where artists of every kind hang out: people who paint, shoot, draw, cut film,
-  set type, and people still figuring out what they like to make. Share what you're working on,
-  ask for help, tell us what's broken, or tell us what you wish these tools could do.
-  Whatever your medium and however long you've been at it, you're welcome here.
-</p>
-
-<p align="center">
-  <a href="https://discord.gg/artcraft"><b>discord.gg/artcraft</b></a> ·
-  <a href="https://getartcraft.com/">getartcraft.com</a> ·
-  <a href="https://getartcraft.com/apps">The Crafting Apps</a> ·
-  <a href="https://getartcraft.com/apps/lightcraft">LightCraft</a>
-</p>
+| Static site | `<binary>-web-<ver>.zip` | Runs in a modern browser; host it on any static server |
 
 <br>
 
 ## License and credits
 
-LightCraft is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
-Copyright (c) 2026 ArtCraft Team and the LightCraft contributors. Required notices are in [NOTICE](NOTICE).
+The app is licensed under the [MIT License](LICENSE), except `crates/segment` and `crates/fetch`, which are
+Apache-2.0 only. It is a fork of an upstream open-source project; the upstream copyright notices and required
+third-party notices are in [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 Bundled fonts, icons, images and other assets keep their own open licenses; each one is listed
 with its author, source and license in [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md).
 
 Showcase photographs are public-domain works, used via Wikimedia Commons: Ansel Adams, *The Tetons and the Snake River*
 (1942, U.S. National Archives); Dorothea Lange, *Migrant Mother* (1936, Library of Congress); Bill Anders / NASA,
-*Earthrise* (1968); NASA, *The Blue Marble* (1972). The demo library is procedurally generated by LightCraft. UI font:
+*Earthrise* (1968); NASA, *The Blue Marble* (1972). The demo library is procedurally generated by the app. UI font:
 Inter (SIL OFL 1.1). Builds made with [craft-fonts](https://github.com/storytold/craft-fonts) (all official releases)
 also embed its Chinese and Japanese fonts (Noto Sans CJK SC, BIZ UDPGothic, BIZ UDMincho, Shippori Mincho; SIL OFL 1.1), listed in its
 [ATTRIBUTION.md](https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md). All icons are original.
 
-The ArtCraft name, wordmark and logos in [`docs/brand/`](docs/brand/) are trademarks of the
-ArtCraft Team and are not covered by this license. They may be used only unmodified, and only as
-part of this repository and LightCraft, under [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt).
 Forks and modified versions must remove them.
 
-<sub>Adobe, Photoshop, Illustrator, Premiere Pro, Lightroom, Acrobat, After Effects and InDesign are trademarks or registered trademarks of Adobe Inc. in the United States and/or other countries. LightCraft is an independent, open-source project and is not affiliated with, sponsored by or endorsed by Adobe Inc.; these names are used only to describe the workflows it is compatible with.</sub>
+<sub>Adobe, Photoshop, Illustrator, Premiere Pro, Lightroom, Acrobat, After Effects and InDesign are trademarks or registered trademarks of Adobe Inc. in the United States and/or other countries. The app is an independent, open-source project and is not affiliated with, sponsored by or endorsed by Adobe Inc.; these names are used only to describe the workflows it is compatible with.</sub>
 
-<p align="center">
-  <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>
-  <sub>Made by the <a href="https://getartcraft.com/">ArtCraft</a> team and community.</sub>
-</p>
 
-## Star history
-
-[![Star History Chart](https://api.star-history.com/svg?repos=storytold/lightcraft&type=Date&legend=top-left)](https://www.star-history.com/?repos=storytold%2Flightcraft&type=date&legend=top-left)

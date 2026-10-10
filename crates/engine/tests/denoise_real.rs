@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! LC_DENOISE_MODEL=<model_bayer.onnx> LC_DENOISE_RAW=<folder with raw files> \
-//!   cargo test --release -p lightcraft-engine --features denoise --test denoise_real -- --ignored --nocapture
+//!   cargo test --release -p dac-engine --features denoise --test denoise_real -- --ignored --nocapture
 //! ```
 //!
 //! `LC_DENOISE_RAW` is a folder of CC0 raw files (`cargo xtask corpus --download` → `corpus/raw`); every file in it is
@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use lightcraft_engine::Session;
+use dac_engine::Session;
 use serde_json::{Value, json};
 
 fn temp(tag: &str) -> PathBuf {
@@ -25,7 +25,7 @@ fn temp(tag: &str) -> PathBuf {
 }
 
 /// Mean absolute second difference of the luma: the fine detail and the noise of a picture.
-fn roughness(img: &lightcraft_raster::Rgba8) -> f64 {
+fn roughness(img: &dac_raster::Rgba8) -> f64 {
     let (w, h) = (img.width, img.height);
     let luma = |x: usize, y: usize| {
         let p = img.data[y * w + x];
@@ -80,7 +80,7 @@ fn the_real_model_denoises_real_raws_through_the_engine() {
         };
         s.execute("library.select", &json!({"ids": [id]})).unwrap();
         s.execute("develop.set", &json!({"control": "enhance.denoise", "value": 100})).unwrap();
-        let photo = lightcraft_engine::catalog::PhotoId(id);
+        let photo = dac_engine::catalog::PhotoId(id);
         let started = Instant::now();
         let mut state = Value::Null;
         while started.elapsed() < Duration::from_secs(600) {
@@ -106,8 +106,8 @@ fn the_real_model_denoises_real_raws_through_the_engine() {
         assert!(b < a, "{name}: the denoised picture is not smoother");
         // the export is made from the same picture, without asking the queue
         s.execute("develop.set", &json!({"control": "enhance.denoise", "value": 100})).unwrap();
-        let o = lightcraft_engine::export::ExportOptions::from_json(&json!({"format": "jpeg", "width": 1200, "height": 1200}));
-        let e = lightcraft_engine::export::export_photo(&mut s, photo, &o, 1).unwrap();
+        let o = dac_engine::export::ExportOptions::from_json(&json!({"format": "jpeg", "width": 1200, "height": 1200}));
+        let e = dac_engine::export::export_photo(&mut s, photo, &o, 1).unwrap();
         assert!(e.bytes.len() > 1000);
     }
     let status = s.execute("denoise.status", &json!({})).unwrap();

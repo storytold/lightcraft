@@ -6,7 +6,7 @@ the amount of work isn't known), the count and what it's working on, and ✕ if 
 a task that can stop is running. Agents see the same list through `activity.list` / `activity.cancel`, and
 `ui.inspect` reports it as `activity`.
 
-The registry is `lightcraft_engine::activity` (`crates/engine/src/activity.rs`, `Session::activity`). The stack is
+The registry is `dac_engine::activity` (`crates/engine/src/activity.rs`, `Session::activity`). The stack is
 `crates/ui-egui/src/panels/activity.rs`. Every job that can last more than a moment uses it; **don't add a progress
 window, panel or progress toast of your own**. A dialog may still show progress inline (the Synchronize Folder
 dialog counts files while it scans), and a toast at the end saying what happened is fine.
@@ -14,7 +14,7 @@ dialog counts files while it scans), and a toast at the end saying what happened
 ## Adding a task
 
 ```rust
-use lightcraft_engine::activity::{Cancel, Unit};
+use dac_engine::activity::{Cancel, Unit};
 
 // when the job starts, with the cancel flag the worker already checks between files
 let guard = app.session.activity.start("export", "Exporting", Cancel::Flag(cancel.clone()));

@@ -1,5 +1,8 @@
 *~
-plan/
+# Planning documents are local-only (not published)
+/plan/
+/PLAN.md
+/PLAN_phase_*.md
 /target
 /target-*/
 /dist

@@ -77,11 +77,11 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
         default.exists().then(|| default.to_string_lossy().to_string())
     });
     let mut cmd = crate::cargo();
-    cmd.args(["run", "--release", "-q", "-p", "lightcraft-engine", "--example", "render_bench", "--"]);
+    cmd.args(["run", "--release", "-q", "-p", "dac-engine", "--example", "render_bench", "--"]);
     if let Some(f) = &file {
         cmd.arg(f);
     }
-    eprintln!("$ cargo run --release -p lightcraft-engine --example render_bench -- {}", file.as_deref().unwrap_or("(procedural 24 MP source)"));
+    eprintln!("$ cargo run --release -p dac-engine --example render_bench -- {}", file.as_deref().unwrap_or("(procedural 24 MP source)"));
     let out = cmd.output().map_err(|e| format!("render_bench: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     print!("{text}");

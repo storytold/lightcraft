@@ -1,0 +1,26 @@
+[package]
+name = "dac-webgallery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Web gallery generator (L1): our own static HTML/CSS/JS templates, settings, token captions, SFTP upload"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[features]
+default = []
+# SFTP upload (pure Rust: russh with the ring backend). Native only.
+sftp = ["dep:russh", "dep:russh-sftp", "dep:tokio"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+russh = { version = "0.64", default-features = false, features = ["ring", "rsa", "flate2"], optional = true }
+russh-sftp = { version = "3", optional = true }
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "io-util"], optional = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+dac-fuzzkit = { workspace = true }

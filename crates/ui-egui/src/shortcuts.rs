@@ -7,7 +7,12 @@ use std::sync::OnceLock;
 use egui::{Key, Modifiers};
 use serde_json::{Value, json};
 
-use crate::LightcraftApp;
+use crate::DacApp;
+
+/// The Classic keymap set and keymap files (fork-owned).
+#[path = "keymap_classic.rs"]
+mod classic;
+pub use classic::{CLASSIC, KeymapSet, active_set, choose_set, default_in, export_file, import_file, import_value, keymap_file, set_active};
 
 /// The user's changes to the keymap: command id → shortcut (`""` = no shortcut). Saved with the
 /// app settings (`ui.json`); commands not listed keep their declared shortcut.
@@ -37,7 +42,7 @@ pub fn bindable() -> &'static [Bindable] {
             }
         }
         let ui_keys: Vec<(Modifiers, Key)> = v.iter().filter_map(|b| b.default.and_then(parse)).collect();
-        for c in lightcraft_engine::command_specs() {
+        for c in dac_engine::command_specs() {
             if v.iter().any(|b| b.id == c.id) {
                 continue;
             }
@@ -65,7 +70,7 @@ pub fn binding<'a>(keymap: &'a Keymap, id: &str, default: Option<&'a str>) -> Op
 
 /// The effective shortcut of command `id` (`None` for unknown commands).
 pub fn shortcut_of<'a>(keymap: &'a Keymap, id: &str) -> Option<&'a str> {
-    find_bindable(id).and_then(|b| binding(keymap, id, b.default))
+    find_bindable(id).and_then(|b| binding(keymap, id, b.default()))
 }
 
 /// Engine commands that intentionally share a key and are disambiguated by context in [`handle`].
@@ -77,7 +82,7 @@ pub fn conflicts(keymap: &Keymap, id: &str, sc: &str) -> Vec<&'static str> {
     bindable()
         .iter()
         .filter(|b| b.id != id && !CONTEXTUAL.iter().any(|(x, y)| (*x == id && *y == b.id) || (*y == id && *x == b.id)))
-        .filter(|b| binding(keymap, b.id, b.default).and_then(parse) == Some(key))
+        .filter(|b| binding(keymap, b.id, b.default()).and_then(parse) == Some(key))
         .map(|b| b.id)
         .collect()
 }
@@ -108,7 +113,7 @@ pub fn assign(keymap: &mut Keymap, id: &str, sc: Option<&str>) -> Result<Vec<&'s
 
 /// Store `sc` for `id`, dropping the entry when it equals the declared shortcut.
 fn set(keymap: &mut Keymap, id: &str, sc: Option<&str>) {
-    let default = find_bindable(id).and_then(|b| b.default);
+    let default = find_bindable(id).and_then(|b| b.default());
     let same = match (sc, default) {
         (None, None) => true,
         (Some(a), Some(b)) => parse(a) == parse(b),
@@ -124,11 +129,11 @@ fn set(keymap: &mut Keymap, id: &str, sc: Option<&str>) {
 /// Restore the declared shortcut of `id`, taking it away from a command the user gave it to.
 pub fn reset(keymap: &mut Keymap, id: &str) -> Result<Vec<&'static str>, String> {
     let b = find_bindable(id).ok_or_else(|| format!("unknown command: {id}"))?;
-    assign(keymap, id, b.default)
+    assign(keymap, id, b.default())
 }
 
 /// `app.setShortcut {id, shortcut?, reset?}`: `shortcut` null or `""` removes it.
-pub fn set_shortcut(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+pub fn set_shortcut(app: &mut DacApp, p: &Value) -> Result<Value, String> {
     let id = p.get("id").and_then(Value::as_str).ok_or("missing id")?;
     let keymap = &mut app.ui.settings.keymap;
     let lost = if p.get("reset").and_then(Value::as_bool).unwrap_or(false) {
@@ -300,7 +305,7 @@ fn grid_bracket_command(keymap: &Keymap, grid: bool, id: &'static str, shortcut:
     if keymap.iter().any(|(other, sc)| other != id && find_bindable(other).is_some() && parse(sc) == Some(shortcut)) { None } else { Some(command) }
 }
 
-pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn handle(app: &mut DacApp, ctx: &egui::Context) {
     if !matches!(app.ui.dialog, Some(crate::state::Dialog::Shortcuts)) {
         app.recording_shortcut = None;
     }
@@ -312,18 +317,24 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     // shortcuts the native menu bar handles (it consumes those key presses itself)
     let native = |sc: &str| app.native_shortcuts.contains(sc);
     let mut aliased: Vec<(&str, serde_json::Value)> = Vec::new();
+    set_active(app.ui.settings.keymap_set);
     let keymap = &app.ui.settings.keymap;
     let grid = library_grid(app);
-    // keys the user gave to a command: the fixed bindings below (aliases, ratings) yield to them
-    let taken: Vec<(Modifiers, Key)> = keymap.values().filter_map(|s| parse(s)).collect();
+    // keys the user gave to a command: the fixed bindings below (aliases, ratings) yield to them;
+    // so do keys the active set gives a command (Classic's ⇧E is the secondary loupe, not export)
+    let taken: Vec<(Modifiers, Key)> = keymap.values().filter_map(|s| parse(s)).chain(classic::taken()).collect();
     // an open popup (a menu, a date picker's calendar) closes on Esc itself: Esc's command (Back,
     // which also closes dialogs) waits until nothing is open
     let popup_open = egui::Popup::is_any_open(ctx);
+    let (module_keys, mut consumed) = (classic::module_keys(app.ui.module), Vec::new());
+    classic::deferred_tabs(&mut app.deferred_tabs, keymap, &mut fire);
     ctx.input(|i| {
+        classic::module_key_presses(i, module_keys, &mut consumed, &mut aliased);
         for b in bindable() {
-            if let Some(sc) = binding(keymap, b.id, b.default)
+            if let Some(sc) = binding(keymap, b.id, b.default())
                 && let Some((m, k)) = parse(sc)
                 && !native(sc)
+                && !consumed.contains(&(m, k))
                 && !(k == Key::Escape && popup_open)
                 && matches(i, m, k)
                 && let Some(id) = grid_bracket_command(keymap, grid, b.id, (m, k))
@@ -358,7 +369,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     use crate::panels::compare;
     // rating/flag/label keys: in Compare/Survey they act on the active photo only; Shift+key or
     // Auto Advance then moves on (next candidate in Compare, next photo elsewhere)
-    let cull = |app: &mut LightcraftApp, id: &str, mut params: serde_json::Value, advance: bool| {
+    let cull = |app: &mut DacApp, id: &str, mut params: serde_json::Value, advance: bool| {
         compare::target_active(app, &mut params);
         let ok = app.run(id, params).is_ok();
         if ok && (advance || app.ui.auto_advance) {
@@ -377,7 +388,10 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
         }
         // flag/rate aliases (Shift+X…) go through the culling path: active photo in Compare/Survey,
         // `advance` moves to the next candidate there
-        if matches!(id, "photo.flag" | "photo.rate" | "photo.label") {
+        if id == "view.filterBar" && !library_grid(app) {
+            // Library's backslash is the filter bar in the grids; in a loupe it stays Show Original
+            let _ = app.run("view.showOriginal", params);
+        } else if matches!(id, "photo.flag" | "photo.rate" | "photo.label") {
             let mut params = params;
             let advance = params.get("advance").and_then(serde_json::Value::as_bool).unwrap_or(false);
             if let Some(o) = params.as_object_mut() {
@@ -391,6 +405,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             app.toast(ctx, e);
         }
     }
+    classic::keep_focus_on_panel_toggle(ctx, &fire);
     for f in fire {
         if let Some(rest) = f.strip_prefix("rate:") {
             let (n, adv) = rest.split_once(':').unwrap_or(("0", "0"));
@@ -452,7 +467,9 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
             }
             // B: the brush while editing; in the grids, add to the target album (Quick Collection)
-            if f == "tool.brush" && matches!(app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid) {
+            if f == "album.toggleTarget"
+                || (f == "tool.brush" && matches!(app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid))
+            {
                 if let Ok(r) = app.run("album.toggleTarget", json!({})) {
                     let n = app.session.targets(&json!({})).len();
                     let what = crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n);
@@ -517,7 +534,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
 }
 
-pub(crate) fn library_grid(app: &LightcraftApp) -> bool {
+pub(crate) fn library_grid(app: &DacApp) -> bool {
     matches!(app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid)
 }
 
@@ -525,12 +542,12 @@ pub(crate) fn library_grid(app: &LightcraftApp) -> bool {
 mod tests {
 
     fn library() -> crate::headless::Headless {
-        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
-        let mut session = lightcraft_engine::Session::new();
+        use dac_catalog::{Op, Photo, PhotoId, Source};
+        let mut session = dac_engine::Session::new();
         for id in 1..=4 {
             let photo = Photo::new(
                 PhotoId(id),
-                Source::File { path: format!("/lightcraft-shortcuts/{id}.jpg") },
+                Source::File { path: format!("/app-shortcuts/{id}.jpg") },
                 &format!("{id}.jpg"),
                 "JPEG",
                 100,
@@ -541,7 +558,7 @@ mod tests {
         }
         session.execute("library.sort", &json!({"key": "fileName", "ascending": true})).unwrap();
         session.execute("library.select", &json!({"ids": [1]})).unwrap();
-        let app = LightcraftApp::new(session, crate::Services { png: None, ..Default::default() });
+        let app = DacApp::new(session, crate::Services { png: None, ..Default::default() });
         let mut h = crate::headless::Headless::new(app, [1200.0, 800.0], 1.0);
         h.app.ui.view = crate::state::ViewMode::PhotoGrid;
         for _ in 0..3 {
@@ -557,7 +574,7 @@ mod tests {
 
     #[test]
     fn library_rating_labels_flags_and_undo() {
-        use lightcraft_catalog::{ColorLabel, Flag, PhotoId};
+        use dac_catalog::{ColorLabel, Flag, PhotoId};
         for view in [crate::state::ViewMode::PhotoGrid, crate::state::ViewMode::SquareGrid] {
             let mut h = library();
             h.app.ui.view = view;
@@ -589,7 +606,7 @@ mod tests {
 
     #[test]
     fn shift_culling_keys_advance_exactly_once() {
-        use lightcraft_catalog::{ColorLabel, Flag, PhotoId};
+        use dac_catalog::{ColorLabel, Flag, PhotoId};
         for auto in [false, true] {
             for (k, rating, label, flag) in [
                 ("0", 0, None, Flag::Pick),
@@ -625,18 +642,18 @@ mod tests {
         let mut h = library();
         h.app.ui.view = crate::state::ViewMode::SquareGrid;
         key(&mut h, "P", true);
-        assert_eq!(h.app.session.active(), Some(lightcraft_catalog::PhotoId(2)));
+        assert_eq!(h.app.session.active(), Some(dac_catalog::PhotoId(2)));
         assert!(!h.app.ui.presets, "grid Shift+P must not open Presets");
         assert_eq!(h.app.ui.view, crate::state::ViewMode::SquareGrid);
         h.app.ui.view = crate::state::ViewMode::Detail;
         key(&mut h, "P", true);
         assert!(h.app.ui.presets);
-        assert_eq!(h.app.session.active(), Some(lightcraft_catalog::PhotoId(2)));
+        assert_eq!(h.app.session.active(), Some(dac_catalog::PhotoId(2)));
     }
 
     #[test]
     fn shift_label_targets_only_candidate_in_compare() {
-        use lightcraft_catalog::{ColorLabel, PhotoId};
+        use dac_catalog::{ColorLabel, PhotoId};
         let mut h = library();
         h.app.session.execute("library.select", &json!({"ids": [1, 2], "active": 1})).unwrap();
         crate::panels::compare::enter_compare(&mut h.app).unwrap();
@@ -648,7 +665,7 @@ mod tests {
 
     #[test]
     fn plain_culling_keys_auto_advance_once() {
-        use lightcraft_catalog::PhotoId;
+        use dac_catalog::PhotoId;
         for k in ["0", "5", "6", "9", "P", "X", "U"] {
             let mut h = library();
             h.app.ui.auto_advance = true;
@@ -659,7 +676,7 @@ mod tests {
 
     #[test]
     fn color_label_actions_show_feedback_only_after_success() {
-        use lightcraft_catalog::PhotoId;
+        use dac_catalog::PhotoId;
         let mut h = library();
         for shift in [false, true] {
             for (k, name) in [("6", "Red"), ("7", "Yellow"), ("8", "Green"), ("9", "Blue")] {
@@ -692,7 +709,7 @@ mod tests {
 
     #[test]
     fn shifted_number_punctuation_rates_and_advances() {
-        use lightcraft_catalog::PhotoId;
+        use dac_catalog::PhotoId;
         let mut h = library();
         // A real winit event on a layout with Shift+1 = !, rather than ui.key's logical Num1.
         for pressed in [true, false] {
@@ -711,7 +728,7 @@ mod tests {
 
     #[test]
     fn library_keys_yield_to_search_and_crop_context() {
-        use lightcraft_catalog::{Flag, PhotoId};
+        use dac_catalog::{Flag, PhotoId};
         let mut h = library();
         let r = h.request("ui.clickWidget", json!({"id": "field:search"}), std::time::Duration::from_secs(20));
         assert_eq!(r["ok"], true, "{r}");
@@ -752,7 +769,7 @@ mod tests {
                 assert!(parse(sc).is_some(), "{id}: {sc}");
             }
         }
-        for c in lightcraft_engine::command_specs() {
+        for c in dac_engine::command_specs() {
             if let Some(sc) = c.shortcut {
                 assert!(parse(sc).is_some(), "{}: {sc}", c.id);
             }
@@ -764,7 +781,7 @@ mod tests {
         let ui: Vec<&str> = crate::menus::ui_commands().map(|c| c.0).collect();
         for (sc, id, params) in ALIASES {
             assert!(parse(sc).is_some(), "{id}: {sc}");
-            assert!(ui.contains(id) || lightcraft_engine::find_command(id).is_some(), "alias {sc} → unknown command {id}");
+            assert!(ui.contains(id) || dac_engine::find_command(id).is_some(), "alias {sc} → unknown command {id}");
             assert!(serde_json::from_str::<serde_json::Value>(params).is_ok(), "alias {sc}: bad params");
         }
     }
@@ -786,6 +803,8 @@ mod tests {
 
     #[test]
     fn assigning_a_key_moves_it_and_reset_restores_it() {
+        // the Alternative set's keys (Classic gives D to Develop)
+        set_active(KeymapSet::Alternative);
         let mut keymap = Keymap::new();
         assert_eq!(shortcut_of(&keymap, "view.survey"), Some("N"));
         // D belongs to Detail: Survey takes it, Detail loses it
@@ -820,6 +839,7 @@ mod tests {
     /// Junk in a hand-edited `ui.json` keymap is ignored (the declared shortcut stays), never a panic.
     #[test]
     fn junk_keymap_entries_mean_no_shortcut() {
+        set_active(KeymapSet::Alternative);
         let mut keymap = Keymap::new();
         keymap.insert("view.survey".into(), "Hyper+☃".into());
         keymap.insert("no.suchCommand".into(), "K".into());
@@ -850,7 +870,7 @@ mod tests {
             ui.push((parse(sc).unwrap(), format!("alias {id}")));
         }
         let mut engine: Vec<((Modifiers, Key), &str)> = Vec::new();
-        for c in lightcraft_engine::command_specs() {
+        for c in dac_engine::command_specs() {
             if let Some(k) = c.shortcut.and_then(parse) {
                 engine.push((k, c.id));
             }

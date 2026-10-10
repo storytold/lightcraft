@@ -141,7 +141,7 @@ fn reused_im2col_clears_all_edge_padding_between_images() {
     }
 }
 #[test]
-#[ignore = "needs LC_DENOISE_MODEL; one tile with LIGHTCRAFT_PROFILE=1"]
+#[ignore = "needs LC_DENOISE_MODEL; one tile with {ENV_PREFIX}_PROFILE=1"]
 fn profile_one_real_tile() {
     let model = std::env::var_os("LC_DENOISE_MODEL").expect("set LC_DENOISE_MODEL");
     let m = crate::known::find("rawnind-bayer").unwrap().manifest;

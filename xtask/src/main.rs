@@ -5,10 +5,17 @@
 
 mod assets;
 mod bench;
+mod brand;
+mod dist;
+mod docs;
 mod ico;
+mod immich;
 mod layers;
 mod parity;
+mod rename;
+mod shortcuts;
 mod stats;
+mod upstream;
 mod version;
 mod web;
 
@@ -20,9 +27,34 @@ usage: cargo xtask <command>
 
 commands:
   assets          every image/icon/font/media file is attributed in assets/ATTRIBUTION.md; no Adobe assets
+  brand check|test|vars
+                  check: no product name (brand.toml's display_name/binary/env_prefix, or a legacy
+                  name) in any source file outside the allowlist (xtask/src/brand.rs);
+                  test: build the CLI with xtask/test-brand.toml and check help, UI snapshot,
+                  MCP serverInfo and config/log paths show only that brand; vars: list template keys
   bench [FILE] [--strict] [--threshold PCT]
                   run the render benchmark, append to target/bench/history.jsonl, compare CPU time with
                   the previous run (default input: corpus/raw/arw-sony-a7m3-compressed.arw)
+  bench-catalog [--photos N,N…] [--backend v3|v4] [--dir DIR]
+                  catalog scale benchmark: import throughput, snapshot time, then (in a fresh process)
+                  open time, peak RSS and filter latency (default 250000,1000000 photos, backend v4)
+  deny            cargo deny check licenses (deny.toml), skipped with a message if cargo-deny is missing
+  shortcuts       regenerate docs/manual/keyboard-shortcuts.md from the command registry (builds dac-cli)
+  docs [--check]  render README.md.in and docs/**/*.md.in ({{app}}, {{binary}}, … from brand.toml) into
+                  the .md next to each; --check fails when one is out of date
+  install [--prefix DIR] [--skip-build]
+                  release build, installed as brand.binary / brand.cli_binary into DIR/bin (default
+                  ~/.local), with man page, shell completions and (Linux) desktop entry and icons
+  package [--skip-build] [--render-only]
+                  release build + rendered packaging/**/*.in templates, branded binaries, man page and
+                  completions into target/package/ (installers: packaging/<os>/package.*)
+  rename-crates <prefix> [--from OLD] | --upstream [--since REV]
+                  change the internal crate prefix (dac-*) everywhere; --upstream rewrites incoming
+                  upstream crate paths (UPSTREAM_PREFIX-*) in files changed since REV (fork-base)
+  run [--release] [ARGS…]
+                  build and run the app under its brand.binary name (target/<profile>/branded/)
+  immich up | down [--volumes] | seed
+                  pinned local Immich test server (xtask/immich/compose.yml) on 127.0.0.1:2284; seed creates an admin, an API key (target/immich/api-key) and a fixture album
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
   layers          enforce the crate dependency layering (plan/architecture.md §3)
@@ -31,11 +63,20 @@ commands:
                   Lightroom parity summary; --write refreshes the summary table in the document
   wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates (+ the web app)
   web [--serve [port]] [--dev]
-                  build the browser app (apps/lightcraft-web) into <target>/web/;
+                  build the browser app (apps/web) into <target>/web/;
                   --serve serves it on http://127.0.0.1:<port> (default 8080)
-  ci              fmt --check, clippy -D warnings, heif, test, parity refs, layers, assets, wasm (stops at first failure)
+  ci              fmt --check, brand check, docs --check, clippy -D warnings, heif, test, parity refs, layers,
+                  assets, deny, wasm (stops at first failure)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite and CC0 raw samples (raw.pixls.us) into corpus/ and checks their sha256
+  upstream-merge [--ref REF] [--no-ci]
+                  merge upstream (default upstream/main) on merge/upstream-YYYYMMDD, keep our version of owned
+                  paths (upstream-owned.txt), write target/upstream/review-YYYYMMDD.md, map crate names, run ci
+  upstream-pr <branch> <commit>...
+                  replay commits onto a new branch off upstream/main with upstream crate names (never pushes)
+  shared-check [--strict]
+                  commits since the last upstream merge that change shared paths without `UPSTREAM-PR:`
+                  (warns; --strict fails)
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
 ";
 
@@ -43,17 +84,30 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
     let result = match args.first().map(String::as_str) {
+        Some("brand") => brand::run(&root(), &rest),
+        Some("docs") => docs::run(&root(), rest.contains(&"--check")),
+        Some("deny") => cmd_deny(),
+        Some("run") => dist::cmd_run(&root(), &rest),
+        Some("install") => dist::cmd_install(&root(), &rest),
+        Some("package") => dist::cmd_package(&root(), &rest),
+        Some("rename-crates") => rename::run(&root(), &rest),
+        Some("immich") => immich::run(&root(), &rest),
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
         Some("layers") => cmd_layers(),
         Some("assets") => assets::run(&root()),
         Some("bench") => bench::run(&root(), &rest),
+        Some("bench-catalog") => cmd_bench_catalog(&rest),
         Some("parity") => parity::run(&root(), rest.contains(&"--write")),
         Some("wasm") => cmd_wasm(),
         Some("web") => web::run(&rest),
         Some("ci") => cmd_ci(),
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
+        Some("upstream-merge") => upstream::merge(&root(), &rest),
+        Some("upstream-pr") => upstream::pr(&root(), &rest),
+        Some("shared-check") => upstream::shared_check(&root(), &rest, false),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
+        Some("shortcuts") => shortcuts::run(&root()),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())
@@ -219,7 +273,7 @@ fn wasm_set() -> Result<Vec<String>, String> {
             _ => false,
         })
         .map(|c| c.name)
-        .chain(std::iter::once("lightcraft-web".to_string()))
+        .chain(std::iter::once("dac-web".to_string()))
         .collect())
 }
 
@@ -240,7 +294,30 @@ fn cmd_wasm() -> Result<(), String> {
     if failed == 0 { Ok(()) } else { Err(format!("{failed} crate(s) failed the wasm check")) }
 }
 
-fn cmd_ci() -> Result<(), String> {
+/// `cargo deny check licenses` with deny.toml; a clear skip when cargo-deny isn't installed (CI installs it).
+/// `bench-catalog`: the catalog crate's `bench_catalog` example, release build (see its docs).
+fn cmd_bench_catalog(rest: &[&str]) -> Result<(), String> {
+    let mut c = cargo();
+    c.args(["run", "--release", "-q", "-p", "dac-catalog", "--example", "bench_catalog", "--"]);
+    if !rest.contains(&"--dir") {
+        c.args(["--dir", "target/bench-catalog"]);
+    }
+    c.args(rest);
+    run(c, "bench_catalog")
+}
+
+fn cmd_deny() -> Result<(), String> {
+    let installed = cargo().args(["deny", "--version"]).output().is_ok_and(|o| o.status.success());
+    if !installed {
+        eprintln!("deny: SKIPPED, cargo-deny is not installed (`cargo install --locked cargo-deny`); CI runs it");
+        return Ok(());
+    }
+    let mut c = cargo();
+    c.args(["deny", "check", "licenses"]);
+    run(c, "cargo deny check licenses")
+}
+
+pub fn cmd_ci() -> Result<(), String> {
     type Step = (&'static str, Box<dyn Fn() -> Result<(), String>>);
     let steps: Vec<Step> = vec![
         (
@@ -251,6 +328,8 @@ fn cmd_ci() -> Result<(), String> {
                 run(c, "cargo fmt --all -- --check")
             }),
         ),
+        ("brand", Box::new(|| brand::check(&root()))),
+        ("docs", Box::new(|| docs::run(&root(), true))),
         (
             "clippy",
             Box::new(|| {
@@ -264,15 +343,15 @@ fn cmd_ci() -> Result<(), String> {
             Box::new(|| {
                 // the optional HEIC/HEIF decoder is off in the workspace build above
                 let mut c = cargo();
-                c.args(["clippy", "-p", "lightcraft-codecs", "--features", "heif", "--all-targets", "--", "-D", "warnings"]);
-                run(c, "cargo clippy -p lightcraft-codecs --features heif --all-targets -- -D warnings")?;
+                c.args(["clippy", "-p", "dac-codecs", "--features", "heif", "--all-targets", "--", "-D", "warnings"]);
+                run(c, "cargo clippy -p dac-codecs --features heif --all-targets -- -D warnings")?;
                 let mut c = cargo();
-                c.args(["test", "-p", "lightcraft-codecs", "-p", "lightcraft-heif", "--features", "lightcraft-codecs/heif"]);
-                run(c, "cargo test -p lightcraft-codecs -p lightcraft-heif --features lightcraft-codecs/heif")?;
+                c.args(["test", "-p", "dac-codecs", "-p", "dac-heif", "--features", "dac-codecs/heif"]);
+                run(c, "cargo test -p dac-codecs -p dac-heif --features dac-codecs/heif")?;
                 // the engine's HEIC import test, with the decoder (the workspace run checks the error)
                 let mut c = cargo();
-                c.args(["test", "-p", "lightcraft-engine", "--lib", "--features", "lightcraft-codecs/heif", "heic"]);
-                run(c, "cargo test -p lightcraft-engine --lib --features lightcraft-codecs/heif heic")
+                c.args(["test", "-p", "dac-engine", "--lib", "--features", "dac-codecs/heif", "heic"]);
+                run(c, "cargo test -p dac-engine --lib --features dac-codecs/heif heic")
             }),
         ),
         (
@@ -284,8 +363,10 @@ fn cmd_ci() -> Result<(), String> {
             }),
         ),
         ("parity", Box::new(|| parity::run(&root(), false))),
+        ("shared-check", Box::new(|| upstream::shared_check(&root(), &[], true))),
         ("layers", Box::new(cmd_layers)),
         ("assets", Box::new(|| assets::run(&root()))),
+        ("deny", Box::new(cmd_deny)),
         ("wasm", Box::new(cmd_wasm)),
     ];
     let mut done = Vec::new();
@@ -848,7 +929,7 @@ fn cmd_corpus(download: bool) -> Result<(), String> {
         "Test corpora live under {} (git-ignored, never committed).
 Tests that use a corpus skip cleanly when it is absent.
 
-  corpus/raw/        raw.pixls.us samples (CC0) — lightcraft-raw decodes every file.
+  corpus/raw/        raw.pixls.us samples (CC0) — dac-raw decodes every file.
   corpus/images/     CC0 / public-domain JPEG/PNG/TIFF/HEIC samples (optional)
 ",
         corpus.display()

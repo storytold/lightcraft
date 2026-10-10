@@ -1,6 +1,6 @@
 # Display (monitor) profiles
 
-LightCraft can show photos through the monitor's ICC profile, so colours are right on wide-gamut and calibrated
+The app can show photos through the monitor's ICC profile, so colours are right on wide-gamut and calibrated
 displays. Without one, previews are sRGB, which a wide-gamut panel shows oversaturated.
 
 ## Using it
@@ -17,15 +17,15 @@ only) returns `{path, description, kind: "matrix" | "lut", primaries: {red, gree
 
 - **The loupe renders into the display's gamut.** Views (Detail, Before, Compare / Reference, preset and profile
   hover, the second window) ask the pipeline for a render in the display's own primaries
-  (`lightcraft_pipeline::DisplaySpace`, `RenderRequest::display`): the per-pixel stage converts from the working space
+  (`dac_pipeline::DisplaySpace`, `RenderRequest::display`): the per-pixel stage converts from the working space
   to the display's linear RGB, gamut maps into *its* gamut and encodes with the sRGB curve, on the CPU and the GPU
   alike (only `FinishParams::to_out` / `out_luma` change). Colours an sRGB render would clip stay as saturated as the
   display can show. For a display that is exactly a standard space the result equals an 8-bit render into that space.
-- **Then to the display's device values** (`lightcraft_codecs::display::DisplayProfile::correct`): for a matrix/TRC
+- **Then to the display's device values** (`dac_codecs::display::DisplayProfile::correct`): for a matrix/TRC
   profile, three 256-entry tables from the sRGB curve to the profile's tone curves (nothing at all when they are the
   sRGB curve, as for Display P3); for a LUT-based profile, a `moxcms` transform through its B2A tables. A LUT-only
   profile (no colorant tags) gets its primaries measured through its A2B tables.
-- **Everything made for sRGB is converted** (`lightcraft_engine::display::present`, on the render workers):
+- **Everything made for sRGB is converted** (`dac_engine::display::present`, on the render workers):
   thumbnails, cached view previews, embedded camera JPEGs and merge previews.
 - **What stays sRGB:** the histogram (of the same sampled pixels, converted back to sRGB), the rendered-thumbnail and
   view-preview caches (a profile change doesn't invalidate them), exports, and the UI itself.

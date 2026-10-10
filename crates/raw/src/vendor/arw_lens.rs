@@ -5,7 +5,7 @@
 //! No lens database or external decoder code. The unrelated MakerNote table has a different scale.
 
 use crate::{Opcode, Rect};
-use lightcraft_tiff::{Ifd, Value};
+use dac_tiff::{Ifd, Value};
 
 const DISTORTION: u16 = 0x7037;
 const SAMPLES: usize = 1024;
@@ -122,7 +122,7 @@ fn solve4(mut a: [[f64; 4]; 4], mut b: [f64; 4]) -> Option<[f64; 4]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_tiff::Entry;
+    use dac_tiff::Entry;
 
     fn ifd(value: Value) -> Ifd {
         Ifd { entries: vec![Entry { tag: DISTORTION, value, offset: 0 }], ..Default::default() }
@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn header_and_full_decode_preserve_correction_through_dng() {
-        use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, tags as t};
+        use dac_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, tags as t};
         for (model, expected) in [("ILCE-7RM4A", 1), ("ILCE-7RM4", 0), ("ILCE-7M3", 0), ("", 0)] {
             for order in [ByteOrder::Little, ByteOrder::Big] {
                 let mut raw = IfdBuilder::new();

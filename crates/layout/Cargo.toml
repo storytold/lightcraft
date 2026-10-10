@@ -1,0 +1,18 @@
+[package]
+name = "dac-layout"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Page layout (L3): pages, cells, grids, packages, guides, snapping, templates, token text and a raster page renderer, shared by Print, Book, Slideshow and Web"
+
+[lints]
+workspace = true
+
+[dependencies]
+dac-raster = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+dac-fuzzkit = { workspace = true }

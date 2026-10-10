@@ -1,4 +1,4 @@
-//! `lightcraft-heif`: the optional HEIF / HEIC (iPhone and Mac photo) decoder.
+//! `dac-heif`: the optional HEIF / HEIC (iPhone and Mac photo) decoder.
 //!
 //! `heic-rs`, a pure-Rust HEIF container and HEVC still-picture decoder, reads the container and
 //! reconstructs the coded pictures (bit-exact against libde265 on iPhone photos); this crate turns
@@ -6,7 +6,7 @@
 //! and matrix ([`vui`]) where heic-rs assumes BT.709 limited range, and upsamples chroma like
 //! libheif. Single pictures and grid-tiled photos, 8- to 16-bit, monochrome, alpha auxiliary
 //! images, ICC, EXIF and XMP. The API is plain data ([`Info`], [`Decoded`], [`Error`]) so the
-//! crate knows nothing about the rest of LightCraft; `lightcraft-codecs` adapts it behind its
+//! crate knows nothing about the rest of the app; `dac-codecs` adapts it behind its
 //! `heif` feature. Shares heic-rs and its regression fixtures with PhotoCraft's `photocraft-heif`.
 //!
 //! HEIF records orientation in the container (`irot`/`imir`, plus a `clap` crop), not in EXIF.

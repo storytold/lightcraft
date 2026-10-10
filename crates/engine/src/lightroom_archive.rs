@@ -214,7 +214,7 @@ fn next_destination(directory: &Path, mut index: u64) -> Result<PathBuf, String>
 }
 
 fn write_archive(path: &Path, data: &CatalogImport) -> Result<(), String> {
-    lightcraft_catalog::safe_file::write_atomic_with(path, &mut |raw| {
+    dac_catalog::safe_file::write_atomic_with(path, &mut |raw| {
         let mut bounded = BoundedWriter { inner: raw, total: 0 };
         bounded.write_all(HEADER)?;
         let mut compressor = ZlibWriter::new(&mut bounded);
@@ -511,7 +511,7 @@ mod tests {
     static NEXT: AtomicU64 = AtomicU64::new(0);
 
     fn tempdir() -> PathBuf {
-        let path = std::env::temp_dir().join(format!("lightcraft-lr-archive-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let path = std::env::temp_dir().join(format!("app-lr-archive-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
         fs::create_dir_all(&path).unwrap();
         path
     }

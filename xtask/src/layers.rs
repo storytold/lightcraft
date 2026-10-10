@@ -30,15 +30,22 @@ impl Class {
     }
 }
 
-/// The layering table. Names are package names without the `lightcraft-`
+/// The layering table. Names are package names without the `dac-`
 /// prefix.
 pub const TABLE: &[(&str, Class)] = &[
+    ("brand", Class::Layer(0)),
     ("geom", Class::Layer(0)),
     ("color", Class::Layer(0)),
     ("raster", Class::Layer(0)),
     ("tiff", Class::Layer(0)),
     ("sysmem", Class::Layer(0)),
     ("fetch", Class::Layer(0)),
+    ("net", Class::Layer(0)),
+    ("credentials", Class::Layer(0)),
+    ("hash", Class::Layer(0)),
+    ("psd", Class::Standalone),
+    ("actions", Class::Standalone),
+    ("plugins", Class::Layer(1)),
     ("denoise-core", Class::Layer(1)),
     ("denoise", Class::Layer(1)),
     ("heif", Class::Layer(0)),
@@ -48,19 +55,31 @@ pub const TABLE: &[(&str, Class)] = &[
     ("develop", Class::Layer(1)),
     ("faces", Class::Layer(1)),
     ("scenes", Class::Layer(1)),
+    ("text", Class::Layer(1)),
+    ("pdf", Class::Layer(1)),
     ("pipeline", Class::Layer(2)),
+    ("geo", Class::Layer(2)),
     ("gpu", Class::Layer(3)),
     ("catalog", Class::Layer(3)),
+    ("immich", Class::Layer(3)),
+    ("publish", Class::Layer(3)),
+    ("tether", Class::Layer(3)),
+    ("webgallery", Class::Layer(1)),
     ("preview", Class::Layer(3)),
     ("export", Class::Layer(3)),
+    ("layout", Class::Layer(3)),
+    ("print", Class::Layer(3)),
+    ("book", Class::Layer(3)),
     ("merge", Class::Layer(3)),
     ("segment", Class::Layer(3)),
     ("engine", Class::Layer(4)),
+    ("slideshow", Class::Layer(4)),
     ("ui-egui", Class::Layer(5)),
     ("mcp", Class::Layer(5)),
     ("testkit", Class::Testkit),
+    ("fuzzkit", Class::Testkit),
     // L6 apps and tooling
-    ("lightcraft", Class::Exempt),
+    ("app", Class::Exempt),
     ("cli", Class::Exempt),
     ("web", Class::Exempt),
     ("xtask", Class::Exempt),
@@ -70,6 +89,16 @@ pub const TABLE: &[(&str, Class)] = &[
 /// L0: `raster` builds on `color` and `geom`; `color` uses `geom` for matrices.
 /// L1: `raw` and `codecs` read metadata through `meta`; `develop` uses `meta` for XMP.
 pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
+    // `brand` (the product name) has no dependencies and may be used by every L0 crate
+    &["brand", "geom"],
+    &["brand", "color"],
+    &["brand", "raster"],
+    &["brand", "tiff"],
+    &["brand", "sysmem"],
+    &["brand", "fetch"],
+    &["brand", "net"],
+    &["brand", "credentials"],
+    &["brand", "heif"],
     &["geom", "color", "raster"],
     &["tiff", "raster"],
     &["denoise-core", "denoise"],
@@ -78,6 +107,19 @@ pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     &["meta", "develop"],
     &["develop", "scenes"],
     &["codecs", "raw"],
+    // the PDF writer embeds fonts laid out by the type engine
+    &["text", "pdf"],
+    // L3: the Immich client writes remote links into the catalog
+    &["catalog", "immich"],
+    &["catalog", "publish"],
+    // L3: the print back end lays out pages with `layout`
+    &["layout", "print"],
+    // L4: the Slideshow module renders and encodes through the engine
+    &["engine", "slideshow"],
+    // L3: books are laid out with the shared page model
+    &["layout", "book"],
+    // IMM-PUBLISH: the Immich publish service implements the publish trait
+    &["publish", "immich"],
 ];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {
@@ -96,7 +138,7 @@ pub const UI_CRATES: &[&str] = &["egui", "eframe", "winit", "egui_kittest", "rfd
 pub const UI_MIN_LAYER: u8 = 5;
 
 pub fn short_name(pkg: &str) -> &str {
-    pkg.strip_prefix("lightcraft-").unwrap_or(pkg)
+    pkg.strip_prefix("dac-").unwrap_or(pkg)
 }
 
 pub fn classify(pkg: &str) -> Option<Class> {
@@ -154,7 +196,7 @@ impl std::fmt::Display for Violation {
                 write!(f, "{krate}: standalone crate must not depend on workspace crate {dep}")
             }
             Violation::TestkitAsNormalDep { krate } => {
-                write!(f, "{krate}: lightcraft-testkit may only be a dev-dependency")
+                write!(f, "{krate}: dac-testkit may only be a dev-dependency")
             }
             Violation::UiBelowL5 { krate, dep, layer } => {
                 write!(f, "{krate} (L{layer}) depends on UI crate `{dep}`; UI toolkits are only allowed in L5+")
@@ -262,54 +304,54 @@ mod tests {
     #[test]
     fn clean_downward_graph_passes() {
         let g = [
-            c("lightcraft-geom", &[("serde", Normal, false)]),
-            c("lightcraft-develop", &[("lightcraft-geom", Normal, true)]),
-            c("lightcraft-engine", &[("lightcraft-develop", Normal, true), ("lightcraft-testkit", Dev, true)]),
-            c("lightcraft-ui-egui", &[("lightcraft-engine", Normal, true), ("egui", Normal, false)]),
-            c("lightcraft-cli", &[("lightcraft-ui-egui", Normal, true)]),
+            c("dac-geom", &[("serde", Normal, false)]),
+            c("dac-develop", &[("dac-geom", Normal, true)]),
+            c("dac-engine", &[("dac-develop", Normal, true), ("dac-testkit", Dev, true)]),
+            c("dac-ui-egui", &[("dac-engine", Normal, true), ("egui", Normal, false)]),
+            c("dac-cli", &[("dac-ui-egui", Normal, true)]),
         ];
         assert!(check(&g).is_empty(), "{:?}", check(&g));
     }
 
     #[test]
     fn upward_dependency_flagged() {
-        let v = check(&[c("lightcraft-develop", &[("lightcraft-engine", Normal, true)])]);
+        let v = check(&[c("dac-develop", &[("dac-engine", Normal, true)])]);
         assert!(matches!(v[..], [Violation::Upward { from: 1, to: 4, .. }]));
     }
 
     #[test]
     fn sideways_dependency_flagged() {
-        let v = check(&[c("lightcraft-catalog", &[("lightcraft-preview", Normal, true)])]);
+        let v = check(&[c("dac-catalog", &[("dac-preview", Normal, true)])]);
         assert!(matches!(v[..], [Violation::Upward { from: 3, to: 3, .. }]));
     }
 
     #[test]
     fn l0_chain_allowed_one_way() {
-        assert!(check(&[c("lightcraft-raster", &[("lightcraft-color", Normal, true)])]).is_empty());
-        assert!(!check(&[c("lightcraft-color", &[("lightcraft-raster", Normal, true)])]).is_empty());
+        assert!(check(&[c("dac-raster", &[("dac-color", Normal, true)])]).is_empty());
+        assert!(!check(&[c("dac-color", &[("dac-raster", Normal, true)])]).is_empty());
     }
 
     #[test]
     fn ui_crates_forbidden_below_l5() {
         for dep in ["egui", "eframe", "winit", "rfd"] {
-            let v = check(&[c("lightcraft-engine", &[(dep, Normal, false)])]);
+            let v = check(&[c("dac-engine", &[(dep, Normal, false)])]);
             assert!(matches!(v[..], [Violation::UiBelowL5 { .. }]), "{dep}");
         }
-        assert!(check(&[c("lightcraft-mcp", &[("winit", Normal, false)])]).is_empty());
+        assert!(check(&[c("dac-mcp", &[("winit", Normal, false)])]).is_empty());
     }
 
     #[test]
     fn unregistered_and_testkit_rules() {
-        let v = check(&[c("lightcraft-mystery", &[])]);
-        assert!(matches!(&v[..], [Violation::Unregistered { krate }] if krate == "lightcraft-mystery"));
-        assert!(!check(&[c("lightcraft-pipeline", &[("lightcraft-testkit", Normal, true)])]).is_empty());
-        assert!(check(&[c("lightcraft-pipeline", &[("lightcraft-testkit", Dev, true)])]).is_empty());
+        let v = check(&[c("dac-mystery", &[])]);
+        assert!(matches!(&v[..], [Violation::Unregistered { krate }] if krate == "dac-mystery"));
+        assert!(!check(&[c("dac-pipeline", &[("dac-testkit", Normal, true)])]).is_empty());
+        assert!(check(&[c("dac-pipeline", &[("dac-testkit", Dev, true)])]).is_empty());
     }
 
     #[test]
     fn apps_exempt() {
-        for app in ["lightcraft", "lightcraft-cli", "lightcraft-web", "xtask"] {
-            assert!(check(&[c(app, &[("egui", Normal, false), ("lightcraft-ui-egui", Normal, true)])]).is_empty());
+        for app in ["dac-app", "dac-cli", "dac-web", "xtask"] {
+            assert!(check(&[c(app, &[("egui", Normal, false), ("dac-ui-egui", Normal, true)])]).is_empty());
         }
     }
 }

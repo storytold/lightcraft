@@ -1,0 +1,23 @@
+[package]
+name = "dac-plugins"
+description = "Sandboxed WebAssembly plug-ins: a resource-limited wasmi host with a capability-gated host API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+# Pure-Rust WebAssembly interpreter (MIT OR Apache-2.0). `validate` keeps full module validation on.
+wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "stable", "portable-dispatch"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+dac-net = { workspace = true }
+
+[dev-dependencies]
+# WebAssembly text -> binary for the hostile-module fixtures (Apache-2.0 WITH LLVM-exception).
+wat = "1.228"
+dac-fuzzkit = { workspace = true }

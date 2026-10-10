@@ -197,3 +197,47 @@ fn a_library_saved_before_folder_records_opens_without_any() {
     let reopened = Catalog::from_snapshot(&old).unwrap();
     assert_eq!(reopened.folder_record("/pics/trip"), None);
 }
+
+/// Export as Catalog and Import from Another Catalog carry the folder labels and the keyword list
+/// (both were lost before: only photos, albums, stacks and label names went across).
+#[test]
+fn folder_labels_and_the_keyword_list_go_across_catalogs() {
+    use crate::keywords::KeywordInfo;
+    use crate::transfer::{self, ConflictRule, ExportOptions};
+    let mut c = library();
+    label(&mut c, "/pics/trip", Some(ColorLabel::Red));
+    label(&mut c, "/pics/home", Some(ColorLabel::Green));
+    let info = KeywordInfo { synonyms: vec!["seaside".into()], ..Default::default() };
+    c.apply(Op::SetKeyword { path: "Places|beach".into(), info: Some(info.clone()) }).unwrap();
+    // export the trip's photos only
+    let trip: Vec<PhotoId> =
+        c.photos().filter(|p| matches!(&p.source, Source::File { path } if path.starts_with("/pics/trip/"))).map(|p| p.id).collect();
+    let sub = transfer::subset(&c, &ExportOptions { photos: trip, ..Default::default() });
+    assert_eq!(sub.folder_color_label("/pics/trip"), Some(ColorLabel::Red));
+    assert_eq!(sub.folder_record("/pics/home"), None, "a folder none of the exported photos is in stays behind");
+    assert_eq!(sub.keyword_info("Places|beach"), Some(&info));
+    // the exported catalog keeps them on disk
+    let dir = std::env::temp_dir().join(format!("dac-xfer-records-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let ids: Vec<PhotoId> = sub.photos().map(|p| p.id).collect();
+    let rep = transfer::export_catalog(&c, &ExportOptions { photos: ids, ..Default::default() }, &dir, "Trip").unwrap();
+    let read = transfer::load_readonly(&rep.entry).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(read.folder_color_label("/pics/trip"), Some(ColorLabel::Red));
+    assert_eq!(read.keyword_info("Places|beach"), Some(&info));
+    // importing into an empty library brings them in
+    let mut other = Catalog::new();
+    let op = transfer::plan_import(&other, &read).ops(&mut other, &read, ConflictRule::Keep);
+    other.apply(op).unwrap();
+    assert_eq!(other.folder_color_label("/pics/trip"), Some(ColorLabel::Red));
+    assert_eq!(other.keyword_info("Places|beach"), Some(&info));
+    // what the library already says about a folder or a keyword wins
+    let mut mine = library();
+    label(&mut mine, "/pics/trip", Some(ColorLabel::Blue));
+    mine.apply(Op::SetKeyword { path: "places|Beach".into(), info: Some(KeywordInfo::default()) }).unwrap();
+    let op = transfer::plan_import(&mine, &read).ops(&mut mine, &read, ConflictRule::Keep);
+    mine.apply(op).unwrap();
+    assert_eq!(mine.folder_color_label("/pics/trip"), Some(ColorLabel::Blue));
+    assert_eq!(mine.keyword_info("Places|beach"), Some(&KeywordInfo::default()));
+}

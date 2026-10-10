@@ -1,18 +1,19 @@
 [package]
-name = "lightcraft-codecs"
+name = "dac-codecs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft standard image codecs: sniffing, decode to linear light, ICC, encoders (L1)"
+description = "Standard image codecs: sniffing, decode to linear light, ICC, encoders (L1)"
 
 [lints]
 workspace = true
 
 [dependencies]
-lightcraft-geom = { workspace = true }
-lightcraft-color = { workspace = true }
-lightcraft-raster = { workspace = true }
-lightcraft-heif = { workspace = true, optional = true }
+dac-brand = { workspace = true }
+dac-geom = { workspace = true }
+dac-color = { workspace = true }
+dac-raster = { workspace = true }
+dac-heif = { workspace = true, optional = true }
 serde = { workspace = true }
 bytemuck = { workspace = true }
 thiserror = { workspace = true }
@@ -35,16 +36,16 @@ avif-serialize = { workspace = true, optional = true }
 
 [features]
 default = ["parallel", "jxl", "avif"]
-parallel = ["dep:rayon", "lightcraft-raster/parallel", "jpeg-decoder/rayon"]
+parallel = ["dep:rayon", "dac-raster/parallel", "jpeg-decoder/rayon"]
 jxl = ["dep:jxl-oxide"]
-# HEIC/HEIF decode via the optional lightcraft-heif crate (heic-rs, pure Rust). Off by default so
+# HEIC/HEIF decode via the optional dac-heif crate (heic-rs, pure Rust). Off by default so
 # distributors choose it at build time (HEVC patents are a distributor's call, same policy as
 # PhotoCraft); `cargo xtask ci` clippies and tests it (`--features heif`), releases don't ship it yet.
-heif = ["dep:lightcraft-heif"]
+heif = ["dep:dac-heif"]
 ## AVIF encoding via ravif/rav1e (pure Rust, BSD). Native targets only; a no-op on wasm32.
 avif = ["dep:ravif", "dep:rav1e", "dep:avif-serialize"]
 
 [dev-dependencies]
 proptest = { workspace = true }
 # Lossless synthetic HEIC files for the `heif` feature's tests.
-lightcraft-heif = { workspace = true, features = ["testdata"] }
+dac-heif = { workspace = true, features = ["testdata"] }

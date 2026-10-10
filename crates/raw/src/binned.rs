@@ -240,7 +240,7 @@ mod tests {
         let img = Rgb32f::from_fn(64, 48, |x, y| [0.2 + 0.3 * (x as f32 / 64.0), 0.4 - 0.2 * (y as f32 / 48.0), 0.25]);
         let raw = raw_from(&mosaic_from_rgb(&img, &Cfa::bayer("RGGB").unwrap()), 0.0, 4095.0);
         let b = raw.develop_binned(2, 0.99).unwrap().unwrap();
-        let full = lightcraft_raster::resample::half(&raw.develop(Method::Ahd).unwrap());
+        let full = dac_raster::resample::half(&raw.develop(Method::Ahd).unwrap());
         for y in 2..b.height - 2 {
             for x in 2..b.width - 2 {
                 for c in 0..3 {

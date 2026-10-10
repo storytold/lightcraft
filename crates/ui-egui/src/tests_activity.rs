@@ -2,17 +2,17 @@
 
 use std::time::Duration;
 
-use lightcraft_engine::activity::{Cancel, TaskInfo, Unit};
+use dac_engine::activity::{Cancel, TaskInfo, Unit};
 use serde_json::json;
 
 use crate::headless::Headless;
 use crate::panels::activity::{WIDTH, count_text};
-use crate::{LightcraftApp, Services};
+use crate::{DacApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 
 fn demo() -> Headless {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let app = DacApp::new(dac_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     // let the first renders finish: a render still running when the test binary exits can crash in the
     // GPU driver's teardown (the preview pool doesn't join its workers)
@@ -206,7 +206,7 @@ fn start_export(h: &mut Headless, n: usize) {
     h.step();
     if let Some(crate::state::Dialog::Export { full_size, resize, dir, .. }) = &mut h.app.ui.dialog {
         *full_size = false;
-        *resize = lightcraft_engine::export::Resize::long_edge(64);
+        *resize = dac_engine::export::Resize::long_edge(64);
         *dir = "/lc-test-out".into();
     }
     let r = h.request("ui.dialog.confirm", json!({}), T);
@@ -247,18 +247,12 @@ fn slow_import(tag: &str, n: usize) -> (Headless, std::path::PathBuf) {
     for i in 0..n {
         std::fs::write(dir.join(format!("IMG_{i:03}.jpg")), format!("not really a jpeg {i}")).unwrap();
     }
-    let mut s = lightcraft_engine::Session::new();
+    let mut s = dac_engine::Session::new();
     s.media.file_probe = Some(std::sync::Arc::new(|p: &str| {
         std::thread::sleep(Duration::from_millis(100));
-        Ok(lightcraft_engine::media::ProbeInfo {
-            width: 60,
-            height: 40,
-            format: "JPEG".into(),
-            content_hash: Some(p.to_string()),
-            ..Default::default()
-        })
+        Ok(dac_engine::media::ProbeInfo { width: 60, height: 40, format: "JPEG".into(), content_hash: Some(p.to_string()), ..Default::default() })
     }));
-    let mut h = Headless::new(LightcraftApp::new(s, Services { png: None, ..Default::default() }), [1200.0, 800.0], 1.0);
+    let mut h = Headless::new(DacApp::new(s, Services { png: None, ..Default::default() }), [1200.0, 800.0], 1.0);
     h.settle(T);
     (h, dir)
 }
@@ -306,16 +300,16 @@ fn bracket(tag: &str) -> (Headless, std::path::PathBuf) {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut paths = Vec::new();
-    for (i, bytes) in lightcraft_merge::synth::bracket_dngs(1600, 1200, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
+    for (i, bytes) in dac_merge::synth::bracket_dngs(1600, 1200, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
         let p = dir.join(format!("IMG_{i}.dng"));
         std::fs::write(&p, bytes).unwrap();
         paths.push(p.to_string_lossy().to_string());
     }
-    let mut session = lightcraft_engine::Session::new().with_fs();
+    let mut session = dac_engine::Session::new().with_fs();
     let r = session.execute("library.import", &json!({"paths": paths})).unwrap();
     let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
     session.execute("library.select", &json!({"ids": ids})).unwrap();
-    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let app = DacApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     h.settle(T);
     (h, dir)

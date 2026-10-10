@@ -1,6 +1,6 @@
 //! Background export: the Export dialog, File → Export with Preset and Export with Previous hand
 //! their batch to a worker thread so the window stays responsive. Photos are prepared on the UI
-//! thread ([`lightcraft_engine::export::prepare_export`]: cheap, needs the session) and rendered,
+//! thread ([`dac_engine::export::prepare_export`]: cheap, needs the session) and rendered,
 //! encoded and written on the worker (several side by side: [`run_batch`]); its row in the
 //! activity stack shows the count, the file in progress and ✕ (issue #345).
 //!
@@ -11,11 +11,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 
-use lightcraft_engine::activity::{Cancel, TaskGuard};
-use lightcraft_engine::export::{Destination, ExportOptions, PreparedExport, run_batch};
+use dac_engine::activity::{Cancel, TaskGuard};
+use dac_engine::export::{Destination, ExportOptions, PreparedExport, run_batch};
 use serde_json::{Value, json};
 
-use crate::LightcraftApp;
+use crate::DacApp;
 
 pub struct ExportTask {
     pub total: usize,
@@ -36,7 +36,7 @@ impl ExportTask {
 }
 
 /// Start exporting `items` in the background. Errors per photo are collected, not fatal.
-pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOptions, to: Destination) -> Result<Value, String> {
+pub fn start(app: &mut DacApp, items: Vec<PreparedExport>, opts: ExportOptions, to: Destination) -> Result<Value, String> {
     if app.export.is_some() {
         return Err("an export is already running".into());
     }
@@ -67,14 +67,14 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
 }
 
 /// Export a single paginated PDF with the same activity row and cancellation as image exports.
-pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Value, String> {
+pub fn start_contact_sheet(app: &mut DacApp, params: &Value) -> Result<Value, String> {
     if app.export.is_some() {
         return Err("an export is already running".into());
     }
     let path = params.get("path").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).ok_or("missing path")?.to_string();
     app.session.check_write_target(&path)?;
     let guard = app.session.original_guard();
-    let prepared = lightcraft_engine::contact_sheet::prepare(&mut app.session, params)?;
+    let prepared = dac_engine::contact_sheet::prepare(&mut app.session, params)?;
     let total = prepared.len();
     let write = app.services.write_shared.clone();
     let progress = Arc::new(Mutex::new((0, String::new())));
@@ -96,7 +96,7 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
                 guard.check(std::path::Path::new(&path))?;
                 match write {
                     Some(write) => write(&path, &doc.bytes)?,
-                    None => lightcraft_engine::export::write_file(&path, &doc.bytes)?,
+                    None => dac_engine::export::write_file(&path, &doc.bytes)?,
                 }
                 Ok(vec![json!({"path": path, "pages": doc.pages, "photos": doc.photos, "bytes": doc.bytes.len(), "contactSheet": true})])
             });
@@ -113,7 +113,7 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
 }
 
 /// Per frame: keep the activity row up to date; when the batch finishes, report it.
-pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn poll(app: &mut DacApp, ctx: &egui::Context) {
     let Some(task) = &app.export else { return };
     match task.rx.try_recv() {
         Ok(r) => {
@@ -139,6 +139,10 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                     if cancelled {
                         m += " · cancelled";
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if sheet.is_none() {
+                        crate::panels::plugins::after_export(app, ctx, &files); // P4.3: plug-in export hooks
                     }
                     app.last_export_result = Some(json!({"files": files, "cancelled": cancelled}));
                     m
@@ -186,7 +190,7 @@ mod contact_sheet_tests {
             })),
             ..Default::default()
         };
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+        let mut app = DacApp::new(dac_engine::Session::with_demo(), services);
         app.run("dialog.contactSheet", json!({})).unwrap();
         let Some(Dialog::ContactSheet { options }) = app.ui.dialog.as_mut() else { panic!("no contact sheet settings") };
         options.paper = "letter".into();
@@ -217,10 +221,8 @@ mod contact_sheet_tests {
 
     #[test]
     fn contact_sheet_export_shows_a_row_and_its_cross_stops_it() {
-        let mut app = LightcraftApp::new(
-            lightcraft_engine::Session::with_demo(),
-            crate::Services { write_shared: Some(Arc::new(|_, _| Ok(()))), ..Default::default() },
-        );
+        let mut app =
+            DacApp::new(dac_engine::Session::with_demo(), crate::Services { write_shared: Some(Arc::new(|_, _| Ok(()))), ..Default::default() });
         let ids: Vec<_> = app.session.catalog.photos().take(24).map(|p| p.id.0).collect();
         start_contact_sheet(&mut app, &json!({"path": "Sheet.pdf", "ids": ids})).unwrap();
         let rows = app.session.activity.list();
@@ -237,8 +239,8 @@ mod contact_sheet_tests {
 
     #[test]
     fn cancelled_contact_sheet_never_calls_writer() {
-        let mut app = LightcraftApp::new(
-            lightcraft_engine::Session::with_demo(),
+        let mut app = DacApp::new(
+            dac_engine::Session::with_demo(),
             crate::Services { write_shared: Some(Arc::new(|_, _| panic!("cancelled export wrote a file"))), ..Default::default() },
         );
         let ids: Vec<_> = app.session.catalog.photos().take(24).map(|p| p.id.0).collect();

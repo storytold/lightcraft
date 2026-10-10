@@ -9,7 +9,7 @@
 
 use super::Mosaic;
 use crate::Rgb32f;
-use lightcraft_raster::par_rows;
+use dac_raster::par_rows;
 
 /// Green plane with PPG estimates at non-green sites.
 pub(crate) fn green_plane(m: &Mosaic) -> Vec<f32> {

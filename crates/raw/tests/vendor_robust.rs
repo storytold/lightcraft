@@ -1,7 +1,7 @@
 //! Malformed vendor raw files (NEF, ARW, PEF, ORF, RW2 of every raw format, CR2, RAF) must decode to an error, never panic.
 
-use lightcraft_tiff::tags as t;
-use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+use dac_tiff::tags as t;
+use dac_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
 use proptest::prelude::*;
 
 const W: u32 = 32;
@@ -146,7 +146,7 @@ fn pef(compression: u16) -> Vec<u8> {
 /// A Canon CR2: three placeholder IFDs and IFD3 with a 2-component lossless JPEG frame.
 fn cr2() -> Vec<u8> {
     let img: Vec<u16> = (0..(W * H) as usize).map(|i| 1024 + (i * 7919 % 12000) as u16).collect();
-    let enc = lightcraft_raw::ljpeg::encode(&img, W as usize / 2, H as usize, 2, 14, 1, 0);
+    let enc = dac_raw::ljpeg::encode(&img, W as usize / 2, H as usize, 2, 14, 1, 0);
     let mut ifd0 = IfdBuilder::new();
     ifd0.set(t::MAKE, Value::Ascii("Canon".into()));
     let mut ifd3 = IfdBuilder::new();
@@ -258,13 +258,13 @@ fn rw2_formats() -> Vec<Vec<u8>> {
 }
 
 fn exercise(bytes: &[u8]) {
-    let _ = lightcraft_raw::probe(bytes);
-    let _ = lightcraft_raw::probe_info(bytes);
-    let _ = lightcraft_raw::embedded_preview(bytes);
-    if let Ok(img) = lightcraft_raw::decode(bytes)
+    let _ = dac_raw::probe(bytes);
+    let _ = dac_raw::probe_info(bytes);
+    let _ = dac_raw::embedded_preview(bytes);
+    if let Ok(img) = dac_raw::decode(bytes)
         && img.width * img.height <= 1 << 16
     {
-        let _ = img.develop(lightcraft_raw::Method::Ahd);
+        let _ = img.develop(dac_raw::Method::Ahd);
     }
 }
 
@@ -297,7 +297,7 @@ proptest! {
 #[test]
 fn rw2_samples_decode_unmutated() {
     for s in &rw2_formats() {
-        let r = lightcraft_raw::decode(s).unwrap();
+        let r = dac_raw::decode(s).unwrap();
         assert_eq!((r.width, r.height), (W as usize, H as usize));
     }
 }

@@ -1,4 +1,4 @@
-//! Installed recognition models on LightCraft's own checked, single-thread float32 CPU engine.
+//! Installed recognition models on the app's own checked, single-thread float32 CPU engine.
 //! The detector and recognisers share graph validation and convolution kernels.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -275,7 +275,7 @@ mod tests {
         }
     }
 
-    /// Opt-in: `LC_FACE_MODELS=<folder> cargo test -p lightcraft-faces -- --ignored --nocapture`
+    /// Opt-in: `LC_FACE_MODELS=<folder> cargo test -p dac-faces -- --ignored --nocapture`
     /// self-tests every known recognition model found there.
     #[test]
     #[ignore = "needs real model files: set LC_FACE_MODELS"]

@@ -1,9 +1,9 @@
-//! AI denoise for LightCraft, as a step between the sensor and the demosaic that the rest of the develop
+//! AI denoise, as a step between the sensor and the demosaic that the rest of the develop
 //! pipeline never sees: the raw file stays untouched, the denoised picture is cached data that can always be
 //! made again, and the amount is an ordinary develop setting.
 //!
 //! - [`manifest`]: what a denoise model takes and gives, and who may use it (untrusted JSON, validated).
-//! - [`known`] and [`archive`]: the models LightCraft can fetch, and taking the model file out of the `.zip` it comes in.
+//! - [`known`] and [`archive`]: the models the app can fetch, and taking the model file out of the `.zip` it comes in.
 //! - [`bayer`]: Bayer layouts and the packing of a mosaic into the four planes a model takes.
 //! - [`tiles`] and [`run`]: cutting a picture into overlapping tiles for a fixed-size model, bringing each tile's
 //!   output scale back to the input's, keeping clipped highlights as they were, and blending the tiles together.
@@ -32,6 +32,6 @@ pub mod runtime;
 #[doc(hidden)]
 pub mod synthetic;
 
-pub use lightcraft_denoise_core::*;
+pub use dac_denoise_core::*;
 
 pub mod synthetic_proto;

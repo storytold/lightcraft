@@ -32,7 +32,7 @@ fn snapshot_version(m: &MemStore) -> u64 {
 fn v1_library_loads_and_is_upgraded() {
     let (base, log, full) = legacy_parts();
     let m = MemStore::new();
-    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":1,\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
+    m.set(SNAPSHOT, format!("{{\"format\":\"dac-catalog\",\"version\":1,\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
     m.set(LOG, log.into_bytes());
     let (mut j, c, r) = Journal::open(Box::new(m.clone())).unwrap();
     assert_eq!(c.to_snapshot(), full.to_snapshot());
@@ -52,7 +52,7 @@ fn v1_library_loads_and_is_upgraded() {
 fn v2_library_loads_and_is_upgraded() {
     let (base, log, full) = legacy_parts();
     let m = MemStore::new();
-    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":2,\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
+    m.set(SNAPSHOT, format!("{{\"format\":\"dac-catalog\",\"version\":2,\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
     m.set(LOG, log.into_bytes());
     let (_, c, r) = Journal::open(Box::new(m.clone())).unwrap();
     assert_eq!(c.to_snapshot(), full.to_snapshot());
@@ -66,12 +66,48 @@ fn v2_library_loads_and_is_upgraded() {
 fn v3_library_loads_and_is_upgraded() {
     let (base, log, full) = legacy_parts();
     let m = MemStore::new();
-    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":3,\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
+    m.set(SNAPSHOT, format!("{{\"format\":\"dac-catalog\",\"version\":3,\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
     m.set(LOG, log.into_bytes());
     let (_, c, r) = Journal::open(Box::new(m.clone())).unwrap();
     assert_eq!(c.to_snapshot(), full.to_snapshot());
     assert_eq!((r.replayed, r.upgraded_from), (1, Some(3)));
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
+}
+
+/// A format-5 library (before saved locations and creations) opens as it was and is rewritten in the current format.
+#[test]
+fn v5_library_loads_and_is_upgraded() {
+    let (base, log, full) = legacy_parts();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"dac-catalog\",\"version\":5,\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
+    m.set(LOG, log.into_bytes());
+    let (_, c, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(c.to_snapshot(), full.to_snapshot());
+    assert_eq!((r.replayed, r.upgraded_from), (1, Some(5)));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+}
+
+/// A saved creation survives the journal, undo restores the plain album, and bad input is refused.
+#[test]
+fn saved_creation_round_trips_and_undoes() {
+    let m = MemStore::new();
+    let (mut j, mut c, _) = Journal::open(Box::new(m.clone())).unwrap();
+    let id = AlbumId(77);
+    let add = Op::AddAlbum { album: crate::Album::new(id, "Holiday Book") };
+    c.apply(add.clone()).unwrap();
+    j.append(std::slice::from_ref(&add)).unwrap();
+    let creation = crate::Creation { kind: "book".into(), document: "{\"kind\":\"book\"}".into() };
+    let set = Op::SetAlbumCreation { id, creation: Some(creation.clone()) };
+    let undo = c.apply(set.clone()).unwrap();
+    j.append(std::slice::from_ref(&set)).unwrap();
+    drop(j);
+    let (_, loaded, _) = Journal::open(Box::new(m)).unwrap();
+    assert_eq!(loaded.albums.get(&id).and_then(|a| a.creation.clone()), Some(creation));
+    c.apply(undo).unwrap();
+    assert!(c.albums.get(&id).is_some_and(|a| a.creation.is_none()));
+    let bad = crate::Creation { kind: "poster".into(), document: String::new() };
+    assert!(c.apply(Op::SetAlbumCreation { id, creation: Some(bad) }).is_err());
+    assert!(c.apply(Op::SetAlbumCreation { id: AlbumId(999), creation: None }).is_err());
 }
 
 #[test]
@@ -103,7 +139,7 @@ fn assert_refused_untouched(m: &MemStore) {
     let e = Journal::open(Box::new(m.clone())).err().expect("refused");
     assert!(matches!(e, CatalogError::Newer(_)), "{e:?}");
     let msg = e.to_string();
-    assert!(msg.contains("newer version of LightCraft") && msg.contains("left unchanged"), "{msg}");
+    assert!(msg.contains("newer version of the app") && msg.contains("left unchanged"), "{msg}");
     assert_eq!(*m.files.lock().unwrap(), before, "nothing modified, nothing renamed");
 }
 
@@ -113,16 +149,13 @@ fn newer_snapshot_is_refused_untouched() {
     let m = MemStore::new();
     m.set(
         SNAPSHOT,
-        format!("{{\"format\":\"lightcraft-catalog\",\"version\":{},\"seq\":2,\"catalog\":{}}}\n", VERSION + 1, base.to_snapshot()).into_bytes(),
+        format!("{{\"format\":\"dac-catalog\",\"version\":{},\"seq\":2,\"catalog\":{}}}\n", VERSION + 1, base.to_snapshot()).into_bytes(),
     );
     m.set(LOG, log.into_bytes());
     assert_refused_untouched(&m);
     // even when its catalog doesn't parse as this version's
     let m = MemStore::new();
-    m.set(
-        SNAPSHOT,
-        format!("{{\"format\":\"lightcraft-catalog\",\"version\":{},\"seq\":2,\"catalog\":{{\"photos\":7}}}}\n", VERSION + 1).into_bytes(),
-    );
+    m.set(SNAPSHOT, format!("{{\"format\":\"dac-catalog\",\"version\":{},\"seq\":2,\"catalog\":{{\"photos\":7}}}}\n", VERSION + 1).into_bytes());
     assert_refused_untouched(&m);
     let e = Journal::open(Box::new(m)).err().unwrap().to_string();
     assert!(e.contains(&format!("v{}", VERSION + 1)), "{e}");
@@ -137,7 +170,7 @@ fn unknown_op_in_the_log_is_refused_untouched() {
         let body = r#"{"op":"fromTheFuture","id":1,"what":"something new"}"#;
         format!("{{\"seq\":{seq},\"crc\":{},\"op\":{body}}}\n", crc32fast::hash(body.as_bytes()))
     };
-    let snap = format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot());
+    let snap = format!("{{\"format\":\"dac-catalog\",\"version\":{VERSION},\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot());
     let id = base.photos().next().unwrap().id;
     let after = format!("{}\n", encode_record(5, &Op::SetRating { id, rating: 1 }));
     for log in [format!("{log}{}", future(4)), format!("{log}{}{after}", future(4)), format!("{}{log}", future(3))] {
@@ -159,10 +192,7 @@ fn unknown_op_in_the_log_is_refused_untouched() {
 fn bad_crc_is_still_a_torn_tail() {
     let (base, log, _) = legacy_parts();
     let m = MemStore::new();
-    m.set(
-        SNAPSHOT,
-        format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes(),
-    );
+    m.set(SNAPSHOT, format!("{{\"format\":\"dac-catalog\",\"version\":{VERSION},\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
     let body = r#"{"op":"fromTheFuture"}"#;
     m.set(LOG, format!("{log}{{\"seq\":4,\"crc\":1,\"op\":{body}}}\n").into_bytes());
     let (_, _, r) = Journal::open(Box::new(m)).unwrap();
@@ -207,11 +237,12 @@ fn op_variants_are_versioned() {
             | Op::Batch { .. } => 1,
             Op::SetBrowsed { .. } => 2,
             Op::SetAlbumOrder { .. } => 3,
-            Op::SetEmbeddedLens { .. } => 4,
-            Op::SetKeyword { .. } => 5,
-            Op::SetFolderRecord { .. } => 6,
+            Op::SetSha1 { .. } | Op::SetKind { .. } | Op::SetXmpStamp { .. } | Op::SetRemote { .. } | Op::SetPreview { .. } => 4,
+            Op::SetEmbeddedLens { .. } | Op::SetKeyword { .. } | Op::SetFolderRecord { .. } => 5,
+            Op::SetSavedLocation { .. } => 6,
+            Op::SetAlbumCreation { .. } => 7,
         }
     }
-    let newest = since(&Op::SetFolderRecord { folder: "/".into(), record: None });
+    let newest = since(&Op::SetAlbumCreation { id: AlbumId(1), creation: None });
     assert_eq!(newest, VERSION, "the newest op's version must be the current format version");
 }

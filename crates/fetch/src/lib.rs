@@ -10,8 +10,8 @@
 //! resumes from where it stopped. A file that fails its check is deleted, never kept.
 //!
 //! What to download and where from belongs to the caller: it passes the [`FileSpec`]s and the
-//! default mirrors (see [`mirrors`]). `lightcraft-segment` does so for the SAM 3 weights, which
-//! are never part of LightCraft (SAM License, see docs/ai-masks.md).
+//! default mirrors (see [`mirrors`]). `dac-segment` does so for the SAM 3 weights, which
+//! are never part of the app (SAM License, see docs/ai-masks.md).
 //!
 //! Native only: on wasm32 this crate is empty (the web build downloads no models).
 
@@ -79,7 +79,7 @@ pub struct Options {
     pub stall_timeout: Duration,
     /// Tries per mirror and file (each resumes where the last one stopped).
     pub attempts: u32,
-    /// The environment variable holding a bearer token, sent to each configured mirror's own host (only over https,
+    /// The environment variable (name after the app prefix, read with `dac_brand::env`) holding a bearer token, sent to each configured mirror's own host (only over https,
     /// never to a host a redirect leads to), so list only mirrors that may see it. `None`: nothing is ever sent, so one model's token cannot leak to another's server.
     pub token_env: Option<&'static str>,
 }
@@ -345,7 +345,7 @@ fn fetch_file(f: &FileSpec<'_>, url: &str, dir: &Path, opts: &Options, cancel: &
                 headers.push(("Range", format!("bytes={have}-")));
             }
             // a token for the configured host only (never sent on to a redirect's host)
-            if let Some(t) = bearer(opts.token_env.and_then(|name| std::env::var(name).ok()).as_deref(), &url, &origin) {
+            if let Some(t) = bearer(opts.token_env.and_then(dac_brand::env).as_deref(), &url, &origin) {
                 headers.push(("Authorization", format!("Bearer {t}")));
             }
             let r = http::get(&url, &headers, &limits).map_err(http_fail)?;

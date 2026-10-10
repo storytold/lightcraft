@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use lightcraft_raster::Rgba8;
+use dac_raster::Rgba8;
 
 use crate::Hash128;
 
@@ -163,6 +163,25 @@ impl DiskCache {
     pub fn size(&self) -> u64 {
         let mut t = self.total.lock().unwrap_or_else(|e| e.into_inner());
         *t.get_or_insert_with(|| self.scan().iter().map(|f| f.1).sum())
+    }
+
+    /// When the file of `key` was last written or read (`None`: not on disk).
+    pub fn modified(&self, key: Hash128) -> Option<std::time::SystemTime> {
+        std::fs::metadata(self.path(key)).ok().filter(|m| m.is_file()).and_then(|m| m.modified().ok())
+    }
+
+    /// Delete the file of `key`; returns the bytes freed (0: it was not there).
+    pub fn remove(&self, key: Hash128) -> u64 {
+        let p = self.path(key);
+        let Ok(m) = std::fs::symlink_metadata(&p) else { return 0 };
+        if !m.is_file() || std::fs::remove_file(&p).is_err() {
+            return 0;
+        }
+        let mut t = self.total.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(total) = t.as_mut() {
+            *total = total.saturating_sub(m.len());
+        }
+        m.len()
     }
 
     pub fn clear(&self) {

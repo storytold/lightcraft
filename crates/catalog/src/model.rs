@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use lightcraft_develop::{DevelopSettings, WbMode};
+use dac_develop::{DevelopSettings, WbMode};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -89,7 +89,7 @@ impl ColorLabel {
 pub enum Source {
     /// A file on disk (native) or in the browser's storage (web).
     File { path: String },
-    /// A procedurally generated demo scene (by `lightcraft-scenes` id).
+    /// A procedurally generated demo scene (by `dac-scenes` id).
     Demo { scene: u32 },
 }
 
@@ -195,16 +195,17 @@ pub struct Meta {
     pub creator: String,
     pub keywords: Vec<String>,
     /// Face/pet/focus regions read from XMP (MWG-RS), on the upright (EXIF-oriented) photo.
-    /// Removing or resizing one edits the catalog only; LightCraft never writes regions to XMP.
+    /// Removing or resizing one edits the catalog only; the app never writes regions to XMP.
     /// Left out of the catalog JSON when empty (most photos), so older catalogs read unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub regions: Vec<lightcraft_meta::Region>,
+    pub regions: Vec<dac_meta::Region>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Version {
     pub name: String,
     pub created: String,
+    #[serde(with = "crate::settings_ref")]
     pub settings: Arc<DevelopSettings>,
     #[serde(default)]
     pub auto: bool,
@@ -213,6 +214,7 @@ pub struct Version {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HistoryStep {
     pub label: String,
+    #[serde(with = "crate::settings_ref")]
     pub settings: Arc<DevelopSettings>,
 }
 
@@ -240,6 +242,7 @@ pub struct Photo {
     pub flag: Flag,
     #[serde(default)]
     pub label: Option<ColorLabel>,
+    #[serde(with = "crate::settings_ref")]
     pub develop: Arc<DevelopSettings>,
     #[serde(default)]
     pub edited: Option<String>,
@@ -266,7 +269,7 @@ pub struct Photo {
     /// Lens corrections embedded in the file (DNG `WarpRectilinear` / `FixVignetteRadial`), applied when
     /// "Enable Profile Corrections" is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub embedded_lens: Option<lightcraft_develop::EmbeddedLens>,
+    pub embedded_lens: Option<Box<dac_develop::EmbeddedLens>>,
     /// A virtual copy: the photo it was copied from (it shares that photo's file but has its own
     /// settings, metadata and history).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -277,7 +280,7 @@ pub struct Photo {
     /// The settings import gave the photo when a user default (a raw/JPEG default preset, see
     /// the engine's import defaults) changed them from [`Photo::camera_defaults`]. They count as
     /// unedited, and Reset returns to them.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::settings_ref::opt")]
     pub import_look: Option<Arc<DevelopSettings>>,
     /// Assisted culling scores (`None` until analysed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -292,6 +295,14 @@ pub struct Photo {
     /// whether the user changed anything since (see [`crate::local`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_baseline: Option<u64>,
+    /// SHA-1 of the original file's bytes (hex), as remote services such as Immich identify
+    /// assets by it. Catalog format 4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha1: Option<String>,
+    /// The state at the last read from / write to the XMP sidecar (see [`crate::xmp_state`]).
+    /// Catalog format 4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xmp: Option<crate::xmp_state::XmpStamp>,
 }
 
 /// What assisted culling measured on a photo.
@@ -348,6 +359,8 @@ impl Photo {
             analysis: None,
             preview_only: None,
             local_baseline: None,
+            sha1: None,
+            xmp: None,
         }
     }
     /// A raw file developed from its sensor data: not a rendered image, and not a raw shown from
@@ -373,7 +386,7 @@ impl Photo {
     }
     /// The built-in defaults for this photo, before any user default preset: raws start from
     /// their as-shot white balance; embedded lens corrections on when the file has them. They
-    /// carry the photo's own rendering process ([`lightcraft_develop::ProcessVersion`]): which
+    /// carry the photo's own rendering process ([`dac_develop::ProcessVersion`]): which
     /// process a photo renders with is not an edit, so comparisons with its defaults (edited?
     /// still as imported?) don't change when a newer process exists. A new photo has the latest.
     pub fn camera_defaults(&self) -> DevelopSettings {
@@ -420,7 +433,7 @@ impl Photo {
     /// differ only in case are one person, as first seen). Pets and unnamed faces are not people.
     pub fn people(&self) -> Vec<&str> {
         let mut out: Vec<&str> = Vec::new();
-        for r in self.meta.regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::Face) {
+        for r in self.meta.regions.iter().filter(|r| r.kind == dac_meta::RegionKind::Face) {
             let Some(name) = r.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) else { continue };
             if !out.iter().any(|o| o.to_lowercase() == name.to_lowercase()) {
                 out.push(name);
@@ -472,12 +485,44 @@ pub struct Album {
     /// hand (see [`crate::Catalog::album_children`]); `None`: listed by name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order: Option<u32>,
+    /// A saved creation (Saved Print / Book / Slideshow / Web Gallery): the album holds its photos
+    /// and this its layout document. Format version 7.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creation: Option<Creation>,
 }
+
+/// The layout attached to a saved-creation album.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Creation {
+    /// `print`, `book`, `slideshow` or `web` (the layout crate's kind names).
+    pub kind: String,
+    /// The layout document as JSON (the layout crate's `Document`; opaque to the catalog).
+    pub document: String,
+}
+
+/// Largest layout document stored in an album (bytes).
+pub const MAX_CREATION_BYTES: usize = 16 * 1024 * 1024;
+/// The kinds of saved creation.
+pub const CREATION_KINDS: &[&str] = &["print", "book", "slideshow", "web"];
 
 impl Album {
     /// A regular (manual) album.
     pub fn new(id: AlbumId, name: impl Into<String>) -> Album {
-        Album { id, name: name.into(), parent: None, folder: false, photos: Vec::new(), cover: None, smart: None, quick: false, order: None }
+        Album {
+            id,
+            name: name.into(),
+            parent: None,
+            folder: false,
+            photos: Vec::new(),
+            cover: None,
+            smart: None,
+            quick: false,
+            order: None,
+            creation: None,
+        }
+    }
+    pub fn is_creation(&self) -> bool {
+        self.creation.is_some()
     }
     pub fn is_smart(&self) -> bool {
         self.smart.is_some()
@@ -504,9 +549,9 @@ mod edited_tests {
 
     #[test]
     fn the_process_a_photo_renders_with_is_not_an_edit() {
-        use lightcraft_develop::ProcessVersion;
+        use dac_develop::ProcessVersion;
         // a photo on another process than the latest (a V1 photo once a later process is the
-        // latest, or a photo saved by a newer LightCraft)
+        // latest, or a photo saved by a newer version of the app)
         let other = ProcessVersion(ProcessVersion::LATEST.0 + 1);
         let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.dng", "DNG", 10, 10, "2026-10-01T00:00:00");
         p.kind = MediaKind::Raw;

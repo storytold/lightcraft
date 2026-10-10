@@ -164,7 +164,7 @@ impl Cr3Track {
     }
 }
 
-/// The parts of a CR3 file LightCraft reads.
+/// The parts of a CR3 file the app reads.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Cr3<'a> {
     /// `CMT1`…`CMT4` (index 0…3).
@@ -431,13 +431,13 @@ fn le32(b: &[u8], at: usize) -> Option<u32> {
 /// Merge `CMT1` (IFD0), `CMT2` (Exif) and `CMT4` (GPS) into one TIFF stream, so the Exif readers see a CR3
 /// like any TIFF-based raw. The maker note (`CMT3`) is left out: its offsets are relative to its own block.
 pub fn merged_exif(c: &Cr3<'_>) -> Option<Vec<u8>> {
-    use lightcraft_tiff::{IfdBuilder, Tiff, TiffWriter, tags as t};
+    use dac_tiff::{IfdBuilder, Tiff, TiffWriter, tags as t};
     let ifd0 = Tiff::parse(c.cmt[0]?).ok()?;
     let order = ifd0.order;
     let first = |i: usize| c.cmt[i].and_then(|b| Tiff::parse(b).ok()).and_then(|t| t.ifds.into_iter().next());
     // pointers and offsets that would dangle once the IFDs move
     const SKIP: [u16; 9] = [t::EXIF_IFD, t::GPS_IFD, t::INTEROP_IFD, t::SUB_IFDS, t::MAKER_NOTE, 273, 279, 513, 514];
-    let build = |ifd: &lightcraft_tiff::Ifd| {
+    let build = |ifd: &dac_tiff::Ifd| {
         let mut b = IfdBuilder::new();
         for e in ifd.entries.iter().filter(|e| !SKIP.contains(&e.tag)) {
             b.set(e.tag, e.value.clone());
@@ -492,14 +492,14 @@ mod tests {
         let stbl = [full(b"stsd", &stsd), full(b"stsz", &stsz), full(b"co64", &co64)].concat();
         bx(b"trak", &bx(b"mdia", &bx(b"minf", &bx(b"stbl", &stbl))))
     }
-    fn tiff_with(tag: u16, v: lightcraft_tiff::Value) -> Vec<u8> {
-        let b = lightcraft_tiff::IfdBuilder::new().with(tag, v);
-        lightcraft_tiff::TiffWriter::new(lightcraft_tiff::ByteOrder::Little, false).write(&[b]).unwrap()
+    fn tiff_with(tag: u16, v: dac_tiff::Value) -> Vec<u8> {
+        let b = dac_tiff::IfdBuilder::new().with(tag, v);
+        dac_tiff::TiffWriter::new(dac_tiff::ByteOrder::Little, false).write(&[b]).unwrap()
     }
 
     /// A small synthetic CR3: Canon uuid with CMT1/CMT2/CMT4, a JPEG track, a raw track, XMP.
     pub(crate) fn sample() -> Vec<u8> {
-        use lightcraft_tiff::{Value, tags as t};
+        use dac_tiff::{Value, tags as t};
         let cmt1 = tiff_with(t::MODEL, Value::Ascii("Canon EOS Test".into()));
         let cmt2 = tiff_with(t::ISO_SPEED, Value::Short(vec![400]));
         let cmt4 = tiff_with(1, Value::Ascii("N".into()));
@@ -684,7 +684,7 @@ mod tests {
 
     #[test]
     fn timed_metadata_exposes_the_dynamic_maker_note() {
-        use lightcraft_tiff::{Value, tags as t};
+        use dac_tiff::{Value, tags as t};
         let exif = tiff_with(t::ISO_SPEED, Value::Short(vec![800]));
         let maker = tiff_with(0x4001, Value::Short(vec![48, 100, 200]));
         let item = |tag: u32, data: &[u8]| {

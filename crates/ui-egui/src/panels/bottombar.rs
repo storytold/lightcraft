@@ -1,16 +1,16 @@
 //! The bottom bar: view modes, sort, rating/flags pill, copy/paste settings, zoom and view toggles.
 
+use dac_catalog::Flag;
 use egui::{Align2, Rect, Sense, pos2, vec2};
-use lightcraft_catalog::Flag;
 use serde_json::json;
 
-use crate::LightcraftApp;
+use crate::DacApp;
 use crate::icons::{Icon, paint};
 use crate::state::{BeforeAfter, ViewMode, Zoom};
 use crate::theme::Tokens;
 use crate::widgets::{icon_button, register, stars};
 
-pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("bottom_bar")
         .exact_size(t.bottom_bar_h)
@@ -52,7 +52,7 @@ const PILL_W: f32 = 196.0;
 
 /// The rating/flag pill and copy/paste settings, between `from` and `to` (the side groups): the
 /// copy buttons go first when there is no room (they are in the Edit menu too), then the pill.
-fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to: f32) {
+fn centre(app: &mut DacApp, ui: &mut egui::Ui, full: Rect, from: f32, to: f32) {
     let t = Tokens::get(ui.ctx());
     let has_clip = app.session.clipboard.is_some();
     let label = crate::i18n::tr(if has_clip { "Paste Edit Settings" } else { "Copy Edit Settings" });
@@ -123,7 +123,7 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
 }
 
 /// The right-hand group (zoom, view toggles or thumbnail size); returns its left edge.
-fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> f32 {
+fn right_side(app: &mut DacApp, ui: &mut egui::Ui, full: Rect) -> f32 {
     let t = Tokens::get(ui.ctx());
     let mut child = ui.new_child(
         egui::UiBuilder::new()
@@ -225,9 +225,9 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> f32 {
     if child.min_rect().width() > 0.0 { child.min_rect().left() } else { full.right() }
 }
 
-fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    use lightcraft_catalog::GroupBy;
-    use lightcraft_catalog::SortKey::*;
+fn sort_menu(app: &mut DacApp, ui: &mut egui::Ui) {
+    use dac_catalog::GroupBy;
+    use dac_catalog::SortKey::*;
     let cur = app.session.sort;
     ui.label(egui::RichText::new(crate::i18n::tr("Sort by")).weak());
     for (label, key, k) in [

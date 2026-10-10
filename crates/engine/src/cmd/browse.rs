@@ -5,12 +5,12 @@
 //!
 //! Each browse records when the folders it listed were browsed. Untouched records of folders
 //! not browsed for [`Session::forget_local_days`] are forgotten (when the library opens, or with
-//! `library.forgetLocal`); see [`lightcraft_catalog::local`] for what "untouched" means. Files
+//! `library.forgetLocal`); see [`dac_catalog::local`] for what "untouched" means. Files
 //! and sidecars on disk are never touched, and browsing the folder again brings them back.
 
 use std::path::Path;
 
-use lightcraft_catalog::{Op, PhotoId};
+use dac_catalog::{Op, PhotoId};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, bool_or, cmd, str_param};
@@ -54,14 +54,14 @@ const RESTAMP_SECS: i64 = 3600;
 /// Record that `root` and the folders of `files` were browsed now (journaled, not an undo step).
 fn stamp_browsed(s: &mut Session, root: &str, files: &[String]) {
     let now = (s.clock)();
-    let now_s = lightcraft_catalog::stacks::iso_seconds(&now);
+    let now_s = dac_catalog::stacks::iso_seconds(&now);
     let mut folders: std::collections::BTreeSet<String> =
         files.iter().filter_map(|f| Path::new(f).parent().map(|d| d.to_string_lossy().trim_end_matches(['/', '\\']).to_string())).collect();
     folders.insert(root.to_string());
     let ops: Vec<Op> = folders
         .into_iter()
         .filter(|f| {
-            let at = s.catalog.last_browsed(f).and_then(lightcraft_catalog::stacks::iso_seconds);
+            let at = s.catalog.last_browsed(f).and_then(dac_catalog::stacks::iso_seconds);
             match (at, now_s) {
                 (Some(at), Some(n)) => n - at >= RESTAMP_SECS || n < at,
                 _ => true,
@@ -98,7 +98,7 @@ impl Session {
     /// Forget untouched Local records whose folder wasn't browsed for `days` (default
     /// [`Session::forget_local_days`]; 0 = never). With `dry_run`, only report what would go.
     /// Journaled (durable, replayed after a crash) but not an undo step; nothing on disk changes.
-    pub fn forget_local(&mut self, dry_run: bool, days: Option<u32>) -> lightcraft_catalog::ForgetPlan {
+    pub fn forget_local(&mut self, dry_run: bool, days: Option<u32>) -> dac_catalog::ForgetPlan {
         let days = days.unwrap_or(self.forget_local_days);
         let now = (self.clock)();
         let keep = in_use(self);
@@ -268,7 +268,7 @@ pub(crate) fn follow_folder(s: &mut Session, from: &str, to: &str) {
 /// the folder itself.
 fn follow_library_folder(chosen: &mut Option<String>, from: &str, to: &str) {
     let Some(c) = chosen.as_deref() else { return };
-    if let Some(rest) = lightcraft_catalog::query::folder_rest(c, from) {
+    if let Some(rest) = dac_catalog::query::folder_rest(c, from) {
         // joined by the platform, so the result is spelled like `to` and like a path read from disk
         *chosen = Some(rest.iter().fold(std::path::PathBuf::from(to), |p, name| p.join(name)).to_string_lossy().to_string());
     }
@@ -290,13 +290,13 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
         .catalog
         .photos()
         .filter_map(|p| match &p.source {
-            lightcraft_catalog::Source::File { path } => Path::new(path).strip_prefix(src).ok().map(|rel| (p.id, p.file_name.clone(), dst.join(rel))),
+            dac_catalog::Source::File { path } => Path::new(path).strip_prefix(src).ok().map(|rel| (p.id, p.file_name.clone(), dst.join(rel))),
             _ => None,
         })
         .map(|(id, file_name, np)| Op::Relink {
             id,
             file_name,
-            source: lightcraft_catalog::Source::File { path: np.to_string_lossy().to_string() },
+            source: dac_catalog::Source::File { path: np.to_string_lossy().to_string() },
             format: None,
         })
         .collect();

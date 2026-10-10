@@ -129,7 +129,7 @@ pub fn days_in_month(year: i32, month: u8) -> u8 {
 pub fn month_grid(year: i32, month: u8) -> Vec<Option<u8>> {
     let first = format!("{year:04}-{month:02}-01");
     // 1970-01-01 was a Thursday: three days after a Monday
-    let lead = lightcraft_catalog::stacks::iso_seconds(&first).map_or(0, |s| (s.div_euclid(86_400) + 3).rem_euclid(7) as usize);
+    let lead = dac_catalog::stacks::iso_seconds(&first).map_or(0, |s| (s.div_euclid(86_400) + 3).rem_euclid(7) as usize);
     let mut cells: Vec<Option<u8>> = std::iter::repeat_n(None, lead).chain((1..=days_in_month(year, month)).map(Some)).collect();
     while !cells.len().is_multiple_of(7) {
         cells.push(None);

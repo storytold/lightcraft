@@ -1,0 +1,71 @@
+# Local / CI Immich test server for `cargo xtask immich up|down|seed` (plan/immich.md).
+#
+# - Pinned to one Immich release. To move to a newer one, update all four images together from that release's
+#   own docker-compose.yml, re-run the integration tests, and update "Checked against" in plan/immich.md.
+# - Listens on 127.0.0.1:2284 (not Immich's default 2283), so it never collides with a real server on this machine.
+# - All data (uploads, database, model cache) lives in named docker volumes; `cargo xtask immich down --volumes`
+#   wipes them.
+# - Test-only credentials; never expose this server.
+#
+# Images match the official compose file of Immich v3.3.1 (server AGPL-3.0; we only run it, see plan/immich.md).
+
+name: xtask-immich
+
+x-env: &env
+  DB_HOSTNAME: database
+  DB_USERNAME: postgres
+  DB_PASSWORD: postgres
+  DB_DATABASE_NAME: immich
+  REDIS_HOSTNAME: redis
+  TZ: Etc/UTC
+
+services:
+  immich-server:
+    image: ghcr.io/immich-app/immich-server:v3.3.1
+    environment: *env
+    volumes:
+      - upload:/data
+      # IMM-EXTLIB tests: a host folder Immich indexes as an external library (read-only, as recommended)
+      - ${IMMICH_EXTLIB_DIR:-../../target/immich/extlib}:/mnt/extlib:ro
+    ports:
+      - '127.0.0.1:2284:2283'
+    depends_on:
+      - redis
+      - database
+    restart: unless-stopped
+    healthcheck:
+      disable: false
+
+  immich-machine-learning:
+    image: ghcr.io/immich-app/immich-machine-learning:v3.3.1
+    environment: *env
+    volumes:
+      - model-cache:/cache
+    restart: unless-stopped
+    healthcheck:
+      disable: false
+
+  redis:
+    image: docker.io/valkey/valkey:9@sha256:c123e3715db63d06d4ad6964884037aa0d5d4d703939b9929954112889708e1d
+    healthcheck:
+      test: redis-cli ping | grep -q PONG || exit 1
+    restart: unless-stopped
+
+  database:
+    image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0@sha256:bcf63357191b76a916ae5eb93464d65c07511da41e3bf7a8416db519b40b1c23
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: immich
+      POSTGRES_INITDB_ARGS: '--data-checksums'
+    volumes:
+      - db:/var/lib/postgresql/data
+    shm_size: 128mb
+    restart: unless-stopped
+    healthcheck:
+      disable: false
+
+volumes:
+  upload:
+  db:
+  model-cache:

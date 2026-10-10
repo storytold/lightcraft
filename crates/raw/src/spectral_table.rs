@@ -2,7 +2,7 @@
 // Derived from the camera spectral sensitivities of rawtoaces-data (Academy Software Foundation), licensed under
 // the Apache License 2.0 (LICENSE-APACHE); see NOTICE and assets/ATTRIBUTION.md. Do not edit by hand.
 use super::Camera;
-use lightcraft_color::Mat3;
+use dac_color::Mat3;
 
 #[rustfmt::skip]
 pub(super) const CAMERAS: &[Camera] = &[

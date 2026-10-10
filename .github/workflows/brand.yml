@@ -1,0 +1,62 @@
+# The product name lives only in brand.toml (PLAN_phase_0.md §0.2.4), and the licence policy is
+# enforced by cargo-deny (§0.4.6):
+# - check: `cargo xtask brand check` (no product name outside brand.toml and the allowlist),
+#   `cargo xtask docs --check` (rendered docs up to date);
+# - deny: `cargo deny check licenses` with deny.toml;
+# - throw-away brand: `cargo xtask brand test` builds the CLI with xtask/test-brand.toml
+#   ("Zzyzx Test") and checks its help, headless UI snapshot, MCP serverInfo and config/log paths.
+name: Brand
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brand-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: brand-check
+      - name: brand check
+        run: cargo xtask brand check
+      - name: docs up to date
+        run: cargo xtask docs --check
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: cargo deny check licenses
+        run: cargo deny check licenses
+
+  test-brand:
+    name: throw-away brand
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: brand-test
+          workspaces: ". -> target/brand-test"
+      - name: cargo xtask brand test
+        run: cargo xtask brand test

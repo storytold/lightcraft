@@ -1,7 +1,7 @@
 //! Masking and Remove (spot) commands on the active photo.
 
-use lightcraft_develop::{BrushStroke, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape, RedEye, Spot, SpotMode};
-use lightcraft_geom::Point;
+use dac_develop::{BrushStroke, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape, RedEye, Spot, SpotMode};
+use dac_geom::Point;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, bad, bool_or, cmd, f64_or, has_active, ok, point, str_param};
@@ -61,7 +61,7 @@ fn points(p: &Value, key: &str) -> Vec<Point> {
 }
 
 /// A segmentation passed in (`seg`: a stored or replayed AI mask; the model isn't needed).
-fn seg_param(p: &Value) -> Option<lightcraft_develop::SegMask> {
+fn seg_param(p: &Value) -> Option<dac_develop::SegMask> {
     p.get("seg").and_then(|v| serde_json::from_value(v.clone()).ok())
 }
 
@@ -298,8 +298,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 let src = s.source_now(id, crate::media::SourceLevel::Thumb).map_err(|e| bad(c, e))?;
                 let info = s.source_info(id);
                 let d = s.develop_of(id).unwrap_or_default();
-                let req = lightcraft_pipeline::RenderRequest::fit(384, 384);
-                let lab = lightcraft_pipeline::color_range_sample(&src, &info, &d, &req, lightcraft_geom::Point::new(x, y))
+                let req = dac_pipeline::RenderRequest::fit(384, 384);
+                let lab = dac_pipeline::color_range_sample(&src, &info, &d, &req, dac_geom::Point::new(x, y))
                     .ok_or_else(|| bad(c, "the point is outside the photo"))?;
                 let mid = mask_id(p, s.active_mask, c)?;
                 let comp = p.get("component").and_then(Value::as_u64).map(|v| v as usize);
@@ -449,7 +449,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Download AI Mask Model",
             [],
             None,
-            "{acknowledged: true} — download the SAM 3 model (about 3.4 GB, Meta's SAM License, not LightCraft's) in the background, from the configured mirrors; only after the user agreed to it. Watch segment.model.status; segment.model.cancel stops it (it resumes later) → {started, installed, downloading}",
+            "{acknowledged: true} — download the SAM 3 model (about 3.4 GB, Meta's SAM License, not the app's) in the background, from the configured mirrors; only after the user agreed to it. Watch segment.model.status; segment.model.cancel stops it (it resumes later) → {started, installed, downloading}",
             super::always,
             |s, p| {
                 let c = "segment.model.download";
@@ -507,7 +507,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 masks_edit(s, "mask.adjust", "Mask Adjustment", |masks, _| {
                     let i = find(masks, mid, "mask.adjust")?;
                     let mut v = serde_json::to_value(masks[i].adjust).unwrap_or_default();
-                    lightcraft_develop::presets::deep_merge(&mut v, &vals);
+                    dac_develop::presets::deep_merge(&mut v, &vals);
                     let a: LocalAdjustments = serde_json::from_value(v).map_err(|e| bad("mask.adjust", e.to_string()))?;
                     masks[i].adjust = clamp_local(a);
                     Ok(())
@@ -667,7 +667,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 // the uncropped photo, so positions are the spots' own coordinates
                 let job = s.render_job(id, 1600, 1600, false, false).ok_or_else(|| bad(c, "no photo"))?;
                 let img = job.run().rendered.map_err(|e| bad(c, e))?.image;
-                let found = lightcraft_pipeline::dust::detect(&img, f64_or(p, "sensitivity", 50.0) as f32);
+                let found = dac_pipeline::dust::detect(&img, f64_or(p, "sensitivity", 50.0) as f32);
                 let out: Vec<Value> = found.iter().map(|d| json!({"x": d.x, "y": d.y, "size": d.radius})).collect();
                 if !p.get("add").and_then(Value::as_bool).unwrap_or(true) || found.is_empty() {
                     return Ok(json!({"spots": out, "added": 0}));
@@ -908,10 +908,10 @@ fn spots_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Spo
 }
 
 /// An automatic source for `spot` on photo `id` (a small proxy of the photo, framed by `d`).
-fn pick_source(s: &mut Session, id: crate::PhotoId, d: &lightcraft_develop::DevelopSettings, spot: &Spot, avoid: Option<Point>) -> Option<Point> {
+fn pick_source(s: &mut Session, id: crate::PhotoId, d: &dac_develop::DevelopSettings, spot: &Spot, avoid: Option<Point>) -> Option<Point> {
     let src = s.source_now(id, crate::media::SourceLevel::Thumb).ok()?;
     let info = s.source_info(id);
-    lightcraft_pipeline::spots::pick_source(&src, &info, d, spot, avoid)
+    dac_pipeline::spots::pick_source(&src, &info, d, spot, avoid)
 }
 
 fn clamp_local(mut a: LocalAdjustments) -> LocalAdjustments {

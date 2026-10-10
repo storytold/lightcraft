@@ -1,9 +1,9 @@
 //! The smart-album rule editor: match all / any / none of a list of rules (field, operator,
-//! value), with nested groups. Field and operator lists come from `lightcraft_catalog::rules`.
+//! value), with nested groups. Field and operator lists come from `dac_catalog::rules`.
 
+use dac_catalog::rules::{FIELD_GROUPS, Kind, Problem, TOP_LEVEL_FIELDS, bool_value, field_kind, field_label, ops_for};
+use dac_catalog::{Match, Rule, RuleSet};
 use egui::RichText;
-use lightcraft_catalog::rules::{FIELD_GROUPS, Kind, Problem, TOP_LEVEL_FIELDS, bool_value, field_kind, field_label, ops_for};
-use lightcraft_catalog::{Match, Rule, RuleSet};
 use serde_json::{Value, json};
 
 use crate::album_picker::{AlbumEntry, AlbumPicker};
@@ -37,7 +37,7 @@ pub fn default_value(field: &str, op: &str) -> Value {
 
 /// The current year, `2026`.
 fn this_year() -> String {
-    lightcraft_catalog::rules::now().get(..4).unwrap_or("2026").to_string()
+    dac_catalog::rules::now().get(..4).unwrap_or("2026").to_string()
 }
 
 /// A new rule (Rating ≥ 3).
@@ -120,7 +120,7 @@ pub struct Env {
 /// An Album rule's value: an album or a smart album, picked from the tree or by typing
 /// ([`AlbumPicker`]). The id is read as the catalog reads it (`3`, `"3"`) and written as a number.
 fn album_value(ui: &mut egui::Ui, v: &mut Value, salt: &str, env: &Env) {
-    let mut chosen = lightcraft_catalog::rules::album_rule_id(v).map(|a| a.0);
+    let mut chosen = dac_catalog::rules::album_rule_id(v).map(|a| a.0);
     if AlbumPicker::new(salt, &mut chosen, &env.albums).width(200.0).show(ui).changed()
         && let Some(id) = chosen
     {
@@ -377,8 +377,8 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_catalog::rules::FIELDS;
-    use lightcraft_catalog::{Catalog, Photo, PhotoId, Source};
+    use dac_catalog::rules::FIELDS;
+    use dac_catalog::{Catalog, Photo, PhotoId, Source};
 
     /// Every field × operator starts with a known operator and a value of the right shape: none for
     /// the empty tests, a pair for "between", one of the choices, a number for number fields (a
@@ -402,7 +402,7 @@ mod tests {
                 let v = default_value(field, op);
                 let one = |v: &Value| match kind {
                     Kind::Choice(c) => v.as_str().is_some_and(|s| c.iter().any(|c| c.0 == s)),
-                    Kind::Number if *field == "shutterSpeed" => v.as_str().and_then(lightcraft_catalog::parse_shutter_seconds).is_some(),
+                    Kind::Number if *field == "shutterSpeed" => v.as_str().and_then(dac_catalog::parse_shutter_seconds).is_some(),
                     Kind::Number => v.is_number(),
                     Kind::Bool => v.is_boolean(),
                     Kind::Album => v.is_null(),
@@ -417,10 +417,10 @@ mod tests {
             }
         }
         // a new date rule starts at this year, not at "" (and a between doesn't match every date)
-        lightcraft_catalog::rules::set_now(Some("2026-10-09T12:00:00".into()));
+        dac_catalog::rules::set_now(Some("2026-10-09T12:00:00".into()));
         assert_eq!(default_value("captureDate", "is"), json!("2026"));
         assert_eq!(default_value("captureDate", "between"), json!(["2026-01", "2026-12"]));
-        lightcraft_catalog::rules::set_now(None);
+        dac_catalog::rules::set_now(None);
         assert_eq!(default_value("shutterSpeed", "gte"), json!("1/250"));
         assert_eq!(default_value("shutterSpeed", "between"), json!(["1/1000", "1/125"]));
     }

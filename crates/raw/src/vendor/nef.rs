@@ -11,10 +11,10 @@
 use super::{nefc, white_from_data};
 use crate::tiffraw::{Packing, read_image};
 use crate::{BlackLevel, Cfa, ColorData, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
-use lightcraft_geom::Orientation;
-use lightcraft_tiff::image::ImageInfo;
-use lightcraft_tiff::tags::{self as t, photometric};
-use lightcraft_tiff::{ByteOrder, Ifd, Tiff, makernote};
+use dac_geom::Orientation;
+use dac_tiff::image::ImageInfo;
+use dac_tiff::tags::{self as t, photometric};
+use dac_tiff::{ByteOrder, Ifd, Tiff, makernote};
 
 const WB_RB_LEVELS: u16 = 0x000c;
 const BLACK_LEVEL: u16 = 0x003d;
@@ -123,7 +123,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<RawImage> {
     let white = white_from_data(samples, bits);
     let active_w = trailing_masked_columns(samples, w, h, white);
     let crop = default_crop(mn.as_ref(), active_w, h);
-    let mut metadata = lightcraft_meta::from_tiff(&tiff);
+    let mut metadata = dac_meta::from_tiff(&tiff);
     metadata.width = Some(crop.width as u32);
     metadata.height = Some(crop.height as u32);
     let img = RawImage {
@@ -201,7 +201,7 @@ fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+    use dac_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
 
     fn nef(compression: u16, bits: u16, strips: Vec<Vec<u8>>, w: u32, h: u32, rps: u32) -> Vec<u8> {
         nef_with_note(compression, bits, strips, w, h, rps, None)

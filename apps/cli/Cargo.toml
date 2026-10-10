@@ -1,0 +1,40 @@
+[package]
+name = "dac-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Command-line tool: headless render, command listing and the MCP server"
+
+[[bin]]
+name = "app-cli"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+dac-brand = { workspace = true }
+dac-engine = { workspace = true }
+dac-sysmem = { workspace = true }
+dac-mcp = { workspace = true }
+log = { workspace = true }
+dac-ui-egui = { workspace = true }
+dac-codecs = { workspace = true }
+dac-raster = { workspace = true }
+dac-merge = { workspace = true }
+serde_json = { workspace = true }
+dhat = { workspace = true, optional = true }
+
+[features]
+default = ["denoise"]
+denoise = ["dac-engine/denoise"]
+rawnind-model = ["denoise", "dac-engine/rawnind-model"]
+# Heap profiling: `cargo run --release -p dac-cli --features dhat-heap -- snapshot …` counts
+# every allocation (live/peak bytes in `library.memory` / `ui.inspect`) and writes dhat-heap.json
+# (open it in DHAT's viewer: allocation sites by bytes at the peak). Slows allocation-heavy work.
+dhat-heap = ["dep:dhat"]
+
+# Open HEIC/HEIF photos (the optional dac-heif crate). Not default so distributors choose
+# it (HEVC patents); build with `--features heif` to include it.
+heif = ["dac-codecs/heif"]

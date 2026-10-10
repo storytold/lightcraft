@@ -183,7 +183,7 @@ impl NetRunner {
         let first = self.plan.tensors.first().ok_or_else(|| bad("no input"))?;
         let want = count(first.channels, first.side)?;
         w.buffers.first_mut().and_then(|b| b.get_mut(..want)).ok_or_else(|| bad("missing input buffer"))?.copy_from_slice(input);
-        let profile = std::env::var_os("LIGHTCRAFT_PROFILE").is_some();
+        let profile = dac_brand::env_is_set("PROFILE");
         for (i, op) in self.plan.net.ops().iter().enumerate() {
             let started = web_time::Instant::now();
             let out = *self.plan.tensors.get(i + 1).ok_or_else(|| bad("missing output tensor"))?;

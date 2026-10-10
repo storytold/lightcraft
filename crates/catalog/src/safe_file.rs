@@ -115,7 +115,7 @@ fn create_temp(path: &Path) -> io::Result<(PathBuf, File)> {
     }
     let dir = parent_of(path);
     for _ in 0..1000 {
-        let tmp = dir.join(format!(".lightcraft-{}-{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        let tmp = dir.join(format!(".{}-{}-{}.tmp", dac_brand::BINARY, std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         match OpenOptions::new().write(true).create_new(true).open(&tmp) {
             Ok(f) => return Ok((tmp, f)),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,

@@ -4,9 +4,9 @@
 
 use std::path::PathBuf;
 
-use lightcraft_catalog::{Op, PhotoId};
-use lightcraft_geom::Rect;
-use lightcraft_meta::{Region, RegionKind};
+use dac_catalog::{Op, PhotoId};
+use dac_geom::Rect;
+use dac_meta::{Region, RegionKind};
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -23,7 +23,7 @@ pub(crate) fn setup(d: &std::path::Path, dim: u64) -> (Session, String) {
     let mut s = Session::with_demo();
     s.face_models_dir = Some(d.join("models"));
     let model = d.join(format!("tiny{dim}.onnx"));
-    std::fs::write(&model, lightcraft_faces::synthetic::tiny_embedder_model(dim)).unwrap();
+    std::fs::write(&model, dac_faces::synthetic::tiny_embedder_model(dim)).unwrap();
     let r = s.execute("faces.models.install", &json!({"path": model.to_string_lossy(), "acknowledged": true})).unwrap();
     let id = r["installed"]["id"].as_str().unwrap().to_string();
     s.execute("faces.models.select", &json!({"id": id})).unwrap();
@@ -165,7 +165,7 @@ fn embeddings_are_cached_beside_the_library_and_reset_for_another_model() {
     let models = d.join("models");
     let install = |s: &mut Session, dim: u64| -> String {
         let model = d.join(format!("tiny{dim}.onnx"));
-        std::fs::write(&model, lightcraft_faces::synthetic::tiny_embedder_model(dim)).unwrap();
+        std::fs::write(&model, dac_faces::synthetic::tiny_embedder_model(dim)).unwrap();
         let r = s.execute("faces.models.install", &json!({"path": model.to_string_lossy(), "acknowledged": true})).unwrap();
         let id = r["installed"]["id"].as_str().unwrap().to_string();
         s.execute("faces.models.select", &json!({"id": id})).unwrap();
@@ -256,7 +256,7 @@ fn the_background_pump_saves_what_it_embeds_for_the_next_launch() {
     s.face_models_dir = Some(models);
     s.open_library(&lib, true).unwrap();
     let model = d.join("tiny64.onnx");
-    std::fs::write(&model, lightcraft_faces::synthetic::tiny_embedder_model(64)).unwrap();
+    std::fs::write(&model, dac_faces::synthetic::tiny_embedder_model(64)).unwrap();
     // installing switches recognition on: nothing else is asked for
     s.execute("faces.models.install", &json!({"path": model.to_string_lossy(), "acknowledged": true})).unwrap();
     // without the detector (not bundled) photos without faces are left unsearched
@@ -412,7 +412,7 @@ fn unnamed_faces_come_with_look_alikes_together_and_the_name_the_named_ones_sugg
     set_regions(&mut s, b, vec![region(0.1, None), region(0.5, None)]);
     set_regions(&mut s, c, vec![region(0.3, None)]);
     // three faces like Ann, two like Bob (unnamed), one unembedded
-    let put = |s: &mut Session, id: lightcraft_catalog::PhotoId, x: f64, v: Vec<f32>| s.faces.index.insert(id.0, &region(x, None).rect, v);
+    let put = |s: &mut Session, id: dac_catalog::PhotoId, x: f64, v: Vec<f32>| s.faces.index.insert(id.0, &region(x, None).rect, v);
     put(&mut s, a, 0.1, unit64(&[(0, 1.0)])); // Ann, named
     put(&mut s, a, 0.5, unit64(&[(1, 1.0)])); // like Bob
     put(&mut s, b, 0.1, unit64(&[(0, 0.97), (2, 0.2)])); // like Ann
@@ -457,8 +457,8 @@ fn every_scanned_face_is_shown_by_the_same_kind_of_box() {
     s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
     let (a, _) = two_photos(&s);
     // a loosely drawn box (from some other tool) and the detector's tighter box of the same face
-    let loose = lightcraft_geom::Rect { x0: 0.2, y0: 0.1, x1: 0.8, y1: 0.9 };
-    let tight = lightcraft_geom::Rect { x0: 0.35, y0: 0.25, x1: 0.65, y1: 0.65 };
+    let loose = dac_geom::Rect { x0: 0.2, y0: 0.1, x1: 0.8, y1: 0.9 };
+    let tight = dac_geom::Rect { x0: 0.35, y0: 0.25, x1: 0.65, y1: 0.65 };
     let mut meta = s.catalog.photo(a).unwrap().meta.clone();
     meta.regions = vec![Region { rect: loose, kind: RegionKind::Face, name: Some("Ann".into()), description: None }];
     s.commit("setup", Op::SetMeta { id: a, meta: Box::new(meta) }).unwrap();
@@ -468,7 +468,7 @@ fn every_scanned_face_is_shown_by_the_same_kind_of_box() {
     let shown = s.face_view(a, loose);
     assert!((shown.x0 - tight.x0).abs() < 1e-3 && (shown.y1 - tight.y1).abs() < 1e-3, "shown by the detector's box once known: {shown:?}");
     // a face nobody has looked at, or in another photo, is shown by its own box
-    let other = lightcraft_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.2 };
+    let other = dac_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.2 };
     assert_eq!(s.face_view(a, other), other);
     // the page of the person uses it too
     let r = s.execute("faces.person", &json!({"name": "Ann"})).unwrap();

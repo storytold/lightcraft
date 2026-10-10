@@ -1,0 +1,43 @@
+# `cargo deny check licenses` (run by `cargo xtask ci` and the CI workflow): only permissive licences may
+# reach the build, so a GPL/LGPL/AGPL/MPL dependency can't arrive silently (PLAN_phase_0.md §0.4.6).
+# The workspace is MIT; crates/segment and crates/fetch stay Apache-2.0 (both allowed below).
+
+[graph]
+all-features = true
+
+[licenses]
+version = 2
+# Everything not listed here is denied, GPL, LGPL, AGPL and MPL included.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CC0-1.0",
+    # Permissive, non-copyleft licences of existing dependencies (not on PLAN.md's original list):
+    "BSL-1.0",              # Boost (clipboard-win, error-code: Windows clipboard)
+    "OFL-1.1",              # epaint_default_fonts (egui default fonts)
+    "Ubuntu-font-1.0",      # epaint_default_fonts
+    "IJG",                  # jpeg-encoder (derived from libjpeg)
+    "NCSA",                 # libfuzzer-sys (LLVM libFuzzer)
+    "CDLA-Permissive-2.0",  # Mozilla CA root data (webpki-roots)
+]
+confidence-threshold = 0.9
+
+# Workspace crates are checked like any other (publish = false must not exempt them).
+[licenses.private]
+ignore = false
+
+[bans]
+multiple-versions = "allow"
+
+[advisories]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

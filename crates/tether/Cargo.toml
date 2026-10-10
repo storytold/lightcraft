@@ -1,0 +1,20 @@
+[package]
+name = "dac-tether"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Tethered capture (L3): studio capture (a watched folder imported as shots arrive, with a session, naming, presets and a target collection); native tethering over PTP (USB via nusb, PTP/IP over Wi-Fi) with a simulated camera for tests"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# PTP over USB (pure Rust, MIT/Apache-2.0); not on the web.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+nusb = "0.2"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+dac-fuzzkit = { workspace = true }

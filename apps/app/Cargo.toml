@@ -1,0 +1,45 @@
+[package]
+name = "dac-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+default-run = "app"
+
+[[bin]]
+name = "app"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[features]
+default = ["denoise"]
+denoise = ["dac-engine/denoise"]
+rawnind-model = ["denoise", "dac-engine/rawnind-model"]
+# Open HEIC/HEIF photos (the optional dac-heif crate). Not default so distributors choose
+# it (HEVC patents); build with `--features heif` to include it.
+heif = ["dac-codecs/heif"]
+
+[dependencies]
+dac-brand = { workspace = true }
+dac-engine = { workspace = true, features = ["sam"] }
+dac-sysmem = { workspace = true }
+dac-ui-egui = { workspace = true }
+dac-codecs = { workspace = true }
+dac-raster = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
+egui = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+
+[build-dependencies]
+# Icon + VERSIONINFO for the desktop executable; build.rs only uses it when targeting Windows.
+dac-brand = { workspace = true }
+winresource = "0.1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rfd = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = { workspace = true }

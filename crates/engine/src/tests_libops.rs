@@ -29,7 +29,7 @@ fn date_groups_follow_sort_and_grouping() {
     assert_eq!(s.execute("library.groups", &json!({})).unwrap(), json!([]));
     s.execute("library.sort", &json!({"group": "year", "key": "fileName"})).unwrap();
     assert_eq!(s.execute("library.groups", &json!({})).unwrap(), json!([]), "no date headers when sorting by name");
-    assert_eq!(s.sort.group, lightcraft_catalog::GroupBy::Year);
+    assert_eq!(s.sort.group, dac_catalog::GroupBy::Year);
     assert!(s.execute("library.sort", &json!({"group": "week"})).is_err());
 }
 
@@ -41,7 +41,7 @@ fn temp_dir(tag: &str) -> std::path::PathBuf {
 }
 
 fn keywords_of(s: &Session, id: u64) -> Vec<String> {
-    s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().meta.keywords.clone()
+    s.catalog.photo(dac_catalog::PhotoId(id)).unwrap().meta.keywords.clone()
 }
 
 /// Keyword rename / merge / delete: one undo step each, replayed from the op log after a restart,
@@ -97,17 +97,43 @@ fn keyword_rename_merge_delete_undo_and_replay() {
 fn write_png(path: &std::path::Path, seed: u8) {
     let (w, h) = (24usize, 16usize);
     let data: Vec<[u8; 4]> = (0..w * h).map(|i| [(i % w * 9) as u8, (i / w * 11) as u8, seed, 255]).collect();
-    let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
-    let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    let img = dac_raster::Rgba8 { width: w, height: h, data };
+    let bytes = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).unwrap();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, bytes).unwrap();
 }
 
 fn path_of(s: &Session, id: u64) -> String {
-    match &s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().source {
-        lightcraft_catalog::Source::File { path } => path.clone(),
+    match &s.catalog.photo(dac_catalog::PhotoId(id)).unwrap().source {
+        dac_catalog::Source::File { path } => path.clone(),
         _ => panic!("not a file"),
     }
+}
+
+/// Edit Capture Time ▸ Change to File's Modification Date: each photo gets its original's mtime
+/// (plus an optional zone shift); photos without a file are counted, never crash.
+#[test]
+fn capture_time_from_file_date() {
+    let src = temp_dir("filedate-src");
+    let lib = temp_dir("filedate-lib");
+    write_png(&src.join("a.png"), 1);
+    let mtime = std::fs::metadata(src.join("a.png")).unwrap().modified().unwrap();
+    let secs = mtime.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
+    let id = r["imported"][0].as_u64().unwrap();
+    s.execute("photo.setCaptureTime", &json!({"ids": [id], "time": "2001-01-01T00:00:00", "each": true})).unwrap();
+    let r = s.execute("photo.setCaptureTime", &json!({"ids": [id], "fromFile": true})).unwrap();
+    assert_eq!(r["changed"], 1, "{r}");
+    assert_eq!(captured(&s, id), Some(dac_catalog::dates::civil(secs)));
+    s.execute("photo.setCaptureTime", &json!({"ids": [id], "fromFile": true, "hours": 2})).unwrap();
+    assert_eq!(captured(&s, id), Some(dac_catalog::dates::civil(secs + 7200)));
+    // a removed original: an error, not a panic
+    std::fs::remove_file(src.join("a.png")).unwrap();
+    assert!(s.execute("photo.setCaptureTime", &json!({"ids": [id], "fromFile": true})).is_err());
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&lib);
 }
 
 /// Batch rename on disk: collisions with existing files and within the batch get suffixes, sidecars
@@ -142,7 +168,7 @@ fn batch_rename_files_collisions_undo_and_replay() {
     assert_eq!(std::fs::read(src.join("Trip-001.png")).unwrap(), b"not ours", "never overwritten");
     assert!(src.join("Trip-001-1.xmp").is_file() && !src.join("a.xmp").exists(), "sidecar moved");
     assert_eq!(path_of(&s, copy), path_of(&s, ids[0]), "the virtual copy follows");
-    assert_eq!(s.catalog.photo(lightcraft_catalog::PhotoId(ids[1])).unwrap().file_name, "Trip-002.png");
+    assert_eq!(s.catalog.photo(dac_catalog::PhotoId(ids[1])).unwrap().file_name, "Trip-002.png");
 
     // undo moves the files back; redo renames again
     s.execute("edit.undo", &json!({})).unwrap();
@@ -181,14 +207,14 @@ fn rename_demo_photos_in_catalog() {
     let ids: Vec<u64> = s.visible_cloned().iter().take(3).map(|p| p.0).collect();
     let r = s.execute("photo.rename", &json!({"ids": ids, "template": "{date:%Y-%m-%d}_{seq:2}", "start": 7})).unwrap();
     assert_eq!(r["renamed"], 3);
-    let name = &s.catalog.photo(lightcraft_catalog::PhotoId(ids[0])).unwrap().file_name;
+    let name = &s.catalog.photo(dac_catalog::PhotoId(ids[0])).unwrap().file_name;
     assert!(name.ends_with("_07.jpg") || name.contains("_07."), "{name}");
     s.execute("edit.undo", &json!({})).unwrap();
-    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(ids[0])).unwrap().file_name.starts_with("LC"));
+    assert!(s.catalog.photo(dac_catalog::PhotoId(ids[0])).unwrap().file_name.starts_with("LC"));
 }
 
 fn captured(s: &Session, id: u64) -> Option<String> {
-    s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().captured.clone()
+    s.catalog.photo(dac_catalog::PhotoId(id)).unwrap().captured.clone()
 }
 
 /// Edit Capture Time: set (others shift along), set each, shift by an offset, time-zone shift;
@@ -200,7 +226,7 @@ fn capture_time_set_shift_undo_and_replay() {
     s.open_library(&dir, true).unwrap();
     let ids: Vec<u64> = s.visible_cloned().iter().take(3).map(|p| p.0).collect();
     let before: Vec<Option<String>> = ids.iter().map(|i| captured(&s, *i)).collect();
-    let secs = |t: &Option<String>| lightcraft_catalog::dates::iso_seconds(t.as_deref().unwrap()).unwrap();
+    let secs = |t: &Option<String>| dac_catalog::dates::iso_seconds(t.as_deref().unwrap()).unwrap();
     // set the active photo; the others keep their distance to it
     s.execute("library.select", &json!({"ids": ids, "active": ids[1]})).unwrap();
     let r = s.execute("photo.setCaptureTime", &json!({"time": "2020-01-02 03:04:05"})).unwrap();
@@ -246,16 +272,16 @@ fn label_names_set_undo_and_replay() {
     assert_eq!(names[3]["name"], "Blue");
     assert_eq!(names[3]["custom"], json!(null));
     s.execute("label.setNames", &json!({"names": {"red": "red"}})).unwrap();
-    assert_eq!(s.catalog.label_name(lightcraft_catalog::ColorLabel::Red), "Red", "the colour's own name resets");
+    assert_eq!(s.catalog.label_name(dac_catalog::ColorLabel::Red), "Red", "the colour's own name resets");
     s.execute("edit.undo", &json!({})).unwrap();
-    assert_eq!(s.catalog.label_name(lightcraft_catalog::ColorLabel::Red), "Reject later");
+    assert_eq!(s.catalog.label_name(dac_catalog::ColorLabel::Red), "Reject later");
     assert!(s.execute("label.setNames", &json!({"names": {"orange": "x"}})).is_err());
     let expect = s.catalog.to_snapshot();
     drop(s);
     let mut s = Session::new();
     s.open_library(&dir, false).unwrap();
     assert_eq!(s.catalog.to_snapshot(), expect);
-    assert_eq!(s.catalog.label_name(lightcraft_catalog::ColorLabel::Green), "Approved");
+    assert_eq!(s.catalog.label_name(dac_catalog::ColorLabel::Green), "Approved");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -297,14 +323,14 @@ fn import_review_preview_and_options() {
         )
         .unwrap();
     assert_eq!(r["imported"].as_array().unwrap().len(), 2, "{r}");
-    let album = lightcraft_catalog::AlbumId(r["album"].as_u64().unwrap());
+    let album = dac_catalog::AlbumId(r["album"].as_u64().unwrap());
     assert_eq!(s.catalog.album(album).unwrap().name, "Imported Trip");
     assert_eq!(s.catalog.album_count(album), 2);
     for id in r["imported"].as_array().unwrap() {
-        let p = s.catalog.photo(lightcraft_catalog::PhotoId(id.as_u64().unwrap())).unwrap();
+        let p = s.catalog.photo(dac_catalog::PhotoId(id.as_u64().unwrap())).unwrap();
         assert_eq!(p.meta.keywords, ["trip", "family|kids"]);
         assert!(p.history.last().unwrap().label.starts_with("Preset: "), "preset applied with a History entry");
-        let lightcraft_catalog::Source::File { path } = &p.source else { panic!() };
+        let dac_catalog::Source::File { path } = &p.source else { panic!() };
         assert!(std::path::Path::new(path).starts_with(lib.join("Originals")), "{path}");
     }
     assert_eq!(s.undo.len(), undo0 + 1, "import + album = one undo step");
@@ -320,7 +346,7 @@ fn import_review_preview_and_options() {
 /// names written to / read from XMP.
 #[test]
 fn label_sets_and_xmp_label_names() {
-    use lightcraft_catalog::ColorLabel;
+    use dac_catalog::ColorLabel;
     let dir = std::env::temp_dir().join(format!("lc-labelsets-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let mut s = Session::new();
@@ -343,15 +369,8 @@ fn label_sets_and_xmp_label_names() {
     s.execute("label.applySet", &json!({"name": "studio"})).unwrap();
     assert_eq!(s.catalog.label_name(ColorLabel::Purple), "Client");
     // XMP: the label's name is written, and read back through the names
-    let mut p = lightcraft_catalog::Photo::new(
-        lightcraft_catalog::PhotoId(1),
-        lightcraft_catalog::Source::Demo { scene: 0 },
-        "a.jpg",
-        "JPEG",
-        4,
-        4,
-        "2026-01-01T00:00:00",
-    );
+    let mut p =
+        dac_catalog::Photo::new(dac_catalog::PhotoId(1), dac_catalog::Source::Demo { scene: 0 }, "a.jpg", "JPEG", 4, 4, "2026-01-01T00:00:00");
     p.label = Some(ColorLabel::Green);
     let x = crate::sidecar::sidecar_packet(&p, &s.catalog);
     assert!(x.contains("Approved"), "{x}");
@@ -380,7 +399,7 @@ fn keyword_sets_and_recent_keywords() {
     s.execute("library.select", &json!({"ids": ids})).unwrap();
     let r = s.execute("keyword.toggleFromSet", &json!({"index": 3})).unwrap();
     assert_eq!((r["keyword"].as_str(), r["added"].as_bool()), (Some("sunset"), Some(true)));
-    let has = |s: &Session, id: u64, k: &str| s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().meta.keywords.iter().any(|x| x == k);
+    let has = |s: &Session, id: u64, k: &str| s.catalog.photo(dac_catalog::PhotoId(id)).unwrap().meta.keywords.iter().any(|x| x == k);
     assert!(has(&s, ids[0], "sunset") && has(&s, ids[1], "sunset"));
     assert_eq!(s.execute("keyword.sets", &json!({})).unwrap()["keywords"][2], "sunset", "the numbers stay put");
     // again: everyone has it, so it's removed
@@ -407,7 +426,7 @@ fn keyword_sets_and_recent_keywords() {
 /// one undo step, replayed from the op log.
 #[test]
 fn tracklog_auto_tag() {
-    use lightcraft_catalog::{Op, PhotoId};
+    use dac_catalog::{Op, PhotoId};
     const GPX: &str = r#"<?xml version="1.0"?>
 <gpx version="1.1" creator="test" xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg>
   <trkpt lat="46.0000" lon="7.0000"><time>2026-05-01T10:00:00Z</time></trkpt>
@@ -471,7 +490,7 @@ fn tracklog_auto_tag() {
 
 #[test]
 fn random_sort_is_stable_until_reshuffled() {
-    use lightcraft_catalog::SortKey;
+    use dac_catalog::SortKey;
     let mut s = Session::with_demo();
     let dated = s.visible_cloned();
     s.execute("library.sort", &json!({"key": "random", "seed": 11})).unwrap();
@@ -553,7 +572,7 @@ fn choosing_random_starts_a_fresh_shuffle() {
 }
 
 fn capture_time_raw_metadata_session(raw: Option<&str>) -> Session {
-    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+    use dac_catalog::{Op, Photo, PhotoId, Source};
     let mut s = Session::new();
     let id = PhotoId(1);
     let mut p = Photo::new(id, Source::Demo { scene: 0 }, "one.jpg", "JPEG", 4, 3, "2026-04-01T00:00:00");
@@ -565,7 +584,7 @@ fn capture_time_raw_metadata_session(raw: Option<&str>) -> Session {
 
 #[test]
 fn capture_time_invalid_calendar_anchor_keeps_other_targets_and_redo() {
-    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+    use dac_catalog::{Op, Photo, PhotoId, Source};
     for raw in ["2026-02-30T12:00:00", "2026x03x01T12:00:00"] {
         let mut s = capture_time_raw_metadata_session(Some(raw));
         let peer = PhotoId(2);

@@ -8,12 +8,12 @@ fn demo() -> Session {
     Session::with_demo()
 }
 
-fn active_dev(s: &Session) -> lightcraft_develop::DevelopSettings {
+fn active_dev(s: &Session) -> dac_develop::DevelopSettings {
     (*s.develop_of(s.active().unwrap()).unwrap()).clone()
 }
 
 /// Spread of the channels (a saturation proxy) at normalized `(x, y)`.
-fn chroma_at(img: &lightcraft_raster::Rgba8, x: f64, y: f64) -> i32 {
+fn chroma_at(img: &dac_raster::Rgba8, x: f64, y: f64) -> i32 {
     let p = img.data[(img.height as f64 * y) as usize * img.width + (img.width as f64 * x) as usize];
     p[0].max(p[1]).max(p[2]) as i32 - p[0].min(p[1]).min(p[2]) as i32
 }
@@ -50,7 +50,7 @@ fn point_color_pick_and_adjust() {
     assert_eq!(active_dev(&s).point_colors.len(), 7);
     // survives the settings JSON (what the catalog and XMP sidecars store)
     let d = active_dev(&s);
-    assert_eq!(lightcraft_develop::DevelopSettings::from_json(&d.to_json()).unwrap(), d);
+    assert_eq!(dac_develop::DevelopSettings::from_json(&d.to_json()).unwrap(), d);
 }
 
 #[test]
@@ -76,7 +76,7 @@ fn red_eye_commands_and_controls() {
     assert!(s.execute("redeye.delete", &json!({"index": 5})).is_err());
     assert!(s.execute("redeye.add", &json!({"rx": 0.03})).is_err());
     let d = active_dev(&s);
-    assert_eq!(lightcraft_develop::DevelopSettings::from_json(&d.to_json()).unwrap(), d);
+    assert_eq!(dac_develop::DevelopSettings::from_json(&d.to_json()).unwrap(), d);
 }
 
 #[test]
@@ -86,9 +86,9 @@ fn pet_eye_catchlight_command() {
     s.execute("redeye.add", &json!({"center": [0.6, 0.4], "rx": 0.03, "ry": 0.03, "pet": true})).unwrap();
     assert!(s.execute("redeye.catchlight", &json!({"index": 0})).is_err(), "red eyes have no catchlight");
     s.execute("redeye.catchlight", &json!({"index": 1})).unwrap();
-    assert_eq!(active_dev(&s).red_eye[1].catchlight, Some(lightcraft_geom::Point::new(-0.35, -0.35)));
+    assert_eq!(active_dev(&s).red_eye[1].catchlight, Some(dac_geom::Point::new(-0.35, -0.35)));
     s.execute("redeye.catchlight", &json!({"index": 1, "offset": [0.2, -3.0]})).unwrap();
-    assert_eq!(active_dev(&s).red_eye[1].catchlight, Some(lightcraft_geom::Point::new(0.2, -1.0)));
+    assert_eq!(active_dev(&s).red_eye[1].catchlight, Some(dac_geom::Point::new(0.2, -1.0)));
     s.execute("redeye.catchlight", &json!({"index": 1, "on": false})).unwrap();
     assert_eq!(active_dev(&s).red_eye[1].catchlight, None);
 }
@@ -101,7 +101,7 @@ fn targeted_adjustment_on_curve_and_mixer() {
     let (k, v) = r.as_object().unwrap().iter().next().map(|(k, v)| (k.clone(), v.clone())).unwrap();
     assert!(k == "curve.lights" || k == "curve.highlights", "{r}");
     assert_eq!(v, 20.0);
-    assert_eq!(lightcraft_develop::controls::get(&active_dev(&s), &k), Some(20.0));
+    assert_eq!(dac_develop::controls::get(&active_dev(&s), &k), Some(20.0));
     // the dark trees in the lower ones
     let r = s.execute("develop.targeted", &json!({"target": "curve", "x": 0.4, "y": 0.62, "delta": -10})).unwrap();
     assert!(r.get("curve.shadows").is_some() || r.get("curve.darks").is_some(), "{r}");

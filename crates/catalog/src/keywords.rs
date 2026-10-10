@@ -1203,7 +1203,7 @@ mod tests {
         assert_eq!(from_file(&v(&["Rome", "Italy", "travel", "beach"]), &v(&["travel|Italy|Rome"])), ["travel|Italy|Rome", "beach"]);
         assert_eq!(from_file(&v(&["ROME"]), &v(&["travel|Rome", " travel | rome "])), ["travel|Rome"], "each once, cleaned");
         assert_eq!(from_file(&v(&["beach", " sea "]), &[]), ["beach", "sea"]);
-        assert_eq!(from_file(&v(&["a|b"]), &[]), ["a|b"], "LightCraft's own sidecars write paths flat");
+        assert_eq!(from_file(&v(&["a|b"]), &[]), ["a|b"], "the app's own sidecars write paths flat");
     }
 
     /// A new keyword inside one the library has takes the library's spelling of it: creating

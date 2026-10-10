@@ -1,8 +1,8 @@
 //! Paginated contact sheets, rendered with the normal export pipeline and packaged as PDF.
 use crate::export::{Anchor, ExportFormat, ExportOptions, Watermark, draw_watermark, encode_image};
 use crate::{Session, media::RenderJob};
-use lightcraft_pipeline::{OutputDepth, OutputSpace};
-use lightcraft_raster::Rgba8;
+use dac_pipeline::{OutputDepth, OutputSpace};
+use dac_raster::Rgba8;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -359,7 +359,7 @@ mod tests {
     fn first_page(bytes: &[u8]) -> Rgba8 {
         let start = bytes.windows(2).position(|v| v == [0xff, 0xd8]).unwrap();
         let end = bytes[start..].windows(2).position(|v| v == [0xff, 0xd9]).unwrap() + start + 2;
-        lightcraft_codecs::decode(&bytes[start..end], Default::default()).unwrap().to_srgb8()
+        dac_codecs::decode(&bytes[start..end], Default::default()).unwrap().to_srgb8()
     }
 
     #[test]
