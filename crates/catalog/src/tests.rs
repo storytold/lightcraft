@@ -568,7 +568,7 @@ fn id_generator_is_not_serialized() {
     assert_eq!(back.to_snapshot(), c.to_snapshot());
 }
 
-/// Photos with one import time and capture time, as one import batch of a burst gives them, added
+/// Photos with one import time and capture time, as one import batch or a burst gives them, added
 /// with ids that run opposite to their names.
 fn batch_with_reversed_ids(c: &mut Catalog) -> Vec<PhotoId> {
     let names = ["DSC_0001.ARW", "DSC_0002.ARW", "DSC_0003.ARW", "DSC_0004.ARW"];
@@ -597,4 +597,16 @@ fn burst_in_one_second_sorts_by_file_name_not_id() {
     let by_name = batch_with_reversed_ids(&mut c);
     let sort = Sort { key: SortKey::CaptureDate, ascending: true, ..Default::default() };
     assert_eq!(c.query(&Filter::default(), &sort), by_name);
+}
+
+#[test]
+fn cmp_name_ignores_case_without_allocating() {
+    use crate::query::cmp_name;
+    use std::cmp::Ordering::*;
+    assert_eq!(cmp_name("IMG_1.JPG", "img_1.jpg"), Equal);
+    assert_eq!(cmp_name("Ärger.jpg", "ärger.jpg"), Equal);
+    assert_eq!(cmp_name("a", "B"), Less);
+    assert_eq!(cmp_name("B", "a"), Greater);
+    assert_eq!(cmp_name("DSC_0001", "DSC_0002"), Less);
+    assert_eq!(cmp_name("a", "ab"), Less);
 }
