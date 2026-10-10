@@ -9,10 +9,11 @@
   Native on macOS, Windows and Linux. In the browser via WebAssembly. Drivable end to end by AI agents over MCP.
 </p>
 
-> [!WARNING]
-> **Please don't contribute yet.** This fork was published on 2026-10-10 and its initial planning and restructuring
-> are still under way, so pull requests and issues filed now are likely to conflict with work in progress. Please
-> wait about 30 hours, until roughly 2026-10-11 15:00 UTC (the "Public" line in the timeline below), before contributing.
+> [!NOTE]
+> **Open for contributions** (since 2026-10-11). Phases 0, 1, U, 3, 4 and 6 are done; pull requests and bug reports
+> are welcome. Changes to crates shared with the upstream project go upstream as PRs first (see
+> [`docs/upstream-merge.md`](docs/upstream-merge.md) and `upstream-owned.txt`). Especially wanted: native-speaker review
+> of the translations, tethering tests on real Canon, Nikon and Sony bodies, and printing to real CUPS printers.
 >
 > Timeline (clock-hours assume continuous agent-driven development):
 >
@@ -23,8 +24,8 @@
 > | U Upstream tracking | 8–14 | 1 | Done (follow-ups ongoing) | ~2 |
 > | 3 Output modules | 72–124 | 12 | Done (slideshow video export after release) | ~4 (with 4) |
 > | 4 Workflow power features, Immich two-way | 60–105 | 10 | Done (People, .lrcat v2 after release; real-camera checks pending) | ~4 (with 3) |
-> | 6 Hardening | 30–50 | 5 | In progress | |
-> | **Public: open for pull requests and bug reports.** From here on, every change to a crate shared with upstream goes upstream as a PR. | | | | |
+> | 6 Hardening (public-release gate) | 30–50 | 5 | Done | ~3 |
+> | **Public: open for pull requests and bug reports (reached 2026-10-11).** From here on, every change to a crate shared with upstream goes upstream as a PR. | | | | |
 > | 2 Quality and camera coverage | 110–180 | 18 | | |
 > | 5 AI, HDR, video | 100–200 | 20 | | |
 > | **Total** | **≈ 442–780** | **78** | | |
