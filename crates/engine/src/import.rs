@@ -501,7 +501,8 @@ pub struct ScanProgress {
     /// Files to probe, set once the folders are expanded.
     pub total: std::sync::atomic::AtomicUsize,
     pub done: std::sync::atomic::AtomicUsize,
-    pub cancel: std::sync::atomic::AtomicBool,
+    /// Shared with the scan's row in the activity stack (its ✕ sets it).
+    pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// The result of [`scan_with`]: the candidates, and the probes to keep for the import that follows.

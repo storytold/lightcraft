@@ -487,3 +487,39 @@ fn every_scanned_face_is_shown_by_the_same_kind_of_box() {
     assert!((v.x0 - tight.x0).abs() < 1e-3 && (v.y0 - tight.y0).abs() < 1e-3, "{v:?}");
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn face_scan_row_follows_pending_photos() {
+    let d = temp("activity");
+    let (mut s, _) = setup(&d, 64);
+    // the last two demo photos, not the first two the other scan tests use: two sessions scanning the same demo scene
+    // at once can deadlock (issue #630), and this test is about the row, not that
+    let mut ids = s.catalog.photos().map(|p| p.id).collect::<Vec<_>>();
+    ids.sort();
+    let (a, b) = (ids[ids.len() - 2], ids[ids.len() - 1]);
+    set_regions(&mut s, a, vec![region(0.1, None), region(0.5, None)]);
+    set_regions(&mut s, b, vec![region(0.3, None)]);
+    let faces_rows = |s: &Session| s.activity.list().into_iter().filter(|t| t.kind == "faces").collect::<Vec<_>>();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let (mut last, mut shown) = (json!(null), false);
+    while std::time::Instant::now() < deadline {
+        last = s.execute("faces.pump", &json!({})).unwrap();
+        let rows = faces_rows(&s);
+        if last["pendingPhotos"].as_u64().unwrap_or(0) > 0 {
+            // while photos are left: one row, not cancellable, its whole the most photos left at once
+            assert_eq!(rows.len(), 1, "{last}");
+            assert_eq!((rows[0].label.as_str(), rows[0].cancellable), ("Finding faces", false));
+            assert_eq!(rows[0].total, last["peak"].as_u64().unwrap(), "{last}");
+            assert_eq!(rows[0].done, rows[0].total - last["pendingPhotos"].as_u64().unwrap());
+            shown = true;
+        }
+        if last["active"] == true && last["pendingPhotos"] == 0 && last["indexedFaces"] == 3 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(shown, "the scan never showed a row: {last}");
+    assert_eq!((last["pendingPhotos"].clone(), last["peak"].clone()), (json!(0), json!(0)), "{last}");
+    assert!(faces_rows(&s).is_empty(), "the row goes when the scan is done");
+    let _ = std::fs::remove_dir_all(&d);
+}

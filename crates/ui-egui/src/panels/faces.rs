@@ -669,8 +669,9 @@ pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
     app.caches.faces_active = v["active"] == true;
     app.caches.faces_indexed = v["indexedFaces"].as_u64().unwrap_or(0);
     app.caches.faces_pending = v["pendingPhotos"].as_u64().unwrap_or(0);
-    // the progress bar's whole: the most photos that were left at once since the scan last finished
-    app.caches.faces_peak = if app.caches.faces_pending == 0 { 0 } else { app.caches.faces_peak.max(app.caches.faces_pending) };
+    // the progress bar's whole: the most photos that were left at once since the scan last finished (the engine keeps
+    // it, so Settings and the activity stack agree)
+    app.caches.faces_peak = v["peak"].as_u64().unwrap_or(0);
     // Frames are drawn only when something asks for one, so nothing here wakes the window needlessly: while there is work it
     // asks to be called again in 50 ms (the progress in Settings, the next photos for the workers); with recognition on and
     // nothing to do it looks again every few seconds (a few wake-ups a minute); with recognition off it asks for nothing

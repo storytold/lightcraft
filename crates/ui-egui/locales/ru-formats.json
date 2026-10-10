@@ -221,5 +221,12 @@
   "; {n} gained synonyms": "; синонимы добавлены к {n}",
   "Exported {n} keyword{}": "Экспортировано ключевых слов: {n}{:.0}",
   " — Capture One won't import a list with ; , < or > in a keyword: {names}": " — Capture One не импортирует список, где в ключевом слове есть ; , < или >: {names}",
-  " — left out, as a keyword list can't hold them: {names}": " — пропущены: список ключевых слов не может их содержать: {names}"
+  " — left out, as a keyword list can't hold them: {names}": " — пропущены: список ключевых слов не может их содержать: {names}",
+  "{done} of {total}": "{done} из {total}",
+  "{done} of {total} MB": "{done} из {total} МБ",
+  "{pct} %": "{pct} %",
+  "+{n} more": "ещё {n}",
+  "1 task is still running: {names}. Quitting stops it.": "Ещё выполняется задача: {names}. Выход прервёт её.",
+  "{n} tasks are still running: {names}. Quitting stops them.": "Ещё выполняется задач: {n} — {names}. Выход прервёт их.",
+  "{what} merge cancelled": "{what}: слияние отменено"
 }

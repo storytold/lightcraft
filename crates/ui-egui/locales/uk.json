@@ -2055,5 +2055,20 @@
   "Stopped by an error (see the log)": "Зупинено через помилку (див. журнал)",
   "Not saved": "Не збережено",
   "A folder is being synchronized": "Тека синхронізується",
-  "Wait for the import to finish": "Дочекайтеся завершення імпорту"
+  "Wait for the import to finish": "Дочекайтеся завершення імпорту",
+  "Show less": "Показати менше",
+  "Quit while tasks are running?": "Вийти, поки виконуються завдання?",
+  "Exporting contact sheet": "Експорт аркуша мініатюр",
+  "Reading folder": "Читання папки",
+  "Scanning folder": "Сканування папки",
+  "Building previews": "Створення попередніх переглядів",
+  "Building smart previews": "Створення смарт-переглядів",
+  "Discarding smart previews": "Видалення смарт-переглядів",
+  "Importing Lightroom catalog": "Імпорт каталогу Lightroom",
+  "Reading Lightroom catalog": "Читання каталогу Lightroom",
+  "Merging": "Об’єднання",
+  "Downloading model": "Завантаження моделі",
+  "Finding faces": "Пошук облич",
+  "Synchronizing folder": "Синхронізація папки",
+  "Looking for changes": "Пошук змін"
 }

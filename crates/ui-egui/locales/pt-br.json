@@ -1874,5 +1874,20 @@
   "Charcoal": "Carvão",
   "Midnight": "Meia-noite",
   "Silver": "Prata",
-  "Paper": "Papel"
+  "Paper": "Papel",
+  "Show less": "Mostrar menos",
+  "Quit while tasks are running?": "Sair com tarefas em andamento?",
+  "Exporting contact sheet": "Exportando folha de contato",
+  "Reading folder": "Lendo pasta",
+  "Scanning folder": "Verificando pasta",
+  "Building previews": "Gerando prévias",
+  "Building smart previews": "Gerando prévias inteligentes",
+  "Discarding smart previews": "Descartando prévias inteligentes",
+  "Importing Lightroom catalog": "Importando catálogo do Lightroom",
+  "Reading Lightroom catalog": "Lendo catálogo do Lightroom",
+  "Merging": "Mesclando",
+  "Downloading model": "Baixando modelo",
+  "Finding faces": "Procurando rostos",
+  "Synchronizing folder": "Sincronizando pasta",
+  "Looking for changes": "Procurando alterações"
 }

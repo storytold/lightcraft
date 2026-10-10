@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use lightcraft_segment::fetch::{self, Options, Progress};
 
+use crate::activity::{Activity, Cancel, Unit};
+
 /// What the session sees of a download.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Status {
@@ -31,7 +33,7 @@ struct Text {
 #[derive(Default)]
 struct Shared {
     running: AtomicBool,
-    cancel: AtomicBool,
+    cancel: Arc<AtomicBool>,
     finished: AtomicBool,
     done: AtomicU64,
     total: AtomicU64,
@@ -92,9 +94,17 @@ impl Downloader {
         running
     }
 
-    /// Start downloading `files` from `mirrors` into `dir` on a background thread. False when
-    /// one is already running.
-    pub fn start(&self, files: &'static [fetch::FileSpec], mirrors: Vec<String>, dir: PathBuf, opts: Options) -> Result<bool, String> {
+    /// Start downloading `files` from `mirrors` into `dir` on a background thread, shown in the activity stack as
+    /// `name` (its ✕ cancels like [`Downloader::cancel`]). False when one is already running.
+    pub fn start(
+        &self,
+        files: &'static [fetch::FileSpec],
+        mirrors: Vec<String>,
+        dir: PathBuf,
+        opts: Options,
+        activity: &Activity,
+        name: &str,
+    ) -> Result<bool, String> {
         let s = self.shared.clone();
         if s.running.swap(true, Ordering::SeqCst) {
             return Ok(false);
@@ -106,6 +116,10 @@ impl Downloader {
         // nothing else runs while `running` was false
         *lock(&s.text) = Text::default();
         *lock(&self.last) = Text::default();
+        let task = activity.start("download", "Downloading model", Cancel::Flag(s.cancel.clone()));
+        task.set_unit(Unit::Bytes);
+        task.detail(name);
+        task.progress(0, s.total.load(Ordering::SeqCst));
         let guard = Running(s.clone());
         let spawned = std::thread::Builder::new().name("sam3-download".into()).spawn(move || {
             let s = guard.0.clone();
@@ -113,6 +127,7 @@ impl Downloader {
             let mut on_progress = |p: &Progress| {
                 s.done.store(p.done, Ordering::SeqCst);
                 s.total.store(p.total, Ordering::SeqCst);
+                task.progress(p.done, p.total);
                 if p.file != last_file {
                     last_file.clone_from(&p.file);
                     lock(&s.text).file.clone_from(&p.file);

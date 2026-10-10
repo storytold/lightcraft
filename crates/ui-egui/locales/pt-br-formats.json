@@ -221,5 +221,12 @@
   "; {n} gained synonyms": "; {n} receberam sinônimos",
   "Exported {n} keyword{}": "Palavras-chave exportadas: {n}{:.0}",
   " — Capture One won't import a list with ; , < or > in a keyword: {names}": " — O Capture One não importa uma lista com ; , < ou > em uma palavra-chave: {names}",
-  " — left out, as a keyword list can't hold them: {names}": " — omitidas, pois uma lista de palavras-chave não pode contê-las: {names}"
+  " — left out, as a keyword list can't hold them: {names}": " — omitidas, pois uma lista de palavras-chave não pode contê-las: {names}",
+  "{done} of {total}": "{done} de {total}",
+  "{done} of {total} MB": "{done} de {total} MB",
+  "{pct} %": "{pct}%",
+  "+{n} more": "+{n} mais",
+  "1 task is still running: {names}. Quitting stops it.": "1 tarefa ainda está em andamento: {names}. Sair a interrompe.",
+  "{n} tasks are still running: {names}. Quitting stops them.": "{n} tarefas ainda estão em andamento: {names}. Sair as interrompe.",
+  "{what} merge cancelled": "{what} mesclagem cancelada"
 }

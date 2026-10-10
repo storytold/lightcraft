@@ -9,7 +9,7 @@
 //! * Ticking "Remove missing photos" also moves those to Recently Deleted.
 //! * Cancel leaves the library as it was.
 //! * Synchronize hands the work to the background at once: the dialog closes, the app keeps
-//!   answering, and the photos arrive over the next frames under a progress window, as one undo
+//!   answering, and the photos arrive over the next frames under a row in the activity stack, as one undo
 //!   step.
 
 use std::time::Duration;
@@ -218,7 +218,7 @@ fn a_stopped_synchronize_says_it_was_stopped_and_stays_at_most_one_step() {
     let steps = h.app.session.undo.len();
     let dlg = h.app.ui.dialog.take().expect("the dialog is open");
     assert!(crate::panels::dialogs::confirm_dialog(&mut h.app, &dlg).is_ok());
-    // the progress window's Cancel, before any frame committed anything
+    // Cancel (what the row's ✕ does), before any frame committed anything
     h.app.sync_run.as_mut().expect("running").cancel();
     assert!(h.step_until(T, |h| h.app.sync_run.is_none()), "it ends");
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
@@ -253,4 +253,52 @@ fn a_synchronize_and_an_import_never_run_at_once() {
     };
     let r = crate::panels::dialogs::confirm_dialog(&mut h.app, &d);
     assert!(r.is_err() && h.app.sync_run.is_none(), "no synchronize while importing: {r:?}");
+}
+
+#[test]
+fn a_synchronize_shows_a_row_and_its_cross_stops_it() {
+    let dir = Scratch::new("row");
+    let mut h = changed_folder(&dir);
+    open_and_scan(&mut h, &dir.path("trip"));
+    let dlg = h.app.ui.dialog.take().expect("the dialog is open");
+    assert!(crate::panels::dialogs::confirm_dialog(&mut h.app, &dlg).is_ok());
+    let rows = h.app.session.activity.list();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!((rows[0].kind, rows[0].label.as_str()), ("sync", "Synchronizing folder"));
+    assert!(rows[0].detail.ends_with("trip"), "the folder as the dialog named it: {:?}", rows[0].detail);
+    assert!(rows[0].cancellable);
+    // the row's ✕ (as `activity.cancel`): what was done stays, and the end says it was stopped
+    h.app.session.activity.cancel(rows[0].id).unwrap();
+    assert!(h.step_until(T, |h| h.app.sync_run.is_none()), "it ends");
+    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.contains("Stopped"), "{toast:?}");
+    assert!(h.app.session.activity.list().is_empty(), "the row goes with the run");
+}
+
+#[test]
+fn the_folders_scan_shows_a_row_and_its_cross_closes_the_dialog() {
+    let dir = Scratch::new("scanrow");
+    let mut h = changed_folder(&dir);
+    // a scan that can't finish until the test lets it: reading the new file waits on a flag
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let g = gate.clone();
+    h.app.session.media.file_probe = Some(std::sync::Arc::new(move |_: &str| {
+        while !g.load(std::sync::atomic::Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        Ok(lightcraft_engine::media::ProbeInfo { format: "PNG".into(), ..Default::default() })
+    }));
+    crate::sync::open(&mut h.app, &dir.path("trip"), "trip", false).unwrap();
+    let rows = h.app.session.activity.list();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!((rows[0].kind, rows[0].label.as_str(), rows[0].detail.as_str()), ("sync", "Looking for changes", "trip"));
+    assert!(rows[0].cancellable);
+    h.app.session.activity.cancel(rows[0].id).unwrap();
+    h.step();
+    assert!(h.app.sync.is_none(), "✕ stops the scan");
+    assert!(h.app.ui.dialog.is_none(), "and closes its dialog: there is nothing to show");
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(h.app.session.activity.list().is_empty());
+    h.settle(SETTLE);
+    assert!(h.app.ui.dialog.is_none(), "a stopped scan opens nothing later");
 }

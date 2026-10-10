@@ -105,7 +105,7 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "status": app.ui.status,
         "copied": app.copied,
         "notices": app.notices,
-        "quitPrompt": app.quit_prompt,
+        "quitPrompt": app.quit_prompt.as_ref().map(crate::QuitPrompt::text),
         // how hard the background face scan may work right now, and why it is judged so (see `panels::faces::scan_pace`)
         "faceScan": {"pace": app.caches.faces_pace, "focused": app.caches.faces_in_front, "pending": app.caches.faces_pending, "indexed": app.caches.faces_indexed},
         "unsaved": app.session.unsaved().map(|(n, e)| json!({"ops": n, "error": e})),
@@ -114,6 +114,8 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "export": {"running": app.export.as_ref().map(crate::export_task::ExportTask::status), "last": app.last_export_result},
         "import": app.import.as_ref().map(crate::import::ImportTask::status),
         "tasks": app.tasks.labels(),
+        // every long-running task in flight, as the activity stack shows them (`activity.list`)
+        "activity": app.session.activity.list(),
         // commands waiting on a native file dialog shown off the UI thread (`pick`)
         "fileDialogs": app.pending_picks.iter().map(|p| p.command.clone()).collect::<Vec<_>>(),
         "memory": memory(app),

@@ -419,6 +419,11 @@ impl Session {
                 lib.forgot_local = Some(plan);
             }
         }
+        // smart previews written by an older camera-look fit are brought up to date in the background
+        #[cfg(not(target_arch = "wasm32"))]
+        if on_disk {
+            crate::cmd::previews::refresh_stale_smart_previews(self);
+        }
         self.library_identity = std::sync::Arc::new(());
         Ok(())
     }

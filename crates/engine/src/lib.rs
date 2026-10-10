@@ -14,8 +14,9 @@
 #[cfg(not(feature = "denoise"))]
 extern crate lightcraft_denoise_core as lightcraft_denoise;
 
+pub mod activity;
 pub mod availability;
-mod camera_preview;
+pub(crate) mod camera_preview;
 pub mod camera_profiles;
 pub mod cmd;
 pub mod config;
@@ -261,6 +262,9 @@ pub struct Session {
     /// The last Synchronize Folder scan, which `folder.synchronize` acts on while it is current
     /// (see [`Session::take_folder_changes`]).
     pub folder_changes: Option<sync::FolderChanges>,
+    /// Background tasks in flight (imports, exports, preview builds…), for the activity stack and
+    /// `activity.list` / `activity.cancel`.
+    pub activity: activity::Activity,
     /// The last (or running) Build Previews.
     pub preview_build: Option<std::sync::Arc<cmd::previews::PreviewBuild>>,
     /// Develop defaults applied on import (persisted in prefs.json).
@@ -345,6 +349,7 @@ impl Session {
             before: Default::default(),
             import_probes: Default::default(),
             folder_changes: None,
+            activity: Default::default(),
             preview_build: None,
             import_defaults: import::ImportDefaults::default(),
             cache_mb: 0,

@@ -1876,5 +1876,20 @@
   "Charcoal": "チャコール",
   "Midnight": "ミッドナイト",
   "Silver": "シルバー",
-  "Paper": "ペーパー"
+  "Paper": "ペーパー",
+  "Show less": "表示を減らす",
+  "Quit while tasks are running?": "タスクの実行中に終了しますか？",
+  "Exporting contact sheet": "コンタクトシートを書き出し中",
+  "Reading folder": "フォルダーを読み込み中",
+  "Scanning folder": "フォルダーをスキャン中",
+  "Building previews": "プレビューを作成中",
+  "Building smart previews": "スマートプレビューを作成中",
+  "Discarding smart previews": "スマートプレビューを破棄中",
+  "Importing Lightroom catalog": "Lightroom カタログを読み込み中",
+  "Reading Lightroom catalog": "Lightroom カタログを読み取り中",
+  "Merging": "合成中",
+  "Downloading model": "モデルをダウンロード中",
+  "Finding faces": "顔を検索中",
+  "Synchronizing folder": "フォルダを同期中",
+  "Looking for changes": "変更を確認中"
 }

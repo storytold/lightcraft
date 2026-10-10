@@ -32,6 +32,10 @@
 //! comes from the data. The crop and white balance are NOT addressed here: the file has no maker-note `FullImageSize`
 //! and no plain WB tag (they live in its `SR2SubIFD`), so it opens uncropped with unit multipliers.
 //!
+//! Packed 12-bit ARW (DSLR-A900; Compression 32767 but BitsPerSample 12 and a strip of exactly width × height × 1.5
+//! bytes): plain 12-bit samples, two per three bytes, least-significant-bit first ([`unpack_row12`]); linear, black 128
+//! (512 on the 14-bit scale), CFA from the file's own pattern tag, crop centred on the frame (see [`default_crop`]).
+//!
 //! Also: uncompressed 16-bit ARW, and lossless-compressed ARW (Compression 7, ILCE-7M4 and later): LJ92 tiles whose
 //! frames hold one 2×2 CFA cell per four-component sample ([`read_quad_tiles`]). Other lossless-JPEG layouts go
 //! through the generic TIFF path.
@@ -201,6 +205,25 @@ fn tag2010_wb(model: &str, block: &[u8], order: lightcraft_tiff::ByteOrder) -> O
     }
     let (r, b) = (r / g, b / g);
     ((0.2..=8.0).contains(&r) && (0.2..=8.0).contains(&b)).then_some([r, 1.0, b])
+}
+
+/// Whether a 12-bit, single-strip, Sony-compressed (32767) image is stored as plain packed 12-bit samples: the strip
+/// is exactly 1.5 bytes per pixel (width even), so every row is `1.5 · width` bytes with no padding. On the one
+/// DSLR-A900 sample this is the whole strip (36 917 760 = 6080 × 4048 × 1.5) and it ends at the end of the file.
+fn is_packed12(info: &ImageInfo, strip_count: usize, strip_len: u64) -> bool {
+    let (w, h) = (info.width as u64, info.height as u64);
+    info.bits() == 12 && strip_count == 1 && w % 2 == 0 && w > 0 && h > 0 && strip_len == w * h * 3 / 2
+}
+
+/// Unpack plain 12-bit samples stored least-significant-bit first: two pixels per three bytes, the first being
+/// `b0 | (b1 & 0xf) << 8` and the second `b1 >> 4 | b2 << 4` (measured: same-colour neighbours differ by ~16 codes
+/// in this order against ~200 in the most-significant-first order). `row` is `1.5 · out.len()` bytes.
+pub(crate) fn unpack_row12(row: &[u8], out: &mut [u16]) {
+    for (i, b) in row.windows(3).step_by(3).enumerate() {
+        let Some(px) = out.get_mut(2 * i..2 * i + 2) else { break };
+        px[0] = u16::from(b[0]) | (u16::from(b[1] & 0xf) << 8);
+        px[1] = u16::from(b[1] >> 4) | (u16::from(b[2]) << 4);
+    }
 }
 
 /// White-balance gains `[R/G, 1, B/G]` from `WB_RGGBLevels` (R, G, G, B); `None` unless there are four levels
@@ -462,18 +485,30 @@ fn word16_order(strip: &[u8], bits: u32, file: lightcraft_tiff::ByteOrder) -> li
     if n > 0 && over_other == 0 && over_file * 100 > n { other } else { file }
 }
 
-/// The image area for files without Sony's crop tags (`0x74c7/0x74c8`, written since about 2017): the DNG-style
-/// default crop when the raw IFD has one, else the image size the camera records (see [`recorded_size_crop`]).
-fn default_crop(raw: &Ifd, mn: Option<&makernote::MakerNote>, exif_size: Option<(u64, u64)>, w: usize, h: usize) -> Rect {
-    let full = Rect::new(0, 0, w, h);
+/// The raw IFD's DNG-style `DefaultCropOrigin` / `DefaultCropSize`, clipped to the `w × h` frame.
+fn dng_default_crop(raw: &Ifd, w: usize, h: usize) -> Option<Rect> {
     if let (Some([x, y]), Some([cw, ch])) = (raw.u64s(t::DEFAULT_CROP_ORIGIN).as_deref(), raw.u64s(t::DEFAULT_CROP_SIZE).as_deref())
         && *cw > 0
         && *ch > 0
     {
-        return Rect::new(*x as usize, *y as usize, *cw as usize, *ch as usize).clipped(w, h);
+        return Some(Rect::new(*x as usize, *y as usize, *cw as usize, *ch as usize).clipped(w, h));
+    }
+    None
+}
+
+/// The image area for files without Sony's crop tags (`0x74c7/0x74c8`, written since about 2017): the DNG-style
+/// default crop when the raw IFD has one, else the image size the camera records (see [`recorded_size_crop`]).
+///
+/// `centred` places that recorded-size window in the middle of the frame (on even offsets, keeping the CFA phase)
+/// instead of at the left: the packed 12-bit frame (DSLR-A900) has no padding at either edge, and its camera JPEG
+/// is centred on the frame.
+fn default_crop(raw: &Ifd, mn: Option<&makernote::MakerNote>, exif_size: Option<(u64, u64)>, w: usize, h: usize, centred: bool) -> Rect {
+    let full = Rect::new(0, 0, w, h);
+    if let Some(crop) = dng_default_crop(raw, w, h) {
+        return crop;
     }
     match mn.and_then(|m| m.ifd.u64s(MN_FULL_IMAGE_SIZE)).as_deref() {
-        Some([fh, fw]) => recorded_size_crop((*fw, *fh), exif_size, w, h).unwrap_or(full),
+        Some([fh, fw]) => recorded_size_crop((*fw, *fh), exif_size, w, h, centred).unwrap_or(full),
         _ => full,
     }
 }
@@ -486,8 +521,9 @@ fn default_crop(raw: &Ifd, mn: Option<&makernote::MakerNote>, exif_size: Option<
 /// top. An in-camera aspect ratio narrower than the frame (16:9) is centred vertically, as measured by registering
 /// each camera JPEG on its raw (the ILCE-7SM2's 4240 × 2384 at y 228–232 of 2848; the DSLR-A580's 4912 × 2760 at
 /// y 258–262 of 3280; issue #535): its height comes from `FullImageSize` (ILCE-7SM2) or, when that still says
-/// 3:2, from an Exif image size of the same width (DSLR-A580).
-fn recorded_size_crop(full: (u64, u64), exif: Option<(u64, u64)>, w: usize, h: usize) -> Option<Rect> {
+/// 3:2, from an Exif image size of the same width (DSLR-A580). `centred` centres the window in both directions
+/// instead (see [`default_crop`]).
+fn recorded_size_crop(full: (u64, u64), exif: Option<(u64, u64)>, w: usize, h: usize, centred: bool) -> Option<Rect> {
     let (fw, fh) = (usize::try_from(full.0).ok()?, usize::try_from(full.1).ok()?);
     // only a plausible trim of the width: never more than 64 pixels, never an enlargement
     if fw == 0 || fh == 0 || fw > w || fw.saturating_add(64) < w || fh > h {
@@ -497,11 +533,13 @@ fn recorded_size_crop(full: (u64, u64), exif: Option<(u64, u64)>, w: usize, h: u
         Some((ew, eh)) if ew == fw && eh > 0 && eh < fh => eh,
         _ => fh,
     };
+    // even offsets keep the CFA phase
+    let x = if centred { ((w - fw) / 2) & !1 } else { 0 };
     if height.saturating_add(64) >= h {
-        return Some(Rect::new(0, 0, fw, height));
+        return Some(Rect::new(x, if centred { ((h - height) / 2) & !1 } else { 0 }, fw, height));
     }
-    // an in-camera aspect ratio: at least half the frame's height, centred (an even offset keeps the CFA phase)
-    (height * 2 >= h).then(|| Rect::new(0, ((h - height) / 2) & !1, fw, height))
+    // an in-camera aspect ratio: at least half the frame's height, centred
+    (height * 2 >= h).then(|| Rect::new(x, ((h - height) / 2) & !1, fw, height))
 }
 
 fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
@@ -528,6 +566,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     // archive measure exactly width x height. A200/A230/A350 files carry a strip 4-23 % larger than that (and A290/A390 one
     // smaller), which is a different packing, so they are refused rather than read with the wrong layout.
     let one_byte_per_sample = chunks.len() == 1 && strip_len == (w * h) as u64;
+    let packed12 = info.compression == 32767 && is_packed12(&info, chunks.len(), strip_len);
     let (data, out_bits) = match info.compression {
         7 if linear_rgb => (RawData::U16(read_ycbcr_tiles(bytes, &info, raw, mode)?), 14),
         32767 if one_byte_per_sample && mode == Mode::Header => {
@@ -546,6 +585,21 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
                 }
             });
             (RawData::U16(data), 14)
+        }
+        32767 if packed12 && mode == Mode::Header => {
+            chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("raw strip outside file".into()))?;
+            (RawData::U16(Vec::new()), 12)
+        }
+        32767 if packed12 => {
+            let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("raw strip outside file".into()))?;
+            let row_bytes = w / 2 * 3;
+            let mut data = vec![0u16; w * h];
+            data.par_chunks_mut(w).enumerate().for_each(|(y, out)| {
+                if let Some(row) = src.get(y * row_bytes..(y + 1) * row_bytes) {
+                    unpack_row12(row, out);
+                }
+            });
+            (RawData::U16(data), 12)
         }
         32767 => return Err(RawError::Unsupported("Sony ARW version 1 / packed compressed variant (raw strip is not one byte per pixel)".into())),
         7 if is_quad_tiled(bytes, &info) => match mode {
@@ -611,7 +665,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         (Some([x, y]), Some([cw, ch])) if *cw > 0 && *ch > 0 => Rect::new(*x as usize, *y as usize, *cw as usize, *ch as usize).clipped(w, h),
         _ => {
             let exif_size = tiff.exif().and_then(|e| Some((e.u64(t::PIXEL_X_DIMENSION)?, e.u64(t::PIXEL_Y_DIMENSION)?)));
-            default_crop(raw, mn.as_ref(), exif_size, w, h)
+            default_crop(raw, mn.as_ref(), exif_size, w, h, packed12)
         }
     };
     let mut metadata = lightcraft_meta::from_tiff(&tiff);
@@ -635,7 +689,19 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         // makes a neutral surface magenta. WB edits remain relative to this as-shot RGB.
         wb_multipliers: if linear_rgb { Some([1.0; 3]) } else { wb },
         linearized: false,
-        opcodes: OpcodeLists::default(),
+        // The distortion table is centred on the DNG-style default crop when the file has one: on the ILCE-7RM4A
+        // it starts at x = 32 where Sony's crop tags (the image crop, unchanged) start at 0, and the warp was
+        // validated against Sony's exports with that centre. The opcode's centre is in active-area coordinates, so
+        // it stays on the optical centre whichever crop frames the image.
+        opcodes: OpcodeLists {
+            list3: if linear_rgb {
+                Vec::new()
+            } else {
+                let geometry = dng_default_crop(raw, w, h).unwrap_or(crop);
+                super::arw_lens::distortion(&model, raw, Rect::new(0, 0, w, h), geometry).into_iter().collect()
+            },
+            ..Default::default()
+        },
         metadata,
     };
     img.validate_for(mode)?;
@@ -684,21 +750,24 @@ mod tests {
     #[test]
     fn recorded_size_crops_in_camera_aspect_ratios() {
         // 3:2: anchored at the top-left, as before (ILCE-7S, DSLR-A700 whose Exif size is the whole frame)
-        assert_eq!(recorded_size_crop((4240, 2832), Some((4240, 2832)), 4288, 2848), Some(Rect::new(0, 0, 4240, 2832)));
-        assert_eq!(recorded_size_crop((4272, 2848), Some((4288, 2856)), 4288, 2856), Some(Rect::new(0, 0, 4272, 2848)));
-        assert_eq!(recorded_size_crop((4240, 2832), None, 4288, 2848), Some(Rect::new(0, 0, 4240, 2832)));
+        assert_eq!(recorded_size_crop((4240, 2832), Some((4240, 2832)), 4288, 2848, false), Some(Rect::new(0, 0, 4240, 2832)));
+        assert_eq!(recorded_size_crop((4272, 2848), Some((4288, 2856)), 4288, 2856, false), Some(Rect::new(0, 0, 4272, 2848)));
+        assert_eq!(recorded_size_crop((4240, 2832), None, 4288, 2848, false), Some(Rect::new(0, 0, 4240, 2832)));
         // 16:9 from FullImageSize (ILCE-7SM2) and from the Exif size when FullImageSize says 3:2 (DSLR-A580): centred
-        assert_eq!(recorded_size_crop((4240, 2384), Some((4240, 2384)), 4288, 2848), Some(Rect::new(0, 232, 4240, 2384)));
-        assert_eq!(recorded_size_crop((4912, 3264), Some((4912, 2760)), 4928, 3280), Some(Rect::new(0, 260, 4912, 2760)));
+        assert_eq!(recorded_size_crop((4240, 2384), Some((4240, 2384)), 4288, 2848, false), Some(Rect::new(0, 232, 4240, 2384)));
+        assert_eq!(recorded_size_crop((4912, 3264), Some((4912, 2760)), 4928, 3280, false), Some(Rect::new(0, 260, 4912, 2760)));
         // offsets stay even (CFA phase)
-        assert_eq!(recorded_size_crop((4240, 2386), None, 4288, 2848).map(|r| r.y), Some(230));
+        assert_eq!(recorded_size_crop((4240, 2386), None, 4288, 2848, false).map(|r| r.y), Some(230));
         // not a crop of this frame: wider than it, far narrower, under half its height, empty, hostile values
-        assert_eq!(recorded_size_crop((4300, 2832), None, 4288, 2848), None);
-        assert_eq!(recorded_size_crop((4000, 2832), None, 4288, 2848), None);
-        assert_eq!(recorded_size_crop((4240, 1000), None, 4288, 2848), None);
-        assert_eq!(recorded_size_crop((0, 2832), None, 4288, 2848), None);
-        assert_eq!(recorded_size_crop((u64::MAX, u64::MAX), Some((u64::MAX, 1)), 4288, 2848), None);
-        assert_eq!(recorded_size_crop((4240, 2832), Some((4240, 0)), 4288, 2848), Some(Rect::new(0, 0, 4240, 2832)));
+        assert_eq!(recorded_size_crop((4300, 2832), None, 4288, 2848, false), None);
+        assert_eq!(recorded_size_crop((4000, 2832), None, 4288, 2848, false), None);
+        assert_eq!(recorded_size_crop((4240, 1000), None, 4288, 2848, false), None);
+        assert_eq!(recorded_size_crop((0, 2832), None, 4288, 2848, false), None);
+        assert_eq!(recorded_size_crop((u64::MAX, u64::MAX), Some((u64::MAX, 1)), 4288, 2848, false), None);
+        assert_eq!(recorded_size_crop((4240, 2832), Some((4240, 0)), 4288, 2848, false), Some(Rect::new(0, 0, 4240, 2832)));
+        // centred (packed 12-bit DSLR-A900: 6048 x 4032 in the middle of 6080 x 4048)
+        assert_eq!(recorded_size_crop((6048, 4032), Some((6048, 4032)), 6080, 4048, true), Some(Rect::new(16, 8, 6048, 4032)));
+        assert_eq!(recorded_size_crop((6046, 4030), None, 6080, 4048, true), Some(Rect::new(16, 8, 6046, 4030)));
     }
 
     /// A 32767-compressed ARW whose single strip is `strip` bytes for a 32 x 4 image.
@@ -730,6 +799,64 @@ mod tests {
             let r = decode(&arw_with_strip(32 * 4), mode);
             assert!(!matches!(r, Err(RawError::Unsupported(ref m)) if m.contains("packed compressed variant")), "{r:?}");
         }
+    }
+
+    /// A 32767-compressed, 12-bit ARW of `w` x `h` whose single strip is `strip`.
+    fn packed_arw(w: u32, h: u32, strip: Vec<u8>) -> Vec<u8> {
+        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+        let mut raw = IfdBuilder::new();
+        raw.set(t::MAKE, Value::Ascii("SONY".into()));
+        raw.set(t::MODEL, Value::Ascii("DSLR-A900".into()));
+        raw.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
+        raw.set(t::IMAGE_LENGTH, Value::Long(vec![h]));
+        raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![12]));
+        raw.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![1]));
+        raw.set(t::PHOTOMETRIC, Value::Short(vec![photometric::CFA]));
+        raw.set(t::COMPRESSION, Value::Short(vec![32767]));
+        raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
+        raw.set(t::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 1, 2]));
+        raw.set(TONE_CURVE, Value::Short(vec![8000, 10400, 12900, 14100]));
+        raw.set_image(ImageData::Strips { rows_per_strip: h, strips: vec![strip] });
+        TiffWriter::default().write(&[raw]).unwrap()
+    }
+
+    /// Pack 12-bit samples as the file does: `b0 = a & 0xff`, `b1 = a >> 8 | b << 4 & 0xf0`, `b2 = b >> 4`.
+    fn pack12(samples: &[u16]) -> Vec<u8> {
+        samples.chunks(2).flat_map(|p| [p[0] as u8, (p[0] >> 8) as u8 | ((p[1] & 0xf) << 4) as u8, (p[1] >> 4) as u8]).collect()
+    }
+
+    #[test]
+    fn packed_12_bit_strip_of_one_and_a_half_bytes_per_pixel_decodes() {
+        let (w, h) = (8usize, 4usize);
+        let samples: Vec<u16> = (0..w * h).map(|i| (i as u16 * 129 + 130) & 0xfff).collect();
+        let file = packed_arw(w as u32, h as u32, pack12(&samples));
+        let full = decode(&file, Mode::Full).unwrap();
+        let RawData::U16(ref got) = full.data else { panic!("integer ARW") };
+        assert_eq!(got, &samples);
+        assert_eq!((full.width, full.height, full.bits), (w, h, 12));
+        assert_eq!(full.cfa.as_ref().map(|c| c.pattern.clone()), Some(vec![0, 1, 1, 2]));
+        assert_eq!(full.black.values.first().copied().unwrap_or(0.0), 128.0);
+        let header = decode(&file, Mode::Header).unwrap();
+        assert_eq!(header.info(), full.info());
+        // the first three bytes 0x12 0xA3 0x45 are the samples 0x312 and 0x45A (least-significant-bit first)
+        let mut row = vec![0u16; 2];
+        unpack_row12(&[0x12, 0xa3, 0x45], &mut row);
+        assert_eq!(row, [0x312, 0x45a]);
+    }
+
+    #[test]
+    fn packed_12_bit_needs_the_exact_strip_size() {
+        let (w, h) = (8usize, 4usize);
+        let exact = w * h * 3 / 2;
+        for strip in [exact - 1, exact + 1, exact + 3 * h] {
+            for mode in [Mode::Header, Mode::Full] {
+                let err = decode(&packed_arw(w as u32, h as u32, vec![0u8; strip]), mode).unwrap_err();
+                assert!(matches!(err, RawError::Unsupported(ref m) if m.contains("packed compressed variant")), "{strip} {mode:?}: {err:?}");
+            }
+        }
+        // an odd width cannot be packed in pairs
+        let err = decode(&packed_arw(7, 4, vec![0u8; 7 * 4 * 3 / 2]), Mode::Full).unwrap_err();
+        assert!(matches!(err, RawError::Unsupported(_)), "{err:?}");
     }
 
     /// Encode one 16-value set as an ARW2 block (the paper's scheme, used here to test the decoder).

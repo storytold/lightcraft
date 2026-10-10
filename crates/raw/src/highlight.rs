@@ -9,6 +9,8 @@
 //!   there is none within reach. Right past the rim, the rim's colour carries on. Fully clipped pixels become
 //!   neutral at the brightest plausible level; partly clipped ones fade into it on their way from the first channel
 //!   clipping to the last, pale ones from the start.
+//! - [`reconstruct_masked`]: the same for a binned image, whose clipped channels a mask tells (block means with a
+//!   clipped sample among them).
 //!
 //! Why the care: the white-balance gains push clipped channels apart (green clips first, red and blue keep
 //! rising), so whatever colour the rebuilt pixels carry is hidden at Neutral only by the tone map's roll-off to
@@ -116,7 +118,7 @@ fn sample<const N: usize>(l: &Level<N>, scale: f32, x: usize, y: usize) -> [f32;
 /// The half-resolution source level of `img`: every `2 × 2` block's source-weighted chromaticity sums, with
 /// blocks near clipped pixels or on strong edges left out. Also returns, per cell, whether a clipped pixel lies
 /// in its row within [`MARGIN`] cells (the vertical half of that test is left to the readers).
-fn sources(img: &Rgb32f, wb: [f32; 3], clip: f32) -> (Level<3>, Vec<bool>) {
+fn sources(img: &Rgb32f, wb: [f32; 3], clip: f32, clipped: &impl Clipped) -> (Level<3>, Vec<bool>) {
     let (w, h) = (img.width, img.height);
     let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
     // per cell: [red sum, blue sum, weight] densities, luminance, whether it holds a clipped pixel
@@ -131,13 +133,15 @@ fn sources(img: &Rgb32f, wb: [f32; 3], clip: f32) -> (Level<3>, Vec<bool>) {
         for x in 0..cw {
             let (mut a, mut sum, mut n, mut hit) = ([0f32; 3], 0f32, 0usize, false);
             let span = 2 * x..(2 * x + 2).min(w);
-            for p in r0.get(span.clone()).unwrap_or(&[]).iter().chain(r1.get(span).unwrap_or(&[])) {
+            let (i0, i1) = (2 * y * w + 2 * x, (2 * y + 1) * w + 2 * x);
+            let pixels = r0.get(span.clone()).unwrap_or(&[]).iter().zip(i0..).chain(r1.get(span).unwrap_or(&[]).iter().zip(i1..));
+            for (p, i) in pixels {
                 let q = [p[0] * wb[0], p[1] * wb[1], p[2] * wb[2]];
                 let s = q[0].max(0.0) + q[1].max(0.0) + q[2].max(0.0);
                 sum += s;
                 n += 1;
                 let top = p[0].max(p[1]).max(p[2]);
-                if top >= clip {
+                if clipped(i, p).iter().any(|&c| c) {
                     hit = true;
                     continue;
                 }
@@ -191,7 +195,7 @@ fn sources(img: &Rgb32f, wb: [f32; 3], clip: f32) -> (Level<3>, Vec<bool>) {
 /// above [`RIM_LO`] of the clip level, weighted (steeply) towards the clip, as densities. Pixels next to clipped
 /// ones (`margin`, by half-resolution cell) are left out, like the colour sources: they were demosaiced partly from
 /// clipped samples, and lens fringes along clipped content would pass for its colour.
-fn rim(img: &Rgb32f, wb: [f32; 3], clip: f32, margin: &(dyn Fn(usize, usize) -> bool + Sync)) -> Level<4> {
+fn rim(img: &Rgb32f, wb: [f32; 3], clip: f32, clipped: &impl Clipped, margin: &(dyn Fn(usize, usize) -> bool + Sync)) -> Level<4> {
     let (w, h) = (img.width, img.height);
     let (cw, ch) = (w.div_ceil(4), h.div_ceil(4));
     let mut cells = vec![[0f32; 4]; cw * ch];
@@ -202,7 +206,7 @@ fn rim(img: &Rgb32f, wb: [f32; 3], clip: f32, margin: &(dyn Fn(usize, usize) -> 
                 for (i, p) in img.data.get(sy * w + 4 * x..sy * w + (4 * x + 4).min(w)).unwrap_or(&[]).iter().enumerate() {
                     n += 1;
                     let top = p[0].max(p[1]).max(p[2]) / clip;
-                    if !(RIM_LO..1.0).contains(&top) || margin((4 * x + i) / 2, sy / 2) {
+                    if !(RIM_LO..1.0).contains(&top) || margin((4 * x + i) / 2, sy / 2) || clipped(sy * w + 4 * x + i, p).iter().any(|&c| c) {
                         continue;
                     }
                     let k = ((top - RIM_LO) / (1.0 - RIM_LO)).powi(4);
@@ -341,9 +345,44 @@ pub fn reconstruct(img: &mut Rgb32f, wb: [f32; 3], clip: f32) -> usize {
 /// chromaticity of reliable unclipped content nearby, and that of `white` where there is none.
 /// Returns the number of pixels that had at least one clipped channel; the others are left exactly as they were.
 pub fn reconstruct_with(img: &mut Rgb32f, wb: [f32; 3], clip: f32, white: [f32; 3]) -> usize {
+    rebuild_clipped(img, wb, clip, white, &|_, p| by_value(p, clip))
+}
+
+/// Bits of a [`reconstruct_masked`] mask entry: which channels of the pixel had a clipped sample.
+pub const CLIPPED_R: u8 = 1;
+pub const CLIPPED_G: u8 = 2;
+pub const CLIPPED_B: u8 = 4;
+
+/// [`reconstruct_with`] for a binned image ([`crate::RawImage::develop_binned_masked`]): its values are block
+/// means, and `mask` (one entry per pixel, bits [`CLIPPED_R`], [`CLIPPED_G`], [`CLIPPED_B`]) says which colours
+/// had a clipped sample in the block. Those channels count as clipped with their mean as the lower bound of their
+/// true value, so one clipped specular sample among many unclipped ones neither escapes reconstruction nor
+/// (as the block's maximum would) lifts the channel to the clip level, which reads as a coloured speckle (#548).
+/// A mask of the wrong length is ignored (clipping is then told by the values alone).
+pub fn reconstruct_masked(img: &mut Rgb32f, wb: [f32; 3], clip: f32, white: [f32; 3], mask: &[u8]) -> usize {
+    if mask.len() != img.data.len() {
+        return reconstruct_with(img, wb, clip, white);
+    }
+    rebuild_clipped(img, wb, clip, white, &|i, p| {
+        let m = mask.get(i).copied().unwrap_or(0);
+        let v = by_value(p, clip);
+        [v[0] || m & CLIPPED_R != 0, v[1] || m & CLIPPED_G != 0, v[2] || m & CLIPPED_B != 0]
+    })
+}
+
+/// Which channels of pixel `i` (values `p`) are clipped.
+trait Clipped: Fn(usize, &[f32; 3]) -> [bool; 3] + Sync {}
+impl<F: Fn(usize, &[f32; 3]) -> [bool; 3] + Sync> Clipped for F {}
+
+#[inline]
+fn by_value(p: &[f32; 3], clip: f32) -> [bool; 3] {
+    [p[0] >= clip, p[1] >= clip, p[2] >= clip]
+}
+
+/// [`reconstruct_with`], with `clipped` telling the clipped channels.
+fn rebuild_clipped(img: &mut Rgb32f, wb: [f32; 3], clip: f32, white: [f32; 3], clipped: &impl Clipped) -> usize {
     let (w, h) = (img.width, img.height);
-    let is_clipped = |p: &[f32; 3]| p[0] >= clip || p[1] >= clip || p[2] >= clip;
-    let count = img.data.par_iter().filter(|p| is_clipped(p)).count();
+    let count = img.data.par_iter().enumerate().filter(|(i, p)| clipped(*i, p).iter().any(|&c| c)).count();
     if count == 0 || w == 0 || h == 0 {
         return 0;
     }
@@ -354,7 +393,7 @@ pub fn reconstruct_with(img: &mut Rgb32f, wb: [f32; 3], clip: f32, white: [f32; 
     let neutral = [white[0] / total, white[1] / total, white[2] / total];
     // A clipped pixel is never a source, so its chromaticity is always the bilinear sample of the
     // half-resolution estimate: the pyramid starts there, straight from the image.
-    let (first, near) = sources(img, wb, clip);
+    let (first, near) = sources(img, wb, clip, clipped);
     let mut levels = vec![first];
     while let Some(l) = levels.last().filter(|l| l.w > 1 || l.h > 1) {
         let next = pull(l);
@@ -392,7 +431,7 @@ pub fn reconstruct_with(img: &mut Rgb32f, wb: [f32; 3], clip: f32, white: [f32; 
     let Some(field) = levels.first() else { return count };
     // the rim (level 0 of its pyramid holds the estimate), if there is one anywhere at all
     let rims = {
-        let mut levels = vec![rim(img, wb, clip, &needed)];
+        let mut levels = vec![rim(img, wb, clip, clipped, &needed)];
         while let Some(l) = levels.last().filter(|l| l.w > 1 || l.h > 1) {
             let next = pull(l);
             levels.push(next);
@@ -405,7 +444,7 @@ pub fn reconstruct_with(img: &mut Rgb32f, wb: [f32; 3], clip: f32, white: [f32; 
     img.data.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
         for (x, px) in row.iter_mut().enumerate() {
             let p = *px;
-            let cl = [p[0] >= clip, p[1] >= clip, p[2] >= clip];
+            let cl = clipped(y * w + x, &p);
             if !cl.iter().any(|&b| b) {
                 continue;
             }
@@ -812,5 +851,31 @@ mod tests {
             })
             .fold(f64::MAX, f64::min);
         eprintln!("reconstruct 24 MP: {ms:.0} ms");
+    }
+
+    /// A mask decides which channels are clipped (their values are lower bounds), whatever their values; the
+    /// unmarked pixels are left as they were; a mask of another size leaves clipping to the values.
+    #[test]
+    fn a_mask_marks_the_clipped_channels() {
+        let base = Rgb32f::from_fn(32, 32, |x, _| if x >= 16 { [0.2, 0.5, 0.25] } else { [0.5, 0.5, 0.5] });
+        let mask: Vec<u8> = (0..32 * 32).map(|i| if i % 32 >= 16 { CLIPPED_R } else { 0 }).collect();
+        let mut img = base.clone();
+        assert_eq!(reconstruct_masked(&mut img, [1.0; 3], 0.99, [1.0; 3], &mask), 512);
+        for (p, b) in img.data.iter().zip(&base.data) {
+            assert!(p.iter().all(|v| v.is_finite()), "{p:?}");
+            if b[0] == 0.5 {
+                assert_eq!(p, b);
+            } else {
+                // red rebuilt from at least its mean, the others kept
+                assert!(p[0] >= 0.2 && p[1] == 0.5 && p[2] == 0.25, "{p:?}");
+            }
+        }
+        // red is rebuilt above its mean, towards the neighbours' neutral (as far as the pixel's own blue agrees)
+        assert!(img.get(24, 16)[0] > 0.3, "{:?}", img.get(24, 16));
+        // the values alone see nothing clipped here, nor does a mask of another size
+        let mut plain = base.clone();
+        assert_eq!(reconstruct(&mut plain, [1.0; 3], 0.99), 0);
+        assert_eq!(reconstruct_masked(&mut plain, [1.0; 3], 0.99, [1.0; 3], &mask[1..]), 0);
+        assert!(plain.data == base.data);
     }
 }
