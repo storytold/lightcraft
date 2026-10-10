@@ -15,6 +15,7 @@
 
 pub mod dates;
 pub mod folders;
+pub mod ids;
 pub mod journal;
 pub mod keywords;
 pub mod local;
