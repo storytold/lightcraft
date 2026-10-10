@@ -1547,10 +1547,6 @@ fn radial_body_contains(shape: &MaskShape, at: Point, map: &CanvasMap) -> bool {
 /// component (click selects its mask, drag moves the component), and brush painting. The mask
 /// itself shows as a rendered overlay ([`view_overlay`]).
 fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
-    let tint = {
-        let [r, g, b] = app.ui.mask_overlay_color;
-        Color32::from_rgba_unmultiplied(r, g, b, 110)
-    };
     let long = (map.rect.width().max(map.rect.height())) as f64;
     let active = app.session.active_mask;
     let clip = app.canvas_rect.unwrap_or(map.rect);
@@ -1676,15 +1672,29 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
                 _ => app.gesture = Some(Gesture::Brush { points: vec![n] }),
             }
         }
-        // the stroke being painted (the render shows it once it's committed)
+        // the stroke being painted (the render shows it once it's committed), with the committed
+        // stroke's dab spacing, feather and flow (issue #517)
         if let Some(Gesture::Brush { points }) = &app.gesture {
-            for q in points {
-                p.circle_filled(map.screen(*q), r, tint);
-            }
+            let screen: Vec<Pos2> = points.iter().map(|q| map.screen(*q)).collect();
+            let opacity = if app.ui.mask_overlay && app.ui.mask_overlay_opacity > 0.0 { app.ui.mask_overlay_opacity / 100.0 } else { 110.0 / 255.0 };
+            let params = crate::brush_live::LiveParams {
+                clip,
+                scale: ui.ctx().pixels_per_point(),
+                r,
+                hard: r * (1.0 - (app.ui.brush_feather / 100.0).clamp(0.0, 1.0)),
+                flow: (app.ui.brush_flow / 100.0).clamp(0.0, 1.0),
+                density: 1.0,
+                color: app.ui.mask_overlay_color,
+                opacity: opacity.clamp(0.0, 1.0),
+            };
+            crate::brush_live::paint(&mut app.brush_live, ui.ctx(), p, params, &screen);
+        } else {
+            app.brush_live = None;
         }
         if (resp.drag_stopped() || resp.clicked())
             && let Some(Gesture::Brush { points }) = app.gesture.take()
         {
+            app.brush_live = None;
             let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();
             // holding ⌥ (Alt) paints with the other mode: Erase while adding, Add while erasing
             let erase = app.ui.brush_erase != resp.ctx.input(|i| i.modifiers.alt);
