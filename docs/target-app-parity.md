@@ -120,6 +120,16 @@ worse, 4.32055 → 4.35502, while p95 improves 11.22721 → 11.08583; five of ni
 native regions worsen. The camera-preview fit also changes with the corrected
 coordinates. This result supports the framing correction, not a tone improvement.
 
+The camera tone-fit port from [#699](https://github.com/storytold/lightcraft/pull/699)
+admits scene ranges down to 1.2×, with a separate original-frame bright-area check
+for fits below the previous 1.5× minimum. Local valid-shadow training remains intact.
+All 44 camera-preview tests pass, including low-contrast and highlight safeguards.
+All six complete native render outputs, ICCs and saved settings remain identical; their
+accepted tone ranges are 34.49–175.71×, so they do not exercise the new acceptance
+band or establish an improvement against Lightroom. The Lightroom error metrics
+use stride-16 grids for the five D3500 cases; the D5000 comparison also covers nine
+native 512×512 regions.
+
 Five saved-photo comparisons remain mixed: three B&W results are unchanged within rounding, while
 the SDR colour case shifts **7.54237 → 7.57388** mean ΔE00 and the HDR-origin case
 **22.56467 → 22.70120**. These use a fixed stride-16 grid of native renders; the HDR-origin edit has
