@@ -515,7 +515,7 @@ static DEVELOP: Develop = Develop;
 static BOOK: Placeholder = Placeholder(ModuleId::Book);
 static SLIDESHOW: Placeholder = Placeholder(ModuleId::Slideshow);
 static PRINT: crate::print_ui::PrintModule = crate::print_ui::PrintModule;
-static WEB: Placeholder = Placeholder(ModuleId::Web);
+use crate::web_module::WEB;
 
 pub fn get(id: ModuleId) -> &'static dyn Module {
     match id {

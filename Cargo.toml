@@ -42,6 +42,7 @@ dac-immich = { path = "crates/immich" }
 dac-geo = { path = "crates/geo" }
 dac-publish = { path = "crates/publish" }
 dac-tether = { path = "crates/tether" }
+dac-webgallery = { path = "crates/webgallery" }
 dac-heif = { path = "crates/heif" }
 dac-segment = { path = "crates/segment" }
 dac-text = { path = "crates/text" }

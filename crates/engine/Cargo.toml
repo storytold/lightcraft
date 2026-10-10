@@ -50,6 +50,7 @@ dac-immich = { workspace = true }
 dac-publish = { workspace = true }
 dac-tether = { workspace = true }
 dac-credentials = { workspace = true }
+dac-webgallery = { workspace = true, features = ["sftp"] }
 
 # free disk space of a volume (Folders panel)
 [target.'cfg(all(unix, not(target_arch = "wasm32")))'.dependencies]

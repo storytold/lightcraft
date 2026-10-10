@@ -44,6 +44,7 @@ pub mod tasks;
 pub mod text_field;
 pub mod theme;
 pub mod titlebar;
+pub mod web_module;
 pub mod widgets;
 
 #[cfg(test)]

@@ -47,6 +47,8 @@ mod quick;
 mod sync;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tether;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod web;
 mod xmp;
 
 use serde::Serialize;
@@ -182,6 +184,8 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(publish::specs());
         #[cfg(not(target_arch = "wasm32"))]
         v.extend(tether::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(web::specs());
         #[cfg(not(target_arch = "wasm32"))]
         v.extend(credentials::specs());
         v.extend(activity::specs());
