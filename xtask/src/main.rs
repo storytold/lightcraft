@@ -13,6 +13,7 @@ mod immich;
 mod layers;
 mod parity;
 mod rename;
+mod shortcuts;
 mod stats;
 mod upstream;
 mod version;
@@ -38,6 +39,7 @@ commands:
                   catalog scale benchmark: import throughput, snapshot time, then (in a fresh process)
                   open time, peak RSS and filter latency (default 250000,1000000 photos, backend v4)
   deny            cargo deny check licenses (deny.toml), skipped with a message if cargo-deny is missing
+  shortcuts       regenerate docs/manual/keyboard-shortcuts.md from the command registry (builds dac-cli)
   docs [--check]  render README.md.in and docs/**/*.md.in ({{app}}, {{binary}}, … from brand.toml) into
                   the .md next to each; --check fails when one is out of date
   install [--prefix DIR] [--skip-build]
@@ -105,6 +107,7 @@ fn main() -> ExitCode {
         Some("upstream-pr") => upstream::pr(&root(), &rest),
         Some("shared-check") => upstream::shared_check(&root(), &rest, false),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
+        Some("shortcuts") => shortcuts::run(&root()),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())

@@ -74,6 +74,9 @@ crates/engine/src/cmd/map.rs
 # our docs and plans
 docs/catalog.md
 docs/immich.md
+docs/manual/
+docs/packaging.md
+xtask/src/shortcuts.rs
 plan/
 PLAN*.md
 # our tooling

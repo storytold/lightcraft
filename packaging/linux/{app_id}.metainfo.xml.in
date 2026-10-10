@@ -14,6 +14,20 @@
     <p>
       {{display_name}} is a photo library and raw developer. Organise photos and develop raw files, non-destructively.
     </p>
+    <p>Its modules follow the classic photo-workflow layout:</p>
+    <ul>
+      <li>Library: folders, albums, smart albums, ratings, flags, colour labels, keywords and people</li>
+      <li>Develop: non-destructive raw development with masks, presets, HDR and panorama merge</li>
+      <li>Map: geotagging, GPX track logs and saved locations</li>
+      <li>Book: photo books exported as PDF or JPEG pages</li>
+      <li>Slideshow: slideshows with titles, overlays and music</li>
+      <li>Print: print layouts to PDF, JPEG or an IPP printer</li>
+      <li>Web: HTML galleries, exported or uploaded over SFTP</li>
+    </ul>
+    <p>
+      Publish services, Immich sync, tethered studio capture, Edit In external editors, recorded actions and
+      WebAssembly plug-ins. Every action is also a command for the command line and AI agents.
+    </p>
   </description>
   <launchable type="desktop-id">{{app_id}}.desktop</launchable>
   <icon type="stock">{{app_id}}</icon>
@@ -31,6 +45,12 @@
     <keyword>raw</keyword>
     <keyword>library</keyword>
     <keyword>develop</keyword>
+    <keyword>geotag</keyword>
+    <keyword>photo book</keyword>
+    <keyword>slideshow</keyword>
+    <keyword>print</keyword>
+    <keyword>web gallery</keyword>
+    <keyword>tethering</keyword>
   </keywords>
   <branding>
     <color type="primary" scheme_preference="light">#9fd0ff</color>
