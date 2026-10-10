@@ -52,6 +52,29 @@ fn store_path(s: &Session) -> Option<PathBuf> {
     s.remote.connections_path.as_ref().and_then(|p| p.parent()).map(|d| d.join("web.json"))
 }
 
+/// Trust on first use: store `fp` as the host key of the saved server `name` when it has none yet
+/// (`store`: the web settings file, [`store_path`]). Needs no session, so a publish worker can call it.
+pub(crate) fn remember_fingerprint(store: Option<&std::path::Path>, name: &str, fp: &str) {
+    let Some(path) = store else { return };
+    if fp.is_empty() || name.trim().is_empty() {
+        return;
+    }
+    let Ok(bytes) = std::fs::read(path) else { return };
+    let Ok(mut st) = serde_json::from_slice::<WebStore>(&bytes) else { return };
+    if let Some(x) = st.servers.iter_mut().find(|x| x.name.eq_ignore_ascii_case(name.trim()))
+        && x.known_fingerprint.is_empty()
+    {
+        x.known_fingerprint = fp.to_string();
+        if let Ok(b) = serde_json::to_vec_pretty(&st) {
+            let _ = crate::export::write_file_durable(&path.to_string_lossy(), &b);
+        }
+    }
+}
+
+pub(crate) fn store_path_of(s: &Session) -> Option<PathBuf> {
+    store_path(s)
+}
+
 fn load(s: &Session) -> std::result::Result<WebStore, String> {
     let Some(path) = store_path(s) else { return Ok(WebStore::default()) };
     match std::fs::read(&path) {
@@ -199,9 +222,20 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Where a prepared web job goes.
 enum Target {
-    Folder { dir: String },
-    Sftp { server: Server, auth: Auth },
-    Immich { client: Box<dac_immich::Client>, album: String, options: dac_immich::share::ShareOptions },
+    Folder {
+        dir: String,
+    },
+    /// `store`: the web settings file, where a saved server's host key is remembered on first use.
+    Sftp {
+        server: Server,
+        auth: Auth,
+        store: Option<PathBuf>,
+    },
+    Immich {
+        client: Box<dac_immich::Client>,
+        album: String,
+        options: dac_immich::share::ShareOptions,
+    },
 }
 
 /// One image of the site to render: its path, whether it is a large image, the photo's capture time.
@@ -277,7 +311,7 @@ pub fn prepare(s: &mut Session, c: &str, p: &Value) -> Result<WebJob> {
         "web.upload" => {
             let server = server_param(s, p, c)?;
             let auth = server_auth(s, &server, str_param(p, "password"), c)?;
-            Target::Sftp { server, auth }
+            Target::Sftp { server, auth, store: store_path(s) }
         }
         "web.shareImmich" => {
             let account = immich_account(s, p, c)?;
@@ -356,9 +390,13 @@ impl WebJob {
                 let index = std::path::Path::new(&dir).join("index.html").to_string_lossy().to_string();
                 json!({"dir": dir, "index": index, "files": files, "photos": photos, "bytes": bytes})
             }
-            Target::Sftp { server, auth } => {
+            Target::Sftp { server, auth, store } => {
                 let files: Vec<(String, Vec<u8>)> = pages.into_iter().chain(rendered.into_iter().map(|(a, b, _)| (a, b))).collect();
                 let done = sftp::upload(&server, auth, &files, &mut |_, _| true)?;
+                // trust on first use: a saved server keeps the host key it showed
+                if server.known_fingerprint.is_empty() {
+                    remember_fingerprint(store.as_deref(), &server.name, &done.fingerprint);
+                }
                 json!({"server": server.name, "host": server.host, "path": server.path, "files": done.files, "bytes": done.bytes,
                     "photos": photos, "fingerprint": done.fingerprint})
             }
@@ -381,30 +419,9 @@ impl WebJob {
     }
 }
 
-/// After a `web.upload` result: trust the host key of a saved server on first use.
-pub fn remember_fingerprint(s: &Session, result: &Value) {
-    let (Some(name), Some(fp)) = (result.get("server").and_then(Value::as_str), result.get("fingerprint").and_then(Value::as_str)) else {
-        return;
-    };
-    if name.is_empty() || fp.is_empty() {
-        return;
-    }
-    if let Ok(mut st) = load(s)
-        && let Some(x) = st.servers.iter_mut().find(|x| x.name.eq_ignore_ascii_case(name))
-        && x.known_fingerprint.is_empty()
-    {
-        x.known_fingerprint = fp.to_string();
-        let _ = save(s, &st);
-    }
-}
-
 fn run_now(s: &mut Session, c: &str, p: &Value) -> Result<Value> {
     let job = prepare(s, c, p)?;
-    let v = job.run(&mut |_, _| true).map_err(|e| bad(c, e))?;
-    if c == "web.upload" {
-        remember_fingerprint(s, &v);
-    }
-    Ok(v)
+    job.run(&mut |_, _| true).map_err(|e| bad(c, e))
 }
 
 fn galleries_json(st: &WebStore) -> Value {

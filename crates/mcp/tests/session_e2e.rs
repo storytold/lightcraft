@@ -21,7 +21,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -123,16 +123,6 @@ impl Mcp {
     fn photo(&mut self, id: u64) -> Value {
         let all = self.tool("query_photos", json!({"limit": 1000}));
         all["photos"].as_array().unwrap().iter().find(|p| p["id"] == id).cloned().unwrap_or_else(|| panic!("no photo {id}: {all}"))
-    }
-
-    /// Pump background work until `done`, at most 20 s.
-    fn pump_until(&mut self, mut done: impl FnMut(&mut Mcp) -> bool) {
-        let t = Instant::now();
-        while !done(self) {
-            assert!(t.elapsed() < Duration::from_secs(20), "timed out waiting for background work");
-            self.cmd("remote.pump", json!({"sha1": true}));
-            std::thread::sleep(Duration::from_millis(20));
-        }
     }
 }
 
@@ -715,6 +705,14 @@ fn tether_cull_develop_publish_sync_print() {
             assert!(f.starts_with(&[0xff, 0xd8]) && f.len() > 1000, "{rel}: {} bytes", f.len());
         }
     }
+    // trust on first use: the saved server now pins the host key
+    let servers = mcp.cmd("web.servers", json!({}));
+    let fp = servers
+        .as_array()
+        .and_then(|a| a.first())
+        .map(|x| x["knownFingerprint"].clone())
+        .unwrap_or(servers["servers"][0]["knownFingerprint"].clone());
+    assert!(fp.as_str().is_some_and(|f| f.starts_with("SHA256:")), "{servers}");
     // taken out of the collection: deleted on the server at the next publish
     let (gone_photo, gone_rel) = sent.iter().find(|(p, _)| *p == c).cloned().unwrap();
     mcp.cmd("album.removePhotos", json!({"id": sftp_coll, "ids": [gone_photo]}));
@@ -745,9 +743,9 @@ fn tether_cull_develop_publish_sync_print() {
         assert_eq!(st.stacks.len(), 2, "each render stacked on its original");
     }
 
-    // 6. the originals link to the catalog by checksum; a rating changed in Immich syncs back
-    mcp.cmd("immich.link", json!({}));
-    mcp.pump_until(|m| m.cmd("immich.links", json!({"id": a}))["state"] == "linked");
+    // 6. the published originals are the photos' Immich links; a rating changed in Immich syncs back
+    // publish linked them: no immich.link needed
+    assert_eq!(mcp.cmd("immich.links", json!({"id": a}))["state"], "linked");
     let original = mcp.cmd("immich.links", json!({"id": a}))["links"][0]["assetId"].as_str().unwrap().to_string();
     assert!(immich.lock().unwrap().stacks.iter().any(|s| s.get(1) == Some(&original)), "the linked asset is the stacked original");
     let r = mcp.cmd("immich.sync", json!({}));

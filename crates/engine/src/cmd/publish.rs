@@ -153,6 +153,9 @@ fn update_service(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(n) = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
         next.name = n.to_string();
     }
+    if let Some(st) = p.get("settings").filter(|v| v.is_object()) {
+        next.settings = st.clone();
+    }
     if let Some(d) = str_param(p, "dir") {
         next.settings["dir"] = json!(d.trim());
     }
@@ -460,6 +463,13 @@ pub fn apply(s: &mut Session, out: Outcome) -> Result<Value> {
             sync_state: SyncState::Synced,
         }));
     }
+    // Immich: the uploaded originals become the photos' Immich links (sync needs no immich.link)
+    if let Ok((_, cfg)) = load(s, "publish.run")
+        && let Some(svc) = cfg.service(&out.service)
+    {
+        let sent: Vec<(PhotoId, String)> = out.published.iter().map(|(p, r, _)| (*p, r.clone())).collect();
+        ops.extend(super::immich::publish::original_link_ops(s, svc, &sent));
+    }
     for photo in &out.removed {
         ops.push(Op::SetRemote { photo: *photo, service: dac_publish::SERVICE.into(), account_id: acct.clone(), record: None });
     }
@@ -529,7 +539,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Publish Service",
             [],
             None,
-            "{service: id | name, name?, dir?, export?} → the service",
+            "{service: id | name, name?, dir?, settings?: the kind's settings object (replaces them), export?} → the service",
             always,
             update_service
         ),

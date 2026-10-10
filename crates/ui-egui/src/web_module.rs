@@ -431,11 +431,7 @@ fn start(app: &mut DacApp, id: &str, engine_id: &'static str, p: &Value) -> Resu
         Some("export"),
         move || job.run(&mut |_, _| true),
         move |app, ctx, r: Result<Value, String>| {
-            if let Ok(v) = &r
-                && engine_id == "web.upload"
-            {
-                dac_engine::cmd::web::remember_fingerprint(&app.session, v);
-            }
+            // (an upload's host key is remembered on first use by the job itself)
             let mut st = state(ctx);
             if let Ok(v) = &r
                 && let Some(url) = v.get("url").and_then(Value::as_str)
