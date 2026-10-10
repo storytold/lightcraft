@@ -33,6 +33,9 @@ commands:
   bench [FILE] [--strict] [--threshold PCT]
                   run the render benchmark, append to target/bench/history.jsonl, compare CPU time with
                   the previous run (default input: corpus/raw/arw-sony-a7m3-compressed.arw)
+  bench-catalog [--photos N,N…] [--backend v3|v4] [--dir DIR]
+                  catalog scale benchmark: import throughput, snapshot time, then (in a fresh process)
+                  open time, peak RSS and filter latency (default 250000,1000000 photos, backend v4)
   deny            cargo deny check licenses (deny.toml), skipped with a message if cargo-deny is missing
   docs [--check]  render README.md.in and docs/**/*.md.in ({{app}}, {{binary}}, … from brand.toml) into
                   the .md next to each; --check fails when one is out of date
@@ -83,6 +86,7 @@ fn main() -> ExitCode {
         Some("layers") => cmd_layers(),
         Some("assets") => assets::run(&root()),
         Some("bench") => bench::run(&root(), &rest),
+        Some("bench-catalog") => cmd_bench_catalog(&rest),
         Some("parity") => parity::run(&root(), rest.contains(&"--write")),
         Some("wasm") => cmd_wasm(),
         Some("web") => web::run(&rest),
@@ -276,6 +280,17 @@ fn cmd_wasm() -> Result<(), String> {
 }
 
 /// `cargo deny check licenses` with deny.toml; a clear skip when cargo-deny isn't installed (CI installs it).
+/// `bench-catalog`: the catalog crate's `bench_catalog` example, release build (see its docs).
+fn cmd_bench_catalog(rest: &[&str]) -> Result<(), String> {
+    let mut c = cargo();
+    c.args(["run", "--release", "-q", "-p", "dac-catalog", "--example", "bench_catalog", "--"]);
+    if !rest.contains(&"--dir") {
+        c.args(["--dir", "target/bench-catalog"]);
+    }
+    c.args(rest);
+    run(c, "bench_catalog")
+}
+
 fn cmd_deny() -> Result<(), String> {
     let installed = cargo().args(["deny", "--version"]).output().is_ok_and(|o| o.status.success());
     if !installed {
