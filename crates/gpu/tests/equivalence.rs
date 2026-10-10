@@ -127,6 +127,14 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.light.whites = 30.0;
             s.light.blacks = -25.0;
         }),
+        // Blacks is a per-channel curve with a black point below the shadows; -100 and +100 also
+        // straddle the point where it hands over to the luminance blend (`Blacks::blend`).
+        ("blacks", |s| {
+            s.light.blacks = -100.0;
+        }),
+        ("blacks (lifted)", |s| {
+            s.light.blacks = 100.0;
+        }),
         ("vibrance/saturation", |s| {
             s.color.vibrance = 40.0;
             s.color.saturation = -20.0;

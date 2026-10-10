@@ -119,7 +119,9 @@ walks the drive.
   settings, frame, output size, stage-cache keys), `Frame::sample_plan`, `local::{wb_matrix_for,
   nr_params, plane_sigmas, guided_fast_step, airlight_of}`, `finish::{FinishParams, mask_terms}`,
   `masks::brush_dabs`; exact tables (tone LUT, sRGB LUT, curve LUTs, resample taps) and the OkLab
-  matrices are uploaded / generated into the WGSL prelude from the CPU values.
+  matrices are uploaded / generated into the WGSL prelude from the CPU values. The Blacks curve is
+  the one finish-stage step passed as plain numbers rather than a table
+  (`tone::{Blacks, …}` → `F_BLACKS_T` / `_P` / `_A`), since it is two constants and a `pow`.
 - Buffers, not textures: images are `array<f32>` with the CPU's interleaved layout (RGB, 1–3
   channels), so upload / readback are plain copies of `Rgb32f` / `Plane` / `Rgba8` data.
 - Kernels (`crates/gpu/src/wgsl/`): `geom` (orientation pixel map, bilinear through the

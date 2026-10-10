@@ -170,9 +170,11 @@ The milestone estimates in the table above were made before work started and are
 - **Raw-format sources:** decided 2026-10-05: decoders are written from *prose* format descriptions (even ones
   published alongside GPL code); decoder source is never read. Still open: freedom-to-operate review for local
   Laplacian filters, PatchMatch and HEVC (HEIC).
-- **Look parity** with Adobe's default rendering is tuned by eye today; the planned fidelity suite (LR-BEHAV-RENDER-FIDELITY)
-  turns it into measured comparisons against local-only Lightroom references. Retuning changes existing edits, so it
-  ships as a new process version (`docs/process-versions.md`): photos keep their look until they are updated.
+- **Look parity** with Adobe's default rendering is measured for the default raw response — tone *and* colour, against
+  local-only Lightroom references (LR-BEHAV-RENDER-FIDELITY). Every other slider's response, and the presets, are still
+  tuned by eye; the planned fidelity suite turns those into the same kind of measured comparison. Retuning changes
+  existing edits, so it ships as a new process version (`docs/process-versions.md`): photos keep their look until they
+  are updated.
 
 ## Raw format coverage and known gaps
 

@@ -11,7 +11,7 @@ use crate::colorops::ColorOps;
 use crate::geometry::Frame;
 use crate::local::log_lum;
 use crate::output::{DeepImage, DeepSamples, OutputDepth, OutputSpace, OutputTrc};
-use crate::tone::ToneMap;
+use crate::tone::{Blacks, ToneMap};
 use crate::{Prepared, SourceInfo, for_rows};
 
 #[inline]
@@ -153,6 +153,9 @@ pub struct FinishParams {
     /// A LUT profile and its amount (0..2), applied to the display-encoded colour.
     pub lut: Option<(std::sync::Arc<crate::lut::Lut3d>, f32)>,
     pub tone: ToneMap,
+    /// The Blacks curve, applied per channel after the tone map. Identity for display-referred
+    /// sources, where [`ToneMap::display`] still owns the Blacks slider.
+    pub blacks: Blacks,
     pub ops: ColorOps,
     /// Calibration: primaries matrix (row-major, linear Rec.2020) and shadows tint (−1..1).
     pub calib: Option<[[f32; 3]; 3]>,
@@ -208,6 +211,7 @@ impl FinishParams {
         h: usize,
         px_per_long: f64,
         air_pre: f32,
+        whites_scale: f32,
         space: OutputSpace,
     ) -> FinishParams {
         let effects = s.section_enabled("effects");
@@ -228,7 +232,8 @@ impl FinishParams {
             peak,
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
-            tone: base_tone(s, info, peak),
+            tone: base_tone(s, info, peak, whites_scale),
+            blacks: if info.raw { Blacks::new(s.light.blacks) } else { Blacks::IDENTITY },
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
             ops: ColorOps::new(s),
             curves: curve_luts(&s.curve),
@@ -270,18 +275,20 @@ impl FinishParams {
     }
 }
 
-/// The base tone map (scene → display luminance, with Contrast, Whites and Blacks) of `s`'s
+/// The base tone map (scene → display luminance, with Contrast and Whites) of `s`'s
 /// rendering process. This is where a new tone model branches: a retuned default tone curve (issue
 /// #146) is a new [`Process`] with its own arm here, and V1's arm stays as it is, so photos edited
 /// under V1 keep their look (`docs/process-versions.md`). CPU and GPU both take it from here.
 /// `peak` is the HDR render's peak relative to SDR white ([`lightcraft_develop::Hdr::peak`]); at 1.0 (SDR)
 /// every arm is the SDR tone map. The camera's look is bounded at white, so HDR renders use the HDR tone map.
-pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
+pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32, whites_scale: f32) -> ToneMap {
     let l = &s.light;
     match s.process.process() {
+        // Positive Whites is per-photo, whichever curve carries the file's tone (see
+        // `tone::whites_scale`) -- so the scale goes to the raw arms, not only the default one.
         Process::V1 => match info.camera_tone.as_ref().filter(|_| info.raw && peak <= 1.0) {
-            Some(curve) => ToneMap::camera(curve, l.contrast, l.whites, l.blacks),
-            None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
+            Some(curve) => ToneMap::camera_scaled(curve, l.contrast, l.whites, whites_scale),
+            None if info.raw => ToneMap::hdr_scaled(l.contrast, l.whites, peak, whites_scale),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
         },
     }
@@ -297,7 +304,7 @@ pub(crate) fn finish(
     proof: Option<crate::Proof>,
 ) -> Rgba8 {
     let (w, h) = (p.img.width, p.img.height);
-    let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, space);
+    let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, p.whites_scale, space);
     fp.proof = proof.map(|pr| pr.params(space));
     if let Some(d) = display {
         fp.for_display(d, proof);
@@ -326,7 +333,7 @@ pub(crate) fn finish_deep(
 ) -> DeepImage {
     use lightcraft_color::transfer::srgb_to_linear;
     let (w, h) = (p.img.width, p.img.height);
-    let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, space);
+    let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, p.whites_scale, space);
     fp.proof = proof.map(|pr| pr.params(space));
     let trc = fp.out_trc;
     let samples = match depth {
@@ -540,6 +547,22 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             if mx > peak {
                 let t = ((mx - peak) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
                 d = d.map(|v| v + (o - v) * t);
+            }
+
+            // --- blacks (per channel, over the tone map; `d` is in 0..1 by now)
+            if !fp.blacks.is_identity() {
+                let pch = d.map(|v| fp.blacks.apply(v));
+                d = match fp.blacks.blend() {
+                    None => pch,
+                    Some(a) => {
+                        let y = luminance_2020(d);
+                        let g = if y > 1e-9 { fp.blacks.apply(y) / y } else { 0.0 };
+                        std::array::from_fn(|i| {
+                            let lum = d[i] * g;
+                            lum + (pch[i] - lum) * a
+                        })
+                    }
+                };
             }
 
             // --- colour

@@ -23,6 +23,11 @@ const FIELDS: &[(&str, usize)] = &[
     ("AIR_PRE", 1),
     ("HL", 1),
     ("SH", 1),
+    // the finish stage's Blacks curve (`lightcraft_pipeline::tone::Blacks`)
+    ("BLACKS", 1),
+    ("BLACKS_T", 1),
+    ("BLACKS_P", 1),
+    ("BLACKS_A", 1),
     ("CLAR", 1),
     ("TEX", 1),
     ("DEHAZE", 1),
@@ -172,6 +177,10 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.f("AIR_PRE", fp.air_pre);
     p.f("HL", fp.hl);
     p.f("SH", fp.sh);
+    p.f("BLACKS_T", fp.blacks.black_point());
+    p.f("BLACKS_P", fp.blacks.power());
+    p.f("BLACKS_A", fp.blacks.share());
+    p.b("BLACKS", !fp.blacks.is_identity());
     p.f("CLAR", fp.clar);
     p.f("TEX", fp.tex);
     p.f("DEHAZE", fp.dehaze);

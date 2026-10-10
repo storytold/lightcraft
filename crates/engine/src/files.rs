@@ -520,12 +520,19 @@ fn matte_kind(name: &str) -> Option<lightcraft_pipeline::masks::MatteKind> {
 /// A DNG `ProfileToneCurve` (linear in, linear out, 1.0 = white after exposure compensation) as the
 /// finish stage's camera tone curve: 32 knots, log-spaced over 12 stops below white; above white
 /// the camera tone's shoulder continues it.
+///
+/// The curve is the reference's own and acts on its channels, so it carries the same colourfulness
+/// as the default curve; applied to luminance alone the file renders flat. Unlike a camera look
+/// fitted from a JPEG there is nothing here to fit a chroma curve against, so it takes the default.
 pub(crate) fn dng_tone_curve(curve: &lightcraft_raw::profile::ToneCurve) -> Option<lightcraft_pipeline::tone::CameraTone> {
     let knots: [[f32; 2]; 32] = std::array::from_fn(|i| {
         let x = 2f32.powf(-12.0 + 12.0 * i as f32 / 31.0);
         [x, curve.eval(x).min(0.9995)]
     });
-    lightcraft_pipeline::tone::CameraTone::new(knots)
+    let tone = lightcraft_pipeline::tone::CameraTone::new(knots)?;
+    // `DEFAULT_CHROMA` is a constant inside `with_chroma`'s accepted range, so the fallback is
+    // unreachable; it is there so a rejected curve can never cost the file its tone map.
+    Some(tone.with_chroma(lightcraft_pipeline::tone::DEFAULT_CHROMA).unwrap_or(tone))
 }
 
 /// Orientation for an embedded preview: its own EXIF orientation when it has one, else the raw file's.
@@ -989,6 +996,11 @@ mod tests {
         assert!((0.8..1.1).contains(&(mean(&after) / mean(&before))), "{} vs {}", mean(&after), mean(&before));
         let tone = info.camera_tone.expect("the DNG tone curve becomes the camera tone");
         assert!((tone.apply(0.18) - 0.3).abs() < 0.01, "{}", tone.apply(0.18));
+        // The profile curve is the reference's own and acts on its channels, so the tone map must
+        // carry a chroma curve too: without it every DNG with a ProfileToneCurve renders flat.
+        let chroma = tone.chroma();
+        assert!(chroma.iter().any(|k| (*k - 1.0).abs() > 1e-6), "camera tone has no chroma curve");
+        assert!(chroma[0] > 1.0 && chroma[chroma.len() - 1] < 1.0, "shadows up, highlights down: {chroma:?}");
         // a look table alone changes the render too (applied after exposure)
         raw.color.profile = ProfileLook {
             look_table: Some(HsvTable { hue_divisions: 1, sat_divisions: 2, val_divisions: 1, data: vec![[0.0, 1.0, 0.5]; 2], srgb_value: false }),

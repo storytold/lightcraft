@@ -689,7 +689,7 @@ fn fit_pairs_on(
         if let Some(tone) = fit_chroma(&bright, &look) {
             look.tone = tone;
         }
-        let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+        let tone = ToneMap::camera(&look.tone, 0.0, 0.0);
         let (mut linear, mut perceptual, mut samples) = (0.0, 0.0, 0);
         for (x, target) in pairs.iter().step_by(3) {
             let corrected = displayed(colour(*x), &tone);
@@ -704,7 +704,7 @@ fn fit_pairs_on(
         }
     }
     let (_, after, samples, look) = best?;
-    let original_tone = ToneMap::new(0.0, 0.0, 0.0);
+    let original_tone = ToneMap::new(0.0, 0.0);
     let before: f64 = pairs
         .iter()
         .step_by(3)
@@ -800,7 +800,7 @@ fn fit_partial_on(sensor: &Rgb32f, reference: &Rgb32f, edge_limit: Option<f32>) 
     if let Some(tone) = fit_chroma(&bright, &look) {
         look.tone = tone;
     }
-    let (tone, neutral) = (ToneMap::camera(&look.tone, 0.0, 0.0, 0.0), ToneMap::new(0.0, 0.0, 0.0));
+    let (tone, neutral) = (ToneMap::camera(&look.tone, 0.0, 0.0), ToneMap::new(0.0, 0.0));
     let encoded = |v: f64| v.max(0.0).powf(1.0 / 2.2);
     let (mut before, mut after, mut before_encoded, mut after_encoded, mut samples) = (0.0, 0.0, 0.0, 0.0, 0);
     for (x, target) in pairs.iter().step_by(3) {
@@ -980,7 +980,7 @@ fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Option<Camer
         let p = look.matrix.apply(*x);
         correction.as_ref().map_or(p, |c| c.apply(p.map(|v| v as f32)).map(f64::from))
     };
-    let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+    let tone = ToneMap::camera(&look.tone, 0.0, 0.0);
     let predict = |x: &[f64; 3]| displayed(scene(x), &tone);
     let chroma = |p: [f64; 3]| {
         let y = luma(p);
@@ -1011,7 +1011,7 @@ fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Option<Camer
         *node = (sum / (weight + CHROMA_SHRINK)).exp() as f32;
     }
     let fitted = look.tone.with_chroma(curve)?;
-    let with = ToneMap::camera(&fitted, 0.0, 0.0, 0.0);
+    let with = ToneMap::camera(&fitted, 0.0, 0.0);
     let error = |map: &ToneMap| -> f64 {
         pairs
             .iter()
@@ -1193,7 +1193,7 @@ mod tests {
         let original = sensor.clone();
         let fit = fit_pairs(&sensor, &reference).unwrap();
         assert_eq!(sensor.data, original.data);
-        let tone = ToneMap::camera(&fit.tone, 0.0, 0.0, 0.0);
+        let tone = ToneMap::camera(&fit.tone, 0.0, 0.0);
         let error: f64 = sensor
             .data
             .iter()
@@ -1320,8 +1320,8 @@ mod tests {
         let chroma = fit.tone.chroma();
         assert!(chroma[6] < 0.5 * chroma[1], "highlights bleach relative to shadows: {chroma:?}");
         // and the rendered highlights land on the camera's, far closer than without the curve
-        let with = ToneMap::camera(&fit.tone, 0.0, 0.0, 0.0);
-        let without = ToneMap::camera(&fit.tone.with_chroma([1.0; lightcraft_pipeline::tone::CHROMA_N]).unwrap(), 0.0, 0.0, 0.0);
+        let with = ToneMap::camera(&fit.tone, 0.0, 0.0);
+        let without = ToneMap::camera(&fit.tone.with_chroma([1.0; lightcraft_pipeline::tone::CHROMA_N]).unwrap(), 0.0, 0.0);
         let highlight_error = |map: &ToneMap| -> f64 {
             sensor
                 .data
@@ -1373,7 +1373,7 @@ mod tests {
         let look = fit_pairs_with(&sensor, &reference, Some((matrix, None))).unwrap();
         assert_eq!(look.matrix, matrix);
         assert!(look.hue_sat.is_none());
-        let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+        let tone = ToneMap::camera(&look.tone, 0.0, 0.0);
         let error = sensor
             .data
             .iter()
@@ -1962,7 +1962,7 @@ mod tests {
         }
         let fit = fit_pairs(&sensor, &reference).expect("look fitted away from the misaligned edges");
         // The look itself is right: on the aligned scene it reproduces the camera.
-        let tone = ToneMap::camera(&fit.tone, 0.0, 0.0, 0.0);
+        let tone = ToneMap::camera(&fit.tone, 0.0, 0.0);
         let (mut error, mut n) = (0.0, 0);
         for y in 0..h {
             for x in 0..w {
@@ -2121,7 +2121,7 @@ mod tests {
             let y = luma(p);
             p.iter().map(|v| (v / y - 1.0).powi(2)).sum::<f64>().sqrt()
         };
-        let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+        let tone = ToneMap::camera(&look.tone, 0.0, 0.0);
         let (mut rendered, mut camera) = (0.0, 0.0);
         for ((x, y), c) in sensor.data.iter().zip(&reference.data).zip(clipped) {
             let y = y.map(f64::from);
@@ -2251,8 +2251,8 @@ mod tests {
         assert!(look.hue_sat.is_none());
         assert_ne!(look.matrix, Mat3::IDENTITY, "a colourful scene gets the damped matrix");
         // on the registered scene, against what the camera renders
-        let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
-        let neutral = ToneMap::new(0.0, 0.0, 0.0);
+        let tone = ToneMap::camera(&look.tone, 0.0, 0.0);
+        let neutral = ToneMap::new(0.0, 0.0);
         let partial = mean_error(&sensor, bright_camera, |x| displayed(look.matrix.apply(x), &tone));
         let fallback = mean_error(&sensor, bright_camera, |x| displayed(x, &neutral));
         assert!(partial < fallback * 0.25, "partial {partial:.5}, neutral fallback {fallback:.5}");
@@ -2280,8 +2280,8 @@ mod tests {
         assert!(fit_pairs(&sensor, &reference).is_none(), "too little colour for the full look");
         let look = fit_look(&sensor, &reference, &vec![false; w * h], None).expect("a partial look");
         assert_eq!(look.matrix, Mat3::IDENTITY, "no colour matrix from a colourless scene");
-        let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
-        let neutral = ToneMap::new(0.0, 0.0, 0.0);
+        let tone = ToneMap::camera(&look.tone, 0.0, 0.0);
+        let neutral = ToneMap::new(0.0, 0.0);
         let lightness =
             |tone: &ToneMap| sensor.data.iter().map(|p| f64::from(tone.apply(luminance_2020(*p)))).sum::<f64>() / sensor.data.len() as f64;
         let target = reference.data.iter().map(|p| f64::from(luminance_2020(*p))).sum::<f64>() / reference.data.len() as f64;
@@ -2301,7 +2301,7 @@ mod tests {
         }
         let none = vec![false; w * h];
         // the camera renders exactly as the neutral fallback: nothing to gain
-        let neutral = ToneMap::new(0.0, 0.0, 0.0);
+        let neutral = ToneMap::new(0.0, 0.0);
         let mut reference = sensor.clone();
         reference.map_in_place(|p| displayed(p.map(f64::from), &neutral).map(|v| v as f32));
         assert!(fit_partial(&sensor, &reference).is_none(), "no clear gain over the fallback");

@@ -342,7 +342,35 @@ pub(crate) fn prepare(
     };
     let ev = s.light.exposure as f32;
     let masks = timed("masks", || masks::evaluate(&s.masks, frame, img.width, img.height, &img, &log_l, ev, mattes));
-    Prepared { img, log_l, base, clarity_blur, texture_blur, dark, chroma_blur, air, masks, px_per_long }
+    Prepared { img, log_l, base, clarity_blur, texture_blur, dark, chroma_blur, air, whites_scale: 1.0, masks, px_per_long }
+}
+
+/// The 99th percentile of the output frame's own display luma, from a small render of it
+/// (`proxy_w` px wide) with Whites pinned at zero.
+///
+/// This is the statistic [`crate::tone::whites_scale`] turns into the per-photo scale on positive
+/// Whites, and it is taken with Whites at zero because it must not depend on the value it scales:
+/// it is the frame's *highlight level*, not the level after Whites moved it. Like
+/// [`frame_airlight`] it is a deliberately minimal proxy — sample, white balance, tone — skipping
+/// the camera colour transform and the spatial planes, so it is cheap and frame-wide rather than
+/// per-window (a windowed render cannot see the whole frame; see `Plan::whites_scale`).
+pub(crate) fn frame_highlight(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, frame: &Frame, proxy_w: usize, proxy_h: usize) -> f32 {
+    let mut img = frame.sample(src, proxy_w, proxy_h);
+    white_balance(&mut img, info, s);
+    let tone = crate::tone::ToneMap::new(s.light.contrast, 0.0);
+    // Encoded, not display-linear: the relation in `tone::whites_scale` was fitted against the
+    // sRGB-*encoded* percentile of the display luma, and a percentile does not commute with the
+    // transfer curve. Taking it in the wrong domain shifts every reading by ~0.2 (0.58 vs 0.78 on
+    // one body) and weakens the correlation from −0.98 to −0.66, which is how the first attempt at
+    // this shipped mis-calibrated.
+    let mut v: Vec<f32> = img.data.iter().map(|p| lightcraft_color::transfer::linear_to_srgb(tone.apply(luminance_2020(*p)))).collect();
+    if v.is_empty() {
+        return 1.0;
+    }
+    let k = (((v.len() as f32) * 0.99) as usize).min(v.len() - 1);
+    v.select_nth_unstable_by(k, |a, b| a.total_cmp(b));
+    let p = v[k];
+    if p.is_finite() { p.clamp(0.0, 1.0) } else { 1.0 }
 }
 
 /// The airlight of the whole output frame, estimated on a small render of it (`proxy_w` px wide):
