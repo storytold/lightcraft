@@ -1182,3 +1182,50 @@ fn the_tracklog_toast_shows_after_a_while() {
     assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.starts_with("Tagged")), "{:?}", h.app.ui.toast);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Issue #678: Settings ▸ Faces cannot switch recognition on until a recognition model is chosen:
+/// the box is off and clicking it changes nothing. Installing a model switches recognition on by
+/// itself, and from then on the box turns it off and on.
+#[test]
+fn recognise_faces_stays_off_until_a_model_is_chosen() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid"}));
+    let dir = std::env::temp_dir().join(format!("lc-ui-faces-toggle-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    h.app.session.face_models_dir = Some(dir.join("models"));
+    let r = h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "faces"}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    // (the first request switches the widget list on, the next frame fills it)
+    h.request("ui.widgets", json!({}), T);
+    h.step();
+    let enabled = |h: &mut Headless| h.app.session.execute("faces.models.list", &json!({})).unwrap()["enabled"] == true;
+    let runtime = h.app.session.execute("faces.models.list", &json!({})).unwrap()["runtime"] == true;
+    assert!(!enabled(&mut h));
+    let click = |h: &mut Headless| {
+        let r = h.request("ui.clickWidget", json!({"id": "check:settings.facesEnabled"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+    };
+    click(&mut h);
+    assert!(!enabled(&mut h), "nothing to run: the box stays off");
+    assert!(h.app.session.execute("faces.enable", &json!({"enabled": true})).is_err(), "the engine refuses too");
+    if !runtime {
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    // a model: installing it chooses it and switches recognition on; the box then works both ways
+    let f = dir.join("m.onnx");
+    std::fs::write(&f, lightcraft_faces::synthetic::tiny_embedder_model(64)).unwrap();
+    h.app.session.execute("faces.models.install", &json!({"path": f.to_string_lossy(), "acknowledged": true})).unwrap();
+    h.app.caches.faces_epoch += 1;
+    h.step();
+    h.step();
+    assert!(enabled(&mut h));
+    click(&mut h);
+    assert!(!enabled(&mut h), "the box switches recognition off");
+    click(&mut h);
+    assert!(enabled(&mut h), "and on again, with a model chosen");
+    let _ = std::fs::remove_dir_all(&dir);
+}

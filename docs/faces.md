@@ -200,7 +200,8 @@ photos in the set.
 
 ## Suggesting who is in a photo
 
-With **Recognise faces** switched on in Settings ▸ Faces and a recognition model chosen (**Use**), LightCraft works out, in
+With **Recognise faces** switched on in Settings ▸ Faces and a recognition model chosen (**Use**; the switch cannot be
+turned on before one is, and turns itself off when the last recogniser is removed), LightCraft works out, in
 the background, what each face in your library looks like to the model, and uses the faces you have already named to
 suggest names for the ones you have not:
 

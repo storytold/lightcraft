@@ -464,6 +464,8 @@ fn remove(s: &mut Session, p: &Value) -> Result<Value> {
     if st.embedder.as_deref() == Some(id) {
         // another installed recogniser takes over, so recognition keeps working; with none left nothing is chosen
         st.embedder = installed_models(&dir).into_iter().find(|i| i.manifest.id != id && i.manifest.role == Role::Embedder).map(|i| i.manifest.id);
+        // on with nothing to run is not a state (issue #678)
+        st.enabled &= st.embedder.is_some();
         write_settings(&dir, &st)?;
     }
     Ok(json!({"removed": id, "embedder": st.embedder}))
@@ -491,7 +493,15 @@ fn enable(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "faces.enable";
     let dir = models_dir(s, C)?;
     let mut st = read_settings(&dir);
-    st.enabled = p.get("enabled").and_then(Value::as_bool).unwrap_or(!st.enabled);
+    let on = p.get("enabled").and_then(Value::as_bool).unwrap_or(!st.enabled);
+    // on means something only with a model to run (issue #678): a toggle that is on with nothing
+    // chosen would sit there doing nothing, with no word about why
+    let usable =
+        st.embedder.as_deref().is_some_and(|id| installed_models(&dir).iter().any(|i| i.manifest.id == id && i.manifest.role == Role::Embedder));
+    if on && !usable {
+        return Err(bad(C, "choose a recognition model first (Settings ▸ Faces ▸ Use)"));
+    }
+    st.enabled = on;
     write_settings(&dir, &st)?;
     // the background scan notices at once, not within the second it trusts its last look
     #[cfg(not(target_arch = "wasm32"))]

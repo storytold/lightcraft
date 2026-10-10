@@ -584,3 +584,32 @@ fn the_users_own_catalog_adds_models_with_the_same_download_and_install() {
     }
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// Issue #678: on means something only with a model to run. Turning recognition on with no chosen
+/// (installed) recogniser is refused; installing one chooses it and switches recognition on, after
+/// which the switch works both ways; removing the last recogniser switches it off again.
+#[test]
+fn recognition_cannot_be_turned_on_without_a_chosen_model() {
+    let d = temp("enable-needs-model");
+    let mut s = session(&d);
+    for p in [json!({"enabled": true}), json!({})] {
+        let e = s.execute("faces.enable", &p).unwrap_err().to_string();
+        assert!(e.contains("recognition model"), "{p}: {e}");
+    }
+    assert_eq!(s.execute("faces.enable", &json!({"enabled": false})).unwrap()["enabled"], false, "off is always allowed");
+    assert_eq!(s.execute("faces.models.list", &json!({})).unwrap()["enabled"], false);
+    let f = model_file(&d, "m.onnx", 64);
+    let r = s.execute("faces.models.install", &json!({"path": f, "acknowledged": true})).unwrap();
+    let id = r["installed"]["id"].as_str().unwrap().to_string();
+    assert_eq!(r["active"]["enabled"], true, "installing chooses the model and switches recognition on: {r}");
+    assert_eq!(s.execute("faces.enable", &json!({"enabled": false})).unwrap()["enabled"], false);
+    assert_eq!(s.execute("faces.enable", &json!({"enabled": true})).unwrap()["enabled"], true);
+    assert_eq!(s.execute("faces.enable", &json!({})).unwrap()["enabled"], false, "toggles when omitted");
+    assert_eq!(s.execute("faces.enable", &json!({})).unwrap()["enabled"], true);
+    // the last recogniser goes: nothing is chosen, so recognition is off and stays off
+    assert_eq!(s.execute("faces.models.remove", &json!({"id": id})).unwrap()["embedder"], Value::Null);
+    let l = s.execute("faces.models.list", &json!({})).unwrap();
+    assert_eq!((l["enabled"].clone(), l["embedder"].clone()), (json!(false), Value::Null), "{l}");
+    assert!(s.execute("faces.enable", &json!({"enabled": true})).is_err());
+    let _ = std::fs::remove_dir_all(&d);
+}
