@@ -1182,3 +1182,43 @@ fn the_tracklog_toast_shows_after_a_while() {
     assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.starts_with("Tagged")), "{:?}", h.app.ui.toast);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Issue #676: right-click ▸ Add to Album offers New Album… like the Photo menu does, also when
+/// the library has no album yet (the submenu used to come up empty); the new album holds the photo.
+#[test]
+fn right_click_add_to_album_offers_a_new_album_when_there_is_none() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let plain: Vec<u64> = h.app.session.catalog.albums().filter(|a| !a.folder && !a.is_smart()).map(|a| a.id.0).collect();
+    for id in plain {
+        h.app.session.execute("album.delete", &json!({"id": id})).unwrap();
+    }
+    assert!(h.app.session.catalog.albums().all(|a| a.folder || a.is_smart()), "no plain album is left");
+    let photo = lightcraft_catalog::PhotoId(h.app.session.visible_cloned()[1].0);
+    h.step();
+    let thumb = widget(&h, &format!("thumb:{}", photo.0));
+    let r = h.request("ui.click", json!({"x": thumb.center().x, "y": thumb.center().y, "button": "right"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert!(h.app.session.selection.contains(photo), "right-click selects the photo");
+    let r = h.request("ui.hoverWidget", json!({"id": "button:contextAddToAlbum"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    let r = h.request("ui.clickWidget", json!({"id": "button:contextNewAlbum"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    match &mut h.app.ui.dialog {
+        Some(crate::state::Dialog::NewAlbum { name, folder: false, parent: None }) => *name = "Trip".into(),
+        other => panic!("New Album dialog expected, got {other:?}"),
+    }
+    h.step();
+    let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    let trip = h.app.session.catalog.albums().find(|a| a.name == "Trip").expect("the album was created");
+    assert!(trip.photos.contains(&photo), "the right-clicked photo is in it: {:?}", trip.photos);
+    assert!(h.app.ui.dialog.is_none(), "{:?}", h.app.ui.dialog);
+}
