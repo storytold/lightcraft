@@ -40,6 +40,8 @@ dac-hash = { path = "crates/hash" }
 dac-immich = { path = "crates/immich" }
 dac-heif = { path = "crates/heif" }
 dac-segment = { path = "crates/segment" }
+dac-text = { path = "crates/text" }
+dac-pdf = { path = "crates/pdf" }
 
 # foundation
 thiserror = "2"
