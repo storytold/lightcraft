@@ -296,3 +296,12 @@ suggestions it would make and how many were right.
 All of this is reachable from the control channel, the CLI and MCP: `faces.models.list`, `faces.models.inspect {path}`,
 `faces.models.install {path, acknowledged: true, activate?}`, `faces.models.download {id, acknowledged: true}` (then `faces.models.downloads`, which also installs what has arrived, and `faces.models.downloadCancel {id}`), `faces.models.remove {id}`, `faces.models.select {id}`,
 `faces.enable {enabled?}`, `faces.detect {ids?, apply?}`, `faces.index {budgetMs?, ids?}`, `faces.pump` (what the app calls every frame), `faces.suggest {ids?, threshold?, margin?}`, `faces.person {name, more?}` (a person's faces and the unnamed faces that look like them), `faces.unnamed {limit?}` (every unnamed face, look-alikes together, with suggested names), `faces.setName {id?, index, name}`, `faces.nameFaces {faces: [{photo, index}], name}` (name many at once, one undo step) and `faces.evaluate`. `acknowledged` must be `true`: the caller has shown the user the terms and the user agreed. Installing makes the model the one in use and switches recognition on unless `activate` is `false`.
+
+## Find Blemishes
+
+Photo ▸ Find Blemishes (`spot.findBlemishes`) uses the installed detector's boxes and landmarks to look for small,
+round, darker-or-redder spots on each face's skin and adds a heal spot on each, the way Find Dust Spots does for
+sensor dust. Eyes, brows, nostrils and the mouth are cut out around the landmarks; faces narrower than 160 px in
+the 1600 px analysis image get nothing, as do faces with more than 12 candidates (stubble, freckles and pores are
+texture, not blemishes); at most six per face. It needs no model beyond the detector and never changes anything
+without a spot you can see and delete (`crates/pipeline/src/blemish.rs`).
