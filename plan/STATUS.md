@@ -11,6 +11,17 @@
 - The 10 `IMM-*` rows are in the document but **not counted yet**: `xtask/src/parity.rs` accepts only the `LR`,
   `LRC`, `MENU`, `KEY` and `KEYC` prefixes (add `"IMM"` to `is_row_id`).
 
+## Phase 1 (first pass merged 2026-10-10)
+
+All tracks 1.1–1.8 are merged on main with `cargo xtask ci` green; exit-gate detail in `PLAN_phase_1.md`. Open gaps:
+- 1.1: move Session/registry/commands out of the `engine` facade (needs a Session context trait).
+- 1.2/1.3: secondary-window filmstrip + filter; panel drag-reorder; image identity plate; KEYC-COMPARE/DEVELOP keys.
+- 1.4: Folders lists only folders with photos, no Windows free space; grid View Options panel.
+- 1.5: lazy photo loading / grid paging (1M photos 2.3 GB); migration progress; unfiltered sort at 500k borderline.
+- 1.6: tile Compare and Reference views; measure slider drags at ≥1:1 (`profile_slider_drag`); run corpus-raw 1:1 test.
+- 1.7/1.8: FileStore credentials in the UI (macOS/Windows); Immich source inside the Import dialog; link-only file kind
+  after original download; translations for new strings; `immich.connect` off the UI thread.
+
 ## Phase 0 checklist
 
 | Item | State |

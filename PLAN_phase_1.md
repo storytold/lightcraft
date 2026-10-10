@@ -239,13 +239,19 @@ message.
 
 ## Exit gate
 
-- [ ] Engine split; layering check green; command ids unchanged.
-- [ ] All seven modules in the picker (Library and Develop complete, others placeholders); panel framework, screen
-      modes and secondary window done; Classic keymap default; shortcut editor.
-- [ ] Library Classic panels ✅ in tracker (Navigator, Catalog, Folders, Collections, Quick Develop, Keywording,
-      Keyword List, Metadata, Painter).
-- [ ] Catalog v4: 500k under 2 s open, under 100 ms filter; backup and optimise; multiple catalogs; export/import
-      catalog.
-- [ ] 1:1 zoom pixel-equal to export.
-- [ ] `net` and `credentials` in place; IMM-CONNECT, IMM-LINK, IMM-IMPORT and IMM-EXTLIB ✅ against the pinned Immich
-      test server.
+Status 2026-10-10 (first pass done; see plan/STATUS.md → Phase 1 for the gaps).
+
+- [~] Engine split; layering check green; command ids unchanged. *(Four crates extracted, ~10k of 45k lines; Session, the
+      command registry and most commands remain in the `engine` facade until a Session abstraction exists.)*
+- [~] All seven modules in the picker (Library and Develop complete, others placeholders); panel framework, screen
+      modes and secondary window done; Classic keymap default; shortcut editor. *(Secondary window lacks its own
+      filmstrip/filter; KEYC-COMPARE / KEYC-DEVELOP / KEYC-MODULE-OUTPUT not ✅; no panel drag-reorder.)*
+- [~] Library Classic panels ✅ in tracker. *(Folders and Grid cells 🟡.)*
+- [~] Catalog v4: 500k under 2 s open, under 100 ms filter; backup and optimise; multiple catalogs; export/import
+      catalog. *(500k open 0.73 s; filtered views < 100 ms but the unfiltered date sort measured 110 ms under load;
+      photos still all in RAM, 1M = 2.3 GB.)*
+- [x] 1:1 zoom pixel-equal to export. *(Procedural image and tile seams; corpus raws not run on this machine. Compare
+      and Reference views not tiled.)*
+- [~] `net` and `credentials` in place; IMM-CONNECT, IMM-LINK, IMM-IMPORT and IMM-EXTLIB ✅ against the pinned Immich
+      test server. *(IMM-LINK ✅; CONNECT 🟡 no key storage on macOS/Windows; IMPORT 🟡 separate window; EXTLIB 🟡
+      not tried against a real external-library scan.)*
