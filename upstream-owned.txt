@@ -23,6 +23,11 @@ crates/net/
 crates/credentials/
 crates/hash/
 crates/immich/
+crates/plugins/
+sdk/
+docs/plugins.md
+crates/engine/src/cmd/plugins.rs
+crates/ui-egui/src/panels/plugins.rs
 # the Classic shell
 crates/ui-egui/src/module.rs
 crates/ui-egui/src/panels/classic.rs

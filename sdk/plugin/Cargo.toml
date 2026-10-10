@@ -1,0 +1,13 @@
+[package]
+name = "dac-plugin-sdk"
+description = "Guest-side SDK for the app's WebAssembly plug-ins (ABI v1): exports, host calls, typed helpers"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+# Not part of the app's workspace: plug-ins are built for wasm32-unknown-unknown on their own.
+[workspace]
+
+[dependencies]
+serde_json = "1"

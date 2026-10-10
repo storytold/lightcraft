@@ -1,0 +1,21 @@
+[package]
+name = "catalog-tools"
+description = "Example plug-in: a menu command with a dialog, a metadata provider, an export hook and a publish service"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+dac-plugin-sdk = { path = "../../plugin" }
+
+[profile.release]
+opt-level = "s"
+panic = "abort"
+lto = true
+strip = true
