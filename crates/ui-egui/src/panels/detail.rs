@@ -685,7 +685,19 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             RightPanel::Masking => mask_overlay(app, ui, &resp, &map, &d),
             RightPanel::Remove => remove_overlay(app, ui, &resp, &map, &d),
             RightPanel::RedEye => eye_overlay(app, ui, &resp, &map, &d),
-            _ => general_interaction(app, ui, &resp, &map, img_rect, main_area, native, aspect),
+            _ => {
+                // side by side / stacked: Before shows the same frame, so a click in its view (white
+                // balance, colour samples, targeted adjustment) means the same point of the photo.
+                // Zoomed in, a view's image reaches past its pane: what counts is the pane clicked.
+                let pointer = resp.interact_pointer_pos().or(resp.hover_pos());
+                let map = match (split, areas.first(), pointer) {
+                    (true, Some(before), Some(q)) if before.contains(q) => {
+                        CanvasMap::new(&frame, fit_rect(*before, aspect, app.ui.zoom, native, ppp, app.ui.pan))
+                    }
+                    _ => map,
+                };
+                general_interaction(app, ui, &resp, &map, img_rect, main_area, native, aspect)
+            }
         }
     }
     // drawn and hit-tested above the loupe and its tools: clicks on it pan
