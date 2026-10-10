@@ -22,7 +22,7 @@ release that has already been published, so bump the version before producing an
 
 ## Builds and artifacts
 
-Release jobs build macOS universal, Windows x86/x64/ARM64, Linux x86_64/aarch64, FreeBSD x86_64,
+Release jobs build macOS universal, Windows x86/x64/ARM64, Linux x86_64/aarch64/riscv64, FreeBSD x86_64,
 and the WASM web app. The platform scripts in [`packaging/`](../packaging/) write their outputs to
 `dist/release/` (the full list of files is the README's Downloads section):
 
