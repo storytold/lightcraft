@@ -13,6 +13,10 @@ struct Server {
     renamed: Vec<Value>,
     merged: Vec<String>,
     clock: u32,
+    /// (id, name, asset ids)
+    albums: Vec<(String, String, Vec<String>)>,
+    stacks: Vec<Vec<String>>,
+    uploads: u32,
 }
 
 impl Server {
@@ -79,6 +83,49 @@ fn handle(state: &Shared, down: &AtomicBool, m: &str, t: &str, key: Option<&str>
                 .chain(std::iter::once(json!({"id": "not-in-catalog"})))
                 .collect();
             json(json!({"assets": {"total": items.len(), "count": items.len(), "items": items, "nextPage": null}}))
+        }
+        ("POST", "/api/assets") => {
+            st.uploads += 1;
+            let id = format!("up-{}", st.uploads);
+            let now = st.tick();
+            // the checksum of the uploaded part is not parsed: the test server keys duplicates by name
+            let text = String::from_utf8_lossy(body);
+            let name = text.split("filename=\"").nth(2).and_then(|x| x.split('"').next()).unwrap_or("x").to_string();
+            st.assets.push(json!({"id": id, "type": "IMAGE", "originalFileName": name, "updatedAt": now, "checksum": format!("name:{name}"), "exifInfo": {}, "tags": []}));
+            resp("201 Created", "application/json", json!({"id": id, "status": "created"}).to_string().as_bytes())
+        }
+        ("POST", "/api/assets/bulk-upload-check") => {
+            let results: Vec<Value> = b["assets"].as_array().into_iter().flatten().map(|x| json!({"id": x["id"], "action": "accept"})).collect();
+            json(json!({"results": results}))
+        }
+        ("GET", "/api/albums") => {
+            json(json!(st.albums.iter().map(|(i, n, a)| json!({"id": i, "albumName": n, "assetCount": a.len()})).collect::<Vec<_>>()))
+        }
+        ("POST", "/api/albums") => {
+            let id = format!("album-{}", st.albums.len() + 1);
+            st.albums.push((id.clone(), b["albumName"].as_str().unwrap_or("").to_string(), vec![]));
+            json(json!({"id": id, "albumName": b["albumName"]}))
+        }
+        (_, p) if p.starts_with("/api/albums/") => {
+            let rest = p.trim_start_matches("/api/albums/");
+            let (id, tail) = rest.split_once('/').unwrap_or((rest, ""));
+            let ids: Vec<String> = b["ids"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+            let Some(al) = st.albums.iter_mut().find(|a| a.0 == id) else { return not_found() };
+            match (m, tail) {
+                ("PUT", "assets") => ids.into_iter().for_each(|i| {
+                    if !al.2.contains(&i) {
+                        al.2.push(i)
+                    }
+                }),
+                ("DELETE", "assets") => al.2.retain(|x| !ids.contains(x)),
+                _ => {}
+            }
+            json(json!({"id": al.0, "albumName": al.1, "assets": al.2.iter().map(|i| json!({"id": i})).collect::<Vec<_>>()}))
+        }
+        ("POST", "/api/stacks") => {
+            let ids = b["assetIds"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+            st.stacks.push(ids);
+            json(json!({"id": "stack"}))
         }
         ("PUT", "/api/tags") => {
             let mut out = Vec::new();
@@ -189,7 +236,7 @@ fn setup(tag: &str) -> Setup {
     let hits = Arc::new(AtomicU32::new(0));
     let url = serve_state(state.clone(), down.clone(), hits.clone());
     let mut s = session();
-    s.remote.cache_dir = Some(dir.join("cache"));
+    s.open_library(dir.join("lib"), false).unwrap();
     s.execute("library.import", &json!({"paths": [dir.join("one.png").to_string_lossy(), dir.join("two.png").to_string_lossy()]})).unwrap();
     let one = s.catalog.photos().find(|p| p.file_name == "one.png").unwrap().id;
     let two = s.catalog.photos().find(|p| p.file_name == "two.png").unwrap().id;
@@ -321,7 +368,7 @@ fn two_way_sync_dry_run_conflicts_and_deletions() {
     let st = s.execute("immich.syncStatus", &json!({"log": 100})).unwrap();
     assert!(st["log"].as_array().unwrap().len() >= 9, "{st}");
     assert!(st["log"].as_array().unwrap().iter().any(|l| l["dryRun"] == true));
-    assert!(std::fs::read_dir(dir.join("cache/sync")).unwrap().count() == 1);
+    assert!(std::fs::read_dir(dir.join("lib/Immich/sync")).unwrap().count() == 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -405,5 +452,86 @@ fn smart_search_maps_results_to_photos_and_shows_or_saves_them() {
     assert!(s.visible().is_empty());
     assert!(s.execute("immich.smartSearch", &json!({"query": "  "})).is_err());
     assert!(s.execute("immich.smartSearch", &json!({"query": "x", "mode": "nope"})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn publish_to_immich_albums_renders_and_stacks() {
+    let Setup { mut s, state, one, two, dir, .. } = setup("publish");
+    let account = s.immich_accounts().unwrap().immich[0].id.clone();
+    // rendered: the collection becomes an album of renders
+    let svc = s
+        .execute(
+            "publish.createService",
+            &json!({"kind": "immich", "name": "Immich", "settings": {"account": account}, "export": {"format": "jpeg", "longEdge": 20}}),
+        )
+        .unwrap();
+    assert!(s.execute("publish.createService", &json!({"kind": "immich", "name": "Bad", "settings": {}})).is_err(), "an account is required");
+    s.execute("library.select", &json!({"ids": [one.0]})).unwrap();
+    let st = s.execute("publish.createCollection", &json!({"service": svc["id"], "name": "Web", "addSelected": true})).unwrap();
+    let coll = st["collection"].as_u64().unwrap();
+    let r = s.execute("publish.run", &json!({"collection": coll})).unwrap();
+    assert_eq!(r["runs"][0]["published"].as_array().unwrap().len(), 1, "{r}");
+    let first = r["runs"][0]["published"][0]["remoteId"].as_str().unwrap().to_string();
+    assert!(first.starts_with("r:up-"), "{first}");
+    {
+        let st = state.lock().unwrap();
+        assert_eq!(st.albums.len(), 1);
+        assert_eq!(st.albums[0].1, "Web");
+        assert_eq!(st.albums[0].2, vec![first.trim_start_matches("r:").to_string()]);
+    }
+    // an edit, then re-publish: the new render replaces the old one, which goes to the trash
+    s.execute("photo.rate", &json!({"ids": [one.0], "rating": 4})).unwrap();
+    let r = s.execute("publish.run", &json!({"collection": coll})).unwrap();
+    let second = r["runs"][0]["published"][0]["remoteId"].as_str().unwrap().to_string();
+    assert_ne!(first, second);
+    assert_eq!(remote(&state, first.trim_start_matches("r:"))["isTrashed"], true);
+    assert_eq!(state.lock().unwrap().albums[0].2, vec![second.trim_start_matches("r:").to_string()]);
+    // taken out of the collection: out of the album, not deleted (deleteRemoved is off)
+    s.execute("album.removePhotos", &json!({"id": coll, "ids": [one.0]})).unwrap();
+    let r = s.execute("publish.run", &json!({"collection": coll})).unwrap();
+    assert_eq!(r["runs"][0]["removed"], json!([one.0]), "{r}");
+    assert!(state.lock().unwrap().albums[0].2.is_empty());
+    assert_eq!(remote(&state, second.trim_start_matches("r:"))["isTrashed"], Value::Null);
+
+    // both: render on top of the original; a linked original is never uploaded again
+    let svc2 = s
+        .execute(
+            "publish.createService",
+            &json!({"kind": "immich", "name": "Immich both", "settings": {"account": account, "send": "both"}, "export": {"format": "jpeg", "longEdge": 20}}),
+        )
+        .unwrap();
+    s.execute("library.select", &json!({"ids": [two.0]})).unwrap();
+    let st = s.execute("publish.createCollection", &json!({"service": svc2["id"], "name": "Stacked", "addSelected": true})).unwrap();
+    let uploads = state.lock().unwrap().uploads;
+    let r = s.execute("publish.run", &json!({"collection": st["collection"]})).unwrap();
+    let id = r["runs"][0]["published"][0]["remoteId"].as_str().unwrap().to_string();
+    assert!(id.ends_with("+o:bbbb-2"), "the linked asset is the original: {id}");
+    let st = state.lock().unwrap();
+    assert_eq!(st.uploads, uploads + 1, "only the render was uploaded");
+    assert_eq!(st.stacks.last().unwrap()[1], "bbbb-2");
+    drop(st);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn albums_sync_both_ways() {
+    let Setup { mut s, state, one, two, dir, .. } = setup("albums");
+    let a = s.execute("album.create", &json!({"name": "Holiday"})).unwrap()["id"].as_u64().unwrap();
+    s.execute("album.addPhotos", &json!({"id": a, "ids": [one.0]})).unwrap();
+    let r = s.execute("immich.linkAlbum", &json!({"album": a})).unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+    // Immich already has photo two in it
+    state.lock().unwrap().albums[0].2.push("bbbb-2".into());
+    let r = s.execute("immich.syncAlbums", &json!({})).unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+    let mut photos = s.catalog.album(dac_catalog::AlbumId(a)).unwrap().photos.clone();
+    photos.sort();
+    assert_eq!(photos, vec![one, two]);
+    assert!(state.lock().unwrap().albums[0].2.contains(&"aaaa-1".to_string()));
+    // removed in Immich: removed in the catalog
+    state.lock().unwrap().albums[0].2.retain(|x| x != "aaaa-1");
+    s.execute("immich.syncAlbums", &json!({})).unwrap();
+    assert_eq!(s.catalog.album(dac_catalog::AlbumId(a)).unwrap().photos, vec![two]);
     let _ = std::fs::remove_dir_all(&dir);
 }

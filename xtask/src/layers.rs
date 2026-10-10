@@ -98,6 +98,8 @@ pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     // L3: the Immich client writes remote links into the catalog
     &["catalog", "immich"],
     &["catalog", "publish"],
+    // IMM-PUBLISH: the Immich publish service implements the publish trait
+    &["publish", "immich"],
 ];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {

@@ -10,6 +10,7 @@ dac-catalog = { workspace = true }
 dac-hash = { workspace = true }
 dac-geom = { workspace = true }
 dac-meta = { workspace = true }
+dac-publish = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

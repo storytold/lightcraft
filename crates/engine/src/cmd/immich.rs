@@ -26,6 +26,8 @@ use crate::{Result, Session};
 const LINK_PAGES: u32 = 10_000;
 const PAGE_SIZE: u32 = 1000;
 
+#[path = "immich_publish.rs"]
+pub mod publish;
 #[path = "immich_sync.rs"]
 pub(crate) mod sync;
 /// Most assets one import takes.
@@ -931,6 +933,7 @@ fn scan_libraries(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub fn specs() -> Vec<CommandSpec> {
     let mut v = sync::specs();
+    v.extend(publish::specs());
     v.extend(base_specs());
     v
 }

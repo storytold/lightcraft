@@ -281,7 +281,7 @@ pub fn publish(app: &mut DacApp, ctx: &egui::Context, album: u64) {
         }
         Err(e) => app.toast_error(ctx, e.to_string()),
     };
-    if let Err(e) = crate::tasks::spawn(app, TASK, work, done) {
+    if let Err(e) = crate::tasks::spawn(app, TASK, None, work, done) {
         app.toast_error(ctx, e);
     }
 }

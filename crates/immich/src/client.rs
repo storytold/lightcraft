@@ -337,6 +337,97 @@ impl Client {
         Ok(())
     }
 
+    // ---- publish (IMM-PUBLISH)
+
+    /// `POST /assets` (multipart): upload one file → `(asset id, duplicate)`. `device_asset_id` is
+    /// the app's stable id for it. Needs `asset.upload`. Not retried (not idempotent by itself;
+    /// callers check checksums first).
+    pub fn upload(&self, up: &NewAsset<'_>) -> Result<(String, bool), ImmichError> {
+        let mut form = dac_net::Multipart::new()
+            .text("deviceAssetId", up.device_asset_id)
+            .text("deviceId", up.device_id)
+            .text("fileCreatedAt", up.created)
+            .text("fileModifiedAt", up.created)
+            .text("filename", up.file_name)
+            .text("isFavorite", if up.favorite { "true" } else { "false" });
+        form = match up.data {
+            UploadData::Bytes(b) => form.bytes("assetData", up.file_name, up.mime, b.to_vec()),
+            UploadData::File(p) => form.file("assetData", up.file_name, up.mime, p)?,
+        };
+        if let Some(x) = up.sidecar {
+            form = form.bytes("sidecarData", &format!("{}.xmp", up.file_name), "application/xml", x.to_vec());
+        }
+        #[derive(serde::Deserialize)]
+        struct Created {
+            id: String,
+            #[serde(default)]
+            status: String,
+        }
+        let r = self
+            .http
+            .request(Method::Post, &self.url("/assets"))
+            .header("accept", "application/json")
+            .secret_header("x-api-key", self.key.expose())
+            .multipart(form)
+            .send()
+            .map_err(ImmichError::from)?;
+        if !r.is_success() {
+            return Err(status(r.status, "/assets"));
+        }
+        let c: Created = r.json().map_err(|e| ImmichError::Protocol(format!("/assets: {e}")))?;
+        path_id(&c.id)?;
+        Ok((c.id.clone(), c.status == "duplicate"))
+    }
+
+    /// `POST /albums`. Needs `album.create`.
+    pub fn create_album(&self, name: &str) -> Result<Album, ImmichError> {
+        self.post("/albums", &serde_json::json!({ "albumName": name }))
+    }
+
+    /// `PATCH /albums/{id}`: rename. Needs `album.update`.
+    pub fn rename_album(&self, id: &str, name: &str) -> Result<(), ImmichError> {
+        self.send(Method::Patch, &format!("/albums/{}", path_id(id)?), Some(&serde_json::json!({ "albumName": name })), true).map(|_| ())
+    }
+
+    /// `PUT /albums/{id}/assets`. Needs `albumAsset.create`.
+    pub fn album_add(&self, album: &str, ids: &[String]) -> Result<(), ImmichError> {
+        for chunk in ids.chunks(500) {
+            self.send(Method::Put, &format!("/albums/{}/assets", path_id(album)?), Some(&serde_json::json!({ "ids": chunk })), true)?;
+        }
+        Ok(())
+    }
+
+    /// `DELETE /albums/{id}/assets`. Needs `albumAsset.delete`.
+    pub fn album_remove(&self, album: &str, ids: &[String]) -> Result<(), ImmichError> {
+        for chunk in ids.chunks(500) {
+            self.send(Method::Delete, &format!("/albums/{}/assets", path_id(album)?), Some(&serde_json::json!({ "ids": chunk })), true)?;
+        }
+        Ok(())
+    }
+
+    /// `GET /albums/{id}` with its asset ids.
+    pub fn album_assets(&self, album: &str) -> Result<Vec<String>, ImmichError> {
+        #[derive(serde::Deserialize)]
+        struct A {
+            #[serde(default)]
+            assets: Vec<Id>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Id {
+            id: String,
+        }
+        let a: A = self.get(&format!("/albums/{}", path_id(album)?), true)?;
+        Ok(a.assets.into_iter().map(|x| x.id).collect())
+    }
+
+    /// `POST /stacks`: stack the assets, the first on top. Needs `stack.create`.
+    pub fn stack(&self, ids: &[String]) -> Result<(), ImmichError> {
+        for id in ids {
+            path_id(id)?;
+        }
+        self.send(Method::Post, "/stacks", Some(&serde_json::json!({ "assetIds": ids })), true).map(|_| ())
+    }
+
     // ---- people (IMM-PEOPLE)
 
     /// Every person, hidden ones included (names, birth dates, hidden flag).
@@ -398,6 +489,25 @@ impl Client {
     pub fn delete_library(&self, id: &str) -> Result<(), ImmichError> {
         self.send(Method::Delete, &format!("/libraries/{}", path_id(id)?), None, true).map(|_| ())
     }
+}
+
+/// What [`Client::upload`] sends.
+pub enum UploadData<'a> {
+    Bytes(&'a [u8]),
+    File(&'a Path),
+}
+
+/// One new asset for [`Client::upload`].
+pub struct NewAsset<'a> {
+    pub data: UploadData<'a>,
+    pub file_name: &'a str,
+    pub mime: &'a str,
+    pub device_asset_id: &'a str,
+    pub device_id: &'a str,
+    /// ISO 8601.
+    pub created: &'a str,
+    pub favorite: bool,
+    pub sidecar: Option<&'a [u8]>,
 }
 
 /// The web page of an asset on server `base`.

@@ -38,4 +38,6 @@ pub const FILE: &str = "publish.json";
 /// The built-in Hard Drive service's kind.
 pub const KIND_HARD_DRIVE: &str = "hardDrive";
 /// Service kinds this build can publish with.
-pub const KINDS: &[&str] = &[KIND_HARD_DRIVE];
+/// Immich (IMM-PUBLISH): opened by the engine, which holds the account's key (`dac_immich::publish`).
+pub const KIND_IMMICH: &str = "immich";
+pub const KINDS: &[&str] = &[KIND_HARD_DRIVE, KIND_IMMICH];

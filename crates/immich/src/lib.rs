@@ -30,6 +30,8 @@ pub mod types;
 pub mod client;
 #[cfg(not(target_arch = "wasm32"))]
 mod error;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod publish;
 
 pub use accounts::{Account, Accounts};
 #[cfg(not(target_arch = "wasm32"))]
