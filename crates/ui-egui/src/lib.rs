@@ -46,6 +46,8 @@ pub mod titlebar;
 pub mod widgets;
 
 #[cfg(test)]
+mod tests_activity;
+#[cfg(test)]
 mod tests_album_picker;
 #[cfg(test)]
 mod tests_catalog_ui;
@@ -212,6 +214,24 @@ pub struct Perf {
     pub fps: f64,
 }
 
+/// Why quitting stopped to ask first (`panels::notices`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum QuitPrompt {
+    /// Changes couldn't be written to disk (issue #103).
+    Unsaved(String),
+    /// Tasks that quitting would cut short are running: an import, an export… (issue #345).
+    Tasks(String),
+}
+
+impl QuitPrompt {
+    /// The prompt's message.
+    pub fn text(&self) -> &str {
+        match self {
+            QuitPrompt::Unsaved(text) | QuitPrompt::Tasks(text) => text,
+        }
+    }
+}
+
 pub struct DacApp {
     pub(crate) model_setup: model_setup::Pending,
     /// Per-catalog-revision caches of library-wide results the panels show every frame
@@ -240,8 +260,8 @@ pub struct DacApp {
     pub headless_host: bool,
     /// Warnings to show one at a time (damaged settings files…, issue #103).
     pub notices: Vec<String>,
-    /// Quitting was stopped because changes couldn't be saved: the prompt's text.
-    pub quit_prompt: Option<String>,
+    /// Quitting was stopped to ask first: changes couldn't be saved, or tasks are running.
+    pub quit_prompt: Option<QuitPrompt>,
     /// Quit Anyway was chosen: the window may close with unsaved changes.
     pub quit_confirmed: bool,
     control_rx: Option<Receiver<ControlRequest>>,
@@ -335,6 +355,8 @@ pub struct DacApp {
     /// Immich: Connections settings, the Import dialog's Immich source, background pump state.
     #[cfg(not(target_arch = "wasm32"))]
     pub immich: panels::connections::ImmichUi,
+    /// The activity stack shows every task, not just the first few ("+N more" was clicked).
+    pub activity_expanded: bool,
 }
 
 impl DacApp {
@@ -405,6 +427,7 @@ impl DacApp {
             display_applied: None,
             display_error: None,
             library_problem: None,
+            activity_expanded: false,
             model_setup: Default::default(),
         }
     }
@@ -493,7 +516,7 @@ impl DacApp {
         ctx.request_repaint_after(std::time::Duration::from_secs_f64((due - now).clamp(0.05, interval)));
     }
 
-    /// Announce the start and end of a Build Previews run.
+    /// Announce the end of a Build Previews run.
     fn preview_build_status(&mut self, ctx: &egui::Context) {
         use std::sync::atomic::Ordering;
         let Some(b) = self.session.preview_build.clone() else { return };
@@ -516,14 +539,7 @@ impl DacApp {
                 self.toast(ctx, msg);
             }
         } else {
-            if self.ui.preview_build_seen != Some((key, false)) {
-                self.ui.preview_build_seen = Some((key, false));
-                let msg = match b.what {
-                    "" => crate::i18n::tr_format!("Building previews for {} photos…", b.total),
-                    what => crate::i18n::tr_format!("Working on {what} for {} photos…", b.total, what = crate::i18n::tr(what)),
-                };
-                self.toast(ctx, msg);
-            }
+            // The activity stack shows the run while it works; poll for the end.
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
     }
@@ -893,7 +909,8 @@ impl DacApp {
                     let undo0 = app.session.undo.len();
                     app.import = Some(import::ImportTask::new(paths, params, undo0, false).auto());
                 };
-                if let Err(e) = tasks::spawn(self, LABEL, work, done) {
+                // listed every few seconds: quiet, no row in the activity stack
+                if let Err(e) = tasks::spawn(self, LABEL, None, work, done) {
                     log::warn!("{e}");
                 }
             }
@@ -1123,11 +1140,8 @@ impl DacApp {
         panels::dialogs::show(self, &ctx);
         catalog_ui::show(self, &ctx);
         panels::library_problem::show(self, &ctx);
-        import::progress(self, &ctx);
-        sync::progress_window(self, &ctx);
-        import::scan_progress(self, &ctx);
-        lightroom_import::progress(self, &ctx);
         export_task::poll(self, &ctx);
+        panels::activity::show(self, &ctx);
         pick::poll(self, &ctx);
         panels::grid::drag_feedback(self, &ctx);
         panels::left::album_drag_feedback(self, &ctx);
