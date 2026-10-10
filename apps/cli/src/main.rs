@@ -15,6 +15,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod alloc_release;
+mod run_action;
 
 use std::io::{BufReader, Write};
 use std::path::Path;
@@ -44,6 +45,8 @@ USAGE:
         --connect [ADDR]  drive the running app (`{bin} --control 7980`; default 127.0.0.1:7980)
         --script FILE|-   also run JSON lines {\"command\": id, \"params\": {…}} (or {\"method\": …})
         --keep-going      continue after a failed command
+  {cli} run-action NAME [OPTIONS] [param=value…] [ids=[…]]
+      Play a saved action (actions.list) on the selection, or on `ids`; OPTIONS as for `run`.
   {cli} mcp [OPTIONS] [FILES/FOLDERS…]
       MCP server (JSON-RPC 2.0 over stdio). Headless by default: an in-process session with the
       given files imported. Options:
@@ -191,6 +194,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let r = match args.first().map(String::as_str) {
         Some("run") => run(&args[1..]),
+        Some("run-action") => run_action::to_run_args(&args[1..]).and_then(|a| run(&a)),
         Some("mcp") => mcp(&args[1..]),
         Some("render") => render(&args[1..]),
         Some("snapshot") => snapshot(&args[1..]),
