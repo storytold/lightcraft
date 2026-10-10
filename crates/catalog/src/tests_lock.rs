@@ -5,6 +5,17 @@ use std::path::PathBuf;
 use crate::lock::{LOCK, OWNER};
 use crate::*;
 
+/// Taken by every test here that holds a lock in this process. On Unix, spawning the child of
+/// [`lock_held_by_another_process_is_released_when_it_dies`] briefly copies this process's file
+/// descriptors, close-on-exec lock files included, until the child's exec closes them. A lock
+/// another test drops in that moment stays held by the copy, so acquiring it again could fail with
+/// "in use".
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn temp_dir(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("lc-lock-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
@@ -14,6 +25,7 @@ fn temp_dir(tag: &str) -> PathBuf {
 
 #[test]
 fn second_opener_is_refused_until_the_first_lets_go() {
+    let _serial = serial();
     let dir = temp_dir("twice");
     let first = LibraryLock::acquire(&dir, "LightCraft").unwrap();
     assert!(first.held());
@@ -38,6 +50,7 @@ fn second_opener_is_refused_until_the_first_lets_go() {
 /// Files left behind by a crash (lock file + owner note) don't lock anyone out.
 #[test]
 fn leftover_lock_files_are_not_a_lock() {
+    let _serial = serial();
     let dir = temp_dir("stale");
     std::fs::write(dir.join(LOCK), b"").unwrap();
     std::fs::write(dir.join(OWNER), br#"{"pid":999999,"host":"elsewhere","program":"LightCraft","version":"0.2.0","since":1}"#).unwrap();
@@ -52,6 +65,7 @@ fn leftover_lock_files_are_not_a_lock() {
 /// Another process holds the lock; when it is killed (a crash), the OS releases it.
 #[test]
 fn lock_held_by_another_process_is_released_when_it_dies() {
+    let _serial = serial();
     let dir = temp_dir("child");
     let exe = std::env::current_exe().unwrap();
     let mut child = std::process::Command::new(exe)
