@@ -29,3 +29,6 @@ hound = "3.5" # WAV, Apache-2.0
 claxon = "0.4" # FLAC, Apache-2.0
 lewton = "0.10" # Ogg Vorbis, MIT OR Apache-2.0
 cpal = { version = "0.15", optional = true } # Apache-2.0; links ALSA on Linux
+
+[dev-dependencies]
+dac-fuzzkit = { workspace = true }
