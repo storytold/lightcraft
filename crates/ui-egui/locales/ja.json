@@ -1734,5 +1734,18 @@
   "Pending photo action cancelled": "Pending photo action cancelled",
   "Pending photo action cancelled because its library or photo changed": "Pending photo action cancelled because its library or photo changed",
   "ONNX model": "ONNX model",
-  "commercial use subject to GPL conditions": "commercial use subject to GPL conditions"
+  "commercial use subject to GPL conditions": "commercial use subject to GPL conditions",
+  "Appearance": "外観",
+  "Appearance Mode": "外観モード",
+  "Sync with System": "システムと同期",
+  "Light Mode": "ライトモード",
+  "Dark Mode": "ダークモード",
+  "Next Appearance Mode": "次の外観モード",
+  "Light Theme": "ライトテーマ",
+  "Dark Theme": "ダークテーマ",
+  "In Use": "使用中",
+  "Charcoal": "チャコール",
+  "Midnight": "ミッドナイト",
+  "Silver": "シルバー",
+  "Paper": "ペーパー"
 }

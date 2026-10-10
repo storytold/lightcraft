@@ -2,6 +2,14 @@
 
 ## October 2026
 
+### Appearance
+- Settings ▸ Interface ▸ Appearance Mode: Sync with System, Dark Mode or Light Mode, above a light
+  and a dark theme card, each previewing its theme (dark: Charcoal, the look so far, or Midnight;
+  light: Silver or Paper). New and existing installs stay dark; following the system is opt-in.
+- The top bar's appearance button cycles Auto, Light, Dark (a monitor, sun or moon), and View ▸
+  Appearance lists the modes and themes. On Linux, Auto follows the desktop portal's colour scheme
+  as it changes, without polling.
+
 ### Masking
 - Drag anywhere inside the selected radial gradient's ellipse to move it, including rotated
   ellipses and radial components in compound masks. Edge and rotation handles keep their existing

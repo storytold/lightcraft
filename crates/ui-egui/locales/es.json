@@ -1734,5 +1734,18 @@
   "Pending photo action cancelled": "Pending photo action cancelled",
   "Pending photo action cancelled because its library or photo changed": "Pending photo action cancelled because its library or photo changed",
   "ONNX model": "ONNX model",
-  "commercial use subject to GPL conditions": "commercial use subject to GPL conditions"
+  "commercial use subject to GPL conditions": "commercial use subject to GPL conditions",
+  "Appearance": "Apariencia",
+  "Appearance Mode": "Modo de apariencia",
+  "Sync with System": "Sincronizar con el sistema",
+  "Light Mode": "Modo claro",
+  "Dark Mode": "Modo oscuro",
+  "Next Appearance Mode": "Siguiente modo de apariencia",
+  "Light Theme": "Tema claro",
+  "Dark Theme": "Tema oscuro",
+  "In Use": "En uso",
+  "Charcoal": "Carbón",
+  "Midnight": "Medianoche",
+  "Silver": "Plata",
+  "Paper": "Papel"
 }

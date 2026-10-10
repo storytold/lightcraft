@@ -128,6 +128,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "view.histogram",
             "view.navigator",
             "view.infoOverlay",
+            "@Appearance",
             "---",
             "view.fullScreenPreview",
             "view.enterFullScreen",
@@ -453,6 +454,29 @@ fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
                 ));
             }
             v.push(item("dialog.labelNames", Value::Null, "Edit Label Names…", None, true, None));
+            v
+        }
+        "Appearance" => {
+            use crate::state::AppearanceMode;
+            use crate::theme::ThemeKind;
+            let s = &app.ui.settings;
+            let mut v: Vec<MenuNode> = [
+                ("auto", "Sync with System", AppearanceMode::Auto),
+                ("light", "Light Mode", AppearanceMode::Light),
+                ("dark", "Dark Mode", AppearanceMode::Dark),
+            ]
+            .into_iter()
+            .map(|(mode, label, m)| item("view.appearance", json!({"mode": mode}), label, None, true, Some(s.appearance_mode == m)))
+            .collect();
+            v.push(item("view.appearance", Value::Null, "Next Appearance Mode", None, true, None));
+            // the saved theme of each family is checked
+            for group in [[ThemeKind::Charcoal, ThemeKind::Midnight], [ThemeKind::Silver, ThemeKind::Paper]] {
+                v.push(MenuNode::Separator);
+                for k in group {
+                    let on = if k.is_dark() { s.dark_theme.kind() == k } else { s.light_theme.kind() == k };
+                    v.push(item("view.theme", json!({"theme": k.id()}), k.label(), None, true, Some(on)));
+                }
+            }
             v
         }
         "Grid Info" => ["filename", "exposure", "date"]

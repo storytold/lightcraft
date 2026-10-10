@@ -136,6 +136,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.secondWindow", "Second Window", Some("Cmd+F11"), "Window"),
     ("tool.keywordPainter", "Keyword Painter", None, ""),
     ("view.gridInfo", "Grid Info", None, ""),
+    // {mode?: auto | light | dark}: Appearance Mode (cycles Auto, Light, Dark when omitted; the
+    // top bar's appearance button). View ▸ Appearance lists the modes.
+    ("view.appearance", "Next Appearance Mode", None, ""),
+    // {theme: charcoal | midnight | silver | paper}: pick a theme and fix the mode to its family.
+    ("view.theme", "Theme", None, ""),
     ("dialog.allMetadata", "All Metadata…", None, "Photo"),
     ("dialog.faceModel", "Add Face Model…", None, ""),
     ("dialog.newSmartAlbum", "New Smart Album from Filter…", Some("Cmd+Alt+N"), "File"),
@@ -253,6 +258,41 @@ pub fn parse_rgb(v: &Value) -> Option<[u8; 3]> {
     Some([c(0)?, c(1)?, c(2)?])
 }
 
+fn appearance_json(app: &LightcraftApp) -> Value {
+    let s = &app.ui.settings;
+    json!({"mode": s.appearance_mode, "darkTheme": s.dark_theme, "lightTheme": s.light_theme})
+}
+
+/// `view.appearance {mode?}`: set Appearance Mode, or step to the next one (Auto, Light, Dark).
+/// The theme follows on the next frame ([`LightcraftApp::sync_theme`]).
+fn appearance_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    use crate::state::AppearanceMode;
+    let mode = match p.get("mode") {
+        None | Some(Value::Null) => app.ui.settings.appearance_mode.next(),
+        Some(v) => match v.as_str() {
+            Some("auto") => AppearanceMode::Auto,
+            Some("light") => AppearanceMode::Light,
+            Some("dark") => AppearanceMode::Dark,
+            _ => return Err(format!("view.appearance: unknown mode {v} (auto|light|dark)")),
+        },
+    };
+    app.ui.settings.appearance_mode = mode;
+    Ok(appearance_json(app))
+}
+
+/// `view.theme {theme}`: pick a theme; the mode becomes its family's (Dark or Light).
+fn theme_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    let ids = crate::theme::ThemeKind::ALL.map(|k| k.id()).join("|");
+    let Some(id) = p.get("theme").and_then(Value::as_str) else {
+        return Err(format!("view.theme: `theme` is required ({ids})"));
+    };
+    let Some(kind) = crate::theme::ThemeKind::ALL.into_iter().find(|k| k.id() == id) else {
+        return Err(format!("view.theme: unknown theme `{id}` ({ids})"));
+    };
+    app.ui.settings.select_theme(kind);
+    Ok(appearance_json(app))
+}
+
 /// Handle UI commands; `None` means "not a UI command — send it to the engine".
 pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
     if matches!(id, "library.inspectLightroom" | "library.importLightroom") {
@@ -310,6 +350,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             app.ui.show_counts = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.show_counts);
             Ok(json!({"show": app.ui.show_counts}))
         }
+        "view.appearance" => appearance_command(app, p),
+        "view.theme" => theme_command(app, p),
         "view.gridToggle" => {
             app.ui.view = if app.ui.view == ViewMode::PhotoGrid { ViewMode::SquareGrid } else { ViewMode::PhotoGrid };
             Ok(Value::Null)

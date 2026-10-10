@@ -84,6 +84,9 @@ eframe = { version = "0.36", default-features = false }
 egui_kittest = "0.36"
 rfd = "0.17"
 muda = { version = "0.21", default-features = false } # native menu bar (macOS: objc2/AppKit, pure Rust; no GTK)
+# Linux: the desktop's dark/light setting from the XDG settings portal (Settings ▸ Interface ▸
+# Appearance Mode ▸ Auto). Pure Rust; the version accesskit already brings in, pinned to it.
+zbus = "=5.19.0"
 web-time = "1"
 
 # web (apps/lightcraft-web)

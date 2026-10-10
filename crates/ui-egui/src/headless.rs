@@ -2662,10 +2662,20 @@ mod tests {
         assert_eq!(h.app.ui.settings.startup_view, crate::state::StartupView::Detail);
         // Interface: filmstrip names off, grid badges always
         h.request("ui.clickWidget", json!({"id": "button:settingsTab-interface"}), t);
+        // Appearance cards sit above these controls; scroll the compact settings viewport.
+        h.request("ui.hoverWidget", json!({"id": "radio:theme-charcoal"}), t);
+        h.request("ui.scroll", json!({"dy": -350.0}), t);
+        for _ in 0..4 {
+            h.step();
+        }
         h.request("ui.clickWidget", json!({"id": "check:settings.filmNames"}), t);
         assert!(!h.app.ui.settings.film_names);
         h.request("ui.clickWidget", json!({"id": "button:settingsGridBadges-1"}), t);
         assert_eq!(h.app.ui.settings.grid_badges, crate::state::GridBadges::Always);
+        h.request("ui.scroll", json!({"dy": 350.0}), t);
+        for _ in 0..4 {
+            h.step();
+        }
         // Performance: the thumbnail cache size goes to the library preferences
         h.request("ui.clickWidget", json!({"id": "button:settingsTab-performance"}), t);
         h.request("ui.clickWidget", json!({"id": "button:settingsCache-0"}), t);
