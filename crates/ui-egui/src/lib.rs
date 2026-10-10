@@ -51,6 +51,8 @@ mod tests_filmstrip;
 #[cfg(test)]
 mod tests_grid;
 #[cfg(test)]
+mod tests_info_dialogs;
+#[cfg(test)]
 mod tests_keymap;
 #[cfg(test)]
 mod tests_keyword_files;
