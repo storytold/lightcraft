@@ -424,7 +424,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| LR-HDR-EDIT | HDR editing | P2 | 🟡 | `cmd:develop.hdr`, `crates/pipeline/src/tone.rs` (`ToneMap::hdr`), `crates/pipeline/src/tests_hdr.rs` | HDR tone map (SDR curve through the midtones, highlights up to the headroom limit) and float HDR render, CPU only; no on-screen HDR display yet (LR-VIEW-HDR-DISPLAY); HDR settings not yet read from crs XMP |
+| LR-HDR-EDIT | HDR editing | P2 | 🟡 | `cmd:develop.hdr`, `crates/pipeline/src/tone.rs` (`ToneMap::hdr`), `crates/pipeline/src/tests_hdr.rs` | HDR tone map (SDR curve through the midtones, highlights up to the headroom limit) and float HDR render, CPU only; no on-screen HDR display yet (LR-VIEW-HDR-DISPLAY); `crs:HDREditMode` from XMP / Lightroom catalogs turns HDR editing on or off (the headroom limit and SDR rendition aren't read from crs yet) |
 | LR-HDR-SDRPREVIEW | SDR preview of HDR | P2 | 🟡 | `ctl:hdr.sdr*` | SDR rendition sliders (brightness, contrast, highlights, shadows, whites, clarity) used by every SDR view and export; no separate SDR-preview toggle until HDR display lands |
 | LR-HDR-VISUALIZE | Visualize HDR range | P2 | ✅ | `cmd:view.visualizeHdr`, `crates/pipeline/src/visualize.rs` (`hdr_range`) | grey below SDR white, four colour bands by stops above it |
 | LR-HDR-LIMIT | HDR headroom limit | P2 | ✅ | `ctl:hdr.maxEv`, `cmd:develop.hdr` | 0 to 5 stops |

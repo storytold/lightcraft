@@ -201,6 +201,10 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     n(o, "Shadows2012", "light.shadows");
     n(o, "Whites2012", "light.whites");
     n(o, "Blacks2012", "light.blacks");
+    // Lightroom's Light panel "HDR" button
+    if let Some(on) = boolean(props, "crs:HDREditMode") {
+        put(o, "hdr.enabled", json!(on));
+    }
     // older process versions (most `.lrtemplate` presets): approximate the 2012 sliders from the
     // earlier ones, relative to their defaults (contrast 25, blacks 5, brightness 50)
     let has = |o: &Value, path: &str| path.split('.').try_fold(o, |v, k| v.get(k)).is_some();
@@ -463,17 +467,15 @@ pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values
             mask_skips.extend(skipped.into_iter().map(|k| format!("Mask: {k}")));
         }
     }
-    // fields that only switch a panel on/off or name things: not adjustments by themselves; an
-    // HDR edit mode that is off, and Point Color slots that are all empty (-1)
+    // fields that only switch a panel on/off or name things: not adjustments by themselves; and
+    // Point Color slots that are all empty (-1)
     let value_is = |k: &str, f: &dyn Fn(&[String]) -> bool| props.get(&format!("crs:{k}")).is_some_and(|v| f(v));
-    let off = |v: &[String]| v.iter().all(|s| s.trim() == "0");
     let empty_points = |v: &[String]| v.iter().all(|s| s.split(',').all(|n| n.trim().parse::<f64>().is_ok_and(|x| x == -1.0) || n.trim().is_empty()));
     let quiet = |k: &str| {
         k.starts_with("Enable")
             || k.starts_with("ToneCurveName")
             || k == "AutoTone"
             || k == "AutoGrayscaleMix"
-            || (k == "HDREditMode" && value_is(k, &off))
             || (k == "PointColors" && value_is(k, &empty_points))
     };
     let mut unmapped: Vec<String> = props
@@ -591,6 +593,29 @@ mod tests {
             xmlns:c="http://ns.adobe.com/camera-raw-settings/1.0/" c:Vibrance="+30" c:GrainAmount="10"/></rdf:RDF>"#;
         let partial = to_partial(&props(x), Target::Any);
         assert_eq!(partial, json!({"color": {"vibrance": 30.0}, "grain": {"amount": 10.0}}));
+    }
+
+    #[test]
+    fn hdr_edit_mode_turns_hdr_editing_on_or_off() {
+        let x = |v: &str| {
+            format!(
+                r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description
+                xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:HDREditMode="{v}" crs:Exposure2012="+1.5"/></rdf:RDF>"#
+            )
+        };
+        let on = apply_partial(&DevelopSettings::default(), &to_partial(&props(&x("1")), Target::RawAbsolute), 1.0);
+        assert!(on.hdr.enabled);
+        assert_eq!(on.light.exposure, 1.5);
+        assert_eq!(on.hdr.max_ev, lightcraft_develop::Hdr::DEFAULT_MAX_EV, "the rest of the HDR settings keep their defaults");
+        let true_form = apply_partial(&DevelopSettings::default(), &to_partial(&props(&x("True")), Target::RawAbsolute), 1.0);
+        assert!(true_form.hdr.enabled);
+        let mut hdr = DevelopSettings::default();
+        hdr.hdr.enabled = true;
+        assert!(!apply_partial(&hdr, &to_partial(&props(&x("0")), Target::RawAbsolute), 1.0).hdr.enabled, "0 turns it off");
+        // without the field nothing about HDR changes
+        let plain = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description
+            xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="+1.5"/></rdf:RDF>"#;
+        assert!(to_partial(&props(plain), Target::RawAbsolute).get("hdr").is_none());
     }
 
     #[test]
@@ -754,10 +779,10 @@ mod tests {
     fn preset_bookkeeping_is_not_reported_but_real_gaps_are() {
         let empty_points = "<crs:PointColors><rdf:Seq><rdf:li>-1.000000, -1.000000, -1.000000, -1.000000</rdf:li></rdf:Seq></crs:PointColors>";
         assert_eq!(unmapped(&preset_packet(r#"crs:HDREditMode="0""#, empty_points)), Vec::<String>::new());
-        // an HDR edit, a used Point Color slot and an unknown adjustment still are
+        // a used Point Color slot and an unknown adjustment still are (an HDR edit is carried over)
         let used_points = "<crs:PointColors><rdf:Seq><rdf:li>0.5, 0.2, 0.1, 10, 0, 0, 0, 0</rdf:li></rdf:Seq></crs:PointColors>";
         let got = unmapped(&preset_packet(r#"crs:HDREditMode="1" crs:FutureSlider="12""#, used_points));
-        assert_eq!(got, ["FutureSlider", "HDREditMode", "PointColors"]);
+        assert_eq!(got, ["FutureSlider", "PointColors"]);
     }
 
     #[test]
