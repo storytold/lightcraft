@@ -32,6 +32,9 @@ crates/tether/
 crates/engine/src/cmd/publish.rs
 crates/engine/src/cmd/publish_tests.rs
 crates/engine/src/cmd/tether.rs
+crates/engine/src/cmd/tether_tests.rs
+docs/tethering.md
+packaging/linux/70-{app_id}-ptp.rules.in
 crates/ui-egui/src/panels/publish.rs
 crates/ui-egui/src/panels/tether_bar.rs
 # the Classic shell

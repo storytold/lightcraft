@@ -47,11 +47,11 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | X. Cross-cutting behaviours (BEHAV) | 18 | 6 | 1 | 1 | 8/8 (100%) | 6/9 (67%) |
 | Y. Menus | 82 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
-| Lightroom Classic extras | 60 | 16 | 47 | 0 | — | 33/37 (89%) |
+| Lightroom Classic extras | 60 | 18 | 45 | 0 | — | 33/37 (89%) |
 | IMM. Immich integration | 4 | 0 | 6 | 0 | — | 4/6 (67%) |
-| **Total** | 428 | 51 | 90 | 27 | 192/200 (96%) | 157/173 (91%) |
+| **Total** | 428 | 53 | 88 | 27 | 192/200 (96%) | 157/173 (91%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.7%** of 569 in-scope rows — P0 98.0% of 200 · P1 93.9% of 173 · P2 48.2% of 195.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.9%** of 569 in-scope rows — P0 98.0% of 200 · P1 93.9% of 173 · P2 48.7% of 195.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -737,7 +737,7 @@ PLAN.md §2 carry the status of that survey ("unverified" where it said so) unti
 |---|---|---|---|---|---|
 | LRC-LIB-IMPORT | Full import dialog | P1 | ✅ | `cmd:library.import` (`mode`, `destination`, `organize`, `rename`, `metadataPreset`, `preset`, `keywords`, `album`), `crates/ui-egui/src/import.rs` | review grid with duplicates skipped; add in place or copy (library Originals or any folder; by day / by month / one folder / custom folder template such as `{date:%Y}/{date:%Y%m%d}` → 2026/20260114, kept inside the destination; example destination shown; rename template with live example, Tags picker (insert at cursor) and unknown-tag warning, numbered across the import); develop preset, metadata preset, keywords, album on import |
 | LRC-LIB-AUTOIMPORT | Watched-folder import | P2 | ✅ | `cmd:library.autoImport` | see LR-IMP-AUTO |
-| LRC-LIB-TETHER | Tethered capture | P2 | 🟡 | `cmd:tether.start` | Studio capture: watched folder, import with session, naming, develop/metadata presets, keywords and a collection; the newest shot opens in the loupe. Native PTP is not done yet |
+| LRC-LIB-TETHER | Tethered capture | P2 | 🟡 | `cmd:tether.start` | Studio capture: watched folder, import with session, naming, develop/metadata presets, keywords and a collection; the newest shot opens in the loupe. Native PTP (`cmd:tether.connect`, `cmd:tether.capture`): USB via nusb and PTP/IP, capture, download-on-capture, delete from card, shutter/aperture/ISO/WB/EV readouts and settings in the tether bar, same-as-previous develop, Nikon live view; tested against a simulated PTP camera only — not yet verified on Canon/Nikon/Sony bodies, and Canon/Sony/Fujifilm remote-capture extensions are not done (see docs/tethering.md) |
 | LRC-LIB-VIEWS | Grid / loupe / compare / survey / people | P1 | 🟡 | `cmd:view.photoGrid`, `cmd:view.squareGrid`, `cmd:view.detail`, `cmd:view.compare`, `cmd:view.survey`, `cmd:view.gridInfo` | grid, square grid, loupe, compare, survey, second window; square-grid captions: file name, exposure or capture date (View ▸ Grid Info); no people view |
 | LRC-LIB-COMPARE | Compare view | P1 | ✅ | `cmd:view.compare` | ⇧C (C is Crop here); swap, make select; zoom always linked |
 | LRC-LIB-SURVEY | Survey view | P2 | ✅ | `cmd:view.survey` | N |

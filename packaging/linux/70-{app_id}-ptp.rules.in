@@ -1,0 +1,3 @@
+# Lets the logged-in user reach USB cameras that speak PTP (still-image class 06/01/01) for
+# tethered capture, without root. Installed by the app's Linux packages; see docs/tethering.md.
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ENV{ID_USB_INTERFACES}=="*:060101:*", TAG+="uaccess"
