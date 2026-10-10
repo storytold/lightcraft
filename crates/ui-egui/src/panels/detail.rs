@@ -1306,7 +1306,13 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
     if resp.drag_started()
         && let Some(q) = resp.interact_pointer_pos()
     {
-        let _ = app.run("develop.beginInteraction", json!({"label": "Crop"}));
+        if let Err(e) = app.run("develop.beginInteraction", json!({"label": "Crop"})).and_then(|_| app.begin_crop().map(|_| serde_json::Value::Null))
+        {
+            app.ui.status = e;
+            let _ = app.session.cancel_interaction();
+            return;
+        }
+        let d = app.session.develop_of(id).unwrap_or_default();
         app.gesture = Some(match handles.iter().position(|h| h.distance(q) < 12.0) {
             Some(h) => Gesture::CropHandle { handle: h as u8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
             None if inside(q) => Gesture::CropHandle { handle: 8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },

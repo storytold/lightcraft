@@ -394,7 +394,26 @@ impl LightcraftApp {
         if let Some(r) = menus::run_ui_command(self, id, &params) {
             return r;
         }
+        let params = if id == "crop.aspect"
+            && params.get("aspect").and_then(Value::as_str) == Some("toggle")
+            && self.crop_tool_aspect().is_some()
+            && self.session.active().and_then(|id| self.session.develop_of(id)).is_some_and(|d| d.crop == lightcraft_develop::Crop::default())
+        {
+            serde_json::json!({"aspect": "free"})
+        } else {
+            params
+        };
         let r = self.session.execute(id, &params).map_err(|e| e.to_string());
+        if r.is_ok() && matches!(id, "crop.aspect" | "crop.rotateAspect") {
+            self.ui.crop_default_aspect = if id == "crop.aspect" && params.get("aspect").and_then(Value::as_str) == Some("original") {
+                Some(serde_json::json!("original"))
+            } else {
+                self.session
+                    .active()
+                    .and_then(|photo| self.session.develop_of(photo))
+                    .map(|d| d.crop.aspect.map_or(serde_json::json!("free"), |(w, h)| serde_json::json!([w as f64 / 100.0, h as f64 / 100.0])))
+            };
+        }
         if r.is_ok() && id == "mask.adjust" {
             // Judge local adjustments on the photo, without the selection overlay obscuring them.
             // Keep it hidden after release; O / the overlay eye can show it again.
@@ -427,6 +446,46 @@ impl LightcraftApp {
             Ok(_) => {}
         }
         r
+    }
+
+    /// The remembered ratio belongs to the tool until the user starts editing the crop.
+    pub(crate) fn crop_tool_aspect(&self) -> Option<(u32, u32)> {
+        let photo = self.session.active()?;
+        let d = self.session.develop_of(photo)?;
+        if d.crop != lightcraft_develop::Crop::default() {
+            return d.crop.aspect;
+        }
+        match self.ui.crop_default_aspect.as_ref()? {
+            Value::String(s) if s == "original" => {
+                let p = self.session.catalog.photo(photo)?;
+                let (w, h) = (p.width.max(1).saturating_mul(100), p.height.max(1).saturating_mul(100));
+                Some(if d.orientation.swaps_axes() { (h, w) } else { (w, h) })
+            }
+            Value::Array(a) => {
+                let number = |i: usize| {
+                    let v = a.get(i)?.as_f64()? * 100.0;
+                    (v.is_finite() && v >= 1.0 && v <= f64::from(u32::MAX)).then_some(v.round() as u32)
+                };
+                Some((number(0)?, number(1)?))
+            }
+            _ => None,
+        }
+    }
+
+    /// Called only after a crop gesture begins, inside its undo transaction.
+    pub(crate) fn begin_crop(&mut self) -> Result<(), String> {
+        if self.session.interaction.is_some()
+            && self.session.active().and_then(|id| self.session.develop_of(id)).is_some_and(|d| d.crop == lightcraft_develop::Crop::default())
+            && let Some(aspect) = self.ui.crop_default_aspect.clone()
+            && aspect != serde_json::json!("free")
+            && let Err(e) = self.session.execute("crop.aspect", &serde_json::json!({"aspect": aspect}))
+        {
+            // A remembered value the command refuses (a hand-edited settings file) would refuse
+            // every crop drag on an untouched photo: forget it and let this drag go ahead.
+            self.ui.crop_default_aspect = None;
+            self.ui.status = e.to_string();
+        }
+        Ok(())
     }
 
     /// Show a transient toast at the bottom of the canvas (like the reference app's HUD).

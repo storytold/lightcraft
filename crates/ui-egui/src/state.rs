@@ -336,6 +336,8 @@ pub struct UiState {
     /// Mirroring of the triangle / spiral crop guides (0..4).
     pub crop_overlay_orient: u8,
     pub crop_overlay: CropOverlay,
+    /// Last explicitly chosen aspect, retained across photos and app launches.
+    pub crop_default_aspect: Option<serde_json::Value>,
     pub show_filenames: bool,
     /// What the square grid's caption shows: `filename`, `exposure` (shutter · aperture · ISO ·
     /// focal length) or `date`.
@@ -811,6 +813,7 @@ impl Default for UiState {
             mask_overlay_opacity: 50.0,
             mask_pins: true,
             crop_overlay: CropOverlay::Thirds,
+            crop_default_aspect: None,
             crop_overlay_orient: 0,
             show_filenames: true,
             grid_info: "filename".into(),
