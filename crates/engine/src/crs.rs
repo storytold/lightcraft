@@ -311,10 +311,12 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     }
 
     // ---- Treatment + B&W mix
-    // Monochrome profiles can save the conversion in their Look parameters without an
-    // outer treatment flag. Carry over that explicit switch while the profile itself
-    // (its table, curve and other parameters) remains unsupported.
-    if let Some(bw) = boolean(props, "crs:ConvertToGrayscale").or_else(|| boolean(props, "crs:Look/crs:Parameters/crs:ConvertToGrayscale")) {
+    // A monochrome Look still converts when the outer treatment flag is false (verified
+    // against a Lightroom export). Either explicit conversion makes the result B&W;
+    // the profile's table, curve and other parameters remain unsupported.
+    let treatment = boolean(props, "crs:ConvertToGrayscale");
+    let profile_treatment = boolean(props, "crs:Look/crs:Parameters/crs:ConvertToGrayscale");
+    if let Some(bw) = treatment.zip(profile_treatment).map(|(a, b)| a || b).or(treatment).or(profile_treatment) {
         put(o, "treatment", json!(if bw { "bw" } else { "color" }));
     }
     for (band, crs) in MIXER_BANDS.iter().zip(CRS_BANDS) {
@@ -613,10 +615,12 @@ mod tests {
     }
 
     #[test]
-    fn outer_grayscale_setting_wins_without_guessing_profile_names() {
+    fn either_explicit_grayscale_conversion_applies_without_guessing_profile_names() {
         for (outer, nested, name, expected) in [
-            (Some("False"), Some("True"), "Procedural look", Some("color")),
+            (Some("False"), Some("True"), "Procedural look", Some("bw")),
             (Some("True"), Some("False"), "Procedural look", Some("bw")),
+            (Some("False"), Some("False"), "Procedural look", Some("color")),
+            (Some("False"), None, "Procedural look", Some("color")),
             (None, Some("False"), "Procedural look", Some("color")),
             (None, None, "Adobe Monochrome", None),
         ] {

@@ -178,7 +178,7 @@ stored edits; it does not establish a Lightroom pixel match.
 | `Vibrance`, `Saturation` | `color.vibrance`, `color.saturation` | 1:1 |
 | `Texture`, `Clarity2012`, `Dehaze` | `effects.texture`, `effects.clarity`, `effects.dehaze` | 1:1 |
 | `HueAdjustment<Band>`, `SaturationAdjustment<Band>`, `LuminanceAdjustment<Band>` | `mixer.<band>.hue/sat/lum` | bands Red, Orange, Yellow, Green, Aqua, Blue, Purple, Magenta |
-| `ConvertToGrayscale` | `treatment` | `True` → B&W; also reads an explicit `Look/Parameters/ConvertToGrayscale` when the outer flag is absent. Attribute and child-element fields are both accepted, including `rdf:parseType="Resource"` attributes. Other Look parameters remain unsupported. |
+| `ConvertToGrayscale` | `treatment` | Either this flag or `Look/Parameters/ConvertToGrayscale` being `True` → B&W; an outer `False` does not undo a monochrome profile. Verified against a Lightroom export. Attribute and child-element fields are both accepted, including `rdf:parseType="Resource"` attributes. Other Look parameters remain unsupported. |
 | `GrayMixer<Band>` | `bw_mix.<band>` | |
 | `ParametricShadows`, `ParametricDarks`, `ParametricLights`, `ParametricHighlights` | `curve.shadows/darks/lights/highlights` | |
 | `ParametricShadowSplit`, `ParametricMidtoneSplit`, `ParametricHighlightSplit` | `curve.split_shadows/split_mid/split_highlights` | |
