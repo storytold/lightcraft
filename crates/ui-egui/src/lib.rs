@@ -39,6 +39,8 @@ pub mod plate;
 pub mod print_ui;
 pub mod region;
 pub mod render;
+/// The module shell's frame steps (fork-owned).
+mod shell;
 pub mod shortcuts;
 pub mod slideshow_ui;
 pub mod softpaint;
@@ -1026,7 +1028,7 @@ impl DacApp {
             raw.events.push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
         }
         if self.synthetic.is_empty() {
-            self.defer_tabs(raw);
+            shell::defer_tabs(self, raw);
             return;
         }
         let n = match self.synthetic[0] {
@@ -1052,24 +1054,7 @@ impl DacApp {
             self.synthetic_mods_release = ends;
         }
         raw.events.extend(self.synthetic.drain(..n));
-        self.defer_tabs(raw);
-    }
-
-    /// Tab outside a text field toggles panels (Classic): keep it from moving egui's focus.
-    fn defer_tabs(&mut self, raw: &mut egui::RawInput) {
-        if self.text_focus || self.recording_shortcut.is_some() {
-            return;
-        }
-        let deferred = &mut self.deferred_tabs;
-        raw.events.retain(|e| match e {
-            egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, .. } => {
-                if *pressed {
-                    deferred.push(*modifiers);
-                }
-                false
-            }
-            _ => true,
-        });
+        shell::defer_tabs(self, raw);
     }
 
     /// Frame timings once layout is done (`t0`: when layout started).
@@ -1118,35 +1103,7 @@ impl DacApp {
         }
         // Order matters: earlier panels take the full edge (top bar spans the window; the tool strip,
         // right panels and left panel run to the bottom; the bottom bar sits between them).
-        module::sync(self);
-        module::auto_show(self, &ctx);
-        let m = module::get(self.ui.module);
-        if self.ui.screen_mode != module::ScreenMode::FullScreen && self.ui.screen_mode != module::ScreenMode::FullScreenHidePanels {
-            panels::topbar::show(self, ui);
-        }
-        if module::edge_visible(self, module::Edge::Top) {
-            module::module_bar(self, ui);
-        }
-        panels::library_problem::banner(self, ui);
-        if module::edge_visible(self, module::Edge::Right) && !m.own_sides() {
-            panels::strip::show(self, ui);
-            // Library's right column is its Classic panels, unless a Library panel of the strip
-            // (Info, Keywords, Versions, Activity) was opened in its place
-            if self.ui.module == module::ModuleId::Library && self.ui.right == state::RightPanel::None {
-                panels::classic::right_column(self, ui);
-            } else if self.ui.right != state::RightPanel::None {
-                panels::right::show(self, ui);
-            }
-            if self.ui.presets {
-                panels::presets::show(self, ui);
-            }
-        }
-        if module::edge_visible(self, module::Edge::Left) && !m.own_sides() {
-            panels::left::show(self, ui);
-        }
-        if self.ui.toolbar && self.ui.screen_mode != module::ScreenMode::FullScreenHidePanels {
-            m.toolbar(ui, self);
-        }
+        let m = shell::edges(self, ui, &ctx);
         let t = theme::Tokens::get(&ctx);
         let bg = if matches!(self.ui.view, state::ViewMode::Detail | state::ViewMode::Compare | state::ViewMode::Survey | state::ViewMode::Reference)
         {
