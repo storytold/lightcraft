@@ -74,6 +74,34 @@ apps/cli/src/run_action.rs
 crates/ui-egui/src/edit_in.rs
 crates/book/
 crates/ui-egui/src/book.rs
+# U.5: fork-only files inside shared crates (no upstream counterpart, so no merge conflicts; the
+# generic ones are listed in docs/upstream-candidates.md instead and stay shared until offered)
+crates/engine/src/cmd/immich.rs
+crates/engine/src/cmd/credentials.rs
+crates/engine/src/cmd/catalog.rs
+crates/engine/src/remote.rs
+crates/engine/src/tests_immich.rs
+crates/engine/src/tests_catalog_cmds.rs
+crates/engine/src/tests_classic.rs
+crates/engine/src/legacy.rs
+crates/meta/src/legacy.rs
+apps/web/src/legacy.rs
+crates/ui-egui/src/catalog_ui_web.rs
+crates/ui-egui/src/tests_catalog_ui.rs
+crates/ui-egui/src/tests_classic.rs
+crates/ui-egui/src/tests_immich_ui.rs
+crates/ui-egui/src/tests_libtools.rs
+crates/ui-egui/src/tests_modules.rs
+crates/ui-egui/src/keymap_classic.rs
+docs/upstream-candidates.md
+# rebranding and packaging templates (brand.toml)
+xtask/src/dist.rs
+xtask/src/docs.rs
+xtask/src/rename.rs
+packaging/**/*.in
+packaging/windows/brand.ps1
+.github/workflows/brand.yml
+.gitattributes
 # the Classic shell
 crates/ui-egui/src/module.rs
 crates/ui-egui/src/panels/classic.rs
