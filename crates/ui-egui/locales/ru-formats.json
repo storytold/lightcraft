@@ -208,5 +208,9 @@
   "Running on {}.": "Running on {}.",
   "{file} · {size}": "{file} · {size}",
   "•  {assumption}": "•  {assumption}",
-  "{n} selected": "Выбрано: {n}"
+  "{n} selected": "Выбрано: {n}",
+  "Create Folder in “{name}”": "Создать папку в «{name}»",
+  "{added} added, {missing} missing, {changed} read from changed sidecars": "Добавлено: {added}, отсутствует: {missing}, прочитано из изменённых XMP: {changed}",
+  "{n} photos relinked": "Перепривязано фото: {n}",
+  "{path} · {count} photos": "{path} · фото: {count}"
 }

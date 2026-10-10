@@ -208,5 +208,9 @@
   "Running on {}.": "Running on {}.",
   "{file} · {size}": "{file} · {size}",
   "•  {assumption}": "•  {assumption}",
-  "{n} selected": "{n} 件を選択"
+  "{n} selected": "{n} 件を選択",
+  "Create Folder in “{name}”": "「{name}」にフォルダーを作成",
+  "{added} added, {missing} missing, {changed} read from changed sidecars": "{added} 件追加、{missing} 件見つからず、変更されたサイドカーから {changed} 件読み込み",
+  "{n} photos relinked": "{n} 枚の写真を再リンク",
+  "{path} · {count} photos": "{path} · {count} 枚"
 }

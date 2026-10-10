@@ -62,6 +62,7 @@ dhat = "0.3" # opt-in heap profiling (dac-cli --features dhat-heap); never in de
 # formats
 quick-xml = "0.38"
 miniz_oxide = "0.8"
+rustix = { version = "1", default-features = false, features = ["std", "fs"] } # free disk space (statvfs), pure Rust on Linux
 
 # codecs
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "webp"] }

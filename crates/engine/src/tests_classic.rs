@@ -45,3 +45,120 @@ fn quick_set_applies_to_every_selected_photo_in_one_step() {
     assert!(s.execute("develop.quickSet", &json!({})).is_err());
     assert!(s.execute("develop.quickSet", &json!({"aspect": "axb"})).unwrap()["errors"].as_array().is_some_and(|e| !e.is_empty()));
 }
+
+/// A scratch folder that goes away with the test, however it ends.
+struct Scratch(std::path::PathBuf);
+
+impl Scratch {
+    fn new(name: &str) -> Scratch {
+        let d = std::env::temp_dir().join(format!("classic-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        Scratch(d)
+    }
+    fn path(&self, rel: &str) -> String {
+        self.0.join(rel).to_string_lossy().to_string()
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn write_png(path: &str, seed: u8) {
+    let (w, h) = (48usize, 32usize);
+    let data: Vec<[u8; 4]> = (0..w * h).map(|i| [(i % w * 5) as u8, (i / w * 7) as u8, seed, 255]).collect();
+    let img = dac_raster::Rgba8 { width: w, height: h, data };
+    let bytes = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+}
+
+fn add_file_photo(s: &mut Session, path: &str) -> dac_catalog::PhotoId {
+    let id = s.catalog.alloc_photo_id();
+    let name = std::path::Path::new(path).file_name().unwrap().to_string_lossy().to_string();
+    let p = dac_catalog::Photo::new(id, dac_catalog::Source::File { path: path.into() }, &name, "JPEG", 60, 40, "2026-01-01T10:00:00");
+    s.catalog.apply(dac_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    id
+}
+
+/// Folders: a folder created on disk is one undo step (undo removes it, redo makes it again); an
+/// empty folder can be deleted (and undone); a folder holding anything is refused.
+#[test]
+fn folders_are_created_and_deleted_on_disk_undoably() {
+    let d = Scratch::new("create");
+    let mut s = Session::with_demo();
+    let r = s.execute("folder.create", &json!({"parent": d.path(""), "name": "Trips"})).unwrap();
+    let made = r["path"].as_str().unwrap().to_string();
+    assert!(std::path::Path::new(&made).is_dir());
+    s.undo_step().unwrap();
+    assert!(!std::path::Path::new(&made).exists(), "undo removes it");
+    s.redo_step().unwrap();
+    assert!(std::path::Path::new(&made).is_dir(), "redo makes it again");
+    // a name with a slash, a missing parent and an existing folder are errors
+    assert!(s.execute("folder.create", &json!({"parent": d.path(""), "name": "a/b"})).is_err());
+    assert!(s.execute("folder.create", &json!({"parent": d.path("nope"), "name": "x"})).is_err());
+    assert!(s.execute("folder.create", &json!({"parent": d.path(""), "name": "Trips"})).is_err());
+    // delete: empty only, undoable
+    s.execute("folder.delete", &json!({"path": made})).unwrap();
+    assert!(!std::path::Path::new(&made).exists());
+    s.undo_step().unwrap();
+    assert!(std::path::Path::new(&made).is_dir());
+    std::fs::write(d.path("Trips/keep.txt"), b"x").unwrap();
+    assert!(s.execute("folder.delete", &json!({"path": made})).is_err(), "not empty");
+    assert!(std::path::Path::new(&d.path("Trips/keep.txt")).is_file(), "nothing was removed");
+    // undoing the creation now fails (it holds a file) and the file stays
+    s.redo_step().ok();
+    while s.undo_step().is_ok() {}
+    assert!(std::path::Path::new(&d.path("Trips/keep.txt")).is_file());
+}
+
+/// Synchronize Folder adds the files the library lacks, lists photos whose file is gone, and
+/// with removeMissing moves them to Recently Deleted; Update Folder Location relinks a moved folder.
+#[test]
+fn a_folder_synchronises_and_relocates() {
+    let d = Scratch::new("sync");
+    std::fs::create_dir_all(d.path("shoot/sub")).unwrap();
+    let mut s = Session::new().with_fs();
+    // a known photo whose file exists, one whose file is gone, and a new file on disk
+    write_png(&d.path("shoot/a.png"), 1);
+    write_png(&d.path("shoot/sub/new.png"), 2);
+    let a = add_file_photo(&mut s, &d.path("shoot/a.png"));
+    let gone = add_file_photo(&mut s, &d.path("shoot/gone.png"));
+    let r = s.execute("folder.sync", &json!({"path": d.path("shoot"), "dryRun": true})).unwrap();
+    assert_eq!(r["new"], 1, "{r}");
+    assert_eq!(r["missing"], json!([gone.0]), "{r}");
+    let r = s.execute("folder.sync", &json!({"path": d.path("shoot"), "removeMissing": true})).unwrap();
+    assert_eq!(r["removed"], 1, "{r}");
+    let r = s.execute("folder.sync", &json!({"path": d.path("shoot"), "dryRun": true})).unwrap();
+    assert_eq!(r["missing"], json!([]), "{r}");
+    // an offline folder is an error that says what to do
+    assert!(s.execute("folder.sync", &json!({"path": d.path("offline")})).unwrap_err().to_string().contains("relocate"));
+    // the folder moved outside the app: point the photos at the new place
+    std::fs::rename(d.path("shoot"), d.path("moved")).unwrap();
+    let r = s.execute("folder.relocate", &json!({"path": d.path("shoot"), "to": d.path("moved")})).unwrap();
+    assert!(r["relinked"].as_u64().unwrap() >= 1, "{r}");
+    let now = match &s.catalog.photo(a).unwrap().source {
+        dac_catalog::Source::File { path } => path.clone(),
+        _ => String::new(),
+    };
+    assert_eq!(now, d.path("moved/a.png"));
+    s.undo_step().unwrap();
+    assert!(matches!(&s.catalog.photo(a).unwrap().source, dac_catalog::Source::File { path } if *path == d.path("shoot/a.png")));
+    assert!(s.execute("folder.relocate", &json!({"path": d.path("nothing-here"), "to": d.path("moved")})).is_err());
+}
+
+/// The volumes the library's photos are on, with free space where the system tells.
+#[test]
+fn volumes_list_the_disks_with_their_space() {
+    let d = Scratch::new("vol");
+    let mut s = Session::with_demo();
+    add_file_photo(&mut s, &d.path("x.jpg"));
+    let v = s.execute("library.volumes", &json!({})).unwrap();
+    let list = v.as_array().unwrap();
+    assert!(!list.is_empty(), "{v}");
+    #[cfg(unix)]
+    assert!(list.iter().any(|x| x["total"].as_u64().unwrap_or(0) > 0), "{v}");
+    assert_eq!(crate::cmd::folders::disk_space("/definitely/not/here"), None);
+}

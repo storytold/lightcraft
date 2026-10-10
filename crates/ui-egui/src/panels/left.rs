@@ -241,7 +241,10 @@ fn library_columns(app: &mut DacApp, ui: &mut egui::Ui, viewport: Rect, total: u
             }
             PanelId::Collections => {
                 let (r, open) = super::classic::header(app, ui, p, side);
-                collections_plus(app, ui, r, viewport);
+                // left of the header's disclosure triangle
+                let mut vp = viewport;
+                vp.max.x -= 26.0;
+                collections_plus(app, ui, Rect::from_min_max(r.min, pos2(r.right() - 26.0, r.bottom())), vp);
                 top_level_drop_target(app, ui, r);
                 if open {
                     albums_body(app, ui);
@@ -1334,6 +1337,8 @@ fn folder_menu_for_library(app: &mut DacApp, resp: &egui::Response, n: &FolderNo
             let _ = f(path);
             ui.close();
         }
+        ui.separator();
+        super::folders::row_menu_items(app, ui, path);
         ui.separator();
         if ui
             .button(crate::i18n::tr("Remove from Library…"))

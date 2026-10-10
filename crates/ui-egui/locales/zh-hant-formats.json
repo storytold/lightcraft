@@ -208,5 +208,9 @@
   "Running on {}.": "Running on {}.",
   "{file} · {size}": "{file} · {size}",
   "•  {assumption}": "•  {assumption}",
-  "{n} selected": "已選取 {n} 張"
+  "{n} selected": "已選取 {n} 張",
+  "Create Folder in “{name}”": "在「{name}」中建立檔案夾",
+  "{added} added, {missing} missing, {changed} read from changed sidecars": "已加入 {added} 張，遺失 {missing} 張，從已變更的附屬檔讀取 {changed} 張",
+  "{n} photos relinked": "已重新連結 {n} 張相片",
+  "{path} · {count} photos": "{path} · {count} 張相片"
 }

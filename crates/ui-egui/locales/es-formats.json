@@ -208,5 +208,9 @@
   "Running on {}.": "Running on {}.",
   "{file} · {size}": "{file} · {size}",
   "•  {assumption}": "•  {assumption}",
-  "{n} selected": "{n} seleccionadas"
+  "{n} selected": "{n} seleccionadas",
+  "Create Folder in “{name}”": "Crear carpeta en «{name}»",
+  "{added} added, {missing} missing, {changed} read from changed sidecars": "{added} añadidas, {missing} faltan, {changed} leídas de archivos auxiliares cambiados",
+  "{n} photos relinked": "{n} fotos vinculadas de nuevo",
+  "{path} · {count} photos": "{path} · {count} fotos"
 }

@@ -1741,5 +1741,16 @@
   "Crop Ratio": "切り抜き比率",
   "Tone Control": "階調コントロール",
   "Auto Tone": "自動補正",
-  "Reset the selected photos' edits": "選択した写真の編集をリセット"
+  "Reset the selected photos' edits": "選択した写真の編集をリセット",
+  "Add Folder": "フォルダーを追加",
+  "Add Folder…": "フォルダーを追加…",
+  "Add the photos of a folder to the library where they are": "フォルダーの写真をその場所のままライブラリに追加",
+  "Create Folder Inside…": "この中にフォルダーを作成…",
+  "Synchronize Folder": "フォルダーを同期",
+  "Add new files, find missing ones and read sidecars changed by other programs": "新しいファイルを追加し、見つからないファイルを探し、他のアプリで変更されたサイドカーを読み込む",
+  "Update Folder Location…": "フォルダーの場所を更新…",
+  "The folder was moved or renamed outside the app: point its photos at the new place": "フォルダーがアプリ外で移動・名前変更されました: 写真を新しい場所に関連付けます",
+  "Show Parent Folder": "親フォルダーを表示",
+  "Offline": "オフライン",
+  "Folder name (created on disk)": "フォルダー名（ディスク上に作成）"
 }

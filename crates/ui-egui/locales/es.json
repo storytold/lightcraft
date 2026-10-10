@@ -1741,5 +1741,16 @@
   "Crop Ratio": "Proporción de recorte",
   "Tone Control": "Control de tono",
   "Auto Tone": "Tono automático",
-  "Reset the selected photos' edits": "Restablecer las ediciones de las fotos seleccionadas"
+  "Reset the selected photos' edits": "Restablecer las ediciones de las fotos seleccionadas",
+  "Add Folder": "Añadir carpeta",
+  "Add Folder…": "Añadir carpeta…",
+  "Add the photos of a folder to the library where they are": "Añadir a la biblioteca las fotos de una carpeta sin moverlas",
+  "Create Folder Inside…": "Crear carpeta dentro…",
+  "Synchronize Folder": "Sincronizar carpeta",
+  "Add new files, find missing ones and read sidecars changed by other programs": "Añadir archivos nuevos, buscar los que faltan y leer los archivos auxiliares cambiados por otros programas",
+  "Update Folder Location…": "Actualizar ubicación de la carpeta…",
+  "The folder was moved or renamed outside the app: point its photos at the new place": "La carpeta se movió o renombró fuera de la app: apuntar sus fotos al nuevo lugar",
+  "Show Parent Folder": "Mostrar carpeta principal",
+  "Offline": "Sin conexión",
+  "Folder name (created on disk)": "Nombre de la carpeta (se crea en el disco)"
 }

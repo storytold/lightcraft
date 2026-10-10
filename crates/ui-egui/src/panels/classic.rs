@@ -96,7 +96,9 @@ pub fn header(app: &mut DacApp, ui: &mut egui::Ui, p: PanelId, side: &[PanelId])
     let painter = ui.painter();
     painter.line_segment([pos2(r.left(), r.top()), pos2(r.right(), r.top())], Stroke::new(1.0, t.divider));
     let col = if resp.hovered() { t.text } else { t.text_dim };
-    triangle(painter, pos2(r.right() - 16.0, r.center().y), open, col);
+    // at the visible edge when the column scrolls sideways
+    let right = ui.clip_rect().right().min(r.right());
+    triangle(painter, pos2(right - 16.0, r.center().y), open, col);
     painter.text(pos2(r.left() + 14.0, r.center().y), Align2::LEFT_CENTER, name, t.semibold(12.5), t.text);
     side_menu(app, &resp, side);
     (r, open)

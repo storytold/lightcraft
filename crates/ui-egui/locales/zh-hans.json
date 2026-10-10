@@ -1741,5 +1741,16 @@
   "Crop Ratio": "裁剪比例",
   "Tone Control": "色调控制",
   "Auto Tone": "自动色调",
-  "Reset the selected photos' edits": "重置所选照片的编辑"
+  "Reset the selected photos' edits": "重置所选照片的编辑",
+  "Add Folder": "添加文件夹",
+  "Add Folder…": "添加文件夹…",
+  "Add the photos of a folder to the library where they are": "将文件夹中的照片原地添加到图库",
+  "Create Folder Inside…": "在其中创建文件夹…",
+  "Synchronize Folder": "同步文件夹",
+  "Add new files, find missing ones and read sidecars changed by other programs": "添加新文件、查找缺失文件并读取其他程序更改的附属文件",
+  "Update Folder Location…": "更新文件夹位置…",
+  "The folder was moved or renamed outside the app: point its photos at the new place": "文件夹在应用外被移动或重命名：将照片指向新位置",
+  "Show Parent Folder": "显示父文件夹",
+  "Offline": "离线",
+  "Folder name (created on disk)": "文件夹名称（在磁盘上创建）"
 }

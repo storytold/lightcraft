@@ -1415,5 +1415,16 @@
   "Crop Ratio": "Пропорции кадрирования",
   "Tone Control": "Управление тоном",
   "Auto Tone": "Автотон",
-  "Reset the selected photos' edits": "Сбросить правки выбранных фото"
+  "Reset the selected photos' edits": "Сбросить правки выбранных фото",
+  "Add Folder": "Добавить папку",
+  "Add Folder…": "Добавить папку…",
+  "Add the photos of a folder to the library where they are": "Добавить фото папки в библиотеку, не перемещая их",
+  "Create Folder Inside…": "Создать папку внутри…",
+  "Synchronize Folder": "Синхронизировать папку",
+  "Add new files, find missing ones and read sidecars changed by other programs": "Добавить новые файлы, найти отсутствующие и прочитать XMP, изменённые другими программами",
+  "Update Folder Location…": "Обновить расположение папки…",
+  "The folder was moved or renamed outside the app: point its photos at the new place": "Папку переместили или переименовали вне приложения: связать фото с новым местом",
+  "Show Parent Folder": "Показать родительскую папку",
+  "Offline": "Не в сети",
+  "Folder name (created on disk)": "Имя папки (создаётся на диске)"
 }

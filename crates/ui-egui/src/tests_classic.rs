@@ -67,6 +67,27 @@ fn quick_develop_steps_every_selected_photo() {
     assert!(has(&h, "button:qd-crop") && has(&h, "button:qd-wb") && has(&h, "button:qd-autoTone"));
 }
 
+/// Folders: each disk the library's photos are on is a volume row with its free space; a folder
+/// created through the command shows up on disk and undoes.
+#[test]
+fn folders_panel_lists_volumes_with_free_space() {
+    let mut h = demo();
+    let dir = std::env::temp_dir().join(format!("classic-ui-vol-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("a.jpg").to_string_lossy().to_string();
+    let id = h.app.session.catalog.alloc_photo_id();
+    let p = dac_catalog::Photo::new(id, dac_catalog::Source::File { path }, "a.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00");
+    h.app.session.catalog.apply(dac_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    // the space is read off the UI thread: wait for it
+    h.step_until(SETTLE, |h| h.app.widgets.iter().any(|(w, _)| w.starts_with("volume:")));
+    assert!(h.app.widgets.iter().any(|(w, _)| w.starts_with("volume:")), "a volume row");
+    run(&mut h, "folder.create", json!({"parent": dir.to_string_lossy(), "name": "New"}));
+    assert!(dir.join("New").is_dir());
+    run(&mut h, "edit.undo", json!({}));
+    assert!(!dir.join("New").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Library's columns are Classic panel stacks: every panel has a foldable header, Solo Mode
 /// keeps one open per side, hidden panels go away, and the order is the user's.
 #[test]
