@@ -1220,11 +1220,13 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
     let shade = Color32::from_black_alpha(150);
     let mut mesh = egui::epaint::Mesh::default();
     let outer = [img.left_top(), img.right_top(), img.right_bottom(), img.left_bottom()];
+    // the box's corners in screen order (a flipped photo shows its top-left corner elsewhere)
+    let on_screen = flipped_corners(&pts, frame.flip_h, frame.flip_v);
     for i in 0..4 {
         let a = outer[i];
         let b = outer[(i + 1) % 4];
-        let c = pts[(i + 1) % 4];
-        let dd = pts[i];
+        let c = on_screen[(i + 1) % 4];
+        let dd = on_screen[i];
         let base = mesh.vertices.len() as u32;
         for v in [a, b, c, dd] {
             mesh.vertices.push(egui::epaint::Vertex { pos: v, uv: Pos2::ZERO, color: shade });
@@ -1449,6 +1451,19 @@ fn to_straight(n: Point, angle: f64, frame: &Frame) -> Point {
     let px = Point::new(n.x * w, n.y * h);
     let r = Affine::rotate_about(angle.to_radians(), Point::new(w / 2.0, h / 2.0)).apply(px);
     Point::new(r.x / w, r.y / h)
+}
+
+/// A crop box's corners (top-left, top-right, bottom-right, bottom-left of the unflipped photo)
+/// in the order they appear on screen when the photo is shown flipped.
+fn flipped_corners(pts: &[Pos2], flip_h: bool, flip_v: bool) -> [Pos2; 4] {
+    let at = |i: usize| pts.get(i).copied().unwrap_or(Pos2::ZERO);
+    let order = match (flip_h, flip_v) {
+        (false, false) => [0, 1, 2, 3],
+        (true, false) => [1, 0, 3, 2],
+        (false, true) => [3, 2, 1, 0],
+        (true, true) => [2, 3, 0, 1],
+    };
+    order.map(at)
 }
 
 fn frame_crop_quad(d: &DevelopSettings, frame: &Frame) -> [Point; 4] {
@@ -2143,7 +2158,8 @@ fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
 
 #[cfg(test)]
 mod tests {
-    use super::{film_label, texture_side};
+    use super::{film_label, flipped_corners, texture_side};
+    use egui::pos2;
 
     /// Issue #652: a native host reports the GPU's texture limit in the first frame's input only.
     /// The loupe must still know it in every later frame (it read the raw input, found nothing and
@@ -2171,5 +2187,21 @@ mod tests {
         assert_eq!(film_label("IMG_20240712_153012"), "IMG_20240712_…");
         assert_eq!(film_label("DSC_0001"), "DSC_0001");
         assert_eq!(film_label(""), "");
+    }
+
+    /// With the photo flipped, the crop box's corners reach the screen mirrored; the dimming
+    /// outside the box pairs each photo corner with the box corner on the same side of the screen
+    /// (it used to pair them in data order, so a flipped photo was dimmed inside the box).
+    #[test]
+    fn flipped_crop_box_corners_come_in_screen_order() {
+        let screen = [pos2(10.0, 10.0), pos2(90.0, 10.0), pos2(90.0, 50.0), pos2(10.0, 50.0)];
+        // data order (top-left, top-right, bottom-right, bottom-left) as each flip shows it
+        let h = [screen[1], screen[0], screen[3], screen[2]];
+        let v = [screen[3], screen[2], screen[1], screen[0]];
+        let hv = [screen[2], screen[3], screen[0], screen[1]];
+        assert_eq!(flipped_corners(&screen, false, false), screen);
+        assert_eq!(flipped_corners(&h, true, false), screen);
+        assert_eq!(flipped_corners(&v, false, true), screen);
+        assert_eq!(flipped_corners(&hv, true, true), screen);
     }
 }

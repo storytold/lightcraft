@@ -71,8 +71,9 @@ impl Frame {
             ow,
             oh,
             crop,
-            flip_h: apply_crop && s.crop.flip_h,
-            flip_v: apply_crop && s.crop.flip_v,
+            // a flip is not part of the crop: the crop tool's uncropped view shows it too
+            flip_h: s.crop.flip_h,
+            flip_v: s.crop.flip_v,
             warp: (!warp.is_identity()).then_some(warp),
             view: None,
         };
@@ -386,5 +387,23 @@ mod tests {
         let out = f.sample(&src, 4, 1);
         assert!((out.get(0, 0)[0] - 3.0).abs() < 1e-5);
         assert!((out.get(3, 0)[0] - 0.0).abs() < 1e-5);
+    }
+
+    /// The crop tool's uncropped frame keeps the flips: Flip H / Flip V show while cropping, and
+    /// screen points map back through the mirror (the crop box is drawn and dragged right).
+    #[test]
+    fn uncropped_frame_keeps_the_flips() {
+        let mut s = DevelopSettings::default();
+        s.crop.flip_h = true;
+        s.crop.flip_v = true;
+        s.crop.geometry.rect = Rect::new(0.1, 0.2, 0.6, 0.9);
+        let src = Rgb32f::from_fn(4, 2, |x, y| [x as f32, y as f32, 0.0]);
+        let f = Frame::new(4, 2, &s, false);
+        let out = f.sample(&src, 4, 2);
+        assert!((out.get(0, 0)[0] - 3.0).abs() < 1e-5 && (out.get(0, 0)[1] - 1.0).abs() < 1e-5, "{:?}", out.get(0, 0));
+        assert!((out.get(3, 1)[0] - 0.0).abs() < 1e-5 && (out.get(3, 1)[1] - 0.0).abs() < 1e-5, "{:?}", out.get(3, 1));
+        // the whole image, mirrored: output top-left is the image's bottom-right
+        let p = f.out_to_norm(400, 200).apply(Point::new(0.0, 0.0));
+        assert!((p.x - 1.0).abs() < 1e-9 && (p.y - 1.0).abs() < 1e-9, "{p:?}");
     }
 }

@@ -316,7 +316,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-CROP-AUTO | Auto straighten | P1 | ✅ | `cmd:crop.autoStraighten` | crop-angle leveling from detected horizon/plumb lines (consensus required) |
 | LR-CROP-ANGLE | Angle slider | P0 | ✅ | `ctl:crop.angle`, `crates/ui-egui/src/panels/right.rs` | the Straighten slider; an exact angle can also be typed in the Angle field under it (see LR-CROP-STRAIGHTEN) |
 | LR-CROP-ROTATE90 | Rotate 90° | P0 | ✅ | `cmd:photo.rotateLeft`, `cmd:photo.rotateRight` | |
-| LR-CROP-FLIP | Flip | P0 | ✅ | `cmd:photo.flipHorizontal`, `cmd:photo.flipVertical` | |
+| LR-CROP-FLIP | Flip | P0 | ✅ | `cmd:photo.flipHorizontal`, `cmd:photo.flipVertical`, `crates/pipeline/src/geometry.rs` | the crop tool's uncropped view shows the flips too, with the crop box and its dimming mirrored to match |
 | LR-CROP-OVERLAY | Crop overlays | P1 | ✅ | `cmd:view.cropOverlay`, `cmd:view.cropOverlayOrientation`, `crates/ui-egui/src/panels/crop_overlay.rs` | thirds, grid, golden ratio, diagonal, triangle, golden spiral (mirrored with ⇧O while cropping); no aspect-ratio overlays |
 | LR-CROP-ZOOM | Zoom while cropping | P1 | ✅ | `cmd:view.zoom100`, `cmd:view.zoomIn`, `crates/ui-egui/src/panels/detail.rs` | zoom levels apply with the crop tool open (verified: 100% shows the photo at native size with the crop frame) |
 | LR-CROP-GENEXPAND | Generative expand | OOS | 🚫 | | |
