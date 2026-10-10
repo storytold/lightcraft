@@ -12,6 +12,7 @@ workspace = true
 dac-brand = { workspace = true }
 dac-engine-core = { workspace = true }
 dac-engine-develop = { workspace = true }
+dac-engine-library = { workspace = true }
 dac-geom = { workspace = true }
 dac-color = { workspace = true }
 dac-raster = { workspace = true }

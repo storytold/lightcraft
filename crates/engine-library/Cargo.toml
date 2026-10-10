@@ -1,0 +1,20 @@
+[package]
+name = "dac-engine-library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Engine library: XMP sidecars, devices, Lightroom catalog SQLite reader (L4)"
+
+[lints]
+workspace = true
+
+[dependencies]
+dac-brand = { workspace = true }
+dac-engine-core = { workspace = true }
+dac-engine-develop = { workspace = true }
+dac-catalog = { workspace = true }
+dac-develop = { workspace = true }
+dac-meta = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }

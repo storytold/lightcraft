@@ -20,7 +20,6 @@ pub mod cmd;
 pub mod config;
 pub mod demo;
 pub mod denoise;
-pub mod devices;
 pub mod export;
 pub mod face_download;
 #[cfg(not(target_arch = "wasm32"))]
@@ -35,7 +34,6 @@ pub mod library;
 mod lightroom_archive;
 pub mod lightroom_catalog;
 pub mod lightroom_job;
-mod lightroom_sqlite;
 pub mod media;
 pub mod memory;
 pub mod merge;
@@ -50,6 +48,7 @@ mod view;
 
 use std::sync::Arc;
 
+pub use dac_engine_library::{devices, lightroom_sqlite};
 pub use dac_engine_develop::{crs, crs_masks, preset_import, preset_luminar};
 pub use dac_engine_core::{
     AUTO_VERSIONS, EngineError, FolderMove, Interaction, Result, UndoEntry, availability, guard, json_delta, legacy, logging, single_photo, walk,
