@@ -42,15 +42,15 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | S. Export (EXP) | 15 | 2 | 1 | 0 | 7/7 (100%) | 7/7 (100%) |
 | T. Share (SHARE) | 0 | 0 | 0 | 4 | — | — |
 | U. Map & location (MAP) | 0 | 1 | 1 | 0 | — | 0/1 (0%) |
-| V. Preferences (PREF) | 7 | 1 | 2 | 2 | 1/1 (100%) | 5/5 (100%) |
+| V. Preferences (PREF) | 6 | 2 | 2 | 2 | 1/1 (100%) | 4/5 (80%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
-| X. Cross-cutting behaviours (BEHAV) | 18 | 6 | 1 | 1 | 8/8 (100%) | 6/9 (67%) |
+| X. Cross-cutting behaviours (BEHAV) | 19 | 6 | 1 | 1 | 8/8 (100%) | 7/10 (70%) |
 | Y. Menus | 82 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
-| Lightroom Classic extras | 32 | 11 | 39 | 9 | — | 22/24 (92%) |
-| **Total** | 393 | 39 | 84 | 36 | 192/200 (96%) | 142/152 (93%) |
+| Lightroom Classic extras | 33 | 15 | 35 | 9 | — | 23/25 (92%) |
+| **Total** | 398 | 49 | 73 | 36 | 192/200 (96%) | 144/156 (92%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.9%** of 516 in-scope rows — P0 98.0% of 200 · P1 95.7% of 152 · P2 42.9% of 163.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **81.2%** of 520 in-scope rows — P0 98.0% of 200 · P1 95.2% of 156 · P2 47.2% of 163.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -447,7 +447,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| LR-EXP-DIALOG | Export dialog | P0 | ✅ | `cmd:dialog.export`, `cmd:app.export` (`preset`), `cmd:export.presets`, `cmd:export.savePreset`, `cmd:export.deletePreset`, `crates/ui-egui/src/panels/dialogs.rs`, `crates/engine/src/export.rs` | batch export; built-in presets (JPEG Small 2048 px / Large full size, Original + Settings, DNG) and saved user presets (library prefs) load into the dialog; deleting a user preset is command-only |
+| LR-EXP-DIALOG | Export dialog | P0 | ✅ | `cmd:dialog.export`, `cmd:app.export` (`preset`), `cmd:export.presets`, `cmd:export.savePreset`, `cmd:export.deletePreset`, `crates/ui-egui/src/panels/dialogs.rs`, `crates/engine/src/export.rs` | batch export; built-in presets (JPEG Small 2048 px / Large full size, Original + Settings, DNG) and saved user presets (library prefs) load into the dialog; deleting a user preset is command-only; on a short window the options scroll and Cancel / OK stay visible (LR-BEHAV-DIALOGS, issue #781) |
 | LR-EXP-TYPE | File types | P0 | ✅ | `cmd:app.export` (`format`), `crates/engine/src/export.rs` (`ExportFormat`), `crates/engine/src/tests_export.rs` | JPEG, PNG, TIFF, WebP, AVIF, DNG (raw photos: lossless re-encode with the edits in the embedded XMP), Original (+ XMP sidecar). No JXL encoder; non-raw → DNG not supported |
 | LR-EXP-DIM | Output size | P0 | ✅ | `cmd:app.export` (`longEdge`, `shortEdge`, `width`, `height`, `megapixels`, `percent`, `dontEnlarge`, `ppi`), `crates/engine/src/export.rs` (`Resize`), `crates/ui-egui/src/panels/dialogs.rs` | full size = the cropped native size (no longer upscaled); W × H fits either orientation; ppi written to JFIF / pHYs / TIFF tags |
 | LR-EXP-QUALITY | JPEG quality | P0 | ✅ | `cmd:app.export` (`quality`, `limitKb`) | |
@@ -525,6 +525,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-BEHAV-RENDER-FIDELITY | Rendering matches Lightroom | P1 | 🟡 | `crates/pipeline/src/lib.rs`, `crates/pipeline/src/tone.rs` | every slider exists and works, but the character of the result (tone curve shape, highlight recovery, texture / clarity / dehaze, noise reduction, sharpening, default look) is tuned by eye; there is no systematic side-by-side comparison against Lightroom on the same CC0 raws. Needs a fidelity suite: Lightroom reference renders kept only in the local `plan/` (never committed), compared per slider and preset with a perceptual metric. Tuning that changes how existing settings render ships as a new process version (LRC-DEV-PROCESS, `docs/process-versions.md`) |
 | LR-BEHAV-DRAGDROP | Drag and drop | P1 | ✅ | `crates/ui-egui/src/lib.rs`, `crates/ui-egui/src/panels/grid.rs` (`drag_feedback`), `crates/ui-egui/src/panels/left.rs` (`drop_target`, `album_drag_over`, `top_level_drop_target`, `drag_auto_scroll`) | files → app (import); grid photos → an album row (adds the selection, with a count badge while dragging); sidebar album / folder rows → a folder (moves it; its name follows the pointer); a drag of albums or grid photos near the top or bottom edge of the sidebar scrolls it (faster nearer the edge, only while the pointer is over the sidebar) |
 | LR-BEHAV-TOAST | Toast notifications | P1 | ✅ | `crates/ui-egui/src/panels/mod.rs` | |
+| LR-BEHAV-DIALOGS | Dialogs fit the window | P1 | ✅ | `crates/ui-egui/src/panels/dialogs.rs` (`dialog_body`, `list_height`), `crates/ui-egui/src/tests_dialog_fit.rs` | a dialog taller than the window (Export on a 1366×768 screen, issue #781) never runs off it: its options scroll while the title bar and the Cancel / OK row stay on screen; lists that scroll on their own (What's New, All Metadata, shortcuts, smart-album rules, credits) get shorter first; dialogs that fit look as before; Import keeps its own resizable, scrolling window |
 | LR-BEHAV-SIDEBAR-COLLAPSE | Collapsible left-sidebar sections | P2 | ✅ | `crates/ui-egui/src/panels/left.rs` (`sidebar_section_header`), `crates/ui-egui/src/state.rs` (`collapsed_sidebar`), `crates/ui-egui/src/tests_panels.rs` | click the Albums, Local, By Date or Keywords header (or drive `ui.clickWidget` `sidebarSection:<albums\|local\|byDate\|keywords>`) to fold or unfold the section; a chevron after the title shows the state; the choice is kept across restarts (`collapsedSidebar` in the UI state). UI-only (no command), like the By Date / Keywords disclosure triangles; photos dropped on a folded Albums section have no target |
 | LR-BEHAV-PANEL-RESIZE | Resizable side panels | P1 | ✅ | `crates/ui-egui/src/panels/mod.rs` (`resizable_side`), `crates/ui-egui/src/state.rs` (`LEFT_WIDTH`, `RIGHT_WIDTH`), `crates/ui-egui/src/tests_panels.rs` | drag the left sidebar's right edge (200–480 pt) or the right panel's left edge (250–520 pt); the photo area keeps ≥ 360 pt; widths are kept across panels, views and restarts (`leftWidth` / `rightWidth` in the UI state); the Presets column stays fixed |
 | LR-BEHAV-EMPTY-STATES | Empty states | P1 | ✅ | `crates/ui-egui/src/panels/mod.rs` (`empty_message`) | |

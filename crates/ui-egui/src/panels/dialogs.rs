@@ -128,6 +128,13 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     // rather than growing the window when the options below the grid get taller (e.g. Copy).
     let import = matches!(dlg, Dialog::Import { .. });
     let window_id = egui::Id::new(if import { "lightcraft-import-dialog" } else { "lightcraft-dialog" });
+    // Every other dialog fits the window (#781): its options scroll when they don't, and the title
+    // bar and the button row stay outside the scroll area. The room they take is measured on the
+    // previous frame (a guess on the first one).
+    let chrome_id = window_id.with("chrome");
+    let chrome = ctx.data(|d| d.get_temp::<f32>(chrome_id)).unwrap_or(DIALOG_CHROME_GUESS);
+    let body_max = (screen.height() - 2.0 * DIALOG_SCREEN_MARGIN - chrome).max(DIALOG_MIN_BODY);
+    let mut body_h = None;
     let shown = egui::Window::new(crate::i18n::tr(&title)).id(window_id)
         .collapsible(false)
         .resizable(import)
@@ -144,7 +151,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         })
         .show(ctx, |ui| {
             ui.spacing_mut().item_spacing.y = 8.0;
-            match &mut dlg {
+            body_h = dialog_body(ui, (!import).then_some(title.as_str()), body_max, |ui| match &mut dlg {
                 Dialog::AutoStack { gap } => {
                     ui.label(egui::RichText::new(crate::i18n::tr("Stack photos taken within this time of each other:")).color(t.text_label));
                     ui.add(
@@ -173,7 +180,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     ui.label(egui::RichText::new(crate::i18n::tr("Scores stay on the photos: filter or make smart albums with Focus and Best of Similar Shots.")).color(t.text_dim));
                 }
                 Dialog::WhatsNew => {
-                    egui::ScrollArea::vertical().max_height(460.0).auto_shrink([false, true]).show(ui, |ui| {
+                    egui::ScrollArea::vertical().max_height(list_height(ui, 460.0)).auto_shrink([false, true]).show(ui, |ui| {
                         for line in WHATS_NEW.lines() {
                             let l = line.trim_end();
                             if let Some(h) = l.strip_prefix("### ") {
@@ -233,7 +240,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     if !xmp.is_empty() {
                         groups.push(("XMP".into(), xmp));
                     }
-                    egui::ScrollArea::vertical().max_height(440.0).auto_shrink([false, true]).show(ui, |ui| {
+                    egui::ScrollArea::vertical().max_height(list_height(ui, 440.0)).auto_shrink([false, true]).show(ui, |ui| {
                         if groups.is_empty() {
                             ui.label(egui::RichText::new(crate::i18n::tr(rows["note"].as_str().unwrap_or("No metadata found"))).color(t.text_dim));
                         }
@@ -260,7 +267,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     let now = (app.session.clock)();
                     let view = app.caches.rules_view(&app.session.catalog, rules, *id, folder, &now);
                     let env = crate::panels::rules_editor::Env { problems: view.problems.clone(), today: now, albums: view.albums.clone() };
-                    egui::ScrollArea::vertical().max_height(360.0).auto_shrink([false, true]).show(ui, |ui| {
+                    egui::ScrollArea::vertical().max_height(list_height(ui, 360.0)).auto_shrink([false, true]).show(ui, |ui| {
                         crate::panels::rules_editor::edit(ui, rules, "rules", 0, &[], &env);
                     });
                     let n = view.count;
@@ -945,7 +952,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                 }
                 Dialog::Shortcuts => crate::panels::keymap::body(app, ui, &t),
-            }
+            });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 // a model file LightCraft cannot use has nothing to confirm
@@ -1022,6 +1029,13 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             }
         });
     if let Some(w) = shown {
+        if let Some(body_h) = body_h {
+            let measured = (w.response.rect.height() - body_h).max(0.0);
+            if (measured - chrome).abs() > 0.5 {
+                ctx.data_mut(|d| d.insert_temp(chrome_id, measured));
+                ctx.request_repaint();
+            }
+        }
         ctx.move_to_top(w.response.layer_id);
         crate::widgets::register(ctx, "dialog:window", w.response.rect);
     }
@@ -1069,6 +1083,66 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     app.ui.dialog = if close { None } else { Some(dlg) };
+}
+
+/// Room kept free above and below a dialog (#781).
+const DIALOG_SCREEN_MARGIN: f32 = 12.0;
+/// A dialog's title bar, frame and button row before the first frame measures them.
+const DIALOG_CHROME_GUESS: f32 = 100.0;
+/// A dialog's options never get less room than this, however short the window.
+const DIALOG_MIN_BODY: f32 = 80.0;
+
+/// A list that scrolls on its own never gets shorter than this to make its dialog fit.
+const DIALOG_MIN_LIST: f32 = 120.0;
+
+fn list_shrink_id() -> egui::Id {
+    egui::Id::new("dialog-list-shrink")
+}
+
+fn list_applied_id() -> egui::Id {
+    egui::Id::new("dialog-list-applied")
+}
+
+/// The height for a list in a dialog that scrolls on its own (What's New, All Metadata, the
+/// shortcuts, smart-album rules): `preferred`, less what the dialog needs to fit the window, so
+/// on a short window the list gets shorter rather than scrolling inside a scrolling dialog.
+pub fn list_height(ui: &egui::Ui, preferred: f32) -> f32 {
+    let shrink = ui.data(|d| d.get_temp::<f32>(list_shrink_id())).unwrap_or(0.0);
+    let height = (preferred - shrink).max(preferred.min(DIALOG_MIN_LIST));
+    ui.data_mut(|d| *d.get_temp_mut_or_default::<f32>(list_applied_id()) += preferred - height);
+    height
+}
+
+/// A dialog's options: in a vertical scroll area at most `max_height` tall when `scroll` names
+/// the dialog (it shrinks to its content, so a dialog that fits looks as it would without it;
+/// each dialog keeps a scroll position of its own), drawn directly otherwise. Returns the height
+/// they took when scrolled.
+fn dialog_body(ui: &mut egui::Ui, scroll: Option<&str>, max_height: f32, body: impl FnOnce(&mut egui::Ui)) -> Option<f32> {
+    let Some(name) = scroll else {
+        ui.data_mut(|d| d.remove_temp::<f32>(list_shrink_id()));
+        body(ui);
+        return None;
+    };
+    ui.data_mut(|d| d.insert_temp(list_applied_id(), 0.0_f32));
+    let top = ui.cursor().top();
+    // (an auto-sized window offers its content last frame's height; the minimum lets a dialog
+    // that grows take its full height at once, and the area still shrinks to fit its content)
+    let out = egui::ScrollArea::vertical()
+        .id_salt(("dialog-body", name))
+        .max_height(max_height)
+        .min_scrolled_height(max_height)
+        .auto_shrink([true, true])
+        .show(ui, body);
+    // what the lists that scroll on their own gave up this frame, and what they should next frame
+    let applied = ui.data(|d| d.get_temp::<f32>(list_applied_id())).unwrap_or(0.0);
+    let was = ui.data(|d| d.get_temp::<f32>(list_shrink_id())).unwrap_or(0.0);
+    let shrink = (out.content_size.y + applied - max_height).max(0.0);
+    if (shrink - was).abs() > 0.5 {
+        ui.data_mut(|d| d.insert_temp(list_shrink_id(), shrink));
+        ui.ctx().request_repaint();
+    }
+    // (the room the scroll area took: its `inner_rect` can be taller than what it allocated)
+    Some(ui.min_rect().bottom() - top)
 }
 
 /// Apply a dialog's action (also used by `ui.dialog.confirm`).
