@@ -73,3 +73,67 @@ fn tiles_never_panic() {
         let _ = tiles::decode_tile(b);
     });
 }
+
+/// Map view math with whatever a damaged `map.json`, a photo's GPS tags or a window size give it.
+#[test]
+fn map_math_never_panics() {
+    use crate::mercator::{self, TileKey};
+    let vals = [
+        0.0,
+        -0.0,
+        1.0,
+        -1.0,
+        85.06,
+        -85.06,
+        90.0,
+        180.0,
+        -180.0,
+        360.0,
+        1e9,
+        -1e9,
+        1e300,
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::MIN_POSITIVE,
+        22.0,
+        30.5,
+    ];
+    let mut rng = dac_fuzzkit::Rng::new(42);
+    let pick = |rng: &mut dac_fuzzkit::Rng| vals.get(rng.below(vals.len())).copied().unwrap_or(0.0);
+    for _ in 0..dac_fuzzkit::iterations(20_000) {
+        let p = LatLon::new(pick(&mut rng), pick(&mut rng));
+        let q = LatLon::new(pick(&mut rng), pick(&mut rng));
+        let (zoom, w, h) = (pick(&mut rng), pick(&mut rng).abs().min(1e5), pick(&mut rng).abs().min(1e5));
+        let z = rng.byte();
+        let _ = (p.is_valid(), mercator::project(p), mercator::world_px(zoom), mercator::distance_m(p, q), mercator::metres_per_px(p.lat, zoom));
+        let (x, y) = (pick(&mut rng), pick(&mut rng));
+        let _ = mercator::unproject(x, y);
+        let _ = mercator::tiles_across(z);
+        if let Some(k) = TileKey::new(z, rng.next_u64() as u32, (rng.next_u64() >> 32) as u32) {
+            let _ = k.parent();
+        }
+        let tiles = mercator::visible_tiles(p, z, w, h);
+        assert!(tiles.len() <= 1 << 16, "{} tiles for {w}x{h}", tiles.len());
+        let _ = mercator::fit(&[p, q], w, h);
+        let pts: Vec<(usize, LatLon)> = (0..rng.below(50)).map(|i| (i, LatLon::new(pick(&mut rng), pick(&mut rng)))).collect();
+        let _ = crate::cluster(&pts, zoom, pick(&mut rng));
+    }
+}
+
+#[test]
+fn tile_server_entries_never_panic() {
+    use crate::mercator::TileKey;
+    use crate::tiles::{TileKind, TileServer};
+    let url = "https://tile.example/{z}/{x}/{y}.png?k={s}";
+    dac_fuzzkit::run_str("geo.tileserver", &[url, "{z}{z}{z}{x}{y}", "http://[::1]:8080/{z}/{x}/{y}"], 3000, |s| {
+        for max in [0u8, 19, 255] {
+            if let Ok(t) = TileServer::custom(s, s, s, s, max, TileKind::Road) {
+                let _ = t.validate();
+                if let Some(k) = TileKey::new(3, 2, 1) {
+                    let _ = t.tile_url(k);
+                }
+            }
+        }
+    });
+}
