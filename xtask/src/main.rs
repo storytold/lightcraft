@@ -371,6 +371,18 @@ const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "https://raw.pixls.us/data/Sony/ILCE-7CR/DSC00798.ARW",
         "f5096e8fbccf0842c8a57763cabd2836608f019eb7fd54f7b22260c2f5bc4da5",
     ),
+    // ILCE-7CM2 (33 MP, issue #697): lossless compressed L, and the compressed "M-size" coding, which is Bayer at
+    // 4736×3132 with black 512 (only the lossless M/S codings are YCbCr with the 1024 pedestal)
+    (
+        "arw-sony-a7cm2-lossless-l.arw",
+        "https://raw.pixls.us/data/Sony/ILCE-7CM2/DSC02431.ARW",
+        "342d893bd71fd050c273df181e3039d3f12d88947b0662de5de5325c84cc449b",
+    ),
+    (
+        "arw-sony-a7cm2-compressed-m.arw",
+        "https://raw.pixls.us/data/Sony/ILCE-7CM2/DSC02436.ARW",
+        "002c86d38a16b08a2438780728b4fda8efcc745fa6c26231dad6af67b383b11e",
+    ),
     // a dusk sky clipped in green behind a poplar: the clipped-highlight colour of issue #523
     (
         "arw-sony-a7rm4-14bit-compressed.arw",

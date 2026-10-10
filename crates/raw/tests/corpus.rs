@@ -445,6 +445,44 @@ fn corpus_sony_a7cr_codings() {
     eprintln!("ILCE-7CR codings checked on {} files", decoded.len());
 }
 
+/// Sony ILCE-7CM2 (33 MP, issue #697), two of the camera's codings on raw.pixls.us: lossless compressed L (LJ92 tiles
+/// of 2×2 cells) and compressed "M-size" (ARW2). Only its lossless M and S codings are the downsized linear YCbCr
+/// whose 1024 pedestal 0.5.0 missed (rendering the issue's file washed out: the darkest half of a dusk scene
+/// +11 L* and blue); the compressed and uncompressed M-size files are Bayer at 4736×3132 with the recorded black
+/// 512, so a size-based rule would break them. Expected values: the files' own colour-filter layout, black and
+/// white levels, default crop and the as-shot gains of the camera's colour-temperature setting.
+#[test]
+fn corpus_sony_a7cm2_codings() {
+    let dir = corpus_root().join("raw");
+    // (file, sensor width and height, as-shot R and B gains, default crop x, y, width, height)
+    let cases = [
+        ("arw-sony-a7cm2-lossless-l.arw", (7168, 5120), [2.313, 1.654], (12, 8, 7008, 4672)),
+        ("arw-sony-a7cm2-compressed-m.arw", (4736, 3132), [2.309, 1.657], (44, 30, 4608, 3072)),
+    ];
+    let mut checked = 0;
+    for (name, (width, height), [r, b], crop) in cases {
+        let bytes = match std::fs::read(dir.join(name)) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("skip: {name} absent");
+                continue;
+            }
+            Err(e) => panic!("{name}: {e}"),
+        };
+        let img = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(probe_info(&bytes).unwrap(), img.info(), "{name}: header and full decode agree");
+        assert_eq!(img.metadata.model.as_deref(), Some("ILCE-7CM2"), "{name}: model");
+        assert_eq!((img.width, img.height, img.cpp), (width, height, 1), "{name}: sensor size");
+        assert_eq!(img.cfa.as_ref().map(|c| c.name()).as_deref(), Some("RGGB"), "{name}: colour-filter layout");
+        assert_eq!((img.black.mean(), img.white_at(0)), (512.0, 16383.0), "{name}: black and white levels");
+        let wb = img.wb_multipliers.unwrap_or_else(|| panic!("{name}: no as-shot white balance"));
+        assert!((wb[0] - r).abs() < 0.01 && wb[1] == 1.0 && (wb[2] - b).abs() < 0.01, "{name}: white balance {wb:?}");
+        assert_eq!((img.crop.x, img.crop.y, img.crop.width, img.crop.height), crop, "{name}: default crop");
+        checked += 1;
+    }
+    eprintln!("ILCE-7CM2 codings checked on {checked} files");
+}
+
 /// Issue #535: Sony black levels against the data. The SR2SubIFD keeps the black level at a position that depends
 /// on its layout (the DSLR-A500 and A700 read 365 and 975 from a fixed position, where ExifTool and the data say
 /// 512), and the downsized lossless M and S codings (linear YCbCr) sit 512 above the recorded level (1024, with
@@ -462,6 +500,9 @@ fn corpus_sony_black_levels_sit_at_the_data_floor() {
         ("arw-sony-a7m4-lossless-l.arw", 512.0, Some(16383.0)),
         ("arw-sony-a7m4-lossless-m.arw", 1024.0, Some(16895.0)),
         ("arw-sony-a7m4-lossless-s.arw", 1024.0, Some(16895.0)),
+        // ILCE-7CM2 (#697): its compressed "M-size" coding is Bayer at the recorded 512, unlike its lossless M
+        ("arw-sony-a7cm2-lossless-l.arw", 512.0, Some(16383.0)),
+        ("arw-sony-a7cm2-compressed-m.arw", 512.0, Some(16383.0)),
     ];
     let mut seen = 0;
     for (name, black, white) in cases {
