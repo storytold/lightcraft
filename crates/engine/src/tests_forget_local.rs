@@ -199,8 +199,12 @@ fn upgraded_catalogs_forget_nothing_at_first() {
     s.close_library().unwrap();
     drop(s);
     // strip the times and baselines, as an older version would have written the snapshot
-    let snap = std::fs::read_to_string(lib.join("catalog.snap")).unwrap();
-    let mut v: serde_json::Value = serde_json::from_str(&snap).unwrap();
+    // (as a format-1 JSON library: the v4 store is migrated from it on the next open)
+    let cat = dac_catalog::transfer::load_readonly(&lib).unwrap();
+    let mut v =
+        json!({"format": "dac-catalog", "version": 1, "seq": 0, "catalog": serde_json::from_str::<serde_json::Value>(&cat.to_snapshot()).unwrap()});
+    std::fs::remove_file(lib.join("catalog.redb")).unwrap();
+    std::fs::write(lib.join("catalog.log"), b"").unwrap();
     v["catalog"].as_object_mut().unwrap().remove("browsed");
     for p in v["catalog"]["photos"].as_object_mut().unwrap().values_mut() {
         p.as_object_mut().unwrap().remove("local_baseline");

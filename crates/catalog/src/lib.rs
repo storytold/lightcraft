@@ -14,17 +14,26 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod dates;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod db;
 pub mod folders;
 pub mod journal;
 pub mod keywords;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod library;
 pub mod local;
 pub mod lock;
 pub mod model;
 pub mod query;
+pub mod remote;
 pub mod rules;
 pub mod safe_file;
+pub(crate) mod settings_ref;
 pub mod stacks;
 pub mod store;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod transfer;
+pub mod xmp_state;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -38,9 +47,11 @@ pub use local::{DEFAULT_FORGET_DAYS, ForgetPlan, folder_of};
 pub use lock::{LibraryLock, LockError, LockOwner};
 pub use model::*;
 pub use query::{DateGroup, Filter, Person, RatingOp, Sort, SortKey, mix64};
+pub use remote::{PreviewEntry, RemoteIdentity, RemoteKey, RemoteTable, SyncState};
 pub use rules::{Match, Rule, RuleSet};
 use serde::{Deserialize, Serialize};
 pub use store::{FsStore, MemStore, Store};
+pub use xmp_state::{SidecarStat, XmpStamp, XmpStatus};
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum CatalogError {
@@ -217,6 +228,29 @@ pub enum Op {
         folder: String,
         at: Option<String>,
     },
+    /// The original file's SHA-1 (40 hex digits; `None` = unknown). Format version 4.
+    SetSha1 {
+        id: PhotoId,
+        sha1: Option<String>,
+    },
+    /// The state at the last XMP read/write (see [`xmp_state`]). Format version 4.
+    SetXmpStamp {
+        id: PhotoId,
+        stamp: Option<xmp_state::XmpStamp>,
+    },
+    /// Link a photo to a remote asset (`record: Some`, replacing its link on that account) or
+    /// unlink it (`None`). Format version 4.
+    SetRemote {
+        photo: PhotoId,
+        service: String,
+        account_id: String,
+        record: Option<Box<RemoteIdentity>>,
+    },
+    /// The previews index entry of a photo (`None`: no preview). Not an undo step. Format version 4.
+    SetPreview {
+        id: PhotoId,
+        entry: Option<PreviewEntry>,
+    },
     /// Several ops as one step (undo applies the inverses in reverse).
     Batch {
         ops: Vec<Op>,
@@ -239,6 +273,12 @@ pub struct Catalog {
     /// When each Local folder was last browsed (folder path → ISO 8601), see [`local`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     browsed: BTreeMap<String, String>,
+    /// Links to assets on remote services (see [`remote`]).
+    #[serde(default, skip_serializing_if = "RemoteTable::is_empty")]
+    remote: RemoteTable,
+    /// The previews index.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    previews: BTreeMap<PhotoId, PreviewEntry>,
     /// Increments on every applied op.
     #[serde(skip)]
     pub revision: u64,
@@ -280,6 +320,30 @@ impl Catalog {
     }
     pub fn is_empty(&self) -> bool {
         self.photos.is_empty()
+    }
+    /// Every remote link (see [`remote`]).
+    pub fn remote_links(&self) -> &RemoteTable {
+        &self.remote
+    }
+    /// A photo's remote links.
+    pub fn remote_of(&self, id: PhotoId) -> impl Iterator<Item = &RemoteIdentity> {
+        self.remote.of_photo(id)
+    }
+    /// The photo linked to a remote asset.
+    pub fn photo_of_remote(&self, service: &str, account_id: &str, remote_id: &str) -> Option<PhotoId> {
+        self.remote.photo_of(service, account_id, remote_id)
+    }
+    /// The op that links (or relinks) a photo to a remote asset.
+    pub fn link_remote_op(r: RemoteIdentity) -> Op {
+        Op::SetRemote { photo: r.photo_id, service: r.service.clone(), account_id: r.account_id.clone(), record: Some(Box::new(r)) }
+    }
+    /// The previews index entry of a photo.
+    pub fn preview_entry(&self, id: PhotoId) -> Option<&PreviewEntry> {
+        self.previews.get(&id)
+    }
+    /// Photos with a given SHA-1 (hex, any case).
+    pub fn photos_with_sha1(&self, sha1: &str) -> Vec<PhotoId> {
+        self.photos.values().filter(|p| p.sha1.as_deref().is_some_and(|s| s.eq_ignore_ascii_case(sha1))).map(|p| p.id).collect()
     }
     pub fn album(&self, id: AlbumId) -> Option<&Album> {
         self.albums.get(&id)
@@ -620,6 +684,52 @@ impl Catalog {
                 };
                 Op::SetBrowsed { folder, at: old }
             }
+            Op::SetSha1 { id, sha1 } => {
+                if let Some(s) = &sha1
+                    && (s.len() != 40 || !s.bytes().all(|b| b.is_ascii_hexdigit()))
+                {
+                    return Err(CatalogError::Invalid(format!("not a SHA-1: {s}")));
+                }
+                let sha1 = sha1.map(|s| s.to_ascii_lowercase());
+                let p = self.photo_mut(id)?;
+                Op::SetSha1 { id, sha1: std::mem::replace(&mut p.sha1, sha1) }
+            }
+            Op::SetXmpStamp { id, stamp } => {
+                let p = self.photo_mut(id)?;
+                Op::SetXmpStamp { id, stamp: std::mem::replace(&mut p.xmp, stamp) }
+            }
+            Op::SetRemote { photo, service, account_id, record } => {
+                let key = (photo, service, account_id);
+                let old = match record {
+                    Some(r) => {
+                        if r.key() != key {
+                            return Err(CatalogError::Invalid("remote link doesn't match its key".into()));
+                        }
+                        if r.service.is_empty() || r.remote_id.is_empty() {
+                            return Err(CatalogError::Invalid("remote link without a service or remote id".into()));
+                        }
+                        if !self.photos.contains_key(&photo) {
+                            return Err(CatalogError::NoPhoto(photo));
+                        }
+                        self.remote.upsert(*r).map_err(CatalogError::Invalid)?
+                    }
+                    None => self.remote.remove(&key),
+                };
+                let (photo, service, account_id) = key;
+                Op::SetRemote { photo, service, account_id, record: old.map(Box::new) }
+            }
+            Op::SetPreview { id, entry } => {
+                let old = match entry {
+                    Some(e) => {
+                        if !self.photos.contains_key(&id) {
+                            return Err(CatalogError::NoPhoto(id));
+                        }
+                        self.previews.insert(id, e)
+                    }
+                    None => self.previews.remove(&id),
+                };
+                Op::SetPreview { id, entry: old }
+            }
             Op::Batch { ops } => {
                 let mut inverses = Vec::with_capacity(ops.len());
                 for op in ops {
@@ -650,6 +760,12 @@ impl Catalog {
             .map(|a| Op::SetAlbumPhotos { id: a.id, photos: a.photos.iter().copied().filter(|p| *p != id).collect() })
             .collect();
         ops.extend(self.remove_from_stacks_ops(&[id]));
+        for (photo, service, account_id) in self.remote.keys_of(id) {
+            ops.push(Op::SetRemote { photo, service, account_id, record: None });
+        }
+        if self.previews.contains_key(&id) {
+            ops.push(Op::SetPreview { id, entry: None });
+        }
         ops.push(Op::RemovePhoto { id });
         Op::Batch { ops }
     }
@@ -666,6 +782,14 @@ impl Catalog {
             .map(|a| Op::SetAlbumPhotos { id: a.id, photos: a.photos.iter().copied().filter(|p| !gone.contains(p)).collect() })
             .collect();
         ops.extend(self.remove_from_stacks_ops(ids));
+        for id in ids {
+            for (photo, service, account_id) in self.remote.keys_of(*id) {
+                ops.push(Op::SetRemote { photo, service, account_id, record: None });
+            }
+            if self.previews.contains_key(id) {
+                ops.push(Op::SetPreview { id: *id, entry: None });
+            }
+        }
         ops.extend(gone.iter().map(|id| Op::RemovePhoto { id: *id }));
         Op::Batch { ops }
     }
@@ -732,3 +856,6 @@ mod tests_local;
 mod tests_lock;
 #[cfg(test)]
 mod tests_torn_append;
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod tests_v4;

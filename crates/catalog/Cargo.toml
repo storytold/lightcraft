@@ -18,6 +18,11 @@ thiserror = { workspace = true }
 crc32fast = { workspace = true }
 log = { workspace = true }
 web-time = { workspace = true }
+siphasher = { workspace = true }
+
+# catalog storage v4 (pure Rust, MIT OR Apache-2.0); the web app keeps the JSON snapshot
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+redb = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

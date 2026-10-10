@@ -73,7 +73,7 @@ fn threshold_compaction_runs_in_the_background() {
             let expect = s.catalog.to_snapshot();
             let copy = temp_dir("bg-compact-crash");
             std::fs::create_dir_all(&copy).unwrap();
-            for f in ["catalog.snap", "catalog.log"] {
+            for f in ["catalog.snap", "catalog.log", "catalog.redb"] {
                 if dir.join(f).exists() {
                     std::fs::copy(dir.join(f), copy.join(f)).unwrap();
                 }

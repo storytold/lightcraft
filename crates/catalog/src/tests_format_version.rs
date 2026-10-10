@@ -57,7 +57,7 @@ fn v2_library_loads_and_is_upgraded() {
     let (_, c, r) = Journal::open(Box::new(m.clone())).unwrap();
     assert_eq!(c.to_snapshot(), full.to_snapshot());
     assert_eq!((r.replayed, r.upgraded_from), (1, Some(2)));
-    assert_eq!(snapshot_version(&m), 3);
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
 }
 
 #[test]
@@ -187,8 +187,9 @@ fn op_variants_are_versioned() {
             | Op::Batch { .. } => 1,
             Op::SetBrowsed { .. } => 2,
             Op::SetAlbumOrder { .. } => 3,
+            Op::SetSha1 { .. } | Op::SetXmpStamp { .. } | Op::SetRemote { .. } | Op::SetPreview { .. } => 4,
         }
     }
-    let newest = since(&Op::SetAlbumOrder { id: AlbumId(0), order: None });
+    let newest = since(&Op::SetSha1 { id: crate::PhotoId(0), sha1: None });
     assert_eq!(newest, VERSION, "the newest op's version must be the current format version");
 }

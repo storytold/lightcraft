@@ -47,11 +47,11 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | X. Cross-cutting behaviours (BEHAV) | 18 | 5 | 1 | 1 | 8/8 (100%) | 6/8 (75%) |
 | Y. Menus | 82 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
-| Lightroom Classic extras | 43 | 18 | 59 | 0 | — | 25/34 (74%) |
+| Lightroom Classic extras | 43 | 20 | 57 | 0 | — | 25/34 (74%) |
 | IMM. Immich integration | 0 | 0 | 10 | 0 | — | 0/6 (0%) |
-| **Total** | 405 | 45 | 114 | 27 | 193/200 (97%) | 145/168 (86%) |
+| **Total** | 405 | 47 | 112 | 27 | 193/200 (97%) | 145/168 (86%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **75.8%** of 564 in-scope rows — P0 98.2% of 200 · P1 89.9% of 168 · P2 40.5% of 195.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **76.0%** of 564 in-scope rows — P0 98.2% of 200 · P1 90.5% of 168 · P2 40.5% of 195.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -820,12 +820,12 @@ PLAN.md §2 carry the status of that survey ("unverified" where it said so) unti
 | LRC-SHELL-IDPLATE | Identity plate (styled text or graphic) and activity centre | P2 | 🟡 | `cmd:view.identityPlate` | P1.2: the module bar shows the brand mark (drawn in code after `brand/logo.svg`) and the app name, or the user's text; the status line is its activity area. Missing: an image file as plate and font/colour styling (needs an SVG/raster loader and the shared text engine) |
 | LRC-SHELL-PREFS | Classic preference groups (presets, external editing, file handling, display, network) | P2 | 🟡 |  | partial; see V. Preferences |
 | LRC-SHELL-PLUGINS | Plug-in manager and SDK (sandboxed) | P2 | ⬜ |  | PLAN.md §2.1; Phase 4 |
-| LRC-CAT-SCALE | Catalog of 500k+ photos with an on-disk index | P1 | 🟡 |  | journal + snapshot works to about 85k photos and lives in RAM; Phase 1 |
-| LRC-CAT-MULTI | Several catalogs: create, open, open recent, choose at startup | P1 | 🟡 |  | unverified (PLAN.md §2.2 left it open) |
-| LRC-CAT-BACKUP | Catalog backup on exit with integrity test and optimise | P1 | ⬜ |  |  |
-| LRC-CAT-EXPORT | Export as catalog (subset, with or without originals and previews) and import from another catalog | P1 | ⬜ |  | merge with a conflict policy |
+| LRC-CAT-SCALE | Catalog of 500k+ photos with an on-disk index | P1 | 🟡 | `crates/catalog/src/db.rs`, `docs/catalog.md` | v4 store (redb): 500k photos open in 0.7 s with 1.1–1.3 GB peak RSS, filtered in 15–110 ms (the unfiltered capture-date sort of all photos is the slow case), checkpoints write only what changed; 1M photos open in 1.6 s (2.3 GB); `cargo xtask bench-catalog`. The grid still takes the full id list, and photo records all stay in memory (shared develop settings) |
+| LRC-CAT-MULTI | Several catalogs: create, open, open recent, choose at startup | P1 | 🟡 | `crates/catalog/src/library.rs` | catalog API only: a catalog is a folder with a `<name>.<catalog_ext>` entry point (`library::create`, `library::open`, `library::resolve`), `RecentCatalogs` (Open Recent list, startup default, chooser when Alt is held or asked for); File ▸ New / Open / Open Recent Catalog and the startup chooser are not wired into the app yet |
+| LRC-CAT-BACKUP | Catalog backup on exit with integrity test and optimise | P1 | 🟡 | `crates/catalog/src/library.rs` | catalog API only: `Journal::backup` (checkpoint, copy into `<backups>/<time>/`, the copy integrity-tested, oldest pruned), `Journal::backup_if_due` (schedule never / every exit / daily / weekly / monthly from `catalog-settings.json`), `Journal::check_integrity`, `Journal::optimize` (store rewritten, unused develop settings dropped, indexes rebuilt, compacted); no exit hook, settings dialog or commands yet |
+| LRC-CAT-EXPORT | Export as catalog (subset, with or without originals and previews) and import from another catalog | P1 | 🟡 | `crates/catalog/src/transfer.rs` | catalog API only: `export_catalog` (subset with albums, smart albums, stacks, remote links; originals copied into `Originals/` optionally; previews index entries optionally), `load_readonly` (another catalog read without changing it), `plan_import` (change preview: new, changed settings / metadata, unchanged, new and extended albums), `ImportPlan::ops` with `ConflictRule` keep / replace settings / replace metadata / both as one undo step; photos match by file path and virtual-copy name (a relocated original imports as a new photo); no commands or dialog yet |
 | LRC-CAT-SETTINGS | Catalog settings: backup schedule, preview size/quality, discard 1:1 previews, auto-write XMP, address lookup, face detection | P1 | 🟡 | `cmd:library.previewSettings` | some exist as app settings; preview size, 1:1 discard and previews at import are per library (`prefs.json`, to move into the catalog's settings); no settings dialog for them yet |
-| LRC-CAT-XMPCONFLICT | Metadata changed on disk: badge, read from / save to file | P1 | 🟡 |  | XMP read/write exists; conflict badge and UI missing |
+| LRC-CAT-XMPCONFLICT | Metadata changed on disk: badge, read from / save to file | P1 | 🟡 | `crates/catalog/src/xmp_state.rs` | XMP read/write exists; the catalog records an `XmpStamp` per photo (`Op::SetXmpStamp`) and `Photo::xmp_status` gives in sync / changed in catalog / changed on disk / conflict; the engine doesn't record stamps on read/write yet, and the badge and conflict dialog are missing |
 | LRC-IMP-SECONDCOPY | Make a second copy (backup) during import | P2 | 🟡 |  | unverified |
 | LRC-IMP-PRESETS | Import presets (saved dialog settings) | P2 | 🟡 |  | unverified |
 | LRC-LIB-KEYWORDLIST | Keyword list: synonyms, export flags, import / export keyword lists | P2 | 🟡 |  |  |
