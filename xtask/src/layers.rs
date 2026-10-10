@@ -116,6 +116,8 @@ pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     &["engine", "slideshow"],
     // L3: books are laid out with the shared page model
     &["layout", "book"],
+    // IMM-PUBLISH: the Immich publish service implements the publish trait
+    &["publish", "immich"],
 ];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {

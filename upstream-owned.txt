@@ -26,6 +26,10 @@ crates/immich/
 crates/text/
 crates/pdf/
 crates/geo/
+# Immich engine wiring (IMM-SYNC / IMM-PEOPLE / IMM-SEARCH)
+crates/engine/src/cmd/immich_sync.rs
+crates/engine/src/tests_immich_sync.rs
+crates/engine/src/cmd/immich_publish.rs
 crates/publish/
 crates/tether/
 crates/engine/src/cmd/publish.rs

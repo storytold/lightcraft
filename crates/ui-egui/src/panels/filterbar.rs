@@ -271,6 +271,7 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
             .map(|(l, v)| (l.to_string(), json!({"immich": v.clone()}), f.immich.as_deref() == v.as_str()))
             .collect(),
         );
+        super::connections::smart_search_box(app, ui);
     }
 
     // metadata pickers
