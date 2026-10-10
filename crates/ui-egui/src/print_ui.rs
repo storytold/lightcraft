@@ -185,8 +185,15 @@ pub fn run(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Value, String
 // ---------------------------------------------------------------- persistence
 
 /// `<config>/print.json`: the user templates, the current settings and template, the printer.
+#[cfg(not(target_arch = "wasm32"))]
 fn store_path(app: &DacApp) -> Option<std::path::PathBuf> {
     app.session.remote.connections_path.as_ref().and_then(|p| p.parent()).map(|d| d.join("print.json"))
+}
+
+/// The web build keeps print settings for the session only.
+#[cfg(target_arch = "wasm32")]
+fn store_path(_app: &DacApp) -> Option<std::path::PathBuf> {
+    None
 }
 
 fn stored_json(pu: &PrintUi) -> Value {

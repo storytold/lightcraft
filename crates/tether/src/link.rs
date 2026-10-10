@@ -40,7 +40,7 @@ pub fn fallback_message(e: &PtpError) -> String {
 /// The cameras that can be connected: USB PTP cameras (and the simulated one when `simulated`).
 pub fn cameras(simulated: bool) -> Value {
     let mut out = Vec::new();
-    let mut error = None;
+    let mut error: Option<String> = None;
     #[cfg(not(target_arch = "wasm32"))]
     match crate::ptp::usb::list() {
         Ok(list) => out.extend(list.into_iter().map(|c| json!({"id": c.id, "name": c.name, "vendor": c.vendor, "kind": "usb"}))),

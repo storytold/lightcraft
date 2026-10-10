@@ -118,7 +118,10 @@ pub fn prepare_jobs(
 /// Runs the jobs from [`prepare_jobs`].
 pub fn run_jobs(jobs: Vec<(String, RenderJob)>, infos: HashMap<String, PhotoInfo>) -> std::result::Result<PreparedPhotos, String> {
     // a few renders at once (P6.1: a contact sheet's 20 photos one by one took 8 s)
+    #[cfg(not(target_arch = "wasm32"))]
     let width = crate::cmd::publish::render_width();
+    #[cfg(target_arch = "wasm32")]
+    let width = 1;
     let mut images = HashMap::with_capacity(jobs.len());
     let mut jobs = jobs.into_iter().peekable();
     while jobs.peek().is_some() {
