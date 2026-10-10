@@ -8,7 +8,6 @@
 
 use std::path::PathBuf;
 
-
 /// The app's per-user config folder ([`dac_brand::settings_dir`]), if the platform tells us where.
 pub fn config_dir() -> Option<PathBuf> {
     dac_brand::settings_dir()
@@ -23,5 +22,3 @@ pub fn default_face_models_dir() -> Option<PathBuf> {
 pub fn default_denoise_models_dir() -> Option<PathBuf> {
     dac_brand::env_os("DENOISE_MODELS").filter(|v| !v.is_empty()).map(PathBuf::from).or_else(|| config_dir().map(|d| d.join("denoise-models")))
 }
-
-

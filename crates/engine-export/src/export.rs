@@ -747,7 +747,8 @@ impl ExportOptions {
         fn string<'a>(cmd: &str, k: &str, v: &'a Value) -> dac_engine_core::Result<&'a str> {
             v.as_str().ok_or_else(|| crate::export::bad(cmd, format!("`{k}` must be a string")))
         }
-        let boolean = |k: &str, v: &Value| -> dac_engine_core::Result<bool> { v.as_bool().ok_or_else(|| bad(format!("`{k}` must be true or false"))) };
+        let boolean =
+            |k: &str, v: &Value| -> dac_engine_core::Result<bool> { v.as_bool().ok_or_else(|| bad(format!("`{k}` must be true or false"))) };
         let one_of = |k: &str, v: &Value, options: &[&str]| -> dac_engine_core::Result<()> {
             let s = string(cmd, k, v)?;
             if options.iter().any(|o| o.eq_ignore_ascii_case(s)) { Ok(()) } else { Err(bad(format!("`{k}` must be one of {}", options.join("|")))) }
@@ -1309,14 +1310,6 @@ pub fn output_size(p: &dac_catalog::Photo, o: &ExportOptions) -> (usize, usize) 
     }
 }
 
-
-
-
-
-
-
-
-
 /// How an exported DNG stores its raw data.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1338,7 +1331,6 @@ pub struct Destination {
     pub dir: String,
     pub exact: Option<String>,
 }
-
 
 /// Write an exported or rendered file on disk: its folder is created if needed, and the file is
 /// replaced atomically ([`dac_catalog::safe_file::write_atomic_nosync`]: a temp file
@@ -1368,7 +1360,6 @@ pub fn write_with(path: &str, bytes: &[u8], durable: bool) -> Result<(), String>
 pub fn sidecar_path(main: &str, ext: &str) -> String {
     std::path::Path::new(main).with_extension(ext).to_string_lossy().to_string()
 }
-
 
 fn bad(cmd: &str, msg: impl Into<String>) -> dac_engine_core::EngineError {
     dac_engine_core::EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }

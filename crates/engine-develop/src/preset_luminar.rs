@@ -666,5 +666,4 @@ mod tests {
         assert_eq!(got, [("Vintage", "Wild Pack"), ("Pop 1", "Wild Pack")]);
         assert!(read_presets("empty.mplumpack", &zip(&[("icon.png", b"x")], false), None).is_err());
     }
-
 }

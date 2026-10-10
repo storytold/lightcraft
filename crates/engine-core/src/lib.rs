@@ -108,4 +108,3 @@ pub fn json_delta(old: &Value, new: &Value) -> Option<Value> {
         (_, b) => Some(b.clone()),
     }
 }
-

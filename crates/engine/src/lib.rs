@@ -47,15 +47,15 @@ mod view;
 
 use std::sync::Arc;
 
-pub use dac_engine_library::{devices, lightroom_sqlite};
-pub use dac_engine_develop::{crs, crs_masks, preset_import, preset_luminar};
-pub use dac_engine_core::{
-    AUTO_VERSIONS, EngineError, FolderMove, Interaction, Result, UndoEntry, availability, guard, json_delta, legacy, logging, single_photo, walk,
-};
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
 use dac_catalog::{Catalog, Filter, Op, PhotoId, Sort};
 use dac_develop::DevelopSettings;
+pub use dac_engine_core::{
+    AUTO_VERSIONS, EngineError, FolderMove, Interaction, Result, UndoEntry, availability, guard, json_delta, legacy, logging, single_photo, walk,
+};
+pub use dac_engine_develop::{crs, crs_masks, preset_import, preset_luminar};
 pub use dac_engine_export::{CRAFT_FONTS, CraftFont, fonts};
+pub use dac_engine_library::{devices, lightroom_sqlite};
 pub use media::{RenderJob, SourceLevel};
 use serde_json::Value;
 pub use view::{Browse, FilterChip, LibrarySource, Selection, SelectionState, filter_chips};
@@ -772,9 +772,9 @@ mod tests_organize;
 #[cfg(test)]
 mod tests_persist;
 #[cfg(test)]
-mod tests_preset_files;
-#[cfg(test)]
 mod tests_prefs;
+#[cfg(test)]
+mod tests_preset_files;
 #[cfg(test)]
 mod tests_segment;
 #[cfg(test)]

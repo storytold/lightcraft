@@ -30,7 +30,7 @@
 ### craft-fonts (`CRAFT_FONTS_DIR`)
 
 - An **optional build input** for CJK and other wide-coverage fonts, from a checkout of the craft-fonts repository.
-- `crates/engine/build.rs` reads `CRAFT_FONTS_DIR` (re-run when it changes). A relative path is resolved against the
+- `crates/engine-export/build.rs` reads `CRAFT_FONTS_DIR` (re-run when it changes). A relative path is resolved against the
   workspace root as well as the crate directory. If the directory is unreadable the build warns and continues
   without the fonts; with `CRAFT_FONTS_REQUIRED` set, a missing directory is a build error (use that in release
   builds).

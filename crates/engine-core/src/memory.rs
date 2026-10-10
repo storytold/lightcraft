@@ -269,5 +269,3 @@ pub fn gpu_usage() -> GpuUsage {
     let g = dac_gpu::memory();
     GpuUsage { allocated: g.allocated, pooled: g.pooled, retired: g.retired }
 }
-
-

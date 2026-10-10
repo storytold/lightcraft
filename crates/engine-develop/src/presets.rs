@@ -8,7 +8,6 @@ use dac_develop::Preset;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-
 /// File extension of the app's preset files (legacy extensions are read too, see [`dac_brand::preset_exts`]).
 pub const LCPRESET_EXT: &str = dac_brand::PRESET_EXT;
 /// The `format` tag of a `.lcpreset` file.
@@ -101,7 +100,6 @@ pub fn expand_preset_paths(paths: &[String]) -> Vec<String> {
     }
     out
 }
-
 
 fn p(group: &str, id: &str, name: &str, settings: serde_json::Value) -> Preset {
     Preset { id: format!("lc.{id}"), name: name.into(), group: group.into(), settings, favorite: false, builtin: true }
@@ -412,7 +410,6 @@ pub fn profile(id: &str) -> Option<&'static ProfileInfo> {
 /// How many recently used profiles the profile menu lists.
 pub const RECENT_PROFILES: usize = 5;
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -440,15 +437,10 @@ mod tests {
         assert_eq!(profile_groups(), ["Basic", "Film", "Cinematic", "Muted", "B&W"]);
     }
 
-
     #[test]
     fn slugs() {
         assert_eq!(slug("Warm & Soft!"), "warm-soft");
         assert_eq!(slug("  "), "preset");
         assert_eq!(slug("B&W/Film 2"), "b-w-film-2");
     }
-
-
-
-
 }

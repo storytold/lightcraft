@@ -32,8 +32,6 @@ use dac_develop::DevelopSettings;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-
-
 /// Sidecar file naming.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -161,9 +159,9 @@ pub fn parse_sidecar(xmp: &str, raw: bool) -> std::result::Result<SidecarData, S
     let full = d.lc_settings.as_deref().and_then(|j| serde_json::from_str::<Value>(j).ok()).and_then(|v| DevelopSettings::from_json(&v).ok());
     out.develop = match full {
         Some(s) => Some(DevelopPatch::Full(Box::new(s))),
-        None if dac_engine_develop::crs::has_adjustments(&d.properties) => {
-            Some(DevelopPatch::Partial(dac_engine_develop::crs::to_partial_report(&d.properties, Some(&d.values), Some(raw), dac_engine_develop::crs_masks::DEFAULT_ASPECT).0))
-        }
+        None if dac_engine_develop::crs::has_adjustments(&d.properties) => Some(DevelopPatch::Partial(
+            dac_engine_develop::crs::to_partial_report(&d.properties, Some(&d.values), Some(raw), dac_engine_develop::crs_masks::DEFAULT_ASPECT).0,
+        )),
         None => None,
     };
     Ok(out)
@@ -436,7 +434,6 @@ impl StemOwners {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

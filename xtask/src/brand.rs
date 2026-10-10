@@ -41,7 +41,7 @@ pub const LEGACY_FILES: &[&str] = &[
     "crates/meta/src/legacy.rs",
     "crates/meta/README.md",
     // preset format tags, old preset-pack folder word, old binary name in library locks
-    "crates/engine/src/legacy.rs",
+    "crates/engine-core/src/legacy.rs",
     // IndexedDB name holding users' browser libraries, cross-tab lock name
     "apps/web/src/legacy.rs",
 ];

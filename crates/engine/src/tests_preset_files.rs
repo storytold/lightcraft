@@ -1,7 +1,7 @@
 //! Preset import through the session (`preset.import`): the parsers live in `dac-engine-develop`.
 use serde_json::json;
 
-    /// A zip archive (`deflate`: compress entries) — enough of a writer for the tests.
+/// A zip archive (`deflate`: compress entries) — enough of a writer for the tests.
 fn zip(entries: &[(&str, &[u8])], deflate: bool) -> Vec<u8> {
     let mut out = Vec::new();
     let mut central = Vec::new();
@@ -78,10 +78,8 @@ fn param(name: &str, v: f64) -> String {
 }
 
 fn layer(id: &str, amount: f64, blend: &str, effects: &[(&str, String)], sub: &str) -> String {
-    let fx: String = effects
-        .iter()
-        .map(|(e, p)| format!("<dict><key>Identifier</key><string>{e}</string><key>Parameters</key><dict>{p}</dict></dict>"))
-        .collect();
+    let fx: String =
+        effects.iter().map(|(e, p)| format!("<dict><key>Identifier</key><string>{e}</string><key>Parameters</key><dict>{p}</dict></dict>")).collect();
     let sub =
         if sub.is_empty() { String::new() } else { format!("<key>Sublayers</key><dict><key>AdjustmentLayers</key><array>{sub}</array></dict>") };
     format!(
@@ -117,13 +115,7 @@ fn modern() -> String {
     let layers = [
         layer("DevelopAdjustmentLayer", 1.0, "Normal", &[], &sub),
         layer("AIStructureEffect", 1.0, "Normal", &[("MIPLAIStructureEffect", param("Amount", 20.0) + &param("Boost", 10.0))], ""),
-        layer(
-            "Half",
-            0.5,
-            "Normal",
-            &[("MIPLVibranceEffect", param("Vibrance", 30.0)), ("MIPLSaturationEffect", param("Saturation", -10.0))],
-            "",
-        ),
+        layer("Half", 0.5, "Normal", &[("MIPLVibranceEffect", param("Vibrance", 30.0)), ("MIPLSaturationEffect", param("Saturation", -10.0))], ""),
         layer("Hsl", 1.0, "Normal", &[("MIPLChannelsEffect", param("hOrange", -8.0) + &param("sBlue", 12.0) + &param("lGreen", 4.0))], ""),
         layer("Vignette", 1.0, "Normal", &[("MIPLVignetteEffect", param("Amount", -20.0) + &param("Vignette Size", 40.0))], ""),
         layer("Orton", 1.0, "Normal", &[("MIPLOrtonFilterEffect", param("Amount", 15.0))], ""),

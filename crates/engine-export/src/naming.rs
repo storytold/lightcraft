@@ -266,4 +266,3 @@ pub fn expand_tokens(template: &str, p: &Photo, seq: usize, seq_width: usize) ->
     out.push_str(rest);
     out
 }
-

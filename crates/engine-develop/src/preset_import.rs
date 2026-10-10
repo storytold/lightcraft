@@ -726,5 +726,4 @@ text]], z = ZSTR "loc" }"#,
         assert_eq!(group_from_dir("Film Pack/XMP Presets for Lightroom CC 7.3+"), Some("Film Pack".into()));
         assert_eq!(group_from_dir("Sacred Light"), Some("Sacred Light".into()), "whole words only");
     }
-
 }
