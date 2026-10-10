@@ -1918,5 +1918,21 @@
   "None yet": "Noch keine",
   "Keyword Shortcut (⇧K)": "Stichwort-Kurzbefehl (⇧K)",
   "Add Keyword Shortcut": "Stichwort-Kurzbefehl hinzufügen",
-  "Set Keyword Shortcut": "Stichwort-Kurzbefehl festlegen"
+  "Set Keyword Shortcut": "Stichwort-Kurzbefehl festlegen",
+  "Filter Keywords": "Stichwörter filtern",
+  "Create Keyword Tag": "Stichwort-Tag erstellen",
+  "Import Keywords…": "Stichwörter importieren…",
+  "Export Keywords…": "Stichwörter exportieren…",
+  "Purge Unused Keywords": "Nicht verwendete Stichwörter löschen",
+  "Other": "Andere",
+  "No keywords yet": "Noch keine Stichwörter",
+  "Add to or remove from the selected photos": "Den ausgewählten Fotos hinzufügen oder entfernen",
+  "Synonyms": "Synonyme",
+  "comma separated": "durch Kommas getrennt",
+  "Include on Export": "Beim Export einschließen",
+  "Export Containing Keywords": "Übergeordnete Stichwörter exportieren",
+  "Export Synonyms": "Synonyme exportieren",
+  "Create Keyword Tag inside…": "Stichwort-Tag darin erstellen…",
+  "Use as Keyword Shortcut (⇧K)": "Als Stichwort-Kurzbefehl verwenden (⇧K)",
+  "Keyword (a|b nests it under a)": "Stichwort (a|b ordnet es unter a ein)"
 }

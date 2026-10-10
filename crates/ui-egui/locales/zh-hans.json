@@ -1763,5 +1763,21 @@
   "None yet": "暂无",
   "Keyword Shortcut (⇧K)": "关键字快捷键 (⇧K)",
   "Add Keyword Shortcut": "添加关键字快捷键",
-  "Set Keyword Shortcut": "设置关键字快捷键"
+  "Set Keyword Shortcut": "设置关键字快捷键",
+  "Filter Keywords": "筛选关键字",
+  "Create Keyword Tag": "创建关键字标记",
+  "Import Keywords…": "导入关键字…",
+  "Export Keywords…": "导出关键字…",
+  "Purge Unused Keywords": "清除未使用的关键字",
+  "Other": "其他",
+  "No keywords yet": "尚无关键字",
+  "Add to or remove from the selected photos": "添加到所选照片或从中移除",
+  "Synonyms": "同义词",
+  "comma separated": "以逗号分隔",
+  "Include on Export": "导出时包含",
+  "Export Containing Keywords": "导出包含的关键字",
+  "Export Synonyms": "导出同义词",
+  "Create Keyword Tag inside…": "在其中创建关键字标记…",
+  "Use as Keyword Shortcut (⇧K)": "用作关键字快捷键 (⇧K)",
+  "Keyword (a|b nests it under a)": "关键字（a|b 表示嵌套在 a 下）"
 }

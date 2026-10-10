@@ -214,5 +214,7 @@
   "{n} photos relinked": "Перепривязано фото: {n}",
   "{path} · {count} photos": "{path} · фото: {count}",
   "Target: {name}": "Цель: {name}",
-  "Collection imported: {n} photos found, {m} not in this library": "Коллекция импортирована: найдено фото: {n}, нет в библиотеке: {m}"
+  "Collection imported: {n} photos found, {m} not in this library": "Коллекция импортирована: найдено фото: {n}, нет в библиотеке: {m}",
+  "{n} keywords imported": "Импортировано ключевых слов: {n}",
+  "{n} keywords removed": "Удалено ключевых слов: {n}"
 }

@@ -1763,5 +1763,21 @@
   "None yet": "Ninguna todavía",
   "Keyword Shortcut (⇧K)": "Atajo de palabra clave (⇧K)",
   "Add Keyword Shortcut": "Añadir atajo de palabra clave",
-  "Set Keyword Shortcut": "Definir atajo de palabra clave"
+  "Set Keyword Shortcut": "Definir atajo de palabra clave",
+  "Filter Keywords": "Filtrar palabras clave",
+  "Create Keyword Tag": "Crear etiqueta de palabra clave",
+  "Import Keywords…": "Importar palabras clave…",
+  "Export Keywords…": "Exportar palabras clave…",
+  "Purge Unused Keywords": "Purgar palabras clave no utilizadas",
+  "Other": "Otras",
+  "No keywords yet": "Aún no hay palabras clave",
+  "Add to or remove from the selected photos": "Añadir a las fotos seleccionadas o quitar de ellas",
+  "Synonyms": "Sinónimos",
+  "comma separated": "separados por comas",
+  "Include on Export": "Incluir al exportar",
+  "Export Containing Keywords": "Exportar palabras clave contenedoras",
+  "Export Synonyms": "Exportar sinónimos",
+  "Create Keyword Tag inside…": "Crear etiqueta dentro…",
+  "Use as Keyword Shortcut (⇧K)": "Usar como atajo de palabra clave (⇧K)",
+  "Keyword (a|b nests it under a)": "Palabra clave (a|b la anida en a)"
 }

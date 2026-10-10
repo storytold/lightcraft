@@ -214,5 +214,7 @@
   "{n} photos relinked": "已重新链接 {n} 张照片",
   "{path} · {count} photos": "{path} · {count} 张照片",
   "Target: {name}": "目标：{name}",
-  "Collection imported: {n} photos found, {m} not in this library": "已导入收藏夹：找到 {n} 张照片，{m} 张不在此图库中"
+  "Collection imported: {n} photos found, {m} not in this library": "已导入收藏夹：找到 {n} 张照片，{m} 张不在此图库中",
+  "{n} keywords imported": "已导入 {n} 个关键字",
+  "{n} keywords removed": "已移除 {n} 个关键字"
 }

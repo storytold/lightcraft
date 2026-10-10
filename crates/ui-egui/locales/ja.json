@@ -1763,5 +1763,21 @@
   "None yet": "まだありません",
   "Keyword Shortcut (⇧K)": "キーワードショートカット (⇧K)",
   "Add Keyword Shortcut": "キーワードショートカットを追加",
-  "Set Keyword Shortcut": "キーワードショートカットを設定"
+  "Set Keyword Shortcut": "キーワードショートカットを設定",
+  "Filter Keywords": "キーワードを絞り込む",
+  "Create Keyword Tag": "キーワードタグを作成",
+  "Import Keywords…": "キーワードを読み込む…",
+  "Export Keywords…": "キーワードを書き出す…",
+  "Purge Unused Keywords": "未使用のキーワードを削除",
+  "Other": "その他",
+  "No keywords yet": "キーワードはまだありません",
+  "Add to or remove from the selected photos": "選択した写真に追加または削除",
+  "Synonyms": "同義語",
+  "comma separated": "カンマ区切り",
+  "Include on Export": "書き出し時に含める",
+  "Export Containing Keywords": "親キーワードを書き出す",
+  "Export Synonyms": "同義語を書き出す",
+  "Create Keyword Tag inside…": "この中にキーワードタグを作成…",
+  "Use as Keyword Shortcut (⇧K)": "キーワードショートカットにする (⇧K)",
+  "Keyword (a|b nests it under a)": "キーワード（a|b で a の下に入れる）"
 }

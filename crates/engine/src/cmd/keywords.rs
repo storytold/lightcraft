@@ -258,9 +258,11 @@ pub fn specs() -> Vec<CommandSpec> {
                 let to = str_param(p, "to").ok_or_else(|| bad("keyword.rename", "missing `to`"))?.to_string();
                 let op = s.catalog.rename_keyword_ops(&from, &to).map_err(|e| bad("keyword.rename", e.to_string()))?;
                 let (f, t) = (clean(&from), clean(&to));
-                commit_keywords(s, "Rename Keyword", op, |k| {
+                let r = commit_keywords(s, "Rename Keyword", op, |k| {
                     Some(if is_under(k, &f) { format!("{t}{}", &k[f.len().min(k.len())..]) } else { k.to_string() })
-                })
+                })?;
+                super::keyword_list::rename_attrs(s, &from, &to);
+                Ok(r)
             }
         ),
         cmd!(
@@ -274,7 +276,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let k = str_param(p, "keyword").ok_or_else(|| bad("keyword.delete", "missing `keyword`"))?.to_string();
                 let op = s.catalog.delete_keyword_ops(&k).map_err(|e| bad("keyword.delete", e.to_string()))?;
                 let c = clean(&k);
-                commit_keywords(s, "Delete Keyword", op, |f| (!is_under(f, &c)).then(|| f.to_string()))
+                let r = commit_keywords(s, "Delete Keyword", op, |f| (!is_under(f, &c)).then(|| f.to_string()))?;
+                super::keyword_list::delete_attrs(s, &k);
+                Ok(r)
             }
         ),
         cmd!(

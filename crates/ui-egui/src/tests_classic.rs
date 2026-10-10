@@ -123,6 +123,30 @@ fn keywording_panel_adds_suggestions_to_the_selection() {
     }
 }
 
+/// Keyword List: created keywords are listed (count 0); the mark toggles a keyword on the
+/// selection; People shows person keywords only; a click on a row filters by it.
+#[test]
+fn keyword_list_marks_filters_and_lists_created_keywords() {
+    let mut h = demo();
+    h.app.ui.hidden_panels = vec![PanelId::QuickDevelop, PanelId::Keywording];
+    run(&mut h, "keyword.create", json!({"keyword": "Anna", "person": true}));
+    let id = h.app.session.visible_cloned()[0].0;
+    run(&mut h, "library.select", json!({"ids": [id]}));
+    assert!(has(&h, "keywordList:Anna"), "a created keyword is listed");
+    click(&mut h, "keywordMark:Anna");
+    let has_kw = |h: &Headless| h.app.session.catalog.photo(dac_catalog::PhotoId(id)).unwrap().meta.keywords.iter().any(|k| k == "Anna");
+    assert!(has_kw(&h), "the mark adds it");
+    click(&mut h, "keywordMark:Anna");
+    assert!(!has_kw(&h), "and takes it away");
+    click(&mut h, "keywordListKind:people");
+    let rows = |h: &Headless| h.app.widgets.iter().filter(|(w, _)| w.starts_with("keywordList:")).count();
+    assert_eq!(rows(&h), 1, "people only");
+    click(&mut h, "keywordListKind:all");
+    assert!(rows(&h) > 1);
+    click(&mut h, "keywordList:Anna");
+    assert_eq!(h.app.session.filter.keyword.as_deref(), Some("Anna"));
+}
+
 /// Library's columns are Classic panel stacks: every panel has a foldable header, Solo Mode
 /// keeps one open per side, hidden panels go away, and the order is the user's.
 #[test]

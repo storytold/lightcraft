@@ -1763,5 +1763,21 @@
   "None yet": "Nenhuma ainda",
   "Keyword Shortcut (⇧K)": "Atalho de palavra-chave (⇧K)",
   "Add Keyword Shortcut": "Adicionar atalho de palavra-chave",
-  "Set Keyword Shortcut": "Definir atalho de palavra-chave"
+  "Set Keyword Shortcut": "Definir atalho de palavra-chave",
+  "Filter Keywords": "Filtrar palavras-chave",
+  "Create Keyword Tag": "Criar tag de palavra-chave",
+  "Import Keywords…": "Importar palavras-chave…",
+  "Export Keywords…": "Exportar palavras-chave…",
+  "Purge Unused Keywords": "Remover palavras-chave não usadas",
+  "Other": "Outras",
+  "No keywords yet": "Ainda não há palavras-chave",
+  "Add to or remove from the selected photos": "Adicionar às fotos selecionadas ou remover delas",
+  "Synonyms": "Sinônimos",
+  "comma separated": "separados por vírgulas",
+  "Include on Export": "Incluir ao exportar",
+  "Export Containing Keywords": "Exportar palavras-chave superiores",
+  "Export Synonyms": "Exportar sinônimos",
+  "Create Keyword Tag inside…": "Criar tag dentro…",
+  "Use as Keyword Shortcut (⇧K)": "Usar como atalho de palavra-chave (⇧K)",
+  "Keyword (a|b nests it under a)": "Palavra-chave (a|b aninha em a)"
 }

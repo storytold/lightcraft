@@ -214,5 +214,7 @@
   "{n} photos relinked": "{n} fotos vinculadas de nuevo",
   "{path} · {count} photos": "{path} · {count} fotos",
   "Target: {name}": "Destino: {name}",
-  "Collection imported: {n} photos found, {m} not in this library": "Colección importada: {n} fotos encontradas, {m} no están en esta biblioteca"
+  "Collection imported: {n} photos found, {m} not in this library": "Colección importada: {n} fotos encontradas, {m} no están en esta biblioteca",
+  "{n} keywords imported": "{n} palabras clave importadas",
+  "{n} keywords removed": "{n} palabras clave eliminadas"
 }

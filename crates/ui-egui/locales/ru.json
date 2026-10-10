@@ -1437,5 +1437,21 @@
   "None yet": "Пока нет",
   "Keyword Shortcut (⇧K)": "Быстрое ключевое слово (⇧K)",
   "Add Keyword Shortcut": "Добавить быстрое ключевое слово",
-  "Set Keyword Shortcut": "Задать быстрое ключевое слово"
+  "Set Keyword Shortcut": "Задать быстрое ключевое слово",
+  "Filter Keywords": "Фильтр ключевых слов",
+  "Create Keyword Tag": "Создать ключевое слово",
+  "Import Keywords…": "Импорт ключевых слов…",
+  "Export Keywords…": "Экспорт ключевых слов…",
+  "Purge Unused Keywords": "Удалить неиспользуемые ключевые слова",
+  "Other": "Другие",
+  "No keywords yet": "Ключевых слов пока нет",
+  "Add to or remove from the selected photos": "Добавить к выбранным фото или убрать",
+  "Synonyms": "Синонимы",
+  "comma separated": "через запятую",
+  "Include on Export": "Включать при экспорте",
+  "Export Containing Keywords": "Экспортировать родительские ключевые слова",
+  "Export Synonyms": "Экспортировать синонимы",
+  "Create Keyword Tag inside…": "Создать вложенное ключевое слово…",
+  "Use as Keyword Shortcut (⇧K)": "Сделать быстрым ключевым словом (⇧K)",
+  "Keyword (a|b nests it under a)": "Ключевое слово (a|b вкладывает в a)"
 }

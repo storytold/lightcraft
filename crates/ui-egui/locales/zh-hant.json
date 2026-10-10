@@ -1763,5 +1763,21 @@
   "None yet": "尚無",
   "Keyword Shortcut (⇧K)": "關鍵字快速鍵 (⇧K)",
   "Add Keyword Shortcut": "加入關鍵字快速鍵",
-  "Set Keyword Shortcut": "設定關鍵字快速鍵"
+  "Set Keyword Shortcut": "設定關鍵字快速鍵",
+  "Filter Keywords": "篩選關鍵字",
+  "Create Keyword Tag": "建立關鍵字標記",
+  "Import Keywords…": "匯入關鍵字…",
+  "Export Keywords…": "匯出關鍵字…",
+  "Purge Unused Keywords": "清除未使用的關鍵字",
+  "Other": "其他",
+  "No keywords yet": "尚無關鍵字",
+  "Add to or remove from the selected photos": "加入所選相片或從中移除",
+  "Synonyms": "同義詞",
+  "comma separated": "以逗號分隔",
+  "Include on Export": "匯出時包含",
+  "Export Containing Keywords": "匯出包含的關鍵字",
+  "Export Synonyms": "匯出同義詞",
+  "Create Keyword Tag inside…": "在其中建立關鍵字標記…",
+  "Use as Keyword Shortcut (⇧K)": "用作關鍵字快速鍵 (⇧K)",
+  "Keyword (a|b nests it under a)": "關鍵字（a|b 表示巢狀於 a 下）"
 }
