@@ -24,8 +24,12 @@ pub struct Headless {
 }
 
 impl Drop for Headless {
-    /// Snapshot a persistent library on exit (a no-op for in-memory sessions).
+    /// Snapshot a persistent library on exit (a no-op for in-memory sessions), after any Apple
+    /// Photos import still running (`export.addToPhotos {wait: false}`) has ended: the process
+    /// must not end in the middle of one, abandoning osascript and the import's result.
     fn drop(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.session.wait_for_photos_imports();
         let _ = self.session.close_library();
     }
 }
@@ -83,6 +87,8 @@ impl Headless {
         };
         let dir = p.get("dir").and_then(Value::as_str).unwrap_or("");
         let write = &mut lightcraft_engine::export::write_file;
+        // Add to Apple Photos: refused before anything is written when it can't be done
+        let after = self.session.after_export(&opts)?;
         let items = prepare_batch(&mut self.session, &ids, &opts)?;
         let total = items.len();
         let mut hook = self.progress.take();
@@ -107,6 +113,9 @@ impl Headless {
         }
         // Single-photo exports also report path/width/height at the top level (back-compat).
         let mut out = files.first().cloned().unwrap_or_else(|| json!({}));
+        if let Some(photos) = after.run(&files, false) {
+            out["applePhotos"] = photos;
+        }
         out["files"] = json!(files);
         Ok(out)
     }
@@ -131,7 +140,7 @@ impl Backend for Headless {
             "engine.commands" => {
                 let mut v: Vec<Value> = self.session.commands().into_iter().map(|c| serde_json::to_value(c).unwrap_or_default()).collect();
                 v.push(json!({"id": "app.export", "label": "Export Now", "menu": [], "shortcut": null,
-                    "params": "{path?: output file (.jpg/.png/.tif/.webp/.avif/.dng) | dir?, ids?, preset?, format?: jpeg|png|tiff|webp|avif|dng|original, longEdge?|shortEdge?|width?|height?|megapixels?|percent? (default longEdge 3000; longEdge 0 = full size), dontEnlarge?, ppi?, quality?: 1..100, limitKb?, colorSpace?: srgb|displayP3|adobeRgb|proPhoto|rec2020, bitDepth?: 8|10|16|32, hdr? (HDR output for HDR edits: gain map JPEG, float TIFF), sharpen?: none|screen|matte|glossy, sharpenAmount?: low|standard|high, metadata?: all|allExceptCamera|copyright|none, removeLocation?, naming?, startNumber?, subfolder?, conflict?: unique|overwrite|skip, tiffCompression?: none|lzw|zip, dngCompression?: lossless|deflate|uncompressed, watermark?: text | {text?, vertical? (upright columns, right to left), size? (text height, 0.005..0.5 of the short edge; default 0.035), opacity? (0..1; 0.7), anchor?: topLeft|top|topRight|left|center|right|bottomLeft|bottom|bottomRight, inset? (margin, 0..0.4 of the short edge; 0.025), color? [r,g,b] sRGB, shadow?, image? (graphic drawn instead of the text), imageWidth? (0.01..1 of the photo's width; 0.2)}} — an unknown parameter, an out-of-range watermark size or a value of the wrong kind is an error, not a default",
+                    "params": "{path?: output file (.jpg/.png/.tif/.webp/.avif/.dng) | dir?, ids?, preset?, format?: jpeg|png|tiff|webp|avif|dng|original, longEdge?|shortEdge?|width?|height?|megapixels?|percent? (default longEdge 3000; longEdge 0 = full size), dontEnlarge?, ppi?, quality?: 1..100, limitKb?, colorSpace?: srgb|displayP3|adobeRgb|proPhoto|rec2020, bitDepth?: 8|10|16|32, hdr? (HDR output for HDR edits: gain map JPEG, float TIFF), sharpen?: none|screen|matte|glossy, sharpenAmount?: low|standard|high, metadata?: all|allExceptCamera|copyright|none, removeLocation?, naming?, startNumber?, subfolder?, conflict?: unique|overwrite|skip, tiffCompression?: none|lzw|zip, dngCompression?: lossless|deflate|uncompressed, addToPhotos?: bool (macOS: then add the files written to Apple Photos; outcome in `applePhotos`), photosAlbum?: top-level album name (made when missing), watermark?: text | {text?, vertical? (upright columns, right to left), size? (text height, 0.005..0.5 of the short edge; default 0.035), opacity? (0..1; 0.7), anchor?: topLeft|top|topRight|left|center|right|bottomLeft|bottom|bottomRight, inset? (margin, 0..0.4 of the short edge; 0.025), color? [r,g,b] sRGB, shadow?, image? (graphic drawn instead of the text), imageWidth? (0.01..1 of the photo's width; 0.2)}} — an unknown parameter, an out-of-range watermark size or a value of the wrong kind is an error, not a default",
                     "enabled": self.session.active().is_some()}));
                 Ok(Value::Array(v))
             }

@@ -259,6 +259,8 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
                 "colorSpace": {"type": "string", "enum": ["srgb", "displayP3", "adobeRgb", "proPhoto", "rec2020"], "description": "Output colour space (default sRGB; AVIF is always sRGB). adobeRgb = Adobe RGB (1998) compatible; the embedded ICC profile is generated from the published primaries"},
                 "bitDepth": {"type": "integer", "enum": [8, 10, 16, 32], "description": "Bits per channel: PNG 8|16 (default 8), TIFF 8|16|32 (default 16; 32 = linear float with a linear profile), AVIF 8|10; JPEG/WebP are 8-bit"},
                 "hdr": {"type": "boolean", "description": "HDR output for photos edited in HDR (develop.hdr): JPEG as an ISO 21496-1 gain map JPEG, AVIF as 10-bit Rec. 2020 PQ, 32-bit TIFF with highlights above 1; other formats and SDR edits export as usual"},
+                "addToPhotos": {"type": "boolean", "description": "macOS: after writing the files, add them to Apple Photos (Apple Events to Photos' import; the first time, macOS asks the user to allow LightCraft to control Photos). The outcome is `applePhotos` in the result, the import job: {job, running, requested, album, imported?, ids?, warning?, error?}; headless waits for Photos, the desktop app returns the running job (outcome: command export.photosImports {job}). The files are written either way. An error before exporting on other platforms, or while another import is reserved or running"},
+                "photosAlbum": {"type": "string", "description": "With addToPhotos: the album to add them to, a top-level Photos album of exactly this name, made when missing (several of that name: nothing is added); default none"},
                 "watermark": {"description": "Text, or {text, vertical (boolean; defaults to false: upright columns right to left), size (text height as a fraction of the short edge, 0.005..0.5; default 0.035), opacity (0..1; default 0.7), anchor (topLeft|top|topRight|left|center|right|bottomLeft|bottom|bottomRight), inset (margin as a fraction of the short edge, 0..0.4; default 0.025), color [r,g,b] (sRGB 0..255), shadow (boolean), image (path of a graphic drawn instead of the text), imageWidth (fraction of the photo's width, 0.01..1; default 0.2)}. Unknown keys and out-of-range sizes are errors"}
             }),
             &[],
@@ -745,6 +747,8 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
                         "conflict",
                         "tiffCompression",
                         "dngCompression",
+                        "addToPhotos",
+                        "photosAlbum",
                     ],
                 ),
             )

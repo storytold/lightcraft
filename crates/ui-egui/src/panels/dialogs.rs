@@ -731,6 +731,27 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         &[(K::Unique, "Add number"), (K::Overwrite, "Overwrite"), (K::Skip, "Skip")],
                         &mut opts.conflict,
                     );
+                    // After export: Apple Photos imports the files written (macOS only)
+                    #[cfg(target_os = "macos")]
+                    {
+                        let r = ui.checkbox(&mut opts.add_to_photos, crate::i18n::tr("Add to Apple Photos"));
+                        crate::widgets::register(ui.ctx(), "exportAddToPhotos", r.rect);
+                        if opts.add_to_photos {
+                            field(ui, "Album", |ui| {
+                                ui.add(egui::TextEdit::singleline(&mut opts.photos_album).hint_text(crate::i18n::tr("none")).desired_width(f32::INFINITY))
+                            });
+                            ui.label(
+                                egui::RichText::new(crate::i18n::tr("The first time, macOS asks whether LightCraft may control Photos."))
+                                    .size(11.0)
+                                    .color(t.text_dim),
+                            );
+                        }
+                    }
+                    // nowhere to add them: a setting carried over from a Mac is dropped, not refused
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        opts.add_to_photos = false;
+                    }
                     ui.add_space(4.0);
                     field(ui, "Save preset", |ui| {
                         trailing_button_row(ui, |ui| {

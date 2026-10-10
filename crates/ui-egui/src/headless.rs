@@ -234,6 +234,16 @@ pub struct Headless {
     pub last_cursor: egui::CursorIcon,
 }
 
+/// A headless run (`lightcraft-cli snapshot`, tests) is a one-shot process: however it ends, it
+/// first waits for an Apple Photos import its script left running (`export.addToPhotos {wait:
+/// false}`), bounded, so it never abandons osascript or the import's result.
+impl Drop for Headless {
+    fn drop(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.app.session.wait_for_photos_imports();
+    }
+}
+
 impl Headless {
     /// Wrap `app` (its control channel is replaced by the driver's).
     /// Invalid dimensions fall back to 1600×1000 at scale 1; external callers can use
@@ -1802,6 +1812,226 @@ mod tests {
         let last = after["export"]["last"].clone();
         assert_eq!(last["files"].as_array().map(Vec::len), Some(3), "{last}");
         assert!(last["files"][0]["width"].as_u64().is_some_and(|w| w <= 64));
+    }
+
+    /// Issue #236: the Export dialog's Add to Apple Photos is there on macOS only; there the
+    /// background export hands the files it wrote to Photos (a fake runner: tests never start
+    /// osascript or Photos) and the toast says how it went.
+    #[test]
+    fn export_dialog_adds_to_apple_photos_on_macos() {
+        let mut h = demo([1200.0, 1100.0]);
+        let t = Duration::from_secs(10);
+        let out = std::env::temp_dir().join(format!("lc-photos-dialog-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        h.app.services.write_shared = Some(Arc::new(|p: &str, bytes: &[u8]| lightcraft_engine::export::write_file(p, bytes)));
+        let calls = Arc::new(std::sync::Mutex::new(Vec::<Vec<String>>::new()));
+        let c = calls.clone();
+        h.app.session.apple_photos = Some(Arc::new(move |args: &[String], _| {
+            c.lock().unwrap().push(args.to_vec());
+            Ok(lightcraft_engine::apple_photos::Output { status: Some(0), stdout: "A/L0/001\nB/L0/001\n".into(), stderr: String::new() })
+        }));
+        let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": ids}}), t);
+        h.request("engine.execute", json!({"command": "dialog.export", "params": {}}), t);
+        h.settle(SETTLE);
+        let shown = h.request("ui.widgets", json!({"filter": "exportAddToPhotos"}), t)["result"].as_array().map_or(0, Vec::len);
+        assert_eq!(shown > 0, cfg!(target_os = "macos"), "the option is offered where Photos is");
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        h.request("ui.clickWidget", json!({"id": "exportAddToPhotos"}), t);
+        h.settle(SETTLE);
+        if let Some(crate::state::Dialog::Export { opts, full_size, resize, dir, .. }) = &mut h.app.ui.dialog {
+            assert!(opts.add_to_photos, "the checkbox turns it on");
+            opts.photos_album = "Trip “2026”".into();
+            *full_size = false;
+            *resize = lightcraft_engine::export::Resize::long_edge(48);
+            *dir = out.to_string_lossy().into_owned();
+        }
+        let r = h.request("ui.dialog.confirm", json!({}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        let t0 = Instant::now();
+        while h.app.export.is_some() && t0.elapsed() < Duration::from_secs(60) {
+            h.step();
+        }
+        let last = h.request("ui.inspect", json!({}), t)["result"]["export"]["last"].clone();
+        let written: Vec<String> = last["files"].as_array().unwrap().iter().map(|f| f["path"].as_str().unwrap().to_string()).collect();
+        assert_eq!(written.len(), 2, "{last}");
+        assert_eq!(last["applePhotos"]["imported"], 2, "{last}");
+        assert_eq!(last["applePhotos"]["album"], "Trip “2026”");
+        let args = calls.lock().unwrap().clone();
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0][args[0].len() - 2..], written[..], "the files written go to Photos");
+        let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert!(toast.contains("2 added to Apple Photos album “Trip “2026””"), "{toast}");
+        // Export with Previous repeats it
+        assert_eq!(h.app.session.last_export.as_ref().unwrap()["addToPhotos"], true);
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
+    /// Issue #236 review: control requests run on the UI thread, which must not wait minutes for
+    /// Photos. `export.addToPhotos` and `app.export {addToPhotos}` without `background` answer at
+    /// once with the running job; the app announces the outcome when Photos is done.
+    #[test]
+    fn a_slow_photos_import_never_blocks_the_window() {
+        let mut h = demo([1000.0, 700.0]);
+        let t = Duration::from_secs(30);
+        let out = std::env::temp_dir().join(format!("lc-photos-slow-ui-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(&out).unwrap();
+        let file = out.join("a.jpg");
+        std::fs::write(&file, b"jpeg").unwrap();
+        h.app.services.write = Some(Box::new(|p: &str, bytes: &[u8]| lightcraft_engine::export::write_file(p, bytes)));
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        let wait = std::sync::Mutex::new(wait);
+        h.app.session.apple_photos_background = true; // as the desktop app sets it
+        h.app.session.apple_photos = Some(Arc::new(move |args: &[String], _| {
+            // a regression (Photos on the UI thread) fails the timing below instead of hanging
+            let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(20));
+            let n = args.len() - args.iter().position(|a| a == lightcraft_engine::apple_photos::MARKER).unwrap() - 2;
+            Ok(lightcraft_engine::apple_photos::Output { status: Some(0), stdout: "ID\n".repeat(n), stderr: String::new() })
+        }));
+        let t0 = Instant::now();
+        let r =
+            h.request("engine.execute", json!({"command": "export.addToPhotos", "params": {"paths": [file.to_string_lossy()], "album": "Slow"}}), t);
+        assert!(t0.elapsed() < Duration::from_secs(5), "answered at once: {r}");
+        assert_eq!(r["result"]["running"], true, "{r}");
+        go.send(()).unwrap();
+        while !h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("Apple Photos")) {
+            assert!(t0.elapsed() < Duration::from_secs(20), "the outcome is announced");
+            h.step();
+        }
+        assert_eq!(h.app.ui.toast.as_ref().unwrap().0, "1 added to Apple Photos album “Slow”");
+        if cfg!(target_os = "macos") {
+            let t1 = Instant::now();
+            let p = json!({"dir": out.to_string_lossy(), "longEdge": 32, "addToPhotos": true});
+            let r = h.request("engine.execute", json!({"command": "app.export", "params": p}), t);
+            assert!(t1.elapsed() < Duration::from_secs(10), "the export answers without waiting for Photos: {r}");
+            assert_eq!(r["result"]["applePhotos"]["running"], true, "{r}");
+            assert_eq!(r["result"]["applePhotos"]["job"], 2, "{r}");
+            go.send(()).unwrap();
+            while !h.app.ui.toast.as_ref().is_some_and(|t| t.0.starts_with("1 added to Apple Photos") && !t.0.contains("Slow")) {
+                assert!(t1.elapsed() < Duration::from_secs(20), "the outcome is announced");
+                h.step();
+            }
+        }
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
+    /// Review of #236: a headless run (snapshot scripts) ending while an import it started with
+    /// `wait: false` is still running waits for it, on every exit path (dropping the `Headless`).
+    #[test]
+    fn a_headless_run_waits_for_its_photos_import_before_ending() {
+        let mut h = demo([800.0, 600.0]);
+        let t = Duration::from_secs(10);
+        let dir = std::env::temp_dir().join(format!("lc-photos-headless-drop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.jpg");
+        std::fs::write(&file, b"jpeg").unwrap();
+        let marker = dir.join("imported");
+        let m = marker.clone();
+        // Photos "imports" when `go` arrives (at most 20 s): released 0.8 s into the drop below
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        let wait = std::sync::Mutex::new(wait);
+        h.app.session.apple_photos = Some(Arc::new(move |_: &[String], _| {
+            let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(20));
+            std::fs::write(&m, b"done").unwrap();
+            Ok(lightcraft_engine::apple_photos::Output { status: Some(0), stdout: "ID\n".into(), stderr: String::new() })
+        }));
+        let r =
+            h.request("engine.execute", json!({"command": "export.addToPhotos", "params": {"paths": [file.to_string_lossy()], "wait": false}}), t);
+        assert_eq!(r["result"]["running"], true, "{r}");
+        assert!(!marker.exists(), "still importing");
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(800));
+            let _ = go.send(());
+        });
+        drop(h);
+        assert!(marker.exists(), "the import finished before the run ended");
+        release.join().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review of #236: a snapshot that ends (an error in its script, say) while its background
+    /// export is still writing waits through the writing and then the import the export starts.
+    #[test]
+    fn a_headless_run_waits_for_its_exports_photos_import() {
+        if !cfg!(target_os = "macos") {
+            return; // addToPhotos is refused before exporting elsewhere
+        }
+        let mut h = demo([800.0, 600.0]);
+        let t = Duration::from_secs(10);
+        let dir = std::env::temp_dir().join(format!("lc-photos-headless-export-drop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let marker = dir.join("imported");
+        h.app.services.write_shared = Some(Arc::new(|p: &str, bytes: &[u8]| {
+            std::thread::sleep(Duration::from_millis(300)); // a slow disk: still writing at the drop
+            lightcraft_engine::export::write_file(p, bytes)
+        }));
+        let m = marker.clone();
+        h.app.session.apple_photos = Some(Arc::new(move |_: &[String], _| {
+            std::thread::sleep(Duration::from_millis(500));
+            std::fs::write(&m, b"done").unwrap();
+            Ok(lightcraft_engine::apple_photos::Output { status: Some(0), stdout: "ID\n".into(), stderr: String::new() })
+        }));
+        let p = json!({"dir": dir.join("out").to_string_lossy(), "longEdge": 32, "addToPhotos": true, "background": true});
+        let r = h.request("engine.execute", json!({"command": "app.export", "params": p}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(h.app.session.apple_photos_imports.running().is_some(), "reserved while writing");
+        drop(h);
+        assert!(marker.exists(), "the export's import finished before the run ended");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review of #236: a background export adding to Photos holds the import from before it
+    /// writes. While its files are being written, `export.addToPhotos` is refused with the
+    /// export's job number; the export then adds its files under that job.
+    #[test]
+    fn a_background_export_holds_photos_while_it_writes() {
+        if !cfg!(target_os = "macos") {
+            return; // addToPhotos is refused before exporting elsewhere
+        }
+        let mut h = demo([1000.0, 700.0]);
+        let t = Duration::from_secs(10);
+        let out = std::env::temp_dir().join(format!("lc-photos-hold-ui-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(&out).unwrap();
+        let other = out.join("other.jpg");
+        std::fs::write(&other, b"jpeg").unwrap();
+        // the writer waits for `go`: the export is still writing while we try another import
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        let wait = std::sync::Mutex::new(wait);
+        h.app.services.write_shared = Some(Arc::new(move |p: &str, bytes: &[u8]| {
+            let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(20));
+            lightcraft_engine::export::write_file(p, bytes)
+        }));
+        let calls = Arc::new(std::sync::Mutex::new(Vec::<Vec<String>>::new()));
+        let c = calls.clone();
+        h.app.session.apple_photos_background = true;
+        h.app.session.apple_photos = Some(Arc::new(move |args: &[String], _| {
+            c.lock().unwrap().push(args.to_vec());
+            Ok(lightcraft_engine::apple_photos::Output { status: Some(0), stdout: "ID\n".into(), stderr: String::new() })
+        }));
+        let p = json!({"dir": out.join("export").to_string_lossy(), "longEdge": 32, "addToPhotos": true, "photosAlbum": "Held", "background": true});
+        let r = h.request("engine.execute", json!({"command": "app.export", "params": p}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(h.app.export.is_some(), "writing in the background");
+        let r = h.request("engine.execute", json!({"command": "export.addToPhotos", "params": {"paths": [other.to_string_lossy()]}}), t);
+        assert_eq!(r["ok"], false, "{r}");
+        assert!(r["error"].as_str().unwrap().contains("An export is about to add its files to Apple Photos (import 1)"), "{r}");
+        go.send(()).unwrap();
+        let t0 = Instant::now();
+        while h.app.export.is_some() {
+            assert!(t0.elapsed() < Duration::from_secs(20), "the export finishes");
+            h.step();
+        }
+        let last = h.app.last_export_result.clone().unwrap();
+        assert_eq!((last["applePhotos"]["job"].as_u64(), last["applePhotos"]["imported"].as_u64()), (Some(1), Some(1)), "{last}");
+        let args = calls.lock().unwrap().clone();
+        assert_eq!(args.len(), 1, "only the export's files went to Photos");
+        assert!(args[0].last().unwrap().contains("export"), "{:?}", args[0].last());
+        let _ = std::fs::remove_dir_all(&out);
     }
 
     /// Dragging grid photos onto an album row adds them to the album.

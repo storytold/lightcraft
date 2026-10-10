@@ -660,13 +660,18 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
 }
 
 impl crate::Session {
-    /// Install the filesystem file hooks (desktop, CLI, MCP headless).
+    /// Install the filesystem file hooks (desktop, CLI, MCP headless), and on macOS the Apple Photos
+    /// runner ([`crate::apple_photos::osascript`]; installed, not run).
     pub fn with_fs(mut self) -> Self {
         let (l, p) = fs_hooks();
         self.media.file_loader = Some(l);
         self.media.file_probe = Some(p);
         self.media.preview_loader = Some(fs_preview_loader());
         self.media.denoise.loader = Some(fs_pair_loader());
+        #[cfg(target_os = "macos")]
+        {
+            self.apple_photos = Some(crate::apple_photos::osascript());
+        }
         self
     }
 }

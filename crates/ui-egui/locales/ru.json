@@ -1590,5 +1590,9 @@
   "Finding faces": "Поиск лиц",
   "Quit Anyway": "Всё равно выйти",
   "Synchronizing folder": "Синхронизация папки",
-  "Looking for changes": "Поиск изменений"
+  "Looking for changes": "Поиск изменений",
+  "Add to Apple Photos": "Добавить в Apple Фото",
+  "Adding to Apple Photos…": "Добавление в Apple Фото…",
+  "not added to Apple Photos (cancelled)": "не добавлено в Apple Фото (отменено)",
+  "The first time, macOS asks whether LightCraft may control Photos.": "В первый раз macOS спросит, может ли LightCraft управлять приложением «Фото»."
 }

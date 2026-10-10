@@ -78,8 +78,69 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(list(s))
 }
 
+/// `export.addToPhotos`: there is a runner (the desktop app and lightcraft-cli on macOS).
+#[cfg(not(target_arch = "wasm32"))]
+fn photos_enabled(s: &Session) -> std::result::Result<(), String> {
+    match &s.apple_photos {
+        Some(_) => Ok(()),
+        None => Err(crate::apple_photos::unavailable().into()),
+    }
+}
+
+/// `export.addToPhotos {paths, album?, wait?}`: add files already on disk to Apple Photos, as a
+/// job: here (the default without a window: lightcraft-cli, the MCP server, scripts), or on a
+/// worker thread (the default in the desktop app, which answers control requests on its UI
+/// thread and must not wait minutes for Photos; see [`Session::apple_photos_background`]).
+#[cfg(not(target_arch = "wasm32"))]
+fn add_to_photos(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "export.addToPhotos";
+    let runner = s.apple_photos.clone().ok_or_else(|| bad(ID, crate::apple_photos::unavailable()))?;
+    if let Some(k) = p.as_object().and_then(|o| o.keys().find(|k| !matches!(k.as_str(), "paths" | "album" | "wait"))) {
+        return Err(bad(ID, format!("unknown parameter `{k}` (one of paths, album, wait)")));
+    }
+    let paths: Vec<String> = match p.get("paths") {
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|v| v.as_str().map(str::to_string))
+            .collect::<Option<_>>()
+            .ok_or_else(|| bad(ID, "`paths` must be an array of file paths"))?,
+        _ => return Err(bad(ID, "missing `paths` (an array of absolute file paths)")),
+    };
+    let album = match p.get("album") {
+        None | Some(Value::Null) => "",
+        Some(Value::String(a)) => a.as_str(),
+        Some(_) => return Err(bad(ID, "`album` must be a string")),
+    };
+    // a window (UI thread) doesn't wait by default; a one-shot process must, or it would end
+    // in the middle of the import
+    let wait = match p.get("wait") {
+        None | Some(Value::Null) => !s.apple_photos_background,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(bad(ID, "`wait` must be true or false")),
+    };
+    let job = crate::apple_photos::import_job(&runner, &s.apple_photos_imports, paths, album, !wait).map_err(|e| bad(ID, e))?;
+    match job.outcome() {
+        Some(crate::apple_photos::Outcome::Failed(e)) => Err(bad(ID, e)),
+        _ => Ok(job.json()),
+    }
+}
+
+/// `export.photosImports {job?}`: this session's Apple Photos imports, or one of them.
+#[cfg(not(target_arch = "wasm32"))]
+fn photos_imports(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "export.photosImports";
+    match p.get("job") {
+        None | Some(Value::Null) => Ok(json!({"imports": s.apple_photos_imports.all().iter().map(|j| j.json()).collect::<Vec<_>>()})),
+        Some(v) => {
+            let id = v.as_u64().ok_or_else(|| bad(ID, "`job` must be an import number"))?;
+            s.apple_photos_imports.get(id).map(|j| j.json()).ok_or_else(|| bad(ID, format!("no import {id} (see export.photosImports)")))
+        }
+    }
+}
+
 pub fn specs() -> Vec<CommandSpec> {
-    vec![
+    #[allow(unused_mut)]
+    let mut v = vec![
         cmd!(query "export.contactSheet", "Export Contact Sheet PDF", [], None,
             "{path, ids?: photo ids (default selection), paper?: a4|letter, landscape?: bool, columns?: 1..8, rows?: 1..10, captions?: bool} → {path, pages, photos, bytes}; replaces an existing output, never an original",
             always, |s, p| {
@@ -123,5 +184,28 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"path": path}))
             }
         ),
-    ]
+    ];
+    // Apple Events to Photos' import command (macOS); not in the web build. Not journaled: a
+    // replay must not import again.
+    #[cfg(not(target_arch = "wasm32"))]
+    v.push(cmd!(
+        query "export.addToPhotos",
+        "Add to Apple Photos",
+        [],
+        None,
+        "{paths: [absolute file paths], album?: name (an album at the top level of Photos, made when missing; default none), wait?} → once Photos is done, {job, running: false, requested, album, imported, ids: [Photos media item ids], warning?}; with wait: false, at once {job, running: true, requested, album} and the outcome later from export.photosImports {job}. wait defaults to true without a window (lightcraft-cli, the MCP server) and to false in the desktop app (its control requests are answered on the UI thread). macOS: asks Photos to import the files (the first time, macOS asks the user to allow LightCraft to control Photos). One import runs at a time, and an export adding to Photos reserves it before writing: another is refused until it ends. app.export does this for the files it writes with `addToPhotos: true`",
+        photos_enabled,
+        add_to_photos
+    ));
+    #[cfg(not(target_arch = "wasm32"))]
+    v.push(cmd!(
+        query "export.photosImports",
+        "Apple Photos Imports",
+        [],
+        None,
+        "{job?} → {imports: [{job, running, exporting?, requested, album, imported?, ids?, warning?, error?, skipped?}]} (this session's, oldest first), or the one job: how Add to Apple Photos is getting on (exporting: reserved by an export still writing its files)",
+        always,
+        photos_imports
+    ));
+    v
 }

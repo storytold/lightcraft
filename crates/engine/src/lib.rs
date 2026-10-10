@@ -15,6 +15,8 @@
 extern crate lightcraft_denoise_core as lightcraft_denoise;
 
 pub mod activity;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod apple_photos;
 pub mod availability;
 pub(crate) mod camera_preview;
 pub mod camera_profiles;
@@ -276,6 +278,20 @@ pub struct Session {
     /// Untouched Local records of folders not browsed for this many days are forgotten when the
     /// library opens (0 = never; persisted in prefs.json). See `cmd/browse.rs`.
     pub forget_local_days: u32,
+    /// Adds exported files to Apple Photos ([`apple_photos`]): `/usr/bin/osascript`, installed by
+    /// [`Session::with_fs`] on macOS; `None` elsewhere and in sessions without a file system. Tests
+    /// put a fake here.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub apple_photos: Option<apple_photos::Runner>,
+    /// This session's Apple Photos imports, running or finished (`export.photosImports`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub apple_photos_imports: apple_photos::Imports,
+    /// Apple Photos imports run on a worker by default (`export.addToPhotos` without `wait`,
+    /// `app.export` without `background`): set by the desktop app, which answers control requests
+    /// on its UI thread. Off (the default), they wait for Photos, so a one-shot process
+    /// (lightcraft-cli, a script) never ends in the middle of one.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub apple_photos_background: bool,
 }
 
 impl Default for Session {
@@ -355,6 +371,12 @@ impl Session {
             cache_mb: 0,
             smart_previews_dir: None,
             forget_local_days: lightcraft_catalog::DEFAULT_FORGET_DAYS,
+            #[cfg(not(target_arch = "wasm32"))]
+            apple_photos: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            apple_photos_imports: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            apple_photos_background: false,
         }
     }
 

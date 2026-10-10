@@ -440,3 +440,283 @@ fn hdr_avif_export_is_pq_rec2020() {
     // a photo without an HDR edit exports as an ordinary (sRGB) AVIF
     assert!(nclx(&sdr.bytes).is_none_or(|c| c[3] != 16));
 }
+
+/// Issue #236: Add to Apple Photos after an export. A fake runner stands in for osascript: tests
+/// never start it, nor Photos.
+#[cfg(not(target_arch = "wasm32"))]
+mod apple_photos {
+    use std::sync::{Arc, Mutex};
+
+    use serde_json::{Value, json};
+
+    use super::disk_batch;
+    use crate::Session;
+    use crate::apple_photos::{Imports, MARKER, Output, Runner};
+    use crate::export::{AfterExport, Destination, ExportOptions};
+    use crate::tests_xmp::temp_dir;
+
+    type Calls = Arc<Mutex<Vec<Vec<String>>>>;
+
+    /// Records the arguments; Photos "imports" the first `keep` files (all: `usize::MAX`).
+    fn fake(keep: usize) -> (Runner, Calls) {
+        let calls: Calls = Arc::default();
+        let c = calls.clone();
+        let r: Runner = Arc::new(move |args: &[String], _| {
+            c.lock().unwrap().push(args.to_vec());
+            let files = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 2;
+            let ids: Vec<String> = (0..files.min(keep)).map(|i| format!("ID-{i}/L0/001")).collect();
+            Ok(Output { status: Some(0), stdout: ids.join("\n") + "\n", stderr: String::new() })
+        });
+        (r, calls)
+    }
+
+    /// The paths after the album: the files Photos was asked to import.
+    fn imported_paths(args: &[String]) -> Vec<String> {
+        args[args.iter().position(|a| a == MARKER).unwrap() + 2..].to_vec()
+    }
+
+    fn export_two(s: &mut Session, tag: &str) -> Vec<Value> {
+        let dir = temp_dir(tag);
+        let ids: Vec<_> = s.visible().iter().copied().take(2).collect();
+        let o = ExportOptions::from_json(&json!({"longEdge": 48, "naming": "{name}-{seq}"}));
+        let to = Destination { dir: dir.to_string_lossy().into(), exact: None };
+        let mut files = Vec::new();
+        for id in ids {
+            files.extend(disk_batch(s, id, &o, &to).unwrap());
+        }
+        files
+    }
+
+    #[test]
+    fn exported_files_go_to_photos_in_order() {
+        let mut s = Session::with_demo();
+        let files = export_two(&mut s, "photos-flow");
+        let written: Vec<String> = files.iter().map(|f| f["path"].as_str().unwrap().to_string()).collect();
+        assert_eq!(written.len(), 2);
+        let (runner, calls) = fake(usize::MAX);
+        let imports = Imports::default();
+        let after = AfterExport::apple_photos(runner.clone(), "  Trip \"2026\"\n ", &imports).unwrap();
+        // a skipped file and a failed photo are not sent
+        let mut results = files.clone();
+        results.insert(1, json!({"skipped": "/elsewhere/x.jpg"}));
+        results.push(json!({"photo": 9, "file": "y", "error": "no source"}));
+        let out = after.run(&results, false).unwrap();
+        assert_eq!(out["imported"], 2, "{out}");
+        assert_eq!(out["requested"], 2);
+        assert_eq!(out["ids"], json!(["ID-0/L0/001", "ID-1/L0/001"]));
+        assert_eq!(out["album"], "Trip \"2026\"");
+        assert!(out.get("warning").is_none());
+        let args = calls.lock().unwrap()[0].clone();
+        assert_eq!(imported_paths(&args), written, "the files written, in order, as whole arguments");
+        assert!(written.iter().all(|p| std::path::Path::new(p).is_absolute()));
+        assert_eq!(args[args.iter().position(|a| a == MARKER).unwrap() + 1], "Trip \"2026\"");
+        // a cancelled export adds nothing
+        let out = AfterExport::apple_photos(runner.clone(), "", &imports).unwrap().run(&files, true).unwrap();
+        assert!(out["skipped"].as_str().unwrap().contains("cancelled"));
+        assert_eq!(calls.lock().unwrap().len(), 1);
+        // Photos took one of the two: said so, not an error
+        let (runner, _) = fake(1);
+        let out = AfterExport::apple_photos(runner, "", &Imports::default()).unwrap().run(&files, false).unwrap();
+        assert_eq!((out["imported"].as_u64(), out["requested"].as_u64()), (Some(1), Some(2)));
+        assert!(out["warning"].as_str().unwrap().contains("1 of 2"), "{out}");
+        assert!(out["album"].is_null());
+        // permission refused: the outcome says where to allow it; the files stay written
+        let denied: Runner = Arc::new(|_: &[String], _| {
+            Ok(Output {
+                status: Some(1),
+                stdout: String::new(),
+                stderr: "execution error: Not authorized to send Apple events to Photos. (-1743)".into(),
+            })
+        });
+        let out = AfterExport::apple_photos(denied, "", &Imports::default()).unwrap().run(&files, false).unwrap();
+        assert!(out["error"].as_str().unwrap().contains("Privacy & Security › Automation"), "{out}");
+        assert!(written.iter().all(|p| std::path::Path::new(p).is_file()));
+        // nothing asked: nothing done
+        assert!(AfterExport::default().is_none());
+        assert_eq!(AfterExport::default().run(&files, false), None);
+    }
+
+    #[test]
+    fn photos_is_refused_before_anything_is_written_when_it_cannot_be_reached() {
+        let mut s = Session::with_demo();
+        assert!(s.apple_photos.is_none(), "only with_fs installs the runner");
+        let on = ExportOptions { add_to_photos: true, ..Default::default() };
+        let e = s.after_export(&on).err().unwrap();
+        if cfg!(target_os = "macos") {
+            assert!(e.contains("isn't connected in this session"), "{e}");
+        } else {
+            assert_eq!(e, "Apple Photos is only available on macOS");
+        }
+        assert!(s.after_export(&ExportOptions::default()).unwrap().is_none());
+        // with a runner: macOS adds, other platforms still refuse
+        let (runner, calls) = fake(usize::MAX);
+        s.apple_photos = Some(runner);
+        let after = s.after_export(&on);
+        assert_eq!(after.is_ok(), cfg!(target_os = "macos"), "{:?}", after.as_ref().err());
+        match after {
+            Ok(after) => {
+                let files = export_two(&mut s, "photos-session");
+                assert_eq!(after.run(&files, false).unwrap()["imported"], 2);
+                assert_eq!(calls.lock().unwrap().len(), 1);
+            }
+            Err(e) => assert!(e.contains("only available on macOS"), "{e}"),
+        }
+    }
+
+    #[test]
+    fn the_add_to_photos_command_needs_a_runner_and_checks_its_input() {
+        let mut s = Session::with_demo();
+        let files = export_two(&mut s, "photos-cmd");
+        let paths: Vec<String> = files.iter().map(|f| f["path"].as_str().unwrap().to_string()).collect();
+        let info = |s: &Session| s.commands().into_iter().find(|c| c.id == "export.addToPhotos").unwrap();
+        // no runner: listed, disabled, with the reason
+        let i = info(&s);
+        assert!(!i.enabled);
+        let why = i.disabled_reason.unwrap();
+        assert!(why.contains(if cfg!(target_os = "macos") { "isn't connected" } else { "only available on macOS" }), "{why}");
+        let e = s.execute("export.addToPhotos", &json!({"paths": paths})).unwrap_err().to_string();
+        assert!(e.contains("Apple Photos"), "{e}");
+        let (runner, calls) = fake(usize::MAX);
+        s.apple_photos = Some(runner);
+        assert!(info(&s).enabled);
+        // no window: it waits for Photos by default
+        let r = s.execute("export.addToPhotos", &json!({"paths": paths, "album": "Läufe/日本 \\ \"q\""})).unwrap();
+        assert_eq!((r["imported"].as_u64(), r["running"].as_bool(), r["job"].as_u64()), (Some(2), Some(false), Some(1)), "{r}");
+        assert_eq!(r["album"], "Läufe/日本 \\ \"q\"");
+        assert_eq!(imported_paths(&calls.lock().unwrap()[0]), paths);
+        // bad input never reaches the runner (paths from the temp folder: absolute on every platform)
+        let missing = std::env::temp_dir().join("lc-photos-nonexistent").join("a.jpg").to_string_lossy().into_owned();
+        for (p, msg) in [
+            (json!({}), "missing `paths`"),
+            (json!({"paths": "a.jpg"}), "missing `paths`"),
+            (json!({"paths": [1]}), "array of file paths"),
+            (json!({"paths": []}), "no files"),
+            (json!({"paths": ["relative.jpg"]}), "absolute"),
+            (json!({"paths": [missing]}), "no such file"),
+            (json!({"paths": paths, "album": 3}), "`album` must be a string"),
+            (json!({"paths": paths, "wait": "yes"}), "`wait` must be true or false"),
+            (json!({"paths": paths, "albm": "x"}), "unknown parameter `albm`"),
+        ] {
+            let e = s.execute("export.addToPhotos", &p).unwrap_err().to_string();
+            assert!(e.contains(msg), "{p}: {e}");
+        }
+        assert_eq!(calls.lock().unwrap().len(), 1);
+        // not journaled: replaying actions must not import again
+        assert!(!s.journal.iter().any(|(id, _)| id == "export.addToPhotos"));
+    }
+
+    /// The desktop app answers control requests on its UI thread: `export.addToPhotos` must not
+    /// wait there for Photos (minutes, or a permission prompt). It returns the running job; the
+    /// outcome comes from `export.photosImports`; a second import, or an export asking for Photos,
+    /// is refused until it ends, so a retry never adds the files twice.
+    #[test]
+    fn a_slow_photos_import_runs_in_the_background() {
+        let mut s = Session::with_demo();
+        let files = export_two(&mut s, "photos-slow");
+        let paths: Vec<String> = files.iter().map(|f| f["path"].as_str().unwrap().to_string()).collect();
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        let wait = Mutex::new(wait);
+        let runner: Runner = Arc::new(move |args: &[String], _| {
+            // a regression (waiting on the caller's thread) fails after 20 s instead of hanging
+            let _ = wait.lock().unwrap().recv_timeout(std::time::Duration::from_secs(20));
+            let n = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 2;
+            Ok(Output { status: Some(0), stdout: (0..n).map(|i| format!("ID-{i}\n")).collect(), stderr: String::new() })
+        });
+        s.apple_photos = Some(runner);
+        s.apple_photos_background = true; // as in the desktop app
+        let t0 = std::time::Instant::now();
+        let r = s.execute("export.addToPhotos", &json!({"paths": paths, "album": "Slow"})).unwrap();
+        assert!(t0.elapsed() < std::time::Duration::from_secs(5), "answered without waiting for Photos");
+        assert_eq!(r, json!({"job": 1, "running": true, "requested": 2, "album": "Slow"}));
+        let status = |s: &mut Session| s.execute("export.photosImports", &json!({"job": 1})).unwrap();
+        assert_eq!(status(&mut s)["running"], true);
+        // a retry is refused, and says why
+        let e = s.execute("export.addToPhotos", &json!({"paths": paths})).unwrap_err().to_string();
+        assert!(e.contains("still adding 2 file(s) from an earlier request (import 1)"), "{e}");
+        if cfg!(target_os = "macos") {
+            let on = ExportOptions { add_to_photos: true, ..Default::default() };
+            assert!(s.after_export(&on).err().unwrap().contains("still adding"), "refused before writing anything");
+        }
+        go.send(()).unwrap();
+        while status(&mut s)["running"] == true {
+            assert!(t0.elapsed() < std::time::Duration::from_secs(20), "the import finishes");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let done = status(&mut s);
+        assert_eq!((done["imported"].as_u64(), done["album"].as_str()), (Some(2), Some("Slow")), "{done}");
+        let all = s.execute("export.photosImports", &json!({})).unwrap();
+        assert_eq!(all["imports"].as_array().map(Vec::len), Some(1));
+        assert!(s.execute("export.photosImports", &json!({"job": 7})).unwrap_err().to_string().contains("no import 7"));
+        // finished: the next one may start
+        go.send(()).unwrap();
+        assert_eq!(s.execute("export.addToPhotos", &json!({"paths": paths, "wait": true})).unwrap()["job"], 2);
+    }
+
+    /// Review of #236: an export adding to Photos reserves the import before it writes its files.
+    /// While it renders, `export.addToPhotos` is refused, naming the export's job, instead of
+    /// taking Photos and leaving the export to fail its Photos step after writing.
+    #[test]
+    fn an_export_holds_photos_from_before_it_writes() {
+        let mut s = Session::with_demo();
+        let (runner, calls) = fake(usize::MAX);
+        s.apple_photos = Some(runner.clone());
+        let elsewhere = export_two(&mut s, "photos-hold-other");
+        let other: Vec<String> = elsewhere.iter().map(|f| f["path"].as_str().unwrap().to_string()).collect();
+        // what Session::after_export does on macOS (it refuses other platforms first)
+        let after = AfterExport::apple_photos(runner, "Held", &s.apple_photos_imports).unwrap();
+        let job = s.execute("export.photosImports", &json!({"job": 1})).unwrap();
+        assert_eq!((job["running"].as_bool(), job["exporting"].as_bool()), (Some(true), Some(true)), "{job}");
+        let e = s.execute("export.addToPhotos", &json!({"paths": other})).unwrap_err().to_string();
+        assert!(e.contains("An export is about to add its files to Apple Photos (import 1)"), "{e}");
+        if cfg!(target_os = "macos") {
+            let on = ExportOptions { add_to_photos: true, ..Default::default() };
+            assert!(s.after_export(&on).err().unwrap().contains("(import 1)"), "a second export is refused before writing");
+        }
+        assert!(calls.lock().unwrap().is_empty());
+        // the export writes its files and hands them over: imported under its own job
+        let files = export_two(&mut s, "photos-hold");
+        let out = after.run(&files, false).unwrap();
+        assert_eq!((out["job"].as_u64(), out["imported"].as_u64(), out["album"].as_str()), (Some(1), Some(2), Some("Held")), "{out}");
+        // then the slot is free
+        assert_eq!(s.execute("export.addToPhotos", &json!({"paths": other})).unwrap()["job"], 2);
+        // an export that fails (its AfterExport dropped) frees it too
+        drop(AfterExport::apple_photos(fake(usize::MAX).0, "", &s.apple_photos_imports).unwrap());
+        assert!(s.apple_photos_imports.running().is_none());
+        assert_eq!(s.execute("export.addToPhotos", &json!({"paths": other})).unwrap()["job"], 4);
+    }
+
+    /// Review of #236: a runner that panics while the command or an export waits for it is that
+    /// import's error; the slot is freed, so the next import isn't refused as "still running"
+    /// and a process ending doesn't wait for it.
+    #[test]
+    fn a_panicking_runner_never_holds_photos() {
+        let mut s = Session::with_demo();
+        let files = export_two(&mut s, "photos-panic");
+        let paths: Vec<String> = files.iter().map(|f| f["path"].as_str().unwrap().to_string()).collect();
+        s.apple_photos = Some(Arc::new(|_: &[String], _| panic!("runner exploded")));
+        // the command (no window: it waits)
+        let e = s.execute("export.addToPhotos", &json!({"paths": paths})).unwrap_err().to_string();
+        assert!(e.contains("stopped unexpectedly"), "{e}");
+        assert!(s.apple_photos_imports.running().is_none());
+        assert_eq!(s.execute("export.photosImports", &json!({"job": 1})).unwrap()["running"], false);
+        // an export's reservation
+        let runner = s.apple_photos.clone().unwrap();
+        let out = AfterExport::apple_photos(runner, "", &s.apple_photos_imports).unwrap().run(&files, false).unwrap();
+        assert!(out["error"].as_str().unwrap().contains("stopped unexpectedly"), "{out}");
+        assert!(s.apple_photos_imports.running().is_none());
+        assert!(!s.wait_for_photos_imports(), "nothing left to wait for");
+        // and the next import runs
+        let (good, _) = fake(usize::MAX);
+        s.apple_photos = Some(good);
+        assert_eq!(s.execute("export.addToPhotos", &json!({"paths": paths})).unwrap()["imported"], 2);
+    }
+
+    /// The desktop app, lightcraft-cli and the MCP server get the real runner from `with_fs`, on
+    /// macOS only. (Installed, never run here.)
+    #[test]
+    fn with_fs_installs_the_runner_on_macos_only() {
+        let s = Session::new().with_fs();
+        assert_eq!(s.apple_photos.is_some(), cfg!(target_os = "macos"));
+        assert_eq!(s.commands().into_iter().find(|c| c.id == "export.addToPhotos").unwrap().enabled, cfg!(target_os = "macos"));
+    }
+}

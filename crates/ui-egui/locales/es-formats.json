@@ -228,5 +228,8 @@
   "+{n} more": "+{n} más",
   "1 task is still running: {names}. Quitting stops it.": "1 tarea sigue en curso: {names}. Salir la detiene.",
   "{n} tasks are still running: {names}. Quitting stops them.": "{n} tareas siguen en curso: {names}. Salir las detiene.",
-  "{what} merge cancelled": "Combinación {what} cancelada"
+  "{what} merge cancelled": "Combinación {what} cancelada",
+  "not added to Apple Photos: {e}": "no se añadieron a Fotos de Apple: {e}",
+  "{n} added to Apple Photos album “{album}”": "{n} añadidas al álbum “{album}” de Fotos de Apple",
+  "{n} added to Apple Photos": "{n} añadidas a Fotos de Apple"
 }

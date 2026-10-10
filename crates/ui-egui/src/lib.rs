@@ -1068,6 +1068,7 @@ impl LightcraftApp {
         panels::library_problem::show(self, &ctx);
         export_task::poll(self, &ctx);
         panels::activity::show(self, &ctx);
+        export_task::poll_photos(self, &ctx);
         pick::poll(self, &ctx);
         panels::grid::drag_feedback(self, &ctx);
         panels::left::album_drag_feedback(self, &ctx);

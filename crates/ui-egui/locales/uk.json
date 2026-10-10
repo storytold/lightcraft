@@ -2070,5 +2070,9 @@
   "Downloading model": "Завантаження моделі",
   "Finding faces": "Пошук облич",
   "Synchronizing folder": "Синхронізація папки",
-  "Looking for changes": "Пошук змін"
+  "Looking for changes": "Пошук змін",
+  "Add to Apple Photos": "Додати до Apple Фото",
+  "Adding to Apple Photos…": "Додавання до Apple Фото…",
+  "not added to Apple Photos (cancelled)": "не додано до Apple Фото (скасовано)",
+  "The first time, macOS asks whether LightCraft may control Photos.": "Першого разу macOS запитає, чи може LightCraft керувати програмою «Фото»."
 }

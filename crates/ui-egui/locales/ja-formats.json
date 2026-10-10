@@ -228,5 +228,8 @@
   "+{n} more": "ほか{n}件",
   "1 task is still running: {names}. Quitting stops it.": "1件のタスクが実行中です：{names}。終了すると停止します。",
   "{n} tasks are still running: {names}. Quitting stops them.": "{n}件のタスクが実行中です：{names}。終了すると停止します。",
-  "{what} merge cancelled": "{what}合成をキャンセルしました"
+  "{what} merge cancelled": "{what}合成をキャンセルしました",
+  "not added to Apple Photos: {e}": "Appleの写真に追加されませんでした：{e}",
+  "{n} added to Apple Photos album “{album}”": "{n}件をAppleの写真のアルバム「{album}」に追加しました",
+  "{n} added to Apple Photos": "{n}件をAppleの写真に追加しました"
 }

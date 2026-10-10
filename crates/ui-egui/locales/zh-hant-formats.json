@@ -228,5 +228,8 @@
   "+{n} more": "還有 {n} 項",
   "1 task is still running: {names}. Quitting stops it.": "仍有 1 個工作在執行：{names}。結束將停止它。",
   "{n} tasks are still running: {names}. Quitting stops them.": "仍有 {n} 個工作在執行：{names}。結束將停止它們。",
-  "{what} merge cancelled": "已取消{what}合併"
+  "{what} merge cancelled": "已取消{what}合併",
+  "not added to Apple Photos: {e}": "未加入 Apple 照片：{e}",
+  "{n} added to Apple Photos album “{album}”": "已將 {n} 個加入 Apple 照片相簿「{album}」",
+  "{n} added to Apple Photos": "已將 {n} 個加入 Apple 照片"
 }
