@@ -509,7 +509,6 @@ impl Module for Placeholder {
 static LIBRARY: Library = Library;
 static DEVELOP: Develop = Develop;
 static MAP: Placeholder = Placeholder(ModuleId::Map);
-static BOOK: Placeholder = Placeholder(ModuleId::Book);
 static SLIDESHOW: Placeholder = Placeholder(ModuleId::Slideshow);
 static PRINT: Placeholder = Placeholder(ModuleId::Print);
 static WEB: Placeholder = Placeholder(ModuleId::Web);
@@ -519,7 +518,7 @@ pub fn get(id: ModuleId) -> &'static dyn Module {
         ModuleId::Library => &LIBRARY,
         ModuleId::Develop => &DEVELOP,
         ModuleId::Map => &MAP,
-        ModuleId::Book => &BOOK,
+        ModuleId::Book => &crate::book::BOOK,
         ModuleId::Slideshow => &SLIDESHOW,
         ModuleId::Print => &PRINT,
         ModuleId::Web => &WEB,
@@ -736,6 +735,39 @@ pub const SHELL_COMMANDS: &[crate::menus::UiCommand] = &[
     ("second.filter", "Secondary Window Filter", None, ""),
     ("second.filmstrip", "Secondary Filmstrip", None, "Window>Secondary Display"),
     ("photo.flagToggle", "Toggle Flagged Status", None, "Photo>Set Flag"),
+    // the Book module (crate::book)
+    ("book.new", "New Book", None, ""),
+    ("book.get", "Book Document", None, ""),
+    ("book.autoLayout", "Auto Layout", None, ""),
+    ("book.clearLayout", "Clear Layout", None, ""),
+    ("book.addPage", "Add Page", None, ""),
+    ("book.removePage", "Remove Page", None, ""),
+    ("book.movePage", "Move Page", None, ""),
+    ("book.template", "Change Page Template", None, ""),
+    ("book.place", "Place Photo", None, ""),
+    ("book.swap", "Swap Photos", None, ""),
+    ("book.text", "Set Cell Text", None, ""),
+    ("book.pageText", "Page Text", None, ""),
+    ("book.textPreset", "Text Style Preset", None, ""),
+    ("book.guides", "Guides", None, ""),
+    ("book.favorite", "Favorite Template", None, ""),
+    ("book.templates", "Page Templates", None, ""),
+    ("book.presets", "Auto Layout Presets", None, ""),
+    ("book.settings", "Book Settings", None, ""),
+    ("book.cell", "Cell Settings", None, ""),
+    ("book.photoText", "Photo Text", None, ""),
+    ("book.type", "Type", None, ""),
+    ("book.background", "Background", None, ""),
+    ("book.pageNumbers", "Page Numbers", None, ""),
+    ("book.view", "Book View", None, ""),
+    ("book.go", "Go to Book Page", None, ""),
+    ("book.select", "Select Book Cell", None, ""),
+    ("book.export", "Export Book…", None, ""),
+    ("book.exportStatus", "Book Export Status", None, ""),
+    ("book.save", "Save Book", None, ""),
+    ("book.open", "Open Saved Book", None, ""),
+    ("book.saved", "Saved Books", None, ""),
+    ("book.deleteSaved", "Delete Saved Book", None, ""),
 ];
 
 /// Is `id` a shell command, and is it enabled?
@@ -756,6 +788,9 @@ pub fn enabled(app: &DacApp, id: &str) -> Option<bool> {
 pub fn run(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
     if !SHELL_COMMANDS.iter().any(|c| c.0 == id) {
         return None;
+    }
+    if crate::book::is_book_command(id) {
+        return Some(crate::book::run(app, id, p));
     }
     Some(run_inner(app, id, p))
 }

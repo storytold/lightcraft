@@ -289,6 +289,9 @@ fn run(book: &mut Book, id: &str, p: &Value) -> Result<Value> {
             Ok(json!({"from": pb, "to": pa}))
         }
         "book.cell" => {
+            if ["zoom", "padding"].iter().any(|k| p.get(*k).is_some_and(|v| v.as_f64().is_none() && !v.is_object())) {
+                return Err(bad("zoom and padding must be numbers"));
+            }
             let c = cell_mut(book, p)?;
             if let Some(v) = p.get("padding") {
                 c.padding = match v.as_f64() {
@@ -582,6 +585,7 @@ mod tests {
             ("book.settings", json!({"size": "custom", "width": f64::MAX})),
             ("book.settings", json!({"bleed": -1})),
             ("book.cell", json!({"page": 1, "cell": 0, "zoom": 1e9})),
+            ("book.cell", json!({"page": 1, "cell": 0, "zoom": "x"})),
             ("book.cell", json!({"page": 1, "cell": 0, "pan": [9, 9]})),
             ("book.cell", json!({"page": 99, "cell": 0})),
             ("book.cell", json!({"page": 1, "cell": 99})),

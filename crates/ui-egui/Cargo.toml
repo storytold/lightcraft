@@ -20,6 +20,10 @@ dac-catalog = { workspace = true }
 web-time = { workspace = true }
 dac-engine = { workspace = true }
 dac-preview = { workspace = true }
+# the Book module (owned, Phase 3)
+dac-book = { workspace = true }
+dac-layout = { workspace = true }
+dac-text = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
