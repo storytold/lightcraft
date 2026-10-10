@@ -13,4 +13,3 @@ serde_json = { workspace = true }
 workspace = true
 
 [dev-dependencies]
-dac-fuzzkit = { workspace = true }

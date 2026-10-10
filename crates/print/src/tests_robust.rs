@@ -86,15 +86,13 @@ fn hostile_ipp_answers_never_panic() {
         [b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".as_slice(), format!("{:x}\r\n", body.len()).as_bytes(), &body, b"\r\n0\r\n\r\n"]
             .concat();
     dac_fuzzkit::run("print.ipp", &[&body, &http, &chunked], 5000, |b| {
-        for msg in [Message::decode(b), http_body(b).and_then(|x| Message::decode(&x))] {
-            if let Ok(m) = msg {
-                let info = parse_printer_info(&m);
-                let _ = info.accepts("application/pdf");
-                for media in &info.media {
-                    let _ = pwg_media_size(&media.name);
-                }
-                let _ = m.encode();
+        for m in [Message::decode(b), http_body(b).and_then(|x| Message::decode(&x))].into_iter().flatten() {
+            let info = parse_printer_info(&m);
+            let _ = info.accepts("application/pdf");
+            for media in &info.media {
+                let _ = pwg_media_size(&media.name);
             }
+            let _ = m.encode();
         }
     });
 }

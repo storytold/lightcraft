@@ -279,7 +279,7 @@ fn resync(line: &[u8], last: u64) -> Option<(usize, (u64, Op))> {
     const START: &[u8] = b"{\"seq\":";
     (1..line.len().saturating_sub(START.len() - 1)).filter(|&i| line[i..].starts_with(START)).find_map(|i| {
         let rec = std::str::from_utf8(&line[i..]).ok().map(|l| l.trim_end_matches('\r')).and_then(decode_record)?;
-        (rec.0 <= last + 1).then_some((i, rec))
+        (rec.0 <= last.saturating_add(1)).then_some((i, rec))
     })
 }
 
@@ -445,7 +445,7 @@ impl Journal {
                     let _ = op;
                     report.stale += 1;
                 }
-                Some((seq, op)) if seq == j.seq + 1 => {
+                Some((seq, op)) if Some(seq) == j.seq.checked_add(1) => {
                     if catalog.apply(op).is_err() {
                         report.failed += 1;
                     } else {
@@ -531,7 +531,10 @@ impl Journal {
         let mut buf = String::new();
         let mut seq = self.seq;
         for op in ops {
-            seq += 1;
+            // a damaged snapshot can claim the last sequence number: refuse rather than wrap
+            seq = seq
+                .checked_add(1)
+                .ok_or_else(|| CatalogError::Corrupt("the catalog's op sequence is exhausted (restore it from a backup)".into()))?;
             buf.push_str(&encode_record(seq, op));
             buf.push('\n');
         }
@@ -582,7 +585,7 @@ impl Journal {
             log::warn!("catalog: background snapshot failed ({e}); writing one now");
         }
         let t0 = web_time::Instant::now();
-        let seq = self.seq + unlogged;
+        let seq = self.seq.saturating_add(unlogged);
         let written = if self.v4 {
             #[cfg(not(target_arch = "wasm32"))]
             {
