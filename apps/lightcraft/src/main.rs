@@ -761,10 +761,8 @@ fn main() -> eframe::Result {
             let (mut session, problem) = open_session(in_memory, library_dir, seed_demo && files.is_empty());
             // AI masks: the SAM 3 checkpoint (facebook/sam3) in <config>/models/sam3, or LIGHTCRAFT_SAM3_DIR
             // (never required: without it, AI masks offer to download it; see docs/ai-masks.md)
-            session.segmenter.dir =
-                std::env::var_os("LIGHTCRAFT_SAM3_DIR").map(std::path::PathBuf::from).or_else(|| config_dir().map(|d| d.join("models").join("sam3")));
-            // the user's own download locations, one base URL per line (LIGHTCRAFT_SAM3_MIRRORS too)
-            session.segmenter.mirrors_file = config_dir().map(|d| d.join("models").join("sam3-mirrors.txt"));
+            // and the user's own download locations, one base URL per line (LIGHTCRAFT_SAM3_MIRRORS too)
+            session = session.with_default_sam3_model();
             let mut app = LightcraftApp::new(session, services(cc.egui_ctx.clone(), app_log_file.as_deref()));
             if let Some(ui) = prefs {
                 app.ui = ui;
