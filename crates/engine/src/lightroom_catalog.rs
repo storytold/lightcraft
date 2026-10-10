@@ -2,7 +2,7 @@
 //! Lightroom, Python and a C SQLite runtime are not needed. Original paths stay in place.
 //! Raw settings are archived before mutation; mapped edits are approximations, not Adobe renders.
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -336,6 +336,29 @@ fn committed_wal_len(main: &[u8], wal: &[u8]) -> Result<usize, String> {
     Ok(committed)
 }
 
+/// Where a root folder is when its `absolutePath` isn't a folder here (the catalog came from
+/// another computer): `relativePathFromCatalog`, which Lightroom records for roots on the
+/// catalog's volume, resolved against the catalog's folder, if that is a folder.
+fn relocated_root(absolute: &str, relative: &str, catalog: &Path) -> Option<PathBuf> {
+    if relative.is_empty() || !Path::new(relative).is_relative() || Path::new(absolute).is_dir() {
+        return None;
+    }
+    let dir = std::path::absolute(catalog).ok()?.parent()?.join(relative);
+    let mut out = PathBuf::new();
+    for part in dir.components() {
+        match part {
+            Component::ParentDir => {
+                if !out.pop() {
+                    return None;
+                }
+            }
+            Component::CurDir => {}
+            part => out.push(part),
+        }
+    }
+    out.is_dir().then_some(out)
+}
+
 /// Inspect `.lrcat` plus committed WAL pages without modifying either source file.
 pub fn read(path: &Path) -> Result<CatalogImport, String> {
     let cancel = AtomicBool::new(false);
@@ -428,6 +451,21 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
         }
         out
     };
+    let mut root_paths = HashMap::new();
+    let mut root_ids: Vec<_> = roots.keys().copied().collect();
+    root_ids.sort_unstable();
+    for (id, root) in root_ids.iter().filter_map(|id| Some((*id, roots.get(id)?))) {
+        let absolute = text(root, "absolutePath");
+        let resolved = match relocated_root(absolute, text(root, "relativePathFromCatalog"), path) {
+            Some(found) => {
+                let found = found.to_string_lossy().to_string();
+                warnings.push(format!("root folder {}: {absolute} not found; using {found} (relative to the catalog)", text(root, "name")));
+                found
+            }
+            None => absolute.to_string(),
+        };
+        root_paths.insert(id, resolved);
+    }
     let mut history = group(optional_table("Adobe_libraryImageDevelopHistoryStep", &mut warnings)?);
     let mut snapshots = group(optional_table("Adobe_libraryImageDevelopSnapshot", &mut warnings)?);
     let mut out = CatalogImport {
@@ -444,7 +482,7 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
         let file = files.get(&number(&image, "rootFile")).ok_or_else(|| format!("image {id}: missing file record"))?;
         let folder = folders.get(&number(file, "folder")).ok_or_else(|| format!("image {id}: missing folder record"))?;
         let root = roots.get(&number(folder, "rootFolder")).ok_or_else(|| format!("image {id}: missing root record"))?;
-        let root_path = text(root, "absolutePath");
+        let root_path = root_paths.get(&number(root, "id_local")).map_or("", String::as_str);
         let folder_path = text(folder, "pathFromRoot");
         let name = text(file, "idx_filename");
         if root_path.is_empty() || name.is_empty() {
@@ -1259,19 +1297,9 @@ mod tests {
         }
         page[offset + 5..offset + 7].copy_from_slice(&(end as u16).to_be_bytes());
     }
-    #[test]
-    fn reads_native_sqlite_tables_without_lightroom_or_external_processes() {
-        use SqlValue::{Integer as I, Null as N, Text as T};
-        let tables = [
-            ("AgLibraryRootFolder", "id_local INTEGER PRIMARY KEY, absolutePath", vec![N, T("/catalog/".into())]),
-            ("AgLibraryFolder", "id_local INTEGER PRIMARY KEY, rootFolder, pathFromRoot", vec![N, I(1), T("Photos/".into())]),
-            ("AgLibraryFile", "id_local INTEGER PRIMARY KEY, folder, idx_filename", vec![N, I(1), T("test.ARW".into())]),
-            (
-                "Adobe_images",
-                "id_local INTEGER PRIMARY KEY, id_global, rootFile, fileFormat, fileWidth, fileHeight, rating, pick",
-                vec![N, T("fixture-image".into()), I(1), T("ARW".into()), I(20), I(10), I(5), I(1)],
-            ),
-        ];
+    /// A one-row-per-table SQLite file: `(name, columns, row)` each.
+    fn native_catalog(tables: &[(&str, &str, Vec<SqlValue>)]) -> Vec<u8> {
+        use SqlValue::{Integer as I, Text as T};
         let mut bytes = vec![0u8; 5 * 2048];
         bytes[..16].copy_from_slice(b"SQLite format 3\0");
         bytes[16..18].copy_from_slice(&2048u16.to_be_bytes());
@@ -1295,6 +1323,30 @@ mod tests {
             leaf(&mut bytes[(i + 1) * 2048..(i + 2) * 2048], 0, std::slice::from_ref(row));
         }
         leaf(&mut bytes[..2048], 100, &schema);
+        bytes
+    }
+
+    fn photo_tables(root: (&str, &str)) -> Vec<(&'static str, &'static str, Vec<SqlValue>)> {
+        use SqlValue::{Integer as I, Null as N, Text as T};
+        vec![
+            (
+                "AgLibraryRootFolder",
+                "id_local INTEGER PRIMARY KEY, absolutePath, name, relativePathFromCatalog",
+                vec![N, T(root.0.into()), T("Photos".into()), T(root.1.into())],
+            ),
+            ("AgLibraryFolder", "id_local INTEGER PRIMARY KEY, rootFolder, pathFromRoot", vec![N, I(1), T("Photos/".into())]),
+            ("AgLibraryFile", "id_local INTEGER PRIMARY KEY, folder, idx_filename", vec![N, I(1), T("test.ARW".into())]),
+            (
+                "Adobe_images",
+                "id_local INTEGER PRIMARY KEY, id_global, rootFile, fileFormat, fileWidth, fileHeight, rating, pick",
+                vec![N, T("fixture-image".into()), I(1), T("ARW".into()), I(20), I(10), I(5), I(1)],
+            ),
+        ]
+    }
+
+    #[test]
+    fn reads_native_sqlite_tables_without_lightroom_or_external_processes() {
+        let bytes = native_catalog(&photo_tables(("/catalog/", "")));
         let path = std::env::temp_dir().join(format!("lightcraft-native-catalog-{}.lrcat", std::process::id()));
         std::fs::write(&path, &bytes).unwrap();
         let catalog = read(&path).unwrap();
@@ -1305,6 +1357,25 @@ mod tests {
         std::fs::write(&path, b"bad catalog").unwrap();
         assert!(read(&path).is_err());
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn a_root_missing_here_is_found_relative_to_the_catalog() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-relocated-catalog-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Lightroom")).unwrap();
+        std::fs::create_dir_all(dir.join("RAW")).unwrap();
+        let path = dir.join("Lightroom").join("Lightroom.lrcat");
+        std::fs::write(&path, native_catalog(&photo_tables(("C:/Users/me/Project/RAW/", "../RAW/")))).unwrap();
+        let catalog = read(&path).unwrap();
+        assert_eq!(Path::new(&catalog.photos[0].path), dir.join("RAW").join("Photos").join("test.ARW"));
+        assert!(catalog.warnings.iter().any(|w| w.contains("relative to the catalog")), "{:?}", catalog.warnings);
+        // a relative path that leads nowhere keeps the recorded one
+        std::fs::write(&path, native_catalog(&photo_tables(("C:/Users/me/Project/RAW/", "../Elsewhere/")))).unwrap();
+        let catalog = read(&path).unwrap();
+        assert!(catalog.photos[0].path.starts_with("C:/Users/me/Project/RAW/"), "{}", catalog.photos[0].path);
+        assert!(catalog.warnings.is_empty(), "{:?}", catalog.warnings);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
