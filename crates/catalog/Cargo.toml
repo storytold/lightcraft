@@ -26,5 +26,6 @@ siphasher = { workspace = true }
 redb = { workspace = true }
 
 [dev-dependencies]
+dac-fuzzkit = { workspace = true }
 dac-geom = { workspace = true }
 proptest = { workspace = true }

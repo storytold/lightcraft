@@ -22,6 +22,7 @@ omastore.toml
 crates/net/
 crates/credentials/
 crates/hash/
+crates/fuzzkit/
 crates/immich/
 crates/text/
 crates/pdf/

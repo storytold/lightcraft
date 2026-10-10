@@ -1333,6 +1333,7 @@ dependencies = [
  "crc32fast",
  "dac-brand",
  "dac-develop",
+ "dac-fuzzkit",
  "dac-geo",
  "dac-geom",
  "dac-meta",
@@ -1409,6 +1410,7 @@ dependencies = [
  "argon2",
  "chacha20poly1305",
  "dac-brand",
+ "dac-fuzzkit",
  "getrandom 0.3.4",
  "log",
  "serde",
@@ -1538,9 +1540,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dac-fuzzkit"
+version = "0.5.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "dac-geo"
 version = "0.5.0"
 dependencies = [
+ "dac-fuzzkit",
  "dac-meta",
  "dac-net",
  "flate2",
@@ -1600,6 +1610,7 @@ version = "0.5.0"
 dependencies = [
  "dac-catalog",
  "dac-credentials",
+ "dac-fuzzkit",
  "dac-hash",
  "dac-net",
  "log",
@@ -1611,6 +1622,7 @@ dependencies = [
 name = "dac-layout"
 version = "0.5.0"
 dependencies = [
+ "dac-fuzzkit",
  "dac-raster",
  "serde",
  "serde_json",
@@ -1678,6 +1690,7 @@ dependencies = [
 name = "dac-pdf"
 version = "0.5.0"
 dependencies = [
+ "dac-fuzzkit",
  "dac-text",
  "lopdf",
  "miniz_oxide 0.8.9",
@@ -1722,6 +1735,7 @@ name = "dac-publish"
 version = "0.5.0"
 dependencies = [
  "dac-catalog",
+ "dac-fuzzkit",
  "dac-hash",
  "serde",
  "serde_json",
@@ -1800,6 +1814,7 @@ dependencies = [
 name = "dac-tether"
 version = "0.5.0"
 dependencies = [
+ "dac-fuzzkit",
  "serde",
  "serde_json",
 ]
@@ -1808,6 +1823,7 @@ dependencies = [
 name = "dac-text"
 version = "0.5.0"
 dependencies = [
+ "dac-fuzzkit",
  "parley",
  "serde",
  "serde_json",

@@ -27,6 +27,8 @@ pub mod fetch;
 pub mod geocode;
 pub mod mercator;
 pub mod places;
+#[cfg(test)]
+mod robust_tests;
 pub mod tiles;
 pub mod tracks;
 mod unzip;

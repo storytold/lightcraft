@@ -37,6 +37,7 @@ dac-fetch = { path = "crates/fetch" }
 dac-net = { path = "crates/net" }
 dac-credentials = { path = "crates/credentials" }
 dac-hash = { path = "crates/hash" }
+dac-fuzzkit = { path = "crates/fuzzkit" }
 dac-layout = { path = "crates/layout" }
 dac-immich = { path = "crates/immich" }
 dac-geo = { path = "crates/geo" }

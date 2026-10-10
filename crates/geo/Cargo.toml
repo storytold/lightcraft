@@ -19,3 +19,6 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dac-net = { workspace = true }
 log = { workspace = true }
+
+[dev-dependencies]
+dac-fuzzkit = { workspace = true }

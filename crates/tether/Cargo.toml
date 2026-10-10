@@ -11,3 +11,6 @@ serde_json = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+dac-fuzzkit = { workspace = true }
