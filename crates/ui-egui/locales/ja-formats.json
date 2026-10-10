@@ -212,5 +212,7 @@
   "Create Folder in “{name}”": "「{name}」にフォルダーを作成",
   "{added} added, {missing} missing, {changed} read from changed sidecars": "{added} 件追加、{missing} 件見つからず、変更されたサイドカーから {changed} 件読み込み",
   "{n} photos relinked": "{n} 枚の写真を再リンク",
-  "{path} · {count} photos": "{path} · {count} 枚"
+  "{path} · {count} photos": "{path} · {count} 枚",
+  "Target: {name}": "ターゲット: {name}",
+  "Collection imported: {n} photos found, {m} not in this library": "コレクションを読み込みました: {n} 枚が見つかり、{m} 枚はこのライブラリにありません"
 }

@@ -6,6 +6,7 @@
 
 mod before;
 pub(crate) mod browse;
+mod collections;
 mod color;
 pub(crate) mod convert;
 mod cull;
@@ -123,6 +124,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         let mut v = Vec::new();
         v.extend(edit::specs());
         v.extend(library::specs());
+        v.extend(collections::specs());
         v.extend(develop::specs());
         v.extend(color::specs());
         v.extend(curves::specs());

@@ -212,5 +212,7 @@
   "Create Folder in “{name}”": "Crear carpeta en «{name}»",
   "{added} added, {missing} missing, {changed} read from changed sidecars": "{added} añadidas, {missing} faltan, {changed} leídas de archivos auxiliares cambiados",
   "{n} photos relinked": "{n} fotos vinculadas de nuevo",
-  "{path} · {count} photos": "{path} · {count} fotos"
+  "{path} · {count} photos": "{path} · {count} fotos",
+  "Target: {name}": "Destino: {name}",
+  "Collection imported: {n} photos found, {m} not in this library": "Colección importada: {n} fotos encontradas, {m} no están en esta biblioteca"
 }

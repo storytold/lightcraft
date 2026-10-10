@@ -1426,5 +1426,10 @@
   "The folder was moved or renamed outside the app: point its photos at the new place": "Папку переместили или переименовали вне приложения: связать фото с новым местом",
   "Show Parent Folder": "Показать родительскую папку",
   "Offline": "Не в сети",
-  "Folder name (created on disk)": "Имя папки (создаётся на диске)"
+  "Folder name (created on disk)": "Имя папки (создаётся на диске)",
+  "B adds the selected photos to the target collection (set it from a collection's menu)": "B добавляет выбранные фото в целевую коллекцию (задаётся в меню коллекции)",
+  "Use the Quick Collection as the target again": "Снова использовать быструю коллекцию как цель",
+  "Import Collection Definition…": "Импорт определения коллекции…",
+  "Export Collection Definition…": "Экспорт определения коллекции…",
+  "Collection definitions and keyword lists": "Определения коллекций и списки ключевых слов"
 }

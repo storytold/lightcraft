@@ -88,6 +88,22 @@ fn folders_panel_lists_volumes_with_free_space() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Collections: the target collection shows under the tree; its × goes back to the Quick
+/// Collection.
+#[test]
+fn collections_panel_shows_and_clears_the_target() {
+    let mut h = demo();
+    // the Collections panel near the top
+    h.app.ui.toggle_sidebar_section("panel:catalog");
+    h.app.ui.toggle_sidebar_section("panel:folders");
+    let id = run(&mut h, "album.create", json!({"name": "Keepers"}))["id"].as_u64().unwrap();
+    assert!(has(&h, "collectionsTarget") && !has(&h, "collectionsTargetClear"));
+    run(&mut h, "album.setTarget", json!({"id": id}));
+    assert!(has(&h, "collectionsTargetClear"));
+    click(&mut h, "collectionsTargetClear");
+    assert_eq!(h.app.session.target_album, None);
+}
+
 /// Library's columns are Classic panel stacks: every panel has a foldable header, Solo Mode
 /// keeps one open per side, hidden panels go away, and the order is the user's.
 #[test]

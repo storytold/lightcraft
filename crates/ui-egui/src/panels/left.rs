@@ -355,6 +355,7 @@ fn collections_plus(app: &mut DacApp, ui: &mut egui::Ui, ar: Rect, viewport: Rec
         if ui.button(crate::i18n::tr("Create Folder…")).clicked() {
             app.ui.dialog = Some(crate::state::Dialog::NewAlbum { name: String::new(), folder: true, parent: None });
         }
+        super::collections::import_item(app, ui, None);
         // only once the albums were put in an order by hand
         if app.session.catalog.album_children_are_ordered(None) {
             ui.separator();
@@ -1152,6 +1153,10 @@ fn folder_menu(app: &mut DacApp, resp: &egui::Response, a: &Album) {
         let mut folders: Vec<(u64, String)> =
             app.session.catalog.albums().filter(|f| f.folder && !is_within(app, f.id, a.id)).map(|f| (f.id.0, f.name.clone())).collect();
         folders.sort_by_key(|(_, n)| n.to_lowercase());
+        super::collections::export_item(app, ui, a.id.0, &a.name);
+        if a.folder {
+            super::collections::import_item(app, ui, Some(a.id.0));
+        }
         ui.menu_button(crate::i18n::tr("Move to"), |ui| {
             if ui.add_enabled(a.parent.is_some(), egui::Button::new(crate::i18n::tr("Top Level"))).clicked() {
                 let _ = app.run("album.move", json!({"id": a.id.0, "parent": null}));

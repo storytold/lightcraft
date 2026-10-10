@@ -69,6 +69,14 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("camera", "Camera", Kind::Text),
     ("lens", "Lens", Kind::Text),
     ("location", "Location", Kind::Text),
+    ("sublocation", "Sublocation", Kind::Text),
+    ("city", "City", Kind::Text),
+    ("state", "State / Province", Kind::Text),
+    ("country", "Country", Kind::Text),
+    ("person", "Person", Kind::Text),
+    ("altText", "Alt Text", Kind::Text),
+    ("usageTerms", "Rights Usage Terms", Kind::Text),
+    ("folder", "Folder", Kind::Text),
     ("creator", "Creator", Kind::Text),
     ("copyright", "Copyright", Kind::Text),
     ("copyrightStatus", "Copyright Status", Kind::Choice(&["copyrighted", "publicDomain", "unknown"])),
@@ -79,6 +87,11 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("aperture", "Aperture", Kind::Number),
     ("focalLength", "Focal Length", Kind::Number),
     ("megapixels", "Megapixels", Kind::Number),
+    ("shutter", "Shutter Speed (seconds)", Kind::Number),
+    ("width", "Width (pixels)", Kind::Number),
+    ("height", "Height (pixels)", Kind::Number),
+    ("aspect", "Aspect Ratio", Kind::Choice(&["portrait", "landscape", "square"])),
+    ("treatment", "Treatment", Kind::Choice(&["color", "bw"])),
     ("hasGps", "Has GPS", Kind::Bool),
     ("virtualCopy", "Virtual Copy", Kind::Bool),
     ("album", "Album", Kind::Number),
@@ -204,6 +217,22 @@ fn num_op(op: &str, have: Option<f64>, value: &Value) -> bool {
     }
 }
 
+/// A shutter speed as written in metadata (`1/250`, `1/250 s`, `2"`, `0.5`) in seconds.
+fn shutter_secs(s: &str) -> Option<f64> {
+    let t = s.trim().trim_end_matches('s').trim_end_matches('"').trim();
+    let v = match t.split_once('/') {
+        Some((a, b)) => {
+            let (a, b): (f64, f64) = (a.trim().parse().ok()?, b.trim().parse().ok()?);
+            if b == 0.0 {
+                return None;
+            }
+            a / b
+        }
+        None => t.parse().ok()?,
+    };
+    v.is_finite().then_some(v)
+}
+
 /// `value` for in-the-last rules: `{n, unit: days|weeks|months|years}` or a number of days.
 fn last_secs(value: &Value) -> Option<i64> {
     let (n, unit) = match value {
@@ -326,6 +355,53 @@ impl Rule {
             "lens" => text(&m.lens),
             "location" => text(&[m.location.as_str(), &m.city, &m.state, &m.country].join(" ")),
             "creator" => text(&m.creator),
+            "sublocation" => text(&m.location),
+            "city" => text(&m.city),
+            "state" => text(&m.state),
+            "country" => text(&m.country),
+            "altText" => text(&m.alt_text),
+            "usageTerms" => text(&m.usage_terms),
+            "person" => {
+                let names: Vec<&str> = m.regions.iter().filter_map(|r| r.name.as_deref()).collect();
+                match op {
+                    "isEmpty" => names.is_empty(),
+                    "isNotEmpty" => !names.is_empty(),
+                    "notContains" | "isNot" => !names.iter().any(|n| text_op(if op == "isNot" { "is" } else { "contains" }, n, &want)),
+                    _ => names.iter().any(|n| text_op(op, n, &want)),
+                }
+            }
+            "folder" => {
+                let folder = match &p.source {
+                    Source::File { path } => {
+                        let path = path.replace('\\', "/");
+                        path.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default()
+                    }
+                    Source::Demo { .. } => String::new(),
+                };
+                let want = want.replace('\\', "/");
+                match op {
+                    "contains" => !want.trim().is_empty() && folder.to_lowercase().contains(want.trim()),
+                    "notContains" => want.trim().is_empty() || !folder.to_lowercase().contains(want.trim()),
+                    _ => text_op(op, &folder, &want),
+                }
+            }
+            "shutter" => num_op(op, shutter_secs(&m.shutter), value),
+            "width" => num_op(op, Some(p.width as f64), value),
+            "height" => num_op(op, Some(p.height as f64), value),
+            "aspect" => {
+                let a = if p.width == p.height {
+                    "square"
+                } else if p.width > p.height {
+                    "landscape"
+                } else {
+                    "portrait"
+                };
+                (a == want) == (op == "is")
+            }
+            "treatment" => {
+                let t = if p.develop.treatment == dac_develop::Treatment::Bw { "bw" } else { "color" };
+                (t == want) == (op == "is")
+            }
             "copyright" => text(&m.copyright),
             "copyrightStatus" => {
                 let want = crate::CopyrightStatus::parse(&want);
@@ -442,6 +518,40 @@ mod tests {
 
     fn rs(v: serde_json::Value) -> RuleSet {
         serde_json::from_value(v).unwrap()
+    }
+
+    /// P1.4: the location parts, people, folder, shutter speed, size, aspect ratio and treatment
+    /// are rule fields too; nested any/all groups combine them.
+    #[test]
+    fn location_people_folder_exposure_and_shape_fields() {
+        let cat = Catalog::new();
+        let mut p = photo(1);
+        p.meta.city = "Rome".into();
+        p.meta.country = "Italy".into();
+        p.meta.shutter = "1/250".into();
+        p.meta.regions.push(dac_meta::Region {
+            rect: dac_meta::Rect { x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.2 },
+            kind: dac_meta::RegionKind::Face,
+            name: Some("Anna Rossi".into()),
+            description: None,
+        });
+        p.source = Source::File { path: "/pics/2026/Trip/IMG_0042.CR2".into() };
+        let m = |v: serde_json::Value| rs(v).matches(&p, &cat);
+        assert!(m(json!({"rules": [{"field": "city", "op": "is", "value": "rome"}, {"field": "country", "op": "contains", "value": "ital"}]})));
+        assert!(m(json!({"rules": [{"field": "person", "op": "contains", "value": "anna"}]})));
+        assert!(!m(json!({"rules": [{"field": "person", "op": "isEmpty"}]})));
+        assert!(m(json!({"rules": [{"field": "folder", "op": "endsWith", "value": "/trip"}]})));
+        assert!(m(json!({"rules": [{"field": "shutter", "op": "lt", "value": 0.01}]})));
+        assert!(m(json!({"rules": [{"field": "width", "op": "is", "value": 6000}, {"field": "aspect", "op": "is", "value": "landscape"}]})));
+        assert!(m(json!({"rules": [{"field": "treatment", "op": "is", "value": "color"}]})));
+        // all of (city is Rome, any of (person Bob, iso ≥ 800))
+        assert!(m(json!({"rules": [
+            {"field": "city", "op": "is", "value": "rome"},
+            {"group": {"match": "any", "rules": [{"field": "person", "op": "contains", "value": "bob"}, {"field": "iso", "op": "gte", "value": 800}]}}
+        ]})));
+        assert_eq!(shutter_secs("1/0"), None);
+        assert_eq!(shutter_secs("2\""), Some(2.0));
+        assert_eq!(shutter_secs("bad"), None);
     }
 
     #[test]

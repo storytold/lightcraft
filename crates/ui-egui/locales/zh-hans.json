@@ -1752,5 +1752,10 @@
   "The folder was moved or renamed outside the app: point its photos at the new place": "文件夹在应用外被移动或重命名：将照片指向新位置",
   "Show Parent Folder": "显示父文件夹",
   "Offline": "离线",
-  "Folder name (created on disk)": "文件夹名称（在磁盘上创建）"
+  "Folder name (created on disk)": "文件夹名称（在磁盘上创建）",
+  "B adds the selected photos to the target collection (set it from a collection's menu)": "按 B 将所选照片添加到目标收藏夹（在收藏夹菜单中设置）",
+  "Use the Quick Collection as the target again": "重新将快捷收藏夹用作目标",
+  "Import Collection Definition…": "导入收藏夹定义…",
+  "Export Collection Definition…": "导出收藏夹定义…",
+  "Collection definitions and keyword lists": "收藏夹定义和关键字列表"
 }

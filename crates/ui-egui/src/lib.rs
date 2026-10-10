@@ -126,6 +126,10 @@ pub struct Services {
     pub pick_curve_preset_files: Option<PickFiles>,
     /// Save dialog for an exported `.lccurve` file.
     pub save_curve_preset_file: Option<SaveFile>,
+    /// Open dialog for a list file: a collection definition (`.json`) or a keyword list (`.txt`).
+    pub pick_list_file: Option<PickFiles>,
+    /// Save dialog for a list file (the suggested name carries the extension).
+    pub save_list_file: Option<SaveFile>,
     pub write: Option<WriteFn>,
     /// Thread-safe writer: with it, UI-started exports run in the background (desktop only).
     pub write_shared: Option<SharedWrite>,

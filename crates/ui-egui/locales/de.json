@@ -1907,5 +1907,10 @@
   "The folder was moved or renamed outside the app: point its photos at the new place": "Der Ordner wurde außerhalb der App verschoben oder umbenannt: Fotos auf den neuen Ort verweisen",
   "Show Parent Folder": "Übergeordneten Ordner anzeigen",
   "Offline": "Offline",
-  "Folder name (created on disk)": "Ordnername (wird auf dem Datenträger erstellt)"
+  "Folder name (created on disk)": "Ordnername (wird auf dem Datenträger erstellt)",
+  "B adds the selected photos to the target collection (set it from a collection's menu)": "B fügt die ausgewählten Fotos der Zielsammlung hinzu (im Menü einer Sammlung festlegen)",
+  "Use the Quick Collection as the target again": "Wieder die Schnellsammlung als Ziel verwenden",
+  "Import Collection Definition…": "Sammlungsdefinition importieren…",
+  "Export Collection Definition…": "Sammlungsdefinition exportieren…",
+  "Collection definitions and keyword lists": "Sammlungsdefinitionen und Stichwortlisten"
 }

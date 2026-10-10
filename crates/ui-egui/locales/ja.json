@@ -1752,5 +1752,10 @@
   "The folder was moved or renamed outside the app: point its photos at the new place": "フォルダーがアプリ外で移動・名前変更されました: 写真を新しい場所に関連付けます",
   "Show Parent Folder": "親フォルダーを表示",
   "Offline": "オフライン",
-  "Folder name (created on disk)": "フォルダー名（ディスク上に作成）"
+  "Folder name (created on disk)": "フォルダー名（ディスク上に作成）",
+  "B adds the selected photos to the target collection (set it from a collection's menu)": "B で選択した写真をターゲットコレクションに追加します（コレクションのメニューで設定）",
+  "Use the Quick Collection as the target again": "クイックコレクションを再びターゲットにする",
+  "Import Collection Definition…": "コレクション定義を読み込む…",
+  "Export Collection Definition…": "コレクション定義を書き出す…",
+  "Collection definitions and keyword lists": "コレクション定義とキーワードリスト"
 }

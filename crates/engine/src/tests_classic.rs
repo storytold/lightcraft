@@ -149,6 +149,55 @@ fn a_folder_synchronises_and_relocates() {
     assert!(s.execute("folder.relocate", &json!({"path": d.path("nothing-here"), "to": d.path("moved")})).is_err());
 }
 
+/// Collections: a set with a collection and a smart collection inside exports as a definition
+/// and imports back (one undo step) with its photos matched; broken definitions are errors.
+#[test]
+fn collection_definitions_round_trip() {
+    let d = Scratch::new("coll");
+    let mut s = Session::new().with_fs();
+    let a = add_file_photo(&mut s, &d.path("a.jpg"));
+    let b = add_file_photo(&mut s, &d.path("b.jpg"));
+    let set = s.execute("album.create", &json!({"name": "Trips", "folder": true})).unwrap()["id"].as_u64().unwrap();
+    let col = s.execute("album.create", &json!({"name": "Rome", "parent": set})).unwrap()["id"].as_u64().unwrap();
+    s.selection = crate::Selection { ids: vec![a, b], active: Some(a) };
+    s.execute("album.addPhotos", &json!({"id": col, "ids": [a.0, b.0]})).unwrap();
+    s.execute("album.createSmart", &json!({"name": "Good", "parent": set, "rules": {"ruleSet": {"match": "any", "rules": [{"field": "rating", "op": "gte", "value": 4}, {"group": {"match": "all", "rules": [{"field": "city", "op": "is", "value": "rome"}]}}]}}})).unwrap();
+    let file = d.path("trips.json");
+    s.execute("album.exportDefinition", &json!({"id": set, "path": file})).unwrap();
+    // into another library holding the same files
+    let mut t = Session::new().with_fs();
+    add_file_photo(&mut t, &d.path("b.jpg"));
+    let undo = t.undo.len();
+    let r = t.execute("album.importDefinition", &json!({"path": file})).unwrap();
+    assert_eq!(r["created"], 3, "{r}");
+    assert_eq!(r["photos"], 1, "{r}");
+    assert_eq!(r["unmatched"], 1, "{r}");
+    assert_eq!(t.undo.len(), undo + 1, "one undo step");
+    let trips = t.catalog.albums().find(|x| x.name == "Trips").unwrap();
+    assert!(trips.folder);
+    let good = t.catalog.albums().find(|x| x.name == "Good").unwrap();
+    assert_eq!(good.parent, Some(trips.id));
+    assert!(good.is_smart());
+    // a new album after the import gets a fresh id
+    let n = t.execute("album.create", &json!({"name": "After"})).unwrap()["id"].as_u64().unwrap();
+    assert_eq!(t.catalog.albums().filter(|x| x.id.0 == n).count(), 1);
+    t.undo_step().unwrap();
+    t.undo_step().unwrap();
+    assert!(t.catalog.albums().all(|x| x.name != "Trips"));
+    // broken input
+    std::fs::write(d.path("bad.json"), "{nope").unwrap();
+    assert!(t.execute("album.importDefinition", &json!({"path": d.path("bad.json")})).is_err());
+    assert!(t.execute("album.importDefinition", &json!({"definition": {"format": "other", "collections": []}})).is_err());
+    assert!(
+        t.execute(
+            "album.importDefinition",
+            &json!({"definition": {"format": "collection-definition", "collections": [{"name": "x", "kind": "smart"}]}})
+        )
+        .is_err()
+    );
+    assert!(t.execute("album.exportDefinition", &json!({"id": 999_999})).is_err());
+}
+
 /// The volumes the library's photos are on, with free space where the system tells.
 #[test]
 fn volumes_list_the_disks_with_their_space() {

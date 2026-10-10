@@ -215,6 +215,8 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
         save_preset_file: None,
         pick_curve_preset_files: None,
         save_curve_preset_file: None,
+        pick_list_file: None,
+        save_list_file: None,
         write: Some(Box::new(download)),
         // downloads happen on the main thread: exports run in the foreground on the web
         write_shared: None,
