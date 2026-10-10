@@ -30,7 +30,7 @@ Owned paths (where we diverge on purpose, `plan/upstream.md` → *What we own*) 
 
 - **`cargo xtask upstream-merge [--ref upstream/main] [--no-ci]`** automates steps 1–3 below and checks step 4:
   refuses on a dirty tree, fetches, creates `merge/upstream-YYYYMMDD` from the current HEAD, runs
-  `git merge --no-ff --no-commit`, then puts back our version of every owned path (conflicted ones too; files
+  `git merge --no-ff --no-commit` (with `merge.conflictStyle=zdiff3`), settles the conflict hunks where one side equals the base once crate names are mapped (`lightcraft_x` → `dac_x`, `LightcraftApp` → `DacApp`, `lightcraft/heif` → `dac-app/heif`), then puts back our version of every owned path (conflicted ones too; files
   upstream added under an owned path are dropped). Git's `merge=ours` attribute is not enough: it only applies when
   both sides changed a file. Upstream commits that touched owned paths go into `target/upstream/review-YYYYMMDD.md`
   (hash, subject, files with line counts): they were set aside, review them for anything worth porting by hand.

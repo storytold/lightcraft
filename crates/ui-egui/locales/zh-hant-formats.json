@@ -233,5 +233,12 @@
   "{n} keywords imported": "已匯入 {n} 個關鍵字",
   "{n} keywords removed": "已移除 {n} 個關鍵字",
   "Only {} keys": "僅顯示 {} 的按鍵",
-  "{} keys": "{} 按鍵"
+  "{} keys": "{} 按鍵",
+  "{done} of {total}": "{done}／{total}",
+  "{done} of {total} MB": "{done}／{total} MB",
+  "{pct} %": "{pct}%",
+  "+{n} more": "還有 {n} 項",
+  "1 task is still running: {names}. Quitting stops it.": "仍有 1 個工作在執行：{names}。結束將停止它。",
+  "{n} tasks are still running: {names}. Quitting stops them.": "仍有 {n} 個工作在執行：{names}。結束將停止它們。",
+  "{what} merge cancelled": "已取消{what}合併"
 }

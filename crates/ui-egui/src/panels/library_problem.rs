@@ -103,6 +103,7 @@ pub fn start_upgrade(app: &mut DacApp, dir: std::path::PathBuf, files: Vec<Strin
     let started = crate::tasks::spawn(
         app,
         "Upgrade catalog",
+        None,
         move || dac_engine::library::migrate_library(&dir).map_err(|e| e.to_string()),
         move |app, _ctx, res: Result<bool, String>| {
             if let Some(p) = app.library_problem.as_mut() {

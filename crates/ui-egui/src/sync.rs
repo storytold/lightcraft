@@ -1,11 +1,13 @@
 //! Synchronize Folder in the app: the folder is scanned on a worker thread (a network share can
 //! take minutes; no frame waits for it) while its dialog is open, and the dialog then says what
 //! changed and what to do about it. Synchronize runs `folder.synchronize`, which acts on exactly
-//! the scan the dialog showed (see `dac_engine::sync`).
+//! the scan the dialog showed (see `dac_engine::sync`). Both the scan and the run show a row in the activity
+//! stack (issue #345); its ✕ stops them like the dialog's Cancel.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+use dac_engine::activity::{Cancel, TaskGuard};
 use dac_engine::sync::{FolderChanges, SyncChoice, SyncCommit, SyncInput, SyncJob, SyncProgress, SyncStep, scan_with};
 use serde_json::{Value, json};
 
@@ -18,6 +20,8 @@ pub struct SyncTask {
     path: String,
     progress: Arc<SyncProgress>,
     rx: std::sync::mpsc::Receiver<FolderChanges>,
+    /// Its row in the activity stack; ✕ cancels the scan and closes the dialog.
+    guard: TaskGuard,
 }
 
 /// Open the dialog for folder `path` (called `name` in it) and start scanning.
@@ -34,7 +38,9 @@ pub fn open(app: &mut DacApp, path: &str, name: &str, disk: bool) -> Result<(), 
     std::thread::spawn(job);
     #[cfg(target_arch = "wasm32")]
     job();
-    app.sync = Some(SyncTask { path: path.to_string(), progress, rx });
+    let guard = app.session.activity.start("sync", "Looking for changes", Cancel::Flag(progress.files.cancel.clone()));
+    guard.detail(name);
+    app.sync = Some(SyncTask { path: path.to_string(), progress, rx, guard });
     let d = SyncChoice::default();
     app.ui.dialog = Some(Dialog::SynchronizeFolder {
         path: path.to_string(),
@@ -78,6 +84,14 @@ pub fn poll(app: &mut DacApp, ctx: &egui::Context) {
         cancel(app);
         return;
     }
+    if task.guard.is_cancelled() {
+        // ✕ on its row: a scan stopped part-way has nothing to show
+        cancel(app);
+        app.ui.dialog = None;
+        return;
+    }
+    let (done, total) = task.progress.counts();
+    task.guard.progress(done as u64, total as u64);
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
     let changes = match task.rx.try_recv() {
         Ok(c) => c,
@@ -210,7 +224,9 @@ pub fn confirm(app: &mut DacApp, dlg: &Dialog) -> Result<Value, String> {
     std::thread::spawn(job);
     #[cfg(target_arch = "wasm32")]
     job();
-    app.sync_run = Some(SyncRun { name: name.clone(), progress, crashed, rx, commit: Some(commit), stopping: false, not_saved: Vec::new() });
+    let guard = app.session.activity.start("sync", "Synchronizing folder", Cancel::Flag(progress.files.cancel.clone()));
+    guard.detail(name);
+    app.sync_run = Some(SyncRun { name: name.clone(), progress, crashed, rx, commit: Some(commit), stopping: false, not_saved: Vec::new(), guard });
     Ok(json!({"started": true}))
 }
 
@@ -227,6 +243,8 @@ pub struct SyncRun {
     commit: Option<SyncCommit>,
     /// Cancel was pressed: nothing new is started; what was readied is still committed.
     stopping: bool,
+    /// Its row in the activity stack (its ✕ is Cancel).
+    guard: TaskGuard,
 }
 
 impl SyncRun {
@@ -253,6 +271,11 @@ impl Drop for SyncRun {
 pub fn poll_run(app: &mut DacApp, ctx: &egui::Context) {
     let Some(run) = app.sync_run.as_mut() else { return };
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    if run.guard.is_cancelled() {
+        run.stopping = true;
+    }
+    let (done, total) = run.counts();
+    run.guard.progress(done as u64, total as u64);
     let mut steps = Vec::new();
     let finished = loop {
         match run.rx.try_recv() {
@@ -315,34 +338,5 @@ pub fn poll_run(app: &mut DacApp, ctx: &egui::Context) {
         app.toast(ctx, format!("{name}: {text}"));
     } else {
         app.toast_for(ctx, format!("{name}: {text}"), 12.0);
-    }
-}
-
-/// The progress window while a synchronize runs, with Cancel (what was done stays, as one undo
-/// step; nothing new is started).
-pub fn progress_window(app: &mut DacApp, ctx: &egui::Context) {
-    let Some(run) = &app.sync_run else { return };
-    let t = Tokens::get(ctx);
-    let (done, total) = run.counts();
-    let text =
-        if run.stopping { crate::i18n::tr("Stopping…").to_string() } else { format!("{} {done} / {total}", crate::i18n::tr("Synchronizing…")) };
-    let frac = if total == 0 { 0.0 } else { done as f32 / total as f32 };
-    let stopping = run.stopping;
-    let mut cancel = false;
-    egui::Window::new(crate::i18n::tr("Synchronize Folder"))
-        .id(egui::Id::new("sync-progress"))
-        .title_bar(false)
-        .resizable(false)
-        .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -80.0])
-        .fixed_size([340.0, 80.0])
-        .show(ctx, |ui| {
-            ui.label(egui::RichText::new(text).color(t.text));
-            ui.add(egui::ProgressBar::new(frac).desired_width(320.0));
-            let r = ui.add_enabled(!stopping, egui::Button::new(crate::i18n::tr("Cancel")));
-            crate::widgets::register(ui.ctx(), "button:syncCancel", r.rect);
-            cancel = r.clicked();
-        });
-    if cancel && let Some(run) = app.sync_run.as_mut() {
-        run.cancel();
     }
 }

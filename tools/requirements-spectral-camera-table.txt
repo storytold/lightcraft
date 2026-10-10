@@ -1,0 +1,5 @@
+# Python packages for tools/spectral_camera_table.py (crates/raw/src/spectral_table.rs).
+#   python3 -m venv .venv-spectral && .venv-spectral/bin/pip install -r tools/requirements-spectral-camera-table.txt
+numpy==2.5.3
+scipy==1.18.1
+colour-science==0.4.7
