@@ -55,7 +55,7 @@ pub fn display_item_label<'a>(id: &str, params: &Value, label: &'a str) -> &'a s
 }
 
 /// Top-level menus in order (the macOS app menu is added by the host).
-pub const MENUS: &[&str] = &["File", "Edit", "View", "Photo", "Window", "Help"];
+pub const MENUS: &[&str] = &["File", "Edit", "Library", "Photo", "View", "Window", "Help"];
 
 /// Order and grouping per menu: command ids, `---` separators and `@Submenu` placeholders.
 /// Entries with a menu path that aren't listed are appended at the end of their menu, before any
@@ -81,11 +81,6 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "catalog.checkIntegrity",
             "catalog.optimize",
             "---",
-            "dialog.newAlbum",
-            "dialog.newFolder",
-            "dialog.smartAlbum",
-            "dialog.newSmartAlbum",
-            "---",
             "file.importPresets",
             "file.exportPresets",
             "---",
@@ -94,7 +89,6 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "@Export with Preset",
             "---",
             "library.toggleAutoWriteXmp",
-            "@Previews",
             "---",
             "app.quit",
         ],
@@ -115,8 +109,6 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "library.selectAll",
             "library.selectNone",
             "@Select by",
-            "---",
-            "view.focusSearch",
             "---",
             "app.settings",
         ],
@@ -172,6 +164,24 @@ const LAYOUT: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "Library",
+        &[
+            "dialog.newAlbum",
+            "dialog.newFolder",
+            "dialog.smartAlbum",
+            "dialog.newSmartAlbum",
+            "---",
+            "view.focusSearch",
+            "---",
+            "dialog.rename",
+            "---",
+            "file.findMissing",
+            "@Previews",
+            "---",
+            "@Immich",
+        ],
+    ),
+    (
         "Photo",
         &[
             "@Add to Album",
@@ -201,7 +211,6 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "photo.readMetadataFromFile",
             "photo.reload",
             "app.showInFinder",
-            "dialog.rename",
             "dialog.captureTime",
             "photo.tagFromTracklog",
             "---",
@@ -756,9 +765,11 @@ pub fn shortcut_text(sc: &str, mac: bool) -> String {
 
 /// Horizontal gap between in-window menu titles. The buttons are frameless, and egui gives
 /// frameless buttons no padding, so the gap has to come from the layout's item spacing.
-const TITLE_GAP: f32 = 24.0;
+/// The bar tightens the gap down to [`MIN_TITLE_GAP`] before it collapses into one "Menu" button.
+const TITLE_GAP: f32 = 20.0;
+const MIN_TITLE_GAP: f32 = 10.0;
 
-/// Width of the in-window menu bar's titles.
+/// Width of the in-window menu bar's titles at their full spacing.
 pub fn bar_width(ui: &egui::Ui) -> f32 {
     let t = crate::theme::Tokens::get(ui.ctx());
     MENUS.iter().map(|m| ui.painter().layout_no_wrap(crate::i18n::tr(m).to_string(), t.font(13.0), t.text).size().x + TITLE_GAP).sum::<f32>()
@@ -770,11 +781,12 @@ pub fn show_in_window(app: &mut DacApp, ui: &mut egui::Ui, max_width: f32) -> f3
     let t = crate::theme::Tokens::get(ui.ctx());
     let bar = menu_bar(app);
     let font = t.font(13.0);
-    let widths: Vec<f32> = bar
-        .iter()
-        .map(|(title, _)| ui.painter().layout_no_wrap(crate::i18n::tr(title).to_string(), font.clone(), t.text).size().x + TITLE_GAP)
-        .collect();
-    let total: f32 = widths.iter().sum();
+    let widths: Vec<f32> =
+        bar.iter().map(|(title, _)| ui.painter().layout_no_wrap(crate::i18n::tr(title).to_string(), font.clone(), t.text).size().x).collect();
+    let text: f32 = widths.iter().sum();
+    let n = widths.len().max(1) as f32;
+    let gap = ((max_width - text) / n).clamp(MIN_TITLE_GAP, TITLE_GAP);
+    let total = text + gap * n;
     let mut clicked: Option<(String, Value)> = None;
     let start = ui.cursor().left();
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
@@ -783,7 +795,7 @@ pub fn show_in_window(app: &mut DacApp, ui: &mut egui::Ui, max_width: f32) -> f3
     let bar_bottom = Some(ui.max_rect().bottom());
     if total <= max_width {
         let saved = ui.spacing().item_spacing.x;
-        ui.spacing_mut().item_spacing.x = TITLE_GAP;
+        ui.spacing_mut().item_spacing.x = gap;
         // All titles first, then their popups, so a title the pointer moves onto can take over
         // from the open menu before either is drawn (no frame with two menus or none).
         let titles: Vec<egui::Response> = bar

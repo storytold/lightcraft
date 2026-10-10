@@ -21,8 +21,8 @@ All tracks 1.1–1.8 are merged on main with `cargo xtask ci` green; exit-gate d
   peak; view paging; migration progress in app + CLI. Left: evicting cold photo records (not needed for the targets).
 - 1.6: closed (Compare/Reference tiled, drags at ≥1:1 back to one stage-cached window, corpus 1:1 test green on 87
   raws); the second window's loupe is fit-only, so it has no tiles.
-- 1.7/1.8: translations for the new Immich/key-storage strings; native macOS/Windows keychains (FFI helper crate); a
-  Library menu (Immich commands sit in File ▸ Immich until it exists).
+- 1.7/1.8: native macOS/Windows keychains (FFI helper crate). (Library menu with Library ▸ Immich and the
+  Immich/key-storage translations: done.)
 
 ## Phase 0 checklist
 
