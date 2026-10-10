@@ -462,6 +462,14 @@ pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values
             read.extend(crate::crs_masks::CONTAINERS.iter().map(|c| c.to_string()));
             mask_skips.extend(skipped.into_iter().map(|k| format!("Mask: {k}")));
         }
+        let (spots, skipped) = crate::crs_masks::spots(values, aspect);
+        if !spots.is_empty() {
+            put(&mut out, "spots", Value::Array(spots));
+        }
+        if values.keys().any(|k| crate::crs_masks::SPOT_CONTAINERS.contains(&k.as_str())) {
+            read.extend(crate::crs_masks::SPOT_CONTAINERS.iter().map(|c| c.to_string()));
+            mask_skips.extend(skipped.into_iter().map(|k| format!("Spot: {k}")));
+        }
     }
     // fields that only switch a panel on/off or name things: not adjustments by themselves; an
     // HDR edit mode that is off, and Point Color slots that are all empty (-1)
