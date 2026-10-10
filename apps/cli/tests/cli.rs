@@ -402,6 +402,27 @@ fn devices_are_listed_and_imported_from() {
     assert_eq!(line["result"]["candidates"].as_array().map(Vec::len), Some(1), "{line}");
 }
 
+/// A library still in the v3 catalog format is upgraded before the command runs, with progress on
+/// stderr; the next run opens it directly.
+#[test]
+fn an_old_library_is_upgraded_with_progress() {
+    let lib = tmp("v3-lib");
+    let _ = std::fs::remove_dir_all(&lib);
+    std::fs::create_dir_all(&lib).unwrap();
+    let catalog = json!({"photos": {}, "albums": {}, "next_photo": 1, "next_album": 1});
+    std::fs::write(lib.join("catalog.snap"), json!({"format": "dac-catalog", "version": 3, "seq": 0, "catalog": catalog}).to_string()).unwrap();
+    let lib_s = lib.to_str().unwrap();
+    let (ok, lines, stderr) = run_cli(&["--library", lib_s, "library.info"], None);
+    assert!(ok, "{stderr}");
+    assert_eq!(lines[0]["ok"], true);
+    assert!(stderr.contains("upgrading the catalog") && stderr.contains("catalog upgraded"), "{stderr}");
+    assert!(lib.join("catalog.redb").exists());
+    let (ok, _, stderr) = run_cli(&["--library", lib_s, "library.info"], None);
+    assert!(ok, "{stderr}");
+    assert!(!stderr.contains("upgrading"), "{stderr}");
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
 /// Issue #99: a library open in one process (here `mcp --library`) is refused by a second one,
 /// with who has it and how to drive the running app instead; free again once the first exits.
 #[test]

@@ -24,6 +24,7 @@ pub mod library;
 pub mod local;
 pub mod lock;
 pub mod model;
+pub mod progress;
 pub mod query;
 pub mod remote;
 pub mod rules;

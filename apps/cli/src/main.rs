@@ -120,6 +120,41 @@ fn library_warnings(session: &mut Session, who: &str) {
     }
 }
 
+/// Upgrade an older library's catalog before it is opened, with the progress on stderr: a
+/// one-time step that takes tens of seconds for a library of hundreds of thousands of photos.
+fn migrate_with_progress(dir: &str) -> Result<(), String> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let path = std::path::Path::new(dir);
+    if !dac_engine::library::needs_migration(path) {
+        return Ok(());
+    }
+    eprintln!("{CLI}: upgrading the catalog of {dir} to the current format (once; the old files are kept under backups/)");
+    let done = std::sync::Arc::new(AtomicBool::new(false));
+    let printer = {
+        let done = done.clone();
+        std::thread::spawn(move || {
+            let mut last = String::new();
+            while !done.load(Ordering::Relaxed) {
+                if let Some(p) = dac_engine::library::migration_progress() {
+                    let line = p.describe();
+                    if line != last {
+                        eprintln!("  {line}");
+                        last = line;
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+        })
+    };
+    let t = std::time::Instant::now();
+    let r = dac_engine::library::migrate_library(path);
+    done.store(true, Ordering::Relaxed);
+    let _ = printer.join();
+    r.map_err(|e| library_error(dir, e))?;
+    eprintln!("{CLI}: catalog upgraded in {:.1} s", t.elapsed().as_secs_f64());
+    Ok(())
+}
+
 fn library_error(dir: &str, e: dac_engine::EngineError) -> String {
     match e {
         dac_engine::EngineError::LibraryInUse(why) => format!(
@@ -341,6 +376,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
             let mut h = match &library {
                 Some(dir) => {
                     let mut h = Headless::default();
+                    migrate_with_progress(dir)?;
                     let r = h.session.open_library(dir, demo).map_err(|e| library_error(dir, e))?;
                     eprintln!("{CLI} mcp: opened library {dir} ({r:?})");
                     library_warnings(&mut h.session, &format!("{CLI} mcp"));
@@ -577,6 +613,7 @@ fn run(args: &[String]) -> Result<(), String> {
             let mut h = match &library {
                 Some(dir) => {
                     let mut h = Headless::default();
+                    migrate_with_progress(dir)?;
                     h.session.open_library(dir, demo).map_err(|e| library_error(dir, e))?;
                     library_warnings(&mut h.session, "dac-cli");
                     h
@@ -749,6 +786,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
     let mut session = match &library {
         Some(dir) => {
             let mut s = Session::new().with_fs().with_default_denoise_models().with_default_connections().with_default_face_models();
+            migrate_with_progress(dir)?;
             s.open_library(dir, false).map_err(|e| library_error(dir, e))?;
             s
         }

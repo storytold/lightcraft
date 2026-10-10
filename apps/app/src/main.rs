@@ -520,6 +520,13 @@ fn services(ctx: egui::Context, log_file: Option<&std::path::Path>) -> Services 
     }
 }
 
+/// A session with no library yet (one opens later), with the folder face models are kept in.
+fn unopened_session() -> Session {
+    let mut s = Session::new().with_fs().with_default_denoise_models().with_default_connections().with_system_clock();
+    s.face_models_dir = dac_engine::config::default_face_models_dir();
+    s
+}
+
 /// The library session with the folder face models are kept in (`<config>/models`).
 fn open_session(in_memory: bool, dir: Option<std::path::PathBuf>, seed_demo: bool) -> (Session, Option<LibraryProblem>) {
     let (mut s, problem) = open_library_session(in_memory, dir, seed_demo);
@@ -752,7 +759,12 @@ fn main() -> eframe::Result {
         dac_brand::DISPLAY_NAME,
         options,
         Box::new(move |cc| {
-            let (mut session, problem) = open_session(in_memory, library_dir, seed_demo && files.is_empty());
+            // an older catalog is upgraded on a worker thread once the window shows, with progress
+            let upgrade = library_dir.clone().filter(|d| !in_memory && dac_engine::library::needs_migration(d));
+            let (mut session, problem) = match &upgrade {
+                Some(_) => (unopened_session(), None),
+                None => open_session(in_memory, library_dir, seed_demo && files.is_empty()),
+            };
             // AI masks: the SAM 3 checkpoint (facebook/sam3) in <config>/models/sam3, or <PREFIX>_SAM3_DIR
             // (never required: without it, AI masks offer to download it; see docs/ai-masks.md)
             session.segmenter.dir =
@@ -791,7 +803,9 @@ fn main() -> eframe::Result {
                 let rx = control_server::start(port, cc.egui_ctx.clone());
                 app = app.with_control(rx);
             }
-            if let Some(mut p) = problem {
+            if let Some(dir) = upgrade {
+                dac_ui_egui::panels::library_problem::start_upgrade(&mut app, dir, files);
+            } else if let Some(mut p) = problem {
                 // imported once the user has chosen where (into the library, or the temporary session)
                 p.pending_import = files;
                 app.library_problem = Some(p);

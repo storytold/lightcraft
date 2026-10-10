@@ -29,6 +29,29 @@ use serde::{Deserialize, Serialize};
 
 use crate::{EngineError, LibrarySource, Result, Selection, Session};
 
+/// The catalog migration (v3 → v4) running in this process, if any: what frontends show while
+/// [`migrate_library`] runs on a worker thread.
+pub fn migration_progress() -> Option<dac_catalog::progress::MigrationProgress> {
+    dac_catalog::progress::migration()
+}
+
+/// Whether opening the library in `dir` first upgrades its catalog (a one-time step that takes
+/// tens of seconds for a library of hundreds of thousands of photos).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn needs_migration(dir: &Path) -> bool {
+    dac_catalog::library::needs_migration(dir)
+}
+
+/// Upgrade the catalog of the library in `dir` without opening it in a session, so a frontend
+/// can run it on a worker thread and show [`migration_progress`]; [`Session::open_library`] is
+/// then a plain open. The library is locked meanwhile (another process using it: `LibraryInUse`).
+/// `Ok(true)` when it was upgraded.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn migrate_library(dir: &Path) -> Result<bool> {
+    let _lock = LibraryLock::acquire(dir, &program_name()).map_err(|e| EngineError::LibraryInUse(e.to_string()))?;
+    Ok(dac_catalog::library::migrate(dir)?)
+}
+
 /// Library directory name inside the user's Pictures folder.
 pub const DEFAULT_NAME: &str = dac_brand::LIBRARY_DEFAULT;
 

@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::{CatalogDb, DB_FILE};
 use crate::journal::{LOG, SNAPSHOT, VERSION};
+use crate::progress::MigrationPhase;
 use crate::store::FsStore;
 use crate::{Catalog, CatalogError, Journal, LoadReport, Result, Store};
 
@@ -108,6 +109,35 @@ pub fn create(parent: &Path, name: &str) -> Result<PathBuf> {
     Ok(entry_path(&dir))
 }
 
+/// Whether opening the library folder `dir` will first migrate it from v3 (the JSON snapshot and
+/// log) to the v4 store: a one-time step that takes tens of seconds for a large library, which
+/// frontends run with a progress display ([`crate::progress::migration`]). Reads only the start
+/// of the snapshot.
+pub fn needs_migration(dir: &Path) -> bool {
+    use std::io::Read;
+    if dir.join(DB_FILE).exists() {
+        return false;
+    }
+    let mut head = [0u8; 64];
+    let snap = std::fs::File::open(dir.join(SNAPSHOT)).ok().and_then(|mut f| f.read(&mut head).ok()).map(|n| head.get(..n).unwrap_or(&[]).to_vec());
+    match snap {
+        Some(start) => !start.starts_with(STUB.trim_end().as_bytes()),
+        None => std::fs::metadata(dir.join(LOG)).is_ok_and(|m| m.len() > 0),
+    }
+}
+
+/// Migrate the library folder `dir` from v3 to the v4 store if it needs it ([`needs_migration`]),
+/// without loading it: `Ok(true)` when it was migrated. Progress shows in
+/// [`crate::progress::migration`] meanwhile. Opening the folder afterwards is a plain v4 open.
+pub fn migrate(dir: &Path) -> Result<bool> {
+    if !needs_migration(dir) {
+        return Ok(false);
+    }
+    let store = FsStore::open(dir).map_err(ioe)?;
+    migrate_v3(Box::new(store), dir)?;
+    Ok(true)
+}
+
 /// Open the catalog at `path` (entry point or folder): migrating a v3 library on the way.
 pub fn open(path: &Path) -> Result<(Journal, Catalog, LoadReport)> {
     let dir = resolve(path)?;
@@ -181,6 +211,7 @@ fn stamp(secs: i64) -> String {
 
 /// v3 → v4: back up, load the JSON library, write the store, put the stub in place.
 fn migrate_v3(store: Box<dyn Store>, dir: &Path) -> Result<(Box<dyn Store>, CatalogDb, u32)> {
+    let _running = crate::progress::Running::start(dir.display().to_string());
     let backup = dir.join(BACKUPS_DIR).join(format!("before-v4 {}", stamp(now_secs())));
     std::fs::create_dir_all(&backup).map_err(ioe)?;
     for f in [SNAPSHOT, LOG] {
@@ -196,7 +227,9 @@ fn migrate_v3(store: Box<dyn Store>, dir: &Path) -> Result<(Box<dyn Store>, Cata
     }
     // the header only (the catalog in it is skipped, not built)
     let from = std::fs::read(dir.join(SNAPSHOT)).ok().and_then(|b| serde_json::from_slice::<Header>(&b).ok()).map_or(0, |h| h.version);
+    crate::progress::phase(MigrationPhase::Reading, 0, 0);
     let (mut j, catalog, rep) = Journal::open_json(store, false)?;
+    crate::progress::phase(MigrationPhase::Encoding, 0, catalog.len() as u64);
     if rep.damaged.is_some() {
         log::warn!("catalog: the v3 log was damaged; migrating the state recovered up to op {}", j.seq());
     }
@@ -209,6 +242,7 @@ fn migrate_v3(store: Box<dyn Store>, dir: &Path) -> Result<(Box<dyn Store>, Cata
     let mut db = CatalogDb::create(&tmp)?;
     db.checkpoint(&catalog, seq)?;
     drop(db);
+    crate::progress::phase(MigrationPhase::Finishing, catalog.len() as u64, catalog.len() as u64);
     std::fs::rename(&tmp, dir.join(DB_FILE)).map_err(ioe)?;
     log::info!(
         "catalog: migrated {} photos to the v4 store in {:.0} ms (v3 files kept in {})",
