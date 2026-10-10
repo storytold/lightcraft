@@ -94,7 +94,8 @@ fn auto_write_and_naming_preference() {
     // a slider drag writes once, at the end
     s.execute("develop.beginInteraction", &json!({"label": "Exposure"})).unwrap();
     s.execute("develop.set", &json!({"control": "light.exposure", "value": 1.5})).unwrap();
-    let exposure = |p: &Path| match crate::sidecar::parse_sidecar(&std::fs::read_to_string(p).unwrap(), false).unwrap().develop {
+    let exposure = |p: &Path| match crate::sidecar::parse_sidecar(&std::fs::read_to_string(p).unwrap(), crate::crs::Target::Rendered).unwrap().develop
+    {
         Some(crate::sidecar::DevelopPatch::Full(d)) => d.light.exposure,
         other => panic!("{other:?}"),
     };

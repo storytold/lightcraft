@@ -283,7 +283,8 @@ impl Op {
             | Op::SetAnalysis { id, .. }
             | Op::SetFile { id, .. }
             | Op::Relink { id, .. }
-            | Op::SetContent { id, .. } => out(*id),
+            | Op::SetContent { id, .. }
+            | Op::SetEmbeddedLens { id, .. } => out(*id),
             Op::AddAlbum { album } => {
                 album.photos.iter().for_each(|p| out(*p));
                 album.cover.into_iter().for_each(&mut *out);
@@ -299,7 +300,9 @@ impl Op {
             | Op::SetAlbumRules { .. }
             | Op::RemoveStack { .. }
             | Op::SetLabelName { .. }
-            | Op::SetBrowsed { .. } => {}
+            | Op::SetKeyword { .. }
+            | Op::SetBrowsed { .. }
+            | Op::SetFolderRecord { .. } => {}
         }
     }
 }

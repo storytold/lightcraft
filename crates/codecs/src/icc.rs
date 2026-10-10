@@ -205,7 +205,7 @@ pub fn write_named(n: NamedSpace) -> Vec<u8> {
     write_matrix_trc(&n.rgb_space(), &n.trc())
 }
 
-fn linear_rec2020_profile() -> ColorProfile {
+pub(crate) fn linear_rec2020_profile() -> ColorProfile {
     let mut p = ColorProfile::new_bt2020();
     p.cicp = None;
     let lin = ToneReprCurve::Parametric(vec![1.0]);

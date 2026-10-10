@@ -173,6 +173,11 @@ pub const OPCODE_LIST_3: u16 = 51022;
 pub const NOISE_PROFILE: u16 = 51041;
 pub const DEFAULT_USER_CROP: u16 = 51125;
 pub const PROFILE_GAIN_TABLE_MAP: u16 = 52525;
+/// DNG 1.7 row interleave: the stored raster holds this many interleaved row groups (each group is
+/// every `n`-th row of the image), so it must be un-interleaved before the data is a mosaic.
+pub const ROW_INTERLEAVE_FACTOR: u16 = 50975;
+/// DNG 1.7 column interleave, the column-wise counterpart of [`ROW_INTERLEAVE_FACTOR`].
+pub const COLUMN_INTERLEAVE_FACTOR: u16 = 52547;
 pub const CALIBRATION_ILLUMINANT_3: u16 = 52529;
 pub const CAMERA_CALIBRATION_3: u16 = 52530;
 pub const COLOR_MATRIX_3: u16 = 52531;
@@ -200,6 +205,8 @@ pub mod compression {
     /// DNG lossy JPEG (baseline DCT, 8-bit).
     pub const LOSSY_JPEG: u16 = 34892;
     pub const JPEG_XL: u16 = 52546;
+    /// SMPTE ST 2073 (VC-5) as written by GoPro's GPR files (the value measured in them).
+    pub const VC5: u16 = 9;
     /// Nikon NEF Huffman compression.
     pub const NIKON: u16 = 34713;
     /// Sony ARW compressed (the value used by ARW files).

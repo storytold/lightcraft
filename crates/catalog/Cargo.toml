@@ -19,4 +19,5 @@ log = { workspace = true }
 web-time = { workspace = true }
 
 [dev-dependencies]
+lightcraft-geom = { workspace = true }
 proptest = { workspace = true }

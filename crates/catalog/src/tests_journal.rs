@@ -78,6 +78,15 @@ fn op_for(c: &mut Catalog, kind: u8, a: u8, b: u8) -> Op {
         13 => Op::Batch { ops: c.remove_from_stacks_ops(&[pid]) },
         14 => c.set_top_ops(pid).unwrap_or(Op::Batch { ops: vec![] }),
         9 if b.is_multiple_of(5) => Op::SetLabelName { label: ColorLabel::ALL[a as usize % 5], name: (a % 3 != 1).then(|| format!("Label {b}")) },
+        9 if b % 7 == 5 => Op::SetKeyword {
+            path: format!("travel|place {}", b % 4),
+            info: (!b.is_multiple_of(3)).then(|| crate::keywords::KeywordInfo {
+                person: a.is_multiple_of(2),
+                synonyms: vec![format!("trip {a}")],
+                ..Default::default()
+            }),
+        },
+        9 if b % 11 == 4 => c.folder_label_op(&format!("/p/f{}", a % 4), ColorLabel::ALL.get(usize::from(b % 6)).copied()),
         9 if b % 7 == 3 => Op::SetAlbumOrder { id: aid, order: (!b.is_multiple_of(3)).then_some(u32::from(b % 5)) },
         9 if b.is_multiple_of(2) => {
             Op::SetFile { id: pid, file_name: format!("Renamed_{b}.jpg"), source: Source::File { path: format!("/p/Renamed_{b}.jpg") } }
@@ -325,4 +334,45 @@ fn failed_streamed_write_keeps_the_old_file() {
     assert_eq!(s.write_atomic_with(SNAPSHOT, &mut |w| w.write_all(b"new")).unwrap(), 3);
     assert_eq!(std::fs::read(dir.join(SNAPSHOT)).unwrap(), b"new");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A damaged rendering process in a saved photo (snapshot or log) reads as V1 and costs nothing
+/// else: the photo and its edits load (`docs/process-versions.md`).
+#[test]
+fn a_damaged_process_value_loads_as_v1_with_the_edits() {
+    use lightcraft_develop::ProcessVersion;
+    let mut c = Catalog::new();
+    let id = c.alloc_photo_id();
+    let mut p = Photo::new(id, Source::Demo { scene: 1 }, "a.jpg", "JPEG", 10, 10, "2026-10-09T00:00:00");
+    p.develop = Arc::new(DevelopSettings {
+        process: ProcessVersion(7),
+        light: lightcraft_develop::Light { exposure: 0.5, ..Default::default() },
+        ..Default::default()
+    });
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let snapshot = c.to_snapshot();
+    assert!(snapshot.contains(r#""process":7"#));
+    let snapshot = format!(
+        "{{\"format\":\"lightcraft-catalog\",\"version\":{},\"seq\":0,\"catalog\":{}}}\n",
+        crate::journal::VERSION,
+        snapshot.replace(r#""process":7"#, r#""process":-1"#)
+    );
+    let m = MemStore::new();
+    m.set(SNAPSHOT, snapshot.into_bytes());
+    let (_, loaded, _) = open(&m);
+    let d = &loaded.photo(id).unwrap().develop;
+    assert_eq!((d.process, d.light.exposure), (ProcessVersion::V1, 0.5));
+    // and in a (CRC-valid) log record
+    let edit = DevelopSettings {
+        process: ProcessVersion(7),
+        light: lightcraft_develop::Light { exposure: 0.8, ..Default::default() },
+        ..Default::default()
+    };
+    let op = Op::SetDevelop { id, settings: Arc::new(edit), label: "Edit".into(), edited: None };
+    let body = serde_json::to_string(&op).unwrap().replace(r#""process":7"#, r#""process":"seven""#);
+    assert!(body.contains("seven"));
+    m.set(LOG, format!("{{\"seq\":1,\"crc\":{},\"op\":{body}}}\n", crc32fast::hash(body.as_bytes())).into_bytes());
+    let (_, loaded, _) = open(&m);
+    let d = &loaded.photo(id).unwrap().develop;
+    assert_eq!((d.process, d.light.exposure), (ProcessVersion::V1, 0.8));
 }

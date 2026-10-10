@@ -298,7 +298,7 @@ mod tests {
 
     fn settings() -> (DevelopSettings, Vec<String>) {
         let d = lightcraft_meta::parse_xmp(PACKET).unwrap();
-        let (partial, unmapped) = crate::crs::to_partial_report(&d.properties, Some(&d.values), None, 1.5);
+        let (partial, unmapped) = crate::crs::to_partial_report(&d.properties, Some(&d.values), crate::crs::Target::Any, 1.5);
         (DevelopSettings::default().merged(&partial).expect("valid settings"), unmapped)
     }
 

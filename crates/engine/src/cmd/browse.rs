@@ -286,7 +286,7 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
         return Err("the library's own folders can't be moved here".into());
     }
     rename_folder_on_disk(from, to)?;
-    let ops: Vec<Op> = s
+    let mut ops: Vec<Op> = s
         .catalog
         .photos()
         .filter_map(|p| match &p.source {
@@ -301,6 +301,8 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
         })
         .collect();
     let n = ops.len();
+    // what the library knows about the folder (and those inside it) goes along, in the same step
+    ops.extend(s.catalog.folder_records_follow(from, to));
     let name = Path::new(to).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     let renamed = src.parent() == dst.parent();
     let label = if renamed { format!("Rename Folder to “{name}”") } else { format!("Move Folder “{name}”") };

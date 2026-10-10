@@ -168,10 +168,23 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     divider(ui);
 
     section(app, ui, &d, "light", "Light", |app, ui, d| {
+        hdr_row(app, ui, d);
         for c in ["light.exposure", "light.contrast", "light.highlights", "light.shadows", "light.whites", "light.blacks"] {
             control(app, ui, d, c, true);
         }
         ui.add_space(6.0);
+        if d.hdr.enabled {
+            let open = app.ui.flyout_open("sdrRendition");
+            if flyout_row(ui, "sdrRendition", "SDR Rendition", Icon::Sliders, open).clicked() {
+                app.ui.toggle_flyout("sdrRendition");
+            }
+            if open {
+                for c in ["hdr.sdrBrightness", "hdr.sdrContrast", "hdr.sdrHighlights", "hdr.sdrShadows", "hdr.sdrWhites", "hdr.sdrClarity"] {
+                    control(app, ui, d, c, true);
+                }
+                ui.add_space(6.0);
+            }
+        }
         let open = app.ui.flyout_open("curve");
         if flyout_row(ui, "curve", crate::i18n::tr("Curve"), Icon::Curve, open).clicked() {
             app.ui.toggle_flyout("curve");
@@ -1070,6 +1083,35 @@ fn point_color(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) 
             });
         });
     });
+}
+
+// ------------------------------------------------------------------------------ HDR
+
+/// The Light panel's HDR row: the HDR switch and Visualize HDR, then (HDR on) the headroom limit.
+fn hdr_row(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            let mut on = d.hdr.enabled;
+            if ui.checkbox(&mut on, "HDR").on_hover_text("Edit in HDR: highlights above SDR white, for HDR exports and displays").changed() {
+                let _ = app.run("develop.hdr", json!({"enabled": on}));
+            }
+            if d.hdr.enabled {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let mut v = app.ui.hdr_visualize;
+                    if ui
+                        .checkbox(&mut v, "Visualize HDR")
+                        .on_hover_text("Grey below SDR white; yellow, orange, red, magenta up to 1, 2, 3 and over 3 stops above it")
+                        .changed()
+                    {
+                        app.ui.hdr_visualize = v;
+                    }
+                });
+            }
+        });
+    });
+    if d.hdr.enabled {
+        control(app, ui, d, "hdr.maxEv", true);
+    }
 }
 
 // ------------------------------------------------------------------------------ colour grading

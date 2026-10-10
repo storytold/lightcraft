@@ -79,6 +79,22 @@ fn smart_album_from_smart_album_view_keeps_its_rules() {
     assert_eq!(s.source, LibrarySource::Album(lightcraft_catalog::AlbumId(id)));
 }
 
+/// Saving the view of a smart album keeps the filter bar's settings even when the album holds a
+/// rule that no longer checks (it tests an album that has since been deleted).
+#[test]
+fn smart_album_view_keeps_the_filter_bar_over_a_stale_rule() {
+    let mut s = Session::with_demo();
+    let gone = s.execute("album.create", &json!({"name": "Gone", "addSelected": false})).unwrap()["id"].as_u64().unwrap();
+    let rules = json!({"ruleSet": {"rules": [{"field": "album", "op": "isNot", "value": gone}]}});
+    let id = s.execute("album.createSmart", &json!({"name": "Not in Gone", "rules": rules})).unwrap()["id"].as_u64().unwrap();
+    s.execute("album.delete", &json!({"id": gone})).unwrap();
+    s.execute("library.source", &json!({"kind": "album", "id": id})).unwrap();
+    s.execute("library.filter", &json!({"rating": 3})).unwrap();
+    let r = s.view_rules();
+    assert_eq!(r.rating, 3, "the filter bar's rating survives");
+    assert!(r.rule_set.is_some(), "and so do the album's own rules");
+}
+
 #[test]
 fn virtual_copies_are_independent_and_persist() {
     let dir = temp_dir("vc");
@@ -255,4 +271,45 @@ fn random_sort_persists_with_the_view() {
     assert_eq!(s2.sort.key, lightcraft_catalog::SortKey::Random);
     assert_eq!(s2.sort.seed, 123_456_789);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Issue #501: deleting a populated folder is one reversible, durable catalog edit.
+#[test]
+fn deleting_an_album_folder_preserves_photos_and_restores_its_subtree() {
+    use lightcraft_catalog::AlbumId;
+    let dir = temp_dir("delete-folder");
+    let mut s = open(&dir);
+    let make = |s: &mut Session, p| s.execute("album.create", &p).unwrap()["id"].as_u64().unwrap();
+    let outer = make(&mut s, json!({"name": "Trips", "folder": true}));
+    let nested = make(&mut s, json!({"name": "Europe", "folder": true, "parent": outer}));
+    let album = make(&mut s, json!({"name": "Best", "parent": nested, "addSelected": true}));
+    let sibling = make(&mut s, json!({"name": "Kept", "addSelected": true}));
+    let smart = s.execute("album.createSmart", &json!({"name": "Rated", "parent": outer, "rules": {"rating": 4}})).unwrap()["id"].as_u64().unwrap();
+    s.execute("album.reorder", &json!({"id": album, "parent": nested})).unwrap();
+    s.execute("library.source", &json!({"kind": "album", "id": album})).unwrap();
+    let before = s.catalog.to_snapshot();
+    let photos = serde_json::to_value(s.catalog.photos().collect::<Vec<_>>()).unwrap();
+    let undo_before = s.undo.len();
+    s.execute("album.delete", &json!({"id": outer})).unwrap();
+    for id in [outer, nested, album, smart] {
+        assert!(s.catalog.album(AlbumId(id)).is_none());
+    }
+    assert!(s.catalog.album(AlbumId(sibling)).is_some());
+    assert_eq!(serde_json::to_value(s.catalog.photos().collect::<Vec<_>>()).unwrap(), photos);
+    assert_eq!(s.source, LibrarySource::All, "a deleted descendant cannot remain the source");
+    assert_eq!(s.undo.len(), undo_before + 1);
+    let deleted = s.catalog.to_snapshot();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.to_snapshot(), before, "all album fields and memberships restored");
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.catalog.to_snapshot(), deleted);
+    let undo_after = s.undo.len();
+    assert!(s.execute("album.delete", &json!({"id": outer})).is_err());
+    assert_eq!(s.catalog.to_snapshot(), deleted, "missing id leaves the catalog unchanged");
+    assert_eq!(s.undo.len(), undo_after);
+    drop(s);
+    let reopened = open(&dir);
+    assert_eq!(reopened.catalog.to_snapshot(), deleted, "journal replay preserves the deletion");
+    drop(reopened);
+    let _ = std::fs::remove_dir_all(dir);
 }

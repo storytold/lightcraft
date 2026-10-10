@@ -6,8 +6,10 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod album_picker;
 pub mod control;
 pub mod credits;
+pub mod date_picker;
 pub mod export_task;
 pub mod headless;
 pub mod i18n;
@@ -27,19 +29,35 @@ pub mod render;
 pub mod shortcuts;
 pub mod softpaint;
 pub mod state;
+pub mod sync;
 pub mod tasks;
+pub mod text_field;
 pub mod theme;
 pub mod titlebar;
 pub mod widgets;
 
 #[cfg(test)]
+mod tests_album_picker;
+#[cfg(test)]
+mod tests_crop_rotate;
+#[cfg(test)]
 mod tests_curve;
+#[cfg(test)]
+mod tests_date_picker;
 #[cfg(test)]
 mod tests_filmstrip;
 #[cfg(test)]
 mod tests_grid;
 #[cfg(test)]
 mod tests_keymap;
+#[cfg(test)]
+mod tests_keyword_files;
+#[cfg(test)]
+mod tests_keyword_list;
+#[cfg(test)]
+mod tests_keyword_set;
+#[cfg(test)]
+mod tests_keywording;
 #[cfg(test)]
 mod tests_labels;
 #[cfg(test)]
@@ -63,11 +81,15 @@ mod tests_scroll;
 #[cfg(test)]
 mod tests_switch_library;
 #[cfg(test)]
+mod tests_sync;
+#[cfg(test)]
 mod tests_titlebar;
 #[cfg(test)]
 mod tests_unsaved;
 #[cfg(test)]
 mod tests_zoom;
+#[cfg(test)]
+mod tests_zoom_keys;
 
 use std::sync::mpsc::{Receiver, Sender};
 
@@ -115,8 +137,14 @@ pub struct Services {
     pub pick_preset_files: Option<PickFiles>,
     /// Open dialog for a GPS track log (`.gpx`; Photo ▸ Auto-Tag from Tracklog…).
     pub pick_tracklog: Option<PickFiles>,
+    /// Open dialog for a monitor ICC profile (`.icc` / `.icm`; Settings ▸ Display; desktop only).
+    pub pick_display_profile: Option<PickFiles>,
     /// Save dialog for an exported `.lcpreset` file.
     pub save_preset_file: Option<SaveFile>,
+    /// Open dialog for a keyword list file (`.txt`, Photo Supreme's `.utf8`; File ▸ Import Keywords…).
+    pub pick_keyword_list: Option<PickFiles>,
+    /// Save dialog for an exported keyword list (File ▸ Export Keywords…).
+    pub save_keyword_list: Option<SaveFile>,
     /// Open dialog for point-curve preset files (`.lccurve`).
     pub pick_curve_preset_files: Option<PickFiles>,
     /// Save dialog for an exported `.lccurve` file.
@@ -196,6 +224,8 @@ pub struct LightcraftApp {
     shadow: Option<headless::HeadlessView>,
     /// Synthetic input events (from the control channel) injected one step per frame.
     pub synthetic: Vec<egui::Event>,
+    /// The text the UI last put on the clipboard (`ui.inspect` → `copied`).
+    pub copied: Option<String>,
     /// Native file dialogs up for commands (`pick`): each command runs again when its closes.
     pub(crate) pending_picks: Vec<pick::Pending>,
     /// Modifiers announced for synthetic input (held from a button down to its release).
@@ -240,6 +270,12 @@ pub struct LightcraftApp {
     pub import: Option<import::ImportTask>,
     /// A folder scan in progress (feeds the import review).
     pub scan: Option<import::ScanTask>,
+    /// A Synchronize Folder scan in progress (feeds its dialog).
+    pub sync: Option<sync::SyncTask>,
+    /// `session.folder_changes` came from the Synchronize Folder dialog (and goes with it).
+    pub sync_owns_changes: bool,
+    /// A Synchronize Folder at work in the background.
+    pub sync_run: Option<sync::SyncRun>,
     /// A Lightroom catalog inspect/import in progress.
     pub lightroom: Option<lightroom_import::LightroomTask>,
     /// Last terminal Lightroom result, exposed by the command's status/wait response.
@@ -259,6 +295,10 @@ pub struct LightcraftApp {
     gpu_applied: Option<bool>,
     /// The memory budget setting last applied (MB, 0 = automatic).
     memory_applied: Option<u32>,
+    /// The display profile setting last applied (`app.displayProfile`).
+    pub(crate) display_applied: Option<String>,
+    /// Why the display profile setting could not be applied (shown in Settings ▸ Display).
+    pub display_error: Option<String>,
     /// The library failed to open at launch: the blocking window, then the temporary-session
     /// banner (issue #100). Cleared once a library opens.
     pub library_problem: Option<panels::library_problem::LibraryProblem>,
@@ -288,6 +328,7 @@ impl LightcraftApp {
             screenshot_token: 0,
             shadow: None,
             synthetic: vec![],
+            copied: None,
             pending_picks: vec![],
             synthetic_mods: egui::Modifiers::NONE,
             synthetic_mods_release: false,
@@ -311,6 +352,9 @@ impl LightcraftApp {
             merge: merge::MergeState::default(),
             import: None,
             scan: None,
+            sync: None,
+            sync_owns_changes: false,
+            sync_run: None,
             lightroom: None,
             lightroom_last: None,
             export: None,
@@ -320,6 +364,8 @@ impl LightcraftApp {
             window_is_fullscreen: false,
             gpu_applied: None,
             memory_applied: None,
+            display_applied: None,
+            display_error: None,
             library_problem: None,
             model_setup: Default::default(),
         }
@@ -349,6 +395,11 @@ impl LightcraftApp {
             return r;
         }
         let r = self.session.execute(id, &params).map_err(|e| e.to_string());
+        if r.is_ok() && id == "mask.adjust" {
+            // Judge local adjustments on the photo, without the selection overlay obscuring them.
+            // Keep it hidden after release; O / the overlay eye can show it again.
+            self.ui.mask_overlay = false;
+        }
         if r.is_ok() && id == "photo.label" {
             let label = params.get("label").and_then(Value::as_str).and_then(lightcraft_catalog::ColorLabel::parse);
             let text = match label {
@@ -685,6 +736,23 @@ impl LightcraftApp {
         }
     }
 
+    /// The process is about to end (settings and library are saved by then): make sure nothing is
+    /// inside the GPU driver when it does (issue #620: a render running on a worker thread while
+    /// the process exits crashes in the driver). No GPU work starts from here on; the render
+    /// workers get up to `timeout` to finish their jobs, and what is left of it goes to GPU work
+    /// on other threads (export, denoise, the device warm-up). `false`: the deadline passed first
+    /// (the host exits anyway). The app renders nothing afterwards.
+    pub fn shutdown(&mut self, timeout: std::time::Duration) -> bool {
+        lightcraft_engine::gpu::begin_shutdown();
+        #[cfg(not(target_arch = "wasm32"))]
+        let t0 = std::time::Instant::now();
+        let stopped = self.renderer.shutdown(timeout);
+        #[cfg(not(target_arch = "wasm32"))]
+        let timeout = timeout.saturating_sub(t0.elapsed());
+        let idle = lightcraft_engine::gpu::wait_idle(timeout);
+        stopped && idle
+    }
+
     /// Per-frame logic before layout (control channel, renders, shortcuts, drops).
     pub fn logic(&mut self, ctx: &egui::Context) {
         i18n::set_language(self.ui.language);
@@ -734,6 +802,8 @@ impl LightcraftApp {
         self.renderer.poll(ctx, &mut self.session);
         merge::poll(self, ctx);
         import::poll_scan(self, ctx);
+        sync::poll(self, ctx);
+        sync::poll_run(self, ctx);
         import::tick(self, ctx);
         lightroom_import::tick(self, ctx);
         tasks::poll(self, ctx);
@@ -758,7 +828,12 @@ impl LightcraftApp {
         if let Some(folder) = self.session.import_defaults.auto_folder.clone() {
             const LABEL: &str = "Auto Import";
             let now = ctx.input(|i| i.time);
-            if now - self.ui.auto_import_at >= 3.0 && self.import.is_none() && self.lightroom.is_none() && !self.tasks.is_running(LABEL) {
+            if now - self.ui.auto_import_at >= 3.0
+                && self.import.is_none()
+                && self.sync_run.is_none()
+                && self.lightroom.is_none()
+                && !self.tasks.is_running(LABEL)
+            {
                 self.ui.auto_import_at = now;
                 let work = move || lightcraft_engine::cmd::library::list_auto_import_folder(&folder);
                 let done = |app: &mut LightcraftApp, _ctx: &egui::Context, listing: Result<Vec<(String, u64)>, String>| {
@@ -837,6 +912,24 @@ impl LightcraftApp {
             let _ = self.session.execute("app.memoryBudget", &serde_json::json!({"mb": mb}));
         }
         self.memory_applied = Some(mb);
+        // the monitor profile (Settings ▸ Display): previews follow it from the next frame
+        if self.display_applied.as_ref() != Some(&self.ui.settings.display_profile) {
+            let path = self.ui.settings.display_profile.clone();
+            match lightcraft_engine::display::Display::load_opt(&path) {
+                Ok(d) => {
+                    self.renderer.set_display(d);
+                    self.display_error = None;
+                }
+                Err(msg) => {
+                    // a profile that can't be used: previews are sRGB, the setting is kept
+                    self.renderer.set_display(None);
+                    log::warn!("display profile: {msg}");
+                    self.toast_error(ctx, format!("{}: {msg}", crate::i18n::tr("Display profile not used")));
+                    self.display_error = Some(msg);
+                }
+            }
+            self.display_applied = Some(path);
+        }
         if let Some(fs) = ctx.input(|i| i.viewport().fullscreen) {
             self.window_is_fullscreen = fs;
         }
@@ -882,7 +975,14 @@ impl LightcraftApp {
     }
 
     /// Frame timings once layout is done (`t0`: when layout started).
-    fn end_frame(&mut self, t0: f64) {
+    fn end_frame(&mut self, ctx: &egui::Context, t0: f64) {
+        ctx.output(|o| {
+            for c in &o.commands {
+                if let egui::OutputCommand::CopyText(text) = c {
+                    self.copied = Some(text.clone());
+                }
+            }
+        });
         self.perf.frame_ms = now_ms() - t0;
         self.perf.update_ms = self.perf.logic_ms + self.perf.frame_ms;
         self.perf.max_update_ms = self.perf.max_update_ms.max(self.perf.update_ms);
@@ -912,7 +1012,7 @@ impl LightcraftApp {
             panels::library_problem::show(self, &ctx);
             panels::toast(self, &ctx);
             self.widgets = widgets::take_registry(&ctx);
-            self.end_frame(t0);
+            self.end_frame(&ctx, t0);
             return;
         }
         // Order matters: earlier panels take the full edge (top bar spans the window; the tool strip,
@@ -950,15 +1050,17 @@ impl LightcraftApp {
         panels::dialogs::show(self, &ctx);
         panels::library_problem::show(self, &ctx);
         import::progress(self, &ctx);
+        sync::progress_window(self, &ctx);
         import::scan_progress(self, &ctx);
         lightroom_import::progress(self, &ctx);
         export_task::poll(self, &ctx);
         pick::poll(self, &ctx);
         panels::grid::drag_feedback(self, &ctx);
         panels::left::album_drag_feedback(self, &ctx);
+        panels::keyword_list::drag_feedback(self, &ctx);
         panels::toast(self, &ctx);
         self.widgets = widgets::take_registry(&ctx);
-        self.end_frame(t0);
+        self.end_frame(&ctx, t0);
     }
 }
 
@@ -1064,6 +1166,13 @@ mod drop_tests {
 #[derive(Default)]
 pub struct Caches {
     keyword_tree: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::KeywordNode>>)>,
+    /// The Keywording box's read-only names (with containing keywords, or Will Export), by library
+    /// revision, selection and view.
+    keyword_names: Option<(u64, u64, std::sync::Arc<Vec<panels::keywording::Chip>>)>,
+    /// The Keywording box's chips, by library revision and selection.
+    keyword_chips: Option<(u64, u64, std::sync::Arc<Vec<panels::keywording::Chip>>)>,
+    /// The Keyword List's tick boxes, by library revision and selection.
+    keyword_ticks: Option<(u64, u64, std::sync::Arc<panels::keyword_list::Ticks>)>,
     folder_tree: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::FolderNode>>)>,
     people: Option<(u64, lightcraft_catalog::Filter, std::sync::Arc<Vec<lightcraft_catalog::Person>>)>,
     suggestions: Option<(u64, std::sync::Arc<Vec<String>>)>,
@@ -1073,6 +1182,12 @@ pub struct Caches {
     album_counts: Option<(u64, std::sync::Arc<std::collections::HashMap<lightcraft_catalog::AlbumId, usize>>)>,
     /// How often the album counts were recomputed (tests check that unchanged frames don't).
     pub album_count_scans: usize,
+    /// What the open smart-album rule dialog shows besides the rules ([`Caches::rules_view`]).
+    rules_view: Option<(u64, std::sync::Arc<RulesView>)>,
+    pub rules_view_scans: usize,
+    /// The problems of every saved smart album that has some ([`Caches::smart_album_problems`]).
+    smart_problems: Option<(u64, std::sync::Arc<std::collections::HashMap<lightcraft_catalog::AlbumId, Vec<lightcraft_catalog::rules::Problem>>>)>,
+    pub smart_problem_scans: usize,
     /// AI denoise: what the pump last saw, the model list and the downloads being watched.
     pub denoise: panels::denoise::Ui,
     /// Bumped when a face model is installed, removed or chosen, so Settings re-reads the list at once.
@@ -1122,6 +1237,14 @@ pub struct FilterValues {
     pub keywords: Vec<String>,
 }
 
+/// What the smart-album rule dialog shows besides the rules themselves: their problems (each row
+/// marks its own), how many photos they match and the albums an Album rule picks from.
+pub struct RulesView {
+    pub problems: Vec<lightcraft_catalog::rules::Problem>,
+    pub count: usize,
+    pub albums: Vec<album_picker::AlbumEntry>,
+}
+
 pub(crate) fn key_of(parts: impl std::hash::Hash) -> u64 {
     use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
     BuildHasherDefault::<DefaultHasher>::default().hash_one(parts)
@@ -1146,6 +1269,60 @@ impl Caches {
             _ => {
                 let t = std::sync::Arc::new(cat.keyword_tree());
                 self.keyword_tree = Some((cat.revision, t.clone()));
+                t
+            }
+        }
+    }
+    /// The Keywording box's read-only names for the selection: what exported files carry
+    /// (`export`), or the keywords with those containing them.
+    pub(crate) fn keyword_names(
+        &mut self,
+        cat: &lightcraft_catalog::Catalog,
+        selection: &[lightcraft_catalog::PhotoId],
+        export: bool,
+    ) -> std::sync::Arc<Vec<panels::keywording::Chip>> {
+        let key = key_of((selection, export));
+        match &self.keyword_names {
+            Some((r, k, c)) if *r == cat.revision && *k == key => c.clone(),
+            _ => {
+                let c = std::sync::Arc::new(if export {
+                    panels::keywording::will_export(cat, selection)
+                } else {
+                    panels::keywording::with_containing(cat, selection)
+                });
+                self.keyword_names = Some((cat.revision, key, c.clone()));
+                c
+            }
+        }
+    }
+    /// The selection's keywords (the Keywording box's chips).
+    pub(crate) fn keyword_chips(
+        &mut self,
+        cat: &lightcraft_catalog::Catalog,
+        selection: &[lightcraft_catalog::PhotoId],
+    ) -> std::sync::Arc<Vec<panels::keywording::Chip>> {
+        let key = key_of(selection);
+        match &self.keyword_chips {
+            Some((r, k, c)) if *r == cat.revision && *k == key => c.clone(),
+            _ => {
+                let c = std::sync::Arc::new(panels::keywording::chips(cat, selection));
+                self.keyword_chips = Some((cat.revision, key, c.clone()));
+                c
+            }
+        }
+    }
+    /// How many selected photos have each keyword (the Keyword List's tick boxes).
+    pub(crate) fn keyword_ticks(
+        &mut self,
+        cat: &lightcraft_catalog::Catalog,
+        selection: &[lightcraft_catalog::PhotoId],
+    ) -> std::sync::Arc<panels::keyword_list::Ticks> {
+        let key = key_of(selection);
+        match &self.keyword_ticks {
+            Some((r, k, t)) if *r == cat.revision && *k == key => t.clone(),
+            _ => {
+                let t = std::sync::Arc::new(panels::keyword_list::Ticks::of(cat, selection));
+                self.keyword_ticks = Some((cat.revision, key, t.clone()));
                 t
             }
         }
@@ -1249,6 +1426,56 @@ impl Caches {
     /// all bump its revision) and — only while some smart album has an "in the last…" rule —
     /// when `now` (the session clock, ISO) enters a new minute, so such counts follow the clock
     /// within a minute without rescanning every frame.
+    /// [`RulesView`] for `rules` edited in smart album `editing` (`None`: a new album), within
+    /// `folder` when it was made from a folder view: worked out again only when the catalog, the
+    /// rules, the language or (for "in the last…" rules) the minute changes, not every frame.
+    pub fn rules_view(
+        &mut self,
+        cat: &lightcraft_catalog::Catalog,
+        rules: &lightcraft_catalog::RuleSet,
+        editing: Option<u64>,
+        folder: Option<String>,
+        now: &str,
+    ) -> std::sync::Arc<RulesView> {
+        let relative = rules.depends_on_now();
+        let minute = if relative { now.get(..16).unwrap_or(now) } else { "" };
+        let k = key_of((cat.revision, serde_json::to_string(rules).unwrap_or_default(), editing, &folder, minute, i18n::language().code()));
+        if let Some((key, v)) = &self.rules_view
+            && *key == k
+        {
+            return v.clone();
+        }
+        if relative {
+            lightcraft_catalog::rules::set_now(Some(now.to_string()));
+        }
+        let problems = rules.check_for(cat, editing.map(lightcraft_catalog::AlbumId));
+        let filter = lightcraft_catalog::Filter { rule_set: Some(rules.clone()), library_folder: folder, ..Default::default() };
+        let count = if problems.is_empty() { cat.query(&filter, &Default::default()).len() } else { 0 };
+        let v = std::sync::Arc::new(RulesView { problems, count, albums: panels::dialogs::album_entries(cat, editing) });
+        self.rules_view_scans += 1;
+        self.rules_view = Some((k, v.clone()));
+        v
+    }
+
+    /// The problems of every saved smart album that has some (`Catalog::smart_album_problems`),
+    /// for the sidebar's ⚠ marks: worked out again only when the catalog changes.
+    pub fn smart_album_problems(
+        &mut self,
+        cat: &lightcraft_catalog::Catalog,
+    ) -> std::sync::Arc<std::collections::HashMap<lightcraft_catalog::AlbumId, Vec<lightcraft_catalog::rules::Problem>>> {
+        if let Some((rev, v)) = &self.smart_problems
+            && *rev == cat.revision
+        {
+            return v.clone();
+        }
+        let v: std::sync::Arc<std::collections::HashMap<_, _>> = std::sync::Arc::new(
+            cat.albums().filter(|a| a.is_smart()).map(|a| (a.id, cat.smart_album_problems(a.id))).filter(|(_, p)| !p.is_empty()).collect(),
+        );
+        self.smart_problem_scans += 1;
+        self.smart_problems = Some((cat.revision, v.clone()));
+        v
+    }
+
     pub fn album_counts(
         &mut self,
         cat: &lightcraft_catalog::Catalog,
@@ -1322,6 +1549,42 @@ mod cache_tests {
         assert_eq!(c.album_counts(&cat, "2026-09-30T13:00:10")[&AlbumId(11)], 0);
         assert_eq!(c.album_count_scans, 4);
         lightcraft_catalog::rules::set_now(None);
+    }
+
+    /// The rule dialog's problems, live count and album list are worked out once per change to the
+    /// catalog or the rules, not every frame; so are the sidebar's smart-album problems.
+    #[test]
+    fn rule_dialog_and_problems_are_cached_until_something_changes() {
+        let mut cat = Catalog::default();
+        let mut c = super::Caches::default();
+        for i in 0..3u64 {
+            cat.apply(photo(i + 1, "2026-09-30T11:00:00", if i == 0 { 5 } else { 1 })).unwrap();
+        }
+        let rules =
+            |v: u64| -> RuleSet { serde_json::from_value(serde_json::json!({"rules": [{"field": "rating", "op": "gte", "value": v}]})).unwrap() };
+        let now = "2026-09-30T12:00:00";
+        let view = c.rules_view(&cat, &rules(3), None, None, now);
+        assert_eq!((view.count, view.problems.len()), (1, 0));
+        for _ in 0..10 {
+            c.rules_view(&cat, &rules(3), None, None, now);
+        }
+        assert_eq!(c.rules_view_scans, 1, "unchanged frames reuse it");
+        assert_eq!(c.rules_view(&cat, &rules(1), None, None, now).count, 3, "a rule change");
+        assert_eq!(c.rules_view(&cat, &rules(9), None, None, now).problems.len(), 1);
+        cat.apply(Op::SetRating { id: PhotoId(2), rating: 4 }).unwrap();
+        assert_eq!(c.rules_view(&cat, &rules(3), None, None, now).count, 2, "a catalog change");
+        assert_eq!(c.rules_view_scans, 4);
+        // the sidebar's problems
+        cat.apply(Op::AddAlbum { album: lightcraft_catalog::Album::new(AlbumId(20), "Trip") }).unwrap();
+        cat.apply(smart(21, serde_json::json!({"rules": [{"field": "album", "op": "is", "value": 20}]}))).unwrap();
+        assert!(c.smart_album_problems(&cat).get(&AlbumId(21)).is_none_or(Vec::is_empty));
+        for _ in 0..10 {
+            c.smart_album_problems(&cat);
+        }
+        assert_eq!(c.smart_problem_scans, 1);
+        cat.apply(Op::RemoveAlbum { id: AlbumId(20) }).unwrap();
+        assert!(c.smart_album_problems(&cat).get(&AlbumId(21)).is_some_and(|p| !p.is_empty()), "its album is gone");
+        assert_eq!(c.smart_problem_scans, 2);
     }
 
     /// Without "in the last…" rules the clock never causes a rescan.

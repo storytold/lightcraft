@@ -1,7 +1,7 @@
 //! Develop commands. All operate on the active photo unless `ids` are given (sync).
 
 use lightcraft_catalog::{Op, PhotoId, Version};
-use lightcraft_develop::{DevelopSettings, Preset, Section, SettingsGroup, Treatment, Upright, WbMode, controls};
+use lightcraft_develop::{DevelopSettings, Preset, ProcessVersion, Section, SettingsGroup, Treatment, Upright, WbMode, controls};
 use lightcraft_geom::{CropGeometry, CropHandle, Point, Rect, crop_fit_angle, drag_crop};
 use serde_json::{Value, json};
 
@@ -72,6 +72,49 @@ fn set_aspect(d: &mut DevelopSettings, w: f64, h: f64, aspect: Option<(u32, u32)
     });
     let angle = d.crop.geometry.angle;
     d.crop.geometry = crop_fit_angle(w, h, angle, a);
+}
+
+/// Photo `id` is on an older rendering process than [`ProcessVersion::LATEST`].
+fn outdated(s: &Session, id: PhotoId) -> bool {
+    s.catalog.photo(id).is_some_and(|p| p.develop.process.is_outdated())
+}
+
+fn already_current() -> String {
+    format!("already on the current process (version {})", ProcessVersion::LATEST.0)
+}
+
+/// Update to Current Process applies to the selection (the selected photos, else the active
+/// photo): one of them is on an older rendering process. Calls that name their photos are
+/// checked by the command instead (`explicit_targets`).
+fn has_outdated_process(s: &Session) -> std::result::Result<(), String> {
+    has_selection(s)?;
+    let sel = &s.selection;
+    let targets = if sel.ids.is_empty() { sel.active.as_slice() } else { sel.ids.as_slice() };
+    if targets.iter().any(|id| outdated(s, *id)) { Ok(()) } else { Err(already_current()) }
+}
+
+/// The photos a call names (`ids`, or `id`), each of which must be in the library; `None` when it
+/// names none (the selection applies).
+fn named_photos(s: &Session, p: &Value, c: &str) -> Result<Option<Vec<PhotoId>>> {
+    if !super::names_photos(p) {
+        return Ok(None);
+    }
+    let given = match p.get("ids").filter(|v| !v.is_null()) {
+        Some(Value::Array(a)) => a.clone(),
+        Some(_) => return Err(bad(c, "`ids` must be a list of photo ids")),
+        None => p.get("id").cloned().into_iter().collect(),
+    };
+    if given.is_empty() {
+        return Err(bad(c, "`ids` names no photos"));
+    }
+    let ids = given
+        .iter()
+        .map(|v| match v.as_u64().map(PhotoId) {
+            Some(id) if s.catalog.photo(id).is_some() => Ok(id),
+            _ => Err(bad(c, format!("no such photo {v}"))),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Some(ids))
 }
 
 /// The user preset named by `p.id` (built-ins can't be changed).
@@ -203,12 +246,44 @@ pub fn specs() -> Vec<CommandSpec> {
                             }
                         }
                     };
-                    s.develop_op(id, fresh, "Reset")
+                    // a fresh start renders with the current process (a section or slider reset doesn't change it)
+                    s.develop_op(id, DevelopSettings { process: ProcessVersion::LATEST, ..fresh }, "Reset")
                 })
                 .collect();
             s.commit("Reset", Op::Batch { ops })?;
             ok()
         }),
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "develop.updateProcess",
+                "Update to Current Process",
+                ["Photo"],
+                None,
+                "{ids?}: moves the target photos (`ids`, else the selection) that are on an older rendering process to the current one, as one undo step (their look can change; the sliders keep their values; see docs/process-versions.md). Enabled while a selected photo is on an older process; named photos are checked themselves (each must exist, one must be on an older process) → {changed, process}",
+                has_outdated_process,
+                |s, p| {
+                    const C: &str = "develop.updateProcess";
+                    const LABEL: &str = "Update to Current Process";
+                    let targets = match named_photos(s, p, C)? {
+                        Some(ids) if !ids.iter().any(|id| outdated(s, *id)) => return Err(crate::EngineError::Disabled(C.into(), already_current())),
+                        Some(ids) => ids,
+                        None => s.targets(p),
+                    };
+                    let ops: Vec<Op> = targets
+                        .into_iter()
+                        .filter_map(|id| s.develop_of(id).map(|d| (id, d)))
+                        .filter(|(_, d)| d.process.is_outdated())
+                        .filter_map(|(id, d)| s.develop_op(id, DevelopSettings { process: ProcessVersion::LATEST, ..(*d).clone() }, LABEL))
+                        .collect();
+                    let n = ops.len();
+                    if n > 0 {
+                        s.commit(LABEL, Op::Batch { ops })?;
+                    }
+                    Ok(json!({"changed": n, "process": ProcessVersion::LATEST}))
+                }
+            )
+        },
         cmd!(
             "develop.resetSection",
             "Reset Section",
@@ -572,6 +647,33 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(())
             })
         }),
+        // ---- HDR editing
+        cmd!(
+            "develop.hdr",
+            "HDR",
+            [],
+            None,
+            "{enabled?: bool (default: toggle), maxEv?: number 0..5 (headroom limit, stops above SDR white)} — HDR editing: highlights above SDR white for HDR exports and displays; every SDR render uses the SDR rendition (the hdr.sdr* controls)",
+            has_active,
+            |s, p| {
+                let id = active(s, "develop.hdr")?;
+                let cur = s.develop_of(id).unwrap_or_default().hdr;
+                let enabled = bool_or(p, "enabled", !cur.enabled);
+                let max_ev = match p.get("maxEv") {
+                    None => None,
+                    Some(v) => Some(v.as_f64().filter(|x| x.is_finite()).ok_or_else(|| bad("develop.hdr", "`maxEv` must be a number"))?),
+                };
+                let label = if enabled { "HDR On" } else { "HDR Off" };
+                edit(s, "develop.hdr", label, |d| {
+                    d.hdr.enabled = enabled;
+                    if let Some(m) = max_ev {
+                        d.hdr.max_ev = m.clamp(0.0, lightcraft_develop::Hdr::MAX_EV_LIMIT);
+                    }
+                    Ok(())
+                })?;
+                Ok(json!({"enabled": enabled, "maxEv": s.develop_of(id).map(|d| d.hdr.max_ev)}))
+            }
+        ),
         // ---- geometry: Upright
         cmd!(
             "geometry.upright",

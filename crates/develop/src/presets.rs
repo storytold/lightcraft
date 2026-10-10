@@ -3,6 +3,10 @@
 //! A preset is a *partial* settings object (JSON) — only the groups it includes. Applying merges it
 //! into the photo's settings; `amount` (0..200 %) interpolates numeric values between the current
 //! settings and the preset's. Copy/paste/sync use the same group selection ([`SettingsGroup`]).
+//!
+//! The rendering process ([`crate::ProcessVersion`]) is in no group: copy, paste, sync and presets
+//! made from a photo never carry it, so the photos they change keep their own. A partial that names
+//! `process` itself (Apply Settings JSON) sets it like any other field.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -98,7 +102,7 @@ impl SettingsGroup {
             SettingsGroup::Profile => &["profile"],
             SettingsGroup::Treatment => &["treatment"],
             SettingsGroup::WhiteBalance => &["wb"],
-            SettingsGroup::Light => &["light"],
+            SettingsGroup::Light => &["light", "hdr"],
             SettingsGroup::ToneCurve => &["curve"],
             SettingsGroup::Color => &["color"],
             SettingsGroup::ColorMixer => &["mixer", "bw_mix", "point_colors"],
@@ -162,7 +166,9 @@ fn scale_patch(base: &Value, patch: &Value, t: f64) -> Value {
             }
             Value::Object(out)
         }
-        (Value::Number(b), Value::Number(p)) => {
+        // Integer fields (the grain seed, ids) are discrete like strings: an interpolated seed would
+        // not deserialize as an integer, and the whole preset would silently not apply.
+        (Value::Number(b), Value::Number(p)) if b.is_f64() || p.is_f64() => {
             let (b, p) = (b.as_f64().unwrap_or(0.0), p.as_f64().unwrap_or(0.0));
             serde_json::Number::from_f64(b + (p - b) * t).map(Value::Number).unwrap_or(Value::Null)
         }
@@ -265,6 +271,25 @@ mod tests {
         // clamped through specs
         let lots = apply_partial(&base, &json!({"light": {"exposure": 4.0}}), 2.0);
         assert_eq!(lots.light.exposure, 5.0);
+    }
+
+    /// A preset with the Grain group (its seed is an integer) used to do nothing at any amount
+    /// other than 100 %: the interpolated seed failed to deserialize and the preset was dropped.
+    #[test]
+    fn amount_keeps_integer_fields_whole() {
+        let mut a = DevelopSettings::default();
+        a.light.exposure = 1.0;
+        a.grain.amount = 40.0;
+        a.grain.seed = 12345;
+        let p = Preset::from_settings("p", "P", "User", &a, &SettingsGroup::default_copy());
+        assert!(p.settings.pointer("/grain/seed").is_some_and(Value::is_u64), "the default copy groups include the grain seed");
+        let base = DevelopSettings::default();
+        for (amount, seed) in [(0.3, 0), (0.5, 12345), (1.5, 12345), (2.0, 12345)] {
+            let out = p.apply(&base, amount);
+            assert!((out.light.exposure - amount.min(5.0)).abs() < 1e-9, "{amount}: exposure {}", out.light.exposure);
+            assert!((out.grain.amount - (40.0 * amount).min(100.0)).abs() < 1e-9, "{amount}: grain {}", out.grain.amount);
+            assert_eq!(out.grain.seed, seed, "{amount}: seed");
+        }
     }
 
     #[test]

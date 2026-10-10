@@ -1,8 +1,9 @@
-//! The Settings dialog (⌘,): General, Import, Performance, Interface, Faces, AI Denoise.
+//! The Settings dialog (⌘,): General, Import, Performance, Display, Interface, Faces, AI Denoise.
 //!
 //! Changes apply immediately (no OK/Cancel). Where they are stored:
 //! - **app settings** ([`crate::state::AppSettings`]: startup view, delete confirmation, GPU,
-//!   preview size, filmstrip/grid badges, last library) and Auto Advance live in the UI state,
+//!   preview size, filmstrip/grid badges, last library, monitor profile) and Auto Advance live in
+//!   the UI state,
 //!   saved by the host in its config folder (`ui.json`);
 //! - **library settings** (import defaults, XMP sidecars, thumbnail cache size) go through the
 //!   `library.preferences` / `library.xmpPreferences` commands into the library's `prefs.json`,
@@ -21,6 +22,7 @@ pub const TABS: &[(&str, &str)] = &[
     ("general", "General"),
     ("import", "Import"),
     ("performance", "Performance"),
+    ("display", "Display"),
     ("interface", "Interface"),
     ("faces", "Faces"),
     ("denoise", "AI Denoise"),
@@ -49,6 +51,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String) {
     match tab.as_str() {
         "import" => import_tab(app, ui, &t),
         "performance" => performance_tab(app, ui, &t),
+        "display" => display_tab(app, ui, &t),
         "interface" => interface_tab(app, ui, &t),
         "faces" => super::faces::settings_tab(app, ui, &t),
         "denoise" => super::denoise::settings_tab(app, ui, &t),
@@ -532,6 +535,69 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 
 // ---------------------------------------------------------------------------------- Interface
 
+/// The monitor profile (`app.displayProfile`): previews are shown through the display's ICC
+/// profile, so wide-gamut and calibrated displays show colours as they are.
+fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    heading(ui, t, crate::i18n::tr("Monitor profile"));
+    let current = app.renderer.display().cloned();
+    row(ui, t, crate::i18n::tr("Profile"), |ui| {
+        let name = match &current {
+            Some(d) => d.profile.description.clone(),
+            None => crate::i18n::tr("None (the display is treated as sRGB)").to_string(),
+        };
+        ui.label(RichText::new(name).color(t.text));
+    });
+    row(ui, t, "", |ui| {
+        let can = app.services.pick_display_profile.is_some();
+        let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Choose Profile…")));
+        register(ui.ctx(), "button:settingsDisplayProfile", r.rect);
+        if r.clicked()
+            && let Some(path) = app.services.pick_display_profile.as_mut().and_then(|pick| pick().into_iter().next())
+        {
+            app.ui.settings.display_profile = path;
+        }
+        let r = ui.add_enabled(!app.ui.settings.display_profile.is_empty(), egui::Button::new(crate::i18n::tr("Use sRGB")));
+        register(ui.ctx(), "button:settingsDisplayProfileNone", r.rect);
+        if r.clicked() {
+            app.ui.settings.display_profile.clear();
+        }
+        if !can {
+            hint(ui, t, crate::i18n::tr("not available here"));
+        }
+    });
+    if let Some(e) = &app.display_error {
+        ui.label(RichText::new(e).size(11.0).color(t.reject));
+    }
+    if let Some(d) = &current {
+        let info = d.describe();
+        row(ui, t, crate::i18n::tr("File"), |ui| {
+            ui.label(RichText::new(&d.path).size(11.0).color(t.text_dim));
+        });
+        row(ui, t, crate::i18n::tr("Type"), |ui| {
+            let kind = match d.profile.kind {
+                lightcraft_engine::display::DisplayKind::MatrixTrc => crate::i18n::tr("Matrix/TRC"),
+                lightcraft_engine::display::DisplayKind::Lut => crate::i18n::tr("LUT-based"),
+            };
+            ui.label(RichText::new(kind).color(t.text));
+        });
+        row(ui, t, crate::i18n::tr("Primaries (x, y)"), |ui| {
+            let p = &info["primaries"];
+            let xy = |(k, l): (&str, &str)| format!("{l} {:.3}, {:.3}", p[k][0].as_f64().unwrap_or(0.0), p[k][1].as_f64().unwrap_or(0.0));
+            let text = [("red", "R"), ("green", "G"), ("blue", "B")].map(xy).join("   ");
+            ui.label(RichText::new(text).size(11.0).color(t.text_dim));
+        });
+    }
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(
+            "Photos are shown through your monitor's ICC profile, so colours are right on wide-gamut and calibrated displays, and the Detail view uses the display's whole gamut. The histogram, the preview caches and exports are not affected.",
+        ),
+    );
+    #[cfg(target_os = "linux")]
+    hint(ui, t, crate::i18n::tr("Profiles assigned in your desktop's colour settings are usually in ~/.local/share/icc."));
+}
+
 fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     heading(ui, t, crate::i18n::tr("Filmstrip"));
     check(ui, "settings.filmNames", &mut app.ui.settings.film_names, "Show file names");
@@ -583,4 +649,30 @@ pub fn open_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String>
     app.ui.compare = None;
     app.ui.settings.library_path = path.clone();
     Ok(json!({"path": path, "photos": app.session.catalog.len()}))
+}
+
+// ---------------------------------------------------------------------------- Display profile
+
+/// `app.displayProfile {path?: string | null}`: show previews through this monitor ICC profile
+/// (`""` or `null`: none, the display is treated as sRGB) and keep it as the setting; no `path`:
+/// report only. A file that can't be used is an error and changes nothing. Returns the profile in
+/// use: `{path, description, kind (matrix|lut), primaries {red, green, blue: [x, y]}}`.
+pub fn display_profile(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    let path = match p.get("path") {
+        None => None,
+        Some(Value::Null) => Some(String::new()),
+        Some(Value::String(s)) => Some(s.trim().to_string()),
+        Some(_) => return Err("app.displayProfile: path must be a string or null".into()),
+    };
+    if let Some(path) = path {
+        let d = lightcraft_engine::display::Display::load_opt(&path).map_err(|e| format!("app.displayProfile: {e}"))?;
+        app.renderer.set_display(d);
+        app.ui.settings.display_profile = path.clone();
+        app.display_applied = Some(path);
+        app.display_error = None;
+    }
+    Ok(match app.renderer.display() {
+        Some(d) => d.describe(),
+        None => json!({"path": null, "description": "sRGB (no display profile)"}),
+    })
 }

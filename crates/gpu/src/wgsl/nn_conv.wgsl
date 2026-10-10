@@ -44,8 +44,11 @@ const TX: u32 = BN / 4u;
 const A_ITEMS: u32 = BM * (BK / 4u);
 const B_ITEMS: u32 = BK * (BN / 4u);
 
-// A[k][m] four pixels to a vec4, B[k][n] four channels to a vec4
-var<workgroup> As: array<vec4<f32>, {{A_VECS}}>;
+// A[k][m] has one scalar per pixel; B[k][n] packs four channels per vec4.
+// Different invocations must not write lanes of the same shared vector: WGSL permits
+// a component write to access the entire vector. A later barrier cannot undo that race.
+// Each scalar below has one writer; gather four pixels only after the barrier.
+var<workgroup> As: array<f32, BK * BM>;
 var<workgroup> Bs: array<vec4<f32>, {{B_VECS}}>;
 
 @compute @workgroup_size(256)
@@ -88,12 +91,11 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) t
                         }
                     }
                 }
-                let base = (q * 4u) * (BM / 4u) + ml / 4u;
-                let lane = ml % 4u;
-                As[base][lane] = v.x;
-                As[base + BM / 4u][lane] = v.y;
-                As[base + 2u * (BM / 4u)][lane] = v.z;
-                As[base + 3u * (BM / 4u)][lane] = v.w;
+                let base = q * 4u * BM + ml;
+                As[base] = v.x;
+                As[base + BM] = v.y;
+                As[base + 2u * BM] = v.z;
+                As[base + 3u * BM] = v.w;
             }
             for (var item = tid; item < B_ITEMS; item += 256u) {
                 let r = item / (BN / 4u);
@@ -103,7 +105,8 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) t
             }
             workgroupBarrier();
             for (var kk = 0u; kk < BK; kk++) {
-                let a = As[kk * (BM / 4u) + ty];
+                let ai = kk * BM + ty * 4u;
+                let a = vec4<f32>(As[ai], As[ai + 1u], As[ai + 2u], As[ai + 3u]);
                 let b = Bs[kk * TX + tx];
                 acc0 += a.x * b;
                 acc1 += a.y * b;
