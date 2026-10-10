@@ -22,6 +22,7 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 [dev-dependencies]
 proptest = { workspace = true }
 dac-psd = { path = ".", features = ["testgen"] }
+dac-fuzzkit = { workspace = true }
 
 [lints]
 workspace = true
