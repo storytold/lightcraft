@@ -153,6 +153,9 @@ fn update_service(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(n) = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
         next.name = n.to_string();
     }
+    if let Some(st) = p.get("settings").filter(|v| v.is_object()) {
+        next.settings = st.clone();
+    }
     if let Some(d) = str_param(p, "dir") {
         next.settings["dir"] = json!(d.trim());
     }
@@ -508,7 +511,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Publish Service",
             [],
             None,
-            "{service: id | name, name?, dir?, export?} → the service",
+            "{service: id | name, name?, dir?, settings?: the kind's settings object (replaces them), export?} → the service",
             always,
             update_service
         ),
