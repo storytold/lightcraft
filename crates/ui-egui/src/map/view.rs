@@ -63,6 +63,7 @@ fn canvas(app: &mut DacApp, ui: &mut egui::Ui, r: Rect) {
     app.map.canvas = Some(r);
     register(&ctx, "map:canvas", r);
     let resp = ui.interact(r, egui::Id::new("map-canvas"), Sense::click_and_drag());
+    crate::access::named(&resp, egui::WidgetType::Other, crate::i18n::tr("Map"));
     let painter = ui.painter_at(r);
     painter.rect_filled(r, 0.0, Color32::from_rgb(0xaa, 0xd3, 0xdf));
 
@@ -179,6 +180,7 @@ fn canvas(app: &mut DacApp, ui: &mut egui::Ui, r: Rect) {
         let rad = if n == 1 { 7.0 } else { 11.0 + (n as f32).log10() * 4.0 };
         let hit = Rect::from_center_size(at, vec2(rad * 2.0 + 6.0, rad * 2.0 + 6.0));
         let pr = ui.interact(hit, id, Sense::click_and_drag());
+        crate::access::named(&pr, egui::WidgetType::Button, &format!("{} ({n})", crate::i18n::tr("Photos at this place")));
         register(&ctx, format!("map:pin:{}", c.items.first().copied().unwrap_or(0)), hit);
         let fill = if sel { t.accent } else { Color32::from_rgb(0x20, 0x20, 0x24) };
         painter.circle(at, rad, fill, Stroke::new(2.0, Color32::WHITE));
@@ -229,7 +231,7 @@ fn canvas(app: &mut DacApp, ui: &mut egui::Ui, r: Rect) {
                 let at = screen_to_geo(&app.map, r, p);
                 let n = ids.len();
                 match app.run("map.geotag", json!({"ids": ids, "lat": at.lat, "lon": at.lon})) {
-                    Ok(_) => app.toast(&ctx, format!("Geotagged {n} photo{}", if n == 1 { "" } else { "s" }, n = n)),
+                    Ok(_) => app.toast(&ctx, crate::i18n::tr_format!("Geotagged {n} photo(s)", n = n)),
                     Err(e) => app.toast_error(&ctx, e),
                 }
                 app.ui.dragging_photos = None;
@@ -257,7 +259,7 @@ fn canvas(app: &mut DacApp, ui: &mut egui::Ui, r: Rect) {
         }
         if ui.button(crate::i18n::tr("Save Location Here")).clicked() {
             let name = if app.map.new_name.trim().is_empty() {
-                format!("Location {}", app.session.catalog.saved_locations().count() + 1)
+                crate::i18n::tr_format!("Location {n}", n = app.session.catalog.saved_locations().count() + 1)
             } else {
                 app.map.new_name.clone()
             };
@@ -286,6 +288,7 @@ fn canvas(app: &mut DacApp, ui: &mut egui::Ui, r: Rect) {
     for (i, (label, dz)) in [("+", 1.0), ("−", -1.0)].into_iter().enumerate() {
         let br = Rect::from_min_size(pos2(r.left() + 10.0, r.top() + 10.0 + i as f32 * 30.0), vec2(26.0, 26.0));
         let b = ui.interact(br, egui::Id::new(("map-zoom", i)), Sense::click());
+        crate::access::button(&b, if dz > 0.0 { "Zoom In" } else { "Zoom Out" });
         register(&ctx, format!("map:zoom{}", if dz > 0.0 { "In" } else { "Out" }), br);
         painter.rect(
             br,
@@ -344,7 +347,7 @@ fn hover_preview(app: &mut DacApp, ui: &mut egui::Ui, r: Rect, at: Pos2, ids: &[
         p.image(tex.tex.id(), fr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
     let name = app.session.catalog.photo(first).map(|ph| ph.file_name.clone()).unwrap_or_default();
-    let text = if ids.len() > 1 { format!("{n} photos", n = ids.len()) } else { name };
+    let text = if ids.len() > 1 { crate::i18n::tr_format!("{n} photos", n = ids.len()) } else { name };
     p.text(pos2(box_r.center().x, box_r.bottom() - 11.0), Align2::CENTER_CENTER, text, t.font(11.0), t.text);
     register(ui.ctx(), "map:hover", box_r);
 }

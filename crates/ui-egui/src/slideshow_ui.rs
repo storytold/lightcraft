@@ -434,7 +434,11 @@ fn export(app: &mut DacApp, p: &Value, pdf: bool) -> Result<Value, String> {
             app.ui.slides.export_busy = false;
             match r {
                 Ok(files) => {
-                    let msg = if pdf { format!("PDF in {dir}") } else { format!("{} JPEGs in {dir}", files.len()) };
+                    let msg = if pdf {
+                        crate::i18n::tr_format!("PDF in {dir}", dir = dir)
+                    } else {
+                        crate::i18n::tr_format!("{n} JPEGs in {dir}", n = files.len(), dir = dir)
+                    };
                     app.toast(ctx, msg.clone());
                     app.ui.slides.export_status = Some(msg);
                     app.ui.slides.export_last = Some(json!({"frames": frames, "files": files}));
@@ -716,7 +720,8 @@ fn play_keys(app: &mut DacApp, ctx: &egui::Context) {
 fn full_screen_show(app: &mut DacApp, ctx: &egui::Context) {
     let screen = ctx.content_rect();
     egui::Area::new(egui::Id::new("slideshow-full")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
-        let (r, _) = ui.allocate_exact_size(screen.size(), Sense::click());
+        let (r, resp) = ui.allocate_exact_size(screen.size(), Sense::click());
+        crate::access::button(&resp, "End Slideshow");
         register(ui.ctx(), "view:slideshow:play".to_string(), r);
         if !paint_show(app, ui, r) {
             stop(app);
@@ -749,7 +754,7 @@ pub fn toolbar(app: &mut DacApp, ui: &mut egui::Ui) {
                         }
                     }
                 });
-                ui.label(format!("{n} {}", crate::i18n::tr("photos")));
+                ui.label(crate::i18n::tr_format!("{n} photos", n = n));
                 if let Some(name) = app.ui.slides.open.clone() {
                     ui.label(format!("· {name}"));
                     if ui.small_button("✕").clicked() {
@@ -879,7 +884,8 @@ fn left_column(app: &mut DacApp, ui: &mut egui::Ui) {
     let builtin: Vec<String> = builtin_templates().into_iter().map(|t| t.name).collect();
     let user: Vec<String> = app.ui.slides.templates.iter().map(|t| t.name.clone()).collect();
     for (name, own) in builtin.iter().map(|n| (n, false)).chain(user.iter().map(|n| (n, true))) {
-        let r = ui.selectable_label(*name == current, name.as_str());
+        // built-in templates show in the UI language, the user's own as named
+        let r = ui.selectable_label(*name == current, if own { name.as_str() } else { crate::i18n::tr(name) });
         register(ui.ctx(), format!("slideshowTemplate:{name}"), r.rect);
         if r.clicked() {
             let _ = app.run("slideshow.applyTemplate", json!({"name": name}));
@@ -895,7 +901,8 @@ fn left_column(app: &mut DacApp, ui: &mut egui::Ui) {
     let draft_id = egui::Id::new("slideshow-template-name");
     let mut draft: String = ui.data(|d| d.get_temp(draft_id)).unwrap_or_default();
     ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut draft).desired_width(120.0).hint_text(crate::i18n::tr("Name")));
+        let r = ui.add(egui::TextEdit::singleline(&mut draft).desired_width(120.0).hint_text(crate::i18n::tr("Name")));
+        crate::access::label(&r, "Template name");
         if ui.button(crate::i18n::tr("Save Template")).clicked()
             && let Err(e) = app.run("slideshow.saveTemplate", json!({"name": draft}))
         {
@@ -920,7 +927,7 @@ fn left_column(app: &mut DacApp, ui: &mut egui::Ui) {
         });
     }
     if ui.button(crate::i18n::tr("Create Saved Slideshow")).clicked() {
-        let name = if draft.trim().is_empty() { format!("Slideshow {}", count + 1) } else { draft.clone() };
+        let name = if draft.trim().is_empty() { crate::i18n::tr_format!("Slideshow {n}", n = count + 1) } else { draft.clone() };
         if let Err(e) = app.run("slideshow.saveSlideshow", json!({"name": name})) {
             app.toast_error(ui.ctx(), e);
         }
@@ -929,7 +936,9 @@ fn left_column(app: &mut DacApp, ui: &mut egui::Ui) {
 }
 
 fn rgb(ui: &mut egui::Ui, c: &mut [u8; 3]) -> bool {
-    ui.color_edit_button_srgb(c).changed()
+    let r = ui.color_edit_button_srgb(c);
+    crate::access::label(&r, "Color");
+    r.changed()
 }
 
 fn pct(ui: &mut egui::Ui, label: &str, v: &mut f32, max: f32) -> bool {
@@ -948,10 +957,23 @@ fn anchor_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, a
         Anchor::Bottom,
         Anchor::BottomRight,
     ];
+    let name = |x: Anchor| {
+        crate::i18n::tr(match x {
+            Anchor::TopLeft => "Top Left",
+            Anchor::Top => "Top",
+            Anchor::TopRight => "Top Right",
+            Anchor::Left => "Left",
+            Anchor::Center => "Center",
+            Anchor::Right => "Right",
+            Anchor::BottomLeft => "Bottom Left",
+            Anchor::Bottom => "Bottom",
+            Anchor::BottomRight => "Bottom Right",
+        })
+    };
     let mut changed = false;
-    egui::ComboBox::from_id_salt(id).selected_text(format!("{a:?}")).show_ui(ui, |ui| {
+    egui::ComboBox::from_id_salt(id).selected_text(name(*a)).show_ui(ui, |ui| {
         for x in ALL {
-            if ui.selectable_label(*a == x, format!("{x:?}")).clicked() {
+            if ui.selectable_label(*a == x, name(x)).clicked() {
                 *a = x;
                 changed = true;
             }
@@ -998,9 +1020,16 @@ fn right_column(app: &mut DacApp, ui: &mut egui::Ui) {
                 }
             }
         }
-        egui::ComboBox::from_id_salt("slideshow-aspect").selected_text(format!("{:?}", s.layout.aspect)).show_ui(ui, |ui| {
+        let aspect = |a: Aspect| {
+            crate::i18n::tr(match a {
+                Aspect::Screen => "Screen",
+                Aspect::Wide16x9 => "Wide (16:9)",
+                Aspect::Classic4x3 => "Classic (4:3)",
+            })
+        };
+        egui::ComboBox::from_id_salt("slideshow-aspect").selected_text(aspect(s.layout.aspect)).show_ui(ui, |ui| {
             for a in [Aspect::Screen, Aspect::Wide16x9, Aspect::Classic4x3] {
-                if ui.selectable_label(s.layout.aspect == a, format!("{a:?}")).clicked() {
+                if ui.selectable_label(s.layout.aspect == a, aspect(a)).clicked() {
                     s.layout.aspect = a;
                     ch = true;
                 }
@@ -1011,7 +1040,9 @@ fn right_column(app: &mut DacApp, ui: &mut egui::Ui) {
         let o = &mut s.overlays;
         ch |= ui.checkbox(&mut o.identity_plate, crate::i18n::tr("Identity Plate")).changed();
         if o.identity_plate {
-            ch |= ui.add(egui::TextEdit::singleline(&mut o.plate_text).hint_text(crate::i18n::tr("Identity plate text"))).changed();
+            let r = ui.add(egui::TextEdit::singleline(&mut o.plate_text).hint_text(crate::i18n::tr("Identity plate text")));
+            crate::access::label(&r, "Identity plate text");
+            ch |= r.changed();
             ch |= anchor_combo(ui, "slideshow-plate-anchor", &mut o.plate_anchor);
             ch |= pct(ui, "Opacity", &mut o.plate_opacity, 1.0);
             ch |= pct(ui, "Scale", &mut o.plate_size, 0.3);
@@ -1028,7 +1059,9 @@ fn right_column(app: &mut DacApp, ui: &mut egui::Ui) {
         for (k, t) in o.texts.iter_mut().enumerate() {
             ui.separator();
             ui.horizontal(|ui| {
-                ch |= ui.add(egui::TextEdit::singleline(&mut t.text).desired_width(170.0)).changed();
+                let r = ui.add(egui::TextEdit::singleline(&mut t.text).desired_width(170.0));
+                crate::access::label(&r, "Text");
+                ch |= r.changed();
                 ch |= rgb(ui, &mut t.color);
                 if ui.small_button("✕").clicked() {
                     remove = Some(k);
@@ -1080,7 +1113,9 @@ fn right_column(app: &mut DacApp, ui: &mut egui::Ui) {
         }
         ui.horizontal(|ui| {
             ui.label(crate::i18n::tr("Background Image"));
-            ch |= ui.add(egui::TextEdit::singleline(&mut b.image).hint_text(crate::i18n::tr("path (export)"))).changed();
+            let r = ui.add(egui::TextEdit::singleline(&mut b.image).hint_text(crate::i18n::tr("path (export)")));
+            crate::access::label(&r, "Background Image");
+            ch |= r.changed();
         });
         ch |= pct(ui, "Opacity", &mut b.image_opacity, 1.0);
     }
@@ -1092,7 +1127,9 @@ fn right_column(app: &mut DacApp, ui: &mut egui::Ui) {
             });
             if tt.enabled {
                 ch |= ui.checkbox(&mut tt.plate, crate::i18n::tr("Add Identity Plate")).changed();
-                ch |= ui.add(egui::TextEdit::singleline(&mut tt.text).hint_text(crate::i18n::tr("Text"))).changed();
+                let r = ui.add(egui::TextEdit::singleline(&mut tt.text).hint_text(crate::i18n::tr("Text")));
+                crate::access::label(&r, "Text");
+                ch |= r.changed();
             }
         }
     }
@@ -1128,7 +1165,8 @@ fn right_column(app: &mut DacApp, ui: &mut egui::Ui) {
         let path_id = egui::Id::new("slideshow-music-path");
         let mut path: String = ui.data(|d| d.get_temp(path_id)).unwrap_or_default();
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut path).desired_width(160.0).hint_text("track.flac"));
+            let r = ui.add(egui::TextEdit::singleline(&mut path).desired_width(160.0).hint_text("track.flac"));
+            crate::access::label(&r, "Music");
             if ui.button(crate::i18n::tr("Add")).clicked() {
                 match app.run("slideshow.addMusic", json!({"path": path})) {
                     Ok(_) => path.clear(),

@@ -499,6 +499,7 @@ pub fn stars(ui: &mut Ui, id: &str, rating: u8, size: f32) -> Option<u8> {
         for i in 0..5u8 {
             let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
             register(ui.ctx(), format!("star:{id}:{}", i + 1), r);
+            crate::access::named(&resp, egui::WidgetType::RadioButton, &format!("{} {}", crate::i18n::tr("Rating"), i + 1));
             if resp.hovered() {
                 h = Some(i + 1);
             }

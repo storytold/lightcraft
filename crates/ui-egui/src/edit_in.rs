@@ -215,13 +215,16 @@ fn presets_window(app: &mut DacApp, ctx: &egui::Context, st: &mut WorkflowUi) {
             ui.separator();
             egui::Grid::new("edit-in-grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                 ui.label(tr("Name"));
-                ui.text_edit_singleline(&mut st.draft.name);
+                let r = ui.text_edit_singleline(&mut st.draft.name);
+                crate::access::label(&r, "Name");
                 ui.end_row();
                 ui.label(tr("Application"));
-                ui.add(egui::TextEdit::singleline(&mut st.draft.app).hint_text(tr("System default")));
+                let r = ui.add(egui::TextEdit::singleline(&mut st.draft.app).hint_text(tr("System default")));
+                crate::access::label(&r, "System default");
                 ui.end_row();
                 ui.label(tr("Arguments"));
-                ui.add(egui::TextEdit::singleline(&mut st.draft.args).hint_text("{file}"));
+                let r = ui.add(egui::TextEdit::singleline(&mut st.draft.args).hint_text("{file}"));
+                crate::access::label(&r, "Arguments");
                 ui.end_row();
                 combo(ui, "ei-mode", "Mode", &mut st.draft.mode, MODES);
                 let formats: Vec<(&str, &str)> = FORMATS.iter().map(|f| (*f, if *f == "psd" { "PSD (layered)" } else { "TIFF" })).collect();
@@ -248,7 +251,8 @@ fn presets_window(app: &mut DacApp, ctx: &egui::Context, st: &mut WorkflowUi) {
                 });
                 ui.end_row();
                 ui.label(tr("File Name"));
-                ui.text_edit_singleline(&mut st.draft.naming);
+                let r = ui.text_edit_singleline(&mut st.draft.naming);
+                crate::access::label(&r, "File Name");
                 ui.end_row();
                 ui.label("");
                 ui.checkbox(&mut st.draft.stack, tr("Stack With Original"));
@@ -316,7 +320,8 @@ fn actions_window(app: &mut DacApp, ctx: &egui::Context, st: &mut WorkflowUi) {
             ui.separator();
             ui.horizontal(|ui| {
                 ui.label(tr("Shortcut"));
-                ui.add(egui::TextEdit::singleline(&mut st.shortcut).hint_text("Cmd+Alt+1").desired_width(110.0));
+                let r = ui.add(egui::TextEdit::singleline(&mut st.shortcut).hint_text("Cmd+Alt+1").desired_width(110.0));
+                crate::access::label(&r, "Shortcut");
                 if ui.button(tr("Set")).clicked() {
                     let sc = st.shortcut.trim().to_string();
                     let r = if !sc.is_empty() && crate::shortcuts::parse(&sc).is_none() {
@@ -351,7 +356,8 @@ fn actions_window(app: &mut DacApp, ctx: &egui::Context, st: &mut WorkflowUi) {
             }
             None => {
                 ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut st.record_name).hint_text(tr("Action name")).desired_width(180.0));
+                    let r = ui.add(egui::TextEdit::singleline(&mut st.record_name).hint_text(tr("Action name")).desired_width(180.0));
+                    crate::access::label(&r, "Action name");
                     if ui.button(tr("Record")).clicked() {
                         let r = app.run("actions.record", json!({"name": st.record_name.trim()}));
                         outcome(st, r, "Recording: edit a photo, then stop");

@@ -88,6 +88,13 @@ crates/ui-egui/src/catalog_ui.rs
 crates/ui-egui/src/print_ui.rs
 crates/ui-egui/src/map/
 crates/engine/src/cmd/map.rs
+# P6.3 accessibility, module help, localisation coverage
+crates/ui-egui/src/access.rs
+crates/ui-egui/src/help_overlay.rs
+crates/ui-egui/src/tests_access.rs
+crates/ui-egui/src/tests_module_help.rs
+crates/ui-egui/src/tests_i18n_coverage.rs
+docs/accessibility.md
 # our docs and plans
 docs/catalog.md
 docs/immich.md
