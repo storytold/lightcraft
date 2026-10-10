@@ -57,6 +57,30 @@ fn default_crop(mn: Option<&makernote::MakerNote>, w: usize, h: usize) -> Rect {
     Rect::new(*x as usize, *y as usize, *width as usize, *height as usize)
 }
 
+/// A body that records no CropArea, measured on its own files: the image area inside the sensor data (where the
+/// camera's full-size JPEG sits when the two are aligned) and the level where its channels clip.
+struct MeasuredBody {
+    model: &'static str,
+    /// Sensor data size and sample depth of the measured files.
+    size: (usize, usize),
+    bits: u32,
+    /// Image area in sensor pixels: x, y, width, height.
+    crop: (usize, usize, usize, usize),
+    white: f32,
+}
+
+/// * **NIKON D4** (148 uncompressed 14-bit NEFs from one body, 2023–2026, ISO 100–10000): the data is 4992 × 3292,
+///   with 2 columns of optical black left of the image and 42 right of it, then 8 empty ones; the camera's
+///   4928 × 3280 JPEG sits at (8, 6). Without this area the optical black shows as purple stripes on both sides.
+///   Green saturates at 15546–15672 while red and blue run on to 15687–16383, so the data's own top (~16300) leaves
+///   clipped highlights magenta; one level of 15520 for every channel turns them white and keeps the white balance.
+const MEASURED_BODIES: &[MeasuredBody] =
+    &[MeasuredBody { model: "NIKON D4", size: (4992, 3292), bits: 14, crop: (8, 6, 4928, 3280), white: 15520.0 }];
+
+fn measured_body(model: &str, w: usize, h: usize, bits: u32) -> Option<&'static MeasuredBody> {
+    MEASURED_BODIES.iter().find(|b| b.model == model.trim() && b.size == (w, h) && b.bits == bits)
+}
+
 fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
     tiff.all_ifds()
         .into_iter()
@@ -120,9 +144,13 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<RawImage> {
         (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => Cfa { width: 2, height: 2, pattern: p.to_vec() },
         _ => Cfa::bayer_static("RGGB"),
     };
-    let white = white_from_data(samples, bits);
+    let body = measured_body(&ifd0.string(t::MODEL).unwrap_or_default(), w, h, bits);
+    let white = body.map_or_else(|| white_from_data(samples, bits), |b| b.white);
     let active_w = trailing_masked_columns(samples, w, h, white);
-    let crop = default_crop(mn.as_ref(), active_w, h);
+    let crop = match body {
+        Some(&MeasuredBody { crop: (x, y, cw, ch), .. }) if x + cw <= active_w && y + ch <= h => Rect::new(x, y, cw, ch),
+        _ => default_crop(mn.as_ref(), active_w, h),
+    };
     let mut metadata = lightcraft_meta::from_tiff(&tiff);
     metadata.width = Some(crop.width as u32);
     metadata.height = Some(crop.height as u32);
@@ -272,6 +300,30 @@ mod tests {
             assert_eq!(raw.metadata.height, Some(expected.height as u32));
             let developed = raw.develop(crate::Method::Bilinear).unwrap();
             assert_eq!((developed.width, developed.height), (expected.width, expected.height));
+        }
+    }
+
+    /// The D4 records no CropArea: its measured image area and saturation level apply to files of its data size and
+    /// depth only.
+    #[test]
+    fn measured_d4_image_area_and_white_level() {
+        let (w, h) = (4992usize, 3292usize);
+        let decode_as = |model: &str, bits: u16| {
+            let mut nef = nef(1, bits, vec![vec![0x10; w * h * 2]], w as u32, h as u32, h as u32);
+            let at = nef.windows(10).position(|b| b == b"NIKON TEST").unwrap();
+            let name = format!("{model:<10}");
+            nef[at..at + 10].copy_from_slice(name.as_bytes());
+            crate::decode(&nef).unwrap()
+        };
+        let d4 = decode_as("NIKON D4", 14);
+        assert_eq!(d4.crop, Rect::new(8, 6, 4928, 3280));
+        assert_eq!(d4.white, vec![15520.0]);
+        assert_eq!((d4.metadata.width, d4.metadata.height), (Some(4928), Some(3280)));
+        let developed = d4.develop(crate::Method::Bilinear).unwrap();
+        assert_eq!((developed.width, developed.height), (4928, 3280));
+        for other in [decode_as("NIKON D5", 14), decode_as("NIKON D4", 12)] {
+            assert_eq!(other.crop, Rect::new(0, 0, w, h));
+            assert_ne!(other.white, vec![15520.0]);
         }
     }
 
