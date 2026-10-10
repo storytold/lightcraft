@@ -103,7 +103,7 @@ of it. Full standard: `../craftrules/standards/never-crash.md`
 - **Fonts live in [storytold/craft-fonts](https://github.com/storytold/craft-fonts), never in this repo.** Don't commit
   font files here (Inter, already in `assets/fonts/`, is the one exception); add new fonts to craft-fonts. The app
   uses it as the optional build input `CRAFT_FONTS_DIR`: `git clone https://github.com/storytold/craft-fonts ../craft-fonts`
-  then `CRAFT_FONTS_DIR=../craft-fonts cargo xtask run` (or any cargo/xtask command). `crates/engine-export/build.rs`
+  then `CRAFT_FONTS_DIR=../craft-fonts cargo xtask run` (or any cargo/xtask command). `crates/engine/build.rs`
   embeds the manifest's fonts as `dac_engine::CRAFT_FONTS` (wasm32: BIZ UDPGothic Regular only); `cargo xtask web`
   ships Noto Sans CJK SC Regular as a separate asset loaded by the UI before startup. The UI
   (`theme::font_definitions`) and the export watermark renderer use CJK faces (picked by script) as fallbacks after Inter. Unset,

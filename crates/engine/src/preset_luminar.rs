@@ -666,4 +666,23 @@ mod tests {
         assert_eq!(got, [("Vintage", "Wild Pack"), ("Pop 1", "Wild Pack")]);
         assert!(read_presets("empty.mplumpack", &zip(&[("icon.png", b"x")], false), None).is_err());
     }
+
+    #[test]
+    fn import_command_reads_looks_and_bundle_folders() {
+        let dir = std::env::temp_dir().join(format!("lc-luminar-import-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Wild/Vintage.lmp/Contents/resources")).unwrap();
+        std::fs::write(dir.join("Wild/Vintage.lmp/Contents/preset.lmp"), modern()).unwrap();
+        std::fs::write(dir.join("Wild/Vintage.lmp/Contents/Info.plist"), "<plist><dict/></plist>").unwrap();
+        std::fs::write(dir.join("Wild/Vintage.lmp/Contents/PkgInfo"), "LMP?????").unwrap();
+        let mut s = crate::Session::with_demo();
+        let r = s.execute("preset.import", &json!({"paths": [dir.join("Wild").to_string_lossy()]})).unwrap();
+        let im = &r["imported"][0];
+        assert_eq!((im["name"].as_str(), im["group"].as_str()), (Some("Vintage"), Some("Wild")), "{r}");
+        assert!(im["unmapped"].as_array().unwrap().iter().any(|u| u == "OrtonFilter.Amount"));
+        // a dropped bundle folder on its own
+        let r = s.execute("preset.import", &json!({"paths": [dir.join("Wild/Vintage.lmp").to_string_lossy()], "dryRun": true})).unwrap();
+        assert_eq!(r["imported"][0]["group"], json!("Imported Presets"), "{r}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
