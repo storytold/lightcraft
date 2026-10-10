@@ -210,7 +210,16 @@ fn export_progress_and_cancel() {
     std::fs::create_dir_all(&out).unwrap();
     let decoy = out.join("photo999.png");
     std::fs::write(&decoy, b"unrelated existing output").unwrap();
-    let mut request = call(4, "command_run", json!({"id":"app.export","params":{"ids":ids,"dir":out,"longEdge":1200,"format":"png"}}));
+    // Enough photos that the cancellation lands between two of them on any machine: a batch
+    // renders up to four side by side, so photo boundaries come in bursts, and progress is
+    // reported at most every 100 ms. Eight small photos can be over one burst after the first
+    // report; these take several bursts more.
+    writeln!(send, "{}", call(6, "query_photos", json!({"limit":24}))).unwrap();
+    let query = next();
+    assert_eq!(query["id"], 6, "{query}");
+    let ids: Vec<_> = query["result"]["structuredContent"]["photos"].as_array().unwrap().iter().map(|p| p["id"].clone()).collect();
+    assert_eq!(ids.len(), 24);
+    let mut request = call(4, "command_run", json!({"id":"app.export","params":{"ids":ids,"dir":out,"longEdge":2000,"format":"png"}}));
     request["params"]["_meta"] = json!({"progressToken":44});
     writeln!(send, "{request}").unwrap();
     loop {
