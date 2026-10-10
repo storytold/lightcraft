@@ -143,6 +143,7 @@ fn body(app: &mut DacApp, ui: &mut egui::Ui) {
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::click());
             register(ui.ctx(), format!("publishCollection:{album}"), rect);
             let selected = shown == Some(album);
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, cname));
             if selected {
                 ui.painter().rect_filled(rect, 3.0, t.accent.gamma_multiply(0.35));
             } else if resp.hovered() {
@@ -177,6 +178,7 @@ fn body(app: &mut DacApp, ui: &mut egui::Ui) {
         if form.coll_for.as_deref() == Some(sid.as_str()) {
             ui.horizontal(|ui| {
                 let r = ui.add(egui::TextEdit::singleline(&mut form.coll_name).hint_text(crate::i18n::tr("Collection name")).desired_width(120.0));
+                crate::access::label(&r, "Collection name");
                 register(ui.ctx(), "publishCollectionName", r.rect);
                 let go = ui.button(crate::i18n::tr("Create")).clicked() || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
                 if go {
@@ -374,10 +376,12 @@ fn setup_form(app: &mut DacApp, ui: &mut egui::Ui, form: &mut Form) {
         form.name = kind_label(&form.kind, &form.plugins);
     }
     let r = ui.add(egui::TextEdit::singleline(&mut form.name).hint_text(crate::i18n::tr("Name")));
+    crate::access::label(&r, "Name");
     register(ui.ctx(), "publishSetUpName", r.rect);
     match form.kind.as_str() {
         dac_publish::KIND_HARD_DRIVE => {
             let r = ui.add(egui::TextEdit::singleline(&mut form.dir).hint_text(crate::i18n::tr("Folder (absolute path)")));
+            crate::access::label(&r, "Folder (absolute path)");
             register(ui.ctx(), "publishSetUpDir", r.rect);
         }
         dac_publish::KIND_SFTP => {
@@ -393,15 +397,20 @@ fn setup_form(app: &mut DacApp, ui: &mut egui::Ui, form: &mut Form) {
             if form.sftp_saved.is_empty() {
                 ui.horizontal(|ui| {
                     let r = ui.add(egui::TextEdit::singleline(&mut form.sftp_host).hint_text(crate::i18n::tr("Host")).desired_width(110.0));
+                    crate::access::label(&r, "Host");
                     register(ui.ctx(), "publishSetUpHost", r.rect);
                     let r = ui.add(egui::TextEdit::singleline(&mut form.sftp_port).hint_text(crate::i18n::tr("Port")).desired_width(40.0));
+                    crate::access::label(&r, "Port");
                     register(ui.ctx(), "publishSetUpPort", r.rect);
                 });
                 let r = ui.add(egui::TextEdit::singleline(&mut form.sftp_user).hint_text(crate::i18n::tr("User name")));
+                crate::access::label(&r, "User name");
                 register(ui.ctx(), "publishSetUpUser", r.rect);
                 let r = ui.add(egui::TextEdit::singleline(&mut form.sftp_path).hint_text(crate::i18n::tr("Remote folder")));
+                crate::access::label(&r, "Remote folder");
                 register(ui.ctx(), "publishSetUpPath", r.rect);
                 let r = ui.add(egui::TextEdit::singleline(&mut form.sftp_key).hint_text(crate::i18n::tr("Private key file")));
+                crate::access::label(&r, "Private key file");
                 register(ui.ctx(), "publishSetUpKey", r.rect);
                 let t = Tokens::get(ui.ctx());
                 ui.label(
@@ -442,6 +451,7 @@ fn setup_form(app: &mut DacApp, ui: &mut egui::Ui, form: &mut Form) {
                 egui::TextEdit::multiline(&mut form.plugin_settings).hint_text(crate::i18n::tr("Settings (JSON)")).desired_rows(3).code_editor(),
             );
             register(ui.ctx(), "publishSetUpSettings", r.rect);
+            crate::access::label(&r, "Settings (JSON)");
         }
     }
     ui.horizontal(|ui| {

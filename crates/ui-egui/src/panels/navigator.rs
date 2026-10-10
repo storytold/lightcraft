@@ -66,7 +66,10 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
     // the title folds the panel (remembered like the sidebar's sections)
     let title = Rect::from_min_max(hr.min, pos2(hr.left() + 110.0, hr.bottom()));
     register(ui.ctx(), "sidebarSection:navigator", title);
-    if ui.interact(title, egui::Id::new("navigator-title"), Sense::click()).clicked() {
+    let title_resp = ui.interact(title, egui::Id::new("navigator-title"), Sense::click());
+    let open = super::classic::is_open(app, crate::module::PanelId::Navigator);
+    crate::access::choice(&title_resp, "Navigator", open);
+    if title_resp.clicked() {
         super::classic::toggle(app, crate::module::PanelId::Navigator);
     }
     let open = super::classic::is_open(app, crate::module::PanelId::Navigator);
@@ -84,6 +87,7 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
         register(ui.ctx(), format!("navigator:{key}"), r);
         let resp = ui.interact(r, egui::Id::new(("navigator-preset", key)), Sense::click());
         let on = cur == Some(level);
+        crate::access::choice(&resp, label, on);
         let col = if on || resp.hovered() { t.text } else { t.text_dim };
         ui.painter().text(pos2(r.left() + 4.0, r.center().y), Align2::LEFT_CENTER, crate::i18n::tr(label), t.font(11.0), col);
         if on {
@@ -144,6 +148,7 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
         p.rect_stroke(r.expand(1.5), 0.0, Stroke::new(1.0, Color32::from_black_alpha(160)), StrokeKind::Outside);
     }
     let resp = ui.interact(img, egui::Id::new("navigator-panel-image"), Sense::click_and_drag());
+    crate::access::button(&resp, "Navigator preview: click or drag to move the view");
     if (resp.clicked() || resp.dragged())
         && let Some(q) = resp.interact_pointer_pos()
     {

@@ -162,7 +162,7 @@ pub fn poll_jobs(app: &mut DacApp, ctx: &egui::Context) {
             },
             Job::Geocode(rx) => match rx.try_recv() {
                 Ok(Ok(params)) => match app.run("map.reverseGeocode", params) {
-                    Ok(v) => app.toast(ctx, format!("Filled the location of {n} photos", n = v["changed"].as_u64().unwrap_or(0))),
+                    Ok(v) => app.toast(ctx, crate::i18n::tr_format!("Filled the location of {n} photos", n = v["changed"].as_u64().unwrap_or(0))),
                     Err(e) => app.toast_error(ctx, e),
                 },
                 Ok(Err(e)) => app.toast_error(ctx, e),
@@ -170,7 +170,7 @@ pub fn poll_jobs(app: &mut DacApp, ctx: &egui::Context) {
                 Err(TryRecvError::Disconnected) => {}
             },
             Job::Download(rx) => match rx.try_recv() {
-                Ok(Ok(n)) => app.toast(ctx, format!("Downloaded {n} place names (GeoNames, CC-BY 4.0)", n = n)),
+                Ok(Ok(n)) => app.toast(ctx, crate::i18n::tr_format!("Downloaded {n} place names (GeoNames, CC-BY 4.0)", n = n)),
                 Ok(Err(e)) => app.toast_error(ctx, e),
                 Err(TryRecvError::Empty) => keep.push(Job::Download(rx)),
                 Err(TryRecvError::Disconnected) => {}
@@ -221,10 +221,11 @@ pub fn bar(app: &mut DacApp, ui: &mut egui::Ui, r: Rect) {
         let tagged = all.iter().filter(|(_, g)| g.is_some()).count();
         (tagged, all.len() - tagged)
     };
-    ui.label(RichText::new(format!("{a} on map · {b} untagged", a = counts.0, b = counts.1)).color(t.text_dim).size(11.0));
+    ui.label(RichText::new(crate::i18n::tr_format!("{a} on map · {b} untagged", a = counts.0, b = counts.1)).color(t.text_dim).size(11.0));
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let edit = egui::TextEdit::singleline(&mut app.map.search).hint_text(tr("Search place or lat, lon")).desired_width(200.0);
         let resp = ui.add(edit);
+        crate::access::label(&resp, "Find Place");
         register(ui.ctx(), "map:search", resp.rect);
         if resp.has_focus() {
             app.text_focus = true;
@@ -282,9 +283,12 @@ fn style_section(app: &mut DacApp, ui: &mut egui::Ui) {
         });
         egui::CollapsingHeader::new(tr("Add Tile Server")).id_salt("map-add-server").show(ui, |ui| {
             let (n, u, a) = &mut app.map.new_server;
-            ui.add(egui::TextEdit::singleline(n).hint_text(tr("Name")));
-            ui.add(egui::TextEdit::singleline(u).hint_text("https://…/{z}/{x}/{y}.png"));
-            ui.add(egui::TextEdit::singleline(a).hint_text(tr("Attribution (shown on the map)")));
+            let r = ui.add(egui::TextEdit::singleline(n).hint_text(tr("Name")));
+            crate::access::label(&r, "Name");
+            let r = ui.add(egui::TextEdit::singleline(u).hint_text("https://…/{z}/{x}/{y}.png"));
+            crate::access::label(&r, "Tile URL");
+            let r = ui.add(egui::TextEdit::singleline(a).hint_text(tr("Attribution (shown on the map)")));
+            crate::access::label(&r, "Attribution (shown on the map)");
             if ui.button(tr("Add")).clicked() {
                 let (n, u, a) = app.map.new_server.clone();
                 match app.run("map.addServer", json!({"name": n, "url": u, "attribution": a})) {
@@ -295,7 +299,9 @@ fn style_section(app: &mut DacApp, ui: &mut egui::Ui) {
         });
         if let Some((bytes, files)) = app.map.tiles.cache_usage() {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("Tile cache: {mb} MB, {n} tiles", mb = bytes / (1024 * 1024), n = files)).weak().size(11.0));
+                ui.label(
+                    RichText::new(crate::i18n::tr_format!("Tile cache: {mb} MB, {n} tiles", mb = bytes / (1024 * 1024), n = files)).weak().size(11.0),
+                );
                 if ui.small_button(tr("Clear")).clicked() {
                     let _ = app.run("map.tileCache", json!({"clear": true}));
                 }
@@ -329,6 +335,7 @@ fn locations_section(app: &mut DacApp, ui: &mut egui::Ui) {
         }
         ui.separator();
         let resp = ui.add(egui::TextEdit::singleline(&mut app.map.new_name).hint_text(tr("New location name")));
+        crate::access::label(&resp, "New location name");
         if resp.has_focus() {
             app.text_focus = true;
         }
@@ -377,6 +384,7 @@ fn track_section(app: &mut DacApp, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 ui.label(tr("Camera time zone"));
                 let r = ui.add(egui::TextEdit::singleline(&mut app.map.offset).hint_text("+02:00").desired_width(70.0));
+                crate::access::label(&r, "Camera time zone");
                 if r.has_focus() {
                     app.text_focus = true;
                 }
@@ -405,7 +413,9 @@ fn track_section(app: &mut DacApp, ui: &mut egui::Ui) {
             let has_sel = !app.session.selection.ids.is_empty();
             if ui.add_enabled(has_sel, egui::Button::new(tr("Auto-Tag Selected Photos"))).clicked() {
                 match app.run("map.autoTag", json!({})) {
-                    Ok(v) => app.toast(ui.ctx(), format!("Tagged {n} photos from the tracklog", n = v["tagged"].as_u64().unwrap_or(0))),
+                    Ok(v) => {
+                        app.toast(ui.ctx(), crate::i18n::tr_format!("Tagged {n} photos from the tracklog", n = v["tagged"].as_u64().unwrap_or(0)))
+                    }
                     Err(e) => app.toast_error(ui.ctx(), e),
                 }
             }
@@ -439,6 +449,7 @@ fn geocode_section(app: &mut DacApp, ui: &mut egui::Ui) {
             }
             "online" => {
                 let r = ui.add(egui::TextEdit::singleline(&mut app.map.prefs.endpoint).desired_width(240.0));
+                crate::access::label(&r, "Geocoding server");
                 if r.has_focus() {
                     app.text_focus = true;
                 }
@@ -460,7 +471,7 @@ fn geocode_section(app: &mut DacApp, ui: &mut egui::Ui) {
         if ui.add_enabled(can, egui::Button::new(tr("Look Up Selected Photos"))).clicked() {
             match app.run("map.lookup", json!({})) {
                 Ok(v) if v.get("pending").is_some() => app.toast(ui.ctx(), tr("Looking up locations…")),
-                Ok(v) => app.toast(ui.ctx(), format!("Filled the location of {n} photos", n = v["found"].as_u64().unwrap_or(0))),
+                Ok(v) => app.toast(ui.ctx(), crate::i18n::tr_format!("Filled the location of {n} photos", n = v["found"].as_u64().unwrap_or(0))),
                 Err(e) => app.toast_error(ui.ctx(), e),
             }
         }

@@ -166,7 +166,8 @@ pub fn show(app: &mut DacApp, ctx: &egui::Context) {
         egui::Window::new(tr("Plug-in Manager")).id(key()).open(&mut open).default_width(560.0).vscroll(true).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(tr("Module (.wasm):"));
-                ui.add(egui::TextEdit::singleline(&mut s.path).desired_width(320.0));
+                let r = ui.add(egui::TextEdit::singleline(&mut s.path).desired_width(320.0));
+                crate::access::label(&r, "Module (.wasm):");
                 if ui.button(tr("Install…")).clicked() {
                     inspect = Some(s.path.trim().to_string());
                 }
@@ -416,12 +417,14 @@ fn field_ui(ui: &mut egui::Ui, f: &Value, values: &mut Value) {
             Some("number") => {
                 let (min, max) = (f["min"].as_f64().unwrap_or(0.0), f["max"].as_f64().unwrap_or(1.0));
                 let mut x = v.as_f64().unwrap_or(min);
-                ui.add(egui::Slider::new(&mut x, min..=max));
+                let r = ui.add(egui::Slider::new(&mut x, min..=max));
+                crate::access::label(&r, label);
                 *v = json!(x);
             }
             Some("bool") => {
                 let mut b = v.as_bool().unwrap_or(false);
-                ui.checkbox(&mut b, "");
+                let r = ui.checkbox(&mut b, "");
+                crate::access::label(&r, label);
                 *v = json!(b);
             }
             Some("choice") => {
@@ -435,7 +438,8 @@ fn field_ui(ui: &mut egui::Ui, f: &Value, values: &mut Value) {
             }
             _ => {
                 let mut t = v.as_str().unwrap_or("").to_string();
-                ui.text_edit_singleline(&mut t);
+                let r = ui.text_edit_singleline(&mut t);
+                crate::access::label(&r, label);
                 *v = json!(t);
             }
         }

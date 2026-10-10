@@ -111,7 +111,9 @@ pub fn extras(app: &mut DacApp, ui: &egui::Ui, id: PhotoId, r: Rect, square: boo
         ui.painter().rect_filled(br, 4.0, Color32::from_black_alpha(150));
         paint(ui.painter(), br.shrink(3.0), icon, color);
         register(ui.ctx(), format!("badge:{key}:{}", id.0), br);
-        let resp = ui.interact(br, egui::Id::new(("cell-badge", key, id.0)), Sense::click()).on_hover_text(tip);
+        let resp = ui.interact(br, egui::Id::new(("cell-badge", key, id.0)), Sense::click());
+        crate::access::named(&resp, egui::WidgetType::Button, &tip);
+        let resp = resp.on_hover_text(tip);
         if resp.clicked() {
             let _ = app.run("library.select", json!({"ids": [id.0]}));
             let panel = match key {

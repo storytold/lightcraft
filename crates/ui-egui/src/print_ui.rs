@@ -374,7 +374,7 @@ fn run_inner(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
                         Ok(info) => {
                             let n = info.media.len();
                             app.print.media = info.media;
-                            app.toast(ctx, format!("{n} paper size(s) from the printer"));
+                            app.toast(ctx, crate::i18n::tr_format!("{n} paper size(s) from the printer", n = n));
                         }
                         Err(e) => app.toast_error(ctx, e.to_string()),
                     },
@@ -403,7 +403,7 @@ fn run_inner(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
                             }
                             let n = list.len();
                             app.print.printers = list;
-                            app.toast(ctx, format!("{n} printer(s) found"));
+                            app.toast(ctx, crate::i18n::tr_format!("{n} printer(s) found", n = n));
                         }
                         Err(e) => app.toast_error(ctx, e.to_string()),
                     },
@@ -576,9 +576,9 @@ fn start(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
         match r {
             Ok(v) => {
                 let msg = if let Some(j) = v.get("job") {
-                    format!("Sent {} page(s) to the printer (job {j})", v["pages"])
+                    crate::i18n::tr_format!("Sent {n} page(s) to the printer (job {j})", n = v["pages"], j = j)
                 } else {
-                    format!("Printed {} page(s) to file", v["pages"])
+                    crate::i18n::tr_format!("Printed {n} page(s) to file", n = v["pages"])
                 };
                 app.print.last = Some(v);
                 app.toast(ctx, msg);
@@ -598,7 +598,8 @@ fn start(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
 pub struct PrintModule;
 
 /// Print: `⌘P`-style keys are the global ones; ← → turn preview pages.
-const PRINT_KEYS: &[ModuleKey] = &[("Left", "printui.page", r#"{"delta": -1}"#), ("Right", "printui.page", r#"{"delta": 1}"#)];
+const PRINT_KEYS: &[ModuleKey] =
+    &[("Left", "printui.page", r#"{"delta": -1}"#), ("Right", "printui.page", r#"{"delta": 1}"#), crate::help_overlay::KEY];
 
 impl Module for PrintModule {
     fn id(&self) -> ModuleId {
@@ -618,6 +619,9 @@ impl Module for PrintModule {
     }
     fn keymap(&self) -> &'static [ModuleKey] {
         PRINT_KEYS
+    }
+    fn command_prefixes(&self) -> &'static [&'static str] {
+        &["print.", "printui."]
     }
 }
 
@@ -642,14 +646,21 @@ fn toolbar(ui: &mut egui::Ui, app: &mut DacApp) {
                 if r.clicked() {
                     cmd(app, &ctx, "printui.page", json!({"delta": -1}));
                 }
-                ui.label(egui::RichText::new(format!("Page {} of {}", (app.print.page + 1).min(n.max(1)), n.max(1))).color(t.text));
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr_format!(
+                        "Page {page} of {pages}",
+                        page = (app.print.page + 1).min(n.max(1)),
+                        pages = n.max(1)
+                    ))
+                    .color(t.text),
+                );
                 let r = ui.button("▶");
                 register(&ctx, "print:nextPage", r.rect);
                 if r.clicked() {
                     cmd(app, &ctx, "printui.page", json!({"delta": 1}));
                 }
                 ui.add_space(16.0);
-                ui.label(egui::RichText::new(format!("{photos} photo{} selected for print", if photos == 1 { "" } else { "s" })).color(t.text_dim));
+                ui.label(egui::RichText::new(crate::i18n::tr_format!("{photos} photo(s) selected for print", photos = photos)).color(t.text_dim));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let s = app.print.settings.page.size;
                     ui.label(egui::RichText::new(format!("{:.2} × {:.2} in", s.w / 72.0, s.h / 72.0)).color(t.text_dim));
@@ -716,7 +727,9 @@ fn template_browser(ui: &mut egui::Ui, app: &mut DacApp) {
         for (group, names) in groups {
             ui.label(egui::RichText::new(crate::i18n::tr(group)).color(t.text_dim).size(11.0));
             for name in names {
-                let r = ui.selectable_label(current.as_deref() == Some(name.as_str()), &name);
+                // built-in templates show in the UI language, the user's own as named
+                let shown = if group == "Built-in" { crate::i18n::tr(&name).to_string() } else { name.clone() };
+                let r = ui.selectable_label(current.as_deref() == Some(name.as_str()), shown);
                 register(&ctx, format!("print:template:{name}"), r.rect);
                 if r.clicked() {
                     cmd(app, &ctx, "printui.template", json!({"name": name}));
@@ -736,6 +749,7 @@ fn template_browser(ui: &mut egui::Ui, app: &mut DacApp) {
             let id = egui::Id::new("print-new-template");
             let mut name: String = ui.data_mut(|d| d.get_temp(id)).unwrap_or_default();
             let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text(crate::i18n::tr("Template name")).desired_width(120.0));
+            crate::access::label(&r, "Template name");
             app.text_focus |= r.has_focus();
             ui.data_mut(|d| d.insert_temp(id, name.clone()));
             let b = ui.button("+");
@@ -758,6 +772,7 @@ fn template_browser(ui: &mut egui::Ui, app: &mut DacApp) {
             let id = egui::Id::new("print-new-creation");
             let mut name: String = ui.data_mut(|d| d.get_temp(id)).unwrap_or_default();
             let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text(crate::i18n::tr("Name")).desired_width(120.0));
+            crate::access::label(&r, "Name");
             app.text_focus |= r.has_focus();
             ui.data_mut(|d| d.insert_temp(id, name.clone()));
             let b = ui.button(crate::i18n::tr("Create Saved Print"));
@@ -880,7 +895,9 @@ fn settings_panels(ui: &mut egui::Ui, app: &mut DacApp) {
         let mut bg = Color32::from_rgba_unmultiplied(o.background[0], o.background[1], o.background[2], 255);
         ui.horizontal(|ui| {
             ui.label(crate::i18n::tr("Page Background Color"));
-            if ui.color_edit_button_srgba(&mut bg).changed() {
+            let r = ui.color_edit_button_srgba(&mut bg);
+            crate::access::label(&r, "Page Background Color");
+            if r.changed() {
                 o.background = [bg.r(), bg.g(), bg.b(), 255];
             }
         });
@@ -935,6 +952,7 @@ fn settings_panels(ui: &mut egui::Ui, app: &mut DacApp) {
         if s.destination == Destination::Printer {
             ui.horizontal(|ui| {
                 let r = ui.add(egui::TextEdit::singleline(&mut app.print.printer_uri).hint_text("ipp://host/printers/name").desired_width(190.0));
+                crate::access::label(&r, "Printer address");
                 app.text_focus |= r.has_focus();
                 let b = ui.button(crate::i18n::tr("Find"));
                 register(&ctx, "print:findPrinters", b.rect);
@@ -982,12 +1000,12 @@ fn page_setup_bar(ui: &mut egui::Ui, app: &mut DacApp, r: Rect) {
     let cur = PAPERS
         .iter()
         .find(|p| (p.size.w - s.w.min(s.h)).abs() < 0.5 && (p.size.h - s.w.max(s.h)).abs() < 0.5)
-        .map(|p| p.label.to_string())
+        .map(|p| crate::i18n::tr(p.label).to_string())
         .unwrap_or_else(|| format!("{:.2} × {:.2} in", s.w / 72.0, s.h / 72.0));
     child.label(crate::i18n::tr("Page Setup:"));
     let resp = egui::ComboBox::from_id_salt("print-paper").selected_text(cur).width(200.0).show_ui(&mut child, |ui| {
         for p in PAPERS {
-            if ui.selectable_label(false, p.label).clicked() {
+            if ui.selectable_label(false, crate::i18n::tr(p.label)).clicked() {
                 cmd(app, &ctx, "printui.pageSetup", json!({"paper": p.key, "landscape": landscape}));
             }
         }
@@ -1134,7 +1152,13 @@ fn canvas(ui: &mut egui::Ui, app: &mut DacApp, area: Rect) {
         custom_drag(ui, app, sheet, k);
     }
     // page numbers under the sheet
-    p.text(pos2(sheet.center().x, sheet.bottom() + 12.0), Align2::CENTER_CENTER, format!("Page {} of {}", pi + 1, n), t.font(11.0), t.text_dim);
+    p.text(
+        pos2(sheet.center().x, sheet.bottom() + 12.0),
+        Align2::CENTER_CENTER,
+        crate::i18n::tr_format!("Page {page} of {pages}", page = pi + 1, pages = n),
+        t.font(11.0),
+        t.text_dim,
+    );
 }
 
 /// The photo's thumbnail placed in its cell as the print will place it.

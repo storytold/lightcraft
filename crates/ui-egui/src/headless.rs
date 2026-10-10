@@ -83,6 +83,8 @@ pub struct HeadlessView {
     pub clipboard: String,
     /// Events the host owes the next frame (a paste request's paste, as a desktop host sends it).
     owed: Vec<egui::Event>,
+    /// The last AccessKit tree update (when `ctx.enable_accesskit()` is on): what a screen reader sees.
+    pub access: Option<egui::accesskit::TreeUpdate>,
 }
 
 impl Default for HeadlessView {
@@ -105,6 +107,7 @@ impl HeadlessView {
             frames: 0,
             clipboard: String::new(),
             owed: vec![],
+            access: None,
         }
     }
 
@@ -151,6 +154,9 @@ impl HeadlessView {
         self.textures.apply(std::mem::take(&mut out.textures_delta));
         self.shapes = std::mem::take(&mut out.shapes);
         self.pixels_per_point = out.pixels_per_point;
+        if let Some(update) = out.platform_output.accesskit_update.take() {
+            self.access = Some(update);
+        }
         for c in &out.platform_output.commands {
             if let egui::OutputCommand::CopyText(text) = c {
                 self.clipboard.clone_from(text);
