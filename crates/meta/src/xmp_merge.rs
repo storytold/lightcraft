@@ -19,7 +19,7 @@
 //! by the removals is dropped, so repeated saves don't accumulate. The result is checked by
 //! parsing it again: every written property must read back as in the fresh packet.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use quick_xml::events::Event;
 
@@ -114,9 +114,14 @@ fn scan(s: &str) -> Result<Scan, XmpError> {
                 let empty = matches!(ev, Event::Empty(_));
                 let mut scope = Vec::new();
                 let mut raw_attrs = Vec::new();
-                for a in e.attributes() {
+                // repeated names are refused with a set, in linear time (quick-xml's own check is quadratic)
+                let mut seen = HashSet::new();
+                for a in e.attributes().with_checks(false) {
                     let a = a.map_err(|e| XmpError::Xml(e.to_string()))?;
                     let k = String::from_utf8_lossy(a.key.as_ref()).into_owned();
+                    if !seen.insert(k.clone()) {
+                        return Err(XmpError::Xml(format!("repeated attribute {k}")));
+                    }
                     let v = String::from_utf8_lossy(&a.value).into_owned();
                     if k == "xmlns" {
                         scope.push((String::new(), v.clone()));
@@ -395,9 +400,43 @@ mod tests {
     }
 
     #[test]
+    fn many_attributes_scan_in_linear_time() {
+        // quick-xml's duplicate-name check compares each attribute with all earlier ones: 200 000 attributes on
+        // one description took over 20 s to scan, about 30 ms with the set
+        let n = 200_000;
+        let mut s = String::from(
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+             <rdf:Description rdf:about=\"\" xmlns:foo=\"http://example.com/foo/\"",
+        );
+        for i in 0..n {
+            s.push_str(&format!(" foo:a{i}=\"{i}\""));
+        }
+        s.push_str("/></rdf:RDF></x:xmpmeta>");
+        let t = std::time::Instant::now();
+        let found = scan(&s).unwrap();
+        let took = t.elapsed();
+        assert_eq!(found.descs[0].attrs.len(), n + 2, "every attribute is read");
+        assert!(took < std::time::Duration::from_secs(5), "{n} attributes took {took:?}");
+    }
+
+    #[test]
     fn refuses_what_it_cannot_read() {
         for bad in ["", "not xml at all", "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF", "<a><b></a>", "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>"] {
             assert!(merge_xmp(bad, &fresh(1, &[]), RULES).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn refuses_a_repeated_attribute() {
+        // not well-formed XML (strict readers such as expat refuse it): no merge, so the caller keeps a backup.
+        // An owned name, a foreign one and one on a nested element (a merge would keep both copies of the last two).
+        for (once, twice) in [
+            ("xmp:Rating=\"2\"", "xmp:Rating=\"2\" xmp:Rating=\"3\""),
+            ("foo:Thing=\"a &amp; b\"", "foo:Thing=\"a &amp; b\" foo:Thing=\"c\""),
+            ("stEvt:action=\"saved\"", "stEvt:action=\"saved\" stEvt:action=\"saved\""),
+        ] {
+            let ex = foreign().replace(once, twice);
+            assert!(merge_xmp(&ex, &fresh(1, &[]), RULES).is_err(), "{twice}");
         }
     }
 }
