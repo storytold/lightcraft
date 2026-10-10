@@ -300,7 +300,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Show Source",
             [],
             None,
-            "{kind: all|recentlyAdded|album|recentlyDeleted|picks|missing|libraryFolder, id?: albumId, path?: a path from library.folders (for libraryFolder)}",
+            "{kind: all|recentlyAdded|album|recentlyDeleted|picks|missing|libraryFolder, id?: albumId (an album, a smart album, or a folder of albums: the photos of every album inside it, each once), path?: a path from library.folders (for libraryFolder)}",
             always,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("all");
@@ -312,7 +312,8 @@ pub fn specs() -> Vec<CommandSpec> {
                     "missing" => LibrarySource::Missing,
                     "album" => {
                         let a = album_param(p, "id", "library.source")?;
-                        if s.catalog.album(a).is_none_or(|a| a.folder) {
+                        // a folder of albums is a source too: what the albums inside it hold
+                        if s.catalog.album(a).is_none() {
                             return Err(bad("library.source", "no such album"));
                         }
                         LibrarySource::Album(a)
@@ -371,6 +372,11 @@ pub fn specs() -> Vec<CommandSpec> {
                 let sets_rules = p.get("ruleSet").is_some_and(|r| !r.is_null());
                 if let Some(problems) = f.rule_set.as_ref().filter(|_| sets_rules).map(|rs| rs.check(&s.catalog)).filter(|p| !p.is_empty()) {
                     return Err(bad("library.filter", problems.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ")));
+                }
+                // an album this call names is one the library has (one named before and since
+                // deleted is let go of, `Session::reconcile_view`)
+                if p.get("album").is_some_and(|a| !a.is_null()) && f.album.is_some_and(|a| s.catalog.album(a).is_none()) {
+                    return Err(bad("library.filter", "no such album"));
                 }
                 s.filter = f;
                 Ok(json!({"count": s.visible().len()}))
@@ -899,6 +905,10 @@ pub fn specs() -> Vec<CommandSpec> {
                     None => view_rules(s),
                 };
                 let parent = p.get("parent").and_then(Value::as_u64).map(AlbumId);
+                // the view of a folder, saved inside that folder, would be limited to itself
+                if let Some(folder) = parent {
+                    smart_loop_in(&s.catalog, &name, &rules, folder).map_or(Ok(()), |why| Err(bad("album.createSmart", why)))?;
+                }
                 let id = s.catalog.alloc_album_id();
                 let album = Album { parent, smart: Some(Box::new(rules)), ..Album::new(id, name) };
                 s.commit("New Smart Album", Op::AddAlbum { album })?;
@@ -958,13 +968,19 @@ pub fn specs() -> Vec<CommandSpec> {
                     view
                 } else {
                     let replace = bool_or(p, "replace", false);
-                    let folder = cur.library_folder.clone();
+                    let (folder, album) = (cur.library_folder.clone(), cur.album);
                     let base = if replace { Default::default() } else { cur };
                     let mut r = merge_rules(&base, p.get("rules").unwrap_or(&Value::Null), "album.setRules", &s.catalog, Some(id))?;
                     // the rules dialog has no folder field: replacing its rules keeps the folder
                     // unless the call says (`libraryFolder: null`) to drop it
                     if replace && p.get("rules").and_then(|r| r.get("libraryFolder")).is_none() {
                         r.library_folder = folder;
+                    }
+                    // nor one for the album or folder of albums a saved view is limited to
+                    // (`album: null` drops it). One that is gone is let go of: this is where
+                    // the mark on such an album sends the person
+                    if replace && p.get("rules").and_then(|r| r.get("album")).is_none() {
+                        r.album = album.filter(|a| s.catalog.album(*a).is_some());
                     }
                     r
                 };
@@ -1016,16 +1032,16 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                 }
                 let ops = order.into_iter().rev().map(|id| Op::RemoveAlbum { id }).collect();
+                // a deleted album that was being shown gives way to All Photos, as after any
+                // other way it goes (`Session::reconcile_view`)
                 s.commit(if folder { "Delete Folder" } else { "Delete Album" }, Op::Batch { ops })?;
-                if matches!(s.source, LibrarySource::Album(current) if removed.contains(&current)) {
-                    s.source = LibrarySource::All;
-                }
                 ok()
             }
         ),
         cmd!("album.move", "Move Album", [], None, "{id, parent?: folderId|null}", always, |s, p| {
             let id = album_param(p, "id", "album.move")?;
             let parent = p.get("parent").and_then(Value::as_u64).map(AlbumId);
+            moved_loop_in(&s.catalog, id, parent).map_or(Ok(()), |why| Err(bad("album.move", why)))?;
             s.commit("Move Album", Op::MoveAlbum { id, parent })?;
             ok()
         }),
@@ -1059,6 +1075,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 };
                 order.insert(at.min(order.len()), id);
                 let moved = me.parent != parent;
+                if moved {
+                    moved_loop_in(&s.catalog, id, parent).map_or(Ok(()), |why| Err(bad("album.reorder", why)))?;
+                }
                 let mut ops = Vec::new();
                 if moved {
                     ops.push(Op::MoveAlbum { id, parent });
@@ -1105,7 +1124,10 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("album.addPhotos", "Add to Album", ["Photo"], None, "{id: albumId, ids?: [photoIds]} (default: selection)", has_selection, |s, p| {
             let id = album_param(p, "id", "album.addPhotos")?;
-            let targets = ids_param(p).unwrap_or_else(|| s.targets(&Value::Null));
+            // photos that are there: an album doesn't list one that is gone (a selection dragged
+            // here after an undo took one of its photos away)
+            let mut targets = ids_param(p).unwrap_or_else(|| s.targets(&Value::Null));
+            targets.retain(|t| s.catalog.photo(*t).is_some());
             let al = s.catalog.album(id).ok_or_else(|| bad("album.addPhotos", "no such album"))?;
             if al.is_smart() || al.folder {
                 return Err(bad("album.addPhotos", "smart albums and folders can't hold photos"));
@@ -1274,12 +1296,18 @@ pub fn specs() -> Vec<CommandSpec> {
             if al.is_smart() {
                 return Err(bad("album.removePhotos", "smart albums update automatically: change their rules"));
             }
+            if al.folder {
+                return Err(bad("album.removePhotos", "a folder shows the photos of the albums in it: remove them from those albums"));
+            }
             let photos: Vec<PhotoId> = al.photos.iter().copied().filter(|x| !targets.contains(x)).collect();
             s.commit("Remove from Album", Op::SetAlbumPhotos { id, photos })?;
             ok()
         }),
         cmd!("album.setCover", "Set as Album Cover", [], None, "{id: albumId, photo?: photoId}", has_active, |s, p| {
             let id = album_param(p, "id", "album.setCover")?;
+            if s.catalog.album(id).is_some_and(|a| a.folder) {
+                return Err(bad("album.setCover", "a folder has no cover: set one on an album in it"));
+            }
             let photo = p.get("photo").and_then(Value::as_u64).map(PhotoId).or(s.active());
             s.commit("Set Album Cover", Op::SetAlbumCover { id, cover: photo })?;
             ok()
@@ -1451,6 +1479,24 @@ fn merge_rules(
     Ok(f)
 }
 
+/// Why a smart album called `name` with `rules` can't be in folder `parent`: its rules lead to
+/// that folder or one around it (the view of a folder, saved inside it), so it would be one of
+/// the albums it asks about. `None` when it can.
+fn smart_loop_in(cat: &lightcraft_catalog::Catalog, name: &str, rules: &lightcraft_catalog::Filter, parent: AlbumId) -> Option<String> {
+    cat.smart_album_would_loop_in(rules, parent).then(|| {
+        let folder = cat.album(parent).map(|f| f.name.as_str()).unwrap_or_default();
+        format!("smart album “{name}” would include itself in folder “{folder}”: its rules show that folder or one around it. Put it outside them")
+    })
+}
+
+/// [`smart_loop_in`] for album or folder `id` on its way into `parent` (`None`: the top level,
+/// where nothing loops): the first smart album among what moves that would include itself.
+fn moved_loop_in(cat: &lightcraft_catalog::Catalog, id: AlbumId, parent: Option<AlbumId>) -> Option<String> {
+    let parent = parent?;
+    let looping = cat.album(cat.album_move_would_loop(id, parent)?)?;
+    smart_loop_in(cat, &looping.name, looping.smart.as_deref()?, parent)
+}
+
 /// Whether `path` lies above a disk: some of its `ids` photos are on a disk (not the startup
 /// disk) that the folder does not lie in. Such a folder (`/Volumes`, `/mnt`…) is not a folder of
 /// one disk but a way to reach several.
@@ -1469,7 +1515,7 @@ fn view_rules(s: &Session) -> lightcraft_catalog::Filter {
         LibrarySource::Album(a) => s.catalog.album(a).and_then(|a| a.smart.as_deref().cloned()),
         _ => None,
     };
-    match smart {
+    let mut rules = match smart {
         Some(base) => {
             // overlay the fields the filter bar changed
             let cur = serde_json::to_value(&s.filter).unwrap_or_default();
@@ -1494,7 +1540,12 @@ fn view_rules(s: &Session) -> lightcraft_catalog::Filter {
             }
             f
         }
+    };
+    // a view of a smart album limited to an album that is gone is saved without that limit
+    if rules.album.is_some_and(|a| s.catalog.album(a).is_none()) {
+        rules.album = None;
     }
+    rules
 }
 
 impl Session {

@@ -703,9 +703,11 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
                 open = true;
                 ui.data_mut(|d| d.insert_temp(open_id, true));
             }
+            // a folder is a source: the photos of the albums inside it, each once (no count: it
+            // would be a pass over the library per folder, for a number the albums already give)
+            let sel = app.session.source == LibrarySource::Album(a.id);
             let resp =
-                row_sensed(app, ui, &format!("folder:{}", a.id.0), Icon::Folder, &a.name, None, None, false, indent, Sense::click_and_drag(), None);
-            // a folder is no source, so its row folds it too; the triangle is the same click, aimed
+                row_sensed(app, ui, &format!("folder:{}", a.id.0), Icon::Folder, &a.name, None, None, sel, indent, Sense::click_and_drag(), None);
             let has_children = all.get(&Some(a.id)).is_some_and(|v| !v.is_empty());
             if resp.drag_started() {
                 app.ui.dragging_album = Some(a.id.0);
@@ -713,15 +715,17 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
             if album_drag_over(app, ui, &resp, a, has_children.then_some(&mut open), indent) {
                 ui.data_mut(|d| d.insert_temp(open_id, true));
             }
-            let mut toggled = resp.clicked();
             if has_children {
                 let tri = disclosure_triangle(ui, &resp, indent, open, egui::Id::new(("album-tri", a.id.0)), format!("albumToggle:{}", a.id.0));
-                toggled |= tri.clicked();
-                // the triangle sits on the row and takes its clicks: the menu opens from it too
+                // only the triangle folds it; it sits on the row and takes its clicks, so the
+                // menu opens from it too
+                if tri.clicked() {
+                    ui.data_mut(|d| d.insert_temp(open_id, !open));
+                }
                 folder_menu(app, &tri, a);
             }
-            if toggled {
-                ui.data_mut(|d| d.insert_temp(open_id, !open));
+            if resp.clicked() {
+                let _ = app.run("library.source", json!({"kind": "album", "id": a.id.0}));
             }
             folder_menu(app, &resp, a);
             if open {
@@ -815,12 +819,19 @@ const MARK_W: f32 = 12.0;
 const HOVER_OPEN_SECS: f64 = 0.6;
 
 /// Whether the album `dragged` may be dropped into the folder `target` (`None`: the top level):
-/// a folder other than where it already is, and not itself or something inside it.
+/// a folder other than where it already is, not itself or something inside it, and not one a
+/// smart album that moves with it shows (it would include itself).
 fn can_drop_album(app: &LightcraftApp, dragged: AlbumId, target: Option<AlbumId>) -> bool {
-    let Some(d) = app.session.catalog.album(dragged) else { return false };
+    let cat = &app.session.catalog;
+    let Some(d) = cat.album(dragged) else { return false };
     match target {
         None => d.parent.is_some(),
-        Some(t) => app.session.catalog.album(t).is_some_and(|f| f.folder) && d.parent != Some(t) && !is_within(app, t, dragged),
+        Some(t) => {
+            cat.album(t).is_some_and(|f| f.folder)
+                && d.parent != Some(t)
+                && !is_within(app, t, dragged)
+                && cat.album_move_would_loop(dragged, t).is_none()
+        }
     }
 }
 
@@ -1055,7 +1066,9 @@ fn folder_menu(app: &mut LightcraftApp, resp: &egui::Response, a: &Album) {
             let _ = app.run("album.addPhotos", json!({"id": a.id.0}));
         }
         if !a.folder && !a.is_smart() {
-            let is_target = app.session.target_album == Some(a.id) || (app.session.target_album.is_none() && a.quick);
+            // looked up, as the row's "+" is: a target that is gone means the Quick Collection
+            let target = app.session.target_album.filter(|t| app.session.catalog.album(*t).is_some());
+            let is_target = target == Some(a.id) || (target.is_none() && a.quick);
             if !is_target && ui.button(crate::i18n::tr("Set as Target Album (B adds to it)")).clicked() {
                 let _ = app.run("album.setTarget", json!({"id": if a.quick { serde_json::Value::Null } else { json!(a.id.0) }}));
             }
@@ -1102,9 +1115,14 @@ fn folder_menu(app: &mut LightcraftApp, resp: &egui::Response, a: &Album) {
             });
             ui.separator();
         }
-        // move into another folder (not into itself or one of its own subfolders)
-        let mut folders: Vec<(u64, String)> =
-            app.session.catalog.albums().filter(|f| f.folder && !is_within(app, f.id, a.id)).map(|f| (f.id.0, f.name.clone())).collect();
+        // move into another folder (not into itself or one of its own subfolders, nor into one
+        // a smart album that moves with it shows)
+        let cat = &app.session.catalog;
+        let mut folders: Vec<(u64, String)> = cat
+            .albums()
+            .filter(|f| f.folder && !is_within(app, f.id, a.id) && cat.album_move_would_loop(a.id, f.id).is_none())
+            .map(|f| (f.id.0, f.name.clone()))
+            .collect();
         folders.sort_by_key(|(_, n)| n.to_lowercase());
         ui.menu_button(crate::i18n::tr("Move to"), |ui| {
             if ui.add_enabled(a.parent.is_some(), egui::Button::new(crate::i18n::tr("Top Level"))).clicked() {
@@ -1112,7 +1130,10 @@ fn folder_menu(app: &mut LightcraftApp, resp: &egui::Response, a: &Album) {
             }
             for (fid, name) in &folders {
                 if ui.add_enabled(a.parent.map(|p| p.0) != Some(*fid), egui::Button::new(name)).clicked() {
-                    let _ = app.run("album.move", json!({"id": a.id.0, "parent": fid}));
+                    // refused for a smart album that would then include itself: say so
+                    if let Err(e) = app.run("album.move", json!({"id": a.id.0, "parent": fid})) {
+                        app.toast(ui.ctx(), e);
+                    }
                 }
             }
         });

@@ -412,6 +412,10 @@ impl Session {
                 self.auto_write_sidecars(&self.pending_log[log_start..]);
             }
         }
+        if self.depth == 0 {
+            // whatever the command changed, and however it ended: the view points at what is there
+            self.reconcile_view();
+        }
         if self.depth == 0 && self.library.is_some() {
             // Make the command durable before reporting success. When the command's own records
             // can't be appended, it fails with `NotSaved`: the change stays applied in memory and
@@ -541,6 +545,7 @@ impl Session {
             }
         };
         self.show_undone(&e.op);
+        self.reconcile_view();
         self.pending_log.push(e.op);
         self.redo.push(UndoEntry { label: e.label.clone(), op: redo, folder: e.folder.as_ref().map(FolderMove::reversed) });
         Ok(e.label)
@@ -556,6 +561,7 @@ impl Session {
             }
         };
         self.show_undone(&e.op);
+        self.reconcile_view();
         self.pending_log.push(e.op);
         self.undo.push(UndoEntry { label: e.label.clone(), op: undo, folder: e.folder.as_ref().map(FolderMove::reversed) });
         Ok(e.label)
@@ -726,8 +732,32 @@ impl Session {
 
     // ---------------------------------------------------------------- library view
 
+    /// Makes the view show only albums the library holds: one that is gone is no longer the
+    /// source (All Photos is) or the filter's album. THE place this is checked: commands, undo
+    /// and redo, opening a library and every look at the grid run it, so whatever removed an
+    /// album (a command, an undo, a background task) or named one (a saved filter, a saved view)
+    /// need not know. Two lookups: it runs every time.
+    ///
+    /// An album that comes back (its deletion undone) is not shown again by itself, as after
+    /// `album.delete` and undo before: the grid stays where the person was put.
+    ///
+    /// What is only looked up when it is used is left as it is, and so comes back with an undo:
+    /// the target album (a missing one means the Quick Collection) and the selection (`active`
+    /// and `targets` leave out photos that are gone).
+    pub fn reconcile_view(&mut self) {
+        let cat = &self.catalog;
+        let gone = |a: &lightcraft_catalog::AlbumId| cat.album(*a).is_none();
+        if matches!(&self.source, LibrarySource::Album(a) if gone(a)) {
+            self.source = LibrarySource::All;
+        }
+        if self.filter.album.as_ref().is_some_and(gone) {
+            self.filter.album = None;
+        }
+    }
+
     /// Photos shown in the grid/filmstrip for the current source, filter and sort.
     pub fn visible(&mut self) -> &[PhotoId] {
+        self.reconcile_view();
         let mut key =
             (self.catalog.revision, format!("{:?}|{:?}|{:?}|{:?}|{:?}", self.source, self.filter, self.sort, self.browse, self.library_folder));
         if self.source == LibrarySource::Missing && self.media.availability.is_background() {
@@ -760,7 +790,9 @@ impl Session {
                 && self.sort.key == lightcraft_catalog::SortKey::CaptureDate
                 && let LibrarySource::Album(a) = self.source
                 && let Some(al) = self.catalog.album(a)
+                // an album's own order; a smart album and a folder of albums have none
                 && !al.is_smart()
+                && !al.folder
                 && self.filter == Filter::default()
             {
                 let order = al.photos.clone();
@@ -802,6 +834,7 @@ impl Session {
     /// Photos in the current source (folder, album, …) before the filter bar and search narrow
     /// them; `None` where that is not a separate number (Missing Photos).
     pub fn source_total(&mut self) -> Option<usize> {
+        self.reconcile_view();
         if self.source == LibrarySource::Missing {
             return None;
         }
@@ -834,7 +867,9 @@ impl Session {
         (self.visible_gen, self.visible.clone())
     }
 
-    /// Targets of photo commands: explicit `ids`/`id` param, else the selection.
+    /// Targets of photo commands: explicit `ids`/`id` param (the caller's to get right), else the
+    /// selection, as far as its photos are there (one taken away by undo stays selected for the
+    /// redo, and is acted on by nothing meanwhile).
     pub fn targets(&self, p: &Value) -> Vec<PhotoId> {
         if let Some(a) = p.get("ids").and_then(Value::as_array) {
             return a.iter().filter_map(Value::as_u64).map(PhotoId).collect();
@@ -842,7 +877,12 @@ impl Session {
         if let Some(id) = p.get("id").and_then(Value::as_u64) {
             return vec![PhotoId(id)];
         }
-        if self.selection.ids.is_empty() { self.selection.active.into_iter().collect() } else { self.selection.ids.clone() }
+        let there = |id: &PhotoId| self.catalog.photo(*id).is_some();
+        if self.selection.ids.is_empty() {
+            self.selection.active.into_iter().filter(there).collect()
+        } else {
+            self.selection.ids.iter().copied().filter(there).collect()
+        }
     }
 }
 
@@ -864,6 +904,8 @@ pub fn json_delta(old: &Value, new: &Value) -> Option<Value> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_album_folder_source;
 #[cfg(test)]
 mod tests_album_order;
 #[cfg(test)]
@@ -909,5 +951,7 @@ mod tests_settings_files;
 mod tests_spots;
 #[cfg(test)]
 mod tests_sync;
+#[cfg(test)]
+mod tests_view_reconcile;
 #[cfg(test)]
 mod tests_xmp;

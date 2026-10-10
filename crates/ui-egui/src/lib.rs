@@ -1506,7 +1506,8 @@ impl Caches {
                     lightcraft_catalog::rules::set_now(Some(now.to_string()));
                 }
                 let v: std::sync::Arc<std::collections::HashMap<_, _>> =
-                    std::sync::Arc::new(cat.albums().map(|a| (a.id, cat.album_count(a.id))).collect());
+                    // folders aren't counted in the sidebar: theirs would cost a pass each
+                    std::sync::Arc::new(cat.albums().filter(|a| !a.folder).map(|a| (a.id, cat.album_count(a.id))).collect());
                 self.album_count_scans += 1;
                 self.album_counts = Some((k, v.clone()));
                 v
