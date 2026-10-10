@@ -15,3 +15,10 @@ dac-codecs = { workspace = true }
 dac-raster = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+
+# P4.7 end-to-end session (tests/session_e2e.rs): an in-process SFTP server, SHA-1s for a fake Immich.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+dac-hash = { workspace = true }
+russh = { version = "0.64", default-features = false, features = ["ring"] }
+russh-sftp = "3"
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time"] }

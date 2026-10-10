@@ -11,10 +11,10 @@ use crate::library::{self, BackupSchedule, CatalogSettings, RecentCatalogs};
 use crate::*;
 
 /// A scratch folder removed on drop.
-struct Scratch(PathBuf);
+pub(crate) struct Scratch(pub(crate) PathBuf);
 
 impl Scratch {
-    fn new(tag: &str) -> Scratch {
+    pub(crate) fn new(tag: &str) -> Scratch {
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let d = std::env::temp_dir().join(format!("dac-v4-{tag}-{}-{n}", std::process::id()));
@@ -22,7 +22,7 @@ impl Scratch {
         std::fs::create_dir_all(&d).unwrap();
         Scratch(d)
     }
-    fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         &self.0
     }
 }
@@ -64,7 +64,7 @@ fn photo(c: &mut Catalog, i: u64) -> Photo {
 }
 
 /// A library with photos, an album, a stack, a link, a preview entry, the format-4 fields.
-fn fill(j: &mut Journal, c: &mut Catalog, n: u64) {
+pub(crate) fn fill(j: &mut Journal, c: &mut Catalog, n: u64) {
     let mut ops: Vec<Op> = (0..n).map(|i| Op::AddPhoto { photo: Box::new(photo(c, i)) }).collect();
     let ids: Vec<PhotoId> = ops.iter().filter_map(|o| if let Op::AddPhoto { photo } = o { Some(photo.id) } else { None }).collect();
     let mut album = Album::new(c.alloc_album_id(), "Best");

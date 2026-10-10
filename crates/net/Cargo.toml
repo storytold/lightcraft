@@ -21,3 +21,6 @@ rustls-rustcrypto = "0.0.2-alpha"
 webpki-roots = "1"
 sha2 = { version = "0.10", default-features = false, features = ["std"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+[dev-dependencies]
+dac-fuzzkit = { workspace = true }

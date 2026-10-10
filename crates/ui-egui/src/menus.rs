@@ -29,7 +29,13 @@ pub const LANGUAGE_COMMANDS: &[UiCommand] = &[
 /// Every UI command: the languages, then everything else. `xtask parity` reads both tables from
 /// this file, so an id listed in `docs/parity.md` is checked wherever it is declared.
 pub fn ui_commands() -> impl Iterator<Item = &'static UiCommand> {
-    LANGUAGE_COMMANDS.iter().chain(UI_COMMANDS).chain(crate::module::SHELL_COMMANDS).chain(crate::map::COMMANDS).chain(crate::print_ui::COMMANDS).chain(PLUGIN_COMMANDS)
+    LANGUAGE_COMMANDS
+        .iter()
+        .chain(UI_COMMANDS)
+        .chain(crate::module::SHELL_COMMANDS)
+        .chain(crate::map::COMMANDS)
+        .chain(crate::print_ui::COMMANDS)
+        .chain(PLUGIN_COMMANDS)
 }
 
 /// P4.3: the Plug-in Manager (`crate::panels::plugins`); native only, so the web build lists none.

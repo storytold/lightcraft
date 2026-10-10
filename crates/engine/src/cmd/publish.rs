@@ -71,6 +71,7 @@ fn service_json(cat: &Catalog, svc: &ServiceConfig) -> Value {
     let caps = match svc.kind.as_str() {
         dac_publish::KIND_HARD_DRIVE => json!({"comments": false, "likes": false}),
         dac_publish::KIND_IMMICH => json!({"comments": false, "likes": true}),
+        dac_publish::KIND_SFTP => json!({"comments": false, "likes": false}),
         _ => json!(null),
     };
     json!({
@@ -98,6 +99,9 @@ fn check(kind: &str, settings: &Value, export: &Value, c: &str) -> Result<()> {
     }
     if kind == dac_publish::KIND_IMMICH {
         super::immich::publish::check_settings(settings).map_err(|e| bad(c, e))?;
+    }
+    if kind == dac_publish::KIND_SFTP {
+        sftp::check_settings(settings).map_err(|e| bad(c, e))?;
     }
     if !export.is_object() {
         return Err(bad(c, "`export` must be an object of app.export params"));
@@ -336,7 +340,10 @@ pub fn plan(s: &mut Session, album: AlbumId) -> Result<Plan> {
     }
     let removals = st.to_remove.iter().filter_map(|id| link(&s.catalog, *id).map(|l| (*id, l.remote_id))).collect();
     let photos: Vec<PhotoId> = jobs.iter().map(|j: &Job| j.photo).collect();
-    let open = super::immich::publish::opener(s, &svc, &coll, &photos).map_err(|e| bad(C, e))?;
+    let open = match sftp::opener(s, &svc, &coll).map_err(|e| bad(C, e))? {
+        Some(o) => Some(o),
+        None => super::immich::publish::opener(s, &svc, &coll, &photos).map_err(|e| bad(C, e))?,
+    };
     Ok(Plan { service: svc, collection: coll, jobs, removals, failed, open })
 }
 
@@ -575,6 +582,9 @@ fn open_any(
     }
     dac_publish::open_service(svc, coll)
 }
+
+#[path = "publish_sftp.rs"]
+mod sftp;
 
 #[cfg(test)]
 #[path = "publish_tests.rs"]

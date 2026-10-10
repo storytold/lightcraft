@@ -159,7 +159,22 @@ fn secret_key(server: &Server) -> Key {
     Key::new(SFTP_SERVICE, &format!("{}@{}:{port}", server.user.trim(), server.host.trim()))
 }
 
-fn server_param(s: &Session, p: &Value, c: &str) -> Result<Server> {
+/// How to log in to `server`: `password` if given, else the saved password or key passphrase.
+pub(crate) fn server_auth(s: &mut Session, server: &Server, password: Option<&str>, c: &str) -> Result<Auth> {
+    let secret = match password {
+        Some(pw) => Some(pw.to_string()),
+        None => s.secret_store().ok().and_then(|st| st.get(&secret_key(server)).ok().flatten()).map(|x| x.expose().to_string()),
+    };
+    if server.key_file.trim().is_empty() {
+        Ok(Auth::Password(secret.ok_or_else(|| bad(c, "no password: give `password` or save one with web.saveServer"))?))
+    } else {
+        let pem = std::fs::read_to_string(server.key_file.trim()).map_err(|e| bad(c, format!("{}: {e}", server.key_file.trim())))?;
+        Ok(Auth::Key { pem, passphrase: secret })
+    }
+}
+
+/// `p.server`: a saved upload server's name or an inline server object.
+pub(crate) fn server_param(s: &Session, p: &Value, c: &str) -> Result<Server> {
     match p.get("server") {
         Some(Value::String(name)) => {
             let st = load(s).map_err(|e| bad(c, e))?;
@@ -261,16 +276,7 @@ pub fn prepare(s: &mut Session, c: &str, p: &Value) -> Result<WebJob> {
         }
         "web.upload" => {
             let server = server_param(s, p, c)?;
-            let secret = match str_param(p, "password") {
-                Some(pw) => Some(pw.to_string()),
-                None => s.secret_store().ok().and_then(|st| st.get(&secret_key(&server)).ok().flatten()).map(|x| x.expose().to_string()),
-            };
-            let auth = if server.key_file.trim().is_empty() {
-                Auth::Password(secret.ok_or_else(|| bad(c, "no password: give `password` or save one with web.saveServer"))?)
-            } else {
-                let pem = std::fs::read_to_string(server.key_file.trim()).map_err(|e| bad(c, format!("{}: {e}", server.key_file.trim())))?;
-                Auth::Key { pem, passphrase: secret }
-            };
+            let auth = server_auth(s, &server, str_param(p, "password"), c)?;
             Target::Sftp { server, auth }
         }
         "web.shareImmich" => {

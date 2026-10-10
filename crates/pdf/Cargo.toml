@@ -16,4 +16,5 @@ skrifa = "0.44"
 miniz_oxide = { workspace = true }
 
 [dev-dependencies]
+dac-fuzzkit = { workspace = true }
 lopdf = { version = "0.45", default-features = false }

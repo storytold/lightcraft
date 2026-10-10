@@ -54,7 +54,8 @@ fn remove_file(path: &Path) -> Result<(), PublishError> {
     }
 }
 
-fn with_ext(name: &str, ext: &str) -> String {
+/// `name` with its extension replaced by `ext` (a sidecar's name).
+pub fn with_ext(name: &str, ext: &str) -> String {
     let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
     format!("{stem}.{ext}")
 }
