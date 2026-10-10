@@ -167,13 +167,21 @@ pub fn probe(bytes: &[u8]) -> Option<RawFormat> {
     let pentax_raw = has_cfa || t.exif().is_some_and(|e| e.contains(vendor::EXIF_CFA_PATTERN));
     // Samsung's raw IFD uses private compressions 32769..=32773 (`vendor::srw`), 32773 being PackBits elsewhere
     let samsung_raw = has_cfa || t.all_ifds().iter().any(|i| i.u16(lightcraft_tiff::tags::COMPRESSION).is_some_and(|c| (32769..=32773).contains(&c)));
+    // Sony raws without a CFA IFD (#702): SRF (DSC-F828), whose IFD0 looks like RGB but holds 14-bit samples (12 or
+    // 14 count: raw sensor depths; the raw is in Sony's SRF blocks), and the DSLR-A100, whose IFD0 is an old-style
+    // JPEG thumbnail (compression 6, which today's TIFF writers don't produce) and whose `SubIFDs` tag addresses its
+    // raw data. A camera-authored or exported TIFF has 8- or 16-bit samples, and its SubIFDs hold ordinary images
+    let model = t.find(lightcraft_tiff::tags::MODEL).and_then(|e| e.value.as_str()).unwrap_or_default().trim().to_ascii_uppercase();
+    let sony_raw = has_cfa
+        || ifd0.u64s(lightcraft_tiff::tags::BITS_PER_SAMPLE).is_some_and(|b| b.iter().any(|v| matches!(v, 12 | 14)))
+        || (model == "DSLR-A100" && ifd0.u16(lightcraft_tiff::tags::COMPRESSION) == Some(6) && ifd0.contains(lightcraft_tiff::tags::SUB_IFDS));
     if make.starts_with("CANON") && t.ifds.len() >= 4 && t.ifds[3].u16(lightcraft_tiff::tags::COMPRESSION) == Some(6) {
         return Some(RawFormat::Cr2);
     }
     if make.starts_with("NIKON") && has_cfa {
         return Some(if t.all_ifds().len() > 1 { RawFormat::Nef } else { RawFormat::Nrw });
     }
-    if make.starts_with("SONY") && has_cfa {
+    if make.starts_with("SONY") && sony_raw {
         return Some(RawFormat::Arw);
     }
     if (make.starts_with("PENTAX") || make.starts_with("RICOH")) && pentax_raw {
@@ -941,6 +949,35 @@ mod tests {
             cam.set_child(t::EXIF_IFD, exif_size(400, 300));
             assert_eq!(probe(&padded(&[cam])), None, "{make} TIFF should not be probed as raw");
         }
+    }
+
+    /// #702: two Sony layouts carry no CFA IFD, so the raw evidence #281 asks of Sony files has to
+    /// include them: SRF (an RGB-looking IFD0 of 14-bit samples) and the DSLR-A100 (raw data addressed
+    /// by `SubIFDs`). An 8-bit TIFF from the same bodies, or a SubIFDs TIFF from another Sony model,
+    /// stays an ordinary image.
+    #[test]
+    fn sony_raws_without_a_cfa_ifd_are_still_raws() {
+        let sony = |model: &str, bits: u16, compression: u16, sub_ifd: Option<IfdBuilder>| {
+            let mut ifd = rgb_ifd(400, 300);
+            ifd.set(t::MAKE, Value::Ascii("SONY".into()));
+            ifd.set(t::MODEL, Value::Ascii(model.into()));
+            ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![bits; 3]));
+            ifd.set(t::COMPRESSION, Value::Short(vec![compression]));
+            if let Some(child) = sub_ifd {
+                ifd.set_child(t::SUB_IFDS, child);
+            }
+            probe(&write(&[ifd]))
+        };
+        let raw_block = || Some(rgb_ifd(64, 48)); // stands in for the A100's raw-data pointer
+        assert_eq!(sony("DSC-F828", 14, 1, None), Some(RawFormat::Arw), "SRF");
+        assert_eq!(sony("DSC-F828", 12, 1, None), Some(RawFormat::Arw), "12-bit samples count too");
+        assert_eq!(sony("DSLR-A100", 8, 6, raw_block()), Some(RawFormat::Arw), "A100: old-JPEG IFD0 and SubIFDs");
+        assert_eq!(sony("DSC-F828", 8, 1, None), None, "an 8-bit TIFF");
+        assert_eq!(sony("DSC-F828", 16, 1, None), None, "a 16-bit TIFF");
+        // TIFFs exported from A100 photos, with a thumbnail in SubIFDs (Codex review of #702)
+        assert_eq!(sony("DSLR-A100", 8, 1, Some(rgb_ifd(64, 48))), None, "an 8-bit A100 TIFF with a SubIFDs thumbnail");
+        assert_eq!(sony("DSLR-A100", 16, 8, Some(rgb_ifd(64, 48))), None, "a 16-bit A100 TIFF with a SubIFDs thumbnail");
+        assert_eq!(sony("ILCE-7M4", 8, 6, raw_block()), None, "the A100's layout under another model");
     }
 
     // --- containers that are recognised but not decoded, with a preview ---
