@@ -164,6 +164,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(preset_files::specs());
         v.extend(prefs::specs());
         v.extend(export::specs());
+        v.extend(crate::creations::specs());
         v.extend(before::specs());
         v.extend(browse::specs());
         v.extend(folders::specs());

@@ -302,6 +302,7 @@ impl Op {
             | Op::RenameAlbum { .. }
             | Op::MoveAlbum { .. }
             | Op::SetAlbumOrder { .. }
+            | Op::SetAlbumCreation { .. }
             | Op::SetAlbumRules { .. }
             | Op::RemoveStack { .. }
             | Op::SetLabelName { .. }

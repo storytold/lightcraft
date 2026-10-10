@@ -25,7 +25,6 @@ crates/hash/
 crates/immich/
 crates/text/
 crates/pdf/
-crates/layout/
 crates/geo/
 crates/publish/
 crates/tether/
@@ -34,6 +33,8 @@ crates/engine/src/cmd/publish_tests.rs
 crates/engine/src/cmd/tether.rs
 crates/ui-egui/src/panels/publish.rs
 crates/ui-egui/src/panels/tether_bar.rs
+crates/layout/
+crates/print/
 # the Classic shell
 crates/ui-egui/src/module.rs
 crates/ui-egui/src/panels/classic.rs
@@ -45,6 +46,7 @@ crates/ui-egui/src/panels/connections.rs
 crates/ui-egui/src/panels/second.rs
 crates/ui-egui/src/plate.rs
 crates/ui-egui/src/catalog_ui.rs
+crates/ui-egui/src/print_ui.rs
 crates/ui-egui/src/map/
 crates/engine/src/cmd/map.rs
 # our docs and plans

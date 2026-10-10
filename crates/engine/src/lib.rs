@@ -21,6 +21,7 @@ pub mod camera_profiles;
 pub mod cmd;
 pub mod config;
 pub mod contact_sheet;
+pub mod creations;
 pub mod crs;
 pub mod crs_masks;
 pub mod demo;

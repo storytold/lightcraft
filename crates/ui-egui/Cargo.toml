@@ -20,6 +20,9 @@ dac-catalog = { workspace = true }
 dac-geo = { workspace = true }
 web-time = { workspace = true }
 dac-engine = { workspace = true }
+dac-layout = { workspace = true }
+dac-pdf = { workspace = true }
+dac-print = { workspace = true }
 dac-preview = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }

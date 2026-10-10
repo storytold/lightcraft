@@ -164,6 +164,11 @@ pub enum Op {
         id: AlbumId,
         cover: Option<PhotoId>,
     },
+    /// Attach, replace or remove an album's saved-creation layout. Format version 7.
+    SetAlbumCreation {
+        id: AlbumId,
+        creation: Option<Creation>,
+    },
     /// Replace a smart album's rules.
     SetAlbumRules {
         id: AlbumId,
@@ -723,6 +728,21 @@ impl Catalog {
             Op::SetAlbumCover { id, cover } => {
                 let a = self.album_mut(id)?;
                 Op::SetAlbumCover { id, cover: std::mem::replace(&mut a.cover, cover) }
+            }
+            Op::SetAlbumCreation { id, creation } => {
+                if let Some(c) = &creation {
+                    if !CREATION_KINDS.contains(&c.kind.as_str()) {
+                        return Err(CatalogError::Invalid(format!("unknown creation kind {:?}", c.kind)));
+                    }
+                    if c.document.len() > MAX_CREATION_BYTES {
+                        return Err(CatalogError::Invalid("the layout document is too large".into()));
+                    }
+                }
+                let a = self.album_mut(id)?;
+                if creation.is_some() && (a.folder || a.smart.is_some()) {
+                    return Err(CatalogError::Invalid("folders and smart albums can't hold a creation".into()));
+                }
+                Op::SetAlbumCreation { id, creation: std::mem::replace(&mut a.creation, creation) }
             }
             Op::SetAlbumRules { id, rules } => {
                 self.validate_rules(&rules)?;

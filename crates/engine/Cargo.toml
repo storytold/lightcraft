@@ -20,6 +20,8 @@ dac-gpu = { workspace = true }
 dac-catalog = { workspace = true }
 dac-geo = { workspace = true }
 dac-hash = { workspace = true }
+dac-layout = { workspace = true }
+dac-print = { workspace = true }
 web-time = { workspace = true }
 dac-preview = { workspace = true }
 dac-codecs = { workspace = true }
