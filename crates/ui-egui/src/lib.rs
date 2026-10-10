@@ -898,6 +898,8 @@ impl DacApp {
             }
             ctx.request_repaint_after(std::time::Duration::from_secs(3));
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        panels::tether_bar::show(self, ctx);
         self.session.persist_if_dirty();
         panels::denoise::pump(self, ctx);
         model_setup::pump(self, ctx);
