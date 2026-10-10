@@ -171,6 +171,11 @@ pub struct Session {
     pub keyword_sets: Vec<cmd::keywords::KeywordSet>,
     pub keyword_set: Option<String>,
     pub recent_keywords: Vec<String>,
+    /// The keyword ⇧K toggles on the selected photos (Keywording ▸ keyword shortcut).
+    pub keyword_shortcut: Option<String>,
+    /// Keyword attributes (synonyms, export options, person) and keywords created before any
+    /// photo has them, by keyword path (Keyword List).
+    pub keyword_attrs: std::collections::BTreeMap<String, cmd::keyword_list::KeywordAttrs>,
     /// Before/After: the "before" settings chosen per photo (this session; default: the photo's
     /// import state). See `cmd/before.rs`.
     pub before: std::collections::HashMap<PhotoId, Arc<DevelopSettings>>,
@@ -260,6 +265,8 @@ impl Session {
             keyword_sets: Vec::new(),
             keyword_set: None,
             recent_keywords: Vec::new(),
+            keyword_shortcut: None,
+            keyword_attrs: Default::default(),
             before: Default::default(),
             import_probes: Default::default(),
             preview_build: None,
@@ -489,11 +496,11 @@ impl Session {
     fn apply_with_files(&mut self, op: &Op, folder: Option<&FolderMove>) -> Result<Op> {
         let fs = rename::RealFs;
         if let Some(f) = folder {
-            cmd::browse::rename_folder_on_disk(&f.from, &f.to).map_err(|e| EngineError::Other(format!("can't move the folder back: {e}")))?;
+            cmd::folders::folder_on_disk(&f.from, &f.to).map_err(|e| EngineError::Other(format!("can't move the folder back: {e}")))?;
         }
         let undo_folder = || {
             if let Some(f) = folder {
-                let _ = cmd::browse::rename_folder_on_disk(&f.to, &f.from);
+                let _ = cmd::folders::folder_on_disk(&f.to, &f.from);
             }
         };
         let moves = self.file_moves(op);
@@ -505,7 +512,7 @@ impl Session {
         }
         match self.catalog.apply(op.clone()) {
             Ok(inv) => {
-                if let Some(f) = folder {
+                if let Some(f) = folder.filter(|f| !f.from.is_empty() && !f.to.is_empty()) {
                     cmd::browse::follow_folder(self, &f.from, &f.to);
                 }
                 Ok(inv)
@@ -752,6 +759,8 @@ impl Session {
 mod tests;
 #[cfg(test)]
 mod tests_album_order;
+#[cfg(test)]
+mod tests_classic;
 #[cfg(test)]
 mod tests_color;
 #[cfg(test)]

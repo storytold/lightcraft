@@ -55,19 +55,50 @@ pub fn note_recent(s: &mut Session, added: &[String]) {
     let _ = s.save_prefs();
 }
 
+/// Keyword sets that come with the app (a user set of the same name replaces one).
+pub const BUILTIN_SETS: &[(&str, [&str; 9])] = &[
+    ("Outdoor Photography", ["Landscape", "Wildlife", "Mountains", "Forest", "Water", "Sky", "Sunrise", "Sunset", "Night"]),
+    ("Portrait Photography", ["Portrait", "Headshot", "Family", "Children", "Couple", "Group", "Studio", "Outdoors", "Candid"]),
+    ("Wedding Photography", ["Ceremony", "Reception", "Bride", "Groom", "Rings", "Dance", "Family", "Details", "Getting Ready"]),
+];
+
+/// The built-in set called `name`, if any.
+fn builtin(name: &str) -> Option<KeywordSet> {
+    BUILTIN_SETS
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(name))
+        .map(|(n, k)| KeywordSet { name: (*n).to_string(), keywords: k.iter().map(|x| (*x).to_string()).collect() })
+}
+
+/// The set called `name`: the user's, else a built-in one.
+fn find_set(s: &Session, name: &str) -> Option<KeywordSet> {
+    s.keyword_sets.iter().find(|x| x.name.eq_ignore_ascii_case(name)).cloned().or_else(|| builtin(name))
+}
+
 /// The nine keywords ⌥1–⌥9 apply: the current set's, or the recent ones.
 pub fn current_keywords(s: &Session) -> Vec<String> {
-    let set = s.keyword_set.as_deref().and_then(|n| s.keyword_sets.iter().find(|x| x.name.eq_ignore_ascii_case(n)));
-    let mut v = set.map_or_else(|| s.recent_keywords.clone(), |x| x.keywords.clone());
+    let set = s.keyword_set.as_deref().and_then(|n| find_set(s, n));
+    let mut v = set.map_or_else(|| s.recent_keywords.clone(), |x| x.keywords);
     v.truncate(9);
     v
 }
 
-/// `{sets: [{name, keywords}], current, keywords}` (Recent Keywords first).
+/// `{sets: [{name, keywords, builtin}], current, keywords, shortcut}` (Recent Keywords first, then
+/// the user's sets, then the built-in ones they don't replace).
 pub fn keyword_sets_json(s: &Session) -> Value {
-    let mut sets = vec![json!({"name": RECENT, "keywords": s.recent_keywords})];
-    sets.extend(s.keyword_sets.iter().map(|x| json!({"name": x.name, "keywords": x.keywords})));
-    json!({"sets": sets, "current": s.keyword_set.clone().unwrap_or_else(|| RECENT.into()), "keywords": current_keywords(s)})
+    let mut sets = vec![json!({"name": RECENT, "keywords": s.recent_keywords, "builtin": true})];
+    sets.extend(s.keyword_sets.iter().map(|x| json!({"name": x.name, "keywords": x.keywords, "builtin": false})));
+    for (n, k) in BUILTIN_SETS {
+        if !s.keyword_sets.iter().any(|x| x.name.eq_ignore_ascii_case(n)) {
+            sets.push(json!({"name": n, "keywords": k, "builtin": true}));
+        }
+    }
+    json!({
+        "sets": sets,
+        "current": s.keyword_set.clone().unwrap_or_else(|| RECENT.into()),
+        "keywords": current_keywords(s),
+        "shortcut": s.keyword_shortcut,
+    })
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -78,14 +109,7 @@ pub fn specs() -> Vec<CommandSpec> {
             s.keyword_set = if name.eq_ignore_ascii_case(RECENT) || name.is_empty() {
                 None
             } else {
-                Some(
-                    s.keyword_sets
-                        .iter()
-                        .find(|x| x.name.eq_ignore_ascii_case(name))
-                        .ok_or_else(|| bad("keyword.useSet", format!("no keyword set `{name}`")))?
-                        .name
-                        .clone(),
-                )
+                Some(find_set(s, name).ok_or_else(|| bad("keyword.useSet", format!("no keyword set `{name}`")))?.name)
             };
             s.save_prefs()?;
             Ok(keyword_sets_json(s))
@@ -124,6 +148,9 @@ pub fn specs() -> Vec<CommandSpec> {
             let before = s.keyword_sets.len();
             s.keyword_sets.retain(|x| !x.name.eq_ignore_ascii_case(name));
             if s.keyword_sets.len() == before {
+                if builtin(name).is_some() {
+                    return Err(bad("keyword.deleteSet", format!("`{name}` comes with the app and can't be deleted")));
+                }
                 return Err(bad("keyword.deleteSet", format!("no keyword set `{name}`")));
             }
             if s.keyword_set.as_deref().is_some_and(|c| c.eq_ignore_ascii_case(name)) {
@@ -164,6 +191,40 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(r)
             }
         ),
+        cmd!(
+            "keyword.setShortcut",
+            "Set Keyword Shortcut",
+            [],
+            Some("Alt+Shift+K"),
+            "{keyword} (empty or null clears it) — the keyword ⇧K toggles on the selected photos → {shortcut}",
+            always,
+            |s, p| {
+                let k = str_param(p, "keyword").map(clean).filter(|k| !k.is_empty());
+                s.keyword_shortcut = k;
+                s.save_prefs()?;
+                Ok(json!({"shortcut": s.keyword_shortcut}))
+            }
+        ),
+        cmd!(
+            "keyword.toggleShortcut",
+            "Add Keyword Shortcut",
+            ["Photo"],
+            Some("Shift+K"),
+            "{ids?} — the keyword shortcut: added to the target photos, or removed when they all have it",
+            super::has_selection,
+            |s, p| {
+                let k = s.keyword_shortcut.clone().ok_or_else(|| bad("keyword.toggleShortcut", "no keyword shortcut: set one first (⌥⇧K)"))?;
+                let ids = s.targets(p);
+                let all = !ids.is_empty()
+                    && ids.iter().all(|id| s.catalog.photo(*id).is_some_and(|ph| ph.meta.keywords.iter().any(|x| x.eq_ignore_ascii_case(&k))));
+                let ids: Vec<u64> = ids.iter().map(|i| i.0).collect();
+                let key = if all { "removeKeywords" } else { "addKeywords" };
+                let mut r = s.execute("photo.setMeta", &json!({"ids": ids, key: [k.clone()]}))?;
+                r["keyword"] = json!(k);
+                r["added"] = json!(!all);
+                Ok(r)
+            }
+        ),
         cmd!(query "keyword.list", "Keywords", [], None, "{} → [{name, path, count, children}] keyword tree (`a|b|c` keywords are hierarchical)", always, |s, _| {
             Ok(serde_json::to_value(s.catalog.keyword_tree()).unwrap_or_default())
         }),
@@ -197,9 +258,11 @@ pub fn specs() -> Vec<CommandSpec> {
                 let to = str_param(p, "to").ok_or_else(|| bad("keyword.rename", "missing `to`"))?.to_string();
                 let op = s.catalog.rename_keyword_ops(&from, &to).map_err(|e| bad("keyword.rename", e.to_string()))?;
                 let (f, t) = (clean(&from), clean(&to));
-                commit_keywords(s, "Rename Keyword", op, |k| {
+                let r = commit_keywords(s, "Rename Keyword", op, |k| {
                     Some(if is_under(k, &f) { format!("{t}{}", &k[f.len().min(k.len())..]) } else { k.to_string() })
-                })
+                })?;
+                super::keyword_list::rename_attrs(s, &from, &to);
+                Ok(r)
             }
         ),
         cmd!(
@@ -213,7 +276,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let k = str_param(p, "keyword").ok_or_else(|| bad("keyword.delete", "missing `keyword`"))?.to_string();
                 let op = s.catalog.delete_keyword_ops(&k).map_err(|e| bad("keyword.delete", e.to_string()))?;
                 let c = clean(&k);
-                commit_keywords(s, "Delete Keyword", op, |f| (!is_under(f, &c)).then(|| f.to_string()))
+                let r = commit_keywords(s, "Delete Keyword", op, |f| (!is_under(f, &c)).then(|| f.to_string()))?;
+                super::keyword_list::delete_attrs(s, &k);
+                Ok(r)
             }
         ),
         cmd!(

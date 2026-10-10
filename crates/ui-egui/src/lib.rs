@@ -35,6 +35,8 @@ pub mod titlebar;
 pub mod widgets;
 
 #[cfg(test)]
+mod tests_classic;
+#[cfg(test)]
 mod tests_curve;
 #[cfg(test)]
 mod tests_filmstrip;
@@ -127,6 +129,10 @@ pub struct Services {
     pub pick_curve_preset_files: Option<PickFiles>,
     /// Save dialog for an exported `.lccurve` file.
     pub save_curve_preset_file: Option<SaveFile>,
+    /// Open dialog for a list file: a collection definition (`.json`) or a keyword list (`.txt`).
+    pub pick_list_file: Option<PickFiles>,
+    /// Save dialog for a list file (the suggested name carries the extension).
+    pub save_list_file: Option<SaveFile>,
     pub write: Option<WriteFn>,
     /// Thread-safe writer: with it, UI-started exports run in the background (desktop only).
     pub write_shared: Option<SharedWrite>,
@@ -970,7 +976,11 @@ impl DacApp {
         panels::library_problem::banner(self, ui);
         if module::edge_visible(self, module::Edge::Right) {
             panels::strip::show(self, ui);
-            if self.ui.right != state::RightPanel::None {
+            // Library's right column is its Classic panels, unless a Library panel of the strip
+            // (Info, Keywords, Versions, Activity) was opened in its place
+            if self.ui.module == module::ModuleId::Library && self.ui.right == state::RightPanel::None {
+                panels::classic::right_column(self, ui);
+            } else if self.ui.right != state::RightPanel::None {
                 panels::right::show(self, ui);
             }
             if self.ui.presets {

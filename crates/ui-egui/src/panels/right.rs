@@ -45,6 +45,16 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
     }
 }
 
+/// The Classic Metadata panel (Library's right column).
+pub fn metadata_panel(app: &mut DacApp, ui: &mut egui::Ui) {
+    match app.session.active() {
+        Some(id) => super::metadata::show(app, ui, id),
+        None => {
+            ui.label(crate::i18n::tr("No photo selected"));
+        }
+    }
+}
+
 pub fn header(ui: &mut egui::Ui, title: &str) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());
@@ -564,7 +574,7 @@ fn keywords(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId) {
 
 /// The keyword set: pick a set, then nine buttons (⌥1–⌥9) that toggle its keywords on the
 /// selected photos; "Save as Set…" keeps the current nine under a name.
-fn keyword_set(app: &mut DacApp, ui: &mut egui::Ui, have: &[String]) {
+pub(crate) fn keyword_set(app: &mut DacApp, ui: &mut egui::Ui, have: &[String]) {
     let t = Tokens::get(ui.ctx());
     let sets = dac_engine::cmd::keywords::keyword_sets_json(&app.session);
     let current = sets["current"].as_str().unwrap_or_default().to_string();

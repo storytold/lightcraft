@@ -46,6 +46,10 @@ dac-fetch = { workspace = true }
 dac-immich = { workspace = true }
 dac-credentials = { workspace = true }
 
+# free disk space of a volume (Folders panel)
+[target.'cfg(all(unix, not(target_arch = "wasm32")))'.dependencies]
+rustix = { workspace = true }
+
 [features]
 # AI masks with SAM 3 (Object / Describe). Off for the web and CLI builds.
 sam = ["dep:dac-segment"]

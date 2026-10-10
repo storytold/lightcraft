@@ -66,7 +66,11 @@ fn prepare_guarded(
     let file_name = o.file_name_for(p, seq);
     let work = if o.format.is_rendered() {
         let (w, h) = output_size(p, o);
-        let meta = export_metadata(p, o);
+        // the Keyword List decides which keywords (parents, synonyms) go into the file
+        let meta = export_metadata(p, o).map(|mut m| {
+            m.keywords = crate::cmd::keyword_list::export_keywords(&session.keyword_attrs, &m.keywords);
+            m
+        });
         let job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
         Work::Render(Box::new(RenderWork { job, meta, opts: o.clone() }))
     } else {

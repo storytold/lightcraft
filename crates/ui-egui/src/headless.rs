@@ -1339,18 +1339,20 @@ mod tests {
         let ex = |h: &mut Headless, c: &str, p: Value| h.request("engine.execute", json!({"command": c, "params": p}), Duration::from_secs(10));
         ex(&mut h, "photo.setMeta", json!({"ids": [vis[0], vis[1]], "addKeywords": ["travel|italy"]}));
         ex(&mut h, "photo.setMeta", json!({"ids": [vis[2]], "addKeywords": ["travel|france"]}));
-        h.request("ui.set", json!({"leftPanel": true}), t);
+        h.request("ui.set", json!({"leftPanel": true, "right": "none"}), t);
+        // the Keyword List alone in Library's right column, at its top
+        h.app.ui.hidden_panels = vec![crate::module::PanelId::QuickDevelop, crate::module::PanelId::Keywording];
         // clicks land on last frame's layout: let the keyword list settle first (on a loaded machine a
         // row could still move, and the click then hit its neighbour, e.g. "sunrise")
         h.settle(SETTLE);
-        let r = h.request("ui.clickWidget", json!({"id": "source:keyword:travel"}), t);
+        let r = h.request("ui.clickWidget", json!({"id": "keywordList:travel"}), t);
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(h.app.session.filter.keyword.as_deref(), Some("travel"));
         assert_eq!(h.app.session.visible_cloned().len(), 3);
         // open the level, filter by the child
-        h.request("ui.clickWidget", json!({"id": "keywordToggle:travel"}), t);
+        h.request("ui.clickWidget", json!({"id": "keywordListToggle:travel"}), t);
         h.settle(SETTLE);
-        let r = h.request("ui.clickWidget", json!({"id": "source:keyword:travel|italy"}), t);
+        let r = h.request("ui.clickWidget", json!({"id": "keywordList:travel|italy"}), t);
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(h.app.session.visible_cloned().len(), 2);
         h.app.ui.dialog = Some(crate::state::Dialog::RenameKeyword { from: "travel".into(), to: "trips".into() });
@@ -1698,7 +1700,7 @@ mod tests {
         };
         let ids = |h: &mut Headless| -> Vec<String> { rects(h).into_iter().map(|(id, _)| id).collect() };
         h.request("ui.set", json!({"leftPanel": true}), t);
-        h.app.ui.toggle_sidebar_section("navigator");
+        h.app.ui.toggle_sidebar_section("panel:navigator");
         h.hide_home_above(&dir);
         // Browse Folder… browses the picked folder and keeps it in Local within one frame; a
         // request runs frames, so keep it first (no frame sees it browsed but not yet kept)

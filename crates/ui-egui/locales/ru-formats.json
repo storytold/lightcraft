@@ -207,5 +207,14 @@
   "In line for AI Denoise ({ahead} ahead)…": "In line for AI Denoise ({ahead} ahead)…",
   "Running on {}.": "Running on {}.",
   "{file} · {size}": "{file} · {size}",
-  "•  {assumption}": "•  {assumption}"
+  "•  {assumption}": "•  {assumption}",
+  "{n} selected": "Выбрано: {n}",
+  "Create Folder in “{name}”": "Создать папку в «{name}»",
+  "{added} added, {missing} missing, {changed} read from changed sidecars": "Добавлено: {added}, отсутствует: {missing}, прочитано из изменённых XMP: {changed}",
+  "{n} photos relinked": "Перепривязано фото: {n}",
+  "{path} · {count} photos": "{path} · фото: {count}",
+  "Target: {name}": "Цель: {name}",
+  "Collection imported: {n} photos found, {m} not in this library": "Коллекция импортирована: найдено фото: {n}, нет в библиотеке: {m}",
+  "{n} keywords imported": "Импортировано ключевых слов: {n}",
+  "{n} keywords removed": "Удалено ключевых слов: {n}"
 }

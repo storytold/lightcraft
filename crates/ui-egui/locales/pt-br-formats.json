@@ -207,5 +207,14 @@
   "In line for AI Denoise ({ahead} ahead)…": "In line for AI Denoise ({ahead} ahead)…",
   "Running on {}.": "Running on {}.",
   "{file} · {size}": "{file} · {size}",
-  "•  {assumption}": "•  {assumption}"
+  "•  {assumption}": "•  {assumption}",
+  "{n} selected": "{n} selecionadas",
+  "Create Folder in “{name}”": "Criar pasta em “{name}”",
+  "{added} added, {missing} missing, {changed} read from changed sidecars": "{added} adicionadas, {missing} ausentes, {changed} lidas de arquivos auxiliares alterados",
+  "{n} photos relinked": "{n} fotos revinculadas",
+  "{path} · {count} photos": "{path} · {count} fotos",
+  "Target: {name}": "Destino: {name}",
+  "Collection imported: {n} photos found, {m} not in this library": "Coleção importada: {n} fotos encontradas, {m} não estão nesta biblioteca",
+  "{n} keywords imported": "{n} palavras-chave importadas",
+  "{n} keywords removed": "{n} palavras-chave removidas"
 }

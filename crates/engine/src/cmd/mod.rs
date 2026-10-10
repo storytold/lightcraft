@@ -6,6 +6,7 @@
 
 mod before;
 pub(crate) mod browse;
+mod collections;
 mod color;
 pub(crate) mod convert;
 mod cull;
@@ -20,6 +21,8 @@ mod face_recognize;
 pub mod filters;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod immich;
+pub mod folders;
+pub mod keyword_list;
 pub mod keywords;
 pub mod library;
 pub mod lut_profiles;
@@ -33,6 +36,7 @@ mod prefs;
 mod preset_files;
 pub mod previews;
 mod query;
+mod quick;
 mod xmp;
 
 use serde::Serialize;
@@ -123,12 +127,14 @@ pub fn command_specs() -> &'static [CommandSpec] {
         let mut v = Vec::new();
         v.extend(edit::specs());
         v.extend(library::specs());
+        v.extend(collections::specs());
         v.extend(develop::specs());
         v.extend(color::specs());
         v.extend(curves::specs());
         v.extend(masks::specs());
         v.extend(organize::specs());
         v.extend(keywords::specs());
+        v.extend(keyword_list::specs());
         v.extend(manage::specs());
         v.extend(previews::specs());
         v.extend(lut_profiles::specs());
@@ -137,12 +143,14 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(convert::edit_specs());
         v.extend(merge::specs());
         v.extend(query::specs());
+        v.extend(quick::specs());
         v.extend(xmp::specs());
         v.extend(preset_files::specs());
         v.extend(prefs::specs());
         v.extend(export::specs());
         v.extend(before::specs());
         v.extend(browse::specs());
+        v.extend(folders::specs());
         v.extend(missing::specs());
         v.extend(metadata::specs());
         v.extend(filters::specs());

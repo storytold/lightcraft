@@ -3,6 +3,8 @@
 pub mod bottombar;
 pub mod cells;
 pub mod chips;
+pub mod classic;
+pub mod collections;
 pub mod compare;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod connections;
@@ -13,8 +15,11 @@ pub mod dialogs;
 pub mod edit;
 pub mod faces;
 pub mod filterbar;
+pub mod folders;
 pub mod grid;
 pub mod keymap;
+pub mod keyword_list;
+pub mod keywording;
 pub mod left;
 pub mod library_problem;
 pub mod masking;
@@ -25,6 +30,7 @@ pub mod people;
 pub mod person;
 pub mod presets;
 pub mod profiles;
+pub mod quick_develop;
 pub mod right;
 pub mod rules_editor;
 pub mod second;

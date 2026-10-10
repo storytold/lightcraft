@@ -491,6 +491,17 @@ fn services(ctx: egui::Context, log_file: Option<&std::path::Path>) -> Services 
                 .save_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),
+        pick_list_file: Some(Box::new(|| {
+            rfd::FileDialog::new()
+                .add_filter_nocase(dac_ui_egui::i18n::tr("Collection definitions and keyword lists"), &["json", "txt"])
+                .pick_file()
+                .map(|p| vec![p.to_string_lossy().to_string()])
+                .unwrap_or_default()
+        })),
+        save_list_file: Some(Box::new(|name: &str| {
+            let ext = std::path::Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("txt").to_string();
+            rfd::FileDialog::new().add_filter_nocase(&ext, &[ext.as_str()]).set_file_name(name).save_file().map(|p| p.to_string_lossy().to_string())
+        })),
         // atomic (temp file + sync + rename): a failed write never leaves a truncated file
         write_shared: Some(std::sync::Arc::new(dac_engine::export::write_file)),
         write: Some(Box::new(dac_engine::export::write_file)),
