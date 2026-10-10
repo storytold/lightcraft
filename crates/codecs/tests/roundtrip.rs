@@ -635,3 +635,49 @@ fn print_resolution_is_written() {
     let j = encode_jpeg(&img, 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
     assert_eq!(&j[13..18], &[0, 0, 1, 0, 1]);
 }
+
+#[test]
+fn pq_png_is_16_bit_rec2020_pq_with_cicp_and_content_light() {
+    // linear Rec. 2020, SDR white at 1.0, up to 8x SDR white along x
+    let (w, h) = (64u32, 4u32);
+    let rgb: Vec<f32> = (0..w * h)
+        .flat_map(|i| {
+            let v = 0.01 * 1.11f32.powi((i % w) as i32);
+            [v, v * 0.5, v * 0.25]
+        })
+        .collect();
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"/>"#;
+    let bytes = encode_png_pq(w, h, &rgb, &EncodeMeta { xmp: Some(xmp), ppi: Some(240), ..Default::default() }).unwrap();
+    let mut r = png::Decoder::new(std::io::Cursor::new(bytes.as_slice())).read_info().unwrap();
+    let cicp = r.info().coding_independent_code_points.expect("cICP");
+    assert_eq!((cicp.color_primaries, cicp.transfer_function), (9, 16), "BT.2020, PQ");
+    let mut buf = vec![0; r.output_buffer_size().unwrap()];
+    let f = r.next_frame(&mut buf).unwrap();
+    assert_eq!((f.bit_depth, f.color_type, f.width, f.height), (png::BitDepth::Sixteen, png::ColorType::Rgb, w, h));
+    // every sample decodes back to its luminance
+    for x in [0usize, 20, 63] {
+        for c in 0..3 {
+            let o = (x * 3 + c) * 2;
+            let e = u16::from_be_bytes([buf[o], buf[o + 1]]) as f32 / 65535.0;
+            let want = rgb[x * 3 + c] * HDR_REFERENCE_WHITE_NITS;
+            assert!((encode::pq_decode(e) - want).abs() <= want * 0.01 + 0.01, "x {x} c {c}: {} vs {want}", encode::pq_decode(e));
+        }
+    }
+    // cLLI: MaxCLL is the brightest channel, in 0.0001 cd/m²
+    let at = bytes.windows(4).position(|w| w == b"cLLI").expect("cLLI");
+    let max_cll = u32::from_be_bytes(bytes[at + 4..at + 8].try_into().unwrap()) as f32 / 10_000.0;
+    let brightest = rgb.iter().copied().fold(0.0f32, f32::max) * HDR_REFERENCE_WHITE_NITS;
+    assert!((max_cll - brightest.ceil()).abs() <= 1.0, "{max_cll} vs {brightest}");
+    assert!(bytes.windows(17).any(|w| w == b"XML:com.adobe.xmp"), "XMP kept");
+    assert!(bytes.windows(4).any(|w| w == b"pHYs"), "print resolution kept");
+    assert!(!bytes.windows(4).any(|w| w == b"iCCP"), "no ICC profile next to cICP");
+}
+
+#[test]
+fn pq_png_rejects_short_buffers_and_survives_hostile_samples() {
+    assert!(encode_png_pq(4, 4, &[1.0; 3], &EncodeMeta::default()).is_err());
+    assert!(encode_png_pq(0, 4, &[], &EncodeMeta::default()).is_err());
+    assert!(encode_png_pq(u32::MAX, u32::MAX, &[], &EncodeMeta::default()).is_err());
+    let hostile = [f32::NAN, f32::INFINITY, -5.0, 1e30, 0.5, 2.0];
+    assert!(encode_png_pq(2, 1, &hostile, &EncodeMeta::default()).is_ok());
+}

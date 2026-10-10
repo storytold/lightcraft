@@ -440,3 +440,28 @@ fn hdr_avif_export_is_pq_rec2020() {
     // a photo without an HDR edit exports as an ordinary (sRGB) AVIF
     assert!(nclx(&sdr.bytes).is_none_or(|c| c[3] != 16));
 }
+
+#[test]
+fn hdr_png_export_is_16_bit_pq_rec2020() {
+    let mut s = Session::with_demo();
+    let id = sunset(&mut s);
+    let o = ExportOptions::from_json(&json!({"longEdge": 160, "format": "png", "hdr": true}));
+    assert!(o.hdr_output());
+    assert_eq!(o.effective_space(), lightcraft_pipeline::OutputSpace::Rec2020);
+    // a photo without an HDR edit exports as an ordinary (sRGB, 8-bit) PNG
+    let sdr = export_photo(&mut s, id, &o, 1).unwrap();
+    assert!(!sdr.bytes.windows(4).any(|w| w == b"cICP"));
+    assert_eq!(sdr.bytes[24], 8, "8-bit");
+    s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 2})).unwrap();
+    let hdr = export_photo(&mut s, id, &o, 1).unwrap();
+    let at = hdr.bytes.windows(4).position(|w| w == b"cICP").expect("cICP chunk");
+    assert_eq!(&hdr.bytes[at + 4..at + 8], &[9, 16, 0, 1], "BT.2020, PQ, RGB, full range");
+    assert_eq!(hdr.bytes[24], 16, "16-bit");
+    // the highlights above SDR white are there: MaxCLL beyond the 203 cd/m² of SDR white
+    let at = hdr.bytes.windows(4).position(|w| w == b"cLLI").expect("cLLI chunk");
+    let max_cll = u32::from_be_bytes(hdr.bytes[at + 4..at + 8].try_into().unwrap()) as f32 / 10_000.0;
+    assert!(max_cll > 250.0 && max_cll <= 4.0 * 203.0 + 1.0, "MaxCLL {max_cll}");
+    // HDR output off: the HDR edit exports its SDR rendition
+    let plain = export_photo(&mut s, id, &ExportOptions::from_json(&json!({"longEdge": 160, "format": "png"})), 1).unwrap();
+    assert!(!plain.bytes.windows(4).any(|w| w == b"cICP"));
+}

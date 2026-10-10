@@ -498,6 +498,59 @@ pub fn encode_avif_pq(width: u32, height: u32, rgb: &[f32], quality: u8, speed: 
     }
 }
 
+/// Encode an HDR PNG: `rgb` is linear light in **Rec. 2020** primaries with SDR white at 1.0
+/// (`width × height × 3`), as for [`encode_avif_pq`]. Written as 16-bit RGB with the PQ curve
+/// (SDR white at [`HDR_REFERENCE_WHITE_NITS`]), described by a `cICP` chunk (PNG third edition:
+/// BT.2020 primaries, PQ, RGB, full range) and a `cLLI` content light level chunk (the same
+/// levels the HDR AVIF records). EXIF and XMP are embedded; an ICC profile is not (`cICP`
+/// describes the colour, and readers prefer it).
+pub fn encode_png_pq(width: u32, height: u32, rgb: &[f32], meta: &EncodeMeta) -> Result<Vec<u8>> {
+    let (w, h) = (width as usize, height as usize);
+    let n = w.checked_mul(h).ok_or_else(|| Error::Encode("image too large".into()))?;
+    if n == 0 || n.checked_mul(3).is_none_or(|need| rgb.len() < need) {
+        return Err(Error::Encode("HDR PNG: sample buffer too short".into()));
+    }
+    const K: [f32; 3] = [0.2627, 0.6780, 0.0593]; // BT.2020 luminance
+    let mut max_nits = 0f32;
+    let mut sum_nits = 0f64;
+    let mut bytes = Vec::with_capacity(n * 6);
+    for c in rgb.as_chunks::<3>().0.iter().take(n) {
+        let nits = c.map(|v| (if v.is_finite() { v.max(0.0) } else { 0.0 }) * HDR_REFERENCE_WHITE_NITS);
+        max_nits = max_nits.max(nits[0].max(nits[1]).max(nits[2]));
+        sum_nits += (K[0] * nits[0] + K[1] * nits[1] + K[2] * nits[2]) as f64;
+        for v in nits {
+            bytes.extend_from_slice(&((pq_encode(v) * 65535.0).round().clamp(0.0, 65535.0) as u16).to_be_bytes());
+        }
+    }
+    let cll = (max_nits.ceil().clamp(1.0, 10_000.0) as u32, ((sum_nits / n as f64).ceil().clamp(1.0, 10_000.0)) as u32);
+    let mut info = png::Info::with_size(width, height);
+    info.color_type = png::ColorType::Rgb;
+    info.bit_depth = png::BitDepth::Sixteen;
+    info.exif_metadata = meta.exif.map(|b| b.to_vec().into());
+    info.pixel_dims = meta.ppi.filter(|p| *p > 0).map(|p| {
+        let ppm = (p as f64 / 0.0254).round() as u32;
+        png::PixelDimensions { xppu: ppm, yppu: ppm, unit: png::Unit::Meter }
+    });
+    let mut out = Vec::new();
+    let e = |e: png::EncodingError| Error::Encode(e.to_string());
+    {
+        let mut enc = png::Encoder::with_info(&mut out, info).map_err(e)?;
+        enc.set_compression(png::Compression::Fast);
+        if let Some(xmp) = meta.xmp {
+            enc.add_itxt_chunk("XML:com.adobe.xmp".into(), xmp.into()).map_err(e)?;
+        }
+        let mut wr = enc.write_header().map_err(e)?;
+        // BT.2020 primaries (9), PQ (16), RGB (0), full range (1)
+        wr.write_chunk(png::chunk::ChunkType(*b"cICP"), &[9, 16, 0, 1]).map_err(e)?;
+        // MaxCLL and MaxFALL in units of 0.0001 cd/m²
+        let clli = [(cll.0 * 10_000).to_be_bytes(), (cll.1 * 10_000).to_be_bytes()].concat();
+        wr.write_chunk(png::chunk::ChunkType(*b"cLLI"), &clli).map_err(e)?;
+        wr.write_image_data(&bytes).map_err(e)?;
+        wr.finish().map_err(e)?;
+    }
+    Ok(out)
+}
+
 /// 16-bit RGB(A) → 10-bit BT.601 full-range YCbCr planes (the matrix `ravif` uses for 8-bit input).
 #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
 fn avif_10bit(enc: &ravif::Encoder, img: &EncodeImage, s: &[u16]) -> Result<Vec<u8>> {

@@ -602,8 +602,9 @@ pub struct ExportOptions {
     pub bit_depth: Option<u8>,
     /// HDR output for photos edited in HDR: JPEG as an ISO 21496-1 gain map JPEG (the SDR
     /// rendition plus a gain map, so the file looks right everywhere; quality as set, `limit_kb`
-    /// not applied), AVIF as 10-bit Rec. 2020 PQ, 32-bit float TIFF with the highlights above SDR
-    /// white kept. Other formats, and photos without an HDR edit, are SDR.
+    /// not applied), AVIF as 10-bit Rec. 2020 PQ, PNG as 16-bit Rec. 2020 PQ (`cICP`), 32-bit float
+    /// TIFF with the highlights above SDR white kept. Other formats, and photos without an HDR
+    /// edit, are SDR.
     pub hdr: bool,
 }
 
@@ -995,6 +996,7 @@ impl ExportOptions {
     pub fn effective_depth(&self) -> OutputDepth {
         match (self.format, self.bit_depth) {
             (ExportFormat::Jpeg | ExportFormat::Webp | ExportFormat::Original | ExportFormat::Dng, _) => OutputDepth::U8,
+            (ExportFormat::Png, _) if self.hdr => OutputDepth::F32Hdr,
             (ExportFormat::Png, Some(16 | 32)) => OutputDepth::U16,
             (ExportFormat::Png, _) => OutputDepth::U8,
             (ExportFormat::Tiff, Some(8)) => OutputDepth::U8,
@@ -1018,15 +1020,20 @@ impl ExportOptions {
     }
 
     /// Whether these options write HDR files (for photos edited in HDR): JPEG (gain map), AVIF
-    /// (PQ) or 32-bit float TIFF with [`ExportOptions::hdr`].
+    /// or PNG (PQ) or 32-bit float TIFF with [`ExportOptions::hdr`].
     pub fn hdr_output(&self) -> bool {
-        self.hdr && matches!((self.format, self.bit_depth), (ExportFormat::Jpeg | ExportFormat::Avif, _) | (ExportFormat::Tiff, Some(32)))
+        self.hdr
+            && matches!(
+                (self.format, self.bit_depth),
+                (ExportFormat::Jpeg | ExportFormat::Avif | ExportFormat::Png, _) | (ExportFormat::Tiff, Some(32))
+            )
     }
 
-    /// The colour space the file is actually written in (AVIF: sRGB, or Rec. 2020 for HDR).
+    /// The colour space the file is actually written in (AVIF: sRGB, or Rec. 2020 for HDR; HDR
+    /// PNG: Rec. 2020).
     pub fn effective_space(&self) -> OutputSpace {
         match self.format {
-            ExportFormat::Avif if self.hdr => OutputSpace::Rec2020,
+            ExportFormat::Avif | ExportFormat::Png if self.hdr => OutputSpace::Rec2020,
             ExportFormat::Avif => OutputSpace::Srgb,
             _ => self.color_space,
         }
@@ -1283,6 +1290,7 @@ pub fn encode_deep(img: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) 
         DeepSamples::F32(v) => EncodeImage::new(w, h, 3, Samples::F32(v)),
     };
     let r = match (o.format, &img.samples) {
+        (ExportFormat::Png, DeepSamples::F32(v)) if img.space == OutputSpace::Rec2020 => lightcraft_codecs::encode_png_pq(w, h, v, &meta),
         (ExportFormat::Png, _) => encode::encode_png(&e, &meta),
         (ExportFormat::Tiff, _) => encode::encode_tiff(&e, o.tiff_compression, &meta),
         (ExportFormat::Avif, DeepSamples::F32(v)) if img.space == OutputSpace::Rec2020 => {

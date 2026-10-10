@@ -553,8 +553,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         choices(ui, "Bit depth", "exportBitDepth", depths, &mut bd);
                         opts.bit_depth = Some(bd);
                     }
-                    if matches!(opts.format, F::Jpeg | F::Tiff | F::Avif) {
-                        let tip = "Photos edited in HDR: JPEG with an HDR gain map (looks right everywhere, brighter highlights on HDR displays), AVIF as 10-bit Rec. 2020 PQ; TIFF needs 32-bit float";
+                    if matches!(opts.format, F::Jpeg | F::Tiff | F::Avif | F::Png) {
+                        let tip = "Photos edited in HDR: JPEG with an HDR gain map (looks right everywhere, brighter highlights on HDR displays), AVIF as 10-bit and PNG as 16-bit Rec. 2020 PQ; TIFF needs 32-bit float";
                         ui.checkbox(&mut opts.hdr, "HDR output").on_hover_text(tip);
                         if opts.hdr && !opts.hdr_output() {
                             ui.label(egui::RichText::new("HDR TIFF needs 32-bit float.").color(t.text_dim));
@@ -563,6 +563,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     if !rendered {
                     } else if opts.format == F::Avif && opts.hdr {
                         ui.label(egui::RichText::new("Color space: Rec. 2020 PQ (HDR AVIF)").color(t.text_dim));
+                    } else if opts.format == F::Png && opts.hdr {
+                        ui.label(egui::RichText::new("Color space: Rec. 2020 PQ, 16-bit (HDR PNG)").color(t.text_dim));
                     } else if opts.format == F::Avif {
                         ui.label(egui::RichText::new(crate::i18n::tr("Color space: sRGB (AVIF)")).color(t.text_dim));
                     } else {
