@@ -201,6 +201,9 @@ pub struct LibTools {
     /// The stroke in progress: erasing?, photos already painted.
     #[serde(skip)]
     pub stroke: Option<(bool, HashSet<PhotoId>)>,
+    /// Sidecar stats for the metadata-conflict badge: (egui time read, stat).
+    #[serde(skip)]
+    pub sidecar_stats: std::collections::HashMap<PhotoId, (f64, Option<dac_catalog::SidecarStat>)>,
 }
 
 impl Default for LibTools {
@@ -213,6 +216,7 @@ impl Default for LibTools {
             painter: None,
             last_painter: None,
             stroke: None,
+            sidecar_stats: Default::default(),
         }
     }
 }

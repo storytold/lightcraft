@@ -118,3 +118,37 @@ fn metadata_panel_edits_many_with_mixed_values() {
         h.step();
     }
 }
+
+/// Feature: grid cell styles and index numbers are commands; the expanded square cell shows the
+/// index; unknown styles are refused.
+#[test]
+fn grid_cell_style_and_index_numbers() {
+    let mut h = app("squareGrid");
+    let r = exec(&mut h, "view.gridCellStyle", json!({"style": "expanded", "index": true}));
+    assert_eq!(r, json!({"style": "expanded", "index": true, "badges": true}));
+    let r = exec(&mut h, "view.gridCellStyle", json!({}));
+    assert_eq!(r["style"], "compact", "cycles");
+    exec(&mut h, "view.gridCellStyle", json!({"style": "expanded"}));
+    h.settle(SETTLE);
+    let first = h.app.session.visible_cloned()[0];
+    center(&mut h, &format!("cellIndex:{}", first.0));
+    let r = h.request("engine.execute", json!({"command": "view.gridCellStyle", "params": {"style": "huge"}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+}
+
+/// Feature: thumbnail badges for keywords and collections; the badges setting hides them.
+#[test]
+fn grid_badges_for_keywords_and_collections() {
+    let mut h = app("squareGrid");
+    let first = h.app.session.visible_cloned()[0];
+    exec(&mut h, "photo.setMeta", json!({"ids": [first.0], "keywords": ["sea"]}));
+    exec(&mut h, "album.toggleTarget", json!({"ids": [first.0]}));
+    h.settle(SETTLE);
+    center(&mut h, &format!("badge:keywords:{}", first.0));
+    center(&mut h, &format!("badge:collections:{}", first.0));
+    exec(&mut h, "view.gridCellStyle", json!({"badges": false}));
+    h.step();
+    h.step();
+    let w = h.request("ui.widgets", json!({}), T);
+    assert!(!w.to_string().contains(&format!("badge:keywords:{}", first.0)));
+}
