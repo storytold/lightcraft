@@ -197,7 +197,13 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 // photos without a capture time start from their import time
                 let base = |s: &crate::Session, id| s.catalog.photo(id).map(|p| p.date().to_string()).unwrap_or_default();
-                let mut delta = (f64_or(p, "shift", 0.0) + f64_or(p, "hours", 0.0) * 3600.0).round() as i64;
+                // seconds; a shift beyond 10,000 years is a mistake (and would overflow), not a date
+                const MAX_SHIFT: f64 = 10_000.0 * 365.25 * 86_400.0;
+                let shift = f64_or(p, "shift", 0.0) + f64_or(p, "hours", 0.0) * 3600.0;
+                if shift.is_nan() || shift.abs() > MAX_SHIFT {
+                    return Err(bad(c, "the shift is more than 10,000 years"));
+                }
+                let mut delta = shift.round() as i64;
                 let mut each: Option<String> = None;
                 if let Some(t) = str_param(p, "time") {
                     let t = normalize_iso(t).ok_or_else(|| bad(c, format!("`{t}` is not a date (YYYY-MM-DDTHH:MM:SS)")))?;
@@ -205,7 +211,11 @@ pub fn specs() -> Vec<CommandSpec> {
                         each = Some(t);
                     } else {
                         let anchor = s.active().filter(|a| targets.contains(a)).unwrap_or(targets[0]);
-                        let from = iso_seconds(&base(s, anchor)).ok_or_else(|| bad(c, "the photo's date doesn't parse"))?;
+                        let anchor_date = base(s, anchor);
+                        // An impossible calendar date cannot anchor changes to the other photos.
+                        let from = normalize_iso(anchor_date.trim().get(..10).unwrap_or(""))
+                            .and_then(|_| iso_seconds(&anchor_date))
+                            .ok_or_else(|| bad(c, "the photo's date doesn't parse"))?;
                         delta += iso_seconds(&t).unwrap_or(from) - from;
                     }
                 }
@@ -213,25 +223,36 @@ pub fn specs() -> Vec<CommandSpec> {
                 let mut ops = Vec::new();
                 let mut out = Vec::new();
                 let mut no_file = 0usize;
+                let mut out_of_range = 0usize;
                 for id in &targets {
-                    let new = if from_file {
+                    let from = if from_file {
                         // the original's modification time (UTC; `hours` moves it to the camera's zone)
                         let Some(t) = s.catalog.photo(*id).and_then(|p| file_time(p)) else {
                             no_file += 1;
                             continue;
                         };
-                        shift_iso(&t, delta)
+                        t
                     } else {
                         match &each {
-                            Some(t) => shift_iso(t, delta),
-                            None => shift_iso(&base(s, *id), delta),
+                            Some(t) => t.clone(),
+                            None => base(s, *id),
                         }
                     };
-                    let Some(new) = new else { continue };
+                    let Some(new) = shift_iso(&from, delta) else {
+                        // a date that reads but would leave years 0000–9999 is refused below; one
+                        // that doesn't read is skipped, as before
+                        if iso_seconds(&from).is_some() {
+                            out_of_range += 1;
+                        }
+                        continue;
+                    };
                     out.push(json!(new));
                     if s.catalog.photo(*id).and_then(|p| p.captured.as_deref()) != Some(new.as_str()) {
                         ops.push(Op::SetCaptured { id: *id, captured: Some(new) });
                     }
+                }
+                if out_of_range > 0 {
+                    return Err(bad(c, format!("the shift would take {out_of_range} photo(s) outside the years 0000–9999; nothing was changed")));
                 }
                 let n = ops.len();
                 if n > 0 {

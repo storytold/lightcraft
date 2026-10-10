@@ -1,319 +1,618 @@
-//! The Library module's Keyword List panel (Classic): every keyword in the library as a tree with
-//! photo counts, created keywords included; a filter (text, matching synonyms too, and All /
-//! People / Other); a mark per row toggles the keyword on the selected photos; the row's menu
-//! edits its synonyms, export options and person flag; Import / Export keyword list files.
+//! The Keyword List (Lightroom Classic's Keyword List panel), in the right panel's Keywords: every
+//! keyword of the library, those without photos too, as a tree with photo counts. A tick box per
+//! keyword gives it to the selected photos or takes it away; the arrow shows the photos with it.
 
-use std::collections::BTreeMap;
-
-use egui::{Align2, Rect, Sense, pos2, vec2};
+use dac_catalog::keywords::{KeywordInfo, KeywordNode, same};
+use dac_catalog::{Catalog, PhotoId};
+use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::json;
 
 use crate::DacApp;
-use crate::icons::Icon;
+use crate::state::Dialog;
 use crate::theme::Tokens;
-use crate::widgets::{icon_button, register};
+use crate::widgets::register;
 
-/// One keyword row: its path, its own name, depth, count, whether it has children.
+/// Rows are this tall; each level is indented this much.
+const ROW_H: f32 = 24.0;
+const INDENT: f32 = 14.0;
+
+/// The Keyword List section: a filter box, then the rows.
+pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    crate::widgets::divider(ui);
+    // the title, where a dragged keyword goes back to the top level
+    let (title, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());
+    register(ui.ctx(), "keywordList:topLevel", title);
+    let dragging = app.ui.dragging_keyword.clone();
+    let (pointer, released) = ui.input(|i| (i.pointer.latest_pos(), i.pointer.any_released()));
+    let over_title = shown_under(ui, title, pointer);
+    if dragging.is_some() && over_title {
+        ui.painter().rect_stroke(title.shrink2(vec2(16.0, 6.0)), 4.0, Stroke::new(1.5, t.accent), StrokeKind::Inside);
+    }
+    let heading = if dragging.is_some() { crate::i18n::tr("Drop here for the top level") } else { crate::i18n::tr("Keyword List") };
+    ui.painter().text(pos2(title.left() + 24.0, title.center().y + 2.0), Align2::LEFT_CENTER, heading, t.semibold(15.0), t.text);
+    if released
+        && over_title
+        && let Some(k) = dragging.clone()
+    {
+        drop_keyword(app, ui.ctx(), &k, None);
+    }
+    let fid = egui::Id::new("keyword-list-filter");
+    let mut filter: String = ui.data(|d| d.get_temp(fid)).unwrap_or_default();
+    ui.horizontal(|ui| {
+        ui.add_space(24.0);
+        crate::text_field::TextField::singleline("field:keywordFilter", &mut filter)
+            .hint(crate::i18n::tr("Filter Keywords"))
+            .width(ui.available_width() - 82.0)
+            .show(ui);
+        // + creates a keyword (inside the picked one), − deletes the picked one
+        let plus = ui.button("+").on_hover_text(crate::i18n::tr("Create Keyword Tag"));
+        register(ui.ctx(), "keywordList:create", plus.rect);
+        if plus.clicked() {
+            app.ui.dialog = Some(create_dialog(app));
+        }
+        let picked = app.ui.keyword_list_selected.clone().filter(|k| in_tree(&app.caches.keyword_tree(&app.session.catalog), k));
+        let minus = ui.add_enabled(picked.is_some(), egui::Button::new("−")).on_hover_text(crate::i18n::tr("Delete Keyword"));
+        register(ui.ctx(), "keywordList:delete", minus.rect);
+        if minus.clicked()
+            && let Some(k) = picked
+        {
+            app.ui.dialog = Some(delete_dialog(app, &k));
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(fid, filter.clone()));
+    ui.add_space(6.0);
+    let tree = app.caches.keyword_tree(&app.session.catalog);
+    let open = app.ui.keyword_list_open.clone();
+    let rows = rows(&tree, &filter, &|p| open.iter().any(|o| same(o, p)));
+    if rows.is_empty() {
+        let none = if filter.trim().is_empty() { "No keywords yet" } else { "No keywords match" };
+        ui.horizontal(|ui| {
+            ui.add_space(24.0);
+            ui.label(egui::RichText::new(crate::i18n::tr(none)).color(t.text_dim));
+        });
+    }
+    let selection = app.session.targets(&serde_json::Value::Null);
+    let ticks = app.caches.keyword_ticks(&app.session.catalog, &selection);
+    for r in &rows {
+        row(app, ui, r, &selection, &ticks, filter.trim().is_empty());
+    }
+    ui.add_space(12.0);
+}
+
+/// After the keyword `from` became `to` (renamed, moved or merged), the list's pick and open
+/// levels follow it, and the levels containing it open so that it stays in sight.
+pub(crate) fn follow(app: &mut DacApp, from: &str, to: &str) {
+    use dac_catalog::keywords::{is_under, reparent};
+    let to = app.session.catalog.keyword_path(to).unwrap_or_else(|| to.to_string());
+    if let Some(k) = app.ui.keyword_list_selected.clone()
+        && is_under(&k, from)
+    {
+        app.ui.keyword_list_selected = Some(reparent(&k, from, &to));
+    }
+    for o in &mut app.ui.keyword_list_open {
+        if is_under(o, from) {
+            *o = reparent(o, from, &to).to_lowercase();
+        }
+    }
+    let levels: Vec<&str> = to.split('|').collect();
+    for n in 1..levels.len() {
+        let parent = levels.get(..n).map(|l| l.join("|").to_lowercase()).unwrap_or_default();
+        if !app.ui.keyword_list_open.iter().any(|o| same(o, &parent)) {
+            app.ui.keyword_list_open.push(parent);
+        }
+    }
+}
+
+/// The pointer is on the part of `rect` that is shown: inside it and inside the panel's visible
+/// (scrolled) area, so a drop never lands on a row or title hidden under the top bar.
+fn shown_under(ui: &egui::Ui, rect: Rect, pointer: Option<egui::Pos2>) -> bool {
+    pointer.is_some_and(|p| rect.contains(p) && ui.clip_rect().contains(p))
+}
+
+/// A keyword being dragged, each frame (after the panels, which take the drop): its name follows
+/// the pointer, and the drag ends with the button's release wherever it is (the list may be gone
+/// by then) or with Esc.
+pub fn drag_feedback(app: &mut DacApp, ctx: &egui::Context) {
+    let Some(keyword) = app.ui.dragging_keyword.clone() else { return };
+    let (released, down, at, esc) =
+        ctx.input(|i| (i.pointer.any_released(), i.pointer.any_down(), i.pointer.latest_pos(), i.key_pressed(egui::Key::Escape)));
+    if released || !down || esc {
+        app.ui.dragging_keyword = None;
+        return;
+    }
+    let Some(at) = at else { return };
+    let t = Tokens::get(ctx);
+    ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+    let name = keyword.rsplit('|').next().unwrap_or(&keyword).to_string();
+    egui::Area::new(egui::Id::new("drag-keyword")).order(egui::Order::Tooltip).interactable(false).fixed_pos(at + vec2(14.0, 10.0)).show(ctx, |ui| {
+        egui::Frame::NONE.fill(t.accent).corner_radius(10.0).inner_margin(egui::Margin::symmetric(9, 3)).show(ui, |ui| {
+            ui.label(egui::RichText::new(name).color(Color32::WHITE).font(t.semibold(12.0)));
+        });
+    });
+}
+
+/// Drop the dragged `keyword` inside `parent` (`None`: the top level). Where one of its name is
+/// already, ask before merging the two; where it is already, nothing happens.
+fn drop_keyword(app: &mut DacApp, ctx: &egui::Context, keyword: &str, parent: Option<&str>) {
+    app.ui.dragging_keyword = None;
+    let cat = &app.session.catalog;
+    let leaf = keyword.rsplit('|').next().unwrap_or(keyword);
+    let parent = parent.map(|p| cat.keyword_path(p).unwrap_or_else(|| p.to_string()));
+    if parent.as_deref().is_some_and(|p| dac_catalog::keywords::is_under(p, keyword)) {
+        return;
+    }
+    let to = parent.as_deref().map_or_else(|| leaf.to_string(), |p| format!("{p}|{leaf}"));
+    if same(&to, keyword) {
+        return;
+    }
+    if cat.has_keyword(&to) {
+        app.ui.dialog = Some(Dialog::MoveKeyword { keyword: keyword.to_string(), parent });
+        return;
+    }
+    match app.run("keyword.move", json!({"keyword": keyword, "parent": parent})) {
+        Ok(_) => follow(app, keyword, &to),
+        Err(e) => app.toast(ctx, e),
+    }
+}
+
+/// One keyword's row: the triangle, the tick box, the name, the count, and on hover the arrow.
+/// `can_fold`: the triangle opens and closes the level (not while a filter opens it).
+fn row(app: &mut DacApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId], ticks: &Ticks, can_fold: bool) {
+    let t = Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click_and_drag());
+    register(ui.ctx(), format!("keywordRow:{}", r.path), rect);
+    if resp.drag_started() {
+        app.ui.dragging_keyword = Some(r.path.clone());
+    }
+    drop_target(app, ui, rect, &r.path);
+    let picked = app.ui.keyword_list_selected.as_deref().is_some_and(|k| same(k, &r.path));
+    let inner = Rect::from_min_max(rect.min + vec2(16.0, 0.0), rect.max - vec2(16.0, 0.0));
+    if picked {
+        ui.painter().rect_filled(inner, 4.0, t.canvas);
+    } else if resp.hovered() {
+        ui.painter().rect_filled(inner, 4.0, t.hover.gamma_multiply(0.6));
+    }
+    let x = inner.left() + 4.0 + r.depth as f32 * INDENT;
+    let cy = rect.center().y;
+    // the triangle
+    if r.has_children {
+        let c = pos2(x + 6.0, cy);
+        let tri = Rect::from_center_size(c, vec2(14.0, 14.0));
+        let tr = ui.interact(tri, egui::Id::new(("keyword-list-tri", r.path.to_lowercase())), Sense::click());
+        register(ui.ctx(), format!("keywordRowToggle:{}", r.path), tri);
+        let pts = if r.open {
+            vec![c + vec2(-4.0, -2.0), c + vec2(4.0, -2.0), c + vec2(0.0, 3.0)]
+        } else {
+            vec![c + vec2(-2.0, -4.0), c + vec2(3.0, 0.0), c + vec2(-2.0, 4.0)]
+        };
+        // while a filter opens the levels the triangle does nothing: it doesn't light up either
+        let lit = tr.hovered() && can_fold;
+        ui.painter().add(egui::Shape::convex_polygon(pts, if lit { t.text } else { t.text_dim }, Stroke::NONE));
+        if tr.clicked() && can_fold {
+            let key = r.path.to_lowercase();
+            if r.open {
+                app.ui.keyword_list_open.retain(|o| !same(o, &key));
+            } else {
+                app.ui.keyword_list_open.push(key);
+            }
+        }
+    }
+    // the tick box: does the selection have it?
+    let state = ticks.tick(&r.path);
+    let boxr = Rect::from_center_size(pos2(x + 22.0, cy), vec2(13.0, 13.0));
+    let on = !selection.is_empty();
+    // (it senses drags too, so a press there that moves doesn't pick the keyword up)
+    let sense = if on { Sense::click_and_drag() } else { Sense::hover() };
+    let tb = ui.interact(boxr.expand(3.0), egui::Id::new(("keyword-list-tick", r.path.to_lowercase())), sense);
+    register(ui.ctx(), format!("keywordCheck:{}", r.path), boxr);
+    let edge = if on { t.text_label } else { t.text_dim.gamma_multiply(0.5) };
+    match state {
+        Tick::All => {
+            ui.painter().rect_filled(boxr, 2.0, t.accent);
+            let pts = vec![boxr.left_center() + vec2(2.5, 0.0), boxr.center_bottom() + vec2(-1.0, -3.0), boxr.right_top() + vec2(-2.5, 3.0)];
+            ui.painter().add(egui::Shape::line(pts, Stroke::new(1.6, Color32::WHITE)));
+        }
+        Tick::Some => {
+            ui.painter().rect_stroke(boxr, 2.0, Stroke::new(1.0, edge), StrokeKind::Inside);
+            ui.painter().line_segment([boxr.left_center() + vec2(3.0, 0.0), boxr.right_center() - vec2(3.0, 0.0)], Stroke::new(1.6, t.text));
+        }
+        Tick::No => {
+            ui.painter().rect_stroke(boxr, 2.0, Stroke::new(1.0, edge), StrokeKind::Inside);
+        }
+    }
+    // (with nothing selected it does nothing, and says nothing)
+    let tb = if on {
+        tb.on_hover_text(crate::i18n::tr(match state {
+            Tick::All => "Remove from Selected Photos",
+            _ => "Add to Selected Photos",
+        }))
+    } else {
+        tb
+    };
+    if tb.clicked() {
+        let key = if state == Tick::All { "removeKeywords" } else { "addKeywords" };
+        let _ = app.run("photo.setMeta", json!({key: [r.path]}));
+    }
+    // the count, then the arrow left of it (shown on hover)
+    let count = ui.painter().layout_no_wrap(r.count.to_string(), t.font(12.0), t.text_dim);
+    let count_rect = Rect::from_min_size(pos2(inner.right() - 6.0 - count.size().x, cy - count.size().y / 2.0), count.size());
+    register(ui.ctx(), format!("keywordCount:{}", r.path), count_rect);
+    ui.painter().galley(count_rect.min, count, t.text_dim);
+    let arrow = Rect::from_center_size(pos2(count_rect.left() - 12.0, cy), vec2(16.0, 16.0));
+    let ar = ui.interact(arrow, egui::Id::new(("keyword-list-show", r.path.to_lowercase())), Sense::click());
+    register(ui.ctx(), format!("keywordShow:{}", r.path), arrow);
+    if resp.hovered() || ar.hovered() {
+        ui.painter().text(arrow.center(), Align2::CENTER_CENTER, "→", t.font(13.0), if ar.hovered() { t.text } else { t.text_dim });
+    }
+    if ar.on_hover_text(crate::i18n::tr("Show Photos with Keyword")).clicked() {
+        super::left::browse_all_photos(app, true);
+        let _ = app.run("library.filter", json!({"keyword": r.path}));
+    }
+    // the name, cut short before the arrow
+    let room = (arrow.left() - 4.0 - (x + 34.0)).max(0.0);
+    let font = t.font(13.0);
+    let measure = |s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text_label).size().x;
+    let name = if measure(&r.name) <= room { r.name.clone() } else { crate::widgets::elide_head(&r.name, room, measure) };
+    let label = ui.painter().text(pos2(x + 34.0, cy), Align2::LEFT_CENTER, name, font.clone(), if picked { t.text } else { t.text_label });
+    // where new keywords go (Put New Keywords Inside This Keyword): a dot after the name
+    if app.session.catalog.default_keyword_parent().as_deref().is_some_and(|k| same(k, &r.path)) {
+        let dot = Rect::from_center_size(pos2(label.right() + 7.0, cy), vec2(6.0, 6.0));
+        ui.painter().circle_filled(dot.center(), 3.0, t.accent);
+        register(ui.ctx(), format!("keywordDefault:{}", r.path), dot);
+    }
+    let resp = resp.on_hover_text(r.path.replace('|', " › "));
+    if resp.clicked() {
+        app.ui.keyword_list_selected = Some(r.path.clone());
+    }
+    if resp.double_clicked() {
+        app.ui.dialog = Some(edit_dialog(app, &r.path));
+    }
+    resp.context_menu(|ui| menu(app, ui, &r.path, selection));
+}
+
+/// A row while a keyword or photos are dragged: outlined under the pointer when the drop would
+/// do something (a keyword never goes inside itself), and a release there does it: nests the
+/// keyword inside this one, or gives this keyword to the photos.
+fn drop_target(app: &mut DacApp, ui: &mut egui::Ui, rect: Rect, path: &str) {
+    let (pointer, released) = ui.input(|i| (i.pointer.latest_pos(), i.pointer.any_released()));
+    if !shown_under(ui, rect, pointer) {
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    let outline = |ui: &egui::Ui| ui.painter().rect_stroke(rect.shrink2(vec2(16.0, 1.0)), 4.0, Stroke::new(1.5, t.accent), StrokeKind::Inside);
+    if let Some(k) = app.ui.dragging_keyword.clone() {
+        if dac_catalog::keywords::is_under(path, &k) {
+            return;
+        }
+        outline(ui);
+        if released {
+            drop_keyword(app, ui.ctx(), &k, Some(path));
+        }
+    } else if let Some(ids) = app.ui.dragging_photos.clone() {
+        outline(ui);
+        if released {
+            // only the photos that didn't have it get it
+            let lacking = |id: &u64| {
+                app.session.catalog.photo(PhotoId(*id)).is_some_and(|p| !p.meta.keywords.iter().any(|k| same(&dac_catalog::keywords::clean(k), path)))
+            };
+            let n = ids.iter().filter(|id| lacking(id)).count();
+            app.ui.dragging_photos = None;
+            match app.run("photo.setMeta", json!({"ids": ids, "addKeywords": [path]})) {
+                Ok(_) => app.toast(
+                    ui.ctx(),
+                    crate::i18n::tr_format!(
+                        "Added “{keyword}” to {n} photo{}",
+                        if n == 1 { "" } else { "s" },
+                        keyword = path.replace('|', " › "),
+                        n = n
+                    ),
+                ),
+                Err(e) => app.toast(ui.ctx(), e),
+            }
+        }
+    }
+}
+
+/// A keyword's context menu.
+fn menu(app: &mut DacApp, ui: &mut egui::Ui, path: &str, selection: &[PhotoId]) {
+    let name = path.replace('|', " › ");
+    let item = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool| {
+        let r = ui.add_enabled(enabled, egui::Button::new(label));
+        register(ui.ctx(), format!("keywordMenu:{id}"), r.rect);
+        r.clicked()
+    };
+    if item(ui, "create", &crate::i18n::tr_format!("Create Keyword Tag Inside “{name}”…", name = name), true) {
+        let mut d = create_dialog(app);
+        if let Dialog::KeywordTag { parent, inside, .. } = &mut d {
+            *parent = Some(path.to_string());
+            *inside = true;
+        }
+        app.ui.dialog = Some(d);
+    }
+    if item(ui, "edit", crate::i18n::tr("Edit Keyword Tag…"), true) {
+        app.ui.dialog = Some(edit_dialog(app, path));
+    }
+    let is_default = app.session.catalog.default_keyword_parent().as_deref().is_some_and(|k| same(k, path));
+    let label = format!("{}{}", if is_default { "✓ " } else { "" }, crate::i18n::tr("Put New Keywords Inside This Keyword"));
+    if item(ui, "defaultParent", &label, true) {
+        let _ = app.run("keyword.setDefaultParent", json!({"keyword": if is_default { serde_json::Value::Null } else { json!(path) }}));
+    }
+    ui.separator();
+    let some = !selection.is_empty();
+    if item(ui, "add", crate::i18n::tr("Add to Selected Photos"), some) {
+        let _ = app.run("photo.setMeta", json!({"addKeywords": [path]}));
+    }
+    if item(ui, "remove", crate::i18n::tr("Remove from Selected Photos"), some) {
+        let _ = app.run("photo.setMeta", json!({"removeKeywords": [path]}));
+    }
+    if item(ui, "show", crate::i18n::tr("Show Photos with Keyword"), true) {
+        super::left::browse_all_photos(app, true);
+        let _ = app.run("library.filter", json!({"keyword": path}));
+    }
+    ui.separator();
+    if item(ui, "purge", crate::i18n::tr("Purge Unused Keywords"), true) {
+        let _ = app.run("keyword.purgeUnused", json!({}));
+    }
+    if item(ui, "delete", crate::i18n::tr("Delete Keyword…"), true) {
+        app.ui.dialog = Some(delete_dialog(app, path));
+    }
+}
+
+/// Create Keyword Tag: inside the keyword picked in the list, else the default parent.
+pub(crate) fn create_dialog(app: &DacApp) -> Dialog {
+    let parent =
+        app.ui.keyword_list_selected.clone().filter(|k| app.session.catalog.has_keyword(k)).or_else(|| app.session.catalog.default_keyword_parent());
+    let d = KeywordInfo::default();
+    Dialog::KeywordTag {
+        editing: None,
+        name: String::new(),
+        inside: parent.is_some(),
+        parent,
+        synonyms: String::new(),
+        include_on_export: d.include_on_export,
+        export_containing: d.export_containing,
+        export_synonyms: d.export_synonyms,
+        person: d.person,
+        add_to_selected: false,
+    }
+}
+
+/// Edit Keyword Tag for `path`, showing its name and attributes.
+pub(crate) fn edit_dialog(app: &DacApp, path: &str) -> Dialog {
+    let path = app.session.catalog.keyword_path(path).unwrap_or_else(|| path.to_string());
+    let info = app.session.catalog.keyword_info(&path).cloned().unwrap_or_default();
+    Dialog::KeywordTag {
+        name: path.rsplit('|').next().unwrap_or(&path).to_string(),
+        editing: Some(path),
+        parent: None,
+        inside: false,
+        synonyms: info.synonyms.join(", "),
+        include_on_export: info.include_on_export,
+        export_containing: info.export_containing,
+        export_synonyms: info.export_synonyms,
+        person: info.person,
+        add_to_selected: false,
+    }
+}
+
+/// Delete Keyword, saying how many photos have it.
+pub(crate) fn delete_dialog(app: &DacApp, path: &str) -> Dialog {
+    let keyword = app.session.catalog.keyword_path(path).unwrap_or_else(|| path.to_string());
+    let count = app
+        .session
+        .catalog
+        .photos()
+        .filter(|p| p.in_library() && p.meta.keywords.iter().any(|k| dac_catalog::keywords::is_under(k, &keyword)))
+        .count();
+    Dialog::DeleteKeyword { keyword, count }
+}
+
+/// One row of the Keyword List as drawn.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Row {
     pub path: String,
     pub name: String,
+    /// Levels below the top (0 = a top-level keyword).
     pub depth: usize,
     pub count: usize,
+    pub has_children: bool,
+    /// Its children are shown.
+    pub open: bool,
 }
 
-/// Every keyword (from the photos, with counts, and the created ones), in tree order.
-pub(crate) fn rows(tree: &[dac_catalog::KeywordNode], attrs: &BTreeMap<String, dac_engine::cmd::keyword_list::KeywordAttrs>) -> Vec<Row> {
-    // path (lowercase) → (path as written, count)
-    let mut all: BTreeMap<String, (String, usize)> = BTreeMap::new();
-    fn walk(nodes: &[dac_catalog::KeywordNode], all: &mut BTreeMap<String, (String, usize)>, depth: usize) {
-        if depth > 32 {
-            return;
-        }
-        for n in nodes {
-            all.insert(n.path.to_lowercase(), (n.path.clone(), n.count));
-            walk(&n.children, all, depth + 1);
-        }
-    }
-    walk(tree, &mut all, 0);
-    for k in attrs.keys() {
-        let mut path = String::new();
-        for part in k.split('|').take(32) {
-            if !path.is_empty() {
-                path.push('|');
-            }
-            path.push_str(part);
-            all.entry(path.to_lowercase()).or_insert_with(|| (path.clone(), 0));
-        }
-    }
-    // sorted by the path's parts, so children follow their parent
-    let mut v: Vec<(String, usize)> = all.into_values().collect();
-    v.sort_by(|a, b| a.0.to_lowercase().split('|').cmp(b.0.to_lowercase().split('|')));
-    v.into_iter()
-        .map(|(path, count)| Row { name: path.rsplit('|').next().unwrap_or(&path).to_string(), depth: path.matches('|').count(), path, count })
-        .collect()
+/// The rows to draw: the tree with its levels open as `open` says (by path, any case). With a
+/// `filter`, the keywords whose name contains it (any case) and the keywords containing them,
+/// opened so that they show.
+pub(crate) fn rows(tree: &[KeywordNode], filter: &str, open: &dyn Fn(&str) -> bool) -> Vec<Row> {
+    let filter = filter.trim().to_lowercase();
+    let mut out = Vec::new();
+    add_rows(tree, 0, &filter, open, &mut out);
+    out
 }
 
-fn attrs_of<'a>(app: &'a DacApp, path: &str) -> Option<&'a dac_engine::cmd::keyword_list::KeywordAttrs> {
-    dac_engine::cmd::keyword_list::attrs(&app.session.keyword_attrs, path)
+/// A node holds a match: its name, or a name below it.
+fn holds(n: &KeywordNode, filter: &str) -> bool {
+    n.name.to_lowercase().contains(filter) || n.children.iter().any(|c| holds(c, filter))
 }
 
-/// Whether the keyword (or one below it) is on all, some or none of the selected photos.
-fn mark(app: &DacApp, path: &str) -> (usize, usize) {
-    let ids = app.session.targets(&json!({}));
-    let has =
-        ids.iter().filter(|id| app.session.catalog.photo(**id).is_some_and(|p| p.meta.keywords.iter().any(|k| k.eq_ignore_ascii_case(path)))).count();
-    (has, ids.len())
-}
-
-pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
-    // the toolbar: filter field, kind, + and the ⋯ menu
-    let fid = egui::Id::new("kwlist-filter");
-    let kid = egui::Id::new("kwlist-kind");
-    let mut filter: String = ui.data(|d| d.get_temp(fid)).unwrap_or_default();
-    let mut kind: u8 = ui.data(|d| d.get_temp(kid)).unwrap_or(0);
-    ui.horizontal(|ui| {
-        let r = ui.add(
-            egui::TextEdit::singleline(&mut filter)
-                .hint_text(crate::i18n::tr("Filter Keywords"))
-                .desired_width((ui.available_width() - 64.0).max(60.0)),
-        );
-        register(ui.ctx(), "field:keywordListFilter", r.rect);
-        let plus = icon_button(ui, "keywordCreate", Icon::Plus, vec2(24.0, 22.0), false, true, "Create Keyword Tag");
-        if plus.clicked() {
-            app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
-                title: "Create Keyword Tag".into(),
-                hint: "Keyword (a|b nests it under a)".into(),
-                value: String::new(),
-                command: "keyword.create".into(),
-                params: json!({}),
-                key: "keyword".into(),
-            });
-        }
-        let more = icon_button(ui, "keywordListMore", Icon::More, vec2(24.0, 22.0), false, true, "Keyword List");
-        egui::Popup::menu(&more).show(|ui| {
-            if app.services.pick_list_file.is_some() && ui.button(crate::i18n::tr("Import Keywords…")).clicked() {
-                let picked = app.services.pick_list_file.as_mut().map(|f| f()).unwrap_or_default();
-                if let Some(path) = picked.first() {
-                    match app.run("keyword.importList", json!({"path": path})) {
-                        Ok(r) => app.toast(ui.ctx(), crate::i18n::tr_format!("{n} keywords imported", n = r["keywords"].as_u64().unwrap_or(0))),
-                        Err(e) => app.toast(ui.ctx(), e),
-                    }
-                }
-                ui.close();
-            }
-            if app.services.save_list_file.is_some() && ui.button(crate::i18n::tr("Export Keywords…")).clicked() {
-                let path = app.services.save_list_file.as_mut().and_then(|f| f("Keywords.txt"));
-                if let Some(path) = path
-                    && let Err(e) = app.run("keyword.exportList", json!({"path": path}))
-                {
-                    app.toast(ui.ctx(), e);
-                }
-                ui.close();
-            }
-            if ui.button(crate::i18n::tr("Purge Unused Keywords")).clicked() {
-                match app.run("keyword.removeUnused", json!({})) {
-                    Ok(r) => app.toast(ui.ctx(), crate::i18n::tr_format!("{n} keywords removed", n = r["removed"].as_array().map_or(0, Vec::len))),
-                    Err(e) => app.toast(ui.ctx(), e),
-                }
-                ui.close();
-            }
-        });
-    });
-    ui.horizontal(|ui| {
-        for (i, label) in ["All", "People", "Other"].iter().enumerate() {
-            let r = ui.selectable_label(kind == i as u8, egui::RichText::new(crate::i18n::tr(label)).size(11.5));
-            register(ui.ctx(), format!("keywordListKind:{}", label.to_lowercase()), r.rect);
-            if r.clicked() {
-                kind = i as u8;
-            }
-        }
-    });
-    ui.data_mut(|d| {
-        d.insert_temp(fid, filter.clone());
-        d.insert_temp(kid, kind);
-    });
-    let tree = app.caches.keyword_tree(&app.session.catalog);
-    let all = rows(&tree, &app.session.keyword_attrs);
-    let needle = filter.trim().to_lowercase();
-    // a row shows when it (or one below it) passes the filter
-    let passes = |app: &DacApp, r: &Row| {
-        let a = attrs_of(app, &r.path);
-        let person = a.is_some_and(|a| a.person);
-        let kind_ok = match kind {
-            1 => person,
-            2 => !person,
-            _ => true,
-        };
-        let text_ok = needle.is_empty()
-            || r.name.to_lowercase().contains(&needle)
-            || a.is_some_and(|a| a.synonyms.iter().any(|s| s.to_lowercase().contains(&needle)));
-        kind_ok && text_ok
-    };
-    let shown: Vec<bool> = all.iter().map(|r| passes(app, r)).collect();
-    let filtering = !needle.is_empty() || kind != 0;
-    let mut skip_below: Option<usize> = None;
-    for (i, r) in all.iter().enumerate() {
-        if let Some(d) = skip_below {
-            if r.depth > d {
-                continue;
-            }
-            skip_below = None;
-        }
-        let lower = r.path.to_lowercase();
-        let subtree_shown = shown.get(i).copied().unwrap_or(false)
-            || all.iter().zip(shown.iter()).skip(i + 1).take_while(|(x, _)| x.depth > r.depth).any(|(_, s)| *s);
-        if !subtree_shown {
+fn add_rows(nodes: &[KeywordNode], depth: usize, filter: &str, open: &dyn Fn(&str) -> bool, out: &mut Vec<Row>) {
+    for n in nodes {
+        // filtering: a match, or a keyword containing one, opened down to it
+        let below = n.children.iter().any(|c| holds(c, filter));
+        if !filter.is_empty() && !below && !n.name.to_lowercase().contains(filter) {
             continue;
         }
-        let has_kids = all.get(i + 1).is_some_and(|n| n.depth > r.depth);
-        let open_id = egui::Id::new(("kwlist-open", lower.clone()));
-        let open: bool = filtering || ui.data(|d| d.get_temp(open_id)).unwrap_or(false);
-        row(app, ui, &t, r, has_kids, open, open_id);
-        if has_kids && !open {
-            skip_below = Some(r.depth);
+        let is_open = if filter.is_empty() { open(&n.path) } else { below };
+        out.push(Row { path: n.path.clone(), name: n.name.clone(), depth, count: n.count, has_children: !n.children.is_empty(), open: is_open });
+        if is_open {
+            add_rows(&n.children, depth + 1, filter, open, out);
         }
-    }
-    if all.is_empty() {
-        ui.label(egui::RichText::new(crate::i18n::tr("No keywords yet")).color(t.text_dim));
     }
 }
 
-fn row(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, r: &Row, has_kids: bool, open: bool, open_id: egui::Id) {
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
-    register(ui.ctx(), format!("keywordList:{}", r.path), rect);
-    let edge = ui.clip_rect().right().min(rect.right());
-    let indent = 14.0 * r.depth as f32;
-    let sel = app.session.filter.keyword.as_deref().is_some_and(|k| k.eq_ignore_ascii_case(&r.path));
-    if sel {
-        ui.painter().rect_filled(rect.shrink2(vec2(2.0, 1.0)), 3.0, t.canvas);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect.shrink2(vec2(2.0, 1.0)), 3.0, t.hover.gamma_multiply(0.6));
-    }
-    // the mark: ✓ every selected photo has it, – some do; a click toggles it on the selection
-    let (has, of) = mark(app, &r.path);
-    let m = Rect::from_center_size(pos2(rect.left() + 10.0 + indent, rect.center().y), vec2(14.0, 14.0));
-    register(ui.ctx(), format!("keywordMark:{}", r.path), m);
-    let mr = ui.interact(m, egui::Id::new(("kwlist-mark", r.path.to_lowercase())), Sense::click());
-    ui.painter().rect_stroke(m, 2.0, egui::Stroke::new(1.0, if mr.hovered() { t.text } else { t.text_dim }), egui::StrokeKind::Inside);
-    let stroke = egui::Stroke::new(1.6, t.text);
-    if has > 0 && has == of {
-        // a check mark, drawn (no font glyph needed)
-        ui.painter().line_segment([m.center() + vec2(-4.0, 0.0), m.center() + vec2(-1.0, 3.0)], stroke);
-        ui.painter().line_segment([m.center() + vec2(-1.0, 3.0), m.center() + vec2(4.0, -3.5)], stroke);
-    } else if has > 0 {
-        ui.painter().line_segment([m.center() + vec2(-3.5, 0.0), m.center() + vec2(3.5, 0.0)], stroke);
-    }
-    if mr.on_hover_text(crate::i18n::tr("Add to or remove from the selected photos")).clicked() && of > 0 {
-        let key = if has == of { "removeKeywords" } else { "addKeywords" };
-        let _ = app.run("photo.setMeta", json!({key: [r.path]}));
-    }
-    // disclosure triangle
-    if has_kids {
-        let c = pos2(rect.left() + 26.0 + indent, rect.center().y);
-        let tr = Rect::from_center_size(c, vec2(14.0, 18.0));
-        register(ui.ctx(), format!("keywordListToggle:{}", r.path), tr);
-        let tresp = ui.interact(tr, egui::Id::new(("kwlist-tri", r.path.to_lowercase())), Sense::click());
-        super::classic::triangle(ui.painter(), c, open, t.text_dim);
-        if tresp.clicked() {
-            ui.data_mut(|d| d.insert_temp(open_id, !open));
-        }
-    }
-    let person = attrs_of(app, &r.path).is_some_and(|a| a.person);
-    let excluded = attrs_of(app, &r.path).is_some_and(|a| a.exclude_on_export);
-    let name = if excluded { format!("[{}]", r.name) } else { r.name.clone() };
-    let col = if r.count == 0 { t.text_dim } else { t.text_label };
-    let lr = ui.painter().text(pos2(rect.left() + 36.0 + indent, rect.center().y), Align2::LEFT_CENTER, &name, t.font(12.5), col);
-    if person {
-        crate::icons::paint(
-            ui.painter(),
-            Rect::from_min_size(pos2(lr.right() + 5.0, rect.center().y - 6.0), vec2(12.0, 12.0)),
-            Icon::FaceBox,
-            t.text_dim,
-        );
-    }
-    ui.painter().text(pos2(edge - 10.0, rect.center().y), Align2::RIGHT_CENTER, r.count.to_string(), t.font(11.5), t.text_dim);
-    let resp = resp.on_hover_text(&r.path);
-    if resp.clicked() {
-        let v = if sel { serde_json::Value::Null } else { json!(r.path) };
-        // like the sidebar's keyword rows: the filter applies to all photos
-        super::left::browse_all_photos(app, !sel);
-        let _ = app.run("library.filter", json!({"keyword": v}));
-    }
-    resp.context_menu(|ui| edit_menu(app, ui, &r.path));
+/// Whether the selected photos have a keyword: the tick box's state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Tick {
+    /// None of them (or nothing is selected).
+    No,
+    /// Some of them: the box shows a dash.
+    Some,
+    /// All of them.
+    All,
 }
 
-/// The row menu: the keyword's attributes, edited in place, and the library-wide actions.
-fn edit_menu(app: &mut DacApp, ui: &mut egui::Ui, path: &str) {
-    let a = attrs_of(app, path).cloned().unwrap_or_default();
-    ui.label(egui::RichText::new(path.replace('|', " › ")).strong());
-    let sid = egui::Id::new(("kwlist-syn", path.to_lowercase()));
-    let mut syn: String = ui.data(|d| d.get_temp(sid)).unwrap_or_else(|| a.synonyms.join(", "));
-    ui.label(crate::i18n::tr("Synonyms"));
-    let r = ui.add(egui::TextEdit::singleline(&mut syn).hint_text(crate::i18n::tr("comma separated")).desired_width(200.0));
-    ui.data_mut(|d| d.insert_temp(sid, syn.clone()));
-    if r.lost_focus() {
-        let _ = app.run("keyword.setAttributes", json!({"keyword": path, "synonyms": syn}));
-        ui.data_mut(|d| d.remove::<String>(sid));
+/// How many of a selection's photos have each keyword itself, counted once per selection (and
+/// library change) rather than per row and frame: a long list with thousands of photos selected
+/// stays fast.
+#[derive(Debug, Default)]
+pub(crate) struct Ticks {
+    photos: usize,
+    /// Photos with it, by cleaned lower-case keyword.
+    counts: std::collections::HashMap<String, usize>,
+}
+
+impl Ticks {
+    pub(crate) fn of(catalog: &Catalog, photos: &[PhotoId]) -> Ticks {
+        let photos = super::keywording::distinct(catalog, photos);
+        let mut counts: std::collections::HashMap<String, usize> = Default::default();
+        let mut seen = std::collections::HashSet::new();
+        for p in &photos {
+            seen.clear();
+            for k in &p.meta.keywords {
+                let key = dac_catalog::keywords::clean(k).to_lowercase();
+                if seen.insert(key.clone()) {
+                    *counts.entry(key).or_default() += 1;
+                }
+            }
+        }
+        Ticks { photos: photos.len(), counts }
     }
-    for (label, key, on) in [
-        ("Include on Export", "includeOnExport", !a.exclude_on_export),
-        ("Export Containing Keywords", "exportParents", !a.no_parents_on_export),
-        ("Export Synonyms", "exportSynonyms", !a.no_synonyms_on_export),
-        ("Person", "person", a.person),
-    ] {
-        let mut v = on;
-        if ui.checkbox(&mut v, crate::i18n::tr(label)).changed() {
-            let _ = app.run("keyword.setAttributes", json!({"keyword": path, key: v}));
+
+    /// The tick box of `path`: a photo counts when it has the keyword itself (any case); one with
+    /// only a keyword below it doesn't.
+    pub(crate) fn tick(&self, path: &str) -> Tick {
+        match self.counts.get(&dac_catalog::keywords::clean(path).to_lowercase()).copied().unwrap_or(0) {
+            0 => Tick::No,
+            n if n >= self.photos => Tick::All,
+            _ => Tick::Some,
         }
     }
-    ui.separator();
-    let has_sel = app.session.active().is_some();
-    if ui.add_enabled(has_sel, egui::Button::new(crate::i18n::tr("Add to Selected Photos"))).clicked() {
-        let _ = app.run("photo.setMeta", json!({"addKeywords": [path]}));
-        ui.close();
-    }
-    if ui.add_enabled(has_sel, egui::Button::new(crate::i18n::tr("Remove from Selected Photos"))).clicked() {
-        let _ = app.run("photo.setMeta", json!({"removeKeywords": [path]}));
-        ui.close();
-    }
-    if ui.button(crate::i18n::tr("Create Keyword Tag inside…")).clicked() {
-        app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
-            title: "Create Keyword Tag".into(),
-            hint: "Keyword".into(),
-            value: format!("{path}|"),
-            command: "keyword.create".into(),
-            params: json!({}),
-            key: "keyword".into(),
-        });
-        ui.close();
-    }
-    if ui.button(crate::i18n::tr("Use as Keyword Shortcut (⇧K)")).clicked() {
-        let _ = app.run("keyword.setShortcut", json!({"keyword": path}));
-        ui.close();
-    }
-    if ui.button(crate::i18n::tr("Rename Keyword…")).clicked() {
-        app.ui.dialog = Some(crate::state::Dialog::RenameKeyword { from: path.to_string(), to: path.to_string() });
-        ui.close();
-    }
-    if ui.button(crate::i18n::tr("Delete Keyword")).clicked() {
-        let _ = app.run("keyword.delete", json!({"keyword": path}));
-        ui.close();
-    }
+}
+
+/// The keyword is in the tree (any case).
+fn in_tree(tree: &[KeywordNode], path: &str) -> bool {
+    tree.iter().any(|n| same(&n.path, path) || (dac_catalog::keywords::is_under(path, &n.path) && in_tree(&n.children, path)))
 }
 
 #[cfg(test)]
 mod tests {
+    use dac_catalog::{Op, Photo, Source};
+
     use super::*;
 
+    fn library(keywords: &[&[&str]]) -> (Catalog, Vec<PhotoId>) {
+        let mut c = Catalog::new();
+        let mut ids = Vec::new();
+        for k in keywords {
+            let id = c.alloc_photo_id();
+            let mut p = Photo::new(id, Source::Demo { scene: 1 }, "a.jpg", "JPEG", 3, 2, "2026-01-01");
+            p.meta.keywords = k.iter().map(|s| s.to_string()).collect();
+            c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+            ids.push(id);
+        }
+        (c, ids)
+    }
+
+    fn shown(rows: &[Row]) -> Vec<(String, usize, usize)> {
+        rows.iter().map(|r| (r.path.clone(), r.depth, r.count)).collect()
+    }
+
+    /// The list shows the top level, and the keywords below a level once it is open.
     #[test]
-    fn created_keywords_join_the_tree_in_order() {
-        let mut attrs = BTreeMap::new();
-        attrs.insert("Places|Italy|Rome".to_string(), Default::default());
-        let r = rows(&[], &attrs);
-        let paths: Vec<&str> = r.iter().map(|x| x.path.as_str()).collect();
-        assert_eq!(paths, ["Places", "Places|Italy", "Places|Italy|Rome"]);
-        assert_eq!(r.iter().map(|x| x.depth).collect::<Vec<_>>(), [0, 1, 2]);
+    fn the_list_shows_the_levels_that_are_open() {
+        let (c, _) = library(&[&["travel|Italy|Rome", "beach"], &["travel|Spain"]]);
+        let tree = c.keyword_tree();
+        let closed = rows(&tree, "", &|_| false);
+        assert_eq!(shown(&closed), [("beach".to_string(), 0, 1), ("travel".to_string(), 0, 2)]);
+        assert!(closed[1].has_children && !closed[1].open && !closed[0].has_children);
+        let open = rows(&tree, "", &|p| p.eq_ignore_ascii_case("TRAVEL"));
+        assert_eq!(
+            shown(&open),
+            [("beach".to_string(), 0, 1), ("travel".to_string(), 0, 2), ("travel|Italy".to_string(), 1, 1), ("travel|Spain".to_string(), 1, 1)]
+        );
+    }
+
+    /// Filtering shows the keywords whose name holds the text, whatever its case, with the keywords
+    /// containing them opened down to them; keywords below a match aren't shown unless they match.
+    #[test]
+    fn filtering_shows_the_matches_with_their_parents() {
+        let (c, _) = library(&[&["travel|Italy|Rome", "travel|Spain|Ronda", "beach"]]);
+        let tree = c.keyword_tree();
+        let found = rows(&tree, "RO", &|_| false);
+        assert_eq!(
+            found.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+            ["travel", "travel|Italy", "travel|Italy|Rome", "travel|Spain", "travel|Spain|Ronda"]
+        );
+        assert!(found.iter().filter(|r| r.has_children).all(|r| r.open));
+        assert_eq!(rows(&tree, "italy", &|_| false).iter().map(|r| r.path.as_str()).collect::<Vec<_>>(), ["travel", "travel|Italy"]);
+        assert!(rows(&tree, "lisbon", &|_| false).is_empty());
+    }
+
+    /// The tick box: ticked when every selected photo has the keyword itself, a dash when some do,
+    /// empty when none do or nothing is selected. Counted once per selection.
+    #[test]
+    fn the_tick_box_says_how_many_selected_photos_have_the_keyword() {
+        let (c, ids) = library(&[&["Travel|Italy"], &["travel|italy", "beach"], &["travel|spain"]]);
+        assert_eq!(Ticks::of(&c, &ids[..2]).tick("travel|Italy"), Tick::All, "whatever the case");
+        let all = Ticks::of(&c, &ids);
+        assert_eq!(all.tick("travel|Italy"), Tick::Some);
+        assert_eq!(all.tick("travel"), Tick::No, "a keyword below doesn't tick its parent");
+        assert_eq!(Ticks::of(&c, &[]).tick("beach"), Tick::No);
+        assert_eq!(Ticks::of(&c, &ids[2..]).tick("beach"), Tick::No);
+        // any letter's case, not only ASCII; a photo with it twice counts once
+        let (c, ids) = library(&[&["Ärzte", "ÄRZTE"], &[]]);
+        assert_eq!(Ticks::of(&c, &ids).tick("ärzte"), Tick::Some);
+    }
+
+    /// The labels the Keyword List and its dialogs pass to `tr` through variables (out of reach of
+    /// a literal search) are translated in every language.
+    #[test]
+    fn labels_passed_through_variables_are_translated() {
+        use crate::i18n::Locale;
+        let labels = [
+            "Include on Export",
+            "Export Containing Keywords",
+            "Export Synonyms",
+            "Person",
+            "Merge Keywords",
+            "No keywords yet",
+            "No keywords match",
+            "Add to Selected Photos",
+            "Remove from Selected Photos",
+            "Keywords",
+            "& Containing",
+            "Will Export",
+            "No keywords are exported",
+            "Add to All Selected Photos",
+            "Set name",
+            "Edit Set…",
+            "Edit Keyword Set",
+            "A keyword set needs a name",
+            "Recent Keywords",
+            "Keywords (⌥1–⌥9)",
+            "Save as a new set",
+            "Import Keywords…",
+            "Export Keywords…",
+        ];
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("locales");
+        for code in ["de", "es", "fr", "pt-br", "ru", "uk", "ja", "zh-hans", "zh-hant"] {
+            let text = std::fs::read_to_string(dir.join(format!("{code}.json"))).unwrap();
+            let catalog: std::collections::HashMap<String, String> = serde_json::from_str(&text).unwrap();
+            for label in labels {
+                assert!(catalog.contains_key(label), "{code}: “{label}”");
+            }
+        }
+        assert_eq!(Locale::ALL.len(), 10, "a language added: list its file above");
     }
 }

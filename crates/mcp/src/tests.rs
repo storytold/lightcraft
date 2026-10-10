@@ -371,3 +371,31 @@ fn modern_requests_receive_result_and_cache_fields() {
     }
     assert!(rpc(&mut s, 2, "tools/list", json!({}))["result"].get("resultType").is_none());
 }
+
+/// A running app's control channel, as far as the MCP server can tell: it records each call.
+struct Recorder(Vec<(String, Value)>);
+
+impl Backend for Recorder {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.0.push((method.to_string(), params));
+        Ok(Value::Null)
+    }
+    fn has_ui(&self) -> bool {
+        true
+    }
+    fn describe(&self) -> String {
+        "recorder".into()
+    }
+}
+
+/// With the app attached, agents cut, copy and paste in its text fields (`clipboard`).
+#[test]
+fn the_clipboard_tool_cuts_copies_and_pastes_in_the_app() {
+    let names: Vec<String> = crate::tools::helper_tools(true).iter().filter_map(|t| t["name"].as_str().map(str::to_string)).collect();
+    assert!(names.iter().any(|n| n == "clipboard"), "{names:?}");
+    assert!(!crate::tools::helper_tools(false).iter().any(|t| t["name"] == "clipboard"), "not without the app");
+    let mut b = Recorder(vec![]);
+    let r = call_tool(&mut b, "clipboard", &json!({"action": "paste", "text": "travel"}));
+    assert!(!r.is_error, "{r:?}");
+    assert_eq!(b.0, vec![("ui.clipboard".to_string(), json!({"action": "paste", "text": "travel"}))]);
+}

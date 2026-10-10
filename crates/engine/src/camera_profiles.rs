@@ -25,6 +25,7 @@ const MAX_FILE: u64 = 4 << 20;
 /// Profiles built into the app (`assets/camera-profiles/`, see `assets/ATTRIBUTION.md`):
 /// `(model, JSON)`.
 pub const BUNDLED: &[(&str, &str)] = &[
+    ("ILCE-7CR", include_str!("../../../assets/camera-profiles/ILCE-7CR.json")),
     ("ILCE-7M4", include_str!("../../../assets/camera-profiles/ILCE-7M4.json")),
     ("X-H2S", include_str!("../../../assets/camera-profiles/X-H2S.json")),
     ("X-T4", include_str!("../../../assets/camera-profiles/X-T4.json")),

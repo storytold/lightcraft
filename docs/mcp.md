@@ -55,6 +55,53 @@ Or check a project-scoped `.mcp.json` into your repo:
 }
 ```
 
+### Codex
+
+The macOS release includes a separate `lightcraft-cli-<version>-macos-universal.zip`;
+unpack it alongside the desktop app if you do not want to build from source. Use the CLI
+and app from the same release. Verify both downloads against that release's `SHA256SUMS.txt`.
+
+Register the CLI's stdio server with Codex using its **absolute** installed path:
+
+```sh
+# Headless: a persistent library whose edits survive MCP restarts.
+codex mcp add lightcraft -- "/absolute/path/dac-cli" mcp --library "/absolute/path/library"
+
+# Live desktop: start the app on the matching loopback port first.
+"/absolute/path/LightCraft.app/Contents/MacOS/LightCraft" --library "/absolute/path/library" --control 7980
+codex mcp add dac-app -- "/absolute/path/dac-cli" mcp --connect 127.0.0.1:7980
+```
+
+Choose one mode for a library: a headless server cannot open a library already locked by
+the desktop app. Connect mode edits the window's actual library and reconnects after the
+app restarts. An external library path keeps the catalog on that drive. Copy/move imports
+default to the library's `Originals/` folder; add-mode imports keep the originals at their
+existing paths. The library path does not relocate settings, logs or optional models (see
+the README's settings/log locations). Make sure an external drive is mounted before
+starting either process.
+
+`codex mcp list` confirms registration, not a successful tool call. After adding the server,
+restart the client's MCP connections and verify `doc_inspect` or `query_photos` against the
+expected library before editing. Configuration options are in the
+[Codex MCP documentation](https://developers.openai.com/codex/mcp/).
+
+### From an installed release
+
+The release packages ship `dac-cli` alongside the desktop app, so no build is needed:
+
+| Install | CLI |
+|---|---|
+| Windows (MSI) | `C:\Program Files\LightCraft\dac-cli.exe` by default (wherever you installed it otherwise), not on `PATH` |
+| Linux (deb, rpm) | `/usr/bin/dac-cli` |
+| macOS | the separate `lightcraft-cli-<version>-macos-<arch>.zip` release asset (the `.app` holds only the desktop app) |
+
+```sh
+# Windows, default install folder
+claude mcp add lightcraft -- "C:\Program Files\LightCraft\dac-cli.exe" mcp
+# Linux, or macOS with the CLI unzipped onto PATH
+claude mcp add lightcraft -- dac-cli mcp
+```
+
 ### Other clients (Claude Desktop, Cursor, …)
 
 Every stdio MCP client takes the same shape: a `command` plus `args`. For example
@@ -119,7 +166,7 @@ per-request `_meta` receive `resultType: complete` and list/read cache hints; re
 | `query_photos {filter?, sort?, offset?, limit?}` | Photos in the current view (or matching a catalog `Filter`) |
 | `select_photos {ids, active?, mode?}` | Set the selection / active photo. Every id (and `active`) must be in the library: an unknown id is a tool error (`no such photo 9999`) and the selection and active photo are left as they were |
 | `list_controls {section?}` | Every develop slider: id (`light.exposure`…), range, default, current value |
-| `get_develop {id?}` | Full develop-settings JSON |
+| `get_develop {id?}` | Full develop-settings JSON, with `process`: the rendering process the photo is on ([process-versions.md](process-versions.md)) |
 | `set_develop {id?, values?, settings?, label?}` | `values`: `{controlId: number}`; `settings`: partial develop JSON deep-merged. Undoable |
 | `apply_preset {preset, amount?, ids?}` | Apply a preset (ids from `cmd_presets_list`) |
 | `crop {id?, rect?, angle?, reset?}` | Normalized crop rect `[x0,y0,x1,y1]` and straighten angle; at least one of `rect`, `angle`, `reset: true` |
@@ -135,8 +182,9 @@ Tools taking `id` make that photo active first; without it they act on the activ
 | `screenshot {maxSize?, format?, path?}` | The app window as an image, after pending renders finish |
 | `inspect_ui` | View, panel, window/image rects, selection, status |
 | `set_ui {state}` | Merge UI state, e.g. `{"view": "detail"}` |
-| `list_widgets {filter?}` / `click {widget \| x,y, count?}` | Widgets by automation id; real egui clicks |
+| `list_widgets {filter?}` / `click {widget \| x,y, count?, button?}` | Widgets by automation id; real egui clicks (`button: "right"` right-clicks) |
 | `press_key {key, cmd?, shift?, alt?}` / `type_text {text}` | Keyboard input (shortcuts) |
+| `clipboard {action, text?}` | Cut, copy or paste in the focused text field (⌘X / ⌘C / ⌘V; refused when none has the focus; cut and copy write the system clipboard); `inspect_ui` → `copied` is what was copied |
 | `pointer_gesture {events}` | Gestures in normalized image coordinates (brush strokes, gradients, crop handles) |
 
 In headless mode these return a tool error explaining how to start the app.

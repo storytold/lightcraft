@@ -19,6 +19,18 @@ pub fn register(ctx: &egui::Context, id: impl Into<String>, rect: Rect) {
     ctx.data_mut(|d| d.get_temp_mut_or_default::<Registry>(egui::Id::new("lc-registry")).0.push((id, rect)));
 }
 
+/// Esc was handled this frame by something nested (an open popup closed on it): containers such
+/// as dialogs shouldn't close too. Keyed to the frame, so it lapses by itself on the next one.
+pub fn take_escape(ctx: &egui::Context) {
+    let frame = ctx.cumulative_frame_nr();
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("lc-escape-taken"), frame));
+}
+
+/// Whether [`take_escape`] was called this frame.
+pub fn escape_taken(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<u64>(egui::Id::new("lc-escape-taken"))) == Some(ctx.cumulative_frame_nr())
+}
+
 pub fn take_registry(ctx: &egui::Context) -> Vec<(String, Rect)> {
     ctx.data_mut(|d| std::mem::take(&mut d.get_temp_mut_or_default::<Registry>(egui::Id::new("lc-registry")).0))
 }
@@ -159,7 +171,7 @@ pub fn typed_value(spec: &ControlSpec, text: &str) -> Option<f64> {
 }
 
 /// A slider's value as shown next to its label.
-fn shown_value(spec: &ControlSpec, v: f64) -> String {
+pub(crate) fn shown_value(spec: &ControlSpec, v: f64) -> String {
     let shown = if spec.id == "wb.temp" { format!("{v:.0}") } else { spec.format(v).replace("+0.00", "0").replace("-0.00", "0") };
     if shown == "+0" || shown == "-0" { "0".to_string() } else { shown }
 }
@@ -186,8 +198,9 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
     let value_resp = ui.interact(value_rect, id.with("value"), if enabled { Sense::click() } else { Sense::hover() });
     register(ui.ctx(), format!("sliderValue:{}", spec.id), value_rect);
+    // say that an exact value can be typed here (issue #534: an exact crop angle was hard to find)
+    let value_resp = if enabled { value_resp.on_hover_text(crate::i18n::tr("Click to type a value")) } else { value_resp };
     let typing_id = id.with("typing");
-    let field_id = id.with("typingField");
     // the text being typed and how many frames the field has been up: it takes the keyboard on its
     // first frames (not on the click's own, whose release would take the focus straight back)
     let mut typing: Option<(String, u8)> = ui.data(|m| m.get_temp(typing_id));
@@ -200,28 +213,23 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let from_x = |x: f32| spec.min + ((x - track_rect.left()) / track_rect.width()).clamp(0.0, 1.0) as f64 * span;
     let mut v = value;
     if let Some((mut text, frames)) = typing.take() {
-        let field = egui::TextEdit::singleline(&mut text)
-            .id(field_id)
-            .font(t.font(12.5))
-            .horizontal_align(egui::Align::RIGHT)
-            .desired_width(value_rect.width())
-            .margin(egui::Margin::ZERO);
         // a child over the value, so the field never moves the rows around it
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(value_rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
-        let te = child.add(field);
+        // the old value is selected when the field takes the focus, so typing replaces it
+        let field = crate::text_field::TextField::singleline(&format!("sliderField:{}", spec.id), &mut text)
+            .font(t.font(12.5))
+            .horizontal_align(egui::Align::RIGHT)
+            .width(value_rect.width())
+            .margin(egui::Margin::ZERO)
+            .select_on_focus(true)
+            .show(&mut child);
         if frames < 2 {
-            te.request_focus();
-            // the old value is selected, so typing replaces it (set again once the field has the
-            // focus, which places the cursor)
-            let mut state = egui::text_edit::TextEditState::load(ui.ctx(), field_id).unwrap_or_default();
-            let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(text.chars().count()));
-            state.cursor.set_char_range(Some(all));
-            state.store(ui.ctx(), field_id);
+            field.response.request_focus();
             typing = Some((text.clone(), frames + 1));
             ui.data_mut(|m| m.insert_temp(typing_id, (text, frames + 1)));
-        } else if !te.has_focus() || !enabled {
+        } else if field.ending.is_some() || !field.editing || !enabled {
             // Esc (or the slider turning off) keeps the old value; Return or clicking away applies
-            let cancelled = !enabled || ui.input(|i| i.key_pressed(egui::Key::Escape));
+            let cancelled = !enabled || field.cancelled();
             if let Some(nv) = typed_value(spec, &text).filter(|nv| !cancelled && (nv - value).abs() > 1e-12) {
                 out.value = Some(nv);
                 out.drag_started = true;

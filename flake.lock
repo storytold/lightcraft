@@ -3,17 +3,17 @@
     "craft-fonts": {
       "flake": false,
       "locked": {
-        "lastModified": 1791295400,
-        "narHash": "sha256-e+6HpOYoAFTh6mNfGBBw2njnBzcE8W8+Jybv1+dKOCA=",
+        "lastModified": 1791311399,
+        "narHash": "sha256-4E9OrthE5z39xFXpvpwn4Fn6RH3wX2sF56rZZejZT+I=",
         "owner": "storytold",
         "repo": "craft-fonts",
-        "rev": "abb83316d96aa59c1cf64784289e378fe9fa5695",
+        "rev": "8dcdacd5153e64560d109541a47d806f26f048c0",
         "type": "github"
       },
       "original": {
         "owner": "storytold",
         "repo": "craft-fonts",
-        "rev": "abb83316d96aa59c1cf64784289e378fe9fa5695",
+        "rev": "8dcdacd5153e64560d109541a47d806f26f048c0",
         "type": "github"
       }
     },

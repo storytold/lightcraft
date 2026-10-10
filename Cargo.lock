@@ -1210,7 +1210,7 @@ dependencies = [
 
 [[package]]
 name = "dac-app"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
  "dac-codecs",
@@ -1229,15 +1229,16 @@ dependencies = [
 
 [[package]]
 name = "dac-brand"
-version = "0.4.0"
+version = "0.5.0"
 
 [[package]]
 name = "dac-catalog"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "crc32fast",
  "dac-brand",
  "dac-develop",
+ "dac-geom",
  "dac-meta",
  "log",
  "proptest",
@@ -1251,7 +1252,7 @@ dependencies = [
 
 [[package]]
 name = "dac-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
  "dac-codecs",
@@ -1268,8 +1269,9 @@ dependencies = [
 
 [[package]]
 name = "dac-codecs"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
+ "avif-serialize",
  "bytemuck",
  "dac-brand",
  "dac-color",
@@ -1284,6 +1286,7 @@ dependencies = [
  "moxcms 0.9.1",
  "png 0.18.1",
  "proptest",
+ "rav1e",
  "ravif",
  "rayon",
  "serde",
@@ -1295,7 +1298,7 @@ dependencies = [
 
 [[package]]
 name = "dac-color"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
  "dac-geom",
@@ -1305,7 +1308,7 @@ dependencies = [
 
 [[package]]
 name = "dac-credentials"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -1320,7 +1323,7 @@ dependencies = [
 
 [[package]]
 name = "dac-denoise"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
  "dac-denoise-core",
@@ -1338,7 +1341,7 @@ dependencies = [
 
 [[package]]
 name = "dac-denoise-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
  "dac-raster",
@@ -1354,7 +1357,7 @@ dependencies = [
 
 [[package]]
 name = "dac-develop"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
  "dac-color",
@@ -1367,7 +1370,7 @@ dependencies = [
 
 [[package]]
 name = "dac-engine"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "ab_glyph",
  "dac-brand",
@@ -1383,6 +1386,7 @@ dependencies = [
  "dac-geom",
  "dac-gpu",
  "dac-hash",
+ "dac-heif",
  "dac-immich",
  "dac-merge",
  "dac-meta",
@@ -1409,7 +1413,7 @@ dependencies = [
 
 [[package]]
 name = "dac-faces"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
  "matrixmultiply",
@@ -1424,7 +1428,7 @@ dependencies = [
 
 [[package]]
 name = "dac-fetch"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
  "log",
@@ -1436,7 +1440,7 @@ dependencies = [
 
 [[package]]
 name = "dac-geom"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
  "proptest",
@@ -1445,7 +1449,7 @@ dependencies = [
 
 [[package]]
 name = "dac-gpu"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bytemuck",
  "dac-brand",
@@ -1455,6 +1459,7 @@ dependencies = [
  "dac-geom",
  "dac-pipeline",
  "dac-raster",
+ "dac-raw",
  "dac-scenes",
  "log",
  "pollster 1.0.1",
@@ -1463,22 +1468,23 @@ dependencies = [
 
 [[package]]
 name = "dac-hash"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "sha1",
 ]
 
 [[package]]
 name = "dac-heif"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
  "heic-rs",
+ "rayon",
 ]
 
 [[package]]
 name = "dac-immich"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-catalog",
  "dac-credentials",
@@ -1491,7 +1497,7 @@ dependencies = [
 
 [[package]]
 name = "dac-mcp"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
  "dac-codecs",
@@ -1503,7 +1509,7 @@ dependencies = [
 
 [[package]]
 name = "dac-merge"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
  "dac-codecs",
@@ -1520,7 +1526,7 @@ dependencies = [
 
 [[package]]
 name = "dac-meta"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
  "dac-geom",
@@ -1533,7 +1539,7 @@ dependencies = [
 
 [[package]]
 name = "dac-net"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
  "flate2",
@@ -1548,7 +1554,7 @@ dependencies = [
 
 [[package]]
 name = "dac-pipeline"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
  "dac-color",
@@ -1566,7 +1572,7 @@ dependencies = [
 
 [[package]]
 name = "dac-preview"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
  "dac-raster",
@@ -1579,7 +1585,7 @@ dependencies = [
 
 [[package]]
 name = "dac-raster"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
  "dac-color",
@@ -1592,7 +1598,7 @@ dependencies = [
 
 [[package]]
 name = "dac-raw"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
  "dac-color",
@@ -1615,7 +1621,7 @@ dependencies = [
 
 [[package]]
 name = "dac-scenes"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
  "dac-color",
@@ -1627,7 +1633,7 @@ dependencies = [
 
 [[package]]
 name = "dac-segment"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1641,14 +1647,14 @@ dependencies = [
 
 [[package]]
 name = "dac-sysmem"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
 ]
 
 [[package]]
 name = "dac-tiff"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
  "proptest",
@@ -1658,7 +1664,7 @@ dependencies = [
 
 [[package]]
 name = "dac-ui-egui"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dac-brand",
  "dac-catalog",
@@ -1685,7 +1691,7 @@ dependencies = [
 
 [[package]]
 name = "dac-web"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "crc32fast",
  "dac-brand",
@@ -7139,7 +7145,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "brotli",
  "flate2",

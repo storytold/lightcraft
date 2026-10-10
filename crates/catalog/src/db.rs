@@ -70,6 +70,12 @@ struct Head {
     label_names: BTreeMap<ColorLabel, String>,
     #[serde(default)]
     browsed: BTreeMap<String, String>,
+    /// Keywords listed on their own or given attributes (format version 5).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    keyword_list: BTreeMap<String, crate::keywords::ListedKeyword>,
+    /// What the library keeps about its folders (format version 5).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    folder_records: BTreeMap<String, crate::FolderRecord>,
 }
 
 impl Head {
@@ -80,6 +86,8 @@ impl Head {
             next_stack: c.next_stack,
             label_names: c.label_names.clone(),
             browsed: c.browsed.clone(),
+            keyword_list: c.keyword_list.clone(),
+            folder_records: c.folder_records.clone(),
         }
     }
 }
@@ -257,6 +265,8 @@ impl CatalogDb {
             cat.next_stack = head.next_stack;
             cat.label_names = head.label_names;
             cat.browsed = head.browsed;
+            cat.keyword_list = head.keyword_list;
+            cat.folder_records = head.folder_records;
         }
 
         // settings first: photos refer to them

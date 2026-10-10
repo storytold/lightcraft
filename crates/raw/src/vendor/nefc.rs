@@ -39,9 +39,18 @@
 //!   252 in 12-bit units); with the first-interval step they sit at that black level.
 //! - Values in the maker note are in the maker note's byte order (newer bodies write little-endian notes).
 //!
+//! "Lossy after split" (non-zero split row at `0x0096` offset 562, type 2 tables only, found in 11 of the CC0
+//! samples): derived by black-box analysis of those files. Rows below the split row use the lossy Huffman path
+//! above unchanged. Row `split` starts at the very next bit (no alignment); from there every pixel is a word of
+//! `bits - 4` bits (8 at 12 bit, 10 at 14 bit), MSB first, with no row padding. A word is a complete prefix code
+//! for a difference category `n` followed by the top `W - prefix length` bits of the T.81 additional bits (the low
+//! bits are dropped); the difference is the centre of the magnitude bin that was kept. The predictor is the same
+//! as above and the running value is not clamped (only the sample index is, before the curve lookup). The camera
+//! ends the strip with 0 to 7 one-bits after the last full row, which the decoder checks.
+//!
 //! Not supported (returned as [`RawError::Unsupported`], the embedded preview is used instead):
-//! - "Lossy after split" files (non-zero split row at `0x0096` offset 562): from that row on a different table
-//!   is used which our analysis has not recovered yet.
+//! - "Lossy after split" files whose fixed-rate section does not end within the last byte of the strip (see
+//!   below): refused rather than decoded wrongly.
 //! - Other `0x0096` versions, bit depths other than 12/14.
 //! - Code words that never occurred in any sample (the lossy 12-bit 8-bit code word `11111110`, and code words
 //!   longer than 9 bits in the lossy tables) are rejected as corrupt; they cannot code a difference within the
@@ -102,6 +111,8 @@ pub(crate) struct DecodeTable {
     pub encoding: Encoding,
     /// Predictor seeds `[row parity][column]`.
     pub seeds: [[i32; 2]; 2],
+    /// First row of the fixed-rate section ("lossy after split"), 0 when the whole strip is Huffman coded.
+    pub split: usize,
 }
 
 /// Parse maker note `0x0096` for a `bits`-bit image. `order` is the maker note's byte order.
@@ -116,6 +127,7 @@ pub(crate) fn parse_table(t: &[u8], order: ByteOrder, bits: u32) -> Result<Decod
     for (i, s) in seeds.iter_mut().flatten().enumerate() {
         *s = u16_at(2 + 2 * i).ok_or_else(short)? as i32;
     }
+    let mut split = 0;
     let encoding = match (v0, v1) {
         (0x46, _) => Encoding::Lossless,
         (0x44, 0x10 | 0x20 | 0x40) => {
@@ -127,12 +139,7 @@ pub(crate) fn parse_table(t: &[u8], order: ByteOrder, bits: u32) -> Result<Decod
             if v1 == 0x10 {
                 Encoding::Lossy(points)
             } else {
-                let split = u16_at(562).unwrap_or(0);
-                if split != 0 {
-                    return Err(RawError::Unsupported(format!(
-                        "Nikon \"lossy after split\" compressed NEF (split at row {split}) is not decoded yet"
-                    )));
-                }
+                split = u16_at(562).unwrap_or(0) as usize;
                 // type 2: `n` points covering `range` codes, one every `range / (n - 1)`; the curve's first interval
                 // rises by exactly that step (identity in the dark part) and the table version sets the span:
                 // `0x20` covers all 2^bits codes, `0x40` the first quarter (see the module docs)
@@ -156,7 +163,66 @@ pub(crate) fn parse_table(t: &[u8], order: ByteOrder, bits: u32) -> Result<Decod
         }
         _ => return Err(RawError::Unsupported(format!("Nikon compressed NEF version {v0:#04x} {v1:#04x}"))),
     };
-    Ok(DecodeTable { encoding, seeds })
+    Ok(DecodeTable { encoding, seeds, split })
+}
+
+/// Difference-category prefix codes of the fixed-rate section: `(prefix bits, prefix length, category n)`.
+/// A word of `W` bits is a prefix followed by `W - length` bits of the T.81 additional bits of category `n`.
+/// (The 14-bit `010` = category 12 never occurs in the samples; its category is deduced.)
+const FIXED_12: &[(u32, u32, u32)] = &[
+    (0b00, 2, 9),
+    (0b010, 3, 10),
+    (0b011, 3, 8),
+    (0b100, 3, 7),
+    (0b101, 3, 6),
+    (0b110, 3, 5),
+    (0b1110, 4, 4),
+    (0b11110, 5, 3),
+    (0b111110, 6, 2),
+    (0b1111110, 7, 1),
+    (0b11111110, 8, 0),
+];
+const FIXED_14: &[(u32, u32, u32)] = &[
+    (0b00, 2, 8),
+    (0b010, 3, 12),
+    (0b011, 3, 11),
+    (0b100, 3, 10),
+    (0b101, 3, 9),
+    (0b110, 3, 7),
+    (0b1110, 4, 6),
+    (0b11110, 5, 5),
+    (0b111110, 6, 4),
+    (0b1111110, 7, 3),
+    (0b11111110, 8, 2),
+    (0b111111110, 9, 1),
+    (0b1111111110, 10, 0),
+];
+
+/// Word (`bits - 4` bits) to dequantised difference for the fixed-rate section; `None` marks the unused all-ones word.
+fn fixed_word_table(bits: u32) -> Vec<Option<i32>> {
+    let (w, codes) = if bits == 12 { (8, FIXED_12) } else { (10, FIXED_14) };
+    let mut lut = vec![None; 1usize << w];
+    for &(prefix, len, n) in codes {
+        let kept = w - len;
+        for m in 0..1u32 << kept {
+            let e = n.saturating_sub(kept);
+            let ex = (m << e) as i32;
+            let half = (1i32 << e) >> 1;
+            let d = if n == 0 {
+                0
+            } else if ex >= 1 << (n - 1) {
+                ex + half
+            } else if e > 0 {
+                ex + half - (1 << n)
+            } else {
+                ex - ((1 << n) - 1)
+            };
+            if let Some(slot) = lut.get_mut(((prefix << kept) | m) as usize) {
+                *slot = Some(d);
+            }
+        }
+    }
+    lut
 }
 
 /// Decode a `w × h` Nikon Huffman-compressed strip `src` with `bits`-bit samples.
@@ -183,6 +249,11 @@ pub(crate) fn decode(src: &[u8], w: usize, h: usize, bits: u32, table: &DecodeTa
         Encoding::Lossless => (&[], (1i32 << bits) - 1),
         Encoding::Lossy(curve) => (curve, curve.len() as i32 - 1),
     };
+    if table.split != 0 && table.split >= h {
+        return Err(RawError::Corrupt(format!("NEF: split row {} outside the {h} rows", table.split)));
+    }
+    let fixed = if table.split != 0 { fixed_word_table(bits) } else { Vec::new() };
+    let word = bits - 4;
     let mut out = vec![0u16; n];
     let mut stream = Bits::new(src);
     let mut vpred = table.seeds;
@@ -191,7 +262,12 @@ pub(crate) fn decode(src: &[u8], w: usize, h: usize, bits: u32, table: &DecodeTa
         let seeds = vpred.get_mut(y & 1).ok_or(RawError::Limit("NEF row"))?;
         let mut hpred = [0i32; 2];
         for (x, o) in row.iter_mut().enumerate() {
-            let d = diff(&mut stream, &huff).ok_or_else(|| RawError::Corrupt(format!("NEF: invalid Huffman code at row {y}")))?;
+            let d = if table.split != 0 && y >= table.split {
+                let code = stream.get(word) as usize;
+                fixed.get(code).copied().flatten().ok_or_else(|| RawError::Corrupt(format!("NEF: invalid fixed-rate word at row {y}")))?
+            } else {
+                diff(&mut stream, &huff).ok_or_else(|| RawError::Corrupt(format!("NEF: invalid Huffman code at row {y}")))?
+            };
             let p = if x < 2 {
                 let s = seeds.get_mut(x).ok_or(RawError::Limit("NEF column"))?;
                 *s += d;
@@ -202,12 +278,25 @@ pub(crate) fn decode(src: &[u8], w: usize, h: usize, bits: u32, table: &DecodeTa
                 hpred[x & 1]
             };
             let v = p.clamp(0, max);
-            clipped += (v != p) as usize;
+            clipped += (v != p && (table.split == 0 || y < table.split)) as usize;
             *o = if lut.is_empty() { v as u16 } else { lut.get(v as usize).copied().unwrap_or(0) };
         }
         // the camera pads the strip; reading more than a few bytes past its end means truncated or corrupt data
         if stream.consumed_bits() > src.len() * 8 + 64 {
             return Err(RawError::Corrupt(format!("NEF: compressed data ends at row {y} of {h}")));
+        }
+    }
+    if table.split != 0 {
+        // the fixed-rate section must fill the rest of the strip: whole rows of w words and 0..7 bits of padding.
+        // A strip may hold a few more rows than the image (one body stores 4022 rows for 4020); anything else means
+        // the file does not follow the rule, so refuse it instead of decoding it wrongly.
+        let left = (src.len() * 8).checked_sub(stream.consumed_bits());
+        let row_bits = w * word as usize;
+        if !left.is_some_and(|l| l % row_bits < 8 && l / row_bits <= 4) {
+            return Err(RawError::Unsupported(format!(
+                "Nikon \"lossy after split\" NEF whose fixed-rate section (from row {}) does not end within the last byte",
+                table.split
+            )));
         }
     }
     // a wrong table / corrupt stream drifts out of range quickly; real files stay inside (a handful of edge pixels)
@@ -293,7 +382,7 @@ mod tests {
 
     fn lossless(bits: u32) -> DecodeTable {
         let s = 1 << (bits - 3);
-        DecodeTable { encoding: Encoding::Lossless, seeds: [[s, s], [s, s]] }
+        DecodeTable { encoding: Encoding::Lossless, seeds: [[s, s], [s, s]], split: 0 }
     }
 
     #[test]
@@ -417,6 +506,84 @@ mod tests {
         assert!(parse_table(&odd, ByteOrder::Little, 12).is_err());
     }
 
+    /// Pack a string of `0`/`1` (spaces ignored) MSB first, padding the last byte with one-bits like the camera.
+    fn pack(bits: &str) -> Vec<u8> {
+        let b: Vec<bool> = bits.chars().filter(|c| !c.is_whitespace()).map(|c| c == '1').collect();
+        b.chunks(8).map(|c| (0..8).fold(0u8, |a, i| (a << 1) | c.get(i).copied().unwrap_or(true) as u8)).collect()
+    }
+
+    fn split_table(v1: u8, seed: u16, step: u16, white: u16, split: u16) -> DecodeTable {
+        let mut t = hand_table(v1, seed, step, white);
+        t[562..564].copy_from_slice(&split.to_le_bytes());
+        parse_table(&t, ByteOrder::Little, if step == 4 { 12 } else { 14 }).unwrap()
+    }
+
+    /// 12-bit "lossy after split": row 0 Huffman coded, rows 1 and 2 as 8-bit words that follow the last Huffman
+    /// bit directly. Bit strings written by hand from the rule (prefix, then the kept top bits of the extra bits).
+    const SPLIT_12: &str = "011 100 11110 1110 0 11110         11111110 11110100 11100111 01110000         00000001 11111110 01111111 11111110";
+
+    #[test]
+    fn lossy_after_split_known_answers_12_bit() {
+        let t = split_table(0x40, 252, 4, 4095, 1);
+        assert_eq!(t.split, 1);
+        let out = decode(&pack(SPLIT_12), 4, 3, 12, &t).unwrap();
+        // row 1: d = 0 (n0), +4 (n3, exact), -8 (n4, exact), +132 (n8 keeps 5 bits: 16 << 3 plus half a bin, 4);
+        // row 2: -500 (n9 keeps 6 bits: bin 1 of the negative side, centre -508 + 8), then +252 on the running
+        // value -244 which is not clamped (8, not 252)
+        assert_eq!(out, [256, 252, 255, 252, 252, 256, 244, 388, 0, 252, 8, 252]);
+    }
+
+    #[test]
+    fn lossy_after_split_known_answers_14_bit() {
+        let t = split_table(0x40, 1008, 16, 16383, 1);
+        // row 0 as in the 0x40 test above; row 1 in 10-bit words: 0 (n0), +32 (n6, exact), -254 (n8, exact),
+        // +510 (n9 keeps 7 bits: 127 << 2 plus 2)
+        let bits = "1100 100 111110 11110 0 111110 1111111110 1110100000 0000000001 1011111111";
+        let out = decode(&pack(bits), 4, 2, 14, &t);
+        // word 3 is `00` + 8 bits: 00 00000001 -> n8 extra 00000001 = -254
+        assert_eq!(out.unwrap(), [1012, 1008, 1011, 1008, 1008, 1040, 754, 1550]);
+    }
+
+    #[test]
+    fn lossy_after_split_dequantisation_is_symmetric() {
+        let lut = fixed_word_table(12);
+        assert_eq!((lut[0b00_000000], lut[0b00_111111]), (Some(-508), Some(508)));
+        assert_eq!((lut[0b011_00000], lut[0b011_11111]), (Some(-252), Some(252)));
+        assert_eq!(lut[0b11111110], Some(0));
+        assert_eq!(lut[0xff], None);
+        let lut = fixed_word_table(14);
+        assert_eq!((lut[0b00_00000000], lut[0b00_11111111]), (Some(-255), Some(255)));
+        assert_eq!(lut[0b101_0000000], Some(-510));
+        assert_eq!(lut[0b1111111110], Some(0));
+        assert_eq!(lut[0x3ff], None);
+        for bits in [12, 14] {
+            let lut = fixed_word_table(bits);
+            assert_eq!(lut.iter().filter(|d| d.is_none()).count(), 1, "{bits}-bit: only the all-ones word is unused");
+        }
+    }
+
+    #[test]
+    fn lossy_after_split_refuses_strips_that_do_not_follow_the_rule() {
+        let t = split_table(0x40, 252, 4, 4095, 1);
+        let mut longer = pack(SPLIT_12);
+        longer.extend_from_slice(&[0xff; 3]);
+        assert!(matches!(decode(&longer, 4, 3, 12, &t), Err(RawError::Unsupported(_))));
+        let shorter = &pack(SPLIT_12)[..10];
+        assert!(decode(shorter, 4, 3, 12, &t).is_err());
+        // the unused all-ones word
+        let bad = pack("011 100 11110 1110 0 11110 11111111 11111110 11111110 11111110");
+        assert!(matches!(decode(&bad, 4, 2, 12, &t), Err(RawError::Corrupt(_))));
+        // a split row beyond the image
+        assert!(matches!(decode(&pack(SPLIT_12), 4, 1, 12, &t), Err(RawError::Corrupt(_))));
+        // through the container
+        let mut table = hand_table(0x40, 252, 4, 4095);
+        table[562..564].copy_from_slice(&1u16.to_le_bytes());
+        let ok = crate::decode(&nef_file(pack(SPLIT_12), 4, 3, 12, table.clone(), ByteOrder::Little)).unwrap();
+        assert_eq!(ok.data, crate::RawData::U16(vec![256, 252, 255, 252, 252, 256, 244, 388, 0, 252, 8, 252]));
+        let e = crate::decode(&nef_file(longer, 4, 3, 12, table, ByteOrder::Little));
+        assert!(matches!(e, Err(RawError::Unsupported(_))), "{e:?}");
+    }
+
     #[test]
     fn lossy_type1_full_curve() {
         let mut t = vec![0x44, 0x10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 5];
@@ -436,7 +603,7 @@ mod tests {
         let corrupt = |r: Result<DecodeTable>| matches!(r, Err(RawError::Corrupt(_)));
         let mut split = lossy_table(12, ByteOrder::Big);
         split[562..564].copy_from_slice(&345u16.to_be_bytes());
-        assert!(unsupported(parse_table(&split, ByteOrder::Big, 12)));
+        assert_eq!(parse_table(&split, ByteOrder::Big, 12).unwrap().split, 345);
         assert!(unsupported(parse_table(&[0x49, 0x30, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], ByteOrder::Big, 12)));
         assert!(unsupported(parse_table(&lossy_table(12, ByteOrder::Big), ByteOrder::Big, 16)));
         assert!(corrupt(parse_table(&[], ByteOrder::Big, 12)));
@@ -502,11 +669,11 @@ mod tests {
         let src = encode(&img, w, &LOSSY_12, t.seeds);
         let r = crate::decode(&nef_file(src.clone(), w as u32, h as u32, 12, table.clone(), ByteOrder::Little)).unwrap();
         assert_eq!(r.data, crate::RawData::U16(img.iter().map(|&v| curve[v as usize]).collect()));
-        // the split variant falls back to the preview
+        // a split file whose strip does not follow the fixed-rate rule is refused, never decoded wrongly
         let mut split = table;
         split[562..564].copy_from_slice(&3u16.to_le_bytes());
         let e = crate::decode(&nef_file(src, w as u32, h as u32, 12, split, ByteOrder::Little));
-        assert!(matches!(e, Err(RawError::Unsupported(_))), "{e:?}");
+        assert!(e.is_err(), "{e:?}");
     }
 
     #[test]

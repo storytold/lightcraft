@@ -40,11 +40,17 @@ pub fn weekday(iso: &str) -> Option<&'static str> {
 }
 
 /// Shift an ISO time by `secs`, keeping anything after the seconds (fractions, zone) as it was.
-/// A date without a time gets one. `None` if it doesn't parse.
+/// A date without a time gets one. `None` if it doesn't parse, or if the result leaves years
+/// 0000–9999 (an ISO date here has four year digits, so it couldn't be read back); `secs` may be
+/// anything, it never overflows.
 pub fn shift_iso(iso: &str, secs: i64) -> Option<String> {
-    let t = iso_seconds(iso)?;
+    let t = iso_seconds(iso)?.checked_add(secs)?;
+    let (first, last) = (iso_seconds("0000-01-01T00:00:00")?, iso_seconds("9999-12-31T23:59:59")?);
+    if !(first..=last).contains(&t) {
+        return None;
+    }
     let tail = iso.trim().get(19..).unwrap_or("");
-    Some(format!("{}{tail}", civil(t + secs)))
+    Some(format!("{}{tail}", civil(t)))
 }
 
 /// Normalize user input to `YYYY-MM-DDTHH:MM:SS` (accepts a space instead of `T`, missing
@@ -204,6 +210,14 @@ mod tests {
         assert_eq!(shift_iso("2026-12-31T23:30:00", 3600).as_deref(), Some("2027-01-01T00:30:00"));
         assert_eq!(shift_iso("2026-03-01T00:00:00.25+02:00", -1).as_deref(), Some("2026-02-28T23:59:59.25+02:00"));
         assert_eq!(shift_iso("nope", 5), None);
+        // hostile shifts never overflow, and a result outside years 0000–9999 (which no ISO date
+        // here can read back) is refused rather than stored
+        for secs in [i64::MAX, i64::MIN, i64::MAX / 2, -(i64::MAX / 2)] {
+            assert_eq!(shift_iso("2026-01-01T00:00:00", secs), None, "{secs}");
+        }
+        assert_eq!(shift_iso("9999-12-31T23:59:59", 1), None);
+        assert_eq!(shift_iso("0000-01-01T00:00:00", -1), None);
+        assert_eq!(shift_iso("9999-12-31T23:59:58", 1).as_deref(), Some("9999-12-31T23:59:59"));
         assert_eq!(normalize_iso("2026-04-01 10:05").as_deref(), Some("2026-04-01T10:05:00"));
         assert_eq!(normalize_iso("2026-02-30"), None);
     }

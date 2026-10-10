@@ -12,16 +12,18 @@ use crate::state::{BeforeAfter, Dialog, RightPanel, ViewMode, Zoom};
 pub type UiCommand = (&'static str, &'static str, Option<&'static str>, &'static str);
 
 /// The "Edit → Language" entries, one per language in [`crate::i18n::Locale::ALL`], so a language
-/// added to the table shows up in the menu (and in the control channel's command list) by itself.
+/// has a matching menu command (also listed through the control channel). Tests check coverage.
 pub const LANGUAGE_COMMANDS: &[UiCommand] = &[
     ("app.language.english", crate::i18n::Locale::En.name(), None, "Edit>Language"),
     ("app.language.simplifiedChinese", crate::i18n::Locale::ZhHans.name(), None, "Edit>Language"),
     ("app.language.traditionalChinese", crate::i18n::Locale::ZhHant.name(), None, "Edit>Language"),
     ("app.language.japanese", crate::i18n::Locale::Ja.name(), None, "Edit>Language"),
     ("app.language.portuguese", crate::i18n::Locale::PtBr.name(), None, "Edit>Language"),
+    ("app.language.french", crate::i18n::Locale::Fr.name(), None, "Edit>Language"),
     ("app.language.spanish", crate::i18n::Locale::Es.name(), None, "Edit>Language"),
     ("app.language.german", crate::i18n::Locale::De.name(), None, "Edit>Language"),
     ("app.language.russian", crate::i18n::Locale::Ru.name(), None, "Edit>Language"),
+    ("app.language.ukrainian", crate::i18n::Locale::Uk.name(), None, "Edit>Language"),
 ];
 
 /// Every UI command: the languages, then everything else. `xtask parity` reads both tables from
@@ -39,9 +41,11 @@ pub fn language_from_command(id: &str) -> Option<crate::i18n::Locale> {
         "app.language.traditionalChinese" => Some(crate::i18n::Locale::ZhHant),
         "app.language.japanese" => Some(crate::i18n::Locale::Ja),
         "app.language.portuguese" => Some(crate::i18n::Locale::PtBr),
+        "app.language.french" => Some(crate::i18n::Locale::Fr),
         "app.language.spanish" => Some(crate::i18n::Locale::Es),
         "app.language.german" => Some(crate::i18n::Locale::De),
         "app.language.russian" => Some(crate::i18n::Locale::Ru),
+        "app.language.ukrainian" => Some(crate::i18n::Locale::Uk),
         _ => None,
     }
 }
@@ -81,6 +85,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.zoomIn", "Zoom In", Some("Cmd+="), "View"),
     ("view.zoomOut", "Zoom Out", Some("Cmd+-"), "View"),
     ("view.clipping", "Show Clipping", Some("J"), "View"),
+    ("view.visualizeHdr", "Visualize HDR", None, "View"),
     // in grids S expands/collapses stacks (the engine command it shadows)
     ("view.softProof", "Soft Proofing", Some("S"), "View"),
     ("view.histogram", "Histogram", Some("Cmd+Shift+H"), "View"),
@@ -161,6 +166,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.pasteSettings", "Paste Selected Settings…", Some("Cmd+Shift+V"), "Edit"),
     ("view.focusSearch", "Find…", Some("Cmd+F"), "Library"),
     ("dialog.export", "Export…", None, "File"),
+    ("dialog.contactSheet", "Contact Sheet PDF…", None, "File"),
+    ("app.contactSheet", "Export Contact Sheet PDF", None, ""),
     ("photo.editInExternal", "Edit in External Editor", Some("Cmd+Shift+E"), "Photo"),
     ("dialog.mergeHdr", "HDR…", Some("Ctrl+H"), "Photo>Photo Merge"),
     ("dialog.mergePanorama", "Panorama…", Some("Ctrl+M"), "Photo>Photo Merge"),
@@ -182,6 +189,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.quit", "Quit {app}", Some("Cmd+Q"), "File"),
     ("file.importPresets", "Import Profiles & Presets…", None, "File"),
     ("file.exportPresets", "Export Presets…", None, "File"),
+    ("file.importKeywords", "Import Keywords…", None, "File"),
+    ("file.exportKeywords", "Export Keywords…", None, "File"),
     // Edit panel ▸ Curve ▸ Point Curve dropdown
     ("file.importCurvePresets", "Import Point Curve Presets…", None, ""),
     ("file.exportCurvePresets", "Export Point Curve Presets…", None, ""),
@@ -196,6 +205,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.catalogSettings", "Catalog Settings…", None, "Edit"),
     ("dialog.exportCatalog", "Export as Catalog…", None, "File"),
     ("dialog.importCatalog", "Import from Another Catalog…", None, "File"),
+    // Settings ▸ Display
+    ("app.displayProfile", "Display Profile", None, ""),
     ("app.about", "About {app}", None, "Help"),
     ("app.systemInfo", "System Info…", None, "Help"),
     ("app.openLogFolder", "Open Log Folder", None, "Help"),
@@ -287,7 +298,8 @@ pub fn parse_rgb(v: &Value) -> Option<[u8; 3]> {
 /// Handle UI commands; `None` means "not a UI command — send it to the engine".
 pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
     if matches!(id, "library.inspectLightroom" | "library.importLightroom") {
-        let ctx = egui::Context::default();
+        // the app's own context: a fresh one's repaints reach no window and its clock starts at zero
+        let ctx = app.tasks.repaint.clone().unwrap_or_default();
         return Some(crate::lightroom_import::command(app, id, p, &ctx));
     }
     if let Some(language) = language_from_command(id) {
@@ -310,7 +322,9 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
     if let Some(r) = crate::libtools::run(app, id, p) {
         return Some(r);
     }
-    let ctx = egui::Context::default();
+    // the app's own context: a toast's time comes from its clock (a fresh context's clock is at 0,
+    // and a toast set by it was long over by the app's clock: it never showed)
+    let ctx = app.tasks.repaint.clone().unwrap_or_default();
     let r: Result<Value, String> = match id {
         "view.photoGrid" => {
             app.ui.view = ViewMode::PhotoGrid;
@@ -505,6 +519,7 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
             Ok(Value::Null)
         }
         "app.openLibrary" => crate::panels::settings::open_library(app, p),
+        "app.displayProfile" => crate::panels::settings::display_profile(app, p),
         "file.backupLibrary" | "file.restoreLibrary" => {
             let action = if id == "file.backupLibrary" { app.services.backup_library.as_mut() } else { app.services.restore_library.as_mut() };
             match action {
@@ -618,6 +633,11 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
         "view.clipping" => {
             app.ui.show_clipping = !app.ui.show_clipping;
             Ok(Value::Null)
+        }
+        "view.visualizeHdr" => {
+            // {on?}; no params toggles. Shown on photos edited in HDR (see `develop.hdr`).
+            app.ui.hdr_visualize = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.hdr_visualize);
+            Ok(json!({"on": app.ui.hdr_visualize}))
         }
         "view.softProof" => {
             // {on?, space?, destWarning?, displayWarning?}; no params toggles
@@ -915,6 +935,20 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
                     app.ui.tool = "guidedUpright".into();
                 }
                 "brush" => {
+                    // A new mask and Add/Subtract are selection operations, not the brush's
+                    // Erase mode. Paint positively into a component with the requested op.
+                    let create = if p.get("new").and_then(Value::as_bool) == Some(true) {
+                        Some(app.run("mask.add", json!({"kind": "brush"})))
+                    } else {
+                        p.get("op").map(|op| app.run("mask.addComponent", json!({"kind": "brush", "op": op})))
+                    };
+                    if let Some(result) = create {
+                        if let Err(e) = result {
+                            return Some(Err(e));
+                        }
+                        app.ui.brush_erase = false;
+                        app.ui.mask_overlay = true;
+                    }
                     app.ui.right = RightPanel::Masking;
                     app.ui.view = ViewMode::Detail;
                     app.ui.tool = "brush".into();
@@ -967,7 +1001,16 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
                 Some(a) => Dialog::SmartRules {
                     id: Some(a.id.0),
                     name: a.name.clone(),
-                    rules: a.smart.as_ref().and_then(|f| f.rule_set.clone()).unwrap_or_default(),
+                    // older rules read as they always matched (RuleSet::upgrade)
+                    rules: a
+                        .smart
+                        .as_ref()
+                        .and_then(|f| f.rule_set.clone())
+                        .map(|mut r| {
+                            r.upgrade();
+                            r
+                        })
+                        .unwrap_or_default(),
                     parent: None,
                 },
                 None => Dialog::SmartRules {
@@ -1020,6 +1063,27 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
                 app.session.copy_groups.iter().filter_map(|g| serde_json::to_value(g).ok().and_then(|v| v.as_str().map(str::to_string))).collect();
             app.ui.dialog = Some(Dialog::CopySettings { groups });
             Ok(Value::Null)
+        }
+        "dialog.contactSheet" => {
+            app.ui.dialog = Some(Dialog::ContactSheet { options: dac_engine::contact_sheet::Options::default() });
+            Ok(Value::Null)
+        }
+        "app.contactSheet" => {
+            if app.export.is_some() {
+                return Some(Err("an export is already running".into()));
+            }
+            let mut params = p.clone();
+            if p.get("path").is_none() {
+                let req = PickRequest::save("Contact Sheet PDF", "PDF", &["pdf"], "Contact Sheet.pdf");
+                let paths = match crate::pick::ask(app, id, p, "path", req, |_| None) {
+                    Picked::Now(paths) => paths,
+                    Picked::Later => return Some(Ok(Value::Null)),
+                    Picked::Unavailable => return Some(Err("no save dialog on this platform; supply path".into())),
+                };
+                let Some(path) = paths.first() else { return Some(Ok(Value::Null)) };
+                params["path"] = json!(path);
+            }
+            crate::export_task::start_contact_sheet(app, &params)
         }
         "dialog.export" => {
             let prev = app.session.last_export.clone().unwrap_or_default();
@@ -1330,7 +1394,8 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
                 if kept > 0 {
                     msg += &crate::i18n::tr_format!("; {kept} already had a location", kept = kept);
                 }
-                app.toast(&egui::Context::default(), msg);
+                let ctx = app.tasks.repaint.clone().unwrap_or_default();
+                app.toast(&ctx, msg);
             }
             r
         }
@@ -1472,6 +1537,80 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
             }
             return Some(r);
         }
+        "file.importKeywords" => {
+            // a keyword list file: Lightroom Classic's, Capture One's, Photo Supreme's (.utf8)
+            let path = match p.get("path").and_then(Value::as_str) {
+                Some(x) => x.to_string(),
+                None => {
+                    let req = PickRequest::file(crate::i18n::tr("Import Keywords"), crate::i18n::tr("Keyword Lists"), &["txt", "utf8"]);
+                    match crate::pick::ask(app, id, p, "path", req, |s| s.pick_keyword_list.as_mut().map(|f| f())) {
+                        Picked::Now(v) => match v.into_iter().next() {
+                            Some(x) => x,
+                            None => return Some(Ok(Value::Null)),
+                        },
+                        Picked::Later => return Some(Ok(Value::Null)),
+                        Picked::Unavailable => return Some(Err("no file dialog on this platform".into())),
+                    }
+                }
+            };
+            let r = app.session.execute("keyword.import", &json!({"path": path})).map_err(|e| e.to_string());
+            match &r {
+                Ok(v) => {
+                    let (added, updated) = (v["added"].as_u64().unwrap_or(0), v["updated"].as_u64().unwrap_or(0));
+                    let mut msg = crate::i18n::tr_format!("Added {n} keyword{}", if added == 1 { "" } else { "s" }, n = added);
+                    if updated > 0 {
+                        msg.push_str(&crate::i18n::tr_format!("; {n} gained synonyms", n = updated));
+                    }
+                    app.toast(&ctx, msg);
+                }
+                Err(e) => app.toast(&ctx, e.clone()),
+            }
+            return Some(r);
+        }
+        "file.exportKeywords" => {
+            let path = match p.get("path").and_then(Value::as_str) {
+                Some(x) => x.to_string(),
+                None => {
+                    let name = "Keywords.txt";
+                    let req = PickRequest::save(crate::i18n::tr("Export Keywords"), crate::i18n::tr("Keyword Lists"), &["txt"], name);
+                    match crate::pick::ask(app, id, p, "path", req, |s| s.save_keyword_list.as_mut().map(|f| f(name).into_iter().collect())) {
+                        Picked::Now(v) => match v.into_iter().next() {
+                            Some(x) => x,
+                            None => return Some(Ok(Value::Null)),
+                        },
+                        Picked::Later => return Some(Ok(Value::Null)),
+                        Picked::Unavailable => return Some(Err("no file dialog on this platform".into())),
+                    }
+                }
+            };
+            let r = app.session.execute("keyword.export", &json!({"path": path})).map_err(|e| e.to_string());
+            if let Err(e) = &r {
+                app.toast(&ctx, e.clone());
+            }
+            if let Ok(v) = &r {
+                let n = v["keywords"].as_u64().unwrap_or(0);
+                let mut msg = crate::i18n::tr_format!("Exported {n} keyword{}", if n == 1 { "" } else { "s" }, n = n);
+                // Capture One's importer refuses ; , < > in a list: say which to rename first
+                let refuses: Vec<&str> = v["captureOneRefuses"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+                if !refuses.is_empty() {
+                    msg.push_str(&crate::i18n::tr_format!(
+                        " — Capture One won't import a list with ; , < or > in a keyword: {names}",
+                        names = refuses.iter().take(5).copied().collect::<Vec<_>>().join(" · ")
+                    ));
+                }
+                // what the format can't hold (a name in brackets, a line break…) isn't in the file
+                let left: Vec<&str> = v["unwritable"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+                if !left.is_empty() {
+                    msg.push_str(&crate::i18n::tr_format!(
+                        " — left out, as a keyword list can't hold them: {names}",
+                        // escaped: a line break in a name would break the toast
+                        names = left.iter().take(5).map(|n| n.escape_debug().to_string()).collect::<Vec<_>>().join(" · ")
+                    ));
+                }
+                app.toast(&ctx, msg);
+            }
+            return Some(r);
+        }
         "file.exportPresets" => {
             let group = p.get("group").and_then(Value::as_str).map(str::to_string);
             let path = match p.get("path").and_then(Value::as_str) {
@@ -1587,6 +1726,7 @@ pub fn ui_enabled(app: &DacApp, id: &str) -> bool {
         return e;
     }
     match id {
+        "dialog.contactSheet" | "app.contactSheet" => !cfg!(target_arch = "wasm32") && app.session.active().is_some() && app.export.is_none(),
         s if s.starts_with("panel.") || s.starts_with("tool.") || s.starts_with("section.") => app.session.active().is_some() || s == "panel.close",
         "app.export" | "dialog.export" | "dialog.createPreset" | "dialog.rename" | "dialog.captureTime" | "dialog.copySettings" => {
             app.session.active().is_some()

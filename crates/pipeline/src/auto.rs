@@ -1,4 +1,5 @@
-//! Auto tone and auto white balance (histogram / grey-world statistics on a proxy).
+//! Auto tone (a Lightroom-like recipe, see [`auto_tone`]) and auto white balance (grey-world
+//! statistics on a proxy).
 
 use dac_color::cct::xy_to_temp_tint;
 use dac_color::{REC2020, Xy, bradford, luminance_2020};
@@ -21,40 +22,83 @@ pub struct AutoTone {
     pub saturation: f64,
 }
 
-fn percentile(sorted: &[f32], q: f32) -> f32 {
-    if sorted.is_empty() {
-        return 0.0;
+/// Exposure in EV that Auto adds per EV of the scene's log-average luminance (the slope is negative:
+/// darker scenes get more). The slope is Lightroom's: regressing the Exposure its Auto chose on 24
+/// raw photos against our own [`scene_log_mean`] of each gives -0.41 EV/EV (r = -0.92).
+const EXPOSURE_SLOPE: f64 = -0.41;
+/// Exposure for a scene whose log-average luminance is middle grey: fitted, with [`CONTRAST`] and
+/// [`VIBRANCE`], so our renders match Lightroom's Auto results on those photos (see [`auto_tone`]).
+const EXPOSURE_AT_GREY: f64 = -0.58;
+/// Highlights and Shadows are Lightroom's own: the average its Auto chose on the 24 photos (our
+/// sliders aim at the same as its). Freeing them as well matched no better on held-out photos and
+/// left them poorly determined.
+const HIGHLIGHTS: f64 = -66.0;
+const SHADOWS: f64 = 52.0;
+/// Contrast and Vibrance are fitted: our slider scales differ from Lightroom's, and our base tone is
+/// flatter, so Contrast is far above its +6. Whites, Blacks and Saturation stay at 0 (Whites and
+/// Blacks made no difference to the match; Lightroom leaves Saturation at about 0).
+const CONTRAST: f64 = 68.0;
+const VIBRANCE: f64 = 30.0;
+
+/// The scene's log-average luminance under the current white balance, in EV relative to middle grey
+/// (the mean of log2(Y / 0.18) over a 512 px proxy, scene-linear, before any tone curve). Pixels that
+/// aren't finite (a damaged decode) are left out: they get no weight when the proxy is made, and
+/// proxy pixels made only of them are skipped. `None` when no pixel is valid.
+pub fn scene_log_mean(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> Option<f64> {
+    let (mut clean, mut weight) = (src.clone(), Rgb32f::new(src.width, src.height));
+    let mut any = false;
+    for (p, w) in clean.data.iter_mut().zip(weight.data.iter_mut()) {
+        if p.iter().all(|v| v.is_finite()) {
+            *w = [1.0; 3];
+            any = true;
+        } else {
+            *p = [0.0; 3];
+        }
     }
-    sorted[((sorted.len() - 1) as f32 * q.clamp(0.0, 1.0)) as usize]
+    if !any {
+        return None;
+    }
+    let fit = |img: &Rgb32f| dac_raster::resample::fit(img, 512, 512, dac_raster::resample::Filter::Box);
+    let (img, weight) = (fit(&clean), fit(&weight));
+    // the mean of the valid pixels under each proxy pixel
+    let kept: Vec<[f32; 3]> = img.data.iter().zip(&weight.data).filter(|(_, w)| w[0] > 1e-6).map(|(p, w)| p.map(|v| v / w[0])).collect();
+    let mut kept = Rgb32f { width: kept.len(), height: 1, data: kept };
+    let base = DevelopSettings { wb: s.wb, process: s.process, ..DevelopSettings::default() };
+    // (white balance is per pixel: the valid pixels can be balanced in a row of their own)
+    crate::local::scene_linear_pre(&mut kept, info, &base);
+    let (mut sum, mut n) = (0f64, 0usize);
+    for c in &kept.data {
+        let ev = (luminance_2020(*c).max(1e-6) / 0.18).log2();
+        if ev.is_finite() {
+            sum += ev as f64;
+            n += 1;
+        }
+    }
+    (n > 0).then(|| sum / n as f64)
 }
 
-/// Compute auto tone values for `src` under the current white balance (ignores current tone values).
+/// Auto settings for `src` under the current white balance (ignores current tone values), aiming at
+/// what Lightroom's Auto does: the Exposure a scene needs follows its log-average luminance
+/// ([`scene_log_mean`], scene-linear, so the rule doesn't depend on the base tone curve), and the
+/// other sliders are one fixed recipe. Calibrated black-box against Lightroom's observed behaviour
+/// (the values its Auto chose and its exported results) on 24 Sony raw photos, of which 16 have a
+/// starting look that Sony's in-camera DRO doesn't brighten. Held out one photo at a time, those 16
+/// come out at a median dE76 of 6.4 from Lightroom's Auto results (8.3 unedited; 18.8 with the
+/// previous percentile rule, which ended about 16 L* too bright); all 24 at 7.7 (7.9 unedited).
+/// Rendered sources (JPEGs) are already toned, so their log-average reads brighter and Auto changes
+/// their exposure less. A source without a single valid pixel gets Exposure 0 (and the rest of the
+/// recipe).
 pub fn auto_tone(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> AutoTone {
-    let mut img = dac_raster::resample::fit(src, 512, 512, dac_raster::resample::Filter::Box);
-    let mut base = DevelopSettings { wb: s.wb, ..DevelopSettings::default() };
-    base.light.exposure = 0.0;
-    crate::local::scene_linear_pre(&mut img, info, &base);
-    let mut ev: Vec<f32> = img.data.iter().map(|c| (luminance_2020(*c).max(1e-6) / 0.18).log2()).collect();
-    ev.sort_by(|a, b| a.total_cmp(b));
-    let median = percentile(&ev, 0.5);
-    let exposure = (-median * 0.85 - 0.1).clamp(-4.0, 4.0);
-    let (p01, p05, p95, p995) =
-        (percentile(&ev, 0.01) + exposure, percentile(&ev, 0.05) + exposure, percentile(&ev, 0.95) + exposure, percentile(&ev, 0.995) + exposure);
-    let highlights = if p995 > 2.2 { -((p995 - 2.2) * 38.0).min(90.0) } else { 0.0 };
-    let shadows = if p05 < -4.0 { ((-4.0 - p05) * 22.0).min(70.0) } else { 0.0 };
-    let spread = p95 - p05;
-    let contrast = ((6.5 - spread) * 6.0).clamp(-20.0, 30.0);
-    let whites = if p995 < 1.8 { ((1.8 - p995) * 25.0).min(40.0) } else { -((p995 - 3.5).max(0.0) * 10.0).min(30.0) };
-    let blacks = if p01 > -5.0 { -((p01 + 5.0) * 10.0).min(35.0) } else { ((-7.0 - p01).max(0.0) * 8.0).min(20.0) };
+    let exposure = scene_log_mean(src, info, s).map_or(0.0, |m| (EXPOSURE_AT_GREY + EXPOSURE_SLOPE * m).clamp(-2.0, 3.0));
     AutoTone {
-        exposure: (exposure as f64 * 100.0).round() / 100.0,
-        contrast: contrast.round() as f64,
-        highlights: highlights.round() as f64,
-        shadows: shadows.round() as f64,
-        whites: whites.round() as f64,
-        blacks: blacks.round() as f64,
-        vibrance: 12.0,
-        saturation: 3.0,
+        exposure: (exposure * 100.0).round() / 100.0,
+        contrast: CONTRAST,
+        highlights: HIGHLIGHTS,
+        shadows: SHADOWS,
+        whites: 0.0,
+        blacks: 0.0,
+        vibrance: VIBRANCE,
+        saturation: 0.0,
     }
 }
 
@@ -65,7 +109,7 @@ pub fn auto_tone(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> AutoTo
 pub fn auto_bw_mix(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> [f64; 8] {
     use dac_color::perceptual::{lab_to_lch, oklab_from_2020};
     let mut img = dac_raster::resample::fit(src, 512, 512, dac_raster::resample::Filter::Box);
-    let base = DevelopSettings { wb: s.wb, light: s.light, ..DevelopSettings::default() };
+    let base = DevelopSettings { wb: s.wb, light: s.light, process: s.process, ..DevelopSettings::default() };
     crate::local::scene_linear_pre(&mut img, info, &base);
     let gain = 2f32.powf(base.light.exposure as f32);
     let (mut mass, mut sum_l) = ([0f64; 8], [0f64; 8]);
@@ -144,13 +188,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dark_image_gets_positive_exposure() {
-        let img = Rgb32f::from_fn(64, 64, |x, _| [0.01 + x as f32 * 0.0003; 3]);
-        let a = auto_tone(&img, &SourceInfo::default(), &DevelopSettings::default());
-        assert!(a.exposure > 1.5, "{a:?}");
-        let bright = Rgb32f::from_fn(64, 64, |x, _| [0.8 + x as f32 * 0.01; 3]);
-        let b = auto_tone(&bright, &SourceInfo::default(), &DevelopSettings::default());
-        assert!(b.exposure < -1.0, "{b:?}");
+    fn exposure_follows_the_log_average_luminance() {
+        let flat = |y: f32| Rgb32f::filled(64, 64, [y; 3]);
+        let auto = |img: &Rgb32f| auto_tone(img, &SourceInfo::default(), &DevelopSettings::default());
+        let log_mean = |img: &Rgb32f| scene_log_mean(img, &SourceInfo::default(), &DevelopSettings::default()).unwrap();
+        // a scene at middle grey gets the exposure at grey; each EV darker adds 0.41 EV
+        assert!(log_mean(&flat(0.18)).abs() < 1e-3);
+        assert_eq!(auto(&flat(0.18)).exposure, -0.58);
+        assert!((auto(&flat(0.18 / 8.0)).exposure - (-0.58 + 3.0 * 0.41)).abs() < 1e-9);
+        // darker scenes get more, brighter ones less, within -2..3 EV
+        let ramp = |lo: f32, step: f32| Rgb32f::from_fn(64, 64, |x, _| [lo + x as f32 * step; 3]);
+        let (dark, bright) = (auto(&ramp(0.01, 0.0003)), auto(&ramp(0.8, 0.01)));
+        assert!(dark.exposure > 0.5 && bright.exposure < -1.0, "{dark:?} {bright:?}");
+        assert_eq!(auto(&flat(1e-9)).exposure, 3.0);
+        assert_eq!(auto(&flat(1e6)).exposure, -2.0);
+        // the rest is one recipe
+        assert_eq!(
+            (dark.contrast, dark.highlights, dark.shadows, dark.whites, dark.blacks, dark.vibrance, dark.saturation),
+            (68.0, -66.0, 52.0, 0.0, 0.0, 30.0, 0.0)
+        );
+        assert_eq!((dark.contrast, dark.shadows), (bright.contrast, bright.shadows));
+    }
+
+    #[test]
+    fn pixels_that_are_not_finite_are_left_out() {
+        let auto = |img: &Rgb32f| auto_tone(img, &SourceInfo::default(), &DevelopSettings::default());
+        // half middle grey, half NaN (or infinite): the grey half alone decides, as if the rest weren't there
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let half = Rgb32f::from_fn(64, 64, |x, _| if x < 32 { [0.18; 3] } else { [bad; 3] });
+            assert_eq!(auto(&half).exposure, -0.58, "{bad}");
+            // also through the resampling of a source larger than the proxy (proxy pixels on the border mix both halves)
+            let big = Rgb32f::from_fn(1030, 700, |x, _| if x < 515 { [0.045; 3] } else { [bad; 3] });
+            assert!((auto(&big).exposure - (-0.58 + 2.0 * 0.41)).abs() < 1e-9, "{bad}");
+            // a few broken pixels scattered over a grey image change nothing
+            let speckled = Rgb32f::from_fn(1030, 700, |x, y| if (x * 7 + y * 13) % 97 == 0 { [bad; 3] } else { [0.18; 3] });
+            assert_eq!(auto(&speckled).exposure, -0.58, "{bad}");
+        }
+        // with no valid pixel at all (or none at all) there is nothing to measure: Exposure 0, the recipe as usual
+        for img in [Rgb32f::filled(8, 8, [f32::NAN; 3]), Rgb32f::filled(600, 600, [f32::INFINITY; 3]), Rgb32f::new(0, 0)] {
+            let a = auto(&img);
+            assert_eq!((a.exposure, a.contrast, a.vibrance), (0.0, 68.0, 30.0));
+        }
     }
 
     #[test]

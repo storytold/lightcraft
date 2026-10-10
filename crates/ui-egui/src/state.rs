@@ -158,6 +158,9 @@ pub struct AppSettings {
     pub keymap: crate::shortcuts::Keymap,
     /// The keymap set the user's changes apply over (Classic by default).
     pub keymap_set: crate::shortcuts::KeymapSet,
+    /// The monitor's ICC profile previews are shown through (`app.displayProfile`; "" = none:
+    /// the display is treated as sRGB).
+    pub display_profile: String,
 }
 
 impl Default for AppSettings {
@@ -175,6 +178,7 @@ impl Default for AppSettings {
             grid_badges: GridBadges::Auto,
             keymap: Default::default(),
             keymap_set: Default::default(),
+            display_profile: String::new(),
         }
     }
 }
@@ -301,6 +305,17 @@ pub const LEFT_WIDTH: PanelWidth = PanelWidth { min: 200.0, default: 268.0, max:
 pub const RIGHT_WIDTH: PanelWidth = PanelWidth { min: 250.0, default: 270.0, max: 520.0 };
 /// The photo area the side panels always leave free (as far as their minimum widths allow).
 pub const MIN_PHOTO_WIDTH: f32 = 360.0;
+
+/// What the Keywording box shows: the keywords (chips to edit), them with the keywords containing
+/// them, or what exported files will carry (read only).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KeywordingView {
+    #[default]
+    Keywords,
+    Containing,
+    WillExport,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -465,6 +480,8 @@ pub struct UiState {
     pub point_color: usize,
     /// Point Color "Visualize range": the selected sample's range in colour, the rest grey.
     pub point_color_visualize: bool,
+    /// Light panel "Visualize HDR": grey below SDR white, colour bands above (HDR edits).
+    pub hdr_visualize: bool,
     /// Red Eye panel: selected correction, and whether new ones are pet eyes.
     pub eye: usize,
     pub eye_pet: bool,
@@ -526,6 +543,16 @@ pub struct UiState {
     pub hovered_photo: Option<u64>,
     /// Painter, grid cell style, Metadata panel preset ([`crate::libtools`]).
     pub lib: crate::libtools::LibTools,
+    /// What the Keywording box shows (Lightroom Classic's Keyword Tags views).
+    pub keywording_view: KeywordingView,
+    /// The Keyword List's open levels (lower-case paths).
+    pub keyword_list_open: Vec<String>,
+    /// The keyword picked in the Keyword List (− deletes it, Edit edits it).
+    #[serde(skip)]
+    pub keyword_list_selected: Option<String>,
+    /// A keyword being dragged in the Keyword List (onto another to nest it).
+    #[serde(skip)]
+    pub dragging_keyword: Option<String>,
     /// A running slideshow (full screen): seconds per photo, when the next one is due (egui
     /// time), paused.
     #[serde(skip)]
@@ -583,6 +610,9 @@ pub struct NameEdit {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Dialog {
+    ContactSheet {
+        options: dac_engine::contact_sheet::Options,
+    },
     /// `parent`: the folder to create it in (none: the top level).
     NewAlbum {
         name: String,
@@ -633,6 +663,47 @@ pub enum Dialog {
     RenameKeyword {
         from: String,
         to: String,
+    },
+    /// Create a keyword, or edit one (`editing`): Lightroom Classic's Create / Edit Keyword Tag.
+    KeywordTag {
+        /// The keyword being edited; `None`: a new one.
+        editing: Option<String>,
+        name: String,
+        /// A new keyword goes inside this one when `inside` is on (the keyword picked in the
+        /// list, or the default parent).
+        parent: Option<String>,
+        inside: bool,
+        /// Comma-separated.
+        synonyms: String,
+        include_on_export: bool,
+        export_containing: bool,
+        export_synonyms: bool,
+        person: bool,
+        /// A new keyword is given to the selected photos.
+        add_to_selected: bool,
+    },
+    /// Edit Keyword Set: a set's name and its nine slots (an empty one is an empty slot). `replaces`:
+    /// the set being edited (renamed when the name changes); `None` saves a new set (from Recent
+    /// Keywords).
+    KeywordSet {
+        replaces: Option<String>,
+        name: String,
+        slots: Vec<String>,
+        /// Save as a new set, leaving the edited one (Lightroom Classic's Save as New Preset).
+        #[serde(default)]
+        as_new: bool,
+    },
+    /// Move a keyword inside `parent` (`None`: the top level) where one of its name is already:
+    /// asks before merging the two.
+    MoveKeyword {
+        keyword: String,
+        parent: Option<String>,
+    },
+    /// Delete a keyword from every photo and the keyword list, after asking.
+    DeleteKeyword {
+        keyword: String,
+        /// Photos that have it (or one below it).
+        count: usize,
     },
     /// Merge keywords into another one on every photo.
     MergeKeywords {
@@ -742,10 +813,47 @@ pub enum Dialog {
         /// A whole disk or share (`library.removeFolder` takes it only on request).
         disk: bool,
     },
+    /// Synchronize Folder: what changed in a library folder on disk, and what to do about it
+    /// (`folder.synchronize`; the scan runs in [`crate::sync`]).
+    SynchronizeFolder {
+        path: String,
+        /// What the dialog calls it (a folder's last two names).
+        name: String,
+        /// A whole disk, or a folder holding disks (`folder.synchronize` `disk`).
+        #[serde(default)]
+        disk: bool,
+        /// What the scan found (`None` while it runs).
+        counts: Option<SyncCounts>,
+        import_new: bool,
+        #[serde(default = "yes")]
+        relink_moved: bool,
+        remove_missing: bool,
+        read_metadata: bool,
+    },
     About,
     Shortcuts,
     /// Library ▸ View Options (⌘J): grid cell style, index numbers, badges.
     ViewOptions,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// How many changes a Synchronize Folder scan found, by kind.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncCounts {
+    /// The folder isn't there (moved, renamed, or on a disk that isn't connected).
+    #[serde(default)]
+    pub offline: bool,
+    pub new: usize,
+    pub duplicates: usize,
+    pub unreadable: usize,
+    pub missing: usize,
+    pub metadata: usize,
+    #[serde(default)]
+    pub moved: usize,
 }
 
 impl Default for UiState {
@@ -827,6 +935,7 @@ impl Default for UiState {
             remove_opacity: 100.0,
             point_color: 0,
             point_color_visualize: false,
+            hdr_visualize: false,
             eye: 0,
             eye_pet: false,
             visualize_spots: false,
@@ -857,6 +966,10 @@ impl Default for UiState {
             second_filmstrip: true,
             hovered_photo: None,
             lib: Default::default(),
+            keywording_view: KeywordingView::default(),
+            keyword_list_open: Vec::new(),
+            keyword_list_selected: None,
+            dragging_keyword: None,
             info_overlay: InfoOverlay::Off,
             navigator: true,
             settings: AppSettings::default(),

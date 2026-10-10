@@ -63,8 +63,16 @@ fn dev() -> Result<&'static Dev, String> {
     if let Some(why) = crate::switched_off() {
         return Err(why);
     }
+    // creating the device is GPU work too: not once the process is ending (issue #620)
+    let _work = match DEV.get() {
+        Some(_) => None,
+        None => Some(crate::exit::enter().ok_or(CLOSING)?),
+    };
     DEV.get_or_init(create_device).as_ref().map_err(|e| e.clone())
 }
+
+/// Why nothing runs on the GPU once [`crate::begin_shutdown`] was called.
+const CLOSING: &str = "LightCraft is closing";
 
 fn create_device() -> Result<Dev, String> {
     let Some(backends) = crate::backend::compute_backends() else { return Err(format!("disabled by {}=off", dac_brand::env_var("GPU_BACKEND"))) };
@@ -511,7 +519,6 @@ fn conv_source(bm: u32, bn: u32, bk: u32) -> String {
         .replace("{{BM}}", &bm.to_string())
         .replace("{{BN}}", &bn.to_string())
         .replace("{{BK}}", &bk.to_string())
-        .replace("{{A_VECS}}", &(bk * bm / 4).to_string())
         .replace("{{B_VECS}}", &(bk * bn / 4).to_string())
 }
 
@@ -654,6 +661,7 @@ pub struct NetRunner {
 /// Put `net` on the GPU for `tile × tile` input cells, or say why it cannot be (no GPU, a layer or a size the kernels
 /// do not do, the device refusing the buffers). Creates the device on first use and compiles the kernels.
 pub fn runner(net: &Net, tile: usize) -> Result<NetRunner, String> {
+    let _work = crate::exit::enter().ok_or(CLOSING)?;
     let d = dev()?;
     let max_binding = d.limits.max_storage_buffer_binding_size.min(d.limits.max_buffer_size).min(MAX_BUFFER);
     let (layout, layers) = plan(net, tile, max_binding)?;
@@ -840,6 +848,8 @@ impl TileRunner for NetRunner {
         if input.len() != self.shared.layout.in_floats {
             return Err(Error::Input("the tile is not the size the model wants".into()));
         }
+        // one tile is one piece of GPU work: a photo's worth would outlast any wait at exit
+        let Some(_work) = crate::exit::enter() else { return Err(Error::Runtime(CLOSING.into())) };
         let w = self.take()?;
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.execute(&w, input)));
         match r {
@@ -902,6 +912,7 @@ mod tests {
 
     fn worst(a: &[f32], b: &[f32]) -> f32 {
         assert_eq!(a.len(), b.len());
+        assert!(a.iter().chain(b).all(|v| v.is_finite()), "non-finite denoise output");
         let scale = b.iter().fold(1e-3f32, |m, v| m.max(v.abs()));
         a.iter().zip(b).fold(0f32, |m, (x, y)| m.max((x - y).abs())) / scale
     }
@@ -922,6 +933,21 @@ mod tests {
             let e = worst(&got, &want);
             eprintln!("{}: tile {tile}, {ch} channels, depth {depth}: off by {e:e} of the output's size", g.adapter());
             assert!(e < 2e-4, "tile {tile}, {ch} channels, depth {depth}: the GPU is off by {e:e} of the output's size");
+        }
+    }
+
+    // Issue #479: several pixels loaded by different invocations shared a vec4,
+    // so lane writes raced on Metal. Exercise a partial block repeatedly with new
+    // inputs; stale shared-memory values must never leak into the next dispatch.
+    #[test]
+    fn partial_tiles_remain_correct_when_reusing_a_runner() {
+        let n = net(3, 4, 0, 8);
+        let Some(g) = gpu(&n, 3) else { return };
+        for seed in 100..112 {
+            let x = picture(4 * 3 * 3, seed);
+            let want = reference::run(&n, 3, &x).unwrap();
+            let e = worst(&g.run(&x).unwrap(), &want);
+            assert!(e < 2e-4, "seed {seed}: off by {e:e}");
         }
     }
 
@@ -1022,7 +1048,6 @@ mod tests {
             .replace("{{BM}}", &bm.to_string())
             .replace("{{BN}}", &bn.to_string())
             .replace("{{BK}}", &bk.to_string())
-            .replace("{{A_VECS}}", &(bk * bm / 4).to_string())
             .replace("{{B_VECS}}", &(bk * bn / 4).to_string());
         let d = dev().unwrap();
         let layout = conv_bgl(d);

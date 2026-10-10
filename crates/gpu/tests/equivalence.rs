@@ -406,6 +406,59 @@ fn gpu_matches_cpu() {
     eprintln!("worst: mean {:.4} LSB, max {} LSB", worst.0, worst.1);
 }
 
+/// Issue #523: a raw's clipped highlights rebuilt as the raw decode does it (fully clipped ones to the neutral of
+/// the colour model applied after them, here a look whose rows don't sum to one) stay neutral when darkened, on
+/// the GPU as on the CPU, and the two renders agree.
+#[test]
+fn clipped_highlights_stay_neutral_on_both() {
+    if !gpu() {
+        return;
+    }
+    let wb = [2.4f32, 1.0, 1.6];
+    let look = dac_color::Mat3([[0.42, 0.548, 0.04], [0.246, 0.728, 0.033], [-0.247, 0.679, 0.447]]);
+    let luma = |c: [f64; 3]| (0..3).map(|i| c[i] * f64::from(dac_color::LUMA_2020[i])).sum::<f64>();
+    let n = look.inverse().unwrap().apply([1.0; 3]);
+    let white = n.map(|v| (v * luma(look.apply([1.0; 3])) / luma(look.apply(n))) as f32);
+    // a grey wall with a fully clipped light, a light clipped in green only, and a dark bar with a purple fringe
+    // in front of the second
+    let mut cam = Rgb32f::from_fn(320, 240, |x, y| {
+        let d = |cx: f32| ((x as f32 - cx).powi(2) + (y as f32 - 120.0).powi(2)).sqrt();
+        if d(90.0) < 50.0 {
+            [1.0; 3]
+        } else if (226..232).contains(&x) && (70..170).contains(&y) {
+            [0.02, 0.03, 0.02]
+        } else if (x == 225 || x == 232) && (70..170).contains(&y) {
+            [0.3, 0.25, 0.6]
+        } else if d(228.0) < 50.0 {
+            [0.6 / wb[0], 1.0, 0.7 / wb[2]]
+        } else {
+            [0.3 / wb[0], 0.3, 0.3 / wb[2]]
+        }
+    });
+    dac_raw::highlight::reconstruct_with(&mut cam, wb, 0.99, white);
+    let m = look.to_f32();
+    let src = Arc::new(cam.map(|p| {
+        let c = [p[0] * wb[0], p[1] * wb[1], p[2] * wb[2]];
+        std::array::from_fn(|i| (m[i][0] * c[0] + m[i][1] * c[1] + m[i][2] * c[2]).max(0.0))
+    }));
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let req = RenderRequest::fit(320, 240);
+    let mut h100 = DevelopSettings::default();
+    h100.light.highlights = -100.0;
+    let mut issue = DevelopSettings::default();
+    let l = &mut issue.light;
+    (l.exposure, l.contrast, l.highlights, l.shadows, l.whites, l.blacks) = (-0.88, 5.0, -75.0, 52.0, 6.0, -37.0);
+    for (name, s) in [("clipped highlights -100", h100), ("clipped highlights #523", issue)] {
+        check(name, &src, &info, &s, &req);
+        let cpu = render(&src, &info, &s, &req).image;
+        let gpu = dac_gpu::render(&src, &info, &s, &req, None).expect("gpu render").image;
+        for (who, img) in [("CPU", &cpu), ("GPU", &gpu)] {
+            let p = img.get(90, 120);
+            assert!(p[1] < 250 && p[0].max(p[1]).max(p[2]) - p[0].min(p[1]).min(p[2]) <= 1, "{name} {who}: clipped light {p:?}");
+        }
+    }
+}
+
 #[test]
 fn rendered_sources_and_other_scenes() {
     if !gpu() {

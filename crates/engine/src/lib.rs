@@ -19,11 +19,13 @@ mod camera_preview;
 pub mod camera_profiles;
 pub mod cmd;
 pub mod config;
+pub mod contact_sheet;
 pub mod crs;
 pub mod crs_masks;
 pub mod demo;
 pub mod denoise;
 pub mod devices;
+pub mod display;
 pub mod export;
 pub mod face_download;
 #[cfg(not(target_arch = "wasm32"))]
@@ -56,6 +58,7 @@ pub mod rename;
 pub mod segment;
 pub mod sidecar;
 pub mod smart;
+pub mod sync;
 mod view;
 pub mod walk;
 
@@ -169,6 +172,9 @@ pub struct Session {
     /// Photos in the current source with no filter on (cached like `visible`).
     total: Option<((u64, String), usize)>,
     pub undo: Vec<UndoEntry>,
+    /// Undo steps committed in this session, ever (the history drops its oldest past 1000, so
+    /// its length can't tell how many steps a command just made; see [`Session::commits`]).
+    commits: u64,
     pub redo: Vec<UndoEntry>,
     pub interaction: Option<Interaction>,
     /// Set by a command whose change must not rewrite the photo's XMP sidecar even with auto-write on
@@ -259,12 +265,14 @@ pub struct Session {
     pub keyword_shortcut: Option<String>,
     /// Keyword attributes (synonyms, export options, person) and keywords created before any
     /// photo has them, by keyword path (Keyword List).
-    pub keyword_attrs: std::collections::BTreeMap<String, cmd::keyword_list::KeywordAttrs>,
     /// Before/After: the "before" settings chosen per photo (this session; default: the photo's
     /// import state). See `cmd/before.rs`.
     pub before: std::collections::HashMap<PhotoId, Arc<DevelopSettings>>,
     /// File probes from the last import review (`library.importPreview`), reused by the import.
     pub import_probes: std::collections::HashMap<String, media::ProbeInfo>,
+    /// The last Synchronize Folder scan, which `folder.synchronize` acts on while it is current
+    /// (see [`Session::take_folder_changes`]).
+    pub folder_changes: Option<sync::FolderChanges>,
     /// The last (or running) Build Previews.
     pub preview_build: Option<std::sync::Arc<cmd::previews::PreviewBuild>>,
     /// Develop defaults applied on import (persisted in prefs.json).
@@ -305,6 +313,7 @@ impl Session {
             visible_gen: 0,
             total: None,
             undo: Vec::new(),
+            commits: 0,
             redo: Vec::new(),
             interaction: None,
             skip_auto_write: false,
@@ -351,9 +360,9 @@ impl Session {
             keyword_set: None,
             recent_keywords: Vec::new(),
             keyword_shortcut: None,
-            keyword_attrs: Default::default(),
             before: Default::default(),
             import_probes: Default::default(),
+            folder_changes: None,
             preview_build: None,
             import_defaults: import::ImportDefaults::default(),
             cache_mb: 0,
@@ -373,7 +382,10 @@ impl Session {
     /// Run a command by id. THE entry point for every frontend.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
-        (spec.enabled)(self).map_err(|why| EngineError::Disabled(id.to_string(), why))?;
+        // a command that validates the photos a call names isn't held back by the selection
+        if !(spec.explicit_targets && cmd::names_photos(params)) {
+            (spec.enabled)(self).map_err(|why| EngineError::Disabled(id.to_string(), why))?;
+        }
         let empty = Value::Object(Default::default());
         let params = if params.is_null() { &empty } else { params };
         self.run_command(id, spec.journal.then_some(params), |s| (spec.run)(s, params))
@@ -444,6 +456,7 @@ impl Session {
         let inv = self.catalog.apply(op)?;
         self.pending_log.push(fwd);
         self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None });
+        self.commits = self.commits.wrapping_add(1);
         if self.undo.len() > 1000 {
             self.undo.remove(0);
         }
@@ -508,6 +521,12 @@ impl Session {
 
     /// Fold the last `n` undo steps into one (commands that commit step by step because each op
     /// depends on the state the previous one left).
+    /// How many undo steps were committed in this session so far: what a command that commits
+    /// several steps compares before and after to merge them ([`Session::merge_undo`]).
+    pub fn commits(&self) -> u64 {
+        self.commits
+    }
+
     pub fn merge_undo(&mut self, n: usize, label: &str) {
         if n < 2 || n > self.undo.len() {
             return;
@@ -648,7 +667,8 @@ impl Session {
 
     /// With Auto Sync on, the ops that carry an edit of the active photo `id` (to `new`) over to the
     /// other selected photos: only the settings that changed; never spot removal or red eye (they
-    /// belong to one photo's pixels), nor history / snapshot restores.
+    /// belong to one photo's pixels), nor the rendering process (Sync doesn't carry it either), nor
+    /// history / snapshot restores.
     fn auto_sync_ops(&self, id: PhotoId, new: &DevelopSettings, label: &str) -> Vec<Op> {
         if !self.auto_sync
             || self.active() != Some(id)
@@ -661,7 +681,7 @@ impl Session {
         let Some(old) = self.develop_of(id) else { return Vec::new() };
         let Some(mut delta) = json_delta(&old.to_json(), &new.to_json()) else { return Vec::new() };
         if let Some(o) = delta.as_object_mut() {
-            for k in ["spots", "red_eye", "version"] {
+            for k in ["spots", "red_eye", "version", "process"] {
                 o.remove(k);
             }
             if o.is_empty() {
@@ -921,6 +941,8 @@ mod tests_import;
 #[cfg(test)]
 mod tests_import_move;
 #[cfg(test)]
+mod tests_keyword_list;
+#[cfg(test)]
 mod tests_libops;
 #[cfg(test)]
 mod tests_library;
@@ -935,10 +957,14 @@ mod tests_prefs;
 #[cfg(test)]
 mod tests_previews;
 #[cfg(test)]
+mod tests_process;
+#[cfg(test)]
 mod tests_segment;
 #[cfg(test)]
 mod tests_settings_files;
 #[cfg(test)]
 mod tests_spots;
+#[cfg(test)]
+mod tests_sync;
 #[cfg(test)]
 mod tests_xmp;

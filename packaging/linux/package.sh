@@ -45,7 +45,7 @@ BASENAME="$APP-$VERSION-linux-$ARCH"
 echo "==> $BRAND_DISPLAY_NAME $VERSION for Linux $ARCH ($FORMATS)"
 
 if [ "$SKIP_BUILD" = 0 ]; then
-  (cd "$ROOT" && cargo build --release --locked -p dac-app -p dac-cli)
+  (cd "$ROOT" && cargo build --release --locked -p dac-app -p dac-cli --features dac-app/heif,dac-cli/heif)
 fi
 BIN="$CARGO_TARGET_DIR/release"
 WORK="$CARGO_TARGET_DIR/linux-package"

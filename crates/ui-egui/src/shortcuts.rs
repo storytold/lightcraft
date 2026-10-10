@@ -427,25 +427,44 @@ pub fn parse(s: &str) -> Option<(Modifiers, Key)> {
 }
 
 fn matches(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
-    i.events.iter().any(|e| match e {
-        egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } => {
-            // `Ctrl` is the physical Control key (on macOS distinct from Cmd; elsewhere Cmd = Ctrl);
-            // "Delete" (⌫ = Backspace) also matches forward-delete
-            let ctrl_ok = if m.ctrl { modifiers.ctrl } else { !modifiers.ctrl || modifiers.command };
-            let cmd_ok = m.ctrl || modifiers.command == m.command;
-            // winit can report shifted digits as punctuation (Shift+1 = `!`). Recognize the
-            // physical number key for culling, without changing layout-aware letter shortcuts.
-            let shifted_digit = m.shift
-                && *physical_key == Some(k)
-                && matches!(k, Key::Num0 | Key::Num1 | Key::Num2 | Key::Num3 | Key::Num4 | Key::Num5 | Key::Num6 | Key::Num7 | Key::Num8 | Key::Num9);
-            (*key == k || shifted_digit || (k == Key::Backspace && *key == Key::Delete))
-                && ctrl_ok
-                && cmd_ok
-                && modifiers.shift == m.shift
-                && modifiers.alt == m.alt
-        }
-        _ => false,
+    // the windowing layer turns ⌘C / ⌘X / ⌘V (with any other modifiers held) and the keyboard's
+    // Copy / Cut / Paste keys into these on Windows and Linux (macOS's menu bar takes them first);
+    // without ⌘/Ctrl held they came from a key that is the plain command (Windows' ⇧Insert pastes)
+    let clipboard = if i.modifiers.command { i.modifiers } else { Modifiers::COMMAND };
+    i.events.iter().any(|e| {
+        let (key, physical_key, modifiers) = match e {
+            egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } => (key, physical_key, modifiers),
+            egui::Event::Copy => (&Key::C, &None, &clipboard),
+            egui::Event::Cut => (&Key::X, &None, &clipboard),
+            egui::Event::Paste(_) => (&Key::V, &None, &clipboard),
+            _ => return false,
+        };
+        // `Ctrl` is the physical Control key (on macOS distinct from Cmd; elsewhere Cmd = Ctrl);
+        // "Delete" (⌫ = Backspace) also matches forward-delete
+        let ctrl_ok = if m.ctrl { modifiers.ctrl } else { !modifiers.ctrl || modifiers.command };
+        let cmd_ok = m.ctrl || modifiers.command == m.command;
+        // winit can report shifted digits as punctuation (Shift+1 = `!`). Recognize the
+        // physical number key for culling, without changing layout-aware letter shortcuts.
+        let shifted_digit = m.shift
+            && *physical_key == Some(k)
+            && matches!(k, Key::Num0 | Key::Num1 | Key::Num2 | Key::Num3 | Key::Num4 | Key::Num5 | Key::Num6 | Key::Num7 | Key::Num8 | Key::Num9);
+        (*key == k || shifted_digit || (k == Key::Backspace && *key == Key::Delete))
+            && ctrl_ok
+            && cmd_ok
+            && modifiers.shift == m.shift
+            && modifiers.alt == m.alt
     })
+}
+
+/// Default brackets rate in grids. Remapped brush keys retain their brush action, and a
+/// saved assignment of either bracket to another command takes precedence over this default.
+fn grid_bracket_command(keymap: &Keymap, grid: bool, id: &'static str, shortcut: (Modifiers, Key)) -> Option<&'static str> {
+    let command = match (grid, id, shortcut) {
+        (true, "brush.smaller", (m, Key::OpenBracket)) if m == Modifiers::NONE => "photo.decreaseRating",
+        (true, "brush.larger", (m, Key::CloseBracket)) if m == Modifiers::NONE => "photo.increaseRating",
+        _ => return Some(id),
+    };
+    if keymap.iter().any(|(other, sc)| other != id && find_bindable(other).is_some() && parse(sc) == Some(shortcut)) { None } else { Some(command) }
 }
 
 pub fn handle(app: &mut DacApp, ctx: &egui::Context) {
@@ -462,12 +481,16 @@ pub fn handle(app: &mut DacApp, ctx: &egui::Context) {
     let mut aliased: Vec<(&str, serde_json::Value)> = Vec::new();
     set_active(app.ui.settings.keymap_set);
     let keymap = &app.ui.settings.keymap;
+    let grid = library_grid(app);
     // keys the user gave to a command: the fixed bindings below (aliases, ratings) yield to them;
     // so do keys the active set gives a command (Classic's ⇧E is the secondary loupe, not export)
     let mut taken: Vec<(Modifiers, Key)> = keymap.values().filter_map(|s| parse(s)).collect();
     if active_set() == KeymapSet::Classic {
         taken.extend(CLASSIC.iter().filter_map(|(_, sc)| sc.and_then(parse)));
     }
+    // an open popup (a menu, a date picker's calendar) closes on Esc itself: Esc's command (Back,
+    // which also closes dialogs) waits until nothing is open
+    let popup_open = egui::Popup::is_any_open(ctx);
     // the module's own keys (Classic set) come first and take their key from the global keymap
     let module_keys: &[crate::module::ModuleKey] = if active_set() == KeymapSet::Classic { crate::module::get(app.ui.module).keymap() } else { &[] };
     let mut consumed: Vec<(Modifiers, Key)> = Vec::new();
@@ -498,13 +521,16 @@ pub fn handle(app: &mut DacApp, ctx: &egui::Context) {
                 && let Some((m, k)) = parse(sc)
                 && !native(sc)
                 && !consumed.contains(&(m, k))
+                && !(k == Key::Escape && popup_open)
                 && matches(i, m, k)
+                && let Some(id) = grid_bracket_command(keymap, grid, b.id, (m, k))
             {
-                fire.push(b.id.to_string());
+                fire.push(id.to_string());
             }
         }
         for (sc, id, params) in ALIASES {
             if let Some((m, k)) = parse(sc).filter(|_| !native(sc))
+                && !(k == Key::Escape && popup_open)
                 && !taken.contains(&(m, k))
                 && matches(i, m, k)
             {
@@ -583,6 +609,8 @@ pub fn handle(app: &mut DacApp, ctx: &egui::Context) {
                 crate::i18n::tr_format!("Rated {}", "★".repeat(n.parse().unwrap_or(0)))
             };
             app.toast(ctx, label);
+        } else if matches!(f.as_str(), "photo.decreaseRating" | "photo.increaseRating") {
+            cull(app, &f, json!({}), false);
         } else if let Some(l) = f.strip_prefix("label:") {
             cull(app, "photo.label", json!({"label": l}), false);
         } else if f == "panel.presets" && library_grid(app) {
@@ -1057,3 +1085,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "shortcuts/tests_relative_ratings.rs"]
+mod relative_rating_tests;

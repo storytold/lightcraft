@@ -64,11 +64,20 @@ impl Format {
 
     /// Whether [`crate::decode`] can decode this format in this build.
     pub fn can_decode(self) -> bool {
+        self.not_decodable().is_none()
+    }
+
+    /// Why [`crate::decode`] can't decode this format in this build (`None`: it can). The
+    /// [`crate::Error::Unsupported`] a decode returns carries the same reason.
+    pub fn not_decodable(self) -> Option<&'static str> {
         match self {
-            Format::Jxl => cfg!(feature = "jxl"),
-            Format::Heif => cfg!(feature = "heif"),
-            Format::Avif | Format::RawTiffLike | Format::RawOther => false,
-            _ => true,
+            #[cfg(not(feature = "jxl"))]
+            Format::Jxl => Some("built without the `jxl` feature"),
+            #[cfg(not(feature = "heif"))]
+            Format::Heif => Some(crate::heif::NOT_IN_BUILD),
+            Format::Avif => Some("no pure-Rust, permissively licensed AV1 decoder yet"),
+            Format::RawTiffLike | Format::RawOther => Some("camera raw: decode with dac-raw"),
+            _ => None,
         }
     }
 

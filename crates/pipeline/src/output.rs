@@ -1,13 +1,14 @@
 //! Output encoding: the colour space (primaries + transfer curve) and sample format a render is
-//! delivered in. Previews are always 8-bit sRGB; exports may ask for a wide-gamut space and/or
-//! 16-bit or linear float samples.
+//! delivered in. Previews are 8-bit sRGB, or 8-bit in a monitor's own primaries when the frontend
+//! has a display profile ([`DisplaySpace`]); exports may ask for a wide-gamut space and/or 16-bit or
+//! linear float samples.
 //!
 //! The per-pixel stage works in scene-linear Rec.2020 and ends by converting to the target's
 //! primaries, gamut mapping into the *target* gamut, and encoding. Tone curves and grain operate on
 //! sRGB-curve-encoded values of the target primaries (identical to the sRGB path when the target is
 //! sRGB); afterwards the values are re-encoded with the target's own curve.
 
-use dac_color::{ADOBE_RGB, DISPLAY_P3, PROPHOTO, REC2020, RgbSpace, SRGB};
+use dac_color::{ADOBE_RGB, DISPLAY_P3, Mat3, PROPHOTO, REC2020, RgbSpace, SRGB};
 use serde::{Deserialize, Serialize};
 
 /// The RGB space an image is rendered into.
@@ -138,6 +139,48 @@ impl OutputSpace {
     }
 }
 
+/// A monitor's RGB as a preview target (from its ICC display profile): previews render into the
+/// display's own primaries, gamut mapped into the display's gamut, encoded with the sRGB curve.
+/// The frontend then takes that encoding to the display's real device values
+/// (`dac_codecs::display`). Exports never use it.
+#[derive(Clone, Copy, Debug)]
+pub struct DisplaySpace {
+    /// Linear Rec.2020 → linear display RGB, and back.
+    pub from_working: [[f32; 3]; 3],
+    pub to_working: [[f32; 3]; 3],
+    /// Luminance weights of the display's linear RGB (gamut mapping).
+    pub luma: [f32; 3],
+    /// Identifies the display profile (part of render keys).
+    pub id: u64,
+}
+
+impl DisplaySpace {
+    /// From the display's linear RGB → linear Rec.2020 matrix (display white → (1, 1, 1)).
+    /// `None` for a singular or non-finite matrix.
+    pub fn new(to_working: Mat3, id: u64) -> Option<DisplaySpace> {
+        let from = to_working.inverse()?;
+        let luma = REC2020.to_xyz().mul(&to_working).0[1];
+        let all = to_working.0.iter().chain(from.0.iter()).flatten().chain(luma.iter());
+        if all.clone().any(|v| !v.is_finite()) || (luma.iter().sum::<f64>() - 1.0).abs() > 1e-3 {
+            return None;
+        }
+        Some(DisplaySpace { from_working: from.to_f32(), to_working: to_working.to_f32(), luma: luma.map(|v| v as f32), id })
+    }
+
+    /// A display that is exactly `space`'s primaries (tests, and the sRGB identity).
+    pub fn of(space: OutputSpace, id: u64) -> Option<DisplaySpace> {
+        DisplaySpace::new(space.rgb_space().to_space(&REC2020), id)
+    }
+}
+
+impl PartialEq for DisplaySpace {
+    fn eq(&self, o: &Self) -> bool {
+        self.id == o.id
+    }
+}
+
+impl Eq for DisplaySpace {}
+
 /// Soft proofing: render as if the result were converted to `space` (colours outside its gamut
 /// are mapped into it, then shown in the render's own space), optionally painting what the
 /// destination can't hold (`dest_warning`, red) and what the display can't show
@@ -179,6 +222,17 @@ impl Proof {
             display_warning: self.display_warning,
         }
     }
+
+    /// [`Self::params`] for a render into a display's primaries: the display warning then shows
+    /// what *this* display can't show.
+    pub fn params_display(self, d: &DisplaySpace) -> ProofParams {
+        let proof_to_working = self.space.rgb_space().to_space(&REC2020).to_f32();
+        ProofParams { proof_to_out: mul33(&d.from_working, &proof_to_working), ..self.params(OutputSpace::Srgb) }
+    }
+}
+
+fn mul33(a: &[[f32; 3]; 3], b: &[[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    std::array::from_fn(|i| std::array::from_fn(|j| (0..3).map(|k| a[i][k] * b[k][j]).sum()))
 }
 
 /// Sample format of a render.
@@ -192,6 +246,9 @@ pub enum OutputDepth {
     U16,
     /// 32-bit float *linear* RGB (target primaries, 0..1) in [`crate::Rendered::deep`].
     F32Linear,
+    /// 32-bit float linear RGB (target primaries) of the HDR render: SDR white = 1, highlights up
+    /// to [`dac_develop::Hdr::peak`]. With HDR off this is [`OutputDepth::F32Linear`].
+    F32Hdr,
 }
 
 /// High-bit-depth RGB samples (3 per pixel, interleaved, row-major).

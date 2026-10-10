@@ -225,7 +225,13 @@ pub fn poll(app: &mut DacApp, ctx: &egui::Context) {
         match t.rx.try_recv() {
             Ok(Ok(out)) => {
                 let Some(t) = app.merge.preview_task.take() else { return };
-                if let Some(img) = out.preview {
+                if let Some(mut img) = out.preview {
+                    // shown through the monitor profile like every other preview
+                    if let Some(d) = app.renderer.display()
+                        && let Err(e) = d.profile.from_srgb(&mut img)
+                    {
+                        log::warn!("display profile: {e}");
+                    }
                     let color = Arc::new(egui::ColorImage::from_rgba_unmultiplied([img.width, img.height], &img.as_bytes()));
                     let tex = ctx.load_texture("merge-preview", color.clone(), egui::TextureOptions::LINEAR);
                     app.merge.preview_pixels = Some(color);

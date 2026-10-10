@@ -213,6 +213,11 @@ fn craft_font_name(f: &dac_engine::CraftFont) -> String {
 }
 
 pub fn apply(ctx: &egui::Context) {
+    // Cmd+= / Cmd+- / Cmd+0 (Ctrl on Windows and Linux) are View ▸ Zoom In / Zoom Out / Zoom to Fit
+    // for the photo. egui would take the same keys at the end of every frame for its browser-style
+    // interface zoom (issue #566); on macOS the native menu bar got them first, elsewhere the whole
+    // UI scaled.
+    ctx.options_mut(|o| o.zoom_with_keyboard = false);
     let t = Tokens::default();
     ctx.data_mut(|d| d.insert_temp(egui::Id::NULL, t));
     let mut v = Visuals::dark();

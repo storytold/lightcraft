@@ -15,6 +15,8 @@
 //! and [`last_fallback`] say why (`ui.inspect` → `perf.gpuReason` / `perf.gpuFallback`).
 //! The browser build has no GPU path yet (WebGPU device creation is asynchronous): everything here
 //! compiles to the CPU fallback on wasm32.
+//!
+//! Before the process ends: [`begin_shutdown`], then [`wait_idle`] (issue #620, see `exit.rs`).
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -29,6 +31,8 @@ use dac_raster::Rgb32f;
 pub mod backend;
 #[cfg(not(target_arch = "wasm32"))]
 mod ctx;
+#[cfg(not(target_arch = "wasm32"))]
+mod exit;
 #[cfg(all(feature = "denoise", not(target_arch = "wasm32")))]
 pub mod nn;
 #[cfg(not(target_arch = "wasm32"))]
@@ -76,6 +80,9 @@ pub fn unavailable_reason() -> Option<String> {
     }
     if !ENABLED.load(Ordering::Relaxed) {
         return Some("disabled by the GPU rendering preference (app.gpu)".into());
+    }
+    if shutting_down() {
+        return Some("LightCraft is closing".into());
     }
     if BROKEN.load(Ordering::Relaxed) {
         let r = BROKEN_REASON.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_else(|| "device error".into());
@@ -147,6 +154,41 @@ pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed) && !BROKEN.load(Ordering::Relaxed) && !env_disabled()
 }
 
+/// The process is about to end: no GPU work starts from now on, on any thread. [`render`] returns
+/// `None` (callers render on the CPU), the devices are not created and denoise tiles fail over to
+/// the CPU. There is no way back. Follow it with [`wait_idle`].
+pub fn begin_shutdown() {
+    #[cfg(not(target_arch = "wasm32"))]
+    exit::begin_shutdown();
+}
+
+/// Whether [`begin_shutdown`] was called.
+pub fn shutting_down() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        exit::shutting_down()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+}
+
+/// Wait up to `timeout` for the GPU work in flight on every thread to end. `true`: none is left,
+/// and after [`begin_shutdown`] none can start, so the process may end; `false`: the deadline
+/// passed with a render (or a device being created) still inside the driver.
+pub fn wait_idle(timeout: std::time::Duration) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        exit::wait_idle(timeout)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = timeout;
+        true
+    }
+}
+
 /// Why GPU compute that has a device of its own (denoise) is switched off by the user's settings, or `None`: the
 /// environment switches and the rendering preference, but not a render-device failure (the devices are separate).
 #[cfg(all(feature = "denoise", not(target_arch = "wasm32")))]
@@ -181,6 +223,11 @@ pub(crate) fn device() -> Option<&'static ctx::Gpu> {
     if env_disabled() || !ENABLED.load(Ordering::Relaxed) {
         return existing_device();
     }
+    if let Some(g) = GPU.get() {
+        return g.as_ref().ok();
+    }
+    // creating the device is a long call into the driver: not once the process is ending
+    let _work = exit::enter()?;
     GPU.get_or_init(|| {
         let Some(backends) = backend::compute_backends() else { return Err(format!("disabled by {}=off", dac_brand::env_var("GPU_BACKEND"))) };
         backend::with_init_marker(backends, || {
@@ -285,7 +332,9 @@ pub fn set_pool_limit(bytes: u64) {
 /// Free recycled buffers until at most `keep` bytes stay pooled (e.g. when the app goes idle).
 pub fn trim_pool(keep: u64) {
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(g) = existing_device() {
+    if let Some(g) = existing_device()
+        && let Some(_work) = exit::enter()
+    {
         if keep == 0 {
             render::release_shared_source();
         }
@@ -341,9 +390,13 @@ pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
         let effective = s.effective();
         let s: &DevelopSettings = &effective;
         // the kernel writes 8-bit output: high-bit-depth exports (and soft proofs) render on the CPU
-        if !enabled() || req.depth != dac_pipeline::OutputDepth::U8 || req.proof.is_some() {
+        // Visualize HDR needs the float HDR render: CPU too
+        if !enabled() || req.depth != dac_pipeline::OutputDepth::U8 || req.proof.is_some() || req.overlay == dac_pipeline::Overlay::HdrRange {
             return None;
         }
+        let s = &*dac_pipeline::settings_for(s, req);
+        // in flight until this returns; `None` once the process is ending (issue #620)
+        let _work = exit::enter()?;
         let gpu = device()?;
         let ext = stages.map(|c| c.extension::<GpuStages>());
         let fault = take_fault();

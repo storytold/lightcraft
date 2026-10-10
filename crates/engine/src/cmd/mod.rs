@@ -26,7 +26,6 @@ pub mod filters;
 pub mod folders;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod immich;
-pub mod keyword_list;
 pub mod keywords;
 pub mod library;
 pub mod lut_profiles;
@@ -41,6 +40,7 @@ mod preset_files;
 pub mod previews;
 mod query;
 mod quick;
+mod sync;
 mod xmp;
 
 use serde::Serialize;
@@ -64,6 +64,10 @@ pub struct CommandSpec {
     pub run: Run,
     /// Record in the journal (false for queries).
     pub journal: bool,
+    /// `enabled` judges the selection (menus, shortcuts); a call that names its photos (`ids` /
+    /// `id`, see [`names_photos`]) skips it, and the command validates those photos itself.
+    /// Off unless a command opts in (`CommandSpec { explicit_targets: true, ..cmd!(…) }`).
+    pub explicit_targets: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -117,10 +121,10 @@ pub fn has_clipboard(s: &Session) -> std::result::Result<(), String> {
 
 macro_rules! cmd {
     ($id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: true }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: true, explicit_targets: false }
     };
     (query $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: false }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: false, explicit_targets: false }
     };
 }
 pub(crate) use cmd;
@@ -138,7 +142,6 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(masks::specs());
         v.extend(organize::specs());
         v.extend(keywords::specs());
-        v.extend(keyword_list::specs());
         v.extend(manage::specs());
         v.extend(previews::specs());
         v.extend(lut_profiles::specs());
@@ -158,6 +161,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(browse::specs());
         v.extend(folders::specs());
         v.extend(missing::specs());
+        v.extend(sync::specs());
         v.extend(metadata::specs());
         v.extend(filters::specs());
         v.extend(denoise::specs());
@@ -177,6 +181,11 @@ pub fn find_command(id: &str) -> Option<&'static CommandSpec> {
 }
 
 // ---------- param helpers
+
+/// The call names its target photos (`ids` or `id`, not null) instead of using the selection.
+pub(crate) fn names_photos(p: &Value) -> bool {
+    ["ids", "id"].iter().any(|k| p.get(k).is_some_and(|v| !v.is_null()))
+}
 
 pub(crate) fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }

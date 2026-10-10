@@ -57,6 +57,8 @@ denoise = ["dep:dac-denoise", "dac-denoise/runtime", "dac-gpu/denoise"]
 rawnind-model = ["denoise", "dac-denoise/rawnind-model", "dac-denoise-core/rawnind-model"]
 
 [dev-dependencies]
+# Lossless synthetic HEIC files (the import test; decoded when the codecs' `heif` feature is on).
+dac-heif = { workspace = true, features = ["testdata"] }
 libc = { workspace = true }
 dac-tiff = { workspace = true }
 

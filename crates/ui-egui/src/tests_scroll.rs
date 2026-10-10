@@ -112,6 +112,44 @@ fn deleting_photos_does_not_jump_the_grid_to_the_top() {
 }
 
 #[test]
+fn permanently_deleting_photos_keeps_the_current_view_neighbour_in_sight() {
+    for view in ["photoGrid", "squareGrid", "detail"] {
+        for count in [1, 3] {
+            let mut h = demo(view);
+            for (command, params) in
+                [("library.selectAll", json!({})), ("photo.delete", json!({})), ("library.source", json!({"kind": "recentlyDeleted"}))]
+            {
+                let r = h.request("engine.execute", json!({"command": command, "params": params}), T);
+                assert_eq!(r["ok"], true, "{r}");
+            }
+            let ids = h.app.session.visible_cloned();
+            let at = ids.len() / 2;
+            let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": &ids[at..at + count]}}), T);
+            assert_eq!(r["ok"], true, "{r}");
+            idle(&mut h, 30);
+            let scroll = |h: &Headless| if view == "detail" { film_x(h) } else { grid_y(h) };
+            let before = scroll(&h);
+            assert!(before > 600.0, "selection is far from the beginning: {view}, {before}");
+            let r = h.request("ui.menu.invoke", json!({"id": "photo.deletePermanently"}), T);
+            assert_eq!(r["ok"], true, "{r}");
+            idle(&mut h, 60);
+            let next = ids[at + count];
+            assert_eq!(h.app.session.active(), Some(next), "{view}, count {count}");
+            assert!(scroll(&h) > 600.0, "deleting scrolled to the beginning: {view}, {before} → {}", scroll(&h));
+            let cell = widget(&h, &format!("{}:{}", if view == "detail" { "film" } else { "thumb" }, next.0));
+            if view == "detail" {
+                assert!(cell.left() >= 0.0 && cell.right() <= 1200.0, "the next survivor is in view: {cell:?}");
+            } else {
+                assert!(cell.intersects(h.app.canvas_rect.unwrap()), "the next survivor is in view");
+            }
+            let after = scroll(&h);
+            idle(&mut h, 60);
+            assert_eq!(scroll(&h), after, "idle frames preserve the new position");
+        }
+    }
+}
+
+#[test]
 fn filmstrip_wheel_scrolls_and_keeps_its_position() {
     let mut h = demo("detail");
     let first = h.app.session.visible_cloned()[0].0;

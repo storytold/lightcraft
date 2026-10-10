@@ -23,7 +23,7 @@ jobs:
     env:
       ACTIONLINT_VERSION: 1.7.12
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install tools
         run: |
           sudo apt-get update
@@ -62,6 +62,11 @@ jobs:
           if grep -oE '<Icon Id="[^"]*"' "$OUT/windows/app.wxs" | grep -vE '\.(ico|exe)"$'; then
             echo "::error::Icon Id must end in .ico or .exe"; exit 1
           fi
+          # The interactive installer asks where to install and ends on a completion page.
+          for want in '<UIRef Id="AppUI" />' 'Value="InstallDirDlg"' '<Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />' \
+              'Name="InstallFolder"' 'Value="LaunchApp"'; do
+            grep -qF "$want" "$OUT/windows/app.wxs" || { echo "::error::app.wxs lost: $want"; exit 1; }
+          done
           desktop-file-validate "$OUT/linux/$APP_ID.desktop"
           appstreamcli validate --no-net --explain "$OUT/linux/$APP_ID.metainfo.xml"
           python3 - <<'EOF'

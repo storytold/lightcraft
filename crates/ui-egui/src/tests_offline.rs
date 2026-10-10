@@ -139,6 +139,9 @@ fn import_reads_files_off_the_ui_thread_and_can_be_cancelled() {
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     let ui_thread = std::thread::current().id();
     h.step();
+    // The first frame installs fonts; finish the first layout before timing the import.
+    h.step();
+    assert!(h.app.fonts_ready, "the UI is initialized before import timing starts");
     let undo0 = h.app.session.undo.len();
     crate::import::start_paths(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
     // some batches arrive; meanwhile every frame is quick

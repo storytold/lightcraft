@@ -113,6 +113,7 @@ impl WireJob {
             depth: dac_engine::pipeline::OutputDepth::U8,
             proof: None,
             window: self.window.map(|[x, y, w, h]| dac_engine::pipeline::PixelWindow { x, y, w, h }),
+            display: None,
         }
     }
 

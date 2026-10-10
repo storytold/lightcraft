@@ -56,11 +56,13 @@ impl DevelopSettings {
         h
     }
 
-    /// True if nothing differs from a fresh default (ignoring white balance "as shot" values).
+    /// True if nothing differs from a fresh default (ignoring white balance "as shot" values, and
+    /// the rendering process: that is not an edit).
     pub fn is_unedited(&self) -> bool {
         let mut a = self.clone();
         let d = DevelopSettings::default();
         a.wb = d.wb;
+        a.process = d.process;
         a == d
     }
 
@@ -131,6 +133,9 @@ impl DevelopSettings {
 }
 
 #[cfg(test)]
+mod tests_process;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -153,6 +158,27 @@ mod tests {
         let back = DevelopSettings::from_json(&v).unwrap();
         assert_eq!(back, s);
         assert_ne!(back.hash64(), DevelopSettings::default().hash64());
+    }
+
+    #[test]
+    fn default_hdr_is_not_serialized_so_existing_hashes_stay() {
+        let s = DevelopSettings::default();
+        assert!(s.to_json().get("hdr").is_none(), "HDR off must not change the settings JSON or hash64");
+        let mut on = s.clone();
+        on.hdr.enabled = true;
+        assert!(on.to_json().get("hdr").is_some());
+        assert_ne!(on.hash64(), s.hash64());
+        assert_eq!(DevelopSettings::from_json(&on.to_json()).unwrap(), on);
+    }
+
+    #[test]
+    fn hdr_peak_is_finite_for_a_non_finite_headroom() {
+        let mut h = Hdr { enabled: true, max_ev: f64::NAN, ..Hdr::default() };
+        assert_eq!(h.peak(), (Hdr::DEFAULT_MAX_EV as f32).exp2());
+        h.max_ev = f64::INFINITY;
+        assert_eq!(h.peak(), (Hdr::DEFAULT_MAX_EV as f32).exp2());
+        h.max_ev = -3.0;
+        assert_eq!(h.peak(), 1.0);
     }
 
     #[test]

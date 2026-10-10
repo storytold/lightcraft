@@ -31,3 +31,4 @@ denoise = ["dep:dac-denoise", "dac-denoise/runtime"]
 
 [dev-dependencies]
 dac-scenes = { workspace = true }
+dac-raw = { workspace = true }

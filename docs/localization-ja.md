@@ -28,5 +28,9 @@
 英語の単複数語尾を日本語で省略する場合、対応する文字列引数は `{:.0}` で空にします。
 `<PREFIX>_LANGUAGE=ja <cli> snapshot ...` で日本語の画面を描画できます。
 
+スマートアルバムの「はい／いいえ」で答える条件（編集、切り抜きなど）の値は、文脈付きキー
+`"smart album value|Yes"`・`"smart album value|No"` で「あり／なし」と表示します。共有の
+`"Yes"`・`"No"`（はい／いいえ）は他の画面でそのまま使います（[`localization.md`](localization.md) の文脈の説明を参照）。
+
 表示・フォント・言語の切り替え・設定の保存・コマンドIDの保持は
 `cargo test -p dac-ui-egui i18n::tests` で検証します（グリフの検査は `CRAFT_FONTS_DIR` 指定時のみ実行）。

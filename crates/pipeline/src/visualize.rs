@@ -33,7 +33,13 @@ pub enum Overlay {
     /// The evaluated alpha of mask `id` (a [`dac_develop::Mask`] id), drawn as `view` in
     /// `color` at `opacity` (0..100; the colour views only).
     Mask { id: u16, view: MaskView, color: [u8; 3], opacity: u8 },
+    /// Visualize HDR (photos edited in HDR): the SDR image dimmed to grey, with every pixel the HDR
+    /// rendition puts above SDR white painted by how far above it is ([`HDR_BANDS`]).
+    HdrRange,
 }
+
+/// [`Overlay::HdrRange`] colours (sRGB) for 0–1, 1–2, 2–3 and ≥ 3 stops above SDR white.
+pub const HDR_BANDS: [[u8; 3]; 4] = [[255, 214, 92], [255, 150, 40], [235, 64, 52], [214, 60, 210]];
 
 /// How [`Overlay::Mask`] draws the mask.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -114,6 +120,7 @@ impl Overlay {
             Overlay::PointColorRange(i) => (1, i as f64),
             Overlay::Spots(t) => (2, t as f64),
             Overlay::Mask { id, view, color, opacity } => (3, pack_mask(id, view, color, opacity) as f64),
+            Overlay::HdrRange => (4, 0.0),
         }
     }
 
@@ -123,6 +130,7 @@ impl Overlay {
             1 => Overlay::PointColorRange(v as u8),
             2 => Overlay::Spots(v.clamp(0.0, 100.0) as u8),
             3 if v.is_finite() && v >= 0.0 => unpack_mask(v as u64),
+            4 => Overlay::HdrRange,
             _ => Overlay::None,
         }
     }
@@ -134,6 +142,7 @@ impl Overlay {
             Overlay::PointColorRange(i) => 0x1000 + i as u64,
             Overlay::Spots(t) => 0x2000 + t as u64,
             Overlay::Mask { id, view, color, opacity } => 3 << 60 | pack_mask(id, view, color, opacity),
+            Overlay::HdrRange => 0x4000,
         }
     }
 
@@ -162,7 +171,8 @@ pub fn adjust_settings(o: Overlay, s: &mut Cow<'_, DevelopSettings>) {
 /// an [`Overlay::Mask`] shows, at the image's size (see [`Overlay::mask`]).
 pub fn apply(img: &mut Rgba8, o: Overlay, plan: &Plan<'_>, mask: Option<&Plane>) {
     match o {
-        Overlay::None => {}
+        // drawn by the renderer from the HDR rendition ([`hdr_range`])
+        Overlay::None | Overlay::HdrRange => {}
         Overlay::PointColorRange(i) => {
             if let Some(p) = plan.settings.point_colors.get(i as usize) {
                 point_color_range(img, &PointK::new(p));
@@ -240,6 +250,34 @@ fn point_color_range(img: &mut Rgba8, k: &PointK) {
             let grey = 0.2126 * px[0] as f32 + 0.7152 * px[1] as f32 + 0.0722 * px[2] as f32;
             for c in 0..3 {
                 px[c] = (grey + (px[c] as f32 - grey) * a).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    });
+}
+
+/// Draw [`Overlay::HdrRange`] on `img` (the SDR render) from `hdr` (the HDR render of the same
+/// request, float linear with luminance weights `luma`): grey below SDR white, band colours above.
+pub fn hdr_range(img: &mut Rgba8, hdr: &crate::DeepImage, luma: [f32; 3]) {
+    let crate::DeepSamples::F32(v) = &hdr.samples else { return };
+    if (hdr.width, hdr.height) != (img.width, img.height) {
+        return;
+    }
+    let w = img.width;
+    for_rows(&mut img.data, w, |y, row| {
+        for (x, p) in row.iter_mut().enumerate() {
+            let i = (y * w + x) * 3;
+            let Some(c) = v.get(i..i + 3) else { continue };
+            let lum = luma[0] * c[0] + luma[1] * c[1] + luma[2] * c[2];
+            let grey = (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) * 0.55;
+            if lum > 1.0 {
+                let stops = lum.log2();
+                let band = HDR_BANDS[(stops as usize).min(HDR_BANDS.len() - 1)];
+                for k in 0..3 {
+                    p[k] = (grey * 0.25 + band[k] as f32 * 0.75).round().clamp(0.0, 255.0) as u8;
+                }
+            } else {
+                let g = grey.round().clamp(0.0, 255.0) as u8;
+                (p[0], p[1], p[2]) = (g, g, g);
             }
         }
     });
