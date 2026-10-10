@@ -41,6 +41,8 @@ mod tests_activity;
 #[cfg(test)]
 mod tests_album_picker;
 #[cfg(test)]
+mod tests_copy_paste_dialogs;
+#[cfg(test)]
 mod tests_crop_rotate;
 #[cfg(test)]
 mod tests_curve;
