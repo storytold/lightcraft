@@ -123,7 +123,11 @@ impl Request {
     }
     /// Selected photo ids (`hook == "command"`).
     pub fn selection(&self) -> Vec<String> {
-        self.0.get("selection").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default()
+        self.0
+            .get("selection")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+            .unwrap_or_default()
     }
     pub fn get(&self, key: &str) -> &Value {
         self.0.get(key).unwrap_or(&Value::Null)

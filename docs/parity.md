@@ -42,15 +42,16 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | S. Export (EXP) | 15 | 2 | 1 | 0 | 7/7 (100%) | 7/7 (100%) |
 | T. Share (SHARE) | 0 | 0 | 0 | 4 | — | — |
 | U. Map & location (MAP) | 0 | 1 | 1 | 0 | — | 0/1 (0%) |
-| V. Preferences (PREF) | 7 | 1 | 2 | 2 | 1/1 (100%) | 5/5 (100%) |
+| V. Preferences (PREF) | 6 | 2 | 2 | 2 | 1/1 (100%) | 4/5 (80%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 18 | 6 | 1 | 1 | 8/8 (100%) | 6/9 (67%) |
 | Y. Menus | 82 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
-| Lightroom Classic extras | 32 | 11 | 39 | 9 | — | 22/24 (92%) |
-| **Total** | 393 | 39 | 84 | 36 | 192/200 (96%) | 142/152 (93%) |
+| Lightroom Classic extras | 55 | 16 | 52 | 0 | — | 33/37 (89%) |
+| IMM. Immich integration | 4 | 0 | 6 | 0 | — | 4/6 (67%) |
+| **Total** | 423 | 50 | 96 | 27 | 192/200 (96%) | 157/173 (91%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.9%** of 516 in-scope rows — P0 98.0% of 200 · P1 95.7% of 152 · P2 42.9% of 163.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **78.7%** of 569 in-scope rows — P0 98.0% of 200 · P1 93.9% of 173 · P2 45.4% of 195.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -823,7 +824,7 @@ PLAN.md §2 carry the status of that survey ("unverified" where it said so) unti
 | LRC-SHELL-KEYMAP | Classic keymap layer (switchable) | P1 | ✅ | `cmd:app.keymapSet`, `cmd:app.keymapExport`, `cmd:app.keymapImport`, `cmd:app.setShortcut` | P1.3: Classic set (default) and the previous keys as the Alternative set; module-local keys over global ones; Settings ▸ Shortcuts edits keys (conflicting keys move), picks the set and imports/exports a keymap file |
 | LRC-SHELL-IDPLATE | Identity plate (styled text or graphic) and activity centre | P2 | ✅ | `cmd:view.identityPlate`, `cmd:dialog.identityPlateImage` | P1.2: the module bar shows the brand mark (drawn in code after `brand/logo.svg`) and the app name, or the user's text; the status line is its activity area. Graphical plate from an SVG (resvg, pure Rust, no text rendering inside SVGs) or PNG / JPEG file (`image`; `crates/ui-egui/src/plate.rs`), styled text plate (`size`, `color` #rrggbb, `bold`); the plate's context menu picks an image, goes back to text, toggles the mark and bold. Not here: a font-family choice (the UI font only) |
 | LRC-SHELL-PREFS | Classic preference groups (presets, external editing, file handling, display, network) | P2 | 🟡 |  | partial; see V. Preferences |
-| LRC-SHELL-PLUGINS | Plug-in manager and SDK (sandboxed) | P2 | ⬜ |  | PLAN.md §2.1; Phase 4 |
+| LRC-SHELL-PLUGINS | Plug-in manager and SDK (sandboxed) | P2 | 🟡 | `cmd:plugin.list`, `cmd:plugin.install`, `cmd:plugin.grant`, `cmd:plugin.enable`, `cmd:plugin.run`, `cmd:plugins.manager` | P4.3: wasmi sandbox (`crates/plugins`), capability grants (catalog, metadata write, network hosts, fs roots) revocable in File ▸ Plug-in Manager…, commands with dialogs, export/metadata/publish hooks, Rust guest SDK + example (`sdk/`), docs/plugins.md. Missing: export hooks not auto-called after export, plug-in commands not in main menus, publish crate adapter, WebDAV example |
 | LRC-CAT-SCALE | Catalog of 500k+ photos with an on-disk index | P1 | ✅ | `crates/catalog/src/db.rs`, `crates/catalog/src/query.rs`, `docs/catalog.md` | v4 store (redb): 500k photos open in 0.75 s, peak RSS under 1 GB, every filter incl. the unfiltered capture-date sort in under 25 ms (kept sort orders; the first view of a session builds one in ~130 ms); 1M photos open in 1.5 s, filter in under 50 ms, peak 1.9 GB; checkpoints write only what changed; the view pages (`Session::visible_page`); v3 → v4 migration shows progress in the app and the CLI; `cargo xtask bench-catalog`. Photo records stay in memory (compact, shared develop settings): no eviction to the store yet |
 | LRC-CAT-MULTI | Several catalogs: create, open, open recent, choose at startup | P1 | ✅ | `crates/catalog/src/library.rs`, `crates/ui-egui/src/catalog_ui.rs` | a catalog is a folder with a `<name>.<catalog_ext>` entry point; File ▸ New Catalog… / Open Catalog… / Open Recent Catalog ▸ (`catalog.new`, `catalog.open`, `catalog.openRecent`), a catalog chooser (`catalog.chooser`) shown at startup when asked for (`catalog.promptAtStartup`) or when Alt is held while the window opens; the startup default comes from `recent-catalogs.json`. The chooser switches from the last catalog rather than appearing before any is opened |
 | LRC-CAT-BACKUP | Catalog backup on exit with integrity test and optimise | P1 | ✅ | `cmd:catalog.backup`, `cmd:catalog.checkIntegrity`, `cmd:catalog.optimize`, `cmd:catalog.backupIfDue`, `crates/catalog/src/library.rs` | checkpoint, copy into `<backups>/<time>/`, the copy integrity-tested, oldest pruned; schedule never / every exit / daily / weekly / monthly checked when the desktop app exits (integrity test before, optimise after, per Catalog Settings); File ▸ Back Up / Test Integrity / Optimize Catalog. No exit-time dialog to skip a backup (it runs silently and logs) |
