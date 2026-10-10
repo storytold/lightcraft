@@ -195,7 +195,7 @@ fn real() {
         p.kind = probe.kind;
         p.meta = probe.meta;
         p.as_shot_wb = probe.as_shot_wb;
-        p.embedded_lens = probe.embedded_lens;
+        p.embedded_lens = probe.embedded_lens.map(Box::new);
         p.content_hash = probe.content_hash;
         p.preview_only = probe.preview_only;
         dac_engine::import::apply_import_defaults(&session, &mut p);
