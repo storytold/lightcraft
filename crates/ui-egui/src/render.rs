@@ -52,6 +52,13 @@ pub enum Slot {
     Import(u32),
     /// The second window's view of the active photo.
     Second,
+    /// A tile of a zoomed view (see [`crate::region::TileCache`]): its side of a Before/After view
+    /// and its place in the grid. Its result goes to [`Renderer::tiles`], not [`Renderer::textures`].
+    Tile {
+        before: bool,
+        col: u16,
+        row: u16,
+    },
 }
 
 pub struct Tex {
@@ -211,6 +218,10 @@ pub struct Renderer {
     /// A budget other than the memory budget's share (tests).
     #[cfg(test)]
     pub(crate) stage_budget_override: Option<usize>,
+    /// Tiles of zoomed views, by what they show (see [`crate::region`]).
+    pub tiles: crate::region::TileCache<Tex>,
+    /// Tile slot → (job key, what it shows, window rendered, tile within it) of its request.
+    tile_meta: HashMap<Slot, (u64, crate::region::TileKey, dac_engine::pipeline::PixelWindow, dac_engine::pipeline::PixelWindow)>,
     /// Since when nothing has been pending, and whether the GPU pool was trimmed since.
     #[cfg(not(target_arch = "wasm32"))]
     idle: Option<(std::time::Instant, bool)>,
@@ -258,6 +269,8 @@ impl Renderer {
             completed: 0,
             keep_pixels: false,
             stages: HashMap::new(),
+            tiles: Default::default(),
+            tile_meta: HashMap::new(),
             quick_tried: HashMap::new(),
             failed: HashMap::new(),
             catalog_rev: 0,
@@ -404,6 +417,67 @@ impl Renderer {
         self.prefetched.clear();
         self.pending.clear();
         self.queue.clear();
+        self.tiles.clear();
+        self.tile_meta.clear();
+    }
+
+    /// Ask for tile `key`: `job` renders `window` of the frame, of which `tile` is kept. Nothing
+    /// happens when the tile is held or already asked for.
+    pub fn request_tile(
+        &mut self,
+        key: crate::region::TileKey,
+        job: RenderJob,
+        window: dac_engine::pipeline::PixelWindow,
+        tile: dac_engine::pipeline::PixelWindow,
+        priority: u32,
+    ) {
+        if self.tiles.has_render(&key) {
+            return;
+        }
+        let slot = Slot::Tile { before: key.before, col: key.tile.col, row: key.tile.row };
+        self.tile_meta.insert(slot, (job.key, key, window, tile));
+        self.request(slot, job, priority);
+    }
+
+    /// Show `img` for tile `key` until its render arrives (a part of a 1:1 preview).
+    pub fn tile_placeholder(&mut self, ctx: &egui::Context, key: crate::region::TileKey, img: &dac_raster::Rgba8) {
+        if self.tiles.contains(&key) {
+            return;
+        }
+        let tex = self.tile_tex(ctx, key, img, 0.0);
+        self.tiles.insert(key, tex, img.width.saturating_mul(img.height).saturating_mul(4), true);
+    }
+
+    fn tile_tex(&self, ctx: &egui::Context, key: crate::region::TileKey, img: &dac_raster::Rgba8, ms: f64) -> Tex {
+        let color = std::sync::Arc::new(color_image(img));
+        let pixels = self.keep_pixels.then(|| color.clone());
+        let tex = ctx.load_texture(format!("tile {:?} {:?}", key.tile, key.before), color, egui::TextureOptions::LINEAR);
+        Tex { key: key.look, photo: key.photo, tex, size: [img.width, img.height], histogram: None, ms, quick: None, pixels }
+    }
+
+    /// Drop queued tile renders `keep` says no to (tiles scrolled away). Running ones finish and
+    /// are kept: their pixels are good.
+    pub fn cancel_tiles(&mut self, keep: impl Fn(Slot) -> bool) {
+        let drop_it = |s: &Slot| matches!(s, Slot::Tile { .. }) && !keep(*s);
+        let mut dropped = self.pool.reprioritize(|s, p| if drop_it(s) { None } else { Some(p) });
+        self.queue.retain(|q| {
+            if drop_it(&q.slot) {
+                dropped.push(q.slot);
+                false
+            } else {
+                true
+            }
+        });
+        for s in dropped {
+            self.pending.remove(&s);
+            self.request_ids.remove(&s);
+            self.tile_meta.remove(&s);
+        }
+    }
+
+    /// Tile renders queued or running.
+    pub fn tiles_pending(&self) -> usize {
+        self.pending.keys().filter(|s| matches!(s, Slot::Tile { .. })).count()
     }
 
     pub fn is_pending(&self, slot: Slot) -> bool {
@@ -600,6 +674,17 @@ impl Renderer {
             if matches!(slot, Slot::Prefetch(_)) {
                 continue;
             }
+            if let Slot::Tile { .. } = slot {
+                if let Some(&(key, tile_key, window, tile)) = self.tile_meta.get(&slot)
+                    && key == r.key
+                    && let Some(img) = crate::region::crop_tile(&rendered.image, window, tile)
+                {
+                    let tex = self.tile_tex(ctx, tile_key, &img, ms);
+                    self.tiles.insert(tile_key, tex, img.width.saturating_mul(img.height).saturating_mul(4), false);
+                    changed = true;
+                }
+                continue;
+            }
             if let Slot::ThumbQuick(id) = slot {
                 if self.textures.contains_key(&Slot::Thumb(id)) {
                     continue; // the real thumbnail won the race
@@ -710,12 +795,17 @@ impl Renderer {
         serde_json::json!({
             "stageCaches": {"count": self.stages.len(), "cpuBytes": cpu, "gpuBytes": gpu, "budgetBytes": self.stage_budget(), "trimmed": self.stages_trimmed, "sharedSourceBytes": dac_engine::gpu::shared_source_bytes()},
             "textures": {"count": self.textures.len(), "bytes": tex, "cpuCopyBytes": copies},
+            "tiles": {"count": self.tiles.len(), "bytes": self.tiles.bytes(), "budgetBytes": self.tiles.budget()},
         })
     }
 
     /// CPU copies of the current textures by id (see [`Self::keep_pixels`]).
     pub fn cpu_textures(&self) -> HashMap<egui::TextureId, crate::softpaint::CpuTexture> {
-        self.textures.values().filter_map(|t| Some((t.tex.id(), crate::softpaint::CpuTexture::linear(t.pixels.clone()?)))).collect()
+        self.textures
+            .values()
+            .chain(self.tiles.values())
+            .filter_map(|t| Some((t.tex.id(), crate::softpaint::CpuTexture::linear(t.pixels.clone()?))))
+            .collect()
     }
 
     /// Drop the import review thumbnails (a new review, or the dialog closed).
