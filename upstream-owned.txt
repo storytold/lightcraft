@@ -93,6 +93,7 @@ crates/ui-egui/src/tests_immich_ui.rs
 crates/ui-egui/src/tests_libtools.rs
 crates/ui-egui/src/tests_modules.rs
 crates/ui-egui/src/keymap_classic.rs
+crates/ui-egui/src/panels/classic_left.rs
 docs/upstream-candidates.md
 # rebranding and packaging templates (brand.toml)
 xtask/src/dist.rs

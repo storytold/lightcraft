@@ -5,10 +5,14 @@ use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 use egui::{Key, Modifiers};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::DacApp;
+
+/// The Classic keymap set and keymap files (fork-owned).
+#[path = "keymap_classic.rs"]
+mod classic;
+pub use classic::{CLASSIC, KeymapSet, active_set, choose_set, default_in, export_file, import_file, import_value, keymap_file, set_active};
 
 /// The user's changes to the keymap: command id → shortcut (`""` = no shortcut). Saved with the
 /// app settings (`ui.json`); commands not listed keep their declared shortcut.
@@ -22,113 +26,10 @@ pub const RESERVED: &[&str] = &["Cmd+,", "Cmd+Q"];
 pub struct Bindable {
     pub id: &'static str,
     pub label: &'static str,
-    /// The declared shortcut (the Alternative set). An engine command whose key a UI command wraps
-    /// (e.g. `W` opens the White Balance Selector rather than sampling without a point) has none:
-    /// the UI one owns it.
-    pub legacy: Option<&'static str>,
+    /// The declared shortcut. An engine command whose key a UI command wraps (e.g. `W` opens the
+    /// White Balance Selector rather than sampling without a point) has none: the UI one owns it.
+    pub default: Option<&'static str>,
 }
-
-impl Bindable {
-    /// The shortcut in the active keymap set: Classic's where [`CLASSIC`] names the command,
-    /// else the declared one.
-    pub fn default(&self) -> Option<&'static str> {
-        default_in(active_set(), self)
-    }
-}
-
-/// The keymap sets: Classic (the default) and the Alternative set (the keys declared on the
-/// commands, which the app used before the Classic shell).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum KeymapSet {
-    #[default]
-    Classic,
-    Alternative,
-}
-
-impl KeymapSet {
-    pub fn parse(s: &str) -> Option<KeymapSet> {
-        match s {
-            "classic" | "Classic" => Some(KeymapSet::Classic),
-            "alternative" | "Alternative" | "legacy" => Some(KeymapSet::Alternative),
-            _ => None,
-        }
-    }
-}
-
-thread_local! {
-    static ACTIVE: std::cell::Cell<KeymapSet> = const { std::cell::Cell::new(KeymapSet::Classic) };
-}
-
-/// The set the UI thread is using (follows [`crate::state::AppSettings::keymap_set`]).
-pub fn active_set() -> KeymapSet {
-    ACTIVE.with(|a| a.get())
-}
-
-pub fn set_active(set: KeymapSet) {
-    ACTIVE.with(|a| a.set(set));
-}
-
-pub fn default_in(set: KeymapSet, b: &Bindable) -> Option<&'static str> {
-    if set == KeymapSet::Classic
-        && let Some((_, sc)) = CLASSIC.iter().find(|(id, _)| *id == b.id)
-    {
-        return *sc;
-    }
-    b.legacy
-}
-
-/// The Classic keymap: where it differs from the declared shortcuts (`None` = no key in Classic).
-pub const CLASSIC: &[(&str, Option<&str>)] = &[
-    // modules and views
-    ("view.loupe", Some("E")),
-    ("panel.edit", None),
-    ("module.develop", Some("D")),
-    ("view.detail", None),
-    ("view.compare", Some("C")),
-    ("module.library", Some("Cmd+Alt+1")),
-    ("module.map", Some("Cmd+Alt+3")),
-    ("module.book", Some("Cmd+Alt+4")),
-    ("module.slideshow", Some("Cmd+Alt+5")),
-    ("module.print", Some("Cmd+Alt+6")),
-    ("module.web", Some("Cmd+Alt+7")),
-    ("module.previous", Some("Cmd+Alt+Up")),
-    // panels and screen
-    ("panel.sides", Some("Tab")),
-    ("panel.all", Some("Shift+Tab")),
-    ("panel.top", Some("F5")),
-    ("panel.bottom", Some("F6")),
-    ("panel.left", Some("F7")),
-    ("panel.right", Some("F8")),
-    ("panel.toolbar", Some("T")),
-    ("view.lightsOut", Some("L")),
-    ("view.screenMode", Some("Shift+F")),
-    ("view.screenModeNormal", Some("Cmd+Alt+F")),
-    ("view.filterBar", None),
-    // develop tools
-    ("panel.crop", Some("R")),
-    ("panel.remove", Some("Q")),
-    ("panel.masking", Some("Shift+W")),
-    ("tool.brush", Some("K")),
-    ("tool.linear", Some("M")),
-    ("tool.radial", Some("Shift+M")),
-    ("tool.guidedUpright", Some("Shift+T")),
-    ("panel.keywords", Some("Cmd+K")),
-    // flags, collections
-    ("photo.flagToggle", Some("`")),
-    ("album.toggleTarget", Some("B")),
-    ("library.showQuickCollection", Some("Cmd+B")),
-    ("album.clearQuick", Some("Cmd+Alt+B")),
-    ("album.saveQuick", Some("Cmd+Shift+B")),
-    ("photo.copyMetadata", Some("Cmd+Alt+Shift+C")),
-    ("photo.pasteMetadata", Some("Cmd+Alt+Shift+V")),
-    // secondary window
-    ("second.grid", Some("Shift+G")),
-    ("second.loupe", Some("Shift+E")),
-    ("second.compare", Some("Shift+C")),
-    ("second.survey", Some("Shift+N")),
-    ("second.slideshow", Some("Cmd+Shift+Enter")),
-];
 
 /// Every command that can have a shortcut: UI commands, then engine commands (one entry per id).
 pub fn bindable() -> &'static [Bindable] {
@@ -137,16 +38,16 @@ pub fn bindable() -> &'static [Bindable] {
         let mut v: Vec<Bindable> = Vec::new();
         for (id, label, sc, _) in crate::menus::ui_commands() {
             if !v.iter().any(|b| b.id == *id) {
-                v.push(Bindable { id, label, legacy: *sc });
+                v.push(Bindable { id, label, default: *sc });
             }
         }
-        let ui_keys: Vec<(Modifiers, Key)> = v.iter().filter_map(|b| b.legacy.and_then(parse)).collect();
+        let ui_keys: Vec<(Modifiers, Key)> = v.iter().filter_map(|b| b.default.and_then(parse)).collect();
         for c in dac_engine::command_specs() {
             if v.iter().any(|b| b.id == c.id) {
                 continue;
             }
             let default = c.shortcut.filter(|sc| parse(sc).is_some_and(|k| !ui_keys.contains(&k)));
-            v.push(Bindable { id: c.id, label: c.label, legacy: default });
+            v.push(Bindable { id: c.id, label: c.label, default });
         }
         v
     })
@@ -229,69 +130,6 @@ fn set(keymap: &mut Keymap, id: &str, sc: Option<&str>) {
 pub fn reset(keymap: &mut Keymap, id: &str) -> Result<Vec<&'static str>, String> {
     let b = find_bindable(id).ok_or_else(|| format!("unknown command: {id}"))?;
     assign(keymap, id, b.default())
-}
-
-/// The largest keymap file read (a keymap is a few kilobytes).
-const MAX_KEYMAP_FILE: u64 = 1 << 20;
-
-/// `app.keymapSet {set: classic|alternative}` (no set: report the active one).
-pub fn choose_set(app: &mut DacApp, p: &Value) -> Result<Value, String> {
-    if let Some(name) = p.get("set").and_then(Value::as_str) {
-        let set = KeymapSet::parse(name).ok_or_else(|| format!("unknown keymap set: {name} (classic|alternative)"))?;
-        app.ui.settings.keymap_set = set;
-        set_active(set);
-    }
-    Ok(json!({"set": app.ui.settings.keymap_set}))
-}
-
-/// The keymap file: the set and the user's changes over it.
-pub fn keymap_file(app: &DacApp) -> Value {
-    json!({"format": "keymap", "version": 1, "set": app.ui.settings.keymap_set, "keymap": app.ui.settings.keymap})
-}
-
-/// `app.keymapExport {path}`.
-pub fn export_file(app: &mut DacApp, path: &str) -> Result<Value, String> {
-    let bytes = serde_json::to_vec_pretty(&keymap_file(app)).map_err(|e| e.to_string())?;
-    std::fs::write(path, bytes).map_err(|e| format!("can't write {path}: {e}"))?;
-    Ok(json!({"path": path, "count": app.ui.settings.keymap.len()}))
-}
-
-/// Apply a keymap file's contents: the set, then each entry through [`assign`] (so conflicts
-/// move keys as in the editor). Bad entries are reported, the rest applied.
-pub fn import_value(app: &mut DacApp, v: &Value) -> Result<Value, String> {
-    let o = v.as_object().ok_or("a keymap file is a JSON object")?;
-    if let Some(name) = o.get("set").and_then(Value::as_str) {
-        let set = KeymapSet::parse(name).ok_or_else(|| format!("unknown keymap set: {name}"))?;
-        app.ui.settings.keymap_set = set;
-        set_active(set);
-    }
-    let entries = o.get("keymap").and_then(Value::as_object).ok_or("missing `keymap` object")?;
-    let mut keymap = Keymap::new();
-    let mut skipped = Vec::new();
-    for (id, sc) in entries.iter().take(10_000) {
-        let r = match sc {
-            Value::String(s) if s.is_empty() => assign(&mut keymap, id, None),
-            Value::String(s) => assign(&mut keymap, id, Some(s)),
-            Value::Null => assign(&mut keymap, id, None),
-            _ => Err("not a string".into()),
-        };
-        if let Err(e) = r {
-            skipped.push(format!("{id}: {e}"));
-        }
-    }
-    app.ui.settings.keymap = keymap;
-    Ok(json!({"set": app.ui.settings.keymap_set, "count": app.ui.settings.keymap.len(), "skipped": skipped}))
-}
-
-/// `app.keymapImport {path}`.
-pub fn import_file(app: &mut DacApp, path: &str) -> Result<Value, String> {
-    let len = std::fs::metadata(path).map_err(|e| format!("can't read {path}: {e}"))?.len();
-    if len > MAX_KEYMAP_FILE {
-        return Err(format!("{path} is too large for a keymap ({len} bytes)"));
-    }
-    let bytes = std::fs::read(path).map_err(|e| format!("can't read {path}: {e}"))?;
-    let v: Value = serde_json::from_slice(&bytes).map_err(|e| format!("{path} is not a keymap file: {e}"))?;
-    import_value(app, &v)
 }
 
 /// `app.setShortcut {id, shortcut?, reset?}`: `shortcut` null or `""` removes it.
@@ -484,38 +322,14 @@ pub fn handle(app: &mut DacApp, ctx: &egui::Context) {
     let grid = library_grid(app);
     // keys the user gave to a command: the fixed bindings below (aliases, ratings) yield to them;
     // so do keys the active set gives a command (Classic's ⇧E is the secondary loupe, not export)
-    let mut taken: Vec<(Modifiers, Key)> = keymap.values().filter_map(|s| parse(s)).collect();
-    if active_set() == KeymapSet::Classic {
-        taken.extend(CLASSIC.iter().filter_map(|(_, sc)| sc.and_then(parse)));
-    }
+    let taken: Vec<(Modifiers, Key)> = keymap.values().filter_map(|s| parse(s)).chain(classic::taken()).collect();
     // an open popup (a menu, a date picker's calendar) closes on Esc itself: Esc's command (Back,
     // which also closes dialogs) waits until nothing is open
     let popup_open = egui::Popup::is_any_open(ctx);
-    // the module's own keys (Classic set) come first and take their key from the global keymap
-    let module_keys: &[crate::module::ModuleKey] = if active_set() == KeymapSet::Classic { crate::module::get(app.ui.module).keymap() } else { &[] };
-    let mut consumed: Vec<(Modifiers, Key)> = Vec::new();
-    // Tab presses held back from egui's focus navigation
-    for m in std::mem::take(&mut app.deferred_tabs) {
-        for b in bindable() {
-            if let Some(sc) = binding(keymap, b.id, b.default())
-                && let Some((bm, Key::Tab)) = parse(sc)
-                && bm.shift == m.shift
-                && bm.alt == m.alt
-                && bm.command == m.command
-            {
-                fire.push(b.id.to_string());
-            }
-        }
-    }
+    let (module_keys, mut consumed) = (classic::module_keys(app.ui.module), Vec::new());
+    classic::deferred_tabs(&mut app.deferred_tabs, keymap, &mut fire);
     ctx.input(|i| {
-        for (sc, id, params) in module_keys {
-            if let Some((m, k)) = parse(sc)
-                && matches(i, m, k)
-            {
-                consumed.push((m, k));
-                aliased.push((id, serde_json::from_str(params).unwrap_or_default()));
-            }
-        }
+        classic::module_key_presses(i, module_keys, &mut consumed, &mut aliased);
         for b in bindable() {
             if let Some(sc) = binding(keymap, b.id, b.default())
                 && let Some((m, k)) = parse(sc)
@@ -591,14 +405,7 @@ pub fn handle(app: &mut DacApp, ctx: &egui::Context) {
             app.toast(ctx, e);
         }
     }
-    // Tab / ⇧Tab toggle panels: they must not also move keyboard focus into a field
-    if fire.iter().any(|f| f == "panel.sides" || f == "panel.all") {
-        ctx.memory_mut(|m| {
-            if let Some(id) = m.focused() {
-                m.surrender_focus(id);
-            }
-        });
-    }
+    classic::keep_focus_on_panel_toggle(ctx, &fire);
     for f in fire {
         if let Some(rest) = f.strip_prefix("rate:") {
             let (n, adv) = rest.split_once(':').unwrap_or(("0", "0"));
