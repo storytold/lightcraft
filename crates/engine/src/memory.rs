@@ -18,7 +18,9 @@ use serde::Serialize;
 /// - a quarter for the working memory of decodes in flight ([`work_gate`]);
 /// - an eighth for the GPU renderer's pool of recycled buffers (trimmed when the app is idle).
 ///
-/// The rest is headroom for what isn't cached (renders in progress, textures, the UI). Default:
+/// The rest is headroom for what isn't cached (renders in progress, textures, the UI). An export
+/// batch may, in addition, hold up to twice the budget in photos rendering side by side
+/// ([`export_gate`]): transient memory, given back when the batch ends. Default:
 /// a quarter of the machine's RAM, at most 1.5 GiB (`{ENV_PREFIX}_MEMORY_MB` overrides it).
 pub fn default_budget() -> usize {
     if let Some(mb) = dac_brand::env("MEMORY_MB").and_then(|v| v.trim().parse::<usize>().ok()).filter(|m| *m >= 64) {
@@ -82,6 +84,9 @@ pub fn set_budget(bytes: usize) -> usize {
 fn apply(b: usize) {
     if let Some(g) = GATE.get() {
         g.set_limit(b / 4);
+    }
+    if let Some(g) = EXPORT_GATE.get() {
+        g.set_limit(export_share(b));
     }
     dac_gpu::set_pool_limit((b / 8) as u64);
 }
@@ -173,6 +178,19 @@ pub fn work_gate() -> &'static WorkGate {
 }
 
 static GATE: OnceLock<WorkGate> = OnceLock::new();
+
+/// The process-wide gate for the photos of an export batch rendering side by side
+/// ([`crate::export::run_batch`]; limit: twice the budget). Separate from [`work_gate`], which the
+/// decodes inside each export take: one gate held across the other's acquire could deadlock.
+pub fn export_gate() -> &'static WorkGate {
+    EXPORT_GATE.get_or_init(|| WorkGate::new(export_share(budget())))
+}
+
+fn export_share(budget: usize) -> usize {
+    budget.saturating_mul(2)
+}
+
+static EXPORT_GATE: OnceLock<WorkGate> = OnceLock::new();
 
 /// Entries and bytes held by one cache.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]

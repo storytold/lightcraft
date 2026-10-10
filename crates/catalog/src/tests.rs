@@ -457,6 +457,178 @@ fn random_sort_has_no_date_headers() {
     assert!(c.date_runs(&ids, SortKey::Random, GroupBy::Day).is_empty());
 }
 
+/// Reload stores the lens data a file carries; the inverse (through the journal's JSON) takes it back.
+#[test]
+fn set_embedded_lens_is_undoable_and_journaled() {
+    let mut c = Catalog::default();
+    let a = c.alloc_photo_id();
+    c.apply(Op::AddPhoto {
+        photo: Box::new(Photo::new(a, Source::File { path: "/x.rw2".into() }, "x.rw2", "RW2", 4000, 3000, "2026-10-06T00:00:00")),
+    })
+    .unwrap();
+    let lens = dac_develop::EmbeddedLens { warp: Some(Default::default()), vignette: None };
+    let op = Op::SetEmbeddedLens { id: a, lens: Some(Box::new(lens)) };
+    let op: Op = serde_json::from_str(&serde_json::to_string(&op).unwrap()).unwrap();
+    let inv = c.apply(op).unwrap();
+    assert_eq!(c.photo(a).unwrap().embedded_lens, Some(Box::new(lens)));
+    let inv: Op = serde_json::from_str(&serde_json::to_string(&inv).unwrap()).unwrap();
+    c.apply(inv).unwrap();
+    assert_eq!(c.photo(a).unwrap().embedded_lens, None);
+}
+
+/// A saved smart album whose rules no longer check (the album a rule tests was deleted) is found,
+/// with its problems; a good one has none; an old album operator is read as it was meant.
+#[test]
+fn smart_album_problems_flag_stale_rules() {
+    let mut c = Catalog::new();
+    c.apply(Op::AddAlbum { album: Album::new(AlbumId(1), "Trip") }).unwrap();
+    let smart = |id: u64, rules: serde_json::Value| {
+        let f: Filter = serde_json::from_value(serde_json::json!({"ruleSet": {"rules": rules}})).unwrap();
+        Album { smart: Some(Box::new(f)), ..Album::new(AlbumId(id), "Smart") }
+    };
+    c.apply(Op::AddAlbum { album: smart(2, serde_json::json!([{"field": "album", "op": "is", "value": 1}])) }).unwrap();
+    c.apply(Op::AddAlbum { album: smart(3, serde_json::json!([{"field": "album", "op": "gte", "value": 1}])) }).unwrap();
+    assert!(c.smart_album_problems(AlbumId(2)).is_empty());
+    assert!(c.smart_album_problems(AlbumId(3)).is_empty(), "an old operator is upgraded, not a problem");
+    assert!(c.smart_album_problems(AlbumId(1)).is_empty(), "a plain album has no rules");
+    c.apply(Op::RemoveAlbum { id: AlbumId(1) }).unwrap();
+    let p = c.smart_album_problems(AlbumId(2));
+    assert_eq!(p.iter().map(ToString::to_string).collect::<Vec<_>>(), vec!["rule 1: no album 1".to_string()]);
+}
+
+/// A smart album can test another smart album: "Keywords contain travel" and "Album isn't Excluded
+/// Photos" (red or rejected) leaves out the excluded photos, and follows that album's rules as they
+/// change.
+#[test]
+fn a_smart_album_can_exclude_another() {
+    let mut c = Catalog::new();
+    let smart = |id: u64, name: &str, rules: serde_json::Value| {
+        let f: Filter = serde_json::from_value(serde_json::json!({"ruleSet": rules})).unwrap();
+        Album { smart: Some(Box::new(f)), ..Album::new(AlbumId(id), name) }
+    };
+    c.apply(Op::AddAlbum {
+        album: smart(
+            1,
+            "Excluded Photos",
+            serde_json::json!({"match": "any", "rules": [
+            {"field": "label", "op": "is", "value": "red"}, {"field": "flag", "op": "is", "value": "reject"}]}),
+        ),
+    })
+    .unwrap();
+    let travel = |c: &mut Catalog, name: &str, label: Option<ColorLabel>, flag: Flag| {
+        let id = c.alloc_photo_id();
+        let mut p = Photo::new(id, Source::Demo { scene: 1 }, name, "JPEG", 6000, 4000, "2026-09-30T10:00:00");
+        p.meta.keywords = vec!["travel".into()];
+        p.label = label;
+        p.flag = flag;
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        id
+    };
+    let keep = travel(&mut c, "keep.jpg", None, Flag::Pick);
+    let red = travel(&mut c, "red.jpg", Some(ColorLabel::Red), Flag::None);
+    let rejected = travel(&mut c, "rejected.jpg", None, Flag::Reject);
+    let rules: RuleSet = serde_json::from_value(serde_json::json!({"rules": [
+        {"field": "keywords", "op": "contains", "value": "travel"}, {"field": "album", "op": "isNot", "value": 1}]}))
+    .unwrap();
+    assert!(rules.check(&c).is_empty(), "a smart album can be tested: {:?}", rules.check(&c));
+    let matched = |c: &Catalog| c.photos().filter(|p| rules.matches(p, c)).map(|p| p.id).collect::<Vec<_>>();
+    assert_eq!(matched(&c), vec![keep]);
+    // "is" works the other way round
+    let inside: RuleSet = serde_json::from_value(serde_json::json!({"rules": [{"field": "album", "op": "is", "value": 1}]})).unwrap();
+    assert_eq!(c.photos().filter(|p| inside.matches(p, &c)).count(), 2);
+    let _ = (red, rejected);
+}
+
+/// An album can't include itself, directly or through other smart albums: the check refuses the
+/// loop for the album being edited, and a loop saved anyway (an older version, a hand-edited file)
+/// neither recurses forever nor crashes: inside it, the album being evaluated counts as holding no
+/// photos, and every album in it is reported.
+#[test]
+fn smart_album_loops_are_refused_and_survived() {
+    let mut c = Catalog::new();
+    let refers = |to: u64| -> Filter {
+        serde_json::from_value(serde_json::json!({"ruleSet": {"rules": [{"field": "album", "op": "isNot", "value": to}]}})).unwrap()
+    };
+    let smart = |id: u64, f: Filter| Album { smart: Some(Box::new(f)), ..Album::new(AlbumId(id), "S") };
+    // A → B → C
+    c.apply(Op::AddAlbum { album: smart(3, Filter::default()) }).unwrap();
+    c.apply(Op::AddAlbum { album: smart(2, refers(3)) }).unwrap();
+    c.apply(Op::AddAlbum { album: smart(1, refers(2)) }).unwrap();
+    let rules = |to: u64| refers(to).rule_set.unwrap();
+    assert!(rules(1).check_for(&c, Some(AlbumId(3))).iter().any(|p| p.issue == crate::rules::Issue::AlbumLoop), "C → A closes A → B → C → A");
+    assert!(rules(3).check_for(&c, Some(AlbumId(3))).iter().any(|p| p.issue == crate::rules::Issue::AlbumLoop), "an album testing itself");
+    assert!(rules(1).check_for(&c, None).is_empty(), "a new album can't be in a loop yet");
+    assert!(rules(3).check_for(&c, Some(AlbumId(1))).is_empty(), "A testing C again is no loop");
+    assert!(!c.album_reaches(AlbumId(3), AlbumId(1)) && c.album_reaches(AlbumId(1), AlbumId(3)));
+    // a loop saved anyway: C → A
+    c.apply(Op::SetAlbumRules { id: AlbumId(3), rules: Box::new(refers(1)) }).unwrap();
+    let id = photo(&mut c, "a.jpg", "2026-09-01T10:00:00");
+    let p = c.photo(id).unwrap().clone();
+    for a in [1, 2, 3] {
+        let _ = c.album_contains(AlbumId(a), &p); // returns, no stack overflow
+        assert!(c.smart_album_problems(AlbumId(a)).iter().any(|p| p.issue == crate::rules::Issue::AlbumLoop), "album {a} is reported");
+    }
+}
+
+/// Summaries name the albums Album rules test ("album isn't “Excluded Photos”"), not their ids;
+/// one that is gone shows as its number.
+#[test]
+fn summaries_name_albums() {
+    let mut c = Catalog::new();
+    c.apply(Op::AddAlbum { album: Album::new(AlbumId(4), "Excluded Photos") }).unwrap();
+    let rules: RuleSet = serde_json::from_value(serde_json::json!({"rules": [
+        {"field": "keywords", "op": "contains", "value": "travel"},
+        {"group": {"match": "any", "rules": [{"field": "album", "op": "isNot", "value": 4}, {"field": "album", "op": "is", "value": 9}]}}]}))
+    .unwrap();
+    assert_eq!(rules.describe_with(&c), "keywords contains travel and (album isn't “Excluded Photos” or album is #9)");
+    let f = Filter { rule_set: Some(rules), ..Default::default() };
+    assert!(f.describe_with(&c).contains("album isn't “Excluded Photos”"));
+}
+
+/// A chain of smart albums each testing the one before twice ("all of: album is X(k-1), album is
+/// X(k-1)") costs a pass per album, not 2^depth: each album's answer for a photo is worked out once
+/// per question. 25 albums deep stays instant.
+#[test]
+fn chains_of_smart_albums_stay_linear() {
+    let mut c = Catalog::new();
+    let smart = |id: u64, f: Filter| Album { smart: Some(Box::new(f)), ..Album::new(AlbumId(id), "X") };
+    c.apply(Op::AddAlbum { album: smart(1, Filter::default()) }).unwrap();
+    for k in 2..=26u64 {
+        let f: Filter = serde_json::from_value(serde_json::json!({"ruleSet": {"rules": [
+            {"field": "album", "op": "is", "value": k - 1}, {"field": "album", "op": "is", "value": k - 1}]}}))
+        .unwrap();
+        c.apply(Op::AddAlbum { album: smart(k, f) }).unwrap();
+    }
+    for i in 0..20 {
+        photo(&mut c, &format!("p{i}.jpg"), "2026-09-01T10:00:00");
+    }
+    let start = std::time::Instant::now();
+    assert_eq!(c.album_count(AlbumId(26)), 20);
+    assert!(start.elapsed() < std::time::Duration::from_secs(2), "took {:?}", start.elapsed());
+}
+
+/// A smart album's own album filter (not only its rules) counts in loops: A filtered to "in A" is
+/// reported, and so is A filtered to B while B's rules test A.
+#[test]
+fn an_album_filter_counts_in_loops() {
+    let mut c = Catalog::new();
+    let smart = |id: u64, f: Filter| Album { smart: Some(Box::new(f)), ..Album::new(AlbumId(id), "S") };
+    c.apply(Op::AddAlbum { album: smart(1, Filter { album: Some(AlbumId(1)), ..Default::default() }) }).unwrap();
+    let loops = |c: &Catalog, id: u64| c.smart_album_problems(AlbumId(id)).iter().any(|p| p.issue == crate::rules::Issue::AlbumLoop);
+    assert!(loops(&c, 1), "filtered to itself");
+    let tests_3: Filter = serde_json::from_value(serde_json::json!({"ruleSet": {"rules": [{"field": "album", "op": "is", "value": 3}]}})).unwrap();
+    c.apply(Op::AddAlbum { album: smart(2, Filter { album: Some(AlbumId(3)), ..Default::default() }) }).unwrap();
+    c.apply(Op::AddAlbum {
+        album: smart(3, serde_json::from_value(serde_json::json!({"ruleSet": {"rules": [{"field": "album", "op": "is", "value": 2}]}})).unwrap()),
+    })
+    .unwrap();
+    assert!(c.album_reaches(AlbumId(3), AlbumId(2)) && c.album_reaches(AlbumId(2), AlbumId(3)));
+    assert!(loops(&c, 2) && loops(&c, 3));
+    let _ = tests_3;
+    let shown: Vec<String> = c.smart_album_problems(AlbumId(1)).iter().map(ToString::to_string).collect();
+    assert!(shown.iter().all(|s| !s.starts_with("rule :")), "{shown:?}");
+}
+
 #[test]
 fn undated_photos_group_under_unknown_date_and_sort_together() {
     let mut c = Catalog::new();

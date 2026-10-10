@@ -84,8 +84,16 @@ impl eframe::App for App {
         if let Err(e) = self.0.session.close_library() {
             log::error!("saving the library failed: {e}");
         }
+        // last, with everything saved: no render may be inside the GPU driver when the process ends
+        if !self.0.shutdown(EXIT_WAIT) {
+            log::warn!("quit: background work was still running after {EXIT_WAIT:?}");
+        }
     }
 }
+
+/// How long quitting waits for renders that are running (issue #620). A GPU render takes well under
+/// a second; anything slower gives way to quitting.
+const EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// The window's renderer (egui-wgpu): eframe's defaults, with the app's backend choice — DX12
 /// alone on Windows unless `<PREFIX>_GPU_BACKEND` / `WGPU_BACKEND` say otherwise (issue #136:
@@ -138,6 +146,23 @@ fn gpu_crash_notice(what: &str) -> String {
          To try the GPU again, turn on Settings ▸ Performance ▸ Use the GPU for rendering; to try another graphics backend, start {app} with \
          {var}=dx12, vulkan or off (see docs/gpu-pipeline.md → Troubleshooting)."
     )
+}
+
+/// Where the system keeps monitor profiles, for the Choose Profile dialog to start in: the user's
+/// own profiles first (Linux: colord / DisplayCAL; macOS: ColorSync), then the system's.
+fn display_profile_dir() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).filter(|h| !h.is_empty()).map(std::path::PathBuf::from);
+    let user = |rel: &str| home.as_ref().map(|h| h.join(rel));
+    let candidates: Vec<Option<std::path::PathBuf>> = if cfg!(target_os = "macos") {
+        vec![user("Library/ColorSync/Profiles"), Some("/Library/ColorSync/Profiles".into())]
+    } else if cfg!(windows) {
+        let root = std::env::var_os("SystemRoot").map(std::path::PathBuf::from).unwrap_or_else(|| "C:\\Windows".into());
+        vec![Some(root.join("System32").join("spool").join("drivers").join("color"))]
+    } else {
+        let data = std::env::var_os("XDG_DATA_HOME").filter(|d| !d.is_empty()).map(std::path::PathBuf::from).or_else(|| user(".local/share"));
+        vec![data.map(|d| d.join("icc")), user(".color/icc"), Some("/usr/share/color/icc".into())]
+    };
+    candidates.into_iter().flatten().find(|d| d.is_dir())
 }
 
 fn config_dir() -> Option<std::path::PathBuf> {
@@ -471,10 +496,35 @@ fn services(ctx: egui::Context, log_file: Option<&std::path::Path>) -> Services 
                 .map(|p| vec![p.to_string_lossy().to_string()])
                 .unwrap_or_default()
         })),
+        pick_display_profile: Some(Box::new(|| {
+            let mut d = rfd::FileDialog::new()
+                .set_title(dac_ui_egui::i18n::tr("Choose Monitor Profile"))
+                .add_filter_nocase(dac_ui_egui::i18n::tr("ICC Profiles"), &["icc", "icm"]);
+            if let Some(dir) = display_profile_dir() {
+                d = d.set_directory(dir);
+            }
+            d.pick_file().map(|p| vec![p.to_string_lossy().to_string()]).unwrap_or_default()
+        })),
         save_preset_file: Some(Box::new(|name: &str| {
             rfd::FileDialog::new()
                 .set_title(dac_ui_egui::i18n::tr("Export Presets"))
                 .add_filter_nocase(dac_ui_egui::i18n::tr("{app} Preset"), &[dac_brand::PRESET_EXT])
+                .set_file_name(name)
+                .save_file()
+                .map(|p| p.to_string_lossy().to_string())
+        })),
+        pick_keyword_list: Some(Box::new(|| {
+            rfd::FileDialog::new()
+                .set_title(dac_ui_egui::i18n::tr("Import Keywords"))
+                .add_filter_nocase(dac_ui_egui::i18n::tr("Keyword Lists"), &["txt", "utf8"])
+                .pick_file()
+                .map(|p| vec![p.to_string_lossy().to_string()])
+                .unwrap_or_default()
+        })),
+        save_keyword_list: Some(Box::new(|name: &str| {
+            rfd::FileDialog::new()
+                .set_title(dac_ui_egui::i18n::tr("Export Keywords"))
+                .add_filter_nocase(dac_ui_egui::i18n::tr("Keyword Lists"), &["txt"])
                 .set_file_name(name)
                 .save_file()
                 .map(|p| p.to_string_lossy().to_string())

@@ -242,7 +242,7 @@ pub fn right_column(app: &mut DacApp, ui: &mut egui::Ui) {
 fn body(app: &mut DacApp, ui: &mut egui::Ui, p: PanelId) {
     match p {
         PanelId::QuickDevelop => super::quick_develop::show(app, ui),
-        PanelId::Keywording => super::keywording::show(app, ui),
+        PanelId::Keywording => super::right::keywording(app, ui),
         PanelId::KeywordList => super::keyword_list::show(app, ui),
         PanelId::Metadata => super::right::metadata_panel(app, ui),
         _ => {}

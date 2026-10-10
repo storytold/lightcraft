@@ -23,6 +23,12 @@ encode_png(&EncodeImage::new(w, h, 4, Samples::U16(&px)), &meta)?;
 encode_tiff(&EncodeImage::new(w, h, 3, Samples::F32(&px)), TiffCompression::Deflate, &meta)?;
 encode_webp_lossless(&img, &meta)?;
 encode_avif(&img, 70, 6, &meta)?;                        // native + feature `avif`
+
+// HDR gain map JPEG (ISO 21496-1): SDR + HDR renditions → base + gain map, and back
+let (map, gm) = gainmap::compute(&sdr_linear, &hdr_linear, w, h, luma, &GainMapOptions::default())?;
+gainmap::encode_jpeg(&EncodeImage::new(w, h, 3, Samples::U8(&base8)), &map, &gm, 90, ChromaSubsampling::S444, &meta)?;
+let found = gainmap::read_jpeg(&bytes);                  // ours, cameras', Lightroom's
+gainmap::apply(&mut base_linear, w, h, &found.gain, &found.meta, 1.0)?;
 ```
 
 Thumbnail fallback decoding limits the source to 64 million pixels by default.
@@ -46,8 +52,9 @@ CRW, MRW, X3F) are detected so the engine can route them to `dac-raw`; `decode` 
 | GIF / BMP | yes (first GIF frame) | — | via `image` |
 | PSD / PSB | merged composite: 8/16/32-bit gray, RGB, CMYK, indexed, duotone (as gray); raw/RLE | — | ICC (1039), EXIF (1058), XMP (1060); ZIP-compressed composite, Lab and 1-bit unsupported |
 | JPEG XL | yes (jxl-oxide, feature `jxl`, default on) | — | enum colour → rendered straight to linear Rec.2020; ICC → our ICC path; orientation applied by the decoder (reported as 1) |
-| AVIF | **no** | yes (ravif/rav1e, native only, feature `avif`) | 8-bit sRGB, EXIF; no ICC in the muxer |
-| HEIC/HEIF | **no** (sniff only) | — | see gaps |
+| AVIF | **no** | yes (ravif/rav1e, native only, feature `avif`) | 8/10-bit sRGB, EXIF; no ICC in the muxer. HDR: `encode_avif_pq` writes 10-bit BT.2020 PQ (SDR white at 203 cd/m², CICP `nclx` + `clli`) |
+| HEIC/HEIF | yes with feature `heif` (dac-heif: heic-rs + libheif-matching colour; 4:2:0/mono, 8–10-bit, grids, irot/imir/clap, ICC/nclx/VUI, EXIF/XMP, thumbnail item) | — | 4:2:2/4:4:4 (Canon/Sony HIF) unsupported |
+| Gain map JPEG (HDR) | gain map found and decoded (`gainmap::read_jpeg`): ISO 21496-1 metadata, else Adobe `hdrgm` XMP | yes (`gainmap::encode_jpeg`) | CIPA DC-007 MPF index (gain map typed `0x050000`), ISO 21496-1 APP2 on both images, `hdrgm` + Container XMP for Android/Chrome, Apple `HDRGainMap`/`HDRToneMap` XMP; gain maps are never used as thumbnails |
 
 ## Colour
 
@@ -100,9 +107,11 @@ Run `cargo test --release -p dac-codecs --test bench -- --ignored --nocapture`.
 
 ## Gaps / limitations
 
-- **AVIF and HEIC decode**: no permissively licensed, pure-Rust AV1/HEVC decoder exists today
-  (dav1d/libheif are C; rav1d-safe and imazen's heic are AGPL). Files are sniffed and rejected with
-  `Error::Unsupported`; a raw-style embedded-preview path could be added for HEIC thumbnails.
+- **AVIF decode**: no permissively licensed, pure-Rust AV1 decoder exists today (dav1d is C;
+  rav1d-safe is AGPL). Files are sniffed and rejected with `Error::Unsupported`.
+- **HEIC** needs the `heif` feature (off by default: HEVC patents are the distributor's call);
+  without it, `Error::Unsupported` says the build has no HEIC support. 4:2:2 and 4:4:4 HEIF
+  (Canon/Sony HIF) is refused: heic-rs 0.1.1 loses sync on those bitstreams.
 - JPEG: arithmetic coding unsupported (as in both decoders); extended XMP (> 64 KiB) neither read
   nor written; EXIF > 64 KiB not written. The encoder uses standard Huffman tables (interleaved
   baseline) for maximum compatibility.

@@ -66,11 +66,41 @@ fn rewrite(text: &str, old: &str, new: &str, accept: impl Fn(&[u8], u8) -> bool)
     out
 }
 
-/// Workspace package names (from `cargo metadata`).
+/// Workspace package names (from `cargo metadata`). Mid-merge a manifest may not parse (conflict markers, or a
+/// dependency on an upstream crate name not renamed yet), so `cargo metadata` fails; then the names are read
+/// straight from the `[package]` tables of the `crates/*`, `apps/*` and `xtask` manifests.
 pub(crate) fn packages() -> Result<Vec<String>, String> {
-    let meta = crate::metadata()?;
-    let pkgs = meta["packages"].as_array().ok_or("cargo metadata: no packages")?;
-    Ok(pkgs.iter().filter_map(|p| p["name"].as_str().map(str::to_string)).collect())
+    if let Ok(meta) = crate::metadata()
+        && let Some(pkgs) = meta["packages"].as_array()
+    {
+        return Ok(pkgs.iter().filter_map(|p| p["name"].as_str().map(str::to_string)).collect());
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().ok_or("no workspace root")?;
+    let mut manifests = vec![root.join("xtask/Cargo.toml")];
+    for dir in ["crates", "apps"] {
+        let Ok(entries) = std::fs::read_dir(root.join(dir)) else { continue };
+        manifests.extend(entries.flatten().map(|e| e.path().join("Cargo.toml")));
+    }
+    let mut names: Vec<String> = manifests.iter().filter_map(|m| std::fs::read_to_string(m).ok()).filter_map(|t| package_name(&t)).collect();
+    names.sort();
+    names.dedup();
+    if names.is_empty() {
+        return Err("no workspace packages found (cargo metadata failed and no manifest named a package)".into());
+    }
+    Ok(names)
+}
+
+/// `name = "…"` from a manifest's `[package]` table, read line by line (tolerates conflict markers elsewhere).
+fn package_name(manifest: &str) -> Option<String> {
+    let mut in_package = false;
+    for line in manifest.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_package = line == "[package]";
+        } else if in_package && let Some(v) = line.strip_prefix("name").map(str::trim_start).and_then(|r| r.strip_prefix('=')) {
+            return Some(v.trim().trim_matches('"').to_string());
+        }
+    }
+    None
 }
 
 /// The prefix most workspace packages share (`dac` for `dac-raw`, `dac-engine`, …).
@@ -185,6 +215,13 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn package_name_reads_the_package_table_only() {
+        let m = "[workspace]\nname = \"no\"\n[package]\nname = \"dac-raw\"\n<<<<<<< HEAD\n[dependencies]\nname = \"x\"\n";
+        assert_eq!(package_name(m).as_deref(), Some("dac-raw"));
+        assert_eq!(package_name("[dependencies]\nname = \"x\"\n"), None);
+    }
 
     #[test]
     fn rewrites_all_tokens() {

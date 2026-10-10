@@ -356,6 +356,46 @@ fn soft_proof_maps_into_the_proof_gamut_and_flags_what_does_not_fit() {
     assert!(red(&pro) < n, "ProPhoto holds more than sRGB");
 }
 
+/// A preview for a monitor with a display profile renders into the display's primaries: for a
+/// display that *is* a standard space, exactly what an 8-bit render into that space gives.
+#[test]
+fn display_space_renders_like_the_matching_output_space() {
+    use crate::{DisplaySpace, OutputSpace, Proof};
+    let src = scene();
+    let mut s = DevelopSettings::default();
+    s.color.saturation = 100.0;
+    s.color.vibrance = 100.0;
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let req = |space, display, proof| RenderRequest { space, display, proof, ..RenderRequest::fit(120, 120) };
+    for space in [OutputSpace::Srgb, OutputSpace::DisplayP3] {
+        let d = DisplaySpace::of(space, 7).unwrap();
+        let want = render(&src, &info, &s, &req(space, None, None)).image;
+        let got = render(&src, &info, &s, &req(OutputSpace::Srgb, Some(d), None)).image;
+        assert!(max_diff(&got, &want) <= 1, "{space:?}: {}", max_diff(&got, &want));
+    }
+    // a wide display shows the saturated colours sRGB clips
+    let srgb = render(&src, &info, &s, &req(OutputSpace::Srgb, None, None)).image;
+    let p3 = render(&src, &info, &s, &req(OutputSpace::Srgb, Some(DisplaySpace::of(OutputSpace::DisplayP3, 1).unwrap()), None)).image;
+    assert!(max_diff(&srgb, &p3) > 4);
+
+    // soft proofing on a display: the display gamut warning is about *this* display
+    let blue = |img: &dac_raster::Rgba8| img.data.iter().filter(|p| p[2] == 255 && p[0] == 0 && p[1] < 80).count();
+    let pro = Some(Proof { space: OutputSpace::ProPhoto, dest_warning: false, display_warning: true });
+    let on_srgb = blue(&render(&src, &info, &s, &req(OutputSpace::Srgb, Some(DisplaySpace::of(OutputSpace::Srgb, 2).unwrap()), pro)).image);
+    let on_wide = blue(&render(&src, &info, &s, &req(OutputSpace::Srgb, Some(DisplaySpace::of(OutputSpace::Rec2020, 3).unwrap()), pro)).image);
+    assert!(on_srgb > 0 && on_wide < on_srgb, "{on_srgb} {on_wide}");
+    let plain = blue(&render(&src, &info, &s, &req(OutputSpace::Srgb, None, pro)).image);
+    assert_eq!(plain, on_srgb, "an sRGB display warns like no display profile");
+}
+
+#[test]
+fn display_space_rejects_degenerate_matrices() {
+    use crate::DisplaySpace;
+    assert!(DisplaySpace::new(dac_color::Mat3([[1.0, 1.0, 0.0], [1.0, 1.0, 0.0], [0.0, 0.0, 1.0]]), 1).is_none());
+    assert!(DisplaySpace::new(dac_color::Mat3([[f64::NAN, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]), 1).is_none());
+    assert!(DisplaySpace::new(dac_color::Mat3::IDENTITY, 1).is_some());
+}
+
 #[test]
 fn tint_negative_is_green_and_positive_is_magenta() {
     use dac_develop::WbMode;
@@ -430,4 +470,50 @@ fn custom_white_balance_redevelops_in_camera_space() {
     // the as-shot white needs nothing
     s.wb.mode = WbMode::AsShot;
     assert!(wb_matrix_for(&info, &s).is_none());
+}
+
+/// Every stored process number renders with a process this build knows: settings saved before
+/// process versions existed exactly as V1, and a number from a newer version of the app exactly as the
+/// latest process here (`docs/process-versions.md`). Raw (base tone curve), camera-tone and
+/// rendered sources, plain and edited, 8-bit and 16-bit.
+#[test]
+fn stored_process_numbers_render_with_a_known_process() {
+    use dac_develop::{Process, ProcessVersion};
+    let src = scene();
+    let curve = crate::tone::CameraTone::new(std::array::from_fn(|i| {
+        let x = 0.004 * 1.18f32.powi(i as i32);
+        [x, 1.0 - (-2.0 * x).exp()]
+    }))
+    .unwrap();
+    let infos = [
+        SourceInfo::default(),
+        SourceInfo { raw: true, as_shot_temp: 5200.0, as_shot_tint: 4.0, ..Default::default() },
+        SourceInfo { raw: true, relative_wb: true, camera_tone: Some(curve), ..Default::default() },
+    ];
+    let mut edited = DevelopSettings::for_raw(5200.0, 4.0);
+    for (id, v) in [("light.exposure", 0.4), ("light.contrast", 30.0), ("light.highlights", -60.0), ("light.whites", 15.0), ("light.blacks", -20.0)] {
+        controls::set(&mut edited, id, v);
+    }
+    let legacy = |s: &DevelopSettings| {
+        let mut v = s.to_json();
+        v.as_object_mut().unwrap().remove("process");
+        DevelopSettings::from_json(&v).unwrap()
+    };
+    let with = |s: &DevelopSettings, p: ProcessVersion| DevelopSettings { process: p, ..s.clone() };
+    let deep = RenderRequest { depth: crate::OutputDepth::U16, ..RenderRequest::fit(96, 96) };
+    for info in &infos {
+        for s in [DevelopSettings::default(), edited.clone()] {
+            for req in [RenderRequest::fit(96, 96), deep] {
+                let out = |s: &DevelopSettings| {
+                    let r = render(&src, info, s, &req);
+                    (r.image.data, r.deep)
+                };
+                let v1 = out(&with(&s, ProcessVersion::V1));
+                assert_eq!(legacy(&s).process, ProcessVersion::V1);
+                assert!(out(&legacy(&s)) == v1, "saved before process versions: rendered as V1");
+                let latest = out(&with(&s, Process::LATEST.version()));
+                assert!(out(&with(&s, ProcessVersion(Process::LATEST.version().0 + 7))) == latest, "newer than this build: as the latest");
+            }
+        }
+    }
 }

@@ -2,6 +2,21 @@ use egui::{Rect, vec2};
 
 use crate::{DacApp, Services, headless::HeadlessView, i18n::Locale};
 
+/// Issue #538: a breadcrumb opens its folder spelled as the path is, keeping a UNC share's leading
+/// `\\` and giving a bare drive its root back.
+#[test]
+fn breadcrumbs_open_their_folder_as_spelled() {
+    let to = |path: &str| super::crumbs(path).into_iter().map(|(name, to)| (name.to_string(), to)).collect::<Vec<_>>();
+    let pairs = |v: &[(&str, &str)]| v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect::<Vec<_>>();
+    assert_eq!(to("/Users/me/Pictures"), pairs(&[("Users", "/Users"), ("me", "/Users/me"), ("Pictures", "/Users/me/Pictures")]));
+    assert_eq!(to(r"C:\Users\me"), pairs(&[("C:", r"C:\"), ("Users", r"C:\Users"), ("me", r"C:\Users\me")]));
+    assert_eq!(to("C:/Users"), pairs(&[("C:", "C:/"), ("Users", "C:/Users")]));
+    assert_eq!(to(r"\\server\share\photos"), pairs(&[("server", r"\\server"), ("share", r"\\server\share"), ("photos", r"\\server\share\photos")]));
+    assert_eq!(to("relative/dir/"), pairs(&[("relative", "relative"), ("dir", "relative/dir")]));
+    assert_eq!(to("/Fotos/día 1/写真"), pairs(&[("Fotos", "/Fotos"), ("día 1", "/Fotos/día 1"), ("写真", "/Fotos/día 1/写真")]));
+    assert!(to("").is_empty() && to("/").is_empty() && to(r"\\").is_empty());
+}
+
 fn text_bounds(shape: &egui::Shape, out: &mut Vec<Rect>) {
     match shape {
         egui::Shape::Text(text) => out.push(text.visual_bounding_rect()),

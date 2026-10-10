@@ -12,7 +12,7 @@
     # glyphs. Pinned to the revision the release workflow uses — bump deliberately
     # (`nix flake update craft-fonts`); craftrules standards/fonts.md.
     craft-fonts = {
-      url = "github:storytold/craft-fonts/abb83316d96aa59c1cf64784289e378fe9fa5695";
+      url = "github:storytold/craft-fonts/8dcdacd5153e64560d109541a47d806f26f048c0";
       flake = false;
     };
   };

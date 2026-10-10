@@ -33,18 +33,20 @@ mode ([mcp.md](mcp.md)) is a thin layer over this channel. Implementation:
 | `engine.commands` | — | Engine + UI commands: id, label, menu, shortcut, params doc, enabled |
 | `ui.menu.list` | — | Menu entries (flat: id, label, menu path, shortcut, enabled) |
 | `ui.menu.tree` | — | The menu bar as shown (File … Help): items `{id, params?, label, shortcut?, enabled, checked?}`, separators, submenus — the model behind the native macOS menu bar and the in-window menus |
-| `ui.inspect` | — | UI state, window, `loupe` (`source`, and `region: {full, window, pending}` when a zoomed view also renders the window on screen at no more than 100 % — `full` is the frame it is cut from, `window` its `[x, y, w, h]` — and `regionBefore` for the Before side of a Before/After view), canvas/image rects, `scroll: {grid, filmstrip}` (scroll offsets in points, `null` until drawn), active photo, selection, perf (`frameMs` = layout, `logicMs` = per-frame logic before it, `updateMs` = both, `maxUpdateMs`, `fps`, render queue …, `gpu` = adapter in use, `gpuReason` = why renders don't use the GPU, `gpuFallback` = latest render redone on the CPU and why — see `docs/gpu-pipeline.md`), status, memory (bytes per cache, see `library.memory`; plus stage caches — `budgetBytes`, `trimmed`, `sharedSourceBytes` (the one device copy of a big original) — and textures), `export: {running: {total, done, current} \| null, last}`, `notices` (warnings waiting to be shown, e.g. a damaged settings file; OK = `button:noticeOk`), `quitPrompt` (why quitting was stopped: unsaved changes; `button:quitRetry` / `button:quitAnyway` / `button:quitCancel`), `import: {done, total, imported, cancelled} \| null` (an import runs on a worker thread), `tasks` (other background work: `Find Missing Photos`, `Auto Import`), `fileDialogs` (commands waiting on a native file dialog, which runs off the UI thread; they run again with the answer when it closes) |
+| `ui.inspect` | — | UI state, window, `loupe` (`source`, and `region: {full, window, pending}` when a zoomed view also renders the window on screen at no more than 100 % — `full` is the frame it is cut from, `window` its `[x, y, w, h]` — and `regionBefore` for the Before side of a Before/After view), canvas/image rects, `scroll: {grid, filmstrip}` (scroll offsets in points, `null` until drawn), active photo, selection, perf (`frameMs` = layout, `logicMs` = per-frame logic before it, `updateMs` = both, `maxUpdateMs`, `fps`, render queue …, `gpu` = adapter in use, `gpuReason` = why renders don't use the GPU, `gpuFallback` = latest render redone on the CPU and why — see `docs/gpu-pipeline.md`), status, memory (bytes per cache, see `library.memory`; plus stage caches — `budgetBytes`, `trimmed`, `sharedSourceBytes` (the one device copy of a big original) — and textures), `export: {running: {total, done, current} \| null, last}`, `notices` (warnings waiting to be shown, e.g. a damaged settings file; OK = `button:noticeOk`), `quitPrompt` (why quitting was stopped: unsaved changes; `button:quitRetry` / `button:quitAnyway` / `button:quitCancel`), `import: {done, total, imported, cancelled} \| null` (an import runs on a worker thread), `tasks` (other background work: `Find Missing Photos`, `Auto Import`), `fileDialogs` (commands waiting on a native file dialog, which runs off the UI thread; they run again with the answer when it closes), `copied` (the text the UI last put on the clipboard, `null` until something is copied) |
 | `ui.widgets` | `{filter?}` | On-screen widgets `{id, rect: [x, y, w, h]}` (screen points) |
-| `ui.clickWidget` / `ui.dragWidget` / `ui.hoverWidget` | `{id, count?, fx?, fy?}` / `{id, toX?, toY?, dx?, dy?, steps?}` / `{id, fx?, fy?}` | Real egui input on a widget (hover: the pointer rests on it, e.g. for preset/profile previews) |
+| `ui.clickWidget` / `ui.dragWidget` / `ui.hoverWidget` | `{id, count?, button?, fx?, fy?}` (`button: "right"` right-clicks) / `{id, toX?, toY?, dx?, dy?, steps?}` / `{id, fx?, fy?}` | Real egui input on a widget (hover: the pointer rests on it, e.g. for preset/profile previews) |
 | `ui.move` / `ui.click` / `ui.drag` | `{x, y, count?, button?}` / `{x, y, toX, toY, steps?}` | Raw pointer input, screen points |
 | `ui.pointer` | `{events: [{kind: down\|drag\|up, x, y}], alt?, shift?, cmd?}` | Gesture in normalized image coordinates (Detail view) |
 | `ui.key` | `{key, cmd?, shift?, alt?, ctrl?}` | Key press |
 | `ui.text` | `{text}` | Text input |
+| `ui.clipboard` | `{action: cut\|copy\|paste, text?}` | Cut, copy or paste in the focused text field, as the system does for ⌘X / ⌘C / ⌘V; `paste` pastes `text`, or the system clipboard without it. Refused when no text field has the focus (outside one, ⌘C / ⌘V are the commands `develop.copy` / `develop.paste`). In the desktop app cut and copy write the system clipboard. `ui.inspect` → `copied` is the text the UI last put on the clipboard |
 | `ui.scroll` | `{dx, dy, cmd?, ctrl?, shift?, alt?}` | Wheel / two-finger scroll at the current pointer; pans over the image, modifier-scroll zooms |
 | `ui.zoom` | `{factor}` | Pinch zoom at the current pointer (positive scale multiplier; 1 = unchanged). Position it first with `ui.move` or `ui.hoverWidget` |
 | `ui.set` | partial UI state, e.g. `{"view": "detail"}` | Resulting UI state |
 | `ui.dialog.confirm` / `ui.dialog.cancel` | — | Close the open dialog |
 | `ui.resize` | `{width, height}` | Resize the window |
+| `ui.zoomFactor` | `{factor}` | Set the interface scale (0.5–3; egui's zoom keys are off, Cmd+= / Cmd+- zoom the photo) |
 | `ui.screenshot` | `{path?, headless?}` | `{path, width, height}` once the frame (with finished renders) is captured. `headless: true` draws the UI on the CPU (no compositor needed); a windowed capture that gets no frame within 2 s falls back to headless automatically |
 | `engine.execute {command: "app.export", params}` | export params (see `docs/mcp.md`), plus `preset`, `dir` / `path`, `ids`, `background` | Writes the files and returns `{files}`; with `background: true` (what the Export dialog and menus use) it returns `{background: true, total}` at once and the batch runs on a worker thread — poll `ui.inspect` → `export` |
 | `ui.render` | `{id?, size?, path?}` | Render a photo (PNG to `path`), `{width, height}` |
@@ -59,6 +61,12 @@ Pinching keeps the image point under the pointer steady and zooms between Fit an
 scrolling pans in both axes and respects the operating system's scrolling direction and momentum.
 These gestures work in Detail (including editing tools and full-screen preview), Compare and Reference
 views, and only apply over their image areas. Panning stops at the image edges.
+
+Mask brushing uses the UI command `tool.brush` through `engine.execute`. With `{}` it activates
+painting on the current mask. `{"new": true}` creates a separate brush mask; `{"op": "add"}` or
+`{"op": "subtract"}` appends a brush component to the selected mask. Creating either starts in
+paint mode with the overlay visible. Brush Erase (or Alt while painting) removes strokes' coverage
+within that brush component; it is distinct from subtracting the component from the whole mask.
 
 ### When the library can't be saved
 
@@ -105,7 +113,8 @@ Headless screenshot dimensions must be finite and at least one logical point, wi
 positive scale. Rounded output must be at least one pixel per edge, at most 16,384 pixels
 per edge and 64 million pixels in total. `snapshot` and `ui.resize` reject requests outside
 these limits before layout or rasterization; supplied resize dimensions must be numbers.
-UI zoom changes text and control sizes while preserving the snapshot viewport's requested
+An interface zoom (egui's zoom factor; the keyboard never changes it — ⌘= / ⌘− / ⌘0 zoom the
+photo, issue #566) changes text and control sizes while preserving the snapshot viewport's requested
 physical pixel dimensions. Later `ui.resize` requests use current egui points; validation
 and rasterization both convert them to native viewport points before rounding the output
 pixels. A native edge below one point after zooming out is valid if it rounds to at least

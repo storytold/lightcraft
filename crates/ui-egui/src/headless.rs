@@ -79,6 +79,10 @@ pub struct HeadlessView {
     pixels_per_point: f32,
     size: [usize; 2],
     frames: u64,
+    /// The pretend host's clipboard: what the UI last copied, and what a paste request pastes.
+    pub clipboard: String,
+    /// Events the host owes the next frame (a paste request's paste, as a desktop host sends it).
+    owed: Vec<egui::Event>,
 }
 
 impl Default for HeadlessView {
@@ -92,7 +96,16 @@ impl HeadlessView {
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx);
         crate::theme::apply(&ctx);
-        HeadlessView { ctx, textures: TextureStore::default(), shapes: vec![], pixels_per_point: 1.0, size: [1600, 1000], frames: 0 }
+        HeadlessView {
+            ctx,
+            textures: TextureStore::default(),
+            shapes: vec![],
+            pixels_per_point: 1.0,
+            size: [1600, 1000],
+            frames: 0,
+            clipboard: String::new(),
+            owed: vec![],
+        }
     }
 
     /// Input for one frame of a `size` (points) viewport at `pixels_per_point`.
@@ -132,17 +145,49 @@ impl HeadlessView {
                 }
             }
         }
+        raw.events.splice(0..0, std::mem::take(&mut self.owed));
         let mut out = self.ctx.run_ui(raw, run_ui);
         self.frames += 1;
         self.textures.apply(std::mem::take(&mut out.textures_delta));
         self.shapes = std::mem::take(&mut out.shapes);
         self.pixels_per_point = out.pixels_per_point;
-        out.viewport_output.remove(&ViewportId::ROOT).map(|v| v.commands).unwrap_or_default()
+        for c in &out.platform_output.commands {
+            if let egui::OutputCommand::CopyText(text) = c {
+                self.clipboard.clone_from(text);
+            }
+        }
+        let commands = out.viewport_output.remove(&ViewportId::ROOT).map(|v| v.commands).unwrap_or_default();
+        // what a desktop host does with a cut, copy or paste request (egui-winit): the event, next frame
+        for c in &commands {
+            match c {
+                ViewportCommand::RequestCut => self.owed.push(egui::Event::Cut),
+                ViewportCommand::RequestCopy => self.owed.push(egui::Event::Copy),
+                ViewportCommand::RequestPaste if !self.clipboard.is_empty() => self.owed.push(egui::Event::Paste(self.clipboard.clone())),
+                _ => {}
+            }
+        }
+        commands
     }
 
     /// Frames run so far.
     pub fn frames(&self) -> u64 {
         self.frames
+    }
+
+    /// Every piece of text the last frame painted (labels, tooltips, values), in paint order.
+    pub fn painted_text(&self) -> Vec<String> {
+        fn texts(shape: &egui::epaint::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::epaint::Shape::Text(shape) => out.push(shape.galley.job.text.clone()),
+                egui::epaint::Shape::Vec(shapes) => shapes.iter().for_each(|shape| texts(shape, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for shape in &self.shapes {
+            texts(&shape.shape, &mut out);
+        }
+        out
     }
 
     /// Size in pixels of the last frame.
@@ -170,6 +215,9 @@ pub struct Headless {
     pub view: HeadlessView,
     /// The largest texture the pretend GPU takes (what a WebGL device may report: 2048).
     pub max_texture_side: usize,
+    /// The limit egui was last told. Like a native host (egui-winit) it is reported once, not in
+    /// every frame's input: code that reads the raw input sees `None` from then on (issue #652).
+    reported_texture_side: Option<usize>,
     /// Logical size (points) and scale.
     pub size: egui::Vec2,
     pub pixels_per_point: f32,
@@ -182,6 +230,8 @@ pub struct Headless {
     pub window_maximized: bool,
     /// Window-management commands the app sent (`StartDrag`, `Maximized`, …), oldest first.
     pub window_commands: Vec<ViewportCommand>,
+    /// The pointer cursor the last frame asked for (what a real host would show).
+    pub last_cursor: egui::CursorIcon,
 }
 
 impl Headless {
@@ -201,6 +251,7 @@ impl Headless {
             app,
             view: HeadlessView::new(),
             max_texture_side: 16384,
+            reported_texture_side: None,
             size,
             pixels_per_point,
             time: 0.0,
@@ -210,11 +261,17 @@ impl Headless {
             quit: false,
             window_maximized: false,
             window_commands: vec![],
+            last_cursor: egui::CursorIcon::Default,
         }
     }
 
     pub fn frames(&self) -> u64 {
         self.frames
+    }
+
+    /// Every piece of text the last frame painted ([`HeadlessView::painted_text`]).
+    pub fn painted_text(&self) -> Vec<String> {
+        self.view.painted_text()
     }
 
     /// `app.quit` was requested.
@@ -227,13 +284,17 @@ impl Headless {
         (self.size, self.pixels_per_point) = bounded_viewport(self.size, self.pixels_per_point);
         let mut raw = HeadlessView::raw_input(self.size, self.pixels_per_point, self.time, std::mem::take(&mut self.events));
         raw.viewports.entry(ViewportId::ROOT).or_default().maximized = Some(self.window_maximized);
-        raw.max_texture_side = Some(self.max_texture_side);
+        raw.max_texture_side = (self.reported_texture_side != Some(self.max_texture_side)).then_some(self.max_texture_side);
+        self.reported_texture_side = Some(self.max_texture_side);
         self.app.raw_input_hook(&mut raw);
         let app = &mut self.app;
+        let mut cursor = egui::CursorIcon::Default;
         let commands = self.view.run(raw, |ui| {
             app.logic(ui.ctx());
             app.ui(ui);
+            cursor = ui.ctx().output(|output| output.cursor_icon);
         });
+        self.last_cursor = cursor;
         self.time += FRAME_DT;
         self.frames += 1;
         for c in commands {
@@ -266,6 +327,8 @@ impl Headless {
             || crate::panels::left::fs_cached_running(&self.view.ctx) > 0
             || self.app.merge.busy()
             || self.app.scan.is_some()
+            || self.app.sync.is_some()
+            || self.app.sync_run.is_some()
             || self.app.import.is_some()
             || self.app.export.is_some()
             || self.app.session.denoise_busy()
@@ -424,6 +487,32 @@ mod tests {
 
     use super::*;
 
+    /// The pretend host has a clipboard, as a desktop does: text the UI copies lands in it, and a
+    /// cut, copy or paste request (from a context menu) comes back as that event on the next frame.
+    #[test]
+    fn the_headless_host_has_a_clipboard() {
+        let mut view = HeadlessView::new();
+        let raw = || HeadlessView::raw_input(egui::vec2(200.0, 100.0), 1.0, 0.0, vec![]);
+        view.run(raw(), |ui| ui.ctx().copy_text("Lisbon".into()));
+        assert_eq!(view.clipboard, "Lisbon");
+        for (command, event) in [
+            (ViewportCommand::RequestPaste, egui::Event::Paste("Lisbon".into())),
+            (ViewportCommand::RequestCopy, egui::Event::Copy),
+            (ViewportCommand::RequestCut, egui::Event::Cut),
+        ] {
+            view.run(raw(), |ui| ui.ctx().send_viewport_cmd(command.clone()));
+            let mut seen = vec![];
+            view.run(raw(), |ui| seen = ui.input(|i| i.events.clone()));
+            assert!(seen.contains(&event), "{command:?}: {seen:?}");
+        }
+        // an empty clipboard pastes nothing, as a desktop host does
+        view.clipboard.clear();
+        view.run(raw(), |ui| ui.ctx().send_viewport_cmd(ViewportCommand::RequestPaste));
+        let mut seen = vec![];
+        view.run(raw(), |ui| seen = ui.input(|i| i.events.clone()));
+        assert!(!seen.iter().any(|e| matches!(e, egui::Event::Paste(_))), "{seen:?}");
+    }
+
     #[test]
     fn screenshot_dimensions_are_checked_before_layout() {
         assert_eq!(viewport_pixels([1600.0, 1000.0], 2.0).unwrap(), [3200, 2000]);
@@ -453,20 +542,14 @@ mod tests {
         {
             let mut view = HeadlessView::new();
             for frame in 0..9 {
-                let key = match frame {
-                    1 => Some(egui::Key::Plus),
-                    5 => Some(egui::Key::Minus),
-                    _ => None,
-                };
-                let mut raw = HeadlessView::raw_input(size, scale, frame as f64 / 60.0, vec![]);
-                if let Some(key) = key {
-                    let modifiers = egui::Modifiers { command: true, ..Default::default() };
-                    raw.events.push(egui::Event::ModifiersChanged(modifiers));
-                    raw.events.extend(vec![
-                        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers },
-                        egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers },
-                    ]);
+                // the interface scale changes between frames (Cmd+Plus / Cmd+Minus are the
+                // photo's zoom, issue #566: egui's own keyboard zoom is off)
+                match frame {
+                    1 => view.ctx.set_zoom_factor(1.1),
+                    5 => view.ctx.set_zoom_factor(1.0),
+                    _ => {}
                 }
+                let raw = HeadlessView::raw_input(size, scale, frame as f64 / 60.0, vec![]);
                 view.run(raw, |ui| {
                     ui.label("UI zoom changes layout, keeping the host viewport size");
                 });
@@ -489,7 +572,8 @@ mod tests {
         app.ui.settings.gpu = false;
         let mut h = Headless::new(app, [480.0, 320.0], 2.0);
         let t = Duration::from_secs(5);
-        assert_eq!(h.request("ui.key", json!({"key": "Plus", "cmd": true}), t)["ok"], true);
+        h.view.ctx.set_zoom_factor(1.1);
+        assert_eq!(h.request("ui.inspect", json!({}), t)["ok"], true);
         assert!(h.view.ctx.zoom_factor() > 1.0);
         let main = h.view.ctx.clone();
         let screenshot = h.app.headless_screenshot(&main, true).unwrap();
@@ -506,7 +590,9 @@ mod tests {
             app.ui.settings.gpu = false;
             let mut h = Headless::new(app, [480.0, 320.0], scale);
             let t = Duration::from_secs(5);
-            assert_eq!(h.request("ui.key", json!({"key": "Plus", "cmd": true}), t)["ok"], true);
+            assert_eq!(h.request("ui.zoomFactor", json!({"factor": 1.1}), t)["ok"], true);
+            h.step();
+            assert!(h.view.ctx.zoom_factor() > 1.0);
             let native_size = resized_viewport([320.0, 240.0], scale, h.view.ctx.zoom_factor()).unwrap();
             let expected = native_viewport_pixels([native_size.x, native_size.y], scale).unwrap();
             assert_eq!(h.request("ui.resize", json!({"width": 320, "height": 240}), t)["ok"], true);
@@ -538,7 +624,8 @@ mod tests {
         app.ui.settings.gpu = false;
         let mut h = Headless::new(app, [480.0, 320.0], 0.9);
         let t = Duration::from_secs(5);
-        assert_eq!(h.request("ui.key", json!({"key": "Minus", "cmd": true}), t)["ok"], true);
+        h.view.ctx.set_zoom_factor(0.9);
+        h.step();
         assert!((h.view.ctx.zoom_factor() - 0.9).abs() < 0.001);
         assert_eq!(h.request("ui.resize", json!({"width": 150, "height": 150}), t)["ok"], true);
         assert_eq!(h.size, egui::vec2(135.0, 135.0));
@@ -578,6 +665,101 @@ mod tests {
         let mut app = DacApp::new(dac_engine::Session::with_demo(), services);
         app.ui.view = crate::state::ViewMode::PhotoGrid;
         Headless::new(app, size, 1.0)
+    }
+
+    /// Agents cut, copy and paste in a text field as the system does for ⌘X / ⌘C / ⌘V
+    /// (`ui.clipboard`), and `ui.inspect` → `copied` says what the UI last copied.
+    #[test]
+    fn agents_cut_copy_and_paste_in_text_fields() {
+        let mut h = demo([1200.0, 760.0]);
+        let t = Duration::from_secs(10);
+        let ask = |h: &mut Headless, method: &str, params: serde_json::Value| {
+            let r = h.request(method, params.clone(), t);
+            assert_eq!(r["ok"], true, "{method} {params}: {r}");
+            h.step();
+            h.step();
+            r
+        };
+        h.settle(SETTLE);
+        ask(&mut h, "ui.clickWidget", json!({"id": "field:search"}));
+        ask(&mut h, "ui.text", json!({"text": "wedding"}));
+        ask(&mut h, "ui.key", json!({"key": "a", "cmd": true}));
+        ask(&mut h, "ui.clipboard", json!({"action": "copy"}));
+        assert_eq!(ask(&mut h, "ui.inspect", json!({}))["result"]["copied"], "wedding");
+        ask(&mut h, "ui.clipboard", json!({"action": "cut"}));
+        assert_eq!(h.app.ui.search, "");
+        ask(&mut h, "ui.clipboard", json!({"action": "paste", "text": "travel"}));
+        assert_eq!(h.app.ui.search, "travel");
+        let r = h.request("ui.clipboard", json!({"action": "shred"}), t);
+        assert_eq!(r["ok"], false, "an unknown action is refused: {r}");
+    }
+
+    /// `ui.clipboard` acts in a text field: with none focused it is refused, rather than doing
+    /// what ⌘V does there on one platform (paste edit settings) and nothing on another.
+    #[test]
+    fn the_clipboard_method_needs_a_text_field() {
+        let mut h = demo([1200.0, 760.0]);
+        let t = Duration::from_secs(10);
+        h.settle(SETTLE);
+        let undo = h.app.session.undo.len();
+        for action in ["copy", "paste"] {
+            let r = h.request("ui.clipboard", json!({"action": action, "text": "travel"}), t);
+            assert_eq!(r["ok"], false, "{action}: {r}");
+            assert!(r["error"].as_str().is_some_and(|e| e.contains("text field")), "{r}");
+        }
+        h.settle(SETTLE);
+        assert_eq!(h.app.session.undo.len(), undo, "nothing was pasted");
+    }
+
+    /// `ui.clickWidget` right-clicks with `button: "right"`, as `ui.click` does (MCP `click`
+    /// passes it on with a widget): a filmstrip photo's context menu opens.
+    #[test]
+    fn click_widget_right_clicks() {
+        let mut h = demo([1200.0, 760.0]);
+        let t = Duration::from_secs(10);
+        h.request("ui.set", json!({"view": "detail"}), t);
+        h.settle(SETTLE);
+        let cell = h.app.widgets.iter().find(|(w, _)| w.starts_with("film:")).map(|(w, _)| w.clone()).expect("a filmstrip photo");
+        assert!(!egui::Popup::is_any_open(&h.view.ctx));
+        let r = h.request("ui.clickWidget", json!({"id": cell, "button": "right"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert!(egui::Popup::is_any_open(&h.view.ctx), "its context menu");
+    }
+
+    /// The search field is a shared text field: right-click ▸ Paste puts the clipboard's text in
+    /// and filters by it.
+    #[test]
+    fn the_search_field_pastes_from_its_menu() {
+        let mut h = demo([1200.0, 760.0]);
+        let t = Duration::from_secs(10);
+        h.settle(SETTLE);
+        h.view.clipboard = "wedding".into();
+        for (id, button) in [("field:search", "right"), ("field:search:paste", "left")] {
+            let r = h.request("ui.clickWidget", json!({"id": id, "button": button}), t);
+            assert_eq!(r["ok"], true, "{id}: {r}");
+            h.settle(SETTLE);
+        }
+        assert_eq!(h.app.ui.search, "wedding");
+        assert_eq!(h.app.session.filter.text, "wedding", "and the library is filtered by it");
+    }
+
+    /// Esc in the search field gives back the search from before the edit, and the filter with it.
+    #[test]
+    fn escape_in_the_search_field_gives_back_the_search() {
+        let mut h = demo([1200.0, 760.0]);
+        let t = Duration::from_secs(10);
+        h.settle(SETTLE);
+        for (method, params) in [("ui.clickWidget", json!({"id": "field:search"})), ("ui.text", json!({"text": "travel"}))] {
+            let r = h.request(method, params, t);
+            assert_eq!(r["ok"], true, "{r}");
+            h.settle(SETTLE);
+        }
+        assert_eq!(h.app.session.filter.text, "travel", "filtered while typing");
+        let r = h.request("ui.key", json!({"key": "Escape"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert_eq!((h.app.ui.search.as_str(), h.app.session.filter.text.as_str()), ("", ""));
     }
 
     #[test]
@@ -1108,6 +1290,45 @@ mod tests {
         assert_eq!(named(&h, ids[1], 0), None);
     }
 
+    /// The name field under the unnamed faces is a shared text field: right-click ▸ Paste puts the
+    /// clipboard's name in, and Esc leaves the field and clears the selection, as Clear does.
+    #[test]
+    fn the_unnamed_faces_name_field_pastes_and_escape_clears() {
+        use dac_catalog::Op;
+        let mut h = demo([1400.0, 900.0]);
+        let t = Duration::from_secs(10);
+        let id = h.app.session.catalog.photos().map(|p| p.id).next().unwrap();
+        let mut meta = h.app.session.catalog.photo(id).unwrap().meta.clone();
+        meta.regions = vec![dac_meta::Region {
+            rect: dac_geom::Rect { x0: 0.3, y0: 0.2, x1: 0.5, y1: 0.55 },
+            kind: dac_meta::RegionKind::Face,
+            name: None,
+            description: None,
+        }];
+        h.app.session.commit("setup", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+        h.request("engine.execute", json!({"command": "view.people"}), t);
+        h.settle(SETTLE);
+        h.view.clipboard = "Wedding Guest".into();
+        for (widget, button) in [
+            (format!("unnamed-face:{}:0", id.0), "left"),
+            ("field:unnamedName".to_string(), "left"),
+            ("field:unnamedName".to_string(), "right"),
+            ("field:unnamedName:paste".to_string(), "left"),
+        ] {
+            let r = h.request("ui.clickWidget", json!({"id": widget, "button": button}), t);
+            assert_eq!(r["ok"], true, "{widget}: {r}");
+            h.step();
+            h.step();
+            h.step();
+        }
+        assert_eq!(h.app.ui.unnamed_name, "Wedding Guest");
+        assert_eq!(h.app.ui.unnamed_selected.len(), 1, "still naming");
+        h.request("ui.key", json!({"key": "Escape"}), t);
+        h.step();
+        h.step();
+        assert!(h.app.ui.unnamed_selected.is_empty() && h.app.ui.unnamed_name.is_empty(), "Esc cleared the selection and the name");
+    }
+
     /// A screenful of faces larger than the picture cache's usual budget (96) is all kept: with a fixed budget the same few
     /// tiles were evicted and re-requested every frame and stayed blank.
     #[test]
@@ -1345,14 +1566,14 @@ mod tests {
         // clicks land on last frame's layout: let the keyword list settle first (on a loaded machine a
         // row could still move, and the click then hit its neighbour, e.g. "sunrise")
         h.settle(SETTLE);
-        let r = h.request("ui.clickWidget", json!({"id": "keywordList:travel"}), t);
+        let r = h.request("ui.clickWidget", json!({"id": "keywordShow:travel"}), t);
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(h.app.session.filter.keyword.as_deref(), Some("travel"));
         assert_eq!(h.app.session.visible_cloned().len(), 3);
         // open the level, filter by the child
-        h.request("ui.clickWidget", json!({"id": "keywordListToggle:travel"}), t);
+        h.request("ui.clickWidget", json!({"id": "keywordRowToggle:travel"}), t);
         h.settle(SETTLE);
-        let r = h.request("ui.clickWidget", json!({"id": "keywordList:travel|italy"}), t);
+        let r = h.request("ui.clickWidget", json!({"id": "keywordShow:travel|italy"}), t);
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(h.app.session.visible_cloned().len(), 2);
         h.app.ui.dialog = Some(crate::state::Dialog::RenameKeyword { from: "travel".into(), to: "trips".into() });
@@ -1371,6 +1592,90 @@ mod tests {
         assert_eq!(r["ok"], true, "{r}");
         assert!(h.app.session.catalog.photo(dac_catalog::PhotoId(vis[1])).unwrap().meta.keywords.contains(&"gelato".to_string()));
         h.settle(SETTLE);
+    }
+
+    /// Rename Keyword's name field is a shared text field. It opens with the name selected, so
+    /// typing replaces it, and Return renames; right-click ▸ Paste works too; Esc cancels the
+    /// dialog and renames nothing.
+    #[test]
+    fn the_rename_keyword_field_selects_pastes_and_cancels() {
+        let mut h = demo([1200.0, 800.0]);
+        let t = Duration::from_secs(10);
+        let first = h.app.session.visible_cloned()[0].0;
+        h.request("engine.execute", json!({"command": "photo.setMeta", "params": {"ids": [first], "addKeywords": ["travel"]}}), t);
+        let keywords = |h: &Headless| h.app.session.catalog.photo(dac_catalog::PhotoId(first)).unwrap().meta.keywords.clone();
+        let open = |h: &mut Headless, name: &str| {
+            h.app.ui.dialog = Some(crate::state::Dialog::RenameKeyword { from: name.into(), to: name.into() });
+            h.settle(SETTLE);
+        };
+        let ask = |h: &mut Headless, method: &str, params: serde_json::Value| {
+            let r = h.request(method, params.clone(), t);
+            assert_eq!(r["ok"], true, "{method} {params}: {r}");
+            h.settle(SETTLE);
+        };
+        // typing replaces the selected name
+        open(&mut h, "travel");
+        ask(&mut h, "ui.text", json!({"text": "trips"}));
+        ask(&mut h, "ui.key", json!({"key": "Enter"}));
+        assert!(keywords(&h).contains(&"trips".to_string()) && !keywords(&h).contains(&"travel".to_string()), "{:?}", keywords(&h));
+        assert_eq!(h.app.ui.dialog, None);
+        // the menu's Paste
+        open(&mut h, "trips");
+        h.view.clipboard = "weddings".into();
+        ask(&mut h, "ui.clickWidget", json!({"id": "field:keywordName", "button": "right"}));
+        ask(&mut h, "ui.clickWidget", json!({"id": "field:keywordName:paste"}));
+        ask(&mut h, "ui.key", json!({"key": "Enter"}));
+        assert!(keywords(&h).contains(&"weddings".to_string()), "{:?}", keywords(&h));
+        // Esc cancels
+        open(&mut h, "weddings");
+        ask(&mut h, "ui.text", json!({"text": "parties"}));
+        ask(&mut h, "ui.key", json!({"key": "Escape"}));
+        assert_eq!(h.app.ui.dialog, None, "Esc closed the dialog");
+        assert!(keywords(&h).contains(&"weddings".to_string()), "renamed nothing: {:?}", keywords(&h));
+    }
+
+    /// Return confirms the one-field dialogs: New Album, Rename Album, New Smart Album, Merge
+    /// Keywords and a text prompt (here: renaming an album). Their name opens selected, so typing
+    /// replaces it. Return did nothing: the field took the focus back on every frame, so egui never
+    /// reported the focus Return gives up.
+    #[test]
+    fn return_confirms_the_one_field_dialogs() {
+        use crate::state::Dialog;
+        let mut h = demo([1200.0, 800.0]);
+        let t = Duration::from_secs(10);
+        let first = h.app.session.visible_cloned()[0].0;
+        h.request("engine.execute", json!({"command": "photo.setMeta", "params": {"ids": [first], "addKeywords": ["holiday"]}}), t);
+        let album = |h: &Headless, name: &str| h.app.session.catalog.albums().find(|a| a.name == name).map(|a| a.id.0);
+        let garden = album(&h, "Garden").expect("the demo's Garden album");
+        let confirm = |h: &mut Headless, dialog: Dialog, typed: &str| {
+            h.app.ui.dialog = Some(dialog);
+            h.settle(SETTLE);
+            for (method, params) in [("ui.text", json!({"text": typed})), ("ui.key", json!({"key": "Enter"}))] {
+                let r = h.request(method, params, t);
+                assert_eq!(r["ok"], true, "{r}");
+                h.settle(SETTLE);
+            }
+            assert_eq!(h.app.ui.dialog, None, "Return confirmed the dialog ({typed})");
+        };
+        confirm(&mut h, Dialog::NewAlbum { name: String::new(), folder: false, parent: None }, "Weddings");
+        assert!(album(&h, "Weddings").is_some(), "New Album");
+        confirm(&mut h, Dialog::RenameAlbum { id: garden, name: "Garden".into() }, "Flowers");
+        assert_eq!(album(&h, "Flowers"), Some(garden), "Rename Album");
+        confirm(&mut h, Dialog::NewSmartAlbum { name: "Smart Album".into(), parent: None }, "Everything");
+        assert!(album(&h, "Everything").is_some(), "New Smart Album");
+        confirm(&mut h, Dialog::MergeKeywords { from: vec!["holiday".into()], into: String::new() }, "travel");
+        let keywords = h.app.session.catalog.photo(dac_catalog::PhotoId(first)).unwrap().meta.keywords.clone();
+        assert!(keywords.contains(&"travel".to_string()) && !keywords.contains(&"holiday".to_string()), "Merge Keywords: {keywords:?}");
+        let prompt = Dialog::TextPrompt {
+            title: "Rename Album".into(),
+            hint: "Name".into(),
+            value: "Flowers".into(),
+            command: "album.rename".into(),
+            params: json!({"id": garden}),
+            key: "name".into(),
+        };
+        confirm(&mut h, prompt, "Botanical");
+        assert_eq!(album(&h, "Botanical"), Some(garden), "the text prompt");
     }
 
     /// The sidebar's file-system checks run on worker threads and add rows when they land, which
@@ -1624,6 +1929,49 @@ mod tests {
         assert!(w["result"].to_string().contains("field:copyrightStatus"), "{w}");
     }
 
+    /// Info panel fields are shared text fields. The caption takes several lines: Return starts a
+    /// new one and only leaving the field saves it. Esc gives up an edit (the title stays as it
+    /// was, nothing saved), and right-click ▸ Paste works there too.
+    #[test]
+    fn info_fields_take_lines_esc_and_the_menu() {
+        let mut h = demo([1300.0, 1000.0]);
+        let t = Duration::from_secs(10);
+        h.request("ui.set", json!({"view": "detail", "right": "info"}), t);
+        h.settle(SETTLE);
+        let meta = |h: &Headless| h.app.session.catalog.photo(h.app.session.active().unwrap()).unwrap().meta.clone();
+        let ask = |h: &mut Headless, method: &str, params: serde_json::Value| {
+            let r = h.request(method, params.clone(), t);
+            assert_eq!(r["ok"], true, "{method} {params}: {r}");
+            h.step();
+            h.step();
+        };
+        let (title, undo) = (meta(&h).title, h.app.session.undo.len());
+        // the caption: two lines, saved on leaving
+        ask(&mut h, "ui.clickWidget", json!({"id": "field:caption"}));
+        ask(&mut h, "ui.key", json!({"key": "A", "cmd": true}));
+        ask(&mut h, "ui.text", json!({"text": "Harbour at dusk"}));
+        ask(&mut h, "ui.key", json!({"key": "Enter"}));
+        ask(&mut h, "ui.text", json!({"text": "Lisbon, 2026"}));
+        assert_eq!(h.app.session.undo.len(), undo, "Return in the caption saves nothing yet");
+        ask(&mut h, "ui.key", json!({"key": "Tab"}));
+        assert_eq!(meta(&h).caption, "Harbour at dusk\nLisbon, 2026");
+        // the title: Esc gives the edit up
+        let undo = h.app.session.undo.len();
+        ask(&mut h, "ui.clickWidget", json!({"id": "field:title"}));
+        ask(&mut h, "ui.text", json!({"text": " (draft)"}));
+        ask(&mut h, "ui.key", json!({"key": "Escape"}));
+        h.settle(SETTLE);
+        assert_eq!((meta(&h).title, h.app.session.undo.len()), (title, undo), "Esc saved nothing");
+        // the menu
+        h.view.clipboard = "Wedding in Sintra".into();
+        ask(&mut h, "ui.clickWidget", json!({"id": "field:title"}));
+        ask(&mut h, "ui.key", json!({"key": "A", "cmd": true}));
+        ask(&mut h, "ui.clickWidget", json!({"id": "field:title", "button": "right"}));
+        ask(&mut h, "ui.clickWidget", json!({"id": "field:title:paste"}));
+        ask(&mut h, "ui.key", json!({"key": "Enter"}));
+        assert_eq!(meta(&h).title, "Wedding in Sintra");
+    }
+
     /// Local: a folder's photos show without joining the library; the breadcrumb, Include
     /// subfolders and Add to My Photos work from the grid header.
     #[test]
@@ -1672,7 +2020,8 @@ mod tests {
         let parent_index = dir.to_string_lossy().split(['/', '\\']).filter(|p| !p.is_empty()).count() - 1;
         assert_eq!(h.request("ui.clickWidget", json!({"id": format!("crumb:{parent_index}")}), t)["ok"], true);
         h.settle(SETTLE);
-        assert_eq!(h.app.session.browse.as_ref().unwrap().path, dir.to_string_lossy().replace('\\', "/"));
+        // the same folder, whatever the platform's separators (issue #538)
+        assert_eq!(std::path::Path::new(&h.app.session.browse.as_ref().unwrap().path), dir.as_path());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1873,6 +2222,28 @@ mod tests {
         h.request("ui.key", json!({"key": "Enter"}), t);
         assert!((exposure(&h) - 1.5).abs() < 1e-9, "{}", exposure(&h));
         assert_eq!(h.app.session.undo.len(), undo0 + 1);
+    }
+
+    /// A slider's typed value is a shared text field: right-click ▸ Paste replaces the value
+    /// (selected when the field opens) and Return applies it; the menu doesn't close the field.
+    #[test]
+    fn a_slider_value_pastes_from_its_menu() {
+        let mut h = demo([1300.0, 900.0]);
+        let t = Duration::from_secs(10);
+        h.request("ui.set", json!({"view": "detail", "right": "edit"}), t);
+        h.settle(SETTLE);
+        h.view.clipboard = "0.75".into();
+        for (id, button) in
+            [("sliderValue:light.exposure", "left"), ("sliderField:light.exposure", "right"), ("sliderField:light.exposure:paste", "left")]
+        {
+            let r = h.request("ui.clickWidget", json!({"id": id, "button": button}), t);
+            assert_eq!(r["ok"], true, "{id}: {r}");
+            h.settle(SETTLE);
+        }
+        h.request("ui.key", json!({"key": "Enter"}), t);
+        h.settle(SETTLE);
+        let exposure = h.app.session.develop_of(h.app.session.active().unwrap()).unwrap().light.exposure;
+        assert!((exposure - 0.75).abs() < 1e-9, "{exposure}");
     }
 
     /// The eye on a section header switches the section off and on again, one undo step each
@@ -2596,6 +2967,8 @@ mod tests {
         if let Some(crate::state::Dialog::Import { opts }) = &mut h.app.ui.dialog {
             opts.rename = "Trip-_x".into();
         }
+        // Paint the edited template before locating the Tags button in the resized dialog.
+        assert!(h.settle(SETTLE), "Copy dialog layout should settle before locating Tags");
         // the cursor sits after "Trip-"
         let id = egui::Id::new("import-rename");
         let mut st = egui::text_edit::TextEditState::default();
@@ -2643,6 +3016,94 @@ mod tests {
         assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::About), "switching tabs keeps the dialog open");
     }
 
+    /// Settings ▸ Display / `app.displayProfile`: previews are shown through the monitor profile
+    /// (the loupe rendered for the display, thumbnails converted from sRGB, the histogram still
+    /// sRGB); a file that can't be used is an error, or, as the setting, reported with previews
+    /// left sRGB.
+    #[test]
+    fn display_profile_converts_previews() {
+        use crate::render::Slot;
+        let dir = std::env::temp_dir().join(format!("app-display-ui-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p3 = dir.join("p3.icc");
+        std::fs::write(&p3, dac_codecs::icc::write_named(dac_codecs::NamedSpace::DisplayP3)).unwrap();
+        let bad = dir.join("bad.icc");
+        std::fs::write(&bad, b"not a profile").unwrap();
+        let (p3, bad) = (p3.to_string_lossy().to_string(), bad.to_string_lossy().to_string());
+
+        let mut h = demo([1000.0, 700.0]);
+        let t = Duration::from_secs(10);
+        h.request("ui.set", json!({"view": "detail"}), t);
+        let thumb_slot =
+            |h: &Headless| h.app.renderer.textures.keys().copied().filter(|s| matches!(s, Slot::Thumb(_))).min_by_key(|s| format!("{s:?}"));
+        let ready = |h: &Headless| {
+            h.app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.pixels.is_some())
+                && thumb_slot(h).is_some()
+                && !h.app.renderer.is_pending(Slot::Main)
+        };
+        assert!(h.step_until(SETTLE, ready));
+        h.settle(SETTLE);
+        let rgba =
+            |c: &egui::ColorImage| dac_raster::Rgba8 { width: c.size[0], height: c.size[1], data: c.pixels.iter().map(|p| p.to_array()).collect() };
+        let tex = |h: &Headless, s: Slot| rgba(h.app.renderer.textures.get(&s).and_then(|t| t.pixels.clone()).as_deref().unwrap());
+        let thumb = thumb_slot(&h).unwrap();
+        let (main0, thumb0) = (tex(&h, Slot::Main), tex(&h, thumb));
+        let hist0 = h.app.renderer.textures[&Slot::Main].histogram.clone().unwrap();
+
+        // the command loads it (and keeps it as the setting); textures are made again
+        let r = h.request("engine.execute", json!({"command": "app.displayProfile", "params": {"path": p3}}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(r["result"]["kind"], "matrix");
+        assert_eq!(h.app.ui.settings.display_profile, p3);
+        let d = h.app.renderer.display().cloned().unwrap();
+        assert!(h.step_until(SETTLE, |h| ready(h) && h.app.renderer.textures.contains_key(&thumb)));
+        h.settle(SETTLE);
+        let (main1, thumb1) = (tex(&h, Slot::Main), tex(&h, thumb));
+        let mut want = thumb0.clone();
+        d.profile.from_srgb(&mut want).unwrap();
+        let max_diff = |a: &dac_raster::Rgba8, b: &dac_raster::Rgba8| {
+            a.data.iter().zip(&b.data).flat_map(|(p, q)| (0..3).map(move |k| (p[k] as i32 - q[k] as i32).abs())).max().unwrap_or(0)
+        };
+        assert_eq!((thumb1.width, thumb1.height), (thumb0.width, thumb0.height));
+        assert!(max_diff(&thumb1, &want) <= 1, "thumbnails are converted from sRGB: {}", max_diff(&thumb1, &want));
+        assert_ne!(thumb1, thumb0);
+        // the loupe: rendered for the display; colours sRGB holds look as they did
+        assert_eq!((main1.width, main1.height), (main0.width, main0.height));
+        assert_ne!(main1, main0);
+        let mut main_want = main0.clone();
+        d.profile.from_srgb(&mut main_want).unwrap();
+        let mean = main1.data.iter().zip(&main_want.data).map(|(p, q)| (0..3).map(|k| (p[k] as f64 - q[k] as f64).abs()).sum::<f64>()).sum::<f64>()
+            / (3 * main1.data.len()) as f64;
+        assert!(mean < 1.5, "{mean}");
+        let hist1 = h.app.renderer.textures[&Slot::Main].histogram.clone().unwrap();
+        assert_eq!(hist1.total, hist0.total, "the histogram stays sRGB");
+
+        // a bad file: an error, nothing changes
+        let r = h.request("engine.execute", json!({"command": "app.displayProfile", "params": {"path": bad}}), t);
+        assert_eq!(r["ok"], false, "{r}");
+        assert_eq!(h.app.renderer.display_id(), Some(d.id()));
+        assert_eq!(h.app.ui.settings.display_profile, p3);
+        // …chosen as the setting (Settings ▸ Display), it is reported and previews go back to sRGB
+        h.app.ui.settings.display_profile = bad.clone();
+        h.step();
+        assert!(h.app.display_error.as_deref().is_some_and(|e| e.contains("not a valid ICC profile")), "{:?}", h.app.display_error);
+        assert_eq!(h.app.renderer.display_id(), None);
+        // the Display tab shows it
+        let r = h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "display"}}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+        // none: sRGB again
+        let r = h.request("engine.execute", json!({"command": "app.displayProfile", "params": {"path": null}}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(r["result"]["path"].is_null());
+        assert!(h.app.ui.settings.display_profile.is_empty() && h.app.display_error.is_none());
+        assert!(h.step_until(SETTLE, |h| ready(h) && h.app.renderer.textures.contains_key(&thumb)));
+        h.settle(SETTLE);
+        assert_eq!(tex(&h, thumb), thumb0, "back to the sRGB thumbnail");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Settings (⌘,): tabs switch, app settings change the UI state, library settings go through
     /// the engine; the delete confirmation guards ⌫.
     #[test]
@@ -2652,7 +3113,7 @@ mod tests {
         let r = h.request("ui.key", json!({"key": ",", "cmd": true}), t);
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::Settings { tab: "general".into() }));
-        for tab in ["import", "performance", "interface", "general"] {
+        for tab in ["import", "performance", "display", "interface", "general"] {
             let r = h.request("ui.clickWidget", json!({"id": format!("button:settingsTab-{tab}")}), t);
             assert_eq!(r["ok"], true, "{tab}: {r}");
             assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::Settings { tab: tab.into() }));

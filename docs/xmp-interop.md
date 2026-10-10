@@ -29,7 +29,7 @@ What we write (standard namespaces, so other tools can read the metadata):
 | Capture time, GPS | `exif:DateTimeOriginal`, `photoshop:DateCreated`, `exif:GPSLatitude`/`GPSLongitude` |
 | Pick / reject flag | `lc:flag` (`pick`, `reject`, `none`) |
 | Location | `lc:location` |
-| Develop settings | `lc:settings` — our complete `DevelopSettings` as JSON (exact round trip, incl. masks, spots, crop) |
+| Develop settings | `lc:settings` — our complete `DevelopSettings` as JSON (exact round trip, incl. masks, spots, crop and the rendering process; settings without `process` are V1, see [process-versions.md](process-versions.md)) |
 
 `lc:` stands for the app's own namespace: `xmp_namespace_uri` with prefix `xmp_namespace_prefix` from the
 `[stable]` table of `brand.toml` (never derived from the product name). Sidecars written under the upstream
@@ -105,15 +105,17 @@ Our pipeline renders differently, so **values carry over but the look is approxi
 We read these fields; we never write them. Only fields in the packet are applied: the result is a partial settings
 object that gets merged like a preset, so everything else keeps its current or default value. Packets marked
 `crs:AlreadyApplied="True"` are skipped, because those pixels already contain the edit. Only process-version 2012+ field
-names are read (e.g. `Exposure2012`, not the older `Exposure`).
+names are read (e.g. `Exposure2012`, not the older `Exposure`). `crs:ProcessVersion` itself numbers the other
+application's renderer and is ignored: the photo keeps the app's own process, the latest for a newly imported photo
+([process-versions.md](process-versions.md)).
 
 | `crs:` field(s) | The app control | Notes |
 |---|---|---|
 | `Exposure2012` | `light.exposure` | EV, 1:1 |
 | `Contrast2012`, `Highlights2012`, `Shadows2012`, `Whites2012`, `Blacks2012` | `light.contrast` … `light.blacks` | −100..100, 1:1 |
 | `WhiteBalance` | `wb.mode` | `As Shot`, `Auto`, `Daylight`, `Cloudy`, `Shade`, `Tungsten`, `Fluorescent`, `Flash`; other names → custom |
-| `Temperature`, `Tint` | `wb.temp`, `wb.tint` | Kelvin / tint for raw files (and presets) |
-| `IncrementalTemperature`, `IncrementalTint` | `wb.temp`, `wb.tint` | rendered files: −100..100 on our relative scale (mired shift around 6500 K, same as the Temp slider) |
+| `Temperature`, `Tint` | `wb.temp`, `wb.tint` | Kelvin / tint as written for raws with a measured illuminant (DNG) and for presets. Raws the app develops relative to their as-shot look (ARW, NEF, RW2, RAF, CR3, CR2, PEF, SRW: 6500 K / 0 means as shot) take the same mired shift from the packet's `AsShotTemperature` / `AsShotTint` instead; without that reference a custom Kelvin stays As Shot and is reported (`Temperature, Tint (custom white balance without AsShotTemperature: kept As Shot)`), because read on the relative scale it would be a large colour cast (issue #510) |
+| `IncrementalTemperature`, `IncrementalTint` | `wb.temp`, `wb.tint` | rendered files: −100..100 on our relative scale (mired shift around 6500 K, same as the Temp slider); a rendered file with only `Temperature` shifts from `AsShotTemperature` like the raws above when it is present |
 | `Vibrance`, `Saturation` | `color.vibrance`, `color.saturation` | 1:1 |
 | `Texture`, `Clarity2012`, `Dehaze` | `effects.texture`, `effects.clarity`, `effects.dehaze` | 1:1 |
 | `HueAdjustment<Band>`, `SaturationAdjustment<Band>`, `LuminanceAdjustment<Band>` | `mixer.<band>.hue/sat/lum` | bands Red, Orange, Yellow, Green, Aqua, Blue, Purple, Magenta |
@@ -122,7 +124,7 @@ names are read (e.g. `Exposure2012`, not the older `Exposure`).
 | `ParametricShadows`, `ParametricDarks`, `ParametricLights`, `ParametricHighlights` | `curve.shadows/darks/lights/highlights` | |
 | `ParametricShadowSplit`, `ParametricMidtoneSplit`, `ParametricHighlightSplit` | `curve.split_shadows/split_mid/split_highlights` | |
 | `CurveRefineSaturation` | `curve.refine_saturation` | 0..100 (100 = curve saturation unchanged) |
-| `ToneCurvePV2012`, `ToneCurvePV2012Red/Green/Blue` | `curve.master/red/green/blue` | `"x, y"` points in 0..255 → 0..1; a straight 0→255 line = no curve; the red / green / blue curves are read only with `ToneCurvePV2012` (Lightroom Classic ignores them without it) |
+| `ToneCurvePV2012`, `ToneCurvePV2012Red/Green/Blue` | `curve.master/red/green/blue` | `"x, y"` points in 0..255 → 0..1; a straight 0→255 line = no curve; the red / green / blue curves are read only when `ToneCurvePV2012` and all three channel curves are present (Lightroom Classic ignores them otherwise: a master + red-only packet renders without the red curve) |
 | `SplitToningShadowHue/Saturation`, `SplitToningHighlightHue/Saturation` | `grading.shadows/highlights.hue/sat` | |
 | `ColorGradeShadowLum`, `ColorGradeHighlightLum` | `grading.shadows/highlights.lum` | |
 | `ColorGradeMidtoneHue/Sat/Lum`, `ColorGradeGlobalHue/Sat/Lum` | `grading.midtones/global.*` | |

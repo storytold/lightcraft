@@ -19,6 +19,18 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
     let width = app.ui.right_width;
     let resized = super::resizable_side(ui, false, "right_panel", frame, width, crate::state::RIGHT_WIDTH, reserve, |ui| {
         let Some(id) = app.session.active() else {
+            // the Keyword List is the library's, not a photo's: it is there without a selection
+            if app.ui.right == RightPanel::Keywords {
+                egui::ScrollArea::vertical().id_salt("right-scroll").auto_shrink([false, false]).show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    header(ui, "Keywords");
+                    padded(ui, |ui| {
+                        ui.label(egui::RichText::new(crate::i18n::tr("Select photos to give them keywords.")).color(t.text_dim));
+                    });
+                    super::keyword_list::show(app, ui);
+                });
+                return;
+            }
             let r = ui.max_rect();
             super::empty_message(ui, r, "No photo selected", "Select a photo to edit");
             return;
@@ -195,6 +207,49 @@ fn crop(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId) {
     if let Some(spec) = ang {
         let out = slider(ui, &spec, d.crop.geometry.angle, true, Some("Straighten"));
         super::edit::apply_slider_out(app, &spec, out, |app, v| app.run("crop.straighten", json!({"angle": v})));
+        // an exact angle, typed (issue #534): a field of its own, besides the slider's value
+        padded(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(crate::i18n::tr("Angle"));
+                let mut angle = d.crop.geometry.angle;
+                let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                let r = ui.add(
+                    egui::DragValue::new(&mut angle)
+                        .range(spec.min..=spec.max)
+                        .clamp_existing_to_range(false)
+                        .speed(0.05)
+                        .fixed_decimals(2)
+                        // as the readout writes it: "+2.50", and every zero "0.00"
+                        .custom_formatter(|v, _| super::detail::crop_angle_label(v).trim_end_matches('°').to_string())
+                        .suffix("°")
+                        // read as the Straighten value reads a typed one: "-3,25" too
+                        .custom_parser(|text| crate::widgets::typed_value(&spec, text.trim().trim_end_matches('°')))
+                        // a typed angle applies on Return (or leaving the field), not keystroke by
+                        // keystroke: no half-typed angles, one undo step
+                        .update_while_editing(false),
+                );
+                crate::widgets::register(ui.ctx(), "cropAngleField", r.rect);
+                // a drag on the field is one undo step, like the slider's
+                if r.drag_started() {
+                    let _ = app.run("develop.beginInteraction", json!({"label": "Straighten"}));
+                }
+                // egui reports a change while text is typed even when the value isn't updated yet:
+                // apply only a new angle
+                // Esc keeps the old angle, but egui applies the typed text on the frame after the
+                // one where Esc took the focus away: remember the Esc for that frame
+                let cancel = egui::Id::new("cropAngleFieldEscaped");
+                let escaped = ui.data_mut(|m| m.remove_temp::<bool>(cancel)).unwrap_or(false);
+                if escape && r.lost_focus() {
+                    ui.data_mut(|m| m.insert_temp(cancel, true));
+                }
+                if r.changed() && !escaped && angle.is_finite() && angle != d.crop.geometry.angle {
+                    let _ = app.run("crop.straighten", json!({"angle": (angle.clamp(spec.min, spec.max) * 100.0).round() / 100.0}));
+                }
+                if r.drag_stopped() {
+                    let _ = app.run("develop.endInteraction", json!({}));
+                }
+            });
+        });
     }
     padded(ui, |ui| {
         ui.horizontal(|ui| {
@@ -485,64 +540,65 @@ fn red_eye(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId) {
 }
 
 fn keywords(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId) {
-    let Some(p) = app.session.catalog.photo(id).cloned() else { return };
+    // (the box is the selection's: the active photo only says that there is one)
+    if app.session.catalog.photo(id).is_none() {
+        return;
+    }
     header(ui, "Keywords");
+    keywording(app, ui);
+    super::keyword_list::show(app, ui);
+}
+
+/// The keyword entry, chips, keyword set, painter and suggestions for the selected photos (the
+/// Classic shell's Keywording panel; the Keywords panel adds the Keyword List below them).
+pub(crate) fn keywording(app: &mut DacApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     padded(ui, |ui| {
         let kid = egui::Id::new("kw-input");
         let mut text = ui.data_mut(|d| d.get_temp::<String>(kid).unwrap_or_default());
-        let r = ui.add(egui::TextEdit::singleline(&mut text).hint_text(crate::i18n::tr("Add keyword")).desired_width(f32::INFINITY));
-        register(ui.ctx(), "field:keyword", r.rect);
-        if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !text.trim().is_empty() {
-            let kws: Vec<String> = text.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        let r =
+            crate::text_field::TextField::singleline("field:keyword", &mut text).hint(crate::i18n::tr("Add keyword")).width(f32::INFINITY).show(ui);
+        // Return gives the keywords to the selected photos; Esc gives back what was there before
+        // this edit (the shared field does)
+        if r.ending == Some(crate::text_field::Ending::Return) && !text.trim().is_empty() {
+            // a new name goes inside the default parent (Put New Keywords Inside This Keyword)
+            let kws: Vec<String> = text.split(',').map(|s| app.session.catalog.typed_keyword(s)).filter(|s| !s.is_empty()).collect();
             let _ = app.run("photo.setMeta", json!({"addKeywords": kws}));
             text.clear();
         }
         ui.data_mut(|d| d.insert_temp(kid, text));
         ui.add_space(8.0);
-        ui.horizontal_wrapped(|ui| {
-            for k in &p.meta.keywords {
-                let r =
-                    ui.add(egui::Button::new(egui::RichText::new(format!("{}  ×", k.replace('|', " › "))).color(t.text_label)).corner_radius(10.0));
-                register(ui.ctx(), format!("keywordChip:{k}"), r.rect);
-                if r.clicked() {
-                    let _ = app.run("photo.setMeta", json!({"removeKeywords": [k]}));
-                }
-                r.context_menu(|ui| {
-                    if ui.button(crate::i18n::tr("Remove from Photo")).clicked() {
-                        let _ = app.run("photo.setMeta", json!({"removeKeywords": [k]}));
-                    }
-                    if ui.button(crate::i18n::tr("Show Photos with Keyword")).clicked() {
-                        let _ = app.run("library.filter", json!({"keyword": k}));
-                    }
-                    ui.separator();
-                    if ui.button(crate::i18n::tr("Rename Keyword…")).clicked() {
-                        app.ui.dialog = Some(crate::state::Dialog::RenameKeyword { from: k.clone(), to: k.clone() });
-                    }
-                    if ui.button(crate::i18n::tr("Delete Keyword")).clicked() {
-                        let _ = app.run("keyword.delete", json!({"keyword": k}));
-                    }
-                });
-            }
-        });
+        super::keywording::view_switch(app, ui);
+        ui.add_space(4.0);
+        if app.ui.keywording_view == crate::state::KeywordingView::Keywords {
+            super::keywording::chip_row(app, ui);
+        } else {
+            super::keywording::names_row(app, ui);
+        }
         ui.add_space(10.0);
-        keyword_set(app, ui, &p.meta.keywords);
+        keyword_set(app, ui);
         ui.add_space(8.0);
         // the painter: click photos in the grid to give them (or take away) a keyword
         ui.horizontal(|ui| {
             let pid = egui::Id::new("kw-painter");
             let painting = app.ui.lib.painter.as_ref().filter(|p| p.kind == crate::libtools::PaintKind::Keywords).map(|p| p.value.clone());
             let mut k: String = ui.data(|d| d.get_temp(pid)).unwrap_or_else(|| painting.clone().unwrap_or_default());
-            let r = ui.add_enabled(
-                painting.is_none(),
-                egui::TextEdit::singleline(&mut k).hint_text(crate::i18n::tr("Keyword to paint")).desired_width(130.0),
-            );
-            register(ui.ctx(), "field:keywordPainter", r.rect);
+            // (fixed while painting: Stop first)
+            let field = ui
+                .add_enabled_ui(painting.is_none(), |ui| {
+                    crate::text_field::TextField::singleline("field:keywordPainter", &mut k)
+                        .hint(crate::i18n::tr("Keyword to paint"))
+                        .width(130.0)
+                        .show(ui)
+                })
+                .inner;
             ui.data_mut(|d| d.insert_temp(pid, k.clone()));
             let label = if painting.is_some() { "Stop" } else { "Paint" };
+            let returned = field.ending == Some(crate::text_field::Ending::Return) && painting.is_none() && !k.trim().is_empty();
             if text_button(ui, "keywordPaint", label, painting.is_some())
                 .on_hover_text(crate::i18n::tr("Click photos in the grid to toggle the keyword; Esc stops"))
                 .clicked()
+                || returned
             {
                 let _ = app.run("tool.keywordPainter", json!({"keyword": if painting.is_some() { serde_json::Value::Null } else { json!(k) }}));
             }
@@ -552,7 +608,11 @@ fn keywords(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId) {
         // photo's keywords, else the most used ones
         let typed = ui.data(|d| d.get_temp::<String>(kid).unwrap_or_default());
         let last = typed.rsplit(',').next().unwrap_or("").trim().to_string();
-        let suggestions = (*app.caches.suggestions(&app.session.catalog, &p.meta.keywords, &last, 12)).clone();
+        // the keywords every selected photo has: those only some have are still suggested
+        let selection = app.session.targets(&serde_json::Value::Null);
+        let have: Vec<String> =
+            app.caches.keyword_chips(&app.session.catalog, &selection).iter().filter(|c| c.on_all()).map(|c| c.path.clone()).collect();
+        let suggestions = (*app.caches.suggestions(&app.session.catalog, &have, &last, 12)).clone();
         if !suggestions.is_empty() {
             ui.label(egui::RichText::new(crate::i18n::tr("Suggestions")).color(t.text_dim));
             ui.horizontal_wrapped(|ui| {
@@ -574,13 +634,16 @@ fn keywords(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId) {
 
 /// The keyword set: pick a set, then nine buttons (⌥1–⌥9) that toggle its keywords on the
 /// selected photos; "Save as Set…" keeps the current nine under a name.
-pub(crate) fn keyword_set(app: &mut DacApp, ui: &mut egui::Ui, have: &[String]) {
+fn keyword_set(app: &mut DacApp, ui: &mut egui::Ui) {
+    // on: every selected photo has it (⌥1–⌥9 then take it off them); partly on: only some do
+    let selection = app.session.targets(&serde_json::Value::Null);
+    let chips = app.caches.keyword_chips(&app.session.catalog, &selection);
     let t = Tokens::get(ui.ctx());
     let sets = dac_engine::cmd::keywords::keyword_sets_json(&app.session);
     let current = sets["current"].as_str().unwrap_or_default().to_string();
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Keyword Set")).color(t.text_dim));
-        egui::ComboBox::from_id_salt("kw-set")
+        let combo = egui::ComboBox::from_id_salt("kw-set")
             .selected_text(crate::i18n::builtin_label(&current, current == dac_engine::cmd::keywords::RECENT))
             .show_ui(ui, |ui| {
                 for set in sets["sets"].as_array().into_iter().flatten() {
@@ -590,6 +653,21 @@ pub(crate) fn keyword_set(app: &mut DacApp, ui: &mut egui::Ui, have: &[String]) 
                     }
                 }
                 ui.separator();
+                // Edit Set…: the current nine, slot by slot (named, Recent Keywords becomes a set)
+                let edit = ui.button(crate::i18n::tr("Edit Set…"));
+                register(ui.ctx(), "keywordSetMenu:edit", edit.rect);
+                if edit.clicked() {
+                    let mut slots: Vec<String> =
+                        sets["keywords"].as_array().into_iter().flatten().filter_map(|k| k.as_str().map(str::to_string)).collect();
+                    slots.resize(9, String::new());
+                    let named = current != dac_engine::cmd::keywords::RECENT;
+                    app.ui.dialog = Some(crate::state::Dialog::KeywordSet {
+                        replaces: named.then(|| current.clone()),
+                        name: if named { current.clone() } else { String::new() },
+                        slots,
+                        as_new: false,
+                    });
+                }
                 if ui.button(crate::i18n::tr("Save Current Keywords as Set…")).clicked() {
                     app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
                         title: "Save Keyword Set".into(),
@@ -606,6 +684,7 @@ pub(crate) fn keyword_set(app: &mut DacApp, ui: &mut egui::Ui, have: &[String]) 
                     let _ = app.run("keyword.deleteSet", json!({"name": current}));
                 }
             });
+        register(ui.ctx(), "keywordSetCombo", combo.response.rect);
     });
     let kws: Vec<String> = sets["keywords"].as_array().into_iter().flatten().filter_map(|k| k.as_str().map(str::to_string)).collect();
     if kws.is_empty() {
@@ -615,8 +694,19 @@ pub(crate) fn keyword_set(app: &mut DacApp, ui: &mut egui::Ui, have: &[String]) 
     let bw = ((ui.available_width() - 8.0) / 3.0).floor().max(40.0);
     egui::Grid::new("kw-set-grid").num_columns(3).spacing([4.0, 4.0]).show(ui, |ui| {
         for (i, k) in kws.iter().enumerate() {
-            let on = have.iter().any(|x| x.eq_ignore_ascii_case(k));
-            let short = k.rsplit('|').next().unwrap_or(k);
+            // an empty slot: an idle button, so the others keep their ⌥ keys
+            if k.is_empty() {
+                let r = ui.add_enabled_ui(false, |ui| ui.add_sized([bw, 22.0], egui::Button::new(""))).inner;
+                register(ui.ctx(), format!("kwSetEmpty:{}", i + 1), r.rect);
+                if i % 3 == 2 {
+                    ui.end_row();
+                }
+                continue;
+            }
+            let chip = chips.iter().find(|c| dac_catalog::keywords::same(&c.path, &dac_catalog::keywords::clean(k)));
+            let on = chip.is_some_and(|c| c.on_all());
+            let some = chip.is_some() && !on;
+            let short = format!("{}{}", k.rsplit('|').next().unwrap_or(k), if some { " *" } else { "" });
             let r = ui
                 .add_sized(
                     [bw, 22.0],
@@ -624,6 +714,11 @@ pub(crate) fn keyword_set(app: &mut DacApp, ui: &mut egui::Ui, have: &[String]) 
                 )
                 .on_hover_text(format!("{} — ⌥{}", k.replace('|', " › "), i + 1));
             register(ui.ctx(), format!("kwSet:{}", i + 1), r.rect);
+            if on {
+                register(ui.ctx(), format!("kwSetOn:{}", i + 1), r.rect);
+            } else if some {
+                register(ui.ctx(), format!("kwSetSome:{}", i + 1), r.rect);
+            }
             if r.clicked() {
                 let _ = app.run("keyword.toggleFromSet", json!({"index": i + 1}));
             }

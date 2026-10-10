@@ -16,6 +16,8 @@ crates/brand/
 brand/
 # catalog v4: upstream fixes are reviewed and ported by hand
 crates/catalog/
+# upstream's store listing (its product name, icon and asset names): not ours to ship
+omastore.toml
 # our new crates
 crates/net/
 crates/credentials/

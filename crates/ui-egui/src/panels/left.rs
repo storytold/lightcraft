@@ -45,10 +45,11 @@ fn row_named(
     selected: bool,
     indent: f32,
 ) -> egui::Response {
-    row_sensed(app, ui, id, icon, label, spoken, count, selected, indent, Sense::click())
+    row_sensed(app, ui, id, icon, label, spoken, count, selected, indent, Sense::click(), None)
 }
 
-/// [`row_named`] with the given `sense` (rows that can be dragged add `drag`).
+/// [`row_named`] with the given `sense` (rows that can be dragged add `drag`) and a colour
+/// label's dot (`mark`) before the count.
 #[allow(clippy::too_many_arguments)]
 fn row_sensed(
     app: &mut DacApp,
@@ -61,6 +62,7 @@ fn row_sensed(
     selected: bool,
     indent: f32,
     sense: Sense,
+    mark: Option<egui::Color32>,
 ) -> egui::Response {
     let label = if matches!(id, "all" | "recentlyAdded" | "previousImport" | "quickCollection" | "picks" | "missing" | "recentlyDeleted") {
         crate::i18n::tr(label)
@@ -98,8 +100,15 @@ fn row_sensed(
     let count_galley = count.filter(|_| app.ui.show_counts).map(|n| ui.painter().layout_no_wrap(n.to_string(), t.font(12.5), t.text_dim));
     let label_left = r.left() + 42.0 + indent;
     let count_left = count_galley.as_ref().map_or(edge - 18.0, |g| edge - 18.0 - g.size().x);
+    // a label's dot sits just before the count
+    let mark_w = if mark.is_some() { MARK_W } else { 0.0 };
+    if let Some(c) = mark {
+        let dot = Rect::from_center_size(pos2(count_left - MARK_W / 2.0, r.center().y), vec2(8.0, 8.0));
+        ui.painter().circle_filled(dot.center(), 4.0, c);
+        register(ui.ctx(), format!("labelMark:{id}"), dot);
+    }
     // the name gives way to the count: cut with an ellipsis, in full on hover
-    let room = count_left - 8.0 - label_left;
+    let room = count_left - mark_w - 8.0 - label_left;
     let measure = |s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), color).size().x;
     let full_w = measure(label);
     let shown = if full_w <= room { label.to_string() } else { crate::widgets::elide_head(label, room.max(0.0), measure) };
@@ -108,7 +117,7 @@ fn row_sensed(
     let resp = if shown != label { resp.on_hover_text(label) } else { resp };
     // a row asks for room for its name up to a share of a panel, so one very long name does not
     // make everything scroll: depth does that
-    let mut needed = 42.0 + indent + full_w.min(MAX_NAME_NEED) + 18.0;
+    let mut needed = 42.0 + indent + full_w.min(MAX_NAME_NEED) + 18.0 + mark_w;
     if let Some(galley) = count_galley {
         let rect = Rect::from_min_size(pos2(edge - 18.0 - galley.size().x, r.center().y - galley.size().y / 2.0), galley.size());
         needed += rect.width() + 16.0;
@@ -779,7 +788,8 @@ fn albums_tree(app: &mut DacApp, ui: &mut egui::Ui, all: &AlbumKids, parent: Opt
                 open = true;
                 ui.data_mut(|d| d.insert_temp(open_id, true));
             }
-            let resp = row_sensed(app, ui, &format!("folder:{}", a.id.0), Icon::Folder, &a.name, None, None, false, indent, Sense::click_and_drag());
+            let resp =
+                row_sensed(app, ui, &format!("folder:{}", a.id.0), Icon::Folder, &a.name, None, None, false, indent, Sense::click_and_drag(), None);
             // a folder is no source, so its row folds it too; the triangle is the same click, aimed
             let has_children = all.get(&Some(a.id)).is_some_and(|v| !v.is_empty());
             if resp.drag_started() {
@@ -812,7 +822,13 @@ fn albums_tree(app: &mut DacApp, ui: &mut egui::Ui, all: &AlbumKids, parent: Opt
             let target =
                 app.session.target_album.filter(|t| app.session.catalog.album(*t).is_some()).or_else(|| app.session.catalog.quick_collection());
             let label = if target == Some(a.id) { format!("{} +", a.name) } else { a.name.clone() };
-            let mut resp = row_sensed(app, ui, &format!("album:{}", a.id.0), icon, &label, None, Some(n), sel, indent, Sense::click_and_drag());
+            // a smart album whose rules no longer check (an album they test was deleted) says so
+            let problems = app.caches.smart_album_problems(&app.session.catalog).get(&a.id).cloned().unwrap_or_default();
+            let label = if problems.is_empty() { label } else { format!("⚠ {label}") };
+            let mut resp = row_sensed(app, ui, &format!("album:{}", a.id.0), icon, &label, None, Some(n), sel, indent, Sense::click_and_drag(), None);
+            if !problems.is_empty() {
+                crate::widgets::register(ui.ctx(), format!("albumProblem:{}", a.id.0), resp.rect);
+            }
             if resp.drag_started() {
                 app.ui.dragging_album = Some(a.id.0);
             }
@@ -821,7 +837,17 @@ fn albums_tree(app: &mut DacApp, ui: &mut egui::Ui, all: &AlbumKids, parent: Opt
                 drop_target(app, ui, &resp, a);
             }
             if let Some(rules) = &a.smart {
-                resp = resp.on_hover_text(crate::i18n::tr_format!("Smart album: {}", crate::i18n::filter_label(rules, &app.session.catalog)));
+                // one tooltip: the rules, then what needs fixing in them
+                let mut tip = crate::i18n::tr_format!("Smart album: {}", crate::i18n::filter_label(rules, &app.session.catalog));
+                if !problems.is_empty() {
+                    tip.push_str("\n\n");
+                    tip.push_str(crate::i18n::tr("Some rules need fixing (Edit Smart Album…):"));
+                    for p in &problems {
+                        tip.push('\n');
+                        tip.push_str(&crate::i18n::problem_line(p));
+                    }
+                }
+                resp = resp.on_hover_text(tip);
             }
             if resp.clicked() {
                 let _ = app.run("library.source", json!({"kind": "album", "id": a.id.0}));
@@ -866,6 +892,9 @@ fn drag_auto_scroll(app: &DacApp, ui: &egui::Ui) {
         ui.ctx().request_repaint();
     }
 }
+
+/// Room a colour label's dot takes before a row's count.
+const MARK_W: f32 = 12.0;
 
 /// How long a dragged album must rest on a closed folder before it opens.
 const HOVER_OPEN_SECS: f64 = 0.6;
@@ -1123,12 +1152,15 @@ fn folder_menu(app: &mut DacApp, resp: &egui::Response, a: &Album) {
             let _ = app.run("album.clearQuick", json!({}));
         }
         if a.is_smart() && ui.button(crate::i18n::tr("Edit Smart Album…")).clicked() {
-            // older smart albums keep their filter fields; the editor works on the rule set
-            let rules = a.smart.as_ref().and_then(|f| f.rule_set.clone()).unwrap_or_default();
-            app.ui.dialog = Some(crate::state::Dialog::SmartRules { id: Some(a.id.0), name: a.name.clone(), rules, parent: None });
+            // the same editor as `dialog.smartAlbum` (older smart albums keep their filter fields;
+            // it works on the rule set, upgraded)
+            let _ = app.run("dialog.smartAlbum", json!({"id": a.id.0}));
         }
         if a.is_smart() && ui.button(crate::i18n::tr("Update Rules from Current Filter")).clicked() {
-            let _ = app.run("album.setRules", json!({"id": a.id.0, "fromView": true}));
+            // refused when the view would make the album test itself: say why
+            if let Err(e) = app.run("album.setRules", json!({"id": a.id.0, "fromView": true})) {
+                app.toast(ui.ctx(), e);
+            }
         }
         if !a.folder {
             // export: show the album, select its photos, then the dialog / a preset
@@ -1176,8 +1208,15 @@ fn folder_menu(app: &mut DacApp, resp: &egui::Response, a: &Album) {
         if ui.button(crate::i18n::tr("Rename…")).clicked() {
             app.ui.dialog = Some(crate::state::Dialog::RenameAlbum { id: a.id.0, name: a.name.clone() });
         }
-        if ui.button(crate::i18n::tr("Delete")).clicked() {
-            let _ = app.run("album.delete", json!({"id": a.id.0}));
+        let delete = ui.button(crate::i18n::tr("Delete"));
+        register(ui.ctx(), format!("albumDelete:{}", a.id.0), delete.rect);
+        let delete =
+            delete.on_hover_text(crate::i18n::tr("Photos stay in All Photos. Deleting a folder also deletes its albums. You can undo this."));
+        if delete.clicked() {
+            if let Err(e) = app.run("album.delete", json!({"id": a.id.0})) {
+                app.toast(ui.ctx(), e);
+            }
+            ui.close();
         }
     });
 }
@@ -1261,7 +1300,14 @@ fn folder_rows(app: &mut DacApp, ui: &mut egui::Ui, nodes: &[FolderNode], indent
             && app.session.source == LibrarySource::LibraryFolder
             && app.session.library_folder.as_deref().is_some_and(|f| same_folder(f, &n.path));
         let name = if selectable { n.name.clone() } else { crate::i18n::tr("This Computer").to_string() };
-        let resp = row_named(app, ui, &format!("libfolder:{}", n.path), Icon::Folder, &name, Some(&name), Some(n.count), sel, indent);
+        // the label is said with the name, as it is shown beside it
+        let spoken = match n.label {
+            Some(l) => format!("{name}, {}", crate::i18n::color_label(&app.session.catalog, l)),
+            None => name.clone(),
+        };
+        let mark = n.label.map(crate::theme::label_color);
+        let id = format!("libfolder:{}", n.path);
+        let resp = row_sensed(app, ui, &id, Icon::Folder, &name, Some(&spoken), Some(n.count), sel, indent, Sense::click(), mark);
         let mut toggled = false;
         if !n.children.is_empty() {
             let tr = disclosure_triangle(ui, &resp, indent, open, egui::Id::new(("libfolder-tri", key)), format!("libraryFolderToggle:{}", n.path));
@@ -1300,6 +1346,9 @@ fn row_menu(app: &mut DacApp, resp: &egui::Response, n: &FolderNode) {
         folder_menu_for_library(app, resp, n);
     } else if n.path != "/" {
         resp.context_menu(|ui| {
+            folder_label_menu(app, ui, n);
+            synchronize_item(app, ui, n, &n.name);
+            ui.separator();
             if ui
                 .button(crate::i18n::tr("Remove Disk from Library…"))
                 .on_hover_text(crate::i18n::tr("Moves every photo imported from this disk to Recently Deleted; no file is touched"))
@@ -1310,6 +1359,36 @@ fn row_menu(app: &mut DacApp, resp: &egui::Response, n: &FolderNode) {
             }
         });
     }
+}
+
+/// Synchronize Folder… of a Folders row (widget `folderSynchronize`): opens its dialog, which
+/// scans the folder in the background.
+fn synchronize_item(app: &mut DacApp, ui: &mut egui::Ui, n: &FolderNode, name: &str) {
+    let r = ui
+        .button(crate::i18n::tr("Synchronize Folder…"))
+        .on_hover_text(crate::i18n::tr("Find photos added to or missing from this folder on disk, and XMP sidecars changed by other apps"));
+    crate::widgets::register(ui.ctx(), "folderSynchronize", r.rect);
+    if r.clicked() {
+        // a disk, or a folder holding disks, was chosen as such
+        if let Err(e) = crate::sync::open(app, &n.path, name, n.volume || !n.selectable) {
+            app.toast(ui.ctx(), e);
+        }
+        ui.close();
+    }
+}
+
+/// Set Color Label ▸ of a Folders row (`folder.label`; the submenu is widget `folderLabelMenu`,
+/// its colours `folderLabel:<colour>`).
+fn folder_label_menu(app: &mut DacApp, ui: &mut egui::Ui, n: &FolderNode) {
+    let menu = ui.menu_button(crate::i18n::tr("Set Color Label"), |ui| {
+        if let Some(l) = crate::panels::grid::label_items(app, ui, n.label, "folderLabel") {
+            if let Err(e) = app.run("folder.label", json!({"path": n.path, "label": crate::panels::grid::label_param(l)})) {
+                app.toast(ui.ctx(), e);
+            }
+            ui.close();
+        }
+    });
+    register(ui.ctx(), "folderLabelMenu", menu.response.rect);
 }
 
 /// The context menu of a folder row: the folder's disk actions (the same as Local's, photos
@@ -1348,6 +1427,8 @@ fn folder_menu_for_library(app: &mut DacApp, resp: &egui::Response, n: &FolderNo
             let _ = f(path);
             ui.close();
         }
+        folder_label_menu(app, ui, n);
+        synchronize_item(app, ui, n, &label);
         ui.separator();
         super::folders::row_menu_items(app, ui, path);
         ui.separator();
@@ -1470,7 +1551,7 @@ fn add_disk_folders(n: &mut dac_catalog::FolderNode, empty_depth: usize, budget:
             continue;
         }
         *budget -= 1;
-        let mut child = dac_catalog::FolderNode { name, path, count: 0, own: 0, volume: false, selectable: true, children: Vec::new() };
+        let mut child = dac_catalog::FolderNode { name, path, count: 0, own: 0, volume: false, selectable: true, label: None, children: Vec::new() };
         add_disk_folders(&mut child, empty_depth + 1, budget);
         added.push(child);
     }
@@ -1615,6 +1696,7 @@ mod tests {
             own,
             volume: false,
             selectable: true,
+            label: None,
             children,
         };
         let tree = vec![node("root", p.clone(), 3, vec![node("shoot", format!("{p}/shoot"), 2, vec![])])];

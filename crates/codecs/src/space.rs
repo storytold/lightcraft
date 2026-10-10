@@ -255,6 +255,27 @@ impl SourceSpace {
         SourceSpace { named: Some(n), to_xyz_d50: n.to_xyz_d50(), trc: Some([t.clone(), t.clone(), t]), origin }
     }
 
+    /// The space named by ITU-T H.273 code points (PNG `cICP`, HEIF `nclx`, HEVC VUI), when
+    /// both the primaries and the transfer are ones this crate models.
+    pub(crate) fn from_cicp(primaries: u16, transfer: u16) -> Option<SourceSpace> {
+        let named = match primaries {
+            1 => NamedSpace::Srgb,
+            9 => NamedSpace::Rec2020,
+            12 => NamedSpace::DisplayP3,
+            _ => return None,
+        };
+        let trc = match transfer {
+            13 => Trc::Srgb,
+            1 | 6 | 14 | 15 => Trc::Rec709,
+            8 => Trc::Linear,
+            4 => Trc::Gamma(2.2),
+            _ => return None,
+        };
+        let mut s = SourceSpace::named(named, SpaceOrigin::Container);
+        s.trc = Some([trc.clone(), trc.clone(), trc]);
+        Some(s)
+    }
+
     /// Linear source RGB → linear `dst` RGB (Bradford from D50 to `dst`'s white).
     pub fn to_space(&self, dst: &RgbSpace) -> Mat3 {
         if let Some(n) = self.named {

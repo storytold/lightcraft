@@ -17,8 +17,10 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod convert;
+pub mod display;
 pub mod encode;
 pub mod exif;
+pub mod gainmap;
 mod heif;
 pub mod icc;
 mod jpeg;
@@ -34,7 +36,8 @@ mod tiff_codec;
 mod webp;
 
 pub use encode::{
-    ChromaSubsampling, EncodeImage, EncodeMeta, Samples, TiffCompression, encode_avif, encode_jpeg, encode_png, encode_tiff, encode_webp_lossless,
+    ChromaSubsampling, EncodeImage, EncodeMeta, HDR_REFERENCE_WHITE_NITS, Samples, TiffCompression, encode_avif, encode_avif_pq, encode_jpeg,
+    encode_png, encode_tiff, encode_webp_lossless,
 };
 pub use sniff::{Format, sniff};
 pub use space::{NamedSpace, SourceSpace, SpaceOrigin, Trc};
@@ -171,9 +174,9 @@ pub struct Header {
 }
 
 /// Read the stored dimensions and orientation of any format [`decode`] supports, agreeing with
-/// what a decode reports, without decoding pixels: JPEG, PNG, TIFF, WebP and PSD are read from
-/// their headers (markers, chunks, IFD, resources). GIF, BMP and JPEG XL fall back to a small
-/// decode.
+/// what a decode reports, without decoding pixels: JPEG, PNG, TIFF, WebP, PSD and HEIF are read
+/// from their headers (markers, chunks, IFD, resources, boxes). GIF, BMP and JPEG XL fall back to
+/// a small decode.
 ///
 /// The header readers also refuse what a decode would refuse before reaching the pixels (an
 /// unsupported layout, compression or frame type) and files whose image data is cut short
@@ -196,6 +199,7 @@ pub fn read_header_unguarded(bytes: &[u8], format: Format) -> Result<Header> {
         Format::Tiff => tiff_codec::header(bytes)?,
         Format::WebP => webp::header(bytes)?,
         Format::Psd => psd::header(bytes)?,
+        Format::Heif => heif::header(bytes)?,
         // rare here (or, for JPEG XL, without a header reader yet): a small decode, as before
         _ => {
             let d = decode_unguarded(bytes, format, &DecodeOptions::fit(64, 64))?;
@@ -217,6 +221,8 @@ pub fn decode_jpeg_with_fallback(bytes: &[u8], opts: DecodeOptions, fallback: Na
 #[doc(hidden)]
 pub fn decode_unguarded(bytes: &[u8], format: Format, opts: &DecodeOptions) -> Result<Decoded> {
     let opts = *opts;
+    // The reason a format can't be decoded lives in one place, `Format::not_decodable`.
+    let unsupported = || Err(Error::Unsupported(format, format.not_decodable().unwrap_or("not decodable in this build")));
     match format {
         Format::Jpeg => jpeg::decode(bytes, &opts),
         Format::Png => png_codec::decode(bytes, &opts),
@@ -227,10 +233,9 @@ pub fn decode_unguarded(bytes: &[u8], format: Format, opts: &DecodeOptions) -> R
         #[cfg(feature = "jxl")]
         Format::Jxl => jxl::decode(bytes, &opts),
         #[cfg(not(feature = "jxl"))]
-        Format::Jxl => Err(Error::Unsupported(format, "built without the `jxl` feature")),
+        Format::Jxl => unsupported(),
         Format::Heif => heif::decode(bytes, &opts),
-        Format::Avif => Err(Error::Unsupported(format, "no pure-Rust, permissively licensed AV1 decoder yet")),
-        Format::RawTiffLike | Format::RawOther => Err(Error::Unsupported(format, "camera raw: decode with dac-raw")),
+        Format::Avif | Format::RawTiffLike | Format::RawOther => unsupported(),
     }
 }
 

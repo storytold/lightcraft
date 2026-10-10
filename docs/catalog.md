@@ -109,7 +109,7 @@ fast (below), not about leaving photos on disk.
   truncates bytes).
 
 The web build (OPFS) and in-memory libraries keep the JSON snapshot (`Store::dir` is `None` for them); both formats
-carry the same catalog (format version 4).
+carry the same catalog (format version 5; 5 adds the keyword list and folder records, kept in the `meta` table's head record).
 
 ### Tables
 

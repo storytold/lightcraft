@@ -355,16 +355,22 @@ fn text_field(app: &mut DacApp, ui: &mut egui::Ui, photos: &[Arc<Photo>], ids: &
     let shown = shared.clone().unwrap_or_default();
     let id = egui::Id::new(("info-field", key));
     let mut text: String = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| shown.clone());
-    let edit = if lines > 1 { egui::TextEdit::multiline(&mut text).desired_rows(lines) } else { egui::TextEdit::singleline(&mut text) };
-    let edit = if shared.is_none() { edit.hint_text(MIXED) } else { edit };
-    let r = ui.add(edit.desired_width(f32::INFINITY));
-    register(ui.ctx(), format!("field:{key}"), r.rect);
-    if r.has_focus() {
+    // the shared text field (upstream's Info panel): Return (one line) or leaving saves, Esc gives the
+    // edit up, right-click has the edit menu
+    let widget = format!("field:{key}");
+    let field = if lines > 1 {
+        crate::text_field::TextField::multiline(&widget, &mut text).rows(lines)
+    } else {
+        crate::text_field::TextField::singleline(&widget, &mut text)
+    };
+    let field = if shared.is_none() { field.hint(MIXED) } else { field };
+    let r = field.width(f32::INFINITY).show(ui);
+    if r.editing {
         ui.data_mut(|d| d.insert_temp(id, text.clone()));
     } else {
         ui.data_mut(|d| d.remove::<String>(id));
     }
-    if r.lost_focus() && text != shown && !(shared.is_none() && text.is_empty()) {
+    if r.committed() && text != shown && !(shared.is_none() && text.is_empty()) {
         let _ = app.run("photo.setMeta", json!({"ids": ids, key: text}));
     }
     ui.add_space(6.0);

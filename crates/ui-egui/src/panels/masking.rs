@@ -138,11 +138,12 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId) {
                         }
                         "object" => start_object(app, ui.ctx(), "new"),
                         "prompt" => start_describe(app, "new"),
-                        "brush" | "linear" | "radial" => {
+                        "brush" => {
+                            let _ = app.run("tool.brush", json!({"new": true}));
+                        }
+                        "linear" | "radial" => {
                             app.ui.tool = kind.to_string();
-                            if *kind != "brush" {
-                                let _ = app.run("mask.add", json!({"kind": kind}));
-                            }
+                            let _ = app.run("mask.add", json!({"kind": kind}));
                         }
                         k => {
                             let _ = app.run("mask.add", json!({"kind": k}));
@@ -798,10 +799,11 @@ fn component_menu(app: &mut DacApp, ui: &mut egui::Ui, op: &str) {
         if kind == "brush" && op == "intersect" {
             continue;
         }
-        if ui.button(label).clicked() {
+        let b = ui.button(label);
+        register(ui.ctx(), format!("maskComp:{op}:{kind}"), b.rect);
+        if b.clicked() {
             if kind == "brush" {
-                app.ui.tool = "brush".into();
-                app.ui.brush_erase = op == "subtract";
+                let _ = app.run("tool.brush", json!({"op": op}));
             } else {
                 let _ = app.run("mask.addComponent", json!({"op": op, "kind": kind}));
             }

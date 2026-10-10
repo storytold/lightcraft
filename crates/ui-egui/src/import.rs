@@ -395,6 +395,12 @@ pub struct ScanTask {
     sources: Vec<String>,
 }
 
+/// An import and a Synchronize Folder never run at once: each readies its files against the
+/// library as it was when it started, so both could add the same file.
+pub(crate) fn busy_synchronizing(app: &DacApp) -> Result<(), String> {
+    if app.sync_run.is_some() { Err(crate::i18n::tr("A folder is being synchronized").to_string()) } else { Ok(()) }
+}
+
 /// Scan `paths` in the background, then open the review dialog (see [`poll_scan`]).
 pub fn open(app: &mut DacApp, paths: Vec<String>) -> Result<Value, String> {
     if app.scan.is_some() {
@@ -562,6 +568,7 @@ impl ScanTask {
 
 /// Start importing the dialog's checked files (the dialog's OK / `ui.dialog.confirm`).
 pub fn start(app: &mut DacApp, d: &ImportDialog) -> Result<Value, String> {
+    busy_synchronizing(app)?;
     #[cfg(not(target_arch = "wasm32"))]
     if d.immich {
         return crate::panels::connections::start_import(app);
@@ -617,6 +624,7 @@ pub fn start(app: &mut DacApp, d: &ImportDialog) -> Result<Value, String> {
 
 /// Start importing `paths` (files or folders) in the background, e.g. dropped on the window.
 pub fn start_paths(app: &mut DacApp, paths: Vec<String>) -> Result<Value, String> {
+    busy_synchronizing(app)?;
     if app.import.is_some() || app.scan.as_ref().is_some_and(|t| !t.browse) {
         return Err("an import is running".into());
     }

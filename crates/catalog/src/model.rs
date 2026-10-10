@@ -152,6 +152,17 @@ impl CopyrightStatus {
     }
 }
 
+/// A shutter speed as cameras write it (`1/250`, `0.5`, `2"`, `30s`) in seconds; `None` for
+/// anything that isn't a positive, finite time.
+pub fn parse_shutter_seconds(s: &str) -> Option<f64> {
+    let s = s.trim().trim_end_matches(['s', '"']).trim();
+    match s.split_once('/') {
+        Some((n, d)) => Some(n.trim().parse::<f64>().ok()? / d.trim().parse::<f64>().ok()?),
+        None => s.parse().ok(),
+    }
+    .filter(|v: &f64| v.is_finite() && *v > 0.0)
+}
+
 /// Descriptive + capture metadata.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -307,6 +318,14 @@ pub struct Analysis {
     pub best: bool,
 }
 
+/// Raw formats whose readers have vendor white-balance multipliers but no measured camera
+/// illuminant: their white balance is developed relative to the as-shot look (6500 K / 0 means
+/// as shot), as for rendered photographs. `format` is the file's extension or Lightroom's
+/// `fileFormat` name, in any case. See [`Photo::relative_wb`].
+pub fn relative_wb_format(format: &str) -> bool {
+    ["ARW", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW", "ORF"].iter().any(|f| format.eq_ignore_ascii_case(f))
+}
+
 impl Photo {
     pub fn new(id: PhotoId, source: Source, file_name: &str, format: &str, width: u32, height: u32, imported: &str) -> Photo {
         Photo {
@@ -349,24 +368,27 @@ impl Photo {
     pub fn develops_raw(&self) -> bool {
         self.kind == MediaKind::Raw && self.preview_only.is_none()
     }
-    /// The current ARW, NEF, RW2, RAF, CR3, CR2, PEF and SRW readers have vendor WB multipliers but no measured camera
+    /// The current ARW, NEF, RW2, RAF, CR3, CR2, PEF, SRW and ORF readers have vendor WB multipliers but no measured camera
     /// illuminant. Use adjustments relative to the camera's as-shot look, as for rendered
     /// photographs (the engine's `camera_preview::file_local_look` covers the same formats; RWL and
     /// RAW are Leica's and the oldest Panasonic bodies' names for RW2 files).
     pub fn relative_wb(&self) -> bool {
-        self.develops_raw()
-            && ["ARW", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW"].iter().any(|f| self.format.eq_ignore_ascii_case(f))
+        self.develops_raw() && relative_wb_format(&self.format)
     }
     /// The develop settings import gave this photo: [`Photo::camera_defaults`], or the user's
-    /// default preset applied on top of them ([`Photo::import_look`]).
+    /// default preset applied on top of them ([`Photo::import_look`]). Like the camera defaults,
+    /// in the photo's own rendering process.
     pub fn import_defaults(&self) -> DevelopSettings {
         match &self.import_look {
-            Some(l) => (**l).clone(),
+            Some(l) => DevelopSettings { process: self.develop.process, ..(**l).clone() },
             None => self.camera_defaults(),
         }
     }
     /// The built-in defaults for this photo, before any user default preset: raws start from
-    /// their as-shot white balance; embedded lens corrections on when the file has them.
+    /// their as-shot white balance; embedded lens corrections on when the file has them. They
+    /// carry the photo's own rendering process ([`dac_develop::ProcessVersion`]): which
+    /// process a photo renders with is not an edit, so comparisons with its defaults (edited?
+    /// still as imported?) don't change when a newer process exists. A new photo has the latest.
     pub fn camera_defaults(&self) -> DevelopSettings {
         let wb = if self.relative_wb() { Some((6500.0, 0.0)) } else { self.as_shot_wb };
         let mut d = match wb {
@@ -376,7 +398,48 @@ impl Photo {
         if self.embedded_lens.is_some() {
             d.optics.lens_profile = true;
         }
+        d.process = self.develop.process;
         d
+    }
+    /// The file name's extension without the dot, as written (`CR2` for `IMG_0042.CR2`); empty
+    /// when the name has none (`README`, a dot file such as `.hidden`).
+    pub fn extension(&self) -> &str {
+        self.file_name.rsplit_once('.').filter(|(stem, _)| !stem.is_empty()).map_or("", |(_, ext)| ext)
+    }
+    /// Width and height in pixels as the photo is shown: turned by its orientation and cut by its
+    /// crop. Straightening and Constrain Crop shrink the crop without changing its shape, so the
+    /// aspect is exact and the edges can read a little larger than an export.
+    pub fn shown_size(&self) -> (f64, f64) {
+        let (w, h) = (self.width as f64, self.height as f64);
+        let (w, h) = if self.develop.orientation.swaps_axes() { (h, w) } else { (w, h) };
+        let r = self.develop.crop.geometry.rect;
+        // a crop read from a file or an agent is hostile: no NaN, nothing outside the frame
+        let part = |len: f64| if len.is_finite() { len.clamp(0.0, 1.0) } else { 1.0 };
+        (w * part(r.width()), h * part(r.height()))
+    }
+    /// Cropped or straightened.
+    pub fn is_cropped(&self) -> bool {
+        !self.develop.crop.geometry.is_identity()
+    }
+    /// How many keywords the photo has: a hierarchical keyword (`travel|italy|rome`) is one, and
+    /// the same keyword in different case or with stray spaces counts once; blank ones don't count.
+    pub fn keyword_count(&self) -> usize {
+        let mut seen: Vec<String> = self.meta.keywords.iter().map(|k| k.trim().to_lowercase()).filter(|k| !k.is_empty()).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        seen.len()
+    }
+    /// The people in the photo: the names on its face regions, trimmed, each once (names that
+    /// differ only in case are one person, as first seen). Pets and unnamed faces are not people.
+    pub fn people(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = Vec::new();
+        for r in self.meta.regions.iter().filter(|r| r.kind == dac_meta::RegionKind::Face) {
+            let Some(name) = r.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) else { continue };
+            if !out.iter().any(|o| o.to_lowercase() == name.to_lowercase()) {
+                out.push(name);
+            }
+        }
+        out
     }
     /// In the library: not deleted and not only browsed (Local).
     pub fn in_library(&self) -> bool {
@@ -453,6 +516,32 @@ mod edited_tests {
     }
 
     #[test]
+    fn the_process_a_photo_renders_with_is_not_an_edit() {
+        use dac_develop::ProcessVersion;
+        // a photo on another process than the latest (a V1 photo once a later process is the
+        // latest, or a photo saved by a newer version of the app)
+        let other = ProcessVersion(ProcessVersion::LATEST.0 + 1);
+        let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.dng", "DNG", 10, 10, "2026-10-01T00:00:00");
+        p.kind = MediaKind::Raw;
+        p.as_shot_wb = Some((5200.0, 4.0));
+        assert_eq!(p.camera_defaults().process, ProcessVersion::LATEST, "a new photo gets the latest");
+        p.develop = Arc::new(DevelopSettings { process: other, ..p.import_defaults() });
+        assert_eq!((p.camera_defaults().process, p.import_defaults().process), (other, other));
+        assert!(!p.is_edited(), "still as imported");
+        // with a default preset's look as well
+        let mut look = DevelopSettings::for_raw(5200.0, 4.0);
+        look.light.exposure = 0.3;
+        p.import_look = Some(Arc::new(look.clone()));
+        p.develop = Arc::new(DevelopSettings { process: other, ..look });
+        assert_eq!(p.import_defaults().process, other);
+        assert!(!p.is_edited());
+        let mut d = (*p.develop).clone();
+        d.light.exposure = 1.0;
+        p.develop = Arc::new(d);
+        assert!(p.is_edited(), "an edit still is one");
+    }
+
+    #[test]
     fn supported_raws_use_relative_white_balance() {
         for (name, format, relative) in [
             ("a.arw", "ARW", true),
@@ -464,6 +553,9 @@ mod edited_tests {
             ("a.raf", "rAf", true),
             ("a.cr3", "cr3", true),
             ("a.srw", "SRW", true),
+            ("a.cr2", "CR2", true),
+            ("a.pef", "pef", true),
+            ("a.orf", "ORF", true),
             ("a.dng", "DNG", false),
         ] {
             let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, name, format, 10, 10, "2026-10-01T00:00:00");

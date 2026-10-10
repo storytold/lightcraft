@@ -43,7 +43,9 @@ fn album_json(a: &Album, all: &[Album], cat: &dac_catalog::Catalog) -> Value {
     if let Some(rules) = &a.smart {
         v["smart"] = json!(true);
         v["rules"] = serde_json::to_value(rules).unwrap_or_default();
-        v["rulesText"] = json!(rules.describe());
+        v["rulesText"] = json!(rules.describe_with(cat));
+        // rules that no longer check (an album they test was deleted…), as `rule 1: …`
+        v["problems"] = json!(cat.smart_album_problems(a.id).iter().map(ToString::to_string).collect::<Vec<_>>());
     }
     v
 }
@@ -151,9 +153,18 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             Ok(v)
         }),
-        cmd!(query "develop.get", "Get Develop Settings", [], None, "{id?}", always, |s, p| {
+        cmd!(query "develop.get", "Get Develop Settings", [], None, "{id?} → the photo's develop settings; `process` is the rendering process they are interpreted by (see develop.updateProcess)", always, |s, p| {
             let id = photo_arg(s, p, "develop.get")?;
-            Ok(s.develop_of(id).map(|d| d.to_json()).unwrap_or(Value::Null))
+            Ok(s.develop_of(id)
+                .map(|d| {
+                    let mut v = d.to_json();
+                    // saved settings leave V1 out (`ProcessVersion::is_legacy`); here it is always stated
+                    if let Some(o) = v.as_object_mut() {
+                        o.insert("process".into(), json!(d.process));
+                    }
+                    v
+                })
+                .unwrap_or(Value::Null))
         }),
         cmd!(query "develop.controls", "List Develop Controls", [], None, "{section?} — every slider with range, default and current value", always, |s, p| {
             let d = s.active().and_then(|id| s.develop_of(id)).unwrap_or_default();

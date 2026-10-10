@@ -114,8 +114,10 @@ pub enum DevelopPatch {
     Partial(Value),
 }
 
-/// Parse a sidecar / XMP packet. `raw` selects absolute (raw) vs relative white balance for `crs:`.
-pub fn parse_sidecar(xmp: &str, raw: bool) -> std::result::Result<SidecarData, String> {
+/// Parse a sidecar / XMP packet. `target` selects how a `crs:` white balance is read
+/// ([`crate::crs::Target`]: absolute Kelvin for raws with a measured illuminant, a shift from the
+/// as-shot white for everything developed relative to it).
+pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Result<SidecarData, String> {
     let d = dac_meta::parse_xmp(xmp).map_err(|e| e.to_string())?;
     let m = &d.metadata;
     let lc = |k: &str| d.properties.get(&format!("lc:{k}")).and_then(|v| v.first()).cloned();
@@ -133,7 +135,8 @@ pub fn parse_sidecar(xmp: &str, raw: bool) -> std::result::Result<SidecarData, S
         country: m.country.clone(),
         alt_text: m.alt_text.clone(),
         extended_description: m.extended_description.clone(),
-        keywords: (!m.keywords.is_empty()).then(|| m.keywords.clone()),
+        keywords: (!m.keywords.is_empty() || !m.hierarchical_keywords.is_empty())
+            .then(|| dac_catalog::keywords::from_file(&m.keywords, &m.hierarchical_keywords)),
         // A sidecar that has `mwg-rs:Regions` at all (even an empty list) was written by an app that
         // knows about regions, so it's authoritative: its list, empty or not, replaces the catalog's.
         // One without it (most writers, the app's own included, which keeps another app's
@@ -162,7 +165,7 @@ pub fn parse_sidecar(xmp: &str, raw: bool) -> std::result::Result<SidecarData, S
     out.develop = match full {
         Some(s) => Some(DevelopPatch::Full(Box::new(s))),
         None if crate::crs::has_adjustments(&d.properties) => {
-            Some(DevelopPatch::Partial(crate::crs::to_partial_report(&d.properties, Some(&d.values), Some(raw), crate::crs_masks::DEFAULT_ASPECT).0))
+            Some(DevelopPatch::Partial(crate::crs::to_partial_report(&d.properties, Some(&d.values), target, crate::crs_masks::DEFAULT_ASPECT).0))
         }
         None => None,
     };
@@ -442,6 +445,18 @@ impl Session {
     /// catalogued file shares the stem (`IMG_0001.CR3` + `IMG_0001.JPG`) and owns the stem
     /// sidecar — a raw first, else the first by file name. The others use Full naming
     /// (`IMG_0001.JPG.xmp`), so their metadata never overwrites each other.
+    /// [`Session::sidecar_naming`] for many photos, the catalog's sidecar owners worked out once
+    /// (per photo that is a pass over the whole catalog).
+    pub fn sidecar_namings(&self, ids: &[PhotoId]) -> Vec<SidecarNaming> {
+        let owners = (self.xmp.naming == SidecarNaming::Stem).then(|| StemOwners::of(&self.catalog));
+        ids.iter()
+            .map(|id| match (self.catalog.photo(*id), &owners) {
+                (Some(p), Some(o)) => o.naming(p, self.xmp.naming),
+                _ => self.xmp.naming,
+            })
+            .collect()
+    }
+
     pub fn sidecar_naming(&self, id: PhotoId) -> SidecarNaming {
         match self.catalog.photo(id) {
             Some(p) if self.xmp.naming == SidecarNaming::Stem => StemOwners::of(&self.catalog).naming(p, self.xmp.naming),
@@ -472,9 +487,15 @@ impl Session {
         let p = self.catalog.photo(id).ok_or(dac_catalog::CatalogError::NoPhoto(id))?;
         let Some(orig) = file_path(p) else { return Ok(None) };
         let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_naming(id)) else { return Ok(None) };
-        let sc = parse_sidecar(&packet, p.kind == MediaKind::Raw)
-            .map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?
-            .resolve_label(&self.catalog);
+        let sc = parse_sidecar(&packet, crate::crs::Target::for_photo(p)).map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?;
+        Ok(Some((self.sidecar_op(id, sc)?, from)))
+    }
+
+    /// The op that applies what a sidecar says (already read and parsed, e.g. on a worker
+    /// thread) to photo `id`: the sidecar wins. No file is read.
+    pub fn sidecar_op(&self, id: PhotoId, sc: SidecarData) -> Result<Op> {
+        let p = self.catalog.photo(id).ok_or(dac_catalog::CatalogError::NoPhoto(id))?;
+        let sc = sc.resolve_label(&self.catalog);
         let mut q = (**p).clone();
         let develop_changed = merge_into(&mut q, &sc, &(self.clock)());
         let mut ops = vec![
@@ -489,7 +510,7 @@ impl Session {
         if develop_changed {
             ops.extend(self.develop_op(id, (*q.develop).clone(), "Read Metadata from File"));
         }
-        Ok(Some((Op::Batch { ops }, from)))
+        Ok(Op::Batch { ops })
     }
 
     /// What the file system says about photo `id`'s sidecar now (`None`: it has none, or isn't a file).
@@ -555,6 +576,19 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    /// A sidecar written by Lightroom Classic (names flat, paths in `lr:hierarchicalSubject`)
+    /// gives the photo its keywords as paths.
+    #[test]
+    fn sidecar_keywords_keep_their_hierarchy() {
+        let m = dac_meta::Metadata {
+            keywords: vec!["Lisbon".into(), "Places".into()],
+            hierarchical_keywords: vec!["Places|Lisbon".into()],
+            ..Default::default()
+        };
+        let sc = super::parse_sidecar(&dac_meta::write_xmp(&m, None), crate::crs::Target::Rendered).unwrap();
+        assert_eq!(sc.keywords, Some(vec!["Places|Lisbon".to_string()]));
+    }
+
     use super::*;
     use dac_catalog::Meta;
 
@@ -593,7 +627,7 @@ mod tests {
     fn packet_roundtrip_restores_everything() {
         let p = photo();
         let x = sidecar_packet(&p, &dac_catalog::Catalog::new());
-        let sc = parse_sidecar(&x, false).unwrap();
+        let sc = parse_sidecar(&x, crate::crs::Target::Rendered).unwrap();
         assert_eq!(sc.rating, Some(4));
         assert_eq!(sc.flag, Some(Flag::Pick));
         assert_eq!(sc.label, Some(Some(ColorLabel::Purple)));
@@ -612,7 +646,7 @@ mod tests {
         let x = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
           <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
             xmp:Rating="-1" xmp:Label="Green" crs:Exposure2012="-0.40" crs:Vibrance="+12"/></rdf:RDF></x:xmpmeta>"#;
-        let sc = parse_sidecar(x, true).unwrap();
+        let sc = parse_sidecar(x, crate::crs::Target::RawAbsolute).unwrap();
         assert_eq!((sc.rating, sc.flag, sc.label), (Some(0), Some(Flag::Reject), Some(Some(ColorLabel::Green))));
         let mut p = photo();
         let before = p.develop.clone();

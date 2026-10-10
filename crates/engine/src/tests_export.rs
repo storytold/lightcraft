@@ -370,3 +370,73 @@ fn exports_are_atomic_without_a_sync() {
     assert!(syncs_on_this_thread() > before, "the durable writer syncs");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The demo library's ocean sunset (a sun far above SDR white), selected and active.
+fn sunset(s: &mut Session) -> dac_catalog::PhotoId {
+    let id = s.catalog.photos().find(|p| p.meta.title == "Golden horizon").map(|p| p.id).unwrap();
+    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+    id
+}
+
+#[test]
+fn hdr_jpeg_export_writes_a_gain_map_and_sdr_edits_stay_plain() {
+    use dac_codecs::gainmap;
+    let mut s = Session::with_demo();
+    let id = sunset(&mut s);
+    let o = ExportOptions::from_json(&json!({"longEdge": 320, "hdr": true}));
+    assert!(o.hdr_output());
+    // no HDR edit: an ordinary JPEG even with HDR output asked for
+    let plain = export_photo(&mut s, id, &o, 1).unwrap();
+    assert!(!gainmap::is_gain_map_jpeg(&plain.bytes));
+
+    let r = s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 3})).unwrap();
+    assert_eq!(r["enabled"], true);
+    let e = export_photo(&mut s, id, &o, 1).unwrap();
+    assert!(gainmap::is_gain_map_jpeg(&e.bytes));
+    let gm = gainmap::read_jpeg(&e.bytes).unwrap();
+    assert!(gm.meta.alternate_headroom > 0.5 && gm.meta.alternate_headroom <= 3.05, "headroom {}", gm.meta.alternate_headroom);
+    // the base is the SDR rendition: the same pixels as the SDR export (the decoders agree)
+    let a = dac_codecs::decode(&e.bytes, Default::default()).unwrap();
+    let b = dac_codecs::decode(&plain.bytes, Default::default()).unwrap();
+    assert_eq!((a.width, a.height), (b.width, b.height));
+    let diff = a.image.data.iter().zip(&b.image.data).map(|(p, q)| (p[1] - q[1]).abs()).fold(0.0f32, f32::max);
+    assert!(diff < 0.02, "base differs from the SDR export by {diff}");
+    // HDR off again: the gain map goes away
+    s.execute("develop.hdr", &json!({"enabled": false})).unwrap();
+    assert!(!gainmap::is_gain_map_jpeg(&export_photo(&mut s, id, &o, 1).unwrap().bytes));
+}
+
+#[test]
+fn hdr_float_tiff_keeps_highlights_above_white() {
+    let mut s = Session::with_demo();
+    let id = sunset(&mut s);
+    s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 2})).unwrap();
+    let max_of = |s: &mut Session, hdr: bool| {
+        let o = ExportOptions::from_json(&json!({"longEdge": 240, "format": "tiff", "bitDepth": 32, "hdr": hdr}));
+        let e = export_photo(s, id, &o, 1).unwrap();
+        let d = dac_codecs::decode(&e.bytes, Default::default()).unwrap();
+        d.image.data.iter().flat_map(|p| p.iter().copied()).fold(0.0f32, f32::max)
+    };
+    let hdr = max_of(&mut s, true);
+    let sdr = max_of(&mut s, false);
+    assert!(sdr <= 1.0 + 1e-3, "SDR float TIFF stays in 0..1 ({sdr})");
+    assert!(hdr > 1.2 && hdr <= 4.0 + 1e-3, "HDR float TIFF max {hdr}");
+}
+
+#[test]
+fn hdr_avif_export_is_pq_rec2020() {
+    let mut s = Session::with_demo();
+    let id = sunset(&mut s);
+    let o = ExportOptions::from_json(&json!({"longEdge": 160, "format": "avif", "hdr": true, "quality": 70}));
+    assert!(o.hdr_output());
+    let sdr = export_photo(&mut s, id, &o, 1).unwrap();
+    s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 2})).unwrap();
+    let hdr = export_photo(&mut s, id, &o, 1).unwrap();
+    // the `colr` nclx box: BT.2020 primaries (9), PQ (16), BT.2020 NCL (9), full range
+    let nclx = |b: &[u8]| b.windows(4).position(|w| w == b"nclx").map(|i| b[i + 4..i + 11].to_vec());
+    let c = nclx(&hdr.bytes).expect("colr nclx box");
+    assert_eq!(c, vec![0, 9, 0, 16, 0, 9, 0x80]);
+    assert!(hdr.bytes.windows(4).any(|w| w == b"clli"), "content light level box");
+    // a photo without an HDR edit exports as an ordinary (sRGB) AVIF
+    assert!(nclx(&sdr.bytes).is_none_or(|c| c[3] != 16));
+}

@@ -99,6 +99,12 @@ let
     brand.binary
     brand.cli_binary
   ];
+
+  # HEIC/HEIF decoding (opt-in upstream: HEVC patents are the distributor's call), as the release builds.
+  buildFeatures = [
+    "dac-app/heif"
+    "dac-cli/heif"
+  ];
 in
 rustPlatform.buildRustPackage {
   pname = brand.binary;

@@ -81,6 +81,9 @@ fn fill(j: &mut Journal, c: &mut Catalog, n: u64) {
         entry: Some(PreviewEntry { size: 2048, one_to_one: false, settings_hash: 3, built_at: "2026-01-01T00:00:00".into() }),
     });
     ops.push(Op::SetLabelName { label: ColorLabel::Red, name: Some("Print".into()) });
+    // format version 5 (upstream's keyword list and folder records): kept in the store's head record
+    ops.push(Op::SetKeyword { path: "People|Anna".into(), info: Some(keywords::KeywordInfo { person: true, ..Default::default() }) });
+    ops.push(c.folder_label_op("/pics/2020", Some(ColorLabel::Green)));
     for op in &ops {
         c.apply(op.clone()).unwrap();
     }
@@ -123,6 +126,8 @@ fn roundtrip_through_checkpoints_and_the_log() {
     let (_, c3, r) = open(s.path());
     assert_eq!((r.replayed, r.failed), (0, 0));
     assert_eq!(c3.to_snapshot(), c.to_snapshot());
+    assert_eq!(c3.listed_path("people|anna"), Some("People|Anna"));
+    assert_eq!(c3.folder_record("/pics/2020").and_then(|r| r.label), Some(ColorLabel::Green));
     // unedited photos share one settings value in memory
     let unedited: Vec<&Arc<Photo>> = c3.photos().filter(|p| p.edited.is_none()).collect();
     assert!(unedited.len() > 2 && unedited.windows(2).all(|w| Arc::ptr_eq(&w[0].develop, &w[1].develop)));

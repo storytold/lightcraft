@@ -179,10 +179,10 @@ fn rating_steps_and_flag_toggle() {
     let id = h.app.session.visible_cloned()[0];
     run(&mut h, "library.select", json!({"ids": [id.0]}));
     run(&mut h, "photo.rate", json!({"rating": 2}));
-    run(&mut h, "photo.ratingUp", json!({}));
+    run(&mut h, "photo.increaseRating", json!({}));
     assert_eq!(h.app.session.catalog.photo(id).unwrap().rating, 3);
     for _ in 0..5 {
-        run(&mut h, "photo.ratingDown", json!({}));
+        run(&mut h, "photo.decreaseRating", json!({}));
     }
     assert_eq!(h.app.session.catalog.photo(id).unwrap().rating, 0);
     run(&mut h, "photo.flagToggle", json!({}));

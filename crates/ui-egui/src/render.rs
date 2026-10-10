@@ -244,6 +244,8 @@ pub struct Renderer {
     window_req: HashMap<u64, WindowGeom>,
     /// Where each [`Slot::Window`] texture's pixels go.
     window_shown: HashMap<Slot, WindowGeom>,
+    /// The monitor profile textures are made for (`app.displayProfile`; `None`: sRGB).
+    display: Option<Arc<dac_engine::display::Display>>,
     /// Since when nothing has been pending, and whether the GPU pool was trimmed since.
     #[cfg(not(target_arch = "wasm32"))]
     idle: Option<(std::time::Instant, bool)>,
@@ -305,6 +307,7 @@ impl Renderer {
             stages_trimmed: 0,
             #[cfg(test)]
             stage_budget_override: None,
+            display: None,
             #[cfg(not(target_arch = "wasm32"))]
             idle: None,
         }
@@ -339,6 +342,46 @@ impl Renderer {
             }
         }
         self.thumb_inputs.insert(photo.id, (Arc::downgrade(photo), bucket, key, quick));
+    }
+
+    /// Views that render straight into the display profile's primaries (wide gamut); everything
+    /// else is rendered for sRGB and converted ([`dac_engine::display::present`]).
+    fn renders_for_display(slot: Slot) -> bool {
+        matches!(slot, Slot::Main | Slot::Before | Slot::Hover | Slot::Compare(_) | Slot::Second)
+    }
+
+    /// `job` as [`Self::request`] would run it for `slot` (its key included): views render for
+    /// the display profile in use.
+    pub fn job_for(&self, slot: Slot, job: RenderJob) -> RenderJob {
+        if Self::renders_for_display(slot) { job.with_display(self.display.clone()) } else { job }
+    }
+
+    /// The display profile in use (id).
+    pub fn display_id(&self) -> Option<u64> {
+        self.display.as_ref().map(|d| d.id())
+    }
+
+    /// The display profile textures are made for (`None`: sRGB).
+    pub fn display(&self) -> Option<&Arc<dac_engine::display::Display>> {
+        self.display.as_ref()
+    }
+
+    /// Show previews through `display` from now on (`app.displayProfile`): when it changes, every
+    /// texture is made again for the new one.
+    pub fn set_display(&mut self, display: Option<Arc<dac_engine::display::Display>>) {
+        if display.as_ref().map(|d| d.id()) != self.display_id() {
+            self.forget_all();
+        }
+        self.display = display;
+    }
+
+    /// Run `job` and make its image ready for `display` (on the worker thread).
+    fn run_for(job: impl FnOnce() -> RenderResult, display: &Option<Arc<dac_engine::display::Display>>) -> RenderResult {
+        let mut r = job();
+        if let Some(d) = display {
+            dac_engine::display::present(&mut r, d);
+        }
+        r
     }
 
     fn request_needed(&self, slot: Slot, key: u64, priority: u32) -> bool {
@@ -378,7 +421,8 @@ impl Renderer {
     }
 
     /// Request a render for `slot` (no-op if already current or pending at the same priority).
-    pub fn request(&mut self, slot: Slot, mut job: RenderJob, priority: u32) {
+    pub fn request(&mut self, slot: Slot, job: RenderJob, priority: u32) {
+        let mut job = self.job_for(slot, job);
         if !self.request_needed(slot, job.key, priority) {
             return;
         }
@@ -396,7 +440,16 @@ impl Renderer {
         }
         let key = job.key;
         let background = matches!(slot, Slot::Thumb(_) | Slot::ThumbQuick(_) | Slot::Prefetch(_));
-        self.pool.submit(slot, key, priority, Box::new(move || if background { dac_engine::memory::in_background(|| job.run()) } else { job.run() }));
+        let display = self.display.clone();
+        self.pool.submit(
+            slot,
+            key,
+            priority,
+            Box::new(move || {
+                let run = || if background { dac_engine::memory::in_background(|| job.run()) } else { job.run() };
+                Self::run_for(run, &display)
+            }),
+        );
     }
 
     /// Request a stand-in for `slot` (once per job key).
@@ -409,7 +462,8 @@ impl Renderer {
         job.request_id = dac_preview::next_tick();
         self.request_ids.insert(slot, job.request_id);
         let key = job.key;
-        self.pool.submit(slot, key, priority, Box::new(move || job.run()));
+        let display = self.display.clone();
+        self.pool.submit(slot, key, priority, Box::new(move || Self::run_for(|| job.run(), &display)));
     }
 
     /// Prepare a photo in the background (a [`Slot::Prefetch`] job runs once per key; a newer one
@@ -533,6 +587,19 @@ impl Renderer {
 
     pub fn is_pending(&self, slot: Slot) -> bool {
         self.pending.contains_key(&slot)
+    }
+
+    /// The app is closing: drop the jobs that have not started and wait up to `timeout` for the
+    /// ones running on the worker threads. Returns whether all of them have ended. Nothing is
+    /// rendered afterwards.
+    pub fn shutdown(&mut self, timeout: std::time::Duration) -> bool {
+        self.queue.clear();
+        self.pool.shutdown(timeout)
+    }
+
+    /// Worker threads that are still alive (0 before the first render).
+    pub fn live_workers(&self) -> usize {
+        self.pool.live_workers()
     }
 
     /// The texture to show for a grid/filmstrip thumbnail: the rendered one, else its stand-in.
@@ -683,8 +750,12 @@ impl Renderer {
         }
         self.dispatch();
         let mut changed = false;
-        for (mut slot, r, ms) in finished {
+        for (mut slot, mut r, ms) in finished {
             self.completed += 1;
+            // made for another display profile than the one in use: obsolete
+            if r.display.is_some_and(|id| Some(id) != self.display_id()) {
+                continue;
+            }
             // Ignore obsolete pixels, failures and decoded sources, even for the same render key;
             // an interactive view still takes a superseded draft that is newer than what it
             // shows, and the source it decoded: a drag supersedes every request before it
@@ -705,6 +776,10 @@ impl Renderer {
             }
             if slot.is_view() {
                 self.shown_ids.insert(slot, r.request_id);
+            }
+            // (results from an offload, which doesn't know the display profile: converted here)
+            if let Some(d) = &self.display {
+                dac_engine::display::present(&mut r, d);
             }
             if self.pending.get(&slot).is_some_and(|p| p.0 == r.key) {
                 self.pending.remove(&slot);

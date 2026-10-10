@@ -600,6 +600,11 @@ pub struct ExportOptions {
     /// Bits per channel: 8, 16 (PNG, TIFF), 32 (TIFF: float, linear) or 10 (AVIF); `None` = the
     /// format's default (TIFF 16, everything else 8). See [`ExportOptions::effective_depth`].
     pub bit_depth: Option<u8>,
+    /// HDR output for photos edited in HDR: JPEG as an ISO 21496-1 gain map JPEG (the SDR
+    /// rendition plus a gain map, so the file looks right everywhere; quality as set, `limit_kb`
+    /// not applied), AVIF as 10-bit Rec. 2020 PQ, 32-bit float TIFF with the highlights above SDR
+    /// white kept. Other formats, and photos without an HDR edit, are SDR.
+    pub hdr: bool,
 }
 
 impl Default for ExportOptions {
@@ -623,6 +628,7 @@ impl Default for ExportOptions {
             watermark: None,
             color_space: OutputSpace::Srgb,
             bit_depth: None,
+            hdr: false,
         }
     }
 }
@@ -658,6 +664,7 @@ pub const OPTION_PARAMS: &[&str] = &[
     "watermark",
     "colorSpace",
     "bitDepth",
+    "hdr",
 ];
 
 /// The keys of a `watermark` object ([`Watermark`], camelCase).
@@ -789,7 +796,7 @@ impl ExportOptions {
                     }
                     serde_json::from_value::<Resize>(v.clone()).map_err(|e| bad(format!("`{k}`: {e}")))?;
                 }
-                "dontEnlarge" | "removeLocation" | "background" => {
+                "dontEnlarge" | "removeLocation" | "background" | "hdr" => {
                     boolean(k, v)?;
                 }
                 "naming" | "subfolder" | "path" | "dir" | "preset" => {
@@ -922,6 +929,7 @@ impl ExportOptions {
             .filter(|w: &Watermark| !w.text.trim().is_empty() || !w.image.trim().is_empty()),
             color_space: s("colorSpace").and_then(OutputSpace::parse).unwrap_or(d.color_space),
             bit_depth: u("bitDepth").filter(|b| matches!(b, 8 | 10 | 16 | 32)).map(|b| b as u8),
+            hdr: p.get("hdr").and_then(Value::as_bool).unwrap_or(d.hdr),
         }
     }
 
@@ -990,8 +998,10 @@ impl ExportOptions {
             (ExportFormat::Png, Some(16 | 32)) => OutputDepth::U16,
             (ExportFormat::Png, _) => OutputDepth::U8,
             (ExportFormat::Tiff, Some(8)) => OutputDepth::U8,
+            (ExportFormat::Tiff, Some(32)) if self.hdr => OutputDepth::F32Hdr,
             (ExportFormat::Tiff, Some(32)) => OutputDepth::F32Linear,
             (ExportFormat::Tiff, _) => OutputDepth::U16,
+            (ExportFormat::Avif, _) if self.hdr => OutputDepth::F32Hdr,
             (ExportFormat::Avif, Some(10 | 16 | 32)) => OutputDepth::U16,
             (ExportFormat::Avif, _) => OutputDepth::U8,
         }
@@ -1007,9 +1017,19 @@ impl ExportOptions {
         }
     }
 
-    /// The colour space the file is actually written in (AVIF: sRGB).
+    /// Whether these options write HDR files (for photos edited in HDR): JPEG (gain map), AVIF
+    /// (PQ) or 32-bit float TIFF with [`ExportOptions::hdr`].
+    pub fn hdr_output(&self) -> bool {
+        self.hdr && matches!((self.format, self.bit_depth), (ExportFormat::Jpeg | ExportFormat::Avif, _) | (ExportFormat::Tiff, Some(32)))
+    }
+
+    /// The colour space the file is actually written in (AVIF: sRGB, or Rec. 2020 for HDR).
     pub fn effective_space(&self) -> OutputSpace {
-        if self.format == ExportFormat::Avif { OutputSpace::Srgb } else { self.color_space }
+        match self.format {
+            ExportFormat::Avif if self.hdr => OutputSpace::Rec2020,
+            ExportFormat::Avif => OutputSpace::Srgb,
+            _ => self.color_space,
+        }
     }
 
     /// Output file name for photo `p` at 1-based position `seq` in a batch (the original's
@@ -1119,13 +1139,8 @@ pub fn encode_image(img: &Rgba8, o: &ExportOptions) -> Result<Vec<u8>, String> {
 
 /// Like [`encode_image`], embedding `meta` (already filtered by the policy) as EXIF + XMP.
 pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
-    let mut img = img.clone();
-    output_sharpen(&mut img, o.sharpen, o.sharpen_amount);
+    let img = finish_8bit(img, o);
     let space = o.effective_space();
-    if let Some(wm) = &o.watermark {
-        let wm = Watermark { color: srgb8_in(space, wm.color), target: Some(space), ..wm.clone() };
-        draw_watermark(&mut img, &wm);
-    }
     let profile = icc::write_named(named_space(space));
     let exif = meta.map(dac_meta::write_exif);
     let xmp = meta.map(|m| dac_meta::write_xmp(m, None));
@@ -1168,6 +1183,56 @@ pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metada
     r.map_err(|e| e.to_string())
 }
 
+/// Output sharpening and the watermark on an 8-bit render in `o.effective_space()`.
+fn finish_8bit(img: &Rgba8, o: &ExportOptions) -> Rgba8 {
+    let mut img = img.clone();
+    output_sharpen(&mut img, o.sharpen, o.sharpen_amount);
+    let space = o.effective_space();
+    if let Some(wm) = &o.watermark {
+        let wm = Watermark { color: srgb8_in(space, wm.color), target: Some(space), ..wm.clone() };
+        draw_watermark(&mut img, &wm);
+    }
+    img
+}
+
+/// Output sharpening and the watermark on a high-bit-depth render.
+fn finish_deep(img: &DeepImage, o: &ExportOptions) -> DeepImage {
+    let mut img = img.clone();
+    output_sharpen_deep(&mut img, o.sharpen, o.sharpen_amount);
+    if let Some(wm) = &o.watermark {
+        let wm = Watermark { color: srgb8_in(img.space, wm.color), target: Some(img.space), ..wm.clone() };
+        draw_watermark_deep(&mut img, &wm);
+    }
+    img
+}
+
+/// Encode an ISO 21496-1 gain map JPEG from the SDR rendition `sdr` (8-bit, in the output space)
+/// and the HDR rendition `hdr` (float linear, same space and size). The gain map is measured
+/// against the base as written, so its 8-bit rounding is handed back by the map.
+pub fn encode_gain_map_jpeg(sdr: &Rgba8, hdr: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
+    use dac_codecs::gainmap;
+    let base = finish_8bit(sdr, o);
+    let hdr = finish_deep(hdr, o);
+    let DeepSamples::F32(hv) = &hdr.samples else {
+        return Err("HDR export needs a float HDR render".into());
+    };
+    let (w, h) = (base.width, base.height);
+    if (hdr.width, hdr.height) != (w, h) || hv.len() < w * h * 3 {
+        return Err("HDR and SDR renders differ in size".into());
+    }
+    let space = o.effective_space();
+    let trc = space.trc();
+    let sdr_lin: Vec<[f32; 3]> = base.data.iter().map(|p| [0, 1, 2].map(|c| trc.decode(p[c] as f32 / 255.0))).collect();
+    let hdr_lin: &[[f32; 3]] = hv.as_chunks::<3>().0;
+    let (map, gm) = gainmap::compute(&sdr_lin, hdr_lin, w, h, space.luma(), &gainmap::GainMapOptions::default()).map_err(|e| e.to_string())?;
+    let profile = icc::write_named(named_space(space));
+    let exif = meta.map(dac_meta::write_exif);
+    let xmp = meta.map(|m| dac_meta::write_xmp(m, None));
+    let em = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
+    let sub = if o.limit_kb.is_some() { ChromaSubsampling::S420 } else { ChromaSubsampling::S444 };
+    gainmap::encode_jpeg(&EncodeImage::rgba8(&base), &map, &gm, o.quality, sub, &em).map_err(|e| e.to_string())
+}
+
 /// The codecs' name of an output space (for its ICC profile).
 pub fn named_space(s: OutputSpace) -> NamedSpace {
     match s {
@@ -1204,12 +1269,7 @@ pub fn encode_rendered(r: &dac_pipeline::Rendered, o: &ExportOptions, meta: Opti
 
 /// Encode a high-bit-depth image (see [`encode_rendered`]).
 pub fn encode_deep(img: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
-    let mut img = img.clone();
-    output_sharpen_deep(&mut img, o.sharpen, o.sharpen_amount);
-    if let Some(wm) = &o.watermark {
-        let wm = Watermark { color: srgb8_in(img.space, wm.color), target: Some(img.space), ..wm.clone() };
-        draw_watermark_deep(&mut img, &wm);
-    }
+    let img = finish_deep(img, o);
     let profile = match img.samples {
         DeepSamples::F32(_) => icc::write_matrix_trc(&img.space.rgb_space(), &dac_codecs::Trc::Linear),
         DeepSamples::U16(_) => icc::write_named(named_space(img.space)),
@@ -1222,27 +1282,19 @@ pub fn encode_deep(img: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) 
         DeepSamples::U16(v) => EncodeImage::new(w, h, 3, Samples::U16(v)),
         DeepSamples::F32(v) => EncodeImage::new(w, h, 3, Samples::F32(v)),
     };
-    let r = match o.format {
-        ExportFormat::Png => encode::encode_png(&e, &meta),
-        ExportFormat::Tiff => encode::encode_tiff(&e, o.tiff_compression, &meta),
-        ExportFormat::Avif => encode::encode_avif(&e, o.quality, 8, &meta),
-        f => return Err(format!("{f:?} export is 8-bit only")),
+    let r = match (o.format, &img.samples) {
+        (ExportFormat::Png, _) => encode::encode_png(&e, &meta),
+        (ExportFormat::Tiff, _) => encode::encode_tiff(&e, o.tiff_compression, &meta),
+        (ExportFormat::Avif, DeepSamples::F32(v)) if img.space == OutputSpace::Rec2020 => dac_codecs::encode_avif_pq(w, h, v, o.quality, 8, &meta),
+        (ExportFormat::Avif, _) => encode::encode_avif(&e, o.quality, 8, &meta),
+        (f, _) => return Err(format!("{f:?} export is 8-bit only")),
     };
     r.map_err(|e| e.to_string())
 }
 
-/// Parse a shutter speed such as `1/250`, `0.5` or `2"` into seconds.
-fn parse_shutter(s: &str) -> Option<f64> {
-    let s = s.trim().trim_end_matches(['s', '"']).trim();
-    match s.split_once('/') {
-        Some((n, d)) => Some(n.trim().parse::<f64>().ok()? / d.trim().parse::<f64>().ok()?),
-        None => s.parse().ok(),
-    }
-    .filter(|v: &f64| v.is_finite() && *v > 0.0)
-}
-
 /// The metadata to embed for `photo` under `o.metadata` / `o.remove_location`. `None` = embed nothing.
-pub fn export_metadata(photo: &dac_catalog::Photo, o: &ExportOptions) -> Option<Metadata> {
+/// Keywords follow the catalog's keyword list (`Catalog::export_keywords`).
+pub fn export_metadata(photo: &dac_catalog::Photo, catalog: &dac_catalog::Catalog, o: &ExportOptions) -> Option<Metadata> {
     let m = &photo.meta;
     let text = |s: &str| (!s.trim().is_empty()).then(|| s.to_string());
     // copyright info (also under "copyright only"): notice, creator, status, usage terms, info URL
@@ -1270,7 +1322,9 @@ pub fn export_metadata(photo: &dac_catalog::Photo, o: &ExportOptions) -> Option<
         out.state = text(&m.state);
         out.country = text(&m.country);
     }
-    out.keywords = m.keywords.clone();
+    let keywords = catalog.export_keywords(&m.keywords);
+    out.keywords = keywords.flat;
+    out.hierarchical_keywords = keywords.hierarchical;
     out.capture_time = photo.captured.as_deref().and_then(DateTime::parse_iso);
     out.rating = (photo.rating > 0).then_some(photo.rating as i8);
     // Pixels are exported upright: orientation is baked in.
@@ -1283,7 +1337,7 @@ pub fn export_metadata(photo: &dac_catalog::Photo, o: &ExportOptions) -> Option<
         out.lens_model = text(&m.lens);
         out.focal_length = m.focal_mm.map(f64::from);
         out.f_number = m.aperture.map(f64::from);
-        out.exposure_time = parse_shutter(&m.shutter);
+        out.exposure_time = dac_catalog::parse_shutter_seconds(&m.shutter);
         out.iso = m.iso;
     }
     Some(out)
@@ -1324,10 +1378,15 @@ pub struct PreparedExport {
     work: Work,
     /// The library's originals, which [`run_batch`] never writes over (shared by a batch).
     guard: std::sync::Arc<crate::originals::OriginalGuard>,
+    /// Estimated working memory of [`Self::run`] (bytes), held from [`crate::memory::export_gate`]
+    /// while it runs beside other photos of a batch.
+    weight: usize,
 }
 
 struct RenderWork {
     job: crate::media::RenderJob,
+    /// The HDR rendition of a gain map JPEG (`job` renders its SDR base).
+    hdr_job: Option<crate::media::RenderJob>,
     meta: Option<Metadata>,
     opts: ExportOptions,
 }
@@ -1368,29 +1427,52 @@ fn prepare_guarded(
 ) -> Result<PreparedExport, String> {
     let p = session.catalog.photo(id).ok_or("no such photo")?;
     let file_name = o.file_name_for(p, seq);
-    let work = if o.format.is_rendered() {
+    // HDR output only for photos edited in HDR; the rest of the batch exports as usual
+    let sdr_opts;
+    let o = if o.hdr && !p.develop.hdr.enabled {
+        sdr_opts = ExportOptions { hdr: false, ..o.clone() };
+        &sdr_opts
+    } else {
+        o
+    };
+    let (full_px, long) = ((p.width as usize).saturating_mul(p.height as usize), p.width.max(p.height) as usize);
+    let (work, weight) = if o.format.is_rendered() {
         let (w, h) = output_size(p, o);
-        // the Keyword List decides which keywords (parents, synonyms) go into the file
-        let meta = export_metadata(p, o).map(|mut m| {
-            m.keywords = crate::cmd::keyword_list::export_keywords(&session.keyword_attrs, &m.keywords);
-            m
-        });
+        let meta = export_metadata(p, &session.catalog, o);
+        let gain_map = o.hdr_output() && o.format == ExportFormat::Jpeg;
         let job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
-        Work::Render(Box::new(RenderWork { job, meta, opts: o.clone() }))
+        let weight = render_weight(full_px, long, job.level, w.saturating_mul(h));
+        let hdr_job = if gain_map { Some(session.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr)?) } else { None };
+        (Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts: o.clone() })), weight)
     } else {
         let dac_catalog::Source::File { path } = &p.source else {
             return Err(format!("{} is a generated demo photo: it has no original file to export", p.file_name));
         };
-        Work::File {
+        let dng = (o.format == ExportFormat::Dng).then_some(o.dng_compression);
+        // the file's bytes; a DNG also decodes the raw data (16-bit samples) and writes it again
+        let weight = (p.file_size as usize).saturating_add(if dng.is_some() { full_px.saturating_mul(6) } else { 0 });
+        let work = Work::File {
             path: path.clone(),
             read: session.media.file_bytes.clone(),
             packet: crate::sidecar::sidecar_packet(p, &session.catalog),
-            dng: (o.format == ExportFormat::Dng).then_some(o.dng_compression),
+            dng,
             label: p.file_name.clone(),
             size: (p.width as usize, p.height as usize),
-        }
+        };
+        (work, weight)
     };
-    Ok(PreparedExport { photo: id, file_name, work, guard })
+    Ok(PreparedExport { photo: id, file_name, work, guard, weight })
+}
+
+/// Working memory of rendering a photo of `full_px` pixels (long edge `long`) from source level
+/// `level` into `out_px` output pixels: the decoded source (linear RGB f32, 12 B/px) plus the
+/// pipeline's planes and the encoded output (~36 B per output pixel). Measured: a 24 MP export
+/// peaks at ~1.2 GB, one at 2048 px from the 2560 px preview at ~150 MB.
+fn render_weight(full_px: usize, long: usize, level: crate::media::SourceLevel, out_px: usize) -> usize {
+    let edge = level.max_edge().min(long.max(1));
+    let scale = edge as f64 / long.max(1) as f64;
+    let src_px = (full_px as f64 * scale * scale).min(usize::MAX as f64 / 64.0) as usize;
+    src_px.saturating_mul(12).saturating_add(out_px.saturating_mul(36))
 }
 
 impl PreparedExport {
@@ -1398,9 +1480,16 @@ impl PreparedExport {
         let file_name = self.file_name;
         match self.work {
             Work::Render(w) => {
-                let RenderWork { job, meta, opts } = *w;
+                let RenderWork { job, hdr_job, meta, opts } = *w;
                 let r = job.run().rendered?;
-                let bytes = encode_rendered(&r, &opts, meta.as_ref())?;
+                let bytes = match hdr_job {
+                    Some(hj) => {
+                        let hr = hj.run().rendered?;
+                        let hdr = hr.deep.ok_or("the HDR render has no float samples")?;
+                        encode_gain_map_jpeg(&r.image, &hdr, &opts, meta.as_ref())?
+                    }
+                    None => encode_rendered(&r, &opts, meta.as_ref())?,
+                };
                 Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new() })
             }
             Work::File { path, read, packet, dng, label, size } => {
@@ -1500,6 +1589,11 @@ fn sidecar_path(main: &str, ext: &str) -> String {
 /// policy. `progress(done, next file)` is called before each photo; returning false cancels the
 /// rest. Returns one JSON object per photo: `{path, width, height, bytes, sidecars}`,
 /// `{skipped: path}` or (unless `stop_on_error`) `{photo, file, error}`.
+///
+/// Several photos render side by side ([`export_parallelism`], within the memory of
+/// [`crate::memory::export_gate`]), so one photo's decode, encode or GPU wait overlaps another's
+/// render (issue #496). Paths, writes, results and `progress` still follow the batch order, and the
+/// files are the same as one at a time.
 pub fn run_batch(
     items: Vec<PreparedExport>,
     o: &ExportOptions,
@@ -1509,31 +1603,226 @@ pub fn run_batch(
     stop_on_error: bool,
     progress: &mut dyn FnMut(usize, &str) -> bool,
 ) -> Result<Vec<serde_json::Value>, String> {
-    use serde_json::json;
-    let join = |a: &str, b: &str| if a.is_empty() { b.to_string() } else { format!("{}/{b}", a.trim_end_matches('/')) };
-    let dir = if o.subfolder.is_empty() { to.dir.clone() } else { join(&to.dir, &o.subfolder) };
-    let single = items.len() == 1;
-    let mut taken = std::collections::HashSet::new();
-    let mut out = Vec::new();
-    for (i, item) in items.into_iter().enumerate() {
-        if !progress(i, &item.file_name) {
-            break;
+    let lanes = export_parallelism(items.len());
+    run_batch_with(items, &mut Placer::new(o, to, write, exists, stop_on_error), progress, lanes)
+}
+
+/// How many photos of a batch of `n` render side by side. Each render already spreads its rows
+/// over every core; the others fill the cores while it decodes, encodes or waits for the GPU.
+/// One on wasm32 (no threads).
+pub fn export_parallelism(n: usize) -> usize {
+    if cfg!(target_arch = "wasm32") {
+        return 1;
+    }
+    let cores = std::thread::available_parallelism().map_or(1, |c| c.get());
+    (cores / 4).clamp(1, 4).min(n.max(1))
+}
+
+/// [`run_batch`] with `lanes` photos in flight (the calling thread is one of them).
+fn run_batch_with(
+    items: Vec<PreparedExport>,
+    placer: &mut Placer<'_>,
+    progress: &mut dyn FnMut(usize, &str) -> bool,
+    lanes: usize,
+) -> Result<Vec<serde_json::Value>, String> {
+    placer.single = items.len() == 1;
+    if lanes <= 1 || items.len() <= 1 {
+        for (i, item) in items.into_iter().enumerate() {
+            if !progress(i, &item.file_name) {
+                break;
+            }
+            let (photo, name, guard) = (item.photo, item.file_name.clone(), item.guard.clone());
+            placer.place(photo, name, &guard, run_gated(item))?;
         }
-        let (photo, name, guard) = (item.photo, item.file_name.clone(), item.guard.clone());
-        let e = match item.run() {
-            Ok(e) => e,
-            Err(err) if stop_on_error => return Err(err),
-            Err(err) => {
-                out.push(json!({"photo": photo.0, "file": name, "error": err}));
+        return Ok(std::mem::take(&mut placer.out));
+    }
+    let heads: Vec<_> = items.iter().map(|i| (i.photo, i.file_name.clone(), i.guard.clone())).collect();
+    let queue = Queue {
+        lane: std::sync::Mutex::new(Lane { items: items.into_iter().map(Some).collect(), next: 0, placed: 0, stop: false, done: Default::default() }),
+        cv: std::sync::Condvar::new(),
+        ahead: lanes,
+    };
+    std::thread::scope(|sc| {
+        for k in 1..lanes {
+            let q = &queue;
+            // a lane that can't start leaves its photos to the others (and to this thread)
+            if std::thread::Builder::new().name(format!("export-{k}")).spawn_scoped(sc, move || q.work()).is_err() {
+                break;
+            }
+        }
+        let placed = || {
+            for (i, (photo, name, guard)) in heads.into_iter().enumerate() {
+                if !progress(i, &name) {
+                    break;
+                }
+                let e = queue.result(i);
+                placer.place(photo, name, &guard, e)?;
+            }
+            Ok::<_, String>(())
+        };
+        let r = placed();
+        queue.stop();
+        r
+    })?;
+    Ok(std::mem::take(&mut placer.out))
+}
+
+/// Run one photo's export holding its working memory from [`crate::memory::export_gate`]; a panic
+/// becomes that photo's error, not the batch's end.
+fn run_gated(item: PreparedExport) -> Result<Exported, String> {
+    let _held = crate::memory::export_gate().acquire(item.weight);
+    let what = format!("exporting {}", item.file_name);
+    crate::guard::catch(&what, || item.run()).and_then(|r| r)
+}
+
+/// The photos of a batch shared by its lanes: each lane takes the next one, at most
+/// [`Queue::ahead`] past the last placed. That bounds the finished files waiting in memory for
+/// their turn too (their working memory is given back to the gate as soon as they are encoded).
+struct Queue {
+    lane: std::sync::Mutex<Lane>,
+    cv: std::sync::Condvar,
+    ahead: usize,
+}
+
+struct Lane {
+    items: Vec<Option<PreparedExport>>,
+    /// The next photo to start.
+    next: usize,
+    /// Photos handed to the placer so far.
+    placed: usize,
+    stop: bool,
+    done: std::collections::HashMap<usize, Result<Exported, String>>,
+}
+
+impl Lane {
+    fn take_next(&mut self) -> Option<(usize, PreparedExport)> {
+        let i = self.next;
+        let item = self.items.get_mut(i)?.take()?;
+        self.next += 1;
+        Some((i, item))
+    }
+}
+
+impl Queue {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Lane> {
+        self.lane.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn wait<'a>(&self, g: std::sync::MutexGuard<'a, Lane>) -> std::sync::MutexGuard<'a, Lane> {
+        self.cv.wait(g).unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn finish(&self, i: usize, r: Result<Exported, String>) {
+        self.lock().done.insert(i, r);
+        self.cv.notify_all();
+    }
+
+    /// A lane thread: run photos until none is left or the batch stops.
+    fn work(&self) {
+        loop {
+            let mut l = self.lock();
+            let (i, item) = loop {
+                if l.stop || l.next >= l.items.len() {
+                    return;
+                }
+                if l.next < l.placed.saturating_add(self.ahead) {
+                    match l.take_next() {
+                        Some(t) => break t,
+                        None => return,
+                    }
+                }
+                l = self.wait(l);
+            };
+            drop(l);
+            self.finish(i, run_gated(item));
+        }
+    }
+
+    /// Photo `i`'s result, waiting for it; run here when no lane has started it yet.
+    fn result(&self, i: usize) -> Result<Exported, String> {
+        let mut l = self.lock();
+        loop {
+            if let Some(r) = l.done.remove(&i) {
+                l.placed = i + 1;
+                drop(l);
+                self.cv.notify_all();
+                return r;
+            }
+            if l.next == i {
+                let Some((_, item)) = l.take_next() else {
+                    return Err("export: photo missing from the batch".into());
+                };
+                drop(l);
+                self.finish(i, run_gated(item));
+                l = self.lock();
                 continue;
+            }
+            l = self.wait(l);
+        }
+    }
+
+    fn stop(&self) {
+        self.lock().stop = true;
+        self.cv.notify_all();
+    }
+}
+
+/// Where a batch's files go: each photo's path (subfolder, conflict policy, sidecars, never an
+/// original) and its write, in batch order.
+struct Placer<'a> {
+    o: &'a ExportOptions,
+    to: &'a Destination,
+    dir: String,
+    single: bool,
+    taken: std::collections::HashSet<String>,
+    out: Vec<serde_json::Value>,
+    write: &'a mut dyn FnMut(&str, &[u8]) -> Result<(), String>,
+    exists: &'a dyn Fn(&str) -> bool,
+    stop_on_error: bool,
+}
+
+fn join_path(a: &str, b: &str) -> String {
+    if a.is_empty() { b.to_string() } else { format!("{}/{b}", a.trim_end_matches('/')) }
+}
+
+impl<'a> Placer<'a> {
+    fn new(
+        o: &'a ExportOptions,
+        to: &'a Destination,
+        write: &'a mut dyn FnMut(&str, &[u8]) -> Result<(), String>,
+        exists: &'a dyn Fn(&str) -> bool,
+        stop_on_error: bool,
+    ) -> Placer<'a> {
+        let dir = if o.subfolder.is_empty() { to.dir.clone() } else { join_path(&to.dir, &o.subfolder) };
+        Placer { o, to, dir, single: false, taken: Default::default(), out: Vec::new(), write, exists, stop_on_error }
+    }
+
+    /// Place photo `photo`'s export result (file `name`): write it and record the outcome. `Err`
+    /// only when it failed and `stop_on_error` is set.
+    fn place(
+        &mut self,
+        photo: dac_catalog::PhotoId,
+        name: String,
+        guard: &crate::originals::OriginalGuard,
+        e: Result<Exported, String>,
+    ) -> Result<(), String> {
+        use serde_json::json;
+        let (o, dir, exists) = (self.o, &self.dir, self.exists);
+        let e = match e {
+            Ok(e) => e,
+            Err(err) if self.stop_on_error => return Err(err),
+            Err(err) => {
+                self.out.push(json!({"photo": photo.0, "file": name, "error": err}));
+                return Ok(());
             }
         };
         // the exported file and its sidecars
         let group = |main: &str| std::iter::once(main.to_string()).chain(e.sidecars.iter().map(|(x, _)| sidecar_path(main, x))).collect::<Vec<_>>();
-        let path = match to.exact.as_deref().filter(|_| single) {
+        let path = match self.to.exact.as_deref().filter(|_| self.single) {
             Some(p) => Ok(p.to_string()),
             None => {
-                let path = join(&dir, &e.file_name);
+                let path = join_path(dir, &e.file_name);
+                let taken = &self.taken;
                 let busy = |main: &str| group(main).iter().any(|p| taken.contains(p) || exists(p));
                 if !busy(&path) {
                     Ok(path)
@@ -1541,12 +1830,12 @@ pub fn run_batch(
                     match o.conflict {
                         Conflict::Overwrite => Ok(path),
                         Conflict::Skip => {
-                            out.push(json!({"skipped": path}));
-                            continue;
+                            self.out.push(json!({"skipped": path}));
+                            return Ok(());
                         }
                         Conflict::Unique => {
                             let (stem, ext) = e.file_name.rsplit_once('.').map_or((e.file_name.as_str(), None), |(a, b)| (a, Some(b)));
-                            let name = |n: usize| join(&dir, &ext.map_or(format!("{stem}-{n}"), |x| format!("{stem}-{n}.{x}")));
+                            let name = |n: usize| join_path(dir, &ext.map_or(format!("{stem}-{n}"), |x| format!("{stem}-{n}.{x}")));
                             (2..1_000_000).map(name).find(|p| !busy(p)).ok_or_else(|| format!("{path}: no free file name"))
                         }
                     }
@@ -1554,6 +1843,7 @@ pub fn run_batch(
             }
         };
         let file = path.clone().unwrap_or_else(|_| name.clone());
+        let write = &mut *self.write;
         let written = path.and_then(|path| {
             let files = group(&path);
             // never over an original, whatever the conflict policy or the exact path said
@@ -1570,14 +1860,14 @@ pub fn run_batch(
         });
         match written {
             Ok((path, files, sidecars)) => {
-                taken.extend(files);
-                out.push(json!({"path": path, "width": e.width, "height": e.height, "bytes": e.bytes.len(), "sidecars": sidecars}));
+                self.taken.extend(files);
+                self.out.push(json!({"path": path, "width": e.width, "height": e.height, "bytes": e.bytes.len(), "sidecars": sidecars}));
             }
-            Err(err) if stop_on_error => return Err(err),
-            Err(err) => out.push(json!({"photo": photo.0, "file": file, "error": err})),
+            Err(err) if self.stop_on_error => return Err(err),
+            Err(err) => self.out.push(json!({"photo": photo.0, "file": file, "error": err})),
         }
+        Ok(())
     }
-    Ok(out)
 }
 
 #[cfg(test)]
@@ -1625,9 +1915,28 @@ mod tests {
         assert!(img.data[3][0] < 80 && img.data[4][0] > 170);
     }
 
+    /// Exported files carry keywords as Lightroom Classic writes them: names flat in `dc:subject`
+    /// (with the keywords containing them), full paths in `lr:hierarchicalSubject`, and nothing of
+    /// a keyword left out of export. They used to carry the `a|b` paths in `dc:subject`.
+    #[test]
+    fn exported_keywords_follow_their_options() {
+        use dac_catalog::{Catalog, Op, Photo, PhotoId, Source, keywords::KeywordInfo};
+        let mut c = Catalog::new();
+        c.apply(Op::SetKeyword { path: "Places".into(), info: Some(KeywordInfo { include_on_export: false, ..KeywordInfo::default() }) }).unwrap();
+        c.apply(Op::SetKeyword { path: "draft".into(), info: Some(KeywordInfo { include_on_export: false, ..KeywordInfo::default() }) }).unwrap();
+        let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.jpg", "jpeg", 10, 10, "2026-09-30T00:00:00");
+        p.meta.keywords = vec!["Places|Lisbon".into(), "travel|Italy".into(), "draft".into()];
+        let m = export_metadata(&p, &c, &ExportOptions::default()).unwrap();
+        assert_eq!(m.keywords, ["Lisbon", "Italy", "travel"]);
+        assert_eq!(m.hierarchical_keywords, ["Places|Lisbon", "travel|Italy"]);
+        let jpg = encode_with_metadata(&test_image(), &ExportOptions::default(), Some(&m)).unwrap();
+        let back = dac_meta::extract(&jpg);
+        assert_eq!((back.keywords, back.hierarchical_keywords), (m.keywords.clone(), m.hierarchical_keywords.clone()));
+    }
+
     #[test]
     fn metadata_policies() {
-        use dac_catalog::{Photo, PhotoId, Source};
+        use dac_catalog::{Catalog, Photo, PhotoId, Source};
         let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.jpg", "jpeg", 10, 10, "2026-09-30T00:00:00");
         p.meta.camera = "Synthetic X2".into();
         p.meta.copyright = "(c) Me".into();
@@ -1636,21 +1945,21 @@ mod tests {
         p.meta.copyright_url = "https://example.com/rights".into();
         p.meta.shutter = "1/250".into();
         p.meta.gps = Some((43.0, -110.0));
-        let all = export_metadata(&p, &ExportOptions::default()).unwrap();
+        let all = export_metadata(&p, &Catalog::new(), &ExportOptions::default()).unwrap();
         assert_eq!(all.model.as_deref(), Some("Synthetic X2"));
         assert!((all.exposure_time.unwrap() - 0.004).abs() < 1e-9);
         assert!(all.gps.is_some());
         let o = ExportOptions { metadata: MetadataPolicy::AllExceptCamera, remove_location: true, ..Default::default() };
-        let m = export_metadata(&p, &o).unwrap();
+        let m = export_metadata(&p, &Catalog::new(), &o).unwrap();
         assert!(m.model.is_none() && m.gps.is_none() && m.copyright.is_some());
-        let c = export_metadata(&p, &ExportOptions { metadata: MetadataPolicy::Copyright, ..Default::default() }).unwrap();
+        let c = export_metadata(&p, &Catalog::new(), &ExportOptions { metadata: MetadataPolicy::Copyright, ..Default::default() }).unwrap();
         assert!(c.model.is_none() && c.gps.is_none() && c.copyright.as_deref() == Some("(c) Me"));
         // "copyright only" keeps all the copyright info: status, usage terms, info URL
         assert_eq!(
             (c.copyright_marked, c.usage_terms.as_deref(), c.copyright_url.as_deref()),
             (Some(true), Some("Editorial use only"), Some("https://example.com/rights"))
         );
-        assert!(export_metadata(&p, &ExportOptions { metadata: MetadataPolicy::None, ..Default::default() }).is_none());
+        assert!(export_metadata(&p, &Catalog::new(), &ExportOptions { metadata: MetadataPolicy::None, ..Default::default() }).is_none());
         // embedded and readable back from the JPEG
         let jpg = encode_with_metadata(&test_image(), &ExportOptions::default(), Some(&all)).unwrap();
         let back = dac_meta::extract(&jpg);
@@ -2220,5 +2529,104 @@ mod tests {
         // the Export dialog's sliders (1–15 % size, 5–100 % opacity, 2–100 % width) stay inside the accepted ranges
         assert!(WATERMARK_SIZE_RANGE.0 <= 0.01 && WATERMARK_SIZE_RANGE.1 >= 0.15);
         assert!(WATERMARK_IMAGE_WIDTH_RANGE.0 <= 0.02 && WATERMARK_IMAGE_WIDTH_RANGE.1 >= 1.0);
+    }
+
+    /// A batch with `lanes` photos in flight into a fake folder `out` (nothing exists there):
+    /// results, writes (path, bytes) and progress calls; `progress` returns false at `cancel_at`.
+    #[allow(clippy::type_complexity)]
+    fn lanes_batch(
+        s: &mut crate::Session,
+        ids: &[dac_catalog::PhotoId],
+        o: &ExportOptions,
+        lanes: usize,
+        stop_on_error: bool,
+        cancel_at: usize,
+    ) -> (Result<Vec<serde_json::Value>, String>, Vec<(String, Vec<u8>)>, Vec<(usize, String)>) {
+        let items = prepare_batch(s, ids, o).unwrap();
+        let to = Destination { dir: "out".into(), exact: None };
+        let mut written = Vec::new();
+        let mut write = |p: &str, b: &[u8]| {
+            written.push((p.to_string(), b.to_vec()));
+            Ok(())
+        };
+        let mut seen = Vec::new();
+        let mut progress = |i: usize, name: &str| {
+            seen.push((i, name.to_string()));
+            i < cancel_at
+        };
+        let files = run_batch_with(items, &mut Placer::new(o, &to, &mut write, &|_| false, stop_on_error), &mut progress, lanes);
+        (files, written, seen)
+    }
+
+    /// The files of a batch without their byte counts: a GPU render (when another test turns the
+    /// GPU off mid-run) may differ from a CPU one by an LSB, never in name, size or order.
+    fn shape(files: &[serde_json::Value]) -> Vec<serde_json::Value> {
+        files.iter().map(|f| json!({"path": f["path"], "width": f["width"], "height": f["height"], "error": f["error"]})).collect()
+    }
+
+    // Issue #496: photos rendered side by side give the same files, names, order and progress as
+    // one at a time, and a cancel stops at the same photo
+    #[test]
+    fn side_by_side_batches_match_one_at_a_time() {
+        let mut s = crate::Session::with_demo();
+        let ids: Vec<_> = s.visible().iter().copied().take(5).collect();
+        // one name for all: the Unique numbering follows the order the files are placed in
+        let o = ExportOptions::from_json(&json!({"format": "png", "width": 40, "naming": "same"}));
+        let (files, written, seen) = lanes_batch(&mut s, &ids, &o, 1, true, usize::MAX);
+        let files = files.unwrap();
+        let paths: Vec<_> = written.iter().map(|(p, _)| p.clone()).collect();
+        assert_eq!(paths, ["out/same.png", "out/same-2.png", "out/same-3.png", "out/same-4.png", "out/same-5.png"]);
+        let heights: std::collections::HashSet<_> = files.iter().map(|f| f["height"].as_u64()).collect();
+        assert!(heights.len() > 1, "photos of different shapes show the order: {files:?}");
+        for lanes in [2, 3, 8] {
+            let (f, w, sn) = lanes_batch(&mut s, &ids, &o, lanes, true, usize::MAX);
+            assert_eq!(shape(&f.unwrap()), shape(&files), "{lanes} lanes");
+            assert_eq!(w.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>(), paths, "{lanes} lanes");
+            assert_eq!(sn, seen, "{lanes} lanes");
+        }
+        let (f, w, sn) = lanes_batch(&mut s, &ids, &o, 3, true, 2);
+        assert_eq!(shape(&f.unwrap()), shape(&files[..2]));
+        assert_eq!((w.len(), sn.len()), (2, 3), "photos past the cancel are never written");
+    }
+
+    // A photo that fails is reported in its place while the others are exported; with
+    // stop_on_error the batch ends there and nothing after it is written
+    #[test]
+    fn side_by_side_batches_report_failures_in_order() {
+        use dac_catalog::{Op, Photo, PhotoId, Source};
+        let mut s = crate::Session::with_demo();
+        let mut ids: Vec<_> = s.visible().iter().copied().take(3).collect();
+        let gone =
+            Photo::new(PhotoId(9_496), Source::File { path: "no/such/dir/gone.jpg".into() }, "gone.jpg", "JPEG", 600, 400, "2026-10-09T00:00:00");
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(gone) }).unwrap();
+        ids.insert(1, PhotoId(9_496));
+        let o = ExportOptions::from_json(&json!({"format": "jpeg", "width": 40}));
+        let (files, written, _) = lanes_batch(&mut s, &ids, &o, 3, false, usize::MAX);
+        let files = files.unwrap();
+        assert_eq!(files.len(), 4);
+        assert_eq!((files[1]["photo"].as_u64(), files[1]["file"].as_str()), (Some(9_496), Some("gone.jpg")), "{files:?}");
+        assert!(files[1]["error"].is_string());
+        assert!([0, 2, 3].iter().all(|&i| files[i]["path"].is_string()), "{files:?}");
+        assert_eq!(written.len(), 3);
+        let one = lanes_batch(&mut s, &ids, &o, 1, false, usize::MAX).0.unwrap();
+        assert_eq!(shape(&files), shape(&one));
+
+        let (r, written, _) = lanes_batch(&mut s, &ids, &o, 3, true, usize::MAX);
+        assert!(r.is_err());
+        assert_eq!(written.len(), 1, "only the photo before the failure");
+    }
+
+    #[test]
+    fn export_weights_follow_the_source_and_output_sizes() {
+        use crate::media::SourceLevel;
+        let mb = |b: usize| b >> 20;
+        // a full-size 24 MP export (measured peak ~1.2 GB)
+        assert_eq!(mb(render_weight(6000 * 4000, 6000, SourceLevel::Full, 6000 * 4000)), 1098);
+        // 2048 px from the 2560 px preview (measured ~150 MB)
+        assert_eq!(mb(render_weight(6000 * 4000, 6000, SourceLevel::Preview, 2048 * 1365)), 145);
+        // a photo smaller than the preview level is its own source
+        assert_eq!(render_weight(1000 * 500, 1000, SourceLevel::Preview, 0), 1000 * 500 * 12);
+        assert_eq!(render_weight(0, 0, SourceLevel::Full, 0), 0);
+        assert!(render_weight(usize::MAX, 1, SourceLevel::Full, usize::MAX) > 0, "no overflow");
     }
 }

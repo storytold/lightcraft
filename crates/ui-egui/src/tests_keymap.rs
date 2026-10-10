@@ -326,3 +326,33 @@ fn the_shortcuts_list_shows_the_current_modules_keys() {
     // the module filter is shown and can be turned off
     click(&mut h, "check:shortcuts.moduleOnly");
 }
+
+/// On Windows and Linux the windowing layer turns Ctrl+C / Ctrl+V into clipboard events, not key
+/// presses: outside a text field they still copy the edit settings, and with ⇧ open Paste Selected
+/// Settings.
+#[test]
+fn clipboard_events_run_the_copy_and_paste_shortcuts() {
+    let mut h = demo();
+    assert!(h.app.session.clipboard.is_none());
+    h.events.push(egui::Event::Copy);
+    h.settle(SETTLE);
+    assert!(h.app.session.clipboard.is_some(), "Ctrl+C copied the edit settings");
+    let shift_cmd = egui::Modifiers::SHIFT | egui::Modifiers::COMMAND;
+    h.events.extend([egui::Event::ModifiersChanged(shift_cmd), egui::Event::Paste("text".into())]);
+    h.settle(SETTLE);
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::PasteSettings { .. })), "⇧Ctrl+V: {:?}", h.app.ui.dialog);
+}
+
+/// Windows also pastes with ⇧Insert and cuts with ⇧Delete: the clipboard events they become are
+/// the plain Paste / Cut, not ⇧Ctrl+V (Paste Selected Settings).
+#[test]
+fn shift_insert_pastes_plainly() {
+    let mut h = demo();
+    h.events.push(egui::Event::Copy);
+    h.settle(SETTLE);
+    let undo = h.app.session.undo.len();
+    h.events.extend([egui::Event::ModifiersChanged(egui::Modifiers::SHIFT), egui::Event::Paste("text".into())]);
+    h.settle(SETTLE);
+    assert_eq!(h.app.ui.dialog, None, "no Paste Selected Settings");
+    assert_eq!(h.app.session.undo.len(), undo + 1, "the settings were pasted");
+}

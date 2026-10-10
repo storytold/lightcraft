@@ -445,7 +445,7 @@ fn merge(args: &[String]) -> Result<(), String> {
         }
         i += 1;
     }
-    let mut s = Session::new().with_fs().with_default_denoise_models().with_default_connections();
+    let mut s = Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_connections();
     let paths = expand_paths(&files);
     let r = s.execute("library.import", &json!({"paths": paths})).map_err(|e| e.to_string())?;
     let mut ids: Vec<u64> = r["imported"].as_array().map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
@@ -705,7 +705,7 @@ fn render(args: &[String]) -> Result<(), String> {
     }
     let input = input.ok_or("render: missing input file")?;
     let output = output.ok_or("render: missing -o OUTPUT")?;
-    let mut s = Session::new().with_fs().with_default_denoise_models().with_default_connections();
+    let mut s = Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_connections();
     let abs = expand_paths(std::slice::from_ref(&input));
     let r = s.execute("library.import", &json!({"paths": abs})).map_err(|e| e.to_string())?;
     let id = r["imported"][0].as_u64().ok_or_else(|| format!("{input}: not a readable photo"))?;
@@ -785,15 +785,16 @@ fn snapshot(args: &[String]) -> Result<(), String> {
     let t0 = Instant::now();
     let mut session = match &library {
         Some(dir) => {
-            let mut s = Session::new().with_fs().with_default_denoise_models().with_default_connections().with_default_face_models();
+            let mut s =
+                Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_connections().with_default_face_models();
             migrate_with_progress(dir)?;
             s.open_library(dir, false).map_err(|e| library_error(dir, e))?;
             s
         }
         None if files.is_empty() => {
-            Session::with_demo().with_fs().with_default_denoise_models().with_default_connections().with_default_face_models()
+            Session::with_demo().with_fs().with_default_denoise_models().with_system_clock().with_default_connections().with_default_face_models()
         }
-        None => Session::new().with_fs().with_default_denoise_models().with_default_connections().with_default_face_models(),
+        None => Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_connections().with_default_face_models(),
     };
     // Apply compute policy before imports or the first scripted query can discover an adapter.
     session.execute("app.gpu", &json!({"enabled": false})).map_err(|e| e.to_string())?;

@@ -3,8 +3,8 @@
 //! A language is one entry in [`language_table!`] below: its BCP-47 code, the endonym shown in the
 //! Language menus, the ISO 15924 script its text needs (which picks the CJK font fallback), and its
 //! message catalog (`locales/<code>.json`, embedded at build time). Adding a language is that entry
-//! plus its catalogs — every menu and settings surface is built from the table, so nothing else in
-//! the UI changes.
+//! plus its catalogs and the corresponding language command in `menus.rs`. Settings read the
+//! locale table, while menus and the control channel share the command mapping.
 
 use std::{cell::RefCell, collections::BTreeMap, sync::OnceLock};
 
@@ -126,6 +126,8 @@ language_table! {
     Es, "es", "Español", "Latn", include_str!("../locales/es.json");
     De, "de", "Deutsch", "Latn", include_str!("../locales/de.json");
     Ru, "ru", "Русский", "Cyrl", include_str!("../locales/ru.json");
+    Fr, "fr", "Français", "Latn", include_str!("../locales/fr.json");
+    Uk, "uk", "Українська", "Cyrl", include_str!("../locales/uk.json");
 }
 
 // The settings file stores the BCP-47 code (`"zh-hans"`), never the Rust variant name, so a
@@ -164,6 +166,16 @@ pub fn language() -> Locale {
 /// Never call this on editable user text, filenames or command identifiers.
 pub fn tr(source: &str) -> &str {
     tr_in(language(), source)
+}
+
+/// [`tr`] for a message whose translation depends on where it appears: a catalog entry keyed
+/// `"<context>|<source>"` wins, else the plain message. A language adds the contextual entry only
+/// where its shared translation reads wrongly there (Japanese はい / いいえ as a rule's value).
+fn tr_ctx_in<'a>(language: Locale, context: &str, source: &'a str) -> &'a str {
+    match language.catalog().get(&format!("{context}|{source}")) {
+        Some(translation) => translation.as_str(),
+        None => tr_in(language, source),
+    }
 }
 
 /// Catalog values are `'static` (they live in the embedded file), so a translation can be handed
@@ -332,7 +344,7 @@ pub fn color_label(catalog: &dac_catalog::Catalog, label: dac_catalog::ColorLabe
 /// A legacy smart-album filter summary, using the same display labels as filter chips.
 pub fn filter_label(filter: &dac_catalog::Filter, catalog: &dac_catalog::Catalog) -> String {
     if language() == Locale::En {
-        filter.describe()
+        filter.describe_with(catalog)
     } else {
         dac_engine::filter_chips(filter, catalog)
             .iter()
@@ -342,9 +354,62 @@ pub fn filter_label(filter: &dac_catalog::Filter, catalog: &dac_catalog::Catalog
     }
 }
 
+/// What people read for a smart-album rule's problem, under its row: the field's name and the
+/// issue, in the current language ("Title: needs something to look for").
+pub fn problem_text(problem: &dac_catalog::rules::Problem) -> String {
+    problem_text_in(language(), problem)
+}
+
+/// [`problem_text`] with the rule's position first ("#2.1 Rating: …"), for lists away from the
+/// editor (the sidebar's tooltip).
+pub fn problem_line(problem: &dac_catalog::rules::Problem) -> String {
+    problem_line_in(language(), problem)
+}
+
+fn problem_text_in(language: Locale, problem: &dac_catalog::rules::Problem) -> String {
+    let issue = tr_in(language, problem.issue.text());
+    // Japanese and Chinese catalogs join a label and its text with a full-width colon
+    let colon = if matches!(language.script(), "Jpan" | "Hans" | "Hant") { "：" } else { ": " };
+    match problem.field.as_deref() {
+        Some(field) => format!("{}{colon}{issue}", tr_in(language, dac_catalog::rules::field_label(field).unwrap_or(field))),
+        None => issue.to_string(),
+    }
+}
+
+fn problem_line_in(language: Locale, problem: &dac_catalog::rules::Problem) -> String {
+    let at: Vec<String> = problem.path.iter().map(|i| i.saturating_add(1).to_string()).collect();
+    // a problem with the album filter around the rules has no rule to point at
+    if at.is_empty() {
+        return problem_text_in(language, problem);
+    }
+    format!("#{} {}", at.join("."), problem_text_in(language, problem))
+}
+
+/// What people read for smart-album choice `id` of `field` ("Gemeinfrei" for `publicDomain` in
+/// German); an id the field doesn't know, as written.
+pub fn choice_text<'a>(field: &str, id: &'a str) -> &'a str {
+    choice_text_in(language(), field, id)
+}
+
+fn choice_text_in<'a>(language: Locale, field: &str, id: &'a str) -> &'a str {
+    dac_catalog::rules::choice_label(field, id).map_or(id, |label| tr_in(language, label))
+}
+
+/// What people read for a smart-album yes/no value ("Ja" / "Nein" in German).
+pub fn bool_text(b: bool) -> &'static str {
+    bool_text_in(language(), b)
+}
+
+/// The context of a smart-album yes/no value ([`tr_ctx_in`]).
+const BOOL_CONTEXT: &str = "smart album value";
+
+fn bool_text_in(language: Locale, b: bool) -> &'static str {
+    tr_ctx_in(language, BOOL_CONTEXT, dac_catalog::rules::bool_label(b))
+}
+
 /// A rule summary for display, keeping free-text rule values verbatim.
-pub fn rules_label(rules: &dac_catalog::RuleSet) -> String {
-    fn describe(rules: &dac_catalog::RuleSet, depth: usize) -> String {
+pub fn rules_label(rules: &dac_catalog::RuleSet, catalog: &dac_catalog::Catalog) -> String {
+    fn describe(rules: &dac_catalog::RuleSet, catalog: &dac_catalog::Catalog, depth: usize) -> String {
         use dac_catalog::{
             Match, Rule,
             rules::{FIELDS, Kind, ops_for},
@@ -356,14 +421,15 @@ pub fn rules_label(rules: &dac_catalog::RuleSet) -> String {
             .rules
             .iter()
             .map(|rule| match rule {
-                Rule::Group { group } => format!("({})", describe(group, depth + 1)),
+                Rule::Group { group } => format!("({})", describe(group, catalog, depth + 1)),
                 Rule::Field { field, op, value } => {
                     let Some((_, label, kind)) = FIELDS.iter().find(|entry| entry.0 == field) else { return field.clone() };
                     let operator = ops_for(*kind).iter().find(|entry| entry.0 == op).map_or(op.as_str(), |entry| entry.1);
                     let text = match kind {
-                        Kind::Choice(_) | Kind::Bool => {
-                            tr(value.as_str().unwrap_or(if value.as_bool() == Some(true) { "true" } else { "false" })).to_string()
-                        }
+                        // the album's name, as people know it (a user's name is never translated)
+                        Kind::Album => dac_catalog::rules::album_name(value, Some(catalog)),
+                        Kind::Choice(_) => value.as_str().map_or_else(|| value.to_string(), |id| choice_text(field, id).to_string()),
+                        Kind::Bool => dac_catalog::rules::bool_value(value).map_or_else(|| value.to_string(), |b| bool_text(b).to_string()),
                         _ if matches!(op.as_str(), "inLast" | "notInLast") => format!(
                             "{} {}",
                             value.get("n").unwrap_or(&serde_json::Value::Null),
@@ -383,7 +449,7 @@ pub fn rules_label(rules: &dac_catalog::RuleSet) -> String {
         if rules.mode == Match::None { format!("{} ({text})", tr("none of")) } else { text }
     }
     // Preserve the established source-language summary.
-    if language() == Locale::En { rules.describe() } else { describe(rules, 0) }
+    if language() == Locale::En { rules.describe_with(catalog) } else { describe(rules, catalog, 0) }
 }
 
 #[cfg(test)]
@@ -473,6 +539,9 @@ mod tests {
         assert_eq!(Locale::parse_tag("pt-BR"), Some(Locale::PtBr));
         assert_eq!(Locale::parse_tag("pt_BR.UTF-8"), Some(Locale::PtBr));
         assert_eq!(Locale::parse_tag("pt"), Some(Locale::PtBr));
+        assert_eq!(Locale::parse_tag("fr"), Some(Locale::Fr));
+        assert_eq!(Locale::parse_tag("fr-FR"), Some(Locale::Fr));
+        assert_eq!(Locale::parse_tag("fr_FR.UTF-8"), Some(Locale::Fr));
         for tag in ["de", "de-DE", "de_AT.UTF-8", "de-CH"] {
             assert_eq!(Locale::parse_tag(tag), Some(Locale::De), "{tag}");
         }
@@ -517,6 +586,9 @@ mod tests {
         set_language(Locale::Ja);
         assert_eq!(tr_format!("Imported {} photo{}", 12, "s"), "12枚を読み込みました");
         assert_eq!(tr_format!("Exported {ok} of {total} photo{}", "s", ok = 4, total = 12), "12枚中4枚を書き出しました");
+        set_language(Locale::Fr);
+        assert_eq!(tr_format!("Imported {} photo{}", 12, "s"), "12 photos importée(s)");
+        assert_eq!(tr_format!("Imported {} photo{}", 1, ""), "1 photo importée(s)");
         // Format specs survive translation: precision, sign, and values a language reorders.
         for language in Locale::ALL {
             set_language(*language);
@@ -618,9 +690,11 @@ mod tests {
             ("app.language.simplifiedChinese", Locale::ZhHans),
             ("app.language.japanese", Locale::Ja),
             ("app.language.portuguese", Locale::PtBr),
+            ("app.language.french", Locale::Fr),
             ("app.language.spanish", Locale::Es),
             ("app.language.german", Locale::De),
             ("app.language.russian", Locale::Ru),
+            ("app.language.ukrainian", Locale::Uk),
         ];
         // One command per language, and every command reachable from the menu table.
         assert_eq!(commands.len(), Locale::ALL.len());
@@ -655,6 +729,225 @@ mod tests {
         }
     }
 
+    /// Smart-album choice values read as words in every language (English "Public Domain", German
+    /// "Gemeinfrei"), never as rule ids like `publicDomain`; an id the field doesn't know shows as
+    /// written. Unlike other labels these must be translated: an untranslated one would be English
+    /// in the middle of a translated rule.
+    #[test]
+    fn choice_values_read_as_words_in_every_language() {
+        use dac_catalog::rules::{FIELDS, Kind};
+        assert_eq!(choice_text_in(Locale::En, "copyrightStatus", "publicDomain"), "Public Domain");
+        assert_eq!(choice_text_in(Locale::De, "copyrightStatus", "publicDomain"), "Gemeinfrei");
+        assert_eq!(choice_text_in(Locale::De, "copyrightStatus", "someday"), "someday");
+        assert_eq!(choice_text_in(Locale::ZhHans, "treatment", "color"), "彩色", "in colour, not the colour noun");
+        assert_eq!(choice_text_in(Locale::Ru, "treatment", "color"), "Цветное");
+        assert_eq!(choice_text_in(Locale::Es, "label", "none"), "Sin etiqueta");
+        // yes/no fields read Yes / No, never true / false
+        assert_eq!((bool_text_in(Locale::En, true), bool_text_in(Locale::En, false)), ("Yes", "No"));
+        assert_eq!(bool_text_in(Locale::De, false), "Nein");
+        // Japanese answers はい / いいえ don't read as a rule's value: its own wording, あり / なし,
+        // through a context, while the shared Yes / No keep their meaning everywhere else
+        assert_eq!((bool_text_in(Locale::Ja, true), bool_text_in(Locale::Ja, false)), ("あり", "なし"));
+        assert_eq!((Locale::Ja.tr("Yes"), Locale::Ja.tr("No")), ("はい", "いいえ"));
+        assert_eq!(tr_ctx_in(Locale::Ja, "nope", "Yes"), "はい", "no contextual entry: the plain message");
+        assert_eq!(tr_ctx_in(Locale::En, BOOL_CONTEXT, "Yes"), "Yes");
+        // and the yes/no fields are named by plain nouns, so "編集 … なし" doesn't read "edits: yes … none"
+        for (field, label, kind) in FIELDS {
+            if *kind != Kind::Bool {
+                continue;
+            }
+            let ja = Locale::Ja.catalog().get(*label).unwrap_or_else(|| panic!("ja lacks the {field} label {label:?}"));
+            assert!(!ja.contains("あり") && !ja.contains("なし"), "{field}: {ja}");
+        }
+        // a contextual entry names a real value (a typo would silently fall back to はい / いいえ)
+        let values = [dac_catalog::rules::bool_label(true), dac_catalog::rules::bool_label(false)];
+        for language in Locale::ALL {
+            for key in language.catalog().keys() {
+                if let Some(value) = key.strip_prefix(BOOL_CONTEXT).and_then(|k| k.strip_prefix('|')) {
+                    assert!(values.contains(&value), "{}: {key:?} isn't a yes/no value", language.code());
+                }
+            }
+        }
+        for language in Locale::ALL.iter().filter(|language| **language != Locale::En) {
+            for label in [dac_catalog::rules::bool_label(true), dac_catalog::rules::bool_label(false)] {
+                assert!(language.catalog().contains_key(label), "{} lacks {label:?}", language.code());
+            }
+        }
+        for language in Locale::ALL {
+            for (field, _, kind) in FIELDS {
+                let Kind::Choice(choices) = kind else { continue };
+                for (id, label) in *choices {
+                    let text = choice_text_in(*language, field, id);
+                    assert_ne!(text, *id, "{}: {field} {id}", language.code());
+                    if *language != Locale::En {
+                        assert!(language.catalog().contains_key(*label), "{} lacks {label:?}", language.code());
+                    }
+                }
+            }
+        }
+    }
+
+    /// A rule's problem reads as the field's name and the issue, in the editor's language ("Titel:
+    /// braucht einen Suchbegriff …"); the sidebar's list puts the rule's position first. Every issue
+    /// is translated in every language: an English one would stand out in a translated editor.
+    #[test]
+    fn problems_read_in_every_language() {
+        use dac_catalog::rules::Issue;
+        let cat = dac_catalog::Catalog::new();
+        let problems =
+            |rules: serde_json::Value| serde_json::from_value::<dac_catalog::RuleSet>(serde_json::json!({"rules": rules})).unwrap().check(&cat);
+        let p = problems(serde_json::json!([{"field": "rating", "op": "gte", "value": 3}, {"field": "title", "op": "contains", "value": ""}]));
+        assert_eq!(problem_text_in(Locale::En, &p[0]), "Title: needs something to look for (or use “is empty”)");
+        assert_eq!(problem_text_in(Locale::De, &p[0]), "Titel: braucht einen Suchbegriff (oder „ist leer“)");
+        assert_eq!(problem_line_in(Locale::En, &p[0]), "#2 Title: needs something to look for (or use “is empty”)");
+        // Japanese and Chinese join with a full-width colon, as their catalogs do
+        assert_eq!(problem_text_in(Locale::Ja, &p[0]), "タイトル：検索する語句が必要です（または「が空」を使用）");
+        // a problem with the album filter itself has no rule position to show
+        let filter_loop =
+            dac_catalog::rules::Problem { path: Vec::new(), field: Some("album".into()), issue: Issue::AlbumLoop, message: String::new() };
+        assert!(problem_line_in(Locale::En, &filter_loop).starts_with("Album: "), "{}", problem_line_in(Locale::En, &filter_loop));
+        let g = problems(serde_json::json!([{"group": {"rules": []}}]));
+        assert_eq!(problem_text_in(Locale::En, &g[0]), "This group is empty: add a rule or remove it.");
+        // the issues, the operators their hints name and the album picker's words, in every language
+        for language in Locale::ALL.iter().filter(|l| **l != Locale::En) {
+            // the field menu: every field and every group, so it never mixes languages
+            for label in dac_catalog::rules::FIELDS.iter().map(|f| f.1).chain(dac_catalog::rules::FIELD_GROUPS.iter().map(|g| g.0)) {
+                assert!(language.catalog().contains_key(label), "{} lacks the rule label {label:?}", language.code());
+            }
+            for word in [
+                "Choose an album…",
+                "No albums yet",
+                "Search albums",
+                "No albums match",
+                "This is the album you're editing",
+                "It tests this album, so testing it back would loop",
+                "Fix the marked rules to save this album.",
+            ] {
+                assert!(language.catalog().contains_key(word), "{} lacks {word:?}", language.code());
+            }
+            for issue in Issue::ALL {
+                assert!(language.catalog().contains_key(issue.text()), "{} lacks {:?}", language.code(), issue.text());
+            }
+            for (_, _, kind) in dac_catalog::rules::FIELDS {
+                for (_, op) in dac_catalog::rules::ops_for(*kind) {
+                    assert!(language.catalog().contains_key(*op), "{} lacks the operator {op:?}", language.code());
+                }
+            }
+        }
+    }
+
+    /// The date picker's own words (its tooltip, the weekday headers) are in every language, as the
+    /// month and day labels it borrows from the date headings are.
+    #[test]
+    fn date_picker_words_are_translated() {
+        for language in Locale::ALL.iter().filter(|l| **l != Locale::En) {
+            for word in crate::date_picker::WEEKDAY_SHORT.iter().chain(&["Pick a date", "Year", "Month", "Day"]) {
+                assert!(language.catalog().contains_key(*word), "{} lacks {word:?}", language.code());
+            }
+        }
+    }
+
+    /// Ukrainian's coverage of every catalog message and display label. Gaps are reported, not failed
+    /// (like `catalogs_agree_on_placeholders_and_report_gaps`): a feature PR that adds a label doesn't
+    /// have to ship its Ukrainian text, which shows in English until the translation catches up.
+    #[test]
+    fn ukrainian_coverage_of_catalogs_commands_controls_and_rules_is_reported() {
+        let catalog = Locale::Uk.catalog();
+        let keys: std::collections::BTreeSet<&String> = Locale::ALL.iter().flat_map(|language| language.catalog().keys()).collect();
+        let lacking: Vec<_> = keys.into_iter().filter(|key| !catalog.contains_key(key.as_str())).collect();
+        if !lacking.is_empty() {
+            eprintln!("uk lacks {} catalog message(s) (shown in English): {lacking:?}", lacking.len());
+        }
+        let mut labels: Vec<&str> = dac_engine::command_specs().iter().map(|spec| spec.label).collect();
+        labels.extend(crate::menus::ui_commands().map(|command| command.1).filter(|label| !Locale::ALL.iter().any(|locale| locale.name() == *label)));
+        labels.extend(dac_develop::CONTROLS.iter().map(|control| control.label));
+        labels.extend(crate::panels::settings::TABS.iter().map(|(_, label)| *label));
+        for (_, label, kind) in dac_catalog::rules::FIELDS {
+            labels.push(label);
+            labels.extend(dac_catalog::rules::ops_for(*kind).iter().map(|(_, label)| *label));
+        }
+        labels.extend(dac_engine::rename::TOKENS.iter().map(|token| token.meaning));
+        labels.extend(dac_engine::rename::TEMPLATE_NOTES);
+        let missing: Vec<_> = labels.into_iter().filter(|label| !catalog.contains_key(*label)).collect();
+        if !missing.is_empty() {
+            eprintln!("uk lacks {} display label(s) (shown in English): {missing:?}", missing.len());
+        }
+    }
+
+    #[test]
+    fn ukrainian_switches_persists_formats_dates_and_preserves_values() {
+        use crate::control::{ControlRequest, Outcome};
+        let mut app = crate::DacApp::new(dac_engine::Session::with_demo(), Default::default());
+        app.run("app.language.ukrainian", serde_json::json!({})).unwrap();
+        assert_eq!(app.ui.language, Locale::Uk);
+        assert_eq!(crate::menubar::checked(&app, "app.language.ukrainian"), Some(true));
+        assert_eq!(tr("Light"), "Світло");
+        assert_eq!(tr("Landscape"), "Пейзаж");
+        assert_eq!(tr("Home"), "Домашня тека");
+        assert_eq!(date_group_label("2026-09-20", false), "Неділя, 20.09.2026");
+        assert_eq!(date_group_label("2026-09", false), "09.2026");
+        assert_eq!(display_time("2026-09-20T16:04:05"), "Неділя, 20.09.2026 16:04:05");
+        // Count-neutral labels work for every Ukrainian integer category, with no English suffix.
+        for n in [0, 1, 2, 5, 11, 21, 22, 25, 111] {
+            assert_eq!(tr_format!("Imported {} photo{}", n, if n == 1 { "" } else { "s" }), format!("Імпортовано фото: {n}"));
+            assert_eq!(tr_format!("{} files and {f} folder{}", n, "s", f = n), format!("Файлів: {n}, тек: {n}"));
+            let noun = tr(if n == 1 { "cached picture" } else { "cached pictures" });
+            assert_eq!(tr_format!("{n} {noun}", n = n, noun = noun), format!("Кешовані зображення: {n}"));
+        }
+        // This trailing argument is queue progress, not an English plural suffix.
+        let queued = tr_format!(" · {queued} waiting", queued = 5);
+        assert_eq!(
+            tr_format!("Denoising {name}: {done} of {total} tiles{}", queued, name = "IMG.CR3", done = 1, total = 4),
+            "Усунення шуму IMG.CR3: ділянки — 1 із 4 · очікують: 5"
+        );
+        let name = "Color {title} 日本語";
+        assert_eq!(tr_format!("Added {n} photo{} to “{}”", "s", name, n = 22), format!("До «{name}» додано фото: 22"));
+        assert_eq!(builtin_label("Warm Glow", false), "Warm Glow");
+        assert_eq!(builtin_label("Warm Glow", true), "Тепле сяйво");
+        assert_eq!(tr("photo-{title}.jpg"), "photo-{title}.jpg");
+        assert_eq!(tr("develop.set"), "develop.set");
+        let saved = serde_json::to_string(&app.ui).unwrap();
+        assert!(saved.contains(r#""language":"uk""#));
+        assert_eq!(serde_json::from_str::<crate::state::UiState>(&saved).unwrap().language, Locale::Uk);
+        let ctx = egui::Context::default();
+        for code in ["uk", "uk-UA", "uk_UA.UTF-8", "uk-Cyrl-UA"] {
+            assert_eq!(Locale::parse_tag(code), Some(Locale::Uk));
+            let (request, _) = ControlRequest::new("ui.set", serde_json::json!({"language": code}));
+            let Outcome::Done(reply) = crate::control::handle(&mut app, &ctx, &request) else { panic!("expected reply") };
+            assert_eq!(reply["ok"], true);
+            assert_eq!(language(), Locale::Uk);
+        }
+        set_language(Locale::En);
+    }
+
+    #[test]
+    fn ukrainian_panels_dialogs_and_letters_paint_with_bundled_fonts() {
+        let ctx = fonts_ctx(&[]);
+        let mut app = crate::DacApp::new(dac_engine::Session::with_demo(), Default::default());
+        app.ui.left_panel = true;
+        let text = painted_text(&ctx, &mut app, Locale::Uk);
+        assert!(text.contains("Мої фото") && text.contains("Усі фото"), "{text}");
+        for (command, title) in [("app.about", "Про"), ("app.shortcuts", "Клавіатурні скорочення"), ("app.settings", "Налаштування")]
+        {
+            app.ui.dialog = None;
+            app.run(command, serde_json::json!({})).unwrap();
+            let text = painted_text(&ctx, &mut app, Locale::Uk);
+            assert!(text.contains(title), "{command}: {text}");
+        }
+        ctx.fonts_mut(|fonts| {
+            for family in [egui::FontFamily::Proportional, egui::FontFamily::Name(crate::theme::FONT_SEMIBOLD.into())] {
+                let font = egui::FontId::new(13.0, family);
+                for ch in "ҐґЄєІіЇї’«»"
+                    .chars()
+                    .chain(Locale::Uk.catalog().values().flat_map(|text| text.chars()).filter(|ch| ('\u{0400}'..='\u{04ff}').contains(ch)))
+                {
+                    assert!(fonts.has_glyph(&font, ch), "missing Ukrainian glyph {ch}");
+                }
+            }
+        });
+        set_language(Locale::En);
+    }
+
     /// Every command, control, rule and rename label, and every line of What's New, is a message a
     /// catalog can translate. What a language lacks is reported, not failed (like
     /// `catalogs_agree_on_placeholders_and_report_gaps`): a feature PR doesn't have to ship every
@@ -668,6 +961,7 @@ mod tests {
             labels.push(label);
             labels.extend(dac_catalog::rules::ops_for(*kind).iter().map(|(_, label)| *label));
         }
+        labels.extend(dac_catalog::rules::FIELD_GROUPS.iter().map(|group| group.0));
         labels.extend(dac_engine::rename::TOKENS.iter().map(|token| token.meaning));
         labels.extend(dac_engine::rename::TEMPLATE_NOTES);
         let ui_labels = labels.len();
@@ -731,7 +1025,26 @@ mod tests {
             mode: dac_catalog::Match::All,
             rules: vec![dac_catalog::Rule::Field { field: "keywords".into(), op: "contains".into(), value: serde_json::json!("Color") }],
         };
-        assert_eq!(rules_label(&rules), "Stichwörter enthält Color");
+        let mut catalog = dac_catalog::Catalog::new();
+        catalog.apply(dac_catalog::Op::AddAlbum { album: dac_catalog::Album::new(dac_catalog::AlbumId(4), "Ausgeschlossen") }).unwrap();
+        assert_eq!(rules_label(&rules, &catalog), "Stichwörter enthält Color");
+        let album = dac_catalog::RuleSet {
+            mode: dac_catalog::Match::All,
+            rules: vec![dac_catalog::Rule::Field { field: "album".into(), op: "isNot".into(), value: serde_json::json!(4) }],
+        };
+        assert!(rules_label(&album, &catalog).ends_with(" “Ausgeschlossen”"), "{}", rules_label(&album, &catalog));
+        let rules = dac_catalog::RuleSet {
+            mode: dac_catalog::Match::All,
+            rules: vec![dac_catalog::Rule::Field { field: "copyrightStatus".into(), op: "is".into(), value: serde_json::json!("publicDomain") }],
+        };
+        assert!(rules_label(&rules, &catalog).ends_with(" Gemeinfrei"), "{}", rules_label(&rules, &catalog));
+        for value in [serde_json::json!(false), serde_json::json!("false")] {
+            let rules = dac_catalog::RuleSet {
+                mode: dac_catalog::Match::All,
+                rules: vec![dac_catalog::Rule::Field { field: "edited".into(), op: "is".into(), value }],
+            };
+            assert!(rules_label(&rules, &catalog).ends_with(" Nein"), "{}", rules_label(&rules, &catalog));
+        }
         let filter = dac_catalog::Filter { labels: vec![dac_catalog::ColorLabel::Red, dac_catalog::ColorLabel::Blue], ..Default::default() };
         assert_eq!(filter_label(&filter, &app.session.catalog), "Farbmarkierung: Rot oder Blau");
         app.run("label.setNames", serde_json::json!({"names": {"red": "Color"}})).unwrap();
@@ -768,7 +1081,7 @@ mod tests {
     }
 
     #[test]
-    fn german_buttons_fit_the_bottom_bar_and_export_dialog() {
+    fn german_and_ukrainian_buttons_fit_the_bottom_bar_and_export_dialog() {
         fn collect(shape: &egui::epaint::Shape, bounds: &mut Vec<(String, egui::Rect)>) {
             match shape {
                 egui::epaint::Shape::Text(shape) => {
@@ -778,38 +1091,40 @@ mod tests {
                 _ => {}
             }
         }
-        let ctx = fonts_ctx(&[]);
-        let services = crate::Services { pick_folder: Some(Box::new(|| None)), ..Default::default() };
-        let mut app = crate::DacApp::new(dac_engine::Session::with_demo(), services);
-        app.ui.language = Locale::De;
-        let mut bounds = Vec::new();
-        for export in [false, true] {
-            if export {
-                app.run("dialog.export", serde_json::json!({})).unwrap();
-            }
-            for frame in 0..4 {
-                let input = crate::headless::HeadlessView::raw_input(egui::vec2(1600.0, 1000.0), 1.0, frame as f64 / 60.0, vec![]);
-                let mut out = ctx.run_ui(input, |ui| {
-                    app.logic(ui.ctx());
-                    app.ui(ui);
-                });
-                out.textures_delta.clear();
-                bounds.clear();
-                for shape in out.shapes {
-                    collect(&shape.shape, &mut bounds);
+        for language in [Locale::De, Locale::Uk] {
+            let ctx = fonts_ctx(&[]);
+            let services = crate::Services { pick_folder: Some(Box::new(|| None)), ..Default::default() };
+            let mut app = crate::DacApp::new(dac_engine::Session::with_demo(), services);
+            app.ui.language = language;
+            let mut bounds = Vec::new();
+            for export in [false, true] {
+                if export {
+                    app.run("dialog.export", serde_json::json!({})).unwrap();
                 }
-            }
-            let rect = |id: &str| app.widgets.iter().find(|entry| entry.0 == id).unwrap().1;
-            if export {
-                let dialog = rect("dialog:window");
-                for id in ["button:exportNamingTags", "button:exportChooseFolder", "button:exportSavePreset"] {
-                    assert!(dialog.contains_rect(rect(id)), "{id} spills outside {dialog:?}: {:?}", rect(id));
+                for frame in 0..4 {
+                    let input = crate::headless::HeadlessView::raw_input(egui::vec2(1600.0, 1000.0), 1.0, frame as f64 / 60.0, vec![]);
+                    let mut out = ctx.run_ui(input, |ui| {
+                        app.logic(ui.ctx());
+                        app.ui(ui);
+                    });
+                    out.textures_delta.clear();
+                    bounds.clear();
+                    for shape in out.shapes {
+                        collect(&shape.shape, &mut bounds);
+                    }
                 }
-            } else {
-                let button = rect("button:copySettings");
-                let (_, text) = bounds.iter().find(|entry| entry.0 == "Bearbeitungseinstellungen kopieren").unwrap();
-                assert!(button.contains_rect(*text), "German copy caption overflows its button: {text:?} vs {button:?}");
-                assert!(!button.intersects(rect("icon:copyGear")));
+                let rect = |id: &str| app.widgets.iter().find(|entry| entry.0 == id).unwrap().1;
+                if export {
+                    let dialog = rect("dialog:window");
+                    for id in ["button:exportNamingTags", "button:exportChooseFolder", "button:exportSavePreset"] {
+                        assert!(dialog.contains_rect(rect(id)), "{id} spills outside {dialog:?}: {:?}", rect(id));
+                    }
+                } else {
+                    let button = rect("button:copySettings");
+                    let (_, text) = bounds.iter().find(|entry| entry.0 == language.tr("Copy Edit Settings")).unwrap();
+                    assert!(button.contains_rect(*text), "{language:?} copy caption overflows its button: {text:?} vs {button:?}");
+                    assert!(!button.intersects(rect("icon:copyGear")));
+                }
             }
         }
         set_language(Locale::En);

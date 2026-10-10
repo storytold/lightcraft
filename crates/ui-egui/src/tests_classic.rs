@@ -104,17 +104,17 @@ fn collections_panel_shows_and_clears_the_target() {
     assert_eq!(h.app.session.target_album, None);
 }
 
-/// Keywording: the tags field, suggestions (a click adds to every selected photo), the keyword
-/// set grid and the shortcut field are on screen.
+/// Keywording (upstream's keyword box in the Classic panel): the entry field and suggestions (a
+/// click adds to every selected photo) are on screen.
 #[test]
 fn keywording_panel_adds_suggestions_to_the_selection() {
     let mut h = demo();
     h.app.ui.hidden_panels = vec![PanelId::QuickDevelop];
     let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
     run(&mut h, "library.select", json!({"ids": ids}));
-    assert!(has(&h, "field:keywordTags") && has(&h, "field:keywordAdd") && has(&h, "field:keywordShortcut"));
-    let k = h.app.widgets.iter().find_map(|(w, _)| w.strip_prefix("kwdSuggest:").map(str::to_string)).expect("a suggestion");
-    click(&mut h, &format!("kwdSuggest:{k}"));
+    assert!(has(&h, "field:keyword"));
+    let k = h.app.widgets.iter().find_map(|(w, _)| w.strip_prefix("kwSuggest:").map(str::to_string)).expect("a suggestion");
+    click(&mut h, &format!("kwSuggest:{k}"));
     for id in &ids {
         assert!(
             h.app.session.catalog.photo(dac_catalog::PhotoId(*id)).unwrap().meta.keywords.iter().any(|x| x.eq_ignore_ascii_case(&k)),
@@ -123,27 +123,22 @@ fn keywording_panel_adds_suggestions_to_the_selection() {
     }
 }
 
-/// Keyword List: created keywords are listed (count 0); the mark toggles a keyword on the
-/// selection; People shows person keywords only; a click on a row filters by it.
+/// Keyword List panel (upstream's list): created keywords are listed; the tick box toggles a
+/// keyword on the selection; the arrow filters by it.
 #[test]
 fn keyword_list_marks_filters_and_lists_created_keywords() {
     let mut h = demo();
     h.app.ui.hidden_panels = vec![PanelId::QuickDevelop, PanelId::Keywording];
-    run(&mut h, "keyword.create", json!({"keyword": "Anna", "person": true}));
+    run(&mut h, "keyword.create", json!({"name": "Anna", "person": true}));
     let id = h.app.session.visible_cloned()[0].0;
     run(&mut h, "library.select", json!({"ids": [id]}));
-    assert!(has(&h, "keywordList:Anna"), "a created keyword is listed");
-    click(&mut h, "keywordMark:Anna");
+    assert!(has(&h, "keywordRow:Anna"), "a created keyword is listed");
+    click(&mut h, "keywordCheck:Anna");
     let has_kw = |h: &Headless| h.app.session.catalog.photo(dac_catalog::PhotoId(id)).unwrap().meta.keywords.iter().any(|k| k == "Anna");
-    assert!(has_kw(&h), "the mark adds it");
-    click(&mut h, "keywordMark:Anna");
+    assert!(has_kw(&h), "the tick adds it");
+    click(&mut h, "keywordCheck:Anna");
     assert!(!has_kw(&h), "and takes it away");
-    click(&mut h, "keywordListKind:people");
-    let rows = |h: &Headless| h.app.widgets.iter().filter(|(w, _)| w.starts_with("keywordList:")).count();
-    assert_eq!(rows(&h), 1, "people only");
-    click(&mut h, "keywordListKind:all");
-    assert!(rows(&h) > 1);
-    click(&mut h, "keywordList:Anna");
+    click(&mut h, "keywordShow:Anna");
     assert_eq!(h.app.session.filter.keyword.as_deref(), Some("Anna"));
 }
 

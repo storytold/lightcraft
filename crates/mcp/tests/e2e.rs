@@ -228,13 +228,20 @@ fn export_progress_and_cancel() {
         if value["method"] == "notifications/progress" {
             continue;
         }
+        // a fast machine can finish the eight small exports before the cancellation is read: MCP
+        // allows the reply then ("the request may have completed"), so it only must not be an error
+        if value["id"] == 4 {
+            assert_eq!(value["result"]["isError"], false, "{value}");
+            continue;
+        }
         assert_eq!(value["id"], 5, "cancelled request must not reply: {value}");
         assert_eq!(value["result"]["isError"], false);
         break;
     }
     assert_eq!(std::fs::read(&decoy).unwrap(), b"unrelated existing output");
     let photos: Vec<_> = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().path()).filter(|p| *p != decoy).collect();
-    assert!(!photos.is_empty() && photos.len() < ids.len(), "only completed photos remain: {photos:?}");
+    // (all of them when the batch finished before the cancellation was read, see above)
+    assert!(!photos.is_empty() && photos.len() <= ids.len(), "only completed photos remain: {photos:?}");
     for path in &photos {
         dac_codecs::decode(&std::fs::read(path).unwrap(), Default::default()).expect("complete image, no partial/temp file");
     }

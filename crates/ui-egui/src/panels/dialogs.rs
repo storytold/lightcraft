@@ -63,6 +63,11 @@ pub const WHATS_NEW: &str = include_str!("../../../../docs/whats-new.md");
 pub fn show(app: &mut DacApp, ctx: &egui::Context) {
     let Some(mut dlg) = app.ui.dialog.clone() else { return };
     let at_start = dlg.clone();
+    // Esc with a popup open in the dialog (a dropdown, a date picker's calendar) closes the popup
+    // only: claimed before the dialog is drawn, since the popup is gone once it has handled the key
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && egui::Popup::is_any_open(ctx) {
+        crate::widgets::take_escape(ctx);
+    }
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
     // The backdrop is an area below the dialog window (a bare `Middle` layer painter would be
@@ -82,6 +87,11 @@ pub fn show(app: &mut DacApp, ctx: &egui::Context) {
         Dialog::LabelNames { .. } => "Edit Color Label Names",
         Dialog::CaptureTime { .. } => "Edit Capture Time",
         Dialog::RenameKeyword { .. } => "Rename Keyword",
+        Dialog::KeywordTag { editing: None, .. } => "Create Keyword Tag",
+        Dialog::KeywordTag { .. } => "Edit Keyword Tag",
+        Dialog::DeleteKeyword { .. } => "Delete Keyword",
+        Dialog::MoveKeyword { .. } => "Merge Keywords",
+        Dialog::KeywordSet { .. } => "Edit Keyword Set",
         Dialog::MergeKeywords { .. } => "Merge Keywords",
         Dialog::NewSmartAlbum { .. } => "Create Smart Album",
         Dialog::AllMetadata { .. } => "All Metadata",
@@ -98,11 +108,13 @@ pub fn show(app: &mut DacApp, ctx: &egui::Context) {
         Dialog::CopySettings { .. } => "Choose Edit Settings to Copy",
         Dialog::PasteSettings { .. } => "Paste Selected Settings",
         Dialog::Export { .. } => "Export",
+        Dialog::ContactSheet { .. } => "Contact Sheet PDF",
         Dialog::Merge { opts } => opts.title(),
         Dialog::Settings { .. } => "Settings",
         Dialog::ConfirmDelete { .. } => "Delete Photos",
         Dialog::RemoveFolder { disk: true, .. } => "Remove Disk from Library",
         Dialog::RemoveFolder { .. } => "Remove Folder from Library",
+        Dialog::SynchronizeFolder { .. } => "Synchronize Folder",
         // (nothing to download from in this build: the dialog explains the manual install)
         Dialog::SamModel { .. } if sam_by_hand(&app.session.segmenter) => "Install the SAM 3 Model",
         Dialog::SamModel { .. } => "Download the SAM 3 Model?",
@@ -243,27 +255,28 @@ pub fn show(app: &mut DacApp, ctx: &egui::Context) {
                     let r = ui.add(egui::TextEdit::singleline(name).hint_text(crate::i18n::tr("Name")).desired_width(f32::INFINITY));
                     crate::widgets::register(ui.ctx(), "field:smartName", r.rect);
                     ui.add_space(6.0);
-                    egui::ScrollArea::vertical().max_height(360.0).auto_shrink([false, true]).show(ui, |ui| {
-                        crate::panels::rules_editor::edit(ui, rules, "rules", 0);
-                    });
-                    let problems = rules.problems();
                     // the folder an album made from a folder view carries is not in the editor, but it counts
                     let folder = id.and_then(|id| app.session.catalog.album(dac_catalog::AlbumId(id))).and_then(|a| a.smart.as_deref().and_then(|f| f.library_folder.clone()));
-                    let f = dac_catalog::Filter { rule_set: Some(rules.clone()), library_folder: folder, ..Default::default() };
-                    let n = if problems.is_empty() { app.session.catalog.query(&f, &Default::default()).len() } else { 0 };
+                    // problems, count and albums: cached until the catalog or the rules change (not per frame)
+                    let now = (app.session.clock)();
+                    let view = app.caches.rules_view(&app.session.catalog, rules, *id, folder, &now);
+                    let env = crate::panels::rules_editor::Env { problems: view.problems.clone(), today: now, albums: view.albums.clone() };
+                    egui::ScrollArea::vertical().max_height(360.0).auto_shrink([false, true]).show(ui, |ui| {
+                        crate::panels::rules_editor::edit(ui, rules, "rules", 0, &[], &env);
+                    });
+                    let n = view.count;
                     ui.add_space(4.0);
-                    ui.label(
-                        egui::RichText::new(match problems.first() {
-                            Some(p) => p.clone(),
-                            None => crate::i18n::tr_format!("{n} photo{} match · updates automatically as photos change", if n == 1 { "" } else { "s" }, n = n),
-                        })
-                        .color(t.text_dim),
-                    );
+                    if view.problems.is_empty() {
+                        ui.label(
+                            egui::RichText::new(crate::i18n::tr_format!("{n} photo{} match · updates automatically as photos change", if n == 1 { "" } else { "s" }, n = n))
+                                .color(t.text_dim),
+                        );
+                    } else {
+                        ui.label(egui::RichText::new(crate::i18n::tr("Fix the marked rules to save this album.")).color(t.caution));
+                    }
                 }
                 Dialog::NewSmartAlbum { name, .. } => {
-                    let r = ui.add(egui::TextEdit::singleline(name).hint_text(crate::i18n::tr("Name")).desired_width(f32::INFINITY));
-                    r.request_focus();
-                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    if dialog_field(ui, "field:smartAlbumName", name, "Name") {
                         confirm = true;
                     }
                     let rules = app.session.view_rules();
@@ -420,10 +433,7 @@ pub fn show(app: &mut DacApp, ctx: &egui::Context) {
                 }
                 Dialog::RenameKeyword { from, to } => {
                     let n = app.session.catalog.photos().filter(|p| p.meta.keywords.iter().any(|k| dac_catalog::keywords::is_under(k, from))).count();
-                    let r = ui.add(egui::TextEdit::singleline(to).hint_text(crate::i18n::tr("New name")).desired_width(f32::INFINITY));
-                    crate::widgets::register(ui.ctx(), "field:keywordName", r.rect);
-                    r.request_focus();
-                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    if dialog_field(ui, "field:keywordName", to, "New name") {
                         confirm = true;
                     }
                     ui.label(
@@ -434,10 +444,7 @@ pub fn show(app: &mut DacApp, ctx: &egui::Context) {
                 }
                 Dialog::MergeKeywords { from, into } => {
                     ui.label(egui::RichText::new(crate::i18n::tr_format!("Replace {} with:", from.iter().map(|f| format!("“{f}”")).collect::<Vec<_>>().join(", "))).color(t.text_label));
-                    let r = ui.add(egui::TextEdit::singleline(into).hint_text(crate::i18n::tr("Keyword")).desired_width(f32::INFINITY));
-                    crate::widgets::register(ui.ctx(), "field:keywordInto", r.rect);
-                    r.request_focus();
-                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    if dialog_field(ui, "field:keywordInto", into, "Keyword") {
                         confirm = true;
                     }
                     let options: Vec<String> = app
@@ -456,16 +463,12 @@ pub fn show(app: &mut DacApp, ctx: &egui::Context) {
                     });
                 }
                 Dialog::TextPrompt { value, hint, .. } => {
-                    let r = ui.add(egui::TextEdit::singleline(value).hint_text(crate::i18n::tr(hint.as_str())).desired_width(f32::INFINITY));
-                    r.request_focus();
-                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    if dialog_field(ui, "field:prompt", value, hint) {
                         confirm = true;
                     }
                 }
                 Dialog::NewAlbum { name, .. } | Dialog::RenameAlbum { name, .. } => {
-                    let r = ui.add(egui::TextEdit::singleline(name).hint_text(crate::i18n::tr("Name")).desired_width(f32::INFINITY));
-                    r.request_focus();
-                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    if dialog_field(ui, "field:albumName", name, "Name") {
                         confirm = true;
                     }
                 }
@@ -483,6 +486,24 @@ pub fn show(app: &mut DacApp, ctx: &egui::Context) {
                             .color(t.text_dim),
                     );
                     group_checklist(ui, "pasteGroup", groups);
+                }
+                Dialog::ContactSheet { options } => {
+                    options.columns = options.columns.clamp(1, 8);
+                    options.rows = options.rows.clamp(1, 10);
+                    let n = app.session.targets(&json!({})).len();
+                    ui.label(format!("{n} selected photos · {} pages", n.div_ceil(options.columns * options.rows)));
+                    field(ui, "Paper", |ui| {
+                        egui::ComboBox::from_id_salt("contactSheetPaper").selected_text(&options.paper).show_ui(ui, |ui| {
+                            ui.selectable_value(&mut options.paper, "a4".into(), "A4");
+                            ui.selectable_value(&mut options.paper, "letter".into(), "Letter");
+                        });
+                    });
+                    ui.checkbox(&mut options.landscape, "Landscape");
+                    field(ui, "Columns", |ui| { ui.add(egui::DragValue::new(&mut options.columns).range(1..=8)); });
+                    field(ui, "Rows", |ui| { ui.add(egui::DragValue::new(&mut options.rows).range(1..=10)); });
+                    ui.checkbox(&mut options.captions, "Filename captions");
+                    ui.label("150 dpi · sRGB · current edits · fit without cropping");
+                    ui.label("Choose a PDF destination after confirming. Print the PDF from your viewer.");
                 }
                 Dialog::Export { opts, full_size, resize, preset_name, limit_kb, dir } => {
                     use dac_engine::export::{Anchor as P, ExportFormat as F, MetadataPolicy as M, SharpenAmount as A, SharpenFor as S};
@@ -542,7 +563,16 @@ pub fn show(app: &mut DacApp, ctx: &egui::Context) {
                         choices(ui, "Bit depth", "exportBitDepth", depths, &mut bd);
                         opts.bit_depth = Some(bd);
                     }
+                    if matches!(opts.format, F::Jpeg | F::Tiff | F::Avif) {
+                        let tip = "Photos edited in HDR: JPEG with an HDR gain map (looks right everywhere, brighter highlights on HDR displays), AVIF as 10-bit Rec. 2020 PQ; TIFF needs 32-bit float";
+                        ui.checkbox(&mut opts.hdr, "HDR output").on_hover_text(tip);
+                        if opts.hdr && !opts.hdr_output() {
+                            ui.label(egui::RichText::new("HDR TIFF needs 32-bit float.").color(t.text_dim));
+                        }
+                    }
                     if !rendered {
+                    } else if opts.format == F::Avif && opts.hdr {
+                        ui.label(egui::RichText::new("Color space: Rec. 2020 PQ (HDR AVIF)").color(t.text_dim));
                     } else if opts.format == F::Avif {
                         ui.label(egui::RichText::new(crate::i18n::tr("Color space: sRGB (AVIF)")).color(t.text_dim));
                     } else {
@@ -733,11 +763,135 @@ pub fn show(app: &mut DacApp, ctx: &egui::Context) {
                 Dialog::Import { opts } => crate::import::body(app, ui, opts),
                 Dialog::Settings { tab } => crate::panels::settings::body(app, ui, tab),
                 Dialog::SamModel { error, .. } => sam_model_body(app, ui, error.as_deref()),
+                Dialog::KeywordTag {
+                    editing,
+                    name,
+                    parent,
+                    inside,
+                    synonyms,
+                    include_on_export,
+                    export_containing,
+                    export_synonyms,
+                    person,
+                    add_to_selected,
+                } => {
+                    ui.label(egui::RichText::new(crate::i18n::tr("Keyword Name")).color(t.text_dim));
+                    // several fields: the name takes the focus when the dialog opens, not after
+                    let r = crate::text_field::TextField::singleline("field:keywordTagName", name)
+                        .hint(crate::i18n::tr("Keyword Name"))
+                        .width(f32::INFINITY)
+                        .select_on_focus(true)
+                        .show(ui);
+                    if just_opened(ui, "keyword-tag") {
+                        r.response.request_focus();
+                    }
+                    if r.ending == Some(crate::text_field::Ending::Return) {
+                        confirm = true;
+                    }
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(crate::i18n::tr("Synonyms")).color(t.text_dim));
+                    // Return in either field creates (or saves) the keyword
+                    let r = crate::text_field::TextField::singleline("field:keywordSynonyms", synonyms)
+                        .hint(crate::i18n::tr("Separated by commas"))
+                        .width(f32::INFINITY)
+                        .show(ui);
+                    if r.ending == Some(crate::text_field::Ending::Return) {
+                        confirm = true;
+                    }
+                    ui.add_space(6.0);
+                    if editing.is_none() {
+                        if let Some(p) = parent {
+                            let r = ui.checkbox(inside, crate::i18n::tr_format!("Put inside “{parent}”", parent = p.replace('|', " › ")));
+                            crate::widgets::register(ui.ctx(), "check:keywordInside", r.rect);
+                        }
+                        let n = app.session.selection.ids.len();
+                        let r = ui.add_enabled(n > 0, egui::Checkbox::new(add_to_selected, crate::i18n::tr("Add to Selected Photos")));
+                        crate::widgets::register(ui.ctx(), "check:keywordAddToSelected", r.rect);
+                        ui.add_space(4.0);
+                    }
+                    ui.label(egui::RichText::new(crate::i18n::tr("Keyword Tag Options")).color(t.text_dim));
+                    for (on, label, id) in [
+                        (include_on_export, "Include on Export", "check:keywordIncludeOnExport"),
+                        (export_containing, "Export Containing Keywords", "check:keywordExportContaining"),
+                        (export_synonyms, "Export Synonyms", "check:keywordExportSynonyms"),
+                        (person, "Person", "check:keywordPerson"),
+                    ] {
+                        let r = ui.checkbox(on, crate::i18n::tr(label));
+                        crate::widgets::register(ui.ctx(), id, r.rect);
+                    }
+                }
+                Dialog::KeywordSet { replaces, name, slots, as_new } => {
+                    ui.label(egui::RichText::new(crate::i18n::tr("Set name")).color(t.text_dim));
+                    let r = crate::text_field::TextField::singleline("field:keywordSetName", name)
+                        .hint(crate::i18n::tr("Set name"))
+                        .width(f32::INFINITY)
+                        .select_on_focus(true)
+                        .show(ui);
+                    if just_opened(ui, "keyword-set") {
+                        r.response.request_focus();
+                    }
+                    let mut returned = r.ending == Some(crate::text_field::Ending::Return);
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(crate::i18n::tr("Keywords (⌥1–⌥9)")).color(t.text_dim));
+                    slots.resize(9, String::new());
+                    // equal columns of a set width (the window is still finding its own)
+                    let w = 130.0;
+                    egui::Grid::new("keyword-set-slots").num_columns(3).min_col_width(w).spacing([6.0, 4.0]).show(ui, |ui| {
+                        for (i, slot) in slots.iter_mut().enumerate() {
+                            let r = crate::text_field::TextField::singleline(&format!("field:keywordSetSlot:{}", i + 1), slot)
+                                .hint(format!("⌥{}", i + 1))
+                                .width(w)
+                                .show(ui);
+                            returned |= r.ending == Some(crate::text_field::Ending::Return);
+                            if i % 3 == 2 {
+                                ui.end_row();
+                            }
+                        }
+                    });
+                    if replaces.is_some() {
+                        ui.add_space(6.0);
+                        let r = ui.checkbox(as_new, crate::i18n::tr("Save as a new set"));
+                        crate::widgets::register(ui.ctx(), "check:keywordSetAsNew", r.rect);
+                    }
+                    // Return in any field saves the set
+                    if returned {
+                        confirm = true;
+                    }
+                }
+                Dialog::MoveKeyword { keyword, parent } => {
+                    let name = keyword.rsplit('|').next().unwrap_or(keyword);
+                    match parent {
+                        Some(p) => ui.label(crate::i18n::tr_format!(
+                            "“{parent}” has a “{name}” already. Merge the two?",
+                            parent = p.replace('|', " › "),
+                            name = name
+                        )),
+                        None => ui.label(crate::i18n::tr_format!("There is a “{name}” at the top level already. Merge the two?", name = name)),
+                    };
+                    ui.label(egui::RichText::new(crate::i18n::tr("Their photos and the keywords below them come together under one keyword.")).color(t.text_dim));
+                }
+                Dialog::DeleteKeyword { keyword, count } => {
+                    let name = keyword.replace('|', " › ");
+                    ui.label(crate::i18n::tr_format!("Delete the keyword “{name}”?", name = name));
+                    ui.label(
+                        egui::RichText::new(if *count == 0 {
+                            crate::i18n::tr("No photo has it; the keywords below it go too.").to_string()
+                        } else {
+                            crate::i18n::tr_format!(
+                                "It is taken off {count} photo{}, with the keywords below it. Undo brings it back.",
+                                if *count == 1 { "" } else { "s" },
+                                count = count
+                            )
+                        })
+                        .color(t.text_dim),
+                    );
+                }
                 Dialog::ConfirmDelete { count } => {
                     let what = if *count == 1 { crate::i18n::tr("this photo").to_string() } else { crate::i18n::tr_format!("these {count} photos", count = count) };
                     ui.label(crate::i18n::tr_format!("Move {what} to Recently Deleted?", what = what));
                     ui.label(egui::RichText::new(crate::i18n::tr("They can be restored from Recently Deleted until it is emptied.")).color(t.text_dim));
                 }
+                d @ Dialog::SynchronizeFolder { .. } => crate::sync::body(app, ui, d),
                 Dialog::RemoveFolder { name, count, path, disk } => {
                     ui.label(crate::i18n::tr_format!(
                         "Remove “{name}” and its {count} photo{} from the library?",
@@ -825,13 +979,20 @@ pub fn show(app: &mut DacApp, ctx: &egui::Context) {
                         add_label = crate::i18n::tr_format!("{verb} {n} Photo{}", if n == 1 { "" } else { "s" }, verb = crate::i18n::tr(verb), n = n);
                         add_label.as_str()
                     }
+                    Dialog::ContactSheet { .. } => "Choose PDF…",
                     Dialog::Merge { .. } => "Merge",
                     Dialog::DenoiseModel { info, .. } if info["download"].is_string() => "Accept & Download",
                     Dialog::DenoiseModel { .. } => "Install",
                     Dialog::FaceModel { info, .. } if !informational && info["download"].is_string() => "Download",
                     Dialog::FaceModel { .. } if !informational => "Install",
-                    Dialog::ConfirmDelete { .. } => "Delete",
+                    Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } => "Delete",
+                    // (not "Merge": that is photo merging, HDR / panorama, in some languages)
+                    Dialog::MoveKeyword { .. } => "Merge Keywords",
+                    Dialog::KeywordSet { .. } => "Save",
+                    Dialog::KeywordTag { editing: None, .. } => "Create",
+                    Dialog::KeywordTag { .. } => "Save",
                     Dialog::RemoveFolder { .. } => "Remove",
+                    Dialog::SynchronizeFolder { .. } => "Synchronize",
                     Dialog::SamModel { then: Some(_), .. } if sam_installed => "Continue",
                     Dialog::SamModel { .. } if sam_installed || sam_running || sam_nowhere => "",
                     Dialog::SamModel { error, .. } if error.is_some() || sam_failed => "Try Again",
@@ -840,7 +1001,14 @@ pub fn show(app: &mut DacApp, ctx: &egui::Context) {
                     _ => "OK",
                 };
                 // installing waits for the licence to be accepted
-                let can_confirm = informational || !matches!(&dlg, Dialog::DenoiseModel { accepted: false, .. } | Dialog::FaceModel { accepted: false, .. });
+                // (and Synchronize waits for the scan)
+                let can_confirm = informational
+                    || !matches!(
+                        &dlg,
+                        Dialog::DenoiseModel { accepted: false, .. } | Dialog::FaceModel { accepted: false, .. } | Dialog::SynchronizeFolder { counts: None, .. }
+                    )
+                        // smart-album rules that can't mean anything wait to be fixed
+                        && !matches!(&dlg, Dialog::SmartRules { id, rules, .. } if !rules.check_for(&app.session.catalog, id.map(dac_catalog::AlbumId)).is_empty());
                 let r = (!ok.is_empty()).then(|| ui.add_enabled(can_confirm, egui::Button::new(crate::i18n::tr(ok))));
                 if let Some(r) = &r {
                     crate::widgets::register(ui.ctx(), "button:dialogOk", r.rect);
@@ -861,8 +1029,9 @@ pub fn show(app: &mut DacApp, ctx: &egui::Context) {
         ctx.move_to_top(w.response.layer_id);
         crate::widgets::register(ctx, "dialog:window", w.response.rect);
     }
-    // (while the shortcuts editor records a key, it takes Esc itself to cancel)
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+    // (while the shortcuts editor records a key, it takes Esc itself to cancel; an open popup in
+    // the dialog, such as a date picker's calendar, takes it to close itself)
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !crate::widgets::escape_taken(ctx) {
         close = true;
     }
     if confirm {
@@ -874,9 +1043,13 @@ pub fn show(app: &mut DacApp, ctx: &egui::Context) {
                     dlg,
                     Dialog::Import { .. }
                         | Dialog::Export { .. }
+                        | Dialog::ContactSheet { .. }
                         | Dialog::NewAlbum { .. }
                         | Dialog::NewSmartAlbum { .. }
                         | Dialog::SmartRules { .. }
+                        | Dialog::KeywordTag { .. }
+                        | Dialog::KeywordSet { .. }
+                        | Dialog::SynchronizeFolder { .. }
                 ) =>
             {
                 app.toast(ctx, e)
@@ -1023,6 +1196,17 @@ fn created_in(app: &mut DacApp, command: &str, params: serde_json::Value) -> Res
     Ok(r)
 }
 
+/// The albums an Album rule in smart album `editing` picks from, in the sidebar's order: the album
+/// itself and any smart album that tests it (testing it back would loop) are blocked, with why.
+pub(crate) fn album_entries(cat: &dac_catalog::Catalog, editing: Option<u64>) -> Vec<crate::album_picker::AlbumEntry> {
+    let editing = editing.map(dac_catalog::AlbumId);
+    crate::album_picker::entries_from(cat, |a| match editing {
+        Some(e) if a.id == e => Some(crate::i18n::tr("This is the album you're editing").to_string()),
+        Some(e) if cat.album_reaches(a.id, e) => Some(crate::i18n::tr("It tests this album, so testing it back would loop").to_string()),
+        _ => None,
+    })
+}
+
 pub fn confirm_dialog(app: &mut DacApp, dlg: &Dialog) -> Result<serde_json::Value, String> {
     match dlg {
         Dialog::SamModel { then, .. } => {
@@ -1070,6 +1254,80 @@ pub fn confirm_dialog(app: &mut DacApp, dlg: &Dialog) -> Result<serde_json::Valu
         }
         Dialog::Rename { template, start } => app.run("photo.rename", json!({"template": template, "start": start})),
         Dialog::RenameKeyword { from, to } => app.run("keyword.rename", json!({"from": from, "to": to})),
+        Dialog::KeywordTag {
+            editing,
+            name,
+            parent,
+            inside,
+            synonyms,
+            include_on_export,
+            export_containing,
+            export_synonyms,
+            person,
+            add_to_selected,
+        } => {
+            let mut params = json!({
+                "synonyms": synonyms.split(',').map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>(),
+                "includeOnExport": include_on_export,
+                "exportContaining": export_containing,
+                "exportSynonyms": export_synonyms,
+                "person": person,
+            });
+            match editing {
+                Some(keyword) => {
+                    params["keyword"] = json!(keyword);
+                    params["name"] = json!(name);
+                    let r = app.run("keyword.edit", params);
+                    if r.is_ok() {
+                        let to = match keyword.rsplit_once('|') {
+                            Some((parent, _)) => format!("{parent}|{}", name.trim()),
+                            None => name.trim().to_string(),
+                        };
+                        crate::panels::keyword_list::follow(app, keyword, &to);
+                    }
+                    r
+                }
+                None => {
+                    params["name"] = json!(name);
+                    params["parent"] = if *inside { json!(parent) } else { serde_json::Value::Null };
+                    params["addToSelected"] = json!(add_to_selected);
+                    app.run("keyword.create", params)
+                }
+            }
+        }
+        Dialog::DeleteKeyword { keyword, .. } => app.run("keyword.delete", json!({"keyword": keyword})),
+        Dialog::KeywordSet { replaces, name, slots, as_new } => {
+            use dac_catalog::keywords::same;
+            let name = name.trim();
+            if name.is_empty() {
+                return Err(crate::i18n::tr("A keyword set needs a name").to_string());
+            }
+            if same(name, dac_engine::cmd::keywords::RECENT) {
+                return Err(crate::i18n::tr("Recent Keywords is built in: choose another name").to_string());
+            }
+            // the set it renames: none when saving as new, or when it was deleted meanwhile (then it is
+            // saved anew rather than refused)
+            let sets = &app.session.keyword_sets;
+            let renames = replaces.as_deref().filter(|_| !as_new).filter(|old| sets.iter().any(|x| same(&x.name, old)));
+            if sets.iter().any(|x| same(&x.name, name) && !renames.is_some_and(|old| same(&x.name, old))) {
+                return Err(crate::i18n::tr_format!("There is a keyword set “{name}” already", name = name));
+            }
+            let mut params = json!({"name": name, "keywords": slots});
+            match renames {
+                Some(old) => params["replace"] = json!(old),
+                None => params["new"] = json!(true),
+            }
+            app.run("keyword.saveSet", params)
+        }
+        Dialog::MoveKeyword { keyword, parent } => {
+            let r = app.run("keyword.move", json!({"keyword": keyword, "parent": parent, "merge": true}));
+            if r.is_ok() {
+                let leaf = keyword.rsplit('|').next().unwrap_or(keyword);
+                let to = parent.as_deref().map_or_else(|| leaf.to_string(), |p| format!("{p}|{leaf}"));
+                crate::panels::keyword_list::follow(app, keyword, &to);
+            }
+            r
+        }
         Dialog::MergeKeywords { from, into } => app.run("keyword.merge", json!({"from": from, "into": into})),
         Dialog::AutoStack { gap } => app.run("stack.auto", json!({"gap": gap})),
         Dialog::DenoiseModel { info, accepted } => crate::panels::denoise::install(app, info, *accepted),
@@ -1083,14 +1341,14 @@ pub fn confirm_dialog(app: &mut DacApp, dlg: &Dialog) -> Result<serde_json::Valu
             app.run("photo.analyze", p)
         }
         Dialog::SmartRules { id, name, rules, parent } => {
+            // refused before anything changes (not even the name)
+            if let Some(problem) = rules.check_for(&app.session.catalog, id.map(dac_catalog::AlbumId)).first() {
+                return Err(problem.to_string());
+            }
             let name = if name.trim().is_empty() { "Smart Album".to_string() } else { name.trim().to_string() };
             match id {
-                Some(id) => {
-                    if app.session.catalog.album(dac_catalog::AlbumId(*id)).is_some_and(|a| a.name != name) {
-                        app.run("album.rename", json!({"id": id, "name": name}))?;
-                    }
-                    app.run("album.setRules", json!({"id": id, "replace": true, "rules": {"ruleSet": rules}}))
-                }
+                // the name and the rules together: one undo step, both or neither
+                Some(id) => app.run("album.setRules", json!({"id": id, "name": name, "replace": true, "rules": {"ruleSet": rules}})),
                 None => created_in(app, "album.createSmart", json!({"name": name, "rules": {"ruleSet": rules}, "parent": parent})),
             }
         }
@@ -1105,6 +1363,7 @@ pub fn confirm_dialog(app: &mut DacApp, dlg: &Dialog) -> Result<serde_json::Valu
                 "groups": groups,
             }),
         ),
+        Dialog::ContactSheet { options } => app.run("app.contactSheet", json!(options)),
         Dialog::CopySettings { groups } => app.run("develop.copy", json!({"groups": groups})),
         Dialog::PasteSettings { groups } => app.run("develop.paste", json!({"groups": groups})),
         Dialog::Export { opts, full_size, resize, limit_kb, dir, .. } => {
@@ -1117,6 +1376,7 @@ pub fn confirm_dialog(app: &mut DacApp, dlg: &Dialog) -> Result<serde_json::Valu
         Dialog::Import { opts } => crate::import::start(app, opts),
         Dialog::ConfirmDelete { .. } => app.run("photo.delete", json!({})),
         Dialog::RemoveFolder { path, disk, .. } => app.run("library.removeFolder", json!({"path": path, "disk": disk})),
+        d @ Dialog::SynchronizeFolder { .. } => crate::sync::confirm(app, d),
         Dialog::About | Dialog::Shortcuts | Dialog::ViewOptions | Dialog::Settings { .. } => Ok(serde_json::Value::Null),
     }
 }
@@ -1296,4 +1556,26 @@ fn choices<V: PartialEq + Copy>(ui: &mut egui::Ui, label: &str, id: &str, option
             }
         }
     });
+}
+
+/// A dialog's one text field: it keeps the focus (except while its own menu has it) and opens
+/// with its text selected, so typing replaces it. True when Return confirms the dialog; Esc
+/// cancels the dialog (`show`). Taking the focus back with a bare `TextEdit` every frame hid the
+/// focus Return gives up, and Return did nothing.
+fn dialog_field(ui: &mut egui::Ui, widget: &str, text: &mut String, hint: &str) -> bool {
+    let r = crate::text_field::TextField::singleline(widget, text).hint(crate::i18n::tr(hint)).width(f32::INFINITY).select_on_focus(true).show(ui);
+    if !r.editing {
+        r.response.request_focus();
+    }
+    r.ending == Some(crate::text_field::Ending::Return)
+}
+
+/// The dialog part `key` is drawn this frame but wasn't the frame before: the dialog has just
+/// opened (to give its first field the focus once).
+fn just_opened(ui: &egui::Ui, key: &str) -> bool {
+    let id = egui::Id::new(("dialog-shown", key));
+    let pass = ui.ctx().cumulative_pass_nr();
+    let last: Option<u64> = ui.data_mut(|d| d.get_temp(id));
+    ui.data_mut(|d| d.insert_temp(id, pass));
+    last.and_then(|l| l.checked_add(1)) != Some(pass)
 }

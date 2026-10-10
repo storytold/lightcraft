@@ -245,11 +245,43 @@ fn smart_album_rule_sets() {
     s.clock = Box::new(|| "2026-10-02T12:00:00".to_string());
     let fields = s.execute("album.ruleFields", &serde_json::json!({})).unwrap();
     assert!(fields.as_array().unwrap().iter().any(|f| f["field"] == "keywords" && f["ops"].as_array().unwrap().len() > 3));
+    // each field names its field-menu group (null at the top level)
+    let group = |id: &str| fields.as_array().unwrap().iter().find(|f| f["field"] == id).map(|f| f["group"].clone());
+    assert_eq!(group("filePath"), Some(serde_json::json!("File")));
+    assert_eq!(group("rating"), Some(serde_json::Value::Null));
+    // choices stay the ids rules store; choiceLabels maps them to what people read
+    let flag = fields.as_array().unwrap().iter().find(|f| f["field"] == "copyrightStatus").unwrap();
+    assert_eq!(flag["choices"], serde_json::json!(["copyrighted", "publicDomain", "unknown"]));
+    assert_eq!(flag["choiceLabels"]["publicDomain"], "Public Domain");
+    let album = fields.as_array().unwrap().iter().find(|f| f["field"] == "album").unwrap();
+    assert_eq!((album["kind"].as_str(), album["ops"].as_array().map(Vec::len)), (Some("album"), Some(2)), "an album id, is / isn't");
     let bad = s.execute(
         "album.createSmart",
         &serde_json::json!({"name": "Bad", "rules": {"ruleSet": {"rules": [{"field": "rating", "op": "contains", "value": 1}]}}}),
     );
     assert!(bad.is_err(), "operators are checked");
+    // yes/no values: "false" means no, anything unreadable is an error rather than a silent yes
+    let maybe = s.execute(
+        "album.createSmart",
+        &serde_json::json!({"name": "Maybe", "rules": {"ruleSet": {"rules": [{"field": "edited", "op": "is", "value": "maybe"}]}}}),
+    );
+    assert!(maybe.is_err_and(|e| e.to_string().contains("yes or no")), "unreadable yes/no value");
+    // the library filter checks a rule set the same way, instead of quietly showing nothing
+    for rules in [serde_json::json!([{"field": "edited", "op": "is", "value": "maybe"}]), serde_json::json!([{"field": "nope", "op": "is"}])] {
+        let r = s.execute("library.filter", &serde_json::json!({"ruleSet": {"rules": rules}}));
+        assert!(r.is_err(), "{rules}");
+    }
+    assert!(s.filter.rule_set.is_none(), "a refused filter isn't applied");
+    s.execute("library.filter", &serde_json::json!({"ruleSet": {"rules": [{"field": "edited", "op": "is", "value": "no"}]}})).unwrap();
+    s.execute("library.filter", &serde_json::json!({"ruleSet": null})).unwrap();
+    let r = s
+        .execute(
+            "album.createSmart",
+            &serde_json::json!({"name": "Unedited", "rules": {"ruleSet": {"rules": [{"field": "edited", "op": "is", "value": "false"}]}}}),
+        )
+        .unwrap();
+    let unedited = s.catalog.photos().filter(|p| !p.deleted && !p.is_edited()).count();
+    assert_eq!(r["count"].as_u64(), Some(unedited as u64));
     let r = s
         .execute(
             "album.createSmart",
@@ -477,4 +509,207 @@ fn visible_photos_page_by_offset_and_limit() {
     // a hostile offset is an empty page, not a crash
     let r = s.execute("catalog.query", &json!({"offset": u64::MAX, "limit": u64::MAX})).unwrap();
     assert_eq!(r["photos"].as_array().map(Vec::len), Some(0));
+}
+
+/// A capture-time shift from an agent can't overflow or write a date no one can read back: a
+/// shift of more than 10,000 years is refused and nothing changes; an ordinary one still works.
+#[test]
+fn capture_time_shift_is_bounded() {
+    let mut s = crate::Session::with_demo();
+    let id = s.catalog.photos().next().unwrap().id;
+    let before = s.catalog.photo(id).unwrap().captured.clone();
+    for p in [
+        serde_json::json!({"ids": [id.0], "shift": 1e30}),
+        serde_json::json!({"ids": [id.0], "hours": -1e15}),
+        serde_json::json!({"ids": [id.0], "shift": 9.3e18}),
+    ] {
+        let r = s.execute("photo.setCaptureTime", &p);
+        // a real refusal, not the panic guard catching an overflow ("failed unexpectedly")
+        assert!(r.as_ref().is_err_and(|e| e.to_string().contains("10,000 years")), "{p}: {r:?}");
+        assert_eq!(s.catalog.photo(id).unwrap().captured, before, "{p} changed nothing");
+    }
+    s.execute("photo.setCaptureTime", &serde_json::json!({"ids": [id.0], "hours": 1})).unwrap();
+    assert_ne!(s.catalog.photo(id).unwrap().captured, before);
+    // a shift that would take a photo past year 9999 says so, rather than skipping it quietly
+    s.execute("photo.setCaptureTime", &serde_json::json!({"ids": [id.0], "time": "9999-12-31T12:00:00"})).unwrap();
+    let r = s.execute("photo.setCaptureTime", &serde_json::json!({"ids": [id.0], "hours": 24}));
+    assert!(r.as_ref().is_err_and(|e| e.to_string().contains("9999")), "{r:?}");
+    assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some("9999-12-31T12:00:00"), "unchanged");
+}
+
+/// Values are checked too: an agent's rule set with a date that isn't one, or a rating of 9, is
+/// refused with the rule's position, by album.createSmart and library.filter alike.
+#[test]
+fn smart_rule_values_are_checked_by_commands() {
+    let mut s = crate::Session::with_demo();
+    let r = s.execute(
+        "album.createSmart",
+        &serde_json::json!({"name": "Odd", "rules": {"ruleSet": {"rules": [
+            {"field": "rating", "op": "gte", "value": 3},
+            {"field": "captureDate", "op": "is", "value": "banana"}
+        ]}}}),
+    );
+    let e = r.expect_err("a date that isn't one").to_string();
+    assert!(e.contains("rule 2:") && e.contains("needs a date"), "{e}");
+    assert!(s.catalog.albums().all(|a| a.name != "Odd"));
+    let e = s
+        .execute("library.filter", &serde_json::json!({"ruleSet": {"rules": [{"field": "rating", "op": "gte", "value": 9}]}}))
+        .expect_err("rating 9")
+        .to_string();
+    assert!(e.contains("rule 1: no rating 0–5 is ≥ 9"), "{e}");
+}
+
+/// A smart album saved with an old album operator (≥, from when Album was a number field) can
+/// still be edited: its rule is read as the "isn't" it always meant.
+#[test]
+fn old_album_operator_rules_stay_editable() {
+    use dac_catalog::{Album, AlbumId, Op};
+    let mut s = crate::Session::with_demo();
+    let trip = s.execute("album.create", &serde_json::json!({"name": "Trip", "addSelected": false})).unwrap()["id"].as_u64().unwrap();
+    let rules: dac_catalog::Filter =
+        serde_json::from_value(serde_json::json!({"ruleSet": {"rules": [{"field": "album", "op": "gte", "value": trip}]}})).unwrap();
+    let id = s.catalog.alloc_album_id();
+    s.catalog.apply(Op::AddAlbum { album: Album { smart: Some(Box::new(rules)), ..Album::new(id, "Old") } }).unwrap();
+    s.execute("album.setRules", &serde_json::json!({"id": id.0, "rules": {"rating": 2}})).unwrap();
+    let saved = serde_json::to_string(&s.catalog.album(AlbumId(id.0)).unwrap().smart).unwrap();
+    assert!(saved.contains(r#""op":"isNot""#), "{saved}");
+    s.execute("library.filter", &serde_json::json!({"ruleSet": {"rules": [{"field": "album", "op": "lte", "value": trip}]}})).unwrap();
+}
+
+/// Renaming and changing the rules is one step: both or neither, undone together.
+#[test]
+fn set_rules_with_a_name_is_one_step() {
+    let mut s = crate::Session::with_demo();
+    let id = s.execute("album.createSmart", &serde_json::json!({"name": "Old", "rules": {"rating": 3}})).unwrap()["id"].as_u64().unwrap();
+    let album = |s: &crate::Session| s.catalog.album(dac_catalog::AlbumId(id)).unwrap().clone();
+    let good = serde_json::json!({"ruleSet": {"rules": [{"field": "rating", "op": "gte", "value": 4}]}});
+    let bad = serde_json::json!({"ruleSet": {"rules": [{"field": "captureDate", "op": "is", "value": "banana"}]}});
+    // refused rules: the name stays too
+    assert!(s.execute("album.setRules", &serde_json::json!({"id": id, "name": "New", "replace": true, "rules": bad})).is_err());
+    assert_eq!(album(&s).name, "Old");
+    let undo = s.undo.len();
+    s.execute("album.setRules", &serde_json::json!({"id": id, "name": "New", "replace": true, "rules": good})).unwrap();
+    assert_eq!((album(&s).name.as_str(), s.undo.len()), ("New", undo + 1), "one undo step");
+    assert!(album(&s).smart.unwrap().rule_set.is_some());
+    s.execute("edit.undo", &serde_json::json!({})).unwrap();
+    assert_eq!(album(&s).name, "Old");
+    assert!(album(&s).smart.unwrap().rule_set.is_none(), "undone together");
+    // a blank name keeps the album's
+    s.execute("album.setRules", &serde_json::json!({"id": id, "name": "  ", "rules": {"rating": 5}})).unwrap();
+    assert_eq!(album(&s).name, "Old");
+}
+
+/// albums.list says which smart albums have rules that no longer check, and why.
+#[test]
+fn album_list_reports_problems() {
+    let mut s = crate::Session::with_demo();
+    let trip = s.execute("album.create", &serde_json::json!({"name": "Trip", "addSelected": false})).unwrap()["id"].as_u64().unwrap();
+    let rules = serde_json::json!({"ruleSet": {"rules": [{"field": "album", "op": "is", "value": trip}]}});
+    let id = s.execute("album.createSmart", &serde_json::json!({"name": "In Trip", "rules": rules})).unwrap()["id"].as_u64().unwrap();
+    let find = |s: &mut crate::Session| {
+        let list = s.execute("albums.list", &serde_json::json!({})).unwrap();
+        list.as_array().unwrap().iter().find(|a| a["id"] == id).cloned().unwrap()
+    };
+    assert_eq!(find(&mut s)["problems"], serde_json::json!([]));
+    s.execute("album.delete", &serde_json::json!({"id": trip})).unwrap();
+    assert_eq!(find(&mut s)["problems"], serde_json::json!([format!("rule 1: no album {trip}")]));
+}
+
+/// "Travel" = keywords contain travel, but not in "Excluded Photos" (red or rejected): the counts
+/// follow, and Excluded Photos can't then test Travel back (a loop).
+#[test]
+fn smart_album_excluding_a_smart_album() {
+    let mut s = crate::Session::with_demo();
+    let excluded = s
+        .execute(
+            "album.createSmart",
+            &serde_json::json!({"name": "Excluded Photos", "rules": {"ruleSet": {"match": "any", "rules": [
+                {"field": "label", "op": "is", "value": "red"}, {"field": "flag", "op": "is", "value": "reject"}]}}}),
+        )
+        .unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    let keyword = s.catalog.photos().flat_map(|p| p.meta.keywords.clone()).next().expect("a demo keyword");
+    let travel = s
+        .execute(
+            "album.createSmart",
+            &serde_json::json!({"name": "Travel", "rules": {"ruleSet": {"rules": [
+                {"field": "keywords", "op": "contains", "value": keyword}, {"field": "album", "op": "isNot", "value": excluded}]}}}),
+        )
+        .unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    let count = |s: &crate::Session| s.catalog.album_count(dac_catalog::AlbumId(travel));
+    let want = |s: &crate::Session| {
+        s.catalog
+            .photos()
+            .filter(|p| !p.deleted && p.meta.keywords.iter().any(|k| k.to_lowercase().contains(&keyword.to_lowercase())))
+            .filter(|p| p.label != Some(dac_catalog::ColorLabel::Red) && p.flag != dac_catalog::Flag::Reject)
+            .count()
+    };
+    assert_eq!(count(&s), want(&s));
+    // reject one of Travel's photos: it leaves Travel
+    let before = count(&s);
+    let id = s.catalog.photos().find(|p| s.catalog.album_contains(dac_catalog::AlbumId(travel), p)).map(|p| p.id).expect("a travel photo");
+    s.execute("photo.flag", &serde_json::json!({"ids": [id.0], "flag": "reject"})).unwrap();
+    assert_eq!(count(&s), before - 1);
+    // Excluded Photos testing Travel back would include itself
+    let looped = s.execute(
+        "album.setRules",
+        &serde_json::json!({"id": excluded, "rules": {"ruleSet": {"rules": [{"field": "album", "op": "is", "value": travel}]}}, "replace": true}),
+    );
+    assert!(looped.is_err_and(|e| e.to_string().contains("would make this album include itself")), "a loop is refused");
+    // agents read the album by name in the summary
+    let list = s.execute("albums.list", &serde_json::json!({})).unwrap();
+    let travel_json = list.as_array().unwrap().iter().find(|a| a["id"] == travel).cloned().unwrap();
+    assert!(travel_json["rulesText"].as_str().unwrap_or("").contains("album isn't “Excluded Photos”"), "{travel_json}");
+}
+
+/// "Update Rules from Current Filter" refuses a loop too: showing A ("Album isn't B") and
+/// updating B from that view would make B test itself.
+#[test]
+fn rules_from_the_view_cant_loop() {
+    let mut s = crate::Session::with_demo();
+    let b = s.execute("album.createSmart", &serde_json::json!({"name": "B", "rules": {"rating": 2}})).unwrap()["id"].as_u64().unwrap();
+    let rules = serde_json::json!({"ruleSet": {"rules": [{"field": "album", "op": "isNot", "value": b}]}});
+    let a = s.execute("album.createSmart", &serde_json::json!({"name": "A", "rules": rules})).unwrap()["id"].as_u64().unwrap();
+    s.execute("library.source", &serde_json::json!({"kind": "album", "id": a})).unwrap();
+    let before = s.catalog.album(dac_catalog::AlbumId(b)).unwrap().smart.clone();
+    let r = s.execute("album.setRules", &serde_json::json!({"id": b, "fromView": true}));
+    assert!(r.is_err_and(|e| e.to_string().contains("would make this album include itself")), "refused");
+    assert_eq!(s.catalog.album(dac_catalog::AlbumId(b)).unwrap().smart, before, "B unchanged");
+    assert!(s.catalog.smart_album_problems(dac_catalog::AlbumId(b)).is_empty());
+}
+
+/// A rule that stops checking later (the album it tests is deleted) doesn't lock up what doesn't
+/// touch it: the filter bar keeps working, and an album's other settings can still be edited. A
+/// change to the rules themselves is still checked.
+#[test]
+fn a_stale_rule_doesnt_block_other_changes() {
+    let mut s = crate::Session::with_demo();
+    let trip = s.execute("album.create", &serde_json::json!({"name": "Trip", "addSelected": false})).unwrap()["id"].as_u64().unwrap();
+    let rules = serde_json::json!({"rules": [{"field": "album", "op": "isNot", "value": trip}]});
+    s.execute("library.filter", &serde_json::json!({"ruleSet": rules})).unwrap();
+    let smart =
+        s.execute("album.createSmart", &serde_json::json!({"name": "Not Trip", "rules": {"ruleSet": rules}})).unwrap()["id"].as_u64().unwrap();
+    s.execute("album.delete", &serde_json::json!({"id": trip})).unwrap();
+    // the filter bar: a rating still applies on top of the stale rule
+    s.execute("library.filter", &serde_json::json!({"rating": 3})).unwrap();
+    assert_eq!(s.filter.rating, 3);
+    // the album: a partial edit that leaves its rules alone
+    s.execute("album.setRules", &serde_json::json!({"id": smart, "rules": {"rating": 2}})).unwrap();
+    // changing the rules is still checked
+    let bad = serde_json::json!({"ruleSet": {"rules": [{"field": "rating", "op": "gte", "value": 9}]}});
+    assert!(s.execute("library.filter", &bad).is_err());
+    assert!(s.execute("album.setRules", &serde_json::json!({"id": smart, "rules": bad})).is_err());
+}
+
+/// album.setRules refuses a loop through the album filter as well as through the rules.
+#[test]
+fn an_album_filter_loop_is_refused() {
+    let mut s = crate::Session::with_demo();
+    let a = s.execute("album.createSmart", &serde_json::json!({"name": "A", "rules": {"rating": 2}})).unwrap()["id"].as_u64().unwrap();
+    let r = s.execute("album.setRules", &serde_json::json!({"id": a, "rules": {"album": a}}));
+    assert!(r.is_err_and(|e| e.to_string().contains("include itself")), "refused");
+    assert_eq!(s.catalog.album(dac_catalog::AlbumId(a)).unwrap().smart.as_ref().and_then(|f| f.album), None);
 }

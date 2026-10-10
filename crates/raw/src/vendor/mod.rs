@@ -12,6 +12,7 @@ pub mod pef;
 pub mod raf;
 mod rafc;
 pub mod rw2;
+mod sr2;
 pub mod srw;
 
 use crate::{BlackLevel, Cfa, Rect};
