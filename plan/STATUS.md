@@ -17,7 +17,8 @@ All tracks 1.1–1.8 are merged on main with `cargo xtask ci` green; exit-gate d
 - 1.1: move Session/registry/commands out of the `engine` facade (needs a Session context trait).
 - 1.2/1.3: secondary-window filmstrip + filter; panel drag-reorder; image identity plate; KEYC-COMPARE/DEVELOP keys.
 - 1.4: Folders lists only folders with photos, no Windows free space; grid View Options panel.
-- 1.5: lazy photo loading / grid paging (1M photos 2.3 GB); migration progress; unfiltered sort at 500k borderline.
+- 1.5: done (2026-10-10): 500k open 0.75 s / < 1 GB peak / every filter < 25 ms (kept sort orders); 1M 1.5 s / 1.9 GB
+  peak; view paging; migration progress in app + CLI. Left: evicting cold photo records (not needed for the targets).
 - 1.6: closed (Compare/Reference tiled, drags at ≥1:1 back to one stage-cached window, corpus 1:1 test green on 87
   raws); the second window's loupe is fit-only, so it has no tiles.
 - 1.7/1.8: FileStore credentials in the UI (macOS/Windows); Immich source inside the Import dialog; link-only file kind

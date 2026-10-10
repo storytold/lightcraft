@@ -47,11 +47,11 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | X. Cross-cutting behaviours (BEHAV) | 18 | 5 | 1 | 1 | 8/8 (100%) | 6/8 (75%) |
 | Y. Menus | 82 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
-| Lightroom Classic extras | 48 | 17 | 57 | 0 | — | 29/36 (81%) |
+| Lightroom Classic extras | 49 | 16 | 57 | 0 | — | 30/36 (83%) |
 | IMM. Immich integration | 1 | 3 | 6 | 0 | — | 1/6 (17%) |
-| **Total** | 411 | 47 | 108 | 27 | 193/200 (97%) | 150/170 (88%) |
+| **Total** | 412 | 46 | 108 | 27 | 193/200 (97%) | 151/170 (89%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **76.8%** of 566 in-scope rows — P0 98.2% of 200 · P1 92.6% of 170 · P2 40.8% of 195.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **76.9%** of 566 in-scope rows — P0 98.2% of 200 · P1 92.9% of 170 · P2 40.8% of 195.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -79,8 +79,8 @@ Take the first one nobody is working on.
    the app offers a consented, verified download, but **upstream's CDN mirrors are not configured yet** (the
    built-in list is empty, so today users need their own mirror or a manual install). Subject / Sky / People could
    use the same model with fixed prompts; denoise / super-resolution models remain a maintainer decision.
-8. **Classic shell** (KEYC-MODULES, LRC-SHELL-*, LRC-CAT-*): module picker, panel system and Classic keymap, and a
-   catalog that scales past 500k photos (Phase 1). Then **Immich**: connect, link, import and external libraries exist (Phase 1, see
+8. **Classic shell** (KEYC-MODULES, LRC-SHELL-*, LRC-CAT-*): module picker, panel system and Classic keymap (the catalog
+   now scales to 500k–1M photos, LRC-CAT-SCALE). Then **Immich**: connect, link, import and external libraries exist (Phase 1, see
    [immich.md](immich.md)); keychains on macOS/Windows, publish and two-way sync (Phase 4) remain.
 9. **HDR** (Q. HDR, LR-EXP-HDR), **video** (R. Video), **Classic output modules** (Map view, Book, Slideshow module,
    Print, Web, publish): large, well understood, lower priority than 1–6.
@@ -819,7 +819,7 @@ PLAN.md §2 carry the status of that survey ("unverified" where it said so) unti
 | LRC-SHELL-IDPLATE | Identity plate (styled text or graphic) and activity centre | P2 | 🟡 | `cmd:view.identityPlate` | P1.2: the module bar shows the brand mark (drawn in code after `brand/logo.svg`) and the app name, or the user's text; the status line is its activity area. Missing: an image file as plate and font/colour styling (needs an SVG/raster loader and the shared text engine) |
 | LRC-SHELL-PREFS | Classic preference groups (presets, external editing, file handling, display, network) | P2 | 🟡 |  | partial; see V. Preferences |
 | LRC-SHELL-PLUGINS | Plug-in manager and SDK (sandboxed) | P2 | ⬜ |  | PLAN.md §2.1; Phase 4 |
-| LRC-CAT-SCALE | Catalog of 500k+ photos with an on-disk index | P1 | 🟡 | `crates/catalog/src/db.rs`, `docs/catalog.md` | v4 store (redb): 500k photos open in 0.7 s with 1.1–1.3 GB peak RSS, filtered in 15–110 ms (the unfiltered capture-date sort of all photos is the slow case), checkpoints write only what changed; 1M photos open in 1.6 s (2.3 GB); `cargo xtask bench-catalog`. The grid still takes the full id list, and photo records all stay in memory (shared develop settings) |
+| LRC-CAT-SCALE | Catalog of 500k+ photos with an on-disk index | P1 | ✅ | `crates/catalog/src/db.rs`, `crates/catalog/src/query.rs`, `docs/catalog.md` | v4 store (redb): 500k photos open in 0.75 s, peak RSS under 1 GB, every filter incl. the unfiltered capture-date sort in under 25 ms (kept sort orders; the first view of a session builds one in ~130 ms); 1M photos open in 1.5 s, filter in under 50 ms, peak 1.9 GB; checkpoints write only what changed; the view pages (`Session::visible_page`); v3 → v4 migration shows progress in the app and the CLI; `cargo xtask bench-catalog`. Photo records stay in memory (compact, shared develop settings): no eviction to the store yet |
 | LRC-CAT-MULTI | Several catalogs: create, open, open recent, choose at startup | P1 | ✅ | `crates/catalog/src/library.rs`, `crates/ui-egui/src/catalog_ui.rs` | a catalog is a folder with a `<name>.<catalog_ext>` entry point; File ▸ New Catalog… / Open Catalog… / Open Recent Catalog ▸ (`catalog.new`, `catalog.open`, `catalog.openRecent`), a catalog chooser (`catalog.chooser`) shown at startup when asked for (`catalog.promptAtStartup`) or when Alt is held while the window opens; the startup default comes from `recent-catalogs.json`. The chooser switches from the last catalog rather than appearing before any is opened |
 | LRC-CAT-BACKUP | Catalog backup on exit with integrity test and optimise | P1 | ✅ | `cmd:catalog.backup`, `cmd:catalog.checkIntegrity`, `cmd:catalog.optimize`, `cmd:catalog.backupIfDue`, `crates/catalog/src/library.rs` | checkpoint, copy into `<backups>/<time>/`, the copy integrity-tested, oldest pruned; schedule never / every exit / daily / weekly / monthly checked when the desktop app exits (integrity test before, optimise after, per Catalog Settings); File ▸ Back Up / Test Integrity / Optimize Catalog. No exit-time dialog to skip a backup (it runs silently and logs) |
 | LRC-CAT-EXPORT | Export as catalog (subset, with or without originals and previews) and import from another catalog | P1 | ✅ | `cmd:catalog.export`, `cmd:catalog.import`, `crates/catalog/src/transfer.rs` | File ▸ Export as Catalog… (selected or all photos, with or without originals and previews) and Import from Another Catalog… with a change preview (new, changed settings / metadata, unchanged, new and extended albums) and the rule for changed photos (keep / settings / metadata / both), one undo step; photos match by file path and virtual-copy name (a relocated original imports as a new photo) |
