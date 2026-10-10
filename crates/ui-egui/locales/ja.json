@@ -1878,5 +1878,7 @@
   "Downloading model": "モデルをダウンロード中",
   "Finding faces": "顔を検索中",
   "Synchronizing folder": "フォルダを同期中",
-  "Looking for changes": "変更を確認中"
+  "Looking for changes": "変更を確認中",
+  "Albums hold library photos: Add to My Photos first": "アルバムに入れられるのはライブラリの写真です：先にマイフォトに追加してください",
+  "Add to My Photos First": "先にマイフォトに追加"
 }

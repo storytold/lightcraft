@@ -1590,5 +1590,7 @@
   "Finding faces": "Поиск лиц",
   "Quit Anyway": "Всё равно выйти",
   "Synchronizing folder": "Синхронизация папки",
-  "Looking for changes": "Поиск изменений"
+  "Looking for changes": "Поиск изменений",
+  "Albums hold library photos: Add to My Photos first": "В альбомах только фото из библиотеки: сначала добавьте их в «Мои фото»",
+  "Add to My Photos First": "Сначала добавить в «Мои фото»"
 }

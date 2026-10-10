@@ -228,5 +228,6 @@
   "+{n} more": "還有 {n} 項",
   "1 task is still running: {names}. Quitting stops it.": "仍有 1 個工作在執行：{names}。結束將停止它。",
   "{n} tasks are still running: {names}. Quitting stops them.": "仍有 {n} 個工作在執行：{names}。結束將停止它們。",
-  "{what} merge cancelled": "已取消{what}合併"
+  "{what} merge cancelled": "已取消{what}合併",
+  "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "已略過 {n} 張本機照片{0:.0}：相簿只能收錄圖庫中的照片（請先加入我的照片）"
 }

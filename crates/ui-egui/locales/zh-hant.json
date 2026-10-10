@@ -1876,5 +1876,7 @@
   "Downloading model": "正在下載模型",
   "Finding faces": "正在尋找臉孔",
   "Synchronizing folder": "正在同步資料夾",
-  "Looking for changes": "正在尋找變更"
+  "Looking for changes": "正在尋找變更",
+  "Albums hold library photos: Add to My Photos first": "相簿只能收錄圖庫中的照片：請先加入我的照片",
+  "Add to My Photos First": "先加入我的照片"
 }

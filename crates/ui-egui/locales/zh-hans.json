@@ -1876,5 +1876,7 @@
   "Downloading model": "正在下载模型",
   "Finding faces": "正在查找人脸",
   "Synchronizing folder": "正在同步文件夹",
-  "Looking for changes": "正在查找更改"
+  "Looking for changes": "正在查找更改",
+  "Albums hold library photos: Add to My Photos first": "相册只能收录图库中的照片：请先添加到我的照片",
+  "Add to My Photos First": "先添加到我的照片"
 }

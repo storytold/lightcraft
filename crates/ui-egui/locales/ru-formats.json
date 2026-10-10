@@ -228,5 +228,6 @@
   "+{n} more": "ещё {n}",
   "1 task is still running: {names}. Quitting stops it.": "Ещё выполняется задача: {names}. Выход прервёт её.",
   "{n} tasks are still running: {names}. Quitting stops them.": "Ещё выполняется задач: {n} — {names}. Выход прервёт их.",
-  "{what} merge cancelled": "{what}: слияние отменено"
+  "{what} merge cancelled": "{what}: слияние отменено",
+  "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Пропущено локальных фото: {n}{0:.0} — в альбомах только фото из библиотеки (сначала добавьте их в «Мои фото»)"
 }

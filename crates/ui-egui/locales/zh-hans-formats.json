@@ -228,5 +228,6 @@
   "+{n} more": "还有 {n} 项",
   "1 task is still running: {names}. Quitting stops it.": "仍有 1 个任务在运行：{names}。退出将停止它。",
   "{n} tasks are still running: {names}. Quitting stops them.": "仍有 {n} 个任务在运行：{names}。退出将停止它们。",
-  "{what} merge cancelled": "已取消 {what} 合并"
+  "{what} merge cancelled": "已取消 {what} 合并",
+  "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "已跳过 {n} 张本地照片{0:.0}：相册只能收录图库中的照片（请先添加到我的照片）"
 }

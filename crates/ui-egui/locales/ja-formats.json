@@ -228,5 +228,6 @@
   "+{n} more": "ほか{n}件",
   "1 task is still running: {names}. Quitting stops it.": "1件のタスクが実行中です：{names}。終了すると停止します。",
   "{n} tasks are still running: {names}. Quitting stops them.": "{n}件のタスクが実行中です：{names}。終了すると停止します。",
-  "{what} merge cancelled": "{what}合成をキャンセルしました"
+  "{what} merge cancelled": "{what}合成をキャンセルしました",
+  "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "ローカル写真{n}枚をスキップしました{0:.0}：アルバムに入れられるのはライブラリの写真です（先にマイフォトに追加してください）"
 }

@@ -228,5 +228,6 @@
   "+{n} more": "+{n} autres",
   "1 task is still running: {names}. Quitting stops it.": "1 tâche est encore en cours : {names}. Quitter l'arrête.",
   "{n} tasks are still running: {names}. Quitting stops them.": "{n} tâches sont encore en cours : {names}. Quitter les arrête.",
-  "{what} merge cancelled": "Fusion {what} annulée"
+  "{what} merge cancelled": "Fusion {what} annulée",
+  "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Photos locales ignorées : {n}{0:.0} — les albums contiennent des photos de la bibliothèque (ajoutez-les d’abord à Mes photos)"
 }

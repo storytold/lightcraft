@@ -1876,5 +1876,7 @@
   "Downloading model": "Téléchargement du modèle",
   "Finding faces": "Recherche des visages",
   "Synchronizing folder": "Synchronisation du dossier",
-  "Looking for changes": "Recherche des modifications"
+  "Looking for changes": "Recherche des modifications",
+  "Albums hold library photos: Add to My Photos first": "Les albums contiennent des photos de la bibliothèque : ajoutez-les d’abord à Mes photos",
+  "Add to My Photos First": "Ajouter d’abord à Mes photos"
 }
