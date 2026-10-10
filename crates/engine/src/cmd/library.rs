@@ -271,7 +271,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Show Source",
             [],
             None,
-            "{kind: all|recentlyAdded|previousImport|quickCollection|album|recentlyDeleted|picks|missing|libraryFolder, id?: albumId, path?: a path from library.folders (for libraryFolder)}",
+            "{kind: all|recentlyAdded|previousImport|previousExport|quickCollection|album|recentlyDeleted|picks|missing|libraryFolder, id?: albumId, path?: a path from library.folders (for libraryFolder)}",
             always,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("all");
@@ -283,6 +283,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     "missing" => LibrarySource::Missing,
                     "previousImport" => LibrarySource::PreviousImport,
                     "quickCollection" => LibrarySource::QuickCollection,
+                    "previousExport" => LibrarySource::PreviousExport,
                     "album" => {
                         let a = album_param(p, "id", "library.source")?;
                         if s.catalog.album(a).is_none_or(|a| a.folder) {

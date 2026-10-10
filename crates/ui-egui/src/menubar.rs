@@ -45,7 +45,9 @@ impl MenuNode {
 
 /// User-defined names in parameterized menus are data, not message keys.
 pub fn display_item_label<'a>(id: &str, params: &Value, label: &'a str) -> &'a str {
-    if matches!(id, "metadata.applyPreset" | "album.addPhotos" | "label.applySet") || (id == "app.export" && params.get("preset").is_some()) {
+    if matches!(id, "metadata.applyPreset" | "album.addPhotos" | "label.applySet" | "catalog.openRecent")
+        || (id == "app.export" && params.get("preset").is_some())
+    {
         label
     } else {
         crate::i18n::tr(label)
@@ -66,9 +68,18 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "file.addFolder",
             "@Import from Device",
             "---",
+            "catalog.new",
+            "catalog.open",
+            "@Open Recent Catalog",
             "app.openLibrary",
             "file.backupLibrary",
             "file.restoreLibrary",
+            "---",
+            "dialog.exportCatalog",
+            "dialog.importCatalog",
+            "catalog.backup",
+            "catalog.checkIntegrity",
+            "catalog.optimize",
             "---",
             "dialog.newAlbum",
             "dialog.newFolder",
@@ -510,6 +521,16 @@ fn expanded(app: &DacApp, name: &str) -> Option<Vec<MenuNode>> {
                 ("No Date Groups", GroupBy::None, "none"),
             ];
             v.extend(groups.into_iter().map(|(label, g, k)| item("library.sort", json!({"group": k}), label, None, true, Some(cur.group == g))));
+            v
+        }
+        "Open Recent Catalog" => {
+            let mut v: Vec<MenuNode> =
+                crate::catalog_ui::recent_items(app).into_iter().map(|(label, p)| item("catalog.openRecent", p, label, None, true, None)).collect();
+            if v.is_empty() {
+                v.push(item("catalog.openRecent", Value::Null, "No Recent Catalogs", None, false, None));
+            }
+            v.push(MenuNode::Separator);
+            v.push(item("catalog.chooser", Value::Null, "Choose Catalog…", None, true, None));
             v
         }
         "Import from Device" => {

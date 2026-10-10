@@ -451,6 +451,8 @@ pub fn export_active(app: &mut DacApp, p: &Value) -> Result<Value, String> {
         o.insert("dir".into(), json!(dir));
     }
     app.session.last_export = Some(last);
+    // the Previous Export source in the Library panel
+    app.session.record_export(&ids);
     let _ = app.session.save_prefs();
     Ok(out)
 }

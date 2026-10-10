@@ -75,6 +75,12 @@ impl eframe::App for App {
         if let Err(e) = self.1.save(&self.0) {
             log::error!("{e}");
         }
+        // the catalog's backup schedule (Catalog Settings): checked on exit, like Lightroom
+        match self.0.session.backup_catalog_if_due() {
+            Ok(Some(dir)) => log::info!("catalog backed up to {}", dir.display()),
+            Ok(None) => {}
+            Err(e) => log::error!("catalog backup failed: {e}"),
+        }
         if let Err(e) = self.0.session.close_library() {
             log::error!("saving the library failed: {e}");
         }
@@ -698,6 +704,13 @@ fn main() -> eframe::Result {
         dac_ui_egui::i18n::set_language(ui.language);
     }
     // --library, else the library last opened from Settings, else the default location
+    // the catalog chosen to open at startup (the chooser's default), if it still exists
+    let library_dir = library_dir.or_else(|| {
+        let file = dac_engine::catalog::library::RecentCatalogs::default_file()
+            .filter(|_| !dac_brand::env_is_set("NO_PREFS") && !dac_brand::env_is_set("LIBRARY"))?;
+        let d = dac_engine::catalog::library::RecentCatalogs::load(&file).default?;
+        dac_engine::catalog::library::resolve(&d).ok()
+    });
     let library_dir = library_dir.or_else(|| {
         prefs.as_ref().map(|u| u.settings.library_path.clone()).filter(|p| !p.is_empty() && !dac_brand::env_is_set("LIBRARY")).map(Into::into)
     });
@@ -738,6 +751,13 @@ fn main() -> eframe::Result {
             let mut app = DacApp::new(session, services(cc.egui_ctx.clone(), app_log_file.as_deref()));
             if let Some(ui) = prefs {
                 app.ui = ui;
+            }
+            // File ▸ Open Recent Catalog and the startup chooser (not for throwaway sessions)
+            if !in_memory && !dac_brand::env_is_set("NO_PREFS") {
+                app.catalog_ui.recent_file = dac_engine::catalog::library::RecentCatalogs::default_file();
+                if let Some(dir) = app.session.catalog_dir().map(std::path::Path::to_path_buf) {
+                    app.catalog_ui.touch(&dir);
+                }
             }
             dac_ui_egui::i18n::set_language(app.ui.language);
             app.integrated_titlebar = cfg!(target_os = "macos");

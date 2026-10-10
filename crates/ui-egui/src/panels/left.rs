@@ -201,6 +201,12 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
                     let _ = app.run("library.source", json!({"kind": id}));
                 }
             }
+            // the last export's photos (once something was exported, like Lightroom's set)
+            if (!app.session.previous_export.is_empty() || src == LibrarySource::PreviousExport)
+                && row(app, ui, "previousExport", Icon::Clock, "Previous Export", None, src == LibrarySource::PreviousExport, 0.0).clicked()
+            {
+                let _ = app.run("library.source", json!({"kind": "previousExport"}));
+            }
             // photos whose files can't be found (checked every few seconds, not every frame)
             let missing = missing_count(app, ui);
             if (missing > 0 || src == LibrarySource::Missing)

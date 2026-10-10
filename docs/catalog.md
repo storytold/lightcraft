@@ -149,11 +149,35 @@ the previews entries; with originals, the files are copied to `Originals/` and t
 `ImportPlan::ops(here, other, ConflictRule)` builds one undoable op (keep / replace settings / replace metadata /
 both). Photos match by file path and virtual-copy name, so a photo whose original moved imports as a new photo.
 
+## In the app
+
+- **File ▸ New Catalog… / Open Catalog… / Open Recent Catalog ▸** (UI commands `catalog.new`, `catalog.open`,
+  `catalog.openRecent`; `crates/ui-egui/src/catalog_ui.rs`). Open validates the folder or entry point
+  (`library::resolve`), so a folder that is no catalog is refused instead of becoming an empty library. The recent
+  list is `<settings_dir>/recent-catalogs.json` (`RecentCatalogs`); its `default` is opened at startup when no
+  `--library` is given.
+- **Catalog chooser** (`catalog.chooser`): recent catalogs, New…, Open…, "always show at startup"
+  (`catalog.promptAtStartup`). It shows at startup when asked for, or when Alt is held while the window opens. The
+  last catalog is opened first and the chooser switches from it (pure Rust has no portable way to read the keyboard
+  before the window exists).
+- **Backup**: engine commands `catalog.backup {dir?}`, `catalog.checkIntegrity`, `catalog.optimize` (File menu) and
+  `catalog.backupIfDue`, which the desktop app runs on exit before the closing checkpoint.
+- **Catalog Settings…** (Edit menu, `dialog.catalogSettings` → `catalog.settings`): backup schedule, folder, integrity
+  test, optimise after backup; standard preview size, 1:1 discard, previews at import. The preview settings live in
+  `catalog-settings.json` (`previews`), no longer in the library's `prefs.json` (read from there once, moved on the next
+  save). Browser and in-memory libraries keep them in `prefs.json`.
+- **File ▸ Export as Catalog…** (`catalog.export {parent, name, ids? | scope, originals, previews}`) and **Import from
+  Another Catalog…** (`catalog.import {path, rule, preview}`): the dialog shows the change preview and the rule for
+  changed photos; the import is one undo step.
+- **Metadata vs XMP**: every XMP write (Save Metadata to File, auto-write) and read (Read Metadata from File, import
+  of a photo with a sidecar) records an `XmpStamp` (journaled, not an undo step). `photo.xmpStatus` reports in sync /
+  changed in catalog / changed on disk / conflict; the grid draws the badge; Read / Save Metadata ask first when they
+  would overwrite changes on the other side (`confirmed: true` skips the question).
+- **Previous Export** source (`library.source {kind: previousExport}`): the photos of the last export, kept with the
+  view (`view.json`).
+
 ## Not done yet
 
-- The app doesn't call these yet (the engine was being split while this landed): File ▸ New / Open / Open Recent
-  Catalog and the startup chooser, the backup-on-exit hook and settings, Export as Catalog / Import from Another
-  Catalog dialogs, recording `XmpStamp`s on XMP read/write and the badge, filling `sha1` at import.
 - The grid still takes the full id list from `Catalog::query`; paging it through `CatalogDb::page_ids` (and leaving
   photo records on disk until shown) needs the engine to read photos through a cache instead of `&Arc<Photo>`.
 - Migration of a 500k-photo v3 library takes tens of seconds and the RAM of a v3 open, once; no progress is reported.

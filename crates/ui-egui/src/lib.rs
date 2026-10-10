@@ -6,6 +6,11 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod catalog_ui;
+#[cfg(target_arch = "wasm32")]
+#[path = "catalog_ui_web.rs"]
+pub mod catalog_ui;
 pub mod control;
 pub mod credits;
 pub mod export_task;
@@ -34,6 +39,8 @@ pub mod theme;
 pub mod titlebar;
 pub mod widgets;
 
+#[cfg(test)]
+mod tests_catalog_ui;
 #[cfg(test)]
 mod tests_curve;
 #[cfg(test)]
@@ -254,6 +261,8 @@ pub struct DacApp {
     pub lightroom: Option<lightroom_import::LightroomTask>,
     /// Last terminal Lightroom result, exposed by the command's status/wait response.
     pub lightroom_last: Option<Value>,
+    /// Catalog dialogs and the Open Recent list (`catalog_ui`).
+    pub catalog_ui: catalog_ui::CatalogUi,
     /// A background export in progress.
     pub export: Option<export_task::ExportTask>,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
@@ -330,6 +339,7 @@ impl DacApp {
             scan: None,
             lightroom: None,
             lightroom_last: None,
+            catalog_ui: Default::default(),
             export: None,
             tasks: Default::default(),
             last_export_result: None,
@@ -950,6 +960,7 @@ impl DacApp {
             panels::second::show(self, &ctx);
             panels::notices::show(self, &ctx);
             panels::dialogs::show(self, &ctx);
+            catalog_ui::show(self, &ctx);
             panels::library_problem::show(self, &ctx);
             panels::toast(self, &ctx);
             self.widgets = widgets::take_registry(&ctx);
@@ -995,6 +1006,7 @@ impl DacApp {
         panels::second::show(self, &ctx);
         panels::notices::show(self, &ctx);
         panels::dialogs::show(self, &ctx);
+        catalog_ui::show(self, &ctx);
         #[cfg(not(target_arch = "wasm32"))]
         panels::connections::import_window(self, &ctx);
         panels::library_problem::show(self, &ctx);

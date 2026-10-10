@@ -6,6 +6,8 @@
 
 mod before;
 pub(crate) mod browse;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod catalog;
 mod color;
 pub(crate) mod convert;
 mod cull;
@@ -138,6 +140,8 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(merge::specs());
         v.extend(query::specs());
         v.extend(xmp::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(catalog::specs());
         v.extend(preset_files::specs());
         v.extend(prefs::specs());
         v.extend(export::specs());
