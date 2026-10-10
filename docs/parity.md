@@ -47,11 +47,11 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | X. Cross-cutting behaviours (BEHAV) | 18 | 5 | 1 | 1 | 8/8 (100%) | 6/8 (75%) |
 | Y. Menus | 82 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
-| Lightroom Classic extras | 32 | 24 | 64 | 0 | — | 22/34 (65%) |
+| Lightroom Classic extras | 34 | 24 | 62 | 0 | — | 23/34 (68%) |
 | IMM. Immich integration | 0 | 0 | 10 | 0 | — | 0/6 (0%) |
-| **Total** | 394 | 51 | 119 | 27 | 193/200 (97%) | 142/168 (85%) |
+| **Total** | 396 | 51 | 117 | 27 | 193/200 (97%) | 143/168 (85%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **74.4%** of 564 in-scope rows — P0 98.2% of 200 · P1 88.1% of 168 · P2 37.9% of 195.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **74.7%** of 564 in-scope rows — P0 98.2% of 200 · P1 89.0% of 168 · P2 38.2% of 195.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -811,12 +811,12 @@ PLAN.md §2 carry the status of that survey ("unverified" where it said so) unti
 | LRC-WEB-IMAGEINFO | Web gallery image info | P2 | ⬜ | | reopened 2026-10-10: the Web module is in scope (PLAN.md §2.11, Phase 3) |
 | LRC-WEB-OUTPUT | Web gallery output | P2 | ⬜ | | reopened 2026-10-10: the Web module is in scope (PLAN.md §2.11, Phase 3) |
 | LRC-WEB-UPLOAD | Web gallery upload | P2 | ⬜ | | reopened 2026-10-10: the Web module is in scope (PLAN.md §2.11, Phase 3) |
-| LRC-SHELL-MODULES | Module picker (Library, Develop, Map, Book, Slideshow, Print, Web), hide modules | P1 | ⬜ |  | PLAN.md §2.1; Phase 1. Upstream is single-window with view modes |
-| LRC-SHELL-PANELS | Panel system: four sides, auto hide/show, solo mode, toolbar toggle | P1 | ⬜ |  | PLAN.md §2.1; Phase 1 (keys in KEYC-PANELS) |
-| LRC-SHELL-SCREENMODES | Screen modes and lights out (dim / off) | P2 | 🟡 |  | window full screen exists; lights out and the Classic cycle missing |
-| LRC-SHELL-SECONDWINDOW-MODES | Secondary display: live / locked loupe, grid, compare, survey, slideshow | P2 | 🟡 |  | second window exists (LR-VIEW-SECONDWINDOW); live/locked modes and keys missing |
+| LRC-SHELL-MODULES | Module picker (Library, Develop, Map, Book, Slideshow, Print, Web), hide modules | P1 | ✅ | `cmd:module.switch`, `cmd:module.library`, `cmd:module.develop`, `cmd:module.previous`, `cmd:module.setVisible` | P1.2: `Module` trait (`crates/ui-egui/src/module.rs`); module bar with picker (right-click hides/shows modules); Library re-homes grid/loupe/compare/survey/people, Develop the loupe with editing panels and the reference view; Map/Book/Slideshow/Print/Web are placeholders until Phase 3. Switching keeps selection and filmstrip |
+| LRC-SHELL-PANELS | Panel system: four sides, auto hide/show, solo mode, toolbar toggle | P1 | 🟡 | `cmd:panel.toggle`, `cmd:panel.sides`, `cmd:panel.all`, `cmd:panel.toolbar`, `cmd:panel.autoShow`, `cmd:panel.solo`, `cmd:panel.show`, `cmd:panel.order` | P1.2: top (module bar), left, right and bottom (filmstrip) edges plus toolbar, saved per module in `ui.json`; auto show at the window edge; right group order and hidden panels per module. Missing: drag-to-reorder UI and a panel-header context menu (order/visibility are commands only); Classic's two auto-hide variants are one mode |
+| LRC-SHELL-SCREENMODES | Screen modes and lights out (dim / off) | P2 | ✅ | `cmd:view.screenMode`, `cmd:view.screenModeNormal`, `cmd:view.lightsOut` | P1.2: normal, full screen with menu bar, full screen, full screen hiding panels; lights out dim (80 %) / black |
+| LRC-SHELL-SECONDWINDOW-MODES | Secondary display: live / locked loupe, grid, compare, survey, slideshow | P2 | 🟡 | `cmd:second.grid`, `cmd:second.loupe`, `cmd:second.live`, `cmd:second.locked`, `cmd:second.compare`, `cmd:second.survey`, `cmd:second.slideshow` | P1.2: all seven modes in the egui second viewport. Missing: its own filmstrip and filter bar, and a mode switcher inside the window (modes are commands and keys) |
 | LRC-SHELL-KEYMAP | Classic keymap layer (switchable) | P1 | 🟡 |  | several keys deliberately differ today (see the shortcuts section); add a Classic layer |
-| LRC-SHELL-IDPLATE | Identity plate (styled text or graphic) and activity centre | P2 | 🟡 |  | an Activity panel exists; identity plate missing (needs the shared text engine) |
+| LRC-SHELL-IDPLATE | Identity plate (styled text or graphic) and activity centre | P2 | 🟡 | `cmd:view.identityPlate` | P1.2: the module bar shows the brand mark (drawn in code after `brand/logo.svg`) and the app name, or the user's text; the status line is its activity area. Missing: an image file as plate and font/colour styling (needs an SVG/raster loader and the shared text engine) |
 | LRC-SHELL-PREFS | Classic preference groups (presets, external editing, file handling, display, network) | P2 | 🟡 |  | partial; see V. Preferences |
 | LRC-SHELL-PLUGINS | Plug-in manager and SDK (sandboxed) | P2 | ⬜ |  | PLAN.md §2.1; Phase 4 |
 | LRC-CAT-SCALE | Catalog of 500k+ photos with an on-disk index | P1 | 🟡 |  | journal + snapshot works to about 85k photos and lives in RAM; Phase 1 |

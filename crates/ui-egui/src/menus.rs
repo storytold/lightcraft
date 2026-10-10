@@ -27,7 +27,7 @@ pub const LANGUAGE_COMMANDS: &[UiCommand] = &[
 /// Every UI command: the languages, then everything else. `xtask parity` reads both tables from
 /// this file, so an id listed in `docs/parity.md` is checked wherever it is declared.
 pub fn ui_commands() -> impl Iterator<Item = &'static UiCommand> {
-    LANGUAGE_COMMANDS.iter().chain(UI_COMMANDS)
+    LANGUAGE_COMMANDS.iter().chain(UI_COMMANDS).chain(crate::module::SHELL_COMMANDS)
 }
 
 /// The language a Language-menu command selects, if the id is one. The engine and the UI both go
@@ -196,6 +196,9 @@ fn panel(app: &mut DacApp, ctx: &egui::Context, p: RightPanel, name: &str) {
         app.toast(ctx, crate::i18n::tr_format!("{name} Off", name = crate::i18n::tr(name)));
     } else {
         app.ui.right = p;
+        // opening a panel brings its edge back (F8 / Tab hid it)
+        app.ui.right_edge = true;
+        app.ui.hidden_panels.retain(|h| h.right_panel() != Some(p));
         app.toast(ctx, crate::i18n::tr_format!("{name} On", name = crate::i18n::tr(name)));
         if p.is_edit_tool() && !matches!(app.ui.view, ViewMode::Detail) {
             app.ui.view = ViewMode::Detail;
@@ -263,6 +266,9 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
         // (menus rebuilt from it, toasts) are already in the new language.
         crate::i18n::set_language(app.ui.language);
         return Some(Ok(json!(app.ui.language)));
+    }
+    if let Some(r) = crate::module::run(app, id, p) {
+        return Some(r);
     }
     let ctx = egui::Context::default();
     let r: Result<Value, String> = match id {
@@ -1448,6 +1454,9 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
 }
 
 pub fn ui_enabled(app: &DacApp, id: &str) -> bool {
+    if let Some(e) = crate::module::enabled(app, id) {
+        return e;
+    }
     match id {
         s if s.starts_with("panel.") || s.starts_with("tool.") || s.starts_with("section.") => app.session.active().is_some() || s == "panel.close",
         "app.export" | "dialog.export" | "dialog.createPreset" | "dialog.rename" | "dialog.captureTime" | "dialog.copySettings" => {

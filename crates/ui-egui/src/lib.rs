@@ -20,6 +20,7 @@ pub mod menubar;
 pub mod menus;
 pub mod merge;
 mod model_setup;
+pub mod module;
 pub mod panels;
 pub mod pick;
 pub mod region;
@@ -50,6 +51,8 @@ mod tests_masking;
 mod tests_masking_layout;
 #[cfg(test)]
 mod tests_menubar;
+#[cfg(test)]
+mod tests_modules;
 #[cfg(test)]
 mod tests_offline;
 #[cfg(test)]
@@ -917,19 +920,31 @@ impl DacApp {
         }
         // Order matters: earlier panels take the full edge (top bar spans the window; the tool strip,
         // right panels and left panel run to the bottom; the bottom bar sits between them).
-        panels::topbar::show(self, ui);
+        module::sync(self);
+        module::auto_show(self, &ctx);
+        let m = module::get(self.ui.module);
+        if self.ui.screen_mode != module::ScreenMode::FullScreen && self.ui.screen_mode != module::ScreenMode::FullScreenHidePanels {
+            panels::topbar::show(self, ui);
+        }
+        if module::edge_visible(self, module::Edge::Top) {
+            module::module_bar(self, ui);
+        }
         panels::library_problem::banner(self, ui);
-        panels::strip::show(self, ui);
-        if self.ui.right != state::RightPanel::None {
-            panels::right::show(self, ui);
+        if module::edge_visible(self, module::Edge::Right) {
+            panels::strip::show(self, ui);
+            if self.ui.right != state::RightPanel::None {
+                panels::right::show(self, ui);
+            }
+            if self.ui.presets {
+                panels::presets::show(self, ui);
+            }
         }
-        if self.ui.presets {
-            panels::presets::show(self, ui);
-        }
-        if self.ui.left_panel {
+        if module::edge_visible(self, module::Edge::Left) {
             panels::left::show(self, ui);
         }
-        panels::bottombar::show(self, ui);
+        if self.ui.toolbar && self.ui.screen_mode != module::ScreenMode::FullScreenHidePanels {
+            m.toolbar(ui, self);
+        }
         let t = theme::Tokens::get(&ctx);
         let bg = if matches!(self.ui.view, state::ViewMode::Detail | state::ViewMode::Compare | state::ViewMode::Survey | state::ViewMode::Reference)
         {
@@ -937,14 +952,8 @@ impl DacApp {
         } else {
             t.grid_bg
         };
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(bg)).show(ui, |ui| match self.ui.view {
-            state::ViewMode::PhotoGrid | state::ViewMode::SquareGrid => panels::grid::show(self, ui),
-            state::ViewMode::Detail => panels::detail::show(self, ui),
-            state::ViewMode::Compare => panels::compare::show_compare(self, ui),
-            state::ViewMode::Survey => panels::compare::show_survey(self, ui),
-            state::ViewMode::Reference => panels::compare::show_reference(self, ui),
-            state::ViewMode::People => panels::people::show(self, ui),
-        });
+        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(bg)).show(ui, |ui| m.center(ui, self));
+        module::lights_out(self, &ctx);
         panels::second::show(self, &ctx);
         panels::notices::show(self, &ctx);
         panels::dialogs::show(self, &ctx);
