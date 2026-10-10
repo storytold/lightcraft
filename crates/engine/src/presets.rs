@@ -171,7 +171,7 @@ pub fn expand_preset_paths(paths: &[String]) -> Vec<String> {
 }
 
 impl Session {
-    /// Add imported presets. Identical presets (same name, group and settings) already present are
+    /// Add imported presets. Identical presets (same name, group, settings and diagnostics) already present are
     /// skipped; id clashes get a fresh id. Returns the ids added.
     pub fn add_presets(&mut self, presets: Vec<Preset>) -> Vec<String> {
         use std::collections::{HashMap, HashSet};
@@ -183,8 +183,9 @@ impl Session {
         }
         let mut added = Vec::new();
         for mut p in presets {
+            p.unsupported_edits = lightcraft_develop::unsupported_edits::bounded_names(p.unsupported_edits.iter().map(String::as_str));
             let key = (p.name.clone(), p.group.clone());
-            let same = by_name.get(&key).is_some_and(|ix| ix.iter().any(|&i| self.presets.get(i).is_some_and(|q| q.settings == p.settings)));
+            let same = by_name.get(&key).is_some_and(|ix| ix.iter().any(|&i| self.presets.get(i).is_some_and(|q| q.settings == p.settings && q.unsupported_edits == p.unsupported_edits)));
             if same {
                 continue;
             }
@@ -209,7 +210,7 @@ impl Session {
 }
 
 fn p(group: &str, id: &str, name: &str, settings: serde_json::Value) -> Preset {
-    Preset { id: format!("lc.{id}"), name: name.into(), group: group.into(), settings, favorite: false, builtin: true }
+    Preset { id: format!("lc.{id}"), name: name.into(), group: group.into(), settings, unsupported_edits: Vec::new(), favorite: false, builtin: true }
 }
 
 pub fn builtin() -> Vec<Preset> {
@@ -572,6 +573,37 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imported_preset_identity_includes_bounded_diagnostics() {
+        let mut s = Session::new();
+        let mut preset = p("Own", "warnings", "Same look", json!({"light":{"exposure":0.5}}));
+        preset.unsupported_edits = vec!["Look".into(), "FilterList".into(), "Look".into()];
+        assert_eq!(s.add_presets(vec![preset.clone()]).len(), 1);
+        assert!(s.add_presets(vec![preset.clone()]).is_empty());
+        let saved = s.presets.iter().find(|p| p.name == "Same look").unwrap();
+        assert_eq!(saved.unsupported_edits, ["FilterList", "Look"]);
+        preset.unsupported_edits.clear();
+        assert_eq!(s.add_presets(vec![preset.clone()]).len(), 1, "same pixels with different source limitations is a distinct preset");
+        preset.name = "Bounded".into();
+        preset.unsupported_edits = (0..300).map(|i| format!("Field{i}")).collect();
+        preset.unsupported_edits.push("Bad\nName".into());
+        s.add_presets(vec![preset]);
+        let saved = s.presets.iter().find(|p| p.name == "Bounded").unwrap();
+        assert_eq!(saved.unsupported_edits.len(), lightcraft_develop::unsupported_edits::MAX_NAMES);
+        assert!(saved.unsupported_edits.iter().all(|n| lightcraft_develop::unsupported_edits::name_valid(n)));
+        assert!(saved.unsupported_edits.iter().any(|n| n == lightcraft_develop::unsupported_edits::INVALID_DIAGNOSTICS));
+    }
+
+    #[test]
+    fn native_preset_file_and_import_report_preserve_warning_names() {
+        let mut preset = p("Own", "warnings", "Warnings", json!({"light":{"exposure":0.5}}));
+        preset.unsupported_edits = vec!["FilterList".into(), "Look".into()];
+        let file = to_lcpreset(std::slice::from_ref(&preset));
+        let parsed = crate::preset_import::read_presets("own.lcpreset", file.as_bytes(), None).unwrap();
+        assert_eq!(parsed[0].preset.unsupported_edits, preset.unsupported_edits);
+        assert_eq!(parsed[0].unmapped, preset.unsupported_edits);
+    }
 
     #[test]
     fn builtin_presets_parse_and_apply() {

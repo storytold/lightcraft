@@ -121,6 +121,23 @@ fn mean(path: &std::path::Path) -> f64 {
 }
 
 #[test]
+fn render_reports_unsupported_sidecar_edits_and_keeps_source() {
+    let input = tmp("unsupported-edits-input.png");
+    let output = tmp("unsupported-edits-output.png");
+    gradient_png(&input);
+    let original = std::fs::read(&input).unwrap();
+    let packet = r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="1" crs:FutureEdit="25"/>"#;
+    std::fs::write(input.with_extension("xmp"), packet).unwrap();
+    let result = Command::new(BIN).args(["render", input.to_str().unwrap(), "-o", output.to_str().unwrap()]).output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let diagnostic = String::from_utf8_lossy(&result.stderr);
+    assert!(diagnostic.contains("unsupported saved settings: [\"FutureEdit\"]"), "{diagnostic}");
+    assert!(output.is_file());
+    assert_eq!(std::fs::read(&input).unwrap(), original);
+    assert_eq!(std::fs::read_to_string(input.with_extension("xmp")).unwrap(), packet);
+}
+
+#[test]
 fn mcp_over_stdio_sets_exposure_and_renders() {
     let input = tmp("in.png");
     gradient_png(&input);

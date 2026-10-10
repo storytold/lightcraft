@@ -2340,5 +2340,7 @@
   "Checking the GPU…": "GPU を確認中…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "顔モデルが GPU を使うのは、同じ結果をより速く出せると確認できた場合だけです。",
-  "Checking the GPU for faces": "顔用の GPU を確認中"
+  "Checking the GPU for faces": "顔用の GPU を確認中",
+  "Some saved settings are not supported": "一部の保存済み設定はサポートされていません",
+  "Rendering may differ from the saved edit.": "保存された編集内容と描画結果が異なる場合があります。"
 }

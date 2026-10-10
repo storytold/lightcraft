@@ -70,6 +70,8 @@ pub struct CameraColor {
 /// Facts about the source the settings are interpreted against.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceInfo {
+    /// Long edge before decoder downsampling, after the source's default crop. Zero when unknown.
+    pub native_long: usize,
     /// Lens corrections embedded in the file (DNG opcodes), relative to the EXIF-oriented source.
     pub lens: Option<lightcraft_develop::EmbeddedLens>,
     /// Raw sources use absolute Kelvin white balance; rendered sources use a relative scale around
@@ -102,6 +104,7 @@ pub struct SourceInfo {
 impl Default for SourceInfo {
     fn default() -> Self {
         Self {
+            native_long: 0,
             raw: false,
             as_shot_temp: 6500.0,
             as_shot_tint: 0.0,
@@ -208,6 +211,7 @@ pub(crate) struct Prepared {
     pub base: Arc<Plane>,
     pub clarity_blur: Option<Arc<Plane>>,
     pub texture_blur: Option<Arc<Plane>>,
+    pub sharpen_blur: Option<Arc<Plane>>,
     pub dark: Option<Arc<Plane>>,
     /// Blurred chromaticity (`rgb / Y`) for local Moiré / Noise.
     pub chroma_blur: Option<Arc<Rgb32f>>,
@@ -306,7 +310,7 @@ impl StageCache {
             }
             let pl = &e.planes;
             let planes = pl.log_l.iter().chain(pl.base.iter().map(|x| &x.1)).chain(pl.clarity.iter().map(|x| &x.1));
-            for p in planes.chain(pl.texture.iter().map(|x| &x.1)).chain(pl.dark.iter().map(|x| &x.1)) {
+            for p in planes.chain(pl.texture.iter().map(|x| &x.1)).chain(pl.sharpen.iter().map(|x| &x.1)).chain(pl.dark.iter().map(|x| &x.1)) {
                 add(Arc::as_ptr(p) as usize, size(p));
             }
         }
@@ -369,6 +373,8 @@ pub struct Plan<'a> {
     /// Output pixels per pixel of the original photo ([`SourceInfo::native_long`], else the source
     /// buffer), at most 1: the scale of noise reduction, whose radii are in the original's pixels.
     pub detail_scale: f32,
+    /// Original source long edge, for detail controls expressed in native pixels.
+    pub native_long: usize,
     /// Key of the resampled source (together with the source buffer's identity).
     pub geo: u64,
     /// Key of the white-balanced, retouched, denoised image (and of the planes computed from it).
@@ -397,6 +403,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         Cow::Borrowed(b) => upright::resolve(src, info, b),
         Cow::Owned(o) => Cow::Owned(upright::resolve(src, info, &o).into_owned()),
     };
+    bypass_sections(&mut settings);
     visualize::adjust_settings(req.overlay, &mut settings);
     // a window must not choose a spot's source from the pixels it happens to hold: fix them
     // from a fixed-size render of the whole frame first
@@ -433,7 +440,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     };
     let src_long = src.width.max(src.height);
     // (an original reported smaller than the source is the source)
-    let native_long = info.native_long.unwrap_or(0).max(src_long).max(1);
+    let native_long = info.native_long.max(src_long).max(1);
     let detail_scale = local::detail_scale(px_per_long, native_long);
     let geo = hash_of((format!("{frame:?}"), w, h));
     let (wb_t, wb_tint) = local::effective_wb(info, s);
@@ -449,13 +456,67 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         // and the local tone mapping
         local_tone::enabled(info, s),
         src_long,
+        native_long,
+        px_per_long.to_bits(),
     ));
     let lin_key = hash_of((
         pre_nr_key,
         [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         detail_scale.to_bits(),
     ));
-    Plan { settings, frame, w, h, px_per_long, src_long, detail_scale, geo, lin_key, pre_nr_key, eyes, fixed_air, keep, mattes: info.mattes.clone() }
+    Plan { settings, frame, w, h, px_per_long, src_long, native_long, detail_scale, geo, lin_key, pre_nr_key, eyes, fixed_air, keep, mattes: info.mattes.clone() }
+}
+}
+
+/// Panel bypass affects both CPU/GPU stage planning and cache keys, without changing saved
+/// edits. Apply after profile deltas, as the existing Effects/Calibration bypasses do. Treatment
+/// and profile selection live above the Color panel and remain active when Color is bypassed.
+fn bypass_sections(settings: &mut Cow<'_, DevelopSettings>) {
+    let light = !settings.section_enabled("light");
+    let color = !settings.section_enabled("color");
+    let curve = light || !settings.section_enabled("curve");
+    let mixer = color || !settings.section_enabled("mixer");
+    let bw_mix = color || !settings.section_enabled("bwMix");
+    let grading = color || !settings.section_enabled("grading");
+    let point_color = color || !settings.section_enabled("pointColor");
+    let detail = !settings.section_enabled("detail");
+    let grain = !settings.section_enabled("grain");
+    let vignette = !settings.section_enabled("vignette");
+    if !(light || color || curve || mixer || bw_mix || grading || point_color || detail || grain || vignette) {
+        return;
+    }
+    let s = settings.to_mut();
+    if light {
+        s.light = Default::default();
+    }
+    if curve {
+        s.curve = Default::default();
+    }
+    if color {
+        s.wb = Default::default();
+        s.color = Default::default();
+    }
+    if mixer {
+        s.mixer = Default::default();
+    }
+    if bw_mix {
+        s.bw_mix = Default::default();
+    }
+    if grading {
+        s.grading = Default::default();
+    }
+    if point_color {
+        s.point_colors.clear();
+    }
+    if detail {
+        s.detail = Default::default();
+    }
+    if grain {
+        s.grain = Default::default();
+    }
+    if vignette {
+        s.vignette = Default::default();
+    }
 }
 
 /// Whether the scene-linear stage needs work only the CPU does (defringe, spot removal).
@@ -588,7 +649,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Some(p) if req.quality == Quality::Draft && p.pre_nr == plan.pre_nr_key => p.for_other_nr(),
         _ => local::Planes { key: lin_key, pre_nr: plan.pre_nr_key, ..Default::default() },
     };
-    let mut prep = local::prepare(lin.clone(), s, frame, px_per_long, req.quality, &mut planes, plan.mattes.as_deref());
+    let mut prep = local::prepare(lin.clone(), s, frame, px_per_long, plan.native_long, req.quality, &mut planes, plan.mattes.as_deref());
     if let Some(a) = plan.fixed_air {
         prep.air = a;
     }
@@ -736,5 +797,11 @@ mod tests_local;
 mod tests_nr_scale;
 #[cfg(test)]
 mod tests_tone;
+#[cfg(test)]
+mod tests_nr;
+#[cfg(test)]
+mod tests_sections;
+#[cfg(test)]
+mod tests_sharpen;
 #[cfg(test)]
 mod tests_window;

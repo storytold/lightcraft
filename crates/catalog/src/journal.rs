@@ -52,6 +52,11 @@
 //! | 7 | Kelvin white balance for raws whose camera has matrices (#730) | `Op::SetAsShotWb`, `WhiteBalance.scale` |
 //! | 8 | History cursor: Go to History Step adds no step | `Op::SetHistoryCursor`, `Photo.history_cursor` |
 //! | 9 | preview-only recheck | `Photo.preview_checked`, `Op::SetContent.preview_checked` |
+//! | 10 | combined saved-edit diagnostics | `Op::SetUnsupportedEdits`, `Photo.unsupported_edits` |
+//!
+//! Earlier fork writers used v3 and v7 for saved-edit diagnostics, and v4 for function curves.
+//! Their diagnostic payloads remain readable alongside upstream v3-v7 fields, including Kelvin WB.
+//! Function curves are not supported by this writer; their payloads fail before any rewrite.
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a

@@ -27,6 +27,7 @@ What we write (standard namespaces, so other tools can read the metadata):
 | Pick / reject flag | `lc:flag` (`pick`, `reject`, `none`) |
 | Location | `lc:location` |
 | Develop settings | `lc:settings` — our complete `DevelopSettings` as JSON (exact round trip, incl. masks, spots, crop and the rendering process; settings without `process` are V1, see [process-versions.md](process-versions.md)) |
+| Unsupported saved edits | `lc:unsupportedEdits` — bounded JSON array of unsupported field names, preserved with native settings |
 
 `lc:` is `http://ns.lightcraft.app/lc/1.0/`.
 
@@ -37,9 +38,27 @@ used — on import (it then also files a copied photo in its date folder) and by
 `xmp:Rating="-1"` (the XMP convention for rejected) sets the reject flag. Develop settings come from
 `lc:settings` when present (exact); otherwise from the `crs:` fields below (approximate).
 
-When foreign `crs:` settings are only partly transferable, `library.import` includes per-photo `warnings` in its
-report. Warnings identify unsupported profile names, saved Upright geometry that will be recalculated, and other
-unmapped adjustments; they do not change the source packet or become catalog edits.
+Browsing or importing a path already in the catalog keeps its stored settings. After an import-parser fix,
+previously imported photos therefore retain their earlier interpretation until explicitly reloaded. Select the
+affected photos and use **Photo ▸ Read Metadata from File** to apply the current sidecar interpretation. Review
+before doing this: every stated field wins over its catalog value. If you also need undo/redo to leave the sidecar
+untouched, turn automatic XMP writing off first; undo/redo otherwise retains its normal auto-write behavior.
+
+## Unsupported saved edits
+
+Import and metadata reads retain the names of fields that could not be applied. The Edit and Info panels show a
+persistent notice; import, inspection and export command results expose `unsupportedEdits`, and CLI renders print
+these names to stderr. Successful exports still report limitations of the source edit. This does not recover an
+unsupported profile, filter or AI effect.
+
+The names survive catalog reopening and native XMP save/read/import. Metadata-only packets and rendered packets
+marked `AlreadyApplied` preserve existing diagnostics; a new applicable supported edit can clear them. Older native
+packets without `lc:unsupportedEdits` preserve diagnostics already in the catalog. Invalid or oversized diagnostic
+metadata is rejected, preserves existing names, and adds `InvalidSavedEditDiagnostics`. Limits are 66,305 bytes of encoded
+JSON, 256 names and 256 UTF-8 bytes per name; the UI abbreviates long lists and names.
+
+Catalog format 7 stores these diagnostics alongside the upstream format-3–6 operations.
+Existing compatible libraries upgrade on open; older LightCraft builds refuse the new format. For comparison with older builds, use a disposable library or a separately backed-up copy.
 
 ## Saving into an existing sidecar
 
@@ -128,7 +147,7 @@ stored edits; it does not establish a Lightroom pixel match.
 | `Vibrance`, `Saturation` | `color.vibrance`, `color.saturation` | 1:1 |
 | `Texture`, `Clarity2012`, `Dehaze` | `effects.texture`, `effects.clarity`, `effects.dehaze` | 1:1 |
 | `HueAdjustment<Band>`, `SaturationAdjustment<Band>`, `LuminanceAdjustment<Band>` | `mixer.<band>.hue/sat/lum` | bands Red, Orange, Yellow, Green, Aqua, Blue, Purple, Magenta |
-| `ConvertToGrayscale` | `treatment` | `True` → B&W; also reads an explicit `Look/Parameters/ConvertToGrayscale` when the outer flag is absent. Other Look parameters remain unsupported. |
+| `ConvertToGrayscale` | `treatment` | `True` → B&W; also reads an explicit `Look/Parameters/ConvertToGrayscale` when the outer flag is absent. Attribute and child-element fields are both accepted, including `rdf:parseType="Resource"` attributes. Other Look parameters remain unsupported. |
 | `GrayMixer<Band>` | `bw_mix.<band>` | |
 | `ParametricShadows`, `ParametricDarks`, `ParametricLights`, `ParametricHighlights` | `curve.shadows/darks/lights/highlights` | |
 | `ParametricShadowSplit`, `ParametricMidtoneSplit`, `ParametricHighlightSplit` | `curve.split_shadows/split_mid/split_highlights` | |
@@ -169,8 +188,8 @@ is; import reports either per preset (`Profile “Name” (Lightroom's own)` / `
 References are resolved again whenever profiles are imported or deleted, so a pack's profiles and presets can come in
 either order. The look's embedded `Parameters` are not read.
 
-**Not mapped:** camera profiles (`CameraProfile`; we have our own profile set), red eye, lens blur,
-process-version 2010 field names, and AI features. Local adjustments and spot removal are read as described below.
+**Not mapped:** camera profiles and looks (`CameraProfile`, `Look`; we have our own profile set), red eye, lens blur,
+and AI features. Legacy process-version 2010 controls use the approximations described above. Local adjustments and spot removal are read as described below.
 
 ## Spot removal
 
@@ -190,6 +209,9 @@ sidecar written for a healed photo contains.
 
 A spot whose mask is any other kind is reported as `Spot: <kind>`. Sizes are clamped to our spot range. A sidecar's
 spots replace the photo's, as its masks do.
+
+Enhanced DNG pixels take priority over the original raw image. If their header or compression is unsupported,
+import/render/export reports an error rather than silently replacing the enhanced image with an embedded JPEG.
 
 ## Local corrections (masks)
 

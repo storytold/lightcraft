@@ -295,5 +295,6 @@
   "Already in “{}”": "Уже в «{}»",
   "Move {n} photo{} to “{}”": "Переместить в «{1}» фото: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Переместить в «{1}» фото: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "В «{1}» перемещено фото: {n}{0:.0}. Правка → Отменить вернёт их."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "В «{1}» перемещено фото: {n}{0:.0}. Правка → Отменить вернёт их.",
+  "{names}; {count} more": "{names}; ещё {count}"
 }

@@ -146,10 +146,11 @@ pub struct UndoEntry {
 }
 
 /// The one photo an undo step changes, when it changes exactly one through its edit, rating, flag,
-/// label, metadata or versions (`depth` bounds nested batches).
+/// label, metadata, unsupported-edit diagnostics or versions (`depth` bounds nested batches).
 fn single_photo(op: &Op, depth: usize) -> Option<PhotoId> {
     match op {
         Op::SetDevelop { id, .. }
+        | Op::SetUnsupportedEdits { id, .. }
         | Op::SetRating { id, .. }
         | Op::SetFlag { id, .. }
         | Op::SetLabel { id, .. }
@@ -778,9 +779,10 @@ impl Session {
         Ok(e.label)
     }
 
-    /// After an undo or redo that changed one photo (its edit, rating, flag, label, metadata or
-    /// versions), that photo becomes the active one, as in Lightroom Classic, so the change is on
-    /// screen (issue #293). It joins the selection if it isn't in it; nothing changes for steps
+    /// After an undo or redo that changed one photo (its edit, rating, flag, label, metadata,
+    /// versions or unsupported-edit diagnostics), that photo becomes the active one, as in
+    /// Lightroom Classic, so the change is on screen (issue #293). It joins the selection if it
+    /// isn't in it; nothing changes for steps
     /// that touch several photos, albums or files, or for a photo not in the current view.
     fn show_undone(&mut self, op: &Op) {
         let Some(id) = single_photo(op, 0) else { return };
@@ -1302,6 +1304,8 @@ mod tests_prefs;
 mod tests_presets_scale;
 #[cfg(test)]
 mod tests_print;
+#[cfg(test)]
+mod tests_preset_diagnostics;
 #[cfg(test)]
 mod tests_process;
 #[cfg(test)]

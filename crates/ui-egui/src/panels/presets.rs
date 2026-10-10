@@ -23,15 +23,14 @@ const THUMB_EDGE: usize = 128;
 #[derive(Clone)]
 struct AppliedPreset {
     id: String,
-    amount: f64,
     selected: Vec<lightcraft_catalog::PhotoId>,
     active: Option<lightcraft_catalog::PhotoId>,
     commits: u64,
 }
 
 impl AppliedPreset {
-    fn new(session: &lightcraft_engine::Session, id: String, amount: f64) -> Self {
-        Self { id, amount, selected: session.selection.ids.clone(), active: session.active(), commits: session.commits() }
+    fn new(session: &lightcraft_engine::Session, id: String, _amount: f64) -> Self {
+        Self { id, selected: session.selection.ids.clone(), active: session.active(), commits: session.commits() }
     }
 
     fn is_current(&self, session: &lightcraft_engine::Session) -> bool {
@@ -44,6 +43,79 @@ impl AppliedPreset {
                 .undo
                 .last()
                 .is_some_and(|entry| session.presets.iter().any(|preset| preset.id == self.id && entry.label == format!("Preset: {}", preset.name)))
+    }
+}
+
+/// The Amount control owns at most the immediately preceding preset step. A zero/identical
+/// application owns no step: its baseline is already current and must not be undone.
+#[derive(Clone)]
+struct PresetAmountState {
+    preset: Preset,
+    amount: f64,
+    context: PresetAmountContext,
+    owns_undo_step: bool,
+    applied: AppliedPreset,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct PresetAmountContext {
+    revision: u64,
+    selection: lightcraft_engine::Selection,
+    undo_depth: usize,
+    library: Option<std::path::PathBuf>,
+    // Process-unique even when a fresh in-memory session reuses photo ids/revision/depth.
+    visible_generation: u64,
+}
+
+impl PresetAmountContext {
+    fn capture(app: &mut LightcraftApp) -> Self {
+        let visible_generation = app.session.visible_shared().0;
+        Self {
+            revision: app.session.catalog.revision,
+            selection: app.session.selection.clone(),
+            undo_depth: app.session.undo.len(),
+            library: app.session.library.as_ref().map(|library| library.dir.clone()),
+            visible_generation,
+        }
+    }
+}
+
+impl PresetAmountState {
+    fn current(&self, app: &mut LightcraftApp) -> bool {
+        app.session.interaction.is_none()
+            && app.session.redo.is_empty()
+            && (!self.owns_undo_step || self.applied.is_current(&app.session))
+            && app.session.presets.iter().any(|preset| preset == &self.preset)
+            && self.context == PresetAmountContext::capture(app)
+    }
+
+    fn apply(app: &mut LightcraftApp, preset: Preset, amount: f64) -> Option<Self> {
+        let before = app.session.catalog.revision;
+        if app.run("preset.apply", json!({"id": preset.id, "amount": amount})).is_err() {
+            return None;
+        }
+        let context = PresetAmountContext::capture(app);
+        // At the 1000-step history cap a real apply replaces the oldest entry without
+        // increasing depth. Revision, not a length delta, distinguishes it from a no-op.
+        let owns_undo_step = context.revision != before;
+        if owns_undo_step && app.session.undo.is_empty() {
+            return None;
+        }
+        let applied = AppliedPreset::new(&app.session, preset.id.clone(), amount);
+        Some(Self { preset, amount, context, owns_undo_step, applied })
+    }
+
+    fn change(self, app: &mut LightcraftApp, amount: f64) -> Option<Self> {
+        if !self.current(app) {
+            return None;
+        }
+        if amount == self.amount {
+            return Some(self);
+        }
+        if self.owns_undo_step && app.run("edit.undo", json!({})).is_err() {
+            return None;
+        }
+        Self::apply(app, self.preset, amount)
     }
 }
 
@@ -87,8 +159,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         divider(ui);
         // amount slider (applies to the last applied preset)
         let amt_id = egui::Id::new("preset-amount");
-        let last: Option<AppliedPreset> = ui.data(|d| d.get_temp(amt_id));
-        if let Some(last) = last.clone().filter(|last| last.is_current(&app.session)) {
+        let mut last: Option<PresetAmountState> = ui.data(|d| d.get_temp(amt_id));
+        if last.as_ref().is_some_and(|state| !state.current(app)) {
+            ui.data_mut(|d| d.remove::<PresetAmountState>(amt_id));
+            last = None;
+        }
+        if let Some(state) = last.clone() {
             let spec = ControlSpec {
                 id: "presetAmount",
                 label: "Amount",
@@ -100,21 +176,18 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 decimals: 0,
                 track: Track::Plain,
             };
-            let out = slider(ui, &spec, last.amount, true, None);
-            if let Some(v) = out.value
-                && app.run("edit.undo", json!({})).is_ok()
-            {
-                // Only replace the most recent preset; never undo intervening edits.
-                if app.run("preset.apply", json!({"id": &last.id, "amount": v})).is_ok() {
-                    ui.data_mut(|d| d.insert_temp(amt_id, AppliedPreset::new(&app.session, last.id, v)));
-                } else {
-                    let _ = app.run("edit.redo", json!({}));
-                    ui.data_mut(|d| d.remove::<AppliedPreset>(amt_id));
-                }
+            let out = slider(ui, &spec, state.amount, true, None);
+            if let Some(v) = out.value {
+                last = state.change(app, v);
+                ui.data_mut(|d| {
+                    if let Some(state) = &last {
+                        d.insert_temp(amt_id, state.clone());
+                    } else {
+                        d.remove::<PresetAmountState>(amt_id);
+                    }
+                });
             }
             divider(ui);
-        } else {
-            ui.data_mut(|d| d.remove::<AppliedPreset>(amt_id));
         }
         let active = app.session.active();
         let current = active.and_then(|id| app.session.develop_of(id)).map(|d| (*d).clone());
@@ -167,7 +240,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
                     crate::widgets::announce(&resp, name.clone());
                     register(ui.ctx(), format!("preset:{pid}"), r);
-                    let is_last = last.as_ref().is_some_and(|l| l.id == pid);
+                    let is_last = last.as_ref().is_some_and(|state| state.preset.id == pid);
                     if is_last {
                         ui.painter().rect_filled(r, 0.0, t.tool_active);
                     } else if resp.hovered() {
@@ -199,10 +272,19 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                             ui.data_mut(|d| d.insert_temp(egui::Id::new("last-preset-hover"), (id, pr.clone(), label)));
                         }
                     }
-                    if resp.clicked() && app.run("preset.apply", json!({"id": pid, "amount": 100})).is_ok() {
-                        ui.data_mut(|d| d.insert_temp(amt_id, AppliedPreset::new(&app.session, pid.clone(), 100.0)));
+                    if resp.clicked() {
+                        last = PresetAmountState::apply(app, pr.clone(), 100.0);
+                        ui.data_mut(|d| {
+                            if let Some(state) = &last {
+                                d.insert_temp(amt_id, state.clone());
+                            } else {
+                                d.remove::<PresetAmountState>(amt_id);
+                            }
+                        });
                         ui.data_mut(|d| d.remove::<(lightcraft_catalog::PhotoId, Preset, String)>(egui::Id::new("last-preset-hover")));
-                        app.toast(ui.ctx(), crate::i18n::tr_format!("Preset: {name}", name = name));
+                        if last.is_some() {
+                            app.toast(ui.ctx(), crate::i18n::tr_format!("Preset: {name}", name = name));
+                        }
                     }
                     let (builtin, group) = (pr.builtin, pr.group.clone());
                     resp.context_menu(|ui| {

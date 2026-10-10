@@ -18,7 +18,7 @@ fn temp_dir(tag: &str) -> PathBuf {
 }
 
 fn user_preset(id: &str, settings: serde_json::Value) -> Preset {
-    Preset { id: id.into(), name: id.into(), group: "User Presets".into(), settings, favorite: false, builtin: false }
+    Preset { id: id.into(), name: id.into(), group: "User Presets".into(), settings, unsupported_edits: Vec::new(), favorite: false, builtin: false }
 }
 
 fn with_presets(s: &mut Session) {
@@ -430,4 +430,22 @@ fn slideshow_playback_settings_persist_with_the_library() {
     assert_eq!((s.slideshow.slide_duration, s.slideshow.fade_duration), (120.0, 0.0));
     drop(s);
     let _ = std::fs::remove_dir_all(&lib);
+}
+
+#[test]
+fn interior_diagonal_curve_survives_preset_roundtrip() {
+    use crate::cmd::curves::{CurvePreset, parse_file, to_file};
+    use lightcraft_develop::ToneCurve;
+    use lightcraft_geom::Point;
+    let points = vec![Point::new(0.25, 0.25), Point::new(0.75, 0.75)];
+    let before = ToneCurve { master: points.clone(), red: points, ..Default::default() };
+    let preset = CurvePreset::from_curve("Interior", &before);
+    assert_eq!(preset.master.len(), 2);
+    assert_eq!(preset.red.len(), 2);
+    assert!(!preset.matches(&ToneCurve::default()));
+    let text = to_file(&[preset]);
+    let presets = parse_file(text.as_bytes()).unwrap();
+    let mut after = ToneCurve::default();
+    presets[0].apply(&mut after);
+    assert_eq!(after, before);
 }

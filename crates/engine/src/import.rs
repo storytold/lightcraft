@@ -213,6 +213,9 @@ pub struct ImportReport {
     /// Per-photo diagnostics from foreign XMP develop settings that could not be fully carried over.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<ImportWarning>,
+    /// Per-photo names of saved edits that could not be applied, never their values.
+    #[serde(rename = "unsupportedEdits", skip_serializing_if = "Vec::is_empty")]
+    pub unsupported_edits: Vec<UnsupportedEdits>,
 }
 
 /// A structured diagnostic from foreign XMP develop settings.
@@ -251,6 +254,12 @@ pub struct ImportWarning {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<ImportUprightMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct UnsupportedEdits {
+    pub id: u64,
     pub fields: Vec<String>,
 }
 
@@ -358,6 +367,7 @@ pub fn apply_import_defaults(s: &Session, p: &mut Photo) {
     let preset = s.import_defaults.preset_for(raw, &p.meta.camera).and_then(|id| s.presets.iter().find(|x| x.id == id));
     match preset {
         Some(pr) => {
+            p.unsupported_edits = pr.merged_unsupported_edits(&p.unsupported_edits);
             let look = std::sync::Arc::new(pr.apply(&base, 1.0));
             p.develop = look.clone();
             p.import_look = (*look != base).then_some(look);
@@ -1421,7 +1431,13 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 p.set_preview_only(info.preview_only.clone());
                 apply_import_defaults(s, &mut p);
                 if let Some(sc) = &sidecar {
+                    let default_unsupported = p.unsupported_edits.clone();
                     crate::sidecar::merge_into(&mut p, sc, &now);
+                    if matches!(&sc.develop, Some(crate::sidecar::DevelopPatch::Partial(_))) {
+                        p.unsupported_edits = lightcraft_develop::unsupported_edits::bounded_names(
+                            default_unsupported.iter().chain(&p.unsupported_edits).map(String::as_str),
+                        );
+                    }
                     report.sidecars += 1;
                     report.warnings.extend(sc.warnings.iter().cloned().map(|mut warning| {
                         warning.path = path.clone();
@@ -1438,11 +1454,15 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                     }
                 }
                 if let Some(preset) = &opts.preset {
+                    p.unsupported_edits = preset.merged_unsupported_edits(&p.unsupported_edits);
                     let d = std::sync::Arc::new(preset.apply(&p.develop, 1.0));
                     let label = format!("Preset: {}", preset.name);
                     p.develop = d.clone();
                     p.edited = Some(now.clone());
                     p.history.push(lightcraft_catalog::HistoryStep { label, settings: d });
+                }
+                if !p.unsupported_edits.is_empty() {
+                    report.unsupported_edits.push(UnsupportedEdits { id: id.0, fields: p.unsupported_edits.clone() });
                 }
                 report.imported.push(id.0);
                 p.local = opts.local;

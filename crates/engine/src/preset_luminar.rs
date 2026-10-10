@@ -444,6 +444,7 @@ pub fn read_lmp(path: &str, bytes: &[u8], group: Option<String>) -> Result<Impor
         Some(mut i) => {
             i.preset.id = i.preset.id.replacen("user.xmp.", "user.lmp.", 1);
             i.unmapped.extend(acc.unmapped);
+            i.preset.unsupported_edits = lightcraft_develop::unsupported_edits::bounded_names(i.unmapped.iter().map(String::as_str));
             Ok(i)
         }
         None if acc.unmapped.is_empty() => Err("this look has no adjustments".into()),
@@ -591,6 +592,9 @@ mod tests {
         assert_eq!(c.len(), 3);
         assert!((c[0]["y"].as_f64().unwrap() - 0.1).abs() < 1e-9 && (c[2]["y"].as_f64().unwrap() - 0.9).abs() < 1e-9);
         assert_eq!(i.unmapped, ["AIStructure.Boost", "OrtonFilter.Amount", "Contrast.Contrast", "Screened: blend mode Screen"]);
+        let mut expected = i.unmapped.clone();
+        expected.sort_unstable();
+        assert_eq!(p.unsupported_edits, expected);
         assert!(s["light"]["contrast"] == json!(12.0), "the screen-blended layer isn't folded in");
         lightcraft_develop::DevelopSettings::default().merged(s).expect("valid develop settings");
     }

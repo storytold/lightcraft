@@ -50,7 +50,7 @@ impl CameraTone {
     pub fn new(knots: [[f32; 2]; 32]) -> Option<Self> {
         let mut previous = [0.0, 0.0];
         for p in knots {
-            if !p.iter().all(|v| v.is_finite()) || p[0] <= previous[0] || p[1] < previous[1] || p[1] >= 1.0 {
+            if !p.iter().all(|v| v.is_finite()) || p[0] <= previous[0] || p[1] < previous[1] || p[1] > 1.0 {
                 return None;
             }
             previous = p;
@@ -99,6 +99,9 @@ const HDR_FROM_EV: f32 = 1.5;
 pub struct ToneMap {
     lut: Vec<f32>,
     chroma: [f32; CHROMA_N],
+    // Exact white endpoint inside the LUT domain: scene input, fractional LUT index, output.
+    // Splitting its LUT cell prevents interpolation from rounding a clipped white down.
+    saturation: Option<[f32; 3]>,
 }
 
 impl ToneMap {
@@ -123,7 +126,11 @@ impl ToneMap {
                 if peak > 1.0 { (o + (peak - 1.0) * smooth(HDR_FROM_EV, top, ev)).clamp(0.0, peak) } else { o }
             })
             .collect();
-        ToneMap { lut, chroma: curve.chroma }
+        let saturation = curve.knots.iter().find(|p| p[1] == 1.0).and_then(|p| {
+            let position = ((p[0] / GREY).log2() - LUT_MIN_EV) / (LUT_MAX_EV - LUT_MIN_EV) * (LUT_N - 1) as f32;
+            (position > 0.0 && position < (LUT_N - 1) as f32).then(|| [p[0], position, if neutral { 1.0 } else { adjustment.apply(1.0) }])
+        });
+        ToneMap { lut, chroma: curve.chroma, saturation }
     }
     /// `contrast`, `whites`, `blacks` in −100..100 (Lightroom slider units).
     pub fn new(contrast: f64, whites: f64, blacks: f64) -> ToneMap {
@@ -169,7 +176,7 @@ impl ToneMap {
                 o.clamp(0.0, peak)
             })
             .collect();
-        ToneMap { lut, chroma: NO_CHROMA }
+        ToneMap { lut, chroma: NO_CHROMA, saturation: None }
     }
 
     /// Tone map for display-referred sources: identity at neutral settings.
@@ -215,7 +222,7 @@ impl ToneMap {
                 o.clamp(0.0, peak)
             })
             .collect();
-        ToneMap { lut, chroma: NO_CHROMA }
+        ToneMap { lut, chroma: NO_CHROMA, saturation: None }
     }
 
     /// The table (`LUT_N` entries, see [`ToneMap::apply`]).
@@ -226,6 +233,12 @@ impl ToneMap {
     /// The chroma curve (`CHROMA_N` entries, see [`ToneMap::chroma_scale`]).
     pub fn chroma_lut(&self) -> &[f32] {
         &self.chroma
+    }
+
+    /// Exact camera-curve saturation anchor, when inside the LUT domain: scene input,
+    /// fractional table index, and adjusted output. Shared with the GPU tone lookup.
+    pub fn saturation_anchor(&self) -> Option<[f32; 3]> {
+        self.saturation
     }
 
     /// Chroma scale at display luminance `o` (exactly 1 everywhere unless a camera look sets it).
@@ -247,11 +260,25 @@ impl ToneMap {
         if y <= 0.0 {
             return 0.0;
         }
+        if let Some([input, _, output]) = self.saturation
+            && y >= input
+        {
+            return output;
+        }
         let ev = (y / GREY).log2();
         let f = ((ev - LUT_MIN_EV) / (LUT_MAX_EV - LUT_MIN_EV)).clamp(0.0, 1.0) * (LUT_N - 1) as f32;
         let i = (f as usize).min(LUT_N - 2);
         let t = f - i as f32;
         let v = self.lut[i] + (self.lut[i + 1] - self.lut[i]) * t;
+        if let Some([_, position, output]) = self.saturation
+            && ev >= LUT_MIN_EV
+            && position > i as f32
+            && position <= (i + 1) as f32
+            && f <= position
+        {
+            let lower = self.lut.get(i).copied().unwrap_or(v);
+            return lower + (output - lower) * (t / (position - i as f32));
+        }
         if ev < LUT_MIN_EV { v * (y / (GREY * 2f32.powf(LUT_MIN_EV))) } else { v }
     }
 }
@@ -264,6 +291,65 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn identity_knots(white: f32) -> [[f32; 2]; 32] {
+        std::array::from_fn(|i| {
+            let y = 2f32.powf(-12.0 + 12.0 * i as f32 / 31.0);
+            [white * y, y]
+        })
+    }
+
+    #[test]
+    fn exact_white_camera_curve_survives_serialization() {
+        let curve = CameraTone::new(identity_knots(1.0)).unwrap();
+        let back: CameraTone = serde_json::from_value(serde_json::to_value(curve).unwrap()).unwrap();
+        assert_eq!(curve, back);
+        assert_eq!(curve.apply(0.0), 0.0);
+        for y in [1.0, 1.01, 2.0, 16.0] {
+            assert_eq!(back.apply(y), 1.0);
+        }
+        let mut bad = identity_knots(1.0);
+        bad[31][1] = 1.001;
+        assert!(CameraTone::new(bad).is_none());
+        bad[31][1] = f32::NAN;
+        assert!(CameraTone::new(bad).is_none());
+    }
+
+    #[test]
+    fn camera_lut_keeps_exact_white_without_a_knee_dip() {
+        for white in [0.5, 1.0, 2.0, GREY * 2f32.powf(LUT_MIN_EV + 24.0 * 2800.0 / 4095.0)] {
+            let curve = CameraTone::new(identity_knots(white)).unwrap();
+            let map = ToneMap::camera(&curve, 0.0, 0.0, 0.0);
+            assert!(map.saturation_anchor().is_some());
+            assert_eq!(map.apply(white), 1.0);
+            let mut previous = 0.0;
+            for i in 0..=10_000 {
+                let y = white * (0.95 + i as f32 / 100_000.0);
+                let output = map.apply(y);
+                assert!((0.0..=1.0).contains(&output));
+                assert!(output >= previous, "nonmonotone at {y}");
+                assert!((output - (y / white).min(1.0)).abs() < 1e-5, "{y}: {output}");
+                previous = output;
+            }
+            let adjusted = ToneMap::camera(&curve, 35.0, -50.0, -20.0);
+            assert_eq!(adjusted.apply(white), ToneMap::display(35.0, -50.0, -20.0).apply(1.0));
+            assert_eq!(adjusted.apply(white * 2.0), adjusted.apply(white));
+        }
+        let white = GREY * 2f32.powf(LUT_MIN_EV + 24.0 * 0.5 / 4095.0);
+        let map = ToneMap::camera(&CameraTone::new(identity_knots(white)).unwrap(), 0.0, 0.0, 0.0);
+        assert!(map.saturation_anchor().is_some());
+        for fraction in [0.0001, 0.01, 0.5] {
+            assert!((map.apply(white * fraction) - fraction).abs() < 1e-6, "first-cell anchor preserves the black toe");
+        }
+        // Finite curves outside the LUT domain do not create a zero-width/out-of-bounds cell.
+        for white in [1e-8, 1e6] {
+            let map = ToneMap::camera(&CameraTone::new(identity_knots(white)).unwrap(), 0.0, 0.0, 0.0);
+            assert!(map.saturation_anchor().is_none());
+            for y in [white * 0.5, white, white * 2.0] {
+                assert!((0.0..=1.0).contains(&map.apply(y)));
+            }
+        }
+    }
 
     fn knots() -> [[f32; 2]; 32] {
         std::array::from_fn(|i| {
@@ -303,6 +389,7 @@ mod tests {
         });
         let curve = CameraTone::new(knots).unwrap();
         let base = ToneMap::camera(&curve, 0.0, 0.0, 0.0);
+        assert!(base.saturation_anchor().is_none(), "unclipped fitted curves keep their original lookup");
         assert_eq!(base.apply(0.0), 0.0);
         assert!(base.apply(0.1) < base.apply(0.2));
         let mut previous = 0.0;

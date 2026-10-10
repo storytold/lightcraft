@@ -12,7 +12,8 @@
 
 use std::collections::BTreeMap;
 
-use lightcraft_develop::{MIXER_BANDS, Preset};
+use lightcraft_develop::{MIXER_BANDS, Preset, ToneCurve};
+use lightcraft_geom::Point;
 use serde_json::{Map, Value, json};
 
 /// Properties keyed `prefix:name` (as produced by [`lightcraft_meta::parse_xmp`]).
@@ -168,21 +169,21 @@ pub fn rel_to_kelvin(r: f64) -> f64 {
 
 /// Parse a point curve stored as an `rdf:Seq` of `"x, y"` strings in 0..255.
 fn curve(props: &Props, k: &str) -> Option<Value> {
-    note(k);
     let items = props.get(k)?;
     let mut pts = Vec::new();
     for it in items {
         let (x, y) = it.split_once(',')?;
-        // (`parse` reads "NaN" and "inf" too: a curve with such a point is not a curve)
-        let (x, y) = (x.trim().parse::<f64>().ok().filter(|v| v.is_finite())?, y.trim().parse::<f64>().ok().filter(|v| v.is_finite())?);
-        pts.push(json!({"x": (x / 255.0).clamp(0.0, 1.0), "y": (y / 255.0).clamp(0.0, 1.0)}));
+        let (x, y) = (x.trim().parse::<f64>().ok()?, y.trim().parse::<f64>().ok()?);
+        if !x.is_finite() || !y.is_finite() {
+            return None;
+        }
+        pts.push(Point::new((x / 255.0).clamp(0.0, 1.0), (y / 255.0).clamp(0.0, 1.0)));
     }
     if pts.len() < 2 {
         return None;
     }
-    // A straight 0,0 → 255,255 line is the identity: store it as "no curve".
-    let identity = pts.len() == 2 && items.iter().all(|it| it.split(',').map(|v| v.trim()).collect::<Vec<_>>().windows(2).all(|w| w[0] == w[1]));
-    Some(if identity { json!([]) } else { Value::Array(pts) })
+    note(k);
+    Some(if ToneCurve::point_curve_is_identity(&pts) { json!([]) } else { json!(pts) })
 }
 
 /// Map the `crs:` fields of an XMP packet to a partial develop-settings JSON object.
@@ -332,7 +333,7 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     n(o, "ParametricMidtoneSplit", "curve.split_mid");
     n(o, "ParametricHighlightSplit", "curve.split_highlights");
     n(o, "CurveRefineSaturation", "curve.refine_saturation");
-    if let Some(c) = curve(props, "crs:ToneCurve").filter(|c| c.as_array().is_some_and(|a| !a.is_empty())) {
+    if let Some(c) = curve(props, "crs:ToneCurve") {
         // the older single curve, used when no 2012 curve is present
         if !props.contains_key("crs:ToneCurvePV2012") {
             put(o, "curve.master", c);
@@ -543,7 +544,7 @@ pub fn has_saved_upright_transform(props: &Props) -> bool {
 pub fn preset_from_xmp(xmp: &str, fallback_name: &str) -> Option<Preset> {
     let d = lightcraft_meta::parse_xmp(xmp).ok()?;
     let props = &d.properties;
-    let settings = to_partial(props, Target::Any);
+    let (settings, unmapped) = to_partial_report(props, Some(&d.values), Target::Any, crate::crs_masks::DEFAULT_ASPECT);
     if settings.as_object().is_none_or(Map::is_empty) {
         return None;
     }
@@ -551,7 +552,8 @@ pub fn preset_from_xmp(xmp: &str, fallback_name: &str) -> Option<Preset> {
     let group = first(props, "crs:Group").unwrap_or("Imported Presets").to_string();
     let uuid = first(props, "crs:UUID").map(|u| u.to_ascii_lowercase());
     let id = format!("user.xmp.{}", uuid.unwrap_or_else(|| crate::presets::slug(&format!("{group}-{name}"))));
-    Some(Preset { id, name, group, settings, favorite: false, builtin: false })
+    let unsupported_edits = lightcraft_develop::unsupported_edits::bounded_names(unmapped.iter().map(String::as_str));
+    Some(Preset { id, name, group, settings, unsupported_edits, favorite: false, builtin: false })
 }
 
 #[cfg(test)]
@@ -560,8 +562,38 @@ mod tests {
     use lightcraft_develop::{DevelopSettings, Upright, VignetteStyle, WbMode, apply_partial};
 
     #[test]
+    fn direct_xmp_preset_preserves_structured_masks_and_nested_bw() {
+        const MASK: &str = r#"<crs:GradientBasedCorrections><rdf:Seq><rdf:li><rdf:Description crs:What="Correction" crs:CorrectionAmount="1" crs:CorrectionActive="true" crs:CorrectionName="Own gradient" crs:LocalExposure2012="-0.25"><crs:CorrectionMasks><rdf:Seq><rdf:li crs:What="Mask/Gradient" crs:MaskBlendMode="0" crs:FullX="0.5" crs:FullY="0" crs:ZeroX="0.5" crs:ZeroY="0.6"/></rdf:Seq></crs:CorrectionMasks></rdf:Description></rdf:li></rdf:Seq></crs:GradientBasedCorrections>"#;
+        const BW: &str = r#"<crs:Look><rdf:Description><crs:Parameters><rdf:Description crs:ConvertToGrayscale="True"/></crs:Parameters></rdf:Description></crs:Look>"#;
+        for (attributes, body, has_mask, grayscale) in
+            [(r#"crs:Exposure2012="0.2""#, format!("{MASK}{BW}"), true, true), ("", MASK.to_string(), true, false), ("", BW.to_string(), false, true)]
+        {
+            let xml = format!(
+                r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Name="Own structured probe" crs:UUID="own-structured-probe" {attributes}>{body}</rdf:Description>"#
+            );
+            let imported = crate::preset_import::read_presets("own.xmp", xml.as_bytes(), None).unwrap().remove(0);
+            let direct = preset_from_xmp(&xml, "Own structured probe").expect("mask-only presets also contain usable adjustments");
+            assert_eq!(direct.settings, imported.preset.settings);
+            assert_eq!(direct.unsupported_edits, imported.preset.unsupported_edits);
+            let parsed = crate::presets::parse_preset_file("own.xmp", xml.as_bytes()).unwrap().remove(0);
+            assert_eq!(parsed.settings, direct.settings);
+            let sniffed = crate::preset_import::read_presets("own.probe", xml.as_bytes(), None).unwrap().remove(0);
+            assert_eq!(sniffed.preset.settings, direct.settings);
+            assert_eq!(sniffed.unmapped, direct.unsupported_edits);
+            let settings = direct.apply(&DevelopSettings::default(), 1.0);
+            assert_eq!(settings.masks.len(), usize::from(has_mask));
+            if let Some(mask) = settings.masks.first() {
+                assert_eq!(mask.name, "Own gradient");
+                assert_eq!(mask.adjust.exposure, -1.0);
+            }
+            assert_eq!(settings.treatment, if grayscale { lightcraft_develop::Treatment::Bw } else { lightcraft_develop::Treatment::Color });
+        }
+    }
+
+    #[test]
     fn monochrome_look_carries_only_explicit_grayscale_conversion() {
         for look in [
+            r#"<crs:Look rdf:parseType="Resource" crs:Name="Procedural look"><crs:Parameters rdf:parseType="Resource" crs:ConvertToGrayscale="True" crs:Exposure2012="3" crs:Clarity2012="50" crs:LookTable="procedural-unsupported-table"/></crs:Look>"#,
             r#"<crs:Look><rdf:Description crs:Name="Procedural look"><crs:Parameters><rdf:Description crs:ConvertToGrayscale="True" crs:Exposure2012="3" crs:Clarity2012="50" crs:LookTable="procedural-unsupported-table"/></crs:Parameters></rdf:Description></crs:Look>"#,
             r#"<crs:Look rdf:parseType="Resource"><crs:Name>Procedural look</crs:Name><crs:Parameters rdf:parseType="Resource"><crs:ConvertToGrayscale>True</crs:ConvertToGrayscale><crs:Exposure2012>3</crs:Exposure2012><crs:Clarity2012>50</crs:Clarity2012><crs:LookTable>procedural-unsupported-table</crs:LookTable></crs:Parameters></crs:Look>"#,
         ] {
@@ -1094,5 +1126,58 @@ mod tests {
         assert!(apply_partial(&d, &to_partial(&p, Target::Any), 1.0).optics.lens_profile);
         let on = props(&preset_packet("", "").replace(r#"crs:LensProfileEnable="0""#, r#"crs:LensProfileEnable="1""#));
         assert!(apply_partial(&DevelopSettings::default(), &to_partial(&on, Target::Any), 1.0).optics.lens_profile);
+    }
+    #[test]
+    fn legacy_and_modern_identity_curves_reset_existing_points() {
+        let mut before = DevelopSettings::default();
+        before.curve.master = vec![lightcraft_geom::Point::new(0.0, 0.1), lightcraft_geom::Point::new(1.0, 0.9)];
+        for key in ["crs:ToneCurve", "crs:ToneCurvePV2012"] {
+            let p = Props::from([(key.to_string(), vec!["0, 0".into(), "255, 255".into()])]);
+            let patch = to_partial(&p, Target::RawAbsolute);
+            assert_eq!(patch["curve"]["master"], json!([]));
+            assert!(apply_partial(&before, &patch, 1.0).curve.master.is_empty(), "{key}");
+        }
+        let p = Props::from([
+            ("crs:ToneCurve".into(), vec!["0, 0".into(), "255, 255".into()]),
+            ("crs:ToneCurvePV2012".into(), vec!["0, 10".into(), "255, 240".into()]),
+        ]);
+        let s = apply_partial(&before, &to_partial(&p, Target::RawAbsolute), 1.0);
+        assert_eq!(s.curve.master.len(), 2);
+        assert!((s.curve.master[0].y - 10.0 / 255.0).abs() < 1e-12, "modern curve still wins");
+    }
+
+    #[test]
+    fn malformed_curve_keeps_valid_exposure_and_existing_curve() {
+        let mut before = DevelopSettings::default();
+        before.curve.master = vec![lightcraft_geom::Point::new(0.0, 0.1), lightcraft_geom::Point::new(1.0, 0.9)];
+        for bad in ["NaN, 128", "128, NaN", "inf, 128", "128, -inf"] {
+            let p = Props::from([
+                ("crs:Exposure2012".into(), vec!["2".into()]),
+                ("crs:ToneCurvePV2012".into(), vec!["0, 0".into(), bad.into(), "255, 255".into()]),
+            ]);
+            let (patch, unmapped) = to_partial_report(&p, None, Target::RawAbsolute, 1.5);
+            let s = apply_partial(&before, &patch, 1.0);
+            assert_eq!(s.light.exposure, 2.0, "{bad}");
+            assert_eq!(s.curve.master, before.curve.master, "{bad}");
+            assert!(unmapped.iter().any(|k| k == "ToneCurvePV2012"), "{bad}");
+        }
+    }
+
+    #[test]
+    fn interior_diagonal_curve_knots_survive_crs_import() {
+        for (key, channel) in
+            [("ToneCurvePV2012", "master"), ("ToneCurvePV2012Red", "red"), ("ToneCurvePV2012Green", "green"), ("ToneCurvePV2012Blue", "blue")]
+        {
+            // The upstream importer requires a complete quartet before applying RGB curves.
+            let mut p = Props::from(
+                ["ToneCurvePV2012", "ToneCurvePV2012Red", "ToneCurvePV2012Green", "ToneCurvePV2012Blue"]
+                    .map(|k| (format!("crs:{k}"), vec!["0, 0".into(), "255, 255".into()])),
+            );
+            p.insert(format!("crs:{key}"), vec!["64, 64".into(), "192, 192".into()]);
+            let patch = to_partial(&p, Target::RawAbsolute);
+            assert_eq!(patch["curve"][channel].as_array().unwrap().len(), 2, "{key}");
+            p.insert(format!("crs:{key}"), vec!["0.0, 0".into(), "128, 128".into(), "255, 255.0".into()]);
+            assert_eq!(to_partial(&p, Target::RawAbsolute)["curve"][channel], json!([]), "{key}");
+        }
     }
 }

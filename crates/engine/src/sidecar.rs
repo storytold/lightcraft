@@ -123,6 +123,10 @@ pub struct SidecarData {
     /// Actionable diagnostics for foreign develop settings that were not fully carried over.
     /// These are surfaced in the photo import report and never persisted in the catalog.
     pub warnings: Vec<crate::import::ImportWarning>,
+    /// Names from the selected develop path. None preserves earlier diagnostics; Some(empty) clears.
+    pub unsupported_edits: Option<Vec<String>>,
+    /// Invalid native diagnostic metadata must not clear known limitations.
+    pub unsupported_edits_invalid: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -131,6 +135,27 @@ pub enum DevelopPatch {
     Full(Box<DevelopSettings>),
     /// Mapped `crs:` fields (partial JSON, merged like a preset).
     Partial(Value),
+}
+
+use lightcraft_develop::unsupported_edits::{
+    INVALID_DIAGNOSTICS as INVALID_UNSUPPORTED_DIAGNOSTICS, MAX_JSON_BYTES as MAX_UNSUPPORTED_JSON_BYTES, MAX_NAMES as MAX_UNSUPPORTED_NAMES,
+    name_valid as unsupported_name_valid,
+};
+
+#[cfg(test)]
+use lightcraft_develop::unsupported_edits::MAX_NAME_BYTES as MAX_UNSUPPORTED_NAME_BYTES;
+
+fn native_unsupported_names(text: &str) -> Option<Vec<String>> {
+    if text.len() > MAX_UNSUPPORTED_JSON_BYTES {
+        return None;
+    }
+    let mut fields = serde_json::from_str::<Vec<String>>(text).ok()?;
+    if fields.len() > MAX_UNSUPPORTED_NAMES || fields.iter().any(|name| !unsupported_name_valid(name)) {
+        return None;
+    }
+    fields.sort_unstable();
+    fields.dedup();
+    Some(fields)
 }
 
 /// Parse a sidecar / XMP packet. `target` selects how a `crs:` white balance is read
@@ -182,7 +207,16 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
     }
     let full = d.lc_settings.as_deref().and_then(|j| serde_json::from_str::<Value>(j).ok()).and_then(|v| DevelopSettings::from_json(&v).ok());
     out.develop = match full {
-        Some(s) => Some(DevelopPatch::Full(Box::new(s))),
+        Some(s) => {
+            // Restore our names-only diagnostics with our settings. Foreign CRS can be stale;
+            // do not derive new warnings from it. Older native packets leave known warnings
+            // alone rather than falsely resolving them just because settings were saved.
+            if let Some(text) = lc("unsupportedEdits") {
+                out.unsupported_edits = native_unsupported_names(&text);
+                out.unsupported_edits_invalid = out.unsupported_edits.is_none();
+            }
+            Some(DevelopPatch::Full(Box::new(s)))
+        }
         None if crate::crs::has_adjustments(&d.properties) => {
             let (partial, unmapped) = crate::crs::to_partial_report(&d.properties, Some(&d.values), target, crate::crs_masks::DEFAULT_ASPECT);
             // Lightroom's default profiles are named by nearly every sidecar; our own starting look stands
@@ -242,6 +276,9 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
                     fields: other.into_iter().map(str::to_string).collect(),
                 });
             }
+            let invalid = unmapped.len() > MAX_UNSUPPORTED_NAMES || unmapped.iter().any(|name| !unsupported_name_valid(name));
+            out.unsupported_edits = Some(unmapped.into_iter().filter(|name| unsupported_name_valid(name)).take(MAX_UNSUPPORTED_NAMES).collect());
+            out.unsupported_edits_invalid = invalid;
             Some(DevelopPatch::Partial(partial))
         }
         None => None,
@@ -252,6 +289,15 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
 /// Apply sidecar data to a photo record (the sidecar wins, except that a capture time embedded in
 /// the file is kept). Returns true if develop changed.
 pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
+    if let Some(fields) = &sc.unsupported_edits {
+        p.unsupported_edits = fields.clone();
+    }
+    if sc.unsupported_edits_invalid
+        && p.unsupported_edits.len() < MAX_UNSUPPORTED_NAMES
+        && !p.unsupported_edits.iter().any(|field| field == INVALID_UNSUPPORTED_DIAGNOSTICS)
+    {
+        p.unsupported_edits.push(INVALID_UNSUPPORTED_DIAGNOSTICS.into());
+    }
     if p.captured.is_none() {
         p.captured = sc.captured.clone();
     }
@@ -364,7 +410,8 @@ pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_
         Flag::Pick => "pick",
         Flag::Reject => "reject",
     };
-    let mut lc = vec![("settings", settings.as_str()), ("flag", flag)];
+    let unsupported = serde_json::to_string(&p.unsupported_edits).unwrap_or_default();
+    let mut lc = vec![("settings", settings.as_str()), ("unsupportedEdits", unsupported.as_str()), ("flag", flag)];
     if !remove_location && !p.meta.location.trim().is_empty() {
         lc.push(("location", p.meta.location.as_str()));
     }
@@ -518,7 +565,7 @@ pub fn read_packet(original: &str, kind: MediaKind, naming: SidecarNaming) -> Op
 /// Photo ids touched by an op (for auto-write).
 pub(crate) fn op_photos(op: &Op, out: &mut Vec<PhotoId>) {
     match op {
-        Op::SetRating { id, .. } | Op::SetFlag { id, .. } | Op::SetLabel { id, .. } | Op::SetDevelop { id, .. } | Op::SetMeta { id, .. }
+        Op::SetRating { id, .. } | Op::SetFlag { id, .. } | Op::SetLabel { id, .. } | Op::SetDevelop { id, .. } | Op::SetMeta { id, .. } | Op::SetUnsupportedEdits { id, .. }
             if !out.contains(id) =>
         {
             out.push(*id);
@@ -702,6 +749,9 @@ impl Session {
             Op::SetLabel { id, label: q.label },
             Op::SetMeta { id, meta: Box::new(q.meta.clone()) },
         ];
+        if q.unsupported_edits != p.unsupported_edits {
+            ops.push(Op::SetUnsupportedEdits { id, fields: q.unsupported_edits.clone() });
+        }
         if q.captured != p.captured {
             ops.push(Op::SetCaptured { id, captured: q.captured.clone() });
         }
@@ -929,3 +979,134 @@ mod tests_repair_provenance;
 #[cfg(test)]
 #[path = "sidecar/tests_stem_owners.rs"]
 mod tests_stem_owners;
+
+#[cfg(test)]
+mod unsupported_edit_tests {
+    use super::*;
+
+    #[test]
+    fn shared_sidecar_op_carries_diagnostics_without_a_develop_change_and_undo_restores_them() {
+        let mut s = Session::with_demo();
+        let id = s.active().unwrap();
+        let develop = s.catalog.photo(id).unwrap().develop.clone();
+        let selected = SidecarData { unsupported_edits: Some(vec!["Look".into()]), ..Default::default() };
+        let op = s.sidecar_op(id, selected).unwrap();
+        let Op::Batch { ops } = &op else { panic!("expected a batch") };
+        assert!(ops.iter().any(|op| matches!(op, Op::SetUnsupportedEdits { .. })));
+        assert!(!ops.iter().any(|op| matches!(op, Op::SetDevelop { .. })));
+        let mut touched = Vec::new();
+        op_photos(&Op::SetUnsupportedEdits { id, fields: vec!["Look".into()] }, &mut touched);
+        assert_eq!(touched, [id], "warning-only writes must reach the normal auto-write owner");
+        let undo = s.catalog.apply(op).unwrap();
+        assert_eq!(s.catalog.photo(id).unwrap().unsupported_edits, ["Look"]);
+        assert_eq!(s.catalog.photo(id).unwrap().develop, develop);
+        let metadata = s.sidecar_op(id, SidecarData::default()).unwrap();
+        s.catalog.apply(metadata).unwrap();
+        assert_eq!(s.catalog.photo(id).unwrap().unsupported_edits, ["Look"], "no develop path preserves diagnostics");
+        let clear = s.sidecar_op(id, SidecarData { unsupported_edits: Some(vec![]), ..Default::default() }).unwrap();
+        let undo_clear = s.catalog.apply(clear).unwrap();
+        assert!(s.catalog.photo(id).unwrap().unsupported_edits.is_empty());
+        s.catalog.apply(undo_clear).unwrap();
+        assert_eq!(s.catalog.photo(id).unwrap().unsupported_edits, ["Look"]);
+        s.catalog.apply(undo).unwrap();
+        assert!(s.catalog.photo(id).unwrap().unsupported_edits.is_empty());
+        assert_eq!(s.catalog.photo(id).unwrap().develop, develop);
+    }
+
+    #[test]
+    fn native_sidecar_roundtrip_preserves_diagnostics_and_explicit_empty_clears() {
+        let mut photo = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "test", "PNG", 8, 8, "now");
+        photo.unsupported_edits = vec!["FilterList".into(), "Look".into()];
+        let catalog = lightcraft_catalog::Catalog::new();
+        let packet = sidecar_packet(&photo, &catalog);
+        let sc = parse_sidecar(&packet, crate::crs::Target::Rendered).unwrap();
+        assert_eq!(sc.unsupported_edits, Some(photo.unsupported_edits.clone()));
+        let mut target = photo.clone();
+        target.unsupported_edits = vec!["CameraProfile".into()];
+        merge_into(&mut target, &sc, "later");
+        assert_eq!(target.unsupported_edits, photo.unsupported_edits);
+        photo.unsupported_edits.clear();
+        let empty = parse_sidecar(&sidecar_packet(&photo, &catalog), crate::crs::Target::Rendered).unwrap();
+        merge_into(&mut target, &empty, "later");
+        assert!(target.unsupported_edits.is_empty());
+    }
+
+    #[test]
+    fn selected_import_path_controls_unsupported_diagnostics() {
+        let wrap = |attributes: &str, body: &str| {
+            format!(
+                r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmlns:lc="http://ns.lightcraft.app/lc/1.0/" {attributes}>{body}</rdf:Description>"#
+            )
+        };
+        let selected = parse_sidecar(
+            &wrap(r#"crs:Exposure2012="1" crs:FuturePanelControl="false" crs:FutureEditZero="0""#, ""),
+            crate::crs::Target::RawAbsolute,
+        )
+        .unwrap();
+        assert_eq!(selected.unsupported_edits, Some(vec!["FutureEditZero".into(), "FuturePanelControl".into()]));
+        let applied =
+            parse_sidecar(&wrap(r#"crs:AlreadyApplied="True" crs:CameraProfile="Procedural""#, ""), crate::crs::Target::RawAbsolute).unwrap();
+        assert_eq!(applied.unsupported_edits, None);
+        let native =
+            parse_sidecar(&wrap(r#"crs:CameraProfile="Procedural""#, "<lc:settings>{}</lc:settings>"), crate::crs::Target::RawAbsolute).unwrap();
+        assert_eq!(native.unsupported_edits, None);
+        let native_known = parse_sidecar(
+            &wrap(r#"crs:CameraProfile="Procedural""#, r#"<lc:settings>{}</lc:settings><lc:unsupportedEdits>["FilterList"]</lc:unsupportedEdits>"#),
+            crate::crs::Target::RawAbsolute,
+        )
+        .unwrap();
+        assert_eq!(native_known.unsupported_edits, Some(vec!["FilterList".into()]));
+        let native_cleared =
+            parse_sidecar(&wrap("", "<lc:settings>{}</lc:settings><lc:unsupportedEdits>[]</lc:unsupportedEdits>"), crate::crs::Target::RawAbsolute)
+                .unwrap();
+        assert_eq!(native_cleared.unsupported_edits, Some(Vec::new()));
+        let metadata_only = parse_sidecar(&wrap("", ""), crate::crs::Target::RawAbsolute).unwrap();
+        assert_eq!(metadata_only.unsupported_edits, None);
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_bounds_tests {
+    use super::*;
+
+    #[test]
+    fn maximal_valid_diagnostic_names_round_trip() {
+        let fields: Vec<String> = (0..MAX_UNSUPPORTED_NAMES).map(|i| format!("Field{i:03}{}", "A".repeat(MAX_UNSUPPORTED_NAME_BYTES - 8))).collect();
+        assert!(fields.iter().all(|name| name.len() == MAX_UNSUPPORTED_NAME_BYTES));
+        let text = serde_json::to_string(&fields).unwrap();
+        assert_eq!(text.len(), MAX_UNSUPPORTED_JSON_BYTES);
+        assert_eq!(native_unsupported_names(&text), Some(fields));
+    }
+
+    #[test]
+    fn native_diagnostic_names_are_validated_without_truncating_valid_names() {
+        let long = "A".repeat(256);
+        let values = vec!["FilterList".to_string(), "Mask: AI mask (?)".into(), "Mask: blend mode -7".into(), "未来字段".into(), long.clone()];
+        let parsed = native_unsupported_names(&serde_json::to_string(&values).unwrap()).unwrap();
+        assert!(parsed.contains(&long) && parsed.contains(&"未来字段".to_string()));
+        assert_eq!(parsed.len(), values.len());
+        for fields in
+            [vec![String::new()], vec!["Bad\nName".into()], vec!["{payload:value}".into()], vec!["A".repeat(257)], vec!["Field".into(); 257]]
+        {
+            assert!(native_unsupported_names(&serde_json::to_string(&fields).unwrap()).is_none());
+        }
+        assert!(native_unsupported_names(&" ".repeat(MAX_UNSUPPORTED_JSON_BYTES + 1)).is_none());
+        assert_eq!(native_unsupported_names("[]"), Some(vec![]));
+    }
+
+    #[test]
+    fn invalid_native_diagnostics_preserve_known_warnings_and_warn_on_fresh_import() {
+        let packet = r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:lc="http://ns.lightcraft.app/lc/1.0/"><lc:settings>{}</lc:settings><lc:unsupportedEdits>["{payload:value}"]</lc:unsupportedEdits></rdf:Description>"#;
+        let sc = parse_sidecar(packet, crate::crs::Target::RawAbsolute).unwrap();
+        assert!(sc.unsupported_edits.is_none() && sc.unsupported_edits_invalid);
+        let mut photo = Photo::new(PhotoId(1), Source::File { path: "/procedural.dng".into() }, "procedural.dng", "DNG", 8, 8, "2026-01-01");
+        photo.unsupported_edits = vec!["FilterList".into()];
+        merge_into(&mut photo, &sc, "2026-01-01");
+        assert_eq!(photo.unsupported_edits, ["FilterList", INVALID_UNSUPPORTED_DIAGNOSTICS]);
+        photo.unsupported_edits.clear();
+        merge_into(&mut photo, &sc, "2026-01-01");
+        assert_eq!(photo.unsupported_edits, [INVALID_UNSUPPORTED_DIAGNOSTICS]);
+        merge_into(&mut photo, &sc, "2026-01-01");
+        assert_eq!(photo.unsupported_edits, [INVALID_UNSUPPORTED_DIAGNOSTICS], "the warning is not duplicated");
+    }
+}

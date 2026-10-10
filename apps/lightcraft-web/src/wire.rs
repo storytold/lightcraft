@@ -33,6 +33,8 @@ pub struct WireJob {
     pub origin: Source,
     /// Decode the source at most this long.
     pub max_edge: usize,
+    #[serde(default)]
+    pub native_long: usize,
     pub raw: bool,
     #[serde(default)]
     pub relative_wb: bool,
@@ -77,6 +79,7 @@ impl WireJob {
             level: job.level,
             origin: job.origin.clone(),
             max_edge,
+            native_long: job.info.native_long,
             raw: job.info.raw,
             relative_wb: job.info.relative_wb,
             legacy_relative_wb: job.info.legacy_relative_wb,
@@ -99,6 +102,7 @@ impl WireJob {
 
     pub fn info(&self) -> SourceInfo {
         SourceInfo {
+            native_long: self.native_long,
             raw: self.raw,
             as_shot_temp: self.as_shot_temp,
             as_shot_tint: self.as_shot_tint,
@@ -468,6 +472,7 @@ mod tests {
             level: SourceLevel::Thumb,
             origin,
             max_edge: 512,
+            native_long: 64,
             raw: false,
             relative_wb: false,
             legacy_relative_wb: false,

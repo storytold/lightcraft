@@ -501,7 +501,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 delta += cl * 0.85 * det * (0.35 + 0.65 * mid);
             }
             let tx = tex + l_tex;
-            let sp = l_sharp * 0.6 + sharpen;
+            let sp = l_sharp * 0.6;
             if (tx != 0.0 || sp != 0.0)
                 && let Some(b) = &p.texture_blur
             {
@@ -512,6 +512,13 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                     let m = if sharpen_mask > 0.0 { smooth(sharpen_mask * 0.25, sharpen_mask * 0.25 + 0.15, det.abs()) } else { 1.0 };
                     delta += sp * 1.3 * det.clamp(-0.8, 0.8) * m;
                 }
+            }
+            if sharpen != 0.0
+                && let Some(b) = &p.sharpen_blur
+            {
+                let det = l_pre - b.data[i];
+                let m = if sharpen_mask > 0.0 { smooth(sharpen_mask * 0.25, sharpen_mask * 0.25 + 0.15, det.abs()) } else { 1.0 };
+                delta += sharpen * 1.3 * det.clamp(-0.8, 0.8) * m;
             }
             // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
             if l_noise != 0.0
@@ -800,5 +807,42 @@ mod tests {
         assert!(worst < 2e-5, "{worst}");
         assert_eq!(encode_srgb(lut, -1.0), 0.0);
         assert!((encode_srgb(lut, 2.0) - 1.0).abs() < 1e-6);
+    }
+    #[test]
+    fn interior_diagonal_curve_clamps_ends_continuously() {
+        use lightcraft_geom::Point;
+        let mut c = ToneCurve { master: vec![Point::new(0.25, 0.25), Point::new(0.75, 0.75)], ..Default::default() };
+        let original = curve_luts(&c).unwrap();
+        for lut in &original {
+            assert!((lut.eval(0.0) - 0.25).abs() < 1e-6);
+            assert!((lut.eval(0.5) - 0.5).abs() < 1e-6);
+            assert!((lut.eval(1.0) - 0.75).abs() < 1e-6);
+        }
+        for p in &mut c.master {
+            p.y += 1e-6;
+        }
+        let moved = curve_luts(&c).unwrap();
+        for (a, b) in original.iter().zip(moved.iter()) {
+            for x in [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0] {
+                assert!((a.eval(x) - b.eval(x)).abs() < 2e-6);
+            }
+        }
+    }
+    #[test]
+    fn camera_white_endpoint_does_not_cap_the_upstream_hdr_process() {
+        let curve = crate::tone::CameraTone::new(std::array::from_fn(|i| {
+            let v = 2f32.powf(-12.0 + 12.0 * i as f32 / 31.0);
+            [v, v]
+        }))
+        .unwrap();
+        let info = SourceInfo { raw: true, camera_tone: Some(curve), ..Default::default() };
+        let s = DevelopSettings::default();
+        let sdr = base_tone(&s, &info, 1.0);
+        assert_eq!(sdr.apply(1.0), 1.0);
+        assert!(sdr.saturation_anchor().is_some());
+        let hdr = base_tone(&s, &info, 8.0);
+        assert!(hdr.saturation_anchor().is_none());
+        assert_eq!(hdr.lut(), ToneMap::hdr(0.0, 0.0, 0.0, 8.0).lut());
+        assert!(hdr.apply(16.0) > 1.0);
     }
 }

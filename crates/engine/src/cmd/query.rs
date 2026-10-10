@@ -28,6 +28,7 @@ pub fn photo_summary(p: &Photo) -> Value {
         "copyName": p.copy_name,
         // an undecodable raw variant, shown and edited from its embedded JPEG: why
         "previewOnly": p.preview_only,
+        "unsupportedEdits": p.unsupported_edits,
     })
 }
 
@@ -203,7 +204,7 @@ pub fn specs() -> Vec<CommandSpec> {
             ))
         }),
         cmd!(query "presets.list", "List Presets", [], None, "{}", always, |s, _| {
-            Ok(Value::Array(s.presets.iter().map(|p| json!({"id": p.id, "name": p.name, "group": p.group, "favorite": p.favorite, "builtin": p.builtin})).collect()))
+            Ok(Value::Array(s.presets.iter().map(|p| json!({"id": p.id, "name": p.name, "group": p.group, "favorite": p.favorite, "builtin": p.builtin, "unsupportedEdits": p.unsupported_edits})).collect()))
         }),
         cmd!(query "profiles.list", "List Profiles", [], None, "{} — every profile (built-in, then imported LUTs marked `imported`) with its group and favourite flag", always, |s, _| {
             let favorite = |id: &str| s.profile_favorites.iter().any(|f| f == id);

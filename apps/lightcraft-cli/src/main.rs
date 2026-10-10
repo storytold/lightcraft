@@ -754,6 +754,10 @@ fn render(args: &[String]) -> Result<(), String> {
         eprintln!("lightcraft-cli: wrote {sc}");
     }
     eprintln!("lightcraft-cli: wrote {output} ({}×{})", e.width, e.height);
+    if !e.unsupported_edits.is_empty() {
+        let fields = serde_json::to_string(&e.unsupported_edits).map_err(|e| e.to_string())?;
+        eprintln!("lightcraft-cli: unsupported saved settings: {fields}; rendering may differ from the saved edit");
+    }
     if let Some(photos) = after.run(&[json!({"path": output})], false) {
         if let Some(err) = photos.get("error").and_then(Value::as_str) {
             return Err(format!("render: {output} was written, but {err}"));

@@ -30,6 +30,8 @@ const FIELDS: &[(&str, usize)] = &[
     ("SHARPEN_MASK", 1),
     ("HAS_CLAR", 1),
     ("HAS_TEX", 1),
+    ("HAS_SHARPEN", 1),
+    ("SHARPEN_OFFSET", 1),
     ("HAS_DARK", 1),
     ("HAS_CHROMA", 1),
     ("OPS_IDENTITY", 1),
@@ -75,6 +77,7 @@ const FIELDS: &[(&str, usize)] = &[
     ("OUT_GAMMA", 1),
     // first row of a band dispatch (the kernel runs over rows Y0.., see `render`)
     ("Y0", 1),
+    ("TONE_SATURATION", 3),
 ];
 
 /// `(name, index)` of every field (for the WGSL constants).
@@ -133,6 +136,8 @@ impl Block {
 pub struct Present {
     pub clarity: bool,
     pub texture: bool,
+    /// Global sharpening plane's offset in `tex`, when present.
+    pub sharpen_offset: Option<usize>,
     pub dark: bool,
     /// The blurred chromaticity follows the mask planes in the `masks` buffer.
     pub chroma: bool,
@@ -179,8 +184,13 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.f("SHARPEN_MASK", fp.sharpen_mask);
     p.b("HAS_CLAR", present.clarity);
     p.b("HAS_TEX", present.texture);
+    p.b("HAS_SHARPEN", present.sharpen_offset.is_some());
+    p.u("SHARPEN_OFFSET", present.sharpen_offset.unwrap_or(0) as u32);
     p.b("HAS_DARK", present.dark);
     p.b("HAS_CHROMA", present.chroma);
+    if let Some(anchor) = fp.tone.saturation_anchor() {
+        p.fs("TONE_SATURATION", &anchor);
+    }
 
     let ops = &fp.ops;
     p.b("OPS_IDENTITY", ops.is_identity());

@@ -529,7 +529,8 @@ pub(crate) fn build(props: &Props, values: &crate::crs_masks::Values, name: Stri
         .unwrap_or_else(|| "Imported Presets".into());
     let uuid = props.get("crs:UUID").and_then(|v| v.first()).map(|u| u.to_ascii_lowercase());
     let id = format!("user.xmp.{}", uuid.unwrap_or_else(|| crate::presets::slug(&format!("{group}-{name}"))));
-    Some(Imported { preset: Preset { id, name, group, settings, favorite: false, builtin: false }, unmapped })
+    let unmapped = lightcraft_develop::unsupported_edits::bounded_names(unmapped.iter().map(String::as_str));
+    Some(Imported { preset: Preset { id, name, group, settings, unsupported_edits: unmapped.clone(), favorite: false, builtin: false }, unmapped })
 }
 
 /// Read the presets in file `name` (`bytes`); `group` names the group when the file doesn't
@@ -589,7 +590,7 @@ pub fn read_presets(name: &str, bytes: &[u8], group: Option<String>) -> Result<V
                     {
                         p.group = g.clone();
                     }
-                    Imported { preset: p, unmapped: Vec::new() }
+                    Imported { unmapped: p.unsupported_edits.clone(), preset: p }
                 })
                 .collect()
         }),
@@ -703,6 +704,7 @@ text]], z = ZSTR "loc" }"#,
             vec!["CameraProfile".to_string(), "EnableColorAdjustments".to_string()],
             "profiles and unverified panel switches are reported"
         );
+        assert_eq!(p.unsupported_edits, v[0].unmapped);
         // it parses into real develop settings
         let d = lightcraft_develop::DevelopSettings::default().merged(&p.settings).expect("valid develop settings");
         assert_eq!(d.light.exposure, 0.35);

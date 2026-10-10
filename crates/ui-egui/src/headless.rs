@@ -1893,6 +1893,132 @@ mod tests {
         assert!(deep.is_some_and(|n| n > 500), "scrolled rows: {later:?}");
     }
 
+    fn preset_amount_fixture() -> Headless {
+        let mut h = demo([1400.0, 900.0]);
+        let id = h.app.session.active().unwrap();
+        h.app.session.execute("develop.set", &json!({"control": "light.exposure", "value": 1.0})).unwrap();
+        h.app
+            .session
+            .commit("Existing source warning", lightcraft_catalog::Op::SetUnsupportedEdits { id, fields: vec!["CameraProfile".into()] })
+            .unwrap();
+        let mut preset = lightcraft_develop::Preset::from_settings(
+            "test.amount",
+            "Amount test",
+            "A Amount test",
+            &lightcraft_develop::DevelopSettings::default(),
+            &[],
+        );
+        preset.settings = json!({"light": {"exposure": 3.0}});
+        preset.unsupported_edits = vec!["FilterList".into()];
+        h.app.session.presets.push(preset);
+        let t = Duration::from_secs(10);
+        assert_eq!(h.request("ui.set", json!({"view": "detail"}), t)["ok"], true);
+        assert_eq!(h.request("engine.execute", json!({"command": "panel.presets"}), t)["ok"], true);
+        h.step();
+        h
+    }
+
+    fn click_preset_amount(h: &mut Headless, amount: f64) {
+        let r = h.request("ui.clickWidget", json!({"id": "slider:presetAmount", "fx": amount / 200.0}), Duration::from_secs(10));
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+    }
+
+    fn amount_photo(h: &Headless) -> &lightcraft_catalog::Photo {
+        h.app.session.catalog.photo(h.app.session.active().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn preset_amount_zero_then_half_restores_baseline_and_diagnostics() {
+        for full_undo_history in [false, true] {
+            let mut h = preset_amount_fixture();
+            if full_undo_history {
+                let entry = h.app.session.undo.last().unwrap().clone();
+                h.app.session.undo.resize(1000, entry);
+            }
+            let t = Duration::from_secs(10);
+            assert_eq!(h.request("ui.clickWidget", json!({"id": "preset:test.amount"}), t)["ok"], true);
+            assert_eq!(amount_photo(&h).develop.light.exposure, 3.0);
+            assert_eq!(amount_photo(&h).unsupported_edits, ["CameraProfile", "FilterList"]);
+            click_preset_amount(&mut h, 0.0);
+            assert_eq!(amount_photo(&h).develop.light.exposure, 1.0);
+            assert_eq!(amount_photo(&h).unsupported_edits, ["CameraProfile"]);
+            let baseline_depth = h.app.session.undo.len();
+            click_preset_amount(&mut h, 50.0);
+            assert_eq!(amount_photo(&h).develop.light.exposure, 2.0, "50% must interpolate from pre-preset exposure1");
+            assert_eq!(amount_photo(&h).unsupported_edits, ["CameraProfile", "FilterList"]);
+            assert_eq!(h.app.session.undo.len(), baseline_depth + 1);
+        }
+    }
+
+    #[test]
+    fn preset_amount_identical_apply_never_undoes_previous_edit() {
+        let mut h = preset_amount_fixture();
+        let t = Duration::from_secs(10);
+        h.app.session.execute("preset.apply", &json!({"id": "test.amount"})).unwrap();
+        h.app.session.execute("develop.set", &json!({"control": "light.contrast", "value": 17.0})).unwrap();
+        h.step();
+        let depth = h.app.session.undo.len();
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "preset:test.amount"}), t)["ok"], true);
+        assert_eq!(h.app.session.undo.len(), depth, "identical settings and diagnostics create no preset step");
+        click_preset_amount(&mut h, 0.0);
+        assert_eq!(amount_photo(&h).develop.light.exposure, 3.0);
+        assert_eq!(amount_photo(&h).develop.light.contrast, 17.0);
+        assert_eq!(amount_photo(&h).unsupported_edits, ["CameraProfile", "FilterList"]);
+        assert_eq!(h.app.session.undo.len(), depth);
+        click_preset_amount(&mut h, 50.0);
+        assert_eq!(amount_photo(&h).develop.light.contrast, 17.0);
+        assert_eq!(h.app.session.undo.len(), depth);
+    }
+
+    #[test]
+    fn preset_amount_clears_after_unrelated_edit_or_preset_definition_change() {
+        for changed_preset in [false, true] {
+            let mut h = preset_amount_fixture();
+            let t = Duration::from_secs(10);
+            assert_eq!(h.request("ui.clickWidget", json!({"id": "preset:test.amount"}), t)["ok"], true);
+            if changed_preset {
+                let preset = h.app.session.presets.iter_mut().find(|p| p.id == "test.amount").unwrap();
+                preset.unsupported_edits.push("Look".into());
+            } else {
+                h.app.session.execute("develop.set", &json!({"control": "light.contrast", "value": 17.0})).unwrap();
+            }
+            let before = amount_photo(&h).clone();
+            let depth = h.app.session.undo.len();
+            h.step();
+            let widgets = h.request("ui.widgets", json!({"filter": "slider:presetAmount"}), t);
+            assert!(widgets["result"].as_array().unwrap().is_empty(), "stale Amount control: {widgets}");
+            assert_eq!(h.request("ui.clickWidget", json!({"id": "slider:presetAmount", "fx": 0.25}), t)["ok"], false);
+            assert_eq!(amount_photo(&h), &before);
+            assert_eq!(h.app.session.undo.len(), depth);
+        }
+    }
+
+    #[test]
+    fn preset_amount_clears_after_selection_or_in_memory_library_replacement() {
+        for replace_session in [false, true] {
+            let mut h = preset_amount_fixture();
+            let t = Duration::from_secs(10);
+            assert_eq!(h.request("ui.clickWidget", json!({"id": "preset:test.amount"}), t)["ok"], true);
+            if replace_session {
+                let presets = h.app.session.presets.clone();
+                h.app.session = lightcraft_engine::Session::with_demo();
+                h.app.session.presets = presets;
+            } else {
+                let active = h.app.session.active().unwrap();
+                let next = h.app.session.visible_cloned().into_iter().find(|id| *id != active).unwrap();
+                h.app.session.execute("library.select", &json!({"ids": [next.0], "active": next.0})).unwrap();
+            }
+            let before = amount_photo(&h).clone();
+            let depth = h.app.session.undo.len();
+            h.step();
+            let widgets = h.request("ui.widgets", json!({"filter": "slider:presetAmount"}), t);
+            assert!(widgets["result"].as_array().unwrap().is_empty(), "stale Amount control: {widgets}");
+            assert_eq!(amount_photo(&h), &before);
+            assert_eq!(h.app.session.undo.len(), depth);
+        }
+    }
+
     /// The filter bar drives `library.filter` and saves the view as a smart album.
     #[test]
     fn filter_bar_filters_and_saves_a_smart_album() {
@@ -2630,6 +2756,34 @@ mod tests {
         assert_eq!(h.app.crop_tool_aspect(), Some((p.width * 100, p.height * 100)));
         h.settle(SETTLE);
         assert_eq!(h.app.session.develop_of(photo).unwrap(), before);
+    }
+
+    #[test]
+    fn unsupported_saved_edits_show_in_edit_and_info_only_for_affected_photo() {
+        let mut h = demo([1300.0, 900.0]);
+        let t = Duration::from_secs(10);
+        let vis = h.app.session.visible_cloned();
+        let (affected, other) = (vis[0], vis[1]);
+        h.app
+            .session
+            .catalog
+            .apply(lightcraft_catalog::Op::SetUnsupportedEdits { id: affected, fields: vec!["FilterList".into(), "CameraProfile".into()] })
+            .unwrap();
+        let notices = |h: &mut Headless| {
+            let response = h.request("ui.widgets", json!({"filter": "notice:unsupportedEdits:"}), t);
+            response["result"].as_array().unwrap().iter().filter_map(|item| item["id"].as_str().map(str::to_string)).collect::<Vec<_>>()
+        };
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [affected.0]}}), t);
+        h.request("ui.set", json!({"view": "detail"}), t);
+        h.app.ui.right = crate::state::RightPanel::Edit;
+        h.settle(SETTLE);
+        assert_eq!(notices(&mut h), ["notice:unsupportedEdits:edit"]);
+        h.app.ui.right = crate::state::RightPanel::Info;
+        h.settle(SETTLE);
+        assert_eq!(notices(&mut h), ["notice:unsupportedEdits:info"]);
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [other.0]}}), t);
+        h.settle(SETTLE);
+        assert!(notices(&mut h).is_empty());
     }
 
     /// While cropping: O cycles the guides, ⇧O mirrors them, A locks / unlocks the aspect.

@@ -7,11 +7,20 @@ fn tone_apply(y: f32) -> f32 {
     if (y <= 0.0) {
         return 0.0;
     }
+    let anchor_input = pf(F_TONE_SATURATION);
+    let anchor_position = pf(F_TONE_SATURATION + 1u);
+    let anchor_output = pf(F_TONE_SATURATION + 2u);
+    if (anchor_input > 0.0 && y >= anchor_input) {
+        return anchor_output;
+    }
     let ev = log2(y / GREY);
     let f = clamp((ev - TONE_MIN_EV) / (TONE_MAX_EV - TONE_MIN_EV), 0.0, 1.0) * f32(TONE_N - 1u);
     let i = min(u32(f), TONE_N - 2u);
     let t = f - f32(i);
     let v = aux[i] + (aux[i + 1u] - aux[i]) * t;
+    if (anchor_input > 0.0 && ev >= TONE_MIN_EV && anchor_position > f32(i) && anchor_position <= f32(i + 1u) && f <= anchor_position) {
+        return aux[i] + (anchor_output - aux[i]) * (t / (anchor_position - f32(i)));
+    }
     if (ev < TONE_MIN_EV) {
         return v * (y / (GREY * TONE_MIN_GAIN));
     }
@@ -378,7 +387,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         delta += cl * 0.85 * det * (0.35 + 0.65 * mid);
     }
     let tx = pf(F_TEX) + lt[8];
-    let sp = lt[13] * 0.6 + pf(F_SHARPEN);
+    let sp = lt[13] * 0.6;
     if ((tx != 0.0 || sp != 0.0) && pu(F_HAS_TEX) != 0u) {
         let det = l_pre - tex[i];
         let tame = 1.0 - 0.6 * sstep(0.4, 1.6, abs(det));
@@ -391,6 +400,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             delta += sp * 1.3 * clamp(det, -0.8, 0.8) * mk;
         }
+    }
+    if (pf(F_SHARPEN) != 0.0 && pu(F_HAS_SHARPEN) != 0u) {
+        let det = l_pre - tex[pu(F_SHARPEN_OFFSET) + i];
+        let sm = pf(F_SHARPEN_MASK);
+        var mk = 1.0;
+        if (sm > 0.0) {
+            mk = sstep(sm * 0.25, sm * 0.25 + 0.15, abs(det));
+        }
+        delta += pf(F_SHARPEN) * 1.3 * clamp(det, -0.8, 0.8) * mk;
     }
     // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
     if (l_noise != 0.0 && pu(F_HAS_TEX) != 0u) {

@@ -389,6 +389,52 @@ fn foreign_profile_and_upright_import_diagnostics_are_actionable() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+#[test]
+fn reading_foreign_metadata_does_not_auto_write_the_source_sidecar() {
+    let src = temp_dir("read-no-auto-write");
+    let original = src.join("harbour.png");
+    let sidecar = src.join("harbour.xmp");
+    write_png(&original, 4);
+    let original_bytes = std::fs::read(&original).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [original]})).unwrap();
+    std::fs::write(&sidecar, FOREIGN).unwrap();
+    let modified = std::fs::metadata(&sidecar).unwrap().modified().unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+
+    let r = s.execute("photo.readMetadataFromFile", &json!({})).unwrap();
+    assert_eq!(r["read"].as_array().unwrap().len(), 1, "{r}");
+    let p = s.catalog.photo(only(&s)).unwrap();
+    assert_eq!((p.rating, p.develop.light.exposure), (3, 1.1));
+    assert!(std::fs::read(&sidecar).unwrap() == FOREIGN.as_bytes(), "reading metadata rewrote its source");
+    assert_eq!(std::fs::metadata(&sidecar).unwrap().modified().unwrap(), modified);
+    assert_eq!(std::fs::read(&original).unwrap(), original_bytes);
+    assert!(s.xmp.auto_write, "reading must preserve the user's preference");
+
+    // Suppression belongs to this read only: a later intentional edit still auto-writes.
+    s.execute("photo.rate", &json!({"rating": 5})).unwrap();
+    assert!(std::fs::read_to_string(&sidecar).unwrap().contains("<xmp:Rating>5</xmp:Rating>"));
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn reading_embedded_metadata_does_not_create_a_sidecar_with_auto_write_enabled() {
+    let src = temp_dir("read-embedded-no-auto-write");
+    let original = src.join("embedded.dng");
+    let original_bytes = synthetic_dng(FOREIGN);
+    std::fs::write(&original, &original_bytes).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [original]})).unwrap();
+    s.execute("develop.reset", &json!({})).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    let r = s.execute("photo.readMetadataFromFile", &json!({})).unwrap();
+    assert_eq!(r["read"].as_array().unwrap().len(), 1, "{r}");
+    assert_eq!(s.catalog.photo(only(&s)).unwrap().develop.light.exposure, 1.1);
+    assert_eq!(std::fs::read(&original).unwrap(), original_bytes);
+    assert!(!src.join("embedded.xmp").exists(), "a read created a new sidecar");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 const MWG_REGIONS: &str = r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
@@ -1327,4 +1373,48 @@ fn a_failed_auto_write_waits_and_is_written_on_retry() {
     assert_eq!(s.unsaved_sidecars(), 0);
     std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
     let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn unsupported_saved_edits_persist_report_clear_and_undo() {
+    let src = temp_dir("unsupported-src");
+    let lib = temp_dir("unsupported-lib");
+    let image = src.join("a.png");
+    let sidecar = src.join("a.xmp");
+    write_png(&image, 83);
+    // Original procedural metadata: no vendor profile or filter payload is copied.
+    let packet = r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="1" crs:CameraProfile="Procedural unsupported profile" crs:FutureEditZero="0"><crs:FilterList rdf:parseType="Resource"><crs:ProceduralAmount>50</crs:ProceduralAmount></crs:FilterList></rdf:Description>"#;
+    std::fs::write(&sidecar, packet).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let result = s.execute("library.import", &json!({"paths": [image.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let fields = json!(["CameraProfile", "FilterList", "FutureEditZero"]);
+    assert_eq!(result["unsupportedEdits"][0]["fields"], fields);
+    assert_eq!(result["unsupportedEdits"][0]["id"], id.0);
+    assert_eq!(s.catalog.photo(id).unwrap().develop.light.exposure, 1.0);
+    s.close_library().unwrap();
+    drop(s);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.execute("library.select", &json!({"ids": [id.0], "active": id.0})).unwrap();
+    assert_eq!(s.execute("photo.inspect", &json!({})).unwrap()["unsupported_edits"], fields);
+    assert_eq!(s.execute("catalog.query", &json!({})).unwrap()["photos"][0]["unsupportedEdits"], fields);
+    s.execute("photo.saveMetadataToFile", &json!({})).unwrap();
+    let result = s.execute("photo.readMetadataFromFile", &json!({})).unwrap();
+    assert_eq!(result["read"][0]["unsupportedEdits"], fields, "saving native settings must not erase known limitations");
+    let mut fresh = Session::new().with_fs();
+    let result = fresh.execute("library.import", &json!({"paths": [image.to_string_lossy()]})).unwrap();
+    assert_eq!(result["unsupportedEdits"][0]["fields"], fields, "the names travel with our saved settings");
+    // A replacement applicable packet with only supported fields clears the diagnostics.
+    std::fs::write(&sidecar, r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="1"/>"#).unwrap();
+    let result = s.execute("photo.readMetadataFromFile", &json!({})).unwrap();
+    assert_eq!(result["read"][0]["unsupportedEdits"], json!([]));
+    assert!(s.catalog.photo(id).unwrap().unsupported_edits.is_empty());
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(serde_json::to_value(&s.catalog.photo(id).unwrap().unsupported_edits).unwrap(), fields);
+    assert!(!std::fs::read_to_string(&sidecar).unwrap().contains("FutureEditZero"), "read/undo does not rewrite the input sidecar");
+    s.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(src);
+    let _ = std::fs::remove_dir_all(lib);
 }

@@ -304,6 +304,10 @@ pub struct Photo {
     /// builds may decode the file, older ones may decode less.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub preview_checked: String,
+    /// Grouped names of saved CRS settings the selected import path could not apply.
+    /// Diagnostics only: no profile payloads or adjustment values are stored here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsupported_edits: Vec<String>,
     /// A Local record: the fingerprint of its state when the browse catalogued it, to tell
     /// whether the user changed anything since (see [`crate::local`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -393,6 +397,7 @@ impl Photo {
             analysis: None,
             preview_only: None,
             preview_checked: String::new(),
+            unsupported_edits: Vec::new(),
             local_baseline: None,
         }
     }

@@ -44,6 +44,7 @@ struct Planes {
     base: Option<(local::BaseKey, Arc<Buf>)>,
     clarity: Option<(u32, Arc<Buf>)>,
     texture: Option<(u32, Arc<Buf>)>,
+    sharpen: Option<(u32, Arc<Buf>)>,
     dark: Option<(u32, Arc<Buf>, f32)>,
     chroma: Option<(u32, Arc<Buf>)>,
 }
@@ -105,6 +106,7 @@ impl GpuStages {
             p.base.iter().for_each(|(_, b)| add(b));
             p.clarity.iter().for_each(|(_, b)| add(b));
             p.texture.iter().for_each(|(_, b)| add(b));
+            p.sharpen.iter().for_each(|(_, b)| add(b));
             p.dark.iter().for_each(|(_, b, _)| add(b));
         }
         if let Some((_, b)) = &*self.source.lock().unwrap_or_else(|e| e.into_inner()) {
@@ -675,10 +677,23 @@ pub fn render(
     let present = Present {
         clarity: prep.clarity.is_some(),
         texture: prep.texture.is_some(),
+        sharpen_offset: prep.sharpen.as_ref().map(|_| if prep.texture.is_some() { n } else { 0 }),
         dark: prep.dark.is_some(),
         chroma: masks.is_some() && prep.chroma.is_some(),
     };
     let (p, aux) = finish_block(&fp, &terms, &present);
+    // Keep the existing storage-binding count: global sharpening follows Texture in `tex`.
+    let detail = match (&prep.texture, &prep.sharpen) {
+        (Some(tex), Some(sharp)) => {
+            let packed = gpu.buffer(n * 2);
+            cx.copy_into(tex, &packed, 0);
+            cx.copy_into(sharp, &packed, n);
+            Some(Arc::new(packed))
+        }
+        (Some(tex), None) => Some(tex.clone()),
+        (None, Some(sharp)) => Some(sharp.clone()),
+        (None, None) => None,
+    };
     let aux = gpu.upload(&aux);
     // cleared, so that work which never ran cannot pass for an image (see the check below)
     let out = cx.zeroed(n);
@@ -700,7 +715,7 @@ pub fn render(
                 Some(&prep.log_l),
                 Some(&prep.base),
                 prep.clarity.as_deref(),
-                prep.texture.as_deref(),
+                detail.as_deref(),
                 prep.dark.as_deref(),
                 masks.as_ref(),
                 Some(&aux),
@@ -834,10 +849,10 @@ fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
     }
     if let Some(nr) = col {
         let chroma = cx.gpu.buffer(n * 3);
-        map(cx, "chroma_k", n, &[], [Some(&img), None, None], &chroma);
+        map(cx, "nr_chroma_k", n, &[], [Some(&img), None, None], &chroma);
         let b = gaussian(cx, &chroma, w, h, 3, nr.sigma);
         let out = cx.gpu.buffer(n * 3);
-        map(cx, "nr_col", n, &[nr.t.to_bits()], [Some(&img), Some(&chroma), Some(&b)], &out);
+        map(cx, "nr_col", n, &[nr.t.to_bits()], [Some(&img), None, Some(&b)], &out);
         img = out;
     }
     img
@@ -849,6 +864,7 @@ struct Prep {
     base: Arc<Buf>,
     clarity: Option<Arc<Buf>>,
     texture: Option<Arc<Buf>>,
+    sharpen: Option<Arc<Buf>>,
     dark: Option<Arc<Buf>>,
     /// Blurred chromaticity (local Moiré / Noise).
     chroma: Option<Arc<Buf>>,
@@ -859,7 +875,7 @@ struct Prep {
 fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, planes: &mut Planes) -> Prep {
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
-    let sig = local::plane_sigmas(&plan.settings, plan.px_per_long, req.quality);
+    let sig = local::plane_sigmas(&plan.settings, plan.px_per_long, plan.native_long, req.quality);
     let log_l = match &planes.log_l {
         Some(b) => b.clone(),
         None => {
@@ -879,6 +895,7 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, pla
     };
     let clarity = sig.clarity.map(|sg| plane_at(&mut planes.clarity, sg.to_bits(), || guided_fast(cx, &log_l, w, h, sg, local::CLARITY_EPS)));
     let texture = sig.texture.map(|sg| plane_at(&mut planes.texture, sg.to_bits(), || gaussian(cx, &log_l, w, h, 1, sg)));
+    let sharpen = sig.sharpen.map(|sg| plane_at(&mut planes.sharpen, sg.to_bits(), || sharpen_blur(cx, &log_l, w, h, sg)));
     let (dark, air) = match sig.dark {
         None => (None, 1.0),
         Some(sg) => match &planes.dark {
@@ -906,7 +923,21 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, pla
             gaussian(cx, &ch, w, h, 3, sg)
         })
     });
-    Prep { log_l, base, clarity, texture, dark, chroma, air }
+    Prep { log_l, base, clarity, texture, sharpen, dark, chroma, air }
+}
+
+fn sharpen_blur(cx: &mut Cx<'_>, src: &Buf, w: usize, h: usize, sigma: f32) -> Buf {
+    let Some(weights) = local::sharpen_kernel(sigma) else { return gaussian(cx, src, w, h, 1, sigma) };
+    if weights.len() == 1 {
+        return cx.copy(src);
+    }
+    let mut p = vec![w as u32, h as u32, weights.len().saturating_sub(1) as u32, 0];
+    p.extend(weights.iter().map(|v| v.to_bits()));
+    let temp = cx.gpu.buffer(w * h);
+    let out = cx.gpu.buffer(w * h);
+    cx.run("detail_h", &p, &[Some(src), Some(&temp)], groups2(w, h, [16, 16]));
+    cx.run("detail_v", &p, &[Some(&temp), Some(&out)], groups2(w, h, [16, 16]));
+    out
 }
 
 /// Most brush dabs the mask kernel evaluates per pixel (more: the CPU rasterizes the brush).

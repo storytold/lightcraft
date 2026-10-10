@@ -978,14 +978,28 @@ pub fn specs() -> Vec<CommandSpec> {
             let pid = str_param(p, "id").ok_or_else(|| bad("preset.apply", "missing id"))?;
             let preset = s.presets.iter().find(|x| x.id == pid).cloned().ok_or_else(|| bad("preset.apply", format!("unknown preset `{pid}`")))?;
             let amount = f64_or(p, "amount", 100.0).clamp(0.0, 200.0) / 100.0;
-            // `id` names the preset here: the photos are `ids`, else the selection
-            let ids = s.targets(&json!({"ids": p.get("ids")}))?;
-            let ops = ids
-                .iter()
-                .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
-                .filter_map(|(id, d)| s.develop_op(id, preset.apply(&d, amount), &format!("Preset: {}", preset.name)))
-                .collect::<Vec<_>>();
-            s.commit(&format!("Preset: {}", preset.name), Op::Batch { ops })?;
+            if amount == 0.0 {
+                return ok();
+            }
+            let label = format!("Preset: {}", preset.name);
+            let mut ops = Vec::new();
+            // `id` names the preset here, not the target photo.
+            for id in s.targets(&json!({"ids": p.get("ids")}))? {
+                let Some(d) = s.develop_of(id) else { continue };
+                let next = preset.apply(&d, amount);
+                if next != *d {
+                    ops.extend(s.develop_op(id, next, &label));
+                }
+                if let Some(photo) = s.catalog.photo(id) {
+                    let fields = preset.merged_unsupported_edits(&photo.unsupported_edits);
+                    if fields != photo.unsupported_edits {
+                        ops.push(Op::SetUnsupportedEdits { id, fields });
+                    }
+                }
+            }
+            if !ops.is_empty() {
+                s.commit(&label, Op::Batch { ops })?;
+            }
             ok()
         }),
         cmd!("preset.create", "Create Preset", ["Photo"], None, "{name, group?, groups?: [settingsGroup]}", has_active, |s, p| {

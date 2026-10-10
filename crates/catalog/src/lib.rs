@@ -104,6 +104,11 @@ pub enum Op {
         id: PhotoId,
         meta: Box<Meta>,
     },
+    /// Replace imported-edit diagnostics without changing the saved develop settings.
+    SetUnsupportedEdits {
+        id: PhotoId,
+        fields: Vec<String>,
+    },
     SetDeleted {
         id: PhotoId,
         deleted: bool,
@@ -708,6 +713,10 @@ impl Catalog {
             Op::SetMeta { id, meta } => {
                 let p = self.photo_mut(id)?;
                 Op::SetMeta { id, meta: Box::new(std::mem::replace(&mut p.meta, *meta)) }
+            }
+            Op::SetUnsupportedEdits { id, fields } => {
+                let p = self.photo_mut(id)?;
+                Op::SetUnsupportedEdits { id, fields: std::mem::replace(&mut p.unsupported_edits, fields) }
             }
             Op::SetDeleted { id, deleted } => {
                 let p = self.photo_mut(id)?;

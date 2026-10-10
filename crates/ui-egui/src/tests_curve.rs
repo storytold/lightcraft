@@ -221,3 +221,25 @@ fn curve_points_from_an_agent_are_stored_in_order() {
     let c = pts(&develop(&h).curve.green);
     assert!(c[1].0 < c[2].0, "dragged up to its neighbour, not past it: {c:?}");
 }
+
+#[test]
+fn dragging_an_import_sized_close_curve_knot_does_not_panic_or_cross() {
+    let mut h = curve_open("master");
+    // Separate the three close x coordinates vertically, so hit testing selects the middle.
+    exec(&mut h, "develop.curve", json!({"channel": "master", "points": [[0.0, 0.0], [0.499, 0.25], [0.5, 0.5], [0.501, 0.75], [1.0, 1.0]]}));
+    h.step();
+    let side = curve_side(&mut h);
+    let before = develop(&h).curve.master;
+    let undo_before = h.app.session.undo.len();
+    let r = h.request("ui.dragWidget", json!({"id": "curve", "fx": 0.5, "fy": 0.5, "dx": 0.1 * side, "dy": -0.2 * side, "steps": 12}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let after = develop(&h).curve.master;
+    assert_eq!(after.len(), before.len());
+    assert!(after[2].x > after[1].x && after[2].x < after[3].x);
+    assert!(after[2].y > 0.6, "vertical movement remains functional: {after:?}");
+    for i in [0, 1, 3, 4] {
+        assert_eq!(after[i], before[i], "only the selected knot changes");
+    }
+    assert_eq!(h.app.session.undo.len(), undo_before + 1);
+}

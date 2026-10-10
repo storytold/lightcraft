@@ -369,7 +369,21 @@ impl Default for ToneCurve {
 
 impl ToneCurve {
     pub fn point_curve_is_identity(pts: &[Point]) -> bool {
-        pts.is_empty() || pts.iter().all(|p| (p.x - p.y).abs() < 1e-9)
+        if pts.is_empty() {
+            return true;
+        }
+        // The spline clamps outside its endpoints: an interior diagonal segment is not
+        // identity. Scan all knots because native settings can arrive unsorted.
+        let mut covers_black = false;
+        let mut covers_white = false;
+        for p in pts {
+            if !p.x.is_finite() || !p.y.is_finite() || (p.x - p.y).abs() >= 1e-9 {
+                return false;
+            }
+            covers_black |= p.x <= 0.0;
+            covers_white |= p.x >= 1.0;
+        }
+        covers_black && covers_white
     }
 }
 

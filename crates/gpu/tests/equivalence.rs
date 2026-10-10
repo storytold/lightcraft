@@ -25,6 +25,73 @@ fn gpu() -> bool {
 }
 
 #[test]
+fn color_nr_preserves_black_edges_and_very_dark_colors() {
+    if !gpu() {
+        return;
+    }
+    let src = Arc::new(Rgb32f::from_fn(320, 80, |x, _| match x / 64 {
+        0 => [0.0; 3],
+        1 => [0.18; 3],
+        2 => [0.8, 0.03, 0.01],
+        3 => [0.01, 0.06, 0.9],
+        _ => [4e-7, 1e-7, 0.0],
+    }));
+    let mut s = DevelopSettings::default();
+    s.detail.nr_luminance = 0.0;
+    s.detail.sharpen_amount = 0.0;
+    for amount in [25.0, 100.0] {
+        s.detail.nr_color = amount;
+        check("color NR black edges", &src, &SourceInfo::default(), &s, &RenderRequest::fit(320, 80));
+    }
+}
+
+#[test]
+fn noise_reduction_uses_native_scale_and_crop_on_cached_gpu_path() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(2, 320, 160);
+    let mut s = DevelopSettings::default();
+    s.detail.nr_color = 75.0;
+    s.detail.nr_luminance = 50.0;
+    let cache = StageCache::default();
+    for (native_long, crop, window) in [(320, false, false), (640, false, false), (640, true, false), (640, true, true), (320, false, false)] {
+        s.crop.geometry.rect = if crop { Rect::new(0.25, 0.0, 0.75, 1.0) } else { Rect::new(0.0, 0.0, 1.0, 1.0) };
+        let info = SourceInfo { native_long, ..Default::default() };
+        let mut req = RenderRequest::fit(if crop { 160 } else { 320 }, 160);
+        if window {
+            req.window = Some(lightcraft_pipeline::PixelWindow { x: 16, y: 16, w: 112, h: 112 });
+        }
+        let cpu = render(&src, &info, &s, &req).image;
+        let warm = lightcraft_gpu::render(&src, &info, &s, &req, Some(&cache)).expect("gpu").image;
+        let (mean, max, _) = diff(&cpu, &warm);
+        assert!(mean < MEAN_LSB && max <= MAX_LSB, "NR native={native_long}, crop={crop}, window={window}: mean {mean}, max {max}");
+        let cold = lightcraft_gpu::render(&src, &info, &s, &req, None).expect("gpu").image;
+        assert_eq!(warm.data, cold.data, "stale GPU NR cache");
+    }
+}
+
+#[test]
+fn disabled_develop_sections_use_the_shared_render_plan() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(2, 320, 240);
+    let mut s = DevelopSettings::default();
+    s.light.exposure = 2.0;
+    s.curve.master = vec![Point::new(0.0, 0.15), Point::new(1.0, 0.8)];
+    s.color.saturation = -80.0;
+    s.wb.mode = WbMode::Custom;
+    s.wb.temp = 9000.0;
+    s.detail.nr_color = 100.0;
+    s.detail.sharpen_amount = 120.0;
+    for section in ["light", "color", "detail"] {
+        s.set_section_enabled(section, false);
+        check(section, &src, &SourceInfo::default(), &s, &RenderRequest::fit(320, 240));
+    }
+}
+
+#[test]
 fn camera_tone_and_relative_wb() {
     if !gpu() {
         return;
@@ -48,6 +115,17 @@ fn camera_tone_and_relative_wb() {
     let info = SourceInfo { camera_tone: Some(curve), ..info };
     check("camera chroma curve", &src, &info, &DevelopSettings::default(), &RenderRequest::fit(320, 240));
     check("camera chroma curve edited", &src, &info, &s, &RenderRequest::fit(320, 240));
+
+    // A profile with an exact white endpoint needs the same split LUT cell on both paths.
+    let src = Arc::new(Rgb32f::from_fn(320, 32, |x, _| [0.95 + x as f32 / 3190.0; 3]));
+    let curve = lightcraft_pipeline::tone::CameraTone::new(std::array::from_fn(|i| {
+        let x = 2f32.powf(-12.0 + 12.0 * i as f32 / 31.0);
+        [x, x]
+    }))
+    .unwrap();
+    let info = SourceInfo { raw: true, relative_wb: true, camera_tone: Some(curve), ..Default::default() };
+    check("camera exact white", &src, &info, &DevelopSettings::default(), &RenderRequest::fit(320, 32));
+    check("camera exact white edited", &src, &info, &s, &RenderRequest::fit(320, 32));
 }
 
 fn scene(i: usize, w: usize, h: usize) -> Arc<Rgb32f> {
@@ -225,6 +303,15 @@ fn cases() -> Vec<(&'static str, Edit)> {
         ("sharpen masking", |s| {
             s.detail.sharpen_amount = 90.0;
             s.detail.sharpen_masking = 60.0;
+        }),
+        ("sharpen radius small", |s| {
+            s.detail.sharpen_amount = 90.0;
+            s.detail.sharpen_radius = 0.5;
+        }),
+        ("sharpen radius large with texture", |s| {
+            s.detail.sharpen_amount = 90.0;
+            s.detail.sharpen_radius = 3.0;
+            s.effects.texture = 50.0;
         }),
         ("white balance", |s| {
             s.wb.mode = WbMode::Custom;

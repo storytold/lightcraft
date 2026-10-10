@@ -228,10 +228,12 @@ impl DecodedSource {
     /// with any stored camera tone curve. The original's size comes from `header` either way: the
     /// decoder only sees the level it decoded.
     pub fn info_or(&self, header: SourceInfo) -> SourceInfo {
-        match &self.info {
-            Some(info) => SourceInfo { native_long: info.native_long.or(header.native_long), ..info.clone() },
-            None => SourceInfo { camera_tone: self.camera_tone.or(header.camera_tone), ..header },
+        let native_long = header.native_long;
+        let mut info = self.info.clone().unwrap_or_else(|| SourceInfo { camera_tone: self.camera_tone.or(header.camera_tone), ..header });
+        if info.native_long == 0 {
+            info.native_long = native_long;
         }
+        info
     }
 }
 
@@ -1160,10 +1162,11 @@ pub fn content_key(p: &Photo) -> String {
 }
 
 pub fn source_info(p: &Photo) -> SourceInfo {
+    let base = SourceInfo { native_long: p.width.max(p.height) as usize, ..Default::default() };
     // Procedural demo scenes are scene-referred HDR (like raw files): use the filmic tone map.
     // (They are drawn afresh at every size, so they have no original size.)
     if matches!(p.source, Source::Demo { .. }) {
-        return SourceInfo { raw: true, ..Default::default() };
+        return SourceInfo { raw: true, ..base };
     }
     // the thumbnail and preview levels are smaller copies: noise reduction works in the original's pixels (#960)
     let native_long = Some(p.width.max(p.height) as usize).filter(|&n| n > 0);
@@ -1184,10 +1187,10 @@ fn header_info(p: &Photo) -> SourceInfo {
             relative_wb: relative,
             // (a fitted-look raw edited in Kelvin: its camera's matrices give the scale, see `files::WbScaleOf`)
             legacy_relative_wb: p.fitted_look() && !relative,
-            ..Default::default()
+            ..base
         }
     } else {
-        SourceInfo::default()
+        base
     }
 }
 

@@ -98,6 +98,26 @@ fn v6_preview_only_photo_loads_unstamped_and_is_upgraded() {
 }
 
 #[test]
+fn v2_library_upgrades_before_recording_unsupported_edits() {
+    let (base, log, full) = legacy_parts();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":2,\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
+    m.set(LOG, log.into_bytes());
+    let (mut journal, mut loaded, report) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(loaded.to_snapshot(), full.to_snapshot());
+    assert_eq!(report.upgraded_from, Some(2));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+    let id = loaded.photos().next().unwrap().id;
+    let op = Op::SetUnsupportedEdits { id, fields: vec!["FilterList".into()] };
+    loaded.apply(op.clone()).unwrap();
+    journal.append(&[op]).unwrap();
+    drop(journal);
+    let (_, reopened, report) = Journal::open(Box::new(m)).unwrap();
+    assert_eq!(reopened.to_snapshot(), loaded.to_snapshot());
+    assert_eq!((report.replayed, report.upgraded_from), (1, None));
+}
+
+#[test]
 fn versionless_log_only_library_is_upgraded() {
     let mut c = Catalog::new();
     let op = photo(&mut c);
@@ -236,10 +256,14 @@ fn op_variants_are_versioned() {
             Op::SetFolderRecord { .. } => 6,
             Op::SetAsShotWb { .. } => 7,
             Op::SetHistoryCursor { .. } => 8,
+            Op::SetUnsupportedEdits { .. } => 9,
         }
     }
     /// v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`.
     const NEWEST_FIELDS: u32 = 9;
-    let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
+    let newest = since(&Op::SetUnsupportedEdits { id: PhotoId(1), fields: Vec::new() });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }
+
+#[path = "tests_format_diagnostics.rs"]
+mod diagnostics_lineage;

@@ -198,6 +198,14 @@ pub struct Preset {
     pub group: String,
     /// Partial settings.
     pub settings: Value,
+    /// Names of saved settings that this preset could not carry over (never values/payloads).
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::unsupported_edits::deserialize_names",
+        serialize_with = "crate::unsupported_edits::serialize_names"
+    )]
+    pub unsupported_edits: Vec<String>,
     #[serde(default)]
     pub favorite: bool,
     /// Built-in presets ship with the app and can't be deleted.
@@ -207,11 +215,26 @@ pub struct Preset {
 
 impl Preset {
     pub fn from_settings(id: &str, name: &str, group: &str, s: &DevelopSettings, groups: &[SettingsGroup]) -> Preset {
-        Preset { id: id.into(), name: name.into(), group: group.into(), settings: extract_groups(s, groups), favorite: false, builtin: false }
+        Preset {
+            id: id.into(),
+            name: name.into(),
+            group: group.into(),
+            settings: extract_groups(s, groups),
+            unsupported_edits: Vec::new(),
+            favorite: false,
+            builtin: false,
+        }
+    }
+    /// A preset is a partial edit: unsupported source settings remain relevant after applying it.
+    pub fn merged_unsupported_edits(&self, existing: &[String]) -> Vec<String> {
+        crate::unsupported_edits::bounded_names(existing.iter().chain(&self.unsupported_edits).map(String::as_str))
     }
     /// Apply at `amount` (1.0 = 100 %). Masks in the preset are added to the photo's own (ones it
     /// already has are skipped), their effect scaled by the amount.
     pub fn apply(&self, s: &DevelopSettings, amount: f64) -> DevelopSettings {
+        if amount == 0.0 {
+            return s.clone();
+        }
         let Some(masks) = self.settings.get("masks").and_then(Value::as_array).filter(|m| !m.is_empty()) else {
             return apply_partial(s, &self.settings, amount);
         };

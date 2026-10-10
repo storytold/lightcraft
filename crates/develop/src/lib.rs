@@ -10,6 +10,7 @@ pub mod controls;
 pub mod presets;
 pub mod segmask;
 pub mod settings;
+pub mod unsupported_edits;
 
 pub use controls::{CONTROLS, ControlSpec, Section, Track};
 pub use presets::{Preset, SettingsGroup, apply_partial, extract_groups};
@@ -362,5 +363,18 @@ mod tests {
         assert!(s.enhance.denoise_enabled());
         s.reset_section(Section::Detail);
         assert_eq!(s.enhance.denoise_on, None);
+    }
+
+    #[test]
+    fn point_curve_identity_requires_full_domain_and_finite_knots() {
+        use lightcraft_geom::Point;
+        let points = |p: &[(f64, f64)]| p.iter().map(|&(x, y)| Point::new(x, y)).collect::<Vec<_>>();
+        assert!(ToneCurve::point_curve_is_identity(&[]));
+        assert!(ToneCurve::point_curve_is_identity(&points(&[(1.0, 1.0), (0.25, 0.25), (0.0, 0.0)])));
+        assert!(!ToneCurve::point_curve_is_identity(&points(&[(0.25, 0.25), (0.75, 0.75)])));
+        assert!(!ToneCurve::point_curve_is_identity(&points(&[(0.0, 0.0), (0.75, 0.75)])));
+        assert!(!ToneCurve::point_curve_is_identity(&points(&[(0.25, 0.25), (1.0, 1.0)])));
+        assert!(!ToneCurve::point_curve_is_identity(&points(&[(0.0, 0.0), (0.5, 0.6), (1.0, 1.0)])));
+        assert!(!ToneCurve::point_curve_is_identity(&points(&[(0.0, 0.0), (f64::NAN, f64::NAN), (1.0, 1.0)])));
     }
 }

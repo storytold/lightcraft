@@ -144,7 +144,8 @@ fn normalize(v: &[[f64; 2]]) -> Vec<[f64; 2]> {
         v.iter().filter(|p| p[0].is_finite() && p[1].is_finite()).map(|p| [p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0)]).collect();
     out.sort_by(|a, b| a[0].total_cmp(&b[0]));
     out.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-6);
-    if out.len() < 2 || out.iter().all(|p| (p[0] - p[1]).abs() < 1e-9) {
+    let points: Vec<Point> = out.iter().map(|p| Point::new(p[0], p[1])).collect();
+    if out.len() < 2 || ToneCurve::point_curve_is_identity(&points) {
         out.clear();
     }
     out
