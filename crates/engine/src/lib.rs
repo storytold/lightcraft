@@ -27,7 +27,6 @@ mod faces_index;
 #[cfg(not(target_arch = "wasm32"))]
 mod faces_worker;
 pub mod files;
-pub mod fonts;
 pub mod import;
 mod import_move;
 pub mod library;
@@ -56,7 +55,7 @@ pub use dac_engine_core::{
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
 use dac_catalog::{Catalog, Filter, Op, PhotoId, Sort};
 use dac_develop::DevelopSettings;
-pub use fonts::{CRAFT_FONTS, CraftFont};
+pub use dac_engine_export::{CRAFT_FONTS, CraftFont, fonts};
 pub use media::{RenderJob, SourceLevel};
 use serde_json::Value;
 pub use view::{Browse, FilterChip, LibrarySource, Selection, SelectionState, filter_chips};

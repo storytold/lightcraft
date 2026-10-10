@@ -1,0 +1,26 @@
+[package]
+name = "dac-engine-export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Engine export: options, encoding, watermarks, craft fonts, file-name templates (L4)"
+
+[lints]
+workspace = true
+
+[dependencies]
+dac-brand = { workspace = true }
+dac-engine-core = { workspace = true }
+dac-catalog = { workspace = true }
+dac-codecs = { workspace = true }
+dac-color = { workspace = true }
+dac-meta = { workspace = true }
+dac-pipeline = { workspace = true }
+dac-raster = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+ab_glyph = { workspace = true }
+# Apply the font’s vertical substitutions and origins to Japanese watermarks.
+harfrust = { version = "0.12", default-features = false, features = ["std"] }
+unicode-segmentation = "1.13"

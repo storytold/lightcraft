@@ -1319,7 +1319,6 @@ dependencies = [
 name = "dac-engine"
 version = "0.4.0"
 dependencies = [
- "ab_glyph",
  "dac-brand",
  "dac-catalog",
  "dac-codecs",
@@ -1329,6 +1328,7 @@ dependencies = [
  "dac-develop",
  "dac-engine-core",
  "dac-engine-develop",
+ "dac-engine-export",
  "dac-engine-library",
  "dac-faces",
  "dac-fetch",
@@ -1343,7 +1343,6 @@ dependencies = [
  "dac-scenes",
  "dac-segment",
  "dac-tiff",
- "harfrust",
  "libc",
  "log",
  "miniz_oxide 0.8.9",
@@ -1351,7 +1350,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "unicode-segmentation",
  "web-time",
 ]
 
@@ -1383,6 +1381,26 @@ dependencies = [
  "miniz_oxide 0.8.9",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "dac-engine-export"
+version = "0.4.0"
+dependencies = [
+ "ab_glyph",
+ "dac-brand",
+ "dac-catalog",
+ "dac-codecs",
+ "dac-color",
+ "dac-engine-core",
+ "dac-meta",
+ "dac-pipeline",
+ "dac-raster",
+ "harfrust",
+ "log",
+ "serde",
+ "serde_json",
+ "unicode-segmentation",
 ]
 
 [[package]]
