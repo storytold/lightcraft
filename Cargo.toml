@@ -38,6 +38,9 @@ dac-engine-export = { path = "crates/engine-export" }
 dac-ui-egui = { path = "crates/ui-egui" }
 dac-mcp = { path = "crates/mcp" }
 dac-fetch = { path = "crates/fetch" }
+dac-net = { path = "crates/net" }
+dac-credentials = { path = "crates/credentials" }
+dac-hash = { path = "crates/hash" }
 dac-heif = { path = "crates/heif" }
 dac-segment = { path = "crates/segment" }
 
