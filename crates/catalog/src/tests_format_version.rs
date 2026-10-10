@@ -210,8 +210,9 @@ fn op_variants_are_versioned() {
             Op::SetEmbeddedLens { .. } => 4,
             Op::SetKeyword { .. } => 5,
             Op::SetFolderRecord { .. } => 6,
+            Op::SetAsShotWb { .. } => 7,
         }
     }
-    let newest = since(&Op::SetFolderRecord { folder: "/".into(), record: None });
+    let newest = since(&Op::SetAsShotWb { id: PhotoId(1), wb: None });
     assert_eq!(newest, VERSION, "the newest op's version must be the current format version");
 }

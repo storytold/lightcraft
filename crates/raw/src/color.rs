@@ -134,6 +134,11 @@ pub fn as_shot_white_xy_of(info: &crate::RawInfo) -> Xy {
     as_shot_white(&info.color, info.wb_multipliers)
 }
 
+/// The as-shot white from colour tags and vendor multipliers alone (see [`as_shot_white_xy`]).
+pub fn as_shot_white_of(c: &ColorData, wb_multipliers: Option<[f32; 3]>) -> Xy {
+    as_shot_white(c, wb_multipliers)
+}
+
 fn as_shot_white(c: &ColorData, wb_multipliers: Option<[f32; 3]>) -> Xy {
     if let Some(xy) = c.as_shot_white_xy {
         return xy;

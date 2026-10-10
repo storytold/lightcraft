@@ -131,10 +131,8 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         if raw.orientation.swaps_axes() {
             std::mem::swap(&mut w, &mut h);
         }
-        let (t, tint) = xy_to_temp_tint(lightcraft_raw::color::as_shot_white_xy_of(&raw));
-        // Vendor RGB multipliers do not identify an absolute illuminant without camera calibration.
-        let relative = crate::camera_preview::file_local_look(raw.format) && !lightcraft_raw::color::has_matrix(&raw.color);
-        let as_shot_wb = Some(if relative { (6500.0, 0.0) } else { (t.round(), tint.round()) });
+        let scale = WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
+        let as_shot_wb = Some(scale.as_shot(lightcraft_raw::color::as_shot_white_xy_of(&raw)));
         let embedded_lens = embedded_lens(&raw);
         return Ok(ProbeInfo {
             embedded_lens,
@@ -367,8 +365,9 @@ fn load_bytes_now(
         let info = raw.info();
         let lens = embedded_lens(&info);
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
-        // Without colour matrices of its own, white balance is relative to the as-shot look (`Photo::relative_wb`).
-        let own_matrix = lightcraft_raw::color::has_matrix(&raw.color);
+        // Which scale white balance is edited on, and the as-shot white on it, from the file's own colour tags or
+        // the camera's measured matrices (`Photo::relative_wb` decides the same from the catalog's camera)
+        let scale = WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
         // the source's segmentation mattes (DNG semantic masks), read while the starting colour is fitted
         let ((xy, t, camera_look), mattes) = rayon::join(|| crate::camera_preview::starting_colour(&mut raw, &bytes), || dng_mattes(&bytes, &info));
         drop(bytes);
@@ -435,17 +434,17 @@ fn load_bytes_now(
             eprintln!("[profile] raw source {}×{} (max {max_edge}, ms after decode): {}", img.width, img.height, parts.join(", "));
         }
         let twin = twin.map(|picture| finish(picture).0);
-        let (temp, tint) = xy_to_temp_tint(xy);
-        let relative = crate::camera_preview::file_local_look(raw.format) && !own_matrix;
-        // White balance re-evaluates the file's own colour model (when it has one and no
-        // file-local look matrix sits on top of it)
-        let camera_color = (!t.matrix_is_fallback && camera_look.is_none()).then(|| {
+        // White balance re-evaluates the file's own colour model (when it has one and no file-local look matrix sits
+        // on top of it). A model's measured matrices never do: they only give the Kelvin scale its numbers, and the
+        // picture is adapted from the as-shot white as every fitted look is (so settings from before that scale
+        // existed render exactly as they did, `lightcraft_pipeline::local::legacy_white`).
+        let camera_color = (scale.own_matrix && !t.matrix_is_fallback && camera_look.is_none()).then(|| {
             let tags = lightcraft_raw::ColorData { profile: Default::default(), ..raw.color.clone() };
             Arc::new(lightcraft_pipeline::CameraColor { tags, developed_for: xy })
         });
         let camera_tone = camera_look.as_ref().map(|p| p.tone).or_else(|| raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve));
         let local_tone = local_tone(&raw);
-        let (temp, tint) = if relative { (6500.0, 0.0) } else { (temp.round(), tint.round()) };
+        let (temp, tint) = scale.as_shot(xy);
         return Ok((
             img,
             twin,
@@ -454,7 +453,8 @@ fn load_bytes_now(
                 as_shot_temp: temp,
                 as_shot_tint: tint,
                 lens,
-                relative_wb: relative,
+                relative_wb: scale.relative,
+                legacy_relative_wb: scale.legacy_relative,
                 camera_color,
                 camera_tone,
                 mattes,
@@ -467,6 +467,47 @@ fn load_bytes_now(
     let img = d.to_working();
     let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
     Ok((img.into_oriented(Orientation::from_exif(d.orientation)), None, SourceInfo::default()))
+}
+
+/// Which white-balance scale a raw is edited on, decided from the file alone, the way the catalog decides it from
+/// the photo's format and camera (`lightcraft_catalog::relative_wb_camera`; a test keeps the two in step).
+///
+/// A file with colour matrices of its own (DNG) has an absolute scale from its tags. A file without
+/// (`camera_preview::file_local_look`) has one when its camera's matrices are measured
+/// (`lightcraft_raw::spectral`): they turn its as-shot multipliers into Kelvin and tint, nothing else — the look
+/// stays the file's fit. Any other raw is edited relative to its as-shot look (6500 K / 0 means as shot).
+struct WbScaleOf {
+    own_matrix: bool,
+    relative: bool,
+    /// Kelvin through the camera's measured matrices: edited on the relative scale before those were used.
+    legacy_relative: bool,
+    /// The as-shot white through the measured matrices, when that is where the scale comes from.
+    spectral_white: Option<lightcraft_color::Xy>,
+}
+
+impl WbScaleOf {
+    fn new(
+        format: lightcraft_raw::RawFormat,
+        color: &lightcraft_raw::ColorData,
+        wb_multipliers: Option<[f32; 3]>,
+        meta: &lightcraft_meta::Metadata,
+    ) -> Self {
+        let own_matrix = lightcraft_raw::color::has_matrix(color);
+        let fitted = crate::camera_preview::file_local_look(format) && !own_matrix;
+        let camera = fitted.then(|| meta.model.as_deref().and_then(|model| lightcraft_raw::spectral::find(meta.make.as_deref(), model))).flatten();
+        let spectral_white = camera.and_then(|c| lightcraft_raw::spectral::as_shot_white_through(c, color, wb_multipliers));
+        WbScaleOf { own_matrix, relative: fitted && camera.is_none(), legacy_relative: fitted && camera.is_some(), spectral_white }
+    }
+    /// The as-shot temperature and tint on the file's scale: the relative scale's reference, the white through
+    /// the measured matrices, else `own` (the white the file's own tags give). Whole numbers, as the catalog
+    /// keeps them. A covered camera whose file names no white (no multipliers) falls back to `own`, D65.
+    fn as_shot(&self, own: lightcraft_color::Xy) -> (f64, f64) {
+        if self.relative {
+            return (6500.0, 0.0);
+        }
+        let (t, tint) = xy_to_temp_tint(self.spectral_white.unwrap_or(own));
+        (t.round(), tint.round())
+    }
 }
 
 /// The raw's gain table map with where its developed picture (the default crop, oriented) sits in
@@ -688,6 +729,45 @@ mod tests {
 
     use super::*;
     use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+
+    /// Which white-balance scale a raw gets (issue #730): a file with matrices of its own is absolute from them; a
+    /// fitted-look file is absolute through its camera's measured matrices, which only read the as-shot
+    /// multipliers as Kelvin; any other raw stays relative (6500 / 0 = as shot). The catalog's decision from the
+    /// format and camera string agrees.
+    #[test]
+    fn white_balance_scale_follows_the_files_matrices_then_the_cameras() {
+        use lightcraft_raw::{ColorData, RawFormat};
+        let meta = |make: &str, model: &str| lightcraft_meta::Metadata { make: Some(make.into()), model: Some(model.into()), ..Default::default() };
+        let mul = Some([2.2f32, 1.0, 1.6]);
+        let d65 = lightcraft_color::D65;
+        // a covered camera: Kelvin through the spectral matrices, near the daylight these multipliers describe
+        let a7m3 = WbScaleOf::new(RawFormat::Arw, &ColorData::default(), mul, &meta("SONY", "ILCE-7M3"));
+        assert!(!a7m3.own_matrix && !a7m3.relative && a7m3.legacy_relative && a7m3.spectral_white.is_some());
+        let (t, tint) = a7m3.as_shot(d65);
+        assert!((3500.0..7000.0).contains(&t) && t != 6500.0 && tint.abs() < 30.0 && t.fract() == 0.0 && tint.fract() == 0.0, "{t} {tint}");
+        assert!(!lightcraft_catalog::relative_wb_camera("ARW", "SONY ILCE-7M3"));
+        // the same camera without multipliers: the scale is Kelvin still, the white falls back to the tags' (D65)
+        let bare = WbScaleOf::new(RawFormat::Arw, &ColorData::default(), None, &meta("SONY", "ILCE-7M3"));
+        assert!(bare.legacy_relative && bare.spectral_white.is_none());
+        assert_eq!(bare.as_shot(d65), {
+            let (t, tint) = xy_to_temp_tint(d65);
+            (t.round(), tint.round())
+        });
+        // a camera without measured matrices: relative, whatever the multipliers
+        let a7m2 = WbScaleOf::new(RawFormat::Arw, &ColorData::default(), mul, &meta("SONY", "ILCE-7M2"));
+        assert!(a7m2.relative && !a7m2.legacy_relative && a7m2.spectral_white.is_none());
+        assert_eq!(a7m2.as_shot(d65), (6500.0, 0.0));
+        assert!(lightcraft_catalog::relative_wb_camera("ARW", "SONY ILCE-7M2"));
+        let unknown = WbScaleOf::new(RawFormat::Nef, &ColorData::default(), mul, &lightcraft_meta::Metadata::default());
+        assert!(unknown.relative && unknown.as_shot(d65) == (6500.0, 0.0));
+        // a file with matrices of its own (DNG): absolute from them, no matter whose camera
+        let own = ColorData { illuminant: [21, 0], color_matrix: [Some(lightcraft_color::Mat3::IDENTITY), None], ..Default::default() };
+        let dng = WbScaleOf::new(RawFormat::Dng, &own, mul, &meta("SONY", "ILCE-7M3"));
+        assert!(dng.own_matrix && !dng.relative && !dng.legacy_relative && dng.spectral_white.is_none());
+        let xy = lightcraft_color::cct::temp_tint_to_xy(4200.0, 12.0);
+        assert_eq!(dng.as_shot(xy), (4200.0, 12.0));
+        assert!(!lightcraft_catalog::relative_wb_camera("DNG", "SONY ILCE-7M3"));
+    }
 
     /// Issue #367: probes read headers, not pixels, and report what the decode-based probe did:
     /// oriented dimensions (EXIF orientation 6 swaps them), metadata, the error for a truncated

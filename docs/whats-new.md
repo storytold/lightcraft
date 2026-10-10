@@ -2,6 +2,19 @@
 
 ## October 2026
 
+### Kelvin white balance for raws whose camera has colour matrices
+- Raws from the 52 camera models whose colour matrices LightCraft has measured (Sony ILCE-7M3, ILCE-7M4, ILCE-7RM3,
+  Nikon D850, Canon EOS 5D Mark III and others) now show white balance in Kelvin, as a DNG does and as Lightroom
+  does: As Shot reads the file's white (an ILCE-7M3 sample: 4268 K / +7), the Temp slider runs 2000–50000 K and the
+  Daylight, Cloudy, Shade, Tungsten, Fluorescent and Flash presets set real temperatures (issue #730). The matrices
+  only convert between the camera's multipliers and Kelvin; the colour look is what it was.
+- Nothing already edited changes: a Custom white balance set on the old relative scale renders pixel for pixel as
+  before, and becomes the Kelvin value with the same look the next time it is edited. A photo imported earlier shows
+  its real As Shot temperature once the file is opened (or Reload reads it).
+- Lightroom's `crs:Temperature` for these raws is read as the Kelvin it is (sidecars, Lightroom catalogs, presets);
+  raws of other cameras keep the as-shot shift of issue #510. The two Kelvin scales come from different matrices and
+  differ by about 7–10 % on the ILCE-7M3; which one is off is still open.
+
 ### Activity stack
 - Long-running tasks show in one place, top left under the top bar, as in Lightroom Classic (issue #345): imports and
   folder scans, exports (and the contact sheet PDF), Synchronize Folder, Build / Smart Previews, Lightroom catalog import, Photo Merge, model downloads, the face scan,

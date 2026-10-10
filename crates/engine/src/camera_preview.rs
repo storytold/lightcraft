@@ -1559,7 +1559,31 @@ mod tests {
             assert_eq!(t.matrix_is_fallback, !own && !spectral, "{name}");
             let (_, info) = crate::files::load_bytes(&bytes, 400).unwrap();
             assert_eq!(info.camera_tone.is_some(), fitted.is_some(), "{name}");
-            assert_eq!(info.relative_wb, !own, "{name}");
+            // white balance: relative only without matrices anywhere; a covered camera edits in Kelvin, through the
+            // spectral matrices, whichever look it got (issue #730)
+            assert_eq!(info.relative_wb, !own && !covered, "{name}");
+            assert_eq!(info.legacy_relative_wb, !own && covered, "{name}");
+            if covered && !own {
+                assert!(
+                    (2000.0..=50000.0).contains(&info.as_shot_temp) && info.as_shot_temp != 6500.0 && info.as_shot_tint.abs() < 100.0,
+                    "{name}: {info:?}"
+                );
+            }
+            // the same as the catalog decides from the probe (format and camera)
+            let probe = crate::files::probe_bytes(name, &bytes).unwrap();
+            let mut p = lightcraft_catalog::Photo::new(
+                lightcraft_catalog::PhotoId(1),
+                lightcraft_catalog::Source::File { path: name.into() },
+                name,
+                &probe.format,
+                1,
+                1,
+                "",
+            );
+            p.kind = probe.kind;
+            p.meta = probe.meta.clone();
+            assert_eq!(p.relative_wb(), info.relative_wb, "{name}");
+            assert_eq!(probe.as_shot_wb, Some((info.as_shot_temp, info.as_shot_tint)), "{name}");
         }
     }
 
@@ -1988,15 +2012,24 @@ mod tests {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
             .join("raw");
-        for (name, accepted) in [("raf-fuji-xt2-865.raf", true), ("raf-fuji-gfx100s-4503.raf", true), ("raf-fuji-xt20-compressed.raf", true)] {
+        // (the GFX100S shares the GFX 100's measured sensor, so its white balance is in Kelvin through those
+        // matrices; the X-T2 and X-T20 have none and stay relative)
+        for (name, accepted, kelvin) in
+            [("raf-fuji-xt2-865.raf", true, false), ("raf-fuji-gfx100s-4503.raf", true, true), ("raf-fuji-xt20-compressed.raf", true, false)]
+        {
             let Ok(bytes) = std::fs::read(dir.join(name)) else { continue };
             let header = crate::files::probe_bytes(name, &bytes).unwrap();
-            assert_eq!(header.as_shot_wb, Some((6500.0, 0.0)), "{name}");
             let (_, small) = crate::files::load_bytes(&bytes, 400).unwrap();
             let (_, large) = crate::files::load_bytes(&bytes, 1200).unwrap();
             assert_eq!(small.camera_tone.is_some(), accepted, "{name}");
             assert_eq!(small.camera_tone, large.camera_tone, "{name}: resolution changed the fit");
-            assert!(small.raw && small.relative_wb && small.as_shot_temp == 6500.0 && small.as_shot_tint == 0.0, "{name}");
+            assert_eq!(header.as_shot_wb, Some((small.as_shot_temp, small.as_shot_tint)), "{name}");
+            assert!(small.raw && small.relative_wb != kelvin && small.legacy_relative_wb == kelvin, "{name}: {small:?}");
+            if kelvin {
+                assert!(small.as_shot_temp != 6500.0 && (2000.0..50000.0).contains(&small.as_shot_temp), "{name}: {}", small.as_shot_temp);
+            } else {
+                assert!(small.as_shot_temp == 6500.0 && small.as_shot_tint == 0.0, "{name}");
+            }
         }
     }
 

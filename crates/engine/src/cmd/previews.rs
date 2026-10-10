@@ -126,7 +126,7 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// One photo's smart preview to build or discard: (photo, its file in the smart previews folder,
 /// how to load the original at preview size, whether the photo takes the per-file camera look —
-/// `camera_preview::file_local_look`, [`lightcraft_catalog::Photo::relative_wb`]: only those
+/// `camera_preview::file_local_look`, [`lightcraft_catalog::Photo::fitted_look`]: only those
 /// proxies go stale when the fit changes).
 #[cfg(not(target_arch = "wasm32"))]
 type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, bool);
@@ -272,7 +272,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let path = dir.join(crate::smart::file_name(&ph));
         let source = (!discard).then(|| s.media.source_ref(&ph, crate::media::SourceLevel::Preview));
-        jobs.push((id, path, source, ph.relative_wb()));
+        jobs.push((id, path, source, ph.fitted_look()));
     }
     let custom = s.smart_previews_dir.is_some();
     if background {
@@ -314,7 +314,7 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
         return None;
     }
     let max_edge = crate::media::SourceLevel::Preview.max_edge();
-    let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, lightcraft_catalog::Source::File { .. }) && p.relative_wb()).collect();
+    let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, lightcraft_catalog::Source::File { .. }) && p.fitted_look()).collect();
     let jobs: Vec<SmartJob> =
         photos.iter().map(|p| (p.id, dir.join(crate::smart::file_name(p)), Some(s.media.origin_ref(&p.source, max_edge)), true)).collect();
     std::thread::Builder::new()

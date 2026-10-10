@@ -82,6 +82,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let wb = &mut std::sync::Arc::make_mut(&mut d).wb;
         wb.temp = 6500.0;
         wb.tint = 0.0;
+    } else if raw {
+        // the Kelvin sliders show the white balance in effect: As Shot reads the file's as-shot white (the stored
+        // numbers can predate a decoder update, or the camera's matrices giving the file its Kelvin scale), a
+        // preset its Kelvin value, and a value written on the old relative scale the Kelvin it renders as
+        let info = app.session.source_info(id);
+        let (temp, tint) = lightcraft_engine::pipeline::local::effective_wb(&info, &d);
+        let wb = &mut std::sync::Arc::make_mut(&mut d).wb;
+        wb.temp = temp;
+        wb.tint = tint;
     }
     let preview_only = app.session.catalog.photo(id).and_then(|p| p.preview_only.clone());
 

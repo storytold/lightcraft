@@ -38,11 +38,21 @@ impl DevelopSettings {
         serde_json::from_value(v.clone())
     }
 
-    /// Merge a partial JSON object into these settings (fields not mentioned are kept).
+    /// Merge a partial JSON object into these settings (fields not mentioned are kept). A white balance that
+    /// names no [`WbScale`] keeps the meaning it always had (`Legacy`), whatever scale these settings were on: a
+    /// partial from before the scale existed, or one that never said, must not become Kelvin by landing on
+    /// Kelvin settings.
     pub fn merged(&self, partial: &Value) -> Result<DevelopSettings, serde_json::Error> {
         let mut v = self.to_json();
         presets::deep_merge(&mut v, partial);
-        DevelopSettings::from_json(&v)
+        let mut out = DevelopSettings::from_json(&v)?;
+        if let Some(wb) = partial.get("wb").and_then(Value::as_object)
+            && (wb.contains_key("temp") || wb.contains_key("tint"))
+            && !wb.contains_key("scale")
+        {
+            out.wb.scale = WbScale::Legacy;
+        }
+        Ok(out)
     }
 
     /// Stable 64-bit hash of the settings (FNV-1a over canonical JSON), for preview cache keys.
@@ -165,6 +175,47 @@ mod tests {
         let back = DevelopSettings::from_json(&v).unwrap();
         assert_eq!(back, s);
         assert_ne!(back.hash64(), DevelopSettings::default().hash64());
+    }
+
+    #[test]
+    fn white_balance_scale_reads_absent_as_legacy_and_writes_only_kelvin() {
+        // settings from before the scale existed: no field, `Legacy`, and written back without it
+        let old = json!({"wb": {"mode": "custom", "temp": 5800.0, "tint": 3.0}});
+        let s = DevelopSettings::from_json(&old).unwrap();
+        assert_eq!(s.wb.scale, WbScale::Legacy);
+        assert_eq!(s.to_json()["wb"], old["wb"]);
+        assert_eq!(DevelopSettings::default().wb.scale, WbScale::Legacy);
+        assert!(DevelopSettings::default().to_json()["wb"].get("scale").is_none());
+        // written on the Kelvin scale: said so, and read back
+        let mut k = s.clone();
+        k.wb.scale = WbScale::Kelvin;
+        assert_eq!(k.to_json()["wb"]["scale"], json!("kelvin"));
+        assert_eq!(DevelopSettings::from_json(&k.to_json()).unwrap(), k);
+        assert_ne!(k.hash64(), s.hash64());
+        // an unknown scale from a newer build is an error, not a panic
+        assert!(DevelopSettings::from_json(&json!({"wb": {"scale": "mired"}})).is_err());
+    }
+
+    #[test]
+    fn a_partial_white_balance_without_a_scale_is_legacy() {
+        let mut base = DevelopSettings::default();
+        base.wb.scale = WbScale::Kelvin;
+        // an old preset's white balance lands on Kelvin settings: it keeps its relative meaning
+        let out = apply_partial(&base, &json!({"wb": {"mode": "custom", "temp": 5800.0}}), 1.0);
+        assert_eq!((out.wb.scale, out.wb.temp), (WbScale::Legacy, 5800.0));
+        let out = apply_partial(&base, &json!({"wb": {"tint": 12.0}}), 1.0);
+        assert_eq!(out.wb.scale, WbScale::Legacy);
+        // one that says Kelvin stays Kelvin; a mode alone leaves the scale as it was
+        let out = apply_partial(&base, &json!({"wb": {"mode": "custom", "temp": 5800.0, "scale": "kelvin"}}), 1.0);
+        assert_eq!(out.wb.scale, WbScale::Kelvin);
+        let out = apply_partial(&base, &json!({"wb": {"mode": "cloudy"}}), 1.0);
+        assert_eq!(out.wb.scale, WbScale::Kelvin);
+        let out = apply_partial(&base, &json!({"light": {"exposure": 1.0}}), 1.0);
+        assert_eq!(out.wb.scale, WbScale::Kelvin);
+        // the plain merge (`develop.merge`) follows the same rule
+        assert_eq!(base.merged(&json!({"wb": {"temp": 5800.0}})).unwrap().wb.scale, WbScale::Legacy);
+        assert_eq!(base.merged(&json!({"wb": {"temp": 5800.0, "scale": "kelvin"}})).unwrap().wb.scale, WbScale::Kelvin);
+        assert_eq!(base.merged(&json!({"wb": {"mode": "auto"}})).unwrap().wb.scale, WbScale::Kelvin);
     }
 
     #[test]

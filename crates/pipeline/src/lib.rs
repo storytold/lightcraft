@@ -78,6 +78,10 @@ pub struct SourceInfo {
     pub as_shot_tint: f64,
     /// No measured camera illuminant: WB adjustments are relative to the camera's rendered look.
     pub relative_wb: bool,
+    /// The Kelvin scale comes from matrices measured for the camera model, not from the file: before those were
+    /// used for white balance, this source was edited on the relative scale (6500 K / 0 = as shot), so settings
+    /// without a [`lightcraft_develop::WbScale`] are read that way ([`local::legacy_to_kelvin`]).
+    pub legacy_relative_wb: bool,
     /// The camera's colour model (raw files with a colour matrix); `None`: white balance adapts
     /// the developed pixels (Bradford, linear Rec.2020).
     pub camera_color: Option<Arc<CameraColor>>,
@@ -97,6 +101,7 @@ impl Default for SourceInfo {
             as_shot_tint: 0.0,
             lens: None,
             relative_wb: false,
+            legacy_relative_wb: false,
             camera_color: None,
             camera_tone: None,
             mattes: None,
