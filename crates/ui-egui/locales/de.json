@@ -2361,5 +2361,20 @@
   "Metadata and develop settings": "Metadaten und Entwicklungseinstellungen",
   "Linked": "Verknüpft",
   "Probably Linked": "Wahrscheinlich verknüpft",
-  "Not Linked": "Nicht verknüpft"
+  "Not Linked": "Nicht verknüpft",
+  "Show less": "Weniger anzeigen",
+  "Quit while tasks are running?": "Beenden, während Aufgaben laufen?",
+  "Exporting contact sheet": "Kontaktabzug wird exportiert",
+  "Reading folder": "Ordner wird gelesen",
+  "Scanning folder": "Ordner wird durchsucht",
+  "Building previews": "Vorschauen werden erstellt",
+  "Building smart previews": "Smart-Vorschauen werden erstellt",
+  "Discarding smart previews": "Smart-Vorschauen werden verworfen",
+  "Importing Lightroom catalog": "Lightroom-Katalog wird importiert",
+  "Reading Lightroom catalog": "Lightroom-Katalog wird gelesen",
+  "Merging": "Zusammenfügen",
+  "Downloading model": "Modell wird heruntergeladen",
+  "Finding faces": "Gesichter werden gesucht",
+  "Synchronizing folder": "Ordner wird synchronisiert",
+  "Looking for changes": "Änderungen werden gesucht"
 }

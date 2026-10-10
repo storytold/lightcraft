@@ -1346,7 +1346,7 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
                 }
             };
             app.ui.last_find_missing = None;
-            if let Err(e) = crate::tasks::spawn(app, LABEL, work, done) {
+            if let Err(e) = crate::tasks::spawn(app, LABEL, Some("findMissing"), work, done) {
                 return Some(Err(e));
             }
             if p.get("wait").and_then(Value::as_bool).unwrap_or(false) {

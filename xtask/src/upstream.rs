@@ -250,7 +250,7 @@ pub fn merge(root: &Path, args: &[&str]) -> Result<(), String> {
     // the merge itself; a conflict is a non-zero exit, which is expected here
     let merged = Command::new("git")
         .current_dir(root)
-        .args(["merge", "--no-ff", "--no-commit", &reference])
+        .args(["-c", "merge.conflictStyle=zdiff3", "merge", "--no-ff", "--no-commit", &reference])
         .status()
         .map_err(|e| format!("git merge: {e}"))?;
     if !merged.success() && !git_ok(root, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]) {
@@ -275,6 +275,8 @@ pub fn merge(root: &Path, args: &[&str]) -> Result<(), String> {
     }
     println!("owned paths: kept ours for {} file(s), dropped {} file(s) upstream added", restored.len(), removed.len());
 
+    auto_resolve(root)?;
+
     let report = review_report(root, &manifest, &base, &reference)?;
     let dir = root.join("target/upstream");
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -298,6 +300,79 @@ pub fn merge(root: &Path, args: &[&str]) -> Result<(), String> {
     }
     println!("next: git commit (the merge), then commit name/brand fixes separately; review {}", report_path.display());
     Ok(())
+}
+
+/// Settles the conflict hunks that are not real conflicts once upstream's crate names are mapped to ours: ours equal
+/// to the (renamed) base takes theirs, theirs equal to the base or to ours keeps ours. A file left without markers
+/// is staged.
+fn auto_resolve(root: &Path) -> Result<(), String> {
+    let names = crate::rename::packages()?;
+    let current = crate::rename::detect_prefix(&names).ok_or("cannot detect the current crate prefix")?;
+    let suffixes: Vec<String> = names.iter().filter_map(|n| n.strip_prefix(&format!("{current}-")).map(str::to_string)).collect();
+    let map = |t: &str| crate::rename::rewrite_upstream(t, &current, &suffixes);
+    let (mut hunks, mut files) = (0, 0);
+    for path in conflicted(root)? {
+        let full = root.join(&path);
+        let Ok(text) = std::fs::read_to_string(&full) else { continue };
+        let (out, resolved, left) = resolve_hunks(&text, &map);
+        if resolved == 0 {
+            continue;
+        }
+        hunks += resolved;
+        std::fs::write(&full, out).map_err(|e| format!("{}: {e}", full.display()))?;
+        if left == 0 {
+            git(root, &["add", "--", &path])?;
+            files += 1;
+        }
+    }
+    println!("auto-resolved {hunks} conflict hunk(s) that differed only by crate names; {files} file(s) fully resolved");
+    Ok(())
+}
+
+/// Resolves the trivial zdiff3 hunks in `text`; returns the new text, the hunks resolved and the hunks left.
+pub fn resolve_hunks(text: &str, map: &dyn Fn(&str) -> String) -> (String, usize, usize) {
+    let mut out = String::with_capacity(text.len());
+    let (mut resolved, mut left) = (0, 0);
+    let mut rest = text;
+    while let Some(start) = find_marker(rest, "<<<<<<<") {
+        let hunk = rest.get(start..).unwrap_or_default();
+        let parts = (|| {
+            let ours_at = hunk.find('\n')? + 1;
+            let base_m = find_marker(hunk, "|||||||")?;
+            let base_at = base_m + hunk.get(base_m..)?.find('\n')? + 1;
+            let sep = find_marker(hunk, "=======")?;
+            let theirs_at = sep + hunk.get(sep..)?.find('\n')? + 1;
+            let end_m = find_marker(hunk, ">>>>>>>")?;
+            let end = hunk.get(end_m..)?.find('\n').map_or(hunk.len(), |n| end_m + n + 1);
+            if !(ours_at <= base_m && base_m < base_at && base_at <= sep && sep < theirs_at && theirs_at <= end_m) {
+                return None;
+            }
+            Some((hunk.get(ours_at..base_m)?, hunk.get(base_at..sep)?, hunk.get(theirs_at..end_m)?, end))
+        })();
+        let Some((ours, base, theirs, end)) = parts else { break };
+        out.push_str(rest.get(..start).unwrap_or_default());
+        if ours == base || ours == map(base) {
+            out.push_str(theirs);
+            resolved += 1;
+        } else if theirs == base || ours == theirs || ours == map(theirs) {
+            out.push_str(ours);
+            resolved += 1;
+        } else {
+            out.push_str(hunk.get(..end).unwrap_or_default());
+            left += 1;
+        }
+        rest = hunk.get(end..).unwrap_or_default();
+    }
+    out.push_str(rest);
+    (out, resolved, left)
+}
+
+/// Byte offset of the first line that starts with `marker`.
+fn find_marker(text: &str, marker: &str) -> Option<usize> {
+    if text.starts_with(marker) {
+        return Some(0);
+    }
+    text.find(&format!("\n{marker}")).map(|i| i + 1)
 }
 
 pub struct Report {
@@ -556,6 +631,15 @@ mod tests {
         assert!(r.text.contains("`0123456789` Fix catalog"));
         assert!(r.text.contains("`crates/catalog/src/a.rs` +3 -1"));
         assert!(!r.text.contains("raw/x.rs"));
+    }
+
+    #[test]
+    fn resolves_rename_only_hunks() {
+        let map = |t: &str| t.replace("up_", "dac_");
+        let text = "a\n<<<<<<< HEAD\nuse dac_x;\n||||||| base\nuse up_x;\n=======\nuse up_x::y;\n>>>>>>> upstream/main\nb\n<<<<<<< HEAD\nours\n||||||| base\nbase\n=======\ntheirs\n>>>>>>> upstream/main\nc\n<<<<<<< HEAD\nmine\n||||||| base\nold\n=======\nold\n>>>>>>> upstream/main\n";
+        let (out, resolved, left) = resolve_hunks(text, &map);
+        assert_eq!((resolved, left), (2, 1));
+        assert_eq!(out, "a\nuse up_x::y;\nb\n<<<<<<< HEAD\nours\n||||||| base\nbase\n=======\ntheirs\n>>>>>>> upstream/main\nc\nmine\n");
     }
 
     #[test]

@@ -259,7 +259,7 @@ impl Segmenter {
 
     /// Start downloading the model (on a background thread; see `segment.model.download`).
     /// `Ok(false)` when it is installed or downloading already.
-    pub fn start_download(&self) -> Result<bool, String> {
+    pub fn start_download(&self, activity: &crate::activity::Activity) -> Result<bool, String> {
         if !Self::AVAILABLE {
             return Err("AI masks are not available in this build".into());
         }
@@ -273,11 +273,11 @@ impl Segmenter {
             if mirrors.is_empty() {
                 return Err(dac_segment::fetch::no_mirrors_message());
             }
-            self.download.start(dac_segment::fetch::SAM3_FILES, mirrors, dir, dac_segment::fetch::options())
+            self.download.start(dac_segment::fetch::SAM3_FILES, mirrors, dir, dac_segment::fetch::options(), activity, "SAM 3")
         }
         #[cfg(not(feature = "sam"))]
         {
-            let _ = dir;
+            let _ = (dir, activity);
             Ok(false)
         }
     }
