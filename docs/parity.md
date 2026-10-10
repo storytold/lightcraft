@@ -42,15 +42,16 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | S. Export (EXP) | 15 | 2 | 1 | 0 | 7/7 (100%) | 7/7 (100%) |
 | T. Share (SHARE) | 0 | 0 | 0 | 4 | — | — |
 | U. Map & location (MAP) | 0 | 1 | 1 | 0 | — | 0/1 (0%) |
-| V. Preferences (PREF) | 7 | 1 | 2 | 2 | 1/1 (100%) | 5/5 (100%) |
+| V. Preferences (PREF) | 6 | 2 | 2 | 2 | 1/1 (100%) | 4/5 (80%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 18 | 6 | 1 | 1 | 8/8 (100%) | 6/9 (67%) |
 | Y. Menus | 82 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
-| Lightroom Classic extras | 32 | 11 | 39 | 9 | — | 22/24 (92%) |
-| **Total** | 393 | 39 | 84 | 36 | 192/200 (96%) | 142/152 (93%) |
+| Lightroom Classic extras | 56 | 16 | 51 | 0 | — | 33/37 (89%) |
+| IMM. Immich integration | 4 | 0 | 6 | 0 | — | 4/6 (67%) |
+| **Total** | 424 | 50 | 95 | 27 | 192/200 (96%) | 157/173 (91%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.9%** of 516 in-scope rows — P0 98.0% of 200 · P1 95.7% of 152 · P2 42.9% of 163.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **78.9%** of 569 in-scope rows — P0 98.0% of 200 · P1 93.9% of 173 · P2 45.9% of 195.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -834,7 +835,7 @@ PLAN.md §2 carry the status of that survey ("unverified" where it said so) unti
 | LRC-IMP-PRESETS | Import presets (saved dialog settings) | P2 | 🟡 |  | unverified |
 | LRC-LIB-KEYWORDLIST | Keyword list: synonyms, export flags, import / export keyword lists | P2 | ✅ | `cmd:keyword.create`, `cmd:keyword.edit`, `cmd:keyword.info`, `cmd:keyword.import`, `cmd:keyword.export`, `cmd:keyword.purgeUnused`, `crates/catalog/src/keywords.rs`, `crates/ui-egui/src/panels/keyword_list.rs` | The Keyword List of LRC-LIB-KEYWORDS (the upstream implementation; our P1.4 panel was replaced by it in the U.4 merge): created keywords with count 0, a filter box, a tri-state tick box per row for the selection, synonyms, Include on Export / Export Containing Keywords / Export Synonyms and Person in Create / Edit Keyword Tag, keyword list files in and out, purge unused. Missing: synonyms are not searched by the grid's text search; no All / People / Other filter; the row menu doesn't set the keyword shortcut |
 | LRC-LIB-PROCESSVERSION | Find previous process version, update DNG previews | P2 | ⬜ |  |  |
-| LRC-LIB-LAYERS | Open as layers in an external editor (layered round trip) | P2 | ⬜ |  | external editor works (LR-EXP-PSD); layered round trip missing |
+| LRC-LIB-LAYERS | Open as layers in an external editor (layered round trip) | P2 | ✅ | `cmd:photo.openAsLayers`, `cmd:photo.editIn`, `cmd:editIn.savePreset`, `crates/engine/src/cmd/edit_in.rs` | layered 16-bit PSD (dac-psd, PhotoCraft's writer) from the selection, stacked; Edit In presets (app, args, TIFF/PSD, colour space, bit depth, copy-with-adjustments / copy / original, naming, stack) and PhotoCraft's control channel; no preset editor dialog yet (commands only) |
 | LRC-DEV-HISTOGRAM-DRAG | Drag on the histogram to adjust tone regions | P2 | ⬜ |  |  |
 | LRC-MAP-PINS | Map pins, clusters and hover previews | P2 | ⬜ |  | Phase 3 |
 | LRC-BOOK-SAVED | Saved books | P2 | ⬜ |  | special collection type, Phase 3 |
@@ -843,7 +844,7 @@ PLAN.md §2 carry the status of that survey ("unverified" where it said so) unti
 | LRC-WEB-SAVED | Saved web galleries | P2 | ⬜ |  | special collection type, Phase 3 |
 | LRC-EXP-EMAIL | Email photos | P2 | ⬜ |  | low priority |
 | LRC-EXP-POSTPROCESS | Post-processing after export (open in app, export actions) | P2 | 🟡 |  | unverified |
-| LRC-AUTO-ACTIONS | Recordable actions / batch scripts | P2 | ⬜ |  | beyond Lightroom; PLAN.md §2.15 |
+| LRC-AUTO-ACTIONS | Recordable actions / batch scripts | P2 | 🟡 | `cmd:actions.record`, `cmd:actions.stop`, `cmd:actions.play`, `cmd:actions.save`, `crates/engine/src/cmd/actions.rs` | record from the journal, parameters (`{{name}}`), per-photo replay on a selection, `app-cli run-action`, MCP via run_command; no Actions panel and stored shortcuts are not bound in the desktop app yet |
 | LRC-VID-FRAME | Capture video frame as a still | P2 | ⬜ |  | see LRC-DEV-VIDEO and R. Video |
 | KEYC-PANELS | Classic panel keys (Tab, ⇧Tab, T, F5–F8, solo) | P2 | ✅ | `cmd:panel.sides`, `cmd:panel.all`, `cmd:panel.toolbar`, `cmd:panel.top`, `cmd:panel.bottom`, `cmd:panel.left`, `cmd:panel.right`, `cmd:panel.solo` | P1.3 Classic set: Tab sides, ⇧Tab all, T toolbar, F5 module bar, F6 filmstrip, F7 left, F8 right; Tab outside a text field no longer moves focus. Solo is a command/menu item (no Classic key) |
 | KEYC-MODULES | Classic module switching (⌘⌥1–7) | P1 | ✅ | `cmd:module.library`, `cmd:module.develop`, `cmd:module.previous` | P1.3: ⌘⌥1–7 (Ctrl+Alt elsewhere), ⌘⌥↑ previous module, D Develop |

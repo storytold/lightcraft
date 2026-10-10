@@ -682,7 +682,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             ..cmd!(
                 "photo.editIn",
                 "Edit In…",
-                [],
+                ["Photo", "Edit In"],
                 None,
                 "{id?, preset?: name (default \"External Editor\"), mode?, format?, colorSpace?, bitDepth?, app?, args?, naming?, stack?, dir?, launch?: false} — Edit In with Lightroom's options: copyWithAdjustments renders the photo with its edits (TIFF, or a layered PSD), copy copies the original file, original edits the file itself (copy/original: JPEG, TIFF, PNG, PSD, WebP only). A new file is added to the library, stacked on the original and selected; launch opens it in the preset's application (or over PhotoCraft's control channel) → {path, id, original, mode, openWith: {path, app, args, reload}, opened}",
                 has_active,
@@ -692,7 +692,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
         cmd!(
             "photo.openAsLayers",
             "Open as Layers in PhotoCraft…",
-            [],
+            ["Photo", "Edit In"],
             None,
             "{ids?, preset?: \"PhotoCraft\", colorSpace?, name?, dir?, stack?: true, launch?: false} — one layered 16-bit PSD from the selected photos (2–64), each rendered with its edits as a layer named after it (the first selected on top), added to the library and stacked on the active photo → {path, id, layers, openWith, opened}",
             has_selection,

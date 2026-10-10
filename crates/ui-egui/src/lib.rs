@@ -15,6 +15,7 @@ pub mod catalog_ui;
 pub mod control;
 pub mod credits;
 pub mod date_picker;
+mod edit_in;
 pub mod export_task;
 pub mod headless;
 pub mod i18n;
@@ -456,6 +457,9 @@ impl DacApp {
             return r;
         }
         let r = self.session.execute(id, &params).map_err(|e| e.to_string());
+        if let Ok(v) = &r {
+            edit_in::after_command(self, id, v);
+        }
         if r.is_ok() && id == "mask.adjust" {
             // Judge local adjustments on the photo, without the selection overlay obscuring them.
             // Keep it hidden after release; O / the overlay eye can show it again.
