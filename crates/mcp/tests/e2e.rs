@@ -213,14 +213,12 @@ fn export_progress_and_cancel() {
     let mut request = call(4, "command_run", json!({"id":"app.export","params":{"ids":ids,"dir":out,"longEdge":1200,"format":"png"}}));
     request["params"]["_meta"] = json!({"progressToken":44});
     writeln!(send, "{request}").unwrap();
-    loop {
-        let value = next();
-        assert_ne!(value["id"], 4, "must be cancellable before completion: {value}");
-        assert_eq!(value["params"]["progressToken"], 44, "{value}");
-        if value["params"]["progress"].as_f64().unwrap() > 0.0 {
-            break;
-        }
-    }
+    // Cancel at the first notification: photo 0 is still written (progress is reported before
+    // each photo), and on many cores the next notification can already be the final one.
+    let value = next();
+    assert_ne!(value["id"], 4, "must be cancellable before completion: {value}");
+    assert_eq!(value["params"]["progressToken"], 44, "{value}");
+    assert_eq!(value["params"]["progress"], 0, "{value}");
     writeln!(send, "{}", json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":4}})).unwrap();
     writeln!(send, "{}", call(5, "doc_inspect", json!({}))).unwrap();
     loop {
