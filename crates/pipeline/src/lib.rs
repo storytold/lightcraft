@@ -338,8 +338,8 @@ fn hash_of(parts: impl std::hash::Hash) -> u64 {
     BuildHasherDefault::<DefaultHasher>::default().hash_one(parts)
 }
 
-/// What a render resolves to before any pixel work: the effective settings (profile and Upright
-/// applied), the geometric frame, the output size and the stage-cache keys. Shared by the CPU
+/// What a render resolves to before any pixel work: the effective settings (profile, section toggles
+/// and Upright applied), the geometric frame, the output size and the stage-cache keys. Shared by the CPU
 /// renderer and the GPU renderer (`lightcraft-gpu`), so both key their caches identically.
 pub struct Plan<'a> {
     pub settings: Cow<'a, DevelopSettings>,
@@ -371,7 +371,12 @@ const AIRLIGHT_PROXY_EDGE: usize = 384;
 
 /// Resolve `s` against `src` for `req` (see [`Plan`]).
 pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &RenderRequest) -> Plan<'a> {
-    let mut settings: Cow<'a, DevelopSettings> = match profiles::effective(s) {
+    // Bypass user edits before the independent profile look, in the plan shared by both renderers.
+    let settings: Cow<'a, DevelopSettings> = match s.effective() {
+        Cow::Borrowed(b) => profiles::effective(b),
+        Cow::Owned(o) => Cow::Owned(profiles::effective(&o).into_owned()),
+    };
+    let mut settings: Cow<'a, DevelopSettings> = match settings {
         Cow::Borrowed(b) => upright::resolve(src, info, b),
         Cow::Owned(o) => Cow::Owned(upright::resolve(src, info, &o).into_owned()),
     };
@@ -395,7 +400,9 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let (frame, w, h) = match req.window {
         Some(win) => {
             let win = win.clamped(full_w, full_h);
-            if s.section_enabled("effects") && (s.effects.dehaze != 0.0 || s.masks.iter().any(|m| m.adjust.dehaze != 0.0)) {
+            // Global Effects are already bypassed in effective settings; masks remain independent.
+            // Match the masks that masks::evaluate actually renders.
+            if s.effects.dehaze != 0.0 || s.masks.iter().any(|m| m.visible && !m.components.is_empty() && m.adjust.dehaze != 0.0) {
                 let k = (AIRLIGHT_PROXY_EDGE as f64 / full_w.max(full_h) as f64).min(1.0);
                 let (pw, ph) = (((full_w as f64 * k).round() as usize).max(1), ((full_h as f64 * k).round() as usize).max(1));
                 fixed_air = Some(local::frame_airlight(src, info, s, &frame, pw, ph));
@@ -465,9 +472,6 @@ enum Src<'a> {
 }
 
 fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: Option<&StageCache>) -> Rendered {
-    // sections switched off with their eye render as if at their defaults (issue #316)
-    let effective = s.effective();
-    let s: &DevelopSettings = &effective;
     // `Instant::now()` panics on wasm32-unknown-unknown: only read the clock when profiling.
     let lap = |what: &str, t: &mut Option<std::time::Instant>| {
         if let Some(t) = t {
@@ -555,7 +559,7 @@ pub fn color_range_sample(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, 
     if cx < 0 || cy < 0 || cx >= plan.w as i64 || cy >= plan.h as i64 {
         return None;
     }
-    let gain = (s.light.exposure as f32).exp2();
+    let gain = (plan.settings.light.exposure as f32).exp2();
     let mut acc = [0f64; 3];
     let mut n = 0.0;
     for y in (cy - 1).max(0)..=(cy + 1).min(plan.h as i64 - 1) {
@@ -623,3 +627,6 @@ mod tests_geometry;
 mod tests_local;
 #[cfg(test)]
 mod tests_window;
+
+#[cfg(test)]
+mod tests_sections;

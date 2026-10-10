@@ -2594,6 +2594,8 @@ mod tests {
         if let Some(crate::state::Dialog::Import { opts }) = &mut h.app.ui.dialog {
             opts.rename = "Trip-_x".into();
         }
+        // Paint the edited template before locating the Tags button in the resized dialog.
+        assert!(h.settle(SETTLE), "Copy dialog layout should settle before locating Tags");
         // the cursor sits after "Trip-"
         let id = egui::Id::new("import-rename");
         let mut st = egui::text_edit::TextEditState::default();

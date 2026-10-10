@@ -1302,7 +1302,11 @@ pub struct Exported {
 
 /// Output size of photo `p` under `o` (its cropped full size when `o.resize` is `None`).
 pub fn output_size(p: &lightcraft_catalog::Photo, o: &ExportOptions) -> (usize, usize) {
-    let (w, h) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
+    // Use the same raw/preview-only lens metadata policy as the render job.
+    let info = crate::media::source_info(p);
+    let (w, h) =
+        lightcraft_pipeline::geometry::Frame::with_lens(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop, true, info.lens.as_ref())
+            .native_size();
     match &o.resize {
         Some(r) => r.apply(w, h),
         None => ((w.round() as usize).max(1), (h.round() as usize).max(1)),
@@ -1593,6 +1597,94 @@ mod tests {
             *p = [(x * 2) as u8, (y * 3) as u8, ((x * y) % 255) as u8, 255];
         }
         img
+    }
+
+    #[test]
+    fn native_export_sizing_bypasses_disabled_geometry_constraint() {
+        use lightcraft_catalog::{Photo, PhotoId, Source};
+        use lightcraft_pipeline::{OutputDepth, RenderRequest, SourceInfo};
+        use lightcraft_raster::Rgb32f;
+
+        let src = Rgb32f::from_fn(100, 100, |x, y| [0.05 + x as f32 * 0.003, 0.05 + y as f32 * 0.003, 0.15]);
+        let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "fixture.jpg", "jpeg", 100, 100, "2026-10-08T00:00:00");
+        let d = std::sync::Arc::make_mut(&mut p.develop);
+        d.optics.distortion = -100.0;
+        d.geometry.constrain_crop = true;
+        let full = ExportOptions { resize: None, ..Default::default() };
+        let constrained = output_size(&p, &full);
+        assert!(constrained.0 < 100 && constrained.1 < 100, "the native fixture requires crop constraint");
+        std::sync::Arc::make_mut(&mut p.develop).set_section_enabled("geometry", false);
+        let saved = p.develop.clone();
+        for (resize, expected) in [
+            (None, (100, 100)),
+            (Some(Resize { mode: ResizeMode::Percent, value: 50.0, ..Default::default() }), (50, 50)),
+            (Some(Resize::long_edge(200)), (100, 100)),
+        ] {
+            let size = output_size(&p, &ExportOptions { resize, ..full.clone() });
+            assert_eq!(size, expected, "export sizing must use the effective crop before applying resize");
+            let req = RenderRequest { depth: OutputDepth::U16, ..RenderRequest::fit(size.0, size.1) };
+            let plan = lightcraft_pipeline::plan(&src, &SourceInfo::default(), &p.develop, &req);
+            assert_eq!(plan.frame.native_size(), (100.0, 100.0));
+            assert!(plan.frame.warp.is_some(), "the independent optics correction is active");
+            let rendered = lightcraft_pipeline::render(&src, &SourceInfo::default(), &p.develop, &req);
+            assert_eq!((rendered.image.width, rendered.image.height), expected);
+            let deep = rendered.deep.unwrap();
+            assert_eq!((deep.width, deep.height), expected);
+        }
+        assert_eq!(p.develop, saved, "export planning must preserve the stored Geometry settings");
+        std::sync::Arc::make_mut(&mut p.develop).set_section_enabled("geometry", true);
+        assert_eq!(output_size(&p, &full), constrained, "re-enabling restores the native crop constraint");
+    }
+
+    #[test]
+    fn native_export_sizing_uses_embedded_lens_and_geometry_toggle() {
+        use lightcraft_catalog::{MediaKind, Photo, PhotoId, Source};
+        use lightcraft_develop::{EmbeddedLens, EmbeddedWarp};
+        use lightcraft_geom::Point;
+        use lightcraft_pipeline::{OutputDepth, RenderRequest};
+        use lightcraft_raster::Rgb32f;
+
+        let src = Rgb32f::from_fn(100, 100, |x, y| [0.05 + x as f32 * 0.003, 0.05 + y as f32 * 0.003, 0.15]);
+        // Only synthetic pixels and raw metadata are used; no camera file is decoded.
+        let mut p = Photo::new(PhotoId(1), Source::File { path: "fixture.dng".into() }, "fixture.dng", "dng", 100, 100, "2026-10-08T00:00:00");
+        p.kind = MediaKind::Raw;
+        p.embedded_lens = Some(EmbeddedLens {
+            warp: Some(EmbeddedWarp { planes: [[1.0, 0.2, 0.0, 0.0, 0.0, 0.0]; 3], center: Point::new(0.5, 0.5), radius: 1.0 }),
+            ..Default::default()
+        });
+        let d = std::sync::Arc::make_mut(&mut p.develop);
+        d.optics.lens_profile = true;
+        d.geometry.constrain_crop = true;
+        let original = p.develop.clone();
+        let full = ExportOptions { resize: None, ..Default::default() };
+        let capped = ExportOptions { resize: Some(Resize { value: 200.0, dont_enlarge: true, ..Default::default() }), ..full.clone() };
+        for enabled in [true, false, true] {
+            std::sync::Arc::make_mut(&mut p.develop).set_section_enabled("geometry", enabled);
+            let saved = p.develop.clone();
+            // The warp maps the full crop's corner to (105, 105). Its safe square has
+            // side 100*t, where t + 0.1*t^3 = 1, approximately 92.17 pixels.
+            let expected = if enabled { (92, 92) } else { (100, 100) };
+            assert_eq!(output_size(&p, &full), expected, "full-size export follows the embedded-lens crop");
+            let size = output_size(&p, &capped);
+            assert_eq!(size, expected, "Don't Enlarge caps against the corrected native crop");
+            let info = crate::media::source_info(&p);
+            assert!(info.raw && info.lens.is_some(), "the fixture must exercise the raw lens metadata path");
+            let req = RenderRequest { depth: OutputDepth::U16, ..RenderRequest::fit(size.0, size.1) };
+            let plan = lightcraft_pipeline::plan(&src, &info, &p.develop, &req);
+            let native = plan.frame.native_size();
+            assert_eq!((native.0.round() as usize, native.1.round() as usize), expected, "export sizing agrees with the render frame");
+            assert!(plan.frame.warp.as_ref().is_some_and(|w| w.lens.is_some()), "Geometry bypass keeps the independent embedded lens correction");
+            let rendered = lightcraft_pipeline::render(&src, &info, &p.develop, &req);
+            assert_eq!((rendered.image.width, rendered.image.height), expected);
+            let deep = rendered.deep.unwrap();
+            assert_eq!((deep.width, deep.height), expected);
+            assert_eq!(p.develop, saved, "sizing and rendering preserve stored settings");
+        }
+        assert_eq!(p.develop, original, "re-enabling Geometry restores the stored settings");
+        p.preview_only = Some("synthetic embedded preview".into());
+        assert!(crate::media::source_info(&p).lens.is_none());
+        assert_eq!(output_size(&p, &full), (100, 100), "a rendered preview must not be corrected twice");
+        assert_eq!(output_size(&p, &capped), (100, 100));
     }
 
     #[test]

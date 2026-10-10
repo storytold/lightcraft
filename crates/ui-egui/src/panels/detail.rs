@@ -306,6 +306,13 @@ fn draw_window(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx, v: &Window
     p.image(tex.tex.id(), dst, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
 }
 
+/// Frame the photo using the same lens metadata policy as its render job.
+/// A preview-only raw is already corrected in its embedded JPEG.
+pub(crate) fn photo_frame(photo: &lightcraft_catalog::Photo, apply_crop: bool) -> Frame {
+    let info = lightcraft_engine::media::source_info(photo);
+    Frame::with_lens(photo.width.max(1) as usize, photo.height.max(1) as usize, &photo.develop, apply_crop, info.lens.as_ref())
+}
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.max_rect();
@@ -326,7 +333,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // the full-screen preview shows the photo only: no tool overlays
     let right = if fullscreen { RightPanel::None } else { app.ui.right };
     let crop_tool = right == RightPanel::Crop;
-    let frame = Frame::with_lens(photo.width.max(1) as usize, photo.height.max(1) as usize, &d, !crop_tool, photo.embedded_lens.as_ref());
+    let frame = photo_frame(&photo, !crop_tool);
     let aspect = frame.aspect() as f32;
     let ppp = ui.ctx().pixels_per_point();
     let area = canvas.shrink(if fullscreen {
@@ -443,7 +450,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             for (n, nid) in [next, prev].into_iter().enumerate() {
                 let Some(nid) = nid else { continue };
                 let Some(np) = app.session.catalog.photo(nid).cloned() else { continue };
-                let nf = Frame::with_lens(np.width.max(1) as usize, np.height.max(1) as usize, &np.develop, !crop_tool, np.embedded_lens.as_ref());
+                let nf = photo_frame(&np, !crop_tool);
                 let na = nf.aspect() as f32;
                 let nr = fit_rect(main_area, na, app.ui.zoom, output_px(&nf), ppp, app.ui.pan);
                 let nw =
@@ -1982,9 +1989,55 @@ fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog:
 
 #[cfg(test)]
 mod preview_geometry_tests {
-    use super::{fit_rect, fit_texture_rect};
+    use super::{fit_rect, fit_texture_rect, photo_frame};
     use crate::state::Zoom;
     use egui::{Rect, pos2, vec2};
+
+    #[test]
+    fn photo_frames_follow_render_lens_policy_and_geometry_bypass() {
+        use lightcraft_catalog::{MediaKind, Photo, PhotoId, Source};
+        use lightcraft_develop::{EmbeddedLens, EmbeddedWarp};
+        use lightcraft_geom::Point;
+        use lightcraft_pipeline::{RenderRequest, plan};
+        use lightcraft_raster::Rgb32f;
+        use std::sync::Arc;
+
+        let src = Rgb32f::filled(100, 100, [0.1; 3]);
+        let req = RenderRequest::fit(100, 100);
+        let mut photo = Photo::new(PhotoId(1), Source::File { path: "synthetic.dng".into() }, "synthetic.dng", "DNG", 100, 100, "2026-10-08");
+        photo.kind = MediaKind::Raw;
+        photo.embedded_lens = Some(EmbeddedLens {
+            warp: Some(EmbeddedWarp { planes: [[1.0, 0.2, 0.0, 0.0, 0.0, 0.0]; 3], center: Point::new(0.5, 0.5), radius: 1.0 }),
+            ..Default::default()
+        });
+        let d = Arc::make_mut(&mut photo.develop);
+        d.optics.lens_profile = true;
+        d.geometry.constrain_crop = true;
+        let frame = photo_frame(&photo, true);
+        assert!(frame.native_size().0 < 100.0, "raw lens distortion must constrain this fixture");
+        assert!(frame.warp.as_ref().is_some_and(|w| w.lens.is_some()));
+        assert_eq!(frame.native_size(), plan(&src, &lightcraft_engine::media::source_info(&photo), &photo.develop, &req).frame.native_size());
+
+        Arc::make_mut(&mut photo.develop).set_section_enabled("geometry", false);
+        assert_eq!(photo_frame(&photo, true).native_size(), (100.0, 100.0));
+        assert!(photo_frame(&photo, true).warp.as_ref().is_some_and(|w| w.lens.is_some()), "Geometry bypass retains independent lens correction");
+        Arc::make_mut(&mut photo.develop).set_section_enabled("geometry", true);
+        for preview_only in [true, false, true] {
+            photo.preview_only = preview_only.then(|| "synthetic embedded preview".into());
+            let info = lightcraft_engine::media::source_info(&photo);
+            let saved = photo.develop.clone();
+            for apply_crop in [false, true] {
+                let frame = photo_frame(&photo, apply_crop);
+                let plan = plan(&src, &info, &photo.develop, &RenderRequest { apply_crop, ..req });
+                assert_eq!(frame.native_size(), plan.frame.native_size());
+                assert_eq!(frame.warp.as_ref().and_then(|w| w.lens).is_some(), !preview_only);
+                if preview_only {
+                    assert_eq!(frame.native_size(), (100.0, 100.0), "preview-only JPEGs must not be lens-corrected twice");
+                }
+            }
+            assert_eq!(photo.develop, saved);
+        }
+    }
 
     #[test]
     fn portrait_preview_keeps_its_ratio_inside_a_landscape_frame() {
