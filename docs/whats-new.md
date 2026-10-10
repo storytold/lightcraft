@@ -282,6 +282,11 @@
 )
 
 ### Reliability
+- Closing a library releases its lock explicitly (issue #680). On Linux and macOS the lock used to go with the file
+  handle, and a program being started by another thread at that moment held a copy of the handle until it was fully
+  launched, so reopening the library straight away could be refused with "This library is already open in another
+  LightCraft program" although nothing had it open. Nothing in the shipped app is known to hit the window today; it
+  made a lock test flaky, and the fix closes the window for good.
 - The Windows installer asks where to install LightCraft (Program Files by default; upgrades keep the folder you
   chose) and ends on a page saying it was installed, with a "Launch LightCraft" box. It used to finish without a word,
   so a successful install looked like nothing had happened (issues #18, #399). Silent installs (`/qn`, `/passive`)
