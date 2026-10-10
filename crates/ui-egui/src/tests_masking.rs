@@ -621,7 +621,7 @@ fn keyword_painter_toggles_on_click() {
     click(&mut h);
     assert!(!has(&h), "a second click takes it away");
     h.request("ui.key", json!({"key": "escape"}), T);
-    assert!(h.app.ui.keyword_painter.is_none());
+    assert!(h.app.ui.lib.painter.is_none());
     h.settle(SETTLE);
 }
 

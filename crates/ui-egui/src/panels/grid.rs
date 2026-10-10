@@ -170,6 +170,8 @@ fn show_inner(app: &mut DacApp, ui: &mut egui::Ui) {
         }
     }
     super::chips::show(app, ui, &chips);
+    crate::libtools::end_stroke(app, ui);
+    crate::libtools::painter_bar(app, ui);
     if app.ui.filter_bar {
         super::filterbar::show(app, ui);
     }
@@ -634,16 +636,8 @@ fn cell(app: &mut DacApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool,
         p.rect_filled(img_rect, 0.0, Color32::from_black_alpha(110));
     }
     // interaction
-    if let Some(k) = app.ui.keyword_painter.clone() {
-        // painting: a click toggles the keyword on this photo
-        if resp.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-        }
-        if resp.clicked() {
-            let has = photo.meta.keywords.iter().any(|x| x.eq_ignore_ascii_case(&k));
-            let key = if has { "removeKeywords" } else { "addKeywords" };
-            let _ = app.run("photo.setMeta", json!({"ids": [id.0], key: [k]}));
-        }
+    // painting: a click or a drag sprays the painter's value instead of selecting
+    if crate::libtools::paint_cell(app, ui, &resp, id) {
         return;
     }
     if resp.clicked() {
