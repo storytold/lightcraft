@@ -2613,6 +2613,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
+name = "jixel"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "278a75e12caacec34be774d62ad05e45fc0b6a52d1f4e9f7fbc0209ecdf794f3"
+
+[[package]]
 name = "jni"
 version = "0.22.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3031,6 +3037,7 @@ dependencies = [
  "bytemuck",
  "image",
  "image-webp",
+ "jixel",
  "jpeg-decoder",
  "jpeg-encoder",
  "jxl-oxide",
@@ -3110,6 +3117,7 @@ version = "0.5.0"
 dependencies = [
  "ab_glyph",
  "harfrust",
+ "jxl-oxide",
  "libc",
  "lightcraft-catalog",
  "lightcraft-codecs",

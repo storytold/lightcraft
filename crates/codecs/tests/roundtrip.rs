@@ -635,3 +635,137 @@ fn print_resolution_is_written() {
     let j = encode_jpeg(&img, 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
     assert_eq!(&j[13..18], &[0, 0, 1, 0, 1]);
 }
+
+/// Largest per-channel difference between two linear images.
+fn max_diff(a: &lightcraft_raster::Rgb32f, b: &lightcraft_raster::Rgb32f) -> f32 {
+    a.data.iter().zip(&b.data).flat_map(|(p, q)| (0..3).map(move |c| (p[c] - q[c]).abs())).fold(0.0, f32::max)
+}
+
+#[test]
+#[cfg(feature = "jxl")]
+fn jxl_lossless_exact_with_metadata() {
+    let img = gradient(97, 61);
+    let icc = write_named(NamedSpace::Srgb);
+    let exif = minimal_exif(1);
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF/></x:xmpmeta>"#;
+    let meta = EncodeMeta { icc: Some(&icc), exif: Some(&exif), xmp: Some(xmp), ..Default::default() };
+    let o = JxlOptions { lossless: true, ..Default::default() };
+    let b = encode_jxl(&EncodeImage::rgba8(&img), &o, &meta).unwrap();
+    assert_eq!(sniff(&b), Some(Format::Jxl));
+    let d = decode(&b, DecodeOptions::default()).unwrap();
+    assert_eq!((d.width, d.height), (97, 61));
+    assert!(!d.has_alpha, "opaque alpha is dropped");
+    assert_eq!(d.icc.as_deref(), Some(&icc[..]));
+    assert_eq!(d.exif.as_deref(), Some(&exif[..]));
+    assert_eq!(d.xmp.as_deref(), Some(xmp));
+    assert_eq!(d.to_srgb8().data, img.data, "lossless round trip is exact");
+
+    // 16-bit lossless keeps every code value
+    let px: Vec<u16> = (0..40 * 30 * 3).map(|i| (i as u32 * 2741 % 65536) as u16).collect();
+    let b = encode_jxl(&EncodeImage::new(40, 30, 3, Samples::U16(&px)), &o, &meta).unwrap();
+    let d = decode(&b, DecodeOptions::default()).unwrap();
+    assert_eq!(d.bit_depth, 16);
+    let png = encode_png(&EncodeImage::new(40, 30, 3, Samples::U16(&px)), &meta).unwrap();
+    let want = decode(&png, DecodeOptions::default()).unwrap();
+    assert!(max_diff(&d.image, &want.image) < 1e-5, "16-bit lossless differs by {}", max_diff(&d.image, &want.image));
+}
+
+#[test]
+#[cfg(feature = "jxl")]
+fn jxl_lossy_quality_and_effort() {
+    let img = smooth(160, 120);
+    let opaque = Rgba8 { data: img.data.iter().map(|p| [p[0], p[1], p[2], 255]).collect(), ..img.clone() };
+    let enc = |o: JxlOptions| encode_jxl(&EncodeImage::rgba8(&opaque), &o, &EncodeMeta::default()).unwrap();
+    let hi = enc(JxlOptions { quality: 95, ..Default::default() });
+    let lo = enc(JxlOptions { quality: 40, ..Default::default() });
+    assert!(lo.len() < hi.len(), "q40 {} ≥ q95 {}", lo.len(), hi.len());
+    for (q, b) in [(95, &hi), (40, &lo)] {
+        let d = decode(b, DecodeOptions::default()).unwrap();
+        let p = psnr8(&opaque, &d.to_srgb8());
+        assert!(p > if q == 95 { 38.0 } else { 28.0 }, "q{q} psnr {p}");
+    }
+    for effort in [JxlEffort::Fast, JxlEffort::Normal] {
+        for progressive in [false, true] {
+            let b = enc(JxlOptions { effort, progressive, ..Default::default() });
+            let p = psnr8(&opaque, &decode(&b, DecodeOptions::default()).unwrap().to_srgb8());
+            assert!(p > 34.0, "{effort:?} progressive={progressive} psnr {p}");
+        }
+    }
+}
+
+#[test]
+#[cfg(feature = "jxl")]
+fn jxl_lossy_wide_gamut_matches_lossless_icc() {
+    // the same display-encoded samples, lossy with the enum encoding and lossless with the ICC
+    // profile, decode to the same colours in the working space
+    let img = smooth(96, 64);
+    let opaque = Rgba8 { data: img.data.iter().map(|p| [p[0], p[1], p[2], 255]).collect(), ..img.clone() };
+    for (colour, named) in [(JxlColour::DisplayP3, NamedSpace::DisplayP3), (JxlColour::Rec2020, NamedSpace::Rec2020)] {
+        let icc = write_named(named);
+        let meta = EncodeMeta { icc: Some(&icc), ..Default::default() };
+        let e = EncodeImage::rgba8(&opaque);
+        let lossy = encode_jxl(&e, &JxlOptions { quality: 98, colour, ..Default::default() }, &meta).unwrap();
+        let exact = encode_jxl(&e, &JxlOptions { lossless: true, colour, ..Default::default() }, &meta).unwrap();
+        let a = decode(&lossy, DecodeOptions::default()).unwrap();
+        assert!(a.icc.is_none(), "lossy files carry the enum encoding");
+        let b = decode(&exact, DecodeOptions::default()).unwrap();
+        let d = max_diff(&a.to_working(), &b.to_working());
+        assert!(d < 0.03, "{colour:?}: lossy differs from lossless by {d}");
+    }
+}
+
+#[test]
+#[cfg(feature = "jxl")]
+fn jxl_alpha_and_gray() {
+    let mut img = gradient(32, 24);
+    img.data[5][3] = 0;
+    let b = encode_jxl(&EncodeImage::rgba8(&img), &JxlOptions { lossless: true, ..Default::default() }, &EncodeMeta::default()).unwrap();
+    let d = decode(&b, DecodeOptions::default()).unwrap();
+    assert!(d.has_alpha);
+    assert_eq!(d.alpha.as_ref().map(|a| a.data[5]), Some(0.0));
+    let g: Vec<u8> = (0..32 * 24).map(|i| (i % 256) as u8).collect();
+    let b = encode_jxl(&EncodeImage::new(32, 24, 1, Samples::U8(&g)), &JxlOptions { lossless: true, ..Default::default() }, &EncodeMeta::default())
+        .unwrap();
+    let d = decode(&b, DecodeOptions::default()).unwrap();
+    assert_eq!(d.to_srgb8().data.iter().map(|p| p[0]).collect::<Vec<_>>(), g);
+}
+
+#[test]
+#[cfg(feature = "jxl")]
+fn jxl_hdr_pq() {
+    // linear Rec. 2020, SDR white = 1.0: the left half at SDR white, the right half four times brighter
+    let (w, h) = (64usize, 32usize);
+    let px: Vec<f32> = (0..w * h).flat_map(|i| [if i % w < w / 2 { 1.0 } else { 4.0 }; 3]).collect();
+    for lossless in [false, true] {
+        let o = JxlOptions { lossless, quality: 95, colour: JxlColour::Rec2020Pq, ..Default::default() };
+        let b = encode_jxl(&EncodeImage::new(w as u32, h as u32, 3, Samples::F32(&px)), &o, &EncodeMeta::default()).unwrap();
+        // the file's own samples: PQ code values for 203 and 812 cd/m²
+        let img = jxl_oxide::JxlImage::builder().read(std::io::Cursor::new(&b)).unwrap();
+        let m = &img.image_header().metadata;
+        assert_eq!(m.tone_mapping.intensity_target, 10_000.0);
+        assert!(format!("{:?}", m.colour_encoding).contains("Pq"), "{:?}", m.colour_encoding);
+        let r = img.render_frame(0).unwrap();
+        let fb = r.image_all_channels();
+        let at = |x: usize| fb.buf()[((h / 2) * w + x) * fb.channels() + 1];
+        for (x, nits) in [(w / 4, HDR_REFERENCE_WHITE_NITS), (w * 3 / 4, 4.0 * HDR_REFERENCE_WHITE_NITS)] {
+            let (got, want) = (at(x), lightcraft_codecs::encode::pq_encode(nits));
+            assert!((got - want).abs() < 0.005, "lossless={lossless}: {nits} cd/m² written as {got}, want {want}");
+        }
+    }
+    // float samples are HDR only
+    let sdr = encode_jxl(&EncodeImage::new(w as u32, h as u32, 3, Samples::F32(&px)), &JxlOptions::default(), &EncodeMeta::default());
+    assert!(matches!(sdr, Err(Error::Encode(_))));
+}
+
+#[test]
+#[cfg(feature = "jxl")]
+fn jxl_bad_input_is_an_error() {
+    let px = [0u8; 12];
+    assert!(encode_jxl(&EncodeImage::new(4, 4, 3, Samples::U8(&px)), &JxlOptions::default(), &EncodeMeta::default()).is_err());
+    assert!(encode_jxl(&EncodeImage::new(0, 4, 3, Samples::U8(&px)), &JxlOptions::default(), &EncodeMeta::default()).is_err());
+    // a 1×1 image and quality 1 still encode
+    let one = [10u8, 20, 30];
+    let b =
+        encode_jxl(&EncodeImage::new(1, 1, 3, Samples::U8(&one)), &JxlOptions { quality: 1, ..Default::default() }, &EncodeMeta::default()).unwrap();
+    assert_eq!(decode(&b, DecodeOptions::default()).unwrap().width, 1);
+}

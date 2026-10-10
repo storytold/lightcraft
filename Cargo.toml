@@ -66,6 +66,7 @@ tiff = "0.11"
 image-webp = "0.2"
 moxcms = { version = "0.9", default-features = false, features = ["lut"] }
 jxl-oxide = { version = "0.12", default-features = false }
+jixel = "0.3.4" # BSD-3-Clause OR Apache-2.0, pure-Rust JPEG XL encoder (export; port of libjxl-tiny)
 zune-jpegxl = { version = "0.5", default-features = false, features = ["std"] } # MIT/Apache-2.0/Zlib lossless JXL encoder (test fixtures only)
 ravif = { version = "0.13", default-features = false, features = ["threading"] } # no "asm": it needs nasm (non-Rust)
 # HDR AVIF (PQ): ravif fixes the sRGB transfer curve, so HDR files drive its rav1e + avif-serialize directly

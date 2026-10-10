@@ -180,6 +180,7 @@ pub fn mime_for(name: &str) -> &'static str {
         Some("tif" | "tiff") => "image/tiff",
         Some("webp") => "image/webp",
         Some("avif") => "image/avif",
+        Some("jxl") => "image/jxl",
         _ => "application/octet-stream",
     }
 }

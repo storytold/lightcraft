@@ -51,13 +51,13 @@ USAGE:
         --library DIR     headless: open (or create) a persistent LightCraft library; edits are saved
         --compact         list only the helper tools (every command stays reachable via run_command)
   lightcraft-cli render <IN> -o <OUT> [OPTIONS]
-      Develop one file and export it (.jpg, .png, .tif, .webp, .avif or .dng by extension) with the
+      Develop one file and export it (.jpg, .png, .tif, .webp, .avif, .jxl or .dng by extension) with the
       same encoder as the app's Export dialog. Options:
         --set CONTROL=VALUE  set a develop slider, repeatable (e.g. --set light.exposure=0.5)
         --settings FILE      merge a partial develop-settings JSON file
         --preset ID          apply a preset (see `commands`/presets.list)
         --size N             long edge in pixels (default: full size, cropped)
-        --quality Q          JPEG/AVIF quality 1..100 (default 92)
+        --quality Q          JPEG/AVIF/JPEG XL quality 1..100 (default 92)
         --opt KEY=VALUE      any export option of `app.export`, repeatable (VALUE is JSON or a
                              string), e.g. --opt colorSpace=displayP3 --opt bitDepth=16
                              --opt percent=50 --opt shortEdge=1080 --opt ppi=300

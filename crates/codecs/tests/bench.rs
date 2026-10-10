@@ -66,6 +66,15 @@ fn bench_24mp_jpeg() {
     let rgba = d.to_srgb8();
     time("encode PNG 8-bit", mp, 1, || encode_png(&EncodeImage::rgba8(&rgba), &EncodeMeta::default()).unwrap());
     time("encode TIFF 8-bit deflate", mp, 1, || encode_tiff(&EncodeImage::rgba8(&rgba), TiffCompression::Deflate, &EncodeMeta::default()).unwrap());
+    #[cfg(feature = "jxl")]
+    for (label, o) in [
+        ("encode JPEG XL q90 effort fast", JxlOptions { effort: JxlEffort::Fast, ..Default::default() }),
+        ("encode JPEG XL q90 effort normal", JxlOptions::default()),
+        ("encode JPEG XL lossless", JxlOptions { lossless: true, ..Default::default() }),
+    ] {
+        let b = time(label, mp, 1, || encode_jxl(&img, &o, &EncodeMeta::default()).unwrap());
+        println!("  size {:.1} MB", b.len() as f64 / 1e6);
+    }
 }
 
 fn exif_with_thumbnail(jpeg: &[u8]) -> Vec<u8> {

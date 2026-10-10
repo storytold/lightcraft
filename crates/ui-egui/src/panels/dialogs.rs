@@ -531,7 +531,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         ui,
                         "Format",
                         "exportFormat",
-                        &[(F::Jpeg, "JPEG"), (F::Png, "PNG"), (F::Tiff, "TIFF"), (F::Webp, "WebP"), (F::Avif, "AVIF"), (F::Dng, "DNG"), (F::Original, "Original files")],
+                        &[(F::Jpeg, "JPEG"), (F::Png, "PNG"), (F::Tiff, "TIFF"), (F::Webp, "WebP"), (F::Avif, "AVIF"), (F::Jxl, "JPEG XL"), (F::Dng, "DNG"), (F::Original, "Original files")],
                         &mut opts.format,
                     );
                     if !opts.format.is_rendered() {
@@ -553,8 +553,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         choices(ui, "Bit depth", "exportBitDepth", depths, &mut bd);
                         opts.bit_depth = Some(bd);
                     }
-                    if matches!(opts.format, F::Jpeg | F::Tiff | F::Avif) {
-                        let tip = "Photos edited in HDR: JPEG with an HDR gain map (looks right everywhere, brighter highlights on HDR displays), AVIF as 10-bit Rec. 2020 PQ; TIFF needs 32-bit float";
+                    if matches!(opts.format, F::Jpeg | F::Tiff | F::Avif | F::Jxl) {
+                        let tip = "Photos edited in HDR: JPEG with an HDR gain map (looks right everywhere, brighter highlights on HDR displays), AVIF as 10-bit and JPEG XL as 16-bit Rec. 2020 PQ; TIFF needs 32-bit float";
                         ui.checkbox(&mut opts.hdr, "HDR output").on_hover_text(tip);
                         if opts.hdr && !opts.hdr_output() {
                             ui.label(egui::RichText::new("HDR TIFF needs 32-bit float.").color(t.text_dim));
@@ -563,6 +563,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     if !rendered {
                     } else if opts.format == F::Avif && opts.hdr {
                         ui.label(egui::RichText::new("Color space: Rec. 2020 PQ (HDR AVIF)").color(t.text_dim));
+                    } else if opts.format == F::Jxl && opts.hdr {
+                        ui.label(egui::RichText::new("Color space: Rec. 2020 PQ (HDR JPEG XL)").color(t.text_dim));
                     } else if opts.format == F::Avif {
                         ui.label(egui::RichText::new(crate::i18n::tr("Color space: sRGB (AVIF)")).color(t.text_dim));
                     } else {
@@ -580,12 +582,26 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             ],
                             &mut opts.color_space,
                         );
+                        if opts.effective_space() != opts.color_space {
+                            let note = "Lossy JPEG XL writes Adobe RGB and ProPhoto as Rec. 2020; choose Lossless to keep them.";
+                            ui.label(egui::RichText::new(crate::i18n::tr(note)).color(t.text_dim));
+                        }
                     }
-                    if matches!(opts.format, F::Jpeg | F::Avif) {
+                    if opts.format == F::Jxl {
+                        let tip = "Mathematically lossless: every pixel is kept exactly (larger files)";
+                        ui.checkbox(&mut opts.jxl_lossless, crate::i18n::tr("Lossless")).on_hover_text(crate::i18n::tr(tip));
+                    }
+                    if matches!(opts.format, F::Jpeg | F::Avif) || (opts.format == F::Jxl && !opts.jxl_lossless) {
                         let mut q = opts.quality as f64;
                         if num(ui, &QUALITY, &mut q) {
                             opts.quality = q as u8;
                         }
+                    }
+                    if opts.format == F::Jxl {
+                        use lightcraft_engine::export::JxlEffort as E;
+                        choices(ui, "Effort", "exportJxlEffort", &[(E::Fast, "Fast"), (E::Normal, "Normal")], &mut opts.jxl_effort);
+                        let tip = "Shows a coarse version first and refines it as the file loads";
+                        ui.checkbox(&mut opts.jxl_progressive, crate::i18n::tr("Progressive")).on_hover_text(crate::i18n::tr(tip));
                     }
                     if opts.format == F::Jpeg {
                         let mut k = *limit_kb as f64;

@@ -9,7 +9,8 @@
 //! - [`read_header`] reads a file's stored dimensions and orientation from its headers, without
 //!   decoding pixels (import probes).
 //! - [`decode_thumbnail`] is the fast path for grid thumbnails (EXIF thumbnail or DCT-scaled decode).
-//! - [`encode`] writes JPEG, PNG, TIFF, lossless WebP and (native, feature `avif`) AVIF, embedding
+//! - [`encode`] writes JPEG, PNG, TIFF, lossless WebP and, on native targets, AVIF (feature `avif`) and
+//!   JPEG XL ([`encode_jxl`], feature `jxl`), embedding
 //!   ICC/EXIF/XMP. [`icc::write_matrix_trc`] builds profiles for export.
 //!
 //! No decoder panics on malformed input (property-tested).
@@ -27,6 +28,7 @@ mod jpeg;
 pub mod jpeg_par;
 #[cfg(feature = "jxl")]
 mod jxl;
+mod jxl_encode;
 mod other;
 mod png_codec;
 mod psd;
@@ -39,6 +41,7 @@ pub use encode::{
     ChromaSubsampling, EncodeImage, EncodeMeta, HDR_REFERENCE_WHITE_NITS, Samples, TiffCompression, encode_avif, encode_avif_pq, encode_jpeg,
     encode_png, encode_tiff, encode_webp_lossless,
 };
+pub use jxl_encode::{JxlColour, JxlEffort, JxlOptions, encode_jxl};
 pub use sniff::{Format, sniff};
 pub use space::{NamedSpace, SourceSpace, SpaceOrigin, Trc};
 

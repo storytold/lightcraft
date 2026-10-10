@@ -49,6 +49,8 @@ denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime", "lightcraft-g
 rawnind-model = ["denoise", "lightcraft-denoise/rawnind-model", "lightcraft-denoise-core/rawnind-model"]
 
 [dev-dependencies]
+# HDR JPEG XL tests read the file's colour encoding
+jxl-oxide = { workspace = true }
 # Lossless synthetic HEIC files (the import test; decoded when the codecs' `heif` feature is on).
 lightcraft-heif = { workspace = true, features = ["testdata"] }
 libc = { workspace = true }

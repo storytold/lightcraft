@@ -2,6 +2,15 @@
 
 ## October 2026
 
+### JPEG XL export
+- Export as JPEG XL (issue #247): Format ▸ JPEG XL in the Export dialog, `format: "jxl"` for agents and the CLI
+  (`render in.raw -o out.jxl`). Quality as for JPEG, or Lossless; Effort (Fast / Normal) trades time for a
+  smaller file; Progressive files show a coarse version first. 8- or 16-bit, sRGB, Display P3 or Rec. 2020 (lossless
+  files also Adobe RGB and ProPhoto), metadata as for JPEG. With HDR output, photos edited in HDR are written as
+  16-bit Rec. 2020 PQ. Not in the web version yet.
+- Lossy JPEG XL files in Display P3 or Rec. 2020 now open in their real colours; saturated colours used to come in
+  noticeably duller.
+
 ### Activity stack
 - Long-running tasks show in one place, top left under the top bar, as in Lightroom Classic (issue #345): imports and
   folder scans, exports (and the contact sheet PDF), Synchronize Folder, Build / Smart Previews, Lightroom catalog import, Photo Merge, model downloads, the face scan,
