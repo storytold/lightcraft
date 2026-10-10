@@ -1256,6 +1256,7 @@ impl crate::Session {
         space: dac_pipeline::OutputSpace,
         depth: dac_pipeline::OutputDepth,
     ) -> Result<RenderJob, String> {
+        dac_pipeline::check_output_size(max_w, max_h)?;
         let mut job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
         // An export is made from the denoised picture its Denoise amount asks for, made when the job runs if the
         // background queue has not got to it. (A source kept in memory may lack the picture, so the job reads the file.)
