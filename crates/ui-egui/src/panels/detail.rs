@@ -1672,6 +1672,8 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
         {
             let n = map.norm(q);
             match &mut app.gesture {
+                // a held, unmoving pointer records nothing: coverage builds by passes, not time (#518)
+                Some(Gesture::Brush { points }) if points.last() == Some(&n) => {}
                 Some(Gesture::Brush { points }) => points.push(n),
                 _ => app.gesture = Some(Gesture::Brush { points: vec![n] }),
             }
