@@ -30,7 +30,7 @@ fn op_for(c: &mut Catalog, kind: u8, a: u8, b: u8) -> Op {
         0 | 1 => {
             let id = c.alloc_photo_id();
             let mut p = Photo::new(id, Source::File { path: format!("/p/{}.jpg", id.0) }, &format!("{}.jpg", id.0), "JPEG", 60, 40, "2026-01-01");
-            p.content_hash = Some(format!("{:032x}", id.0.wrapping_mul(7919)));
+            p.content_hash = Some(format!("{:032x}", id.0 * 7919));
             Op::AddPhoto { photo: Box::new(p) }
         }
         2 => Op::SetRating { id: pid, rating: b % 7 },
@@ -136,8 +136,8 @@ proptest! {
         let (_, loaded, r) = open(&m);
         prop_assert_eq!(r.failed, 0);
         prop_assert_eq!(loaded.to_snapshot(), live.to_snapshot());
-        // the counters (still used by older builds) continue where they left off
-        prop_assert_eq!(loaded.next_photo, live.next_photo);
+        // allocation continues where it left off
+        prop_assert_eq!(loaded.clone().alloc_photo_id(), live.clone().alloc_photo_id());
     }
 }
 

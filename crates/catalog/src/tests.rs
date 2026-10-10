@@ -187,9 +187,7 @@ fn smart_albums_update_live() {
     c.apply(Op::SetDeleted { id: a, deleted: false }).unwrap();
     // change the rules; inverse restores
     let inv = c.apply(Op::SetAlbumRules { id, rules: Box::new(Filter { rating: 4, rating_op: RatingOp::Exactly, ..Default::default() }) }).unwrap();
-    let mut all = vec![a, b, z];
-    all.sort();
-    assert_eq!(c.album_photos(id), all);
+    assert_eq!(c.album_photos(id), vec![a, b, z]);
     c.apply(inv).unwrap();
     assert_eq!(c.album_photos(id), vec![a]);
     // smart albums hold no photos and can't nest smart rules
@@ -205,12 +203,10 @@ fn smart_albums_update_live() {
     // a smart album may narrow a manual album
     c.apply(Op::SetAlbumPhotos { id: manual, photos: vec![b, z] }).unwrap();
     c.apply(Op::SetAlbumRules { id, rules: Box::new(Filter { album: Some(manual), lens: Some(String::new()), ..Default::default() }) }).unwrap();
-    let mut bz = vec![b, z];
-    bz.sort();
-    assert_eq!(c.album_photos(id), bz);
+    assert_eq!(c.album_photos(id), vec![b, z]);
     // persisted in snapshots
     let back = Catalog::from_snapshot(&c.to_snapshot()).unwrap();
-    assert_eq!(back.album_photos(id), bz);
+    assert_eq!(back.album_photos(id), vec![b, z]);
     assert!(Filter { rating: 3, keyword: Some("sea".into()), ..Default::default() }.describe().contains("rating ≥ 3, keyword sea"));
 }
 
@@ -343,20 +339,16 @@ fn people_from_named_face_regions() {
     add("f.jpg", vec![]);
     let people = c.people();
     let summary: Vec<(&str, usize)> = people.iter().map(|p| (p.name.as_str(), p.count)).collect();
-    // ids are random, so which spelling of Jane comes first (the lower id's) is too
-    let jane = if a < b { "Jane Doe" } else { "JANE DOE" };
-    assert_eq!(summary, vec![(jane, 2), ("John Roe", 2), ("Sam", 1)], "once per photo, pets and unnamed faces left out");
+    assert_eq!(summary, vec![("Jane Doe", 2), ("John Roe", 2), ("Sam", 1)], "once per photo, pets and unnamed faces left out");
     // the picture is the person's largest face; ties go to the lower photo id
-    assert_eq!((people[0].photo, people[0].face), (a.min(b), Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 }));
+    assert_eq!((people[0].photo, people[0].face), (a, Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 }));
     assert_eq!((people[1].photo, people[1].face), (d, big), "the larger face wins over an earlier, smaller one");
 
     let q = |f: Filter| c.query(&f, &Sort::default());
     assert_eq!(q(Filter { person: Some("jane doe".into()), ..Default::default() }).len(), 2);
     let mut got = q(Filter { person: Some("John Roe".into()), ..Default::default() });
     got.sort();
-    let mut want = vec![b, d];
-    want.sort();
-    assert_eq!(got, want);
+    assert_eq!(got, vec![b, d]);
     assert!(q(Filter { person: Some("Rex".into()), ..Default::default() }).is_empty(), "a pet is not a person");
     assert_eq!(q(Filter { text: "person:SAM".into(), ..Default::default() }), vec![e], "the search token finds a person, any case");
     assert!(q(Filter { person: Some("Jane Doe".into()), ..Default::default() }).contains(&a));

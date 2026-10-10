@@ -369,10 +369,7 @@ fn label_sets_and_xmp_label_names() {
 #[test]
 fn keyword_sets_and_recent_keywords() {
     let mut s = Session::with_demo();
-    // the demo photos' ids are random: pick two that carry none of the keywords used below
-    let fresh = |p: &&std::sync::Arc<lightcraft_catalog::Photo>| !p.meta.keywords.iter().any(|k| ["beach", "sunset", "family"].contains(&k.as_str()));
-    let ids: Vec<u64> = s.catalog.photos().filter(fresh).take(2).map(|p| p.id.0).collect();
-    assert_eq!(ids.len(), 2);
+    let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
     s.execute("library.select", &json!({"ids": [ids[0]]})).unwrap();
     s.execute("photo.setMeta", &json!({"addKeywords": ["beach", "sunset"]})).unwrap();
     s.execute("photo.setMeta", &json!({"addKeywords": ["family"]})).unwrap();

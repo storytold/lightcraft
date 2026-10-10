@@ -359,10 +359,9 @@ mod tests {
         let path = "/missing/lightroom-job-edit.jpg";
         let prepared = prepared_for(&session, path, 4);
         let first = commit_prepared(&mut session, prepared).unwrap();
-        let mapped = first.report["mapping"]["1"].as_u64();
-        assert!(mapped.is_some(), "source photo 1 is mapped to a catalog id");
+        assert_eq!(first.report["mapping"]["1"].as_u64(), Some(1));
         assert_eq!(session.undo.len(), 1);
-        let id = lightcraft_catalog::PhotoId(mapped.unwrap_or_default());
+        let id = lightcraft_catalog::PhotoId(1);
         let mut personal = lightcraft_develop::DevelopSettings::default();
         personal.light.exposure = 1.5;
         session.set_develop(id, personal, "Personal").unwrap();

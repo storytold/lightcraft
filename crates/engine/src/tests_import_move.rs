@@ -492,10 +492,10 @@ fn copies_run_side_by_side_with_the_same_outcome() {
     }
     assert_eq!(std::fs::read(dest.join("IMG_2.png")).unwrap(), b"someone else's file");
     assert_eq!(files_under(&dest).len(), 14, "{:?}", files_under(&dest));
-    // the duplicate names the photo copied from the same content (d/p3); the result lists ids in file order
+    // the duplicate names the photo copied from the same content (d/p3); ids follow the file order
     let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
-    assert_eq!(ids.len(), 13, "{ids:?}");
-    // ids are random, so the order the result lists them in is the file order
+    assert!(ids.windows(2).all(|w| w[0] < w[1]), "{ids:?}");
+    // and the result lists the photos in file order
     let names: Vec<String> = ids.iter().map(|id| s.catalog.photo(lightcraft_catalog::PhotoId(*id)).unwrap().file_name.clone()).collect();
     let mut want: Vec<String> = ["IMG_1.png", "IMG_2-1.png", "IMG_1-1.png", "IMG_1-2.png", "IMG_1-3.png"].map(String::from).into();
     want.extend((0..8).map(|i| format!("p{i}.png")));
