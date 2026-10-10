@@ -20,7 +20,8 @@ any other CR3 decode error (a corrupt file, or a body whose CRX stream the
 decoder misreads): every CR3 opened from its embedded JPEG before this decoder,
 and only three bodies are verified, so a CR3 never fails to import or load
 where a preview exists. HEVC-only preview tracks are recognized but are not
-decoded.
+decoded; such a file (an HDR-PQ shot) starts from the median Canon camera tone
+(`docs/camera-preview-colour.md`).
 
 ## Verified sensor decoding
 

@@ -5,7 +5,7 @@
 //! lime shirt olive that the camera kept lime): a hue/saturation table fitted to the residuals
 //! (applied like a DNG `ProfileHueSatMap`) corrects that when it also improves the held-out pixels.
 use lightcraft_color::{D50, D65, Mat3, PROPHOTO, REC2020, Xy, bradford, luminance_2020};
-use lightcraft_pipeline::tone::{CameraTone, ToneMap};
+use lightcraft_pipeline::tone::{CHROMA_N, CameraTone, ToneMap};
 use lightcraft_raster::{
     Rgb32f,
     resample::{Filter, fit, resize},
@@ -22,8 +22,8 @@ use lightcraft_raw::{RawFormat, RawImage, color::CameraTransform, profile::HsvTa
 /// that leave the fitted look alone. `RENDER_CACHE_VERSION` covers renders; this covers proxies.
 ///
 /// 1: the fit as of #499's follow-up; 2: Sony DRO (tone curve lowered to Sony's curve without DRO)
-/// and the ILCE-7CR profile (#528, #583, #568, #616).
-pub const LOOK_VERSION: u32 = 2;
+/// and the ILCE-7CR profile (#528, #583, #568, #616); 3: the median Canon tone for a CR3 without an embedded JPEG.
+pub const LOOK_VERSION: u32 = 3;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
@@ -94,6 +94,67 @@ fn starting_colour_with(
     }
     let (xy, t) = start(raw);
     (xy, t, None)
+}
+
+/// Median tone and chroma curves of the camera looks fitted to the embedded JPEGs of 50 public Canon RF-mount CR3
+/// files (R, RP, R3, R5, R6, R6 Mark II, R7, R10, R50, R100, R6 Mark III; the HDR-PQ files, which have no JPEG,
+/// are not among them). On a common scene-luminance grid, the median over the files whose own knots cover the grid
+/// point; the part past the covered range continues at half the last covered slope. The curves agree within roughly
+/// 15 % between bodies from 0.05 to 0.25 scene luminance (display 0.08-0.13 and 0.58-0.73 at the ends).
+const CANON_TONE_KNOTS: [[f32; 2]; 32] = [
+    [0.01300, 0.02133],
+    [0.01462, 0.02399],
+    [0.01645, 0.02399],
+    [0.01851, 0.02573],
+    [0.02082, 0.03036],
+    [0.02342, 0.03749],
+    [0.02635, 0.04490],
+    [0.02964, 0.05512],
+    [0.03334, 0.06410],
+    [0.03751, 0.07782],
+    [0.04219, 0.09449],
+    [0.04746, 0.11311],
+    [0.05340, 0.13590],
+    [0.06007, 0.16061],
+    [0.06757, 0.18507],
+    [0.07601, 0.21076],
+    [0.08551, 0.23481],
+    [0.09619, 0.26245],
+    [0.10821, 0.29332],
+    [0.12173, 0.32584],
+    [0.13694, 0.36895],
+    [0.15405, 0.40889],
+    [0.17330, 0.45380],
+    [0.19495, 0.50112],
+    [0.21931, 0.54242],
+    [0.24671, 0.58651],
+    [0.27754, 0.63641],
+    [0.31221, 0.67163],
+    [0.35122, 0.69642],
+    [0.39510, 0.71950],
+    [0.44447, 0.73694],
+    [0.50000, 0.75066],
+];
+const CANON_TONE_CHROMA: [f32; CHROMA_N] = [1.0191, 1.0141, 0.9875, 0.9537, 0.9309, 0.9176, 0.8915, 0.9833];
+
+/// The tone a Canon CR3 starts from when it has no embedded JPEG to fit a look to (the HDR-PQ shots of the R5 Mark II and R8
+/// carry only an HEVC preview) and takes the model's spectral colour matrices: the median camera tone of Canon
+/// RF-mount bodies ([`CANON_TONE_KNOTS`]), instead of LightCraft's default curve, which renders such a raw about
+/// 13 L* darker than the camera's own look. `None` for any raw with a preview, its own matrices or a fitted look.
+pub(crate) fn previewless_tone(
+    raw: &RawImage,
+    bytes: &[u8],
+    own_matrix: bool,
+    transform: &CameraTransform,
+    look: &Option<CameraLook>,
+) -> Option<CameraTone> {
+    if raw.format != RawFormat::Cr3 || own_matrix || transform.matrix_is_fallback || look.is_some() {
+        return None;
+    }
+    if lightcraft_raw::embedded_preview(bytes).is_some() {
+        return None;
+    }
+    CameraTone::new(CANON_TONE_KNOTS)?.with_chroma(CANON_TONE_CHROMA)
 }
 
 pub(crate) fn fit_preview(raw: &RawImage, bytes: &[u8], transform: &CameraTransform) -> Option<CameraLook> {
@@ -1517,6 +1578,28 @@ mod tests {
         // white-balanced white stays white
         let w = t.matrix.apply([1.0; 3]);
         assert!(w.iter().all(|v| (v - 1.0).abs() < 1e-4), "{w:?}");
+    }
+
+    /// A Canon CR3 with no embedded JPEG (the HDR-PQ shots keep only an HEVC preview) and spectral matrices starts
+    /// from the median Canon camera tone; nothing else does.
+    #[test]
+    fn a_previewless_canon_cr3_gets_the_median_camera_tone() {
+        let tone = |format, model: &str, bytes: &[u8], own: bool, look: &Option<CameraLook>| {
+            let mut raw = raw_of(format, "Canon", model, Default::default());
+            let (_, t, _) = starting_colour(&mut raw, bytes);
+            previewless_tone(&raw, bytes, own, &t, look)
+        };
+        let got = tone(RawFormat::Cr3, "Canon EOS R5 Mark II", &[], false, &None).expect("spectral CR3 without a preview");
+        // the median look puts scene 0.18 near display 0.45, far above LightCraft's default curve there
+        let mid = got.apply(0.18);
+        assert!((0.40..0.55).contains(&mid), "{mid}");
+        assert!(got.chroma().iter().all(|c| (0.8..=1.1).contains(c)));
+        // a file's own matrices, a fitted look, a model outside the spectral table or another format keep their look
+        assert!(tone(RawFormat::Cr3, "Canon EOS R5 Mark II", &[], true, &None).is_none());
+        let fitted = dro_test_look(&std::array::from_fn(|i| 0.006 * 1.13f32.powi(i as i32)), &|x| x.sqrt());
+        assert!(tone(RawFormat::Cr3, "Canon EOS R5 Mark II", &[], false, &Some(fitted)).is_none());
+        assert!(tone(RawFormat::Cr3, "Canon EOS 7D", &[], false, &None).is_none());
+        assert!(tone(RawFormat::Cr2, "Canon EOS 600D", &[], false, &None).is_none());
     }
 
     /// Step 5: a camera outside the table whose fit fails keeps the neutral fallback.
