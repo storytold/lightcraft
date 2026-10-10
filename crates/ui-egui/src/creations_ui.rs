@@ -13,7 +13,10 @@ use crate::DacApp;
 use crate::icons::Icon;
 
 /// UI commands: (id, label, shortcut, menu).
-pub const COMMANDS: &[crate::menus::UiCommand] = &[("creation.open", "Open Saved Creation", None, "")];
+pub const COMMANDS: &[crate::menus::UiCommand] = &[
+    // what a double-click in the Collections panel runs
+    ("creation.open", "Open Saved Creation", None, ""),
+];
 
 /// The kind of saved creation `a` is, if it is one.
 pub fn kind(a: &Album) -> Option<CreationKind> {
@@ -137,5 +140,34 @@ mod tests {
         // the panel marks creations with their own icons
         let a = h.app.session.catalog.album(dac_catalog::AlbumId(print.as_u64().unwrap())).unwrap().clone();
         assert_eq!(super::icon(&a), Some(crate::icons::Icon::Printer));
+    }
+
+    /// P3.7 audit: what MCP sees when it drives the app (`mcp --connect` → `engine.commands` /
+    /// `engine.execute` on the control channel): every module has commands, and one harmless
+    /// command per module runs, headless.
+    #[test]
+    fn every_module_is_scriptable_over_the_control_channel() {
+        let mut h = demo();
+        let r = h.request("engine.commands", json!({}), T);
+        let list = r["result"].as_array().cloned().unwrap_or_default();
+        let ids: Vec<String> = list.iter().filter_map(|c| c["id"].as_str().map(str::to_string)).collect();
+        assert!(ids.len() > 100, "{r}");
+        let modules: [(&str, &[&str], &str, Value); 7] = [
+            ("library", &["library.", "album.", "catalog."], "library.state", json!({})),
+            ("develop", &["develop."], "develop.controls", json!({})),
+            ("map", &["map."], "map.view", json!({})),
+            ("book", &["book."], "book.get", json!({})),
+            ("slideshow", &["slideshow."], "slideshow.get", json!({})),
+            ("print", &["printui.", "print."], "printui.state", json!({})),
+            ("web", &["web."], "web.galleries", json!({})),
+        ];
+        for (module, prefixes, call, params) in modules {
+            let n = ids.iter().filter(|id| prefixes.iter().any(|p| id.starts_with(p))).count();
+            assert!(n > 0, "{module}: no commands");
+            assert!(ids.iter().any(|i| i == &format!("module.{module}")), "{module}: no module switch");
+            ok(&mut h, &format!("module.{module}"), json!({}));
+            ok(&mut h, call, params);
+        }
+        assert!(ids.iter().any(|i| i == "creation.open"));
     }
 }

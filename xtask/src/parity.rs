@@ -290,6 +290,10 @@ pub fn run(root: &Path, write: bool) -> Result<(), String> {
     // the Map module's commands (crates/ui-egui/src/map/mod.rs)
     let map = std::fs::read_to_string(root.join("crates/ui-egui/src/map/mod.rs")).map_err(|e| format!("map/mod.rs: {e}"))?;
     commands.extend(ui_command_ids(&map));
+    // the fork's module command tables (Print, saved creations)
+    for f in ["crates/ui-egui/src/print_ui.rs", "crates/ui-egui/src/creations_ui.rs"] {
+        commands.extend(ui_command_ids(&std::fs::read_to_string(root.join(f)).map_err(|e| format!("{f}: {e}"))?));
+    }
     let controls = registry("controls")?;
     let problems = check(&doc, &commands, &controls, |p| {
         let full = root.join(p);

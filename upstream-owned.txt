@@ -50,6 +50,7 @@ crates/engine/src/creations.rs
 crates/ui-egui/src/web_module.rs
 crates/ui-egui/src/slideshow_ui.rs
 crates/ui-egui/src/creations_ui.rs
+crates/mcp/tests/modules.rs
 crates/slideshow/
 crates/psd/
 crates/actions/
