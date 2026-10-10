@@ -25,6 +25,9 @@ use crate::{Result, Session};
 /// Most pages one link pass lists (1000 assets each).
 const LINK_PAGES: u32 = 10_000;
 const PAGE_SIZE: u32 = 1000;
+
+#[path = "immich_sync.rs"]
+pub(crate) mod sync;
 /// Most assets one import takes.
 const MAX_IMPORT: usize = 5000;
 
@@ -641,6 +644,9 @@ pub fn pump(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
             Msg::Downloaded(d) => finish_import(s, *d, &now),
+            Msg::Synced(d) => {
+                sync::finish(s, *d);
+            }
             Msg::Original { photo, account, result } => {
                 s.remote.fetching.remove(&photo);
                 match result {
@@ -655,6 +661,9 @@ pub fn pump(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
         }
+    }
+    if bool_or(p, "sync", true) {
+        sync::tick(s);
     }
     // the next SHA-1 batch
     if bool_or(p, "sha1", true) && !s.remote.sha1_busy && s.remote.sha1_idle_at != Some(s.catalog.revision) {
@@ -921,6 +930,12 @@ fn scan_libraries(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
+    let mut v = sync::specs();
+    v.extend(base_specs());
+    v
+}
+
+fn base_specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "remote.pump", "Remote Work", [], None, "{sha1?: bool} — cheap, every frame: takes in finished background work (SHA-1 back-fill of originals, Immich link passes, imports, original downloads) and starts the next SHA-1 batch → {sha1, links, import, fetching, fetchErrors}", always, pump),
         cmd!(query "immich.test", "Test Immich Connection", [], None, "{url, apiKey, pinned?} — contact the server (not saved; never journaled) → {ok, url, version, user, permissions, missingPermissions} or {ok: false, error: {kind, message, retryable, fingerprint?}}", always, test),

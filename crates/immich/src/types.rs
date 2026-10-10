@@ -161,6 +161,9 @@ pub struct MetadataSearch {
     pub size: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub with_exif: Option<bool>,
+    /// Also trashed assets (IMM-SYNC sees deletions).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub with_deleted: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_after: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

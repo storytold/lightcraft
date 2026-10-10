@@ -43,6 +43,8 @@ pub(crate) enum Msg {
         account: String,
         result: Result<dac_immich::ServerStatus, ImmichError>,
     },
+    /// `immich.sync {background}`: a sync run finished.
+    Synced(Box<crate::cmd::immich::sync::SyncDone>),
     /// `credentials.unlock {background}`: the encrypted file opened (or not).
     FileUnlocked(Result<dac_credentials::FileStore, CredError>),
     /// `credentials.unlockSystem`: the keychain's own unlock prompt was answered.
@@ -132,6 +134,8 @@ pub struct State {
     /// `immich.status {check, background}`: accounts being checked; each one's last server status.
     pub(crate) checking: HashSet<String>,
     pub(crate) checks: HashMap<String, serde_json::Value>,
+    /// IMM-SYNC per account: state between runs, the running flag, the schedule.
+    pub(crate) sync: HashMap<String, crate::cmd::immich::sync::AccountSync>,
 }
 
 impl Default for State {
@@ -162,6 +166,7 @@ impl Default for State {
             connected: None,
             checking: HashSet::new(),
             checks: HashMap::new(),
+            sync: HashMap::new(),
         }
     }
 }

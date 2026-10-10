@@ -23,6 +23,9 @@ crates/net/
 crates/credentials/
 crates/hash/
 crates/immich/
+# Immich engine wiring (IMM-SYNC / IMM-PEOPLE / IMM-SEARCH)
+crates/engine/src/cmd/immich_sync.rs
+crates/engine/src/tests_immich_sync.rs
 # the Classic shell
 crates/ui-egui/src/module.rs
 crates/ui-egui/src/panels/classic.rs
