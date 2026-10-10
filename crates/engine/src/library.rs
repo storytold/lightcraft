@@ -119,6 +119,9 @@ struct ViewFile {
     // would silently hide photos, with only a small badge to say so.
     sort: dac_catalog::Sort,
     selection: Selection,
+    /// The photos of the last export (the Previous Export source).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    previous_export: Vec<dac_catalog::PhotoId>,
 }
 
 impl Library {
@@ -333,6 +336,7 @@ impl Session {
         self.interaction = None;
         self.pending_log.clear();
         self.selection = Selection::default();
+        self.previous_export.clear();
         self.source = LibrarySource::All;
         self.library_folder = None;
         if report.created && seed_demo {
@@ -359,6 +363,15 @@ impl Session {
         self.import_defaults = prefs.import;
         self.cache_mb = prefs.cache_mb;
         self.preview_prefs = prefs.previews;
+        #[cfg(not(target_arch = "wasm32"))]
+        if on_disk {
+            // the catalog's own settings hold them (catalog-settings.json); prefs.json only for
+            // libraries written before they moved, migrated on the next save
+            let cs = dac_catalog::library::CatalogSettings::load(&dir);
+            if let Some(v) = cs.previews.and_then(|v| serde_json::from_value(v).ok()) {
+                self.preview_prefs = v;
+            }
+        }
         self.forget_local_days = prefs.forget_local_days.unwrap_or(dac_catalog::DEFAULT_FORGET_DAYS);
         self.smart_previews_dir = prefs.smart_previews_dir.filter(|_| on_disk).map(PathBuf::from);
         if let Some(d) = &self.smart_previews_dir {
@@ -393,6 +406,7 @@ impl Session {
                 }
             }
             self.sort = v.sort;
+            self.previous_export = v.previous_export.into_iter().filter(|id| self.catalog.photo(*id).is_some()).collect();
             self.selection = v.selection;
             self.selection.ids.retain(|id| self.catalog.photo(*id).is_some());
             self.selection.active = self.selection.active.filter(|id| self.catalog.photo(*id).is_some());
@@ -551,6 +565,7 @@ impl Session {
             library_folder: self.library_folder.clone().filter(|_| self.source == LibrarySource::LibraryFolder),
             sort: self.sort,
             selection: self.selection.clone(),
+            previous_export: self.previous_export.clone(),
         };
         serde_json::to_vec_pretty(&view).unwrap_or_default()
     }
@@ -592,10 +607,20 @@ impl Session {
             cache_mb: self.cache_mb,
             smart_previews_dir: self.smart_previews_dir.as_ref().map(|d| d.to_string_lossy().to_string()),
             forget_local_days: Some(self.forget_local_days),
-            previews: self.preview_prefs,
+            // on disk they live in the catalog's settings (below)
+            previews: if self.library.as_ref().is_some_and(|l| l.on_disk) { Default::default() } else { self.preview_prefs },
         })
         .unwrap_or_default();
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
+        #[cfg(not(target_arch = "wasm32"))]
+        if lib.on_disk {
+            let mut cs = dac_catalog::library::CatalogSettings::load(&lib.dir);
+            let v = serde_json::to_value(self.preview_prefs).ok();
+            if cs.previews != v {
+                cs.previews = v;
+                cs.save(&lib.dir).map_err(|e| EngineError::Other(format!("catalog settings: {e}")))?;
+            }
+        }
         if lib.blocked.contains(&"prefs.json") {
             return Err(EngineError::Other(
                 "prefs: prefs.json couldn't be read when the library opened, so it isn't overwritten; reopen the library to save preferences".into(),
@@ -658,6 +683,69 @@ impl Session {
             lib.journal.snapshot(&self.catalog)?;
         }
         Ok(())
+    }
+}
+
+/// Catalog-level operations (native: a catalog is a folder with a v4 store).
+#[cfg(not(target_arch = "wasm32"))]
+impl Session {
+    /// The open catalog's folder, when it is one on disk with a v4 store (backup, integrity
+    /// test, optimise, catalog settings need it).
+    pub fn catalog_dir(&self) -> Option<&Path> {
+        self.library.as_ref().filter(|l| l.on_disk && l.journal.has_db()).map(|l| l.dir.as_path())
+    }
+
+    /// Run `f` on the open catalog's journal and catalog, after the queued ops are written (so a
+    /// checkpoint holds them).
+    fn with_catalog_journal<T>(&mut self, f: impl FnOnce(&mut Journal, &dac_catalog::Catalog) -> dac_catalog::Result<T>) -> Result<T> {
+        if self.interaction.is_some() {
+            return Err(EngineError::Other("finish the edit in progress first".into()));
+        }
+        self.persist()?;
+        let lib = self.library.as_mut().filter(|l| l.on_disk && l.journal.has_db());
+        let lib = lib.ok_or_else(|| EngineError::Other("no catalog on disk is open (an in-memory or browser library has no backups)".into()))?;
+        Ok(f(&mut lib.journal, &self.catalog)?)
+    }
+
+    /// The open catalog's settings (`catalog-settings.json`); the defaults when none is on disk.
+    pub fn catalog_settings(&self) -> dac_catalog::library::CatalogSettings {
+        self.catalog_dir().map(dac_catalog::library::CatalogSettings::load).unwrap_or_default()
+    }
+
+    /// Save the open catalog's settings.
+    pub fn set_catalog_settings(&mut self, settings: &dac_catalog::library::CatalogSettings) -> Result<()> {
+        let dir = self.catalog_dir().ok_or_else(|| EngineError::Other("no catalog on disk is open".into()))?.to_path_buf();
+        settings.save(&dir)?;
+        Ok(())
+    }
+
+    /// Back up the catalog into `root` (default: the catalog settings' backup folder). Returns
+    /// the backup's folder.
+    pub fn backup_catalog(&mut self, root: Option<&Path>) -> Result<PathBuf> {
+        let settings = self.catalog_settings();
+        let dir = self.catalog_dir().map(Path::to_path_buf).unwrap_or_default();
+        let root = root.map(Path::to_path_buf).unwrap_or_else(|| settings.backup_root(&dir));
+        self.with_catalog_journal(|j, c| j.backup(c, &root, settings.keep_backups))
+    }
+
+    /// Test the catalog's integrity (a checkpoint first).
+    pub fn check_catalog_integrity(&mut self) -> Result<dac_catalog::library::IntegrityReport> {
+        self.with_catalog_journal(|j, c| j.check_integrity(c))
+    }
+
+    /// Optimise the catalog: its store rewritten, indexes rebuilt, compacted.
+    pub fn optimize_catalog(&mut self) -> Result<dac_catalog::library::OptimizeReport> {
+        self.with_catalog_journal(|j, c| j.optimize(c))
+    }
+
+    /// The exit-time backup: when the catalog's schedule says one is due (with the integrity
+    /// test and optimise when set). `Ok(None)`: not due, or no catalog on disk.
+    pub fn backup_catalog_if_due(&mut self) -> Result<Option<PathBuf>> {
+        if self.catalog_dir().is_none() || !self.catalog_settings().backup_due(dac_catalog::library::now_secs()) {
+            return Ok(None);
+        }
+        let _ = self.end_interaction();
+        self.with_catalog_journal(|j, c| j.backup_if_due(c))
     }
 }
 

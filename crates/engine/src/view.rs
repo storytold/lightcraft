@@ -26,6 +26,8 @@ pub enum LibrarySource {
     PreviousImport,
     /// The Quick Collection (empty until something was added to it).
     QuickCollection,
+    /// The photos of the last export ([`crate::Session::previous_export`]).
+    PreviousExport,
 }
 
 /// The folder a [`LibrarySource::Folder`] view shows.
@@ -62,7 +64,7 @@ impl LibrarySource {
             LibrarySource::RecentlyDeleted => f.deleted = true,
             LibrarySource::Picks => f.flag = Some(dac_catalog::Flag::Pick),
             // the folder itself is filled in by the session (it holds the path)
-            LibrarySource::Folder | LibrarySource::Missing | LibrarySource::LibraryFolder => {}
+            LibrarySource::Folder | LibrarySource::Missing | LibrarySource::LibraryFolder | LibrarySource::PreviousExport => {}
         }
         f
     }
@@ -79,6 +81,7 @@ impl LibrarySource {
             LibrarySource::Missing => "Missing Photos".into(),
             LibrarySource::PreviousImport => "Previous Import".into(),
             LibrarySource::QuickCollection => "Quick Collection".into(),
+            LibrarySource::PreviousExport => "Previous Export".into(),
         }
     }
 }

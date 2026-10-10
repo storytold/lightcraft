@@ -174,6 +174,15 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("file.exportCurvePresets", "Export Point Curve Presets…", None, ""),
     ("app.settings", "Settings…", Some("Cmd+,"), "Edit"),
     ("app.openLibrary", "Open Library…", None, "File"),
+    // catalogs (crate::catalog_ui)
+    ("catalog.new", "New Catalog…", None, "File"),
+    ("catalog.open", "Open Catalog…", None, "File"),
+    ("catalog.openRecent", "Open Recent Catalog", None, ""),
+    ("catalog.chooser", "Choose Catalog…", None, ""),
+    ("catalog.promptAtStartup", "Show the Catalog Chooser at Startup", None, ""),
+    ("dialog.catalogSettings", "Catalog Settings…", None, "Edit"),
+    ("dialog.exportCatalog", "Export as Catalog…", None, "File"),
+    ("dialog.importCatalog", "Import from Another Catalog…", None, "File"),
     ("app.about", "About {app}", None, "Help"),
     ("app.systemInfo", "System Info…", None, "Help"),
     ("app.openLogFolder", "Open Log Folder", None, "Help"),
@@ -276,6 +285,9 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
         return Some(Ok(json!(app.ui.language)));
     }
     if let Some(r) = crate::module::run(app, id, p) {
+        return Some(r);
+    }
+    if let Some(r) = crate::catalog_ui::run(app, id, p) {
         return Some(r);
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -1506,6 +1518,9 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
 
 pub fn ui_enabled(app: &DacApp, id: &str) -> bool {
     if let Some(e) = crate::module::enabled(app, id) {
+        return e;
+    }
+    if let Some(e) = crate::catalog_ui::enabled(app, id) {
         return e;
     }
     match id {

@@ -1283,6 +1283,10 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     if !placed.is_empty() {
         finish_moves(s, placed, log0, &mut report);
     }
+    // photos that came with an XMP sidecar start in step with it (the metadata-vs-file badge)
+    // (not browsed Local records: a stamp would count as a change the user made and keep them)
+    let with_xmp: Vec<PhotoId> = report.imported.iter().map(|i| PhotoId(*i)).filter(|id| s.catalog.photo(*id).is_some_and(|p| !p.local)).collect();
+    s.record_xmp_stamps(&with_xmp, true);
     Ok(report)
 }
 

@@ -318,6 +318,10 @@ pub struct CatalogSettings {
     pub test_integrity: bool,
     /// Optimise after a backup.
     pub optimize: bool,
+    /// The preview store's settings (standard size, 1:1 discard, previews at import). Owned by
+    /// the engine (`library.previewSettings`); kept opaque here so the catalog needn't know them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previews: Option<serde_json::Value>,
 }
 
 impl CatalogSettings {

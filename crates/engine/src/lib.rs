@@ -146,6 +146,8 @@ pub struct Session {
     pub xmp: sidecar::XmpPrefs,
     /// Parameters of the last export (`app.export` params, minus targets), persisted in prefs.json.
     pub last_export: Option<serde_json::Value>,
+    /// The photos of the last export (the Previous Export source), persisted in view.json.
+    pub previous_export: Vec<PhotoId>,
     /// The user's export presets (built-ins: [`export::builtin_presets`]), persisted in prefs.json.
     pub export_presets: Vec<export::ExportPreset>,
     /// Metadata presets (`metadata.*`), persisted in prefs.json.
@@ -253,6 +255,7 @@ impl Session {
             library_identity: Arc::new(()),
             xmp: sidecar::XmpPrefs::default(),
             last_export: None,
+            previous_export: Vec::new(),
             export_presets: Vec::new(),
             metadata_presets: Vec::new(),
             filter_presets: Vec::new(),
@@ -326,7 +329,8 @@ impl Session {
         if self.depth == 0 {
             let skip = std::mem::take(&mut self.skip_auto_write);
             if r.is_ok() && !skip && self.xmp.auto_write && self.interaction.is_none() && self.pending_log.len() > log_start {
-                self.auto_write_sidecars(&self.pending_log[log_start..]);
+                let ops = self.pending_log.get(log_start..).map(<[Op]>::to_vec).unwrap_or_default();
+                self.auto_write_sidecars(&ops);
             }
         }
         if self.depth == 0 && self.library.is_some() {
@@ -657,6 +661,9 @@ impl Session {
                 // no folder chosen: nothing (`.` names no folder)
                 f.library_folder = Some(self.library_folder.clone().unwrap_or_else(|| ".".into()));
             }
+            if self.source == LibrarySource::PreviousExport {
+                f.only = self.previous_export_filter();
+            }
             let mut visible = self.catalog.query(&f, &self.sort);
             if visible.is_empty() && self.source == LibrarySource::LibraryFolder && !self.folder_holds_photos() {
                 // the shown folder lost its last photo (deleted, moved, removed): everything, not
@@ -701,6 +708,19 @@ impl Session {
         &self.visible
     }
 
+    /// The Previous Export source's photos as a filter (nothing exported yet: an id no photo has).
+    fn previous_export_filter(&self) -> Vec<PhotoId> {
+        if self.previous_export.is_empty() { vec![PhotoId(u64::MAX)] } else { self.previous_export.clone() }
+    }
+
+    /// Remember `ids` as the last export (the Previous Export source); saved with the view.
+    pub fn record_export(&mut self, ids: &[PhotoId]) {
+        self.previous_export = ids.iter().copied().filter(|id| self.catalog.photo(*id).is_some()).collect();
+        self.visible_key = None;
+        self.total = None;
+        self.save_view();
+    }
+
     /// Whether the library still holds a photo imported from the folder a `LibraryFolder` source
     /// shows.
     fn folder_holds_photos(&self) -> bool {
@@ -724,6 +744,9 @@ impl Session {
             }
             if self.source == LibrarySource::LibraryFolder {
                 f.library_folder = Some(self.library_folder.clone().unwrap_or_else(|| ".".into()));
+            }
+            if self.source == LibrarySource::PreviousExport {
+                f.only = self.previous_export_filter();
             }
             let n = self.catalog.query(&f, &self.sort).len();
             self.total = Some((key, n));
@@ -759,6 +782,7 @@ impl Session {
 mod tests;
 #[cfg(test)]
 mod tests_album_order;
+mod tests_catalog_cmds;
 #[cfg(test)]
 mod tests_classic;
 #[cfg(test)]

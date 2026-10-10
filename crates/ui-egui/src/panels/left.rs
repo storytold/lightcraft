@@ -274,6 +274,12 @@ fn catalog_section(app: &mut DacApp, ui: &mut egui::Ui, total: usize, picks: usi
         }
     }
     // photos whose files can't be found (checked every few seconds, not every frame)
+    // the last export's photos (once something was exported, like Lightroom's set)
+    if (!app.session.previous_export.is_empty() || src == LibrarySource::PreviousExport)
+        && row(app, ui, "previousExport", Icon::Clock, "Previous Export", None, src == LibrarySource::PreviousExport, 0.0).clicked()
+    {
+        let _ = app.run("library.source", json!({"kind": "previousExport"}));
+    }
     let missing = missing_count(app, ui);
     if (missing > 0 || src == LibrarySource::Missing)
         && row(app, ui, "missing", Icon::Folder, "Missing Photos", Some(missing), src == LibrarySource::Missing, 0.0).clicked()

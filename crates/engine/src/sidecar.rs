@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use dac_catalog::{MediaKind, Op, PhotoId};
+use dac_catalog::{MediaKind, Op, PhotoId, SidecarStat, XmpStatus};
 
 pub use dac_engine_library::sidecar::*;
 
@@ -64,20 +64,63 @@ impl Session {
         Ok(Some((Op::Batch { ops }, from)))
     }
 
+    /// What the file system says about photo `id`'s sidecar now (`None`: it has none, or isn't a file).
+    pub fn sidecar_stat(&self, id: PhotoId) -> Option<SidecarStat> {
+        let p = self.catalog.photo(id)?;
+        let orig = file_path(p)?;
+        let f = find_sidecar(orig, self.sidecar_naming(id))?;
+        let m = std::fs::metadata(f).ok()?;
+        let mtime =
+            m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).and_then(|d| i64::try_from(d.as_secs()).ok()).unwrap_or(0);
+        Some(SidecarStat { mtime, size: m.len() })
+    }
+
+    /// The metadata-vs-XMP state of photo `id` (see [`dac_catalog::xmp_state`]).
+    pub fn xmp_status(&self, id: PhotoId) -> XmpStatus {
+        match self.catalog.photo(id) {
+            Some(p) => p.xmp_status(self.sidecar_stat(id)),
+            None => XmpStatus::Unknown,
+        }
+    }
+
+    /// Record that the photos' catalog state and their sidecars are in step now (right after a
+    /// read from or write to the sidecar): app bookkeeping, journaled but not an undo step.
+    /// With `only_with_sidecar`, photos without a sidecar file are skipped.
+    pub(crate) fn record_xmp_stamps(&mut self, ids: &[PhotoId], only_with_sidecar: bool) {
+        for id in ids {
+            let stat = self.sidecar_stat(*id);
+            if only_with_sidecar && stat.is_none() {
+                continue;
+            }
+            let Some(p) = self.catalog.photo(*id) else { continue };
+            let stamp = Some(p.xmp_stamp_now(stat));
+            if p.xmp == stamp {
+                continue;
+            }
+            let op = Op::SetXmpStamp { id: *id, stamp };
+            if self.catalog.apply(op.clone()).is_ok() {
+                self.pending_log.push(op);
+            }
+        }
+    }
+
     /// Auto-write: sidecars for photos changed by `ops` (errors are logged, not returned).
-    pub(crate) fn auto_write_sidecars(&self, ops: &[Op]) {
+    pub(crate) fn auto_write_sidecars(&mut self, ops: &[Op]) {
         let mut ids = Vec::new();
         ops.iter().for_each(|o| op_photos(o, &mut ids));
         if ids.is_empty() {
             return;
         }
         let owners = StemOwners::of(&self.catalog);
+        let mut written = Vec::new();
         for id in ids {
-            if self.catalog.photo(id).is_some_and(|p| file_path(p).is_some() && p.copy_of.is_none())
-                && let Err(e) = self.save_sidecar_with(id, &owners)
-            {
-                log::warn!("auto-write XMP: {e}");
+            if self.catalog.photo(id).is_some_and(|p| file_path(p).is_some() && p.copy_of.is_none()) {
+                match self.save_sidecar_with(id, &owners) {
+                    Ok(_) => written.push(id),
+                    Err(e) => log::warn!("auto-write XMP: {e}"),
+                }
             }
         }
+        self.record_xmp_stamps(&written, false);
     }
 }
