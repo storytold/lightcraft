@@ -306,11 +306,14 @@ fn link_only_downloads_the_original_on_demand() {
     assert_eq!(p.preview_only.as_deref(), Some(LINK_ONLY));
     assert!(p.sha1.is_none());
     assert_eq!(s.execute("immich.links", &json!({"id": p.id.0})).unwrap()["linkOnly"], true);
+    // as if the preview were a JPEG standing in for a raw: the original's kind and format win
+    s.catalog.apply(Op::SetKind { id: p.id, kind: dac_catalog::MediaKind::Raw, format: "JPEG".into() }).unwrap();
     assert_eq!(s.execute("immich.fetchOriginal", &json!({"id": p.id.0})).unwrap()["started"], true);
     pump_until(&mut s, |s, _| s.remote.fetching.is_empty());
     let q = s.catalog.photo(p.id).unwrap();
     assert!(q.preview_only.is_none(), "{:?}", s.remote.fetch_errors);
     assert_eq!(q.file_name, "far.png");
+    assert_eq!((q.kind, q.format.as_str()), (dac_catalog::MediaKind::Image, "PNG"), "kind and format follow the original");
     assert_eq!(q.sha1.as_deref(), Some(dac_hash::sha1_bytes(&a).to_hex().as_str()));
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -359,4 +362,171 @@ impl RemoteOf for Photo {
     fn remote_of_test(&self, cat: &dac_catalog::Catalog) -> Option<String> {
         cat.remote_of(self.id).next().map(|r| r.remote_id.clone())
     }
+}
+
+// Feature: Connect and Check run off the UI thread; their results come through `remote.pump`.
+#[test]
+fn background_connect_and_check_report_through_the_pump() {
+    let (url, _) = serve(Fake { assets: vec![] });
+    let mut s = session();
+    let r = s.execute("immich.connect", &json!({"url": url, "apiKey": "wrong", "background": true})).unwrap();
+    assert_eq!(r["started"], true);
+    pump_until(&mut s, |_, v| v["connecting"] == false);
+    let st = s.execute("immich.status", &json!({})).unwrap();
+    assert_eq!(st["connected"]["error"]["kind"], "badKey", "{st}");
+    assert!(s.immich_accounts().unwrap().immich.is_empty());
+
+    s.execute("immich.connect", &json!({"url": url, "apiKey": KEY, "background": true})).unwrap();
+    pump_until(&mut s, |_, v| v["connecting"] == false);
+    let st = s.execute("immich.status", &json!({"check": true, "background": true})).unwrap();
+    assert_eq!(st["connected"]["ok"], true, "{st}");
+    let account = st["connected"]["account"].as_str().unwrap().to_string();
+    assert_eq!(st["accounts"][0]["id"], account.as_str());
+    pump_until(&mut s, |_, v| v["checking"].as_array().is_some_and(Vec::is_empty));
+    let st = s.execute("immich.status", &json!({})).unwrap();
+    assert_eq!(st["accounts"][0]["server"]["ok"], true, "{st}");
+    assert_eq!(st["accounts"][0]["server"]["version"], "3.3.1");
+    assert!(!st.to_string().contains(KEY));
+    assert!(!format!("{:?}", s.journal).contains(KEY));
+}
+
+// Feature: without a usable keychain, keys live in an encrypted file unlocked once per session.
+#[test]
+fn encrypted_key_file_is_unlocked_once_and_keeps_keys() {
+    let dir = temp_dir("keyfile");
+    let (url, _) = serve(Fake { assets: vec![] });
+    let fresh = || {
+        let mut s = Session::new().with_fs();
+        s.remote.secrets_file = Some(dir.join("credentials.enc"));
+        s.remote.credentials_prefs = Some(dir.join("credentials.json"));
+        s.remote.connections_path = Some(dir.join("connections.json"));
+        s
+    };
+    let mut s = fresh();
+    s.execute("credentials.useStore", &json!({"store": "file"})).unwrap();
+    let st = s.execute("credentials.status", &json!({})).unwrap();
+    assert_eq!(st["needsPassphrase"], true, "{st}");
+    assert_eq!(st["file"]["exists"], false);
+    // locked: connecting says how to unlock, never panics
+    let e = s.execute("immich.connect", &json!({"url": url, "apiKey": KEY})).unwrap_err().to_string();
+    assert!(e.contains("passphrase"), "{e}");
+    assert!(s.execute("credentials.unlock", &json!({"passphrase": "short"})).is_err(), "too short for a new file");
+    let r = s.execute("credentials.unlock", &json!({"passphrase": "correct horse battery"})).unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(r["created"], true);
+    assert_eq!(s.execute("immich.connect", &json!({"url": url, "apiKey": KEY})).unwrap()["ok"], true);
+    let st = s.execute("credentials.status", &json!({})).unwrap();
+    assert_eq!(st["active"], "encrypted file");
+    assert_eq!(st["needsPassphrase"], false);
+    let on_disk = std::fs::read_to_string(dir.join("credentials.enc")).unwrap();
+    assert!(!on_disk.contains(KEY), "the key is encrypted");
+    for f in ["connections.json", "credentials.json"] {
+        let txt = std::fs::read_to_string(dir.join(f)).unwrap();
+        assert!(!txt.contains(KEY) && !txt.contains("correct horse"), "{f} has no secrets");
+    }
+    assert!(!format!("{:?}", s.journal).contains("correct horse"));
+
+    // the next session: a wrong passphrase is refused, the right one (in the background) opens it
+    let mut s = fresh();
+    let r = s.execute("credentials.unlock", &json!({"passphrase": "wrong horse battery"})).unwrap();
+    assert_eq!(r["error"]["kind"], "wrongPassphrase");
+    let account = s.immich_accounts().unwrap().immich[0].id.clone();
+    assert!(s.immich_client(&account).is_err(), "still locked");
+    assert_eq!(s.execute("credentials.unlock", &json!({"passphrase": "correct horse battery", "background": true})).unwrap()["started"], true);
+    pump_until(&mut s, |_, v| v["unlocking"] == false);
+    let (_, c) = s.immich_client(&account).unwrap();
+    assert_eq!(c.me().unwrap().name, "Me");
+    s.execute("credentials.lock", &json!({})).unwrap();
+    assert!(s.immich_client(&account).is_err(), "locked again");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Poll `f` every 2 s until it gives `Some`, at most `secs`.
+fn wait_for<T>(secs: u64, what: &str, mut f: impl FnMut() -> Option<T>) -> T {
+    let t = Instant::now();
+    loop {
+        if let Some(v) = f() {
+            return v;
+        }
+        assert!(t.elapsed() < Duration::from_secs(secs), "timed out: {what}");
+        std::thread::sleep(Duration::from_secs(2));
+    }
+}
+
+/// IMM-EXTLIB against a real server (`cargo xtask immich up && cargo xtask immich seed`; the
+/// compose file mounts `target/immich/extlib` at `/mnt/extlib`): an external library over a
+/// folder of generated photos links them by mapped path (Immich does not hash those files; no
+/// upload), and the XMP sidecars the app
+/// writes reach Immich (rating, description, keywords) after a rescan.
+#[test]
+#[ignore = "needs `cargo xtask immich up` and `seed` (nightly)"]
+fn live_external_library_links_by_path_and_reads_sidecars() {
+    let url = std::env::var("IMMICH_URL").unwrap_or_else(|_| "http://127.0.0.1:2284".into());
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/immich");
+    let key = std::fs::read_to_string(root.join("api-key")).expect("run `cargo xtask immich seed`").trim().to_string();
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let run = format!("run-{stamp}");
+    let dir = root.join("extlib").join(&run);
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = dir.canonicalize().unwrap();
+    // photos no other run has: the run's stamp is in the pixels
+    let mut files = Vec::new();
+    for i in 0..3u8 {
+        let (w, h) = (48usize, 32usize);
+        let data: Vec<[u8; 4]> = (0..w * h).map(|p| [(p % w * 5) as u8 ^ (stamp >> (i * 8)) as u8, (p / w * 7) as u8, i * 80, 255]).collect();
+        let img = dac_raster::Rgba8 { width: w, height: h, data };
+        let bytes = dac_codecs::encode_png(&dac_codecs::EncodeImage::rgba8(&img), &dac_codecs::EncodeMeta::default()).unwrap();
+        let f = dir.join(format!("shared-{i}.png"));
+        std::fs::write(&f, bytes).unwrap();
+        files.push(f.to_string_lossy().to_string());
+    }
+    let mut s = session();
+    s.execute("library.import", &json!({"paths": files})).unwrap();
+    pump_until(&mut s, |s, _| s.catalog.photos().all(|p| p.sha1.is_some()));
+    let r = s.execute("immich.connect", &json!({"url": url, "apiKey": key})).unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+
+    let c = dac_immich::Client::new(&url, dac_credentials::Secret::new(&key), &dac_immich::ServerOptions::standard()).unwrap();
+    let me = c.me().unwrap();
+    let lib = c.create_library(&me.id, &format!("live {run}"), &[format!("/mnt/extlib/{run}")]).unwrap();
+    let cleanup = |c: &dac_immich::Client| {
+        let _ = c.delete_library(&lib.id);
+        let _ = std::fs::remove_dir_all(&dir);
+    };
+    // the helper sees the library and, once mapped, which folder it covers
+    s.execute("immich.setPathMaps", &json!({"pathMaps": [{"container": "/mnt/extlib", "local": dir.parent().unwrap().to_string_lossy()}]})).unwrap();
+    let libs = s.execute("immich.libraries", &json!({})).unwrap();
+    let covered = libs["coverage"].as_array().unwrap().iter().any(|c| c["library"] == lib.id.as_str());
+    assert!(covered, "{libs}");
+    let sc = s.execute("immich.scanLibraries", &json!({})).unwrap();
+    assert!(sc["scanned"].as_array().unwrap().iter().any(|x| x == lib.id.as_str()), "{sc}");
+
+    // linked by checksum, nothing uploaded
+    let ids: Vec<PhotoId> = s.catalog.photos().map(|p| p.id).collect();
+    wait_for(180, "the scan finds the files and the link pass matches them", || {
+        s.execute("immich.link", &json!({"full": true})).unwrap();
+        pump_until(&mut s, |_, v| v["links"].as_object().is_some_and(|m| m.values().all(|l| l["active"] == false)));
+        ids.iter().all(|id| dac_immich::link::link_state(&s.catalog, *id) == "linked").then_some(())
+    });
+    for id in &ids {
+        let r = s.catalog.remote_of(*id).next().unwrap();
+        let a = c.asset(&r.remote_id).unwrap();
+        assert!(a.original_path.starts_with(&format!("/mnt/extlib/{run}/")), "{}", a.original_path);
+    }
+
+    // metadata → XMP sidecars → rescan → Immich
+    let first = ids[0];
+    s.execute("photo.rate", &json!({"ids": [first.0], "rating": 4})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [first.0], "caption": "shared caption", "keywords": ["sharedtag"]})).unwrap();
+    let w = s.execute("immich.writeSidecars", &json!({})).unwrap();
+    assert_eq!(w["written"], 3, "{w}");
+    assert_eq!(w["refreshed"], 3, "{w}");
+    let asset_id = s.catalog.remote_of(first).next().unwrap().remote_id.clone();
+    let a = wait_for(180, "Immich reads the sidecar", || {
+        let a = c.asset(&asset_id).ok()?;
+        let e = a.exif_info.clone()?;
+        (e.rating == Some(4) && e.description.as_deref() == Some("shared caption") && a.tags.iter().any(|t| t.value == "sharedtag")).then_some(a)
+    });
+    assert_eq!(a.exif_info.and_then(|e| e.rating), Some(4));
+    cleanup(&c);
 }

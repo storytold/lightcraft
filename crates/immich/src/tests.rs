@@ -386,3 +386,31 @@ fn accounts_file_round_trips_without_secrets() {
     assert_eq!(crate::Accounts::load(&dir.join("missing.json")).unwrap(), crate::Accounts::default());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// Regression: Immich doesn't hash external-library files (checksum = SHA-1 of `path:` + path),
+// so they are linked by their mapped path, never by checksum.
+#[test]
+fn external_library_assets_link_by_mapped_path() {
+    let mut cat = Catalog::default();
+    let shared = photo(&mut cat, "shared.png", Some("ab".repeat(20)), "2024-01-01T00:00:00", 10);
+    let a = crate::types::Asset {
+        id: "ext-1".into(),
+        library_id: Some("lib".into()),
+        original_path: "/mnt/photos/shared.png".into(),
+        original_file_name: "shared.png".into(),
+        checksum: "W+lhGqxqiJGkv2Suuu2b+NqwfVY=".into(),
+        ..Default::default()
+    };
+    let maps = [crate::extlib::PathMap { container: "/mnt/photos".into(), local: "/pics/".into() }];
+    assert!(Index::new(&cat).find(&a).is_none(), "no mapping: no link");
+    let index = Index::with_path_maps(&cat, &maps);
+    let (ops, found) = link::link_ops(&cat, &index, "acc", std::slice::from_ref(&a), "now");
+    assert_eq!(found.iter().map(|m| (m.photo, m.kind)).collect::<Vec<_>>(), vec![(shared, MatchKind::Path)]);
+    for op in ops {
+        cat.apply(op).unwrap();
+    }
+    assert_eq!(link::link_state(&cat, shared), "linked");
+    // an uploaded asset at that path (no library) is not matched by path
+    let up = crate::types::Asset { library_id: None, id: "up".into(), ..a };
+    assert!(index.find(&up).is_none());
+}

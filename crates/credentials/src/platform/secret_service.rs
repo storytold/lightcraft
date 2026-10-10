@@ -6,7 +6,8 @@
 //! Items carry the attributes `application` (the app id from `dac_brand`), `service` and
 //! `account`; lookups match all three. The session uses the `plain` algorithm: the secret travels
 //! over the local session bus to the keyring daemon, as with most clients. A locked collection
-//! that needs an unlock prompt is reported as [`CredError::Locked`].
+//! that needs an unlock prompt is reported as [`CredError::Locked`]; [`SecretStore::unlock`] shows the
+//! keyring's own unlock dialog (the spec's `Prompt` object) and waits for its `Completed` signal.
 
 use std::collections::HashMap;
 
@@ -21,6 +22,7 @@ const SERVICE: &str = "org.freedesktop.Secret.Service";
 const COLLECTION: &str = "org.freedesktop.Secret.Collection";
 const ITEM: &str = "org.freedesktop.Secret.Item";
 const SESSION: &str = "org.freedesktop.Secret.Session";
+const PROMPT: &str = "org.freedesktop.Secret.Prompt";
 
 /// The Secret struct `(oayays)`: session, parameters, value, content type.
 type WireSecret = (OwnedObjectPath, Vec<u8>, Vec<u8>, String);
@@ -128,6 +130,28 @@ impl SecretStore for SecretService {
             return Err(CredError::Locked);
         }
         log::info!("credentials: stored a secret for {} in the Secret Service", key.service);
+        Ok(())
+    }
+
+    fn unlock(&self) -> Result<(), CredError> {
+        let collection: OwnedObjectPath = self.service()?.call("ReadAlias", &"default").map_err(unavailable)?;
+        if is_root(&collection) {
+            return Err(CredError::Unavailable("the keyring has no default collection".into()));
+        }
+        let (_, prompt): (Vec<OwnedObjectPath>, OwnedObjectPath) = self.service()?.call("Unlock", &vec![collection]).map_err(unavailable)?;
+        if is_root(&prompt) {
+            return Ok(()); // it was not locked
+        }
+        let p = self.proxy(&prompt, PROMPT)?;
+        // subscribe before prompting, so the answer can't be missed
+        let mut done = p.receive_signal("Completed").map_err(unavailable)?;
+        p.call_method("Prompt", &"").map_err(unavailable)?;
+        let msg = done.next().ok_or_else(|| CredError::Unavailable("the keyring prompt went away".into()))?;
+        let (dismissed, _): (bool, OwnedValue) = msg.body().deserialize().map_err(unavailable)?;
+        if dismissed {
+            return Err(CredError::Locked);
+        }
+        log::info!("credentials: the keyring was unlocked");
         Ok(())
     }
 

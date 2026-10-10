@@ -228,6 +228,13 @@ pub enum Op {
         folder: String,
         at: Option<String>,
     },
+    /// What kind of file the photo is and its format, when the file behind it changed kind (a
+    /// link-only Immich photo whose raw original arrived). Format version 4.
+    SetKind {
+        id: PhotoId,
+        kind: MediaKind,
+        format: String,
+    },
     /// The original file's SHA-1 (40 hex digits; `None` = unknown). Format version 4.
     SetSha1 {
         id: PhotoId,
@@ -683,6 +690,10 @@ impl Catalog {
                     None => self.browsed.remove(&folder),
                 };
                 Op::SetBrowsed { folder, at: old }
+            }
+            Op::SetKind { id, kind, format } => {
+                let p = self.photo_mut(id)?;
+                Op::SetKind { id, kind: std::mem::replace(&mut p.kind, kind), format: std::mem::replace(&mut p.format, format) }
             }
             Op::SetSha1 { id, sha1 } => {
                 if let Some(s) = &sha1

@@ -87,6 +87,8 @@ pub struct ImportDialog {
     /// The candidate clicked last: where a Shift-click range starts ([`ImportDialog::click`]).
     #[serde(skip)]
     pub last_clicked: Option<usize>,
+    /// The source is a connected Immich server (browsed in the dialog) instead of the scanned files.
+    pub immich: bool,
 }
 
 /// A candidate's file type, as the review groups them: its format, or its extension when the
@@ -560,6 +562,10 @@ impl ScanTask {
 
 /// Start importing the dialog's checked files (the dialog's OK / `ui.dialog.confirm`).
 pub fn start(app: &mut DacApp, d: &ImportDialog) -> Result<Value, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if d.immich {
+        return crate::panels::connections::start_import(app);
+    }
     let queue = d.selected_paths();
     if queue.is_empty() {
         return Err("no photos selected".into());
@@ -835,6 +841,33 @@ pub fn progress(app: &mut DacApp, ctx: &egui::Context) {
 /// The dialog body: options, then the candidate grid.
 pub fn body(app: &mut DacApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
     let t = Tokens::get(ui.ctx());
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // the source: files scanned from disk, or a connected Immich server
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.label(egui::RichText::new(crate::i18n::tr("Import from")).color(t.text_label));
+            if crate::widgets::text_button(ui, "importSource:files", crate::i18n::tr("Files"), !d.immich).clicked() {
+                d.immich = false;
+            }
+            if crate::widgets::text_button(ui, "importSource:immich", crate::i18n::tr("Immich"), d.immich).clicked() && !d.immich {
+                d.immich = true;
+                crate::panels::connections::open_source(app, None);
+            }
+        });
+        if d.immich {
+            crate::panels::connections::import_source(app, ui);
+            return;
+        }
+        if d.candidates.is_empty() {
+            ui.label(egui::RichText::new(crate::i18n::tr("No files chosen yet.")).color(t.text_dim));
+            if crate::widgets::text_button(ui, "importChooseFiles", crate::i18n::tr("Choose Files…"), false).clicked() {
+                app.ui.dialog = None;
+                let _ = app.run("file.addPhotos", json!({}));
+            }
+            return;
+        }
+    }
     let n = d.candidates.len();
     let dups = d.candidates.iter().filter(|c| c.duplicate.is_some()).count();
     let sel = d.selected_paths().len();

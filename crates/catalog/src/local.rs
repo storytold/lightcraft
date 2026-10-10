@@ -285,6 +285,7 @@ impl Op {
             | Op::Relink { id, .. }
             | Op::SetContent { id, .. }
             | Op::SetSha1 { id, .. }
+            | Op::SetKind { id, .. }
             | Op::SetXmpStamp { id, .. }
             | Op::SetPreview { id, .. } => out(*id),
             Op::SetRemote { photo, .. } => out(*photo),

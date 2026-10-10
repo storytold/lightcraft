@@ -252,6 +252,7 @@ Status 2026-10-10 (first pass done; see plan/STATUS.md → Phase 1 for the gaps)
       photos still all in RAM, 1M = 2.3 GB.)*
 - [x] 1:1 zoom pixel-equal to export. *(Procedural image and tile seams; corpus raws not run on this machine. Compare
       and Reference views not tiled.)*
-- [~] `net` and `credentials` in place; IMM-CONNECT, IMM-LINK, IMM-IMPORT and IMM-EXTLIB ✅ against the pinned Immich
-      test server. *(IMM-LINK ✅; CONNECT 🟡 no key storage on macOS/Windows; IMPORT 🟡 separate window; EXTLIB 🟡
-      not tried against a real external-library scan.)*
+- [x] `net` and `credentials` in place; IMM-CONNECT, IMM-LINK, IMM-IMPORT and IMM-EXTLIB ✅ against the pinned Immich
+      test server. *(Keys: Secret Service or the passphrase-encrypted file, used where no keychain is reachable —
+      native macOS/Windows keychains still need an FFI helper crate. EXTLIB links by mapped path: Immich does not hash
+      external-library files.)*

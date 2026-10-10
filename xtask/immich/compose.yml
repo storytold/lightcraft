@@ -25,6 +25,8 @@ services:
     environment: *env
     volumes:
       - upload:/data
+      # IMM-EXTLIB tests: a host folder Immich indexes as an external library (read-only, as recommended)
+      - ${IMMICH_EXTLIB_DIR:-../../target/immich/extlib}:/mnt/extlib:ro
     ports:
       - '127.0.0.1:2284:2283'
     depends_on:

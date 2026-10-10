@@ -11,6 +11,8 @@ pub mod catalog;
 mod collections;
 mod color;
 pub(crate) mod convert;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod credentials;
 mod cull;
 pub mod curves;
 pub(crate) mod denoise;
@@ -164,6 +166,8 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(face_recognize::specs());
         #[cfg(not(target_arch = "wasm32"))]
         v.extend(immich::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(credentials::specs());
         v
     })
 }
