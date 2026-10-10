@@ -15,6 +15,7 @@ use tokio::io::AsyncWriteExt;
 pub use crate::settings::Server;
 
 /// How to authenticate.
+#[derive(Clone)]
 pub enum Auth {
     Password(String),
     /// A private key's text (OpenSSH / PEM) and its passphrase.
@@ -99,7 +100,21 @@ pub fn upload(server: &Server, auth: Auth, files: &[(String, Vec<u8>)], progress
     rt.block_on(run(server, auth, files, progress))
 }
 
-async fn run(server: &Server, auth: Auth, files: &[(String, Vec<u8>)], progress: &mut dyn FnMut(usize, usize) -> bool) -> Result<Uploaded, String> {
+/// A logged-in SFTP session.
+struct Conn {
+    session: client::Handle<Handler>,
+    sftp: SftpSession,
+    fingerprint: String,
+}
+
+impl Conn {
+    async fn close(self) {
+        let _ = self.sftp.close().await;
+        let _ = self.session.disconnect(russh::Disconnect::ByApplication, "", "en").await;
+    }
+}
+
+async fn connect(server: &Server, auth: Auth) -> Result<Conn, String> {
     let seen = Arc::new(Mutex::new(String::new()));
     let handler = Handler { known: server.known_fingerprint.trim().to_string(), seen: seen.clone() };
     let config = Arc::new(client::Config { inactivity_timeout: Some(Duration::from_secs(60)), ..client::Config::default() });
@@ -140,6 +155,12 @@ async fn run(server: &Server, auth: Auth, files: &[(String, Vec<u8>)], progress:
     let channel = session.channel_open_session().await.map_err(|e| format!("cannot open an SFTP channel: {e}"))?;
     channel.request_subsystem(true, "sftp").await.map_err(|e| format!("the server offers no SFTP: {e}"))?;
     let sftp = SftpSession::new(channel.into_stream()).await.map_err(|e| format!("cannot start SFTP: {e}"))?;
+    Ok(Conn { session, sftp, fingerprint: fingerprint() })
+}
+
+async fn run(server: &Server, auth: Auth, files: &[(String, Vec<u8>)], progress: &mut dyn FnMut(usize, usize) -> bool) -> Result<Uploaded, String> {
+    let conn = connect(server, auth).await?;
+    let sftp = &conn.sftp;
     for dir in folders(&server.path, files) {
         if !sftp.try_exists(dir.clone()).await.unwrap_or(false) {
             sftp.create_dir(dir.clone()).await.map_err(|e| format!("cannot create {dir}: {e}"))?;
@@ -158,9 +179,30 @@ async fn run(server: &Server, auth: Auth, files: &[(String, Vec<u8>)], progress:
         bytes = bytes.saturating_add(data.len() as u64);
     }
     progress(total, total);
-    let _ = sftp.close().await;
-    let _ = session.disconnect(russh::Disconnect::ByApplication, "", "en").await;
-    Ok(Uploaded { files: total, bytes, fingerprint: fingerprint() })
+    let fingerprint = conn.fingerprint.clone();
+    conn.close().await;
+    Ok(Uploaded { files: total, bytes, fingerprint })
+}
+
+/// Deletes the files at `rels` (relative to the server's folder); one already gone is not an
+/// error. Returns the server's host key fingerprint.
+pub fn remove(server: &Server, auth: Auth, rels: &[String]) -> Result<String, String> {
+    if server.host.trim().is_empty() || server.user.trim().is_empty() {
+        return Err("the upload server needs a host and a user name".into());
+    }
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| format!("cannot start the upload: {e}"))?;
+    rt.block_on(async {
+        let conn = connect(server, auth).await?;
+        for rel in rels {
+            let path = remote_path(&server.path, rel);
+            if conn.sftp.try_exists(path.clone()).await.unwrap_or(false) {
+                conn.sftp.remove_file(path.clone()).await.map_err(|e| format!("cannot delete {path}: {e}"))?;
+            }
+        }
+        let fp = conn.fingerprint.clone();
+        conn.close().await;
+        Ok(fp)
+    })
 }
 
 #[cfg(test)]
