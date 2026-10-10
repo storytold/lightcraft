@@ -96,6 +96,8 @@ crates/ui-egui/src/keymap_classic.rs
 crates/ui-egui/src/panels/classic_left.rs
 crates/ui-egui/src/menus_fork.rs
 crates/ui-egui/src/shell.rs
+apps/cli/src/catalog_migrate.rs
+apps/app/src/catalog_hooks.rs
 docs/upstream-candidates.md
 # rebranding and packaging templates (brand.toml)
 xtask/src/dist.rs
