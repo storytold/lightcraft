@@ -400,6 +400,12 @@ pub trait Module: Sync {
     fn own_sides(&self) -> bool {
         false
     }
+    /// Command-id prefixes that belong to this module: the ⌘/ help and the Keyboard Shortcuts
+    /// dialog's "Only <module> keys" list them (Library and Develop are listed in
+    /// `panels::keymap::in_module`).
+    fn command_prefixes(&self) -> &'static [&'static str] {
+        &[]
+    }
 }
 
 struct Library;
@@ -429,6 +435,7 @@ pub const LIBRARY_KEYS: &[ModuleKey] = &[
     ("-", "view.thumbSmaller", "{}"),
     ("Home", "library.first", "{}"),
     ("End", "library.last", "{}"),
+    crate::help_overlay::KEY,
 ];
 
 /// Develop: ⌘U Auto (tone), ⇧⌘U Auto white balance, ⇧Q cycles the selected spot's mode
@@ -439,6 +446,7 @@ pub const DEVELOP_KEYS: &[ModuleKey] = &[
     ("Shift+Q", "spot.cycleMode", "{}"),
     ("Home", "library.first", "{}"),
     ("End", "library.last", "{}"),
+    crate::help_overlay::KEY,
 ];
 
 impl Module for Library {
@@ -491,7 +499,7 @@ static SLIDESHOW: SlideshowModule = SlideshowModule;
 /// the slide settings right. ↩ plays full screen, ⌥↩ previews in place.
 struct SlideshowModule;
 
-const SLIDESHOW_KEYS: &[ModuleKey] = &[("Enter", "slideshow.play", "{}"), ("Alt+Enter", "slideshow.preview", "{}")];
+const SLIDESHOW_KEYS: &[ModuleKey] = &[("Enter", "slideshow.play", "{}"), ("Alt+Enter", "slideshow.preview", "{}"), crate::help_overlay::KEY];
 
 impl Module for SlideshowModule {
     fn id(&self) -> ModuleId {
@@ -511,6 +519,9 @@ impl Module for SlideshowModule {
     }
     fn keymap(&self) -> &'static [ModuleKey] {
         SLIDESHOW_KEYS
+    }
+    fn command_prefixes(&self) -> &'static [&'static str] {
+        &["slideshow."]
     }
     fn own_sides(&self) -> bool {
         true
@@ -710,6 +721,7 @@ pub const SHELL_COMMANDS: &[crate::menus::UiCommand] = &[
     ("module.print", "Print", None, "Window>Modules"),
     ("module.web", "Web", None, "Window>Modules"),
     ("module.previous", "Go Back to Previous Module", None, "Window"),
+    ("module.help", "Module Shortcuts", None, "Help"),
     ("module.setVisible", "Show Module in Picker", None, ""),
     ("panel.toggle", "Toggle Panel", None, ""),
     ("panel.top", "Show Module Picker", None, "Window>Panels"),
@@ -843,6 +855,9 @@ fn run_inner(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
     }
     if let Some(r) = crate::web_module::run(app, id, p) {
         return r;
+    }
+    if id == crate::help_overlay::COMMAND {
+        return crate::help_overlay::run(app, p);
     }
     if let Some(m) = id.strip_prefix("module.").and_then(ModuleId::parse) {
         return switch(app, m);
@@ -1145,6 +1160,7 @@ pub fn auto_show(app: &mut DacApp, ctx: &egui::Context) {
 /// The identity plate's context menu: a graphic from a file, back to text, the brand mark, bold.
 fn plate_menu(app: &mut DacApp, ui: &mut egui::Ui, plate: Rect) {
     let resp = ui.interact(plate, egui::Id::new("identity-plate"), Sense::click());
+    crate::access::button(&resp, "Identity Plate");
     resp.context_menu(|ui| {
         if ui.button(crate::i18n::tr("Choose Plate Image…")).clicked() {
             let _ = app.run("dialog.identityPlateImage", json!({}));
@@ -1234,6 +1250,7 @@ pub fn module_bar(app: &mut DacApp, ui: &mut egui::Ui) {
                 register(ui.ctx(), &id, r);
                 let resp = ui.interact(r, egui::Id::new(&id), Sense::click());
                 let on = *m == app.ui.module;
+                crate::access::choice(&resp, m.label(), on);
                 let color = if on {
                     t.text
                 } else if resp.hovered() {
@@ -1249,6 +1266,7 @@ pub fn module_bar(app: &mut DacApp, ui: &mut egui::Ui) {
                 x += w + sep;
             }
             let bg = ui.interact(full, egui::Id::new("module-bar-bg"), Sense::click());
+            crate::access::button(&bg, "Module Picker");
             bg.context_menu(|ui| picker_menu(app, ui));
             if let Some(m) = switch_to
                 && let Err(e) = app.run(m.command(), json!({}))

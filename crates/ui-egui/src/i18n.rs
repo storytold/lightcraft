@@ -70,7 +70,9 @@ macro_rules! language_table {
                             .iter()
                             .map(|language| {
                                 let catalog = match *language { $(Self::$variant => Some($catalog),)* _ => None };
-                                (*language, parse(catalog))
+                                let mut messages = parse(catalog);
+                                messages.extend(parse(crate::i18n_fork::overlay(language.code())));
+                                (*language, messages)
                             })
                             .collect()
                     })

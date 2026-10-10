@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod access;
 pub mod album_picker;
 pub mod book;
 #[cfg(not(target_arch = "wasm32"))]
@@ -20,7 +21,9 @@ pub mod date_picker;
 mod edit_in;
 pub mod export_task;
 pub mod headless;
+pub mod help_overlay;
 pub mod i18n;
+mod i18n_fork;
 pub mod icons;
 pub mod import;
 pub mod libtools;
@@ -39,6 +42,8 @@ pub mod plate;
 pub mod print_ui;
 pub mod region;
 pub mod render;
+/// The module shell's frame steps (fork-owned).
+mod shell;
 pub mod shortcuts;
 pub mod slideshow_ui;
 pub mod softpaint;
@@ -51,6 +56,8 @@ pub mod titlebar;
 pub mod web_module;
 pub mod widgets;
 
+#[cfg(test)]
+mod tests_access;
 #[cfg(test)]
 mod tests_activity;
 #[cfg(test)]
@@ -69,6 +76,8 @@ mod tests_date_picker;
 mod tests_filmstrip;
 #[cfg(test)]
 mod tests_grid;
+#[cfg(test)]
+mod tests_i18n_coverage;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests_immich_ui;
 #[cfg(test)]
@@ -93,6 +102,8 @@ mod tests_masking;
 mod tests_masking_layout;
 #[cfg(test)]
 mod tests_menubar;
+#[cfg(test)]
+mod tests_module_help;
 #[cfg(test)]
 mod tests_modules;
 #[cfg(test)]
@@ -367,6 +378,8 @@ pub struct DacApp {
     pub activity_expanded: bool,
     /// The Map module's view state (P3.3).
     pub map: map::MapUi,
+    /// The Classic module help sheet (⌘/, P6.3).
+    pub help: help_overlay::HelpOverlay,
 }
 
 impl DacApp {
@@ -379,6 +392,7 @@ impl DacApp {
             immich: Default::default(),
             print: Default::default(),
             map: Default::default(),
+            help: Default::default(),
             ui: UiState::default(),
             services,
             renderer: render::Renderer::default(),
@@ -1026,7 +1040,7 @@ impl DacApp {
             raw.events.push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
         }
         if self.synthetic.is_empty() {
-            self.defer_tabs(raw);
+            shell::defer_tabs(self, raw);
             return;
         }
         let n = match self.synthetic[0] {
@@ -1052,24 +1066,7 @@ impl DacApp {
             self.synthetic_mods_release = ends;
         }
         raw.events.extend(self.synthetic.drain(..n));
-        self.defer_tabs(raw);
-    }
-
-    /// Tab outside a text field toggles panels (Classic): keep it from moving egui's focus.
-    fn defer_tabs(&mut self, raw: &mut egui::RawInput) {
-        if self.text_focus || self.recording_shortcut.is_some() {
-            return;
-        }
-        let deferred = &mut self.deferred_tabs;
-        raw.events.retain(|e| match e {
-            egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, .. } => {
-                if *pressed {
-                    deferred.push(*modifiers);
-                }
-                false
-            }
-            _ => true,
-        });
+        shell::defer_tabs(self, raw);
     }
 
     /// Frame timings once layout is done (`t0`: when layout started).
@@ -1118,35 +1115,7 @@ impl DacApp {
         }
         // Order matters: earlier panels take the full edge (top bar spans the window; the tool strip,
         // right panels and left panel run to the bottom; the bottom bar sits between them).
-        module::sync(self);
-        module::auto_show(self, &ctx);
-        let m = module::get(self.ui.module);
-        if self.ui.screen_mode != module::ScreenMode::FullScreen && self.ui.screen_mode != module::ScreenMode::FullScreenHidePanels {
-            panels::topbar::show(self, ui);
-        }
-        if module::edge_visible(self, module::Edge::Top) {
-            module::module_bar(self, ui);
-        }
-        panels::library_problem::banner(self, ui);
-        if module::edge_visible(self, module::Edge::Right) && !m.own_sides() {
-            panels::strip::show(self, ui);
-            // Library's right column is its Classic panels, unless a Library panel of the strip
-            // (Info, Keywords, Versions, Activity) was opened in its place
-            if self.ui.module == module::ModuleId::Library && self.ui.right == state::RightPanel::None {
-                panels::classic::right_column(self, ui);
-            } else if self.ui.right != state::RightPanel::None {
-                panels::right::show(self, ui);
-            }
-            if self.ui.presets {
-                panels::presets::show(self, ui);
-            }
-        }
-        if module::edge_visible(self, module::Edge::Left) && !m.own_sides() {
-            panels::left::show(self, ui);
-        }
-        if self.ui.toolbar && self.ui.screen_mode != module::ScreenMode::FullScreenHidePanels {
-            m.toolbar(ui, self);
-        }
+        let m = shell::edges(self, ui, &ctx);
         let t = theme::Tokens::get(&ctx);
         let bg = if matches!(self.ui.view, state::ViewMode::Detail | state::ViewMode::Compare | state::ViewMode::Survey | state::ViewMode::Reference)
         {
@@ -1156,6 +1125,7 @@ impl DacApp {
         };
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(bg)).show(ui, |ui| m.center(ui, self));
         module::lights_out(self, &ctx);
+        help_overlay::show(self, &ctx);
         panels::second::show(self, &ctx);
         panels::notices::show(self, &ctx);
         panels::dialogs::show(self, &ctx);
@@ -1367,7 +1337,7 @@ impl Caches {
         match &self.folder_tree {
             Some((r, t)) if *r == cat.revision => t.clone(),
             _ => {
-                let t = std::sync::Arc::new(crate::panels::left::with_disk_folders(cat.folder_tree()));
+                let t = std::sync::Arc::new(crate::panels::left::classic::with_disk_folders(cat.folder_tree()));
                 self.folder_tree = Some((cat.revision, t.clone()));
                 t
             }

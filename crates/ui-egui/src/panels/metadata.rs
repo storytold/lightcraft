@@ -365,6 +365,7 @@ fn text_field(app: &mut DacApp, ui: &mut egui::Ui, photos: &[Arc<Photo>], ids: &
     };
     let field = if shared.is_none() { field.hint(MIXED) } else { field };
     let r = field.width(f32::INFINITY).show(ui);
+    crate::access::label(&r.response, label);
     if r.editing {
         ui.data_mut(|d| d.insert_temp(id, text.clone()));
     } else {
@@ -461,6 +462,7 @@ fn gps(app: &mut DacApp, ui: &mut egui::Ui, photos: &[Arc<Photo>], ids: &[u64]) 
     let hint = if shared.is_none() { MIXED } else { crate::i18n::tr("latitude, longitude") };
     let r = ui.add(egui::TextEdit::singleline(&mut text).hint_text(hint).desired_width(f32::INFINITY));
     register(ui.ctx(), "field:gps", r.rect);
+    crate::access::label(&r, "GPS");
     if r.has_focus() {
         ui.data_mut(|d| d.insert_temp(gid, text.clone()));
     } else {
@@ -525,7 +527,9 @@ fn label(app: &mut DacApp, ui: &mut egui::Ui, photos: &[Arc<Photo>]) {
             if on {
                 ui.painter().circle_stroke(r.center(), 10.0, egui::Stroke::new(1.5, t.text));
             }
-            let resp = resp.on_hover_text(crate::i18n::color_label(&app.session.catalog, l));
+            let name = crate::i18n::color_label(&app.session.catalog, l);
+            crate::access::named(&resp, egui::WidgetType::RadioButton, &name);
+            let resp = resp.on_hover_text(name);
             if resp.clicked() {
                 let _ = app.run("photo.label", json!({"label": if on { "none".to_string() } else { key }}));
             }
@@ -564,7 +568,7 @@ fn extras(app: &mut DacApp, ui: &mut egui::Ui, p: &Photo) {
             line.push_str(&crate::i18n::tr_format!(" · {:.0}% clipped", a.clipped * 100.0));
         }
         if a.group.is_some() {
-            line.push_str(if a.best { " · best of its burst" } else { " · in a burst" });
+            line.push_str(crate::i18n::tr(if a.best { " · best of its burst" } else { " · in a burst" }));
         }
         ui.add_space(4.0);
         ui.label(egui::RichText::new(line).color(t.text_dim));

@@ -335,22 +335,29 @@ fn settings_window(app: &mut DacApp, ctx: &egui::Context) {
                         "Optional: where downloads go"
                     })));
                 register(ui.ctx(), "tetherFolder", r.rect);
+                crate::access::label(&r, "Watched folder");
                 ui.end_row();
                 ui.label(crate::i18n::tr("Session name"));
                 let r = ui.add(egui::TextEdit::singleline(&mut form.session).desired_width(260.0));
+                crate::access::label(&r, "Session name");
                 register(ui.ctx(), "tetherSession", r.rect);
                 ui.end_row();
                 ui.label(crate::i18n::tr("Copy into library"));
                 ui.checkbox(&mut form.copy, crate::i18n::tr("Copy shots into Originals/<session>"));
                 ui.end_row();
                 ui.label(crate::i18n::tr("File naming"));
-                ui.add_enabled(form.copy, egui::TextEdit::singleline(&mut form.naming).desired_width(260.0).hint_text("{session}-{seq:4}"));
+                let r = ui.add_enabled(form.copy, egui::TextEdit::singleline(&mut form.naming).desired_width(260.0).hint_text("{session}-{seq:4}"));
+                crate::access::label(&r, "File naming");
                 ui.end_row();
                 ui.label(crate::i18n::tr("Collection"));
-                ui.add(egui::TextEdit::singleline(&mut form.collection).desired_width(260.0).hint_text(crate::i18n::tr("Default: the session name")));
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut form.collection).desired_width(260.0).hint_text(crate::i18n::tr("Default: the session name")),
+                );
+                crate::access::label(&r, "Default: the session name");
                 ui.end_row();
                 ui.label(crate::i18n::tr("Keywords"));
-                ui.add(egui::TextEdit::singleline(&mut form.keywords).desired_width(260.0).hint_text("studio, client"));
+                let r = ui.add(egui::TextEdit::singleline(&mut form.keywords).desired_width(260.0).hint_text("studio, client"));
+                crate::access::label(&r, "Keywords");
                 ui.end_row();
                 ui.label(crate::i18n::tr("Develop preset"));
                 let presets: Vec<(String, String)> = app.session.presets.iter().map(|p| (p.id.clone(), p.name.clone())).collect();
