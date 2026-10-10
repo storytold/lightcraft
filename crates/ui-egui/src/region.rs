@@ -543,4 +543,26 @@ mod tests {
         let w = window_for(100_000, 100_000, (0.0, 0.0, 90_000.0, 90_000.0), MAX_SPAN).unwrap();
         assert!(w.w <= MAX_SPAN && w.h <= MAX_SPAN);
     }
+
+    // Given the named zoom levels, each is found, Zoom In / Out walk them in order, and out of
+    // 1:4 is Fit
+    #[test]
+    fn zoom_levels_run_from_one_quarter_to_eleven_to_one() {
+        use crate::state::{MAX_ZOOM, ZOOM_LEVELS, Zoom, zoom_level, zoom_step};
+        assert_eq!(zoom_level("fit"), Some(Zoom::Fit));
+        assert_eq!(zoom_level("fill"), Some(Zoom::Fill));
+        assert_eq!(zoom_level("1:1"), Some(Zoom::Percent(100.0)));
+        assert_eq!(zoom_level("11:1"), Some(Zoom::Percent(MAX_ZOOM)));
+        assert_eq!(zoom_level("5:1"), None);
+        let mut up = vec![];
+        let mut cur = 20.0;
+        while cur < MAX_ZOOM {
+            cur = zoom_step(cur, true).unwrap();
+            up.push(cur);
+        }
+        assert_eq!(up, ZOOM_LEVELS.map(|l| l.1).to_vec());
+        assert_eq!(zoom_step(MAX_ZOOM, true), Some(MAX_ZOOM), "11:1 is the deepest");
+        assert_eq!(zoom_step(100.0 / 3.0, false), Some(25.0), "1:3 out is 1:4");
+        assert_eq!(zoom_step(25.0, false), None, "1:4 out is Fit");
+    }
 }

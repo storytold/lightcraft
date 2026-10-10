@@ -52,8 +52,10 @@ mode ([mcp.md](mcp.md)) is a thin layer over this channel. Implementation:
 
 Image navigation is also available directly as the UI command `view.navigate`, with
 `{zoom?: "fit" | "fill" | {"percent": number}, pan?: [x, y]}`. Percentage zoom accepts fractional
-values greater than 0 and at most 800; pan is the normalized image centre, with coordinates from 0 to 1.
-Pinching keeps the image point under the pointer steady and zooms between Fit and 800%; two-finger
+values greater than 0 and at most 1100 (11:1); pan is the normalized image centre, with coordinates from 0 to 1.
+`view.zoomLevel {level}` jumps to a named level: `fit`, `fill`, `1:4`, `1:3`, `1:2`, `1:1`, `2:1`, `3:1`, `4:1`,
+`8:1` or `11:1` (Zoom In / Out step through the same levels).
+Pinching keeps the image point under the pointer steady and zooms between Fit and 1100%; two-finger
 scrolling pans in both axes and respects the operating system's scrolling direction and momentum.
 These gestures work in Detail (including editing tools and full-screen preview), Compare and Reference
 views, and only apply over their image areas. Panning stops at the image edges.

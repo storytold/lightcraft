@@ -77,6 +77,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // the ratio a click (and Z / Space) zooms to
     ("view.clickZoom", "Click Zoom Ratio", None, ""),
     ("view.navigate", "Set Image Zoom and Pan", None, ""),
+    ("view.zoomLevel", "Zoom Level", None, ""),
     ("view.zoomIn", "Zoom In", Some("Cmd+="), "View"),
     ("view.zoomOut", "Zoom Out", Some("Cmd+-"), "View"),
     ("view.clipping", "Show Clipping", Some("J"), "View"),
@@ -520,37 +521,48 @@ pub fn run_ui_command(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Va
             Ok(Value::Null)
         }
         "view.clickZoom" => {
-            // {ratio?: 1|2|3|4|8} → {ratio}
+            // {ratio?: 1|2|3|4|8|11} → {ratio}
             if let Some(r) = p.get("ratio").and_then(Value::as_f64) {
                 let pct = (r * 100.0).round() as u32;
                 if !crate::state::CLICK_ZOOMS.contains(&pct) {
-                    return Some(Err(format!("view.clickZoom: ratio {r} (1, 2, 3, 4 or 8)")));
+                    return Some(Err(format!("view.clickZoom: ratio {r} (1, 2, 3, 4, 8 or 11)")));
                 }
                 app.ui.click_zoom = pct;
             }
             Ok(json!({"ratio": app.ui.click_zoom / 100}))
         }
         "view.zoomIn" | "view.zoomOut" => {
-            let steps = [25.0, 50.0, 100.0, 200.0, 400.0, 800.0];
+            // the fixed levels 1:4 … 11:1 (state::ZOOM_LEVELS); out of the first one is Fit
             let cur = match app.ui.zoom {
                 Zoom::Percent(p) => p,
                 _ => 25.0,
             };
-            let next = if id == "view.zoomIn" {
-                steps.iter().find(|s| **s > cur).copied().unwrap_or(800.0)
-            } else {
-                steps.iter().rev().find(|s| **s < cur).copied().unwrap_or(0.0)
+            app.ui.zoom = match crate::state::zoom_step(cur, id == "view.zoomIn") {
+                Some(p) => Zoom::Percent(p),
+                None => Zoom::Fit,
             };
-            app.ui.zoom = if next == 0.0 { Zoom::Fit } else { Zoom::Percent(next) };
             Ok(Value::Null)
+        }
+        "view.zoomLevel" => {
+            // {level: fit|fill|1:4|1:3|1:2|1:1|2:1|3:1|4:1|8:1|11:1} → {zoom}
+            const LEVELS: &str = "fit, fill, 1:4, 1:3, 1:2, 1:1, 2:1, 3:1, 4:1, 8:1 or 11:1";
+            let Some(level) = p.get("level").and_then(Value::as_str) else {
+                return Some(Err(format!("view.zoomLevel: level is required ({LEVELS})")));
+            };
+            let Some(z) = crate::state::zoom_level(level) else {
+                return Some(Err(format!("view.zoomLevel: unknown level `{level}` ({LEVELS})")));
+            };
+            app.ui.zoom = z;
+            app.ui.zoom_anim = true;
+            Ok(json!({"zoom": z}))
         }
         "view.navigate" => {
             // {zoom?: "fit"|"fill"|{percent: number}, pan?: [x, y]} (normalized image centre).
             // Validate the complete request before changing either part of the viewport.
             let zoom = match p.get("zoom") {
                 Some(v) => match serde_json::from_value::<Zoom>(v.clone()) {
-                    Ok(Zoom::Percent(p)) if !p.is_finite() || p <= 0.0 || p > 800.0 => {
-                        return Some(Err("view.navigate: zoom percent must be greater than 0 and at most 800".into()));
+                    Ok(Zoom::Percent(p)) if !p.is_finite() || p <= 0.0 || p > crate::state::MAX_ZOOM => {
+                        return Some(Err("view.navigate: zoom percent must be greater than 0 and at most 1100".into()));
                     }
                     Ok(z) => z,
                     Err(e) => return Some(Err(format!("view.navigate: {e}"))),

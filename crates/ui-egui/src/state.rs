@@ -237,8 +237,45 @@ impl AppSettings {
     }
 }
 
-/// Click-zoom ratios offered (percent): 1:1, 2:1, 3:1, 4:1, 8:1.
-pub const CLICK_ZOOMS: [u32; 5] = [100, 200, 300, 400, 800];
+/// Click-zoom ratios offered (percent): 1:1, 2:1, 3:1, 4:1, 8:1, 11:1.
+pub const CLICK_ZOOMS: [u32; 6] = [100, 200, 300, 400, 800, 1100];
+
+/// The deepest zoom (percent): 11:1.
+pub const MAX_ZOOM: f32 = 1100.0;
+
+/// The fixed zoom levels below Fit and Fill, as (name, percent): what Zoom In / Out step through
+/// and `view.zoomLevel` names.
+pub const ZOOM_LEVELS: [(&str, f32); 9] = [
+    ("1:4", 25.0),
+    ("1:3", 100.0 / 3.0),
+    ("1:2", 50.0),
+    ("1:1", 100.0),
+    ("2:1", 200.0),
+    ("3:1", 300.0),
+    ("4:1", 400.0),
+    ("8:1", 800.0),
+    ("11:1", 1100.0),
+];
+
+/// The zoom a level name stands for: `fit`, `fill` or one of [`ZOOM_LEVELS`].
+pub fn zoom_level(name: &str) -> Option<Zoom> {
+    match name {
+        "fit" | "Fit" => Some(Zoom::Fit),
+        "fill" | "Fill" => Some(Zoom::Fill),
+        _ => ZOOM_LEVELS.iter().find(|(n, _)| *n == name).map(|(_, p)| Zoom::Percent(*p)),
+    }
+}
+
+/// The next fixed level after `cur` (percent) going in (`up`) or out; `None` past the last one
+/// out (Fit).
+pub fn zoom_step(cur: f32, up: bool) -> Option<f32> {
+    // (a little slack: 1:3 is not a whole percentage)
+    if up {
+        Some(ZOOM_LEVELS.iter().map(|l| l.1).find(|p| *p > cur + 0.01).unwrap_or(MAX_ZOOM))
+    } else {
+        ZOOM_LEVELS.iter().rev().map(|l| l.1).find(|p| *p < cur - 0.01)
+    }
+}
 
 /// Width limits of a side panel the user resizes (points).
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -2861,7 +2861,7 @@ mod tests {
         assert!((edge.left() - area.left()).abs() < 0.01 && (edge.bottom() - area.bottom()).abs() < 0.01, "{edge:?} vs {area:?}");
 
         h.request("ui.zoom", json!({"factor": 1e20}), t);
-        assert_eq!(h.app.ui.zoom, Zoom::Percent(800.0));
+        assert_eq!(h.app.ui.zoom, Zoom::Percent(crate::state::MAX_ZOOM));
         h.request("ui.zoom", json!({"factor": 0.000001}), t);
         assert_eq!(h.app.ui.zoom, Zoom::Fit);
         assert_eq!(h.app.ui.pan, (0.5, 0.5));

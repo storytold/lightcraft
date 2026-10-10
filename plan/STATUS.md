@@ -63,3 +63,20 @@
 - `cargo xtask immich up` starts Immich v3.3.1 on `http://127.0.0.1:2284` (docker volumes `xtask-immich_*`),
   `seed` creates `admin@example.invalid`, an API key in `target/immich/api-key` and an album of 8 generated PNGs,
   `down [--volumes]` stops it (and wipes data). Re-running `seed` is safe: uploads come back as duplicates.
+
+## Metrics
+
+### P1.6 panning at 1:1 (45 MP)
+
+`cargo test --release -p dac-engine --lib pan_at_one_to_one -- --ignored --nocapture` (2026-10-10, Ryzen AI Max+
+PRO 395 / Radeon 8060S, Linux): an 8256 × 5504 procedural photo with exposure and clarity, a 2560 × 1440 canvas at
+1:1, panned 40 px a frame for 180 frames. The loupe draws the window it has every frame (a texture moved by the
+GPU, so the frame rate does not depend on the photo) and renders a new one (snapped to 256 px, 512 px margin, about
+3584 × 2560) only when the view leaves it: 7 window renders in 180 frames.
+
+| path | mean window render | worst | sharp panning up to |
+|------|--------------------|-------|---------------------|
+| CPU  | 95.5 ms | 99.9 ms | ≈ 270 fps |
+| GPU  | 39.0 ms | 128.1 ms (first, cold) | ≈ 660 fps |
+
+Both stay well above the 30 fps target: a window render takes less than the 25 frames its margin covers.
