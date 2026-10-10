@@ -365,7 +365,7 @@ pub fn lrtemplate_props(text: &str) -> Result<(Option<String>, Props, crate::crs
 }
 
 /// Data-only Lua settings shared by preset and native catalog import. Never executes Lua.
-pub(crate) fn lua_settings_props(settings: &Lua) -> Result<(Props, crate::crs_masks::Values), String> {
+pub fn lua_settings_props(settings: &Lua) -> Result<(Props, crate::crs_masks::Values), String> {
     let Lua::Table(_, fields) = settings else { return Err("no develop settings in this template".into()) };
     let mut props = Props::new();
     let mut values = crate::crs_masks::Values::new();
@@ -727,37 +727,4 @@ text]], z = ZSTR "loc" }"#,
         assert_eq!(group_from_dir("Sacred Light"), Some("Sacred Light".into()), "whole words only");
     }
 
-    #[test]
-    fn import_command_reads_folders_bundles_and_applies() {
-        let dir = std::env::temp_dir().join(format!("lc-preset-import-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("Looks/Film")).unwrap();
-        std::fs::write(dir.join("Looks/Film/Warm Fade.lrtemplate"), TEMPLATE).unwrap();
-        std::fs::write(dir.join("Looks/bundle.zip"), zip(&[("Street/Bright.xmp", XMP.as_bytes())], true)).unwrap();
-        std::fs::write(dir.join("Looks/notes.txt"), "not a preset").unwrap();
-        let mut s = crate::Session::with_demo();
-        let before = s.presets.len();
-        let paths = json!([dir.join("Looks").to_string_lossy()]);
-        // a dry run reports without adding
-        let r = s.execute("preset.import", &json!({"paths": paths, "dryRun": true})).unwrap();
-        assert_eq!(r["imported"].as_array().unwrap().len(), 2, "{r}");
-        assert_eq!(s.presets.len(), before);
-        let r = s.execute("preset.import", &json!({"paths": paths})).unwrap();
-        let got: Vec<(String, String)> =
-            r["imported"].as_array().unwrap().iter().map(|i| (i["name"].as_str().unwrap().into(), i["group"].as_str().unwrap().into())).collect();
-        assert_eq!(got, [("Warm Fade".to_string(), "Film".to_string()), ("Bright".into(), "Street".into())]);
-        assert_eq!(r["imported"][0]["unmapped"], json!(["CameraProfile"]));
-        assert_eq!(s.presets.len(), before + 2);
-        // importing again adds nothing
-        let r = s.execute("preset.import", &json!({"paths": paths})).unwrap();
-        assert_eq!((r["imported"].as_array().unwrap().len(), r["skipped"].as_u64()), (0, Some(2)));
-        // and the imported look applies
-        let id = s.catalog.photos().next().unwrap().id;
-        s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
-        let pid = s.presets.iter().find(|p| p.name == "Warm Fade").unwrap().id.clone();
-        s.execute("preset.apply", &json!({"id": pid})).unwrap();
-        let d = s.develop_of(id).unwrap();
-        assert_eq!((d.light.exposure, d.light.contrast), (0.35, -20.0));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 }

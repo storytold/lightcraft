@@ -18,8 +18,6 @@ mod camera_preview;
 pub mod camera_profiles;
 pub mod cmd;
 pub mod config;
-pub mod crs;
-pub mod crs_masks;
 pub mod demo;
 pub mod denoise;
 pub mod devices;
@@ -43,8 +41,6 @@ pub mod memory;
 pub mod merge;
 mod model_download;
 pub mod originals;
-pub mod preset_import;
-pub mod preset_luminar;
 pub mod presets;
 pub mod rename;
 pub mod segment;
@@ -54,6 +50,7 @@ mod view;
 
 use std::sync::Arc;
 
+pub use dac_engine_develop::{crs, crs_masks, preset_import, preset_luminar};
 pub use dac_engine_core::{
     AUTO_VERSIONS, EngineError, FolderMove, Interaction, Result, UndoEntry, availability, guard, json_delta, legacy, logging, single_photo, walk,
 };
@@ -776,6 +773,8 @@ mod tests_merge;
 mod tests_organize;
 #[cfg(test)]
 mod tests_persist;
+#[cfg(test)]
+mod tests_preset_files;
 #[cfg(test)]
 mod tests_prefs;
 #[cfg(test)]
