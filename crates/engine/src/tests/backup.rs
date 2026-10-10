@@ -20,6 +20,14 @@ fn open(dir: &Path) -> Session {
     s
 }
 
+/// The backup in `made`, restored into a folder of its own and opened: a backup is not opened
+/// where it is.
+fn restored(s: &mut Session, made: &Path, tag: &str) -> Session {
+    let to = temp_dir(tag);
+    s.execute("library.restore", &json!({"dir": made.to_string_lossy(), "to": to.to_string_lossy()})).unwrap();
+    open(&to)
+}
+
 fn backups(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> =
         std::fs::read_dir(dir).map(|d| d.filter_map(|e| e.ok()?.file_name().into_string().ok()).collect()).unwrap_or_default();
@@ -44,7 +52,7 @@ fn a_backup_opens_as_the_library() {
     let expect = s.catalog.to_snapshot();
     // the library goes on; the backup is what it was
     s.execute("photo.rate", &json!({"rating": 1})).unwrap();
-    let back = open(&made);
+    let back = restored(&mut s, &made, "opens-restored");
     assert_eq!(back.catalog.to_snapshot(), expect);
     assert_eq!(back.catalog.photo(id).unwrap().rating, 4);
     assert_eq!(s.execute("library.backupStatus", &json!({})).unwrap()["report"]["dir"], r["report"]["dir"]);
@@ -195,8 +203,8 @@ fn a_backup_holds_what_was_not_saved_yet() {
     for name in ["catalog.snap", "prefs.json", "backup.json"] {
         assert!(made.join(name).is_file(), "{name}");
     }
+    assert_eq!(restored(&mut s, &made, "unsaved-restored").catalog.photo(id).unwrap().rating, 5);
     drop(s);
-    assert_eq!(open(&made).catalog.photo(id).unwrap().rating, 5);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

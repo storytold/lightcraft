@@ -9,6 +9,8 @@
 //!   prefs.json     (library preferences: XMP sidecars, import defaults, cache size, last export)
 //!   thumbs/        (rendered thumbnail cache, safe to delete)
 //!   Originals/     (photos imported with "copy into library")
+//!   Backups/       (catalog backups, `library.backup`, unless another folder is set)
+//!   Replaced/      (what restores from a backup replaced, `library.restore`: library folders)
 //! ```
 //!
 //! The files live in [`Store`]s: a directory ([`FsStore`]) natively, or any other implementation
@@ -101,6 +103,10 @@ pub struct Library {
     warnings_reported: usize,
     /// Settings files that couldn't be read or set aside: never overwritten this session.
     blocked: Vec<&'static str>,
+    /// Why nothing is written to the catalog any more: a restore stopped while it was moving the
+    /// library's files, so they are no longer the ones this session has open (`library.restore`).
+    /// Changes are refused meanwhile; opening the library again finishes the restore.
+    pub(crate) stuck: Option<String>,
     /// Keeps other processes out of this library while it's open (last: released after the
     /// journal's background snapshot has landed).
     lock: Option<LibraryLock>,
@@ -380,7 +386,7 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 }
 
 /// This program, for the lock owner note ("LightCraft", "lightcraft-cli").
-fn program_name() -> String {
+pub(crate) fn program_name() -> String {
     let exe = std::env::current_exe().ok().and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()));
     match exe.as_deref() {
         Some("lightcraft") | None => "LightCraft".into(),
@@ -522,6 +528,15 @@ impl Session {
         if let Some(place) = crate::lightroom_folder::lightroom_catalog_at(&dir) {
             return Err(EngineError::LightroomCatalog { path: dir, catalog: place.catalog });
         }
+        // a backup is not worked in where it is (and not written to: no lock file, no log)
+        if lightcraft_catalog::backup::is_backup(&dir) {
+            return Err(EngineError::Other(format!(
+                "{} is a backup, not a library to work in. Restore it (`library.restore`): into the library it is of, or into a folder of its own with `to`. \
+                 (A folder that is to be worked in after all is a library once its {} is removed.)",
+                dir.display(),
+                lightcraft_catalog::backup::MARKER
+            )));
+        }
         let dir = resolve_dir(&dir)?;
         let open = || FsStore::open(&dir).map_err(|e| EngineError::Other(format!("can't open library {}: {e}", dir.display())));
         let stores = LibraryStores { catalog: Box::new(open()?), files: Box::new(open()?), on_disk: true, dir: dir.clone() };
@@ -532,11 +547,28 @@ impl Session {
             Some(l) => Some(l),
             None => Some(LibraryLock::acquire(&dir, &program_name()).map_err(|e| EngineError::LibraryInUse(e.to_string()))?),
         };
+        // a restore that was cut short while it moved the library's files is finished first (with
+        // the lock: nothing else is in the folder), so that what opens is one catalog
+        let finished = match lightcraft_catalog::restore::finish(&dir) {
+            Ok(finished) => finished,
+            Err(e) => {
+                if reusing && let Some(lib) = self.library.as_mut() {
+                    lib.lock = lock.take();
+                }
+                return Err(EngineError::Other(e.to_string()));
+            }
+        };
         if let Err(e) = self.open_stores(stores, seed_demo, &mut lock) {
             if reusing && let Some(lib) = self.library.as_mut() {
                 lib.lock = lock.take();
             }
             return Err(e);
+        }
+        if let (Some(r), Some(lib)) = (finished, self.library.as_mut()) {
+            log::warn!("library: finished a restore from {} that was cut short", r.backup.display());
+            let kept = r.aside.map_or(String::new(), |a| format!(" What the library held before is in {}.", a.display()));
+            lib.settings_warnings
+                .push(format!("A restore of this library that was cut short has been finished: the library is now the backup.{kept}"));
         }
         self.loaded_report()
     }
@@ -705,6 +737,7 @@ impl Session {
             settings_warnings: unlocked_warning(lock.as_ref()).into_iter().chain(kept).chain(settings.warnings).collect(),
             warnings_reported: 0,
             blocked: settings.blocked,
+            stuck: None,
             lock: lock.take(),
         });
         // forget untouched Local records of folders not browsed for a while (journaled at once)
@@ -728,11 +761,25 @@ impl Session {
         Ok(())
     }
 
+    /// An error while a restore that stopped part-way has left the library's files half moved
+    /// (`library.restore`): nothing is changed or written until the library is opened again,
+    /// which finishes the restore.
+    pub(crate) fn not_stuck(&self) -> Result<()> {
+        match self.library.as_ref().and_then(|l| l.stuck.as_ref()) {
+            Some(why) => Err(EngineError::Other(why.clone())),
+            None => Ok(()),
+        }
+    }
+
     /// Write pending ops to the log (fsynced), compact when due, and save changed presets.
     /// Called after every top-level command; cheap when nothing changed. Fails (with
     /// [`EngineError::NotSaved`]) only when the queued ops couldn't be written; they stay queued.
     pub fn persist(&mut self) -> Result<()> {
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
+        if let Some(why) = &lib.stuck {
+            // (the files this session has open are not the library's any more: nothing is written)
+            return if self.pending_log.is_empty() { Ok(()) } else { Err(EngineError::NotSaved(why.clone())) };
+        }
         if !self.pending_log.is_empty() {
             if let Err(e) = lib.journal.append(&self.pending_log) {
                 // the ops stay queued (and applied in memory): the next persist retries them
@@ -820,6 +867,15 @@ impl Session {
         if self.library.is_none() {
             return Ok(());
         }
+        if self.library.as_ref().is_some_and(|l| l.stuck.is_some()) {
+            // nothing of this session can be written to files that are being replaced; changes
+            // are refused while it is so ([`Session::not_stuck`]), and opening the library again,
+            // which starts here, is the way out: never refused
+            if !self.pending_log.is_empty() {
+                log::error!("library: {} change(s) made after a restore stopped part-way are not saved", self.pending_log.len());
+            }
+            return Ok(());
+        }
         let _ = self.end_interaction();
         let persisted = self.persist();
         self.save_view();
@@ -872,7 +928,7 @@ impl Session {
     /// written. Native hosts get this from [`Session::close_library`]; the browser host calls it
     /// periodically, since a tab can be closed without notice.
     pub fn save_view(&mut self) {
-        if self.library.is_none() {
+        if self.library.as_ref().is_none_or(|l| l.stuck.is_some()) {
             return;
         }
         let v = self.view_json();
@@ -915,6 +971,7 @@ impl Session {
             hold_view: self.hold_view,
         })
         .unwrap_or_default();
+        self.not_stuck()?;
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
         if lib.blocked.contains(&PREFS) {
             return Err(EngineError::Other(
@@ -954,6 +1011,9 @@ impl Session {
     /// a change that shrinks the catalog a lot, so the smaller snapshot replaces the old one.
     /// Errors are logged and reported like other persistence errors (nothing is lost).
     pub fn compact_soon(&mut self) {
+        if self.not_stuck().is_err() {
+            return;
+        }
         if let Err(e) = self.persist() {
             log::error!("library: {e}");
             return;
@@ -971,6 +1031,7 @@ impl Session {
 
     /// Compact the log into a snapshot now.
     pub fn compact_library(&mut self) -> Result<()> {
+        self.not_stuck()?;
         self.persist()?;
         if self.interaction.is_some() {
             return Err(EngineError::Other("can't compact during an interaction".into()));

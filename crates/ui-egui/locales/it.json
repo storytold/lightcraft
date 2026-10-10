@@ -2366,5 +2366,8 @@
   "Backing up the library": "Backup della libreria in corso",
   "Backup Status": "Stato del backup",
   "Check Backup": "Verifica backup",
+  "Backups": "Backup",
+  "Restore Library from Backup": "Ripristina la libreria da un backup",
+  "Restoring the library": "Ripristino della libreria",
   "Backup Preferences": "Preferenze di backup"
 }

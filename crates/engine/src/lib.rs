@@ -395,6 +395,9 @@ pub struct Session {
     pub backup_dir: Option<std::path::PathBuf>,
     /// Holds a backup before it starts reading (tests look at its row meanwhile).
     pub(crate) backup_hold: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Holds a restore before it starts (tests look at its row meanwhile).
+    #[cfg(test)]
+    pub(crate) restore_hold: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Develop defaults applied on import (persisted in prefs.json).
     pub import_defaults: import::ImportDefaults,
     /// Disk budget of the library's thumbnail cache in MB (0 = default; persisted in prefs.json).
@@ -535,6 +538,8 @@ impl Session {
             backup: None,
             backup_dir: None,
             backup_hold: Default::default(),
+            #[cfg(test)]
+            restore_hold: Default::default(),
             import_defaults: import::ImportDefaults::default(),
             cache_mb: 0,
             slideshow: slideshow::PlaybackSettings::default(),
@@ -572,6 +577,9 @@ impl Session {
         }
         let empty = Value::Object(Default::default());
         let params = if params.is_null() { &empty } else { params };
+        if spec.journal {
+            self.not_stuck()?;
+        }
         self.run_command(id, spec.journal.then_some(params), |s| (spec.run)(s, params)).map_err(|e| match e {
             // a shared parameter check ([`Session::targets`]) names the command it ran for
             EngineError::BadParams { cmd, msg } if cmd.is_empty() => EngineError::BadParams { cmd: id.to_string(), msg },
@@ -639,6 +647,7 @@ impl Session {
 
     /// Apply an op as one undoable step.
     pub fn commit(&mut self, label: &str, op: Op) -> Result<()> {
+        self.not_stuck()?;
         let fwd = op.clone();
         let inv = self.apply_catalog(op)?;
         self.pending_log.push(fwd);
@@ -711,6 +720,7 @@ impl Session {
     /// scan, a raw's as-shot white read by a decode, raws rechecked after an update): journaled like any op, but not
     /// an undo step, and it leaves the redo stack alone.
     pub(crate) fn apply_system(&mut self, op: Op) -> Result<()> {
+        self.not_stuck()?;
         let fwd = op.clone();
         self.catalog.apply(op)?;
         self.pending_log.push(fwd);
@@ -780,6 +790,7 @@ impl Session {
     }
 
     pub(crate) fn undo_step_with(&mut self, fs: &dyn rename::MoveFs) -> Result<String> {
+        self.not_stuck()?;
         let mut e = self.undo.pop().ok_or_else(|| EngineError::Other("nothing to undo".into()))?;
         let redo = match self.apply_with_files(&mut e, fs) {
             Ok(r) => r,
@@ -805,6 +816,7 @@ impl Session {
     }
 
     pub(crate) fn redo_step_with(&mut self, fs: &dyn rename::MoveFs) -> Result<String> {
+        self.not_stuck()?;
         let mut e = self.redo.pop().ok_or_else(|| EngineError::Other("nothing to redo".into()))?;
         let undo = match self.apply_with_files(&mut e, fs) {
             Ok(r) => r,

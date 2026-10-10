@@ -1,8 +1,9 @@
 //! Backing up a library's catalog: a dated folder that opens as the library it was taken of.
 //!
 //! A backup holds `catalog.snap`, the segments it lists (in `segments/`, as in the library),
-//! `catalog.log` and the settings files beside them (not the photos, and not the caches). It is a library folder in its own right:
-//! opening it shows the catalog as it was.
+//! `catalog.log` and the settings files beside them (not the photos, and not the caches). Its
+//! files are a library folder's, so it reads as the catalog as it was; to work in that again it is
+//! restored ([`crate::restore`]), not opened where it is, which would change it.
 //!
 //! **Each backup shares with the one before it the files that didn't change.** A segment is
 //! never changed once written (a snapshot writes a changed one under a new name), so a segment
@@ -60,6 +61,9 @@ pub enum BackupError {
     /// A backup that was checked is not what it was when it was made ([`check`]).
     #[error("the backup is not as it was made: {0}")]
     Changed(String),
+    /// A library can't be restored from a backup ([`crate::restore`]).
+    #[error("the library can't be restored: {0}")]
+    Restore(String),
     #[error("the backup can't be written: {0}")]
     Io(String),
 }
@@ -116,7 +120,7 @@ pub trait Watch {
 
 impl Watch for () {}
 
-fn io(what: &str, path: &Path, e: std::io::Error) -> BackupError {
+pub(crate) fn io(what: &str, path: &Path, e: std::io::Error) -> BackupError {
     BackupError::Io(format!("{what} {}: {e}", path.display()))
 }
 
@@ -172,14 +176,14 @@ fn read_head(bytes: &[u8]) -> Result<Head, BackupError> {
 /// A name `options.also` may hold: a plain file name that isn't one of the catalog's or the
 /// marker's (those are written by the backup itself, and a segment may be shared with another
 /// backup: it is never written over).
-fn valid_extra(name: &str) -> bool {
+pub(crate) fn valid_extra(name: &str) -> bool {
     valid_name(name) && name != SNAPSHOT && name != LOG && name != MARKER && name != segments::SEGMENT_DIR
 }
 
 /// The files of the folder `dir` that a backup may hold, by the names the catalog gives them:
 /// the ones in it, and the ones in its segments folder (`segments/…`). An error names anything
 /// else that is in it (another folder, a link).
-fn held(dir: &Path) -> Result<Vec<String>, String> {
+pub(crate) fn held(dir: &Path) -> Result<Vec<String>, String> {
     let mut names = Vec::new();
     let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     for entry in entries {
@@ -204,14 +208,14 @@ fn held(dir: &Path) -> Result<Vec<String>, String> {
 }
 
 /// Make the folder a file of a backup goes into (the segments folder, with its first file).
-fn folder_for(path: &Path) -> Result<(), BackupError> {
+pub(crate) fn folder_for(path: &Path) -> Result<(), BackupError> {
     match path.parent() {
         Some(folder) if !folder.is_dir() => std::fs::create_dir_all(folder).map_err(|e| io("can't make the folder", folder, e)),
         _ => Ok(()),
     }
 }
 
-fn valid_name(name: &str) -> bool {
+pub(crate) fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 200
         && name != "."
@@ -221,7 +225,7 @@ fn valid_name(name: &str) -> bool {
 }
 
 /// A file's bytes; `None` when there is no such file.
-fn read(path: &Path) -> Result<Option<Vec<u8>>, BackupError> {
+pub(crate) fn read(path: &Path) -> Result<Option<Vec<u8>>, BackupError> {
     match std::fs::read(path) {
         Ok(b) => Ok(Some(b)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -231,12 +235,12 @@ fn read(path: &Path) -> Result<Option<Vec<u8>>, BackupError> {
 
 /// Write a new file and make it durable. Never over one that is there: a file of a backup may
 /// be shared with another backup.
-fn write(path: &Path, bytes: &[u8]) -> Result<(), BackupError> {
+pub(crate) fn write(path: &Path, bytes: &[u8]) -> Result<(), BackupError> {
     let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|e| io("can't create", path, e))?;
     f.write_all(bytes).and_then(|()| f.sync_all()).map_err(|e| io("can't write", path, e))
 }
 
-fn sync_dir(dir: &Path) {
+pub(crate) fn sync_dir(dir: &Path) {
     // (makes the names in it durable; a folder can't be opened on Windows, where renames are journaled)
     if let Ok(d) = std::fs::File::open(dir) {
         let _ = d.sync_all();
@@ -244,7 +248,7 @@ fn sync_dir(dir: &Path) {
 }
 
 /// A regular file (not a link to one elsewhere).
-fn regular(path: &Path) -> bool {
+pub(crate) fn regular(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
 }
 
@@ -497,6 +501,32 @@ pub fn back_up(library: &Path, dest: &Path, options: &BackupOptions<'_>, watch: 
         unfinished.0 = None;
     }
     made
+}
+
+/// The finished backups in `dest`, newest first (by when their markers were written, then by
+/// name): each as its marker reports it, with the folder it is in now. Folders whose marker
+/// can't be read are left out.
+pub fn list(dest: &Path) -> Vec<BackupReport> {
+    let Ok(entries) = std::fs::read_dir(dest) else { return Vec::new() };
+    let mut found: Vec<(std::time::SystemTime, String, BackupReport)> = entries
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|name| !name.ends_with(PARTIAL) && regular(&dest.join(name).join(MARKER)))
+        .filter_map(|name| {
+            let marker = dest.join(&name).join(MARKER);
+            let made = std::fs::metadata(&marker).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+            let mut report: BackupReport = serde_json::from_slice(&std::fs::read(&marker).ok()?).ok()?;
+            report.dir = dest.join(&name);
+            Some((made, name, report))
+        })
+        .collect();
+    found.sort_unstable_by(|a, b| (b.0, &b.1).cmp(&(a.0, &a.1)));
+    found.into_iter().map(|(_, _, report)| report).collect()
+}
+
+/// Whether `dir` is a backup: it has a backup's marker (whatever that is: a folder with
+/// something of that name is not worked in as a library).
+pub fn is_backup(dir: &Path) -> bool {
+    std::fs::symlink_metadata(dir.join(MARKER)).is_ok()
 }
 
 /// Read the backup in `dir` against what its marker lists: every file there, with the size and

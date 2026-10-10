@@ -121,7 +121,7 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
     only then switches to it (`active-library` names the folder in use) and reloads: the previous
     library stays in storage. Both are web-only (`file.backupLibrary`, `file.restoreLibrary`; the
     desktop library is a folder, whose catalog File ▸ Back Up Library, `library.backup`, backs up to a
-    folder: `docs/catalog-persistence.md` → Backups).
+    folder and `library.restore` puts back: `docs/catalog-persistence.md` → Backups).
   - A failed save (quota exceeded, storage cleared) is not silent: the catalog then refuses new
     writes, so commands report `saved in memory but not written`, the top bar shows the unsaved
     warning (as on the desktop, see `docs/control-protocol.md`), and saving is retried every

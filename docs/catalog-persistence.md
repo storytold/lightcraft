@@ -168,10 +168,9 @@ the other).
   reads at start-up. The library's file store refuses to write a file that is not on it, so a new one can't be added
   without being backed up. Not in a backup: the files an upgrade kept (`catalog.snap.v…`), a damaged log set aside,
   previews and caches.
-- **A backup is a library.** Opening its folder shows the catalog as it was. To go back to it, copy the folder and
-  open the copy, or copy its files over the library's. Opening the backup itself turns it into a library in use: it is
-  changed from then on, no longer passes `library.checkBackup`, and (it holds the library's preferences) sends its own
-  backups to the same folder as the original's.
+- **A backup holds a whole library, and is not worked in.** Its files are a library folder's, but LightCraft refuses
+  to open a backup where it is: working in it would change it. To go back to it, or to look at it, restore it
+  (`library.restore`, below).
 - **Each backup shares with the one before it the files that didn't change.** A segment is never changed once
   written, so one of the same name, size and CRC in the previous backup is the same file, and is hard-linked instead
   of copied. Every backup still stands on its own: removing an older one, or the library, takes nothing from it.
@@ -189,6 +188,46 @@ the other).
   `library.checkBackup` reads a backup against that list and names the first file that was edited, damaged, removed or
   added since (not what Finder or Explorer write into a folder somebody looked at: `.DS_Store`, `Thumbs.db`,
   `desktop.ini`, `._…`).
+
+### Restoring
+
+`library.restore {dir}` puts a backup back (`crates/catalog/src/restore.rs`): the open library becomes what the backup
+holds (catalog, log, presets, view and preferences; the folder its backups go to stays as it is now), and the session
+goes on in it, with no undo history, as after opening a library. With `to`, the backup is restored into that folder
+instead, which is how to look at a backup without giving up the library; nothing is opened. `to` is a folder that
+isn't there or is empty, or a library that nothing has open (it is replaced the same way); not a folder in the backup
+or in the open library, and not a folder of other files. `library.backups` lists the backups of a folder, newest
+first.
+
+- **Only a sound backup is restored.** It is read against its marker first, and each file again as it is copied. One
+  that was edited or damaged is refused, and so is one whose catalog or log a newer LightCraft wrote, with the library
+  untouched. The backup is only read: its files are copied, never shared, because a library goes on changing, and
+  nothing is made in its folder.
+- **What the library was is kept.** The files a restore replaces, with every change made up to that moment, are moved
+  to `Replaced/<the time (UTC)>` in the library folder. That is a library folder itself: open it, or restore from a
+  backup of it, to go back. Nothing removes these folders yet; delete the ones you no longer want.
+- **All or nothing.** The backup is first copied into `restore.partial` in the library folder while the library is
+  still as it was. Then a note of what is to be moved (`restore.json`) is written, and only then are files moved: the
+  library's out, the snapshot first, and the backup's in, the snapshot last. If the library's files can't all be
+  moved out, the ones that were are moved back and the restore is refused. A restore that stops after the note (the
+  program ends) is completed when the library is next opened, which says so; one that stops before it leaves the
+  library as it was. A library folder is never opened as some files of one catalog and some of another.
+- **The note is not trusted.** It moves a catalog's files by plain name between the library folder, `Replaced` and
+  `restore.partial`, which must be folders of the library's own, not links; never another folder, a lock file or a
+  backup's marker. A note that can't be read or asks for anything else stops the library from opening, moves nothing,
+  and says where the files are; with the note removed, the library opens as whatever is in place.
+- **A restored catalog that doesn't open is taken back.** If the session can't open what it restored (a segment that
+  has its checksum but is no catalog data), the library's files are moved back, the backup's go to
+  `Replaced/<the time> (not opened)`, and the session goes on in the library as it was. With `to` nothing is opened,
+  so that is found out only when the folder is.
+- **Not while the library is at work.** A restore of the open library is refused while a backup or any other
+  background task is running.
+- **If it can neither go on nor go back** (the disk fails between two moves), the session changes and writes nothing
+  more and says so; opening the library again completes the restore.
+- **It takes the space of the catalog twice over**: the copy in the library, and what it replaced.
+
+The restore runs in the command (a row in the activity stack, kind `restore`; it can't be stopped part-way) and the
+app waits for it: copying the catalog, then opening it. There is no menu item for it yet.
 
 A backup on the same disk as the library guards against a damaged catalog or a mistake, not against losing the disk:
 set the library's backup folder to another drive for that.

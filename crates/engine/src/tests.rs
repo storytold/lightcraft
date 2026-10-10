@@ -41,6 +41,7 @@ mod presets_scale;
 mod print;
 mod process;
 mod recheck;
+mod restore;
 mod segment;
 mod settings_files;
 mod slide;

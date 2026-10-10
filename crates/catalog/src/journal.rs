@@ -612,6 +612,33 @@ struct SnapHeader {
     defaults: Option<serde_json::Value>,
 }
 
+/// Whether this version reads the `catalog.snap` in `bytes`, going by its header: a LightCraft
+/// catalog, of a format that isn't newer than [`VERSION`]. The error says what it is instead.
+pub(crate) fn readable(bytes: &[u8]) -> std::result::Result<(), String> {
+    let h: SnapHeader = serde_json::from_slice(bytes).map_err(|e| format!("{SNAPSHOT}: {e}"))?;
+    if h.format != FORMAT {
+        return Err(format!("{SNAPSHOT} is not a LightCraft catalog (format {:?})", h.format));
+    }
+    if h.version > VERSION {
+        return Err(format!("{SNAPSHOT} is catalog format v{}, written by a newer LightCraft than this one (v{VERSION})", h.version));
+    }
+    Ok(())
+}
+
+/// Whether this version reads the `catalog.log` in `bytes`: no record in it holds a change this
+/// version doesn't know (what a newer LightCraft wrote; damage is another matter, and is dealt
+/// with when the log is opened).
+pub(crate) fn log_readable(bytes: &[u8]) -> std::result::Result<(), String> {
+    for line in bytes.split(|b| *b == b'\n') {
+        if let Ok(line) = std::str::from_utf8(line)
+            && let Line::Newer(seq) = decode_line(line.trim_end_matches('\r'))
+        {
+            return Err(format!("{LOG} record {seq} holds a change this version doesn't know (a newer LightCraft wrote it)"));
+        }
+    }
+    Ok(())
+}
+
 /// The whole `catalog.snap` (after [`SnapHeader`] was checked; `format` and `version` are ignored).
 #[derive(serde::Deserialize)]
 struct SnapFile {

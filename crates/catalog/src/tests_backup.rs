@@ -9,7 +9,7 @@ use crate::backup::{self, BackupError, BackupOptions, BackupReport, Watch};
 use crate::journal::{LOG, SEGMENT_PREFIX, SNAPSHOT, segment_file};
 use crate::*;
 
-fn temp(name: &str) -> PathBuf {
+pub(crate) fn temp(name: &str) -> PathBuf {
     static N: AtomicU64 = AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!("lc-backup-{name}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
@@ -17,7 +17,7 @@ fn temp(name: &str) -> PathBuf {
     dir
 }
 
-fn photo(id: u64) -> Photo {
+pub(crate) fn photo(id: u64) -> Photo {
     Photo::new(
         PhotoId(id),
         Source::File { path: format!("/pictures/2019/trip/IMG_{id:06}.jpg") },
@@ -29,20 +29,20 @@ fn photo(id: u64) -> Photo {
     )
 }
 
-fn run(j: &mut Journal, c: &mut Catalog, ops: Vec<Op>) {
+pub(crate) fn run(j: &mut Journal, c: &mut Catalog, ops: Vec<Op>) {
     for op in &ops {
         c.apply(op.clone()).unwrap();
     }
     j.append(&ops).unwrap();
 }
 
-fn add(ids: impl IntoIterator<Item = u64>) -> Vec<Op> {
+pub(crate) fn add(ids: impl IntoIterator<Item = u64>) -> Vec<Op> {
     ids.into_iter().map(|id| Op::AddPhoto { photo: Box::new(photo(id)) }).collect()
 }
 
 /// A library folder of photos `1..=n` in segments of 4, compacted, with one change in its log
 /// and a presets file beside the catalog.
-fn library(dir: &Path, n: u64) -> (Journal, Catalog) {
+pub(crate) fn library(dir: &Path, n: u64) -> (Journal, Catalog) {
     let (mut j, mut c, _) = Journal::open(Box::new(FsStore::open(dir).unwrap())).unwrap();
     j.policy.segment_photos = 4;
     run(&mut j, &mut c, add(1..=n));
@@ -52,22 +52,22 @@ fn library(dir: &Path, n: u64) -> (Journal, Catalog) {
     (j, c)
 }
 
-fn options(name: &str) -> BackupOptions<'_> {
+pub(crate) fn options(name: &str) -> BackupOptions<'_> {
     BackupOptions { name, also: &["presets.json", "view.json"] }
 }
 
-fn back_up(library: &Path, dest: &Path, name: &str) -> BackupReport {
+pub(crate) fn back_up(library: &Path, dest: &Path, name: &str) -> BackupReport {
     backup::back_up(library, dest, &options(name), &()).unwrap()
 }
 
 /// The catalog a folder opens as.
-fn opened(dir: &Path) -> Catalog {
+pub(crate) fn opened(dir: &Path) -> Catalog {
     Journal::open(Box::new(FsStore::open(dir).unwrap())).unwrap().1
 }
 
 /// The files of a folder by the names the catalog gives them: the ones in it, and the ones in
 /// its segments folder (`segments/…`). Other folders in it are named too (`Backups`).
-fn files(dir: &Path) -> Vec<String> {
+pub(crate) fn files(dir: &Path) -> Vec<String> {
     let mut names = Vec::new();
     for entry in std::fs::read_dir(dir).unwrap() {
         let entry = entry.unwrap();
@@ -83,7 +83,7 @@ fn files(dir: &Path) -> Vec<String> {
 }
 
 /// A copy of a backup's (or library's) files, file by file (no links).
-fn copy_of(from: &Path, name: &str) -> PathBuf {
+pub(crate) fn copy_of(from: &Path, name: &str) -> PathBuf {
     let to = temp(name);
     std::fs::create_dir_all(to.join("segments")).unwrap();
     for f in files(from) {
@@ -92,13 +92,13 @@ fn copy_of(from: &Path, name: &str) -> PathBuf {
     to
 }
 
-fn segments(dir: &Path) -> Vec<String> {
+pub(crate) fn segments(dir: &Path) -> Vec<String> {
     files(dir).into_iter().filter(|n| n.starts_with(SEGMENT_PREFIX)).collect()
 }
 
 /// Whether two paths are the same file on disk (one a hard link of the other): `None` where that
 /// can't be told (not on Unix), so that an assertion on it is skipped there, not passed.
-fn same_file(a: &Path, b: &Path) -> Option<bool> {
+pub(crate) fn same_file(a: &Path, b: &Path) -> Option<bool> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
