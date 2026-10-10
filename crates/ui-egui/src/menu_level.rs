@@ -86,10 +86,14 @@ pub fn level(ui: &mut Ui, depth: usize, bar_bottom: Option<f32>, rows: impl FnOn
     // The popup's `Ui` is only as tall as the popup was last frame (egui's default area size on
     // the first), and a scroll area never grows past that. Ask for the room the window has;
     // auto-shrink then fits the area to its rows, so a menu scrolls only when they don't fit.
+    // No scrollbar: the ▲ / ▼ strips, the wheel and dragging scroll a menu, like native menus.
+    // egui's floating bar is drawn over the rows' right edge, where the shortcut text ends, and in
+    // its wide (hovered) state its background hides the last character (issue #691).
     let out = egui::ScrollArea::vertical()
         .id_salt(("menu-level", depth))
         .max_height(height)
         .min_scrolled_height(height)
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
         .scroll_source(egui::containers::scroll_area::ScrollSource::ALL)
         .show(ui, rows);
     let down = over.then(|| ui.allocate_exact_size(vec2(0.0, ARROW), Sense::hover()).0);
