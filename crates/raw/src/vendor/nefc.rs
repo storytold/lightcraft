@@ -225,17 +225,28 @@ fn fixed_word_table(bits: u32) -> Vec<Option<i32>> {
     lut
 }
 
-/// Decode a `w × h` Nikon Huffman-compressed strip `src` with `bits`-bit samples.
+/// Decode a whole `w × h` Nikon Huffman-compressed strip `src` with `bits`-bit samples.
+#[cfg(test)]
 pub(crate) fn decode(src: &[u8], w: usize, h: usize, bits: u32, table: &DecodeTable) -> Result<Vec<u16>> {
+    decode_rows(src, w, h, h, bits, table)
+}
+
+/// The first `rows` rows (`w × rows` samples) of a `w × h` strip. The stream is sequential, so a header-only probe
+/// decodes just the rows its masked-column test looks at (issue #708) instead of the whole image. The size and
+/// truncation checks still cover the whole image; the "lossy after split" end-of-strip rule (and corruption
+/// further down) can only be seen when the whole strip is decoded.
+pub(crate) fn decode_rows(src: &[u8], w: usize, h: usize, rows: usize, bits: u32, table: &DecodeTable) -> Result<Vec<u16>> {
     if bits != 12 && bits != 14 {
         return Err(RawError::Unsupported(format!("Nikon compressed NEF with {bits}-bit samples")));
     }
-    let n = w.checked_mul(h).filter(|&n| n > 0 && n <= MAX_SAMPLES).ok_or(RawError::Limit("NEF image size"))?;
+    let whole = w.checked_mul(h).filter(|&n| n > 0 && n <= MAX_SAMPLES).ok_or(RawError::Limit("NEF image size"))?;
     // every code word is at least 2 bits long: a strip that can't hold the image is truncated (also bounds the
     // allocation by the file size)
-    if n / 4 > src.len() {
+    if whole / 4 > src.len() {
         return Err(RawError::Corrupt(format!("NEF: {} bytes of compressed data for {w}x{h} pixels", src.len())));
     }
+    let rows = rows.min(h);
+    let n = w.saturating_mul(rows);
     let huff = Huffman::new(
         &match (&table.encoding, bits) {
             (Encoding::Lossless, 12) => LOSSLESS_12,
@@ -286,7 +297,7 @@ pub(crate) fn decode(src: &[u8], w: usize, h: usize, bits: u32, table: &DecodeTa
             return Err(RawError::Corrupt(format!("NEF: compressed data ends at row {y} of {h}")));
         }
     }
-    if table.split != 0 {
+    if table.split != 0 && rows == h {
         // the fixed-rate section must fill the rest of the strip: whole rows of w words and 0..7 bits of padding.
         // A strip may hold a few more rows than the image (one body stores 4022 rows for 4020); anything else means
         // the file does not follow the rule, so refuse it instead of decoding it wrongly.
@@ -674,6 +685,47 @@ mod tests {
         split[562..564].copy_from_slice(&3u16.to_le_bytes());
         let e = crate::decode(&nef_file(src, w as u32, h as u32, 12, split, ByteOrder::Little));
         assert!(e.is_err(), "{e:?}");
+    }
+
+    /// Issue #708: the header probe of a compressed NEF decodes only the first [`super::super::nef::MASK_ROWS`]
+    /// rows (the ones the masked-column test reads) instead of the whole Huffman stream, and still finds the masked
+    /// columns the full decode finds. A strip cut off after those rows proves it: the probe succeeds with the same
+    /// description while the full decode reports the truncation.
+    #[test]
+    fn header_probe_stops_after_the_masked_column_rows() {
+        use super::super::nef::MASK_ROWS;
+        let (w, h) = (160usize, MASK_ROWS * 3);
+        let mut img = image(w, h, 16383, 7);
+        // eight optically masked columns at 0, as the D5100 / D7000 write them
+        for row in img.chunks_mut(w) {
+            row[w - 8..].fill(0);
+        }
+        let t = lossless(14);
+        let table = {
+            let mut v = vec![0x46, 0x30];
+            for s in t.seeds.iter().flatten() {
+                v.extend_from_slice(&(*s as u16).to_be_bytes());
+            }
+            v.resize(46, 0);
+            v
+        };
+        let src = encode(&img, w, &LOSSLESS_14, t.seeds);
+        let whole = nef_file(src.clone(), w as u32, h as u32, 14, table.clone(), ByteOrder::Big);
+        let full = crate::decode(&whole).unwrap();
+        assert_eq!(full.active_area, crate::Rect::new(0, 0, w - 8, h), "the masked columns are found in a compressed file");
+        assert_eq!(crate::probe_info(&whole).unwrap(), full.info());
+        // the same stream cut off after two thirds of the rows (the first rows' codes are a prefix of the whole)
+        let cut = encode(&img[..w * (h * 2 / 3)], w, &LOSSLESS_14, t.seeds).len();
+        assert!(cut > w * h / 4, "enough bytes to pass the size check");
+        let truncated = nef_file(src[..cut].to_vec(), w as u32, h as u32, 14, table, ByteOrder::Big);
+        assert!(matches!(crate::decode(&truncated), Err(RawError::Corrupt(_))), "the full decode sees the truncation");
+        assert_eq!(crate::probe_info(&truncated).unwrap(), full.info(), "the header probe never reads that far");
+        // decode_rows itself: a prefix of the whole decode, and the whole image's size check still applies
+        let top = decode_rows(&src, w, h, MASK_ROWS, 14, &t).unwrap();
+        assert_eq!(top.len(), w * MASK_ROWS);
+        assert_eq!(top[..], decode(&src, w, h, 14, &t).unwrap()[..w * MASK_ROWS]);
+        assert_eq!(decode_rows(&src, w, h, h + 5, 14, &t).unwrap().len(), w * h, "rows are clamped to the height");
+        assert!(decode_rows(&src[..w * h / 4 - 1], w, h, 1, 14, &t).is_err(), "a strip too short for the image is corrupt in any mode");
     }
 
     #[test]
