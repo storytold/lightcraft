@@ -22,7 +22,7 @@ pub mod tokens;
 #[cfg(all(feature = "sftp", not(target_arch = "wasm32")))]
 pub mod sftp;
 
-pub use settings::{Appearance, GallerySettings, ImageInfo, MetadataMode, Output, Palette, SiteInfo, Template};
+pub use settings::{Appearance, GallerySettings, ImageInfo, MetadataMode, Output, Palette, Server, SiteInfo, Template};
 pub use site::{GalleryPhoto, ImageRequest, Site, SiteFile, generate};
 
 /// HTML-escapes text for element content and attribute values.

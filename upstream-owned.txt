@@ -25,6 +25,7 @@ crates/hash/
 crates/immich/
 crates/webgallery/
 crates/engine/src/cmd/web.rs
+crates/ui-egui/src/web_module.rs
 # the Classic shell
 crates/ui-egui/src/module.rs
 crates/ui-egui/src/panels/classic.rs

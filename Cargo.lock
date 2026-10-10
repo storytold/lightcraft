@@ -1936,6 +1936,7 @@ dependencies = [
  "dac-pipeline",
  "dac-preview",
  "dac-raster",
+ "dac-webgallery",
  "egui",
  "log",
  "resvg",

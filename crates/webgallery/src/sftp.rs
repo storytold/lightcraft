@@ -10,24 +10,9 @@ use std::time::Duration;
 use russh::client;
 use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh_sftp::client::SftpSession;
-use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 
-/// An upload server preset (the secret lives in the keychain, never here).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct Server {
-    pub name: String,
-    pub host: String,
-    pub port: u16,
-    pub user: String,
-    /// The remote folder the site goes into (created when missing).
-    pub path: String,
-    /// A private key file; empty = password authentication.
-    pub key_file: String,
-    /// The server's host key fingerprint (`SHA256:…`), filled on first connection.
-    pub known_fingerprint: String,
-}
+pub use crate::settings::Server;
 
 /// How to authenticate.
 pub enum Auth {

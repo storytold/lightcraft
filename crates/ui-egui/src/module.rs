@@ -512,7 +512,7 @@ static MAP: Placeholder = Placeholder(ModuleId::Map);
 static BOOK: Placeholder = Placeholder(ModuleId::Book);
 static SLIDESHOW: Placeholder = Placeholder(ModuleId::Slideshow);
 static PRINT: Placeholder = Placeholder(ModuleId::Print);
-static WEB: Placeholder = Placeholder(ModuleId::Web);
+use crate::web_module::WEB;
 
 pub fn get(id: ModuleId) -> &'static dyn Module {
     match id {
