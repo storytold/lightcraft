@@ -1008,16 +1008,18 @@ impl Session {
     }
 
     /// Make the index of ready photos from the products on disk (a directory listing and a hash per photo: no file is
-    /// opened). Pictures that appeared or vanished drop the decoded sources they affect.
+    /// opened). Pictures that appeared or vanished drop the decoded sources they affect. The photo being made is its
+    /// job's to report (see [`Self::denoise_check_photo`]).
     pub(crate) fn denoise_reindex(&mut self) {
         self.denoise.dirty = false;
         self.denoise.reindexed = Some((self.catalog.revision, web_time::Instant::now()));
+        let running = self.denoise.running.as_ref().map(|r| r.photo);
         let mut now: HashMap<PhotoId, DenoiseSpec> = HashMap::new();
         if let (Some(dir), Some(active)) = (self.denoise_products_dir(), self.denoise.active.as_ref()) {
             let names: HashSet<String> =
                 products_in(&dir).into_iter().filter_map(|(p, _, _)| p.file_stem().and_then(|s| s.to_str()).map(str::to_string)).collect();
             if !names.is_empty() {
-                for p in self.catalog.photos().filter(|p| eligible(p)) {
+                for p in self.catalog.photos().filter(|p| eligible(p) && running != Some(p.id)) {
                     let key = product_key(&active.fingerprint, p);
                     if names.contains(&key) {
                         now.insert(p.id, DenoiseSpec { product: product_path(&dir, &key), key, make: None });
@@ -1046,7 +1048,14 @@ impl Session {
     }
 
     /// A photo whose file changed (its content key is not the one its index entry was made for) has no picture.
+    ///
+    /// The photo whose picture is being made is left to its job: the worker saves the picture before it reports, so the
+    /// file is on disk while the job still counts as running. Finding it here would make the photo Ready while the session
+    /// is busy with it (#719); [`Self::denoise_poll`] makes it Ready in the pump that takes the job's result instead.
     fn denoise_check_photo(&mut self, id: PhotoId) {
+        if self.denoise.running.as_ref().is_some_and(|r| r.photo == id) {
+            return;
+        }
         let Some(p) = self.catalog.photo(id).cloned() else { return };
         let Some((spec, _)) = self.denoise_spec(&p) else { return };
         match self.media.denoise.spec(id) {
@@ -1397,6 +1406,12 @@ impl Session {
 
     pub(crate) fn denoise_made(&self) -> u64 {
         self.denoise.made
+    }
+
+    /// The running job's product path and key (tests stand in for the worker's save).
+    #[cfg(test)]
+    pub(crate) fn denoise_running_product(&self) -> Option<(PathBuf, String)> {
+        self.denoise.running.as_ref().map(|r| (r.product.clone(), r.key.clone()))
     }
 
     /// What an export of photo `id` with `settings` needs for its Denoise amount: its denoised picture, made now when the
