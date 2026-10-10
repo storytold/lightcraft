@@ -185,8 +185,8 @@ fn store_presets(s: &mut Session, cmd: &str, list: Vec<EditorPreset>) -> Result<
         if let Some(d) = f.parent() {
             std::fs::create_dir_all(d).map_err(|e| bad(cmd, format!("can't create {}: {e}", d.display())))?;
         }
-        let tmp = f.with_extension("json.tmp");
-        std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, f)).map_err(|e| bad(cmd, format!("can't write {}: {e}", f.display())))?;
+        // temp file + rename; a failed write (full disk) removes the temp file
+        dac_catalog::safe_file::write_atomic(f, &bytes).map_err(|e| bad(cmd, format!("can't write {}: {e}", f.display())))?;
     }
     s.workflow.editors = Some(list);
     Ok(())
@@ -745,5 +745,30 @@ mod tests {
         let p = EditorPreset { name: "x".into(), color_space: "lab".into(), ..Default::default() };
         assert!(p.validate().is_err());
         assert!(decode_tiff16(b"II*\0garbage").is_err());
+    }
+
+    /// P6.2: a hand-edited or damaged `editors.json` never panics: every entry either fails to
+    /// parse or is checked like a preset saved through `editIn.savePreset`.
+    #[test]
+    fn hostile_editors_json_never_panics() {
+        let values = [r#""""#, r#""../x""#, r#""{file}{file}""#, r#""\u0000""#, "1e308", "-1", "null", "[]", "{}", r#""a\nb""#, "255", "65536"];
+        let keys = ["name", "app", "args", "format", "colorSpace", "bitDepth", "mode", "naming", "stack", "control"];
+        let extras = ["", r#","args":["{file}","-x"]"#, r#","control":{"port":99999,"tokenFile":"","root":"/"}"#];
+        let mut n = 0;
+        for (i, k) in keys.iter().enumerate() {
+            for v in values {
+                for extra in extras {
+                    let doc = format!(r#"[{{"name":"p{i}","{k}":{v}{extra}}}]"#);
+                    let Ok(list) = serde_json::from_str::<Vec<EditorPreset>>(&doc) else { continue };
+                    for p in list {
+                        n += 1;
+                        if p.validate().is_ok() {
+                            let _ = command_line(&p.app, &p.args, std::path::Path::new("/tmp/x y.tif"));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(n > 20, "{n}");
     }
 }

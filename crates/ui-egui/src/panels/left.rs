@@ -816,7 +816,7 @@ fn albums_tree(app: &mut DacApp, ui: &mut egui::Ui, all: &AlbumKids, parent: Opt
             }
         } else {
             let sel = app.session.source == LibrarySource::Album(a.id);
-            let icon = if a.is_smart() { Icon::SmartAlbum } else { Icon::Album };
+            let icon = crate::creations_ui::icon(a).unwrap_or(if a.is_smart() { Icon::SmartAlbum } else { Icon::Album });
             // cached: a smart album's count scans the catalog
             let now = (app.session.clock)();
             let n = app.caches.album_counts(&app.session.catalog, &now).get(&a.id).copied().unwrap_or(0);
@@ -853,6 +853,9 @@ fn albums_tree(app: &mut DacApp, ui: &mut egui::Ui, all: &AlbumKids, parent: Opt
             }
             if resp.clicked() {
                 let _ = app.run("library.source", json!({"kind": "album", "id": a.id.0}));
+            }
+            if resp.double_clicked() {
+                crate::creations_ui::double_clicked(app, ui.ctx(), a);
             }
             folder_menu(app, &resp, a);
         }

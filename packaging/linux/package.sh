@@ -59,6 +59,7 @@ strip "$STAGE/usr/bin/$APP" "$STAGE/usr/bin/$CLI" 2>/dev/null || true
 brand_render "$HERE/{app_id}.desktop.in" "$STAGE/usr/share/applications/$APP_ID.desktop"
 brand_render "$HERE/{app_id}.mime.xml.in" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
 brand_render "$HERE/{app_id}.metainfo.xml.in" "$STAGE/usr/share/metainfo/$APP_ID.metainfo.xml"
+brand_render "$HERE/70-{app_id}-ptp.rules.in" "$STAGE/usr/lib/udev/rules.d/70-$APP_ID-ptp.rules" # tethering: docs/tethering.md
 install_icons "$STAGE/usr/share/icons"
 mkdir -p "$STAGE/usr/share/doc/$APP"
 copy_docs "$STAGE/usr/share/doc/$APP"

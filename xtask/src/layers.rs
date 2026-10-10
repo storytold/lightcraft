@@ -77,6 +77,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("ui-egui", Class::Layer(5)),
     ("mcp", Class::Layer(5)),
     ("testkit", Class::Testkit),
+    ("fuzzkit", Class::Testkit),
     // L6 apps and tooling
     ("app", Class::Exempt),
     ("cli", Class::Exempt),

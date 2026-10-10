@@ -46,3 +46,5 @@ pub fn user_agent() -> String {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_robust;

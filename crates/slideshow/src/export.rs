@@ -1,8 +1,10 @@
 //! Export a slideshow as a JPEG sequence: one composed slide per photo (plus the intro and ending
-//! screens when they are on), named `<name>-001.jpg` … in show order. Rendering goes through the
-//! engine's export renderer, encoding through `dac_engine::export` (the one encoder of the app).
+//! screens when they are on), named `<name>-001.jpg` … in show order; or as one PDF, `<name>.pdf`,
+//! with a page per slide (the same JPEG frames embedded through `dac-pdf`, page size = the slide
+//! at 96 px per inch). Rendering goes through the engine's export renderer, encoding through
+//! `dac_engine::export` (the one encoder of the app).
 //!
-//! PDF and video export come later (PLAN phase 3.4).
+//! Video export (AV1) is deferred: it needs an encoder crate shared with upstream (PLAN phase 3.4).
 
 use std::path::{Path, PathBuf};
 
@@ -60,6 +62,8 @@ pub struct Prepared {
     segments: Vec<Segment>,
     items: Vec<Item>,
     background: Option<Rgba8>,
+    /// One PDF instead of a JPEG sequence.
+    pdf: bool,
 }
 
 fn safe_name(name: &str) -> String {
@@ -114,8 +118,30 @@ pub fn prepare(
         segments: plan.segments,
         items,
         background,
+        pdf: false,
     })
 }
+
+/// [`prepare`] for a PDF: one page per frame, written as `<dir>/<name>.pdf`.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_pdf(
+    session: &mut Session,
+    ids: &[PhotoId],
+    settings: &Settings,
+    width: usize,
+    height: usize,
+    quality: u8,
+    dir: &Path,
+    name: &str,
+    plate: &str,
+) -> Result<Prepared, String> {
+    let mut p = prepare(session, ids, settings, width, height, quality, dir, name, plate)?;
+    p.pdf = true;
+    Ok(p)
+}
+
+/// Points per pixel of a PDF slide (96 px per inch).
+const PT_PER_PX: f64 = 0.75;
 
 impl Prepared {
     /// Frames to write (slides plus title screens).
@@ -134,6 +160,16 @@ impl Prepared {
         let o = ExportOptions { format: ExportFormat::Jpeg, quality: self.quality, ..Default::default() };
         let mut items: Vec<Option<Item>> = self.items.into_iter().map(Some).collect();
         let mut written = Vec::with_capacity(self.segments.len());
+        let mut doc = self.pdf.then(|| {
+            let mut d = dac_pdf::Document::new();
+            d.metadata.title = Some(self.name.clone());
+            d.metadata.creator = Some(dac_brand::DISPLAY_NAME.to_string());
+            d
+        });
+        let page_size = (
+            (self.width as f64 * PT_PER_PX).clamp(dac_pdf::MIN_SIDE, dac_pdf::MAX_SIDE),
+            (self.height as f64 * PT_PER_PX).clamp(dac_pdf::MIN_SIDE, dac_pdf::MAX_SIDE),
+        );
         for (k, seg) in self.segments.iter().enumerate() {
             let label = match seg {
                 Segment::Intro => "Intro".to_string(),
@@ -162,10 +198,23 @@ impl Prepared {
                 }
             };
             let bytes = encode_image(&img, &o)?;
+            if let Some(d) = doc.as_mut() {
+                let image = d.add_image(dac_pdf::Image::jpeg(bytes, dac_pdf::ColorSpace::Rgb)).map_err(|e| format!("PDF: {e}"))?;
+                let mut page = dac_pdf::Page::new(page_size.0, page_size.1);
+                page.image(image, dac_pdf::Rect::new(0.0, 0.0, page_size.0, page_size.1));
+                d.push_page(page).map_err(|e| format!("PDF: {e}"))?;
+                continue;
+            }
             let path = self.dir.join(format!("{}-{:03}.jpg", self.name, k + 1));
             let path_s = path.display().to_string();
             write_file(&path_s, &bytes)?;
             written.push(path_s);
+        }
+        if let Some(d) = doc {
+            let bytes = d.to_bytes().map_err(|e| format!("PDF: {e}"))?;
+            let path = self.dir.join(format!("{}.pdf", self.name)).display().to_string();
+            write_file(&path, &bytes)?;
+            written.push(path);
         }
         progress(self.segments.len(), "");
         Ok(written)
@@ -202,6 +251,27 @@ mod tests {
             assert_eq!(&b[..2], &[0xFF, 0xD8], "a JPEG");
         }
         assert!(files[0].ends_with("Show-001.jpg"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn exports_a_pdf_with_a_page_per_frame() {
+        let mut session = Session::with_demo();
+        let ids: Vec<PhotoId> = session.catalog.photos().take(2).map(|p| p.id).collect();
+        let mut s = Settings::default();
+        s.titles.ending.enabled = true;
+        s.titles.ending.text = "The end".into();
+        let dir = std::env::temp_dir().join(format!("dac-slideshow-pdf-{}", std::process::id()));
+        let p = prepare_pdf(&mut session, &ids, &s, 320, 180, 85, &dir, "Show", "Plate").unwrap();
+        assert_eq!(p.len(), 3);
+        let files = std::thread::spawn(move || p.run(&mut |_, _| true)).join().unwrap().unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].ends_with("Show.pdf"));
+        let b = std::fs::read(&files[0]).unwrap();
+        assert!(b.starts_with(b"%PDF-"));
+        let text = String::from_utf8_lossy(&b);
+        assert!(text.contains("/Count 3"), "three pages");
+        assert!(text.contains("/MediaBox [0 0 240 135]"), "320×180 px at 96 ppi");
         let _ = std::fs::remove_dir_all(dir);
     }
 

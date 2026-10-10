@@ -384,6 +384,15 @@ impl Client {
         self.post("/albums", &serde_json::json!({ "albumName": name }))
     }
 
+    /// `POST /shared-links`: a shared link for album `album` (IMM-SHARELINK). Needs `sharedLink.create`.
+    pub fn create_shared_link(&self, album: &str, o: &crate::share::ShareOptions) -> Result<crate::share::SharedLink, ImmichError> {
+        let link: crate::share::SharedLink = self.post("/shared-links", &crate::share::link_body(path_id(album)?, o))?;
+        if link.key.trim().is_empty() || !link.key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            return Err(ImmichError::Protocol("/shared-links: the server returned no usable key".into()));
+        }
+        Ok(link)
+    }
+
     /// `PATCH /albums/{id}`: rename. Needs `album.update`.
     pub fn rename_album(&self, id: &str, name: &str) -> Result<(), ImmichError> {
         self.send(Method::Patch, &format!("/albums/{}", path_id(id)?), Some(&serde_json::json!({ "albumName": name })), true).map(|_| ())

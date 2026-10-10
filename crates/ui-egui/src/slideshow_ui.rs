@@ -53,17 +53,28 @@ pub struct SlideshowState {
     pub settings: Settings,
     /// The user's templates (the built-in ones come from `dac-slideshow`).
     pub templates: Vec<Template>,
+    /// Saved slideshows as older builds kept them here; they move into the catalog as saved
+    /// creations (collections of kind `slideshow`) the first time a slideshow command runs.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub saved: Vec<SavedSlideshow>,
     /// The template last applied or saved.
     pub template: String,
     pub use_photos: UsePhotos,
-    /// The saved slideshow open (its photos are the show), if any.
+    /// The name of the saved slideshow open (its photos are the show), if any.
     pub open: Option<String>,
+    /// Its collection (saved creation).
+    pub open_id: Option<u64>,
     #[serde(skip)]
     pub playing: Option<Playing>,
     /// The last export's result, for the toolbar.
     #[serde(skip)]
     pub export_status: Option<String>,
+    /// An export is running on a worker thread.
+    #[serde(skip)]
+    pub export_busy: bool,
+    /// The last export's command result (or `{error}`).
+    #[serde(skip)]
+    pub export_last: Option<Value>,
 }
 
 thread_local! {
@@ -78,10 +89,10 @@ pub fn is_command(id: &str) -> bool {
 
 /// The photos the show uses.
 pub fn photos(app: &mut DacApp) -> Vec<PhotoId> {
-    if let Some(name) = app.ui.slides.open.clone()
-        && let Some(s) = app.ui.slides.saved.iter().find(|s| s.name == name)
+    if let Some(id) = app.ui.slides.open_id
+        && let Some(a) = app.session.catalog.album(dac_catalog::AlbumId(id)).filter(|a| a.creation.is_some())
     {
-        let ids: Vec<PhotoId> = s.photos.iter().map(|i| PhotoId(*i)).filter(|i| app.session.catalog.photo(*i).is_some()).collect();
+        let ids: Vec<PhotoId> = a.photos.iter().copied().filter(|i| app.session.catalog.photo(*i).is_some()).collect();
         return ids;
     }
     let visible = app.session.visible_cloned();
@@ -112,6 +123,47 @@ fn name_param(p: &Value) -> Result<String, String> {
     Ok(n.chars().take(80).collect())
 }
 
+/// The saved slideshows: saved creations of kind `slideshow` in the catalog.
+fn saved_list(app: &DacApp) -> Vec<dac_engine::creations::SavedCreation> {
+    dac_engine::creations::creations_of(&app.session, Some(dac_layout::CreationKind::Slideshow))
+}
+
+/// Moves saved slideshows an older build kept in `ui.json` into the catalog (once).
+fn migrate_saved(app: &mut DacApp) {
+    if app.ui.slides.saved.is_empty() {
+        return;
+    }
+    for old in std::mem::take(&mut app.ui.slides.saved) {
+        let exists = dac_engine::creations::find_creation(&app.session, dac_layout::CreationKind::Slideshow, &old.name).is_some();
+        if exists || old.name.trim().is_empty() {
+            continue;
+        }
+        let r = app.run("creation.save", json!({"kind": "slideshow", "name": old.name, "settings": old.settings, "ids": old.photos}));
+        if let Err(e) = r {
+            log::warn!("saved slideshow {:?} could not move into the catalog: {e}", old.name);
+        }
+    }
+}
+
+/// Opens a saved slideshow (`id`: its collection; else by `name`): its settings, and its photos
+/// are the show.
+fn open_saved(app: &mut DacApp, p: &Value) -> Result<Value, String> {
+    let list = saved_list(app);
+    let found = match p.get("id").and_then(Value::as_u64) {
+        Some(id) => list.into_iter().find(|c| c.id.0 == id),
+        None => {
+            let name = name_param(p)?;
+            list.into_iter().find(|c| c.name.eq_ignore_ascii_case(&name))
+        }
+    };
+    let c = found.ok_or("no such saved slideshow")?;
+    let settings: Settings = serde_json::from_value(c.settings.clone()).unwrap_or_default();
+    app.ui.slides.settings = settings.sanitized();
+    app.ui.slides.open = Some(c.name);
+    app.ui.slides.open_id = Some(c.id.0);
+    Ok(state_json(app))
+}
+
 fn state_json(app: &mut DacApp) -> Value {
     let photos = photos(app).len();
     let s = &app.ui.slides;
@@ -119,8 +171,9 @@ fn state_json(app: &mut DacApp) -> Value {
         "settings": s.settings,
         "template": s.template,
         "templates": all_templates(app).iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
-        "saved": s.saved.iter().map(|x| json!({"name": x.name, "photos": x.photos.len()})).collect::<Vec<_>>(),
+        "saved": saved_list(app).iter().map(|x| json!({"id": x.id.0, "name": x.name, "photos": x.photos.len()})).collect::<Vec<_>>(),
         "open": s.open,
+        "openId": s.open_id,
         "usePhotos": s.use_photos,
         "photos": photos,
         "playing": s.playing.as_ref().map(|p| json!({"full": p.full, "paused": p.paused_at.is_some(), "slides": p.plan.segments.len()})),
@@ -204,6 +257,7 @@ pub fn run(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Value, String
 }
 
 fn run_inner(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
+    migrate_saved(app);
     match id {
         "slideshow.get" => Ok(state_json(app)),
         "slideshow.set" => {
@@ -260,29 +314,43 @@ fn run_inner(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
             if ids.is_empty() {
                 return Err("no photos to save in the slideshow".into());
             }
-            let settings = app.ui.slides.settings.clone();
-            let list = &mut app.ui.slides.saved;
-            list.retain(|s| s.name != name);
-            list.push(SavedSlideshow { name: name.clone(), settings, photos: ids });
+            // a saved creation in the catalog: replaces the one of the same name
+            let settings = serde_json::to_value(&app.ui.slides.settings).map_err(|e| e.to_string())?;
+            let existing = dac_engine::creations::find_creation(&app.session, dac_layout::CreationKind::Slideshow, &name);
+            let cid = match existing {
+                Some(c) => {
+                    app.run("creation.update", json!({"id": c.id.0, "settings": settings, "ids": ids}))?;
+                    c.id.0
+                }
+                None => app
+                    .run("creation.save", json!({"kind": "slideshow", "name": name, "settings": settings, "ids": ids}))?
+                    .get("id")
+                    .and_then(Value::as_u64)
+                    .ok_or("the slideshow was not saved")?,
+            };
             app.ui.slides.open = Some(name);
+            app.ui.slides.open_id = Some(cid);
             Ok(state_json(app))
         }
-        "slideshow.openSaved" => {
-            let name = name_param(p)?;
-            let s = app.ui.slides.saved.iter().find(|s| s.name == name).cloned().ok_or_else(|| format!("no saved slideshow named {name}"))?;
-            app.ui.slides.settings = s.settings.sanitized();
-            app.ui.slides.open = Some(name);
-            Ok(state_json(app))
-        }
+        "slideshow.openSaved" => open_saved(app, p),
         "slideshow.closeSaved" => {
             app.ui.slides.open = None;
+            app.ui.slides.open_id = None;
             Ok(state_json(app))
         }
         "slideshow.deleteSaved" => {
-            let name = name_param(p)?;
-            app.ui.slides.saved.retain(|s| s.name != name);
-            if app.ui.slides.open.as_deref() == Some(name.as_str()) {
+            let c = match p.get("id").and_then(Value::as_u64) {
+                Some(id) => saved_list(app).into_iter().find(|c| c.id.0 == id),
+                None => {
+                    let name = name_param(p)?;
+                    saved_list(app).into_iter().find(|c| c.name.eq_ignore_ascii_case(&name))
+                }
+            };
+            let c = c.ok_or("no such saved slideshow")?;
+            app.run("album.delete", json!({"id": c.id.0}))?;
+            if app.ui.slides.open_id == Some(c.id.0) {
                 app.ui.slides.open = None;
+                app.ui.slides.open_id = None;
             }
             Ok(state_json(app))
         }
@@ -318,24 +386,32 @@ fn run_inner(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
             app.ui.slides.settings.music.tracks.clear();
             Ok(state_json(app))
         }
-        "slideshow.exportJpeg" => export_jpeg(app, p),
+        "slideshow.exportJpeg" => export(app, p, false),
+        "slideshow.exportPdf" => export(app, p, true),
         _ => Err(format!("unknown slideshow command: {id}")),
     }
 }
 
-/// `slideshow.exportJpeg {dir, width?, height?, quality?, name?}`: the JPEG sequence.
-fn export_jpeg(app: &mut DacApp, p: &Value) -> Result<Value, String> {
+/// `slideshow.exportJpeg {dir, width?, height?, quality?, name?}`: the JPEG sequence;
+/// `slideshow.exportPdf {…}`: one PDF, a page per slide. The slides are set up here and rendered,
+/// composed and written on a worker thread (Activity "export"); the result lands in
+/// `export_status` / `export_last`. Returns `{background: true, frames}`.
+fn export(app: &mut DacApp, p: &Value, pdf: bool) -> Result<Value, String> {
+    let id = if pdf { "slideshow.exportPdf" } else { "slideshow.exportJpeg" };
     let Some(dir) = p.get("dir").and_then(Value::as_str).filter(|d| !d.trim().is_empty()) else {
         let req = crate::pick::PickRequest::folder(crate::i18n::tr("Export Slideshow"));
-        return match crate::pick::ask(app, "slideshow.exportJpeg", p, "dir", req, |s| s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])) {
+        return match crate::pick::ask(app, id, p, "dir", req, |s| s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])) {
             crate::pick::Picked::Now(v) => match v.into_iter().next() {
-                Some(d) => export_jpeg(app, &crate::pick::with_answer(p, "dir", crate::pick::PickKind::Folder, &[d])),
+                Some(d) => export(app, &crate::pick::with_answer(p, "dir", crate::pick::PickKind::Folder, &[d]), pdf),
                 None => Ok(Value::Null),
             },
             crate::pick::Picked::Later => Ok(Value::Null),
-            crate::pick::Picked::Unavailable => Err("no folder dialog here: run slideshow.exportJpeg {dir}".into()),
+            crate::pick::Picked::Unavailable => Err(format!("no folder dialog here: run {id} {{dir}}")),
         };
     };
+    if app.ui.slides.export_busy {
+        return Err("a slideshow export is already running".into());
+    }
     let num = |k: &str, d: u64| p.get(k).and_then(Value::as_u64).unwrap_or(d);
     let (w, h) = (num("width", 1920) as usize, num("height", 1080) as usize);
     let quality = num("quality", 90).clamp(1, 100) as u8;
@@ -343,12 +419,39 @@ fn export_jpeg(app: &mut DacApp, p: &Value) -> Result<Value, String> {
     let ids = photos(app);
     let settings = app.ui.slides.settings.clone();
     let plate = plate_text(app);
-    let job = dac_slideshow::export::prepare(&mut app.session, &ids, &settings, w, h, quality, std::path::Path::new(dir), &name, &plate)?;
+    let prep = if pdf { dac_slideshow::export::prepare_pdf } else { dac_slideshow::export::prepare };
+    let job = prep(&mut app.session, &ids, &settings, w, h, quality, std::path::Path::new(dir), &name, &plate)?;
     let frames = job.len();
-    // synchronous: the export renders through the engine; it is bounded by MAX_PHOTOS
-    let files = job.run(&mut |_, _| true)?;
-    app.ui.slides.export_status = Some(format!("{} JPEGs in {dir}", files.len()));
-    Ok(json!({"frames": frames, "files": files}))
+    let dir = dir.to_string();
+    app.ui.slides.export_busy = true;
+    app.ui.slides.export_status = Some(crate::i18n::tr("Exporting…").to_string());
+    let started = crate::tasks::spawn(
+        app,
+        if pdf { "Exporting PDF slideshow" } else { "Exporting JPEG slideshow" },
+        Some("export"),
+        move || job.run(&mut |_, _| true),
+        move |app, ctx, r: Result<Vec<String>, String>| {
+            app.ui.slides.export_busy = false;
+            match r {
+                Ok(files) => {
+                    let msg = if pdf { format!("PDF in {dir}") } else { format!("{} JPEGs in {dir}", files.len()) };
+                    app.toast(ctx, msg.clone());
+                    app.ui.slides.export_status = Some(msg);
+                    app.ui.slides.export_last = Some(json!({"frames": frames, "files": files}));
+                }
+                Err(e) => {
+                    app.ui.slides.export_status = Some(e.clone());
+                    app.ui.slides.export_last = Some(json!({"error": e}));
+                    app.toast_error(ctx, e);
+                }
+            }
+        },
+    );
+    if let Err(e) = started {
+        app.ui.slides.export_busy = false;
+        return Err(e);
+    }
+    Ok(json!({"background": true, "frames": frames}))
 }
 
 // ---------------------------------------------------------------- painting
@@ -672,6 +775,11 @@ pub fn toolbar(app: &mut DacApp, ui: &mut egui::Ui) {
                     if ex.clicked() {
                         run_reporting(app, ui.ctx(), "slideshow.exportJpeg");
                     }
+                    let ex = ui.button(crate::i18n::tr("Export PDF…"));
+                    register(ui.ctx(), "button:slideshow.exportPdf".to_string(), ex.rect);
+                    if ex.clicked() {
+                        run_reporting(app, ui.ctx(), "slideshow.exportPdf");
+                    }
                     if let Some(s) = &app.ui.slides.export_status {
                         ui.label(egui::RichText::new(s.clone()).color(t.text_dim));
                     }
@@ -796,21 +904,23 @@ fn left_column(app: &mut DacApp, ui: &mut egui::Ui) {
     });
     ui.add_space(10.0);
     ui.label(egui::RichText::new(crate::i18n::tr("Saved Slideshows")).strong());
-    let saved: Vec<(String, usize)> = app.ui.slides.saved.iter().map(|s| (s.name.clone(), s.photos.len())).collect();
-    let open = app.ui.slides.open.clone();
-    for (name, n) in saved {
-        let r = ui.selectable_label(open.as_deref() == Some(name.as_str()), format!("{name} ({n})"));
+    migrate_saved(app);
+    let saved: Vec<(u64, String, usize)> = saved_list(app).into_iter().map(|s| (s.id.0, s.name, s.photos.len())).collect();
+    let count = saved.len();
+    let open = app.ui.slides.open_id;
+    for (id, name, n) in saved {
+        let r = ui.selectable_label(open == Some(id), format!("{name} ({n})"));
         if r.clicked() {
-            let _ = app.run("slideshow.openSaved", json!({"name": name}));
+            let _ = app.run("slideshow.openSaved", json!({"id": id}));
         }
         r.context_menu(|ui| {
             if ui.button(crate::i18n::tr("Delete")).clicked() {
-                let _ = app.run("slideshow.deleteSaved", json!({"name": name}));
+                let _ = app.run("slideshow.deleteSaved", json!({"id": id}));
             }
         });
     }
     if ui.button(crate::i18n::tr("Create Saved Slideshow")).clicked() {
-        let name = if draft.trim().is_empty() { format!("Slideshow {}", app.ui.slides.saved.len() + 1) } else { draft.clone() };
+        let name = if draft.trim().is_empty() { format!("Slideshow {}", count + 1) } else { draft.clone() };
         if let Err(e) = app.run("slideshow.saveSlideshow", json!({"name": name})) {
             app.toast_error(ui.ctx(), e);
         }
@@ -1081,6 +1191,16 @@ mod tests {
         r["result"].clone()
     }
 
+    fn wait_export(h: &mut Headless) -> Value {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while h.app.ui.slides.export_busy && std::time::Instant::now() < deadline {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(!h.app.ui.slides.export_busy, "export did not finish");
+        h.app.ui.slides.export_last.take().unwrap()
+    }
+
     fn has_widget(h: &Headless, id: &str) -> bool {
         h.app.widgets.iter().any(|(w, _)| w == id)
     }
@@ -1115,8 +1235,12 @@ mod tests {
         assert_eq!(r["photos"].as_u64(), Some(n));
         // the state survives ui.json
         let saved: crate::state::UiState = serde_json::from_value(serde_json::to_value(&h.app.ui).unwrap()).unwrap();
-        assert_eq!(saved.slides.saved.len(), 1);
         assert_eq!(saved.slides.templates.len(), 1);
+        // the saved slideshow is a saved creation in the catalog, not ui.json
+        assert!(saved.slides.saved.is_empty());
+        let list = ok(&mut h, "creation.list", json!({"kind": "slideshow"}));
+        assert_eq!(list["creations"][0]["name"], "Trip", "{list}");
+        assert_eq!(list["creations"][0]["photos"].as_u64(), Some(n));
         // play full screen, step, pause, stop
         let r = ok(&mut h, "slideshow.play", json!({}));
         assert!(r["slides"].as_u64().unwrap() > 0);
@@ -1141,7 +1265,16 @@ mod tests {
         let first = h.app.session.visible_cloned()[0].0;
         ok(&mut h, "library.select", json!({"ids": [first]}));
         let r = ok(&mut h, "slideshow.exportJpeg", json!({"dir": dir.display().to_string(), "width": 320, "height": 200}));
+        assert_eq!(r["background"], true, "{r}");
+        assert!(exec(&mut h, "slideshow.exportPdf", json!({"dir": dir.display().to_string()}))["ok"] == false, "one export at a time");
+        let r = wait_export(&mut h);
         assert_eq!(r["files"].as_array().map(Vec::len), Some(1), "{r}");
+        // PDF: one file, a page per slide
+        ok(&mut h, "slideshow.exportPdf", json!({"dir": dir.display().to_string(), "width": 320, "height": 200, "name": "Show"}));
+        let r = wait_export(&mut h);
+        let pdf = r["files"][0].as_str().unwrap_or_default().to_string();
+        assert!(pdf.ends_with("Show.pdf"), "{r}");
+        assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF-"));
         let _ = std::fs::remove_dir_all(dir);
         let img = h.snapshot(T);
         assert!(img.width() > 0);

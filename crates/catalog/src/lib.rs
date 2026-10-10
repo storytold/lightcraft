@@ -358,17 +358,17 @@ impl Catalog {
 
     pub fn alloc_photo_id(&mut self) -> PhotoId {
         let id = PhotoId(self.next_photo.max(1));
-        self.next_photo = id.0 + 1;
+        self.next_photo = id.0.saturating_add(1);
         id
     }
     pub fn alloc_album_id(&mut self) -> AlbumId {
         let id = AlbumId(self.next_album.max(1));
-        self.next_album = id.0 + 1;
+        self.next_album = id.0.saturating_add(1);
         id
     }
     pub fn alloc_stack_id(&mut self) -> StackId {
         let id = StackId(self.next_stack.max(1));
-        self.next_stack = id.0 + 1;
+        self.next_stack = id.0.saturating_add(1);
         id
     }
 
@@ -594,7 +594,9 @@ impl Catalog {
                     return Err(CatalogError::Invalid(format!("photo {:?} exists", photo.id)));
                 }
                 let id = photo.id;
-                self.next_photo = self.next_photo.max(id.0 + 1);
+                // the largest id would leave no next one (a damaged log or a hostile op)
+                let next = id.0.checked_add(1).ok_or_else(|| CatalogError::Invalid(format!("photo id {} is out of range", id.0)))?;
+                self.next_photo = self.next_photo.max(next);
                 self.photos.insert(id, Arc::new(*photo));
                 Op::RemovePhoto { id }
             }
@@ -671,7 +673,9 @@ impl Catalog {
                     self.validate_rules(rules)?;
                 }
                 let id = album.id;
-                self.next_album = self.next_album.max(id.0 + 1);
+                // the largest id would leave no next one (a damaged log or a hostile op)
+                let next = id.0.checked_add(1).ok_or_else(|| CatalogError::Invalid(format!("album id {} is out of range", id.0)))?;
+                self.next_album = self.next_album.max(next);
                 self.albums.insert(id, album);
                 Op::RemoveAlbum { id }
             }
@@ -758,7 +762,9 @@ impl Catalog {
                 }
                 self.validate_stack(stack.id, &stack.photos)?;
                 let id = stack.id;
-                self.next_stack = self.next_stack.max(id.0 + 1);
+                // the largest id would leave no next one (a damaged log or a hostile op)
+                let next = id.0.checked_add(1).ok_or_else(|| CatalogError::Invalid(format!("stack id {} is out of range", id.0)))?;
+                self.next_stack = self.next_stack.max(next);
                 self.stacks.insert(id, stack);
                 Op::RemoveStack { id }
             }
@@ -1048,6 +1054,8 @@ mod tests_journal;
 mod tests_local;
 #[cfg(test)]
 mod tests_lock;
+#[cfg(test)]
+mod tests_robust;
 #[cfg(test)]
 mod tests_sort_cache;
 #[cfg(test)]

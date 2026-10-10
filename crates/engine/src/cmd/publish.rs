@@ -71,6 +71,7 @@ fn service_json(cat: &Catalog, svc: &ServiceConfig) -> Value {
     let caps = match svc.kind.as_str() {
         dac_publish::KIND_HARD_DRIVE => json!({"comments": false, "likes": false}),
         dac_publish::KIND_IMMICH => json!({"comments": false, "likes": true}),
+        dac_publish::KIND_SFTP => json!({"comments": false, "likes": false}),
         _ => json!(null),
     };
     json!({
@@ -98,6 +99,9 @@ fn check(kind: &str, settings: &Value, export: &Value, c: &str) -> Result<()> {
     }
     if kind == dac_publish::KIND_IMMICH {
         super::immich::publish::check_settings(settings).map_err(|e| bad(c, e))?;
+    }
+    if kind == dac_publish::KIND_SFTP {
+        sftp::check_settings(settings).map_err(|e| bad(c, e))?;
     }
     if !export.is_object() {
         return Err(bad(c, "`export` must be an object of app.export params"));
@@ -148,6 +152,9 @@ fn update_service(s: &mut Session, p: &Value) -> Result<Value> {
     let mut next = svc.clone();
     if let Some(n) = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
         next.name = n.to_string();
+    }
+    if let Some(st) = p.get("settings").filter(|v| v.is_object()) {
+        next.settings = st.clone();
     }
     if let Some(d) = str_param(p, "dir") {
         next.settings["dir"] = json!(d.trim());
@@ -336,7 +343,10 @@ pub fn plan(s: &mut Session, album: AlbumId) -> Result<Plan> {
     }
     let removals = st.to_remove.iter().filter_map(|id| link(&s.catalog, *id).map(|l| (*id, l.remote_id))).collect();
     let photos: Vec<PhotoId> = jobs.iter().map(|j: &Job| j.photo).collect();
-    let open = super::immich::publish::opener(s, &svc, &coll, &photos).map_err(|e| bad(C, e))?;
+    let open = match sftp::opener(s, &svc, &coll).map_err(|e| bad(C, e))? {
+        Some(o) => Some(o),
+        None => super::immich::publish::opener(s, &svc, &coll, &photos).map_err(|e| bad(C, e))?,
+    };
     Ok(Plan { service: svc, collection: coll, jobs, removals, failed, open })
 }
 
@@ -384,25 +394,53 @@ impl Plan {
             }
             done += 1;
         }
-        for job in self.jobs {
+        // renders run a few at a time (P6.1: one at a time left most cores idle between the decode's
+        // serial parts); uploads stay in order on this thread, as the service needs `&mut`
+        let width = render_width();
+        let mut jobs = self.jobs.into_iter().peekable();
+        while jobs.peek().is_some() {
             if !progress(done, total) {
                 out.cancelled = true;
                 return out;
             }
-            let r = job.prepared.run().and_then(|x| {
-                let up =
-                    Upload { photo: job.photo, file_name: &x.file_name, bytes: &x.bytes, sidecars: &x.sidecars, previous: job.previous.as_deref() };
-                svc.publish(&up).map_err(|e| e.to_string())
-            });
-            match r {
-                Ok(p) => out.published.push((job.photo, p.remote_id, job.fingerprint)),
-                Err(e) => out.failed.push((job.photo, e)),
+            let (batch, prepared): (Vec<_>, Vec<_>) = jobs.by_ref().take(width).map(|j| ((j.photo, j.previous, j.fingerprint), j.prepared)).unzip();
+            let rendered = render_batch(prepared);
+            for ((photo, previous, fingerprint), r) in batch.into_iter().zip(rendered) {
+                if !progress(done, total) {
+                    out.cancelled = true;
+                    return out;
+                }
+                let r = r.and_then(|x| {
+                    let up = Upload { photo, file_name: &x.file_name, bytes: &x.bytes, sidecars: &x.sidecars, previous: previous.as_deref() };
+                    svc.publish(&up).map_err(|e| e.to_string())
+                });
+                match r {
+                    Ok(p) => out.published.push((photo, p.remote_id, fingerprint)),
+                    Err(e) => out.failed.push((photo, e)),
+                }
+                done += 1;
             }
-            done += 1;
         }
         progress(done, total);
         out
     }
+}
+
+/// How many publish renders run at once: a quarter of the cores, 1..=4 (each 24 MP render holds
+/// a few hundred MB, and a render is already multi-threaded inside).
+pub(crate) fn render_width() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| n.get() / 4).clamp(1, 4)
+}
+
+/// Render `batch` concurrently, results in input order; a render thread that dies is that photo's error.
+fn render_batch(batch: Vec<crate::export::PreparedExport>) -> Vec<std::result::Result<crate::export::Exported, String>> {
+    if batch.len() <= 1 || cfg!(target_arch = "wasm32") {
+        return batch.into_iter().map(|p| p.run()).collect();
+    }
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = batch.into_iter().map(|p| scope.spawn(move || p.run())).collect();
+        handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("the render stopped unexpectedly".to_string()))).collect()
+    })
 }
 
 /// Record a run's links (app bookkeeping, not an undo step).
@@ -424,6 +462,13 @@ pub fn apply(s: &mut Session, out: Outcome) -> Result<Value> {
             last_synced_at: Some(now.clone()),
             sync_state: SyncState::Synced,
         }));
+    }
+    // Immich: the uploaded originals become the photos' Immich links (sync needs no immich.link)
+    if let Ok((_, cfg)) = load(s, "publish.run")
+        && let Some(svc) = cfg.service(&out.service)
+    {
+        let sent: Vec<(PhotoId, String)> = out.published.iter().map(|(p, r, _)| (*p, r.clone())).collect();
+        ops.extend(super::immich::publish::original_link_ops(s, svc, &sent));
     }
     for photo in &out.removed {
         ops.push(Op::SetRemote { photo: *photo, service: dac_publish::SERVICE.into(), account_id: acct.clone(), record: None });
@@ -494,7 +539,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Publish Service",
             [],
             None,
-            "{service: id | name, name?, dir?, export?} → the service",
+            "{service: id | name, name?, dir?, settings?: the kind's settings object (replaces them), export?} → the service",
             always,
             update_service
         ),
@@ -575,6 +620,9 @@ fn open_any(
     }
     dac_publish::open_service(svc, coll)
 }
+
+#[path = "publish_sftp.rs"]
+mod sftp;
 
 #[cfg(test)]
 #[path = "publish_tests.rs"]

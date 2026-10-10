@@ -103,7 +103,7 @@ pub struct MapUi {
     pub drawn: Vec<(egui::Pos2, Vec<u64>)>,
     /// The map canvas (screen), last frame.
     pub canvas: Option<egui::Rect>,
-    pins_cache: Option<(u64, usize, String, i64, Vec<dac_geo::Cluster<u64>>)>,
+    pins_cache: Option<(u64, usize, String, i64, std::sync::Arc<Vec<dac_geo::Cluster<u64>>>)>,
 }
 
 impl Default for MapUi {
@@ -233,8 +233,9 @@ impl MapUi {
         }
     }
 
-    /// The pins for the photos in view at the current zoom (cached per catalog revision, filter and zoom step).
-    pub fn pins(&mut self, app_session: &mut dac_engine::Session) -> Vec<dac_geo::Cluster<u64>> {
+    /// The pins for the photos in view at the current zoom (cached per catalog revision, filter and zoom step;
+    /// shared, so a frame doesn't copy 50k clusters — P6.1).
+    pub fn pins(&mut self, app_session: &mut dac_engine::Session) -> std::sync::Arc<Vec<dac_geo::Cluster<u64>>> {
         let rev = app_session.catalog.revision;
         let n = app_session.visible().len();
         let zkey = (self.prefs.zoom * 4.0).round() as i64;
@@ -245,12 +246,12 @@ impl MapUi {
             && *f == fkey
             && *z == zkey
         {
-            return pins.clone();
+            return std::sync::Arc::clone(pins);
         }
         let pts: Vec<(u64, LatLon)> =
             dac_engine::cmd::map::filtered(app_session, &self.filter).into_iter().filter_map(|(id, g)| g.map(|g| (id.0, g))).collect();
-        let pins = dac_geo::cluster(&pts, zkey as f64 / 4.0, 44.0);
-        self.pins_cache = Some((rev, n, fkey, zkey, pins.clone()));
+        let pins = std::sync::Arc::new(dac_geo::cluster(&pts, zkey as f64 / 4.0, 44.0));
+        self.pins_cache = Some((rev, n, fkey, zkey, std::sync::Arc::clone(&pins)));
         pins
     }
 }

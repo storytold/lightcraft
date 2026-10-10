@@ -12,7 +12,8 @@
 //! `printui.set {settings}` (merged into the current settings), `printui.pageSetup {paper,
 //! landscape}`, `printui.page {page | delta}`, `printui.guides {...}`, `printui.print {destination,
 //! path, printer}`, `printui.printOne`, `printui.printers {server}`, `printui.saveTemplate {name}`,
-//! `printui.state`.
+//! `printui.state`, `printui.saveCreation {name}` (a Saved Print: a collection holding the photos,
+//! the page layout and these settings), `printui.openCreation {id}`.
 
 use dac_catalog::PhotoId;
 use dac_layout::tokens::{PhotoInfo, expand};
@@ -54,6 +55,14 @@ pub struct PrintUi {
     pub output_path: String,
     pub busy: bool,
     pub last: Option<Value>,
+    /// The Saved Print (collection) last saved or opened.
+    pub creation: Option<u64>,
+    /// Paper sizes the chosen printer reports (IPP `media-col-database` / `media-supported`).
+    pub media: Vec<dac_print::ipp::Media>,
+    /// `<config>/print.json` has been read.
+    pub loaded: bool,
+    /// What was last written to (or read from) `print.json`, to save only on change.
+    pub stored: Option<Value>,
 }
 
 impl Default for PrintUi {
@@ -75,6 +84,10 @@ impl Default for PrintUi {
             output_path: String::new(),
             busy: false,
             last: None,
+            creation: None,
+            media: Vec::new(),
+            loaded: false,
+            stored: None,
         }
     }
 }
@@ -90,7 +103,11 @@ pub const COMMANDS: &[crate::menus::UiCommand] = &[
     ("printui.printOne", "Print One", None, ""),
     ("printui.printers", "Find Printers", None, ""),
     ("printui.saveTemplate", "New Print Template", None, ""),
+    ("printui.deleteTemplate", "Delete Print Template", None, ""),
+    ("printui.media", "Printer Paper Sizes", None, ""),
     ("printui.state", "Print State", None, ""),
+    ("printui.saveCreation", "Create Saved Print", None, ""),
+    ("printui.openCreation", "Open Saved Print", None, ""),
 ];
 
 /// The photos a print takes: the selection when it has more than one photo, else every photo in
@@ -155,7 +172,93 @@ pub fn run(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Value, String
     if !COMMANDS.iter().any(|c| c.0 == id) {
         return None;
     }
-    Some(run_inner(app, id, p))
+    ensure_loaded(app);
+    let r = run_inner(app, id, p);
+    if r.is_ok()
+        && let Err(e) = persist(app)
+    {
+        log::warn!("print settings not saved: {e}");
+    }
+    Some(r)
+}
+
+// ---------------------------------------------------------------- persistence
+
+/// `<config>/print.json`: the user templates, the current settings and template, the printer.
+#[cfg(not(target_arch = "wasm32"))]
+fn store_path(app: &DacApp) -> Option<std::path::PathBuf> {
+    app.session.remote.connections_path.as_ref().and_then(|p| p.parent()).map(|d| d.join("print.json"))
+}
+
+/// The web build keeps print settings for the session only.
+#[cfg(target_arch = "wasm32")]
+fn store_path(_app: &DacApp) -> Option<std::path::PathBuf> {
+    None
+}
+
+fn stored_json(pu: &PrintUi) -> Value {
+    json!({
+        "settings": serde_json::to_value(&pu.settings).unwrap_or(Value::Null),
+        "template": pu.template,
+        "userTemplates": pu.user_templates.iter().map(|(n, s)| json!({"name": n, "settings": serde_json::to_value(s).unwrap_or(Value::Null)})).collect::<Vec<_>>(),
+        "printerUri": pu.printer_uri,
+        "cupsServer": pu.cups_server,
+    })
+}
+
+/// Apply a stored `print.json`; anything unreadable is skipped (a damaged file never stops the module).
+fn apply_stored(pu: &mut PrintUi, v: &Value) {
+    let settings = |x: &Value| PrintSettings::from_json(&x.to_string()).ok().filter(|s| s.validate().is_ok());
+    if let Some(s) = v.get("settings").and_then(settings) {
+        pu.settings = s;
+    }
+    if let Some(t) = v.get("template") {
+        pu.template = t.as_str().map(str::to_string);
+    }
+    if let Some(list) = v.get("userTemplates").and_then(Value::as_array) {
+        pu.user_templates = list
+            .iter()
+            .filter_map(|t| Some((t.get("name")?.as_str()?.trim().to_string(), settings(t.get("settings")?)?)))
+            .filter(|(n, _)| !n.is_empty())
+            .take(500)
+            .collect();
+    }
+    if let Some(u) = v.get("printerUri").and_then(Value::as_str) {
+        pu.printer_uri = u.to_string();
+    }
+    if let Some(u) = v.get("cupsServer").and_then(Value::as_str).filter(|u| !u.trim().is_empty()) {
+        pu.cups_server = u.to_string();
+    }
+}
+
+/// Read `print.json` once per session.
+pub fn ensure_loaded(app: &mut DacApp) {
+    if app.print.loaded {
+        return;
+    }
+    app.print.loaded = true;
+    let Some(path) = store_path(app) else { return };
+    match std::fs::read(&path) {
+        Ok(b) => match serde_json::from_slice::<Value>(&b) {
+            Ok(v) => apply_stored(&mut app.print, &v),
+            Err(e) => log::warn!("{}: {e}; using the default print settings", path.display()),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => log::warn!("{}: {e}", path.display()),
+    }
+    app.print.stored = Some(stored_json(&app.print));
+}
+
+/// Write `print.json` when the settings, templates or printer changed since the last write.
+pub fn persist(app: &mut DacApp) -> Result<(), String> {
+    let now = stored_json(&app.print);
+    if app.print.stored.as_ref() == Some(&now) {
+        return Ok(());
+    }
+    let Some(path) = store_path(app) else { return Ok(()) };
+    let bytes = serde_json::to_vec_pretty(&now).map_err(|e| e.to_string())?;
+    app.print.stored = Some(now);
+    dac_engine::export::write_file_durable(&path.to_string_lossy(), &bytes)
 }
 
 fn state_json(app: &mut DacApp) -> Value {
@@ -175,8 +278,11 @@ fn state_json(app: &mut DacApp) -> Value {
         "printer": pu.printer_uri,
         "printers": pu.printers.iter().map(|p| json!({"name": p.name, "uri": p.uri, "info": p.info})).collect::<Vec<_>>(),
         "busy": pu.busy,
+        "creation": pu.creation,
         "last": pu.last,
         "templates": builtin_templates().into_iter().map(|t| t.0).chain(pu.user_templates.iter().map(|t| t.0.clone())).collect::<Vec<_>>(),
+        "userTemplates": pu.user_templates.iter().map(|t| t.0.clone()).collect::<Vec<_>>(),
+        "media": pu.media.iter().map(|m| json!({"name": m.name, "w": m.size.w, "h": m.size.h, "margins": m.margins})).collect::<Vec<_>>(),
     })
 }
 
@@ -198,12 +304,21 @@ fn run_inner(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
             app.print.settings = s;
         }
         "printui.pageSetup" => {
-            let s = &mut app.print.settings;
-            let landscape = p.get("landscape").and_then(Value::as_bool).unwrap_or(s.page.size.w > s.page.size.h);
-            let size = match p.get("paper").and_then(Value::as_str) {
-                Some(k) => dac_print::job::paper(k).ok_or_else(|| format!("unknown paper {k}"))?.size,
-                None => s.page.size,
+            let cur = app.print.settings.page.size;
+            let landscape = p.get("landscape").and_then(Value::as_bool).unwrap_or(cur.w > cur.h);
+            let size = match (p.get("paper").and_then(Value::as_str), p.get("media").and_then(Value::as_str)) {
+                (Some(k), _) => dac_print::job::paper(k).ok_or_else(|| format!("unknown paper {k}"))?.size,
+                (None, Some(m)) => app
+                    .print
+                    .media
+                    .iter()
+                    .find(|x| x.name == m)
+                    .map(|x| x.size)
+                    .or_else(|| dac_print::ipp::pwg_media_size(m))
+                    .ok_or_else(|| format!("unknown printer paper {m}"))?,
+                (None, None) => cur,
             };
+            let s = &mut app.print.settings;
             s.set_paper(size, landscape);
             // grids and packages adapt; custom cells keep their places
             s.validate().map_err(|e| e.to_string())?;
@@ -238,6 +353,44 @@ fn run_inner(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
             app.print.user_templates.push((name.clone(), s));
             app.print.template = Some(name);
         }
+        "printui.deleteTemplate" => {
+            let name = p.get("name").and_then(Value::as_str).ok_or("missing name")?;
+            let before = app.print.user_templates.len();
+            app.print.user_templates.retain(|t| t.0 != name);
+            if app.print.user_templates.len() == before {
+                return Err(format!("no user print template named {name}"));
+            }
+            if app.print.template.as_deref() == Some(name) {
+                app.print.template = None;
+            }
+        }
+        "printui.media" => {
+            let uri = p.get("uri").and_then(Value::as_str).unwrap_or(&app.print.printer_uri).trim().to_string();
+            if uri.is_empty() {
+                return Err("no printer: give uri or choose one (printui.printers)".into());
+            }
+            app.print.printer_uri = uri.clone();
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                crate::tasks::spawn(
+                    app,
+                    "Reading printer paper sizes",
+                    None,
+                    move || dac_print::ipp::printer_info(&uri),
+                    |app, ctx, r| match r {
+                        Ok(info) => {
+                            let n = info.media.len();
+                            app.print.media = info.media;
+                            app.toast(ctx, format!("{n} paper size(s) from the printer"));
+                        }
+                        Err(e) => app.toast_error(ctx, e.to_string()),
+                    },
+                )?;
+                return Ok(json!({"background": true}));
+            }
+            #[cfg(target_arch = "wasm32")]
+            return Err("printing is not available in the browser".into());
+        }
         "printui.printers" => {
             let server = p.get("server").and_then(Value::as_str).unwrap_or(&app.print.cups_server).to_string();
             app.print.cups_server = server.clone();
@@ -268,6 +421,49 @@ fn run_inner(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
             return Err("printing is not available in the browser".into());
         }
         "printui.print" | "printui.printOne" => return start(app, id, p),
+        "printui.saveCreation" => {
+            let name = p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).ok_or("missing name")?.to_string();
+            let (mut doc, ids) = document(app)?;
+            if ids.is_empty() {
+                return Err("no photos to save in the print".into());
+            }
+            doc.settings = Some(serde_json::to_value(&app.print.settings).map_err(|e| e.to_string())?);
+            let document = serde_json::to_value(&doc).map_err(|e| e.to_string())?;
+            // the Saved Print open keeps its collection when saved under its own name again
+            let same = app.print.creation.filter(|c| {
+                app.session
+                    .catalog
+                    .album(dac_catalog::AlbumId(*c))
+                    .is_some_and(|a| a.name == name && a.creation.as_ref().is_some_and(|k| k.kind == "print"))
+            });
+            let cid = match same {
+                Some(c) => {
+                    app.run("creation.update", json!({"id": c, "document": document}))?;
+                    c
+                }
+                None => app
+                    .run("creation.save", json!({"kind": "print", "name": name, "document": document}))?
+                    .get("id")
+                    .and_then(Value::as_u64)
+                    .ok_or("the print was not saved")?,
+            };
+            app.print.creation = Some(cid);
+        }
+        "printui.openCreation" => {
+            let cid = p.get("id").and_then(Value::as_u64).ok_or("missing id")?;
+            let r = app.run("creation.get", json!({"id": cid}))?;
+            if r["kind"] != "print" {
+                return Err("not a Saved Print".into());
+            }
+            // a print saved from this module carries its settings; one made from a template (MCP)
+            // keeps the current settings
+            if let Some(st) = r["document"].get("settings").filter(|v| v.is_object()) {
+                app.print.settings = PrintSettings::from_json(&st.to_string()).map_err(|e| e.to_string())?;
+                app.print.template = None;
+            }
+            app.print.creation = Some(cid);
+            app.print.page = 0;
+        }
         _ => {}
     }
     Ok(state_json(app))
@@ -472,6 +668,12 @@ fn toolbar(ui: &mut egui::Ui, app: &mut DacApp) {
 fn center(ui: &mut egui::Ui, app: &mut DacApp) {
     let t = Tokens::get(ui.ctx());
     let ctx = ui.ctx().clone();
+    ensure_loaded(app);
+    if !ctx.input(|i| i.pointer.any_down())
+        && let Err(e) = persist(app)
+    {
+        log::warn!("print settings not saved: {e}");
+    }
     let mut area = ui.available_rect_before_wrap();
     if crate::module::edge_visible(app, Edge::Bottom) {
         let film = Rect::from_min_max(pos2(area.left(), area.bottom() - t.film_h), area.max);
@@ -526,6 +728,14 @@ fn template_browser(ui: &mut egui::Ui, app: &mut DacApp) {
                 if r.clicked() {
                     cmd(app, &ctx, "printui.template", json!({"name": name}));
                 }
+                if group == "User Templates" {
+                    r.context_menu(|ui| {
+                        if ui.button(crate::i18n::tr("Delete")).clicked() {
+                            cmd(app, &ctx, "printui.deleteTemplate", json!({"name": name}));
+                            ui.close();
+                        }
+                    });
+                }
             }
             ui.add_space(6.0);
         }
@@ -539,6 +749,28 @@ fn template_browser(ui: &mut egui::Ui, app: &mut DacApp) {
             register(&ctx, "print:saveTemplate", b.rect);
             if b.clicked() && !name.trim().is_empty() {
                 cmd(app, &ctx, "printui.saveTemplate", json!({"name": name}));
+                ui.data_mut(|d| d.insert_temp(id, String::new()));
+            }
+        });
+        heading(ui, "Saved Prints");
+        let open = app.print.creation;
+        for c in dac_engine::creations::creations_of(&app.session, Some(dac_layout::CreationKind::Print)) {
+            let r = ui.selectable_label(open == Some(c.id.0), format!("{} ({})", c.name, c.photos.len()));
+            register(&ctx, format!("print:creation:{}", c.id.0), r.rect);
+            if r.clicked() {
+                cmd(app, &ctx, "creation.open", json!({"id": c.id.0}));
+            }
+        }
+        ui.horizontal(|ui| {
+            let id = egui::Id::new("print-new-creation");
+            let mut name: String = ui.data_mut(|d| d.get_temp(id)).unwrap_or_default();
+            let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text(crate::i18n::tr("Name")).desired_width(120.0));
+            app.text_focus |= r.has_focus();
+            ui.data_mut(|d| d.insert_temp(id, name.clone()));
+            let b = ui.button(crate::i18n::tr("Create Saved Print"));
+            register(&ctx, "print:saveCreation", b.rect);
+            if b.clicked() && !name.trim().is_empty() {
+                cmd(app, &ctx, "printui.saveCreation", json!({"name": name}));
                 ui.data_mut(|d| d.insert_temp(id, String::new()));
             }
         });
@@ -721,6 +953,8 @@ fn settings_panels(ui: &mut egui::Ui, app: &mut DacApp) {
             for pr in printers {
                 if ui.selectable_label(app.print.printer_uri == pr.uri, format!("{} {}", pr.name, pr.info)).clicked() {
                     app.print.printer_uri = pr.uri.clone();
+                    // offer its paper sizes in Page Setup
+                    cmd(app, &ctx, "printui.media", json!({"uri": pr.uri}));
                 }
             }
         }
@@ -762,6 +996,16 @@ fn page_setup_bar(ui: &mut egui::Ui, app: &mut DacApp, r: Rect) {
         for p in PAPERS {
             if ui.selectable_label(false, p.label).clicked() {
                 cmd(app, &ctx, "printui.pageSetup", json!({"paper": p.key, "landscape": landscape}));
+            }
+        }
+        if !app.print.media.is_empty() {
+            ui.separator();
+            ui.label(egui::RichText::new(crate::i18n::tr("Printer paper")).small().weak());
+            for m in app.print.media.clone() {
+                let label = format!("{}  ({:.2} × {:.2} in)", m.name, m.size.w / 72.0, m.size.h / 72.0);
+                if ui.selectable_label(false, label).clicked() {
+                    cmd(app, &ctx, "printui.pageSetup", json!({"media": m.name, "landscape": landscape}));
+                }
             }
         }
     });
@@ -1038,6 +1282,44 @@ mod tests {
         let mut a = json!({"page": {"size": {"w": 1, "h": 2}}, "job": {"dpi": 240}});
         merge(&mut a, &json!({"job": {"dpi": 300}, "page": {"size": {"w": 5}}}));
         assert_eq!(a, json!({"page": {"size": {"w": 5, "h": 2}}, "job": {"dpi": 300}}));
+    }
+
+    #[test]
+    fn user_templates_settings_and_printer_paper_persist() {
+        let dir = std::env::temp_dir().join(format!("dac-print-persist-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let open = || {
+            let mut s = dac_engine::Session::with_demo();
+            s.remote.connections_path = Some(dir.join("connections.json"));
+            DacApp::new(s, crate::Services::default())
+        };
+        let mut app = open();
+        app.run("printui.template", json!({"name": "2×2 Cells"})).unwrap();
+        app.run("printui.set", json!({"settings": {"job": {"dpi": 200}}})).unwrap();
+        app.run("printui.saveTemplate", json!({"name": "Gone"})).unwrap();
+        app.run("printui.deleteTemplate", json!({"name": "Gone"})).unwrap();
+        assert_eq!(app.print.template, None);
+        app.run("printui.saveTemplate", json!({"name": "Mine"})).unwrap();
+        assert!(app.run("printui.deleteTemplate", json!({"name": "Gone"})).is_err());
+        // a printer's PWG media name sets the page size (A5: 148 × 210 mm)
+        app.run("printui.pageSetup", json!({"media": "iso_a5_148x210mm", "landscape": false})).unwrap();
+        assert!((app.print.settings.page.size.w - 148.0 * 72.0 / 25.4).abs() < 0.1);
+        assert!(app.run("printui.pageSetup", json!({"media": "bogus"})).is_err());
+        assert!(app.run("printui.media", json!({"uri": ""})).is_err(), "no printer");
+        assert!(dir.join("print.json").is_file());
+        // a new session finds them again
+        let mut again = open();
+        let st = again.run("printui.state", json!({})).unwrap();
+        assert_eq!(st["userTemplates"], json!(["Mine"]));
+        assert_eq!(st["template"], "Mine");
+        assert_eq!(st["settings"]["job"]["dpi"].as_f64(), Some(200.0));
+        assert!((again.print.settings.page.size.w - 148.0 * 72.0 / 25.4).abs() < 0.1);
+        // a damaged file is ignored, never a crash
+        std::fs::write(dir.join("print.json"), b"{not json").unwrap();
+        let mut broken = open();
+        assert!(broken.run("printui.state", json!({})).unwrap()["userTemplates"].as_array().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -35,6 +35,7 @@ pub fn ui_commands() -> impl Iterator<Item = &'static UiCommand> {
         .chain(crate::module::SHELL_COMMANDS)
         .chain(crate::map::COMMANDS)
         .chain(crate::print_ui::COMMANDS)
+        .chain(crate::creations_ui::COMMANDS)
         .chain(PLUGIN_COMMANDS)
 }
 

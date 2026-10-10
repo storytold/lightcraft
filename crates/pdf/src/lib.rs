@@ -514,6 +514,11 @@ impl Writer {
     }
 
     fn write(mut self, doc: &Document) -> Result<Vec<u8>, PdfError> {
+        if let Some(oi) = &doc.output_intent
+            && !matches!(oi.components, 1 | 3 | 4)
+        {
+            return Err(PdfError::Image(format!("an output intent profile with {} components (1, 3 or 4 supported)", oi.components)));
+        }
         let mut pdf = Pdf::new();
         pdf.set_version(1, 7);
         let catalog_id = self.alloc();

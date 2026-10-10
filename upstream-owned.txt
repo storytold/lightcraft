@@ -22,10 +22,17 @@ omastore.toml
 crates/net/
 crates/credentials/
 crates/hash/
+crates/fuzzkit/
+apps/cli/tests/robust_catalog.rs
 crates/immich/
 crates/text/
 crates/pdf/
 crates/geo/
+# P6.1 performance budgets
+docs/perf.md
+crates/engine/examples/perf_tile.rs
+# layout/print/book engine glue (fork-created in P3.1)
+crates/engine/src/creations.rs
 # Immich engine wiring (IMM-SYNC / IMM-PEOPLE / IMM-SEARCH)
 crates/engine/src/cmd/immich_sync.rs
 crates/engine/src/tests_immich_sync.rs
@@ -39,14 +46,24 @@ crates/publish/
 crates/tether/
 crates/engine/src/cmd/publish.rs
 crates/engine/src/cmd/publish_tests.rs
+crates/engine/src/cmd/publish_sftp.rs
+crates/mcp/tests/session_e2e.rs
 crates/engine/src/cmd/tether.rs
+crates/engine/src/cmd/tether_tests.rs
+docs/tethering.md
+packaging/linux/70-{app_id}-ptp.rules.in
 crates/ui-egui/src/panels/publish.rs
 crates/ui-egui/src/panels/tether_bar.rs
 crates/layout/
 crates/print/
 crates/webgallery/
 crates/engine/src/cmd/web.rs
+crates/engine/src/creations.rs
 crates/ui-egui/src/web_module.rs
+crates/ui-egui/src/slideshow_ui.rs
+crates/ui-egui/src/creations_ui.rs
+crates/mcp/tests/modules.rs
+docs/print.md
 crates/slideshow/
 crates/psd/
 crates/actions/
@@ -74,6 +91,9 @@ crates/engine/src/cmd/map.rs
 # our docs and plans
 docs/catalog.md
 docs/immich.md
+docs/manual/
+docs/packaging.md
+xtask/src/shortcuts.rs
 plan/
 PLAN*.md
 # our tooling

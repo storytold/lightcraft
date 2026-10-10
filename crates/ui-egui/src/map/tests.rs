@@ -192,3 +192,99 @@ fn saved_locations_filter_and_tracks() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// P6.2: a damaged or hand-edited `map.json` (hostile numbers, bad tile servers, wrong types)
+/// either fails to parse (defaults are used) or is sanitized into range; never a panic.
+#[test]
+fn hostile_map_json_is_sanitized() {
+    use super::{MapPrefs, MapUi};
+    let nums = ["0", "-0", "1e308", "-1e308", "90.0001", "-180.5", "1e-320", "22", "99999999999999999999", "-1"];
+    let servers = [
+        r#"[]"#,
+        r#"[{"id":"x","name":"x","url":"file:///etc/passwd","attribution":"","maxZoom":19}]"#,
+        r#"[{"id":"","name":"","url":"https://t/{z}/{x}/{y}.png","attribution":"","maxZoom":255}]"#,
+        r#"[{"id":"osm","name":"dup","url":"https://t/{z}/{x}/{y}.png","attribution":"a","maxZoom":19,"kind":"satellite"}]"#,
+        r#"{"not":"a list"}"#,
+    ];
+    let mut n = 0;
+    for (i, lat) in nums.iter().enumerate() {
+        for lon in nums.iter().step_by(3) {
+            for zoom in nums.iter().skip(i % 3).step_by(2) {
+                for (k, sv) in servers.iter().enumerate() {
+                    let style = ["osm", "", "x", "\\u0000"][k % 4];
+                    let text = format!(
+                        r#"{{"lat":{lat},"lon":{lon},"zoom":{zoom},"style":"{style}","servers":{sv},"geocoder":"online","endpoint":"","onlineConsent":true,"cacheMb":{}}}"#,
+                        nums[k]
+                    );
+                    let Ok(prefs) = serde_json::from_str::<MapPrefs>(&text) else { continue };
+                    n += 1;
+                    let mut m = MapUi { prefs, ..MapUi::default() };
+                    m.sanitize();
+                    let p = &m.prefs;
+                    let max = f64::from(dac_geo::mercator::MAX_ZOOM);
+                    assert!(dac_geo::LatLon::new(p.lat, p.lon).is_valid() && (1.0..=max).contains(&p.zoom), "{text}");
+                    assert!(m.servers().iter().any(|s| s.id == p.style), "{text}");
+                    assert!(p.servers.iter().all(|s| s.validate().is_ok()));
+                    let _ = serde_json::to_string(p);
+                }
+            }
+        }
+    }
+    assert!(n > 50, "only {n} variants parsed");
+}
+
+/// P6.1 budget probe (`cargo test --release -p dac-ui-egui map_50k -- --ignored --nocapture`):
+/// 50,000 geotagged photos spread over Europe; prints the clustering time per zoom step and the
+/// steady-state frame time of the Map view (pins cached) at a few zooms. Numbers go in docs/perf.md.
+#[test]
+#[ignore = "perf probe"]
+fn map_50k_pins_frame_time() {
+    use dac_catalog::{Op, Photo, Source};
+    use std::time::Instant;
+    let port = fake_tiles();
+    let mut h = demo();
+    for i in 0..50_000u64 {
+        let id = h.app.session.catalog.alloc_photo_id();
+        let mut p = Photo::new(id, Source::File { path: format!("/x/{i}.jpg") }, &format!("{i}.jpg"), "JPEG", 6000, 4000, "2026-01-01T00:00:00");
+        // deterministic scatter over 36..60 N, -10..30 E
+        let a = (i.wrapping_mul(2_654_435_761) % 10_000) as f64 / 10_000.0;
+        let b = (i.wrapping_mul(40_503) % 10_007) as f64 / 10_007.0;
+        p.meta.gps = Some((36.0 + 24.0 * a, -10.0 + 40.0 * b));
+        h.app.session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    run(&mut h, "module.map", json!({}));
+    run(&mut h, "map.addServer", json!({"name": "Fake", "url": format!("http://127.0.0.1:{port}/{{z}}/{{x}}/{{y}}.png"), "attribution": "© Fake"}));
+    for zoom in [3.0, 5.0, 8.0, 12.0] {
+        run(&mut h, "map.view", json!({"lat": 48.0, "lon": 10.0, "zoom": zoom}));
+        h.settle(SETTLE);
+        h.app.map.pins_cache = None;
+        let t = Instant::now();
+        let pins = h.app.map.pins(&mut h.app.session);
+        let cluster_ms = t.elapsed().as_secs_f64() * 1e3;
+        h.step();
+        let frames = 30;
+        let t = Instant::now();
+        for _ in 0..frames {
+            h.step();
+        }
+        let frame_ms = t.elapsed().as_secs_f64() * 1e3 / f64::from(frames);
+        let t = Instant::now();
+        for _ in 0..frames {
+            drop(h.app.map.pins(&mut h.app.session));
+        }
+        let cached_us = t.elapsed().as_secs_f64() * 1e6 / f64::from(frames);
+        println!(
+            "map 50k zoom {zoom}: {} pins, {} drawn, cluster {cluster_ms:.1} ms, cached pins {cached_us:.1} µs, frame {frame_ms:.2} ms",
+            pins.len(),
+            h.app.map.drawn.len()
+        );
+    }
+    // the same frame loop outside the Map (what the rest of the shell costs with 50k photos)
+    run(&mut h, "module.library", json!({}));
+    h.settle(SETTLE);
+    let t = Instant::now();
+    for _ in 0..30 {
+        h.step();
+    }
+    println!("library 50k: frame {:.2} ms", t.elapsed().as_secs_f64() * 1e3 / 30.0);
+}

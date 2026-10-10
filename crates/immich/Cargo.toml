@@ -22,3 +22,6 @@ workspace = true
 dac-net = { workspace = true }
 dac-credentials = { workspace = true }
 log = { workspace = true }
+
+[dev-dependencies]
+dac-fuzzkit = { workspace = true }

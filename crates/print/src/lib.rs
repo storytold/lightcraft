@@ -44,3 +44,5 @@ pub type Result<T> = std::result::Result<T, PrintError>;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_robust;
