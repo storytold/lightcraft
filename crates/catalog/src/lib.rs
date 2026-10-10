@@ -268,7 +268,7 @@ pub enum Op {
         entry: Option<PreviewEntry>,
     },
     /// List a keyword in the library's keyword list with these attributes, or take it off the list
-    /// (`None`; photos that carry it keep it). Format version 4.
+    /// (`None`; photos that carry it keep it). Format version 5.
     SetKeyword {
         path: String,
         info: Option<keywords::KeywordInfo>,

@@ -221,7 +221,14 @@ fn renaming_a_keyword_set_keeps_its_place() {
     s.execute("keyword.saveSet", &json!({"name": "Travel", "keywords": ["harbour"]})).unwrap();
     s.execute("keyword.useSet", &json!({"name": "Weddings"})).unwrap();
     let r = s.execute("keyword.saveSet", &json!({"name": "Ceremonies", "replace": "weddings", "keywords": ["ceremony", "rings"]})).unwrap();
-    let names: Vec<String> = r["sets"].as_array().unwrap().iter().map(|x| x["name"].as_str().unwrap().to_string()).collect();
+    // (the built-in sets of the fork follow the user's: `builtin`)
+    let names: Vec<String> = r["sets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|x| x["builtin"] != true || x["name"] == "Recent Keywords")
+        .map(|x| x["name"].as_str().unwrap().to_string())
+        .collect();
     assert_eq!(names, ["Recent Keywords", "Ceremonies", "Travel"]);
     assert_eq!(r["current"], "Ceremonies");
     assert_eq!(r["keywords"], json!(["ceremony", "rings"]));
