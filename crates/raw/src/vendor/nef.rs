@@ -8,7 +8,7 @@
 //! (HE / HE★, Z 8, Z 9, Z 6III, Z f): they keep compression 34713 but carry a wavelet codestream that starts with
 //! the JPEG XS markers SOC + CAP (ISO/IEC 21122-1, `FF10 FF50`) and have no `0x0096` table (issue #193).
 
-use super::{nefc, white_from_data};
+use super::{coolpix, nefc, white_from_data};
 use crate::tiffraw::{Packing, read_image};
 use crate::{BlackLevel, Cfa, ColorData, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
 use lightcraft_geom::Orientation;
@@ -91,6 +91,9 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<RawImage> {
     let make = ifd0.string(t::MAKE).unwrap_or_default();
     let mn =
         tiff.exif().and_then(|e| e.get(t::MAKER_NOTE)).and_then(|e| makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make));
+    if let Some(img) = two_field_coolpix(bytes, &tiff, raw, &info) {
+        return img;
+    }
     let data = if info.compression == t::compression::NIKON {
         compressed(bytes, &info, mn.as_ref())?
     } else {
@@ -141,6 +144,74 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<RawImage> {
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
         color: ColorData::default(),
         wb_multipliers: wb,
+        linearized: false,
+        opcodes: OpcodeLists::default(),
+        metadata,
+    };
+    img.validate()?;
+    Ok(img)
+}
+
+/// The two-field Coolpix raws (E5700 CYGM, E8400 Bayer; see [`coolpix`]) when `info` is exactly the measured layout:
+/// the model, the size, an uncompressed 12-bit single-channel single strip of `w * h * 1.5` bytes and, for the
+/// CYGM model, the `[5, 3, 1, 4]` colour-filter tag. `None` leaves every other file to the ordinary path.
+fn two_field_coolpix(bytes: &[u8], tiff: &Tiff, raw: &Ifd, info: &ImageInfo) -> Option<Result<RawImage>> {
+    let ifd0 = tiff.ifds.first()?;
+    let (w, h) = (info.width as usize, info.height as usize);
+    let layout = coolpix::layout(&ifd0.string(t::MODEL).unwrap_or_default(), w, h)?;
+    let pattern = raw.bytes(t::CFA_PATTERN_EP).map(<[u8]>::to_vec).unwrap_or_default();
+    let tag_ok = matches!((layout.cygm, pattern.as_slice()), (true, [5, 3, 1, 4]) | (false, [2, 1, 1, 0]));
+    let pattern: [u8; 4] = pattern.try_into().ok()?;
+    let plain = info.compression == 1
+        && info.bits() == 12
+        && info.samples_per_pixel == 1
+        && info.planar != 2
+        && coolpix::strip_matches(&info.offsets, &info.byte_counts, w, h);
+    if !(tag_ok && plain && raw.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref() == Some(&[2, 2])) {
+        return None;
+    }
+    Some(decode_two_field_coolpix(bytes, tiff, ifd0, info, layout, pattern))
+}
+
+fn decode_two_field_coolpix(
+    bytes: &[u8],
+    tiff: &Tiff,
+    ifd0: &Ifd,
+    info: &ImageInfo,
+    layout: coolpix::TwoField,
+    pattern: [u8; 4],
+) -> Result<RawImage> {
+    let (w, h) = (info.width as usize, info.height as usize);
+    let RawData::U16(strip) = read_image(bytes, info, tiff.order, Packing::Msb)? else {
+        return Err(RawError::Unsupported("float NEF".into()));
+    };
+    let mosaic = coolpix::deinterlace(&strip, w, h, layout.first_field_even).ok_or_else(|| RawError::Corrupt("Coolpix: bad field layout".into()))?;
+    drop(strip);
+    let (data, cpp, cfa, white) = if layout.cygm {
+        let (rgb, white) = coolpix::cygm_to_rgb(&mosaic, w, h, pattern).ok_or_else(|| RawError::Corrupt("Coolpix: bad CYGM mosaic".into()))?;
+        (rgb, 3, None, white)
+    } else {
+        (mosaic, 1, Some(Cfa { width: 2, height: 2, pattern: pattern.to_vec() }), 4095.0)
+    };
+    let mut metadata = lightcraft_meta::from_tiff(tiff);
+    metadata.width = Some(w as u32);
+    metadata.height = Some(h as u32);
+    let img = RawImage {
+        format: RawFormat::Nef,
+        width: w,
+        height: h,
+        cpp,
+        data: RawData::U16(data),
+        cfa,
+        bits: 12,
+        black: BlackLevel::uniform(0.0),
+        white: vec![white],
+        active_area: Rect::new(0, 0, w, h),
+        crop: Rect::new(0, 0, w, h),
+        orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
+        color: ColorData::default(),
+        // CYGM: the gray-world gains are already applied
+        wb_multipliers: if layout.cygm { Some([1.0; 3]) } else { None },
         linearized: false,
         opcodes: OpcodeLists::default(),
         metadata,
@@ -363,6 +434,93 @@ mod tests {
         let mut both = nrw_note(200);
         both.set(BLACK_LEVEL, Value::Short(vec![400, 404, 408, 412]));
         assert_eq!(decode(Some(both)).black.values, vec![100.0, 101.0, 102.0, 103.0]);
+    }
+
+    /// A two-field Coolpix file: model `model`, `pattern` as the colour-filter tag, one strip of 12-bit MSB-first samples.
+    fn coolpix_file(model: &str, pattern: [u8; 4], w: usize, h: usize, strip_px: &[u16]) -> Vec<u8> {
+        let mut packed = Vec::new();
+        for pair in strip_px.chunks(2) {
+            let v = (pair[0] as u32) << 12 | pair.get(1).copied().unwrap_or(0) as u32;
+            packed.extend_from_slice(&[(v >> 16) as u8, (v >> 8) as u8, v as u8]);
+        }
+        let mut raw = IfdBuilder::new();
+        raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
+        raw.set(t::IMAGE_WIDTH, Value::Long(vec![w as u32]));
+        raw.set(t::IMAGE_LENGTH, Value::Long(vec![h as u32]));
+        raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![12]));
+        raw.set(t::COMPRESSION, Value::Short(vec![1]));
+        raw.set(t::PHOTOMETRIC, Value::Short(vec![photometric::CFA]));
+        raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
+        raw.set(t::CFA_PATTERN_EP, Value::Byte(pattern.to_vec()));
+        raw.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![packed] });
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::MAKE, Value::Ascii("NIKON".into()));
+        ifd0.set(t::MODEL, Value::Ascii(model.into()));
+        ifd0.add_sub_ifd(raw);
+        TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()
+    }
+
+    /// The strip of a sensor image `img` with its even lines in the first (`first_even`) or the second field.
+    fn two_fields(img: &[u16], w: usize, h: usize, first_even: bool) -> Vec<u16> {
+        let lines = |start: usize| (start..h).step_by(2).flat_map(|y| img[y * w..(y + 1) * w].to_vec()).collect::<Vec<u16>>();
+        let (even, odd) = (lines(0), lines(1));
+        if first_even { [even, odd].concat() } else { [odd, even].concat() }
+    }
+
+    #[test]
+    fn coolpix_e8400_is_deinterlaced_bggr() {
+        let (w, h) = (3280usize, 2454usize);
+        let img: Vec<u16> = (0..w * h).map(|i| ((i / w) * 5 + (i % w) * 3 % 1000) as u16 % 4096).collect();
+        let r = crate::decode(&coolpix_file("E8400", [2, 1, 1, 0], w, h, &two_fields(&img, w, h, true))).unwrap();
+        assert_eq!((r.width, r.height, r.cpp), (w, h, 1));
+        assert_eq!(r.data, RawData::U16(img));
+        assert_eq!(r.cfa.as_ref().unwrap().name(), "BGGR");
+        assert_eq!((r.black.values.as_slice(), r.white.as_slice()), (&[0.0][..], &[4095.0][..]));
+    }
+
+    #[test]
+    fn coolpix_e5700_is_cygm_converted_to_neutral_rgb() {
+        let (w, h) = (2576usize, 1924usize);
+        // ideal complementary filters over a neutral grey ramp: Y = C = M = 2 g, G = g in a cell Y C / G M
+        let img: Vec<u16> =
+            (0..w * h).map(|i| if (i / w) % 2 == 1 && i % 2 == 0 { 100 + (i % w / 2) as u16 } else { 200 + (i % w / 2) as u16 * 2 }).collect();
+        // the first stored field is the odd lines
+        let r = crate::decode(&coolpix_file("E5700", [5, 3, 1, 4], w, h, &two_fields(&img, w, h, false))).unwrap();
+        assert_eq!((r.width, r.height, r.cpp), (w, h, 3));
+        assert!(r.cfa.is_none());
+        let n = r.normalized().unwrap();
+        let mid = (h / 2 * w + w / 2) * 3;
+        let px = &n.data[mid..mid + 3];
+        assert!(px[0] > 0.01 && px.iter().all(|v| (v - px[0]).abs() < 2e-3), "{px:?}");
+        // with the opposite parity the cell rows swap and the grey is no longer neutral-consistent: still decodes
+        assert!(crate::decode(&coolpix_file("E5700", [5, 3, 1, 4], w, h, &two_fields(&img, w, h, true))).is_ok());
+    }
+
+    #[test]
+    fn coolpix_guard_leaves_other_files_alone() {
+        let (w, h) = (16usize, 8usize);
+        let px: Vec<u16> = (0..w * h).map(|i| (i * 131 % 4096) as u16).collect();
+        // wrong size for the model: ordinary single-field Bayer decode, rows in file order
+        let r = crate::decode(&coolpix_file("E8400", [2, 1, 1, 0], w, h, &px)).unwrap();
+        assert_eq!(r.data, RawData::U16(px.clone()));
+        assert_eq!(r.cpp, 1);
+        // other model at the E5700 size is not converted
+        let (w, h) = (2576usize, 1924usize);
+        let r = crate::decode(&coolpix_file("E5000", [2, 1, 1, 0], w, h, &vec![7u16; w * h])).unwrap();
+        assert_eq!((r.cpp, r.data.len()), (1, w * h));
+        // E5700 with a different colour-filter tag stays on the ordinary path (and is refused as before)
+        let wrong_tag = coolpix_file("E5700", [5, 3, 1, 3], w, h, &vec![7u16; w * h]);
+        assert_eq!(crate::decode(&wrong_tag).map(|r| r.cpp).unwrap_or(1), 1);
+    }
+
+    #[test]
+    fn coolpix_short_input_is_an_error_not_a_panic() {
+        let (w, h) = (2576usize, 1924usize);
+        let mut file = coolpix_file("E5700", [5, 3, 1, 4], w, h, &vec![100u16; w * h]);
+        file.truncate(file.len() / 2);
+        let _ = crate::decode(&file);
+        file.truncate(200);
+        assert!(crate::decode(&file).is_err());
     }
 
     #[test]
