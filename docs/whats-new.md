@@ -95,6 +95,10 @@
   Selected Settings). Ctrl+V only reaches LightCraft while the system clipboard holds text; otherwise use Edit ▸ Paste Edit
   Settings.
 
+### Dialogs
+- System Info, All Metadata and What's New end with one Close button, like About, instead of Cancel and OK
+  (issue #782).
+
 ### Synchronize Folder
 - Right-click a folder (or a disk other than the startup disk) in the sidebar's Folders section ▸ Synchronize
   Folder…. The folder and the folders inside it are scanned in the background for photos added on disk, photos whose
