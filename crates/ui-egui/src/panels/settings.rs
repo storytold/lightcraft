@@ -1,4 +1,5 @@
-//! The Settings dialog (⌘,): General, Import, Performance, Interface, Faces, AI Denoise.
+//! The Settings dialog (⌘,): General, Import, Performance, Interface, Integrations, Faces,
+//! AI Denoise.
 //!
 //! Changes apply immediately (no OK/Cancel). Where they are stored:
 //! - **app settings** ([`crate::state::AppSettings`]: startup view, delete confirmation, GPU,
@@ -22,6 +23,7 @@ pub const TABS: &[(&str, &str)] = &[
     ("import", "Import"),
     ("performance", "Performance"),
     ("interface", "Interface"),
+    ("integrations", "Integrations"),
     ("faces", "Faces"),
     ("denoise", "AI Denoise"),
 ];
@@ -50,18 +52,25 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String) {
         "import" => import_tab(app, ui, &t),
         "performance" => performance_tab(app, ui, &t),
         "interface" => interface_tab(app, ui, &t),
+        "integrations" => {
+            // the Immich client and its workers are native-only; the web build says so
+            #[cfg(not(target_arch = "wasm32"))]
+            crate::immich::settings_tab(app, ui, &t);
+            #[cfg(target_arch = "wasm32")]
+            ui.label(crate::i18n::tr("Immich import is available in the desktop app."));
+        }
         "faces" => super::faces::settings_tab(app, ui, &t),
         "denoise" => super::denoise::settings_tab(app, ui, &t),
         _ => general_tab(app, ui, &t),
     }
 }
 
-pub(super) fn heading(ui: &mut egui::Ui, t: &Tokens, text: &str) {
+pub(crate) fn heading(ui: &mut egui::Ui, t: &Tokens, text: &str) {
     ui.add_space(4.0);
     ui.label(RichText::new(crate::i18n::tr(text)).font(t.semibold(12.5)).color(t.text));
 }
 
-fn row<R>(ui: &mut egui::Ui, t: &Tokens, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+pub(crate) fn row<R>(ui: &mut egui::Ui, t: &Tokens, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     ui.horizontal(|ui| {
         ui.allocate_ui_with_layout(egui::vec2(LABEL_W, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.set_min_width(LABEL_W);
@@ -72,7 +81,7 @@ fn row<R>(ui: &mut egui::Ui, t: &Tokens, label: &str, add: impl FnOnce(&mut egui
     .inner
 }
 
-pub(super) fn hint(ui: &mut egui::Ui, t: &Tokens, text: &str) {
+pub(crate) fn hint(ui: &mut egui::Ui, t: &Tokens, text: &str) {
     ui.label(RichText::new(crate::i18n::tr(text)).size(11.0).color(t.text_dim));
 }
 

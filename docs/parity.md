@@ -21,7 +21,7 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 <!-- parity:summary -->
 | Section | ✅ | 🟡 | ⬜ | 🚫 | P0 done | P1 done |
 |---|---:|---:|---:|---:|---:|---:|
-| A. Import (IMP) | 11 | 3 | 1 | 1 | 3/5 (60%) | 5/5 (100%) |
+| A. Import (IMP) | 12 | 3 | 1 | 1 | 3/5 (60%) | 6/6 (100%) |
 | B. Library management (LIB) | 22 | 2 | 1 | 2 | 9/9 (100%) | 9/9 (100%) |
 | C. Views & navigation (VIEW) | 15 | 1 | 1 | 0 | 8/9 (89%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
@@ -45,12 +45,12 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | V. Preferences (PREF) | 6 | 1 | 2 | 2 | 1/1 (100%) | 4/4 (100%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 18 | 5 | 1 | 1 | 8/8 (100%) | 6/8 (75%) |
-| Y. Menus | 82 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
+| Y. Menus | 83 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
 | Lightroom Classic extras | 32 | 11 | 39 | 9 | — | 22/24 (92%) |
-| **Total** | 394 | 38 | 84 | 36 | 193/200 (97%) | 142/152 (93%) |
+| **Total** | 396 | 38 | 84 | 36 | 193/200 (97%) | 143/153 (93%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **80.0%** of 516 in-scope rows — P0 98.2% of 200 · P1 95.7% of 152 · P2 42.9% of 163.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **80.1%** of 518 in-scope rows — P0 98.2% of 200 · P1 95.8% of 153 · P2 42.9% of 163.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -148,6 +148,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-IMP-CULL-AT-IMPORT | Culling analysis at import | P2 | 🟡 | `cmd:photo.analyze` | run Assisted Culling on the imported photos (they're selected after an import); not automatic |
 | LR-IMP-MOVE | Move on import [Classic] | P1 | ✅ | `cmd:library.import` (`mode` move), `crates/engine/src/import_move.rs`, `crates/engine/src/tests_import_move.rs`, `crates/ui-egui/src/import.rs` | Transfer ▸ Move with Copy's destination, folders (day / month / one folder / custom template), rename template and example destination; XMP sidecars (both namings) move along; each source is removed only after its destination is written (hard link on the same volume, else copied, synced and compared byte for byte) and its catalog record is saved; failed, duplicate, unchecked files keep their sources, taken names get -1, -2…, never overwritten; files already in the destination/library are added in place; sources that can't be removed (read-only card) are kept and reported (`kept`). Undo removes the photos from the library but leaves the moved files at the destination. No Copy as DNG while moving |
 | LR-IMP-DNG-CONVERT | Convert to DNG on import [Classic] | P2 | ✅ | `cmd:library.import` (`dng`), `crates/ui-egui/src/import.rs` | copy imports: Raw files ▸ Copy as DNG (lossless; the card is untouched); the raw copy is removed only once its DNG is verified and on disk (issue #106) |
+| LR-IMP-IMMICH | Import from a self-hosted Immich server | P1 | ✅ | `cmd:immich.servers`, `cmd:immich.browse`, `cmd:immich.import`, `crates/immich/`, `crates/engine/src/cmd/immich.rs`, `crates/ui-egui/src/immich.rs` | native-only client crate (pure Rust over std TCP; API key auth, bounded limits); server entries configured via one command (keys never echoed, prefs 0600), paged/filtered browse (album, favorites, rating, date) and originals download with cancel; the desktop dialog browses with live thumbnails and imports selection through `library.import` (de-dup, undo, durable save identical to any import); headless end-to-end test against a mock server |
 
 ## B. Library management (LIB)
 
@@ -550,6 +551,7 @@ visible menu bar yet: the menu model is only exposed through the control channel
 | MENU-APP-HIDE | Hide / hide others / show all | P1 | ✅ | `apps/lightcraft/src/native_menu.rs` | the system's own items in the app menu (⌘H, ⌥⌘H) |
 | MENU-APP-QUIT | Quit | P0 | ✅ | `cmd:app.quit`, `apps/lightcraft/src/native_menu.rs` | macOS: app menu (native); elsewhere: File → Quit LightCraft, always the last item in its own group (after commands the File layout does not list) |
 | MENU-FILE-ADDPHOTOS | Import Photos… (was Add Photos…) | P0 | ✅ | `cmd:file.addPhotos`, `crates/ui-egui/src/menus.rs` | first item of File, ⇧⌘I; file picker → the import review |
+| MENU-FILE-IMMICH | Import from Immich… | — | ✅ | `cmd:file.importImmich`, `crates/ui-egui/src/immich.rs` | File submenu; native only (disabled in the web build); browse + select + import dialog |
 | MENU-FILE-ADDFOLDER | Import from Folder… (was Add Folder…) | P0 | ✅ | `cmd:file.addFolder`, `cmd:library.importPreview` | folder picker (desktop) → the import review, subfolders included; `path` param for agents. Worded as importing: it doesn't save a Local location (that is Local → Browse Folder…) |
 | MENU-FILE-MIGRATE | Migrate photos | OOS | 🚫 | | |
 | MENU-FILE-NEWALBUM | New Album… | P0 | ✅ | `cmd:dialog.newAlbum` | |

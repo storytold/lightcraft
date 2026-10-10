@@ -158,6 +158,9 @@ struct PrefsFile {
     /// Days after which untouched Local records of unbrowsed folders are forgotten (missing =
     /// the default, 0 = never).
     forget_local_days: Option<u32>,
+    /// Immich servers the user configured (the API keys are stored unencrypted in v1; the file
+    /// itself is written owner-read/write-only).
+    immich: crate::cmd::immich::ImmichPrefs,
 }
 
 fn presets_json(s: &Session) -> String {
@@ -340,6 +343,7 @@ impl Session {
         self.recent_keywords = prefs.recent_keywords;
         self.import_defaults = prefs.import;
         self.cache_mb = prefs.cache_mb;
+        self.immich_servers = prefs.immich.servers;
         self.forget_local_days = prefs.forget_local_days.unwrap_or(lightcraft_catalog::DEFAULT_FORGET_DAYS);
         self.smart_previews_dir = prefs.smart_previews_dir.filter(|_| on_disk).map(PathBuf::from);
         if let Some(d) = &self.smart_previews_dir {
@@ -571,6 +575,7 @@ impl Session {
             cache_mb: self.cache_mb,
             smart_previews_dir: self.smart_previews_dir.as_ref().map(|d| d.to_string_lossy().to_string()),
             forget_local_days: Some(self.forget_local_days),
+            immich: crate::cmd::immich::ImmichPrefs { servers: self.immich_servers.clone() },
         })
         .unwrap_or_default();
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
@@ -579,7 +584,17 @@ impl Session {
                 "prefs: prefs.json couldn't be read when the library opened, so it isn't overwritten; reopen the library to save preferences".into(),
             ));
         }
-        lib.files.write_atomic("prefs.json", &v).map_err(|e| EngineError::Other(format!("prefs: {e}")))
+        lib.files.write_atomic("prefs.json", &v).map_err(|e| EngineError::Other(format!("prefs: {e}")))?;
+        // prefs.json holds the Immich API keys once any server is configured: owner read/write
+        // only, after every write (the atomic rename creates the file with the default mode).
+        #[cfg(unix)]
+        if lib.on_disk {
+            use std::os::unix::fs::PermissionsExt;
+            if let Err(e) = std::fs::set_permissions(lib.dir.join("prefs.json"), std::fs::Permissions::from_mode(0o600)) {
+                log::warn!("prefs: could not restrict prefs.json to the owner: {e}");
+            }
+        }
+        Ok(())
     }
 
     /// Warnings about the open library not handed out yet: its settings files, and a lock that

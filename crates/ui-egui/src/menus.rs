@@ -155,6 +155,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("file.addPhotos", "Import Photos…", Some("Cmd+Shift+I"), "File"),
     ("file.addFolder", "Import from Folder…", None, "File"),
     ("file.importLightroom", "Import Lightroom Catalog…", None, "File"),
+    ("file.importImmich", "Import from Immich…", None, "File"),
     ("file.addFromDevice", "Import from Device", None, ""),
     ("file.findMissing", "Find Missing Photos…", None, "File"),
     ("file.backupLibrary", "Back Up Library…", None, "File"),
@@ -1090,6 +1091,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 None => Ok(Value::Null),
             }
         }
+        // the Immich browser (native only — the client crate does not exist in the web build)
+        #[cfg(not(target_arch = "wasm32"))]
+        "file.importImmich" => crate::immich::open(app, p),
+        #[cfg(target_arch = "wasm32")]
+        "file.importImmich" => Err("Import from Immich is not available in the browser build".into()),
         "app.quit" => {
             app.ui.quit = true;
             Ok(Value::Null)
@@ -1471,6 +1477,9 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
         "view.compare" => app.session.catalog.len() > 1,
         "view.fullScreenPreview" | "view.infoOverlay" | "view.navigator" => app.session.active().is_some() || app.ui.fullscreen,
         "app.openLibrary" | "file.addFolder" => app.services.pick_folder.is_some() && !crate::lightroom_import::is_running(app),
+        // (native: the browser runs on a worker thread over `lightcraft-immich`; and a server
+        // must have passed a test in Settings ▸ Integrations first)
+        "file.importImmich" => !cfg!(target_arch = "wasm32") && app.session.immich_servers.iter().any(|s| s.verified),
         "file.backupLibrary" => app.services.backup_library.is_some(),
         "app.openLogFolder" => app.services.reveal.is_some() && app.services.log_file.is_some(),
         "file.restoreLibrary" => app.services.restore_library.is_some(),

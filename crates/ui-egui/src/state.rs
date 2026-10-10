@@ -541,6 +541,12 @@ pub enum Dialog {
     Import {
         opts: Box<crate::import::ImportDialog>,
     },
+    /// Import from Immich (File ▸ Import from Immich…). Native only — the client crate does not
+    /// exist in the browser build.
+    #[cfg(not(target_arch = "wasm32"))]
+    Immich {
+        opts: Box<crate::immich::ImmichDialog>,
+    },
     /// Edit the colour label names (red, yellow, green, blue, purple; empty = the colour's name).
     LabelNames {
         names: Vec<String>,
@@ -639,7 +645,8 @@ pub enum Dialog {
     Merge {
         opts: crate::merge::MergeDialog,
     },
-    /// Settings (preferences): `tab` = general | import | performance | interface.
+    /// Settings (preferences): `tab` = general | import | performance | interface | integrations
+    /// | faces | denoise.
     Settings {
         tab: String,
     },

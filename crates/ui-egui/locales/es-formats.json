@@ -206,5 +206,9 @@
   "In line for AI Denoise ({ahead} ahead)…": "In line for AI Denoise ({ahead} ahead)…",
   "Running on {}.": "Running on {}.",
   "{file} · {size}": "{file} · {size}",
-  "•  {assumption}": "•  {assumption}"
+  "•  {assumption}": "•  {assumption}",
+  "Import {} Photo{}": "Import {} Photo{}",
+  "Imported {} · {} already in the library · {} failed": "Imported {} · {} already in the library · {} failed",
+  "Page {}": "Page {}",
+  "{} on this page · {} selected": "{} on this page · {} selected"
 }

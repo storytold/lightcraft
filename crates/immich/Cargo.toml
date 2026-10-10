@@ -1,0 +1,20 @@
+[package]
+name = "lightcraft-immich"
+description = "Client for a self-hosted Immich photo server: browse, import and publish against any server the user names, in pure Rust (L0)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Native only, like lightcraft-fetch: the web build talks to no photo server.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# The same pure-Rust TLS stack as lightcraft-fetch: rustls with the RustCrypto provider (nothing
+# from C or assembly) and the webpki root set. Same declarations, so both crates resolve one copy.
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+rustls-rustcrypto = "0.0.2-alpha"
+webpki-roots = "1"
+
+[lints]
+workspace = true

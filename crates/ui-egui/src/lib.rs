@@ -12,6 +12,8 @@ pub mod export_task;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod immich;
 pub mod import;
 pub mod lightroom_import;
 pub mod links;
@@ -38,6 +40,8 @@ mod tests_curve;
 mod tests_filmstrip;
 #[cfg(test)]
 mod tests_grid;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_immich;
 #[cfg(test)]
 mod tests_keymap;
 #[cfg(test)]
@@ -240,6 +244,9 @@ pub struct LightcraftApp {
     pub import: Option<import::ImportTask>,
     /// A folder scan in progress (feeds the import review).
     pub scan: Option<import::ScanTask>,
+    /// The Immich import dialog's workers (native only; the dialog state travels with `ui.dialog`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub immich_task: Option<immich::ImmichTask>,
     /// A Lightroom catalog inspect/import in progress.
     pub lightroom: Option<lightroom_import::LightroomTask>,
     /// Last terminal Lightroom result, exposed by the command's status/wait response.
@@ -311,6 +318,8 @@ impl LightcraftApp {
             merge: merge::MergeState::default(),
             import: None,
             scan: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            immich_task: None,
             lightroom: None,
             lightroom_last: None,
             export: None,
@@ -735,6 +744,8 @@ impl LightcraftApp {
         merge::poll(self, ctx);
         import::poll_scan(self, ctx);
         import::tick(self, ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        immich::tick(self, ctx);
         lightroom_import::tick(self, ctx);
         tasks::poll(self, ctx);
         self.preview_build_status(ctx);

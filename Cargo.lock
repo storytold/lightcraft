@@ -3118,6 +3118,7 @@ dependencies = [
  "lightcraft-fetch",
  "lightcraft-geom",
  "lightcraft-gpu",
+ "lightcraft-immich",
  "lightcraft-merge",
  "lightcraft-meta",
  "lightcraft-pipeline",
@@ -3192,6 +3193,18 @@ name = "lightcraft-heif"
 version = "0.5.0"
 dependencies = [
  "heic-rs",
+]
+
+[[package]]
+name = "lightcraft-immich"
+version = "0.4.0"
+dependencies = [
+ "log",
+ "rustls",
+ "rustls-rustcrypto",
+ "serde",
+ "serde_json",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -3346,6 +3359,7 @@ dependencies = [
  "lightcraft-engine",
  "lightcraft-faces",
  "lightcraft-geom",
+ "lightcraft-immich",
  "lightcraft-meta",
  "lightcraft-pipeline",
  "lightcraft-preview",
