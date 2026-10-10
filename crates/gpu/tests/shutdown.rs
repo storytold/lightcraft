@@ -53,6 +53,6 @@ fn nothing_renders_on_the_gpu_once_the_process_is_ending() {
     assert!(dac_gpu::render(&src, &info, &s, &req, None).is_none(), "no GPU render once the process is ending");
     assert!(dac_gpu::wait_idle(Duration::ZERO));
     if has_gpu {
-        assert_eq!(dac_gpu::unavailable_reason().as_deref(), Some("LightCraft is closing"));
+        assert_eq!(dac_gpu::unavailable_reason().as_deref(), Some("the app is closing"));
     }
 }

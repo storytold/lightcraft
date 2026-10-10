@@ -1,7 +1,7 @@
 //! Synchronize Folder: bring a library folder up to date with what is on disk (see
 //! [`crate::sync`]).
 //!
-//! Scenarios, in the words of someone whose folder changed outside LightCraft:
+//! Scenarios, in the words of someone whose folder changed outside the app:
 //!
 //! * Given a folder of the library, when files were added to it (or to a folder inside it), the
 //!   scan lists them as new; files the library already has, by path or by content, are not new.

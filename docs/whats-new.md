@@ -42,7 +42,7 @@
 - File ▸ Import Keywords… and Export Keywords… read and write keyword list files as Lightroom Classic does (a keyword
   a line, a tab per level, synonyms in braces, keywords left out of export in brackets). Capture One, darktable, Adobe
   Bridge and Photo Supreme (its Formatted Vocabulary File) use the same files, so keyword lists move between them and
-  LightCraft. Importing adds the keywords you don't have, in one undo step; a file it can't read says which line, or
+  the app. Importing adds the keywords you don't have, in one undo step; a file it can't read says which line, or
   to save it as UTF-8. Exporting warns about keywords Capture One won't import, and names any keyword the format can't
   hold (such as a name in brackets), which it leaves out so the file always reads back.
 
@@ -83,7 +83,7 @@
   no longer saves it). Return in those dialogs now confirms them, and their name opens selected. More fields will
   follow.
 - On Windows and Linux, Ctrl+C outside a text field copies edit settings and Ctrl+V pastes them (⇧Ctrl+V: Paste
-  Selected Settings). Ctrl+V only reaches LightCraft while the system clipboard holds text; otherwise use Edit ▸ Paste Edit
+  Selected Settings). Ctrl+V only reaches the app while the system clipboard holds text; otherwise use Edit ▸ Paste Edit
   Settings.
 
 ### Synchronize Folder
@@ -99,7 +99,7 @@
 - Right-click a folder (or a disk other than the startup disk) in the sidebar's Folders section ▸ Set Color Label ▸ a colour or None. The row
   shows the label's dot before its photo count. Agents use `folder.label` (`path`, `label`); `library.folders`
   reports each row's `label`.
-- A label follows its folder when it is renamed or moved in LightCraft, together with the labels of the folders
+- A label follows its folder when it is renamed or moved in the app, together with the labels of the folders
   inside it; undo and redo carry them back and forth.
 - The catalog format is now version 4 (`Catalog.folder_records`, `Op::SetFolderRecord`). Once this version has
   opened a library, older versions refuse it, as with every format change.
@@ -268,8 +268,8 @@
 )
 
 ### Reliability
-- The Windows installer asks where to install LightCraft (Program Files by default; upgrades keep the folder you
-  chose) and ends on a page saying it was installed, with a "Launch LightCraft" box. It used to finish without a word,
+- The Windows installer asks where to install the app (Program Files by default; upgrades keep the folder you
+  chose) and ends on a page saying it was installed, with a "Launch <app>" box. It used to finish without a word,
   so a successful install looked like nothing had happened (issues #18, #399). Silent installs (`/qn`, `/passive`)
   show no dialogs and take `INSTALLFOLDER=...`.
 - If the desktop app can't open its window (for example when no graphics device can be used), it now says so in a

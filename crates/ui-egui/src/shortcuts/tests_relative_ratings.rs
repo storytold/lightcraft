@@ -11,7 +11,7 @@ fn app() -> dac_engine::Result<DacApp> {
     for (id, rating) in [(1, 0), (2, 2), (3, 5)] {
         let mut photo = Photo::new(
             PhotoId(id),
-            Source::File { path: format!("/lightcraft-relative-rating-keys/{id}.jpg") },
+            Source::File { path: format!("/app-relative-rating-keys/{id}.jpg") },
             &format!("{id}.jpg"),
             "JPEG",
             40,

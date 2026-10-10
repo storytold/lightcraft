@@ -1,6 +1,6 @@
 # Display (monitor) profiles
 
-LightCraft can show photos through the monitor's ICC profile, so colours are right on wide-gamut and calibrated
+The app can show photos through the monitor's ICC profile, so colours are right on wide-gamut and calibrated
 displays. Without one, previews are sRGB, which a wide-gamut panel shows oversaturated.
 
 ## Using it

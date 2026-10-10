@@ -151,7 +151,7 @@ const FAILED: &str = "the demo scene could not be generated";
 /// would run queued jobs while it waits for rows other workers took, and one of them could ask for
 /// this very scene and wait for the generation further down its own stack (the faces scan's pool
 /// threads hung that way). That also keeps the work within the caller's pool and its limits (the
-/// scan's pace, `LIGHTCRAFT_FACE_THREADS`). Any other caller (the render workers, which are plain
+/// scan's pace, `<PREFIX>_FACE_THREADS`). Any other caller (the render workers, which are plain
 /// threads) renders in parallel on [`render_pool`], whose threads only ever render, and blocks
 /// without running other work meanwhile; where that pool can't be started it renders alone too.
 fn generate(render: impl FnOnce(Render) -> dac_raster::Rgb32f + Send) -> dac_raster::Rgb32f {

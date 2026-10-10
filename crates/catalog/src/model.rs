@@ -519,7 +519,7 @@ mod edited_tests {
     fn the_process_a_photo_renders_with_is_not_an_edit() {
         use dac_develop::ProcessVersion;
         // a photo on another process than the latest (a V1 photo once a later process is the
-        // latest, or a photo saved by a newer LightCraft)
+        // latest, or a photo saved by a newer version of the app)
         let other = ProcessVersion(ProcessVersion::LATEST.0 + 1);
         let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.dng", "DNG", 10, 10, "2026-10-01T00:00:00");
         p.kind = MediaKind::Raw;

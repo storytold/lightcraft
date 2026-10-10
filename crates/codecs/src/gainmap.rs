@@ -749,7 +749,7 @@ mod tests {
                 [v, v * 0.8, v * 0.6]
             })
             .collect();
-        // a luminance tone map (one scale per pixel, as LightCraft's renders do), so a single
+        // a luminance tone map (one scale per pixel, as the app's renders do), so a single
         // luminance gain can rebuild it exactly
         let sdr = hdr
             .iter()

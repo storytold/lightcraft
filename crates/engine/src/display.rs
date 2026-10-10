@@ -154,7 +154,7 @@ mod tests {
 
     #[test]
     fn load_reports_and_rejects() {
-        let dir = std::env::temp_dir().join(format!("lightcraft-display-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("app-display-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let good = dir.join("p3.icc");
         std::fs::write(&good, dac_codecs::icc::write_named(dac_codecs::NamedSpace::DisplayP3)).unwrap();

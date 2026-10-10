@@ -434,9 +434,8 @@ mod tests {
     /// gets it on Reload, the render changes to the corrected one, and Undo takes it all back.
     #[test]
     fn corpus_reload_corrects_an_rw2_catalogued_without_lens_data() {
-        let root = std::env::var_os("LIGHTCRAFT_CORPUS")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"));
+        let root =
+            dac_brand::env_os("CORPUS").map(std::path::PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"));
         let f = root.join("raw/rw2-panasonic-gx80.rw2");
         if !f.exists() {
             eprintln!("skip: {} absent", f.display());

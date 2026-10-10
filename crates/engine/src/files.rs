@@ -156,7 +156,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     }
     let fmt = dac_codecs::sniff(bytes).ok_or("unrecognized file format")?;
     if let Some(why) = fmt.not_decodable() {
-        // e.g. "Heif files can't be opened: HEIC/HEIF support isn't included in this build of LightCraft"
+        // e.g. "Heif files can't be opened: HEIC/HEIF support isn't included in this build of the app"
         return Err(format!("{fmt:?} files can't be opened: {why}"));
     }
     // headers only (issue #367: decoding the pixels was nearly all of an import's CPU time)
@@ -665,7 +665,7 @@ impl crate::Session {
 #[cfg(test)]
 mod tests {
     /// Keywords from a file keep their hierarchy: the paths of `lr:hierarchicalSubject`, not the
-    /// flat names of `dc:subject` that LightCraft's exports (and Lightroom Classic) write besides
+    /// flat names of `dc:subject` that the app's exports (and Lightroom Classic) write besides
     /// them; an exported `travel|Italy|Rome` comes back as itself.
     #[test]
     fn imported_keywords_keep_their_hierarchy() {
@@ -1141,7 +1141,7 @@ mod tests {
     /// on one side of the tree and a magenta one on the other (Highlights -100 or the issue's edit show them).
     #[test]
     fn corpus_clipped_sky_beside_a_tree_has_no_coloured_halo() {
-        let dir = std::env::var_os("LIGHTCRAFT_CORPUS")
+        let dir = dac_brand::env_os("CORPUS")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
             .join("raw");

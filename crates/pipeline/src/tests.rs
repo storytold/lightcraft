@@ -473,7 +473,7 @@ fn custom_white_balance_redevelops_in_camera_space() {
 }
 
 /// Every stored process number renders with a process this build knows: settings saved before
-/// process versions existed exactly as V1, and a number from a newer LightCraft exactly as the
+/// process versions existed exactly as V1, and a number from a newer version of the app exactly as the
 /// latest process here (`docs/process-versions.md`). Raw (base tone curve), camera-tone and
 /// rendered sources, plain and edited, 8-bit and 16-bit.
 #[test]

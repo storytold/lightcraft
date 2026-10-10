@@ -9,7 +9,7 @@ fn session() -> Result<Session> {
     for (id, rating) in [(1, 0), (2, 2), (3, 5), (4, 1)] {
         let mut photo = Photo::new(
             PhotoId(id),
-            Source::File { path: format!("/lightcraft-relative-ratings/{id}.jpg") },
+            Source::File { path: format!("/app-relative-ratings/{id}.jpg") },
             &format!("{id}.jpg"),
             "JPEG",
             40,

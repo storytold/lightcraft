@@ -36,5 +36,5 @@ fn shutdown_leaves_no_render_worker_running() {
     // a job that was caught before its render gives up: quitting doesn't wait for a CPU render
     let id = h.app.session.active().or_else(|| h.app.session.catalog.photos().next().map(|p| p.id)).expect("a demo photo");
     let job = h.app.session.render_job(id, 300, 200, false, true).expect("a render job");
-    assert_eq!(job.run().rendered.err().as_deref(), Some("LightCraft is closing"));
+    assert_eq!(job.run().rendered.err().as_deref(), Some("the app is closing"));
 }

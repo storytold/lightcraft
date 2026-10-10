@@ -1475,7 +1475,7 @@ mod tests {
     /// own fit (the fallback when a profile is rejected) would not.
     #[test]
     fn corpus_a7cr_uses_the_bundled_profile() {
-        let path = std::env::var_os("LIGHTCRAFT_CORPUS")
+        let path = dac_brand::env_os("CORPUS")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
             .join("raw/arw-sony-a7cr-lossless-l.arw");
@@ -1525,7 +1525,7 @@ mod tests {
     /// ARW2 all get a look fitted to their own JPEG, not the neutral fallback.
     #[test]
     fn corpus_a7cr_codings_get_a_camera_look() {
-        let dir = std::env::var_os("LIGHTCRAFT_CORPUS")
+        let dir = dac_brand::env_os("CORPUS")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
             .join("raw");
@@ -1717,7 +1717,7 @@ mod tests {
     /// JPEGs. The ILCE-7M3 sample (DRO off) keeps its own fit.
     #[test]
     fn corpus_arw_with_dro_is_lowered_to_the_dro_off_tone() {
-        let dir = std::env::var_os("LIGHTCRAFT_CORPUS")
+        let dir = dac_brand::env_os("CORPUS")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
             .join("raw");

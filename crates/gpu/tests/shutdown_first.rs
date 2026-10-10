@@ -20,6 +20,6 @@ fn the_device_is_not_created_once_the_process_is_ending() {
     assert!(rendered.is_none());
     assert!(dac_gpu::wait_idle(Duration::from_secs(60)), "the warm-up thread found the gate closed");
     // `ready()` is "device creation finished" (or the GPU is switched off by the environment)
-    let switched_off = dac_gpu::unavailable_reason().is_some_and(|r| r.starts_with("disabled by LIGHTCRAFT_GPU"));
+    let switched_off = dac_gpu::unavailable_reason().is_some_and(|r| r.starts_with(&format!("disabled by {}", dac_brand::env_var("GPU"))));
     assert!(switched_off || !dac_gpu::ready(), "no device was created");
 }

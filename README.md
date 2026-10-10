@@ -227,7 +227,7 @@ through the same entry point. An agent can cull a shoot, develop it, mask a sky 
   supports cancellation and protects originals and XMP sidecars. From the CLI:
 
   ```sh
-  dac-cli run --import ~/Pictures/shoot library.selectAll export.contactSheet path=Contact.pdf paper=a4 columns=3 rows=4 captions=true
+  <cli> run --import ~/Pictures/shoot library.selectAll export.contactSheet path=Contact.pdf paper=a4 columns=3 rows=4 captions=true
   ```
 
   `export.contactSheet` also accepts explicit `ids`, `landscape=true`, and `paper=letter`. It replaces an existing
@@ -436,9 +436,9 @@ with `cargo xtask package`.
 | arm64 (Snapdragon and other ARM PCs) | `<binary>-<ver>-windows-arm64.msi` | `<binary>-<ver>-windows-arm64-portable.zip` |
 | x86 (32-bit) | `<binary>-<ver>-windows-x86.msi` | `<binary>-<ver>-windows-x86-portable.zip` |
 
-Installers and executables are code-signed. The installer asks where to install (`C:\Program Files\LightCraft` by
-default; upgrades stay in the folder you chose) and ends on a page confirming LightCraft was installed, with an
-option to start it. For unattended installs: `msiexec /i lightcraft-<ver>-windows-x64.msi /qn INSTALLFOLDER="D:\Apps\LightCraft\"`.
+Installers and executables are code-signed. The installer asks where to install (`C:\Program Files\<app>` by
+default; upgrades stay in the folder you chose) and ends on a page confirming the app was installed, with an
+option to start it. For unattended installs: `msiexec /i <binary>-<ver>-windows-x64.msi /qn INSTALLFOLDER="D:\Apps\<app>\"`.
 
 ### macOS
 

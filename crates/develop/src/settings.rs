@@ -13,7 +13,7 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// photo keeps its look until someone updates it (`develop.updateProcess`). See
 /// `docs/process-versions.md`.
 ///
-/// Stored as a plain number: one written by a newer LightCraft loads, is kept as it is, and
+/// Stored as a plain number: one written by a newer version of the app loads, is kept as it is, and
 /// renders with the newest process this build knows ([`ProcessVersion::process`]). Reading is
 /// lenient: a whole number from 0 to 2^32 - 1 (also written as `2.0`) is that process; anything
 /// else (negative, fractional, too large, text, null, a list…) reads as V1, like a missing field,
@@ -40,7 +40,7 @@ impl<'de> Deserialize<'de> for ProcessVersion {
 }
 
 impl ProcessVersion {
-    /// The first process: LightCraft's rendering from before process versions existed. Frozen.
+    /// The first process: the app's rendering from before process versions existed. Frozen.
     pub const V1: ProcessVersion = Process::V1.version();
     /// The process new photos and Reset get.
     pub const LATEST: ProcessVersion = Process::LATEST.version();
@@ -58,8 +58,8 @@ impl ProcessVersion {
     }
 
     /// The process this build renders with: the newest one it knows that isn't newer than this
-    /// number (a number from a newer LightCraft renders with [`Process::LATEST`]; one below V1,
-    /// which no LightCraft writes, with V1).
+    /// number (a number from a newer version of the app renders with [`Process::LATEST`]; one below V1,
+    /// which no version of the app writes, with V1).
     pub fn process(self) -> Process {
         Process::ALL.into_iter().rev().find(|p| p.version() <= self).unwrap_or(Process::V1)
     }
@@ -79,7 +79,7 @@ impl ProcessVersion {
 /// makes the compiler point at every stage whose behaviour depends on it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Process {
-    /// The rendering of LightCraft before process versions existed (2026-10).
+    /// The rendering of the app before process versions existed (2026-10).
     V1,
 }
 

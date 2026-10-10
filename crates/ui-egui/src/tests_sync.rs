@@ -1,6 +1,6 @@
 //! Synchronize Folder in the app (see `dac_engine::sync`).
 //!
-//! Scenarios, in the words of someone whose folder changed outside LightCraft:
+//! Scenarios, in the words of someone whose folder changed outside the app:
 //!
 //! * Right-click a folder in the sidebar's Folders section ▸ Synchronize Folder…: a dialog opens
 //!   at once and scans the folder without holding up the app, then says how many photos are new,

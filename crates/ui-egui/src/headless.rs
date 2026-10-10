@@ -3023,7 +3023,7 @@ mod tests {
     #[test]
     fn display_profile_converts_previews() {
         use crate::render::Slot;
-        let dir = std::env::temp_dir().join(format!("lightcraft-display-ui-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("app-display-ui-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p3 = dir.join("p3.icc");
         std::fs::write(&p3, dac_codecs::icc::write_named(dac_codecs::NamedSpace::DisplayP3)).unwrap();

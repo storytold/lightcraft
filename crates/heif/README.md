@@ -1,6 +1,6 @@
 # dac-heif
 
-The optional HEIF / HEIC decoder of LightCraft: iPhone and Mac photos. [`heic-rs`](https://github.com/tbraun96/heic-rs)
+The optional HEIF / HEIC decoder of the app: iPhone and Mac photos. [`heic-rs`](https://github.com/tbraun96/heic-rs)
 (pure Rust, no `unsafe`, MIT OR Apache-2.0, written from the H.265 / HEIF specifications) reads the
 container and reconstructs the HEVC pictures; this crate turns them into 16-bit RGB itself so the
 result matches libheif to within one code value:

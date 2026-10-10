@@ -11,9 +11,9 @@ use serde_json::json;
 
 use crate::{EngineError, Session};
 
-/// No process is older than V1 yet: 0 (which no LightCraft writes) stands in for one.
+/// No process is older than V1 yet: 0 (which no version of the app writes) stands in for one.
 const OLDER: ProcessVersion = ProcessVersion(0);
-/// A number from a newer LightCraft.
+/// A number from a newer version of the app.
 const NEWER: ProcessVersion = ProcessVersion(ProcessVersion::LATEST.0 + 6);
 
 fn process(s: &Session, id: PhotoId) -> ProcessVersion {
