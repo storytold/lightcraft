@@ -691,6 +691,63 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!(
+            "spot.findBlemishes",
+            "Find Blemishes",
+            [],
+            None,
+            "{sensitivity?: 0..100 (50), add?: bool (true), maxPerFace?: 1..20 (6)} — find small blemishes (darker or redder round spots on skin) on the faces of the active photo and add a heal spot on each (one undo step); needs the YuNet face detector (`faces.models.download {id: \"yunet-2023mar\"}`). Faces narrower than 160 px at 1600 px, and faces with more than 12 candidates (stubble, freckles, pores), get none → {faces, spots: [{x, y, size, face}], added}",
+            has_active,
+            |s, p| {
+                let c = "spot.findBlemishes";
+                let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                let detector = super::face_detect::detector(s).map_err(|e| bad(c, e))?;
+                // the uncropped photo, so positions are the spots' own coordinates
+                let job = s.render_job(id, 1600, 1600, false, false).ok_or_else(|| bad(c, "no photo"))?;
+                let img = job.run().rendered.map_err(|e| bad(c, e))?.image;
+                let rgb: Vec<u8> = img.data.iter().flat_map(|px| [px[0], px[1], px[2]]).collect();
+                let faces =
+                    detector.detect(&rgb, img.width, img.height, &lightcraft_faces::yunet::Options::default()).map_err(|e| bad(c, e.to_string()))?;
+                let boxes: Vec<lightcraft_pipeline::blemish::FaceBox> = faces
+                    .iter()
+                    .map(|f| lightcraft_pipeline::blemish::FaceBox {
+                        x0: f64::from(f.x0),
+                        y0: f64::from(f.y0),
+                        x1: f64::from(f.x1),
+                        y1: f64::from(f.y1),
+                        landmarks: f.landmarks.map(|(x, y)| (f64::from(x), f64::from(y))),
+                    })
+                    .collect();
+                let max_per_face = (f64_or(p, "maxPerFace", 6.0) as usize).clamp(1, 20);
+                let mut found = lightcraft_pipeline::blemish::detect(&img, &boxes, f64_or(p, "sensitivity", 50.0) as f32);
+                let mut per_face = std::collections::BTreeMap::new();
+                found.retain(|b| {
+                    let n = per_face.entry(b.face).or_insert(0usize);
+                    *n += 1;
+                    *n <= max_per_face
+                });
+                let out: Vec<Value> = found.iter().map(|b| json!({"x": b.x, "y": b.y, "size": b.radius, "face": b.face})).collect();
+                if !p.get("add").and_then(Value::as_bool).unwrap_or(true) || found.is_empty() {
+                    return Ok(json!({"faces": boxes.len(), "spots": out, "added": 0}));
+                }
+                let mut dd = (*s.develop_of(id).unwrap_or_default()).clone();
+                let base = Spot::default();
+                for b in &found {
+                    let mut spot = Spot {
+                        mode: SpotMode::Heal,
+                        points: vec![Point::new(b.x, b.y)],
+                        size: b.radius.clamp(SPOT_SIZE.0, SPOT_SIZE.1),
+                        feather: base.feather,
+                        opacity: 100.0,
+                        source_offset: None,
+                    };
+                    spot.source_offset = pick_source(s, id, &dd, &spot, None);
+                    dd.spots.push(spot);
+                }
+                s.set_develop(id, dd, "Find Blemishes")?;
+                Ok(json!({"faces": boxes.len(), "spots": out, "added": found.len()}))
+            }
+        ),
+        cmd!(
             "spot.add",
             "Add Remove Spot",
             [],
