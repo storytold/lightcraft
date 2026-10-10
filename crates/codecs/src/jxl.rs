@@ -1,5 +1,7 @@
 //! JPEG XL decode via `jxl-oxide` (pure Rust). Enum-encoded images are rendered straight into linear
 //! Rec.2020; ICC-tagged ones are rendered in their own space and interpreted with our ICC path.
+//! XYB (lossy) images are rendered to linear sRGB primaries and converted to Rec.2020 here:
+//! jxl-oxide 0.12 desaturates colours outside sRGB when it renders XYB to wider primaries.
 //! jxl-oxide applies the codestream orientation itself, so `orientation` is reported as 1.
 
 use crate::convert::{Buf, Meta, Model, Raw, check_size, finish};
@@ -24,11 +26,13 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     let gray = header.metadata.grayscale();
     let icc = img.original_icc().map(|v| v.to_vec());
     let mut meta = Meta { orientation: Some(1), ..Default::default() };
+    // linear sRGB primaries, unclamped, then our own matrix to Rec.2020 (see the module docs)
+    let via_srgb = icc.is_none() && !gray && header.metadata.xyb_encoded;
     if icc.is_none() {
         img.request_color_encoding(EnumColourEncoding {
             colour_space: if gray { ColourSpace::Grey } else { ColourSpace::Rgb },
             white_point: WhitePoint::D65,
-            primaries: Primaries::Bt2100,
+            primaries: if via_srgb { Primaries::Srgb } else { Primaries::Bt2100 },
             tf: TransferFunction::Linear,
             rendering_intent: RenderingIntent::Relative,
         });
@@ -55,10 +59,18 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     let keep = n_color + has_alpha as usize;
     let src = fb.buf();
     let mut v = Vec::with_capacity(fw * fh * keep);
+    let to_2020 = lightcraft_color::SRGB.to_space(&lightcraft_color::REC2020).to_f32();
     for px in src.chunks_exact(ch) {
+        let start = v.len();
         v.extend_from_slice(&px[..keep.min(ch)]);
         if keep > ch {
             v.push(1.0);
+        }
+        if via_srgb && let Some(rgb) = v.get_mut(start..start + 3) {
+            let [r, g, b] = [rgb[0], rgb[1], rgb[2]];
+            for (o, m) in rgb.iter_mut().zip(&to_2020) {
+                *o = m[0] * r + m[1] * g + m[2] * b;
+            }
         }
     }
     let raw = Raw {

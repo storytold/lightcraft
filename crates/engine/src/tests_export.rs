@@ -440,3 +440,37 @@ fn hdr_avif_export_is_pq_rec2020() {
     // a photo without an HDR edit exports as an ordinary (sRGB) AVIF
     assert!(nclx(&sdr.bytes).is_none_or(|c| c[3] != 16));
 }
+
+#[test]
+fn hdr_jxl_export_is_pq_rec2020() {
+    let mut s = Session::with_demo();
+    let id = sunset(&mut s);
+    let o = ExportOptions::from_json(&json!({"longEdge": 160, "format": "jxl", "hdr": true, "quality": 90}));
+    assert!(o.hdr_output());
+    let sdr = export_photo(&mut s, id, &o, 1).unwrap();
+    s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 2})).unwrap();
+    let hdr = export_photo(&mut s, id, &o, 1).unwrap();
+    let encoding = |b: &[u8]| {
+        let img = jxl_oxide::JxlImage::builder().read(std::io::Cursor::new(b)).unwrap();
+        let m = &img.image_header().metadata;
+        (format!("{:?}", m.colour_encoding), m.bit_depth.bits_per_sample())
+    };
+    let (c, bits) = encoding(&hdr.bytes);
+    assert!(c.contains("Bt2100") && c.contains("Pq"), "{c}");
+    assert_eq!(bits, 16);
+    // a photo without an HDR edit exports as an ordinary SDR file
+    let (c, _) = encoding(&sdr.bytes);
+    assert!(!c.contains("Pq"), "{c}");
+}
+
+#[test]
+fn jxl_export_writes_metadata() {
+    let mut s = Session::with_demo();
+    let id = sunset(&mut s);
+    let o = ExportOptions::from_json(&json!({"longEdge": 120, "format": "jxl", "quality": 80}));
+    let e = export_photo(&mut s, id, &o, 1).unwrap();
+    let d = lightcraft_codecs::decode(&e.bytes, Default::default()).unwrap();
+    assert_eq!(d.width.max(d.height), 120);
+    assert!(d.xmp.as_deref().is_some_and(|x| x.contains("Golden horizon")), "title in the XMP box");
+    assert!(d.exif.is_some(), "EXIF box");
+}

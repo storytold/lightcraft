@@ -1,6 +1,6 @@
 //! Encoders: JPEG (`jpeg-encoder`), PNG (`png`), TIFF (`tiff`), lossless WebP (`image-webp`) and,
-//! on native targets with the `avif` feature, AVIF (`ravif`/`rav1e`). Metadata (ICC/EXIF/XMP) is
-//! embedded where the format allows.
+//! on native targets with the `avif` feature, AVIF (`ravif`/`rav1e`); JPEG XL is in `jxl_encode`.
+//! Metadata (ICC/EXIF/XMP) is embedded where the format allows.
 
 use crate::{Error, Result};
 use lightcraft_raster::Rgba8;
@@ -32,7 +32,7 @@ impl<'a> EncodeImage<'a> {
         EncodeImage { width, height, channels, samples }
     }
 
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         if !(1..=4).contains(&self.channels) {
             return Err(Error::Encode(format!("unsupported channel count {}", self.channels)));
         }

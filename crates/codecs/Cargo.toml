@@ -32,11 +32,14 @@ jxl-oxide = { workspace = true, optional = true }
 ravif = { workspace = true, optional = true }
 rav1e = { workspace = true, optional = true }
 avif-serialize = { workspace = true, optional = true }
+# spawns threads of its own (std::thread), which wasm32 has not got
+jixel = { workspace = true, optional = true }
 
 [features]
 default = ["parallel", "jxl", "avif"]
 parallel = ["dep:rayon", "lightcraft-raster/parallel", "jpeg-decoder/rayon"]
-jxl = ["dep:jxl-oxide"]
+## JPEG XL decode (jxl-oxide) and, on native targets, encode (jixel); both pure Rust.
+jxl = ["dep:jxl-oxide", "dep:jixel"]
 # HEIC/HEIF decode via the optional lightcraft-heif crate (heic-rs, pure Rust). Off by default so
 # distributors choose it at build time (HEVC patents are a distributor's call, same policy as
 # PhotoCraft); `cargo xtask ci` clippies and tests it (`--features heif`), releases don't ship it yet.
@@ -45,6 +48,8 @@ heif = ["dep:lightcraft-heif"]
 avif = ["dep:ravif", "dep:rav1e", "dep:avif-serialize"]
 
 [dev-dependencies]
+# JPEG XL tests read encoded samples without our colour conversion
+jxl-oxide = { workspace = true }
 proptest = { workspace = true }
 # Lossless synthetic HEIC files for the `heif` feature's tests.
 lightcraft-heif = { workspace = true, features = ["testdata"] }
