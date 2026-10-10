@@ -56,12 +56,16 @@ in the catalog (same checksum, or already linked) are skipped before downloading
 
 ## External libraries (IMM-EXTLIB)
 
-When Immich indexes the same folders as the catalog as an *external library*, nothing is uploaded: the link pass links
-them by checksum. Settings → Connections → *External Libraries…* (`immich.libraries`) lists the server's libraries and
+When Immich indexes the same folders as the catalog as an *external library*, nothing is uploaded. Immich does not
+hash external-library files (their `checksum` is the SHA-1 of `path:` + the container path, checked against v3.3.1), so
+the link pass links them **by path**: the asset's `originalPath`, translated by the account's path mapping, is the
+photo's file. Settings → Connections → *External Libraries…* (`immich.libraries`) lists the server's libraries and
 a path mapping table (`immich.setPathMaps`) between Immich's container paths and local folders (a suggestion is made
 from matching folder names), and shows which catalog folders each library covers. *Write XMP Sidecars*
 (`immich.writeSidecars`) writes sidecars for the photos in mapped folders so Immich reads ratings, descriptions and
-keywords on its next library scan.
+keywords, then asks Immich to re-read them: the sidecar discovery job finds new sidecars (admin key) and
+`refresh-metadata` re-reads the linked assets, because a library scan skips files that did not change. *Rescan in
+Immich* (`immich.scanLibraries`) starts a scan of the libraries covering mapped folders (new files).
 
 ## Tests
 
@@ -71,4 +75,7 @@ keywords on its next library scan.
   sidecars through the commands, against an in-process server.
 - Nightly, with Docker: `cargo xtask immich up && cargo xtask immich seed`, then
   `cargo test -p dac-immich --test live -- --ignored` (lists, downloads an original and checks its SHA-1 equals
-  Immich's checksum).
+  Immich's checksum), and `cargo test -p dac-engine live_external -- --ignored`: an external library over a folder of
+  generated photos (the compose file mounts `target/immich/extlib` at `/mnt/extlib`, override with
+  `IMMICH_EXTLIB_DIR`), scanned, linked by path, then rating, description and a keyword written as XMP and read back
+  from Immich.

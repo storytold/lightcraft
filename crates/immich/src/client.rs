@@ -252,6 +252,39 @@ impl Client {
     pub fn libraries(&self) -> Result<Vec<Library>, ImmichError> {
         self.get("/libraries", true)
     }
+
+    /// `POST /libraries/{id}/scan`: Immich re-reads the library's folders (new files, changed
+    /// XMP sidecars) in the background. Needs an admin key with `library.update`.
+    pub fn scan_library(&self, id: &str) -> Result<(), ImmichError> {
+        self.send(Method::Post, &format!("/libraries/{}/scan", path_id(id)?), Some(&serde_json::json!({})), true).map(|_| ())
+    }
+
+    /// `POST /libraries`: a new external library of `owner` over `import_paths` (container paths).
+    pub fn create_library(&self, owner: &str, name: &str, import_paths: &[String]) -> Result<Library, ImmichError> {
+        self.post("/libraries", &serde_json::json!({"ownerId": owner, "name": name, "importPaths": import_paths}))
+    }
+
+    /// `POST /assets/jobs` `refresh-metadata`: Immich re-reads the assets' files and XMP sidecars
+    /// (a library scan skips files that did not change). Needs `job.create`.
+    pub fn refresh_metadata(&self, ids: &[String]) -> Result<(), ImmichError> {
+        for chunk in ids.chunks(500) {
+            let body = serde_json::json!({"assetIds": chunk, "name": "refresh-metadata"});
+            self.send(Method::Post, "/assets/jobs", Some(&body), true)?;
+        }
+        Ok(())
+    }
+
+    /// `PUT /jobs/sidecar` (discover): Immich looks for XMP sidecars of assets that have none yet
+    /// and reads them. Needs an admin key (`job.create`).
+    pub fn discover_sidecars(&self) -> Result<(), ImmichError> {
+        let body = serde_json::json!({"command": "start", "force": false});
+        self.send(Method::Put, "/jobs/sidecar", Some(&body), true).map(|_| ())
+    }
+
+    /// `DELETE /libraries/{id}` (its assets leave Immich; the files stay).
+    pub fn delete_library(&self, id: &str) -> Result<(), ImmichError> {
+        self.send(Method::Delete, &format!("/libraries/{}", path_id(id)?), None, true).map(|_| ())
+    }
 }
 
 /// The web page of an asset on server `base`.

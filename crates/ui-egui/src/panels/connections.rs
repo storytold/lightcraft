@@ -671,6 +671,18 @@ fn extlib(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, id: &str) {
                 Err(e) => app.toast(ui.ctx(), e.to_string()),
             }
         }
+        if text_button(ui, "immichRescan", crate::i18n::tr("Rescan in Immich"), false)
+            .on_hover_text(crate::i18n::tr("Ask Immich to rescan the external libraries now (needs an admin key)"))
+            .clicked()
+        {
+            match app.session.execute("immich.scanLibraries", &json!({"account": id})) {
+                Ok(r) if r["ok"] == true => {
+                    app.toast(ui.ctx(), trf!("Immich is rescanning {} libraries", r["scanned"].as_array().map(Vec::len).unwrap_or(0)))
+                }
+                Ok(r) => app.toast(ui.ctx(), r["error"]["message"].as_str().unwrap_or("Immich")),
+                Err(e) => app.toast(ui.ctx(), e.to_string()),
+            }
+        }
     });
     app.immich.maps.insert(id.to_string(), rows);
     let cov = v["coverage"].as_array().cloned().unwrap_or_default();

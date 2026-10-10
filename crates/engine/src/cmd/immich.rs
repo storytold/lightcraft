@@ -601,11 +601,12 @@ pub fn pump(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
             Msg::LinkPage { account, assets } => {
-                let index = Index::new(&s.catalog);
+                let maps = s.immich_accounts().ok().and_then(|a| a.get(&account).map(|x| x.path_maps.clone())).unwrap_or_default();
+                let index = Index::with_path_maps(&s.catalog, &maps);
                 let (ops, found) = link::link_ops(&s.catalog, &index, &account, &assets, &now);
                 let pr = s.remote.links.entry(account).or_default();
                 pr.seen += assets.len() as u64;
-                pr.linked += found.iter().filter(|m| m.kind == link::MatchKind::Checksum).count() as u64;
+                pr.linked += found.iter().filter(|m| m.kind != link::MatchKind::Probable).count() as u64;
                 pr.probable += found.iter().filter(|m| m.kind == link::MatchKind::Probable).count() as u64;
                 for op in ops {
                     if let Err(e) = s.apply_system(op) {
@@ -862,9 +863,60 @@ fn write_sidecars(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({"written": 0, "failed": []}));
     }
     let r = s.execute("photo.saveMetadataToFile", &json!({"ids": ids}))?;
-    Ok(
-        json!({"written": r["written"].as_array().map(Vec::len).unwrap_or(0) + r["merged"].as_array().map(Vec::len).unwrap_or(0), "failed": r["failed"]}),
-    )
+    let mut out = json!({"written": r["written"].as_array().map(Vec::len).unwrap_or(0) + r["merged"].as_array().map(Vec::len).unwrap_or(0), "failed": r["failed"]});
+    // Immich's library scan skips files that didn't change: ask it to re-read the linked assets
+    if bool_or(p, "refresh", true) {
+        let assets: Vec<String> = ids
+            .iter()
+            .filter_map(|i| s.catalog.remote_of(PhotoId(*i)).find(|r| r.service == SERVICE && r.account_id == id).map(|r| r.remote_id.clone()))
+            .collect();
+        if !assets.is_empty() {
+            match s.immich_client(&id) {
+                Ok((_, c)) => {
+                    // new sidecars are found by the discovery job (admin keys); changed ones by a refresh
+                    if let Err(e) = c.discover_sidecars() {
+                        out["discoverError"] = failure(&e)["error"].clone();
+                    }
+                    match c.refresh_metadata(&assets) {
+                        Ok(()) => out["refreshed"] = json!(assets.len()),
+                        Err(e) => out["refreshError"] = failure(&e)["error"].clone(),
+                    }
+                }
+                Err(e) => out["refreshError"] = failure(&e)["error"].clone(),
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Ask Immich to rescan the external libraries that cover mapped folders (or `library`), so it
+/// reads new files and the XMP sidecars just written. Immich scans in the background.
+fn scan_libraries(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "immich.scanLibraries";
+    let id = account_param(s, p, C)?;
+    let (acc, client) = match s.immich_client(&id) {
+        Ok(x) => x,
+        Err(e) => return Ok(failure(&e)),
+    };
+    let ids: Vec<String> = match str_param(p, "library") {
+        Some(l) => vec![l.to_string()],
+        None => {
+            let libs = match client.libraries() {
+                Ok(l) => l,
+                Err(e) => return Ok(failure(&e)),
+            };
+            let folders = photo_folders(s, 2000);
+            let cov = extlib::coverage(&folders, &libs, &acc.path_maps);
+            let used: BTreeSet<String> = cov.iter().filter_map(|c| c.library.clone()).collect();
+            libs.into_iter().map(|l| l.id).filter(|l| used.contains(l)).collect()
+        }
+    };
+    for l in &ids {
+        if let Err(e) = client.scan_library(l) {
+            return Ok(failure(&e));
+        }
+    }
+    Ok(json!({"ok": true, "scanned": ids}))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -937,9 +989,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Write XMP for Immich",
             [],
             None,
-            "{account?} — write XMP sidecars for photos in mapped external-library folders, so Immich reads ratings, descriptions and keywords on its next scan → {written, failed}",
+            "{account?, refresh?: bool = true} — write XMP sidecars for photos in mapped external-library folders and ask Immich to re-read the linked ones (refresh-metadata), so it shows their ratings, descriptions and keywords → {written, failed, refreshed?, refreshError?}",
             always,
             write_sidecars
+        ),
+        cmd!(
+            "immich.scanLibraries",
+            "Rescan Immich External Libraries",
+            [],
+            None,
+            "{account?, library?} — ask Immich to rescan the external libraries covering mapped folders (or `library`), so it reads new files and XMP sidecars → {ok, scanned: [library ids]}",
+            always,
+            scan_libraries
         ),
     ]
 }
