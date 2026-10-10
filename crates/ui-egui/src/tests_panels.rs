@@ -16,6 +16,8 @@ fn demo(size: [f32; 2], ui: serde_json::Value) -> Headless {
     let services = Services { png: None, ..Default::default() };
     let app = DacApp::new(dac_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, size, 1.0);
+    // these tests measure the sources list: the Navigator above it is folded
+    h.app.ui.toggle_sidebar_section("navigator");
     let r = h.request("ui.set", ui, T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
@@ -708,7 +710,8 @@ fn a_dragged_album_opens_the_folder_it_hovers_over() {
 
 /// A headless app over a library of file-backed photos that exist only in the catalog.
 fn folders_app(paths: &[&str]) -> Headless {
-    folders_app_sized(paths, [1400.0, 900.0])
+    // (tall enough for the Catalog rows above the folders)
+    folders_app_sized(paths, [1400.0, 980.0])
 }
 
 fn folders_app_sized(paths: &[&str], size: [f32; 2]) -> Headless {
@@ -721,6 +724,7 @@ fn folders_app_sized(paths: &[&str], size: [f32; 2]) -> Headless {
     }
     let app = DacApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, size, 1.0);
+    h.app.ui.toggle_sidebar_section("navigator");
     // (the module bar off: these layouts were sized before it existed)
     let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true, "moduleBar": false}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -1096,4 +1100,35 @@ fn date_and_keyword_rows_show_their_photos_from_any_source() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert_eq!(h.app.session.filter, dac_catalog::Filter::default(), "{key}");
+}
+
+/// Library's Navigator panel: its 1:1 preset opens the loupe at 1:1, a click on its picture pans
+/// there, Fit goes back; folding it hides the picture.
+#[test]
+fn navigator_panel_presets_and_click_to_pan() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    h.app.ui.toggle_sidebar_section("navigator");
+    h.step();
+    h.step();
+    let r = h.request("ui.clickWidget", json!({"id": "navigator:1:1"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(h.app.ui.view, crate::state::ViewMode::Detail);
+    assert_eq!(h.app.ui.zoom, crate::state::Zoom::Percent(100.0));
+    h.step();
+    h.app.ui.pan = (0.1, 0.9);
+    let r = h.request("ui.clickWidget", json!({"id": "navigator:image"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let (u, v) = h.app.ui.pan;
+    assert!((u - 0.5).abs() < 0.05 && (v - 0.5).abs() < 0.05, "a click in the middle centres the loupe: {u},{v}");
+    let r = h.request("ui.clickWidget", json!({"id": "navigator:fit"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(h.app.ui.zoom, crate::state::Zoom::Fit);
+    let r = h.request("ui.clickWidget", json!({"id": "sidebarSection:navigator"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert!(!h.app.widgets.iter().any(|(w, _)| w == "navigator:image"));
 }

@@ -22,6 +22,10 @@ pub enum LibrarySource {
     /// A folder the library's photos were imported from ([`crate::Session::library_folder`]),
     /// and the folders inside it (`library.folders`).
     LibraryFolder,
+    /// The photos of the latest import (one import shares one timestamp).
+    PreviousImport,
+    /// The Quick Collection (empty until something was added to it).
+    QuickCollection,
 }
 
 /// The folder a [`LibrarySource::Folder`] view shows.
@@ -49,6 +53,12 @@ impl LibrarySource {
                 f.imported_from = Some(from);
             }
             LibrarySource::Album(a) => f.album = Some(*a),
+            LibrarySource::PreviousImport => {
+                let latest = cat.photos().filter(|p| p.in_library()).map(|p| p.imported.clone()).max().unwrap_or_default();
+                f.imported_from = Some(latest);
+            }
+            // no Quick Collection yet: an album id no album has, so nothing shows
+            LibrarySource::QuickCollection => f.album = Some(cat.quick_collection().unwrap_or(AlbumId(u64::MAX))),
             LibrarySource::RecentlyDeleted => f.deleted = true,
             LibrarySource::Picks => f.flag = Some(dac_catalog::Flag::Pick),
             // the folder itself is filled in by the session (it holds the path)
@@ -67,6 +77,8 @@ impl LibrarySource {
             LibrarySource::Folder => "Folder".into(),
             LibrarySource::LibraryFolder => "Folder".into(),
             LibrarySource::Missing => "Missing Photos".into(),
+            LibrarySource::PreviousImport => "Previous Import".into(),
+            LibrarySource::QuickCollection => "Quick Collection".into(),
         }
     }
 }

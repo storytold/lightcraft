@@ -271,7 +271,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Show Source",
             [],
             None,
-            "{kind: all|recentlyAdded|album|recentlyDeleted|picks|missing|libraryFolder, id?: albumId, path?: a path from library.folders (for libraryFolder)}",
+            "{kind: all|recentlyAdded|previousImport|quickCollection|album|recentlyDeleted|picks|missing|libraryFolder, id?: albumId, path?: a path from library.folders (for libraryFolder)}",
             always,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("all");
@@ -281,6 +281,8 @@ pub fn specs() -> Vec<CommandSpec> {
                     "recentlyDeleted" => LibrarySource::RecentlyDeleted,
                     "picks" => LibrarySource::Picks,
                     "missing" => LibrarySource::Missing,
+                    "previousImport" => LibrarySource::PreviousImport,
+                    "quickCollection" => LibrarySource::QuickCollection,
                     "album" => {
                         let a = album_param(p, "id", "library.source")?;
                         if s.catalog.album(a).is_none_or(|a| a.folder) {
@@ -1051,6 +1053,41 @@ pub fn specs() -> Vec<CommandSpec> {
             )?;
             ok()
         }),
+        cmd!(
+            "library.showQuickCollection",
+            "Show Quick Collection",
+            [],
+            None,
+            "{} — the grid shows the Quick Collection → {count}",
+            always,
+            |s, _| { s.execute("library.source", &json!({"kind": "quickCollection"})) }
+        ),
+        cmd!(
+            "album.saveQuick",
+            "Save Quick Collection…",
+            [],
+            None,
+            "{name?: album name (default \"Quick Collection\"), clear?: bool (default true)} — a new album holding the Quick Collection's photos, which is then cleared; one undo step → {id, count}",
+            always,
+            |s, p| {
+                let quick = s.catalog.quick_collection();
+                let photos: Vec<PhotoId> = quick.and_then(|q| s.catalog.album(q)).map(|a| a.photos.clone()).unwrap_or_default();
+                if photos.is_empty() {
+                    return Err(bad("album.saveQuick", "the Quick Collection is empty"));
+                }
+                let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Quick Collection");
+                let id = s.catalog.alloc_album_id();
+                let album = Album::new(id, name);
+                let cover = photos.first().copied();
+                let mut ops = vec![Op::AddAlbum { album }, Op::SetAlbumPhotos { id, photos: photos.clone() }, Op::SetAlbumCover { id, cover }];
+                if let Some(q) = quick.filter(|_| p.get("clear").and_then(Value::as_bool).unwrap_or(true)) {
+                    ops.push(Op::SetAlbumPhotos { id: q, photos: vec![] });
+                    ops.push(Op::SetAlbumCover { id: q, cover: None });
+                }
+                s.commit("Save Quick Collection", Op::Batch { ops })?;
+                Ok(json!({"id": id.0, "count": photos.len()}))
+            }
+        ),
         cmd!(
             "library.autoImport",
             "Auto Import Settings",

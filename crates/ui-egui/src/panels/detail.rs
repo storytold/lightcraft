@@ -978,6 +978,12 @@ const NAV_W: f32 = 180.0;
 /// visible region outlined; click or drag on it to pan.
 fn navigator(app: &mut DacApp, ui: &mut egui::Ui, canvas: Rect, img: Rect, id: PhotoId) {
     let zoomed = img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0;
+    // the Library's Navigator panel outlines the same part
+    if img.width() > 0.0 && img.height() > 0.0 {
+        let vis = canvas.intersect(img);
+        let n = |q: Pos2| pos2((q.x - img.left()) / img.width(), (q.y - img.top()) / img.height());
+        super::navigator::note_visible(ui.ctx(), Rect::from_min_max(n(vis.min), n(vis.max)));
+    }
     if !app.ui.navigator || !zoomed || app.ui.fullscreen {
         return;
     }

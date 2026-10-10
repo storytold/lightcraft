@@ -61,7 +61,11 @@ fn row_sensed(
     indent: f32,
     sense: Sense,
 ) -> egui::Response {
-    let label = if matches!(id, "all" | "recentlyAdded" | "picks" | "missing" | "recentlyDeleted") { crate::i18n::tr(label) } else { label };
+    let label = if matches!(id, "all" | "recentlyAdded" | "previousImport" | "quickCollection" | "picks" | "missing" | "recentlyDeleted") {
+        crate::i18n::tr(label)
+    } else {
+        label
+    };
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 29.0), sense);
     register(ui.ctx(), format!("source:{id}"), r);
@@ -165,6 +169,10 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
     let width = app.ui.left_width;
     let resized = super::resizable_side(ui, true, "left_panel", frame, width, crate::state::LEFT_WIDTH, 0.0, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
+        // Library: the Navigator heads the column (Classic layout)
+        if app.ui.module == crate::module::ModuleId::Library {
+            super::navigator::show(app, ui);
+        }
         let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover());
         ui.painter().text(pos2(hr.left() + 18.0, hr.center().y), Align2::LEFT_CENTER, crate::i18n::tr("My Photos"), t.semibold(15.0), t.text);
         let counts = app.caches.counts(&app.session.catalog);
@@ -181,8 +189,11 @@ pub fn show(app: &mut DacApp, ui: &mut egui::Ui) {
                 d.insert_temp(egui::Id::new("left-visible-right"), ui.cursor().left() + viewport.max.x);
             });
             let src = app.session.source;
+            let quick = app.session.catalog.quick_collection().map(|q| app.session.catalog.album_count(q)).unwrap_or(0);
             for (id, icon, label, count, s) in [
                 ("all", Icon::Photos, "All Photos", Some(total), LibrarySource::All),
+                ("quickCollection", Icon::Album, "Quick Collection", Some(quick), LibrarySource::QuickCollection),
+                ("previousImport", Icon::Clock, "Previous Import", None, LibrarySource::PreviousImport),
                 ("recentlyAdded", Icon::Clock, "Recently Added", None, LibrarySource::RecentlyAdded),
                 ("picks", Icon::FlagPick, "Picks", Some(picks), LibrarySource::Picks),
             ] {
