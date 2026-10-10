@@ -20,3 +20,4 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 lopdf = { version = "0.45", default-features = false }
+dac-brand = { workspace = true }

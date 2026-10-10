@@ -54,6 +54,8 @@ crates/print/
 crates/webgallery/
 crates/engine/src/cmd/web.rs
 crates/ui-egui/src/web_module.rs
+crates/ui-egui/src/slideshow_ui.rs
+docs/print.md
 crates/slideshow/
 crates/psd/
 crates/actions/

@@ -11,6 +11,7 @@
 //! - [`sync`]: two-way metadata sync (IMM-SYNC): snapshots, the three-way merge, conflicts.
 //! - [`people`]: Immich faces → face regions, names back to Immich people (IMM-PEOPLE).
 //! - [`extlib`]: path mapping between Immich's container paths and local folders.
+//! - [`share`]: IMM-SHARELINK, upload photos into a new album and create a shared link.
 //! - [`accounts`]: the connected accounts as kept in settings (never the API key).
 //!
 //! The client is native only; the pure modules build everywhere.
@@ -32,6 +33,8 @@ pub mod client;
 mod error;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod publish;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod share;
 
 pub use accounts::{Account, Accounts};
 #[cfg(not(target_arch = "wasm32"))]

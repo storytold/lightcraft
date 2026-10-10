@@ -109,3 +109,23 @@ fn single_image_grid_style_survives_round_trip() {
     let back = PrintSettings::from_json(&s.to_json().unwrap()).unwrap();
     assert_eq!(back.build(&ids(7)).unwrap().pages.len(), 2);
 }
+
+/// Opt-in: a real CUPS queue (e.g. `cups-pdf`) at the IPP URI in `<PREFIX>_CUPS_TEST_PRINTER`
+/// (`ipp://localhost:631/printers/PDF`). Reads its paper sizes, then prints a contact sheet PDF.
+/// Skipped when the variable is unset (see docs/print.md → CUPS test printer).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn cups_test_printer_receives_a_job() {
+    let Some(uri) = dac_brand::env("CUPS_TEST_PRINTER").filter(|u| !u.trim().is_empty()) else {
+        eprintln!("skipped: set {} to an IPP printer URI to run", dac_brand::env_var("CUPS_TEST_PRINTER"));
+        return;
+    };
+    let info = crate::ipp::printer_info(&uri).unwrap();
+    assert!(!info.media.is_empty(), "the printer reports paper sizes: {info:?}");
+    assert!(info.accepts("application/pdf"), "{:?}", info.formats);
+    let s = template("2×2 Cells");
+    let doc = s.build(&ids(4)).unwrap();
+    let out = to_pdf(&doc, &s, &Gradient, &ShapedText::new(), &PdfOptions::default(), &mut |_, _| true).unwrap();
+    let job = crate::ipp::print_job(&uri, "test", "contact sheet", "application/pdf", 1, out.files.first().unwrap()).unwrap();
+    assert!(job > 0, "a job id");
+}
