@@ -322,6 +322,7 @@ fn bad_crc_is_still_a_torn_tail() {
 fn op_variants_are_versioned() {
     fn since(op: &Op) -> u32 {
         match op {
+            Op::SetDevelop { settings, .. } if settings.profile.imported.as_ref().is_some_and(|look| look.convert_to_grayscale) => 11,
             Op::SetDevelop { settings, .. } if settings.profile.imported.is_some() => 10,
             Op::SetDevelop { settings, .. }
                 if [&settings.curve.master, &settings.curve.red, &settings.curve.green, &settings.curve.blue].iter().any(|c| c.is_function()) =>
@@ -375,18 +376,22 @@ fn op_variants_are_versioned() {
         edited: None,
     });
     assert_eq!(function, 9);
-    let newest = since(&Op::SetDevelop {
-        id: PhotoId(1),
-        settings: Arc::new(
-            lightcraft_develop::DevelopSettings::from_json(&serde_json::json!({
-                "profile": {"id": "lc.imported", "imported": {"name": "Photo look", "contrast": 8.0}}
-            }))
-            .unwrap(),
-        ),
-        label: "imported profile".into(),
-        edited: None,
-    });
-    assert_eq!(newest, VERSION, "the newest op payload's version must be the current format version");
+    for (convert_to_grayscale, version) in [(false, 10), (true, VERSION)] {
+        let required = since(&Op::SetDevelop {
+            id: PhotoId(1),
+            settings: Arc::new(
+                lightcraft_develop::DevelopSettings::from_json(&serde_json::json!({
+                    "profile": {"id": "lc.imported", "imported": {
+                        "name": "Photo look", "contrast": 8.0, "convert_to_grayscale": convert_to_grayscale
+                    }}
+                }))
+                .unwrap(),
+            ),
+            label: "imported profile".into(),
+            edited: None,
+        });
+        assert_eq!(required, version, "the newest op payload's version must be the current format version");
+    }
 }
 
 #[path = "tests_format_diagnostics.rs"]

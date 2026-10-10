@@ -56,6 +56,11 @@ pub(crate) fn encoded_to_oklch(e: [f32; 3]) -> [f32; 3] {
 
 /// Everything after the colour mixer, neutralized (the colour Point Color sees).
 pub(crate) fn after_mixer_neutral(d: &mut DevelopSettings) {
+    // Retain the profile's upstream scalar effects once, but stop its conversion and
+    // post-mixer curves from being applied again while sampling the underlying color.
+    *d = lightcraft_pipeline::profiles::effective(d).into_owned();
+    d.profile.id = "lc.color".into();
+    d.profile.imported = None;
     d.color.vibrance = 0.0;
     d.color.saturation = 0.0;
     d.point_colors.clear();
@@ -144,7 +149,7 @@ fn targeted(s: &mut Session, p: &Value) -> Result<Value> {
             let [_, _, h] = encoded_to_oklch(e);
             let w = lightcraft_pipeline::colorops::band_weights(h);
             let top = w.iter().cloned().fold(0.0f32, f32::max).max(1e-6);
-            let bw = d.treatment == Treatment::Bw || d.profile.id == "lc.mono";
+            let bw = d.is_bw();
             label = if bw { "B&W Mix" } else { "Color Mixer" };
             for (i, band) in MIXER_BANDS.iter().enumerate() {
                 let k = (w[i] / top) as f64;

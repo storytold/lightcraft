@@ -271,7 +271,7 @@ fn future_schema_and_duplicate_wire_markers_remain_checked_with_process_enabled(
         assert!(serde_json::from_str::<DevelopSettings>(&wire.to_string()).is_err());
         assert!(try_apply_partial(&DevelopSettings::default(), &wire, 1.0).is_err());
     }
-    for wire in [r#"{"version":4,"version":1,"process":77}"#, r#"{"version":1,"version":4,"process":77}"#] {
+    for wire in [r#"{"version":5,"version":1,"process":77}"#, r#"{"version":1,"version":5,"process":77}"#] {
         assert!(serde_json::from_str::<DevelopSettings>(wire).is_err());
     }
     let raw = DevelopSettings::for_raw(5210.0, -4.0);

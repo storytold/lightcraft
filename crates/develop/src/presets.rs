@@ -173,7 +173,12 @@ pub fn extract_groups(s: &DevelopSettings, groups: &[SettingsGroup]) -> Value {
         }
     }
     if out.get("profile").and_then(|profile| profile.get("imported")).is_some_and(|look| !look.is_null()) {
-        out.insert("version".into(), Value::from(crate::settings::IMPORTED_LOOK_SCHEMA_VERSION));
+        let version = if s.profile.imported.as_ref().is_some_and(|look| look.convert_to_grayscale) {
+            crate::settings::PROFILE_TREATMENT_SCHEMA_VERSION
+        } else {
+            crate::settings::IMPORTED_LOOK_SCHEMA_VERSION
+        };
+        out.insert("version".into(), Value::from(version));
     } else if out.get("curve").is_some_and(|curve| ["master", "red", "green", "blue"].iter().any(|key| curve.get(*key).is_some_and(function_wire))) {
         out.insert("version".into(), Value::from(crate::settings::POINT_CURVE_SCHEMA_VERSION));
     }
@@ -431,6 +436,16 @@ mod tests {
         assert_eq!(applied.light, b.light);
         assert_eq!(applied.curve, b.curve);
         assert_eq!(applied.version, crate::IMPORTED_LOOK_SCHEMA_VERSION);
+        a.profile.imported.as_mut().unwrap().convert_to_grayscale = true;
+        a.profile.amount = 0.0;
+        let profile = extract_groups(&a, &[SettingsGroup::Profile]);
+        assert_eq!(profile["version"], crate::PROFILE_TREATMENT_SCHEMA_VERSION);
+        assert!(profile.get("treatment").is_none());
+        let applied = try_apply_partial(&b, &profile, 1.0).unwrap();
+        assert_eq!(applied.treatment, b.treatment);
+        assert!(applied.is_bw(), "profile-only copy retains monochrome at Amount zero");
+        let native = serde_json::to_string(&applied).unwrap();
+        assert!(serde_json::from_str::<DevelopSettings>(&native).unwrap().is_bw());
     }
 
     #[test]

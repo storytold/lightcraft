@@ -477,7 +477,12 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!("develop.treatment", "Black & White", ["Photo"], Some("V"), "{bw?: bool} (toggles when omitted)", has_active, |s, p| {
             edit(s, "develop.treatment", "Treatment", |d| {
-                let bw = p.get("bw").and_then(Value::as_bool).unwrap_or(d.treatment != Treatment::Bw);
+                let profile_bw = d.profile.imported_look().is_some_and(|look| look.convert_to_grayscale);
+                let bw = p.get("bw").and_then(Value::as_bool).unwrap_or(!(d.treatment == Treatment::Bw || profile_bw));
+                if !bw && profile_bw {
+                    d.profile.id = "lc.color".into();
+                    d.profile.imported = None;
+                }
                 d.treatment = if bw { Treatment::Bw } else { Treatment::Color };
                 Ok(())
             })

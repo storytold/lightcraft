@@ -51,7 +51,7 @@ pub mod visualize;
 pub use output::{DeepImage, DeepSamples, DisplaySpace, OutputDepth, OutputSpace, OutputTrc, Proof, ProofLut, proof_profile, register_proof_profile};
 pub use visualize::{MaskView, Overlay};
 
-use lightcraft_develop::{DevelopSettings, Treatment};
+use lightcraft_develop::DevelopSettings;
 use std::any::Any;
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
@@ -765,7 +765,7 @@ pub fn before_settings(s: &DevelopSettings) -> DevelopSettings {
 }
 
 pub(crate) fn is_bw(s: &DevelopSettings) -> bool {
-    s.treatment == Treatment::Bw || s.profile.id == "lc.mono" || s.profile.id.starts_with("lc.bw.")
+    s.is_bw()
 }
 
 /// `LIGHTCRAFT_PROFILE` is set: print per-stage timings to stderr.

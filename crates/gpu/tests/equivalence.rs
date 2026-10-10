@@ -129,6 +129,7 @@ fn function_curves_profiles_bypass_and_cached_gpu_match_cpu() {
             }
             settings.profile.id = profile.into();
             settings.profile.imported = (profile == lightcraft_develop::IMPORTED_LOOK_ID).then(|| lightcraft_develop::ImportedLook {
+                convert_to_grayscale: amount == 0.0 || bypass,
                 contrast: 8.0,
                 highlights: -12.0,
                 shadows: 10.0,

@@ -88,17 +88,20 @@ fn disabled_sections_stay_bypassed_after_creative_profile_deltas() {
     let src = Rgb32f::from_fn(96, 48, |x, y| [0.02 + x as f32 / 120.0, 0.02 + y as f32 / 80.0, 0.08]);
     let info = SourceInfo::default();
     let req = RenderRequest::fit(96, 48);
-    for id in ["lc.film.warm-print", "lc.film.faded-slide", "lc.bw.sepia"] {
+    for id in ["lc.film.warm-print", "lc.film.faded-slide", "lc.bw.sepia", lightcraft_develop::IMPORTED_LOOK_ID] {
         let mut s = DevelopSettings::default();
         s.profile.id = id.into();
         s.profile.amount = 150.0;
+        if id == lightcraft_develop::IMPORTED_LOOK_ID {
+            s.profile.imported = Some(lightcraft_develop::ImportedLook { convert_to_grayscale: true, contrast: 50.0, ..Default::default() });
+        }
         s.light.exposure = 1.0;
         s.color.saturation = 30.0;
         s.curve.master = vec![Point::new(0.0, 0.1), Point::new(1.0, 0.85)].into();
         s.set_section_enabled("light", false);
         s.set_section_enabled("color", false);
         let saved = s.clone();
-        let expected = DevelopSettings { treatment: if id == "lc.bw.sepia" { Treatment::Bw } else { Treatment::Color }, ..Default::default() };
+        let expected = DevelopSettings { treatment: if s.is_bw() { Treatment::Bw } else { Treatment::Color }, ..Default::default() };
         assert_eq!(render(&src, &info, &s, &req).image.data, render(&src, &info, &expected, &req).image.data, "{id}");
         assert_eq!(s, saved, "bypass must preserve all saved profile/slider/curve values");
     }

@@ -78,6 +78,8 @@ Weights and evidence: [target-app-parity.md](docs/target-app-parity.md#features)
 
 Local native 16-bit Lightroom comparisons now cover authored charts and selected saved edits.
 Imported B&W, continuous preset curves and separate saved-profile curves / parameters are supported.
+A saved profile carries its own monochrome conversion through profile-only copy, presets and sync;
+selecting a color profile no longer leaves that conversion behind in global treatment.
 V2 fixes global and imported-profile curves to ProPhoto primaries with sRGB encoding; existing V1
 edits retain their rendering. The controlled colour-chart result improves, but saved-photo results
 remain mixed. Refine Saturation is approximate; sharpening Detail and luminance-NR Contrast are

@@ -35,7 +35,9 @@ impl DevelopSettings {
 
     /// Minimum wire schema needed by the authored features; legacy markers remain unchanged.
     pub fn required_schema_version(&self) -> u32 {
-        if self.profile.imported.is_some() {
+        if self.profile.imported.as_ref().is_some_and(|look| look.convert_to_grayscale) {
+            PROFILE_TREATMENT_SCHEMA_VERSION
+        } else if self.profile.imported.is_some() {
             IMPORTED_LOOK_SCHEMA_VERSION
         } else if [&self.curve.master, &self.curve.red, &self.curve.green, &self.curve.blue].iter().any(|c| c.is_function()) {
             POINT_CURVE_SCHEMA_VERSION
@@ -132,6 +134,15 @@ impl DevelopSettings {
 
     pub fn section_enabled(&self, section: &str) -> bool {
         !self.disabled_sections.iter().any(|s| s == section)
+    }
+
+    /// Effective treatment, including a profile's independent monochrome conversion.
+    /// Amount zero does not turn a monochrome profile into a color profile.
+    pub fn is_bw(&self) -> bool {
+        self.treatment == Treatment::Bw
+            || self.profile.id == "lc.mono"
+            || self.profile.id.starts_with("lc.bw.")
+            || self.profile.imported_look().is_some_and(|look| look.convert_to_grayscale)
     }
 
     /// The settings as rendered: an Edit-panel section whose eye is off contributes nothing (issue
@@ -240,6 +251,15 @@ mod tests {
         assert_eq!(loaded, s);
         assert_eq!(loaded.light.exposure, 1.25);
         assert_eq!(loaded.profile.imported_look(), s.profile.imported.as_ref());
+        assert!(loaded.to_json()["profile"]["imported"].get("convert_to_grayscale").is_none());
+        let legacy_wire = serde_json::to_string(&loaded).unwrap();
+        let legacy: DevelopSettings = serde_json::from_str(&legacy_wire).unwrap();
+        assert_eq!(serde_json::to_string(&legacy).unwrap(), legacy_wire);
+        s.profile.imported.as_mut().unwrap().convert_to_grayscale = true;
+        let direct = serde_json::to_value(&s).unwrap();
+        assert_eq!(direct["version"], PROFILE_TREATMENT_SCHEMA_VERSION);
+        assert_eq!(direct["profile"]["imported"]["convert_to_grayscale"], true);
+        assert!(DevelopSettings::from_json(&direct).unwrap().is_bw());
         s.profile.imported = None;
         assert!(serde_json::to_value(&s).is_err());
         assert!(s.merged(&json!({"light":{"exposure":2.0}})).is_err());

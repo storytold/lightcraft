@@ -147,14 +147,14 @@ fn assert_union(catalog: &Catalog) {
 
 #[test]
 fn both_catalog_lineages_upgrade_before_a_combined_op_is_appended() {
-    assert_eq!(VERSION, 9, "imported profile adjustments need the next writer version");
+    assert_eq!(VERSION, 10, "independent profile treatment needs the next writer version");
     for (local, version) in [(true, 3), (true, 4), (false, 3), (false, 4), (false, 5), (false, 6), (false, 7)] {
         let (snapshot, ops, expected) = fixture(local, version);
         let store = files(version, &snapshot, &ops);
         let (mut journal, mut catalog, report) = Journal::open(Box::new(store.clone())).unwrap();
         assert_eq!((report.replayed, report.upgraded_from), (ops.len(), Some(version)), "local={local},version={version}");
         let header = saved(&store);
-        assert_eq!(header["version"], 9, "upgrade is durable before the caller can append");
+        assert_eq!(header["version"], VERSION, "upgrade is durable before the caller can append");
         assert_eq!(header["seq"], SNAP_SEQ + ops.len() as u64);
         assert!(store.get(LOG).unwrap().is_empty());
         assert_projection(&header["catalog"], &expected);
@@ -162,7 +162,7 @@ fn both_catalog_lineages_upgrade_before_a_combined_op_is_appended() {
         let op: Op = serde_json::from_value(union_op()).unwrap();
         catalog.apply(op.clone()).unwrap();
         journal.append(&[op]).unwrap();
-        assert_eq!(saved(&store)["version"], 9);
+        assert_eq!(saved(&store)["version"], VERSION);
         let line = String::from_utf8(store.get(LOG).unwrap()).unwrap();
         let written: Value = serde_json::from_str(line.trim()).unwrap();
         assert_eq!(written["seq"], SNAP_SEQ + ops.len() as u64 + 1);
@@ -200,12 +200,12 @@ fn assert_refused_unchanged(store: &MemStore, must_report_newer: bool) {
 }
 
 #[test]
-fn future_catalog10_keeps_all_snapshot_and_log_bytes_untouched() {
-    assert_eq!(VERSION, 9);
+fn future_catalog_keeps_all_snapshot_and_log_bytes_untouched() {
+    assert_eq!(VERSION, 10);
     let (snapshot, ops, _) = fixture(true, 4);
-    assert_refused_unchanged(&files(10, &snapshot, &ops), true);
+    assert_refused_unchanged(&files(VERSION + 1, &snapshot, &ops), true);
     // The catalog payload need not be understood before a future outer version is refused.
-    assert_refused_unchanged(&files(10, &json!({"photos":"future storage"}), &[union_op()]), true);
+    assert_refused_unchanged(&files(VERSION + 1, &json!({"photos":"future storage"}), &[union_op()]), true);
 }
 
 #[test]
@@ -213,7 +213,7 @@ fn future_native_curve_and_schema_markers_are_refused_in_snapshots_and_valid_log
     for invalid in [
         {
             let mut v = function(0.1);
-            v["version"] = json!(4);
+            v["version"] = json!(lightcraft_develop::SCHEMA_VERSION + 1);
             v
         },
         {

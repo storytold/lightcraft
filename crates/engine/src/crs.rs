@@ -196,12 +196,36 @@ fn imported_look(props: &Props) -> Option<Value> {
         "name": first(props, "crs:Look/crs:Name").unwrap_or("Imported profile"),
         "source_id": first(props, "crs:Look/crs:UUID").unwrap_or("")
     });
+    let conversion = boolean(props, "crs:Look/crs:Parameters/crs:ConvertToGrayscale");
+    if let Some(bw) = conversion {
+        payload["convert_to_grayscale"] = json!(bw);
+    }
+    let conversion_payload = payload.clone();
+    // Conversion is independently understood even when a profile's numeric definition is
+    // unsupported. Keep only that checked component, not a previous profile or a clamped curve.
+    let conversion_only = |amount| {
+        conversion.map(|convert_to_grayscale| {
+            let look = serde_json::from_value::<ImportedLook>(conversion_payload.clone())
+                .unwrap_or_else(|_| ImportedLook { convert_to_grayscale, ..Default::default() });
+            json!({"id": IMPORTED_LOOK_ID, "amount": amount, "imported": look})
+        })
+    };
+    let amount_key = "crs:Look/crs:Amount";
+    let amount = if props.contains_key(amount_key) {
+        let Some(v) = num(props, amount_key).filter(|v| (0.0..=2.0).contains(v)) else {
+            skipped("Look (invalid profile amount)");
+            return conversion_only(100.0);
+        };
+        v * 100.0
+    } else {
+        100.0
+    };
     for (field, target) in [("Contrast2012", "contrast"), ("Highlights2012", "highlights"), ("Shadows2012", "shadows"), ("Clarity2012", "clarity")] {
         let key = format!("crs:Look/crs:Parameters/crs:{field}");
         if props.contains_key(&key) {
             let Some(v) = num(props, &key).filter(|v| (-100.0..=100.0).contains(v)) else {
                 skipped("Look (invalid profile parameter)");
-                return None;
+                return conversion_only(amount);
             };
             payload[target] = json!(v);
         }
@@ -222,7 +246,7 @@ fn imported_look(props: &Props) -> Option<Value> {
             };
             let Some(v) = props.get(&key).filter(valid_points).and_then(|_| curve(props, &key)) else {
                 skipped("Look (invalid profile curve)");
-                return None;
+                return conversion_only(amount);
             };
             payload[target] = v;
         }
@@ -230,19 +254,9 @@ fn imported_look(props: &Props) -> Option<Value> {
     // An explicitly replaced Look with only unsupported components still replaces the old
     // supported definition with a neutral subset. Otherwise rereading a table-only profile
     // would leave the previous profile's curves active. The unmapped Look warning remains.
-    let amount_key = "crs:Look/crs:Amount";
-    let amount = if props.contains_key(amount_key) {
-        let Some(v) = num(props, amount_key).filter(|v| (0.0..=2.0).contains(v)) else {
-            skipped("Look (invalid profile amount)");
-            return None;
-        };
-        v * 100.0
-    } else {
-        100.0
-    };
     let Ok(look) = serde_json::from_value::<ImportedLook>(payload) else {
         skipped("Look (invalid profile definition)");
-        return None;
+        return conversion_only(amount);
     };
     Some(json!({"id": IMPORTED_LOOK_ID, "amount": amount, "imported": look}))
 }
@@ -372,15 +386,15 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     }
 
     // ---- Treatment + B&W mix
-    // A monochrome Look still converts when the outer treatment flag is false (verified
-    // against a Lightroom export). Either explicit conversion makes the result B&W;
-    // the profile's supported parameters remain independent of global controls.
-    let treatment = boolean(props, "crs:ConvertToGrayscale");
-    let profile_treatment = boolean(props, "crs:Look/crs:Parameters/crs:ConvertToGrayscale");
-    if let Some(bw) = treatment.zip(profile_treatment).map(|(a, b)| a || b).or(treatment).or(profile_treatment) {
+    // Keep the outer treatment independent: the Look's own conversion travels with its
+    // payload through profile-only copy/paste, presets and sync, even at Amount zero.
+    if let Some(bw) = boolean(props, "crs:ConvertToGrayscale") {
         put(o, "treatment", json!(if bw { "bw" } else { "color" }));
     }
     if let Some(profile) = imported_look(props) {
+        if profile.pointer("/imported/convert_to_grayscale").and_then(Value::as_bool) == Some(true) {
+            put(o, "version", json!(lightcraft_develop::PROFILE_TREATMENT_SCHEMA_VERSION));
+        }
         put(o, "profile", profile);
     }
     for (band, crs) in MIXER_BANDS.iter().zip(CRS_BANDS) {
@@ -641,6 +655,15 @@ mod tests {
             let direct = preset_from_xmp(&xml, "Own structured probe").expect("mask-only presets also contain usable adjustments");
             assert_eq!(direct.settings, imported.preset.settings);
             assert_eq!(direct.unsupported_edits, imported.preset.unsupported_edits);
+            if grayscale {
+                assert_eq!(direct.settings["version"], lightcraft_develop::PROFILE_TREATMENT_SCHEMA_VERSION);
+                let file = crate::presets::to_lcpreset(std::slice::from_ref(&direct));
+                let envelope: Value = serde_json::from_str(&file).unwrap();
+                assert_eq!(envelope["format"], crate::presets::LCPRESET_FUNCTION_FORMAT);
+                assert_eq!(envelope["presets"][0]["settings"]["version"], lightcraft_develop::PROFILE_TREATMENT_SCHEMA_VERSION);
+                let reloaded = crate::presets::parse_preset_file("own.lcpreset", file.as_bytes()).unwrap().remove(0);
+                assert_eq!(reloaded.settings, direct.settings);
+            }
             let parsed = crate::presets::parse_preset_file("own.xmp", xml.as_bytes()).unwrap().remove(0);
             assert_eq!(parsed.settings, direct.settings);
             let sniffed = crate::preset_import::read_presets("own.probe", xml.as_bytes(), None).unwrap().remove(0);
@@ -652,7 +675,8 @@ mod tests {
                 assert_eq!(mask.name, "Own gradient");
                 assert_eq!(mask.adjust.exposure, -1.0);
             }
-            assert_eq!(settings.treatment, if grayscale { lightcraft_develop::Treatment::Bw } else { lightcraft_develop::Treatment::Color });
+            assert_eq!(settings.treatment, lightcraft_develop::Treatment::Color);
+            assert_eq!(settings.is_bw(), grayscale);
         }
     }
 
@@ -669,7 +693,8 @@ mod tests {
             let packet = lightcraft_meta::parse_xmp(&xml).unwrap();
             let (partial, unmapped) = to_partial_report(&packet.properties, Some(&packet.values), Target::RawAbsolute, 1.5);
             let settings = apply_partial(&DevelopSettings::default(), &partial, 1.0);
-            assert_eq!(settings.treatment, lightcraft_develop::Treatment::Bw);
+            assert_eq!(settings.treatment, lightcraft_develop::Treatment::Color);
+            assert!(settings.is_bw());
             assert_eq!(settings.bw_mix.blue, -35.0);
             assert_eq!(settings.light.exposure, 0.0, "profile parameters must not become global edits");
             assert_eq!(settings.effects.clarity, 0.0);
@@ -692,13 +717,14 @@ mod tests {
 
     #[test]
     fn either_explicit_grayscale_conversion_applies_without_guessing_profile_names() {
-        for (outer, nested, name, expected) in [
-            (Some("False"), Some("True"), "Procedural look", Some("bw")),
-            (Some("True"), Some("False"), "Procedural look", Some("bw")),
-            (Some("False"), Some("False"), "Procedural look", Some("color")),
-            (Some("False"), None, "Procedural look", Some("color")),
-            (None, Some("False"), "Procedural look", Some("color")),
-            (None, None, "Adobe Monochrome", None),
+        for (outer, nested, name, expected, effective_bw) in [
+            (Some("False"), Some("True"), "Procedural look", Some("color"), true),
+            (Some("True"), Some("False"), "Procedural look", Some("bw"), true),
+            (Some("False"), Some("False"), "Procedural look", Some("color"), false),
+            (Some("False"), None, "Procedural look", Some("color"), false),
+            (None, Some("False"), "Procedural look", None, false),
+            (None, Some("True"), "Procedural look", None, true),
+            (None, None, "Adobe Monochrome", None, false),
         ] {
             let outer = outer.map_or(String::new(), |v| format!(r#"crs:ConvertToGrayscale="{v}""#));
             let nested = nested.map_or(String::new(), |v| format!(r#"crs:ConvertToGrayscale="{v}""#));
@@ -707,6 +733,30 @@ mod tests {
             );
             let partial = to_partial(&props(&xml), Target::RawAbsolute);
             assert_eq!(partial.get("treatment").and_then(Value::as_str), expected);
+            assert_eq!(apply_partial(&DevelopSettings::default(), &partial, 1.0).is_bw(), effective_bw);
+        }
+        for (field, values, warning) in [
+            ("Parameters/crs:ToneCurvePV2012", vec!["0,0", "255,510"], "curve"),
+            ("Parameters/crs:Contrast2012", vec!["101"], "parameter"),
+            ("Amount", vec!["NaN"], "amount"),
+        ] {
+            for bw in [false, true] {
+                let fields = Props::from([
+                    ("crs:ConvertToGrayscale".into(), vec!["False".into()]),
+                    ("crs:Look/crs:Parameters/crs:ConvertToGrayscale".into(), vec![bw.to_string()]),
+                    (format!("crs:Look/crs:{field}"), values.iter().map(|s| s.to_string()).collect()),
+                ]);
+                let (partial, unmapped) = to_partial_report(&fields, None, Target::RawAbsolute, 1.5);
+                let mut previous = DevelopSettings::default();
+                previous.profile.id = IMPORTED_LOOK_ID.into();
+                previous.profile.imported = Some(ImportedLook { convert_to_grayscale: !bw, contrast: 35.0, ..Default::default() });
+                let settings = apply_partial(&previous, &partial, 1.0);
+                assert_eq!(settings.treatment, lightcraft_develop::Treatment::Color);
+                assert_eq!(settings.is_bw(), bw, "conversion survives invalid {field} independently");
+                assert_eq!(settings.profile.imported_look().unwrap().contrast, 0.0, "no stale profile survives");
+                assert!(settings.profile.imported_look().unwrap().master.is_identity());
+                assert!(unmapped.iter().any(|s| s == &format!("Look (invalid profile {warning})")));
+            }
         }
     }
 

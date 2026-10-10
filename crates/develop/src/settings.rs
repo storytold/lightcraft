@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 
 pub const POINT_CURVE_SCHEMA_VERSION: u32 = 2;
 pub const IMPORTED_LOOK_SCHEMA_VERSION: u32 = 3;
-pub const SCHEMA_VERSION: u32 = IMPORTED_LOOK_SCHEMA_VERSION;
+pub const PROFILE_TREATMENT_SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = PROFILE_TREATMENT_SCHEMA_VERSION;
 
 fn deserialize_schema_version<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
     let version = u32::deserialize(deserializer)?;
@@ -267,6 +268,9 @@ pub struct ImportedLook {
     pub name: String,
     #[serde(deserialize_with = "deserialize_look_text")]
     pub source_id: String,
+    /// The profile converts to monochrome independently of global Treatment and Amount.
+    /// Absent in older native settings: never infer it from a name or a flattened Treatment.
+    pub convert_to_grayscale: bool,
     #[serde(deserialize_with = "deserialize_look_scalar")]
     pub contrast: f64,
     #[serde(deserialize_with = "deserialize_look_scalar")]
@@ -351,9 +355,12 @@ impl Serialize for ImportedLook {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         self.validate().map_err(serde::ser::Error::custom)?;
-        let mut out = serializer.serialize_struct("ImportedLook", 10)?;
+        let mut out = serializer.serialize_struct("ImportedLook", 10 + usize::from(self.convert_to_grayscale))?;
         out.serialize_field("name", &self.name)?;
         out.serialize_field("source_id", &self.source_id)?;
+        if self.convert_to_grayscale {
+            out.serialize_field("convert_to_grayscale", &true)?;
+        }
         out.serialize_field("contrast", &self.contrast)?;
         out.serialize_field("highlights", &self.highlights)?;
         out.serialize_field("shadows", &self.shadows)?;

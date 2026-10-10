@@ -62,7 +62,8 @@ packets without `lc:unsupportedEdits` preserve diagnostics already in the catalo
 metadata is rejected, preserves existing names, and adds `InvalidSavedEditDiagnostics`. Limits are 66,305 bytes of encoded
 JSON, 256 names and 256 UTF-8 bytes per name; the UI abbreviates long lists and names.
 
-Catalog format 8 stores continuous point curves and these diagnostics alongside the upstream format-3–6 operations.
+Catalog format 10 stores independent imported-profile treatment, profile adjustments, continuous point curves
+and these diagnostics alongside the upstream format-3–6 operations.
 Existing compatible libraries upgrade on open; older LightCraft builds refuse the new format. For comparison with older builds, use a disposable library or a separately backed-up copy.
 
 ## Continuous curves and older versions
@@ -74,6 +75,11 @@ does not replace the blended shape with a newly fitted handful of points. Native
 retain that complete model. Sparse settings keep their supported wire version on read, so existing Local-photo
 baseline fingerprints remain valid. New sparse settings use version 1; authoring function curves promotes them
 to version 2. Edited/default comparisons ignore only this version marker.
+
+Imported profile definitions require schema 3; their independent monochrome conversion requires schema 4
+when true. The new flag is omitted when false, so earlier native settings keep their serialized values and
+fingerprints. Earlier settings that already stored global B&W stay B&W: loading never guesses whether that
+choice originally came from a profile. Catalog format 10 prevents older readers from dropping the new flag.
 
 New function preset files use `lightcraft.preset.v2` and curve presets use a version-2 `curves` envelope. Their old
 readers reject those formats; legacy sparse preset files remain readable. Older LightCraft versions that predate
@@ -178,7 +184,7 @@ stored edits; it does not establish a Lightroom pixel match.
 | `Vibrance`, `Saturation` | `color.vibrance`, `color.saturation` | 1:1 |
 | `Texture`, `Clarity2012`, `Dehaze` | `effects.texture`, `effects.clarity`, `effects.dehaze` | 1:1 |
 | `HueAdjustment<Band>`, `SaturationAdjustment<Band>`, `LuminanceAdjustment<Band>` | `mixer.<band>.hue/sat/lum` | bands Red, Orange, Yellow, Green, Aqua, Blue, Purple, Magenta |
-| `ConvertToGrayscale` | `treatment` | Either this flag or `Look/Parameters/ConvertToGrayscale` being `True` → B&W; an outer `False` does not undo a monochrome profile. Verified against a Lightroom export. Attribute and child-element fields are both accepted, including `rdf:parseType="Resource"` attributes. Supported profile curves and parameters remain separate from the global controls (below). |
+| `ConvertToGrayscale` | `treatment` | The outer flag controls global treatment. The nested `Look/Parameters/ConvertToGrayscale` is retained independently in `profile.imported.convert_to_grayscale`: either true flag renders B&W, including profile Amount zero. An outer false with a monochrome Look was verified against a Lightroom export. Profile-only copy/paste, presets and sync carry the conversion; selecting a plain color profile removes only the profile conversion. Explicit Color clears an active imported monochrome profile. Attribute and child-element forms are accepted, including `rdf:parseType="Resource"` attributes. |
 | `Look/Parameters/ToneCurvePV2012`, `…Red/Green/Blue`; `Contrast2012`, `Highlights2012`, `Shadows2012`, `Clarity2012` | `profile.imported` | Checked per-photo profile definition with its own name and Amount (0..200%). Profile curves follow global curves and Refine Saturation; four scalar deltas affect effective rendering without moving the saved sliders. Amount blends the profile function with identity. This is a measured approximation; opaque tables and other profile parameters remain unsupported and `Look` stays in the diagnostic report. |
 | `GrayMixer<Band>` | `bw_mix.<band>` | |
 | `ParametricShadows`, `ParametricDarks`, `ParametricLights`, `ParametricHighlights` | `curve.shadows/darks/lights/highlights` | |
@@ -223,6 +229,10 @@ either order. Supported embedded `Parameters` are read as described above.
 **Not mapped:** SDR rendition controls and extended HDR curves (`SDR*`, `ExtendedToneCurve*`); camera profiles (`CameraProfile`), opaque Look tables and parameters outside the subset above, unsupported mask
 types and payloads (supported local corrections are listed below), red eye, lens blur, and AI features
 such as saved Denoise filters. Legacy process-version 2010 controls use the approximations described above.
+
+If a conversion-bearing Look has an invalid curve, scalar, Amount or identifier, only its independently
+understood conversion is retained in a neutral profile definition and the invalid component remains reported.
+It does not inherit a previous profile or turn an unsupported curve into a clamped approximation.
 
 ## Spot removal
 

@@ -92,8 +92,10 @@ The local suite now compares authored charts and selected saved edits against Li
 experiments use private copies and scratch catalogs. References and measurement reports remain
 local in `plan/`. This is limited evidence, not a representative camera or saved-edit benchmark.
 
-Imported B&W is rendered. Saved Look master / RGB curves and Contrast, Highlights, Shadows and
-Clarity are retained separately from global sliders. Preset Amount can blend continuous curve
+Imported B&W is rendered. A saved Look's monochrome conversion travels with profile-only copy/paste,
+presets and sync independently of global Treatment, including Amount zero. Plain Color profile selection
+removes that conversion; existing native global B&W is preserved without guessing its origin. Saved Look
+master / RGB curves and Contrast, Highlights, Shadows and Clarity are retained separately from global sliders. Preset Amount can blend continuous curve
 functions without flattening the saved curve model; malformed or unsupported native settings are
 refused rather than replaced by stale CRS settings. These preservation and control fixes do not
 establish Lightroom appearance parity for every preset or Amount.

@@ -221,3 +221,58 @@ fn white_balance_commands_write_kelvin_on_raws_whose_camera_has_matrices() {
 fn lightcraft_engine_effective(info: &lightcraft_pipeline::SourceInfo, d: &lightcraft_develop::DevelopSettings) -> (f64, f64) {
     lightcraft_pipeline::local::effective_wb(info, d)
 }
+
+#[test]
+fn imported_monochrome_profile_survives_profile_only_copy_and_explicit_color_toggle() {
+    use lightcraft_develop::{DevelopSettings, Preset, SettingsGroup, Treatment};
+    let packet = r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:ConvertToGrayscale="False"><crs:Look rdf:parseType="Resource" crs:Name="Own monochrome profile" crs:Amount="0"><crs:Parameters rdf:parseType="Resource" crs:ConvertToGrayscale="True"/></crs:Look></rdf:Description>"#;
+    let imported = crate::crs::preset_from_xmp(packet, "Own monochrome profile").unwrap();
+    let mut s = demo();
+    let id = s.active().unwrap();
+    s.execute("develop.merge", &json!({"settings": imported.settings})).unwrap();
+    let source = active_dev(&s);
+    assert_eq!(source.treatment, Treatment::Color);
+    assert_eq!(source.profile.amount, 0.0);
+    assert!(source.is_bw());
+    let direct = s.render_now(id, 384, 384).unwrap().image;
+    assert!(chroma_at(&direct, 0.5, 0.08) <= 1);
+    let preset = Preset::from_settings("own", "Own", "Test", &source, &[SettingsGroup::Profile]);
+    assert!(preset.apply(&DevelopSettings::default(), 1.0).is_bw());
+    s.execute("develop.copy", &json!({"groups": ["profile"]})).unwrap();
+    s.execute("develop.profile", &json!({"id": "lc.color"})).unwrap();
+    assert!(!active_dev(&s).is_bw(), "profile selection must not inherit flattened global BW");
+    assert!(chroma_at(&s.render_now(id, 384, 384).unwrap().image, 0.5, 0.08) > 4);
+    s.execute("develop.paste", &json!({})).unwrap();
+    assert_eq!(active_dev(&s).treatment, Treatment::Color);
+    assert!(active_dev(&s).is_bw());
+    assert_eq!(s.render_now(id, 384, 384).unwrap().image.data, direct.data);
+    let copied = active_dev(&s);
+    let restored: DevelopSettings = serde_json::from_str(&serde_json::to_string(&copied).unwrap()).unwrap();
+    assert_eq!(restored, copied);
+    let changed = s.execute("develop.targeted", &json!({"target": "lum", "x": 0.5, "y": 0.08, "delta": 15})).unwrap();
+    assert!(!changed.as_object().unwrap().is_empty());
+    assert!(changed.as_object().unwrap().keys().all(|k| k.starts_with("bw.")));
+    s.execute("pointColor.pick", &json!({"x": 0.5, "y": 0.08})).unwrap();
+    assert!(active_dev(&s).point_colors[0].chroma > 0.01, "sampling must see the underlying color");
+    s.execute("develop.treatment", &json!({})).unwrap();
+    assert!(!active_dev(&s).is_bw());
+    assert_eq!(active_dev(&s).profile.id, "lc.color");
+    assert!(active_dev(&s).profile.imported.is_none());
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(active_dev(&s).is_bw());
+    assert_eq!(active_dev(&s).treatment, Treatment::Color);
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert!(!active_dev(&s).is_bw());
+
+    // Earlier native settings stored only global BW. Loading or replacing their profile
+    // must not infer that this was a profile conversion or erase the user's treatment.
+    let legacy = json!({"version": 3, "treatment": "bw", "profile": {"id": "lc.imported", "imported": {"name": "Own legacy look"}}});
+    let legacy = DevelopSettings::from_json(&legacy).unwrap();
+    let wire = serde_json::to_string(&legacy).unwrap();
+    let read: DevelopSettings = serde_json::from_str(&wire).unwrap();
+    assert_eq!(serde_json::to_string(&read).unwrap(), wire);
+    assert_eq!(read.version, 3);
+    assert!(read.is_bw());
+    assert!(!read.profile.imported_look().unwrap().convert_to_grayscale);
+    assert!(read.merged(&json!({"profile": {"id": "lc.color"}})).unwrap().is_bw());
+}
