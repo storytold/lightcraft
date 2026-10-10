@@ -100,15 +100,17 @@ fn dir_bytes(dir: &Path) -> u64 {
 }
 
 fn open_journal(backend: &str, dir: &Path) -> R<(Journal, Catalog)> {
-    let (j, c, _) = match backend {
-        "v4" => return Err("the v4 backend is not built yet".into()),
-        _ => Journal::open(Box::new(FsStore::open(dir)?))?,
+    let store = match backend {
+        "v3" => FsStore::open_json(dir)?,
+        _ => FsStore::open(dir)?,
     };
+    let (j, c, _) = Journal::open(Box::new(store))?;
     Ok((j, c))
 }
 
-/// Build `n` photos into `dir`: returns (import photos/s, snapshot ms, bytes on disk).
-fn build(backend: &str, dir: &Path, n: u64) -> R<(f64, f64, u64)> {
+/// Build `n` photos into `dir`: returns (import photos/s, first snapshot ms, bytes on disk,
+/// snapshot ms after 1000 rating changes).
+fn build(backend: &str, dir: &Path, n: u64) -> R<(f64, f64, u64, f64)> {
     let _ = std::fs::remove_dir_all(dir);
     std::fs::create_dir_all(dir)?;
     let (mut j, mut cat) = open_journal(backend, dir)?;
@@ -127,8 +129,26 @@ fn build(backend: &str, dir: &Path, n: u64) -> R<(f64, f64, u64)> {
     let t = Instant::now();
     j.snapshot(&cat)?;
     let snap_ms = ms(t);
+    // a session's worth of edits, then the next compaction / checkpoint
+    let ids: Vec<PhotoId> = cat.photos().map(|p| p.id).step_by(97).take(1000).collect();
+    let ops: Vec<Op> = ids.iter().map(|id| Op::SetRating { id: *id, rating: 5 }).collect();
+    for op in &ops {
+        cat.apply(op.clone())?;
+    }
+    j.append(&ops)?;
+    let t = Instant::now();
+    j.snapshot(&cat)?;
+    let again_ms = ms(t);
     drop(j);
-    Ok((n as f64 / import_s.max(1e-9), snap_ms, dir_bytes(dir)))
+    Ok((n as f64 / import_s.max(1e-9), snap_ms, dir_bytes(dir), again_ms))
+}
+
+fn child(backend: &str, d: &Path) -> R<serde_json::Value> {
+    let out = std::process::Command::new(std::env::current_exe()?).args(["--phase", "open", "--backend", backend, "--dir"]).arg(d).output()?;
+    if !out.status.success() {
+        return Err(format!("open phase failed: {}", String::from_utf8_lossy(&out.stderr)).into());
+    }
+    Ok(serde_json::from_slice(out.stdout.trim_ascii())?)
 }
 
 /// Child process: open, query, print one JSON line.
@@ -169,36 +189,58 @@ fn main() -> R<()> {
     for n in sizes {
         let d = dir.join(format!("{backend}-{n}"));
         eprintln!("building {n} photos ({backend}) in {}", d.display());
-        let (import_per_s, snapshot_ms, bytes) = build(&backend, &d, n)?;
-        let out = std::process::Command::new(std::env::current_exe()?).args(["--phase", "open", "--backend", &backend, "--dir"]).arg(&d).output()?;
-        if !out.status.success() {
-            return Err(format!("open phase failed: {}", String::from_utf8_lossy(&out.stderr)).into());
-        }
-        let mut v: serde_json::Value = serde_json::from_slice(out.stdout.trim_ascii())?;
+        let (import_per_s, snapshot_ms, bytes, again_ms) = build(&backend, &d, n)?;
+        let mut v = child(&backend, &d)?;
+        // v3 → v4 migration on open (`--migrate`, v3 only), then a plain v4 open of the result
+        let migrated = if backend == "v3" && args.iter().any(|a| a == "--migrate") {
+            let m = child("v4", &d)?;
+            let after = child("v4", &d)?;
+            Some((m["open_ms"].clone(), m["peak_rss_mb"].clone(), after["open_ms"].clone()))
+        } else {
+            None
+        };
         if let Some(o) = v.as_object_mut() {
             o.insert("backend".into(), backend.clone().into());
             o.insert("import_per_s".into(), import_per_s.round().into());
             o.insert("snapshot_ms".into(), snapshot_ms.round().into());
+            o.insert("snapshot_after_edits_ms".into(), again_ms.round().into());
             o.insert("disk_mb".into(), ((bytes as f64 / 1e5).round() / 10.0).into());
+            if let Some((m, rss, after)) = migrated {
+                o.insert("migrate_open_ms".into(), m);
+                o.insert("migrate_peak_rss_mb".into(), rss);
+                o.insert("v4_open_after_migration_ms".into(), after);
+            }
         }
         println!("{v}");
         rows.push(v);
-        let _ = std::fs::remove_dir_all(&d);
+        if !args.iter().any(|a| a == "--keep") {
+            let _ = std::fs::remove_dir_all(&d);
+        }
     }
-    println!("\n| backend | photos | open | peak RSS | filter (worst) | snapshot | import | disk |\n|---|---|---|---|---|---|---|---|");
+    println!(
+        "\n| backend | photos | open | peak RSS | filter (worst) | first snapshot | snapshot after 1000 edits | import | disk |\n|---|---|---|---|---|---|---|---|---|"
+    );
     for v in rows {
         let worst = v["filter_ms"].as_object().map(|o| o.values().filter_map(|x| x.as_f64()).fold(0.0, f64::max)).unwrap_or(0.0);
         println!(
-            "| {} | {} | {:.0} ms | {:.0} MB | {:.0} ms | {} ms | {}/s | {} MB |",
+            "| {} | {} | {:.0} ms | {:.0} MB | {:.0} ms | {} ms | {} ms | {}/s | {} MB |",
             v["backend"].as_str().unwrap_or("?"),
             v["photos"],
             v["open_ms"].as_f64().unwrap_or(0.0),
             v["peak_rss_mb"].as_f64().unwrap_or(0.0),
             worst,
             v["snapshot_ms"],
+            v["snapshot_after_edits_ms"],
             v["import_per_s"],
             v["disk_mb"]
         );
+        if let Some(m) = v["migrate_open_ms"].as_f64() {
+            println!(
+                "|   migrated to v4 on open | | {m:.0} ms | {:.0} MB | | | | | (then v4 open {:.0} ms) |",
+                v["migrate_peak_rss_mb"].as_f64().unwrap_or(0.0),
+                v["v4_open_after_migration_ms"].as_f64().unwrap_or(0.0)
+            );
+        }
     }
     Ok(())
 }

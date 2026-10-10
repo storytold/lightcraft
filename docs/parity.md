@@ -47,11 +47,11 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | X. Cross-cutting behaviours (BEHAV) | 18 | 5 | 1 | 1 | 8/8 (100%) | 6/8 (75%) |
 | Y. Menus | 82 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
-| Lightroom Classic extras | 32 | 24 | 64 | 0 | — | 22/34 (65%) |
+| Lightroom Classic extras | 32 | 26 | 62 | 0 | — | 22/34 (65%) |
 | IMM. Immich integration | 0 | 0 | 10 | 0 | — | 0/6 (0%) |
-| **Total** | 394 | 51 | 119 | 27 | 193/200 (97%) | 142/168 (85%) |
+| **Total** | 394 | 53 | 117 | 27 | 193/200 (97%) | 142/168 (85%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **74.4%** of 564 in-scope rows — P0 98.2% of 200 · P1 88.1% of 168 · P2 37.9% of 195.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **74.6%** of 564 in-scope rows — P0 98.2% of 200 · P1 88.7% of 168 · P2 37.9% of 195.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -820,11 +820,11 @@ PLAN.md §2 carry the status of that survey ("unverified" where it said so) unti
 | LRC-SHELL-PREFS | Classic preference groups (presets, external editing, file handling, display, network) | P2 | 🟡 |  | partial; see V. Preferences |
 | LRC-SHELL-PLUGINS | Plug-in manager and SDK (sandboxed) | P2 | ⬜ |  | PLAN.md §2.1; Phase 4 |
 | LRC-CAT-SCALE | Catalog of 500k+ photos with an on-disk index | P1 | 🟡 |  | journal + snapshot works to about 85k photos and lives in RAM; Phase 1 |
-| LRC-CAT-MULTI | Several catalogs: create, open, open recent, choose at startup | P1 | 🟡 |  | unverified (PLAN.md §2.2 left it open) |
-| LRC-CAT-BACKUP | Catalog backup on exit with integrity test and optimise | P1 | ⬜ |  |  |
-| LRC-CAT-EXPORT | Export as catalog (subset, with or without originals and previews) and import from another catalog | P1 | ⬜ |  | merge with a conflict policy |
+| LRC-CAT-MULTI | Several catalogs: create, open, open recent, choose at startup | P1 | 🟡 | `crates/catalog/src/library.rs` | catalog API only: a catalog is a folder with a `<name>.<catalog_ext>` entry point (`library::create`, `library::open`, `library::resolve`), `RecentCatalogs` (Open Recent list, startup default, chooser when Alt is held or asked for); File ▸ New / Open / Open Recent Catalog and the startup chooser are not wired into the app yet |
+| LRC-CAT-BACKUP | Catalog backup on exit with integrity test and optimise | P1 | 🟡 | `crates/catalog/src/library.rs` | catalog API only: `Journal::backup` (checkpoint, copy into `<backups>/<time>/`, the copy integrity-tested, oldest pruned), `Journal::backup_if_due` (schedule never / every exit / daily / weekly / monthly from `catalog-settings.json`), `Journal::check_integrity`, `Journal::optimize` (store rewritten, unused develop settings dropped, indexes rebuilt, compacted); no exit hook, settings dialog or commands yet |
+| LRC-CAT-EXPORT | Export as catalog (subset, with or without originals and previews) and import from another catalog | P1 | 🟡 | `crates/catalog/src/transfer.rs` | catalog API only: `export_catalog` (subset with albums, smart albums, stacks, remote links; originals copied into `Originals/` optionally; previews index entries optionally), `load_readonly` (another catalog read without changing it), `plan_import` (change preview: new, changed settings / metadata, unchanged, new and extended albums), `ImportPlan::ops` with `ConflictRule` keep / replace settings / replace metadata / both as one undo step; photos match by file path and virtual-copy name (a relocated original imports as a new photo); no commands or dialog yet |
 | LRC-CAT-SETTINGS | Catalog settings: backup schedule, preview size/quality, discard 1:1 previews, auto-write XMP, address lookup, face detection | P1 | 🟡 |  | some exist as app settings |
-| LRC-CAT-XMPCONFLICT | Metadata changed on disk: badge, read from / save to file | P1 | 🟡 |  | XMP read/write exists; conflict badge and UI missing |
+| LRC-CAT-XMPCONFLICT | Metadata changed on disk: badge, read from / save to file | P1 | 🟡 | `crates/catalog/src/xmp_state.rs` | XMP read/write exists; the catalog records an `XmpStamp` per photo (`Op::SetXmpStamp`) and `Photo::xmp_status` gives in sync / changed in catalog / changed on disk / conflict; the engine doesn't record stamps on read/write yet, and the badge and conflict dialog are missing |
 | LRC-IMP-SECONDCOPY | Make a second copy (backup) during import | P2 | 🟡 |  | unverified |
 | LRC-IMP-PRESETS | Import presets (saved dialog settings) | P2 | 🟡 |  | unverified |
 | LRC-LIB-KEYWORDLIST | Keyword list: synonyms, export flags, import / export keyword lists | P2 | 🟡 |  |  |

@@ -48,6 +48,7 @@ proptest = "1"
 bytemuck = { version = "1", features = ["derive"] }
 crc32fast = "1"
 siphasher = "1"
+redb = "4.3" # catalog storage v4 (crates/catalog/src/db.rs): pure Rust, MIT OR Apache-2.0
 libc = "0.2" # dev-only: process CPU time in benches
 dhat = "0.3" # opt-in heap profiling (dac-cli --features dhat-heap); never in default builds
 

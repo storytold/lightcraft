@@ -194,6 +194,7 @@ pub struct Meta {
 pub struct Version {
     pub name: String,
     pub created: String,
+    #[serde(with = "crate::settings_ref")]
     pub settings: Arc<DevelopSettings>,
     #[serde(default)]
     pub auto: bool,
@@ -202,6 +203,7 @@ pub struct Version {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HistoryStep {
     pub label: String,
+    #[serde(with = "crate::settings_ref")]
     pub settings: Arc<DevelopSettings>,
 }
 
@@ -229,6 +231,7 @@ pub struct Photo {
     pub flag: Flag,
     #[serde(default)]
     pub label: Option<ColorLabel>,
+    #[serde(with = "crate::settings_ref")]
     pub develop: Arc<DevelopSettings>,
     #[serde(default)]
     pub edited: Option<String>,
@@ -266,7 +269,7 @@ pub struct Photo {
     /// The settings import gave the photo when a user default (a raw/JPEG default preset, see
     /// the engine's import defaults) changed them from [`Photo::camera_defaults`]. They count as
     /// unedited, and Reset returns to them.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::settings_ref::opt")]
     pub import_look: Option<Arc<DevelopSettings>>,
     /// Assisted culling scores (`None` until analysed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -281,6 +284,14 @@ pub struct Photo {
     /// whether the user changed anything since (see [`crate::local`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_baseline: Option<u64>,
+    /// SHA-1 of the original file's bytes (hex), as remote services such as Immich identify
+    /// assets by it. Catalog format 4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha1: Option<String>,
+    /// The state at the last read from / write to the XMP sidecar (see [`crate::xmp_state`]).
+    /// Catalog format 4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xmp: Option<crate::xmp_state::XmpStamp>,
 }
 
 /// What assisted culling measured on a photo.
@@ -329,6 +340,8 @@ impl Photo {
             analysis: None,
             preview_only: None,
             local_baseline: None,
+            sha1: None,
+            xmp: None,
         }
     }
     /// A raw file developed from its sensor data: not a rendered image, and not a raw shown from

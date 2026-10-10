@@ -271,6 +271,7 @@ fn fs_store_roundtrip() {
     j.snapshot(&c2).unwrap();
     assert_eq!(std::fs::metadata(dir.join(LOG)).unwrap().len(), 0);
     assert!(!dir.join(format!("{SNAPSHOT}.tmp")).exists());
+    drop(j);
     let (_, c3, r) = Journal::open(Box::new(FsStore::open(&dir).unwrap())).unwrap();
     assert_eq!((r.snapshot_seq, r.replayed), (2, 0));
     assert_eq!(c3.to_snapshot(), c.to_snapshot());
@@ -295,7 +296,7 @@ fn streamed_snapshot_keeps_the_on_disk_format() {
     std::fs::create_dir_all(&dir).unwrap();
     // an old-style snapshot (written by a build before streaming) loads, and is rewritten the same
     std::fs::write(dir.join(SNAPSHOT), legacy.as_bytes()).unwrap();
-    let (mut fj, fc, r) = Journal::open(Box::new(FsStore::open(&dir).unwrap())).unwrap();
+    let (mut fj, fc, r) = Journal::open(Box::new(FsStore::open_json(&dir).unwrap())).unwrap();
     assert_eq!((fc.to_snapshot(), r.snapshot_seq), (c.to_snapshot(), j.seq()));
     fj.snapshot(&fc).unwrap();
     assert_eq!(std::fs::read(dir.join(SNAPSHOT)).unwrap(), legacy.as_bytes());
