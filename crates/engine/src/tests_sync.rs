@@ -31,8 +31,10 @@ impl Scratch {
         std::fs::create_dir_all(&dir).unwrap();
         Scratch(dir)
     }
+    /// `rel` (written with `/`) inside the scratch folder, spelled with the separators of this
+    /// OS, as the paths a scan reports are.
     fn path(&self, rel: &str) -> String {
-        self.0.join(rel).to_string_lossy().to_string()
+        rel.split('/').fold(self.0.clone(), |p, part| p.join(part)).to_string_lossy().to_string()
     }
 }
 
