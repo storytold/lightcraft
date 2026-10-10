@@ -221,5 +221,6 @@
   "; {n} gained synonyms": "；{n} 個獲得了同義詞",
   "Exported {n} keyword{}": "已匯出 {n} 個關鍵字{:.0}",
   " — Capture One won't import a list with ; , < or > in a keyword: {names}": " — Capture One 不會匯入關鍵字中含有 ; , < 或 > 的清單：{names}",
-  " — left out, as a keyword list can't hold them: {names}": " — 已省略，關鍵字清單無法容納: {names}"
+  " — left out, as a keyword list can't hold them: {names}": " — 已省略，關鍵字清單無法容納: {names}",
+  "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "已略過 {n} 張本機照片{0:.0}：相簿只能收錄圖庫中的照片（請先加入我的照片）"
 }

@@ -221,5 +221,6 @@
   "; {n} gained synonyms": "; синонимы добавлены к {n}",
   "Exported {n} keyword{}": "Экспортировано ключевых слов: {n}{:.0}",
   " — Capture One won't import a list with ; , < or > in a keyword: {names}": " — Capture One не импортирует список, где в ключевом слове есть ; , < или >: {names}",
-  " — left out, as a keyword list can't hold them: {names}": " — пропущены: список ключевых слов не может их содержать: {names}"
+  " — left out, as a keyword list can't hold them: {names}": " — пропущены: список ключевых слов не может их содержать: {names}",
+  "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Пропущено локальных фото: {n}{0:.0} — в альбомах только фото из библиотеки (сначала добавьте их в «Мои фото»)"
 }

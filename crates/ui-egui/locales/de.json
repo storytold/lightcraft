@@ -2016,5 +2016,7 @@
   "Stopped by an error (see the log)": "Durch einen Fehler angehalten (siehe Protokoll)",
   "Not saved": "Nicht gespeichert",
   "A folder is being synchronized": "Ein Ordner wird gerade synchronisiert",
-  "Wait for the import to finish": "Warten Sie, bis der Import abgeschlossen ist"
+  "Wait for the import to finish": "Warten Sie, bis der Import abgeschlossen ist",
+  "Albums hold library photos: Add to My Photos first": "Alben enthalten Bibliotheksfotos: zuerst zu „Meine Fotos“ hinzufügen",
+  "Add to My Photos First": "Zuerst zu „Meine Fotos“ hinzufügen"
 }

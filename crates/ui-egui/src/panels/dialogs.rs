@@ -1056,6 +1056,11 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     *error = Some(e);
                 }
             }
+            Ok(r) if matches!(dlg, Dialog::NewAlbum { .. }) && r.get("skipped").and_then(serde_json::Value::as_u64).is_some_and(|n| n > 0) => {
+                // albums hold library photos (issue #684): say which part of the selection stayed out
+                crate::panels::grid::toast_skipped(app, ctx, &r);
+                close = true;
+            }
             Ok(_) if keeps_open(app, &dlg) => {
                 if let Dialog::SamModel { error, .. } = &mut dlg {
                     *error = None;

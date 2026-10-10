@@ -1574,5 +1574,7 @@
   "Stopped by an error (see the log)": "Остановлено из-за ошибки (см. журнал)",
   "Not saved": "Не сохранено",
   "A folder is being synchronized": "Идёт синхронизация папки",
-  "Wait for the import to finish": "Дождитесь окончания импорта"
+  "Wait for the import to finish": "Дождитесь окончания импорта",
+  "Albums hold library photos: Add to My Photos first": "В альбомах только фото из библиотеки: сначала добавьте их в «Мои фото»",
+  "Add to My Photos First": "Сначала добавить в «Мои фото»"
 }

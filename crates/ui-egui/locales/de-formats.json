@@ -221,5 +221,6 @@
   "; {n} gained synonyms": "; mit neuen Synonymen: {n}",
   "Exported {n} keyword{}": "Stichwörter exportiert: {n}{:.0}",
   " — Capture One won't import a list with ; , < or > in a keyword: {names}": " — Capture One importiert keine Liste mit ; , < oder > in einem Stichwort: {names}",
-  " — left out, as a keyword list can't hold them: {names}": " — ausgelassen, weil eine Stichwortliste sie nicht aufnehmen kann: {names}"
+  " — left out, as a keyword list can't hold them: {names}": " — ausgelassen, weil eine Stichwortliste sie nicht aufnehmen kann: {names}",
+  "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Übersprungen: {n} lokale Fotos{0:.0} – Alben enthalten Bibliotheksfotos (zuerst zu „Meine Fotos“ hinzufügen)"
 }

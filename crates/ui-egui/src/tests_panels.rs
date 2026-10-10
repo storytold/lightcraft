@@ -1182,3 +1182,99 @@ fn the_tracklog_toast_shows_after_a_while() {
     assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.starts_with("Tagged")), "{:?}", h.app.ui.toast);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Issue #684: albums hold library photos. For a browsed (Local) photo the grid's right-click
+/// Add to Album is off, Photo ▸ Add to Album says to Add to My Photos first with its entries off,
+/// and a drop onto an album row is refused with that hint; once the photo is in My Photos all
+/// three work.
+#[test]
+fn local_photos_cannot_be_added_to_albums_until_they_join_my_photos() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let album = h.app.session.execute("album.create", &json!({"name": "Trip", "addSelected": false})).unwrap()["id"].as_u64().unwrap();
+    let album_id = lightcraft_catalog::AlbumId(album);
+    let dir = std::env::temp_dir().join(format!("lc-ui-albums-local-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = lightcraft_raster::Rgba8::from_fn(24, 16, |x, y| [(x * 9) as u8, (y * 12) as u8, 80, 255]);
+    let o = lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() };
+    std::fs::write(dir.join("a.png"), lightcraft_engine::export::encode_image(&img, &o).unwrap()).unwrap();
+    let r = h.request("engine.execute", json!({"command": "library.browse", "params": {"path": dir.to_string_lossy()}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let vis = h.app.session.visible_cloned();
+    assert_eq!(vis.len(), 1, "{vis:?}");
+    let local = vis[0];
+    assert!(h.app.session.catalog.photo(local).unwrap().local);
+    let thumb = widget(&h, &format!("thumb:{}", local.0));
+
+    // right-click: Add to Album is there but off, so hovering opens no album entries
+    let r = h.request("ui.click", json!({"x": thumb.center().x, "y": thumb.center().y, "button": "right"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert!(h.app.session.selection.contains(local));
+    let r = h.request("ui.hoverWidget", json!({"id": "button:contextAddToAlbum"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("button:contextAlbum:")), "the submenu must not open for a Local photo");
+    let r = h.request("ui.key", json!({"key": "Escape"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+
+    // Photo ▸ Add to Album: the hint item first (off), the album and New Album… off
+    let add_to_album = |app: &LightcraftApp| -> Vec<crate::menubar::MenuNode> {
+        let bar = crate::menubar::menu_bar(app);
+        let photo = &bar.iter().find(|(t, _)| t == "Photo").expect("Photo menu").1;
+        photo
+            .iter()
+            .find_map(|n| match n {
+                crate::menubar::MenuNode::Submenu { label, children } if label == "Add to Album" => Some(children.clone()),
+                _ => None,
+            })
+            .expect("Add to Album submenu")
+    };
+    let enabled_of = |nodes: &[crate::menubar::MenuNode], id: &str| -> Option<bool> {
+        nodes.iter().find_map(|n| match n {
+            crate::menubar::MenuNode::Item { id: i, enabled, .. } if i == id => Some(*enabled),
+            _ => None,
+        })
+    };
+    let nodes = add_to_album(&h.app);
+    assert!(matches!(nodes.first(), Some(crate::menubar::MenuNode::Item { id, enabled: false, .. }) if id == "photo.addToLibrary"), "{nodes:?}");
+    assert_eq!(enabled_of(&nodes, "album.addPhotos"), Some(false), "{nodes:?}");
+    assert_eq!(enabled_of(&nodes, "dialog.newAlbum"), Some(false), "{nodes:?}");
+
+    // a drop onto the album row is refused and says why
+    let row = widget(&h, &format!("source:album:{album}"));
+    let r = h.request("ui.drag", json!({"x": thumb.center().x, "y": thumb.center().y, "toX": row.center().x, "toY": row.center().y, "steps": 12}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.session.catalog.album(album_id).unwrap().photos.is_empty(), "nothing invisible was added");
+    assert!(h.app.ui.dragging_photos.is_none(), "the drag ended");
+    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.contains("Add to My Photos first"), "{toast:?}");
+
+    // in My Photos: the menu entries come on, the submenu opens, and the album takes the photo
+    h.app.run("photo.addToLibrary", json!({"ids": [local.0]})).unwrap();
+    h.step();
+    let nodes = add_to_album(&h.app);
+    assert!(!matches!(nodes.first(), Some(crate::menubar::MenuNode::Item { id, .. }) if id == "photo.addToLibrary"), "{nodes:?}");
+    assert_eq!(enabled_of(&nodes, "album.addPhotos"), Some(true), "{nodes:?}");
+    assert_eq!(enabled_of(&nodes, "dialog.newAlbum"), Some(true), "{nodes:?}");
+    let thumb = widget(&h, &format!("thumb:{}", local.0));
+    let r = h.request("ui.click", json!({"x": thumb.center().x, "y": thumb.center().y, "button": "right"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    let r = h.request("ui.hoverWidget", json!({"id": "button:contextAddToAlbum"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    let r = h.request("ui.clickWidget", json!({"id": format!("button:contextAlbum:{album}")}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert_eq!(h.app.session.catalog.album(album_id).unwrap().photos, vec![local]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -1014,12 +1014,36 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
     if !over {
         return;
     }
+    let released = ui.input(|i| i.pointer.any_released());
+    // albums hold library photos (issue #684): Local ones can't be dropped in; the row doesn't
+    // light up, and a release says why
+    let photos: Vec<lightcraft_catalog::PhotoId> = ids.iter().map(|id| lightcraft_catalog::PhotoId(*id)).collect();
+    if super::grid::local_only(app, &photos) {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
+        if released {
+            app.toast(ui.ctx(), super::grid::albums_hint());
+            app.ui.dragging_photos = None;
+        }
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     ui.painter().rect_stroke(resp.rect.shrink2(vec2(8.0, 1.0)), 4.0, egui::Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
-    if ui.input(|i| i.pointer.any_released()) {
-        let n = ids.len();
+    if released {
         match app.run("album.addPhotos", json!({"id": a.id.0, "ids": ids})) {
-            Ok(_) => app.toast(ui.ctx(), crate::i18n::tr_format!("Added {n} photo{} to “{}”", if n == 1 { "" } else { "s" }, a.name, n = n)),
+            Ok(r) => {
+                let n = r.get("added").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                let skipped = r.get("skipped").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                let mut msg = crate::i18n::tr_format!("Added {n} photo{} to “{}”", if n == 1 { "" } else { "s" }, a.name, n = n);
+                if skipped > 0 {
+                    msg.push_str(" · ");
+                    msg.push_str(&crate::i18n::tr_format!(
+                        "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)",
+                        if skipped == 1 { "" } else { "s" },
+                        n = skipped
+                    ));
+                }
+                app.toast(ui.ctx(), msg);
+            }
             Err(e) => app.toast(ui.ctx(), e),
         }
         app.ui.dragging_photos = None;
@@ -1051,8 +1075,17 @@ fn folder_menu(app: &mut LightcraftApp, resp: &egui::Response, a: &Album) {
             }
             ui.separator();
         }
-        if !a.folder && !a.is_smart() && ui.button(crate::i18n::tr("Add Selected Photos")).clicked() {
-            let _ = app.run("album.addPhotos", json!({"id": a.id.0}));
+        if !a.folder && !a.is_smart() {
+            let local_only = super::grid::local_only(app, &app.session.targets(&serde_json::Value::Null));
+            let b = ui
+                .add_enabled(!local_only, egui::Button::new(crate::i18n::tr("Add Selected Photos")))
+                .on_disabled_hover_text(super::grid::albums_hint());
+            if b.clicked() {
+                match app.run("album.addPhotos", json!({"id": a.id.0})) {
+                    Ok(r) => super::grid::toast_skipped(app, ui.ctx(), &r),
+                    Err(e) => app.toast(ui.ctx(), e),
+                }
+            }
         }
         if !a.folder && !a.is_smart() {
             let is_target = app.session.target_album == Some(a.id) || (app.session.target_album.is_none() && a.quick);

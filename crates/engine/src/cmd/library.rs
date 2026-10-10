@@ -4,7 +4,7 @@
 use lightcraft_catalog::{Album, AlbumId, ColorLabel, CopyrightStatus, Filter, Flag, GroupBy, Op, PhotoId, Sort, SortKey};
 use serde_json::{Value, json};
 
-use super::{CommandSpec, always, bad, bool_or, cmd, has_active, has_selection, ok, str_param};
+use super::{CommandSpec, always, bad, bool_or, cmd, has_active, has_library_selection, has_selection, ok, str_param};
 use crate::{LibrarySource, Result, Selection, Session};
 
 fn select_after_deletion(s: &mut Session, before: &[PhotoId]) {
@@ -147,6 +147,24 @@ fn strs(p: &Value, key: &str) -> Vec<String> {
 
 fn ids_param(p: &Value) -> Option<Vec<PhotoId>> {
     p.get("ids").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(PhotoId).collect())
+}
+
+/// The targets an album can hold and how many were browsed (Local) photos, which album views
+/// never show (issue #684): those are skipped, and reported, instead of becoming invisible members.
+fn album_targets(s: &Session, targets: Vec<PhotoId>) -> (Vec<PhotoId>, usize) {
+    let before = targets.len();
+    let kept: Vec<PhotoId> = targets.into_iter().filter(|id| s.catalog.photo(*id).is_none_or(|p| !p.local)).collect();
+    let skipped = before - kept.len();
+    (kept, skipped)
+}
+
+/// Album targets, or the error for a selection that was nothing but Local photos.
+fn album_targets_or_err(s: &Session, command: &str, targets: Vec<PhotoId>) -> Result<(Vec<PhotoId>, usize)> {
+    let (kept, skipped) = album_targets(s, targets);
+    if kept.is_empty() && skipped > 0 {
+        return Err(bad(command, super::LOCAL_ONLY));
+    }
+    Ok((kept, skipped))
 }
 
 /// Apply one op per target as a single undo step.
@@ -866,22 +884,31 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         // ---- albums
-        cmd!("album.create", "New Album", ["File"], None, "{name, parent?: folderId, folder?: bool, addSelected?: bool}", always, |s, p| {
-            let name = str_param(p, "name").unwrap_or("Untitled Album").trim().to_string();
-            if name.is_empty() {
-                return Err(bad("album.create", "empty name"));
+        cmd!(
+            "album.create",
+            "New Album",
+            ["File"],
+            None,
+            "{name, parent?: folderId, folder?: bool, addSelected?: bool} → {id, skipped} (skipped: Local photos of the selection, which albums can't hold)",
+            always,
+            |s, p| {
+                let name = str_param(p, "name").unwrap_or("Untitled Album").trim().to_string();
+                if name.is_empty() {
+                    return Err(bad("album.create", "empty name"));
+                }
+                let folder = bool_or(p, "folder", false);
+                let parent = p.get("parent").and_then(Value::as_u64).map(AlbumId);
+                let (photos, skipped) =
+                    if !folder && bool_or(p, "addSelected", false) { album_targets(s, s.targets(&Value::Null)) } else { (vec![], 0) };
+                let id = s.catalog.alloc_album_id();
+                let cover = photos.first().copied();
+                s.commit(
+                    if folder { "New Folder" } else { "New Album" },
+                    Op::AddAlbum { album: Album { id, name, parent, folder, photos, cover, smart: None, quick: false, order: None } },
+                )?;
+                Ok(json!({"id": id.0, "skipped": skipped}))
             }
-            let folder = bool_or(p, "folder", false);
-            let parent = p.get("parent").and_then(Value::as_u64).map(AlbumId);
-            let photos = if !folder && bool_or(p, "addSelected", false) { s.targets(&Value::Null) } else { vec![] };
-            let id = s.catalog.alloc_album_id();
-            let cover = photos.first().copied();
-            s.commit(
-                if folder { "New Folder" } else { "New Album" },
-                Op::AddAlbum { album: Album { id, name, parent, folder, photos, cover, smart: None, quick: false, order: None } },
-            )?;
-            Ok(json!({"id": id.0}))
-        }),
+        ),
         cmd!(
             "album.createSmart",
             "New Smart Album…",
@@ -1103,34 +1130,44 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"changed": changed}))
             }
         ),
-        cmd!("album.addPhotos", "Add to Album", ["Photo"], None, "{id: albumId, ids?: [photoIds]} (default: selection)", has_selection, |s, p| {
-            let id = album_param(p, "id", "album.addPhotos")?;
-            let targets = ids_param(p).unwrap_or_else(|| s.targets(&Value::Null));
-            let al = s.catalog.album(id).ok_or_else(|| bad("album.addPhotos", "no such album"))?;
-            if al.is_smart() || al.folder {
-                return Err(bad("album.addPhotos", "smart albums and folders can't hold photos"));
-            }
-            let mut photos = al.photos.clone();
-            let before = photos.len();
-            for t in targets {
-                if !photos.contains(&t) {
-                    photos.push(t);
+        cmd!(
+            "album.addPhotos",
+            "Add to Album",
+            ["Photo"],
+            None,
+            "{id: albumId, ids?: [photoIds]} (default: selection) → {added, skipped}; Local photos are skipped (albums hold library photos), only Local ones is an error",
+            has_library_selection,
+            |s, p| {
+                let id = album_param(p, "id", "album.addPhotos")?;
+                let targets = ids_param(p).unwrap_or_else(|| s.targets(&Value::Null));
+                let al = s.catalog.album(id).ok_or_else(|| bad("album.addPhotos", "no such album"))?;
+                if al.is_smart() || al.folder {
+                    return Err(bad("album.addPhotos", "smart albums and folders can't hold photos"));
                 }
+                let (targets, skipped) = album_targets_or_err(s, "album.addPhotos", targets)?;
+                let mut photos = al.photos.clone();
+                let before = photos.len();
+                for t in targets {
+                    if !photos.contains(&t) {
+                        photos.push(t);
+                    }
+                }
+                let added = photos.len() - before;
+                let cover = al.cover.or(photos.first().copied());
+                s.commit("Add to Album", Op::Batch { ops: vec![Op::SetAlbumPhotos { id, photos }, Op::SetAlbumCover { id, cover }] })?;
+                Ok(json!({"added": added, "skipped": skipped}))
             }
-            let added = photos.len() - before;
-            let cover = al.cover.or(photos.first().copied());
-            s.commit("Add to Album", Op::Batch { ops: vec![Op::SetAlbumPhotos { id, photos }, Op::SetAlbumCover { id, cover }] })?;
-            Ok(json!({"added": added}))
-        }),
+        ),
         cmd!(
             "album.toggleTarget",
             "Add to Target Album",
             [],
             None,
-            "{ids?} — B: adds the photos to the target album (the Quick Collection unless one is set), or removes them when they're all in it → {album, added}",
-            has_selection,
+            "{ids?} — B: adds the photos to the target album (the Quick Collection unless one is set), or removes them when they're all in it → {album, added, skipped}; Local photos are skipped",
+            has_library_selection,
             |s, p| {
-                let targets = ids_param(p).unwrap_or_else(|| s.targets(&Value::Null));
+                let targets = album_targets_or_err(s, "album.toggleTarget", ids_param(p).unwrap_or_else(|| s.targets(&Value::Null)))?;
+                let (targets, skipped) = targets;
                 let target = s.target_album.filter(|a| s.catalog.album(*a).is_some_and(|al| !al.is_smart() && !al.folder));
                 let id = match target.or_else(|| s.catalog.quick_collection()) {
                     Some(id) => id,
@@ -1154,7 +1191,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     if all_in { "Remove from Target Album" } else { "Add to Target Album" },
                     Op::Batch { ops: vec![Op::SetAlbumPhotos { id, photos }, Op::SetAlbumCover { id, cover }] },
                 )?;
-                Ok(json!({"album": id.0, "name": name, "added": !all_in, "count": s.catalog.album_count(id)}))
+                Ok(json!({"album": id.0, "name": name, "added": !all_in, "count": s.catalog.album_count(id), "skipped": skipped}))
             }
         ),
         cmd!("album.setTarget", "Set as Target Album", [], None, "{id: albumId | null} (null = the Quick Collection)", always, |s, p| {

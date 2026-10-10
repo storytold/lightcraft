@@ -801,6 +801,32 @@ pub fn drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
 
 pub use super::filterbar::label_color;
 
+/// Albums hold library photos (issue #684): true when `ids` are photos and all of them are
+/// browsed (Local) ones, which album views never show.
+pub fn local_only(app: &LightcraftApp, ids: &[PhotoId]) -> bool {
+    !ids.is_empty() && ids.iter().all(|id| app.session.catalog.photo(*id).is_some_and(|p| p.local))
+}
+
+/// Why an album action is off for Local photos.
+pub fn albums_hint() -> String {
+    crate::i18n::tr("Albums hold library photos: Add to My Photos first").to_string()
+}
+
+/// Tell the user when an album command skipped Local photos of the selection (`skipped` in its
+/// result).
+pub fn toast_skipped(app: &mut LightcraftApp, ctx: &egui::Context, r: &serde_json::Value) {
+    if let Some(n) = r.get("skipped").and_then(serde_json::Value::as_u64).filter(|n| *n > 0) {
+        app.toast(
+            ctx,
+            crate::i18n::tr_format!(
+                "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)",
+                if n == 1 { "" } else { "s" },
+                n = n
+            ),
+        );
+    }
+}
+
 /// "Set Color Label" items for the active photo, shared by context menus.
 pub fn label_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let current = app.session.active().and_then(|id| app.session.catalog.photo(id)).and_then(|p| p.label);
@@ -913,14 +939,26 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
     });
     ui.menu_button(crate::i18n::tr("Set Color Label"), |ui| label_menu(app, ui));
-    ui.menu_button(crate::i18n::tr("Add to Album"), |ui| {
-        let albums: Vec<_> = app.session.catalog.albums().filter(|a| !a.folder && !a.is_smart()).map(|a| (a.id.0, a.name.clone())).collect();
-        for (aid, name) in albums {
-            if ui.button(name).clicked() {
-                let _ = app.run("album.addPhotos", json!({"id": aid}));
+    if local_only(app, &app.session.targets(&serde_json::Value::Null)) {
+        // albums hold library photos (issue #684): nothing here to add until they join My Photos
+        let add = ui.add_enabled(false, egui::Button::new(crate::i18n::tr("Add to Album"))).on_disabled_hover_text(albums_hint());
+        register(ui.ctx(), "button:contextAddToAlbum", add.rect);
+    } else {
+        let add = ui.menu_button(crate::i18n::tr("Add to Album"), |ui| {
+            let albums: Vec<_> = app.session.catalog.albums().filter(|a| !a.folder && !a.is_smart()).map(|a| (a.id.0, a.name.clone())).collect();
+            for (aid, name) in albums {
+                let b = ui.button(name);
+                register(ui.ctx(), format!("button:contextAlbum:{aid}"), b.rect);
+                if b.clicked() {
+                    match app.run("album.addPhotos", json!({"id": aid})) {
+                        Ok(r) => toast_skipped(app, ui.ctx(), &r),
+                        Err(e) => app.toast(ui.ctx(), e),
+                    }
+                }
             }
-        }
-    });
+        });
+        register(ui.ctx(), "button:contextAddToAlbum", add.response.rect);
+    }
     // in a (non-smart) album: take the selection out of it, or make this photo its cover
     if let lightcraft_engine::LibrarySource::Album(aid) = app.session.source
         && app.session.catalog.album(aid).is_some_and(|a| !a.folder && !a.is_smart())

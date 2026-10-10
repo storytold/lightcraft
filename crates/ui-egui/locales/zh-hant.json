@@ -1861,5 +1861,7 @@
   "Stopped by an error (see the log)": "因錯誤而停止（請見記錄）",
   "Not saved": "未儲存",
   "A folder is being synchronized": "正在同步資料夾",
-  "Wait for the import to finish": "請等待匯入完成"
+  "Wait for the import to finish": "請等待匯入完成",
+  "Albums hold library photos: Add to My Photos first": "相簿只能收錄圖庫中的照片：請先加入我的照片",
+  "Add to My Photos First": "先加入我的照片"
 }

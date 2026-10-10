@@ -99,6 +99,14 @@ pub fn has_active(s: &Session) -> std::result::Result<(), String> {
 pub fn has_selection(s: &Session) -> std::result::Result<(), String> {
     if s.selection.ids.is_empty() && s.selection.active.is_none() { Err("no photos selected".into()) } else { Ok(()) }
 }
+/// Albums hold library photos: a selection of only browsed (Local) photos has nothing an album
+/// can take (issue #684; Add to My Photos first).
+pub fn has_library_selection(s: &Session) -> std::result::Result<(), String> {
+    has_selection(s)?;
+    if s.targets(&serde_json::Value::Null).iter().any(|id| s.catalog.photo(*id).is_none_or(|p| !p.local)) { Ok(()) } else { Err(LOCAL_ONLY.into()) }
+}
+/// Why an album command refused a Local-only selection.
+pub const LOCAL_ONLY: &str = "only Local photos: albums hold library photos (Add to My Photos first)";
 pub fn can_undo(s: &Session) -> std::result::Result<(), String> {
     if s.undo.is_empty() { Err("nothing to undo".into()) } else { Ok(()) }
 }
