@@ -47,11 +47,11 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | X. Cross-cutting behaviours (BEHAV) | 18 | 6 | 1 | 1 | 8/8 (100%) | 6/9 (67%) |
 | Y. Menus | 82 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
-| Lightroom Classic extras | 60 | 16 | 47 | 0 | — | 33/37 (89%) |
+| Lightroom Classic extras | 70 | 17 | 36 | 0 | — | 33/37 (89%) |
 | IMM. Immich integration | 4 | 0 | 6 | 0 | — | 4/6 (67%) |
-| **Total** | 428 | 51 | 90 | 27 | 192/200 (96%) | 157/173 (91%) |
+| **Total** | 438 | 52 | 79 | 27 | 192/200 (96%) | 157/173 (91%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.7%** of 569 in-scope rows — P0 98.0% of 200 · P1 93.9% of 173 · P2 48.2% of 195.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **81.5%** of 569 in-scope rows — P0 98.0% of 200 · P1 93.9% of 173 · P2 53.6% of 195.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -838,7 +838,7 @@ PLAN.md §2 carry the status of that survey ("unverified" where it said so) unti
 | LRC-LIB-LAYERS | Open as layers in an external editor (layered round trip) | P2 | ⬜ |  | external editor works (LR-EXP-PSD); layered round trip missing |
 | LRC-DEV-HISTOGRAM-DRAG | Drag on the histogram to adjust tone regions | P2 | ⬜ |  |  |
 | LRC-MAP-PINS | Map pins, clusters and hover previews | P2 | ✅ | `cmd:map.pins`, `crates/geo/src/cluster.rs`, `crates/ui-egui/src/map/view.rs` | grid clusters per zoom with counts, selected pins highlighted, click selects, hover shows thumbnail + count |
-| LRC-BOOK-SAVED | Saved books | P2 | 🟡 | `cmd:book.save`, `cmd:book.open` | P3.5: JSON files in the settings folder; to move to saved creations (catalog) |
+| LRC-BOOK-SAVED | Saved books | P2 | ✅ | `cmd:book.save`, `cmd:book.open`, `crates/book/src/layoutdoc.rs` | P3.5: saved as a book collection (saved creation, layout document) plus a lossless book file in the settings folder; opening a collection uses the file when present, else rebuilds the book from the layout |
 | LRC-SS-SAVED | Saved slideshows | P2 | ⬜ |  | special collection type, Phase 3 |
 | LRC-PRINT-PAGESETUP | Page setup, printer settings, print one copy | P2 | ⬜ |  | Phase 3 |
 | LRC-WEB-SAVED | Saved web galleries | P2 | ⬜ |  | special collection type, Phase 3 |

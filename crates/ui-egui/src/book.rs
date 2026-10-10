@@ -109,7 +109,17 @@ pub struct BookUi {
     pub type_target: TypeTarget,
     /// The name typed in the Saved Books box.
     pub save_name: String,
+    /// The saved creation (catalog collection) this book was saved to or opened from.
+    pub creation: Option<u64>,
+    /// Book edits to undo and redo (this session only).
+    #[serde(skip)]
+    pub undo: Vec<Book>,
+    #[serde(skip)]
+    pub redo: Vec<Book>,
 }
+
+/// Most book edits kept for undo.
+const UNDO_LIMIT: usize = 100;
 
 impl Default for BookUi {
     fn default() -> Self {
@@ -122,6 +132,9 @@ impl Default for BookUi {
             thumb: 150.0,
             type_target: TypeTarget::Cell,
             save_name: String::new(),
+            creation: None,
+            undo: Vec::new(),
+            redo: Vec::new(),
         }
     }
 }
@@ -152,10 +165,9 @@ impl Module for BookModule {
     }
 }
 
-/// Book keys over the global keymap: ⌘⇧N a new page, ⌘E the spread view, ⌘T single page,
-/// ⌘U zoomed page, ⌘R multi-page… we keep the defaults small: ⌘⇧B new page with the default
-/// template, Delete removes the current page.
-pub const BOOK_KEYS: &[ModuleKey] = &[("Cmd+Shift+B", "book.addPage", "{}")];
+/// Book keys over the global keymap: ⌘⇧B adds a page with the default template; ⌘Z / ⌘⇧Z undo
+/// and redo book edits (the book has its own history, separate from the catalog's).
+pub const BOOK_KEYS: &[ModuleKey] = &[("Cmd+Shift+B", "book.addPage", "{}"), ("Cmd+Z", "book.undo", "{}"), ("Cmd+Shift+Z", "book.redo", "{}")];
 
 // ------------------------------------------------------------------ commands
 
@@ -233,6 +245,16 @@ pub fn run(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
             Ok(json!({"page": page_json(st.current), "cell": st.cell}))
         }
         "book.export" => export(app, id, p),
+        "book.undo" | "book.redo" => {
+            let (from, to) = if id == "book.undo" { (&mut st.undo, &mut st.redo) } else { (&mut st.redo, &mut st.undo) };
+            let b = from.pop().ok_or(if id == "book.undo" { "nothing to undo in the book" } else { "nothing to redo in the book" })?;
+            to.push(std::mem::replace(&mut st.book, b));
+            if st.book.page(st.current).is_none() {
+                st.current = st.book.all_pages().first().copied().unwrap_or(PageRef::Page(0));
+            }
+            st.cell = st.cell.filter(|c| st.book.page(st.current).is_some_and(|p| *c < p.cells.len()));
+            Ok(json!({"undo": st.undo.len(), "redo": st.redo.len()}))
+        }
         "book.exportStatus" => Ok(serde_json::to_value(with_status(|s| s.clone())).unwrap_or(Value::Null)),
         "book.save" | "book.open" | "book.saved" | "book.deleteSaved" => saved(app, id, p),
         "book.autoLayout" if p.get("photos").is_none() => {
@@ -275,7 +297,15 @@ fn run_op(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
         return Err(format!("unknown command: {id}"));
     }
     let st = &mut app.ui.book;
+    let before = st.book.clone();
     let r = dac_book::ops::apply(&mut st.book, id, p).map_err(|e| e.to_string())?;
+    if st.book != before {
+        st.undo.push(before);
+        if st.undo.len() > UNDO_LIMIT {
+            st.undo.remove(0);
+        }
+        st.redo.clear();
+    }
     match id {
         "book.addPage" => {
             if let Some(n) = r.get("page").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()) {
@@ -337,6 +367,23 @@ fn saved(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
         "book.saved" => Ok(json!(saved_books())),
         "book.save" => {
             let n = name()?;
+            // the collection (saved creation) in the catalog
+            let doc = dac_book::layoutdoc::to_layout(&app.ui.book.book);
+            let document = serde_json::to_value(&doc).map_err(|e| e.to_string())?;
+            let existing = app
+                .ui
+                .book
+                .creation
+                .filter(|c| app.session.catalog.album(dac_catalog::AlbumId(*c)).is_some_and(|a| a.creation.is_some() && a.name == n));
+            let creation = match existing {
+                Some(c) => app.run("creation.update", json!({"id": c, "document": document})).map(|_| c)?,
+                None => app
+                    .run("creation.save", json!({"kind": "book", "name": n, "document": document}))?
+                    .get("id")
+                    .and_then(Value::as_u64)
+                    .ok_or("the collection was not saved")?,
+            };
+            app.ui.book.creation = Some(creation);
             let mut b = app.ui.book.book.clone();
             b.name = n.clone();
             let text = b.to_json().map_err(|e| e.to_string())?;
@@ -345,7 +392,32 @@ fn saved(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
             let tmp = dir.join(format!(".{n}.json.tmp"));
             std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, &path)).map_err(|e| format!("{}: {e}", path.display()))?;
             app.ui.book.book.name = n.clone();
-            Ok(json!({"saved": n, "path": path.to_string_lossy()}))
+            Ok(json!({"saved": n, "path": path.to_string_lossy(), "creation": creation}))
+        }
+        "book.open" if p.get("id").is_some() => {
+            // a saved creation: the lossless book file of the same name when there is one, else
+            // the book rebuilt from its layout
+            let c = p.get("id").and_then(Value::as_u64).ok_or("id must be a collection id")?;
+            let r = app.run("creation.get", json!({"id": c}))?;
+            if r.get("kind").and_then(Value::as_str) != Some("book") {
+                return Err("that collection is not a saved book".into());
+            }
+            let n = r.get("name").and_then(Value::as_str).unwrap_or("Book").to_string();
+            let file = safe_name(&n).map(|f| dir.join(format!("{f}.json")));
+            let b = match file.and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| Book::from_json(&t).ok()) {
+                Some(b) => b,
+                None => {
+                    let doc =
+                        dac_layout::Document::from_json(&r.get("document").map(Value::to_string).unwrap_or_default()).map_err(|e| e.to_string())?;
+                    dac_book::layoutdoc::from_layout(&doc, &n).map_err(|e| e.to_string())?
+                }
+            };
+            let st = &mut app.ui.book;
+            st.undo.push(std::mem::replace(&mut st.book, b));
+            st.creation = Some(c);
+            st.current = st.book.all_pages().first().copied().unwrap_or(PageRef::Page(0));
+            st.cell = None;
+            Ok(json!({"opened": n, "pages": st.book.pages.len(), "creation": c}))
         }
         "book.open" => {
             let n = name()?;
@@ -353,7 +425,8 @@ fn saved(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
             let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
             let b = Book::from_json(&text).map_err(|e| format!("{n}: {e}"))?;
             let st = &mut app.ui.book;
-            st.book = b;
+            st.undo.push(std::mem::replace(&mut st.book, b));
+            st.creation = None;
             st.current = st.book.all_pages().first().copied().unwrap_or(PageRef::Page(0));
             st.cell = None;
             Ok(json!({"opened": n, "pages": st.book.pages.len()}))
@@ -369,80 +442,9 @@ fn saved(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
 
 // ------------------------------------------------------------------ export
 
-/// Developed photos for an export, rendered before the book is laid out.
-struct Rendered {
-    images: HashMap<String, dac_raster::Rgba8>,
-    infos: HashMap<String, dac_layout::tokens::PhotoInfo>,
-}
-
-impl dac_layout::render::PhotoSource for Rendered {
-    fn image(&self, photo: &str, _long_side: usize) -> Result<dac_raster::Rgba8, String> {
-        self.images.get(photo).cloned().ok_or_else(|| "photo not available".to_string())
-    }
-    fn info(&self, photo: &str) -> dac_layout::tokens::PhotoInfo {
-        self.infos.get(photo).cloned().unwrap_or_default()
-    }
-}
-
-/// `1/250`, `0.5`, `2"` → seconds.
-fn parse_shutter(s: &str) -> Option<f64> {
-    let s = s.trim().trim_end_matches(['s', '"', ' ']);
-    match s.split_once('/') {
-        Some((a, b)) => {
-            let (a, b) = (a.trim().parse::<f64>().ok()?, b.trim().parse::<f64>().ok()?);
-            (b > 0.0).then(|| a / b)
-        }
-        None => s.parse().ok(),
-    }
-}
-
 /// Token values for a catalog photo.
 pub fn photo_info(app: &DacApp, id: &str) -> dac_layout::tokens::PhotoInfo {
-    let Some(p) = id.parse::<u64>().ok().and_then(|n| app.session.catalog.photo(PhotoId(n))) else { return Default::default() };
-    let m = &p.meta;
-    dac_layout::tokens::PhotoInfo {
-        filename: p.file_name.clone(),
-        date: p.captured.clone().unwrap_or_default(),
-        title: m.title.clone(),
-        caption: m.caption.clone(),
-        creator: m.creator.clone(),
-        copyright: m.copyright.clone(),
-        camera: m.camera.clone(),
-        lens: m.lens.clone(),
-        iso: m.iso,
-        shutter: parse_shutter(&m.shutter),
-        aperture: m.aperture.map(f64::from),
-        focal: m.focal_mm.map(f64::from),
-        rating: Some(p.rating),
-        keywords: m.keywords.clone(),
-        dimensions: Some((p.width, p.height)),
-        ..Default::default()
-    }
-}
-
-/// The long side (pixels) each photo is needed at for an export at `ppi`.
-fn needed_sizes(book: &Book, ppi: f32) -> HashMap<String, usize> {
-    let trim = book.trim();
-    let k = ppi / 72.0;
-    let mut need: HashMap<String, usize> = HashMap::new();
-    let mut want = |id: &str, pts: f32| {
-        let px = ((pts * k).ceil().max(64.0) as usize).min(8000);
-        let e = need.entry(id.to_string()).or_insert(0);
-        *e = (*e).max(px);
-    };
-    for r in book.all_pages() {
-        let Some(page) = book.page(r) else { continue };
-        for c in &page.cells {
-            if let CellContent::Photo { photo: Some(id), zoom, .. } = &c.content {
-                let rp = c.rect.to_points(trim);
-                want(id, rp.w.max(rp.h) * zoom.clamp(1.0, 10.0));
-            }
-        }
-        if let Some(id) = &book.background_of(r).photo {
-            want(id, trim.w.max(trim.h) + 2.0 * book.settings.bleed);
-        }
-    }
-    need
+    id.parse::<u64>().ok().and_then(|n| app.session.catalog.photo(PhotoId(n))).map(|p| dac_engine::creations::photo_info(p)).unwrap_or_default()
 }
 
 fn export(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
@@ -482,24 +484,12 @@ fn export(app: &mut DacApp, id: &str, p: &Value) -> Result<Value, String> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let mut jobs = Vec::new();
-        let mut infos = HashMap::new();
-        for (photo, long) in needed_sizes(&book, book.settings.resolution as f32) {
-            let Some(pid) = photo.parse::<u64>().ok().map(PhotoId).filter(|i| app.session.catalog.photo(*i).is_some()) else { continue };
-            infos.insert(photo.clone(), photo_info(app, &photo));
-            let job = app.session.export_job(pid, long, long, dac_pipeline::OutputSpace::Srgb, dac_pipeline::OutputDepth::U8)?;
-            jobs.push((photo, job));
-        }
+        let layout = dac_book::layoutdoc::to_layout(&book);
+        let (jobs, infos) = dac_engine::creations::prepare_jobs(&mut app.session, &layout, book.settings.resolution as f32)?;
         let total = book.all_pages().len();
         with_status(|s| *s = ExportStatus { running: true, done: 0, total, result: None });
         let work = move || -> Result<Vec<String>, String> {
-            let mut images = HashMap::new();
-            for (photo, job) in jobs {
-                if let Ok(r) = job.run().rendered {
-                    images.insert(photo, r.image);
-                }
-            }
-            let src = Rendered { images, infos };
+            let src = dac_engine::creations::run_jobs(jobs, infos)?;
             let mut engine = dac_text::TextEngine::with_system_fonts();
             let mut progress = |done: usize, total: usize| {
                 with_status(|s| {
@@ -1741,6 +1731,17 @@ mod tests {
         run(&mut h, "book.type", json!({"style": {"size": 20, "columns": 2}}));
         run(&mut h, "book.background", json!({"color": "#f4efe6", "graphic": "corners"}));
         run(&mut h, "book.pageNumbers", json!({"show": true}));
+        run(&mut h, "book.undo", json!({}));
+        assert!(!h.app.ui.book.book.numbers.show);
+        run(&mut h, "book.redo", json!({}));
+        assert!(h.app.ui.book.book.numbers.show);
+        let doc = dac_book::layoutdoc::to_layout(&h.app.ui.book.book);
+        let saved = run(&mut h, "creation.save", json!({"kind": "book", "name": "Test Book", "document": serde_json::to_value(&doc).unwrap()}));
+        let cid = saved["id"].as_u64().unwrap();
+        let pages = h.app.ui.book.book.pages.len();
+        run(&mut h, "book.clearLayout", json!({}));
+        let r = run(&mut h, "book.open", json!({"id": cid}));
+        assert_eq!(r["pages"].as_u64().unwrap() as usize, pages, "{r}");
         for v in BookView::ALL {
             run(&mut h, "book.view", json!({"mode": v.key()}));
             let img = h.snapshot(T);
@@ -1761,11 +1762,8 @@ mod tests {
     }
 
     #[test]
-    fn names_and_shutter() {
+    fn names() {
         assert_eq!(safe_name(" a/b:c "), Some("abc".into()));
         assert_eq!(safe_name(".."), None);
-        assert_eq!(parse_shutter("1/250"), Some(0.004));
-        assert_eq!(parse_shutter("1/0"), None);
-        assert_eq!(parse_shutter("2\""), Some(2.0));
     }
 }

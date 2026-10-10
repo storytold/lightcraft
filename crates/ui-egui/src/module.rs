@@ -759,6 +759,8 @@ pub const SHELL_COMMANDS: &[crate::menus::UiCommand] = &[
     ("book.type", "Type", None, ""),
     ("book.background", "Background", None, ""),
     ("book.pageNumbers", "Page Numbers", None, ""),
+    ("book.undo", "Undo Book Edit", None, ""),
+    ("book.redo", "Redo Book Edit", None, ""),
     ("book.view", "Book View", None, ""),
     ("book.go", "Go to Book Page", None, ""),
     ("book.select", "Select Book Cell", None, ""),

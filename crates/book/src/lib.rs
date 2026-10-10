@@ -25,6 +25,7 @@
 
 pub mod auto;
 pub mod export;
+pub mod layoutdoc;
 mod model;
 pub mod ops;
 pub mod render;
