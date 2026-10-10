@@ -123,6 +123,9 @@ fn open_as_layers_builds_one_psd_from_the_selection() {
     assert_eq!((f.header.width, f.header.height), (30, 30));
     assert_eq!(f.layer(1).unwrap().name(), "a", "first selected on top");
     assert_eq!(f.layer(0).unwrap().name(), "b");
+    let r8 = s.execute("photo.openAsLayers", &json!({"ids": [ia.0, ib.0], "bitDepth": 8})).unwrap();
+    let f8 = dac_psd::PsdFile::from_bytes(&std::fs::read(r8["path"].as_str().unwrap()).unwrap()).unwrap();
+    assert_eq!(f8.header.depth, 8, "an 8-bit preset writes 8-bit layers");
     let new = PhotoId(r["id"].as_u64().unwrap());
     assert!(s.catalog.stack_of(new).is_some());
     let _ = std::fs::remove_dir_all(&dir);

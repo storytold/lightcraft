@@ -389,7 +389,7 @@ fn decode_tiff16(bytes: &[u8]) -> std::result::Result<Rendered16, String> {
 /// A layered PSD (PSB when a side passes 30 000 px): `layers` bottom to top, each centred on a
 /// canvas as large as the largest, and the composite (layers are opaque: the topmost covering a
 /// pixel shows; uncovered pixels are transparent).
-fn layered_psd(layers: &[(String, Rendered16)], icc: Option<Vec<u8>>, xmp: Option<String>) -> std::result::Result<Vec<u8>, String> {
+fn layered_psd(layers: &[(String, Rendered16)], depth: u8, icc: Option<Vec<u8>>, xmp: Option<String>) -> std::result::Result<Vec<u8>, String> {
     let w = layers.iter().map(|(_, r)| r.width).max().unwrap_or(0);
     let h = layers.iter().map(|(_, r)| r.height).max().unwrap_or(0);
     if w == 0 || h == 0 {
@@ -398,7 +398,15 @@ fn layered_psd(layers: &[(String, Rendered16)], icc: Option<Vec<u8>>, xmp: Optio
     let canvas = (w as usize).saturating_mul(h as usize);
     let mut comp = vec![0u16; canvas.saturating_mul(4)];
     // RLE: what every reader takes (ours reads no ZIP composites)
-    let mut b = dac_psd::PsdBuilder::new(w, h).depth(16);
+    let eight = depth == 8;
+    let pixels = |v: Vec<u16>| {
+        if eight {
+            dac_psd::PixelData::Rgba8(v.into_iter().map(|x| ((u32::from(x) * 255 + 32_767) / 65_535) as u8).collect())
+        } else {
+            dac_psd::PixelData::Rgba16(v)
+        }
+    };
+    let mut b = dac_psd::PsdBuilder::new(w, h).depth(if eight { 8 } else { 16 });
     if w > PSD_MAX_SIDE || h > PSD_MAX_SIDE {
         b = b.version(dac_psd::Version::Psb);
     }
@@ -422,9 +430,9 @@ fn layered_psd(layers: &[(String, Rendered16)], icc: Option<Vec<u8>>, xmp: Optio
         }
         let left = i32::try_from(left).map_err(|_| "too large")?;
         let top = i32::try_from(top).map_err(|_| "too large")?;
-        b.push_layer(dac_psd::LayerSpec::new(name.clone(), left, top, r.width, r.height, dac_psd::PixelData::Rgba16(px)));
+        b.push_layer(dac_psd::LayerSpec::new(name.clone(), left, top, r.width, r.height, pixels(px)));
     }
-    b.composite(dac_psd::PixelData::Rgba16(comp));
+    b.composite(pixels(comp));
     b.to_bytes().map_err(|e| e.to_string())
 }
 
@@ -478,8 +486,7 @@ fn edit_in(s: &mut Session, p: &Value) -> Result<Value> {
                 Format::Psd => {
                     let r = render16(s, id, space, C)?;
                     let icc = r.icc.clone();
-                    let r = if pr.bit_depth == 8 { to8in16(r) } else { r };
-                    let bytes = layered_psd(&[(stem_of(&ph.file_name), r)], icc, xmp_of(s, id)).map_err(|e| bad(C, e))?;
+                    let bytes = layered_psd(&[(stem_of(&ph.file_name), r)], pr.bit_depth, icc, xmp_of(s, id)).map_err(|e| bad(C, e))?;
                     let dest = unique_path(&dir, &stem, "psd")?;
                     write_durable(&dest, &bytes, C)?;
                     dest
@@ -501,15 +508,6 @@ fn edit_in(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
-/// 8-bit precision kept in 16-bit samples (an 8-bit preset still writes a 16-bit PSD layer
-/// structure; the values are rounded to 8 bits so the file matches what an 8-bit copy holds).
-fn to8in16(mut r: Rendered16) -> Rendered16 {
-    for v in &mut r.rgb {
-        *v = ((u32::from(*v) * 255 + 32_767) / 65_535 * 257) as u16;
-    }
-    r
-}
-
 fn open_as_layers(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.openAsLayers";
     let pr = resolve(s, &json!({"preset": str_param(p, "preset").unwrap_or("PhotoCraft")}), C)?;
@@ -521,6 +519,12 @@ fn open_as_layers(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, format!("at most {MAX_LAYERS} photos")));
     }
     let space = space(str_param(p, "colorSpace").unwrap_or(&pr.color_space)).map_err(|e| bad(C, e))?;
+    let depth = match p.get("bitDepth").and_then(Value::as_u64) {
+        None => pr.bit_depth,
+        Some(8) => 8,
+        Some(16) => 16,
+        Some(d) => return Err(bad(C, format!("bit depth {d} (8 or 16)"))),
+    };
     // memory: the canvas is as large as the largest photo, one copy per layer
     let mut long = (0f64, 0f64);
     for id in &ids {
@@ -546,7 +550,7 @@ fn open_as_layers(s: &mut Session, p: &Value) -> Result<Value> {
         icc = icc.or_else(|| r.icc.clone());
         layers.push((name, r));
     }
-    let bytes = layered_psd(&layers, icc, xmp_of(s, on)).map_err(|e| bad(C, e))?;
+    let bytes = layered_psd(&layers, depth, icc, xmp_of(s, on)).map_err(|e| bad(C, e))?;
     drop(layers);
     let stem = str_param(p, "name").map(str::to_string).unwrap_or_else(|| format!("{}-Layers", stem_of(&ph.file_name)));
     if stem.contains(['/', '\\']) || stem.trim().is_empty() {
@@ -694,7 +698,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "Open as Layers in PhotoCraft…",
             ["Photo", "Edit In"],
             None,
-            "{ids?, preset?: \"PhotoCraft\", colorSpace?, name?, dir?, stack?: true, launch?: false} — one layered 16-bit PSD from the selected photos (2–64), each rendered with its edits as a layer named after it (the first selected on top), added to the library and stacked on the active photo → {path, id, layers, openWith, opened}",
+            "{ids?, preset?: \"PhotoCraft\", colorSpace?, bitDepth?: 8|16, name?, dir?, stack?: true, launch?: false} — one layered PSD (16-bit unless the preset or bitDepth says 8) from the selected photos (2–64), each rendered with its edits as a layer named after it (the first selected on top), added to the library and stacked on the active photo → {path, id, layers, openWith, opened}",
             has_selection,
             open_as_layers
         ),
@@ -718,7 +722,7 @@ mod tests {
     fn layered_psd_has_named_layers_and_a_composite() {
         let a = Rendered16 { width: 4, height: 2, rgb: vec![1000; 4 * 2 * 3], icc: None };
         let b = Rendered16 { width: 2, height: 2, rgb: vec![60000; 2 * 2 * 3], icc: None };
-        let bytes = layered_psd(&[("bottom".into(), a), ("top".into(), b)], None, Some("<x:xmpmeta/>".into())).unwrap();
+        let bytes = layered_psd(&[("bottom".into(), a), ("top".into(), b)], 16, None, Some("<x:xmpmeta/>".into())).unwrap();
         let f = dac_psd::PsdFile::from_bytes(&bytes).unwrap();
         assert_eq!((f.header.width, f.header.height, f.header.depth), (4, 2, 16));
         assert_eq!(f.layer(0).unwrap().name(), "bottom");

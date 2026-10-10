@@ -453,6 +453,9 @@ impl DacApp {
         if let Some(result) = model_setup::intercept(self, id, &params) {
             return result;
         }
+        if let Some(r) = edit_in::intercept(self, id, &params) {
+            return r;
+        }
         if let Some(r) = menus::run_ui_command(self, id, &params) {
             return r;
         }
@@ -925,6 +928,7 @@ impl DacApp {
         panels::faces::pump(self, ctx);
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);
+        edit_in::show(self, ctx);
         if self.fonts_ready {
             shortcuts::handle(self, ctx);
         }
