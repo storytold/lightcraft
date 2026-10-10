@@ -62,5 +62,9 @@ Archive version 1 begins with the 12 bytes `LC-LRARCH\0\x01Z`, followed by zlib-
 Recovery readers must cap decompression at 32 MiB. JSON retains source identities, photo paths,
 settings, decoded XMP, keywords, history, snapshots, collection definitions and membership.
 
-The importer uses shared Rust code on macOS, Windows and Linux. If originals move between
-computers or volumes, use LightCraft's missing-photo relinking tools to update their paths.
+The importer uses shared Rust code on macOS, Windows and Linux. When a root folder's recorded
+path isn't a folder on this computer (a catalog copied from another machine), the importer uses
+the path relative to the catalog that Lightroom records for root folders on the catalog's volume
+(`relativePathFromCatalog`), when that is a folder, and reports the remapping as a warning. Copying
+a project folder with its catalog inside it therefore keeps its originals linked. Other moved
+originals stay missing; use LightCraft's missing-photo relinking tools to update their paths.
