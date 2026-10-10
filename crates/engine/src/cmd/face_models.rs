@@ -356,7 +356,13 @@ fn download(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, "that model is already installed"));
     }
     let host = spec.host().to_string();
-    s.face_downloads.start(spec, &dir).map_err(|e| bad(C, e))?;
+    let name = known::all()
+        .into_iter()
+        .find(|m| m.id == spec.id)
+        .map(|m| m.name)
+        .or_else(|| s.face_catalog.entries.iter().find(|e| e.manifest.id == spec.id).map(|e| e.manifest.name.clone()))
+        .unwrap_or_else(|| spec.id.clone());
+    s.face_downloads.start(spec, &dir, &s.activity, &name).map_err(|e| bad(C, e))?;
     Ok(json!({"started": id, "from": host}))
 }
 

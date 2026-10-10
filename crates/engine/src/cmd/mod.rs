@@ -5,6 +5,7 @@
 //! `edit.*` (undo/redo), and queries (`catalog.query`, `photo.inspect`, `develop.get`…).
 
 pub mod actions;
+mod activity;
 mod before;
 pub(crate) mod browse;
 #[cfg(not(target_arch = "wasm32"))]
@@ -176,6 +177,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(credentials::specs());
         v.extend(actions::specs());
         v.extend(edit_in::specs());
+        v.extend(activity::specs());
         v
     })
 }

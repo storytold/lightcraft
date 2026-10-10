@@ -233,5 +233,12 @@
   "{n} keywords imported": "{n} palabras clave importadas",
   "{n} keywords removed": "{n} palabras clave eliminadas",
   "Only {} keys": "Solo teclas de {}",
-  "{} keys": "Teclas de {}"
+  "{} keys": "Teclas de {}",
+  "{done} of {total}": "{done} de {total}",
+  "{done} of {total} MB": "{done} de {total} MB",
+  "{pct} %": "{pct} %",
+  "+{n} more": "+{n} más",
+  "1 task is still running: {names}. Quitting stops it.": "1 tarea sigue en curso: {names}. Salir la detiene.",
+  "{n} tasks are still running: {names}. Quitting stops them.": "{n} tareas siguen en curso: {names}. Salir las detiene.",
+  "{what} merge cancelled": "Combinación {what} cancelada"
 }

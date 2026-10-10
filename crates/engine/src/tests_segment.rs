@@ -230,3 +230,51 @@ fn object_clicks_are_capped() {
     assert!(!s.segmenter.busy());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[cfg(feature = "sam")]
+#[test]
+fn a_running_model_download_shows_in_activity_and_cancels() {
+    use std::io::{BufRead, BufReader, Write};
+    // a local mirror that sends its files slowly, so the download is still running when it is cancelled
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}/sam3", l.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for mut c in l.incoming().flatten() {
+            let mut r = BufReader::new(c.try_clone().unwrap());
+            let mut line = String::new();
+            while r.read_line(&mut line).unwrap_or(0) > 2 {
+                line.clear();
+            }
+            let _ = c.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\nConnection: close\r\n\r\n");
+            for _ in 0..250 {
+                if c.write_all(&[b' '; 4000]).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    });
+    let dir = tmp("download-activity");
+    let mirrors = dir.with_extension("activity-mirrors.txt");
+    std::fs::write(&mirrors, format!("# test mirror\n{base}\n")).unwrap();
+    let mut s = Session::with_demo();
+    s.segmenter.dir = Some(dir.clone());
+    s.segmenter.mirrors_file = Some(mirrors.clone());
+    assert_eq!(s.execute("segment.model.download", &json!({"acknowledged": true})).unwrap()["started"], true);
+    let rows = s.activity.list();
+    assert_eq!(rows.len(), 1);
+    assert_eq!((rows[0].kind, rows[0].label.as_str(), rows[0].detail.as_str()), ("download", "Downloading model", "SAM 3"));
+    assert_eq!(rows[0].unit, crate::activity::Unit::Bytes);
+    assert!(rows[0].cancellable);
+    s.execute("activity.cancel", &json!({"id": rows[0].id})).unwrap();
+    let t = Instant::now();
+    while s.segmenter.download_status().running || !s.activity.list().is_empty() {
+        assert!(t.elapsed() < Duration::from_secs(10), "the download never stopped");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let e = s.segmenter.download_status().error.unwrap_or_default();
+    assert!(e.contains("cancelled"), "{e}");
+    assert!(!s.segmenter.installed());
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_file(&mirrors);
+}

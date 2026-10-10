@@ -1863,5 +1863,20 @@
   "Not Linked": "Non liée",
   "Sublocation": "Lieu précis",
   "Width (pixels)": "Largeur (pixels)",
-  "Height (pixels)": "Hauteur (pixels)"
+  "Height (pixels)": "Hauteur (pixels)",
+  "Show less": "Afficher moins",
+  "Quit while tasks are running?": "Quitter pendant que des tâches sont en cours ?",
+  "Exporting contact sheet": "Exportation de la planche-contact",
+  "Reading folder": "Lecture du dossier",
+  "Scanning folder": "Analyse du dossier",
+  "Building previews": "Génération des aperçus",
+  "Building smart previews": "Génération des aperçus dynamiques",
+  "Discarding smart previews": "Suppression des aperçus dynamiques",
+  "Importing Lightroom catalog": "Importation du catalogue Lightroom",
+  "Reading Lightroom catalog": "Lecture du catalogue Lightroom",
+  "Merging": "Fusion en cours",
+  "Downloading model": "Téléchargement du modèle",
+  "Finding faces": "Recherche des visages",
+  "Synchronizing folder": "Synchronisation du dossier",
+  "Looking for changes": "Recherche des modifications"
 }
