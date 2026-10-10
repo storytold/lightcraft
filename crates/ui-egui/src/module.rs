@@ -800,7 +800,7 @@ pub const SHELL_COMMANDS: &[crate::menus::UiCommand] = &[
 
 /// Is `id` a shell command, and is it enabled?
 pub fn enabled(app: &DacApp, id: &str) -> Option<bool> {
-    if let Some(e) = crate::print_ui::enabled(app, id) {
+    if let Some(e) = crate::print_ui::enabled(app, id).or_else(|| crate::creations_ui::enabled(app, id)) {
         return Some(e);
     }
     if !SHELL_COMMANDS.iter().any(|c| c.0 == id) {
@@ -817,7 +817,7 @@ pub fn enabled(app: &DacApp, id: &str) -> Option<bool> {
 
 /// Run a shell command; `None`: not one.
 pub fn run(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
-    if let Some(r) = crate::print_ui::run(app, id, p) {
+    if let Some(r) = crate::print_ui::run(app, id, p).or_else(|| crate::creations_ui::run(app, id, p)) {
         return Some(r);
     }
     if let Some(r) = crate::map::run(app, id, p) {
