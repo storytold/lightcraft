@@ -1,17 +1,21 @@
 //! The LightCraft develop pipeline (CPU reference implementation).
 //!
 //! Input: a scene-referred, linear Rec.2020 source image (already EXIF-oriented) at any resolution
-//! (full size or a proxy), plus [`DevelopSettings`]. Output: a display-encoded sRGB image at the
-//! requested size, and its histogram.
+//! (full size or a proxy), plus [`DevelopSettings`]. Output: an image encoded for the requested
+//! display/output space, its histogram, and optional deep samples.
 //!
-//! Stage order (see `docs/pipeline.md`):
+//! Stage order (process compatibility: `docs/process-versions.md`):
 //! 1. geometry — user orientation, lens corrections (distortion, CA, vignetting), perspective, crop +
 //!    straighten, flips; one resample at output resolution; then defringe
 //! 2. scene-linear — white balance, exposure, dehaze, local tone (highlights/shadows), texture,
 //!    clarity, local adjustments (masks)
 //! 3. tone map — contrast / whites / blacks filmic curve on luminance, highlight desaturation
 //! 4. colour — vibrance, saturation, colour mixer, colour grading, B&W (OkLCh)
-//! 5. display — gamut map to the output space (sRGB unless [`RenderRequest::space`] says otherwise), encode, tone curves (parametric + point), vignette, grain
+//! 5. post-crop vignette, then V2 global curves (parametric + point), Refine Saturation and imported
+//!    profile curves in fixed ProPhoto D50 primaries with sRGB encoding
+//! 6. proof/output gamut mapping, then sRGB encoding in output primaries; V1 applies its global
+//!    curves, Refine Saturation and imported-profile curves here
+//! 7. grain and external 3D LUT, then the requested output transfer encoding
 //!
 //! Spatial parameters are specified relative to the image's long edge, so a 400 px preview and a
 //! 60 MP export look alike.

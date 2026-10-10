@@ -272,8 +272,8 @@ pub fn base_detail_radius(px_per_long: f64) -> usize {
 /// 0 (no median) under V1, [`base_detail_radius`] from V2.
 pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
     match s.process.process() {
-        Process::V1 => 0,
-        Process::V2 => base_detail_radius(px_per_long),
+        Process::V1 | Process::V2 => 0,
+        Process::V3 => base_detail_radius(px_per_long),
     }
 }
 
@@ -486,9 +486,9 @@ pub const CHROMA_SIGMA: f32 = 0.004;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PlaneSigmas {
     /// Edge-aware base for highlights/shadows ([`tone_base`]: fast guided filter, [`BASE_EPS`]; from
-    /// process V2 of the [`BASE_DETAIL`] median).
+    /// process V3 of the [`BASE_DETAIL`] median).
     pub base: Option<f32>,
-    /// Median radius (px) of that base ([`tone_base_detail`]: 0 under V1).
+    /// Median radius (px) of that base ([`tone_base_detail`]: 0 under V1/V2).
     pub base_detail: usize,
     /// Clarity band (fast guided filter, [`CLARITY_EPS`]).
     pub clarity: Option<f32>,
@@ -508,7 +508,7 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, native_long: usize, q
     let tone_active =
         s.light.highlights != 0.0 || s.light.shadows != 0.0 || s.masks.iter().any(|m| m.adjust.highlights != 0.0 || m.adjust.shadows != 0.0);
     // Edge-aware base at ~1.5% of the long edge (EV² epsilon: edges of > ~0.6 EV are preserved)
-    // From V2 it is taken of the median at 0.15%: lines and texture finer than that are detail,
+    // From V3 it is taken of the median at 0.15%: lines and texture finer than that are detail,
     // not tone (#632).
     let base = tone_active.then(|| {
         let sigma = (0.015 * ppl).max(1.0);

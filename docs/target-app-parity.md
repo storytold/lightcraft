@@ -32,11 +32,15 @@ have their own documents: [raw-parity.md](raw-parity.md), [file-format-parity.md
   `.lproj` localizations; `CameraProfiles` (1,500 Adobe Standard and 395 Camera Matching model
   names); `LensProfiles` (3,635 files, 56 makers); `ModelZoo` (37 AI model names). The app was not
   launched.
-- **LightCraft side:** origin/main at `b70ae174` (2026-10-10): code counts (226 engine commands, 143
+- **Initial LightCraft survey:** origin/main at `b70ae174` (2026-10-10): code counts (226 engine commands, 143
   UI commands, 122 + 10 develop controls, 2,561 tests, ≈ 202,000 Rust lines in 24 crates + 3 apps),
   the checklist rows, raw corpus manifests, locale catalogs, CI workflows, docs.
-- **Behaviour and output** were not compared against a running Lightroom in this pass; the
-  measured ΔE figures in [raw-parity.md](raw-parity.md) come from earlier work.
+- **Behaviour and output:** the initial survey did not compare a running Lightroom. This revision
+  includes separate local native 16-bit Lightroom chart/photo measurements, described
+  [below](#local-rendering-evidence-2026-10-10). The ΔE figures in [raw-parity.md](raw-parity.md)
+  still refer to that document's earlier camera-colour work.
+- **Current checklist recount:** 555 total rows: 388 done, 58 partial, 73 missing and 36 out of
+  scope. The 519 in-scope rows yield 80.3%; estimated readiness and hours are unchanged.
 
 **Presence is not parity.** ✅ rows are set by whoever lands a feature and have not been checked
 systematically against Lightroom's behaviour; bugs keep turning up in ✅ areas (CR2 colour-filter
@@ -68,18 +72,49 @@ from the checklist sections and the deep-dive documents.
 |---|---:|---:|---:|---:|---|
 | Import and library (import, folders, albums, smart albums, keywords, metadata, search, faces) | 15% | 90% | 80% | 25–45 h | checklist A–E 83–92%; robust journal; 85k-photo libraries |
 | RAW decoding and camera coverage | 15% | 81% | 77% | 120–220 h | [raw-parity.md](raw-parity.md), measured model by model: 85% of photographers' cameras decode (use-weighted), × 0.9 for per-body bugs; CR3 variants, compressed ORF, HE NEF |
-| Colour, camera profiles, render fidelity | 10% | 65% | 35% | 80–150 h | 5 bundled profiles vs Adobe's 1,500; per-file fits median ΔE ~5 vs the camera JPEG, ~10% far off; no fidelity suite ([raw-parity.md](raw-parity.md#colour)) |
-| Global develop adjustments (light, colour, curves, grading, effects, detail) | 15% | 93% | 70% | 30–60 h | checklist F 91.7%; character tuned by eye |
+| Colour, camera profiles, render fidelity | 10% | 65% | 35% | 80–150 h | 5 bundled profiles vs Adobe's 1,500; per-file fits median ΔE ~5 vs the camera JPEG, ~10% far off; limited local Lightroom measurements, mixed saved-photo results ([evidence](#local-rendering-evidence-2026-10-10)) |
+| Global develop adjustments (light, colour, curves, grading, effects, detail) | 15% | 93% | 70% | 30–60 h | checklist F 84.4%; V2 curve-space correction measured; Refine Saturation approximate, sharpening Detail / NR Contrast no-ops and other measured detail gaps |
 | Optics, lens profiles, crop and geometry | 6% | 80% | 50% | 40–80 h | no lens database; crop / Upright complete |
 | Masking | 8% | 67% | 45% | 60–110 h | checklist K 67.4%; AI masks heuristic or SAM 3 without mirror |
 | Remove, heal, Enhance (denoise, Raw Details, Super Resolution, Lens Blur) | 7% | 45% | 30% | 70–130 h | checklist I 75%, P 0% |
-| Presets, profiles, versions, history, sync | 5% | 95% | 85% | 8–15 h | |
+| Presets, profiles, versions, history, sync | 5% | 95% | 85% | 8–15 h | numeric and continuous point-curve Amount, separate imported-profile curves / parameters; foreign tables and Lightroom-matched Amount remain gaps |
 | Export | 6% | 89% | 75% | 15–30 h | checklist S 88.9% |
 | Merge and HDR | 3% | 85% | 60% | 20–35 h | merge 88% (HDR merge 🟡: AI Denoise on merged DNGs, JPEG response, memory; gap 29), HDR 70% (no HDR display) |
 | Views, compare, zoom, culling | 5% | 90% | 70% | 15–30 h | zoom detail P0 gap |
 | Classic output modules (Map, Book, Slideshow, Print, Web, publish, tethering) | 4% | 15% | 10% | 90–150 h | Classic extras 48% counts many small keys; the modules themselves are mostly ⬜ |
 | Video | 1% | 0% | 0% | 25–45 h | catalogued only |
 | **Weighted** | 100% | **~77%** | **~61%** (61.5%) | **600–1,100 h** | |
+
+### Local rendering evidence (2026-10-10)
+
+The local suite now compares authored charts and selected saved edits against Lightroom's native
+16-bit TIFF exports through their ICC profiles. Inputs, sidecars and saved settings are guarded;
+experiments use private copies and scratch catalogs. References and measurement reports remain
+local in `plan/`. This is limited evidence, not a representative camera or saved-edit benchmark.
+
+Imported B&W is rendered. Saved Look master / RGB curves and Contrast, Highlights, Shadows and
+Clarity are retained separately from global sliders. Preset Amount can blend continuous curve
+functions without flattening the saved curve model; malformed or unsupported native settings are
+refused rather than replaced by stale CRS settings. These preservation and control fixes do not
+establish Lightroom appearance parity for every preset or Amount.
+
+V2 applies global and imported-profile curves in fixed ProPhoto primaries with sRGB encoding,
+independent of export primaries; V1 retains the legacy rendering and saved-version behavior
+([process-versions.md](process-versions.md)). On one authored affine colour chart, global-only and
+profile-only curves each improve mean ΔE00 across declared interiors from **0.15036 to 0.03421**;
+neutral output is unchanged. CPU/GPU checks and exact legacy-output gates pass. The measurement
+supports this curve-domain correction for in-gamut SDR colours, Refine Saturation 100 and profile
+Amount 1; it does not validate gamut / proof ordering, arbitrary curves, other Amount values or HDR.
+
+Five saved-photo comparisons remain mixed: three B&W results are unchanged within rounding, while
+the SDR colour case shifts **7.54237 → 7.57388** mean ΔE00 and the HDR-origin case
+**22.56467 → 22.70120**. These use a fixed stride-16 grid of native renders; the HDR-origin edit has
+unsupported extended curves and is not a validation of HDR rendering. Source colour / tone,
+missing profile-table definitions, exact Amount and imported HDR settings remain unresolved.
+Refine Saturation is approximate. Sharpening Detail and luminance-NR Contrast are stored but unused
+in rendering: controlled Lightroom exports show both matter. Conventional NR strength and
+sharpening frequency, contrast, Amount and Radius responses also have measured gaps. The readiness
+percentages and hour estimates above remain unchanged pending broader coverage.
 
 ## AI
 
@@ -240,8 +275,8 @@ variants, compressed ORF, HE NEF as previews) degrade but don't block a workflow
 **To beta:** ~14 points of readiness, **~340–600 h**: the `B` gaps in [gaps.md](gaps.md)
 (~230–430 h), plus burning down the ~92 open core-path user issues (40–80 h) and stability work
 around them. Beta needs: CR3, ORF and
-HE NEF decoding from sensor data; measured colour for the popular models and a fidelity suite with
-scores; Subject / Sky / People masks; a lens profile database for the
+HE NEF decoding from sensor data; measured colour for the popular models and broader saved-edit
+coverage in the fidelity suite; Subject / Sky / People masks; a lens profile database for the
 popular lenses; tests in CI on macOS, Windows and Linux.
 
 ## How hours are calibrated
@@ -277,6 +312,7 @@ most of its list; what remains is the data-heavy part (colour, lenses, models) i
 | Date | Checklist (all / P0 / P1 / P2) | Ready for real work | Remaining to full parity | Source |
 |---|---|---|---|---|
 | 2026-10-12 | 81.1% (unchanged) | ~61% full · ~51% mainstream · ~65% essentials | unchanged | 22 more CR3 bodies verified (raw-parity.md) |
+| 2026-10-10 (saved edits) | 80.3% / 96.5% / 94.2% / 47.2% (519 rows) | ~61% full · ~49% mainstream · ~64% essentials (unchanged) | unchanged | checklist recount with saved-edit / measured-rendering gaps retained; bounded local evidence above |
 | 2026-10-10 (RAW) | 81.1% (unchanged) | ~61% full · ~49% mainstream · ~64% essentials | unchanged | RAW measured model by model against Adobe's list; RAW decode and colour as explicit rows |
 | 2026-10-10 (final) | 81.1% (unchanged) | ~59% full (weighted sum) · ~51% mainstream · ~63% essentials | full 1,000–1,800 h · mainstream 450–840 h · essentials 160–300 h | method aligned with the standard |
 | 2026-10-10 (later) | 81.1% (unchanged) | ~46% full · ~51% mainstream · ~63% essentials | 1,000–1,800 h | full × discounts (superseded) |
@@ -309,6 +345,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 | 2026-10-12 | minor | 22 more CR3 bodies verified on one CC0 file each (raw-parity.md): use-weighted share whose camera decodes 85% → 92%, RAW decoding 77% → 83%; full 60.7% → 61.2% (~61%), mainstream depth 72.1% → 74.0% (~49% → ~51%), essentials depth 77.5% → 78.0% (~64% → ~65%) |
 | 2026-10-12 | minor | 117 Nikon and Fujifilm bodies verified (raw-parity.md): use-weighted share whose camera decodes 85% → 86%, RAW decoding 77% (unchanged); mainstream depth 72.1% → 72.4%, essentials depth 77.5% → 77.6%; headline numbers unchanged |
 | 2026-10-11 | minor | EOS R5 Mark II CR3 verified (raw-parity.md): use-weighted share whose camera decodes 84% → 85%, RAW decoding 76% → 77%; full 60.6% → 60.7%, mainstream depth 71.8% → 72.1%, essentials depth 77.4% → 77.5%; the rounded numbers (~61%, ~49%, ~64%) are unchanged |
+| 2026-10-10 | minor | Added bounded native 16-bit chart/photo evidence, V2 fixed-domain curves and V1 preservation, remaining profile / Refine / detail gaps; checklist 80.3% of 519 and F 84.4%; readiness and hour estimates unchanged |
 | 2026-10-10 | minor | RAW measured model by model (raw-parity.md): RAW decoding (76%) and colour (35%) are explicit rows of the full sum (59% → 61%); mainstream uses the use-weighted 84% plus a ×0.85 colour discount (51% → 49%); essentials uses 84% × colour 0.75 (63% → 64%); beta ~14 points |
 | 2026-10-10 | minor | Full number restored to an additive weighted sum over the dimensions (~59%; method aligned with the standard, no new evidence); hours to ~95% for each of the three audiences; beta distance ~16 points |
 | 2026-10-10 | minor | Added mainstream practitioner (~51%) and essentials user (~63%) numbers; full ready re-derived from written weights × discounts (55% → 46%); user-issue evidence; beta hours 340–600 |

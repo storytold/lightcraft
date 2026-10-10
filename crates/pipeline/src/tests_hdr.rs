@@ -40,6 +40,19 @@ fn hdr_render_keeps_highlights_up_to_the_peak() {
     // a smaller headroom limit caps lower
     let v1 = deep(&src, &hdr_on(1.0), OutputDepth::F32Hdr);
     assert!(v1.iter().all(|x| *x <= 2.0 + 1e-4));
+    // Both V2 curve stages keep their slope-one extension instead of decoding through a
+    // clamping output TRC. The fixed-space round trip must not flatten HDR at SDR white.
+    let mut curved = hdr_on(3.0);
+    curved.curve.master = vec![lightcraft_geom::Point::new(0.0, 0.03), lightcraft_geom::Point::new(1.0, 0.93)].into();
+    curved.profile.id = lightcraft_develop::IMPORTED_LOOK_ID.into();
+    curved.profile.imported = Some(lightcraft_develop::ImportedLook {
+        master: vec![lightcraft_geom::Point::new(0.0, 0.02), lightcraft_geom::Point::new(1.0, 0.95)].into(),
+        ..Default::default()
+    });
+    let with_curves = deep(&src, &curved, OutputDepth::F32Hdr);
+    assert!(with_curves.iter().all(|x| x.is_finite() && (0.0..=8.0 + 1e-4).contains(x)));
+    assert!(with_curves.iter().copied().fold(0.0f32, f32::max) > 1.5);
+    assert_ne!(with_curves, v);
 }
 
 #[test]

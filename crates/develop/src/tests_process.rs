@@ -67,6 +67,9 @@ fn new_settings_get_the_latest_process() {
     assert_eq!(DevelopSettings::for_raw(5200.0, 4.0).process, ProcessVersion::LATEST);
     assert_eq!(ProcessVersion::LATEST, Process::LATEST.version());
     assert_eq!(ProcessVersion::V1, ProcessVersion(1));
+    assert_eq!(ProcessVersion::V2, ProcessVersion(2));
+    assert_eq!(ProcessVersion::LATEST, ProcessVersion::V2);
+    assert!(ProcessVersion::V1.is_outdated());
     // the processes are listed oldest first, the latest last, each with its own number
     let versions: Vec<u32> = Process::ALL.iter().map(|p| p.version().0).collect();
     assert!(versions.windows(2).all(|w| w[0] < w[1]), "{versions:?}");
@@ -162,7 +165,7 @@ fn the_process_is_not_an_edit_nor_part_of_copied_settings() {
     assert_eq!(target.merged(&json!({"process": LATEST_PLUS_ONE})).unwrap().process, ProcessVersion(LATEST_PLUS_ONE));
 }
 
-/// A process other than the latest: a newer LightCraft's number (no older one than V1 exists).
+/// A process newer than the latest: preserved without assuming a particular current number.
 const LATEST_PLUS_ONE: u32 = ProcessVersion::LATEST.0 + 1;
 
 #[test]

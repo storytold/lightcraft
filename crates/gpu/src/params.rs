@@ -3,7 +3,7 @@
 
 use lightcraft_develop::VignetteStyle;
 use lightcraft_pipeline::colorops::POINT_WORDS;
-use lightcraft_pipeline::finish::{FinishParams, MASK_TERMS, srgb_lut};
+use lightcraft_pipeline::finish::{CURVE_ENCODED_LIMIT, FinishParams, MASK_TERMS, srgb_lut};
 
 /// Entries per tone-curve table (`lightcraft_pipeline::finish` builds them at this size).
 pub const CURVE_N: u32 = 1024;
@@ -80,6 +80,10 @@ const FIELDS: &[(&str, usize)] = &[
     ("TONE_SATURATION", 3),
     ("PROFILE_CURVE_OFF", 1),
     ("PROFILE_CURVES", 1),
+    ("CURVE_WORKING", 1),
+    ("CURVE_IN_M", 9),
+    ("CURVE_OUT_M", 9),
+    ("CURVE_LIMIT", 1),
 ];
 
 /// `(name, index)` of every field (for the WGSL constants).
@@ -181,6 +185,12 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.u("PROFILE_CURVE_OFF", profile_curve_off as u32);
     p.b("PROFILE_CURVES", fp.profile_curves.is_some());
     p.f("REFINE_SAT", fp.refine_sat);
+    if let Some(space) = fp.curve_space {
+        p.b("CURVE_WORKING", true);
+        p.fs("CURVE_IN_M", space.to_curve.as_flattened());
+        p.fs("CURVE_OUT_M", space.from_curve.as_flattened());
+        p.f("CURVE_LIMIT", CURVE_ENCODED_LIMIT);
+    }
     p.f("GAIN", fp.gain);
     p.f("EV", fp.ev);
     p.f("AIR", fp.air);

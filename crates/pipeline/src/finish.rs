@@ -2,7 +2,7 @@
 
 use lightcraft_color::luminance_2020;
 use lightcraft_color::spline::{Lut1, MonotoneCurve};
-use lightcraft_color::transfer::linear_to_srgb;
+use lightcraft_color::transfer::{linear_to_srgb, srgb_to_linear};
 use lightcraft_develop::{DevelopSettings, LocalAdjustments, POINT_CURVE_LUT_SIZE, PointCurve, Process, ToneCurve, VignetteStyle};
 use lightcraft_geom::Point;
 use lightcraft_raster::Rgba8;
@@ -190,6 +190,18 @@ pub fn mask_terms(j: &LocalAdjustments) -> [f32; MASK_TERMS] {
     ]
 }
 
+/// Fixed curve primaries for Process V2. The transfer function is sRGB, independently of
+/// ProPhoto's export transfer function. Absent for V1 and when both curve stages are identity.
+#[derive(Clone, Copy, Debug)]
+pub struct CurveSpace {
+    pub to_curve: [[f32; 3]; 3],
+    pub from_curve: [[f32; 3]; 3],
+}
+
+/// Numerical guard for V2 curve transfer decoding only: ±1e15 encoded decodes below 1e36,
+/// leaving f32 matrix headroom. It is independent of SDR/HDR peak; output mapping owns clipping.
+pub const CURVE_ENCODED_LIMIT: f32 = 1e15;
+
 /// Everything the per-pixel stage computes once per render: the CPU loop below and the GPU kernel
 /// (`lightcraft-gpu`) both read their parameters from here, so the two cannot drift apart.
 pub struct FinishParams {
@@ -205,6 +217,8 @@ pub struct FinishParams {
     /// Imported profile master/channel curves and Amount, after global curves/refinement and
     /// before grain. Same sRGB encoding domain as the global curves, independent of their bypass.
     pub profile_curves: Option<[Lut1; 3]>,
+    /// V2 curves run in these fixed primaries before proof/output mapping.
+    pub curve_space: Option<CurveSpace>,
     /// Refine Saturation as 0..1 (1 = the curves' own saturation).
     pub refine_sat: f32,
     pub vig: Option<Vig>,
@@ -270,6 +284,12 @@ impl FinishParams {
         });
         let calibration = s.section_enabled("calibration");
         let peak = s.hdr.peak();
+        let curves = curve_luts(&s.curve, crate::profiles::curve_fades(s));
+        let profile_curves = profile_curve_luts(s);
+        let curve_space = (s.process.process() == Process::V2 && (curves.is_some() || profile_curves.is_some())).then(|| CurveSpace {
+            to_curve: lightcraft_color::REC2020.to_space(&lightcraft_color::PROPHOTO).to_f32(),
+            from_curve: lightcraft_color::PROPHOTO.to_space(&lightcraft_color::REC2020).to_f32(),
+        });
         FinishParams {
             peak,
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
@@ -277,8 +297,9 @@ impl FinishParams {
             tone: base_tone(s, info, peak),
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
             ops: ColorOps::new(s),
-            curves: curve_luts(&s.curve, crate::profiles::curve_fades(s)),
-            profile_curves: profile_curve_luts(s),
+            curves,
+            profile_curves,
+            curve_space,
             refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
             vig: if effects { vignette(s) } else { None },
             to_out: space.from_working(),
@@ -327,8 +348,8 @@ impl FinishParams {
 pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     let l = &s.light;
     match s.process.process() {
-        // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
-        Process::V1 | Process::V2 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+        // All processes share the base tone map; V3 changes the spatial base.
+        Process::V1 | Process::V2 | Process::V3 => match info.camera_tone.as_ref().filter(|_| info.raw) {
             Some(curve) => ToneMap::camera_hdr(curve, l.contrast, l.whites, l.blacks, peak),
             None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
@@ -635,6 +656,12 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 }
             }
 
+            // V2 only: curves see fixed primaries before proof/output gamut mapping. Identity
+            // curves skip even this matrix round trip, preserving the no-curve path exactly.
+            if let Some(space) = fp.curve_space {
+                d = working_curves(d, fp, space, srgb, exact);
+            }
+
             // --- gamut map to the output space (desaturate towards luminance until in range);
             // soft proofing maps into the proof space first and shows that in the output space
             let mut warn = None;
@@ -679,24 +706,27 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             } else {
                 r.map(|v| encode_srgb(srgb, v))
             };
-            if let Some(l) = curves {
-                let e0 = e;
-                e = if hdr {
-                    // above SDR white the curves continue with slope 1 from their end point
-                    std::array::from_fn(|k| if e[k] > 1.0 { l[k].eval(1.0) + (e[k] - 1.0) } else { l[k].eval(e[k]) })
-                } else {
-                    [l[0].eval(e[0]), l[1].eval(e[1]), l[2].eval(e[2])]
-                };
-                if fp.refine_sat < 1.0 {
-                    e = refine_saturation(e0, e, fp.refine_sat);
+            // V1 retains its original target-primary arithmetic and ordering.
+            if fp.curve_space.is_none() {
+                if let Some(l) = curves {
+                    let e0 = e;
+                    e = if hdr {
+                        // above SDR white the curves continue with slope 1 from their end point
+                        std::array::from_fn(|k| if e[k] > 1.0 { l[k].eval(1.0) + (e[k] - 1.0) } else { l[k].eval(e[k]) })
+                    } else {
+                        [l[0].eval(e[0]), l[1].eval(e[1]), l[2].eval(e[2])]
+                    };
+                    if fp.refine_sat < 1.0 {
+                        e = refine_saturation(e0, e, fp.refine_sat);
+                    }
                 }
-            }
-            if let Some(l) = &fp.profile_curves {
-                e = if hdr {
-                    std::array::from_fn(|k| if e[k] > 1.0 { l[k].eval(1.0) + (e[k] - 1.0) } else { l[k].eval(e[k]) })
-                } else {
-                    [l[0].eval(e[0]), l[1].eval(e[1]), l[2].eval(e[2])]
-                };
+                if let Some(l) = &fp.profile_curves {
+                    e = if hdr {
+                        std::array::from_fn(|k| if e[k] > 1.0 { l[k].eval(1.0) + (e[k] - 1.0) } else { l[k].eval(e[k]) })
+                    } else {
+                        [l[0].eval(e[0]), l[1].eval(e[1]), l[2].eval(e[2])]
+                    };
+                }
             }
             if let Some((amt, cell, rough, seed)) = *grain {
                 let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
@@ -728,6 +758,37 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
         }
     });
     out
+}
+
+/// Apply V2 global curves, their saturation refinement, then imported-profile curves in
+/// fixed ProPhoto D50 primaries. Signed and above-peak outputs survive until output gamut mapping;
+/// only extreme finite encoded values are bounded to avoid overflow in decoding/matrix arithmetic.
+/// HDR retains the slope-one extension above encoded SDR white through both LUT stages.
+fn working_curves(d: [f32; 3], fp: &FinishParams, space: CurveSpace, srgb: &[f32; SRGB_LUT_N + 1], exact: bool) -> [f32; 3] {
+    let hdr = fp.peak > 1.0;
+    let mut e = mul3(&space.to_curve, d).map(|v| {
+        if hdr && v > 1.0 {
+            linear_to_srgb(v)
+        } else if exact {
+            linear_to_srgb(v.clamp(0.0, 1.0))
+        } else {
+            encode_srgb(srgb, v)
+        }
+    });
+    let bound = |v: f32| v.clamp(-CURVE_ENCODED_LIMIT, CURVE_ENCODED_LIMIT);
+    let apply =
+        |l: &[Lut1; 3], e: [f32; 3]| std::array::from_fn(|k| bound(if hdr && e[k] > 1.0 { l[k].eval(1.0) + (e[k] - 1.0) } else { l[k].eval(e[k]) }));
+    if let Some(l) = &fp.curves {
+        let before = e;
+        e = apply(l, e);
+        if fp.refine_sat < 1.0 {
+            e = refine_saturation(before, e, fp.refine_sat);
+        }
+    }
+    if let Some(l) = &fp.profile_curves {
+        e = apply(l, e);
+    }
+    mul3(&space.from_curve, e.map(|v| srgb_to_linear(bound(v))))
 }
 
 /// A colour needing more desaturation than this (scale < `GAMUT_WARN`) to fit is out of gamut for
@@ -946,7 +1007,8 @@ mod tests {
                 assert_eq!(lut[1].v[i], lut[2].v[i]);
             }
         }
-        // Verify the actual finish ordering after a nonidentity global curve and saturation
+        s.process = lightcraft_develop::ProcessVersion::V1;
+        // Verify the V1 finish ordering after a nonidentity global curve and saturation
         // refinement, not merely the construction of the independent profile tables.
         s.set_section_enabled("light", true);
         s.set_section_enabled("curve", true);

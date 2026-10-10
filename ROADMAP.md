@@ -30,7 +30,7 @@ Each audience with its own hours (Opus 5.5 agent wall-clock hours to ~95%):
 
 The gap between breadth and readiness is quality and coverage, not missing buttons: camera colour is
 estimated rather than measured, CR3 decodes on 26 verified Canon bodies (rarer CRX variants still open as previews), compressed ORF and HE NEF
-open as previews, rendering is tuned by eye, AI masks are heuristics, there is no lens database, and
+open as previews, measured rendering coverage is limited, AI masks are heuristics, there is no lens database, and
 tests run in CI on FreeBSD only. **Why alpha:** core workflows run end to end, but readiness is below
 the ~75% beta bar (it is above the ~40% alpha bar) and Lightroom's main inputs, raw files, still have blocking gaps (compressed ORF and HE NEF open as previews; Canon,
 ~30% of raw users, decodes CR3 on 26 verified bodies). It passes the alpha gate: all six core workflows
@@ -76,6 +76,16 @@ Hours are calibrated on this repo's PR history; see
 
 Weights and evidence: [target-app-parity.md](docs/target-app-parity.md#features).
 
+Local native 16-bit Lightroom comparisons now cover authored charts and selected saved edits.
+Imported B&W, continuous preset curves and separate saved-profile curves / parameters are supported.
+V2 fixes global and imported-profile curves to ProPhoto primaries with sRGB encoding; existing V1
+edits retain their rendering. The controlled colour-chart result improves, but saved-photo results
+remain mixed. Refine Saturation is approximate; sharpening Detail and luminance-NR Contrast are
+stored but do not affect rendering despite measured Lightroom responses. Profile tables, exact
+Amount, source colour / tone and imported HDR extended curves remain gaps. See the
+[bounded evidence](docs/target-app-parity.md#local-rendering-evidence-2026-10-10); the readiness and
+hour estimates above have not been recalculated from these measurements.
+
 ## Languages
 
 Measured from `crates/ui-egui/locales` (share of 2,304 catalog messages translated); none is `full`
@@ -104,7 +114,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 1. Camera colour of our own: measured calibration for the popular models (50–90 h)
 2. CR3 for every Canon body (25–45 h)
-3. Render-fidelity suite against Lightroom, then tuning (30–60 h)
+3. Expand the limited Lightroom render-fidelity suite across saved edits, then tune (30–60 h)
 4. ~~Full-resolution zoom~~ (done 2026-10-12)
 5. AI masks: Subject / Sky / People (40–70 h + model decision)
 6. Compressed ORF and HE NEF (28–55 h)
@@ -138,6 +148,10 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
   preview): the CRX QP map's first-symbol literal and limited-length escape; four CC0 R5 Mark II files
   pinned, the QP maps of 33,665 private C-RAW files decode exactly ([cr3.md](docs/cr3.md)). 235 models
   verified; RAW decoding 76% → 77%; headline numbers unchanged.
+- 2026-10-10 (saved edits): native 16-bit chart/photo measurements, saved-edit preservation guards,
+  separate imported-profile rendering and continuous preset curves; V2 corrects the curve working
+  space while preserving V1. Broad fidelity remains incomplete, including measured NR / sharpening
+  gaps. Checklist recount: 80.3% of 519 in-scope rows; readiness and hour estimates unchanged.
 - **2026-10-10 (UI docking):** Library, Tools, and Presets panels can be regrouped, split, floated within the app window, closed, and reopened. Tools keeps the current Edit/Crop/Masking mode; the photo view and filmstrip stay together. Panel moves and reset are available as UI commands, and saved UI preferences retain arrangements. Widget state styling uses the shared `craft-ui` theme helper, retaining the dark palette, typography, spacing and per-state borders. No readiness percentage change.
 - 2026-10-10 (RAW): RAW measured model by model against Adobe's 1,446-model list (234 verified, 943
   unverified, 233 preview-only, 36 unsupported; ~84% of photographers' cameras decode, ~40% on a
@@ -198,6 +212,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 | 2026-10-12 | minor | 22 more CR3 bodies verified, EOS R6 Mark III white balance: RAW decoding 77% → 83%, RAW ~56% → ~60%; mainstream 49% → 51%, essentials 64% → 65%; full unchanged at ~61% |
 | 2026-10-12 | minor | 117 Nikon and Fujifilm bodies verified (354 models, 24%); headline numbers unchanged |
 | 2026-10-11 | minor | EOS R5 Mark II CR3 verified: CR3 on four verified bodies, RAW decoding 76% → 77%; headline numbers unchanged |
+| 2026-10-10 | minor | Restored saved-edit and measured-rendering evidence after the progress-doc restructure; V2 curves / V1 preservation, remaining detail and profile gaps; checklist 80.3% of 519, readiness and hours unchanged |
 | 2026-10-10 | minor | RAW measured model by model; RAW decode and colour as explicit rows: full 59% → 61%, mainstream 51% → 49%, essentials 63% → 64%; beta ~14 points |
 | 2026-10-10 | minor | Full ready restored to the additive weighted sum (~59%; method aligned with the standard, no new evidence); hours per audience; beta ~16 points away |
 | 2026-10-10 | minor | Mainstream practitioner and essentials user numbers; full ready 55% → 46% (method written down); beta 340–600 h |

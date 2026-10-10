@@ -391,7 +391,8 @@ fn refine_saturation_tames_a_contrast_curve() {
     let src = Rgb32f::filled(16, 16, [0.12, 0.05, 0.03]);
     let req = RenderRequest::fit(16, 16);
     let sat = |p: [u8; 4]| p[0] as i32 - p[2] as i32;
-    let mut s = DevelopSettings::default();
+    // V1 refinement preserves encoded output luma; V2 preserves the fixed curve-domain luma.
+    let mut s = DevelopSettings { process: lightcraft_develop::ProcessVersion::V1, ..Default::default() };
     let flat = render(&src, &info, &s, &req).image.data[0];
     s.curve.master = vec![
         lightcraft_geom::Point::new(0.0, 0.0),
@@ -493,6 +494,17 @@ fn display_space_renders_like_the_matching_output_space() {
     assert!(on_srgb > 0 && on_wide < on_srgb, "{on_srgb} {on_wide}");
     let plain = blue(&render(&src, &info, &s, &req(OutputSpace::Srgb, None, pro)).image);
     assert_eq!(plain, on_srgb, "an sRGB display warns like no display profile");
+    // Active V2 curves precede both proof and custom-display mapping. V1 still follows each
+    // display's target-primary path; a standard display must agree with that output space.
+    s.curve.master = vec![lightcraft_geom::Point::new(0.0, 0.04), lightcraft_geom::Point::new(1.0, 0.96)].into();
+    for process in lightcraft_develop::Process::ALL {
+        s.process = process.version();
+        for space in [OutputSpace::Srgb, OutputSpace::DisplayP3] {
+            let want = render(&src, &info, &s, &req(space, None, pro)).image;
+            let got = render(&src, &info, &s, &req(OutputSpace::Srgb, Some(DisplaySpace::of(space, 9).unwrap()), pro)).image;
+            assert!(max_diff(&got, &want) <= 1, "{process:?} {space:?}: {}", max_diff(&got, &want));
+        }
+    }
 }
 
 /// Proofing against an output-device table: the table's colours are what the render shows, and its
@@ -744,6 +756,13 @@ fn stored_process_numbers_render_with_a_known_process() {
     for (id, v) in [("light.exposure", 0.4), ("light.contrast", 30.0), ("light.highlights", -60.0), ("light.whites", 15.0), ("light.blacks", -20.0)] {
         controls::set(&mut edited, id, v);
     }
+    let mut curved = edited.clone();
+    curved.curve.master = vec![lightcraft_geom::Point::new(0.0, 0.08), lightcraft_geom::Point::new(1.0, 0.92)].into();
+    curved.profile.id = lightcraft_develop::IMPORTED_LOOK_ID.into();
+    curved.profile.imported = Some(lightcraft_develop::ImportedLook {
+        blue: vec![lightcraft_geom::Point::new(0.0, 0.03), lightcraft_geom::Point::new(1.0, 0.9)].into(),
+        ..Default::default()
+    });
     let legacy = |s: &DevelopSettings| {
         let mut v = s.to_json();
         v.as_object_mut().unwrap().remove("process");
@@ -752,7 +771,7 @@ fn stored_process_numbers_render_with_a_known_process() {
     let with = |s: &DevelopSettings, p: ProcessVersion| DevelopSettings { process: p, ..s.clone() };
     let deep = RenderRequest { depth: crate::OutputDepth::U16, ..RenderRequest::fit(96, 96) };
     for info in &infos {
-        for s in [DevelopSettings::default(), edited.clone()] {
+        for s in [DevelopSettings::default(), edited.clone(), curved.clone()] {
             for req in [RenderRequest::fit(96, 96), deep] {
                 let out = |s: &DevelopSettings| {
                     let r = render(&src, info, s, &req);
@@ -762,6 +781,9 @@ fn stored_process_numbers_render_with_a_known_process() {
                 assert_eq!(legacy(&s).process, ProcessVersion::V1);
                 assert!(out(&legacy(&s)) == v1, "saved before process versions: rendered as V1");
                 let latest = out(&with(&s, Process::LATEST.version()));
+                if s.curve.master.is_identity() && s.profile.imported.is_none() {
+                    assert!(latest == v1, "V2 must not add a matrix/TRC round trip without active curves");
+                }
                 assert!(out(&with(&s, ProcessVersion(Process::LATEST.version().0 + 7))) == latest, "newer than this build: as the latest");
             }
         }
@@ -789,5 +811,79 @@ fn sliver_crops_render_quickly_with_wide_stages_on() {
         let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(280, 180));
         assert!(t.elapsed().as_secs_f64() < 20.0, "{rect:?}: {:?}", t.elapsed());
         assert!(r.image.width >= 1 && r.image.height >= 1, "{rect:?}");
+    }
+}
+
+/// Compare in a common linear space with colours inside every destination gamut. Target gamut
+/// clipping can legitimately differ; the curve operation itself must not depend on export primaries.
+#[test]
+fn v2_curves_are_output_independent_and_keep_global_refine_profile_order() {
+    use crate::{DeepSamples, OutputDepth, OutputSpace};
+    use lightcraft_color::transfer::{linear_to_srgb, srgb_to_linear};
+    use lightcraft_develop::{ImportedLook, ProcessVersion};
+    use lightcraft_geom::Point;
+    let src = Rgb32f::from_fn(12, 8, |x, y| [0.1 + x as f32 * 0.006, 0.13 + y as f32 * 0.004, 0.11 + x as f32 * 0.002]);
+    let info = SourceInfo::default();
+    let render_linear = |s: &DevelopSettings, space| {
+        let req = RenderRequest { space, depth: OutputDepth::F32Linear, ..RenderRequest::fit(12, 8) };
+        let DeepSamples::F32(v) = render(&src, &info, s, &req).deep.unwrap().samples else { panic!("float output") };
+        v
+    };
+    let neutral = DevelopSettings { process: ProcessVersion::V2, ..Default::default() };
+    let pre_curve = render_linear(&neutral, OutputSpace::ProPhoto);
+    let mut global = neutral.clone();
+    global.curve.master = vec![Point::new(0.0, 0.06), Point::new(1.0, 0.91)].into();
+    global.curve.red = vec![Point::new(0.0, 0.02), Point::new(1.0, 0.96)].into();
+    global.curve.refine_saturation = 25.0;
+    let mut profile = neutral.clone();
+    profile.profile.id = lightcraft_develop::IMPORTED_LOOK_ID.into();
+    profile.profile.imported = Some(ImportedLook {
+        master: vec![Point::new(0.0, 0.08), Point::new(1.0, 0.94)].into(),
+        blue: vec![Point::new(0.0, 0.03), Point::new(1.0, 0.93)].into(),
+        ..Default::default()
+    });
+    let mut both = global.clone();
+    both.profile = profile.profile.clone();
+    for settings in [&global, &profile, &both] {
+        let want = render_linear(settings, OutputSpace::ProPhoto);
+        let back = OutputSpace::ProPhoto.rgb_space().to_space(&lightcraft_color::REC2020);
+        let want: Vec<_> = want.as_chunks::<3>().0.iter().map(|p| back.apply_f32(*p)).collect();
+        for space in OutputSpace::ALL {
+            let actual = render_linear(settings, space);
+            assert!(actual.iter().all(|v| (0.0..1.0).contains(v)), "fixture must stay in gamut: {space:?}");
+            let back = space.rgb_space().to_space(&lightcraft_color::REC2020);
+            for (pixel, expected) in actual.as_chunks::<3>().0.iter().zip(&want) {
+                let common = back.apply_f32(*pixel);
+                assert!(common.iter().zip(expected).all(|(a, b)| (a - b).abs() < 2e-6), "{space:?}: {common:?} != {expected:?}");
+            }
+        }
+    }
+    // An independent per-pixel calculation in the fixed primaries verifies the two LUT stages
+    // straddle only global Refine Saturation, whose existing encoded weights remain unchanged.
+    let actual = render_linear(&both, OutputSpace::ProPhoto);
+    let master = both.curve.master.render_lut();
+    let red = both.curve.red.render_lut();
+    let look = both.profile.imported.as_ref().unwrap();
+    let pm = look.master.render_lut();
+    let pb = look.blue.render_lut();
+    for (before, actual) in pre_curve.as_chunks::<3>().0.iter().zip(actual.as_chunks::<3>().0) {
+        let encoded = before.map(linear_to_srgb);
+        let global = [red.eval(master.eval(encoded[0])), master.eval(encoded[1]), master.eval(encoded[2])];
+        let refined = crate::finish::refine_saturation(encoded, global, 0.25);
+        let expected = [pm.eval(refined[0]), pm.eval(refined[1]), pb.eval(pm.eval(refined[2]))].map(srgb_to_linear);
+        assert!(actual.iter().zip(expected).all(|(a, b)| (a - b).abs() < 3e-6), "{actual:?} != {expected:?}");
+    }
+    // Bypass eliminates only global curves; the independent profile stays in the same domain.
+    both.set_section_enabled("curve", false);
+    assert_eq!(render_linear(&both, OutputSpace::ProPhoto), render_linear(&profile, OutputSpace::ProPhoto));
+    both.profile.amount = 0.0;
+    assert_eq!(render_linear(&both, OutputSpace::ProPhoto), pre_curve);
+    // Legacy sparse endpoints may be finite but enormous. The new decode step must keep its
+    // numerical guard independent of the output gamut rather than overflow before mapping.
+    let mut extreme = neutral;
+    extreme.curve.master = lightcraft_develop::PointCurve::try_from_points(vec![Point::new(0.0, -1e30), Point::new(1.0, 1e30)]).unwrap();
+    extreme.curve.refine_saturation = 0.0;
+    for space in OutputSpace::ALL {
+        assert!(render_linear(&extreme, space).iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
     }
 }

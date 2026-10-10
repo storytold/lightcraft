@@ -101,49 +101,53 @@ fn function_curves_profiles_bypass_and_cached_gpu_match_cpu() {
     let request = RenderRequest::fit(320, 240);
     let cache = StageCache::default();
     let mut settings = DevelopSettings::default();
-    for (amount, profile, bypass) in [
-        (0.25, "lc.color", false),
-        (0.5, "lc.color", false),
-        (0.75, "lc.color", false),
-        (1.5, "lc.muted.matte-soft", false),
-        (0.5, "lc.film.faded-slide", false),
-        (0.5, "lc.film.faded-slide", true),
-        (0.5, "lc.film.faded-slide", false),
-        (0.0, lightcraft_develop::IMPORTED_LOOK_ID, false),
-        (0.5, lightcraft_develop::IMPORTED_LOOK_ID, false),
-        (1.0, lightcraft_develop::IMPORTED_LOOK_ID, true),
-        (2.0, lightcraft_develop::IMPORTED_LOOK_ID, false),
-        (0.5, "lc.color", false),
-    ] {
-        for (i, curve) in
-            [&mut settings.curve.master, &mut settings.curve.red, &mut settings.curve.green, &mut settings.curve.blue].into_iter().enumerate()
-        {
-            let source =
-                lightcraft_develop::PointCurve::from(vec![Point::new(0.0, 0.0), Point::new(0.25 + i as f64 * 0.03, 0.15), Point::new(1.0, 1.0)]);
-            let target =
-                lightcraft_develop::PointCurve::from(vec![Point::new(0.0, 0.05), Point::new(0.7 - i as f64 * 0.03, 0.85), Point::new(1.0, 0.95)]);
-            *curve = source.blend(&target, amount).unwrap();
+    // Reuse the same cache across both processes, including the reverse transition.
+    for process in [lightcraft_develop::ProcessVersion::V1, lightcraft_develop::ProcessVersion::V2, lightcraft_develop::ProcessVersion::V1] {
+        settings.process = process;
+        for (amount, profile, bypass) in [
+            (0.25, "lc.color", false),
+            (0.5, "lc.color", false),
+            (0.75, "lc.color", false),
+            (1.5, "lc.muted.matte-soft", false),
+            (0.5, "lc.film.faded-slide", false),
+            (0.5, "lc.film.faded-slide", true),
+            (0.5, "lc.film.faded-slide", false),
+            (0.0, lightcraft_develop::IMPORTED_LOOK_ID, false),
+            (0.5, lightcraft_develop::IMPORTED_LOOK_ID, false),
+            (1.0, lightcraft_develop::IMPORTED_LOOK_ID, true),
+            (2.0, lightcraft_develop::IMPORTED_LOOK_ID, false),
+            (0.5, "lc.color", false),
+        ] {
+            for (i, curve) in
+                [&mut settings.curve.master, &mut settings.curve.red, &mut settings.curve.green, &mut settings.curve.blue].into_iter().enumerate()
+            {
+                let source =
+                    lightcraft_develop::PointCurve::from(vec![Point::new(0.0, 0.0), Point::new(0.25 + i as f64 * 0.03, 0.15), Point::new(1.0, 1.0)]);
+                let target =
+                    lightcraft_develop::PointCurve::from(vec![Point::new(0.0, 0.05), Point::new(0.7 - i as f64 * 0.03, 0.85), Point::new(1.0, 0.95)]);
+                *curve = source.blend(&target, amount).unwrap();
+            }
+            settings.profile.id = profile.into();
+            settings.profile.imported = (profile == lightcraft_develop::IMPORTED_LOOK_ID).then(|| lightcraft_develop::ImportedLook {
+                contrast: 8.0,
+                highlights: -12.0,
+                shadows: 10.0,
+                clarity: 15.0,
+                master: vec![Point::new(0.0, 0.02), Point::new(0.45, 0.65), Point::new(1.0, 0.98)].into(),
+                red: vec![Point::new(0.0, 0.0), Point::new(0.7, 0.6), Point::new(1.0, 1.0)].into(),
+                blue: vec![Point::new(0.0, 0.01), Point::new(1.0, 0.95)].into(),
+                ..Default::default()
+            });
+            settings.profile.amount = if settings.profile.imported.is_some() { amount * 100.0 } else { 100.0 };
+            settings.curve.refine_saturation = if settings.profile.imported.is_some() { 0.0 } else { 100.0 };
+            settings.set_section_enabled("curve", !bypass);
+            let cpu = render(&src, &info, &settings, &request).image;
+            let warm = lightcraft_gpu::render(&src, &info, &settings, &request, Some(&cache)).expect("gpu").image;
+            let (mean, max, _) = diff(&cpu, &warm);
+            assert!(mean < MEAN_LSB && max <= MAX_LSB, "amount{amount}, profile{profile}, bypass{bypass}: mean{mean},max{max}");
+            let cold = lightcraft_gpu::render(&src, &info, &settings, &request, None).expect("gpu").image;
+            assert_eq!(warm.data, cold.data, "stale cached function curve");
         }
-        settings.profile.id = profile.into();
-        settings.profile.imported = (profile == lightcraft_develop::IMPORTED_LOOK_ID).then(|| lightcraft_develop::ImportedLook {
-            contrast: 8.0,
-            highlights: -12.0,
-            shadows: 10.0,
-            clarity: 15.0,
-            master: vec![Point::new(0.0, 0.02), Point::new(0.45, 0.65), Point::new(1.0, 0.98)].into(),
-            red: vec![Point::new(0.0, 0.0), Point::new(0.7, 0.6), Point::new(1.0, 1.0)].into(),
-            blue: vec![Point::new(0.0, 0.01), Point::new(1.0, 0.95)].into(),
-            ..Default::default()
-        });
-        settings.profile.amount = if settings.profile.imported.is_some() { amount * 100.0 } else { 100.0 };
-        settings.curve.refine_saturation = if settings.profile.imported.is_some() { 0.0 } else { 100.0 };
-        settings.set_section_enabled("curve", !bypass);
-        let cpu = render(&src, &info, &settings, &request).image;
-        let warm = lightcraft_gpu::render(&src, &info, &settings, &request, Some(&cache)).expect("gpu").image;
-        let (mean, max, _) = diff(&cpu, &warm);
-        assert!(mean < MEAN_LSB && max <= MAX_LSB, "amount{amount}, profile{profile}, bypass{bypass}: mean{mean},max{max}");
-        let cold = lightcraft_gpu::render(&src, &info, &settings, &request, None).expect("gpu").image;
-        assert_eq!(warm.data, cold.data, "stale cached function curve");
     }
 }
 
@@ -891,12 +895,15 @@ fn output_spaces_match() {
     use lightcraft_pipeline::OutputSpace;
     let src = scene(0, 900, 600);
     let raw = SourceInfo { raw: true, ..Default::default() };
-    for space in OutputSpace::ALL {
-        for (name, edit) in [("typical", typical as Edit), ("saturated + curves + grain", saturated as Edit)] {
-            let mut s = DevelopSettings::default();
-            edit(&mut s);
-            let req = RenderRequest { space, ..RenderRequest::fit(640, 640) };
-            check(&format!("{space:?} {name}"), &src, &raw, &s, &req);
+    for process in lightcraft_develop::Process::ALL {
+        for space in OutputSpace::ALL {
+            for (name, edit) in [("typical", typical as Edit), ("saturated + curves + grain", saturated as Edit)] {
+                let mut s = DevelopSettings::default();
+                edit(&mut s);
+                s.process = process.version();
+                let req = RenderRequest { space, ..RenderRequest::fit(640, 640) };
+                check(&format!("{space:?} {name}"), &src, &raw, &s, &req);
+            }
         }
     }
 }

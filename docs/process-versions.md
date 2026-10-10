@@ -5,10 +5,24 @@ Every photo's develop settings record the **rendering process** they are interpr
 this the process version. It lets the look of LightCraft improve (a new default tone curve, issue #146;
 stronger Light sliders, issue #196) without changing a single photo someone has already edited.
 
-| Process | What it changes |
-|---|---|
-| **V1** | LightCraft's rendering from before process versions existed. Frozen. |
-| **V2** (the latest) | Highlights and Shadows keep fine detail (issue #632): their base layer (`local::tone_base`) is the edge-aware filter of a separable median of log luminance (radius 0.15 % of the long edge, at most 24 px, `local::BASE_DETAIL`) instead of log luminance itself, so twigs, lines and texture take their surroundings' shift and keep their contrast; region edges stay sharp. CPU (`local::prepare`) and GPU prepare branch on `local::tone_base_detail` (0 = no median under V1); the base plane is cached per process (`local::BaseKey`). Renders without Highlights or Shadows (global or local) are the same as V1's. Tone map unchanged. |
+There are three processes. **V1** preserves LightCraft's rendering from before process versions
+existed. **V2**, the default used for new photos and Reset, moves global and imported-profile curves into fixed
+ProPhoto D50 primaries with the sRGB transfer curve. It applies global curves, their existing Refine
+Saturation formula, then profile curves before soft-proof and output gamut mapping. Choosing an
+export or display colour space therefore no longer changes the curve operation itself; target
+gamut limits still affect the delivered image. The base tone model is unchanged.
+
+V1 retains its original target-primary curve stage. V2 bypasses its extra matrix/transfer operations
+when both curve LUT stages are identity, so no-curve renders retain the same samples. Grain and
+external 3D LUTs remain in sRGB-encoded output primaries. HDR curves retain their slope-one extension
+above encoded SDR white; signed and above-peak curve outputs reach output gamut mapping. Only
+extreme encoded values are limited to ±1e15 to prevent f32 overflow during transfer decoding and
+matrix multiplication, independently of the display's peak. These contracts do not establish full
+Lightroom curve, profile, or HDR parity.
+
+**V3** is explicit opt-in: V2 curves plus the upstream median-prefiltered Highlights/Shadows base (radius 0.15% of the long edge, capped at24px). V1/V2 retain their original spatial base. CPU/GPU use the shared `tone_base_detail` and cache by process. V3 is supported but is not the default for new imports, Reset or Update to Current Process while photographic evaluation is pending.
+
+Upstream also used numeric V2 for median-base tone with its older curve space. Those settings cannot be distinguished reliably from this fork's V2 by the number alone. This fork preserves its established V2 meaning; no automatic upstream-V2 appearance migration is claimed.
 
 ## The rule
 
@@ -24,12 +38,12 @@ stronger Light sliders, issue #196) without changing a single photo someone has 
 
 ## Adding a process
 
-1. Add a variant to `Process` (`V2`), append it to `Process::ALL` (oldest first), give it its number in
+1. Add a variant to `Process`, append it to `Process::ALL` (oldest first), give it its number in
    `Process::version` and make it `Process::LATEST`.
 2. The compiler then points at every `match` on `Process`. The base tone map is chosen in one place,
    `lightcraft_pipeline::finish::base_tone` (both the CPU and the GPU renderer take it from there): give
-   V2 its own arm and leave V1's alone. A process that changes another stage branches there the same
-   way, on `s.process.process()`; if that stage is cached (`Plan::lin_key`, the planes in `local.rs`),
+   the new process its own arm and leave older processes alone. A process that changes another stage
+   branches there the same way, on `s.process.process()`; if that stage is cached (`Plan::lin_key`, the planes in `local.rs`),
    add the process to its key.
 3. Keep `settings_saved_before_process_versions_load_as_v1` (`crates/develop/src/tests_process.rs`)
    passing: settings saved without the field must stay V1, not become the new latest. That is the

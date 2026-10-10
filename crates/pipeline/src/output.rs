@@ -4,9 +4,11 @@
 //! linear float samples.
 //!
 //! The per-pixel stage works in scene-linear Rec.2020 and ends by converting to the target's
-//! primaries, gamut mapping into the *target* gamut, and encoding. Tone curves and grain operate on
-//! sRGB-curve-encoded values of the target primaries (identical to the sRGB path when the target is
-//! sRGB); afterwards the values are re-encoded with the target's own curve.
+//! primaries, gamut mapping into the *target* gamut, and encoding. Process V1 tone curves use
+//! sRGB-curve-encoded values of the target primaries. V2 global and imported-profile curves instead
+//! use fixed ProPhoto D50 primaries with the sRGB transfer curve, before proof/output mapping.
+//! Grain and external 3D LUTs still use sRGB-encoded target primaries on both processes; afterwards
+//! the values are re-encoded with the target's own transfer curve.
 
 use lightcraft_color::{ADOBE_RGB, DISPLAY_P3, Mat3, PROPHOTO, REC2020, RgbSpace, SRGB};
 use serde::{Deserialize, Serialize};

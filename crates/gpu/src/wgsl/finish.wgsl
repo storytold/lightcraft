@@ -493,6 +493,45 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
+    // V2 curves use fixed ProPhoto primaries before output mapping. The GPU renders SDR;
+    // HDR and proofing use the CPU path. No active LUT means no additional matrix/TRC work.
+    if (pu(F_CURVE_WORKING) != 0u) {
+        let cm = array<vec3<f32>, 3>(
+            vec3<f32>(pf(F_CURVE_IN_M), pf(F_CURVE_IN_M + 1u), pf(F_CURVE_IN_M + 2u)),
+            vec3<f32>(pf(F_CURVE_IN_M + 3u), pf(F_CURVE_IN_M + 4u), pf(F_CURVE_IN_M + 5u)),
+            vec3<f32>(pf(F_CURVE_IN_M + 6u), pf(F_CURVE_IN_M + 7u), pf(F_CURVE_IN_M + 8u)),
+        );
+        let back = array<vec3<f32>, 3>(
+            vec3<f32>(pf(F_CURVE_OUT_M), pf(F_CURVE_OUT_M + 1u), pf(F_CURVE_OUT_M + 2u)),
+            vec3<f32>(pf(F_CURVE_OUT_M + 3u), pf(F_CURVE_OUT_M + 4u), pf(F_CURVE_OUT_M + 5u)),
+            vec3<f32>(pf(F_CURVE_OUT_M + 6u), pf(F_CURVE_OUT_M + 7u), pf(F_CURVE_OUT_M + 8u)),
+        );
+        let limit = vec3<f32>(pf(F_CURVE_LIMIT));
+        let c = mul3(cm, d);
+        var ce = vec3<f32>(encode_srgb(c.x), encode_srgb(c.y), encode_srgb(c.z));
+        if (pu(F_CURVES) != 0u) {
+            let before = ce;
+            ce = clamp(vec3<f32>(curve(0u, ce.x), curve(1u, ce.y), curve(2u, ce.z)), -limit, limit);
+            if (pf(F_REFINE_SAT) < 1.0) {
+                ce = refine_saturation(before, ce, pf(F_REFINE_SAT));
+            }
+        }
+        if (pu(F_PROFILE_CURVES) != 0u) {
+            ce = clamp(vec3<f32>(profile_curve(0u, ce.x), profile_curve(1u, ce.y), profile_curve(2u, ce.z)), -limit, limit);
+        }
+        // Numerical overflow guard only; retain negative and above-white curve outputs.
+        ce = clamp(ce, -limit, limit);
+        var linear: vec3<f32>;
+        for (var k = 0u; k < 3u; k++) {
+            if (ce[k] <= 0.04045) {
+                linear[k] = ce[k] / 12.92;
+            } else {
+                linear[k] = pow((ce[k] + 0.055) / 1.055, 2.4);
+            }
+        }
+        d = mul3(back, linear);
+    }
+
     // --- gamut map to the output space (desaturate towards luminance until in range)
     let om = array<vec3<f32>, 3>(
         vec3<f32>(pf(F_OUT_M), pf(F_OUT_M + 1u), pf(F_OUT_M + 2u)),
@@ -516,16 +555,19 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- encode, curves, grain
     var e = vec3<f32>(encode_srgb(r.x), encode_srgb(r.y), encode_srgb(r.z));
-    if (pu(F_CURVES) != 0u) {
-        let e0 = e;
-        e = vec3<f32>(curve(0u, e.x), curve(1u, e.y), curve(2u, e.z));
-        let rs = pf(F_REFINE_SAT);
-        if (rs < 1.0) {
-            e = refine_saturation(e0, e, rs);
+    // Frozen V1 target-primary curve path.
+    if (pu(F_CURVE_WORKING) == 0u) {
+        if (pu(F_CURVES) != 0u) {
+            let e0 = e;
+            e = vec3<f32>(curve(0u, e.x), curve(1u, e.y), curve(2u, e.z));
+            let rs = pf(F_REFINE_SAT);
+            if (rs < 1.0) {
+                e = refine_saturation(e0, e, rs);
+            }
         }
-    }
-    if (pu(F_PROFILE_CURVES) != 0u) {
-        e = vec3<f32>(profile_curve(0u, e.x), profile_curve(1u, e.y), profile_curve(2u, e.z));
+        if (pu(F_PROFILE_CURVES) != 0u) {
+            e = vec3<f32>(profile_curve(0u, e.x), profile_curve(1u, e.y), profile_curve(2u, e.z));
+        }
     }
     if (pu(F_GRAIN) != 0u) {
         let px = f32(x) + 0.5;

@@ -57,6 +57,10 @@ impl<'de> Deserialize<'de> for ProcessVersion {
 impl ProcessVersion {
     /// The first process: LightCraft's rendering from before process versions existed. Frozen.
     pub const V1: ProcessVersion = Process::V1.version();
+    /// Fixed ProPhoto primaries with sRGB transfer for global and imported-profile curves.
+    pub const V2: ProcessVersion = Process::V2.version();
+    /// The combined median-base process, available through explicit settings.
+    pub const V3: ProcessVersion = Process::V3.version();
     /// The process new photos and Reset get.
     pub const LATEST: ProcessVersion = Process::LATEST.version();
 
@@ -73,7 +77,7 @@ impl ProcessVersion {
     }
 
     /// The process this build renders with: the newest one it knows that isn't newer than this
-    /// number (a number from a newer LightCraft renders with [`Process::LATEST`]; one below V1,
+    /// number (a number from a newer LightCraft renders with the newest supported process; one below V1,
     /// which no LightCraft writes, with V1).
     pub fn process(self) -> Process {
         Process::ALL.into_iter().rev().find(|p| p.version() <= self).unwrap_or(Process::V1)
@@ -96,20 +100,22 @@ impl ProcessVersion {
 pub enum Process {
     /// The rendering of LightCraft before process versions existed (2026-10).
     V1,
-    /// Highlights and Shadows keep the local contrast of the tones they move: their edge-aware base
-    /// is taken of a fine median of log luminance (issue #632).
+    /// Output-independent curves in ProPhoto D50 primaries, with the sRGB transfer curve.
     V2,
+    /// V2 curves with a median-prefiltered Highlights/Shadows base (issue #632). Explicit opt-in.
+    V3,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 2] = [Process::V1, Process::V2];
+    pub const ALL: [Process; 3] = [Process::V1, Process::V2, Process::V3];
     pub const LATEST: Process = Process::V2;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
             Process::V1 => ProcessVersion(1),
             Process::V2 => ProcessVersion(2),
+            Process::V3 => ProcessVersion(3),
         }
     }
 }

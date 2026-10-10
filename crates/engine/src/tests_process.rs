@@ -11,8 +11,8 @@ use serde_json::json;
 
 use crate::{EngineError, Session};
 
-/// No process is older than V1 yet: 0 (which no LightCraft writes) stands in for one.
-const OLDER: ProcessVersion = ProcessVersion(0);
+/// V1 is a supported old process; upgrading it must be explicit and undoable.
+const OLDER: ProcessVersion = ProcessVersion::V1;
 /// A number from a newer LightCraft.
 const NEWER: ProcessVersion = ProcessVersion(ProcessVersion::LATEST.0 + 6);
 
