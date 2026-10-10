@@ -22,6 +22,8 @@ omastore.toml
 crates/net/
 crates/credentials/
 crates/hash/
+crates/fuzzkit/
+apps/cli/tests/robust_catalog.rs
 crates/immich/
 crates/text/
 crates/pdf/

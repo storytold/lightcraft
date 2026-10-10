@@ -192,3 +192,43 @@ fn saved_locations_filter_and_tracks() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// P6.2: a damaged or hand-edited `map.json` (hostile numbers, bad tile servers, wrong types)
+/// either fails to parse (defaults are used) or is sanitized into range; never a panic.
+#[test]
+fn hostile_map_json_is_sanitized() {
+    use super::{MapPrefs, MapUi};
+    let nums = ["0", "-0", "1e308", "-1e308", "90.0001", "-180.5", "1e-320", "22", "99999999999999999999", "-1"];
+    let servers = [
+        r#"[]"#,
+        r#"[{"id":"x","name":"x","url":"file:///etc/passwd","attribution":"","maxZoom":19}]"#,
+        r#"[{"id":"","name":"","url":"https://t/{z}/{x}/{y}.png","attribution":"","maxZoom":255}]"#,
+        r#"[{"id":"osm","name":"dup","url":"https://t/{z}/{x}/{y}.png","attribution":"a","maxZoom":19,"kind":"satellite"}]"#,
+        r#"{"not":"a list"}"#,
+    ];
+    let mut n = 0;
+    for (i, lat) in nums.iter().enumerate() {
+        for lon in nums.iter().step_by(3) {
+            for zoom in nums.iter().skip(i % 3).step_by(2) {
+                for (k, sv) in servers.iter().enumerate() {
+                    let style = ["osm", "", "x", "\\u0000"][k % 4];
+                    let text = format!(
+                        r#"{{"lat":{lat},"lon":{lon},"zoom":{zoom},"style":"{style}","servers":{sv},"geocoder":"online","endpoint":"","onlineConsent":true,"cacheMb":{}}}"#,
+                        nums[k]
+                    );
+                    let Ok(prefs) = serde_json::from_str::<MapPrefs>(&text) else { continue };
+                    n += 1;
+                    let mut m = MapUi { prefs, ..MapUi::default() };
+                    m.sanitize();
+                    let p = &m.prefs;
+                    let max = f64::from(dac_geo::mercator::MAX_ZOOM);
+                    assert!(dac_geo::LatLon::new(p.lat, p.lon).is_valid() && (1.0..=max).contains(&p.zoom), "{text}");
+                    assert!(m.servers().iter().any(|s| s.id == p.style), "{text}");
+                    assert!(p.servers.iter().all(|s| s.validate().is_ok()));
+                    let _ = serde_json::to_string(p);
+                }
+            }
+        }
+    }
+    assert!(n > 50, "only {n} variants parsed");
+}

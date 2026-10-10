@@ -461,6 +461,20 @@ fn hostile_input_is_an_error_not_a_panic() {
     assert_eq!(parse(&Document::new().to_bytes().unwrap()).get_pages().len(), 0);
 }
 
+/// P6.2 regression: an ICC colour space with a component count other than 1, 3 or 4 (a damaged
+/// profile, a caller bug) made the PDF writer panic; it is an error now.
+#[test]
+fn icc_with_bad_component_count_is_an_error() {
+    let icc = |components| ColorSpace::Icc { profile: Arc::new(vec![0; 16]), components };
+    for n in [0u8, 2, 5, 9, 255] {
+        let mut d = Document::new();
+        assert!(matches!(d.add_image(Image::samples8(1, 1, icc(n), vec![0; usize::from(n)])), Err(PdfError::Image(_))), "{n}");
+        d.output_intent =
+            Some(OutputIntent { subtype: "GTS_PDFX".into(), identifier: "x".into(), info: None, profile: Arc::new(vec![0; 16]), components: n });
+        assert!(d.to_bytes().is_err(), "{n}");
+    }
+}
+
 #[test]
 fn faces_that_cannot_be_embedded_are_drawn_as_outlines() {
     // A variable instance (non-default coordinates) is drawn as paths, no font resource.
