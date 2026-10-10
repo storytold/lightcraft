@@ -226,9 +226,13 @@ pub(crate) fn device() -> Option<&'static ctx::Gpu> {
     let _work = exit::enter()?;
     GPU.get_or_init(|| {
         let Some(backends) = backend::compute_backends() else { return Err("disabled by LIGHTCRAFT_GPU_BACKEND=off".into()) };
-        backend::with_init_marker(backends, || {
+        let r = backend::with_init_marker(backends, || {
             std::panic::catch_unwind(|| ctx::Gpu::new(backends)).unwrap_or_else(|_| Err("device creation panicked".into()))
-        })
+        });
+        if let Err(why) = &r {
+            log::warn!("gpu: rendering on the CPU: {why}");
+        }
+        r
     })
     .as_ref()
     .ok()
