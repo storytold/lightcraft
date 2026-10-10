@@ -15,6 +15,10 @@ The product name is never written in code; use `brand::` constants (Phase 0.2).
 
 ## 1.1 Split the engine crate first (≈ 6–10 h)
 
+> **Not merged (2026-10-10).** Finished on branch `worktree-agent-abf3c789693fc3a16` (8 commits, CI green), but
+> `engine` is a shared crate, so under [plan/upstream.md](plan/upstream.md) it is offered upstream as a proposal
+> instead of merged here.
+
 `crates/engine` is 45k lines and mixes import, export, catalog import, a SQLite reader, faces, denoise, segmentation,
 presets and devices. Split it before new features land in it:
 

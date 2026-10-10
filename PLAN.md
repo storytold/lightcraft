@@ -459,6 +459,16 @@ Apps: internal binaries `app`, `app-cli` (and optional web build), renamed from 
 
 ## 6. Plan to completion
 
+**Upstream-first (decided 2026-10-10, [plan/upstream.md](plan/upstream.md)).** Crates shared with upstream are
+frozen until the public release; until then only owned crates and new crates change. Crash fixes and unavoidable
+hooks in shared crates go upstream as PRs within days. After the release, shared-crate work (Phase 2, and the HDR,
+AI and video parts of Phase 5) is done upstream-first: every change is a PR to upstream. **Order:** 0 → 1 → U →
+3 → 4 → 6 (public release) → 2 → 5.
+
+**Phase U: upstream tracking (≈ 8–14 h, before the first merge).** Merge tooling (`cargo xtask upstream-merge`,
+`upstream-pr`, rerere, the shared-path check); sort Phase 1's shared-crate changes into upstream PRs, moves into
+owned crates, and reverts; offer the engine split upstream; first full upstream merge.
+
 Estimates are in **agent-hours**, calibrated on LightCraft's own log (4–6 parallel agents built M0–M13 in about 25
 active hours, roughly 105–145 agent-hours in total). Treat them as relative sizes: the heavy items depend on data and
 licences, not on typing speed. Each phase ends with an **exit gate** checked by tests or measurement, not by
@@ -507,7 +517,8 @@ ticking boxes.
    - backup-on-exit with integrity check and optimise;
    - multiple catalogs; Export as Catalog / Import from Catalog with conflict rules;
    - metadata-conflict badges against XMP.
-5. **Split `engine`** (45k lines) into the sub-crates of §5 before the output modules land.
+5. **Split `engine`** (45k lines) into the sub-crates of §5 before the output modules land. *Done on a branch
+   but not merged: it is a shared crate, so it is offered upstream instead ([plan/upstream.md](plan/upstream.md)).*
 6. **Full-resolution zoom:**
    - generalise `ui-egui/src/region.rs` to tile/region rendering at 1:1 and above, for loupe, compare, soft proof and
      overlays;
@@ -523,6 +534,10 @@ ticking boxes.
 - 1:1 zoom matches export pixels.
 
 ### Phase 2: Image quality and camera coverage (≈ 110–180 h, partly data collection) → [PLAN_phase_2.md](PLAN_phase_2.md)
+
+*After the public release, upstream-first: almost all of it is in shared crates (`raw`, `develop`, `pipeline`,
+`color`), so each change is a PR to upstream. Check what upstream has done first: it is already working on camera
+colour, raw coverage and highlights.*
 
 1. **`camdb` crate:** per-camera matrices (dual illuminant), WB presets, noise profiles, black/white levels and crops.
    - sources: data the file carries itself, our own chart calibration, noise profiles measured from ISO series and
@@ -567,7 +582,11 @@ ticking boxes.
 - Lens profile found for ≥ 80% of corpus lens EXIFs.
 - Fidelity suite runs in CI on a small set.
 
-### Phase 3: Output modules (≈ 72–124 h; can run in parallel with Phase 2 after Phase 1) → [PLAN_phase_3.md](PLAN_phase_3.md)
+### Phase 3: Output modules (≈ 72–124 h; next after Phase U) → [PLAN_phase_3.md](PLAN_phase_3.md)
+
+Everything here goes in new crates (`layout`, `text`, `pdf`, `print`, `map`, …) and owned UI files. Parts that
+would change shared crates wait for the post-release track: moving export watermarks to `text`, print sharpening in
+`pipeline`, video export in `engine-export`.
 
 Shared first: **`layout`** (pages, cells, guides, templates, text blocks), **`text`** (from PhotoCraft) and a real
 **`pdf`** writer (multi-page, font subsetting and embedding, ICC output intents, JPEG/Flate images).
@@ -613,6 +632,9 @@ round trip through a known ICC profile measures within ΔE tolerance.
 
 ### Phase 4: Workflow power features and full Immich integration (≈ 60–105 h) → [PLAN_phase_4.md](PLAN_phase_4.md)
 
+*Before the public release, in new crates (`tether`, `publish`, `plugin`) and owned files. Hooks needed in shared
+crates (export hooks for publish and plugins) go upstream as small PRs first.*
+
 1. **Tethered capture:**
    - start with "studio capture" (watched folder plus auto-apply preset), which is cheap and works with any vendor
      app;
@@ -650,6 +672,9 @@ folder, SFTP and Immich → rating changed in Immich syncs back → print to PDF
 
 ### Phase 5: AI, HDR and video (≈ 100–200 h, highest uncertainty)
 
+*After the public release, upstream-first. Upstream has already landed HDR editing and export (gain-map JPEG, HDR
+AVIF, float TIFF), so item 2 starts by taking theirs through the merge.*
+
 1. **AI model strategy (an owner decision).** Use permissively licensed weights, or train our own; pure-Rust
    inference on candle or LightCraft's own interpreter; host the downloads.
    - Subject, Sky, Background, People parts, Landscape parts, depth (for Depth Range and Lens Blur).
@@ -677,7 +702,10 @@ folder, SFTP and Immich → rating changed in Immich syncs back → print to PDF
 **Gate:** AI masks reach IoU ≥ 0.85 on an annotated CC0 test set; an HDR export round-trips gain maps; MP4 from the
 main camera brands plays and trims.
 
-### Phase 6: 1.0 hardening (≈ 30–50 h)
+### Phase 6: public release and 1.0 hardening (≈ 30–50 h)
+
+*Moves ahead of Phases 2 and 5: it is the "functional enough to go public" gate that unfreezes the shared crates.
+Fixes it needs in shared crates go upstream first.*
 
 - Performance budgets:
   - slider ≤ 16 ms at preview size on 24 MP;
@@ -705,12 +733,13 @@ users migrating real catalogs.
 | 4 Workflow power features, Immich two-way | 60–105 |
 | 5 AI, HDR, video | 100–200 |
 | 6 Hardening | 30–50 |
-| **Total** | **≈ 434–766** |
+| U Upstream tracking | 8–14 |
+| **Total** | **≈ 442–780** |
 
 Order and parallelism:
-- Phases 0 → 1 must come first; they are the architectural changes everything else sits on.
-- Phases 2, 3 and 4 then run in parallel on separate crates.
-- Phase 5 depends mostly on the model decision and can start research early.
+- Phases 0 → 1 → U must come first.
+- Phases 3 and 4 then run in parallel on new and owned crates; Phase 6 (public release) follows.
+- After the release, Phases 2 and 5 run upstream-first. Phase 5 research (the model decision) can start early.
 - With 4–6 parallel agents at about 70% efficiency, that is roughly **110–190 hours of wall-clock work**, plus the
   non-coding time for data (chart shots, corpus), model licensing and testing with real users.
 - Without Phase 5 (AI, HDR, video), a complete Classic-module application with Lightroom-grade colour is about
@@ -724,7 +753,7 @@ Order and parallelism:
 |---|---|---|
 | Clean-room data collection is slow (MIT, no GPL tables) | Some cameras stay "estimated" for a long time | Community CC0 chart/ISO-series submissions; automatic noise estimation from corpus raws; maker-note WB presets; JPEG fitting fallback |
 | Contamination: an agent reads GPL source | Licence breach | Clean-room rule in AGENTS.md; GPL trees are never referenced by path in tasks; every algorithm PR names its sources |
-| LightCraft keeps moving; merges get painful | Lost upstream fixes | New work in new crates; merge weekly; keep shared crate names unchanged after the one-time rename |
+| LightCraft keeps moving; merges get painful | Lost upstream fixes | Upstream-first policy ([plan/upstream.md](plan/upstream.md)): shared crates frozen until release, then changed only through upstream PRs; owned paths listed; weekly merge with `cargo xtask upstream-merge` |
 | Catalog redesign breaks existing libraries | Data loss | Keep the catalog API; migration with backup; crash/fuzz tests from LightCraft |
 | AI weights not licensable | AI masks stay heuristic | Classical fallbacks (PhotoCraft GrabCut/maxflow); train our own small models |
 | Video decoding in pure Rust | No video | Isolated OS-decoder FFI crate (§Phase 5) |
@@ -737,6 +766,8 @@ Order and parallelism:
 ---
 
 ## 8. Immediate next steps
+
+*Updated 2026-10-10:* Phase U next ([plan/upstream.md](plan/upstream.md)), then Phases 3 and 4.
 
 1. ~~Licence~~: **MIT** (decided 2026-10-10). The name can wait: `brand.toml` makes it a one-line change at any time.
 2. Phase 0 ([PLAN_phase_0.md](PLAN_phase_0.md)): fork, brand config, debrand, rebuild `plan/`, update the tracker

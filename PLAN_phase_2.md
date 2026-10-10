@@ -4,6 +4,12 @@ Part of [PLAN.md](PLAN.md). **Estimate:** 110–180 agent-hours, partly data col
 all camera data is measured or reverse-engineered by us (PLAN.md §4). **Depends on:** Phase 1 (engine split and the 1:1 region renderer).
 **Runs in parallel with:** Phases 3 and 4.
 
+**When:** after the public release (Phase 6), **upstream-first** ([plan/upstream.md](plan/upstream.md)). This
+phase changes shared crates (`raw`, `develop`, `pipeline`, `color`, `meta`), so each task is developed on a branch
+off `upstream/main` and offered upstream as a PR; we receive it through the normal merge. New crates (`camdb`,
+`lensdb`) are written to be offered upstream as well. Before starting a task, check what upstream has done since
+(camera colour, raw coverage and highlights are moving there already).
+
 **Goal:** a photographer opening their own raws sees **correct colour**, **correct lens geometry** and
 **Lightroom-grade detail**, on nearly every camera they own. This is the gap that decides whether people switch.
 

@@ -4,6 +4,11 @@ Part of [PLAN.md](PLAN.md). **Estimate:** 72–124 agent-hours. **Depends on:** 
 Print also needs Phase 2.9 (`cms`); until then it uses the existing output-space transform.
 **Runs in parallel with:** Phases 2 and 4.
 
+**Upstream-first ([plan/upstream.md](plan/upstream.md)):** runs before the public release, in new crates and owned
+UI files only. Deferred to after the release, as upstream PRs: replacing the export watermark renderer with `text`,
+print sharpening and 16-bit output in the shared pipeline, slideshow video export in the export crate. Until then,
+the output modules call the existing export API.
+
 **Goal:** every Lightroom Classic output module works end to end, sharing one layout and text engine and one PDF
 writer.
 

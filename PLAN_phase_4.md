@@ -4,6 +4,11 @@ Part of [PLAN.md](PLAN.md). **Estimate:** 60–105 agent-hours (including about 
 **Depends on:** Phase 1 (catalog v4, `net`, `credentials`, the `immich` crate and links).
 **Runs in parallel with:** Phases 2 and 3.
 
+**Upstream-first ([plan/upstream.md](plan/upstream.md)):** runs before the public release in new crates (`tether`,
+`publish`, `plugin`, `actions`) and owned files. Hooks that shared crates must provide (export hooks for publish and
+plugins, face-region XMP writing in `meta`) are small PRs to upstream first. `.lrcat` migration v2 and People (4.5)
+touch shared crates and wait for the post-release track.
+
 **Goal:**
 - the workflow features power users rely on: tethering, publish services, plugins, round trips, actions, people and
   catalog migration;

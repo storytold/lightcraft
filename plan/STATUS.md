@@ -11,10 +11,25 @@
 - The 10 `IMM-*` rows are in the document but **not counted yet**: `xtask/src/parity.rs` accepts only the `LR`,
   `LRC`, `MENU`, `KEY` and `KEYC` prefixes (add `"IMM"` to `is_row_id`).
 
+## Next: Phase U (upstream tracking), then Phases 3 and 4
+
+**Upstream-first policy (2026-10-10, [upstream.md](upstream.md)):** shared crates are frozen until the public
+release; crash fixes and unavoidable hooks in them go upstream as PRs within days. Order: U → 3 + 4 → 6 (public
+release) → 2 → 5. Upstream had 381 new commits on 2026-10-10 (keywords, smart collections, raw formats, camera
+colour, HDR export).
+
+Phase U tasks:
+1. `cargo xtask upstream-merge` (restore owned paths, rename crates, brand fixes, review report, `ci`), rerere,
+   `cargo xtask upstream-pr`, and the shared-path check.
+2. Sort Phase 1's changes to shared crates: upstream PR, move to an owned crate, or revert.
+3. Offer the engine split (branch `worktree-agent-abf3c789693fc3a16`, not merged) upstream.
+4. First full upstream merge; review the report for upstream work on owned paths (keywords, smart collections)
+   worth porting.
+
 ## Phase 1 (first pass merged 2026-10-10)
 
 All tracks 1.1–1.8 are merged on main with `cargo xtask ci` green; exit-gate detail in `PLAN_phase_1.md`. Open gaps:
-- 1.1: move Session/registry/commands out of the `engine` facade (needs a Session context trait).
+- 1.1: split finished on a branch but not merged (shared crate; offered upstream instead, see upstream.md).
 - 1.2/1.3: secondary-window filmstrip + filter; panel drag-reorder; image identity plate; KEYC-COMPARE/DEVELOP keys.
 - 1.4: Folders lists only folders with photos, no Windows free space; grid View Options panel.
 - 1.5: done (2026-10-10): 500k open 0.75 s / < 1 GB peak / every filter < 25 ms (kept sort orders); 1M 1.5 s / 1.9 GB
