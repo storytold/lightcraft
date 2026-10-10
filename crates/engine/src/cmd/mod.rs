@@ -19,9 +19,9 @@ pub(crate) mod face_detect;
 mod face_models;
 mod face_recognize;
 pub mod filters;
+pub mod folders;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod immich;
-pub mod folders;
 pub mod keyword_list;
 pub mod keywords;
 pub mod library;
