@@ -306,11 +306,14 @@ fn link_only_downloads_the_original_on_demand() {
     assert_eq!(p.preview_only.as_deref(), Some(LINK_ONLY));
     assert!(p.sha1.is_none());
     assert_eq!(s.execute("immich.links", &json!({"id": p.id.0})).unwrap()["linkOnly"], true);
+    // as if the preview were a JPEG standing in for a raw: the original's kind and format win
+    s.catalog.apply(Op::SetKind { id: p.id, kind: dac_catalog::MediaKind::Raw, format: "JPEG".into() }).unwrap();
     assert_eq!(s.execute("immich.fetchOriginal", &json!({"id": p.id.0})).unwrap()["started"], true);
     pump_until(&mut s, |s, _| s.remote.fetching.is_empty());
     let q = s.catalog.photo(p.id).unwrap();
     assert!(q.preview_only.is_none(), "{:?}", s.remote.fetch_errors);
     assert_eq!(q.file_name, "far.png");
+    assert_eq!((q.kind, q.format.as_str()), (dac_catalog::MediaKind::Image, "PNG"), "kind and format follow the original");
     assert_eq!(q.sha1.as_deref(), Some(dac_hash::sha1_bytes(&a).to_hex().as_str()));
     let _ = std::fs::remove_dir_all(&dir);
 }

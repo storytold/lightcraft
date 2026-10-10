@@ -815,8 +815,11 @@ pub fn show(app: &mut DacApp, ctx: &egui::Context) {
                 let add_label;
                 let ok = match &dlg {
                     Dialog::Import { opts } => {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let n = if opts.immich { crate::panels::connections::selected_count(app) } else { opts.selected_paths().len() };
+                        #[cfg(target_arch = "wasm32")]
                         let n = opts.selected_paths().len();
-                        let verb = if opts.copy && opts.move_files { "Move" } else { "Import" };
+                        let verb = if opts.copy && opts.move_files && !opts.immich { "Move" } else { "Import" };
                         add_label = crate::i18n::tr_format!("{verb} {n} Photo{}", if n == 1 { "" } else { "s" }, verb = crate::i18n::tr(verb), n = n);
                         add_label.as_str()
                     }

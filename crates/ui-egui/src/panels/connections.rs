@@ -1,10 +1,10 @@
 //! Immich in the app (IMM-CONNECT, IMM-LINK, IMM-IMPORT, IMM-EXTLIB): Settings → Connections,
-//! the "in Immich" grid badge, Info's "Open in Immich" link, the Import from Immich window, and the
+//! the "in Immich" grid badge, Info's "Open in Immich" link, the Import dialog's Immich source, and the
 //! per-frame `remote.pump` that takes in background work (SHA-1 back-fill, link passes, imports,
 //! downloading a link-only photo's original when it is opened in Develop).
 //!
 //! Everything goes through the engine's `immich.*` commands except the slow listing and thumbnail
-//! calls of the import window, which run on worker threads with a client from
+//! calls of the Immich import source, which run on worker threads with a client from
 //! [`dac_engine::Session::immich_client`]. The API key typed into the form lives in memory until
 //! Connect hands it to the secret store; it is never shown again, logged or saved in settings.
 
@@ -63,7 +63,6 @@ pub struct ImmichUi {
     result: Option<Value>,
     libraries: HashMap<String, Value>,
     maps: HashMap<String, Vec<(String, String)>>,
-    pub import_open: bool,
     account: Option<String>,
     source: String,
     target: Option<(String, String)>,
@@ -90,6 +89,15 @@ pub struct ImmichUi {
     /// The last `credentials.status`, refreshed every few frames (it is cheap).
     cred: Value,
     cred_at: f64,
+}
+
+#[cfg(test)]
+impl ImmichUi {
+    /// Fill both passphrase fields (tests: typing into a password field).
+    pub(crate) fn type_passphrase(&mut self, p: &str) {
+        self.passphrase = p.into();
+        self.passphrase2 = p.into();
+    }
 }
 
 // ------------------------------------------------------------------------------------- pump
@@ -679,22 +687,32 @@ fn extlib(app: &mut DacApp, ui: &mut egui::Ui, t: &Tokens, id: &str) {
 
 // ---------------------------------------------------------------------- Import from Immich
 
-/// UI commands: `file.importImmich` opens the Import from Immich window.
+/// UI commands: `file.importImmich` opens the Import dialog on its Immich source.
 pub fn run(app: &mut DacApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
     match id {
         "file.importImmich" => {
             open_import(app, p.get("account").and_then(Value::as_str).map(str::to_string));
-            Some(Ok(json!({"open": app.immich.import_open})))
+            Some(Ok(json!({"open": true, "source": "immich", "account": app.immich.account})))
         }
         _ => None,
     }
 }
 
+/// Open the Import dialog with Immich as its source.
 fn open_import(app: &mut DacApp, account: Option<String>) {
+    let opts = crate::import::ImportDialog { immich: true, ..Default::default() };
+    app.ui.dialog = Some(crate::state::Dialog::Import { opts: Box::new(opts) });
+    open_source(app, account);
+}
+
+/// Switch the Import dialog's Immich source to `account` (else the first one) and list its timeline.
+pub fn open_source(app: &mut DacApp, account: Option<String>) {
     let accounts: Vec<String> = app.session.immich_accounts().map(|a| a.immich.iter().map(|x| x.id.clone()).collect()).unwrap_or_default();
     let ui = &mut app.immich;
-    ui.import_open = true;
-    ui.account = account.filter(|a| accounts.contains(a)).or_else(|| accounts.first().cloned());
+    ui.account = account
+        .filter(|a| accounts.contains(a))
+        .or_else(|| ui.account.clone().filter(|a| accounts.contains(a)))
+        .or_else(|| accounts.first().cloned());
     if ui.destination.is_empty() {
         ui.destination = app
             .session
@@ -705,6 +723,11 @@ fn open_import(app: &mut DacApp, account: Option<String>) {
             .unwrap_or_default();
     }
     set_source(app, "timeline", None);
+}
+
+/// How many Immich assets are selected (the dialog's Import button counts them).
+pub fn selected_count(app: &DacApp) -> usize {
+    app.immich.selected.len()
 }
 
 fn set_source(app: &mut DacApp, source: &str, target: Option<(String, String)>) {
@@ -813,12 +836,8 @@ fn load_thumbs(app: &mut DacApp, ids: Vec<String>) {
     });
 }
 
-/// The Import from Immich window (when open).
-pub fn import_window(app: &mut DacApp, ctx: &egui::Context) {
-    if !app.immich.import_open {
-        return;
-    }
-    // finished listing
+/// Take in finished listings and decoded thumbnails.
+fn poll(app: &mut DacApp, ctx: &egui::Context) {
     if let Some(slot) = app.immich.listing.clone()
         && let Some(v) = take(&slot)
     {
@@ -849,29 +868,81 @@ pub fn import_window(app: &mut DacApp, ctx: &egui::Context) {
     if app.immich.listing.is_some() || app.immich.thumbs.values().any(|t| matches!(t, Thumb::Loading)) {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
-    let mut open = true;
-    egui::Window::new(crate::i18n::tr("Import from Immich"))
-        .id(egui::Id::new("immich-import"))
-        .open(&mut open)
-        .default_size(vec2(820.0, 600.0))
-        .show(ctx, |ui| {
-            import_body(app, ui);
-        });
-    if !open {
-        app.immich.import_open = false;
-    }
 }
 
-fn import_body(app: &mut DacApp, ui: &mut egui::Ui) {
+/// Start importing the selected assets (the Import dialog's Import button).
+pub fn start_import(app: &mut DacApp) -> Result<Value, String> {
+    if app.immich.selected.is_empty() {
+        return Err(crate::i18n::tr("Select photos to import").to_string());
+    }
+    if !app.immich.link_only && app.immich.destination.trim().is_empty() {
+        return Err(crate::i18n::tr("Choose a destination folder").to_string());
+    }
+    let album = match &app.immich.target {
+        Some((k, id)) if k == "album" => {
+            app.immich.groups.iter().find(|g| g["id"] == id.as_str()).and_then(|g| g["name"].as_str()).map(str::to_string)
+        }
+        _ => None,
+    };
+    let params = json!({
+        "account": app.immich.account,
+        "assets": app.immich.selected.iter().collect::<Vec<_>>(),
+        "mode": if app.immich.link_only { "link" } else { "copy" },
+        "destination": (!app.immich.link_only).then(|| app.immich.destination.trim().to_string()),
+        "albumName": album,
+    });
+    let r = app.run("immich.import", params)?;
+    app.immich.selected.clear();
+    Ok(r)
+}
+
+/// The Import dialog's Immich source: accounts, timeline / favourites / albums / people as
+/// thumbnails loaded from the server, Copy or Link only.
+pub fn import_source(app: &mut DacApp, ui: &mut egui::Ui) {
+    poll(app, ui.ctx());
     let t = Tokens::get(ui.ctx());
-    let accounts: Vec<String> = app.session.immich_accounts().map(|a| a.immich.iter().map(|x| x.id.clone()).collect()).unwrap_or_default();
+    let st = cred_status(app, ui.ctx());
+    if st["needsPassphrase"] == true {
+        unlock_box(app, ui, &t, &st);
+        if app.immich.list_error.is_some() && st["unlocking"] != true {
+            // once unlocked, list again
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        }
+        return;
+    }
+    let accounts: Vec<(String, String)> = app
+        .session
+        .immich_accounts()
+        .map(|a| a.immich.iter().map(|x| (x.id.clone(), format!("{} ({})", x.url, x.user_name))).collect())
+        .unwrap_or_default();
     if accounts.is_empty() {
         ui.label(RichText::new(crate::i18n::tr("No Immich server is connected.")).color(t.text_label));
         if text_button(ui, "immichOpenConnections", crate::i18n::tr("Connect a Server…"), false).clicked() {
-            app.immich.import_open = false;
             let _ = app.run("app.settings", json!({"tab": "connections"}));
         }
         return;
+    }
+    if app.immich.account.is_none()
+        || (app.immich.list_error.is_some()
+            && app.immich.assets.is_empty()
+            && app.immich.listing.is_none()
+            && st["active"].is_string()
+            && app.immich.list_error.as_deref().is_some_and(|e| e.contains("passphrase")))
+    {
+        // first open, or the key store was just unlocked: list
+        open_source(app, None);
+    }
+    if accounts.len() > 1 {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.label(RichText::new(crate::i18n::tr("Server")).color(t.text_label));
+            for (i, (id, label)) in accounts.iter().enumerate() {
+                let on = app.immich.account.as_deref() == Some(id);
+                if text_button(ui, &format!("immichAccount-{i}"), label, on).clicked() && !on {
+                    open_source(app, Some(id.clone()));
+                }
+            }
+        });
     }
     // sources
     ui.horizontal(|ui| {
@@ -893,51 +964,53 @@ fn import_body(app: &mut DacApp, ui: &mut egui::Ui) {
     });
     if let Some(e) = app.immich.list_error.clone() {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(e).color(t.caution));
+            let l = ui.label(RichText::new(e).color(t.caution));
+            register(ui.ctx(), "label:immichListError", l.rect);
             if text_button(ui, "immichListRetry", crate::i18n::tr("Retry"), false).clicked() {
                 app.immich.list_error = None;
                 list(app);
             }
         });
     }
-    ui.separator();
-    let grid_h = (ui.available_height() - 90.0).max(160.0);
+    let grid_h = (ui.available_height() - 110.0).max(240.0);
     let in_groups = matches!(app.immich.source.as_str(), "albums" | "people") && app.immich.target.is_none();
-    egui::ScrollArea::vertical().id_salt("immich-import-grid").max_height(grid_h).auto_shrink([false, false]).show(ui, |ui| {
-        if in_groups {
-            let kind = if app.immich.source == "albums" { "album" } else { "person" };
-            for (i, g) in app.immich.groups.clone().iter().enumerate() {
-                let name = g["name"].as_str().unwrap_or_default().to_string();
-                let label = match g["count"].as_u64() {
-                    Some(n) => format!("{name} ({n})"),
-                    None => name.clone(),
-                };
-                if text_button(ui, &format!("immichGroup-{i}"), &label, false).clicked() {
-                    let id = g["id"].as_str().unwrap_or_default().to_string();
-                    set_source(app, kind, Some((kind.to_string(), id)));
+    egui::ScrollArea::vertical().id_salt("immich-import-grid").max_height(grid_h).min_scrolled_height(grid_h).auto_shrink([false, false]).show(
+        ui,
+        |ui| {
+            if in_groups {
+                let kind = if app.immich.source == "albums" { "album" } else { "person" };
+                for (i, g) in app.immich.groups.clone().iter().enumerate() {
+                    let name = g["name"].as_str().unwrap_or_default().to_string();
+                    let label = match g["count"].as_u64() {
+                        Some(n) => format!("{name} ({n})"),
+                        None => name.clone(),
+                    };
+                    if text_button(ui, &format!("immichGroup-{i}"), &label, false).clicked() {
+                        let id = g["id"].as_str().unwrap_or_default().to_string();
+                        set_source(app, kind, Some((kind.to_string(), id)));
+                    }
                 }
+                return;
             }
-            return;
-        }
-        let cell = 132.0;
-        let cols = ((ui.available_width() / cell).floor() as usize).max(1);
-        let assets = app.immich.assets.clone();
-        for (r, chunk) in assets.chunks(cols).enumerate() {
-            ui.horizontal(|ui| {
-                for (c, a) in chunk.iter().enumerate() {
-                    asset_cell(app, ui, &t, r * cols + c, a, cell);
-                }
-            });
-        }
-        if app.immich.next_page.is_some()
-            && app.immich.listing.is_none()
-            && text_button(ui, "immichMore", crate::i18n::tr("Load More"), false).clicked()
-        {
-            app.immich.page = app.immich.next_page.unwrap_or(app.immich.page + 1);
-            list(app);
-        }
-    });
-    ui.separator();
+            let cell = 132.0;
+            let cols = ((ui.available_width() / cell).floor() as usize).max(1);
+            let assets = app.immich.assets.clone();
+            for (r, chunk) in assets.chunks(cols).enumerate() {
+                ui.horizontal(|ui| {
+                    for (c, a) in chunk.iter().enumerate() {
+                        asset_cell(app, ui, &t, r * cols + c, a, cell);
+                    }
+                });
+            }
+            if app.immich.next_page.is_some()
+                && app.immich.listing.is_none()
+                && text_button(ui, "immichMore", crate::i18n::tr("Load More"), false).clicked()
+            {
+                app.immich.page = app.immich.next_page.unwrap_or(app.immich.page + 1);
+                list(app);
+            }
+        },
+    );
     // options
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
@@ -964,6 +1037,7 @@ fn import_body(app: &mut DacApp, ui: &mut egui::Ui) {
         }
     });
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
         let n = app.immich.selected.len();
         ui.label(RichText::new(trf!("{} selected", n)).color(t.text_label));
         if text_button(ui, "immichSelectAll", crate::i18n::tr("Select All"), false).clicked() {
@@ -971,33 +1045,12 @@ fn import_body(app: &mut DacApp, ui: &mut egui::Ui) {
                 app.immich.assets.iter().filter(|a| a["inCatalog"] != true).filter_map(|a| a["id"].as_str().map(str::to_string)).collect();
             app.immich.selected.extend(all);
         }
-        let busy = app.immich.last["import"]["active"] == true;
-        let ok = n > 0 && !busy && (app.immich.link_only || !app.immich.destination.trim().is_empty());
-        if ui.add_enabled_ui(ok, |ui| text_button(ui, "immichImportStart", crate::i18n::tr("Import"), true)).inner.clicked() {
-            let album = match &app.immich.target {
-                Some((k, id)) if k == "album" => {
-                    app.immich.groups.iter().find(|g| g["id"] == id.as_str()).and_then(|g| g["name"].as_str()).map(str::to_string)
-                }
-                _ => None,
-            };
-            let params = json!({
-                "account": app.immich.account,
-                "assets": app.immich.selected.iter().collect::<Vec<_>>(),
-                "mode": if app.immich.link_only { "link" } else { "copy" },
-                "destination": (!app.immich.link_only).then(|| app.immich.destination.trim().to_string()),
-                "albumName": album,
-            });
-            match app.run("immich.import", params) {
-                Ok(_) => {
-                    app.immich.selected.clear();
-                    app.immich.import_open = false;
-                    app.toast(ui.ctx(), "Importing from Immich…");
-                }
-                Err(e) => app.toast(ui.ctx(), &e),
-            }
+        if text_button(ui, "immichSelectNone", crate::i18n::tr("Select None"), false).clicked() {
+            app.immich.selected.clear();
         }
-        if busy {
+        if app.immich.last["import"]["active"] == true {
             ui.spinner();
+            ui.label(RichText::new(crate::i18n::tr("An Immich import is running…")).color(t.text_dim));
         }
     });
 }

@@ -49,6 +49,8 @@ mod tests_curve;
 mod tests_filmstrip;
 #[cfg(test)]
 mod tests_grid;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_immich_ui;
 #[cfg(test)]
 mod tests_keymap;
 #[cfg(test)]
@@ -288,7 +290,7 @@ pub struct DacApp {
     /// The library failed to open at launch: the blocking window, then the temporary-session
     /// banner (issue #100). Cleared once a library opens.
     pub library_problem: Option<panels::library_problem::LibraryProblem>,
-    /// Immich: Connections settings, the import window, background pump state.
+    /// Immich: Connections settings, the Import dialog's Immich source, background pump state.
     #[cfg(not(target_arch = "wasm32"))]
     pub immich: panels::connections::ImmichUi,
 }
@@ -1018,8 +1020,6 @@ impl DacApp {
         panels::notices::show(self, &ctx);
         panels::dialogs::show(self, &ctx);
         catalog_ui::show(self, &ctx);
-        #[cfg(not(target_arch = "wasm32"))]
-        panels::connections::import_window(self, &ctx);
         panels::library_problem::show(self, &ctx);
         import::progress(self, &ctx);
         import::scan_progress(self, &ctx);

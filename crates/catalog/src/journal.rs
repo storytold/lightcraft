@@ -46,7 +46,7 @@
 //! | 1 | up to v0.2.0 | |
 //! | 2 | after v0.2.0 | `Op::SetBrowsed`, `Catalog.browsed`, `Photo.local_baseline` |
 //! | 3 | albums by hand | `Op::SetAlbumOrder`, `Album.order` |
-//! | 4 | catalog v4 | `Op::SetSha1`, `Op::SetXmpStamp`, `Op::SetRemote`, `Op::SetPreview`, `Photo.sha1`, `Photo.xmp`, `Catalog.remote`, `Catalog.previews`; native libraries in a folder move to the v4 store ([`crate::db`]) |
+//! | 4 | catalog v4 | `Op::SetSha1`, `Op::SetKind`, `Op::SetXmpStamp`, `Op::SetRemote`, `Op::SetPreview`, `Photo.sha1`, `Photo.xmp`, `Catalog.remote`, `Catalog.previews`; native libraries in a folder move to the v4 store ([`crate::db`]) |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a

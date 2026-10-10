@@ -769,6 +769,10 @@ fn adopt_original(s: &mut Session, id: PhotoId, account: &str, path: &Path) -> R
                 preview_only: None,
             });
             ops.push(Op::SetSha1 { id, sha1 });
+            // the preview was a JPEG; the original may be a raw, a HEIF…
+            if ph.kind != info.kind || ph.format != info.format {
+                ops.push(Op::SetKind { id, kind: info.kind, format: info.format.clone() });
+            }
         }
         None => ops.push(Op::SetContent {
             id,

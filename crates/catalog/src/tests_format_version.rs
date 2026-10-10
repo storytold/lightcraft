@@ -187,7 +187,7 @@ fn op_variants_are_versioned() {
             | Op::Batch { .. } => 1,
             Op::SetBrowsed { .. } => 2,
             Op::SetAlbumOrder { .. } => 3,
-            Op::SetSha1 { .. } | Op::SetXmpStamp { .. } | Op::SetRemote { .. } | Op::SetPreview { .. } => 4,
+            Op::SetSha1 { .. } | Op::SetKind { .. } | Op::SetXmpStamp { .. } | Op::SetRemote { .. } | Op::SetPreview { .. } => 4,
         }
     }
     let newest = since(&Op::SetSha1 { id: crate::PhotoId(0), sha1: None });
