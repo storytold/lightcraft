@@ -13,6 +13,21 @@
 > **Please don't contribute yet.** This fork was published on 2026-10-10 and its initial planning and restructuring
 > are still under way, so pull requests and issues filed now are likely to conflict with work in progress. Please
 > wait about 18 hours, until 2026-10-11, before contributing.
+>
+> Timeline (clock-hours assume continuous agent-driven development):
+>
+> | Phase | Agent-hours<br>estimate | Clock-hours<br>estimate | Status | Clock-hours<br>actual |
+> |---|---:|---:|---|---|
+> | 0 Fork, brand config and foundations | 12–22 | 2 | Done | 1.5 |
+> | 1 Classic shell, catalog, Immich link | 50–85 | 8 | Done | ~9 |
+> | U Upstream tracking | 8–14 | 1 | In progress | |
+> | 3 Output modules | 72–124 | 12 | | |
+> | 4 Workflow power features, Immich two-way | 60–105 | 10 | | |
+> | 6 Hardening | 30–50 | 5 | | |
+> | **Public: open for pull requests and bug reports.** From here on, every change to a crate shared with upstream goes upstream as a PR. | | | | |
+> | 2 Quality and camera coverage | 110–180 | 18 | | |
+> | 5 AI, HDR, video | 100–200 | 20 | | |
+> | **Total** | **≈ 442–780** | **78** | | |
 
 > [!NOTE]
 > The product name, binary names, settings folder and environment-variable prefix are set in one place,
