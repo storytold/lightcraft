@@ -1354,6 +1354,9 @@ pub struct Exported {
     /// Files written next to it, named like it with another extension: `(extension, bytes)` (the
     /// XMP sidecar of an `Original` export).
     pub sidecars: Vec<(&'static str, Vec<u8>)>,
+    /// Set when the render was tried on the GPU and fell back to the CPU: why (see
+    /// `docs/gpu-pipeline.md`). The file holds the CPU render either way.
+    pub gpu_fallback: Option<String>,
 }
 
 /// Output size of photo `p` under `o` (its cropped full size when `o.resize` is `None`).
@@ -1488,7 +1491,9 @@ impl PreparedExport {
         match self.work {
             Work::Render(w) => {
                 let RenderWork { job, hdr_job, meta, opts } = *w;
-                let r = job.run().rendered?;
+                let result = job.run();
+                let r = result.rendered?;
+                let gpu_fallback = result.gpu_fallback;
                 let bytes = match hdr_job {
                     Some(hj) => {
                         let hr = hj.run().rendered?;
@@ -1497,7 +1502,7 @@ impl PreparedExport {
                     }
                     None => encode_rendered(&r, &opts, meta.as_ref())?,
                 };
-                Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new() })
+                Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback })
             }
             Work::File { path, read, packet, dng, label, size } => {
                 let bytes = match &read {
@@ -1505,7 +1510,14 @@ impl PreparedExport {
                     None => std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?,
                 };
                 let Some(dng) = dng else {
-                    return Ok(Exported { file_name, bytes, width: size.0, height: size.1, sidecars: vec![("xmp", packet.into_bytes())] });
+                    return Ok(Exported {
+                        file_name,
+                        bytes,
+                        width: size.0,
+                        height: size.1,
+                        sidecars: vec![("xmp", packet.into_bytes())],
+                        gpu_fallback: None,
+                    });
                 };
                 if lightcraft_raw::probe(&bytes).is_none() {
                     return Err(format!("{label}: DNG export needs a raw photo"));
@@ -1519,7 +1531,7 @@ impl PreparedExport {
                 };
                 let dng = lightcraft_raw::write_dng(&raw, &lightcraft_raw::DngWriteOptions { xmp: Some(packet), compression, ..Default::default() })
                     .map_err(|e| e.to_string())?;
-                Ok(Exported { file_name, bytes: dng, width: raw.width, height: raw.height, sidecars: Vec::new() })
+                Ok(Exported { file_name, bytes: dng, width: raw.width, height: raw.height, sidecars: Vec::new(), gpu_fallback: None })
             }
         }
     }
@@ -1868,7 +1880,11 @@ impl<'a> Placer<'a> {
         match written {
             Ok((path, files, sidecars)) => {
                 self.taken.extend(files);
-                self.out.push(json!({"path": path, "width": e.width, "height": e.height, "bytes": e.bytes.len(), "sidecars": sidecars}));
+                let mut entry = json!({"path": path, "width": e.width, "height": e.height, "bytes": e.bytes.len(), "sidecars": sidecars});
+                if let Some(why) = &e.gpu_fallback {
+                    entry["gpuFallback"] = json!(why);
+                }
+                self.out.push(entry);
             }
             Err(err) if self.stop_on_error => return Err(err),
             Err(err) => self.out.push(json!({"photo": photo.0, "file": file, "error": err})),
@@ -2572,6 +2588,29 @@ mod tests {
     /// GPU off mid-run) may differ from a CPU one by an LSB, never in name, size or order.
     fn shape(files: &[serde_json::Value]) -> Vec<serde_json::Value> {
         files.iter().map(|f| json!({"path": f["path"], "width": f["width"], "height": f["height"], "error": f["error"]})).collect()
+    }
+
+    /// Issue #675: a batch reports a render that fell back from the GPU to the CPU on that file's
+    /// entry (`gpuFallback`, the render's own reason) and says nothing on the others.
+    #[test]
+    fn a_batch_reports_a_gpu_fallback_on_the_file_it_hit() {
+        if !lightcraft_gpu::available() {
+            eprintln!("skipped: no GPU adapter ({:?})", lightcraft_gpu::unavailable_reason());
+            return;
+        }
+        let mut s = crate::Session::with_demo();
+        let ids: Vec<_> = s.visible().iter().copied().take(2).collect();
+        let o = ExportOptions::from_json(&json!({"format": "png", "width": 64}));
+        // one lane: both photos render on this thread, and the fault hits the first render here
+        lightcraft_gpu::inject_fault(lightcraft_gpu::Fault::Limit(1 << 10));
+        let (files, _, _) = lanes_batch(&mut s, &ids, &o, 1, true, usize::MAX);
+        let files = files.unwrap();
+        assert_eq!(files.len(), 2, "{files:?}");
+        let why: Vec<_> = files.iter().filter_map(|f| f.get("gpuFallback").and_then(serde_json::Value::as_str)).collect();
+        assert_eq!(why.len(), 1, "exactly one file fell back: {files:?}");
+        assert!(why[0].contains("limit"), "{files:?}");
+        assert!(files[1].get("gpuFallback").is_none(), "the second render was fine: {files:?}");
+        assert!(lightcraft_gpu::available(), "a limit is no device failure");
     }
 
     // Issue #496: photos rendered side by side give the same files, names, order and progress as

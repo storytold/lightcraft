@@ -177,7 +177,13 @@ fn prepared_exports_run_on_another_thread() {
 
 /// Issue #78: a GPU render whose work never ran (a driver that drops a submission without an
 /// error) gave an all-black export. The export must come from the CPU instead — the same
-/// image — with the reason recorded.
+/// image — with the reason recorded on the export itself.
+///
+/// Issue #675: this test runs beside every other engine test, many of them rendering on the GPU.
+/// It asks only about its own export (`Exported::gpu_fallback`), never the process-wide
+/// `lightcraft_gpu::last_fallback` another thread's render overwrites, and the simulated failure
+/// switches the GPU off for this thread alone, so neither the fault nor `reset_failures` reaches
+/// the other tests.
 #[test]
 fn export_falls_back_to_the_cpu_when_gpu_work_is_lost() {
     let mut s = Session::with_demo();
@@ -192,18 +198,26 @@ fn export_falls_back_to_the_cpu_when_gpu_work_is_lost() {
     let gpu = lightcraft_gpu::available();
     let healthy = mean(&export_photo(&mut s, id, &o, 1).unwrap().bytes);
     lightcraft_gpu::inject_fault(lightcraft_gpu::Fault::DropWork);
-    let faulted = export_photo(&mut s, id, &o, 1).unwrap().bytes;
+    let faulted = export_photo(&mut s, id, &o, 1).unwrap();
     if gpu {
-        let why = lightcraft_gpu::last_fallback().unwrap_or_default();
+        let why = faulted.gpu_fallback.clone().unwrap_or_default();
         assert!(why.contains("incomplete"), "{why}");
-        // the GPU is off for the process now: this export renders on the CPU
+        // the GPU is off for this thread now: the next export is not even tried on it
         assert!(!lightcraft_gpu::available());
+        assert!(lightcraft_gpu::unavailable_reason().unwrap_or_default().contains("incomplete"), "{:?}", lightcraft_gpu::unavailable_reason());
+        // the thread's own `inject_fault` stopped only its own GPU use: the others still have it
+        let elsewhere = std::thread::spawn(|| (lightcraft_gpu::available(), lightcraft_gpu::unavailable_reason())).join().unwrap();
+        assert_eq!(elsewhere, (true, None), "a simulated failure must not switch the GPU off for the other threads");
+    } else {
+        assert_eq!(faulted.gpu_fallback, None);
     }
-    let cpu = export_photo(&mut s, id, &o, 1).unwrap().bytes;
+    let cpu = export_photo(&mut s, id, &o, 1).unwrap();
+    assert_eq!(cpu.gpu_fallback, None, "not tried on the GPU: no fallback to report");
     lightcraft_gpu::reset_failures();
+    assert_eq!(lightcraft_gpu::available(), gpu, "reset_failures gives this thread the GPU back");
     let px = |b: &[u8]| lightcraft_codecs::decode(b, Default::default()).unwrap().image.data;
-    assert!(px(&faulted) == px(&cpu), "the fallback is the CPU render");
-    let m = mean(&faulted);
+    assert!(px(&faulted.bytes) == px(&cpu.bytes), "the fallback is the CPU render");
+    let m = mean(&faulted.bytes);
     assert!(m > 0.02, "not black: mean {m}");
     assert!((m - healthy).abs() < 0.01, "GPU {healthy} vs CPU {m}");
 }
