@@ -39,6 +39,7 @@ pub mod theme;
 pub mod titlebar;
 pub mod widgets;
 
+#[cfg(test)]
 mod tests_catalog_ui;
 #[cfg(test)]
 mod tests_classic;

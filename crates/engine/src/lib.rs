@@ -782,6 +782,7 @@ impl Session {
 mod tests;
 #[cfg(test)]
 mod tests_album_order;
+#[cfg(test)]
 mod tests_catalog_cmds;
 #[cfg(test)]
 mod tests_classic;
