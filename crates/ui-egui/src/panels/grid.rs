@@ -913,14 +913,26 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
     });
     ui.menu_button(crate::i18n::tr("Set Color Label"), |ui| label_menu(app, ui));
-    ui.menu_button(crate::i18n::tr("Add to Album"), |ui| {
+    let add = ui.menu_button(crate::i18n::tr("Add to Album"), |ui| {
         let albums: Vec<_> = app.session.catalog.albums().filter(|a| !a.folder && !a.is_smart()).map(|a| (a.id.0, a.name.clone())).collect();
+        let any = !albums.is_empty();
         for (aid, name) in albums {
             if ui.button(name).clicked() {
                 let _ = app.run("album.addPhotos", json!({"id": aid}));
             }
         }
+        if any {
+            ui.separator();
+        }
+        // as in the Photo menu: a new album holding the selection, also when there is none yet
+        // to pick (issue #676: the submenu came up empty)
+        let new = ui.button(crate::i18n::tr("New Album…"));
+        register(ui.ctx(), "button:contextNewAlbum", new.rect);
+        if new.clicked() {
+            let _ = app.run("dialog.newAlbum", json!({}));
+        }
     });
+    register(ui.ctx(), "button:contextAddToAlbum", add.response.rect);
     // in a (non-smart) album: take the selection out of it, or make this photo its cover
     if let lightcraft_engine::LibrarySource::Album(aid) = app.session.source
         && app.session.catalog.album(aid).is_some_and(|a| !a.folder && !a.is_smart())
