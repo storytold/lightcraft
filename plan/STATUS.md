@@ -18,7 +18,8 @@ All tracks 1.1–1.8 are merged on main with `cargo xtask ci` green; exit-gate d
 - 1.2/1.3: secondary-window filmstrip + filter; panel drag-reorder; image identity plate; KEYC-COMPARE/DEVELOP keys.
 - 1.4: Folders lists only folders with photos, no Windows free space; grid View Options panel.
 - 1.5: lazy photo loading / grid paging (1M photos 2.3 GB); migration progress; unfiltered sort at 500k borderline.
-- 1.6: tile Compare and Reference views; measure slider drags at ≥1:1 (`profile_slider_drag`); run corpus-raw 1:1 test.
+- 1.6: closed (Compare/Reference tiled, drags at ≥1:1 back to one stage-cached window, corpus 1:1 test green on 87
+  raws); the second window's loupe is fit-only, so it has no tiles.
 - 1.7/1.8: FileStore credentials in the UI (macOS/Windows); Immich source inside the Import dialog; link-only file kind
   after original download; translations for new strings; `immich.connect` off the UI thread.
 
@@ -76,6 +77,35 @@ All tracks 1.1–1.8 are merged on main with `cargo xtask ci` green; exit-gate d
   `down [--volumes]` stops it (and wipes data). Re-running `seed` is safe: uploads come back as duplicates.
 
 ## Metrics
+
+### P1.6 slider drags at ≥ 1:1 (`profile_slider_drag`)
+
+`cargo test -p dac-ui-egui --release profile_slider_drag -- --ignored --nocapture` (2026-10-10, Ryzen AI Max+ PRO 395
+/ Radeon 8060S, Linux, GPU), demo 24 MP photo, tick → shown median (p90), ms:
+
+| canvas, zoom | old single window (pre-tiles) | tiles drafted per tile | one drag window per pane (now) |
+|---|---|---|---|
+| 1400 × 900, fit | 3.7 (5.2) | 9.1 (12.1) | 2.6 (5.0) |
+| 1400 × 900, 100 % | 9.3 (11.2) | 128.2 (236.1) | 9.5 (11.4) |
+| 1400 × 900, 400 % | 6.4 (7.2) | 119.1 (134.1) | 5.9 (7.6) |
+| 2800 × 1700, 100 % | 19.6 (21.1) | 254.6 (315.1) | 19.2 (21.5) |
+| 2800 × 1700, 400 % | 8.9 (10.0) | 119.6 (123.0) | 8.8 (11.3) |
+
+During a drag the visible window (2304 × 2048 at 1:1 on the small canvas) is drafted as one `Slot::Window(pane)` job
+with its own stage cache (4.4 ms) and drawn over the tiles; the final look's tiles follow when the drag ends. On a
+~2.5 MP view a tick is within the 16 ms budget; the 2800 × 1700 canvas at 1:1 (≈ 10.8 MP window) is about 19 ms.
+
+### P1.6 corpus raws: 1:1 equals export
+
+`DAC_CORPUS_RAW_COUNT=87 cargo test --release -p dac-engine --lib one_to_one_pixels_equal_export_pixels_on_corpus_raws`:
+all 87 raw.pixls.us samples (`cargo xtask corpus --download`): three 1:1 windows and tiles per photo equal the
+full-size export within 2 levels (145 s). The test had silently decoded nothing before (no filesystem loader).
+
+### Bench 2026-10-10 (`cargo xtask bench`, a7m3 24 MP, CPU | GPU wall)
+
+First run in this checkout (no history to compare; the pipeline is unchanged by P1.6's UI work): loupe 1920 × 1280
+cold 56.3 | 34.4 ms, exposure drag warm 13.8 | 2.7 ms, draft clarity drag 5.5 | 2.0 ms, export render 6000 × 4000
+418 | 347 ms, JPEG encode 64.7 ms; GPU vs CPU max 1 LSB.
 
 ### P1.6 panning at 1:1 (45 MP)
 

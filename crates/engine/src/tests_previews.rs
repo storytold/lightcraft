@@ -85,18 +85,26 @@ fn one_to_one_pixels_equal_export_pixels_on_corpus_raws() {
         eprintln!("skipped: no raw corpus at {}", dir.display());
         return;
     };
-    let files: Vec<_> = rd.flatten().map(|e| e.path()).filter(|p| p.is_file()).take(3).collect();
+    // (DAC_CORPUS_RAW_COUNT files, sorted by name; default 3: each is a full-size render)
+    let count = std::env::var("DAC_CORPUS_RAW_COUNT").ok().and_then(|n| n.parse().ok()).unwrap_or(3);
+    let mut files: Vec<_> = rd.flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
+    files.sort();
+    let step = (files.len() / count.max(1)).max(1);
+    let files: Vec<_> = files.into_iter().step_by(step).take(count).collect();
     if files.is_empty() {
         eprintln!("skipped: empty raw corpus");
         return;
     }
-    let mut s = Session::new();
+    // (the filesystem loader: without it no file decodes)
+    let mut s = Session::new().with_fs();
     let paths: Vec<String> = files.iter().map(|p| p.to_string_lossy().to_string()).collect();
     s.execute("library.import", &json!({"paths": paths})).unwrap();
     let ids: Vec<_> = s.catalog.photos().map(|p| p.id).collect();
-    for id in ids {
-        check_one_to_one(&mut s, id);
+    assert_eq!(ids.len(), files.len(), "every corpus raw imported");
+    for id in &ids {
+        check_one_to_one(&mut s, *id);
     }
+    eprintln!("1:1 equals export on {} corpus raws", ids.len());
 }
 
 // Given 1:1 previews built, they are kept apart from the standard ones and discarded on their own
