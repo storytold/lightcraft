@@ -70,10 +70,10 @@ fn rewrite(text: &str, old: &str, new: &str, accept: impl Fn(&[u8], u8) -> bool)
 /// dependency on an upstream crate name not renamed yet), so `cargo metadata` fails; then the names are read
 /// straight from the `[package]` tables of the `crates/*`, `apps/*` and `xtask` manifests.
 pub(crate) fn packages() -> Result<Vec<String>, String> {
-    if let Ok(meta) = crate::metadata() {
-        if let Some(pkgs) = meta["packages"].as_array() {
-            return Ok(pkgs.iter().filter_map(|p| p["name"].as_str().map(str::to_string)).collect());
-        }
+    if let Ok(meta) = crate::metadata()
+        && let Some(pkgs) = meta["packages"].as_array()
+    {
+        return Ok(pkgs.iter().filter_map(|p| p["name"].as_str().map(str::to_string)).collect());
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().ok_or("no workspace root")?;
     let mut manifests = vec![root.join("xtask/Cargo.toml")];
@@ -96,10 +96,8 @@ fn package_name(manifest: &str) -> Option<String> {
     for line in manifest.lines().map(str::trim) {
         if line.starts_with('[') {
             in_package = line == "[package]";
-        } else if in_package {
-            if let Some(v) = line.strip_prefix("name").map(str::trim_start).and_then(|r| r.strip_prefix('=')) {
-                return Some(v.trim().trim_matches('"').to_string());
-            }
+        } else if in_package && let Some(v) = line.strip_prefix("name").map(str::trim_start).and_then(|r| r.strip_prefix('=')) {
+            return Some(v.trim().trim_matches('"').to_string());
         }
     }
     None
