@@ -102,12 +102,14 @@ fn backup_is_ahead(app: &LightcraftApp) -> bool {
         && lightcraft_engine::cmd::backup::backup_folder(&app.session).is_some()
 }
 
-/// The tasks quitting would cut short. A backup of the library is not one of them while this
-/// quit has its own backup ahead: one that runs already is the one it waits for.
+/// The tasks quitting would cut short. A backup of the open library that is under way is not
+/// one of them while this quit has its own backup ahead: it is the one the quit waits for. (A
+/// backup of another library, still running after a switch, is asked about like any task.)
 fn tasks_quitting_would_stop(app: &LightcraftApp) -> Vec<lightcraft_engine::activity::TaskInfo> {
     let mut running = app.session.activity.running_cancellable();
-    if backup_is_ahead(app) {
-        running.retain(|t| t.kind != "backup");
+    if backup_is_ahead(app) && backup_under_way(app) {
+        let awaited = lightcraft_engine::cmd::backup::status(&app.session).and_then(|b| app.session.activity.id_of(&b.cancel));
+        running.retain(|t| Some(t.id) != awaited);
     }
     running
 }
@@ -638,12 +640,6 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
         clear_prompt_focus(ctx);
     }
     chosen
-}
-
-/// What the Cancel of a question about quitting does (for tests of what follows it).
-#[cfg(test)]
-pub(crate) fn call_off_for_test(app: &mut LightcraftApp) {
-    quit_called_off(app);
 }
 
 /// Quit without the backup this quit had ahead (skipped, not waited for, or not made): nothing

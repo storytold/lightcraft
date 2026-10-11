@@ -695,12 +695,22 @@ pub fn back_up_if_due(s: &mut Session) -> std::result::Result<bool, String> {
     if s.restore.as_ref().is_some_and(|r| r.running()) {
         return Ok(false);
     }
-    // (backups that are no longer there are no backup: the folder was removed, or its drive)
-    let there = backup_folder(s).is_some_and(|(folder, _)| folder.is_dir());
-    let last = s.last_backup.as_deref().filter(|_| there);
     let now = (s.clock)();
-    if !due(s.backup_schedule.every, last, s.backup_tried.as_deref(), &now) {
+    if !due(s.backup_schedule.every, None, s.backup_tried.as_deref(), &now) {
+        // (tried within the hour)
         return Ok(false);
+    }
+    if !due(s.backup_schedule.every, s.last_backup.as_deref(), None, &now) {
+        // Not due by the time of the last backup. Backups that are no longer there are no
+        // backup, though: their folder was removed, or its drive wiped. (Looked at only here,
+        // where everything else says "not due": a slow drive is not asked on every look.)
+        if backup_folder(s).is_some_and(|(folder, _)| folder.is_dir()) {
+            return Ok(false);
+        }
+        s.last_backup = None;
+        if let Err(e) = s.save_prefs() {
+            log::warn!("library: {e}");
+        }
     }
     s.backup_tried = Some(now);
     match back_up(s, &json!({"background": true})) {

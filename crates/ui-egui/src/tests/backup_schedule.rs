@@ -252,29 +252,77 @@ fn the_wait_for_the_backup_can_be_cut_short_or_called_off() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Given the backup was skipped (or made) in a quit that then did not happen (another question
-/// of quitting was cancelled), then the next quit asks about the backup again; and a quit that
-/// was cancelled while it waited for its backup does not happen by itself when the backup ends.
+/// Given the backup was skipped in a quit that then did not happen (a task had started, and its
+/// question was cancelled), then the next quit asks about the backup again.
 #[test]
 fn a_quit_that_is_called_off_starts_over_next_time() {
     let dir = temp("called-off");
     let mut h = app_with_a_library_in(&dir);
     prefs(&mut h, json!({"onClose": "ask"}));
-    // a task that quitting would stop, to have its question after the backup's
+    assert!(!may_close(&mut h.app));
+    h.step();
+    assert!(matches!(h.app.quit_prompt, Some(QuitPrompt::BackUp(_))), "{:?}", h.app.quit_prompt);
+    // a task starts behind the question (an import an agent began, say)
+    let task = h.app.session.activity.start("import", "Importing", lightcraft_engine::activity::Cancel::Yes);
+    click(&mut h, "button:quitSkipBackup");
+    assert!(matches!(h.app.quit_prompt, Some(QuitPrompt::Tasks(_))), "the task is asked about: {:?}", h.app.quit_prompt);
+    assert_eq!(h.app.quit_backup, QuitBackup::Settled);
+    click(&mut h, "button:quitCancel");
+    assert!(h.app.quit_prompt.is_none() && !h.quit_requested());
+    assert_eq!(h.app.quit_backup, QuitBackup::Undecided, "called off: the next quit starts over");
+    drop(task);
+    assert!(!may_close(&mut h.app), "asked again");
+    assert!(matches!(h.app.quit_prompt, Some(QuitPrompt::BackUp(_))), "{:?}", h.app.quit_prompt);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Given a quit that waits for its backup, when another question of quitting comes up and is
+/// cancelled, then LightCraft does not quit by itself when the backup ends.
+#[test]
+fn a_quit_cancelled_while_it_waited_does_not_happen_by_itself() {
+    use std::sync::atomic::Ordering;
+    let dir = temp("no-surprise");
+    let mut h = app_with_a_library_in(&dir);
+    prefs(&mut h, json!({"onClose": "always"}));
+    h.app.session.backup_hold.store(true, Ordering::SeqCst);
+    assert!(!may_close(&mut h.app));
+    assert_eq!(h.app.quit_backup, QuitBackup::Running);
+    // a task starts, and the window's close button is pressed again
     let task = h.app.session.activity.start("import", "Importing", lightcraft_engine::activity::Cancel::Yes);
     assert!(!may_close(&mut h.app));
     h.step();
     assert!(matches!(h.app.quit_prompt, Some(QuitPrompt::Tasks(_))), "{:?}", h.app.quit_prompt);
+    // (the awaited backup is not among the tasks quitting would stop)
+    assert!(!h.app.quit_prompt.as_ref().unwrap().text().contains("Backing up"), "{:?}", h.app.quit_prompt);
     click(&mut h, "button:quitCancel");
+    assert_eq!(h.app.quit_backup, QuitBackup::Undecided);
+    h.app.session.backup_hold.store(false, Ordering::SeqCst);
+    assert!(h.step_until(T, |h| h.app.session.last_backup.is_some()), "the backup is still made");
+    for _ in 0..10 {
+        h.step();
+    }
+    assert!(!h.quit_requested(), "no quit by itself");
     drop(task);
-    // skipped, and then the quit is called off by hand: as the Cancel of any later question does
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Given a backup of another library is still running after a switch, when the person quits a
+/// library that is backed up on quitting, then that other backup is asked about like any task:
+/// it is not the backup this quit waits for.
+#[test]
+fn another_librarys_backup_is_a_task_like_any_other() {
+    use std::sync::atomic::Ordering;
+    let dir = temp("other-library");
+    let mut h = app_with_a_library_in(&dir);
+    h.app.session.backup_hold.store(true, Ordering::SeqCst);
+    h.app.run("library.backup", json!({})).unwrap();
+    // on to another library, which is backed up when LightCraft quits
+    h.app.run("app.openLibrary", json!({"path": dir.join("second").to_string_lossy()})).unwrap();
+    prefs(&mut h, json!({"onClose": "always"}));
     assert!(!may_close(&mut h.app));
-    h.step();
-    click(&mut h, "button:quitSkipBackup");
-    assert!(h.step_until(T, |h| h.quit_requested()));
-    crate::panels::notices::call_off_for_test(&mut h.app);
-    assert!(!may_close(&mut h.app), "asked again");
-    assert!(matches!(h.app.quit_prompt, Some(QuitPrompt::BackUp(_))), "{:?}", h.app.quit_prompt);
+    let prompt = h.app.quit_prompt.clone();
+    h.app.session.backup_hold.store(false, Ordering::SeqCst);
+    assert!(matches!(&prompt, Some(QuitPrompt::Tasks(text)) if text.contains("Backing up")), "{prompt:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

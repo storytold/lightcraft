@@ -233,11 +233,22 @@ fn the_last_backup_is_the_last_one_in_the_folder_backups_go_to() {
     finish(&mut s);
     assert_eq!(backups_in(&other), 1);
     assert!(!due_backup(&mut s));
-    // the folder is gone (a drive that was wiped, a folder thrown away)
+    // the folder is gone (a drive that was wiped, a folder thrown away): the library is not
+    // backed up any more, which the next look finds, says (`lastBackup`) and puts right
     std::fs::remove_dir_all(&other).unwrap();
     s.backup_tried = None;
+    assert!(prefs(&mut s, json!({}))["lastBackup"].is_string(), "not known before the look");
     assert!(due_backup(&mut s), "its backups are gone: due");
     finish(&mut s);
+    assert_eq!(backups_in(&other), 1);
+    // (and had the backup not been made, it would not be named as the last)
+    std::fs::remove_dir_all(&other).unwrap();
+    std::fs::write(&other, b"not a folder").unwrap();
+    s.backup_tried = None;
+    assert!(due_backup(&mut s));
+    finish(&mut s);
+    assert!(prefs(&mut s, json!({}))["lastBackup"].is_null(), "gone, and the new one failed");
+    let _ = std::fs::remove_file(&other);
     drop(s);
     for d in [dir, other] {
         let _ = std::fs::remove_dir_all(d);
