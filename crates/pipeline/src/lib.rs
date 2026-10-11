@@ -132,7 +132,7 @@ pub enum Quality {
     Full,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct RenderRequest {
     /// Output must fit in `max_w × max_h` (aspect preserved).
     pub max_w: usize,
@@ -154,6 +154,8 @@ pub struct RenderRequest {
     /// Previews for a monitor with a display profile: render 8-bit into its primaries instead of
     /// `space` (see [`DisplaySpace`]; ignored by deep renders).
     pub display: Option<DisplaySpace>,
+    /// Explicit session resource; never part of saved settings or decoded source pixels.
+    pub imported_table: Option<Arc<lightcraft_raw::profile::big_table::DecodedLookTable>>,
 }
 
 /// A window of the (virtual) full output, in its pixels: what a zoomed view needs, rendered
@@ -191,6 +193,7 @@ impl RenderRequest {
             proof: None,
             window: None,
             display: None,
+            imported_table: None,
         }
     }
 }
@@ -201,6 +204,68 @@ pub struct Rendered {
     pub histogram: Histogram,
     /// The high-bit-depth result when [`RenderRequest::depth`] asks for one.
     pub deep: Option<DeepImage>,
+    /// Bounded names-only diagnostics, including unresolved runtime profile references.
+    pub unsupported_edits: Vec<String>,
+}
+
+/// A reference whose profile is enabled and whose table Amount is nonzero.
+/// Profile-induced B&W is independent of this table bypass.
+pub fn active_look_table(s: &DevelopSettings) -> Option<&lightcraft_develop::LookTableRef> {
+    if !s.section_enabled("profile") || s.profile.amount == 0.0 {
+        return None;
+    }
+    s.profile.imported_look()?.look_table.as_ref()
+}
+
+pub(crate) struct ResolvedProfileTable {
+    table: Arc<lightcraft_raw::profile::big_table::DecodedLookTable>,
+    amount: f64,
+}
+
+/// Identity-relative entry scaling. The original samples are used directly at Amount100.
+fn table_entry_at_amount(entry: [f32; 3], amount: f64) -> [f32; 3] {
+    [(f64::from(entry[0]) * amount) as f32, (1.0 + amount * (f64::from(entry[1]) - 1.0)) as f32, (1.0 + amount * (f64::from(entry[2]) - 1.0)) as f32]
+}
+
+/// One eligibility decision for rendering and diagnostics, made before effective/SDR settings.
+fn profile_table_for(s: &DevelopSettings, req: &RenderRequest) -> Result<Option<ResolvedProfileTable>, &'static str> {
+    let Some(reference) = active_look_table(s) else { return Ok(None) };
+    if s.process.process() != lightcraft_develop::Process::V2 {
+        return Err("requires Process 2");
+    }
+    if s.hdr.enabled || req.depth == OutputDepth::F32Hdr {
+        return Err("HDR unsupported");
+    }
+    let amount = s.profile.amount / 100.0;
+    if !amount.is_finite() || !(0.0..=2.0).contains(&amount) {
+        return Err("Amount unsupported");
+    }
+    let table = req.imported_table.as_ref().ok_or("missing resource - use profile.loadTable")?;
+    if table.fingerprint().to_string() != reference.as_str() {
+        return Err("loaded fingerprint mismatch");
+    }
+    let [minimum, maximum] = table.amount_range();
+    if amount < minimum || amount > maximum {
+        return Err("declared Amount range excludes requested amount");
+    }
+    if amount != 1.0
+        && table.hsv().data.iter().any(|&entry| {
+            let scaled = table_entry_at_amount(entry, amount);
+            scaled.iter().any(|v| !v.is_finite()) || scaled[1] < 0.0 || scaled[2] < 0.0
+        })
+    {
+        return Err("Amount produces invalid HSV scales");
+    }
+    Ok(Some(ResolvedProfileTable { table: table.clone(), amount }))
+}
+
+/// Resolve support on every request, including when an engine cache supplies its pixels.
+/// This also makes a direct pipeline caller's missing resource explicit.
+pub fn profile_table_diagnostics(s: &DevelopSettings, req: &RenderRequest) -> Vec<String> {
+    match (active_look_table(s), profile_table_for(s, req)) {
+        (Some(reference), Err(reason)) => vec![format!("LookTable {reference_id} ({reason})", reference_id = reference.as_str())],
+        _ => Vec::new(),
+    }
 }
 
 /// Everything the per-pixel stage needs, precomputed at output resolution.
@@ -601,6 +666,8 @@ enum Src<'a> {
 }
 
 fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: Option<&StageCache>) -> Rendered {
+    let unsupported_edits = profile_table_diagnostics(s, req);
+    let imported_table = profile_table_for(s, req).ok().flatten();
     // sections switched off with their eye render as if at their defaults (issue #316)
     let effective = s.effective();
     let edit: &DevelopSettings = &effective;
@@ -662,13 +729,13 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes });
     }
     if req.depth != OutputDepth::U8 {
-        let deep = finish::finish_deep(&prep, s, frame, info, req.space, req.depth, req.proof);
+        let deep = finish::finish_deep(&prep, s, frame, info, req.space, req.depth, req.proof, imported_table);
         let image = deep.to_rgba8();
         let histogram = Histogram::of_srgb8(&image);
         lap("finish (deep)", &mut t);
-        return Rendered { image, histogram, deep: Some(deep) };
+        return Rendered { image, histogram, deep: Some(deep), unsupported_edits };
     }
-    let image = finish::finish(&prep, s, frame, info, req.space, req.display.as_ref(), req.proof);
+    let image = finish::finish(&prep, s, frame, info, req.space, req.display.as_ref(), req.proof, imported_table);
     lap("finish", &mut t);
     let cut = |i: &Rgba8| match plan.keep {
         Some(k) => i.crop(k.x, k.y, k.w, k.h),
@@ -686,13 +753,13 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     let mut image = if plan.keep.is_some() { cut(&image) } else { image };
     if req.overlay == Overlay::HdrRange && edit.hdr.enabled {
         // the HDR rendition of the same request says how far above SDR white each pixel goes
-        let hreq = RenderRequest { depth: OutputDepth::F32Hdr, overlay: Overlay::None, proof: None, ..*req };
+        let hreq = RenderRequest { depth: OutputDepth::F32Hdr, overlay: Overlay::None, proof: None, ..req.clone() };
         if let Some(hdr) = render(src_img, info, edit, &hreq).deep {
             visualize::hdr_range(&mut image, &hdr, req.space.luma());
         }
         lap("visualize hdr", &mut t);
     }
-    Rendered { image, histogram, deep: None }
+    Rendered { image, histogram, deep: None, unsupported_edits }
 }
 
 /// The colour a colour-range mask would sample at normalized image point `p` (OkLab of the

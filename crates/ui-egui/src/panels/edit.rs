@@ -129,7 +129,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         wb.tint = tint;
     }
     let preview_only = app.session.catalog.photo(id).and_then(|p| p.preview_only.clone());
-    let unsupported_edits = app.session.catalog.photo(id).map(|p| p.unsupported_edits.clone()).unwrap_or_default();
+    let unsupported_edits = app.session.unsupported_edits(id);
 
     if app.ui.histogram {
         histogram(app, ui, id);

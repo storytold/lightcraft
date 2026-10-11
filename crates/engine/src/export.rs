@@ -1644,7 +1644,7 @@ fn prepare_guarded(
     let p = session.catalog.photo(id).ok_or("no such photo")?;
     let file_name = o.file_name_for(p, seq);
     let source_dir = original_folder(&p.source);
-    let unsupported_edits = p.unsupported_edits.clone();
+    let unsupported_edits = session.unsupported_edits(id);
     // HDR output only for photos edited in HDR; the rest of the batch exports as usual
     let sdr_opts;
     let o = if o.hdr && !p.develop.hdr.enabled {
@@ -1739,16 +1739,22 @@ fn render_weight(full_px: usize, long: usize, level: crate::media::SourceLevel, 
 impl PreparedExport {
     pub fn run(self) -> Result<Exported, String> {
         let file_name = self.file_name;
-        let unsupported_edits = self.unsupported_edits;
+        let mut unsupported_edits = self.unsupported_edits;
         match self.work {
             Work::Render(w) => {
                 let RenderWork { job, hdr_job, meta, opts } = *w;
                 let result = job.run();
                 let r = result.rendered?;
                 let gpu_fallback = result.gpu_fallback;
+                unsupported_edits = lightcraft_develop::unsupported_edits::bounded_names(
+                    unsupported_edits.iter().chain(r.unsupported_edits.iter()).map(String::as_str),
+                );
                 let bytes = match hdr_job {
                     Some(hj) => {
                         let hr = hj.run().rendered?;
+                        unsupported_edits = lightcraft_develop::unsupported_edits::bounded_names(
+                            unsupported_edits.iter().chain(hr.unsupported_edits.iter()).map(String::as_str),
+                        );
                         let hdr = hr.deep.ok_or("the HDR render has no float samples")?;
                         encode_gain_map_jpeg(&r.image, &hdr, &opts, meta.as_ref())?
                     }
@@ -2978,8 +2984,13 @@ mod tests {
             let src = lightcraft_raster::Rgb32f::filled(16, 16, [0.18; 3]);
             let base = lightcraft_pipeline::RenderRequest::fit(16, 16);
             move |space| {
-                lightcraft_pipeline::render(&src, &Default::default(), &Default::default(), &lightcraft_pipeline::RenderRequest { space, ..base })
-                    .image
+                lightcraft_pipeline::render(
+                    &src,
+                    &Default::default(),
+                    &Default::default(),
+                    &lightcraft_pipeline::RenderRequest { space, ..base.clone() },
+                )
+                .image
             }
         };
         let reference =

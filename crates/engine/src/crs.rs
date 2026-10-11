@@ -200,13 +200,33 @@ fn imported_look(props: &Props) -> Option<Value> {
     if let Some(bw) = conversion {
         payload["convert_to_grayscale"] = json!(bw);
     }
+    let table_key = "crs:Look/crs:Parameters/crs:LookTable";
+    if let Some(values) = props.get(table_key) {
+        match values.as_slice() {
+            [value] => match value.parse::<lightcraft_develop::LookTableRef>() {
+                Ok(reference) => {
+                    payload["look_table"] = json!(reference);
+                    note(table_key);
+                }
+                Err(_) => skipped("LookTable (invalid fingerprint)"),
+            },
+            _ => skipped("LookTable (ambiguous reference)"),
+        }
+    }
     let conversion_payload = payload.clone();
-    // Conversion is independently understood even when a profile's numeric definition is
-    // unsupported. Keep only that checked component, not a previous profile or a clamped curve.
-    let conversion_only = |amount| {
-        conversion.map(|convert_to_grayscale| {
-            let look = serde_json::from_value::<ImportedLook>(conversion_payload.clone())
-                .unwrap_or_else(|_| ImportedLook { convert_to_grayscale, ..Default::default() });
+    // Independently checked components survive unsupported curves/scalars. An invalid Amount
+    // must never activate a table at an invented amount; only grayscale is Amount-independent.
+    let checked_subset = |amount: f64, keep_table: bool| {
+        let mut subset = conversion_payload.clone();
+        if !keep_table && let Some(object) = subset.as_object_mut() {
+            object.remove("look_table");
+        }
+        (conversion.is_some() || conversion_payload.get("look_table").is_some()).then(|| {
+            let look = serde_json::from_value::<ImportedLook>(subset.clone()).unwrap_or_else(|_| ImportedLook {
+                convert_to_grayscale: conversion.unwrap_or(false),
+                look_table: subset.get("look_table").and_then(Value::as_str).and_then(|s| s.parse().ok()),
+                ..Default::default()
+            });
             json!({"id": IMPORTED_LOOK_ID, "amount": amount, "imported": look})
         })
     };
@@ -214,7 +234,10 @@ fn imported_look(props: &Props) -> Option<Value> {
     let amount = if props.contains_key(amount_key) {
         let Some(v) = num(props, amount_key).filter(|v| (0.0..=2.0).contains(v)) else {
             skipped("Look (invalid profile amount)");
-            return conversion_only(100.0);
+            if conversion_payload.get("look_table").is_some() {
+                skipped("LookTable (invalid profile amount)");
+            }
+            return checked_subset(100.0, false);
         };
         v * 100.0
     } else {
@@ -225,7 +248,7 @@ fn imported_look(props: &Props) -> Option<Value> {
         if props.contains_key(&key) {
             let Some(v) = num(props, &key).filter(|v| (-100.0..=100.0).contains(v)) else {
                 skipped("Look (invalid profile parameter)");
-                return conversion_only(amount);
+                return checked_subset(amount, true);
             };
             payload[target] = json!(v);
         }
@@ -246,7 +269,7 @@ fn imported_look(props: &Props) -> Option<Value> {
             };
             let Some(v) = props.get(&key).filter(valid_points).and_then(|_| curve(props, &key)) else {
                 skipped("Look (invalid profile curve)");
-                return conversion_only(amount);
+                return checked_subset(amount, true);
             };
             payload[target] = v;
         }
@@ -256,7 +279,7 @@ fn imported_look(props: &Props) -> Option<Value> {
     // would leave the previous profile's curves active. The unmapped Look warning remains.
     let Ok(look) = serde_json::from_value::<ImportedLook>(payload) else {
         skipped("Look (invalid profile definition)");
-        return conversion_only(amount);
+        return checked_subset(amount, true);
     };
     Some(json!({"id": IMPORTED_LOOK_ID, "amount": amount, "imported": look}))
 }
@@ -392,7 +415,9 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
         put(o, "treatment", json!(if bw { "bw" } else { "color" }));
     }
     if let Some(profile) = imported_look(props) {
-        if profile.pointer("/imported/convert_to_grayscale").and_then(Value::as_bool) == Some(true) {
+        if profile.pointer("/imported/look_table").is_some_and(|v| !v.is_null()) {
+            put(o, "version", json!(lightcraft_develop::LOOK_TABLE_SCHEMA_VERSION));
+        } else if profile.pointer("/imported/convert_to_grayscale").and_then(Value::as_bool) == Some(true) {
             put(o, "version", json!(lightcraft_develop::PROFILE_TREATMENT_SCHEMA_VERSION));
         }
         put(o, "profile", profile);
@@ -677,6 +702,28 @@ mod tests {
             }
             assert_eq!(settings.treatment, lightcraft_develop::Treatment::Color);
             assert_eq!(settings.is_bw(), grayscale);
+        }
+        let fingerprint = "E96CB8AF6484F8402BB0E6ECFC8AD0FC";
+        for amount in ["1", "NaN", "3"] {
+            let xml = format!(
+                r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"><crs:Look rdf:parseType="Resource" crs:Amount="{amount}"><crs:Parameters rdf:parseType="Resource" crs:ConvertToGrayscale="True" crs:LookTable="{fingerprint}"/></crs:Look></rdf:Description>"#
+            );
+            let direct = preset_from_xmp(&xml, "Own reference").unwrap();
+            let imported = crate::preset_import::read_presets("own.xmp", xml.as_bytes(), None).unwrap().remove(0);
+            assert_eq!(direct.settings, imported.preset.settings);
+            let applied = direct.apply(&DevelopSettings::default(), 1.0);
+            let look = applied.profile.imported_look().unwrap();
+            assert!(look.convert_to_grayscale);
+            if amount == "1" {
+                assert_eq!(look.look_table.as_ref().unwrap().as_str(), fingerprint);
+                assert_eq!(direct.settings["version"], lightcraft_develop::LOOK_TABLE_SCHEMA_VERSION);
+                let file = crate::presets::to_lcpreset(std::slice::from_ref(&direct));
+                let reloaded = crate::presets::parse_preset_file("own.lcpreset", file.as_bytes()).unwrap().remove(0);
+                assert_eq!(reloaded.settings, direct.settings);
+            } else {
+                assert!(look.look_table.is_none(), "an invalid Amount must not activate a table at 100 percent");
+                assert!(direct.unsupported_edits.iter().any(|s| s == "LookTable (invalid profile amount)"));
+            }
         }
     }
 

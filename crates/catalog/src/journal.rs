@@ -54,6 +54,7 @@
 //! | 9 | combined saved-edit diagnostics | `Op::SetUnsupportedEdits`, `Photo.unsupported_edits` |
 //! | 10 | combined imported profile adjustments | Independent Look parameters and curves (schema 3) |
 //! | 11 | combined profile treatment | Independent imported-profile monochrome conversion (schema 4) |
+//! | 12 | combined WB and runtime profile tables | Kelvin scale plus checked HSV references (schema 6) |
 //! | upstream 9 (combined 14) | preview-only recheck | `Photo.preview_checked`, `Op::SetContent.preview_checked` |
 //!
 //! Earlier fork writers used v3 and v7 for saved-edit diagnostics, and v4 for function curves.
@@ -84,7 +85,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 11;
+pub const VERSION: u32 = 12;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]

@@ -202,9 +202,47 @@ pub struct CurveSpace {
 /// leaving f32 matrix headroom. It is independent of SDR/HDR peak; output mapping owns clipping.
 pub const CURVE_ENCODED_LIMIT: f32 = 1e15;
 
+/// Runtime HSV profile, applied in linear ProPhoto before camera tone and B&W.
+/// Its value-axis transfer is part of the table, not an RGB encoding of this stage.
+struct ImportedTable {
+    table: std::sync::Arc<lightcraft_raw::profile::big_table::DecodedLookTable>,
+    scaled: Option<lightcraft_raw::profile::HsvTable>,
+    space: CurveSpace,
+}
+
+impl ImportedTable {
+    fn new(resource: crate::ResolvedProfileTable) -> Self {
+        let crate::ResolvedProfileTable { table, amount } = resource;
+        // The shared eligibility gate checked every scaled entry before rendering. Keep the
+        // original resource immutable; only non-unit amounts allocate a bounded transient grid.
+        let scaled = (amount != 1.0).then(|| {
+            let mut grid = table.hsv().clone();
+            for entry in &mut grid.data {
+                *entry = crate::table_entry_at_amount(*entry, amount);
+            }
+            grid
+        });
+        Self {
+            table,
+            scaled,
+            space: CurveSpace {
+                to_curve: lightcraft_color::REC2020.to_space(&lightcraft_color::PROPHOTO).to_f32(),
+                from_curve: lightcraft_color::PROPHOTO.to_space(&lightcraft_color::REC2020).to_f32(),
+            },
+        }
+    }
+
+    fn apply(&self, rgb: [f32; 3]) -> [f32; 3] {
+        let prophoto = mul3(&self.space.to_curve, rgb);
+        mul3(&self.space.from_curve, self.scaled.as_ref().unwrap_or_else(|| self.table.hsv()).apply(prophoto))
+    }
+}
+
 /// Everything the per-pixel stage computes once per render: the CPU loop below and the GPU kernel
 /// (`lightcraft-gpu`) both read their parameters from here, so the two cannot drift apart.
 pub struct FinishParams {
+    /// CPU-only explicit table; public GPU entry declines active references.
+    imported_table: Option<ImportedTable>,
     /// A LUT profile and its amount (0..2), applied to the display-encoded colour.
     pub lut: Option<(std::sync::Arc<crate::lut::Lut3d>, f32)>,
     pub tone: ToneMap,
@@ -291,6 +329,7 @@ impl FinishParams {
             from_curve: lightcraft_color::PROPHOTO.to_space(&lightcraft_color::REC2020).to_f32(),
         });
         FinishParams {
+            imported_table: None,
             peak,
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
@@ -357,6 +396,7 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn finish(
     p: &Prepared,
     s: &DevelopSettings,
@@ -365,9 +405,11 @@ pub(crate) fn finish(
     space: OutputSpace,
     display: Option<&crate::DisplaySpace>,
     proof: Option<crate::Proof>,
+    imported_table: Option<crate::ResolvedProfileTable>,
 ) -> Rgba8 {
     let (w, h) = (p.img.width, p.img.height);
     let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, space);
+    fp.imported_table = imported_table.map(ImportedTable::new);
     fp.proof = proof.map(|pr| pr.params(space));
     if let Some(d) = display {
         fp.for_display(d, proof);
@@ -393,10 +435,12 @@ pub(crate) fn finish_deep(
     space: OutputSpace,
     depth: OutputDepth,
     proof: Option<crate::Proof>,
+    imported_table: Option<crate::ResolvedProfileTable>,
 ) -> DeepImage {
     use lightcraft_color::transfer::srgb_to_linear;
     let (w, h) = (p.img.width, p.img.height);
     let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, space);
+    fp.imported_table = imported_table.map(ImportedTable::new);
     fp.proof = proof.map(|pr| pr.params(space));
     let trc = fp.out_trc;
     let samples = match depth {
@@ -603,6 +647,11 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             // --- calibration (scene linear, before the tone map)
             if fp.calib.is_some() || fp.shadow_tint != 0.0 {
                 c = crate::colorops::calibrate(c, fp.calib.as_ref(), fp.shadow_tint);
+            }
+
+            // --- explicit profile table (scene linear, before camera tone and B&W)
+            if let Some(table) = &fp.imported_table {
+                c = table.apply(c);
             }
 
             // --- tone map on luminance, highlight desaturation

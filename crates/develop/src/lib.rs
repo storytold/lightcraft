@@ -35,7 +35,9 @@ impl DevelopSettings {
 
     /// Minimum wire schema needed by the authored features; legacy markers remain unchanged.
     pub fn required_schema_version(&self) -> u32 {
-        if self.profile.imported.as_ref().is_some_and(|look| look.convert_to_grayscale) {
+        if self.profile.imported.as_ref().is_some_and(|look| look.look_table.is_some()) {
+            LOOK_TABLE_SCHEMA_VERSION
+        } else if self.profile.imported.as_ref().is_some_and(|look| look.convert_to_grayscale) {
             PROFILE_TREATMENT_SCHEMA_VERSION
         } else if self.profile.imported.is_some() {
             IMPORTED_LOOK_SCHEMA_VERSION

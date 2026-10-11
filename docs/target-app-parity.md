@@ -77,7 +77,7 @@ from the checklist sections and the deep-dive documents.
 | Optics, lens profiles, crop and geometry | 6% | 80% | 50% | 40–80 h | no lens database; crop / Upright complete |
 | Masking | 8% | 67% | 45% | 60–110 h | checklist K 67.4%; AI masks heuristic or SAM 3 without mirror |
 | Remove, heal, Enhance (denoise, Raw Details, Super Resolution, Lens Blur) | 7% | 45% | 30% | 70–130 h | checklist I 75%, P 0% |
-| Presets, profiles, versions, history, sync | 5% | 95% | 85% | 8–15 h | numeric and continuous point-curve Amount, separate imported-profile curves / parameters; foreign tables and Lightroom-matched Amount remain gaps |
+| Presets, profiles, versions, history, sync | 5% | 95% | 85% | 8–15 h | numeric and continuous point-curve Amount, separate imported-profile curves / parameters; explicit runtime type-0 HSV tables have limited measured support; other tables and general Lightroom-matched Amount remain gaps |
 | Export | 6% | 89% | 75% | 15–30 h | checklist S 88.9% |
 | Merge and HDR | 3% | 85% | 60% | 20–35 h | merge 88% (HDR merge 🟡: AI Denoise on merged DNGs, JPEG response, memory; gap 29), HDR 70% (no HDR display) |
 | Views, compare, zoom, culling | 5% | 90% | 70% | 15–30 h | zoom detail P0 gap |
@@ -136,11 +136,35 @@ Five saved-photo comparisons remain mixed: three B&W results are unchanged withi
 the SDR colour case shifts **7.54237 → 7.57388** mean ΔE00 and the HDR-origin case
 **22.56467 → 22.70120**. These use a fixed stride-16 grid of native renders; the HDR-origin edit has
 unsupported extended curves and is not a validation of HDR rendering. Source colour / tone,
-missing profile-table definitions, exact Amount and imported HDR settings remain unresolved.
+unresolved profile-table definitions, general Amount behavior and imported HDR settings remain unresolved.
 Refine Saturation is approximate. Sharpening Detail and luminance-NR Contrast are stored but unused
 in rendering: controlled Lightroom exports show both matter. Conventional NR strength and
 sharpening frequency, contrast, Amount and Radius responses also have measured gaps. The readiness
 percentages and hour estimates above remain unchanged pending broader coverage.
+
+#### Runtime profile-table evidence (2026-10-11)
+
+An explicitly loaded type-0 HSV table now produces a measured effect through the actual CPU renderer,
+instead of silently leaving the saved reference inactive. The resource is resolved only from a
+user-supplied XMP file; no profile payload or path is bundled or written into the catalog. See
+[commands and support limits](control-protocol.md#explicit-runtime-profile-tables).
+
+Seven own-chart states were rendered at native 768×400 RGB16 and compared through their ICC profiles.
+Across the 24 fixed interiors, mean ΔE00 changes from **0.880907 → 0.046312** for the color/table case,
+**0.714675 → 0.035600** with a global affine curve, **0.385510 → 0.313531** with nested B&W, and
+**1.102498 → 0.400350** with an authored camera-tone curve. Neutral controls are byte-identical;
+43 resource/settings/lifecycle checks pass. Controlled source-composition measurements support the
+pre-tone/pre-B&W position for this chart. They do not identify ordering with arbitrary Exposure,
+Calibration, spatial adjustments, profile combinations or HDR; the remaining tone/B&W error is real.
+Six B&W chart cells worsen and pooled p95 rises slightly despite the lower pooled mean.
+
+One saved Nikon D3500 B&W photo at its unchanged Amount 120 gives a mixed result: stride-16 native-grid mean
+ΔE00 improves **4.771952 → 4.405292**, p95 **16.358665 → 14.790359**; the fixed center 512×512 region
+worsens, mean **2.660664 → 2.734120**, p95 **11.499795 → 12.131304**. Original/settings/provenance
+checks pass. Independent reviews reproduce the chart and photo metrics; a separate direct-reference
+chart at 120% (table Amount 1.2) also passes its unchanged comparison bound. These results do not
+establish broad photographic parity.
+Readiness estimates and partial fidelity status are unchanged.
 
 ## AI
 
@@ -371,6 +395,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 | 2026-10-12 | minor | 22 more CR3 bodies verified on one CC0 file each (raw-parity.md): use-weighted share whose camera decodes 85% → 92%, RAW decoding 77% → 83%; full 60.7% → 61.2% (~61%), mainstream depth 72.1% → 74.0% (~49% → ~51%), essentials depth 77.5% → 78.0% (~64% → ~65%) |
 | 2026-10-12 | minor | 117 Nikon and Fujifilm bodies verified (raw-parity.md): use-weighted share whose camera decodes 85% → 86%, RAW decoding 77% (unchanged); mainstream depth 72.1% → 72.4%, essentials depth 77.5% → 77.6%; headline numbers unchanged |
 | 2026-10-11 | minor | EOS R5 Mark II CR3 verified (raw-parity.md): use-weighted share whose camera decodes 84% → 85%, RAW decoding 76% → 77%; full 60.6% → 60.7%, mainstream depth 71.8% → 72.1%, essentials depth 77.4% → 77.5%; the rounded numbers (~61%, ~49%, ~64%) are unchanged |
+| 2026-10-11 | minor | Added explicit runtime HSV-table scope, native chart improvements and mixed saved Amount 120 evidence; no readiness or status increase |
 | 2026-10-10 | minor | Added bounded native 16-bit chart/photo evidence, V2 fixed-domain curves and V1 preservation, remaining profile / Refine / detail gaps; checklist 80.3% of 519 and F 84.4%; readiness and hour estimates unchanged |
 | 2026-10-10 | minor | RAW measured model by model (raw-parity.md): RAW decoding (76%) and colour (35%) are explicit rows of the full sum (59% → 61%); mainstream uses the use-weighted 84% plus a ×0.85 colour discount (51% → 49%); essentials uses 84% × colour 0.75 (63% → 64%); beta ~14 points |
 | 2026-10-10 | minor | Full number restored to an additive weighted sum over the dimensions (~59%; method aligned with the standard, no new evidence); hours to ~95% for each of the three audiences; beta distance ~16 points |

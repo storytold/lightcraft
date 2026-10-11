@@ -62,7 +62,7 @@ packets without `lc:unsupportedEdits` preserve diagnostics already in the catalo
 metadata is rejected, preserves existing names, and adds `InvalidSavedEditDiagnostics`. Limits are 66,305 bytes of encoded
 JSON, 256 names and 256 UTF-8 bytes per name; the UI abbreviates long lists and names.
 
-Catalog format 10 stores independent imported-profile treatment, profile adjustments, continuous point curves
+Catalog format 11 stores runtime profile-table references, independent imported-profile treatment, profile adjustments, continuous point curves
 and these diagnostics alongside the upstream format-3–6 operations.
 Existing compatible libraries upgrade on open; older LightCraft builds refuse the new format. For comparison with older builds, use a disposable library or a separately backed-up copy.
 
@@ -80,6 +80,12 @@ Imported profile definitions require schema 3; their independent monochrome conv
 when true. The new flag is omitted when false, so earlier native settings keep their serialized values and
 fingerprints. Earlier settings that already stored global B&W stay B&W: loading never guesses whether that
 choice originally came from a profile. Catalog format 10 prevents older readers from dropping the new flag.
+
+Imported Look table references require schema 5 and catalog format 11. They retain only a checked fingerprint;
+the resource path and table payload are never serialized. Resolve an explicitly selected XMP resource with
+[`profile.loadTable`](control-protocol.md#explicit-runtime-profile-tables) for the current session. Missing or
+unsupported resources produce rendering diagnostics; they do not replace saved settings. Older profiles with
+no table reference retain their existing wire shape and hash.
 
 New function preset files use `lightcraft.preset.v2` and curve presets use a version-2 `curves` envelope. Their old
 readers reject those formats; legacy sparse preset files remain readable. Older LightCraft versions that predate

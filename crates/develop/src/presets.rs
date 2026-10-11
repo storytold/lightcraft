@@ -173,7 +173,9 @@ pub fn extract_groups(s: &DevelopSettings, groups: &[SettingsGroup]) -> Value {
         }
     }
     if out.get("profile").and_then(|profile| profile.get("imported")).is_some_and(|look| !look.is_null()) {
-        let version = if s.profile.imported.as_ref().is_some_and(|look| look.convert_to_grayscale) {
+        let version = if s.profile.imported.as_ref().is_some_and(|look| look.look_table.is_some()) {
+            crate::settings::LOOK_TABLE_SCHEMA_VERSION
+        } else if s.profile.imported.as_ref().is_some_and(|look| look.convert_to_grayscale) {
             crate::settings::PROFILE_TREATMENT_SCHEMA_VERSION
         } else {
             crate::settings::IMPORTED_LOOK_SCHEMA_VERSION
@@ -446,6 +448,20 @@ mod tests {
         assert!(applied.is_bw(), "profile-only copy retains monochrome at Amount zero");
         let native = serde_json::to_string(&applied).unwrap();
         assert!(serde_json::from_str::<DevelopSettings>(&native).unwrap().is_bw());
+        assert!(!native.contains("look_table"), "absent references keep the legacy wire shape");
+        let reference: crate::LookTableRef = "e96cb8af6484f8402bb0e6ecfc8ad0fc".parse().unwrap();
+        a.profile.imported.as_mut().unwrap().look_table = Some(reference.clone());
+        let partial = extract_groups(&a, &[SettingsGroup::Profile]);
+        assert_eq!(partial["version"], crate::LOOK_TABLE_SCHEMA_VERSION);
+        let applied = try_apply_partial(&b, &partial, 1.0).unwrap();
+        assert_eq!(applied.profile.imported_look().unwrap().look_table, Some(reference));
+        assert_eq!(serde_json::from_value::<DevelopSettings>(applied.to_json()).unwrap(), applied);
+        let amount = applied.merged(&json!({"profile":{"amount":150.0}})).unwrap();
+        assert_eq!(amount.profile.imported, applied.profile.imported);
+        assert!(applied.merged(&json!({"profile":{"id":"lc.color"}})).unwrap().profile.imported.is_none());
+        for invalid in ["", "abc", "E96CB8AF6484F8402BB0E6ECFC8AD0F_"] {
+            assert!(serde_json::from_value::<crate::LookTableRef>(json!(invalid)).is_err());
+        }
     }
 
     #[test]

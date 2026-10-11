@@ -772,7 +772,7 @@ fn stored_process_numbers_render_with_a_known_process() {
     let deep = RenderRequest { depth: crate::OutputDepth::U16, ..RenderRequest::fit(96, 96) };
     for info in &infos {
         for s in [DevelopSettings::default(), edited.clone(), curved.clone()] {
-            for req in [RenderRequest::fit(96, 96), deep] {
+            for req in [RenderRequest::fit(96, 96), deep.clone()] {
                 let out = |s: &DevelopSettings| {
                     let r = render(&src, info, s, &req);
                     (r.image.data, r.deep)

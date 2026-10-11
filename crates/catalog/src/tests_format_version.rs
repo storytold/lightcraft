@@ -139,7 +139,10 @@ fn v3_library_upgrades_before_recording_function_curves_and_reopens_exactly() {
     assert_eq!(report.upgraded_from, Some(3));
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
     assert_eq!(loaded.to_snapshot(), base.to_snapshot(), "legacy sparse edits survive the upgrade");
-    let settings = Arc::new(lightcraft_develop::DevelopSettings::from_json(&function_settings()).unwrap());
+    let mut value = function_settings();
+    value["profile"] = serde_json::json!({"id":"lc.imported","imported":{"look_table":"E96CB8AF6484F8402BB0E6ECFC8AD0FC"}});
+    let settings = Arc::new(lightcraft_develop::DevelopSettings::from_json(&value).unwrap());
+    assert_eq!(settings.required_schema_version(), lightcraft_develop::LOOK_TABLE_SCHEMA_VERSION);
     let op = Op::SetDevelop { id, settings: settings.clone(), label: "Continuous".into(), edited: None };
     loaded.apply(op.clone()).unwrap();
     journal.append(&[op]).unwrap();
@@ -322,6 +325,7 @@ fn bad_crc_is_still_a_torn_tail() {
 fn op_variants_are_versioned() {
     fn since(op: &Op) -> u32 {
         match op {
+            Op::SetDevelop { settings, .. } if settings.profile.imported.as_ref().is_some_and(|look| look.look_table.is_some()) => 12,
             Op::SetDevelop { settings, .. } if settings.profile.imported.as_ref().is_some_and(|look| look.convert_to_grayscale) => 11,
             Op::SetDevelop { settings, .. } if settings.profile.imported.is_some() => 10,
             Op::SetDevelop { settings, .. }
@@ -376,13 +380,13 @@ fn op_variants_are_versioned() {
         edited: None,
     });
     assert_eq!(function, 9);
-    for (convert_to_grayscale, version) in [(false, 10), (true, VERSION)] {
+    for (convert_to_grayscale, table, version) in [(false, None, 10), (true, None, 11), (true, Some("E96CB8AF6484F8402BB0E6ECFC8AD0FC"), VERSION)] {
         let required = since(&Op::SetDevelop {
             id: PhotoId(1),
             settings: Arc::new(
                 lightcraft_develop::DevelopSettings::from_json(&serde_json::json!({
                     "profile": {"id": "lc.imported", "imported": {
-                        "name": "Photo look", "contrast": 8.0, "convert_to_grayscale": convert_to_grayscale
+                        "name": "Photo look", "contrast": 8.0, "convert_to_grayscale": convert_to_grayscale, "look_table": table
                     }}
                 }))
                 .unwrap(),

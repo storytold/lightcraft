@@ -12,8 +12,9 @@ Saturation formula, then profile curves before soft-proof and output gamut mappi
 export or display colour space therefore no longer changes the curve operation itself; target
 gamut limits still affect the delivered image. The base tone model is unchanged.
 
-V1 retains its original target-primary curve stage. V2 bypasses its extra matrix/transfer operations
-when both curve LUT stages are identity, so no-curve renders retain the same samples. Grain and
+V1 retains its original target-primary curve stage. V2 bypasses its extra curve matrix/transfer
+operations when both curve LUT stages are identity, so no-curve renders without an active runtime
+table retain the same samples. Grain and
 external 3D LUTs remain in sRGB-encoded output primaries. HDR curves retain their slope-one extension
 above encoded SDR white; signed and above-peak curve outputs reach output gamut mapping. Only
 extreme encoded values are limited to ±1e15 to prevent f32 overflow during transfer decoding and
@@ -23,6 +24,13 @@ Lightroom curve, profile, or HDR parity.
 **V3** is explicit opt-in: V2 curves plus the upstream median-prefiltered Highlights/Shadows base (radius 0.15% of the long edge, capped at24px). V1/V2 retain their original spatial base. CPU/GPU use the shared `tone_base_detail` and cache by process. V3 is supported but is not the default for new imports, Reset or Update to Current Process while photographic evaluation is pending.
 
 Upstream also used numeric V2 for median-base tone with its older curve space. Those settings cannot be distinguished reliably from this fork's V2 by the number alone. This fork preserves its established V2 meaning; no automatic upstream-V2 appearance migration is claimed.
+
+V2 and V3 can also apply an explicitly loaded runtime type-0 HSV profile table in **linear** ProPhoto,
+before camera tone and B&W. This is separate from the sRGB-encoded point-curve stage. It is CPU-only,
+SDR-only, with checked Amount and resource diagnostics; V1 does not apply it. Absent references,
+profile bypass and Amount 0 skip the table and its matrix round trip. See
+[loading and limits](control-protocol.md#explicit-runtime-profile-tables) and
+[bounded measurements](target-app-parity.md#runtime-profile-table-evidence-2026-10-11).
 
 ## The rule
 
@@ -90,3 +98,10 @@ The process is saved as `"process": <number>` in the settings JSON, except V1, w
 Settings made before process versions existed are therefore saved exactly as before, and their
 preview-cache keys (`DevelopSettings::hash64`) don't change. `develop.get` (MCP `get_develop`) always
 states the process.
+
+Imported Look table references require **settings schema 5** and **catalog format 11**. These are
+storage versions, distinct from rendering Process 2. Only a canonical fingerprint is serialized;
+paths, table samples and loaded/unloaded state are session-only. Settings without a reference keep
+their existing wire representation and schema marker. New builds read older settings; opening an
+older catalog upgrades its envelope to 11, which older builds refuse instead of silently discarding
+new edit data. Loading or unloading a resource does not alter saved settings or undo history.

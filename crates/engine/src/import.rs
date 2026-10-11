@@ -1609,7 +1609,12 @@ impl Session {
         let edge = edge.clamp(64, crate::media::SourceLevel::Thumb.max_edge());
         let level = crate::media::SourceLevel::Thumb;
         let source = self.media.origin_ref(&p.source, level.max_edge());
-        let key = lightcraft_preview::Hasher128::new().str(&c.path).u64(c.file_size).u64(edge as u64).finish().0 as u64;
+        let mut hash = lightcraft_preview::Hasher128::new();
+        hash.str(&c.path).u64(c.file_size).u64(edge as u64);
+        if let Some(table_key) = self.profile_table_key(&p.develop) {
+            hash.update(&table_key.0.to_le_bytes());
+        }
+        let key = hash.finish().0 as u64;
         let small = crate::media::RenderJob {
             request_id: 0,
             cache_generation: self.media.rendered.generation(),
@@ -1620,7 +1625,10 @@ impl Session {
             origin: p.source.clone(),
             info: crate::media::source_info(&p),
             settings: p.develop.clone(),
-            request: lightcraft_pipeline::RenderRequest::fit(edge, edge),
+            request: lightcraft_pipeline::RenderRequest {
+                imported_table: self.profile_table(&p.develop),
+                ..lightcraft_pipeline::RenderRequest::fit(edge, edge)
+            },
             key,
             cache: None,
             stages: None,
@@ -1630,10 +1638,18 @@ impl Session {
             preview_cut: None,
         };
         let embedded = match (&self.media.preview_loader, c.kind) {
-            (Some(l), MediaKind::Raw) => Some((c.path.clone(), l.clone(), edge)),
+            (Some(l), MediaKind::Raw) if lightcraft_pipeline::active_look_table(&p.develop).is_none() => Some((c.path.clone(), l.clone(), edge)),
             _ => None,
         };
-        Some(crate::media::QuickJob { request_id: 0, photo: id, key, cached: Vec::new(), embedded, small: Some(Box::new(small)) })
+        Some(crate::media::QuickJob {
+            unsupported_edits: lightcraft_pipeline::profile_table_diagnostics(&small.settings, &small.request),
+            request_id: 0,
+            photo: id,
+            key,
+            cached: Vec::new(),
+            embedded,
+            small: Some(Box::new(small)),
+        })
     }
 
     /// Use the system clock for import/edit times (native hosts).

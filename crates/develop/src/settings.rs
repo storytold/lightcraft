@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 pub const POINT_CURVE_SCHEMA_VERSION: u32 = 2;
 pub const IMPORTED_LOOK_SCHEMA_VERSION: u32 = 3;
 pub const PROFILE_TREATMENT_SCHEMA_VERSION: u32 = 4;
-pub const SCHEMA_VERSION: u32 = PROFILE_TREATMENT_SCHEMA_VERSION;
+pub const LOOK_TABLE_SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = LOOK_TABLE_SCHEMA_VERSION;
 
 fn deserialize_schema_version<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
     let version = u32::deserialize(deserializer)?;
@@ -259,8 +260,45 @@ pub enum Treatment {
 pub const IMPORTED_LOOK_ID: &str = "lc.imported";
 pub const MAX_IMPORTED_LOOK_TEXT_BYTES: usize = 256;
 
+/// A saved runtime table reference. The definition and its local path are never settings.
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize)]
+#[serde(transparent)]
+pub struct LookTableRef(String);
+
+impl LookTableRef {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::str::FromStr for LookTableRef {
+    type Err = &'static str;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.len() != 32 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("look table reference must contain exactly 32 hexadecimal digits");
+        }
+        Ok(Self(value.to_ascii_uppercase()))
+    }
+}
+
+impl<'de> Deserialize<'de> for LookTableRef {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Reference;
+        impl serde::de::Visitor<'_> for Reference {
+            type Value = LookTableRef;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a 32-hex table reference")
+            }
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<LookTableRef, E> {
+                value.parse().map_err(E::custom)
+            }
+        }
+        d.deserialize_str(Reference)
+    }
+}
+
 /// A profile's own parameters, independent of the user's global sliders and curves.
-/// Only the supported scalar/curve subset is stored here; opaque table payloads stay unsupported.
+/// Table definitions are supplied separately at runtime; only their checked reference is saved.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ImportedLook {
@@ -271,6 +309,7 @@ pub struct ImportedLook {
     /// The profile converts to monochrome independently of global Treatment and Amount.
     /// Absent in older native settings: never infer it from a name or a flattened Treatment.
     pub convert_to_grayscale: bool,
+    pub look_table: Option<LookTableRef>,
     #[serde(deserialize_with = "deserialize_look_scalar")]
     pub contrast: f64,
     #[serde(deserialize_with = "deserialize_look_scalar")]
@@ -355,11 +394,15 @@ impl Serialize for ImportedLook {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         self.validate().map_err(serde::ser::Error::custom)?;
-        let mut out = serializer.serialize_struct("ImportedLook", 10 + usize::from(self.convert_to_grayscale))?;
+        let mut out =
+            serializer.serialize_struct("ImportedLook", 10 + usize::from(self.convert_to_grayscale) + usize::from(self.look_table.is_some()))?;
         out.serialize_field("name", &self.name)?;
         out.serialize_field("source_id", &self.source_id)?;
         if self.convert_to_grayscale {
             out.serialize_field("convert_to_grayscale", &true)?;
+        }
+        if let Some(reference) = &self.look_table {
+            out.serialize_field("look_table", reference)?;
         }
         out.serialize_field("contrast", &self.contrast)?;
         out.serialize_field("highlights", &self.highlights)?;

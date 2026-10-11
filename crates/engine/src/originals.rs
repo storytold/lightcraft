@@ -81,7 +81,11 @@ impl OriginalGuard {
 impl crate::Session {
     /// A guard over this library's originals (see [`OriginalGuard`]).
     pub fn original_guard(&self) -> OriginalGuard {
-        OriginalGuard::new(&self.catalog)
+        let mut guard = OriginalGuard::new(&self.catalog);
+        for loaded in self.profile_tables.values() {
+            guard.add(&loaded.path, "supplied profile table");
+        }
+        guard
     }
 
     /// `Err` when writing `path` would replace a catalogued photo's original or sidecar. A free

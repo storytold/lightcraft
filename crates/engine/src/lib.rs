@@ -67,6 +67,7 @@ pub mod print;
 pub mod print_color;
 pub mod print_pdf;
 pub mod profile_refs;
+pub mod profile_tables;
 pub mod proof;
 pub mod rename;
 pub mod segment;
@@ -330,6 +331,7 @@ pub struct Session {
     pub signatures: std::collections::HashMap<String, [f32; 64]>,
     /// Imported `.cube` LUT profiles.
     pub lut_profiles: Vec<cmd::lut_profiles::LutProfile>,
+    pub(crate) profile_tables: std::collections::HashMap<String, profile_tables::LoadedTable>,
     /// The target album B adds to (`None` = the Quick Collection).
     pub target_album: Option<lightcraft_catalog::AlbumId>,
     /// Auto import: files seen in the watched folder and their size then (a file is imported once
@@ -478,6 +480,7 @@ impl Session {
             label_sets: Vec::new(),
             signatures: Default::default(),
             lut_profiles: Vec::new(),
+            profile_tables: Default::default(),
             target_album: None,
             auto_import_seen: Default::default(),
             keyword_sets: Vec::new(),

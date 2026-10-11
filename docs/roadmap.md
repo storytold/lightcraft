@@ -71,7 +71,7 @@ calibration: M0–M13 took ≈ 25 active hours against an estimate of ≈ 110–
 | M6 | Masking | brush, linear/radial gradients, colour/luminance/depth range, add/subtract/intersect/invert, all local adjustments, masks panel | 8–12 | 🚧 (brush/linear/radial/colour/luminance range, add/subtract/intersect, masks panel ✅; depth range, AI masks ⬜) |
 | M7 | Detail | sharpening + masking preview, luminance/colour NR, Denoise, Raw Details, Super Resolution | 6–10 | 🚧 (sharpening and conventional NR 🟡: unused sharpening Detail / NR Contrast controls and measured fidelity gaps; AI Denoise 🟡 (Bayer, optional weights; policy/fidelity open); Raw Details, Super Resolution ⬜) |
 | M8 | Heal / Remove | content-aware remove (PatchMatch), heal, clone, brush spots, visualize spots, red/pet eye | 6–10 | 🚧 (heal, clone, auto source, visualize spots, red/pet eye ✅; PatchMatch remove ⬜) |
-| M9 | Presets, profiles, versions, sync | preset browser + amount, create/import presets, profile browser, versions, history, copy/paste/sync settings | 5–8 | 🚧 (numeric and continuous point-curve Amount, separate saved-profile curves / parameters and preservation guards; Lightroom-matched Amount, profile tables and imported HDR curves remain gaps) |
+| M9 | Presets, profiles, versions, sync | preset browser + amount, create/import presets, profile browser, versions, history, copy/paste/sync settings | 5–8 | 🚧 (numeric and continuous point-curve Amount, separate saved-profile curves / parameters and preservation guards; explicit runtime type-0 HSV tables have limited chart/photo evidence; general Lightroom Amount, other tables and imported HDR curves remain gaps) |
 | M10 | Export & share | export dialog (JPEG/PNG/TIFF/DNG/AVIF/JXL/original), sizing, sharpening, metadata, watermark, naming, batch jobs, XMP sidecars, HDR export | 6–10 | 🚧 (all formats incl. DNG/original, sizing, presets, background jobs, HDR gain map JPEG / PQ AVIF ✅; JXL encode ⬜) |
 | M11 | RAW II | CR3, RAF (X-Trans), ORF, RW2, PEF, SRW, 3FR, IIQ + long tail; camera calibration DB; HEIC/AVIF/JXL import | 20–35 | 🚧 (RAF all, RW2 every format, PEF, ORF uncompressed and 12.8 bpp, SRW uncompressed, HEIC ✅; CR3 🟡 (3 bodies verified); **camera colour calibration** 🚧 (per-file JPEG fits, 5 bundled profiles, 52 spectral matrices; measured database missing); compressed ORF / SRW, HE NEF, IIQ, X3F ⬜) |
 | M12 | AI & smart features | subject/sky/background/people/object masks, semantic search, faces/People (permissively licensed models, pure-Rust inference) | 20–40 | 🚧 (faces: detection, recognition, People view ✅; Object / Describe masks via SAM 3 🟡; Subject / Sky / People masks, semantic search ⬜) |
@@ -92,7 +92,7 @@ calibration: M0–M13 took ≈ 25 active hours against an estimate of ≈ 110–
   alongside GPL code); decoder source is never read (decided 2026-10-05). Still open:
   freedom-to-operate review for local Laplacian filters, PatchMatch and HEVC (HEIC).
 - **Look parity** remains incomplete. Local native 16-bit Lightroom measurements now cover selected
-  charts and saved edits; source colour / tone, profile tables, Refine Saturation and conventional
+  charts and saved edits; source colour / tone, unresolved profile tables, Refine Saturation and conventional
   detail still have gaps. V2 fixes curves to ProPhoto primaries with sRGB encoding, while saved-photo
   results remain mixed. Existing V1 edits retain their rendering until explicitly updated
   ([process-versions.md](process-versions.md)); broad photographic coverage is still needed.

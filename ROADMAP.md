@@ -83,8 +83,9 @@ selecting a color profile no longer leaves that conversion behind in global trea
 V2 fixes global and imported-profile curves to ProPhoto primaries with sRGB encoding; existing V1
 edits retain their rendering. The controlled colour-chart result improves, but saved-photo results
 remain mixed. Refine Saturation is approximate; sharpening Detail and luminance-NR Contrast are
-stored but do not affect rendering despite measured Lightroom responses. Profile tables, exact
-Amount, source colour / tone and imported HDR extended curves remain gaps. See the
+stored but do not affect rendering despite measured Lightroom responses. Explicit runtime type-0
+HSV tables improve controlled chart error, while one saved Amount 120 photo has mixed regional results.
+Other profile tables, general Amount behavior, source colour / tone and imported HDR extended curves remain gaps. See the
 [bounded evidence](docs/target-app-parity.md#local-rendering-evidence-2026-10-10); the readiness and
 hour estimates above have not been recalculated from these measurements.
 
@@ -150,6 +151,9 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
   preview): the CRX QP map's first-symbol literal and limited-length escape; four CC0 R5 Mark II files
   pinned, the QP maps of 33,665 private C-RAW files decode exactly ([cr3.md](docs/cr3.md)). 235 models
   verified; RAW decoding 76% → 77%; headline numbers unchanged.
+- 2026-10-11 (runtime profiles): explicit type-0 HSV table resolution and rendering, with native chart
+  improvements and mixed regional results on one Nikon D3500 saved edit. Partial fidelity status,
+  readiness and hour estimates remain unchanged.
 - 2026-10-10 (saved edits): native 16-bit chart/photo measurements, saved-edit preservation guards,
   separate imported-profile rendering and continuous preset curves; V2 corrects the curve working
   space while preserving V1. Broad fidelity remains incomplete, including measured NR / sharpening

@@ -22,6 +22,8 @@
 //! Values above 1.0 (highlight headroom) keep their headroom: the table's value scale only ever
 //! lowers them, so a lookup can't clip what the scene-referred pipeline still needs.
 
+pub mod big_table;
+
 use crate::gaintable::GainTableMap;
 use lightcraft_color::transfer::{linear_to_srgb, srgb_to_linear};
 use lightcraft_color::{D50, D65, Mat3, PROPHOTO, REC2020, bradford};
