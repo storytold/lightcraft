@@ -197,6 +197,69 @@ interiors worsen; native export increases from **3.68 to 5.11 s** in this observ
 no active spatial tone adjustment, is pixel-identical between V2 and V3. This is mixed, limited
 evidence: V3 stays opt-in, and source/profile colour and conventional NR remain visibly unmatched.
 
+#### Channel-only Refine Saturation (2026-10-11)
+
+V2/V3 SDR now leaves individual-channel curves alone when the master curve, parametric controls
+and master-curve fade from a built-in profile are inactive. Three authored native 768×400 RGB16 chart pairs cover red
+and green affine curves and a nonlinear blue curve, with identity master/other channels. Lightroom's
+pixels and ICC are identical between explicit Refine 0 and requested 100 in each pair. The 100
+exports omit that scalar and `CompatibleVersion`; this observed serialization form is recorded
+explicitly, rather than described as independent numeric-100 readback.
+
+Against the fully verified explicit-0 Lightroom exports, mean ΔE00 changes as follows:
+
+| Individual curve | All 24 fixed interiors | Whole frame |
+|---|---:|---:|
+| Red affine | 0.597319 → 0.038811 | 0.487147 → 0.040341 |
+| Green affine | 0.769967 → 0.045187 | 0.626976 → 0.047154 |
+| Blue nonlinear | 2.876546 → 0.106233 | 2.328633 → 0.112383 |
+
+In each chart, twenty coloured interiors improve and four gray interiors remain unchanged.
+Each renderer's embedded ICC is used; the remaining difference exceeds native-code sensitivity
+bounds, so this is not pixel parity.
+Candidate Refine 100 preserves the prior native output. Separate native master-affine Refine 0/50
+controls preserve every RGB16 sample and ICC byte. V1 and HDR retain their prior refinement path.
+The existing curve-order test also covers V2/V3 channel-only behavior and the enabled-HDR/zero-headroom
+exclusion; a headless app check displays the imported chart with its exact settings.
+
+##### One D3500 photographic witness
+
+One already-seen D3500 training photograph also uses the fixed red-affine curve, identity master
+and Refine 0, with Adobe Standard/no Look and otherwise neutral settings. The comparison uses
+native 6000×4000 RGB16 exports, each renderer's embedded ICC converted to D50 XYZ, two fixed
+375×250 sample grids at native phases (0,0) and (8,8), nine disjoint 640×640 regions and a 512×512
+center. The grids and center overlap the regions; these are descriptive scopes, not independent
+photographs. No registration, resampling, fitting or heldout inspection was performed.
+
+| Fixed scope | Direct mean ΔE00 | Paired XYZ-vector RMS | Paired Lab-chroma-vector RMS |
+|---|---:|---:|---:|
+| Grid, phase (0,0) | 11.146628 → 4.939543 | 0.012269 → 0.004558 | 16.786869 → 3.623544 |
+| Grid, phase (8,8) | 11.129753 → 4.946593 | 0.012246 → 0.004563 | 16.756721 → 3.623444 |
+| Nine regions pooled | 10.787501 → 4.881046 | 0.012180 → 0.004987 | 16.712557 → 3.684541 |
+| Center | 10.378872 → 5.718512 | 0.012545 → 0.004780 | 15.146018 → 3.790288 |
+
+All thirteen scopes improve direct ΔE00 mean, RMS, p95 and maximum. Direct absolute-Y mean and
+RMS worsen in all thirteen, as does direct absolute-L* p95. Direct XYZ errors are mixed and some
+Lab/chroma maxima worsen. For example, grid-phase-(0,0) direct XYZ-vector RMS increases
+0.039884 → 0.040850 despite the lower ΔE00. Every worsening is retained in the private report.
+Paired-response means and RMS improve in every scope; some paired XYZ and Y p95/maxima worsen.
+
+The paired quantity is `(edited LC − neutral LC303c) − (edited LR − neutral LR)`, computed
+separately in XYZ and Lab; ΔE00 is never applied to Lab difference vectors. Both comparisons use
+the same retained baseline-binary neutral LC anchor. No fresh candidate-neutral capture was made,
+so this comparison does not independently establish candidate neutral invariance. Direct errors
+still include source-colour/profile mismatch: the neutral phase-(0,0) grid mean ΔE00 is 5.224440.
+This single training photograph is not heldout validation or general photographic parity.
+
+The correction revises the still-unreleased fork V2/V3 contract; existing development channel-only
+edits below Refine 100 can change without rewriting their settings. V1 remains frozen, and
+render-cache version 63 invalidates prior rendered previews. See the explicit
+[pre-release exception](process-versions.md#the-rule).
+
+These bounded witnesses do not establish arbitrary-curve, mixed master/channel or B&W parity.
+The master refinement formula remains approximate. Source colour, conventional noise reduction
+and sharpening still have measured gaps. Partial statuses and readiness estimates are unchanged.
+
 ## AI
 
 Lightroom 9.6 ships 37 on-device models (names listed from its `ModelZoo`), covering subject, sky,
@@ -426,6 +489,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 | 2026-10-14 | minor | Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (`coverage_sweep_corpus.rs`, `coverage-sweep.tsv`; `docs/raw/coverage.py` 515 → 545 verified rows); the counts above are not re-measured here. Sensor verification does not establish colour parity (#1277); headline numbers unchanged |
 | 2026-10-12 | minor | 22 more CR3 bodies verified on one CC0 file each (raw-parity.md): use-weighted share whose camera decodes 85% → 92%, RAW decoding 77% → 83%; full 60.7% → 61.2% (~61%), mainstream depth 72.1% → 74.0% (~49% → ~51%), essentials depth 77.5% → 78.0% (~64% → ~65%) |
 | 2026-10-12 | minor | 117 Nikon and Fujifilm bodies verified (raw-parity.md): use-weighted share whose camera decodes 85% → 86%, RAW decoding 77% (unchanged); mainstream depth 72.1% → 72.4%, essentials depth 77.5% → 77.6%; headline numbers unchanged |
+| 2026-10-11 | minor | Corrected channel-only Refine Saturation scope for unreleased V2/V3 SDR; three native charts and one training-photo comparison with retained regressions/neutral-anchor limits; cache 63, legacy/HDR preservation and no readiness increase |
 | 2026-10-11 | minor | Recount after upstream76b53778 integration: checklist 80.8% of 531; V3 tone remains opt-in; readiness and hour estimates unchanged |
 | 2026-10-11 | minor | EOS R5 Mark II CR3 verified (raw-parity.md): use-weighted share whose camera decodes 84% → 85%, RAW decoding 76% → 77%; full 60.6% → 60.7%, mainstream depth 71.8% → 72.1%, essentials depth 77.4% → 77.5%; the rounded numbers (~61%, ~49%, ~64%) are unchanged |
 | 2026-10-11 | minor | Retained measured D3500 rare-pixel source fix; restored local Masking interaction after repeatable Lightroom counterevidence; no readiness increase |

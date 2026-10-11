@@ -41,9 +41,18 @@ Lightroom exports use the already paired local controller and a serial queue:
 python -B plan/lightroom-reference/tools/controller_export_queue.py /absolute/path/to/reviewed-queue.json
 ```
 
-There are now 135 native-verified scripted exports, including local sharpening, colour-NR structure/channel charts and companion-control references. Use new output paths, exact source/settings guards and the retained TIFF16/full-size/AdobeRGB/no-output-sharpening settings. Do not resubmit uncertain jobs. Never print or copy the pairing token.
+There are now 150 accepted native scripted exports, including local sharpening, colour-NR structure/channel charts and companion-control references. Three recent requested-Refine100 chart exports carry an explicit metadata-omission qualification; their numeric100 setting was not independently read back. Use new output paths, exact source/settings guards and the retained TIFF16/full-size/AdobeRGB/no-output-sharpening settings. Do not resubmit uncertain jobs. Never print or copy the pairing token.
 
 The controller returns no `SharpenEdgeMasking` value. Keep its 13 supported readiness checks and verify Masking in the exported XMP: this run explicitly retains 100 but omits zero, Radius and Detail at global Sharpness 0. Lightroom also normalizes legacy gradients to mask groups and adds identity `LocalCurveRefineSaturation=100`. Preserve these distinctions; missing metadata is not a verified numerical value.
+
+`openImage` acknowledgment is not image-load completion. A chart-to-NEF transition with the same
+13 neutral values exported the previous chart. Native dimensions and `RawFileName` rejected it.
+After recording and archiving that completed wrong-image output, a fresh job added the supported
+`SharpenDetail=50` readiness value, distinguishing the intended photo from the prior chart's 100;
+the correct 6000×4000 photo and full settings then verified. Use a distinguishing, source-backed
+readiness value when available, and always verify the actual exported identity. Controller
+Temperature/Tint readings are not necessarily the Kelvin/tint numbers in XMP. This remains a
+verified one-shot export workflow with failure detection, not an identity guarantee from `openImage`.
 
 ## Previously measured integration
 
@@ -75,10 +84,40 @@ V3 changes DSC0805's active Shadows adjustment: grid mean ΔE00 at Color NR 0 im
 
 Final CLI `303c06aeda65` passes all eight `cargo xtask ci` gates. Four fresh imports/exports preserve every measured V2 native RGB value and ICC byte, with exact settings and diagnostics. The final corrections distinguish Legacy/Kelvin white balance in the source-stage cache and restore strict alternate-sidecar validation before saving. Existing compatibility tests were adjusted for Kelvin serialization and macOS path/dialog behavior; no new test functions were added. Owned full TIFFs were removed after verification, and original sources/sidecars remain unchanged.
 
+## Current channel-only Refine correction
+
+Still-unreleased V2/V3 SDR now bypasses Refine Saturation for individual-channel curves when the
+master, parametric controls and built-in master fade are inactive. V1 and HDR retain their prior
+path; saved settings are not rewritten. Existing development V2/V3 appearances can change.
+Render-cache version 63 prevents stale rendered previews; camera-look version 8 is unchanged.
+The explicit pre-release exception is recorded in [process-versions](process-versions.md#the-rule).
+
+Three fixed native charts cover red/green affine and nonlinear blue curves. All twenty coloured
+interiors improve and four gray interiors remain unchanged in each. Candidate Refine 100 and
+master-affine Refine 0/50 native controls preserve prior pixels/ICC. Each Lightroom requested-100
+export omits the Refine and CompatibleVersion fields, so the measured target is fully verified
+explicit 0; the requested-100 identity evidence has no independent numeric-100 readback.
+
+One already-seen D3500 training photo with the red-affine Refine-0 edit improves direct grid mean
+ΔE00 11.146628 → 4.939543. Every direct ΔE00 summary improves across all thirteen fixed scopes,
+but direct absolute-Y mean/RMS worsen everywhere and other distribution regressions remain.
+Paired-response means/RMS improve, using a shared retained303c neutral anchor rather than a fresh
+candidate-neutral capture. This is no heldout or general photographic parity claim. See the
+[complete scope and metric caveats](target-app-parity.md#one-d3500-photographic-witness).
+
+Private records under `resume-20261011/fidelity-audit/`: `refine-channel-curve`,
+`refine-channel-extra/native-comparison-01`, and `refine-channel-photo/native-comparison-02`.
+Earlier failed export/import attempts and their narrowly scoped amendments remain preserved.
+
+Final CLI `5b882e762716` passes all eight `cargo xtask ci` gates. Fresh native captures of the
+D3500 edit and both red-chart Refine states match every measured candidate RGB16 pixel and ICC
+byte, with exact settings, diagnostics and owned-source guards. One existing test was extended;
+no new test functions were added. Redundant full TIFFs were retired after verified compact retention.
+
 ## Next work
 
-1. Investigate source-colour fitting before further NR tuning. A reviewed private probe records the existing D3500 candidate bank and exact proxy reduction arithmetic without changing selection. Require unchanged native Color0 output and exact replay before interpreting render-before-average versus average-before-render. No new fit or improved fidelity is established by instrumentation alone. Continue conventional sharpening/colour-NR afterward; Global Sharpening Detail and luminance-NR Contrast remain stored no-ops.
+1. Measure an affine master plus the already measured nonlinear blue curve at Refine 0/100 to test curve ordering and interaction. Unlike identical affine curves, these operations do not commute. Keep the empirical master-only endpoints and require the mixed-100 composition gate before interpreting the result. The master endpoint formula remains unresolved; no new endpoint model or fitted replacement is proposed. Preserve the channel-only correction and V1/HDR behavior.
 2. Investigate profile-table ordering relative to Exposure using own sources. No new exposure reference has been exported. A failed composition check alone does not prove the reverse order. Do not read or hash Adobe app-bundle contents under the current project instructions.
-3. Continue remaining tone/B&W and curve gaps. The existing saved Amount 120 paired-response audit is complete; baseline source-colour error dominates and the full-photo mean can hide cancellation.
+3. Continue remaining tone/B&W and conventional NR/sharpening gaps without recycling rejected candidates. The proxy-order replay left the existing winners unchanged; the shared Lightroom-targeted source-colour fit failed the training no-regression gate, and its four heldout scenes remain sealed. No source fit or experimental CNR model was adopted. Global Sharpening Detail and luminance-NR Contrast remain stored no-ops. The saved Amount 120 paired-response audit is complete; baseline source-colour error can dominate and full-photo means can hide cancellation.
 
 A sixbox-to-Mac SSH shell round trip was verified using sixbox's existing `macbook-air` alias. Lightroom control/export over that SSH route was **not** verified, and no migration or SSH configuration change was made. A future migration needs the local evidence and export-worker arrangement; a Git clone alone is insufficient.

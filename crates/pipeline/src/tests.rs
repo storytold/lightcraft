@@ -904,6 +904,35 @@ fn v2_curves_are_output_independent_and_keep_global_refine_profile_order() {
     assert_eq!(render_linear(&both, OutputSpace::ProPhoto), render_linear(&profile, OutputSpace::ProPhoto));
     both.profile.amount = 0.0;
     assert_eq!(render_linear(&both, OutputSpace::ProPhoto), pre_curve);
+    // Only a channel curve: current SDR processes keep the curve's own saturation.
+    // Legacy and HDR paths retain refinement, including enabled HDR at zero headroom.
+    let channel_refine_pair = |mut settings: DevelopSettings, depth| {
+        let req = RenderRequest { space: OutputSpace::ProPhoto, depth, ..RenderRequest::fit(12, 8) };
+        [0.0, 100.0].map(|refine| {
+            settings.curve.refine_saturation = refine;
+            let DeepSamples::F32(v) = render(&src, &info, &settings, &req).deep.unwrap().samples else { panic!("float output") };
+            assert!(v.iter().all(|v| v.is_finite()));
+            v
+        })
+    };
+    let mut channel_only = neutral.clone();
+    channel_only.curve.red = vec![Point::new(0.0, 32.0 / 255.0), Point::new(1.0, 223.0 / 255.0)].into();
+    for process in [ProcessVersion::V2, ProcessVersion::V3] {
+        channel_only.process = process;
+        let [refined, full] = channel_refine_pair(channel_only.clone(), OutputDepth::F32Linear);
+        assert_eq!(refined, full, "{process:?}: channel-only SDR must ignore Refine Saturation");
+        let uncurved = DevelopSettings { process, ..neutral.clone() };
+        assert_ne!(full, render_linear(&uncurved, OutputSpace::ProPhoto), "channel curve must remain active");
+    }
+    channel_only.process = ProcessVersion::V1;
+    let [refined, full] = channel_refine_pair(channel_only.clone(), OutputDepth::F32Linear);
+    assert_ne!(refined, full, "V1 channel-only refinement must retain its legacy behavior");
+    channel_only.process = ProcessVersion::V2;
+    channel_only.hdr.enabled = true;
+    channel_only.hdr.max_ev = 0.0;
+    // F32Linear would request an SDR rendition and erase the HDR-enabled exclusion.
+    let [refined, full] = channel_refine_pair(channel_only, OutputDepth::F32Hdr);
+    assert_ne!(refined, full, "HDR enabled with zero headroom must retain refinement");
     // Legacy sparse endpoints may be finite but enormous. The new decode step must keep its
     // numerical guard independent of the output gamut rather than overflow before mapping.
     let mut extreme = neutral;

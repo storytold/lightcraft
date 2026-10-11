@@ -322,7 +322,14 @@ impl FinishParams {
         });
         let calibration = s.section_enabled("calibration");
         let peak = s.hdr.peak();
-        let curves = curve_luts(&s.curve, crate::profiles::curve_fades(s));
+        let fades = crate::profiles::curve_fades(s);
+        let curves = curve_luts(&s.curve, fades);
+        let master_or_parametric = !s.curve.master.is_identity()
+            || fades[0].is_some()
+            || s.curve.highlights != 0.0
+            || s.curve.lights != 0.0
+            || s.curve.darks != 0.0
+            || s.curve.shadows != 0.0;
         let profile_curves = profile_curve_luts(s);
         let curve_space =
             (matches!(s.process.process(), Process::V2 | Process::V3) && (curves.is_some() || profile_curves.is_some())).then(|| CurveSpace {
@@ -340,7 +347,13 @@ impl FinishParams {
             curves,
             profile_curves,
             curve_space,
-            refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
+            // In SDR, channel-only curves do not trigger saturation refinement. Keep the
+            // measured master-curve path, legacy V1, and unmeasured HDR ordering intact.
+            refine_sat: if matches!(s.process.process(), Process::V2 | Process::V3) && !s.hdr.enabled && !master_or_parametric {
+                1.0
+            } else {
+                (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32
+            },
             vig: if effects { vignette(s) } else { None },
             to_out: space.from_working(),
             out_luma: space.luma(),

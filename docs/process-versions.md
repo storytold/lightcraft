@@ -12,6 +12,12 @@ Saturation formula, then profile curves before soft-proof and output gamut mappi
 export or display colour space therefore no longer changes the curve operation itself; target
 gamut limits still affect the delivered image. The base tone model is unchanged.
 
+In V2/V3 SDR, individual-channel curves alone do not activate Refine Saturation. A master,
+parametric or master-curve fade from a built-in profile curve still uses the existing refinement path. This corrects
+unwanted colour changes when only a red, green or blue curve is edited; the saved Refine value
+is retained. V1 and HDR, including enabled HDR with zero extra headroom, keep their prior behavior.
+See the [bounded native comparisons](target-app-parity.md#channel-only-refine-saturation-2026-10-11).
+
 V1 retains its original target-primary curve stage. V2 bypasses its extra curve matrix/transfer
 operations when both curve LUT stages are identity, so no-curve renders without an active runtime
 table retain the same samples. Grain and
@@ -43,6 +49,11 @@ profile bypass and Amount 0 skip the table and its matrix round trip. See
   error, CPU and GPU disagreeing) are not looks and can land in place, as before.
 - Changes to how a file is decoded or which camera colour it gets change the source, not how settings
   are interpreted; the process doesn't reach that stage today.
+
+**Pre-release correction (2026-10-11):** the channel-only Refine correction above revises this
+fork's still-unreleased V2/V3 contract in place. Existing development V2/V3 images with only
+individual-channel curves and Refine below 100 will render differently; their saved settings are
+not rewritten. V1 stays frozen. This exception does not permit changing a released process's look.
 
 ## Adding a process
 
