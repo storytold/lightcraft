@@ -261,19 +261,42 @@ fn a_scan_gone_stale_in_the_dialog_is_made_again_in_the_background() {
     let mut h = changed_folder(&dir);
     open_and_scan(&mut h, &dir.path("trip"));
     tick_remove_missing(&mut h);
-    // a photo of the folder changes while the dialog is open
-    let a = h.app.session.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
-    let r = h.request("engine.execute", json!({"command": "photo.rate", "params": {"ids": [a.0], "rating": 3}}), T);
+    // the folder gets another photo some other way while the dialog is open
+    write_png(&dir.path("trip/d.png"), 4);
+    let r = h.request("engine.execute", json!({"command": "library.import", "params": {"paths": [dir.path("trip/d.png")]}}), T);
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("ui.dialog.confirm", json!({}), T);
     assert_eq!(r["ok"], false, "not done on a stale scan: {r}");
-    assert_eq!(in_library(&h), vec!["a.png", "b.png"]);
+    assert_eq!(in_library(&h), vec!["a.png", "b.png", "d.png"]);
     assert!(matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { .. })), "the dialog stays open");
     let rescanned = h.step_until(T, |h| matches!(&h.app.ui.dialog, Some(Dialog::SynchronizeFolder { counts: Some(_), .. })));
     assert!(rescanned, "and scans again");
     assert!(matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { remove_missing: true, .. })), "keeping what was ticked");
     synchronize(&mut h);
-    assert_eq!(in_library(&h), vec!["a.png", "c.png"], "c came in, the missing b went");
+    assert_eq!(in_library(&h), vec!["a.png", "c.png", "d.png"], "c came in, the missing b went");
+}
+
+/// Tagging and rating the folder's photos while the dialog is open (the scan of a big folder
+/// takes minutes, and the dialog says to go on working) does not send Synchronize back to
+/// scanning: it does what the dialog shows.
+#[test]
+fn working_on_the_folders_photos_while_the_dialog_is_open_does_not_restart_the_scan() {
+    let dir = Scratch::new("worked-on");
+    let mut h = changed_folder(&dir);
+    open_and_scan(&mut h, &dir.path("trip"));
+    let a = h.app.session.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
+    for (command, params) in [
+        ("library.select", json!({"ids": [a.0]})),
+        ("photo.rate", json!({"ids": [a.0], "rating": 3})),
+        ("photo.setMeta", json!({"ids": [a.0], "addKeywords": ["Places|Italy|Rome", "Transport|Ferry"]})),
+    ] {
+        let r = h.request("engine.execute", json!({"command": command, "params": params}), T);
+        assert_eq!(r["ok"], true, "{command}: {r}");
+    }
+    synchronize(&mut h);
+    assert_eq!(in_library(&h), vec!["a.png", "b.png", "c.png"], "the new photo came in");
+    assert!(h.app.sync.is_none(), "no second scan");
+    assert_eq!(h.app.session.catalog.photo(a).unwrap().meta.keywords.len(), 2, "and the keywords stay");
 }
 
 #[test]
@@ -604,10 +627,10 @@ fn a_result_looked_at_after_the_folder_changed_is_scanned_again_not_acted_on() {
     scan_in_background(&mut h, &dir);
     gate.store(true, std::sync::atomic::Ordering::Relaxed);
     assert!(h.step_until(T, |h| h.app.sync_ready.is_some()));
-    // the person went on working in the folder before looking
+    // one of the folder's photos left the library before the person looked
     let id = h.app.session.catalog.photos().find(|p| p.file_name == "a.png").map(|p| p.id.0).unwrap();
     h.app.run("library.select", json!({"ids": [id]})).unwrap();
-    h.app.run("photo.rate", json!({"rating": 3})).unwrap();
+    h.app.run("photo.delete", json!({})).unwrap();
     crate::sync::review(&mut h.app);
     let dlg = h.app.ui.dialog.take().expect("the dialog is open");
     let before = in_library(&h);
@@ -615,6 +638,32 @@ fn a_result_looked_at_after_the_folder_changed_is_scanned_again_not_acted_on() {
     assert!(r.is_err() && h.app.sync_run.is_none(), "what was shown is no longer so: {r:?}");
     assert_eq!(in_library(&h), before);
     assert!(h.app.sync.is_some(), "it is scanned again");
+}
+
+/// The person went on working in the folder while it was scanned in the background (ratings,
+/// keywords, a colour label, albums): what the scan found still holds, and Synchronize does it.
+#[test]
+fn a_result_looked_at_after_work_on_the_folders_photos_is_acted_on() {
+    let dir = Scratch::new("background-worked-on");
+    let mut h = changed_folder(&dir);
+    let gate = gated(&mut h);
+    scan_in_background(&mut h, &dir);
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(h.step_until(T, |h| h.app.sync_ready.is_some()));
+    let id = h.app.session.catalog.photos().find(|p| p.file_name == "a.png").map(|p| p.id.0).unwrap();
+    h.app.run("library.select", json!({"ids": [id]})).unwrap();
+    h.app.run("photo.rate", json!({"rating": 3})).unwrap();
+    h.app.run("photo.label", json!({"label": "red"})).unwrap();
+    h.app.run("photo.pick", json!({})).unwrap();
+    h.app.run("photo.setMeta", json!({"addKeywords": ["Places|Italy|Rome", "Transport|Ferry"], "title": "A"})).unwrap();
+    for name in ["One", "Two"] {
+        let album = h.app.run("album.create", json!({"name": name})).unwrap()["id"].as_u64().unwrap();
+        h.app.run("album.addPhotos", json!({"id": album})).unwrap();
+    }
+    crate::sync::review(&mut h.app);
+    synchronize(&mut h);
+    assert_eq!(in_library(&h), vec!["a.png", "b.png", "c.png"], "the new photo came in");
+    assert!(h.app.sync.is_none(), "and nothing was scanned again");
 }
 
 #[test]

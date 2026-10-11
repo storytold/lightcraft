@@ -301,9 +301,18 @@ pub fn scan_with(input: SyncInput, progress: &SyncProgress) -> FolderChanges {
     changes
 }
 
-/// Whether a photo is the same as far as synchronizing goes: its file, its place in the library
-/// and what a sidecar is compared with. Face and pet regions found in the background meanwhile
-/// don't make a scan stale.
+/// Whether a photo is the same file in the same place in the library: what decides whether it
+/// is missing or moved, and which files beside it are new. Its rating, keywords and edits are
+/// the person's work, not the folder's state.
+fn same_file(a: &Arc<Photo>, b: &Arc<Photo>) -> bool {
+    Arc::ptr_eq(a, b)
+        || (&a.source, a.deleted, a.local, a.copy_of, &a.content_hash, a.file_size)
+            == (&b.source, b.deleted, b.local, b.copy_of, &b.content_hash, b.file_size)
+}
+
+/// Whether a photo is the same as far as reading its sidecar goes: its file, its place in the
+/// library and what a sidecar is compared with. Face and pet regions found in the background
+/// meanwhile don't make a scan stale.
 fn same_for_sync(a: &Arc<Photo>, b: &Arc<Photo>) -> bool {
     if Arc::ptr_eq(a, b) {
         return true;
@@ -577,19 +586,31 @@ fn not_there(path: &str) -> EngineError {
 
 impl Session {
     /// The last scan ([`Session::folder_changes`]) if it is of folder `path` and still current:
-    /// the folder holds the same photos, none of them changed. What the person was shown is what
-    /// gets done. Used once. (Changes elsewhere in the library don't matter.)
+    /// the folder holds the same photos (virtual copies aside), each the same file in the same
+    /// place ([`same_file`]).
+    /// What the person was shown is what gets done. Used once.
+    ///
+    /// Work on the folder's photos since (ratings, labels, keywords, edits) leaves the scan
+    /// current: none of it changes which files are new, missing or moved, and a scan of a big
+    /// folder on a slow disk takes minutes in which the person is told to go on working. The one
+    /// thing such work does matter to is a sidecar the scan found news in: reading it would go
+    /// over that work, so for those photos nothing may have changed ([`same_for_sync`]).
+    /// (Changes elsewhere in the library don't matter.)
     pub fn take_folder_changes(&mut self, path: &str) -> Option<FolderChanges> {
         let c = self.folder_changes.take()?;
         if lightcraft_catalog::query::folder_key(&c.path) != lightcraft_catalog::query::folder_key(path) {
             return None;
         }
         let f = Filter { library_folder: Some(path.to_string()), ..Default::default() };
-        let mut now: Vec<PhotoId> = self.catalog.query(&f, &Sort::default());
-        let mut then: Vec<PhotoId> = c.seen.iter().map(|p| p.id).collect();
+        // (virtual copies made or deleted meanwhile are not files: the folder holds what it held)
+        let mut now: Vec<PhotoId> =
+            self.catalog.query(&f, &Sort::default()).into_iter().filter(|id| self.catalog.photo(*id).is_some_and(|p| p.copy_of.is_none())).collect();
+        let mut then: Vec<PhotoId> = c.seen.iter().filter(|p| p.copy_of.is_none()).map(|p| p.id).collect();
         now.sort();
         then.sort();
-        let unchanged = now == then && c.seen.iter().all(|p| self.catalog.photo(p.id).is_some_and(|q| same_for_sync(p, q)));
+        let read: std::collections::HashSet<u64> = c.metadata.iter().map(|m| m.id).collect();
+        let same = |p: &Arc<Photo>, q: &Arc<Photo>| if read.contains(&p.id.0) { same_for_sync(p, q) } else { same_file(p, q) };
+        let unchanged = now == then && c.seen.iter().filter(|p| p.copy_of.is_none()).all(|p| self.catalog.photo(p.id).is_some_and(|q| same(p, q)));
         unchanged.then_some(c)
     }
 }

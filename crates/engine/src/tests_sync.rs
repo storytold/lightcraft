@@ -476,21 +476,75 @@ fn a_scan_stays_current_while_only_other_folders_change() {
     assert_eq!(r["imported"], 1, "{r}");
 }
 
+/// Work on the folder's photos while it is scanned (a rating, keywords, an edit) changes nothing
+/// about what the scan found: a scan of a big folder on a slow disk takes minutes, and the
+/// dialog says to go on working. Synchronize does what it showed.
 #[test]
-fn a_change_to_the_folders_photos_makes_the_scan_stale() {
+fn working_on_the_folders_photos_meanwhile_leaves_the_scan_current() {
+    let dir = Scratch::new("worked-on");
+    let mut s = library(&dir);
+    write_png(&dir.path("trip/c.png"), 3);
+    scan(&mut s, &dir.path("trip"));
+    let a = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
+    s.selection = crate::Selection::single(a);
+    s.execute("photo.rate", &json!({"ids": [a.0], "rating": 2})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [a.0], "addKeywords": ["Trips|Alps", "snow"], "title": "A"})).unwrap();
+    s.execute("photo.label", &json!({"ids": [a.0], "label": "red"})).unwrap();
+    s.execute("photo.pick", &json!({"ids": [a.0]})).unwrap();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.5})).unwrap();
+    // into several albums, a virtual copy made of it, and one of its edits undone
+    s.execute("photo.virtualCopy", &json!({"ids": [a.0]})).unwrap();
+    s.selection = crate::Selection::single(a);
+    for name in ["One", "Two"] {
+        let album = s.execute("album.create", &json!({"name": name})).unwrap()["id"].as_u64().unwrap();
+        s.execute("album.addPhotos", &json!({"id": album, "ids": [a.0]})).unwrap();
+    }
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("edit.redo", &json!({})).unwrap();
+    let r = s.execute("folder.synchronize", &json!({"path": dir.path("trip"), "scanned": true})).unwrap();
+    assert_eq!(r["imported"], 1, "what the scan showed is done: {r}");
+    assert_eq!(s.catalog.photo(a).unwrap().rating, 2, "and the work stays");
+}
+
+/// What the scan found is no longer true once the folder holds other photos, or one of them is
+/// another file now: then it is refused, never redone on the spot.
+#[test]
+fn a_change_to_which_photos_the_folder_holds_makes_the_scan_stale() {
     let dir = Scratch::new("stale-folder");
     let mut s = library(&dir);
     write_png(&dir.path("trip/c.png"), 3);
     scan(&mut s, &dir.path("trip"));
     let a = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
-    s.execute("photo.rate", &json!({"ids": [a.0], "rating": 2})).unwrap();
-    // the dialog asks for exactly what it showed: refused, never redone on the spot
+    s.selection = crate::Selection::single(a);
+    // one of its photos goes to Recently Deleted
+    s.execute("photo.delete", &json!({"ids": [a.0]})).unwrap();
     let e = s.execute("folder.synchronize", &json!({"path": dir.path("trip"), "scanned": true})).unwrap_err().to_string();
     assert!(e.contains("scan again"), "{e}");
-    assert_eq!(s.catalog.photos().filter(|p| p.in_library()).count(), 2, "nothing was done");
+    assert_eq!(s.catalog.photos().filter(|p| p.in_library()).count(), 1, "nothing was done");
     // an agent that just asks to synchronize gets a fresh scan
     let r = s.execute("folder.synchronize", &json!({"path": dir.path("trip")})).unwrap();
     assert_eq!(r["imported"], 1, "{r}");
+}
+
+/// A photo whose sidecar the scan found news in, changed here since: what the sidecar says would
+/// go over that work, which the person was not shown. That scan is refused.
+#[test]
+fn a_change_to_a_photo_whose_sidecar_has_news_makes_the_scan_stale() {
+    let dir = Scratch::new("stale-sidecar");
+    let mut s = library(&dir);
+    write_sidecar(&dir.path("trip/a.png"), 5, Duration::ZERO);
+    let found = scan(&mut s, &dir.path("trip"));
+    assert_eq!(found["metadata"].as_array().map(Vec::len), Some(1), "{found}");
+    // work on another photo of the folder does not matter…
+    let (a, b) = (s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id, s.catalog.photos().find(|p| p.file_name == "b.png").unwrap().id);
+    s.selection = crate::Selection::single(b);
+    s.execute("photo.rate", &json!({"ids": [b.0], "rating": 1})).unwrap();
+    assert!(s.folder_changes.is_some());
+    // …work on the photo whose sidecar is to be read does
+    s.execute("photo.rate", &json!({"ids": [a.0], "rating": 2})).unwrap();
+    let e = s.execute("folder.synchronize", &json!({"path": dir.path("trip"), "scanned": true, "readMetadata": true})).unwrap_err().to_string();
+    assert!(e.contains("scan again"), "{e}");
+    assert_eq!(s.catalog.photo(a).unwrap().rating, 2, "nothing was read over it");
 }
 
 #[test]

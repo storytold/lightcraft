@@ -836,6 +836,10 @@
   go on working. When it is done nothing pops up: a notice in the activity stack says how many changes were found.
   Click it to open the dialog with the result, or ✕ to let go of it. A scan that found nothing to do only says so.
   Cancel and the row's ✕ stop the scan as before. One folder is scanned at a time.
+- Working on the folder's photos while it is scanned (ratings, flags, colour labels, keywords, edits, albums,
+  virtual copies) no longer sends Synchronize back to scanning. What the scan found still holds, and Synchronize
+  does it. It scans again only when the folder holds other photos than it did, one of them is another file now, or
+  a photo whose sidecar is about to be read was changed here since.
 
 ### Lens corrections
 - Sony A7R VI (ILCE-7RM6) raws are corrected for lens distortion from the table the camera records in each file,
