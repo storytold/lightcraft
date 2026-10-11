@@ -3570,6 +3570,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightcraft-cameras"
+version = "0.18.0"
+dependencies = [
+ "windows",
+]
+
+[[package]]
 name = "lightcraft-catalog"
 version = "0.18.0"
 dependencies = [
@@ -3702,6 +3709,7 @@ dependencies = [
  "harfrust 0.13.3",
  "jxl-oxide",
  "libc",
+ "lightcraft-cameras",
  "lightcraft-catalog",
  "lightcraft-codecs",
  "lightcraft-color",
