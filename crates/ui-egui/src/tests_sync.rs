@@ -704,3 +704,19 @@ fn synchronize_waits_a_moment_after_its_button_stopped_being_continue_in_backgro
     assert_eq!(in_library(&h), before);
     assert!(!crate::sync::settled(&h.app, &h.view.ctx));
 }
+
+#[test]
+fn a_dialog_opened_before_the_first_frame_is_not_taken_for_another_librarys() {
+    let dir = Scratch::new("first-frame");
+    write_png(&dir.path("trip/a.png"), 1);
+    let mut session = lightcraft_engine::Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [dir.path("trip")]})).unwrap();
+    write_png(&dir.path("trip/c.png"), 3);
+    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+    // no frame has run yet: the library is shown for the first time on the next one
+    crate::sync::open(&mut h.app, &dir.path("trip"), "trip", false).unwrap();
+    let scanned = h.step_until(T, |h| matches!(&h.app.ui.dialog, Some(Dialog::SynchronizeFolder { counts: Some(_), .. })));
+    assert!(scanned, "the scan is its own library's: {:?}", h.app.ui.dialog);
+    assert_eq!(counts(&h).new, 1);
+}
