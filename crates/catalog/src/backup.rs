@@ -523,6 +523,14 @@ pub fn list(dest: &Path) -> Vec<BackupReport> {
     found.into_iter().map(|(_, _, report)| report).collect()
 }
 
+/// Whether `dir` is a backup that was made: its marker is a file that reads as a backup's list.
+/// (Stricter than [`is_backup`], for telling a backup from a folder that merely holds a file of
+/// that name: an export called `backup.json` does not make a drive a backup.)
+pub fn is_made_backup(dir: &Path) -> bool {
+    let marker = dir.join(MARKER);
+    regular(&marker) && std::fs::read(&marker).ok().is_some_and(|bytes| serde_json::from_slice::<BackupReport>(&bytes).is_ok())
+}
+
 /// Whether `dir` is a backup: it has a backup's marker (whatever that is: a folder with
 /// something of that name is not worked in as a library).
 pub fn is_backup(dir: &Path) -> bool {

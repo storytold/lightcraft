@@ -340,11 +340,34 @@ fn backups_do_not_go_into_the_librarys_own_folders_or_into_a_backup() {
     assert!(e.contains("is a backup"), "{e}");
     let e = s.execute("library.backupPreferences", &json!({"dir": there.join("deeper").to_string_lossy()})).unwrap_err().to_string();
     assert!(e.contains("inside one"), "{e}");
-    // what is taken
-    for good in [outside.clone(), library.join("Backups")] {
-        let p = s.execute("library.backupPreferences", &json!({"dir": good.to_string_lossy()})).unwrap();
-        assert_eq!(p["dir"].as_str(), Some(&*good.to_string_lossy()));
+    let e = s.execute("library.backup", &json!({"dir": there.to_string_lossy()})).unwrap_err().to_string();
+    assert!(e.contains("is a backup"), "{e}");
+    // a path that only reads as outside: `..` after a folder that is yet to be made
+    let round = format!("{}/not-made/../../{}/segments", outside.display(), library.file_name().unwrap().to_string_lossy());
+    for command in ["library.backupPreferences", "library.backup"] {
+        let e = s.execute(command, &json!({"dir": round})).unwrap_err().to_string();
+        assert!(e.contains("without `..`"), "{command}: {e}");
     }
+    assert!(!outside.join("not-made").exists() && !library.join("segments").join("Backups").exists());
+    // a file that is merely called what a backup's list is called makes nothing a backup
+    let stray = temp_dir("own-folders-stray");
+    std::fs::create_dir_all(stray.join("deeper")).unwrap();
+    std::fs::write(stray.join("backup.json"), b"{\"an\": \"export\"}").unwrap();
+    let p = s.execute("library.backupPreferences", &json!({"dir": stray.join("deeper").to_string_lossy()})).unwrap();
+    assert_eq!(p["dir"].as_str(), Some(&*stray.join("deeper").to_string_lossy()));
+    let _ = std::fs::remove_dir_all(&stray);
+    // what is taken: a folder outside, and `Backups` in the library, which is the usual place
+    // and so not a choice
+    let p = s.execute("library.backupPreferences", &json!({"dir": outside.to_string_lossy()})).unwrap();
+    assert_eq!(p["dir"].as_str(), Some(&*outside.to_string_lossy()));
+    let p = s.execute("library.backupPreferences", &json!({"dir": library.join("Backups").to_string_lossy()})).unwrap();
+    assert!(p["dir"].is_null(), "{p}");
+    assert_eq!(p["folder"].as_str().map(PathBuf::from), Some(library.join("Backups")));
+    // a folder set before the rule (or by hand in the preferences) is not used either
+    s.backup_dir = Some(library.join("segments"));
+    let e = s.execute("library.backup", &json!({})).unwrap_err().to_string();
+    assert!(e.contains("can't be used") && e.contains("inside the library folder"), "{e}");
+    s.backup_dir = None;
     drop(s);
     for d in [dir, outside] {
         let _ = std::fs::remove_dir_all(d);
@@ -360,6 +383,9 @@ fn choosing_with_a_dialog_is_refused_where_there_is_none() {
     let e = s.execute("library.backupPreferences", &json!({"choose": true})).unwrap_err().to_string();
     assert!(e.contains("no folder dialog") && e.contains("`dir`"), "{e}");
     assert!(s.execute("library.backupPreferences", &json!({"choose": false})).unwrap()["dir"].is_null());
+    // (and it is true or false whatever else is given)
+    let e = s.execute("library.backupPreferences", &json!({"dir": null, "choose": "yes"})).unwrap_err().to_string();
+    assert!(e.contains("`choose`"), "{e}");
     drop(s);
     let _ = std::fs::remove_dir_all(dir);
 }
