@@ -169,7 +169,10 @@ pub(super) fn crop_overlay(
             Some(Gesture::CropRotate { start_angle, a0 }) => {
                 let c = map.screen(Point::new(0.5, 0.5));
                 let a = (q - c).angle();
-                let ang = (start_angle + (a - a0).to_degrees() as f64).clamp(-45.0, 45.0);
+                // Negate the angle delta because straighten angle is opposite to rotation direction:
+                // dragging clockwise (positive delta) should rotate image clockwise,
+                // but straighten angle is the correction (opposite of rotation).
+                let ang = (start_angle - (a - a0).to_degrees() as f64).clamp(-45.0, 45.0);
                 shown_angle = (ang * 100.0).round() / 100.0;
                 let _ = app.run("crop.straighten", json!({"angle": shown_angle}));
             }
