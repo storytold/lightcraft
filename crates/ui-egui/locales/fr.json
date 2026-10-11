@@ -2231,6 +2231,7 @@
   "Back up the library before LightCraft quits?": "Sauvegarder la bibliothèque avant que LightCraft ne quitte ?",
   "Backing up before quitting": "Sauvegarde avant de quitter",
   "Backing up the library. LightCraft quits when the backup is made.": "Sauvegarde de la bibliothèque en cours. LightCraft quittera une fois la sauvegarde terminée.",
+  "Quit without a backup?": "Quitter sans sauvegarde ?",
   "Lightroom Catalog Import": "Importation de catalogue Lightroom",
   "These photos are only in memory. Open a library on disk and import the catalog again to save them.": "Ces photos sont uniquement en mémoire. Ouvrez une bibliothèque sur disque et importez à nouveau le catalogue pour les enregistrer.",
   "Show in Library": "Afficher dans la bibliothèque",

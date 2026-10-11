@@ -163,7 +163,7 @@ fn backups(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     row(ui, t, crate::i18n::tr("Last backup"), |ui| {
         let last = match &app.session.last_backup {
             // (the session's clock is UTC, as the backups' names say)
-            Some(at) => format!("{} UTC", lightcraft_engine::catalog::dates::display_time(at)),
+            Some(at) => format!("{} UTC", crate::i18n::display_time(at)),
             None => crate::i18n::tr("Not yet").to_string(),
         };
         ui.label(RichText::new(last).color(t.text));

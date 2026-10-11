@@ -123,6 +123,8 @@ pub enum QuitPrompt {
     /// The library is being backed up before LightCraft quits, which it does when the backup is
     /// made.
     BackingUp(String),
+    /// The backup before quitting could not be made: quit anyway, or don't.
+    BackupFailed(String),
 }
 
 /// The backup a library has when LightCraft quits, in the quit that is under way.
@@ -141,7 +143,11 @@ impl QuitPrompt {
     /// The prompt's message.
     pub fn text(&self) -> &str {
         match self {
-            QuitPrompt::Unsaved(text) | QuitPrompt::Tasks(text) | QuitPrompt::BackUp(text) | QuitPrompt::BackingUp(text) => text,
+            QuitPrompt::Unsaved(text)
+            | QuitPrompt::Tasks(text)
+            | QuitPrompt::BackUp(text)
+            | QuitPrompt::BackingUp(text)
+            | QuitPrompt::BackupFailed(text) => text,
         }
     }
 }
@@ -173,6 +179,11 @@ pub struct LightcraftApp {
     pub text_focus: bool,
     /// The host is [`headless::Headless`] (it answers viewport screenshot commands itself).
     pub headless_host: bool,
+    /// The library is backed up by itself when its schedule says a backup is due
+    /// (`library.backupPreferences`, `every`). Only in the app a person has open: a headless
+    /// session (a snapshot, an agent's) may end moments later and cut the backup off, so
+    /// [`headless::Headless`] turns this off.
+    pub backs_up_by_itself: bool,
     /// Warnings to show one at a time (damaged settings files…, issue #103).
     pub notices: Vec<String>,
     pub(crate) updates_rt: updates_ui::Runtime,

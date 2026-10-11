@@ -202,6 +202,7 @@
   "Back up the library before LightCraft quits?": "Zálohovat knihovnu před ukončením LightCraft?",
   "Backing up before quitting": "Zálohování před ukončením",
   "Backing up the library. LightCraft quits when the backup is made.": "Knihovna se zálohuje. LightCraft se ukončí, jakmile bude záloha hotová.",
+  "Quit without a backup?": "Ukončit bez zálohy?",
   "Adding to Apple Photos…": "Přidávání do Apple Photos…",
   "Advanced search…": "Rozšířené hledání…",
   "After": "Po",

@@ -294,6 +294,7 @@ impl Headless {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut app = app.with_control(rx);
         app.headless_host = true;
+        app.backs_up_by_itself = false;
         Headless {
             app,
             view: HeadlessView::new(),

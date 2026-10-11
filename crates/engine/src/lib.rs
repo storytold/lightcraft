@@ -402,7 +402,8 @@ pub struct Session {
     /// When a backup by itself was last started in this session (see `backup_schedule::due`).
     pub backup_tried: Option<String>,
     /// Holds a backup before it starts reading (tests look at its row meanwhile).
-    pub(crate) backup_hold: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    #[doc(hidden)]
+    pub backup_hold: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// The restore of the library that runs in the background, or the last one made that way
     /// (`library.restore` with `background`).
     pub restore: Option<std::sync::Arc<cmd::backup::RestoreJob>>,

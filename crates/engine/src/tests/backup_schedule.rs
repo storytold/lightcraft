@@ -46,6 +46,11 @@ fn finish(s: &mut Session) {
     s.persist_if_dirty();
 }
 
+/// Whether a backup was due and was started (one that can't be started is its own scenario).
+fn due_backup(s: &mut Session) -> bool {
+    backup::back_up_if_due(s).unwrap()
+}
+
 fn backups_in(dir: &Path) -> usize {
     std::fs::read_dir(dir).map(|d| d.filter_map(|e| e.ok()).filter(|e| !e.file_name().to_string_lossy().ends_with(".partial")).count()).unwrap_or(0)
 }
@@ -59,7 +64,7 @@ fn the_schedule_is_off_until_chosen_and_is_saved_with_the_library() {
     let (mut s, _) = open(&dir);
     let p = prefs(&mut s, json!({}));
     assert_eq!((p["every"].as_str(), p["onClose"].as_str(), p["lastBackup"].is_null()), (Some("never"), Some("never"), true));
-    assert!(!backup::back_up_if_due(&mut s), "nothing is due that was not asked for");
+    assert!(!due_backup(&mut s), "nothing is due that was not asked for");
 
     let p = prefs(&mut s, json!({"every": "week", "onClose": "ask"}));
     assert_eq!((p["every"].as_str(), p["onClose"].as_str()), (Some("week"), Some("ask")));
@@ -88,17 +93,17 @@ fn a_library_is_backed_up_when_its_backup_is_due() {
     let dir = temp_dir("due");
     let (mut s, now) = open(&dir);
     prefs(&mut s, json!({"every": "day"}));
-    assert!(backup::back_up_if_due(&mut s), "never backed up: due");
-    assert!(!backup::back_up_if_due(&mut s), "one at a time");
+    assert!(due_backup(&mut s), "never backed up: due");
+    assert!(!due_backup(&mut s), "one at a time");
     finish(&mut s);
     assert_eq!(backups_in(&dir.join("Backups")), 1);
     assert_eq!(prefs(&mut s, json!({}))["lastBackup"].as_str(), Some("2026-10-11T09:00:00"));
     assert!(s.activity.list().is_empty());
 
     at(&now, "2026-10-12T08:59:59");
-    assert!(!backup::back_up_if_due(&mut s), "not yet a day");
+    assert!(!due_backup(&mut s), "not yet a day");
     at(&now, "2026-10-12T09:00:00");
-    assert!(backup::back_up_if_due(&mut s), "a day later");
+    assert!(due_backup(&mut s), "a day later");
     finish(&mut s);
     assert_eq!(backups_in(&dir.join("Backups")), 2);
     assert_eq!(prefs(&mut s, json!({}))["lastBackup"].as_str(), Some("2026-10-12T09:00:00"));
@@ -108,7 +113,7 @@ fn a_library_is_backed_up_when_its_backup_is_due() {
     drop(s);
     let (mut s, now) = open(&dir);
     at(&now, "2026-10-12T18:00:00");
-    assert!(!backup::back_up_if_due(&mut s));
+    assert!(!due_backup(&mut s));
     drop(s);
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -125,9 +130,9 @@ fn a_week_is_seven_days_and_a_month_thirty() {
         s.persist_if_dirty();
         prefs(&mut s, json!({"every": every}));
         at(&now, not_yet);
-        assert!(!backup::back_up_if_due(&mut s), "{every}: {not_yet}");
+        assert!(!due_backup(&mut s), "{every}: {not_yet}");
         at(&now, due);
-        assert!(backup::back_up_if_due(&mut s), "{every}: {due}");
+        assert!(due_backup(&mut s), "{every}: {due}");
         finish(&mut s);
     }
     drop(s);
@@ -149,7 +154,7 @@ fn a_backup_made_by_hand_counts() {
     s.persist_if_dirty();
     assert_eq!(prefs(&mut s, json!({}))["lastBackup"].as_str(), Some("2026-10-11T09:00:00"));
     at(&now, "2026-10-11T20:00:00");
-    assert!(!backup::back_up_if_due(&mut s));
+    assert!(!due_backup(&mut s));
     drop(s);
     for d in [dir, other] {
         let _ = std::fs::remove_dir_all(d);
@@ -166,15 +171,15 @@ fn a_backup_that_fails_is_tried_again_later_not_at_once() {
     std::fs::write(outside.join("a-file"), b"x").unwrap();
     let (mut s, now) = open(&dir);
     prefs(&mut s, json!({"every": "day", "dir": outside.join("a-file").to_string_lossy()}));
-    assert!(backup::back_up_if_due(&mut s));
+    assert!(due_backup(&mut s));
     finish(&mut s);
     let status = s.execute("library.backupStatus", &json!({})).unwrap();
     assert!(status["error"].as_str().is_some() && status["report"].is_null(), "{status}");
     assert!(prefs(&mut s, json!({}))["lastBackup"].is_null());
     at(&now, "2026-10-11T09:59:59");
-    assert!(!backup::back_up_if_due(&mut s), "not on every look");
+    assert!(!due_backup(&mut s), "not on every look");
     at(&now, "2026-10-11T10:00:00");
-    assert!(backup::back_up_if_due(&mut s), "an hour later");
+    assert!(due_backup(&mut s), "an hour later");
     finish(&mut s);
     drop(s);
     for d in [dir, outside] {
@@ -188,6 +193,117 @@ fn a_backup_that_fails_is_tried_again_later_not_at_once() {
 fn a_library_in_memory_is_never_due() {
     let mut s = Session::with_demo();
     s.backup_schedule.every = BackupEvery::Day;
-    assert!(!backup::back_up_if_due(&mut s));
+    assert!(!due_backup(&mut s));
     assert!(s.activity.list().is_empty());
+}
+
+/// Given a backup by itself that is due and can't even be started (the folder set for backups
+/// is one the library may not use), then that is said (the app shows it), and it is not tried,
+/// or said, again until an hour later.
+#[test]
+fn a_backup_that_cannot_be_started_says_so_and_waits_an_hour() {
+    let dir = temp_dir("no-start");
+    let (mut s, now) = open(&dir);
+    prefs(&mut s, json!({"every": "day"}));
+    // (as a preferences file from before the rule about folders, or one edited by hand)
+    s.backup_dir = Some(s.library.as_ref().unwrap().dir.join("segments"));
+    let e = backup::back_up_if_due(&mut s).unwrap_err();
+    assert!(e.contains("can't be used"), "{e}");
+    assert_eq!(backup::back_up_if_due(&mut s), Ok(false), "not on every look");
+    at(&now, "2026-10-11T10:00:00");
+    assert!(backup::back_up_if_due(&mut s).is_err(), "an hour later");
+    drop(s);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Given a library that was backed up, when its backups are to go to another folder, then it
+/// has not been backed up there: a backup is due at once, and Settings no longer names the old
+/// one as the last. The same when the folder its backups were in is gone.
+#[test]
+fn the_last_backup_is_the_last_one_in_the_folder_backups_go_to() {
+    let (dir, other) = (temp_dir("moved"), temp_dir("moved-other"));
+    let (mut s, _) = open(&dir);
+    prefs(&mut s, json!({"every": "month"}));
+    s.execute("library.backup", &json!({})).unwrap();
+    s.persist_if_dirty();
+    assert!(!due_backup(&mut s));
+    let p = prefs(&mut s, json!({"dir": other.to_string_lossy()}));
+    assert!(p["lastBackup"].is_null(), "{p}");
+    assert!(due_backup(&mut s), "not backed up there yet");
+    finish(&mut s);
+    assert_eq!(backups_in(&other), 1);
+    assert!(!due_backup(&mut s));
+    // the folder is gone (a drive that was wiped, a folder thrown away)
+    std::fs::remove_dir_all(&other).unwrap();
+    s.backup_tried = None;
+    assert!(due_backup(&mut s), "its backups are gone: due");
+    finish(&mut s);
+    drop(s);
+    for d in [dir, other] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+/// Given a backup made while the clock was wrong (its time is yet to come), then the next one
+/// is not put off until that date: it is due.
+#[test]
+fn a_last_backup_in_the_future_does_not_put_the_next_one_off() {
+    let dir = temp_dir("future");
+    let (mut s, now) = open(&dir);
+    prefs(&mut s, json!({"every": "week"}));
+    at(&now, "2031-01-01T00:00:00");
+    s.execute("library.backup", &json!({})).unwrap();
+    s.persist_if_dirty();
+    at(&now, "2026-10-11T09:00:00");
+    assert!(due_backup(&mut s));
+    finish(&mut s);
+    assert_eq!(prefs(&mut s, json!({}))["lastBackup"].as_str(), Some("2026-10-11T09:00:00"));
+    drop(s);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Given a library with a schedule, when an older backup of it (from before the schedule was
+/// chosen) is restored, then the schedule stays as it is now, like the folder backups go to: it
+/// is the library's choice, not something the backup holds.
+#[test]
+fn a_restore_keeps_the_schedule() {
+    let dir = temp_dir("restore");
+    let (mut s, _) = open(&dir);
+    let made = s.execute("library.backup", &json!({})).unwrap();
+    let from = made["report"]["dir"].as_str().unwrap().to_string();
+    s.persist_if_dirty();
+    prefs(&mut s, json!({"every": "week", "onClose": "always"}));
+    let last = prefs(&mut s, json!({}))["lastBackup"].clone();
+    assert!(last.is_string());
+    s.execute("library.restore", &json!({"dir": from})).unwrap();
+    let p = prefs(&mut s, json!({}));
+    assert_eq!((p["every"].as_str(), p["onClose"].as_str()), (Some("week"), Some("always")));
+    assert_eq!(p["lastBackup"], last);
+    drop(s);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Given a preferences file with a choice this version doesn't know (a later version's), then
+/// that choice is the usual one and the rest of the file is read: the preferences are not
+/// thrown away for it.
+#[test]
+fn a_choice_this_version_does_not_know_costs_no_other_preference() {
+    let (dir, other) = (temp_dir("unknown"), temp_dir("unknown-other"));
+    let (mut s, _) = open(&dir);
+    prefs(&mut s, json!({"dir": other.to_string_lossy(), "onClose": "ask"}));
+    s.close_library().unwrap();
+    drop(s);
+    let file = dir.join("prefs.json");
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.contains("\"onClose\": \"ask\""), "{text}");
+    std::fs::write(&file, text.replace("\"onClose\": \"ask\"", "\"onClose\": \"ask\", \"every\": \"fortnight\"")).unwrap();
+    let (mut s, _) = open(&dir);
+    let p = prefs(&mut s, json!({}));
+    assert_eq!((p["every"].as_str(), p["onClose"].as_str()), (Some("never"), Some("ask")));
+    assert_eq!(p["dir"].as_str(), Some(&*other.to_string_lossy()), "the rest of the file was read");
+    assert!(s.take_library_warnings().iter().all(|w| !w.contains("prefs.json")));
+    drop(s);
+    for d in [dir, other] {
+        let _ = std::fs::remove_dir_all(d);
+    }
 }

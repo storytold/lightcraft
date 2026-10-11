@@ -92,12 +92,26 @@ pub const RETRY_SECONDS: i64 = 60 * 60;
 
 /// Whether a backup is due at `now`: the library was last backed up at `last` (never: `None`),
 /// and a backup by itself was last tried at `tried` (not in this session: `None`). Times are the
-/// session clock's (ISO 8601); one that can't be read is taken for long ago.
+/// session clock's (ISO 8601). A time that can't be read is taken for long ago, and so is one
+/// that is after `now`: a backup made while the clock was wrong does not put the next one off
+/// until that date.
 pub fn due(every: BackupEvery, last: Option<&str>, tried: Option<&str>, now: &str) -> bool {
     let Some(period) = every.seconds() else { return false };
-    // (`now` has reached `from` + `seconds`; a time that can't be shifted is long ago)
-    let reached = |from: &str, seconds: i64| lightcraft_catalog::dates::shift_iso(from, seconds).is_none_or(|then| now >= then.as_str());
+    let reached =
+        |from: &str, seconds: i64| from > now || lightcraft_catalog::dates::shift_iso(from, seconds).is_none_or(|then| now >= then.as_str());
     last.is_none_or(|last| reached(last, period)) && tried.is_none_or(|tried| reached(tried, RETRY_SECONDS))
+}
+
+/// A schedule read from a preferences file, where a choice this build doesn't know (a newer
+/// build's, or a slip of the hand) is the usual one: the rest of the file is not thrown away
+/// for it.
+pub(crate) fn lenient<'de, D: serde::Deserializer<'de>>(d: D) -> Result<BackupSchedule, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    let choice = |key: &str| v.get(key).and_then(serde_json::Value::as_str);
+    Ok(BackupSchedule {
+        every: choice("every").and_then(BackupEvery::from_id).unwrap_or_default(),
+        on_close: choice("onClose").and_then(BackupOnClose::from_id).unwrap_or_default(),
+    })
 }
 
 #[cfg(test)]
@@ -118,8 +132,23 @@ mod tests {
         assert!(due(BackupEvery::Day, None, Some(t), "2026-10-11T10:00:00"));
         // a time that can't be read is long ago, not never
         assert!(due(BackupEvery::Day, Some("yesterday"), None, t));
-        // the clock set back: not due, and no panic
-        assert!(!due(BackupEvery::Day, Some("2027-01-01T00:00:00"), None, t));
+        // a backup made while the clock was wrong (a time yet to come) does not put the next off
+        assert!(due(BackupEvery::Day, Some("2027-01-01T00:00:00"), None, t));
+        assert!(due(BackupEvery::Day, None, Some("2027-01-01T00:00:00"), t));
+    }
+
+    #[test]
+    fn a_choice_this_build_does_not_know_is_the_usual_one() {
+        #[derive(Deserialize)]
+        struct File {
+            #[serde(deserialize_with = "lenient")]
+            schedule: BackupSchedule,
+            kept: u8,
+        }
+        let f: File = serde_json::from_str(r#"{"schedule": {"every": "fortnight", "onClose": "ask"}, "kept": 7}"#).unwrap();
+        assert_eq!((f.schedule.every, f.schedule.on_close, f.kept), (BackupEvery::Never, BackupOnClose::Ask, 7));
+        let f: File = serde_json::from_str(r#"{"schedule": {"every": 3}, "kept": 7}"#).unwrap();
+        assert_eq!((f.schedule, f.kept), (BackupSchedule::default(), 7));
     }
 
     #[test]

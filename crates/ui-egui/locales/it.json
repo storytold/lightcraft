@@ -2388,5 +2388,6 @@
   "Back up before quitting?": "Eseguire il backup prima di uscire?",
   "Back up the library before LightCraft quits?": "Eseguire il backup della libreria prima che LightCraft esca?",
   "Backing up before quitting": "Backup prima di uscire",
-  "Backing up the library. LightCraft quits when the backup is made.": "Backup della libreria in corso. LightCraft si chiude quando il backup è completato."
+  "Backing up the library. LightCraft quits when the backup is made.": "Backup della libreria in corso. LightCraft si chiude quando il backup è completato.",
+  "Quit without a backup?": "Uscire senza backup?"
 }

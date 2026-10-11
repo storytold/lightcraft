@@ -2233,6 +2233,7 @@
   "Back up the library before LightCraft quits?": "LightCraft を終了する前にライブラリをバックアップしますか？",
   "Backing up before quitting": "終了前のバックアップ",
   "Backing up the library. LightCraft quits when the backup is made.": "ライブラリをバックアップしています。バックアップが完了すると LightCraft は終了します。",
+  "Quit without a backup?": "バックアップせずに終了しますか？",
   "Lightroom Catalog Import": "Lightroomカタログの読み込み",
   "These photos are only in memory. Open a library on disk and import the catalog again to save them.": "これらの写真はメモリ内にのみあります。ディスク上のライブラリを開き、カタログを再度読み込んで保存してください。",
   "Show in Library": "ライブラリに表示",

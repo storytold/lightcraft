@@ -169,9 +169,12 @@ the other).
   until made (`library.backupPreferences`: `every`, `onClose`; Settings ▸ General ▸ Backups). While it is open, the
   app backs it up in the background once a day, a week or a month (thirty days), counted from the last backup made
   to the folder its backups go to, whoever made it (`lastBackup`, the session clock's time, kept in the library's
-  preferences); a backup by itself that fails is tried again an hour later. When LightCraft quits, it asks first or
-  backs up at once, and quits when the backup is made; a backup that fails calls the quit off. Only the app does
-  either: the command line and agents back up when they are told to.
+  preferences); a backup by itself that fails, or can't be started, says so and is tried again an hour later. Backed up
+  "there" is meant: when backups go to another folder, or that folder is gone, the library has not been backed up.
+  When LightCraft quits, it asks first or backs up at once (a backup that runs already is the one it waits for), and
+  quits when the backup is made; one that fails asks whether to quit anyway. A restore keeps the schedule, like the
+  folder: both are the library's choices now, not the backup's from then. Only the app a
+  person has open does either: headless sessions (snapshots, agents, the command line) back up when they are told to.
 - **A backup takes every file the library has.** The library's own files beside the catalog are one list
   (`SettingsFile` in `crates/engine/src/library.rs`), which is what a backup takes along and what the browser build
   reads at start-up. The library's file store refuses to write a file that is not on it, so a new one can't be added

@@ -77,12 +77,14 @@ fn the_schedule_is_chosen_in_settings() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Given a library to be backed up once a day that never was, when the app runs, then a backup
-/// is made by itself, a toast says where it went, and no second one follows.
+/// Given a library to be backed up once a day that never was, when the app a person has open
+/// runs, then a backup is made by itself, a toast says where it went, and no second one follows.
 #[test]
 fn a_backup_that_is_due_is_made_while_the_library_is_open() {
     let dir = temp("due");
     let mut h = app_with_a_library_in(&dir);
+    // (as the app a person has open: the headless host does not back up by itself)
+    h.app.backs_up_by_itself = true;
     for _ in 0..5 {
         h.step();
     }
@@ -95,6 +97,22 @@ fn a_backup_that_is_due_is_made_while_the_library_is_open() {
         h.step();
     }
     assert_eq!(backups(&dir), 1, "not due again");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Given the same library in a headless session (a snapshot, an agent's), then nothing is backed
+/// up by itself: the session may end moments later.
+#[test]
+fn a_headless_session_does_not_back_up_by_itself() {
+    let dir = temp("headless");
+    let mut h = app_with_a_library_in(&dir);
+    assert!(!h.app.backs_up_by_itself);
+    prefs(&mut h, json!({"every": "day"}));
+    for _ in 0..40 {
+        h.step();
+    }
+    assert_eq!(backups(&dir), 0);
+    assert!(h.app.session.last_backup.is_none() && h.app.session.backup_tried.is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -112,8 +130,7 @@ fn quitting_asks_for_a_backup_and_quits_once_it_is_made() {
         assert!(has(&mut h, b), "{b}");
     }
     click(&mut h, "button:quitBackUp");
-    // (the quit itself is the window closing: what is seen here is that nothing holds it back)
-    assert!(h.step_until(T, |h| h.app.quit_backup == QuitBackup::Settled), "the backup is made: {:?}", h.app.quit_prompt);
+    assert!(h.step_until(T, |h| h.quit_requested()), "quits once the backup is made: {:?}", h.app.quit_prompt);
     assert_eq!(backups(&dir), 1);
     assert!(h.app.quit_prompt.is_none() && may_close(&mut h.app));
     let _ = std::fs::remove_dir_all(&dir);
@@ -134,7 +151,7 @@ fn a_backup_on_quitting_can_be_skipped_or_the_quit_cancelled() {
     assert!(!may_close(&mut h.app), "asked again");
     h.step();
     click(&mut h, "button:quitSkipBackup");
-    assert!(h.app.quit_backup == QuitBackup::Settled && h.app.quit_prompt.is_none(), "{:?}", h.app.quit_prompt);
+    assert!(h.step_until(T, |h| h.quit_requested()) && h.app.quit_prompt.is_none(), "{:?}", h.app.quit_prompt);
     assert_eq!(backups(&dir), 0);
     assert!(may_close(&mut h.app), "the window may close: not asked twice");
     let _ = std::fs::remove_dir_all(&dir);
@@ -150,25 +167,128 @@ fn quitting_always_backs_up_first_where_that_was_chosen() {
     prefs(&mut h, json!({"onClose": "always"}));
     assert!(!may_close(&mut h.app), "the backup first");
     assert!(matches!(h.app.quit_prompt, Some(QuitPrompt::BackingUp(_))), "{:?}", h.app.quit_prompt);
-    assert!(h.step_until(T, |h| h.app.quit_backup == QuitBackup::Settled), "the backup is made: {:?}", h.app.quit_prompt);
+    assert!(h.step_until(T, |h| h.quit_requested()), "quits once the backup is made: {:?}", h.app.quit_prompt);
     assert_eq!(backups(&dir), 1);
-    assert!(h.app.quit_prompt.is_none() && may_close(&mut h.app));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Given the backup on quitting can't be made, then LightCraft does not quit as if it had been:
-/// it says why, and the person decides (the next quit asks again).
+/// Given the backup on quitting can't be made (the folder for backups can't be), then LightCraft
+/// does not quit as if it had been, and is not kept from quitting either: it says why and asks.
+/// Cancel goes back to work (the next quit starts over); Quit Anyway quits without the backup.
 #[test]
-fn a_backup_on_quitting_that_fails_does_not_quit() {
+fn a_backup_on_quitting_that_fails_asks_whether_to_quit_anyway() {
     let dir = temp("fails");
     let blocked = dir.join("a-file");
     std::fs::write(&blocked, b"x").unwrap();
     let mut h = app_with_a_library_in(&dir);
     prefs(&mut h, json!({"onClose": "always", "dir": blocked.to_string_lossy()}));
     assert!(!may_close(&mut h.app));
-    assert!(h.step_until(T, |h| h.app.quit_prompt.is_none()), "the wait is over");
-    assert_eq!(h.app.quit_backup, QuitBackup::Undecided, "not quit: the next quit starts over");
+    assert!(h.step_until(T, |h| matches!(h.app.quit_prompt, Some(QuitPrompt::BackupFailed(_)))), "{:?}", h.app.quit_prompt);
+    assert!(h.app.quit_prompt.as_ref().unwrap().text().contains("not backed up"));
+    assert!(!h.quit_requested(), "not quit");
+    click(&mut h, "button:quitCancel");
+    assert!(h.app.quit_prompt.is_none() && h.app.quit_backup == QuitBackup::Undecided && !h.quit_requested());
+
+    // again, and this time quit all the same
+    assert!(!may_close(&mut h.app));
+    assert!(h.step_until(T, |h| matches!(h.app.quit_prompt, Some(QuitPrompt::BackupFailed(_)))), "{:?}", h.app.quit_prompt);
+    click(&mut h, "button:quitAnyway");
+    assert!(h.step_until(T, |h| h.quit_requested()), "{:?}", h.app.quit_prompt);
+    assert_eq!(backups(&dir), 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Given a backup of the library is running already when the person quits (one made by hand, or
+/// the one that was due), then it is the backup the quit waits for: it is not stopped as a task
+/// in the way, and no second one is started.
+#[test]
+fn a_backup_that_runs_already_is_the_one_quitting_waits_for() {
+    use std::sync::atomic::Ordering;
+    let dir = temp("already");
+    let mut h = app_with_a_library_in(&dir);
+    prefs(&mut h, json!({"onClose": "always"}));
+    h.app.session.backup_hold.store(true, Ordering::SeqCst);
+    h.app.run("library.backup", json!({})).unwrap();
+    assert!(!may_close(&mut h.app));
+    assert!(matches!(h.app.quit_prompt, Some(QuitPrompt::BackingUp(_))), "waited for, not asked about as a task: {:?}", h.app.quit_prompt);
+    let job = h.app.session.backup.clone().unwrap();
+    assert!(!job.cancel.load(Ordering::Relaxed), "not stopped");
+    h.app.session.backup_hold.store(false, Ordering::SeqCst);
+    assert!(h.step_until(T, |h| h.quit_requested()), "{:?}", h.app.quit_prompt);
+    assert_eq!(backups(&dir), 1, "the one backup");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// "Quit Without Waiting" stops the backup and quits; nothing half made is left as a backup.
+/// "Cancel" goes back to work: the backup is still made, and LightCraft does not quit by itself.
+#[test]
+fn the_wait_for_the_backup_can_be_cut_short_or_called_off() {
+    use std::sync::atomic::Ordering;
+    let dir = temp("wait");
+    let mut h = app_with_a_library_in(&dir);
+    prefs(&mut h, json!({"onClose": "always"}));
+    h.app.session.backup_hold.store(true, Ordering::SeqCst);
+    assert!(!may_close(&mut h.app));
+    h.step();
+    assert!(has(&mut h, "button:quitNoWait") && has(&mut h, "button:quitCancel"));
+    click(&mut h, "button:quitCancel");
+    assert!(h.app.quit_prompt.is_none() && h.app.quit_backup == QuitBackup::Undecided);
+    h.app.session.backup_hold.store(false, Ordering::SeqCst);
+    assert!(h.step_until(T, |h| h.app.session.last_backup.is_some()), "the backup goes on");
+    for _ in 0..10 {
+        h.step();
+    }
+    assert!(!h.quit_requested(), "called off: no quit by itself");
+    assert_eq!(backups(&dir), 1);
+
+    h.app.session.backup_hold.store(true, Ordering::SeqCst);
+    assert!(!may_close(&mut h.app));
+    h.step();
+    click(&mut h, "button:quitNoWait");
+    assert!(h.step_until(T, |h| h.quit_requested()), "{:?}", h.app.quit_prompt);
+    h.app.session.backup_hold.store(false, Ordering::SeqCst);
+    assert!(h.step_until(T, |h| h.app.session.backup.as_ref().is_some_and(|b| b.outcome().is_some())));
+    assert_eq!(backups(&dir), 1, "the stopped one is no backup");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Given the backup was skipped (or made) in a quit that then did not happen (another question
+/// of quitting was cancelled), then the next quit asks about the backup again; and a quit that
+/// was cancelled while it waited for its backup does not happen by itself when the backup ends.
+#[test]
+fn a_quit_that_is_called_off_starts_over_next_time() {
+    let dir = temp("called-off");
+    let mut h = app_with_a_library_in(&dir);
+    prefs(&mut h, json!({"onClose": "ask"}));
+    // a task that quitting would stop, to have its question after the backup's
+    let task = h.app.session.activity.start("import", "Importing", lightcraft_engine::activity::Cancel::Yes);
+    assert!(!may_close(&mut h.app));
+    h.step();
+    assert!(matches!(h.app.quit_prompt, Some(QuitPrompt::Tasks(_))), "{:?}", h.app.quit_prompt);
+    click(&mut h, "button:quitCancel");
+    drop(task);
+    // skipped, and then the quit is called off by hand: as the Cancel of any later question does
+    assert!(!may_close(&mut h.app));
+    h.step();
+    click(&mut h, "button:quitSkipBackup");
+    assert!(h.step_until(T, |h| h.quit_requested()));
+    crate::panels::notices::call_off_for_test(&mut h.app);
+    assert!(!may_close(&mut h.app), "asked again");
+    assert!(matches!(h.app.quit_prompt, Some(QuitPrompt::BackUp(_))), "{:?}", h.app.quit_prompt);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Given a library to be backed up once a day whose backup can't be started, then the person is
+/// told (not only the log).
+#[test]
+fn a_due_backup_that_cannot_start_is_said() {
+    let dir = temp("no-start");
+    let mut h = app_with_a_library_in(&dir);
+    h.app.backs_up_by_itself = true;
+    h.app.session.backup_dir = Some(dir.join("library/segments"));
+    prefs(&mut h, json!({"every": "day"}));
     assert!(h.step_until(T, |h| h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("not backed up"))), "{:?}", h.app.ui.toast);
+    assert_eq!(backups(&dir), 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -306,7 +306,7 @@ struct PrefsFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     backup_dir: Option<PathBuf>,
     /// When the library is backed up without being asked, and when it last was.
-    #[serde(skip_serializing_if = "crate::backup_schedule::BackupSchedule::is_off")]
+    #[serde(skip_serializing_if = "crate::backup_schedule::BackupSchedule::is_off", deserialize_with = "crate::backup_schedule::lenient")]
     backup_schedule: crate::backup_schedule::BackupSchedule,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_backup: Option<String>,

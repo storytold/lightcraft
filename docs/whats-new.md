@@ -33,8 +33,10 @@
 - A library can be backed up without being asked, in two ways of their own, both off until chosen in Settings ▸
   General ▸ Backups. **While open**: once a day, a week or a month, by itself in the background when the last backup
   is that old (a month is thirty days; one that fails is tried again an hour later). **When quitting**: Ask (Back Up,
-  Skip or Cancel) or Always (LightCraft quits when the backup is made; Quit Without Waiting stops it). A backup that
-  can't be made does not quit as if it had been. Settings shows when the library was last backed up. Agents:
+  Skip or Cancel) or Always (LightCraft quits when the backup is made; Quit Without Waiting stops it). A backup of
+  the library that runs already is the one waited for. One that can't be made asks whether to quit anyway: never a
+  quit as if the library had been backed up, and never an app that can't be quit because a drive is unplugged. Only
+  the app you have open does either; snapshots, agents and the command line back up when told to. Settings shows when the library was last backed up. Agents:
   `library.backupPreferences` takes `every` (never, day, week, month) and `onClose` (never, ask, always), and
   answers them with `lastBackup`.
 - Settings ▸ General ▸ Backups shows the folder the library's backups go to, and sets it: Choose Folder… for one of

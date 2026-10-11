@@ -41,6 +41,7 @@ impl LightcraftApp {
             recording_shortcut: None,
             text_focus: false,
             headless_host: false,
+            backs_up_by_itself: true,
             notices: vec![],
             updates_rt: Default::default(),
             quit_prompt: None,
@@ -368,7 +369,7 @@ impl LightcraftApp {
     /// backup has its row in the activity stack, and [`Self::backup_status`] says how it ended.
     fn backup_schedule(&mut self, ctx: &egui::Context) {
         use lightcraft_engine::backup_schedule::BackupEvery;
-        if self.session.backup_schedule.every == BackupEvery::Never {
+        if !self.backs_up_by_itself || self.session.backup_schedule.every == BackupEvery::Never {
             return;
         }
         const LOOK_EVERY: f64 = 5.0;
@@ -377,7 +378,10 @@ impl LightcraftApp {
         let looked: Option<f64> = ctx.data(|d| d.get_temp(id));
         if looked.is_none_or(|at| now - at >= LOOK_EVERY || now < at) {
             ctx.data_mut(|d| d.insert_temp(id, now));
-            lightcraft_engine::cmd::backup::back_up_if_due(&mut self.session);
+            // (one that is due and could not even be started: said, like one that failed)
+            if let Err(e) = lightcraft_engine::cmd::backup::back_up_if_due(&mut self.session) {
+                self.toast_for(ctx, crate::i18n::tr_format!("The library was not backed up: {}", e), 8.0);
+            }
         }
         // (an idle window still looks: a library left open for days is backed up)
         ctx.request_repaint_after(std::time::Duration::from_secs(60));

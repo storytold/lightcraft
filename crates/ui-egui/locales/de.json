@@ -2232,6 +2232,7 @@
   "Back up the library before LightCraft quits?": "Die Bibliothek sichern, bevor LightCraft beendet wird?",
   "Backing up before quitting": "Sicherung vor dem Beenden",
   "Backing up the library. LightCraft quits when the backup is made.": "Die Bibliothek wird gesichert. LightCraft wird beendet, sobald die Sicherung erstellt ist.",
+  "Quit without a backup?": "Ohne Sicherung beenden?",
   "Lightroom Catalog Import": "Lightroom-Katalogimport",
   "Destination library": "Zielbibliothek",
   "Show in Library": "In Bibliothek anzeigen",

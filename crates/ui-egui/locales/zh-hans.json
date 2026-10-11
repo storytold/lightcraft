@@ -2066,6 +2066,7 @@
   "Back up the library before LightCraft quits?": "在 LightCraft 退出前备份图库？",
   "Backing up before quitting": "退出前备份",
   "Backing up the library. LightCraft quits when the backup is made.": "正在备份图库。备份完成后 LightCraft 将退出。",
+  "Quit without a backup?": "不备份直接退出？",
   "Lightroom Catalog Import": "Lightroom 目录导入",
   "These photos are only in memory. Open a library on disk and import the catalog again to save them.": "这些照片仅保存在内存中。请打开磁盘上的图库并再次导入目录以保存照片。",
   "Show in Library": "在图库中显示",

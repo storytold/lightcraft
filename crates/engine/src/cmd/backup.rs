@@ -587,7 +587,7 @@ fn can_restore(s: &Session) -> std::result::Result<(), String> {
 fn place(s: &mut Session, staged: restore::Staged, from: &Path, target: &Path, aside: &str) -> Result<Value> {
     // what of the session is the library's (it is put back if the restore is taken back), and
     // what stays: the folder backups go to is the library's choice now, not the backup's from then
-    let (backups, active) = (s.backup_dir.clone(), s.active());
+    let (backups, active) = ((s.backup_dir.clone(), s.backup_schedule, s.last_backup.clone()), s.active());
     let kept = (s.presets.clone(), s.profile_favorites.clone(), s.profile_recent.clone(), s.media.smart_dir.clone());
     // everything this session changed is on disk, and nothing of it writes any more
     s.close_library()?;
@@ -636,8 +636,9 @@ fn place(s: &mut Session, staged: restore::Staged, from: &Path, target: &Path, a
         });
     }
     log::info!("library: restored from {}; what it held is in {}", from.display(), made.aside.as_deref().unwrap_or(Path::new("")).display());
-    if s.backup_dir != backups {
-        s.backup_dir = backups;
+    // (and so is when it is backed up by itself, and when it last was)
+    if (s.backup_dir.clone(), s.backup_schedule, s.last_backup.clone()) != backups {
+        (s.backup_dir, s.backup_schedule, s.last_backup) = backups;
         if let Err(e) = s.save_prefs() {
             log::warn!("library: {e}");
         }
@@ -682,27 +683,31 @@ pub fn note_finished(s: &mut Session) {
 
 /// Back the open library up by itself if its schedule says it is due
 /// ([`crate::backup_schedule::due`]): in the background, to the folder its backups go to, like
-/// `library.backup`. Whether one was started. For the app to call now and then while a library
-/// is open; a backup that could not be started is not tried again for an hour either.
-pub fn back_up_if_due(s: &mut Session) -> bool {
+/// `library.backup`. Whether one was started; a backup that is due and can't be started is the
+/// error, to tell the person (it is not tried again for an hour either). For the app to call
+/// now and then while a library is open.
+pub fn back_up_if_due(s: &mut Session) -> std::result::Result<bool, String> {
     use crate::backup_schedule::due;
     if s.backup_schedule.every == crate::backup_schedule::BackupEvery::Never || can_back_up(s).is_err() {
-        return false;
+        return Ok(false);
     }
     // (a restore under way puts another library here: its backup is the restored library's)
     if s.restore.as_ref().is_some_and(|r| r.running()) {
-        return false;
+        return Ok(false);
     }
+    // (backups that are no longer there are no backup: the folder was removed, or its drive)
+    let there = backup_folder(s).is_some_and(|(folder, _)| folder.is_dir());
+    let last = s.last_backup.as_deref().filter(|_| there);
     let now = (s.clock)();
-    if !due(s.backup_schedule.every, s.last_backup.as_deref(), s.backup_tried.as_deref(), &now) {
-        return false;
+    if !due(s.backup_schedule.every, last, s.backup_tried.as_deref(), &now) {
+        return Ok(false);
     }
     s.backup_tried = Some(now);
     match back_up(s, &json!({"background": true})) {
-        Ok(_) => true,
+        Ok(_) => Ok(true),
         Err(e) => {
             log::warn!("library: the backup that was due was not made: {e}");
-            false
+            Err(e.to_string())
         }
     }
 }
@@ -770,6 +775,7 @@ fn preferences(s: &mut Session, p: &Value) -> Result<Value> {
         choice(C, p, "onClose", crate::backup_schedule::BackupOnClose::from_id, &crate::backup_schedule::BackupOnClose::ALL.map(|c| c.id()))?;
     let before = (s.backup_dir.clone(), s.backup_schedule, s.last_backup.clone(), s.backup_tried.clone());
     if let Some(dir) = p.get("dir") {
+        let before = s.backup_dir.clone();
         s.backup_dir = match dir {
             Value::Null => None,
             dir => {
@@ -780,6 +786,11 @@ fn preferences(s: &mut Session, p: &Value) -> Result<Value> {
                 (!usual).then_some(dir)
             }
         };
+        if s.backup_dir != before {
+            // (when the library was last backed up is when it was backed up *there*)
+            s.last_backup = None;
+            s.backup_tried = None;
+        }
     } else if choose {
         // (the app asks with a folder dialog before the command gets here)
         return Err(bad(C, "there is no folder dialog here to `choose` with: give the folder as `dir`"));

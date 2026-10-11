@@ -2104,6 +2104,7 @@
   "Back up the library before LightCraft quits?": "Utworzyć kopię zapasową biblioteki przed zamknięciem LightCraft?",
   "Backing up before quitting": "Tworzenie kopii zapasowej przed zakończeniem",
   "Backing up the library. LightCraft quits when the backup is made.": "Trwa tworzenie kopii zapasowej biblioteki. LightCraft zakończy działanie, gdy kopia będzie gotowa.",
+  "Quit without a backup?": "Zakończyć bez kopii zapasowej?",
   "Fill Location": "Uzupełnij lokalizację",
   "Fill Location from GPS": "Uzupełnij lokalizację z GPS",
   "Fill empty City, State and Country from GPS (offline GeoNames place names)": "Uzupełnij puste pola Miasto, Region i Kraj na podstawie GPS (nazwy miejsc GeoNames, offline)",

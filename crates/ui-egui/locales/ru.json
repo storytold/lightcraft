@@ -2226,6 +2226,7 @@
   "Back up the library before LightCraft quits?": "Создать резервную копию библиотеки перед завершением работы LightCraft?",
   "Backing up before quitting": "Резервное копирование перед выходом",
   "Backing up the library. LightCraft quits when the backup is made.": "Создаётся резервная копия библиотеки. LightCraft завершит работу, когда копия будет готова.",
+  "Quit without a backup?": "Выйти без резервной копии?",
   "Lightroom Catalog Import": "Импорт каталога Lightroom",
   "Destination library": "Библиотека назначения",
   "Show in Library": "Показать в библиотеке",
