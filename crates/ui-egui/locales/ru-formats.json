@@ -317,5 +317,9 @@
   "Panel layout could not be restored: {error}": "Не удалось восстановить расположение панелей: {error}",
   "Panel move was not applied: {error}": "Перемещение панели не применено: {error}",
   "{name} is installed": "Модель {name} установлена",
-  "{name} is installed and in use: face recognition is on": "Модель {name} установлена и используется: распознавание лиц включено"
+  "{name} is installed and in use: face recognition is on": "Модель {name} установлена и используется: распознавание лиц включено",
+  "Couldn't read {name}: {error}": "Не удалось прочитать {name}: {error}",
+  "Couldn't read {n} photo{s} from {name}": "{name}: не удалось прочитать фото ({n}){s:.0}",
+  "No new photos on {name} ({n} already in the library)": "На {name} нет новых фото ({n} уже в библиотеке)",
+  "No photos found on {name}": "На {name} не найдено фото"
 }

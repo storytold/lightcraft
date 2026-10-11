@@ -317,5 +317,9 @@
   "Panel layout could not be restored: {error}": "無法還原面板配置：{error}",
   "Panel move was not applied: {error}": "面板移動未套用：{error}",
   "{name} is installed": "{name} 已安裝",
-  "{name} is installed and in use: face recognition is on": "{name} 已安裝並在使用中：臉部辨識已開啟"
+  "{name} is installed and in use: face recognition is on": "{name} 已安裝並在使用中：臉部辨識已開啟",
+  "Couldn't read {name}: {error}": "無法讀取 {name}：{error}",
+  "Couldn't read {n} photo{s} from {name}": "{name}：有 {n} 張照片無法讀取{s:.0}",
+  "No new photos on {name} ({n} already in the library)": "{name} 上沒有新照片（{n} 張已在照片庫中）",
+  "No photos found on {name}": "在 {name} 上找不到照片"
 }

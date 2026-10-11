@@ -107,6 +107,7 @@ impl LightcraftApp {
             import: None,
             scan: None,
             waiting_import: Default::default(),
+            camera: None,
             sync: None,
             sync_owns_changes: false,
             sync_run: None,
