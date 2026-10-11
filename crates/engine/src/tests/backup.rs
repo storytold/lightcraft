@@ -95,8 +95,13 @@ fn backups_go_to_the_folder_asked_for() {
     assert!(PathBuf::from(r["report"]["dir"].as_str().unwrap()).starts_with(&there));
     assert!(backups(&dir.join("Backups")).is_empty(), "given for one backup, not remembered");
     // the library's own folder for them, kept with the library
+    // (nothing chosen yet: `folder` says where they go all the same)
+    let p = s.execute("library.backupPreferences", &json!({})).unwrap();
+    assert!(p["dir"].is_null());
+    assert_eq!(p["folder"].as_str().map(PathBuf::from), Some(s.library.as_ref().unwrap().dir.join("Backups")));
     let p = s.execute("library.backupPreferences", &json!({"dir": elsewhere.to_string_lossy()})).unwrap();
     assert_eq!(p["dir"].as_str(), Some(&*elsewhere.to_string_lossy()));
+    assert_eq!(p["folder"], p["dir"]);
     s.close_library().unwrap();
     drop(s);
     let mut s = open(&dir);
@@ -104,7 +109,9 @@ fn backups_go_to_the_folder_asked_for() {
     s.execute("library.backup", &json!({})).unwrap();
     assert_eq!(backups(&elsewhere).len(), 1);
     // and back to the default
-    assert!(s.execute("library.backupPreferences", &json!({"dir": null})).unwrap()["dir"].is_null());
+    let p = s.execute("library.backupPreferences", &json!({"dir": null})).unwrap();
+    assert!(p["dir"].is_null());
+    assert_eq!(p["folder"].as_str().map(PathBuf::from), Some(s.library.as_ref().unwrap().dir.join("Backups")));
     s.execute("library.backup", &json!({})).unwrap();
     assert_eq!(backups(&dir.join("Backups")).len(), 1);
     drop(s);

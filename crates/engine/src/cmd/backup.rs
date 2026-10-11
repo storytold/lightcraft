@@ -642,7 +642,9 @@ fn preferences(s: &mut Session, p: &Value) -> Result<Value> {
         };
         s.save_prefs()?;
     }
-    Ok(json!({"dir": s.backup_dir.as_ref().map(|d| d.to_string_lossy())}))
+    // `dir`: what was chosen (null: nothing was). `folder`: where backups go, chosen or not.
+    let folder = s.library.as_ref().filter(|l| l.on_disk).map(|l| s.backup_dir.clone().unwrap_or_else(|| l.dir.join(BACKUPS)));
+    Ok(json!({"dir": s.backup_dir.as_ref().map(|d| d.to_string_lossy()), "folder": folder.as_ref().map(|d| d.to_string_lossy())}))
 }
 
 fn on_disk(s: &Session) -> std::result::Result<(), String> {
@@ -725,7 +727,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Backup Preferences",
             [],
             None,
-            "{dir?: absolute folder path | null} — the folder the library's backups go to (saved with the library); null: Backups in the library folder → {dir}",
+            "{dir?: absolute folder path | null, choose?: bool} — the folder the library's backups go to (saved with the library); null: Backups in the library folder; `choose` (in the app, without `dir`): ask for it with a folder dialog → {dir: what was chosen | null, folder: where backups go}",
             on_disk,
             preferences
         ),

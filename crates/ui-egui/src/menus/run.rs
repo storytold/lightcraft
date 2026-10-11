@@ -144,6 +144,34 @@ fn theme_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
     Ok(appearance_json(app))
 }
 
+/// `library.backupPreferences` with `choose` in the app: the folder the library's backups go to
+/// is asked for with a folder dialog (unless `dir` says it), then set as the command sets it.
+/// A dialog closed without a folder changes nothing.
+fn choose_backup_folder(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    const ID: &str = "library.backupPreferences";
+    let mut params = p.as_object().cloned().unwrap_or_default();
+    params.remove("choose");
+    if !params.contains_key("dir") {
+        // nothing is asked for a folder that can't be set now
+        if let Some(spec) = lightcraft_engine::cmd::command_specs().iter().find(|c| c.id == ID) {
+            (spec.enabled)(&app.session)?;
+        }
+        if app.services.picker.is_none() && app.services.pick_folder.is_none() {
+            return Err("no folder dialog on this platform: give the folder as `dir`".into());
+        }
+        let req = crate::pick::PickRequest::folder(crate::i18n::tr("Choose a Folder for Backups"));
+        let dir = match crate::pick::ask(app, ID, p, "dir", req, |s| s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])) {
+            crate::pick::Picked::Now(v) => v.into_iter().next(),
+            crate::pick::Picked::Later => return Ok(Value::Null),
+            // (there is a dialog: it was closed without a folder)
+            crate::pick::Picked::Unavailable => None,
+        };
+        let Some(dir) = dir else { return Ok(Value::Null) };
+        params.insert("dir".into(), Value::String(dir));
+    }
+    app.session.execute(ID, &Value::Object(params)).map_err(|e| e.to_string())
+}
+
 /// `library.restore` in the app: without `dir`, the backup's folder is asked for; and a restore
 /// of the open library copies the backup while the library stays in use (its row is in the
 /// activity stack, and a toast says how it ended) unless `background` says otherwise.
@@ -190,6 +218,9 @@ pub fn library_replaced(app: &mut LightcraftApp) {
 pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
     if matches!(id, "ui.dock" | "ui.dock.reset") {
         return Some(crate::docking::command(app, id == "ui.dock.reset", p));
+    }
+    if id == "library.backupPreferences" && p.get("choose").is_some() {
+        return Some(choose_backup_folder(app, p));
     }
     if id == "library.restore" {
         return Some(restore_library(app, p));
