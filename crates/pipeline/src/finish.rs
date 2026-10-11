@@ -324,10 +324,11 @@ impl FinishParams {
         let peak = s.hdr.peak();
         let curves = curve_luts(&s.curve, crate::profiles::curve_fades(s));
         let profile_curves = profile_curve_luts(s);
-        let curve_space = (s.process.process() == Process::V2 && (curves.is_some() || profile_curves.is_some())).then(|| CurveSpace {
-            to_curve: lightcraft_color::REC2020.to_space(&lightcraft_color::PROPHOTO).to_f32(),
-            from_curve: lightcraft_color::PROPHOTO.to_space(&lightcraft_color::REC2020).to_f32(),
-        });
+        let curve_space =
+            (matches!(s.process.process(), Process::V2 | Process::V3) && (curves.is_some() || profile_curves.is_some())).then(|| CurveSpace {
+                to_curve: lightcraft_color::REC2020.to_space(&lightcraft_color::PROPHOTO).to_f32(),
+                from_curve: lightcraft_color::PROPHOTO.to_space(&lightcraft_color::REC2020).to_f32(),
+            });
         FinishParams {
             imported_table: None,
             peak,
@@ -998,7 +999,7 @@ mod tests {
         }))
         .unwrap();
         let info = SourceInfo { raw: true, camera_tone: Some(curve), ..Default::default() };
-        for process in [lightcraft_develop::ProcessVersion::V1, lightcraft_develop::ProcessVersion::V2] {
+        for process in [lightcraft_develop::ProcessVersion::V1, lightcraft_develop::ProcessVersion::V2, lightcraft_develop::ProcessVersion::V3] {
             let s = DevelopSettings { process, ..Default::default() };
             let sdr = base_tone(&s, &info, 1.0);
             let expected_sdr = ToneMap::camera(&curve, 0.0, 0.0, 0.0);

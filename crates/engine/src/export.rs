@@ -1800,7 +1800,15 @@ impl PreparedExport {
                 };
                 let dng = lightcraft_raw::write_dng(&raw, &lightcraft_raw::DngWriteOptions { xmp: Some(packet), compression, ..Default::default() })
                     .map_err(|e| e.to_string())?;
-                Ok(Exported { file_name, bytes: dng, width: raw.width, height: raw.height, sidecars: Vec::new(), gpu_fallback: None, unsupported_edits })
+                Ok(Exported {
+                    file_name,
+                    bytes: dng,
+                    width: raw.width,
+                    height: raw.height,
+                    sidecars: Vec::new(),
+                    gpu_fallback: None,
+                    unsupported_edits,
+                })
             }
         }
     }

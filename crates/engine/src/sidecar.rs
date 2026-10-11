@@ -731,20 +731,23 @@ impl Session {
             .map_err(|e| EngineError::Other(format!("{}: unfinished XMP repair: {e}", preferred.display())))?;
         // Keep an existing packet's spelling/style so foreign properties survive this save and
         // subsequent Undo/Redo writes. Shared stems owned by another photo were excluded above.
+        let preferred_missing = !preferred.exists();
         // On a case-insensitive volume `a.xmp` also answers for `a.XMP`: the spelling the folder
         // lists comes first, so the atomic write doesn't rename the packet.
         use crate::rename::MoveFs;
         let existing: Vec<PathBuf> = candidates.into_iter().filter(|path| path.is_file()).collect();
         let listed = existing.iter().find(|path| crate::rename::RealFs.listed(path)).cloned();
-        let path = listed.or_else(|| existing.into_iter().next()).unwrap_or(preferred);
+        let path = listed.or_else(|| existing.into_iter().next()).unwrap_or_else(|| preferred.clone());
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
+        let orig = file_path(p).ok_or_else(|| EngineError::Other(format!("{} is not a file on disk", p.file_name)))?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
-        if !path.exists()
+        if preferred_missing
             && let Some((packet, from)) = read_packet_checked(orig, p.kind, owners.naming(p, self.xmp.naming)).map_err(err)?
-            && from != path
+            && from != preferred
         {
-            // A new preferred sidecar would shadow an alternate sidecar or embedded native edit.
+            // Validate the authoritative alternate before adopting its spelling for the save,
+            // just as when a new preferred sidecar would shadow it or an embedded native edit.
             let parsed = lightcraft_meta::parse_xmp(&packet).map_err(|e| err(std::io::Error::other(e.to_string())))?;
             native_settings(&parsed).map_err(|e| err(std::io::Error::other(e)))?;
         }

@@ -1961,7 +1961,7 @@ mod tests {
             denoise: None,
         };
         let undo_before = s.undo.len();
-        let request = job.request;
+        let request = job.request.clone();
         let r = job.run();
         let new = r.rendered.as_ref().unwrap().image.data.clone();
         // the old pipeline: the same settings against the relative-scale source facts of an older build

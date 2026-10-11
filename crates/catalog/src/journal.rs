@@ -49,18 +49,21 @@
 //! | 4 | Reload reads lens data | `Op::SetEmbeddedLens` |
 //! | 5 | the keyword list | `Op::SetKeyword`, `Catalog.keyword_list` |
 //! | 6 | folder labels | `Op::SetFolderRecord`, `Catalog.folder_records` |
-//! | 7 | Kelvin white balance for raws whose camera has matrices (#730) | `Op::SetAsShotWb`, `WhiteBalance.scale` |
-//! | 8 | History cursor: Go to History Step adds no step | `Op::SetHistoryCursor`, `Photo.history_cursor` |
-//! | 9 | combined saved-edit diagnostics | `Op::SetUnsupportedEdits`, `Photo.unsupported_edits` |
-//! | 10 | combined imported profile adjustments | Independent Look parameters and curves (schema 3) |
-//! | 11 | combined profile treatment | Independent imported-profile monochrome conversion (schema 4) |
-//! | 12 | combined WB and runtime profile tables | Kelvin scale plus checked HSV references (schema 6) |
+//! | 7 (upstream) | Kelvin WB for measured cameras (#730) | `Op::SetAsShotWb`, `WhiteBalance.scale` |
+//! | 7 (fork) | saved-edit diagnostics | `Op::SetUnsupportedEdits`, `Photo.unsupported_edits` |
+//! | 8 (upstream) | History cursor | `Op::SetHistoryCursor`, `Photo.history_cursor` |
+//! | 8 (fork) | continuous point curves | Function point curves (schema 2) |
+//! | 9 (fork) | imported profile adjustments | Saved Look parameters and curves (schema 3) |
+//! | 10 (fork) | profile treatment | Imported-profile monochrome conversion (schema 4) |
+//! | 11 (fork) | runtime profile tables | Checked HSV references, no payloads or paths (schema 5) |
+//! | 12 | combined upstream and fork writer | All above fields; explicit Kelvin WB uses schema 6 |
+//! | 13 | combined writer with History cursor | All v12 fields plus `Op::SetHistoryCursor`, `Photo.history_cursor` |
 //! | upstream 9 (combined 14) | preview-only recheck | `Photo.preview_checked`, `Op::SetContent.preview_checked` |
 //!
-//! Earlier fork writers used v3 and v7 for saved-edit diagnostics, and v4 for function curves.
-//! Their diagnostic payloads remain readable alongside upstream v3-v7 fields, including Kelvin WB.
-//! | 9 | combined continuous point curves | Function point curves in develop settings (schema 2) |
-//! Compatible function curves from the earlier fork v4/v8 lineage remain readable.
+//! Earlier fork writers also used v3 for diagnostics and v4 for function curves. These payloads
+//! remain readable. Version 7 and rendering process 2 have different upstream/fork meanings:
+//! no numeric-only migration infers their lineage. This fork retains its established process 2
+//! rendering; see `docs/process-versions.md` for the upstream-process compatibility boundary.
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -85,7 +88,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 12;
+pub const VERSION: u32 = 13;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]

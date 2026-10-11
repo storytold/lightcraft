@@ -147,7 +147,7 @@ fn assert_union(catalog: &Catalog) {
 
 #[test]
 fn both_catalog_lineages_upgrade_before_a_combined_op_is_appended() {
-    assert_eq!(VERSION, 11, "runtime profile references need the next writer version");
+    assert_eq!(VERSION, 12, "combined white-balance and profile settings need the next writer version");
     for (local, version) in [(true, 3), (true, 4), (false, 3), (false, 4), (false, 5), (false, 6), (false, 7)] {
         let (snapshot, ops, expected) = fixture(local, version);
         let store = files(version, &snapshot, &ops);
@@ -201,7 +201,7 @@ fn assert_refused_unchanged(store: &MemStore, must_report_newer: bool) {
 
 #[test]
 fn future_catalog_keeps_all_snapshot_and_log_bytes_untouched() {
-    assert_eq!(VERSION, 11);
+    assert_eq!(VERSION, 12);
     let (snapshot, ops, _) = fixture(true, 4);
     assert_refused_unchanged(&files(VERSION + 1, &snapshot, &ops), true);
     // The catalog payload need not be understood before a future outer version is refused.

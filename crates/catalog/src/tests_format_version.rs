@@ -325,13 +325,14 @@ fn bad_crc_is_still_a_torn_tail() {
 fn op_variants_are_versioned() {
     fn since(op: &Op) -> u32 {
         match op {
-            Op::SetDevelop { settings, .. } if settings.profile.imported.as_ref().is_some_and(|look| look.look_table.is_some()) => 12,
-            Op::SetDevelop { settings, .. } if settings.profile.imported.as_ref().is_some_and(|look| look.convert_to_grayscale) => 11,
-            Op::SetDevelop { settings, .. } if settings.profile.imported.is_some() => 10,
+            Op::SetDevelop { settings, .. } if settings.wb.scale == lightcraft_develop::WbScale::Kelvin => 12,
+            Op::SetDevelop { settings, .. } if settings.profile.imported.as_ref().is_some_and(|look| look.look_table.is_some()) => 11,
+            Op::SetDevelop { settings, .. } if settings.profile.imported.as_ref().is_some_and(|look| look.convert_to_grayscale) => 10,
+            Op::SetDevelop { settings, .. } if settings.profile.imported.is_some() => 9,
             Op::SetDevelop { settings, .. }
                 if [&settings.curve.master, &settings.curve.red, &settings.curve.green, &settings.curve.blue].iter().any(|c| c.is_function()) =>
             {
-                9
+                8
             }
             Op::AddPhoto { .. }
             | Op::RemovePhoto { .. }
@@ -367,20 +368,24 @@ fn op_variants_are_versioned() {
             Op::SetKeyword { .. } => 5,
             Op::SetFolderRecord { .. } => 6,
             Op::SetAsShotWb { .. } => 7,
-            Op::SetHistoryCursor { .. } => 8,
-            Op::SetUnsupportedEdits { .. } => 9,
+            Op::SetHistoryCursor { .. } => 13,
+            Op::SetUnsupportedEdits { .. } => 7,
             Op::SetDevelop { .. } => 1,
         }
     }
-    assert_eq!(since(&Op::SetUnsupportedEdits { id: PhotoId(1), fields: Vec::new() }), 8);
+    let mut kelvin = lightcraft_develop::DevelopSettings::default();
+    kelvin.wb.scale = lightcraft_develop::WbScale::Kelvin;
+    assert_eq!(since(&Op::SetDevelop { id: PhotoId(1), settings: Arc::new(kelvin), label: "Kelvin".into(), edited: None }), 12);
+    assert_eq!(since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None }), VERSION);
+    assert_eq!(since(&Op::SetUnsupportedEdits { id: PhotoId(1), fields: Vec::new() }), 7);
     let function = since(&Op::SetDevelop {
         id: PhotoId(1),
         settings: Arc::new(lightcraft_develop::DevelopSettings::from_json(&function_settings()).unwrap()),
         label: "function".into(),
         edited: None,
     });
-    assert_eq!(function, 9);
-    for (convert_to_grayscale, table, version) in [(false, None, 10), (true, None, 11), (true, Some("E96CB8AF6484F8402BB0E6ECFC8AD0FC"), VERSION)] {
+    assert_eq!(function, 8);
+    for (convert_to_grayscale, table, version) in [(false, None, 9), (true, None, 10), (true, Some("E96CB8AF6484F8402BB0E6ECFC8AD0FC"), 11)] {
         let required = since(&Op::SetDevelop {
             id: PhotoId(1),
             settings: Arc::new(

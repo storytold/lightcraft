@@ -70,10 +70,12 @@ fn new_settings_get_the_latest_process() {
     assert_eq!(ProcessVersion::V2, ProcessVersion(2));
     assert_eq!(ProcessVersion::LATEST, ProcessVersion::V2);
     assert!(ProcessVersion::V1.is_outdated());
-    // the processes are listed oldest first, the latest last, each with its own number
+    // the processes are listed oldest first, the newest supported last, each with its own number
     let versions: Vec<u32> = Process::ALL.iter().map(|p| p.version().0).collect();
     assert!(versions.windows(2).all(|w| w[0] < w[1]), "{versions:?}");
-    assert_eq!(Process::ALL.last(), Some(&Process::LATEST));
+    assert_eq!(Process::ALL.last(), Some(&Process::V3));
+    assert_eq!(ProcessVersion::V3, ProcessVersion(3));
+    assert!(!ProcessVersion::V3.is_outdated());
     assert!(Process::ALL.iter().all(|p| p.version().process() == *p && p.version().is_known()));
 }
 
@@ -94,7 +96,7 @@ fn unknown_process_numbers_load_and_render_with_the_newest_known() {
     // written by a newer LightCraft: kept as it is, rendered with the latest process this build has
     let s = DevelopSettings::from_json(&json!({"process": 7, "light": {"exposure": 0.5}})).unwrap();
     assert_eq!(s.process, ProcessVersion(7));
-    assert_eq!(s.process.process(), Process::LATEST);
+    assert_eq!(s.process.process(), Process::V3);
     assert!(!s.process.is_known());
     assert!(!s.process.is_outdated(), "never downgraded by Update to Current Process");
     assert_eq!(s.to_json()["process"], json!(7));
@@ -103,7 +105,7 @@ fn unknown_process_numbers_load_and_render_with_the_newest_known() {
     let zero = DevelopSettings::from_json(&json!({"process": 0})).unwrap().process;
     assert_eq!((zero.process(), zero.is_known(), zero.is_outdated()), (Process::V1, false, true));
     let max = DevelopSettings::from_json(&json!({"process": u32::MAX})).unwrap().process;
-    assert_eq!(max.process(), Process::LATEST);
+    assert_eq!(max.process(), Process::V3);
     // a whole number written as a float is that number
     assert_eq!(DevelopSettings::from_json(&json!({"process": 2.0})).unwrap().process, ProcessVersion(2));
 }
@@ -141,13 +143,13 @@ fn a_damaged_process_value_reads_as_v1_and_keeps_the_edits() {
 
 #[test]
 fn the_process_is_not_an_edit_nor_part_of_copied_settings() {
-    let mut s = DevelopSettings { process: ProcessVersion(LATEST_PLUS_ONE), ..Default::default() };
+    let mut s = DevelopSettings { process: ProcessVersion(NEWEST_PLUS_ONE), ..Default::default() };
     assert!(s.is_unedited(), "a photo on another process is not edited for that");
     s.light.exposure = 1.0;
     assert!(!s.is_unedited());
     // resetting a section or a slider leaves the process alone
     s.reset_section(Section::Light);
-    assert_eq!(s.process, ProcessVersion(LATEST_PLUS_ONE));
+    assert_eq!(s.process, ProcessVersion(NEWEST_PLUS_ONE));
     // copy / paste / sync / presets: no group carries the process, so the target keeps its own
     assert!(SettingsGroup::ALL.iter().all(|g| !g.keys().contains(&"process")));
     s.light.exposure = 1.0;
@@ -162,11 +164,11 @@ fn the_process_is_not_an_edit_nor_part_of_copied_settings() {
     let half = preset.apply(&target, 0.5);
     assert_eq!((half.process, half.light.exposure), (ProcessVersion(1), 0.7));
     // a partial that names a process explicitly (Apply Settings JSON) sets it
-    assert_eq!(target.merged(&json!({"process": LATEST_PLUS_ONE})).unwrap().process, ProcessVersion(LATEST_PLUS_ONE));
+    assert_eq!(target.merged(&json!({"process": NEWEST_PLUS_ONE})).unwrap().process, ProcessVersion(NEWEST_PLUS_ONE));
 }
 
 /// A process newer than the latest: preserved without assuming a particular current number.
-const LATEST_PLUS_ONE: u32 = ProcessVersion::LATEST.0 + 1;
+const NEWEST_PLUS_ONE: u32 = ProcessVersion::V3.0 + 1;
 
 #[test]
 fn sparse_schema_markers_keep_legacy_wire_and_hash_with_process_and_hdr_omitted() {

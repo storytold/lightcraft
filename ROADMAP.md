@@ -147,6 +147,10 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 - 2026-10-12: 117 Nikon and Fujifilm bodies verified, one CC0 raw.pixls.us file each pinned and checked
   against the camera JPEG (`crates/raw/tests/body_corpus.rs`); the sweep found COOLPIX 5700 / 8400 / 8800
   decoding wrongly. 354 models verified, ~58% of photographers on a verified body; headline numbers unchanged.
+- 2026-10-11 (second integration): upstream76b53778 retained with fork V2 defaults. Native D3500
+  controls are exact on one scene and differ only slightly in measured regions on the other. V3 tone
+  has mixed regional results and remains opt-in. Checklist recount: 80.8% of 531; readiness unchanged.
+
 - 2026-10-11: Canon EOS R5 Mark II C-RAW decodes from sensor data (57% of its files opened as a
   preview): the CRX QP map's first-symbol literal and limited-length escape; four CC0 R5 Mark II files
   pinned, the QP maps of 33,665 private C-RAW files decode exactly ([cr3.md](docs/cr3.md)). 235 models
@@ -217,6 +221,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 | 2026-10-14 | minor | Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (coverage.py 515 → 545 verified); sensor verification does not establish colour parity (#1277); headline numbers unchanged |
 | 2026-10-12 | minor | 22 more CR3 bodies verified, EOS R6 Mark III white balance: RAW decoding 77% → 83%, RAW ~56% → ~60%; mainstream 49% → 51%, essentials 64% → 65%; full unchanged at ~61% |
 | 2026-10-12 | minor | 117 Nikon and Fujifilm bodies verified (354 models, 24%); headline numbers unchanged |
+| 2026-10-11 | minor | Recount after upstream76b53778 integration: checklist 80.8% of 531; V3 tone remains opt-in; readiness and hour estimates unchanged |
 | 2026-10-11 | minor | EOS R5 Mark II CR3 verified: CR3 on four verified bodies, RAW decoding 76% → 77%; headline numbers unchanged |
 | 2026-10-10 | minor | Restored saved-edit and measured-rendering evidence after the progress-doc restructure; V2 curves / V1 preservation, remaining detail and profile gaps; checklist 80.3% of 519, readiness and hours unchanged |
 | 2026-10-10 | minor | RAW measured model by model; RAW decode and colour as explicit rows: full 59% → 61%, mainstream 51% → 49%, essentials 63% → 64%; beta ~14 points |

@@ -21,7 +21,7 @@ extreme encoded values are limited to ±1e15 to prevent f32 overflow during tran
 matrix multiplication, independently of the display's peak. These contracts do not establish full
 Lightroom curve, profile, or HDR parity.
 
-**V3** is explicit opt-in: V2 curves plus the upstream median-prefiltered Highlights/Shadows base (radius 0.15% of the long edge, capped at24px). V1/V2 retain their original spatial base. CPU/GPU use the shared `tone_base_detail` and cache by process. V3 is supported but is not the default for new imports, Reset or Update to Current Process while photographic evaluation is pending.
+**V3** is explicit opt-in: V2 curves plus the upstream median-prefiltered Highlights/Shadows base (radius 0.15% of the long edge, capped at 24 px). V1/V2 retain their original spatial base. CPU/GPU use the shared `tone_base_detail` and cache by process. The measured D3500 result has mixed regional changes and slower exports, so V3 is not the default for new imports, Reset or Update to Current Process.
 
 Upstream also used numeric V2 for median-base tone with its older curve space. Those settings cannot be distinguished reliably from this fork's V2 by the number alone. This fork preserves its established V2 meaning; no automatic upstream-V2 appearance migration is claimed.
 
@@ -47,7 +47,7 @@ profile bypass and Amount 0 skip the table and its matrix round trip. See
 ## Adding a process
 
 1. Add a variant to `Process`, append it to `Process::ALL` (oldest first), give it its number in
-   `Process::version` and make it `Process::LATEST`.
+   `Process::version` and evaluate it before making it `Process::LATEST` (the default, currently V2).
 2. The compiler then points at every `match` on `Process`. The base tone map is chosen in one place,
    `lightcraft_pipeline::finish::base_tone` (both the CPU and the GPU renderer take it from there): give
    the new process its own arm and leave older processes alone. A process that changes another stage
@@ -84,7 +84,7 @@ ignored; a photo imported with Lightroom edits is on LightCraft's latest process
 LightCraft photo that receives them keeps its own.
 
 **A number this build doesn't know** (a library or sidecar written by a newer LightCraft) loads, is
-kept when saved, and renders with the newest process this build has. Update to Current Process never
+kept when saved, and renders with the newest supported process (currently V3), independently of the default. Update to Current Process never
 moves a photo to an older process; Reset does move it to this build's latest.
 
 **A damaged value** (anything but a whole number from 0 to 2^32 - 1; `2.0` counts as 2) reads as V1,
@@ -100,8 +100,8 @@ preview-cache keys (`DevelopSettings::hash64`) don't change. `develop.get` (MCP 
 states the process.
 
 Imported Look table references require **settings schema 5** and **catalog format 11**. These are
-storage versions, distinct from rendering Process 2. Only a canonical fingerprint is serialized;
+storage versions, distinct from rendering Processes 2 and 3. Only a canonical fingerprint is serialized;
 paths, table samples and loaded/unloaded state are session-only. Settings without a reference keep
-their existing wire representation and schema marker. New builds read older settings; opening an
-older catalog upgrades its envelope to 11, which older builds refuse instead of silently discarding
-new edit data. Loading or unloading a resource does not alter saved settings or undo history.
+their existing wire representation and schema marker. Explicit Kelvin white balance requires
+settings schema 6. The combined writer uses catalog format 12; opening an older catalog upgrades
+its envelope to 12, which older builds refuse instead of silently discarding new edit data. Loading or unloading a resource does not alter saved settings or undo history.

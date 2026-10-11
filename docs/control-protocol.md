@@ -152,7 +152,7 @@ may be held in a session. Loading does not select a profile, edit a photo, insta
 folders. The local path and decoded table stay in memory; only the fingerprint travels with saved
 settings, profile-only copy/paste, presets and sync. Load the resource again after restarting.
 
-Rendering currently supports Process 2, SDR and finite Amount 0–200 within the table's declared range.
+Rendering currently supports Process 2 or 3, SDR and finite Amount 0–200 within the table's declared range.
 Amount 0 bypasses the table; profile-induced B&W remains independent. Amount 100 uses the original
 entries; other supported amounts scale hue shifts from zero and saturation/value scales from one.
 Negative or nonfinite extrapolated scales are rejected. The stage uses linear ProPhoto before

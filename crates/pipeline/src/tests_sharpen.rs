@@ -51,7 +51,7 @@ fn local_sharpening_responds_to_global_masking() {
     let req = RenderRequest { depth: OutputDepth::U16, ..RenderRequest::fit(src.width, src.height) };
     let info = SourceInfo::default();
     let cache = StageCache::default();
-    for process in [ProcessVersion::V1, ProcessVersion::V2] {
+    for process in [ProcessVersion::V1, ProcessVersion::V2, ProcessVersion::V3] {
         s.process = process;
         s.detail.sharpen_masking = 0.0;
         let unmasked = deep(&src, &s);
@@ -79,7 +79,7 @@ fn local_sharpening_uses_effective_masking_through_detail_bypass() {
     let req = RenderRequest { depth: OutputDepth::U16, ..RenderRequest::fit(src.width, src.height) };
     let info = SourceInfo::default();
     let cache = StageCache::default();
-    for process in [ProcessVersion::V1, ProcessVersion::V2] {
+    for process in [ProcessVersion::V1, ProcessVersion::V2, ProcessVersion::V3] {
         s.process = process;
         s.set_section_enabled("detail", true);
         s.detail.sharpen_masking = 0.0;
@@ -106,7 +106,7 @@ fn local_sharpening_uses_effective_masking_through_detail_bypass() {
 fn global_masking_still_suppresses_global_sharpening() {
     let (src, _) = local_sharpening_fixture();
     let mut s = settings(1.0);
-    for process in [ProcessVersion::V1, ProcessVersion::V2] {
+    for process in [ProcessVersion::V1, ProcessVersion::V2, ProcessVersion::V3] {
         s.process = process;
         s.detail.sharpen_masking = 0.0;
         let plain = deep(&src, &DevelopSettings { process, ..Default::default() });

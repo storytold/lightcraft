@@ -11,7 +11,8 @@ pub const POINT_CURVE_SCHEMA_VERSION: u32 = 2;
 pub const IMPORTED_LOOK_SCHEMA_VERSION: u32 = 3;
 pub const PROFILE_TREATMENT_SCHEMA_VERSION: u32 = 4;
 pub const LOOK_TABLE_SCHEMA_VERSION: u32 = 5;
-pub const SCHEMA_VERSION: u32 = LOOK_TABLE_SCHEMA_VERSION;
+pub const WB_SCALE_SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = WB_SCALE_SCHEMA_VERSION;
 
 fn deserialize_schema_version<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
     let version = u32::deserialize(deserializer)?;

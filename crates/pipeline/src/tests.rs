@@ -224,6 +224,31 @@ fn stage_cache_matches_uncached_render_through_a_slider_session() {
     // a different source buffer never hits another source's entries
     let other = Arc::new(Rgb32f::filled(src.width, src.height, [0.3, 0.3, 0.3]));
     assert_eq!(render_cached(&other, &info, &s, &full, &cache).image, render(&other, &info, &s, &full).image);
+
+    // Converting a saved relative white to Kelvin keeps its displayed pair, but the exact
+    // composed white and the reconstructed white can differ below output quantisation.
+    let wb_info = SourceInfo { raw: true, legacy_relative_wb: true, as_shot_temp: 4986.0, as_shot_tint: -2.4, ..Default::default() };
+    let wb_src = Arc::new(Rgb32f::filled(16, 16, [0.3, 0.18, 0.09]));
+    let mut legacy = DevelopSettings::default();
+    (legacy.wb.mode, legacy.wb.temp, legacy.wb.tint) = (lightcraft_develop::WbMode::Custom, 7682.0, 10.0);
+    let mut kelvin = legacy.clone();
+    crate::local::normalize_wb(&mut kelvin, &wb_info);
+    assert_eq!(crate::local::effective_wb(&wb_info, &legacy), crate::local::effective_wb(&wb_info, &kelvin));
+    assert_ne!(crate::local::wb_matrix_for(&wb_info, &legacy), crate::local::wb_matrix_for(&wb_info, &kelvin));
+    let linear = |c: &StageCache| c.lock()[0].lin.as_ref().unwrap().1.clone();
+    for quality in [Quality::Full, Quality::Draft] {
+        let req = RenderRequest { quality, ..RenderRequest::fit(16, 16) };
+        cache.clear();
+        render_cached(&wb_src, &wb_info, &legacy, &req, &cache);
+        let before = linear(&cache);
+        render_cached(&wb_src, &wb_info, &kelvin, &req, &cache);
+        let warm = linear(&cache);
+        let cold_cache = StageCache::default();
+        render_cached(&wb_src, &wb_info, &kelvin, &req, &cold_cache);
+        let cold = linear(&cold_cache);
+        assert_ne!(before.data, cold.data, "fixture must expose the white-balance matrix change");
+        assert_eq!(warm.data, cold.data, "stale {quality:?} linear buffer after white-balance normalization");
+    }
 }
 
 #[test]
@@ -234,7 +259,7 @@ fn drafts_keep_wide_planes_across_a_noise_reduction_change_and_full_renders_do_n
     let info = SourceInfo { raw: true, ..Default::default() };
     let cache = StageCache::default();
     let draft = RenderRequest { quality: Quality::Draft, ..RenderRequest::fit(160, 160) };
-    let full = RenderRequest { quality: Quality::Full, ..draft };
+    let full = RenderRequest { quality: Quality::Full, ..draft.clone() };
     let mut s = typical_edits();
     s.effects.clarity = 60.0;
     render_cached(&src, &info, &s, &draft, &cache);
@@ -784,7 +809,8 @@ fn stored_process_numbers_render_with_a_known_process() {
                 if s.curve.master.is_identity() && s.profile.imported.is_none() {
                     assert!(latest == v1, "V2 must not add a matrix/TRC round trip without active curves");
                 }
-                assert!(out(&with(&s, ProcessVersion(Process::LATEST.version().0 + 7))) == latest, "newer than this build: as the latest");
+                let newest = out(&with(&s, Process::V3.version()));
+                assert!(out(&with(&s, ProcessVersion(Process::V3.version().0 + 7))) == newest, "newer than this build: as the newest supported");
             }
         }
     }

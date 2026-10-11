@@ -160,9 +160,9 @@ fn hdr_histogram_shows_the_range_above_sdr_white_on_a_fixed_scale() {
     let mut s = hdr_on(3.0);
     s.light.exposure = 1.0;
     for other in [
-        RenderRequest { depth: OutputDepth::U16, ..req },
-        RenderRequest { window: Some(crate::PixelWindow { x: 0, y: 0, w: 8, h: 8 }), ..req },
-        RenderRequest { proof: Some(crate::Proof::default()), ..req },
+        RenderRequest { depth: OutputDepth::U16, ..req.clone() },
+        RenderRequest { window: Some(crate::PixelWindow { x: 0, y: 0, w: 8, h: 8 }), ..req.clone() },
+        RenderRequest { proof: Some(crate::Proof::default()), ..req.clone() },
     ] {
         assert!(crate::hdr_histogram(&src, &raw(), &s, &other).is_none());
     }

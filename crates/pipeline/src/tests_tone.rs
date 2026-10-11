@@ -1,5 +1,5 @@
 //! Highlights / Shadows keep the local contrast of the tones they move (issue #632), from process
-//! V2; V1 keeps the base it always had (`docs/process-versions.md`).
+//! V3; V1 keeps the base it always had (`docs/process-versions.md`).
 
 use std::sync::Arc;
 
@@ -57,9 +57,9 @@ fn on(process: Process) -> DevelopSettings {
     DevelopSettings { process: process.version(), ..DevelopSettings::default() }
 }
 
-/// V2 settings with control `id` at `v`.
+/// V3 settings with control `id` at `v`.
 fn with(id: &str, v: f64) -> DevelopSettings {
-    with_on(Process::V2, id, v)
+    with_on(Process::V3, id, v)
 }
 
 fn with_on(process: Process, id: &str, v: f64) -> DevelopSettings {
@@ -97,7 +97,7 @@ fn stats(img: &Rgba8, x0: usize, x1: usize) -> (f32, f32) {
 
 #[test]
 fn highlights_keep_the_local_contrast_of_bright_areas() {
-    let (plain, hl, exp) = (shot(&on(Process::V2)), shot(&with("light.highlights", -100.0)), shot(&with("light.exposure", -1.0)));
+    let (plain, hl, exp) = (shot(&on(Process::V3)), shot(&with("light.highlights", -100.0)), shot(&with("light.exposure", -1.0)));
     let (bright, flat_dark) = ((40, 540), (700, 1160));
     let ((m0, c0), (mh, ch), (_, ce)) = (stats(&plain, bright.0, bright.1), stats(&hl, bright.0, bright.1), stats(&exp, bright.0, bright.1));
     let (k0, kh, ke) = (line_contrast(&plain, bright.0, bright.1), line_contrast(&hl, bright.0, bright.1), line_contrast(&exp, bright.0, bright.1));
@@ -114,7 +114,7 @@ fn highlights_keep_the_local_contrast_of_bright_areas() {
 
 #[test]
 fn shadows_keep_the_local_contrast_of_dark_areas() {
-    let (plain, sh, exp) = (shot(&on(Process::V2)), shot(&with("light.shadows", 100.0)), shot(&with("light.exposure", 1.0)));
+    let (plain, sh, exp) = (shot(&on(Process::V3)), shot(&with("light.shadows", 100.0)), shot(&with("light.exposure", 1.0)));
     let dark = (640, 1160);
     let ((m0, _), (ms, cs), (_, ce)) = (stats(&plain, dark.0, dark.1), stats(&sh, dark.0, dark.1), stats(&exp, dark.0, dark.1));
     let (k0, ks, ke) = (line_contrast(&plain, dark.0, dark.1), line_contrast(&sh, dark.0, dark.1), line_contrast(&exp, dark.0, dark.1));
@@ -134,7 +134,7 @@ fn highlights_add_no_halo_at_a_strong_edge() {
     // filter's own softness leaves up to 4 levels within a few px of the edge, as before)
     let src = Rgb32f::from_fn(W, H, |x, _| if x < W / 2 { [0.85; 3] } else { [0.011; 3] });
     let shot = |s: &DevelopSettings| render(&src, &SourceInfo::default(), s, &RenderRequest::fit(W, H)).image;
-    let (plain, hl) = (shot(&on(Process::V2)), shot(&with("light.highlights", -100.0)));
+    let (plain, hl) = (shot(&on(Process::V3)), shot(&with("light.highlights", -100.0)));
     let at = |img: &Rgba8, x: usize| luma(img.data[(H / 2) * W + x]);
     let far = at(&hl, 100) - at(&plain, 100);
     for x in (W / 2 - 40..W / 2).chain(W / 2..W / 2 + 40) {
@@ -146,14 +146,14 @@ fn highlights_add_no_halo_at_a_strong_edge() {
 
 #[test]
 fn zero_highlights_and_shadows_render_without_the_base() {
-    let mut s = on(Process::V2);
+    let mut s = on(Process::V3);
     s.light.highlights = 0.0;
     s.light.shadows = 0.0;
     controls::set(&mut s, "effects.clarity", 40.0);
     // no base plane is computed or read (the per-pixel stage sees log luminance): the render is
     // the one it always was
-    assert_eq!(local::plane_sigmas(&s, 1200.0, Quality::Full).base, None);
-    assert!(local::plane_sigmas(&with("light.shadows", 1.0), 1200.0, Quality::Full).base.is_some());
+    assert_eq!(local::plane_sigmas(&s, 1200.0, 1200, Quality::Full).base, None);
+    assert!(local::plane_sigmas(&with("light.shadows", 1.0), 1200.0, 1200, Quality::Full).base.is_some());
 }
 
 #[test]
@@ -189,16 +189,18 @@ fn median_matches_a_plain_per_pixel_median() {
 
 #[test]
 fn v1_keeps_the_base_it_always_had() {
-    // V1's base is the edge-aware filter of log luminance itself, as before process V2: no median
+    // V1's base is the edge-aware filter of log luminance itself, as before process V3: no median
     // radius, and `tone_base` at 0 is that filter bit for bit
     let v1 = with_on(Process::V1, "light.highlights", -100.0);
     assert_eq!(ProcessVersion::legacy().process(), Process::V1);
     for ppl in [300.0, 1200.0, 5568.0, 1e6] {
         for q in [Quality::Full, Quality::Draft] {
-            let sig = local::plane_sigmas(&v1, ppl, q);
+            let sig = local::plane_sigmas(&v1, ppl, ppl as usize, q);
             assert!(sig.base.is_some());
             assert_eq!(sig.base_detail, 0, "V1 at {ppl} px");
             assert_eq!(local::tone_base_detail(&v1, ppl), 0);
+            let v2 = with_on(Process::V2, "light.highlights", -100.0);
+            assert_eq!(local::tone_base_detail(&v2, ppl), 0, "fork V2 retains its base");
         }
     }
     let l =
@@ -206,23 +208,23 @@ fn v1_keeps_the_base_it_always_had() {
     for sg in [1.0f32, 4.5, 18.0] {
         assert_eq!(local::tone_base(&l, sg, 0).data, local::guided_fast(&l, sg, local::BASE_EPS).data, "sigma {sg}");
     }
-    // V2 takes the median wherever the image is big enough for one
-    let v2 = with("light.highlights", -100.0);
-    assert_eq!(local::plane_sigmas(&v2, 5568.0, Quality::Full).base_detail, local::base_detail_radius(5568.0));
-    assert_eq!(local::plane_sigmas(&v2, 300.0, Quality::Full).base_detail, 0);
+    // V3 takes the median wherever the image is big enough for one
+    let v3 = with("light.highlights", -100.0);
+    assert_eq!(local::plane_sigmas(&v3, 5568.0, 5568, Quality::Full).base_detail, local::base_detail_radius(5568.0));
+    assert_eq!(local::plane_sigmas(&v3, 300.0, 300, Quality::Full).base_detail, 0);
 }
 
 #[test]
-fn only_v2_keeps_the_twigs_under_highlights() {
+fn only_v3_keeps_the_twigs_under_highlights() {
     let bright = (40, 540);
-    let (p1, p2) = (shot(&on(Process::V1)), shot(&on(Process::V2)));
+    let (p1, p2) = (shot(&on(Process::V1)), shot(&on(Process::V3)));
     // without Highlights / Shadows the processes render alike
-    assert!(p1 == p2, "plain renders differ between V1 and V2");
+    assert!(p1 == p2, "plain renders differ between V1 and V3");
     let (h1, h2, e) =
         (shot(&with_on(Process::V1, "light.highlights", -100.0)), shot(&with("light.highlights", -100.0)), shot(&with("light.exposure", -1.0)));
     let (k1, k2, ke) = (line_contrast(&h1, bright.0, bright.1), line_contrast(&h2, bright.0, bright.1), line_contrast(&e, bright.0, bright.1));
-    // V1 is the base from before (≈ 0.73 of Exposure's twig contrast), V2 keeps them
-    assert!(k1 < 0.85 * ke && k2 > 0.9 * ke, "twig contrast V1 {k1} EV, V2 {k2} EV, exposure −1 {ke} EV");
+    // V1 is the base from before (≈ 0.73 of Exposure's twig contrast), V3 keeps them
+    assert!(k1 < 0.85 * ke && k2 > 0.9 * ke, "twig contrast V1 {k1} EV, V3 {k2} EV, exposure −1 {ke} EV");
 }
 
 #[test]
@@ -238,7 +240,7 @@ fn the_base_plane_is_cached_per_process() {
         let warm = render_cached(&src, &info, s, &req, &cache).image;
         assert!(warm == render(&src, &info, s, &req).image, "process {:?}", s.process);
     }
-    let sig = local::plane_sigmas(&s2, W as f64, Quality::Full);
+    let sig = local::plane_sigmas(&s2, W as f64, W, Quality::Full);
     let sg = sig.base.unwrap();
     assert_ne!(local::base_key(&s1, sg, 0), local::base_key(&s2, sg, 0), "the process is part of the key");
     assert_ne!(local::base_key(&s2, sg, 0), local::base_key(&s2, sg, sig.base_detail));

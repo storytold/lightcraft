@@ -1,6 +1,6 @@
 # Lightroom fidelity handoff
 
-Resumed on 2026-10-11 at the user's request. Pulled `172ec37c` and rebased the 15 local commits onto upstream `0dd6593d`.
+Resumed on 2026-10-11 at the user's request. The first integration pulled `172ec37c` and rebased onto `0dd6593d`; the second integrates upstream `76b53778`. Both have native measurements. The second integration passes all eight quality gates, and its final binary reproduces all four measured V2 native renders exactly.
 
 ## Scope
 
@@ -13,7 +13,7 @@ Resumed on 2026-10-11 at the user's request. Pulled `172ec37c` and rebased the 1
 
 Imported-profile monochrome treatment is independent of global treatment and survives profile-only copy, presets, sync, undo and Amount 0.
 Explicit session-only type-0 HSV tables now render on the CPU before camera tone/B&W. Only their fingerprint is saved; use `profile.loadTable` / `profile.unloadTable` as described in [control-protocol.md](control-protocol.md#explicit-runtime-profile-tables).
-Supported scope is Process 2, SDR and bounded Amount 0–200; unresolved or unsupported resources remain diagnosed.
+Supported scope is Processes 2 and 3, SDR and bounded Amount 0–200; unresolved or unsupported resources remain diagnosed.
 
 The earlier runtime-table implementation passed all eight `cargo xtask ci` gates. Seven native RGB16 chart states pass 43 lifecycle checks; missing resources, Amount 0 and unloading preserve the expected pixels. Headless UI loading/unloading was checked.
 The final native comparison is against the same inputs and fixed regions used by the measured candidate.
@@ -41,11 +41,11 @@ Lightroom exports use the already paired local controller and a serial queue:
 python -B plan/lightroom-reference/tools/controller_export_queue.py /absolute/path/to/reviewed-queue.json
 ```
 
-There are now 120 native-verified scripted exports, including five local-sharpening exports on this resume. Use new output paths, exact source/settings guards and the retained TIFF16/full-size/AdobeRGB/no-output-sharpening settings. Do not resubmit uncertain jobs. Never print or copy the pairing token.
+There are now 135 native-verified scripted exports, including local sharpening, colour-NR structure/channel charts and companion-control references. Use new output paths, exact source/settings guards and the retained TIFF16/full-size/AdobeRGB/no-output-sharpening settings. Do not resubmit uncertain jobs. Never print or copy the pairing token.
 
 The controller returns no `SharpenEdgeMasking` value. Keep its 13 supported readiness checks and verify Masking in the exported XMP: this run explicitly retains 100 but omits zero, Radius and Detail at global Sharpness 0. Lightroom also normalizes legacy gradients to mask groups and adds identity `LocalCurveRefineSaturation=100`. Preserve these distinctions; missing metadata is not a verified numerical value.
 
-## Current measured integration
+## Previously measured integration
 
 Private evidence: `plan/lightroom-reference/exports/resume-20261011/`.
 
@@ -61,9 +61,23 @@ error by **33.5% on the fixed grid and 31.1% in the center**. The no-local-sharp
 and unmasked controls remain pixel-identical. Native comparisons and independent
 review are complete; this fixes the regression, not the remaining sharpening gap.
 
+## Second upstream integration measured
+
+The 16 fork commits have been rebased onto `76b53778`. Preserve numeric Process 2 as this fork's fixed-domain curves with its original spatial tone base. Process 3 adds upstream's median-prefiltered Highlights/Shadows and is explicit opt-in; new imports, Reset and Update to Current Process still select V2 pending photographic evidence. Upstream's numeric V2 had a different meaning and cannot be identified reliably from the saved number alone; automatic appearance-preserving migration from that lineage is not claimed.
+
+Combined catalog format 12, explicit-Kelvin settings schema 6, camera-look version 8 and render-cache version 62 separate the combined writer from both prior lineages. The upstream Draft NR cache must clear the fork's sharpening plane along with log luminance and Texture. No experimental CNR model is included.
+
+Three fixed two-scale CNR probes were rejected: late application, early as-shot-WB coordinates, and early unbalanced camera coordinates. On the corrected matching settings, the last improves pooled chroma-response error by21.84%/2.37% on the two D3500 scenes, but the second photo has regional regressions and pooled XYZ-response error worsens30.77%; exports take17.66/21.30s. These are diagnostic results, not overall fidelity gains. The earlier photographic comparison with missing Exposure+2.06/Shadows+43 on DSC0805 was retracted and replaced by the exact sidecar-import comparisons.
+
+Private records are under `resume-20261011/color-nr-matched-native`, `color-nr-source-stage-native`, `color-nr-pre-wb-native` and `upstream-integration-76b53778`. Eight native captures from pinned CLI `4145003d4505` compare combined V2 with the old binary and optional V3 with V2, using identical sources, imported settings, Lightroom references and regions. V2 preserves every DSC0805 pixel and ICC byte at Color NR 0 and 25. DSC0626 has only small sampled numerical drift (maximum direct ΔE00 0.003841/0.003134); no material fidelity gain is claimed.
+
+V3 changes DSC0805's active Shadows adjustment: grid mean ΔE00 at Color NR 0 improves 8.19710→8.17058, but two interior regions worsen and export time rises 3.68→5.11 seconds. DSC0626 is pixel-identical to V2. Independent review reproduces 43,228/43,226 numerical checks within 7.816e-14. These mixed results keep V3 opt-in.
+
+Final CLI `303c06aeda65` passes all eight `cargo xtask ci` gates. Four fresh imports/exports preserve every measured V2 native RGB value and ICC byte, with exact settings and diagnostics. The final corrections distinguish Legacy/Kelvin white balance in the source-stage cache and restore strict alternate-sidecar validation before saving. Existing compatibility tests were adjusted for Kelvin serialization and macOS path/dialog behavior; no new test functions were added. Owned full TIFFs were removed after verification, and original sources/sidecars remain unchanged.
+
 ## Next work
 
-1. Continue conventional sharpening/colour-NR response measurements on the user's D3500. Local Masking is not independent in the measured Lightroom case; preserve that counterevidence. Global Sharpening Detail and luminance-NR Contrast remain stored no-ops.
+1. Investigate source-colour fitting before further NR tuning. A reviewed private probe records the existing D3500 candidate bank and exact proxy reduction arithmetic without changing selection. Require unchanged native Color0 output and exact replay before interpreting render-before-average versus average-before-render. No new fit or improved fidelity is established by instrumentation alone. Continue conventional sharpening/colour-NR afterward; Global Sharpening Detail and luminance-NR Contrast remain stored no-ops.
 2. Investigate profile-table ordering relative to Exposure using own sources. No new exposure reference has been exported. A failed composition check alone does not prove the reverse order. Do not read or hash Adobe app-bundle contents under the current project instructions.
 3. Continue remaining tone/B&W and curve gaps. The existing saved Amount 120 paired-response audit is complete; baseline source-colour error dominates and the full-photo mean can hide cancellation.
 

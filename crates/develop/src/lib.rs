@@ -35,7 +35,9 @@ impl DevelopSettings {
 
     /// Minimum wire schema needed by the authored features; legacy markers remain unchanged.
     pub fn required_schema_version(&self) -> u32 {
-        if self.profile.imported.as_ref().is_some_and(|look| look.look_table.is_some()) {
+        if self.wb.scale == WbScale::Kelvin {
+            WB_SCALE_SCHEMA_VERSION
+        } else if self.profile.imported.as_ref().is_some_and(|look| look.look_table.is_some()) {
             LOOK_TABLE_SCHEMA_VERSION
         } else if self.profile.imported.as_ref().is_some_and(|look| look.convert_to_grayscale) {
             PROFILE_TREATMENT_SCHEMA_VERSION
@@ -274,12 +276,16 @@ mod tests {
         let s = DevelopSettings::from_json(&old).unwrap();
         assert_eq!(s.wb.scale, WbScale::Legacy);
         assert_eq!(s.to_json()["wb"], old["wb"]);
+        assert_eq!(s.to_json()["version"], 1);
         assert_eq!(DevelopSettings::default().wb.scale, WbScale::Legacy);
         assert!(DevelopSettings::default().to_json()["wb"].get("scale").is_none());
         // written on the Kelvin scale: said so, and read back
         let mut k = s.clone();
         k.wb.scale = WbScale::Kelvin;
         assert_eq!(k.to_json()["wb"]["scale"], json!("kelvin"));
+        assert_eq!(k.to_json()["version"], WB_SCALE_SCHEMA_VERSION);
+        k.normalize_schema();
+        assert_eq!(k.version, WB_SCALE_SCHEMA_VERSION);
         assert_eq!(DevelopSettings::from_json(&k.to_json()).unwrap(), k);
         assert_ne!(k.hash64(), s.hash64());
         // an unknown scale from a newer build is an error, not a panic
@@ -290,11 +296,17 @@ mod tests {
     fn a_partial_white_balance_without_a_scale_is_legacy() {
         let mut base = DevelopSettings::default();
         base.wb.scale = WbScale::Kelvin;
+        base.wb.temp = 5100.0;
+        base.wb.tint = -4.0;
         // an old preset's white balance lands on Kelvin settings: it keeps its relative meaning
         let out = apply_partial(&base, &json!({"wb": {"mode": "custom", "temp": 5800.0}}), 1.0);
         assert_eq!((out.wb.scale, out.wb.temp), (WbScale::Legacy, 5800.0));
+        assert_eq!(out.wb.tint, base.wb.tint, "the omitted axis is preserved");
+        assert_eq!(out.version, WB_SCALE_SCHEMA_VERSION, "merging never downgrades the saved schema");
+        assert!(out.to_json()["wb"].get("scale").is_none());
         let out = apply_partial(&base, &json!({"wb": {"tint": 12.0}}), 1.0);
         assert_eq!(out.wb.scale, WbScale::Legacy);
+        assert_eq!((out.wb.temp, out.wb.tint), (base.wb.temp, 12.0));
         // one that says Kelvin stays Kelvin; a mode alone leaves the scale as it was
         let out = apply_partial(&base, &json!({"wb": {"mode": "custom", "temp": 5800.0, "scale": "kelvin"}}), 1.0);
         assert_eq!(out.wb.scale, WbScale::Kelvin);

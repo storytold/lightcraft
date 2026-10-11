@@ -172,17 +172,25 @@ pub fn extract_groups(s: &DevelopSettings, groups: &[SettingsGroup]) -> Value {
             }
         }
     }
+    let mut version = 0;
+    if out.contains_key("wb") && s.wb.scale == crate::settings::WbScale::Kelvin {
+        version = crate::settings::WB_SCALE_SCHEMA_VERSION;
+    }
     if out.get("profile").and_then(|profile| profile.get("imported")).is_some_and(|look| !look.is_null()) {
-        let version = if s.profile.imported.as_ref().is_some_and(|look| look.look_table.is_some()) {
+        let profile_version = if s.profile.imported.as_ref().is_some_and(|look| look.look_table.is_some()) {
             crate::settings::LOOK_TABLE_SCHEMA_VERSION
         } else if s.profile.imported.as_ref().is_some_and(|look| look.convert_to_grayscale) {
             crate::settings::PROFILE_TREATMENT_SCHEMA_VERSION
         } else {
             crate::settings::IMPORTED_LOOK_SCHEMA_VERSION
         };
+        version = version.max(profile_version);
+    }
+    if out.get("curve").is_some_and(|curve| ["master", "red", "green", "blue"].iter().any(|key| curve.get(*key).is_some_and(function_wire))) {
+        version = version.max(crate::settings::POINT_CURVE_SCHEMA_VERSION);
+    }
+    if version > 0 {
         out.insert("version".into(), Value::from(version));
-    } else if out.get("curve").is_some_and(|curve| ["master", "red", "green", "blue"].iter().any(|key| curve.get(*key).is_some_and(function_wire))) {
-        out.insert("version".into(), Value::from(crate::settings::POINT_CURVE_SCHEMA_VERSION));
     }
     Value::Object(out)
 }
@@ -462,6 +470,15 @@ mod tests {
         for invalid in ["", "abc", "E96CB8AF6484F8402BB0E6ECFC8AD0F_"] {
             assert!(serde_json::from_value::<crate::LookTableRef>(json!(invalid)).is_err());
         }
+        a.wb.scale = crate::WbScale::Kelvin;
+        let wb = extract_groups(&a, &[SettingsGroup::WhiteBalance]);
+        assert_eq!(wb["version"], crate::WB_SCALE_SCHEMA_VERSION);
+        assert_eq!(wb["wb"]["scale"], "kelvin");
+        assert_eq!(try_apply_partial(&b, &wb, 1.0).unwrap().wb, a.wb);
+        let combined = extract_groups(&a, &[SettingsGroup::Profile, SettingsGroup::WhiteBalance]);
+        assert_eq!(combined["version"], crate::WB_SCALE_SCHEMA_VERSION, "selected groups use their maximum required schema");
+        assert_eq!(extract_groups(&a, &[SettingsGroup::Profile])["version"], crate::LOOK_TABLE_SCHEMA_VERSION);
+        assert!(extract_groups(&a, &[SettingsGroup::Light]).get("version").is_none());
     }
 
     #[test]
@@ -582,6 +599,10 @@ mod tests {
         let partial = extract_groups(&target, &[SettingsGroup::ToneCurve]);
         assert_eq!(partial["version"], crate::settings::POINT_CURVE_SCHEMA_VERSION);
         assert!(extract_groups(&target, &[SettingsGroup::Light]).get("version").is_none());
+        target.wb.scale = crate::WbScale::Kelvin;
+        assert_eq!(extract_groups(&target, &[SettingsGroup::ToneCurve])["version"], crate::POINT_CURVE_SCHEMA_VERSION);
+        let combined = extract_groups(&target, &[SettingsGroup::ToneCurve, SettingsGroup::WhiteBalance]);
+        assert_eq!(combined["version"], crate::WB_SCALE_SCHEMA_VERSION);
         let result = try_apply_partial(&base, &partial, 0.4).unwrap();
         assert_eq!(result.version, crate::settings::POINT_CURVE_SCHEMA_VERSION);
         for i in 0..=128 {

@@ -609,12 +609,8 @@ pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values
     // Point Color slots that are all empty (-1)
     let value_is = |k: &str, f: &dyn Fn(&[String]) -> bool| props.get(&format!("crs:{k}")).is_some_and(|v| f(v));
     let empty_points = |v: &[String]| v.iter().all(|s| s.split(',').all(|n| n.trim().parse::<f64>().is_ok_and(|x| x == -1.0) || n.trim().is_empty()));
-    let quiet = |k: &str| {
-        k.starts_with("ToneCurveName")
-            || k == "AutoTone"
-            || k == "AutoGrayscaleMix"
-            || (k == "PointColors" && value_is(k, &empty_points))
-    };
+    let quiet =
+        |k: &str| k.starts_with("ToneCurveName") || k == "AutoTone" || k == "AutoGrayscaleMix" || (k == "PointColors" && value_is(k, &empty_points));
     let mut unmapped: Vec<String> = props
         .keys()
         .filter(|k| k.starts_with("crs:"))
@@ -851,8 +847,16 @@ mod tests {
             let fields = format!(r#"crs:{field}="{value}" {references}"#);
             let (partial, unmapped) = to_partial_report(&wb_props(&fields), None, target, 1.5);
             let wb = partial["wb"].as_object().unwrap();
-            assert_eq!(wb.len(), 2, "{target:?}/{field}: only mode and the stated coordinate belong in the patch");
+            let kelvin = matches!(target, Target::RawAbsolute | Target::Any) && !field.starts_with("Incremental");
+            assert_eq!(
+                wb.len(),
+                if kelvin { 3 } else { 2 },
+                "{target:?}/{field}: only mode, the stated coordinate, and its scale belong in the patch"
+            );
+            assert_eq!(wb.get("scale"), kelvin.then_some(&json!("kelvin")));
+            assert_eq!(wb.get("mode"), Some(&json!("custom")));
             assert!(wb.contains_key(coordinate));
+            assert!(!wb.contains_key(if coordinate == "temp" { "tint" } else { "temp" }));
             assert!(unmapped.is_empty(), "{target:?}/{field}: {unmapped:?}");
             let settings = apply_partial(&original, &partial, 1.0);
             assert_eq!(settings.wb.mode, WbMode::Custom);
@@ -1113,7 +1117,7 @@ mod tests {
         let x = r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
              crs:WhiteBalance="Daylight" crs:Temperature="5500" crs:Tint="10" crs:AlreadyApplied="True"/>"#;
         let p = props(x);
-        assert_eq!(to_partial(&p, Target::RawAbsolute), json!({"wb": {"mode": "custom", "temp": 5500.0, "tint": 10.0}}));
+        assert_eq!(to_partial(&p, Target::RawAbsolute), json!({"wb": {"mode": "custom", "temp": 5500.0, "tint": 10.0, "scale": "kelvin"}}));
         assert!(!has_adjustments(&p));
         let bookkeeping = r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
              xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Version="1" crs:HasSettings="True"/>"#;
@@ -1213,8 +1217,10 @@ mod tests {
         let bare = props(&x.replace(r#" crs:AsShotTemperature="5400" crs:AsShotTint="-1""#, ""));
         assert_eq!(to_partial(&bare, a7m3)["wb"]["temp"], 4650.0);
         assert_eq!(to_partial(&bare, a7m2)["wb"], json!({"mode": "asShot"}));
-        // a named preset carries no numbers either way
-        let daylight = props(&x.replace(r#"crs:WhiteBalance="Custom""#, r#"crs:WhiteBalance="Daylight""#));
+        // Resolved numbers take precedence over the name; a name-only preset keeps its mode.
+        let daylight_xml = x.replace(r#"crs:WhiteBalance="Custom""#, r#"crs:WhiteBalance="Daylight""#);
+        assert_eq!(to_partial(&props(&daylight_xml), a7m3)["wb"], json!({"mode": "custom", "temp": 4650.0, "tint": 3.0, "scale": "kelvin"}));
+        let daylight = props(&daylight_xml.replace(r#" crs:Temperature="4650" crs:Tint="+3""#, ""));
         assert_eq!(to_partial(&daylight, a7m3)["wb"], json!({"mode": "daylight"}));
     }
 

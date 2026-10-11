@@ -7,8 +7,8 @@
 use std::sync::Arc;
 
 use lightcraft_develop::{
-    BrushStroke, DevelopSettings, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape, Process, ProcessVersion, Spot, Treatment, VignetteStyle, WbMode,
-    Wheel,
+    BrushStroke, DevelopSettings, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape, Process, ProcessVersion, Spot, Treatment, VignetteStyle,
+    WbMode, Wheel,
 };
 use lightcraft_geom::{Orientation, Point, Rect};
 use lightcraft_pipeline::{Quality, RenderRequest, SourceInfo, StageCache, render};
@@ -113,7 +113,7 @@ fn local_sharpening_masking_and_detail_bypass_match_on_gpu() {
         adjust: LocalAdjustments { sharpness: 100.0, ..Default::default() },
         ..Default::default()
     });
-    for process in [ProcessVersion::V1, ProcessVersion::V2] {
+    for process in [ProcessVersion::V1, ProcessVersion::V2, ProcessVersion::V3] {
         let mut local = s.clone();
         local.process = process;
         let expected = lightcraft_gpu::render(&src, &info, &local, &req, Some(&cache)).expect("gpu").image;
@@ -158,7 +158,12 @@ fn function_curves_profiles_bypass_and_cached_gpu_match_cpu() {
     let cache = StageCache::default();
     let mut settings = DevelopSettings::default();
     // Reuse the same cache across both processes, including the reverse transition.
-    for process in [lightcraft_develop::ProcessVersion::V1, lightcraft_develop::ProcessVersion::V2, lightcraft_develop::ProcessVersion::V1] {
+    for process in [
+        lightcraft_develop::ProcessVersion::V1,
+        lightcraft_develop::ProcessVersion::V2,
+        lightcraft_develop::ProcessVersion::V3,
+        lightcraft_develop::ProcessVersion::V1,
+    ] {
         settings.process = process;
         for (amount, profile, bypass) in [
             (0.25, "lc.color", false),
@@ -778,7 +783,7 @@ fn cached_renders_match_uncached() {
 }
 
 /// Issue #632: the Highlights / Shadows base of each process (V1: the edge-aware filter of log
-/// luminance; V2: of its fine median, a radius that grows with the render) matches the CPU's, and
+/// luminance; V3: of its fine median, a radius that grows with the render) matches the CPU's, and
 /// a warm cache never hands one process the other's base.
 #[test]
 fn highlights_shadows_base_matches_on_every_process() {
@@ -809,7 +814,7 @@ fn highlights_shadows_base_matches_on_every_process() {
             }];
             check(&format!("{p:?} local highlights {w}"), &src, &raw, &s, &req);
         }
-        for p in [Process::V1, Process::V2, Process::V1, Process::V2] {
+        for p in [Process::V1, Process::V2, Process::V3, Process::V2, Process::V1] {
             let mut s = DevelopSettings { process: p.version(), ..DevelopSettings::default() };
             s.light.highlights = -100.0;
             let warm = lightcraft_gpu::render(&src, &raw, &s, &req, Some(&cache)).expect("gpu");

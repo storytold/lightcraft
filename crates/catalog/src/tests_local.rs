@@ -271,11 +271,12 @@ fn legacy_local_fingerprints_survive_supported_schema_roundtrip_without_blessing
     use crate::{Catalog, HistoryStep, MediaKind, Op, Photo, PhotoId, Source, Version};
     use std::sync::Arc;
     let mut original =
-        Photo::new(PhotoId(101), Source::File { path: "/legacy/IMG_0101.DNG".into() }, "IMG_0101.DNG", "DNG", 60, 40, "2026-08-01T10:00:00");
+        Photo::new(PhotoId(101), Source::File { path: "/legacy/IMG_0101.NEF".into() }, "IMG_0101.NEF", "NEF", 60, 40, "2026-08-01T10:00:00");
     original.kind = MediaKind::Raw;
     original.local = true;
     original.as_shot_wb = Some((5210.0, -4.0));
     let mut sparse = original.camera_defaults();
+    assert_eq!(sparse.wb.scale, lightcraft_develop::WbScale::Legacy, "legacy wire versions need no Kelvin marker");
     sparse.version = 1;
     original.develop = Arc::new(sparse.clone());
     original.import_look = Some(Arc::new(sparse.clone()));
@@ -323,7 +324,8 @@ fn sparse_schema_marker_alone_is_not_a_raw_edit_or_legacy_local_change() {
         sparse.version = version;
         let wire = serde_json::to_string(&sparse).unwrap();
         let loaded: lightcraft_develop::DevelopSettings = serde_json::from_str(&wire).unwrap();
-        assert_eq!(loaded, sparse, "supported sparse wire version remains exact");
+        sparse.normalize_schema();
+        assert_eq!(loaded, sparse, "Kelvin promotes only its required schema marker, not edit values");
         photo.develop = Arc::new(loaded);
         assert!(!photo.is_edited(), "version {version}");
         assert!(photo.untouched_local(), "without an old fingerprint, semantic camera defaults still count as untouched: {version}");

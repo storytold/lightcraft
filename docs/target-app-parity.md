@@ -39,8 +39,8 @@ have their own documents: [raw-parity.md](raw-parity.md), [file-format-parity.md
   includes separate local native 16-bit Lightroom chart/photo measurements, described
   [below](#local-rendering-evidence-2026-10-10). The ΔE figures in [raw-parity.md](raw-parity.md)
   still refer to that document's earlier camera-colour work.
-- **Current checklist recount:** 555 total rows: 388 done, 58 partial, 73 missing and 36 out of
-  scope. The 519 in-scope rows yield 80.3%; estimated readiness and hours are unchanged.
+- **Current checklist recount:** 566 total rows: 399 done, 60 partial, 72 missing and 35 out of
+  scope. The 531 in-scope rows yield 80.8%; estimated readiness and hours are unchanged.
 
 **Presence is not parity.** ✅ rows are set by whoever lands a feature and have not been checked
 systematically against Lightroom's behaviour; bugs keep turning up in ✅ areas (CR2 colour-filter
@@ -185,6 +185,17 @@ Removing LightCraft's local Masking interaction raises paired D50 luminance-resp
 of nine fixed regions. The interaction is restored on CPU and GPU. Its formula and sharpening kernel
 still differ substantially from Lightroom; neither Detail bypass nor other local controls are proven
 equivalent by this comparison. Partial statuses and readiness estimates remain unchanged.
+
+The second integration onto `76b53778` retains the fork's Process 2 as default. Four matched native
+CNR0/25 captures preserve all imported settings and diagnostics. DSC0805 is full-frame pixel-identical
+at both amounts. DSC0626 differs slightly: maximum direct old/new ΔE00 among the retained grid and
+interiors is **0.003841** at CNR0 and **0.003134** at CNR25; no material fidelity gain is claimed.
+
+Explicit Process 3 adds the upstream median-prefiltered tone base while retaining V2 curves. On
+DSC0805 with Shadows +43, grid CNR0 mean error improves **8.19710 → 8.17058**, but two of nine
+interiors worsen; native export increases from **3.68 to 5.11 s** in this observation. DSC0626, with
+no active spatial tone adjustment, is pixel-identical between V2 and V3. This is mixed, limited
+evidence: V3 stays opt-in, and source/profile colour and conventional NR remain visibly unmatched.
 
 ## AI
 
@@ -382,6 +393,7 @@ most of its list; what remains is the data-heavy part (colour, lenses, models) i
 | Date | Checklist (all / P0 / P1 / P2) | Ready for real work | Remaining to full parity | Source |
 |---|---|---|---|---|
 | 2026-10-12 | 81.1% (unchanged) | ~61% full · ~51% mainstream · ~65% essentials | unchanged | 22 more CR3 bodies verified (raw-parity.md) |
+| 2026-10-11 (second integration) | 80.8% / 96.5% / 94.3% / 50.0% (531 rows) | ~61% full · ~49% mainstream · ~64% essentials (unchanged) | unchanged | upstream integration recount; native D3500 fidelity remains partial |
 | 2026-10-10 (saved edits) | 80.3% / 96.5% / 94.2% / 47.2% (519 rows) | ~61% full · ~49% mainstream · ~64% essentials (unchanged) | unchanged | checklist recount with saved-edit / measured-rendering gaps retained; bounded local evidence above |
 | 2026-10-10 (RAW) | 81.1% (unchanged) | ~61% full · ~49% mainstream · ~64% essentials | unchanged | RAW measured model by model against Adobe's list; RAW decode and colour as explicit rows |
 | 2026-10-10 (final) | 81.1% (unchanged) | ~59% full (weighted sum) · ~51% mainstream · ~63% essentials | full 1,000–1,800 h · mainstream 450–840 h · essentials 160–300 h | method aligned with the standard |
@@ -414,6 +426,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 | 2026-10-14 | minor | Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (`coverage_sweep_corpus.rs`, `coverage-sweep.tsv`; `docs/raw/coverage.py` 515 → 545 verified rows); the counts above are not re-measured here. Sensor verification does not establish colour parity (#1277); headline numbers unchanged |
 | 2026-10-12 | minor | 22 more CR3 bodies verified on one CC0 file each (raw-parity.md): use-weighted share whose camera decodes 85% → 92%, RAW decoding 77% → 83%; full 60.7% → 61.2% (~61%), mainstream depth 72.1% → 74.0% (~49% → ~51%), essentials depth 77.5% → 78.0% (~64% → ~65%) |
 | 2026-10-12 | minor | 117 Nikon and Fujifilm bodies verified (raw-parity.md): use-weighted share whose camera decodes 85% → 86%, RAW decoding 77% (unchanged); mainstream depth 72.1% → 72.4%, essentials depth 77.5% → 77.6%; headline numbers unchanged |
+| 2026-10-11 | minor | Recount after upstream76b53778 integration: checklist 80.8% of 531; V3 tone remains opt-in; readiness and hour estimates unchanged |
 | 2026-10-11 | minor | EOS R5 Mark II CR3 verified (raw-parity.md): use-weighted share whose camera decodes 84% → 85%, RAW decoding 76% → 77%; full 60.6% → 60.7%, mainstream depth 71.8% → 72.1%, essentials depth 77.4% → 77.5%; the rounded numbers (~61%, ~49%, ~64%) are unchanged |
 | 2026-10-11 | minor | Retained measured D3500 rare-pixel source fix; restored local Masking interaction after repeatable Lightroom counterevidence; no readiness increase |
 | 2026-10-11 | minor | Added explicit runtime HSV-table scope, native chart improvements and mixed saved Amount 120 evidence; no readiness or status increase |

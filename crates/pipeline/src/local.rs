@@ -254,7 +254,7 @@ fn transpose(p: &Plane) -> Plane {
     t
 }
 
-/// Detail scale of the highlights/shadows base from process V2, as a fraction of the long edge:
+/// Detail scale of the highlights/shadows base from process V3, as a fraction of the long edge:
 /// the base is the edge-aware filter of the [`median_hv`] of log luminance at this radius, so
 /// twigs, lines and fine texture brighter or darker than their surroundings take their
 /// surroundings' shift (and keep their contrast, as with Exposure) while region boundaries stay
@@ -269,7 +269,7 @@ pub fn base_detail_radius(px_per_long: f64) -> usize {
 }
 
 /// Median radius (px) of the highlights/shadows base of `s`'s rendering process at `px_per_long`:
-/// 0 (no median) under V1, [`base_detail_radius`] from V2.
+/// 0 (no median) under V1/V2, [`base_detail_radius`] from V3.
 pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
     match s.process.process() {
         Process::V1 | Process::V2 => 0,
@@ -278,7 +278,7 @@ pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
 }
 
 /// The highlights/shadows base layer of log luminance `l`: the fast guided filter ([`BASE_EPS`])
-/// of its [`median_hv`] at `detail` px ([`tone_base_detail`]); at 0, of `l` itself (V1).
+/// of its [`median_hv`] at `detail` px ([`tone_base_detail`]); at 0, of `l` itself (V1/V2).
 pub fn tone_base(l: &Plane, sigma: f32, detail: usize) -> Plane {
     if detail == 0 {
         return guided_fast(l, sigma, BASE_EPS);

@@ -230,8 +230,8 @@ fn table_entry_at_amount(entry: [f32; 3], amount: f64) -> [f32; 3] {
 /// One eligibility decision for rendering and diagnostics, made before effective/SDR settings.
 fn profile_table_for(s: &DevelopSettings, req: &RenderRequest) -> Result<Option<ResolvedProfileTable>, &'static str> {
     let Some(reference) = active_look_table(s) else { return Ok(None) };
-    if s.process.process() != lightcraft_develop::Process::V2 {
-        return Err("requires Process 2");
+    if !matches!(s.process.process(), lightcraft_develop::Process::V2 | lightcraft_develop::Process::V3) {
+        return Err("requires Process 2 or 3");
     }
     if s.hdr.enabled || req.depth == OutputDepth::F32Hdr {
         return Err("HDR unsupported");
@@ -518,6 +518,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let pre_nr_key = hash_of((
         geo,
         [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
+        // Legacy whites compose exactly; their displayed Kelvin pair is a rounded inverse.
+        s.wb.scale == lightcraft_develop::WbScale::Kelvin,
         format!("{:?}", s.spots),
         format!("{eyes:?}"),
         // defringe runs in this stage
@@ -642,7 +644,7 @@ pub fn hdr_histogram(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: 
         proof: None,
         window: None,
         display: None,
-        ..*req
+        ..req.clone()
     };
     let deep = render(src, info, s, &hreq).deep?;
     let DeepSamples::F32(v) = &deep.samples else { return None };
@@ -874,5 +876,7 @@ mod tests_nr;
 mod tests_sections;
 #[cfg(test)]
 mod tests_sharpen;
+#[cfg(test)]
+mod tests_tone;
 #[cfg(test)]
 mod tests_window;
