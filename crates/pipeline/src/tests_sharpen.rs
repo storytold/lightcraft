@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use lightcraft_develop::DevelopSettings;
+use lightcraft_develop::{DevelopSettings, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape, ProcessVersion};
+use lightcraft_geom::Point;
 use lightcraft_raster::Rgb32f;
 
 use crate::{DeepSamples, OutputDepth, RenderRequest, SourceInfo, StageCache, render, render_cached};
@@ -20,6 +21,92 @@ fn deep(src: &Rgb32f, s: &DevelopSettings) -> Vec<u16> {
     let req = RenderRequest { depth: OutputDepth::U16, ..RenderRequest::fit(src.width, src.height) };
     let DeepSamples::U16(pixels) = render(src, &SourceInfo::default(), s, &req).deep.unwrap().samples else { panic!("expected RGB16") };
     pixels
+}
+
+fn local_sharpening_fixture() -> (Arc<Rgb32f>, DevelopSettings) {
+    let src = Arc::new(Rgb32f::from_fn(240, 120, |x, _| [0.18 * (1.0 + 0.12 * (x as f32 * 1.1).sin()); 3]));
+    let mut s = DevelopSettings::default();
+    s.masks.push(Mask {
+        id: 1,
+        components: vec![MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Linear { start: Point::new(0.45, 0.5), end: Point::new(0.46, 0.5) },
+        }],
+        adjust: LocalAdjustments { sharpness: 100.0, ..Default::default() },
+        ..Default::default()
+    });
+    (src, s)
+}
+
+fn max_difference(a: &[u16], b: &[u16]) -> u16 {
+    assert_eq!(a.len(), b.len());
+    a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0)
+}
+
+#[test]
+fn local_sharpening_is_independent_of_global_masking() {
+    let (src, mut s) = local_sharpening_fixture();
+    let req = RenderRequest { depth: OutputDepth::U16, ..RenderRequest::fit(src.width, src.height) };
+    let info = SourceInfo::default();
+    let cache = StageCache::default();
+    for process in [ProcessVersion::V1, ProcessVersion::V2] {
+        s.process = process;
+        s.detail.sharpen_masking = 0.0;
+        let expected = deep(&src, &s);
+        let plain = DevelopSettings { process, ..Default::default() };
+        assert!(max_difference(&expected, &deep(&src, &plain)) > 100, "fixture must exercise local sharpening in {process:?}");
+        // Global Amount is zero. Its Masking must not suppress an independent local edit.
+        for masking in [100.0, 50.0, 0.0] {
+            s.detail.sharpen_masking = masking;
+            let cold = deep(&src, &s);
+            let DeepSamples::U16(warm) = render_cached(&src, &info, &s, &req, &cache).deep.unwrap().samples else { panic!("expected RGB16") };
+            assert_eq!(max_difference(&expected, &cold), 0, "{process:?}: global Masking {masking} changed local sharpening");
+            assert_eq!(max_difference(&cold, &warm), 0, "{process:?}: cached local sharpening at Masking {masking}");
+        }
+    }
+}
+
+#[test]
+fn local_sharpening_survives_detail_bypass() {
+    let (src, mut s) = local_sharpening_fixture();
+    let req = RenderRequest { depth: OutputDepth::U16, ..RenderRequest::fit(src.width, src.height) };
+    let info = SourceInfo::default();
+    let cache = StageCache::default();
+    for process in [ProcessVersion::V1, ProcessVersion::V2] {
+        s.process = process;
+        s.detail.sharpen_masking = 100.0;
+        let expected = deep(&src, &s);
+        let saved_mask = s.masks.clone();
+        for enabled in [true, false, true] {
+            s.set_section_enabled("detail", enabled);
+            let cold = deep(&src, &s);
+            let DeepSamples::U16(warm) = render_cached(&src, &info, &s, &req, &cache).deep.unwrap().samples else { panic!("expected RGB16") };
+            assert_eq!(max_difference(&expected, &cold), 0, "{process:?}: Detail enabled={enabled}: changed local sharpening");
+            assert_eq!(max_difference(&cold, &warm), 0, "{process:?}: stale local sharpening cache when Detail enabled={enabled}");
+            assert_eq!(s.masks, saved_mask, "bypass must preserve saved mask adjustments");
+        }
+    }
+}
+
+#[test]
+fn global_masking_still_suppresses_global_sharpening() {
+    let (src, _) = local_sharpening_fixture();
+    let mut s = settings(1.0);
+    for process in [ProcessVersion::V1, ProcessVersion::V2] {
+        s.process = process;
+        s.detail.sharpen_masking = 0.0;
+        let plain = deep(&src, &DevelopSettings { process, ..Default::default() });
+        let unmasked = deep(&src, &s);
+        assert!(max_difference(&plain, &unmasked) > 100, "fixture must exercise global sharpening in {process:?}");
+        s.detail.sharpen_masking = 100.0;
+        let masked = deep(&src, &s);
+        assert!(
+            max_difference(&plain, &masked) < max_difference(&plain, &unmasked),
+            "{process:?}: global Masking must retain its global-sharpening effect"
+        );
+    }
 }
 
 #[test]

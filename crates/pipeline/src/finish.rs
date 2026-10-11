@@ -621,8 +621,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 let tame = 1.0 - 0.6 * smooth(0.4, 1.6, det.abs());
                 delta += tx * 1.1 * det.clamp(-1.0, 1.0) * tame;
                 if sp != 0.0 {
-                    let m = if sharpen_mask > 0.0 { smooth(sharpen_mask * 0.25, sharpen_mask * 0.25 + 0.15, det.abs()) } else { 1.0 };
-                    delta += sp * 1.3 * det.clamp(-0.8, 0.8) * m;
+                    // Local sharpening is independent of the global Detail-panel Masking control.
+                    delta += sp * 1.3 * det.clamp(-0.8, 0.8);
                 }
             }
             if sharpen != 0.0

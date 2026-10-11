@@ -7,7 +7,8 @@
 use std::sync::Arc;
 
 use lightcraft_develop::{
-    BrushStroke, DevelopSettings, Mask, MaskComponent, MaskOp, MaskShape, Process, Spot, Treatment, VignetteStyle, WbMode, Wheel,
+    BrushStroke, DevelopSettings, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape, Process, ProcessVersion, Spot, Treatment, VignetteStyle, WbMode,
+    Wheel,
 };
 use lightcraft_geom::{Orientation, Point, Rect};
 use lightcraft_pipeline::{Quality, RenderRequest, SourceInfo, StageCache, render};
@@ -88,6 +89,52 @@ fn disabled_develop_sections_use_the_shared_render_plan() {
     for section in ["light", "color", "detail"] {
         s.set_section_enabled(section, false);
         check(section, &src, &SourceInfo::default(), &s, &RenderRequest::fit(320, 240));
+    }
+}
+
+#[test]
+fn local_sharpening_keeps_masking_and_detail_bypass_independent_on_gpu() {
+    if !gpu() {
+        return;
+    }
+    let src = Arc::new(Rgb32f::from_fn(240, 120, |x, _| [0.18 * (1.0 + 0.12 * (x as f32 * 1.1).sin()); 3]));
+    let info = SourceInfo::default();
+    let req = RenderRequest::fit(240, 120);
+    let cache = StageCache::default();
+    let mut s = DevelopSettings::default();
+    s.masks.push(Mask {
+        id: 1,
+        components: vec![MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Linear { start: Point::new(0.45, 0.5), end: Point::new(0.46, 0.5) },
+        }],
+        adjust: LocalAdjustments { sharpness: 100.0, ..Default::default() },
+        ..Default::default()
+    });
+    for process in [ProcessVersion::V1, ProcessVersion::V2] {
+        let mut local = s.clone();
+        local.process = process;
+        let expected = lightcraft_gpu::render(&src, &info, &local, &req, Some(&cache)).expect("gpu").image;
+        let plain = lightcraft_gpu::render(&src, &info, &DevelopSettings { process, ..Default::default() }, &req, None).expect("gpu").image;
+        assert!(expected.data != plain.data, "fixture must exercise local sharpening on the GPU in {process:?}");
+        for (masking, enabled) in [(100.0, true), (50.0, true), (100.0, false), (0.0, true)] {
+            local.detail.sharpen_masking = masking;
+            local.set_section_enabled("detail", enabled);
+            check("local sharpening independence", &src, &info, &local, &req);
+            let actual = lightcraft_gpu::render(&src, &info, &local, &req, Some(&cache)).expect("gpu").image;
+            assert!(actual.data == expected.data, "{process:?}: Masking {masking}, Detail enabled={enabled}: changed local sharpening on the GPU");
+        }
+        // The shared global control must still mask global sharpening when it is enabled.
+        local.masks.clear();
+        local.detail.sharpen_amount = 80.0;
+        local.detail.sharpen_masking = 0.0;
+        let unmasked = lightcraft_gpu::render(&src, &info, &local, &req, Some(&cache)).expect("gpu").image;
+        local.detail.sharpen_masking = 100.0;
+        let masked = lightcraft_gpu::render(&src, &info, &local, &req, Some(&cache)).expect("gpu").image;
+        assert!(unmasked.data != masked.data, "{process:?}: global Masking must retain its global-sharpening effect on the GPU");
+        check("global sharpening masking", &src, &info, &local, &req);
     }
 }
 
