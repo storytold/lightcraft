@@ -219,7 +219,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     if matches!(id, "ui.dock" | "ui.dock.reset") {
         return Some(crate::docking::command(app, id == "ui.dock.reset", p));
     }
-    if id == "library.backupPreferences" && p.get("choose").is_some() {
+    if id == "library.backupPreferences" && p.get("choose").and_then(Value::as_bool) == Some(true) {
         return Some(choose_backup_folder(app, p));
     }
     if id == "library.restore" {

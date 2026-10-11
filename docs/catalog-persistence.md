@@ -159,7 +159,9 @@ what changed, and opening a library reads its segments on several threads.
 File ▸ Back Up Library (`library.backup`) makes a folder named after the time (UTC) that holds `catalog.snap`, the
 segments it lists, `catalog.log` and the presets, view and preferences files: the catalog, not the photos or the
 caches (`crates/catalog/src/backup.rs`). It goes to `Backups` in the library folder, to the folder set for the library
-(Settings ▸ General ▸ Backups, or `library.backupPreferences`), or to the one given with the command. The app makes it in the background and says in a
+(Settings ▸ General ▸ Backups, or `library.backupPreferences`), or to the one given with the command. A folder
+given for backups may not be one of the library's own (inside the library folder only `Backups` is for backups: the
+others are the catalog's, and a restore moves them as such), nor a backup or a folder inside one. The app makes it in the background and says in a
 toast where it went or why there is none; the command itself returns when the backup is made (`background: true` for
 the other).
 

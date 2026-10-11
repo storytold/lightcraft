@@ -168,14 +168,16 @@ fn a_library_without_a_folder_is_not_backed_up() {
     assert!(e.to_string().contains("folder"), "{e}");
     assert!(s.activity.list().is_empty());
     // a folder that can't be written to is the backup's error, not a panic; nothing is left
-    let dir = temp_dir("bad-dest");
+    let (dir, outside) = (temp_dir("bad-dest"), temp_dir("bad-dest-outside"));
     let mut s = open(&dir);
-    std::fs::write(dir.join("not-a-folder"), b"x").unwrap();
-    let r = s.execute("library.backup", &json!({"dir": dir.join("not-a-folder").to_string_lossy()})).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("not-a-folder"), b"x").unwrap();
+    let r = s.execute("library.backup", &json!({"dir": outside.join("not-a-folder").to_string_lossy()})).unwrap();
     assert!(r["report"].is_null() && r["error"].as_str().is_some(), "{r}");
     assert!(s.activity.list().is_empty());
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&outside);
 }
 
 /// A backup can be checked against what it listed when it was made: untouched it is sound; a
@@ -305,4 +307,59 @@ fn the_library_writes_only_the_files_it_lists() {
     files.write_atomic("prefs.json.corrupt-1", b"{").unwrap();
     assert!(dir.join("view.json").exists() && dir.join("prefs.json.corrupt-1").exists());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Given a library on disk, when a folder is given for its backups that is one of the library's
+/// own (inside the library folder, but for `Backups`) or a backup, then it is refused with the
+/// reason and nothing changes: a restore moves the library's folders as the catalog's, and a
+/// backup is not added to. A folder outside the library, and `Backups` in it, are taken.
+#[test]
+fn backups_do_not_go_into_the_librarys_own_folders_or_into_a_backup() {
+    let (dir, outside) = (temp_dir("own-folders"), temp_dir("own-folders-outside"));
+    let mut s = open(&dir);
+    let made = s.execute("library.backup", &json!({})).unwrap();
+    let a_backup = PathBuf::from(made["report"]["dir"].as_str().unwrap());
+    let library = s.library.as_ref().unwrap().dir.clone();
+    for (bad, why) in [
+        (library.clone(), "inside the library folder"),
+        (library.join("segments"), "inside the library folder"),
+        (library.join("Replaced"), "inside the library folder"),
+        (library.join("Backups").join("mine"), "inside the library folder"),
+        (a_backup.clone(), "inside the library folder"),
+    ] {
+        for command in ["library.backupPreferences", "library.backup"] {
+            let e = s.execute(command, &json!({"dir": bad.to_string_lossy()})).unwrap_err().to_string();
+            assert!(e.contains(why), "{command} {}: {e}", bad.display());
+        }
+    }
+    assert!(s.execute("library.backupPreferences", &json!({})).unwrap()["dir"].is_null());
+    // a backup that is elsewhere is no place for backups either
+    let elsewhere = s.execute("library.backup", &json!({"dir": outside.to_string_lossy()})).unwrap();
+    let there = PathBuf::from(elsewhere["report"]["dir"].as_str().unwrap());
+    let e = s.execute("library.backupPreferences", &json!({"dir": there.to_string_lossy()})).unwrap_err().to_string();
+    assert!(e.contains("is a backup"), "{e}");
+    let e = s.execute("library.backupPreferences", &json!({"dir": there.join("deeper").to_string_lossy()})).unwrap_err().to_string();
+    assert!(e.contains("inside one"), "{e}");
+    // what is taken
+    for good in [outside.clone(), library.join("Backups")] {
+        let p = s.execute("library.backupPreferences", &json!({"dir": good.to_string_lossy()})).unwrap();
+        assert_eq!(p["dir"].as_str(), Some(&*good.to_string_lossy()));
+    }
+    drop(s);
+    for d in [dir, outside] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+/// `choose` asks with a folder dialog, which only the app has: here it is refused, with what to
+/// do instead, and is not taken for a question about the folder.
+#[test]
+fn choosing_with_a_dialog_is_refused_where_there_is_none() {
+    let dir = temp_dir("choose");
+    let mut s = open(&dir);
+    let e = s.execute("library.backupPreferences", &json!({"choose": true})).unwrap_err().to_string();
+    assert!(e.contains("no folder dialog") && e.contains("`dir`"), "{e}");
+    assert!(s.execute("library.backupPreferences", &json!({"choose": false})).unwrap()["dir"].is_null());
+    drop(s);
+    let _ = std::fs::remove_dir_all(dir);
 }

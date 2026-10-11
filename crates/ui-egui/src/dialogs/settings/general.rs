@@ -113,9 +113,9 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
 /// disk: nothing else is backed up to a folder.
 fn backups(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     const ID: &str = "library.backupPreferences";
-    let Ok(now) = app.session.execute(ID, &json!({})) else { return };
-    let Some(folder) = now["folder"].as_str().map(str::to_string) else { return };
-    let chosen = !now["dir"].is_null();
+    // (read, not asked with the command: this is every frame, and a command is journaled)
+    let Some((folder, chosen)) = lightcraft_engine::cmd::backup::backup_folder(&app.session) else { return };
+    let folder = folder.display().to_string();
     heading(ui, t, crate::i18n::tr("Backups"));
     row(ui, t, crate::i18n::tr("Folder"), |ui| {
         ui.add(egui::Label::new(RichText::new(folder.clone()).color(t.text)).truncate()).on_hover_text(folder.clone());

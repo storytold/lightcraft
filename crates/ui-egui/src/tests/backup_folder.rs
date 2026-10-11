@@ -110,18 +110,35 @@ fn closing_the_folder_dialog_changes_nothing() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Given a folder that can't be used (the command refuses it), then the folder stays what it
-/// was and the person is told why.
+/// Given a folder that can't be used (one of the library's own: its `segments`), when it is
+/// picked, then the folder stays what it was and the person is told why.
 #[test]
 fn a_folder_that_is_refused_says_why() {
     let dir = temp("refused");
     let mut h = settings_of_a_library_in(&dir);
-    // (a relative path is not a folder the command takes)
-    h.app.services.pick_folder = Some(Box::new(|| Some("not/absolute".into())));
+    let own = dir.join("library/segments");
+    std::fs::create_dir_all(&own).unwrap();
+    let picked = own.to_string_lossy().into_owned();
+    h.app.services.pick_folder = Some(Box::new(move || Some(picked.clone())));
     click(&mut h, "button:settingsBackupChoose");
     assert_eq!(backup_dir(&mut h), Value::Null);
     let said = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
-    assert!(said.contains("absolute"), "{said:?}");
+    assert!(said.contains("inside the library folder"), "{said:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Given Settings is left open on General, then showing the Backups section runs no command:
+/// the record of what was done in the session (`journal.list`) is what it was.
+#[test]
+fn showing_the_section_runs_no_command() {
+    let dir = temp("quiet");
+    let mut h = settings_of_a_library_in(&dir);
+    assert!(has(&mut h, "button:settingsBackupChoose"));
+    let before = h.app.session.journal.clone();
+    for _ in 0..30 {
+        h.step();
+    }
+    assert_eq!(h.app.session.journal, before);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -145,6 +162,15 @@ fn the_command_asks_for_a_folder_in_the_app() {
     let mut h = settings_of_a_library_in(&dir);
     let e = h.app.run("library.backupPreferences", json!({"choose": true})).unwrap_err();
     assert!(e.contains("no folder dialog"), "{e}");
+    // (`choose: false` is not asking)
+    let never = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let asked = never.clone();
+    h.app.services.pick_folder = Some(Box::new(move || {
+        asked.store(true, std::sync::atomic::Ordering::Relaxed);
+        None
+    }));
+    let r = h.app.run("library.backupPreferences", json!({"choose": false})).unwrap();
+    assert!(r["dir"].is_null() && !never.load(std::sync::atomic::Ordering::Relaxed), "{r}");
     let picked = elsewhere.to_string_lossy().into_owned();
     h.app.services.pick_folder = Some(Box::new(move || Some(picked.clone())));
     let r = h.app.run("library.backupPreferences", json!({"choose": true})).unwrap();

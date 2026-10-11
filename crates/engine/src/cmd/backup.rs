@@ -166,7 +166,7 @@ fn back_up(s: &mut Session, p: &Value) -> Result<Value> {
     let background = flag(C, p, "background")?;
     let dest = match p.get("dir") {
         None | Some(Value::Null) => s.backup_dir.clone().unwrap_or_else(|| library.join(BACKUPS)),
-        Some(dir) => folder(C, "dir", dir)?,
+        Some(dir) => destination(s, C, "dir", dir)?,
     };
     // everything changed so far is in the log before it is read
     s.persist()?;
@@ -634,16 +634,66 @@ fn backups(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"dir": dir.to_string_lossy(), "backups": backup::list(&dir)}))
 }
 
+/// Where the open library's backups go, and whether that folder was chosen for it (else it is
+/// `Backups` in the library folder). `None`: the library is not a folder on disk, and is not
+/// backed up to one. Reads only: what Settings shows on every frame.
+pub fn backup_folder(s: &Session) -> Option<(PathBuf, bool)> {
+    let library = s.library.as_ref().filter(|l| l.on_disk)?;
+    Some(match &s.backup_dir {
+        Some(chosen) => (chosen.clone(), true),
+        None => (library.dir.join(BACKUPS), false),
+    })
+}
+
+/// A folder given for the open library's backups to go to ([`folder`]), which may not be one of
+/// the library's own: inside the library folder only `Backups` is for backups (its other
+/// folders are the catalog's, and a restore moves them as such), and a backup is not a place
+/// for backups (it would no longer be what its list of files says).
+fn destination(s: &Session, cmd: &str, key: &str, value: &Value) -> Result<PathBuf> {
+    let dir = folder(cmd, key, value)?;
+    // (As the file system names them, as far as they exist: a link is not a way round, and a
+    // folder that is yet to be made is where its nearest folder that exists puts it.)
+    let real = |p: &Path| {
+        p.ancestors()
+            .find_map(|known| {
+                let rest = p.strip_prefix(known).ok()?;
+                Some(std::fs::canonicalize(known).ok()?.join(rest))
+            })
+            .unwrap_or_else(|| p.to_path_buf())
+    };
+    let at = real(&dir);
+    if let Some(library) = s.library.as_ref().filter(|l| l.on_disk).map(|l| real(&l.dir))
+        && at.starts_with(&library)
+        && at != library.join(BACKUPS)
+    {
+        return Err(bad(
+            cmd,
+            format!(
+                "`{key}`: {} is inside the library folder, whose folders are the catalog's own; give a folder outside it (or none, for {BACKUPS} in it)",
+                dir.display()
+            ),
+        ));
+    }
+    if let Some(backup) = at.ancestors().find(|a| backup::is_backup(a)) {
+        return Err(bad(cmd, format!("`{key}`: {} is a backup, or inside one ({}); a backup is not added to", dir.display(), backup.display())));
+    }
+    Ok(dir)
+}
+
 fn preferences(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "library.backupPreferences";
     if let Some(dir) = p.get("dir") {
         s.backup_dir = match dir {
             Value::Null => None,
-            dir => Some(folder("library.backupPreferences", "dir", dir)?),
+            dir => Some(destination(s, C, "dir", dir)?),
         };
         s.save_prefs()?;
+    } else if flag(C, p, "choose")? {
+        // (the app asks with a folder dialog before the command gets here)
+        return Err(bad(C, "there is no folder dialog here to `choose` with: give the folder as `dir`"));
     }
     // `dir`: what was chosen (null: nothing was). `folder`: where backups go, chosen or not.
-    let folder = s.library.as_ref().filter(|l| l.on_disk).map(|l| s.backup_dir.clone().unwrap_or_else(|| l.dir.join(BACKUPS)));
+    let folder = backup_folder(s).map(|(folder, _)| folder);
     Ok(json!({"dir": s.backup_dir.as_ref().map(|d| d.to_string_lossy()), "folder": folder.as_ref().map(|d| d.to_string_lossy())}))
 }
 
@@ -727,7 +777,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Backup Preferences",
             [],
             None,
-            "{dir?: absolute folder path | null, choose?: bool} — the folder the library's backups go to (saved with the library); null: Backups in the library folder; `choose` (in the app, without `dir`): ask for it with a folder dialog → {dir: what was chosen | null, folder: where backups go}",
+            "{dir?: absolute folder path | null, choose?: bool} — the folder the library's backups go to (saved with the library); null: Backups in the library folder; not a folder inside the library folder (other than Backups) or inside a backup; `choose: true` (in the app only, without `dir`): ask for it with a folder dialog, and the answer is null while the dialog is open → {dir: what was chosen | null, folder: where backups go}",
             on_disk,
             preferences
         ),

@@ -33,7 +33,8 @@
 - Settings ▸ General ▸ Backups shows the folder the library's backups go to, and sets it: Choose Folder… for one of
   your own (on another drive, say), Use Library Folder for Backups in the library folder again. Agents:
   `library.backupPreferences` also answers `folder` (where backups go, chosen or not) and takes `choose` (ask with a
-  folder dialog).
+  folder dialog, in the app). A folder inside the library folder (other than Backups) or inside a backup is refused
+  for backups, by this command and by `library.backup`.
 - A backup can be put back: File ▸ Restore Library from Backup… (`library.restore`) makes the open library what the backup holds and goes on in it, and
   keeps what the library was, with every change up to that moment, in Replaced in the library folder. With `to` it
   restores into another folder instead, to look at a backup without giving up the library. A backup that was edited
