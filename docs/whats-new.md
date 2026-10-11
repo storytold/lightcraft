@@ -754,6 +754,13 @@
   in Recently Deleted apart, since they are restored and their files stay where they are: "Move 2 Photos · Restore 1
   Photo".
 
+### Several albums, folders, keywords or dates shown at once (agents)
+- `library.source` takes `ids` (albums) or `paths` (folders) and shows the photos of any of them, each once;
+  `library.filter` takes `keywords`, `dates`, `libraryFolders` and `albums`. The single fields stay and count as one
+  more of them. `library.state` lists `albums` and `libraryFolders`. Nothing on screen changes yet: the sidebars'
+  Cmd+click and Shift+click that use this come in a later change.
+- `album.setRules` with `replace` keeps a smart album's album, as it already kept its folder (`album: null` drops
+  it), so editing a smart album saved from a view of several albums no longer loses them.
 
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a

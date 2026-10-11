@@ -40,6 +40,7 @@ mod mask_effects;
 mod mask_geometry;
 mod merge;
 mod move_to_share;
+mod multi_source;
 mod organize;
 mod persist;
 mod prefs;
