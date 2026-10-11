@@ -6,6 +6,7 @@ mod album_order;
 mod album_remove;
 mod albums_local;
 mod backup;
+mod backup_schedule;
 mod color;
 mod constrain_crop;
 mod crop_angle;

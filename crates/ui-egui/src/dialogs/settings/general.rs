@@ -140,7 +140,35 @@ fn backups(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             hint(ui, t, crate::i18n::tr("not available here"));
         }
     });
-    // (a folder that was refused: why. One that was set shows in the row above.)
+    // when the library is backed up without being asked: two choices of their own
+    use lightcraft_engine::backup_schedule::{BackupEvery, BackupOnClose};
+    let mut schedule = app.session.backup_schedule;
+    row(ui, t, crate::i18n::tr("While open"), |ui| {
+        let every = [
+            (BackupEvery::Never, "Never"),
+            (BackupEvery::Day, "Once a day"),
+            (BackupEvery::Week, "Once a week"),
+            (BackupEvery::Month, "Once a month"),
+        ];
+        if choices(ui, "settingsBackupEvery", &every, &mut schedule.every) {
+            result = Some(app.run(ID, json!({"every": schedule.every.id()})));
+        }
+    });
+    row(ui, t, crate::i18n::tr("When quitting"), |ui| {
+        let on_close = [(BackupOnClose::Never, "Never"), (BackupOnClose::Ask, "Ask"), (BackupOnClose::Always, "Always")];
+        if choices(ui, "settingsBackupOnClose", &on_close, &mut schedule.on_close) {
+            result = Some(app.run(ID, json!({"onClose": schedule.on_close.id()})));
+        }
+    });
+    row(ui, t, crate::i18n::tr("Last backup"), |ui| {
+        let last = match &app.session.last_backup {
+            // (the session's clock is UTC, as the backups' names say)
+            Some(at) => format!("{} UTC", lightcraft_engine::catalog::dates::display_time(at)),
+            None => crate::i18n::tr("Not yet").to_string(),
+        };
+        ui.label(RichText::new(last).color(t.text));
+    });
+    // (a folder or a choice that was refused: why. What was set shows in the rows above.)
     if let Some(Err(e)) = result {
         app.toast(ui.ctx(), e);
     }

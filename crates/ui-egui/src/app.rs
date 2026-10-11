@@ -3,10 +3,11 @@ use super::services::Services;
 use super::state::{GestureFrame, InjectedDrop, InjectedPress};
 use super::{
     AiModel, Caches, CommandError, ControlRequest, ControlResponse, ErrorKind, GESTURE_TIMEOUT_MS, LightcraftApp, MAX_PENDING_GESTURES,
-    MAX_PENDING_SHOTS, MAX_SHOT_BYTES, MAX_SHOT_TOTAL_BYTES, MAX_TEXTURE_SIDE, PendingGesture, PendingShot, Perf, Receiver, SCREEN_PROFILE,
-    SCREENSHOT_FALLBACK_MS, SCREENSHOT_SETTLE_MS, SHOT_FORCE_BUSY_MS, SHOT_SETTLE_FRAMES, SHOT_SETTLE_MS, Sender, Session, ShotGeometry,
-    TOAST_SECONDS, UiState, Value, docking, drop_overlay, export_task, focus_scan, frame_rate, headless, i18n, import, lightroom_import, menus,
-    merge, model_setup, panels, pick, recheck, render, shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
+    MAX_PENDING_SHOTS, MAX_SHOT_BYTES, MAX_SHOT_TOTAL_BYTES, MAX_TEXTURE_SIDE, PendingGesture, PendingShot, Perf, QuitBackup, Receiver,
+    SCREEN_PROFILE, SCREENSHOT_FALLBACK_MS, SCREENSHOT_SETTLE_MS, SHOT_FORCE_BUSY_MS, SHOT_SETTLE_FRAMES, SHOT_SETTLE_MS, Sender, Session,
+    ShotGeometry, TOAST_SECONDS, UiState, Value, docking, drop_overlay, export_task, focus_scan, frame_rate, headless, i18n, import,
+    lightroom_import, menus, merge, model_setup, panels, pick, recheck, render, shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui,
+    widgets,
 };
 
 mod control;
@@ -45,6 +46,7 @@ impl LightcraftApp {
             quit_prompt: None,
             notice_input: Default::default(),
             quit_confirmed: false,
+            quit_backup: QuitBackup::default(),
             control_rx: None,
             pending_screenshots: vec![],
             pending_gestures: vec![],
@@ -359,6 +361,26 @@ impl LightcraftApp {
             }
         }
         panels::slideshow::tick(self, ctx, now);
+    }
+
+    /// Back the library up by itself when its schedule says a backup is due
+    /// (`library.backupPreferences`, `every`). Looked at every few seconds, not every frame; the
+    /// backup has its row in the activity stack, and [`Self::backup_status`] says how it ended.
+    fn backup_schedule(&mut self, ctx: &egui::Context) {
+        use lightcraft_engine::backup_schedule::BackupEvery;
+        if self.session.backup_schedule.every == BackupEvery::Never {
+            return;
+        }
+        const LOOK_EVERY: f64 = 5.0;
+        let id = egui::Id::unique("backup-schedule-looked");
+        let now = ctx.input(|i| i.time);
+        let looked: Option<f64> = ctx.data(|d| d.get_temp(id));
+        if looked.is_none_or(|at| now - at >= LOOK_EVERY || now < at) {
+            ctx.data_mut(|d| d.insert_temp(id, now));
+            lightcraft_engine::cmd::backup::back_up_if_due(&mut self.session);
+        }
+        // (an idle window still looks: a library left open for days is backed up)
+        ctx.request_repaint_after(std::time::Duration::from_secs(60));
     }
 
     /// Announce the end of a library backup: where it went, or why there is none.

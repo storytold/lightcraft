@@ -18,6 +18,7 @@ pub mod activity;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod apple_photos;
 pub mod availability;
+pub mod backup_schedule;
 pub(crate) mod camera_preview;
 pub mod camera_profiles;
 pub mod cmd;
@@ -393,6 +394,13 @@ pub struct Session {
     pub backup: Option<std::sync::Arc<cmd::backup::BackupJob>>,
     /// Where the library's backups go (a library preference; `None`: Backups in its folder).
     pub backup_dir: Option<std::path::PathBuf>,
+    /// When the library is backed up without being asked (`library.backupPreferences`).
+    pub backup_schedule: backup_schedule::BackupSchedule,
+    /// When the library was last backed up to the folder its backups go to (the session clock's
+    /// time; saved with the library).
+    pub last_backup: Option<String>,
+    /// When a backup by itself was last started in this session (see `backup_schedule::due`).
+    pub backup_tried: Option<String>,
     /// Holds a backup before it starts reading (tests look at its row meanwhile).
     pub(crate) backup_hold: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// The restore of the library that runs in the background, or the last one made that way
@@ -540,6 +548,9 @@ impl Session {
             slideshow_export: None,
             backup: None,
             backup_dir: None,
+            backup_schedule: Default::default(),
+            last_backup: None,
+            backup_tried: None,
             backup_hold: Default::default(),
             restore: None,
             #[cfg(test)]

@@ -3,6 +3,7 @@ mod album_picker;
 mod album_remove;
 mod appearance;
 mod backup_folder;
+mod backup_schedule;
 mod before_after;
 mod browse_active;
 mod button;

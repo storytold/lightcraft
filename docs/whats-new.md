@@ -30,6 +30,13 @@
   `library.backup` (`dir`; returns when the backup is made, or at once with `background`), `library.backupStatus`,
   `library.backupPreferences` (the folder a library's backups go to), `library.checkBackup` (reads a backup against
   the list of files it was made with, and names one that was edited or damaged since).
+- A library can be backed up without being asked, in two ways of their own, both off until chosen in Settings ▸
+  General ▸ Backups. **While open**: once a day, a week or a month, by itself in the background when the last backup
+  is that old (a month is thirty days; one that fails is tried again an hour later). **When quitting**: Ask (Back Up,
+  Skip or Cancel) or Always (LightCraft quits when the backup is made; Quit Without Waiting stops it). A backup that
+  can't be made does not quit as if it had been. Settings shows when the library was last backed up. Agents:
+  `library.backupPreferences` takes `every` (never, day, week, month) and `onClose` (never, ask, always), and
+  answers them with `lastBackup`.
 - Settings ▸ General ▸ Backups shows the folder the library's backups go to, and sets it: Choose Folder… for one of
   your own (on another drive, say), Use Library Folder for Backups in the library folder again. Agents:
   `library.backupPreferences` also answers `folder` (where backups go, chosen or not) and takes `choose` (ask with a

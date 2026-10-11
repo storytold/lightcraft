@@ -165,6 +165,13 @@ others are the catalog's, and a restore moves them as such), nor a backup or a f
 toast where it went or why there is none; the command itself returns when the backup is made (`background: true` for
 the other).
 
+- **A library can be backed up without being asked.** Two choices of their own, saved with the library and off
+  until made (`library.backupPreferences`: `every`, `onClose`; Settings ▸ General ▸ Backups). While it is open, the
+  app backs it up in the background once a day, a week or a month (thirty days), counted from the last backup made
+  to the folder its backups go to, whoever made it (`lastBackup`, the session clock's time, kept in the library's
+  preferences); a backup by itself that fails is tried again an hour later. When LightCraft quits, it asks first or
+  backs up at once, and quits when the backup is made; a backup that fails calls the quit off. Only the app does
+  either: the command line and agents back up when they are told to.
 - **A backup takes every file the library has.** The library's own files beside the catalog are one list
   (`SettingsFile` in `crates/engine/src/library.rs`), which is what a backup takes along and what the browser build
   reads at start-up. The library's file store refuses to write a file that is not on it, so a new one can't be added

@@ -272,7 +272,8 @@ fn a_backup_is_its_librarys() {
 }
 
 /// Given a library with every one of its own files (presets, view, preferences), when it is
-/// backed up, then the backup has each of them, as it is in the library.
+/// backed up, then the backup has each of them, as it was in the library when the backup was
+/// made. (The library's preferences then note the backup: that is after it.)
 #[test]
 fn a_backup_takes_every_file_of_the_library() {
     use crate::library::SettingsFile;
@@ -284,7 +285,7 @@ fn a_backup_takes_every_file_of_the_library() {
     let made = s.execute("library.backup", &json!({})).unwrap();
     let backup = PathBuf::from(made["report"]["dir"].as_str().unwrap());
     for file in SettingsFile::ALL {
-        assert_eq!(std::fs::read(backup.join(file.name())).unwrap(), std::fs::read(dir.join(file.name())).unwrap(), "{}", file.name());
+        assert_eq!(std::fs::read_to_string(backup.join(file.name())).unwrap(), format!("{{\"file\":\"{}\"}}", file.name()), "{}", file.name());
     }
     assert_eq!(crate::library::SETTINGS_FILES.to_vec(), SettingsFile::ALL.map(SettingsFile::name).to_vec());
     let _ = std::fs::remove_dir_all(&dir);

@@ -305,6 +305,11 @@ struct PrefsFile {
     /// Where the library's backups go (`library.backupPreferences`).
     #[serde(skip_serializing_if = "Option::is_none")]
     backup_dir: Option<PathBuf>,
+    /// When the library is backed up without being asked, and when it last was.
+    #[serde(skip_serializing_if = "crate::backup_schedule::BackupSchedule::is_off")]
+    backup_schedule: crate::backup_schedule::BackupSchedule,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_backup: Option<String>,
     /// Parameters of the last export (for Export with Previous).
     #[serde(alias = "last_export")]
     last_export: Option<serde_json::Value>,
@@ -656,6 +661,9 @@ impl Session {
         let prefs = settings.read::<PrefsFile>(files.as_mut(), PREFS).unwrap_or_default();
         self.xmp = prefs.xmp;
         self.backup_dir = prefs.backup_dir;
+        self.backup_schedule = prefs.backup_schedule;
+        self.last_backup = prefs.last_backup;
+        self.backup_tried = None;
         self.last_export = prefs.last_export;
         self.last_merge = prefs.last_merge;
         self.export_presets = prefs.export_presets;
@@ -964,6 +972,8 @@ impl Session {
         let v = serde_json::to_vec_pretty(&PrefsFile {
             xmp: self.xmp,
             backup_dir: self.backup_dir.clone(),
+            backup_schedule: self.backup_schedule,
+            last_backup: self.last_backup.clone(),
             last_export: self.last_export.clone(),
             last_merge: self.last_merge.clone(),
             export_presets: self.export_presets.clone(),

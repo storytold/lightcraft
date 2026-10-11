@@ -6,7 +6,7 @@ use egui::{Align2, RichText, vec2};
 
 use crate::theme::Tokens;
 use crate::widgets::WidgetHit;
-use crate::{LightcraftApp, QuitPrompt};
+use crate::{LightcraftApp, QuitBackup, QuitPrompt};
 
 /// Collect the library's settings-file warnings (each is shown once), and the no-GPU notice once the GPU device has
 /// been tried.
@@ -64,10 +64,17 @@ pub fn may_close(app: &mut LightcraftApp) -> bool {
         return true;
     }
     // before the library is touched: a Cancel here keeps working with it
-    let running = app.session.activity.running_cancellable();
+    let mut running = app.session.activity.running_cancellable();
+    // (the backup this quit waits for is not a task quitting would cut short: see below)
+    if app.quit_backup == QuitBackup::Running {
+        running.retain(|t| t.kind != "backup");
+    }
     if !running.is_empty() {
         let names = running.iter().map(|t| crate::i18n::tr(&t.label)).collect::<Vec<_>>().join(", ");
         app.quit_prompt = Some(QuitPrompt::Tasks(tasks_message(running.len(), &names)));
+        return false;
+    }
+    if !backed_up_for_quitting(app) {
         return false;
     }
     if app.session.unsaved().is_none() {
@@ -88,12 +95,86 @@ pub fn may_close(app: &mut LightcraftApp) -> bool {
     }
 }
 
+/// The backup the library has when LightCraft quits (`library.backupPreferences`, `onClose`),
+/// if it has one: `true` once there is nothing more to wait or ask for. Asked about, or started,
+/// here; [`quit_after_backup`] goes on with the quit when the backup is made.
+fn backed_up_for_quitting(app: &mut LightcraftApp) -> bool {
+    use lightcraft_engine::backup_schedule::BackupOnClose;
+    let on_close = app.session.backup_schedule.on_close;
+    // (a library that is not a folder on disk has no backup to make)
+    if on_close == BackupOnClose::Never || lightcraft_engine::cmd::backup::backup_folder(&app.session).is_none() {
+        return true;
+    }
+    match app.quit_backup {
+        QuitBackup::Settled => true,
+        QuitBackup::Running => {
+            waiting_for_the_backup(app);
+            false
+        }
+        QuitBackup::Undecided if on_close == BackupOnClose::Ask => {
+            app.quit_prompt = Some(QuitPrompt::BackUp(crate::i18n::tr("Back up the library before LightCraft quits?").to_string()));
+            false
+        }
+        QuitBackup::Undecided => {
+            back_up_then_quit(app);
+            false
+        }
+    }
+}
+
+/// Start the backup LightCraft waits for before it quits. One that can't be started says why,
+/// and the quit is called off.
+fn back_up_then_quit(app: &mut LightcraftApp) {
+    // (a backup that runs already is the one waited for)
+    let running = lightcraft_engine::cmd::backup::status(&app.session).is_some_and(|b| b.outcome().is_none());
+    if !running && let Err(e) = app.run("library.backup", serde_json::json!({})) {
+        app.quit_backup = QuitBackup::Undecided;
+        app.quit_prompt = None;
+        app.ui.toast = Some((e, app.last_time + 6.0, None));
+        return;
+    }
+    app.quit_backup = QuitBackup::Running;
+    waiting_for_the_backup(app);
+}
+
+fn waiting_for_the_backup(app: &mut LightcraftApp) {
+    app.quit_prompt = Some(QuitPrompt::BackingUp(crate::i18n::tr("Backing up the library. LightCraft quits when the backup is made.").to_string()));
+}
+
+/// Go on with a quit that waits for its backup ([`QuitBackup::Running`]) once the backup has
+/// ended: made, LightCraft quits (after whatever else quitting asks); not made, the quit is
+/// called off, and the person is told why by the backup's own toast.
+pub fn quit_after_backup(app: &mut LightcraftApp) {
+    if app.quit_backup != QuitBackup::Running {
+        return;
+    }
+    let Some(outcome) = lightcraft_engine::cmd::backup::status(&app.session).and_then(|b| b.outcome()) else {
+        // (still running; or no backup at all: the library was closed under the quit)
+        if lightcraft_engine::cmd::backup::status(&app.session).is_none() {
+            app.quit_backup = QuitBackup::Undecided;
+            app.quit_prompt = None;
+        }
+        return;
+    };
+    app.quit_prompt = None;
+    if outcome.is_ok() {
+        app.quit_backup = QuitBackup::Settled;
+        if may_close(app) {
+            app.ui.quit = true;
+        }
+    } else {
+        app.quit_backup = QuitBackup::Undecided;
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Choice {
     Retry,
     QuitAnyway,
     Cancel,
     Ok,
+    BackUp,
+    Skip,
 }
 
 /// The prompt (quit or settings notice) that owns input this frame, if any.
@@ -105,6 +186,8 @@ pub(crate) fn prompt_layer(app: &LightcraftApp) -> Option<egui::LayerId> {
     let id = match (&app.quit_prompt, app.notices.is_empty()) {
         (Some(QuitPrompt::Tasks(_)), _) => "quit-tasks",
         (Some(QuitPrompt::Unsaved(_)), _) => "quit-unsaved",
+        (Some(QuitPrompt::BackUp(_)), _) => "quit-backup",
+        (Some(QuitPrompt::BackingUp(_)), _) => "quit-backing-up",
         (None, false) => "settings-notice",
         (None, true) => return None,
     };
@@ -528,6 +611,42 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
 /// and re-checks for unsaved changes; quit-with-unsaved retries, quits or cancels; a settings
 /// notice is removed when acknowledged. Returns without drawing when no prompt is up.
 pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
+    if let Some(QuitPrompt::BackUp(text)) = app.quit_prompt.clone() {
+        let buttons = [("quitBackUp", "Back Up", Choice::BackUp), ("quitSkipBackup", "Skip", Choice::Skip), ("quitCancel", "Cancel", Choice::Cancel)];
+        let Some(i) = window(ctx, "quit-backup", "Back up before quitting?", &text, &buttons, &mut app.notice_input) else { return };
+        app.quit_prompt = None;
+        match buttons[i].2 {
+            Choice::BackUp => back_up_then_quit(app),
+            Choice::Skip => {
+                app.quit_backup = QuitBackup::Settled;
+                if may_close(app) {
+                    app.ui.quit = true;
+                }
+            }
+            _ => app.quit_backup = QuitBackup::Undecided,
+        }
+        return;
+    }
+    if let Some(QuitPrompt::BackingUp(text)) = app.quit_prompt.clone() {
+        let buttons = [("quitNoWait", "Quit Without Waiting", Choice::QuitAnyway), ("quitCancel", "Cancel", Choice::Cancel)];
+        let Some(i) = window(ctx, "quit-backing-up", "Backing up before quitting", &text, &buttons, &mut app.notice_input) else { return };
+        app.quit_prompt = None;
+        match buttons[i].2 {
+            Choice::QuitAnyway => {
+                // (the backup is stopped, and leaves nothing half made)
+                if let Some(b) = lightcraft_engine::cmd::backup::status(&app.session) {
+                    b.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                app.quit_backup = QuitBackup::Settled;
+                if may_close(app) {
+                    app.ui.quit = true;
+                }
+            }
+            // back to work: the backup goes on, and the quit is called off
+            _ => app.quit_backup = QuitBackup::Undecided,
+        }
+        return;
+    }
     if let Some(QuitPrompt::Tasks(text)) = app.quit_prompt.clone() {
         let buttons = [("quitAnyway", "Quit Anyway", Choice::QuitAnyway), ("quitCancel", "Cancel", Choice::Cancel)];
         let Some(i) = window(ctx, "quit-tasks", "Quit while tasks are running?", &text, &buttons, &mut app.notice_input) else {
@@ -570,7 +689,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 app.quit_confirmed = true;
                 app.ui.quit = true;
             }
-            Some(Choice::Cancel | Choice::Ok) | None => app.quit_prompt = None,
+            Some(Choice::Cancel | Choice::Ok | Choice::BackUp | Choice::Skip) | None => app.quit_prompt = None,
         }
         return;
     }
