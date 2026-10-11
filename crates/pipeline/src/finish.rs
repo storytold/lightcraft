@@ -55,6 +55,26 @@ fn curve_luts(c: &ToneCurve, fades: [Option<(f64, f64)>; 4]) -> Option<[Lut1; 3]
     Some(std::array::from_fn(|i| if chans[i] { point_lut(per[i], fades[i + 1]).compose(&base) } else { base.clone() }))
 }
 
+/// Refine between the master/parametric and individual-channel curves.
+/// Absent for master-only, channel-only, legacy, HDR and full-saturation renders.
+pub struct SplitCurveLuts {
+    pub master: Lut1,
+    /// Identity channels are skipped instead of adding an interpolation round trip.
+    pub channels: [Option<Lut1>; 3],
+}
+
+fn split_curve_luts(c: &ToneCurve, fades: [Option<(f64, f64)>; 4]) -> Option<SplitCurveLuts> {
+    let per = [&c.red, &c.green, &c.blue];
+    let channels = std::array::from_fn(|i| (!per[i].is_identity() || fades[i + 1].is_some()).then(|| point_lut(per[i], fades[i + 1])));
+    if channels.iter().all(Option::is_none) {
+        return None;
+    }
+    let master_only = ToneCurve { red: PointCurve::default(), green: PointCurve::default(), blue: PointCurve::default(), ..c.clone() };
+    // Use the unchanged builder, including parametric composition and the profile's master fade.
+    let master = curve_luts(&master_only, [fades[0], None, None, None])?.into_iter().next()?;
+    Some(SplitCurveLuts { master, channels })
+}
+
 /// An imported profile is an independent encoded-domain function after the global curves.
 /// Amount mixes the composed master/channel function with identity, without changing saved
 /// curves or involving the global curve panel's bypass and Refine Saturation controls.
@@ -252,6 +272,8 @@ pub struct FinishParams {
     pub shadow_tint: f32,
     /// Tone curves (parametric ∘ point, per channel) on encoded values, 1024 entries each.
     pub curves: Option<[Lut1; 3]>,
+    /// SDR mixed curves: master/parametric, refinement, then individual channels.
+    pub split_curves: Option<SplitCurveLuts>,
     /// Imported profile master/channel curves and Amount, after global curves/refinement and
     /// before grain. Same sRGB encoding domain as the global curves, independent of their bypass.
     pub profile_curves: Option<[Lut1; 3]>,
@@ -330,6 +352,12 @@ impl FinishParams {
             || s.curve.lights != 0.0
             || s.curve.darks != 0.0
             || s.curve.shadows != 0.0;
+        // In SDR, channel-only curves do not trigger saturation refinement. Keep the
+        // measured master-only path, legacy V1, and unmeasured HDR ordering intact.
+        let current_sdr = matches!(s.process.process(), Process::V2 | Process::V3) && !s.hdr.enabled;
+        let refine_sat = if current_sdr && !master_or_parametric { 1.0 } else { (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32 };
+        // At 100 keep the composed LUT exactly: separate interpolation can round differently.
+        let split_curves = if current_sdr && master_or_parametric && refine_sat < 1.0 { split_curve_luts(&s.curve, fades) } else { None };
         let profile_curves = profile_curve_luts(s);
         let curve_space =
             (matches!(s.process.process(), Process::V2 | Process::V3) && (curves.is_some() || profile_curves.is_some())).then(|| CurveSpace {
@@ -345,15 +373,10 @@ impl FinishParams {
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
             ops: ColorOps::new(s),
             curves,
+            split_curves,
             profile_curves,
             curve_space,
-            // In SDR, channel-only curves do not trigger saturation refinement. Keep the
-            // measured master-curve path, legacy V1, and unmeasured HDR ordering intact.
-            refine_sat: if matches!(s.process.process(), Process::V2 | Process::V3) && !s.hdr.enabled && !master_or_parametric {
-                1.0
-            } else {
-                (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32
-            },
+            refine_sat,
             vig: if effects { vignette(s) } else { None },
             to_out: space.from_working(),
             out_luma: space.luma(),
@@ -841,7 +864,16 @@ fn working_curves(d: [f32; 3], fp: &FinishParams, space: CurveSpace, srgb: &[f32
     let bound = |v: f32| v.clamp(-CURVE_ENCODED_LIMIT, CURVE_ENCODED_LIMIT);
     let apply =
         |l: &[Lut1; 3], e: [f32; 3]| std::array::from_fn(|k| bound(if hdr && e[k] > 1.0 { l[k].eval(1.0) + (e[k] - 1.0) } else { l[k].eval(e[k]) }));
-    if let Some(l) = &fp.curves {
+    if let Some(split) = &fp.split_curves {
+        let before = e;
+        e = e.map(|v| bound(split.master.eval(v)));
+        e = refine_saturation(before, e, fp.refine_sat);
+        for (value, channel) in e.iter_mut().zip(&split.channels) {
+            if let Some(channel) = channel {
+                *value = bound(channel.eval(*value));
+            }
+        }
+    } else if let Some(l) = &fp.curves {
         let before = e;
         e = apply(l, e);
         if fp.refine_sat < 1.0 {

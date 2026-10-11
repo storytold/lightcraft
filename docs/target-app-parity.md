@@ -256,9 +256,65 @@ edits below Refine 100 can change without rewriting their settings. V1 remains f
 render-cache version 63 invalidates prior rendered previews. See the explicit
 [pre-release exception](process-versions.md#the-rule).
 
-These bounded witnesses do not establish arbitrary-curve, mixed master/channel or B&W parity.
+These channel-only witnesses do not establish arbitrary-curve, mixed master/channel or B&W parity.
 The master refinement formula remains approximate. Source colour, conventional noise reduction
 and sharpening still have measured gaps. Partial statuses and readiness estimates are unchanged.
+
+#### Mixed master/channel ordering correction (2026-10-11)
+
+The CPU/GPU correction applies master/parametric curves and their unchanged
+Refine Saturation formula before individual-channel curves in V2/V3 SDR. Imported-profile curves
+remain after both stages. The Refine100 composed-LUT path, master-only, channel-only, V1 and HDR
+paths remain unchanged. All eight native master0/50 and red/green/blue channel0/100 controls,
+plus mixed100, preserve every RGB16 sample and ICC byte. This is a placement correction, not a
+replacement for the still-approximate master refinement formula.
+
+An authored affine-master/nonlinear-blue chart gives pooled 24-interior mean ΔE00
+**2.646066 → 0.383281**, and whole-frame **2.145175 → 0.334947**. Twenty coloured cells improve and four gray cells remain unchanged. All fixed direct ΔE00 summaries
+and XYZ RMS avoid regressions; absolute-Y error worsens in two high-amplitude isoluminant-RG
+cells. The mixed result preserves measured master-only R/G within the original code/evaluator
+bounds. Empirical forward blue compatibility is conditional and leaves 3,456 interior Refine0
+pixels unsupported. The separate analytic-affine control failed and remains inadmitted; neither
+compatibility nor candidate improvement identifies a unique Lightroom internal order.
+
+One additional already-seen D3500 training photograph (train02), fixed before candidate scores,
+uses the same master/blue curves and explicit Refine0 with otherwise neutral controls. Native
+6000×4000 exports retain both phase0/8 grids, all nine disjoint 640×640 regions, pooled regions and the
+overlapping 512×512 center, with each renderer's own ICC. No new fit or heldout inspection occurs.
+
+| Fixed scope | Direct mean ΔE00, baseline5b → candidate |
+|---|---:|
+| Grid, phase (0,0) | 9.948771 → 1.363362 |
+| Grid, phase (8,8) | 9.949168 → 1.365652 |
+| Nine regions pooled | 10.454207 → 1.326509 |
+
+All 13 scopes improve mean ΔE00 and paired XYZ-vector RMS. Regressions remain: direct ΔE00 maximum
+worsens on grid phase (8,8) (**23.999857 → 27.423555**) and region 7 (**31.459205 → 34.716989**);
+some direct XYZ/Lab/chroma maxima and lightness tails worsen. Several paired Y summaries worsen,
+including mean/RMS in regions 0,2,3,5,6; some paired lightness summaries and Lab/chroma maxima also
+worsen. Every direct/paired mean, RMS, p95 and maximum flag is retained, without selected-pixel
+filtering or tolerance changes.
+
+Both final5b baseline and candidate paired responses use the older 303c neutral LC anchor:
+`(edited LC − neutral LC303c) − (edited LR − neutral LR)`, separately in XYZ and Lab. Neither has
+a fresh neutral measurement here; paired improvement does not independently prove either
+binary's neutral invariance. Direct errors still include source-colour/profile residuals.
+This training photograph is not heldout or general photographic validation.
+
+There are 153 accepted native Lightroom exports. Mixed0 and100 both explicitly serialize the
+numeric Refine value; mixed100 omits only CompatibleVersion, accepted through a narrow recorded
+amendment. This differs from the earlier channel-only requested100 cases that omit both fields.
+Private records are `refine-mixed-order/native-candidate-score-01`,
+`refine-mixed-order/candidate-controls-native-equivalence-01.json` and
+`refine-mixed-photo/native-comparison-01` under the local 2026-10-11 fidelity audit.
+
+Independent reviews and all eight integration CI gates passed, including existing CPU/GPU curve
+equivalence on an available GPU. Final CLI `1a39853139c6` reproduces every candidate RGB16 pixel
+and ICC byte for mixed0, mixed100 and the D3500 photograph. The same unreleased V2/V3 fork
+exception applies; cache64 invalidates prior rendered previews and V1 stays frozen. Refine99.99999
+and100 are native-identical on this fixed chart. Sequential versus composed LUT sampling below100
+remains an approximation, without general continuity proof. No generic curve/B&W/camera parity,
+partial-status change or readiness increase is claimed.
 
 ## AI
 
@@ -489,6 +545,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 | 2026-10-14 | minor | Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (`coverage_sweep_corpus.rs`, `coverage-sweep.tsv`; `docs/raw/coverage.py` 515 → 545 verified rows); the counts above are not re-measured here. Sensor verification does not establish colour parity (#1277); headline numbers unchanged |
 | 2026-10-12 | minor | 22 more CR3 bodies verified on one CC0 file each (raw-parity.md): use-weighted share whose camera decodes 85% → 92%, RAW decoding 77% → 83%; full 60.7% → 61.2% (~61%), mainstream depth 72.1% → 74.0% (~49% → ~51%), essentials depth 77.5% → 78.0% (~64% → ~65%) |
 | 2026-10-12 | minor | 117 Nikon and Fujifilm bodies verified (raw-parity.md): use-weighted share whose camera decodes 85% → 86%, RAW decoding 77% (unchanged); mainstream depth 72.1% → 72.4%, essentials depth 77.5% → 77.6%; headline numbers unchanged |
+| 2026-10-11 | minor | Integrated measured mixed master/channel ordering correction: chart/train02 gains, exact native controls and final build, CI/GPU pass, retained Y/tail regressions and shared303c neutral; no readiness increase |
 | 2026-10-11 | minor | Corrected channel-only Refine Saturation scope for unreleased V2/V3 SDR; three native charts and one training-photo comparison with retained regressions/neutral-anchor limits; cache 63, legacy/HDR preservation and no readiness increase |
 | 2026-10-11 | minor | Recount after upstream76b53778 integration: checklist 80.8% of 531; V3 tone remains opt-in; readiness and hour estimates unchanged |
 | 2026-10-11 | minor | EOS R5 Mark II CR3 verified (raw-parity.md): use-weighted share whose camera decodes 84% → 85%, RAW decoding 76% → 77%; full 60.6% → 60.7%, mainstream depth 71.8% → 72.1%, essentials depth 77.4% → 77.5%; the rounded numbers (~61%, ~49%, ~64%) are unchanged |

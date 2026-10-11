@@ -1,7 +1,7 @@
 // The per-pixel stage: a straight port of `lightcraft_pipeline::finish` (keep in step with it).
 // Bindings: img (rgb, pre-exposure), log_l, base, clar, tex, dark, masks (NMASK planes, then the
 // blurred chromaticity when HAS_CHROMA), aux
-// (tone LUT | chroma curve | sRGB LUT | global/profile curve LUTs | mask terms), out (packed RGBA8).
+// (tone LUT | chroma curve | sRGB LUT | global/profile curve LUTs | optional split curve LUTs | mask terms), out (packed RGBA8).
 
 fn tone_apply(y: f32) -> f32 {
     if (y <= 0.0) {
@@ -58,6 +58,15 @@ fn curve(ch: u32, x: f32) -> f32 {
 
 fn profile_curve(ch: u32, x: f32) -> f32 {
     let o = pu(F_PROFILE_CURVE_OFF) + ch * CURVE_N;
+    let f = clamp(x, 0.0, 1.0) * f32(CURVE_N - 1u);
+    let i = min(u32(f), CURVE_N - 2u);
+    let t = f - f32(i);
+    return aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * t;
+}
+
+// Slot 0 is master/parametric; slots 1..3 are the individual channels.
+fn split_curve(slot: u32, x: f32) -> f32 {
+    let o = pu(F_SPLIT_CURVE_OFF) + slot * CURVE_N;
     let f = clamp(x, 0.0, 1.0) * f32(CURVE_N - 1u);
     let i = min(u32(f), CURVE_N - 2u);
     let t = f - f32(i);
@@ -509,7 +518,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let limit = vec3<f32>(pf(F_CURVE_LIMIT));
         let c = mul3(cm, d);
         var ce = vec3<f32>(encode_srgb(c.x), encode_srgb(c.y), encode_srgb(c.z));
-        if (pu(F_CURVES) != 0u) {
+        if (pu(F_SPLIT_CURVES) != 0u) {
+            let before = ce;
+            ce = clamp(vec3<f32>(split_curve(0u, ce.x), split_curve(0u, ce.y), split_curve(0u, ce.z)), -limit, limit);
+            ce = refine_saturation(before, ce, pf(F_REFINE_SAT));
+            let channel_mask = pu(F_SPLIT_CHANNEL_MASK);
+            for (var k = 0u; k < 3u; k++) {
+                if ((channel_mask & (1u << k)) != 0u) {
+                    ce[k] = clamp(split_curve(k + 1u, ce[k]), -pf(F_CURVE_LIMIT), pf(F_CURVE_LIMIT));
+                }
+            }
+        } else if (pu(F_CURVES) != 0u) {
             let before = ce;
             ce = clamp(vec3<f32>(curve(0u, ce.x), curve(1u, ce.y), curve(2u, ce.z)), -limit, limit);
             if (pf(F_REFINE_SAT) < 1.0) {

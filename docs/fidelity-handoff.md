@@ -41,7 +41,7 @@ Lightroom exports use the already paired local controller and a serial queue:
 python -B plan/lightroom-reference/tools/controller_export_queue.py /absolute/path/to/reviewed-queue.json
 ```
 
-There are now 150 accepted native scripted exports, including local sharpening, colour-NR structure/channel charts and companion-control references. Three recent requested-Refine100 chart exports carry an explicit metadata-omission qualification; their numeric100 setting was not independently read back. Use new output paths, exact source/settings guards and the retained TIFF16/full-size/AdobeRGB/no-output-sharpening settings. Do not resubmit uncertain jobs. Never print or copy the pairing token.
+There are now 153 accepted native scripted exports, including local sharpening, colour-NR structure/channel charts and companion-control references. Three recent requested-Refine100 chart exports carry an explicit metadata-omission qualification; their numeric100 setting was not independently read back. Use new output paths, exact source/settings guards and the retained TIFF16/full-size/AdobeRGB/no-output-sharpening settings. Do not resubmit uncertain jobs. Never print or copy the pairing token.
 
 The controller returns no `SharpenEdgeMasking` value. Keep its 13 supported readiness checks and verify Masking in the exported XMP: this run explicitly retains 100 but omits zero, Radius and Detail at global Sharpness 0. Lightroom also normalizes legacy gradients to mask groups and adds identity `LocalCurveRefineSaturation=100`. Preserve these distinctions; missing metadata is not a verified numerical value.
 
@@ -114,9 +114,39 @@ D3500 edit and both red-chart Refine states match every measured candidate RGB16
 byte, with exact settings, diagnostics and owned-source guards. One existing test was extended;
 no new test functions were added. Redundant full TIFFs were retired after verified compact retention.
 
+## Measured mixed-curve ordering correction
+
+The V2/V3 SDR correction applies the existing master/parametric refinement
+before individual-channel curves. It changes placement only; the master Refine formula remains
+approximate. Refine 100 retains the old composed LUT path exactly. Master-only, channel-only,
+V1, HDR and imported-profile placement are preserved. Native RGB16/ICC checks pass for all eight
+master-only 0/50 and red/green/blue channel-only 0/100 controls, plus mixed 100.
+
+The mixed affine-master/nonlinear-blue chart improves pooled 24-interior mean ΔE00 **2.646066 → 0.383281**.
+The fixed next already-seen D3500 training source (train02), chosen before candidate scores,
+improves grid phase (8,8) mean ΔE00 **9.949168 → 1.365652**. All 13 photo scopes improve mean ΔE00 and
+paired XYZ RMS; some Y/lightness summaries and tails worsen. Both edited binaries use the
+shared303c neutral anchor, with no fresh baseline5b or candidate neutral capture. The full
+[measurements and limits](target-app-parity.md#mixed-masterchannel-ordering-correction-2026-10-11)
+retain every worsening and unsupported comparison.
+
+Private evidence: `refine-mixed-order/native-candidate-score-01`,
+`refine-mixed-order/candidate-controls-native-equivalence-01.json`, and
+`refine-mixed-photo/native-comparison-01`. The original failed analytic-affine composition gate
+remains failed; empirical forward compatibility does not identify Lightroom's internal order.
+Mixed0 and100 both have explicit numeric readback; mixed100 omits only CompatibleVersion.
+
+Final CLI `1a39853139c6` passes all eight `cargo xtask ci` gates, including the existing CPU/GPU
+curve-equivalence checks on an available GPU. Both mixed chart states and the D3500 photograph
+match every measured candidate RGB16 pixel and ICC byte. Independent reviews passed; one existing
+test expectation was adjusted, with no new test functions. Cache64 invalidates prior rendered
+previews. Refine99.99999 and100 produce identical RGB16/ICC on the fixed chart; this does not prove
+continuity for arbitrary curves. Sequential LUT evaluation remains an approximation. No generic
+curve/camera parity or readiness increase is claimed.
+
 ## Next work
 
-1. Measure an affine master plus the already measured nonlinear blue curve at Refine 0/100 to test curve ordering and interaction. Unlike identical affine curves, these operations do not commute. Keep the empirical master-only endpoints and require the mixed-100 composition gate before interpreting the result. The master endpoint formula remains unresolved; no new endpoint model or fitted replacement is proposed. Preserve the channel-only correction and V1/HDR behavior.
+1. Continue the unresolved master Refine formula and conventional Detail controls from the retained native evidence. The mixed-order correction is verified and integrated. Preserve the failed analytic-affine gate; the bounded improvement does not identify a unique Lightroom internal order.
 2. Investigate profile-table ordering relative to Exposure using own sources. No new exposure reference has been exported. A failed composition check alone does not prove the reverse order. Do not read or hash Adobe app-bundle contents under the current project instructions.
 3. Continue remaining tone/B&W and conventional NR/sharpening gaps without recycling rejected candidates. The proxy-order replay left the existing winners unchanged; the shared Lightroom-targeted source-colour fit failed the training no-regression gate, and its four heldout scenes remain sealed. No source fit or experimental CNR model was adopted. Global Sharpening Detail and luminance-NR Contrast remain stored no-ops. The saved Amount 120 paired-response audit is complete; baseline source-colour error can dominate and full-photo means can hide cancellation.
 

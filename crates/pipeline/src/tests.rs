@@ -884,8 +884,8 @@ fn v2_curves_are_output_independent_and_keep_global_refine_profile_order() {
             }
         }
     }
-    // An independent per-pixel calculation in the fixed primaries verifies the two LUT stages
-    // straddle only global Refine Saturation, whose existing encoded weights remain unchanged.
+    // An independent calculation verifies master refinement precedes individual channels,
+    // while imported-profile curves remain last. The existing refinement weights are unchanged.
     let actual = render_linear(&both, OutputSpace::ProPhoto);
     let master = both.curve.master.render_lut();
     let red = both.curve.red.render_lut();
@@ -894,9 +894,9 @@ fn v2_curves_are_output_independent_and_keep_global_refine_profile_order() {
     let pb = look.blue.render_lut();
     for (before, actual) in pre_curve.as_chunks::<3>().0.iter().zip(actual.as_chunks::<3>().0) {
         let encoded = before.map(linear_to_srgb);
-        let global = [red.eval(master.eval(encoded[0])), master.eval(encoded[1]), master.eval(encoded[2])];
-        let refined = crate::finish::refine_saturation(encoded, global, 0.25);
-        let expected = [pm.eval(refined[0]), pm.eval(refined[1]), pb.eval(pm.eval(refined[2]))].map(srgb_to_linear);
+        let mastered = encoded.map(|v| master.eval(v));
+        let refined = crate::finish::refine_saturation(encoded, mastered, 0.25);
+        let expected = [pm.eval(red.eval(refined[0])), pm.eval(refined[1]), pb.eval(pm.eval(refined[2]))].map(srgb_to_linear);
         assert!(actual.iter().zip(expected).all(|(a, b)| (a - b).abs() < 3e-6), "{actual:?} != {expected:?}");
     }
     // Bypass eliminates only global curves; the independent profile stays in the same domain.

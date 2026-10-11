@@ -18,6 +18,16 @@ unwanted colour changes when only a red, green or blue curve is edited; the save
 is retained. V1 and HDR, including enabled HDR with zero extra headroom, keep their prior behavior.
 See the [bounded native comparisons](target-app-parity.md#channel-only-refine-saturation-2026-10-11).
 
+The SDR V2/V3 mixed-curve correction separates master/parametric refinement
+from the following individual-channel curves. The Refine formula, fixed encoding domain and
+profile stage stay unchanged. It retains the old composed LUT at exactly100, and leaves
+master-only, channel-only, V1 and HDR paths intact. Eight native master/channel controls and
+mixed100 preserve RGB16/ICC exactly. Final integration CI, actual GPU checks and final-native
+equivalence passed; cache64 invalidates prior rendered previews. Refine99.99999 and100 are
+native-identical on the fixed chart, without a general continuity claim. Sequential LUT evaluation
+below100 remains an approximation to composed-LUT sampling. See the
+[mixed-curve evidence](target-app-parity.md#mixed-masterchannel-ordering-correction-2026-10-11).
+
 V1 retains its original target-primary curve stage. V2 bypasses its extra curve matrix/transfer
 operations when both curve LUT stages are identity, so no-curve renders without an active runtime
 table retain the same samples. Grain and
@@ -54,6 +64,9 @@ profile bypass and Amount 0 skip the table and its matrix round trip. See
 fork's still-unreleased V2/V3 contract in place. Existing development V2/V3 images with only
 individual-channel curves and Refine below 100 will render differently; their saved settings are
 not rewritten. V1 stays frozen. This exception does not permit changing a released process's look.
+The verified mixed-order correction uses the same unreleased-fork exception, changing affected development
+V2/V3 SDR mixed edits below100 without rewriting their settings. It adds no permission to retune
+released processes, the master endpoint formula, V1 or HDR.
 
 ## Adding a process
 

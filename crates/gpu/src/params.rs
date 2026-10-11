@@ -84,6 +84,9 @@ const FIELDS: &[(&str, usize)] = &[
     ("CURVE_IN_M", 9),
     ("CURVE_OUT_M", 9),
     ("CURVE_LIMIT", 1),
+    ("SPLIT_CURVE_OFF", 1),
+    ("SPLIT_CURVES", 1),
+    ("SPLIT_CHANNEL_MASK", 1),
 ];
 
 /// `(name, index)` of every field (for the WGSL constants).
@@ -150,7 +153,7 @@ pub struct Present {
 }
 
 /// The `finish` kernel's parameter block and auxiliary table (tone LUT | chroma curve | sRGB LUT | global/profile curve LUTs |
-/// mask terms) for `fp` with `masks` (their local adjustments' terms).
+/// optional split master/channel LUTs | mask terms) for `fp` with `masks` (their local adjustments' terms).
 pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present) -> (Vec<u32>, Vec<f32>) {
     let mut aux: Vec<f32> = fp.tone.lut().to_vec();
     aux.extend_from_slice(fp.tone.chroma_lut());
@@ -169,6 +172,20 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
             aux.extend_from_slice(&l.v);
         }
     }
+    let split_curve_off = aux.len();
+    let mut split_channel_mask = 0u32;
+    if let Some(split) = &fp.split_curves {
+        aux.extend_from_slice(&split.master.v);
+        for (i, channel) in split.channels.iter().enumerate() {
+            if let Some(channel) = channel {
+                split_channel_mask |= 1u32 << i;
+                aux.extend_from_slice(&channel.v);
+            } else {
+                // The mask skips identity axes; their fixed slots are never evaluated.
+                aux.resize(aux.len() + CURVE_N as usize, 0.0);
+            }
+        }
+    }
     let mask_off = aux.len();
     for m in masks {
         aux.extend_from_slice(m);
@@ -184,6 +201,9 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.b("CURVES", fp.curves.is_some());
     p.u("PROFILE_CURVE_OFF", profile_curve_off as u32);
     p.b("PROFILE_CURVES", fp.profile_curves.is_some());
+    p.u("SPLIT_CURVE_OFF", split_curve_off as u32);
+    p.b("SPLIT_CURVES", fp.split_curves.is_some());
+    p.u("SPLIT_CHANNEL_MASK", split_channel_mask);
     p.f("REFINE_SAT", fp.refine_sat);
     if let Some(space) = fp.curve_space {
         p.b("CURVE_WORKING", true);
