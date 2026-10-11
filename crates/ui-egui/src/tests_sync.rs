@@ -423,3 +423,284 @@ fn while_the_folder_is_listed_its_row_says_what_was_listed_and_its_bar_moves_on_
     p.checked.store(10, Relaxed);
     assert_eq!(crate::sync::scan_row(&p, "photos/Various"), (10, 64085, "photos/Various".to_string()));
 }
+
+// ---- the scan need not be waited for ----
+//
+// * While the folder is scanned, the dialog's button is Continue in Background: the dialog
+//   closes, the scan goes on under its row, and the app is free for other things.
+// * When the scan is done nothing pops up: a notice in the activity stack says what was found.
+//   A click on it opens the dialog with that result; ✕ lets go of it.
+// * A scan that found nothing to do only says so.
+// * ✕ on the scan's row stops a background scan too, and no notice follows.
+
+/// A gate for the scan of `h`: it can't finish until the returned flag is set (reading the new
+/// file waits on it).
+fn gated(h: &mut Headless) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let g = gate.clone();
+    h.app.session.media.file_probe = Some(std::sync::Arc::new(move |_: &str| {
+        while !g.load(std::sync::atomic::Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        Ok(lightcraft_engine::media::ProbeInfo { format: "PNG".into(), ..Default::default() })
+    }));
+    gate
+}
+
+/// Open the dialog on `trip` and press Continue in Background while the scan is held.
+fn scan_in_background(h: &mut Headless, dir: &Scratch) {
+    crate::sync::open(&mut h.app, &dir.path("trip"), "trip", false).unwrap();
+    let hidden = |h: &Headless| h.app.ui.dialog.is_none();
+    for _ in 0..5 {
+        h.step();
+        let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        if h.step_until(Duration::from_secs(3), hidden) {
+            break;
+        }
+    }
+    assert!(h.app.ui.dialog.is_none(), "the dialog closes: {:?}", h.app.ui.dialog);
+    assert!(h.app.sync.is_some(), "and the scan goes on");
+}
+
+fn has_widget(h: &Headless, id: &str) -> bool {
+    h.app.widgets.iter().any(|(w, _)| w == id)
+}
+
+fn click_widget(h: &mut Headless, id: &str, landed: impl Fn(&Headless) -> bool) {
+    for _ in 0..5 {
+        h.step();
+        let r = h.request("ui.clickWidget", json!({"id": id}), T);
+        assert_eq!(r["ok"], true, "{id}: {r}");
+        if h.step_until(Duration::from_secs(3), &landed) {
+            return;
+        }
+    }
+    panic!("the click on {id} never landed: {:?}", h.app.ui.dialog);
+}
+
+#[test]
+fn a_scan_continued_in_the_background_ends_in_a_notice_that_opens_its_result() {
+    let dir = Scratch::new("background");
+    let mut h = changed_folder(&dir);
+    let gate = gated(&mut h);
+    scan_in_background(&mut h, &dir);
+    let rows = h.app.session.activity.list();
+    assert_eq!((rows.len(), rows[0].label.as_str()), (1, "Looking for changes"), "its row stays: {rows:?}");
+
+    // meanwhile the app is free: a photo is rated, frames go by
+    let id = h.app.session.catalog.photos().find(|p| p.file_name == "a.png").map(|p| p.id.0).unwrap();
+    assert!(h.app.run("library.select", json!({"ids": [id]})).is_ok());
+    assert!(h.app.run("photo.rate", json!({"rating": 3})).is_ok());
+    for _ in 0..5 {
+        h.step();
+    }
+    assert!(h.app.sync.is_some() && h.app.sync_ready.is_none(), "still scanning");
+
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(h.step_until(T, |h| h.app.sync.is_none()), "the scan ends");
+    h.step();
+    h.step();
+    assert!(h.app.ui.dialog.is_none(), "nothing pops up: {:?}", h.app.ui.dialog);
+    let ready = h.app.sync_ready.clone().expect("a notice waits");
+    assert_eq!((ready.counts.new, ready.counts.missing, ready.changes()), (1, 1, 2), "{ready:?}");
+    assert!(has_widget(&h, "activity:scanReady"), "shown in the activity stack");
+    assert!(h.app.session.activity.list().is_empty(), "the scan's own row is gone");
+    // it stays until it is looked at
+    for _ in 0..20 {
+        h.step();
+    }
+    assert!(h.app.sync_ready.is_some() && h.app.session.folder_changes.is_some());
+
+    click_widget(&mut h, "activity:scanReady:review", |h| matches!(&h.app.ui.dialog, Some(Dialog::SynchronizeFolder { counts: Some(_), .. })));
+    let c = counts(&h);
+    assert_eq!((c.new, c.missing), (1, 1), "the dialog shows what the scan found: {c:?}");
+    assert!(h.app.sync_ready.is_none() && h.app.sync.is_none(), "without scanning again");
+    // (with the rating undone the folder's photos are as scanned: the scan is still current)
+    h.app.session.undo_step().unwrap();
+    synchronize(&mut h);
+    assert_eq!(in_library(&h), vec!["a.png", "b.png", "c.png"]);
+}
+
+#[test]
+fn dismissing_the_notice_lets_go_of_what_the_scan_found() {
+    let dir = Scratch::new("dismiss");
+    let mut h = changed_folder(&dir);
+    let gate = gated(&mut h);
+    scan_in_background(&mut h, &dir);
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(h.step_until(T, |h| h.app.sync_ready.is_some()), "a notice waits");
+
+    click_widget(&mut h, "activity:scanReady:dismiss", |h| h.app.sync_ready.is_none());
+
+    assert!(h.app.session.folder_changes.is_none(), "the scan is let go of");
+    assert!(h.app.ui.dialog.is_none());
+    h.step();
+    assert!(!has_widget(&h, "activity:scanReady"));
+    assert_eq!(in_library(&h), vec!["a.png", "b.png"], "nothing was changed");
+}
+
+#[test]
+fn a_background_scan_that_found_nothing_only_says_so() {
+    let dir = Scratch::new("background-none");
+    let mut h = changed_folder(&dir);
+    // bring the library up to date first
+    open_and_scan(&mut h, &dir.path("trip"));
+    tick_remove_missing(&mut h);
+    synchronize(&mut h);
+    h.settle(SETTLE);
+
+    crate::sync::open(&mut h.app, &dir.path("trip"), "trip", false).unwrap();
+    let dlg = h.app.ui.dialog.take().expect("the dialog is open");
+    // (pressed before the scan can have ended: no frame has run since it started)
+    let r = crate::panels::dialogs::confirm_dialog(&mut h.app, &dlg);
+    assert!(r.is_ok(), "{r:?}");
+    assert!(h.step_until(T, |h| h.app.sync.is_none()), "the scan ends");
+    assert!(h.app.sync_ready.is_none(), "no notice: there is nothing to look at");
+    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.contains("up to date"), "{toast:?}");
+    assert!(h.app.session.folder_changes.is_none());
+}
+
+#[test]
+fn the_cross_on_its_row_stops_a_background_scan_without_a_notice() {
+    let dir = Scratch::new("background-stop");
+    let mut h = changed_folder(&dir);
+    let gate = gated(&mut h);
+    scan_in_background(&mut h, &dir);
+    // another dialog is open meanwhile: it is not closed by the scan ending
+    h.app.ui.dialog = Some(Dialog::About);
+    let rows = h.app.session.activity.list();
+    h.app.session.activity.cancel(rows[0].id).unwrap();
+    h.step();
+    assert!(h.app.sync.is_none(), "✕ stops the scan");
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::About)), "{:?}", h.app.ui.dialog);
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
+    h.app.ui.dialog = None;
+    h.settle(SETTLE);
+    assert!(h.app.sync_ready.is_none() && h.app.ui.dialog.is_none(), "a stopped scan says nothing later");
+}
+
+#[test]
+fn opening_the_dialog_again_replaces_a_waiting_notice() {
+    let dir = Scratch::new("background-again");
+    let mut h = changed_folder(&dir);
+    let gate = gated(&mut h);
+    scan_in_background(&mut h, &dir);
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(h.step_until(T, |h| h.app.sync_ready.is_some()));
+    // Synchronize Folder… from the menu once more: a fresh scan, not two answers
+    open_and_scan(&mut h, &dir.path("trip"));
+    assert!(h.app.sync_ready.is_none(), "the old notice is gone");
+    let c = counts(&h);
+    assert_eq!((c.new, c.missing), (1, 1), "{c:?}");
+}
+
+#[test]
+fn a_result_looked_at_after_the_folder_changed_is_scanned_again_not_acted_on() {
+    let dir = Scratch::new("background-stale");
+    let mut h = changed_folder(&dir);
+    let gate = gated(&mut h);
+    scan_in_background(&mut h, &dir);
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(h.step_until(T, |h| h.app.sync_ready.is_some()));
+    // the person went on working in the folder before looking
+    let id = h.app.session.catalog.photos().find(|p| p.file_name == "a.png").map(|p| p.id.0).unwrap();
+    h.app.run("library.select", json!({"ids": [id]})).unwrap();
+    h.app.run("photo.rate", json!({"rating": 3})).unwrap();
+    crate::sync::review(&mut h.app);
+    let dlg = h.app.ui.dialog.take().expect("the dialog is open");
+    let before = in_library(&h);
+    let r = crate::panels::dialogs::confirm_dialog(&mut h.app, &dlg);
+    assert!(r.is_err() && h.app.sync_run.is_none(), "what was shown is no longer so: {r:?}");
+    assert_eq!(in_library(&h), before);
+    assert!(h.app.sync.is_some(), "it is scanned again");
+}
+
+#[test]
+fn another_folder_is_not_scanned_over_a_background_scan_or_its_notice() {
+    let dir = Scratch::new("background-other");
+    write_png(&dir.path("other/x.png"), 9);
+    let mut h = changed_folder(&dir);
+    h.app.session.execute("library.import", &json!({"paths": [dir.path("other")]})).unwrap();
+    let gate = gated(&mut h);
+    scan_in_background(&mut h, &dir);
+
+    let e = crate::sync::open(&mut h.app, &dir.path("other"), "other", false).unwrap_err();
+    assert!(e.contains("still being scanned") && e.contains("trip"), "{e}");
+    assert!(h.app.sync.is_some() && h.app.ui.dialog.is_none(), "the scan goes on");
+
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(h.step_until(T, |h| h.app.sync_ready.is_some()));
+    let e = crate::sync::open(&mut h.app, &dir.path("other"), "other", false).unwrap_err();
+    assert!(e.contains("changes found in") && e.contains("trip"), "{e}");
+    // and a folder that can't be synchronized at all takes nothing away either
+    assert!(crate::sync::open(&mut h.app, &dir.path("nowhere"), "nowhere", false).is_err());
+    assert!(h.app.sync_ready.is_some() && h.app.session.folder_changes.is_some(), "the notice still waits");
+
+    // once it is dismissed the other folder can be scanned
+    crate::sync::dismiss(&mut h.app);
+    assert!(crate::sync::open(&mut h.app, &dir.path("other"), "other", false).is_ok());
+}
+
+#[test]
+fn what_was_ticked_comes_back_with_the_result() {
+    let dir = Scratch::new("background-ticks");
+    let mut h = changed_folder(&dir);
+    let gate = gated(&mut h);
+    crate::sync::open(&mut h.app, &dir.path("trip"), "trip", false).unwrap();
+    // a dialog that had scanned before and scans again still has its ticks
+    let mut dlg = h.app.ui.dialog.take().expect("the dialog is open");
+    if let Dialog::SynchronizeFolder { import_new, remove_missing, .. } = &mut dlg {
+        (*import_new, *remove_missing) = (false, true);
+    }
+    assert!(crate::panels::dialogs::confirm_dialog(&mut h.app, &dlg).is_ok());
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(h.step_until(T, |h| h.app.sync_ready.is_some()));
+    // another dialog is open: the notice waits rather than take it away
+    h.app.ui.dialog = Some(Dialog::About);
+    crate::sync::review(&mut h.app);
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::About)) && h.app.sync_ready.is_some());
+    h.app.ui.dialog = None;
+    crate::sync::review(&mut h.app);
+    assert!(
+        matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { import_new: false, remove_missing: true, counts: Some(_), .. })),
+        "{:?}",
+        h.app.ui.dialog
+    );
+    // closing the dialog lets go of the scan, as for one that was never in the background
+    h.app.ui.dialog = None;
+    h.step();
+    assert!(h.app.session.folder_changes.is_none());
+}
+
+#[test]
+fn a_folder_that_isnt_there_is_a_notice_too_and_another_library_gets_none() {
+    let dir = Scratch::new("background-offline");
+    let mut h = changed_folder(&dir);
+    std::fs::rename(dir.0.join("trip"), dir.0.join("trip-elsewhere")).unwrap();
+    crate::sync::open(&mut h.app, &dir.path("trip"), "trip", false).unwrap();
+    let dlg = h.app.ui.dialog.take().expect("the dialog is open");
+    assert!(crate::panels::dialogs::confirm_dialog(&mut h.app, &dlg).is_ok());
+    assert!(h.step_until(T, |h| h.app.sync_ready.is_some()), "a notice waits");
+    assert!(h.app.sync_ready.as_ref().is_some_and(|r| r.counts.offline));
+
+    // File ▸ Open Library: the notice was about the library before
+    crate::sync::library_changed(&mut h.app);
+    assert!(h.app.sync_ready.is_none() && h.app.session.folder_changes.is_none());
+}
+
+#[test]
+fn synchronize_waits_a_moment_after_its_button_stopped_being_continue_in_background() {
+    let dir = Scratch::new("settle");
+    let mut h = changed_folder(&dir);
+    open_and_scan(&mut h, &dir.path("trip"));
+    // a click meant for Continue in Background, landing as the scan ends
+    let before = in_library(&h);
+    let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(h.app.sync_run.is_none() && matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { .. })), "nothing was started");
+    assert_eq!(in_library(&h), before);
+    assert!(!crate::sync::settled(&h.app, &h.view.ctx));
+}

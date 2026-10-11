@@ -830,6 +830,13 @@
 - Compare and Reference View panes say "Rendering…" (or that the photo can't be opened) the same way, so a
   magnified preview isn't taken for the photo when checking focus at 1:1.
 
+### Synchronize Folder: no need to wait for the scan
+- While Synchronize Folder… scans a folder (a large one on a network share can take minutes), its button is
+  **Continue in Background**: the dialog closes, the scan goes on under its row in the activity stack, and you can
+  go on working. When it is done nothing pops up: a notice in the activity stack says how many changes were found.
+  Click it to open the dialog with the result, or ✕ to let go of it. A scan that found nothing to do only says so.
+  Cancel and the row's ✕ stop the scan as before. One folder is scanned at a time.
+
 ### Lens corrections
 - Sony A7R VI (ILCE-7RM6) raws are corrected for lens distortion from the table the camera records in each file,
   under Optics ▸ Enable Lens Corrections, on by default for newly imported photos. On 33 photos shot with the camera's

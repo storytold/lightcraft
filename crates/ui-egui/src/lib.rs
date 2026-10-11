@@ -476,6 +476,10 @@ pub struct LightcraftApp {
     pub sync: Option<sync::SyncTask>,
     /// `session.folder_changes` came from the Synchronize Folder dialog (and goes with it).
     pub sync_owns_changes: bool,
+    /// When (app time, s) the open Synchronize Folder dialog got its scan ([`sync::settled`]).
+    pub sync_scanned_at: f64,
+    /// A Synchronize Folder scan that finished in the background and waits to be looked at.
+    pub sync_ready: Option<sync::SyncReady>,
     /// A Synchronize Folder at work in the background.
     pub sync_run: Option<sync::SyncRun>,
     /// A Lightroom catalog inspect/import in progress.
@@ -587,6 +591,8 @@ impl LightcraftApp {
             scan: None,
             sync: None,
             sync_owns_changes: false,
+            sync_scanned_at: f64::NEG_INFINITY,
+            sync_ready: None,
             sync_run: None,
             lightroom: None,
             lightroom_last: None,
@@ -1530,6 +1536,7 @@ impl LightcraftApp {
             return;
         }
         self.shown_library = Some(generation);
+        sync::library_changed(self);
         if let Some(l) = self.session.library.as_ref().filter(|l| l.on_disk) {
             let path = l.dir.to_string_lossy().into_owned();
             panels::settings::remember_library(&mut self.ui.settings.recent_libraries, &path);

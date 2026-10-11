@@ -305,5 +305,8 @@
   "Could not read {name}: {e}": "{name} を読み取れませんでした: {e}",
   "Added {n} photo{}": "{n}枚を追加しました{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom カタログ「{catalog}」をどこに読み込みますか？",
-  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}",
+  "Changes found: {n}": "見つかった変更: {n}",
+  "“{name}” is still being scanned: wait for it, or stop it with ✕ on its row": "「{name}」はまだスキャン中です。終わるまで待つか、その行の ✕ で停止してください",
+  "Look at the changes found in “{name}” first, or dismiss them": "先に「{name}」で見つかった変更を確認するか、閉じてください"
 }
