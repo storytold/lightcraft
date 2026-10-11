@@ -866,6 +866,26 @@
   D7000, D5100, D800, D800E, Df, D4, D3, D3S, D700, D300, D300S, D600, D610, D810, D4S, D5600, Coolpix A, D3000, D40X,
   D60, D80 and D2Xs now show the area the camera itself frames, a few pixels smaller than before.
 
+### Import without the photos' own metadata
+- An import can leave what the photos already say about themselves in the files: keywords, ratings and labels,
+  titles and captions (with creator and copyright), location (GPS and place names) and the develop settings of a
+  sidecar are each read or not. Choose it for the library in Settings ▸ Import ▸ **Read from photos**, or for one
+  import in the Import Photos review (**Read**), which opens with the library's choice. Everything is read until
+  you choose otherwise. Agents: `read` in `library.import`, `import.read` in `library.preferences`.
+- What was not read stays in the file and its sidecar, and stays the file's: when LightCraft writes that photo's
+  sidecar later (automatically, or with Save Metadata to File), it writes nothing of those kinds and takes nothing
+  of them out, whatever you gave the photo here since. A rating, a title or keywords given here to such a photo
+  are in the library only. (To have LightCraft write a kind to the sidecars, import with it read.)
+- The library's default creator and copyright are still for photos that have none: a photo whose own were left in
+  the file is not given the library's in their place.
+- The library's choice also goes for photos that are dropped in, found by Auto Import or as new files by
+  Synchronize Folder, or browsed in Local; and when Synchronize Folder reads a sidecar that changed, it reads it
+  without the kinds that were left in that photo's file. Not for: a Lightroom catalog import, which always reads
+  everything (the catalog's own account is laid over the files'); Read Metadata from File, which you ask for
+  and which reads everything into the library (the sidecar is still not written for the kinds that were left); and
+  photos already browsed in Local, which keep what was read when they were first shown. With Copy, the sidecar is
+  not copied with the photo (as before), so what was not read is then only at the source.
+
 ### JPEG XL export
 - Export as JPEG XL (issue #247): Format ▸ JPEG XL in the Export dialog, `format: "jxl"` for agents and the CLI
   (`render in.raw -o out.jxl`). Quality as for JPEG, or Lossless; Effort (Fast / Normal) trades time for a
