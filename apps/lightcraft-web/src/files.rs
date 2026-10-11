@@ -17,6 +17,7 @@ use std::io;
 use std::sync::{Arc, Mutex};
 
 use lightcraft_engine::catalog::Store;
+use lightcraft_engine::library::SettingsFile;
 
 /// What has to be written for a dirty file.
 #[derive(Clone, Debug, PartialEq)]
@@ -199,8 +200,10 @@ impl Store for FilesStore {
     }
 }
 
-/// Names of the library files read at start-up.
-pub const LIBRARY_FILES: [&str; 6] = ["catalog.snap", "catalog.log", "presets.json", "view.json", "prefs.json", "ui.json"];
+/// Names of the library files read at start-up: the catalog, the library's own files (every one
+/// of `SettingsFile::ALL`; a test holds that), and the interface's.
+pub const LIBRARY_FILES: [&str; 6] =
+    ["catalog.snap", "catalog.log", SettingsFile::Presets.name(), SettingsFile::View.name(), SettingsFile::Prefs.name(), "ui.json"];
 
 /// Is a browser storage error, by its `DOMException` name, "the entry doesn't exist"? Only
 /// `NotFoundError` is; anything else (security, type mismatch, an unreadable store) is a failure.
@@ -229,6 +232,14 @@ mod tests {
     use lightcraft_engine::Session;
     use lightcraft_engine::library::LibraryStores;
     use serde_json::json;
+
+    /// Every file the library has is read at start-up (and so saved and backed up by the page).
+    #[test]
+    fn every_file_of_the_library_is_read_at_start_up() {
+        for file in SettingsFile::ALL {
+            assert!(LIBRARY_FILES.contains(&file.name()), "{}", file.name());
+        }
+    }
 
     /// Apply flush ops to a "disk" map, as the backend would.
     fn flush(files: &Files, disk: &mut BTreeMap<String, Vec<u8>>) {

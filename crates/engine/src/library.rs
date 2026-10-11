@@ -76,8 +76,8 @@ pub struct Library {
     /// cached in `thumbs/`.
     pub on_disk: bool,
     journal: Journal,
-    /// presets.json, view.json, prefs.json.
-    files: Box<dyn Store>,
+    /// The library's own files beside the catalog ([`SettingsFile`]).
+    pub(crate) files: Box<dyn Store>,
     /// What happened when the catalog was loaded.
     pub report: LoadReport,
     /// Last persistence error (shown by the UI; ops stay pending and are retried).
@@ -106,13 +106,88 @@ pub struct Library {
     lock: Option<LibraryLock>,
 }
 
+/// One of the library's own files beside the catalog: what it remembers that is not in the
+/// catalog. This is the one list of them. A file the library writes there is a file its backups
+/// take along (`cmd::backup`) and the browser build reads at start-up, so the library's file
+/// store writes no file that is not here ([`Listed`]): add a variant, and both follow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsFile {
+    /// User presets and favourites.
+    Presets,
+    /// What the library shows: source, sort, filter.
+    View,
+    /// Preferences that belong to the library.
+    Prefs,
+}
+
+impl SettingsFile {
+    pub const ALL: [SettingsFile; 3] = [SettingsFile::Presets, SettingsFile::View, SettingsFile::Prefs];
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            SettingsFile::Presets => "presets.json",
+            SettingsFile::View => "view.json",
+            SettingsFile::Prefs => "prefs.json",
+        }
+    }
+}
+
+/// The names of [`SettingsFile::ALL`].
+pub const SETTINGS_FILES: [&str; 3] = [SettingsFile::Presets.name(), SettingsFile::View.name(), SettingsFile::Prefs.name()];
+
+const PRESETS: &str = SettingsFile::Presets.name();
+const VIEW: &str = SettingsFile::View.name();
+const PREFS: &str = SettingsFile::Prefs.name();
+
+/// The library's file store, writing only the files the library lists ([`SettingsFile`]), and
+/// one of those set aside under its own name (`prefs.json.corrupt-…`).
+struct Listed(Box<dyn Store>);
+
+impl Listed {
+    fn check(name: &str) -> std::io::Result<()> {
+        let listed = SETTINGS_FILES.iter().any(|file| name.strip_prefix(file).is_some_and(|rest| rest.is_empty() || rest.starts_with('.')));
+        if listed {
+            return Ok(());
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{name} is not one of the library's files: list it in library::SettingsFile, so that backups take it along"),
+        ))
+    }
+}
+
+impl Store for Listed {
+    fn read(&mut self, name: &str) -> std::io::Result<Option<Vec<u8>>> {
+        self.0.read(name)
+    }
+    fn write_atomic(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        Listed::check(name)?;
+        self.0.write_atomic(name, data)
+    }
+    fn append(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        Listed::check(name)?;
+        self.0.append(name, data)
+    }
+    fn truncate(&mut self, name: &str, len: u64) -> std::io::Result<()> {
+        Listed::check(name)?;
+        self.0.truncate(name, len)
+    }
+    fn remove(&mut self, name: &str) -> std::io::Result<()> {
+        Listed::check(name)?;
+        self.0.remove(name)
+    }
+    fn describe(&self) -> String {
+        self.0.describe()
+    }
+}
+
 /// Where a library's files live (see [`Session::open_library_in`]).
 pub struct LibraryStores {
     /// Shown as the library's location (`library.info`).
     pub dir: PathBuf,
     /// The catalog journal (`catalog.snap`, `catalog.log`).
     pub catalog: Box<dyn Store>,
-    /// presets.json, view.json, prefs.json.
+    /// The library's own files beside the catalog ([`SettingsFile`]).
     pub files: Box<dyn Store>,
     /// `dir` is a real directory (enables `Originals/` copies and the `thumbs/` disk cache).
     pub on_disk: bool,
@@ -483,7 +558,8 @@ impl Session {
 
     /// Open `stores`; the new library takes `lock` once nothing can fail any more.
     fn open_stores(&mut self, stores: LibraryStores, seed_demo: bool, lock: &mut Option<LibraryLock>) -> Result<()> {
-        let LibraryStores { dir, catalog, mut files, on_disk } = stores;
+        let LibraryStores { dir, catalog, files, on_disk } = stores;
+        let mut files: Box<dyn Store> = Box::new(Listed(files));
         self.media.smart_dir = on_disk.then(|| crate::smart::dir(&dir));
         // the current library may be these same files: let its background snapshot land first
         if let Some(old) = self.library.as_mut()
@@ -529,7 +605,7 @@ impl Session {
         }
         let mut settings = SettingsLoad::default();
         // preferences
-        let prefs = settings.read::<PrefsFile>(files.as_mut(), "prefs.json").unwrap_or_default();
+        let prefs = settings.read::<PrefsFile>(files.as_mut(), PREFS).unwrap_or_default();
         self.xmp = prefs.xmp;
         self.backup_dir = prefs.backup_dir;
         self.last_export = prefs.last_export;
@@ -561,7 +637,7 @@ impl Session {
             self.media.smart_dir = Some(d.clone());
         }
         // presets
-        if let Some(f) = settings.read::<PresetsFile>(files.as_mut(), "presets.json") {
+        if let Some(f) = settings.read::<PresetsFile>(files.as_mut(), PRESETS) {
             for p in &mut self.presets {
                 p.favorite = p.builtin && f.favorites.contains(&p.id) || (!p.builtin && p.favorite);
             }
@@ -576,7 +652,7 @@ impl Session {
             self.profile_recent = f.profile_recent.into_iter().filter(known).take(crate::presets::RECENT_PROFILES).collect();
         }
         // view state
-        if let Some(v) = settings.read::<ViewFile>(files.as_mut(), "view.json") {
+        if let Some(v) = settings.read::<ViewFile>(files.as_mut(), VIEW) {
             self.source = v.source;
             self.browse = v.browse;
             self.library_folder = v.library_folder.filter(|f| !f.trim().is_empty());
@@ -686,7 +762,7 @@ impl Session {
             log::error!("library: compaction: {e}");
             lib.last_error = Some(format!("compaction: {e}"));
         }
-        let due = self.library.as_ref().is_some_and(|l| l.presets_saved.differs(self) && !l.blocked.contains(&"presets.json"));
+        let due = self.library.as_ref().is_some_and(|l| l.presets_saved.differs(self) && !l.blocked.contains(&PRESETS));
         if !due {
             return Ok(());
         }
@@ -697,7 +773,7 @@ impl Session {
         if state.hash == lib.presets_saved.hash {
             lib.presets_saved = state;
             lib.presets_error = None;
-        } else if let Err(e) = lib.files.write_atomic("presets.json", presets.as_bytes()) {
+        } else if let Err(e) = lib.files.write_atomic(PRESETS, presets.as_bytes()) {
             // the state stays stale: retried by the next command and the frame loop (backing off);
             // meanwhile the presets count as unsaved, so the UI warns and a backup refuses
             log::error!("library: presets: {e}");
@@ -801,8 +877,8 @@ impl Session {
         }
         let v = self.view_json();
         let Some(lib) = self.library.as_mut() else { return };
-        if v != lib.view_written && !lib.blocked.contains(&"view.json") {
-            match lib.files.write_atomic("view.json", &v) {
+        if v != lib.view_written && !lib.blocked.contains(&VIEW) {
+            match lib.files.write_atomic(VIEW, &v) {
                 Ok(()) => lib.view_written = v,
                 Err(e) => log::error!("library: view: {e}"),
             }
@@ -840,12 +916,12 @@ impl Session {
         })
         .unwrap_or_default();
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
-        if lib.blocked.contains(&"prefs.json") {
+        if lib.blocked.contains(&PREFS) {
             return Err(EngineError::Other(
                 "prefs: prefs.json couldn't be read when the library opened, so it isn't overwritten; reopen the library to save preferences".into(),
             ));
         }
-        lib.files.write_atomic("prefs.json", &v).map_err(|e| EngineError::Other(format!("prefs: {e}")))
+        lib.files.write_atomic(PREFS, &v).map_err(|e| EngineError::Other(format!("prefs: {e}")))
     }
 
     /// Warnings about the open library not handed out yet: its settings files, and a lock that

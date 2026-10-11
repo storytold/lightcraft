@@ -20,8 +20,8 @@ use crate::{Result, Session};
 
 /// The folder in the library that backups go to unless another is asked for.
 pub const BACKUPS: &str = "Backups";
-/// The library's other files a backup takes along.
-const ALSO: &[&str] = &["presets.json", "view.json", "prefs.json"];
+/// The library's other files a backup takes along: every one it has.
+const ALSO: &[&str] = &crate::library::SETTINGS_FILES;
 
 /// A backup under way, or the last one made.
 #[derive(Default)]

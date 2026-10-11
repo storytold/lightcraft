@@ -243,3 +243,41 @@ fn a_backup_is_its_librarys() {
         let _ = std::fs::remove_dir_all(d);
     }
 }
+
+/// Given a library with every one of its own files (presets, view, preferences), when it is
+/// backed up, then the backup has each of them, as it is in the library.
+#[test]
+fn a_backup_takes_every_file_of_the_library() {
+    use crate::library::SettingsFile;
+    let dir = temp_dir("every-file");
+    let mut s = open(&dir);
+    for file in SettingsFile::ALL {
+        std::fs::write(dir.join(file.name()), format!("{{\"file\":\"{}\"}}", file.name())).unwrap();
+    }
+    let made = s.execute("library.backup", &json!({})).unwrap();
+    let backup = PathBuf::from(made["report"]["dir"].as_str().unwrap());
+    for file in SettingsFile::ALL {
+        assert_eq!(std::fs::read(backup.join(file.name())).unwrap(), std::fs::read(dir.join(file.name())).unwrap(), "{}", file.name());
+    }
+    assert_eq!(crate::library::SETTINGS_FILES.to_vec(), SettingsFile::ALL.map(SettingsFile::name).to_vec());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Given an open library, when something writes a file beside the catalog that the library does
+/// not list, then it is refused, and the error says where to list it: a file the library writes
+/// is a file its backups take along, so there is no writing one without listing it. A listed
+/// file, and a damaged one set aside under its name, are written.
+#[test]
+fn the_library_writes_only_the_files_it_lists() {
+    let dir = temp_dir("listed-files");
+    let mut s = open(&dir);
+    let files = &mut s.library.as_mut().unwrap().files;
+    let e = files.write_atomic("locations.json", b"{}").unwrap_err();
+    assert!(e.to_string().contains("locations.json") && e.to_string().contains("SettingsFile"), "{e}");
+    assert!(files.append("locations.json", b"{}").is_err());
+    assert!(!dir.join("locations.json").exists());
+    files.write_atomic("view.json", b"{}").unwrap();
+    files.write_atomic("prefs.json.corrupt-1", b"{").unwrap();
+    assert!(dir.join("view.json").exists() && dir.join("prefs.json.corrupt-1").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
