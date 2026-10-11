@@ -49,6 +49,9 @@ Overrides (read once at launch):
 - `LIGHTCRAFT_GPU=0`: GPU rendering off for the process (the window is unaffected).
 - Both `LIGHTCRAFT_GPU=0` and `LIGHTCRAFT_GPU_BACKEND=off` also keep AI Denoise, the face models
   and the AI mask model (SAM 3 on Metal) on the CPU.
+- `LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1`: accept a software adapter (llvmpipe / lavapipe, WARP), which is
+  otherwise refused because the CPU pipeline is faster. For tests on machines without a GPU (CI);
+  the app never sets it.
 
 **DX12 shader compiler (issue #471).** Every instance (window and compute) compiles DX12 shaders with
 FXC (`d3dcompiler_47.dll`, part of Windows; `lightcraft_gpu::backend::backend_options`). wgpu's
@@ -271,6 +274,16 @@ non-Apple GPU verified: all 16 tests pass, 135 compared cases. 124 differ by max
 bit-identical, and one (the point colour range overlay) has max 2 LSB on 0.0002% of pixels. Worst
 mean 0.0003 LSB. That is the same picture as on Metal, inside the bounds
 (`cargo test -p lightcraft-gpu --release --test it equivalence:: -- --nocapture`).
+
+**In CI** (`.github/workflows/ci.yml`, issue #1050) they run on every platform: on Metal on the macOS
+runners, and on software adapters on Linux (Mesa lavapipe) and Windows (WARP, DX12 with FXC), which
+`LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1` admits (tests only: the app never sets it). The step fails if they
+skip. Measured on lavapipe (CI and locally) and WARP: all 134 compared renders within **max 1 LSB,
+mean ≤ 0.0003 LSB**, as on the M4 Pro; on the macOS runner's (paravirtual) Metal device one case reaches
+2 LSB (point colour range overlay, 0.0002% of pixels over 1), the rest max 1. The suite takes about
+50 s on lavapipe, 30 s on the macOS runner and 2–7.5 min on WARP. lavapipe's
+storage bindings stop at 128 MiB (the WebGPU default), so the two big-source tests use a 117 MiB
+source: above what a view keeps with its stages (96 MiB) and small enough to be uploaded there.
 
 Remaining differences come from f32 vs f64 coordinate math, fast-math transcendental functions on
 Metal and summation order in the box filters — all far below one 8-bit step.
