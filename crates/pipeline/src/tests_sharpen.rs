@@ -46,7 +46,7 @@ fn max_difference(a: &[u16], b: &[u16]) -> u16 {
 }
 
 #[test]
-fn local_sharpening_is_independent_of_global_masking() {
+fn local_sharpening_responds_to_global_masking() {
     let (src, mut s) = local_sharpening_fixture();
     let req = RenderRequest { depth: OutputDepth::U16, ..RenderRequest::fit(src.width, src.height) };
     let info = SourceInfo::default();
@@ -54,38 +54,50 @@ fn local_sharpening_is_independent_of_global_masking() {
     for process in [ProcessVersion::V1, ProcessVersion::V2] {
         s.process = process;
         s.detail.sharpen_masking = 0.0;
-        let expected = deep(&src, &s);
-        let plain = DevelopSettings { process, ..Default::default() };
-        assert!(max_difference(&expected, &deep(&src, &plain)) > 100, "fixture must exercise local sharpening in {process:?}");
-        // Global Amount is zero. Its Masking must not suppress an independent local edit.
+        let unmasked = deep(&src, &s);
+        let plain = deep(&src, &DevelopSettings { process, ..Default::default() });
+        let unmasked_response = max_difference(&unmasked, &plain);
+        assert!(unmasked_response > 100, "fixture must exercise local sharpening in {process:?}");
+        // Masking also suppresses local sharpening when global Amount is zero.
         for masking in [100.0, 50.0, 0.0] {
             s.detail.sharpen_masking = masking;
             let cold = deep(&src, &s);
             let DeepSamples::U16(warm) = render_cached(&src, &info, &s, &req, &cache).deep.unwrap().samples else { panic!("expected RGB16") };
-            assert_eq!(max_difference(&expected, &cold), 0, "{process:?}: global Masking {masking} changed local sharpening");
+            if masking > 0.0 {
+                assert!(max_difference(&plain, &cold) < unmasked_response, "{process:?}: Masking {masking} must suppress local sharpening");
+            } else {
+                assert_eq!(max_difference(&unmasked, &cold), 0, "{process:?}: returning Masking to zero must restore local sharpening");
+            }
             assert_eq!(max_difference(&cold, &warm), 0, "{process:?}: cached local sharpening at Masking {masking}");
         }
     }
 }
 
 #[test]
-fn local_sharpening_survives_detail_bypass() {
+fn local_sharpening_uses_effective_masking_through_detail_bypass() {
     let (src, mut s) = local_sharpening_fixture();
     let req = RenderRequest { depth: OutputDepth::U16, ..RenderRequest::fit(src.width, src.height) };
     let info = SourceInfo::default();
     let cache = StageCache::default();
     for process in [ProcessVersion::V1, ProcessVersion::V2] {
         s.process = process;
+        s.set_section_enabled("detail", true);
+        s.detail.sharpen_masking = 0.0;
+        let unmasked = deep(&src, &s);
         s.detail.sharpen_masking = 100.0;
-        let expected = deep(&src, &s);
+        let masked = deep(&src, &s);
+        assert!(max_difference(&unmasked, &masked) > 100, "fixture must exercise Masking of local sharpening in {process:?}");
         let saved_mask = s.masks.clone();
+        let saved_detail = s.detail;
         for enabled in [true, false, true] {
             s.set_section_enabled("detail", enabled);
             let cold = deep(&src, &s);
             let DeepSamples::U16(warm) = render_cached(&src, &info, &s, &req, &cache).deep.unwrap().samples else { panic!("expected RGB16") };
-            assert_eq!(max_difference(&expected, &cold), 0, "{process:?}: Detail enabled={enabled}: changed local sharpening");
+            let expected = if enabled { &masked } else { &unmasked };
+            assert_eq!(max_difference(expected, &cold), 0, "{process:?}: Detail enabled={enabled}: incorrect effective Masking");
             assert_eq!(max_difference(&cold, &warm), 0, "{process:?}: stale local sharpening cache when Detail enabled={enabled}");
             assert_eq!(s.masks, saved_mask, "bypass must preserve saved mask adjustments");
+            assert_eq!(s.detail, saved_detail, "bypass must preserve saved Detail adjustments");
         }
     }
 }

@@ -621,8 +621,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 let tame = 1.0 - 0.6 * smooth(0.4, 1.6, det.abs());
                 delta += tx * 1.1 * det.clamp(-1.0, 1.0) * tame;
                 if sp != 0.0 {
-                    // Local sharpening is independent of the global Detail-panel Masking control.
-                    delta += sp * 1.3 * det.clamp(-0.8, 0.8);
+                    let m = if sharpen_mask > 0.0 { smooth(sharpen_mask * 0.25, sharpen_mask * 0.25 + 0.15, det.abs()) } else { 1.0 };
+                    delta += sp * 1.3 * det.clamp(-0.8, 0.8) * m;
                 }
             }
             if sharpen != 0.0
@@ -998,14 +998,30 @@ mod tests {
         }))
         .unwrap();
         let info = SourceInfo { raw: true, camera_tone: Some(curve), ..Default::default() };
-        let s = DevelopSettings::default();
-        let sdr = base_tone(&s, &info, 1.0);
-        assert_eq!(sdr.apply(1.0), 1.0);
-        assert!(sdr.saturation_anchor().is_some());
-        let hdr = base_tone(&s, &info, 8.0);
-        assert!(hdr.saturation_anchor().is_none());
-        assert_eq!(hdr.lut(), ToneMap::hdr(0.0, 0.0, 0.0, 8.0).lut());
-        assert!(hdr.apply(16.0) > 1.0);
+        for process in [lightcraft_develop::ProcessVersion::V1, lightcraft_develop::ProcessVersion::V2] {
+            let s = DevelopSettings { process, ..Default::default() };
+            let sdr = base_tone(&s, &info, 1.0);
+            let expected_sdr = ToneMap::camera(&curve, 0.0, 0.0, 0.0);
+            assert_eq!(sdr.lut(), expected_sdr.lut(), "{process:?}: SDR camera curve changed");
+            assert_eq!(sdr.saturation_anchor(), expected_sdr.saturation_anchor());
+            assert!(sdr.saturation_anchor().is_some());
+            assert_eq!(sdr.apply(1.0), 1.0);
+            assert_eq!(sdr.apply(16.0), 1.0);
+            let hdr = base_tone(&s, &info, 8.0);
+            assert!(hdr.saturation_anchor().is_none());
+            for y in [0.02, 0.18, 0.4] {
+                assert_eq!(hdr.apply(y), sdr.apply(y), "{process:?}: HDR camera midtone changed at {y}");
+            }
+            let mut previous = hdr.apply(0.99);
+            assert!(previous > 1.0, "{process:?}: HDR must lift highlights before the SDR white endpoint");
+            for y in [0.999, 1.0, 1.001, 1.01, 2.0, 16.0, 32.0] {
+                let output = hdr.apply(y);
+                assert!(output >= previous, "{process:?}: HDR is not monotone at {y}: {output} < {previous}");
+                assert!(output <= 8.0, "{process:?}: HDR exceeded its peak at {y}");
+                previous = output;
+            }
+            assert_eq!(hdr.apply(32.0), 8.0, "{process:?}: HDR must reach its peak beyond the SDR white endpoint");
+        }
     }
     #[test]
     fn blended_functions_render_continuously_and_profile_fades_keep_sparse_compatibility() {

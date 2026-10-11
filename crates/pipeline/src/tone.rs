@@ -126,7 +126,9 @@ impl ToneMap {
                 if peak > 1.0 { (o + (peak - 1.0) * smooth(HDR_FROM_EV, top, ev)).clamp(0.0, peak) } else { o }
             })
             .collect();
-        let saturation = curve.knots.iter().find(|p| p[1] == 1.0).and_then(|p| {
+        // The exact white anchor is an SDR ceiling. The HDR lift keeps increasing past that
+        // input, so its curve must use the normal LUT interpolation instead.
+        let saturation = curve.knots.iter().find(|p| peak <= 1.0 && p[1] == 1.0).and_then(|p| {
             let position = ((p[0] / GREY).log2() - LUT_MIN_EV) / (LUT_MAX_EV - LUT_MIN_EV) * (LUT_N - 1) as f32;
             (position > 0.0 && position < (LUT_N - 1) as f32).then(|| [p[0], position, if neutral { 1.0 } else { adjustment.apply(1.0) }])
         });

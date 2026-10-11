@@ -166,6 +166,26 @@ chart at 120% (table Amount 1.2) also passes its unchanged comparison bound. The
 establish broad photographic parity.
 Readiness estimates and partial fidelity status are unchanged.
 
+### D3500 integration evidence (2026-10-11)
+
+Two neutral D3500 photos were compared at native 6000×4000 RGB16 before and after the upstream
+near-black camera-look and RAW saturation changes, using identical Process 2 settings and no external
+profile resources. DSC0805 is pixel-identical. On DSC0626, pooled mean ΔE00 across nine fixed interiors
+changes **5.394012 → 5.393483**, while the worst retained error changes **99.052244 → 39.946724**.
+The previously worst pixel was falsely white; its own error drops **99.052244 → 3.503372**.
+The separate whole-image grid mean slightly worsens. This is evidence for removing a rare rendering
+defect, not a broad colour improvement; combined measurements do not separate the two source changes.
+
+A separate fixed-gradient case tests local Sharpness 100 with global Sharpness 0. Lightroom's
+Masking 100 export has a much smaller local sharpening response than the requested Masking 0 case.
+The exported metadata explicitly retains 100 and omits zero; other public settings and local geometry
+match. Repeating both exports in reverse order gives exact native-pixel and ICC matches.
+Removing LightCraft's local Masking interaction raises paired D50 luminance-response RMS error
+**0.006027 → 0.009065** on the fixed grid and **0.005610 → 0.008145** in the center, worsening eight
+of nine fixed regions. The interaction is restored on CPU and GPU. Its formula and sharpening kernel
+still differ substantially from Lightroom; neither Detail bypass nor other local controls are proven
+equivalent by this comparison. Partial statuses and readiness estimates remain unchanged.
+
 ## AI
 
 Lightroom 9.6 ships 37 on-device models (names listed from its `ModelZoo`), covering subject, sky,
@@ -395,6 +415,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 | 2026-10-12 | minor | 22 more CR3 bodies verified on one CC0 file each (raw-parity.md): use-weighted share whose camera decodes 85% → 92%, RAW decoding 77% → 83%; full 60.7% → 61.2% (~61%), mainstream depth 72.1% → 74.0% (~49% → ~51%), essentials depth 77.5% → 78.0% (~64% → ~65%) |
 | 2026-10-12 | minor | 117 Nikon and Fujifilm bodies verified (raw-parity.md): use-weighted share whose camera decodes 85% → 86%, RAW decoding 77% (unchanged); mainstream depth 72.1% → 72.4%, essentials depth 77.5% → 77.6%; headline numbers unchanged |
 | 2026-10-11 | minor | EOS R5 Mark II CR3 verified (raw-parity.md): use-weighted share whose camera decodes 84% → 85%, RAW decoding 76% → 77%; full 60.6% → 60.7%, mainstream depth 71.8% → 72.1%, essentials depth 77.4% → 77.5%; the rounded numbers (~61%, ~49%, ~64%) are unchanged |
+| 2026-10-11 | minor | Retained measured D3500 rare-pixel source fix; restored local Masking interaction after repeatable Lightroom counterevidence; no readiness increase |
 | 2026-10-11 | minor | Added explicit runtime HSV-table scope, native chart improvements and mixed saved Amount 120 evidence; no readiness or status increase |
 | 2026-10-10 | minor | Added bounded native 16-bit chart/photo evidence, V2 fixed-domain curves and V1 preservation, remaining profile / Refine / detail gaps; checklist 80.3% of 519 and F 84.4%; readiness and hour estimates unchanged |
 | 2026-10-10 | minor | RAW measured model by model (raw-parity.md): RAW decoding (76%) and colour (35%) are explicit rows of the full sum (59% → 61%); mainstream uses the use-weighted 84% plus a ×0.85 colour discount (51% → 49%); essentials uses 84% × colour 0.75 (63% → 64%); beta ~14 points |

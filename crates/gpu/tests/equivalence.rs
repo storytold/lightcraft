@@ -93,7 +93,7 @@ fn disabled_develop_sections_use_the_shared_render_plan() {
 }
 
 #[test]
-fn local_sharpening_keeps_masking_and_detail_bypass_independent_on_gpu() {
+fn local_sharpening_masking_and_detail_bypass_match_on_gpu() {
     if !gpu() {
         return;
     }
@@ -119,12 +119,21 @@ fn local_sharpening_keeps_masking_and_detail_bypass_independent_on_gpu() {
         let expected = lightcraft_gpu::render(&src, &info, &local, &req, Some(&cache)).expect("gpu").image;
         let plain = lightcraft_gpu::render(&src, &info, &DevelopSettings { process, ..Default::default() }, &req, None).expect("gpu").image;
         assert!(expected.data != plain.data, "fixture must exercise local sharpening on the GPU in {process:?}");
-        for (masking, enabled) in [(100.0, true), (50.0, true), (100.0, false), (0.0, true)] {
+        for (masking, enabled) in [(100.0, true), (50.0, true), (100.0, false), (100.0, true), (0.0, true)] {
             local.detail.sharpen_masking = masking;
             local.set_section_enabled("detail", enabled);
-            check("local sharpening independence", &src, &info, &local, &req);
+            check("local sharpening masking", &src, &info, &local, &req);
             let actual = lightcraft_gpu::render(&src, &info, &local, &req, Some(&cache)).expect("gpu").image;
-            assert!(actual.data == expected.data, "{process:?}: Masking {masking}, Detail enabled={enabled}: changed local sharpening on the GPU");
+            let cold = lightcraft_gpu::render(&src, &info, &local, &req, None).expect("gpu").image;
+            assert_eq!(actual.data, cold.data, "{process:?}: Masking {masking}, Detail enabled={enabled}: stale local sharpening cache on the GPU");
+            if enabled && masking > 0.0 {
+                assert!(actual.data != expected.data, "{process:?}: Masking {masking} must change local sharpening on the GPU");
+            } else {
+                assert!(
+                    actual.data == expected.data,
+                    "{process:?}: Masking {masking}, Detail enabled={enabled}: incorrect effective Masking on the GPU"
+                );
+            }
         }
         // The shared global control must still mask global sharpening when it is enabled.
         local.masks.clear();
