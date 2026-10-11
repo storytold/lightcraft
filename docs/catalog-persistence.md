@@ -205,7 +205,9 @@ first.
   nothing is made in its folder.
 - **What the library was is kept.** The files a restore replaces, with every change made up to that moment, are moved
   to `Replaced/<the time (UTC)>` in the library folder. That is a library folder itself: open it, or restore from a
-  backup of it, to go back. Nothing removes these folders yet; delete the ones you no longer want.
+  backup of it, to go back. Nothing removes these folders yet; delete the ones you no longer want. The files an
+  earlier upgrade kept (`catalog.snap.v…`, `catalog.log.v…`) are not part of this: they stay where they are, and are
+  still the library as the older version left it, not the one restored.
 - **All or nothing.** The backup is first copied into `restore.partial` in the library folder while the library is
   still as it was. Then a note of what is to be moved (`restore.json`) is written, and only then are files moved: the
   library's out, the snapshot first, and the backup's in, the snapshot last. If the library's files can't all be
