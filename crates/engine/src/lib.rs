@@ -395,6 +395,9 @@ pub struct Session {
     pub backup_dir: Option<std::path::PathBuf>,
     /// Holds a backup before it starts reading (tests look at its row meanwhile).
     pub(crate) backup_hold: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The restore of the library that runs in the background, or the last one made that way
+    /// (`library.restore` with `background`).
+    pub restore: Option<std::sync::Arc<cmd::backup::RestoreJob>>,
     /// Holds a restore before it starts (tests look at its row meanwhile).
     #[cfg(test)]
     pub(crate) restore_hold: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -538,6 +541,7 @@ impl Session {
             backup: None,
             backup_dir: None,
             backup_hold: Default::default(),
+            restore: None,
             #[cfg(test)]
             restore_hold: Default::default(),
             import_defaults: import::ImportDefaults::default(),

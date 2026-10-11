@@ -249,6 +249,8 @@
   "· {in_source} identical copies": "· identyczne kopie: {in_source}",
   "Backed up the library to {}": "Utworzono kopię zapasową biblioteki w {}",
   "The library was not backed up: {}": "Nie utworzono kopii zapasowej biblioteki: {}",
+  "Restored the library. What it held before is in {}": "Przywrócono bibliotekę. Jej poprzednia zawartość jest w {}",
+  "The library was not restored: {}": "Nie przywrócono biblioteki: {}",
   "· {trashed} in Recently Deleted": "· w Ostatnio usuniętych: {trashed}",
   " in {g} group{}": " w grupach: {g}{:.0}",
   " · kept, not applied: {}": " · zachowane, niezastosowane: {}",

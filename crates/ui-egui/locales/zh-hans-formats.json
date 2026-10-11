@@ -274,6 +274,8 @@
   "· {in_source} identical copies": "· {in_source} 个相同副本",
   "Backed up the library to {}": "已将图库备份到 {}",
   "The library was not backed up: {}": "未能备份图库：{}",
+  "Restored the library. What it held before is in {}": "已恢复图库。之前的内容位于 {}",
+  "The library was not restored: {}": "未能恢复图库：{}",
   "{count} more warnings.": "另有 {count} 条警告。",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "有 {skipped} 张图像未导入，因为它们在目录中的记录不完整。",
   "{photos} catalog records processed; {collections} collections.": "已处理 {photos} 条目录记录；{collections} 个收藏集。",

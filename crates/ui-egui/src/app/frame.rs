@@ -153,6 +153,9 @@ impl LightcraftApp {
             self.ui.known_cards = None;
         }
         self.session.persist_if_dirty();
+        // (after it: a backup that was just moved into place is announced, and the old library's
+        // pictures forgotten, in this same frame)
+        self.restore_status(ctx);
         self.expire_gestures();
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);

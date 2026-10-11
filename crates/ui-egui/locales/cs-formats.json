@@ -205,6 +205,8 @@
   "· {in_source} identical copies": "· shodné kopie: {in_source}",
   "Backed up the library to {}": "Knihovna zálohována do {}",
   "The library was not backed up: {}": "Knihovna nebyla zálohována: {}",
+  "Restored the library. What it held before is in {}": "Knihovna obnovena. Její předchozí obsah je v {}",
+  "The library was not restored: {}": "Knihovna nebyla obnovena: {}",
   "{n} photo{}": "fotografií: {n}{:.0}",
   "{n} photo{} match · updates automatically as photos change": "Odpovídající fotografie: {n}{:.0} · aktualizuje se automaticky při změnách fotografií",
   "{n} photo{} now · updates automatically as photos change": "Aktuální fotografie: {n}{:.0} · aktualizuje se automaticky při změnách fotografií",

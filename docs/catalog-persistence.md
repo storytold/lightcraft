@@ -191,7 +191,7 @@ the other).
 
 ### Restoring
 
-`library.restore {dir}` puts a backup back (`crates/catalog/src/restore.rs`): the open library becomes what the backup
+File ▸ Restore Library from Backup… (`library.restore {dir}`) puts a backup back (`crates/catalog/src/restore.rs`): the open library becomes what the backup
 holds (catalog, log, presets, view and preferences; the folder its backups go to stays as it is now), and the session
 goes on in it, with no undo history, as after opening a library. With `to`, the backup is restored into that folder
 instead, which is how to look at a backup without giving up the library; nothing is opened. `to` is a folder that
@@ -228,8 +228,23 @@ first.
   more and says so; opening the library again completes the restore.
 - **It takes the space of the catalog twice over**: the copy in the library, and what it replaced.
 
-The restore runs in the command (a row in the activity stack, kind `restore`; it can't be stopped part-way) and the
-app waits for it: copying the catalog, then opening it. There is no menu item for it yet.
+In the app the menu item asks for the backup's folder, and the backup is copied and checked on a worker thread while
+the library stays in use (`background: true`): a row in the activity stack (kind `restore`) shows it, and its ✕ stops
+it with nothing changed. Once the copy is made, its files are moved into place when the library is at rest (no slider
+held, no backup or other background work), which takes the moment that moving files and opening the catalog take; a
+change made while the backup was being copied is in what the restore replaced. A toast says where that went, or why
+the library was not restored. While it waits its row reads "copied", and can still stop it.
+
+- Opening a library before the backup is moved into place, another one or this one again, gives the restore up: the
+  copy stops, and what was copied is removed.
+- A copy left by a program that ended while it was copying (`restore.partial`, with no note) is cleared away when the
+  library is next opened.
+- `Replaced/<the time>` is named for when the restore was asked for, not for when the files were moved.
+- `background` is for a session that goes on (the app, MCP, the control channel). Without it the command does all of
+  it before it returns, which is what a script or a one-shot `lightcraft-cli run` needs: that program ends when the
+  command returns, and a restore in the background ends with it, having changed nothing.
+  `library.restoreStatus` reports a restore in the background and, asked until `running` is false, sees it through
+  where no frame loop does.
 
 A backup on the same disk as the library guards against a damaged catalog or a mistake, not against losing the disk:
 set the library's backup folder to another drive for that.

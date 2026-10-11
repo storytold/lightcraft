@@ -270,6 +270,8 @@
   "· {in_source} identical copies": "· идентичных копий: {in_source}",
   "Backed up the library to {}": "Резервная копия библиотеки сохранена в {}",
   "The library was not backed up: {}": "Резервная копия библиотеки не создана: {}",
+  "Restored the library. What it held before is in {}": "Библиотека восстановлена. Прежнее содержимое находится в {}",
+  "The library was not restored: {}": "Библиотека не восстановлена: {}",
   "{count} more warnings.": "Других предупреждений: {count}.",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "Не импортированы изображения каталога: {skipped}. Их записи в каталоге неполные.",
   "{photos} catalog records processed; {collections} collections.": "Обработано записей каталога: {photos}; коллекций: {collections}.",

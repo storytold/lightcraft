@@ -9,7 +9,8 @@
 //!
 //! `library.restore` puts a backup back ([`lightcraft_catalog::restore`]): the library becomes
 //! what the backup holds, what it was is kept in `Replaced` in its folder, and the session goes
-//! on in the restored library. A backup is not opened where it is.
+//! on in the restored library. A backup is not opened where it is. With `background` the backup
+//! is copied on a worker thread ([`copy`]) and moved into place between commands ([`settle`]).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -272,6 +273,9 @@ fn restore_library(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, format!("{} is not a backup (it has no {})", from.display(), backup::MARKER)));
     }
     if in_place {
+        if restore_status(s).is_some_and(|r| r.running()) {
+            return Err(bad(C, "a restore of this library is already under way"));
+        }
         if s.library.as_ref().is_some_and(|l| l.stuck.is_some()) {
             return Err(bad(C, "a restore of this library stopped part-way; open the library again to finish it"));
         }
@@ -283,26 +287,246 @@ fn restore_library(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad(C, format!("background work is under way ({}); restore once it is done, or stop it first", task.label)));
         }
     }
+    let background = flag(C, p, "background")?;
+    let aside = free_name(&target.join(restore::REPLACED), &(s.clock)());
+    #[cfg(test)]
+    let hold = s.restore_hold.clone();
+    // (tests hold a restore here, to look at its row)
+    let held = move || {
+        #[cfg(test)]
+        {
+            let t0 = std::time::Instant::now();
+            while hold.load(Ordering::SeqCst) && t0.elapsed() < std::time::Duration::from_secs(20) {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+    };
+    // (a browser library has no folder: nothing runs in the background there)
+    let _ = background;
+    #[cfg(not(target_arch = "wasm32"))]
+    if in_place && background {
+        // the backup is copied and checked on a worker while the library stays in use; its files
+        // are moved into place by `settle`, between commands
+        let job = Arc::new(RestoreJob { library: target, from, aside, ..Default::default() });
+        s.restore = Some(job.clone());
+        let task = s.activity.start("restore", "Restoring the library", Cancel::Flag(job.cancel.clone()));
+        task.set_unit(Unit::Bytes);
+        let worker = job.clone();
+        let spawned = std::thread::Builder::new().name("lc-restore".into()).spawn(move || {
+            held();
+            copy(&worker, task);
+        });
+        if let Err(e) = spawned {
+            // (said once, by the command: there is no restore to report on)
+            job.end(Err(format!("could not start: {e}")));
+            s.restore = None;
+            return Err(bad(C, format!("could not start: {e}")));
+        }
+        return Ok(job.json());
+    }
     let task = s.activity.start("restore", "Restoring the library", Cancel::No);
     task.set_unit(Unit::Bytes);
-    #[cfg(test)]
-    {
-        // (tests hold a restore here, to look at its row)
-        let t0 = std::time::Instant::now();
-        while s.restore_hold.load(Ordering::SeqCst) && t0.elapsed() < std::time::Duration::from_secs(20) {
-            std::thread::sleep(std::time::Duration::from_millis(2));
-        }
-    }
+    held();
     let never = AtomicBool::new(false);
     let row = Row { task: &task, cancel: &never };
     if !in_place {
         return restore_into(s, &from, &target, &row);
     }
-    let other = |e: backup::BackupError| crate::EngineError::Other(e.to_string());
-    let aside = free_name(&target.join(restore::REPLACED), &(s.clock)());
     // the backup is copied into the library folder and checked while the library is as it is
-    let staged = restore::stage(&from, &target, &RestoreOptions { also: ALSO, aside: &aside }, &row).map_err(other)?;
+    let staged =
+        restore::stage(&from, &target, &RestoreOptions { also: ALSO, aside: &aside }, &row).map_err(|e| crate::EngineError::Other(e.to_string()))?;
     task.detail("catalog.snap");
+    place(s, staged, &from, &target, &aside)
+}
+
+/// A restore of the open library whose backup is copied in the background, or the last one made
+/// that way.
+#[derive(Default)]
+pub struct RestoreJob {
+    /// The library it is of, and the backup it is from.
+    pub library: PathBuf,
+    pub from: PathBuf,
+    /// The folder in `Replaced` for what it replaces.
+    aside: String,
+    /// Shared with the restore's row in the activity stack (its ✕ sets it).
+    pub cancel: Arc<AtomicBool>,
+    /// The backup's files, copied into the library folder and checked: waiting to be moved into
+    /// place ([`settle`]), with the row that stays until then.
+    staged: std::sync::Mutex<Option<(restore::Staged, TaskGuard)>>,
+    /// How it ended: what `library.restore` returns, or why not.
+    outcome: std::sync::Mutex<Option<std::result::Result<Value, String>>>,
+    /// Its files are being moved into place (the library is closed and opened again for that,
+    /// which is no reason to give it up).
+    placing: AtomicBool,
+}
+
+/// Why a restore that was stopped, or given up, made no change.
+const STOPPED: &str = "the restore was stopped; the library is as it was";
+const GIVEN_UP: &str = "the library was closed or opened again before the backup was moved into place; it is as it was";
+
+/// Reports the copy to the restore's row, and stops it when the row's ✕ was pressed, when the
+/// restore was given up, or when nobody holds the job any more (the session is gone).
+struct Copying<'a> {
+    task: &'a TaskGuard,
+    job: &'a Arc<RestoreJob>,
+}
+
+impl Watch for Copying<'_> {
+    fn progress(&self, name: &str, done: u64, total: u64) {
+        self.task.progress(done, total);
+        self.task.detail(name);
+    }
+    fn cancelled(&self) -> bool {
+        self.job.cancel.load(Ordering::Relaxed) || !self.job.running() || Arc::strong_count(self.job) <= 1
+    }
+}
+
+impl RestoreJob {
+    /// How it ended (`None` while it runs).
+    pub fn outcome(&self) -> Option<std::result::Result<Value, String>> {
+        self.outcome.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+    }
+
+    pub fn running(&self) -> bool {
+        self.outcome().is_none()
+    }
+
+    /// It is over (the first end counts); nothing of a copy that was not moved in stays.
+    fn end(&self, outcome: std::result::Result<Value, String>) {
+        let mut ended = self.outcome.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if ended.is_none() {
+            *ended = Some(outcome);
+        }
+        drop(ended);
+        // (dropped: the copy is removed, and the row goes)
+        self.staged.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+    }
+
+    pub fn json(&self) -> Value {
+        let outcome = self.outcome();
+        let made = outcome.as_ref().and_then(|o| o.as_ref().ok());
+        json!({
+            "running": outcome.is_none(),
+            "cancelled": self.cancel.load(Ordering::Relaxed) && outcome.as_ref().is_some_and(|o| o.is_err()),
+            "library": self.library.to_string_lossy(),
+            "backup": self.from.to_string_lossy(),
+            "restored": made.map(|v| v["restored"].clone()),
+            "error": outcome.as_ref().and_then(|o| o.as_ref().err()),
+        })
+    }
+}
+
+/// The worker's part of a restore in the background: copy the backup into the library folder
+/// and check it. The library is not touched.
+fn copy(job: &Arc<RestoreJob>, task: TaskGuard) {
+    // however this ends, the restore is not left "running" for good
+    struct Over<'a>(&'a RestoreJob, bool);
+    impl Drop for Over<'_> {
+        fn drop(&mut self) {
+            if !self.1 {
+                self.0.end(Err("the restore stopped on an internal error".into()));
+            }
+        }
+    }
+    let mut over = Over(job, false);
+    let staged = restore::stage(&job.from, &job.library, &RestoreOptions { also: ALSO, aside: &job.aside }, &Copying { task: &task, job });
+    match staged {
+        Ok(staged) => {
+            // all of it is copied; what is left waits for the library to be at rest
+            let bytes = staged.report().bytes;
+            task.progress(bytes, bytes);
+            task.detail("copied");
+            *job.staged.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((staged, task));
+            // (ended meanwhile, by another library being opened: nothing of the copy stays)
+            if !job.running() {
+                job.staged.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+            }
+        }
+        Err(backup::BackupError::Cancelled) => job.end(Err(STOPPED.into())),
+        Err(e) => {
+            log::warn!("library: restore: {e}");
+            job.end(Err(e.to_string()));
+        }
+    }
+    over.1 = true;
+}
+
+/// The restore of the open library that is under way in the background, or the last one made.
+pub fn restore_status(s: &Session) -> Option<&Arc<RestoreJob>> {
+    let library = s.library.as_ref().map(|l| &l.dir)?;
+    s.restore.as_ref().filter(|r| r.library == *library)
+}
+
+/// Move a restore whose backup is copied into place, when the library is at rest: no slider
+/// held, no backup or other background work under way. Called between commands (the app's frame
+/// loop, `library.restoreStatus`); cheap when there is nothing to do. A restore of a library that
+/// is no longer the open one is given up.
+pub fn settle(s: &mut Session) {
+    let Some(job) = s.restore.clone() else { return };
+    if !job.running() {
+        return;
+    }
+    if !s.library.as_ref().is_some_and(|l| l.dir == job.library) {
+        job.end(Err(GIVEN_UP.into()));
+        return;
+    }
+    // (while the backup is still being copied, the worker sees a stop itself)
+    let ready = job.staged.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().map(|(_, task)| task.id());
+    let Some(row) = ready else { return };
+    if job.cancel.load(Ordering::Relaxed) {
+        job.end(Err(STOPPED.into()));
+        return;
+    }
+    let busy = s.interaction.is_some()
+        || s.library.as_ref().is_some_and(|l| l.stuck.is_some())
+        || status(s).is_some_and(|b| !b.finished.load(Ordering::Relaxed))
+        || s.activity.list().iter().any(|t| t.id != row);
+    if busy {
+        return;
+    }
+    let Some((staged, task)) = job.staged.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() else { return };
+    // from here on it is not stopped
+    task.set_cancellable(false);
+    job.placing.store(true, Ordering::SeqCst);
+    // (the frame loop calls this outside any command: a panic here is the restore's error too)
+    let made = crate::guard::catch("the restore", || place(s, staged, &job.from, &job.library, &job.aside));
+    job.placing.store(false, Ordering::SeqCst);
+    drop(task);
+    job.end(match made {
+        Ok(made) => made.map_err(|e| e.to_string()),
+        Err(panic) => Err(panic),
+    });
+}
+
+/// Give up a restore in the background whose backup is not moved into place yet: the library is
+/// being opened (another one, or this one again), so it is no longer the library the restore
+/// was asked of as it was open then. The copy stops, and nothing of it stays.
+pub(crate) fn give_up(s: &Session) {
+    if let Some(job) = &s.restore
+        && job.running()
+        && !job.placing.load(Ordering::SeqCst)
+    {
+        job.end(Err(GIVEN_UP.into()));
+    }
+}
+
+/// `library.restore` can run: no restore or backup of the open library is under way, and none
+/// has left it half moved.
+fn can_restore(s: &Session) -> std::result::Result<(), String> {
+    if restore_status(s).is_some_and(|r| r.running()) {
+        return Err("a restore of this library is under way".into());
+    }
+    if status(s).is_some_and(|b| !b.finished.load(Ordering::Relaxed)) {
+        return Err("a backup of this library is running".into());
+    }
+    match s.library.as_ref().and_then(|l| l.stuck.as_ref()) {
+        Some(_) => Err("a restore of this library stopped part-way; open the library again".into()),
+        None => Ok(()),
+    }
+}
+
+/// Move a copied backup into place as the open library, and go on in it.
+fn place(s: &mut Session, staged: restore::Staged, from: &Path, target: &Path, aside: &str) -> Result<Value> {
     // what of the session is the library's (it is put back if the restore is taken back), and
     // what stays: the folder backups go to is the library's choice now, not the backup's from then
     let (backups, active) = (s.backup_dir.clone(), s.active());
@@ -320,7 +544,7 @@ fn restore_library(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let made = match staged.replace() {
         Ok(made) => made,
-        Err(e) => match restore::finish(&target) {
+        Err(e) => match restore::finish(target) {
             Ok(Some(made)) => made,
             Ok(None) => {
                 let e = e.to_string();
@@ -337,7 +561,7 @@ fn restore_library(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.profile_favorites.clear();
     s.profile_recent.clear();
-    if let Err(e) = s.open_library(&target, false) {
+    if let Err(e) = s.open_library(target, false) {
         // the restored catalog is not one this version opens: back to the library as it was
         // (the session still has it, and its files are the same ones once they are back)
         let e = e.to_string();
@@ -449,12 +673,24 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!(query
             "library.restore",
-            "Restore Library from Backup",
+            "Restore Library from Backup…",
+            ["File"],
+            None,
+            "{dir: a backup's folder (absolute path), to?: absolute folder path, background?: bool} — put a backup back. Without `to` (or with `to` naming the open library): the open library becomes what the backup holds (catalog, log, presets, view and preferences; not the photos, and the folder its backups go to stays), and the session goes on in it: undo history is gone, as after opening a library. What the library held is kept, also changes not yet saved, in Replaced/<the time (UTC)> in its folder, which is a library folder itself. Refused while a backup or other background work is under way. With another `to`: the backup is restored into that folder (one that isn't there or is empty, or a library nothing has open, which is replaced the same way; not a folder in the backup or in the open library) and nothing is opened. The backup is checked against its marker first and is only read; one that was edited or damaged, or whose catalog or log a newer LightCraft wrote, is refused with the library untouched. A restored catalog that then doesn't open is taken back (the library is as it was; the backup's files are in Replaced/<the time> (not opened)); with `to` that is not found out, since nothing is opened. Has a row in the activity stack (kind `restore`). The command returns when it is done; with `background` (a restore of the open library only) it returns at once with what `library.restoreStatus` reports: the backup is copied and checked while the library stays in use (the row's ✕ stops it then), and its files are moved into place once the library is at rest (no slider held, no other background work), which the app sees to between frames and `library.restoreStatus` when asked; so `background` is for a session that goes on (the app, MCP, the control channel), not for a program that ends when the command returns. Opening a library (another, or this one again) before that gives the restore up, with nothing changed. A backup can't be opened as a library where it is → {restored: {backup, library, aside | null, seq, photos, files, bytes, skipped, placed, replaced}, opened}",
+            can_restore,
+            restore_library
+        ),
+        cmd!(query
+            "library.restoreStatus",
+            "Restore Status",
             [],
             None,
-            "{dir: a backup's folder (absolute path), to?: absolute folder path} — put a backup back. Without `to` (or with `to` naming the open library): the open library becomes what the backup holds (catalog, log, presets, view and preferences; not the photos, and the folder its backups go to stays), and the session goes on in it: undo history is gone, as after opening a library. What the library held is kept, also changes not yet saved, in Replaced/<the time (UTC)> in its folder, which is a library folder itself. Refused while a backup or other background work is under way. With another `to`: the backup is restored into that folder (one that isn't there or is empty, or a library nothing has open, which is replaced the same way; not a folder in the backup or in the open library) and nothing is opened. The backup is checked against its marker first and is only read; one that was edited or damaged, or whose catalog or log a newer LightCraft wrote, is refused with the library untouched. A restored catalog that then doesn't open is taken back (the library is as it was; the backup's files are in Replaced/<the time> (not opened)); with `to` that is not found out, since nothing is opened. Has a row in the activity stack (kind `restore`); the command returns when it is done. A backup can't be opened as a library where it is → {restored: {backup, library, aside | null, seq, photos, files, bytes, skipped, placed, replaced}, opened}",
+            "{} → the restore of the open library that is under way in the background (`library.restore` with `background`), or the last one made that way in this session | null: {running, cancelled, library, backup, restored: as `library.restore` returns it | null, error}. Also moves a backup that is copied into place when the library is at rest (as the app does between frames), so a script that asks until `running` is false sees the restore through",
             always,
-            restore_library
+            |s, _| {
+                settle(s);
+                Ok(restore_status(s).map_or(Value::Null, |r| r.json()))
+            }
         ),
         cmd!(
             "library.backupPreferences",

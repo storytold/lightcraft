@@ -2368,6 +2368,8 @@
   "Check Backup": "Verifica backup",
   "Backups": "Backup",
   "Restore Library from Backup": "Ripristina la libreria da un backup",
+  "Restore Status": "Stato del ripristino",
+  "Restored the library": "Libreria ripristinata",
   "Restoring the library": "Ripristino della libreria",
   "Backup Preferences": "Preferenze di backup"
 }

@@ -2013,6 +2013,8 @@
   "Check Backup": "檢查備份",
   "Backups": "備份",
   "Restore Library from Backup": "從備份還原照片庫",
+  "Restore Status": "還原狀態",
+  "Restored the library": "已還原照片庫",
   "Restoring the library": "正在還原照片庫",
   "Backup Preferences": "備份偏好設定",
   "Lightroom Catalog Import": "Lightroom 目錄匯入",

@@ -2212,6 +2212,8 @@
   "Check Backup": "バックアップを確認",
   "Backups": "バックアップ",
   "Restore Library from Backup": "バックアップからライブラリを復元",
+  "Restore Status": "復元の状態",
+  "Restored the library": "ライブラリを復元しました",
   "Restoring the library": "ライブラリを復元中",
   "Backup Preferences": "バックアップの環境設定",
   "Lightroom Catalog Import": "Lightroomカタログの読み込み",

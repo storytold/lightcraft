@@ -245,6 +245,8 @@
   "· {in_source} identical copies": "· იდენტური ასლები: {in_source}",
   "Backed up the library to {}": "ბიბლიოთეკის სარეზერვო ასლი შეიქმნა: {}",
   "The library was not backed up: {}": "ბიბლიოთეკის სარეზერვო ასლი ვერ შეიქმნა: {}",
+  "Restored the library. What it held before is in {}": "ბიბლიოთეკა აღდგა. მისი წინა შიგთავსი არის აქ: {}",
+  "The library was not restored: {}": "ბიბლიოთეკა ვერ აღდგა: {}",
   "· {n} photo{}": "· ფოტო: {n}{:.0}",
   "· {trashed} in Recently Deleted": "· ახლახან წაშლილებში: {trashed}",
   "“{parent}” has a “{name}” already. Merge the two?": "„{parent}“-ში „{name}“ უკვე არსებობს. გაერთიანდეს ორივე?",

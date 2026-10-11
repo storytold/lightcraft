@@ -542,6 +542,8 @@ impl Session {
         if let Some(place) = crate::lightroom_folder::lightroom_catalog_at(&dir) {
             return Err(EngineError::LightroomCatalog { path: dir, catalog: place.catalog });
         }
+        // a restore that is still copying its backup is of the library as it was open: given up
+        crate::cmd::backup::give_up(self);
         let dir = resolve_dir(&dir)?;
         // a backup is not worked in where it is (and not written to: no lock file, no log); also
         // not when it is named by one of its files
@@ -566,6 +568,8 @@ impl Session {
                 return Err(EngineError::Other(e.to_string()));
             }
         };
+        // (and what one that never got that far left: a copy of a backup)
+        lightcraft_catalog::restore::clear_leftover(&dir);
         if let Err(e) = self.open_stores(stores, seed_demo, &mut lock) {
             if reusing && let Some(lib) = self.library.as_mut() {
                 lib.lock = lock.take();
@@ -846,6 +850,8 @@ impl Session {
     /// Persist if commands left ops pending (cheap; frontends call it once per frame for state
     /// changed outside [`Session::execute`]).
     pub fn persist_if_dirty(&mut self) {
+        // a backup that was copied in the background is moved into place between commands
+        crate::cmd::backup::settle(self);
         let backing_off = self.library.as_ref().and_then(|l| l.retry_at).is_some_and(|t| web_time::Instant::now() < t);
         let presets_unsaved = self.library.as_ref().is_some_and(|l| l.presets_error.is_some());
         if self.library.is_some() && (!self.pending_log.is_empty() || presets_unsaved) && !backing_off {

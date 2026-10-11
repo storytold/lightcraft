@@ -776,6 +776,8 @@
   "Check Backup": "სარეზერვო ასლის შემოწმება",
   "Backups": "სარეზერვო ასლები",
   "Restore Library from Backup": "ბიბლიოთეკის აღდგენა სარეზერვო ასლიდან",
+  "Restore Status": "აღდგენის მდგომარეობა",
+  "Restored the library": "ბიბლიოთეკა აღდგა",
   "Restoring the library": "ბიბლიოთეკის აღდგენა",
   "Backup Preferences": "სარეზერვო ასლის პარამეტრები",
   "Fill": "შევსება",

@@ -720,3 +720,31 @@ fn a_backup_with_a_newer_log_or_no_snapshot_is_refused() {
     assert!(same(&opened(&dir), &now));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The copy of a backup that a restore left when the program ended before it moved a file is
+/// cleared away when asked; a folder of that name with somebody's files in it, or one a restore
+/// under way still needs, is not.
+#[test]
+fn a_leftover_copy_of_a_backup_is_cleared_away() {
+    let dir = temp("restore-leftover");
+    let (made, _, now) = backed_up_and_changed(&dir);
+    let staged = restore::stage(&made.dir, &dir, &options("before"), &()).unwrap();
+    std::mem::forget(staged);
+    assert!(dir.join("restore.partial").join(SNAPSHOT).is_file());
+    restore::clear_leftover(&dir);
+    assert!(!dir.join("restore.partial").exists());
+    assert!(same(&opened(&dir), &now));
+    // somebody's
+    std::fs::create_dir_all(dir.join("restore.partial")).unwrap();
+    std::fs::write(dir.join("restore.partial").join("notes.txt"), b"mine").unwrap();
+    restore::clear_leftover(&dir);
+    assert_eq!(std::fs::read(dir.join("restore.partial").join("notes.txt")).unwrap(), b"mine");
+    let _ = std::fs::remove_dir_all(&dir);
+    // a restore under way
+    let (dir, _, then, _) = stopped_where("restore-leftover-needed", |d| phase(d).is_some());
+    restore::clear_leftover(&dir);
+    assert!(dir.join("restore.partial").is_dir());
+    restore::finish(&dir).unwrap().unwrap();
+    assert!(same(&opened(&dir), &then));
+    let _ = std::fs::remove_dir_all(&dir);
+}

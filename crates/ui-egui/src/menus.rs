@@ -13,7 +13,7 @@ mod run;
 mod ui_commands;
 
 pub use files::{confirm_delete, delete_in_album, reveal_label, show_in_folders_enabled};
-pub use run::{parse_rgb, run_ui_command};
+pub use run::{library_replaced, parse_rgb, run_ui_command};
 pub use ui_commands::{LANGUAGE_COMMANDS, UI_COMMANDS, language_from_command, ui_commands};
 
 pub mod menu_level;

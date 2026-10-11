@@ -2083,6 +2083,8 @@
   "Check Backup": "Sprawdź kopię zapasową",
   "Backups": "Kopie zapasowe",
   "Restore Library from Backup": "Przywróć bibliotekę z kopii zapasowej",
+  "Restore Status": "Stan przywracania",
+  "Restored the library": "Przywrócono bibliotekę",
   "Restoring the library": "Przywracanie biblioteki",
   "Backup Preferences": "Preferencje kopii zapasowych",
   "Fill Location": "Uzupełnij lokalizację",

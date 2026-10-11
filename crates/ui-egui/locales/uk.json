@@ -2210,6 +2210,8 @@
   "Check Backup": "Перевірити резервну копію",
   "Backups": "Резервні копії",
   "Restore Library from Backup": "Відновити бібліотеку з резервної копії",
+  "Restore Status": "Стан відновлення",
+  "Restored the library": "Бібліотеку відновлено",
   "Restoring the library": "Відновлення бібліотеки",
   "Backup Preferences": "Параметри резервного копіювання",
   "Lightroom Catalog Import": "Імпорт каталогу Lightroom",

@@ -383,6 +383,42 @@ impl LightcraftApp {
         }
     }
 
+    /// Announce the end of a restore whose backup was copied in the background: where what the
+    /// library held went, or why it was not restored.
+    pub(crate) fn restore_status(&mut self, ctx: &egui::Context) {
+        let Some(r) = self.session.restore.clone() else { return };
+        let key = std::sync::Arc::as_ptr(&r) as usize;
+        if self.ui.restore_seen == Some(key) {
+            return;
+        }
+        // (of the library that is open: one that was given up for another has nothing to say here)
+        if !self.session.library.as_ref().is_some_and(|l| l.dir == r.library) {
+            if !r.running() {
+                self.ui.restore_seen = Some(key);
+            }
+            return;
+        }
+        match r.outcome() {
+            Some(outcome) => {
+                self.ui.restore_seen = Some(key);
+                let msg = match outcome {
+                    Ok(made) => {
+                        crate::menus::library_replaced(self);
+                        match made["restored"]["aside"].as_str() {
+                            Some(aside) => crate::i18n::tr_format!("Restored the library. What it held before is in {}", aside),
+                            None => crate::i18n::tr("Restored the library").to_string(),
+                        }
+                    }
+                    Err(e) => crate::i18n::tr_format!("The library was not restored: {}", e),
+                };
+                self.toast_for(ctx, msg, 10.0);
+            }
+            // The activity stack shows the restore while it runs; the frames this asks for also
+            // move the backup into place once it is copied (`Session::persist_if_dirty`).
+            None => ctx.request_repaint_after(std::time::Duration::from_millis(250)),
+        }
+    }
+
     /// Announce the end of a Build Previews run.
     fn preview_build_status(&mut self, ctx: &egui::Context) {
         use std::sync::atomic::Ordering;

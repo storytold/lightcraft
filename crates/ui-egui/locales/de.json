@@ -2211,6 +2211,8 @@
   "Check Backup": "Sicherung prüfen",
   "Backups": "Sicherungen",
   "Restore Library from Backup": "Bibliothek aus Sicherung wiederherstellen",
+  "Restore Status": "Wiederherstellungsstatus",
+  "Restored the library": "Bibliothek wiederhergestellt",
   "Restoring the library": "Bibliothek wird wiederhergestellt",
   "Backup Preferences": "Sicherungseinstellungen",
   "Lightroom Catalog Import": "Lightroom-Katalogimport",
