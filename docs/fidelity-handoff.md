@@ -1,6 +1,8 @@
 # Lightroom fidelity handoff
 
-Resumed on 2026-10-11 at the user's request. The first integration pulled `172ec37c` and rebased onto `0dd6593d`; the second integrates upstream `76b53778`. Both have native measurements. The second integration passes all eight quality gates, and its final binary reproduces all four measured V2 native renders exactly.
+Paused for review on 2026-10-12 at the user's request. All 19 fidelity commits have been rebased onto upstream `main` at `25ef65c8` (0.7.0 release preparation). `git range-diff` confirms every patch is unchanged; the new upstream commit changes only package versions. Earlier integrations onto `0dd6593d` and `76b53778` have native measurements. Accepted behavior and remaining gaps are recorded below; rendering fidelity is still incomplete.
+
+All eight `cargo xtask ci` gates passed again after the rebase (fmt, clippy, HEIF, tests, parity, layers, assets and WASM). No new tests were added for this pause; the final tracked change is this handoff update. The optional craft-fonts input was unset. Native fidelity measurements remain tied to the preserved pre-rebase binary, whose product source is unchanged by the version bump.
 
 ## Scope
 
@@ -41,7 +43,7 @@ Lightroom exports use the already paired local controller and a serial queue:
 python -B plan/lightroom-reference/tools/controller_export_queue.py /absolute/path/to/reviewed-queue.json
 ```
 
-There are now 153 accepted native scripted exports, including local sharpening, colour-NR structure/channel charts and companion-control references. Three recent requested-Refine100 chart exports carry an explicit metadata-omission qualification; their numeric100 setting was not independently read back. Use new output paths, exact source/settings guards and the retained TIFF16/full-size/AdobeRGB/no-output-sharpening settings. Do not resubmit uncertain jobs. Never print or copy the pairing token.
+There are now 168 accepted native scripted exports, including local sharpening, colour-NR structure/channel charts, exposure and compressed-NEF transport references. Three requested-Refine100 chart exports carry an explicit metadata-omission qualification; their numeric100 setting was not independently read back. Use new output paths, exact source/settings guards and the retained TIFF16/full-size/AdobeRGB/no-output-sharpening settings. Do not resubmit uncertain jobs. Never print or copy the pairing token.
 
 The controller returns no `SharpenEdgeMasking` value. Keep its 13 supported readiness checks and verify Masking in the exported XMP: this run explicitly retains 100 but omits zero, Radius and Detail at global Sharpness 0. Lightroom also normalizes legacy gradients to mask groups and adds identity `LocalCurveRefineSaturation=100`. Preserve these distinctions; missing metadata is not a verified numerical value.
 
@@ -53,6 +55,15 @@ the correct 6000×4000 photo and full settings then verified. Use a distinguishi
 readiness value when available, and always verify the actual exported identity. Controller
 Temperature/Tint readings are not necessarily the Kelvin/tint numbers in XMP. This remains a
 verified one-shot export workflow with failure detection, not an identity guarantee from `openImage`.
+
+For repeated same-setting targets, first load a surviving owned reference with a different supported
+readiness value (the latest queues use Detail 100 before the target's 50), wait for all expected
+values and export readiness, then submit the target once. If the initial active value is null,
+record that state and bootstrap the owned reference separately; never assume the previous image
+is still loaded. The intermediate step only opens a disposable reference; it changes no edits and
+does not export. Full exported identity and CRS still decide acceptance. Saved export preferences
+are compared before/after; Output Sharpening None is backed by the retained same-session UI witness,
+because the preferences reader does not expose it. No foreground input is needed.
 
 ## Previously measured integration
 
@@ -144,10 +155,43 @@ previews. Refine99.99999 and100 produce identical RGB16/ICC on the fixed chart; 
 continuity for arbitrary curves. Sequential LUT evaluation remains an approximation. No generic
 curve/camera parity or readiness increase is claimed.
 
-## Next work
+## Pause boundary: color investigation (2026-10-12)
 
-1. Continue the unresolved master Refine formula and conventional Detail controls from the retained native evidence. The mixed-order correction is verified and integrated. Preserve the failed analytic-affine gate; the bounded improvement does not identify a unique Lightroom internal order.
-2. Investigate profile-table ordering relative to Exposure using own sources. No new exposure reference has been exported. A failed composition check alone does not prove the reverse order. Do not read or hash Adobe app-bundle contents under the current project instructions.
-3. Continue remaining tone/B&W and conventional NR/sharpening gaps without recycling rejected candidates. The proxy-order replay left the existing winners unchanged; the shared Lightroom-targeted source-colour fit failed the training no-regression gate, and its four heldout scenes remain sealed. No source fit or experimental CNR model was adopted. Global Sharpening Detail and luminance-NR Contrast remain stored no-ops. The saved Amount 120 paired-response audit is complete; baseline source-colour error can dominate and full-photo means can hide cancellation.
+No new color candidate was accepted after the mixed-curve correction. A fresh original D3500
+neutral/+1 EV pair measures whole-frame mean ΔE00 2.237445 and 2.670111 respectively. At +1 EV,
+LightCraft has 17,276,292 blue-channel samples at 65535 versus Lightroom's two; this is not the
+same as all-channel white clipping. A wider output-gamut diagnostic leaves the brightness excess.
+The fitted camera-tone continuation is a concrete lead, not an isolated proof of the entire cause.
+
+A parameter-free rational continuation reduced that photo's +1 EV luminance RMS error by 38.14%
+and mean ΔE00 by 5.37%, while worsening opponent-chroma RMS by 19.55%. After isolating it from
+source fitting, it failed the predeclared mean-ΔE00 rule on another training scene. It was rejected
+before heldout inspection. The shared white-balance-dependent source-color fit and conventional
+NR candidates also remain rejected. None of these improvements is a landed or aggregate fidelity gain.
+
+The final compressed-NEF transport experiment passes: LightCraft's own codec tables regenerate
+the original compressed strip byte for byte, preserving the complete decoded CFA and metadata.
+An appended-strip copy changes only its raw StripOffsets field in the original prefix. Its one
+Lightroom export has exactly the original reference's **24,000,000 RGB16 pixels and ICC bytes**, with
+the unique filename and full CRS verified. This qualifies transport of the original samples;
+no synthetic calibration chart or new camera model has been validated.
+
+Local records under `resume-20261011/fidelity-audit/`:
+
+- `d3500-exposure-response-01/measurement-01/`: complete original neutral/+1 measurements.
+- `d3500-exposure-response-01/rational-shoulder-02/rejection.json`: rejected continuation and other-scene results.
+- `d3500-compressed-transport-01/native-equivalence-01.json`: exact transport result, with metadata, export and retirement receipts beside it.
+
+Completed candidate binaries and redundant pixel buffers were retired after verification. The
+original reference compacts, source copies, reports and helper source remain local. Historical
+guards for retired files are provenance, not runnable capture inputs. The pinned accepted CLI is
+`resume-20261011/lightcraft-cli-mixed-final-1a39853139c6` (built before the version-only rebase).
+Do not use an unverified shared target binary as a fidelity baseline.
+
+## Next work after review
+
+1. Resume source color/exposure from the exact compressed transport result. Any synthetic CFA chart requires a separate generation and validation step; the current helper only reproduces the original strip. Keep the failed DNG/uncompressed transports rejected, and the four source-color heldouts sealed.
+2. Continue the unresolved master Refine formula and profile-table/Exposure ordering using own sources. The nonlinear table/precomposed EV0 transport failed; the fixed EV0 table render is close but does not establish general ordering or exposure parity. Preserve these failed gates rather than recycling candidates.
+3. Continue remaining tone/B&W and conventional NR/sharpening gaps. Global Sharpening Detail and luminance-NR Contrast remain stored no-ops. Baseline source-color error can dominate, and whole-photo means can hide regional regressions. D3500 only; optics, lens blur and AI remain excluded.
 
 A sixbox-to-Mac SSH shell round trip was verified using sixbox's existing `macbook-air` alias. Lightroom control/export over that SSH route was **not** verified, and no migration or SSH configuration change was made. A future migration needs the local evidence and export-worker arrangement; a Git clone alone is insufficient.
