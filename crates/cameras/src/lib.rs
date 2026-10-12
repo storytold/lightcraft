@@ -6,24 +6,32 @@
 //! - **Windows:** Windows Portable Devices (WPD), the API Explorer and the Photos app use
 //!   ([`wpd`]). The device is opened read-only (`GENERIC_READ`): nothing on the camera is ever
 //!   changed or deleted.
+//! - **macOS:** ImageCaptureCore, the framework Image Capture and Photos use (`ica`). The system's
+//!   camera daemon keeps the USB connection and serves it to every app; sessions are read-only.
+//!   The framework answers on the main thread only, so cameras are read while the main thread runs
+//!   an event loop (the app) or is the caller (the CLI).
 //! - **Elsewhere:** not yet. [`cameras`] lists none and [`Session::open`] says so, so callers need
-//!   no platform checks. macOS (ImageCaptureCore) and Linux (PTP over `nusb`) can implement the
-//!   same three calls: list cameras, list a camera's photos, copy one photo.
+//!   no platform checks. Linux (PTP over `nusb`) can implement the same three calls: list cameras,
+//!   list a camera's photos, copy one photo.
 //!
-//! This is LightCraft's second crate allowed `unsafe` (after `crates/sysmem`): the COM calls live
-//! in the `wpd` module, each block with a `// SAFETY:` note, behind the safe API below.
+//! This is LightCraft's second crate allowed `unsafe` (after `crates/sysmem`): the system calls live
+//! in the `wpd` (COM) and `ica` (Objective-C) modules, each block with a `// SAFETY:` note, behind
+//! the safe API below.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::sync::atomic::AtomicBool;
 
+#[cfg(target_os = "macos")]
+mod ica;
+mod layout;
 #[cfg(windows)]
 mod wpd;
 
 /// A connected camera or phone.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Camera {
-    /// The operating system's id for the device (Windows: its PnP device path). Stable while it
-    /// stays plugged in; pass it to [`Session::open`].
+    /// The operating system's id for the device (Windows: its PnP device path; macOS: its
+    /// ImageCaptureCore UUID). Stable while it stays plugged in; pass it to [`Session::open`].
     pub id: String,
     /// The name the system shows for it ("X100T", "Pixel 8").
     pub name: String,
@@ -78,7 +86,11 @@ pub fn cameras() -> Result<Vec<Camera>, Error> {
     {
         wpd::cameras()
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        ica::cameras()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         Ok(Vec::new())
     }
@@ -89,6 +101,8 @@ pub fn cameras() -> Result<Vec<Camera>, Error> {
 pub struct Session {
     #[cfg(windows)]
     inner: wpd::Session,
+    #[cfg(target_os = "macos")]
+    inner: ica::Session,
 }
 
 impl Session {
@@ -98,7 +112,11 @@ impl Session {
         {
             Ok(Session { inner: wpd::Session::open(id)? })
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        {
+            Ok(Session { inner: ica::Session::open(id)? })
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = id;
             Err(Error::Unsupported)
@@ -109,11 +127,11 @@ impl Session {
     /// its whole storage when it has none. `found` is called with the running count as folders are
     /// read (a full card can hold thousands of files). Folders nest at most [`MAX_DEPTH`] deep.
     pub fn files(&self, cancel: &AtomicBool, found: &mut dyn FnMut(usize)) -> Result<Vec<CameraFile>, Error> {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         {
             self.inner.files(cancel, found)
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = (cancel, found);
             Err(Error::Unsupported)
@@ -123,11 +141,11 @@ impl Session {
     /// Copy `file`'s bytes into `out`, calling `progress` with the bytes copied so far. Returns the
     /// byte count. `cancel` is checked between reads.
     pub fn copy_to(&self, file: &CameraFile, out: &mut dyn std::io::Write, cancel: &AtomicBool, progress: &mut dyn FnMut(u64)) -> Result<u64, Error> {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         {
             self.inner.copy_to(file, out, cancel, progress)
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = (file, out, cancel, progress);
             Err(Error::Unsupported)
@@ -152,6 +170,19 @@ pub fn ole_date_to_iso(days: f64) -> Option<String> {
     let secs = (days * 86_400.0).round() as i64;
     let (day, sec) = (secs.div_euclid(86_400) - 25_569, secs.rem_euclid(86_400));
     let (y, m, d) = civil_from_days(day);
+    Some(format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}", sec / 3600, sec / 60 % 60, sec % 60))
+}
+
+/// Seconds since 1970-01-01 on a local clock as `YYYY-MM-DDTHH:MM:SS`. `None` before 1970 or
+/// after 2200, like [`ole_date_to_iso`].
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn unix_to_iso(secs: i64) -> Option<String> {
+    // 2201-01-01 is day 84371
+    if !(0..84_371 * 86_400).contains(&secs) {
+        return None;
+    }
+    let (y, m, d) = civil_from_days(secs.div_euclid(86_400));
+    let sec = secs.rem_euclid(86_400);
     Some(format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}", sec / 3600, sec / 60 % 60, sec % 60))
 }
 
@@ -266,8 +297,30 @@ mod tests {
     }
 
     #[test]
+    fn unix_seconds_become_local_timestamps() {
+        assert_eq!(unix_to_iso(0).as_deref(), Some("1970-01-01T00:00:00"));
+        let t = local_seconds("2026-10-09T18:48:46").unwrap();
+        assert_eq!(unix_to_iso(t).as_deref(), Some("2026-10-09T18:48:46"));
+        assert_eq!(unix_to_iso(local_seconds("2200-12-31T23:59:59").unwrap()).as_deref(), Some("2200-12-31T23:59:59"));
+        for s in [-1, local_seconds("2201-01-01T00:00:00").unwrap(), i64::MIN, i64::MAX] {
+            assert_eq!(unix_to_iso(s), None, "{s}");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn without_a_served_main_queue_cameras_fail_instead_of_hanging() {
+        // the test harness's main thread is parked, so ImageCaptureCore never answers: nothing is
+        // listed and opening is an error, each within its time limit
+        let t = std::time::Instant::now();
+        assert_eq!(cameras(), Ok(Vec::new()));
+        assert!(matches!(Session::open("no-such-camera"), Err(Error::Device(_))));
+        assert!(t.elapsed() < std::time::Duration::from_secs(20), "{:?}", t.elapsed());
+    }
+
+    #[test]
     fn other_platforms_list_no_cameras() {
-        if cfg!(not(windows)) {
+        if cfg!(not(any(windows, target_os = "macos"))) {
             assert_eq!(cameras(), Ok(Vec::new()));
             assert!(matches!(Session::open("x"), Err(Error::Unsupported)));
         }
