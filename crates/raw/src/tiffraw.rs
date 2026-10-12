@@ -1,7 +1,7 @@
 //! Reading the pixel data of a TIFF IFD (strips or tiles; uncompressed, lossless/lossy JPEG, Deflate, JPEG XL), in parallel.
 
 use crate::unpack::{f16_to_f32, f24_to_f32, inflate, read_u16s, undo_diff_u16, undo_float_predictor, unpack_lsb, unpack_msb, unpack_words32_msb};
-use crate::{MAX_SAMPLES, RawData, RawError, Result, ljpeg};
+use crate::{MAX_SAMPLES, RawData, RawError, Result, dctjpeg, ljpeg};
 use lightcraft_tiff::image::{Chunk, ImageInfo, chunk_bytes};
 use lightcraft_tiff::{ByteOrder, tags::compression as comp};
 use rayon::prelude::*;
@@ -99,7 +99,11 @@ pub(crate) fn read_image_in(mode: crate::Mode, data: &[u8], info: &ImageInfo, or
             {
                 match info.compression {
                     7 => {
-                        ljpeg::frame_info(src)?;
+                        if dctjpeg::is_dct(src) {
+                            dctjpeg::frame_info(src)?;
+                        } else {
+                            ljpeg::frame_info(src)?;
+                        }
                     }
                     comp::JPEG_XL => {
                         let planar = info.planar == 2 && info.samples_per_pixel > 1;
@@ -234,7 +238,9 @@ fn decode_chunk(data: &[u8], info: &ImageInfo, c: &Chunk, order: ByteOrder, pack
             unpack_chunk(src, order, packing, cw, ch, cpp, bits, float, 1)
         }
         comp::JPEG => {
-            let f = ljpeg::decode(src, n.saturating_mul(2).max(1 << 16))?;
+            // Blackmagic's lossy CinemaDNG DCT-codes (SOF0/SOF1, 12-bit) its tiles under this compression code too
+            let limit = n.saturating_mul(2).max(1 << 16);
+            let f = if dctjpeg::is_dct(src) { dctjpeg::decode(src, limit)? } else { ljpeg::decode(src, limit)? };
             if f.data.len() < n {
                 // Some writers encode edge tiles smaller than nominal: accept a frame that covers the rows inside the image.
                 if f.data.is_empty() || f.data.len() % (cw * cpp) != 0 || f.data.len() / (cw * cpp) < vh {
