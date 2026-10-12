@@ -794,6 +794,14 @@
   read; reload the page to try again.
 ## 2026-10-14
 
+### Import from cameras that don't show up as a drive, on macOS too
+- On macOS, cameras and phones that talk PTP over USB (a Leica M11, most cameras in their default USB mode) are now
+  listed in File ▸ Import from Device as well, read through ImageCaptureCore, the framework Image Capture and Photos
+  use. The system keeps the connection, so Image Capture and other apps can stay open. Same flow as on Windows:
+  only new photos are copied, with progress and ✕, then the import review opens with **Move** checked (issue #1005).
+  Checked with a Leica M11-P over USB 2.0: 352 photos (12.7 GB) listed in under 0.1 s once the camera has built
+  its catalog, DNGs copied at about 24 MB/s, byte-identical, with the camera's capture times.
+
 ### Model downloads time out on a name that doesn't resolve
 - Model downloads (AI denoise, faces, SAM) give up on a server name that doesn't resolve within the connect timeout,
   and Cancel stops a download that is still looking the name up (issue #1532). The lookup used to block with no time

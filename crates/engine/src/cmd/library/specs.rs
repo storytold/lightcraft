@@ -379,7 +379,7 @@ pub fn specs() -> Vec<CommandSpec> {
             s.selection = Selection { active: s.selection.active.filter(|a| vis.contains(a)).or(vis.first().copied()), ids: vis };
             Ok(json!({"selected": s.selection.ids.len()}))
         }),
-        cmd!(query "library.devices", "Cameras and Cards", [], None, "{} → [{name, path (its DCIM folder), root, camera}] — mounted volumes with a DCIM folder, and cameras/phones that don't mount as a disk (`camera`: their id, `path` empty; Windows)", always, |_, _| {
+        cmd!(query "library.devices", "Cameras and Cards", [], None, "{} → [{name, path (its DCIM folder), root, camera}] — mounted volumes with a DCIM folder, and cameras/phones that don't mount as a disk (`camera`: their id, `path` empty; Windows and macOS)", always, |_, _| {
             Ok(serde_json::to_value(crate::devices::devices_now()).unwrap_or_default())
         }),
         cmd!(query "library.fetchCamera", "Fetch from Camera", [], None, "{camera: id from library.devices, name?: for the staging folder} — copy the camera's photos the library doesn't have yet into a staging folder outside the library (blocking, for headless use: in the desktop app `file.addFromDevice {camera}` does this in the background and opens the review; read-only on the camera; a file with the same name, size and a capture time within 2 min of the camera's date is skipped unread, a cancelled or repeated fetch reuses what is already staged) → {staged: [paths], fetched, reused, known, unsupported, failed: [{name, error}], bytes, folder}. Then import them: `library.import {paths: staged, mode: \"move\"}`", always, |s, p| {

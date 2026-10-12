@@ -1,6 +1,6 @@
 //! Cameras and memory cards: mounted volumes with a `DCIM` folder (the DCF layout every camera
 //! writes), and cameras and phones that don't mount as a disk (PTP/MTP, through the system's own
-//! driver: `lightcraft-cameras`; Windows so far). Listed by `library.devices`; the app offers them
+//! driver: `lightcraft-cameras`; Windows and macOS). Listed by `library.devices`; the app offers them
 //! under File → Import from Device, and the import review copies from them into the library (a
 //! camera's photos are fetched into a staging folder first: `camera_import`).
 //!
