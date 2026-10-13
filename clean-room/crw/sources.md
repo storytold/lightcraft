@@ -103,3 +103,11 @@ checked out, diffed, logged or read.
   of every entropy stream (zero exceptions), the PowerShot `ff d9` terminator, and the exact
   low-bits region bounds on G5/G6. Documented in `03-payload-layout.md`. No external sources
   consulted in this step.
+
+## Oracle (P2, from 2026-10-12)
+
+- The maintainer installed LibRaw 0.22.2 (official pre-built Windows binaries) at
+  `C:\Users\Robert\LibRaw-0.22.2\bin`. That directory tree also contains LibRaw's source
+  code; **no source file there is ever opened, read or searched** — only
+  `bin\unprocessed_raw.exe` is executed, as a black box, per the approved plan (§5a/§7).
+  All oracle runs and probe campaigns are logged in `04-derivation-log.md`.
