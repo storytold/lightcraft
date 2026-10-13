@@ -57,3 +57,23 @@ D60 files; the PowerShot G5 is the known exception (`06-crw-format.md` §4).
 - The G1 (10-bit, no low-bits plane) verifies the low-bits presence rule; the G6
   (12-bit, different geometry, w not divisible by 64) verifies the row-reset and
   block rules on a second geometry.
+
+## Revision 2: the wider D60 sweep (2026-10-13)
+
+The maintainer supplied 1,516 Canon EOS D60 files (private; local use only, nothing
+copied into the repository, verdicts only recorded here). With the revision-1 decoder,
+223 failed on unseen code-table entries and 9 were misread as 10-bit (`06-crw-format.md`,
+revision 2). After the two corrections every file was compared against LibRaw 0.22.2
+`unprocessed_raw.exe -T`, every sensor sample, with the Rust decoder
+(`plan/crw/model/sweep_all.py`, local):
+
+| Selector | Files | Verdict |
+|---|---:|---|
+| 0 | 243 | all **EXACT** |
+| 1 | 1,193 | all **EXACT** |
+| 2 | 80 | all **EXACT** |
+| **Total** | **1,516** | **1,516 EXACT** |
+
+The nine learned codes came from 30 of the failing files; the other 202 failing files and
+the 1,284 that already decoded are a blind check of them. The public files were re-run
+with the same build: 10 EXACT, the G5 still refused.

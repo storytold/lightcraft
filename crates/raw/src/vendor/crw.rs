@@ -158,11 +158,15 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let payload =
         bytes.get(ro..ro.checked_add(rl).ok_or_else(|| corrupt("raw record size overflow"))?).ok_or_else(|| corrupt("raw data outside the file"))?;
 
-    // Low-bits plane discriminator (frozen rule): the plane's raw bytes may hold an 0xff not
-    // followed by 0x00, which the stuffed entropy stream never does.
+    // Low-bits plane discriminator, two signs of a plane: (a) its raw bytes may hold an 0xff not
+    // followed by 0x00, which the stuffed entropy stream never does; (b) the zero header of
+    // `ent_off` bytes sits right after it, where a file without a plane is deep in entropy data.
+    // (b) catches the D60 files whose lowest bit is almost always 0, so no plane byte is 0xff.
     let q = n.div_ceil(4);
-    let head = payload.get(..q.saturating_add(ent_off).min(payload.len())).unwrap_or(payload);
-    let has_low = head.windows(2).any(|p| p[0] == 0xff && p[1] != 0x00);
+    let span = q.saturating_add(ent_off);
+    let head = payload.get(..span.min(payload.len())).unwrap_or(payload);
+    let header_after_plane = ent_off >= 64 && payload.len() > span && payload.get(q..span).is_some_and(|z| z.iter().all(|&b| b == 0));
+    let has_low = header_after_plane || head.windows(2).any(|p| p[0] == 0xff && p[1] != 0x00);
     let bits = if has_low { 12 } else { 10 };
     let low_len = if has_low { q } else { 0 };
 
@@ -684,6 +688,22 @@ mod tests {
         assert_eq!(img.data, RawData::U16(expected));
     }
 
+    /// A low-bits plane without a single 0xff byte (real D60 files whose lowest bit is nearly
+    /// always 0) used to be taken for "no plane": the plane was read as entropy data and the
+    /// file came out as 10-bit garbage. The zero header after the plane gives it away.
+    #[test]
+    fn a_low_bits_plane_without_ff_bytes_is_still_a_plane() {
+        let hi = test_hi(128);
+        for byte in [0x22u8, 0x00] {
+            let low = vec![byte; 32];
+            let f = roundtrip_file(16, 8, "Canon EOS D60", Some(&low), &hi, Order::Le);
+            let img = decode(&f, Mode::Full).expect("decodes");
+            assert_eq!(img.bits, 12);
+            let expected: Vec<u16> = hi.iter().enumerate().map(|(i, &v)| (v << 2) | u16::from((byte >> ((i & 3) * 2)) & 3)).collect();
+            assert_eq!(img.data, RawData::U16(expected));
+        }
+    }
+
     #[test]
     fn big_endian_ciff_decodes_too() {
         let hi = test_hi(128);
@@ -795,6 +815,21 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// Every second table codes all 162 symbols: (r, s) for r 0..=15 and s 1..=10, end of block
+    /// and (15, 0). Selectors 0 and 1 lacked (7..=14, 10) and (14, 10), learned from too few
+    /// files, and 223 of 1,516 real D60 files failed with "undecodable entropy code".
+    #[test]
+    fn second_tables_code_every_symbol() {
+        for sel in 0..3 {
+            let t = crw_tables::tables(sel).expect("selector");
+            let have: std::collections::BTreeSet<(u8, u8)> = t.main.iter().map(|e| (e.2, e.3)).collect();
+            let mut want: std::collections::BTreeSet<(u8, u8)> = (0..16).flat_map(|r| (1..=10).map(move |s| (r, s))).collect();
+            want.extend([(0, 0), (15, 0)]);
+            assert_eq!(have, want, "selector {sel}");
+            assert_eq!(t.main.len(), 162, "selector {sel}: one code per symbol");
         }
     }
 

@@ -1,8 +1,14 @@
 # Canon CRW raw compression — derived format (FROZEN)
 
-Status: **frozen at this commit** (plan §5 P4). From here on, the derivation is not
-tuned; any later correction must reopen it explicitly with a recorded cause and a new
-freeze commit. Everything here was derived from the CC0/private sample files
+Status: **frozen, revision 2** (plan §5 P4). The derivation is not tuned; any correction
+must reopen it explicitly with a recorded cause and a new freeze commit.
+
+**Revision 2 (2026-10-13), cause:** the maintainer supplied 1,516 D60 files, 50 times the
+first corpus. 223 of them failed on code-table entries the first corpus never exercised,
+and 9 were misread as having no low-bits plane. Two corrections, both recorded in
+`04-derivation-log.md` and re-verified in `07-verification.md`: the low-bits presence rule
+(§1) gained the header-position test, and the selector 0 and 1 second tables were completed
+(§3). Nothing else in the model changed, and every file of the first corpus still verifies. Everything here was derived from the CC0/private sample files
 and black-box probing of LibRaw 0.22.2 (`unprocessed_raw.exe`), per the approved plan; no
 decoder source was consulted. The chronological evidence is `04-derivation-log.md`; the
 container and payload groundwork are `02-container.md` and `03-payload-layout.md`.
@@ -20,10 +26,15 @@ RawData (CIFF record 0x2005), with w×h from SensorInfo (0x1031) and
 ```
 
 - **Low-bits plane**: 2 bits per sensor sample, row-major, LSB-first within each byte
-  (sample 4i in bits 1:0 … sample 4i+3 in bits 7:6). Present ⇔ the first
-  w·h/4 + 514 bytes of the payload contain any 0xff byte NOT followed by 0x00
-  (the entropy stream is always stuffed, the low-bits plane is raw — this scan is the
-  discriminator; verified: present on D30/D60/10D/300D/G5/G6, absent on G1).
+  (sample 4i in bits 1:0 … sample 4i+3 in bits 7:6). Present ⇔ either
+  (a) the first w·h/4 + 514 bytes of the payload contain any 0xff byte NOT followed by
+  0x00 (the entropy stream is always stuffed, the low-bits plane is raw), or
+  (b) the 514 bytes at offset w·h/4 are all zero (the zero header sits right after the
+  plane; without a plane that offset is deep in entropy data).
+  Rule (a) alone, the revision-1 rule, misses planes that hold no 0xff byte: some D60
+  files have a lowest bit that is almost always 0 (low values 1 and 3 on about 0.04 % of
+  samples), so no four neighbouring samples are all 3. Verified: present on
+  D30/D60/10D/300D/G5/G6, absent on G1.
 - On the EOS bodies the DecoderTable's compressedLength excludes the low-bits plane;
   on G5/G6 it includes it. The decoder should not rely on compressedLength: entropy
   data starts at (low-bits size, if present) + 514 and runs to the tail.
@@ -61,9 +72,17 @@ After removing the stuffing (drop the 0x00 after every 0xff), bits are read
 
 Extracted from the samples by known-plaintext alignment and frozen as data:
 
-- Selector 0: `logs/table_sel0.json` — 12 first-table + 154 second-table codes.
-- Selector 1: `logs/table_sel1.json` — 12 + 161.
+- Selector 0: `logs/table_sel0.json` — 12 first-table + 162 second-table codes.
+- Selector 1: `logs/table_sel1.json` — 12 + 162.
 - Selector 2: `logs/table_sel2.json` — 12 + 162.
+
+Each second table now holds all 162 symbols: (r, s) for r = 0..15, s = 1..10, plus (0, 0)
+and (15, 0). Revision 1 lacked (7..14, 10) in selector 0 and (14, 10) in selector 1: runs
+of 7 or more zero differences followed by a difference of 512 or more, which the first
+corpus never contained. The nine codes were learned from the wider corpus by the same
+known-plaintext method; each landed in one of the unassigned 16-bit slots inside the code
+range, of which there were exactly eight and one. The slots still unassigned are the
+all-ones tail of each table (5, 20 and 3 codes) and the first tables' longest code.
 
 Tables are shared across bodies per selector (verified across D60/10D/300D/Rebel for
 selector 0; D30, G1 and the private D60s for selector 1; 10D, 300D and a private D60

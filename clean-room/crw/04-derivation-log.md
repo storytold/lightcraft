@@ -291,3 +291,25 @@ string. Colour/geometry work (CFA phases by chroma correlation + green-diagonal 
 border black levels, 0x10a9/0x10aa white balance, rotation and timestamps) is documented in
 `08-color.md`; ExifTool prose pages and a raw.pixls.us repository-listing fetch (to recover
 the 11 corpus files' stable URLs for `cargo xtask corpus`) are logged in `sources.md`.
+
+## 2026-10-13 — Freeze reopened (revision 2): 1,516 D60 files, two corrections
+
+The maintainer put all his D60 files in `../RawImages` (1,516). The revision-1 decoder
+failed on 232 of them, which the 29-file corpus could not have shown:
+
+- **223 "undecodable entropy code".** The second tables were learned from exercised codes
+  only: selector 0 had 154 of 162 symbols, selector 1 had 161. Laying out the 16-bit code
+  range showed exactly eight unassigned slots inside selector 0's range and one inside
+  selector 1's, against exactly eight and one missing symbols: (7..14, 10) and (14, 10).
+  For selector 1 the assignment follows by elimination; the learner (`aligner12.py`, same
+  known-plaintext method, LibRaw as the black box) confirmed it and assigned selector 0's
+  eight from the failing files.
+- **9 files decoded as 10-bit garbage.** Their low-bits plane holds no 0xff byte, because
+  the lowest bit of nearly every sample is 0, so the revision-1 presence rule said "no
+  plane". My first reading (an all-zero plane) was wrong: I had counted 0xff bytes, not
+  nonzero bytes; the plane has 1.5 M nonzero bytes. The rule now also accepts the zero
+  header found right after the plane.
+
+Result: 1,516 of 1,516 EXACT, and the first corpus unchanged (`07-verification.md`).
+A lesson for the remaining unverified bodies: a table learned from a few files is complete
+only when its symbol count is; selector 2 was already at 162.
