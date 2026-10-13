@@ -909,6 +909,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-20 | patch | LR-MASK-BRUSH: extreme segments skip intermediate dabs; ordinary spacing and endpoints preserved; status unchanged (🟡) |
 | 2026-10-12 | minor | LR-META-XMP: bounded complete-APP1 manual JPEG reread, fail-closed sidecar precedence and scoped regression coverage; LR-META-EXIF-FULL: reuse loaded bytes; statuses unchanged |
 | 2026-10-13 | minor | LR-IMP-ADD-DIALOG: the import review (and `library.importPreview`) says when its folder scan stopped at the walk limit, could not read folders or skipped files that are not a supported photo type; no walk behaviour changes; status unchanged (✅) |
+| 2026-10-13 | minor | LR-IMP-ADD-DIALOG: the import review (and `library.importPreview`) says when its folder scan stopped at the walk limit, could not read folders or skipped files that are not a supported photo type (XMP sidecars are not counted); no walk behaviour changes; status unchanged (✅) |
 | 2026-10-11 | minor | LR-MERGE-HDR: HDR and panorama merges of raws without colour matrices (CR2, NEF, ARW…) write the colour they open with as DNG tags (issue #965); status unchanged |
 | 2026-10-12 | minor | LR-META-XMP: Read Metadata from File no longer auto-writes the sidecar it has just read, which added `lc:settings` and hid another app's later `crs:` edits (#934); status unchanged (✅) |
 | 2026-10-12 | patch | LR-IMP-CAMERA-COVERAGE: CR2 white level from the active area, not the saturated masked rows above it (issue #1272); status unchanged (🟡) |
