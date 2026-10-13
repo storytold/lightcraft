@@ -186,7 +186,9 @@ pub(super) fn check(n: &Node, g: &Graph) -> Result<()> {
                 floats(n, g, 2)?;
             }
         }
-        "Dropout" if !(0.0..1.0).contains(&float(n, "ratio", 0.5)) => return shape_err("Dropout ratio is invalid"),
+        "Dropout" if !(0.0..1.0).contains(&float(n, "ratio", 0.5)) => {
+            return shape_err("Dropout ratio is invalid");
+        }
         "MaxPool" => {
             pair(n, "kernel_shape", 1)?;
             pair(n, "strides", 1)?;
