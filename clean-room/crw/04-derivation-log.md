@@ -227,3 +227,24 @@ starting each block); (run ≤ 15, size) leaves with JPEG MSB magnitudes; (0,0) 
 EOB; per-block DC carry; parity chains init 512, reset at row starts; low-bits recombined
 as the 2 LSBs. Remaining: complete code tables per DecoderTableNumber, extracted by the
 known-plaintext walker (`aligner11.py`), then full-corpus verification.
+
+## 2026-10-13 — SELECTOR-0 TABLES COMPLETE; four bodies decode end-to-end
+
+The greedy known-plaintext extractor (`plan/crw/model/aligner12.py`: deterministic decode
+with deep trial-validation per unknown code, flip-scans resolving the few ambiguous sites)
+completed the DecoderTableNumber-0 Huffman tables. Results:
+
+- **D60 (public): the full 6 518 336-sample frame decodes from bit 0 against the oracle,
+  pixel-exact,** in seconds, with only the final 3 samples open (stream tail handling).
+- **10D, 300D and Digital Rebel (selector 0) decode end-to-end with the same table** —
+  per-selector tables are shared across bodies, as the plan hoped. Each file exercised a
+  few additional rare high-k codes (merged).
+- Final selector-0 tables: 11 first-table codes, 131 second-table codes (incl. the 16-bit
+  `11111111xxxxxxxx` run/size family); saved as `logs/table_sel0_d60class.json`.
+- The decisive last fix: a hand-guessed 15-bit seed blocked the true 11-bit (1,7) code by
+  prefix; a flip-scan at the stall site read the real code and magnitude (m = 83) directly.
+
+Selector 1 (from the D30) and selector 2 (from the second 10D file) extractions running
+with the same tooling. Remaining after that: G1/G5/G6 PowerShot handling (10-bit G1; the
+G5 low-bits anomaly), the stream-tail rule, then the frozen format document and the
+Python reference decoder for the P4 verification pass.
