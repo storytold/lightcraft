@@ -331,6 +331,50 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// Files the caller's `keep` refuses are counted (an import reports them as unsupported), and
+    /// so are only those: hidden files and the skipped folder are left out without a count, and
+    /// the files returned are the same ones in the same order.
+    #[test]
+    fn unkept_files_are_counted_as_skipped() {
+        let d = tmp("skipped");
+        for f in ["a.jpg", "b.txt", "c.png", "sub/d.jpg", "sub/e.md", ".hidden.txt", "lib/l.txt"] {
+            let p = d.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, b"x").unwrap();
+        }
+        let lib = d.join("lib");
+        let w = files_in(&d, Some(&lib), Limits::default(), |p| p.extension().is_some_and(|e| e == "jpg"));
+        let rel: Vec<String> = w.files.iter().map(|p| p.strip_prefix(&d).unwrap().to_string_lossy().replace('\\', "/")).collect();
+        assert_eq!(rel, ["a.jpg", "sub/d.jpg"]);
+        assert_eq!((w.skipped, w.unreadable, w.truncated), (3, 0, false), "{w:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A folder that is gone by the time the walk reaches it (here removed while an earlier file is
+    /// looked at, as an unplugged disk or a deleted folder would be) is counted as unreadable;
+    /// the walk carries on and still returns the other files.
+    #[test]
+    fn a_folder_that_vanishes_is_counted_as_unreadable() {
+        let d = tmp("vanished");
+        for f in ["a.jpg", "b/b.jpg", "c.jpg"] {
+            let p = d.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, b"x").unwrap();
+        }
+        let gone = d.join("b");
+        // `a.jpg` is looked at before the folder `b` is entered
+        let w = files_in(&d, None, Limits::default(), |p| {
+            if p.ends_with("a.jpg") {
+                let _ = std::fs::remove_dir_all(&gone);
+            }
+            true
+        });
+        let rel: Vec<String> = w.files.iter().map(|p| p.strip_prefix(&d).unwrap().to_string_lossy().replace('\\', "/")).collect();
+        assert_eq!(rel, ["a.jpg", "c.jpg"]);
+        assert_eq!((w.unreadable, w.skipped, w.truncated), (1, 0, false), "{w:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     /// Folder imports must not revisit the user's own library through symlinks
     /// or through an alias to the library's parent.
     #[cfg(unix)]
