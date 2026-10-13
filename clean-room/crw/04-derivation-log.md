@@ -74,6 +74,42 @@ decoded rows. First probes (filler = repeated bit):
 | all 1 | 512 512 512 … | all-ones token(s) = zero diffs |
 | `100` + 511 + zeros | 16144 505 16137 498 … | no clamping in the oracle; convention probe |
 
-Then `plan/crw/model/treewalk.py`: adaptive prefix expansion — a prefix whose first decoded
-pixel is identical under 0-filler and 1-filler has its first token complete; leaves give
-(token bits, first diff, run behaviour). Campaign running for DecoderTableNumber 0, then 1, 2.
+Then `plan/crw/model/treewalk.py`: adaptive prefix expansion. Three aborted attempts taught
+the method its final shape: (1) a race — the first walker's process survived its kill and
+fought a second one over a shared probe file (fixed with per-PID work files; both result
+sets discarded as corrupt); (2) enumerating magnitude bits explodes 2^k-fold; (3) leaf
+detection via an assumed magnitude convention fails because the convention is *not* plain
+JPEG (single-bit probes behind a known codeword give non-binary-weight responses).
+
+## 2026-10-12/13 — truncation probing of the real stream (campaign 2)
+
+`plan/crw/model/boundary.py` / `boundary2.py`: feed the oracle the real stream truncated at
+bit B plus a constant filler. `boundary2`'s agreement scan (decode under 0-filler AND
+1-filler; count leading pixels where both agree and match the real decode) yields **exact
+token boundaries**: agreement can only grow when a token completes inside [0,B).
+
+Zero-region result (D60, table 0, bits 0–120 ≈ pixels 0–321, all-zero rows; data in
+`bounds2_zero.json`, local):
+
+| token bits (stream order, LSB-first in bytes) | len | emits pixels |
+|---|---|---|
+| `1001111111111111` | 16 | 1 (pix 0, d = −512) |
+| `011111111111100111111111` | 24 | 2 (zeros) |
+| `11111011` | 8 | 61 → ends exactly at pixel 64 (EOB) |
+| `0000101111100000` | 16 | 1 (pix 64, first of block 1) |
+| `1110000` | 7 | 1 |
+| `1` | 1 | 62 → ends exactly at pixel 128 (**1-bit EOB**) |
+| `11111011` | 8 | 2 |
+| `11111101` | 8 | 63 (ends at pixel 193) |
+| `0111111` | 7 | 1 |
+| `010111111` | 9 | 63 |
+| `11011111` | 8 | 63 |
+| `11101111` | 8 | 1 |
+
+Established: **64-pixel block structure** (B4's "blocks of 64" holds); an EOB-style token
+ends a block; the same bit string decodes differently in different blocks (`11111011` = EOB
+in block 0 but a 2-pixel token later) → at least two tables/contexts in play (B5's two-table
+recollection pointing the right way). First-of-block tokens are long (16 bits here, carrying
+the −512 initial diffs). The value-token magnitude convention is still open — it is *not*
+plain JPEG — and is being extracted from a second agreement scan over row 7's textured data
+(`bounds2_row7.json`).
