@@ -1,6 +1,6 @@
 # Olympus and OM System ORF decoding
 
-> **Last updated:** 2026-10-12 · **Change:** minor (lossless compressed ORF, including PEN E-PL7)
+> **Last updated:** 2026-10-13 · **Change:** minor (invalidate JPEG-derived smart previews on decoder upgrade)
 
 LightCraft reads ORF sensor data from older uncompressed cameras and from the lossless compressed
 files written by Olympus PEN, OM-D and Tough cameras and OM System bodies. The original mosaic,
@@ -75,6 +75,8 @@ payloads and overflowing maker-note crop coordinates.
 
 The E-PL7 engine regression also checks import as raw, guarded camera-colour fitting, finite render
 pixels, and Reload from Disk upgrading an old preview-only catalog entry without losing its edits.
+Reload invalidates its JPEG-derived smart preview even when the original's bytes are unchanged;
+use **Build Smart Previews** before taking the original offline to rebuild it from sensor data.
 Render cache version 62 invalidates previously cached JPEG-fallback renders. Existing imports can
 be upgraded with **Photo → Reload from Disk** after rebuilding and restarting LightCraft.
 
@@ -92,4 +94,5 @@ listed as unverified in [raw/coverage.tsv](raw/coverage.tsv).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | Reload invalidates old JPEG-derived smart previews before switching to sensor decoding; synthetic and E-PL7 regressions |
 | 2026-10-12 | minor | Lossless compressed ORF: independent Rust decoder, 23 exact sensor references including PEN E-PL7, fast probes and malformed-input regressions |
