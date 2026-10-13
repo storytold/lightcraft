@@ -127,3 +127,38 @@ boundary (pixel0 = m − 255 over the whole probed range m = 127…255): the mag
 convention is offset-style, not JPEG's two-branch rule, at least for this token. A full
 flip scan over a textured region (row 11) is mapping code and magnitude bits for ~25
 consecutive tokens.
+
+## 2026-10-13 — bit order corrected: MSB-first; token structure pinned
+
+A systematic contradiction (magnitude fields appearing split across bytes, "token
+boundaries" clustering at 8 bits) resolved when the flip map was re-plotted in MSB-first
+bit coordinates: an early mis-step had locked the analysis into LSB-first reading, which
+mirrors every byte. **The stream is MSB-first after ff00 unstuffing.** In MSB coordinates
+every magnitude field is contiguous and the JPEG rule is confirmed by exact branch-flip
+deltas (e.g. flipping the top magnitude bit of a k=5, m=2 token: −29 → +18, Δ+47 observed).
+
+Flip-verified token chain (D60 table 0, pixels 34994–34999, bits 20784–20819):
+
+| bits | table | meaning | pixels |
+|---|---|---|---|
+| `01` + `00010` | A | k=5, m=2 → −29 | 34994 |
+| `11111100` + `11110` | B | run 1 + k=5, m=30 → +30 | 34995 (zero), 34996 |
+| `1100` + `1` | A | k=1 → +1 | 34997 |
+| `00` + `010` | B | k=3, m=2 → −5 | 34998 |
+| `00` + `010` | A | k=3 → −5 | 34999 |
+
+Established:
+- **Two Huffman tables, strictly alternating per token (A, B, A, B, …)** — forced by
+  prefix-freeness: the verified codes cannot coexist in one table or in parity-assigned
+  tables, and alternation renders both tables prefix-free. (This refines B5.)
+- Tokens carry a **(zero-run r, size s)** pair: r zero-diff pixels plus one value of
+  size s; s = 0 codes are pure runs/EOB. Predictors: two, by pixel parity, init 512,
+  carried across rows (flip cascades propagate stride-2 to the image end).
+- The 10-bit "hi" plane is nearly constant in dark/flat areas — the reason the low-bits
+  plane exists: the sensor noise lives in the 2 raw LSBs, keeping the entropy-coded
+  plane highly compressible.
+
+Open: exact placement of the bundled zeros (before vs after the value) in corner cases,
+EOB/block semantics, the first-token special case at pixel 0, and the complete code
+tables for DecoderTableNumber 0, 1, 2 (being extracted by continued flip scans plus the
+known-plaintext aligner `plan/crw/model/aligner4.py`).
