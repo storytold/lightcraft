@@ -189,3 +189,24 @@ Second-table codes verified so far (D60, DecoderTableNumber 0): `00`=(0,3), `100
 A seeded known-plaintext aligner (`aligner6.py`) is now walking the whole 6.5-Mpixel stream
 to learn the remaining codes of both tables and verify every pixel; the same harness then
 runs on files with DecoderTableNumbers 1 and 2 and on the other bodies.
+
+## 2026-10-13 — the carry chain, and the first/second table split confirmed
+
+Synthetic sentinel probes plus the zero-region MSB scan established two more rules:
+
+- **Carry on block DC**: each 64-pixel block's first diff is coded relative to the
+  previous block's *combined* first diff (`diff0 += carry; carry = diff0`). This single
+  rule reconciles pixel 0 (coded −512), pixel 64 (coded +512 → effective 0) and pixel
+  128 (coded 0 → effective 0) with plain parity chains init 512 — the earlier
+  "predictor anomalies" were all carry.
+- **The first-of-block token really does use a separate Huffman table** (`101` = (0,2)
+  there vs (0,5) in the main table, verified by decode-iteration at pixel 35008), i.e.
+  the classic first/second table structure of B5.
+- The S-EOB of the main table is 9 bits (`111111011`); agreement boundaries inside
+  all-zero blocks proved unreliable (fillers self-heal on zeros), so zero-region token
+  readings are being re-derived by decode-iteration rather than scans.
+
+Current state: the main table has ~20 verified codes; a decode-and-learn loop
+(`plan/crw/model/aligner8.py`) walks the real stream, decoding deterministically with
+known codes and learning first-table/main-table rows at each stall, each verified
+against the oracle pixels.
