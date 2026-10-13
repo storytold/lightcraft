@@ -1680,6 +1680,97 @@ fn smart_header(file: &Path) -> Value {
     serde_json::from_slice(&bytes[start..nl]).unwrap()
 }
 
+/// A decoder upgrade changes the interpretation, not the original's bytes or proxy filename.
+#[test]
+fn reload_invalidates_preview_only_smart_previews() {
+    use crate::media::{ProbeInfo, SourceLevel};
+    use lightcraft_catalog::{MediaKind, Op};
+    use lightcraft_pipeline::SourceInfo;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    let dir = temp_dir("smart-decoder-upgrade");
+    let path = dir.join("photo.orf");
+    // Procedural pixels stand in for the two decoder versions; no downloaded corpus is needed.
+    write_png(&path, 9);
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("lib"), false).unwrap();
+    let sensor = Arc::new(AtomicBool::new(false));
+    let upgraded = sensor.clone();
+    s.media.file_probe = Some(Arc::new(move |_| {
+        Ok(ProbeInfo {
+            width: 48,
+            height: 32,
+            format: "ORF".into(),
+            kind: MediaKind::Raw,
+            file_size: 1234,
+            content_hash: Some("unchanged".into()),
+            preview_only: (!upgraded.load(Ordering::SeqCst)).then(|| "compressed ORF".into()),
+            ..Default::default()
+        })
+    }));
+    let upgraded = sensor.clone();
+    s.media.file_loader = Some(Arc::new(move |path, _| {
+        std::fs::read(path).map_err(|e| e.to_string())?;
+        let raw = upgraded.load(Ordering::SeqCst);
+        Ok((
+            lightcraft_raster::Rgb32f::filled(48, 32, if raw { [0.2, 0.4, 0.6] } else { [0.8; 3] }),
+            SourceInfo { raw, relative_wb: raw, ..Default::default() },
+        ))
+    }));
+    let r = s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = lightcraft_catalog::PhotoId(r["imported"][0].as_u64().unwrap());
+    let mut copy = (**s.catalog.photo(id).unwrap()).clone();
+    copy.id = s.catalog.alloc_photo_id();
+    copy.copy_of = Some(id);
+    let copy_id = copy.id;
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.7})).unwrap();
+    let before = s.catalog.photo(id).unwrap().clone();
+    let smart_dir = s.media.smart_dir.clone().unwrap();
+    let file = crate::smart::sharded_file_path(&smart_dir, &before);
+    let flat = smart_dir.join(crate::smart::file_name(&before));
+    s.execute("library.smartPreviews", &json!({"ids": [id.0]})).unwrap();
+    assert!(crate::smart::is_valid(&file) && !crate::smart::is_stale(&file));
+    let old = std::fs::read(&file).unwrap();
+    std::fs::write(&flat, &old).unwrap(); // both layouts must be invalidated
+    assert_eq!(s.execute("photo.reload", &json!({"ids": [id.0]})).unwrap()["reloaded"], json!([]));
+    assert_eq!(std::fs::read(&file).unwrap(), old, "an unchanged interpretation keeps its proxy");
+
+    sensor.store(true, Ordering::SeqCst);
+    std::fs::remove_file(&flat).unwrap();
+    std::fs::create_dir(&flat).unwrap(); // an unremovable proxy must not allow the catalog switch
+    assert!(s.execute("photo.reload", &json!({"ids": [id.0]})).is_err());
+    assert!(!s.catalog.photo(id).unwrap().develops_raw());
+    std::fs::remove_dir(&flat).unwrap();
+    std::fs::write(&file, &old).unwrap();
+    std::fs::write(&flat, &old).unwrap();
+    let r = s.execute("photo.reload", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(r["reloaded"], json!([id.0, copy_id.0]));
+    let after = s.catalog.photo(id).unwrap().clone();
+    assert_eq!((&after.content_hash, after.file_size, &after.develop), (&before.content_hash, before.file_size, &before.develop));
+    assert_eq!(crate::smart::sharded_file_path(&smart_dir, &after), file);
+    assert!(after.develops_raw() && s.catalog.photo(copy_id).unwrap().develops_raw());
+    assert!(!file.exists() && !flat.exists(), "JPEG-derived proxies cannot be used as raw");
+    let r = s.execute("library.smartPreviews", &json!({"ids": [id.0, copy_id.0]})).unwrap();
+    assert!(r["failed"].as_array().unwrap().is_empty(), "{r}");
+    let rebuilt = std::fs::read(&file).unwrap();
+    assert_ne!(rebuilt, old);
+    assert_eq!(smart_header(&file)["look_version"], json!(crate::camera_preview::LOOK_VERSION));
+    std::fs::remove_file(&path).unwrap();
+    for id in [id, copy_id] {
+        s.media.forget(id);
+        let ph = s.catalog.photo(id).unwrap();
+        let source = s.media.source_ref(ph, SourceLevel::Preview).load_source().unwrap();
+        assert!(source.info_or(crate::media::source_info(ph)).raw);
+        assert!((source.image.data[0][0] - 0.2).abs() < 0.02, "offline uses the rebuilt sensor pixels");
+    }
+    drop(s);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// A camera tone curve with a recognisable shape (`k` changes it).
 fn test_tone(k: f32) -> lightcraft_pipeline::tone::CameraTone {
     lightcraft_pipeline::tone::CameraTone::new(std::array::from_fn(|i| {

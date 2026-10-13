@@ -1818,8 +1818,23 @@ fn corpus_epl7_raw_import_and_reload_keep_sensor_development() {
         })
         .unwrap();
     assert!(!s.catalog.photo(id).unwrap().develops_raw());
+    // An old build's proxy contains the embedded JPEG, with a still-current look version.
+    let dir = std::env::temp_dir().join(format!("lc-epl7-smart-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let proxy = crate::smart::sharded_file_path(&dir, &p);
+    std::fs::create_dir_all(proxy.parent().unwrap()).unwrap();
+    let (jpeg, _) = load_embedded_preview(&bytes, 400).unwrap();
+    let old = crate::smart::encode(&jpeg, None).unwrap();
+    std::fs::write(&proxy, &old).unwrap();
+    s.media.smart_dir = Some(dir.clone());
     let result = s.execute("photo.reload", &json!({"ids": [id.0]})).unwrap();
     assert_eq!(result["reloaded"], json!([id.0]));
     assert!(s.catalog.photo(id).unwrap().develops_raw());
     assert_eq!(s.catalog.photo(id).unwrap().develop, settings);
+    assert!(!proxy.exists(), "the unchanged ORF's JPEG proxy must be invalidated");
+    let result = s.execute("library.smartPreviews", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(result["built"], 1, "{result}");
+    assert_ne!(std::fs::read(&proxy).unwrap(), old, "rebuilt from sensor data");
+    drop(s);
+    let _ = std::fs::remove_dir_all(dir);
 }
