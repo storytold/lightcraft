@@ -57,6 +57,12 @@ vs −0.67 GRBG). Unsampled PowerShots default to RGGB, unverified.
   0 Auto, 1 Daylight, 2 Cloudy, 3 Tungsten, 4 Fluorescent, 5 Flash, 6 Custom, 8 Shade,
   9 Kelvin). Every corpus file reads 0 (Auto) → slot 0. Preset mappings follow the slot
   orders above and are untested for lack of non-auto samples.
+- **Auto slot confirmed on the private D60 files** (2026-10-13): on the pixels each camera
+  JPEG renders neutral (channel spread < 6 of 255, mid-tone, raw unclipped), the median raw
+  G/R and G/B give the multipliers the camera applied. On 17 files with enough neutral
+  pixels, slot 0 is within 0.005–0.036 (summed log error) of that on every one, flash
+  shots included, and is the nearest slot on 16 (the 17th prefers Daylight by 0.005).
+  Numbers only; no image content recorded.
 - **0x10aa** (same three bodies): one (R, G, G, B) quadruple with G ≈ 1024 and R/B as
   *levels* (multiplier = G/level); consistent with a measured-white-balance record (Canon
   maker-note 0xaa MeasuredColor). On some files it fits the camera JPEG better than slot 0,

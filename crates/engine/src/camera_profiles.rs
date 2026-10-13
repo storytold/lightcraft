@@ -1,6 +1,6 @@
 //! Camera colour profiles of our own, pooled from many photos of one camera model.
 //!
-//! A raw file without colour matrices (Sony ARW, Nikon NEF, Fujifilm RAF) gets its look fitted to its own embedded camera
+//! A raw file without colour matrices (Sony ARW, Nikon NEF, Fujifilm RAF, Canon CRW) gets its look fitted to its own embedded camera
 //! JPEG (`camera_preview`), but one photo shows too little of some colours: a lime shirt covering a
 //! few dozen proxy pixels next to a hillside of foliage at the same hue. `lightcraft-cli calibrate`
 //! pools the colour pairs of many photos per model and fits one matrix and hue/saturation/value
