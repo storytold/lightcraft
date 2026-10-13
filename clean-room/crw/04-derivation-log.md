@@ -162,3 +162,30 @@ Open: exact placement of the bundled zeros (before vs after the value) in corner
 EOB/block semantics, the first-token special case at pixel 0, and the complete code
 tables for DecoderTableNumber 0, 1, 2 (being extracted by continued flip scans plus the
 known-plaintext aligner `plan/crw/model/aligner4.py`).
+
+## 2026-10-13 — complete token grammar established (D60, table 0)
+
+The MSB-faithful agreement scan (`bounds3_row11_msb.json`, 187 exact micro-boundaries over
+bits 20776–21500) plus a merge analysis settled the remaining structure. Sub-boundary rises
+occur inside tokens (fillers can reproduce zero pixels), and merging every zero segment into
+the following value yields a token stream that is fully consistent — zero semantic conflicts
+and zero prefix violations — under exactly one model:
+
+- **64-pixel blocks** (image order). The token that starts at a block's first pixel comes
+  from a **"first" Huffman table**; every other token from a **"second" table**. (The
+  apparent two-alternating-tables stage was a phantom: fitted as alternating tables, the two
+  halves come out *identical*, collapsing to one "second" table. B5's recollection — "one
+  table for the first element of a block, another for the rest" — was exactly right.)
+- **Token = code → (run r, size s)**: r zero-diff pixels, then one value of size s coded as
+  s JPEG-rule magnitude bits (MSB-first). s = 0 codes are EOB (zeros to end of block).
+- Two DPCM predictors by pixel parity, init 512, never reset.
+
+Second-table codes verified so far (D60, DecoderTableNumber 0): `00`=(0,3), `100`=(0,2),
+`101`=(0,5), `1100`=(0,1), `111011`=(1,2), `111100`=(1,3), `111101`=(1,1), `11111100`=(1,5),
+`1111111000`=(2,1), `1111111100`=(2,3), `11111110111100`=(16,1), and 16-bit codes
+(3,1) (4,1) (4,2) (5,1) (5,4) (5,5) (6,3) (6,4) (8,1). First-table: `101`=(0,2),
+`111110`=(0,10) at pixel 0. The code set has a canonical Huffman shape.
+
+A seeded known-plaintext aligner (`aligner6.py`) is now walking the whole 6.5-Mpixel stream
+to learn the remaining codes of both tables and verify every pixel; the same harness then
+runs on files with DecoderTableNumbers 1 and 2 and on the other bodies.
