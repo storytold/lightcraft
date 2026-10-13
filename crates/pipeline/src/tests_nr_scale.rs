@@ -178,7 +178,7 @@ fn preview_from_a_smaller_source_level_matches_one_from_the_original() {
     let thumb_level = scaled(&original, 512.0 / W as f32);
     let req = RenderRequest::fit(256, 256);
     let raw = SourceInfo { raw: true, ..Default::default() };
-    let told = SourceInfo { native_long: Some(W), ..raw.clone() };
+    let told = SourceInfo { native_long: W, ..raw.clone() };
     assert!((plan(&thumb_level, &told, &s, &req).detail_scale - 256.0 / W as f32).abs() < 1e-4);
     assert!((plan(&original, &raw, &s, &req).detail_scale - 256.0 / W as f32).abs() < 1e-4);
     assert!((plan(&thumb_level, &raw, &s, &req).detail_scale - 0.5).abs() < 1e-4, "original unknown: the source's pixels");

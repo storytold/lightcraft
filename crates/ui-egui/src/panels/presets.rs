@@ -84,14 +84,13 @@ impl PresetAmountContext {
 impl PresetAmountState {
     fn current(&self, app: &mut LightcraftApp) -> bool {
         app.session.interaction.is_none()
-            && app.session.redo.is_empty()
             && (!self.owns_undo_step || self.applied.is_current(&app.session))
             && app.session.presets.iter().any(|preset| preset == &self.preset)
             && self.context == PresetAmountContext::capture(app)
     }
 
     fn apply(app: &mut LightcraftApp, preset: Preset, amount: f64) -> Option<Self> {
-        let baseline = app.session.targets(&json!({})).into_iter().filter_map(|id| app.session.develop_of(id)).collect();
+        let baseline = app.session.selected().into_iter().filter_map(|id| app.session.develop_of(id)).collect();
         let before = app.session.catalog.revision;
         if app.run("preset.apply", json!({"id": preset.id, "amount": amount})).is_err() {
             return None;

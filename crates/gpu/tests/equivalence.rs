@@ -307,7 +307,7 @@ fn preview_noise_reduction_matches() {
     s.detail.nr_color = 60.0;
     s.detail.nr_color_smoothness = 50.0;
     // a preview level of a 6000-px original: loupe-, grid- and tiny-thumbnail-sized outputs
-    let info = SourceInfo { raw: true, native_long: Some(6000), ..Default::default() };
+    let info = SourceInfo { raw: true, native_long: 6000, ..Default::default() };
     for (name, edge) in [("NR preview 640 of 6000", 640), ("NR preview 320 of 6000", 320), ("NR preview 128 of 6000", 128)] {
         check(name, &src, &info, &s, &RenderRequest::fit(edge, edge));
     }

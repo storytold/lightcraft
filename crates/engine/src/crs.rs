@@ -1056,8 +1056,8 @@ mod tests {
             let x = SIDECAR.replace("<rdf:li>64, 52</rdf:li>", &format!("<rdf:li>{bad}</rdf:li>"));
             let partial = to_partial(&props(&x), Target::RawAbsolute);
             let s = apply_partial(&DevelopSettings::for_raw(5000.0, 0.0), &partial, 1.0);
-            assert!(s.curve.master.is_empty(), "{bad}: {:?}", s.curve.master);
-            assert!(s.curve.master.iter().all(|p| p.x.is_finite() && p.y.is_finite()));
+            assert_eq!(s.curve.master.sparse_points(), Some([].as_slice()), "{bad}: {:?}", s.curve.master);
+            assert!(s.curve.master.is_identity());
         }
     }
 

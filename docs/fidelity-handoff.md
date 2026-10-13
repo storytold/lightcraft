@@ -1,8 +1,37 @@
 # Lightroom fidelity handoff
 
-Paused for review on 2026-10-12 at the user's request. All 19 fidelity commits have been rebased onto upstream `main` at `25ef65c8` (0.7.0 release preparation). `git range-diff` confirms every patch is unchanged; the new upstream commit changes only package versions. Earlier integrations onto `0dd6593d` and `76b53778` have native measurements. Accepted behavior and remaining gaps are recorded below; rendering fidelity is still incomplete.
+The 2026-10-15 integration rebases the accepted fidelity branch onto upstream `main` at
+`0da998f2` (0.8.0), 699 commits after its previous base. The user's fidelity investigation remains
+paused. No new Lightroom exports or calibration candidates are part of this integration.
 
-All eight `cargo xtask ci` gates passed again after the rebase (fmt, clippy, HEIF, tests, parity, layers, assets and WASM). No new tests were added for this pause; the final tracked change is this handoff update. The optional craft-fonts input was unset. Native fidelity measurements remain tied to the preserved pre-rebase binary, whose product source is unchanged by the version bump.
+Relevant upstream changes include original-resolution scaling for preview noise reduction,
+correct radial-mask inversion and legacy feather import, hard-edge spot safety, crop rotation
+and straightening, named-profile preset resolution and CLI settings/export handling. AHD and
+camera-look processing also gain speed and reduce memory use. Built-in profile-name mappings
+remain approximations. These changes do not establish Lightroom parity: the remaining D3500
+colour and master Refine Saturation mismatch is unresolved.
+
+Integration preserves explicit saved Look parameters over name-only profile substitutions,
+persisted unsupported-edit diagnostics, native detail dimensions and the accepted curve behavior.
+Catalog format **14**, camera-look version **10** and render-cache version **66** distinguish the
+combined writer and invalidate older caches. Optimized-development CLI `7f521de62369` reproduces
+all four accepted D3500 controls exactly: complete 6000×4000 RGB16 pixel hashes, ICC bytes and
+saved settings match CLI `4449dd66d7af`. Source/sidecar guards pass, and temporary full TIFFs were
+retired after compact verification. These CNR0 native controls do not measure active preview NR
+or establish new fidelity. Private evidence: `plan/rebase-20261015/native-verification.json`.
+All eight `cargo xtask ci` gates pass, including CPU/GPU equivalence on Apple M4 Metal.
+The run reports 165 checks skipped for absent optional corpus, fonts or model data; the four
+private D3500 comparisons above ran separately. Existing tests were adapted; no new test
+functions or infrastructure were added. Verification receipts remain after 163 MB of redundant
+owned RAW copies and duplicate compact arrays were retired against retained equivalents.
+
+## Previous integration (2026-10-13)
+
+Resumed on 2026-10-13 after publishing PR #1226. Rebased onto upstream `main` at `b3d392b4` (0.7.1), including its guarded camera dark-tone fit, preset-list caching and virtualization, history cursor and sidecar fixes. Integration preserves the fork's previous shadow fit as the baseline for the new dark-tone gate. Rendering fidelity remains incomplete.
+
+Four fresh D3500 native comparisons against the accepted CLI `1a39853139c6` are **pixel-identical by complete RGB16 SHA-256 and ICC identity**: DSC0805 and DSC0626 with their corrected saved CNR0 edits, plus train02 neutral and +1 EV. Each export is 6000×4000, with identical complete imported/exported settings and diagnostics. DSC0626's four new toe attempts fail the 1% dark-error improvement gate; the prior fit remains. This is preservation evidence, not a new fidelity gain. Fixed grid, center and all nine interior regions retain their Lightroom comparisons, including missing-profile and white-balance limitations.
+
+The combined writer now uses catalog format **13** to retain both fork settings and upstream history-cursor data. Camera-look version **9** and render-cache version **65** invalidate older caches. The preset Amount UI was inspected in a headless app snapshot; the existing checks cover Amount, saved edits and independent sidecar ownership. Private evidence: `plan/lightroom-reference/exports/resume-20261013/`. All eight `cargo xtask ci` gates pass after integration. Final CLI `4449dd66d7af` reproduces all four measured native outputs and settings exactly. The repaired all-masks overlay was inspected in a headless app snapshot; both regions remain visible. Existing tests were adjusted, with no new test functions or infrastructure. Optional craft-fonts were unset; WASM checks pass with existing target-specific warnings.
 
 ## Scope
 
@@ -43,7 +72,7 @@ Lightroom exports use the already paired local controller and a serial queue:
 python -B plan/lightroom-reference/tools/controller_export_queue.py /absolute/path/to/reviewed-queue.json
 ```
 
-There are now 168 accepted native scripted exports, including local sharpening, colour-NR structure/channel charts, exposure and compressed-NEF transport references. Three requested-Refine100 chart exports carry an explicit metadata-omission qualification; their numeric100 setting was not independently read back. Use new output paths, exact source/settings guards and the retained TIFF16/full-size/AdobeRGB/no-output-sharpening settings. Do not resubmit uncertain jobs. Never print or copy the pairing token.
+There are now 174 accepted native scripted exports, including local sharpening, colour-NR structure/channel charts, exposure and compressed-NEF sensor charts. Three requested-Refine100 chart exports carry an explicit metadata-omission qualification; their numeric100 setting was not independently read back. Use new output paths, exact source/settings guards and the retained TIFF16/full-size/AdobeRGB/no-output-sharpening settings. Do not resubmit uncertain jobs. Never print or copy the pairing token.
 
 The controller returns no `SharpenEdgeMasking` value. Keep its 13 supported readiness checks and verify Masking in the exported XMP: this run explicitly retains 100 but omits zero, Radius and Detail at global Sharpness 0. Lightroom also normalizes legacy gradients to mask groups and adds identity `LocalCurveRefineSaturation=100`. Preserve these distinctions; missing metadata is not a verified numerical value.
 
@@ -188,9 +217,35 @@ guards for retired files are provenance, not runnable capture inputs. The pinned
 `resume-20261011/lightcraft-cli-mixed-final-1a39853139c6` (built before the version-only rebase).
 Do not use an unverified shared target binary as a fidelity baseline.
 
-## Next work after review
+## Sensor-color investigation resumed (2026-10-13)
 
-1. Resume source color/exposure from the exact compressed transport result. Any synthetic CFA chart requires a separate generation and validation step; the current helper only reproduces the original strip. Keep the failed DNG/uncompressed transports rejected, and the four source-color heldouts sealed.
+Two authored D3500 CFA charts pass exact full-sensor compression/metadata roundtrips and
+one-shot Lightroom identity/settings checks. Each has 48 fixed flat interiors. The mixed-color
+chart avoids the output clipping seen at the primary corners. Identical neutral sensor samples
+at identical coordinates nevertheless differ by up to 1.539 L* between charts, with matching
+exported CRS apart from filename and exact ICC equality. Re-exporting an exact copy of the primary
+under a fresh filename reproduces every native pixel and ICC byte after the intervening mixed chart.
+
+This rules out pooling those outputs into a context-independent pointwise calibration without
+further investigation. Histogram, minimum sensor value, surrounding chroma and spatial layout
+changed together; Lightroom's internal normalization remains unknown. No new camera model,
+product improvement or heldout validation follows from these diagnostic exports. Their unrelated
+retained embedded JPEG must not drive a LightCraft chart fit. Complete native RGB16/ICC/XMP
+compacts and protocols remain in `resume-20261013/d3500-cfa-chart*`; redundant TIFFs were retired.
+A permutation preserving every Bayer-phase histogram and a separate 4,096-sample black patch
+both leave all 48 measured interiors pixel-identical to the mixed chart. Neither identifies the
+remaining contextual mechanism; the black-patch result rules out only that specific intervention.
+Replacing only the output-cropped eight-pixel sensor rim also leaves all 48 primary-chart
+interiors unchanged. The entire 24-million-sample visible CFA crop was verified identical;
+this null result does not identify Lightroom's internal margin handling.
+
+The new upstream dark-refinement gate compares against this branch's inherited shadow fit.
+Its reliability exclusions apply to the additional refinement, not retrospectively to all samples
+in that baseline. Existing regressions cover rejection with both explicit and colour-only baselines.
+
+## Continuing work
+
+1. Isolate the repeatable sensor-chart context effect before fitting source color/exposure. The fixed histogram-preserving column permutation and a small black-anchor intervention both left all 48 measured interiors pixel-identical; a substitution of only the output-cropped sensor rim is also unchanged. Broader histogram or tone adaptation remains unisolated. Keep the failed DNG/uncompressed transports rejected, and the four source-color heldouts sealed.
 2. Continue the unresolved master Refine formula and profile-table/Exposure ordering using own sources. The nonlinear table/precomposed EV0 transport failed; the fixed EV0 table render is close but does not establish general ordering or exposure parity. Preserve these failed gates rather than recycling candidates.
 3. Continue remaining tone/B&W and conventional NR/sharpening gaps. Global Sharpening Detail and luminance-NR Contrast remain stored no-ops. Baseline source-color error can dominate, and whole-photo means can hide regional regressions. D3500 only; optics, lens blur and AI remain excluded.
 

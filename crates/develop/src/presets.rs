@@ -10,7 +10,6 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::borrow::Cow;
 
 use crate::{DevelopSettings, PointCurve, PointCurveError, Profile};
 use std::fmt;

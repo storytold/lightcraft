@@ -1,6 +1,6 @@
 # Target-app parity: LightCraft vs Adobe Lightroom
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (upstream fidelity integration and merged checklist recount; readiness unchanged) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
 
 The authoritative assessment of how close LightCraft is to Lightroom. The row-by-row checklist is
 [parity-checklist.md](parity-checklist.md); the ranked work list is [gaps.md](gaps.md); deep areas
@@ -12,7 +12,7 @@ have their own documents: [raw-parity.md](raw-parity.md), [file-format-parity.md
 
 | Number | Value | Kind |
 |---|---:|---|
-| **Feature breadth**, checklist | **81.6%** of 532 in-scope rows (P0 98.0%, P1 95.2%, P2 50.0%) | **measured**: recount of [parity-checklist.md](parity-checklist.md) rows (✅ 1, 🟡 ½, 🚫 left out), the same rule `cargo xtask parity` uses |
+| **Feature breadth**, checklist | **82.6%** of 539 in-scope rows (P0 96.8%, P1 94.1%, P2 55.7%) | **measured**: recount of [parity-checklist.md](parity-checklist.md) rows (✅ 1, 🟡 ½, 🚫 left out), the same rule `cargo xtask parity` uses |
 | **Feature breadth**, weighted by use | **~77%** | estimated: feature-area table below |
 | **Ready for real work** (full target) | **~61%** (range 56–66%) | estimated: weighted sum over the dimensions with written weights, see [below](#ready-for-real-work-mainstream-practitioner-and-essentials-user) |
 | **Mainstream practitioner** | **~51%** (range 46–56%) | estimated: weekly areas of a working photographer, depth 74.0% × 0.804 × colour 0.85 |
@@ -39,8 +39,8 @@ have their own documents: [raw-parity.md](raw-parity.md), [file-format-parity.md
   includes separate local native 16-bit Lightroom chart/photo measurements, described
   [below](#local-rendering-evidence-2026-10-10). The ΔE figures in [raw-parity.md](raw-parity.md)
   still refer to that document's earlier camera-colour work.
-- **Current checklist recount:** 566 total rows: 399 done, 60 partial, 72 missing and 35 out of
-  scope. The 531 in-scope rows yield 80.8%; estimated readiness and hours are unchanged.
+- **Current checklist recount:** 574 total rows: 410 done, 70 partial, 59 missing and 35 out of
+  scope. The 539 in-scope rows yield 82.6%; estimated readiness and hours are unchanged.
 
 **Presence is not parity.** ✅ rows are set by whoever lands a feature and have not been checked
 systematically against Lightroom's behaviour; bugs keep turning up in ✅ areas (CR2 colour-filter
@@ -50,7 +50,7 @@ phase #85, duplicate Local entries #22, black GPU exports on an Intel iGPU #78).
 
 | Dimension | Breadth | Ready for real work | Remaining | Doc |
 |---|---:|---:|---:|---|
-| Features (weighted areas below) | ~77% (checklist 81.1%, measured) | ~61% | 600–1,100 h | [Features](#features) |
+| Features (weighted areas below) | ~77% (checklist 82.6%, measured) | ~61% | 600–1,100 h | [Features](#features) |
 | ↳ RAW cameras, colour and lens profiles (part of features) | 83% of Adobe's 1,446 models decode (38% verified), measured | ~56% | 255–480 h | [raw-parity.md](raw-parity.md) |
 | UI/UX fidelity | ~85% | ~70% | 32–54 h | [ui-parity.md](ui-parity.md) |
 | File formats (non-raw: images, sidecars, presets, catalogs) | ~85% | ~70% | 30–55 h | [file-format-parity.md](file-format-parity.md) |
@@ -537,10 +537,12 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Rebased fidelity branch onto 0da998f2; preview NR scaling and mask/crop/import fixes retained; checklist recount 82.6% of 539; no aggregate fidelity or readiness gain claimed |
 | 2026-10-14 | minor | Localization ~52% → ~55% (mean of the 12 key languages): de, es, fr, ja and uk catalogs filled |
 | 2026-10-12 | minor | UI/UX remaining 34–58 h → 32–54 h (canvas tools by keyboard); headline numbers unchanged |
 | 2026-10-14 | minor | Merge and HDR: merge 100% → 88% (LR-MERGE-HDR ✅ → 🟡 after testing on real 67 MP brackets; gap 29); area percentages unchanged |
 | 2026-10-14 | minor | Gap 4 (full-resolution zoom) closed: removed from the interaction-fidelity notes, the alpha-gate partial rows and the beta needs; headline numbers and the ×0.95 interaction factor unchanged |
+| 2026-10-13 | minor | Rebased onto b3d392b4; four full-native D3500 states unchanged against the accepted renderer; catalog13/camera-look9/render65 and preset/sidecar integration preserved; checklist 80.8% of 533; no fidelity or readiness gain |
 | 2026-10-12 | minor | UI/UX remaining 40–70 h → 34–58 h (accessibility audit landed, ui-parity.md); percentages unchanged |
 | 2026-10-14 | minor | Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (`coverage_sweep_corpus.rs`, `coverage-sweep.tsv`; `docs/raw/coverage.py` 515 → 545 verified rows); the counts above are not re-measured here. Sensor verification does not establish colour parity (#1277); headline numbers unchanged |
 | 2026-10-12 | minor | 22 more CR3 bodies verified on one CC0 file each (raw-parity.md): use-weighted share whose camera decodes 85% → 92%, RAW decoding 77% → 83%; full 60.7% → 61.2% (~61%), mainstream depth 72.1% → 74.0% (~49% → ~51%), essentials depth 77.5% → 78.0% (~64% → ~65%) |
@@ -558,3 +560,30 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 | 2026-10-10 | minor | Stage re-checked against the core-workflow alpha gate: passes, stays alpha |
 | 2026-10-10 | major | Created per the progress-docs standard: full re-measure (checklist recount, installed Lightroom 9.6 bundle listing, code counts, catalogs, CI), feature areas with weights, dimensions, AI, stage, calibration; merged ROADMAP's *Where we stand* and *Parity estimate* |
 | 2026-10-14 | minor | RAW: 82% of Adobe's models decode, 36% verified (integration batch 36) |
+
+### D3500 upstream integration evidence — 2026-10-13
+
+Rebased onto `b3d392b4`. Four native 6000×4000 RGB16 comparisons against the accepted
+CLI `1a39853139c6` retain exactly the same complete pixel hashes and ICC bytes:
+DSC0805 CNR0 (Exposure +2.06, Shadows +43), DSC0626 CNR0 with its saved nested profile
+curve, and train02 neutral/+1 EV. Complete settings, unsupported-resource diagnostics,
+original RAWs and sidecars were checked unchanged. DSC0626's four wider dark-tone fits
+did not meet the independent 1% improvement threshold, preserving the previous fit.
+
+Fixed stride-16 grid mean ΔE00 remains 8.197097, 5.816628, 1.887430 and 2.521846
+respectively. Center and all nine interior regions are also unchanged; these are existing
+training scenes with unresolved profile/WB approximations. There is no new measured
+fidelity improvement or overall parity claim. Catalog13 preserves upstream history
+cursors with the fork's saved edits; camera-look9/render65 clear older caches.
+
+The upstream all-masks diagnostic view now draws the union once; its previous sequential
+WhiteOnBlack drawing erased earlier mask regions. The existing regression covers both visible
+regions and hiding one. This is an overlay fix, with no change to exported adjustments.
+
+Six new background Lightroom exports qualify authored compressed-CFA chart observations.
+The primary chart repeats exactly under a fresh filename, yet its neutral interiors differ from
+the mixed chart by up to 1.539 L* with identical local sensor samples and recorded settings.
+A Bayer-histogram-preserving column permutation and a separate small black patch each preserve
+all 48 mixed-chart interiors exactly. Substituting only the output-cropped sensor rim also
+preserves all 48 primary-chart interiors. No static camera model, internal normalization mechanism
+or photographic fidelity gain is established; the four source-color heldouts remain sealed.

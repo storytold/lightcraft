@@ -229,7 +229,9 @@ impl Session {
         for mut p in presets {
             p.unsupported_edits = lightcraft_develop::unsupported_edits::bounded_names(p.unsupported_edits.iter().map(String::as_str));
             let key = (p.name.clone(), p.group.clone());
-            let same = by_name.get(&key).is_some_and(|ix| ix.iter().any(|&i| self.presets.get(i).is_some_and(|q| q.settings == p.settings && q.unsupported_edits == p.unsupported_edits)));
+            let same = by_name.get(&key).is_some_and(|ix| {
+                ix.iter().any(|&i| self.presets.get(i).is_some_and(|q| q.settings == p.settings && q.unsupported_edits == p.unsupported_edits))
+            });
             if same {
                 continue;
             }
@@ -874,7 +876,7 @@ mod tests {
         let result = s.execute("preset.import", &json!({"paths":[file]})).unwrap();
         assert_eq!(result["failed"].as_array().unwrap().len(), 1, "{result}");
         assert!(result["imported"].as_array().unwrap().is_empty());
-        assert_eq!(s.presets, before);
+        assert_eq!(s.presets.as_slice(), before.as_slice());
         assert_eq!(s.catalog.to_snapshot(), catalog);
         assert_eq!(std::fs::read_to_string(&file).unwrap(), bytes);
         assert_eq!(std::fs::metadata(&file).unwrap().modified().unwrap(), modified);

@@ -43,9 +43,6 @@ pub struct WireJob {
     pub as_shot_temp: f64,
     pub as_shot_tint: f64,
     pub lens: Option<EmbeddedLens>,
-    /// The original's long edge (`SourceInfo::native_long`).
-    #[serde(default)]
-    pub native_long: Option<usize>,
     pub settings: Arc<DevelopSettings>,
     pub max_w: usize,
     pub max_h: usize,
@@ -86,7 +83,6 @@ impl WireJob {
             as_shot_temp: job.info.as_shot_temp,
             as_shot_tint: job.info.as_shot_tint,
             lens: job.info.lens,
-            native_long: job.info.native_long,
             settings: job.settings.clone(),
             max_w: job.request.max_w,
             max_h: job.request.max_h,
@@ -109,7 +105,6 @@ impl WireJob {
             lens: self.lens,
             relative_wb: self.relative_wb,
             legacy_relative_wb: self.legacy_relative_wb,
-            native_long: self.native_long,
             ..Default::default()
         }
     }
@@ -480,7 +475,6 @@ mod tests {
             as_shot_temp: 6500.0,
             as_shot_tint: 0.0,
             lens: None,
-            native_long: None,
             settings: Arc::new(DevelopSettings::default()),
             max_w: 32,
             max_h: 32,

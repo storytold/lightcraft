@@ -594,7 +594,12 @@ fn read_packet_checked(original: &str, kind: MediaKind, naming: SidecarNaming) -
 /// Photo ids touched by an op (for auto-write).
 pub(crate) fn op_photos(op: &Op, out: &mut Vec<PhotoId>) {
     match op {
-        Op::SetRating { id, .. } | Op::SetFlag { id, .. } | Op::SetLabel { id, .. } | Op::SetDevelop { id, .. } | Op::SetMeta { id, .. } | Op::SetUnsupportedEdits { id, .. }
+        Op::SetRating { id, .. }
+        | Op::SetFlag { id, .. }
+        | Op::SetLabel { id, .. }
+        | Op::SetDevelop { id, .. }
+        | Op::SetMeta { id, .. }
+        | Op::SetUnsupportedEdits { id, .. }
             if !out.contains(id) =>
         {
             out.push(*id);
@@ -742,12 +747,17 @@ impl Session {
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let orig = file_path(p).ok_or_else(|| EngineError::Other(format!("{} is not a file on disk", p.file_name)))?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
-        if preferred_missing
-            && let Some((packet, from)) = read_packet_checked(orig, p.kind, owners.naming(p, self.xmp.naming)).map_err(err)?
-            && from != preferred
-        {
-            // Validate the authoritative alternate before adopting its spelling for the save,
-            // just as when a new preferred sidecar would shadow it or an embedded native edit.
+        let alternate = if preferred_missing && path.is_file() {
+            // Only the ownership-filtered alternate may be adopted, never another photo's stem.
+            Some(std::fs::read_to_string(&path).map_err(err)?)
+        } else if !path.exists() && p.kind == MediaKind::Raw {
+            let bytes = std::fs::read(orig).map_err(err)?;
+            lightcraft_meta::embedded(&bytes).xmp
+        } else {
+            None
+        };
+        if let Some(packet) = alternate {
+            // A new sidecar must not shadow an unreadable native edit in the authoritative packet.
             let parsed = lightcraft_meta::parse_xmp(&packet).map_err(|e| err(std::io::Error::other(e.to_string())))?;
             native_settings(&parsed).map_err(|e| err(std::io::Error::other(e)))?;
         }

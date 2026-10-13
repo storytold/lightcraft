@@ -652,9 +652,12 @@ impl Catalog {
             Op::SetCaptured { .. } => self.changes.now = Aspects::CAPTURED,
             Op::SetFile { .. } | Op::Relink { .. } => self.changes.now = Aspects::FILE,
             Op::SetAnalysis { .. } => self.changes.now = Aspects::ANALYSIS,
-            Op::SetDevelop { .. } | Op::SetVersions { .. } | Op::SetHistory { .. } | Op::PushHistory { .. } | Op::SetHistoryCursor { .. } => {
-                self.changes.now = Aspects::DEVELOP
-            }
+            Op::SetDevelop { .. }
+            | Op::SetVersions { .. }
+            | Op::SetHistory { .. }
+            | Op::PushHistory { .. }
+            | Op::SetHistoryCursor { .. }
+            | Op::SetUnsupportedEdits { .. } => self.changes.now = Aspects::DEVELOP,
             // (its ops say for themselves, one by one)
             Op::Batch { .. } => {}
             Op::AddAlbum { .. }

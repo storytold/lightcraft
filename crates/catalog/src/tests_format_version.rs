@@ -376,7 +376,11 @@ fn op_variants_are_versioned() {
     let mut kelvin = lightcraft_develop::DevelopSettings::default();
     kelvin.wb.scale = lightcraft_develop::WbScale::Kelvin;
     assert_eq!(since(&Op::SetDevelop { id: PhotoId(1), settings: Arc::new(kelvin), label: "Kelvin".into(), edited: None }), 12);
-    assert_eq!(since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None }), VERSION);
+    let newest_op = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
+    assert_eq!(newest_op, 13);
+    // Combined writer: upstream preview_checked plus the fork settings payloads.
+    const NEWEST_FIELDS: u32 = 14;
+    assert_eq!(newest_op.max(NEWEST_FIELDS), VERSION);
     assert_eq!(since(&Op::SetUnsupportedEdits { id: PhotoId(1), fields: Vec::new() }), 7);
     let function = since(&Op::SetDevelop {
         id: PhotoId(1),

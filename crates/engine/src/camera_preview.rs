@@ -90,7 +90,8 @@ pub(crate) fn starting_colour(
     lens: Option<&LensGeometry>,
     embedded: Option<&lightcraft_develop::EmbeddedLens>,
 ) -> (Xy, CameraTransform, Option<CameraLook>) {
-    let (xy, t, look) = starting_colour_with(raw, |raw, t| fit_preview(raw, bytes, t, external_profiles, lens), |raw, t| monochrome_look(raw, bytes, t, lens));
+    let (xy, t, look) =
+        starting_colour_with(raw, |raw, t| fit_preview(raw, bytes, t, external_profiles, lens), |raw, t| monochrome_look(raw, bytes, t, lens));
     if look.is_none() && dng_tone_eligible(raw, &t) {
         let look = fit_dng_tone(raw, bytes, &t, embedded);
         return (xy, t, look);
@@ -262,7 +263,13 @@ fn dng_tone_curve(tone: &CameraTone) -> Option<ToneCurve> {
 }
 
 /// The look fitted to the file's camera JPEG, and whether that JPEG is black and white ([`monochrome`]).
-pub(crate) fn fit_preview(raw: &RawImage, bytes: &[u8], transform: &CameraTransform, external_profiles: bool, lens: Option<&LensGeometry>) -> (Option<CameraLook>, bool) {
+pub(crate) fn fit_preview(
+    raw: &RawImage,
+    bytes: &[u8],
+    transform: &CameraTransform,
+    external_profiles: bool,
+    lens: Option<&LensGeometry>,
+) -> (Option<CameraLook>, bool) {
     if !transform.matrix_is_fallback || !file_local_look(raw.format) {
         return (None, false);
     }
@@ -470,10 +477,11 @@ fn fit_dng_tone(raw: &RawImage, bytes: &[u8], transform: &CameraTransform, lens:
     let unclipped = without_clipped(&sensor, &clipped);
     let fit_on = unclipped.as_ref().unwrap_or(&sensor);
     let colour = Some((Mat3::IDENTITY, None));
+    let bright = HighlightCheck { pairs: highlights(&sensor, &reference), dro: false };
     let look = TONE_FITS.iter().find_map(|&tone| {
-        [false, true]
-            .into_iter()
-            .find_map(|away_from_edges| fit_attempt(fit_on, &reference, &colour, Attempt { tone, profile: true, away_from_edges, dark: true }))
+        [false, true].into_iter().find_map(|away_from_edges| {
+            fit_attempt(fit_on, &reference, &colour, Attempt { tone, profile: true, away_from_edges, dark: true }, &bright)
+        })
     });
     let Some(look) = look else { return refuse("fit") };
     let plain = match raw.color.profile.tone_curve.as_ref().and_then(crate::files::dng_tone_curve) {
@@ -2132,7 +2140,7 @@ mod tests {
     }
 
     #[test]
-    fn unreliable_dark_pairs_keep_the_original_tone_and_colour() {
+    fn unreliable_dark_refinement_keeps_its_baseline_and_colour() {
         let (sensor, reference) = steep_toe_scene();
         let dark: Vec<_> = reference.data.iter().enumerate().filter(|(_, p)| luminance_2020(**p) < 0.015).map(|(i, _)| i).collect();
         let mut excluded = sensor.clone();
@@ -2141,6 +2149,9 @@ mod tests {
         }
         let colour = Some((Mat3::IDENTITY, None));
         let original = fit_pairs_with(&excluded, &reference, colour.clone()).unwrap();
+        let (original_pairs, _, _) = collect_pairs(&excluded, &reference, 0.005, None, false).unwrap();
+        let colour_only =
+            fit_tone(original_pairs.iter().enumerate().filter(|(i, _)| i % 3 != 0).map(|(_, (x, y))| (luma(*x), luma(*y))).collect()).unwrap();
         for case in 0..6 {
             let (mut x, mut y) = (sensor.clone(), reference.clone());
             for (j, &i) in dark.iter().enumerate() {
@@ -2154,8 +2165,17 @@ mod tests {
                     _ => {}
                 }
             }
+            let (pairs, _, _) = collect_pairs(&x, &y, 0.005, None, false).unwrap();
+            // The fork's inherited baseline can already contain dark samples. This gate
+            // rejects an unreliable extra-dark refinement, preserving whichever baseline
+            // the caller supplied; without one it retains the upstream colour-only fit.
+            assert_eq!(
+                fit_tone_with_shadows(ToneFit::Quantile, &pairs, &x, &y, None, |x| x, Some(original.tone)),
+                Some(original.tone),
+                "case {case}"
+            );
+            assert_eq!(fit_tone_with_shadows(ToneFit::Quantile, &pairs, &x, &y, None, |x| x, None), Some(colour_only), "case {case}");
             let look = fit_pairs_with(&x, &y, colour.clone()).unwrap();
-            assert_eq!(look.tone, original.tone, "case {case}");
             assert_eq!(look.matrix, original.matrix, "case {case}");
             assert!(look.hue_sat.is_none());
         }
@@ -2285,6 +2305,7 @@ mod tests {
                 Some((Mat3::IDENTITY, None)),
                 None,
                 tone_fit,
+                false,
                 &HighlightCheck { pairs: highlights(&sensor, &reference), dro: false },
             )
             .expect("the known model passes unchanged gates");
@@ -2301,7 +2322,7 @@ mod tests {
             &HighlightCheck { pairs: highlights(&sensor, &reference), dro: false },
         )
         .unwrap();
-        assert_eq!(attempt, Attempt { tone: ToneFit::Quantile, profile: true, away_from_edges: false });
+        assert_eq!(attempt, Attempt { tone: ToneFit::Quantile, profile: true, away_from_edges: false, dark: false });
         assert_shadow_tone(&look, &sensor, &reference);
     }
 
@@ -2329,7 +2350,7 @@ mod tests {
         reference.data[4] = [f32::INFINITY, 0.2, 0.3];
         reference.data[5] = [-0.01, 0.2, 0.3];
         reference.data[6] = [1.0, 0.2, 0.3];
-        let (colour, _, tone) = collect_pairs(&sensor, &reference, 0.005, None).unwrap();
+        let (colour, _, tone) = collect_pairs(&sensor, &reference, 0.005, None, false).unwrap();
         for pair in colour.iter().step_by(3) {
             assert!(!tone.contains(pair), "a colour holdout pixel cannot train the tone curve");
         }
@@ -2350,15 +2371,15 @@ mod tests {
             *dst = src.map(|v| v * luminance_2020(*src));
         }
         let pair_at = |i: usize| (sensor.data[i].map(f64::from), reference.data[i].map(f64::from));
-        let (_, _, all_tone) = collect_pairs(&sensor, &reference, 0.005, None).unwrap();
+        let (_, _, all_tone) = collect_pairs(&sensor, &reference, 0.005, None, false).unwrap();
         let (clipped_pixel, edge_pixel) = (8, 31);
         assert!(all_tone.contains(&pair_at(clipped_pixel)) && all_tone.contains(&pair_at(edge_pixel)));
         let mut clipped = vec![false; sensor.data.len()];
         clipped[clipped_pixel] = true;
         let masked = without_clipped(&sensor, &clipped).unwrap();
-        let (_, _, unclipped_tone) = collect_pairs(&masked, &reference, 0.005, None).unwrap();
+        let (_, _, unclipped_tone) = collect_pairs(&masked, &reference, 0.005, None, false).unwrap();
         assert!(!unclipped_tone.contains(&pair_at(clipped_pixel)), "clip masking applies to shadow tone samples too");
-        let (colour, _, tone) = collect_pairs(&masked, &reference, 0.005, Some(EDGE_CONTRAST)).unwrap();
+        let (colour, _, tone) = collect_pairs(&masked, &reference, 0.005, Some(EDGE_CONTRAST), false).unwrap();
         assert!(!tone.contains(&pair_at(edge_pixel)), "the same edge gate applies to shadow tone samples");
         assert!(tone.iter().any(|(_, target)| luma(*target) < 0.015));
         for pair in colour.iter().step_by(3) {
@@ -4157,8 +4178,14 @@ mod tests {
             }
         }
         let colour = Some((Mat3::IDENTITY, None));
-        let look = fit_attempt(&sensor, &reference, &colour, Attempt { tone: ToneFit::Quantile, profile: true, away_from_edges: false, dark: true })
-            .expect("tone fitted");
+        let look = fit_attempt(
+            &sensor,
+            &reference,
+            &colour,
+            Attempt { tone: ToneFit::Quantile, profile: true, away_from_edges: false, dark: true },
+            &HighlightCheck { pairs: highlights(&sensor, &reference), dro: false },
+        )
+        .expect("tone fitted");
         assert_eq!(look.matrix, Mat3::IDENTITY);
         assert!(look.hue_sat.is_none());
         let (fitted, default) = (ToneMap::camera(&look.tone, 0.0, 0.0, 0.0), ToneMap::new(0.0, 0.0, 0.0));

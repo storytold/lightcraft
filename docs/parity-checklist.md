@@ -31,13 +31,13 @@ cited here still exists. Formerly docs/parity.md.
 | C. Views & navigation (VIEW) | 16 | 1 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 44 | 2 | 3 | 1 | 28/28 (100%) | 13/14 (93%) |
-| G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
+| F. Edit panel — global adjustments (EDIT) | 37 | 9 | 3 | 1 | 22/28 (79%) | 12/14 (86%) |
+| G. Profiles (PROF) | 6 | 2 | 3 | 0 | 3/4 (75%) | 2/3 (67%) |
 | H. Crop & rotate (CROP) | 9 | 0 | 0 | 1 | 6/6 (100%) | 3/3 (100%) |
 | I. Remove / healing (REM) | 8 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
 | J. Red eye (EYE) | 2 | 0 | 0 | 0 | — | 1/1 (100%) |
 | K. Masking (MASK) | 15 | 5 | 5 | 0 | 7/8 (88%) | 7/7 (100%) |
-| L. Presets (PRE) | 6 | 0 | 1 | 1 | 2/2 (100%) | 2/2 (100%) |
+| L. Presets (PRE) | 5 | 1 | 1 | 1 | 2/2 (100%) | 1/2 (50%) |
 | M. Versions & history (VER) | 5 | 0 | 0 | 0 | 1/1 (100%) | 3/3 (100%) |
 | N. Copy / paste / sync (SYNC) | 5 | 0 | 0 | 0 | 3/3 (100%) | 1/1 (100%) |
 | O. Merge (MERGE) | 3 | 1 | 0 | 0 | — | — |
@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 84 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 40 | 23 | 23 | 8 | — | 24/26 (92%) |
-| **Total** | 419 | 61 | 59 | 35 | 194/201 (97%) | 148/161 (92%) |
+| **Total** | 410 | 70 | 59 | 35 | 188/201 (94%) | 145/161 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 539 in-scope rows — P0 98.3% of 201 · P1 95.0% of 161 · P2 55.7% of 176.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **82.6%** of 539 in-scope rows — P0 96.8% of 201 · P1 94.1% of 161 · P2 55.7% of 176.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -317,7 +317,7 @@ Embedded preview colour fallback is applied before resizing. ICC and explicit EX
 | LR-MASK-SLIDERS | Local adjustment sliders | P0 | ✅ | `cmd:mask.adjust`, `crates/pipeline/src/finish.rs` | every slider renders (CPU + GPU), incl. Noise, Moiré, Defringe (negative Defringe has no effect); no local curve |
 | LR-MASK-EFFECTS | Local adjustment (effect / brush) presets | P1 | ✅ | `cmd:mask.effects`, `cmd:mask.applyEffect`, `cmd:mask.saveEffect`, `cmd:mask.updateEffect`, `cmd:mask.renameEffect`, `cmd:mask.duplicateEffect`, `cmd:mask.deleteEffect`, `cmd:mask.favoriteEffect`, `cmd:mask.setEffectGroup`, `cmd:mask.renameEffectGroup`, `cmd:mask.toolEffect`, `cmd:mask.importEffects`, `cmd:mask.exportEffects`, `cmd:dialog.saveMaskEffect`, `cmd:dialog.manageMaskEffects`, `cmd:file.exportMaskEffects`, `crates/engine/src/cmd/mask_effects.rs`, `crates/engine/src/cmd/mask_effect_files.rs`, `crates/ui-egui/src/panels/mask_effects.rs` | Effect menu above the mask sliders: grouped (folders, ★ Favorites first), searchable, scrolls, ↑ ↓ Return, ✓ on the matching effect (else Custom), resting on an effect previews it on the photo; right-click: apply to all masks / to the same-named mask on the selected photos (one undo step), update, rename, duplicate, star, move to group, delete (asks first); Reset Sliders; New Effect Preset dialog: which sliders (All / None / Changed Only), Amount, brush size/feather/flow; any mask type; Manage Effect Presets window (search, inline rename, update, duplicate, stars, groups, export, delete with confirmation); a new mask starts with the effect last applied to a mask of its kind (per tool, kept with the library); imports Lightroom Classic local `.lrtemplate` presets, Camera Raw local-correction `.xmp` presets, `.lceffect` and `.zip` bundles, through File ▸ Import Profiles & Presets… and drag & drop too; folders and LrC divider presets (`10 ----- DETAIL ----- 10`) become groups; settings with no local slider here (`grain`, Point Color `pointColors`, `toningLuminance`) are reported and kept with the effect for export, not applied (🟡 for those); brush size/feather/flow aren't in LrC presets (it keeps them per brush), so only `.lceffect` carries them; no built-in effects |
 | LR-MASK-OVERLAY | Mask overlay | P0 | ✅ | `cmd:view.maskOverlay`, `cmd:view.maskOverlayMode`, `cmd:view.maskOverlayColor`, `crates/pipeline/src/visualize.rs` | rendered alpha of the selected mask (CPU + GPU): colour, colour on B&W, image on black/white, white on black; ⇧O cycles while masking; successful local adjustments (including Amount) hide the overlay until manually shown again with O / the eye; shape/edge edits retain it; zoomed in, the overlay is rendered on the same sharp window as the plain view (zoom and pan unchanged; `crates/ui-egui/src/tests_preview_limit.rs`, `crates/pipeline/src/tests_window.rs`); no auto-show on hover |
-| LR-MASK-OVERLAYALL | Show all mask overlays | P1 | ✅ | `cmd:view.maskOverlayAll`, `crates/ui-egui/src/panels/masking.rs`, `crates/pipeline/src/visualize.rs` | one diagnostic tint over every visible mask at once (CPU + GPU): the masks still stack their adjustments as before — this only paints each mask's region together, so you can see all masked areas at a glance (⌘⇧O / Ctrl+Shift+O) |
+| LR-MASK-OVERLAYALL | Show all mask overlays | P1 | ✅ | `cmd:view.maskOverlayAll`, `crates/ui-egui/src/panels/masking.rs`, `crates/pipeline/src/visualize.rs` | one diagnostic view of the maximum alpha across visible masks (CPU + GPU); drawing once prevents later mask backgrounds from erasing earlier regions: the masks still stack their adjustments as before — this only paints each mask's region together, so you can see all masked areas at a glance (⌘⇧O / Ctrl+Shift+O) |
 | LR-MASK-PINS | Pins | P1 | ✅ | `cmd:view.maskPins`, `cmd:view.toolOverlay`, `crates/ui-egui/src/panels/detail.rs`, `crates/ui-egui/src/tests_tool_overlay.rs` | a pin per radial/linear/brush component: click selects its mask, drag moves it; Show Pins on follows the Tool Overlay mode (Auto: while the pointer is over the photo, hidden while brushing; Always; Selected: the selected mask's; Never; ⇧H cycles, #224); no pins for range/AI components |
 | LR-MASK-UPDATE | Recompute AI masks | P2 | ⬜ | | |
 | LR-MASK-SYNC | Copy masks to other photos | P1 | ✅ | `cmd:develop.copy` (`groups`) | |
@@ -840,6 +840,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-13 | minor | LR-IMP-DEVICE: Settings → Import → Cameras and Cards can open the import review when a camera or card is connected; status unchanged (✅) |
 | 2026-10-13 | minor | KEY-SLIDER-SCRUB: drag a slider's value sideways to scrub it, as in Lightroom (new row) |
 | 2026-10-13 | minor | KEY-SLIDER-RESET: hovering a slider's name or thumb says a double-click resets it; a double-click on the thumb is one undo step, not two; a disabled slider's name doesn't reset it (issue #1436); status unchanged (✅) |
+| 2026-10-13 | minor | Rebased onto b3d392b4; four full-native D3500 states unchanged against the accepted renderer; catalog13/camera-look9/render65 and preset/sidecar integration preserved; no fidelity or readiness gain |
 | 2026-10-11 | minor | LR-MERGE-HDR: HDR and panorama merges of raws without colour matrices (CR2, NEF, ARW…) write the colour they open with as DNG tags (issue #965); status unchanged |
 | 2026-10-12 | minor | LR-META-XMP: Read Metadata from File no longer auto-writes the sidecar it has just read, which added `lc:settings` and hid another app's later `crs:` edits (#934); status unchanged (✅) |
 | 2026-10-12 | patch | LR-IMP-CAMERA-COVERAGE: CR2 white level from the active area, not the saturated masked rows above it (issue #1272); status unchanged (🟡) |

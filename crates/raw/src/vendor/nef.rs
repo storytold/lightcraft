@@ -339,10 +339,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         linearized: false,
         pixel_aspect,
         // Nikon's in-file distortion correction, about the optical centre (which follows the sensor shift)
-        opcodes: OpcodeLists {
-            list3: super::nef_lens::distortion(&model, raw, Rect::new(0, 0, active_w, h), crop).into_iter().collect(),
-            ..Default::default()
-        },
+        opcodes: OpcodeLists { list3: super::nef_lens::distortion(&model, raw, active_area, crop).into_iter().collect(), ..Default::default() },
         metadata,
         lens_metadata: Default::default(),
     };
@@ -533,7 +530,7 @@ mod tests {
             if let Some(v) = note {
                 let mut mn = IfdBuilder::new();
                 mn.set(0x001e, Value::Short(vec![v]));
-                let mut bytes = b"Nikon   ".to_vec();
+                let mut bytes = b"Nikon\x00\x02\x10\x00\x00".to_vec();
                 bytes.extend(TiffWriter::new(ByteOrder::Little, false).write(&[mn]).unwrap());
                 exif.set(t::MAKER_NOTE, Value::Undefined(bytes));
             }

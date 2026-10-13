@@ -58,7 +58,7 @@
 //! | 11 (fork) | runtime profile tables | Checked HSV references, no payloads or paths (schema 5) |
 //! | 12 | combined upstream and fork writer | All above fields; explicit Kelvin WB uses schema 6 |
 //! | 13 | combined writer with History cursor | All v12 fields plus `Op::SetHistoryCursor`, `Photo.history_cursor` |
-//! | upstream 9 (combined 14) | preview-only recheck | `Photo.preview_checked`, `Op::SetContent.preview_checked` |
+//! | 14 (upstream 9) | preview-only recheck | `Photo.preview_checked`, `Op::SetContent.preview_checked` |
 //!
 //! Earlier fork writers also used v3 for diagnostics and v4 for function curves. These payloads
 //! remain readable. Version 7 and rendering process 2 have different upstream/fork meanings:
@@ -88,7 +88,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 13;
+pub const VERSION: u32 = 14;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]

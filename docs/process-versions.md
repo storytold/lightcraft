@@ -127,5 +127,7 @@ Imported Look table references require **settings schema 5** and **catalog forma
 storage versions, distinct from rendering Processes 2 and 3. Only a canonical fingerprint is serialized;
 paths, table samples and loaded/unloaded state are session-only. Settings without a reference keep
 their existing wire representation and schema marker. Explicit Kelvin white balance requires
-settings schema 6. The combined writer uses catalog format 12; opening an older catalog upgrades
-its envelope to 12, which older builds refuse instead of silently discarding new edit data. Loading or unloading a resource does not alter saved settings or undo history.
+settings schema 6. The combined writer uses catalog format 14, including the upstream history cursor
+and preview-only recheck stamp; opening an older catalog upgrades its envelope to 14, which older
+builds refuse instead of silently discarding new edit data. Loading or unloading a resource does not
+alter saved settings or undo history.

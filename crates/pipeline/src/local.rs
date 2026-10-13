@@ -798,7 +798,7 @@ mod nr_tests {
         s.detail.nr_color_smoothness = 50.0;
         for rgb in [[0.0; 3], [1e-7; 3], [4e-7, 1e-7, 0.0], [1e-30, 3e-30, 2e-30], [0.18; 3], [4.0, 1.0, 0.0]] {
             let mut img = Rgb32f::filled(32, 16, rgb);
-            denoise(&mut img, &s, 32, 32.0);
+            denoise(&mut img, &s, 1.0);
             let tol = rgb.into_iter().fold(0.0_f32, f32::max) * 3e-6;
             for p in &img.data {
                 for (a, b) in p.iter().zip(rgb) {
@@ -821,7 +821,7 @@ mod nr_tests {
             s.detail.nr_luminance = 0.0;
             s.detail.nr_color = amount;
             let mut img = original.clone();
-            denoise(&mut img, &s, 96, 96.0);
+            denoise(&mut img, &s, 1.0);
             for (before, after) in original.data.iter().zip(&img.data) {
                 let y = luminance_2020(*before);
                 assert!((luminance_2020(*after) - y).abs() <= y * 3e-6, "color NR changed Y: {before:?} -> {after:?}");

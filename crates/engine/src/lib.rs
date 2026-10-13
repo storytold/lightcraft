@@ -1339,11 +1339,11 @@ mod tests_persist;
 #[cfg(test)]
 mod tests_prefs;
 #[cfg(test)]
+mod tests_preset_diagnostics;
+#[cfg(test)]
 mod tests_presets_scale;
 #[cfg(test)]
 mod tests_print;
-#[cfg(test)]
-mod tests_preset_diagnostics;
 #[cfg(test)]
 mod tests_process;
 #[cfg(test)]

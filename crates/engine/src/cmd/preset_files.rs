@@ -63,6 +63,8 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
                             let look = it.preset.settings["profile"]["look"].clone();
                             it.unmapped.retain(|u| u != "Look");
                             it.unmapped.extend(crate::profile_refs::report(&look, &r));
+                            it.preset.unsupported_edits =
+                                lightcraft_develop::unsupported_edits::bounded_names(it.unmapped.iter().map(String::as_str));
                             profile = json!({"name": look["name"], "id": it.preset.settings["profile"].get("id")});
                         }
                         let (name, grp) = (it.preset.name.clone(), it.preset.group.clone());

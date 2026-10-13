@@ -328,7 +328,8 @@ fn color_range_sampling_respects_disabled_sections() {
             }],
             ..Default::default()
         });
-        let overlay = RenderRequest { overlay: Overlay::Mask { id: 1, view: MaskView::WhiteOnBlack, color: [255, 0, 0], opacity: 100 }, ..req };
+        let overlay =
+            RenderRequest { overlay: Overlay::Mask { id: 1, view: MaskView::WhiteOnBlack, color: [255, 0, 0], opacity: 100 }, ..req.clone() };
         let img = render(&src, &info, &s, &overlay).image;
         assert_eq!(img.data[12 * 32 + 16], [255; 4], "the sampled colour is selected with {section} off");
     }

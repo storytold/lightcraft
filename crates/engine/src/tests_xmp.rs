@@ -1160,7 +1160,7 @@ fn dngs_of_raws_without_colour_matrices_carry_the_colour_they_open_with() {
         std::fs::write(&path, &bytes).unwrap();
         let mut opened = lightcraft_raw::decode(&bytes).unwrap();
         assert!(!has_matrix(&opened.color));
-        let (_, want, look) = crate::camera_preview::starting_colour(&mut opened, &bytes, None, None);
+        let (_, want, look) = crate::camera_preview::starting_colour(&mut opened, &bytes, true, None, None);
         assert_eq!((want.matrix_is_fallback, look.is_none()), (!measured, true), "{model}");
 
         let mut s = Session::new().with_fs();
@@ -1444,6 +1444,13 @@ fn files_sharing_a_stem_get_their_own_sidecars() {
     s.execute("photo.rate", &json!({"ids": [j.0, p.0], "rating": 0})).unwrap();
     s.execute("photo.readMetadataFromFile", &json!({"ids": [j.0, p.0]})).unwrap();
     assert_eq!((s.catalog.photo(j).unwrap().rating, s.catalog.photo(p).unwrap().rating), (2, 5));
+    // An unreadable packet owned by the first photo cannot block the other's first save.
+    std::fs::remove_file(src.join("IMG_1.png.xmp")).unwrap();
+    let foreign = b"\xffunreadable owner packet";
+    std::fs::write(src.join("IMG_1.xmp"), foreign).unwrap();
+    s.save_sidecar(p).unwrap();
+    assert_eq!(rating("IMG_1.png.xmp"), Some(5));
+    assert_eq!(std::fs::read(src.join("IMG_1.xmp")).unwrap(), foreign);
     let _ = std::fs::remove_dir_all(&src);
     let _ = std::fs::remove_dir_all(&lib);
 }

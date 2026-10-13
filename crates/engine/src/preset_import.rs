@@ -513,6 +513,8 @@ pub(crate) fn build(props: &Props, values: &crate::crs_masks::Values, name: Stri
     }
     // the profile it names, resolved against the user's imported profiles by `preset.import`
     if let Some(look) = crate::profile_refs::look_ref(props)
+        && !props.keys().any(|k| k == "crs:Look/crs:Parameters" || k.starts_with("crs:Look/crs:Parameters/"))
+        && !unmapped.iter().any(|v| v.starts_with("Look (invalid "))
         && let Some(o) = settings.as_object_mut()
     {
         o.insert("profile".into(), serde_json::json!({"look": look}));

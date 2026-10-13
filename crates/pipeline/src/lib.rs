@@ -98,11 +98,6 @@ pub struct SourceInfo {
     /// The raw's own local tone mapping (DNG `ProfileGainTableMap`), rendered only when the
     /// photo's Profile option asks for it ([`local_tone`]).
     pub local_tone: Option<Arc<local_tone::LocalTone>>,
-    /// Long edge (px) of the original photo, when the source handed to the renderer is a smaller
-    /// copy of it (the app's thumbnail and preview levels); `None`: the source is the original.
-    /// Noise reduction sizes its radii in the original's pixels ([`Plan::detail_scale`]), so a
-    /// preview looks like the full-size render scaled down (issue #960).
-    pub native_long: Option<usize>,
 }
 
 impl Default for SourceInfo {
@@ -119,7 +114,6 @@ impl Default for SourceInfo {
             camera_tone: None,
             mattes: None,
             local_tone: None,
-            native_long: None,
         }
     }
 }
@@ -535,8 +529,23 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         detail_scale.to_bits(),
     ));
-    Plan { settings, frame, w, h, px_per_long, src_long, native_long, detail_scale, geo, lin_key, pre_nr_key, eyes, fixed_air, keep, mattes: info.mattes.clone() }
-}
+    Plan {
+        settings,
+        frame,
+        w,
+        h,
+        px_per_long,
+        src_long,
+        native_long,
+        detail_scale,
+        geo,
+        lin_key,
+        pre_nr_key,
+        eyes,
+        fixed_air,
+        keep,
+        mattes: info.mattes.clone(),
+    }
 }
 
 /// Panel bypass affects both CPU/GPU stage planning and cache keys, without changing saved
@@ -867,11 +876,9 @@ mod tests_hdr;
 #[cfg(test)]
 mod tests_local;
 #[cfg(test)]
-mod tests_nr_scale;
-#[cfg(test)]
-mod tests_tone;
-#[cfg(test)]
 mod tests_nr;
+#[cfg(test)]
+mod tests_nr_scale;
 #[cfg(test)]
 mod tests_sections;
 #[cfg(test)]

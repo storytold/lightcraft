@@ -358,7 +358,7 @@ impl TitleCompose {
             photo: lightcraft_catalog::PhotoId(0),
             level: crate::media::SourceLevel::Preview,
             key: self.key(),
-            rendered: Ok(lightcraft_pipeline::Rendered { image, histogram, deep: None }),
+            rendered: Ok(lightcraft_pipeline::Rendered { image, histogram, deep: None, unsupported_edits: Vec::new() }),
             loaded: None,
             quick: None,
             display: None,

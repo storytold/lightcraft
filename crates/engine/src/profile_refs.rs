@@ -1,6 +1,6 @@
 //! Profiles named by imported presets (issue #1001).
 //!
-//! A Lightroom preset doesn't carry its profile's look: it names it (`crs:Look`: name, group,
+//! A Lightroom preset can name a profile without carrying its look (`crs:Look`: name, group,
 //! UUID, amount), and many presets get most of their look from that profile. On import the
 //! reference is kept in the preset's settings as `profile.look`, and resolved against the
 //! profiles the user has imported (by name, the group breaking ties), so the preset applies the
@@ -9,6 +9,7 @@
 //!
 //! References are resolved again whenever profiles are imported or deleted, so a pack works in
 //! either order. Only the user's own files are read; no profile content ships with LightCraft.
+//! Explicit saved Look parameters and curves take precedence over this name-only resolution.
 
 use serde_json::{Value, json};
 
@@ -94,6 +95,10 @@ pub fn resolve(look: &Value, luts: &[LutProfile]) -> Resolved {
 /// and whether `settings` changed.
 pub fn apply(settings: &mut Value, luts: &[LutProfile]) -> Option<(Resolved, bool)> {
     let profile = settings.get_mut("profile")?.as_object_mut()?;
+    // Explicit saved parameters/curves take precedence over name-only substitution.
+    if profile.get("imported").is_some_and(|v| !v.is_null()) {
+        return None;
+    }
     let look = profile.get("look")?.clone();
     let r = resolve(&look, luts);
     let before = (profile.get("id").cloned(), profile.get("amount").cloned());
@@ -126,24 +131,34 @@ pub fn report(look: &Value, r: &Resolved) -> Option<String> {
 /// Only the presets that change are touched, so an unchanged list isn't saved again.
 pub fn refresh(s: &mut Session) {
     let luts = s.lut_profiles.clone();
-    let stale: Vec<usize> = s
+    let updates: Vec<_> = s
         .presets
         .iter()
         .enumerate()
         .filter(|(_, p)| !p.builtin)
-        .filter(|(_, p)| {
+        .filter_map(|(i, p)| {
             let mut settings = p.settings.clone();
-            apply(&mut settings, &luts).is_some_and(|(_, changed)| changed)
+            let (resolved, changed) = apply(&mut settings, &luts)?;
+            let look = settings.get("profile")?.get("look")?;
+            let old_reports: Vec<_> = [Resolved::OtherAppBuiltIn, Resolved::NotImported].iter().filter_map(|r| report(look, r)).collect();
+            let fields = lightcraft_develop::unsupported_edits::bounded_names(
+                p.unsupported_edits
+                    .iter()
+                    .filter(|v| v.as_str() != "Look" && !old_reports.contains(v))
+                    .map(String::as_str)
+                    .chain(report(look, &resolved).as_deref()),
+            );
+            (changed || fields != p.unsupported_edits).then_some((i, settings, fields))
         })
-        .map(|(i, _)| i)
         .collect();
-    if stale.is_empty() {
+    if updates.is_empty() {
         return;
     }
     let presets = &mut *s.presets;
-    for i in stale {
+    for (i, settings, fields) in updates {
         if let Some(p) = presets.get_mut(i) {
-            apply(&mut p.settings, &luts);
+            p.settings = settings;
+            p.unsupported_edits = fields;
         }
     }
 }
@@ -188,6 +203,10 @@ mod tests {
         assert_eq!(apply(&mut s, &[]), Some((Resolved::NotImported, true)), "profile deleted");
         assert!(s["profile"].get("id").is_none());
         assert_eq!(apply(&mut json!({"light": {}}), &luts), None);
+        let mut explicit = json!({"profile": {"id": "lc.imported", "amount": 120.0, "imported": {"contrast": 8.0}, "look": {"name": "mb1 profile"}}});
+        let before = explicit.clone();
+        assert_eq!(apply(&mut explicit, &luts), None);
+        assert_eq!(explicit, before);
     }
 
     #[test]
