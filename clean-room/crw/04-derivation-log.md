@@ -248,3 +248,20 @@ Selector 1 (from the D30) and selector 2 (from the second 10D file) extractions 
 with the same tooling. Remaining after that: G1/G5/G6 PowerShot handling (10-bit G1; the
 G5 low-bits anomaly), the stream-tail rule, then the frozen format document and the
 Python reference decoder for the P4 verification pass.
+
+## 2026-10-13 — selectors 1 and 2; G1, G6, private files; G5 isolated
+
+- Anchor hunting (truncation-probe agreement at byte boundaries + bit-level pinning)
+  plus structural bootstrap (reading each file's opening k=10 tokens and the steady
+  zero-block unit directly off the bits) made extraction routine for new table sets.
+- **Selector 1** (extracted from private CRW_0476, topped up from the public D30):
+  D30 **EXACT**, PowerShot **G1 EXACT** (10-bit, no low-bits plane — detected by the
+  frozen unstuffed-ff scan), CRW_0476 **EXACT**. Cross-body sharing confirmed again.
+- **G6 EXACT** with the selector-0 table once the low-bits rule was frozen (presence
+  by the ff-scan; entropy always at low-bits-size + 514).
+- **G5 remains anomalous**: its low-bits plane matches the oracle's LSBs ~97.5 % in the
+  top rows (not 100 %), degrading to 0 % in the lower half, and no constant bit-shift
+  explains it; its entropy stream also diverges from the selector-1 parse within the
+  first rows. G5 is documented as unresolved and will be refused (or preview-only) by
+  the decoder pending further work.
+- Selector 2 (from the public 10D-b) extraction completing.
