@@ -63,6 +63,45 @@ fn hover(h: &mut Headless, p: egui::Pos2) {
     h.settle(SETTLE);
 }
 
+fn corner(h: &Headless, i: usize) -> egui::Pos2 {
+    h.app.widgets.iter().find(|(w, _)| *w == format!("cropHandle:{i}")).map(|(_, r)| r.center()).expect("a corner handle")
+}
+
+/// Degrees in (-180, 180]; screen angles run the other way once wrapped.
+fn wrap(d: f32) -> f64 {
+    let d = d.to_degrees() as f64;
+    (d + 180.0) % 360.0 - 180.0
+}
+
+/// The crop box turns the way the pointer does (issue #962). Measured on screen, where y grows
+/// downwards, so a falling angle is counter-clockwise. The drag starts left of the photo and
+/// moves down: on the left, downward is counter-clockwise, whatever the photo's proportions, so
+/// the expected turn needs no arithmetic. An edge is the probe, not a diagonal: the box also
+/// shrinks to fit as it turns (issue #742), by different amounts per axis, and that bends a
+/// diagonal without turning anything.
+#[test]
+fn the_crop_box_follows_the_pointer() {
+    let mut h = crop_tool();
+    let before = corner(&h, 1) - corner(&h, 0);
+    let r = h.request(
+        "ui.pointer",
+        json!({"events": [
+            {"kind": "down", "x": -0.05, "y": 0.2},
+            {"kind": "drag", "x": -0.05, "y": 0.25},
+            {"kind": "drag", "x": -0.05, "y": 0.3},
+        ]}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(has(&h, "cropAngleReadout"), "the drag is rotating at all");
+    let turn = wrap((corner(&h, 1) - corner(&h, 0)).angle() - before.angle());
+    assert!(
+        turn < -1.0,
+        "dragging down on the left turns the pointer counter-clockwise, so the box must too, not the other way: it turned {turn:.2}°"
+    );
+}
+
 /// Outside the crop box, where a drag rotates, the pointer becomes a curved double arrow drawn at
 /// the pointer (no system cursor has one); inside it is the move cursor, with no rotation glyph.
 #[test]
