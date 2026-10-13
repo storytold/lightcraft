@@ -1087,6 +1087,10 @@ mod tests {
         assert!(other.relative && other.scale_white.is_none());
         let unknown = WbScaleOf::new(RawFormat::Nef, &ColorData::default(), mul, &lightcraft_meta::Metadata::default());
         assert!(unknown.relative && unknown.as_shot(d65) == (6500.0, 0.0));
+        // CRW: no matrices and no measured camera — relative, so its JPEG-fitted look applies
+        let crw = WbScaleOf::new(RawFormat::Crw, &ColorData::default(), mul, &meta("Canon", "Canon EOS D60"));
+        assert!(crw.relative && !crw.legacy_relative && crw.scale_white.is_none());
+        assert!(lightcraft_catalog::relative_wb_camera("CRW", "Canon Canon EOS D60"));
         // a file with matrices of its own (DNG): absolute from them, no matter whose camera
         let own = ColorData { illuminant: [21, 0], color_matrix: [Some(lightcraft_color::Mat3::IDENTITY), None], ..Default::default() };
         let dng = WbScaleOf::new(RawFormat::Dng, &own, mul, &meta("SONY", "ILCE-7M3"));
