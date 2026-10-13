@@ -77,6 +77,9 @@ pub struct ImportOptions {
     /// one skipped as a duplicate, restored from Recently Deleted, or joined from a browsed
     /// folder (Local) is never touched, as the preset and keywords never are.
     pub recipe: Vec<(String, f64)>,
+    /// Files to import although another photo has the same content (the review's hand-ticked
+    /// "Duplicate"s): each becomes a new photo. A file whose path is in the library is never one.
+    pub import_anyway: std::collections::HashSet<String>,
 }
 
 /// How copies are filed in the destination. The date is the capture time, else the time of the
@@ -139,6 +142,10 @@ pub struct ImportCandidate {
     pub duplicate: Option<String>,
     /// The photo that already has it.
     pub existing: Option<u64>,
+    /// A `"content"` duplicate of a file earlier in this list rather than of a library photo: that
+    /// file's path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub earlier: Option<String>,
     /// Not readable.
     pub error: Option<String>,
     /// A raw variant that can't be decoded yet (why): it imports as preview only.
@@ -173,9 +180,43 @@ pub struct FileFacts {
     pub captured: Option<String>,
 }
 
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+/// What the duplicates among [`ImportCandidate`]s are, for the review's summary.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DuplicateCounts {
+    /// Already in the library from the same path.
+    pub in_library: usize,
+    /// The same content as a library photo, from another path.
+    pub copies: usize,
+    /// The same content as a file earlier in this import.
+    pub repeated: usize,
+}
+
+impl DuplicateCounts {
+    pub fn of<'a>(candidates: impl IntoIterator<Item = &'a ImportCandidate>) -> Self {
+        let mut n = Self::default();
+        for c in candidates {
+            match c.duplicate.as_deref() {
+                Some("path") => n.in_library += 1,
+                Some(_) if c.earlier.is_some() => n.repeated += 1,
+                Some(_) => n.copies += 1,
+                None => {}
+            }
+        }
+        n
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ImportReport {
     pub imported: Vec<u64>,
+    /// How many of `imported` have the content of another photo, ticked by hand
+    /// ([`ImportOptions::import_anyway`]).
+    #[serde(rename = "importedAnyway", skip_serializing_if = "is_zero")]
+    pub imported_anyway: usize,
     pub duplicates: Vec<Duplicate>,
     /// [`OnDeleted::Restore`]: photos brought back from Recently Deleted instead of imported.
     #[serde(skip_serializing_if = "Vec::is_empty")]

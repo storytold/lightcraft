@@ -1,6 +1,6 @@
 use super::defaults::apply_import_defaults;
 use super::files::copy_into;
-use super::job::{Prepared, PreparedItem, ReadyFile};
+use super::job::{Prepared, PreparedItem, ReadyFile, normalize_import_path};
 use super::types::{Duplicate, ImportOptions, ImportReport, Kept, Moved, OnDeleted};
 use super::{HashMap, Op, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
@@ -187,6 +187,7 @@ fn trashed_file_is_gone(cat: &lightcraft_catalog::Catalog, id: PhotoId) -> bool 
 pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepared: Prepared) -> crate::Result<ImportReport> {
     let now = now.to_string();
     let mut report = ImportReport { scanned: prepared.scanned, ..Default::default() };
+    let anyway = prepared.anyway;
     let mut ops = Vec::new();
     // Move: placed at the destination, sources untouched until the records are committed
     let mut placed: Vec<crate::import_move::Placed> = Vec::new();
@@ -245,12 +246,25 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 placed.extend(pl);
                 let id = s.catalog.alloc_photo_id();
                 if let Some(h) = &info.content_hash {
-                    new_hash.insert(h.clone(), id);
+                    new_hash.entry(h.clone()).or_insert(id);
                 }
                 for old in info.content_hash.as_ref().and_then(|h| trash_hash.get(h)).into_iter().chain(trash_path.get(&stored)) {
                     if purged.insert(*old) {
                         purge.push(*old);
                     }
+                }
+                // ticked by hand although another photo has this content: a Duplicate's hash
+                // (`:dup<id>`), so the two photos can be told apart and neither is mistaken for the other
+                let mut hash = info.content_hash.clone();
+                if anyway.contains(&normalize_import_path(&path))
+                    && let Some(h) = &mut hash
+                    && (new_hash.get(h.as_str()).is_some_and(|first| *first != id)
+                        || s.catalog
+                            .photos()
+                            .any(|p| !purged.contains(&p.id) && p.content_hash.as_deref().map(crate::sync::base_hash) == Some(h.as_str())))
+                {
+                    *h = format!("{h}:dup{}", id.0);
+                    report.imported_anyway += 1;
                 }
                 let sidecar = sidecar.map(|sc| sc.resolve_label(&s.catalog)).filter(|sc| *sc != crate::sidecar::SidecarData::default());
                 // the photo is upright as the file's own orientation turns it, when the file states one
@@ -263,7 +277,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 p.captured = info.captured;
                 p.meta = info.meta;
                 p.as_shot_wb = info.as_shot_wb;
-                p.content_hash = info.content_hash;
+                p.content_hash = hash;
                 p.embedded_lens = info.embedded_lens;
                 p.set_preview_only(info.preview_only.clone());
                 apply_import_defaults(s, &mut p);

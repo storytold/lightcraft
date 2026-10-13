@@ -81,6 +81,7 @@ pub fn import_params(s: &Session, p: &Value) -> Result<ImportRequest> {
         rename_start,
         metadata_preset,
         convert_dng: bool_or(p, "dng", false),
+        import_anyway: strs(p, "importAnyway").into_iter().collect(),
         local: bool_or(p, "local", false),
         recipe: crate::cmd::recipe_param(p, "library.import")?,
     };

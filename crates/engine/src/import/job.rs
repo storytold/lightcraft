@@ -1,6 +1,7 @@
 use super::commit::{How, Plan, Slot, Transfer, commit_prepared, name_family, run_transfers, system_clock};
 use super::files::{Seen, expand, probe_all, reusable_probes, sidecars_of};
 use super::types::{FileFacts, ImportCandidate, ImportMode, ImportOptions, ImportReport, Kept, OnDeleted};
+use super::scan::index_hash;
 use super::{HashMap, MediaKind, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
 /// Import files/folders. See the module docs.
@@ -41,6 +42,9 @@ pub struct ImportJob {
     pub(super) by_path: HashMap<String, (PhotoId, bool)>,
     /// content hash → the photo that has it (`None`: a file earlier in this import)
     pub(super) by_hash: HashMap<String, Option<PhotoId>>,
+    /// Files to import although their content is known ([`ImportOptions::import_anyway`]), by
+    /// [`normalize_import_path`].
+    anyway: std::collections::HashSet<String>,
     pub(super) probe: Option<crate::media::FileProbe>,
     file_bytes: Option<crate::merge::ByteReader>,
     /// Probes from a preceding scan (not read again).
@@ -62,6 +66,9 @@ pub struct ImportJob {
 #[derive(Debug, Default)]
 pub struct Prepared {
     pub scanned: usize,
+    /// Files imported although their content is in the library ([`ImportOptions::import_anyway`]),
+    /// by [`normalize_import_path`].
+    pub(super) anyway: std::collections::HashSet<String>,
     pub(super) items: Vec<PreparedItem>,
 }
 
@@ -123,7 +130,7 @@ impl Prepared {
                 paths.insert(normalize_import_path(path), photo.id);
             }
             if let Some(hash) = &photo.content_hash {
-                hashes.insert(hash.clone(), photo.id);
+                index_hash(&mut hashes, hash, photo.id);
             }
         }
         let mut items = Vec::with_capacity(self.items.len());
@@ -134,7 +141,8 @@ impl Prepared {
             };
             let ReadyFile { path, stored, info, sidecar, placed } = *ready;
             let existing_path = paths.get(&normalize_import_path(&stored)).copied().or_else(|| paths.get(&normalize_import_path(&path)).copied());
-            let existing_hash = info.content_hash.as_ref().and_then(|hash| hashes.get(hash).copied());
+            let anyway = self.anyway.contains(&normalize_import_path(&path));
+            let existing_hash = info.content_hash.as_ref().filter(|_| !anyway).and_then(|hash| hashes.get(hash).copied());
             if let Some(existing) = existing_path.or(existing_hash) {
                 if let Some(placed) = &placed {
                     crate::import_move::rollback(placed);
@@ -154,7 +162,7 @@ impl Prepared {
     }
 }
 
-fn normalize_import_path(path: &str) -> String {
+pub(super) fn normalize_import_path(path: &str) -> String {
     let path = path.replace('\\', "/");
     if cfg!(windows) { path.to_lowercase() } else { path }
 }
@@ -162,10 +170,11 @@ fn normalize_import_path(path: &str) -> String {
 impl ImportJob {
     /// Snapshot what an import with `opts` needs from the session (no file-system calls). Takes
     /// the probes a preceding scan left ([`Session::import_probes`]).
-    pub fn new(s: &mut Session, opts: ImportOptions) -> crate::Result<Self> {
+    pub fn new(s: &mut Session, mut opts: ImportOptions) -> crate::Result<Self> {
         // a recipe is checked before any file is read or placed, not when the photos are committed
         crate::cmd::check_recipe(&opts.recipe).map_err(|e| crate::cmd::bad("library.import", e))?;
         let mode = opts.mode;
+        let anyway = std::mem::take(&mut opts.import_anyway).iter().map(|p| normalize_import_path(p)).collect();
         // Only a library on disk has an `Originals/` folder. The browser build keeps the bytes of
         // every added file in its own storage already, so "copy" there means "add".
         let transfer = matches!(mode, ImportMode::Copy | ImportMode::Move);
@@ -194,6 +203,7 @@ impl ImportJob {
             library: Some((s.catalog.clone(), fresh)),
             by_path: HashMap::new(),
             by_hash: HashMap::new(),
+            anyway,
             probe: s.media.file_probe.clone(),
             file_bytes: s.media.file_bytes.clone(),
             cache: std::mem::take(&mut s.import_probes),
@@ -243,7 +253,7 @@ impl ImportJob {
                 self.by_path.insert(path.clone(), (p.id, p.local));
             }
             if let Some(h) = &p.content_hash {
-                self.by_hash.insert(h.clone(), Some(p.id));
+                index_hash(&mut self.by_hash, h, Some(p.id));
             }
         }
         Some(library)
@@ -256,7 +266,7 @@ impl ImportJob {
         let library = self.look_up_library();
         let opts = self.opts.clone();
         let mode = self.mode;
-        let mut out = Prepared { scanned: files.len(), items: Vec::new() };
+        let mut out = Prepared { scanned: files.len(), items: Vec::new(), anyway: Default::default() };
         let mut todo = Vec::new();
         for f in files {
             match self.by_path.get(f.as_str()).copied() {
@@ -303,7 +313,11 @@ impl ImportJob {
         let known: std::collections::HashSet<&str> = todo
             .iter()
             .zip(&probed)
-            .filter(|(_, p)| !opts.local && p.as_ref().is_ok_and(|i| i.content_hash.as_ref().is_some_and(|h| self.by_hash.contains_key(h))))
+            .filter(|(f, p)| {
+                !opts.local
+                    && !self.anyway.contains(&normalize_import_path(f))
+                    && p.as_ref().is_ok_and(|i| i.content_hash.as_ref().is_some_and(|h| self.by_hash.contains_key(h)))
+            })
             .map(|(f, _)| f.as_str())
             .collect();
         let mut found =
@@ -328,8 +342,13 @@ impl ImportJob {
             };
             // (this file's place in the lookups above: files that failed to probe have none)
             let found_sidecar = found.next().flatten();
+            let anyway = !opts.local && self.anyway.contains(&normalize_import_path(&path));
+            if anyway {
+                out.anyway.insert(normalize_import_path(&path));
+            }
             // a copy of a file whose transfer is still pending: a duplicate only if that one succeeds
             if !opts.local
+                && !anyway
                 && let Some(h) = &info.content_hash
                 && plan.pending_hashes.contains(h)
             {
@@ -340,7 +359,7 @@ impl ImportJob {
             }
             // same bytes as a library photo: skipped below, once its capture time is known
             let duplicate_of =
-                info.content_hash.as_ref().filter(|_| !opts.local).and_then(|h| self.by_hash.get(h).map(|existing| (h.clone(), *existing)));
+                info.content_hash.as_ref().filter(|_| !opts.local && !anyway).and_then(|h| self.by_hash.get(h).map(|existing| (h.clone(), *existing)));
             // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
             // and names the copy when the file itself has none (a duplicate needs only that time)
             let raw = info.kind == MediaKind::Raw;
@@ -437,7 +456,7 @@ impl ImportJob {
                 _ => path.clone(),
             };
             if let Some(h) = &info.content_hash {
-                self.by_hash.insert(h.clone(), None);
+                self.by_hash.entry(h.clone()).or_insert(None);
             }
             self.done.fetch_add(1, Relaxed);
             plan.slots.push(Slot::Item(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed: None }))));
@@ -463,7 +482,7 @@ impl ImportJob {
             if let PreparedItem::Ready(r) = &item
                 && let Some(h) = &r.info.content_hash
             {
-                self.by_hash.insert(h.clone(), None);
+                self.by_hash.entry(h.clone()).or_insert(None);
             }
             out.items.push(item);
         }
