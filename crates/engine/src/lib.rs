@@ -700,8 +700,12 @@ impl Session {
             }
         }
         for path in proxies {
+            // NotFound on an unplugged custom drive does not mean its old proxy is gone.
+            if self.smart_previews_dir.is_some() && !dir.is_dir() {
+                return Err(EngineError::Other(format!("smart preview folder {} is unavailable; reconnect the drive and retry", dir.display())));
+            }
             if let Err(e) = std::fs::remove_file(&path)
-                && e.kind() != std::io::ErrorKind::NotFound
+                && (e.kind() != std::io::ErrorKind::NotFound || (self.smart_previews_dir.is_some() && !dir.is_dir()))
             {
                 return Err(EngineError::Other(format!("can't invalidate smart preview {}: {e}", path.display())));
             }
