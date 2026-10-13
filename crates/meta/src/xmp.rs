@@ -292,7 +292,7 @@ fn parse_tree(s: &str) -> Result<Node, XmpError> {
                 }
             }
             Event::End(_) if stack.len() > 1 => {
-                let n = stack.pop().expect("len > 1");
+                let n = stack.pop().ok_or_else(|| XmpError::Xml("XMP element stack is empty".into()))?;
                 scopes.pop();
                 if let Some(parent) = stack.last_mut() {
                     parent.children.push(n);

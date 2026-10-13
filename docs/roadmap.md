@@ -1,6 +1,6 @@
 # Roadmap: milestones, current focus and what's next
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created; milestones moved here from ROADMAP.md, focus re-ranked after the 2026-10-10 re-measure) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (lossless compressed ORF completed: 23 exact sensor references; combined evidence verifies 571 of 1,446 models) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 Forward-looking plan. The summary with the headline numbers is [ROADMAP.md](../ROADMAP.md); the
 ranked shortfalls are [gaps.md](gaps.md); the numbers come from [target-app-parity.md](target-app-parity.md).
@@ -9,7 +9,7 @@ LightCraft has no `cargo xtask scorecard`; the measured checklist is
 
 ## Current focus
 
-Toward **beta** (~340–600 Opus 5.5 agent hours; ranked, each a gap in [gaps.md](gaps.md)):
+Toward **beta** (~330–590 Opus 5.5 agent hours; ranked, each a gap in [gaps.md](gaps.md)):
 
 1. **Camera colour of our own** (gap 1, 50–90 h): chart-based calibration for the most-used models,
    building on the per-file JPEG fits and pooled profiles (`lightcraft-cli calibrate`); never Adobe
@@ -21,7 +21,7 @@ Toward **beta** (~340–600 Opus 5.5 agent hours; ranked, each a gap in [gaps.md
 4. **Full-resolution zoom** (gap 4, 8–15 h): visible-region rendering so 100% shows original pixels.
 5. **AI masks** (gap 5, 40–70 h): Subject / Sky / People on licensable weights; configure the SAM 3
    mirror. Needs the maintainer's model decision.
-6. **Compressed ORF and HE NEF** (gaps 6–7, 28–55 h).
+6. **HE NEF** (gap 7, 20–40 h; compressed ORF completed).
 7. **Lens profiles of our own** (gap 8, 40–80 h).
 8. **Tests in CI on macOS, Windows and Linux** (gap 9, 6–12 h).
 9. **Per-model verification** (gap 10, 20–35 h).
@@ -36,7 +36,7 @@ against the code, tests, issues and [gaps.md](gaps.md).
 |---|---|---|---:|
 | 1. Import a shoot (raw + JPEG) from a card or folder into the library | yes | Add / Copy / Move import with templates, duplicates, devices with DCIM, background import with cancel (`crates/engine/src/import.rs`, `tests_import.rs`, `tests_import_move.rs`); checklist A 83% | 0 |
 | 2. Cull: rate, flag, label, compare / survey, filter, check focus | yes (partial: focus check) | ratings / flags / labels with advance, Compare, Survey ≤ 48, filter bar, smart albums (checklist B–D 88–92%); 100% zoom is capped by the preview size (2,560 px default, adjustable in Settings), gap 4 — degrades focus checks on large files but does not block culling | 0 (8–15 h to close gap 4, beta) |
-| 3. Develop raws non-destructively (global sliders, crop, masks, heal) | yes for most cameras (partial: Canon CR3 outside the verified variants, compressed ORF, HE NEF open as embedded previews) | Sony, Nikon (except HE), Fujifilm, Panasonic, Pentax, CR2, DNG decode from sensor data (raw-parity.md); every Edit slider, crop / Upright, brush / gradient / range masks, heal / clone (checklist F, H, K); colour estimated per file rather than measured, gaps 1–3 | 0 (coverage and colour gaps are beta blockers 1–3, 6–7) |
+| 3. Develop raws non-destructively (global sliders, crop, masks, heal) | yes for most cameras (partial: Canon CR3 outside the verified variants and HE NEF open as embedded previews) | Sony, Nikon (except HE), Fujifilm, Panasonic, Pentax, Olympus / OM ORF, CR2, DNG decode from sensor data (raw-parity.md); every Edit slider, crop / Upright, brush / gradient / range masks, heal / clone (checklist F, H, K); colour estimated per file rather than measured, gaps 1–3 | 0 (coverage and colour gaps are beta blockers 1–3; HE NEF gap 7 is non-blocking) |
 | 4. Save, quit and reopen the work | yes | crash-safe journal + snapshots, torn-append and crash tests (`crates/catalog/src/journal.rs`, `tests_journal.rs`, `tests_torn_append.rs`); XMP sidecars read / write; failed saves reported | 0 |
 | 5. Batch-apply a look: presets, copy / paste / sync settings | yes | presets (incl. `.xmp` / `.lrtemplate` import), copy / paste / sync, auto sync (checklist L 86%, N 100%) | 0 |
 | 6. Export deliverables (JPEG / TIFF, size, sharpening, metadata, watermark, naming) | yes | one encoder for app, CLI and MCP (`crates/engine/src/export.rs`, `tests_export.rs`); checklist S 89% | 0 |
@@ -72,7 +72,7 @@ calibration: M0–M13 took ≈ 25 active hours against an estimate of ≈ 110–
 | M8 | Heal / Remove | content-aware remove (PatchMatch), heal, clone, brush spots, visualize spots, red/pet eye | 6–10 | 🚧 (heal, clone, auto source, visualize spots, red/pet eye ✅; PatchMatch remove ⬜) |
 | M9 | Presets, profiles, versions, sync | preset browser + amount, create/import presets, profile browser, versions, history, copy/paste/sync settings | 5–8 | ✅ |
 | M10 | Export & share | export dialog (JPEG/PNG/TIFF/DNG/AVIF/JXL/original), sizing, sharpening, metadata, watermark, naming, batch jobs, XMP sidecars, HDR export | 6–10 | 🚧 (all formats incl. DNG/original, sizing, presets, background jobs, HDR gain map JPEG / PQ AVIF ✅; JXL encode ⬜) |
-| M11 | RAW II | CR3, RAF (X-Trans), ORF, RW2, PEF, SRW, 3FR, IIQ + long tail; camera calibration DB; HEIC/AVIF/JXL import | 20–35 | 🚧 (RAF all, RW2 every format, PEF, ORF uncompressed and 12.8 bpp, SRW uncompressed, HEIC ✅; CR3 🟡 (3 bodies verified); **camera colour calibration** 🚧 (per-file JPEG fits, 5 bundled profiles, 52 spectral matrices; measured database missing); compressed ORF / SRW, HE NEF, IIQ, X3F ⬜) |
+| M11 | RAW II | CR3, RAF (X-Trans), ORF, RW2, PEF, SRW, 3FR, IIQ + long tail; camera calibration DB; HEIC/AVIF/JXL import | 20–35 | 🚧 (RAF all, RW2 every format, PEF, ORF uncompressed / 12.8 bpp / lossless compressed (23 exact sensor references, including PEN E-PL7), SRW uncompressed, HEIC ✅; CR3 🟡 (3 bodies verified); **camera colour calibration** 🚧 (per-file JPEG fits, 5 bundled profiles, 52 spectral matrices; measured database missing); compressed SRW, HE NEF, IIQ, X3F ⬜) |
 | M12 | AI & smart features | subject/sky/background/people/object masks, semantic search, faces/People (permissively licensed models, pure-Rust inference) | 20–40 | 🚧 (faces: detection, recognition, People view ✅; Object / Describe masks via SAM 3 🟡; Subject / Sky / People masks, semantic search ⬜) |
 | M13 | Merge | HDR merge (deghost), panorama (projections, boundary warp, fill edges), HDR panorama | 10–15 | ✅ |
 | M14 | Video | import/playback/trim via FilmCraft crates, global edits + presets on video, video export | 6–10 | ⬜ |
@@ -108,6 +108,8 @@ calibration: M0–M13 took ≈ 25 active hours against an estimate of ≈ 110–
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | patch | Rebased compressed ORF onto current main; combined camera evidence measures 571 verified, 694 unverified, 144 preview-only and 37 unsupported models (96% use-weighted decoding, 88% on verified bodies); existing readiness estimates retained |
+| 2026-10-12 | minor | Compressed ORF completed (23 newly verified bodies including PEN E-PL7); removed gap 6 from upcoming work, updated RAW II and alpha-gate coverage |
 | 2026-10-10 | minor | Beta hours 340–600; full ready ~59% in the gate note |
 | 2026-10-10 | minor | Added the Alpha gate table (core-workflow gate from the revised standard): passes, stays alpha |
 | 2026-10-10 | major | Created: milestones moved from ROADMAP.md (statuses refreshed: M3 ✅, M11 / M12 / M15 detail), current focus re-ranked toward beta, risks and design notes kept |
