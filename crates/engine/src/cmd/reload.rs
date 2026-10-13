@@ -99,27 +99,6 @@ pub fn apply(s: &mut Session, items: Vec<Item>, results: Vec<std::result::Result
         s.reload_tickets.applied.insert(item.id, item.ticket);
         crate::cmd::convert::reload_ops(&s.catalog, item.id, &info, &mut ops, &mut reloaded);
     }
-    // The bytes can be unchanged while a new decoder replaces the embedded JPEG with sensor
-    // data. Neither the content-addressed proxy name nor its camera-look version detects that.
-    let mut proxies = std::collections::HashSet::new();
-    for op in &ops {
-        if let Op::SetContent { id, preview_only, .. } = op
-            && let (Some(dir), Some(ph)) = (&s.media.smart_dir, s.catalog.photo(*id))
-            && ph.preview_only.is_some() != preview_only.is_some()
-        {
-            proxies.insert(crate::smart::sharded_file_path(dir, ph));
-            proxies.insert(dir.join(crate::smart::file_name(ph)));
-        }
-    }
-    // Invalidate both layouts before changing the catalog interpretation. A failed removal must
-    // not leave JPEG pixels available as raw data when the original goes offline.
-    for path in proxies {
-        if let Err(e) = std::fs::remove_file(&path)
-            && e.kind() != std::io::ErrorKind::NotFound
-        {
-            return Err(crate::cmd::bad("photo.reload", format!("{}: {e}", path.display())));
-        }
-    }
     for id in &reloaded {
         s.media.forget(*id);
     }
