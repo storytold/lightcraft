@@ -2205,6 +2205,40 @@ fn import_preview_reports_what_the_scan_skipped() {
     let _ = std::fs::remove_dir_all(&deep);
 }
 
+/// XMP sidecars are read with their photos, so they are not "skipped": the expansion, the scan and
+/// `library.importPreview` count them (in any letter case, in subfolders too) as nothing, and still
+/// count every other file that is not a photo.
+#[test]
+fn xmp_sidecars_are_not_counted_as_unsupported() {
+    use crate::import::{ScanInput, ScanProgress, expand_report, scan_with};
+    let mut s = Session::new().with_fs();
+    // sidecars beside a photo, a sidecar without one, in any case, one deeper; plus a text file
+    let mixed = temp_dir("sidecars-mixed");
+    write_png(&mixed.join("a.png"), 1);
+    std::fs::write(mixed.join("a.xmp"), b"x").unwrap();
+    std::fs::write(mixed.join("b.XMP"), b"x").unwrap();
+    std::fs::create_dir_all(mixed.join("sub")).unwrap();
+    std::fs::write(mixed.join("sub").join("c.Xmp"), b"x").unwrap();
+    std::fs::write(mixed.join("c.txt"), b"x").unwrap();
+    // only photos and sidecars
+    let tidy = temp_dir("sidecars-only");
+    write_png(&tidy.join("a.png"), 2);
+    std::fs::write(tidy.join("a.xmp"), b"x").unwrap();
+    std::fs::write(tidy.join("b.XMP"), b"x").unwrap();
+    for (dir, unsupported) in [(&mixed, 1usize), (&tidy, 0)] {
+        let path = dir.to_string_lossy().to_string();
+        let e = expand_report(std::slice::from_ref(&path), None, crate::walk::Limits::default());
+        assert_eq!((e.files.len(), e.unsupported), (1, unsupported), "expand_report {e:?}");
+        let (input, paths) = ScanInput::new(&mut s, std::slice::from_ref(&path));
+        let out = scan_with(input, &paths, &ScanProgress::default());
+        assert_eq!((out.candidates.len(), out.unsupported), (1, unsupported), "scan_with");
+        let r = s.execute("library.importPreview", &json!({"paths": [path]})).unwrap();
+        assert_eq!((r["scanned"].clone(), r["skipped"]["unsupported"].clone()), (json!(1), json!(unsupported)), "{r}");
+    }
+    let _ = std::fs::remove_dir_all(&mixed);
+    let _ = std::fs::remove_dir_all(&tidy);
+}
+
 /// Raw containers LightCraft cannot decode but shows by their embedded JPEG are picked up from a folder
 /// (the extensions are in `import::EXTENSIONS`; the files differ so none is a duplicate) and import as preview only.
 #[test]

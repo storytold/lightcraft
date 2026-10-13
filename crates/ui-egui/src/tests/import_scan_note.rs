@@ -96,6 +96,30 @@ fn the_review_says_how_many_files_were_skipped() {
     assert!(has_note_widget(&mut h), "the line is a registered widget");
 }
 
+/// XMP sidecars beside the pictures are read with them, so they are not "skipped": no note for
+/// them, but a text file in the same folder still gets its line.
+#[test]
+fn xmp_sidecars_do_not_make_the_review_say_files_were_skipped() {
+    let dir = Scratch::new("sidecars");
+    write_png(&dir.0.join("a.png"), 1);
+    std::fs::write(dir.0.join("a.xmp"), b"x").unwrap();
+    std::fs::write(dir.0.join("b.XMP"), b"x").unwrap();
+    let mut h = headless();
+    open_review(&mut h, &dir);
+    let d = review(&mut h);
+    assert_eq!((d.candidates.len(), d.truncated, d.unreadable, d.unsupported), (1, false, 0, 0));
+    h.step();
+    assert!(!shows_any_note(&h), "{:?}", h.painted_text());
+    assert!(!has_note_widget(&mut h));
+
+    std::fs::write(dir.0.join("notes.txt"), b"not a photo").unwrap();
+    h.app.ui.dialog = None;
+    open_review(&mut h, &dir);
+    assert_eq!(review(&mut h).unsupported, 1, "only the text file");
+    h.step();
+    assert!(shows(&h, "1 file skipped (not a supported photo type)"), "{:?}", h.painted_text());
+}
+
 /// A tree deeper than a scan goes: the review says that there may be more photos.
 #[test]
 fn the_review_says_when_the_scan_stopped_at_its_limit() {
