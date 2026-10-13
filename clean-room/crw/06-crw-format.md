@@ -77,8 +77,11 @@ which the Rust implementation may normalise, provided the verification table of
 
 ## 4 Not yet established / out of scope here
 
-- **G5 anomaly**: its low-bits plane matches the oracle LSBs only ~47 % under the
-  standard layout; under investigation (its hi-plane decode will localise the issue).
+- **G5 anomaly**: its entropy stream decodes end-to-end with the selector-1 tables,
+  but values diverge beginning at sample 2056 (= 4 × 514), and its low-bits plane fits
+  no tested layout (top rows mostly match, decaying to 0 %, no constant shift). The
+  decoder must detect the G5 (CanonModelID / make-model) and fall back to the embedded
+  JPEG until a follow-up derivation resolves it.
 - The exact meaning of each file's tail bytes (handled by the stream-end rule).
 - Big-endian (`MM`) CIFF files: no sample exists.
 - PowerShot G2/G3/Pro1/Pro70/S30–S70: no CC0 samples (licence-excluded); decodable
