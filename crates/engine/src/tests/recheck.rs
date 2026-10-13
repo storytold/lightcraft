@@ -153,3 +153,36 @@ fn session_without_file_access_refuses() {
     assert!(e.contains("no file access"), "{e}");
     assert!(x.s.catalog.photo(x.id).unwrap().preview_only.is_some());
 }
+
+/// Automatic rechecks use system operations, but must discard old JPEG proxies just as Reload
+/// does even when the original bytes and their content-addressed proxy name have not changed.
+#[test]
+fn recheck_invalidates_unchanged_file_smart_previews() {
+    let mut x = library("smart-preview");
+    decodable_now(&x);
+    let info = recheck::file_probe(&x.s).unwrap()(&x.file.to_string_lossy()).unwrap();
+    x.s.catalog
+        .apply(Op::SetContent {
+            id: x.id,
+            width: info.width,
+            height: info.height,
+            file_size: info.file_size,
+            content_hash: info.content_hash,
+            preview_only: Some("old decoder".into()),
+            preview_checked: OTHER.into(),
+        })
+        .unwrap();
+    let ph = x.s.catalog.photo(x.id).unwrap().clone();
+    let dir = x.s.media.smart_dir.clone().unwrap();
+    let sharded = crate::smart::sharded_file_path(&dir, &ph);
+    let flat = dir.join(crate::smart::file_name(&ph));
+    std::fs::create_dir_all(sharded.parent().unwrap()).unwrap();
+    std::fs::write(&sharded, b"old JPEG proxy").unwrap();
+    std::fs::write(&flat, b"old flat JPEG proxy").unwrap();
+    let result = x.s.execute("library.recheckPreviewOnly", &json!({})).unwrap();
+    assert_eq!(result["cleared"], json!([x.id.0]));
+    let updated = x.s.catalog.photo(x.id).unwrap();
+    assert!(updated.develops_raw());
+    assert_eq!(updated.content_hash, ph.content_hash, "only the decoder interpretation changed");
+    assert!(!sharded.exists() && !flat.exists(), "both old proxy layouts must be discarded");
+}

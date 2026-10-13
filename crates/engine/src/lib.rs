@@ -646,6 +646,7 @@ impl Session {
     }
 
     fn apply_catalog(&mut self, op: Op) -> Result<Op> {
+        self.invalidate_changed_smart_previews(&op)?;
         // Retain only cache IDs while the catalog consumes the operation. Cloning an import
         // batch here also cloned every photo, although commit already keeps the journal copy.
         let mut invalidated = Vec::new();
@@ -677,6 +678,37 @@ impl Session {
         Ok(inv)
     }
 
+    /// Reload, Relink and their Undo/Redo can change how unchanged file bytes are decoded.
+    /// Discard proxies before applying that interpretation, including operations inside batches.
+    fn invalidate_changed_smart_previews(&self, op: &Op) -> Result<()> {
+        let Some(dir) = &self.media.smart_dir else { return Ok(()) };
+        let mut pending = vec![op];
+        let mut proxies = std::collections::HashSet::new();
+        while let Some(op) = pending.pop() {
+            match op {
+                Op::SetContent { id, preview_only, .. } => {
+                    if let Some(ph) = self.catalog.photo(*id)
+                        && ph.preview_only.is_some() != preview_only.is_some()
+                    {
+                        // The content-addressed name and look version do not encode JPEG vs raw.
+                        proxies.insert(crate::smart::sharded_file_path(dir, ph));
+                        proxies.insert(dir.join(crate::smart::file_name(ph)));
+                    }
+                }
+                Op::Batch { ops } => pending.extend(ops),
+                _ => {}
+            }
+        }
+        for path in proxies {
+            if let Err(e) = std::fs::remove_file(&path)
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(EngineError::Other(format!("can't invalidate smart preview {}: {e}", path.display())));
+            }
+        }
+        Ok(())
+    }
+
     /// [`Session::commit`] for an op that goes with a folder already renamed on disk; the undo
     /// step renames it back (`folder` is the undo direction: current place → old place).
     pub(crate) fn commit_with_folder(&mut self, label: &str, op: Op, folder: FolderMove) -> Result<()> {
@@ -702,6 +734,7 @@ impl Session {
     /// scan, a raw's as-shot white read by a decode, raws rechecked after an update): journaled like any op, but not
     /// an undo step, and it leaves the redo stack alone.
     pub(crate) fn apply_system(&mut self, op: Op) -> Result<()> {
+        self.invalidate_changed_smart_previews(&op)?;
         let fwd = op.clone();
         self.catalog.apply(op)?;
         self.pending_log.push(fwd);

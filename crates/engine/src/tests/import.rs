@@ -1759,6 +1759,23 @@ fn reload_invalidates_preview_only_smart_previews() {
     let rebuilt = std::fs::read(&file).unwrap();
     assert_ne!(rebuilt, old);
     assert_eq!(smart_header(&file)["look_version"], json!(crate::camera_preview::LOOK_VERSION));
+    // Undo and Redo change the same interpretation as Reload. An invalidation failure must
+    // preserve both the catalog and the undo entry, so the user can fix the folder and retry.
+    std::fs::create_dir(&flat).unwrap();
+    assert!(s.execute("edit.undo", &json!({})).is_err());
+    assert!(s.catalog.photo(id).unwrap().develops_raw());
+    std::fs::remove_dir(&flat).unwrap();
+    std::fs::write(&file, &rebuilt).unwrap();
+    std::fs::write(&flat, &rebuilt).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(!s.catalog.photo(id).unwrap().develops_raw());
+    assert!(!file.exists() && !flat.exists(), "Undo must discard sensor proxies before restoring preview-only state");
+    std::fs::write(&file, &old).unwrap();
+    std::fs::write(&flat, &old).unwrap();
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert!(s.catalog.photo(id).unwrap().develops_raw());
+    assert!(!file.exists() && !flat.exists(), "Redo must discard JPEG proxies before restoring raw state");
+    s.execute("library.smartPreviews", &json!({"ids": [id.0]})).unwrap();
     std::fs::remove_file(&path).unwrap();
     for id in [id, copy_id] {
         s.media.forget(id);
@@ -1767,6 +1784,48 @@ fn reload_invalidates_preview_only_smart_previews() {
         assert!(source.info_or(crate::media::source_info(ph)).raw);
         assert!((source.image.data[0][0] - 0.2).abs() < 0.02, "offline uses the rebuilt sensor pixels");
     }
+    drop(s);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Relinking unchanged bytes after a decoder upgrade changes the source interpretation too.
+#[test]
+fn relink_invalidates_preview_only_smart_previews() {
+    use lightcraft_catalog::{Op, PhotoId};
+    let dir = temp_dir("smart-relink-decoder-upgrade");
+    let path = dir.join("old.dng");
+    std::fs::write(&path, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("lib"), false).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = PhotoId(r["imported"][0].as_u64().unwrap());
+    let p = s.catalog.photo(id).unwrap().clone();
+    // Emulate an older catalog that could only read this raw's embedded JPEG.
+    s.catalog
+        .apply(Op::SetContent {
+            id,
+            width: p.width,
+            height: p.height,
+            file_size: p.file_size,
+            content_hash: p.content_hash.clone(),
+            preview_only: Some("old decoder".into()),
+            preview_checked: String::new(),
+        })
+        .unwrap();
+    let smart_dir = s.media.smart_dir.clone().unwrap();
+    let file = crate::smart::sharded_file_path(&smart_dir, &p);
+    let flat = smart_dir.join(crate::smart::file_name(&p));
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let bytes = crate::smart::encode(&lightcraft_raster::Rgb32f::filled(48, 32, [0.8; 3]), None).unwrap();
+    std::fs::write(&file, &bytes).unwrap();
+    std::fs::write(&flat, &bytes).unwrap();
+    let moved = dir.join("moved.dng");
+    std::fs::rename(&path, &moved).unwrap();
+    s.execute("photo.relink", &json!({"id": id.0, "path": moved.to_string_lossy()})).unwrap();
+    let after = s.catalog.photo(id).unwrap();
+    assert!(after.develops_raw());
+    assert_eq!(after.content_hash, p.content_hash, "relinking did not change the bytes");
+    assert!(!file.exists() && !flat.exists(), "Relink must invalidate both JPEG proxy layouts");
     drop(s);
     let _ = std::fs::remove_dir_all(dir);
 }
