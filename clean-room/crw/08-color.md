@@ -37,6 +37,11 @@ vs −0.67 GRBG). Unsampled PowerShots default to RGGB, unverified.
   rows). This lands on the true dark level on every corpus body. Cross-check: the trailing
   quadruple of ColorBalance (0x10a9) is (126–127)×4 on D60/10D and (124–125)×4 on 300D —
   matching the measured borders (ExifTool's prose notes this quadruple as "black levels").
+- **Correction (2026-10-13):** the first implementation also averaged in the clamped strips
+  it meant to ignore (mean ≤ 1 passes "within 8 DN of the darkest"), which put the D60's
+  level at 117 instead of 128 and lifted every shadow. Fixed and tested; on 20 private D60
+  files the left border's mean is within 2 DN of the record's black quadruple, per site
+  (127–137, higher on the files with the larger calibration-row value).
 - **White level**: saturation plateau of the decoded samples (shared `white_from_data`),
   full-range fallback 4095 (12-bit) / 1023 (G1's 10-bit high plane only).
 

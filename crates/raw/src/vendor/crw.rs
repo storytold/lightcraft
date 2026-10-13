@@ -332,7 +332,9 @@ fn black_from_borders(data: &[u16], w: usize, h: usize, active: Rect) -> BlackLe
     // per-CFA-site means over every strip near the darkest
     let (mut sum, mut cnt) = ([0f64; 4], [0u64; 4]);
     for (m, xs, ys) in &strips {
-        if *m > darkest + 8.0 {
+        // clamped padding (mean ≤ 1) is no black reference: counting it dragged the D60's level
+        // from 128 down to 117 and lifted every shadow
+        if *m <= 1.0 || *m > darkest + 8.0 {
             continue;
         }
         for y in ys.clone() {
@@ -735,6 +737,28 @@ mod tests {
         let f = roundtrip_file(16, 8, "Canon PowerShot G5", None, &hi, Order::Le);
         let Err(RawError::Unsupported(why)) = decode(&f, Mode::Full) else { panic!("expected Unsupported") };
         assert!(why.contains("G5"), "{why}");
+    }
+
+    /// The D60 layout: sensor rows clamped to 0 above the image, dark columns left of it. The
+    /// clamped rows must not count towards the black level.
+    #[test]
+    fn black_level_ignores_clamped_rows() {
+        let (w, h) = (64usize, 40usize);
+        let active = Rect::new(24, 16, 40, 24);
+        let mut data = vec![900u16; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                data[y * w + x] = if y < 7 {
+                    0
+                } else if x < 24 {
+                    128
+                } else {
+                    900
+                };
+            }
+        }
+        let black = black_from_borders(&data, w, h, active);
+        assert!(black.values.iter().all(|v| (v - 128.0).abs() < 0.5), "{:?}", black.values);
     }
 
     /// The frozen stream-end rule: a truncated entropy stream leaves the remaining samples at
