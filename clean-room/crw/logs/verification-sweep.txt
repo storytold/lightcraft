@@ -1,0 +1,22 @@
+CRW_0476.crw: sel 1, 3152x2068: EXACT
+CRW_0478.crw: sel 1, 3152x2068: EXACT
+CRW_0486.crw: sel 0, 3152x2068: EXACT
+CRW_0527.crw: sel 1, 3152x2068: EXACT
+CRW_0683.crw: sel 1, 3152x2068: EXACT
+CRW_0717.crw: sel 1, 3152x2068: EXACT
+CRW_0765.crw: sel 1, 3152x2068: EXACT
+CRW_0822.crw: sel 1, 3152x2068: EXACT
+CRW_0879.crw: sel 1, 3152x2068: EXACT
+CRW_1011.crw: sel 1, 3152x2068: EXACT
+CRW_1153.crw: sel 0, 3152x2068: EXACT
+crw-canon-eos-10d-a.crw: sel 0, 3152x2068: EXACT
+crw-canon-eos-10d-b.crw: sel 2, 3152x2068: EXACT
+crw-canon-eos-10d-c.crw: sel 2, 3152x2068: EXACT
+crw-canon-eos-300d-a.crw: sel 0, 3152x2068: EXACT
+crw-canon-eos-300d-b.crw: sel 2, 3152x2068: EXACT
+crw-canon-eos-d30.crw: sel 1, 2224x1456: EXACT
+crw-canon-eos-d60.crw: sel 0, 3152x2068: EXACT
+crw-canon-eos-digital-rebel.crw: sel 0, 3152x2068: EXACT
+crw-canon-powershot-g1.crw: sel 1, 2144x1560: EXACT
+crw-canon-powershot-g5.crw: sel 1, 2672x1968: 2685618 mismatches, first at 0 (row 0, col 0)
+crw-canon-powershot-g6.crw: sel 0, 3160x2344: EXACT

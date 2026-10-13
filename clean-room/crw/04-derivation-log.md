@@ -265,3 +265,18 @@ Python reference decoder for the P4 verification pass.
   first rows. G5 is documented as unresolved and will be refused (or preview-only) by
   the decoder pending further work.
 - Selector 2 (from the public 10D-b) extraction completing.
+
+## 2026-10-13 — P2 complete; tables frozen; 28 of 29 files verify EXACT
+
+A final systematic fix (first-table magnitudes reach s = 11+: the carry-coded block DC
+spans ±2046) unlocked selector 2 (extracted from the 300D-b after the saturated 10D-b
+proved hostile learning ground). Table top-ups over every private file completed the
+three table sets (12 first + 154/161/162 second codes). The final sweep: **28 of 29
+corpus files decode with zero mismatching samples** against LibRaw 0.22.2 — every EOS
+body and selector, the 10-bit G1, the G6, and all 18 private D60s. The PowerShot G5
+remains the open anomaly (stream decodes, values diverge from sample 2056; low-bits
+plane fits no tested layout) and is excluded pending follow-up.
+
+Frozen at this commit: `06-crw-format.md` (the format), `logs/table_sel{0,1,2}.json`
+(the tables), `07-verification.md` (the evidence). P3 (black/WB/colour records) and P5
+(the Rust decoder) proceed only after maintainer review, per the plan.
