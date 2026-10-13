@@ -1941,6 +1941,7 @@
   "Metadata read": "已讀取中繼資料",
   "Failed": "失敗",
   "Stopped": "已停止",
+  "Stopped at the scan limit: there may be more photos": "已在掃描上限處停止：可能還有更多照片",
   "Stopped by an error (see the log)": "因錯誤而停止（請見記錄）",
   "Not saved": "未儲存",
   "A folder is being synchronized": "正在同步資料夾",

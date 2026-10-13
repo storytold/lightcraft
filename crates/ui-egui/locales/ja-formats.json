@@ -96,6 +96,8 @@
   "{name} On": "{name}を有効にする",
   "{name} — double-click to reset it": "{name}：ダブルクリックでリセット",
   "{n} change{} saved in memory but not written to disk: {e}\nLightCraft retries automatically; quitting now would lose {}.": "{n}件の変更{:.0}をディスクに保存できません：{e}\n自動で再試行します。終了すると変更が失われます{:.0}",
+  "{n} file{} skipped (not a supported photo type)": "スキップしたファイル（非対応の写真形式）：{n}個{:.0}",
+  "{n} folder{} could not be read": "読み取れなかったフォルダー：{n}個{:.0}",
   "{n} found · {sel} selected": "{n}枚検出・{sel}枚選択",
   "{n} photos": "{n}枚",
   "{n} photos in {} are hidden by the filters above": "{}の{n}枚は上のフィルターで非表示になっています",

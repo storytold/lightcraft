@@ -96,6 +96,8 @@
   "{name} On": "已开启 {name}",
   "{name} — double-click to reset it": "{name} — 双击可重置",
   "{n} change{} saved in memory but not written to disk: {e}\nLightCraft retries automatically; quitting now would lose {}.": "{n} 项更改已保存在内存中，但尚未写入磁盘：{e}\nLightCraft 会自动重试；现在退出将丢失这些更改。{0:.0}{1:.0}",
+  "{n} file{} skipped (not a supported photo type)": "已跳过的文件（不是支持的照片类型）：{n} 个{:.0}",
+  "{n} folder{} could not be read": "无法读取的文件夹：{n} 个{:.0}",
   "{n} found · {sel} selected": "找到 {n} 张 · 已选 {sel} 张",
   "{n} photos": "{n} 张照片",
   "{n} photos in {} are hidden by the filters above": "{0} 中的 {n} 张照片被上方的过滤器隐藏",

@@ -3,10 +3,11 @@
 //! a grid of thumbnails with checkboxes (duplicates marked and unchecked; Shift-click sets a
 //! range), the destination (add in place / copy or move into the library's `Originals/` or a
 //! chosen folder, filed by day, by month, into one folder or by a custom folder template,
-//! optionally renamed), an album (existing or new), a preset and keywords to apply. Importing
-//! runs on a worker thread (files are probed, copied or moved there) and its batches join the
-//! catalog between frames, with a row and ✕ in the activity stack (issue #345); the whole import is
-//! one undo step.
+//! optionally renamed), an album (existing or new), a preset and keywords to apply. When the scan
+//! left something out (a walk cut at its limit, folders it couldn't read, files that are not
+//! photos) one line under the count says so ([`scan_note`]). Importing runs on a worker thread
+//! (files are probed, copied or moved there) and its batches join the catalog between frames, with
+//! a row and ✕ in the activity stack (issue #345); the whole import is one undo step.
 
 use egui::{Color32, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use lightcraft_engine::import::{
@@ -79,6 +80,13 @@ pub struct ImportDialog {
     /// What to do with those: `restore` (the default: the photo comes back with its edits), `fresh`
     /// (imported as a new photo, the old record deleted) or "" (leave them) — the `onDeleted` param.
     pub on_deleted: String,
+    /// The scan's folder walk stopped at a depth or entry limit: there may be more photos than the
+    /// review lists ([`ScanOutput::truncated`]).
+    pub truncated: bool,
+    /// Folders the scan couldn't list ([`ScanOutput::unreadable`]).
+    pub unreadable: usize,
+    /// Files in the scanned folders that are not a supported photo type ([`ScanOutput::unsupported`]).
+    pub unsupported: usize,
     /// The candidate clicked last: where a Shift-click range starts ([`ImportDialog::click`]).
     #[serde(skip)]
     pub last_clicked: Option<usize>,
