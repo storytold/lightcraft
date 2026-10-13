@@ -81,7 +81,7 @@ pub struct ScanOutput {
     pub truncated: bool,
     /// Folders whose contents couldn't be listed.
     pub unreadable: usize,
-    /// Files inside the folders that are not a supported photo type.
+    /// Files inside the folders that are not a supported photo type (XMP sidecars not counted).
     pub unsupported: usize,
 }
 

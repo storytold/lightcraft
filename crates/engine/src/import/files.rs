@@ -24,6 +24,11 @@ pub fn is_supported(path: &Path) -> bool {
     path.extension().is_some_and(|e| EXTENSIONS.contains(&e.to_string_lossy().to_lowercase().as_str()))
 }
 
+/// An XMP sidecar (`.xmp`, any letter case): read with its photo on import, never a photo itself.
+fn is_xmp_sidecar(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("xmp"))
+}
+
 /// The web file picker's accept list, derived from [`EXTENSIONS`]. Each extension
 /// is listed in both cases: browsers' `accept` matching is case-insensitive per
 /// spec, but some implementations (e.g. Windows/Edge) match case-sensitively and
@@ -94,9 +99,10 @@ pub struct Expansion {
     pub truncated: bool,
     /// Folders whose contents couldn't be listed (permissions, a folder that vanished or went offline).
     pub unreadable: usize,
-    /// Files found inside the folders walked that are not a supported type (see [`is_supported`]).
-    /// A file named directly is attempted whatever its extension and is never counted here. Both
-    /// counts add up over the sources, so a folder named twice (or inside another source) counts twice.
+    /// Files found inside the folders walked that are not a supported type (see [`is_supported`]),
+    /// not counting XMP sidecars, which the import reads with their photos. A file named directly
+    /// is attempted whatever its extension and is never counted here. Both counts add up over the
+    /// sources, so a folder named twice (or inside another source) counts twice.
     pub unsupported: usize,
 }
 
@@ -121,9 +127,18 @@ fn expand_report_noting(
             continue;
         }
         if p.is_dir() {
+            // XMP sidecars are read with their photos, not skipped: they are left out of the count
+            let mut sidecars = 0usize;
+            let keep = |f: &Path| {
+                let keep = is_supported(f);
+                if !keep && is_xmp_sidecar(f) {
+                    sidecars = sidecars.saturating_add(1);
+                }
+                keep
+            };
             let w = match note.as_mut() {
-                Some(note) => crate::walk::files_in_noting(p, skip, limits, is_supported, &mut **note),
-                None => crate::walk::files_in(p, skip, limits, is_supported),
+                Some(note) => crate::walk::files_in_noting(p, skip, limits, keep, &mut **note),
+                None => crate::walk::files_in(p, skip, limits, keep),
             };
             if w.truncated {
                 log::warn!(
@@ -136,7 +151,7 @@ fn expand_report_noting(
             }
             out.truncated |= w.truncated;
             out.unreadable = out.unreadable.saturating_add(w.unreadable);
-            out.unsupported = out.unsupported.saturating_add(w.skipped);
+            out.unsupported = out.unsupported.saturating_add(w.skipped.saturating_sub(sidecars));
             out.files.extend(w.files.into_iter().map(|f| f.to_string_lossy().to_string()));
         } else {
             // explicitly named files are attempted even with an unknown extension (sniffed)

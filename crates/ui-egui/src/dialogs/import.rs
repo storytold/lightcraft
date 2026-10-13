@@ -87,7 +87,8 @@ pub struct ImportDialog {
     pub truncated: bool,
     /// Folders the scan couldn't list ([`ScanOutput::unreadable`]).
     pub unreadable: usize,
-    /// Files in the scanned folders that are not a supported photo type ([`ScanOutput::unsupported`]).
+    /// Files in the scanned folders that are not a supported photo type, XMP sidecars not counted
+    /// ([`ScanOutput::unsupported`]).
     pub unsupported: usize,
     /// The candidate clicked last: where a Shift-click range starts ([`ImportDialog::click`]).
     #[serde(skip)]

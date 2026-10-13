@@ -45,8 +45,8 @@ pub struct Walked {
     /// offline): the walk skipped them and carried on. Only a refused listing counts, not an
     /// entry inside a listed folder that couldn't be examined.
     pub unreadable: usize,
-    /// Files the walk reached that `keep` refused (for an import, files that are not a supported
-    /// photo type). Hidden entries and the skipped folder are left out silently and not counted.
+    /// Files the walk reached that `keep` refused. Hidden entries and the skipped folder are left
+    /// out silently and not counted.
     pub skipped: usize,
 }
 
@@ -331,8 +331,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
-    /// Files the caller's `keep` refuses are counted (an import reports them as unsupported), and
-    /// so are only those: hidden files and the skipped folder are left out without a count, and
+    /// Files the caller's `keep` refuses are counted (an import reports most of them as
+    /// unsupported), and so are only those: hidden files and the skipped folder are left out without a count, and
     /// the files returned are the same ones in the same order.
     #[test]
     fn unkept_files_are_counted_as_skipped() {
