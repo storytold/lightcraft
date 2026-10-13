@@ -248,3 +248,10 @@ Sony	RX1R II (DSC-RX1RM2)	verified	issue #535: raw.pixls.us bulk check of all 10
 Sony	ZV-1 (DCZV1/B)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	ZV-E1	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	ZV-E10	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Canon	EOS D30	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
+Canon	EOS D60	verified	corpus: crates/raw/tests/corpus.rs; 18 maintainer files exact (clean-room/crw/07-verification.md)
+Canon	EOS 10D	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES; 3 files)
+Canon	EOS 300D (EOS Digital Rebel, EOS Kiss Digital)	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES; 3 files)
+Canon	PowerShot G1	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
+Canon	PowerShot G6	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
+Canon	PowerShot G5	preview	CRW entropy anomaly (clean-room/crw/06-crw-format.md section 4); embedded JPEG

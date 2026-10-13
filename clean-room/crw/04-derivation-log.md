@@ -280,3 +280,14 @@ plane fits no tested layout) and is excluded pending follow-up.
 Frozen at this commit: `06-crw-format.md` (the format), `logs/table_sel{0,1,2}.json`
 (the tables), `07-verification.md` (the evidence). P3 (black/WB/colour records) and P5
 (the Rust decoder) proceed only after maintainer review, per the plan.
+
+## 2026-10-13 — P5: Rust decoder lands; P3 colour/geometry derived
+
+The maintainer approved the freeze. `crates/raw/src/vendor/crw.rs` implements the frozen
+model (tables generated from `logs/table_sel{0,1,2}.json` into `crw_tables.rs`); the Rust
+decoder matched the oracle **sample-exact on all 28 decodable corpus files on its first
+run** (`crates/raw/tests/crw_oracle.rs`, ~65 ms per 8 MP file). The G5 is refused by model
+string. Colour/geometry work (CFA phases by chroma correlation + green-diagonal tests,
+border black levels, 0x10a9/0x10aa white balance, rotation and timestamps) is documented in
+`08-color.md`; ExifTool prose pages and a raw.pixls.us repository-listing fetch (to recover
+the 11 corpus files' stable URLs for `cargo xtask corpus`) are logged in `sources.md`.

@@ -111,3 +111,14 @@ checked out, diffed, logged or read.
   code; **no source file there is ever opened, read or searched** — only
   `bin\unprocessed_raw.exe` is executed, as a black box, per the approved plan (§5a/§7).
   All oracle runs and probe campaigns are logged in `04-derivation-log.md`.
+
+- 2026-10-13 — **Fetch** `https://raw.pixls.us/json/getrepository.php?set=all` (and the site
+  root to find that endpoint): recovered the stable `getfile.php` URLs of the 11 CC0 corpus
+  files by matching their SHA-256s, and re-confirmed each row's CC0 licence; URLs pinned in
+  `xtask/src/main.rs` `RAW_SAMPLES`. No decoder content on these pages.
+- 2026-10-13 — **Fetch** `https://exiftool.org/TagNames/CanonRaw.html` (again) and
+  `https://exiftool.org/TagNames/Canon.html` (prose tag tables only): 0x10a9 ColorBalance →
+  Canon ColorBalance table (Index2; WB_RGGBLevels slot order Auto/Daylight/Shade/Cloudy/
+  Tungsten/Fluorescent/Flash/Custom/Kelvin, index-29 "black levels for the D60" note),
+  0x1030 WhiteSample field names, CanonShotInfo index 7 = WhiteBalance and the Canon
+  WhiteBalance value enumeration, CanonModelID values. Prose documentation, no code.
