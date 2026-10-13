@@ -200,6 +200,7 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     app.renderer.forget_imports();
     let mut d = ImportDialog::new(out.candidates);
+    (d.truncated, d.unreadable, d.unsupported) = (out.truncated, out.unreadable, out.unsupported);
     let trashed = d
         .candidates
         .iter()

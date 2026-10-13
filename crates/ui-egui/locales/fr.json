@@ -1930,6 +1930,7 @@
   "Metadata read": "Métadonnées lues",
   "Failed": "Échecs",
   "Stopped": "Arrêté",
+  "Stopped at the scan limit: there may be more photos": "Arrêt à la limite d'analyse : il peut y avoir d'autres photos",
   "Stopped by an error (see the log)": "Arrêté par une erreur (voir le journal)",
   "Not saved": "Non enregistré",
   "A folder is being synchronized": "Un dossier est en cours de synchronisation",

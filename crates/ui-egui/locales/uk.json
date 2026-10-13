@@ -2125,6 +2125,7 @@
   "Metadata read": "Метадані прочитано",
   "Failed": "Помилки",
   "Stopped": "Зупинено",
+  "Stopped at the scan limit: there may be more photos": "Зупинено на межі сканування: можливо, є й інші фото",
   "Stopped by an error (see the log)": "Зупинено через помилку (див. журнал)",
   "Not saved": "Не збережено",
   "A folder is being synchronized": "Тека синхронізується",

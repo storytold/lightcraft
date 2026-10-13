@@ -1943,6 +1943,7 @@
   "Metadata read": "メタデータ読み込み",
   "Failed": "失敗",
   "Stopped": "停止しました",
+  "Stopped at the scan limit: there may be more photos": "スキャンの上限で停止しました。ほかにも写真がある可能性があります",
   "Stopped by an error (see the log)": "エラーで停止しました（ログを参照）",
   "Not saved": "保存されていません",
   "A folder is being synchronized": "フォルダを同期中です",

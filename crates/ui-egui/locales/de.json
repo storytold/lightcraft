@@ -2094,6 +2094,7 @@
   "Metadata read": "Metadaten gelesen",
   "Failed": "Fehlgeschlagen",
   "Stopped": "Angehalten",
+  "Stopped at the scan limit: there may be more photos": "Am Suchlimit angehalten: Es gibt möglicherweise weitere Fotos",
   "Stopped by an error (see the log)": "Durch einen Fehler angehalten (siehe Protokoll)",
   "Not saved": "Nicht gespeichert",
   "A folder is being synchronized": "Ein Ordner wird gerade synchronisiert",
