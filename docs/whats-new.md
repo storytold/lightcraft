@@ -104,6 +104,14 @@
 
 ## 2026-10-21
 
+### Background tasks under the bell
+- Running tasks (imports, exports, preview builds…) no longer float over the top-left corner, where they covered the
+  top of the left panel for as long as a job ran. The bell in the top bar shows them: a ring for how far along they
+  are, and beside it, in a wide window, the task's name and percentage, or how many run (a narrower window keeps the
+  percentage or the count, and the bell's tooltip says the rest). Click the bell (or Window ▸ Tasks) for the list,
+  with ✕ to stop a task; it shows every task, the newest first, and scrolls. Esc or a click elsewhere closes it.
+- The bell used to open History. History is in the Window menu and on the tool strip, as before.
+
 ### Settings window
 - Settings is one size on every tab and stays where it is as you go through them; before, each tab made its own
   size and the tabs moved under the pointer. The tabs stay in place while a long page scrolls (in a very short
