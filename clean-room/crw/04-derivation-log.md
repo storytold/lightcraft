@@ -113,3 +113,17 @@ recollection pointing the right way). First-of-block tokens are long (16 bits he
 the −512 initial diffs). The value-token magnitude convention is still open — it is *not*
 plain JPEG — and is being extracted from a second agreement scan over row 7's textured data
 (`bounds2_row7.json`).
+
+## 2026-10-13 — flip probing (campaign 3): code/magnitude split read directly
+
+`plan/crw/model/flipscan.py`: flip one bit of the real stream at a time (real
+continuation), diff the full decode against the real decode. A flipped magnitude bit
+changes exactly one pixel by a power of two; a flipped code bit derails the parse.
+
+First result, the pixel-0 token `1001111111111111` (16 bits): bits 0–7 are the code
+(`10011111`), bits 8–15 are an 8-bit magnitude, weights 1,2,4,…,128 in stream order
+(LSB-first), and the decoded value responds **linearly** across the would-be JPEG sign
+boundary (pixel0 = m − 255 over the whole probed range m = 127…255): the magnitude
+convention is offset-style, not JPEG's two-branch rule, at least for this token. A full
+flip scan over a textured region (row 11) is mapping code and magnitude bits for ~25
+consecutive tokens.
