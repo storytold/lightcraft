@@ -41,6 +41,13 @@ pub struct Walked {
     pub truncated: bool,
     /// Directory entries looked at.
     pub entries: usize,
+    /// Folders whose contents couldn't be listed (permissions, a folder that vanished or went
+    /// offline): the walk skipped them and carried on. Only a refused listing counts, not an
+    /// entry inside a listed folder that couldn't be examined.
+    pub unreadable: usize,
+    /// Files the walk reached that `keep` refused (for an import, files that are not a supported
+    /// photo type). Hidden entries and the skipped folder are left out silently and not counted.
+    pub skipped: usize,
 }
 
 /// Whether the entry has a dot-prefixed name or a Windows or macOS hidden attribute.
@@ -93,7 +100,8 @@ pub type NoteFolder<'a> = &'a mut dyn FnMut(&Path, Vec<(std::ffi::OsString, Entr
 
 /// The files below folder `root` that `keep` accepts. Hidden entries (names starting with `.`)
 /// are left out, the folder `skip` (e.g. the library's own) is never entered, and the walk stops
-/// at `limits` (see [`Walked::truncated`]). Unreadable folders are skipped.
+/// at `limits` (see [`Walked::truncated`]). Unreadable folders are skipped and counted
+/// ([`Walked::unreadable`]), as are the files `keep` refuses ([`Walked::skipped`]).
 pub fn files_in(root: &Path, skip: Option<&Path>, limits: Limits, keep: impl FnMut(&Path) -> bool) -> Walked {
     walk(root, skip, limits, keep, None)
 }
@@ -120,6 +128,8 @@ fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&
         if !is_dir {
             if keep(&path) {
                 out.files.push(path);
+            } else {
+                out.skipped = out.skipped.saturating_add(1);
             }
             continue;
         }
@@ -130,7 +140,10 @@ fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&
             out.truncated = true;
             continue;
         }
-        let Ok(rd) = std::fs::read_dir(&path) else { continue };
+        let Ok(rd) = std::fs::read_dir(&path) else {
+            out.unreadable = out.unreadable.saturating_add(1);
+            continue;
+        };
         let mut children: Vec<(PathBuf, bool)> = Vec::new();
         // (the folder's listing, for who asked for it; all of it unless something below says otherwise)
         let mut listed = note.is_some().then(Vec::new);
