@@ -210,3 +210,20 @@ Current state: the main table has ~20 verified codes; a decode-and-learn loop
 (`plan/crw/model/aligner8.py`) walks the real stream, decoding deterministically with
 known codes and learning first-table/main-table rows at each stall, each verified
 against the oracle pixels.
+
+## 2026-10-13 (cont.) — row reset; full model assembled
+
+Two refinements completed the structural model, each validated against the stream:
+
+- **Chains reset to 512 at every row start** (not row padding — a padded-grid variant was
+  tried and refuted by block alignment at pixel 35008). With the reset, every all-zero row
+  needs one k=10 "−512" value token at its first pixel, which is exactly what the stream
+  shows: a 15-bit second-table code (15,10) at the first row crossing, mag 511 → −512.
+- The verified second table gains `01` = (0,5) (flip-verified at pixel 34994); both `01`
+  and `101` map to (0,5) — duplicate leaves are legal and present.
+
+Model now complete: flat 64-sample blocks; first/second Huffman tables (first = the token
+starting each block); (run ≤ 15, size) leaves with JPEG MSB magnitudes; (0,0) mid-block =
+EOB; per-block DC carry; parity chains init 512, reset at row starts; low-bits recombined
+as the 2 LSBs. Remaining: complete code tables per DecoderTableNumber, extracted by the
+known-plaintext walker (`aligner11.py`), then full-corpus verification.
