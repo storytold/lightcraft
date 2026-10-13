@@ -1366,6 +1366,25 @@ fn smart_header(file: &Path) -> Value {
 /// A decoder upgrade changes the interpretation, not the original's bytes or proxy filename.
 #[test]
 fn reload_invalidates_preview_only_smart_previews() {
+    reload_smart_preview_transition(false, false, false);
+}
+
+#[test]
+fn reload_virtual_copy_updates_shared_smart_preview_family() {
+    reload_smart_preview_transition(true, false, false);
+}
+
+#[test]
+fn reload_unavailable_smart_preview_drive_is_retryable() {
+    reload_smart_preview_transition(false, true, false);
+}
+
+#[test]
+fn undo_rebuild_rejects_mismatched_smart_preview_interpretation() {
+    reload_smart_preview_transition(false, false, true);
+}
+
+fn reload_smart_preview_transition(from_copy: bool, unplug: bool, rebuild_after_undo: bool) {
     use crate::media::{ProbeInfo, SourceLevel};
     use lightcraft_catalog::{MediaKind, Op};
     use lightcraft_pipeline::SourceInfo;
@@ -1374,7 +1393,7 @@ fn reload_invalidates_preview_only_smart_previews() {
         atomic::{AtomicBool, Ordering},
     };
 
-    let dir = temp_dir("smart-decoder-upgrade");
+    let dir = temp_dir(&format!("smart-decoder-upgrade-{from_copy}-{unplug}-{rebuild_after_undo}"));
     let path = dir.join("photo.orf");
     // Procedural pixels stand in for the two decoder versions; no downloaded corpus is needed.
     write_png(&path, 9);
@@ -1410,6 +1429,11 @@ fn reload_invalidates_preview_only_smart_previews() {
     copy.copy_of = Some(id);
     let copy_id = copy.id;
     s.catalog.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
+    let mut sibling = (**s.catalog.photo(copy_id).unwrap()).clone();
+    sibling.id = s.catalog.alloc_photo_id();
+    let sibling_id = sibling.id;
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(sibling) }).unwrap();
+    let reload_ids = if from_copy { json!([copy_id.0, sibling_id.0]) } else { json!([id.0]) };
     s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.7})).unwrap();
     let before = s.catalog.photo(id).unwrap().clone();
     let smart_dir = s.media.smart_dir.clone().unwrap();
@@ -1423,6 +1447,18 @@ fn reload_invalidates_preview_only_smart_previews() {
     assert_eq!(std::fs::read(&file).unwrap(), old, "an unchanged interpretation keeps its proxy");
 
     sensor.store(true, Ordering::SeqCst);
+    if unplug {
+        // A selected external folder disappears while its proxies survive on the drive.
+        s.smart_previews_dir = Some(smart_dir.clone());
+        let offline = dir.join("offline-previews");
+        std::fs::rename(&smart_dir, &offline).unwrap();
+        let err = s.execute("photo.reload", &json!({"ids": reload_ids})).unwrap_err().to_string();
+        assert!(err.contains("reconnect"), "{err}");
+        assert!(!s.catalog.photo(id).unwrap().develops_raw());
+        assert!(!smart_dir.exists(), "do not recreate an unavailable drive");
+        std::fs::rename(&offline, &smart_dir).unwrap();
+        assert_eq!(std::fs::read(&file).unwrap(), old);
+    }
     std::fs::remove_file(&flat).unwrap();
     std::fs::create_dir(&flat).unwrap(); // an unremovable proxy must not allow the catalog switch
     assert!(s.execute("photo.reload", &json!({"ids": [id.0]})).is_err());
@@ -1430,8 +1466,8 @@ fn reload_invalidates_preview_only_smart_previews() {
     std::fs::remove_dir(&flat).unwrap();
     std::fs::write(&file, &old).unwrap();
     std::fs::write(&flat, &old).unwrap();
-    let r = s.execute("photo.reload", &json!({"ids": [id.0]})).unwrap();
-    assert_eq!(r["reloaded"], json!([id.0, copy_id.0]));
+    let r = s.execute("photo.reload", &json!({"ids": reload_ids})).unwrap();
+    assert_eq!(r["reloaded"], json!([id.0, copy_id.0, sibling_id.0]));
     let after = s.catalog.photo(id).unwrap().clone();
     assert_eq!((&after.content_hash, after.file_size, &after.develop), (&before.content_hash, before.file_size, &before.develop));
     assert_eq!(crate::smart::sharded_file_path(&smart_dir, &after), file);
@@ -1453,6 +1489,12 @@ fn reload_invalidates_preview_only_smart_previews() {
     s.execute("edit.undo", &json!({})).unwrap();
     assert!(!s.catalog.photo(id).unwrap().develops_raw());
     assert!(!file.exists() && !flat.exists(), "Undo must discard sensor proxies before restoring preview-only state");
+    if rebuild_after_undo {
+        let r = s.execute("library.smartPreviews", &json!({"ids": [copy_id.0]})).unwrap();
+        assert_eq!(r["built"], 0, "cannot label newly decoded sensor pixels as preview-only: {r}");
+        assert!(r["failed"][0][1].as_str().unwrap().contains("Reload"), "{r}");
+        assert!(!file.exists() && !flat.exists());
+    }
     std::fs::write(&file, &old).unwrap();
     std::fs::write(&flat, &old).unwrap();
     s.execute("edit.redo", &json!({})).unwrap();
@@ -1460,7 +1502,7 @@ fn reload_invalidates_preview_only_smart_previews() {
     assert!(!file.exists() && !flat.exists(), "Redo must discard JPEG proxies before restoring raw state");
     s.execute("library.smartPreviews", &json!({"ids": [id.0]})).unwrap();
     std::fs::remove_file(&path).unwrap();
-    for id in [id, copy_id] {
+    for id in [id, copy_id, sibling_id] {
         s.media.forget(id);
         let ph = s.catalog.photo(id).unwrap();
         let source = s.media.source_ref(ph, SourceLevel::Preview).load_source().unwrap();
@@ -1565,7 +1607,12 @@ fn smart_previews_from_an_older_look_fit_are_refreshed() {
     let png_file = crate::smart::sharded_file_path(&dir, s.catalog.photo(png).unwrap());
     let (old, new) = (test_tone(1.5), test_tone(3.5));
     let calls = std::sync::Arc::new(AtomicUsize::new(0));
-    let plain = s.media.file_loader.clone().unwrap();
+    let decode = s.media.file_loader.clone().unwrap();
+    let plain: crate::media::FileLoader = std::sync::Arc::new(move |path, max_edge| {
+        let (img, mut info) = decode(path, max_edge)?;
+        info.raw = Path::new(path).file_name().is_some_and(|name| name == "a.png");
+        Ok((img, info))
+    });
     s.media.file_loader = Some(look_loader(plain.clone(), old, calls.clone()));
     let r = s.execute("library.smartPreviews", &json!({})).unwrap();
     assert_eq!((r["built"].as_u64(), r["refreshed"].as_u64()), (Some(2), Some(0)), "{r}");
