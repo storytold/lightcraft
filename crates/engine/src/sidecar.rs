@@ -566,7 +566,12 @@ impl Session {
             .map_err(|e| EngineError::Other(format!("{}: unfinished XMP repair: {e}", preferred.display())))?;
         // Keep an existing packet's spelling/style so foreign properties survive this save and
         // subsequent Undo/Redo writes. Shared stems owned by another photo were excluded above.
-        let path = candidates.into_iter().find(|path| path.is_file()).unwrap_or(preferred);
+        // On a case-insensitive volume `a.xmp` also answers for `a.XMP`: the spelling the folder
+        // lists comes first, so the atomic write doesn't rename the packet.
+        use crate::rename::MoveFs;
+        let existing: Vec<PathBuf> = candidates.into_iter().filter(|path| path.is_file()).collect();
+        let listed = existing.iter().find(|path| crate::rename::RealFs.listed(path)).cloned();
+        let path = listed.or_else(|| existing.into_iter().next()).unwrap_or(preferred);
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));

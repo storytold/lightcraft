@@ -1,6 +1,7 @@
 //! Native files and genuine Session entry points: packet ownership survives partial renames.
 use super::*;
 use crate::rename::{MoveFs, RealFs};
+use crate::tests_xmp::same_path_or_file;
 use lightcraft_catalog::{Op, Photo, Source};
 use serde_json::json;
 
@@ -16,7 +17,7 @@ impl MoveFs for Faults {
         RealFs.same_file(a, b)
     }
     fn rename_no_replace(&self, a: &Path, b: &Path) -> std::io::Result<()> {
-        if self.0.iter().any(|p| p == a) {
+        if self.0.iter().any(|p| same_path_or_file(p, a)) {
             Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "injected provenance partial move"))
         } else {
             RealFs.rename_no_replace(a, b)

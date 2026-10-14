@@ -219,6 +219,12 @@ fn step(s: &mut Session, d: isize) -> Result<Value> {
     Ok(json!({"active": vis[next].0}))
 }
 
+/// `library.up` / `library.down`: how many photos to move (at least 1, capped so hostile input
+/// can't overflow).
+fn row_step(p: &Value) -> isize {
+    p.get("rows").and_then(Value::as_u64).unwrap_or(1).clamp(1, 1 << 20) as isize
+}
+
 fn rotate(s: &mut Session, p: &Value, cw: bool) -> Result<Value> {
     let targets = s.targets(p);
     let mut ops = Vec::new();
@@ -641,6 +647,24 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!("library.next", "Next Photo", [], Some("Right"), "{}", always, |s, _| step(s, 1)),
         cmd!("library.previous", "Previous Photo", [], Some("Left"), "{}", always, |s, _| step(s, -1)),
+        cmd!(
+            "library.down",
+            "Photo Below",
+            [],
+            Some("Down"),
+            "{rows?: n (photos to move forward; default 1, the grid passes the distance to the cell below)}",
+            always,
+            |s, p| { step(s, row_step(p)) }
+        ),
+        cmd!(
+            "library.up",
+            "Photo Above",
+            [],
+            Some("Up"),
+            "{rows?: n (photos to move back; default 1, the grid passes the distance to the cell above)}",
+            always,
+            |s, p| { step(s, -row_step(p)) }
+        ),
         // ---- rating / flags / labels
         cmd!("photo.rate", "Set Rating", ["Photo", "Set Rating"], None, "{rating: 0..5, ids?, advance?: bool}", has_selection, |s, p| {
             let r = super::f64_req(p, "rating", "photo.rate")? as i64;

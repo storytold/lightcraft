@@ -303,10 +303,14 @@ fn mcp(args: &[String]) -> Result<(), String> {
     while i < args.len() {
         match args[i].as_str() {
             "--connect" => {
-                // Optional address argument.
-                match args.get(i + 1).filter(|a| !a.starts_with("--") && a.contains(':')) {
+                // Optional address argument. A bare port (all digits) is taken as a port on the
+                // loopback default — matches the help's `--connect [ADDR]` hint alongside the
+                // `--control 7980` example. A non-numeric, non-`--`-prefixed token (e.g. a
+                // command id like `ui.inspect`) leaves the address at its default so the
+                // command is still consumed next. (#1178)
+                match args.get(i + 1).filter(|a| a.contains(':') || a.chars().all(|c| c.is_ascii_digit())) {
                     Some(a) => {
-                        connect = Some(a.clone());
+                        connect = Some(if a.contains(':') { a.clone() } else { format!("127.0.0.1:{a}") });
                         i += 1;
                     }
                     None => connect = Some(DEFAULT_ADDR.to_string()),
@@ -525,9 +529,9 @@ fn run(args: &[String]) -> Result<(), String> {
                 i += 1;
                 break;
             }
-            "--connect" => match args.get(i + 1).filter(|a| a.contains(':') && !a.contains('=')) {
+            "--connect" => match args.get(i + 1).filter(|a| !a.contains('=') && (a.contains(':') || a.chars().all(|c| c.is_ascii_digit()))) {
                 Some(a) => {
-                    connect = Some(a.clone());
+                    connect = Some(if a.contains(':') { a.clone() } else { format!("127.0.0.1:{a}") });
                     i += 1;
                 }
                 None => connect = Some(DEFAULT_ADDR.to_string()),

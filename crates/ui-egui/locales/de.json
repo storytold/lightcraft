@@ -703,6 +703,7 @@
   "In memory — nothing is saved": "Im Arbeitsspeicher — nichts wird gespeichert",
   "In use": "In Verwendung",
   "In-memory session: these settings last until LightCraft quits.": "Sitzung im Arbeitsspeicher: Diese Einstellungen gelten bis zum Beenden von LightCraft.",
+  "Include selected photos": "Ausgewählte Fotos einschließen",
   "Include subfolders": "Unterordner einbeziehen",
   "Increase Brush Feather": "Weiche Pinselkante vergrößern",
   "Increase Brush Size": "Pinselgröße vergrößern",
@@ -803,6 +804,7 @@
   "Local folders": "Lokale Ordner",
   "Local library — no cloud account needed": "Lokale Bibliothek — kein Cloud-Konto erforderlich",
   "Locate Missing File…": "Fehlende Datei suchen…",
+  "Locate Missing Files…": "Fehlende Dateien suchen…",
   "Locate Photo": "Foto suchen",
   "Location": "Ort",
   "Lock": "Sperren",
@@ -1380,6 +1382,8 @@
   "Show Luminance Map": "Luminanzkarte anzeigen",
   "Show Mask": "Maske anzeigen",
   "Show Mask Overlay": "Maskenüberlagerung anzeigen",
+  "Show All Mask Overlays": "Alle Maskenüberlagerungen anzeigen",
+  "Show all overlays": "Alle Überlagerungen anzeigen",
   "Show Mask Pins": "Maskenpins anzeigen",
   "Show Original": "Original anzeigen",
   "Show Photo Counts": "Fotoanzahl anzeigen",
@@ -1813,6 +1817,8 @@
   "Install the SAM 3 Model": "SAM-3-Modell installieren",
   "This build can't download the model yet. To install it by hand, put model.safetensors, vocab.json and merges.txt from Meta's facebook/sam3 in the folder above: Object and Describe work as soon as they are there.": "Diese Version kann das Modell noch nicht herunterladen. Zum Installieren von Hand lege model.safetensors, vocab.json und merges.txt aus Metas facebook/sam3 in den obigen Ordner: Objekt und Beschreiben funktionieren, sobald sie dort liegen.",
   "Open Log Folder": "Protokollordner öffnen",
+  "Reading photos…": "Fotos werden gelesen…",
+  "Adding photos…": "Fotos werden hinzugefügt…",
   "Back to this person": "Back to this person",
   "AI Denoise": "AI Denoise",
   "AI Denoise Model": "AI Denoise Model",
@@ -2109,5 +2115,8 @@
   "Adding to Apple Photos…": "Wird zu Apple Fotos hinzugefügt…",
   "not added to Apple Photos (cancelled)": "nicht zu Apple Fotos hinzugefügt (abgebrochen)",
   "The first time, macOS asks whether LightCraft may control Photos.": "Beim ersten Mal fragt macOS, ob LightCraft Fotos steuern darf.",
-  "Adding to Apple Photos": "Wird zu Apple Fotos hinzugefügt"
+  "Adding to Apple Photos": "Wird zu Apple Fotos hinzugefügt",
+  "No graphics processor found: LightCraft renders on the CPU, which is much slower. Details in Help → System Info.": "Kein Grafikprozessor gefunden: LightCraft rendert auf der CPU, was viel langsamer ist. Details unter Hilfe → Systeminformationen.",
+  "On NixOS, start it from `nix develop`.": "Unter NixOS starten Sie es aus `nix develop`.",
+  "Files with the same content as another file in this import: only the first is imported.": "Dateien mit demselben Inhalt wie eine andere Datei dieses Imports: Nur die erste wird importiert."
 }

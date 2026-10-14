@@ -84,15 +84,21 @@ impl CropGeometry {
     /// the rotated image, else the largest crop of its aspect that fits, centred (Lightroom's
     /// "Constrain to image"). Every way of setting the angle goes through here (the rotate handle,
     /// the Straighten slider and Angle field, `crop.straighten`, `develop.set` on `crop.angle`), so
-    /// they all give the same crop (issue #742).
+    /// they all give the same crop (issue #742). A crop that is the largest of its aspect at its
+    /// own angle (the full photo, or one an earlier turn shrank to fit) stays the largest at the new
+    /// angle, so it grows back as the angle returns towards 0° (issue #1388).
     pub fn with_angle(&self, angle_deg: f64, w: f64, h: f64) -> CropGeometry {
-        let cand = CropGeometry { rect: self.rect, angle: angle_deg };
-        if cand.is_within_image(w, h) {
-            return cand;
-        }
         let r = self.rect_px(w, h);
         // a degenerate rect has no aspect to keep: fall back to the image's own
         let aspect = Some(r.width() / r.height()).filter(|a| a.is_finite() && *a > 0.0);
+        let largest = crop_fit_angle(w, h, self.angle, aspect).rect;
+        let is_largest = [(self.rect.x0, largest.x0), (self.rect.y0, largest.y0), (self.rect.x1, largest.x1), (self.rect.y1, largest.y1)]
+            .iter()
+            .all(|(a, b)| (a - b).abs() < 1e-9);
+        let cand = CropGeometry { rect: self.rect, angle: angle_deg };
+        if !is_largest && cand.is_within_image(w, h) {
+            return cand;
+        }
         crop_fit_angle(w, h, angle_deg, aspect)
     }
 }
@@ -169,6 +175,23 @@ mod tests {
             let (a, b) = (c.rect_px(600.0, 400.0), t.rect_px(600.0, 400.0));
             assert!((a.aspect() - b.aspect()).abs() < 1e-9, "aspect kept: {} vs {}", a.aspect(), b.aspect());
             assert_eq!(t.angle, ang);
+        }
+    }
+
+    #[test]
+    fn with_angle_grows_a_fitted_crop_back_as_the_angle_returns() {
+        // issue #1388: the crop a turn shrank to fit is the largest of its aspect; turning back
+        // gives the largest at the new angle, not the shrunk one again
+        for aspect in [None, Some(1.0), Some(16.0 / 9.0)] {
+            let mut c = crop_fit_angle(600.0, 400.0, 0.0, aspect);
+            for ang in [10.0, 25.0, -25.0, 7.0, 0.0] {
+                c = c.with_angle(ang, 600.0, 400.0);
+                let want = crop_fit_angle(600.0, 400.0, ang, aspect);
+                assert!(
+                    (c.rect.width() - want.rect.width()).abs() < 1e-9 && (c.rect.height() - want.rect.height()).abs() < 1e-9,
+                    "{aspect:?} at {ang}°: {c:?} vs {want:?}"
+                );
+            }
         }
     }
 

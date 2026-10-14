@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~14 points and ~340–600 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (Canon CRW decoded clean-room; 241 models verified) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (Canon CRW decoded clean-room; with Leica Q3, 243 models verified) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 One-page summary of how close LightCraft is to Adobe Lightroom. Agents: read this, then pick work
 from [docs/gaps.md](docs/gaps.md). The full assessment, method and evidence are in
@@ -46,7 +46,7 @@ Hours are calibrated on this repo's PR history; see
 |---|---:|---:|---:|---|
 | Features | ~61% | ~77% (checklist 81.1%) | 600–1,100 h | [target-app-parity](docs/target-app-parity.md#features) |
 | ↳ RAW cameras, colour, lens profiles | ~56% | 81% of 1,446 Adobe models decode, 16% verified | 255–480 h | [raw-parity](docs/raw-parity.md) |
-| UI/UX fidelity | ~70% | ~85% | 40–70 h | [ui-parity](docs/ui-parity.md) |
+| UI/UX fidelity | ~70% | ~85% | 34–58 h | [ui-parity](docs/ui-parity.md) |
 | File formats (non-raw) | ~70% | ~85% | 30–55 h | [file-format-parity](docs/file-format-parity.md) |
 | Hardware | ~40% | ~50% | 40–80 h | [hardware-parity](docs/hardware-parity.md) |
 | Localization | ~52% of the 12 key languages | 7 of 12 present | 130–210 h (+145–255 h new scripts) | [localization-parity](docs/localization-parity.md) |
@@ -118,8 +118,10 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
   derived clean-room against a black-box reference and frozen (`clean-room/crw/06-crw-format.md`);
   EOS D30/D60/10D/300D and PowerShot G1/G6 verified pixel-exact on 28 of 29 corpus files (18 of
   them the maintainer's D60 shots); as-shot white balance, black level, rotation and capture time
-  from the CIFF records; the PowerShot G5's anomalous coding stays preview-only. 241 models
+  from the CIFF records; the PowerShot G5's anomalous coding stays preview-only. 243 models
   verified; use-weighted coverage 85% unchanged, Canon bucket 73% → 76%.
+- 2026-10-11: Leica Q3 verified by a recorded check of 38 private DNGs (all decode and develop at full
+  size; mean ΔE to the camera JPEG 6.3–13.9). 236 models verified; headline numbers unchanged.
 - 2026-10-11: Canon EOS R5 Mark II C-RAW decodes from sensor data (57% of its files opened as a
   preview): the CRX QP map's first-symbol literal and limited-length escape; four CC0 R5 Mark II files
   pinned, the QP maps of 33,665 private C-RAW files decode exactly ([cr3.md](docs/cr3.md)). 235 models
@@ -167,7 +169,8 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-13 | minor | Canon CRW decoded (clean-room): 6 bodies verified pixel-exact, G5 preview; 241 models verified |
+| 2026-10-13 | minor | Canon CRW decoded (clean-room): 6 bodies verified pixel-exact, G5 preview; 243 models verified |
+| 2026-10-12 | minor | UI/UX remaining 40–70 h → 34–58 h (accessibility audit landed); headline numbers unchanged |
 | 2026-10-11 | minor | EOS R5 Mark II CR3 verified: CR3 on four verified bodies, RAW decoding 76% → 77%; headline numbers unchanged |
 | 2026-10-10 | minor | RAW measured model by model; RAW decode and colour as explicit rows: full 59% → 61%, mainstream 51% → 49%, essentials 63% → 64%; beta ~14 points |
 | 2026-10-10 | minor | Full ready restored to the additive weighted sum (~59%; method aligned with the standard, no new evidence); hours per audience; beta ~16 points away |

@@ -182,6 +182,11 @@ impl Frame {
     pub fn fit(&self, max_w: usize, max_h: usize) -> (usize, usize) {
         let a = self.aspect();
         let (mw, mh) = (max_w.max(1) as f64, max_h.max(1) as f64);
+        // a box that is already this aspect up to rounding (an export size) is the size: fitting
+        // into it again rounds twice and can lose a pixel of the edge that was asked for
+        if (mw - 0.5) / a <= mh + 0.5 && (mw + 0.5) / a >= mh - 0.5 {
+            return (max_w.max(1), max_h.max(1));
+        }
         let (w, h) = if mw / mh > a { (mh * a, mh) } else { (mw, mw / a) };
         ((w.round() as usize).max(1), (h.round() as usize).max(1))
     }

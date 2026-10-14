@@ -182,7 +182,7 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
             "get_develop",
             "Get develop settings",
             "The full develop settings JSON of a photo (white balance, light, color, curves, mixer, grading, effects, crop, masks, spots…).",
-            json!({"id": photo_id}),
+            json!({"id": {"type": "integer", "description": "Photo id (default: the active photo). Reads without changing the selection."}}),
             &[],
         ),
         tool(
@@ -216,7 +216,7 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
             "Render photo",
             "Render a photo with its current develop settings (cropped) and return it as an image so you can look at the result.",
             json!({
-                "id": photo_id,
+                "id": {"type": "integer", "description": "Photo id (default: the active photo); selection is unchanged"},
                 "size": {"type": "integer", "description": "Long edge in pixels (default 1024, max 4096)"},
                 "format": {"type": "string", "enum": ["png", "jpeg"], "description": "Image encoding (default png; jpeg is smaller)"},
                 "path": {"type": "string", "description": "Also save the rendered file here"}
@@ -239,7 +239,7 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
                 "conflict": {"type": "string", "enum": ["unique", "overwrite", "skip"]},
                 "tiffCompression": {"type": "string", "enum": ["none", "lzw", "zip"]},
                 "dngCompression": {"type": "string", "enum": ["lossless", "deflate", "uncompressed"]},
-                "format": {"type": "string", "enum": ["jpeg", "png", "tiff", "psd", "webp", "avif", "jxl", "original", "dng"], "description": "psd = a flat PSD (no layers); original = the file as is + an XMP sidecar with the edits; dng = raw photos as DNG with the edits embedded"},
+                "format": {"type": "string", "enum": ["jpeg", "png", "tiff", "psd", "webp", "avif", "jxl", "original", "dng", "rendereddng"], "description": "psd = a flat PSD (no layers); rendereddng = Render to DNG, a linear 16-bit float DNG of the rendered photo with the edit baked in; original = the file as is + an XMP sidecar with the edits; dng = raw photos as DNG with the edits embedded"},
                 "longEdge": {"type": "integer", "description": "Output long edge in px. When no size param is given: 3000; 0 = full size (cropped, native resolution)"},
                 "shortEdge": {"type": "integer", "description": "Output short edge in px"},
                 "width": {"type": "integer", "description": "Output width in px (with height: fit inside width × height, either orientation)"},
@@ -262,6 +262,7 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
                 "colorSpace": {"type": "string", "enum": ["srgb", "displayP3", "adobeRgb", "proPhoto", "rec2020"], "description": "Output colour space (default sRGB; AVIF is always sRGB; lossy JPEG XL writes adobeRgb/proPhoto as rec2020). adobeRgb = Adobe RGB (1998) compatible; the embedded ICC profile is generated from the published primaries"},
                 "bitDepth": {"type": "integer", "enum": [8, 10, 16, 32], "description": "Bits per channel: PNG 8|16 (default 8), TIFF 8|16|32 (default 16; 32 = linear float with a linear profile), PSD 8|16 (default 16), AVIF 8|10, JPEG XL 8|16; JPEG/WebP are 8-bit"},
                 "hdr": {"type": "boolean", "description": "HDR output for photos edited in HDR (develop.hdr): JPEG as an ISO 21496-1 gain map JPEG, AVIF as 10-bit, PNG and JPEG XL as 16-bit Rec. 2020 PQ, 32-bit TIFF with highlights above 1; other formats and SDR edits export as usual"},
+                "hdrTransfer": {"type": "string", "enum": ["pq", "hlg"], "description": "Transfer curve of HDR AVIF output (default pq): pq = SMPTE ST 2084, hlg = ITU-R BT.2100 hybrid log-gamma"},
                 "addToPhotos": {"type": "boolean", "description": "macOS: after writing the files, add them to Apple Photos (Apple Events to Photos' import; the first time, macOS asks the user to allow LightCraft to control Photos). The outcome is `applePhotos` in the result, the import job: {job, running, requested, album, imported?, ids?, warning?, error?}; headless waits for Photos, the desktop app returns the running job (outcome: command export.photosImports {job}). The files are written either way. An error before exporting on other platforms, or while another import is reserved or running"},
                 "photosAlbum": {"type": "string", "description": "With addToPhotos: the album to add them to, a top-level Photos album of exactly this name, made when missing (several of that name: nothing is added); default none"},
                 "watermark": {"description": "Text, or {text, vertical (boolean; defaults to false: upright columns right to left), size (text height as a fraction of the short edge, 0.005..0.5; default 0.035), opacity (0..1; default 0.7), anchor (topLeft|top|topRight|left|center|right|bottomLeft|bottom|bottomRight), insetX (margin from the left or right edge as a fraction of the short edge, 0..0.4; default 0.025), insetY (margin from the top or bottom edge, same units), inset (sets both), rotation (degrees clockwise: 0|90|180|270; default 0; the watermark is sized before it is turned), color [r,g,b] (sRGB 0..255), shadow (boolean), image (path of a graphic drawn instead of the text), imageWidth (fraction of the photo's width, 0.01..1; default 0.2)}. Unknown keys and out-of-range sizes are errors"}
@@ -743,6 +744,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
                         "colorSpace",
                         "bitDepth",
                         "hdr",
+                        "hdrTransfer",
                         "preset",
                         "background",
                         "resize",

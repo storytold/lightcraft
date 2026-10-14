@@ -244,5 +244,8 @@
   "not added to Apple Photos: {e}": "nicht zu Apple Fotos hinzugefügt: {e}",
   "{n} added to Apple Photos album “{album}”": "{n} zum Apple-Fotos-Album „{album}“ hinzugefügt",
   "{n} added to Apple Photos": "{n} zu Apple Fotos hinzugefügt",
-  "{n} photos opened for editing; each is stacked with its original": "{n} Fotos zur Bearbeitung geöffnet; jedes ist mit seinem Original gestapelt"
+  "{n} photos opened for editing; each is stacked with its original": "{n} Fotos zur Bearbeitung geöffnet; jedes ist mit seinem Original gestapelt",
+  "{name} opened in the other editor": "{name} im anderen Editor geöffnet",
+  "{n} originals opened in the other editor": "{n} Originale im anderen Editor geöffnet",
+  "· {in_source} identical copies": "· {in_source} identische Kopien"
 }

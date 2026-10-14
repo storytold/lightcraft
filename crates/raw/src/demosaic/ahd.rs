@@ -77,10 +77,10 @@ fn tile(m: &Mosaic, x0: usize, y0: usize, tw: usize, th: usize) -> Vec<[f32; 3]>
             }
             let (l, r) = (mos[cl(x - 1, y)], mos[cl(x + 1, y)]);
             let est = (l + r) * 0.5 + (2.0 * c - mos[cl(x - 2, y)] - mos[cl(x + 2, y)]) * 0.25;
-            gh[i] = est.clamp(l.min(r), l.max(r));
+            gh[i] = super::clamp_between(est, l, r);
             let (u, d) = (mos[cl(x, y - 1)], mos[cl(x, y + 1)]);
             let est = (u + d) * 0.5 + (2.0 * c - mos[cl(x, y - 2)] - mos[cl(x, y + 2)]) * 0.25;
-            gv[i] = est.clamp(u.min(d), u.max(d));
+            gv[i] = super::clamp_between(est, u, d);
         }
     }
     // 2. full candidates

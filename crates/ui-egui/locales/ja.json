@@ -866,6 +866,7 @@
   "Local folders": "ローカルフォルダ",
   "Local library — no cloud account needed": "ローカルのライブラリ（クラウドアカウント不要）",
   "Locate Missing File…": "見つからないファイルを指定…",
+  "Locate Missing Files…": "見つからないファイルを指定…",
   "Location": "保存場所",
   "Long Edge": "長辺",
   "Looking for photos…": "写真を検索中…",
@@ -1263,6 +1264,8 @@
   "Show Luminance Map": "輝度マップを表示",
   "Show Mask": "マスクを表示",
   "Show Mask Overlay": "マスクの重ね表示",
+  "Show All Mask Overlays": "すべてのマスクオーバーレイを表示",
+  "Show all overlays": "すべてのオーバーレイを表示",
   "Show Mask Pins": "マスクのピンを表示",
   "Show Original": "元の写真を表示",
   "Show Photo Counts": "写真の枚数を表示",
@@ -1658,6 +1661,8 @@
   "Install the SAM 3 Model": "SAM 3モデルのインストール",
   "This build can't download the model yet. To install it by hand, put model.safetensors, vocab.json and merges.txt from Meta's facebook/sam3 in the folder above: Object and Describe work as soon as they are there.": "このビルドではまだモデルをダウンロードできません。手動でインストールするには、Meta の facebook/sam3 の model.safetensors、vocab.json、merges.txt を上のフォルダに置いてください。置いた時点で「オブジェクト」と「説明で選択」が使えるようになります。",
   "Open Log Folder": "ログフォルダーを開く",
+  "Reading photos…": "写真を確認中…",
+  "Adding photos…": "写真を追加中…",
   "Back to this person": "Back to this person",
   "AI Denoise": "AI Denoise",
   "AI Denoise Model": "AI Denoise Model",
@@ -1953,5 +1958,8 @@
   "Adding to Apple Photos…": "Appleの写真に追加中…",
   "not added to Apple Photos (cancelled)": "Appleの写真には追加されませんでした（キャンセル）",
   "The first time, macOS asks whether LightCraft may control Photos.": "初回は、LightCraftに写真の操作を許可するかmacOSが確認します。",
-  "Adding to Apple Photos": "Appleの写真に追加中"
+  "Adding to Apple Photos": "Appleの写真に追加中",
+  "No graphics processor found: LightCraft renders on the CPU, which is much slower. Details in Help → System Info.": "グラフィックプロセッサが見つかりません。LightCraftはCPUで描画するため、かなり遅くなります。詳細は「ヘルプ → システム情報」を参照してください。",
+  "On NixOS, start it from `nix develop`.": "NixOSでは `nix develop` から起動してください。",
+  "Files with the same content as another file in this import: only the first is imported.": "この読み込み内の別のファイルと内容が同じファイルです。最初のファイルだけが読み込まれます。"
 }

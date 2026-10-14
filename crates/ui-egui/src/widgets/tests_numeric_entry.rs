@@ -75,3 +75,22 @@ fn dragging_away_from_readout_does_not_capture_keyboard() {
     }
     assert!(!h.view.ctx.egui_wants_keyboard_input(), "a cancelled readout gesture must not retain keyboard focus");
 }
+
+#[test]
+fn typing_after_a_released_click_still_edits() {
+    // Issue #1362: a normal click (press, a few frames held, release) must leave the field
+    // editing, so the value can be typed without holding the button down.
+    let mut h = Harness::new();
+    let pos = h.rect.center();
+    let button = |pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    h.frame(vec![Event::PointerMoved(pos)]);
+    h.frame(vec![button(true)]);
+    for _ in 0..4 {
+        h.frame(vec![]);
+    }
+    assert_eq!(h.frame(vec![button(false)]).value, None);
+    h.frame(vec![]);
+    assert!(h.view.ctx.egui_wants_keyboard_input(), "the field keeps the keyboard after the click");
+    h.frame(vec![Event::Text("2".into())]);
+    assert_eq!(h.key(Key::Enter).value, Some(2.0));
+}

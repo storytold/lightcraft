@@ -58,7 +58,8 @@ fn default_crop(mn: Option<&makernote::MakerNote>, w: usize, h: usize) -> Rect {
 }
 
 /// A body that records no CropArea, measured on its own files: the image area inside the sensor data (where the
-/// camera's full-size JPEG sits when the two are aligned) and the level where its channels clip.
+/// camera's full-size JPEG sits when the two are aligned) and, when the data's own top would be wrong, the level
+/// where its channels clip.
 struct MeasuredBody {
     model: &'static str,
     /// Sensor data size and sample depth of the measured files.
@@ -66,7 +67,7 @@ struct MeasuredBody {
     bits: u32,
     /// Image area in sensor pixels: x, y, width, height.
     crop: (usize, usize, usize, usize),
-    white: f32,
+    white: Option<f32>,
 }
 
 /// * **NIKON D4** (148 uncompressed 14-bit NEFs from one body, 2023–2026, ISO 100–10000): the data is 4992 × 3292,
@@ -74,8 +75,24 @@ struct MeasuredBody {
 ///   4928 × 3280 JPEG sits at (8, 6). Without this area the optical black shows as purple stripes on both sides.
 ///   Green saturates at 15546–15672 while red and blue run on to 15687–16383, so the data's own top (~16300) leaves
 ///   clipped highlights magenta; one level of 15520 for every channel turns them white and keeps the white balance.
-const MEASURED_BODIES: &[MeasuredBody] =
-    &[MeasuredBody { model: "NIKON D4", size: (4992, 3292), bits: 14, crop: (8, 6, 4928, 3280), white: 15520.0 }];
+/// * **NIKON D7100** (issue #1248; 14-bit NEFs from the public zjqc/photographing-art repository, with their
+///   Lightroom Classic exports): the data holds picture, not masked lines, beyond the camera's frame. In full frame
+///   it is 6036 × 4020 and the camera's JPEG is 6000 × 4000; in the 1.3x crop mode it is 4812 × 3212 and the JPEG
+///   4800 × 3200. Fitting renders of the full data to Lightroom's exports (feature matches, homography) puts
+///   Lightroom's frame, the camera JPEG's size, at (18, 10) and (6, 6): within 0.5 px mean on DSC_1316, DSC_2763
+///   and DSC_1486. Without it, renders are larger than Lightroom's and its crops land up to 6 px off (18 px in
+///   full frame).
+/// * **NIKON D90** (550 compressed 12-bit NEFs from one body, 10 measured): the data is 4352 × 2868 and its last 42
+///   columns (from 4310) are filler at a flat ~254 whatever the exposure, above the dark image samples (black 0), so
+///   the masked-column test keeps them and they develop as a pink band on the right. The camera's 4288 × 2848 JPEG
+///   sits at (10, 10). Green saturates at 3840–3851 while red and blue run on to 4095; one level of 3830 keeps
+///   clipped highlights white.
+const MEASURED_BODIES: &[MeasuredBody] = &[
+    MeasuredBody { model: "NIKON D4", size: (4992, 3292), bits: 14, crop: (8, 6, 4928, 3280), white: Some(15520.0) },
+    MeasuredBody { model: "NIKON D7100", size: (6036, 4020), bits: 14, crop: (18, 10, 6000, 4000), white: None },
+    MeasuredBody { model: "NIKON D7100", size: (4812, 3212), bits: 14, crop: (6, 6, 4800, 3200), white: None },
+    MeasuredBody { model: "NIKON D90", size: (4352, 2868), bits: 12, crop: (10, 10, 4288, 2848), white: Some(3830.0) },
+];
 
 fn measured_body(model: &str, w: usize, h: usize, bits: u32) -> Option<&'static MeasuredBody> {
     MEASURED_BODIES.iter().find(|b| b.model == model.trim() && b.size == (w, h) && b.bits == bits)
@@ -164,8 +181,8 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let active_w = trailing_masked_columns(samples, w, bits);
     // the white level is measured from the whole image (or known for a measured body); the probe (no samples in its
     // result) takes the nominal one
-    let white = match (body, mode) {
-        (Some(b), _) => b.white,
+    let white = match (body.and_then(|b| b.white), mode) {
+        (Some(white), _) => white,
         (None, Mode::Full) => white_from_data(samples, bits),
         (None, Mode::Header) => ((1u32 << bits.clamp(1, 16)) - 1) as f32,
     };
@@ -396,6 +413,48 @@ mod tests {
             assert_eq!(other.crop, Rect::new(0, 0, w, h));
             assert_ne!(other.white, vec![15520.0]);
         }
+    }
+
+    /// Issue #1248: the D7100 records no CropArea, and its data holds picture beyond Lightroom's frame in both
+    /// image areas (full frame and 1.3x crop), so renders came out larger and Lightroom crops landed off.
+    #[test]
+    fn measured_d7100_image_area() {
+        let decode_as = |model: &str, (w, h): (usize, usize)| {
+            let mut nef = nef(1, 14, vec![vec![0x10; w * h * 2]], w as u32, h as u32, h as u32);
+            // the fixture's model is "NIKON TEST" plus its NUL: 11 bytes to overwrite
+            let at = nef.windows(11).position(|b| b == b"NIKON TEST\0").unwrap();
+            let name = format!("{model:\0<11}");
+            nef[at..at + 11].copy_from_slice(name.as_bytes());
+            crate::decode(&nef).unwrap()
+        };
+        for (size, crop) in [((6036, 4020), Rect::new(18, 10, 6000, 4000)), ((4812, 3212), Rect::new(6, 6, 4800, 3200))] {
+            let d7100 = decode_as("NIKON D7100", size);
+            assert_eq!(d7100.crop, crop);
+            assert_eq!((d7100.metadata.width, d7100.metadata.height), (Some(crop.width as u32), Some(crop.height as u32)));
+            assert_ne!(d7100.white, vec![15520.0]);
+            let developed = d7100.develop(crate::Method::Bilinear).unwrap();
+            assert_eq!((developed.width, developed.height), (crop.width, crop.height));
+            assert_eq!(decode_as("NIKON D7200", size).crop, Rect::new(0, 0, size.0, size.1));
+        }
+    }
+
+    /// The D90's last 42 columns are filler at a flat ~254, above its dark image samples: without the measured
+    /// area they stay in the image and develop as a pink band on the right.
+    #[test]
+    fn measured_d90_drops_the_filler_columns() {
+        let (w, h) = (4352usize, 2868usize);
+        let mut px = vec![40u16; w * h];
+        for row in px.chunks_mut(w) {
+            row[4310..].fill(254);
+        }
+        let mut nef = nef(1, 12, vec![px.iter().flat_map(|v| v.to_le_bytes()).collect()], w as u32, h as u32, h as u32);
+        let at = nef.windows(10).position(|b| b == b"NIKON TEST").unwrap();
+        nef[at..at + 10].copy_from_slice(b"NIKON D90 ");
+        let d90 = crate::decode(&nef).unwrap();
+        assert_eq!(d90.crop, Rect::new(10, 10, 4288, 2848));
+        assert!(d90.crop.x + d90.crop.width <= 4310, "the filler columns are outside the image");
+        assert_eq!(d90.white, vec![3830.0]);
+        assert_eq!((d90.metadata.width, d90.metadata.height), (Some(4288), Some(2848)));
     }
 
     /// Issue #708: the active width is judged from the first [`MASK_ROWS`] rows in both modes, so the header probe

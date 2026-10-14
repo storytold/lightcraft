@@ -1,6 +1,7 @@
 //! Real Session/serializer regressions for saves that overlap retained physical repairs.
 use super::*;
 use crate::rename::{MoveFs, RealFs};
+use crate::tests_xmp::same_path_or_file;
 use lightcraft_catalog::{Op, Photo, Source};
 use serde_json::json;
 
@@ -19,14 +20,14 @@ impl MoveFs for PartialRename {
         RealFs.same_file(a, b)
     }
     fn rename_no_replace(&self, a: &Path, b: &Path) -> std::io::Result<()> {
-        if a == self.sidecar || a == self.photo {
+        if same_path_or_file(a, &self.sidecar) || same_path_or_file(a, &self.photo) {
             Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "transient rename fault"))
         } else {
             RealFs.rename_no_replace(a, b)
         }
     }
     fn copy_no_replace(&self, a: &Path, b: &Path) -> std::io::Result<()> {
-        if a == self.sidecar {
+        if same_path_or_file(a, &self.sidecar) {
             Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "transient copy fault"))
         } else {
             RealFs.copy_no_replace(a, b)
@@ -151,7 +152,9 @@ fn autowrite_repairs_partial_rename_before_merging_foreign_xmp_across_library_sw
                     assert_eq!(parsed.title.as_deref(), Some("Final title"));
                     assert!(parsed.keywords.as_ref().unwrap().contains(&"café".to_string()));
                     if upper {
-                        assert!(!preferred.exists(), "merge uses the repaired uppercase packet");
+                        // by listing: on a case-insensitive volume `preferred` answers for the upper-case packet
+                        let listed = std::fs::read_dir(&root).unwrap().any(|e| Some(e.unwrap().file_name().as_os_str()) == preferred.file_name());
+                        assert!(!listed, "merge uses the repaired uppercase packet");
                     }
                     for (step, title) in [("edit.undo", "Fresh title"), ("edit.redo", "Final title")] {
                         s.execute(step, &json!({})).unwrap();

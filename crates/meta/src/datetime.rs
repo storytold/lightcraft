@@ -25,8 +25,19 @@ fn num(s: &str) -> Option<u32> {
 
 impl DateTime {
     fn valid(self) -> Option<Self> {
-        let ok = (1..=12).contains(&self.month)
-            && (1..=31).contains(&self.day)
+        // A timestamp must represent a real Gregorian calendar day, not just
+        // numbers in the range 1..=31. Invalid dates would otherwise be
+        // accepted from EXIF/XMP and silently normalized during time arithmetic.
+        let leap = self.year.is_multiple_of(4) && (!self.year.is_multiple_of(100) || self.year.is_multiple_of(400));
+        let max_day = match self.month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            2 if leap => 29,
+            2 => 28,
+            _ => 0,
+        };
+        let ok = self.day >= 1
+            && self.day <= max_day
             && self.hour < 24
             && self.minute < 60
             && self.second < 61
@@ -165,6 +176,16 @@ mod tests {
         assert!(DateTime::parse_exif("0000:00:00 00:00:00").is_none());
         assert!(DateTime::parse_exif("    :  :     :  :  ").is_none());
         assert!(DateTime::parse_exif("2024:13:01 00:00:00").is_none());
+        // Invalid calendar days must never enter persisted capture metadata.
+        for value in ["2023:02:29", "2024:02:30", "2024:04:31", "1900:02:29", "2024:01:00"] {
+            assert!(DateTime::parse_exif(value).is_none(), "{value}");
+        }
+        assert!(DateTime::parse_exif("2024:02:29").is_some());
+        assert!(DateTime::parse_exif("2000:02:29").is_some());
+        for value in ["2023-02-29", "2024-02-30", "1900-02-29", "2024-06-31T10:00:00Z"] {
+            assert!(DateTime::parse_iso(value).is_none(), "{value}");
+        }
+        assert!(DateTime::parse_iso("2000-02-29T23:59:59Z").is_some());
         assert_eq!(DateTime::parse_exif("2024-06-01").unwrap().hour, 0);
         assert_eq!(DateTime::parse_exif("2024:06:01 13:45:59").unwrap().with_subsec("5").millis, 500);
         assert_eq!(DateTime::parse_exif("2024:06:01 13:45:59").unwrap().with_subsec("0123").millis, 12);

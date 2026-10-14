@@ -198,6 +198,10 @@ pub const ALIASES: &[(&str, &str, &str)] = &[
     ("Shift+E", "dialog.export", "{}"),
     ("Cmd+E", "app.exportPrevious", "{}"),
     ("Space", "view.zoomToggle", "{}"),
+    // Lightroom Classic: F6 toggles the filmstrip, F7 the left library panel.
+    // Keep existing primary shortcuts and honour custom keymap assignments.
+    ("F6", "view.filmstrip", "{}"),
+    ("F7", "view.leftPanel", "{}"),
     ("Shift+M", "version.create", "{}"),
     ("Shift+X", "photo.flag", r#"{"flag": "reject", "advance": true}"#),
     ("Shift+Z", "photo.flag", r#"{"flag": "pick", "advance": true}"#),
@@ -532,6 +536,25 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                     continue;
                 }
             }
+            // Up / Down in the grids go to the cell above / below (the filmstrip steps one photo)
+            if matches!(f.as_str(), "library.up" | "library.down") {
+                // over a slider the arrows nudge it (widgets::slider takes the key)
+                let over_slider =
+                    ctx.pointer_hover_pos().is_some_and(|p| app.widgets.iter().any(|(id, r)| id.starts_with("slider:") && r.contains(p)));
+                if over_slider {
+                    continue;
+                }
+                match crate::panels::grid::row_distance(app, f == "library.down") {
+                    Some(0) => {}
+                    Some(rows) => {
+                        let _ = app.run(&f, json!({"rows": rows}));
+                    }
+                    None => {
+                        let _ = app.run(&f, json!({}));
+                    }
+                }
+                continue;
+            }
             // an export that can't start (e.g. no folder) says why instead of doing nothing
             if let Err(e) = app.run(&f, json!({}))
                 && matches!(f.as_str(), "app.export" | "app.exportPrevious")
@@ -618,6 +641,20 @@ mod tests {
             assert_eq!(h.app.session.catalog.photo(PhotoId(1)).unwrap().flag, Flag::None);
             assert_eq!(h.app.session.active(), Some(PhotoId(1)));
         }
+    }
+
+    #[test]
+    fn classic_f6_and_f7_toggle_the_filmstrip_and_left_panel() {
+        let mut h = library();
+        let (filmstrip, left) = (h.app.ui.filmstrip, h.app.ui.left_panel);
+        key(&mut h, "F6", false);
+        assert_eq!(h.app.ui.filmstrip, !filmstrip);
+        assert_eq!(h.app.ui.left_panel, left);
+        key(&mut h, "F7", false);
+        assert_eq!(h.app.ui.left_panel, !left);
+        key(&mut h, "F6", false);
+        key(&mut h, "F7", false);
+        assert_eq!((h.app.ui.filmstrip, h.app.ui.left_panel), (filmstrip, left));
     }
 
     #[test]

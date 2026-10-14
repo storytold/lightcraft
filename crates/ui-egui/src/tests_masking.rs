@@ -168,6 +168,15 @@ fn mask_adjustments_hide_overlay_without_disabling_the_mask() {
     assert_eq!(develop(&h).masks[0], mask, "toggling the overlay leaves the mask and its effect unchanged");
     assert!(matches!(crate::panels::detail::view_overlay(&h.app, &develop(&h)), Overlay::Mask { .. }));
 
+    // Ctrl+Shift+O / Cmd+Shift+O shows every visible mask's region at once (the new command), ahead of the selected
+    // mask overlay so it is not shadowed by the always-on single-mask overlay.
+    exec(&mut h, "view.maskOverlayAll", json!({}));
+    assert!(h.app.ui.mask_overlay_all, "the all-masks overlay command turns it on");
+    assert!(matches!(crate::panels::detail::view_overlay(&h.app, &develop(&h)), Overlay::AllMasks { .. }));
+    exec(&mut h, "view.maskOverlayAll", json!({}));
+    assert!(!h.app.ui.mask_overlay_all, "the all-masks overlay command toggles it off");
+    assert!(!matches!(crate::panels::detail::view_overlay(&h.app, &develop(&h)), Overlay::AllMasks { .. }));
+
     // Failed edits and global adjustments must not hide the mask overlay.
     assert!(h.app.run("mask.adjust", json!({"id": 999, "values": {"exposure": 1.0}})).is_err());
     assert!(h.app.ui.mask_overlay);
@@ -896,6 +905,48 @@ fn local_folder_tree_expands_and_browses() {
     h.settle(SETTLE);
 }
 
+/// A folder listed twice in Local (Pictures as a place of its own and again inside Home) opens
+/// and closes on each row by itself: both copies of its triangle used to share one egui id, so
+/// the copy drawn later took the clicks of the one drawn first (issue #1093).
+#[test]
+fn local_folder_listed_twice_opens_and_closes_each_row() {
+    let base = std::env::temp_dir().join(format!("lc-ui-twice-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let inner = base.join("Inner");
+    std::fs::create_dir_all(inner.join("Sub")).unwrap();
+    let mut h = detail("panel.edit");
+    exec(&mut h, "view.leftPanel", json!({"show": true}));
+    h.hide_home_above(&base);
+    let (base_s, inner_s) = (base.to_string_lossy().to_string(), inner.to_string_lossy().to_string());
+    let sub = inner.join("Sub").to_string_lossy().to_string();
+    exec(&mut h, "local.addRoot", json!({"path": base_s}));
+    exec(&mut h, "local.addRoot", json!({"path": inner_s}));
+    h.settle(SETTLE);
+    let r = h.request("ui.clickWidget", json!({"id": format!("folderToggle:{base_s}")}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let toggle = format!("folderToggle:{inner_s}");
+    h.step_until(SETTLE, |h| h.app.widgets.iter().filter(|(w, _)| *w == toggle).count() == 2);
+    let rows = |h: &Headless, id: &str| h.app.widgets.iter().filter(|(w, _)| w == id).count();
+    assert_eq!(rows(&h, &toggle), 2, "Inner is listed inside the base folder and as a place of its own");
+    let sub_row = format!("source:local:{sub}");
+    assert_eq!(rows(&h, &sub_row), 0);
+    // each copy's triangle opens that copy only, and closes it again
+    for copy in 0..2 {
+        let at = h.app.widgets.iter().filter(|(w, _)| *w == toggle).nth(copy).map(|(_, r)| r.center()).unwrap();
+        let r = h.request("ui.click", json!({"x": at.x, "y": at.y}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step_until(SETTLE, |h| h.app.widgets.iter().any(|(w, _)| *w == sub_row));
+        assert_eq!(rows(&h, &sub_row), 1, "copy {copy} opens, the other stays closed");
+        let at = h.app.widgets.iter().filter(|(w, _)| *w == toggle).nth(copy).map(|(_, r)| r.center()).unwrap();
+        let r = h.request("ui.click", json!({"x": at.x, "y": at.y}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert_eq!(rows(&h, &sub_row), 0, "copy {copy} closes again");
+    }
+    let _ = std::fs::remove_dir_all(&base);
+    h.settle(SETTLE);
+}
+
 #[test]
 fn slideshow_advances_pauses_and_ends() {
     let mut h = detail("panel.edit");
@@ -1024,6 +1075,89 @@ fn edit_in_photocraft_opens_a_psd_copy() {
     h.settle(SETTLE);
 }
 
+/// Open Original in Other Editor: each selected photo's own file (a raw stays a raw) goes to the
+/// configured editor, untouched and without a copy; demo photos and missing files say why.
+#[test]
+fn open_original_in_external_editor_hands_over_the_raw_itself() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let dir = std::env::temp_dir().join(format!("lc-ui-orig-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let opened: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>> = Default::default();
+    let o = opened.clone();
+    let services = Services {
+        png: None,
+        open_with: Some(Box::new(move |path: &str, app: &str| {
+            o.lock().unwrap().push((path.to_string(), app.to_string()));
+            Ok(())
+        })),
+        check_editor: Some(Box::new(|_: &str| Ok(()))),
+        ..Default::default()
+    };
+    let mut session = lightcraft_engine::Session::with_demo().with_fs();
+    let demo = session.catalog.photos().map(|p| p.id).next().unwrap();
+    let mut file = |name: &str, exists: bool| {
+        let path = dir.join(name);
+        if exists {
+            std::fs::write(&path, b"raw sensor data").unwrap();
+        }
+        let id = session.catalog.alloc_photo_id();
+        let p = Photo::new(id, Source::File { path: path.to_string_lossy().into_owned() }, name, "NEF", 60, 40, "2026-01-01T10:00:00");
+        session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        (id, path.to_string_lossy().into_owned())
+    };
+    let (a, a_path) = file("DSC_0001.NEF", true);
+    let (b, b_path) = file("DSC_0002.NEF", true);
+    let (gone, _) = file("DSC_0003.NEF", false);
+    let app = LightcraftApp::new(session, services);
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.app.ui.settings.external_editor = "DxO PhotoLab".into();
+    let n = h.app.session.catalog.len();
+
+    exec(&mut h, "library.select", json!({"ids": [a.0, b.0, demo.0]}));
+    let r = exec(&mut h, "photo.openOriginalInExternal", json!({}));
+    let calls = opened.lock().unwrap().clone();
+    assert_eq!(calls, vec![(a_path.clone(), "DxO PhotoLab".to_string()), (b_path.clone(), "DxO PhotoLab".to_string())]);
+    assert_eq!(r["skipped"][0]["id"], demo.0, "{r}");
+    assert_eq!(h.app.session.catalog.len(), n, "no copy is added to the library");
+    assert_eq!(std::fs::read(&a_path).unwrap(), b"raw sensor data", "the original is left as it is");
+    assert!(std::fs::read_dir(&dir).unwrap().count() == 2, "nothing is written next to the originals");
+
+    // the editor can be named per call; the active photo must have a file for the menu
+    let r = exec(&mut h, "photo.openOriginalInExternal", json!({"ids": [a.0], "app": "/opt/dxo"}));
+    assert_eq!(r["opened"][0]["path"], a_path.as_str());
+    assert_eq!(opened.lock().unwrap().last().unwrap().1, "/opt/dxo");
+    exec(&mut h, "library.select", json!({"ids": [a.0]}));
+    assert!(crate::menus::ui_enabled(&h.app, "photo.openOriginalInExternal"));
+    exec(&mut h, "library.select", json!({"ids": [demo.0]}));
+    assert!(!crate::menus::ui_enabled(&h.app, "photo.openOriginalInExternal"));
+
+    // a host that can start the editor once with every file does (DxO PhotoLab keeps one window
+    // and drops the files that arrive while it starts)
+    let batches: std::sync::Arc<std::sync::Mutex<Vec<(Vec<String>, String)>>> = Default::default();
+    let bt = batches.clone();
+    h.app.services.open_all_with = Some(Box::new(move |paths: &[String], app: &str| {
+        bt.lock().unwrap().push((paths.to_vec(), app.to_string()));
+        Ok(())
+    }));
+    let singles = opened.lock().unwrap().len();
+    let r = exec(&mut h, "photo.openOriginalInExternal", json!({"ids": [a.0, b.0, demo.0]}));
+    assert_eq!(r["opened"].as_array().map(Vec::len), Some(2), "{r}");
+    assert_eq!(*batches.lock().unwrap(), vec![(vec![a_path.clone(), b_path.clone()], "DxO PhotoLab".to_string())]);
+    assert_eq!(opened.lock().unwrap().len(), singles, "one start for all, not one per file");
+
+    // a demo photo or a missing file: a clear error, nothing opened
+    let calls = opened.lock().unwrap().len();
+    for (ids, why) in [(json!([demo.0]), "demo"), (json!([gone.0]), "missing")] {
+        let r = h.request("engine.execute", json!({"command": "photo.openOriginalInExternal", "params": {"ids": ids}}), T);
+        assert_eq!(r["ok"], false, "{r}");
+        assert!(r.to_string().contains(why), "{r}");
+    }
+    assert_eq!(opened.lock().unwrap().len(), calls);
+    let _ = std::fs::remove_dir_all(&dir);
+    h.settle(SETTLE);
+}
+
 #[test]
 fn second_window_shows_the_active_photo() {
     let mut h = detail("panel.edit");
@@ -1122,6 +1256,10 @@ fn grid_info_cycles_caption() {
     exec(&mut h, "view.squareGrid", json!({}));
     exec(&mut h, "view.gridInfo", json!({"info": "exposure"}));
     h.settle(SETTLE);
+    // Photo Grid has no captions: picking one shows it in Square Grid
+    exec(&mut h, "view.photoGrid", json!({}));
+    exec(&mut h, "view.gridInfo", json!({"info": "date"}));
+    assert_eq!(h.app.ui.view, crate::state::ViewMode::SquareGrid);
 }
 
 #[test]
@@ -1352,9 +1490,12 @@ fn a_selected_develop_slider_accepts_wheel_nudges() {
 
     // A wheel event over the selected control adjusts exposure instead of
     // scrolling the right sidebar (an unselected slider leaves scrolling alone).
+    // (120 points is more than one notch, `theme::WHEEL_LINE_POINTS`; egui smooths it over a few frames)
     let result = h.request("ui.scroll", json!({"dy": 120.0}), T);
     assert_eq!(result["ok"], true, "{result}");
-    h.step();
+    for _ in 0..10 {
+        h.step();
+    }
     let after = lightcraft_develop::controls::get(&develop(&h), "light.exposure").expect("exposure");
     assert!(after > before, "selected exposure did not increase: {before} -> {after}");
 }

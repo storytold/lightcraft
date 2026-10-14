@@ -135,13 +135,15 @@ struct CameraLevels {
 
 /// Canon's versioned word arrays. Offsets are word indices from the published tag tables, not
 /// byte offsets. The four as-shot WB values are R, G, G, B, independent of the CFA layout.
+/// A version without a white-level offset takes its white level from the data (see `docs/cr3.md`).
 fn camera_levels(maker: Option<&Ifd>, bits: u8) -> CameraLevels {
     let Some(values) = maker.and_then(|m| m.u64s(COLOR_DATA)) else { return CameraLevels::default() };
     let offsets = match values.first().copied() {
-        Some(16..=19) => (71, 329, 797),
-        Some(32 | 33) => (85, 343, 811),
-        Some(34 | 48) => (105, 363, 641),
-        Some(64 | 65) => (105, 383, 661),
+        Some(16..=19) => (71, 329, Some(797)),
+        Some(32 | 33) => (85, 343, Some(811)),
+        Some(34 | 48) => (105, 363, Some(641)),
+        Some(64 | 65) => (105, 383, Some(661)),
+        Some(66) => (105, 383, None),
         _ => return CameraLevels::default(),
     };
     let full = ((1u32 << u32::from(bits.clamp(1, 16))) - 1) as f32;
@@ -160,7 +162,7 @@ fn camera_levels(maker: Option<&Ifd>, bits: u8) -> CameraLevels {
     });
     let black = quadruple(offsets.1).filter(|v| v.iter().any(|&b| b > 0.0) && v.iter().all(|&b| b >= 0.0 && b < full * 0.5));
     let max_black = black.map(|v| v.into_iter().fold(0.0f32, f32::max)).unwrap_or(0.0);
-    let white = values.get(offsets.2).map(|&v| v as f32).filter(|&v| v > max_black && v >= full * 0.5 && v <= full);
+    let white = offsets.2.and_then(|at| values.get(at)).map(|&v| v as f32).filter(|&v| v > max_black && v >= full * 0.5 && v <= full);
     CameraLevels { wb, black, white }
 }
 
@@ -526,6 +528,11 @@ mod tests {
             assert_eq!(levels.black, Some([100.0, 101.0, 102.0, 103.0]));
             assert_eq!(levels.white, Some(15000.0));
         }
+        // A version without a white-level offset leaves the white level to the data.
+        let levels = camera_levels(Some(&maker(66, 105, 383, 661)), 14);
+        assert_eq!(levels.wb, Some([2.0, 1.0, 1.5]));
+        assert_eq!(levels.black, Some([100.0, 101.0, 102.0, 103.0]));
+        assert_eq!(levels.white, None);
         assert!(camera_levels(Some(&maker(255, 71, 329, 797)), 14).wb.is_none());
         assert!(camera_levels(None, 14).black.is_none());
     }

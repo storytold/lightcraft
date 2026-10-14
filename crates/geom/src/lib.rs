@@ -234,12 +234,13 @@ impl Affine {
     }
     pub fn inverse(&self) -> Option<Affine> {
         let det = self.determinant();
-        if det.abs() < 1e-300 {
+        if !det.is_finite() || det.abs() < 1e-300 {
             return None;
         }
         let [a, b, c, d, e, f] = self.0;
         let inv = 1.0 / det;
-        Some(Affine([d * inv, -b * inv, -c * inv, a * inv, (c * f - d * e) * inv, (b * e - a * f) * inv]))
+        let coefficients = [d * inv, -b * inv, -c * inv, a * inv, (c * f - d * e) * inv, (b * e - a * f) * inv];
+        coefficients.iter().all(|v| v.is_finite()).then_some(Affine(coefficients))
     }
     /// Bounding box of a transformed rectangle.
     pub fn transform_rect_bbox(&self, r: &Rect) -> Rect {

@@ -40,7 +40,8 @@ impl Scratch {
         Scratch(dir)
     }
     fn path(&self, rel: &str) -> String {
-        self.0.join(rel).to_string_lossy().to_string()
+        // the host's separator throughout, as the code under test spells joined paths
+        self.0.join(rel).components().collect::<std::path::PathBuf>().to_string_lossy().to_string()
     }
 }
 

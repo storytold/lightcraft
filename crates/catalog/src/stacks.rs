@@ -9,6 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::query::cmp_name;
 use crate::{Catalog, CatalogError, Op, PhotoId, Result, Stack, StackId};
 
 impl Catalog {
@@ -203,17 +204,19 @@ impl Catalog {
     /// Only runs of two or more are returned.
     pub fn auto_stack_groups(&self, ids: &[PhotoId], gap_secs: f64) -> Vec<Vec<PhotoId>> {
         let index = self.stack_index();
-        let mut timed: Vec<(i64, PhotoId)> = ids
+        let mut timed: Vec<(i64, &str, PhotoId)> = ids
             .iter()
             .filter_map(|id| self.photos.get(id))
             .filter(|p| !p.deleted && !index.contains_key(&p.id))
-            .filter_map(|p| Some((iso_seconds(p.captured.as_deref()?)?, p.id)))
+            .filter_map(|p| Some((iso_seconds(p.captured.as_deref()?)?, p.file_name.as_str(), p.id)))
             .collect();
-        timed.sort();
-        timed.dedup_by_key(|(_, id)| *id);
+        // a burst within one second stays in file name order (the first file is the stack's cover)
+        timed.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| cmp_name(a.1, b.1)).then(a.2.cmp(&b.2)));
+        // equal ids are the same photo, so same time and name: adjacent after the sort
+        timed.dedup_by_key(|(_, _, id)| *id);
         let mut groups: Vec<Vec<PhotoId>> = Vec::new();
         let mut last: Option<i64> = None;
-        for (t, id) in timed {
+        for (t, _, id) in timed {
             match (last, groups.last_mut()) {
                 (Some(l), Some(g)) if (t - l) as f64 <= gap_secs => g.push(id),
                 _ => groups.push(vec![id]),
@@ -262,6 +265,22 @@ mod tests {
             ids.push(id);
         }
         (c, ids)
+    }
+
+    #[test]
+    fn auto_stack_keeps_a_burst_in_file_order() {
+        let mut c = Catalog::new();
+        let mut by_name = Vec::new();
+        for (n, name) in ["DSC_0001.ARW", "dsc_0002.ARW", "DSC_0003.ARW"].iter().enumerate() {
+            let id = PhotoId(1000 - n as u64);
+            let mut p = Photo::new(id, Source::Demo { scene: 1 }, name, "ARW", 60, 40, "2026-01-01T00:00:00");
+            p.captured = Some("2026-04-01T10:00:00".into());
+            c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+            by_name.push(id);
+        }
+        let groups = c.auto_stack_groups(&[by_name[2], by_name[0], by_name[1]], 1.0);
+        assert_eq!(groups, vec![by_name.clone()]);
+        assert_eq!(groups[0][0], by_name[0], "the first file is the stack's cover");
     }
 
     #[test]

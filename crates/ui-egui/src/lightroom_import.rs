@@ -5,10 +5,11 @@
 //! data only on the owner thread, then finishes the archive index on a worker.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 
 use lightcraft_engine::activity::{Cancel, TaskGuard};
+use lightcraft_engine::lightroom_job::{LightroomProgress, LightroomStep};
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
@@ -37,8 +38,7 @@ pub struct LightroomTask {
     kind: Kind,
     path: PathBuf,
     cancel: Arc<AtomicBool>,
-    total: Arc<AtomicUsize>,
-    done: Arc<AtomicUsize>,
+    progress: LightroomProgress,
     rx: mpsc::Receiver<Message>,
     phase: Phase,
     cancelled: bool,
@@ -52,8 +52,7 @@ impl LightroomTask {
         kind: Kind,
         path: PathBuf,
         cancel: Arc<AtomicBool>,
-        total: Arc<AtomicUsize>,
-        done: Arc<AtomicUsize>,
+        progress: LightroomProgress,
         rx: mpsc::Receiver<Message>,
     ) -> Self {
         let label = match kind {
@@ -61,7 +60,7 @@ impl LightroomTask {
             Kind::Import => "Importing Lightroom catalog",
         };
         let guard = s.activity.start("lightroom", label, Cancel::Flag(cancel.clone()));
-        let task = Self { kind, path, cancel, total, done, rx, phase: Phase::Reading, cancelled: false, guard };
+        let task = Self { kind, path, cancel, progress, rx, phase: Phase::Reading, cancelled: false, guard };
         task.refresh();
         task
     }
@@ -73,16 +72,21 @@ impl LightroomTask {
         self.refresh();
     }
 
-    /// Bring the activity row up to date: the count while reading, then what is being done.
+    /// Bring the activity row up to date: while reading, the step under way and its own count
+    /// (reading the photos takes nearly all of an import, so it is counted, not waited out);
+    /// then what is being done.
     fn refresh(&self) {
-        let detail = match (self.phase, self.kind) {
-            (Phase::Reading, Kind::Inspect) => "",
-            (Phase::Reading, Kind::Import) => crate::i18n::tr("Reading Lightroom catalog…"),
-            (Phase::Committing, _) => crate::i18n::tr("Adding Lightroom photos…"),
-            (Phase::Finalizing, _) => crate::i18n::tr("Saving Lightroom import index…"),
+        let (step, done, total) = self.progress.step();
+        let detail = match (self.phase, self.kind, step) {
+            (Phase::Reading, Kind::Inspect, _) => "",
+            (Phase::Reading, Kind::Import, LightroomStep::Catalog) => crate::i18n::tr("Reading Lightroom catalog…"),
+            (Phase::Reading, Kind::Import, LightroomStep::ReadPhotos) => crate::i18n::tr("Reading photos…"),
+            (Phase::Reading, Kind::Import, LightroomStep::AddPhotos) => crate::i18n::tr("Adding photos…"),
+            (Phase::Committing, ..) => crate::i18n::tr("Adding Lightroom photos…"),
+            (Phase::Finalizing, ..) => crate::i18n::tr("Saving Lightroom import index…"),
         };
         if self.phase == Phase::Reading {
-            self.guard.progress(self.done.load(Ordering::Relaxed) as u64, self.total.load(Ordering::Relaxed) as u64);
+            self.guard.progress(done as u64, total as u64);
         } else {
             self.guard.progress(0, 0);
         }
@@ -100,13 +104,21 @@ impl LightroomTask {
             Phase::Committing => "committing",
             Phase::Finalizing => "finalizing",
         };
+        let (step, done, total) = self.progress.step();
+        let step = match step {
+            LightroomStep::Catalog => "catalog",
+            LightroomStep::ReadPhotos => "readPhotos",
+            LightroomStep::AddPhotos => "addPhotos",
+        };
         json!({
             "running": true,
             "kind": kind,
             "path": self.path,
             "phase": phase,
-            "done": self.done.load(Ordering::Relaxed),
-            "total": self.total.load(Ordering::Relaxed),
+            "step": step,
+            "done": done,
+            "total": total,
+            "fraction": self.progress.fraction(),
             "cancelled": self.cancelled || self.cancel.load(Ordering::Relaxed),
         })
     }
@@ -148,8 +160,7 @@ fn busy(app: &LightcraftApp) -> Result<(), String> {
 fn spawn_inspect(
     path: PathBuf,
     cancel: Arc<AtomicBool>,
-    total: Arc<AtomicUsize>,
-    done: Arc<AtomicUsize>,
+    progress: LightroomProgress,
     tx: mpsc::Sender<Message>,
     ctx: egui::Context,
 ) -> Result<(), String> {
@@ -157,7 +168,7 @@ fn spawn_inspect(
         .name("lc-lightroom-inspect".into())
         .spawn(move || {
             let result = lightcraft_engine::guard::catch("Lightroom inspect", || {
-                lightcraft_engine::lightroom_catalog::read_with_progress(&path, &cancel, &total, &done)
+                lightcraft_engine::lightroom_catalog::read_with_progress(&path, &cancel, &progress.catalog_total, &progress.catalog_done)
             })
             .and_then(|r| r.map(inspect_report));
             let _ = tx.send(Message::Inspected(result));
@@ -278,12 +289,11 @@ fn terminal(app: &mut LightcraftApp, ctx: &egui::Context, task: &LightroomTask, 
 fn start_inspect(app: &mut LightcraftApp, path: PathBuf, ctx: &egui::Context) -> Result<Value, String> {
     busy(app)?;
     let cancel = Arc::new(AtomicBool::new(false));
-    let total = Arc::new(AtomicUsize::new(0));
-    let done = Arc::new(AtomicUsize::new(0));
+    let progress = LightroomProgress::default();
     let (tx, rx) = mpsc::channel();
-    spawn_inspect(path.clone(), cancel.clone(), total.clone(), done.clone(), tx, ctx.clone())?;
+    spawn_inspect(path.clone(), cancel.clone(), progress.clone(), tx, ctx.clone())?;
     app.lightroom_last = None;
-    app.lightroom = Some(LightroomTask::new(&app.session, Kind::Inspect, path.clone(), cancel, total, done, rx));
+    app.lightroom = Some(LightroomTask::new(&app.session, Kind::Inspect, path.clone(), cancel, progress, rx));
     Ok(json!({"running": true, "kind": "inspect", "path": path}))
 }
 
@@ -292,12 +302,11 @@ fn start_import(app: &mut LightcraftApp, path: PathBuf, update_existing: bool, c
     busy(app)?;
     let job = lightcraft_engine::lightroom_job::LightroomJob::new(&mut app.session, path.clone(), update_existing).map_err(|e| e.to_string())?;
     let cancel = Arc::new(AtomicBool::new(false));
-    let total = job.total_atomic();
-    let done = job.done_atomic();
+    let progress = job.progress();
     let (tx, rx) = mpsc::channel();
     spawn_prepare(job, cancel.clone(), tx, ctx.clone())?;
     app.lightroom_last = None;
-    app.lightroom = Some(LightroomTask::new(&app.session, Kind::Import, path.clone(), cancel, total, done, rx));
+    app.lightroom = Some(LightroomTask::new(&app.session, Kind::Import, path.clone(), cancel, progress, rx));
     Ok(json!({"running": true, "kind": "import", "path": path}))
 }
 
@@ -463,11 +472,11 @@ mod tests {
     use lightcraft_engine::lightroom_catalog::CatalogImport;
 
     /// A task as `start_import` makes it, fed by a channel the test holds instead of a worker.
-    fn fake_import(h: &crate::headless::Headless) -> (LightroomTask, mpsc::Sender<Message>, Arc<AtomicBool>, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+    fn fake_import(h: &crate::headless::Headless) -> (LightroomTask, mpsc::Sender<Message>, Arc<AtomicBool>, LightroomProgress) {
         let (tx, rx) = mpsc::channel();
-        let (cancel, total, done) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
-        let task = LightroomTask::new(&h.app.session, Kind::Import, "fixture.lrcat".into(), cancel.clone(), total.clone(), done.clone(), rx);
-        (task, tx, cancel, total, done)
+        let (cancel, progress) = (Arc::new(AtomicBool::new(false)), LightroomProgress::default());
+        let task = LightroomTask::new(&h.app.session, Kind::Import, "fixture.lrcat".into(), cancel.clone(), progress.clone(), rx);
+        (task, tx, cancel, progress)
     }
 
     fn demo() -> crate::headless::Headless {
@@ -481,10 +490,10 @@ mod tests {
     #[test]
     fn lightroom_row_is_not_cancellable_while_committing() {
         let mut h = demo();
-        let (task, tx, cancel, total, done) = fake_import(&h);
+        let (task, tx, cancel, progress) = fake_import(&h);
         h.app.lightroom = Some(task);
-        total.store(10, Ordering::Relaxed);
-        done.store(3, Ordering::Relaxed);
+        progress.catalog_total.store(10, Ordering::Relaxed);
+        progress.catalog_done.store(3, Ordering::Relaxed);
         h.step();
         let rows = h.app.session.activity.list();
         assert_eq!(rows.len(), 1);
@@ -505,7 +514,7 @@ mod tests {
     #[test]
     fn lightroom_cancel_from_the_stack_stops_the_read() {
         let mut h = demo();
-        let (task, tx, cancel, _, _) = fake_import(&h);
+        let (task, tx, cancel, _) = fake_import(&h);
         h.app.lightroom = Some(task);
         h.step();
         let id = h.app.session.activity.list()[0].id;

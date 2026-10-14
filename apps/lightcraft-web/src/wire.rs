@@ -64,7 +64,7 @@ impl WireJob {
     /// `view`: the slot name, for jobs that keep a stage cache.
     pub fn from_job(job: &RenderJob, thumb_cached: bool, view: &str) -> WireJob {
         let max_edge = match &job.source {
-            SourceRef::Demo { max_edge, .. } | SourceRef::File { max_edge, .. } => *max_edge,
+            SourceRef::Demo { max_edge, .. } | SourceRef::File { max_edge, .. } | SourceRef::Fit { max_edge, .. } => *max_edge,
             SourceRef::Loaded(img) => img.image.width.max(img.image.height),
             SourceRef::Smart { .. } => 2560,
         };

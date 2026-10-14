@@ -244,5 +244,8 @@
   "not added to Apple Photos: {e}": "не додано до Apple Фото: {e}",
   "{n} added to Apple Photos album “{album}”": "Додано до альбому Apple Фото «{album}»: {n}",
   "{n} added to Apple Photos": "Додано до Apple Фото: {n}",
-  "{n} photos opened for editing; each is stacked with its original": "Відкрито для редагування фото: {n}; кожне об’єднано в стос з оригіналом"
+  "{n} photos opened for editing; each is stacked with its original": "Відкрито для редагування фото: {n}; кожне об’єднано в стос з оригіналом",
+  "{name} opened in the other editor": "{name} відкрито в іншому редакторі",
+  "{n} originals opened in the other editor": "Відкрито оригіналів в іншому редакторі: {n}",
+  "· {in_source} identical copies": "· ідентичних копій: {in_source}"
 }

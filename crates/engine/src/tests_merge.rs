@@ -67,6 +67,31 @@ fn hdr_merge_command_creates_and_imports_a_dng() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Raws without colour matrices of their own (CR2, NEF, ARW…) merge into a DNG with the colour they open with,
+/// not with no colour at all (issue #965: an HDR merge of CR2s rendered green and dark).
+#[test]
+fn a_merge_of_raws_without_colour_matrices_keeps_their_colour() {
+    let dir = temp_dir("hdr-colour");
+    let neutral = [0.5, 1.0, 0.7];
+    let mut paths = Vec::new();
+    for (i, b) in lightcraft_merge::synth::bracket_dngs(240, 160, &[-1.0, 0.0, 1.0]).unwrap().into_iter().enumerate() {
+        // the same pixels with a white balance but no colour matrices
+        let mut raw = lightcraft_raw::decode(&b).unwrap();
+        raw.color = lightcraft_raw::ColorData { as_shot_neutral: Some(neutral), ..Default::default() };
+        let p = dir.join(format!("IMG_{i}.dng"));
+        std::fs::write(&p, lightcraft_raw::write_dng(&raw, &Default::default()).unwrap()).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    let r = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false})).unwrap();
+    let merged = lightcraft_raw::decode(&std::fs::read(r["path"].as_str().unwrap()).unwrap()).unwrap();
+    assert!(lightcraft_raw::color::has_matrix(&merged.color), "{:?}", merged.color);
+    let got = merged.color.as_shot_neutral.expect("the sources' white balance");
+    assert!(got.iter().zip(neutral).all(|(a, b)| (a - b).abs() < 1e-3), "{got:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn panorama_command_with_auto_crop() {
     let dir = temp_dir("pano");

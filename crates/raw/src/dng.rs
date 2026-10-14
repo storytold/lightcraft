@@ -121,6 +121,7 @@ pub(crate) fn color_data(ifd0: &Ifd, raw: &Ifd, order: ByteOrder) -> ColorData {
         // DNG 1.7 BaselineSharpness (IFD 0 or the enhanced IFD); implausible values are ignored
         baseline_sharpness: get(t::BASELINE_SHARPNESS).and_then(|v| v.first().copied()).filter(|v| v.is_finite() && *v > 0.0 && *v <= 16.0),
         profile: profile_look(ifd0, raw, order),
+        kelvin_presets: None,
     }
 }
 
@@ -234,6 +235,16 @@ pub(crate) fn decode_as(bytes: &[u8], mode: Mode, format: RawFormat) -> Result<R
     if white.is_empty() {
         white = vec![default_white];
     }
+    // No sensor records NaN or infinity, so such a float sample is damage. Left in, it turns into NaN in demosaic
+    // arithmetic and spreads; NaN and −∞ read as black (0), +∞ as the white level (a clipped highlight). Finite
+    // samples, negative or above white included, are kept as stored.
+    if let RawData::F32(v) = &mut data {
+        for (i, s) in v.iter_mut().enumerate() {
+            if !s.is_finite() {
+                *s = if *s > 0.0 { white.get(i % cpp).or(white.first()).copied().unwrap_or(default_white) } else { 0.0 };
+            }
+        }
+    }
 
     let dim = raw.u64s(t::BLACK_LEVEL_REPEAT_DIM).unwrap_or_default();
     let (br, bc) = match dim.as_slice() {
@@ -290,7 +301,9 @@ pub(crate) fn decode_as(bytes: &[u8], mode: Mode, format: RawFormat) -> Result<R
         if cpp != 1 {
             return Err(RawError::Unsupported("CFA data with several samples per pixel".into()));
         }
-        Some(Cfa { width: cols, height: rows, pattern })
+        // the tag is anchored at the top-left of the ActiveArea (DNG spec); `RawImage::cfa` is anchored at the
+        // sensor origin (the crop to the active area shifts it back), so move the anchor out by the area's offset
+        Some(Cfa { width: cols, height: rows, pattern }.shifted(cols - active_area.x % cols, rows - active_area.y % rows))
     } else {
         None
     };

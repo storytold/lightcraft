@@ -41,12 +41,23 @@ pub fn lookup(db: &LensDb, m: &lightcraft_meta::Metadata, w: f64, h: f64, orient
     let focal = m.focal_length.filter(|f| f.is_finite() && *f > 0.0)?;
     let camera = db.find_camera(m.make.as_deref().unwrap_or_default(), m.model.as_deref().unwrap_or_default());
     let lens = db.find_lens(m.lens_make.as_deref(), m.lens_model.as_deref()?, camera)?;
-    // the crop factor: the camera's, else what the 35 mm equivalent focal length implies
-    let crop =
-        camera.map(|c| c.crop_factor).or_else(|| m.focal_length_35mm.map(|f35| f35 / focal).filter(|c| c.is_finite() && (0.1..=20.0).contains(c)));
+    let crop = frame_crop_factor(camera.map(|c| c.crop_factor), focal, m.focal_length_35mm);
     let shot = Shot { focal, aperture: m.f_number, distance: None, crop_factor: crop, width: w, height: h };
     let corr = lens.correction(&shot)?;
     Some(lightcraft_pipeline::optics::reorient_lens(&corr, orientation, w, h))
+}
+
+/// The crop factor of the recorded frame, which scales the profile's radii: the body's (`camera`), else what the
+/// 35 mm equivalent focal length implies. A body shooting a crop of its sensor (a full-frame camera in APS-C /
+/// Super 35 mode, or switched there by an APS-C lens) records a larger 35 mm equivalent than its own crop factor
+/// gives; the frame's corners are then nearer the optical axis, so that crop wins. Within 10 % of the body's, the
+/// difference is the tag's whole-millimetre rounding and the body's value stands.
+fn frame_crop_factor(camera: Option<f64>, focal: f64, focal_35mm: Option<f64>) -> Option<f64> {
+    let frame = focal_35mm.map(|f35| f35 / focal).filter(|c| c.is_finite() && (0.1..=20.0).contains(c));
+    match (camera, frame) {
+        (Some(body), Some(frame)) if frame > body * 1.1 => Some(frame),
+        (body, frame) => body.or(frame),
+    }
 }
 
 /// [`crate::files::embedded_lens`], else the database profile ([`lookup`]) for a raw with metadata `meta`.
@@ -96,6 +107,46 @@ mod tests {
         assert!(lookup(&db, &lightcraft_meta::Metadata { focal_length: None, ..meta() }, 6000.0, 4000.0, Orientation::Normal).is_none());
         let other = lightcraft_meta::Metadata { lens_model: Some("70-200mm F4".into()), ..meta() };
         assert!(lookup(&db, &other, 6000.0, 4000.0, Orientation::Normal).is_none());
+    }
+
+    /// A full-frame body in APS-C / Super 35 mode (an ILCE-1M2 at 70 mm records 105 mm equivalent) frames only the
+    /// middle of the image circle: the profile is applied at the frame's crop factor, not the body's, so the crop's
+    /// corners don't get the full frame's corner correction.
+    #[test]
+    fn in_camera_crop_mode_uses_the_frames_crop_factor() {
+        let db = LensDb::parse(
+            r#"<lensdatabase>
+              <camera><maker>Sony</maker><model>ILCE-1M2</model><mount>Sony E</mount><cropfactor>1</cropfactor></camera>
+              <lens><maker>Sigma</maker><model>24-70mm F2.8 DG DN | Art 019</model><mount>Sony E</mount><cropfactor>1.0</cropfactor>
+                <calibration>
+                  <distortion model="ptlens" focal="70" a="0.0019947" b="0.0035263" c="0.0005016" />
+                  <vignetting model="pa" focal="70" aperture="2.8" distance="1000" k1="-0.4" k2="0" k3="0" />
+                </calibration>
+              </lens></lensdatabase>"#,
+        )
+        .unwrap();
+        let m = |f35: Option<f64>| lightcraft_meta::Metadata {
+            make: Some("SONY".into()),
+            model: Some("ILCE-1M2".into()),
+            lens_model: Some("24-70mm F2.8 DG DN | Art 019".into()),
+            focal_length: Some(70.0),
+            focal_length_35mm: f35,
+            f_number: Some(2.8),
+            ..Default::default()
+        };
+        let at = |crop: f64, w: f64, h: f64| {
+            let shot = Shot { focal: 70.0, aperture: Some(2.8), distance: None, crop_factor: Some(crop), width: w, height: h };
+            db.lenses[0].correction(&shot).unwrap()
+        };
+        let aps_c = lookup(&db, &m(Some(105.0)), 5616.0, 3744.0, Orientation::Normal).unwrap();
+        assert_eq!(aps_c, at(1.5, 5616.0, 3744.0));
+        assert_ne!(aps_c, at(1.0, 5616.0, 3744.0), "the crop is not corrected as a full frame");
+        // full frame, a 35 mm equivalent rounded off by a millimetre, or none at all: the body's crop factor
+        for f35 in [Some(70.0), Some(71.0), None] {
+            assert_eq!(lookup(&db, &m(f35), 8640.0, 5760.0, Orientation::Normal).unwrap(), at(1.0, 8640.0, 5760.0), "{f35:?}");
+        }
+        assert_eq!(frame_crop_factor(None, 70.0, Some(105.0)), Some(1.5), "no body in the database: the 35 mm equivalent's");
+        assert_eq!(frame_crop_factor(Some(1.0), 0.0, Some(105.0)), Some(1.0), "a hostile focal length is ignored");
     }
 
     /// A synthetic grid recorded through the profile's barrel distortion comes out of the pipeline's geometry

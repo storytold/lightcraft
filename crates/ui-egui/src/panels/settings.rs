@@ -165,6 +165,13 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     edit_file_rows(ui, t, "externalFile", &mut app.ui.settings.external_file);
     hint(ui, t, crate::i18n::tr("Edit in Other Editor (⌥⌘E) opens the copy in this application (an app name on macOS, a program path elsewhere)."));
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(
+            "To hand this editor the original file itself instead (the raw, without a copy: DxO PhotoLab, for example), right-click a photo → Edit In → Open Original in Other Editor (RAW, no copy).",
+        ),
+    );
 }
 
 /// The file Edit In hands an editor: format, colour space and bit depth (`button:{id}Format-…`).
@@ -203,15 +210,8 @@ fn preset_combo(app: &LightcraftApp, ui: &mut egui::Ui, id: &str, current: Optio
         if ui.selectable_label(current.is_none(), crate::i18n::tr(none_label)).clicked() {
             out = Some(None);
         }
-        let mut group = "";
-        for p in &app.session.presets {
-            if p.group != group {
-                group = &p.group;
-                ui.label(RichText::new(crate::i18n::builtin_label(group, p.builtin)).size(10.5).weak());
-            }
-            if ui.selectable_label(current == Some(p.id.as_str()), crate::i18n::builtin_label(&p.name, p.builtin)).clicked() {
-                out = Some(Some(p.id.clone()));
-            }
+        if let Some(pid) = crate::panels::presets::picker_rows(ui, id, &app.session.presets, current) {
+            out = Some(Some(pid));
         }
     });
     register(ui.ctx(), format!("combo:{id}"), r.response.rect);
@@ -283,10 +283,8 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                         if ui.selectable_label(current.is_none(), crate::i18n::tr("LightCraft Default")).clicked() {
                             pick = Some(json!({"camera": cam, "preset": null}));
                         }
-                        for p in &app.session.presets {
-                            if ui.selectable_label(current == Some(p.id.as_str()), crate::i18n::builtin_label(&p.name, p.builtin)).clicked() {
-                                pick = Some(json!({"camera": cam, "preset": p.id}));
-                            }
+                        if let Some(pid) = crate::panels::presets::picker_rows(ui, &id, &app.session.presets, current) {
+                            pick = Some(json!({"camera": cam, "preset": pid}));
                         }
                     });
                     register(ui.ctx(), format!("combo:{id}"), r.response.rect);

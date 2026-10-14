@@ -76,6 +76,9 @@ fn offline_originals_never_block_a_frame() {
     let ui_thread = std::thread::current().id();
     h.app.ui.view = ViewMode::PhotoGrid;
     h.step();
+    // The first frame installs fonts; finish the first layout before timing the views.
+    h.step();
+    assert!(h.app.fonts_ready, "the UI is initialized before frame timing starts");
     assert!(h.app.session.media.availability.is_background(), "the app checks files off the UI thread");
 
     // the grid: every cell asks for its thumbnail (which asks whether the original is there)

@@ -9,7 +9,13 @@
 ← {"id": 2, "ok": false, "error": "unknown command `nope`"}
 ```
 
-Requests are answered on the UI thread between frames (timeout 60 s).
+Requests are answered on the UI thread between frames (timeout 60 s). A request is given up
+if the app has not started it and draws no frame for 5 s. The reply is then `{"ok": false, "error": "the app drew no frame for 5 s, …"}`,
+and the app never runs that request later, so a retry doesn't do it twice. This happens on
+Wayland when the window is on a hidden workspace or minimized: the compositor sends no frame
+callbacks, so the app's loop is paused. Keep the window on screen while you drive it, or use
+headless snapshots or `lightcraft-cli mcp` without `--connect`. A request that has already started
+(a long command blocks frames) still gets the full 60 s.
 
 **Only requests are read.** Every line must be a JSON object with a string `method` (`id` and `params` are
 optional; blank lines are skipped). Anything else — text that isn't JSON, a JSON array or number, an object without
@@ -44,7 +50,8 @@ their command behavior. That API invokes the app command dispatcher directly; it
 Cocoa menu dispatch. Native menu activation and keyboard accelerator delivery require a separate test.
 
 Before capturing a finished Detail view, poll `ui.inspect` until the expected `loupe.photo` is active,
-`loupe.source` is `render` or `cached`, `loupe.pending` is false, and the render queues are empty.
+`loupe.source` is `render` or `cached`, `loupe.pending` is false, and the render queues are empty — or until
+`loupe.failed` is set: that photo's render failed, and what is on screen is all there will be.
 For the loupe, `cached` is a prior view render keyed by the current photo and develop settings;
 `thumb`, `small` and `embedded` are separate fallback sources. A presented frame can otherwise
 contain an in-progress rendering placeholder. Require loaded thumbnail textures only when the
@@ -58,7 +65,7 @@ filmstrip is visible.
 | `engine.commands` | — | Engine + UI commands: id, label, menu, shortcut, params doc, enabled |
 | `ui.menu.list` | — | Menu entries (flat: id, label, menu path, shortcut, enabled) |
 | `ui.menu.tree` | — | The menu bar as shown (File … Help): items `{id, params?, label, shortcut?, enabled, checked?}`, separators, submenus — the model behind the native macOS menu bar and the in-window menus |
-| `ui.inspect` | — | UI state, window, `loupe` (`source`, and `region: {full, window, pending}` when a zoomed view also renders the window on screen at no more than 100 % — `full` is the frame it is cut from, `window` its `[x, y, w, h]` — and `regionBefore` for the Before side of a Before/After view), canvas/image rects, `scroll: {grid, filmstrip}` (scroll offsets in points, `null` until drawn), active photo, selection, perf (`frameMs` = layout, `logicMs` = per-frame logic before it, `updateMs` = both, `maxUpdateMs`, `fps`, render queue …, `gpu` = adapter in use, `gpuReason` = why renders don't use the GPU, `gpuFallback` = latest render redone on the CPU and why — see `docs/gpu-pipeline.md`), status, memory (bytes per cache, see `library.memory`; plus stage caches — `budgetBytes`, `trimmed`, `sharedSourceBytes` (the one device copy of a big original) — and textures), `export: {running: {total, done, current} \| null, last}`, `notices` (warnings waiting to be shown, e.g. a damaged settings file; OK = `button:noticeOk`), `quitPrompt` (why quitting was stopped: tasks that would be cut short are running — `button:quitAnyway` cancels them and quits, `button:quitCancel` keeps working — or unsaved changes: `button:quitRetry` / `button:quitAnyway` / `button:quitCancel`), `import: {done, total, imported, cancelled} \| null` (an import runs on a worker thread), `tasks` (other background work: `Find Missing Photos`, `Auto Import`), `activity` (every long-running task in flight as the activity stack in the top-left corner shows it, same shape as `activity.list`; a row appears once its task is 0.5 s old, ids `activity:row:<id>`, ✕ = `activity:cancel:<id>`, `activity:more` expands past 3 rows), `fileDialogs` (commands waiting on a native file dialog, which runs off the UI thread; they run again with the answer when it closes), `copied` (the text the UI last put on the clipboard, `null` until something is copied) |
+| `ui.inspect` | — | UI state, window, `loupe` (`source`, `pending`, `failed` = why its render failed, else `null`, and `region: {full, window, pending}` when a zoomed view also renders the window on screen at no more than 100 % — `full` is the frame it is cut from, `window` its `[x, y, w, h]` — and `regionBefore` for the Before side of a Before/After view), canvas/image rects, `scroll: {grid, filmstrip}` (scroll offsets in points, `null` until drawn), active photo, selection, perf (`frameMs` = layout, `logicMs` = per-frame logic before it, `updateMs` = both, `maxUpdateMs`, `fps`, render queue …, `gpu` = adapter in use, `gpuReason` = why renders don't use the GPU, `gpuFallback` = latest render redone on the CPU and why — see `docs/gpu-pipeline.md`), status, memory (bytes per cache, see `library.memory`; plus stage caches — `budgetBytes`, `trimmed`, `sharedSourceBytes` (the one device copy of a big original) — and textures), `export: {running: {total, done, current} \| null, last}`, `notices` (warnings waiting to be shown, e.g. a damaged settings file; OK = `button:noticeOk`), `quitPrompt` (why quitting was stopped: tasks that would be cut short are running — `button:quitAnyway` cancels them and quits, `button:quitCancel` keeps working — or unsaved changes: `button:quitRetry` / `button:quitAnyway` / `button:quitCancel`), `import: {done, total, imported, cancelled} \| null` (an import runs on a worker thread), `tasks` (other background work: `Find Missing Photos`, `Auto Import`), `activity` (every long-running task in flight as the activity stack in the top-left corner shows it, same shape as `activity.list`; a row appears once its task is 0.5 s old, ids `activity:row:<id>`, ✕ = `activity:cancel:<id>`, `activity:more` expands past 3 rows), `fileDialogs` (commands waiting on a native file dialog, which runs off the UI thread; they run again with the answer when it closes), `copied` (the text the UI last put on the clipboard, `null` until something is copied) |
 | `ui.widgets` | `{filter?}` | On-screen widgets `{id, rect: [x, y, w, h]}` (screen points) |
 | `ui.clickWidget` / `ui.dragWidget` / `ui.hoverWidget` | `{id, count?, button?, fx?, fy?}` (`button: "right"` right-clicks) / `{id, toX?, toY?, dx?, dy?, steps?}` / `{id, fx?, fy?}` | Real egui input on a widget (hover: the pointer rests on it, e.g. for preset/profile previews) |
 | `ui.move` / `ui.click` / `ui.drag` | `{x, y, count?, button?}` / `{x, y, toX, toY, steps?}` | Raw pointer input, screen points |
@@ -72,7 +79,7 @@ filmstrip is visible.
 | `ui.dialog.confirm` / `ui.dialog.cancel` | — | Close the open dialog |
 | `ui.resize` | `{width, height}` | Resize the window |
 | `ui.zoomFactor` | `{factor}` | Set the interface scale (0.5–3; egui's zoom keys are off, Cmd+= / Cmd+- zoom the photo) |
-| `ui.screenshot` | `{path?, headless?}` | `{path, width, height}` once the frame (with finished renders) is captured. `headless: true` draws the UI on the CPU (no compositor needed); a windowed capture that gets no frame within 2 s falls back to headless automatically |
+| `ui.screenshot` | `{path?, headless?}` | `{path, width, height}` once the frame (with finished renders) is captured. `headless: true` draws the UI on the CPU (no compositor needed); a windowed capture that gets no frame within 2 s falls back to headless automatically. While the loupe still waits for a render, `ui.widgets {filter: "loupe:rendering"}` lists its "Rendering…" pill; `loupe:renderFailed` is the pill saying a render failed behind a stand-in; Compare and Reference panes have their own (`compare:rendering:<pane>`, `compare:renderFailed:<pane>`) |
 | `engine.execute {command: "app.export", params}` | export params (see `docs/mcp.md`), plus `preset`, `dir` / `path`, `ids`, `background` | Writes the files and returns `{files}` (one `{path, width, height, bytes, sidecars}` per file, plus `gpuFallback` — why that render fell back from the GPU to the CPU — when it did; see `docs/gpu-pipeline.md`); with `background: true` (what the Export dialog and menus use) it returns `{background: true, total}` at once and the batch runs on a worker thread — poll `ui.inspect` → `export` |
 | `engine.execute {command: "activity.list"}` | — | The long-running tasks in flight (imports, exports, preview builds, downloads, the face scan…), oldest first: `{tasks: [{id, kind, label, done, total, unit, detail, cancellable, cancelling, ageMs}]}`; `total` 0 = not known yet; `unit` is `count`, `bytes` or `percent`; `label` is English (the app shows it translated) |
 | `engine.execute {command: "activity.cancel"}` | `{id}` or `{all: true}` | Asks the task (or every cancellable one) to stop at its next file or photo → `{cancelled: n}`; an unknown id (it may have just finished) or a task that can't be cancelled is an error |
@@ -81,7 +88,8 @@ filmstrip is visible.
 
 White balance (`develop.set` with `wb.temp` / `wb.tint`, `develop.wb`, `develop.wbPick`) is in Kelvin and tint on
 raws with colour matrices — in the file (DNG) or measured for the camera model (`lightcraft_raw::spectral`; issue
-#730) — where As Shot reads the file's as-shot white; rendered files and raws without matrices use a relative scale
+#730) — and on raws whose white-balance presets give the scale (`lightcraft_raw::kelvin_presets`), where As Shot
+reads the file's as-shot white; rendered files and raws without matrices use a relative scale
 whose 6500 K / 0 is the as-shot look (the Edit panel shows it as −100..+100). The stored `wb` of such a Kelvin raw
 says `"scale": "kelvin"`; a partial settings JSON given to `develop.merge` or a preset whose `wb` sets `temp` / `tint`
 **without** `scale` keeps the relative meaning it always had (6500 = as shot) on every raw, so agents that mean
@@ -139,6 +147,78 @@ its `-wal` / `-shm` / `.lock` files, it keeps the library open now and returns `
 opens as one. With no library open (the library problem window) it is an error instead. The engine refuses the same
 places (`EngineError::LightroomCatalog`, so `lightcraft-cli --library` and `mcp --library` too). `library.importLightroom
 {status: true}` reports the catalog's `path` after the task ends as well as while it runs.
+
+## External controllers
+
+External apps can use this channel to send commands and poll the running desktop app for feedback
+(e.g. knob values or LEDs). Start the app with `--control PORT`, then keep a JSON-lines connection to
+`127.0.0.1:PORT`. Discover command ids, parameters and current enablement with `engine.commands`;
+use control ids and ranges from `develop.controls` rather than translated labels or widget positions.
+
+| Task | Command through `engine.execute` | Result / effect |
+|---|---|---|
+| Read selection and active photo | `library.state {}` | `selection: {ids, active}`; `active` is `null` when no photo is active |
+| Read photo identity and settings together | `photo.inspect {}` | Active photo's `id`, `develop`, rating, flag and history in one reply |
+| Read a specific photo without selecting it | `photo.inspect {id}` / `develop.get {id}` | Photo details / full develop JSON; omitting `id` reads the active photo |
+| Read global slider metadata and values | `develop.controls {section?}` | Array of `{id, label, section, min, max, default, step, decimals, track, value}` for the active photo |
+| Set absolute slider values | `develop.set {values: {"light.exposure": 0.7}}` | Undoable edit of the active photo; also accepts `{control, value}` |
+| Move a relative control | `develop.adjust {control: "light.exposure", delta: 0.1}` | Adds to the current value, clamped to the control's range |
+| Change photo | `library.select {ids: [photoId]}` / `library.next {}` / `library.previous {}` | Changes the active photo; next/previous follow the current view's order |
+| Undo / redo | `edit.undo {}` / `edit.redo {}` | Restore settings; poll again for feedback |
+
+With Auto Sync enabled, `develop.set` and `develop.adjust` can also change the other selected photos.
+Only changed settings propagate; spot removal, red eye and the rendering process stay per photo.
+During an interaction, propagation occurs when it ends. Re-read affected photos after the edit.
+`develop.autoSync {}` toggles the mode; it is not a state query.
+
+For example, send these requests one at a time and read each reply before sending the next:
+
+```json
+{"id":1,"method":"engine.commands"}
+{"id":2,"method":"engine.execute","params":{"command":"photo.inspect"}}
+{"id":3,"method":"engine.execute","params":{"command":"develop.controls","params":{"section":"light"}}}
+{"id":4,"method":"engine.execute","params":{"command":"develop.set","params":{"values":{"light.exposure":0.7}}}}
+{"id":5,"method":"engine.execute","params":{"command":"photo.inspect"}}
+```
+
+Replies use `{id, ok, result}` or `{id, ok: false, error}`. In the photo snapshot, exposure is
+`result.develop.light.exposure`; the controls array's matching `light.exposure` entry has `value`,
+`min: -5`, `max: 5` and `step: 0.01`. `wb.temp` is Kelvin on raws with colour matrices and relative
+(6500 = as shot) elsewhere, as described above. Re-read values after edits to reflect the stored result.
+Local mask adjustments are in the photo snapshot's `develop.masks`; use the mask commands from the
+registry (e.g. `mask.adjust`) for those, rather than treating global control values as mask values.
+
+Feedback uses polling: the channel sends replies to requests, with no unsolicited change events.
+Compare successive `photo.inspect` snapshots for photo-id or develop-setting changes, including GUI
+edits, photo navigation, presets and undo/redo. GUI slider updates are visible while a drag is in
+progress; ending a changed interaction commits it as one undo step (unchanged drags add none).
+A controller can group `develop.set` / `develop.adjust` updates between
+`develop.beginInteraction {label}` and `develop.endInteraction {}`. The GUI and controllers share
+one interaction: another `develop.beginInteraction` or `library.select` ends the current one.
+Update controller feedback from reads without sending the same values back as new edits.
+
+Each request is a separate snapshot. `photo.inspect` keeps identity and settings together; a
+`develop.controls` reply has no photo id, so do not associate it with an earlier cached selection
+when the user is changing photos. Refresh the selection and retry those reads after navigation.
+With no active photo, `develop.controls` returns default values and `photo.inspect` / `develop.get`
+without `id` return an error; check `library.state` before treating defaults as photo feedback.
+Photo ids are local to the current library/session. After reconnecting or opening another library,
+discard cached photo mappings and re-read state; matching photo ids alone do not identify the library.
+For persistent libraries, poll `library.info` for the current `path` as well. Polling observes the state
+at each read, not every intermediate change.
+
+The same queries and edits are available through the connected CLI:
+
+```sh
+lightcraft-cli run --connect 127.0.0.1:7980 library.state photo.inspect develop.controls section=light
+lightcraft-cli run --connect 127.0.0.1:7980 develop.adjust control=light.exposure delta=0.1 photo.inspect
+```
+
+For MCP, use `lightcraft-cli mcp --connect 127.0.0.1:7980`: `run_command` reaches the commands above,
+`list_controls` / `set_develop` provide slider helpers, and `resources/read` polls
+`lightcraft://library`, `lightcraft://photo/active`, `lightcraft://develop/active` and
+`lightcraft://controls` ([mcp.md](mcp.md#resources)). Headless CLI/MCP mode owns a separate engine
+session; use connect mode for feedback from edits in the desktop app.
 
 ## Headless rendering (no window, no GPU)
 

@@ -62,6 +62,9 @@ const CROP_SIZE: u16 = 0x74c8;
 const SR2_OLD_BLACK: u16 = 0x7300;
 const SR2_OLD_WB: u16 = 0x7303;
 const SR2_OLD_CROP: u16 = 0x74c3;
+/// `SR2SubIFD` white-balance presets at a stated temperature (`WB_RGBLevels2500K` … `8500K`: R, G, B), which give
+/// the Kelvin scale of a camera without colour matrices (`crate::kelvin_presets`).
+const SR2_KELVIN_PRESETS: [(f32, u16); 5] = [(2500.0, 0x782d), (3200.0, 0x782c), (4500.0, 0x7824), (6000.0, 0x782b), (8500.0, 0x782a)];
 const YCBCR_COEFFICIENTS: u16 = 529;
 const REFERENCE_BLACK_WHITE: u16 = 532;
 /// Maker-note tags (ExifTool Sony tag names): the enciphered `Tag2010` block and `FullImageSize` (height, width).
@@ -199,9 +202,28 @@ const TAG2010_WB: &[(&[&str], usize)] = &[
     ),
 ];
 
+/// Maker-note `SonyModelID` (`0xb001`, int16u, ExifTool Sony tag documentation).
+const MN_SONY_MODEL_ID: u16 = 0xb001;
+
+/// `SonyModelID` values (ExifTool Sony tag documentation) of the Sony bodies Hasselblad sold under its own Make and
+/// model (the Lunar, a NEX-7; the Stellar and Stellar II, an RX100 and RX100 II; the HV, an SLT-A99), so that
+/// [`TAG2010_WB`] finds their layout. Measured on the CC0 Lunar (raw.pixls.us 4051): Make HASSELBLAD, Model Lunar,
+/// SonyModelID 289 (issue #1275).
+const SONY_MODEL_IDS: &[(u64, &str)] = &[(289, "NEX-7"), (294, "SLT-A99"), (297, "DSC-RX100"), (308, "DSC-RX100M2")];
+
+/// The Sony body for the model-keyed tables: the Exif `model` of a Sony-branded file, else the one the maker note's
+/// `SonyModelID` names (a Lunar says "Lunar"), else `model` as it is.
+fn sony_body<'a>(make: &str, model: &'a str, mn: Option<&makernote::MakerNote>) -> &'a str {
+    if make.trim().to_ascii_uppercase().starts_with("SONY") {
+        return model;
+    }
+    let id = mn.and_then(|m| m.ifd.u64(MN_SONY_MODEL_ID));
+    SONY_MODEL_IDS.iter().find(|(i, _)| Some(*i) == id).map_or(model, |(_, name)| name)
+}
+
 /// White balance from the maker note's enciphered `Tag2010` block, the fallback described at [`TAG2010_WB`].
-/// `model` is the Exif model; Sony appends a regional "V" to some names (SLT-A77V), which the documented lists
-/// omit.
+/// `model` is the Sony body ([`sony_body`]); Sony appends a regional "V" to some names (SLT-A77V), which the
+/// documented lists omit.
 fn tag2010_wb(model: &str, block: &[u8], order: lightcraft_tiff::ByteOrder) -> Option<[f32; 3]> {
     let model = model.trim();
     let &(_, offset) = TAG2010_WB.iter().find(|(models, _)| models.iter().any(|m| model == *m || model.strip_suffix('V') == Some(*m)))?;
@@ -478,6 +500,16 @@ fn sr2_old_wb(sr2: &super::sr2::SubIfd) -> Option<[f32; 3]> {
 }
 
 /// The DSC-R1's crop from `0x74c3` (x0, y0, x1, y1): an even origin (CFA phase) and a window inside the `w × h` frame.
+/// The five presets of [`SR2_KELVIN_PRESETS`], when the block has them all and they make a curve.
+fn sr2_kelvin_presets(sr2: &super::sr2::SubIfd) -> Option<crate::kelvin_presets::KelvinPresets> {
+    let mut points = [(0.0f32, [0.0f32; 3]); 5];
+    for (p, (k, tag)) in points.iter_mut().zip(SR2_KELVIN_PRESETS) {
+        let v = sr2.shorts(tag).filter(|v| v.len() == 3)?;
+        *p = (k, [v[0] as f32, v[1] as f32, v[2] as f32]);
+    }
+    crate::kelvin_presets::KelvinPresets::new(points)
+}
+
 fn sr2_old_crop(sr2: &super::sr2::SubIfd, w: usize, h: usize) -> Option<Rect> {
     let v = sr2.shorts(SR2_OLD_CROP).filter(|v| v.len() == 4)?;
     let [x0, y0, x1, y1] = [v[0] as usize, v[1] as usize, v[2] as usize, v[3] as usize];
@@ -697,11 +729,12 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         .exif()
         .and_then(|e| e.get(t::MAKER_NOTE))
         .and_then(|e| makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &ifd0.string(t::MAKE).unwrap_or_default()));
+    let body = sony_body(&ifd0.string(t::MAKE).unwrap_or_default(), &model, mn.as_ref());
     let wb = raw
         .f64s(WB_RGGB)
         .and_then(|v| rggb_gains(&v))
         .or_else(|| rggb_gains(&sr2()?.shorts(WB_RGGB)?))
-        .or_else(|| mn.as_ref().and_then(|m| tag2010_wb(&model, m.ifd.bytes(MN_TAG2010)?, m.order)))
+        .or_else(|| mn.as_ref().and_then(|m| tag2010_wb(body, m.ifd.bytes(MN_TAG2010)?, m.order)))
         .or_else(|| sr2_old_wb(sr2()?));
     let crop = match (raw.u64s(CROP_TOP_LEFT).as_deref(), raw.u64s(CROP_SIZE).as_deref()) {
         (Some([x, y]), Some([cw, ch])) if *cw > 0 && *ch > 0 => Rect::new(*x as usize, *y as usize, *cw as usize, *ch as usize).clipped(w, h),
@@ -728,7 +761,8 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         active_area: Rect::new(0, 0, w, h),
         crop,
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
-        color: ColorData::default(),
+        // (linear YCbCr comes white-balanced: its unit multipliers have no place on the presets' curve)
+        color: ColorData { kelvin_presets: if linear_rgb { None } else { sr2().and_then(sr2_kelvin_presets) }, ..Default::default() },
         // Sony's linear YCbCr already carries as-shot WB. Applying the CFA gains again
         // makes a neutral surface magenta. WB edits remain relative to this as-shot RGB.
         wb_multipliers: if linear_rgb { Some([1.0; 3]) } else { wb },
@@ -1175,6 +1209,73 @@ mod tests {
             file[at..at + 4].copy_from_slice(&(private as u32).to_le_bytes());
         }
         file
+    }
+
+    /// Issue #1275: a Hasselblad Lunar (Make HASSELBLAD, Model Lunar) is a NEX-7. Its maker note (header-less, as the
+    /// Lunar's is) names the body by `SonyModelID`, which picks the NEX-7's `Tag2010` layout for the fallback white
+    /// balance; without the ID, or with one that isn't listed, there is no layout to read.
+    #[test]
+    fn rebadged_body_takes_its_tag2010_layout_from_the_sony_model_id() {
+        use lightcraft_tiff::{ByteOrder::Little, IfdBuilder, ImageData, TiffWriter, Value};
+        let file = |make: &str, model: &str, id: Option<u16>| {
+            let mut block = vec![0u8; 4600];
+            for (i, v) in [639u16, 256, 368].iter().enumerate() {
+                block[4480 + 2 * i..4482 + 2 * i].copy_from_slice(&v.to_le_bytes());
+            }
+            let block = encipher(&block);
+            let note = |at: usize| -> Vec<u8> {
+                let entries = 1 + u16::from(id.is_some());
+                let mut n = entries.to_le_bytes().to_vec();
+                n.extend(MN_TAG2010.to_le_bytes());
+                n.extend(7u16.to_le_bytes());
+                n.extend((block.len() as u32).to_le_bytes());
+                n.extend(((at + 2 + 12 * entries as usize + 4) as u32).to_le_bytes());
+                if let Some(id) = id {
+                    n.extend(MN_SONY_MODEL_ID.to_le_bytes());
+                    n.extend(3u16.to_le_bytes());
+                    n.extend(1u32.to_le_bytes());
+                    n.extend(id.to_le_bytes());
+                    n.extend([0, 0]);
+                }
+                n.extend([0; 4]);
+                n.extend(&block);
+                n
+            };
+            let mut raw = IfdBuilder::new();
+            raw.set(t::IMAGE_WIDTH, Value::Long(vec![32]));
+            raw.set(t::IMAGE_LENGTH, Value::Long(vec![4]));
+            raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![12]));
+            raw.set(t::PHOTOMETRIC, Value::Short(vec![photometric::CFA]));
+            raw.set(t::COMPRESSION, Value::Short(vec![32767]));
+            raw.set(TONE_CURVE, Value::Short(vec![8000, 10400, 12900, 14100]));
+            raw.set_image(ImageData::Strips { rows_per_strip: 4, strips: vec![vec![0u8; 32 * 4]] });
+            let mut ifd0 = IfdBuilder::new();
+            ifd0.set(t::MAKE, Value::Ascii(make.into()));
+            ifd0.set(t::MODEL, Value::Ascii(model.into()));
+            ifd0.set_child(t::EXIF_IFD, IfdBuilder::new().with(t::MAKER_NOTE, Value::Undefined(note(0))));
+            ifd0.add_sub_ifd(raw);
+            let mut file = TiffWriter::new(Little, false).write(&[ifd0]).unwrap();
+            let parsed = Tiff::parse(&file).unwrap();
+            let e = parsed.exif().unwrap().get(t::MAKER_NOTE).unwrap();
+            let at = e.offset as usize;
+            file[at..at + e.count()].copy_from_slice(&note(at));
+            file
+        };
+        let wb = |make: &str, model: &str, id: Option<u16>| {
+            let bytes = file(make, model, id);
+            assert_eq!(crate::probe(&bytes), Some(RawFormat::Arw), "{make} {model}");
+            let full = crate::decode(&bytes).unwrap();
+            assert_eq!(crate::probe_info(&bytes).unwrap().wb_multipliers, full.wb_multipliers);
+            full.wb_multipliers
+        };
+        let nex7 = Some([639.0 / 256.0, 1.0, 368.0 / 256.0]);
+        assert_eq!(wb("HASSELBLAD", "Lunar", Some(289)), nex7);
+        assert_eq!(wb("SONY", "NEX-7", None), nex7, "the Sony body itself");
+        assert_eq!(wb("HASSELBLAD", "Lunar", None), None, "no SonyModelID");
+        assert_eq!(wb("HASSELBLAD", "Lunar", Some(288)), None, "an ID that is not listed (NEX-5N)");
+        // a Sony file keeps its Exif model whatever the ID says
+        assert_eq!(wb("SONY", "ILCE-1", Some(289)), None);
+        assert_eq!(sony_body("HASSELBLAD", "HV", None), "HV");
     }
 
     #[test]

@@ -23,6 +23,73 @@ pub struct PresetFile {
     pub presets: Vec<Preset>,
 }
 
+/// The session's presets (built-in, then the user's) with a generation that changes on every
+/// mutable access, so saving and the UI's caches skip their O(presets) work while the list is
+/// untouched: a Lightroom collection imported whole is 10 000+ presets and ~40 MB of JSON.
+///
+/// Reads go through `Deref` (`iter`, `len`, `find`…) and keep the generation; `push`, `iter_mut`,
+/// `remove`… go through `DerefMut` and bump it, whether or not anything is then changed.
+/// Generations are unique across all lists in the process.
+#[derive(Clone, Debug)]
+pub struct PresetList {
+    items: Vec<Preset>,
+    generation: u64,
+}
+
+static PRESET_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_generation() -> u64 {
+    PRESET_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+impl PresetList {
+    pub fn new(items: Vec<Preset>) -> PresetList {
+        PresetList { items, generation: next_generation() }
+    }
+
+    /// Changes whenever the list may have changed.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+impl Default for PresetList {
+    fn default() -> PresetList {
+        PresetList::new(Vec::new())
+    }
+}
+
+impl std::ops::Deref for PresetList {
+    type Target = Vec<Preset>;
+    fn deref(&self) -> &Vec<Preset> {
+        &self.items
+    }
+}
+
+impl std::ops::DerefMut for PresetList {
+    fn deref_mut(&mut self) -> &mut Vec<Preset> {
+        self.generation = next_generation();
+        &mut self.items
+    }
+}
+
+impl<'a> IntoIterator for &'a PresetList {
+    type Item = &'a Preset;
+    type IntoIter = std::slice::Iter<'a, Preset>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut PresetList {
+    type Item = &'a mut Preset;
+    type IntoIter = std::slice::IterMut<'a, Preset>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.generation = next_generation();
+        self.items.iter_mut()
+    }
+}
+
 /// Lower-case ASCII slug for ids (`"Warm & Soft"` → `warm-soft`).
 pub fn slug(s: &str) -> String {
     let mut out = String::new();
@@ -107,22 +174,33 @@ impl Session {
     /// Add imported presets. Identical presets (same name, group and settings) already present are
     /// skipped; id clashes get a fresh id. Returns the ids added.
     pub fn add_presets(&mut self, presets: Vec<Preset>) -> Vec<String> {
+        use std::collections::{HashMap, HashSet};
+        // indexed: a collection of 10 000+ presets was quadratic (minutes) to import
+        let mut ids: HashSet<String> = self.presets.iter().map(|q| q.id.clone()).collect();
+        let mut by_name: HashMap<(String, String), Vec<usize>> = HashMap::new();
+        for (i, q) in self.presets.iter().enumerate() {
+            by_name.entry((q.name.clone(), q.group.clone())).or_default().push(i);
+        }
         let mut added = Vec::new();
         for mut p in presets {
-            if self.presets.iter().any(|q| q.name == p.name && q.group == p.group && q.settings == p.settings) {
+            let key = (p.name.clone(), p.group.clone());
+            let same = by_name.get(&key).is_some_and(|ix| ix.iter().any(|&i| self.presets.get(i).is_some_and(|q| q.settings == p.settings)));
+            if same {
                 continue;
             }
-            if p.id.trim().is_empty() || p.id.starts_with("lc.") || self.presets.iter().any(|q| q.id == p.id) {
+            if p.id.trim().is_empty() || p.id.starts_with("lc.") || ids.contains(&p.id) {
                 let base = format!("user.{}", slug(&format!("{}-{}", p.group, p.name)));
                 let mut id = base.clone();
                 let mut n = 2;
-                while self.presets.iter().any(|q| q.id == id) {
+                while ids.contains(&id) {
                     id = format!("{base}-{n}");
                     n += 1;
                 }
                 p.id = id;
             }
             p.builtin = false;
+            ids.insert(p.id.clone());
+            by_name.entry(key).or_default().push(self.presets.len());
             added.push(p.id.clone());
             self.presets.push(p);
         }

@@ -52,6 +52,14 @@ pub(crate) fn reflect(i: isize, n: usize) -> usize {
     i as usize
 }
 
+/// `v` clamped between `a` and `b`: `v.clamp(a.min(b), a.max(b))`, except that it returns `v` as is when both
+/// bounds are NaN (NaN samples in a float raw), where `f32::clamp` panics.
+#[inline]
+pub(crate) fn clamp_between(v: f32, a: f32, b: f32) -> f32 {
+    let (lo, hi) = (a.min(b), a.max(b));
+    if lo <= hi { v.clamp(lo, hi) } else { v }
+}
+
 impl Mosaic<'_> {
     #[inline]
     pub fn get(&self, x: isize, y: isize) -> f32 {
@@ -220,6 +228,37 @@ mod tests {
         assert_eq!(demosaic(&n, Method::Ahd).data, vec![[0.2; 3], [0.4; 3]]);
         let n = Normalized { width: 1, height: 1, cpp: 3, data: vec![0.1, 0.2, 0.3], cfa: None };
         assert_eq!(demosaic(&n, Method::Ahd).data, vec![[0.1, 0.2, 0.3]]);
+    }
+
+    #[test]
+    fn non_finite_samples_do_not_panic() {
+        // regression: NaN samples (a float DNG) gave AHD and PPG NaN bounds for `f32::clamp`, which panics
+        let cfa = Cfa::bayer("RGGB").unwrap();
+        let mut patchy = mosaic_from_rgb(&edgy_scene(24, 20), &cfa);
+        for (i, v) in patchy.data.iter_mut().enumerate() {
+            let (x, y) = (i % 24, i / 24);
+            if (8..12).contains(&x) && (6..10).contains(&y) {
+                *v = f32::NAN;
+            } else if i % 7 == 0 {
+                *v = if i % 2 == 0 { f32::INFINITY } else { f32::NEG_INFINITY };
+            }
+        }
+        let all_nan = Normalized { width: 9, height: 7, cpp: 1, data: vec![f32::NAN; 63], cfa: Some(cfa) };
+        for n in [&patchy, &all_nan] {
+            for m in [Method::Bilinear, Method::Ppg, Method::Ahd] {
+                let out = demosaic(n, m);
+                assert_eq!((out.width, out.height), (n.width, n.height), "{m:?}");
+            }
+        }
+        // without NaN bounds it is the `f32::clamp` it replaced, bit for bit (finite results stay identical)
+        let vals = [f32::NEG_INFINITY, -3e38, -2.5, -0.0, 0.0, 1e-40, 0.5, 1.0, 3e38, f32::INFINITY];
+        for v in vals {
+            for a in vals {
+                for b in vals {
+                    assert_eq!(clamp_between(v, a, b).to_bits(), v.clamp(a.min(b), a.max(b)).to_bits(), "{v} {a} {b}");
+                }
+            }
+        }
     }
 
     #[test]

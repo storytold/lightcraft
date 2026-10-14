@@ -81,11 +81,11 @@ fn quick_develop_reset_and_batch_paths_fit_too() {
     let got = try_cmd(&mut s, "develop.set", json!({"control": "crop.angle", "value": 12.0, "ids": [id.0]}));
     assert!(close(got, want), "develop.set ids {got:?} vs {want:?}");
 
-    // back to 0°: the crop that fitted at 12° fits at 0° too and is kept
+    // back to 0°: the crop shrunk to fit at 12° grows back to the full photo (issue #1388)
     s.execute("develop.set", &json!({"control": "crop.angle", "value": 12.0})).unwrap();
     s.execute("develop.resetControl", &json!({"control": "crop.angle"})).unwrap();
     let g = geometry(&s);
-    assert_eq!((g.rect, g.angle), (want.rect, 0.0));
+    assert_eq!((g.rect, g.angle), (Rect::UNIT, 0.0));
     assert!(g.is_within_image(w, h));
 }
 
@@ -105,4 +105,22 @@ fn a_straighten_slider_drag_fits_live_and_is_one_undo_step() {
     assert_eq!(geometry(&s).angle, 15.0);
     s.execute("edit.undo", &json!({})).unwrap();
     assert!(close(geometry(&s), start));
+}
+
+#[test]
+fn a_crop_shrunk_by_straightening_grows_back_towards_0() {
+    // issue #1388: slide the Straighten slider out and back, in one drag or in several
+    let mut s = Session::with_demo();
+    let (w, h) = dims(&s);
+    s.execute("develop.beginInteraction", &json!({"label": "Straighten"})).unwrap();
+    for angle in [5.0, 12.0, 20.0, 8.0, -20.0, -3.0, 0.0] {
+        s.execute("crop.straighten", &json!({"angle": angle})).unwrap();
+        let g = geometry(&s);
+        assert!(close(g, lightcraft_geom::crop_fit_angle(w, h, angle, None)), "the largest crop at {angle}°, got {g:?}");
+    }
+    s.execute("develop.endInteraction", &json!({})).unwrap();
+    s.execute("crop.straighten", &json!({"angle": 20.0})).unwrap();
+    s.execute("crop.straighten", &json!({"angle": 0.0})).unwrap();
+    let g = geometry(&s);
+    assert!(close(g, CropGeometry::default()), "two separate drags: back to the full photo at 0°, got {g:?}");
 }

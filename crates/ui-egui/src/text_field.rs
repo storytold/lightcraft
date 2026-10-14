@@ -51,6 +51,7 @@ pub struct TextField<'a> {
     text: &'a mut String,
     multiline: bool,
     hint: Option<String>,
+    label: Option<String>,
     width: Option<f32>,
     select_on_focus: bool,
     begin_edit: bool,
@@ -81,6 +82,7 @@ impl<'a> TextField<'a> {
             text,
             multiline: false,
             hint: None,
+            label: None,
             width: None,
             select_on_focus: false,
             begin_edit: false,
@@ -101,6 +103,13 @@ impl<'a> TextField<'a> {
     /// Grey text shown while the field is empty.
     pub fn hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());
+        self
+    }
+
+    /// The name a screen reader announces for the field (its visible caption); the hint
+    /// stands in when there is none.
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
         self
     }
 
@@ -182,6 +191,7 @@ impl<'a> TextField<'a> {
                 Action::Refocus => {}
             }
         }
+        let name = self.label.clone().or_else(|| self.hint.clone());
         let mut edit = if self.multiline { egui::TextEdit::multiline(self.text) } else { egui::TextEdit::singleline(self.text) };
         edit = edit.id(id);
         if let Some(hint) = self.hint {
@@ -214,6 +224,11 @@ impl<'a> TextField<'a> {
         let right = ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary) || i.pointer.button_released(egui::PointerButton::Secondary));
         let selection = egui::text_edit::TextEditState::load(ui.ctx(), id).and_then(|s| s.cursor.char_range());
         let mut response = ui.add(edit);
+        // screen readers: the field by its caption, even once it holds text (egui names it by
+        // nothing but its contents)
+        if let Some(name) = name.filter(|n| !n.trim().is_empty()) {
+            ui.ctx().accesskit_node_builder(response.id, |node| node.set_label(name));
+        }
         // The menu may take focus on a primary-button release. egui collapses a
         // TextEdit selection when focus leaves; retain the range our own menu acts on.
         if right && response.contains_pointer() || memo.menu_open && !ui.memory(|m| m.has_focus(id)) {

@@ -48,7 +48,7 @@ phase #85, duplicate Local entries #22, black GPU exports on an Intel iGPU #78).
 |---|---:|---:|---:|---|
 | Features (weighted areas below) | ~77% (checklist 81.1%, measured) | ~61% | 600–1,100 h | [Features](#features) |
 | ↳ RAW cameras, colour and lens profiles (part of features) | 81% of Adobe's 1,446 models decode (16% verified), measured | ~56% | 255–480 h | [raw-parity.md](raw-parity.md) |
-| UI/UX fidelity | ~85% | ~70% | 40–70 h | [ui-parity.md](ui-parity.md) |
+| UI/UX fidelity | ~85% | ~70% | 34–58 h | [ui-parity.md](ui-parity.md) |
 | File formats (non-raw: images, sidecars, presets, catalogs) | ~85% | ~70% | 30–55 h | [file-format-parity.md](file-format-parity.md) |
 | Hardware | ~50% | ~40% | 40–80 h (+ tethering and printing, counted under Classic modules) | [hardware-parity.md](hardware-parity.md) |
 | Localization (12 key languages) | 7 of 12 present | ~52% (mean of the 12, measured) | 130–210 h for the target's set; +145–255 h for Hindi, Arabic, Indonesian, Vietnamese, Korean | [localization-parity.md](localization-parity.md) |
@@ -297,7 +297,8 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-13 | minor | Canon CRW decoded (clean-room, `clean-room/crw/`): 241 models verified, Canon preview rows 21 → 6; RAW decoding stays 77% |
+| 2026-10-13 | minor | Canon CRW decoded (clean-room, `clean-room/crw/`): 243 models verified, Canon preview rows 21 → 6; RAW decoding stays 77% |
+| 2026-10-12 | minor | UI/UX remaining 40–70 h → 34–58 h (accessibility audit landed, ui-parity.md); percentages unchanged |
 | 2026-10-11 | minor | EOS R5 Mark II CR3 verified (raw-parity.md): use-weighted share whose camera decodes 84% → 85%, RAW decoding 76% → 77%; full 60.6% → 60.7%, mainstream depth 71.8% → 72.1%, essentials depth 77.4% → 77.5%; the rounded numbers (~61%, ~49%, ~64%) are unchanged |
 | 2026-10-10 | minor | RAW measured model by model (raw-parity.md): RAW decoding (76%) and colour (35%) are explicit rows of the full sum (59% → 61%); mainstream uses the use-weighted 84% plus a ×0.85 colour discount (51% → 49%); essentials uses 84% × colour 0.75 (63% → 64%); beta ~14 points |
 | 2026-10-10 | minor | Full number restored to an additive weighted sum over the dimensions (~59%; method aligned with the standard, no new evidence); hours to ~95% for each of the three audiences; beta distance ~16 points |

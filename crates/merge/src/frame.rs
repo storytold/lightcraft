@@ -103,15 +103,28 @@ pub fn detect_clip(img: &Rgb32f) -> f32 {
     if maxv >= 1.0 || piled { level * 0.995 } else { 1.0 }
 }
 
+/// The colour tags a raw source starts from when the caller knows better than the file (`None`: the
+/// file's own tags). Called with the decoded raw, its samples still there, and the file's bytes.
+pub type RawColour<'a> = dyn Fn(&mut lightcraft_raw::RawImage, &[u8]) -> Option<ColorData> + Sync + 'a;
+
 /// Decode a photo (raw or standard format) into a frame no larger than `max_edge` (when given).
 /// `orient` applies the EXIF orientation to the pixels.
 pub fn load_frame(bytes: &[u8], max_edge: Option<usize>, orient: bool) -> Result<Frame> {
+    load_frame_with(bytes, max_edge, orient, &|_, _| None)
+}
+
+/// [`load_frame`] with a raw's colour tags from `colour`: a raw without colour matrices of its own
+/// (CR2, NEF, ARW…) starts from a colour the app works out (issue #965).
+pub fn load_frame_with(bytes: &[u8], max_edge: Option<usize>, orient: bool, colour: &RawColour) -> Result<Frame> {
     let metadata = lightcraft_meta::extract(bytes);
     let exposure = exif_exposure(&metadata);
     if lightcraft_raw::probe(bytes).is_some() {
         let mut raw = lightcraft_raw::decode(bytes).map_err(|e| MergeError::Decode(e.to_string()))?;
         // geometric lens corrections stay with the develop settings ("profile corrections")
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
+        if let Some(color) = colour(&mut raw, bytes) {
+            raw.color = color;
+        }
         let small = max_edge.is_some_and(|m| m <= 1200);
         let method = if small { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd };
         let mut image = raw.develop(method).map_err(|e| MergeError::Decode(e.to_string()))?;

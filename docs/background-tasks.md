@@ -9,7 +9,10 @@ a task that can stop is running. Agents see the same list through `activity.list
 The registry is `lightcraft_engine::activity` (`crates/engine/src/activity.rs`, `Session::activity`). The stack is
 `crates/ui-egui/src/panels/activity.rs`. Every job that can last more than a moment uses it; **don't add a progress
 window, panel or progress toast of your own**. A dialog may still show progress inline (the Synchronize Folder
-dialog counts files while it scans), and a toast at the end saying what happened is fine.
+dialog counts files while it scans), and a toast at the end saying what happened is fine. A view saying its pixels
+aren't final isn't progress either: the loupe's "Rendering…" pill (`loupe:rendering`) marks a stand-in or an
+out-of-date render on the photo itself, and the render behind it holds no row (a slider drag replaces it many times a
+second).
 
 ## Adding a task
 

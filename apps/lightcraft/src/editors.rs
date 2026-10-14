@@ -61,6 +61,39 @@ pub fn open_with(path: &str, app: &str) -> Result<(), String> {
     c.spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// Open every file in `paths` with one start of `app`, as a file manager hands over a selection:
+/// an editor that keeps a single window (DxO PhotoLab) loses the files that arrive while it is
+/// still starting when it is started once per file. The system default opens them one by one
+/// (Explorer and `xdg-open` take one file).
+pub fn open_all_with(paths: &[String], app: &str) -> Result<(), String> {
+    match all_command(launcher(app)?, paths) {
+        Some(mut c) => c.spawn().map(|_| ()).map_err(|e| e.to_string()),
+        None => paths.iter().try_for_each(|p| open_with(p, app)),
+    }
+}
+
+/// The one command that opens all of `paths` in `launcher` (none for the system default).
+fn all_command(launcher: Launcher, paths: &[String]) -> Option<Command> {
+    match launcher {
+        Launcher::Default => None,
+        Launcher::MacApp(app) => {
+            let mut c = Command::new("open");
+            c.args(["-a", &app]).args(paths);
+            Some(c)
+        }
+        Launcher::Program(p) => {
+            let mut c = Command::new(p);
+            c.args(paths);
+            Some(c)
+        }
+        Launcher::Flatpak => {
+            let mut c = Command::new("flatpak");
+            c.args(["run", "--file-forwarding", PHOTOCRAFT_ID, "@@"]).args(paths).arg("@@");
+            Some(c)
+        }
+    }
+}
+
 /// Windows: open `path` in its default application through Explorer, given the path as its one
 /// argument. Not `cmd /C start`: cmd.exe would read `&`, `^`, `%` or `|` in a file name as its own
 /// syntax (running what follows an `&` as a command).
@@ -172,8 +205,10 @@ fn desktop_exec(entry: &str) -> Option<PathBuf> {
         Some(rest) => rest.split('"').next()?,
         None => exec.split_whitespace().next()?,
     };
-    // a bare name (`photocraft %F`) was already looked for on the PATH
-    Some(PathBuf::from(program)).filter(|p| p.is_absolute())
+    // a bare name (`photocraft %F`) was already looked for on the PATH. Desktop entries are a
+    // freedesktop (POSIX) format: absolute means a leading `/` on every platform the parser runs on
+    // (`Path::is_absolute` wants a drive letter on Windows, where the tests run too)
+    program.starts_with('/').then(|| PathBuf::from(program))
 }
 
 #[cfg(test)]
@@ -189,6 +224,25 @@ mod tests {
         assert_eq!(c.get_program(), "explorer.exe");
         let args: Vec<_> = c.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(args, [r"C:\Edits\a & b ^c %PATH% | d.psd"]);
+    }
+
+    /// Open Original with several photos: one start of the editor with every file, which a
+    /// single-window editor (DxO PhotoLab) needs to get them all.
+    #[test]
+    fn several_files_go_to_one_start_of_the_editor() {
+        let paths = [r"D:\Pictures\a.dng".to_string(), r"D:\Pictures\b c.dng".to_string()];
+        let args = |c: &Command| c.get_args().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>();
+        let c = all_command(Launcher::Program(PathBuf::from(r"C:\DxO\DxO.PhotoLab.exe")), &paths).unwrap();
+        assert_eq!(c.get_program(), r"C:\DxO\DxO.PhotoLab.exe");
+        assert_eq!(args(&c), paths);
+        let c = all_command(Launcher::MacApp("DxO PhotoLab 8".into()), &paths).unwrap();
+        assert_eq!(
+            (c.get_program().to_string_lossy().into_owned(), args(&c)),
+            ("open".into(), vec!["-a".into(), "DxO PhotoLab 8".into(), paths[0].clone(), paths[1].clone()])
+        );
+        let c = all_command(Launcher::Flatpak, &paths).unwrap();
+        assert_eq!(args(&c), ["run", "--file-forwarding", PHOTOCRAFT_ID, "@@", &paths[0], &paths[1], "@@"]);
+        assert!(all_command(Launcher::Default, &paths).is_none(), "the system default opens them one by one");
     }
 
     #[test]

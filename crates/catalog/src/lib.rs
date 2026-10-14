@@ -125,6 +125,12 @@ pub enum Op {
         id: PhotoId,
         step: HistoryStep,
     },
+    /// Move the History cursor (see [`Photo::history_cursor`]) without changing the steps.
+    SetHistoryCursor {
+        id: PhotoId,
+        #[serde(default)]
+        cursor: Option<usize>,
+    },
     AddAlbum {
         album: Album,
     },
@@ -545,12 +551,25 @@ impl Catalog {
             Op::PushHistory { id, step } => {
                 let p = self.photo_mut(id)?;
                 let old = p.history.clone();
+                let old_cursor = p.history_cursor.take();
+                // a new edit made from an earlier step drops the steps after it
+                if let Some(c) = old_cursor {
+                    p.history.truncate(c.saturating_add(1));
+                }
                 p.history.push(step);
                 if p.history.len() > HISTORY_LIMIT {
                     let n = p.history.len() - HISTORY_LIMIT;
                     p.history.drain(..n);
                 }
-                Op::SetHistory { id, history: old }
+                if old_cursor.is_none() {
+                    Op::SetHistory { id, history: old }
+                } else {
+                    Op::Batch { ops: vec![Op::SetHistory { id, history: old }, Op::SetHistoryCursor { id, cursor: old_cursor }] }
+                }
+            }
+            Op::SetHistoryCursor { id, cursor } => {
+                let p = self.photo_mut(id)?;
+                Op::SetHistoryCursor { id, cursor: std::mem::replace(&mut p.history_cursor, cursor) }
             }
             Op::AddAlbum { album } => {
                 if self.albums.contains_key(&album.id) {

@@ -637,6 +637,7 @@
   "Local folders": "Локальные папки",
   "Local library — no cloud account needed": "Локальная библиотека — учётная запись в облаке не нужна",
   "Locate Missing File…": "Указать отсутствующий файл…",
+  "Locate Missing Files…": "Указать отсутствующие файлы…",
   "Locate Photo": "Найти фото",
   "Location": "Местоположение",
   "Long Edge": "Длинная сторона",
@@ -784,6 +785,8 @@
   "Open Library": "Открыть библиотеку",
   "Open Library…": "Открыть библиотеку…",
   "Open Log Folder": "Открыть папку журналов",
+  "Reading photos…": "Чтение фото…",
+  "Adding photos…": "Добавление фото…",
   "Open in": "Открыть в",
   "Open in Detail": "Открыть в режиме «Детализация»",
   "Open the place in OpenStreetMap": "Открыть место в OpenStreetMap",
@@ -1106,6 +1109,8 @@
   "Show Luminance Map": "Показать карту яркости",
   "Show Mask": "Показать маску",
   "Show Mask Overlay": "Показать наложение маски",
+  "Show All Mask Overlays": "Показать все наложения масок",
+  "Show all overlays": "Показать все наложения",
   "Show Mask Pins": "Показать булавки масок",
   "Show Original": "Показать оригинал",
   "Show Photo Counts": "Показывать количество фото",
@@ -2143,5 +2148,8 @@
   "Adding to Apple Photos…": "Добавление в Apple Фото…",
   "not added to Apple Photos (cancelled)": "не добавлено в Apple Фото (отменено)",
   "The first time, macOS asks whether LightCraft may control Photos.": "В первый раз macOS спросит, может ли LightCraft управлять приложением «Фото».",
-  "Adding to Apple Photos": "Добавление в Apple Фото"
+  "Adding to Apple Photos": "Добавление в Apple Фото",
+  "No graphics processor found: LightCraft renders on the CPU, which is much slower. Details in Help → System Info.": "Графический процессор не найден: LightCraft выполняет рендеринг на CPU, а это намного медленнее. Подробности: Справка → Сведения о системе.",
+  "On NixOS, start it from `nix develop`.": "В NixOS запускайте его из `nix develop`.",
+  "Files with the same content as another file in this import: only the first is imported.": "Файлы с тем же содержимым, что и другой файл этого импорта: импортируется только первый."
 }

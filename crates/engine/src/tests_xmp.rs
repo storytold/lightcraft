@@ -7,6 +7,26 @@ use lightcraft_catalog::{ColorLabel, Flag, PhotoId};
 use serde_json::json;
 
 use crate::Session;
+use crate::rename::{MoveFs, RealFs};
+
+/// Whether `dir` is on a case-insensitive volume (the default on macOS and Windows): its path in upper case still resolves.
+pub(crate) fn case_insensitive(dir: &Path) -> bool {
+    Path::new(&dir.to_string_lossy().to_uppercase()).exists()
+}
+
+/// The same path, or the same file under another spelling (`a.XMP` and `a.xmp` on a case-insensitive volume). Fault
+/// injectors match this way, so an injected failure fires whichever spelling the code under test uses for a file; on a
+/// case-sensitive volume only identical paths match.
+pub(crate) fn same_path_or_file(a: &Path, b: &Path) -> bool {
+    a == b || RealFs.same_file(a, b)
+}
+
+/// The same path, or on a case-insensitive volume a path that differs only in ASCII case: the code under test may spell
+/// a sidecar `.XMP` for a file stored as `.xmp` there, while on a case-sensitive volume it offers only the spelling that
+/// exists.
+pub(crate) fn same_path_for_volume(a: &Path, b: &Path) -> bool {
+    a == b || (a.parent().is_some_and(case_insensitive) && a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy()))
+}
 
 pub(crate) fn temp_dir(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("lc-xmp-{tag}-{}", std::process::id()));
@@ -172,6 +192,71 @@ fn foreign_crs_sidecar_on_import_and_read_from_file() {
     let r = s.execute("photo.readMetadataFromFile", &json!({})).unwrap();
     assert_eq!(r["failed"].as_array().unwrap().len(), 1);
     assert!(r.get("warnings").is_none(), "{r}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A sidecar with only `crs:` develop settings, as LRTimelapse writes them (issue #934).
+fn crs_exposure_sidecar(exposure: &str) -> String {
+    format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Version="15.0" crs:Exposure2012="{exposure}"/></rdf:RDF></x:xmpmeta>"#
+    )
+}
+
+/// Issue #934: with auto-write on, Read Metadata from File wrote what it had just read straight back
+/// into the sidecar, adding our `lc:settings`. Reading leaves the file byte for byte; an edit made
+/// after it is still written.
+#[test]
+fn reading_metadata_leaves_the_sidecar_alone_with_auto_write_on() {
+    let src = temp_dir("read-no-autowrite");
+    write_png(&src.join("frame.png"), 6);
+    let sidecar = src.join("frame.xmp");
+    std::fs::write(&sidecar, crs_exposure_sidecar("0.5")).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    assert_eq!(s.catalog.photo(id).unwrap().develop.light.exposure, 0.5);
+    // something for the read to change back (auto-write is still off, so the file stays as it is)
+    s.execute("develop.reset", &json!({"ids": [id.0]})).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    let before = std::fs::read(&sidecar).unwrap();
+    let r = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(r["read"].as_array().unwrap().len(), 1, "{r}");
+    assert_eq!(s.catalog.photo(id).unwrap().develop.light.exposure, 0.5, "the sidecar was read");
+    let now = std::fs::read(&sidecar).unwrap();
+    assert!(now == before, "reading leaves the sidecar byte for byte, but it is now:\n{}", String::from_utf8_lossy(&now));
+    // a develop edit afterwards is still written (only the read is exempt)
+    s.execute("develop.set", &json!({"ids": [id.0], "control": "light.exposure", "value": 0.9})).unwrap();
+    let after = std::fs::read_to_string(&sidecar).unwrap();
+    match crate::sidecar::parse_sidecar(&after, crate::crs::Target::Rendered).unwrap().develop {
+        Some(crate::sidecar::DevelopPatch::Full(d)) => assert_eq!(d.light.exposure, 0.9),
+        other => panic!("the edit wasn't auto-written: {other:?}\n{after}"),
+    }
+    assert!(after.contains(r#"crs:Exposure2012="0.5""#), "the other app's settings are kept: {after}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// Issue #934, the round trip the write-back broke: after a read with auto-write on, another app
+/// changes `crs:Exposure2012` from 0.5 to 1.2 (keeping the rest of the file), and the next read
+/// takes 1.2.
+#[test]
+fn a_crs_change_after_a_read_is_taken_with_auto_write_on() {
+    let src = temp_dir("read-then-crs-change");
+    write_png(&src.join("frame.png"), 7);
+    let sidecar = src.join("frame.xmp");
+    std::fs::write(&sidecar, crs_exposure_sidecar("0.5")).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().develop.light.exposure, 0.5);
+    // the other app edits the file as it is now
+    let text = std::fs::read_to_string(&sidecar).unwrap();
+    let changed = text.replace(r#"crs:Exposure2012="0.5""#, r#"crs:Exposure2012="1.2""#);
+    assert_ne!(changed, text);
+    std::fs::write(&sidecar, changed).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().develop.light.exposure, 1.2, "the second read takes the other app's exposure");
     let _ = std::fs::remove_dir_all(&src);
 }
 

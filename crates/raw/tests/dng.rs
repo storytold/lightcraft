@@ -379,6 +379,43 @@ fn floating_point_dngs() {
 }
 
 #[test]
+fn non_finite_float_samples_decode_and_develop() {
+    // regression: NaN samples in a float CFA DNG panicked AHD and PPG (`f32::clamp` with NaN bounds)
+    let (w, h) = (24, 20);
+    let mut raw = synthetic(w, h, Some(Cfa::bayer("RGGB").unwrap()), 1);
+    let mut vals: Vec<f32> = (0..w * h).map(|i| ((i * 37) % 200) as f32 / 256.0).collect();
+    for (i, v) in vals.iter_mut().enumerate() {
+        let (x, y) = (i % w, i / w);
+        if (8..14).contains(&x) && (6..12).contains(&y) {
+            *v = f32::NAN;
+        } else if i % 11 == 0 {
+            *v = if i % 2 == 0 { f32::INFINITY } else { f32::NEG_INFINITY };
+        }
+    }
+    raw.data = RawData::F32(vals.clone());
+    raw.black = BlackLevel::uniform(0.0);
+    raw.white = vec![0.75];
+    for compression in [DngCompression::Uncompressed, DngCompression::Deflate { tile: 16, half: false }] {
+        let bytes = write_dng(&raw, &DngWriteOptions { compression, ..Default::default() }).unwrap();
+        let img = decode(&bytes).unwrap();
+        // NaN and −∞ read as black, +∞ as the white level; finite samples are kept bit-exactly
+        let RawData::F32(got) = &img.data else { panic!("float data expected") };
+        for (a, b) in vals.iter().zip(got) {
+            let want = match *a {
+                f32::INFINITY => 0.75,
+                v if v.is_finite() => v,
+                _ => 0.0,
+            };
+            assert_eq!(want.to_bits(), b.to_bits(), "{a} read as {b}");
+        }
+        for m in [Method::Bilinear, Method::Ppg, Method::Ahd] {
+            let rgb = img.develop(m).unwrap();
+            assert!(rgb.data.iter().all(|p| p.iter().all(|v| v.is_finite())), "{m:?}");
+        }
+    }
+}
+
+#[test]
 fn lj92_strips_and_levels_and_linearization() {
     let (w, h) = (20, 12);
     let px = pattern(w, h, 1, 12);
@@ -988,4 +1025,25 @@ fn baseline_sharpness_is_read_when_plausible() {
     });
     assert_eq!(decode(&bytes).unwrap().color.baseline_sharpness, None);
     assert_eq!(decode(&profile_dng(ByteOrder::Big, |_| {})).unwrap().color.baseline_sharpness, None);
+}
+
+/// The DNG CFAPattern is anchored at the top-left of the ActiveArea: a DNG whose area starts on an odd row or
+/// column still demosaics with the pattern the tag states (#1086), and the writer states it back the same way.
+#[test]
+fn cfa_pattern_is_relative_to_the_active_area() {
+    let (w, h) = (20, 12);
+    for (top, left, sensor_name) in [(0u32, 0u32, "GRBG"), (1, 0, "BGGR"), (0, 1, "RGGB"), (1, 1, "GBRG"), (3, 5, "GBRG"), (2, 4, "GRBG")] {
+        let mut raw = base_ifd(w, h, 16, 1, true);
+        raw.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![u16_bytes(&pattern(w, h, 1, 16), ByteOrder::Little)] });
+        raw.set(t::WHITE_LEVEL, Value::Short(vec![65535]));
+        raw.set(t::ACTIVE_AREA, Value::Long(vec![top, left, h as u32 - 1, w as u32 - 1]));
+        let img = decode(&dng(raw, ByteOrder::Little)).unwrap();
+        assert_eq!(img.cfa.as_ref().unwrap().name(), sensor_name, "sensor anchor for area at ({left}, {top})");
+        assert_eq!(img.normalized().unwrap().cfa.unwrap().name(), "GRBG", "tag pattern for area at ({left}, {top})");
+        let back =
+            decode(&write_dng(&img, &DngWriteOptions { compression: DngCompression::Uncompressed, order: ByteOrder::Little, xmp: None }).unwrap())
+                .unwrap();
+        assert_eq!(back.cfa.as_ref().unwrap().name(), sensor_name);
+        assert_eq!(back.normalized().unwrap().cfa.unwrap().name(), "GRBG");
+    }
 }

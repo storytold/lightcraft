@@ -125,7 +125,9 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
 
     if let Some(cfa) = &raw.cfa {
         ifd.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![cfa.height as u16, cfa.width as u16]));
-        ifd.set(t::CFA_PATTERN_EP, Value::Byte(cfa.pattern.clone()));
+        // the tag is anchored at the ActiveArea's top-left, `raw.cfa` at the sensor origin
+        let a = raw.active_area;
+        ifd.set(t::CFA_PATTERN_EP, Value::Byte(cfa.shifted(a.x, a.y).pattern));
         ifd.set(t::CFA_PLANE_COLOR, Value::Byte(vec![0, 1, 2]));
         ifd.set(t::CFA_LAYOUT, Value::Short(vec![1]));
     }
@@ -361,4 +363,65 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
         }
     }
     Ok(TiffWriter::new(opts.order, false).write(&[ifd])?)
+}
+
+/// Exif `LightSource` code of a white point the rendered DNG writer knows (D65 = 21, D50 = 23).
+fn illuminant_of(white: lightcraft_color::Xy) -> u16 {
+    if (white.x - lightcraft_color::D50.x).abs() < 1e-3 && (white.y - lightcraft_color::D50.y).abs() < 1e-3 { 23 } else { 21 }
+}
+
+/// Render to DNG: a linear DNG (`LinearRaw`, 16-bit float Deflate tiles) of an already rendered,
+/// oriented image. `rgb` is `width × height` interleaved linear RGB in `space` (white = 1; values
+/// above 1 are kept up to the half-float maximum, negative and non-finite ones become 0). The colour tags describe `space`
+/// exactly — `ColorMatrix1` = XYZ → space, `ForwardMatrix1` = space → XYZ D50, a neutral
+/// `AsShotNeutral` — and an identity `ProfileToneCurve` keeps raw converters from adding their
+/// default tone curve on top of the baked-in edit.
+pub fn write_rendered_dng(
+    width: usize,
+    height: usize,
+    rgb: &[f32],
+    space: &lightcraft_color::RgbSpace,
+    metadata: &lightcraft_meta::Metadata,
+    xmp: Option<String>,
+) -> Result<Vec<u8>> {
+    let n = width.checked_mul(height).and_then(|p| p.checked_mul(3)).ok_or(RawError::Limit("image too large"))?;
+    if width == 0 || height == 0 || width > u32::MAX as usize || height > u32::MAX as usize {
+        return Err(RawError::Corrupt(format!("cannot write a {width}×{height} DNG")));
+    }
+    let src = rgb.get(..n).ok_or_else(|| RawError::Corrupt(format!("{} samples for a {width}×{height} RGB image", rgb.len())))?;
+    let data: Vec<f32> = src.iter().map(|&v| if v.is_finite() { v.clamp(0.0, 65504.0) } else { 0.0 }).collect();
+    let full = crate::Rect::new(0, 0, width, height);
+    let forward = lightcraft_color::bradford(space.white, lightcraft_color::D50).mul(&space.to_xyz());
+    let color = crate::ColorData {
+        illuminant: [illuminant_of(space.white), 0],
+        color_matrix: [Some(space.from_xyz()), None],
+        forward_matrix: [Some(forward), None],
+        as_shot_neutral: Some([1.0; 3]),
+        profile: crate::profile::ProfileLook {
+            tone_curve: Some(crate::profile::ToneCurve { points: vec![[0.0, 0.0], [1.0, 1.0]] }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let raw = RawImage {
+        format: crate::RawFormat::Dng,
+        width,
+        height,
+        cpp: 3,
+        data: RawData::F32(data),
+        cfa: None,
+        bits: 16,
+        black: crate::BlackLevel::uniform(0.0),
+        white: vec![1.0],
+        active_area: full,
+        crop: full,
+        orientation: lightcraft_geom::Orientation::Normal,
+        color,
+        wb_multipliers: None,
+        linearized: false,
+        opcodes: crate::OpcodeLists::default(),
+        metadata: metadata.clone(),
+    };
+    let order = ByteOrder::Little;
+    write_dng(&raw, &DngWriteOptions { compression: DngCompression::Deflate { tile: 256, half: true }, order, xmp })
 }

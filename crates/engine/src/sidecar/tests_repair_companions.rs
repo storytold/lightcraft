@@ -1,6 +1,7 @@
 //! Real Session partial moves, sidecar serialization/merging, AutoWrite and history.
 use super::*;
 use crate::rename::{MoveFs, RealFs};
+use crate::tests_xmp::{same_path_for_volume, same_path_or_file};
 use lightcraft_catalog::{Op, Photo, Source};
 use serde_json::json;
 
@@ -16,7 +17,7 @@ impl MoveFs for Faults {
         RealFs.same_file(a, b)
     }
     fn rename_no_replace(&self, a: &Path, b: &Path) -> std::io::Result<()> {
-        if self.0.iter().any(|p| p == a) {
+        if self.0.iter().any(|p| same_path_or_file(p, a)) {
             Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "injected partial move"))
         } else {
             RealFs.rename_no_replace(a, b)
@@ -261,8 +262,8 @@ fn queued_stem_retry_preserves_shared_packet_after_batch_rollback() {
     assert!(!second_packet.exists());
     let pending = queues(&s);
     assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].from, shared);
-    assert_eq!(pending[0].to, second_packet);
+    assert!(same_path_for_volume(&pending[0].from, &shared), "{:?}", pending[0].from);
+    assert!(same_path_for_volume(&pending[0].to, &second_packet), "{:?}", pending[0].to);
     let catalog_before = s.catalog.to_snapshot();
     let history_before = (s.undo.len(), s.redo.len(), s.commits());
 

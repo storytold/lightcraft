@@ -247,6 +247,11 @@ pub struct Photo {
     pub versions: Vec<Version>,
     #[serde(default)]
     pub history: Vec<HistoryStep>,
+    /// The History step the photo's settings are at, when it isn't the latest one (Go to History
+    /// Step moved back): later steps stay listed and can be returned to until a new edit drops
+    /// them. `None` (and catalogs written before the cursor existed) = the latest step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_cursor: Option<usize>,
     /// In "Recently Deleted".
     #[serde(default)]
     pub deleted: bool,
@@ -318,15 +323,22 @@ pub fn relative_wb_format(format: &str) -> bool {
 
 /// Whether a raw of `format` shot on `camera` (Exif make and model, as [`Meta::camera`] keeps them) is developed
 /// with a white balance relative to its as-shot look (6500 K / 0 means as shot, as for rendered photographs):
-/// a file without colour matrices ([`relative_wb_format`]) whose camera has none measured either. A camera
-/// with matrices in `lightcraft_raw::spectral` edits in Kelvin: the matrices turn its as-shot multipliers into
-/// a temperature, and the slider back, while its colour look stays whatever the file's fit gives (issue #730).
-/// The engine's render path (`files.rs`) decides the same way from the file; both must agree.
+/// a file without colour matrices ([`relative_wb_format`]) whose camera has none measured either, nor
+/// white-balance presets to read Kelvin from. A camera with matrices in `lightcraft_raw::spectral` edits in Kelvin:
+/// the matrices turn its as-shot multipliers into a temperature, and the slider back, while its colour look stays
+/// whatever the file's fit gives (issue #730). A camera in `lightcraft_raw::kelvin_presets` does the same through
+/// its own presets. The engine's render path (`files.rs`) decides the same way from the file; both must agree.
 pub fn relative_wb_camera(format: &str, camera: &str) -> bool {
-    relative_wb_format(format) && lightcraft_raw::spectral::find_camera(camera).is_none()
+    relative_wb_format(format) && lightcraft_raw::spectral::find_camera(camera).is_none() && !lightcraft_raw::kelvin_presets::covers_camera(camera)
 }
 
 impl Photo {
+    /// The History step the settings are at (the cursor, clamped to the list; `None` = no history).
+    pub fn history_index(&self) -> Option<usize> {
+        let last = self.history.len().checked_sub(1)?;
+        Some(self.history_cursor.map_or(last, |c| c.min(last)))
+    }
+
     pub fn new(id: PhotoId, source: Source, file_name: &str, format: &str, width: u32, height: u32, imported: &str) -> Photo {
         Photo {
             id,
@@ -347,6 +359,7 @@ impl Photo {
             edited: None,
             versions: Vec::new(),
             history: Vec::new(),
+            history_cursor: None,
             deleted: false,
             local: false,
             duration: None,
@@ -599,6 +612,8 @@ mod edited_tests {
             ("FUJIFILM X-T4", "RAF", false),
             ("ILCE-7M3", "ARW", false),
             ("SONY ILCE-7M2", "ARW", true),
+            ("SONY ILCA-99M2", "ARW", false),
+            ("SONY SLT-A33", "ARW", false),
             ("SONY ILCE-1", "ARW", true),
             ("", "ARW", true),
             ("SONY ILCE-7M3", "DNG", false),

@@ -94,20 +94,20 @@ impl DiskCache {
         if std::fs::create_dir_all(parent).is_err() {
             return;
         }
-        // know the current total before adding (the first scan must not count this file twice)
-        let _ = self.size();
+        // Serialize the file replacement and its size accounting. A repeated render of
+        // the same key replaces its JPEG; it must not count as another cache entry.
+        let mut total = self.total.lock().unwrap_or_else(|e| e.into_inner());
+        let used = total.get_or_insert_with(|| self.scan().iter().map(|f| f.1).sum());
+        let old_len = std::fs::metadata(&p).map_or(0, |m| m.len());
         let tmp = p.with_extension(format!("tmp{:?}", std::thread::current().id()).replace(['(', ')'], ""));
         if std::fs::write(&tmp, &bytes).is_err() || std::fs::rename(&tmp, &p).is_err() {
             let _ = std::fs::remove_file(&tmp);
             return;
         }
         self.writes.fetch_add(1, Ordering::Relaxed);
-        let over = {
-            let mut t = self.total.lock().unwrap_or_else(|e| e.into_inner());
-            let total = t.get_or_insert(0);
-            *total += bytes.len() as u64;
-            *total > self.budget()
-        };
+        *used = used.saturating_sub(old_len).saturating_add(bytes.len() as u64);
+        let over = *used > self.budget();
+        drop(total);
         if over {
             self.prune();
         }

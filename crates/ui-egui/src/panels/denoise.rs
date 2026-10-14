@@ -35,6 +35,8 @@ pub struct Ui {
     /// Models the user pressed Download for that have not been installed yet.
     dl_watch: Vec<String>,
     list: Option<(u64, f64, Value)>,
+    /// Why the last file picked with Install from file… was refused, shown under the button.
+    rejected: Option<String>,
 }
 
 /// Called every frame: keeps the engine's denoise work going and asks for a redraw when a photo's picture appears (the
@@ -247,9 +249,17 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     register(ui.ctx(), "denoise:installFile", r.rect);
     if r.clicked()
         && let Some(path) = app.services.pick_denoise_model.as_mut().and_then(|f| f().into_iter().next())
-        && let Ok(info) = app.run("denoise.models.inspect", json!({"path": path}))
     {
-        app.ui.dialog = Some(crate::state::Dialog::DenoiseModel { info, accepted: false });
+        match app.session.execute("denoise.models.inspect", &json!({"path": path})) {
+            Ok(info) => {
+                app.caches.denoise.rejected = None;
+                app.ui.dialog = Some(crate::state::Dialog::DenoiseModel { info, accepted: false });
+            }
+            Err(e) => app.caches.denoise.rejected = Some(plain(&e)),
+        }
+    }
+    if let Some(why) = &app.caches.denoise.rejected {
+        hint(ui, t, why);
     }
     if all.is_empty() {
         hint(ui, t, "Install your own ONNX model with denoise-model.json beside it. This build offers no model downloads.");
@@ -548,6 +558,14 @@ pub fn install(app: &mut LightcraftApp, info: &Value, accepted: bool) -> Result<
         app.ui.dialog = Some(crate::state::Dialog::Settings { tab: "denoise".into() });
     }
     r
+}
+
+/// What an engine error says, without the command it came from (the install job's errors read the same way).
+fn plain(e: &lightcraft_engine::EngineError) -> String {
+    match e {
+        lightcraft_engine::EngineError::BadParams { msg, .. } => msg.clone(),
+        other => other.to_string(),
+    }
 }
 
 /// "1 photo" / "3 photos": the count with the right noun.

@@ -466,10 +466,18 @@ pub fn launch_path(arg: &str, cwd: Option<&Path>, home: Option<&Path>, dcim: imp
 
 /// Probe files (headers + content hash) as an import would.
 pub(crate) fn probe_paths(s: &Session, paths: &[String]) -> Vec<Result<ProbeInfo, String>> {
-    probe_all(s.media.file_probe.as_ref(), paths, &ScanProgress::default())
+    let progress = ScanProgress::default();
+    probe_all(s.media.file_probe.as_ref(), paths, &progress.done, &progress.cancel)
 }
 
-fn probe_all(probe: Option<&crate::media::FileProbe>, paths: &[String], progress: &ScanProgress) -> Vec<Result<ProbeInfo, String>> {
+/// Probe `paths` (several at once), counting each in `done`. Stops before the next file once
+/// `cancel` is set: the files not reached come back as errors.
+fn probe_all(
+    probe: Option<&crate::media::FileProbe>,
+    paths: &[String],
+    done: &std::sync::atomic::AtomicUsize,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Vec<Result<ProbeInfo, String>> {
     use std::sync::atomic::Ordering::Relaxed;
     let Some(probe) = probe.cloned() else {
         return paths
@@ -497,11 +505,11 @@ fn probe_all(probe: Option<&crate::media::FileProbe>, paths: &[String], progress
                             if i >= paths.len() {
                                 break;
                             }
-                            if progress.cancel.load(Relaxed) {
+                            if cancel.load(Relaxed) {
                                 break;
                             }
                             let r = probe(&paths[i]);
-                            progress.done.fetch_add(1, Relaxed);
+                            done.fetch_add(1, Relaxed);
                             out.lock().unwrap_or_else(|e| e.into_inner())[i] = Some(r);
                         }
                     });
@@ -513,11 +521,11 @@ fn probe_all(probe: Option<&crate::media::FileProbe>, paths: &[String], progress
     paths
         .iter()
         .map(|p| {
-            if progress.cancel.load(Relaxed) {
+            if cancel.load(Relaxed) {
                 return Err("cancelled".into());
             }
             let r = probe(p);
-            progress.done.fetch_add(1, Relaxed);
+            done.fetch_add(1, Relaxed);
             r
         })
         .collect()
@@ -620,7 +628,7 @@ pub fn scan_with(mut input: ScanInput, paths: &[String], progress: &ScanProgress
         .collect();
     let missing: Vec<String> = todo.iter().zip(&cached).filter(|(_, c)| c.is_none()).map(|(f, _)| f.clone()).collect();
     progress.done.store(todo.len() - missing.len(), Relaxed);
-    let mut fresh = probe_all(input.probe.as_ref(), &missing, progress).into_iter();
+    let mut fresh = probe_all(input.probe.as_ref(), &missing, &progress.done, &progress.cancel).into_iter();
     let probed: Vec<Result<ProbeInfo, String>> =
         cached.into_iter().map(|c| c.map(Ok).unwrap_or_else(|| fresh.next().unwrap_or_else(|| Err("not probed".into())))).collect();
     crate::memory::release();
@@ -641,6 +649,8 @@ pub fn scan_with(mut input: ScanInput, paths: &[String], progress: &ScanProgress
             Some(Ok(info)) => {
                 (c.format, c.kind, c.width, c.height, c.file_size, c.captured) =
                     (info.format.clone(), info.kind, info.width, info.height, info.file_size, info.captured.clone());
+                // as the import will date it (a sidecar's date, when there is one, still wins there)
+                c.captured = c.captured.or_else(|| info.file_modified.clone());
                 c.preview_only = info.preview_only.clone();
                 if let Some(h) = &info.content_hash {
                     match seen_hash.get(h) {
@@ -705,6 +715,10 @@ pub struct ImportJob {
     /// Files found so far (folders expanded) and handled so far, for progress.
     pub total: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub done: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Of those, the files that have to be read first (not probed by a preceding scan) and the
+    /// ones read so far: the step before they are handled.
+    pub read_total: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    pub read_done: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// The outcome of [`ImportJob::prepare`] for one batch, in file order.
@@ -857,6 +871,8 @@ impl ImportJob {
             now: (s.clock)(),
             total: Default::default(),
             done: Default::default(),
+            read_total: Default::default(),
+            read_done: Default::default(),
         })
     }
 
@@ -917,8 +933,10 @@ impl ImportJob {
             })
             .collect();
         let missing: Vec<String> = todo.iter().zip(&cached).filter(|(_, c)| c.is_none()).map(|(f, _)| f.clone()).collect();
-        let progress = ScanProgress::default();
-        let mut fresh = probe_all(self.probe.as_ref(), &missing, &progress).into_iter();
+        // Reading the files is the slow part of adding them where they are: it is counted on its
+        // own, and `cancel` stops it too (a large library takes long enough to want both).
+        self.read_total.fetch_add(missing.len(), Relaxed);
+        let mut fresh = probe_all(self.probe.as_ref(), &missing, &self.read_done, cancel).into_iter();
         let probed: Vec<Result<ProbeInfo, String>> =
             cached.into_iter().map(|c| c.map(Ok).unwrap_or_else(|| fresh.next().unwrap_or_else(|| Err("not probed".into())))).collect();
         crate::memory::release();
@@ -973,6 +991,10 @@ impl ImportJob {
             });
             if info.captured.is_none() {
                 info.captured = sidecar.as_ref().and_then(|sc| sc.captured.clone());
+            }
+            // no date in the file or its sidecar: the file's own date, as Lightroom does
+            if info.captured.is_none() {
+                info.captured = info.file_modified.clone();
             }
             let stored = match (mode, &self.copy_root) {
                 (ImportMode::Copy | ImportMode::Move, Some(root))
@@ -1497,5 +1519,52 @@ mod prepared_tests {
         prepared.revalidate_add(&s);
         assert!(matches!(prepared.items.first(), Some(PreparedItem::Duplicate { reason: "path", .. })));
         assert!(matches!(prepared.items.get(1), Some(PreparedItem::Ready(_))));
+    }
+
+    fn unread_paths(n: usize) -> Vec<String> {
+        (0..n).map(|i| std::env::temp_dir().join(format!("lightcraft-probe-progress-{i}.jpg")).to_string_lossy().into()).collect()
+    }
+
+    /// Reading the files of a large import (a Lightroom catalog's originals) reported nothing:
+    /// the progress stood still at "14 of 24554" for as long as it took.
+    #[test]
+    fn prepare_counts_the_files_it_reads() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let mut s = Session::new();
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (seen_in_probe, done_in_probe) = (seen.clone(), std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)));
+        let mut job = ImportJob::new(&mut s, ImportOptions { mode: ImportMode::Add, ..ImportOptions::default() }).unwrap();
+        let (done, last) = (job.read_done.clone(), done_in_probe.clone());
+        job.probe = Some(std::sync::Arc::new(move |_: &str| {
+            seen_in_probe.fetch_add(1, Relaxed);
+            last.fetch_max(done.load(Relaxed), Relaxed);
+            Ok(ProbeInfo { format: "JPEG".into(), ..ProbeInfo::default() })
+        }));
+        let prepared = job.prepare(&unread_paths(40), &std::sync::atomic::AtomicBool::new(false));
+        assert_eq!(prepared.items.len(), 40);
+        assert_eq!(seen.load(Relaxed), 40);
+        assert!(done_in_probe.load(Relaxed) > 0, "progress moves while files are read");
+        assert_eq!((job.read_done.load(Relaxed), job.read_total.load(Relaxed)), (40, 40), "every file read is counted");
+        assert_eq!((job.done.load(Relaxed), job.total.load(Relaxed)), (40, 40), "handling them is counted on its own");
+    }
+
+    /// Cancel had no effect until every file had been read.
+    #[test]
+    fn cancel_stops_reading_files() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let mut s = Session::new();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut job = ImportJob::new(&mut s, ImportOptions { mode: ImportMode::Add, ..ImportOptions::default() }).unwrap();
+        let (seen_in_probe, cancel_in_probe) = (seen.clone(), cancel.clone());
+        job.probe = Some(std::sync::Arc::new(move |_: &str| {
+            seen_in_probe.fetch_add(1, Relaxed);
+            cancel_in_probe.store(true, Relaxed);
+            Ok(ProbeInfo { format: "JPEG".into(), ..ProbeInfo::default() })
+        }));
+        let prepared = job.prepare(&unread_paths(400), &cancel);
+        // at most the files the (up to 8) readers had already started
+        assert!(seen.load(Relaxed) <= 8, "read {} files after cancel", seen.load(Relaxed));
+        assert!(prepared.items.is_empty());
     }
 }

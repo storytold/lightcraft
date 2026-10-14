@@ -140,6 +140,24 @@ fn png_metadata_and_gray_alpha() {
     assert!((a - 128.0 / 255.0).abs() < 1e-6);
 }
 
+/// The working image has no alpha: transparency is flattened onto white, in linear light (issue #1212:
+/// transparent areas, stored black, rendered black).
+#[test]
+fn png_transparency_develops_on_white() {
+    // opaque red, transparent black (as most encoders store it), half-transparent red
+    let data = [200, 40, 40, 255, 0, 0, 0, 0, 200, 40, 40, 128];
+    let bytes = encode_png(&EncodeImage::new(3, 1, 4, Samples::U8(&data)), &EncodeMeta::default()).unwrap();
+    let d = decode(&bytes, DecodeOptions::default()).unwrap();
+    assert!(d.has_alpha);
+    let opaque = encode_png(&EncodeImage::new(1, 1, 3, Samples::U8(&[200, 40, 40])), &EncodeMeta::default()).unwrap();
+    let red = decode(&opaque, DecodeOptions::default()).unwrap().to_working().get(0, 0);
+    let w = d.to_working();
+    let a = 128.0 / 255.0;
+    for (got, want) in [(w.get(0, 0), red), (w.get(1, 0), [1.0; 3]), (w.get(2, 0), red.map(|c| a * c + (1.0 - a)))] {
+        assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-5), "{got:?} != {want:?}");
+    }
+}
+
 #[test]
 fn p3_icc_to_working() {
     let icc = write_named(NamedSpace::DisplayP3);

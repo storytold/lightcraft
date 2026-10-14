@@ -32,10 +32,16 @@ fn a_preview_reads_only_the_header_and_the_preview() {
         read.total,
         frac * 100.0,
         elapsed.as_secs_f64(),
-        if read.header_path { " [header path]" } else { " [whole file]" }
+        if read.planned {
+            " [plan]"
+        } else if read.header_path {
+            " [header path]"
+        } else {
+            " [whole file]"
+        }
     );
 
-    assert!(read.header_path, "the header path must answer for a raw whose pointer is in its header");
+    assert!(read.header_path, "the header or the plan must answer for a raw whose preview is not the whole file");
     assert_eq!(read.total, file_len, "the report covers the whole file");
     assert!(frac < 0.5, "a preview must not cost most of the file: read {} of {} bytes", read.read, read.total);
     assert!(preview.starts_with(&[0xff, 0xd8]), "the preview bytes are a JPEG: {:?}", preview.get(..4));

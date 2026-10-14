@@ -5,6 +5,14 @@ The CR3 adapter reads the CRX Bayer track, `CMP1` compression descriptor,
 black/white levels and the default crop come from the file. A Dual Pixel delta
 track is never substituted for the primary Bayer track.
 
+The EOS R6 Mark III writes `ColorData` version 66, which keeps version 64's as-shot white balance (word 105) and
+black level (word 383) offsets. Measured on 33 files from 12 shoots (ISO 100–12800, 1/1250 s–25 s): the as-shot
+R, G, G, B quadruple is followed by its colour temperature (3271–7424 K across the shoots) and then the fixed
+preset table (Daylight 5200 K, Shade 7000 K, Cloudy 6000 K, Tungsten 3200 K, ...), and the black levels equal the
+masked-column levels in every file (512 at low ISO, 2047–2048 above). Word 661 holds 14351 or 13995, but it is not
+the clipping point: highlights pile up at 16383 and run smoothly through the range above 14351, so version 66
+takes its white level from the data.
+
 The in-camera aspect ratio (3:2, 4:3, 16:9, 1:1) is not applied to the sensor data. The maker note's
 `AspectInfo` (tag `0x009a`: aspect code, cropped width, height, left, top) gives the shot's rectangle inside the
 recommended crop, and the decoder uses it as the default crop, so the developed image has the shape the photographer

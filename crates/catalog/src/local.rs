@@ -279,6 +279,7 @@ impl Op {
             | Op::SetVersions { id, .. }
             | Op::SetHistory { id, .. }
             | Op::PushHistory { id, .. }
+            | Op::SetHistoryCursor { id, .. }
             | Op::SetCaptured { id, .. }
             | Op::SetAnalysis { id, .. }
             | Op::SetFile { id, .. }

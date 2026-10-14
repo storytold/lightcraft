@@ -260,13 +260,13 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         match t.rx.try_recv() {
             Ok(r) => {
                 let Some(t) = app.merge.final_task.take() else { return };
-                let what = if t.options.command == "merge.panorama" {
+                let what = crate::i18n::tr(if t.options.command == "merge.panorama" {
                     "Panorama"
                 } else if t.options.command == "merge.hdrPanorama" {
                     "HDR panorama"
                 } else {
                     "HDR"
-                };
+                });
                 match r.map_err(lightcraft_engine::EngineError::Other).and_then(|out| app.session.finish_merge(&t.job, out)) {
                     Ok(v) => {
                         app.merge.last_result = Some(v);
@@ -327,7 +327,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
             let info = app.merge.preview.as_ref().map(|p| p.3.clone());
             if let Some(info) = info {
                 let txt = if opts.is_pano() {
-                    format!(
+                    crate::i18n::tr_format!(
                         "{} photos · {} · {:.0}° × {:.0}°",
                         info["used"].as_array().map_or(0, Vec::len),
                         info["projection"].as_str().unwrap_or(""),
@@ -349,7 +349,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
             if opts.is_pano() {
                 ui.label(egui::RichText::new(crate::i18n::tr("Projection")).color(t.text_label));
                 for (v, l) in [("auto", "Auto Select"), ("spherical", "Spherical"), ("cylindrical", "Cylindrical"), ("perspective", "Perspective")] {
-                    if ui.radio(opts.projection == v, l).clicked() {
+                    if ui.radio(opts.projection == v, crate::i18n::tr(l)).clicked() {
                         opts.projection = v.to_string();
                     }
                 }

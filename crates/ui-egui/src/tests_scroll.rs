@@ -208,3 +208,25 @@ fn filmstrip_shows_every_selected_photo() {
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(fill(&mut h, second), active);
 }
+
+/// A mouse wheel notch (a line) scrolls `theme::WHEEL_LINE_POINTS`, not egui's default 40: long
+/// panels took 50+ notches.
+#[test]
+fn a_wheel_notch_scrolls_a_hundred_points() {
+    let mut h = demo("photoGrid");
+    let canvas = h.app.canvas_rect.expect("grid canvas");
+    h.request("ui.move", json!({"x": canvas.center().x, "y": canvas.center().y}), T);
+    let y0 = grid_y(&h);
+    for _ in 0..3 {
+        h.events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, -1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.step();
+    }
+    idle(&mut h, 120);
+    let moved = grid_y(&h) - y0;
+    assert!(moved >= 3.0 * crate::theme::WHEEL_LINE_POINTS - 1.0, "three notches scrolled {moved} points");
+}

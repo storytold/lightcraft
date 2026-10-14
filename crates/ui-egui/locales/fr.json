@@ -761,6 +761,7 @@
   "Local folders": "Dossiers locaux",
   "Local library — no cloud account needed": "Bibliothèque locale : aucun compte cloud nécessaire",
   "Locate Missing File…": "Localiser le fichier manquant…",
+  "Locate Missing Files…": "Localiser les fichiers manquants…",
   "Locate Photo": "Localiser la photo",
   "Location": "Lieu",
   "Lock": "Verrouiller",
@@ -1317,6 +1318,8 @@
   "Show Luminance Map": "Afficher la carte de luminance",
   "Show Mask": "Afficher le masque",
   "Show Mask Overlay": "Afficher l'incrustation du masque",
+  "Show All Mask Overlays": "Afficher toutes les superpositions de masque",
+  "Show all overlays": "Afficher toutes les superpositions",
   "Show Mask Pins": "Afficher les épingles de masque",
   "Show Original": "Afficher l'original",
   "Show Photo Counts": "Afficher le nombre de photos",
@@ -1951,5 +1954,8 @@
   "Adding to Apple Photos…": "Ajout à Apple Photos…",
   "not added to Apple Photos (cancelled)": "non ajouté à Apple Photos (annulé)",
   "The first time, macOS asks whether LightCraft may control Photos.": "La première fois, macOS demande si LightCraft peut contrôler Photos.",
-  "Adding to Apple Photos": "Ajout à Apple Photos"
+  "Adding to Apple Photos": "Ajout à Apple Photos",
+  "No graphics processor found: LightCraft renders on the CPU, which is much slower. Details in Help → System Info.": "Aucun processeur graphique trouvé : LightCraft effectue le rendu sur le processeur, ce qui est beaucoup plus lent. Détails dans Aide → Informations système.",
+  "On NixOS, start it from `nix develop`.": "Sous NixOS, lancez-le depuis `nix develop`.",
+  "Files with the same content as another file in this import: only the first is imported.": "Fichiers au contenu identique à un autre fichier de cette importation : seul le premier est importé."
 }

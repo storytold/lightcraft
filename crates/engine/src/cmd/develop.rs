@@ -1079,15 +1079,47 @@ pub fn specs() -> Vec<CommandSpec> {
             let id = active(s, "history.clear")?;
             let d = s.develop_of(id).unwrap_or_default();
             let history = vec![lightcraft_catalog::HistoryStep { label: "Cleared History".into(), settings: d }];
-            s.commit("Clear History", Op::SetHistory { id, history })?;
+            s.commit("Clear History", Op::Batch { ops: vec![Op::SetHistory { id, history }, Op::SetHistoryCursor { id, cursor: None }] })?;
             ok()
         }),
-        cmd!("history.restore", "Go to History Step", [], None, "{index}", has_active, |s, p| {
-            let id = active(s, "history.restore")?;
-            let i = f64_req(p, "index", "history.restore")? as usize;
-            let st = s.catalog.photo(id).and_then(|ph| ph.history.get(i).cloned()).ok_or_else(|| bad("history.restore", "no such step"))?;
-            s.set_develop(id, (*st.settings).clone(), &format!("History: {}", st.label))?;
-            ok()
+        cmd!(
+            "history.restore",
+            "Go to History Step",
+            [],
+            None,
+            "{index} — loads that step's settings and moves the History cursor there; later steps stay listed until a new edit",
+            has_active,
+            |s, p| {
+                let c = "history.restore";
+                let id = active(s, c)?;
+                let i = f64_req(p, "index", c)?;
+                if !(i.is_finite() && i >= 0.0) {
+                    return Err(bad(c, "no such step"));
+                }
+                go_to_history_step(s, c, id, i as usize)
+            }
+        ),
+        cmd!("history.previous", "Previous History Step", [], None, "{} — steps the History cursor back one step", has_history_before, |s, _| {
+            let c = "history.previous";
+            let id = active(s, c)?;
+            let i = s
+                .catalog
+                .photo(id)
+                .and_then(|ph| ph.history_index())
+                .and_then(|i| i.checked_sub(1))
+                .ok_or_else(|| bad(c, "at the first History step"))?;
+            go_to_history_step(s, c, id, i)
+        }),
+        cmd!("history.next", "Next History Step", [], None, "{} — steps the History cursor forward one step", has_history_after, |s, _| {
+            let c = "history.next";
+            let id = active(s, c)?;
+            let ph = s.catalog.photo(id).ok_or_else(|| bad(c, "no photo"))?;
+            let i = ph
+                .history_index()
+                .map(|i| i.saturating_add(1))
+                .filter(|i| *i < ph.history.len())
+                .ok_or_else(|| bad(c, "at the latest History step"))?;
+            go_to_history_step(s, c, id, i)
         }),
         // ---- interactions (slider drags, brush strokes)
         cmd!("develop.beginInteraction", "Begin Interaction", [], None, "{label}", has_active, |s, p| {
@@ -1103,4 +1135,33 @@ pub fn specs() -> Vec<CommandSpec> {
             ok()
         }),
     ]
+}
+
+/// Load History step `i` of photo `id` and put the cursor there, without adding a step: the later
+/// steps stay listed (one undo step).
+fn go_to_history_step(s: &mut Session, c: &str, id: PhotoId, i: usize) -> Result<Value> {
+    let ph = s.catalog.photo(id).ok_or_else(|| bad(c, "no photo"))?;
+    let st = ph.history.get(i).cloned().ok_or_else(|| bad(c, "no such step"))?;
+    let cursor = (i.saturating_add(1) < ph.history.len()).then_some(i);
+    let label = format!("History: {}", st.label);
+    let edited = Some((s.clock)());
+    s.commit(
+        &label,
+        Op::Batch { ops: vec![Op::SetDevelop { id, settings: st.settings, label: label.clone(), edited }, Op::SetHistoryCursor { id, cursor }] },
+    )?;
+    ok()
+}
+
+fn has_history_before(s: &Session) -> std::result::Result<(), String> {
+    let at = s.active().and_then(|id| s.catalog.photo(id)).and_then(|p| p.history_index());
+    if at.is_some_and(|i| i > 0) { Ok(()) } else { Err("at the first History step".into()) }
+}
+
+fn has_history_after(s: &Session) -> std::result::Result<(), String> {
+    let photo = s.active().and_then(|id| s.catalog.photo(id));
+    if photo.is_some_and(|p| p.history_index().is_some_and(|i| i.saturating_add(1) < p.history.len())) {
+        Ok(())
+    } else {
+        Err("at the latest History step".into())
+    }
 }

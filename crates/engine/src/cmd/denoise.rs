@@ -303,9 +303,20 @@ fn inspect(s: &mut Session, p: &Value) -> Result<Value> {
     if !src.extension().is_some_and(|e| e.eq_ignore_ascii_case("onnx")) {
         return Err(bad(C, "choose an .onnx file with denoise-model.json beside it"));
     }
-    let bytes = read_capped(&src.with_file_name("denoise-model.json"), MAX_MANIFEST_BYTES)
-        .ok_or_else(|| bad(C, "denoise-model.json is missing or too large"))?;
-    let m = manifest::parse(&bytes).map_err(|e| bad(C, e.to_string()))?;
+    let sibling = src.with_file_name("denoise-model.json");
+    let Some(bytes) = read_capped(&sibling, MAX_MANIFEST_BYTES) else {
+        let why = if sibling.is_file() {
+            "denoise-model.json could not be read or is too large"
+        } else if src.with_file_name("model.json").is_file() {
+            // other apps ship their models with a model.json of their own (#1381)
+            "No denoise-model.json beside this .onnx file. The model.json there is another app's description, which LightCraft \
+             does not read: it needs its own denoise-model.json (see docs/denoise.md)"
+        } else {
+            "No denoise-model.json beside this .onnx file: LightCraft needs one that says how to use the model (see docs/denoise.md)"
+        };
+        return Err(bad(C, why));
+    };
+    let m = manifest::parse(&bytes).map_err(|e| bad(C, format!("denoise-model.json: {e} (see docs/denoise.md)")))?;
     let dir = models_dir(s, C)?;
     Ok(json!({"kind": "model", "domain": "denoise", "path": path, "fileName": src.file_name().map(|n| n.to_string_lossy()), "model": m,
         "sizeBytes": std::fs::metadata(src).ok().map(|m| m.len()), "alreadyInstalled": dir.join(&m.id).join("model.onnx").is_file()}))

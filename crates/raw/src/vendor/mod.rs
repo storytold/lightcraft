@@ -65,6 +65,14 @@ pub(crate) fn black_from_columns(data: &[u16], width: usize, cols: Range<usize>,
     BlackLevel { repeat_rows: 2, repeat_cols: 2, values: (0..4).map(|i| (sum[i] / n[i] as f64) as f32).collect(), delta_h: vec![], delta_v: vec![] }
 }
 
+/// Samples of up to 512 evenly spaced rows of the active area, for [`white_from_data`]: the borders can hold
+/// their own saturated runs (0xffff junk on RW2, masked rows at 16383 on some Canon CR2s). The step is odd so both
+/// row parities, and with them every CFA site, are read.
+pub(crate) fn active_rows(data: &[u16], w: usize, a: Rect) -> Vec<u16> {
+    let step = (a.height / 512).max(1) | 1;
+    (a.y..a.y + a.height).step_by(step).filter_map(|y| data.get(y * w + a.x..y * w + a.x + a.width)).flatten().copied().collect()
+}
+
 /// White level estimate: the saturation plateau if a noticeable number of samples sit at the maximum value,
 /// otherwise the full `bits` range. A few stray samples above the plateau (hot pixels, e.g. on a Canon EOS 70D
 /// CR2) don't hide it.
@@ -137,6 +145,15 @@ mod tests {
 
     /// A Canon EOS 70D CR2 saturates at 13583 but has a handful of samples up to 14426 (out of ~20M): the plateau
     /// is still found instead of falling back to 16383 (≈0.3 EV too dark, highlights never seen as clipped).
+    /// A plateau on the blue sites alone (odd rows) is still found: an even row step would read one row parity only.
+    #[test]
+    fn active_rows_reads_both_row_parities() {
+        let n = 2048;
+        let d: Vec<u16> = (0..n * n).map(|i| if (i / n) % 2 == 1 && i % 2 == 1 { 15000 } else { (i % 10000) as u16 }).collect();
+        let w = white_from_data(&active_rows(&d, n, Rect::new(0, 0, n, n)), 14);
+        assert!((14900.0..=15000.0).contains(&w), "{w}");
+    }
+
     #[test]
     fn white_plateau_with_strays_above() {
         let mut d: Vec<u16> = (0..100_000).map(|i| (2048 + i % 10000) as u16).collect();

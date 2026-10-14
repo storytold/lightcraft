@@ -455,6 +455,21 @@ fn hdr_avif_export_is_pq_rec2020() {
     assert!(nclx(&sdr.bytes).is_none_or(|c| c[3] != 16));
 }
 
+#[test]
+fn hdr_avif_export_hlg() {
+    let mut s = Session::with_demo();
+    let id = sunset(&mut s);
+    let o = ExportOptions::from_json(&json!({"longEdge": 160, "format": "avif", "hdr": true, "hdrTransfer": "hlg", "quality": 70}));
+    assert_eq!(o.hdr_transfer, crate::export::HdrCurve::Hlg);
+    assert_eq!(o.to_json()["hdrTransfer"], "hlg");
+    s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 2})).unwrap();
+    let hdr = export_photo(&mut s, id, &o, 1).unwrap();
+    // nclx: BT.2020 primaries (9), HLG (18), BT.2020 NCL (9), full range; no content light level box
+    let i = hdr.bytes.windows(4).position(|w| w == b"nclx").expect("colr nclx box");
+    assert_eq!(hdr.bytes[i + 4..i + 11].to_vec(), vec![0, 9, 0, 18, 0, 9, 0x80]);
+    assert!(!hdr.bytes.windows(4).any(|w| w == b"clli"));
+}
+
 /// "Remove location info" holds for the file-copying formats too: the sidecar and the DNG's
 /// packet carry no location, and an original that embeds GPS is refused rather than copied.
 #[test]

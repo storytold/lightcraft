@@ -314,7 +314,7 @@ LightCraft is young and moving fast: **alpha**. **Where we honestly stand** (det
   - **camera colour calibration:** Sony, Nikon, Panasonic, Fujifilm and Canon CR3 raws have guarded estimates from their camera JPEGs, with built-in ILCE-7CR, ILCE-7M4, X-H2S and X-T4 profiles; measured calibration is missing, and other raws or rejected fits retain a neutral matrix;
   - **compressed Olympus raws and unsupported CR3 variants:** these use embedded JPEG previews when present. Fujifilm lossless/lossy compressed RAF now decodes sensor data; [verification and existing-library reload instructions](docs/raf-compression.md);
   - **AI masks and denoise:** subject and sky selection are classical heuristics;
-  - **network libraries:** a preview reads the raw's header and its embedded JPEG only (56.5 MB → 5.9 MB, 10 s → 1 s on the test share), but the *developed* picture still needs the sensor data over the wire; see [docs/raw-preview-reads.md](docs/raw-preview-reads.md);
+  - **network libraries:** a preview reads the raw's header — or, for a CR3 or a TIFF raw whose preview tag sits past it, exactly the ranges the sparse planner names — and its embedded JPEG only (56.5 MB → 5.9 MB, 10 s → 1 s on the test share), but the *developed* picture still needs the sensor data over the wire; see [docs/raw-preview-reads.md](docs/raw-preview-reads.md);
   - **on-screen HDR display, video and the Classic Print / Book / Map modules.**
 - **What's next:** see [the ranked gaps](docs/gaps.md) and [the roadmap](docs/roadmap.md).
 
@@ -408,6 +408,9 @@ nix run github:storytold/lightcraft                    # the desktop app
 nix build github:storytold/lightcraft                  # → ./result/bin/{lightcraft,lightcraft-cli}
 nix develop github:storytold/lightcraft                # rust toolchain + native deps + fonts
 ```
+
+On NixOS, run a `cargo` build from `nix develop`: outside it the app can't find `libvulkan.so.1`, finds no GPU and
+renders on the CPU, much more slowly (it says so once at start-up). `nix run` and `nix build` set the path themselves.
 
 In a flake configuration (NixOS, home-manager, nix-darwin):
 

@@ -82,3 +82,53 @@ fn filmstrip_click_replaces_the_active_side_in_compare() {
     let r = h.request("engine.execute", json!({"command": "compare.set", "params": {"id": others[0], "side": "left"}}), T);
     assert_eq!(r["ok"], false, "unknown side is an error: {r}");
 }
+
+/// Compare is where sharpness is judged: while a pane's render of an edit is on its way, that pane
+/// says "Rendering…" once it has lasted a moment, and stops when the render lands.
+#[test]
+fn a_compare_pane_says_rendering_while_its_edit_renders() {
+    use std::{cell::Cell, rc::Rc};
+    let pill = |h: &Headless| h.app.widgets.iter().any(|(w, _)| w.starts_with("compare:rendering:"));
+    let mut h = demo();
+    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
+    let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(!pill(&h), "finished renders");
+    let open = Rc::new(Cell::new(false));
+    h.app.renderer.set_offload(Box::new(crate::headless::RenderGate::new(open.clone())));
+    h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.5}}), T);
+    for _ in 0..12 {
+        h.step();
+    }
+    assert!(!pill(&h), "not at once");
+    for _ in 0..30 {
+        h.step();
+    }
+    assert!(pill(&h), "the edited pane's render is on its way");
+    open.set(true);
+    assert!(h.step_until(SETTLE, |h| !pill(h)), "gone once the render lands");
+}
+
+/// A pane whose render fails behind its thumbnail says so, as the loupe does, instead of showing
+/// the thumbnail as if it were the photo.
+#[test]
+fn a_compare_pane_says_when_its_render_failed() {
+    use crate::render::Slot;
+    use std::{cell::Cell, rc::Rc};
+    let failed = |h: &Headless| h.app.widgets.iter().any(|(w, _)| w.starts_with("compare:renderFailed:"));
+    let mut h = demo();
+    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
+    h.request("engine.execute", json!({"command": "view.compare"}), T);
+    h.settle(SETTLE);
+    assert!(!failed(&h));
+    let open = Rc::new(Cell::new(true));
+    h.app.renderer.set_offload(Box::new(crate::headless::RenderGate::failing(open, |s| matches!(s, Slot::Compare(_)))));
+    // another photo in the second pane: its render fails, its thumbnail stays up
+    let r = h.request("engine.execute", json!({"command": "compare.set", "params": {"id": vis[2], "side": "candidate"}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.step_until(SETTLE, failed), "the failure is said");
+    assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("compare:rendering:")));
+}

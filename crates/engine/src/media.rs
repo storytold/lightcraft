@@ -62,7 +62,7 @@ impl SettingsHashes {
 }
 
 /// Bump when the pipeline's output changes, to invalidate cached thumbnails.
-pub const RENDER_CACHE_VERSION: u64 = 61;
+pub const RENDER_CACHE_VERSION: u64 = 62;
 
 /// Thumbnails render at one of these long edges (so window/cell size changes reuse the cache).
 pub const THUMB_SIZES: [usize; 4] = [128, 256, 384, 512];
@@ -223,6 +223,13 @@ impl DecodedSource {
 #[derive(Clone)]
 pub enum SourceRef {
     Loaded(Box<DecodedSource>),
+    /// A larger decoded source of the photo, fitted to `max_edge` by the worker: the thumbnail of
+    /// the photo open in the loupe is cut from its preview-level source instead of decoding the
+    /// file again (a second or more for a 64 MP raw).
+    Fit {
+        from: Box<DecodedSource>,
+        max_edge: usize,
+    },
     Demo {
         scene: Box<lightcraft_scenes::Scene>,
         max_edge: usize,
@@ -251,6 +258,13 @@ impl SourceRef {
     pub fn load_source(&self) -> Result<DecodedSource, String> {
         let image = match self {
             SourceRef::Loaded(a) => return Ok((**a).clone()),
+            SourceRef::Fit { from, max_edge } => {
+                if from.image.width.max(from.image.height) <= *max_edge {
+                    return Ok((**from).clone());
+                }
+                let image = lightcraft_raster::resample::fit(&from.image, *max_edge, *max_edge, lightcraft_raster::resample::Filter::Box);
+                return Ok(DecodedSource { image: Arc::new(image), denoised: None, ..(**from).clone() });
+            }
             SourceRef::Demo { scene, max_edge } => crate::demo::scene_pixels(scene, *max_edge)?,
             SourceRef::File { path, max_edge, loader, fallback, denoise } => {
                 let plain = || match loader {
@@ -314,6 +328,8 @@ pub struct MediaCache {
     full: Vec<(PhotoId, DecodedSource, u64)>,
     /// How many full-resolution originals to keep (LRU, at least one).
     full_capacity: usize,
+    /// The photo the loupe shows ([`Self::set_on_screen`]): its original is not evicted for the budget.
+    on_screen: Option<PhotoId>,
     /// How many previews to keep (LRU).
     pub preview_capacity: usize,
     /// Bytes all decoded sources and rendered previews in memory may take together (the cache
@@ -391,6 +407,7 @@ impl Default for MediaCache {
             previews: Vec::new(),
             full: Vec::new(),
             full_capacity: 1,
+            on_screen: None,
             preview_capacity: 0,
             budget,
             file_loader: None,
@@ -447,6 +464,16 @@ impl MediaCache {
         self.trim_full();
     }
 
+    /// The photo the loupe shows (the frontend sets it every frame; `None` in other views). Its original stays
+    /// even over budget: a 64 MP original (797 MB as linear float) alone exceeds the default share, and evicting it
+    /// made every pan of a zoomed view decode the raw again. Showing another photo lets it go at once.
+    pub fn set_on_screen(&mut self, id: Option<PhotoId>) {
+        if self.on_screen != id {
+            self.on_screen = id;
+            self.enforce_budget();
+        }
+    }
+
     fn trim_full(&mut self) {
         while self.full.len() > self.full_capacity {
             let oldest = self.full.iter().enumerate().min_by_key(|(_, e)| e.2).map(|(i, _)| i).unwrap_or(0);
@@ -475,15 +502,20 @@ impl MediaCache {
 
     /// Evict least recently used entries across the source caches and the rendered previews
     /// until they fit the budget. The newest preview-level source (the photo on screen, or the
-    /// one just decoded) is never evicted here.
+    /// one just decoded) is never evicted here, nor is the original of the photo on screen
+    /// ([`Self::set_on_screen`]).
     pub fn enforce_budget(&mut self) {
-        let mut held = self.held();
+        // The on-screen original is never evicted here, so it does not count either: counted, a 64 MP original (760 MiB)
+        // nearly fills the default share (768 MiB) alone and everything else went instead — the photo's preview and
+        // thumbnail sources and the neighbours' were decoded again from the raw on every edit, zoom-out and step.
+        let pinned: usize = self.full.iter().filter(|e| Some(e.0) == self.on_screen).map(|e| e.1.bytes()).sum();
+        let mut held = self.held().saturating_sub(pinned);
         while held > self.budget {
             let newest_preview = self.previews.iter().map(|e| e.2).max();
             let candidates = [
                 self.thumbs.oldest_tick().map(|t| (t, 0)),
                 self.previews.iter().filter(|e| Some(e.2) != newest_preview).map(|e| e.2).min().map(|t| (t, 1)),
-                self.full.iter().map(|e| e.2).min().map(|t| (t, 2)),
+                self.full.iter().filter(|e| Some(e.0) != self.on_screen).map(|e| e.2).min().map(|t| (t, 2)),
                 self.rendered.oldest_tick().map(|t| (t, 3)),
             ];
             let Some((tick, which)) = candidates.into_iter().flatten().min() else { break };
@@ -624,6 +656,15 @@ impl MediaCache {
     fn source_ref_plain(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {
         if cached && let Some(a) = self.get_source(p.id, level) {
             return SourceRef::Loaded(Box::new(a));
+        }
+        // a thumbnail of a photo whose preview is decoded (the one in the loupe) is cut from it; not
+        // with a denoised picture, which the thumbnail would lose
+        if cached
+            && level == SourceLevel::Thumb
+            && self.denoise.spec(p.id).is_none()
+            && let Some(big) = self.get_source(p.id, SourceLevel::Preview)
+        {
+            return SourceRef::Fit { from: Box::new(big), max_edge: level.max_edge() };
         }
         // Procedural scenes have a nominal size: "full" is that size, not unbounded.
         let max_edge = level.max_edge().min(match (&p.source, level) {
@@ -803,7 +844,31 @@ impl RenderJob {
         self
     }
 
+    /// Render. A panic inside (a decoder or pipeline bug) is this job's failure: the view waiting
+    /// for it is told, instead of waiting forever on a worker that died (the pool doesn't replace
+    /// it, so a few such panics used to stop every render).
     pub fn run(self) -> RenderResult {
+        let failed = self.failed(String::new());
+        crate::guard::catch("the render", || self.run_unguarded()).unwrap_or_else(|e| RenderResult { rendered: Err(e), ..failed })
+    }
+
+    /// This job's result when it fails with `e`.
+    fn failed(&self, e: String) -> RenderResult {
+        RenderResult {
+            request_id: self.request_id,
+            source_key: self.source_key,
+            photo: self.photo,
+            level: self.level,
+            key: self.key,
+            rendered: Err(e),
+            gpu_fallback: None,
+            loaded: None,
+            quick: None,
+            display: None,
+        }
+    }
+
+    fn run_unguarded(self) -> RenderResult {
         if let Some((cache, key)) = &self.cache
             && let Some(img) = cache.get_at(self.cache_generation, *key)
         {
@@ -877,18 +942,7 @@ impl RenderJob {
                     display,
                 }
             }
-            Err(e) => RenderResult {
-                request_id: self.request_id,
-                source_key: self.source_key,
-                photo: self.photo,
-                level: self.level,
-                key: self.key,
-                rendered: Err(e),
-                gpu_fallback: None,
-                loaded: None,
-                quick: None,
-                display: None,
-            },
+            Err(e) => self.failed(e),
         }
     }
 }
@@ -976,7 +1030,25 @@ pub struct QuickJob {
 }
 
 impl QuickJob {
+    /// The stand-in, from the first source that has one. A panic inside is this job's failure
+    /// (see [`RenderJob::run`]).
     pub fn run(self) -> RenderResult {
+        let (request_id, photo, key) = (self.request_id, self.photo, self.key);
+        crate::guard::catch("the render", || self.run_unguarded()).unwrap_or_else(|e| RenderResult {
+            request_id,
+            source_key: None,
+            photo,
+            level: SourceLevel::Thumb,
+            key,
+            rendered: Err(e),
+            gpu_fallback: None,
+            loaded: None,
+            quick: None,
+            display: None,
+        })
+    }
+
+    fn run_unguarded(self) -> RenderResult {
         let (photo, key) = (self.photo, self.key);
         let request_id = self.request_id;
         let done = |rendered: Result<Rendered, String>, quick| RenderResult {
@@ -1479,6 +1551,10 @@ pub struct ProbeInfo {
     pub kind: MediaKind,
     pub file_size: u64,
     pub captured: Option<String>,
+    /// The file's modification time (ISO 8601, the clock of [`crate::import::system_clock`]): the
+    /// capture date of a file whose metadata has none, as Lightroom does (exports saved without
+    /// metadata would otherwise all land under "Unknown Date").
+    pub file_modified: Option<String>,
     pub meta: lightcraft_catalog::Meta,
     pub as_shot_wb: Option<(f64, f64)>,
     /// Hash of the file's bytes (hex), for duplicate detection. When it is a 32-digit
@@ -1587,6 +1663,31 @@ mod thumbnail_hash_tests {
         s.media.forget(PhotoId(1));
         s.accept(&old);
         assert_eq!(s.media.source_usage().0, 0);
+    }
+    /// A panic while rendering (here in the decoder) used to end the pool's worker thread without
+    /// an answer, so the view that asked showed "Rendering…" forever. It is the job's failure now,
+    /// for renders and for stand-ins, answering the request it came from.
+    #[test]
+    fn a_render_that_panics_fails_instead_of_never_answering() {
+        let mut s = session();
+        s.media.file_loader = Some(Arc::new(|_, _| panic!("decoder bug")));
+        let mut job = s.thumb_job(PhotoId(1), 256).unwrap();
+        job.request_id = 42;
+        let (key, level, source_key) = (job.key, job.level, job.source_key);
+        let r = job.run();
+        assert_eq!((r.request_id, r.photo, r.key, r.level, r.source_key), (42, PhotoId(1), key, level, source_key));
+        assert_eq!(r.rendered.err().as_deref(), Some("the render failed unexpectedly: decoder bug"));
+        let quick = QuickJob {
+            request_id: 7,
+            photo: PhotoId(1),
+            key: 9,
+            cached: Vec::new(),
+            embedded: Some(("x.arw".into(), Arc::new(|_: &str, _: usize| -> Option<Rgba8> { panic!("preview reader bug") }), 256)),
+            small: None,
+        };
+        let r = quick.run();
+        assert_eq!((r.request_id, r.key), (7, 9));
+        assert_eq!(r.rendered.err().as_deref(), Some("the render failed unexpectedly: preview reader bug"));
     }
 }
 
@@ -1793,6 +1894,45 @@ mod tests {
         assert!(m.has_source(PhotoId(3), SourceLevel::Full));
     }
 
+    // Given the on-screen original alone over the budget, the photo's other sources and its neighbour's stay
+    // (counted, it evicted them all: each edit decoded the raw again for the thumbnail and the whole-frame render)
+    #[test]
+    fn the_on_screen_original_does_not_evict_the_other_sources() {
+        let img = |w: usize| Arc::new(Rgb32f::new(w, w));
+        let mut m = MediaCache::default();
+        let mb = 1 << 20;
+        m.set_budget(20 * mb);
+        m.set_on_screen(Some(PhotoId(1)));
+        m.insert(PhotoId(1), SourceLevel::Preview, img(500));
+        m.insert(PhotoId(1), SourceLevel::Thumb, img(200));
+        m.insert(PhotoId(1), SourceLevel::Full, img(1500)); // 27 MB
+        m.insert(PhotoId(2), SourceLevel::Preview, img(500)); // a prefetched neighbour
+        for (id, level) in [(1, SourceLevel::Preview), (1, SourceLevel::Thumb), (1, SourceLevel::Full), (2, SourceLevel::Preview)] {
+            assert!(m.has_source(PhotoId(id), level), "{id} {level:?}");
+        }
+    }
+
+    // A 64 MP original (797 MB as linear float) is bigger than the default cache share (768 MiB):
+    // evicted on insert, every pan of a zoomed view decoded the raw again. The original of the photo
+    // on screen stays, whatever is decoded after it (prefetched neighbours), until another is shown.
+    #[test]
+    fn the_original_on_screen_stays_even_over_budget() {
+        let img = |w: usize| Arc::new(Rgb32f::new(w, w));
+        let mut m = MediaCache::default();
+        let mb = 1 << 20;
+        m.set_budget(20 * mb);
+        m.set_on_screen(Some(PhotoId(1)));
+        m.insert(PhotoId(1), SourceLevel::Preview, img(500));
+        m.insert(PhotoId(1), SourceLevel::Full, img(1500)); // 27 MB
+        assert!(m.has_source(PhotoId(1), SourceLevel::Full));
+        m.insert(PhotoId(2), SourceLevel::Preview, img(500)); // a prefetched neighbour
+        m.insert(PhotoId(3), SourceLevel::Thumb, img(100));
+        assert!(m.has_source(PhotoId(1), SourceLevel::Full));
+        m.set_on_screen(Some(PhotoId(2)));
+        assert!(!m.has_source(PhotoId(1), SourceLevel::Full));
+        assert!(m.held() <= 20 * mb, "{}", m.held());
+    }
+
     #[test]
     fn work_gate_waits_for_room() {
         use crate::memory::WorkGate;
@@ -1929,6 +2069,24 @@ mod tests {
         assert_eq!((a.width, a.height), (b.width, b.height));
         let mean = |i: &Rgba8| i.data.iter().map(|p| p[1] as f64).sum::<f64>() / i.data.len() as f64;
         assert!(mean(&a) > mean(&b) + 10.0, "two stops brighter after: {} vs {}", mean(&a), mean(&b));
+    }
+
+    /// The thumbnail of a photo whose preview-level source is decoded is cut from it: the file (here
+    /// one nothing can decode) is not read again.
+    #[test]
+    fn a_thumbnail_is_cut_from_the_decoded_preview() {
+        let mut s = crate::Session::new();
+        let p = Photo::new(PhotoId(1), Source::File { path: "/nowhere/a.ARW".into() }, "a.ARW", "ARW", 2400, 1600, "");
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p.clone()) }).unwrap();
+        s.media.insert(p.id, SourceLevel::Preview, Arc::new(Rgb32f::from_fn(2400, 1600, |x, _| [x as f32 / 2400.0, 0.5, 0.25])));
+        let job = s.thumb_job(p.id, 512).unwrap();
+        assert!(matches!(job.source, SourceRef::Fit { .. }));
+        let r = job.run();
+        let thumb = r.rendered.as_ref().unwrap();
+        assert_eq!((thumb.image.width, thumb.image.height), (512, 341));
+        s.accept(&r);
+        let cached = s.media.get(p.id, SourceLevel::Thumb).unwrap();
+        assert_eq!((cached.width, cached.height), (512, 341), "a thumbnail-sized source is kept, not the preview");
     }
 
     #[test]

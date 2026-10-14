@@ -99,7 +99,7 @@
 //! 1 and 3, and bit depths other than the ones above (no samples of any of them).
 
 use super::pef::{Bits, Huffman, diff};
-use super::white_from_data;
+use super::{active_rows, white_from_data};
 use crate::{BlackLevel, Cfa, ColorData, MAX_SAMPLES, Mode, Opcode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
 use lightcraft_geom::Orientation;
 use lightcraft_tiff::{ByteOrder, Ifd, Tiff, Value, tags as t};
@@ -495,12 +495,6 @@ fn fill_defects(data: &mut [u16], w: usize, area: Rect) {
             }
         }
     }
-}
-
-/// Samples of up to 512 evenly spaced rows of the active area (the borders hold junk such as 0xffff runs).
-fn active_rows(data: &[u16], w: usize, a: Rect) -> Vec<u16> {
-    let step = (a.height / 512).max(1);
-    (a.y..a.y + a.height).step_by(step).filter_map(|y| data.get(y * w + a.x..y * w + a.x + a.width)).flatten().copied().collect()
 }
 
 fn cfa(code: u16) -> Cfa {

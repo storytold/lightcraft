@@ -211,8 +211,9 @@ fn op_variants_are_versioned() {
             Op::SetKeyword { .. } => 5,
             Op::SetFolderRecord { .. } => 6,
             Op::SetAsShotWb { .. } => 7,
+            Op::SetHistoryCursor { .. } => 8,
         }
     }
-    let newest = since(&Op::SetAsShotWb { id: PhotoId(1), wb: None });
+    let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest, VERSION, "the newest op's version must be the current format version");
 }

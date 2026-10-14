@@ -25,7 +25,7 @@ const INTERNAL_ERROR: i64 = -32603;
 const RESOURCE_NOT_FOUND: i64 = -32002;
 
 const INSTRUCTIONS: &str = "LightCraft is a non-destructive photo library and raw developer (a Lightroom alternative). \
-Photos have integer ids; most editing acts on the *active* photo (tools that take `id` make that photo active first). \
+Photos have integer ids; most editing acts on the *active* photo (`set_develop`, `crop` and `export` with an explicit photo id end the current edit interaction, replace the selection with that one photo and make it active; `get_develop` and `render_photo` do not change the selection). \
 Typical loop: query_photos → select_photos (or pass id) → list_controls → set_develop {values: {\"light.exposure\": 0.5}} → \
 render_preview to look at the result → export. Positions (crop rects, mask points, brush strokes) are normalized image \
 coordinates 0..1 with the origin at the top-left. Every action is a command: command_list shows ids and parameter \

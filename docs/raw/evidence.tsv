@@ -31,6 +31,7 @@ Fujifilm	X-T4**	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
 Fujifilm	X-T5	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
 Fujifilm	X-T50	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
 Google	Pixel 2 XL	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
+Hasselblad	Lunar	verified	issue #1275: raw.pixls.us 4051 (a Sony NEX-7 ARW under Make HASSELBLAD) decodes from sensor data; black 512 and SR2SubIFD WB as on a NEX-7
 Leica	C (Typ 112)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
 Leica	D-Lux (Typ 109)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
 Leica	D-Lux 3	verified	PR #215: raw.pixls.us bulk check of every RW2 / RWL / RAW body
@@ -40,6 +41,7 @@ Leica	D-Lux 6	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leic
 Leica	D-Lux 7	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
 Leica	Digilux 2	verified	PR #215: raw.pixls.us bulk check of every RW2 / RWL / RAW body
 Leica	Digilux 3	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Leica	Q3	verified	recorded check 2026-10-11: 38 private Q3 DNGs (landscape and portrait) decoded from sensor data and developed at full size without error, mean CIE76 dE to the camera JPEG 6.3-13.9 at 400 px (not committed; docs/raw-parity.md)
 Leica	V-LUX (Typ 114)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
 Leica	V-LUX 1	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
 Leica	V-LUX 4	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format

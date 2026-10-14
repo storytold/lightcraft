@@ -858,6 +858,7 @@
   "Local folders": "本地文件夹",
   "Local library — no cloud account needed": "本地图库 — 无需云账户",
   "Locate Missing File…": "定位缺失的文件…",
+  "Locate Missing Files…": "定位缺失的文件…",
   "Locate Photo": "定位照片",
   "Location": "位置",
   "Long Edge": "长边",
@@ -1325,6 +1326,8 @@
   "Show Luminance Map": "显示明亮度图",
   "Show Mask": "显示蒙版",
   "Show Mask Overlay": "显示蒙版叠加",
+  "Show All Mask Overlays": "显示所有蒙版叠加",
+  "Show all overlays": "显示所有叠加",
   "Show Mask Pins": "显示蒙版图钉",
   "Show Original": "显示原图",
   "Show Photo Counts": "显示照片数量",
@@ -1658,6 +1661,8 @@
   "Install the SAM 3 Model": "安装 SAM 3 模型",
   "This build can't download the model yet. To install it by hand, put model.safetensors, vocab.json and merges.txt from Meta's facebook/sam3 in the folder above: Object and Describe work as soon as they are there.": "此版本尚无法下载模型。如需手动安装，请将 Meta 的 facebook/sam3 中的 model.safetensors、vocab.json 和 merges.txt 放入上方的文件夹：放入后即可使用“对象”和“描述”。",
   "Open Log Folder": "打开日志文件夹",
+  "Reading photos…": "正在读取照片…",
+  "Adding photos…": "正在添加照片…",
   "Back to this person": "返回此人",
   "AI Denoise": "AI 降噪",
   "AI Denoise Model": "AI 降噪模型",
@@ -1989,5 +1994,8 @@
   "Adding to Apple Photos…": "正在添加到 Apple 照片…",
   "not added to Apple Photos (cancelled)": "未添加到 Apple 照片（已取消）",
   "The first time, macOS asks whether LightCraft may control Photos.": "首次使用时，macOS 会询问是否允许 LightCraft 控制“照片”。",
-  "Adding to Apple Photos": "正在添加到 Apple 照片"
+  "Adding to Apple Photos": "正在添加到 Apple 照片",
+  "No graphics processor found: LightCraft renders on the CPU, which is much slower. Details in Help → System Info.": "未找到图形处理器：LightCraft 改用 CPU 渲染，速度会慢很多。详情见“帮助 → 系统信息”。",
+  "On NixOS, start it from `nix develop`.": "在 NixOS 上，请从 `nix develop` 启动。",
+  "Files with the same content as another file in this import: only the first is imported.": "与本次导入中另一个文件内容相同的文件：只导入第一个。"
 }

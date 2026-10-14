@@ -35,6 +35,7 @@ pub mod gaintable;
 pub mod highlight;
 #[cfg(feature = "jxl")]
 mod jxl;
+pub mod kelvin_presets;
 pub mod ljpeg;
 pub(crate) mod llvc;
 pub mod opcodes;
@@ -49,7 +50,7 @@ mod unpack;
 mod vendor;
 
 pub use demosaic::{Method, demosaic};
-pub use dngwrite::{DngCompression, DngWriteOptions, write_dng};
+pub use dngwrite::{DngCompression, DngWriteOptions, write_dng, write_rendered_dng};
 pub use lightcraft_color::Mat3;
 pub use lightcraft_geom::Orientation;
 pub use lightcraft_meta::Metadata;
@@ -191,7 +192,10 @@ pub fn probe(bytes: &[u8]) -> Option<RawFormat> {
     if make.starts_with("NIKON") && has_cfa {
         return Some(if t.all_ifds().len() > 1 { RawFormat::Nef } else { RawFormat::Nrw });
     }
-    if make.starts_with("SONY") && sony_raw {
+    // Hasselblad's Sony-built bodies (the Lunar is a NEX-7 inside) write a Sony ARW under their own Make. Sony's
+    // raw coding gives them away: compression 32767 or the raw IFD's tone-curve tag 0x7010, which no 3FR / FFF has
+    let sony_coded = || t.all_ifds().iter().any(|i| i.u16(lightcraft_tiff::tags::COMPRESSION) == Some(32767) || i.contains(0x7010));
+    if (make.starts_with("SONY") && sony_raw) || (make.starts_with("HASSELBLAD") && sony_coded()) {
         return Some(RawFormat::Arw);
     }
     if (make.starts_with("PENTAX") || make.starts_with("RICOH")) && pentax_raw {
@@ -210,10 +214,21 @@ pub fn probe(bytes: &[u8]) -> Option<RawFormat> {
     if dng::is_plain_cfa_tiff(&t, bytes) {
         return Some(RawFormat::CfaTiff);
     }
-    if has_cfa || thumbnail_shell(&t, bytes.len()).is_some() || is_preview_container(ifd0) {
+    if has_cfa || thumbnail_shell(&t, bytes.len()).is_some() || is_preview_container(ifd0) || is_leaf_mosaic(ifd0) {
         return Some(RawFormat::OtherTiff);
     }
     None
+}
+
+/// Leaf's private data block in IFD0, tag `0x8606` (`LeafData` in the ExifTool EXIF tag-name documentation, which
+/// says the Leaf tags "are found in .MOS images from Leaf digital camera backs").
+const LEAF_DATA: u16 = 0x8606;
+
+/// An uncompressed Leaf MOS: IFD0 is the 16-bit mosaic itself (compression 1, BlackIsZero, one sample per pixel),
+/// with no Make tag and no CFA photometric, so only Leaf's data block marks it as a raw (issue #1275). A rendered
+/// RGB image that kept the block stays an ordinary image.
+fn is_leaf_mosaic(ifd0: &lightcraft_tiff::Ifd) -> bool {
+    ifd0.contains(LEAF_DATA) && ifd0.u16(lightcraft_tiff::tags::SAMPLES_PER_PIXEL).unwrap_or(1) == 1
 }
 
 /// Whether the Exif maker note starts with the signature of the Pentax layouts (`AOC\0` or `PENTAX \0`).
@@ -601,6 +616,10 @@ pub struct ColorData {
     /// "Camera local tone mapping" option asks for it (`lightcraft_pipeline::local_tone`).
     #[serde(default)]
     pub profile: profile::ProfileLook,
+    /// The camera's white-balance presets at stated temperatures (Sony ARW), which give a raw without colour
+    /// matrices a Kelvin scale ([`kelvin_presets`]). Not a DNG tag: nothing else reads it.
+    #[serde(default)]
+    pub kelvin_presets: Option<kelvin_presets::KelvinPresets>,
 }
 
 /// A decoded raw image.
@@ -1070,6 +1089,66 @@ mod tests {
         let mut ifd = rgb_ifd(16, 12);
         ifd.set(t::COMPRESSION, Value::Short(vec![99]));
         assert_eq!(probe(&write(&[ifd])), Some(RawFormat::OtherTiff));
+    }
+
+    /// Issue #1275: an uncompressed Leaf MOS (Aptus 22) is a full-size 16-bit grey IFD0 with no Make tag; only Leaf's
+    /// data block (`0x8606`) says it is a raw. It must not import as a greyscale image of its mosaic. The same IFD
+    /// without the block, or an RGB image carrying it, stays an ordinary image.
+    #[test]
+    fn uncompressed_leaf_mos_is_a_raw() {
+        let mosaic = |leaf_data: bool| {
+            let mut ifd = IfdBuilder::new();
+            ifd.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
+            ifd.set(t::IMAGE_WIDTH, Value::Long(vec![16]));
+            ifd.set(t::IMAGE_LENGTH, Value::Long(vec![12]));
+            ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+            ifd.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![1]));
+            ifd.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::BLACK_IS_ZERO]));
+            ifd.set(t::COMPRESSION, Value::Short(vec![1]));
+            ifd.set_image(ImageData::Tiles { tile_width: 16, tile_height: 12, tiles: vec![vec![0x40; 16 * 12 * 2]] });
+            if leaf_data {
+                ifd.set(LEAF_DATA, Value::Undefined(b"PKTS\0\0\0\x01".to_vec()));
+            }
+            ifd
+        };
+        let bytes = TiffWriter::new(lightcraft_tiff::ByteOrder::Big, false).write(&[mosaic(true)]).unwrap();
+        assert_eq!(probe(&bytes), Some(RawFormat::OtherTiff));
+        assert!(matches!(decode(&bytes), Err(RawError::Unsupported(_))));
+        assert!(matches!(probe_info(&bytes), Err(RawError::Unsupported(_))));
+        assert_eq!(probe(&write(&[mosaic(false)])), None, "a 16-bit grey TIFF");
+        let mut rgb = rgb_ifd(16, 12);
+        rgb.set(LEAF_DATA, Value::Undefined(b"PKTS\0\0\0\x01".to_vec()));
+        assert_eq!(probe(&write(&[rgb])), None, "a rendered RGB image that kept the block");
+    }
+
+    /// Issue #1275: a Hasselblad Lunar is a Sony NEX-7 ARW under Make HASSELBLAD. Sony's raw coding (compression 32767
+    /// or the tone-curve tag `0x7010`) sends it to the ARW reader; a Hasselblad file without it does not go there.
+    #[test]
+    fn hasselblad_make_with_sony_raw_coding_is_arw() {
+        let file = |make: &str, compression: u16, tone_curve: bool| {
+            let mut raw = IfdBuilder::new();
+            raw.set(t::IMAGE_WIDTH, Value::Long(vec![64]));
+            raw.set(t::IMAGE_LENGTH, Value::Long(vec![2]));
+            raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![12]));
+            raw.set(t::COMPRESSION, Value::Short(vec![compression]));
+            raw.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::CFA]));
+            if tone_curve {
+                raw.set(0x7010, Value::Short(vec![8000, 10400, 12900, 14100]));
+            }
+            raw.set_image(ImageData::Strips { rows_per_strip: 2, strips: vec![vec![0; 128]] });
+            let mut ifd0 = rgb_ifd(4, 3);
+            ifd0.set(t::MAKE, Value::Ascii(make.into()));
+            ifd0.set(t::MODEL, Value::Ascii("Lunar".into()));
+            ifd0.add_sub_ifd(raw);
+            write(&[ifd0])
+        };
+        assert_eq!(probe(&file("HASSELBLAD", 32767, false)), Some(RawFormat::Arw));
+        assert_eq!(probe(&file("Hasselblad", 1, true)), Some(RawFormat::Arw));
+        let lunar = decode(&file("HASSELBLAD", 32767, true)).unwrap();
+        assert_eq!((lunar.format, lunar.width, lunar.height, lunar.bits), (RawFormat::Arw, 64, 2, 14));
+        // a Hasselblad CFA image in another coding is not an ARW
+        assert_ne!(probe(&file("HASSELBLAD", 1, false)), Some(RawFormat::Arw));
+        assert_ne!(probe(&file("HASSELBLAD", 7, false)), Some(RawFormat::Arw));
     }
 
     // --- TIFF raws that describe their raw IFD the way DNG does but carry no DNG version tag ---

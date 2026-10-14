@@ -92,6 +92,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.softProof", "Soft Proofing", Some("S"), "View"),
     ("view.histogram", "Histogram", Some("Cmd+Shift+H"), "View"),
     ("view.maskOverlay", "Show Mask Overlay", Some("O"), "View"),
+    // Ctrl+Shift+O / Cmd+Shift+O: every mask's region at once, not just the selected one
+    ("view.maskOverlayAll", "Show All Mask Overlays", Some("Cmd+Shift+O"), "View"),
     // Shift+O in the Masking panel (elsewhere it cycles the crop overlay)
     ("view.maskOverlayMode", "Cycle Mask Overlay Mode", None, "View"),
     ("view.maskOverlayColor", "Cycle Mask Overlay Color", None, "View"),
@@ -166,6 +168,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.contactSheet", "Export Contact Sheet PDF", None, ""),
     ("photo.editInPhotoCraft", "Edit in PhotoCraft", Some("Cmd+Shift+E"), "Photo>Edit In"),
     ("photo.editInExternal", "Edit in Other Editor", Some("Cmd+Alt+E"), "Photo>Edit In"),
+    // {ids?, app?}: the original files themselves (a raw stays a raw: no render, no copy), opened
+    // in the other editor, e.g. a raw developer
+    ("photo.openOriginalInExternal", "Open Original in Other Editor (RAW, no copy)", None, "Photo>Edit In"),
     ("dialog.mergeHdr", "HDR…", Some("Ctrl+H"), "Photo>Photo Merge"),
     ("dialog.mergePanorama", "Panorama…", Some("Ctrl+M"), "Photo>Photo Merge"),
     ("dialog.mergeHdrPanorama", "HDR Panorama…", None, "Photo>Photo Merge"),
@@ -263,6 +268,18 @@ fn adjust_brush(app: &mut LightcraftApp, k: f32, df: f32) -> Value {
 /// The `parent` folder id of a `dialog.new*` command (none: the top level).
 fn parent_param(p: &Value) -> Option<u64> {
     p.get("parent").and_then(Value::as_u64)
+}
+
+/// `file.addPhotos` / `file.addFolder` / `file.addFromDevice` `{album?}`: the review of the scan
+/// just started opens with that album chosen (an album's context menu ▸ Import ▸ …). An error
+/// means another scan is running.
+fn import_into_album(app: &mut LightcraftApp, p: &Value, r: Result<Value, String>) -> Result<Value, String> {
+    if r.is_ok()
+        && let Some(t) = &mut app.scan
+    {
+        t.album = p.get("album").and_then(Value::as_u64);
+    }
+    r
 }
 
 /// An sRGB colour from `"#rrggbb"` or `[r, g, b]` (0..255).
@@ -379,6 +396,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             };
             app.ui.grid_info = next;
             app.ui.show_filenames = true;
+            // the caption is drawn on Square Grid cells only: from Photo Grid, show it there
+            if app.ui.view == ViewMode::PhotoGrid {
+                app.ui.view = ViewMode::SquareGrid;
+            }
             Ok(json!({"info": app.ui.grid_info}))
         }
         "tool.keywordPainter" => {
@@ -819,6 +840,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             app.ui.mask_overlay = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.mask_overlay);
             Ok(json!({"maskOverlay": app.ui.mask_overlay}))
         }
+        "view.maskOverlayAll" => {
+            app.ui.mask_overlay_all = !app.ui.mask_overlay_all;
+            Ok(json!({"maskOverlayAll": app.ui.mask_overlay_all}))
+        }
         "view.maskOverlayMode" => {
             use lightcraft_engine::pipeline::MaskView;
             let cur = MaskView::parse(&app.ui.mask_overlay_mode).unwrap_or_default();
@@ -1069,13 +1094,22 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "dialog.newFolder" => {
-            app.ui.dialog =
-                Some(Dialog::NewAlbum { name: p.get("name").and_then(Value::as_str).unwrap_or("").into(), folder: true, parent: parent_param(p) });
+            app.ui.dialog = Some(Dialog::NewAlbum {
+                name: p.get("name").and_then(Value::as_str).unwrap_or("").into(),
+                folder: true,
+                parent: parent_param(p),
+                include_selected: false,
+            });
             Ok(Value::Null)
         }
         "dialog.newAlbum" => {
-            app.ui.dialog =
-                Some(Dialog::NewAlbum { name: p.get("name").and_then(Value::as_str).unwrap_or("").into(), folder: false, parent: parent_param(p) });
+            // {name?, parent?, includeSelected? (true)}
+            app.ui.dialog = Some(Dialog::NewAlbum {
+                name: p.get("name").and_then(Value::as_str).unwrap_or("").into(),
+                folder: false,
+                parent: parent_param(p),
+                include_selected: p.get("includeSelected").and_then(Value::as_bool).unwrap_or(true),
+            });
             Ok(Value::Null)
         }
         "dialog.autoStack" => {
@@ -1219,6 +1253,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         "photo.editInPhotoCraft" => edit_in(app, &ctx, p, true),
         "photo.editInExternal" => edit_in(app, &ctx, p, false),
+        "photo.openOriginalInExternal" => open_original_in(app, &ctx, p),
         "dialog.cull" => {
             app.ui.dialog = Some(Dialog::Cull { reject_below: 0.0, pick_best: true });
             Ok(Value::Null)
@@ -1307,7 +1342,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 return Some(Ok(Value::Null));
             }
             // review first: the import dialog lists what was found
-            crate::import::open(app, paths)
+            let r = crate::import::open(app, paths);
+            import_into_album(app, p, r)
         }
         "file.importLightroom" => {
             let path = match p.get("path").and_then(Value::as_str).map(str::to_string) {
@@ -1336,9 +1372,16 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "file.findMissing" => {
+            let within = match p.get("within") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(path)) if !path.is_empty() => Some(path.clone()),
+                Some(Value::String(_)) => return Some(Err("file.findMissing: `within` must not be empty".into())),
+                Some(value) => return Some(Err(format!("file.findMissing: `within` must be a folder path, not {value}"))),
+            };
+            let title = if within.is_some() { "Locate Missing Files…" } else { "Find Missing Photos…" };
             let folder = match p.get("folder").and_then(Value::as_str) {
                 Some(f) => Some(f.to_string()),
-                None => match crate::pick::ask(app, id, p, "folder", PickRequest::folder(crate::i18n::tr("Find Missing Photos…")), |s| {
+                None => match crate::pick::ask(app, id, p, "folder", PickRequest::folder(crate::i18n::tr(title)), |s| {
                     s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])
                 }) {
                     Picked::Now(v) => v.into_iter().next(),
@@ -1352,7 +1395,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             if app.tasks.is_running(LABEL) {
                 return Some(Err("Find Missing Photos is already searching".into()));
             }
-            let candidates = lightcraft_engine::cmd::missing::find_candidates(&app.session.catalog);
+            let mut candidates = lightcraft_engine::cmd::missing::find_candidates(&app.session.catalog);
+            if let Some(within) = within {
+                candidates.retain(|candidate| lightcraft_catalog::query::folder_within(&candidate.path, &within));
+            }
             let work = move || lightcraft_engine::cmd::missing::plan_find_missing(&candidates, &folder);
             let done = |app: &mut LightcraftApp, ctx: &egui::Context, plan: Result<lightcraft_engine::cmd::missing::FindPlan, String>| {
                 // relinked under the session as it is now: photos relinked meanwhile and files
@@ -1476,7 +1522,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             {
                 t.copy = true;
             }
-            r
+            import_into_album(app, p, r)
         }
         "file.addFolder" => {
             // a folder (searched recursively) into the import review
@@ -1490,7 +1536,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 },
             };
             match path {
-                Some(path) => crate::import::open(app, vec![path]),
+                Some(path) => {
+                    let r = crate::import::open(app, vec![path]);
+                    import_into_album(app, p, r)
+                }
                 None => Ok(Value::Null),
             }
         }
@@ -1807,6 +1856,14 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
         "photo.editInPhotoCraft" | "photo.editInExternal" => app.session.active().is_some() && app.services.open_with.is_some(),
         "app.exportPrevious" => app.session.active().is_some() && app.session.last_export.is_some(),
         "dialog.pasteSettings" => app.session.active().is_some() && app.session.clipboard.is_some(),
+        "photo.openOriginalInExternal" => {
+            app.services.open_with.is_some()
+                && app
+                    .session
+                    .active()
+                    .and_then(|id| app.session.catalog.photo(id))
+                    .is_some_and(|p| matches!(p.source, lightcraft_engine::catalog::Source::File { .. }))
+        }
         "app.showInFinder" => {
             app.services.reveal.is_some()
                 && app
@@ -1962,4 +2019,88 @@ fn edit_in(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value, photocraft: 
         _ => app.toast(ctx, crate::i18n::tr_format!("{n} photos opened for editing; each is stacked with its original", n = copies.len())),
     }
     Ok(r)
+}
+
+/// Most originals one Open Original hands the editor (each starts it once).
+const MAX_ORIGINALS: usize = 50;
+
+/// Photo ▸ Edit In ▸ Open Original in Other Editor: hand each selected photo's original file
+/// itself (a raw stays a raw: nothing is rendered, copied or added to the library) to the editor
+/// set in Settings ▸ External Editing, e.g. a raw developer. `p` may give `ids` and the editor
+/// (`app`). Demo photos and missing files are skipped and listed; when no photo has a file to
+/// open, it fails saying why.
+fn open_original_in(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value) -> Result<Value, String> {
+    let r = open_originals(app, p);
+    if let Err(e) = &r {
+        app.toast(ctx, e.clone());
+    }
+    let r = r?;
+    let opened = r["opened"].as_array().map_or(0, Vec::len);
+    match (r["failed"].as_str(), r["opened"][0]["path"].as_str()) {
+        (Some(e), _) => app.toast(ctx, crate::i18n::tr_format!("Couldn't open the editor: {e}", e = e)),
+        (None, Some(path)) if opened == 1 => {
+            let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            app.toast(ctx, crate::i18n::tr_format!("{name} opened in the other editor", name = name));
+        }
+        _ => app.toast(ctx, crate::i18n::tr_format!("{n} originals opened in the other editor", n = opened)),
+    }
+    Ok(r)
+}
+
+fn open_originals(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    let mut ids = app.session.targets(p);
+    ids.dedup();
+    if ids.is_empty() {
+        return Err("no photo selected".into());
+    }
+    if ids.len() > MAX_ORIGINALS {
+        return Err(format!("{} photos selected: open at most {MAX_ORIGINALS} originals at a time", ids.len()));
+    }
+    let mut files = Vec::new();
+    let mut skipped = Vec::new();
+    for id in ids {
+        match app.session.catalog.photo(id).map(|ph| &ph.source) {
+            Some(lightcraft_engine::catalog::Source::File { path }) if std::path::Path::new(path).is_file() => files.push((id, path.clone())),
+            Some(lightcraft_engine::catalog::Source::File { path }) => {
+                skipped.push(json!({"id": id.0, "reason": format!("the original is missing: {path}")}))
+            }
+            Some(_) => skipped.push(json!({"id": id.0, "reason": "a demo photo has no original file"})),
+            None => skipped.push(json!({"id": id.0, "reason": "no such photo"})),
+        }
+    }
+    if files.is_empty() {
+        let why = skipped.first().and_then(|s| s["reason"].as_str()).unwrap_or("no original file");
+        return Err(if skipped.len() == 1 {
+            format!("nothing to open: {why}")
+        } else {
+            format!("nothing to open: none of these photos has its original file ({why})")
+        });
+    }
+    let editor = p.get("app").and_then(Value::as_str).map_or_else(|| app.ui.settings.external_editor.clone(), str::to_string);
+    if let Some(check) = app.services.check_editor.as_ref() {
+        check(&editor)?;
+    }
+    // all at once where the host can: an editor that keeps one window (DxO PhotoLab) loses the
+    // files that arrive while it is still starting
+    if let Some(open_all) = app.services.open_all_with.as_mut() {
+        let paths: Vec<String> = files.iter().map(|(_, path)| path.clone()).collect();
+        open_all(&paths, &editor).map_err(|e| format!("Couldn't open the editor: {e}"))?;
+        let opened: Vec<Value> = files.iter().map(|(id, path)| json!({"id": id.0, "path": path})).collect();
+        return Ok(json!({"opened": opened, "skipped": skipped, "app": editor, "failed": null}));
+    }
+    let open = app.services.open_with.as_mut().ok_or("opening another application isn't available here")?;
+    let mut opened = Vec::new();
+    let mut failed = None;
+    for (id, path) in files {
+        match open(&path, &editor) {
+            Ok(()) => opened.push(json!({"id": id.0, "path": path})),
+            Err(e) => failed = Some(e),
+        }
+    }
+    if opened.is_empty()
+        && let Some(e) = failed
+    {
+        return Err(format!("Couldn't open the editor: {e}"));
+    }
+    Ok(json!({"opened": opened, "skipped": skipped, "app": editor, "failed": failed}))
 }

@@ -229,9 +229,18 @@ pub(crate) fn rgb_words(img: &Rgb32f) -> &[f32] {
 // ---------------------------------------------------------------------------------------------
 // Filters (twins of `lightcraft_raster::blur` / `resample` and `lightcraft_pipeline::local`)
 
-/// Pixels each blur thread slides its running sum over (at least; longer for large radii, so the
+/// Rows each `box_v` thread slides its running sum over (at least; longer for large radii, so the
 /// priming sum stays a small share of the work).
 const CHUNK: usize = 16;
+
+/// One box pass of radius `r` (clamped edges) over a `w × h` image of `nc` interleaved channels,
+/// `src → dst`: horizontal or vertical.
+fn box_pass(cx: &mut Cx<'_>, horizontal: bool, src: &Buf, dst: &Buf, (w, h): (usize, usize), nc: usize, r: usize) {
+    let chunk = (2 * r + 1).clamp(CHUNK, 128);
+    let p = [w as u32, h as u32, nc as u32, r as u32, chunk as u32];
+    let (k, groups) = if horizontal { ("box_h", groups2(w, h, [64, 4])) } else { ("box_v", groups2(w, h.div_ceil(chunk), [64, 4])) };
+    cx.run(k, &p, &[Some(src), Some(dst)], groups);
+}
 
 /// Gaussian blur of a `w × h` image of `nc` interleaved channels: three box passes each way
 /// (`lightcraft_raster::blur::gaussian`).
@@ -240,18 +249,15 @@ pub(crate) fn gaussian(cx: &mut Cx<'_>, src: &Buf, w: usize, h: usize, nc: usize
         return cx.copy(src);
     }
     let radii = lightcraft_raster::blur::box_radii(sigma);
-    let passes: Vec<(&str, usize)> = radii.iter().map(|r| ("box_h", *r)).chain(radii.iter().map(|r| ("box_v", *r))).filter(|p| p.1 > 0).collect();
+    let passes: Vec<(bool, usize)> = radii.iter().map(|r| (true, *r)).chain(radii.iter().map(|r| (false, *r))).filter(|p| p.1 > 0).collect();
     if passes.is_empty() {
         return cx.copy(src);
     }
     // ping-pong between two buffers
     let mut bufs = [cx.gpu.buffer(w * h * nc), cx.gpu.buffer(w * h * nc)];
-    for (i, (k, r)) in passes.iter().enumerate() {
-        let chunk = (2 * r + 1).clamp(CHUNK, 128);
-        let groups = if *k == "box_h" { groups2(w.div_ceil(chunk), h, [64, 4]) } else { groups2(w, h.div_ceil(chunk), [64, 4]) };
-        let p = [w as u32, h as u32, nc as u32, *r as u32, chunk as u32];
+    for (i, (horizontal, r)) in passes.iter().enumerate() {
         let (out, prev) = (&bufs[i % 2], &bufs[(i + 1) % 2]);
-        cx.run(k, &p, &[Some(if i == 0 { src } else { prev }), Some(out)], groups);
+        box_pass(cx, *horizontal, if i == 0 { src } else { prev }, out, (w, h), nc, *r);
     }
     let last = (passes.len() - 1) % 2;
     let [a, b] = std::mem::replace(&mut bufs, [cx.gpu.buffer(0), cx.gpu.buffer(0)]);
@@ -712,6 +718,27 @@ pub fn render(
             _ => Err(m),
         }
     });
+    // every visible mask's alpha, for `Overlay::AllMasks` (one tint over all masks at once).
+    // The masks buffer holds each visible mask's alpha back-to-back in the same `list` order the
+    // single-mask overlay uses, so read the whole buffer back in ONE GPU->CPU transfer and split it
+    // on the CPU, instead of one synchronous readback per mask (which stalls the pipeline N times).
+    let all_overlay_alphas: Option<Vec<Plane>> = if matches!(req.overlay, lightcraft_pipeline::Overlay::AllMasks { .. }) {
+        masks.as_ref().map(|all| {
+            let list: Vec<_> = s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).collect();
+            if list.is_empty() {
+                return Vec::new();
+            }
+            let raw: Vec<f32> = cx.read(all, n * list.len());
+            let mut alphas = Vec::with_capacity(list.len());
+            for mi in 0..list.len() {
+                let s = mi * n;
+                alphas.push(Plane { width: w, height: h, data: raw[s..s + n].to_vec() });
+            }
+            alphas
+        })
+    } else {
+        None
+    };
     let data: Vec<[u8; 4]> = cx.read(&out, n);
     let image = Rgba8 { width: w, height: h, data };
     lap("finish + readback", &mut t, &mut cx);
@@ -747,7 +774,7 @@ pub fn render(
             lightcraft_pipeline::masks::evaluate_one(m, &plan.frame, w, h, &img, &l, s.light.exposure as f32, plan.mattes.as_deref())
         }
     });
-    lightcraft_pipeline::visualize::apply(&mut image, req.overlay, &plan, overlay_mask.as_ref());
+    lightcraft_pipeline::visualize::apply(&mut image, req.overlay, &plan, overlay_mask.as_ref(), all_overlay_alphas.as_deref());
     // spots grew the window the render worked on: cut it back to the request
     if let Some(k) = plan.keep {
         image = image.crop(k.x, k.y, k.w, k.h);
@@ -1132,6 +1159,33 @@ mod tests {
         assert!(covered > 0 && covered < w * h, "{covered} px covered");
     }
 
+    /// The blur against `lightcraft_raster::blur::gaussian`: widths that do and don't fill the last
+    /// workgroup, windows wider than the image, and 1, 2 (as two planes) and 3 channels.
+    #[test]
+    fn gaussian_matches_cpu() {
+        use lightcraft_raster::blur;
+        let Some(gpu) = crate::device() else { return };
+        let _scope = crate::ctx::RenderScope::new(gpu);
+        let v = |x: usize, y: usize, c: usize| ((x * 7 + y * 13 + c * 5) % 17) as f32 / 16.0 + if x % 61 < 3 { 2.0 } else { 0.0 };
+        for (w, h) in [(1000, 5), (257, 3), (5, 4), (1, 9)] {
+            for sigma in [0.8f32, 2.0, 4.5, 30.0, 250.0, 1000.0] {
+                let planes: Vec<Plane> = (0..3).map(|c| Plane::from_fn(w, h, |x, y| v(x, y, c))).collect();
+                let want: Vec<Plane> = planes.iter().map(|p| blur::gaussian(p, sigma)).collect();
+                for nc in [1, 2, 3] {
+                    let words: Vec<f32> = (0..w * h).flat_map(|i| (0..nc).map(move |c| (i, c))).map(|(i, c)| planes[c].data[i]).collect();
+                    let mut cx = Cx::new(gpu);
+                    let src = gpu.upload(&words);
+                    let out = gaussian(&mut cx, &src, w, h, nc, sigma);
+                    let got: Vec<f32> = cx.read(&out, w * h * nc);
+                    for (i, g) in got.iter().enumerate() {
+                        let want = want[i % nc].data[i / nc];
+                        assert!((g - want).abs() < 1e-5 * (1.0 + sigma / 10.0), "{w}×{h} nc={nc} sigma={sigma}: word {i} {g} vs {want}");
+                    }
+                }
+            }
+        }
+    }
+
     /// Kernel timings on a 24 MP plane: `cargo test --release -p lightcraft-gpu -- --ignored --nocapture`.
     #[test]
     #[ignore]
@@ -1139,6 +1193,7 @@ mod tests {
         let Some(gpu) = crate::device() else { return };
         let _scope = crate::ctx::RenderScope::new(gpu);
         let (w, h) = (6000, 4000);
+        eprintln!("{} ({:?})", gpu.info.name, gpu.info.backend);
         let src = gpu.upload(&vec![0.5f32; w * h * 3]);
         let time = |name: &str, f: &mut dyn FnMut(&mut Cx<'_>)| {
             let mut best = f64::MAX;
@@ -1153,8 +1208,18 @@ mod tests {
             eprintln!("{name:<40} {best:.1} ms");
         };
         for nc in [1, 2, 3] {
+            let out = gpu.buffer(w * h * nc);
+            // noise reduction's radii, Texture's and Dehaze's at 6000 px
+            for r in [2, 11, 120] {
+                for (k, horizontal) in [("box_h", true), ("box_v", false)] {
+                    time(&format!("{k} nc={nc} r={r}"), &mut |cx| box_pass(cx, horizontal, &src, &out, (w, h), nc, r));
+                }
+            }
+        }
+        for nc in [1, 2, 3] {
             time(&format!("gaussian nc={nc} sigma=2"), &mut |cx| drop(gaussian(cx, &src, w, h, nc, 2.0)));
         }
+        time("gaussian nc=3 sigma=4.5 (colour NR)", &mut |cx| drop(gaussian(cx, &src, w, h, 3, 4.5)));
         time("map log_lum", &mut |cx| {
             let o = cx.gpu.buffer(w * h);
             map(cx, "log_lum_k", w * h, &[], [Some(&src), None, None], &o);
