@@ -842,7 +842,9 @@ pub fn render(
     let mut prepared_work = None;
     let fixed_air = if let Some(full) = full.as_ref().filter(|full| req.is_bounded_window() || full.lin_key != plan.lin_key) {
         let budget = stages.map_or(lightcraft_pipeline::airlight::PREPARE_BUDGET, |c| c.airlight.budget());
-        if lightcraft_pipeline::airlight::check_prepare_budget(full, Some(&plan), budget, true).is_err()
+        if req.bounded_window {
+            Some(lightcraft_pipeline::airlight::proxy(src, info, full))
+        } else if lightcraft_pipeline::airlight::check_prepare_budget(full, Some(&plan), budget, true).is_err()
             || lightcraft_pipeline::airlight::check_pixels(src.width, src.height).is_err()
         {
             if let Some(cache) = stages {
@@ -862,6 +864,10 @@ pub fn render(
             });
             if let Some(air) = ready {
                 Some(air)
+            } else if req.quality == lightcraft_pipeline::Quality::Draft {
+                // A drag doesn't wait for the whole frame's preparation: this image's statistic if
+                // known, else main's proxy (the full-quality render that follows is exact).
+                Some(stages.and_then(|c| c.airlight.get(src, full.lin_key)).unwrap_or_else(|| lightcraft_pipeline::airlight::proxy(src, info, full)))
             } else {
                 let prepared = match saved {
                     Some((key, value)) if key == full.lin_key => Ok((value.air, Some(value))),
@@ -949,7 +955,8 @@ pub fn render(
     // 4. masks
     let (masks, terms) = masks(&mut cx, &lin, &prep, &plan, &mut host, &mut alphas);
     lap("masks", &mut t, &mut cx);
-    if let Some(c) = stages {
+    // (a bounded window is a stand-in: its stages would only evict the exact window's)
+    if let Some(c) = stages.filter(|_| !req.bounded_window) {
         c.put(Entry {
             src: src.clone(),
             geo: plan.geo,

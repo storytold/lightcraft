@@ -132,6 +132,8 @@ impl WireJob {
             proof: None,
             window: self.window.map(|[x, y, w, h]| lightcraft_engine::pipeline::PixelWindow { x, y, w, h }),
             display: None,
+            // web windows are main's already
+            bounded_window: false,
         }
     }
 

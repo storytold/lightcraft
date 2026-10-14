@@ -13,7 +13,8 @@ pub fn check(mut render: impl FnMut(&Arc<Rgb32f>, &SourceInfo, &DevelopSettings,
         let mut s = DevelopSettings { process: process.version(), ..Default::default() };
         s.effects.dehaze = 100.0;
         let info = SourceInfo::default();
-        let req = RenderRequest { quality: Quality::Draft, ..RenderRequest::fit(1801, 1207) };
+        // (full quality: drafts of a window take main's window and Dehaze proxy, as a drag needs)
+        let req = RenderRequest { quality: Quality::Full, ..RenderRequest::fit(1801, 1207) };
         let full = render(&src, &info, &s, &req);
         assert_eq!((full.width, full.height), (1801, 1207));
         let at = if whole { PixelWindow { x: 0, y: 0, w: full.width, h: full.height } } else { PixelWindow { x: 601, y: 0, w: 121, h: 83 } };

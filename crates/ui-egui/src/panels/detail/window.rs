@@ -100,6 +100,16 @@ pub(super) fn request_window(app: &mut LightcraftApp, ctx: &egui::Context, c: &W
     // or the proof never leaves a stale region tile on screen while its replacement renders.
     let proof_key = if v.before { 0 } else { proof.map_or(0, |p| p.key()) };
     let look = job.settings.hash64() ^ overlay.key().rotate_left(17) ^ proof_key.rotate_left(41);
+    // A window not on screen yet (first zoom, a pan) comes main's way first, then exact: the
+    // exact one can need the whole frame's noise reduction and Dehaze statistic (about a second
+    // on a 60 MP raw). Edits of a window already shown (any look) go straight to exact: its
+    // stages are warm, and a drag's drafts stay up meanwhile.
+    let shown = app.renderer.textures.get(&v.slot).filter(|t| t.photo == c.id).map(|t| t.key);
+    let bounded = job.clone().bounded_window();
+    let placed = app.region_tiles.iter().any(|((b, k), t)| *b == v.before && Some(*k) == shown && t.window == win && t.full == (fw, fh));
+    // (web windows are main's already)
+    let job =
+        if cfg!(target_arch = "wasm32") || c.interacting || shown == Some(job.key) || shown == Some(bounded.key) || placed { job } else { bounded };
     let view = crate::region::RegionView { photo: c.id, before: v.before, key: job.key, full: (fw, fh), window: win, settings: look };
     // windows of other photos, looks and zooms of this side can't be drawn any more
     app.region_tiles.retain(|(before, key), t| {
@@ -122,4 +132,37 @@ pub(super) fn draw_window(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx,
     let dst = Rect::from_min_size(at, vec2(tile.window.w as f32 / fw * v.img.width(), tile.window.h as f32 / fh * v.img.height()));
     p.image(tex.id(), dst, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     true
+}
+
+#[cfg(test)]
+mod bounded_window_tests {
+    use super::*;
+    use crate::{Services, headless::Headless};
+    use std::time::Duration;
+
+    /// A window not on screen yet is rendered main's way first (bounded margin, Dehaze proxy),
+    /// then the exact window replaces it.
+    #[test]
+    fn a_new_window_is_bounded_first_then_exact() {
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+        let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+        assert_eq!(h.request("ui.set", serde_json::json!({"view":"detail", "right":"none", "filmstrip":false}), Duration::from_secs(20))["ok"], true);
+        h.settle(Duration::from_secs(120));
+        h.app.ui.zoom = crate::state::Zoom::Percent(200.0);
+        assert!(h.step_until(Duration::from_secs(120), |h| h.app.region_view.is_some()), "a window is asked for");
+        let first = h.app.region_view.unwrap();
+        let exact = h
+            .app
+            .session
+            .region_job(first.photo, first.full.0, first.full.1, first.window, true)
+            .map(|j| h.app.renderer.job_for(Slot::Region, j))
+            .unwrap();
+        assert_ne!(first.key, exact.key);
+        assert_eq!(first.key, exact.clone().bounded_window().key, "main's window first");
+        let exact_key = exact.key;
+        assert!(
+            h.step_until(Duration::from_secs(120), |h| h.app.renderer.textures.get(&Slot::Region).is_some_and(|t| t.key == exact_key)),
+            "then the exact one"
+        );
+    }
 }

@@ -89,6 +89,10 @@ fn typical() -> DevelopSettings {
     s.detail.nr_luminance = 30.0;
     s.detail.nr_color = 25.0;
     s.detail.sharpen_amount = 40.0;
+    // `NODEHAZE=1`: the same edit without Dehaze
+    if std::env::var_os("NODEHAZE").is_some() {
+        s.effects.dehaze = 0.0;
+    }
     s
 }
 
@@ -361,11 +365,22 @@ fn main() {
             lightcraft_engine::gpu::trim_pool(0);
             drop(develop(&full, &info, &s, &at(w0, Quality::Full), Some(&StageCache::default()), g).unwrap())
         });
+        // the loupe's first look at a new window: main's margin and Dehaze proxy (the exact one follows)
+        let bounded = |w: PixelWindow| RenderRequest { bounded_window: true, ..at(w, Quality::Full) };
+        row("window first, bounded:", &mut |g| {
+            lightcraft_engine::gpu::trim_pool(0);
+            drop(develop(&full, &info, &s, &bounded(w0), Some(&StageCache::default()), g).unwrap())
+        });
         let wc = [StageCache::default(), StageCache::default()];
         for g in backends {
             drop(develop(&full, &info, &s, &at(w0, Quality::Full), Some(&wc[*g as usize]), *g).unwrap());
         }
         let mut step = 0usize;
+        row("window pan, bounded (warm src):", &mut |g| {
+            step += 1;
+            let w = win(fw / 2 + 512 * (step % 4 + 1), fh / 2);
+            drop(develop(&full, &info, &s, &bounded(w), Some(&wc[g as usize]), g).unwrap())
+        });
         row("window pan (new window, warm src):", &mut |g| {
             step += 1;
             let w = win(fw / 2 + 512 * (step % 4 + 1), fh / 2);
@@ -384,6 +399,12 @@ fn main() {
             let mut t = s.clone();
             k += 1.0;
             t.light.exposure = 0.3 + k * 0.01;
+            drop(develop(&full, &info, &t, &at(w0, Quality::Draft), Some(&wc[g as usize]), g).unwrap());
+        });
+        row("window draft NR drag (warm):", &mut |g| {
+            let mut t = s.clone();
+            k += 1.0;
+            t.detail.nr_luminance = 30.0 + k % 50.0;
             drop(develop(&full, &info, &t, &at(w0, Quality::Draft), Some(&wc[g as usize]), g).unwrap());
         });
         row("window NR change (warm):", &mut |g| {

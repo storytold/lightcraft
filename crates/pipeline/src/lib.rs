@@ -170,6 +170,9 @@ pub struct RenderRequest {
     /// Previews for a monitor with a display profile: render 8-bit into its primaries instead of
     /// `space` (see [`DisplaySpace`]; ignored by deep renders).
     pub display: Option<DisplaySpace>,
+    /// A window rendered as main did (the caller's margin and the 384 px Dehaze proxy): a quick
+    /// first look while the exact window follows. Leaves the exact path's caches alone.
+    pub bounded_window: bool,
 }
 
 /// A window of the (virtual) full output, in its pixels: what a zoomed view needs, rendered
@@ -260,6 +263,7 @@ impl RenderRequest {
             proof: None,
             window: None,
             display: None,
+            bounded_window: false,
         }
     }
 
@@ -608,7 +612,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
                 });
                 // Defringe also surrounds the source patches read by spots.
                 let work = window::expand(work, full_w, full_h, optics::defringe_radius(s, px_per_long / optics::DEFRINGE_REF_LONG));
-                if airlight::check_pixels(work.w, work.h).is_err() {
+                // (drafts follow a drag: main's window is enough for them, and keeps them as fast)
+                if req.bounded_window || req.quality == Quality::Draft || airlight::check_pixels(work.w, work.h).is_err() {
                     // Preserve main's bounded window when complete support cannot
                     // fit. Dehaze's full-frame budget check selects its proxy too.
                     if req.depth == OutputDepth::U8 { spots::window_for_reads(s, &frame, full_w, full_h, px_per_long, win) } else { win }
@@ -892,7 +897,10 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     #[cfg(not(target_arch = "wasm32"))]
     let fixed_air = if let Some(full) = full.as_ref().filter(|full| req.is_bounded_window() || full.lin_key != plan.lin_key) {
         let budget = shared.map_or(airlight::PREPARE_BUDGET, |(_, c)| c.airlight.budget());
-        if airlight::check_prepare_budget(full, Some(&plan), budget, false).is_err() || airlight::check_pixels(src_img.width, src_img.height).is_err()
+        if req.bounded_window {
+            Some(airlight::proxy(src_img, info, full))
+        } else if airlight::check_prepare_budget(full, Some(&plan), budget, false).is_err()
+            || airlight::check_pixels(src_img.width, src_img.height).is_err()
         {
             if let Some((_, cache)) = shared {
                 cache.airlight_frame.clear();
@@ -908,6 +916,10 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
             let ready = shared.and_then(|(src, cache)| cache.airlight.get(src, full.lin_key)).filter(|_| !saved_matches || entry_matches);
             if let Some(air) = ready {
                 Some(air)
+            } else if req.quality == Quality::Draft {
+                // A drag doesn't wait for the whole frame's preparation: this image's statistic if
+                // known, else main's proxy (the full-quality render that follows is exact).
+                Some(shared.and_then(|(src, cache)| cache.airlight.get(src, full.lin_key)).unwrap_or_else(|| airlight::proxy(src_img, info, full)))
             } else {
                 let prepared = match saved {
                     Some((key, value)) if key == full.lin_key => value,
@@ -1018,7 +1030,8 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         prep.air = a;
     }
     lap("prepare", &mut t);
-    if let Some((a, c)) = shared {
+    // (a bounded window is a stand-in: its stages would only evict the exact window's)
+    if let Some((a, c)) = shared.filter(|_| !req.bounded_window) {
         c.put(CacheEntry {
             src: a.clone(),
             geo,
