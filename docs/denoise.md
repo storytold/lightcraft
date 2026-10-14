@@ -23,12 +23,14 @@ Terms must be acknowledged before installation or
 download. Downloads use the shared pure-Rust `lightcraft-fetch` client, with resume,
 progress, cancellation, size limits and SHA-256 verification.
 
-RawNIND's optional ONNX weights are **GPL-3.0**, as recorded in the pinned model catalog.
-They are downloaded separately after consent and read by our own Rust executor.
-Whether releases should offer this download remains a maintainer policy decision;
-permissively licensed or independently trained weights remain a gap. This is not a
-claim that optional downloading settles licensing questions. No GPL decoder or neural
-runtime code is included. Model metadata is in `crates/denoise-core/src/known.rs`.
+RawNIND's optional ONNX weights ("RawNIND" by Benoit Brummer) are dual-licensed by their
+author under **GPL-3.0 and CC BY 4.0** ([rawnind_jddc](https://github.com/trougnouf/rawnind_jddc),
+issue #1760); the pinned model catalog offers them under **CC BY 4.0**, which allows any use,
+commercial use included, and asks for credit. The terms shown before the download give that
+credit. The weights are downloaded separately after consent and read by our own Rust executor.
+Whether releases should offer this download remains a maintainer policy decision. No GPL
+decoder or neural runtime code is included. Model metadata is in
+`crates/denoise-core/src/known.rs`.
 
 Installation checks the manifest, model hash and size, then runs a synthetic self-test:
 finite output of the promised shape, repeatability, the declared scale and reduced

@@ -1,6 +1,6 @@
 # Lightroom parity checklist
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (integration batch 36: slideshow module, print-ready PDF fixes, local adjustment presets, Layout Image loupe overlay, Delete in an album removes from it, new languages Czech, Polish, Italian-ready catalogs; many rows' notes updated by their PRs) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** patch (LR-EDIT-DETAIL-DENOISE: RawNIND weights offered under CC BY 4.0, #1760) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 The measured, row-by-row checklist: one row per Lightroom feature, menu item and shortcut, what we
 have and what is missing. It answers *does the feature exist?* (feature breadth). Whether it is good
@@ -209,7 +209,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-EDIT-DETAIL-SHARPEN | Sharpening | P0 | ✅ | `ctl:detail.sharpenAmount`, `ctl:detail.sharpenRadius`, `ctl:detail.sharpenDetail`, `ctl:detail.sharpenMasking` | no Alt-drag mask preview |
 | LR-EDIT-DETAIL-NR | Luminance noise reduction | P0 | ✅ | `ctl:detail.nrLuminance`, `ctl:detail.nrDetail`, `ctl:detail.nrContrast` | radii in the original's pixels, so grid, loupe and smaller exports look like the full-size render scaled down (`local::nr_params`, `Plan::detail_scale`, #960) |
 | LR-EDIT-DETAIL-CNR | Colour noise reduction | P0 | ✅ | `ctl:detail.nrColor`, `ctl:detail.nrColorDetail`, `ctl:detail.nrColorSmoothness` | preview-size independent like luminance NR (#960) |
-| LR-EDIT-DETAIL-DENOISE | AI denoise | P2 | 🟡 | cmd:denoise.toggle, cmd:denoise.models.install, cmd:denoise.queue, ctl:enhance.denoise, `crates/denoise/`, `docs/denoise.md` | non-destructive Bayer RAW, opt-in weights, pure-Rust CPU/GPU; GPU convolution uses independently written shared scalars (Metal equivalence regression, issue #479); tiles can also run on another computer's graphics card (`lightcraft-cli denoise-serve`, `crates/denoise/src/remote.rs`); X-Trans/linear RGB, model policy and Lightroom fidelity remain; closing the model setup without installing turns the switch back off (#922) |
+| LR-EDIT-DETAIL-DENOISE | AI denoise | P2 | 🟡 | cmd:denoise.toggle, cmd:denoise.models.install, cmd:denoise.queue, ctl:enhance.denoise, `crates/denoise/`, `docs/denoise.md` | non-destructive Bayer RAW, opt-in weights, pure-Rust CPU/GPU; GPU convolution uses independently written shared scalars (Metal equivalence regression, issue #479); tiles can also run on another computer's graphics card (`lightcraft-cli denoise-serve`, `crates/denoise/src/remote.rs`); RawNIND weights offered under CC BY 4.0 (their author's dual licence with GPL-3.0, #1760); X-Trans/linear RGB, offering the download by default and Lightroom fidelity remain; closing the model setup without installing turns the switch back off (#922) |
 | LR-EDIT-DETAIL-RAWDETAILS | Improved demosaic toggle | P2 | ⬜ | | |
 | LR-EDIT-DETAIL-SUPERRES | Super resolution | P2 | ⬜ | | |
 | LR-EDIT-DETAIL-AISHARPEN | AI sharpen | OOS | 🚫 | | |
@@ -797,6 +797,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | patch | LR-EDIT-DETAIL-DENOISE: the RawNIND weights are offered under CC BY 4.0, one of the two licences their author grants (with GPL-3.0, #1760); the terms credit the author. Status unchanged (🟡) |
 | 2026-10-12 | minor | LR-EDIT-OPTICS-PROFILE: Sony ARW shading, CA and distortion tables decoded with settings and provenance (raw IFD, `SR2SubIFD` fallback); applied corrections unchanged (ILCE-7RM4A and ILCE-7RM6 distortion); status unchanged (🟡) |
 | 2026-10-14 | minor | LR-IMP-CAMERA-COVERAGE: Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (coverage.py 515 → 545 verified); sensor verification does not establish colour parity (#1277); status unchanged (🟡) |
 | 2026-10-13 | minor | LR-MERGE-PANO: a panorama's DNG takes its `AsShotNeutral` from the median of its frames' vendor white-balance multipliers (CR2, NEF, ARW…) instead of the first frame's tags, and frames now carry the multipliers (issue #1144); status unchanged (✅) |
