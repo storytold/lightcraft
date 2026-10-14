@@ -42,8 +42,23 @@ vs −0.67 GRBG). Unsampled PowerShots default to RGGB, unverified.
   level at 117 instead of 128 and lifted every shadow. Fixed and tested; on 20 private D60
   files the left border's mean is within 2 DN of the record's black quadruple, per site
   (127–137, higher on the files with the larger calibration-row value).
-- **White level**: saturation plateau of the decoded samples (shared `white_from_data`),
-  full-range fallback 4095 (12-bit) / 1023 (G1's 10-bit high plane only).
+- **White level**: saturation plateau of the decoded samples (shared `white_from_data`);
+  without a plateau, the level at least 64 samples reach when that is within 3 % of the
+  full range (`white_level`); else the full range, 4095 (12-bit) / 1023 (G1).
+- **The sensor clips below 4095 at low ISO** (2026-10-13, 1,516 private D60 files by ISO
+  from ShotInfo value 2, ISO = 100·2^(v/32 − 5)): at ISO 100, 200 and 400 no sample exceeds
+  4009 and the maxima cluster at 4000–4008; at ISO 800 and 1000 saturated files reach 4095.
+  The 10D and 300D samples stop at 4003–4008 as well. Before `white_level`, a photo with a
+  small blown area had no plateau and got 4095 (373 of 925 files at ISO 100, 283 of 287 at
+  ISO 400), leaving blown pixels at 0.977 of white, below the clip threshold.
+- **Controlled frames from the maintainer** (lens cap and blown-out, ISO 100 and 1000; all
+  four decode sample-exact). Cap, ISO 100: active area 129.2–130.1 per site, left border
+  128.2–129.6, our level 128.9, record 127–129. Cap, ISO 1000: active area 129.5–130.5,
+  but left border 134.5–135.7, our level 133.8, record 131–133: at high ISO the masked
+  border and the record read about 4 DN above the image's true dark level. One frame, so
+  no correction is applied; noise there is 15 DN. Blown-out, ISO 100: the common values
+  are 3997–4000 and the maximum 4002 (our level 3987). Blown-out, ISO 1000: every active
+  sample is 4095 (our level 4080).
 
 ## 3 As-shot white balance
 
@@ -60,8 +75,17 @@ vs −0.67 GRBG). Unsampled PowerShots default to RGGB, unverified.
   (γ-model error), so the slot is chosen by metadata, not by fit.
 - **Slot selection**: ShotInfo (0x102a) index 7 is the WhiteBalance setting (ExifTool prose:
   0 Auto, 1 Daylight, 2 Cloudy, 3 Tungsten, 4 Fluorescent, 5 Flash, 6 Custom, 8 Shade,
-  9 Kelvin). Every corpus file reads 0 (Auto) → slot 0. Preset mappings follow the slot
-  orders above and are untested for lack of non-auto samples.
+  9 Kelvin). Every corpus file reads 0 (Auto) → slot 0.
+- **D60 preset mapping verified** (2026-10-14): the maintainer shot one overcast scene at
+  each setting, Auto, Daylight, Cloudy, Tungsten, Fluorescent, Flash and Custom, ISO 100,
+  within a minute (all seven decode sample-exact). Slots 1–6 hold the same multipliers in
+  every file; slot 0 (Auto) varies slightly per shot. On the pixels each camera JPEG
+  renders neutral, the multipliers the camera applied are nearest to slot 1 for Daylight,
+  2 for Cloudy, 4 for Fluorescent and 5 for Flash, i.e. setting n uses slot n. Tungsten and
+  Custom leave too few neutral pixels for that test (5 and 0), so they were checked by
+  rendering: the overall tint of our render follows the camera JPEG for every setting
+  (Tungsten JPEG R/G 0.57 B/G 1.41, ours 0.66 / 1.52; Custom 0.62 / 2.93, ours 0.80 /
+  3.02), which no other slot would give. Shade and Kelvin (10D/300D only) remain untested.
 - **Auto slot confirmed on the private D60 files** (2026-10-13): on the pixels each camera
   JPEG renders neutral (channel spread < 6 of 255, mid-tone, raw unclipped), the median raw
   G/R and G/B give the multipliers the camera applied. On 17 files with enough neutral

@@ -197,7 +197,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let cfa = Cfa::bayer_static(if model.contains("PowerShot G1") { "GBRG" } else { "RGGB" });
 
     let black = if mode == Mode::Full { black_from_borders(&data, w, h, active) } else { BlackLevel::uniform(0.0) };
-    let white = if mode == Mode::Full { white_from_data(&data, bits) } else { ((1u32 << bits) - 1) as f32 };
+    let white = if mode == Mode::Full { white_level(&data, bits) } else { ((1u32 << bits) - 1) as f32 };
 
     // ImageInfo rotation: degrees; 270 observed on portrait files whose scene is upright after a
     // 90° counter-clockwise turn (Exif 8), so 90 is its mirror (Exif 6)
@@ -290,6 +290,44 @@ fn wb_from_color_balance(bytes: &[u8], rec: &BTreeMap<u16, (usize, usize)>, o: O
     }
     let (mr, mb) = (r / g, b / g);
     ((0.2..=8.0).contains(&mr) && (0.2..=8.0).contains(&mb)).then_some([mr, 1.0, mb])
+}
+
+/// Fewest samples at the top of the data that count as the sensor's clip level (hot pixels are
+/// fewer).
+const CLIP_SAMPLES: usize = 64;
+
+/// White level: the saturation plateau when the shared estimate finds one, else the top of the
+/// data when it sits just under the full range.
+///
+/// These bodies clip below the full range at low ISO: on 1,409 D60 files at ISO 100–400 no
+/// sample exceeds 4009 (most stop at 4000–4008), while ISO 800–1000 files reach 4095; the 10D
+/// and 300D samples stop at 4003–4008 too. A photo with only a small blown area has no plateau
+/// for [`white_from_data`], which then answered 4095 (373 of 925 ISO 100 files, 283 of 287 at
+/// ISO 400): the blown pixels sat at 0.977 of white, under the clip threshold, and kept a
+/// colour after white balance. So when at least [`CLIP_SAMPLES`] samples reach within 3 % of the
+/// full range, the level they reach is the white level, lowered by the same 1/256 band the
+/// plateau estimate uses.
+fn white_level(data: &[u16], bits: u32) -> f32 {
+    let full = (1u32 << bits.clamp(1, 16)) - 1;
+    let plateau = white_from_data(data, bits);
+    if plateau < full as f32 {
+        return plateau;
+    }
+    let mut hist = vec![0usize; full as usize + 1];
+    for &v in data {
+        if let Some(h) = hist.get_mut(v as usize) {
+            *h += 1;
+        }
+    }
+    let mut above = 0usize;
+    let top = hist.iter().enumerate().rev().find_map(|(v, &n)| {
+        above += n;
+        (above >= CLIP_SAMPLES).then_some(v as u32)
+    });
+    match top {
+        Some(top) if top < full && top as f32 >= 0.97 * full as f32 => (top - (top / 256).max(1)) as f32,
+        _ => full as f32,
+    }
 }
 
 /// Black level from the masked sensor borders: the darkest flat strip among 8-column groups of
@@ -737,6 +775,24 @@ mod tests {
         let f = roundtrip_file(16, 8, "Canon PowerShot G5", None, &hi, Order::Le);
         let Err(RawError::Unsupported(why)) = decode(&f, Mode::Full) else { panic!("expected Unsupported") };
         assert!(why.contains("G5"), "{why}");
+    }
+
+    /// A D60 at ISO 100 clips near 4000, and a photo with a small blown area has no plateau:
+    /// the white level must still come down to where the data stops, not stay at 4095. A few
+    /// hot pixels, or a photo that never gets near the top, leave the full range.
+    #[test]
+    fn white_level_follows_a_small_clipped_area() {
+        let mut data: Vec<u16> = (0..200_000).map(|i| 300 + (i % 3000) as u16).collect();
+        assert_eq!(white_level(&data, 12), 4095.0, "nothing near the top");
+        for v in data.iter_mut().take(100) {
+            *v = 4002;
+        }
+        assert_eq!(white_level(&data, 12), (4002 - 15) as f32, "100 samples at the clip level");
+        let mut hot: Vec<u16> = (0..200_000).map(|i| 300 + (i % 3000) as u16).collect();
+        for v in hot.iter_mut().take(10) {
+            *v = 4002;
+        }
+        assert_eq!(white_level(&hot, 12), 4095.0, "ten hot pixels are not a clip level");
     }
 
     /// The D60 layout: sensor rows clamped to 0 above the image, dark columns left of it. The
