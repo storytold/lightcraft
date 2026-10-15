@@ -263,6 +263,10 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.captureTime", "Edit Capture Time…", None, "Photo"),
     ("photo.tagFromTracklog", "Auto-Tag from Tracklog…", None, "Photo"),
     ("app.exportPrevious", "Export with Previous", Some("Cmd+Alt+Shift+E"), "File"),
+    // CollabCraft cloud storage: open a photo from cloud / save (export) one to cloud.
+    // Only rendered when a CollabCraft service is configured (`cloud::available`).
+    ("file.cloudOpen", "Open from CollabCraft…", None, "File"),
+    ("file.cloudSave", "Save to CollabCraft…", None, "File"),
 ];
 
 fn panel(app: &mut LightcraftApp, ctx: &egui::Context, p: RightPanel, name: &str) {
@@ -780,6 +784,20 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 Some(f) => f(&mut app.session),
                 None => Err("not available here: on the desktop the library is a folder; back it up with your other files".into()),
             }
+        }
+        "file.cloudOpen" => {
+            if !crate::cloud::available(app) {
+                return Some(Err("CollabCraft is not configured".into()));
+            }
+            app.cloud_page = Some(crate::cloud::CloudPage::Open);
+            Ok(serde_json::json!({"page": "open"}))
+        }
+        "file.cloudSave" => {
+            if !crate::cloud::available(app) {
+                return Some(Err("CollabCraft is not configured".into()));
+            }
+            app.cloud_page = Some(crate::cloud::CloudPage::Save);
+            Ok(serde_json::json!({"page": "save"}))
         }
         "view.filmstrip" => {
             app.ui.filmstrip = !app.ui.filmstrip;
@@ -2172,6 +2190,8 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
         "file.backupLibrary" => app.services.backup_library.is_some(),
         "app.openLogFolder" => app.services.reveal.is_some() && app.services.log_file.is_some(),
         "file.restoreLibrary" => app.services.restore_library.is_some(),
+        "file.cloudOpen" => crate::cloud::available(app),
+        "file.cloudSave" => crate::cloud::available(app) && app.session.active().is_some(),
         "app.clearRecentLibraries" => !app.ui.settings.recent_libraries.is_empty(),
         "compare.swap" | "compare.makeSelect" | "compare.set" => app.ui.view == ViewMode::Compare,
         "slideshow.togglePause" | "slideshow.next" | "slideshow.previous" | "slideshow.end" => app.ui.slideshow.is_some(),

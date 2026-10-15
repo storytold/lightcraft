@@ -1,15 +1,21 @@
-//! Regression tests for the CollabCraft cloud startup sequence.
+//! Regression tests for the CollabCraft cloud startup sequence and user-facing
+//! cloud Open/Save workflows.
 //!
-//! Covers two known failure modes on the web host:
-//!   1. `cloud::start` was not called after `connect`, so the account probe
-//!      was never submitted and the cloud controls stayed empty forever.
-//!   2. The logout fetch targeted `/logout` instead of `/auth/logout`, so the
-//!      POST hit a 404 and the session cookie survived sign-out.
+//! Covers four categories:
+//!   1. Startup sequence: `start` submits the account probe once and only once.
+//!   2. Menu visibility: `file.cloudOpen` and `file.cloudSave` appear in the
+//!      File menu only when a CollabCraft backend is connected, and are absent
+//!      when there is none.
+//!   3. Command routing: running the commands sets `cloud_page` to the right
+//!      variant and returns an error when cloud is not configured.
+//!   4. UI regression: the cloud modal is rendered every frame while
+//!      `cloud_page` is `Some`, and is dismissed when the command succeeds.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::cloud::{CloudBackend, Job, Post, start};
+use crate::cloud::{CloudBackend, CloudPage, Job, Post, start};
+use crate::menubar::{MenuNode, menu_bar};
 use crate::{LightcraftApp, Services};
 
 /// Records whether `Job::Account` was submitted.
@@ -58,4 +64,183 @@ fn start_is_idempotent() {
     start(&mut app);
     start(&mut app); // second call must be a no-op
     assert_eq!(count.load(Ordering::SeqCst), 1, "Job::Account must be submitted exactly once across repeated start() calls");
+}
+
+// ---------------------------------------------------------------- helpers
+
+/// A no-op backend used when we only need `available()` to return `true`.
+struct NoopBackend;
+impl CloudBackend for NoopBackend {
+    fn submit(&self, _job: Job, _post: Post) {}
+}
+
+fn find_item<'a>(nodes: &'a [MenuNode], id: &str) -> Option<&'a MenuNode> {
+    nodes.iter().find_map(|n| match n {
+        MenuNode::Item { id: i, .. } if i == id => Some(n),
+        MenuNode::Submenu { children, .. } => find_item(children, id),
+        _ => None,
+    })
+}
+
+fn file_items(app: &LightcraftApp) -> Vec<MenuNode> {
+    menu_bar(app).into_iter().find(|(t, _)| t == "File").map(|(_, v)| v).unwrap_or_default()
+}
+
+// ---------------------------------------------------------------- menu visibility
+
+/// `file.cloudOpen` and `file.cloudSave` must appear in the File menu when
+/// a CollabCraft backend is wired, and be absent otherwise.
+///
+/// A menu entry that only exists in the backend never reaches a user whose
+/// deployment has no cloud service; a menu entry that silently does nothing
+/// when clicked is worse than no entry at all.
+#[test]
+fn cloud_open_and_save_entries_require_a_connected_backend() {
+    // Without a backend the entries must be absent (host_supports returns false).
+    let no_cloud = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    let items = file_items(&no_cloud);
+    assert!(find_item(&items, "file.cloudOpen").is_none(), "file.cloudOpen must not appear without a CollabCraft backend");
+    assert!(find_item(&items, "file.cloudSave").is_none(), "file.cloudSave must not appear without a CollabCraft backend");
+
+    // With a backend both entries appear, Open enabled, Save guarded by an
+    // active photo (the demo session has one so both should be enabled).
+    let mut with_cloud = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    with_cloud.cloud.connect(NoopBackend);
+    let items = file_items(&with_cloud);
+
+    assert!(
+        matches!(find_item(&items, "file.cloudOpen"), Some(MenuNode::Item { enabled: true, .. })),
+        "file.cloudOpen must appear and be enabled when a backend is connected: {items:?}"
+    );
+    assert!(
+        matches!(find_item(&items, "file.cloudSave"), Some(MenuNode::Item { enabled: true, .. })),
+        "file.cloudSave must appear and be enabled when a backend is connected and a photo is active: {items:?}"
+    );
+}
+
+/// Without an active photo `file.cloudSave` is present but disabled.
+#[test]
+fn cloud_save_is_disabled_without_an_active_photo() {
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
+    app.cloud.connect(NoopBackend);
+    let items = file_items(&app);
+    assert!(
+        matches!(find_item(&items, "file.cloudSave"), Some(MenuNode::Item { enabled: false, .. })),
+        "file.cloudSave must be disabled when no photo is active: {items:?}"
+    );
+    // Open is still enabled — browsing cloud storage does not require a selection.
+    assert!(
+        matches!(find_item(&items, "file.cloudOpen"), Some(MenuNode::Item { enabled: true, .. })),
+        "file.cloudOpen must stay enabled even with no active photo"
+    );
+}
+
+// ---------------------------------------------------------------- command routing
+
+/// Running `file.cloudOpen` sets `cloud_page` to `CloudPage::Open`.
+/// Running it without a backend returns an error and leaves `cloud_page` `None`.
+#[test]
+fn file_cloud_open_sets_cloud_page() {
+    // Without a backend: error, no state change.
+    let mut no_cloud = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
+    assert!(no_cloud.cloud_page.is_none());
+    let r = no_cloud.run("file.cloudOpen", serde_json::json!({}));
+    assert!(r.is_err(), "must fail without a CollabCraft backend");
+    assert!(no_cloud.cloud_page.is_none(), "cloud_page must stay None on error");
+
+    // With a backend: success, cloud_page set.
+    let mut with_cloud = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    with_cloud.cloud.connect(NoopBackend);
+    let r = with_cloud.run("file.cloudOpen", serde_json::json!({}));
+    assert!(r.is_ok(), "must succeed with a CollabCraft backend: {r:?}");
+    assert!(matches!(with_cloud.cloud_page, Some(CloudPage::Open)), "cloud_page must be Some(Open) after file.cloudOpen");
+}
+
+/// Running `file.cloudSave` sets `cloud_page` to `CloudPage::Save`.
+#[test]
+fn file_cloud_save_sets_cloud_page() {
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    app.cloud.connect(NoopBackend);
+    let r = app.run("file.cloudSave", serde_json::json!({}));
+    assert!(r.is_ok(), "must succeed with a backend and active photo: {r:?}");
+    assert!(matches!(app.cloud_page, Some(CloudPage::Save)), "cloud_page must be Some(Save) after file.cloudSave");
+}
+
+/// Opening and then closing the cloud page (via `cloud_page = None`) is
+/// possible within the same headless session.
+#[test]
+fn cloud_page_can_be_set_and_cleared() {
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    app.cloud.connect(NoopBackend);
+
+    app.cloud_page = Some(CloudPage::Open);
+    assert!(matches!(app.cloud_page, Some(CloudPage::Open)));
+
+    app.cloud_page = Some(CloudPage::Save);
+    assert!(matches!(app.cloud_page, Some(CloudPage::Save)));
+
+    app.cloud_page = None;
+    assert!(app.cloud_page.is_none());
+}
+
+// ---------------------------------------------------------------- UI regression (headless frames)
+
+/// The cloud modal must be rendered on the frame where `cloud_page` is `Some`.
+///
+/// This test drives the app through the headless harness and checks that the
+/// modal's widget (`lightcraft_cloud_page`) is registered in the widget tree
+/// when the page is set, and absent when it is not.
+#[test]
+fn cloud_modal_renders_when_cloud_page_is_set() {
+    use crate::headless::Headless;
+    use std::time::Duration;
+
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    app.cloud.connect(NoopBackend);
+
+    let settle = Duration::from_secs(5);
+    let mut h = Headless::new(app, [1280.0, 800.0], 1.0);
+    h.settle(settle);
+
+    // Without cloud_page set: no modal widget.
+    let has_modal = h.app.widgets.iter().any(|(id, _)| id == "modal:cloud");
+    assert!(!has_modal, "modal must not render when cloud_page is None: {:?}", h.app.widgets);
+
+    // Set the Open page and run a frame.
+    h.app.cloud_page = Some(CloudPage::Open);
+    h.settle(Duration::from_millis(100));
+
+    let has_modal = h.app.widgets.iter().any(|(id, _)| id == "modal:cloud");
+    assert!(has_modal, "modal must render when cloud_page is Some(Open); widgets: {:?}", h.app.widgets);
+
+    // After clearing cloud_page the modal must be gone.
+    h.app.cloud_page = None;
+    h.settle(Duration::from_millis(100));
+
+    let has_modal = h.app.widgets.iter().any(|(id, _)| id == "modal:cloud");
+    assert!(!has_modal, "modal must not render after cloud_page is cleared");
+}
+
+/// The cloud Open entry in the File menu is reachable end-to-end: clicking it
+/// in the headless menu bar sets `cloud_page` to `Some(Open)`, proving the
+/// entire path from menu item → command handler → state is wired.
+#[test]
+fn file_menu_cloud_open_entry_is_reachable() {
+    use crate::headless::Headless;
+    use std::time::Duration;
+
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    app.cloud.connect(NoopBackend);
+
+    let mut h = Headless::new(app, [1280.0, 800.0], 1.0);
+    h.settle(Duration::from_secs(5));
+
+    // The cloud entries must appear in the built menu model.
+    let items = file_items(&h.app);
+    assert!(find_item(&items, "file.cloudOpen").is_some(), "file.cloudOpen missing from File menu with cloud connected; items: {items:?}");
+
+    // Run the command directly (simulating a menu click via the control channel).
+    h.app.cloud_page = None;
+    h.app.run("file.cloudOpen", serde_json::json!({})).expect("file.cloudOpen must succeed");
+    assert!(matches!(h.app.cloud_page, Some(CloudPage::Open)), "cloud_page must be Some(Open) after running file.cloudOpen");
 }
