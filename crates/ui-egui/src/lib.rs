@@ -43,13 +43,13 @@ pub mod widgets;
 #[cfg(test)]
 mod tests_activity;
 #[cfg(test)]
-mod tests_cloud;
-#[cfg(test)]
 mod tests_album_picker;
 #[cfg(test)]
 mod tests_appearance;
 #[cfg(test)]
 mod tests_before_after;
+#[cfg(test)]
+mod tests_cloud;
 #[cfg(test)]
 mod tests_compare;
 #[cfg(test)]
@@ -1332,6 +1332,9 @@ impl LightcraftApp {
             panels::notices::show(self, &ctx);
             panels::dialogs::show(self, &ctx);
             panels::library_problem::show(self, &ctx);
+            if let Some(page) = self.cloud_page {
+                cloud::modal(self, page, &ctx);
+            }
             panels::toast(self, &ctx);
             self.widgets = widgets::take_registry(&ctx);
             self.end_frame(&ctx, t0);
@@ -1348,6 +1351,10 @@ impl LightcraftApp {
         panels::notices::show(self, &ctx);
         panels::dialogs::show(self, &ctx);
         panels::library_problem::show(self, &ctx);
+        // Cloud Open / Save modal: drawn above all panels, below system dialogs.
+        if let Some(page) = self.cloud_page {
+            cloud::modal(self, page, &ctx);
+        }
         export_task::poll(self, &ctx);
         panels::activity::show(self, &ctx);
         export_task::poll_photos(self, &ctx);
