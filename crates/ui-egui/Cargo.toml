@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 craft-ui = { workspace = true }
+lightcraft-print = { workspace = true }
 lightcraft-geom = { workspace = true }
 lightcraft-meta = { workspace = true }
 lightcraft-color = { workspace = true }
@@ -28,6 +29,8 @@ serde_json = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]
+# The in-process fake WS-Print printer for the network print tests (`craft_print::wsd::testing`).
+craft-print = { workspace = true, features = ["wsd", "ipp", "testing"] }
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }

@@ -1350,7 +1350,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     Dialog::LightroomResult { first: Some(_), .. } => "Show in Library",
                     Dialog::ContactSheet { .. } => "Choose PDF…",
                     Dialog::SlideshowExport { .. } => "Export…",
-                    Dialog::Print => "Print to PDF…",
+                    Dialog::Print => app.print_out.confirm_label(),
                     Dialog::Merge { .. } => "Merge",
                     Dialog::DenoiseModel { info, .. } if info["download"].is_string() => "Accept & Download",
                     Dialog::DenoiseModel { .. } => "Install",
@@ -1385,6 +1385,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     _ => false,
                 };
                 let can_confirm = !rename_blocked
+                    && (!matches!(&dlg, Dialog::Print) || app.print_out.can_confirm())
                     && (informational
                         || !matches!(
                             &dlg,
@@ -1589,7 +1590,8 @@ pub fn fmt_gap(v: f64) -> String {
 /// Whether a dialog stays open after its action succeeded (the SAM 3 dialog while the model
 /// downloads).
 pub fn keeps_open(app: &LightcraftApp, dlg: &Dialog) -> bool {
-    matches!(dlg, Dialog::SamModel { .. }) && !app.session.segmenter.installed()
+    (matches!(dlg, Dialog::SamModel { .. }) && !app.session.segmenter.installed())
+        || (matches!(dlg, Dialog::Print) && app.print_out.keeps_dialog_open())
 }
 
 /// No SAM 3 model, no download running and nowhere to download it from: installing it by hand is
@@ -1902,6 +1904,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         ),
         Dialog::ContactSheet { options } => app.run("app.contactSheet", json!(options)),
         Dialog::SlideshowExport { settings } => app.run("app.slideshowExport", json!(settings)),
+        Dialog::Print if app.print_out.dest != crate::print_dest::Destination::Pdf => crate::print_dest::start(app),
         Dialog::Print => app.run("app.print", json!({})),
         Dialog::CopySettings { groups } => app.run("develop.copy", json!({"groups": groups})),
         Dialog::PasteSettings { groups } => app.run("develop.paste", json!({"groups": groups})),

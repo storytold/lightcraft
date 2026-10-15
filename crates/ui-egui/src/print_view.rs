@@ -188,6 +188,8 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
     ui.spacing_mut().item_spacing.y = 5.0;
     ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if photos == 1 { "" } else { "s" }, n = photos)).color(t.text_dim));
 
+    crate::print_dest::section(app, ui, t, photos);
+
     heading(ui, t, "Templates");
     ui.horizontal(|ui| {
         crate::text_field::TextField::singleline("field:printTemplateName", &mut pu.template_name)

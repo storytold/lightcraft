@@ -34,3 +34,13 @@ Speicherung, Datumsformate, unveränderte Benutzernamen und gerenderte Texte sow
 und ß. Ein weiterer Render-Test prüft die Schaltflächenbreiten; der Importtest prüft
 auch den Sprachwechsel nach der Hintergrundprüfung der Quellen. Akzeptierte Sprachangaben umfassen `de`, `de-DE`, `de_AT.UTF-8` und `de-CH`;
 gespeichert wird stets `de`. Weitere Hinweise stehen in [localization.md](localization.md).
+
+## Maschinell entworfene Texte (nicht geprüft)
+
+Die Texte zum Drucken auf einem Drucker (Dialog Drucken, Abschnitt „Drucken auf“: Drucker des
+Computers, Netzwerkdrucker über WS-Print oder IPP, Auftragsstatus, Fehler, Abgleich) in
+`locales/de.json` sind **maschinell entworfen und von keiner Muttersprachlerin und keinem
+Muttersprachler geprüft**. Sie stehen am Ende von `locales/de.json` (ab „({done} von {total} Blättern)“; die
+Beschreibung der Funktion steht in `docs/network-printing.md`). Andere Sprachen
+zeigen diese Texte vorerst auf Englisch; der Katalog darf nach `docs/localization.md` einzeln
+wachsen.

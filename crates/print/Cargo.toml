@@ -1,0 +1,23 @@
+[package]
+name = "lightcraft-print"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightCraft printing to a device: the system spooler and, with `network-print`, WS-Print and IPP printers through craft-print; composed print pages as the raster documents printers take (L3)"
+
+[lints]
+workspace = true
+
+[features]
+default = ["network-print"]
+# Network printing over WS-Print and IPP: turns on craft-print's `wsd` and `ipp` backends. Not built for wasm32
+# (there is no socket to open). Nothing connects until the app adds a printer and a job is confirmed.
+network-print = ["craft-print/wsd", "craft-print/ipp"]
+
+[dependencies]
+craft-print = { workspace = true }
+jpeg-encoder = { workspace = true }
+
+[dev-dependencies]
+# The in-process fake WS-Print and IPP printers (`craft_print::wsd::testing`, `craft_print::ipp::testing`).
+craft-print = { workspace = true, features = ["wsd", "ipp", "testing"] }

@@ -28,8 +28,11 @@ pub mod menubar;
 pub mod menus;
 pub mod merge;
 mod model_setup;
+#[cfg(not(target_arch = "wasm32"))]
+mod network_glue;
 pub mod panels;
 pub mod pick;
+pub mod print_dest;
 pub mod print_view;
 pub mod recheck;
 pub mod region;
@@ -447,6 +450,11 @@ pub struct LightcraftApp {
     pub shown_library: Option<u64>,
     /// A background export in progress.
     pub export: Option<export_task::ExportTask>,
+    /// Where the Print dialog sends the print (a PDF file, a printer of this computer, a network printer).
+    pub print_out: print_dest::PrintOut,
+    /// The network-printer destination: its state, query and tracked print (not on the web).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) print_net: network_glue::NetTasks,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
     pub tasks: tasks::Tasks,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).
@@ -542,6 +550,9 @@ impl LightcraftApp {
             lightroom_result: None,
             shown_library: None,
             export: None,
+            print_out: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            print_net: Default::default(),
             tasks: Default::default(),
             last_export_result: None,
             slideshow_export_reported: true,
@@ -1464,6 +1475,7 @@ impl LightcraftApp {
         panels::dialogs::show(self, &ctx);
         panels::library_problem::show(self, &ctx);
         export_task::poll(self, &ctx);
+        print_dest::poll(self, &ctx);
         slideshow_export::poll(self, &ctx);
         panels::activity::show(self, &ctx);
         export_task::poll_photos(self, &ctx);

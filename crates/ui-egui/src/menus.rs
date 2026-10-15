@@ -1369,6 +1369,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         "dialog.print" => {
             app.ui.print = Default::default();
+            app.print_out.dialog_opened();
+            #[cfg(not(target_arch = "wasm32"))]
+            app.print_net.dialog_opened();
             app.ui.dialog = Some(Dialog::Print);
             Ok(Value::Null)
         }
