@@ -11,6 +11,7 @@ pub mod brush_live;
 pub mod button;
 pub mod canvas_keys;
 mod command_error;
+pub mod cloud;
 pub mod control;
 pub mod credits;
 pub mod date_picker;
@@ -478,6 +479,14 @@ pub struct LightcraftApp {
     pub library_problem: Option<panels::library_problem::LibraryProblem>,
     /// The activity stack shows every task, not just the first few ("+N more" was clicked).
     pub activity_expanded: bool,
+    /// Cloud file browser / save / share state. Driven every frame by `cloud::pump`.
+    pub cloud: craft_ui::cloud::CloudFiles,
+    /// Share-dialog state. Shown by `share.show(ctx)` every frame.
+    pub share: craft_ui::share::ShareDialog,
+    /// Presence bar (other users viewing the same photo). Populated by `pump`.
+    pub presence: craft_ui::presence::PresenceBar,
+    /// Which cloud page the user opened from the File menu, if any.
+    pub cloud_page: Option<cloud::CloudPage>,
 }
 
 impl LightcraftApp {
@@ -557,6 +566,10 @@ impl LightcraftApp {
             library_problem: None,
             activity_expanded: false,
             model_setup: Default::default(),
+            cloud: Default::default(),
+            share: Default::default(),
+            presence: Default::default(),
+            cloud_page: None,
         }
     }
 
@@ -1118,6 +1131,11 @@ impl LightcraftApp {
         self.save_status(ctx);
         self.slideshow_tick(ctx);
         panels::faces::pump(self, ctx);
+        // Cloud Open / Save / Share: drain the worker channel and advance the UI state.
+        cloud::pump(self, ctx);
+        // Share dialog: draw the modal overlay when it is open. Called from logic so it appears
+        // even when the topbar (which normally opens it) is not drawn this frame.
+        self.share.show(ctx);
         // back from an external editor: pick up the files it saved
         let focused = ctx.input(|i| i.focused);
         if focused && !self.ui.was_focused && !self.ui.external_edits.is_empty() {

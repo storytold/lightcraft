@@ -188,6 +188,19 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ("bell", Icon::Bell, "Activity", "panel.activity"),
             ] {
                 let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
+                // When a cloud service is configured the static storage-status
+                // icon is replaced by the live account badge from craft-ui. The
+                // badge fits the same 28 × 28 slot; it grows rightward into the
+                // space the title bar leaves, which is never occupied on the
+                // narrow end of a large-photo window.
+                if id == "cloud" && crate::cloud::available(app) {
+                    // Account badge + presence. Both draw inside the allocated rect.
+                    let badge_rect = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, full.height()));
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(badge_rect));
+                    crate::cloud::who(app, &mut child);
+                    x -= 40.0;
+                    continue;
+                }
                 let resp = ui.interact(r, egui::Id::new(("top", id)), Sense::click()).on_hover_text(crate::i18n::tr(tip));
                 crate::widgets::announce(&resp, crate::i18n::tr(tip));
                 register(ui.ctx(), format!("icon:{id}"), r);

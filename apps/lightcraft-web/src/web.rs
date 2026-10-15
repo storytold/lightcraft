@@ -435,6 +435,17 @@ impl WebApp {
         let frozen = Rc::new(Cell::new(false));
         let mut app = LightcraftApp::new(session, services(originals.clone(), backend.clone(), files.clone(), frozen.clone(), cc.egui_ctx.clone()))
             .with_chinese_font(chinese_font);
+        // Cloud storage through CollabCraft, when the app is served from its origin.
+        // Same-origin cookies carry the session; no token file on web.
+        // This block is always compiled (we are in the wasm32 module), but the
+        // cloud module itself is gated to wasm32, which is the only target that
+        // builds this file.
+        {
+            use crate::cloud::Service as CloudService;
+            let svc = CloudService::new(cc.egui_ctx.clone());
+            app.cloud.connect(svc);
+            app.share.connect(collabcraft_share::CollabCraft::from_fn(|| Some(craft_cloud_client::Client::from_page())));
+        }
         let ui_written = files.get("ui.json").unwrap_or_default();
         if let Ok(ui) = serde_json::from_slice::<UiState>(&ui_written) {
             app.ui = ui;
