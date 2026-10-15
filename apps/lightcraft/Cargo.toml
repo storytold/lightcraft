@@ -29,6 +29,8 @@ serde_json = { workspace = true }
 # probing the window's renderer before it opens (`window_gpu`)
 pollster = { workspace = true }
 log = { workspace = true }
+craft-cloud-client = { workspace = true }
+collabcraft-share = { workspace = true }
 
 [build-dependencies]
 # Icon + VERSIONINFO for lightcraft.exe; build.rs only uses it when targeting Windows.
