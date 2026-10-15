@@ -295,6 +295,8 @@ pub fn modal(app: &mut LightcraftApp, page: CloudPage, ctx: &egui::Context) {
         let width = 680.0_f32.min(room.x);
         ui.set_min_width(360.0_f32.min(width));
         ui.set_max_width(width);
+        // Register the modal container so accessibility/regression tests can detect it.
+        crate::widgets::register(ui.ctx(), "modal:cloud", ui.max_rect());
         ui.label(egui::RichText::new(title).strong().size(16.0));
         ui.add_space(10.0);
         let body = (room.y - ui.min_size().y - 48.0).max(1.0);

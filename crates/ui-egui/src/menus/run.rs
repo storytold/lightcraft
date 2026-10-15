@@ -580,6 +580,20 @@ fn ui_commands_4(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                 None => Err("not available here: on the desktop the library is a folder; back it up with your other files".into()),
             }
         }
+        "file.cloudOpen" => {
+            if !crate::cloud::available(app) {
+                return Some(Err("CollabCraft is not configured".into()));
+            }
+            app.cloud_page = Some(crate::cloud::CloudPage::Open);
+            Ok(serde_json::json!({"page": "open"}))
+        }
+        "file.cloudSave" => {
+            if !crate::cloud::available(app) {
+                return Some(Err("CollabCraft is not configured".into()));
+            }
+            app.cloud_page = Some(crate::cloud::CloudPage::Save);
+            Ok(serde_json::json!({"page": "save"}))
+        }
         "view.filmstrip" => {
             app.ui.filmstrip = !app.ui.filmstrip;
             Ok(Value::Null)

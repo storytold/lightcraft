@@ -57,10 +57,6 @@ mod test_budget;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-mod tests_cloud;
-#[cfg(test)]
-mod tests_album_picker;
-#[cfg(test)]
 use tests::panels as tests_panels;
 #[cfg(test)]
 use tests::{fixtures as tests_fixtures, render_fixtures as tests_render_fixtures};

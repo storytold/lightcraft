@@ -283,4 +283,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.captureTime", "Edit Capture Time…", None, "Photo"),
     ("photo.tagFromTracklog", "Auto-Tag from Tracklog…", None, "Photo"),
     ("app.exportPrevious", "Export with Previous", Some("Cmd+Alt+Shift+E"), "File"),
+    // CollabCraft cloud storage: open a photo from cloud / save (export) one to cloud.
+    // Only rendered when a CollabCraft service is configured (`cloud::available`).
+    ("file.cloudOpen", "Open from CollabCraft…", None, "File"),
+    ("file.cloudSave", "Save to CollabCraft…", None, "File"),
 ];

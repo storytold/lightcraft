@@ -432,6 +432,10 @@ impl LightcraftApp {
             // Share dialog: draw the modal overlay when it is open. Called from here so it appears
             // even when the topbar (which normally opens it) is not drawn this frame.
             self.share.show(&ctx);
+            // Cloud Open / Save modal: drawn above all panels, below system dialogs.
+            if let Some(page) = self.cloud_page {
+                crate::cloud::modal(self, page, &ctx);
+            }
             updates_ui::show(self, &ctx);
             panels::library_problem::show(self, &ctx, notice_blocks);
             panels::toast(self, &ctx);
@@ -466,6 +470,10 @@ impl LightcraftApp {
         // Share dialog: draw the modal overlay when it is open. Called from here so it appears
         // even when the topbar (which normally opens it) is not drawn this frame.
         self.share.show(&ctx);
+        // Cloud Open / Save modal: drawn above all panels, below system dialogs.
+        if let Some(page) = self.cloud_page {
+            crate::cloud::modal(self, page, &ctx);
+        }
         updates_ui::show(self, &ctx);
         panels::library_problem::show(self, &ctx, notice_blocks);
         export_task::poll(self, &ctx);
