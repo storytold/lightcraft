@@ -27,7 +27,7 @@ use crop::crop_overlay;
 #[cfg(test)]
 pub(crate) use crop::readout_rect;
 #[cfg(test)]
-use crop::{flipped_corners, outside_crop_mesh, rotate_cursor_turn};
+use crop::{crop_overlay_centre, flipped_corners, outside_crop_mesh, rotate_cursor_turn, shortest_turn};
 #[cfg(test)]
 use filmstrip::film_label;
 #[cfg(test)]
@@ -80,6 +80,10 @@ pub enum Gesture {
     CropRotate {
         start_angle: f64,
         a0: f32,
+        /// On-screen centre of the crop overlay when the drag began. Not `map.screen(rect.center())`:
+        /// that treats the straightened-frame rect as oriented-image coords, so an off-centre box
+        /// still turns about the photo.
+        pivot: Pos2,
         /// The crop as it stood when the drag began, so every step shrinks from the drawn crop
         /// rather than from the previous step's shrunken one (issue #1794).
         start_rect: lightcraft_geom::Rect,
@@ -1078,6 +1082,27 @@ pub(crate) fn click_zoom_and_pan(app: &mut LightcraftApp, resp: &egui::Response,
 
 #[cfg(test)]
 mod tests {
+    /// Crossing the left (atan2 branch cut) must not jump by a full turn.
+    #[test]
+    fn shortest_turn_crosses_the_left_without_a_full_spin() {
+        use std::f32::consts::PI;
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-5;
+        // top-left (~-3π/4) down to just past the left axis (~π): a short clockwise step, not +7π/4
+        assert!(near(super::shortest_turn(-3.0 * PI / 4.0, -PI + 0.05), -PI / 4.0 + 0.05));
+        assert!(near(super::shortest_turn(-3.0 * PI / 4.0, PI - 0.05), -PI / 4.0 - 0.05));
+        // bottom-left (~+3π/4) up past the left axis: a short counter-clockwise step
+        assert!(near(super::shortest_turn(3.0 * PI / 4.0, PI - 0.05), PI / 4.0 - 0.05));
+        assert!(near(super::shortest_turn(3.0 * PI / 4.0, -PI + 0.05), PI / 4.0 + 0.05));
+        assert!(near(super::shortest_turn(0.2, 0.3), 0.1));
+    }
+
+    #[test]
+    fn crop_overlay_centre_is_the_mean_of_the_corners() {
+        use egui::pos2;
+        let c = super::crop_overlay_centre(&[pos2(0.0, 0.0), pos2(4.0, 0.0), pos2(4.0, 2.0), pos2(0.0, 2.0)]);
+        assert!((c.x - 2.0).abs() < 1e-6 && (c.y - 1.0).abs() < 1e-6);
+    }
+
     /// The rotation pointer's arc bulges away from the side of the crop box it is on, and follows
     /// a box that is itself rotated.
     #[test]

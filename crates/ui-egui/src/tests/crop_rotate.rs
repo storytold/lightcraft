@@ -57,11 +57,11 @@ fn the_rotation_pivots_on_the_box_centre() {
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     let img = h.app.image_rect.expect("the photo on screen");
-    let box_centre = {
-        let id = h.app.session.active().expect("a photo");
-        h.app.session.catalog.photo(id).expect("the photo").develop.crop.geometry.rect.center()
+    // the overlay's own corners, not `rect.center()` mapped as image coords (that is the photo's frame)
+    let (cx, cy) = {
+        let p = |i| corner(&h, i);
+        ((p(0).x + p(1).x + p(2).x + p(3).x) / 4.0, (p(0).y + p(1).y + p(2).y + p(3).y) / 4.0)
     };
-    let (cx, cy) = (img.left() + box_centre.x as f32 * img.width(), img.top() + box_centre.y as f32 * img.height());
     let radius = img.width() * 0.30;
     // pointer positions on an arc about the box centre; the first drag event is where the gesture
     // begins, so that is where the angle is measured from
@@ -118,6 +118,71 @@ fn a_handle_stays_a_handle_however_far_the_pointer_moves_first() {
         h.request("ui.pointer", json!({"events": [{"kind": "up", "x": x, "y": y - 0.16}]}), T);
         h.settle(SETTLE);
     }
+}
+
+/// A rotate drag that starts at a left corner and crosses the box's left midline used to jump to
+/// the ±45° stop: atan2 wraps at ±π, the raw `a - a0` is ~±315°, and the clamp snaps. The
+/// shortest turn keeps the sign it had before the cut.
+fn inset_crop(h: &mut Headless) {
+    let r = h.request("engine.execute", json!({"command": "crop.set", "params": {"rect": [0.25, 0.25, 0.75, 0.75]}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+}
+
+fn img_xy(h: &Headless, p: egui::Pos2) -> (f64, f64) {
+    let img = h.app.image_rect.expect("the photo on screen");
+    (f64::from((p.x - img.left()) / img.width()), f64::from((p.y - img.top()) / img.height()))
+}
+
+#[test]
+fn dragging_down_the_left_does_not_snap_to_minus_45() {
+    let mut h = crop_tool();
+    inset_crop(&mut h);
+    let tl = corner(&h, 0);
+    let bl = corner(&h, 3);
+    let mid_y = (tl.y + bl.y) / 2.0;
+    // just left of the top-left handle: outside the box, so this is a rotate, not a resize
+    let press = img_xy(&h, egui::pos2(tl.x - 20.0, tl.y));
+    let past = img_xy(&h, egui::pos2(tl.x - 20.0, mid_y + (bl.y - tl.y) * 0.15));
+    let r = h.request(
+        "ui.pointer",
+        json!({"events": [
+            {"kind": "down", "x": press.0, "y": press.1},
+            {"kind": "drag", "x": press.0, "y": press.1 + 0.02},
+            {"kind": "drag", "x": past.0, "y": past.1},
+        ]}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let a = angle(&h);
+    assert!(a > -44.0, "crossed the left midline: snapped to the −45° stop ({a})");
+    assert_ne!(a, 0.0, "the drag did rotate");
+}
+
+#[test]
+fn dragging_up_the_left_does_not_snap_to_plus_45() {
+    let mut h = crop_tool();
+    inset_crop(&mut h);
+    let tl = corner(&h, 0);
+    let bl = corner(&h, 3);
+    let mid_y = (tl.y + bl.y) / 2.0;
+    let press = img_xy(&h, egui::pos2(bl.x - 20.0, bl.y));
+    let past = img_xy(&h, egui::pos2(bl.x - 20.0, mid_y - (bl.y - tl.y) * 0.15));
+    let r = h.request(
+        "ui.pointer",
+        json!({"events": [
+            {"kind": "down", "x": press.0, "y": press.1},
+            {"kind": "drag", "x": press.0, "y": press.1 - 0.02},
+            {"kind": "drag", "x": past.0, "y": past.1},
+        ]}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let a = angle(&h);
+    assert!(a < 44.0, "crossed the left midline: snapped to the +45° stop ({a})");
+    assert_ne!(a, 0.0, "the drag did rotate");
 }
 
 /// The crop box lies inside the rotated photo (issue #742: a typed or slid angle shrinks it to fit,
