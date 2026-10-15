@@ -326,7 +326,7 @@ fn open_browser(url: &str) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::token_for_service;
+    use super::{token_for_service, write_private};
     use serde_json::json;
 
     #[test]
@@ -339,5 +339,34 @@ mod tests {
     #[test]
     fn legacy_token_without_a_service_is_not_loaded() {
         assert_eq!(token_for_service(&json!({ "token": "secret" }), "https://one.example"), None);
+    }
+
+    #[test]
+    fn service_trailing_slash_is_ignored() {
+        let session = json!({ "service": "https://craft.example/", "token": "abc" });
+        assert_eq!(token_for_service(&session, "https://craft.example").as_deref(), Some("abc"));
+        assert_eq!(token_for_service(&session, "https://craft.example/").as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn empty_token_is_rejected() {
+        let session = json!({ "service": "https://one.example", "token": "" });
+        assert_eq!(token_for_service(&session, "https://one.example"), None);
+    }
+
+    /// The session file must be readable only by its owner. A world-readable
+    /// token file is a credential leak waiting for the next shared-home
+    /// operator to find it.
+    #[cfg(unix)]
+    #[test]
+    fn unix_token_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let tmp = std::env::temp_dir().join(format!("lightcraft-token-mode-test-{}", std::process::id()));
+        write_private(&tmp, b"{\"token\":\"test\",\"service\":\"https://x.example\"}")
+            .expect("write_private should succeed");
+        let mode = std::fs::metadata(&tmp).expect("stat").permissions().mode();
+        let _ = std::fs::remove_file(&tmp);
+        // Mode bits: owner read+write = 0o600; nothing for group or other.
+        assert_eq!(mode & 0o777, 0o600, "token file must be mode 0600 (got {:#o})", mode & 0o777);
     }
 }
