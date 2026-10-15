@@ -3,7 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="craft-runtime-worker" content="/craft-worker-host.js">
   <title>LightCraft</title>
+  <script>
+    (function () {
+      if (location.pathname.endsWith("craft-runtime-smoke.html")) return;
+      var q = new URLSearchParams(location.search);
+      if (q.has("craftRuntime")) {
+        location.replace("craft-runtime-smoke.html" + location.search + location.hash);
+      }
+    })();
+  </script>
   <link rel="icon" href="data:,">
   <meta name="description" content="LightCraft: open-source photo library and raw developer, running in your browser (WASM).">
   <style>
