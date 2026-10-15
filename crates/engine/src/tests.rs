@@ -416,6 +416,28 @@ fn masks_crop_and_render() {
     s.execute("develop.wbPick", &json!({"x": 0.5, "y": 0.5})).unwrap();
 }
 
+/// Photo ▸ Auto Settings (⇧A) acts on every selected photo, each from its own picture, as one undo
+/// step; `ids` names photos instead (#1752).
+#[test]
+fn auto_settings_apply_to_every_selected_photo() {
+    let mut s = demo();
+    let ids: Vec<u64> = s.visible_cloned().iter().take(3).map(|p| p.0).collect();
+    let dev = |s: &Session, id: u64| s.develop_of(lightcraft_catalog::PhotoId(id)).unwrap_or_default();
+    s.execute("library.select", &json!({"ids": [ids[0], ids[1]], "active": ids[0]})).unwrap();
+    let r = s.execute("develop.auto", &json!({})).unwrap();
+    assert!(r.get("exposure").is_some(), "{r}");
+    let (a, b) = (dev(&s, ids[0]), dev(&s, ids[1]));
+    assert!(!a.is_unedited() && !b.is_unedited(), "both selected photos get auto settings");
+    assert!(dev(&s, ids[2]).is_unedited(), "an unselected photo is left alone");
+    assert_ne!((a.light.exposure, a.light.highlights), (b.light.exposure, b.light.highlights), "each from its own picture");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(dev(&s, ids[0]).is_unedited() && dev(&s, ids[1]).is_unedited(), "one undo step");
+    // named photos, whatever is selected
+    s.execute("develop.auto", &json!({"ids": [ids[2]]})).unwrap();
+    assert!(!dev(&s, ids[2]).is_unedited() && dev(&s, ids[0]).is_unedited());
+    assert!(s.execute("develop.auto", &json!({"ids": [999_999]})).is_err(), "unknown ids are an error");
+}
+
 #[test]
 fn versions_history_and_reset() {
     let mut s = demo();
