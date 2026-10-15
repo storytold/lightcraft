@@ -15,6 +15,27 @@ use crate::state::Dialog;
 use crate::{LightcraftApp, Services};
 
 const T: Duration = Duration::from_secs(60);
+
+/// The in-process spooler every test dialog gets: four queues, one the default. The real one is never read.
+pub(super) fn fake_printers() -> Vec<spool::Printer> {
+    ["Copy Room Laser", "Front Desk", "Slide Printer", "Photo Lab"]
+        .into_iter()
+        .map(|name| spool::Printer { name: name.to_owned(), default: name == "Front Desk", two_sided: None })
+        .collect()
+}
+
+/// What the fake spooler was handed: the job and the PDF.
+static SUBMITTED: std::sync::Mutex<Vec<(spool::Job, Vec<u8>)>> = std::sync::Mutex::new(Vec::new());
+
+pub(super) fn fake_submit(pdf: &[u8], job: &spool::Job) -> Result<String, String> {
+    SUBMITTED.lock().map_err(|e| e.to_string())?.push((job.clone(), pdf.to_vec()));
+    Ok("job-1".into())
+}
+
+/// The job the fake spooler got for `printer` (each test prints to a queue of its own).
+fn submitted_to(printer: &str) -> Option<(spool::Job, Vec<u8>)> {
+    SUBMITTED.lock().ok()?.iter().find(|(j, _)| j.printer.as_deref() == Some(printer)).cloned()
+}
 const ADDRESS: &str = "127.0.0.1:5357/printer";
 
 fn demo_with(printer: &Arc<FakePrinter>) -> Headless {
@@ -56,21 +77,43 @@ fn one_photo_on_4x6(h: &mut Headless) {
     );
 }
 
+fn click(h: &mut Headless, id: &str) {
+    let r = h.request("ui.clickWidget", json!({"id": id}), T);
+    assert_eq!(r["ok"], true, "{id}: {r}");
+    h.settle(T);
+}
+
 #[test]
-fn the_dialog_offers_the_three_destinations_and_the_network_one_waits_for_its_query_and_tick() {
+fn one_printer_list_holds_the_pdf_file_the_system_printers_and_the_network_entry_which_waits_for_its_query_and_tick() {
     let printer = FakePrinter::new(Config::default());
     let mut h = demo_with(&printer);
     cmd(&mut h, "dialog.print", json!({}));
-    for id in ["button:printDestPdf", "button:printDestSystem", "button:printDestNetwork"] {
-        assert!(h.app.widgets.iter().any(|(w, _)| w == id), "no {id}");
+    assert!(h.step_until(T, |h| h.app.print_out.printers.len() == 4), "the queues were listed");
+    h.settle(T);
+    // one dropdown, no switch between system and network
+    assert!(h.app.widgets.iter().any(|(w, _)| w == "combo:printDestination"));
+    for gone in ["button:printDestPdf", "button:printDestSystem", "button:printDestNetwork"] {
+        assert!(!h.app.widgets.iter().any(|(w, _)| w == gone), "{gone} is gone");
     }
+    let names: Vec<String> = h.app.print_out.entries().iter().map(entry_label).collect();
+    assert_eq!(
+        names,
+        ["PDF file", "Front Desk (default)", "Copy Room Laser", "Slide Printer", "Photo Lab", "Network printer…"],
+        "the PDF file, the system printers (default first), then the network entry"
+    );
     assert!(h.app.print_out.can_confirm(), "a PDF file needs nothing more");
     assert_eq!(h.app.print_out.confirm_label(), "Print to PDF…");
-    let r = h.request("ui.clickWidget", json!({"id": "button:printDestNetwork"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(T);
-    assert_eq!(h.app.print_out.dest, Destination::Network);
+    // a system printer is one click away in the same list
+    click(&mut h, "combo:printDestination");
+    click(&mut h, "item:printDestination-2");
+    assert_eq!(h.app.print_out.dest, Destination::System("Copy Room Laser".into()));
     assert_eq!(h.app.print_out.confirm_label(), "Print");
+    assert!(h.app.print_out.block.is_none(), "no network section for a system printer");
+    // the network entry reveals the address, query and confirmation
+    click(&mut h, "combo:printDestination");
+    click(&mut h, "item:printDestination-5");
+    assert_eq!(h.app.print_out.dest, Destination::Network);
+    assert!(h.app.print_out.block.is_some(), "the network section was drawn, and blocks Print");
     assert!(!h.app.print_out.can_confirm(), "not queried, not confirmed");
     assert!(crate::panels::dialogs::keeps_open(&h.app, &Dialog::Print), "the dialog stays to show the job");
     // Print without the query and the tick sends nothing
@@ -83,6 +126,116 @@ fn the_dialog_offers_the_three_destinations_and_the_network_one_waits_for_its_qu
     h.settle(T);
     assert!(h.app.print_out.can_confirm());
     assert_eq!(printer.jobs(), 0, "reading the printer is all that happened");
+}
+
+#[test]
+fn a_queried_network_printer_joins_the_list_by_its_reported_name_and_can_be_chosen_again() {
+    let printer = FakePrinter::new(Config::default());
+    let mut h = demo_with(&printer);
+    open_network(&mut h);
+    query(&mut h);
+    h.settle(T);
+    let name = h.app.print_net.state.draft.printer().expect("queried").name.clone();
+    let entries = h.app.print_out.entries();
+    assert_eq!(entries.last(), Some(&Entry::Remembered { name, address: ADDRESS.into() }));
+    assert_eq!(h.app.print_out.remembered.len(), 1, "once, however many frames drew it");
+    // away to a system printer and back: the address does not have to be typed again
+    choose(&mut h.app, &Entry::System { name: "Photo Lab".into(), default: false });
+    h.app.print_net.state.draft = net::Draft::default();
+    h.settle(T);
+    choose(&mut h.app, &entries.last().cloned().expect("entry"));
+    h.settle(T);
+    assert_eq!(h.app.print_out.dest, Destination::Network);
+    assert_eq!(h.app.print_net.state.draft.url, ADDRESS);
+    assert!(h.app.print_net.state.draft.printer().is_none(), "choosing it contacts nothing: Query printer asks");
+    assert!(!h.app.print_out.can_confirm());
+    // "Network printer…" is the blank form again
+    choose(&mut h.app, &Entry::Network);
+    assert_eq!(h.app.print_net.state.draft.url, "");
+}
+
+#[test]
+fn grayscale_is_the_word_everywhere_and_the_preview_and_the_pages_are_gray() {
+    let printer = FakePrinter::new(Config::default());
+    let mut h = demo_with(&printer);
+    one_photo_on_4x6(&mut h);
+    let labels = crate::network_glue::labels();
+    assert_eq!(labels.color_monochrome, "Grayscale");
+    assert!(labels.unsupported_color.contains("grayscale"), "{}", labels.unsupported_color);
+    h.app.renderer.keep_pixels = true;
+    cmd(&mut h, "dialog.print", json!({}));
+    assert!(h.app.widgets.iter().any(|(w, _)| w == "check:printGrayscale"));
+    let id = h.app.session.selection.ids[0];
+    // in colour first: the library's thumbnail is drawn and there is no gray one
+    assert!(h.step_until(T, |h| h.app.renderer.thumb(id).is_some()), "the colour thumbnail rendered");
+    assert!(h.app.renderer.print_gray(id).is_none());
+    let is_gray = |t: &crate::render::Tex| t.pixels.as_ref().is_some_and(|p| p.pixels.iter().all(|c| c.r() == c.g() && c.g() == c.b()));
+    let has_colour = |t: &crate::render::Tex| t.pixels.as_ref().is_some_and(|p| p.pixels.iter().any(|c| c.r() != c.b()));
+    assert!(h.app.renderer.thumb(id).is_some_and(has_colour), "the demo photo has colour");
+    click(&mut h, "check:printGrayscale");
+    assert!(h.app.session.print.job.grayscale, "the box sets the job's grayscale");
+    assert!(h.step_until(T, |h| h.app.renderer.print_gray(id).is_some()), "the gray preview rendered");
+    assert!(h.app.renderer.print_gray(id).is_some_and(is_gray), "every preview pixel is gray");
+    assert!(h.app.renderer.thumb(id).is_some_and(has_colour), "the colour thumbnail is still cached next to it, for the toggle back");
+    // back to colour: the colour thumbnail is drawn at once and the gray ones are dropped
+    click(&mut h, "check:printGrayscale");
+    assert!(!h.app.session.print.job.grayscale);
+    assert!(h.app.renderer.print_gray(id).is_none());
+    // a network printer's Color setting set to Grayscale makes the print gray as well
+    open_network(&mut h);
+    assert!(!grayscale_wanted(&h.app));
+    h.app.print_net.state.draft.color = Some(net::ColorMode::Monochrome);
+    assert!(grayscale_wanted(&h.app), "the printer's Grayscale choice composes gray pages and a gray preview");
+}
+
+#[test]
+fn a_gray_print_to_a_system_printer_asks_the_driver_for_monochrome_too() {
+    let printer = FakePrinter::new(Config::default());
+    let mut h = demo_with(&printer);
+    one_photo_on_4x6(&mut h);
+    cmd(&mut h, "print.set", json!({"job": {"grayscale": true}}));
+    cmd(&mut h, "dialog.print", json!({}));
+    choose(&mut h.app, &Entry::System { name: "Photo Lab".into(), default: false });
+    crate::panels::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
+    assert!(h.step_until(T, |_| submitted_to("Photo Lab").is_some()), "handed to the spooler");
+    let (job, pdf) = submitted_to("Photo Lab").expect("job");
+    assert!(job.grayscale);
+    assert!(pdf.starts_with(b"%PDF-"));
+}
+
+#[test]
+fn scaling_is_exact_for_a_chosen_paper_and_shrink_to_fit_for_a_size_no_queue_lists() {
+    use spool::Scaling::{Exact, ShrinkToFit};
+    for paper in ["a4", "letter", "4x6", "13x19"] {
+        assert_eq!(scaling_for(paper, false), Exact, "{paper} was chosen from the papers: demanded exactly");
+        assert_eq!(scaling_for(paper, true), ShrinkToFit, "the box asks for fitting");
+    }
+    assert_eq!(scaling_for("custom", false), ShrinkToFit, "a custom size is on the queue's own paper");
+    assert_eq!(scaling_for("custom", true), ShrinkToFit);
+}
+
+#[test]
+fn a_slide_shaped_custom_page_goes_on_the_queues_own_paper_and_a_chosen_paper_is_exact() {
+    let printer = FakePrinter::new(Config::default());
+    let mut h = demo_with(&printer);
+    one_photo_on_4x6(&mut h);
+    // 16:9, 13.33 x 7.5 in: no tray has it, and nobody chose a paper
+    cmd(&mut h, "print.set", json!({"layout": {"page": {"paper": "custom", "customWidth": 13.33, "customHeight": 7.5}}}));
+    cmd(&mut h, "dialog.print", json!({}));
+    choose(&mut h.app, &Entry::System { name: "Slide Printer".into(), default: false });
+    crate::panels::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
+    assert!(h.step_until(T, |_| submitted_to("Slide Printer").is_some()), "handed to the spooler");
+    let (job, _) = submitted_to("Slide Printer").expect("job");
+    assert_eq!(job.scaling, spool::Scaling::ShrinkToFit, "not refused for lack of a 13.33 x 7.50 in paper");
+    assert!(job.options.is_empty(), "no paper is asked for");
+    // 4 x 6 in was picked in the dialog: the queue must have it
+    cmd(&mut h, "print.set", json!({"layout": {"page": {"paper": "4x6"}}}));
+    h.app.ui.dialog = Some(Dialog::Print);
+    choose(&mut h.app, &Entry::System { name: "Copy Room Laser".into(), default: false });
+    assert!(h.step_until(T, |h| !h.app.print_out.busy()));
+    crate::panels::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
+    assert!(h.step_until(T, |_| submitted_to("Copy Room Laser").is_some()), "handed to the spooler");
+    assert_eq!(submitted_to("Copy Room Laser").expect("job").0.scaling, spool::Scaling::Exact);
 }
 
 #[test]

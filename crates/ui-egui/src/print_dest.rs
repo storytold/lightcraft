@@ -1,6 +1,7 @@
-//! Where a print goes besides a PDF file: a printer of this computer (the system spooler) or a network
-//! printer (WS-Print or IPP). The Print dialog (`print_view`) draws the choice; this module owns what lies
-//! behind it.
+//! Where a print goes: a PDF file, a printer of this computer (the system spooler) or a network printer
+//! (WS-Print or IPP). The Print dialog (`print_view`) draws the choice as one Printer list (the PDF file, the
+//! system's printers, then "Network printer…" and the network printers this session has queried); this module
+//! owns what lies behind it.
 //!
 //! The pages are the Print module's, composed exactly as for "Print to PDF": the layout, the colour
 //! management and the resolution the dialog shows are what is sent. Composing needs the session, so it starts
@@ -55,14 +56,27 @@ struct Composing {
     paper: String,
     title: String,
     fit: spool::Scaling,
+    /// Composed gray: the driver is asked for monochrome too.
+    gray: bool,
 }
 
 /// A job handed to the system spooler: the printer and the spooler's answer.
 type SpoolJob = (String, Receiver<Result<String, String>>);
 
+/// Lists the system's printers (the spooler, or a fake in tests).
+type Lister = fn() -> Vec<spool::Printer>;
+/// Hands a PDF to the system spooler (the spooler, or a fake in tests).
+type Submitter = fn(&[u8], &spool::Job) -> Result<String, String>;
+
+#[cfg(not(test))]
+fn spooler_submit(pdf: &[u8], job: &spool::Job) -> Result<String, String> {
+    spool::submit(pdf, job).map_err(|e| e.to_string())
+}
+
 /// What the Print dialog remembers about where the print goes (not saved).
-#[derive(Default)]
 pub struct PrintOut {
+    lister: Lister,
+    submitter: Submitter,
     pub dest: Destination,
     /// Let the printer scale the page into what it can print (otherwise the composed page keeps its size).
     pub shrink_to_fit: bool,
@@ -73,6 +87,52 @@ pub struct PrintOut {
     jobs: Vec<SpoolJob>,
     /// Why Print is unavailable for the network destination right now (set while it is drawn).
     block: Option<craft_ui::printing::network::Block>,
+    /// Network printers queried this session, by the name they reported and the address typed: one more entry
+    /// each in the Printer list, so the same printer can be chosen again without retyping. Not saved.
+    remembered: Vec<(String, String)>,
+}
+
+/// The system spooler; tests never reach it (they get the in-process fakes of `tests`).
+#[cfg(not(test))]
+fn default_spooler() -> (Lister, Submitter) {
+    (spool::printers, spooler_submit)
+}
+
+#[cfg(test)]
+fn default_spooler() -> (Lister, Submitter) {
+    (tests::fake_printers, tests::fake_submit)
+}
+
+impl Default for PrintOut {
+    fn default() -> Self {
+        let (lister, submitter) = default_spooler();
+        Self {
+            lister,
+            submitter,
+            dest: Destination::default(),
+            shrink_to_fit: false,
+            printers: Vec::new(),
+            printers_loading: false,
+            printers_rx: None,
+            composing: None,
+            jobs: Vec::new(),
+            block: None,
+            remembered: Vec::new(),
+        }
+    }
+}
+
+/// One line of the Printer list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Entry {
+    /// A PDF file the person chooses.
+    Pdf,
+    /// A printer of this computer, and whether it is the system default.
+    System { name: String, default: bool },
+    /// "Network printer…": the address field and the query.
+    Network,
+    /// A network printer queried earlier in this session: its reported name and the address it answered at.
+    Remembered { name: String, address: String },
 }
 
 impl PrintOut {
@@ -84,17 +144,48 @@ impl PrintOut {
         {
             self.dest = Destination::Pdf;
         }
-        if self.printers_rx.is_none() {
-            let (tx, rx) = channel();
-            self.printers_loading = true;
-            self.printers_rx = Some(rx);
-            let spawned = std::thread::Builder::new().name("printers".into()).spawn(move || {
-                let _ = tx.send(spool::printers());
-            });
-            if spawned.is_err() {
-                self.printers_rx = None;
-                self.printers_loading = false;
-            }
+        self.refresh_printers();
+    }
+
+    /// The Printer list: the PDF file, the system printers (the default first), "Network printer…", then the
+    /// network printers queried before in this session.
+    pub fn entries(&self) -> Vec<Entry> {
+        let mut list = vec![Entry::Pdf];
+        let mut printers: Vec<&spool::Printer> = self.printers.iter().collect();
+        printers.sort_by_key(|p| !p.default); // (stable: the others keep the spooler's order)
+        list.extend(printers.into_iter().map(|p| Entry::System { name: p.name.clone(), default: p.default }));
+        list.push(Entry::Network);
+        list.extend(self.remembered.iter().map(|(name, address)| Entry::Remembered { name: name.clone(), address: address.clone() }));
+        list
+    }
+
+    /// Re-read the system's printers in the background (the "Refresh printers" button).
+    pub fn refresh_printers(&mut self) {
+        if self.printers_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = channel();
+        self.printers_loading = true;
+        self.printers_rx = Some(rx);
+        let lister = self.lister;
+        let spawned = std::thread::Builder::new().name("printers".into()).spawn(move || {
+            let _ = tx.send(lister());
+        });
+        if spawned.is_err() {
+            self.printers_rx = None;
+            self.printers_loading = false;
+        }
+    }
+
+    /// Note a queried network printer for the list (by address; a new answer renames the entry).
+    fn remember(&mut self, name: &str, address: &str) {
+        let key = craft_ui::printing::network::normalize_url(address);
+        if name.trim().is_empty() || key.is_empty() {
+            return;
+        }
+        match self.remembered.iter_mut().find(|(_, a)| craft_ui::printing::network::normalize_url(a) == key) {
+            Some(entry) => entry.0 = name.to_owned(),
+            None => self.remembered.push((name.to_owned(), address.to_owned())),
         }
     }
 
@@ -143,59 +234,154 @@ pub(crate) fn media_for_paper(paper: &str) -> Option<&'static str> {
     })
 }
 
+/// How a job to a printer treats the page size. A named paper the person picked in the dialog (A4, Letter, 4 x 6…) is
+/// demanded exactly, so a queue that lacks it refuses rather than guesses. A size no paper tray lists (the custom
+/// size) was not chosen from the queue's papers: the job goes on the queue's own default paper, centred and shrunk to
+/// fit. The "Shrink to the printer's printable area" box asks for the same with any paper.
+pub(crate) fn scaling_for(paper: &str, shrink_to_fit: bool) -> spool::Scaling {
+    if shrink_to_fit || media_for_paper(paper).is_none() { spool::Scaling::ShrinkToFit } else { spool::Scaling::Exact }
+}
+
+/// Is this print grayscale? The dialog's box, or the network printer's Color setting set to Grayscale: the pages are
+/// composed gray (and the preview shows them so) and the driver is asked for monochrome as well.
+pub(crate) fn grayscale_wanted(app: &LightcraftApp) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    if app.print_out.dest == Destination::Network && app.print_net.state.draft.color == Some(craft_ui::printing::network::ColorMode::Monochrome) {
+        return true;
+    }
+    app.session.print.job.grayscale
+}
+
+/// The label of a Printer list entry.
+#[cfg(not(target_arch = "wasm32"))]
+fn entry_label(e: &Entry) -> String {
+    match e {
+        Entry::Pdf => crate::i18n::tr("PDF file").to_string(),
+        Entry::System { name, default: true } => crate::network_glue::tracked::fill(crate::i18n::tr("{printer} (default)"), &[("printer", name)]),
+        Entry::System { name, .. } => name.clone(),
+        Entry::Network => crate::i18n::tr("Network printer…").to_string(),
+        Entry::Remembered { name, .. } => name.clone(),
+    }
+}
+
+/// Is `e` what is chosen now?
+#[cfg(not(target_arch = "wasm32"))]
+fn entry_selected(app: &LightcraftApp, e: &Entry) -> bool {
+    let out = &app.print_out;
+    match (e, &out.dest) {
+        (Entry::Pdf, Destination::Pdf) => true,
+        (Entry::System { name, .. }, Destination::System(current)) => name == current,
+        (Entry::Network, Destination::Network) => !out.remembered.iter().any(|(_, a)| same_address(a, &app.print_net.state.draft.url)),
+        (Entry::Remembered { address, .. }, Destination::Network) => same_address(address, &app.print_net.state.draft.url),
+        _ => false,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn same_address(a: &str, b: &str) -> bool {
+    craft_ui::printing::network::normalize_url(a) == craft_ui::printing::network::normalize_url(b)
+}
+
+/// Choose a Printer list entry. A remembered network printer fills in its address (nothing is contacted: Query
+/// printer asks it, and the confirmation is still to be ticked).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn choose(app: &mut LightcraftApp, e: &Entry) {
+    match e {
+        Entry::Pdf => app.print_out.dest = Destination::Pdf,
+        Entry::System { name, .. } => app.print_out.dest = Destination::System(name.clone()),
+        Entry::Network => {
+            // the address last typed stays for the session; it is not a remembered printer's
+            if app.print_out.remembered.iter().any(|(_, a)| same_address(a, &app.print_net.state.draft.url)) {
+                app.print_net.state.draft = craft_ui::printing::network::Draft::default();
+            }
+            app.print_out.dest = Destination::Network;
+        }
+        Entry::Remembered { address, .. } => {
+            if !same_address(address, &app.print_net.state.draft.url) {
+                app.print_net.state.draft = craft_ui::printing::network::Draft::for_address(address);
+            }
+            app.print_out.dest = Destination::Network;
+        }
+    }
+}
+
+/// The Grayscale box: the job's setting, which the pages, the PDF and the preview follow.
+fn grayscale_box(app: &mut LightcraftApp, ui: &mut Ui) {
+    let gray = app.session.print.job.grayscale;
+    let r = ui.checkbox(&mut { gray }, crate::i18n::tr("Grayscale"));
+    register(ui.ctx(), "check:printGrayscale", r.rect);
+    if r.clicked()
+        && let Err(e) = app.run("print.set", json!({"job": {"grayscale": !gray}}))
+    {
+        app.toast(&ui.ctx().clone(), e);
+    }
+    r.on_hover_text(crate::i18n::tr("The pages and the preview print in shades of gray."));
+}
+
 /// The "Print To" section at the top of the Print dialog's settings.
 pub fn section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, photos: usize) {
     ui.add_space(8.0);
+    #[cfg(not(target_arch = "wasm32"))]
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(crate::i18n::tr("Print To")).font(t.semibold(12.0)).color(t.text));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if text_button(ui, "printRefreshPrinters", "Refresh printers", false).clicked() {
+                app.print_out.refresh_printers();
+            }
+        });
+    });
+    #[cfg(target_arch = "wasm32")]
     ui.label(egui::RichText::new(crate::i18n::tr("Print To")).font(t.semibold(12.0)).color(t.text));
     ui.add_space(2.0);
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let out = &mut app.print_out;
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 3.0;
-            if text_button(ui, "printDestPdf", "PDF file", out.dest == Destination::Pdf).clicked() {
-                out.dest = Destination::Pdf;
-            }
-            let system = matches!(out.dest, Destination::System(_));
-            if text_button(ui, "printDestSystem", "Printer", system).clicked() && !system {
-                out.dest = spool::default_printer(&out.printers).map_or(Destination::Pdf, |p| Destination::System(p.name.clone()));
-            }
-            if text_button(ui, "printDestNetwork", "Network printer", out.dest == Destination::Network).clicked() {
-                out.dest = Destination::Network;
-            }
-        });
-        if let Destination::System(current) = out.dest.clone() {
-            if out.printers_loading {
-                ui.label(egui::RichText::new(crate::i18n::tr("Looking for printers…")).color(t.text_dim));
-            }
-            if out.printers.is_empty() && !out.printers_loading {
-                ui.label(egui::RichText::new(crate::i18n::tr("No printers found on this computer.")).color(t.text_dim));
-            }
-            let combo = egui::ComboBox::from_id_salt("printSystemPrinter").width(220.0).selected_text(current.clone()).show_ui(ui, |ui| {
-                for p in out.printers.clone() {
-                    if ui.selectable_label(p.name == current, &p.name).clicked() {
-                        out.dest = Destination::System(p.name.clone());
+        if app.print_out.printers_loading {
+            ui.label(egui::RichText::new(crate::i18n::tr("Looking for printers…")).color(t.text_dim));
+        }
+        let entries = app.print_out.entries();
+        let selected_text = entries.iter().find(|e| entry_selected(app, e)).map_or_else(String::new, entry_label);
+        let mut picked = None;
+        ui.horizontal(|ui| {
+            let combo = egui::ComboBox::from_id_salt("printDestination").width(150.0).selected_text(selected_text).show_ui(ui, |ui| {
+                for (i, e) in entries.iter().enumerate() {
+                    let r = ui.selectable_label(entry_selected(app, e), entry_label(e));
+                    register(ui.ctx(), format!("item:printDestination-{i}"), r.rect);
+                    if r.clicked() {
+                        picked = Some(e.clone());
                     }
                 }
             });
-            register(ui.ctx(), "combo:printSystemPrinter", combo.response.rect);
+            register(ui.ctx(), "combo:printDestination", combo.response.rect);
+            grayscale_box(app, ui);
+        });
+        if let Some(e) = picked {
+            choose(app, &e);
         }
+        if app.print_out.printers.is_empty() && !app.print_out.printers_loading {
+            ui.label(egui::RichText::new(crate::i18n::tr("No printers found on this computer.")).color(t.text_dim));
+        }
+        let out = &mut app.print_out;
         if out.dest != Destination::Pdf {
             let r = ui.checkbox(&mut out.shrink_to_fit, crate::i18n::tr("Shrink to the printer's printable area"));
             register(ui.ctx(), "check:printShrinkToFit", r.rect);
             r.on_hover_text(crate::i18n::tr("Off: the page keeps the size it has in the preview. On: the printer scales it into what it can print."));
         }
-        if out.dest == Destination::Network {
+        if app.print_out.dest == Destination::Network {
             let response = app.print_net.show(ui, photos > 0);
             app.print_out.block = response.block;
+            if let Some(p) = app.print_net.state.draft.printer() {
+                let (name, address) = (p.name.clone(), app.print_net.state.draft.url.clone());
+                app.print_out.remember(&name, &address);
+            }
         } else {
             app.print_out.block = None;
         }
     }
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (app, photos, text_button, register);
+        let _ = (photos, text_button);
         ui.label(egui::RichText::new(crate::i18n::tr("Print to a PDF file, then print the PDF from your viewer.")).color(t.text_dim));
+        grayscale_box(app, ui);
     }
 }
 
@@ -214,7 +400,8 @@ pub fn start(app: &mut LightcraftApp) -> Result<Value, String> {
     if to == Destination::Network && app.print_out.block.is_some() {
         return Err(crate::i18n::tr("Query the printer and tick the confirmation first.").to_string());
     }
-    let settings = app.session.print.clone();
+    let mut settings = app.session.print.clone();
+    settings.job.grayscale = grayscale_wanted(app);
     let ids = app.session.targets(&json!({})).map_err(|e| e.to_string())?;
     let prepared = compose::prepare(&mut app.session, &settings, &ids)?;
     let total = prepared.len();
@@ -256,8 +443,9 @@ pub fn start(app: &mut LightcraftApp) -> Result<Value, String> {
     let guard = app.session.activity.start("export", "Preparing print", Cancel::Flag(cancel));
     guard.progress(0, total as u64);
     let paper = settings.layout.page.paper.clone();
-    let fit = if app.print_out.shrink_to_fit { spool::Scaling::ShrinkToFit } else { spool::Scaling::Exact };
-    app.print_out.composing = Some(Composing { rx, progress, total, guard, to, paper, title, fit });
+    let fit = scaling_for(&paper, app.print_out.shrink_to_fit);
+    let gray = settings.job.grayscale;
+    app.print_out.composing = Some(Composing { rx, progress, total, guard, to, paper, title, fit, gray });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -338,11 +526,18 @@ fn deliver(app: &mut LightcraftApp, ctx: &egui::Context, task: Composing, compos
     match task.to {
         Destination::Pdf => {}
         Destination::System(printer) => {
-            let job = spool::Job { printer: Some(printer.clone()), title: task.title.clone(), scaling: task.fit, ..spool::Job::default() };
+            let job = spool::Job {
+                printer: Some(printer.clone()),
+                title: task.title.clone(),
+                scaling: task.fit,
+                grayscale: task.gray,
+                ..spool::Job::default()
+            };
             let (tx, rx) = channel();
             let pdf = composed.pdf;
+            let submit = app.print_out.submitter;
             let spawned = std::thread::Builder::new().name("spool".into()).spawn(move || {
-                let _ = tx.send(spool::submit(&pdf, &job).map_err(|e| e.to_string()));
+                let _ = tx.send(submit(&pdf, &job));
             });
             match spawned {
                 Ok(_) => app.print_out.jobs.push((printer, rx)),
@@ -350,8 +545,13 @@ fn deliver(app: &mut LightcraftApp, ctx: &egui::Context, task: Composing, compos
             }
         }
         Destination::Network => {
-            let payload =
-                crate::network_glue::Payload { name: task.title, pdf: Arc::new(composed.pdf), sheets: Arc::new(composed.sheets), fit: task.fit };
+            let payload = crate::network_glue::Payload {
+                name: task.title,
+                pdf: Arc::new(composed.pdf),
+                sheets: Arc::new(composed.sheets),
+                fit: task.fit,
+                gray: task.gray,
+            };
             if !app.network_send(Some(ctx), payload, &task.paper) {
                 app.toast(ctx, crate::i18n::tr("The print was not sent: query the printer and tick the confirmation."));
             }

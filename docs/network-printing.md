@@ -34,7 +34,7 @@ The **Print To** section at the top of the settings column chooses where they go
 
 - `crates/print` (`lightcraft-print`, L3): `spool` (the system spooler), `sheets` (`Sheet`, `SheetConverter`), and with the
   `network-print` feature (default, not wasm32) `network` (`Station`: one printer behind a craft-print registry with both
-  backends, the deny list, the events opt-in).
+  backends, the events opt-in).
 - `crates/ui-egui/src/network_glue.rs` and `network_glue/{caps,tracked}.rs`: the host side of `craft_ui::printing::network`.
 - `crates/ui-egui/src/print_dest.rs`: the destination choice, composing the pages on a worker, delivering them.
 

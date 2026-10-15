@@ -51,7 +51,7 @@ fn tiny_pdf() -> Vec<u8> {
 /// One 2 x 2 inch page: the PDF the printer may take as it is and the same page as pixels.
 fn payload() -> Payload {
     let sheet = Sheet::new(40, 40, 2.0, 2.0, vec![180; 40 * 40 * 3]).expect("sheet");
-    Payload { name: "report.pdf".into(), pdf: Arc::new(tiny_pdf()), sheets: Arc::new(vec![sheet]), fit: Scaling::Exact }
+    Payload { name: "report.pdf".into(), pdf: Arc::new(tiny_pdf()), sheets: Arc::new(vec![sheet]), fit: Scaling::Exact, gray: false }
 }
 
 fn send(app: &mut LightcraftApp) -> bool {

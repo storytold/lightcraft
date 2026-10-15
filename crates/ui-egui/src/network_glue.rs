@@ -236,6 +236,8 @@ pub(crate) struct Payload {
     pub pdf: Arc<Vec<u8>>,
     pub sheets: Arc<Vec<Sheet>>,
     pub fit: Fit,
+    /// The pages are gray: the printer is asked for monochrome as well.
+    pub gray: bool,
 }
 
 /// The worker that makes the tracked print of the payload and drives it (see [`tracked`]). Each call makes a new
@@ -251,6 +253,7 @@ pub(crate) fn send_job(
     Box::new(move |address: &str, request: Request| {
         let (mut job, options) = options(&request, &payload.name);
         job.scaling = payload.fit;
+        job.grayscale = payload.gray;
         match station_for(&stations, address, transport.clone()) {
             Ok(station) => {
                 // This print's pages are what the registry converts from, when the printer lists no PDF.
@@ -355,7 +358,7 @@ pub(crate) fn labels() -> Labels<'static> {
         photo: crate::i18n::tr("Photo"),
         color: crate::i18n::tr("Color:"),
         color_color: crate::i18n::tr("Color"),
-        color_monochrome: crate::i18n::tr("Black and white"),
+        color_monochrome: crate::i18n::tr("Grayscale"),
         resolution: crate::i18n::tr("Resolution:"),
         resolution_dpi: "{dpi} dpi",
         resolution_dpi_xy: "{x} x {y} dpi",
@@ -364,7 +367,7 @@ pub(crate) fn labels() -> Labels<'static> {
         unsupported_sides: crate::i18n::tr("This printer only prints one-sided."),
         unsupported_orientation: crate::i18n::tr("This printer does not take an orientation setting."),
         unsupported_quality: crate::i18n::tr("This printer does not take a quality setting."),
-        unsupported_color: crate::i18n::tr("This printer only prints in black and white."),
+        unsupported_color: crate::i18n::tr("This printer only prints in grayscale."),
         unsupported_resolution: crate::i18n::tr("This printer does not take a resolution setting."),
         unconfirmed_note: crate::i18n::tr("Not confirmed by the printer."),
         confirm: crate::i18n::tr("I confirm sending this document to this printer"),

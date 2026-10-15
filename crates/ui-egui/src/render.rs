@@ -27,6 +27,9 @@ use std::sync::Arc;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Slot {
     Thumb(PhotoId),
+    /// The Print dialog's preview thumbnail in grayscale (Rec. 709, the conversion the printed pages use): a slot of
+    /// its own, so a gray and a colour thumbnail of one photo are never each other's cache entry.
+    PrintGray(PhotoId),
     /// A thumbnail's stand-in (embedded preview of an unedited raw).
     ThumbQuick(PhotoId),
     Main,
@@ -116,6 +119,19 @@ pub(crate) fn color_image(img: &lightcraft_raster::Rgba8) -> egui::ColorImage {
     egui::ColorImage { size: [img.width, img.height], source_size: egui::vec2(img.width as f32, img.height as f32), pixels }
 }
 
+/// `image` in shades of gray, with the conversion the printed pages use ([`lightcraft_engine::print::gray_u8`]); alpha is kept.
+pub(crate) fn gray_image(image: &egui::ColorImage) -> egui::ColorImage {
+    let pixels = image
+        .pixels
+        .iter()
+        .map(|c| {
+            let y = lightcraft_engine::print::gray_u8(c.r(), c.g(), c.b());
+            egui::Color32::from_rgba_premultiplied(y, y, y, c.a())
+        })
+        .collect();
+    egui::ColorImage { size: image.size, source_size: image.source_size, pixels }
+}
+
 /// How far over the budget the open photo's window and before caches may run before they are cut.
 const HARD_FACTOR: usize = 4;
 
@@ -194,6 +210,8 @@ pub struct Renderer {
     /// Last thumbnail inputs; weak identities do not retain photo histories or force deep clones.
     /// (photo, size bucket, job key, whether the request went through an embedded stand-in)
     thumb_inputs: HashMap<PhotoId, (std::sync::Weak<lightcraft_catalog::Photo>, usize, u64, bool)>,
+    /// Last inputs of the Print dialog's gray previews (photo, size bucket).
+    print_gray_inputs: HashMap<PhotoId, (std::sync::Weak<lightcraft_catalog::Photo>, usize)>,
     /// Photos whose grid thumbnail is the camera's embedded preview itself (no render behind it).
     embedded_thumbs: HashMap<PhotoId, (std::sync::Weak<lightcraft_catalog::Photo>, usize, u64)>,
     pool: JobPool<Slot, Finished>,
@@ -278,6 +296,7 @@ impl Renderer {
             preview_generation: None,
             pool: JobPool::new(threads),
             thumb_inputs: HashMap::new(),
+            print_gray_inputs: HashMap::new(),
             embedded_thumbs: HashMap::new(),
             offload: None,
             queue: Vec::new(),
@@ -470,7 +489,7 @@ impl Renderer {
             return;
         }
         let key = job.key;
-        let background = matches!(slot, Slot::Thumb(_) | Slot::ThumbQuick(_) | Slot::Prefetch(_));
+        let background = matches!(slot, Slot::Thumb(_) | Slot::ThumbQuick(_) | Slot::PrintGray(_) | Slot::Prefetch(_));
         let display = self.display.clone();
         self.pool.submit(
             slot,
@@ -560,6 +579,7 @@ impl Renderer {
         self.preview_generation = None;
         self.pool.reprioritize(|_, _| None);
         self.thumb_inputs.clear();
+        self.print_gray_inputs.clear();
         self.textures.clear();
         self.stages.clear();
         self.quick_tried.clear();
@@ -589,6 +609,41 @@ impl Renderer {
     /// The texture to show for a grid/filmstrip thumbnail: the rendered one, else its stand-in.
     pub fn thumb(&self, id: PhotoId) -> Option<&Tex> {
         self.textures.get(&Slot::Thumb(id)).or_else(|| self.textures.get(&Slot::ThumbQuick(id)))
+    }
+
+    /// The Print dialog's gray thumbnail of `id` (only ever gray: never the colour thumbnail), once rendered.
+    pub fn print_gray(&self, id: PhotoId) -> Option<&Tex> {
+        self.textures.get(&Slot::PrintGray(id))
+    }
+
+    /// Would asking for the gray thumbnail of `photo` at `bucket` again change nothing?
+    pub fn print_gray_current(&self, photo: &Arc<lightcraft_catalog::Photo>, bucket: usize) -> bool {
+        let slot = Slot::PrintGray(photo.id);
+        let Some((old, size)) = self.print_gray_inputs.get(&photo.id) else { return false };
+        old.as_ptr() == Arc::as_ptr(photo)
+            && *size == bucket
+            && (self.textures.contains_key(&slot) || self.pending.contains_key(&slot) || self.failed.contains_key(&slot))
+    }
+
+    /// Ask for the gray thumbnail `job` makes (the thumbnail job of `photo` at `bucket`); the texture comes out gray.
+    pub fn request_print_gray(&mut self, photo: &Arc<lightcraft_catalog::Photo>, bucket: usize, job: RenderJob, priority: u32) {
+        self.print_gray_inputs.insert(photo.id, (Arc::downgrade(photo), bucket));
+        self.request(Slot::PrintGray(photo.id), job, priority);
+    }
+
+    /// The Print dialog shows colour (or is closed): drop the gray thumbnails and their queued renders.
+    pub fn forget_print_gray(&mut self) {
+        if self.print_gray_inputs.is_empty() && !self.textures.keys().any(|s| matches!(s, Slot::PrintGray(_))) {
+            return;
+        }
+        self.print_gray_inputs.clear();
+        let is_gray = |s: &Slot| matches!(s, Slot::PrintGray(_));
+        self.pool.reprioritize(|s, p| if is_gray(s) { None } else { Some(p) });
+        self.queue.retain(|q| !is_gray(&q.slot));
+        self.pending.retain(|s, _| !is_gray(s));
+        self.request_ids.retain(|s, _| !is_gray(s));
+        self.textures.retain(|s, _| !is_gray(s));
+        self.failed.retain(|s, _| !is_gray(s));
     }
 
     pub fn queued(&self) -> usize {
@@ -852,6 +907,7 @@ impl Renderer {
             }
             let img = &rendered.image;
             let color = color.unwrap_or_else(|| Arc::new(color_image(img)));
+            let color = if matches!(slot, Slot::PrintGray(_)) { Arc::new(gray_image(&color)) } else { color };
             let pixels = self.keep_pixels.then(|| color.clone());
             let name = format!("{slot:?}");
             match self.textures.get_mut(&slot) {
