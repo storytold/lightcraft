@@ -122,14 +122,23 @@ impl CropGeometry {
     /// Any other crop never grows: a crop dragged in from a corner still touches two edges of the
     /// photo, and turning it used to swap it for the largest crop of its aspect (issue #1794).
     pub fn with_angle(&self, angle_deg: f64, w: f64, h: f64) -> CropGeometry {
-        let r = self.rect_px(w, h);
+        self.with_angle_from(self.rect, angle_deg, w, h)
+    }
+
+    /// [`with_angle`](Self::with_angle), but shrinking `from` rather than the current rectangle.
+    ///
+    /// A rotate drag calls this on every pointer move, so by the second step `self.rect` is
+    /// already the shrunken crop, which is by definition the largest of its aspect that fits and
+    /// so grows back on the next step (issue #1794). Passing the rectangle the drag started from
+    /// keeps every step measured against the crop the user drew, which only ever shrinks.
+    pub fn with_angle_from(&self, from: Rect, angle_deg: f64, w: f64, h: f64) -> CropGeometry {
+        let r = from.scale(w, h);
         // a degenerate rect has no aspect to keep: fall back to the image's own
         let aspect = Some(r.width() / r.height()).filter(|a| a.is_finite() && *a > 0.0);
         let largest = crop_fit_angle(w, h, self.angle, aspect).rect;
-        let is_largest = [(self.rect.x0, largest.x0), (self.rect.y0, largest.y0), (self.rect.x1, largest.x1), (self.rect.y1, largest.y1)]
-            .iter()
-            .all(|(a, b)| (a - b).abs() < 1e-9);
-        let cand = CropGeometry { rect: self.rect, angle: angle_deg };
+        let is_largest =
+            [(from.x0, largest.x0), (from.y0, largest.y0), (from.x1, largest.x1), (from.y1, largest.y1)].iter().all(|(a, b)| (a - b).abs() < 1e-9);
+        let cand = CropGeometry { rect: from, angle: angle_deg };
         if !is_largest && cand.is_within_image(w, h) {
             return cand;
         }
@@ -298,6 +307,50 @@ mod tests {
                     (c.rect.width() - want.rect.width()).abs() < 1e-9 && (c.rect.height() - want.rect.height()).abs() < 1e-9,
                     "{aspect:?} at {ang}°: {c:?} vs {want:?}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn with_angle_from_keeps_the_drawn_crop_across_a_round_trip() {
+        // issue #1794: a rotate drag re-enters with_angle on every pointer move, so each step must
+        // be measured against the crop the drag started from. Measuring against the previous step's
+        // shrunken crop made it "the largest of its aspect", and the next step grew it back — so a
+        // centred 0.1..0.9 crop came home as the whole photo.
+        let (w, h) = (1000.0_f64, 667.0_f64);
+        let drawn = Rect::new(0.1, 0.1, 0.9, 0.9);
+        let width_of = |r: Rect| r.scale(w, h).width();
+        let mut c = CropGeometry { rect: drawn, angle: 0.0 };
+        for ang in [10.0, 20.0, 25.0, 30.0, 20.0, 10.0, 5.0, 0.0] {
+            c = c.with_angle_from(drawn, ang, w, h);
+            assert!(c.is_within_image(w, h), "{ang}°: {c:?}");
+        }
+        let end = width_of(c.rect);
+        assert!((end - width_of(drawn)).abs() < 1e-6, "the drawn crop must come home whole: {} -> {end}", width_of(drawn));
+        // and the path is symmetric: reaching 10° directly or by way of 30° gives the same crop,
+        // because every step is measured against the same drawn rect
+        let mut direct = CropGeometry { rect: drawn, angle: 0.0 };
+        direct = direct.with_angle_from(drawn, 10.0, w, h);
+        let mut via = CropGeometry { rect: drawn, angle: 0.0 };
+        for ang in [30.0, 20.0] {
+            via = via.with_angle_from(drawn, ang, w, h);
+        }
+        via = via.with_angle_from(drawn, 10.0, w, h);
+        assert!((direct.rect.width() - via.rect.width()).abs() < 1e-9, "{direct:?} vs {via:?}");
+    }
+
+    #[test]
+    fn with_angle_from_still_grows_a_fitted_crop_back() {
+        // issue #1388 still holds when the drag passes its starting crop: a crop that was the
+        // largest of its aspect when the drag began is still the largest after it
+        let (w, h) = (600.0_f64, 400.0_f64);
+        for aspect in [None, Some(1.0)] {
+            let start = crop_fit_angle(w, h, 0.0, aspect).rect;
+            let mut c = CropGeometry { rect: start, angle: 0.0 };
+            for ang in [10.0, 25.0, -25.0, 0.0] {
+                c = c.with_angle_from(start, ang, w, h);
+                let want = crop_fit_angle(w, h, ang, aspect).rect;
+                assert!((c.rect.width() - want.width()).abs() < 1e-9, "{aspect:?} at {ang}°: {c:?} vs {want:?}");
             }
         }
     }
