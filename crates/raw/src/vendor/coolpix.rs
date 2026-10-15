@@ -90,8 +90,9 @@ fn preview_agrees(d: &[u16], w: usize, h: usize, first_even: bool, rgb: &[u8], p
                 let field = if yy % 2 == 0 { !first_even } else { first_even };
                 let stored_y = yy / 2 + if field { h / 2 } else { 0 };
                 for xx in x.saturating_sub(4)..(x + 4).min(w) {
-                    contiguous += f64::from(d[yy * w + xx]);
-                    interleaved += f64::from(d[stored_y * w + xx]);
+                    let (Some(&original), Some(&proposed)) = (d.get(yy * w + xx), d.get(stored_y * w + xx)) else { return false };
+                    contiguous += f64::from(original);
+                    interleaved += f64::from(proposed);
                     count += 1;
                 }
             }
@@ -99,7 +100,8 @@ fn preview_agrees(d: &[u16], w: usize, h: usize, first_even: bool, rgb: &[u8], p
             for yy in gy * ph / 48..((gy + 1) * ph / 48).max(gy * ph / 48 + 1) {
                 for xx in gx * pw / 64..((gx + 1) * pw / 64).max(gx * pw / 64 + 1) {
                     let at = 3 * (yy * pw + xx);
-                    light += (f64::from(rgb[at]) + f64::from(rgb[at + 1]) + f64::from(rgb[at + 2])) / 3.0;
+                    let Some([r, g, b]) = rgb.get(at..at + 3) else { return false };
+                    light += (f64::from(*r) + f64::from(*g) + f64::from(*b)) / 3.0;
                     pixels += 1;
                 }
             }
