@@ -305,5 +305,8 @@
   "Added {n} photo{}": "Dodano zdjęcia: {n}{:.0}",
   "Inside: {names}": "Wewnątrz: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dokąd zaimportować katalog Lightroom „{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}",
+  "Changes found: {n}": "Znalezione zmiany: {n}",
+  "“{name}” is still being scanned: wait for it, or stop it with ✕ on its row": "„{name}” jest jeszcze przeszukiwany: poczekaj albo zatrzymaj to ✕ w jego wierszu",
+  "Look at the changes found in “{name}” first, or dismiss them": "Najpierw przejrzyj zmiany znalezione w „{name}” albo je odrzuć"
 }

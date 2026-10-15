@@ -305,5 +305,8 @@
   "Could not read {name}: {e}": "Impossibile leggere {name}: {e}",
   "Added {n} photo{}": "Foto aggiunte: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dove importare il catalogo Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Unisci alla libreria aperta “{library}” (foto: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Unisci alla libreria aperta “{library}” (foto: {count}{:.0})",
+  "Changes found: {n}": "Modifiche trovate: {n}",
+  "“{name}” is still being scanned: wait for it, or stop it with ✕ on its row": "“{name}” è ancora in analisi: attendi, oppure fermala con ✕ sulla sua riga",
+  "Look at the changes found in “{name}” first, or dismiss them": "Guarda prima le modifiche trovate in “{name}”, oppure scartale"
 }
