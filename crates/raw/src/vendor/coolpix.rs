@@ -13,8 +13,10 @@
 //! * black level 0, white level 4095, nothing masked;
 //! * E8400 and E8800: `0x828e = [2, 1, 1, 0]`, an ordinary BGGR Bayer. E5700: `0x828e = [5, 3, 1, 4]`, i.e. Y C / G M.
 //!
-//! Whether a file is stacked is decided from its data ([`fields_stacked`]), so any body that writes this layout takes
-//! the path (the E5400 and E8800 among them), not only the sizes measured here. Only the field order is per model.
+//! The Nikon reader restricts the data test ([`fields_stacked`]) to the measured legacy maker-note dialect
+//! and tight 12-bit layout, then requires independent camera-preview geometry agreement. Scene statistics
+//! alone cannot establish a storage format. Missing or ambiguous previews leave stored rows intact.
+//! Only field order is per model.
 //! The CYGM conversion is taken for the `[5, 3, 1, 4]` colour-filter tag.
 //!
 //! CYGM to RGB is deliberately simple. Each of the four colour planes is bilinearly interpolated to full resolution,
@@ -51,6 +53,94 @@ pub(crate) fn fields_stacked(d: &[u16], w: usize, h: usize, pattern: &[u8], firs
     let m = h / 2;
     let seam = (0..w).step_by(5).map(|x| (d[(m - 1) * w + x] as f64 - d[m * w + x] as f64).abs()).sum::<f64>() / w.div_ceil(5) as f64;
     seam > g1 * 4.0 && green_fields_agree(d, w, h, pattern, first_even)
+}
+
+/// Confirm the proposed geometry independently against the file's own camera preview.
+/// Work is bounded: at most 32 MiB of input, a 2048-pixel JPEG edge and 4 MP decoded,
+/// then a fixed 64 x 48 grid. Missing, oversized or ambiguous previews leave rows intact.
+pub(crate) fn preview_confirms_fields(bytes: &[u8], d: &[u16], w: usize, h: usize, first_even: bool) -> bool {
+    if bytes.len() > 32 * 1024 * 1024 {
+        return false;
+    }
+    let Some(jpeg) = crate::preview::embedded_preview_covering(bytes, 64) else { return false };
+    if lightcraft_meta::extract(&jpeg).orientation.is_some_and(|o| o != lightcraft_geom::Orientation::Normal) {
+        return false;
+    }
+    let Ok((rgb, pw, ph, _)) = crate::tiffraw::lossy_jpeg_limited(&jpeg, 3, 2048, 4 * 1024 * 1024 * 3) else { return false };
+    preview_agrees(d, w, h, first_even, &rgb, pw, ph)
+}
+
+fn preview_agrees(d: &[u16], w: usize, h: usize, first_even: bool, rgb: &[u8], pw: usize, ph: usize) -> bool {
+    let Some(n) = w.checked_mul(h).filter(|n| *n <= crate::MAX_SAMPLES && *n == d.len()) else { return false };
+    let Some(pn) = pw.checked_mul(ph).and_then(|n| n.checked_mul(3)) else { return false };
+    if n == 0 || w < 64 || h < 64 || !h.is_multiple_of(2) || pw < 64 || ph < 48 || pn != rgb.len() || pn > 4 * 1024 * 1024 * 3 {
+        return false;
+    }
+    // No registration search: only the measured full-frame aspect, within one percent.
+    let (a, b) = (w as u64 * ph as u64, h as u64 * pw as u64);
+    if a.abs_diff(b) * 100 > a {
+        return false;
+    }
+    let mut regions = [[Moments::default(); 2]; 4];
+    for gy in 3..45 {
+        for gx in 3..61 {
+            let (x, y) = (((2 * gx + 1) * w / 128) & !1, ((2 * gy + 1) * h / 96) & !1);
+            let (mut contiguous, mut interleaved, mut count) = (0.0f64, 0.0f64, 0u32);
+            for yy in y.saturating_sub(4)..(y + 4).min(h) {
+                let field = if yy % 2 == 0 { !first_even } else { first_even };
+                let stored_y = yy / 2 + if field { h / 2 } else { 0 };
+                for xx in x.saturating_sub(4)..(x + 4).min(w) {
+                    contiguous += f64::from(d[yy * w + xx]);
+                    interleaved += f64::from(d[stored_y * w + xx]);
+                    count += 1;
+                }
+            }
+            let (mut light, mut pixels) = (0.0f64, 0u32);
+            for yy in gy * ph / 48..((gy + 1) * ph / 48).max(gy * ph / 48 + 1) {
+                for xx in gx * pw / 64..((gx + 1) * pw / 64).max(gx * pw / 64 + 1) {
+                    let at = 3 * (yy * pw + xx);
+                    light += (f64::from(rgb[at]) + f64::from(rgb[at + 1]) + f64::from(rgb[at + 2])) / 3.0;
+                    pixels += 1;
+                }
+            }
+            let q = (light / f64::from(pixels)).ln_1p();
+            let region = usize::from(gy >= 24) * 2 + usize::from(gx >= 32);
+            regions[region][0].add((contiguous / f64::from(count)).ln_1p(), q);
+            regions[region][1].add((interleaved / f64::from(count)).ln_1p(), q);
+        }
+    }
+    // All four quadrants must agree, preventing one edge or a repeated half from deciding.
+    // Measured real-file quadrant correlations exceed 0.86; the ordinary mild horizon
+    // correlates better in its original order. Keep a substantial absolute and relative margin.
+    regions.iter().all(|pair| match (pair[0].correlation(), pair[1].correlation()) {
+        (Some(original), Some(proposed)) => proposed >= 0.8 && proposed >= original + 0.2,
+        _ => false,
+    })
+}
+
+#[derive(Clone, Copy, Default)]
+struct Moments {
+    n: f64,
+    x: f64,
+    y: f64,
+    xx: f64,
+    yy: f64,
+    xy: f64,
+}
+impl Moments {
+    fn add(&mut self, x: f64, y: f64) {
+        self.n += 1.0;
+        self.x += x;
+        self.y += y;
+        self.xx += x * x;
+        self.yy += y * y;
+        self.xy += x * y;
+    }
+    fn correlation(self) -> Option<f64> {
+        let (vx, vy) = (self.n * self.xx - self.x * self.x, self.n * self.yy - self.y * self.y);
+        // Flat or nearly flat patches cannot establish geometry.
+        (vx > self.n * self.n * 1e-6 && vy > self.n * self.n * 1e-6).then(|| (self.n * self.xy - self.x * self.y) / (vx * vy).sqrt())
+    }
 }
 
 /// Both Bayer fields see the same green light on neighbouring sensor rows. A normal neutral
@@ -286,5 +376,23 @@ mod tests {
         assert!(cygm_to_rgb(&[0; 15], 5, 3, [5, 3, 1, 4]).is_none());
         // all-black input is fine
         assert!(cygm_to_rgb(&[0; 16], 4, 4, [5, 3, 1, 4]).is_some());
+    }
+    #[test]
+    fn preview_evidence_rejects_ambiguous_or_mismatched_geometry() {
+        let (w, h) = (160usize, 256usize);
+        let d = vec![1000; w * h];
+        let rgb = vec![128; w * h * 3];
+        assert!(!preview_agrees(&d, w, h, true, &rgb, w, h));
+        assert!(!preview_agrees(&d, w, h, true, &rgb, h, w));
+        assert!(!preview_agrees(&d, w, h, true, &rgb[..rgb.len() - 1], w, h));
+        assert!(!preview_agrees(&[], usize::MAX, h, true, &[], w, h));
+        assert!(!preview_confirms_fields(b"invalid JPEG and TIFF", &d, w, h, true));
+    }
+    #[test]
+    fn repeated_vertical_structure_cannot_establish_field_storage() {
+        let (w, h) = (160usize, 256usize);
+        let d: Vec<u16> = (0..w * h).map(|i| 1000 + (i % w) as u16 * 10).collect();
+        let rgb: Vec<u8> = d.iter().flat_map(|v| [(f32::from(*v) / 4095.0).sqrt().mul_add(255.0, 0.0) as u8; 3]).collect();
+        assert!(!preview_agrees(&d, w, h, true, &rgb, w, h));
     }
 }
