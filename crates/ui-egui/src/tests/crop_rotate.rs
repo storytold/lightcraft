@@ -46,6 +46,50 @@ fn angle(h: &Headless) -> f64 {
     h.app.session.catalog.photo(id).expect("the photo").develop.crop.geometry.angle
 }
 
+/// The rotation pivots on the crop box's own centre, not the photo's. A box drawn off-centre used
+/// to swing around the photo's middle, so the angle came out of a different origin than the pointer
+/// moved on, and the box turned by however much happened to be left over.
+#[test]
+fn the_rotation_pivots_on_the_box_centre() {
+    let mut h = crop_tool();
+    // a box well left of and below the photo's centre, so the two pivots cannot agree
+    let r = h.request("engine.execute", json!({"command": "crop.set", "params": {"rect": [0.05, 0.3, 0.45, 0.7]}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let img = h.app.image_rect.expect("the photo on screen");
+    let box_centre = {
+        let id = h.app.session.active().expect("a photo");
+        h.app.session.catalog.photo(id).expect("the photo").develop.crop.geometry.rect.center()
+    };
+    let (cx, cy) = (img.left() + box_centre.x as f32 * img.width(), img.top() + box_centre.y as f32 * img.height());
+    let radius = img.width() * 0.30;
+    // pointer positions on an arc about the box centre; the first drag event is where the gesture
+    // begins, so that is where the angle is measured from
+    let at = |deg: f64| {
+        let a = deg.to_radians();
+        ((cx + radius * a.cos() as f32 - img.left()) / img.width(), (cy + radius * a.sin() as f32 - img.top()) / img.height())
+    };
+    let (from_deg, to_deg) = (6.0_f64, -25.0_f64);
+    let (from, to) = (at(from_deg), at(to_deg));
+    let press = at(from_deg + 4.0);
+    let r = h.request(
+        "ui.pointer",
+        json!({"events": [
+            {"kind": "down", "x": press.0, "y": press.1},
+            {"kind": "drag", "x": from.0, "y": from.1},
+            {"kind": "drag", "x": to.0, "y": to.1},
+            {"kind": "drag", "x": to.0, "y": to.1},
+        ]}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    // the box turns by the pointer's travel about its own centre, and the straighten angle is that
+    // correction, so it comes out negated
+    let want = from_deg - to_deg;
+    assert!((angle(&h) - want).abs() < 0.01, "the pointer turned {want}° about the box centre, the box gave {}", angle(&h));
+}
+
 /// The crop box lies inside the rotated photo (issue #742: a typed or slid angle shrinks it to fit,
 /// as the rotate handle does).
 fn crop_fits(h: &Headless) -> bool {
