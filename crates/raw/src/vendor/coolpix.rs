@@ -36,8 +36,9 @@ pub(crate) fn first_field_even(model: &str) -> bool {
 /// Whether `d` (`w x h`, rows in file order) holds the two interlaced fields one after the other, found from the
 /// data and not from the model: in that layout neighbouring stored rows are the same colour two image rows apart, so
 /// they differ far less than rows two apart; in a normal Bayer frame it is the other way round (one row over is
-/// another colour). The seam at the half is checked as well.
-pub(crate) fn fields_stacked(d: &[u16], w: usize, h: usize) -> bool {
+/// another colour). The seam at the half is checked as well. For a Bayer `pattern`, matching
+/// green sites in the proposed fields must agree, to reject ordinary scenes with a horizon.
+pub(crate) fn fields_stacked(d: &[u16], w: usize, h: usize, pattern: &[u8], first_even: bool) -> bool {
     let Some(n) = w.checked_mul(h).filter(|n| *n <= crate::MAX_SAMPLES) else { return false };
     if h < 64 || !h.is_multiple_of(2) || w < 64 || d.len() < n {
         return false;
@@ -49,7 +50,30 @@ pub(crate) fn fields_stacked(d: &[u16], w: usize, h: usize) -> bool {
     // stored rows h/2-1 and h/2 are image rows h-2 and 1 (or h-1 and 0): far apart, so a real seam separates them
     let m = h / 2;
     let seam = (0..w).step_by(5).map(|x| (d[(m - 1) * w + x] as f64 - d[m * w + x] as f64).abs()).sum::<f64>() / w.div_ceil(5) as f64;
-    seam > g1 * 4.0
+    seam > g1 * 4.0 && green_fields_agree(d, w, h, pattern, first_even)
+}
+
+/// Both Bayer fields see the same green light on neighbouring sensor rows. A normal neutral
+/// scene with a strong horizon can pass the gap/seam tests, but its upper and lower halves
+/// do not agree on that light. Compare the green sites, independent of the red/blue balance.
+/// CYGM has no green site in one field and keeps the original detector.
+fn green_fields_agree(d: &[u16], w: usize, h: usize, pattern: &[u8], first_even: bool) -> bool {
+    if pattern.len() != 4 || pattern.iter().any(|c| *c > 2) {
+        return true;
+    }
+    let (Some(g0), Some(g1)) = (pattern[..2].iter().position(|c| *c == 1), pattern[2..].iter().position(|c| *c == 1)) else { return true };
+    let (a, b) = if first_even { (g0, g1) } else { (g1, g0) };
+    let half = h / 2;
+    let (mut difference, mut light) = (0.0, 0.0);
+    // Called only after the checked dimensions, minimum size and complete raster validation.
+    for y in (0..half).step_by(7) {
+        for x in (0..w - 1).step_by(8) {
+            let (ga, gb) = (f64::from(d[y * w + x + a]), f64::from(d[(half + y) * w + x + b]));
+            difference += (ga - gb).abs();
+            light += (ga + gb) * 0.5;
+        }
+    }
+    light > 0.0 && difference <= light * 0.25
 }
 
 /// Mean absolute difference between rows `r` and `r + step`, over a column and row subsample.
@@ -174,7 +198,7 @@ mod tests {
     #[test]
     fn malformed_dimensions_are_refused_before_work_or_allocation() {
         for (w, h) in [(usize::MAX, 2), (usize::MAX - 1, 64), (crate::MAX_SAMPLES, 4)] {
-            assert!(!fields_stacked(&[], w, h));
+            assert!(!fields_stacked(&[], w, h, &[2, 1, 1, 0], true));
             assert!(deinterlace(&[], w, h, true).is_none());
             assert!(cygm_to_rgb(&[], w, h, CYGM_PATTERN).is_none());
         }
@@ -228,13 +252,13 @@ mod tests {
                 }
                 v
             };
-            assert!(fields_stacked(&stacked, w, h));
+            assert!(fields_stacked(&stacked, w, h, &[2, 1, 1, 0], first_even));
             assert_eq!(deinterlace(&stacked, w, h, first_even).unwrap(), full);
         }
-        assert!(!fields_stacked(&full, w, h));
+        assert!(!fields_stacked(&full, w, h, &[2, 1, 1, 0], true));
         // too small or odd-height frames are never stacked
-        assert!(!fields_stacked(&full[..w * 8], w, 8));
-        assert!(!fields_stacked(&full[..w * 69], w, 69));
+        assert!(!fields_stacked(&full[..w * 8], w, 8, &[2, 1, 1, 0], true));
+        assert!(!fields_stacked(&full[..w * 69], w, 69, &[2, 1, 1, 0], true));
     }
 
     #[test]
