@@ -526,6 +526,9 @@ impl WebApp {
             app.cloud.connect(svc);
             app.share.connect(collabcraft_share::CollabCraft::from_fn(|| Some(craft_cloud_client::Client::from_page())));
         }
+        // Kick off the initial account probe and root-folder listing so the cloud
+        // controls are populated from the first frame (matches WordCraft/DeckCraft).
+        lightcraft_ui_egui::cloud::start(&mut app);
         let ui_written = files.get("ui.json").unwrap_or_default();
         // an arrangement from an older docking version starts again from the default
         let mut saved = serde_json::from_slice::<serde_json::Value>(&ui_written).unwrap_or_default();
