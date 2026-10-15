@@ -82,7 +82,11 @@ pub enum ResizeMode {
     Width,
     /// `value` = height in pixels.
     Height,
-    /// Fit inside `value × height` pixels, whichever way round the photo is (long edge ≤ the larger).
+    /// Fit inside `value` wide × `height` tall as the photo stands: width ≤ `value`, height ≤
+    /// `height` (Lightroom's "Width & Height").
+    WidthHeight,
+    /// Fit inside `value × height` pixels, whichever way round the photo is (long edge ≤ the
+    /// larger; Lightroom's "Dimensions").
     Dimensions,
     /// `value` = megapixels.
     Megapixels,
@@ -96,7 +100,7 @@ pub enum ResizeMode {
 pub struct Resize {
     pub mode: ResizeMode,
     pub value: f32,
-    /// Second dimension for [`ResizeMode::Dimensions`].
+    /// Second dimension for [`ResizeMode::Dimensions`] and [`ResizeMode::WidthHeight`].
     pub height: u32,
     /// Never upscale past the photo's own (cropped) size.
     pub dont_enlarge: bool,
@@ -127,6 +131,7 @@ impl Resize {
             ResizeMode::ShortEdge => v / short,
             ResizeMode::Width => v / w,
             ResizeMode::Height => v / h,
+            ResizeMode::WidthHeight => (v / w).min(self.height as f64 / h),
             ResizeMode::Dimensions => {
                 let (a, b) = (v, self.height as f64);
                 (a.max(b) / long).min(a.min(b) / short)
@@ -721,6 +726,7 @@ pub const OPTION_PARAMS: &[&str] = &[
     "height",
     "megapixels",
     "percent",
+    "fit",
     "dontEnlarge",
     "ppi",
     "limitKb",
@@ -894,6 +900,7 @@ impl ExportOptions {
                 "longEdge" | "shortEdge" | "width" | "height" | "megapixels" | "percent" => {
                     num(k, v, 0.0, 1.0e9)?;
                 }
+                "fit" => one_of(k, v, &["dimensions", "widthHeight"])?,
                 "resize" => {
                     let Some(r) = v.as_object() else { return Err(bad(format!("`{k}` must be an object {{mode, value, height?, dontEnlarge?}}"))) };
                     if let Some(x) = r.keys().find(|x| !matches!(x.as_str(), "mode" | "value" | "height" | "dontEnlarge")) {
@@ -1075,8 +1082,12 @@ impl ExportOptions {
             return (r.value > 0.0).then_some(Resize { dont_enlarge: p.get("dontEnlarge").and_then(Value::as_bool).unwrap_or(r.dont_enlarge), ..r });
         }
         let r = |mode, value: f64| Resize { mode, value: value.min(65_535.0) as f32, height: 0, dont_enlarge };
+        // `fit: widthHeight` binds each edge to its own number; the default fits either orientation
+        let bound = p.get("fit").and_then(Value::as_str).is_some_and(|fit| fit.eq_ignore_ascii_case("widthHeight"));
         Some(match (f("width"), f("height")) {
-            (Some(w), Some(h)) => Resize { height: h.min(65_535.0) as u32, ..r(ResizeMode::Dimensions, w) },
+            (Some(w), Some(h)) => {
+                Resize { height: h.min(65_535.0) as u32, ..r(if bound { ResizeMode::WidthHeight } else { ResizeMode::Dimensions }, w) }
+            }
             (Some(w), None) => r(ResizeMode::Width, w),
             (None, Some(h)) => r(ResizeMode::Height, h),
             (None, None) => {
@@ -2768,6 +2779,13 @@ mod tests {
         assert_eq!(size(json!({"width": 1000, "height": 800}), 6000.0, 4000.0), Some((1000, 667)));
         assert_eq!(size(json!({"width": 1000, "height": 800}), 4000.0, 6000.0), Some((667, 1000)));
         assert_eq!(size(json!({"width": 1000, "height": 500}), 6000.0, 4000.0), Some((750, 500)));
+        assert_eq!(size(json!({"width": 270, "height": 337, "fit": "dimensions"}), 480.0, 320.0), Some((337, 225)));
+        // Width & Height (`fit: widthHeight`) binds each edge to its own number: W limits the width, H the height (#1620)
+        assert_eq!(size(json!({"width": 270, "height": 337, "fit": "widthHeight"}), 480.0, 320.0), Some((270, 180)));
+        assert_eq!(size(json!({"width": 270, "height": 337, "fit": "widthHeight"}), 320.0, 480.0), Some((225, 337)));
+        assert_eq!(size(json!({"width": 240, "height": 300, "fit": "widthHeight"}), 480.0, 320.0), Some((240, 160)));
+        // `fit` only matters with both numbers
+        assert_eq!(size(json!({"width": 1000, "fit": "widthHeight"}), 6000.0, 4000.0), Some((1000, 667)));
         let (w, h) = size(json!({"megapixels": 6}), 6000.0, 4000.0).unwrap();
         assert!(((w * h) as f64 - 6e6).abs() < 6e6 * 0.002, "{w}×{h}");
         assert_eq!(size(json!({"percent": 25}), 6000.0, 4000.0), Some((1500, 1000)));
@@ -2782,6 +2800,8 @@ mod tests {
         let r = Resize { mode: ResizeMode::ShortEdge, value: 720.0, height: 0, dont_enlarge: false };
         let back = ExportOptions::from_json(&ExportOptions::resize_json(Some(&r))).resize;
         assert_eq!(back, Some(r));
+        let r = Resize { mode: ResizeMode::WidthHeight, value: 270.0, height: 337, dont_enlarge: true };
+        assert_eq!(ExportOptions::from_json(&ExportOptions::resize_json(Some(&r))).resize, Some(r));
         assert_eq!(ExportOptions::from_json(&ExportOptions::resize_json(None)).resize, None);
         assert_eq!(ExportOptions::from_json(&json!({"ppi": 300})).ppi, 300);
         // never larger than the encoders' limit, never empty
@@ -2853,6 +2873,7 @@ mod tests {
                         mode(ResizeMode::Width, value, 0),
                         mode(ResizeMode::Height, value, 0),
                         mode(ResizeMode::Dimensions, value, 1365),
+                        mode(ResizeMode::WidthHeight, value, 1365),
                         mode(ResizeMode::Megapixels, value / 1000.0, 0),
                         mode(ResizeMode::Percent, value / 100.0, 0),
                     ] {
@@ -3149,6 +3170,7 @@ mod tests {
         assert!(err(json!({"bitDepth": 12})).contains("`bitDepth` must be 8, 10, 16 or 32"));
         assert!(err(json!({"colorSpace": "cmyk"})).contains("`colorSpace` must be one of"));
         assert!(err(json!({"dontEnlarge": "no"})).contains("`dontEnlarge` must be true or false"));
+        assert!(err(json!({"fit": "sideways"})).contains("`fit` must be one of dimensions|widthHeight"));
         assert!(err(json!({"resize": {"mode": "longEdge", "valeu": 10}})).contains("did you mean `value`"));
         assert!(err(json!({"resize": {"mode": "diagonal", "value": 10}})).contains("`resize`:"));
         assert!(err(json!({"ids": [1, "x"]})).contains("`ids` must be an array of photo ids"));
