@@ -3652,3 +3652,61 @@ fn content_duplicate_is_found_after_its_original_leaves_the_catalog() {
     assert_eq!(ids(&r, "duplicates"), 1, "{r}");
     let _ = std::fs::remove_dir_all(&src);
 }
+
+/// Fresh replaces every deleted instance of the incoming content, including intentional copies.
+/// Other deleted content stays available, and undo recovers each replaced photo with its edits.
+#[test]
+fn fresh_import_replaces_deleted_content_copies_and_undo_restores_them() {
+    for remove_original in [false, true] {
+        let src = temp_dir(if remove_original { "fresh-copies-only" } else { "fresh-original-and-copies" });
+        write_png(&src.join("original.png"), 1);
+        for name in ["copy1.png", "copy2.png", "incoming.png"] {
+            std::fs::copy(src.join("original.png"), src.join(name)).unwrap();
+        }
+        write_png(&src.join("unrelated.png"), 2);
+        let path = |name: &str| src.join(name).to_string_lossy().to_string();
+        let mut s = Session::new().with_fs();
+        let mut matching = Vec::new();
+        for name in ["original.png", "copy1.png", "copy2.png"] {
+            let r = s.execute("library.import", &json!({"paths": [path(name)], "importAnyway": [path(name)]})).unwrap();
+            let id = r["imported"][0].as_u64().unwrap();
+            s.execute("photo.rate", &json!({"ids": [id], "rating": 4})).unwrap();
+            matching.push(id);
+        }
+        let r = s.execute("library.import", &json!({"paths": [path("unrelated.png")]})).unwrap();
+        let unrelated = r["imported"][0].as_u64().unwrap();
+        let original = remove_original.then(|| matching.remove(0));
+        let mut deleted = matching.clone();
+        deleted.push(unrelated);
+        s.execute("photo.delete", &json!({"ids": deleted})).unwrap();
+        if let Some(original) = original {
+            s.execute("photo.deletePermanently", &json!({"ids": [original]})).unwrap();
+        }
+        // Restore still revives one existing record with its edits rather than replacing it.
+        let r = s.execute("library.import", &json!({"paths": [path("incoming.png")], "onDeleted": "restore"})).unwrap();
+        assert_eq!(ids(&r, "restored"), 1, "{r}");
+        let restored = r["restored"][0].as_u64().unwrap();
+        assert!(matching.contains(&restored));
+        assert_eq!(s.catalog.photo(lightcraft_catalog::PhotoId(restored)).unwrap().rating, 4);
+        s.execute("edit.undo", &json!({})).unwrap();
+        let old_hashes: Vec<_> = matching.iter().map(|id| s.catalog.photo(lightcraft_catalog::PhotoId(*id)).unwrap().content_hash.clone()).collect();
+        let r = s.execute("library.import", &json!({"paths": [path("incoming.png")], "onDeleted": "fresh"})).unwrap();
+        assert_eq!(ids(&r, "imported"), 1, "{r}");
+        assert_eq!(ids(&r, "restored"), 0, "{r}");
+        let new = lightcraft_catalog::PhotoId(r["imported"][0].as_u64().unwrap());
+        assert!(matching.iter().all(|id| s.catalog.photo(lightcraft_catalog::PhotoId(*id)).is_none()), "all matching trash replaced");
+        let p = s.catalog.photo(new).unwrap();
+        assert!(!p.deleted && p.rating == 0, "fresh edits");
+        assert_eq!(s.catalog.len(), 2);
+        assert!(s.catalog.photo(lightcraft_catalog::PhotoId(unrelated)).unwrap().deleted);
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert!(s.catalog.photo(new).is_none());
+        for (id, hash) in matching.iter().zip(old_hashes) {
+            let p = s.catalog.photo(lightcraft_catalog::PhotoId(*id)).unwrap();
+            assert!(p.deleted && p.rating == 4);
+            assert_eq!(p.content_hash, hash);
+        }
+        assert!(s.catalog.photo(lightcraft_catalog::PhotoId(unrelated)).unwrap().deleted);
+        let _ = std::fs::remove_dir_all(&src);
+    }
+}

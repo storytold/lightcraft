@@ -194,11 +194,12 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     // photos added by this batch, by content (a duplicate of a file earlier in the import names it)
     let mut new_hash: HashMap<String, PhotoId> = HashMap::new();
     // Fresh: trashed photos a new import replaces (by content or by file), each removed once
-    let (mut trash_hash, mut trash_path): (HashMap<String, PhotoId>, HashMap<String, PhotoId>) = Default::default();
+    let mut trash_hash: HashMap<String, Vec<PhotoId>> = HashMap::new();
+    let mut trash_path: HashMap<String, PhotoId> = HashMap::new();
     if opts.on_deleted == OnDeleted::Fresh {
         for p in s.catalog.photos().filter(|p| p.deleted) {
             if let Some(h) = &p.content_hash {
-                trash_hash.insert(h.clone(), p.id);
+                trash_hash.entry(crate::sync::base_hash(h).to_string()).or_default().push(p.id);
             }
             if let Source::File { path } = &p.source {
                 trash_path.insert(path.clone(), p.id);
@@ -248,9 +249,16 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 if let Some(h) = &info.content_hash {
                     new_hash.entry(h.clone()).or_insert(id);
                 }
-                for old in info.content_hash.as_ref().and_then(|h| trash_hash.get(h)).into_iter().chain(trash_path.get(&stored)) {
-                    if purged.insert(*old) {
-                        purge.push(*old);
+                for old in info
+                    .content_hash
+                    .as_deref()
+                    .and_then(|h| trash_hash.remove(crate::sync::base_hash(h)))
+                    .into_iter()
+                    .flatten()
+                    .chain(trash_path.remove(&stored))
+                {
+                    if purged.insert(old) {
+                        purge.push(old);
                     }
                 }
                 // ticked by hand although another photo has this content: a Duplicate's hash
