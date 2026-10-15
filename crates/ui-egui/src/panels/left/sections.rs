@@ -404,19 +404,21 @@ pub(super) fn missing_count(app: &mut LightcraftApp, ui: &mut egui::Ui) -> usize
     let now = ui.input(|i| i.time);
     let rev = app.session.catalog.revision;
     let mut job: Job = ui.data(|d| d.get_temp(id)).unwrap_or(Job { rev: u64::MAX, at: f64::MIN, ..Default::default() });
+    // (which files the library expects is no develop state: a slider drag doesn't check them all again)
+    let still = crate::still_right(&app.session.catalog, job.rev, crate::READS_NO_DEVELOP);
     let running = job.running.load(Relaxed);
-    if running && job.rev != rev && !job.owed {
+    if running && !still && !job.owed {
         // the recount waits for the running count (a timed refresh, not waited for), but settling
         // must wait for it from now on
         super::local::fs_running_counter(ui.ctx()).fetch_add(1, AcqRel);
         job.owed = true;
         ui.data_mut(|d| d.insert_temp(id, job.clone()));
     }
-    let fresh = now - job.at < 5.0 && job.rev == rev;
+    let fresh = now - job.at < 5.0 && still;
     if !fresh && !running {
         // the same scope as the Missing Photos view: library photos only, never Local browse records
         let paths = lightcraft_engine::cmd::missing::candidates(&app.session.catalog);
-        let pending = (job.rev != rev).then(|| super::local::fs_running_counter(ui.ctx()));
+        let pending = (!still).then(|| super::local::fs_running_counter(ui.ctx()));
         if let Some(p) = &pending
             && !job.owed
         {
