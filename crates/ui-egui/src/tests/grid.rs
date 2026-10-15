@@ -132,6 +132,41 @@ fn grid_headers_selection_scrolling_stacks_and_shape_changes() {
     assert_cheap_frames(&mut h);
 }
 
+/// A develop edit (a Quick Develop click, a slider tick) leaves the list in view as it is: the grid's date runs and
+/// stack index aren't rebuilt, and the square grid's layout neither. The justified grid lays out again, since a
+/// crop or rotation can change a photo's shape: a rotation shows in its rows without the list changing.
+#[test]
+fn develop_edits_keep_the_grid_view() {
+    for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid] {
+        let mut h = grid(view);
+        let (generation, _) = h.app.session.visible_shared();
+        let before = h.app.caches.grid_stats.clone();
+        let id = h.app.session.visible()[10];
+        select(&mut h, id);
+        for v in [0.5, 1.0] {
+            let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": v}}), T);
+            assert_eq!(r["ok"], true, "{r}");
+            h.settle(SETTLE);
+        }
+        assert_eq!(h.app.session.visible_shared().0, generation, "{view:?}: the list was kept");
+        let s = &h.app.caches.grid_stats;
+        assert_eq!((s.view_builds, s.stack_index_builds), (before.view_builds, before.stack_index_builds), "{view:?}");
+        if view == ViewMode::SquareGrid {
+            assert_eq!(s.layout_builds, before.layout_builds, "square cells don't depend on shapes");
+        } else {
+            let landscape = h.app.session.visible()[12];
+            let r = h.request("engine.execute", json!({"command": "photo.rotateRight", "params": {"ids": [landscape.0]}}), T);
+            assert_eq!(r["ok"], true, "{r}");
+            h.settle(SETTLE);
+            assert_eq!(h.app.session.visible_shared().0, generation, "a rotation is develop state too");
+            let cell = widget(&h, &format!("thumb:{}", landscape.0)).unwrap();
+            assert!(cell.height() > cell.width(), "the rotated photo's cell is portrait: {cell:?}");
+            assert_as_made_afresh(&mut h, "after a rotation in a kept list");
+        }
+        assert_cheap_frames(&mut h);
+    }
+}
+
 /// Selected photos whose thumbnails have not loaded (or can't) are still marked selected in the
 /// justified grid (issue #298), in a light theme too (a white ring vanished on the light grid):
 /// the ring of the active photo is heavier than the others' and both are the theme's colours, not
