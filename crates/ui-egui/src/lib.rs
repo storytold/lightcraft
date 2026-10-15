@@ -18,6 +18,7 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 pub mod brush_live;
 pub mod canvas_keys;
 mod command_error;
+pub mod cloud;
 pub mod control;
 pub mod destination;
 pub mod dialogs;
@@ -371,6 +372,14 @@ pub struct LightcraftApp {
     pub recent_checks: panels::library_problem::RecentChecks,
     /// The activity stack shows every task, not just the first few ("+N more" was clicked).
     pub activity_expanded: bool,
+    /// Cloud file browser / save / share state. Driven every frame by `cloud::pump`.
+    pub cloud: craft_ui::cloud::CloudFiles,
+    /// Share-dialog state. Shown by `share.show(ctx)` every frame.
+    pub share: craft_ui::share::ShareDialog,
+    /// Presence bar (other users viewing the same photo). Populated by `pump`.
+    pub presence: craft_ui::presence::PresenceBar,
+    /// Which cloud page the user opened from the File menu, if any.
+    pub cloud_page: Option<cloud::CloudPage>,
 }
 
 /// How long a screenshot waits for in-flight renders before it is captured anyway (and the

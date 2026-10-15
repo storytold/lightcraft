@@ -80,6 +80,8 @@ impl LightcraftApp {
         panels::faces::pump_background(self, ctx, now);
         model_setup::pump(self, ctx, now);
         focus_scan::pump(self, ctx, now);
+        // Cloud Open / Save / Share: drain the worker channel and advance the UI state.
+        crate::cloud::pump(self, ctx);
         // auto import: list the watched folder every few seconds (on a worker thread: it may be on
         // a network share), then import what's new like any import (also on a worker thread)
         // a folder that couldn't be read stops being one once another is watched (or none)
@@ -427,6 +429,9 @@ impl LightcraftApp {
                 panels::notices::hide_background_pointer(&ctx);
             }
             panels::dialogs::show(self, &ctx, notice_blocks);
+            // Share dialog: draw the modal overlay when it is open. Called from here so it appears
+            // even when the topbar (which normally opens it) is not drawn this frame.
+            self.share.show(&ctx);
             updates_ui::show(self, &ctx);
             panels::library_problem::show(self, &ctx, notice_blocks);
             panels::toast(self, &ctx);
@@ -458,6 +463,9 @@ impl LightcraftApp {
             panels::notices::hide_background_pointer(&ctx);
         }
         panels::dialogs::show(self, &ctx, notice_blocks);
+        // Share dialog: draw the modal overlay when it is open. Called from here so it appears
+        // even when the topbar (which normally opens it) is not drawn this frame.
+        self.share.show(&ctx);
         updates_ui::show(self, &ctx);
         panels::library_problem::show(self, &ctx, notice_blocks);
         export_task::poll(self, &ctx);

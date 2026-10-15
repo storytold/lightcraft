@@ -10,13 +10,26 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/lightcraft"
 
 [workspace.dependencies]
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["serde"] }
+# craft-ui must track the same wdunn001/craft-libs rev as craft-cloud below: craft-ui's cloud
+# module (CloudFiles/share/presence) hands craft_cloud types across the LightCraft/CollabCraft
+# boundary, and two revisions of craft_cloud in the dependency graph would be two incompatible
+# types. storytold/craft-libs does not have the cloud module yet (craft-libs#123 fold-in, not
+# upstreamed), so both pins stay on the fork until that lands.
+craft-ui = { git = "https://github.com/wdunn001/craft-libs", rev = "1a3cbfd724bf28ccbe51a1f45f19022f131f15bb", features = ["serde"] }
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
 # Canon CRW decoder shared with the other Craft apps
 craft-crw = { git = "https://github.com/storytold/craft-libs", rev = "f3b62ec61f45534392376492fc5ad33047375205" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["egui"] }
 craft-window = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["egui"] }
+# The vendor-neutral cloud vocabulary: file entries, capabilities, shares. Pinned to the same
+# wdunn001/craft-libs rev as craft-ui and as collab-craft's own craft-cloud pin (see craft-ui
+# comment above): craft-cloud-client (collab-craft, below) returns these types directly.
+craft-cloud = { git = "https://github.com/wdunn001/craft-libs", rev = "1a3cbfd724bf28ccbe51a1f45f19022f131f15bb" }
+# HTTP client that reaches CollabCraft. No provider credential lives in LightCraft.
+craft-cloud-client = { git = "https://github.com/wdunn001/collab-craft", rev = "f895a6f" }
+# Share-dialog backend that talks to CollabCraft over the same session.
+collabcraft-share = { git = "https://github.com/wdunn001/collab-craft", rev = "f895a6f" }
 # internal
 lightcraft-denoise-core = { path = "crates/denoise-core" }
 lightcraft-denoise = { path = "crates/denoise", default-features = false }

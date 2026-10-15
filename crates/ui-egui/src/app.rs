@@ -134,6 +134,10 @@ impl LightcraftApp {
             recent_checks: Default::default(),
             activity_expanded: false,
             model_setup: Default::default(),
+            cloud: Default::default(),
+            share: Default::default(),
+            presence: Default::default(),
+            cloud_page: None,
         }
     }
 
