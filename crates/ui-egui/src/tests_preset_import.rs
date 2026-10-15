@@ -33,7 +33,7 @@ fn import(h: &mut Headless, paths: &[&std::path::Path]) -> serde_json::Value {
 }
 
 fn toast(h: &Headless) -> String {
-    h.app.ui.toast.clone().map(|t| t.0).unwrap_or_default()
+    h.app.ui.toast().cloned().map(|t| t.0).unwrap_or_default()
 }
 
 /// A 2×2×2 identity LUT.

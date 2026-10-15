@@ -144,7 +144,7 @@ fn a_drop_while_a_dialog_is_open_leaves_the_dialog_and_imports_nothing() {
     assert!(matches!(h.app.ui.dialog, Some(Dialog::WhatsNew)), "the open dialog stays");
     assert!(h.app.scan.is_none() && h.app.import.is_none(), "no scan or import started");
     assert_eq!(photos(&h), 0);
-    assert!(h.app.ui.toast.is_some(), "the person is told why");
+    assert!(h.app.ui.toast().is_some(), "the person is told why");
 }
 
 /// The scan of a dropped folder finishing while another dialog is open (the face model's licence, Settings…)
@@ -237,7 +237,7 @@ fn a_drop_while_an_import_runs_is_refused() {
     }
     assert!(h.app.ui.dialog.is_none(), "no review opened");
     assert!(h.app.scan.is_some() && h.app.import.is_none(), "the running scan was left alone and nothing else started");
-    assert!(h.app.ui.toast.is_some(), "the person is told why");
+    assert!(h.app.ui.toast().is_some(), "the person is told why");
     assert_eq!(photos(&h), 0);
 }
 
@@ -251,7 +251,7 @@ fn a_direct_drop_while_an_import_runs_is_refused_too() {
     let _scan = crate::import::stall_scan(&mut h.app);
     drop_files(&mut h, &[dir.path("more")], false);
     assert!(h.app.import.is_none(), "no second import");
-    assert!(h.app.ui.toast.is_some());
+    assert!(h.app.ui.toast().is_some());
 }
 
 /// A Local folder browse scan counts too: a review-first drop would be rejected by `open`, and a
@@ -272,7 +272,7 @@ fn a_drop_while_a_browse_scan_runs_is_refused_in_both_modes() {
         }
         assert!(h.app.ui.dialog.is_none() && h.app.import.is_none(), "direct={direct}: nothing started");
         assert!(h.app.scan.is_some(), "the browse was left alone");
-        assert!(h.app.ui.toast.is_some(), "the person is told why");
+        assert!(h.app.ui.toast().is_some(), "the person is told why");
     }
 }
 
@@ -288,7 +288,7 @@ fn hovering_photos_while_a_lightroom_import_is_pending_says_they_will_be_refused
     assert!(!said(&h, "review"), "{:?}", h.painted_text());
     drop_files(&mut h, &[dir.path("trip")], false);
     assert!(h.app.ui.dialog.is_none(), "no review opened");
-    assert!(h.app.ui.toast.is_some(), "the person is told why");
+    assert!(h.app.ui.toast().is_some(), "the person is told why");
     assert_eq!(photos(&h), 0);
 }
 
@@ -324,8 +324,8 @@ fn photos_dropped_with_no_library_open_wait_for_one() {
     assert!(h.app.ui.dialog.is_none() && h.app.import.is_none(), "no review, no import into the temporary session");
     assert_eq!(photos(&h), 0);
     // a preset belongs to a library: refused, not imported into the session the library replaces
-    h.app.ui.toast = None;
+    h.app.ui.toasts.clear();
     drop_files(&mut h, &[dir.path("warm.lcpreset")], false);
-    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    let toast = h.app.ui.toast().map(|t| t.0.clone()).unwrap_or_default();
     assert!(toast.contains("drop the presets again"), "{toast}");
 }
