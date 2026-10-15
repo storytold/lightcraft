@@ -51,6 +51,8 @@ pub mod window_place;
 #[cfg(test)]
 mod tests_activity;
 #[cfg(test)]
+mod tests_cloud;
+#[cfg(test)]
 mod tests_album_picker;
 #[cfg(test)]
 mod tests_album_remove;
