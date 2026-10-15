@@ -43,11 +43,15 @@ impl RegionView {
 }
 
 /// Show main's window for a new location, then replace it with the exact job.
-/// A shown tile at the same location lets edits go directly to exact. Drafts
-/// already use main's window and retain their distinct result key.
+/// A shown tile at the same location lets edits go directly to exact, except the
+/// draft a drag ended on with Dehaze active: the exact window after it can take
+/// ~0.3 s (67 MP on a 4070 Ti, nearly all of it the GPU plan lap), so main's
+/// window comes first there too. Drafts already use main's window and retain
+/// their distinct result key.
 pub fn first_window(job: lightcraft_engine::RenderJob, shown: Option<u64>, placed: bool, drafting: bool) -> lightcraft_engine::RenderJob {
     let bounded = job.clone().bounded_window();
-    if cfg!(target_arch = "wasm32") || drafting || placed || shown == Some(job.key) || shown == Some(bounded.key) { job } else { bounded }
+    let released = shown == Some(job.clone().draft().key) && job.settings.effects.dehaze != 0.0;
+    if cfg!(target_arch = "wasm32") || drafting || (placed && !released) || shown == Some(job.key) || shown == Some(bounded.key) { job } else { bounded }
 }
 
 /// Context to render around the visible pixels of a frame `full_long` pixels along: enough for the

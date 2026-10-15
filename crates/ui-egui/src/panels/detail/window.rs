@@ -175,4 +175,30 @@ mod bounded_window_tests {
             "then the exact one"
         );
     }
+
+    /// With Dehaze on, the exact window after a drag can take ~0.3 s at 67 MP: the released drag
+    /// shows main's window first, then the exact one.
+    #[test]
+    fn a_released_drag_with_dehaze_is_bounded_first_then_exact() {
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+        let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+        let timeout = Duration::from_secs(120);
+        let set = |h: &mut Headless, control: &str, value: f64| {
+            h.request("engine.execute", serde_json::json!({"command":"develop.set", "params":{"control":control, "value":value}}), timeout);
+        };
+        h.request("ui.set", serde_json::json!({"view":"detail", "right":"none", "filmstrip":false}), Duration::from_secs(20));
+        set(&mut h, "effects.dehaze", 10.0);
+        h.app.ui.zoom = crate::state::Zoom::Percent(200.0);
+        assert!(h.settle(timeout));
+        h.app.session.begin_interaction("Exposure").unwrap();
+        set(&mut h, "light.exposure", 0.5);
+        assert!(h.settle(timeout));
+        let draft = h.app.region_view.unwrap();
+        let exact = exact_job(&mut h, draft, Slot::Region);
+        assert_eq!(draft.key, exact.clone().draft().key);
+        h.app.session.end_interaction().unwrap();
+        assert!(h.step_until(timeout, |h| h.app.region_view.is_some_and(|v| v.key != draft.key)));
+        assert_eq!(h.app.region_view.unwrap().key, exact.clone().bounded_window().key, "main's window first");
+        assert!(h.step_until(timeout, |h| h.app.renderer.textures.get(&Slot::Region).is_some_and(|t| t.key == exact.key)), "then the exact one");
+    }
 }
