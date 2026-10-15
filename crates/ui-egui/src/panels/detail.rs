@@ -80,6 +80,9 @@ pub enum Gesture {
     CropRotate {
         start_angle: f64,
         a0: f32,
+        /// The crop as it stood when the drag began, so every step shrinks from the drawn crop
+        /// rather than from the previous step's shrunken one (issue #1794).
+        start_rect: lightcraft_geom::Rect,
     },
     Pan {
         start: (f32, f32),

@@ -70,6 +70,29 @@ fn a_crop_that_still_fits_is_kept() {
 }
 
 #[test]
+fn a_rotate_drag_keeps_the_crop_it_started_from() {
+    // issue #1794: `from` is the crop the drag began with, so every step measures against the
+    // drawn crop. Without it a centred crop comes back as the whole photo.
+    let mut s = Session::with_demo();
+    let (w, h) = dims(&s);
+    let drawn = Rect::new(0.1, 0.1, 0.9, 0.9);
+    s.execute("crop.set", &json!({"rect": [drawn.x0, drawn.y0, drawn.x1, drawn.y1]})).unwrap();
+    let from = json!([drawn.x0, drawn.y0, drawn.x1, drawn.y1]);
+    for angle in [10.0, 20.0, 30.0, 20.0, 10.0, 0.0] {
+        s.execute("crop.straighten", &json!({"angle": angle, "from": from})).unwrap();
+        assert!(geometry(&s).is_within_image(w, h), "{angle}°");
+    }
+    let got = geometry(&s).rect_px(w, h);
+    let want = drawn.scale(w, h);
+    assert!((got.width() - want.width()).abs() < 1e-6, "the drawn crop must come home whole: {} -> {}", want.width(), got.width());
+
+    // a malformed `from` is ignored, not trusted
+    for bad in [json!([0.9, 0.9, 0.1, 0.1]), json!([0.1, 0.1]), json!([0.1, 0.1, 0.9])] {
+        s.execute("crop.straighten", &json!({"angle": 0.0, "from": bad})).unwrap();
+    }
+}
+
+#[test]
 fn quick_develop_reset_and_batch_paths_fit_too() {
     let mut s = Session::with_demo();
     let (w, h) = dims(&s);

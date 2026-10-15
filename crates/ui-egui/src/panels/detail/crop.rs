@@ -146,7 +146,7 @@ pub(super) fn crop_overlay(
             None if inside(q) => Gesture::CropHandle { handle: 8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
             None => {
                 let c = map.screen(Point::new(0.5, 0.5));
-                Gesture::CropRotate { start_angle: d.crop.geometry.angle, a0: (q - c).angle() }
+                Gesture::CropRotate { start_angle: d.crop.geometry.angle, a0: (q - c).angle(), start_rect: d.crop.geometry.rect }
             }
         });
     }
@@ -166,7 +166,7 @@ pub(super) fn crop_overlay(
                     json!({"handle": handle, "from": [orig.x, orig.y], "to": [n.x, n.y], "start": [start.x0, start.y0, start.x1, start.y1], "keepRatio": keep_ratio}),
                 );
             }
-            Some(Gesture::CropRotate { start_angle, a0 }) => {
+            Some(Gesture::CropRotate { start_angle, a0, start_rect }) => {
                 let c = map.screen(Point::new(0.5, 0.5));
                 let a = (q - c).angle();
                 // Negate the angle delta because straighten angle is opposite to rotation direction:
@@ -174,7 +174,10 @@ pub(super) fn crop_overlay(
                 // but straighten angle is the correction (opposite of rotation).
                 let ang = (start_angle - (a - a0).to_degrees() as f64).clamp(-45.0, 45.0);
                 shown_angle = (ang * 100.0).round() / 100.0;
-                let _ = app.run("crop.straighten", json!({"angle": shown_angle}));
+                // `start_rect` is the drawn crop, not the last step's shrunken one: without it a
+                // centred crop comes back as the whole photo (issue #1794).
+                let _ =
+                    app.run("crop.straighten", json!({"angle": shown_angle, "from": [start_rect.x0, start_rect.y0, start_rect.x1, start_rect.y1]}));
             }
             _ => {}
         }
