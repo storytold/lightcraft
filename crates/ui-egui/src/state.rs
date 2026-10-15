@@ -189,6 +189,10 @@ pub struct UiState {
     /// preview ([`lightcraft_pipeline::Overlay::for_control`]).
     #[serde(skip)]
     pub alt_held: bool,
+    /// The crop as it stood when the Straighten slider drag began, so every step of that drag is
+    /// measured against the drawn crop rather than the previous step's shrunken one (issue #1794).
+    #[serde(skip)]
+    pub crop_angle_from: Option<lightcraft_geom::Rect>,
     pub search: String,
     /// Focus the search field on the next frame (Edit → Find…).
     #[serde(skip)]
@@ -434,6 +438,7 @@ impl Default for UiState {
             hidden_locations: Vec::new(),
             dragging_control: None,
             alt_held: false,
+            crop_angle_from: None,
             external_edits: Vec::new(),
             was_focused: true,
             auto_import_at: 0.0,

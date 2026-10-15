@@ -69,9 +69,9 @@ fn the_rotation_pivots_on_the_box_centre() {
         let a = deg.to_radians();
         ((cx + radius * a.cos() as f32 - img.left()) / img.width(), (cy + radius * a.sin() as f32 - img.top()) / img.height())
     };
-    let (from_deg, to_deg) = (6.0_f64, -25.0_f64);
-    let (from, to) = (at(from_deg), at(to_deg));
-    let press = at(from_deg + 4.0);
+    let (press_deg, to_deg) = (10.0_f64, -25.0_f64);
+    let (from, to) = (at(press_deg - 4.0), at(to_deg));
+    let press = at(press_deg);
     let r = h.request(
         "ui.pointer",
         json!({"events": [
@@ -84,10 +84,40 @@ fn the_rotation_pivots_on_the_box_centre() {
     );
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
-    // the box turns by the pointer's travel about its own centre, and the straighten angle is that
-    // correction, so it comes out negated
-    let want = from_deg - to_deg;
+    // the box turns by the pointer's travel about its own centre, measured from where the button went
+    // down, and the straighten angle is that correction, so it comes out negated
+    let want = press_deg - to_deg;
     assert!((angle(&h) - want).abs() < 0.01, "the pointer turned {want}° about the box centre, the box gave {}", angle(&h));
+}
+
+/// A handle grabbed on press stays that handle, however far the pointer travels before the drag
+/// registers. Judged on the pointer's live position instead of where the button went down, a fast
+/// or long first move cleared the handle's 12 px radius and the drag silently became a rotate,
+/// which then ran into the ±45° clamp.
+#[test]
+fn a_handle_stays_a_handle_however_far_the_pointer_moves_first() {
+    let mut h = crop_tool();
+    let before = angle(&h);
+    let img = h.app.image_rect.expect("the photo on screen");
+    fn handle_at(h: &Headless, i: usize) -> egui::Pos2 {
+        h.app.widgets.iter().find(|(w, _)| *w == format!("cropHandle:{i}")).map(|(_, r)| r.center()).expect("a handle")
+    }
+    for i in 0..8_usize {
+        let p = handle_at(&h, i);
+        let x = f64::from((p.x - img.left()) / img.width());
+        let y = f64::from((p.y - img.top()) / img.height());
+        // press on the handle, then jump far enough to leave its 12 px radius before the first drag
+        let r = h.request(
+            "ui.pointer",
+            json!({"events": [{"kind": "down", "x": x, "y": y}, {"kind": "drag", "x": x, "y": y - 0.12}, {"kind": "drag", "x": x, "y": y - 0.16}]}),
+            T,
+        );
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert_eq!(angle(&h), before, "handle {i}: a handle drag must not turn the crop");
+        h.request("ui.pointer", json!({"events": [{"kind": "up", "x": x, "y": y - 0.16}]}), T);
+        h.settle(SETTLE);
+    }
 }
 
 /// The crop box lies inside the rotated photo (issue #742: a typed or slid angle shrinks it to fit,
