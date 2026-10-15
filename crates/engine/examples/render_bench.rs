@@ -413,6 +413,32 @@ fn main() {
             t.detail.nr_luminance = 30.0 + k % 50.0;
             drop(develop(&full, &info, &t, &at(w0, Quality::Full), Some(&wc[g as usize]), g).unwrap());
         });
+        // a released drag: a few Draft ticks (untimed), then the Full render of the last value
+        for (label, nr) in [("window exposure release after drafts:", false), ("window NR release after drafts:", true)] {
+            let cols: Vec<String> = backends
+                .iter()
+                .map(|&g| {
+                    let mut b = T(f64::MAX, f64::MAX);
+                    for _ in 0..n {
+                        let mut t = s.clone();
+                        for _ in 0..3 {
+                            k += 1.0;
+                            if nr {
+                                t.detail.nr_luminance = 30.0 + k % 50.0;
+                            } else {
+                                t.light.exposure = 0.3 + k * 0.01;
+                            }
+                            drop(develop(&full, &info, &t, &at(w0, Quality::Draft), Some(&wc[g as usize]), g));
+                        }
+                        let (t0, c) = (Instant::now(), cpu_ms());
+                        drop(develop(&full, &info, &t, &at(w0, Quality::Full), Some(&wc[g as usize]), g));
+                        b = T(b.0.min(t0.elapsed().as_secs_f64() * 1e3), b.1.min(cpu_ms() - c));
+                    }
+                    format!("{b}")
+                })
+                .collect();
+            println!("{label:<38} {}: {}{}", if backends[0] { "gpu" } else { "cpu" }, cols[0], cols.get(1).map(|g| format!("  |  gpu: {g}")).unwrap_or_default());
+        }
         // `DUMP=file`: the GPU window's raw RGBA bytes (A/B pixel comparisons between builds)
         if let (true, Some(path)) = (gpu, std::env::var_os("DUMP")) {
             let g = develop(&full, &info, &s, &at(w0, Quality::Full), Some(&StageCache::default()), true).unwrap().image;
