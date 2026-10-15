@@ -24,10 +24,24 @@ const CHINESE_FONT_FILE: &str = "lightcraft_zh_hans.otf";
 const CHINESE_FONT_LICENSE_FILE: &str = "OFL-noto-sans-cjk-sc.txt";
 
 /// Files copied from `apps/lightcraft-web/` into the bundle as they are.
-const STATIC_FILES: [&str; 2] = ["index.html", "worker.js"];
+const STATIC_FILES: [&str; 5] = [
+    "index.html",
+    "worker.js",
+    "craft-runtime-smoke.html",
+    "craft-runtime-pilot.js",
+    "craft-runtime-loader.js",
+];
 
 /// Bundle files that get precompressed copies.
-const COMPRESSED: [&str; 4] = ["index.html", "worker.js", "lightcraft_web.js", "lightcraft_web_bg.wasm"];
+const COMPRESSED: [&str; 7] = [
+    "index.html",
+    "worker.js",
+    "craft-runtime-smoke.html",
+    "craft-runtime-pilot.js",
+    "craft-runtime-loader.js",
+    "lightcraft_web.js",
+    "lightcraft_web_bg.wasm",
+];
 
 /// The Noto face is shipped beside the WASM rather than embedded in it: hosts such as Cloudflare
 /// Pages cap individual files at 25 MiB, while the complete site can contain larger assets.
