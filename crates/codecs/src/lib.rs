@@ -12,6 +12,7 @@
 //! - [`encode`] writes JPEG, PNG, TIFF, lossless WebP and, on native targets, AVIF (feature `avif`) and
 //!   JPEG XL ([`encode_jxl`], feature `jxl`), embedding
 //!   ICC/EXIF/XMP. [`icc::write_matrix_trc`] builds profiles for export.
+//! - [`video`] encodes AV1 video (native, feature `avif`) and writes it as MP4 or WebM.
 //!
 //! No decoder panics on malformed input (property-tested).
 #![forbid(unsafe_code)]
@@ -31,11 +32,13 @@ mod jxl;
 mod jxl_encode;
 mod other;
 mod png_codec;
+pub mod print;
 pub mod proof;
 mod psd;
 mod sniff;
 pub mod space;
 mod tiff_codec;
+pub mod video;
 mod webp;
 
 pub use encode::{

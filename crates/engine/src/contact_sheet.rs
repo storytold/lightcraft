@@ -1,4 +1,5 @@
-//! Paginated contact sheets, rendered with the normal export pipeline and packaged as PDF.
+//! Paginated contact sheets, rendered with the normal export pipeline and packaged as PDF
+//! ([`crate::pdf`]).
 use crate::export::{Anchor, ExportFormat, ExportOptions, Watermark, draw_watermark, encode_image};
 use crate::{Session, media::RenderJob};
 use lightcraft_pipeline::{OutputDepth, OutputSpace};
@@ -82,7 +83,7 @@ pub fn prepare(session: &mut Session, p: &Value) -> Result<Prepared, String> {
     if p.get("id").is_some_and(|v| v.as_u64().is_none()) {
         return Err("id must be a photo id".into());
     }
-    let ids = session.targets(p);
+    let ids = session.targets(p).map_err(|e| e.to_string())?;
     if ids.is_empty() || ids.len() > 1000 {
         return Err("select between 1 and 1000 photos".into());
     }
@@ -114,7 +115,7 @@ impl Prepared {
         let capacity = self.options.columns * self.options.rows;
         let photos = self.items.len();
         let pages = photos.div_ceil(capacity);
-        let mut pdf = Pdf::new(pages, l.points);
+        let mut pdf = crate::pdf::Pdf::new(Vec::new())?;
         let mut page = Rgba8::filled(l.width, l.height, [255; 4]);
         for (i, (name, job)) in self.items.into_iter().enumerate() {
             if !progress(i, &name) {
@@ -149,17 +150,17 @@ impl Prepared {
             }
             if slot + 1 == capacity || i + 1 == photos {
                 let jpg = encode_image(&page, &ExportOptions { format: ExportFormat::Jpeg, quality: 92, ..Default::default() })?;
-                if pdf.bytes.len().saturating_add(jpg.len()) > 256 * 1024 * 1024 {
+                if pdf.len().saturating_add(jpg.len()) > 256 * 1024 * 1024 {
                     return Err("contact sheet exceeds 256 MiB; select fewer photos".into());
                 }
-                pdf.page(i / capacity, &jpg, l.width, l.height);
+                pdf.image_page(&jpg, l.width, l.height, l.points, "")?;
                 page.data.fill([255; 4]);
             }
         }
         if !progress(photos, "PDF") {
             return Err("Contact sheet cancelled".into());
         }
-        Ok(Document { bytes: pdf.finish(), pages, photos })
+        Ok(Document { bytes: pdf.finish("")?, pages, photos })
     }
 }
 
@@ -194,67 +195,6 @@ fn blit(dst: &mut Rgba8, src: &Rgba8, x: usize, y: usize) -> Result<(), String> 
         }
     }
     Ok(())
-}
-
-// Minimal PDF 1.4: one JPEG XObject per page, explicit byte lengths and classic xref offsets.
-struct Pdf {
-    bytes: Vec<u8>,
-    offsets: Vec<usize>,
-    points: (f64, f64),
-}
-
-impl Pdf {
-    fn new(pages: usize, points: (f64, f64)) -> Self {
-        let mut p = Self { bytes: b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec(), offsets: vec![0], points };
-        p.object(1, b"<< /Type /Catalog /Pages 2 0 R >>");
-        let kids = (0..pages).map(|i| format!("{} 0 R", 3 + i * 3)).collect::<Vec<_>>().join(" ");
-        p.object(2, format!("<< /Type /Pages /Count {pages} /Kids [{kids}] >>").as_bytes());
-        p
-    }
-
-    fn object(&mut self, id: usize, body: &[u8]) {
-        self.offsets.push(self.bytes.len());
-        self.bytes.extend_from_slice(format!("{id} 0 obj\n").as_bytes());
-        self.bytes.extend_from_slice(body);
-        self.bytes.extend_from_slice(b"\nendobj\n");
-    }
-
-    fn stream(&mut self, id: usize, dictionary: &str, bytes: &[u8]) {
-        let mut body = format!("<< {dictionary} /Length {} >>\nstream\n", bytes.len()).into_bytes();
-        body.extend_from_slice(bytes);
-        body.extend_from_slice(b"\nendstream");
-        self.object(id, &body);
-    }
-
-    fn page(&mut self, index: usize, jpg: &[u8], width: usize, height: usize) {
-        let id = 3 + index * 3;
-        let (w, h) = self.points;
-        self.object(
-            id,
-            format!(
-                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w:.2} {h:.2}] /Resources << /XObject << /Im {} 0 R >> >> /Contents {} 0 R >>",
-                id + 2,
-                id + 1
-            )
-            .as_bytes(),
-        );
-        self.stream(id + 1, "", format!("q {w:.2} 0 0 {h:.2} 0 0 cm /Im Do Q").as_bytes());
-        self.stream(
-            id + 2,
-            &format!("/Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode"),
-            jpg,
-        );
-    }
-
-    fn finish(mut self) -> Vec<u8> {
-        let start = self.bytes.len();
-        self.bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", self.offsets.len()).as_bytes());
-        for offset in self.offsets.iter().skip(1) {
-            self.bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
-        }
-        self.bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{start}\n%%EOF\n", self.offsets.len()).as_bytes());
-        self.bytes
-    }
 }
 
 #[cfg(test)]

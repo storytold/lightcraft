@@ -15,9 +15,21 @@ lightcraft-cli run --library "LightCraft Library" library.inspectLightroom path=
 lightcraft-cli run --library "LightCraft Library" library.importLightroom path="Lightroom Catalog.lrcat"
 ```
 
+Import adds records to the currently open LightCraft library; it does not create a separate
+folder named after the Lightroom catalog. The desktop result stays open until dismissed and
+shows the destination library, the number of records added, missing originals and warnings.
+**Show in Library** opens All Photos, clears filters and selects an imported record. Errors stay
+readable in the same result window. If another dialog is open, the result waits until that dialog closes. The result
+is also available through `library.importLightroom {"status":true}` during that session.
+
 Original files are referenced in place. Ratings, picks/rejects, color labels, XMP metadata,
 hierarchical keywords, regular collections/collection sets, virtual copies and mapped develop
-settings are imported. Missing originals remain catalogued for relinking. Existing LightCraft
+settings are imported. Missing originals remain catalogued for relinking, count as added records and are reported
+separately from failures reading files that are present. Known-missing originals are not probed
+again. Previously browsed Local records join All Photos even when their originals are offline;
+their promotion is counted once and undone together with the catalog import.
+Virtual copies count as added records too; reimport reports zero additions when all
+records already exist. Existing LightCraft
 edits are preserved by default; `updateExisting=true` explicitly replaces them. Persistent import
 identity prevents reimport from duplicating virtual copies and collections. One undo step reverses
 catalog changes; any saved recovery archives remain available.
@@ -32,8 +44,10 @@ retained. Oldest managed archives are retired; legacy `.json` archives remain un
 `Interop/lightroom-index.json` records imported identities. Source catalogs and originals are
 never overwritten.
 
-Native import is bounded to a 1 GiB database/WAL, 16 MiB XMP packets and one million rows per
-table. The in-tree, read-only Rust SQLite B-tree reader follows SQLite’s public file-format
+Each native `.lrcat` database and WAL file is independently limited to 1 GiB
+(1,073,741,824 bytes). This bounds the current whole-file reader; referenced photo sizes and
+photo counts are not part of that limit. XMP packets are capped at 16 MiB and each table at one million rows.
+The in-tree, read-only Rust SQLite B-tree reader follows SQLite’s public file-format
 specification; it introduces no dependency or C runtime. Table payloads are capped at 256 MiB.
 Optional history, keyword and collection tables that exceed limits are skipped with warnings;
 required photo tables still report errors. Unrelated unsupported schemas are ignored. A needed
@@ -60,6 +74,12 @@ until Reload reads it.
 Lightroom's `-999999` deferred-adjustment sentinel is omitted from both catalog and XMP mappings;
 it is reported, included in any saved archive, and never clamped into a real slider value. Deferred Adobe Auto Tone
 is not evaluated by the importer; LightCraft's Auto control remains available after migration.
+
+New photo records are moved into staged operations; only masters needed for virtual copies
+retain a second owned record while the import commits.
+Applying catalog operations collects affected source-cache IDs before consuming the operations,
+avoiding another full operation copy. Full-strength develop patches reuse their JSON without
+serializing an unused copy of the current settings.
 
 Native desktop inspection/import runs on a cancellable background worker with progress. Only
 prepared catalog operations commit on the owner thread; archive index writing stays on a worker.

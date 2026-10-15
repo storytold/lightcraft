@@ -1,25 +1,143 @@
-# Sony embedded distortion corrections
+# Sony embedded lens corrections
 
-LightCraft reads the signed 16-sample distortion table in the raw image IFD (`0x7037`) of
-Sony **ILCE-7RM4A (A7R IVA)** Bayer ARWs. Other camera models are deliberately left uncorrected,
-even when they contain a table with the same layout.
-It converts that table into `OpcodeList3` / `WarpRectilinear`, so the existing profile correction control,
-CPU/GPU optics path, EXIF orientation handling, and DNG export use the same correction.
+The **ILCE-7RM6** (A7R VI) has its own conversion, with other conventions measured against its camera JPEGs:
+[Sony ARW lens corrections](sony-ilce7rm6-lens-corrections.md). On ILCE-7RM6 photos the formula below misses the 24–70 GM II by
+up to 1.43 px at 1440 px while fitting the 100 mm and 200–600 better, and no single unit fits every lens under either
+convention; that page's *Two conventions* section has the comparison and what would settle it.
 
-This adds **distortion only**. Sony vignetting and lateral chromatic-aberration tables are not decoded.
-The enabled and independently validated model is ILCE-7RM4A with the FE 24–105mm F4 G OSS and
-FE 200–600mm F5.6–6.3 G OSS. Linear YCbCr ARWs and non-3:2 camera crops are excluded pending validation. An aspect crop may
-retain the full-frame radial normalization; the decoder does not guess that relationship. Older files that carry
-only encrypted correction metadata, different table lengths, and rejected tables remain uncorrected.
-The camera's distortion Off setting does not erase its table. Newly imported photos use LightCraft's existing
-embedded-profile default (enabled); the profile correction control can disable or adjust it.
+Sony ARWs record three lens corrections per shot in the raw image IFD: shading (vignetting), lateral chromatic
+aberration (CA) and distortion, each as a camera setting and a radial table, with copies in the encrypted
+`SR2SubIFD`. LightCraft **decodes all three** wherever a file carries them and **applies one**: the distortion table
+of the **ILCE-7RM4A (A7R IVA)** in Bayer ARWs with native 3:2 framing, independently validated with the
+FE 24–105mm F4 G OSS and FE 200–600mm F5.6–6.3 G OSS (the ILCE-7RM6's distortion is applied too, by its own
+conversion above). Every other model,
+and shading and CA on every model, are decoded only: no warp, vignetting or CA correction is added for them. The decoded record stays with the image
+(`RawInfo::lens_metadata` / `RawImage::lens_metadata`, types in `crates/raw/src/lens_metadata.rs`, decoder in
+`crates/raw/src/vendor/arw_lens.rs`) for diagnostics and for the validation work described below.
+
+The applied distortion is converted into `OpcodeList3` / `WarpRectilinear`, so the existing profile correction
+control, CPU/GPU optics path, EXIF orientation handling, and DNG export use the same correction. Linear YCbCr ARWs
+and non-3:2 camera crops are excluded pending validation. An aspect crop may retain the full-frame radial
+normalization; the decoder does not guess that relationship. Tables of other lengths and rejected tables remain
+uncorrected, and a table found only in the encrypted `SR2SubIFD` is never applied. The camera's distortion Off
+setting does not erase its table. Newly imported photos use LightCraft's existing embedded-profile default
+(enabled); the profile correction control can disable or adjust it.
+
+## What is decoded
+
+| Component | Raw-IFD setting / table | `SR2SubIFD` setting / table | Accepted layout |
+|---|---|---|---|
+| Shading | `0x7031` / `0x7032` | `0x797c` / `0x797d` | SHORT\[1\]; SSHORT\[17\]: 16, then 16 samples |
+| Lateral CA | `0x7034` / `0x7035` | `0x797f` / `0x7980` | SHORT\[1\]; SSHORT\[33\]: 32, then two 16-sample curves |
+| Distortion | `0x7036` / `0x7037` | `0x7981` / `0x7982` | SHORT\[1\]; SSHORT\[17\]: 16, then 16 samples |
+
+- **Bounded, exact reading.** A raw-IFD field is the one the TIFF reader parsed, the copy the image itself uses:
+  its first occurrence, within the reader's limits (8,192 entries per directory, a total value budget). The directory
+  is also scanned, in either byte order and in BigTIFF, for diagnostics only: a tag that occurs more than once is
+  flagged (`raw_ifd_repeated`, `sr2_repeated`), and an entry the reader left out is reported with its reason (values
+  outside the file, an unknown type, or past the reader's limits) rather than treated as absent. `SR2SubIFD` fields
+  are read straight from their first entry. A setting may also be a nonnegative SSHORT (the documented editor type
+  differs from the type the cameras store). Anything else is refused with its reason (`SonyFieldError`: field type,
+  count, leading sample count, values outside the file or block, past the reader's limits, a negative setting).
+  Nothing is allocated from a count in the file.
+- **Raw IFD first, `SR2SubIFD` as a checked fallback.** The raw IFD's copy wins. The `SR2SubIFD`'s copy is used only
+  when the raw IFD lacks the tag; a malformed raw-IFD copy is reported, never silently replaced. When both copies are
+  well-formed their agreement is recorded (`copies_agree`), and on disagreement the raw IFD's copy is used. The block
+  is decrypted (by the existing `vendor/sr2.rs`) for every ARW that has one, so the check always runs; a block that
+  can't be found or decrypted gives no copies. Locating it selects the `SR2Private` directory's offset, length and
+  key exactly as the TIFF reader would (the reader's own directory layout, 8,192-entry limit, readable-entry rules
+  and value budget, then the first readable occurrence of each), but decodes only each field's first value, so the
+  directory's other entries cost no memory however large they claim to be; the block itself is limited to 1 MiB. The
+  plain tag numbers are not looked up inside the `SR2SubIFD`.
+- **Settings keep their number and a documented meaning:** shading 256 Off, 257 and 272 Auto, 511 unavailable; CA
+  0 Off, 1 Auto, 255 unavailable; distortion 0 Off, 1 Auto, 17 Auto fixed by the lens, 255 unavailable. Any other value
+  is `Unknown(value)`, never Off (the A7CR's Low shading setting has no documented number). Values are not read as
+  bit masks. Off does not mean absent: the table is still recorded.
+- **Only the 16-sample (CA: 2 × 16) layout is interpreted.** Many bodies store 11 (CA: 22) samples padded into the
+  same 17 (33) values: older compacts and bodies such as the DSC-RX100 III and ILCE-3500, and the ILCE-7M4's APS-C
+  captures (its full-frame captures carry 16). Those tables are refused as `CountPrefix(11)` and stay
+  uninterpreted. An all-zero table is kept: it is a valid no-op, not a sign of an unsupported lens.
+- **Framing evidence travels with the tables:** the stored frame (padding included), Sony's crop tags and the DNG
+  default crop as recorded, the image crop, the reference rectangle the distortion conversion is centred on and
+  normalized to (the default crop when present, else the image crop), compression, whether the data is linear
+  YCbCr (lossless M/S), and whether both crops are native 3:2.
+- **Per-component status.** `Applied` (converted into an opcode), `NoTable`, `NotValidatedComponent` (shading and CA
+  on every body), `NotValidatedModel`, `NotValidatedMode` (linear YCbCr, non-3:2 framing, or a distortion table found
+  only in the `SR2SubIFD`), `Neutral` (all-zero table in the validated scope) and `Rejected` (the validated
+  conversion refused the table). A readable table never implies a usable correction; only `Applied` components
+  become opcodes.
+
+The applied path is unchanged: the validated conversion still receives the raw IFD's `0x7037` table exactly as the
+TIFF reader parsed it, with the same model, framing and fit checks, and produces the same warp. A repeated tag keeps
+the reader's choice and is only flagged, and a table the reader never reads (past its entry limit) is reported but
+never applied, so already-catalogued photos, their previews and their stored lens data stay consistent with a fresh
+decode.
+
+## What each component still needs
+
+The following summarizes an investigation on the ILCE-7CR (A7CR): an owner's collection of 131 raws with four
+lenses (Voigtländer APO-LANTHAR 28mm F2 and 50mm F2, both manual focus; Sony FE 24–50mm F2.8 G; Tamron 35–150mm
+F2–2.8), plus the three public raw.pixls.us A7CR samples. No private photographs, names or derived images are
+part of this repository.
+
+- **Inventory.** All 131 raws carry all three tables in both the raw IFD and the `SR2SubIFD`, and the copies agree
+  in every file; all four lenses provide tables, the manual-focus ones included. Shading is 272 (Auto) and CA 1
+  (Auto) everywhere; distortion is 17 (Auto, fixed by the lens) on the nine FE 24–50 files and 0 (Off) on the rest.
+  Every image crop is 9504 × 6336 at (32, 20), in uncompressed, compressed and lossless-L (padded to 9728 × 6656)
+  storage. The decoder reproduces this inventory exactly (see *Local inventory check*).
+- **Distortion.** The table layout and crop tags match the A7R IVA's, but its interpretation applied unchanged does
+  not reproduce the A7CR camera JPEG at 24 mm: at 2376 px wide, median / 95th-percentile feature residuals were
+  1.61 / 6.17 px (12.98 / 51.19 px uncorrected, 6,539 matches), with a signed radial pattern (about +1.7 px at
+  radii 0.25–0.5, −7.4 px at 0.8–1) that no translation removes. At 50 mm it agrees (0.23 / 1.05 px, from
+  2.21 / 12.25 px). Scaling the raw table by about 10/9, or using the MakerNote's distortion array instead, brings
+  24 mm to about 0.37 / 1.10 and 0.33 / 0.97 px. Those are exploratory comparisons on two files against the camera
+  JPEG, not a model: the MakerNote values are roughly 1.11 times the raw table without one exact ratio, and the
+  A7R IVA was validated against a different reference renderer (Imaging Edge exports). Needed: A7CR Imaging Edge
+  On/Off exports at 24 and 50 mm and with another lens, compared with the raw table at its fixed scale; a decision on
+  the reference (camera JPEG or Imaging Edge); then ILCE-7CR added to the validated models for the full-frame Bayer
+  3:2 mode only. Neither a 10/9 multiplier nor the MakerNote table is used.
+- **Shading.** The layout decodes, but no public specification gives the sample-to-gain function, its radius
+  convention on the A7CR, or whether the raw samples already contain part of the correction. Brightness ratios on six
+  natural scenes show no consistent missing peripheral brightening. Needed: evenly lit flat fields with shading
+  Off / Auto / Low at several apertures and focal lengths, raw CFA ratios between them, and Imaging Edge On/Off
+  exports, to fix the gain function and processing stage and rule out double correction.
+- **Lateral CA.** A public analysis reads the table as a red, then a blue curve relative to green, at a 2⁻²¹
+  relative radial scale. On three distortion-Off files that candidate reduced red and blue feature residuals
+  modestly (for example 0.35 → 0.29 px median for red with the 28 mm), which supports investigating it but certifies
+  neither scale, interpolation nor processing stage. Two product changes come before it: embedded CA must be
+  independent of the distortion amount (today `pipeline::optics` scales the whole embedded per-plane warp with the
+  profile distortion control), and the red and blue planes must be resampled in camera RGB, before the camera colour
+  model mixes them (`engine::files::load_bytes_now` applies the colour model before the optics stage). Then
+  validation on full-resolution achromatic edges.
+- **Other modes.** APS-C, aspect crops and lossless M/S (linear YCbCr) captures were not measured and stay
+  excluded.
+
+## Local inventory check
+
+`crates/raw/tests/sony_lens_inventory.rs` is opt-in and does nothing in CI. With `LIGHTCRAFT_SONY_LENS_DIR` naming a
+directory of ARWs it decodes each from its headers and prints its record (settings, sources, copies' agreement,
+sample ranges, statuses); `LIGHTCRAFT_SONY_LENS_FULL=1` also compares header and full decode. With
+`LIGHTCRAFT_SONY_LENS_INVENTORY` naming a CSV inventory it checks every file's table counts, sizes, sample counts,
+minima and maxima, raw-IFD versus `SR2SubIFD` agreement, settings (numbers and labels), stored size, compression and
+crop tags. A file with a row must decode, and every file must have a row, whether it decodes or not. Any decode
+error fails the check except an unsupported variant, which is counted and must equal `LIGHTCRAFT_SONY_LENS_UNSUPPORTED`
+(default 0). On the 131 A7CR raws above, all 131 inventory rows reproduce and every file decodes. On 133 public Sony
+ARWs (127 raw.pixls.us samples from 100 bodies, four corpus copies and two files attached to a public issue), 110 carry
+a record, 14 decode without one, and 9 are unsupported variants (eight packed ARWs of older bodies and one ARW
+without a CFA image); header and full decode agree on the 124 that decode, and no record has disagreeing copies.
 
 ## Clean-room evidence
 
-The [ExifTool EXIF tag-name documentation](https://exiftool.org/TagNames/EXIF.html) identifies
-`0x7037` as 17 signed 16-bit integers. The first value is the count, 16, followed by radial samples.
-No external photo decoder implementation or Adobe lens profile was consulted.
-Sony Imaging Edge Edit 4.1 was used only as a black-box reference on local scratch copies.
+The [ExifTool EXIF tag-name documentation](https://exiftool.org/TagNames/EXIF.html) names the raw-IFD tags
+`0x7031` to `0x7037` (VignettingCorrection / VignettingCorrParams, ChromaticAberrationCorrection /
+ChromaticAberrationCorrParams, DistortionCorrection / DistortionCorrParams) with their setting values, and gives the
+tables as 17 or 33 signed 16-bit integers whose first value is the count. The
+[Sony SR2SubIFD documentation](https://exiftool.org/TagNames/Sony.html#SR2SubIFD) names the encrypted copies
+`0x797d`, `0x7980` and `0x7982`; the setting tags next to them (`0x797c`, `0x797f`, `0x7981`) are unnamed there and
+were identified by inspecting files, where they equal the raw-IFD settings. The corpus test's expected tables are the
+values ExifTool, run as a black-box tool, prints for the public samples. No external photo decoder implementation,
+lens database or Adobe lens profile was consulted. Sony Imaging Edge Edit 4.1 was used only as a black-box reference
+on local scratch copies.
 
 The observed inverse mapping, with radius `r` normalized to the default crop's half diagonal, is:
 
@@ -45,7 +163,8 @@ so the warp stays on the optical centre either way. On the A7R IVA that framing 
 pixels left of Sony's exports (eight pixels in a 2376-pixel-wide export).
 
 The main raw-IFD table is important: the similarly named MakerNote table has different values and
-must not be substituted into this formula. Main raw-IFD and SR2SubIFD values agreed in the test files.
+must not be substituted into this formula. Main raw-IFD and SR2SubIFD values agreed in the test files, and the
+`SR2SubIFD` copy is never converted.
 
 ## Validation
 
@@ -90,7 +209,18 @@ The distortion geometry remains aligned while every body's image framing follows
 
 Tests cover signedness/length rejection, zero and malformed tables, independent 600 mm reference
 geometry, barrel framing, offset crop normalization, both TIFF byte orders, header/full consistency,
-and preservation through DNG export. No private photographs or reference TIFFs are committed.
+and preservation through DNG export. The decoder's synthetic tests (`crates/raw/src/vendor/arw_lens.rs`) add both
+byte orders and BigTIFF, exact SHORT / SSHORT types, negative samples, missing, short, long, huge and zero counts,
+wrong leading counts, values outside the file, a table past the TIFF reader's entry limit (not applied), repeated
+tags (the reader's copy kept, as before), unknown and negative settings, raw-IFD versus
+`SR2SubIFD` precedence and agreement, the correct `SR2SubIFD` tag numbers, a wrong decryption key, hostile entries
+inside the decrypted block, linear YCbCr, framing evidence (Sony's crop at x = 0 against the default crop, agreeing
+crops, padded storage, aspect crops, crop tags outside the frame), all eight EXIF orientations leaving the record
+unchanged, and neutral, out-of-range and folding tables. On a small classic-TIFF fixture in both byte orders, every
+truncation and four mutations of each byte outside the pixel data (set to 0x00 and 0xff, top and low bit flipped)
+decode or fail without a panic. `tests/sr2_heap.rs` measures the peak heap of decoding a 16 MiB file whose
+`SR2Private` directory holds eight fields aliasing the whole file: 37 kB, against 134 MB when those fields were
+decoded. No private photographs or reference TIFFs are committed.
 
 ## Camera coverage and regression boundary
 
@@ -99,27 +229,35 @@ model names, and every other model remain unsupported by this distortion decoder
 numbers and table lengths do not establish the scale, interpolation or crop normalization on another
 body. Support can expand after independent geometry validation; do not add model-name prefix matching.
 
-The current `cargo xtask corpus --download` manifest contains 23 Sony CC0 samples across 17 bodies,
-including samples 4822 (A7R IVA / 24–105 mm) and 3989 (A9 II / 200–600 mm). All 23 files have
-pinned SHA-256 hashes and are checked with `sony_embedded_distortion_is_limited_to_validated_models`:
+The current `cargo xtask corpus --download` manifest contains 25 Sony CC0 samples across 18 bodies,
+including samples 4822 (A7R IVA / 24–105 mm) and 3989 (A9 II / 200–600 mm), each with a pinned SHA-256 that the
+download checks. `sony_embedded_distortion_is_limited_to_validated_models` checks 23 of them (the two ILCE-7CM2
+codings have their own test), and `sony_lens_records_of_the_public_samples` verifies all 25 against their pins
+(`SONY_SAMPLES` in `crates/raw/tests/corpus.rs`, itself anchored by a pinned digest and compared with the manifest)
+before decoding. **No CI job fetches the corpus**: these fixture tests run only where it has been downloaded, and
+otherwise skip each absent file. `LIGHTCRAFT_CORPUS_REQUIRED=1` makes `sony_lens_records_of_the_public_samples`
+fail on any absent pinned file instead.
 
-| Camera | Corpus samples | Raw-IFD table observed | Expected correction |
+| Camera | Corpus samples | Decoded record: tables, settings (shading / CA / distortion) | Applied |
 |---|---|---|---|
-| ILCE-7RM4A | Compressed (4822) | 16 samples | One distortion warp |
-| ILCE-9M2 | Compressed (3989) | 16 samples | None |
-| ILCE-7M3 | Compressed, uncompressed | 16 samples | None |
-| ILCE-7M4 | 14-bit, lossless L/M/S | 11 samples in the 14-bit file; 16 in L/M/S | None |
-| ILCE-7RM2 | 12-bit uncompressed | 16 samples | None |
-| DSC-RX100 | One | No raw-IFD table | None |
-| DSC-RX100M3 | One | 11 samples | None |
-| ILCE-7CR | Compressed, lossless L/M | Not used; model excluded | None |
-| ILCE-7RM4 | 14-bit compressed | Not used; model excluded | None |
-| DSLR-A500, DSLR-A700, SLT-A33 | One each | Not used; model excluded | None |
-| ILCE-3500, ILCE-7S | 5600 K, Shade respectively | Not used; model excluded | None |
-| ILCE-7SM2, DSLR-A580 | 16:9 framing, one each | Not used; model excluded | None |
-| DSLR-A900 | Packed 12-bit | Not used; model excluded | None |
+| ILCE-7RM4A | Compressed (4822) | All three tables; 257 / 1 / 17 | One distortion warp |
+| ILCE-9M2 | Compressed (3989) | All three; 257 / 1 / 0 | None |
+| ILCE-7M3 | Compressed, uncompressed | All three; 257 / 1 / 0 | None |
+| ILCE-7M4 | 14-bit, lossless L/M/S | L/M/S: all three, 272 / 1 / 17; the 14-bit file (APS-C framing, 4608 × 3072): settings only, its 11-sample tables are not interpreted | None |
+| ILCE-7RM2 | 12-bit uncompressed | All three; 256 / 0 / 1 | None |
+| DSC-RX100 | One | Shading, from the `SR2SubIFD` (the raw IFD has no tables); CA and distortion in the 11-sample layout | None |
+| DSC-RX100M3 | One | Shading; CA and distortion in the 11-sample layout | None |
+| ILCE-7CR | Compressed, lossless L/M | All three; 272 / 1 / 0 | None |
+| ILCE-7RM4 | 14-bit compressed | All three; 257 / 1 / 17 | None |
+| ILCE-3500 | 5600 K | Settings only (unavailable) | None |
+| ILCE-7S | Shade | An all-zero CA table; settings unavailable | None |
+| ILCE-7SM2 | 16:9 framing | All-zero shading and CA tables; settings unavailable | None |
+| DSLR-A500, DSLR-A700, SLT-A33, DSLR-A580, DSLR-A900 | One each | No record | None |
 
-These are **model-boundary regression checks, not new geometric validation of those models**. In particular,
+These are **model-boundary regression checks, not new geometric validation of those models**.
+`sony_lens_records_of_the_public_samples` also checks the exact tables, settings, provenance and framing evidence of
+the three A7CR codings and the A7R IVA sample, and that across the Sony corpus only the A7R IVA's distortion is ever
+applied. In particular,
 refusing the A7 III tables resolves the unverified corner warp identified in review. The lossless M/S
 files are linear YCbCr and remain excluded independently of the model check. Header and full decode
 must agree for every sample. Synthetic tests also verify both TIFF byte orders, exact model matching,

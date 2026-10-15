@@ -9,7 +9,8 @@ use crate::headless::Headless;
 use crate::panels::activity::{WIDTH, count_text};
 use crate::{LightcraftApp, Services};
 
-const T: Duration = Duration::from_secs(20);
+// generous: merges and renders run on worker threads that a busy machine (a full workspace test run) slows a lot
+const T: Duration = Duration::from_secs(60);
 
 fn demo() -> Headless {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
@@ -281,6 +282,24 @@ fn import_cancelled_by_command_reports_cancelled() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A photo chosen while an import runs stays the active one when the import ends: the import
+/// selects its first photo only if nobody picked something else meanwhile (issue #1446).
+#[test]
+fn a_photo_chosen_during_an_import_stays_selected() {
+    let (mut h, dir) = slow_import("chosen", 20);
+    crate::import::start_paths(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
+    assert!(h.step_until(Duration::from_secs(60), |h| h.app.import.as_ref().is_some_and(|t| t.imported >= 2)));
+    // the newest photo so far, never the import's first
+    let chosen = h.app.session.catalog.photos().map(|p| p.id).max().expect("photos arrived");
+    let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [chosen.0]}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.app.import.is_some(), "still importing");
+    assert!(h.step_until(Duration::from_secs(60), |h| h.app.import.is_none()));
+    assert_eq!(h.app.session.catalog.len(), 20, "all imported");
+    assert_eq!(h.app.session.selection.active, Some(chosen));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn scan_shows_a_row_and_cancel_closes_it() {
     let (mut h, dir) = slow_import("scan", 120);
@@ -339,6 +358,51 @@ fn final_merge_shows_a_row_and_cancels() {
     assert!(h.app.session.activity.list().is_empty());
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
     assert_eq!(toast, "HDR merge cancelled");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// HDR for Each Bracket Set runs the merges one after the other, each with its activity row; cancelling one stops the
+/// rest.
+#[test]
+fn batch_merge_runs_each_set_in_turn() {
+    let dir = std::env::temp_dir().join(format!("lc-activity-batch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut paths = Vec::new();
+    // different exposures, or the import would take set B for duplicates of set A
+    for (set, evs) in [("A", [-2.0, 0.0, 2.0]), ("B", [-1.5, 0.5, 2.5]), ("C", [-1.0, 1.0, 3.0])] {
+        for (i, bytes) in lightcraft_merge::synth::bracket_dngs(1600, 1200, &evs).unwrap().into_iter().enumerate() {
+            let p = dir.join(format!("{set}_{i}.dng"));
+            std::fs::write(&p, bytes).unwrap();
+            paths.push(p.to_string_lossy().to_string());
+        }
+    }
+    let mut session = lightcraft_engine::Session::new().with_fs();
+    let r = session.execute("library.import", &json!({"paths": paths})).unwrap();
+    let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
+    assert_eq!(ids.len(), 9);
+    for set in ids.chunks(3) {
+        session.execute("stack.group", &json!({"ids": set})).unwrap();
+    }
+    session.execute("library.select", &json!({"ids": ids})).unwrap();
+    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.settle(T);
+    let r = crate::menus::run_ui_command(&mut h.app, "merge.hdrBatch", &json!({})).unwrap().unwrap();
+    assert_eq!(r["sets"], 3);
+    assert_eq!(h.app.merge.batch.len(), 2, "one running, two queued");
+    let rows = h.app.session.activity.list();
+    assert_eq!((rows.len(), rows.first().map(|r| r.kind)), (1, Some("merge")));
+    // the first merge finishes and the second starts by itself
+    assert!(h.step_until(T, |h| h.app.merge.batch.len() == 1 && h.app.merge.final_task.is_some()));
+    assert_eq!(h.app.session.catalog.len(), 10);
+    // cancelling the second drops the third
+    let rows = h.app.session.activity.list();
+    h.app.session.activity.cancel(rows[0].id).unwrap();
+    assert!(h.step_until(T, |h| h.app.merge.final_task.is_none()));
+    assert!(h.app.merge.batch.is_empty());
+    assert_eq!(h.app.session.catalog.len(), 10, "nothing more merged");
+    assert!(h.app.session.activity.list().is_empty());
     let _ = std::fs::remove_dir_all(dir);
 }
 

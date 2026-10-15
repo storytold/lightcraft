@@ -44,7 +44,9 @@ pub enum Icon {
     ChevronDown,
     ChevronRight,
     ChevronLeft,
-    TriangleLeft,
+    ChevronUp,
+    ChevronDoubleLeft,
+    ChevronDoubleRight,
     Plus,
     Minus,
     Album,
@@ -83,6 +85,10 @@ pub enum Icon {
     Chat,
     /// Face boxes on/off: four corner brackets round a small face.
     FaceBox,
+    /// Play (a triangle pointing right).
+    Play,
+    /// Pause (two bars).
+    Pause,
     /// Colour grading, all three wheels: three small circles.
     GradeAll,
     /// Colour grading, shadows wheel: a filled circle.
@@ -175,6 +181,22 @@ pub fn paint_turned(p: &Painter, rect: Rect, icon: Icon, color: Color32, radians
 
 fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<(f32, f32)>) {
     let side = rect.width().min(rect.height());
+    // All disclosure and navigation chevrons share a 16-point size and stroke.
+    let side = if matches!(
+        icon,
+        Icon::Back
+            | Icon::Forward
+            | Icon::ChevronDown
+            | Icon::ChevronUp
+            | Icon::ChevronLeft
+            | Icon::ChevronRight
+            | Icon::ChevronDoubleLeft
+            | Icon::ChevronDoubleRight
+    ) {
+        side.min(16.0)
+    } else {
+        side
+    };
     let r = Rect::from_center_size(rect.center(), vec2(side, side));
     let k = side / 20.0;
     let pen = Pen { p, r, s: Stroke::new((1.5 * k).max(1.0), color), k, turn };
@@ -183,14 +205,6 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
         Sidebar => {
             pen.rect(3.0, 4.0, 17.0, 16.0, 1.5);
             pen.line(&[(8.0, 4.0), (8.0, 16.0)]);
-        }
-        Back => {
-            pen.line(&[(16.0, 10.0), (4.0, 10.0)]);
-            pen.line(&[(9.0, 5.0), (4.0, 10.0), (9.0, 15.0)]);
-        }
-        Forward => {
-            pen.line(&[(4.0, 10.0), (16.0, 10.0)]);
-            pen.line(&[(11.0, 5.0), (16.0, 10.0), (11.0, 15.0)]);
         }
         Monitor => {
             pen.rect(2.5, 3.5, 17.5, 13.5, 1.5);
@@ -399,9 +413,17 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.rect_fill(10.0, 4.0, 17.0, 16.0, 0.5);
         }
         ChevronDown => pen.line(&[(5.0, 7.5), (10.0, 12.5), (15.0, 7.5)]),
-        ChevronRight => pen.line(&[(7.5, 5.0), (12.5, 10.0), (7.5, 15.0)]),
-        ChevronLeft => pen.line(&[(12.5, 5.0), (7.5, 10.0), (12.5, 15.0)]),
-        TriangleLeft => pen.fill(&[(13.0, 6.0), (13.0, 14.0), (7.0, 10.0)], color),
+        Forward | ChevronRight => pen.line(&[(7.5, 5.0), (12.5, 10.0), (7.5, 15.0)]),
+        Back | ChevronLeft => pen.line(&[(12.5, 5.0), (7.5, 10.0), (12.5, 15.0)]),
+        ChevronDoubleLeft => {
+            pen.line(&[(9.0, 5.0), (4.0, 10.0), (9.0, 15.0)]);
+            pen.line(&[(16.0, 5.0), (11.0, 10.0), (16.0, 15.0)]);
+        }
+        ChevronDoubleRight => {
+            pen.line(&[(4.0, 5.0), (9.0, 10.0), (4.0, 15.0)]);
+            pen.line(&[(11.0, 5.0), (16.0, 10.0), (11.0, 15.0)]);
+        }
+        ChevronUp => pen.line(&[(5.0, 12.5), (10.0, 7.5), (15.0, 12.5)]),
         Plus => {
             pen.line(&[(10.0, 4.0), (10.0, 16.0)]);
             pen.line(&[(4.0, 10.0), (16.0, 10.0)]);
@@ -496,6 +518,11 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.circle(10.0, 7.0, 3.0);
             pen.arc(10.0, 18.0, 6.5, 200.0, 340.0);
             pen.rect(2.5, 2.5, 17.5, 17.5, 2.0);
+        }
+        Play => pen.fill(&[(6.0, 4.0), (6.0, 16.0), (16.0, 10.0)], color),
+        Pause => {
+            pen.rect_fill(5.0, 4.0, 8.5, 16.0, 0.5);
+            pen.rect_fill(11.5, 4.0, 15.0, 16.0, 0.5);
         }
         FaceBox => {
             pen.line(&[(2.5, 7.0), (2.5, 2.5), (7.0, 2.5)]);

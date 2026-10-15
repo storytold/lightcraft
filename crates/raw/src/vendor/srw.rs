@@ -184,8 +184,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         color: ColorData::default(),
         wb_multipliers: wb,
         linearized: false,
+        pixel_aspect: 1.0,
         opcodes: OpcodeLists::default(),
         metadata,
+        lens_metadata: Default::default(),
     };
     img.validate_for(mode)?;
     Ok(img)

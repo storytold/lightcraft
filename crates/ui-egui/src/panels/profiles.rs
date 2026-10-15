@@ -12,7 +12,7 @@ use super::presets::cover_uv;
 use crate::icons::{Icon, paint};
 use crate::state::RightPanel;
 use crate::theme::Tokens;
-use crate::widgets::{divider, icon_button, register};
+use crate::widgets::{divider, icon_button, one_line, register};
 use crate::{HoverPreview, LightcraftApp};
 
 /// Long edge of the variant thumbnails (px).
@@ -35,13 +35,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let (cr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::hover());
     let name = app.session.profile_info(&d.profile.id).map(|(name, _)| name).unwrap_or("Color");
     ui.painter().text(pos2(cr.left() + 24.0, cr.center().y), Align2::LEFT_CENTER, crate::i18n::tr("Profile"), t.font(13.0), t.text_dim);
-    ui.painter().text(
-        pos2(cr.left() + 84.0, cr.center().y),
-        Align2::LEFT_CENTER,
-        crate::i18n::profile_label(&d.profile.id, name),
-        t.font(14.0),
-        t.text_label,
-    );
+    // a long name is cut short (with …) at the panel's edge
+    let g = one_line(ui.painter(), crate::i18n::profile_label(&d.profile.id, name), t.font(14.0), t.text_label, cr.width() - 84.0 - 24.0);
+    ui.painter().galley(pos2(cr.left() + 84.0, cr.center().y - g.size().y / 2.0), g, t.text_label);
     if d.profile.id != "lc.color" {
         super::edit::control(app, ui, &d, "profile.amount", true);
         ui.add_space(6.0);
@@ -79,10 +75,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let open_id = egui::Id::new(("profile-group", imported, title));
         let open: bool = ui.data(|m| m.get_temp(open_id)).unwrap_or(true);
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
+        crate::widgets::announce(&resp, title.to_string());
         register(ui.ctx(), if imported { format!("profileGroup:lut:{title}") } else { format!("profileGroup:{title}") }, r);
         paint(
             ui.painter(),
-            Rect::from_center_size(pos2(r.left() + 22.0, r.center().y), vec2(12.0, 12.0)),
+            Rect::from_center_size(pos2(r.left() + 22.0, r.center().y), vec2(16.0, 16.0)),
             if open { Icon::ChevronDown } else { Icon::ChevronRight },
             t.text_label,
         );
@@ -157,6 +154,7 @@ fn cell_ui(
     let t = Tokens::get(ui.ctx());
     let key = if tag.is_empty() { format!("profileCell:{p_id}") } else { format!("profileCell:{tag}:{p_id}") };
     let resp = ui.interact(cell, egui::Id::new(&key), Sense::click());
+    crate::widgets::announce(&resp, p_name.to_string());
     register(ui.ctx(), key, cell);
     let thumb = Rect::from_min_size(cell.min, vec2(cell.width(), th));
     let s = with_profile_id(d, p_id);
@@ -174,13 +172,9 @@ fn cell_ui(
         painter.rect_stroke(thumb, 3.0, Stroke::new(1.0, t.text_dim), egui::StrokeKind::Outside);
     }
     let name_color = if applied { t.text } else { t.text_label };
-    painter.text(
-        pos2(cell.left() + 2.0, thumb.bottom() + 12.0),
-        Align2::LEFT_CENTER,
-        crate::i18n::profile_label(p_id, p_name),
-        t.font(12.0),
-        name_color,
-    );
+    // cut short (with …) to the cell, so it never runs into its neighbour; the full name on hover
+    let g = one_line(painter, crate::i18n::profile_label(p_id, p_name), t.font(12.0), name_color, cell.width() - 2.0);
+    painter.galley(pos2(cell.left() + 2.0, thumb.bottom() + 12.0 - g.size().y / 2.0), g, name_color);
     // favourite star (always shown when set, on hover otherwise)
     let fav = app.session.profile_favorites.iter().any(|f| f == p_id);
     let star = Rect::from_center_size(pos2(thumb.right() - 13.0, thumb.top() + 13.0), vec2(20.0, 20.0));

@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use lightcraft_catalog::{PhotoId, Source};
 use lightcraft_develop::DevelopSettings;
+use lightcraft_merge::pano::MAX_MEGAPIXELS;
 use lightcraft_merge::{Deghost, Frame, HdrOptions, PanoOptions, Projection};
 use lightcraft_pipeline::{Quality, RenderRequest, SourceInfo};
 use lightcraft_raster::{Rgb32f, Rgba8};
@@ -19,6 +20,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{EngineError, Result, Session};
+
+/// Why `merge.hdrBatch` found nothing to merge.
+pub const NO_BRACKET_SETS: &str =
+    "no bracket sets among these photos: select stacks, or photos taken less than a second apart at different exposures";
 
 /// Long edge of the frames of a preview merge.
 pub const PREVIEW_EDGE: usize = 1024;
@@ -105,20 +110,18 @@ impl MergeJob {
         use rayon::prelude::*;
         let done = std::sync::atomic::AtomicUsize::new(0);
         let n = self.sources.len();
-        let frames: std::result::Result<Vec<Frame>, String> = self
-            .sources
-            .par_iter()
-            .map(|(_, path)| {
-                let bytes = (self.read)(path)?;
-                // a raw without colour matrices of its own starts from the colour it has when opened alone (#965)
-                let f = lightcraft_merge::load_frame_with(&bytes, self.preview, orient, &crate::camera_preview::starting_colour_tags)
-                    .map_err(|e| format!("{path}: {e}"));
-                let k = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                progress(span.0 + (span.1 - span.0) * k as f32 / n as f32, "Reading photos");
-                f
-            })
-            .collect();
-        frames
+        let one = |(_, path): &(PhotoId, String)| {
+            let bytes = (self.read)(path)?;
+            // a raw without colour matrices of its own starts from the colour it has when opened alone (#965)
+            let f = lightcraft_merge::load_frame_with(&bytes, self.preview, orient, &crate::camera_preview::starting_colour_tags)
+                .map_err(|e| format!("{path}: {e}"));
+            let k = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            progress(span.0 + (span.1 - span.0) * k as f32 / n as f32, "Reading photos");
+            f
+        };
+        // Full-size photos are decoded one at a time (the demosaic is parallel inside): decoding several 60 MP raws at
+        // once multiplied the decoders' scratch memory, and a 7-frame bracket ran out of memory.
+        if self.preview.is_some() { self.sources.par_iter().map(one).collect() } else { self.sources.iter().map(one).collect() }
     }
 
     /// Run the merge. `progress(fraction, stage)` returns false to cancel.
@@ -130,11 +133,14 @@ impl MergeJob {
             return Err("cancelled".into());
         }
         let sub = |a: f32, b: f32| move |f: f32, s: &str| progress(a + (b - a) * f, s);
+        // the reference frame's lens corrections (HDR); panoramas carry none
+        let mut lens = Vec::new();
         let (image, color, orientation, metadata, baseline, samples, crop, mut info, ghost) = match &self.kind {
             MergeKind::Hdr { hdr } => {
                 let frames = self.load(false, progress, (0.0, 0.3))?;
                 let p = sub(0.3, 0.9);
-                let r = lightcraft_merge::merge_hdr(frames, hdr, &p).map_err(err)?;
+                let mut r = lightcraft_merge::merge_hdr(frames, hdr, &p).map_err(err)?;
+                lens = std::mem::take(&mut r.lens);
                 let info = json!({
                     "reference": self.sources[r.reference].0.0,
                     "ev": r.ev, "evExif": r.ev_exif,
@@ -146,8 +152,9 @@ impl MergeJob {
             MergeKind::Panorama { pano } => {
                 let frames = self.load(true, progress, (0.0, 0.25))?;
                 let p = sub(0.25, 0.9);
-                let r = lightcraft_merge::stitch(frames, pano, &p).map_err(err)?;
-                let info = pano_info(&r, &self.sources);
+                let fit = fit_in_memory(pano, pixels(&frames), crate::memory::total_ram());
+                let r = lightcraft_merge::stitch(frames, &fit, &p).map_err(err)?;
+                let info = pano_info(&r, &self.sources, pano, &fit);
                 (
                     r.image,
                     r.color,
@@ -183,13 +190,16 @@ impl MergeJob {
                         orientation: r.orientation,
                         metadata: r.metadata,
                         baseline_exposure: r.baseline_exposure,
+                        lens: Vec::new(),
+                        wb_multipliers: r.wb_multipliers,
                     };
                     f.orient();
                     merged.push(f);
                 }
                 let p = sub(0.6, 0.9);
-                let r = lightcraft_merge::stitch(merged, pano, &p).map_err(err)?;
-                let mut info = pano_info(&r, &self.sources);
+                let fit = fit_in_memory(pano, pixels(&merged), crate::memory::total_ram());
+                let r = lightcraft_merge::stitch(merged, &fit, &p).map_err(err)?;
+                let mut info = pano_info(&r, &self.sources, pano, &fit);
                 info["bracket"] = json!(b);
                 (
                     r.image,
@@ -214,7 +224,7 @@ impl MergeJob {
             metadata.caption = Some(format!("Merged from {}", names.join(", ")));
         }
         metadata.software = Some("LightCraft Photo Merge".into());
-        let dng = lightcraft_merge::write_linear_dng(&image, &color, orientation, &metadata, baseline, samples).map_err(err)?;
+        let dng = lightcraft_merge::write_linear_dng(&image, &color, orientation, &metadata, baseline, samples, &lens).map_err(err)?;
         info["width"] = json!(image.width);
         info["height"] = json!(image.height);
         let preview = match self.preview {
@@ -226,7 +236,20 @@ impl MergeJob {
     }
 }
 
-fn pano_info(r: &lightcraft_merge::PanoResult, sources: &[(PhotoId, String)]) -> Value {
+/// `asked` is what the command asked for, `fit` what ran (held to memory): when the panorama came
+/// out smaller than the photos' own resolution, `limit` says why (`memory`, `size`: Lightroom's
+/// 512 MP / 65,000 px, or `asked`).
+fn pano_info(r: &lightcraft_merge::PanoResult, sources: &[(PhotoId, String)], asked: &PanoOptions, fit: &PanoOptions) -> Value {
+    let megapixels = (r.image.width * r.image.height) as f64 / 1e6;
+    let native = r.native_megapixels;
+    let why = if fit.max_megapixels < asked.max_megapixels && fit.max_megapixels < native {
+        "memory"
+    } else if asked.max_megapixels < MAX_MEGAPIXELS && asked.max_megapixels < native {
+        "asked"
+    } else {
+        "size"
+    };
+    let limit = (megapixels < native * 0.98).then_some(why);
     json!({
         "projection": r.projection,
         "used": r.used.iter().filter_map(|&i| sources.get(i).map(|s| s.0.0)).collect::<Vec<_>>(),
@@ -234,8 +257,45 @@ fn pano_info(r: &lightcraft_merge::PanoResult, sources: &[(PhotoId, String)]) ->
         "rmsPx": r.rms,
         "gains": r.gains,
         "crop": r.crop,
+        "megapixels": megapixels,
+        "nativeMegapixels": native,
+        "limit": limit,
     })
 }
+
+/// Peak memory of a panorama per pixel of its output (bytes), measured as the peak resident size
+/// of synthetic stitches of 20–81 MP from 38–154 MP of photos, rounded up from the smaller ones
+/// (the larger need less): while the photos are projected they are still held, beside the tiles
+/// ([`PANO_TILE_BYTES`] on top of the photos' own 12 bytes a pixel); the blend that follows, the
+/// photos freed, peaks at [`PANO_BLEND_BYTES`]. Writing the DNG takes less than either.
+const PANO_TILE_BYTES: f64 = 36.0;
+const PANO_BLEND_BYTES: f64 = 68.0;
+
+/// What a merge may use of the computer's memory: three quarters of it (the rest is the system's
+/// and the other apps'), less the app's own memory budget (its caches).
+fn merge_memory(ram: Option<usize>) -> f64 {
+    // a computer whose memory we can't read (Windows) is taken to have 8 GB
+    let ram = ram.unwrap_or(8 << 30) as f64;
+    (ram * 0.75 - crate::memory::budget() as f64).max(0.0)
+}
+
+/// `pano` with its size held to what fits in memory beside its photos (`frame_px` pixels, 12
+/// bytes each, loaded already): a panorama of five 51 MP photos may have up to 166 MP on a 16 GB
+/// computer, 355 MP on 32 GB. Never below 40 megapixels, the size every panorama had before it
+/// followed the photos' resolution, and never above what was asked.
+pub(crate) fn fit_in_memory(pano: &PanoOptions, frame_px: f64, ram: Option<usize>) -> PanoOptions {
+    let room = merge_memory(ram);
+    let fits = ((room - frame_px * 12.0) / PANO_TILE_BYTES).min(room / PANO_BLEND_BYTES) / 1e6;
+    PanoOptions { max_megapixels: pano.max_megapixels.min(fits.max(MIN_FITTED_MEGAPIXELS)), ..pano.clone() }
+}
+
+/// The pixels of `frames`.
+fn pixels(frames: &[Frame]) -> f64 {
+    frames.iter().map(|f| (f.width() * f.height()) as f64).sum()
+}
+
+/// The smallest size [`fit_in_memory`] holds a panorama to (megapixels).
+pub(crate) const MIN_FITTED_MEGAPIXELS: f64 = 40.0;
 
 /// Bracket size from EXIF: the smallest period of the exposure sequence (≥ 2).
 pub fn detect_bracket(frames: &[Frame]) -> Option<usize> {
@@ -327,7 +387,8 @@ pub fn parse(id: &str, p: &Value) -> Result<(MergeKind, MergeFinish)> {
         boundary_warp: p.get("boundaryWarp").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 100.0),
         auto_crop: p.get("autoCrop").and_then(Value::as_bool).unwrap_or(false),
         fill_edges: p.get("fillEdges").and_then(Value::as_bool).unwrap_or(false),
-        max_megapixels: p.get("maxMegapixels").and_then(Value::as_f64).unwrap_or(40.0),
+        // the photos' own resolution unless asked (held to what fits in memory when it runs)
+        max_megapixels: p.get("maxMegapixels").and_then(Value::as_f64).filter(|v| *v > 0.0).unwrap_or(MAX_MEGAPIXELS).min(MAX_MEGAPIXELS),
     };
     let kind = match id {
         "merge.hdr" => MergeKind::Hdr { hdr },

@@ -34,7 +34,7 @@ pub(crate) fn setup(d: &std::path::Path, dim: u64) -> (Session, String) {
 /// committed) and says whether it did: the parts of a test that need to find faces run only then.
 pub(crate) fn install_yunet(s: &mut Session) -> bool {
     let Some(file) = std::env::var_os("LC_YUNET_MODEL") else {
-        eprintln!("LC_YUNET_MODEL is not set: skipping the face-finding part");
+        lightcraft_testkit::skip!(Model, "LC_YUNET_MODEL is not set, so the face-finding part is not checked");
         return false;
     };
     let r = s.execute("faces.models.install", &json!({"path": file.to_string_lossy(), "acknowledged": true}));
@@ -522,4 +522,99 @@ fn face_scan_row_follows_pending_photos() {
     assert_eq!((last["pendingPhotos"].clone(), last["peak"].clone()), (json!(0), json!(0)), "{last}");
     assert!(faces_rows(&s).is_empty(), "the row goes when the scan is done");
     let _ = std::fs::remove_dir_all(&d);
+}
+
+fn face_names(s: &Session, id: PhotoId) -> Vec<Option<String>> {
+    s.catalog.photo(id).unwrap().meta.regions.iter().map(|r| r.name.clone()).collect()
+}
+
+/// Every in-library spelling of a person becomes the exact new name, including a change of case only,
+/// and a person filter follows it. One undo step puts the old names back.
+#[test]
+fn rename_person_rewrites_every_spelling_and_undoes() {
+    let mut s = Session::with_demo();
+    let (a, b) = two_photos(&s);
+    set_regions(&mut s, a, vec![region(0.1, Some("Ann")), region(0.5, Some("  ANN  ")), region(0.7, Some("Rex"))]);
+    let mut pet = region(0.2, Some("Ann"));
+    pet.kind = RegionKind::Pet;
+    set_regions(&mut s, b, vec![region(0.3, Some("ann")), pet]);
+    s.execute("library.filter", &json!({"person": "ANN"})).unwrap();
+    let undo = s.undo.len();
+    let r = s.execute("faces.renamePerson", &json!({"from": "  ann ", "to": "  Ada  "})).unwrap();
+    assert_eq!((r["faces"].clone(), r["photos"].clone(), r["to"].clone(), r["merged"].clone()), (json!(3), json!(2), json!("Ada"), json!(false)));
+    assert_eq!(face_names(&s, a), vec![Some("Ada".into()), Some("Ada".into()), Some("Rex".into())]);
+    assert_eq!(face_names(&s, b)[0], Some("Ada".into()));
+    assert_eq!(face_names(&s, b)[1], Some("Ann".into()), "a pet is not a person");
+    assert_eq!(s.catalog.people().iter().find(|p| p.name.eq_ignore_ascii_case("ada")).map(|p| p.name.as_str()), Some("Ada"));
+    assert_eq!(s.filter.person.as_deref(), Some("Ada"));
+    assert_eq!(s.undo.len(), undo + 1);
+    assert_eq!(s.undo.last().map(|u| u.label.as_str()), Some("Rename Person"));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(face_names(&s, a), vec![Some("Ann".into()), Some("  ANN  ".into()), Some("Rex".into())]);
+    assert_eq!(face_names(&s, b)[0], Some("ann".into()));
+}
+
+/// Renaming onto someone else is refused until merge is asked for; then one undo step restores both people.
+#[test]
+fn rename_person_refuses_a_merge_until_it_is_asked_for() {
+    let mut s = Session::with_demo();
+    let (a, b) = two_photos(&s);
+    set_regions(&mut s, a, vec![region(0.1, Some("Ann"))]);
+    set_regions(&mut s, b, vec![region(0.3, Some("Bea"))]);
+    let before = (face_names(&s, a), face_names(&s, b), s.undo.len());
+    let err = s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Bea"})).unwrap_err();
+    assert!(err.to_string().contains("already another person"), "{err}");
+    assert_eq!((face_names(&s, a), face_names(&s, b), s.undo.len()), before, "a refusal changes nothing");
+    let r = s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Bea", "merge": true})).unwrap();
+    assert_eq!(r["merged"], true);
+    assert_eq!(s.undo.last().map(|u| u.label.as_str()), Some("Merge People"));
+    let names: Vec<String> = s.catalog.people().into_iter().map(|p| p.name).collect();
+    assert_eq!(names, vec!["Bea".to_string()]);
+    s.execute("edit.undo", &json!({})).unwrap();
+    let mut names: Vec<String> = s.catalog.people().into_iter().map(|p| p.name).collect();
+    names.sort();
+    assert_eq!(names, vec!["Ann".to_string(), "Bea".to_string()]);
+}
+
+/// More faces than `faces.person` lists are still renamed. A bad call, a missing person, or a name that
+/// is already exact changes nothing, and deleted or only-browsed photos are not part of the person.
+#[test]
+fn rename_person_covers_more_than_the_person_query_and_rejects_bad_input() {
+    let mut s = Session::with_demo();
+    let (a, b) = two_photos(&s);
+    set_regions(&mut s, a, vec![region(0.1, Some("Ann"))]);
+    let undo = s.undo.len();
+    for p in [
+        json!({}),
+        json!({"from": "Ann"}),
+        json!({"from": "  ", "to": "Ada"}),
+        json!({"from": 1, "to": "Ada"}),
+        json!({"from": "Ann", "to": ""}),
+        json!({"from": "Ann", "to": 5}),
+        json!({"from": "Ann", "to": "a\u{7}b"}),
+        json!({"from": "Ann", "to": "x".repeat(201)}),
+        json!({"from": "Nobody", "to": "Ada"}),
+        json!({"from": "Ann", "to": "Ann"}),
+    ] {
+        let err = s.execute("faces.renamePerson", &p).unwrap_err();
+        assert!(s.undo.len() == undo, "{p} changed the catalog: {err}");
+    }
+    assert_eq!(face_names(&s, a), vec![Some("Ann".into())]);
+    let regions: Vec<_> = (0..5001).map(|i| region(0.1, Some(if i == 0 { "ANN" } else { "Ann" }))).collect();
+    set_regions(&mut s, a, regions);
+    set_regions(&mut s, b, vec![region(0.2, Some("Ann"))]);
+    s.commit("delete", Op::SetDeleted { id: b, deleted: true }).unwrap();
+    let listed = s.execute("faces.person", &json!({"name": "Ann"})).unwrap();
+    assert_eq!((listed["total"].clone(), listed["confirmed"].as_array().unwrap().len()), (json!(5001), 5000));
+    let r = s.execute("faces.renamePerson", &json!({"from": "ann", "to": "Ada"})).unwrap();
+    assert_eq!((r["faces"].clone(), r["photos"].clone()), (json!(5001), json!(1)), "the deleted photo is left alone");
+    assert!(s.catalog.photo(a).unwrap().meta.regions.iter().all(|r| r.name.as_deref() == Some("Ada")));
+    assert_eq!(s.catalog.photo(b).unwrap().meta.regions[0].name.as_deref(), Some("Ann"));
+    let local = s.catalog.photos().map(|p| p.id).find(|id| *id != a && *id != b).unwrap();
+    set_regions(&mut s, local, vec![region(0.1, Some("Ada"))]);
+    s.commit("browse", Op::SetLocal { id: local, local: true }).unwrap();
+    let r = s.execute("faces.renamePerson", &json!({"from": "Ada", "to": "Bea"})).unwrap();
+    assert_eq!(r["photos"], 1, "the browsed photo is not another person and is not renamed");
+    assert_eq!(s.catalog.photo(a).unwrap().meta.regions[0].name.as_deref(), Some("Bea"));
+    assert_eq!(s.catalog.photo(local).unwrap().meta.regions[0].name.as_deref(), Some("Ada"));
 }

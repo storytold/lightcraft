@@ -503,3 +503,30 @@ fn copies_run_side_by_side_with_the_same_outcome() {
     assert_eq!(first.file_name, "IMG_1.png");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+#[test]
+fn finish_keeps_the_original_when_the_copy_changed_to_the_same_length() {
+    use crate::import_move::{finish, place};
+    let base = temp_dir("finish-recheck");
+    let (src, dest) = (base.join("card/IMG_1.jpg"), base.join("dest"));
+    std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+    std::fs::write(&src, b"original bytes").unwrap();
+    inject(Fault::NoLink);
+    let placed = place(&src, &dest, "IMG_1.jpg").unwrap();
+    // unchanged copy: the original goes
+    assert!(finish(&placed).is_ok());
+    assert!(!src.exists());
+    // a copy replaced by other bytes of the same length: the original stays
+    std::fs::write(&src, b"original bytes").unwrap();
+    let placed = place(&src, &dest, "IMG_1.jpg").unwrap();
+    std::fs::write(&placed.dst, b"different byte").unwrap();
+    assert!(finish(&placed).is_err());
+    assert_eq!(std::fs::read(&src).unwrap(), b"original bytes");
+    // an original edited meanwhile to other bytes of the same length: it stays too
+    let placed = place(&src, &dest, "IMG_1.jpg").unwrap();
+    std::fs::write(&src, b"edited  bytes!").unwrap();
+    assert!(finish(&placed).is_err());
+    assert_eq!(std::fs::read(&src).unwrap(), b"edited  bytes!");
+    inject(Fault::None);
+    let _ = std::fs::remove_dir_all(&base);
+}

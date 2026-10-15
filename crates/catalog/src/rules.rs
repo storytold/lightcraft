@@ -598,6 +598,35 @@ pub fn now() -> String {
     }
 }
 
+/// A flag as rules name it (its variant, lower case), without building a string per photo.
+fn flag_name(f: crate::Flag) -> &'static str {
+    match f {
+        crate::Flag::None => "none",
+        crate::Flag::Pick => "pick",
+        crate::Flag::Reject => "reject",
+    }
+}
+
+/// A colour label's colour as rules name it (lower case).
+fn label_colour(l: crate::ColorLabel) -> &'static str {
+    match l {
+        crate::ColorLabel::Red => "red",
+        crate::ColorLabel::Yellow => "yellow",
+        crate::ColorLabel::Green => "green",
+        crate::ColorLabel::Blue => "blue",
+        crate::ColorLabel::Purple => "purple",
+    }
+}
+
+/// A media kind as rules name it (lower case).
+fn kind_name(k: crate::MediaKind) -> &'static str {
+    match k {
+        crate::MediaKind::Image => "image",
+        crate::MediaKind::Raw => "raw",
+        crate::MediaKind::Video => "video",
+    }
+}
+
 fn lower(v: &Value) -> String {
     match v {
         Value::String(s) => s.trim().to_lowercase(),
@@ -778,16 +807,16 @@ impl Rule {
         match field {
             "rating" => num_op(op, Some(p.rating as f64), value),
             "flag" => {
-                let f = format!("{:?}", p.flag).to_lowercase();
+                let f = flag_name(p.flag);
                 (f == want || (want == "picked" && f == "pick") || (want == "rejected" && f == "reject")) == (op == "is")
             }
             "label" => {
-                let l = p.label.map(|l| format!("{l:?}").to_lowercase()).unwrap_or_else(|| "none".into());
+                let l = p.label.map_or("none", label_colour);
                 // custom label names count too
-                let named = p.label.is_some_and(|l| cat.label_name(l).to_lowercase() == want);
+                let named = p.label.is_some_and(|l| cat.custom_label_name(l).map_or(label_colour(l) == want, |n| n.to_lowercase() == want));
                 (l == want || named) == (op == "is")
             }
-            "kind" => (format!("{:?}", p.kind).to_lowercase() == want) == (op == "is"),
+            "kind" => (kind_name(p.kind) == want) == (op == "is"),
             "edited" => yes(p.is_edited()),
             "hasGps" => yes(m.gps.is_some()),
             "virtualCopy" => yes(p.copy_of.is_some()),

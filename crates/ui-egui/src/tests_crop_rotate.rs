@@ -121,7 +121,7 @@ fn the_straighten_value_says_it_can_be_typed() {
     // tooltips wait for the pointer to rest
     let _ = h.step_until(Duration::from_secs(5), |h| h.painted_text().iter().any(|t| t.contains("type")));
     assert!(
-        h.painted_text().iter().any(|t| t == "Click to type a value"),
+        h.painted_text().iter().any(|t| t == "Click to type a value, drag to change it"),
         "{:?}",
         h.painted_text().iter().filter(|t| t.contains("lick")).collect::<Vec<_>>()
     );

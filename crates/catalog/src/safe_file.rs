@@ -20,8 +20,8 @@
 //!   it is then simply exported again.
 //! - [`write_new`] / [`write_new_unique`] write a file that must not exist yet: the same temp file
 //!   and sync, plus a read-back check, and the file then appears under its final name **without
-//!   replacing anything** (a hard link, which fails on a taken name; a check-then-rename where the
-//!   volume has no hard links).
+//!   replacing anything** (a hard link, which fails on a taken name; where the volume has no hard
+//!   links, an exclusive create that claims the name, then a rename over that placeholder).
 //! - [`same_file`] tells whether two paths name the same file on disk (device + inode on Unix,
 //!   resolved paths elsewhere), for "is this target an original?" checks.
 
@@ -226,14 +226,22 @@ fn publish_new(tmp: &Path, path: &Path) -> io::Result<()> {
     match fs::hard_link(tmp, path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(e),
-        // no hard links on this volume (FAT/exFAT, some shares): check, then rename
-        Err(_) => {
-            if fs::symlink_metadata(path).is_ok() {
-                return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("{} exists", path.display())));
-            }
-            fs::rename(tmp, path)
-        }
+        // no hard links on this volume (FAT/exFAT, some shares)
+        Err(_) => publish_new_by_rename(tmp, path, &|| {}),
     }
+}
+
+/// Fallback of [`publish_new`]: reserve the name with an exclusive create (atomic, so a file that
+/// appears at the same time is never replaced), then rename the complete temp file over our own
+/// empty placeholder. `before_claim` runs just before the name is claimed (a test hook).
+fn publish_new_by_rename(tmp: &Path, path: &Path, before_claim: &dyn Fn()) -> io::Result<()> {
+    before_claim();
+    OpenOptions::new().write(true).create_new(true).open(path)?;
+    if let Err(e) = fs::rename(tmp, path) {
+        let _ = fs::remove_file(path);
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Does the file at `path` hold exactly `data`?
@@ -294,6 +302,22 @@ mod tests {
         let mut v: Vec<String> = fs::read_dir(dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
         v.sort();
         v
+    }
+
+    #[test]
+    fn fallback_publish_never_replaces_a_file_that_appears_at_the_same_time() {
+        let d = temp("nolink-race");
+        let tmp = d.join(".tmp-new");
+        let dest = d.join("IMG_1.dng");
+        fs::write(&tmp, b"new").unwrap();
+        let e = publish_new_by_rename(&tmp, &dest, &|| fs::write(&dest, b"other writer").unwrap()).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&dest).unwrap(), b"other writer");
+        fs::remove_file(&dest).unwrap();
+        publish_new_by_rename(&tmp, &dest, &|| {}).unwrap();
+        assert_eq!(fs::read(&dest).unwrap(), b"new");
+        assert!(!tmp.exists());
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

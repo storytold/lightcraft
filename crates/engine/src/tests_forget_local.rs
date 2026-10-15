@@ -216,3 +216,46 @@ fn upgraded_catalogs_forget_nothing_at_first() {
     assert!(local_paths(&s).is_empty(), "the untouched legacy record goes once 30 days passed");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Issue #1392: files deleted by another app after their folder was browsed in Local stayed in
+/// it, failing to load (and logging an error) on every visit. Browsing the folder again forgets
+/// the untouched records of files that are gone; a rated one stays (shown as missing), so does a
+/// photo added to the library, and nothing on disk is touched.
+#[test]
+fn browsing_again_forgets_untouched_records_of_deleted_files() {
+    let root = temp_dir("gone");
+    let (a, lib) = (root.join("a"), root.join("lib"));
+    for (i, n) in ["a1.png", "a2.png", "a3.png", "a4.png"].iter().enumerate() {
+        png(&a.join(n), i as u8);
+    }
+    let clock = Arc::new(Mutex::new("2026-08-01T10:00:00".to_string()));
+    let mut s = open(&lib, &clock);
+    let r = s.execute("library.browse", &json!({"path": a.to_string_lossy()})).unwrap();
+    assert_eq!((r["new"].as_u64(), r["forgotten"].as_u64()), (Some(4), Some(0)), "{r}");
+    let id = |s: &Session, n: &str| s.catalog.photos().find(|p| p.file_name == n).unwrap().id;
+    let (a2, a4) = (id(&s, "a2.png"), id(&s, "a4.png"));
+    s.selection = Selection::single(a2);
+    s.execute("photo.rate", &json!({"rating": 3})).unwrap();
+    s.execute("photo.addToLibrary", &json!({"ids": [a4.0]})).unwrap();
+    look_elsewhere(&mut s);
+    for n in ["a1.png", "a2.png", "a4.png"] {
+        std::fs::remove_file(a.join(n)).unwrap();
+    }
+
+    let r = s.execute("library.browse", &json!({"path": a.to_string_lossy()})).unwrap();
+    assert_eq!((r["new"].as_u64(), r["forgotten"].as_u64(), r["photos"].as_u64()), (Some(0), Some(1), Some(3)), "{r}");
+    assert_eq!(local_paths(&s), vec!["a2.png", "a3.png"], "the untouched record of a1 is forgotten, the rated a2 stays");
+    assert!(s.catalog.photo(a4).is_some_and(|p| !p.local), "a library photo of a deleted file stays");
+    assert!(a.join("a3.png").exists());
+    assert!(s.undo.is_empty(), "not an undo step");
+    // browsing once more changes nothing
+    let r = s.execute("library.browse", &json!({"path": a.to_string_lossy()})).unwrap();
+    assert_eq!(r["forgotten"], 0, "{r}");
+
+    // journaled: the library opens in the same state
+    let expect = s.catalog.to_snapshot();
+    drop(s);
+    let s = open(&lib, &clock);
+    assert_eq!(s.catalog.to_snapshot(), expect);
+    let _ = std::fs::remove_dir_all(&root);
+}

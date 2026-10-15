@@ -183,15 +183,7 @@ impl Catalog {
         let mut plan = ForgetPlan { now: now.to_string(), ..Default::default() };
         let now_s = crate::stacks::iso_seconds(now);
         let max_age = i64::from(days) * 86_400;
-        let mut referenced: HashSet<PhotoId> = HashSet::new();
-        for a in self.albums.values() {
-            referenced.extend(a.photos.iter().copied());
-            referenced.extend(a.cover);
-        }
-        for s in self.stacks.values() {
-            referenced.extend(s.photos.iter().copied());
-        }
-        referenced.extend(self.photos.values().filter_map(|p| p.copy_of));
+        let referenced = self.referenced();
         // the fingerprints are the costly part: work them out for the candidates in parallel
         let candidates: Vec<&Photo> = self
             .photos
@@ -236,6 +228,30 @@ impl Catalog {
         plan.stamp = stamp.into_iter().collect();
         plan.unstamp = self.browsed.keys().filter(|f| !remaining.contains(*f)).cloned().collect();
         plan
+    }
+
+    /// Of `ids`, the untouched Local records nothing refers to (no album, stack or virtual copy):
+    /// the ones [`Catalog::forget_local_plan`] could forget, whatever their folder's time.
+    pub fn forgettable_local(&self, ids: &[PhotoId]) -> Vec<PhotoId> {
+        let referenced = self.referenced();
+        let candidates: Vec<&Photo> =
+            ids.iter().filter(|id| !referenced.contains(id)).filter_map(|id| self.photos.get(id)).filter(|p| p.local).map(|p| &**p).collect();
+        let untouched = untouched_of(&candidates);
+        ids.iter().copied().filter(|id| untouched.contains(id)).collect()
+    }
+
+    /// Photos an album (as a member or its cover), a stack or a virtual copy refers to.
+    fn referenced(&self) -> HashSet<PhotoId> {
+        let mut referenced: HashSet<PhotoId> = HashSet::new();
+        for a in self.albums.values() {
+            referenced.extend(a.photos.iter().copied());
+            referenced.extend(a.cover);
+        }
+        for s in self.stacks.values() {
+            referenced.extend(s.photos.iter().copied());
+        }
+        referenced.extend(self.photos.values().filter_map(|p| p.copy_of));
+        referenced
     }
 }
 

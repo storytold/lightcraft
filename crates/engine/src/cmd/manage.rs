@@ -10,7 +10,7 @@ use crate::Result;
 fn rename_args(s: &crate::Session, p: &Value, c: &str) -> Result<(Vec<lightcraft_catalog::PhotoId>, String, usize)> {
     let template = str_param(p, "template").ok_or_else(|| bad(c, "missing `template`"))?.to_string();
     let start = p.get("start").and_then(Value::as_u64).unwrap_or(1) as usize;
-    Ok((s.targets(p), template, start))
+    Ok((s.targets(p)?, template, start))
 }
 
 /// A named set of colour-label names (red, yellow, green, blue, purple; empty = the colour's name).
@@ -96,7 +96,7 @@ fn auto_tag_tracklog(s: &mut crate::Session, p: &Value) -> Result<Value> {
     let (mut no_time, mut outside, mut has_gps, mut assumed_utc, mut interpolated) = (0, 0, 0, 0, 0);
     let mut ops = Vec::new();
     let mut photos = Vec::new();
-    for id in s.targets(p) {
+    for id in s.targets(p)? {
         let Some(ph) = s.catalog.photo(id) else { continue };
         if ph.meta.gps.is_some() && !replace {
             has_gps += 1;
@@ -183,7 +183,7 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 use lightcraft_catalog::dates::{iso_seconds, normalize_iso, shift_iso};
                 let c = "photo.setCaptureTime";
-                let targets: Vec<_> = s.targets(p).into_iter().filter(|id| s.catalog.photo(*id).is_some()).collect();
+                let targets: Vec<_> = s.targets(p)?.into_iter().filter(|id| s.catalog.photo(*id).is_some()).collect();
                 if targets.is_empty() {
                     return Err(bad(c, "no photos"));
                 }

@@ -186,3 +186,38 @@ fn targeted_adjustment_announces_itself_and_esc_turns_it_off() {
     assert!(h.app.ui.tool.is_empty(), "Esc turns the tool off: {:?}", h.app.ui.tool);
     assert!(matches!(h.app.ui.view, crate::state::ViewMode::Detail), "the first Esc only leaves the tool");
 }
+
+/// Dragging a point whose neighbours are closer than the editor's 0.02 spacing (two clicks side
+/// by side, or a curve from a sidecar or an agent) clamped it between bounds that had crossed,
+/// which panics: the app went down mid-drag. The point now stays between its neighbours.
+#[test]
+fn dragging_a_point_between_close_neighbours_does_not_panic() {
+    let mut h = curve_open("master");
+    let close = [[0.0, 0.0], [0.5, 0.5], [0.508, 0.6], [0.515, 0.3], [1.0, 1.0]];
+    exec(&mut h, "develop.curve", json!({"channel": "master", "points": close}));
+    h.step();
+    let side = curve_side(&mut h);
+    let r = h.request("ui.dragWidget", json!({"id": "curve", "fx": 0.508, "fy": 0.4, "dx": 0.05 * side, "dy": -0.1 * side, "steps": 8}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let c = pts(&develop(&h).curve.master);
+    assert_eq!(c.len(), 5, "{c:?}");
+    assert!(c.windows(2).all(|w| w[0].0 <= w[1].0), "the points stay in order: {c:?}");
+    assert!(c[2].0 > 0.5 && c[2].0 < 0.515, "the dragged point stays between its neighbours: {c:?}");
+}
+
+/// Points an agent sends out of order are stored in the order the curve runs, so the editor's
+/// neighbours are the curve's.
+#[test]
+fn curve_points_from_an_agent_are_stored_in_order() {
+    let mut h = curve_open("green");
+    exec(&mut h, "develop.curve", json!({"channel": "green", "points": [[0.0, 0.0], [0.7, 0.8], [0.3, 0.2], [1.0, 1.0]]}));
+    h.step();
+    assert_eq!(pts(&develop(&h).curve.green), vec![(0.0, 0.0), (0.3, 0.2), (0.7, 0.8), (1.0, 1.0)]);
+    let side = curve_side(&mut h);
+    let r = h.request("ui.dragWidget", json!({"id": "curve", "fx": 0.3, "fy": 0.8, "dx": 0.6 * side, "dy": 0.0, "steps": 8}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let c = pts(&develop(&h).curve.green);
+    assert!(c[1].0 < c[2].0, "dragged up to its neighbour, not past it: {c:?}");
+}

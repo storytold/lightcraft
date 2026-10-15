@@ -87,6 +87,10 @@ def classify(maker, camera, ext_field):
                 return "preview", "SRW", "compressed SRW is not decoded"
             return "unverified", "SRW", "uncompressed / packed SRW"
     e = es[0] if es else ""
+    if e == "MEF":
+        return "unverified", "MEF", "MEF decoder (uncompressed 12-bit)"
+    if e == "ERF":
+        return "unverified", "ERF", "ERF decoder (12-bit 16-byte blocks)"
     if e == "CRW":
         # CIFF-era bodies decode (clean-room/crw/06-crw-format.md): EOS D30/D60/10D/300D and
         # the CIFF PowerShots; the pre-CIFF compacts (PowerShot 600, A5, A50, Pro70) and the
@@ -94,7 +98,7 @@ def classify(maker, camera, ext_field):
         if CRW_DECODED.search(camera):
             return "unverified", "CRW", "CRW decoder (CIFF; selector 0-2 tables)"
         return "preview", "CRW", "pre-CIFF CRW is not decoded"
-    if e in ("3FR", "FFF", "IIQ", "MOS", "ERF", "KDC", "MRW", "X3F", "RAW", "ORI"):
+    if e in ("3FR", "FFF", "IIQ", "MOS", "KDC", "MRW", "X3F", "RAW", "ORI"):
         return "preview", e, f"{e} is opened from its embedded JPEG only"
     return "unsupported", e, f"{e or 'unknown'} is not imported"
 

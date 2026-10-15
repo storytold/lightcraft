@@ -25,5 +25,23 @@ sync_github_name = false
 [people.rock-meister]
 sync_github_name = true
 
+[people.Th4nat0s]
+display_name = "Thanat0s"
+
 [people.sanyamsingh001]
 display_name = "sanyamsingh001"
+
+[people.ArekatlaNishanthchowdary]
+real_name = "Arekatla Nishanth Chowdary"
+sync_github_name = true
+
+[people.Losminek]
+sync_github_name = true
+
+[people.FooVoo]
+real_name = "Aleksandr Batyrev"
+sync_github_name = true
+
+[people.Silvertree2010]
+display_name = "Netter"
+sync_github_name = false

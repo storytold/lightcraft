@@ -28,6 +28,7 @@ An export can hand the files it wrote to Apple Photos, optionally into an album 
 An import can take minutes, and the first one waits for the user to answer macOS's permission prompt. Each
 import is a job: `{job, running, requested, album}`, plus, once Photos is done, `{imported, ids, warning?}`,
 `{error}` or `{skipped}` (`exporting: true` while an export that will add its files is still writing them).
+`skipped` says why Photos wasn't asked, in words; `cancelled: true` comes with it when the export was cancelled.
 
 While Photos works, the activity stack ([background-tasks.md](background-tasks.md)) shows it. An export adding its
 files keeps its own row, which reads "Adding to Apple Photos…" and loses its ✕, since Photos can't be stopped once

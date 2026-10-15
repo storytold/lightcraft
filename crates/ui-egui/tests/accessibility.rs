@@ -55,7 +55,13 @@ fn audit(h: &Harness<'_, LightcraftApp>, place: &str) -> Vec<String> {
     for node in h.root().children_recursive() {
         let n = node.accesskit_node();
         let role = n.role();
-        if !interactive(role) {
+        // egui's own scroll bars are announced by their role, as native ones are
+        if role == Role::ScrollBar {
+            continue;
+        }
+        // a widget that takes the focus or a click is interactive whatever its role
+        let acts = |a| n.data().supports_action(a);
+        if !interactive(role) && !acts(egui::accesskit::Action::Focus) && !acts(egui::accesskit::Action::Click) {
             continue;
         }
         count += 1;
@@ -185,5 +191,61 @@ fn canvas_tool_sliders_are_reachable_with_tab() {
         h.run_steps(4);
         let after = slider_value(&h, &name);
         assert_ne!(before, after, "{right:?}: ArrowUp on the Tab-focused {name:?}");
+    }
+}
+
+/// The canvas handles are in the tree by name, with their position as the value.
+#[test]
+fn canvas_handles_are_named_with_their_position() {
+    let h = harness(ViewMode::Detail, RightPanel::Crop);
+    let found: Vec<(String, String)> = h
+        .root()
+        .children_recursive()
+        .map(|n| n.accesskit_node())
+        .filter(|n| n.role() == Role::Button)
+        .map(|n| (n.label().unwrap_or_default(), n.value().unwrap_or_default()))
+        .collect();
+    for name in ["Crop top-left corner", "Crop right edge", "Crop box"] {
+        assert!(found.iter().any(|(l, v)| l == name && v.contains('%')), "{name}: {found:?}");
+    }
+    let h = harness(ViewMode::Detail, RightPanel::Remove);
+    assert!(h.root().children_recursive().any(|n| n.accesskit_node().label().is_some_and(|l| l.starts_with("New spot"))));
+}
+
+/// Tab walks each right panel from top to bottom (rows left to right): the order a sighted user
+/// reads it in. Each step down may not jump back up by more than a row.
+#[test]
+fn tab_walks_the_right_panels_top_to_bottom() {
+    for right in [RightPanel::Edit, RightPanel::Crop, RightPanel::Remove, RightPanel::Masking] {
+        let mut h = harness(ViewMode::Detail, right);
+        let panel_left = 1500.0 - h.state().ui.right_width - 10.0;
+        // the tool strip beside the panel is a column of its own, walked before it
+        let strip = h
+            .root()
+            .children_recursive()
+            .map(|n| n.accesskit_node())
+            .find(|n| n.label().as_deref() == Some("Edit (E)"))
+            .and_then(|n| n.bounding_box())
+            .map(|b| b.x0 as f32)
+            .unwrap_or(f32::INFINITY);
+        let mut seen: Vec<(String, f32)> = Vec::new();
+        for _ in 0..120 {
+            h.key_press(egui::Key::Tab);
+            h.run_steps(1);
+            let Some(n) = h.root().children_recursive().map(|n| n.accesskit_node()).find(|n| n.is_focused()) else { continue };
+            let Some(b) = n.bounding_box() else { continue };
+            if (b.x0 as f32) < panel_left || (b.x0 as f32) >= strip - 1.0 {
+                continue;
+            }
+            let name = n.label().unwrap_or_default();
+            if seen.iter().any(|(s, y)| *s == name && (*y - b.y0 as f32).abs() < 1.0) && !name.is_empty() {
+                break;
+            }
+            seen.push((name, b.y0 as f32));
+        }
+        assert!(seen.len() > 3, "{right:?}: Tab reaches the panel: {seen:?}");
+        for w in seen.windows(2) {
+            assert!(w[1].1 >= w[0].1 - 30.0, "{right:?}: Tab jumps up from {:?} to {:?}\n{seen:?}", w[0], w[1]);
+        }
     }
 }

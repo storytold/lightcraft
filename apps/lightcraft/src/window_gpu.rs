@@ -278,11 +278,11 @@ mod tests {
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
-            eprintln!("no GPU adapter: skipped");
+            lightcraft_testkit::skip!(Gpu, "no GPU adapter");
             return;
         };
         let Ok((device, _queue)) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())) else {
-            eprintln!("no GPU device: skipped");
+            lightcraft_testkit::skip!(Gpu, "no GPU device");
             return;
         };
         install_error_handler(&device);

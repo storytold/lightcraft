@@ -79,7 +79,20 @@ pub fn demosaic(n: &Normalized, method: Method) -> Rgb32f {
     }
     match (&n.cfa, n.cpp) {
         (_, 3) => Rgb32f { width: w, height: h, data: n.data.as_chunks::<3>().0.iter().map(|c| [c[0], c[1], c[2]]).collect() },
-        (_, cpp) if cpp != 1 => Rgb32f { width: w, height: h, data: n.data.chunks_exact(cpp).map(|c| [c[0], c[1], c[2]]).collect() },
+        // four colours develop from their first three; narrower data (refused by `RawImage::validate`, issue #1511)
+        // repeats its last sample instead of reading past the pixel
+        (_, cpp) if cpp != 1 => Rgb32f {
+            width: w,
+            height: h,
+            data: n
+                .data
+                .chunks_exact(cpp.max(1))
+                .map(|c| {
+                    let s = |i: usize| c.get(i).or(c.last()).copied().unwrap_or(0.0);
+                    [s(0), s(1), s(2)]
+                })
+                .collect(),
+        },
         (None, _) => Rgb32f { width: w, height: h, data: n.data.iter().map(|&v| [v; 3]).collect() },
         (Some(cfa), _) => {
             let m = Mosaic { w, h, data: &n.data, cfa };

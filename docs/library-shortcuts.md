@@ -4,6 +4,8 @@ Select photos in Photo Grid or Square Grid, then use:
 
 | Key | Action |
 |---|---|
+| `Enter` | Open the active photo in Detail from Photo Grid or Square Grid |
+| `Cmd+Shift+D` (macOS) / `Ctrl+Shift+D` (Windows/Linux) | Select only the active photo |
 | `0` | Clear the star rating |
 | `1`–`5` | Set the star rating |
 | `[` / `]` | Decrease / increase each selected photo's rating by one, within 0–5 |
@@ -11,7 +13,15 @@ Select photos in Photo Grid or Square Grid, then use:
 | `P` | Flag as a pick |
 | `X` | Flag as rejected |
 | `U` | Clear the flag |
+| `` ` `` (backtick) | Cycle the flag: unflagged → pick → reject → unflagged |
+| `Cmd`/`Ctrl` + `↑` / `↓` | Raise / lower flag status (reject < unflagged < pick; stops at either end) |
 | `Shift` + `0`–`9`, `P`, `X` or `U` | Apply the action and select the next photo |
+
+Enter opens the active photo without changing the selection. Text fields, dialogs and open popups keep the key; a custom Enter binding takes precedence. Enter has no additional action in Detail.
+
+Select Only Active Photo (Edit menu) narrows the selection to the active photo. It does not change
+the photo, its edits or the last edit Undo step, and it works in any view that has an active photo.
+It can be reassigned or disabled in Help → Keyboard Shortcuts; text fields and dialogs keep the key.
 
 Purple and clearing a colour label are available in Photo → Set Color Label and the photo context
 menu. Purple has no default number key, matching Lightroom Classic. Rejection marks a photo for
@@ -28,6 +38,16 @@ step. AutoWrite uses the normal rating metadata path. In Detail, including Maski
 `[` / `]` keep resizing the brush and shifted brackets keep adjusting feather. Saved overrides,
 remapping and disabling the default brush bindings take precedence over their grid bracket actions.
 The separate Decrease Rating / Increase Rating commands can also be assigned in Help → Keyboard Shortcuts.
+
+Flag cycling and raise/lower use each photo's own flag, so a mixed selection steps together without being made uniform. Adobe's shortcut list names the backtick "Cycle flag settings" but does not state the order; unflagged → pick → reject is LightCraft's choice. The key is the logical grave key, so it follows the keyboard layout (on layouts where it is a dead accent key, assign another key in Help → Keyboard Shortcuts to `photo.cycleFlag`).
+
+`Home` and `End` make the first or last photo of the view the active, selected one. `Shift` + `←` /
+`→` add the previous or next photo of the view to the selection and make the added photo active; the
+key never removes a photo from the selection, and at either end of the view it does nothing. These
+four keys work in Photo Grid and Square Grid only. They wait in Detail, Compare and Survey, in the
+full-screen preview (which covers the grid), while a text field or a dialog has the keyboard, and
+when you gave the same key to a command in Help → Keyboard Shortcuts, where they are listed under
+Fixed keys.
 
 Grid actions apply to all selected photos and support Undo / Redo. In Compare and Survey, culling
 actions apply to the active photo. Auto Advance moves forward after an action; holding Shift with
@@ -46,7 +66,17 @@ commit `4e012a59a6d2442ba749f109ea27aadb5c0b11a5` by Gardy, and addresses the ca
 [issue #283](https://github.com/storytold/lightcraft/issues/283). That PR was open when checked
 on 2026-10-08; this work extends its fix with library culling bindings and tests.
 
-Public behaviour references, checked 2026-10-08:
+## Grid thumbnail size
+
+`=` makes the grid thumbnails larger and `-` smaller (`+` also enlarges), as in Lightroom Classic. Each
+press moves the bottom-bar slider by 30 pt within its 90–480 pt range and stops at either end. The keys
+work in Photo Grid, Square Grid and People (the views with the slider), do nothing in Detail, Compare,
+Survey and Reference, and leave text fields alone, so the search box still types `-` and `=`. `⌘=` /
+`⌘−` remain Zoom In / Out. The same steps are the View ▸ Increase / Decrease Grid Thumbnail Size
+commands (`view.thumbSizeUp`, `view.thumbSizeDown`, reachable from the control channel and MCP, which
+return `{"size"}`); the size is saved with the other interface settings.
+
+Public behaviour references, checked 2026-10-08 (thumbnail size: 2026-10-13):
 
 - [Lightroom Classic keyboard shortcuts](https://helpx.adobe.com/lightroom-classic/help/keyboard-shortcuts.html)
 - [Lightroom Classic flagging, labelling and rating](https://helpx.adobe.com/lightroom-classic/help/flag-label-rate-photos.html)

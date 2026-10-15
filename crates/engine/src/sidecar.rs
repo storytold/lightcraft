@@ -63,17 +63,31 @@ pub fn sidecar_path(original: &str, naming: SidecarNaming) -> PathBuf {
 }
 
 /// An existing sidecar for `original`: the preferred naming first, then the other one (also
-/// accepting an upper-case `.XMP`).
+/// accepting `.XMP` and `.Xmp`, and a full name whose photo extension differs in case, such as
+/// `IMG_1.cr3.xmp` beside `IMG_1.CR3`, which a case-sensitive file system would otherwise miss).
 pub fn find_sidecar(original: &str, naming: SidecarNaming) -> Option<PathBuf> {
+    sidecar_candidates(original, naming).find(|p| p.is_file())
+}
+
+/// The names `original`'s sidecar can have, in the order they are looked for: under `naming`,
+/// then under the other naming (the full name also with the photo extension in the other case),
+/// each as `.xmp`, `.XMP` and `.Xmp`.
+pub(crate) fn sidecar_candidates(original: &str, naming: SidecarNaming) -> impl Iterator<Item = PathBuf> {
     let other = if naming == SidecarNaming::Stem { SidecarNaming::Full } else { SidecarNaming::Stem };
+    let ext = Path::new(original).extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
+    let base = Path::new(original).with_extension("");
+    let recased = |e: String| (e != ext).then(|| format!("{}.{e}", base.to_string_lossy()));
+    let full_variants: Vec<String> = [recased(ext.to_lowercase()), recased(ext.to_uppercase())].into_iter().flatten().collect();
     [naming, other]
         .into_iter()
-        .flat_map(|n| {
-            let p = sidecar_path(original, n);
-            let upper = p.with_extension("XMP");
-            [p, upper]
+        .flat_map(move |n| {
+            let mut v = vec![sidecar_path(original, n)];
+            if n == SidecarNaming::Full {
+                v.extend(full_variants.iter().map(|o| sidecar_path(o, n)));
+            }
+            v
         })
-        .find(|p| p.is_file())
+        .flat_map(|p| [p.clone(), p.with_extension("XMP"), p.with_extension("Xmp")])
 }
 
 /// What a sidecar (or embedded XMP packet) says about a photo. `None` = not stated.
@@ -450,6 +464,33 @@ fn stem_key(original: &str) -> String {
     sidecar_path(original, SidecarNaming::Stem).to_string_lossy().to_lowercase()
 }
 
+/// Where a plain path is cut to make its [`stem_key`]: at the dot of its extension, which is
+/// what `with_extension` replaces. A plain path is ASCII and ends in its file's name with an
+/// extension, which is what a library's paths are; `None` for any other shape.
+fn plain_cut(original: &str) -> Option<usize> {
+    let path = Path::new(original);
+    let (name, stem, ext) = (path.file_name()?.to_str()?, path.file_stem()?.to_str()?, path.extension()?.to_str()?);
+    // (the path ends in its file's name, as it stands: no `/.` or separator after it; and the
+    // name has a stem and an extension of its own, which `..jpg` and `a.` have not)
+    let plain = original.is_ascii() && original.ends_with(name) && !ext.is_empty() && !stem.is_empty() && stem != "." && stem != "..";
+    let cut = original.len().checked_sub(ext.len().saturating_add(1))?;
+    (plain && original.as_bytes().get(cut) == Some(&b'.')).then_some(cut)
+}
+
+/// [`stem_key`] written into `key`, which is reused: nothing is allocated for a plain path
+/// ([`plain_cut`]). Any other shape goes the long way.
+fn stem_key_into(key: &mut String, original: &str) {
+    key.clear();
+    match plain_cut(original) {
+        Some(cut) => {
+            key.push_str(original.get(..cut).unwrap_or_default());
+            key.make_ascii_lowercase();
+            key.push_str(".xmp");
+        }
+        None => key.push_str(&stem_key(original)),
+    }
+}
+
 fn file_path(p: &Photo) -> Option<&str> {
     match &p.source {
         Source::File { path } => Some(path),
@@ -475,10 +516,10 @@ pub fn read_packet(original: &str, kind: MediaKind, naming: SidecarNaming) -> Op
 /// Photo ids touched by an op (for auto-write).
 pub(crate) fn op_photos(op: &Op, out: &mut Vec<PhotoId>) {
     match op {
-        Op::SetRating { id, .. } | Op::SetFlag { id, .. } | Op::SetLabel { id, .. } | Op::SetDevelop { id, .. } | Op::SetMeta { id, .. } => {
-            if !out.contains(id) {
-                out.push(*id);
-            }
+        Op::SetRating { id, .. } | Op::SetFlag { id, .. } | Op::SetLabel { id, .. } | Op::SetDevelop { id, .. } | Op::SetMeta { id, .. }
+            if !out.contains(id) =>
+        {
+            out.push(*id);
         }
         Op::Batch { ops } => ops.iter().for_each(|o| op_photos(o, out)),
         _ => {}
@@ -490,13 +531,49 @@ pub(crate) fn op_photos(op: &Op, out: &mut Vec<PhotoId>) {
 pub(crate) struct StemOwners(HashMap<String, PhotoId>);
 
 impl StemOwners {
+    /// The owners of every shared stem in the library, each file's key made the long way: what
+    /// [`StemOwners::among`] must agree with for the photos it is asked about (this is how the
+    /// owners were worked out before, for every write).
+    #[cfg(test)]
     pub(crate) fn of(cat: &lightcraft_catalog::Catalog) -> StemOwners {
-        // per stem: (raw first, then file name, then id) of the best candidate; and how many
         let mut best: HashMap<String, ((bool, String, u64), PhotoId, usize)> = HashMap::new();
         for p in cat.photos().filter(|p| p.copy_of.is_none()) {
             let Some(path) = file_path(p) else { continue };
             let rank = (p.kind != MediaKind::Raw, path.to_lowercase(), p.id.0);
             let e = best.entry(stem_key(path)).or_insert_with(|| (rank.clone(), p.id, 0));
+            e.2 += 1;
+            if rank < e.0 {
+                (e.0, e.1) = (rank, p.id);
+            }
+        }
+        StemOwners(best.into_iter().filter(|(_, v)| v.2 > 1).map(|(k, v)| (k, v.1)).collect())
+    }
+
+    /// The owners of the stems photos `ids` map to: all that naming those photos needs. The
+    /// library is passed over once, and only files of those stems are looked at closer, so a
+    /// sidecar written for one photo does not cost a table of the whole library.
+    pub(crate) fn among(cat: &lightcraft_catalog::Catalog, ids: &[PhotoId]) -> StemOwners {
+        let wanted: std::collections::HashSet<String> =
+            ids.iter().filter_map(|id| cat.photo(*id)).filter_map(|p| file_path(p)).map(stem_key).collect();
+        if wanted.is_empty() {
+            return StemOwners(HashMap::new());
+        }
+        Self::where_wanted(cat, &wanted)
+    }
+
+    /// The owners of the shared stems in `wanted`.
+    fn where_wanted(cat: &lightcraft_catalog::Catalog, wanted: &std::collections::HashSet<String>) -> StemOwners {
+        // per stem: (raw first, then file name, then id) of the best candidate; and how many
+        let mut best: HashMap<String, ((bool, String, u64), PhotoId, usize)> = HashMap::new();
+        let mut key = String::new();
+        for p in cat.photos().filter(|p| p.copy_of.is_none()) {
+            let Some(path) = file_path(p) else { continue };
+            stem_key_into(&mut key, path);
+            if !wanted.contains(key.as_str()) {
+                continue;
+            }
+            let rank = (p.kind != MediaKind::Raw, path.to_lowercase(), p.id.0);
+            let e = best.entry(key.clone()).or_insert_with(|| (rank.clone(), p.id, 0));
             e.2 += 1;
             if rank < e.0 {
                 (e.0, e.1) = (rank, p.id);
@@ -514,33 +591,39 @@ impl StemOwners {
     }
 }
 
+/// How the sidecar of each of photos `ids` is named in library `cat`, whose naming is `naming`
+/// ([`Session::sidecar_namings`], for a thread that has the library and not the session).
+pub(crate) fn namings_in(cat: &lightcraft_catalog::Catalog, naming: SidecarNaming, ids: &[PhotoId]) -> Vec<SidecarNaming> {
+    let owners = (naming == SidecarNaming::Stem).then(|| StemOwners::among(cat, ids));
+    ids.iter()
+        .map(|id| match (cat.photo(*id), &owners) {
+            (Some(p), Some(o)) => o.naming(p, naming),
+            _ => naming,
+        })
+        .collect()
+}
+
 impl Session {
     /// The sidecar naming for photo `id`: the library's, except under Stem naming when another
     /// catalogued file shares the stem (`IMG_0001.CR3` + `IMG_0001.JPG`) and owns the stem
     /// sidecar — a raw first, else the first by file name. The others use Full naming
     /// (`IMG_0001.JPG.xmp`), so their metadata never overwrites each other.
-    /// [`Session::sidecar_naming`] for many photos, the catalog's sidecar owners worked out once
-    /// (per photo that is a pass over the whole catalog).
+    /// [`Session::sidecar_naming`] for many photos, their stems' owners worked out once (per
+    /// photo that is a pass over the whole catalog).
     pub fn sidecar_namings(&self, ids: &[PhotoId]) -> Vec<SidecarNaming> {
-        let owners = (self.xmp.naming == SidecarNaming::Stem).then(|| StemOwners::of(&self.catalog));
-        ids.iter()
-            .map(|id| match (self.catalog.photo(*id), &owners) {
-                (Some(p), Some(o)) => o.naming(p, self.xmp.naming),
-                _ => self.xmp.naming,
-            })
-            .collect()
+        namings_in(&self.catalog, self.xmp.naming, ids)
     }
 
     pub fn sidecar_naming(&self, id: PhotoId) -> SidecarNaming {
         match self.catalog.photo(id) {
-            Some(p) if self.xmp.naming == SidecarNaming::Stem => StemOwners::of(&self.catalog).naming(p, self.xmp.naming),
+            Some(p) if self.xmp.naming == SidecarNaming::Stem => StemOwners::among(&self.catalog, &[id]).naming(p, self.xmp.naming),
             _ => self.xmp.naming,
         }
     }
 
     /// Write the photo's XMP sidecar, merged into an existing one (see the module docs).
     pub fn save_sidecar(&mut self, id: PhotoId) -> Result<SidecarSaved> {
-        self.save_sidecar_with(id, &StemOwners::of(&self.catalog))
+        self.save_sidecar_with(id, &StemOwners::among(&self.catalog, &[id]))
     }
 
     pub(crate) fn save_sidecar_with(&mut self, id: PhotoId, owners: &StemOwners) -> Result<SidecarSaved> {
@@ -642,14 +725,62 @@ impl Session {
         if ids.is_empty() {
             return;
         }
-        let owners = StemOwners::of(&self.catalog);
+        let owners = StemOwners::among(&self.catalog, &ids);
         for id in ids {
-            if self.catalog.photo(id).is_some_and(|p| file_path(p).is_some() && p.copy_of.is_none())
-                && let Err(e) = self.save_sidecar_with(id, &owners)
-            {
-                log::warn!("auto-write XMP: {e}");
+            if self.catalog.photo(id).is_some_and(|p| file_path(p).is_some() && p.copy_of.is_none()) {
+                match self.save_sidecar_with(id, &owners) {
+                    Ok(_) => {
+                        self.unsaved_sidecars.remove(&id);
+                    }
+                    Err(e) => {
+                        // kept for a retry once the file is reachable: a network share that dropped out mustn't leave
+                        // the sidecar silently behind the edit
+                        log::warn!("auto-write XMP: {e}");
+                        self.unsaved_sidecars.insert(id);
+                    }
+                }
             }
         }
+    }
+
+    /// How many photos have an automatic sidecar write waiting (it failed: the folder offline, read-only or full).
+    pub fn unsaved_sidecars(&self) -> usize {
+        self.unsaved_sidecars.len()
+    }
+
+    /// Write the waiting sidecars whose originals are reachable again (the availability cache answers without
+    /// touching the disk for the others); photos that are gone, or with auto-write off, are dropped from the wait.
+    /// Returns how many were written.
+    pub fn retry_unsaved_sidecars(&mut self) -> usize {
+        if !self.xmp.auto_write {
+            self.unsaved_sidecars.clear();
+            return 0;
+        }
+        let mut ready = Vec::new();
+        for id in self.unsaved_sidecars.clone() {
+            match self.catalog.photo(id).filter(|p| p.copy_of.is_none()).and_then(|p| file_path(p).map(str::to_owned)) {
+                None => {
+                    self.unsaved_sidecars.remove(&id);
+                }
+                Some(path) if self.media.availability.exists(&path) == Some(true) => ready.push(id),
+                Some(_) => {}
+            }
+        }
+        if ready.is_empty() {
+            return 0;
+        }
+        let owners = StemOwners::among(&self.catalog, &ready);
+        let mut written = 0;
+        for id in ready {
+            match self.save_sidecar_with(id, &owners) {
+                Ok(_) => {
+                    self.unsaved_sidecars.remove(&id);
+                    written += 1;
+                }
+                Err(e) => log::debug!("retry XMP: {e}"),
+            }
+        }
+        written
     }
 }
 
@@ -764,3 +895,7 @@ mod tests_repair_companions;
 #[cfg(test)]
 #[path = "sidecar/tests_repair_provenance.rs"]
 mod tests_repair_provenance;
+
+#[cfg(test)]
+#[path = "sidecar/tests_stem_owners.rs"]
+mod tests_stem_owners;

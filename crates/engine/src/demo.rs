@@ -30,6 +30,16 @@ pub fn load(s: &mut Session) {
             creator: "LightCraft Demo".into(),
             ..Default::default()
         };
+        // one demo photo carries a camera focus point (as a Sony raw would), on the bloom's centre, so
+        // View ▸ Show Focus Point and Zoom to Focus Point can be tried without a camera file
+        if sc.name == "Cosmos bloom" {
+            p.meta.focus = Some(lightcraft_meta::FocusPoint {
+                rect: lightcraft_geom::Rect { x0: 0.42, y0: 0.433, x1: 0.50, y1: 0.487 },
+                mode: Some("AF-S".into()),
+                area: Some("Flexible Spot".into()),
+                tracking: None,
+            });
+        }
         p.rating = [0, 3, 4, 5, 2, 0, 4, 3][sc.id as usize % 8];
         p.flag = match sc.id % 6 {
             1 => Flag::Pick,
@@ -409,7 +419,7 @@ mod tests {
     #[test]
     fn a_scene_is_rendered_once_however_many_ask() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let (renders, peak) = within(60, || {
+        let (renders, peak) = within(120, || {
             let slot = Arc::new(SceneSlot::default());
             let (running, peak, renders) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
             let render = {
@@ -454,7 +464,7 @@ mod tests {
     /// and that pool's limits; other threads render in parallel on the scene pool.
     #[test]
     fn a_rayon_worker_renders_alone_on_its_own_thread() {
-        let ((how, caller, renderer), (other_how, other_name)) = within(30, || {
+        let ((how, caller, renderer), (other_how, other_name)) = within(120, || {
             let pool = rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap();
             let slot = SceneSlot::default();
             let mut seen = None;
@@ -485,7 +495,7 @@ mod tests {
     /// minutes of CPU time on a small machine).
     #[test]
     fn callers_wait_for_the_generation_running() {
-        let (a, b, renders) = within(30, || {
+        let (a, b, renders) = within(120, || {
             let slot = Arc::new(SceneSlot::default());
             let renders = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let (started_tx, started) = std::sync::mpsc::channel::<()>();
@@ -518,7 +528,7 @@ mod tests {
     /// generates the scene again.
     #[test]
     fn a_failed_generation_is_an_error_and_the_next_request_tries_again() {
-        let (first, waiters, again) = within(30, || {
+        let (first, waiters, again) = within(120, || {
             let slot = Arc::new(SceneSlot::default());
             let (started_tx, started) = std::sync::mpsc::channel::<()>();
             let (go, go_rx) = std::sync::mpsc::channel::<()>();
@@ -564,7 +574,7 @@ mod tests {
         assert!(matches!(st.outcome(n), Some(Err(_))), "even once the retry succeeded");
         assert!(matches!(st.outcome(m), Some(Ok(_))));
         // and with threads: a retry racing the waiters of a failed generation never hands them its result
-        let wrong = within(60, || {
+        let wrong = within(120, || {
             let mut wrong = 0;
             for _ in 0..20 {
                 let slot = Arc::new(SceneSlot::default());

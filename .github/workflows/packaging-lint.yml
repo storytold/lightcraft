@@ -21,6 +21,7 @@ concurrency:
 
 jobs:
   lint:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     env:
       ACTIONLINT_VERSION: 1.7.12
@@ -58,6 +59,11 @@ jobs:
               'Key="Software\LightCraft" Name="InstallFolder"' 'Value="LaunchLightcraft"'; do
             grep -qF "$want" packaging/windows/lightcraft.wxs || { echo "::error::lightcraft.wxs lost: $want"; exit 1; }
           done
+          # The completion page the Publish events point at must actually exist: a Publish alone
+          # does not pull the dialog fragment into the MSI, and without the DialogRef the
+          # installer finishes silently (issues #790, #892).
+          grep -qF '<DialogRef Id="ExitDialog" />' packaging/windows/lightcraft.wxs \
+            || { echo "::error::ExitDialog is not referenced; installs and removes end without a completion dialog"; exit 1; }
           desktop-file-validate packaging/linux/ai.storyteller.lightcraft.desktop
           sed -e 's/@VERSION@/0.0.0/' -e 's/@DATE@/2026-01-01/' packaging/linux/ai.storyteller.lightcraft.metainfo.xml.in >"$RUNNER_TEMP/ai.storyteller.lightcraft.metainfo.xml"
           appstreamcli validate --no-net --explain "$RUNNER_TEMP/ai.storyteller.lightcraft.metainfo.xml"

@@ -900,11 +900,24 @@ pub struct BrushStroke {
     pub density: f64,
     pub erase: bool,
     pub auto_mask: bool,
+    /// Pen pressure (0..1) at each of `points`, recorded when the brush's pressure switch is on: it scales each dab's
+    /// radius and flow. Empty (the default, a mouse or the switch off) is full pressure everywhere; a point past the
+    /// end of a shorter list takes the last value.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pressure: Vec<f32>,
+}
+
+impl BrushStroke {
+    /// The pressure at point `i` (0..1; 1 without pressure data, a hostile value clamped, NaN as 1).
+    pub fn pressure_at(&self, i: usize) -> f32 {
+        let p = self.pressure.get(i).or(self.pressure.last()).copied().unwrap_or(1.0);
+        if p.is_nan() { 1.0 } else { p.clamp(0.0, 1.0) }
+    }
 }
 
 impl Default for BrushStroke {
     fn default() -> Self {
-        Self { points: Vec::new(), size: 0.03, feather: 50.0, flow: 100.0, density: 100.0, erase: false, auto_mask: false }
+        Self { points: Vec::new(), size: 0.03, feather: 50.0, flow: 100.0, density: 100.0, erase: false, auto_mask: false, pressure: Vec::new() }
     }
 }
 

@@ -84,29 +84,29 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
     match shape {
         MaskShape::Object { seg: Some(_), .. } | MaskShape::Prompt { seg: Some(_), .. } => {}
         MaskShape::Object { hint, exclude, .. } if !hint.is_empty() && background => {
-            s.segmenter.model_dir().map_err(ai_err)?;
+            s.segmenter.require_model()?;
             return Ok(Later::Clicks(std::mem::take(hint), std::mem::take(exclude)));
         }
         MaskShape::Object { hint, exclude, seg, .. } if !hint.is_empty() => {
-            *seg = Some(s.segment_clicks(id, &clicks_of(hint, exclude)).map_err(ai_err)?);
+            *seg = Some(segment(s, |s| s.segment_clicks(id, &clicks_of(hint, exclude)))?);
         }
         MaskShape::Object { .. } => {
             // the clicks come later: refuse an Object mask that could never be computed (no
             // model) rather than leave an empty one; in the app, analyze the photo meanwhile
-            s.segmenter.model_dir().map_err(ai_err)?;
+            s.segmenter.require_model()?;
             if background {
-                s.segment_prepare(id).map_err(ai_err)?;
+                segment(s, |s| s.segment_prepare(id))?;
             }
         }
         MaskShape::Prompt { text, .. } if background => {
-            s.segmenter.model_dir().map_err(ai_err)?;
+            s.segmenter.require_model()?;
             if text.trim().is_empty() {
                 return Err(ai_err("describe what to select"));
             }
             return Ok(Later::Text(text.clone()));
         }
         MaskShape::Prompt { text, seg, .. } => {
-            let found = s.segment_text(id, text).map_err(ai_err)?;
+            let found = segment(s, |s| s.segment_text(id, text))?;
             *seg = Some(found.ok_or_else(|| ai_err(format!("nothing matching “{text}” was found in this photo")))?);
         }
         _ => {}
@@ -118,7 +118,7 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
 fn queue_later(s: &mut Session, later: Later, mask: u32, comp: usize, mut out: Value) -> Result<Value> {
     if let Later::Clicks(hint, exclude) = later {
         let id = s.active().ok_or_else(|| ai_err("no active photo"))?;
-        s.segment_clicks_later(id, mask, comp, hint, exclude).map_err(ai_err)?;
+        segment(s, |s| s.segment_clicks_later(id, mask, comp, hint, exclude))?;
         out["pending"] = json!(true);
     }
     Ok(out)
@@ -127,6 +127,13 @@ fn queue_later(s: &mut Session, later: Later, mask: u32, comp: usize, mut out: V
 /// AI mask failures are shown as they are (not as "invalid parameters").
 fn ai_err(msg: impl Into<String>) -> crate::EngineError {
     crate::EngineError::Other(msg.into())
+}
+
+/// A segmentation call: the model is checked first, so a missing one is [`crate::EngineError::ModelMissing`]
+/// (the segmenter's own errors are text).
+fn segment<T>(s: &mut Session, f: impl FnOnce(&mut Session) -> std::result::Result<T, String>) -> Result<T> {
+    s.segmenter.require_model()?;
+    f(s).map_err(ai_err)
 }
 
 pub(crate) fn clicks_of(include: &[Point], exclude: &[Point]) -> Vec<Click> {
@@ -141,6 +148,55 @@ fn masks_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Mas
     s.set_develop(id, d, label)?;
     s.active_mask = active;
     Ok(json!({"activeMask": active}))
+}
+
+/// Most pieces a tapered ⇧-click segment is cut into.
+const MAX_TAPER_STEPS: usize = 64;
+
+/// The strokes a ⇧-click adds: `to` drawn on from point `from`, the last point of stroke `last` (a straight segment
+/// to `to`'s first point, then the rest of `to`). When the brush's size, feather or flow changed since `last`, the
+/// segment is cut into pieces whose values step from `last`'s to `to`'s, so the line tapers; strokes combine by their
+/// maximum, so the pieces join without building up.
+fn connected_strokes(from: Point, last: &BrushStroke, to: BrushStroke) -> Vec<BrushStroke> {
+    let Some(&first) = to.points.first() else { return vec![to] };
+    let same = |a: f64, b: f64| (a - b).abs() <= 1e-9;
+    // pen pressure along the line: the last dab's at its start, the click's at its end (none when neither has any)
+    let pressured = !last.pressure.is_empty() || !to.pressure.is_empty();
+    let (p_from, p_to) = (last.pressure_at(0), to.pressure_at(0));
+    if same(last.size, to.size) && same(last.feather, to.feather) && same(last.flow, to.flow) {
+        let mut points = Vec::with_capacity(to.points.len() + 1);
+        points.push(from);
+        points.extend(to.points.iter().copied());
+        let pressure = if pressured { std::iter::once(p_from).chain((0..to.points.len()).map(|i| to.pressure_at(i))).collect() } else { Vec::new() };
+        return vec![BrushStroke { points, pressure, ..to }];
+    }
+    // about 5% of size, or 2 points of feather or flow, per piece
+    let ratio = if last.size > 0.0 && to.size > 0.0 { (to.size / last.size).ln().abs() / 1.05f64.ln() } else { 0.0 };
+    let needed = [ratio, (to.feather - last.feather).abs() / 2.0, (to.flow - last.flow).abs() / 2.0]
+        .into_iter()
+        .filter(|v| v.is_finite())
+        .fold(1.0f64, f64::max);
+    let steps = (needed.ceil() as usize).clamp(1, MAX_TAPER_STEPS);
+    let lerp = |a: f64, b: f64, t: f64| a + (b - a) * t;
+    let at = |t: f64| Point::new(lerp(from.x, first.x, t), lerp(from.y, first.y, t));
+    let mut out: Vec<BrushStroke> = (0..steps)
+        .map(|i| {
+            let (t0, t1) = (i as f64 / steps as f64, (i + 1) as f64 / steps as f64);
+            let p = |t: f64| (f64::from(p_from) + (f64::from(p_to) - f64::from(p_from)) * t) as f32;
+            BrushStroke {
+                points: vec![at(t0), at(t1)],
+                size: lerp(last.size, to.size, t1),
+                feather: lerp(last.feather, to.feather, t1),
+                flow: lerp(last.flow, to.flow, t1),
+                pressure: if pressured { vec![p(t0), p(t1)] } else { Vec::new() },
+                ..to.clone()
+            }
+        })
+        .collect();
+    if to.points.len() > 1 {
+        out.push(to);
+    }
+    out
 }
 
 fn mask_id(p: &Value, active: Option<u32>, c: &str) -> Result<u32> {
@@ -167,15 +223,18 @@ pub fn specs() -> Vec<CommandSpec> {
                 let name = str_param(p, "name").map(str::to_string);
                 if let Later::Text(text) = &later {
                     let id = s.active().ok_or_else(|| bad("mask.add", "no active photo"))?;
-                    s.segment_text_later(id, None, "add", name, text).map_err(ai_err)?;
+                    segment(s, |s| s.segment_text_later(id, None, "add", name, text))?;
                     return Ok(json!({"pending": true}));
                 }
                 let next = s.active().and_then(|id| s.develop_of(id)).map(|d| d.next_mask_id()).unwrap_or(1);
+                // the effect last applied to a mask of this kind
+                let adjust = super::mask_effects::new_mask_adjust(s, &kind);
                 let out = masks_edit(s, "mask.add", "Add Mask", |masks, active| {
                     masks.push(Mask {
                         id: next,
                         name: name.unwrap_or_else(|| format!("Mask {next}")),
                         components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }],
+                        adjust,
                         ..Default::default()
                     });
                     *active = Some(next);
@@ -205,7 +264,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let later = resolve_ai(s, &mut shape, "mask.addComponent")?;
                 if let Later::Text(text) = &later {
                     let op = p.get("op").and_then(Value::as_str).unwrap_or("add");
-                    s.segment_text_later(id, Some(mid), op, None, text).map_err(ai_err)?;
+                    segment(s, |s| s.segment_text_later(id, Some(mid), op, None, text))?;
                     return Ok(json!({"pending": true}));
                 }
                 let mut comp = 0;
@@ -223,7 +282,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Brush Stroke",
             [],
             None,
-            "{id?: maskId, points: [[x,y],…] normalized, size?: fraction of long edge (0.03), feather?, flow?, density?, erase?: bool, autoMask?: bool}",
+            "{id?: maskId, points: [[x,y],…] normalized, size?: fraction of long edge (0.03), feather?, flow?, density?, erase?: bool, autoMask?: bool, pressure?: [p,…] pen pressure 0..1 per point (scales each dab's size and flow; omitted: full), connect?: bool — start from the last point of the mask's last stroke (⇧-click), size / feather / flow tapering from that stroke's to these} → {activeMask, connected}",
             has_active,
             |s, p| {
                 let pts: Vec<Point> = p
@@ -233,6 +292,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     .iter()
                     .filter_map(|q| Some(Point::new(q.get(0)?.as_f64()?, q.get(1)?.as_f64()?)))
                     .collect();
+                let pts_len = pts.len();
                 let d = BrushStroke::default();
                 let stroke = BrushStroke {
                     points: pts,
@@ -242,14 +302,18 @@ pub fn specs() -> Vec<CommandSpec> {
                     density: f64_or(p, "density", d.density),
                     erase: bool_or(p, "erase", false),
                     auto_mask: bool_or(p, "autoMask", false),
+                    pressure: pressure_list(p.get("pressure"), pts_len)?,
                 };
+                let connect = bool_or(p, "connect", false);
+                let mut connected = false;
                 let next = s.active().and_then(|id| s.develop_of(id)).map(|d| d.next_mask_id()).unwrap_or(1);
                 let want = p.get("id").and_then(Value::as_u64).map(|v| v as u32).or(s.active_mask);
-                masks_edit(s, "mask.brushStroke", "Brush", |masks, active| {
+                let adjust = super::mask_effects::new_mask_adjust(s, "brush");
+                let mut out = masks_edit(s, "mask.brushStroke", "Brush", |masks, active| {
                     let i = match want.and_then(|m| masks.iter().position(|x| x.id == m)) {
                         Some(i) => i,
                         None => {
-                            masks.push(Mask { id: next, name: format!("Mask {next}"), ..Default::default() });
+                            masks.push(Mask { id: next, name: format!("Mask {next}"), adjust, ..Default::default() });
                             *active = Some(next);
                             masks.len() - 1
                         }
@@ -258,7 +322,28 @@ pub fn specs() -> Vec<CommandSpec> {
                     if let Some(MaskComponent { shape: MaskShape::Brush { strokes }, .. }) =
                         m.components.iter_mut().rev().find(|c| matches!(c.shape, MaskShape::Brush { .. }))
                     {
-                        strokes.push(stroke);
+                        // the previous stroke's end and its brush values (not its points)
+                        let anchor = strokes.last().filter(|_| connect).and_then(|l| {
+                            Some((
+                                *l.points.last()?,
+                                BrushStroke {
+                                    points: Vec::new(),
+                                    size: l.size,
+                                    feather: l.feather,
+                                    flow: l.flow,
+                                    // the pressure the last dab was painted with, when the stroke recorded any
+                                    pressure: if l.pressure.is_empty() { Vec::new() } else { vec![l.pressure_at(l.points.len().saturating_sub(1))] },
+                                    ..BrushStroke::default()
+                                },
+                            ))
+                        });
+                        match anchor {
+                            Some((from, last)) => {
+                                strokes.extend(connected_strokes(from, &last, stroke));
+                                connected = true;
+                            }
+                            None => strokes.push(stroke),
+                        }
                     } else {
                         m.components.push(MaskComponent {
                             name: None,
@@ -268,7 +353,11 @@ pub fn specs() -> Vec<CommandSpec> {
                         });
                     }
                     Ok(())
-                })
+                })?;
+                if let Some(o) = out.as_object_mut() {
+                    o.insert("connected".into(), json!(connected));
+                }
+                Ok(out)
             }
         ),
         cmd!("mask.update", "Update Mask Shape", [], None, "{id?, component?: index (0), shape: MaskShape JSON}", has_active, |s, p| {
@@ -365,10 +454,10 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 if s.segmenter.background && !hint.is_empty() {
                     let out = json!({"include": hint.len(), "exclude": ex.len(), "pending": true});
-                    s.segment_clicks_later(id, mid, k, hint, ex).map_err(ai_err)?;
+                    segment(s, |s| s.segment_clicks_later(id, mid, k, hint, ex))?;
                     return Ok(out);
                 }
-                let seg = if hint.is_empty() { None } else { Some(s.segment_clicks(id, &clicks_of(&hint, &ex)).map_err(ai_err)?) };
+                let seg = if hint.is_empty() { None } else { Some(segment(s, |s| s.segment_clicks(id, &clicks_of(&hint, &ex)))?) };
                 let out = json!({"include": hint.len(), "exclude": ex.len()});
                 masks_edit(s, c, "Object Mask", |masks, _| {
                     let i = find(masks, mid, c)?;
@@ -401,7 +490,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         .rposition(|x| matches!(x.shape, MaskShape::Object { .. } | MaskShape::Prompt { .. }))
                         .ok_or_else(|| bad(c, "the mask has no Object or Describe selection"))?,
                 };
-                let started = s.segment_detail(id, mid, k).map_err(ai_err)?;
+                let started = segment(s, |s| s.segment_detail(id, mid, k))?;
                 Ok(json!({"started": started}))
             }
         ),
@@ -415,7 +504,7 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, _| {
                 let c = "segment.prepare";
                 let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
-                s.segment_prepare(id).map_err(ai_err)?;
+                segment(s, |s| s.segment_prepare(id))?;
                 Ok(json!({"busy": s.segmenter.busy()}))
             }
         ),
@@ -639,7 +728,8 @@ pub fn specs() -> Vec<CommandSpec> {
             let i = find(&mut masks, mid, "mask.move")?;
             let to = match (p.get("to").and_then(Value::as_i64), p.get("delta").and_then(Value::as_i64)) {
                 (Some(t), _) => t,
-                (None, Some(d)) => i as i64 + d,
+                // (an agent's delta can be anything: saturate rather than overflow)
+                (None, Some(d)) => (i as i64).saturating_add(d),
                 (None, None) => return Err(bad("mask.move", "give `to` (index) or `delta`")),
             }
             .clamp(0, masks.len() as i64 - 1) as usize;
@@ -700,7 +790,7 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let c = "spot.findBlemishes";
                 let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
-                let detector = super::face_detect::detector(s).map_err(|e| bad(c, e))?;
+                let detector = super::face_detect::detector(s).map_err(|e| e.into_error(c))?;
                 // the uncropped photo, so positions are the spots' own coordinates
                 let job = s.render_job(id, 1600, 1600, false, false).ok_or_else(|| bad(c, "no photo"))?;
                 let img = job.run().rendered.map_err(|e| bad(c, e))?.image;
@@ -913,7 +1003,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_active,
             |s, p| {
                 let c = "redeye.catchlight";
-                let i = super::f64_req(p, "index", c)? as usize;
+                let i = super::index_req(p, "index", c)?;
                 let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
                 let mut dd = (*s.develop_of(id).unwrap_or_default()).clone();
                 let eye = dd.red_eye.get_mut(i).ok_or_else(|| bad(c, "no such eye"))?;
@@ -928,7 +1018,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("redeye.delete", "Delete Red Eye Correction", [], None, "{index}", has_active, |s, p| {
             let c = "redeye.delete";
-            let i = super::f64_req(p, "index", c)? as usize;
+            let i = super::index_req(p, "index", c)?;
             let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
             let mut dd = (*s.develop_of(id).unwrap_or_default()).clone();
             if i >= dd.red_eye.len() {
@@ -971,7 +1061,7 @@ fn pick_source(s: &mut Session, id: crate::PhotoId, d: &lightcraft_develop::Deve
     lightcraft_pipeline::spots::pick_source(&src, &info, d, spot, avoid)
 }
 
-fn clamp_local(mut a: LocalAdjustments) -> LocalAdjustments {
+pub(crate) fn clamp_local(mut a: LocalAdjustments) -> LocalAdjustments {
     let c = |v: &mut f64, lo: f64, hi: f64| *v = if v.is_finite() { v.clamp(lo, hi) } else { 0.0 };
     c(&mut a.exposure, -4.0, 4.0);
     for v in [
@@ -998,4 +1088,18 @@ fn clamp_local(mut a: LocalAdjustments) -> LocalAdjustments {
     c(&mut a.color_sat, 0.0, 100.0);
     c(&mut a.amount, 0.0, 200.0);
     a
+}
+
+/// `mask.brushStroke`'s `pressure`: one number 0..1 per point (clamped), at most one per point; absent or `null`
+/// is no pressure data.
+fn pressure_list(v: Option<&Value>, points: usize) -> Result<Vec<f32>> {
+    let Some(v) = v.filter(|v| !v.is_null()) else { return Ok(Vec::new()) };
+    let list = v.as_array().ok_or_else(|| bad("mask.brushStroke", "pressure must be a list of numbers 0..1"))?;
+    if list.len() > points {
+        return Err(bad("mask.brushStroke", "pressure has more values than points"));
+    }
+    list.iter()
+        .map(|q| q.as_f64().filter(|f| f.is_finite()).map(|f| f.clamp(0.0, 1.0) as f32))
+        .collect::<Option<Vec<f32>>>()
+        .ok_or_else(|| bad("mask.brushStroke", "pressure must be a list of numbers 0..1"))
 }

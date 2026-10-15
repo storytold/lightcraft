@@ -58,7 +58,7 @@ impl PickRequest {
 }
 
 /// What File ▸ Import Profiles & Presets… opens.
-pub const PRESET_EXTENSIONS: &[&str] = &["lcpreset", "xmp", "lrtemplate", "zip", "dng", "lmp", "mplumpack", "cube"];
+pub const PRESET_EXTENSIONS: &[&str] = &["lcpreset", "xmp", "lrtemplate", "zip", "dng", "lmp", "mplumpack", "cube", "lceffect"];
 /// What Import Point Curve Presets… opens.
 pub const CURVE_PRESET_EXTENSIONS: &[&str] = &["lccurve", "json"];
 

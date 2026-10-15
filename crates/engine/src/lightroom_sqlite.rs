@@ -395,8 +395,10 @@ fn validate_header_fields(header: &[u8], page_size: usize) -> Result<usize, Stri
     if usable < 480 {
         return Err("SQLite usable page size is below 480 bytes".into());
     }
+    // 0 = no schema yet (file format §1.3.10): a catalog whose tables are all still in its WAL
+    // has that in the main file, and the WAL's own page 1 is checked again with the overlay
     let schema_format = be_u32(header, 44)?;
-    if !(1..=4).contains(&schema_format) {
+    if !(0..=4).contains(&schema_format) {
         return Err("unsupported SQLite schema format".into());
     }
     Ok(reserved)
@@ -939,6 +941,34 @@ mod tests {
         let (table_names, table_alias) = parse_create_table("CREATE TABLE t (id INTEGER, value TEXT, PRIMARY KEY(id))").unwrap();
         assert_eq!(table_names, vec!["id", "value"]);
         assert_eq!(table_alias, Some(0));
+    }
+
+    /// A database file with no schema yet has schema format 0 in its header (file format
+    /// §1.3.10): a catalog created in WAL mode whose tables are all still in its `-wal` file (one
+    /// Lightroom has open and hasn't checkpointed) was refused as "unsupported SQLite schema
+    /// format" before the WAL was looked at. It opens, with no tables; other formats stay refused.
+    #[test]
+    fn schema_format_zero_is_an_empty_database() {
+        let header = |format: u32| {
+            let mut main = vec![0u8; 512];
+            main[..16].copy_from_slice(b"SQLite format 3\0");
+            main[16..18].copy_from_slice(&512u16.to_be_bytes());
+            main[18] = 2;
+            main[19] = 2;
+            main[21] = 64;
+            main[22] = 32;
+            main[23] = 32;
+            main[28..32].copy_from_slice(&1u32.to_be_bytes());
+            main[44..48].copy_from_slice(&format.to_be_bytes());
+            main[56..60].copy_from_slice(&1u32.to_be_bytes());
+            main[100] = 0x0d;
+            main[105..107].copy_from_slice(&512u16.to_be_bytes());
+            main
+        };
+        let db = Database::open_with_wal(header(0), &[]).unwrap();
+        assert!(db.live_tables().unwrap().is_empty());
+        assert!(Database::open_with_wal(header(4), &[]).is_ok());
+        assert_eq!(Database::open_with_wal(header(5), &[]).err().as_deref(), Some("unsupported SQLite schema format"));
     }
 
     #[test]

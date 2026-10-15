@@ -126,6 +126,10 @@ language_table! {
     Ru, "ru", "Русский", "Cyrl", include_str!("../locales/ru.json");
     Fr, "fr", "Français", "Latn", include_str!("../locales/fr.json");
     Uk, "uk", "Українська", "Cyrl", include_str!("../locales/uk.json");
+    Pl, "pl", "Polski", "Latn", include_str!("../locales/pl.json");
+    Cs, "cs", "Čeština", "Latn", include_str!("../locales/cs.json");
+    It, "it", "Italiano", "Latn", include_str!("../locales/it.json");
+    Ka, "ka", "ქართული", "Geor", include_str!("../locales/ka.json");
 }
 
 // The settings file stores the BCP-47 code (`"zh-hans"`), never the Rust variant name, so a
@@ -210,6 +214,33 @@ pub fn startup_failed_message(error: &str, log_file: Option<&str>) -> (String, S
         None => tr_format!("LightCraft could not open its window: {e}", e = error),
     };
     (tr("LightCraft could not start").to_string(), text)
+}
+
+/// The title and text of the message box shown when LightCraft stopped while its window was up
+/// (issue #1337: the window's renderer after the graphics driver reset the GPU), in the UI
+/// language: what happened and, when there is one, the log file to look in.
+pub fn stopped_message(error: &str, log_file: Option<&str>) -> (String, String) {
+    let text = match log_file {
+        Some(path) => tr_format!("LightCraft stopped unexpectedly: {e}\n\nThe log file has the details: {path}", e = error, path = path),
+        None => tr_format!("LightCraft stopped unexpectedly: {e}", e = error),
+    };
+    (tr("LightCraft stopped").to_string(), text)
+}
+
+/// Whether sentence case may upper-case `c`. Georgian has no case: upper-casing Mkhedruli would
+/// turn it into Mtavruli, a different (all-caps) script, so Georgian letters stay as written.
+pub fn capitalizes(c: char) -> bool {
+    !matches!(c, '\u{10A0}'..='\u{10FF}' | '\u{1C90}'..='\u{1CBF}' | '\u{2D00}'..='\u{2D2F}')
+}
+
+/// `text` with its first letter upper-cased ("its input" → "Its input"), unless [`capitalizes`]
+/// says that letter has no capital to take.
+pub fn upper_first(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) if capitalizes(first) => first.to_uppercase().chain(chars).collect(),
+        _ => text.to_string(),
+    }
 }
 
 pub fn builtin_label(source: &str, builtin: bool) -> &str {
@@ -433,6 +464,86 @@ mod tests {
     use super::*;
 
     #[test]
+    fn czech_coverage_of_catalogs_commands_controls_and_rules_is_reported() {
+        let catalog = Locale::Cs.catalog();
+        let keys: std::collections::BTreeSet<&String> = Locale::ALL.iter().flat_map(|language| language.catalog().keys()).collect();
+        let lacking: Vec<_> = keys.into_iter().filter(|key| !catalog.contains_key(key.as_str())).collect();
+        if !lacking.is_empty() {
+            eprintln!("cs lacks {} catalog message(s) (shown in English): {lacking:?}", lacking.len());
+        }
+        let mut labels: Vec<&str> = lightcraft_engine::command_specs().iter().map(|spec| spec.label).collect();
+        labels.extend(crate::menus::ui_commands().map(|command| command.1).filter(|label| !Locale::ALL.iter().any(|locale| locale.name() == *label)));
+        labels.extend(lightcraft_develop::CONTROLS.iter().map(|control| control.label));
+        labels.extend(crate::panels::settings::TABS.iter().map(|(_, label)| *label));
+        labels.extend(lightcraft_catalog::rules::FIELD_GROUPS.iter().map(|group| group.0));
+        labels.extend(lightcraft_engine::rename::TOKENS.iter().map(|token| token.meaning));
+        labels.extend(lightcraft_engine::rename::TEMPLATE_NOTES);
+        let missing: Vec<_> = labels.into_iter().filter(|label| !catalog.contains_key(*label)).collect();
+        if !missing.is_empty() {
+            eprintln!("cs lacks {} display label(s) (shown in English): {missing:?}", missing.len());
+        }
+    }
+
+    #[test]
+    fn czech_switches_persists_and_formats_without_changing_user_values() {
+        use crate::control::{ControlRequest, Outcome};
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        app.run("app.language.czech", serde_json::json!({})).unwrap();
+        assert_eq!(app.ui.language, Locale::Cs);
+        assert_eq!(Locale::Cs.name(), "Čeština");
+        assert_eq!(Locale::Cs.script(), "Latn");
+        assert_eq!(crate::menubar::checked(&app, "app.language.czech"), Some(true));
+        assert_eq!(tr("File"), "Soubor");
+        assert_eq!(tr("Develop"), "Vyvolat");
+        assert_eq!(date_group_label("2026-09-20", false), "Neděle, 20. 9. 2026");
+        assert_eq!(date_group_label("2026-09-20", true), "Neděle, 20.");
+        assert_eq!(date_group_label("2026-09", false), "9. 2026");
+        assert_eq!(date_group_label("2026", false), "2026");
+        assert_eq!(display_time("2026-09-20T16:04:05"), "Neděle, 20. 9. 2026 16:04:05");
+        for n in [0, 1, 2, 4, 5, 11, 21, 22, 25] {
+            assert_eq!(tr_format!("Imported {} photo{}", n, if n == 1 { "" } else { "s" }), format!("Importováno fotografií: {n}"));
+            assert_eq!(
+                tr_format!("{n} {noun}", n = n, noun = tr(if n == 1 { "photo waiting" } else { "photos waiting" })),
+                format!("Čekající fotografie: {n}")
+            );
+        }
+        let name = String::from("Color 1234.56 {title} 日本語");
+        assert_eq!(tr_format!("Added {n} photo{} to “{}”", "s", name, n = 22), format!("Do „{name}“ přidáno fotografií: 22"));
+        assert_eq!(builtin_label("Warm Glow", false), "Warm Glow");
+        assert_eq!(tr("photo-{title}.jpg"), "photo-{title}.jpg");
+        let saved = serde_json::to_string(&app.ui).unwrap();
+        assert_eq!(serde_json::from_str::<crate::state::UiState>(&saved).unwrap().language, Locale::Cs);
+        let ctx = egui::Context::default();
+        for tag in ["cs", "cs-CZ", "cs_CZ.UTF-8", "cs-Latn-CZ"] {
+            assert_eq!(Locale::parse_tag(tag), Some(Locale::Cs));
+            let (request, _) = ControlRequest::new("ui.set", serde_json::json!({"language": tag}));
+            let Outcome::Done(reply) = crate::control::handle(&mut app, &ctx, &request) else { panic!("expected reply") };
+            assert_eq!(reply["ok"], true);
+            assert_eq!(language(), Locale::Cs);
+        }
+        let text = painted_text(&ctx, &mut app, Locale::Cs);
+        assert!(text.contains("Soubor") && text.contains("Expozice"), "{text}");
+        ctx.fonts_mut(|fonts| {
+            for family in [egui::FontFamily::Proportional, egui::FontFamily::Name(crate::theme::FONT_SEMIBOLD.into())] {
+                let font = egui::FontId::new(13.0, family);
+                for ch in "áčďéěíňóřšťúůýžÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ„“".chars() {
+                    assert!(fonts.has_glyph(&font, ch), "missing Czech glyph {ch}");
+                }
+            }
+        });
+        set_language(Locale::En);
+    }
+
+    #[test]
+    fn sentence_case_keeps_georgian_lowercase() {
+        assert_eq!(upper_first("its input is not an image"), "Its input is not an image");
+        assert_eq!(upper_first("ფაილი ვერ იკითხება"), "ფაილი ვერ იკითხება");
+        assert_eq!(upper_first("ᲥᲐᲠᲗᲣᲚᲘ"), "ᲥᲐᲠᲗᲣᲚᲘ");
+        assert_eq!(upper_first(""), "");
+        assert!(capitalizes('a') && capitalizes('ж') && !capitalizes('ქ') && !capitalizes('Ⴀ') && !capitalizes('ⴀ'));
+    }
+
+    #[test]
     fn every_language_has_a_catalog_covering_the_source() {
         assert!(crate::i18n::Locale::En.catalog().is_empty(), "the source language needs no catalog");
         for language in Locale::ALL {
@@ -597,7 +708,7 @@ mod tests {
                 lightcraft_engine::CRAFT_FONTS.iter().filter(|font| font.serves(language.script())).map(|font| font.family).collect();
             faces.dedup();
             if faces.is_empty() {
-                eprintln!("skipped {}: built without a craft-fonts face for {}", language.code(), language.script());
+                lightcraft_testkit::skip!(Fonts, "{}: built without a craft-fonts face for {}", language.code(), language.script());
                 continue;
             }
             ctx.fonts_mut(|fonts| {
@@ -667,6 +778,10 @@ mod tests {
             ("app.language.german", Locale::De),
             ("app.language.russian", Locale::Ru),
             ("app.language.ukrainian", Locale::Uk),
+            ("app.language.polish", Locale::Pl),
+            ("app.language.czech", Locale::Cs),
+            ("app.language.italian", Locale::It),
+            ("app.language.georgian", Locale::Ka),
         ];
         // One command per language, and every command reachable from the menu table.
         assert_eq!(commands.len(), Locale::ALL.len());
@@ -894,6 +1009,31 @@ mod tests {
     }
 
     #[test]
+    fn georgian_switches_formats_counts_and_dates() {
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        app.run("app.language.georgian", serde_json::json!({})).unwrap();
+        assert_eq!(app.ui.language, Locale::Ka);
+        assert_eq!(crate::menubar::checked(&app, "app.language.georgian"), Some(true));
+        assert_eq!(tr("Light"), "სინათლე");
+        assert_eq!(date_group_label("2026-09-20", false), "კვირა, 20.09.2026");
+        assert_eq!(date_group_label("2026-09", false), "09.2026");
+        for n in [0, 1, 2, 5, 21] {
+            assert_eq!(tr_format!("Imported {} photo{}", n, if n == 1 { "" } else { "s" }), format!("იმპორტირებულია ფოტო: {n}"));
+        }
+        assert_eq!(tr_format!("Added {n} photo{} to “{}”", "s", "Trip", n = 3), "„Trip“-ს დაემატა ფოტო: 3");
+        let saved = serde_json::to_string(&app.ui).unwrap();
+        assert!(saved.contains(r#""language":"ka""#));
+        for code in ["ka", "ka-GE", "ka_GE.UTF-8"] {
+            assert_eq!(Locale::parse_tag(code), Some(Locale::Ka));
+        }
+        // no Mtavruli: Georgian UI text is written in lowercase Mkhedruli
+        for text in Locale::Ka.catalog().values() {
+            assert!(!text.chars().any(|c| ('\u{1C90}'..='\u{1CBF}').contains(&c)), "{text}");
+        }
+        set_language(Locale::En);
+    }
+
+    #[test]
     fn ukrainian_panels_dialogs_and_letters_paint_with_bundled_fonts() {
         let ctx = fonts_ctx(&[]);
         let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
@@ -915,6 +1055,109 @@ mod tests {
                     .chain(Locale::Uk.catalog().values().flat_map(|text| text.chars()).filter(|ch| ('\u{0400}'..='\u{04ff}').contains(ch)))
                 {
                     assert!(fonts.has_glyph(&font, ch), "missing Ukrainian glyph {ch}");
+                }
+            }
+        });
+        set_language(Locale::En);
+    }
+
+    /// Italian's coverage of every catalog message and display label, reported like Ukrainian's.
+    #[test]
+    fn italian_coverage_of_catalogs_commands_controls_and_rules_is_reported() {
+        let catalog = Locale::It.catalog();
+        let keys: std::collections::BTreeSet<&String> = Locale::ALL.iter().flat_map(|language| language.catalog().keys()).collect();
+        let lacking: Vec<_> = keys.into_iter().filter(|key| !catalog.contains_key(key.as_str())).collect();
+        if !lacking.is_empty() {
+            eprintln!("it lacks {} catalog message(s) (shown in English): {lacking:?}", lacking.len());
+        }
+        let mut labels: Vec<&str> = lightcraft_engine::command_specs().iter().map(|spec| spec.label).collect();
+        labels.extend(crate::menus::ui_commands().map(|command| command.1).filter(|label| !Locale::ALL.iter().any(|locale| locale.name() == *label)));
+        labels.extend(lightcraft_develop::CONTROLS.iter().map(|control| control.label));
+        labels.extend(crate::panels::settings::TABS.iter().map(|(_, label)| *label));
+        for (_, label, kind) in lightcraft_catalog::rules::FIELDS {
+            labels.push(label);
+            labels.extend(lightcraft_catalog::rules::ops_for(*kind).iter().map(|(_, label)| *label));
+        }
+        labels.extend(lightcraft_engine::rename::TOKENS.iter().map(|token| token.meaning));
+        labels.extend(lightcraft_engine::rename::TEMPLATE_NOTES);
+        let missing: Vec<_> = labels.into_iter().filter(|label| !catalog.contains_key(*label)).collect();
+        if !missing.is_empty() {
+            eprintln!("it lacks {} display label(s) (shown in English): {missing:?}", missing.len());
+        }
+    }
+
+    #[test]
+    fn italian_switches_persists_formats_dates_and_preserves_values() {
+        use crate::control::{ControlRequest, Outcome};
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        app.run("app.language.italian", serde_json::json!({})).unwrap();
+        assert_eq!(app.ui.language, Locale::It);
+        assert_eq!(crate::menubar::checked(&app, "app.language.italian"), Some(true));
+        assert_eq!(tr("Light"), "Luce");
+        assert_eq!(tr("Landscape"), "Paesaggio");
+        assert_eq!(tr("Home"), "Cartella personale");
+        assert_eq!(date_group_label("2026-09-20", false), "Domenica 20/09/2026");
+        assert_eq!(date_group_label("2026-09", false), "09/2026");
+        assert_eq!(display_time("2026-09-20T16:04:05"), "Domenica 20/09/2026 16:04:05");
+        // Italian agrees adjectives with the count ("1 foto importata", "2 foto importate"), so the
+        // count follows a label instead, which reads right for every number; the English plural
+        // suffix is consumed and never shows.
+        for n in [0, 1, 2, 5, 11, 21, 22, 25, 111] {
+            assert_eq!(tr_format!("Imported {} photo{}", n, if n == 1 { "" } else { "s" }), format!("Foto importate: {n}"));
+            assert_eq!(tr_format!("{} files and {f} folder{}", n, "s", f = n), format!("{n} file, cartelle: {n}"));
+            let noun = tr(if n == 1 { "cached picture" } else { "cached pictures" });
+            let expected = if n == 1 { "1 immagine in cache".to_string() } else { format!("{n} immagini in cache") };
+            assert_eq!(tr_format!("{n} {noun}", n = n, noun = noun), expected);
+        }
+        // This trailing argument is queue progress, not an English plural suffix.
+        let queued = tr_format!(" · {queued} waiting", queued = 5);
+        assert_eq!(
+            tr_format!("Denoising {name}: {done} of {total} tiles{}", queued, name = "IMG.CR3", done = 1, total = 4),
+            "Riduzione disturbo di IMG.CR3: 1 di 4 riquadri · in attesa: 5"
+        );
+        let name = "Color {title} 日本語";
+        assert_eq!(tr_format!("Added {n} photo{} to “{}”", "s", name, n = 22), format!("Foto aggiunte a “{name}”: 22"));
+        assert_eq!(builtin_label("Warm Glow", false), "Warm Glow");
+        assert_eq!(builtin_label("Warm Glow", true), "Bagliore caldo");
+        assert_eq!(tr("photo-{title}.jpg"), "photo-{title}.jpg");
+        assert_eq!(tr("develop.set"), "develop.set");
+        let saved = serde_json::to_string(&app.ui).unwrap();
+        assert!(saved.contains(r#""language":"it""#));
+        assert_eq!(serde_json::from_str::<crate::state::UiState>(&saved).unwrap().language, Locale::It);
+        let ctx = egui::Context::default();
+        for code in ["it", "it-IT", "it_IT.UTF-8", "it-Latn-IT", "it-CH"] {
+            assert_eq!(Locale::parse_tag(code), Some(Locale::It));
+            let (request, _) = ControlRequest::new("ui.set", serde_json::json!({"language": code}));
+            let Outcome::Done(reply) = crate::control::handle(&mut app, &ctx, &request) else { panic!("expected reply") };
+            assert_eq!(reply["ok"], true);
+            assert_eq!(language(), Locale::It);
+        }
+        set_language(Locale::En);
+    }
+
+    #[test]
+    fn italian_panels_dialogs_and_letters_paint_with_bundled_fonts() {
+        let ctx = fonts_ctx(&[]);
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        app.ui.left_panel = true;
+        let text = painted_text(&ctx, &mut app, Locale::It);
+        assert!(text.contains("Le mie foto") && text.contains("Tutte le foto"), "{text}");
+        for (command, title) in
+            [("app.about", "Informazioni su LightCraft"), ("app.shortcuts", "Scorciatoie da tastiera"), ("app.settings", "Impostazioni")]
+        {
+            app.ui.dialog = None;
+            app.run(command, serde_json::json!({})).unwrap();
+            let text = painted_text(&ctx, &mut app, Locale::It);
+            assert!(text.contains(title), "{command}: {text}");
+        }
+        ctx.fonts_mut(|fonts| {
+            for family in [egui::FontFamily::Proportional, egui::FontFamily::Name(crate::theme::FONT_SEMIBOLD.into())] {
+                let font = egui::FontId::new(13.0, family);
+                for ch in "àèéìòùÀÈÉÌÒÙ’“”«»"
+                    .chars()
+                    .chain(Locale::It.catalog().values().flat_map(|text| text.chars()).filter(|ch| ('\u{00c0}'..='\u{017f}').contains(ch)))
+                {
+                    assert!(fonts.has_glyph(&font, ch), "missing Italian glyph {ch}");
                 }
             }
         });
@@ -1062,7 +1305,7 @@ mod tests {
     }
 
     #[test]
-    fn german_and_ukrainian_buttons_fit_the_bottom_bar_and_export_dialog() {
+    fn german_ukrainian_and_italian_buttons_fit_the_bottom_bar_and_export_dialog() {
         fn collect(shape: &egui::epaint::Shape, bounds: &mut Vec<(String, egui::Rect)>) {
             match shape {
                 egui::epaint::Shape::Text(shape) => {
@@ -1072,7 +1315,7 @@ mod tests {
                 _ => {}
             }
         }
-        for language in [Locale::De, Locale::Uk] {
+        for language in [Locale::De, Locale::Uk, Locale::It] {
             let ctx = fonts_ctx(&[]);
             let services = crate::Services { pick_folder: Some(Box::new(|| None)), ..Default::default() };
             let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
@@ -1200,7 +1443,7 @@ mod tests {
         let samples = [(Locale::Ja, "日本語の文字"), (Locale::ZhHans, "简体中文字"), (Locale::ZhHant, "繁體中文字")];
         for (language, sample) in samples {
             if !lightcraft_engine::CRAFT_FONTS.iter().any(|font| font.serves(language.script())) {
-                eprintln!("skipped {}: built without a craft-fonts face for {}", language.code(), language.script());
+                lightcraft_testkit::skip!(Fonts, "{}: built without a craft-fonts face for {}", language.code(), language.script());
                 continue;
             }
             set_language(language);

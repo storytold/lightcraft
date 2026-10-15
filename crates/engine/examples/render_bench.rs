@@ -9,7 +9,15 @@
 //! export of each (decode + render + encode). Prints minimum wall-clock and minimum process CPU
 //! time: on a shared machine the CPU time shows the work done, wall-clock also the wait for cores.
 //! Each scenario runs on the CPU pipeline and, when a GPU adapter exists, on `lightcraft-gpu`
-//! (second column; `LIGHTCRAFT_GPU=0` for the CPU only).
+//! (second column; `LIGHTCRAFT_GPU=0` for the CPU only, `GPU_ONLY=1` for the GPU only).
+//!
+//! `ONLY=window`: a 1:1 zoom window cut from the full-size original (the loupe's `Slot::Region`):
+//! the first window of a photo, a pan, and exposure / draft / NR changes with a warm stage cache;
+//! `DUMP=file` writes the GPU window's RGBA bytes, for pixel A/B comparisons between builds.
+//! Opening a photo, per file: `ONLY=source` (decode steps), `ONLY=load` (what the app's loaders
+//! cost: file read, decode, binning, embedded stand-ins, `load_bytes(2560)`, the fs loader),
+//! `ONLY=load1` (decode checksum + `load_bytes(2560)`; `LOADONLY=1`: only that, for a profiler),
+//! `ONLY=jpeg` (a JPEG decoded to fit 256–2560 px boxes).
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -88,6 +96,63 @@ fn main() {
     let n: usize = std::env::var("N").ok().and_then(|v| v.parse().ok()).unwrap_or(5);
     let only = std::env::var("ONLY").unwrap_or_default();
     let run = |name: &str| only.is_empty() || only.split(',').any(|o| name.contains(o));
+    if only == "jpeg" {
+        // a JPEG (e.g. an embedded preview pulled out with exiftool) decoded to fit a few boxes
+        for path in &args {
+            let bytes = std::fs::read(path).expect("read");
+            for edge in [256u32, 512, 1600, 2560] {
+                let o = lightcraft_codecs::DecodeOptions::fit(edge, edge);
+                let d = lightcraft_codecs::decode(&bytes, o).expect("decode");
+                println!(
+                    "  {path} fit {edge}: {}×{} {}",
+                    d.image.width,
+                    d.image.height,
+                    best(n, || drop(lightcraft_codecs::decode(&bytes, o).expect("decode")))
+                );
+            }
+        }
+        return;
+    }
+    if only == "load" || only == "load1" {
+        // opening a photo in the loupe, step by step: what the app's loaders cost (per file)
+        for path in &args {
+            let bytes = std::fs::read(path).expect("read");
+            println!("{path}");
+            if std::env::var("LOADONLY").is_ok() {
+                // only the preview load (for a profiler)
+                println!("  {:<36} {}", "load_bytes(2560):", best(n, || drop(lightcraft_engine::files::load_bytes(&bytes, 2560).expect("load"))));
+                continue;
+            }
+            println!("  {:<36} {}", "file read:", best(n, || drop(std::fs::read(path).expect("read"))));
+            println!("  {:<36} {}", "raw decode:", best(n, || drop(lightcraft_raw::decode(&bytes).expect("decode"))));
+            let mut raw = lightcraft_raw::decode(&bytes).expect("decode");
+            if let lightcraft_raw::RawData::U16(d) = &raw.data {
+                let sum = d.iter().enumerate().fold(0u64, |a, (i, &v)| a.wrapping_mul(31).wrapping_add(v as u64 ^ i as u64));
+                println!("  decode checksum: {sum:016x}");
+            }
+            if only == "load1" {
+                println!("  {:<36} {}", "load_bytes(2560):", best(n, || drop(lightcraft_engine::files::load_bytes(&bytes, 2560).expect("load"))));
+                continue;
+            }
+            raw.opcodes.list3.retain(|op| !op.is_lens_correction());
+            if let Some(k) = lightcraft_engine::files::bin_factor(&raw, 2560) {
+                println!("  {:<36} {}", format!("binned ×{k} masked:"), best(n, || drop(raw.develop_binned_masked(k, 0.99))));
+            }
+            for edge in [2560usize, 1600] {
+                println!(
+                    "  {:<36} {}",
+                    format!("embedded srgb, whole file ({edge}):"),
+                    best(n, || drop(lightcraft_engine::files::embedded_preview_srgb(&bytes, edge)))
+                );
+                let quick = lightcraft_engine::files::fs_preview_loader();
+                println!("  {:<36} {}", format!("fs_preview_loader ({edge}):"), best(n, || drop(quick(path, edge))));
+            }
+            println!("  {:<36} {}", "load_bytes(2560):", best(n, || drop(lightcraft_engine::files::load_bytes(&bytes, 2560).expect("load"))));
+            let (loader, _) = lightcraft_engine::files::fs_hooks();
+            println!("  {:<36} {}", "fs loader (2560, read+load):", best(n, || drop(loader(path, 2560).expect("load"))));
+        }
+        return;
+    }
     if only == "source" {
         // opening a photo: where the time goes before the first sharp loupe (per file)
         for path in &args {
@@ -152,10 +217,16 @@ fn main() {
         Some(a) => println!("gpu: {a} (device + kernels: {:.0} ms)", t.elapsed().as_secs_f64() * 1e3),
         None => println!("gpu: none"),
     }
-    let backends: &[bool] = if gpu { &[false, true] } else { &[false] };
+    // `GPU_ONLY=1`: skip the CPU column (profiling the GPU path)
+    let backends: &[bool] = match (gpu, std::env::var_os("GPU_ONLY").is_some()) {
+        (true, true) => &[true],
+        (true, false) => &[false, true],
+        _ => &[false],
+    };
     let row = |name: &str, f: &mut dyn FnMut(bool)| {
         let cols: Vec<String> = backends.iter().map(|&g| format!("{}", best(n, || f(g)))).collect();
-        println!("{name:<38} cpu: {}{}", cols[0], cols.get(1).map(|g| format!("  |  gpu: {g}")).unwrap_or_default());
+        let first = if backends[0] { "gpu" } else { "cpu" };
+        println!("{name:<38} {first}: {}{}", cols[0], cols.get(1).map(|g| format!("  |  gpu: {g}")).unwrap_or_default());
     };
     let preview = Arc::new(fit(&full, 2560, 2560, Filter::Box));
     let s = typical();
@@ -213,6 +284,68 @@ fn main() {
             t.detail.nr_luminance = 30.0 + k % 50.0;
             drop(develop(&preview, &info, &t, &view, Some(&caches[g as usize]), g));
         });
+    }
+    if run("window") {
+        // a 1:1 zoom window (the loupe's `Slot::Region`): visible 1920×1200 + margin, snapped to the
+        // 256 px grid, cut from the full-resolution original (`ui-egui` `region::window_for`)
+        use lightcraft_pipeline::PixelWindow;
+        let (fw, fh) = (full.width, full.height);
+        let win = |cx: usize, cy: usize| {
+            let snap = |v: usize| v / 256 * 256;
+            let (x, y) = (snap(cx.saturating_sub(960 + 512)), snap(cy.saturating_sub(600 + 512)));
+            PixelWindow { x, y, w: 3072.min(fw - x), h: 2304.min(fh - y) }
+        };
+        let at = |w: PixelWindow, q: Quality| RenderRequest { window: Some(w), quality: q, ..RenderRequest::fit(fw, fh) };
+        let w0 = win(fw / 2, fh / 2);
+        println!("window {}×{} at ({}, {}) of {fw}×{fh}", w0.w, w0.h, w0.x, w0.y);
+        // first window of a photo: nothing cached (the GPU uploads the original: `shared_source`)
+        row("window first (upload original):", &mut |g| {
+            lightcraft_engine::gpu::trim_pool(0);
+            drop(develop(&full, &info, &s, &at(w0, Quality::Full), Some(&StageCache::default()), g))
+        });
+        let wc = [StageCache::default(), StageCache::default()];
+        for g in backends {
+            drop(develop(&full, &info, &s, &at(w0, Quality::Full), Some(&wc[*g as usize]), *g));
+        }
+        let mut step = 0usize;
+        row("window pan (new window, warm src):", &mut |g| {
+            step += 1;
+            let w = win(fw / 2 + 512 * (step % 4 + 1), fh / 2);
+            drop(develop(&full, &info, &s, &at(w, Quality::Full), Some(&wc[g as usize]), g))
+        });
+        for g in backends {
+            drop(develop(&full, &info, &s, &at(w0, Quality::Full), Some(&wc[*g as usize]), *g));
+        }
+        row("window exposure change (warm):", &mut |g| {
+            let mut t = s.clone();
+            k += 1.0;
+            t.light.exposure = 0.3 + k * 0.01;
+            drop(develop(&full, &info, &t, &at(w0, Quality::Full), Some(&wc[g as usize]), g));
+        });
+        row("window draft exposure drag (warm):", &mut |g| {
+            let mut t = s.clone();
+            k += 1.0;
+            t.light.exposure = 0.3 + k * 0.01;
+            drop(develop(&full, &info, &t, &at(w0, Quality::Draft), Some(&wc[g as usize]), g));
+        });
+        row("window NR change (warm):", &mut |g| {
+            let mut t = s.clone();
+            k += 1.0;
+            t.detail.nr_luminance = 30.0 + k % 50.0;
+            drop(develop(&full, &info, &t, &at(w0, Quality::Full), Some(&wc[g as usize]), g));
+        });
+        // `DUMP=file`: the GPU window's raw RGBA bytes (A/B pixel comparisons between builds)
+        if let (true, Some(path)) = (gpu, std::env::var_os("DUMP")) {
+            let g = develop(&full, &info, &s, &at(w0, Quality::Full), Some(&StageCache::default()), true).image;
+            let bytes: Vec<u8> = g.data.iter().flatten().copied().collect();
+            std::fs::write(path, bytes).expect("dump");
+        }
+        if gpu && std::env::var_os("GPU_ONLY").is_none() {
+            let c = develop(&full, &info, &s, &at(w0, Quality::Full), None, false).image;
+            let g = develop(&full, &info, &s, &at(w0, Quality::Full), None, true).image;
+            let (max, mean) = diff(&c, &g);
+            println!("gpu vs cpu, window: max {max} LSB, mean {mean:.4} LSB");
+        }
     }
     if run("finish") {
         // per-pixel stage cost by feature (warm cache: exposure changes only)

@@ -245,10 +245,9 @@ fn box_pass(cx: &mut Cx<'_>, horizontal: bool, src: &Buf, dst: &Buf, (w, h): (us
 /// Gaussian blur of a `w × h` image of `nc` interleaved channels: three box passes each way
 /// (`lightcraft_raster::blur::gaussian`).
 pub(crate) fn gaussian(cx: &mut Cx<'_>, src: &Buf, w: usize, h: usize, nc: usize, sigma: f32) -> Buf {
-    if sigma <= 0.3 || w * h == 0 {
+    let Some(radii) = lightcraft_raster::blur::radii_for(sigma, w, h) else {
         return cx.copy(src);
-    }
-    let radii = lightcraft_raster::blur::box_radii(sigma);
+    };
     let passes: Vec<(bool, usize)> = radii.iter().map(|r| (true, *r)).chain(radii.iter().map(|r| (false, *r))).filter(|p| p.1 > 0).collect();
     if passes.is_empty() {
         return cx.copy(src);
@@ -823,7 +822,7 @@ fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, ho
 fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
-    let (lum, col) = local::nr_params(&plan.settings, plan.src_long, plan.frame.output_long(w, h));
+    let (lum, col) = local::nr_params(&plan.settings, plan.detail_scale);
     let mut img = img;
     if let Some(nr) = lum {
         let l = cx.gpu.buffer(n);
@@ -1014,7 +1013,8 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
                 }
                 MaskShape::Brush { strokes } => {
                     let dabs: Vec<_> = strokes.iter().map(|st| lightcraft_pipeline::masks::brush_dabs(st, frame, w, h)).collect();
-                    if dabs.iter().map(|d| d.dabs.len()).sum::<usize>() > MAX_DABS {
+                    // pen pressure varies radius and flow per dab, which the kernel doesn't take: the CPU rasterizes it
+                    if dabs.iter().map(|d| d.dabs.len()).sum::<usize>() > MAX_DABS || dabs.iter().any(|d| !d.pressure.is_empty()) {
                         None
                     } else if dabs.iter().any(|d| d.auto) {
                         // Auto Mask: stroke by stroke (each one refined before it's combined)

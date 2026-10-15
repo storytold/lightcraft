@@ -26,6 +26,108 @@ impl Default for ParseOptions {
     }
 }
 
+impl ParseOptions {
+    /// The value budget for `data_len` bytes of input: [`Self::value_budget`], else `8 × data_len + 1 MiB`.
+    pub fn budget_for(&self, data_len: usize) -> u64 {
+        self.value_budget.unwrap_or((data_len as u64).saturating_mul(8).saturating_add(1 << 20))
+    }
+}
+
+/// Where a directory's entries are and how many of them the reader reads, as [`directory_entries`] found them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DirectoryEntries {
+    /// Position of the first entry.
+    table: usize,
+    /// Entries read: the declared count, cut to the entries the data holds and to the `max_entries` limit.
+    read: usize,
+    /// The declared entry count.
+    declared: u64,
+    /// Bytes per entry: 12, or 20 in BigTIFF.
+    entry_size: usize,
+}
+
+impl DirectoryEntries {
+    /// Positions of the entries read, in directory order. Checked arithmetic: the iteration ends rather than
+    /// overflow, whatever the layout.
+    pub fn positions(&self) -> impl Iterator<Item = usize> + use<> {
+        let (table, size) = (self.table, self.entry_size);
+        (0..self.read).map_while(move |i| i.checked_mul(size)?.checked_add(table))
+    }
+
+    /// The number of entries read.
+    pub fn read(&self) -> usize {
+        self.read
+    }
+
+    /// The entry count the directory declares.
+    pub fn declared(&self) -> u64 {
+        self.declared
+    }
+}
+
+/// The directory at `offset` as the reader walks it: its entry table and how many entries it reads. The same errors
+/// as [`parse_ifd_at`] for a directory it can't read: past the data, empty, or without room for one entry.
+pub fn directory_entries(data: &[u8], offset: u64, order: ByteOrder, bigtiff: bool, max_entries: usize) -> Result<DirectoryEntries> {
+    let pos = usize::try_from(offset).map_err(|_| TiffError::Truncated(offset))?;
+    let (n, head, entry_size) = if bigtiff {
+        (order.read_u64(data, pos).ok_or(TiffError::Truncated(offset))?, 8usize, 20usize)
+    } else {
+        (order.read_u16(data, pos).ok_or(TiffError::Truncated(offset))? as u64, 2, 12)
+    };
+    let table = pos + head;
+    let fit = (data.len().saturating_sub(table) / entry_size) as u64;
+    let read = n.min(fit).min(max_entries as u64) as usize;
+    if n == 0 {
+        return Err(TiffError::Invalid(format!("empty IFD at {offset}")));
+    }
+    if read == 0 {
+        return Err(TiffError::Truncated(offset));
+    }
+    Ok(DirectoryEntries { table, read, declared: n, entry_size })
+}
+
+/// A directory entry the reader can read: its tag, type and count, and where its values are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EntrySpan {
+    pub tag: u16,
+    pub field_type: FieldType,
+    pub count: u64,
+    /// Position of the values in the data: the entry's own value field when they fit it, else `base` plus the offset
+    /// stored there.
+    pub start: u64,
+    /// `count × size` bytes.
+    pub len: u64,
+}
+
+/// The entry at `pos`, when the reader reads it: a known field type, `count × size` without overflow, and values
+/// inside `data`. Nothing is decoded; [`parse_ifd_at`] also drops an entry whose values exceed what is left of its
+/// value budget ([`ParseOptions::budget_for`]), which this leaves to the caller.
+pub fn entry_span(data: &[u8], pos: usize, order: ByteOrder, bigtiff: bool, base: u64) -> Option<EntrySpan> {
+    let tag = order.read_u16(data, pos)?;
+    let field_type = FieldType::from_u16(order.read_u16(data, pos.checked_add(2)?)?)?;
+    let (count, field, inline) = if bigtiff {
+        (order.read_u64(data, pos.checked_add(4)?)?, pos.checked_add(12)?, 8u64)
+    } else {
+        (order.read_u32(data, pos.checked_add(4)?)? as u64, pos.checked_add(8)?, 4)
+    };
+    let len = count.checked_mul(field_type.size() as u64)?;
+    let start = if len <= inline {
+        field as u64
+    } else {
+        let rel = if bigtiff { order.read_u64(data, field)? } else { order.read_u32(data, field)? as u64 };
+        base.checked_add(rel)?
+    };
+    let end = start.checked_add(len)?;
+    (end <= data.len() as u64).then_some(EntrySpan { tag, field_type, count, start, len })
+}
+
+/// Whether a directory declaring `declared` entries was read whole (`read` entries), so that its next-IFD pointer
+/// follows them. The counts compare as 64-bit numbers: narrowing the declared count to `usize` instead would, on a
+/// 32-bit target, let a BigTIFF declaring 4,294,967,297 entries but holding one pass for a whole directory.
+fn reads_every_entry(declared: u64, read: usize) -> bool {
+    u64::try_from(read).is_ok_and(|read| read == declared)
+}
+
 /// Parse the header: (byte order, bigtiff, first IFD offset).
 pub(crate) fn header(data: &[u8]) -> Result<(ByteOrder, bool, u64)> {
     header_with(data, true)
@@ -97,7 +199,7 @@ struct Ctx<'a> {
 
 impl<'a> Ctx<'a> {
     fn new(data: &'a [u8], order: ByteOrder, big: bool, opts: &'a ParseOptions) -> Self {
-        let budget = opts.value_budget.unwrap_or((data.len() as u64).saturating_mul(8).saturating_add(1 << 20));
+        let budget = opts.budget_for(data.len());
         Self { data, order, big, opts, visited: HashSet::new(), budget }
     }
 
@@ -116,33 +218,19 @@ impl<'a> Ctx<'a> {
         if !self.visited.insert(offset) {
             return Err(TiffError::Invalid(format!("IFD loop at {offset}")));
         }
-        let pos = usize::try_from(offset).map_err(|_| TiffError::Truncated(offset))?;
-        let (n, head, entry_size, inline) = if self.big {
-            (self.order.read_u64(self.data, pos).ok_or(TiffError::Truncated(offset))?, 8usize, 20usize, 8usize)
-        } else {
-            (self.order.read_u16(self.data, pos).ok_or(TiffError::Truncated(offset))? as u64, 2, 12, 4)
-        };
-        let table = pos + head;
-        let fit = (self.data.len().saturating_sub(table) / entry_size) as u64;
-        let n_read = n.min(fit).min(self.opts.max_entries as u64) as usize;
-        if n == 0 {
-            return Err(TiffError::Invalid(format!("empty IFD at {offset}")));
-        }
-        if n_read == 0 {
-            return Err(TiffError::Truncated(offset));
-        }
-        let mut entries = Vec::with_capacity(n_read);
-        for i in 0..n_read {
-            let p = table + i * entry_size;
-            if let Some(e) = self.entry(p, base, inline) {
+        let dir = directory_entries(self.data, offset, self.order, self.big, self.opts.max_entries)?;
+        let mut entries = Vec::with_capacity(dir.read);
+        for p in dir.positions() {
+            if let Some(e) = self.entry(p, base) {
                 entries.push(e);
             }
         }
         entries.sort_by_key(|e| e.tag);
         entries.dedup_by_key(|e| e.tag);
-        let next_pos = table + (n as usize).saturating_mul(entry_size);
-        let next = if n as usize == n_read {
-            match self.read_off(next_pos) {
+        // the next-IFD pointer follows the last entry, read only when every declared entry was (checked: a BigTIFF
+        // count can be anything up to u64::MAX)
+        let next = if reads_every_entry(dir.declared, dir.read) {
+            match dir.read.checked_mul(dir.entry_size).and_then(|n| n.checked_add(dir.table)).and_then(|p| self.read_off(p)) {
                 Some(0) | None => 0,
                 Some(v) => base.checked_add(v).unwrap_or(0),
             }
@@ -180,33 +268,19 @@ impl<'a> Ctx<'a> {
         ifd.interop = interop;
     }
 
-    fn entry(&mut self, p: usize, base: u64, inline: usize) -> Option<Entry> {
-        let o = self.order;
-        let tag = o.read_u16(self.data, p)?;
-        let typ = FieldType::from_u16(o.read_u16(self.data, p + 2)?)?;
-        let (count, field) = if self.big { (o.read_u64(self.data, p + 4)?, p + 12) } else { (o.read_u32(self.data, p + 4)? as u64, p + 8) };
-        let total = count.checked_mul(typ.size() as u64)?;
-        let start = if total <= inline as u64 {
-            field as u64
-        } else {
-            let rel = self.read_off(field)?;
-            base.checked_add(rel)?
-        };
-        let end = start.checked_add(total)?;
-        if end > self.data.len() as u64 {
+    fn entry(&mut self, p: usize, base: u64) -> Option<Entry> {
+        let span = entry_span(self.data, p, self.order, self.big, base)?;
+        if span.len > self.budget {
             return None;
         }
-        if total > self.budget {
-            return None;
-        }
-        self.budget -= total;
-        let bytes = &self.data[start as usize..end as usize];
-        Some(Entry { tag, value: decode(o, typ, bytes), offset: start })
+        self.budget -= span.len;
+        let bytes = self.data.get(usize::try_from(span.start).ok()?..usize::try_from(span.start + span.len).ok()?)?;
+        Some(Entry { tag: span.tag, value: decode(self.order, span.field_type, bytes), offset: span.start })
     }
 }
 
-/// Decode `bytes` (exactly `count × size` long) as values of type `typ`.
-pub(crate) fn decode(o: ByteOrder, typ: FieldType, b: &[u8]) -> Value {
+/// Decode `bytes` (exactly `count × size` long, or the first values of an entry) as values of type `typ`.
+pub fn decode(o: ByteOrder, typ: FieldType, b: &[u8]) -> Value {
     fn arr<const N: usize>(c: &[u8]) -> [u8; N] {
         let mut a = [0u8; N];
         a.copy_from_slice(c);
@@ -234,5 +308,101 @@ pub(crate) fn decode(o: ByteOrder, typ: FieldType, b: &[u8]) -> Value {
         FieldType::Long8 => Value::Long8(b.as_chunks::<8>().0.iter().map(|c| o.u64(arr(c))).collect()),
         FieldType::Ifd8 => Value::Ifd8(b.as_chunks::<8>().0.iter().map(|c| o.u64(arr(c))).collect()),
         FieldType::SLong8 => Value::SLong8(b.as_chunks::<8>().0.iter().map(|c| o.u64(arr(c)) as i64).collect()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A BigTIFF whose first IFD, at 80, declares `declared` entries but holds one, followed by a next-IFD pointer
+    /// `next`; a valid one-entry IFD sits at 16.
+    fn bigtiff_chain(order: ByteOrder, declared: u64, next: u64) -> Vec<u8> {
+        let ifd = |d: &mut Vec<u8>, count: u64, tag: u16, next: u64| {
+            order.put_u64(d, count);
+            order.put_u16(d, tag);
+            order.put_u16(d, 3);
+            order.put_u64(d, 1);
+            order.put_u16(d, 8);
+            d.extend([0; 6]);
+            order.put_u64(d, next);
+        };
+        let mut d = if order == ByteOrder::Little { b"II".to_vec() } else { b"MM".to_vec() };
+        order.put_u16(&mut d, 43);
+        order.put_u16(&mut d, 8);
+        order.put_u16(&mut d, 0);
+        order.put_u64(&mut d, 80);
+        ifd(&mut d, 1, 0x0101, 0);
+        d.resize(80, 0);
+        ifd(&mut d, declared, 0x0100, next);
+        d
+    }
+
+    #[test]
+    fn only_a_directory_read_whole_has_a_next_pointer() {
+        // the comparison itself, on every target: a declared count past u32::MAX never matches a small read count
+        for (declared, read, whole) in [
+            (0, 0, true),
+            (1, 1, true),
+            (8192, 8192, true),
+            (8193, 8192, false),
+            (1, 0, false),
+            ((1 << 32) + 1, 1, false),
+            ((2 << 32) + 1, 1, false),
+            ((1 << 63) + 1, 1, false),
+            (u64::MAX, 1, false),
+        ] {
+            assert_eq!(reads_every_entry(declared, read), whole, "{declared} declared, {read} read");
+        }
+    }
+
+    #[test]
+    fn a_bigtiff_count_past_u32_max_never_follows_the_next_pointer() {
+        // the whole chain: on 32-bit targets (wasm32) the old cast truncated these counts to 1 and followed the pointer
+        for order in [ByteOrder::Little, ByteOrder::Big] {
+            for declared in [(1u64 << 32) + 1, (2u64 << 32) + 1, (1u64 << 63) + 1] {
+                let d = bigtiff_chain(order, declared, 16);
+                let tiff = Tiff::parse(&d).unwrap();
+                assert_eq!(tiff.ifds.len(), 1, "{order:?} {declared}");
+                assert_eq!(tiff.ifds[0].u64(0x0100), Some(8));
+                assert_eq!(parse_ifd_at(&d, 80, order, 0, true, &ParseOptions::default()).unwrap().1, 0, "{order:?} {declared}");
+            }
+            // control: the same file declaring its one entry follows the pointer to the IFD at 16
+            let whole = Tiff::parse(&bigtiff_chain(order, 1, 16)).unwrap();
+            assert_eq!(whole.ifds.len(), 2, "{order:?}");
+            assert_eq!(whole.ifds[1].u64(0x0101), Some(8));
+        }
+    }
+
+    #[test]
+    fn directory_positions_never_overflow() {
+        // a hand-built layout the reader never produces: the iterator stops instead of overflowing
+        let hostile = DirectoryEntries { table: usize::MAX, read: 2, declared: 2, entry_size: 12 };
+        assert_eq!(hostile.positions().collect::<Vec<_>>(), vec![usize::MAX]);
+        assert_eq!(hostile.positions().nth(1), None);
+        let wide = DirectoryEntries { table: usize::MAX - 30, read: 4, declared: 4, entry_size: 12 };
+        assert_eq!(wide.positions().collect::<Vec<_>>(), vec![usize::MAX - 30, usize::MAX - 18, usize::MAX - 6]);
+        // a directory read from data lists its entries
+        let mut data = Vec::new();
+        ByteOrder::Little.put_u16(&mut data, 2);
+        data.extend([0; 24]);
+        let dir = directory_entries(&data, 0, ByteOrder::Little, false, 8192).unwrap();
+        assert_eq!(dir.positions().collect::<Vec<_>>(), vec![2, 14]);
+    }
+
+    #[test]
+    fn a_bigtiff_directory_declaring_u64_max_entries_parses_without_overflow() {
+        // 44 bytes: BigTIFF header (first IFD at 16), an entry count of u64::MAX, one 20-byte entry
+        let mut data = b"II\x2b\x00\x08\x00\x00\x00".to_vec();
+        data.extend(16u64.to_le_bytes());
+        data.extend(u64::MAX.to_le_bytes());
+        data.extend(0x0100u16.to_le_bytes());
+        data.extend(3u16.to_le_bytes());
+        data.extend(1u64.to_le_bytes());
+        data.extend([8, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(data.len(), 44);
+        let tiff = Tiff::parse(&data).unwrap();
+        assert_eq!(tiff.ifds.len(), 1);
+        assert_eq!(tiff.ifds[0].u64(0x0100), Some(8));
     }
 }

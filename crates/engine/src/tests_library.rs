@@ -440,6 +440,21 @@ fn scale_100k_library_queries() {
     m("undo", &mut || {
         s.execute("edit.undo", &serde_json::json!({})).unwrap();
     });
+    // a 20k-photo album shown in its own order (capture-date sort, no filter)
+    let big = s.execute("album.create", &serde_json::json!({"name": "Big"})).unwrap()["id"].as_u64().unwrap();
+    let ids: Vec<u64> = (0..n).rev().step_by(5).map(|i| i + 1).collect();
+    m("add 20k to an album", &mut || {
+        s.execute("album.addPhotos", &serde_json::json!({"id": big, "ids": ids})).unwrap();
+    });
+    m("album of 20k (album order)", &mut || {
+        s.execute("library.source", &serde_json::json!({"kind": "album", "id": big})).unwrap();
+        let _ = s.visible_cloned();
+    });
+    s.execute("library.source", &serde_json::json!({"kind": "all"})).unwrap();
+    let half: Vec<u64> = ids.iter().copied().step_by(2).collect();
+    m("remove 10k from the album", &mut || {
+        s.execute("album.removePhotos", &serde_json::json!({"id": big, "ids": half})).unwrap();
+    });
     worst.sort_by(|a, b| b.1.total_cmp(&a.1));
     eprintln!("slowest: {:?}", &worst[..3]);
 }
@@ -674,4 +689,75 @@ fn an_album_filter_loop_is_refused() {
     let r = s.execute("album.setRules", &serde_json::json!({"id": a, "rules": {"album": a}}));
     assert!(r.is_err_and(|e| e.to_string().contains("include itself")), "refused");
     assert_eq!(s.catalog.album(lightcraft_catalog::AlbumId(a)).unwrap().smart.as_ref().and_then(|f| f.album), None);
+}
+
+/// Given a library whose thumbnail cache is from before (`.jpg` files in `thumbs`), when it is
+/// opened, then the cache is tidied in the background with a row in the activity stack: the
+/// thumbnails are taken over under a name that is no picture's, the folder is tagged as a
+/// cache, and the next time the library opens there is nothing to tidy and no row.
+#[test]
+fn a_thumbnail_cache_from_before_is_tidied_in_the_background_when_the_library_opens() {
+    let dir = temp_dir("tidy-thumbs");
+    let mut s = Session::new().with_fs();
+    s.open_library(&dir, true).unwrap();
+    assert!(s.activity.list().is_empty(), "a new library has nothing to tidy");
+    s.close_library().unwrap();
+    drop(s);
+    // the cache as an older build left it
+    let thumbs = dir.join("thumbs");
+    let _ = std::fs::remove_dir_all(&thumbs);
+    let img = lightcraft_raster::Rgba8 { width: 32, height: 20, data: vec![[90, 120, 150, 255]; 640] };
+    let jpeg = lightcraft_preview::encode_jpeg(&img).unwrap();
+    let names: Vec<String> = (0..2000u16).map(|i| lightcraft_preview::hash_bytes(&i.to_le_bytes()).to_string()).collect();
+    for hex in &names {
+        std::fs::create_dir_all(thumbs.join(&hex[..2])).unwrap();
+        std::fs::write(thumbs.join(&hex[..2]).join(format!("{hex}.jpg")), &jpeg).unwrap();
+    }
+
+    let mut s = Session::new().with_fs();
+    s.open_library(&dir, true).unwrap();
+    // (two thousand files to rename: the row is there when the library has just opened)
+    let rows = s.activity.list();
+    assert!(rows.iter().any(|r| r.kind == "cache" && r.label == "Tidying the thumbnail cache" && r.cancellable), "{rows:?}");
+    let t0 = std::time::Instant::now();
+    while !s.activity.list().is_empty() && t0.elapsed() < std::time::Duration::from_secs(20) {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(s.activity.list().is_empty());
+    for hex in &names {
+        let shard = thumbs.join(&hex[..2]);
+        assert!(shard.join(format!("{hex}.lcthumb")).is_file() && !shard.join(format!("{hex}.jpg")).exists(), "{hex}");
+    }
+    assert!(thumbs.join("CACHEDIR.TAG").is_file());
+    s.close_library().unwrap();
+    drop(s);
+    let mut s = Session::new().with_fs();
+    s.open_library(&dir, true).unwrap();
+    assert!(s.activity.list().is_empty(), "tidied once");
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_hold_of_the_view_is_kept_with_the_library_and_holds_nothing_over_from_another() {
+    let dir = temp_dir("holdview");
+    let mut s = open(&dir, true);
+    assert!(!s.hold_view, "off in a library that never asked for it");
+    s.execute("library.holdView", &json!({"on": true})).unwrap();
+    // a filter over the demo photos, and one of them edited out from under it: held
+    s.execute("library.filter", &json!({"rating": 0, "flag": "none"})).unwrap();
+    let shown = s.visible_cloned();
+    let id = *shown.first().expect("the seeded library has unflagged photos");
+    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.flag", &json!({"flag": "pick"})).unwrap();
+    assert!(s.visible_cloned().contains(&id));
+    s.close_library().unwrap();
+    drop(s);
+    // opened again: the hold is on, and what was held is not (a library opens on what matches)
+    let mut s = open(&dir, false);
+    assert!(s.hold_view);
+    s.execute("library.filter", &json!({"rating": 0, "flag": "none"})).unwrap();
+    assert!(!s.visible_cloned().contains(&id));
+    s.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
 }

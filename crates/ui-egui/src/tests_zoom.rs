@@ -108,3 +108,30 @@ fn zoomed_before_after_views_stay_in_their_panes() {
         }
     }
 }
+
+/// A crop of no size (or a hair wide), from an agent or a sidecar, gave the loupe a NaN aspect:
+/// the photo was laid out at a NaN size, which egui's debug checks stop on (a panic in a debug
+/// build) and nothing could be drawn or clicked. It now lays out at a finite size, fitted and at
+/// 100 %.
+#[test]
+fn a_crop_of_no_size_lays_out_at_a_finite_size() {
+    let mut h = detail();
+    for rect in [[0.5, 0.5, 0.5, 0.5], [0.0, 0.0, 1e-9, 1.0], [0.0, 0.3, 1.0, 0.3]] {
+        let r = h.request("engine.execute", json!({"command": "crop.set", "params": {"rect": rect}}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        for zoom in ["view.zoomFit", "view.zoom100"] {
+            let r = h.request("engine.execute", json!({"command": zoom}), T);
+            assert_eq!(r["ok"], true, "{zoom}: {r}");
+            h.settle(SETTLE);
+            let img = h.app.image_rect.expect("the loupe laid the photo out");
+            assert!(img.min.is_finite() && img.max.is_finite(), "{rect:?} at {zoom}: {img:?}");
+            let r = h.request(
+                "ui.pointer",
+                json!({"events": [{"kind": "down", "x": 0.5, "y": 0.5}, {"kind": "drag", "x": 0.6, "y": 0.4}, {"kind": "up", "x": 0.6, "y": 0.4}]}),
+                T,
+            );
+            assert_eq!(r["ok"], true, "{r}");
+            h.step();
+        }
+    }
+}

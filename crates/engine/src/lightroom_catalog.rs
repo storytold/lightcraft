@@ -16,7 +16,8 @@ use serde_json::{Value, json};
 
 type Row = BTreeMap<String, Value>;
 const COMMAND: &str = "library.importLightroom";
-const MAX_FILE: u64 = 1 << 30;
+/// Largest catalog database or WAL read into memory (4 GiB). The whole file is held in RAM, so the cap stays finite.
+const MAX_FILE: u64 = 1 << 32;
 
 fn error(why: impl Into<String>) -> crate::EngineError {
     crate::EngineError::BadParams { cmd: COMMAND.into(), msg: why.into() }
@@ -234,10 +235,14 @@ pub(crate) fn validate_for_job(data: &CatalogImport) -> Result<(), String> {
 fn bytes(path: &Path) -> Result<Vec<u8>, String> {
     use std::io::Read;
     let f = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    if f.metadata().map_err(|e| e.to_string())?.len() > MAX_FILE {
-        return Err("catalog or WAL exceeds 1 GiB import limit".into());
+    let len = f.metadata().map_err(|e| e.to_string())?.len();
+    if len > MAX_FILE {
+        return Err("catalog or WAL exceeds 4 GiB import limit".into());
     }
     let mut out = Vec::new();
+    // Reserve the exact size up front: growing by doubling would briefly need about twice the catalog's size.
+    let wanted = usize::try_from(len).map_err(|_| "catalog is too large for this platform".to_string())?;
+    out.try_reserve_exact(wanted).map_err(|_| "not enough memory to read the catalog".to_string())?;
     f.take(MAX_FILE + 1).read_to_end(&mut out).map_err(|e| e.to_string())?;
     if out.len() as u64 > MAX_FILE {
         return Err("catalog grew beyond import limit".into());
@@ -698,14 +703,22 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, data: CatalogImport, contex
     let mut ops = Vec::new();
     let now = (s.clock)();
     let mut missing = Vec::new();
+    // Normal import counts probed originals; catalog import also adds offline records,
+    // distinct originals with identical bytes, and virtual copies.
+    let mut imported = files.imported.len();
+    let mut promoted = HashSet::new();
     let mut unmapped = BTreeMap::new();
     let mut preserved = 0;
     // Masters precede their virtual copies.
     let mut photos: Vec<_> = data.photos.iter().collect();
     photos.sort_by_key(|p| number(&p.image, "masterImage") != 0);
+    let copy_masters: HashSet<_> = data.photos.iter().map(|p| number(&p.image, "masterImage")).filter(|id| *id != 0).collect();
     let mut planned: HashMap<PhotoId, Photo> = HashMap::new();
     for src in photos {
         let master = number(&src.image, "masterImage");
+        if master == 0 && missing_sources.contains(&key(&src.path)) {
+            missing.push(src.path.clone());
+        }
         let indexed = index
             .photos
             .get(&identity(&data, src))
@@ -736,9 +749,6 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, data: CatalogImport, contex
         } else {
             let id = s.catalog.alloc_photo_id();
             let name = Path::new(&src.path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| src.path.clone());
-            if missing_sources.contains(&key(&src.path)) {
-                missing.push(src.path.clone());
-            }
             let mut p = Photo::new(
                 id,
                 Source::File { path: src.path.clone() },
@@ -807,7 +817,21 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, data: CatalogImport, contex
         if keep_develop {
             (p.develop, p.edited) = previous_develop;
         }
+        // Missing files bypass normal-file preparation, including its Local promotion.
+        // Import still joins the library, and a virtual copy must inherit that membership.
+        let was_local = p.local;
+        p.local = false;
+        let photo_id = p.id;
+        // Only virtual-copy masters need a second owned photo while operations are staged.
+        // Keeping every photo here doubled the new-record working set on large catalogs.
+        if copy_masters.contains(&src.source_id) {
+            planned.insert(photo_id, p.clone());
+        }
         if s.catalog.photo(p.id).is_some() {
+            if was_local && promoted.insert(p.id) {
+                imported += 1;
+                ops.push(Op::SetLocal { id: p.id, local: false });
+            }
             ops.extend([
                 Op::SetRating { id: p.id, rating: p.rating },
                 Op::SetFlag { id: p.id, flag: p.flag },
@@ -817,10 +841,10 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, data: CatalogImport, contex
             ]);
             ops.push(Op::SetDevelop { id: p.id, settings: p.develop.clone(), label: "Lightroom catalog".into(), edited: p.edited.clone() });
         } else {
-            ops.push(Op::AddPhoto { photo: Box::new(p.clone()) });
+            imported += 1;
+            ops.push(Op::AddPhoto { photo: Box::new(p) });
         }
-        by_path.entry(key(&src.path)).or_insert(p.id);
-        planned.insert(p.id, p);
+        by_path.entry(key(&src.path)).or_insert(photo_id);
     }
     let mut albums = HashMap::new();
     for collection in &data.collections {
@@ -893,7 +917,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, data: CatalogImport, contex
     }
     s.merge_undo(s.undo.len().saturating_sub(undo0), "Import Lightroom Catalog");
     Ok(AppliedImport {
-        report: json!({"source":data.source,"photos":ids.len(),"imported":files.imported.len(),"collections":albums.len(),"preservedExistingEdits":preserved,"missing":missing,"failed":files.failed,"warnings":warnings,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
+        report: json!({"source":data.source,"photos":ids.len(),"imported":imported,"library":s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy()),"collections":albums.len(),"preservedExistingEdits":preserved,"missing":missing,"failed":files.failed,"warnings":warnings,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
         index: index.clone(),
     })
 }
@@ -939,11 +963,61 @@ mod tests {
         }
     }
     #[test]
+    fn offline_local_master_and_copy_join_library_with_one_undo_step() {
+        let mut s = crate::Session::new();
+        let data = sample();
+        let master_id = s.catalog.alloc_photo_id();
+        let mut master = Photo::new(master_id, Source::File { path: "/missing/test.ARW".into() }, "test.ARW", "ARW", 20, 10, "before");
+        master.local = true;
+        s.commit("Browse folder", Op::AddPhoto { photo: Box::new(master) }).unwrap();
+        s.undo.clear();
+        let before = s.catalog.photo(master_id).unwrap().clone();
+        let mut index = ImportIndex::default();
+        let missing_sources = [key("/missing/test.ARW")].into_iter().collect();
+        let mut import = |s: &mut crate::Session| {
+            let undo0 = s.undo.len();
+            apply_prepared(
+                s,
+                data.clone(),
+                ApplyPrepared {
+                    update_existing: false,
+                    files: Default::default(),
+                    index: &mut index,
+                    archive_path: None,
+                    missing_sources: &missing_sources,
+                    undo0,
+                },
+            )
+            .unwrap()
+            .report
+        };
+        let first = import(&mut s);
+        assert_eq!(first["mapping"]["1"], master_id.0);
+        assert_eq!(first["imported"], 2, "the promoted master and new copy both join All Photos");
+        assert_eq!(first["missing"], json!(["/missing/test.ARW"]));
+        assert_eq!(s.catalog.len(), 2);
+        assert!(s.catalog.photos().all(|photo| !photo.local));
+        assert_eq!(s.undo.len(), 1);
+        let second = import(&mut s);
+        assert_eq!(second["imported"], 0);
+        assert_eq!(second["mapping"], first["mapping"]);
+        s.undo_step().unwrap();
+        s.undo_step().unwrap();
+        assert_eq!(s.catalog.len(), 1);
+        assert_eq!(s.catalog.photo(master_id), Some(&before));
+        assert!(s.catalog.albums().next().is_none());
+        let third = import(&mut s);
+        assert_eq!(third["imported"], 2);
+        assert!(s.catalog.photos().all(|photo| !photo.local));
+    }
+
+    #[test]
     fn imports_copies_collections_ratings_and_mapped_edits_in_one_undo_step() {
         let mut s = crate::Session::new();
         let data = sample();
         let r = apply(&mut s, data.clone(), false).unwrap();
         assert_eq!(r["photos"], 2);
+        assert_eq!(r["imported"], 2, "the offline master and virtual copy both count as added");
         assert_eq!(r["missing"].as_array().unwrap().len(), 1);
         let master = s.catalog.photo(PhotoId(r["mapping"]["1"].as_u64().unwrap())).unwrap();
         assert_eq!(master.rating, 5);
@@ -1241,6 +1315,10 @@ mod tests {
         s.commit("Changed time", Op::SetCaptured { id, captured: None }).unwrap();
         let second = apply(&mut s, data, true).unwrap();
         assert_eq!(first["mapping"], second["mapping"]);
+        assert_eq!(first["imported"], 2);
+        assert_eq!(second["imported"], 0, "reimport updates records instead of adding them");
+        assert_eq!(second["missing"].as_array().unwrap().len(), 1, "offline originals are reported on reimport too");
+        assert_eq!(second["library"], dir.to_string_lossy().as_ref());
         assert_eq!(s.catalog.len(), 2);
         assert_eq!(s.catalog.albums().count(), 2);
         assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some("2024-01-16T12:34:56"));
@@ -1357,6 +1435,63 @@ mod tests {
         std::fs::write(&path, b"bad catalog").unwrap();
         assert!(read(&path).is_err());
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn preparation_skips_missing_original_probes_but_keeps_catalog_records() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-offline-probes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.lrcat");
+        let root = dir.join("offline");
+        let tables = photo_tables((root.to_str().unwrap(), ""));
+        std::fs::write(&source, native_catalog(&tables)).unwrap();
+        let mut s = crate::Session::new();
+        let probes = Arc::new(AtomicUsize::new(0));
+        let calls = probes.clone();
+        s.media.file_probe = Some(Arc::new(move |_| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Err("a known-missing original must not be probed".into())
+        }));
+        let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source, false).unwrap();
+        let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
+        assert_eq!(probes.load(Ordering::Relaxed), 0);
+        let result = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap();
+        assert_eq!(result.report["imported"], 1);
+        assert_eq!(result.report["failed"], json!([]));
+        assert_eq!(result.report["missing"].as_array().unwrap().len(), 1);
+        let photo = s.catalog.photos().next().unwrap();
+        assert_eq!(photo.rating, 5);
+        assert_eq!((photo.width, photo.height), (20, 10));
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert!(s.catalog.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn probed_original_is_counted_once_and_reimport_adds_nothing() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-present-probes-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Photos")).unwrap();
+        let source = dir.join("source.lrcat");
+        std::fs::write(dir.join("Photos/test.ARW"), b"original").unwrap();
+        std::fs::write(&source, native_catalog(&photo_tables((dir.to_str().unwrap(), "")))).unwrap();
+        let mut s = crate::Session::new();
+        let probes = Arc::new(AtomicUsize::new(0));
+        let calls = probes.clone();
+        s.media.file_probe = Some(Arc::new(move |_| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Ok(crate::media::ProbeInfo { format: "ARW".into(), width: 20, height: 10, ..Default::default() })
+        }));
+        for expected in [1, 0] {
+            let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source.clone(), false).unwrap();
+            let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
+            let completion = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap();
+            assert_eq!(completion.report["imported"], expected);
+            assert_eq!(completion.report["missing"], json!([]));
+            assert_eq!(completion.report["failed"], json!([]));
+            assert_eq!(s.catalog.len(), 1);
+        }
+        assert_eq!(probes.load(Ordering::Relaxed), 1);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

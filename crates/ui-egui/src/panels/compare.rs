@@ -97,6 +97,31 @@ pub fn set_photo(app: &mut LightcraftApp, id: PhotoId, side: Option<&str>) -> Re
     Ok(json!({"select": a.0, "candidate": b.0}))
 }
 
+/// A ⌘/Ctrl-click (`range: false`, toggles the photo) or Shift-click (`range: true`, extends
+/// from the active photo) on the filmstrip in Compare: the selection changes as it does in the
+/// grid, but the two photos shown stay selected and the active one stays active, so the photo the
+/// rating keys act on is still on screen (#744). A plain click is [`set_photo`].
+pub fn select_with_modifier(app: &mut LightcraftApp, id: PhotoId, range: bool) -> Result<Value, String> {
+    if app.session.catalog.photo(id).is_none_or(|p| p.deleted) {
+        return Err(format!("no photo {}", id.0));
+    }
+    let (sel, cand) = compare_pair(app).ok_or("nothing to compare")?;
+    let mut next = app.session.selection.clone();
+    if range {
+        next.extend_to(id, &app.session.visible_cloned());
+    } else {
+        next.toggle(id);
+    }
+    for shown in [sel, cand] {
+        if !next.contains(shown) {
+            next.ids.push(shown);
+        }
+    }
+    let active = app.session.selection.active.filter(|a| next.contains(*a)).unwrap_or(cand);
+    let ids: Vec<u64> = next.ids.iter().map(|p| p.0).collect();
+    app.session.execute("library.select", &json!({"ids": ids, "active": active.0})).map_err(|e| e.to_string())
+}
+
 /// The candidate becomes the select; the next photo becomes the candidate.
 pub fn make_select(app: &mut LightcraftApp) -> Result<Value, String> {
     let (_, b) = compare_pair(app).ok_or("nothing to compare")?;
@@ -172,6 +197,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
     let t = Tokens::get(ui.ctx());
     let ppp = ui.ctx().pixels_per_point();
     let resp = ui.interact(area, egui::Id::new(("cull-tile", slot_index(slot), id.0)), Sense::click_and_drag());
+    crate::widgets::announce(&resp, app.session.catalog.photo(id).map(|p| p.file_name.clone()).unwrap_or_default());
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return (area, resp) };
     let caption_h = 26.0;
     let img_area = Rect::from_min_max(area.min, pos2(area.right(), area.bottom() - caption_h));
@@ -253,6 +279,9 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
     }
     if photo.flag == Flag::Reject {
         p.rect_filled(display, 0.0, Color32::from_black_alpha(110));
+    }
+    if app.ui.settings.focus_point {
+        super::detail::draw_focus_point(&p, display, &photo, &format!("compare:focusPoint:{}", id.0));
     }
     let active = app.session.selection.active == Some(id);
     if active {
@@ -525,6 +554,7 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if resp.hovered() && photos.len() > 1 {
             let xr = Rect::from_min_size(pos2(img.right() - 26.0, img.top() + 6.0), vec2(20.0, 20.0));
             let xresp = ui.interact(xr, egui::Id::new(("survey-x", id.0)), Sense::click()).on_hover_text(crate::i18n::tr("Remove from survey"));
+            crate::widgets::announce(&xresp, crate::i18n::tr("Remove from survey"));
             ui.painter().circle_filled(xr.center(), 10.0, Color32::from_black_alpha(if xresp.hovered() { 230 } else { 160 }));
             paint(ui.painter(), xr.shrink(4.0), Icon::Close, t.text);
             if xresp.clicked() {

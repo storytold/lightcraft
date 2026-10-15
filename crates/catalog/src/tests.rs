@@ -123,6 +123,23 @@ fn filter_search_sort() {
     assert_eq!(c.keywords(), vec![("ocean".to_string(), 1), ("summer".to_string(), 1)]);
 }
 
+/// A `captured` string that is not ASCII (the Lightroom importer copies `captureTime` into an
+/// `AddPhoto` op verbatim, and a JSON snapshot is valid UTF-8 whatever it holds) must not be
+/// sliced on a byte index in `date_groups`: grouping counts the well-formed dates and ignores
+/// the rest instead of panicking on a char boundary.
+#[test]
+fn date_groups_ignores_a_non_ascii_captured() {
+    let mut c = Catalog::new();
+    let ok = photo(&mut c, "ok.jpg", "2026-05-01T10:00:00");
+    // `AddPhoto` takes the field as it is, like `library.importLightroom` building the op
+    let bad = photo(&mut c, "bad.jpg", "日本語日本語");
+    assert_ne!(ok, bad);
+    let g = c.date_groups();
+    assert_eq!(g.len(), 1, "the one well-formed date still groups");
+    assert_eq!((g[0].year.as_str(), g[0].count), ("2026", 1));
+    assert_eq!(g[0].days.iter().map(|d| d.1).sum::<usize>(), 1);
+}
+
 #[test]
 fn snapshot_and_log_replay() {
     let mut c = Catalog::new();
@@ -265,13 +282,30 @@ fn preview_only_survives_serde_and_set_content_undo() {
     let old: Catalog = serde_json::from_value(v).unwrap();
     assert_eq!(old.photo(a).unwrap().preview_only, None);
     assert!(old.photo(a).unwrap().develops_raw());
-    // Reload: the file decodes now → cleared; undo (through the journal's JSON) restores it
-    let op = Op::SetContent { id: a, width: 6016, height: 4000, file_size: 1, content_hash: None, preview_only: None };
+    // a newer build still can't decode it: the reason and the stamp of the version that decided
+    // it are recorded together (#662)
+    let op = Op::SetContent {
+        id: a,
+        width: 6000,
+        height: 4000,
+        file_size: 1,
+        content_hash: None,
+        preview_only: Some("Nikon Huffman-compressed NEF".into()),
+        preview_checked: "0.6.0".into(),
+    };
+    c.apply(op).unwrap();
+    assert_eq!(c.photo(a).unwrap().preview_checked, "0.6.0");
+    // Reload: the file decodes now → cleared, with its stamp; undo (through the journal's JSON)
+    // restores both
+    let op =
+        Op::SetContent { id: a, width: 6016, height: 4000, file_size: 1, content_hash: None, preview_only: None, preview_checked: String::new() };
     let inv = c.apply(op).unwrap();
     assert!(c.photo(a).unwrap().develops_raw());
+    assert_eq!(c.photo(a).unwrap().preview_checked, "");
     let inv: Op = serde_json::from_str(&serde_json::to_string(&inv).unwrap()).unwrap();
     c.apply(inv).unwrap();
     assert_eq!(c.photo(a).unwrap().preview_only.as_deref(), Some("Nikon Huffman-compressed NEF"));
+    assert_eq!(c.photo(a).unwrap().preview_checked, "0.6.0");
     assert_eq!(c.photo(a).unwrap().width, 6000);
 }
 
@@ -388,6 +422,28 @@ fn empty_regions_are_not_serialized_and_default_when_missing() {
         description: None,
     });
     let back: Meta = serde_json::from_str(&serde_json::to_string(&with).unwrap()).unwrap();
+    assert_eq!(back, with);
+}
+
+/// The camera's focus point is optional camera data: absent from the catalog JSON when unknown (so a
+/// catalog from before it existed reads with none, and writes the same), kept exactly when known.
+#[test]
+fn focus_point_is_not_serialized_when_unknown_and_round_trips() {
+    let m = Meta { camera: "SONY ILCE-1".into(), ..Default::default() };
+    let v = serde_json::to_value(&m).unwrap();
+    assert!(v.get("focus").is_none(), "{v}");
+    let back: Meta = serde_json::from_value(v).unwrap();
+    assert!(back.focus.is_none());
+    let mut with = m.clone();
+    with.focus = Some(lightcraft_meta::FocusPoint {
+        rect: lightcraft_meta::Rect { x0: 0.36, y0: 0.33, x1: 0.38, y1: 0.36 },
+        mode: Some("AF-C".into()),
+        area: Some("Wide".into()),
+        tracking: None,
+    });
+    let json = serde_json::to_string(&with).unwrap();
+    assert!(json.contains("\"focus\"") && !json.contains("tracking"), "{json}");
+    let back: Meta = serde_json::from_str(&json).unwrap();
     assert_eq!(back, with);
 }
 
@@ -736,4 +792,82 @@ fn cmp_name_ignores_case_without_allocating() {
     assert_eq!(cmp_name("B", "a"), Greater);
     assert_eq!(cmp_name("DSC_0001", "DSC_0002"), Less);
     assert_eq!(cmp_name("a", "ab"), Less);
+}
+
+/// What the catalog remembers of its latest ops: which photos each changed and what of them, as long as that can be
+/// said photo by photo.
+#[test]
+fn the_catalog_remembers_which_photos_its_latest_ops_changed_and_what_of_them() {
+    let mut c = Catalog::default();
+    let photo = |c: &mut Catalog, name: &str| {
+        let id = c.alloc_photo_id();
+        c.apply(Op::AddPhoto {
+            photo: Box::new(Photo::new(id, Source::File { path: format!("/p/{name}") }, name, "JPEG", 60, 40, "2026-01-01T10:00:00")),
+        })
+        .unwrap();
+        id
+    };
+    let (a, b) = (photo(&mut c, "a.jpg"), photo(&mut c, "b.jpg"));
+    let start = c.revision;
+    assert_eq!(c.touched_since(start), Some(vec![]));
+    assert_eq!(c.aspects_since(start), Some(Aspects::NONE));
+    // a rating, then a flag on another photo, as one batch
+    c.apply(Op::SetRating { id: a, rating: 3 }).unwrap();
+    assert_eq!(c.touched_since(start), Some(vec![a]));
+    assert_eq!(c.aspects_since(start), Some(Aspects::RATING));
+    let after_rating = c.revision;
+    c.apply(Op::Batch { ops: vec![Op::SetFlag { id: b, flag: Flag::Pick }, Op::SetRating { id: a, rating: 4 }] }).unwrap();
+    assert_eq!(c.touched_since(start), Some(vec![a, b]), "each once");
+    assert_eq!(c.touched_since(after_rating), Some(vec![a, b]));
+    assert_eq!(c.aspects_since(after_rating), Some(Aspects::FLAG.with(Aspects::RATING)));
+    assert_eq!(c.touched_since(c.revision), Some(vec![]));
+    // a photo that goes counts for everything
+    let before = c.revision;
+    c.apply(Op::RemovePhoto { id: b }).unwrap();
+    assert_eq!(c.touched_since(before), Some(vec![b]));
+    assert!(c.aspects_since(before).is_some_and(|x| x.any_of(Aspects::PRESENCE) && x.any_of(Aspects::FILE)));
+    // an op that changes more than photos of its own: nothing is said of what came before it
+    let before = c.revision;
+    let album = c.alloc_album_id();
+    c.apply(Op::AddAlbum { album: Album::new(album, "Trip") }).unwrap();
+    assert_eq!(c.touched_since(before), None);
+    assert_eq!(c.aspects_since(start), None);
+    assert_eq!(c.touched_since(c.revision), Some(vec![]), "from after it, it is known again");
+    // a revision that is not this catalog's past
+    assert_eq!(c.touched_since(c.revision + 5), None);
+    // a revision set from outside (a library just loaded): nothing is known of how the catalog got there, and after
+    // the next op nothing of before it
+    let old = c.revision;
+    c.revision = 7 << 32;
+    assert_eq!(c.touched_since(old), None);
+    assert_eq!(c.aspects_since(c.revision), None);
+    let loaded = c.revision;
+    c.apply(Op::SetRating { id: a, rating: 1 }).unwrap();
+    assert_eq!(c.touched_since(loaded), Some(vec![a]));
+    assert_eq!(c.touched_since(old), None);
+    // an op that fails changes nothing, and what is remembered never says less than what happened
+    let before = c.revision;
+    assert!(c.apply(Op::SetRating { id: PhotoId(9_999), rating: 1 }).is_err());
+    assert_eq!(c.revision, before);
+    c.apply(Op::SetFlag { id: a, flag: Flag::Pick }).unwrap();
+    assert!(c.touched_since(before).is_some_and(|ids| ids.contains(&a)));
+    assert!(c.aspects_since(before).is_some_and(|x| x.any_of(Aspects::FLAG)));
+    // a batch that fails midway is undone as a whole; a batch in a batch is remembered photo by photo; a batch
+    // with an op that changes more than photos is not
+    let before = c.revision;
+    assert!(c.apply(Op::Batch { ops: vec![Op::SetRating { id: a, rating: 5 }, Op::SetRating { id: PhotoId(9_999), rating: 1 }] }).is_err());
+    assert_eq!((c.revision, c.photo(a).map(|p| p.rating)), (before, Some(1)));
+    c.apply(Op::Batch { ops: vec![Op::Batch { ops: vec![Op::SetRating { id: a, rating: 2 }] }] }).unwrap();
+    // (the photo the failed batch asked for and never found may be named too: more is said, never less)
+    assert!(c.touched_since(before).is_some_and(|ids| ids.contains(&a)));
+    let before = c.revision;
+    c.apply(Op::Batch { ops: vec![Op::SetRating { id: a, rating: 3 }, Op::RenameAlbum { id: album, name: "Journey".into() }] }).unwrap();
+    assert_eq!(c.touched_since(before), None);
+    // more ops than are remembered: the oldest are answered with "anything"
+    let long_ago = c.revision;
+    for i in 0..9000u32 {
+        c.apply(Op::SetRating { id: a, rating: (i % 5) as u8 }).unwrap();
+    }
+    assert_eq!(c.touched_since(long_ago), None);
+    assert_eq!(c.touched_since(c.revision - 10), Some(vec![a]));
 }

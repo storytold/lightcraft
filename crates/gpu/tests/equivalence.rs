@@ -19,7 +19,7 @@ const MAX_LSB: u8 = 3;
 fn gpu() -> bool {
     let ok = lightcraft_gpu::available();
     if !ok {
-        eprintln!("skipped: no GPU adapter");
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter");
     }
     ok
 }
@@ -91,6 +91,26 @@ fn typical(s: &mut DevelopSettings) {
     s.detail.nr_luminance = 30.0;
     s.detail.nr_color = 25.0;
     s.detail.sharpen_amount = 40.0;
+}
+
+/// Issue #960: a preview's noise reduction works in the original's pixels (a smaller radius, a
+/// smaller `eps`, faded below one pixel). The GPU takes the same parameters (`local::nr_params`).
+#[test]
+fn preview_noise_reduction_matches() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(3, 640, 480);
+    let mut s = DevelopSettings::default();
+    s.detail.nr_luminance = 70.0;
+    s.detail.nr_detail = 30.0;
+    s.detail.nr_color = 60.0;
+    s.detail.nr_color_smoothness = 50.0;
+    // a preview level of a 6000-px original: loupe-, grid- and tiny-thumbnail-sized outputs
+    let info = SourceInfo { raw: true, native_long: Some(6000), ..Default::default() };
+    for (name, edge) in [("NR preview 640 of 6000", 640), ("NR preview 320 of 6000", 320), ("NR preview 128 of 6000", 128)] {
+        check(name, &src, &info, &s, &RenderRequest::fit(edge, edge));
+    }
 }
 
 /// A render big enough for the per-pixel stage to run in several bands of rows (and the render

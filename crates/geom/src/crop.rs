@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Affine, Point, Rect, Vec2};
+use crate::{Affine, MIN_CROP_FRACTION, Point, Rect, Vec2};
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CropGeometry {
@@ -77,16 +77,25 @@ impl CropGeometry {
         let s = max_inscribed_scale(w, h, self.angle, r.width(), r.height());
         let nr = Rect::from_center(c, r.width() * s, r.height() * s);
         let _ = best;
-        CropGeometry { rect: nr.scale(1.0 / w, 1.0 / h), angle: self.angle }
+        let out = CropGeometry { rect: nr.scale(1.0 / w, 1.0 / h), angle: self.angle };
+        if [out.rect.x0, out.rect.y0, out.rect.x1, out.rect.y1].iter().all(|v| v.is_finite()) {
+            return out;
+        }
+        // A rect too large for pixel maths (`inf * 0` above): the largest crop of its aspect that
+        // fits, else of the image's own.
+        let aspect = Some(self.rect.width() / self.rect.height() * (w / h)).filter(|a| a.is_finite() && *a > 0.0);
+        crop_fit_angle(w, h, self.angle, aspect)
     }
 
     /// This crop turned to `angle_deg` on a `w × h` image: kept as it is when it still fits inside
-    /// the rotated image, else the largest crop of its aspect that fits, centred (Lightroom's
-    /// "Constrain to image"). Every way of setting the angle goes through here (the rotate handle,
-    /// the Straighten slider and Angle field, `crop.straighten`, `develop.set` on `crop.angle`), so
-    /// they all give the same crop (issue #742). A crop that is the largest of its aspect at its
-    /// own angle (the full photo, or one an earlier turn shrank to fit) stays the largest at the new
-    /// angle, so it grows back as the angle returns towards 0° (issue #1388).
+    /// the rotated image, else shrunk about its own centre, keeping its aspect, until it fits
+    /// (Lightroom's "Constrain to image"). Every way of setting the angle goes through here (the
+    /// rotate handle, the Straighten slider and Angle field, `crop.straighten`, `develop.set` on
+    /// `crop.angle`), so they all give the same crop (issue #742). A crop that is the largest of its
+    /// aspect at its own angle (the full photo, or one an earlier turn shrank to fit) stays the
+    /// largest at the new angle, so it grows back as the angle returns towards 0° (issue #1388).
+    /// Any other crop never grows: a crop dragged in from a corner still touches two edges of the
+    /// photo, and turning it used to swap it for the largest crop of its aspect (issue #1794).
     pub fn with_angle(&self, angle_deg: f64, w: f64, h: f64) -> CropGeometry {
         let r = self.rect_px(w, h);
         // a degenerate rect has no aspect to keep: fall back to the image's own
@@ -99,7 +108,45 @@ impl CropGeometry {
         if !is_largest && cand.is_within_image(w, h) {
             return cand;
         }
-        crop_fit_angle(w, h, angle_deg, aspect)
+        let fitted = crop_fit_angle(w, h, angle_deg, aspect);
+        if is_largest || aspect.is_none() {
+            return fitted;
+        }
+        // shrunk in place, as long as that leaves a crop the drag model would allow
+        let min_side = MIN_CROP_FRACTION * w.min(h);
+        if let Some(s) = cand.fit_scale_about_centre(w, h).filter(|s| r.width().min(r.height()) * s >= min_side) {
+            return CropGeometry { rect: Rect::from_center(r.center(), r.width() * s, r.height() * s).scale(1.0 / w, 1.0 / h), angle: angle_deg };
+        }
+        // its centre is off the turned photo (a sliver in a corner): centred, at its own size at most
+        let f = fitted.rect_px(w, h);
+        let Some(s) = Some(r.width() / f.width()).filter(|s| s.is_finite() && *s < 1.0) else {
+            return fitted;
+        };
+        CropGeometry { rect: Rect::from_center(f.center(), f.width() * s, f.height() * s).scale(1.0 / w, 1.0 / h), angle: angle_deg }
+    }
+
+    /// The largest scale, at most 1, at which this crop shrunk about its own centre lies inside the
+    /// rotated image; `None` when its centre is outside it.
+    fn fit_scale_about_centre(&self, w: f64, h: f64) -> Option<f64> {
+        let r = self.rect_px(w, h);
+        let back = Affine::rotate_about(-self.angle.to_radians(), Point::new(w / 2.0, h / 2.0));
+        let c = back.apply(r.center());
+        if !(0.0..=w).contains(&c.x) || !(0.0..=h).contains(&c.y) {
+            return None;
+        }
+        // each corner, in the image frame, is c + s·d: keep both coordinates in 0..w and 0..h
+        let mut s: f64 = 1.0;
+        for corner in r.corners() {
+            let d = back.apply(corner) - c;
+            for (q, dq, max) in [(c.x, d.x, w), (c.y, d.y, h)] {
+                if dq > 0.0 {
+                    s = s.min((max - q) / dq);
+                } else if dq < 0.0 {
+                    s = s.min(q / -dq);
+                }
+            }
+        }
+        Some(s).filter(|s| s.is_finite() && *s > 0.0)
     }
 }
 
@@ -196,6 +243,45 @@ mod tests {
     }
 
     #[test]
+    fn with_angle_shrinks_a_crop_against_the_edge_about_its_own_centre() {
+        // issue #1794: a crop dragged in from one corner keeps the opposite corner on the photo's,
+        // so it stops fitting at the first fraction of a degree; it used to become the largest crop
+        // of its aspect, nearly the whole photo
+        let (w, h) = (600.0, 400.0);
+        let c = CropGeometry { rect: Rect::new(0.0, 0.0, 0.6, 0.6), angle: 0.0 };
+        let a = c.rect_px(w, h);
+        for ang in [-10.0, -1.0, 0.5, 3.0, 20.0] {
+            let t = c.with_angle(ang, w, h);
+            let b = t.rect_px(w, h);
+            assert!(t.is_within_image(w, h), "{ang}°");
+            assert_eq!(t.angle, ang);
+            assert!(b.width() <= a.width() + 1e-9, "{ang}°: never larger than the crop made, {} vs {}", b.width(), a.width());
+            assert!((a.aspect() - b.aspect()).abs() < 1e-9, "{ang}°: aspect kept");
+            assert!(b.center().dist(a.center()) < 1e-9, "{ang}°: shrunk about its own centre");
+            // as large as fits there: 1 % bigger about the same centre does not
+            let big = CropGeometry { rect: Rect::from_center(t.rect.center(), t.rect.width() * 1.01, t.rect.height() * 1.01), angle: ang };
+            assert!(!big.is_within_image(w, h), "{ang}°: the largest about its centre");
+        }
+        // a small turn is a small change, not a jump
+        let t = c.with_angle(0.5, w, h).rect_px(w, h);
+        assert!(t.width() > 0.97 * a.width(), "0.5° keeps nearly all of the crop: {} of {}", t.width(), a.width());
+    }
+
+    #[test]
+    fn with_angle_never_grows_a_crop_whose_centre_leaves_the_photo() {
+        // a sliver in the corner: at 45° its centre is outside the turned photo, so it can't shrink
+        // in place; it moves to the centre at its own size, not at the largest of its aspect
+        let (w, h) = (600.0, 400.0);
+        let c = CropGeometry { rect: Rect::new(0.0, 0.0, 0.05, 0.05), angle: 0.0 };
+        let a = c.rect_px(w, h);
+        let t = c.with_angle(45.0, w, h);
+        let b = t.rect_px(w, h);
+        assert!(t.is_within_image(w, h));
+        assert!(b.width() <= a.width() + 1e-9 && (a.aspect() - b.aspect()).abs() < 1e-9, "{b:?} from {a:?}");
+        assert!(b.center().dist(Point::new(w / 2.0, h / 2.0)) < 1e-9, "centred: {b:?}");
+    }
+
+    #[test]
     fn with_angle_survives_a_degenerate_crop() {
         // zero height: no aspect to keep (width / height = ∞)
         let c = CropGeometry { rect: Rect::new(0.0, 0.5, 1.0, 0.5), angle: 0.0 };
@@ -210,5 +296,17 @@ mod tests {
         let t = c.output_to_source(100.0, 100.0, 50.0, 50.0);
         let p = t.apply(Point::new(0.0, 0.0));
         assert!((p.x - 25.0).abs() < 1e-9 && (p.y - 25.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn constrained_huge_rect_is_finite_and_inside() {
+        for rect in [Rect::new(0.0, 0.0, 1e308, 1e308), Rect::new(-1e308, -1e308, 1e308, 1e308), Rect::new(0.0, 0.0, 1e308, 0.5)] {
+            for angle in [0.0, 30.0] {
+                let c = CropGeometry { rect, angle }.constrained(400.0, 300.0);
+                let r = c.rect;
+                assert!([r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite()), "{rect:?} {angle}: {r:?}");
+                assert!(c.is_within_image(400.0, 300.0), "{rect:?} {angle}: {r:?}");
+            }
+        }
     }
 }

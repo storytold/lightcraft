@@ -30,6 +30,12 @@ const MAX_CRX_SAMPLES: usize = 200_000_000;
 const MAX_CRX_EDGE: u32 = 65_536;
 /// Unary QP-map prefix length that announces an 8-bit escaped symbol.
 const QP_ESCAPE_ZEROS: u32 = 23;
+/// Highest uniform (per-subband) quantization value with a measured step.
+const MAX_UNIFORM_QUANT: u8 = 44;
+/// Highest adaptive quantization value (QP − 124) seen in real files: QP 175 on the EOS R6 Mark II.
+/// See [`quant_step`].
+const MAX_ADAPTIVE_QUANT: u8 = 51;
+const MAX_QP: i32 = 124 + MAX_ADAPTIVE_QUANT as i32;
 const RUN_EXPONENT: [u8; 32] = [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
 fn corrupt(reason: &str) -> RawError {
@@ -207,7 +213,7 @@ fn validate_planes(tiles: &[Tile], config: &Cr3Compression) -> Result<()> {
                 if config.levels != 0 {
                     match band.quant {
                         Quantization::Uniform(value) => {
-                            quant_step(value)?;
+                            quant_step(value, MAX_UNIFORM_QUANT)?;
                         }
                         Quantization::Adaptive { gain, .. } => {
                             if index < 4 && gain != 0 {
@@ -342,12 +348,14 @@ fn tile_qp(sample: &[u8], tile: &Tile) -> Result<Option<QpMap>> {
         .transpose()
 }
 
-fn quant_step(value: u8) -> Result<i32> {
+fn quant_step(value: u8, max: u8) -> Result<i32> {
     // Measured independently with an external decoder after modifying only the
     // quantValue field: all forty values 4..43 follow this integer sequence. Value 44 (QP 168)
     // continues it (step 102); it was checked against a measured step of about 100 on an EOS R50
-    // C-RAW file. Nothing above 44 has been seen, so it stays rejected.
-    if !(4..=44).contains(&value) {
+    // C-RAW file. Uniform subband values stop there (`MAX_UNIFORM_QUANT`). Adaptive QP maps reach
+    // QP 175 (value 51) on the EOS R6 Mark II; those steps (114..228) continue the same sequence and
+    // were checked against the camera's own JPEGs (docs/cr3.md). Anything higher is still rejected.
+    if !(4..=max).contains(&value) {
         return Err(RawError::Unsupported(format!("Canon CRX quantization value {value}")));
     }
     let scale = [40i32, 45, 51, 57, 64, 72].get(usize::from(value % 6)).copied().ok_or_else(|| corrupt("quantization table index"))?;
@@ -403,7 +411,7 @@ fn wavelet_plane(sample: &[u8], plane: &Plane, width: usize, height: usize, edge
         };
         for (position, value) in data.iter_mut().enumerate() {
             let step = match band.quant {
-                Quantization::Uniform(value) => quant_step(value)?,
+                Quantization::Uniform(value) => quant_step(value, MAX_UNIFORM_QUANT)?,
                 Quantization::Adaptive { base, gain } => {
                     adaptive_step(qp.ok_or_else(|| corrupt("missing QP map"))?, i, position % w, position / w, base, gain)?
                 }
@@ -443,7 +451,7 @@ fn adaptive_step(map: &QpMap, band: usize, x: usize, y: usize, base: u32, gain: 
         // QP rows are averaged before looking up the integer step. R8 field
         // mutations distinguish this order from averaging dequantization steps.
         let quant = u8::try_from(value - 124).map_err(|_| corrupt("QP value outside quantization table"))?;
-        u64::from(base) + u64::from(gain) * quant_step(quant)? as u64 / 8
+        u64::from(base) + u64::from(gain) * quant_step(quant, MAX_ADAPTIVE_QUANT)? as u64 / 8
     };
     i32::try_from(step.max(1)).map_err(|_| corrupt("adaptive quantization step outside precision"))
 }
@@ -775,7 +783,7 @@ fn qp_map(src: &[u8], width: usize, height: usize) -> Result<QpMap> {
             // The map opens with its first symbol as a 32-bit literal; every later one is Rice coded.
             let symbol = if x == 0 && y == 0 { (bits.take(16)? << 16) | bits.take(16)? } else { bits.qp_rice(k)? };
             let value = median(left, above, corner).checked_add(signed(symbol)).ok_or_else(|| corrupt("QP prediction overflow"))?;
-            if !(131..=168).contains(&value) {
+            if !(131..=MAX_QP).contains(&value) {
                 return Err(RawError::Unsupported(format!("Canon CRX adaptive QP value {value}")));
             }
             *current.get_mut(x).ok_or_else(|| corrupt("QP outside row"))? = value;
@@ -990,10 +998,19 @@ mod tests {
     #[test]
     fn measured_quantization_and_allocation_limits() {
         for (quant, expected) in [(4, 1), (9, 1), (10, 2), (16, 4), (22, 8), (26, 12), (32, 25), (36, 40), (41, 72), (42, 80), (43, 90), (44, 102)] {
-            assert_eq!(quant_step(quant).unwrap(), expected);
+            assert_eq!(quant_step(quant, MAX_UNIFORM_QUANT).unwrap(), expected);
         }
-        assert!(matches!(quant_step(3), Err(RawError::Unsupported(_))));
-        assert!(matches!(quant_step(45), Err(RawError::Unsupported(_))));
+        assert!(matches!(quant_step(3, MAX_UNIFORM_QUANT), Err(RawError::Unsupported(_))));
+        assert!(matches!(quant_step(45, MAX_UNIFORM_QUANT), Err(RawError::Unsupported(_))));
+        // Adaptive QP 169..=175 (EOS R6 Mark II C-RAW) continue the sequence; QP 176 does not decode.
+        for (quant, expected) in [(45, 114), (46, 128), (47, 144), (48, 160), (49, 180), (50, 204), (51, 228)] {
+            assert_eq!(quant_step(quant, MAX_ADAPTIVE_QUANT).unwrap(), expected);
+        }
+        assert!(matches!(quant_step(52, MAX_ADAPTIVE_QUANT), Err(RawError::Unsupported(_))));
+        let high = QpMap { width: 1, height: 2, data: vec![172, 175] };
+        // floor((172+175)/2) = 173 → value 49, step 180; gain 8/8 plus base 1.
+        assert_eq!(adaptive_step(&high, 4, 0, 0, 1, 8).unwrap(), 181);
+        assert_eq!(adaptive_step(&high, 7, 0, 1, 0, 8).unwrap(), 228);
         for (width, height) in [(20_000, 20_000), (65_538, 2), (2, 65_538)] {
             let mut config = coding();
             config.width = width;
@@ -1032,9 +1049,18 @@ mod tests {
     }
 
     #[test]
-    fn qp_168_is_accepted_and_169_is_not() {
-        assert_eq!(qp_map(&[0, 0, 1, 0x50, 0x94], 1, 4).unwrap().data, [168; 4]);
-        assert!(matches!(qp_map(&[0, 0, 1, 0x52, 0x94], 1, 4), Err(RawError::Unsupported(_))));
+    fn qp_limit_is_accepted_and_one_above_is_not() {
+        // The first symbol is a 32-bit literal: signed(2·QP) = QP from a prediction of 0. QP 172 and 175
+        // occur in EOS R6 Mark II maps (3 of 40 sample files failed with them before).
+        let map = |qp: u32| {
+            let symbol = 2 * qp;
+            let mut src = vec![0, 0, (symbol >> 8) as u8, symbol as u8];
+            src.push(0x94);
+            qp_map(&src, 1, 4)
+        };
+        assert_eq!(map(168).unwrap().data, [168; 4]);
+        assert_eq!(map(MAX_QP as u32).unwrap().data, [MAX_QP; 4]);
+        assert!(matches!(map(MAX_QP as u32 + 1), Err(RawError::Unsupported(_))));
     }
 
     #[test]
@@ -1115,6 +1141,10 @@ mod tests {
             ("cr3-canon-m50-craw.cr3", 0x9aacbfe66f505e1bu64),
             ("cr3-canon-r8-raw.cr3", 0x63c1c6d8d1eb2312u64),
             ("cr3-canon-r8-craw.cr3", 0xf836a663a795a375u64),
+            ("cr3-canon-rp-raw.cr3", 0x5cb0f46404b8b663u64),
+            ("cr3-canon-rp-craw.cr3", 0xf48df06ca1d67382u64),
+            ("cr3-canon-rp-raw-crop.cr3", 0x46808a9de3b3dcc7u64),
+            ("cr3-canon-rp-craw-crop.cr3", 0x39a60c4efed4e1f4u64),
         ] {
             let path = std::path::Path::new(&directory).join(name);
             let bytes = std::fs::read(path).unwrap();

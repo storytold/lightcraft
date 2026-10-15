@@ -210,6 +210,28 @@ fn resumes_partial_files_and_restarts_bad_ones() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A link planted at the partial download's name is removed, never written or appended through: the file it points
+/// to keeps its bytes and the download completes (issue #1502).
+#[cfg(unix)]
+#[test]
+fn a_link_at_the_partial_name_is_never_written_through() {
+    let srv = server();
+    let dir = tmp("part-link");
+    std::fs::create_dir_all(&dir).unwrap();
+    let victim = dir.join("victim.txt");
+    for target_len in [10usize, 0] {
+        std::fs::write(&victim, vec![b'k'; target_len.max(1)]).unwrap();
+        let before = std::fs::read(&victim).unwrap();
+        let _ = std::fs::remove_file(dir.join("model.bin"));
+        let _ = std::fs::remove_file(part_path(&dir, "model.bin"));
+        std::os::unix::fs::symlink(&victim, part_path(&dir, "model.bin")).unwrap();
+        run(&[pinned()], &[format!("{}/good", srv.base)], &dir, &AtomicBool::new(false)).0.unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), before, "the linked file is untouched");
+        assert_eq!(std::fs::read(dir.join("model.bin")).unwrap(), payload());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_416_or_a_bad_complete_part_starts_over() {
     let srv = server();

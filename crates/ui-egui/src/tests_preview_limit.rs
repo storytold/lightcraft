@@ -227,6 +227,63 @@ mod in_the_loupe {
         assert_eq!(h.app.region_view.map(|r| r.settings), Some(plain.settings), "back to the plain window");
     }
 
+    // Given the Show All Masks view (issue #1712) at 1:1, the zoomed loupe is a canvas-sized frame
+    // plus a native window carrying the overlay, as a selected mask's is: the union is evaluated
+    // from the same mask alphas, so it must not fall back to a whole-frame render at the zoomed
+    // size (slower, and its detail stops at the frame render's resolution)
+    #[test]
+    fn an_all_masks_overlay_at_one_to_one_is_a_window() {
+        let (mut h, native) = detail();
+        for (command, params) in [
+            ("panel.masking", json!({})),
+            ("mask.add", json!({"kind": "radial", "center": [0.4, 0.5], "rx": 0.2, "ry": 0.2})),
+            ("mask.add", json!({"kind": "linear", "start": [0.2, 0.3], "end": [0.8, 0.7]})),
+        ] {
+            let r = h.request("engine.execute", json!({"command": command, "params": params}), T);
+            assert_eq!(r["ok"], true, "{command}: {r}");
+        }
+        let r = h.request("engine.execute", json!({"command": "view.maskOverlayAll", "params": {}}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(h.app.ui.mask_overlay_all, "the all-masks overlay is on");
+        h.request("engine.execute", json!({"command": "view.zoom100"}), T);
+        h.settle(SETTLE);
+        let id = h.app.session.active().expect("a photo");
+        let d = h.app.session.develop_of(id).expect("settings");
+        assert!(
+            matches!(crate::panels::detail::view_overlay(&h.app, &d), lightcraft_pipeline::Overlay::AllMasks { .. }),
+            "the all-masks overlay is shown"
+        );
+        let main = rendered_long_edge(&h);
+        assert!(main <= 2560 && main < native, "native {native}: the whole-frame render is {main}");
+        let region = h.app.region_view.expect("a window render with the all-masks overlay");
+        assert_eq!(region.full.0.max(region.full.1), native, "cut from the photo's own pixels");
+        let (w, hh) = region_tile(&h).expect("its texture");
+        assert!(w >= 1300 && hh >= 700, "it covers the canvas: {w}×{hh}");
+    }
+
+    // Given soft proofing on at 1:1 (LR-VIEW-ZOOM), the view is a canvas-sized frame plus a
+    // native window carrying the proof, as without it, instead of a whole-frame render at the
+    // photo's full size; switching the proof off swaps the window back to the plain look
+    #[test]
+    fn soft_proofing_at_one_to_one_is_a_window() {
+        let (mut h, native) = detail();
+        h.request("engine.execute", json!({"command": "view.zoom100"}), T);
+        h.settle(SETTLE);
+        let plain = h.app.region_view.expect("a window render without the proof");
+        let r = h.request("engine.execute", json!({"command": "view.softProof", "params": {"on": true, "destWarning": true}}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert!(h.app.ui.soft_proof);
+        let main = rendered_long_edge(&h);
+        assert!(main <= 2560 && main < native, "native {native}: the whole-frame render is {main}");
+        let proofed = h.app.region_view.expect("a window render with the proof");
+        assert_eq!(proofed.full.0.max(proofed.full.1), native, "cut from the photo's own pixels");
+        assert_ne!(proofed.settings, plain.settings, "the proof is part of the window's look");
+        h.request("engine.execute", json!({"command": "view.softProof", "params": {"on": false}}), T);
+        h.settle(SETTLE);
+        assert_eq!(h.app.region_view.map(|r| r.settings), Some(plain.settings), "back to the plain window");
+    }
+
     // Given the user capped the preview at 1600 px, then 1:1 is rendered no larger than that
     #[test]
     fn an_explicit_limit_still_caps_one_to_one() {
@@ -438,11 +495,52 @@ mod in_the_loupe {
         h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.5}}), T);
         h.settle(SETTLE);
         let main = rendered_long_edge(&h);
-        assert!(main <= 1000 && main * 4 < native, "the whole-frame draft is {main} px for a {native} px photo");
+        // canvas-sized: the whole canvas on the GPU, a 0.6 draft of it on the CPU (#330)
+        let canvas = h.app.canvas_rect.expect("the loupe was drawn");
+        let canvas_long = canvas.width().max(canvas.height()) as usize + crate::state::LOUPE_EDGE_STEP;
+        assert!(main <= canvas_long && main * 4 < native, "the whole-frame draft is {main} px for a {native} px photo");
         let region = h.app.region_view.expect("the window is drafted too");
         assert_eq!(region.full.0.max(region.full.1), native, "at 100 %, magnified by the GPU");
         let (w, hh) = region_tile(&h).expect("a window draft");
         assert!(w * hh <= 3_000_000, "{w}×{hh}: the window holds what is on screen, not the frame");
+    }
+
+    /// Drag Exposure in the loupe and return the long edge of the whole-frame draft shown, with
+    /// the largest a small (CPU-sized) draft of the photo as drawn can be.
+    fn drag_exposure(h: &mut Headless) -> (usize, usize) {
+        h.app.session.begin_interaction("Exposure").unwrap();
+        h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.5}}), T);
+        h.settle(SETTLE);
+        let image = h.app.image_rect.expect("the photo was drawn");
+        let small = (image.width().max(image.height()) * crate::region::CPU_DRAFT_SCALE) as usize + crate::state::LOUPE_EDGE_STEP;
+        (rendered_long_edge(h), small)
+    }
+
+    // Given a drag whose full-size drafts were too slow before (the CPU, a LUT profile, a slow
+    // GPU), when the same slider is dragged again, then it drafts small (#330)
+    #[test]
+    fn a_slow_drag_drafts_small() {
+        // the GPU device up front (the loupe never waits for it): with one, it is the earlier
+        // drag's time that makes this drag small
+        let _ = lightcraft_engine::gpu::available();
+        let (mut h, _) = detail();
+        let id = h.app.session.active().expect("a photo is open");
+        h.app.drag_scale.remember_slow(id, "Exposure");
+        let (main, small) = drag_exposure(&mut h);
+        assert!(main <= small, "the draft is {main} px, a small one at most {small}");
+    }
+
+    // Given soft proofing (rendered on the CPU even with a GPU), a drag drafts small (#330)
+    #[test]
+    fn a_soft_proofed_drag_drafts_small() {
+        // the GPU device up front (the loupe never waits for it): with one, this is the case where
+        // the GPU is there and the render still goes to the CPU
+        let _ = lightcraft_engine::gpu::available();
+        let (mut h, _) = detail();
+        h.app.ui.soft_proof = true;
+        h.settle(SETTLE);
+        let (main, small) = drag_exposure(&mut h);
+        assert!(main <= small, "the draft is {main} px, a small one at most {small}");
     }
 
     fn tile(h: &Headless, slot: Slot) -> Option<(usize, usize)> {
@@ -571,10 +669,16 @@ mod in_the_loupe {
     #[test]
     #[ignore = "a measurement, not a check"]
     fn profile_slider_drag() {
-        for (size, percent) in
-            [([1400.0, 900.0], 0.0), ([1400.0, 900.0], 100.0), ([1400.0, 900.0], 400.0), ([2800.0, 1700.0], 100.0), ([2800.0, 1700.0], 400.0)]
-        {
+        for (size, percent, proof) in [
+            ([1400.0, 900.0], 0.0, false),
+            ([1400.0, 900.0], 100.0, false),
+            ([1400.0, 900.0], 400.0, false),
+            ([2800.0, 1700.0], 100.0, false),
+            ([2800.0, 1700.0], 400.0, false),
+            ([1400.0, 900.0], 100.0, true),
+        ] {
             let (mut h, native) = detail_in(size);
+            h.app.ui.soft_proof = proof;
             h.app.ui.zoom = if percent == 0.0 { crate::state::Zoom::Fit } else { crate::state::Zoom::Percent(percent) };
             h.settle(SETTLE);
             h.app.session.begin_interaction("Exposure").unwrap();
@@ -598,9 +702,10 @@ mod in_the_loupe {
             ms.sort_by(|a, b| a.total_cmp(b));
             let (w, hh) = region_tile(&h).unwrap_or((0, 0));
             eprintln!(
-                "PROFILE {}x{} canvas, {percent:>4}% (0 = fit) of {native} px: tick→shown median {:.1} ms, p90 {:.1} ms, max {:.1} ms; whole-frame render {} px, window tile {w}×{hh}",
+                "PROFILE {}x{} canvas, {percent:>4}% (0 = fit){} of {native} px: tick→shown median {:.1} ms, p90 {:.1} ms, max {:.1} ms; whole-frame render {} px, window tile {w}×{hh}",
                 size[0],
                 size[1],
+                if proof { ", soft proof" } else { "" },
                 ms[ms.len() / 2],
                 ms[ms.len() * 9 / 10],
                 ms[ms.len() - 1],
@@ -744,18 +849,6 @@ mod in_the_loupe {
         assert_eq!(h.app.region_tiles.len(), 2, "{:?}", h.app.region_tiles.keys().collect::<Vec<_>>());
     }
 
-    // Given soft proofing at 1:1 (a mode that draws one image, so no window), the whole-frame
-    // render is as big as the view, not a canvas-sized upscale
-    #[test]
-    fn soft_proofing_at_one_to_one_renders_the_whole_frame_at_full_size() {
-        let (mut h, native) = detail();
-        h.app.ui.soft_proof = true;
-        h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
-        assert_eq!(h.app.region_view, None);
-        assert_eq!(rendered_long_edge(&h), native);
-    }
-
     // Given a window the photo's spots make too big for one render (refused), the loupe falls back
     // to the whole frame at the drawn size, and tries windows again when the look changes
     #[test]
@@ -862,9 +955,37 @@ mod in_the_loupe {
         }
     }
 
+    // …and with no monitor profile chosen but a screen that reports one (macOS: previews follow
+    // the screen's profile, #787), the sharp window is painted too (#1365): every Mac renders for
+    // a display
+    #[test]
+    fn with_the_screen_profile_the_window_is_drawn() {
+        let (mut h, native) = detail();
+        h.app.services.screen_profile = Some(Box::new(|| Some(lightcraft_codecs::icc::write_named(lightcraft_codecs::NamedSpace::DisplayP3))));
+        h.step();
+        assert!(h.app.ui.settings.display_profile.is_empty(), "no profile chosen");
+        assert!(h.app.renderer.display_id().is_some(), "the screen's profile is in use");
+        h.request("engine.execute", json!({"command": "view.zoom100"}), T);
+        h.settle(SETTLE);
+        assert!(rendered_long_edge(&h) < native, "the whole frame is smaller than the photo");
+        let (whole, window) = (drawn(&h, Slot::Main), drawn(&h, Slot::Region));
+        assert!(!whole.is_empty(), "the whole-frame render is painted");
+        assert!(!window.is_empty(), "the window is painted");
+        assert!(window[0].0 > whole[0].0, "over the whole-frame render");
+    }
+
+    /// The engine caches' share of the default memory budget (1.5 GiB) on a machine with 6 GiB of
+    /// RAM or more: room for both panes' 24 MP originals (288 MB each as linear float).
+    const COMPARE_CACHE: usize = 768 << 20;
+
     /// Compare view of the demo library at `zoom`, settled.
+    ///
+    /// The session's cache budget is set here rather than taken from the process-wide memory
+    /// budget, which other tests change while they run (Settings ▸ Performance ▸ 1 GB leaves a
+    /// 512 MiB share, too small for two originals, so one pane's was evicted).
     fn compare_at(zoom: crate::state::Zoom) -> Headless {
         let (mut h, _) = detail();
+        h.app.session.media.set_budget(COMPARE_CACHE);
         let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(h.app.ui.view, crate::state::ViewMode::Compare);

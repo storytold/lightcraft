@@ -393,3 +393,37 @@ proptest! {
         prop_assert_eq!(t.ifds[0].f64s(501).unwrap().len(), v.len());
     }
 }
+
+/// A BigTIFF whose IFD says it has an enormous number of entries, with one readable, computed where the next-IFD
+/// offset would be from the advertised count: an add overflow, a panic in builds with overflow checks (issue
+/// #1516). The readable entry is kept and there is no next IFD; complete chains still link.
+#[test]
+fn bigtiff_with_an_enormous_entry_count_does_not_panic() {
+    for order in ORDERS {
+        for count in [u64::MAX, 1 << 62, 2] {
+            // little-endian bytes, reversed for big-endian files
+            let e = |le: &[u8]| -> Vec<u8> { if order == ByteOrder::Little { le.to_vec() } else { le.iter().rev().copied().collect() } };
+            let mut f = if order == ByteOrder::Little { b"II".to_vec() } else { b"MM".to_vec() };
+            for part in [e(&43u16.to_le_bytes()), e(&8u16.to_le_bytes()), e(&0u16.to_le_bytes()), e(&16u64.to_le_bytes()), e(&count.to_le_bytes())] {
+                f.extend(part);
+            }
+            // one entry: ImageWidth, LONG, 1 value (inline in the 8-byte field)
+            for part in [e(&tags::IMAGE_WIDTH.to_le_bytes()), e(&4u16.to_le_bytes()), e(&1u64.to_le_bytes()), e(&640u32.to_le_bytes())] {
+                f.extend(part);
+            }
+            f.extend([0; 4]);
+            let (ifd, next) = parse_ifd_at(&f, 16, order, 0, true, &ParseOptions::default()).unwrap();
+            assert_eq!(ifd.value(tags::IMAGE_WIDTH), Some(&Value::Long(vec![640])), "{order:?} {count}");
+            assert_eq!(next, 0, "{order:?} {count}");
+            let t = Tiff::parse(&f).unwrap();
+            assert_eq!(t.ifds.len(), 1);
+        }
+        // a complete chain of two IFDs still links
+        let mut a = IfdBuilder::new();
+        a.set(1000, Value::Short(vec![1]));
+        let mut b = IfdBuilder::new();
+        b.set(1000, Value::Short(vec![2]));
+        let t = Tiff::parse(&TiffWriter::new(order, true).write(&[a, b]).unwrap()).unwrap();
+        assert_eq!(t.ifds.len(), 2, "{order:?}");
+    }
+}

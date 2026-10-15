@@ -11,7 +11,8 @@
 //!   control-channel method names itself (rendering with the engine's pipeline and encoding with
 //!   `lightcraft-codecs`), so agents can develop photos and look at the result without a window.
 //!
-//! Entry points: [`Server::serve`] (stdio loop) and [`Server::handle_line`] (one message).
+//! Entry points: [`Server::serve_stdio`] (process stdin), [`Server::serve`] (caller-managed
+//! streams), and [`Server::handle_line`] (one message).
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 

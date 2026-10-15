@@ -115,6 +115,7 @@ fn a_failing_download_ends_with_an_error_and_never_blocks() {
     }
     let st = s.segmenter.download_status();
     assert!(!st.finished);
+    assert!(!st.cancelled, "a failure is not a cancel");
     let e = st.error.unwrap();
     assert!(e.contains("not found"), "{e}");
     assert!(!s.segmenter.installed());
@@ -272,9 +273,35 @@ fn a_running_model_download_shows_in_activity_and_cancels() {
         assert!(t.elapsed() < Duration::from_secs(10), "the download never stopped");
         std::thread::sleep(Duration::from_millis(10));
     }
-    let e = s.segmenter.download_status().error.unwrap_or_default();
+    let st = s.segmenter.download_status();
+    assert!(st.cancelled, "the app tells a cancel by the flag (#1046): {st:?}");
+    let e = st.error.unwrap_or_default();
     assert!(e.contains("cancelled"), "{e}");
     assert!(!s.segmenter.installed());
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_file(&mirrors);
+}
+
+/// Frontends decide on the error's kind, not its words (#1046): a missing model is
+/// `ModelMissing(Sam3)` whether the app queues requests (background) or a command waits (CLI, MCP);
+/// a build without AI masks is not a missing model (there is nothing to download).
+#[test]
+fn a_missing_model_is_model_missing_by_kind() {
+    use crate::{AiModel, ErrorKind};
+    for background in [true, false] {
+        let mut s = Session::with_demo();
+        s.segmenter.background = background;
+        s.segmenter.dir = Some(tmp(&format!("kind-{background}")));
+        for (cmd, p) in
+            [("mask.add", json!({"kind": "object"})), ("mask.add", json!({"kind": "prompt", "text": "sky"})), ("segment.prepare", json!({}))]
+        {
+            let e = s.execute(cmd, &p).unwrap_err();
+            if Segmenter::AVAILABLE {
+                assert_eq!(e.kind(), ErrorKind::ModelMissing(AiModel::Sam3), "{cmd} (background {background}): {e}");
+                assert!(e.to_string().starts_with(NOT_INSTALLED), "the message is unchanged: {e}");
+            } else {
+                assert_eq!(e.kind(), ErrorKind::Other, "{cmd}: {e}");
+            }
+        }
+    }
 }

@@ -38,7 +38,7 @@ fn masked(s: &mut DevelopSettings, k: usize) {
 #[test]
 fn failed_gpu_renders_fall_back_with_a_reason() {
     if !lightcraft_gpu::available() {
-        eprintln!("skipped: no GPU adapter ({:?})", lightcraft_gpu::unavailable_reason());
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter ({})", lightcraft_gpu::unavailable_reason().unwrap_or_default());
         return;
     }
     assert_eq!(lightcraft_gpu::unavailable_reason(), None);

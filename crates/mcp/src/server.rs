@@ -84,7 +84,9 @@ impl Server {
     }
 
     /// Serve newline-delimited JSON-RPC until `input` closes. Logs go to stderr only (stdout is
-    /// the protocol stream).
+    /// the protocol stream). The scoped input worker must reach EOF or an input error before
+    /// this returns, including on output failure: callers must unblock their own input.
+    /// For a process serving stdin, use [`Self::serve_stdio`] instead.
     pub fn serve(&mut self, input: impl BufRead + Send, output: impl Write + Send) -> std::io::Result<()> {
         self.serve_wire(input, output)
     }

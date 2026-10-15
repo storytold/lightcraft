@@ -2365,3 +2365,47 @@ fn new_album_can_leave_the_selected_photos_out() {
     confirm(&mut h);
     assert!(photos(&h, "Nothing").is_empty());
 }
+
+/// Histogram corner controls stay usable even before a histogram is available, and each
+/// click invokes the same clipping-warning command as the J shortcut exactly once.
+#[test]
+fn histogram_corners_toggle_clipping_warnings() {
+    let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
+    for texture in h.app.renderer.textures.values_mut() {
+        texture.histogram = None;
+    }
+    h.step();
+    h.app.ui.show_clipping = false;
+    let histogram = h.app.widgets.iter().find(|(id, _)| id == "histogram").unwrap().1;
+    for id in ["histogram:shadows", "histogram:highlights"] {
+        let rect = h.app.widgets.iter().find(|(widget, _)| widget == id).unwrap().1;
+        assert!(histogram.shrink(8.0).contains_rect(rect), "{id} keeps clear space to the histogram edges: {rect:?} in {histogram:?}");
+    }
+    for (id, enabled) in [("histogram:shadows", true), ("histogram:highlights", false), ("histogram", true)] {
+        let r = h.request("ui.clickWidget", json!({"id": id}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        assert_eq!(h.app.ui.show_clipping, enabled, "{id} must toggle exactly once");
+    }
+    let r = h.request("ui.key", json!({"key": "J"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(!h.app.ui.show_clipping);
+}
+
+#[test]
+fn the_histogram_clipping_buttons_stay_clear_of_the_hovered_scroll_bar() {
+    // every section open: the Edit panel scrolls, so its scroll bar runs past the histogram
+    let h = demo(
+        [1400.0, 700.0],
+        json!({"view": "detail", "right": "edit", "histogram": true, "openSections": ["light", "color", "effects", "detail", "optics"]}),
+    );
+    let hist = widget(&h, "histogram");
+    let (low, high) = (widget(&h, "histogram:shadows"), widget(&h, "histogram:highlights"));
+    // a hovered floating scroll bar grows to its full width at the panel's right edge, over the content
+    let scroll = h.view.ctx.global_style().spacing.scroll;
+    let bar_left = hist.right() - scroll.bar_outer_margin - scroll.bar_width;
+    assert!(high.right() <= bar_left, "the highlight clipping button {high:?} is under the scroll bar (from x = {bar_left})");
+    // and the shadow one keeps the same inset from its edge
+    assert!(((low.left() - hist.left()) - (hist.right() - high.right())).abs() < 0.5, "{low:?} {high:?} in {hist:?}");
+}

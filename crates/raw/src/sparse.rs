@@ -13,9 +13,9 @@
 //! tracks (keeping the raw track's coding headers and quantization maps, and the timed-metadata
 //! track where Canon puts the as-shot white balance), a RAF's CFA strip (keeping its compression
 //! header) and a Panasonic RW2's raw data. Formats whose header probe reads samples (NEF: masked
-//! columns; ORF: bit depth and CFA phase; PEF: dark borders) and anything else get
-//! [`HeaderPlan::Whole`], as does a structure that is incomplete, inconsistent or keeps metadata
-//! inside its sample data: the plan never guesses.
+//! columns; ORF: bit depth and CFA phase; PEF: dark borders; ARW6, for its header plan only: the
+//! start of every tile) and anything else get [`HeaderPlan::Whole`], as does a structure that is
+//! incomplete, inconsistent or keeps metadata inside its sample data: the plan never guesses.
 
 use std::collections::HashSet;
 
@@ -227,7 +227,7 @@ fn tiff_plan(bytes: &[u8], loaded: &Ranges, preview: bool) -> HeaderPlan {
         return plan;
     }
     // (the Make is usually in the first kilobytes: a NEF, PEF or ORF is known before the rest is read)
-    if matches!(crate::probe(bytes), Some(RawFormat::Nef | RawFormat::Nrw | RawFormat::Orf | RawFormat::Pef)) {
+    if matches!(crate::probe(bytes), Some(RawFormat::Nef | RawFormat::Nrw | RawFormat::Orf | RawFormat::Pef | RawFormat::Erf | RawFormat::Mef)) {
         return HeaderPlan::Whole("its header probe reads samples");
     }
     let Ok(tiff) = Tiff::parse(bytes) else { return HeaderPlan::Whole("TIFF structure") };
@@ -236,6 +236,8 @@ fn tiff_plan(bytes: &[u8], loaded: &Ranges, preview: bool) -> HeaderPlan {
         let chunks: Vec<(u64, u64)> = match ifd.image() {
             // a preview's strips are read when the preview is wanted: only the raw image is skipped
             Ok(info) if preview && !matches!(info.photometric, t::photometric::CFA | t::photometric::LINEAR_RAW) => continue,
+            // (Sony Compressed RAW 2: the header probe decodes the start of every tile; a preview reads none)
+            Ok(info) if !preview && info.compression == 32766 => return HeaderPlan::Whole("an ARW6 header probe reads its tiles"),
             Ok(info) => info.chunks(len).iter().map(|c| (c.offset, c.len)).collect(),
             // a raw IFD without the tags a TIFF image needs (an older CR2's) still lists its strips
             Err(_) => match (ifd.u64s(t::STRIP_OFFSETS), ifd.u64s(t::STRIP_BYTE_COUNTS)) {
@@ -260,7 +262,9 @@ fn tiff_plan(bytes: &[u8], loaded: &Ranges, preview: bool) -> HeaderPlan {
         holes.insert(off.saturating_add(HEAD), len);
     }
     finish(len, loaded, &holes, &meta, || match crate::probe(bytes) {
-        Some(RawFormat::Nef | RawFormat::Nrw | RawFormat::Orf | RawFormat::Pef) => HeaderPlan::Whole("its header probe reads samples"),
+        Some(RawFormat::Nef | RawFormat::Nrw | RawFormat::Orf | RawFormat::Pef | RawFormat::Erf | RawFormat::Mef) => {
+            HeaderPlan::Whole("its header probe reads samples")
+        }
         Some(f) if f.is_supported() => HeaderPlan::Ready,
         _ => HeaderPlan::Whole("not a supported raw"),
     })
@@ -549,5 +553,18 @@ mod tests {
         raf[100..104].copy_from_slice(&1000u32.to_be_bytes());
         raf[104..108].copy_from_slice(&1000u32.to_be_bytes());
         assert_eq!(run(&raf, 160, 0).0, HeaderPlan::Whole("RAF raw container"));
+    }
+
+    /// An ARW6 header probe reads every tile's headers and the first lines of its data, which lie in the strip a
+    /// plan would skip: here the second tile, past a first one of bulk size.
+    #[test]
+    fn arw6_is_described_from_the_whole_file() {
+        use crate::vendor::arw6_testenc::{Qis, arw6_file, one_tile_quantised};
+        let (tile, _) = one_tile_quantised(64, 48, 0, Qis::REAL);
+        let mut first = tile.clone();
+        first.resize(BULK as usize, 0);
+        let file = arw6_file(&[(0, 0, 64, 48, first), (64, 0, 64, 48, tile)], 128, 48);
+        assert!(crate::probe_info(&file).is_ok());
+        assert_eq!(run(&file, 16, 0).0, HeaderPlan::Whole("an ARW6 header probe reads its tiles"));
     }
 }

@@ -129,6 +129,76 @@ impl Opcode {
     pub fn is_lens_correction(&self) -> bool {
         matches!(self, Opcode::WarpRectilinear { .. } | Opcode::WarpRectilinear2 { .. } | Opcode::FixVignetteRadial { .. })
     }
+
+    /// This lens correction re-expressed for the part `crop` of the `width × height` image it was written for: applied
+    /// to the cropped image it gives the crop of the corrected whole. The centre moves into the crop and the
+    /// coefficients are rescaled for the crop's farthest corner, the radius every coordinate is normalised by. Centres
+    /// use the warps' convention (0 and 1 at the first and last pixel), also for `FixVignetteRadial`, as the develop
+    /// pipeline reads them. `None` for other opcodes, an image or crop under 2 × 2, or a crop outside the image.
+    pub fn cropped(&self, width: usize, height: usize, crop: crate::Rect) -> Option<Opcode> {
+        let fits = crop.x.checked_add(crop.width).is_some_and(|r| r <= width) && crop.y.checked_add(crop.height).is_some_and(|b| b <= height);
+        if width < 2 || height < 2 || crop.width < 2 || crop.height < 2 || !fits {
+            return None;
+        }
+        let (aw, ah) = (width as f64 - 1.0, height as f64 - 1.0);
+        let (cw, ch) = (crop.width as f64 - 1.0, crop.height as f64 - 1.0);
+        // the centre in the crop, and the ratio of the crop's normalising radius to the image's
+        let reframe = |c: [f64; 2]| -> Option<([f64; 2], f64)> {
+            let (px, py) = (c[0] * aw, c[1] * ah);
+            let (qx, qy) = (px - crop.x as f64, py - crop.y as f64);
+            let s = max_radius(qx, qy, cw, ch) / max_radius(px, py, aw, ah);
+            (s.is_finite() && s > 0.0 && qx.is_finite() && qy.is_finite()).then_some(([qx / cw, qy / ch], s))
+        };
+        match self {
+            // source radius r·(kr0 + kr1 r² + kr2 r⁴ + kr3 r⁶) and tangential terms quadratic in r: with r = r'·s,
+            // kr_i scales by s^2i and kt by s
+            Opcode::WarpRectilinear { planes, center } => {
+                let (center, s) = reframe(*center)?;
+                let planes = planes
+                    .iter()
+                    .map(|k| {
+                        let mut k = *k;
+                        for (i, v) in k[..4].iter_mut().enumerate() {
+                            *v *= s.powi(2 * i as i32);
+                        }
+                        k[4] *= s;
+                        k[5] *= s;
+                        k
+                    })
+                    .collect();
+                Some(Opcode::WarpRectilinear { planes, center })
+            }
+            // radial factor Σ kr_i r^i between the valid radii: kr_i scales by s^i, the radii by 1/s
+            Opcode::WarpRectilinear2 { planes, center, reciprocal, optional } => {
+                let (center, s) = reframe(*center)?;
+                let planes = planes
+                    .iter()
+                    .map(|k| {
+                        let mut k = *k;
+                        for (i, v) in k[..15].iter_mut().enumerate() {
+                            *v *= s.powi(i as i32);
+                        }
+                        k[15] *= s;
+                        k[16] *= s;
+                        k[17] /= s;
+                        k[18] /= s;
+                        k
+                    })
+                    .collect();
+                Some(Opcode::WarpRectilinear2 { planes, center, reciprocal: *reciprocal, optional: *optional })
+            }
+            // gain 1 + Σ k_i r^(2i+2)
+            Opcode::FixVignetteRadial { k, center } => {
+                let (center, s) = reframe(*center)?;
+                let mut k = *k;
+                for (i, v) in k.iter_mut().enumerate() {
+                    *v *= s.powi(2 * i as i32 + 2);
+                }
+                Some(Opcode::FixVignetteRadial { k, center })
+            }
+            _ => None,
+        }
+    }
 }
 
 /// The opcodes of a list that a reader applies, in order: all of them, minus the DNG 1.6 skip rule (specification
@@ -454,7 +524,7 @@ fn gain_at(points_v: u32, points_h: u32, spacing: [f64; 2], origin: [f64; 2], ma
 }
 
 /// Radius normaliser: distance from the centre to the farthest image corner.
-fn max_radius(cx: f64, cy: f64, w: f64, h: f64) -> f64 {
+pub(crate) fn max_radius(cx: f64, cy: f64, w: f64, h: f64) -> f64 {
     [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)].iter().map(|&(x, y)| (x - cx).hypot(y - cy)).fold(0.0, f64::max).max(1e-9)
 }
 
@@ -1031,5 +1101,61 @@ pub(crate) mod tests {
         // a refused (Unknown) opcode 14 triggers no skip
         let bad = Opcode::Unknown { id: 14, flags: 1, params: vec![] };
         assert!(applied_ops(&[bad, wr]).any(|o| matches!(o, Opcode::WarpRectilinear { .. })));
+    }
+
+    /// `cropped` re-expresses a lens correction for a crop: the corrected crop is the crop of the corrected whole. A
+    /// linear ramp makes bilinear sampling exact, so only the borders (where the warp reaches past the crop) differ.
+    #[test]
+    fn cropped_lens_corrections_correct_the_crop_like_the_whole() {
+        let (w, h) = (90usize, 64usize);
+        let crop = crate::Rect::new(7, 5, 70, 50);
+        let ramp = Rgb32f::from_fn(w, h, |x, y| [0.002 * x as f32 + 0.001 * y as f32 + 0.1, 0.3 + 0.0015 * y as f32, 0.2]);
+        let mut wr2 = [0.0; WR2_LEN];
+        wr2[..5].copy_from_slice(&[1.0, 0.01, -0.03, 0.0, 0.01]);
+        wr2[15] = 0.002;
+        wr2[16] = -0.001;
+        wr2[17] = 0.05;
+        wr2[18] = 0.9;
+        let warps = [
+            Opcode::WarpRectilinear { planes: vec![[0.97, 0.04, -0.01, 0.002, 0.003, -0.002]], center: [0.47, 0.53] },
+            Opcode::WarpRectilinear2 { planes: vec![wr2], center: [0.52, 0.46], reciprocal: false, optional: true },
+            Opcode::WarpRectilinear2 { planes: vec![wr2], center: [0.52, 0.46], reciprocal: true, optional: false },
+        ];
+        for op in &warps {
+            let mut whole = ramp.clone();
+            apply_list3(std::slice::from_ref(op), &mut whole);
+            let re = op.cropped(w, h, crop).unwrap();
+            let mut part = ramp.clone().into_crop(crop.x, crop.y, crop.width, crop.height);
+            apply_list3(std::slice::from_ref(&re), &mut part);
+            let mut worst = 0f32;
+            for y in 6..crop.height - 6 {
+                for x in 6..crop.width - 6 {
+                    let (a, b) = (whole.data[(y + crop.y) * w + x + crop.x], part.data[y * crop.width + x]);
+                    worst = (0..3).map(|c| (a[c] - b[c]).abs()).fold(worst, f32::max);
+                }
+            }
+            assert!(worst < 1e-4, "{op:?} → {re:?}: {worst}");
+        }
+        // the vignette, in the warps' centre convention the develop pipeline reads it with
+        let gain = |k: &[f64; 5], c: [f64; 2], w: usize, h: usize, x: f64, y: f64| {
+            let (aw, ah) = (w as f64 - 1.0, h as f64 - 1.0);
+            let (px, py) = (c[0] * aw, c[1] * ah);
+            let r2 = ((x - px).powi(2) + (y - py).powi(2)) / max_radius(px, py, aw, ah).powi(2);
+            1.0 + (0..5).map(|i| k[i] * r2.powi(i as i32 + 1)).sum::<f64>()
+        };
+        let (k, center) = ([-0.3, 0.1, -0.05, 0.02, -0.01], [0.45, 0.55]);
+        let Some(Opcode::FixVignetteRadial { k: k2, center: c2 }) = (Opcode::FixVignetteRadial { k, center }).cropped(w, h, crop) else {
+            panic!("vignette")
+        };
+        for (x, y) in [(0.0, 0.0), (69.0, 49.0), (33.5, 20.0), (69.0, 0.0), (12.0, 40.0)] {
+            let (a, b) = (gain(&k, center, w, h, x + crop.x as f64, y + crop.y as f64), gain(&k2, c2, crop.width, crop.height, x, y));
+            assert!((a - b).abs() < 1e-12, "({x}, {y}): {a} vs {b}");
+        }
+        // no change for a full-frame "crop"; nothing for other opcodes, tiny images or a crop past the edge
+        assert_eq!(warps[0].cropped(w, h, crate::Rect::new(0, 0, w, h)).unwrap(), warps[0]);
+        assert!(Opcode::TrimBounds { top: 0, left: 0, bottom: 2, right: 2 }.cropped(w, h, crop).is_none());
+        assert!(warps[0].cropped(1, h, crate::Rect::new(0, 0, 1, h)).is_none());
+        assert!(warps[0].cropped(w, h, crate::Rect::new(30, 0, 70, 50)).is_none());
+        assert!(warps[0].cropped(w, h, crate::Rect::new(usize::MAX, 0, 70, 50)).is_none());
     }
 }

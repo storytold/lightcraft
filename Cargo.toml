@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
 
 [workspace.package]
-version = "0.7.1"
+version = "0.8.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.90"
@@ -39,6 +39,8 @@ lightcraft-fetch = { path = "crates/fetch" }
 lightcraft-heif = { path = "crates/heif" }
 lightcraft-segment = { path = "crates/segment" }
 lightcraft-geocode = { path = "crates/geocode" }
+lightcraft-slideshow = { path = "crates/slideshow" }
+lightcraft-testkit = { path = "crates/testkit" }
 
 # foundation
 thiserror = "2"
@@ -52,7 +54,7 @@ bytemuck = { version = "1", features = ["derive"] }
 crc32fast = "1"
 siphasher = "1"
 libc = "0.2" # dev-only: process CPU time in benches
-dhat = "0.3" # opt-in heap profiling (lightcraft-cli --features dhat-heap); never in default builds
+dhat = "0.3" # opt-in heap profiling (lightcraft-cli --features dhat-heap) and heap tests; never in product builds
 
 # formats
 quick-xml = "0.38"

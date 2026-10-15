@@ -3,8 +3,11 @@
 //! The image is cut into bands of MCU rows separated by restart markers (`DRI` + `RSTn`): DC
 //! prediction restarts at every marker, so bands are entropy-coded independently on all cores and
 //! concatenated. Quantization uses the example tables of T.81 Annex K scaled by the usual 1–100
-//! quality convention; Huffman coding uses the Annex K example tables (interleaved baseline, readable
-//! by every decoder). Supports grayscale and YCbCr 4:4:4 / 4:2:0.
+//! quality convention. Huffman tables are made for each image from its own symbol counts (T.81
+//! Annex K.2): a first pass over the bands counts the symbols, a second codes them. The file stays
+//! interleaved baseline with the tables in its `DHT` segments, readable by every decoder, and is
+//! smaller than with the Annex K example tables at the same pixels. Supports grayscale and YCbCr
+//! 4:4:4 / 4:2:0.
 
 use crate::encode::ChromaSubsampling;
 
@@ -61,14 +64,101 @@ impl Huff {
         let (mut c, mut k) = (0u16, 0usize);
         for (len, &n) in bits.iter().enumerate() {
             for _ in 0..n {
-                code[vals[k] as usize] = (c, len as u8 + 1);
-                c += 1;
+                if let Some(&v) = vals.get(k) {
+                    code[v as usize] = (c, len as u8 + 1);
+                }
+                c = c.wrapping_add(1);
                 k += 1;
             }
-            c <<= 1;
+            c = c.wrapping_shl(1);
         }
         Huff { code }
     }
+}
+
+/// Symbol counts of one Huffman table: index = symbol (DC size category, or AC run/size byte).
+type Freq = [u64; 256];
+
+/// The code lengths (`BITS`, counts per length 1..16) and symbols (`HUFFVAL`) of an optimal
+/// Huffman table for `freq`, limited to 16-bit codes and never assigning the all-ones code
+/// (T.81 Annex K.2, figures K.1–K.4). Symbols with a zero count get no code. At least one symbol
+/// is always present (a table nothing used gets symbol 0), so the result is a valid `DHT`.
+fn optimal_table(freq: &Freq) -> ([u8; 16], Vec<u8>) {
+    // 256 is the reserved pseudo-symbol: counted once, it takes the longest code, which is
+    // then dropped so no real code is all ones (K.2)
+    let mut f = [0u64; 257];
+    f[..256].copy_from_slice(freq);
+    if f[..256].iter().all(|&c| c == 0) {
+        f[0] = 1;
+    }
+    f[256] = 1;
+    let mut size = [0usize; 257];
+    let mut next: [Option<usize>; 257] = [None; 257];
+    loop {
+        // the two smallest non-zero counts; on equal counts the larger symbol goes first (K.1)
+        let mut c1: Option<usize> = None;
+        for i in 0..257 {
+            if f[i] > 0 && c1.is_none_or(|c| f[i] <= f[c]) {
+                c1 = Some(i);
+            }
+        }
+        let Some(c1) = c1 else { break };
+        let mut c2: Option<usize> = None;
+        for i in 0..257 {
+            if i != c1 && f[i] > 0 && c2.is_none_or(|c| f[i] <= f[c]) {
+                c2 = Some(i);
+            }
+        }
+        let Some(c2) = c2 else { break };
+        f[c1] = f[c1].saturating_add(f[c2]);
+        f[c2] = 0;
+        // every symbol in both trees goes one level deeper; c2's chain is appended to c1's
+        let mut k = c1;
+        size[k] += 1;
+        while let Some(n) = next[k] {
+            k = n;
+            size[k] += 1;
+        }
+        next[k] = Some(c2);
+        let mut k = c2;
+        size[k] += 1;
+        while let Some(n) = next[k] {
+            k = n;
+            size[k] += 1;
+        }
+    }
+    // counts per code length; 257 symbols need at most 256 levels
+    let mut bits = [0usize; 257];
+    for &s in &size {
+        if s > 0 {
+            bits[s.min(256)] += 1;
+        }
+    }
+    // limit to 16 bits (K.3): move pairs of the longest codes up, one level at a time (the
+    // deepest level of a full tree always holds an even number of codes)
+    for i in (17..257).rev() {
+        while bits[i] >= 2 {
+            let Some(j) = (1..i - 1).rev().find(|&j| bits[j] > 0) else { break };
+            bits[i] -= 2;
+            bits[i - 1] += 1;
+            bits[j + 1] += 2;
+            bits[j] -= 1;
+        }
+    }
+    // drop the reserved symbol's code: it is one of the longest
+    if let Some(i) = (1..=16).rev().find(|&i| bits[i] > 0) {
+        bits[i] -= 1;
+    }
+    // symbols by code length, then by value (K.4); the reserved symbol is not listed
+    let mut vals = Vec::new();
+    for len in 1..257 {
+        vals.extend((0..256).filter(|&s| size[s] == len).map(|s| s as u8));
+    }
+    let mut out = [0u8; 16];
+    for (o, &b) in out.iter_mut().zip(&bits[1..=16]) {
+        *o = b.min(255) as u8;
+    }
+    (out, vals)
 }
 
 fn scaled_quant(base: &[u16; 64], quality: u8) -> [u16; 64] {
@@ -177,13 +267,15 @@ fn magnitude(v: i32) -> (u32, u32) {
     (size, bits & ((1u32 << size) - 1))
 }
 
-fn encode_block(w: &mut Bits, q: &[i16; 64], pred: &mut i32, dc: &Huff, ac: &Huff) {
+/// The Huffman symbols of one quantized block in coding order: `sym(ac, symbol, bits, n)` for the
+/// DC size category (`ac` false) and each AC run/size, ZRL and EOB (`ac` true), each followed by
+/// its `n` extra bits `bits`.
+#[inline(always)]
+fn block_symbols(q: &[i16; 64], pred: &mut i32, mut sym: impl FnMut(bool, usize, u32, u32)) {
     let d = q[0] as i32 - *pred;
     *pred = q[0] as i32;
     let (s, b) = magnitude(d);
-    let (c, l) = dc.code[s as usize];
-    w.put(c as u32, l as u32);
-    w.put(b, s);
+    sym(false, s as usize, b, s);
     let mut run = 0u32;
     for &zi in &ZIGZAG[1..] {
         let v = q[zi] as i32;
@@ -192,20 +284,43 @@ fn encode_block(w: &mut Bits, q: &[i16; 64], pred: &mut i32, dc: &Huff, ac: &Huf
             continue;
         }
         while run >= 16 {
-            let (c, l) = ac.code[0xF0];
-            w.put(c as u32, l as u32);
+            sym(true, 0xF0, 0, 0);
             run -= 16;
         }
         let (s, b) = magnitude(v);
-        let (c, l) = ac.code[((run << 4) | s) as usize];
-        w.put(c as u32, l as u32);
-        w.put(b, s);
+        sym(true, ((run << 4) | s) as usize, b, s);
         run = 0;
     }
     if run > 0 {
-        let (c, l) = ac.code[0x00];
-        w.put(c as u32, l as u32);
+        sym(true, 0x00, 0, 0);
     }
+}
+
+/// One coded symbol of the entropy-coded data: bits 0–7 the symbol, 8–9 its table (0 DC luma,
+/// 1 AC luma, 2 DC chroma, 3 AC chroma), 10–13 the number of extra bits, 14–29 those bits (a
+/// baseline coefficient needs at most 11).
+type Token = u32;
+
+/// Append one block's symbols to `out` and count them in `freq` (by table, as in [`Token`]).
+fn tokenize_block(q: &[i16; 64], pred: &mut i32, chroma: bool, out: &mut Vec<Token>, freq: &mut [Freq; 4]) {
+    let base = if chroma { 2 } else { 0 };
+    block_symbols(q, pred, |is_ac, s, bits, n| {
+        let table = base + is_ac as usize;
+        freq[table][s & 0xFF] += 1;
+        out.push((s as u32 & 0xFF) | (table as u32) << 8 | (n & 0xF) << 10 | (bits & 0xFFFF) << 14);
+    });
+}
+
+/// Code a band's symbols with `tables` (indexed as in [`Token`]).
+fn write_tokens(tokens: &[Token], tables: &[Huff; 4]) -> Vec<u8> {
+    let mut w = Bits::new();
+    for &t in tokens {
+        let (s, table, n, bits) = (t & 0xFF, (t >> 8) & 3, (t >> 10) & 0xF, t >> 14);
+        let (c, l) = tables[table as usize].code[s as usize];
+        w.put(c as u32, l as u32);
+        w.put(bits, n);
+    }
+    w.finish()
 }
 
 /// Planar component samples (level-shifted to −128..127) with edge replication on read.
@@ -249,7 +364,8 @@ fn dht(out: &mut Vec<u8>, class_id: u8, bits: &[u8; 16], vals: &[u8]) {
     segment(out, 0xC4, &p);
 }
 
-/// Encode interleaved 8-bit samples (`channels` 1, 3 or 4; alpha is dropped).
+/// Encode interleaved 8-bit samples (`channels` 1, 3 or 4; alpha is dropped), with Huffman
+/// tables made for the image.
 pub fn encode(
     data: &[u8],
     width: usize,
@@ -258,6 +374,21 @@ pub fn encode(
     quality: u8,
     sub: ChromaSubsampling,
     app_segments: &[(u8, Vec<u8>)],
+) -> Vec<u8> {
+    encode_with(data, width, height, channels, quality, sub, app_segments, true)
+}
+
+/// [`encode`], with optimized Huffman tables or (`optimize` false) the Annex K example tables.
+#[allow(clippy::too_many_arguments)]
+fn encode_with(
+    data: &[u8],
+    width: usize,
+    height: usize,
+    channels: usize,
+    quality: u8,
+    sub: ChromaSubsampling,
+    app_segments: &[(u8, Vec<u8>)],
+    optimize: bool,
 ) -> Vec<u8> {
     let gray = channels == 1;
     let (hs, vs) = match (gray, sub) {
@@ -331,42 +462,67 @@ pub fn encode(
     let ql = scaled_quant(&Q_LUMA, quality);
     let qc = scaled_quant(&Q_CHROMA, quality);
     let (rl, rc) = (recip_table(&ql), recip_table(&qc));
-    let (dcl, acl) = (Huff::new(&DC_LUMA_BITS, &DC_VALS), Huff::new(&AC_LUMA_BITS, &AC_LUMA_VALS));
-    let (dcc, acc) = (Huff::new(&DC_CHROMA_BITS, &DC_VALS), Huff::new(&AC_CHROMA_BITS, &AC_CHROMA_VALS));
-
     let (mcu_w, mcu_h) = (8 * hs, 8 * vs);
     let (mx, my) = (width.div_ceil(mcu_w), height.div_ceil(mcu_h));
     // restart interval: whole MCU rows per band, ≤ 65535 MCUs, enough bands to keep all cores busy
     let rows_per_band = (my / 64).clamp(1, (65_535 / mx.max(1)).max(1));
     let bands: Vec<usize> = (0..my.div_ceil(rows_per_band)).collect();
-    let encode_band = |band: &usize| -> Vec<u8> {
-        let mut w = Bits::new();
-        let mut pred = [0i32; 3];
+    // first pass: each band's quantized blocks as symbols, with their counts per table (DC
+    // prediction restarts per band, as the restart markers say)
+    let tokenize_band = |band: &usize| -> (Vec<Token>, [Freq; 4]) {
         let (mut blk, mut q) = ([0f32; 64], [0i16; 64]);
+        let (mut tokens, mut freq) = (Vec::new(), [[0u64; 256]; 4]);
+        let mut pred = [0i32; 3];
         for mcu_y in band * rows_per_band..((band + 1) * rows_per_band).min(my) {
             for mcu_x in 0..mx {
                 for vy in 0..vs {
                     for hx in 0..hs {
                         planes[0].block(mcu_x * hs + hx, mcu_y * vs + vy, &mut blk);
                         fdct_quant(&blk, &rl, &mut q);
-                        encode_block(&mut w, &q, &mut pred[0], &dcl, &acl);
+                        tokenize_block(&q, &mut pred[0], false, &mut tokens, &mut freq);
                     }
                 }
                 if !gray {
-                    for k in 1..3 {
-                        planes[k].block(mcu_x, mcu_y, &mut blk);
+                    for (plane, pred) in planes.iter().zip(pred.iter_mut()).take(3).skip(1) {
+                        plane.block(mcu_x, mcu_y, &mut blk);
                         fdct_quant(&blk, &rc, &mut q);
-                        encode_block(&mut w, &q, &mut pred[k], &dcc, &acc);
+                        tokenize_block(&q, pred, true, &mut tokens, &mut freq);
                     }
                 }
             }
         }
-        w.finish()
+        (tokens, freq)
     };
     #[cfg(feature = "parallel")]
-    let coded: Vec<Vec<u8>> = bands.par_iter().map(encode_band).collect();
+    let tokenized: Vec<(Vec<Token>, [Freq; 4])> = bands.par_iter().map(tokenize_band).collect();
     #[cfg(not(feature = "parallel"))]
-    let coded: Vec<Vec<u8>> = bands.iter().map(encode_band).collect();
+    let tokenized: Vec<(Vec<Token>, [Freq; 4])> = bands.iter().map(tokenize_band).collect();
+    drop(planes);
+    // the tables: DC luma, AC luma, DC chroma, AC chroma
+    let tables: [([u8; 16], Vec<u8>); 4] = if optimize {
+        let mut total = [[0u64; 256]; 4];
+        for (_, f) in &tokenized {
+            for (t, f) in total.iter_mut().zip(f) {
+                for (t, f) in t.iter_mut().zip(f) {
+                    *t = t.saturating_add(*f);
+                }
+            }
+        }
+        total.each_ref().map(optimal_table)
+    } else {
+        [
+            (DC_LUMA_BITS, DC_VALS.to_vec()),
+            (AC_LUMA_BITS, AC_LUMA_VALS.to_vec()),
+            (DC_CHROMA_BITS, DC_VALS.to_vec()),
+            (AC_CHROMA_BITS, AC_CHROMA_VALS.to_vec()),
+        ]
+    };
+    let huff = tables.each_ref().map(|(bits, vals)| Huff::new(bits, vals));
+    // second pass: code the symbols
+    #[cfg(feature = "parallel")]
+    let coded: Vec<Vec<u8>> = tokenized.into_par_iter().map(|(t, _)| write_tokens(&t, &huff)).collect();
+    #[cfg(not(feature = "parallel"))]
+    let coded: Vec<Vec<u8>> = tokenized.into_iter().map(|(t, _)| write_tokens(&t, &huff)).collect();
 
     // headers
     let mut out = Vec::with_capacity(coded.iter().map(Vec::len).sum::<usize>() + 4096);
@@ -396,11 +552,12 @@ pub fn encode(
         sof.extend_from_slice(&[3, 1, ((hs as u8) << 4) | vs as u8, 0, 2, 0x11, 1, 3, 0x11, 1]);
     }
     segment(&mut out, 0xC0, &sof);
-    dht(&mut out, 0x00, &DC_LUMA_BITS, &DC_VALS);
-    dht(&mut out, 0x10, &AC_LUMA_BITS, &AC_LUMA_VALS);
+    let [(dlb, dlv), (alb, alv), (dcb, dcv), (acb, acv)] = &tables;
+    dht(&mut out, 0x00, dlb, dlv);
+    dht(&mut out, 0x10, alb, alv);
     if !gray {
-        dht(&mut out, 0x01, &DC_CHROMA_BITS, &DC_VALS);
-        dht(&mut out, 0x11, &AC_CHROMA_BITS, &AC_CHROMA_VALS);
+        dht(&mut out, 0x01, dcb, dcv);
+        dht(&mut out, 0x11, acb, acv);
     }
     let interval = (rows_per_band * mx) as u16;
     if coded.len() > 1 {
@@ -493,6 +650,100 @@ mod tests {
             let z = zune_jpeg::JpegDecoder::new(zune_core::bytestream::ZCursor::new(&jpg[..])).decode().expect("zune-jpeg");
             assert_eq!(z.len(), px.len());
         }
+    }
+
+    /// The code lengths of `(bits, vals)`, checked: every listed symbol once, at most 16 bits,
+    /// and room left in the code space (the all-ones code is never assigned, Kraft sum < 1).
+    fn check_table(bits: &[u8; 16], vals: &[u8]) {
+        assert_eq!(bits.iter().map(|&b| b as usize).sum::<usize>(), vals.len());
+        let mut seen = [false; 256];
+        for &v in vals {
+            assert!(!seen[v as usize], "symbol {v} listed twice");
+            seen[v as usize] = true;
+        }
+        let kraft: f64 = bits.iter().enumerate().map(|(i, &n)| n as f64 / 2f64.powi(i as i32 + 1)).sum();
+        assert!(kraft < 1.0, "code space full: {kraft}");
+        let h = Huff::new(bits, vals);
+        for &v in vals {
+            let (c, l) = h.code[v as usize];
+            assert!((1..=16).contains(&l));
+            assert_ne!(c as u32, (1u32 << l) - 1, "symbol {v} has the all-ones code");
+        }
+    }
+
+    #[test]
+    fn optimal_tables_are_valid_and_bounded() {
+        // one symbol, two, a typical spread and every symbol
+        let mut one = [0u64; 256];
+        one[7] = 5;
+        let mut two = [0u64; 256];
+        two[0] = 1;
+        two[0xF0] = 1_000_000;
+        let typical: Freq = std::array::from_fn(|s| if s % 3 == 0 { (s as u64 * 7919) % 1000 + 1 } else { 0 });
+        let all: Freq = std::array::from_fn(|s| s as u64 + 1);
+        // Fibonacci counts make an unbounded Huffman tree ~40 levels deep: the 16-bit limit applies
+        let mut fib = [0u64; 256];
+        let (mut a, mut b) = (1u64, 1u64);
+        for f in fib.iter_mut().take(40) {
+            *f = a;
+            (a, b) = (b, a + b);
+        }
+        for (name, f) in [("one", one), ("two", two), ("typical", typical), ("all", all), ("fib", fib), ("none", [0; 256])] {
+            let (bits, vals) = optimal_table(&f);
+            check_table(&bits, &vals);
+            for s in 0..256 {
+                assert_eq!(vals.contains(&(s as u8)), f[s] > 0 || (name == "none" && s == 0), "{name}: symbol {s}");
+            }
+        }
+        // more frequent symbols never get longer codes
+        let (bits, vals) = optimal_table(&typical);
+        let h = Huff::new(&bits, &vals);
+        for &x in &vals {
+            for &y in &vals {
+                if typical[x as usize] > typical[y as usize] {
+                    assert!(h.code[x as usize].1 <= h.code[y as usize].1, "{x} vs {y}");
+                }
+            }
+        }
+        // the Annex K example tables pass the same checks
+        check_table(&AC_LUMA_BITS, &AC_LUMA_VALS);
+        check_table(&DC_CHROMA_BITS, &DC_VALS);
+    }
+
+    /// Issue #1373: tables made for the image give a smaller file with exactly the same pixels as
+    /// the Annex K example tables (the quantized coefficients are the same), at every quality and
+    /// subsampling, and both decoders read it.
+    #[test]
+    fn optimized_tables_shrink_files_without_changing_pixels() {
+        let (w, h) = (517, 333);
+        // gradients plus deterministic noise, like a photo's grain
+        let mut seed = 0x2545_f491_u32;
+        let src: Vec<u8> = test_rgb(w, h)
+            .into_iter()
+            .map(|v| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                v.saturating_add((seed % 23) as u8)
+            })
+            .collect();
+        for (q, sub) in [(100, ChromaSubsampling::S444), (92, ChromaSubsampling::S444), (75, ChromaSubsampling::S420), (30, ChromaSubsampling::S420)]
+        {
+            let std = encode_with(&src, w, h, 3, q, sub, &[], false);
+            let opt = encode(&src, w, h, 3, q, sub, &[]);
+            assert!(opt.len() < std.len(), "q{q} {sub:?}: {} ≥ {}", opt.len(), std.len());
+            let a = jpeg_decoder::Decoder::new(&std[..]).decode().expect("standard tables");
+            let b = jpeg_decoder::Decoder::new(&opt[..]).decode().expect("optimized tables");
+            assert_eq!(a, b, "q{q} {sub:?}: pixels differ");
+            let z = zune_jpeg::JpegDecoder::new(zune_core::bytestream::ZCursor::new(&opt[..])).decode().expect("zune-jpeg");
+            assert_eq!(z.len(), b.len());
+        }
+        // grayscale too
+        let gray: Vec<u8> = src.iter().step_by(3).copied().collect();
+        let std = encode_with(&gray, w, h, 1, 90, ChromaSubsampling::S444, &[], false);
+        let opt = encode(&gray, w, h, 1, 90, ChromaSubsampling::S444, &[]);
+        assert!(opt.len() < std.len());
+        assert_eq!(jpeg_decoder::Decoder::new(&std[..]).decode().unwrap(), jpeg_decoder::Decoder::new(&opt[..]).decode().unwrap());
     }
 
     #[test]

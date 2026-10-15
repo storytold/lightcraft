@@ -38,7 +38,7 @@ fn mask_disagreement(a: &[f32], b: &[f32]) -> f32 {
 #[test]
 fn matches_reference() {
     let Some((dir, r)) = setup() else {
-        eprintln!("skipped: set LIGHTCRAFT_SAM3_DIR and LIGHTCRAFT_SAM3_REF");
+        lightcraft_testkit::skip!(Model, "set LIGHTCRAFT_SAM3_DIR and LIGHTCRAFT_SAM3_REF");
         return;
     };
     let mut model = Sam3::load(&dir).unwrap();

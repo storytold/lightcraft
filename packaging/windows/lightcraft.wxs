@@ -80,7 +80,9 @@
     upgrade; Change... browses, and a folder that can't be used (InvalidDirDlg) is refused before
     anything is installed. Failure and cancellation end on WiX's standard FatalError / UserExit
     dialogs instead of the completion page. Maintenance (running the MSI again, Repair/Remove from
-    Apps) uses the standard maintenance dialogs.
+    Apps) uses the standard maintenance dialogs; every successful run — install, repair or
+    remove — then ends on the shared completion page, so a successful uninstall is confirmed
+    with a visible final dialog (issue #892; the page itself is issue #790's fix).
 
     This is WixUI_InstallDir without its licence-acceptance page: LightCraft is MIT OR Apache-2.0,
     which ask nothing of people who just install and run it, so a click-through EULA would only
@@ -128,6 +130,11 @@
       <DialogRef Id="BrowseDlg" />
       <DialogRef Id="InvalidDirDlg" />
       <DialogRef Id="DiskCostDlg" />
+      <!-- Referenced by the Publish events below but never pulled in on its own: without this
+           ref the MSI ships without a completion page, so a successful install or remove ends
+           silently (issues #790, #892). The UI extension's fragment shows it on exit=success,
+           which covers Remove from Apps & features too. -->
+      <DialogRef Id="ExitDialog" />
       <DialogRef Id="VerifyReadyDlg" />
       <DialogRef Id="MaintenanceWelcomeDlg" />
       <DialogRef Id="MaintenanceTypeDlg" />
@@ -198,6 +205,9 @@
 
       <Component Id="LightcraftCli">
         <File Id="LightcraftCliExe" Source="$(var.BinDir)\lightcraft-cli.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="LightcraftFontLicences">
+        <File Id="LightcraftFontLicencesFile" Source="$(var.BinDir)\FONT-LICENCES.txt" KeyPath="yes" />
       </Component>
     </ComponentGroup>
   </Fragment>

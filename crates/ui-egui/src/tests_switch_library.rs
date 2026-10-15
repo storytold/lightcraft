@@ -55,6 +55,26 @@ fn app_in(dir: &std::path::Path) -> LightcraftApp {
     LightcraftApp::new(session, Services::default())
 }
 
+#[test]
+fn switching_libraries_dismisses_the_previous_lightroom_result() {
+    let dir = temp("switch-lightroom-result");
+    let mut app = app_in(&dir);
+    let result = || crate::state::Dialog::LightroomResult {
+        summary: "Imported into first".into(),
+        library: Some(dir.join("first").to_string_lossy().into_owned()),
+        details: Vec::new(),
+        first: Some(1),
+    };
+    app.ui.dialog = Some(result());
+    app.lightroom_result = Some(result());
+    app.lightroom_last = Some(json!({"imported": 1}));
+    app.run("app.newLibrary", json!({"path": dir.to_string_lossy(), "name": "Second"})).unwrap();
+    assert!(app.ui.dialog.is_none(), "the old destination and photo ID must not act on the new library");
+    assert!(app.lightroom_result.is_none());
+    assert!(app.lightroom_last.is_none());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 fn recent_submenu(app: &LightcraftApp) -> Vec<crate::menubar::MenuNode> {
     use crate::menubar::MenuNode;
     let bar = crate::menubar::menu_bar(app);

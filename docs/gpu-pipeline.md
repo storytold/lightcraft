@@ -105,6 +105,14 @@ rendering; `set VK_LOADER_DRIVERS_DISABLE=*igvk64*` (Vulkan loader) hides a spec
 from every program started with it. Help ▸ System Info and `app.gpu` show the adapter and backend in
 use (e.g. `Intel(R) UHD Graphics 630 (Dx12)`).
 
+**LightCraft stops during an export or a render; the log says "device lost" (Windows, issue #1337).**
+When the graphics driver resets the GPU (the Windows watchdog, a driver hang: DXGI `0x887A0005`, "GPU
+device instance has been suspended"), renders fall back to the CPU, but the window's renderer (egui-wgpu)
+panics on the lost device and LightCraft stops. It says so ("LightCraft stopped unexpectedly", not "could
+not open its window") and records it in `gpu-lost.marker` in the settings folder: the next start turns
+*Use the GPU for rendering* off and says why once. Turn it back on in Settings ▸ Performance after a
+driver update.
+
 **Window never appears, "not responding" (Windows, NVIDIA; issue #374).** With *Shader Cache Size*
 set to **Disabled** in NVIDIA Control Panel (Manage 3D settings → Global Settings), NVIDIA's driver
 walks the whole system drive while the window's GPU device is created (`D3D12CreateDevice` →

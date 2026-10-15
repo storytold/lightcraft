@@ -47,6 +47,48 @@ fn contact_sheet_exports_pdf_and_protects_originals() {
     assert_eq!(std::fs::read(&out).unwrap(), prior, "failed export changed prior output");
 }
 
+#[test]
+fn print_commands_chain_into_a_picture_package_pdf() {
+    let input = tmp("print-input.png");
+    gradient_png(&input);
+    let out = tmp("print.pdf");
+    let (ok, lines, err) = run_cli(
+        &[
+            "--import",
+            input.to_str().unwrap(),
+            "print.set",
+            r#"layout={"style":"picturePackage","page":{"paper":"4x6","orientation":"landscape"}}"#,
+            r#"image={"zoomToFill":true,"borderEnabled":true,"borderWidth":0.05}"#,
+            "job={\"ppi\":72}",
+            "print.cell.add",
+            "width=1.5",
+            "height=1",
+            "print.cell.add",
+            "width=1.5",
+            "height=1",
+            "print.layout.autoLayout",
+            "print.exportPdf",
+            &format!("path={}", out.display()),
+        ],
+        None,
+    );
+    assert!(ok, "{err}: {lines:?}");
+    let export = lines.last().unwrap();
+    assert_eq!((export["result"]["pages"].as_u64(), export["result"]["photos"].as_u64()), (Some(1), Some(1)));
+    let bytes = std::fs::read(&out).unwrap();
+    assert!(bytes.starts_with(b"%PDF-"));
+    let text = String::from_utf8_lossy(&bytes);
+    let at = text.find("/MediaBox [").unwrap() + "/MediaBox [".len();
+    let nums: Vec<f64> = text[at..].split(']').next().unwrap().split_whitespace().map(|v| v.parse().unwrap()).collect();
+    assert_eq!((nums[2], nums[3]), (432.0, 288.0), "6 x 4 in");
+    // a bad setting fails the run and writes nothing new
+    let before = std::fs::read(&out).unwrap();
+    let (ok, _, _) =
+        run_cli(&["--import", input.to_str().unwrap(), "print.set", "job={\"ppi\":5}", "print.exportPdf", &format!("path={}", out.display())], None);
+    assert!(!ok);
+    assert_eq!(std::fs::read(&out).unwrap(), before);
+}
+
 fn tmp(name: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("lightcraft-cli-test-{}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
@@ -137,6 +179,51 @@ fn render_subcommand() {
     let o = Command::new(BIN).args(["render", input.to_str().unwrap(), "-o", out.to_str().unwrap(), "--set", "nope=1"]).output().unwrap();
     assert!(!o.status.success());
     assert!(String::from_utf8_lossy(&o.stderr).contains("unknown control"));
+}
+
+/// Issue #1730: `render --settings` took a `.lcpreset` from `preset.export`, ignored its wrapper
+/// and rendered the photo unedited.
+#[test]
+fn render_settings_applies_an_lcpreset_and_refuses_unknown_files() {
+    let input = tmp("lcpreset-in.png");
+    gradient_png(&input);
+    let preset = tmp("bright.lcpreset");
+    let (ok, lines, err) = run_cli(
+        &[
+            "--import",
+            input.to_str().unwrap(),
+            "develop.set",
+            "control=light.exposure",
+            "value=1",
+            "preset.create",
+            "name=Bright",
+            "preset.export",
+            &format!("path={}", preset.display()),
+        ],
+        None,
+    );
+    assert!(ok, "{err}: {lines:?}");
+    let plain = tmp("lcpreset-plain.png");
+    let st = Command::new(BIN).args(["render", input.to_str().unwrap(), "-o", plain.to_str().unwrap()]).status().unwrap();
+    assert!(st.success());
+    let bright = tmp("lcpreset-bright.png");
+    let o = Command::new(BIN)
+        .args(["render", input.to_str().unwrap(), "-o", bright.to_str().unwrap(), "--settings", preset.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(mean(&bright) > mean(&plain) + 10.0, "the preset's exposure was not applied");
+
+    let other = tmp("other.lcpreset");
+    std::fs::write(&other, r#"{"format": "other", "version": 1, "presets": []}"#).unwrap();
+    let out = tmp("lcpreset-other.png");
+    let o = Command::new(BIN)
+        .args(["render", input.to_str().unwrap(), "-o", out.to_str().unwrap(), "--settings", other.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!o.status.success(), "an unreadable settings file was accepted");
+    assert!(String::from_utf8_lossy(&o.stderr).contains("other.lcpreset"), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(!out.exists(), "nothing is written when the settings can't be read");
 }
 
 /// Issue #93: `render IMG -o IMG` replaced its own input with the render.
@@ -271,6 +358,24 @@ fn snapshot_script_failure_exits_non_zero() {
     // continue-and-report: the final screenshot is still written
     let d = lightcraft_codecs::decode(&std::fs::read(&out).unwrap(), Default::default()).unwrap();
     assert_eq!((d.width, d.height), (320, 200));
+}
+
+/// A script line whose `params` is not an object must be an error, never a panic: the
+/// `ui.screenshot`-without-a-path branch used to index (`params["path"] = …`) an array and abort
+/// the whole script.
+#[test]
+fn snapshot_script_with_non_object_params_is_an_error() {
+    let script = tmp("snap-bad-params.jsonl");
+    let out = tmp("snap-bad-params.png");
+    std::fs::write(&script, format!("{}\n", json!({"method": "ui.screenshot", "params": [1]}))).unwrap();
+    let o = Command::new(BIN)
+        .args(["snapshot", "--demo", "--script", script.to_str().unwrap(), "-o", out.to_str().unwrap(), "--size", "320x200"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success(), "{stderr}");
+    assert!(!stderr.contains("panicked"), "a bad `params` must be an error, not a panic: {stderr}");
+    assert!(stderr.contains("`params` must be a JSON object"), "{stderr}");
 }
 
 #[test]

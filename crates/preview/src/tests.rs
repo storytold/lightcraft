@@ -114,7 +114,7 @@ fn disk_cache_roundtrip_and_prune() {
     let k2 = hash_bytes(b"corrupt");
     d.put(k2, &img);
     let hex = k2.to_string();
-    let p = dir.join(&hex[..2]).join(format!("{hex}.jpg"));
+    let p = dir.join(&hex[..2]).join(format!("{hex}.lcthumb"));
     std::fs::write(&p, b"not a jpeg").unwrap();
     assert!(d.get(k2).is_none());
     assert!(!p.exists());
@@ -143,7 +143,7 @@ fn disk_cache_overwrite_accounts_for_replaced_jpeg_only_once() {
     cache.put(a, &gradient(120, 90, 9));
     let path = |key: Hash128| {
         let hex = key.to_string();
-        dir.join(&hex[..2]).join(format!("{hex}.jpg"))
+        dir.join(&hex[..2]).join(format!("{hex}.lcthumb"))
     };
     let actual = std::fs::metadata(path(a)).unwrap().len() + std::fs::metadata(path(b)).unwrap().len();
     assert_eq!(cache.size(), actual);
@@ -375,9 +375,310 @@ fn disk_cache_never_touches_foreign_files() {
     for p in &foreign {
         assert!(p.exists(), "foreign file deleted: {}", p.display());
     }
+    assert!(disk::is_cache_file("01", "0123456789abcdef0123456789abcdef.lcthumb"));
+    // (what the cache wrote before it stopped naming its files as pictures is still its own)
     assert!(disk::is_cache_file("01", "0123456789abcdef0123456789abcdef.jpg"));
     assert!(!disk::is_cache_file("01", "0123456789abcdef0123456789abcdef.jpg.bak"));
+    assert!(!disk::is_cache_file("01", "0123456789abcdef0123456789abcdef.lcthumb.bak"));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- the cache is nobody's pictures (issues #610, #1066)
+
+/// Every file under `dir`, by its path from there.
+fn files_under(dir: &std::path::Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            if e.path().is_dir() {
+                todo.push(e.path());
+            } else {
+                out.push(e.path().strip_prefix(dir).unwrap().to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The endings by which a photo gallery, a backup of "my pictures" or a media scanner takes a
+/// file for a picture.
+const PICTURE_ENDINGS: [&str; 12] = ["jpg", "jpeg", "jpe", "jfif", "png", "gif", "bmp", "tif", "tiff", "webp", "heic", "avif"];
+
+fn is_named_as_a_picture(name: &str) -> bool {
+    name.rsplit_once('.').is_some_and(|(_, ending)| PICTURE_ENDINGS.contains(&ending.to_ascii_lowercase().as_str()))
+}
+
+/// Given a library in the Pictures folder, when thumbnails are cached, then no file the cache
+/// writes is named as a picture: a photo gallery that looks through Pictures does not list the
+/// cache as the person's photos, however many thumbnails there are.
+#[test]
+fn nothing_the_cache_writes_is_named_as_a_picture() {
+    let dir = temp_dir("not-pictures");
+    let d = DiskCache::new(&dir, 10 << 20);
+    for i in 0..12u8 {
+        d.put(hash_bytes(&[i, 9]), &gradient(160, 100, i));
+    }
+    let written = files_under(&dir);
+    assert!(written.len() >= 12, "{written:?}");
+    let pictures: Vec<&String> = written.iter().filter(|f| is_named_as_a_picture(f)).collect();
+    assert!(pictures.is_empty(), "named as pictures: {pictures:?}");
+    // and they are found again under those names
+    assert!((0..12u8).all(|i| d.get(hash_bytes(&[i, 9])).is_some()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A shard directory that is a symlink to a folder outside the cache is neither listed, cleared,
+/// pruned, read nor written (issue #1504).
+#[cfg(unix)]
+#[test]
+fn disk_cache_ignores_symlinked_shard_directories() {
+    let dir = temp_dir("symlink-shard");
+    let outside = temp_dir("symlink-outside");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let key = hash_bytes(&[9, 9]);
+    let hex = key.to_string();
+    let sentinel = outside.join(format!("{hex}.jpg"));
+    std::fs::write(&sentinel, vec![7u8; 50_000]).unwrap();
+    std::os::unix::fs::symlink(&outside, dir.join(&hex[..2])).unwrap();
+    let d = DiskCache::new(&dir, 10);
+    assert_eq!(d.size(), 0, "files behind the link are not the cache's");
+    d.prune();
+    assert!(sentinel.exists(), "prune followed the link");
+    assert!(d.get(key).is_none(), "get read through the link");
+    d.put(key, &gradient(16, 16, 1));
+    assert_eq!(std::fs::metadata(&sentinel).unwrap().len(), 50_000, "put wrote through the link");
+    d.clear();
+    assert!(sentinel.exists(), "clear followed the link");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&outside);
+}
+
+/// A folder whose shard is a symlink to somewhere else is not only the cache's: tidying it
+/// neither follows the link nor tags the folder as a cache (issue #1504).
+#[cfg(unix)]
+#[test]
+fn tidying_does_not_declare_a_folder_with_a_symlinked_shard_a_cache() {
+    let dir = temp_dir("symlink-tidy");
+    let outside = temp_dir("symlink-tidy-outside");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let hex = hash_bytes(&[9, 8]).to_string();
+    // (named as a thumbnail is now: only the link says it is not the cache's)
+    let sentinel = outside.join(format!("{hex}.lcthumb"));
+    std::fs::write(&sentinel, b"somebody's file").unwrap();
+    std::os::unix::fs::symlink(&outside, dir.join(&hex[..2])).unwrap();
+    let d = DiskCache::new(&dir, 100 << 20);
+    assert!(d.needs_tidying());
+    assert_eq!(d.take_over_old(&|| false, &|_, _| {}), 0, "nothing behind the link is taken over");
+    assert!(sentinel.is_file(), "the file behind the link is where it was");
+    assert!(!dir.join("CACHEDIR.TAG").exists(), "a folder with a link in it is not declared a cache");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&outside);
+}
+
+/// The bytes of every file under `dir` that is the cache's own.
+fn cache_bytes_on_disk(dir: &std::path::Path) -> u64 {
+    files_under(dir)
+        .iter()
+        .filter(|f| f.split_once('/').is_some_and(|(shard, name)| disk::is_cache_file(shard, name)))
+        .map(|f| std::fs::metadata(dir.join(f)).unwrap().len())
+        .sum()
+}
+
+/// Given a cache from before, whose thumbnails are `.jpg` files, when one is asked for, then it
+/// is found (nothing is rendered again for the change of name) and is no longer a `.jpg`. When
+/// the cache is tidied, none of its old files is a `.jpg` any more, each thumbnail is there
+/// once and counted once, and the folder (which holds nothing but the cache) is tagged. Asking
+/// how big the cache is renames nothing: that is asked from the interface.
+#[test]
+fn thumbnails_cached_as_jpg_files_are_taken_over_under_the_new_name() {
+    let dir = temp_dir("taken-over");
+    let old_path = |k: Hash128| {
+        let hex = k.to_string();
+        dir.join(&hex[..2]).join(format!("{hex}.jpg"))
+    };
+    // (thousands in one folder: renaming while a folder is listed lists some of them twice)
+    let keys: Vec<Hash128> = (0..3000u128).map(|i| Hash128((0xab << 120) | i)).collect();
+    let jpeg = disk::encode_jpeg(&gradient(32, 20, 3)).unwrap();
+    for k in &keys {
+        std::fs::create_dir_all(old_path(*k).parent().unwrap()).unwrap();
+        std::fs::write(old_path(*k), &jpeg).unwrap();
+    }
+    // one that is there under both names (an older build ran after a newer one)
+    std::fs::write(old_path(keys[1]).with_extension("lcthumb"), &jpeg).unwrap();
+
+    let d = DiskCache::new(&dir, 100 << 20);
+    let back = d.get(keys[0]).expect("found under its old name");
+    assert_eq!((back.width, back.height), (32, 20));
+    assert!(!old_path(keys[0]).exists(), "and no longer a .jpg");
+    assert_eq!(d.writes.load(std::sync::atomic::Ordering::Relaxed), 0, "nothing was rendered or written anew");
+    let before = d.size();
+    assert_eq!(before, cache_bytes_on_disk(&dir));
+    assert!(old_path(keys[2]).exists(), "asking for the size renames nothing");
+
+    let seen = std::sync::atomic::AtomicUsize::new(0);
+    let taken = d.take_over_old(&|| false, &|done, of| {
+        assert_eq!(of, 2999, "the old files, less the one already asked for");
+        seen.store(done, std::sync::atomic::Ordering::Relaxed);
+    });
+    assert_eq!(taken, 2998, "all but the one already asked for and the one that was there twice");
+    assert_eq!(seen.load(std::sync::atomic::Ordering::Relaxed), 2999, "and its progress came to the end");
+    let left: Vec<String> = files_under(&dir).into_iter().filter(|f| is_named_as_a_picture(f)).collect();
+    assert_eq!(left, Vec::<String>::new(), "nothing of the cache's is named as a picture");
+    assert_eq!(d.size(), cache_bytes_on_disk(&dir), "each thumbnail counted once");
+    assert_eq!(d.size(), jpeg.len() as u64 * 3000);
+    assert!(keys.iter().all(|k| d.get(*k).is_some()));
+    assert!(dir.join("CACHEDIR.TAG").is_file(), "a folder that holds nothing but the cache is tagged");
+    // tidied once: there is nothing more to do, and it says so
+    assert!(!d.needs_tidying());
+    assert_eq!(d.take_over_old(&|| false, &|_, _| {}), 0);
+    // a thumbnail written while the size was not known is counted with the rest, not alone
+    let fresh = DiskCache::new(&dir, 100 << 20);
+    fresh.put(hash_bytes(b"one more"), &gradient(32, 20, 9));
+    assert_eq!(fresh.size(), cache_bytes_on_disk(&dir));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Given a `thumbs` folder that also holds somebody else's files (a library opened on a photo
+/// folder, issue #98), when the cache is tidied, then their files are as they were, whatever
+/// they are named, and the folder is not declared a cache. A thing that is no file under a
+/// thumbnail's new name keeps the old one from being touched. And tidying can be stopped.
+#[test]
+fn tidying_leaves_what_is_somebodys_and_can_be_stopped() {
+    let dir = temp_dir("tidy-shared");
+    let jpeg = disk::encode_jpeg(&gradient(32, 20, 3)).unwrap();
+    let key = hash_bytes(b"ours");
+    let hex = key.to_string();
+    let ours = dir.join(&hex[..2]).join(format!("{hex}.jpg"));
+    std::fs::create_dir_all(ours.parent().unwrap()).unwrap();
+    std::fs::write(&ours, &jpeg).unwrap();
+    let theirs = [dir.join("holiday.jpg"), dir.join(&hex[..2]).join("holiday.jpg"), dir.join("album").join("one.jpg")];
+    for p in &theirs {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, b"somebody's picture").unwrap();
+    }
+    // something that is no file has another thumbnail's new name
+    let blocked = hash_bytes(b"blocked").to_string();
+    let blocked_old = dir.join(&blocked[..2]).join(format!("{blocked}.jpg"));
+    std::fs::create_dir_all(blocked_old.with_extension("lcthumb")).unwrap();
+    std::fs::write(&blocked_old, &jpeg).unwrap();
+
+    let d = DiskCache::new(&dir, 100 << 20);
+    assert!(d.needs_tidying());
+    assert_eq!(d.take_over_old(&|| true, &|_, _| {}), 0, "stopped before anything");
+    assert!(ours.exists() && d.needs_tidying(), "and to be gone on with");
+    assert_eq!(d.take_over_old(&|| false, &|_, _| {}), 1);
+    assert!(!ours.exists() && ours.with_extension("lcthumb").is_file());
+    assert!(blocked_old.is_file(), "left where it is");
+    for p in &theirs {
+        assert_eq!(std::fs::read(p).unwrap(), b"somebody's picture", "{}", p.display());
+    }
+    assert!(!dir.join("CACHEDIR.TAG").exists(), "a folder with somebody's files in it is not declared a cache");
+    assert!(d.needs_tidying(), "one could not be taken over: it is tried again");
+    // with that out of the way it is done, once, though the folder is still shared
+    std::fs::remove_dir(blocked_old.with_extension("lcthumb")).unwrap();
+    assert_eq!(d.take_over_old(&|| false, &|_, _| {}), 1);
+    assert!(!d.needs_tidying() && !dir.join("CACHEDIR.TAG").exists());
+
+    // what a file manager leaves behind in a folder it showed does not make it somebody's
+    let own = temp_dir("tidy-droppings");
+    let k = hash_bytes(b"k").to_string();
+    std::fs::create_dir_all(own.join(&k[..2])).unwrap();
+    std::fs::write(own.join(&k[..2]).join(format!("{k}.jpg")), &jpeg).unwrap();
+    for left in [own.join(".DS_Store"), own.join("desktop.ini"), own.join(&k[..2]).join("Thumbs.db"), own.join("._thumbs")] {
+        std::fs::write(left, b"x").unwrap();
+    }
+    let d = DiskCache::new(&own, 100 << 20);
+    assert_eq!(d.take_over_old(&|| false, &|_, _| {}), 1);
+    assert!(own.join("CACHEDIR.TAG").is_file() && !d.needs_tidying());
+    let _ = std::fs::remove_dir_all(&own);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Given a full cache, when it has to let thumbnails go, then the ones read in this session
+/// stay over ones that were written later and never looked at: what is in use is not the first
+/// to go, though reading it wrote nothing.
+#[test]
+fn a_full_cache_keeps_what_was_read_this_session() {
+    let dir = temp_dir("read-kept");
+    let d = DiskCache::new(&dir, 60_000);
+    let keys: Vec<Hash128> = (0..8u8).map(|i| hash_bytes(&[i, 7])).collect();
+    for (i, k) in keys.iter().enumerate() {
+        d.put(*k, &gradient(160, 100, i as u8));
+    }
+    // the first two written are the ones in use
+    assert!(d.get(keys[0]).is_some() && d.get(keys[1]).is_some());
+    for i in 0..40u8 {
+        d.put(hash_bytes(&[i, 8]), &gradient(160, 100, i));
+    }
+    assert!(d.size() <= 60_000, "{}", d.size());
+    assert!(d.get(keys[0]).is_some() && d.get(keys[1]).is_some(), "what was read stayed");
+    assert!(d.get(keys[5]).is_none(), "what was written after it and never read went");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn modified(p: &std::path::Path) -> std::time::SystemTime {
+    std::fs::metadata(p).unwrap().modified().unwrap()
+}
+
+/// Given cached thumbnails, when they are read (as at every launch, for every photo in view),
+/// then nothing is written: a file read today is as it was, date and all. Only one that was not
+/// used for a long while has its date brought forward, so that what is still in use is not the
+/// first to go when the cache is full.
+#[test]
+fn reading_a_thumbnail_writes_nothing() {
+    let dir = temp_dir("read-only");
+    let d = DiskCache::new(&dir, 10 << 20);
+    let (fresh, stale) = (hash_bytes(b"fresh"), hash_bytes(b"stale"));
+    let path = |k: Hash128| {
+        let hex = k.to_string();
+        dir.join(&hex[..2]).join(format!("{hex}.lcthumb"))
+    };
+    d.put(fresh, &gradient(160, 100, 1));
+    d.put(stale, &gradient(160, 100, 2));
+    let day = std::time::Duration::from_secs(24 * 3600);
+    let now = std::time::SystemTime::now();
+    let set = |k: Hash128, at: std::time::SystemTime| std::fs::File::options().write(true).open(path(k)).unwrap().set_modified(at).unwrap();
+    set(fresh, now - day);
+    set(stale, now - day * 60);
+    let before = (modified(&path(fresh)), std::fs::read(path(fresh)).unwrap());
+    for _ in 0..3 {
+        assert!(d.get(fresh).is_some());
+    }
+    assert_eq!((modified(&path(fresh)), std::fs::read(path(fresh)).unwrap()), before, "read, and untouched");
+    assert!(d.get(stale).is_some());
+    assert!(modified(&path(stale)) > now - day, "one not used for two months is in use again");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A folder the cache makes for itself says that it is a cache (`CACHEDIR.TAG`, which backup
+/// programs go by), and the tag is not one of its thumbnails: clearing the cache leaves it. A
+/// folder that was there before (it may hold somebody's files, issue #98) is not tagged.
+#[test]
+fn a_folder_the_cache_makes_is_tagged_as_a_cache_and_one_that_was_there_is_not() {
+    let (made, theirs) = (temp_dir("tagged"), temp_dir("untagged"));
+    let own = made.join("thumbs");
+    let d = DiskCache::new(&own, 10 << 20);
+    assert!(!own.exists(), "nothing is made before there is something to keep");
+    d.put(hash_bytes(b"a"), &gradient(160, 100, 1));
+    let tag = std::fs::read_to_string(own.join("CACHEDIR.TAG")).expect("tagged");
+    assert!(tag.starts_with("Signature: 8a477f597d28d172789f06886806bc55"), "{tag}");
+    d.clear();
+    assert_eq!(d.size(), 0);
+    assert!(own.join("CACHEDIR.TAG").is_file());
+
+    std::fs::create_dir_all(&theirs).unwrap();
+    std::fs::write(theirs.join("holiday.jpg"), b"somebody's picture").unwrap();
+    let d = DiskCache::new(&theirs, 10 << 20);
+    d.put(hash_bytes(b"a"), &gradient(160, 100, 1));
+    assert!(d.get(hash_bytes(b"a")).is_some());
+    assert!(!theirs.join("CACHEDIR.TAG").exists(), "a folder with somebody's files in it is not declared a cache");
+    for dir in [made, theirs] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
 
 /// [`JobPool::wait`] returns once a job finishes, which [`JobPool::try_recv`] then hands out, or
@@ -467,4 +768,27 @@ fn a_panicking_job_frees_its_slot() {
         got.is_some()
     }));
     assert_eq!(got, Some(2));
+}
+
+/// Deferred disk writes go through one writer with a byte budget: a burst of big renders can't queue more than the
+/// budget (each used to start a thread of its own, holding its image; issue #1522), and what was queued reaches disk.
+#[test]
+fn deferred_writes_are_bounded_and_drain_to_disk() {
+    let dir = temp_dir("deferred-budget");
+    let cache = Arc::new(PreviewCache::with_disk(1 << 30, &dir, 1 << 31));
+    let big = Arc::new(gradient(4096, 2048, 3)); // 32 MiB each
+    let keys: Vec<Hash128> = (0..24u32).map(|i| hash_bytes(&i.to_le_bytes())).collect();
+    for key in &keys {
+        cache.put_deferred(*key, big.clone());
+        assert!(cache.queued_bytes() <= MAX_QUEUED_BYTES, "{} bytes queued", cache.queued_bytes());
+    }
+    let t = std::time::Instant::now();
+    while cache.queued_bytes() > 0 && t.elapsed() < std::time::Duration::from_secs(120) {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(cache.queued_bytes(), 0, "the queue drains");
+    assert!(cache.disk().unwrap().get(keys[0]).is_some(), "the first write reached disk");
+    // every image is still in memory, written to disk or not
+    assert!(keys.iter().all(|k| cache.get(*k).is_some()));
+    let _ = std::fs::remove_dir_all(&dir);
 }

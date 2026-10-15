@@ -32,9 +32,47 @@ are the public prose descriptions and patents cited in
 embedded-JPEG fallback and its visible warning when a JPEG is present. So does
 any other CR3 decode error (a corrupt file, or a body whose CRX stream the
 decoder misreads): every CR3 opened from its embedded JPEG before this decoder,
-and only four bodies are verified, so a CR3 never fails to import or load
+and not every body's variants are known, so a CR3 never fails to import or load
 where a preview exists. HEVC-only preview tracks are recognized but are not
 decoded.
+
+## Variant status
+
+The supported and rejected CRX coding variants. Every rejection is an explicit `RawError::Unsupported` whose
+text is part of the contract: `crates/raw/tests/cr3_variants.rs` rebuilds each variant as a synthetic CR3
+fixture and asserts the exact string, and that header probing (`probe_info`, the import path) and full
+decoding fail with the same error, because the engine shows that reason when it falls back to the embedded
+preview. The same tests decode a control fixture at both edges of each accepted range, so a rejection can
+only come from the gate named here.
+
+| Variant | Status | Gate | Exact rejection |
+|---|---|---|---|
+| Version `0x100`, four Bayer planes, encoding 0, wavelet levels 0 (lossless) or 3 (C-RAW, horizontal tiles) | Supported | `supports()` in `vendor/crx.rs` | none |
+| Version `0x200`: single-tile 14-bit three-level C-RAW with adaptive quantization, QP map of any height (an odd height leaves the last QP row without a partner and it is used on its own), QP values 131–175 (169–175: EOS R6 Mark II) | Supported | `supports()`, `qp_map()` | none |
+| Version other than `0x100`/`0x200`, or wavelet levels other than 0 and 3 | Rejected | `supports()` | `Canon CRX version {version:#x}, encoding {encoding}, {planes} planes, {levels} wavelet levels` |
+| Bit depth outside 8–16 (the `CMP1` parser only accepts 1–16, so 1–7 is what can arrive) | Rejected | `supports()` | `Canon CRX {bits}-bit samples` |
+| C-RAW with vertical tiles (tile height below the image height, three levels) | Rejected | `supports()` | `Canon CRX C-RAW with vertical tiles` |
+| Version `0x200` that is not a single-tile 14-bit C-RAW | Rejected | `supports()` | `Canon CRX version 0x200 requires a single-tile 14-bit Bayer C-RAW image` |
+| Extended `CMP1` header with a median bit depth (used by type-3 burst coding) | Rejected | `supports()` | `Canon CRX extended median-bit-depth header` |
+| Rounded-plane coding or unexpected plane flags | Rejected | `validate_planes()` | `Canon CRX plane coding flags` |
+| Partial-subband coding | Rejected | `validate_planes()` | `Canon CRX partial subband coding` |
+| Adaptive quantization gain on a low-frequency band (bands 0–3) | Rejected | `validate_planes()` | `Canon CRX adaptive quantization subband parameters` |
+| Uniform quantization value outside 4–44 | Rejected | `quant_step()`, called from `validate_planes()` | `Canon CRX quantization value {value}` |
+| Adaptive QP value outside 131–175 | Rejected | `qp_map()` | `Canon CRX adaptive QP value {value}` |
+| `ff11`/`ff12`/`ff13` markers in a `0x100` stream | Rejected | `layout()` | `Canon CRX ff11/ff12/ff13 marker family` |
+| Marker header of the wrong length (8 bytes expected for `ff01`, `ff02`, `ff03` and `ff12`, 16 for `ff11` and `ff13`) | Rejected | `layout()` | `Canon CRX marker {marker:#x} header length {size}` |
+| `0x200` tile header with a wrong magic, a nonzero reserved field, an empty QP map or QP padding above 7 | Rejected | `layout()` | `Canon CRX adaptive quantization tile header` |
+| `0x200` band header with a nonzero reserved field | Rejected | `layout()` | `Canon CRX adaptive subband reserved field` |
+| Container adapter: a track that is not four planes with encoding 0 | Rejected | `decode()` in `vendor/cr3.rs` | `Canon CR3 encoding {encoding} with {planes} planes` |
+
+`supports()` also rejects encoding other than 0, a plane count other than 4 and a CFA pattern above 3, but
+through a CR3 container the adapter rejects the first two before the CRX layer is reached, and the `CMP1`
+parser rejects the third for four-plane tracks. A descriptor the parser cannot accept at all (a zero
+dimension, a tile larger than the image, a bit depth outside 1–16, a plane count outside 1–4 or a zero
+header size) is reported as `Corrupt` (`CR3 raw track has an invalid CMP1 descriptor`), not as unsupported.
+A gain on a low-frequency band cannot reach `adaptive_step()`, which has its own rejection
+(`Canon CRX adaptive low-frequency quantization`): `validate_planes()` refuses it first. That gate is defence
+in depth and is not tested separately.
 
 ## Verified sensor decoding
 
@@ -46,7 +84,7 @@ its adaptive quantization map. C-RAW is quantized, so next to clipped highlights
 its reconstruction can overshoot the sensor range by a few quantization steps
 (up to 36 codes above 16383 in 17 CC0 files); those samples are clamped to the
 CMP1 bit depth. A lossless sample outside the bit depth is still corrupt data.
-Other unverified coding variants return explicit unsupported errors. Header probing validates the same coding variants and
+Other unverified coding variants return explicit unsupported errors (the table above lists them all). Header probing validates the same coding variants and
 tile/plane layout as full decoding.
 
 `crates/raw/tests/cr3_corpus.rs` checks every full-sensor sample against a
@@ -62,6 +100,10 @@ control. The exact inputs and reference hashes are:
 | Canon R100 C-RAW, raw.pixls.us 7897 | `0b66842b2fe00329ebc05fe8ab9357ddbbe1a0a2d2e69a2893102de7fdf5c942` | `341c706b37c38bbf` |
 | Canon R8 RAW, raw.pixls.us 6585 | `7d5c6dbb11ff7e6ee58715d90a20f5d801e8b103f4711ff6ea329ceafcef254c` | `63c1c6d8d1eb2312` |
 | Canon R8 C-RAW, raw.pixls.us 6587 | `df33cf394573645ce03dea1b2e9f0b5cc2b7734e9e3391ee7114151414cf2812` | `f836a663a795a375` |
+| Canon RP RAW, raw.pixls.us 4674 | `dcbd0f6f9929de2e2331b0fd10a9d01e7cfd04c5a5e4038456de1647d714cdf2` | `5cb0f46404b8b663` |
+| Canon RP C-RAW, raw.pixls.us 4672 | `bd3270610593d37ff8a399908bb9406a4e32f9151d55bf19ac1cf8f10d787b46` | `f48df06ca1d67382` |
+| Canon RP RAW, 1.6× crop, raw.pixls.us 4673 | `7d4ba45dc9264d598336133593c677b09774bcdf13b602ee770e72415a652a16` | `46808a9de3b3dcc7` |
+| Canon RP C-RAW, 1.6× crop, raw.pixls.us 4671 | `4a859ab137f792aedaf3416b0aad1497ebaab02052a49453902e226699154aa7` | `39a60c4efed4e1f4` |
 
 The EOS R5 Mark II files (raw.pixls.us 7881–7884, CC0) are pinned to LightCraft's own decode; no external
 decoder was run on them:
@@ -77,15 +119,20 @@ Reference pixels were observed from the DNGLab 0.8.0 macOS arm64 release
 binary; no decoder source was read or copied, and it is not shipped or linked.
 The release ZIP SHA-256 was
 `ee70805cb60f18d5ed62548c4e595f6cee0a33407e15358eb1766a46afc1c16e`.
-All six sensor comparisons pass. R8 HEVC preview tracks are distinguished from
+The RP references came from the same release's Windows x64 binary (ZIP SHA-256
+`d3add6b71568bf5f7938468b0b40a0ee1eaec01e0057fe78dcc453188010be9a`), after it
+reproduced the M50 RAW hash above. The RP's 1.6× crop mode writes a single
+4032×2656 tile, where full frame (6384×4224) uses two 3192-wide horizontal
+tiles. All ten sensor comparisons pass. R8 HEVC preview tracks are distinguished from
 the primary Bayer RAW; the HEVC preview itself is not decoded. Missing corpus
 files are reported as skipped by the tests.
 
 The version `0x200` QP predictor and entropy framing were checked independently.
 Controlled input mutations establish floor averaging of paired QP rows before
 the nonlinear integer table, then multiplication, division by eight, addition
-of the subband base and a minimum step of one. QP values 131–167 are verified;
-unmeasured values are rejected.
+of the subband base and a minimum step of one. QP values 131–167 are verified; 168 (quantization
+value 44, step 102, measured at about 100 on EOS R50 C-RAW files) continues the sequence and is
+accepted. Other values are rejected.
 
 The QP map is coded as follows (established on the EOS R5 Mark II). Its first symbol is a 32-bit
 big-endian literal, mapped like every other symbol and added to a prediction of zero. Every later
@@ -124,10 +171,48 @@ and 6400), whose developed images match visually and whose sensor means agree
 within 0.1% at ISO 6400. Files with even-height maps never reach this rule, so
 the six verified fixtures are unchanged. Partial-subband and
 rounded-plane coding, vertical C-RAW tiling and adaptive low-frequency gains
-remain unsupported. The decoder bounds image dimensions, sample count,
+remain unsupported (see the variant table above; `cr3_variants.rs` pins each rejection). The decoder bounds image dimensions, sample count,
 tile count, marker headers and temporary allocations. The full sensor buffer is
 allocated only after the first plane decodes, and plane buffers grow row by row,
 so a small crafted file fails before reserving memory for the image it claims.
+
+## Further bodies: one CC0 file each
+
+All 110 CR3 files on raw.pixls.us (2026-10-12, every one CC0, 31 folders) decode from sensor data; none
+falls back to the preview, so none of them uses a CRX variant the decoder refuses (vertical C-RAW tiles,
+partial-subband or rounded-plane coding, multi-tile 0x200, adaptive low-frequency gains) or a CR3
+sRAW / mRAW. HEIF stills are separate `.HIF` files, not CR3. One file per body is pinned in
+`canon_cr3_bodies_decode_like_the_camera_jpeg` (`crates/raw/tests/cr3_corpus.rs`; URLs and SHA-256 in
+`RAW_SAMPLES`, `xtask/src/main.rs`): EOS-1D X Mark III, 90D, 250D, 850D, M200, M50 Mark II, M6 Mark II,
+R, R3, R5, R6, R6 Mark II, R6 Mark III, R7, R10, RP, R50, R50 V and PowerShot G5 X Mark II, G7 X Mark III,
+SX70 HS and V1, C-RAW where the body has a CC0 C-RAW sample. No external decoder was run: the sensor
+hashes pin LightCraft's own decode, and the check is black-box against the camera:
+
+- the green sites of the active area, on a 24 × 16 grid, follow the camera's own embedded JPEG
+  (gamma-encoded Pearson r 0.93–0.99; 0.83 for the M6 Mark II and 0.71 for the G7 X Mark III, whose
+  JPEGs are strongly distortion-corrected; a misread stream gives r near 0);
+- each render was inspected at 100 % for tile seams, band or quantiser artefacts (none);
+- where raw.pixls.us has RAW and C-RAW shots of one scene, their black-subtracted sensor means correlate
+  on 16 × 16 blocks at 0.99–0.995 (R, R6, 250D, R50, G5 X Mark II, R5 crop mode) and 0.97 (RP); the
+  two R5 full-frame shots correlate at only 0.83, though each follows its own camera JPEG at r 0.98, so
+  the shots differ, not the decodes. The shots differ in exposure, so the means are not compared.
+
+The EOS R6 Mark III (`ColorData` version 66) reads its as-shot white balance and black level as described at
+the top of this page; its white level comes from the data.
+
+Not every C-RAW file of a verified body decodes: the decoder accepts adaptive QP values 131–175 only. The 3 of
+40 EOS R6 Mark II C-RAW files with QP 172 or 175 a user reported (they opened as their preview with "Canon CRX
+adaptive QP value 172") now decode (#1694). EOS R7 C-RAW (the odd-height QP map above) has only been checked on six paired RAW /
+C-RAW captures; the pinned R7 file is lossless, so R7 C-RAW still has no black-box reference.
+
+## White level
+
+The white level is Canon's specular white from `ColorData` (the word after the
+normal white level), not the sensor's saturation point. On the RP at ISO 100
+it is 14558 while samples clip at 16383. At the −⅓-stop ISOs, which pull a
+higher analog ISO down digitally, it drops further: 11062 at ISO 5000, where
+red saturates near 13668. Samples above the white level render as clipped.
+Whether Lightroom recovers them has not been measured.
 
 ## Colour limits
 

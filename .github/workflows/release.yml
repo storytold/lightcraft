@@ -37,6 +37,7 @@ env:
 
 jobs:
   version:
+    timeout-minutes: 10
     name: version
     runs-on: ubuntu-latest
     # No `environment: release` here or on the other jobs that sign nothing: no release secrets.
@@ -65,6 +66,7 @@ jobs:
           echo "### LightCraft v$v (\`${GITHUB_SHA::9}\`)" >>"$GITHUB_STEP_SUMMARY"
 
   macos:
+    timeout-minutes: 90
     name: macOS universal
     needs: version
     runs-on: macos-15-xlarge  # M2 Pro larger runner; use only in release.yml (actions_macos_xl budget caps spend)
@@ -78,7 +80,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
-          ref: 8dcdacd5153e64560d109541a47d806f26f048c0 # bump deliberately
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3 # bump deliberately
           path: craft-fonts
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
@@ -114,6 +116,7 @@ jobs:
           if [ -n "${MACOS_KEYCHAIN:-}" ]; then security delete-keychain "$MACOS_KEYCHAIN" || true; fi
 
   windows:
+    timeout-minutes: 90
     name: Windows ${{ matrix.arch }}
     needs: version
     runs-on: windows-latest
@@ -136,7 +139,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
-          ref: 8dcdacd5153e64560d109541a47d806f26f048c0 # bump deliberately
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3 # bump deliberately
           path: craft-fonts
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
@@ -173,6 +176,7 @@ jobs:
           if-no-files-found: error
 
   linux:
+    timeout-minutes: 90
     name: Linux ${{ matrix.arch }}
     needs: version
     # The oldest GitHub-hosted image, so the binaries only need glibc >= 2.35 (Ubuntu 22.04+,
@@ -194,7 +198,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
-          ref: 8dcdacd5153e64560d109541a47d806f26f048c0 # bump deliberately
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3 # bump deliberately
           path: craft-fonts
       - name: Install build and packaging tools
         run: |
@@ -237,6 +241,7 @@ jobs:
           if-no-files-found: error
 
   flatpak:
+    timeout-minutes: 90
     name: Flatpak ${{ matrix.arch }}
     needs: [version, linux]
     # Repackages the Linux job's tarball (the same binaries as the AppImage/deb/rpm); no Rust
@@ -274,6 +279,7 @@ jobs:
           if-no-files-found: error
 
   linux-riscv64:
+    timeout-minutes: 90
     name: Linux riscv64
     needs: version
     # Cross-compiled on x86_64 (no hosted RISC-V runners) against the runner's own Ubuntu release
@@ -291,7 +297,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
-          ref: 8dcdacd5153e64560d109541a47d806f26f048c0 # bump deliberately
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3 # bump deliberately
           path: craft-fonts
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
@@ -362,7 +368,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
-          ref: 8dcdacd5153e64560d109541a47d806f26f048c0 # bump deliberately
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3 # bump deliberately
           path: craft-fonts
       - name: Build and package in a FreeBSD VM (tar.gz)
         # vmactions/freebsd-vm v1.5.9, pinned by commit (it runs our build).
@@ -398,6 +404,7 @@ jobs:
           if-no-files-found: error
 
   web:
+    timeout-minutes: 90
     name: Web (wasm)
     needs: version
     runs-on: ubuntu-latest
@@ -411,7 +418,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
-          ref: 8dcdacd5153e64560d109541a47d806f26f048c0 # bump deliberately
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3 # bump deliberately
           path: craft-fonts
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
@@ -441,6 +448,7 @@ jobs:
           if-no-files-found: error
 
   release:
+    timeout-minutes: 10
     name: Draft GitHub Release
     needs: [version, macos, windows, linux, linux-riscv64, flatpak, freebsd, web]
     runs-on: ubuntu-latest

@@ -51,6 +51,7 @@
 //! | 6 | folder labels | `Op::SetFolderRecord`, `Catalog.folder_records` |
 //! | 7 | Kelvin white balance for raws whose camera has matrices (#730) | `Op::SetAsShotWb`, `WhiteBalance.scale` |
 //! | 8 | History cursor: Go to History Step adds no step | `Op::SetHistoryCursor`, `Photo.history_cursor` |
+//! | 9 | preview-only recheck | `Photo.preview_checked`, `Op::SetContent.preview_checked` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -75,7 +76,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 8;
+pub const VERSION: u32 = 9;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]
@@ -113,6 +114,8 @@ pub struct LoadReport {
     /// The library was in an older catalog format (`0` = before format versions: a log without a
     /// snapshot) and was rewritten in this version's format ([`VERSION`]).
     pub upgraded_from: Option<u32>,
+    /// What [`Catalog::repair`] changed in a damaged snapshot (empty for a sound one).
+    pub repaired: Vec<String>,
 }
 
 /// Where persistence time goes (reported by `library.info` → `persistence`; printed to stderr
@@ -328,7 +331,12 @@ impl Journal {
                     return Err(newer(format!("{SNAPSHOT} is catalog format v{}", h.version)));
                 }
                 let s: SnapFile = serde_json::from_slice(&bytes).map_err(|e| CatalogError::Corrupt(format!("{SNAPSHOT}: {e}")))?;
-                (s.catalog, s.seq, Some(h.version))
+                let mut catalog = s.catalog;
+                report.repaired = catalog.repair();
+                for r in &report.repaired {
+                    log::warn!("{SNAPSHOT}: {r}");
+                }
+                (catalog, s.seq, Some(h.version))
             }
             None => (Catalog::new(), 0, None),
         };
