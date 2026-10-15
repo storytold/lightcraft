@@ -145,8 +145,8 @@ pub(super) fn crop_overlay(
             Some(h) => Gesture::CropHandle { handle: h as u8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
             None if inside(q) => Gesture::CropHandle { handle: 8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
             None => {
-                let c = map.screen(d.crop.geometry.rect.center());
-                Gesture::CropRotate { start_angle: d.crop.geometry.angle, a0: (q - c).angle(), start_rect: d.crop.geometry.rect }
+                let c = crop_overlay_centre(&pts);
+                Gesture::CropRotate { start_angle: d.crop.geometry.angle, a0: (q - c).angle(), pivot: c, start_rect: d.crop.geometry.rect }
             }
         });
     }
@@ -166,15 +166,14 @@ pub(super) fn crop_overlay(
                     json!({"handle": handle, "from": [orig.x, orig.y], "to": [n.x, n.y], "start": [start.x0, start.y0, start.x1, start.y1], "keepRatio": keep_ratio}),
                 );
             }
-            Some(Gesture::CropRotate { start_angle, a0, start_rect }) => {
-                // about the crop box's own centre, not the photo's: a box off-centre in the frame
-                // would otherwise swing around the photo's middle and slide off its own axis
-                let c = map.screen(start_rect.center());
-                let a = (q - c).angle();
+            Some(Gesture::CropRotate { start_angle, a0, pivot, start_rect }) => {
+                let a = (q - pivot).angle();
                 // Negate the angle delta because straighten angle is opposite to rotation direction:
                 // dragging clockwise (positive delta) should rotate image clockwise,
                 // but straighten angle is the correction (opposite of rotation).
-                let ang = (start_angle - (a - a0).to_degrees() as f64).clamp(-45.0, 45.0);
+                // `a`/`a0` are atan2 in (-π, π]: dragging down the left of the box crosses ±π, so
+                // the raw subtraction jumps by ~2π and the ±45° clamp snaps the crop to the stop.
+                let ang = (start_angle - shortest_turn(a0, a).to_degrees() as f64).clamp(-45.0, 45.0);
                 shown_angle = (ang * 100.0).round() / 100.0;
                 // `start_rect` is the drawn crop, not the last step's shrunken one: without it a
                 // centred crop comes back as the whole photo (issue #1794).
@@ -292,6 +291,25 @@ fn rotate_cursor(ui: &egui::Ui, at: Pos2, turn: f32) {
     p.circle_filled(at, 12.0, Color32::from_black_alpha(150));
     crate::icons::paint_turned(&p, r.shrink(2.0), crate::icons::Icon::RotateDrag, Color32::WHITE, turn);
     register(ui, "cropRotateCursor", r);
+}
+
+/// Screen-space centre of the crop overlay (mean of its four corners).
+pub(super) fn crop_overlay_centre(pts: &[Pos2]) -> Pos2 {
+    let n = pts.len().max(1) as f32;
+    pos2(pts.iter().map(|p| p.x).sum::<f32>() / n, pts.iter().map(|p| p.y).sum::<f32>() / n)
+}
+
+/// Shortest signed turn from `from` to `to` (egui `Vec2::angle`, radians in (-π, π]).
+pub(super) fn shortest_turn(from: f32, to: f32) -> f32 {
+    let mut d = to - from;
+    let tau = std::f32::consts::PI * 2.0;
+    while d > std::f32::consts::PI {
+        d -= tau;
+    }
+    while d < -std::f32::consts::PI {
+        d += tau;
+    }
+    d
 }
 
 /// How far to turn the rotation pointer (radians, clockwise) so its arc, drawn bulging up, bulges
