@@ -259,7 +259,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     if let (Mode::Full, RawData::U16(d)) = (mode, &mut data)
         && info.compression != t::compression::NIKON
         && info.samples_per_pixel == 1
-        && coolpix::fields_stacked(d, w, h)
+        && coolpix::fields_stacked(d, w, h, raw.bytes(t::CFA_PATTERN_EP).unwrap_or(&[0, 1, 1, 2]), coolpix::first_field_even(&model))
         && let Some(img) = coolpix::deinterlace(d, w, h, coolpix::first_field_even(&model))
     {
         *d = img;
@@ -1165,6 +1165,14 @@ mod tests {
             assert_eq!(header.info(), full.info(), "{model}");
             assert!(matches!(header.data, RawData::U16(ref d) if d.is_empty()));
         }
+    }
+
+    #[test]
+    fn a_neutral_horizon_in_a_normal_frame_is_not_interleaved() {
+        let (w, h) = (160usize, 256usize);
+        let image: Vec<u16> = (0..w * h).map(|i| (1000 + 2 * (i % w) + 2 * (i / w) + if i / w >= h / 2 { 2000 } else { 0 }) as u16).collect();
+        let bytes = coolpix_file("E8800", [2, 1, 1, 0], w, h, &image);
+        assert_eq!(crate::decode(&bytes).unwrap().data, RawData::U16(image));
     }
 
     #[test]
