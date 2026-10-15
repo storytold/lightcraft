@@ -4,7 +4,9 @@
 //! A global matrix can't follow the camera's hue-dependent rendering (the best matrix rendered a
 //! lime shirt olive that the camera kept lime): a hue/saturation table fitted to the residuals
 //! (applied like a DNG `ProfileHueSatMap`) corrects that when it also improves the held-out pixels.
-use lightcraft_color::{D50, D65, Mat3, PROPHOTO, REC2020, Xy, bradford, luminance_2020};
+use lightcraft_color::{D50, D65, Mat3, PROPHOTO, REC2020, SRGB, Xy, bradford, luminance_2020};
+use lightcraft_pipeline::finish::GamutMap;
+use lightcraft_pipeline::output::OutputSpace;
 use lightcraft_pipeline::tone::{CameraTone, ToneMap};
 use lightcraft_raster::{
     Rgb32f,
@@ -34,7 +36,8 @@ use lightcraft_raw::{
 /// 7: the sensor proxy follows the file's lens warp when the camera JPEG is lens-corrected.
 /// 8: the bundled NIKON Z 6_2 profile.
 /// 9: the bundled NIKON Z 8 and NIKON D5300 profiles.
-pub const LOOK_VERSION: u32 = 9;
+/// 10: the chroma curve fitted on predictions gamut mapped into sRGB, as the JPEG holds them.
+pub const LOOK_VERSION: u32 = 10;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
@@ -956,6 +959,18 @@ fn displayed(scene: [f64; 3], tone: &ToneMap) -> [f64; 3] {
     scene.map(|v| o + (v * o / y - o) * k)
 }
 
+/// [`displayed`] as a camera JPEG can hold it: brought into sRGB by the finish stage's gamut map
+/// (V3, [`GamutMap::KeepSaturation`]). The chroma curve is fitted on this, so it learns how the
+/// camera bleaches colours, not how far the prediction lies outside the JPEG's gamut: compared
+/// unmapped, a sunset's saturated orange (past sRGB, in range in the JPEG) taught the curve to
+/// desaturate every bright colour. Camera JPEGs in Adobe RGB are mapped into sRGB too.
+fn displayed_in_gamut(scene: [f64; 3], tone: &ToneMap) -> [f64; 3] {
+    let d = displayed(scene, tone);
+    let (to, back) = (REC2020.to_space(&SRGB), SRGB.to_space(&REC2020));
+    let (r, _) = GamutMap::KeepSaturation.apply(to.apply(d).map(|v| v as f32), OutputSpace::Srgb.luma(), 1.0);
+    back.apply(r.map(f64::from))
+}
+
 #[cfg(test)]
 fn fit_pairs(sensor: &Rgb32f, reference: &Rgb32f) -> Option<CameraLook> {
     fit_pairs_with(sensor, reference, None)
@@ -1713,7 +1728,7 @@ fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Option<Camer
         correction.as_ref().map_or(p, |c| c.apply(p.map(|v| v as f32)).map(f64::from))
     };
     let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
-    let predict = |x: &[f64; 3]| displayed(scene(x), &tone);
+    let predict = |x: &[f64; 3]| displayed_in_gamut(scene(x), &tone);
     let chroma = |p: [f64; 3]| {
         let y = luma(p);
         (y > 0.0).then(|| p.iter().map(|v| (v / y - 1.0).powi(2)).sum::<f64>().sqrt())
@@ -1749,7 +1764,7 @@ fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Option<Camer
             .iter()
             .step_by(3)
             .map(|(x, y)| {
-                let p = displayed(scene(x), map);
+                let p = displayed_in_gamut(scene(x), map);
                 (0..3).map(|c| (p[c] - y[c]).powi(2)).sum::<f64>()
             })
             .sum()
@@ -2231,6 +2246,34 @@ mod tests {
         };
         let (a, b) = (highlight_error(&without), highlight_error(&with));
         assert!(b < 0.5 * a, "highlight error {a:.4} -> {b:.4}");
+    }
+
+    /// A camera that doesn't bleach, but whose JPEG holds a bright saturated orange within sRGB (red
+    /// clipped, blue kept low): the chroma curve must not read the gamut limit as bleaching. Fitted
+    /// on unmapped predictions it desaturated every bright colour, a sunset's orange halo among them.
+    #[test]
+    fn chroma_curve_does_not_learn_the_jpeg_gamut() {
+        let known = Mat3([[1.8, -0.4, -0.1], [-0.2, 1.5, -0.1], [-0.05, -0.3, 1.7]]);
+        let (to, back) = (REC2020.to_space(&SRGB), SRGB.to_space(&REC2020));
+        let mut sensor = Rgb32f::new(96, 64);
+        let mut reference = sensor.clone();
+        for (i, (src, dst)) in sensor.data.iter_mut().zip(&mut reference.data).enumerate() {
+            let ev = 0.02 + (i % 37) as f32 * 0.03;
+            *src = if i % 3 == 0 {
+                [ev * 1.25, ev * 0.5, ev * 0.12]
+            } else {
+                [ev * (0.75 + (i % 11) as f32 * 0.05), ev, ev * (0.7 + (i % 13) as f32 * 0.05)]
+            };
+            let p = known.apply_f32(*src);
+            let y = luminance_2020(p);
+            let o = 1.0 - (-2.5 * y).exp();
+            let d = p.map(|v| v * o / y);
+            let (r, _) = GamutMap::KeepSaturation.apply(to.apply_f32(d), OutputSpace::Srgb.luma(), 1.0);
+            *dst = back.apply_f32(r).map(|v| v.clamp(0.0, 0.999));
+        }
+        let fit = fit_pairs(&sensor, &reference).unwrap();
+        let chroma = fit.tone.chroma();
+        assert!(chroma.iter().all(|k| *k > 0.9), "no bleaching to learn: {chroma:?}");
     }
 
     /// Pooled pairs of several "photos" recover the camera's matrix, and a photo given that
@@ -3480,7 +3523,7 @@ mod tests {
         let new_ratio =
             (colourfulness_ratio(&new, &sensor, &reference, &clipped, mid), colourfulness_ratio(&new, &sensor, &reference, &clipped, bright));
         // with the clipped sky in the pairs, the bright colours lose much of their colour
-        assert!(old_ratio.1 < 0.8, "earlier fit: colourfulness vs camera {old_ratio:?}, chroma {:?}", old.tone.chroma());
+        assert!(old_ratio.1 < 0.85, "earlier fit: colourfulness vs camera {old_ratio:?}, chroma {:?}", old.tone.chroma());
         // without it, the render keeps the camera's colourfulness at every brightness
         for r in [new_ratio.0, new_ratio.1] {
             assert!((0.9..1.1).contains(&r), "colourfulness vs camera {new_ratio:?}, chroma {:?}", new.tone.chroma());

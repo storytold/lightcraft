@@ -73,6 +73,8 @@ const FIELDS: &[(&str, usize)] = &[
     ("OUT_Y", 3),
     ("OUT_TRC", 1),
     ("OUT_GAMMA", 1),
+    // `GamutMap::KeepSaturation` (V3) instead of desaturating towards luminance
+    ("GAMUT_KEEP", 1),
     // first row of a band dispatch (the kernel runs over rows Y0.., see `render`)
     ("Y0", 1),
 ];
@@ -233,6 +235,7 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     let (trc, gamma) = fp.out_trc.code();
     p.u("OUT_TRC", trc);
     p.f("OUT_GAMMA", gamma);
+    p.b("GAMUT_KEEP", fp.gamut == lightcraft_pipeline::finish::GamutMap::KeepSaturation);
     if let Some((amt, cell, rough, seed)) = fp.grain {
         p.b("GRAIN", true);
         p.f("GRAIN_AMT", amt);

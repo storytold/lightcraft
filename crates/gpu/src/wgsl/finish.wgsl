@@ -31,6 +31,43 @@ fn chroma_scale(o: f32) -> f32 {
     return a + (b - a) * t;
 }
 
+// `lightcraft_pipeline::finish::gamut_map_keep_to` into 0..1: keep luminance (weights `luma`) and
+// saturation; clipped luminance goes to the channels above the lowest first, then towards white.
+fn gamut_keep(r0: vec3<f32>, luma: vec3<f32>) -> vec3<f32> {
+    let yy = clamp(dot(luma, r0), 0.0, 1.0);
+    var t = 1.0;
+    for (var k = 0u; k < 3u; k++) {
+        if (r0[k] < 0.0) {
+            t = min(t, yy / max(yy - r0[k], 1e-9));
+        }
+    }
+    var r = r0;
+    if (t < 1.0) {
+        r = yy + (r0 - yy) * t;
+    }
+    let lo = min(r.x, min(r.y, r.z));
+    let hi = max(r.x, max(r.y, r.z));
+    if (!(hi > 1.0)) {
+        return r;
+    }
+    var q = min(r, vec3<f32>(1.0));
+    var w = vec3<f32>(1.0);
+    if (hi - lo > 1e-9) {
+        w = (r - lo) / (hi - lo);
+    }
+    let room = dot(luma, w * (1.0 - q));
+    let need = yy - dot(luma, q);
+    if (room > 1e-9 && need > 0.0) {
+        q = q + min(need / room, 1.0) * w * (1.0 - q);
+    }
+    let need2 = yy - dot(luma, q);
+    let room2 = dot(luma, 1.0 - q);
+    if (room2 > 1e-9 && need2 > 0.0) {
+        q = q + (1.0 - q) * clamp(need2 / room2, 0.0, 1.0);
+    }
+    return q;
+}
+
 fn encode_srgb(v: f32) -> f32 {
     let o = pu(F_SRGB_OFF);
     let f = clamp(v, 0.0, 1.0) * f32(SRGB_N);
@@ -419,8 +456,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let mx = max(d.x, max(d.y, d.z));
     if (mx > 1.0) {
-        let t = clamp((mx - 1.0) / max(mx - o, 1e-6), 0.0, 1.0);
-        d = d + (o - d) * t;
+        if (pu(F_GAMUT_KEEP) != 0u) {
+            d = gamut_keep(d, vec3<f32>(0.2627, 0.6780, 0.0593));
+        } else {
+            let t = clamp((mx - 1.0) / max(mx - o, 1e-6), 0.0, 1.0);
+            d = d + (o - d) * t;
+        }
     }
 
     // --- colour
@@ -467,25 +508,30 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // --- gamut map to the output space (desaturate towards luminance until in range)
+    // --- gamut map to the output space (`GamutMap`: by process)
     let om = array<vec3<f32>, 3>(
         vec3<f32>(pf(F_OUT_M), pf(F_OUT_M + 1u), pf(F_OUT_M + 2u)),
         vec3<f32>(pf(F_OUT_M + 3u), pf(F_OUT_M + 4u), pf(F_OUT_M + 5u)),
         vec3<f32>(pf(F_OUT_M + 6u), pf(F_OUT_M + 7u), pf(F_OUT_M + 8u)),
     );
     var r = mul3(om, d);
-    let yy = clamp(pf(F_OUT_Y) * r.x + pf(F_OUT_Y + 1u) * r.y + pf(F_OUT_Y + 2u) * r.z, 0.0, 1.0);
-    var tg = 1.0;
-    for (var k = 0u; k < 3u; k++) {
-        let cc = r[k];
-        if (cc < 0.0) {
-            tg = min(tg, yy / max(yy - cc, 1e-9));
-        } else if (cc > 1.0) {
-            tg = min(tg, (1.0 - yy) / max(cc - yy, 1e-9));
+    let out_y = vec3<f32>(pf(F_OUT_Y), pf(F_OUT_Y + 1u), pf(F_OUT_Y + 2u));
+    if (pu(F_GAMUT_KEEP) != 0u) {
+        r = gamut_keep(r, out_y);
+    } else {
+        let yy = clamp(dot(out_y, r), 0.0, 1.0);
+        var tg = 1.0;
+        for (var k = 0u; k < 3u; k++) {
+            let cc = r[k];
+            if (cc < 0.0) {
+                tg = min(tg, yy / max(yy - cc, 1e-9));
+            } else if (cc > 1.0) {
+                tg = min(tg, (1.0 - yy) / max(cc - yy, 1e-9));
+            }
         }
-    }
-    if (tg < 1.0) {
-        r = yy + (r - yy) * tg;
+        if (tg < 1.0) {
+            r = yy + (r - yy) * tg;
+        }
     }
 
     // --- encode, curves, grain

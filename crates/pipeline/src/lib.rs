@@ -727,6 +727,8 @@ pub(crate) fn for_rows<T: Send>(data: &mut [T], w: usize, f: impl Fn(usize, &mut
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_gamut;
+#[cfg(test)]
 mod tests_geometry;
 #[cfg(test)]
 mod tests_hdr;
