@@ -322,11 +322,16 @@ pub(crate) const MAX_JPEG_SAMPLES: usize = 1 << 26;
 
 /// Decode one baseline JPEG chunk to 8-bit samples: (samples, width, height, channels).
 pub(crate) fn lossy_jpeg(src: &[u8], cpp: usize, max_samples: usize) -> Result<(Vec<u8>, usize, usize, usize)> {
+    lossy_jpeg_limited(src, cpp, 1 << 16, max_samples)
+}
+
+/// [`lossy_jpeg`] with the largest width and height accepted too (a small preview is refused before decoding).
+pub(crate) fn lossy_jpeg_limited(src: &[u8], cpp: usize, max_edge: usize, max_samples: usize) -> Result<(Vec<u8>, usize, usize, usize)> {
     use zune_core::bytestream::ZCursor;
     use zune_core::colorspace::ColorSpace;
     use zune_core::options::DecoderOptions;
     let cs = if cpp == 1 { ColorSpace::Luma } else { ColorSpace::RGB };
-    let opts = DecoderOptions::default().set_max_width(1 << 16).set_max_height(1 << 16).set_strict_mode(false).jpeg_set_out_colorspace(cs);
+    let opts = DecoderOptions::default().set_max_width(max_edge).set_max_height(max_edge).set_strict_mode(false).jpeg_set_out_colorspace(cs);
     let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(src), opts);
     // The header is read first: the JPEG's own dimensions, not the enclosing tile's, size every
     // allocation `decode` makes, and they may claim billions of pixels.
@@ -467,6 +472,15 @@ mod lossy_tests {
 
     /// A lossy-DNG-style image: two 16×8 tiles, each a baseline JPEG, the right one cut short
     /// by the image edge.
+    #[test]
+    fn preview_jpeg_dimensions_are_checked_before_pixel_decode() {
+        let mut jpeg = Vec::new();
+        jpeg_encoder::Encoder::new(&mut jpeg, 100).encode(&[128; 8 * 8 * 3], 8, 8, jpeg_encoder::ColorType::Rgb).unwrap();
+        let sof = jpeg.windows(2).position(|b| b == [0xff, 0xc0]).unwrap();
+        jpeg[sof + 5..sof + 9].copy_from_slice(&[0xea, 0x60, 0xea, 0x60]);
+        assert!(lossy_jpeg_limited(&jpeg, 3, 2048, 4 * 1024 * 1024 * 3).is_err());
+    }
+
     #[test]
     fn lossy_jpeg_tiles_decode() {
         let (tw, th) = (16usize, 8usize);
