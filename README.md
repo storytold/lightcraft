@@ -343,7 +343,7 @@ LightCraft is young and moving fast: **alpha**. **Where we honestly stand** (det
 | Camera colour: DNG files use their own matrices | ✅ DNG · 🚧 own Sony/Fujifilm profiles; measured calibration database missing |
 | Native macOS menu bar (generated from the command registry), control channel + every widget addressable, headless UI snapshots | ✅ |
 | RAW: DNG, CR2, CR3 (lossless CRX Bayer and version 0x100/0x200 C-RAW), ARW, NEF (uncompressed + lossless/lossy compressed, incl. lossy after split), Fujifilm RAF (uncompressed + lossless/lossy compressed, Bayer + X-Trans), Panasonic RW2 / Leica RWL / Panasonic RAW (every raw format, DMC-LX1 to DC-S1RM2), Pentax PEF, Olympus ORF (uncompressed, 12.8 bpp), Samsung SRW (uncompressed); embedded previews for every format incl. CR3 | 🚧 · other CR3 variants, compressed ORF / SRW and Nikon HE NEF decode ⬜ ([raw parity](docs/raw-parity.md)) |
-| Detail: sharpening, luminance + colour noise reduction | ✅ · AI Denoise 🚧 (Bayer, user-installed weights), Super Resolution ⬜ |
+| Detail: sharpening, luminance + colour noise reduction | ✅ · AI Denoise 🚧 (Bayer, RawNIND weights as a one-click download), Super Resolution ⬜ |
 | Remove / Heal / Clone spots (auto source), Visualize Spots, Red Eye and Pet Eye (auto pupil detection, catchlight) | ✅ · content-aware fill, spot pin editing 🚧 |
 | Export: JPEG / PNG / TIFF / WebP / AVIF / DNG / original, sizing, file-size limit, output sharpening, naming templates, batch, metadata policy, text or image watermark | ✅ |
 | HDR: HDR editing with a headroom limit, SDR rendition, Visualize HDR; export as ISO 21496-1 gain map JPEG, PQ AVIF or 32-bit float TIFF | ✅ · HDR display ⬜ |

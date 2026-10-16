@@ -1,6 +1,6 @@
 # Target-app parity: LightCraft vs Adobe Lightroom
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** patch (AI Denoise: RawNIND weights as a one-click download, CC BY 4.0, #1760) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
 
 The authoritative assessment of how close LightCraft is to Lightroom. The row-by-row checklist is
 [parity-checklist.md](parity-checklist.md); the ranked work list is [gaps.md](gaps.md); deep areas
@@ -96,7 +96,7 @@ search embeddings; generative remove runs in Adobe's cloud.
 | People (faces, body, hair, skin…) and Landscape masks | — | ⬜ |
 | Object / Describe masks | SAM 3 in pure Rust (Metal / CPU); opt-in 3.4 GB download, no mirror configured | 🟡 |
 | Depth range mask, Lens Blur | — | ⬜ |
-| AI Denoise | Bayer only, pure-Rust CPU / GPU, user-installed weights | 🟡 |
+| AI Denoise | Bayer only, pure-Rust CPU / GPU, RawNIND weights as a one-click download (CC BY 4.0) | 🟡 |
 | Raw Details, Super Resolution | — | ⬜ |
 | Generative remove, distractions, reflections | — (generative is out of scope: cloud) | ⬜ |
 | Dust detection | ✅ | ✅ |
@@ -300,6 +300,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | patch | AI Denoise row: RawNIND weights (CC BY 4.0, #1760) are a one-click download in the app instead of user-installed only; status and percentages unchanged |
 | 2026-10-14 | minor | Localization ~52% → ~55% (mean of the 12 key languages): de, es, fr, ja and uk catalogs filled |
 | 2026-10-12 | minor | UI/UX remaining 34–58 h → 32–54 h (canvas tools by keyboard); headline numbers unchanged |
 | 2026-10-14 | minor | Merge and HDR: merge 100% → 88% (LR-MERGE-HDR ✅ → 🟡 after testing on real 67 MP brackets; gap 29); area percentages unchanged |
