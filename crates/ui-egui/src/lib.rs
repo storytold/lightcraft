@@ -56,6 +56,12 @@ mod tests_album_remove;
 #[cfg(test)]
 mod tests_appearance;
 #[cfg(test)]
+mod tests_backup_folder;
+#[cfg(test)]
+mod tests_backup_schedule;
+#[cfg(test)]
+mod tests_backup_status;
+#[cfg(test)]
 mod tests_before_after;
 #[cfg(test)]
 mod tests_browse_active;
@@ -147,6 +153,8 @@ mod tests_quit_unsaved;
 mod tests_recheck;
 #[cfg(test)]
 mod tests_rename_person;
+#[cfg(test)]
+mod tests_restore_list;
 #[cfg(test)]
 mod tests_sam_setup;
 #[cfg(test)]
@@ -325,13 +333,37 @@ pub enum QuitPrompt {
     Unsaved(String),
     /// Tasks that quitting would cut short are running: an import, an export… (issue #345).
     Tasks(String),
+    /// The library asks for a backup when LightCraft quits (`library.backupPreferences`,
+    /// `onClose: ask`): back it up first, skip it, or don't quit.
+    BackUp(String),
+    /// The library is being backed up before LightCraft quits, which it does when the backup is
+    /// made.
+    BackingUp(String),
+    /// The backup before quitting could not be made: quit anyway, or don't.
+    BackupFailed(String),
+}
+
+/// The backup a library has when LightCraft quits, in the quit that is under way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum QuitBackup {
+    /// Not decided yet (or the quit was called off: the next one starts here again).
+    #[default]
+    Undecided,
+    /// It is being made; LightCraft quits when it is.
+    Running,
+    /// Made, or skipped: nothing more is asked about it in this quit.
+    Settled,
 }
 
 impl QuitPrompt {
     /// The prompt's message.
     pub fn text(&self) -> &str {
         match self {
-            QuitPrompt::Unsaved(text) | QuitPrompt::Tasks(text) => text,
+            QuitPrompt::Unsaved(text)
+            | QuitPrompt::Tasks(text)
+            | QuitPrompt::BackUp(text)
+            | QuitPrompt::BackingUp(text)
+            | QuitPrompt::BackupFailed(text) => text,
         }
     }
 }
@@ -361,12 +393,20 @@ pub struct LightcraftApp {
     pub text_focus: bool,
     /// The host is [`headless::Headless`] (it answers viewport screenshot commands itself).
     pub headless_host: bool,
+    /// The library is backed up by itself when its schedule says a backup is due
+    /// (`library.backupPreferences`, `every`). Only in the app a person has open: a headless
+    /// session (a snapshot, an agent's) may end moments later and cut the backup off, so
+    /// [`headless::Headless`] turns this off.
+    pub backs_up_by_itself: bool,
     /// Warnings to show one at a time (damaged settings files…, issue #103).
     pub notices: Vec<String>,
     /// Quitting was stopped to ask first: changes couldn't be saved, or tasks are running.
     pub quit_prompt: Option<QuitPrompt>,
     /// Quit Anyway was chosen: the window may close with unsaved changes.
     pub quit_confirmed: bool,
+    /// How far the backup the library has when LightCraft quits has got in this quit (see
+    /// `panels::notices`).
+    pub quit_backup: QuitBackup,
     control_rx: Option<Receiver<ControlRequest>>,
     pending_screenshots: Vec<PendingShot>,
     screenshot_token: u64,
@@ -497,9 +537,11 @@ impl LightcraftApp {
             recording_shortcut: None,
             text_focus: false,
             headless_host: false,
+            backs_up_by_itself: true,
             notices: vec![],
             quit_prompt: None,
             quit_confirmed: false,
+            quit_backup: QuitBackup::default(),
             control_rx: None,
             pending_screenshots: vec![],
             screenshot_token: 0,
@@ -733,6 +775,106 @@ impl LightcraftApp {
     /// Advance a running slideshow.
     fn slideshow_tick(&mut self, ctx: &egui::Context) {
         panels::slideshow::tick(self, ctx);
+    }
+
+    /// Back the library up by itself when its schedule says a backup is due
+    /// (`library.backupPreferences`, `every`). Looked at every few seconds, not every frame; the
+    /// backup has its row in the activity stack, and [`Self::backup_status`] says how it ended.
+    fn backup_schedule(&mut self, ctx: &egui::Context) {
+        use lightcraft_engine::backup_schedule::BackupEvery;
+        if !self.backs_up_by_itself || self.session.backup_schedule.every == BackupEvery::Never {
+            return;
+        }
+        const LOOK_EVERY: f64 = 5.0;
+        let id = egui::Id::new("backup-schedule-looked");
+        let now = ctx.input(|i| i.time);
+        let looked: Option<f64> = ctx.data(|d| d.get_temp(id));
+        if looked.is_none_or(|at| now - at >= LOOK_EVERY || now < at) {
+            ctx.data_mut(|d| d.insert_temp(id, now));
+            // (one that is due and could not even be started: said, like one that failed)
+            if let Err(e) = lightcraft_engine::cmd::backup::back_up_if_due(&mut self.session) {
+                self.toast_for(ctx, crate::i18n::tr_format!("The library was not backed up: {}", e), 8.0);
+            }
+        }
+        // (an idle window still looks: a library left open for days is backed up)
+        ctx.request_repaint_after(std::time::Duration::from_secs(60));
+    }
+
+    /// Announce the end of a library backup: where it went, or why there is none.
+    fn backup_status(&mut self, ctx: &egui::Context) {
+        let Some(b) = self.session.backup.clone() else { return };
+        let key = std::sync::Arc::as_ptr(&b) as usize;
+        if self.ui.backup_seen == Some(key) {
+            return;
+        }
+        match b.outcome() {
+            Some(outcome) => {
+                self.ui.backup_seen = Some(key);
+                let mut msg = match outcome {
+                    Ok(report) => crate::i18n::tr_format!("Backed up the library to {}", report.dir.display()),
+                    Err(e) => crate::i18n::tr_format!("The library was not backed up: {}", crate::i18n::refusal_text(&e)),
+                };
+                // (what the backup removed is said, not done in silence: the backups older than
+                // the library keeps them, and the ones that could not be removed)
+                let count = |names: &std::sync::Mutex<Vec<String>>| names.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len();
+                let (removed, not_removed) = (count(&b.removed), count(&b.not_removed));
+                if removed > 0 {
+                    msg = format!("{msg}\n{}", crate::i18n::tr_format!("Older backups removed: {}", removed));
+                }
+                if not_removed > 0 {
+                    msg = format!("{msg}\n{}", crate::i18n::tr_format!("Older backups that could not be removed: {}", not_removed));
+                }
+                // (and what earlier restores replaced, as old as that)
+                let replaced = count(&b.replaced_removed);
+                if replaced > 0 {
+                    msg = format!("{msg}\n{}", crate::i18n::tr_format!("Folders of what restores replaced, removed: {}", replaced));
+                }
+                let replaced = count(&b.replaced_not_removed);
+                if replaced > 0 {
+                    msg = format!("{msg}\n{}", crate::i18n::tr_format!("Folders of what restores replaced that could not be removed: {}", replaced));
+                }
+                // (long enough to read a path, or what went wrong)
+                self.toast_for(ctx, msg, 8.0);
+            }
+            // The activity stack shows the backup while it runs; poll for the end.
+            None => ctx.request_repaint_after(std::time::Duration::from_millis(250)),
+        }
+    }
+
+    /// Announce the end of a restore whose backup was copied in the background: where what the
+    /// library held went, or why it was not restored.
+    fn restore_status(&mut self, ctx: &egui::Context) {
+        let Some(r) = self.session.restore.clone() else { return };
+        let key = std::sync::Arc::as_ptr(&r) as usize;
+        if self.ui.restore_seen == Some(key) {
+            return;
+        }
+        // (of the library that is open: one that was given up for another has nothing to say here)
+        if !self.session.library.as_ref().is_some_and(|l| l.dir == r.library) {
+            if !r.running() {
+                self.ui.restore_seen = Some(key);
+            }
+            return;
+        }
+        match r.outcome() {
+            Some(outcome) => {
+                self.ui.restore_seen = Some(key);
+                let msg = match outcome {
+                    Ok(made) => {
+                        crate::menus::library_replaced(self);
+                        match made["restored"]["aside"].as_str() {
+                            Some(aside) => crate::i18n::tr_format!("Restored the library. What it held before is in {}", aside),
+                            None => crate::i18n::tr("Restored the library").to_string(),
+                        }
+                    }
+                    Err(e) => crate::i18n::tr_format!("The library was not restored: {}", crate::i18n::refusal_text(&e)),
+                };
+                self.toast_for(ctx, msg, 10.0);
+            }
+            // The activity stack shows the restore while it runs; the frames this asks for also
+            // move the backup into place once it is copied (`Session::persist_if_dirty`).
+            None => ctx.request_repaint_after(std::time::Duration::from_millis(250)),
+        }
     }
 
     /// Announce the end of a Build Previews run.
@@ -1115,6 +1257,9 @@ impl LightcraftApp {
         recheck::tick(self);
         tasks::poll(self, ctx);
         self.preview_build_status(ctx);
+        self.backup_schedule(ctx);
+        self.backup_status(ctx);
+        panels::notices::quit_after_backup(self);
         self.save_status(ctx);
         self.slideshow_tick(ctx);
         panels::faces::pump(self, ctx);
@@ -1204,6 +1349,9 @@ impl LightcraftApp {
             self.ui.known_cards = None;
         }
         self.session.persist_if_dirty();
+        // (after it: a backup that was just moved into place is announced, and the old library's
+        // pictures forgotten, in this same frame)
+        self.restore_status(ctx);
         panels::denoise::pump(self, ctx);
         model_setup::pump(self, ctx);
         panels::faces::pump(self, ctx);

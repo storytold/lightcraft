@@ -407,10 +407,152 @@ fn theme_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
     Ok(appearance_json(app))
 }
 
+/// `library.backupPreferences` with `choose` in the app: the folder the library's backups go to
+/// is asked for with a folder dialog (unless `dir` says it), then set as the command sets it.
+/// A dialog closed without a folder changes nothing.
+fn choose_backup_folder(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    const ID: &str = "library.backupPreferences";
+    let mut params = p.as_object().cloned().unwrap_or_default();
+    params.remove("choose");
+    if !params.contains_key("dir") {
+        // nothing is asked for a folder that can't be set now
+        if let Some(spec) = lightcraft_engine::cmd::command_specs().iter().find(|c| c.id == ID) {
+            (spec.enabled)(&app.session)?;
+        }
+        if app.services.picker.is_none() && app.services.pick_folder.is_none() {
+            return Err("no folder dialog on this platform: give the folder as `dir`".into());
+        }
+        let req = crate::pick::PickRequest::folder(crate::i18n::tr("Choose a Folder for Backups"));
+        let dir = match crate::pick::ask(app, ID, p, "dir", req, |s| s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])) {
+            crate::pick::Picked::Now(v) => v.into_iter().next(),
+            crate::pick::Picked::Later => return Ok(Value::Null),
+            // (there is a dialog: it was closed without a folder)
+            crate::pick::Picked::Unavailable => None,
+        };
+        let Some(dir) = dir else { return Ok(Value::Null) };
+        params.insert("dir".into(), Value::String(dir));
+    }
+    app.session.execute(ID, &Value::Object(params)).map_err(|e| e.to_string())
+}
+
+/// The backups `library.backups` listed, as the dialog holds them.
+pub(crate) fn backups_to_choose_from(listed: &Value) -> Vec<Value> {
+    listed["backups"]
+        .as_array()
+        .map(|all| {
+            all.iter()
+                .map(|b| {
+                    // (not the list of its files: the dialog shows what the backup is, not what is in it)
+                    let mut b = b.clone();
+                    if let Some(fields) = b.as_object_mut() {
+                        fields.remove("contents");
+                    }
+                    b
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Show the backups `library.backups` listed, to choose one to restore from: the newest of the
+/// open library's own is chosen beforehand, and none when there are only another library's.
+fn list_backups_to_restore(app: &mut LightcraftApp, listed: &Value) {
+    let backups = backups_to_choose_from(listed);
+    let selected = backups.iter().position(|b| b["ofThisLibrary"] == Value::Bool(true));
+    app.ui.dialog = Some(Dialog::RestoreBackup { dir: listed["dir"].as_str().unwrap_or_default().to_string(), backups, selected });
+}
+
+/// `library.restore` in the app. Without `dir`, the backups in the folder the library's backups
+/// go to are listed to choose from (`choose: true`: a folder dialog asks for the backup, or for
+/// a folder that backups are in, which are then listed). A restore of the open library copies
+/// the backup while the library stays in use (its row is in the activity stack, and a toast
+/// says how it ended) unless `background` says otherwise.
+fn restore_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    const ID: &str = "library.restore";
+    let mut params = p.as_object().cloned().unwrap_or_default();
+    let choose = params.remove("choose").is_some_and(|c| c == Value::Bool(true));
+    // nothing is asked or listed for a restore that can't be made now (also when the folder
+    // dialog answers after a backup or a restore has begun)
+    if (choose || !params.contains_key("dir"))
+        && let Some(spec) = lightcraft_engine::cmd::command_specs().iter().find(|c| c.id == ID)
+    {
+        (spec.enabled)(&app.session)?;
+    }
+    if !params.contains_key("dir") {
+        if !choose {
+            // (the list restores the open library: a restore into another folder says which backup)
+            if params.contains_key("to") {
+                return Err("`to` needs the backup's folder as `dir`".into());
+            }
+            let listed = app.session.execute("library.backups", &json!({})).map_err(|e| e.to_string())?;
+            list_backups_to_restore(app, &listed);
+            return Ok(Value::Null);
+        }
+        if app.services.picker.is_none() && app.services.pick_folder.is_none() {
+            return Err("no folder dialog on this platform: give the backup's folder as `dir`".into());
+        }
+        let req = crate::pick::PickRequest::folder(crate::i18n::tr("Restore Library from Backup"));
+        let dir = match crate::pick::ask(app, ID, p, "dir", req, |s| s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])) {
+            crate::pick::Picked::Now(v) => v.into_iter().next(),
+            crate::pick::Picked::Later => return Ok(Value::Null),
+            // (there is a dialog: it was closed without a folder)
+            crate::pick::Picked::Unavailable => None,
+        };
+        let Some(dir) = dir else { return Ok(Value::Null) };
+        params.insert("dir".into(), Value::String(dir));
+    }
+    if choose {
+        // a folder chosen in a dialog may be the one backups are in, not a backup: they are listed
+        let listed = app.session.execute("library.backups", &json!({"dir": params.get("dir")})).map_err(|e| e.to_string())?;
+        if listed["isBackup"] != Value::Bool(true) && listed["backups"].as_array().is_some_and(|b| !b.is_empty()) {
+            // (the folder dialog may answer when something else is asked by now: that stays)
+            if !matches!(app.ui.dialog, None | Some(Dialog::RestoreBackup { .. })) {
+                return Err("the folder holds backups to choose from, but another dialog is open: choose Restore Library from Backup again".into());
+            }
+            list_backups_to_restore(app, &listed);
+            return Ok(Value::Null);
+        }
+    }
+    if !params.contains_key("background") && !params.contains_key("to") {
+        params.insert("background".into(), Value::Bool(true));
+    }
+    let r = app.session.execute(ID, &Value::Object(params)).map_err(|e| e.to_string())?;
+    // (the backup was chosen: the list of them is done with)
+    if matches!(app.ui.dialog, Some(Dialog::RestoreBackup { .. })) {
+        app.ui.dialog = None;
+    }
+    if r["opened"] == Value::Bool(true) {
+        library_replaced(app);
+    }
+    Ok(r)
+}
+
+/// The session's library was replaced by another catalog (a restore): nothing drawn or
+/// remembered of the one before it applies any more.
+pub fn library_replaced(app: &mut LightcraftApp) {
+    app.lightroom_last = None;
+    app.renderer.forget_all();
+    app.ui.compare = None;
+}
+
 /// Handle UI commands; `None` means "not a UI command — send it to the engine".
 pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
     if matches!(id, "ui.dock" | "ui.dock.reset") {
         return Some(crate::docking::command(app, id == "ui.dock.reset", p));
+    }
+    if id == "library.backup" && p.get("background").is_none() {
+        // In the app a backup runs while the library stays in use (its row is in the activity
+        // stack, and a toast says how it ended); the engine's own default is to return when it
+        // is made, which is what a script needs.
+        let mut params = p.as_object().cloned().unwrap_or_default();
+        params.insert("background".into(), Value::Bool(true));
+        return Some(app.session.execute(id, &Value::Object(params)).map_err(|e| e.to_string()));
+    }
+    if id == "library.backupPreferences" && p.get("choose").and_then(Value::as_bool) == Some(true) {
+        return Some(choose_backup_folder(app, p));
+    }
+    if id == "library.restore" {
+        return Some(restore_library(app, p));
     }
     if matches!(id, "library.inspectLightroom" | "library.importLightroom") {
         // the app's own context: a fresh one's repaints reach no window and its clock starts at zero
@@ -778,7 +920,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             let action = if id == "file.backupLibrary" { app.services.backup_library.as_mut() } else { app.services.restore_library.as_mut() };
             match action {
                 Some(f) => f(&mut app.session),
-                None => Err("not available here: on the desktop the library is a folder; back it up with your other files".into()),
+                None => {
+                    Err("not available here: on the desktop the library is a folder; File ▸ Back Up Library (`library.backup`) backs up its catalog"
+                        .into())
+                }
             }
         }
         "view.filmstrip" => {

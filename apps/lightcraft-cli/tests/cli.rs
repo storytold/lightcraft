@@ -1,6 +1,7 @@
 //! End-to-end tests of the `lightcraft-cli` binary: `mcp` over real stdio pipes, `render`, `commands`.
 
 use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
@@ -769,4 +770,40 @@ fn denoise_serve_runs_tiles_for_another_computer() {
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&models);
+}
+
+/// Given a library with a backup, when one `run` restores it in the background (as the app
+/// does), then the call ends only when the restore is over: its last line is the restore's own
+/// account, the library is the backup again, and nothing of a restore is left half-way. So is
+/// a backup that was started in the background: it is there when the call returns.
+#[test]
+fn run_sees_a_background_restore_or_backup_through_before_it_ends() {
+    let dir = std::env::temp_dir().join(format!("lc-cli-wait-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let lib = dir.join("library");
+    let run = |args: &[&str]| -> Vec<Value> {
+        let o = Command::new(BIN).args(["run", "--demo", "--library", lib.to_str().unwrap()]).args(args).output().unwrap();
+        assert!(o.status.success(), "{}\n{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+        String::from_utf8_lossy(&o.stdout).lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+    };
+    // a backup in the background: made when the call returns, and said
+    let lines = run(&["photo.rate", "rating=4", "library.backup", "background=true"]);
+    let last = lines.last().unwrap();
+    assert_eq!(last["command"], "library.backupStatus", "{lines:?}");
+    assert_eq!(last["result"]["running"], false);
+    let made = last["result"]["report"]["dir"].as_str().expect("the backup was made").to_string();
+    assert!(Path::new(&made).join("backup.json").is_file());
+
+    // the library goes on, and is restored in the background
+    let with_four = |lines: Vec<Value>| lines.last().unwrap()["result"]["selected"].as_u64().unwrap();
+    let before = with_four(run(&["photo.rate", "rating=1", "library.selectBy", "rating=4", "ratingOp=eq"]));
+    let lines = run(&["library.restore", &format!("dir={made}"), "background=true"]);
+    let last = lines.last().unwrap();
+    assert_eq!(last["command"], "library.restoreStatus", "{lines:?}");
+    assert_eq!((last["ok"].clone(), last["result"]["running"].clone()), (json!(true), json!(false)), "{last}");
+    assert!(last["result"]["error"].is_null() && last["result"]["restored"].is_object(), "{last}");
+    assert!(!lib.join("restore.json").exists() && !lib.join("restore.partial").exists());
+    assert!(lib.join("Replaced").is_dir());
+    assert_eq!(with_four(run(&["library.selectBy", "rating=4", "ratingOp=eq"])), before + 1, "the photo has its four stars back");
+    let _ = std::fs::remove_dir_all(&dir);
 }

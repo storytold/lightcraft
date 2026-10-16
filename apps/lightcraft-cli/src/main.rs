@@ -34,7 +34,10 @@ USAGE:
       engine.commands / ui.inspect / ui.screenshot) and print one JSON line per command:
       {\"command\", \"ok\", \"result\" | \"error\", \"ms\"}. A word without `=` starts the next
       command; values are JSON when they parse (1, true, [1,2], {…}), else strings. Exit status
-      is non-zero when a command fails. Example:
+      is non-zero when a command fails. Headless, a restore or backup started with
+      `background=true` is waited for before the call ends, and how it ended is one more line
+      (`library.restoreStatus` / `library.backupStatus`); not after a command failed, unless
+      --keep-going. Example:
         lightcraft-cli run --import ~/Photos/a.jpg develop.set control=light.exposure value=0.7 \\
             develop.auto app.export path=/tmp/a.jpg longEdge=1600
       Options:
@@ -572,6 +575,8 @@ fn run(args: &[String]) -> Result<(), String> {
     if steps.is_empty() {
         return Err("run: no command given (see `lightcraft-cli commands`)".into());
     }
+    // (this process holds the library: what it starts in the background ends with it)
+    let headless = connect.is_none();
     let mut backend: Box<dyn Backend> =
         match connect {
             Some(addr) => {
@@ -607,11 +612,18 @@ fn run(args: &[String]) -> Result<(), String> {
             }
         };
     let mut out = std::io::stdout().lock();
-    let mut failed = 0;
+    let mut failed = 0usize;
+    let (mut restoring, mut backing_up) = (false, false);
     for s in &steps {
         let t = std::time::Instant::now();
         let line = match run_step(backend.as_mut(), s) {
-            Ok(r) => json!({"command": s.id, "ok": true, "result": r, "ms": (t.elapsed().as_secs_f64() * 1e4).round() / 10.0}),
+            Ok(r) => {
+                // (started in the background: it is seen through below)
+                let goes_on = r["running"] == json!(true);
+                restoring |= goes_on && s.id == "library.restore";
+                backing_up |= goes_on && s.id == "library.backup";
+                json!({"command": s.id, "ok": true, "result": r, "ms": (t.elapsed().as_secs_f64() * 1e4).round() / 10.0})
+            }
             Err(e) => {
                 failed += 1;
                 json!({"command": s.id, "ok": false, "error": e})
@@ -620,6 +632,49 @@ fn run(args: &[String]) -> Result<(), String> {
         writeln!(out, "{line}").map_err(|e| e.to_string())?;
         if failed > 0 && !keep_going {
             break;
+        }
+    }
+    // A restore or a backup that a command started in the background is seen through before
+    // this session ends: its work is this process's, and would end with it (a restore given up
+    // with nothing changed, a backup cut short). How it ended is one more line, whether or not
+    // it was over already when it was first asked about.
+    if headless && (failed == 0 || keep_going) {
+        for (started, status) in [(restoring, "library.restoreStatus"), (backing_up, "library.backupStatus")] {
+            if !started {
+                continue;
+            }
+            let step = Step { id: status.to_string(), params: json!({}) };
+            let t = std::time::Instant::now();
+            let mut said = false;
+            let ended = loop {
+                match run_step(backend.as_mut(), &step) {
+                    Ok(r) if r["running"] == json!(true) => {
+                        // (a restore is moved into place once nothing else is at work in the
+                        // library: one that waits is said, not waited for in silence)
+                        if !said && t.elapsed() > std::time::Duration::from_secs(10) {
+                            said = true;
+                            eprintln!(
+                                "lightcraft-cli run: still waiting for {status} to say it is over (stop with Ctrl-C: nothing is left half done)"
+                            );
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                    other => break other,
+                }
+            };
+            let ms = (t.elapsed().as_secs_f64() * 1e4).round() / 10.0;
+            let line = match ended {
+                Ok(r) => {
+                    let ok = r["error"].is_null();
+                    failed += usize::from(!ok);
+                    json!({"command": status, "ok": ok, "result": r, "ms": ms})
+                }
+                Err(e) => {
+                    failed += 1;
+                    json!({"command": status, "ok": false, "error": e})
+                }
+            };
+            writeln!(out, "{line}").map_err(|e| e.to_string())?;
         }
     }
     drop(backend); // a library session is flushed here
