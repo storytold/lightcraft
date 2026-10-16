@@ -1348,9 +1348,15 @@ fn look_loader(
 /// camera look go stale (a PNG's proxy never does), and the opening scan runs once per fit version.
 #[test]
 fn smart_previews_from_an_older_look_fit_are_refreshed() {
+    for format in ["ARW", "DNG"] {
+        smart_look_refresh_for(format);
+    }
+}
+
+fn smart_look_refresh_for(format: &str) {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    let src = temp_dir("smartlook-src");
-    let lib = temp_dir("smartlook-lib");
+    let src = temp_dir(&format!("smartlook-src-{format}"));
+    let lib = temp_dir(&format!("smartlook-lib-{format}"));
     write_png(&src.join("a.png"), 3);
     write_png(&src.join("b.png"), 9);
     let mut s = Session::new().with_fs();
@@ -1360,11 +1366,12 @@ fn smart_previews_from_an_older_look_fit_are_refreshed() {
     let (id, png) = (find(&s, "a.png"), find(&s, "b.png"));
     // `a` stands for a raw that takes the per-file camera look (the test loader decodes its pixels)
     let mut raw = (**s.catalog.photo(id).unwrap()).clone();
-    raw.format = "ARW".into();
+    raw.format = format.into();
     raw.kind = lightcraft_catalog::MediaKind::Raw;
     s.catalog.apply(lightcraft_catalog::Op::RemovePhoto { id }).unwrap();
     s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(raw) }).unwrap();
-    assert!(s.catalog.photo(id).unwrap().relative_wb() && !s.catalog.photo(png).unwrap().relative_wb());
+    assert_eq!(s.catalog.photo(id).unwrap().relative_wb(), format == "ARW");
+    assert!(!s.catalog.photo(png).unwrap().relative_wb());
     s.execute("library.select", &json!({"ids": [id.0, png.0], "active": id.0})).unwrap();
     let dir = s.media.smart_dir.clone().unwrap();
     let file = crate::smart::sharded_file_path(&dir, s.catalog.photo(id).unwrap());

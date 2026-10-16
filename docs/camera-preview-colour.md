@@ -109,6 +109,21 @@ On a local set of 54 ARW6 and lossless ARW photos (the maintainer's own shots pl
 
 A pooled profile was tried and is not bundled. Pooling the 46 photos (158,549 colour pairs) and validating on withheld photos (every third photo, N = 15, trained on the other 31) took mean ΔE from 5.71 with per-file fitting to 6.40 with the profile: 11 of 15 photos regressed, 3 improved and 1 was unchanged, the largest by +4.68, and 2 of the 8 rejected files were newly accepted. Per-file fitting therefore ships for this body. The 42 private photos are one photographer's scenes, 38 of them in the Standard creative style (the 12 RawDB files were not inventoried); revisit when a varied multi-photographer set exists.
 
+## DNG previews with embedded lens corrections
+
+A DNG with its own colour model and no non-identity profile tone curve uses the existing
+`camera_preview::fit_dng_tone` path, including its eligibility and acceptance checks. There is
+one preview fit. Files with a look table, a gain table map or an unusable preview keep their
+existing behaviour.
+
+When the file carries lens opcodes, that fit develops its sensor proxy through those opcodes
+before reducing it: its camera preview already contains their distortion and vignetting
+corrections. This uses the raw decoder's existing opcode implementation, including chained
+warps. The separate proxy vignetting multiplier is skipped in this case. The editable source
+still has lens corrections removed, so the pipeline applies them once through Enable Profile
+Corrections. Developing this proxy requires a full-resolution demosaic; files without such
+opcodes keep their binned proxy.
+
 ## Camera profiles (pooled per model)
 
 One photo can show too little of a colour for its own fit to learn it: in a second shot of the lime shirt only a few dozen proxy pixels show it, next to a hillside of foliage at the same hue that the camera renders differently, and the shirt stayed yellow (hue 68° against the JPEG's 82°; a 192-pixel proxy only reached 74°). `lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS…` therefore pools the colour pairs of many ARWs, NEFs or RAFs per camera model — each against its own embedded JPEG, at a 192-pixel proxy, at most 4000 pairs per photo, files spread evenly over the folders — and fits one matrix (from white-balanced camera RGB, so no single photo's white point is baked in) and one hue/saturation/value table. Models need at least 5 usable photos.

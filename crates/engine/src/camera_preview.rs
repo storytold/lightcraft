@@ -34,7 +34,8 @@ use lightcraft_raw::{
 /// 7: the sensor proxy follows the file's lens warp when the camera JPEG is lens-corrected.
 /// 8: the bundled NIKON Z 6_2 profile.
 /// 9: the bundled NIKON Z 8 and NIKON D5300 profiles.
-pub const LOOK_VERSION: u32 = 9;
+/// 10: DNG tone fitting uses a lens-corrected proxy when the file carries lens opcodes.
+pub const LOOK_VERSION: u32 = 10;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
@@ -927,7 +928,10 @@ fn into_lens_geometry(img: &Rgb32f, raw: &RawImage, k: usize, lens: &LensGeometr
 fn sensor_proxy(raw: &RawImage, k: usize, edge: usize) -> Option<Rgb32f> {
     Some(match raw.develop_binned(k, SENSOR_CLIP).ok()? {
         Some(sensor) => sensor,
-        None if raw.cpp == 3 && raw.cfa.is_none() => fit(&raw.develop(lightcraft_raw::Method::Bilinear).ok()?, edge, edge, Filter::Box),
+        // Lens opcodes cannot be applied to a binned mosaic: they are defined at full resolution.
+        None if (raw.cpp == 3 && raw.cfa.is_none()) || (raw.format == RawFormat::Dng && !raw.opcodes.list3.is_empty()) => {
+            fit(&raw.develop(lightcraft_raw::Method::Bilinear).ok()?, edge, edge, Filter::Box)
+        }
         None => return None,
     })
 }
@@ -3956,6 +3960,27 @@ mod tests {
         plain.data.fill([0.2; 3]);
         correct_vignetting(&mut plain, None, lightcraft_geom::Orientation::Normal);
         assert!(plain.data.iter().all(|p| *p == [0.2; 3]));
+    }
+
+    /// Lens opcodes prevent mosaic binning. The DNG fit still gets a proxy, with the file's
+    /// full-resolution corrections applied once rather than silently losing the tone fit.
+    #[test]
+    fn dng_sensor_proxy_applies_lens_opcodes_before_downsampling() {
+        use lightcraft_raw::Opcode;
+        let bytes = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+        let mut raw = lightcraft_raw::decode(&bytes).unwrap();
+        raw.data = lightcraft_raw::RawData::U16(vec![4000; raw.width * raw.height]);
+        raw.opcodes.list3 = vec![Opcode::FixVignetteRadial { k: [1.0, 0.0, 0.0, 0.0, 0.0], center: [0.5, 0.5] }];
+        assert!(raw.develop_binned(2, SENSOR_CLIP).unwrap().is_none());
+        let proxy = sensor_proxy(&raw, 2, 32).expect("a corrected CFA proxy even when binning is unavailable");
+        assert_eq!((proxy.width, proxy.height), (32, 24));
+        let center = proxy.data[12 * 32 + 16][1];
+        let corner = proxy.data[0][1];
+        assert!((1.8..2.1).contains(&(corner / center)), "one vignetting gain, not zero or two: {corner} / {center}");
+        let full = raw.develop(lightcraft_raw::Method::Bilinear).unwrap();
+        assert_eq!(proxy.data, full.data, "the same opcode interpretation as raw development");
+        let small = sensor_proxy(&raw, 2, 16).unwrap();
+        assert_eq!(small.data, fit(&full, 16, 16, Filter::Box).data, "correct first, then reduce");
     }
 
     /// Which DNGs get a tone fitted to their camera JPEG: a colour matrix, a tone curve that is absent or the
