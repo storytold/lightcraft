@@ -1682,3 +1682,114 @@ fn malformed_photo_targets_are_refused_not_widened() {
     let preset = s.presets.first().unwrap().id.clone();
     s.execute("preset.apply", &json!({"id": preset})).unwrap();
 }
+
+#[test]
+fn auto_sync_section_eyes_preserve_independent_sections() {
+    use lightcraft_catalog::PhotoId;
+    let mut s = demo();
+    let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
+    s.execute("library.select", &json!({"ids": [ids[0]]})).unwrap();
+    s.execute("develop.sectionEnabled", &json!({"section": "optics", "enabled": false})).unwrap();
+    s.execute("library.select", &json!({"ids": [ids[1]]})).unwrap();
+    s.execute("develop.set", &json!({"control": "light.contrast", "value": 25})).unwrap();
+    s.execute("develop.set", &json!({"control": "color.saturation", "value": 60})).unwrap();
+    s.execute("develop.sectionEnabled", &json!({"section": "color", "enabled": false})).unwrap();
+    s.execute("library.select", &json!({"ids": [ids[2]]})).unwrap();
+    s.execute("develop.sectionEnabled", &json!({"section": "effects", "enabled": false})).unwrap();
+    let saved: Vec<_> = ids.iter().map(|id| s.develop_of(PhotoId(*id)).unwrap()).collect();
+    s.execute("library.select", &json!({"ids": ids, "active": ids[0]})).unwrap();
+    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+
+    s.execute("develop.sectionEnabled", &json!({"section": "light", "enabled": false})).unwrap();
+    for id in &ids {
+        assert!(!s.develop_of(PhotoId(*id)).unwrap().section_enabled("light"));
+    }
+    let b = s.develop_of(PhotoId(ids[1])).unwrap();
+    assert!(!b.section_enabled("color"), "B's independently disabled Color must stay off");
+    assert!(b.section_enabled("optics"), "A's unchanged Optics eye must not be copied to B");
+    assert_eq!(b.light.contrast, 25.0, "the stored edits survive bypass");
+    assert_eq!(b.color.saturation, 60.0);
+    assert!(!s.develop_of(PhotoId(ids[2])).unwrap().section_enabled("effects"));
+    let disabled: Vec<_> = ids.iter().map(|id| s.develop_of(PhotoId(*id)).unwrap()).collect();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(ids.iter().map(|id| s.develop_of(PhotoId(*id)).unwrap()).collect::<Vec<_>>(), saved, "one undo restores every selected photo");
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(ids.iter().map(|id| s.develop_of(PhotoId(*id)).unwrap()).collect::<Vec<_>>(), disabled);
+
+    s.execute("develop.sectionEnabled", &json!({"section": "light", "enabled": true})).unwrap();
+    assert_eq!(ids.iter().map(|id| s.develop_of(PhotoId(*id)).unwrap()).collect::<Vec<_>>(), saved, "re-enabling only changes Light");
+    s.execute("develop.autoSync", &json!({"on": false})).unwrap();
+    s.execute("develop.sectionEnabled", &json!({"section": "light", "enabled": false})).unwrap();
+    assert_eq!(s.develop_of(PhotoId(ids[1])).unwrap(), saved[1]);
+    assert_eq!(s.develop_of(PhotoId(ids[2])).unwrap(), saved[2]);
+}
+
+#[test]
+fn auto_sync_section_changes_combine_with_sliders_and_ignore_list_order() {
+    use lightcraft_catalog::PhotoId;
+    let mut s = demo();
+    let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
+    s.execute("library.select", &json!({"ids": [ids[0]]})).unwrap();
+    for section in ["color", "optics"] {
+        s.execute("develop.sectionEnabled", &json!({"section": section, "enabled": false})).unwrap();
+    }
+    s.execute("library.select", &json!({"ids": [ids[1]]})).unwrap();
+    for section in ["color", "effects"] {
+        s.execute("develop.sectionEnabled", &json!({"section": section, "enabled": false})).unwrap();
+    }
+    s.execute("library.select", &json!({"ids": ids, "active": ids[0]})).unwrap();
+    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    let mut d = (*s.develop_of(PhotoId(ids[0])).unwrap()).clone();
+    d.set_section_enabled("color", true);
+    d.set_section_enabled("light", false);
+    d.light.exposure = 0.7;
+    s.set_develop(PhotoId(ids[0]), d, "Combined edit").unwrap();
+    let b = s.develop_of(PhotoId(ids[1])).unwrap();
+    assert!(b.section_enabled("color"));
+    assert!(b.section_enabled("optics"));
+    assert!(!b.section_enabled("effects"));
+    assert!(!b.section_enabled("light"));
+    assert_eq!(b.light.exposure, 0.7);
+    let history_len = s.catalog.photo(PhotoId(ids[1])).unwrap().history.len();
+    let mut d = (*s.develop_of(PhotoId(ids[0])).unwrap()).clone();
+    d.disabled_sections.reverse();
+    s.set_develop(PhotoId(ids[0]), d, "Reorder section list").unwrap();
+    assert_eq!(s.develop_of(PhotoId(ids[1])).unwrap(), b, "list order is not a section-state edit");
+    assert_eq!(s.catalog.photo(PhotoId(ids[1])).unwrap().history.len(), history_len, "unchanged target gets no history entry");
+}
+
+#[test]
+fn auto_sync_section_eyes_preserve_already_disabled_target_history() {
+    use lightcraft_catalog::PhotoId;
+    let mut s = demo();
+    let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
+    assert_eq!(ids.len(), 2);
+    let (a, b) = (PhotoId(ids[0]), PhotoId(ids[1]));
+    s.execute("library.select", &json!({"ids": [ids[1]]})).unwrap();
+    for section in ["light", "color"] {
+        s.execute("develop.sectionEnabled", &json!({"section": section, "enabled": false})).unwrap();
+    }
+    s.execute("library.select", &json!({"ids": ids, "active": ids[0]})).unwrap();
+    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    let saved_a = s.develop_of(a).unwrap();
+    let saved_b = s.develop_of(b).unwrap();
+    let history_a_len = s.catalog.photo(a).unwrap().history.len();
+    let history_b = s.catalog.photo(b).unwrap().history.clone();
+    let undo = s.undo.len();
+    assert_eq!(s.active(), Some(a));
+    assert!(saved_a.section_enabled("light"));
+    assert_eq!(saved_b.disabled_sections, vec!["light".to_string(), "color".to_string()]);
+
+    s.execute("develop.sectionEnabled", &json!({"section": "light", "enabled": false})).unwrap();
+    assert!(!s.develop_of(a).unwrap().section_enabled("light"));
+    assert_eq!(s.catalog.photo(a).unwrap().history.len(), history_a_len + 1);
+    assert_eq!(s.undo.len(), undo + 1);
+    assert_eq!(s.catalog.photo(b).unwrap().history, history_b, "an already-disabled target must not gain history");
+    assert_eq!(s.develop_of(b).unwrap(), saved_b, "the target's full saved settings must remain unchanged");
+
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.develop_of(a).unwrap(), saved_a);
+    assert_eq!(s.develop_of(b).unwrap(), saved_b);
+    assert_eq!(s.catalog.photo(b).unwrap().history, history_b);
+    assert_eq!(s.undo.len(), undo);
+}
