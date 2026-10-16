@@ -496,11 +496,12 @@ pub(crate) fn watermark_logo(path: &str) -> Option<std::sync::Arc<Rgba8>> {
 }
 
 /// A graphic file (a PNG with transparency, typically) as 8-bit sRGB with its alpha: the
-/// watermark logo, the loupe's layout image. The error says why it couldn't be read or decoded.
+/// watermark logo, the loupe's layout image. Applies EXIF orientation before either consumer sizes it.
+/// The error says why it couldn't be read or decoded.
 pub fn read_graphic(path: &str) -> Result<Rgba8, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("can't read {path}: {e}"))?;
     let decoded = lightcraft_codecs::decode(&bytes, Default::default()).map_err(|e| format!("can't decode {path}: {e}"))?;
-    Ok(decoded.to_srgb8())
+    Ok(decoded.to_srgb8().into_oriented(lightcraft_geom::Orientation::from_exif(decoded.orientation)))
 }
 
 /// The graphic watermark: scaled (premultiplied, so transparent edges stay clean) to
@@ -513,8 +514,14 @@ fn logo_coverage(width: usize, height: usize, wm: &Watermark, mut blend_px: impl
     if width == 0 || height == 0 || logo.width == 0 || logo.height == 0 {
         return;
     }
-    let lw = ((wm.image_width.clamp(0.01, 1.0) * width as f32).round() as usize).clamp(1, width);
-    let lh = ((lw as f32 * logo.height as f32 / logo.width as f32).round() as usize).clamp(1, height);
+    let turns = wm.quarter_turns();
+    // Fit the turned box with one scale: clamping height alone distorts tall graphics.
+    let (max_w, max_h) = if turns % 2 == 1 { (height, width) } else { (width, height) };
+    let scale = (wm.image_width.clamp(0.01, 1.0) as f64 * width as f64 / logo.width as f64)
+        .min(max_w as f64 / logo.width as f64)
+        .min(max_h as f64 / logo.height as f64);
+    let lw = (logo.width as f64 * scale).round().max(1.0) as usize;
+    let lh = (logo.height as f64 * scale).round().max(1.0) as usize;
     let pre: lightcraft_raster::Image<[f32; 4]> = lightcraft_raster::Image::from_fn(logo.width, logo.height, |x, y| {
         let p = logo.get(x, y);
         let a = p[3] as f32 / 255.0;
@@ -523,7 +530,6 @@ fn logo_coverage(width: usize, height: usize, wm: &Watermark, mut blend_px: impl
     let scaled = lightcraft_raster::resample::resize(&pre, lw, lh, lightcraft_raster::resample::Filter::Mitchell);
     let short = width.min(height) as f32;
     let (ix, iy) = (wm.inset_x.clamp(0.0, 0.4) * short, wm.inset_y.clamp(0.0, 0.4) * short);
-    let turns = wm.quarter_turns();
     let (bw, bh) = if turns % 2 == 1 { (lh, lw) } else { (lw, lh) };
     let (w, h, lwf, lhf) = (width as f32, height as f32, bw as f32, bh as f32);
     use Anchor::*;
@@ -653,8 +659,8 @@ pub struct ExportOptions {
     /// format's default (TIFF 16, everything else 8). See [`ExportOptions::effective_depth`].
     pub bit_depth: Option<u8>,
     /// HDR output for photos edited in HDR: JPEG as an ISO 21496-1 gain map JPEG (the SDR
-    /// rendition plus a gain map, so the file looks right everywhere; quality as set, `limit_kb`
-    /// not applied), AVIF as 10-bit Rec. 2020 PQ, PNG as 16-bit Rec. 2020 PQ (`cICP`; viewers
+    /// rendition plus a gain map, so the file looks right everywhere; `limit_kb` includes both
+    /// images and their metadata), AVIF as 10-bit Rec. 2020 PQ, PNG as 16-bit Rec. 2020 PQ (`cICP`; viewers
     /// without cICP support show it as sRGB, washed out), JPEG XL as 16-bit Rec. 2020 PQ, 32-bit float
     /// TIFF with the highlights above SDR white kept. Other formats, and photos without an HDR
     /// edit, are SDR.
@@ -1315,29 +1321,7 @@ pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metada
         ExportFormat::Jpeg => {
             // 4:4:4 normally; 4:2:0 when targeting a file size (much smaller at equal visual quality).
             let sub = if o.limit_kb.is_some() { ChromaSubsampling::S420 } else { ChromaSubsampling::S444 };
-            let jpeg = |q: u8| encode::encode_jpeg(&e, q, sub, &meta);
-            match o.limit_kb {
-                Some(kb) => {
-                    let limit = kb as usize * 1024;
-                    // Binary search for the highest quality that fits.
-                    let (mut lo, mut hi) = (1u8, o.quality);
-                    let mut best = None;
-                    while lo <= hi {
-                        let mid = lo + (hi - lo) / 2;
-                        let b = jpeg(mid).map_err(|e| e.to_string())?;
-                        if b.len() <= limit {
-                            best = Some(b);
-                            lo = mid + 1;
-                        } else if mid == 1 {
-                            break;
-                        } else {
-                            hi = mid - 1;
-                        }
-                    }
-                    return best.ok_or_else(|| format!("cannot fit within {kb} KB"));
-                }
-                None => jpeg(o.quality),
-            }
+            return encode_jpeg_with_limit(o, |q| encode::encode_jpeg(&e, q, sub, &meta));
         }
         ExportFormat::Png => encode::encode_png(&e, &meta),
         ExportFormat::Tiff => encode::encode_tiff(&e, o.tiff_compression, &meta),
@@ -1349,6 +1333,27 @@ pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metada
         ExportFormat::RenderedDng => return Err("Render to DNG needs a float render".into()),
     };
     r.map_err(|e| e.to_string())
+}
+
+/// Apply the same file-size policy to ordinary JPEGs and complete HDR gain map JPEGs.
+fn encode_jpeg_with_limit(o: &ExportOptions, jpeg: impl Fn(u8) -> lightcraft_codecs::Result<Vec<u8>>) -> Result<Vec<u8>, String> {
+    let Some(kb) = o.limit_kb else { return jpeg(o.quality).map_err(|e| e.to_string()) };
+    let limit = u64::from(kb) * 1024;
+    let (mut lo, mut hi) = (1u8, o.quality.min(100));
+    let mut best = None;
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        let b = jpeg(mid).map_err(|e| e.to_string())?;
+        if b.len() as u64 <= limit {
+            best = Some(b);
+            lo = mid + 1;
+        } else if mid == 1 {
+            break;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    best.ok_or_else(|| format!("cannot fit within {kb} KB"))
 }
 
 /// Output sharpening and the watermark on an 8-bit render in `o.effective_space()`.
@@ -1398,7 +1403,7 @@ pub fn encode_gain_map_jpeg(sdr: &Rgba8, hdr: &DeepImage, o: &ExportOptions, met
     let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
     let em = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
     let sub = if o.limit_kb.is_some() { ChromaSubsampling::S420 } else { ChromaSubsampling::S444 };
-    gainmap::encode_jpeg(&EncodeImage::rgba8(&base), &map, &gm, o.quality, sub, &em).map_err(|e| e.to_string())
+    encode_jpeg_with_limit(o, |q| gainmap::encode_jpeg(&EncodeImage::rgba8(&base), &map, &gm, q, sub, &em))
 }
 
 /// The codecs' name of an output space (for its ICC profile).
@@ -2299,6 +2304,96 @@ mod tests {
         let kb = (full.len() / 1024 / 2).max(2) as u32;
         let b = encode_image(&img, &ExportOptions { quality: 100, limit_kb: Some(kb), ..Default::default() }).unwrap();
         assert!(b.len() <= kb as usize * 1024);
+    }
+
+    #[test]
+    fn hdr_jpeg_size_limit_respected() {
+        let img = Rgba8::from_fn(256, 192, |x, y| {
+            let n = (x as u32).wrapping_mul(73856093) ^ (y as u32).wrapping_mul(19349663);
+            [n as u8, (n >> 8) as u8, (n >> 16) as u8, 255]
+        });
+        let hdr = DeepImage {
+            width: img.width,
+            height: img.height,
+            space: OutputSpace::Srgb,
+            samples: DeepSamples::F32(
+                img.data.iter().flat_map(|p| p[..3].iter().map(|v| lightcraft_color::transfer::decode_srgb8(*v) * 4.0)).collect(),
+            ),
+        };
+        let opts = ExportOptions { hdr: true, quality: 100, limit_kb: Some(u32::MAX), ..Default::default() };
+        let full = encode_gain_map_jpeg(&img, &hdr, &opts, None).unwrap();
+        let kb = (full.len() / 2048) as u32;
+        let limited = encode_gain_map_jpeg(&img, &hdr, &ExportOptions { limit_kb: Some(kb), ..opts.clone() }, None).unwrap();
+        assert!(limited.len() <= kb as usize * 1024, "{} bytes exceeds {kb} KB", limited.len());
+        let decoded = lightcraft_codecs::gainmap::read_jpeg(&limited).unwrap();
+        assert!(decoded.meta.alternate_headroom > 1.0, "the gain map must survive size limiting");
+        let impossible = encode_gain_map_jpeg(&img, &hdr, &ExportOptions { limit_kb: Some(1), ..opts }, None);
+        assert!(impossible.is_err_and(|e| e.contains("cannot fit within 1 KB")));
+    }
+
+    #[test]
+    fn graphic_watermark_honours_exif_orientation() {
+        let dir = std::env::temp_dir().join(format!("lc-wm-orientation-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let logo = Rgba8::from_fn(40, 20, |x, _| if x < 20 { [255, 0, 0, 255] } else { [0, 0, 255, 255] });
+        for orientation in [2, 6] {
+            let meta = Metadata { orientation: Some(lightcraft_geom::Orientation::from_exif(orientation)), ..Default::default() };
+            let exif = lightcraft_meta::write_exif(&meta);
+            let bytes = lightcraft_codecs::encode_jpeg(
+                &EncodeImage::rgba8(&logo),
+                100,
+                ChromaSubsampling::S444,
+                &EncodeMeta { exif: Some(&exif), ..Default::default() },
+            )
+            .unwrap();
+            let path = dir.join(format!("oriented-{orientation}.jpg"));
+            std::fs::write(&path, bytes).unwrap();
+            let wm = Watermark {
+                image: path.to_string_lossy().into(),
+                image_width: if orientation == 6 { 0.25 } else { 0.5 },
+                opacity: 1.0,
+                inset_x: 0.0,
+                inset_y: 0.0,
+                ..Default::default()
+            };
+            let mut img = Rgba8::from_fn(80, 80, |_, _| [0, 0, 0, 255]);
+            draw_watermark(&mut img, &wm);
+            if orientation == 6 {
+                assert!(img.get(70, 45)[0] > 240 && img.get(70, 75)[2] > 240, "EXIF 6: red above blue");
+            } else {
+                assert!(img.get(45, 70)[2] > 240 && img.get(75, 70)[0] > 240, "EXIF 2: blue left of red");
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn graphic_watermark_keeps_aspect_when_fitted_and_rotated() {
+        let dir = std::env::temp_dir().join(format!("lc-wm-aspect-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tall.png");
+        let logo = Rgba8::from_fn(40, 160, |_, _| [255, 0, 0, 255]);
+        std::fs::write(&path, lightcraft_codecs::encode_png(&EncodeImage::rgba8(&logo), &EncodeMeta::default()).unwrap()).unwrap();
+        for (rotation, expected) in [(0, (20, 80)), (90, (120, 30)), (180, (20, 80)), (270, (120, 30))] {
+            let wm = Watermark {
+                image: path.to_string_lossy().into(),
+                image_width: 0.5,
+                opacity: 1.0,
+                inset_x: 0.0,
+                inset_y: 0.0,
+                rotation,
+                ..Default::default()
+            };
+            let mut img = Rgba8::from_fn(120, 80, |_, _| [0, 0, 0, 255]);
+            draw_watermark(&mut img, &wm);
+            let lit: Vec<_> = img.data.iter().enumerate().filter(|(_, p)| p[0] > 200).map(|(i, _)| (i % 120, i / 120)).collect();
+            let bounds = (
+                lit.iter().map(|p| p.0).max().unwrap() - lit.iter().map(|p| p.0).min().unwrap() + 1,
+                lit.iter().map(|p| p.1).max().unwrap() - lit.iter().map(|p| p.1).min().unwrap() + 1,
+            );
+            assert_eq!(bounds, expected, "{rotation} degrees: fitting must preserve the logo's aspect ratio");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
