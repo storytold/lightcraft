@@ -1272,6 +1272,8 @@ mod tests_import;
 #[cfg(test)]
 mod tests_import_move;
 #[cfg(test)]
+mod tests_import_read;
+#[cfg(test)]
 mod tests_keyword_list;
 #[cfg(test)]
 mod tests_libops;
