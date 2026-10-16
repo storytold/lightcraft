@@ -191,7 +191,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                         if m == WbMode::Custom {
                             continue;
                         }
-                        if MenuItem::new(m.label()).checked(d.wb.mode == m).show(ui).clicked() {
+                        if MenuItem::new(crate::i18n::tr(m.label())).selected(d.wb.mode == m).show(ui).clicked() {
                             let mode = serde_json::to_value(m).unwrap_or_default();
                             let _ = app.run("develop.wb", json!({"mode": mode}));
                         }

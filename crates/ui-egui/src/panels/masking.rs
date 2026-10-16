@@ -461,7 +461,7 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let r = crate::widgets::dropdown(ui, "maskOverlayMode", menu_label(view.label()), t.font(12.5), t.text_label);
         egui::Popup::menu(&r).show(|ui| {
             for v in MaskView::ALL {
-                if MenuItem::new(menu_label(v.label())).checked(v == view).show(ui).clicked() {
+                if MenuItem::new(menu_label(v.label())).selected(v == view).show(ui).clicked() {
                     let _ = app.run("view.maskOverlayMode", json!({"mode": v.name()}));
                 }
             }

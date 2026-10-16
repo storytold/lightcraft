@@ -409,7 +409,7 @@ pub(crate) fn tool_overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             .on_hover_text(crate::i18n::tr("When pins show on the photo (Shift+H cycles)"));
         egui::Popup::menu(&r).show(|ui| {
             for m in ToolOverlay::ALL {
-                let item = MenuItem::new(crate::i18n::tr(m.label())).checked(m == current).widget(format!("toolOverlay:{}", m.name())).show(ui);
+                let item = MenuItem::new(crate::i18n::tr(m.label())).selected(m == current).widget(format!("toolOverlay:{}", m.name())).show(ui);
                 if item.clicked() {
                     let _ = app.run("view.toolOverlay", json!({"mode": m.name()}));
                 }

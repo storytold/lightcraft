@@ -239,7 +239,7 @@ pub(super) fn export_size(ui: &mut egui::Ui, full: &mut bool, r: &mut lightcraft
             let before = r.mode;
             let c = crate::widgets::combo_box("exportResizeMode").width(150.0).selected_text(crate::i18n::tr(cur)).show_ui(ui, |ui| {
                 for (m, l) in MODES {
-                    if MenuItem::new(crate::i18n::tr(l)).checked(r.mode == m).show(ui).clicked() {
+                    if MenuItem::new(crate::i18n::tr(l)).selected(r.mode == m).show(ui).clicked() {
                         r.mode = m;
                     }
                 }

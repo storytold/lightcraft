@@ -1359,10 +1359,10 @@ fn contact_sheet_body(app: &mut LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dial
     ui.label(contact_sheet_summary(n, pages));
     field(ui, "Paper", |ui| {
         let c = crate::widgets::combo_box("contactSheetPaper").selected_text(&options.paper).show_ui(ui, |ui| {
-            if MenuItem::new("A4").checked(options.paper == "a4").show(ui).clicked() {
+            if MenuItem::new("A4").selected(options.paper == "a4").show(ui).clicked() {
                 options.paper = "a4".into();
             }
-            if MenuItem::new(crate::i18n::tr("Letter")).checked(options.paper == "letter").show(ui).clicked() {
+            if MenuItem::new(crate::i18n::tr("Letter")).selected(options.paper == "letter").show(ui).clicked() {
                 options.paper = "letter".into();
             }
         });

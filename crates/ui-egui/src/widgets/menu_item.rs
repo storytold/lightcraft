@@ -28,6 +28,9 @@ pub struct MenuItem<'a> {
     icon: Option<Icon>,
     swatch: Option<egui::Color32>,
     checked: Option<bool>,
+    /// One-of-N choice: `Some(on)`.
+    selected: Option<bool>,
+    inert: bool,
     slot: bool,
     shortcut: Option<&'a str>,
     enabled: bool,
@@ -38,7 +41,19 @@ pub struct MenuItem<'a> {
 impl<'a> MenuItem<'a> {
     /// A row saying `label` (already translated).
     pub fn new(label: &'a str) -> Self {
-        Self { label, icon: None, swatch: None, checked: None, slot: false, shortcut: None, enabled: true, reason: None, widget: None }
+        Self {
+            label,
+            icon: None,
+            swatch: None,
+            checked: None,
+            selected: None,
+            inert: false,
+            slot: false,
+            shortcut: None,
+            enabled: true,
+            reason: None,
+            widget: None,
+        }
     }
 
     /// An icon before the text.
@@ -61,10 +76,24 @@ impl<'a> MenuItem<'a> {
         self
     }
 
+    /// A row that is the current one of several exclusive choices (a combo row, a sort key): the
+    /// check slot as for [`Self::checked`], announced as a selected radio button.
+    pub fn selected(mut self, on: bool) -> Self {
+        self.selected = Some(on);
+        self.slot = true;
+        self
+    }
+
+    /// Not clickable, but drawn at full strength (the current choice that has nothing to choose).
+    pub fn inert(mut self) -> Self {
+        self.inert = true;
+        self
+    }
+
     /// Reserve the check slot without being checkable, so the rows of a menu where some are
     /// checkable line up.
     pub fn check_slot(mut self, reserve: bool) -> Self {
-        self.slot = reserve || self.checked.is_some();
+        self.slot = reserve || self.checked.is_some() || self.selected.is_some();
         self
     }
 
@@ -111,7 +140,7 @@ impl<'a> MenuItem<'a> {
     /// previous frame (a menu is redrawn at once when a column appears), so the labels of a
     /// mixed menu start at one x without callers keeping count.
     fn columns(&self, ui: &Ui) -> (bool, bool) {
-        let mine = (self.slot || self.checked.is_some(), self.icon.is_some() || self.swatch.is_some());
+        let mine = (self.slot || self.checked.is_some() || self.selected.is_some(), self.icon.is_some() || self.swatch.is_some());
         let ctx = ui.ctx();
         let key = egui::Id::unique(("lc-menu-columns", ui.scope_id()));
         let pass = ctx.cumulative_pass_nr();
@@ -161,12 +190,15 @@ impl<'a> MenuItem<'a> {
             }
         };
         let enabled = self.enabled && ui.is_enabled();
-        let resp = ui.interact(rect, id, if enabled { Sense::click() } else { Sense::hover() });
+        let clickable = enabled && !self.inert;
+        let resp = ui.interact(rect, id, if clickable { Sense::click() } else { Sense::hover() });
         let words = self.label.to_string();
-        match self.checked {
+        match self.selected.or(self.checked) {
             // (a submenu row marking the current choice is still a button that opens a menu)
+            // (a submenu row marking the current group is a plain button: its check is visual only)
+            Some(_) if submenu => resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, words.clone())),
             Some(on) => {
-                let kind = if submenu { egui::WidgetType::Button } else { egui::WidgetType::Checkbox };
+                let kind = if self.selected.is_some() { egui::Role::RadioButton } else { egui::Role::CheckBox };
                 resp.widget_info(|| egui::WidgetInfo::selected(kind, enabled, on, words.clone()))
             }
             None => resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, words.clone())),
@@ -177,7 +209,7 @@ impl<'a> MenuItem<'a> {
         // the row whose submenu is open stays lit
         let open = submenu && egui::Popup::is_id_open(ui.ctx(), egui::containers::menu::SubMenu::id_from_widget_id(id));
         let p = ui.painter();
-        let fill = if !enabled {
+        let fill = if !clickable {
             None
         } else if resp.is_pointer_button_down_on() {
             Some(t.pressed)
@@ -196,7 +228,7 @@ impl<'a> MenuItem<'a> {
         let cy = rect.center().y;
         let mut x = rect.left() + PAD;
         if self.slot {
-            if self.checked == Some(true) {
+            if self.selected.or(self.checked) == Some(true) {
                 paint(p, egui::Rect::from_center_size(pos2(x + SLOT / 2.0, cy), vec2(MARK, MARK)), Icon::Check, ink);
             }
             x += SLOT + GAP;

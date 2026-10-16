@@ -407,7 +407,7 @@ pub fn picker_rows(ui: &mut egui::Ui, salt: &str, presets: &PresetList, selected
                     PickRow::Preset(i) => {
                         let Some(p) = presets.get(*i) else { continue };
                         let label = crate::i18n::builtin_label(&p.name, p.builtin);
-                        if MenuItem::new(label).checked(selected == Some(p.id.as_str())).show(ui).clicked() {
+                        if MenuItem::new(label).selected(selected == Some(p.id.as_str())).show(ui).clicked() {
                             out = Some(p.id.clone());
                         }
                     }

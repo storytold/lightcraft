@@ -78,7 +78,7 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, current: &str, a
                 } else {
                     crate::i18n::tr(label)
                 };
-                if MenuItem::new(text).checked(*sel).show(ui).clicked() {
+                if MenuItem::new(text).selected(*sel).show(ui).clicked() {
                     chosen = Some(patch.clone());
                 }
             }

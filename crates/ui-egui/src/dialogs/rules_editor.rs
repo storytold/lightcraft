@@ -56,7 +56,7 @@ fn match_combo(ui: &mut egui::Ui, salt: &str, m: &mut Match) {
     };
     let combo = crate::widgets::combo_box(format!("{salt}-match")).width(64.0).selected_text(crate::i18n::tr(label(*m))).show_ui(ui, |ui| {
         for x in [Match::All, Match::Any, Match::None] {
-            if MenuItem::new(crate::i18n::tr(label(x))).checked(*m == x).show(ui).clicked() {
+            if MenuItem::new(crate::i18n::tr(label(x))).selected(*m == x).show(ui).clicked() {
                 *m = x;
             }
         }
@@ -158,7 +158,7 @@ fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &
                 ui.add(egui::DragValue::new(&mut n).range(1.0..=10_000.0).clamp_existing_to_range(false).speed(0.2).fixed_decimals(0)).changed();
             let combo = crate::widgets::combo_box(format!("{salt}-unit")).width(70.0).selected_text(crate::i18n::tr(&unit)).show_ui(ui, |ui| {
                 for u in ["hours", "days", "weeks", "months", "years"] {
-                    if MenuItem::new(crate::i18n::tr(u)).checked(unit.trim_end_matches('s') == u.trim_end_matches('s')).show(ui).clicked() {
+                    if MenuItem::new(crate::i18n::tr(u)).selected(unit.trim_end_matches('s') == u.trim_end_matches('s')).show(ui).clicked() {
                         unit = u.to_string();
                         changed = true;
                     }
@@ -206,12 +206,15 @@ fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &
         (Some(Kind::Number), _) => number_value(ui, v, field),
         (Some(Kind::Choice(c)), _) => {
             let cur = v.as_str().unwrap_or("").to_string();
-            let combo = crate::widgets::combo_box(format!("{salt}-choice")).width(120.0).selected_text(crate::i18n::choice_text(field, &cur)).show_ui(ui, |ui| {
-                for (id, _) in c.iter() {
-                    if MenuItem::new(crate::i18n::choice_text(field, id)).checked(cur == *id).show(ui).clicked() {
-                        *v = json!(id);
+            let combo = crate::widgets::combo_box(format!("{salt}-choice"))
+                .width(120.0)
+                .selected_text(crate::i18n::choice_text(field, &cur))
+                .show_ui(ui, |ui| {
+                    for (id, _) in c.iter() {
+                        if MenuItem::new(crate::i18n::choice_text(field, id)).selected(cur == *id).show(ui).clicked() {
+                            *v = json!(id);
+                        }
                     }
-                }
                 });
             crate::widgets::name_combo(&combo.response, crate::i18n::tr(field_label(field).unwrap_or(field)));
         }
@@ -222,7 +225,7 @@ fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &
             let text = cur.map_or_else(|| v.to_string(), |b| crate::i18n::bool_text(b).to_string());
             let combo = crate::widgets::combo_box(format!("{salt}-bool")).width(60.0).selected_text(text).show_ui(ui, |ui| {
                 for b in [true, false] {
-                    if MenuItem::new(crate::i18n::bool_text(b)).checked(cur == Some(b)).show(ui).clicked() {
+                    if MenuItem::new(crate::i18n::bool_text(b)).selected(cur == Some(b)).show(ui).clicked() {
                         *v = json!(b);
                     }
                 }
@@ -246,7 +249,7 @@ fn field_menu(ui: &mut egui::Ui, salt: &str, field: &mut String, op: &mut String
         let mut pick = None;
         let mut item = |ui: &mut egui::Ui, id: &'static str| {
             let label = crate::i18n::tr(field_label(id).unwrap_or(id));
-            let r = MenuItem::new(label).checked(current == id).widget(format!("ruleFieldItem:{id}:{salt}")).show(ui);
+            let r = MenuItem::new(label).selected(current == id).widget(format!("ruleFieldItem:{id}:{salt}")).show(ui);
             if r.clicked() {
                 pick = Some(id);
                 ui.close();
@@ -258,7 +261,7 @@ fn field_menu(ui: &mut egui::Ui, salt: &str, field: &mut String, op: &mut String
         ui.separator();
         // the submenu holding the current field is checked
         for (group, ids) in FIELD_GROUPS {
-            let r = MenuItem::new(crate::i18n::tr(group)).checked(ids.contains(&current.as_str())).submenu(ui, |ui| {
+            let r = MenuItem::new(crate::i18n::tr(group)).selected(ids.contains(&current.as_str())).submenu(ui, |ui| {
                 for id in *ids {
                     item(ui, id);
                 }
@@ -328,16 +331,17 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
                     field_menu(ui, &rsalt, field, op, value);
                     let kind = field_kind(field).unwrap_or(Kind::Text);
                     let op_label = ops_for(kind).iter().find(|o| o.0 == op.as_str()).map_or(op.as_str(), |o| o.1).to_string();
-                    let combo = crate::widgets::combo_box(format!("{rsalt}-op")).width(110.0).selected_text(crate::i18n::tr(&op_label)).show_ui(ui, |ui| {
-                        for (id, l) in ops_for(kind) {
-                            if MenuItem::new(crate::i18n::tr(l)).checked(op == id).show(ui).clicked() && op != id {
-                                let was_special = matches!(op.as_str(), "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty");
-                                *op = id.to_string();
-                                if was_special || matches!(*id, "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty") {
-                                    *value = default_value(field, op);
+                    let combo =
+                        crate::widgets::combo_box(format!("{rsalt}-op")).width(110.0).selected_text(crate::i18n::tr(&op_label)).show_ui(ui, |ui| {
+                            for (id, l) in ops_for(kind) {
+                                if MenuItem::new(crate::i18n::tr(l)).selected(op == id).show(ui).clicked() && op != id {
+                                    let was_special = matches!(op.as_str(), "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty");
+                                    *op = id.to_string();
+                                    if was_special || matches!(*id, "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty") {
+                                        *value = default_value(field, op);
+                                    }
                                 }
                             }
-                        }
                         });
                     crate::widgets::name_combo(&combo.response, crate::i18n::tr("Operator"));
                     value_editor(ui, field, op, value, &rsalt, env);

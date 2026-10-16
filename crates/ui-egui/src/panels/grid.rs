@@ -1221,12 +1221,12 @@ pub fn label_items(app: &mut LightcraftApp, ui: &mut egui::Ui, current: Option<C
     for l in ColorLabel::ALL {
         let name = crate::i18n::color_label(&app.session.catalog, l);
         let resp =
-            MenuItem::new(&name).swatch(label_color(l)).checked(current == Some(l)).widget(format!("{widget}:{}", label_param(Some(l)))).show(ui);
+            MenuItem::new(&name).swatch(label_color(l)).selected(current == Some(l)).widget(format!("{widget}:{}", label_param(Some(l)))).show(ui);
         if resp.clicked() {
             chosen = Some(Some(l));
         }
     }
-    let none = MenuItem::new(crate::i18n::tr("None")).checked(current.is_none()).widget(format!("{widget}:none")).show(ui);
+    let none = MenuItem::new(crate::i18n::tr("None")).selected(current.is_none()).widget(format!("{widget}:none")).show(ui);
     if none.clicked() {
         chosen = Some(None);
     }

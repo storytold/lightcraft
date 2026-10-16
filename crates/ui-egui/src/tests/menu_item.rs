@@ -249,3 +249,29 @@ fn collect_text_x(shape: &Shape, out: &mut Vec<f32>) {
         _ => {}
     }
 }
+
+#[test]
+fn exclusive_choices_are_radio_buttons_and_independent_toggles_are_checkboxes() {
+    let r = run(None, Vec::new(), |ui| {
+        vec![
+            MenuItem::new("Day").selected(true).show(ui),
+            MenuItem::new("Month").selected(false).show(ui),
+            MenuItem::new("Solo Mode").checked(true).show(ui),
+            MenuItem::new("Group").selected(true).submenu(ui, |_| {}).response,
+        ]
+    });
+    let role = |name: &str| r.nodes.iter().find(|(_, n, _)| n == name).map(|(role, _, t)| (role.clone(), *t));
+    assert_eq!(role("Day"), Some(("RadioButton".to_string(), Some(true))), "{:?}", r.nodes);
+    assert_eq!(role("Month"), Some(("RadioButton".to_string(), Some(false))));
+    assert_eq!(role("Solo Mode"), Some(("CheckBox".to_string(), Some(true))));
+    // a submenu row marking the current group is a plain button
+    assert_eq!(role("Group"), Some(("Button".to_string(), None)));
+}
+
+#[test]
+fn an_inert_current_choice_ignores_clicks_without_the_disabled_look() {
+    let rows = |ui: &mut egui::Ui| vec![MenuItem::new("Display P3").selected(true).inert().show(ui)];
+    let r = run(Some(0), Vec::new(), rows);
+    assert_eq!(r.clicked, vec![false]);
+    assert!(r.nodes.iter().any(|(role, n, t)| role == "RadioButton" && n == "Display P3" && *t == Some(true)), "{:?}", r.nodes);
+}

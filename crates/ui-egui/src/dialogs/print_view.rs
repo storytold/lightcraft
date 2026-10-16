@@ -450,7 +450,7 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
         let current = current_paper(&l.page.paper);
         let c = craft_ui::ComboBox::from_id_salt("printPaper").selected_text(paper_label(current)).show_ui(ui, |ui| {
             for name in layout::paper_names().chain(std::iter::once("custom")) {
-                if MenuItem::new(&paper_label(name)).checked(current == name).show(ui).clicked() {
+                if MenuItem::new(&paper_label(name)).selected(current == name).show(ui).clicked() {
                     patch(app, &ctx, json!({"layout": {"page": {"paper": name}}}));
                 }
             }
@@ -526,15 +526,15 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
             for (space, label) in [(ManagedSpace::Srgb, "Managed by Printer (sRGB)"), (ManagedSpace::AdobeRgb, "Managed by Printer (Adobe RGB)")] {
                 let id = format!("item:printProfile-{}", to_value(space).as_str().unwrap_or_default());
                 let selected = color.profile == managed(space);
-                if MenuItem::new(crate::i18n::tr(label)).checked(selected).widget(id).show(ui).clicked() && !selected {
+                if MenuItem::new(crate::i18n::tr(label)).selected(selected).widget(id).show(ui).clicked() && !selected {
                     patch_color(app, &ctx, "profile", to_value(managed(space)));
                 }
             }
             if let PrintProfile::Icc { .. } = &color.profile {
-                MenuItem::new(shown.as_str()).checked(true).enabled(false).show(ui);
+                MenuItem::new(shown.as_str()).selected(true).inert().show(ui);
             }
             if app.services.pick_display_profile.is_some() {
-                let r = MenuItem::new(crate::i18n::tr("Other…")).checked(false).widget("item:printProfile-other").show(ui);
+                let r = MenuItem::new(crate::i18n::tr("Other…")).selected(false).widget("item:printProfile-other").show(ui);
                 pick |= r.clicked();
             }
         });

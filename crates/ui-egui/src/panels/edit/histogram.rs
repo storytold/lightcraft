@@ -234,14 +234,14 @@ pub(super) fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
             let mut pick = false;
             let combo = crate::widgets::combo_box("proof-space").width(170.0).selected_text(shown).show_ui(ui, |ui| {
                 for s in OutputSpace::ALL {
-                    if MenuItem::new(s.label()).checked(device.is_none() && cur == s).show(ui).clicked() {
+                    if MenuItem::new(s.label()).selected(device.is_none() && cur == s).show(ui).clicked() {
                         let _ = app.run("view.softProof", json!({"space": s}));
                     }
                 }
                 if let Some(n) = &device {
-                    let _ = MenuItem::new(n).checked(true).enabled(false).show(ui);
+                    let _ = MenuItem::new(n).selected(true).inert().show(ui);
                 }
-                if app.services.pick_display_profile.is_some() && MenuItem::new(crate::i18n::tr("Other…")).checked(false).show(ui).clicked() {
+                if app.services.pick_display_profile.is_some() && MenuItem::new(crate::i18n::tr("Other…")).selected(false).show(ui).clicked() {
                     pick = true;
                 }
             });

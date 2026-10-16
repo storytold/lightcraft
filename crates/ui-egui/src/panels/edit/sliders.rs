@@ -81,7 +81,7 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
     let mut pick: (Option<String>, Option<String>) = (None, None);
     let item = |ui: &mut egui::Ui, key: &str, id: &str, name: &str, pick: &mut (Option<String>, Option<String>)| {
         let label = crate::i18n::profile_label(id, name);
-        let r = MenuItem::new(label).checked(id == cur).widget(format!("profileMenu:{key}:{id}")).show(ui);
+        let r = MenuItem::new(label).selected(id == cur).widget(format!("profileMenu:{key}:{id}")).show(ui);
         if r.clicked() {
             pick.0 = Some(id.to_string());
         }

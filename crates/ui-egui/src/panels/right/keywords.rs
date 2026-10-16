@@ -245,7 +245,7 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 for set in sets["sets"].as_array().into_iter().flatten() {
                     let name = set["name"].as_str().unwrap_or_default();
                     if MenuItem::new(crate::i18n::builtin_label(name, name == lightcraft_engine::cmd::keywords::RECENT))
-                        .checked(name == current)
+                        .selected(name == current)
                         .show(ui)
                         .clicked()
                     {

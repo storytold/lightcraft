@@ -74,7 +74,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         egui::Popup::menu(&more).show(|ui| {
                             for &(id, _, mode, label) in VIEW_MODES {
                                 let keys = crate::shortcuts::shortcut_of(&app.ui.settings.keymap, &view_key_command(id)).map(str::to_string);
-                                let mut item = MenuItem::new(crate::i18n::tr(label)).checked(app.ui.view == mode);
+                                let mut item = MenuItem::new(crate::i18n::tr(label)).selected(app.ui.view == mode);
                                 if let Some(k) = &keys {
                                     item = item.shortcut(k);
                                 }
@@ -244,7 +244,7 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
                 ("200%", Zoom::Percent(200.0)),
                 ("400%", Zoom::Percent(400.0)),
             ] {
-                if MenuItem::new(crate::i18n::tr(label)).checked(app.ui.zoom == z).show(ui).clicked() {
+                if MenuItem::new(crate::i18n::tr(label)).selected(app.ui.zoom == z).show(ui).clicked() {
                     app.ui.zoom = z;
                     app.ui.pan = (0.5, 0.5);
                 }
@@ -317,7 +317,7 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
 
 fn click_zoom_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     for pct in crate::state::CLICK_ZOOMS {
-        if MenuItem::new(&format!("{}:1", pct / 100)).checked(app.ui.click_zoom == pct).show(ui).clicked() {
+        if MenuItem::new(&format!("{}:1", pct / 100)).selected(app.ui.click_zoom == pct).show(ui).clicked() {
             let _ = app.run("view.clickZoom", json!({"ratio": pct / 100}));
         }
     }
@@ -337,7 +337,7 @@ fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ("File Size", FileSize, "fileSize"),
         ("Random", Random, "random"),
     ] {
-        if MenuItem::new(crate::i18n::tr(label)).checked(cur.key == key).show(ui).clicked() {
+        if MenuItem::new(crate::i18n::tr(label)).selected(cur.key == key).show(ui).clicked() {
             let _ = app.run("library.sort", json!({"key": k}));
         }
     }
@@ -354,10 +354,10 @@ fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.separator();
     // a shuffle has no direction worth choosing
     ui.add_enabled_ui(cur.key != Random, |ui| {
-        if MenuItem::new(crate::i18n::tr("Ascending")).checked(cur.key != Random && cur.ascending).show(ui).clicked() {
+        if MenuItem::new(crate::i18n::tr("Ascending")).selected(cur.key != Random && cur.ascending).show(ui).clicked() {
             let _ = app.run("library.sort", json!({"ascending": true}));
         }
-        if MenuItem::new(crate::i18n::tr("Descending")).checked(cur.key != Random && !cur.ascending).show(ui).clicked() {
+        if MenuItem::new(crate::i18n::tr("Descending")).selected(cur.key != Random && !cur.ascending).show(ui).clicked() {
             let _ = app.run("library.sort", json!({"ascending": false}));
         }
     });
@@ -370,7 +370,7 @@ fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ("Year", GroupBy::Year, "year"),
         ("None", GroupBy::None, "none"),
     ] {
-        if MenuItem::new(crate::i18n::tr(label)).checked(cur.group == g).show(ui).clicked() {
+        if MenuItem::new(crate::i18n::tr(label)).selected(cur.group == g).show(ui).clicked() {
             let _ = app.run("library.sort", json!({"group": k}));
         }
     }

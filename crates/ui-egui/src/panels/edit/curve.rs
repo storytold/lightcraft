@@ -415,7 +415,7 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
                     }
                     let label = crate::i18n::builtin_label(&p.name, p.builtin);
                     let r =
-                        MenuItem::new(label).checked(current.as_deref() == Some(p.name.as_str())).widget(format!("curvePreset:{}", p.name)).show(ui);
+                        MenuItem::new(label).selected(current.as_deref() == Some(p.name.as_str())).widget(format!("curvePreset:{}", p.name)).show(ui);
                     if r.clicked() {
                         let _ = app.run("curve.applyPreset", json!({"name": p.name}));
                         ui.close();

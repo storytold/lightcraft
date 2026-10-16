@@ -47,10 +47,10 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
                     };
                     let id = format!("settingsCamera-{i}");
                     let r = crate::widgets::combo_box(&id).width(240.0).selected_text(label).show_ui(ui, |ui| {
-                        if MenuItem::new(crate::i18n::tr("Same as raw default")).checked(current == Some(RAW_DEFAULT)).show(ui).clicked() {
+                        if MenuItem::new(crate::i18n::tr("Same as raw default")).selected(current == Some(RAW_DEFAULT)).show(ui).clicked() {
                             pick = Some(json!({"camera": cam, "remove": true}));
                         }
-                        if MenuItem::new(crate::i18n::tr("LightCraft Default")).checked(current.is_none()).show(ui).clicked() {
+                        if MenuItem::new(crate::i18n::tr("LightCraft Default")).selected(current.is_none()).show(ui).clicked() {
                             pick = Some(json!({"camera": cam, "preset": null}));
                         }
                         if let Some(pid) = crate::panels::presets::picker_rows(ui, &id, &app.session.presets, current) {
@@ -102,11 +102,11 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
                 .width(240.0)
                 .selected_text(cur.clone().unwrap_or_else(|| crate::i18n::tr("None").into()))
                 .show_ui(ui, |ui| {
-                    if MenuItem::new(crate::i18n::tr("None")).checked(cur.is_none()).show(ui).clicked() {
+                    if MenuItem::new(crate::i18n::tr("None")).selected(cur.is_none()).show(ui).clicked() {
                         pick = Some(String::new());
                     }
                     for m in &app.session.metadata_presets {
-                        if MenuItem::new(&m.name).checked(cur.as_deref() == Some(m.name.as_str())).show(ui).clicked() {
+                        if MenuItem::new(&m.name).selected(cur.as_deref() == Some(m.name.as_str())).show(ui).clicked() {
                             pick = Some(m.name.clone());
                         }
                     }
