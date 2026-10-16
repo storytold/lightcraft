@@ -1215,6 +1215,7 @@
   "Remove (H)": "Entfernen (H)",
   "Remove CA": "Chromatische Aberration entfernen",
   "Remove Chromatic Aberration": "Chromatische Aberration entfernen",
+  "Remove Hot Pixels": "Hotpixel entfernen",
   "Camera local tone mapping": "Lokale Tonwertzuordnung der Kamera",
   "Apply the local tone mapping stored in the raw (Apple ProRAW), as the camera renders it": "Die in der Raw-Datei gespeicherte lokale Tonwertzuordnung (Apple ProRAW) anwenden, wie die Kamera sie rendert",
   "Remove Disk from Library": "Datenträger aus Bibliothek entfernen",

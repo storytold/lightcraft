@@ -27,6 +27,7 @@ impl DevelopSettings {
         s.wb.tint = as_shot_tint;
         s.detail.sharpen_amount = 40.0;
         s.detail.nr_color = 25.0;
+        s.detail.nr_outliers = true;
         s
     }
 
@@ -149,6 +150,21 @@ mod tests_process;
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Remove Hot Pixels (#1345) is on for a newly imported raw and off for everything else, and an edit saved
+    /// before the box existed reads as off, so it renders as it did.
+    #[test]
+    fn hot_pixel_box_is_on_for_new_raws_only() {
+        assert!(DevelopSettings::for_raw(5500.0, 10.0).detail.nr_outliers);
+        assert!(!DevelopSettings::default().detail.nr_outliers);
+        let mut saved = DevelopSettings::for_raw(5500.0, 10.0).to_json();
+        let detail = saved.get_mut("detail").and_then(|d| d.as_object_mut()).unwrap();
+        assert!(detail.remove("nr_outliers").is_some());
+        let read = DevelopSettings::from_json(&saved).unwrap();
+        assert!(!read.detail.nr_outliers);
+        assert_eq!(read.detail.nr_color, 25.0, "the rest of the saved edit is kept");
+        assert_ne!(read.hash64(), DevelopSettings::for_raw(5500.0, 10.0).hash64(), "cached renders are told apart");
+    }
 
     #[test]
     fn serde_roundtrip_default_and_edited() {

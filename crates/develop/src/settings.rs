@@ -623,6 +623,11 @@ pub struct Detail {
     pub nr_color: f64,
     pub nr_color_detail: f64,
     pub nr_color_smoothness: f64,
+    /// Replace single outlier photosites (noise spikes far above all their same-colour neighbours) in the
+    /// raw mosaic before demosaicing, so they do not become coloured dots (#1345). On for newly imported
+    /// raws ([`crate::DevelopSettings::for_raw`]); off for edits saved before it existed, so they look the
+    /// same. Raw files only.
+    pub nr_outliers: bool,
 }
 
 impl Default for Detail {
@@ -640,6 +645,7 @@ impl Default for Detail {
             nr_color: 0.0,
             nr_color_detail: 50.0,
             nr_color_smoothness: 50.0,
+            nr_outliers: false,
         }
     }
 }

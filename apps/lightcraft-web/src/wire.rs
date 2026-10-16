@@ -129,7 +129,9 @@ impl WireJob {
     /// Identifies the decoded source this job needs.
     fn source_key(&self) -> String {
         match &self.origin {
-            Source::File { path } => format!("{}:{:?}:{}:{path}", self.cache_generation, self.source_identity, self.max_edge),
+            Source::File { path } => {
+                format!("{}:{:?}:{}:{}:{path}", self.cache_generation, self.source_identity, self.max_edge, self.settings.detail.nr_outliers)
+            }
             Source::Demo { scene } => format!("{}:{:?}:{}:demo:{scene}", self.cache_generation, self.source_identity, self.max_edge),
         }
     }
@@ -181,8 +183,9 @@ impl WorkerCore {
             None => {
                 let src = match (&job.origin, original) {
                     (Source::File { .. }, Some(bytes)) => {
-                        let (image, info) = lightcraft_engine::files::load_bytes(bytes, job.max_edge)?;
-                        DecodedSource::new(Arc::new(image), Some(info))
+                        let outliers = job.settings.detail.nr_outliers;
+                        let (image, info) = lightcraft_engine::files::load_bytes_with(bytes, job.max_edge, outliers)?;
+                        DecodedSource { outliers, ..DecodedSource::new(Arc::new(image), Some(info)) }
                     }
                     (Source::File { path }, None) => return Err(format!("{path}: original not found in browser storage")),
                     (origin @ Source::Demo { .. }, _) => self.media.origin_ref(origin, job.max_edge).load_source()?,

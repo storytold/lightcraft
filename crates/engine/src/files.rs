@@ -366,20 +366,26 @@ pub fn bin_factor(raw: &lightcraft_raw::RawImage, max_edge: usize) -> Option<usi
 /// instead of each one waking the pool from outside and waiting for it (which costs more than the
 /// loops themselves when the machine is busy).
 pub fn load_bytes(bytes: &[u8], max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    rayon::scope(|_| load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, None).map(|(img, _, info)| (img, info)))
+    load_bytes_with(bytes, max_edge, false)
+}
+
+/// [`load_bytes`], with a raw's single outlier photosites replaced in the mosaic first when `outliers` is set
+/// ([`lightcraft_develop::Detail::nr_outliers`]).
+pub fn load_bytes_with(bytes: &[u8], max_edge: usize, outliers: bool) -> Result<(Rgb32f, SourceInfo), String> {
+    rayon::scope(|_| load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, None, outliers).map(|(img, _, info)| (img, info)))
 }
 
 /// [`load_bytes`] taking the file's bytes: a raw file's bytes are freed as soon as it is decoded
 /// (less memory held while it is developed).
-pub fn load_vec(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None).map(|(img, _, info)| (img, info)))
+pub fn load_vec(bytes: Vec<u8>, max_edge: usize, outliers: bool) -> Result<(Rgb32f, SourceInfo), String> {
+    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, outliers).map(|(img, _, info)| (img, info)))
 }
 
 /// [`load_vec`] that also develops the photo's cached denoised picture (`spec`) from the same decode: the plain
 /// picture, the denoised one (`None` when it cannot be read or does not fit this raw: the plain one is then all
 /// there is) and the source facts. Both pictures are the same size.
-pub fn load_vec_pair(bytes: Vec<u8>, max_edge: usize, spec: &DenoiseSpec) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, Some(spec)))
+pub fn load_vec_pair(bytes: Vec<u8>, max_edge: usize, spec: &DenoiseSpec, outliers: bool) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> {
+    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, Some(spec), outliers))
 }
 
 /// The denoised camera RGB of `raw` from its cached product, as the plain development would have it: the default
@@ -408,6 +414,7 @@ fn load_bytes_now(
     bytes: std::borrow::Cow<'_, [u8]>,
     max_edge: usize,
     denoise: Option<&DenoiseSpec>,
+    outliers: bool,
 ) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> {
     if lightcraft_raw::probe(&bytes).is_some() {
         let mut raw = match lightcraft_raw::decode(&bytes).map_err(|e| preview_reason(&bytes, e)) {
@@ -420,6 +427,14 @@ fn load_bytes_now(
             }
             Err(Err(e)) => return Err(e),
         };
+        // single outlier photosites, replaced in the mosaic before anything is developed from it (#1345)
+        if outliers {
+            let t = std::time::Instant::now();
+            let n = raw.suppress_hot_pixels();
+            if lightcraft_pipeline::profiling() {
+                eprintln!("[profile] raw outliers: {n} photosites replaced in {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+            }
+        }
         // Embedded lens corrections are applied by the pipeline ("Enable Profile Corrections"), not baked in
         // (removed before the camera look's binned sensor proxy too, which needs an empty `OpcodeList3`).
         let info = raw.info();
@@ -1039,13 +1054,13 @@ fn quick_image_srgb(header: &[u8], window: &[u8], adobe_rgb: bool, max_edge: usi
 /// The filesystem-backed [`PairLoader`]: the file is read and decoded once, and developed as usual and from the photo's
 /// denoised picture. It holds two pictures at once, so it counts for more at the memory gate than a plain load.
 pub fn fs_pair_loader() -> PairLoader {
-    Arc::new(|path: &str, max_edge: usize, spec: &DenoiseSpec| {
+    Arc::new(|path: &str, max_edge: usize, spec: &DenoiseSpec, outliers: bool| {
         let len = std::fs::metadata(path).map(|m| m.len() as usize).unwrap_or(0);
         let weight = len * if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 4 } else { 10 };
         let gate = crate::memory::work_gate();
         let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-        let r = load_vec_pair(bytes, max_edge, spec);
+        let r = load_vec_pair(bytes, max_edge, spec, outliers);
         crate::memory::release();
         r
     })
@@ -1059,13 +1074,13 @@ pub fn fs_pair_loader() -> PairLoader {
 /// interactive loads (the loupe, exports) never wait — they are counted, so background work
 /// yields to them.
 pub fn fs_hooks() -> (FileLoader, FileProbe) {
-    let loader: FileLoader = Arc::new(|path: &str, max_edge: usize| {
+    let loader: FileLoader = Arc::new(|path: &str, max_edge: usize, outliers: bool| {
         let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
         let weight = len * if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 3 } else { 6 };
         let gate = crate::memory::work_gate();
         let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-        let r = load_vec(bytes, max_edge);
+        let r = load_vec(bytes, max_edge, outliers);
         // the file, the samples and the intermediate images are gone: give their pages back
         crate::memory::release();
         r
@@ -1604,7 +1619,7 @@ pub(crate) mod tests {
         product::write(&path, &camera_rgb, key).unwrap();
         let spec = DenoiseSpec { product: path, key: key.into(), make: None };
         let (ordinary, _) = load_bytes(&bytes, 2048).unwrap();
-        let (plain, cached, _) = load_vec_pair(bytes, 2048, &spec).unwrap();
+        let (plain, cached, _) = load_vec_pair(bytes, 2048, &spec, false).unwrap();
         assert_eq!(plain.data, ordinary.data, "requesting a twin must not change the ordinary path");
         let cached = cached.unwrap();
         assert_eq!((plain.width, plain.height), (24, 32));
