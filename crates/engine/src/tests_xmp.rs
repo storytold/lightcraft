@@ -558,8 +558,19 @@ pub(crate) fn synthetic_dng_with(xmp: Option<&str>, metadata: lightcraft_meta::M
 
 /// A synthetic Bayer DNG for denoise and cache tests.
 pub(crate) fn synthetic_dng_of(w: usize, h: usize, cfa: &str, data: Vec<u16>, xmp: Option<&str>, metadata: lightcraft_meta::Metadata) -> Vec<u8> {
+    synthetic_dng_cfa(w, h, lightcraft_raw::Cfa::bayer(cfa).unwrap(), data, xmp, metadata)
+}
+
+/// [`synthetic_dng_of`] for any colour filter array, Bayer or not (X-Trans).
+pub(crate) fn synthetic_dng_cfa(
+    w: usize,
+    h: usize,
+    cfa: lightcraft_raw::Cfa,
+    data: Vec<u16>,
+    xmp: Option<&str>,
+    metadata: lightcraft_meta::Metadata,
+) -> Vec<u8> {
     use lightcraft_raw::*;
-    let cfa = Cfa::bayer(cfa).unwrap();
     let raw = RawImage {
         format: RawFormat::Dng,
         width: w,

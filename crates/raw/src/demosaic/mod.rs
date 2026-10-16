@@ -8,6 +8,8 @@
 //! - Non-Bayer patterns (X-Trans, …) always use `xtrans::directional`, our own edge-weighted colour-difference
 //!   interpolation.
 //!
+//! [`remosaic_rggb`] goes the other way, for callers that need Bayer geometry from a sensor that has none.
+//!
 //! Every method reproduces a constant-colour mosaic exactly.
 
 mod ahd;
@@ -112,6 +114,39 @@ pub fn demosaic(n: &Normalized, method: Method) -> Rgb32f {
             }
         }
     }
+}
+
+/// A non-Bayer mosaic (Fujifilm X-Trans, …) rebuilt as an RGGB mosaic of the same size, so that tools
+/// written around Bayer geometry can read a sensor they were not written for: the AI denoiser, whose
+/// model contract is four RGGB planes. The mosaic is interpolated as [`demosaic`] would and one channel is
+/// kept per site, the one RGGB wants there, without building the full RGB picture in between.
+///
+/// Where the sensor already carries that colour at that site the interpolation returns the sample
+/// itself, so those sites keep their original value and their original noise, while the rest are
+/// interpolated and so already a little smoother. Anything reading the result sees noise that varies
+/// from site to site, and the interpolation's own errors: this is an approximation of the sensor, not
+/// the sensor.
+///
+/// `None` when the mosaic is not one this can rebuild: already demosaiced data (`cpp != 1`), no CFA, a
+/// CFA that is already Bayer (read that one as it is), a pattern whose size does not match its colours
+/// or holding a colour that is not red, green or blue (RGBE, CYGM) or missing one of the three, or a
+/// size that does not match the samples.
+pub fn remosaic_rggb(n: &Normalized) -> Option<Normalized> {
+    let cfa = n.cfa.as_ref()?;
+    if n.cpp != 1 || cfa.is_bayer() {
+        return None;
+    }
+    if cfa.width == 0 || cfa.height == 0 || cfa.width.checked_mul(cfa.height) != Some(cfa.pattern.len()) {
+        return None;
+    }
+    if !(0..=2).all(|c| cfa.pattern.contains(&c)) || cfa.pattern.iter().any(|&c| c > 2) {
+        return None;
+    }
+    if n.width == 0 || n.height == 0 || n.width.checked_mul(n.height) != Some(n.data.len()) {
+        return None;
+    }
+    let data = xtrans::rggb(&Mosaic { w: n.width, h: n.height, data: &n.data, cfa });
+    Some(Normalized { width: n.width, height: n.height, cpp: 1, data, cfa: Some(Cfa::bayer_static("RGGB")) })
 }
 
 /// Build a mosaic from an RGB image by sampling each pixel's CFA colour (for tests and synthetic data).
@@ -282,6 +317,155 @@ mod tests {
         assert_eq!(reflect(6, 5), 2);
         assert_eq!(reflect(3, 1), 0);
         assert_eq!(reflect(-7, 2), 1);
+    }
+
+    /// The single-pass re-mosaic must give exactly what demosaicing and then keeping each site's RGGB
+    /// colour gives: every phase of the pattern, the borders, and samples with no structure to hide behind.
+    #[test]
+    fn remosaic_matches_the_demosaic_sampled_as_rggb() {
+        let mut seed = 2024u32;
+        for (dx, dy) in [(0, 0), (1, 2), (5, 3)] {
+            let cfa = Cfa::xtrans().shifted(dx, dy);
+            let (w, h) = (37, 29);
+            let data: Vec<f32> = (0..w * h)
+                .map(|_| {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    (seed >> 8) as f32 / (1u32 << 24) as f32
+                })
+                .collect();
+            let n = Normalized { width: w, height: h, cpp: 1, data, cfa: Some(cfa) };
+            let want = mosaic_from_rgb(&demosaic(&n, Method::Ahd), &Cfa::bayer("RGGB").unwrap());
+            let got = remosaic_rggb(&n).unwrap();
+            assert_eq!((got.width, got.height, got.cpp), (w, h, 1));
+            assert!(got.data.iter().zip(&want.data).all(|(a, b)| a.to_bits() == b.to_bits()), "phase ({dx}, {dy})");
+        }
+    }
+
+    #[test]
+    fn remosaic_keeps_a_constant_colour_exactly() {
+        let colour = [0.3f32, 0.55, 0.8];
+        let n = mosaic_from_rgb(&Rgb32f::filled(19, 14, colour), &Cfa::xtrans());
+        let r = remosaic_rggb(&n).unwrap();
+        let cfa = r.cfa.clone().unwrap();
+        assert_eq!(cfa.name(), "RGGB");
+        for y in 0..r.height {
+            for x in 0..r.width {
+                let want = colour[cfa.color_at(x, y) as usize];
+                assert!((r.data[y * r.width + x] - want).abs() < 1e-5, "({x}, {y})");
+            }
+        }
+    }
+
+    /// The sites where X-Trans already carries the colour RGGB wants keep their own sample, untouched.
+    #[test]
+    fn remosaic_keeps_the_samples_the_two_patterns_share() {
+        let img = edgy_scene(40, 32);
+        let xt = Cfa::xtrans();
+        let n = mosaic_from_rgb(&img, &xt);
+        let r = remosaic_rggb(&n).unwrap();
+        let rggb = r.cfa.clone().unwrap();
+        let mut shared = 0;
+        for y in 0..32 {
+            for x in 0..40 {
+                let c = rggb.color_at(x, y);
+                if xt.color_at(x, y) != c {
+                    continue;
+                }
+                shared += 1;
+                assert_eq!(r.data[y * 40 + x].to_bits(), img.get(x, y)[c as usize].to_bits(), "({x}, {y})");
+            }
+        }
+        // about two sites in five: 20/36 greens against RGGB's half, 8/36 reds and blues against its quarters
+        assert!(shared > 40 * 32 / 4, "only {shared} shared sites");
+    }
+
+    /// Reading the re-mosaic back as Bayer costs a little against demosaicing the X-Trans mosaic directly,
+    /// but must stay close: it is the picture the denoiser's Bayer contract starts from.
+    #[test]
+    fn remosaic_round_trip_stays_close_to_the_direct_demosaic() {
+        for img in [smooth_scene(96, 80), edgy_scene(96, 80)] {
+            let n = mosaic_from_rgb(&img, &Cfa::xtrans());
+            let direct = psnr(&img, &demosaic(&n, Method::Ahd), 6);
+            let through = psnr(&img, &demosaic(&remosaic_rggb(&n).unwrap(), Method::Ahd), 6);
+            eprintln!("direct {direct:.1} dB, through RGGB {through:.1} dB");
+            assert!(through > 24.0, "through RGGB {through:.1} dB");
+            assert!(through > direct - 2.0, "through RGGB {through:.1} dB against direct {direct:.1} dB");
+        }
+    }
+
+    #[test]
+    fn remosaic_refuses_what_it_cannot_rebuild() {
+        let img = smooth_scene(12, 10);
+        let xtrans = || mosaic_from_rgb(&img, &Cfa::xtrans());
+        // already Bayer: the caller reads that mosaic as it is
+        assert!(remosaic_rggb(&mosaic_from_rgb(&img, &Cfa::bayer("GRBG").unwrap())).is_none());
+        // already demosaiced
+        let mut three = xtrans();
+        three.cpp = 3;
+        assert!(remosaic_rggb(&three).is_none());
+        // no colour filter array at all (a monochrome sensor)
+        let mut mono = xtrans();
+        mono.cfa = None;
+        assert!(remosaic_rggb(&mono).is_none());
+        // a fourth colour (RGBE), a pattern missing blue, and patterns whose size does not match their colours
+        // (a zero side would divide by zero when looking a colour up, a short pattern would read past its end)
+        for (width, height, pattern) in
+            [(2, 2, vec![0, 1, 1, 3]), (2, 2, vec![0, 1, 1, 1]), (0, 2, vec![0, 1, 2]), (2, 2, vec![0, 1, 2]), (6, 6, vec![])]
+        {
+            let mut odd = xtrans();
+            odd.cfa = Some(Cfa { width, height, pattern });
+            assert!(remosaic_rggb(&odd).is_none(), "{width}×{height}");
+        }
+        // samples that do not match the size
+        let mut short = xtrans();
+        short.data.pop();
+        assert!(remosaic_rggb(&short).is_none());
+        let mut empty = xtrans();
+        (empty.width, empty.height, empty.data) = (0, 0, Vec::new());
+        assert!(remosaic_rggb(&empty).is_none());
+    }
+
+    /// The re-mosaic on a real non-Bayer file, which no synthetic pattern stands in for (the active-area crop
+    /// moves the pattern's phase, and sensor noise is what the denoiser is given the result for):
+    /// `LC_XTRANS_RAW=<file> cargo test --release -p lightcraft-raw --lib -- --ignored --nocapture remosaic_a_real_file`
+    #[test]
+    #[ignore = "needs LC_XTRANS_RAW pointing at a real non-Bayer raw file"]
+    fn remosaic_a_real_file() {
+        let Some(path) = std::env::var_os("LC_XTRANS_RAW") else {
+            lightcraft_testkit::skip!(Input, "set LC_XTRANS_RAW=<path to a non-Bayer raw file>");
+            return;
+        };
+        let raw = crate::decode(&std::fs::read(&path).unwrap()).unwrap();
+        let n = raw.normalized().unwrap();
+        let cfa = n.cfa.clone().unwrap();
+        assert!(!cfa.is_bayer(), "not a non-Bayer file");
+        let t = std::time::Instant::now();
+        let r = remosaic_rggb(&n).unwrap();
+        let ms = t.elapsed().as_secs_f64() * 1e3;
+        assert_eq!((r.width, r.height), (n.width, n.height));
+        assert!(r.data.iter().all(|v| v.is_finite()));
+        let rggb = r.cfa.clone().unwrap();
+        let (mut shared, mut kept) = (0usize, 0usize);
+        for y in 0..n.height {
+            for x in 0..n.width {
+                if cfa.color_at(x, y) == rggb.color_at(x, y) {
+                    shared += 1;
+                    kept += usize::from(r.data[y * n.width + x].to_bits() == n.data[y * n.width + x].to_bits());
+                }
+            }
+        }
+        let t = std::time::Instant::now();
+        let direct = demosaic(&n, Method::Ahd);
+        let direct_ms = t.elapsed().as_secs_f64() * 1e3;
+        println!(
+            "{}×{}: re-mosaic {ms:.0} ms (a full demosaic {direct_ms:.0} ms), {shared} shared sites ({:.1} %), {kept} of them \
+             untouched, PSNR through RGGB against the direct demosaic {:.1} dB",
+            n.width,
+            n.height,
+            100.0 * shared as f64 / (n.width * n.height) as f64,
+            psnr(&direct, &demosaic(&r, Method::Ahd), 8)
+        );
+        assert_eq!(kept, shared, "a shared site lost its own sample");
     }
 
     #[test]

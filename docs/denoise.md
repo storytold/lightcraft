@@ -177,7 +177,18 @@ Native apps enable inference through their `denoise` feature. A build without it
 the web build report inference unavailable. Manifest/cache primitives still compile
 for WASM. Settings and models remain opt-in; nothing is downloaded on launch.
 
-This implementation supports **Bayer RAW only**. X-Trans, Foveon, demosaiced DNG and
-non-RAW images remain unsupported by this model contract. No measured quality parity
-with Lightroom is claimed. Apple/Metal and wider hardware verification, model policy,
+The model contract itself is **Bayer only**. A non-Bayer colour filter array — Fujifilm's
+X-Trans, and any other pattern laid out in red, green and blue — reaches it through a
+re-mosaic: the sensor is interpolated and read back as an RGGB mosaic of the same size
+(`remosaic_rggb`, `crates/raw/src/demosaic`), so the picture keeps its resolution and every
+step after the model is unchanged. It interpolates only the colour each site needs, without
+the full RGB picture in between: on a 26 MP X-Trans frame it takes ~65 ms (a full demosaic
+~80 ms) and holds three planes at once, the mosaic, its green and the RGGB copy, under its
+own share of the working-memory gate. 39 % of the frame's sites already carry the colour
+RGGB wants there and keep the sensor's own sample, and reading the result back as RGB comes
+within 42 dB (PSNR) of demosaicing the X-Trans mosaic directly. The rest reach the model
+already interpolated, so it sees noise that varies from site to site: this is an
+approximation of an X-Trans sensor, not a model trained on one, and its quality is
+unmeasured. Foveon, demosaiced DNG and non-RAW
+images remain unsupported. No measured quality parity with Lightroom is claimed. Apple/Metal and wider hardware verification, model policy,
 a linear-RGB contract and a side-by-side fidelity suite remain future work.

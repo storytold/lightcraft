@@ -139,6 +139,45 @@ fn green(m: &Mosaic, off: &Offsets) -> Vec<f32> {
     g
 }
 
+/// Step 2 at an interior pixel `i` with green `gp`: green plus the edge-weighted mean colour difference of
+/// the same-colour samples at `list` (precomputed offsets, no reflection).
+#[inline]
+fn colour_inside(m: &Mosaic, g: &[f32], i: usize, gp: f32, list: &[(isize, isize)]) -> f32 {
+    let w = m.w as isize;
+    let (mut s, mut ws) = (0.0f32, 0.0f32);
+    for &(dx, dy) in list {
+        let j = (i as isize + dy * w + dx) as usize;
+        let gq = g[j];
+        let d2 = (dx * dx + dy * dy) as f32;
+        let wt = 1.0 / (d2 * (EPS + (gq - gp).abs()));
+        s += wt * (m.data[j] - gq);
+        ws += wt;
+    }
+    if ws > 0.0 { gp + s / ws } else { gp }
+}
+
+/// Step 2 near the border, for colour `c` (0 red, 2 blue) at `(x, y)` with green `gp`: the 5×5
+/// neighbourhood read with reflection.
+#[inline]
+fn colour_at_border(m: &Mosaic, g: &[f32], x: isize, y: isize, gp: f32, c: usize) -> f32 {
+    let (w, h) = (m.w, m.h);
+    let gg = |x: isize, y: isize| g[super::reflect(y, h) * w + super::reflect(x, w)];
+    let (mut s, mut ws) = (0.0f32, 0.0f32);
+    for dy in -2isize..=2 {
+        for dx in -2isize..=2 {
+            if m.color(x + dx, y + dy) as usize != c {
+                continue;
+            }
+            let gq = gg(x + dx, y + dy);
+            let d2 = (dx * dx + dy * dy) as f32;
+            let wt = 1.0 / (d2 * (EPS + (gq - gp).abs()));
+            s += wt * (m.get(x + dx, y + dy) - gq);
+            ws += wt;
+        }
+    }
+    if ws > 0.0 { gp + s / ws } else { gp }
+}
+
 pub(crate) fn directional(m: &Mosaic) -> Rgb32f {
     let (w, h) = (m.w, m.h);
     let off = Offsets::new(m);
@@ -153,50 +192,50 @@ pub(crate) fn directional(m: &Mosaic) -> Rgb32f {
                 let i = y * w + x;
                 let own = m.cfa.color_at(x, y) as usize;
                 let gp = g[i];
-                px[1] = gp;
                 let lists = &off.rb[off.phase(x, y)];
-                for (li, c) in [0usize, 2].into_iter().enumerate() {
-                    if c == own {
-                        px[c] = m.data[i];
-                        continue;
-                    }
-                    let (mut s, mut ws) = (0.0f32, 0.0f32);
-                    for &(dx, dy) in &lists[li] {
-                        let j = (i as isize + dy * w as isize + dx) as usize;
-                        let gq = g[j];
-                        let d2 = (dx * dx + dy * dy) as f32;
-                        let wt = 1.0 / (d2 * (EPS + (gq - gp).abs()));
-                        s += wt * (m.data[j] - gq);
-                        ws += wt;
-                    }
-                    px[c] = if ws > 0.0 { gp + s / ws } else { gp };
-                }
+                px[1] = gp;
+                px[0] = if own == 0 { m.data[i] } else { colour_inside(m, &g, i, gp, &lists[0]) };
+                px[2] = if own == 2 { m.data[i] } else { colour_inside(m, &g, i, gp, &lists[1]) };
                 continue;
             }
             let x = x as isize;
             let own = m.color(x, yi) as usize;
             let gp = gg(x, yi);
             px[1] = gp;
-            for c in [0usize, 2] {
-                if c == own {
-                    px[c] = m.get(x, yi);
+            px[0] = if own == 0 { m.get(x, yi) } else { colour_at_border(m, &g, x, yi, gp, 0) };
+            px[2] = if own == 2 { m.get(x, yi) } else { colour_at_border(m, &g, x, yi, gp, 2) };
+        }
+    });
+    out
+}
+
+/// The mosaic interpolated and read back as RGGB: sample for sample what [`directional`] followed by
+/// keeping the RGGB colour of each site gives, without the full RGB picture in between — a third of the
+/// memory, and one colour interpolated only at the sites that want red or blue.
+pub(crate) fn rggb(m: &Mosaic) -> Vec<f32> {
+    let (w, h) = (m.w, m.h);
+    let off = Offsets::new(m);
+    let g = green(m, &off);
+    let mut out = vec![0f32; w * h];
+    par_rows(&mut out, w, |y, row| {
+        let interior_y = y >= 2 && y + 2 < h;
+        let yi = y as isize;
+        for (x, o) in row.iter_mut().enumerate() {
+            let i = y * w + x;
+            let c = match (y % 2, x % 2) {
+                (0, 0) => 0,
+                (1, 1) => 2,
+                _ => {
+                    *o = g[i];
                     continue;
                 }
-                let (mut s, mut ws) = (0.0f32, 0.0f32);
-                for dy in -2isize..=2 {
-                    for dx in -2isize..=2 {
-                        if m.color(x + dx, yi + dy) as usize != c {
-                            continue;
-                        }
-                        let gq = gg(x + dx, yi + dy);
-                        let d2 = (dx * dx + dy * dy) as f32;
-                        let wt = 1.0 / (d2 * (EPS + (gq - gp).abs()));
-                        s += wt * (m.get(x + dx, yi + dy) - gq);
-                        ws += wt;
-                    }
-                }
-                px[c] = if ws > 0.0 { gp + s / ws } else { gp };
+            };
+            if interior_y && x >= 2 && x + 2 < w {
+                *o = if m.cfa.color_at(x, y) as usize == c { m.data[i] } else { colour_inside(m, &g, i, g[i], &off.rb[off.phase(x, y)][c / 2]) };
+                continue;
             }
+            let x = x as isize;
+            *o = if m.color(x, yi) as usize == c { m.get(x, yi) } else { colour_at_border(m, &g, x, yi, g[i], c) };
         }
     });
     out
