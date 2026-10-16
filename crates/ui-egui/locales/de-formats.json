@@ -1,4 +1,13 @@
 {
+  "Photos: {count}": {
+    "one": "Foto: {count}",
+    "few": "Fotos: {count}",
+    "many": "Fotos: {count}",
+    "other": "Fotos: {count}"
+  },
+  "Estimated total size: {size}": "Geschätzte Gesamtgröße: {size}",
+  "Destination: {path}": "Ziel: {path}",
+  "Free space: {size}": "Freier Speicherplatz: {size}",
   " ({unsure} with several look-alike files: use Locate)": " ({unsure} mit mehreren ähnlichen Dateien: „Fehlende Datei suchen“ verwenden)",
   " ({} in Recently Deleted)": " ({} in „Zuletzt gelöscht“)",
   " · {:.0}% clipped": " · {:.0}% beschnitten",
@@ -137,7 +146,6 @@
   "the {n} selected photos": "die {n} ausgewählten Fotos",
   "the {} photos in view": "die {} Fotos in der Ansicht",
   "these {count} photos": "diese {count} Fotos",
-  "{count} smart preview{} · {:.1} MB": "Smart-Vorschauen: {count}{0:.0} · {1:.1} MB",
   "{f} folders (and their subfolders)": "{f} Ordner (und ihre Unterordner)",
   "{label} Grading": "Farbtonung: {label}",
   "{label} {d:+} on every selected photo": "{label} {d:+} für jedes ausgewählte Foto",
@@ -295,5 +303,26 @@
   "Already in “{}”": "Bereits in „{}“",
   "Move {n} photo{} to “{}”": "{n} Foto{0} nach „{1}“ verschieben",
   "Move {n} photo{} to “{}”?": "{n} Foto{0} nach „{1}“ verschieben?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} Foto{0} nach „{1}“ verschoben. Bearbeiten → Rückgängig holt sie zurück."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} Foto{0} nach „{1}“ verschoben. Bearbeiten → Rückgängig holt sie zurück.",
+  "Smart preview folder changed. {count} source files could not be removed.": {
+    "one": "Smart-Vorschauordner geändert. {count} Quelldatei konnte nicht entfernt werden.",
+    "few": "Smart-Vorschauordner geändert. {count} Quelldateien konnten nicht entfernt werden.",
+    "many": "Smart-Vorschauordner geändert. {count} Quelldateien konnten nicht entfernt werden.",
+    "other": "Smart-Vorschauordner geändert. {count} Quelldateien konnten nicht entfernt werden."
+  },
+  "Smart preview folder change failed: {error}": "Ordnerwechsel für Smart-Vorschauen fehlgeschlagen: {error}",
+  ". {count} existing previews kept unchanged": {
+    "one": ". {count} vorhandene Vorschau unverändert beibehalten",
+    "few": ". {count} vorhandene Vorschauen unverändert beibehalten",
+    "many": ". {count} vorhandene Vorschauen unverändert beibehalten",
+    "other": ". {count} vorhandene Vorschauen unverändert beibehalten"
+  },
+  "{count} smart previews · {size:.1} MiB": {
+    "one": "{count} Smart-Vorschau · {size:.1} MiB",
+    "few": "{count} Smart-Vorschauen · {size:.1} MiB",
+    "many": "{count} Smart-Vorschauen · {size:.1} MiB",
+    "other": "{count} Smart-Vorschauen · {size:.1} MiB"
+  },
+  "could not check smart preview storage: {e}": "Smart-Vorschau-Speicher konnte nicht geprüft werden: {e}",
+  "free space is unavailable for {path} on this platform": "Für {path} ist der freie Speicherplatz auf dieser Plattform nicht verfügbar."
 }

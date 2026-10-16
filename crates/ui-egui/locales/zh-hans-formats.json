@@ -1,4 +1,13 @@
 {
+  "Photos: {count}": {
+    "one": "照片：{count} 张",
+    "few": "照片：{count} 张",
+    "many": "照片：{count} 张",
+    "other": "照片：{count} 张"
+  },
+  "Estimated total size: {size}": "预计总大小：{size}",
+  "Destination: {path}": "目标位置：{path}",
+  "Free space: {size}": "可用空间：{size}",
   " · {skipped} skipped (file exists)": " · 已跳过 {skipped} 个（文件已存在）",
   " · {} duplicate{} skipped": " · 已跳过 {0} 个重复项{1:.0}",
   " · {} failed: {}": " · {0} 个失败：{1}",
@@ -79,7 +88,6 @@
   "the {n} selected photos": "选中的 {n} 张照片",
   "the {} photos in view": "视图中的 {0} 张照片",
   "these {count} photos": "这 {count} 张照片",
-  "{count} smart preview{} · {:.1} MB": "{count} 个智能预览{0:.0} · {1:.1} MB",
   "{f} folders (and their subfolders)": "{f} 个文件夹（及其子文件夹）",
   "{label} Grading": "{label} 颜色分级",
   "{label} {d:+} on every selected photo": "每张选中照片的 {label} {d:+}",
@@ -295,5 +303,26 @@
   "Renames {n} face{} across the library. The files are not changed.": "在整个图库中重命名 {n} 张面孔。不会改动文件。{:.0}",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "“{to}”已经是另一个人。合并后成为一个人；撤销会再把他们分开。",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "已添加 {what} 合并（{mp}）：完整尺寸（{full}）所需的内存超出了这台电脑的内存",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "已添加 {what} 合并（{mp}），这是全景图的最大尺寸（完整尺寸：{full}）"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "已添加 {what} 合并（{mp}），这是全景图的最大尺寸（完整尺寸：{full}）",
+  "Smart preview folder changed. {count} source files could not be removed.": {
+    "one": "智能预览文件夹已更改。有 {count} 个源文件无法删除。",
+    "few": "智能预览文件夹已更改。有 {count} 个源文件无法删除。",
+    "many": "智能预览文件夹已更改。有 {count} 个源文件无法删除。",
+    "other": "智能预览文件夹已更改。有 {count} 个源文件无法删除。"
+  },
+  "Smart preview folder change failed: {error}": "更改智能预览文件夹失败：{error}",
+  ". {count} existing previews kept unchanged": {
+    "one": "。已保留 {count} 个现有预览，未作更改",
+    "few": "。已保留 {count} 个现有预览，未作更改",
+    "many": "。已保留 {count} 个现有预览，未作更改",
+    "other": "。已保留 {count} 个现有预览，未作更改"
+  },
+  "{count} smart previews · {size:.1} MiB": {
+    "one": "{count} 个智能预览 · {size:.1} MiB",
+    "few": "{count} 个智能预览 · {size:.1} MiB",
+    "many": "{count} 个智能预览 · {size:.1} MiB",
+    "other": "{count} 个智能预览 · {size:.1} MiB"
+  },
+  "could not check smart preview storage: {e}": "无法检查智能预览存储空间：{e}",
+  "free space is unavailable for {path} on this platform": "此平台无法获取 {path} 的可用空间。"
 }

@@ -1,10 +1,9 @@
-//! Smart previews: a compact proxy of each photo (its decoded preview-size source, about 1 MB)
-//! kept in the library, so photos stay editable — and exportable at proxy size — while their
-//! originals are offline (an unplugged drive). The proxy is the scene-linear source scaled into
-//! 0..1 by a stored factor, sRGB-encoded and saved as a JPEG after a one-line header. The header
-//! also keeps the decoder's file-local camera tone curve (Sony ARW camera look), which is applied
-//! at render time and is not baked into the pixels.
+//! Smart previews store a reduced scene-linear working RGB source for offline editing.
+//! Compact JPEG (LCSP1) remains the default. Optional lossless float TIFF (LCSP2) preserves
+//! source precision and highlight range. Camera tone and chroma curves stay in the header
+//! and apply at render time. See docs/smart-previews.md.
 
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -12,6 +11,21 @@ use lightcraft_catalog::Photo;
 use lightcraft_color::transfer::linear_to_srgb;
 use lightcraft_pipeline::tone::CameraTone;
 use lightcraft_raster::{Rgb32f, Rgba8};
+
+mod format;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod migration;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) mod tests_conversion;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_cut_short;
+#[cfg(test)]
+mod tests_lossless;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_round3;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) mod tests_round4;
+pub use format::Format;
 
 const MAGIC: &[u8] = b"LCSP1\n";
 
@@ -48,7 +62,7 @@ pub fn existing_file_path(dir: &Path, sharded: PathBuf) -> PathBuf {
     if legacy.exists() { legacy } else { sharded }
 }
 
-/// The most header [`is_valid`] reads (the JSON line before the JPEG).
+/// The most header [`is_complete`] reads (the magic and JSON line before the pixels).
 const HEADER_MAX: u64 = 4096;
 
 /// The header field that records which version of the camera-look fit (`camera_preview::LOOK_VERSION`)
@@ -67,7 +81,8 @@ const JPEG_QUALITY: u8 = 97;
 
 /// The header field that records which version of this module's own encoding wrote a proxy's pixels
 /// (the source mapping above and [`JPEG_QUALITY`]). Not to be confused with [`LOOK_FIELD`], which
-/// tracks the camera-look fit that is baked into those pixels.
+/// tracks the camera-look fit that is baked into those pixels. Lossless (LCSP2) headers use the same
+/// field for their own format-local version, so [`ENCODE_VERSION`] applies to Compact proxies only.
 const ENC_FIELD: &str = "enc";
 
 /// The value of [`ENC_FIELD`] this build writes. Bump it whenever [`encode`]'s mapping or JPEG
@@ -79,6 +94,10 @@ pub(crate) const ENCODE_VERSION: u64 = 2;
 
 /// Encode a source image (and the decoder's camera tone curve, if any) as a smart preview.
 pub fn encode(img: &Rgb32f, tone: Option<&CameraTone>) -> Result<Vec<u8>, String> {
+    format::dimensions(&serde_json::json!({"w": img.width, "h": img.height}))?;
+    if img.width.checked_mul(img.height) != Some(img.data.len()) || img.data.iter().flatten().any(|v| !v.is_finite()) {
+        return Err("invalid smart preview source pixels".into());
+    }
     // scale so all but the brightest 0.05 % fit into 0..1
     let mut lum: Vec<f32> = img.data.iter().map(|c| c[0].max(c[1]).max(c[2])).filter(|v| v.is_finite()).collect();
     let scale = if lum.is_empty() {
@@ -125,16 +144,83 @@ pub fn encode(img: &Rgb32f, tone: Option<&CameraTone>) -> Result<Vec<u8>, String
 /// Decode a smart preview back into a source image and its stored camera tone curve (an invalid
 /// curve is ignored, like a missing one).
 pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>), String> {
-    let rest = bytes.strip_prefix(MAGIC).ok_or("not a smart preview")?;
-    let nl = rest.iter().position(|b| *b == b'\n').ok_or("bad smart preview")?;
-    let head: serde_json::Value = serde_json::from_slice(&rest[..nl]).map_err(|e| e.to_string())?;
-    let scale = head["scale"].as_f64().unwrap_or(1.0) as f32;
+    if bytes.len() as u64 > format::MAX_BYTES {
+        return Err("smart preview file exceeds the limit".into());
+    }
+    let (storage, head, body) = format::split(bytes)?;
+    let (w, h) = format::dimensions(&head)?;
     let tone = head.get("tone").and_then(|t| serde_json::from_value::<CameraTone>(t.clone()).ok());
-    let d = lightcraft_codecs::decode(&rest[nl + 1..], Default::default()).map_err(|e| e.to_string())?;
-    // the decoder undoes the sRGB encoding; the values are the source's own primaries
+    // A JPEG cut short still decodes, with the rest of the picture made up: a Compact payload
+    // must end where JPEG ends (the Lossless payload has its length and checksum).
+    if storage == Format::Compact && !body.ends_with(&[0xFF, 0xD9]) {
+        return Err("smart preview is cut short".into());
+    }
+    let payload = if storage == Format::Lossless { format::payload(&head, body)? } else { body };
+    let d = lightcraft_codecs::decode(payload, lightcraft_codecs::DecodeOptions { max_pixels: (w as u64) * (h as u64), ..Default::default() })
+        .map_err(|e| e.to_string())?;
+    if (d.image.width, d.image.height) != (w, h) {
+        return Err("smart preview dimensions do not match its pixels".into());
+    }
+    if storage == Format::Lossless
+        && (d.format != lightcraft_codecs::Format::Tiff || !d.float || d.bit_depth != 32 || d.has_alpha || d.grayscale || d.cmyk || d.icc.is_some())
+    {
+        return Err("lossless smart preview needs untagged float RGB TIFF pixels".into());
+    }
     let mut img = d.image;
-    img.data.iter_mut().for_each(|c| *c = c.map(|v| v * scale));
+    if storage == Format::Compact {
+        let scale = head.get("scale").map_or(Some(1.0), Value::as_f64).ok_or("invalid smart preview scale")? as f32;
+        if !scale.is_finite() || scale <= 0.0 {
+            return Err("invalid smart preview scale".into());
+        }
+        img.data.iter_mut().for_each(|c| *c = c.map(|v| v * scale));
+    }
+    if img.data.iter().flatten().any(|v| !v.is_finite()) {
+        return Err("invalid smart preview pixels".into());
+    }
     Ok((img, tone))
+}
+
+/// Encode the chosen format. Existing callers retain compact JPEG through [`encode`].
+pub fn encode_format(img: &Rgb32f, tone: Option<&CameraTone>, storage: Format) -> Result<Vec<u8>, String> {
+    match storage {
+        Format::Compact => encode(img, tone),
+        Format::Lossless => format::encode(img, tone),
+    }
+}
+
+/// Read just the bounded header. Unknown fields remain available to header migrations.
+pub fn header(path: &Path) -> Option<(Format, Value)> {
+    use std::io::Read;
+    let f = std::fs::File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    f.take(HEADER_MAX).read_to_end(&mut bytes).ok()?;
+    format::split(&bytes).ok().map(|(storage, head, _)| (storage, head))
+}
+
+/// Carry future metadata through a rebuild or format migration. The current writer owns only
+/// these pixel fields and the tone fields it understands. In particular, an unknown white_stat
+/// inside tone survives until the camera-tone implementation learns to write it itself.
+pub fn preserve_header(bytes: &[u8], previous: &Value) -> Result<Vec<u8>, String> {
+    let (storage, mut head, body) = format::split(bytes)?;
+    let known = ["w", "h", "scale", "look_version", "enc", "format", "payload_bytes", "payload_hash", "tone"];
+    if let (Some(old), Some(new)) = (previous.as_object(), head.as_object_mut()) {
+        for (key, value) in old {
+            if !known.contains(&key.as_str()) {
+                new.entry(key).or_insert_with(|| value.clone());
+            }
+        }
+        if let Some(old) = old.get("tone").and_then(Value::as_object) {
+            for (key, value) in old {
+                if !["knots", "chroma"].contains(&key.as_str()) {
+                    let tone = new.entry("tone").or_insert_with(|| serde_json::json!({}));
+                    if let Some(tone) = tone.as_object_mut() {
+                        tone.entry(key).or_insert_with(|| value.clone());
+                    }
+                }
+            }
+        }
+    }
+    format::pack(storage, &head, body)
 }
 
 /// Where a library keeps its smart previews.
@@ -162,10 +248,19 @@ pub fn check_writable(dir: &Path) -> Result<(), String> {
 /// The owned proxy files in both layouts. Do not follow symlinked directories or
 /// traverse unrelated folders inside a user-selected smart preview directory.
 fn files(dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    try_files(dir).unwrap_or_default()
+}
+
+fn try_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
     let mut found = Vec::new();
-    for e in entries.flatten() {
-        let Ok(kind) = e.file_type() else { continue };
+    for entry in entries {
+        let e = entry?;
+        let kind = e.file_type()?;
         if kind.is_file() && e.path().extension().is_some_and(|ext| ext == "lcsp") {
             found.push(e.path()); // legacy layout
         } else if kind.is_dir() {
@@ -174,22 +269,24 @@ fn files(dir: &Path) -> Vec<PathBuf> {
             if shard.len() != 2 || !shard.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) {
                 continue;
             }
-            let Ok(children) = std::fs::read_dir(e.path()) else { continue };
-            for child in children.flatten() {
+            let children = std::fs::read_dir(e.path())?;
+            for child in children {
+                let child = child?;
                 let name = child.file_name();
                 let Some(name) = name.to_str() else { continue };
                 let Some(stem) = name.strip_suffix(".lcsp") else { continue };
                 if stem.len() == 32
                     && stem.starts_with(shard)
                     && stem.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-                    && child.file_type().is_ok_and(|kind| kind.is_file())
+                    && child.file_type()?.is_file()
                 {
                     found.push(child.path());
                 }
             }
         }
     }
-    found
+    found.sort();
+    Ok(found)
 }
 
 /// The number of smart previews in `dir` and their total size in bytes.
@@ -203,7 +300,7 @@ pub fn stats(dir: &Path) -> (usize, u64) {
 /// What to do with the smart previews in the old folder when the location changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Existing {
-    /// Move them to the new folder (copy and delete across drives).
+    /// Copy and verify them in the new folder, then remove the redundant sources.
     Move,
     /// Leave them where they are (they stop being used; build again in the new folder).
     Leave,
@@ -222,69 +319,50 @@ impl Existing {
     }
 }
 
-/// Apply `what` to the smart previews in `from` for the new folder `to` → (moved or removed, failed).
+/// Synchronous migration for non-UI callers. The library command commits its location
+/// between these phases instead. Never delete a source before every destination verifies.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn migrate(from: &Path, to: &Path, what: Existing) -> (usize, Vec<String>) {
-    let (mut done, mut failed) = (0, Vec::new());
-    if what == Existing::Leave {
-        return (done, failed);
+    let activity = crate::activity::Activity::default();
+    let task = activity.start("smartMigration", "Changing smart preview folder", crate::activity::Cancel::No);
+    match migration::prepare(from, to, Some(what), &task.handle()) {
+        Ok(Some(prepared)) => prepared.cleanup(&task.handle()),
+        Ok(None) => (0, Vec::new()),
+        Err(error) => (0, vec![error]),
     }
-    for src in files(from) {
-        let Some(name) = src.file_name() else { continue };
-        let dst = name
-            .to_str()
-            .and_then(|n| n.strip_suffix(".lcsp"))
-            .filter(|stem| stem.len() == 32 && stem.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()))
-            .map_or_else(|| to.join(name), |stem| to.join(&stem[..2]).join(name));
-        let r = match what {
-            Existing::Discard => std::fs::remove_file(&src),
-            _ => {
-                let parent = dst.parent().unwrap_or(to);
-                // Create only the shard, never missing parent directories on an unplugged drive.
-                let prepare = if parent.is_dir() { Ok(()) } else { std::fs::create_dir(parent) };
-                prepare.and_then(|()| {
-                    if is_valid(&dst) {
-                        // named by content: the complete copy already there is the same preview
-                        std::fs::remove_file(&src)
-                    } else {
-                        // across drives: copied atomically (never a partial proxy at the new place)
-                        std::fs::rename(&src, &dst).or_else(|_| {
-                            std::fs::read(&src)
-                                .and_then(|b| lightcraft_catalog::safe_file::write_atomic(&dst, &b))
-                                .and_then(|()| std::fs::remove_file(&src))
-                        })
-                    }
-                })
-            }
-        };
-        match r {
-            Ok(()) => done += 1,
-            Err(err) => failed.push(format!("{}: {err}", src.display())),
-        }
-    }
-    (done, failed)
 }
 
-/// A cheap check that the smart preview at `path` is complete: our header, then a JPEG from its
-/// start marker to its end marker. A file cut short by a crash, a full drive or an unplugged one
-/// fails it (and is then rebuilt by Build Smart Previews, not counted as there).
-pub fn is_valid(path: &Path) -> bool {
+/// A cheap structural hint using the bounded header, payload length and end marker.
+/// This does not verify pixel integrity. Use [`is_usable`] before keeping a destination,
+/// deleting another copy, or skipping a rebuild.
+pub fn is_complete(path: &Path) -> bool {
     use std::io::{Read, Seek, SeekFrom};
     let Ok(mut f) = std::fs::File::open(path) else { return false };
     let mut head = Vec::with_capacity(1024);
     if (&mut f).take(HEADER_MAX).read_to_end(&mut head).is_err() {
         return false;
     }
-    let Some(rest) = head.strip_prefix(MAGIC) else { return false };
-    let Some(nl) = rest.iter().position(|b| *b == b'\n') else { return false };
-    let size_ok = rest
-        .get(..nl)
-        .and_then(|h| serde_json::from_slice::<serde_json::Value>(h).ok())
-        .is_some_and(|h| h["w"].as_u64().is_some_and(|w| w > 0) && h["h"].as_u64().is_some_and(|h| h > 0));
-    if !size_ok || rest.get(nl + 1..nl + 3) != Some(&[0xFF, 0xD8][..]) {
+    let Ok((storage, parsed, body)) = format::split(&head) else { return false };
+    let offset = (head.len() - body.len()) as u64;
+    let mut start = [0u8; 4];
+    if f.seek(SeekFrom::Start(offset)).is_err() || f.read_exact(&mut start).is_err() {
+        return false;
+    }
+    if storage == Format::Lossless {
+        return start == *b"II\x2a\x00" && format::complete(&parsed, offset, &mut f);
+    }
+    if !start.starts_with(&[0xFF, 0xD8]) || f.metadata().map_or(true, |m| m.len() > format::MAX_BYTES) {
         return false;
     }
     let mut end = [0u8; 2];
     f.seek(SeekFrom::End(-2)).is_ok() && f.read_exact(&mut end).is_ok() && end == [0xFF, 0xD9]
+}
+
+/// Whether the proxy is complete ([`is_complete`]: a Compact JPEG has no checksum, and one cut
+/// short can still decode) and a bounded read decodes it, including the LCSP2 payload checksum.
+/// Use this for decisions that keep a proxy instead of rebuilding it or retaining another copy.
+pub fn is_usable(path: &Path) -> bool {
+    is_complete(path) && load(path).is_ok()
 }
 
 /// The fit version a header records: a missing, negative, fractional or otherwise malformed value
@@ -301,24 +379,18 @@ fn header_encode_version(head: &serde_json::Value) -> u64 {
 
 /// Whether the complete proxy at `path` is out of date for this build: written by an older
 /// camera-look fit than this build's (so its stored curve, and the colour baked into its pixels, are
-/// out of date), or by an older encoding of its own pixels ([`ENCODE_VERSION`], i.e. a lower JPEG
-/// quality). A proxy from a newer build is left alone (rebuilding it here would only undo that
-/// build's work), as is one that can't be read: those are [`is_valid`]'s business.
+/// out of date), or, for a Compact proxy, by an older encoding of its own pixels ([`ENCODE_VERSION`],
+/// i.e. a lower JPEG quality). A proxy from a newer build is left alone (rebuilding it here would
+/// only undo that build's work), as is one that is structurally incomplete. This is only a
+/// staleness hint, not an integrity check.
 pub fn is_stale(path: &Path) -> bool {
-    use std::io::Read;
-    if !is_valid(path) {
-        return false;
-    }
-    let Ok(f) = std::fs::File::open(path) else { return false };
-    let mut head = Vec::with_capacity(1024);
-    if f.take(HEADER_MAX).read_to_end(&mut head).is_err() {
-        return false;
-    }
-    let Some(rest) = head.strip_prefix(MAGIC) else { return false };
-    let Some(nl) = rest.iter().position(|b| *b == b'\n') else { return false };
-    rest.get(..nl)
-        .and_then(|h| serde_json::from_slice::<serde_json::Value>(h).ok())
-        .is_some_and(|h| header_look_version(&h) < u64::from(crate::camera_preview::LOOK_VERSION) || header_encode_version(&h) < ENCODE_VERSION)
+    // The encode version is Compact's own (its JPEG settings): a Lossless header uses the same
+    // field for its format-local encoding version, which reading it checks.
+    is_complete(path)
+        && header(path).is_some_and(|(storage, h)| {
+            header_look_version(&h) < u64::from(crate::camera_preview::LOOK_VERSION)
+                || (storage == Format::Compact && header_encode_version(&h) < ENCODE_VERSION)
+        })
 }
 
 /// The marker file in a smart previews folder: the camera-look fit version and encode version its
@@ -355,15 +427,22 @@ pub fn mark_look_checked(dir: &Path) -> Result<(), String> {
 
 /// Load the proxy at `path`.
 pub fn load(path: &Path) -> Result<crate::media::DecodedSource, String> {
-    let b = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    decode(&b).map(|(image, camera_tone)| crate::media::DecodedSource { image: Arc::new(image), info: None, camera_tone, denoised: None })
+    decode(&read(path)?).map(|(image, camera_tone)| crate::media::DecodedSource { image: Arc::new(image), info: None, camera_tone, denoised: None })
+}
+
+fn read(path: &Path) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let f = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut b = Vec::new();
+    f.take(format::MAX_BYTES + 1).read_to_end(&mut b).map_err(|e| e.to_string())?;
+    Ok(b)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn temp(tag: &str) -> PathBuf {
+    pub(super) fn temp(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("lc-smart-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
@@ -387,9 +466,10 @@ mod tests {
         let (a, b) = (base.join("a"), base.join("b"));
         std::fs::create_dir_all(&a).unwrap();
         std::fs::create_dir_all(&b).unwrap();
-        std::fs::write(a.join("1.lcsp"), b"one").unwrap();
+        let proxy = encode(&Rgb32f::new(2, 2), None).unwrap();
+        std::fs::write(a.join("1.lcsp"), &proxy).unwrap();
         std::fs::write(a.join("note.txt"), b"keep").unwrap();
-        assert_eq!(stats(&a), (1, 3));
+        assert_eq!(stats(&a), (1, proxy.len() as u64));
         assert_eq!(migrate(&a, &b, Existing::Leave).0, 0);
         assert_eq!(stats(&a).0, 1);
         assert_eq!(migrate(&a, &b, Existing::Move).0, 1);
@@ -409,17 +489,18 @@ mod tests {
         std::fs::create_dir(&to).unwrap();
         let old = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2.lcsp";
         let new = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1.lcsp";
-        std::fs::write(from.join(old), b"legacy").unwrap();
-        std::fs::write(from.join("a1").join(new), b"sharded").unwrap();
+        let proxy = encode(&Rgb32f::new(2, 2), None).unwrap();
+        std::fs::write(from.join(old), &proxy).unwrap();
+        std::fs::write(from.join("a1").join(new), &proxy).unwrap();
         std::fs::write(from.join("a1").join("notes.txt"), b"user file").unwrap();
         std::fs::write(from.join("notes.lcsp.txt"), b"keep").unwrap();
-        assert_eq!(stats(&from), (2, 13));
+        assert_eq!(stats(&from), (2, 2 * proxy.len() as u64));
         let (moved, failed) = migrate(&from, &to, Existing::Move);
         assert_eq!((moved, failed), (2, Vec::<String>::new()));
         assert_eq!(stats(&from), (0, 0));
-        assert_eq!(stats(&to), (2, 13));
-        assert_eq!(std::fs::read(to.join("b2").join(old)).unwrap(), b"legacy");
-        assert_eq!(std::fs::read(to.join("a1").join(new)).unwrap(), b"sharded");
+        assert_eq!(stats(&to), (2, 2 * proxy.len() as u64));
+        assert_eq!(std::fs::read(to.join("b2").join(old)).unwrap(), proxy);
+        assert_eq!(std::fs::read(to.join("a1").join(new)).unwrap(), proxy);
         assert!(from.join("a1").join("notes.txt").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -433,12 +514,12 @@ mod tests {
         let img = lightcraft_scenes::demo_library()[0].render(64, 40);
         let good = encode(&img, None).unwrap();
         std::fs::write(a.join("1.lcsp"), &good).unwrap();
-        assert!(is_valid(&a.join("1.lcsp")));
+        assert!(is_complete(&a.join("1.lcsp")));
         for cut in [good.len() - 1, good.len() / 2, 10, 0] {
             std::fs::write(b.join("1.lcsp"), &good[..cut]).unwrap();
-            assert!(!is_valid(&b.join("1.lcsp")), "cut at {cut}");
+            assert!(!is_complete(&b.join("1.lcsp")), "cut at {cut}");
         }
-        assert!(!is_valid(&b.join("missing.lcsp")));
+        assert!(!is_complete(&b.join("missing.lcsp")));
         // moving onto a damaged copy replaces it instead of deleting the good one
         assert_eq!(migrate(&a, &b, Existing::Move).0, 1);
         assert_eq!(std::fs::read(b.join("1.lcsp")).unwrap(), good);
@@ -459,7 +540,7 @@ mod tests {
         let path = dir.join("t.lcsp");
         std::fs::write(&path, &bytes).unwrap();
         // the longer header is still read by the validity check, and the curve by `load`
-        assert!(is_valid(&path));
+        assert!(is_complete(&path));
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.camera_tone, Some(tone));
         let header = lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() };
@@ -667,7 +748,7 @@ mod tests {
         old.extend_from_slice(serde_json::Value::Object(older).to_string().as_bytes());
         old.extend_from_slice(&bytes[nl..]);
         std::fs::write(&path, &old).unwrap();
-        assert!(is_valid(&path), "losing the field keeps the file readable");
+        assert!(is_usable(&path), "losing the field keeps the file readable");
         assert!(is_stale(&path), "an older encoding is rebuilt");
         // the marker records both versions, and one from before the encode version forces a scan
         assert!(!look_checked(&dir));
