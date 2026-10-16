@@ -751,6 +751,83 @@ fn undated_photos_group_under_unknown_date_and_sort_together() {
     assert_eq!(c.query(&filter_year, &Sort { key: SortKey::CaptureDate, ascending: false, ..Default::default() }), vec![p_dated2, p_dated1]);
 }
 
+fn relevance() -> Sort {
+    Sort { key: SortKey::Relevance, ..Default::default() }
+}
+
+fn ranked(ids: &[(PhotoId, f32)], min: f32) -> Option<crate::Ranked> {
+    Some(crate::Ranked { ids: ids.to_vec(), min })
+}
+
+#[test]
+fn ranked_photos_and_with_every_other_filter_and_sort_by_relevance() {
+    let mut c = Catalog::new();
+    let ids = many(&mut c, 8);
+    c.apply(Op::SetRating { id: ids[1], rating: 4 }).unwrap();
+    c.apply(Op::SetRating { id: ids[5], rating: 5 }).unwrap();
+    let scores = [(ids[5], 0.30), (ids[1], 0.10), (ids[3], 0.20), (ids[7], 0.001)];
+    // only the ranked photos at or above the cut-off, best first
+    let f = Filter { ranked: ranked(&scores, 0.05), ..Default::default() };
+    assert_eq!(c.query(&f, &relevance()), vec![ids[5], ids[3], ids[1]]);
+    // ascending: worst first
+    assert_eq!(c.query(&f, &Sort { ascending: true, ..relevance() }), vec![ids[1], ids[3], ids[5]]);
+    // ANDed with the rest of the filter (a rating, a text word, `only`)
+    let rated = Filter { rating: 4, ..f.clone() };
+    assert_eq!(c.query(&rated, &relevance()), vec![ids[5], ids[1]]);
+    let worded = Filter { text: "rating:>=4 contents:beach".into(), ..f.clone() };
+    assert_eq!(c.query(&worded, &relevance()), vec![ids[5], ids[1]], "the contents word is the ranking's, not the catalog's");
+    let only = Filter { only: vec![ids[1], ids[3], ids[6]], ..f.clone() };
+    assert_eq!(c.query(&only, &relevance()), vec![ids[3], ids[1]]);
+    // other sorts still apply to the ranked set
+    let by_name = c.query(&f, &Sort { key: SortKey::FileName, ascending: true, ..Default::default() });
+    assert_eq!(by_name, vec![ids[1], ids[3], ids[5]]);
+    // an empty ranking matches nothing; no ranking, everything
+    assert!(c.query(&Filter { ranked: ranked(&[], 0.0), ..Default::default() }, &relevance()).is_empty());
+    assert_eq!(c.query(&Filter::default(), &relevance()).len(), 8, "Relevance without a ranking: by date");
+    assert_eq!(c.query(&Filter::default(), &relevance()), c.query(&Filter::default(), &Sort::default()));
+    // ids that are not photos (deleted since) and NaN scores are ignored
+    let odd = Filter { ranked: ranked(&[(PhotoId(999), 1.0), (ids[2], f32::NAN), (ids[4], 0.5)], f32::NEG_INFINITY), ..Default::default() };
+    assert_eq!(c.query(&odd, &relevance()), vec![ids[4]]);
+    // a single photo is checked the same way
+    assert!(f.matches(c.photo(ids[3]).unwrap(), &c) && !f.matches(c.photo(ids[7]).unwrap(), &c));
+}
+
+#[test]
+fn equal_scores_keep_a_stable_order_and_the_ranking_is_never_saved() {
+    let mut c = Catalog::new();
+    let ids = many(&mut c, 6);
+    let same: Vec<(PhotoId, f32)> = ids.iter().map(|id| (*id, 0.5)).collect();
+    let f = Filter { ranked: ranked(&same, 0.0), ..Default::default() };
+    let a = c.query(&f, &relevance());
+    assert_eq!(a, c.query(&f, &relevance()));
+    assert_eq!(a, c.query(&Filter::default(), &Sort::default()), "ties: newest capture first, as the date sort");
+    // the ranking stays out of saved filters, and its debug text stays short for big rankings
+    let json = serde_json::to_string(&f).unwrap();
+    assert!(!json.contains("ranked"), "{json}");
+    let big = crate::Ranked { ids: (0..10_000).map(|i| (PhotoId(i), 0.1)).collect(), min: 0.0 };
+    assert!(format!("{big:?}").len() < 100);
+    let back: Filter = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.ranked, None);
+}
+
+#[test]
+fn contents_words_are_split_off_quoted_or_not() {
+    use crate::query::{search_tokens, split_contents};
+    assert_eq!(search_tokens(r#"rating:>=3 contents:"red car" dog"#), vec!["rating:>=3", "contents:red car", "dog"]);
+    assert_eq!(split_contents(r#"rating:>=3 contents:"red car""#), (Some("red car".into()), "rating:>=3".into()));
+    assert_eq!(split_contents("shows:beach Shows:sunset x100v"), (Some("beach sunset".into()), "x100v".into()));
+    assert_eq!(split_contents("contents: camera:\"x100 v\""), (None, "camera:\"x100 v\"".into()));
+    assert_eq!(split_contents("plain words"), (None, "plain words".into()));
+    // unclosed quotes, emoji, empty: no panic, something sensible
+    assert_eq!(split_contents("contents:\"🦂 scorpion"), (Some("🦂 scorpion".into()), String::new()));
+    assert_eq!(split_contents(""), (None, String::new()));
+    assert_eq!(split_contents("\"\""), (None, String::new()));
+    // a quoted value of another field still matches as before
+    let mut c = Catalog::new();
+    let a = photo(&mut c, "big trip.jpg", "2026-04-01");
+    assert_eq!(c.query(&Filter { text: "name:\"big trip\"".into(), ..Default::default() }, &Sort::default()), vec![a]);
+}
+
 /// Photos with one import time and capture time, as one import batch or a burst gives them, added
 /// with ids that run opposite to their names.
 fn batch_with_reversed_ids(c: &mut Catalog) -> Vec<PhotoId> {

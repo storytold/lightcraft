@@ -1,5 +1,6 @@
 //! The library filter bar above the grid: rating (≥ / = / ≤), flags, colour labels, kind,
-//! edited state and camera / lens / keyword pickers — every control drives `library.filter`.
+//! edited state and camera / lens / keyword pickers, and the Contents picker (the auto-tags of the content index, with
+//! their counts) — every control drives `library.filter`.
 //! "Save as Smart Album…" keeps the current view as a live album; "Clear" resets the filter.
 
 use egui::{Color32, Rect, Sense, Stroke, StrokeKind, vec2};
@@ -61,7 +62,7 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, current: &str, a
     let r = crate::widgets::dropdown(
         ui,
         &format!("filter-{id}"),
-        if active && matches!(id, "camera" | "lens" | "keyword") { current } else { crate::i18n::tr(current) },
+        if active && matches!(id, "camera" | "lens" | "keyword" | "contentTag") { current } else { crate::i18n::tr(current) },
         t.font(12.5),
         if active { t.text } else { t.text_label },
     );
@@ -71,18 +72,19 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, current: &str, a
     let mut chosen = None;
     egui::Popup::menu(&r).show(|ui| {
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-            for (label, patch, sel) in &items {
-                if ui
-                    .selectable_label(
-                        *sel,
-                        if matches!(id, "camera" | "lens" | "keyword") && patch.get(id).is_some_and(|value| !value.is_null()) {
-                            label.as_str()
-                        } else {
-                            crate::i18n::tr(label)
-                        },
-                    )
-                    .clicked()
-                {
+            for (i, (label, patch, sel)) in items.iter().enumerate() {
+                // (addressable: `filterItem:<picker>:<value>`, or its position when the value isn't text)
+                let value = patch.get(id).and_then(Value::as_str).map_or_else(|| i.to_string(), str::to_string);
+                let r = ui.selectable_label(
+                    *sel,
+                    if matches!(id, "camera" | "lens" | "keyword" | "contentTag") && patch.get(id).is_some_and(|value| !value.is_null()) {
+                        label.as_str()
+                    } else {
+                        crate::i18n::tr(label)
+                    },
+                );
+                register(ui.ctx(), format!("filterItem:{id}:{value}"), r.rect);
+                if r.clicked() {
                     chosen = Some(patch.clone());
                 }
             }
@@ -265,6 +267,22 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let shown = current.clone().unwrap_or_else(|| all_label.to_string());
         let shown = if shown.chars().count() > 22 { format!("{}…", shown.chars().take(21).collect::<String>()) } else { shown };
         picker(app, ui, id, &shown, current.is_some(), items);
+    }
+    // what the photos show: the auto-tags (Settings → Search), a level above its tags, each with its photo count
+    let tags = app.session.content_tag_counts();
+    if !tags.is_empty() || f.content_tag.is_some() {
+        let mut items = vec![("Any contents".to_string(), json!({"contentTag": Value::Null}), f.content_tag.is_none())];
+        items.extend(tags.iter().map(|(path, n)| {
+            let depth = path.matches('|').count();
+            let name = path.rsplit('|').next().unwrap_or(path);
+            let on = f.content_tag.as_deref().is_some_and(|c| c.eq_ignore_ascii_case(path));
+            (format!("{}{name}  {n}", "    ".repeat(depth)), json!({"contentTag": path}), on)
+        }));
+        let shown = match f.content_tag.as_deref() {
+            Some(t) => t.rsplit('|').next().unwrap_or(t).to_string(),
+            None => "Contents".to_string(),
+        };
+        picker(app, ui, "contentTag", &shown, f.content_tag.is_some(), items);
     }
 
     // save / clear

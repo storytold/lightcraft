@@ -66,6 +66,45 @@ pub struct Filter {
     /// Smart-album rules (all / any / none, nested groups; see [`crate::rules`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rule_set: Option<crate::RuleSet>,
+    /// An auto-tag (`animal|bird`; its levels below count too): the photos the engine's content index tags with it,
+    /// through the thread's [`crate::rules::RuleContext`] (none: nothing matches).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_tag: Option<String>,
+    /// Only these photos, each with a score (a search by photo contents, which the engine resolves outside the
+    /// catalog), ANDed with everything else like [`Filter::only`]; [`SortKey::Relevance`] orders by the score.
+    /// Never saved: it is worked out again from the query that made it.
+    #[serde(skip)]
+    pub ranked: Option<Ranked>,
+}
+
+/// Photos with scores, from outside the catalog ([`Filter::ranked`]): a photo passes when it is listed with a score of
+/// at least `min`.
+#[derive(Clone, Default, PartialEq)]
+pub struct Ranked {
+    pub ids: Vec<(PhotoId, f32)>,
+    pub min: f32,
+}
+
+impl std::fmt::Debug for Ranked {
+    // (a ranking can list thousands of photos; the view keys filters by their debug text)
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let sum: f64 = self.ids.iter().map(|(id, s)| id.0 as f64 * 1e-3 + f64::from(*s)).sum();
+        write!(f, "Ranked({} photos, min {}, sum {sum})", self.ids.len(), self.min)
+    }
+}
+
+impl Ranked {
+    /// Score by photo, of the photos that pass (a photo listed twice keeps its best score).
+    pub fn scores(&self) -> std::collections::HashMap<PhotoId, f32> {
+        let mut m = std::collections::HashMap::with_capacity(self.ids.len());
+        for (id, s) in self.ids.iter().filter(|(_, s)| *s >= self.min && !s.is_nan()) {
+            let e = m.entry(*id).or_insert(*s);
+            if *s > *e {
+                *e = *s;
+            }
+        }
+        m
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,6 +120,9 @@ pub enum SortKey {
     /// A shuffle fixed by [`Sort::seed`]: the same seed always gives the same order, and photos
     /// added or edited later never reshuffle the others. Pick a new seed to reshuffle.
     Random,
+    /// How well each photo matches a search by contents ([`Filter::ranked`]), best first (descending); without such a
+    /// search, by capture date.
+    Relevance,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,6 +139,12 @@ pub struct Sort {
 impl Sort {
     /// Which of two photos comes first in this order (never `Equal` for two photos: the id decides last).
     pub fn order(&self, a: &Photo, b: &Photo) -> std::cmp::Ordering {
+        self.order_ranked(a, b, None)
+    }
+
+    /// [`Sort::order`] with a search by contents' scores ([`Ranked::scores`]), which [`SortKey::Relevance`] orders by.
+    pub fn order_ranked(&self, a: &Photo, b: &Photo, ranked: Option<&std::collections::HashMap<PhotoId, f32>>) -> std::cmp::Ordering {
+        let score = |p: &Photo| ranked.and_then(|r| r.get(&p.id).copied()).unwrap_or(f32::NEG_INFINITY);
         let o = match self.key {
             SortKey::CaptureDate => a.captured.cmp(&b.captured).then_with(|| a.imported.cmp(&b.imported)),
             SortKey::ImportDate => a.imported.cmp(&b.imported),
@@ -105,6 +153,9 @@ impl Sort {
             SortKey::Rating => a.rating.cmp(&b.rating),
             SortKey::FileSize => a.file_size.cmp(&b.file_size),
             SortKey::Random => shuffle_rank(self.seed, a.id).cmp(&shuffle_rank(self.seed, b.id)),
+            // (descending, the default, is best first; equal scores fall back to the capture date)
+            SortKey::Relevance if ranked.is_some() => score(a).total_cmp(&score(b)).then_with(|| a.captured.cmp(&b.captured)),
+            SortKey::Relevance => a.captured.cmp(&b.captured).then_with(|| a.imported.cmp(&b.imported)),
         }
         // Ties (one import batch, a burst within a second, equal ratings) sort by file name, the
         // order cameras number frames, so the order doesn't depend on how ids were allocated;
@@ -135,25 +186,81 @@ fn shuffle_rank(seed: u64, id: PhotoId) -> u64 {
     mix64(mix64(seed) ^ id.0)
 }
 
+/// The words of a search text: split at spaces, except inside a quoted value (`contents:"red car"`, also
+/// `camera:"x100 v"`), whose quotes are dropped. An unclosed quote runs to the end.
+pub fn search_tokens(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    for c in text.chars() {
+        if c == '"' && (quoted || cur.ends_with(':') || cur.is_empty()) {
+            quoted = !quoted;
+            continue;
+        }
+        if c.is_whitespace() && !quoted {
+            if !cur.is_empty() {
+                out.push(std::mem::take(&mut cur));
+            }
+            continue;
+        }
+        cur.push(c);
+    }
+    if !cur.trim().is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// The fields of a search text that ask what photos show (`contents:` and its synonym `shows:`), answered outside the
+/// catalog ([`Filter::ranked`]); the catalog lets them through.
+pub const CONTENT_FIELDS: [&str; 2] = ["contents", "shows"];
+
+/// The content part of a search text: the values of its `contents:` / `shows:` words (`None` when it has none), and
+/// the text without them.
+pub fn split_contents(text: &str) -> (Option<String>, String) {
+    let (mut asked, mut rest) = (Vec::new(), Vec::new());
+    for tok in search_tokens(text) {
+        match tok.split_once(':') {
+            Some((field, value)) if CONTENT_FIELDS.iter().any(|f| f.eq_ignore_ascii_case(field)) => {
+                if !value.trim().is_empty() {
+                    asked.push(value.trim().to_string());
+                }
+            }
+            _ => rest.push(if tok.chars().any(char::is_whitespace) { quote(&tok) } else { tok }),
+        }
+    }
+    ((!asked.is_empty()).then(|| asked.join(" ")), rest.join(" "))
+}
+
+/// A word with a space in its value, written back quoted (`camera:"x100 v"`).
+fn quote(tok: &str) -> String {
+    match tok.split_once(':') {
+        Some((field, value)) => format!("{field}:\"{value}\""),
+        None => format!("\"{tok}\""),
+    }
+}
+
 /// What [`Filter::prepare`] works out once for a pass over many photos.
 pub(crate) struct Prepared {
     root: Option<String>,
     only: Option<std::collections::HashSet<PhotoId>>,
+    /// [`Filter::ranked`]'s scores ([`Ranked::scores`]).
+    ranked: Option<std::collections::HashMap<PhotoId, f32>>,
 }
 
 fn token_matches(p: &Photo, tok: &str) -> bool {
     let t = tok.to_lowercase();
     if let Some((field, val)) = t.split_once(':') {
-        let num = |s: &str| -> Option<(char, f64)> {
-            let (op, rest) = match s.chars().next()? {
-                c @ ('>' | '<' | '=') => (c, &s[1..]),
-                _ => ('=', s),
-            };
-            rest.parse().ok().map(|v| (op, v))
+        // `>3`, `>=3`, `<3`, `<=3`, `=3` or `3`
+        let num = |s: &str| -> Option<(&str, f64)> {
+            let op = ["<=", ">=", "<", ">", "="].into_iter().find(|op| s.starts_with(op)).unwrap_or("");
+            s.get(op.len()..)?.parse().ok().map(|v| (op, v))
         };
         let cmp = |x: f64, s: &str| match num(s) {
-            Some(('>', v)) => x > v,
-            Some(('<', v)) => x < v,
+            Some((">", v)) => x > v,
+            Some(("<", v)) => x < v,
+            Some((">=", v)) => x >= v - 1e-9,
+            Some(("<=", v)) => x <= v + 1e-9,
             Some((_, v)) => (x - v).abs() < 1e-9,
             None => false,
         };
@@ -173,6 +280,8 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
             "date" => p.captured.as_deref().is_some_and(|c| c.starts_with(val)),
             "copy" | "virtual" => (val == "true" || val == "yes") == p.copy_of.is_some(),
             "name" | "file" => p.file_name.to_lowercase().contains(val),
+            // answered outside the catalog, by `Filter::ranked`
+            f if CONTENT_FIELDS.contains(&f) => true,
             _ => false,
         };
     }
@@ -230,6 +339,7 @@ impl Filter {
             ("date", &self.date),
             ("folder", &self.library_folder),
             ("imported", &self.imported),
+            ("contents", &self.content_tag),
         ] {
             if let Some(x) = val {
                 v.push(format!("{name} {x}"));
@@ -257,6 +367,13 @@ impl Filter {
         out
     }
 
+    /// What this filter asks of photo contents: its auto-tag, and its Contents rules (`shows`: a text; else a tag).
+    pub fn contents_asked(&self) -> Vec<(bool, String)> {
+        let mut out: Vec<(bool, String)> = self.content_tag.iter().map(|t| (false, t.clone())).collect();
+        out.extend(self.rule_set.as_ref().map(crate::RuleSet::contents_asked).unwrap_or_default());
+        out
+    }
+
     /// Whether matches depend on the clock (only "in the last…" rules do).
     pub fn depends_on_now(&self) -> bool {
         self.rule_set.as_ref().is_some_and(crate::RuleSet::depends_on_now)
@@ -268,13 +385,17 @@ impl Filter {
 
     /// [`Filter::prepare`] for testing one photo (the `only` ids are looked through, not hashed).
     pub(crate) fn prepare_one(&self) -> Prepared {
-        Prepared { root: self.library_root(), only: None }
+        Prepared { root: self.library_root(), only: None, ranked: self.ranked.as_ref().map(Ranked::scores) }
     }
 
     /// What [`Filter::matches_in`] needs worked out once for a pass over many photos rather than
     /// once per photo: the library folder's identity and the `only` ids as a set.
     pub(crate) fn prepare(&self) -> Prepared {
-        Prepared { root: self.library_root(), only: (!self.only.is_empty()).then(|| self.only.iter().copied().collect()) }
+        Prepared {
+            root: self.library_root(),
+            only: (!self.only.is_empty()).then(|| self.only.iter().copied().collect()),
+            ranked: self.ranked.as_ref().map(Ranked::scores),
+        }
     }
 
     /// [`Filter::library_folder`] as a folder identity ([`folder_key`]); `None` without a choice.
@@ -326,6 +447,14 @@ impl Filter {
             return false;
         }
         if !self.only.is_empty() && !prepared.only.as_ref().map_or_else(|| self.only.contains(&p.id), |only| only.contains(&p.id)) {
+            return false;
+        }
+        if prepared.ranked.as_ref().is_some_and(|r| !r.contains_key(&p.id)) {
+            return false;
+        }
+        if let Some(t) = &self.content_tag
+            && !crate::rules::has_content_tag(p.id, t)
+        {
             return false;
         }
         if let Some(want) = &self.merged {
@@ -395,7 +524,7 @@ impl Filter {
         {
             return false;
         }
-        self.text.split_whitespace().all(|tok| token_matches(p, tok))
+        search_tokens(&self.text).iter().all(|tok| token_matches(p, tok))
     }
 }
 
@@ -405,6 +534,13 @@ pub fn cmp_name(a: &str, b: &str) -> std::cmp::Ordering {
 }
 
 impl Catalog {
+    /// [`Catalog::query`] with `ctx` answering the rules and filters about photo contents (installed for this thread,
+    /// where it stays for the album counts and smart albums asked after).
+    pub fn query_with(&self, filter: &Filter, sort: &Sort, ctx: Option<std::sync::Arc<dyn crate::rules::RuleContext>>) -> Vec<PhotoId> {
+        crate::rules::set_context(ctx);
+        self.query(filter, sort)
+    }
+
     /// Photos matching `filter`, in `sort` order (ties broken by file name, then id).
     pub fn query(&self, filter: &Filter, sort: &Sort) -> Vec<PhotoId> {
         self.query_keeping(filter, sort, &std::collections::HashSet::new(), filter)
@@ -423,7 +559,7 @@ impl Catalog {
             .map(|p| p.as_ref())
             .filter(|p| filter.matches_in(p, self, &prepared) || (keep.contains(&p.id) && within.matches_in(p, self, &within_prepared)))
             .collect();
-        v.sort_by(|a, b| sort.order(a, b));
+        v.sort_by(|a, b| sort.order_ranked(a, b, prepared.ranked.as_ref()));
         v.into_iter().map(|p| p.id).collect()
     }
 
@@ -441,7 +577,7 @@ impl Catalog {
             let kept = within.zip(within_prepared.as_ref()).is_some_and(|(w, wp)| listed.contains(id) && w.matches_in(p, self, wp));
             if filter.matches_in(p, self, &prepared) || kept {
                 // (the list is in order without the touched photos, and stays so as each is put back)
-                let at = ids.partition_point(|other| self.photo(*other).is_some_and(|o| sort.order(o, p).is_lt()));
+                let at = ids.partition_point(|other| self.photo(*other).is_some_and(|o| sort.order_ranked(o, p, prepared.ranked.as_ref()).is_lt()));
                 ids.insert(at, *id);
             }
         }
