@@ -210,6 +210,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     });
     let mut close = false;
     let mut confirm = false;
+    // (Restore Library from Backup: its Choose Folder… was pressed)
+    let mut choose_folder = false;
     // Return presses OK in a dialog without a text field of its own (Lightroom's default button);
     // a widget that has the keyboard focus (a text field, a button or checkbox reached with Tab)
     // takes Return itself. Consumed before the dialog is drawn, so nothing else sees it too.
@@ -245,6 +247,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::FaceModel { info, .. } if info["download"].is_string() => "Download Face Model",
         Dialog::FaceModel { .. } => "Add Face Model",
         Dialog::WhatsNew => "What's New",
+        Dialog::RestoreBackup { .. } => "Restore Library from Backup",
         Dialog::Cull { .. } => "Assisted Culling",
         Dialog::SmartRules { id: None, .. } => "New Smart Album",
         Dialog::SmartRules { .. } => "Edit Smart Album",
@@ -367,6 +370,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         }
                     });
                 }
+                Dialog::RestoreBackup { dir, backups, selected } => choose_folder = restore_backup_body(app, ui, &t, dir, backups, selected),
                 Dialog::DenoiseModel { info, accepted } => crate::panels::denoise::model_dialog(app, ui, &t, info, accepted),
                 Dialog::FaceModel { info, accepted, .. } => crate::panels::faces::model_dialog(app, ui, &t, info, accepted),
                 Dialog::LightroomResult { summary, library, details, .. } => {
@@ -1365,6 +1369,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     Dialog::KeywordTag { editing: None, .. } => "Create",
                     Dialog::KeywordTag { .. } => "Save",
                     Dialog::RemoveFolder { .. } => "Remove",
+                    Dialog::RestoreBackup { .. } => "Restore",
                     Dialog::LightroomCatalog { .. } => "Import Lightroom Catalog…",
                     Dialog::SynchronizeFolder { .. } => "Synchronize",
                     Dialog::SamModel { then: Some(_), .. } if sam_installed => "Continue",
@@ -1388,7 +1393,11 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     && (informational
                         || !matches!(
                             &dlg,
-                            Dialog::DenoiseModel { accepted: false, .. } | Dialog::FaceModel { accepted: false, .. } | Dialog::SynchronizeFolder { counts: None, .. }
+                            Dialog::DenoiseModel { accepted: false, .. }
+                                | Dialog::FaceModel { accepted: false, .. }
+                                | Dialog::SynchronizeFolder { counts: None, .. }
+                                // (a backup is chosen before it is restored)
+                                | Dialog::RestoreBackup { selected: None, .. }
                         )
                             // smart-album rules that can't mean anything wait to be fixed
                             && !matches!(&dlg, Dialog::SmartRules { id, rules, .. } if !rules.check_for(&app.session.catalog, id.map(lightcraft_catalog::AlbumId)).is_empty()));
@@ -1451,6 +1460,15 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !crate::widgets::escape_taken(ctx) {
         close = true;
     }
+    if choose_folder {
+        match app.run("library.restore", json!({"choose": true})) {
+            // (nothing chosen, or a folder of backups, which are now the ones listed)
+            Ok(serde_json::Value::Null) => {}
+            // a backup was chosen: its restore has begun
+            Ok(_) => close = true,
+            Err(e) => app.toast(ctx, e),
+        }
+    }
     if confirm {
         match confirm_dialog(app, &dlg) {
             // the import review stays open on an error (e.g. an unusable folder template), and so
@@ -1472,6 +1490,17 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         | Dialog::SaveEffect { .. }
                 ) =>
             {
+                app.toast(ctx, e)
+            }
+            // the list of backups stays too, as the folder now is (the backup may be gone since)
+            Err(e) if matches!(dlg, Dialog::RestoreBackup { .. }) => {
+                if let Dialog::RestoreBackup { dir, backups, selected } = &mut dlg
+                    && let Ok(listed) = app.session.execute("library.backups", &json!({"dir": dir.as_str()}))
+                {
+                    let chosen = selected.and_then(|i| backups.get(i)).map(|b| b["dir"].clone());
+                    *backups = crate::menus::backups_to_choose_from(&listed);
+                    *selected = chosen.and_then(|dir| backups.iter().position(|b| b["dir"] == dir));
+                }
                 app.toast(ctx, e)
             }
             // the SAM 3 dialog stays open to show the download (or why it can't start)
@@ -1870,6 +1899,10 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::DenoiseModel { info, accepted } => crate::panels::denoise::install(app, info, *accepted),
         Dialog::FaceModel { path, info, accepted } => crate::panels::faces::install(app, path, info, *accepted),
         Dialog::AllMetadata { .. } | Dialog::SystemInfo { .. } | Dialog::WhatsNew => Ok(serde_json::Value::Null),
+        Dialog::RestoreBackup { backups, selected, .. } => match selected.and_then(|i| backups.get(i)).and_then(|b| b["dir"].as_str()) {
+            Some(dir) => app.run("library.restore", json!({"dir": dir})),
+            None => Err(crate::i18n::tr("Choose a backup first").to_string()),
+        },
         Dialog::Cull { reject_below, pick_best } => {
             let mut p = json!({"pickBest": pick_best});
             if *reject_below > 0.0 {
@@ -2236,6 +2269,79 @@ fn person_rename_plan(cat: &lightcraft_catalog::Catalog, from: &str, to: &str) -
     };
     // a case-only change is the same person, not a merge
     PersonRenamePlan { faces, needs_merge: needs_merge && from_key != to_key, block }
+}
+
+/// When a backup was made, as its row says it: the time it says itself (UTC), else its
+/// folder's name (which is the time too, unless the folder was renamed).
+fn backup_when(b: &serde_json::Value) -> String {
+    match b["made"].as_str().filter(|made| made.len() == 19 && made.contains('T')) {
+        Some(made) => format!("{} UTC", made.replace('T', " ")),
+        None => b["name"].as_str().unwrap_or_default().to_string(),
+    }
+}
+
+/// Restore Library from Backup: the backups in `dir`, newest first, one of them chosen. True
+/// when Choose Folder… was pressed (for a backup, or a folder of them, that is elsewhere).
+fn restore_backup_body(
+    app: &LightcraftApp,
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    dir: &str,
+    backups: &[serde_json::Value],
+    selected: &mut Option<usize>,
+) -> bool {
+    ui.set_min_width(460.0);
+    let opened = just_opened(ui, "restore-backup");
+    ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr_format!("Backups in {}", dir)).color(t.text_dim)).wrap());
+    ui.add_space(4.0);
+    if backups.is_empty() {
+        ui.label(crate::i18n::tr("There are no backups in this folder."));
+    }
+    egui::ScrollArea::vertical().max_height(list_height(ui, 260.0)).auto_shrink([false, true]).show(ui, |ui| {
+        // (rows as wide as the list, their text at the left)
+        let rows = egui::Layout::top_down_justified(egui::Align::LEFT);
+        ui.with_layout(rows, |ui| {
+            for (i, b) in backups.iter().enumerate() {
+                let mut text = format!(
+                    "{}   ·   {}   ·   {}",
+                    backup_when(b),
+                    crate::i18n::tr_format!("{} photos", b["photos"].as_u64().unwrap_or(0)),
+                    crate::panels::right::human_size(b["bytes"].as_u64().unwrap_or(0))
+                );
+                if b["ofThisLibrary"] != serde_json::Value::Bool(true) {
+                    text = format!("{text}   ·   {}", crate::i18n::tr("another library"));
+                }
+                let r = ui.add(egui::Button::selectable(*selected == Some(i), text).min_size(egui::vec2(0.0, 22.0)));
+                // (the backup that Restore would take is in sight when the list opens)
+                if opened && *selected == Some(i) {
+                    r.scroll_to_me(Some(egui::Align::Center));
+                }
+                crate::widgets::register(ui.ctx(), format!("row:restoreBackup-{i}"), r.rect);
+                if r.clicked() {
+                    *selected = Some(i);
+                }
+            }
+        });
+    });
+    ui.add_space(6.0);
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(crate::i18n::tr(
+                "The library becomes what it was when the backup was made. What it holds now is kept in Replaced in the library folder.",
+            ))
+            .color(t.text_dim),
+        )
+        .wrap(),
+    );
+    let mut choose = false;
+    // (a backup kept elsewhere: where a folder can be chosen)
+    if app.services.pick_folder.is_some() || app.services.picker.is_some() {
+        ui.add_space(4.0);
+        let r = ui.button(crate::i18n::tr("Choose Folder…"));
+        crate::widgets::register(ui.ctx(), "button:restoreChooseFolder", r.rect);
+        choose = r.clicked();
+    }
+    choose
 }
 
 /// A dialog's one text field: it keeps the focus (except while its own menu has it) and opens
