@@ -107,7 +107,31 @@ impl<'a> MenuItem<'a> {
         egui::InnerResponse::new(inner, response)
     }
 
-    fn row(self, ui: &mut Ui, submenu: bool) -> Response {
+    /// The columns every row of this menu reserves: those any row of it uses, as drawn on the
+    /// previous frame (a menu is redrawn at once when a column appears), so the labels of a
+    /// mixed menu start at one x without callers keeping count.
+    fn columns(&self, ui: &Ui) -> (bool, bool) {
+        let mine = (self.slot || self.checked.is_some(), self.icon.is_some() || self.swatch.is_some());
+        let ctx = ui.ctx();
+        let key = egui::Id::unique(("lc-menu-columns", ui.scope_id()));
+        let pass = ctx.cumulative_pass_nr();
+        // (previous frame's columns, this frame's so far, the pass they were last touched on)
+        let (mut prev, mut cur, at) = ctx.data(|d| d.get_temp::<((bool, bool), (bool, bool), u64)>(key)).unwrap_or_default();
+        if at != pass {
+            prev = cur;
+            cur = (false, false);
+        }
+        cur = (cur.0 || mine.0, cur.1 || mine.1);
+        ctx.data_mut(|d| d.insert_temp(key, (prev, cur, pass)));
+        if (mine.0 || cur.0) && !prev.0 || (mine.1 || cur.1) && !prev.1 {
+            ctx.request_repaint();
+        }
+        (mine.0 || prev.0, mine.1 || prev.1)
+    }
+
+    fn row(mut self, ui: &mut Ui, submenu: bool) -> Response {
+        let (slot, lead) = self.columns(ui);
+        self.slot = slot;
         let t = Tokens::get(ui.ctx());
         let font = t.font(13.0);
         let galley = ui.painter().layout_no_wrap(self.label.to_string(), font, t.text);
@@ -117,7 +141,7 @@ impl<'a> MenuItem<'a> {
         if self.slot {
             width += SLOT + GAP;
         }
-        if self.icon.is_some() || self.swatch.is_some() {
+        if lead {
             width += SLOT + GAP;
         }
         if let Some(k) = &keys {
@@ -140,8 +164,12 @@ impl<'a> MenuItem<'a> {
         let resp = ui.interact(rect, id, if enabled { Sense::click() } else { Sense::hover() });
         let words = self.label.to_string();
         match self.checked {
-            Some(on) => resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, words.clone())),
-            None => resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, words.clone())),
+            // (a submenu row marking the current choice is still a button that opens a menu)
+            Some(on) => {
+                let kind = if submenu { egui::WidgetType::Button } else { egui::WidgetType::Checkbox };
+                resp.widget_info(|| egui::WidgetInfo::selected(kind, enabled, on, words.clone()))
+            }
+            None => resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, words.clone())),
         }
         if let Some(w) = &self.widget {
             crate::widgets::register(ui, w.clone(), rect);
@@ -175,10 +203,11 @@ impl<'a> MenuItem<'a> {
         }
         if let Some(icon) = self.icon {
             paint(p, egui::Rect::from_center_size(pos2(x + SLOT / 2.0, cy), vec2(SLOT, SLOT)), icon, ink);
-            x += SLOT + GAP;
         }
         if let Some(color) = self.swatch {
             p.circle_filled(pos2(x + SLOT / 2.0, cy), 5.0, color);
+        }
+        if lead {
             x += SLOT + GAP;
         }
         p.galley_with_override_text_color(pos2(x, cy - galley.size().y / 2.0), galley, ink);

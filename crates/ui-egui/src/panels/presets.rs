@@ -391,7 +391,7 @@ pub fn picker_rows(ui: &mut egui::Ui, salt: &str, presets: &PresetList, selected
             rows
         }
     };
-    let row_h = ui.spacing().interact_size.y;
+    let row_h = crate::menu_item::ROW_H;
     let mut out = None;
     egui::ScrollArea::vertical().id_salt(("preset-picker", salt)).max_height(300.0).auto_shrink([false, true]).show_rows(
         ui,
@@ -407,7 +407,7 @@ pub fn picker_rows(ui: &mut egui::Ui, salt: &str, presets: &PresetList, selected
                     PickRow::Preset(i) => {
                         let Some(p) = presets.get(*i) else { continue };
                         let label = crate::i18n::builtin_label(&p.name, p.builtin);
-                        if ui.add_sized(size, egui::Button::selectable(selected == Some(p.id.as_str()), label)).clicked() {
+                        if MenuItem::new(label).checked(selected == Some(p.id.as_str())).show(ui).clicked() {
                             out = Some(p.id.clone());
                         }
                     }

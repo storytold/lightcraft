@@ -12,13 +12,21 @@ use crate::theme::Tokens;
 use crate::widgets::{icon_button, register};
 
 const VIEW_MODES: &[(&str, Icon, ViewMode, &str)] = &[
-    ("photoGrid", Icon::GridPhoto, ViewMode::PhotoGrid, "Photo Grid (G)"),
-    ("squareGrid", Icon::GridSquare, ViewMode::SquareGrid, "Square Grid (G toggles)"),
+    ("photoGrid", Icon::GridPhoto, ViewMode::PhotoGrid, "Photo Grid"),
+    ("squareGrid", Icon::GridSquare, ViewMode::SquareGrid, "Square Grid"),
     ("detail", Icon::Single, ViewMode::Detail, "Detail"),
     ("compare", Icon::Compare, ViewMode::Compare, "Compare"),
     ("survey", Icon::Survey, ViewMode::Survey, "Survey"),
     ("people", Icon::Subject, ViewMode::People, "People"),
 ];
+
+/// The command whose key a view button shows: the grids share the G toggle.
+fn view_key_command(id: &str) -> String {
+    match id {
+        "photoGrid" | "squareGrid" => "view.gridToggle".to_string(),
+        _ => format!("view.{id}"),
+    }
+}
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
@@ -37,10 +45,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     if left_rect.width() >= 270.0 {
                         for &(id, icon, mode, tip) in VIEW_MODES {
-                            // the key each view has now (the grids' G is fixed, so their text keeps it)
-                            let tip = crate::widgets::kbd::tip_with_shortcut(
+                            // the key each view has now
+                            let tip = crate::kbd::tip_with_shortcut(
                                 crate::i18n::tr(tip),
-                                &format!("view.{id}"),
+                                &view_key_command(id),
                                 &app.ui.settings.keymap,
                                 crate::kbd::is_mac(ui.ctx()),
                             );
@@ -65,7 +73,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         );
                         egui::Popup::menu(&more).show(|ui| {
                             for &(id, _, mode, label) in VIEW_MODES {
-                                if MenuItem::new(crate::i18n::tr(label)).checked(app.ui.view == mode).show(ui).clicked() {
+                                let keys = crate::shortcuts::shortcut_of(&app.ui.settings.keymap, &view_key_command(id)).map(str::to_string);
+                                let mut item = MenuItem::new(crate::i18n::tr(label)).checked(app.ui.view == mode);
+                                if let Some(k) = &keys {
+                                    item = item.shortcut(k);
+                                }
+                                if item.show(ui).clicked() {
                                     let _ = app.run(&format!("view.{id}"), json!({}));
                                     ui.close();
                                 }

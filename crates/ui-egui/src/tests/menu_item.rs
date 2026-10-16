@@ -214,3 +214,38 @@ fn a_keycap_row_is_as_wide_as_its_keys() {
     assert!(sizes[1] > sizes[0], "{sizes:?}");
     assert!(sizes[1] > sizes[2], "keycaps are wider than the compact string: {sizes:?}");
 }
+
+/// Where each row's label starts, read from the AccessKit-free layout: the x of the galley is the
+/// row's left plus its columns, so rows are compared by drawing them over several frames and
+/// measuring the width a row grows by when a column is reserved.
+#[test]
+fn the_rows_of_a_mixed_menu_start_their_text_at_one_x() {
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    let mut text_x: Vec<f32> = Vec::new();
+    for _ in 0..4 {
+        let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(600.0, 400.0))), ..Default::default() };
+        let mut out = ctx.run_ui(raw, |ui| {
+            ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+                MenuItem::new("Red").swatch(egui::Color32::RED).checked(true).show(ui);
+                MenuItem::new("None").checked(false).show(ui);
+                MenuItem::new("Edit Label Names…").show(ui);
+            });
+        });
+        out.textures_delta.clear();
+        text_x.clear();
+        for clipped in &out.shapes {
+            collect_text_x(&clipped.shape, &mut text_x);
+        }
+    }
+    assert_eq!(text_x.len(), 3, "{text_x:?}");
+    assert!(text_x.windows(2).all(|w| (w[0] - w[1]).abs() < 0.01), "labels start at different x: {text_x:?}");
+}
+
+fn collect_text_x(shape: &Shape, out: &mut Vec<f32>) {
+    match shape {
+        Shape::Vec(v) => v.iter().for_each(|s| collect_text_x(s, out)),
+        Shape::Text(t) => out.push(t.pos.x),
+        _ => {}
+    }
+}

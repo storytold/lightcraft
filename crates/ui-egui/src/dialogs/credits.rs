@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 
 use egui::RichText;
 
-use crate::{LightcraftApp, theme::Tokens};
+use crate::{LightcraftApp, menu_item::MenuItem, theme::Tokens};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Contributor {
@@ -242,7 +242,7 @@ pub fn contributors_ui(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ui.label(crate::i18n::tr("Sort"));
         let sort = crate::widgets::combo_box("credits_sort").selected_text(crate::i18n::tr(v.key.label().0)).show_ui(ui, |ui| {
             for k in SortKey::ALL {
-                if ui.selectable_label(v.key == k, crate::i18n::tr(k.label().0)).clicked() {
+                if MenuItem::new(crate::i18n::tr(k.label().0)).checked(v.key == k).show(ui).clicked() {
                     v.key = k;
                     v.ascending = k.default_ascending();
                 }

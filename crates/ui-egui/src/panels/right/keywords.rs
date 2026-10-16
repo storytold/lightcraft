@@ -244,8 +244,9 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             .show_ui(ui, |ui| {
                 for set in sets["sets"].as_array().into_iter().flatten() {
                     let name = set["name"].as_str().unwrap_or_default();
-                    if ui
-                        .selectable_label(name == current, crate::i18n::builtin_label(name, name == lightcraft_engine::cmd::keywords::RECENT))
+                    if MenuItem::new(crate::i18n::builtin_label(name, name == lightcraft_engine::cmd::keywords::RECENT))
+                        .checked(name == current)
+                        .show(ui)
                         .clicked()
                     {
                         let _ = app.run("keyword.useSet", json!({"name": name}));
@@ -253,8 +254,7 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 }
                 ui.separator();
                 // Edit Set…: the current nine, slot by slot (named, Recent Keywords becomes a set)
-                let edit = ui.button(crate::i18n::tr("Edit Set…"));
-                register(ui, "keywordSetMenu:edit", edit.rect);
+                let edit = MenuItem::new(crate::i18n::tr("Edit Set…")).check_slot(true).widget("keywordSetMenu:edit").show(ui);
                 if edit.clicked() {
                     let mut slots: Vec<String> =
                         sets["keywords"].as_array().into_iter().flatten().filter_map(|k| k.as_str().map(str::to_string)).collect();
@@ -267,7 +267,7 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         as_new: false,
                     });
                 }
-                if ui.button(crate::i18n::tr("Save Current Keywords as Set…")).clicked() {
+                if MenuItem::new(crate::i18n::tr("Save Current Keywords as Set…")).check_slot(true).show(ui).clicked() {
                     app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
                         title: "Save Keyword Set".into(),
                         hint: "Set name".into(),
@@ -278,7 +278,7 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     });
                 }
                 if current != lightcraft_engine::cmd::keywords::RECENT
-                    && ui.button(crate::i18n::tr_format!("Delete “{current}”", current = current)).clicked()
+                    && MenuItem::new(&crate::i18n::tr_format!("Delete “{current}”", current = current)).check_slot(true).show(ui).clicked()
                 {
                     let _ = app.run("keyword.deleteSet", json!({"name": current}));
                 }
