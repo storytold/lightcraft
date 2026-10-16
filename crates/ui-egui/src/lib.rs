@@ -735,6 +735,28 @@ impl LightcraftApp {
         panels::slideshow::tick(self, ctx);
     }
 
+    /// Announce the end of a library backup: where it went, or why there is none.
+    fn backup_status(&mut self, ctx: &egui::Context) {
+        let Some(b) = self.session.backup.clone() else { return };
+        let key = std::sync::Arc::as_ptr(&b) as usize;
+        if self.ui.backup_seen == Some(key) {
+            return;
+        }
+        match b.outcome() {
+            Some(outcome) => {
+                self.ui.backup_seen = Some(key);
+                let msg = match outcome {
+                    Ok(report) => crate::i18n::tr_format!("Backed up the library to {}", report.dir.display()),
+                    Err(e) => crate::i18n::tr_format!("The library was not backed up: {}", e),
+                };
+                // (long enough to read a path, or what went wrong)
+                self.toast_for(ctx, msg, 8.0);
+            }
+            // The activity stack shows the backup while it runs; poll for the end.
+            None => ctx.request_repaint_after(std::time::Duration::from_millis(250)),
+        }
+    }
+
     /// Announce the end of a Build Previews run.
     fn preview_build_status(&mut self, ctx: &egui::Context) {
         use std::sync::atomic::Ordering;
@@ -1115,6 +1137,7 @@ impl LightcraftApp {
         recheck::tick(self);
         tasks::poll(self, ctx);
         self.preview_build_status(ctx);
+        self.backup_status(ctx);
         self.save_status(ctx);
         self.slideshow_tick(ctx);
         panels::faces::pump(self, ctx);
