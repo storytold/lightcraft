@@ -977,7 +977,7 @@ fn main() -> eframe::Result {
                 }
                 // The share dialog reaches the same service through its own client,
                 // so a sign-in through either half serves both.
-                app.share.connect(collabcraft_share::CollabCraft::from_fn(cloud::client));
+                app.share.connect(collabcraft_share::CollabCraft::from_fn(cloud::client).for_app("lightcraft"));
                 if let Some(ui) = prefs {
                     app.ui = ui;
                 }
