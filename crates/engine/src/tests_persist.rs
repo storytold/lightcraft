@@ -137,7 +137,8 @@ fn failed_append_of_undo_is_reported_and_retried() {
 fn failed_snapshot_does_not_fail_the_command() {
     let store = Flaky { snapshots_only: true, ..Default::default() };
     let mut s = open(&store, false);
-    s.library.as_mut().unwrap().journal_mut().policy = SnapshotPolicy { max_records: 1, max_bytes: u64::MAX };
+    s.library.as_mut().unwrap().journal_mut().policy =
+        SnapshotPolicy { max_records: 1, max_bytes: u64::MAX, snapshot_share: 0, ..Default::default() };
     store.set_failing(true);
     s.execute("album.create", &json!({"name": "A"})).unwrap();
     s.execute("album.create", &json!({"name": "B"})).unwrap();
@@ -190,4 +191,65 @@ fn close_fails_when_nothing_can_be_saved() {
     store.set_failing(false);
     s.close_library().unwrap();
     assert_eq!(s.unsaved(), None);
+}
+
+/// Given a library with a large catalog, when it is closed after one change, then the snapshot
+/// is not rewritten for it: the change is in the log, and opening the library again shows it.
+/// A small library (the default) is compacted on close as before, and closing with nothing
+/// changed writes nothing.
+#[test]
+fn close_rewrites_a_large_snapshot_only_when_the_log_is_long() {
+    let store = Flaky::default();
+    let mut s = open(&store, true);
+    let id = s.selection.active.unwrap();
+    let snap = || store.files.get("catalog.snap").unwrap();
+    let log = || store.files.get("catalog.log").unwrap_or_default();
+
+    // small: compacted on close
+    s.execute("photo.rate", &json!({"rating": 2})).unwrap();
+    assert!(!log().is_empty());
+    s.close_library().unwrap();
+    assert!(log().is_empty());
+    let compacted = snap();
+
+    // nothing changed: nothing written
+    let written = s.library.as_ref().unwrap().journal().stats().snapshots;
+    s.close_library().unwrap();
+    assert_eq!(s.library.as_ref().unwrap().journal().stats().snapshots, written);
+
+    // "large": the snapshot is above what a close rewrites in passing
+    s.library.as_mut().unwrap().journal_mut().policy.close_bytes = 0;
+    s.execute("photo.rate", &json!({"rating": 5})).unwrap();
+    s.close_library().unwrap();
+    assert_eq!(snap(), compacted, "the snapshot was rewritten");
+    assert!(!log().is_empty());
+    let expect = s.catalog.to_snapshot();
+    drop(s);
+    let s2 = open(&store, true);
+    assert_eq!(s2.catalog.to_snapshot(), expect);
+    assert_eq!(s2.catalog.photo(id).unwrap().rating, 5);
+}
+
+/// Given a library saved by an earlier version, when it is opened, then the person is told once
+/// that it was upgraded and where the library as it was is kept (the files are theirs to
+/// delete), and `library.info` lists it; a library that was not upgraded says nothing.
+#[test]
+fn an_upgraded_library_says_where_what_it_was_is_kept() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-kept-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("catalog.snap"), include_str!("../../catalog/src/fixtures/v6-catalog.snap.json")).unwrap();
+    std::fs::write(dir.join("catalog.log"), include_str!("../../catalog/src/fixtures/v6-catalog.log.jsonl")).unwrap();
+    let mut s = Session::new();
+    s.open_library(&dir, false).unwrap();
+    let told = s.take_library_warnings();
+    assert!(told.iter().any(|w| w.contains("catalog.snap.v6-8") && w.contains("catalog.log.v6-8") && w.contains("delete")), "{told:?}");
+    assert!(dir.join("catalog.snap.v6-8").exists() && dir.join("catalog.log.v6-8").exists());
+    let info = s.execute("library.info", &serde_json::json!({})).unwrap();
+    assert!(info["settingsWarnings"].to_string().contains("catalog.snap.v6-8"), "{info}");
+    s.close_library().unwrap();
+    s.open_library(&dir, false).unwrap();
+    assert!(!s.take_library_warnings().iter().any(|w| w.contains("upgraded")));
+    s.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -3217,6 +3217,7 @@ name = "lightcraft-engine"
 version = "0.8.0"
 dependencies = [
  "ab_glyph",
+ "crc32fast",
  "harfrust",
  "jxl-oxide",
  "libc",
