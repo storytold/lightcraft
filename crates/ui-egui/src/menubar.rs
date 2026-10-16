@@ -85,6 +85,9 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "file.importKeywords",
             "file.exportKeywords",
             "---",
+            "file.cloudOpen",
+            "file.cloudSave",
+            "---",
             "dialog.export",
             "app.exportPrevious",
             "@Export with Preset",
@@ -294,6 +297,7 @@ fn host_supports(app: &LightcraftApp, id: &str) -> bool {
     match id {
         "file.backupLibrary" => app.services.backup_library.is_some(),
         "file.restoreLibrary" => app.services.restore_library.is_some(),
+        "file.cloudOpen" | "file.cloudSave" => crate::cloud::available(app),
         "photo.restore" | "photo.deletePermanently" => selection_deleted(app),
         "photo.delete" => !selection_deleted(app),
         // only in an album that holds its photos (not a smart one)

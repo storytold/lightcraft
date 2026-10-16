@@ -10,7 +10,13 @@ rust-version = "1.90"
 repository = "https://github.com/storytold/lightcraft"
 
 [workspace.dependencies]
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "5c874d51eeb3de70e735c8ce87a59a7dedd47675", features = ["serde"] }
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "289d562cc6e8b567819aee51f759a78f41a65454", features = ["serde", "cloud"] }
+# The vendor-neutral cloud vocabulary: file entries, capabilities, shares.
+craft-cloud = { git = "https://github.com/storytold/craft-libs", rev = "289d562cc6e8b567819aee51f759a78f41a65454" }
+# HTTP client that reaches CollabCraft. No provider credential lives in LightCraft.
+craft-cloud-client = { git = "https://github.com/wdunn001/collab-craft", rev = "80bfaec" }
+# Share-dialog backend that talks to CollabCraft over the same session.
+collabcraft-share = { git = "https://github.com/wdunn001/collab-craft", rev = "80bfaec" }
 # internal
 lightcraft-denoise-core = { path = "crates/denoise-core" }
 lightcraft-denoise = { path = "crates/denoise", default-features = false }
