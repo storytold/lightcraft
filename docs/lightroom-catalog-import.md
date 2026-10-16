@@ -44,14 +44,51 @@ retained. Oldest managed archives are retired; legacy `.json` archives remain un
 `Interop/lightroom-index.json` records imported identities. Source catalogs and originals are
 never overwritten.
 
-Each native `.lrcat` database and WAL file is independently limited to 1 GiB
-(1,073,741,824 bytes). This bounds the current whole-file reader; referenced photo sizes and
-photo counts are not part of that limit. XMP packets are capped at 16 MiB and each table at one million rows.
-The in-tree, read-only Rust SQLite B-tree reader follows SQLite’s public file-format
-specification; it introduces no dependency or C runtime. Table payloads are capped at 256 MiB.
-Optional history, keyword and collection tables that exceed limits are skipped with warnings;
-required photo tables still report errors. Unrelated unsupported schemas are ignored. A needed
-WITHOUT ROWID or virtual table produces an explicit error, handled as a warning when optional.
+## Limits
+
+Native import reads referenced database pages on demand (at most 64 KiB per page), rather than
+loading the whole `.lrcat`, and streams every table: each row is decoded, the fields the import
+maps are taken from it, and the rest is dropped before the next row (issue #1234). Memory follows
+what the import keeps (paths, image records, develop settings text, decoded XMP, keywords,
+collections), not the size of the tables, so there is no per-table size or row cap any more.
+What is bounded, and why:
+
+- **Files**: database files up to 16 GiB and 16,777,216 pages; the WAL up to 1 GiB (it is read
+  into memory to validate its checksums).
+- **Records**: one record's payload up to 64 MiB, its overflow chain up to 1,048,576 pages with
+  no repeated page; XMP packets up to 16 MiB decoded.
+- **B-tree structure**: at most 64 levels deep, no page visited twice (cycles and shared pages are
+  errors), cell pointers inside the page. Two whole-table sanity bounds replace the old 256 MiB /
+  one million row caps: a table's rows can't carry more payload than the database has bytes, and
+  can't number more than the database's bytes divided by five (the smallest a row can be). A
+  well-formed table never reaches either; a hostile file whose cells overlap or share overflow
+  chains stops there instead of walking without end.
+- **History and snapshots** go to the recovery archive only (not to native history). They are
+  streamed and kept up to 256 MiB together (estimated in memory); the archive holds at most
+  32 MiB compressed and settings text compresses about 8:1, so more could not be archived anyway.
+  Steps past the budget are counted in a warning; imported edits are not affected.
+
+**Develop settings are never dropped quietly.** If the catalog has an `Adobe_imageDevelopSettings`
+table that can't be read (a damaged catalog), the import still brings in the photos, ratings,
+keywords and collections, keeps the settings read before the damaged part, and reports how many
+photos arrived without their edits: `editsNotImported` in the inspect and import results, a first
+warning that says so, and a longer-lasting import summary in the app that leads with it. Failing
+the whole import instead would leave a user with a damaged catalog with nothing; after repairing
+the catalog in Lightroom Classic (File > Optimize Catalog), importing it again with
+`updateExisting=true` brings the edits in (without it, photos whose XMP already gave them an edit
+keep it).
+
+The open file and source path are checked again after all tables are read. Close Lightroom before
+importing: metadata checks detect ordinary concurrent changes, but are not SQLite snapshot isolation.
+
+The in-tree, read-only Rust SQLite B-tree reader follows SQLite's public file-format
+specification; it introduces no dependency or C runtime.
+Optional history, keyword and collection tables that can't be read are skipped with warnings
+(rows read before the failure are kept); required photo tables still report errors. Unrelated
+unsupported schemas are ignored. A needed WITHOUT ROWID or virtual table produces an explicit
+error, handled as a warning when optional.
+
+## How edits and folders map
 
 Develop settings reuse the existing XMP/preset mapper. Supported sliders, curves and supported
 mask structures remain editable, but this is approximate rendering: camera profiles, Adobe AI
@@ -97,3 +134,7 @@ the path relative to the catalog that Lightroom records for root folders on the 
 (`relativePathFromCatalog`), when that is a folder, and reports the remapping as a warning. Copying
 a project folder with its catalog inside it therefore keeps its originals linked. Other moved
 originals stay missing; use LightCraft's missing-photo relinking tools to update their paths.
+
+## Local validation
+
+Validated in a local Linux environment after upstream reconciliation: 47 catalog-focused tests, nine pipeline spot tests, the exact sparse-catalog regression, and all eight `cargo xtask ci` stages passed. The full gate recorded 3,166 passing test executions, zero failures, and 28 ignored tests. An original synthetic sparse catalog with a required image-table page beyond 1 GiB also passed headless application import and selection; its expected missing-original placeholder retained its five-star rating. This snapshot check does not establish native-window coverage or dense-catalog performance.

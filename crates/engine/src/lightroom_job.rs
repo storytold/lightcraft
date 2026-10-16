@@ -355,6 +355,7 @@ mod tests {
             members: Vec::new(),
             collection_content: Vec::new(),
             warnings: Vec::new(),
+            edits_not_imported: 0,
         }
     }
 
@@ -398,6 +399,7 @@ mod tests {
                 members: Vec::new(),
                 collection_content: Vec::new(),
                 warnings: Vec::new(),
+                edits_not_imported: 0,
             },
             normal: Prepared::default(),
             index: ImportIndex::default(),

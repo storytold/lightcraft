@@ -48,6 +48,7 @@
   "Lightroom import complete: {imported} photos added": "Lightroom 匯入完成：已加入 {imported} 張相片",
   "Lightroom import complete: {imported} photos added, {failed} failed": "Lightroom 匯入完成：已加入 {imported} 張相片，{failed} 張失敗",
   "Lightroom import complete: {imported} photos added; index warning: {warning}": "Lightroom 匯入完成：已加入 {imported} 張相片；索引警告：{warning}",
+  "Lightroom edits were not imported for {count} photos: the catalog's develop settings could not be read": "{count} 張照片的 Lightroom 編輯未匯入：無法讀取目錄的沖印設定",
   "Lightroom import failed: {e}{warning}": "Lightroom 匯入失敗：{e}{warning}",
   "Lightroom inspection failed: {e}{warning}": "Lightroom 檢查失敗：{e}{warning}",
   "Label Set: {name}": "標籤集：{name}",

@@ -96,6 +96,7 @@
   "Lightroom geometry was not preserved for {path}; {mode} will be recalculated.": "Geometrie Lightroom pro {path} se nezachovala; {mode} se přepočítá.",
   "Lightroom import complete: {imported} photos added": "Import z Lightroom byl dokončen: přidaných fotografií: {imported}",
   "Lightroom import complete: {imported} photos added, {failed} failed": "Import z Lightroom byl dokončen: přidaných fotografií: {imported}, neúspěšných: {failed}",
+  "Lightroom edits were not imported for {count} photos: the catalog's develop settings could not be read": "Úpravy z Lightroom nebyly importovány u {count} fotografií: nastavení vyvolání katalogu nelze přečíst",
   "Lightroom import complete: {imported} photos added; index warning: {warning}": "Import z Lightroom byl dokončen: přidaných fotografií: {imported}; varování indexu: {warning}",
   "Lightroom import failed: {e}{warning}": "Import z Lightroom selhal: {e}{warning}",
   "Lightroom inspection failed: {e}{warning}": "Prohlížení katalogu Lightroom selhalo: {e}{warning}",

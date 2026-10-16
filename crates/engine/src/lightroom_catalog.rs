@@ -8,7 +8,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-use crate::lightroom_sqlite::{Database, LiveTable, Value as SqlValue};
+use crate::lightroom_sqlite::{Database, FileSource, LiveTable, Record, RowError, Value as SqlValue};
 use lightcraft_catalog::{Album, Flag, Op, Photo, PhotoId, Source};
 use lightcraft_geom::{Affine, Orientation, Point, Rect};
 use serde::{Deserialize, Serialize};
@@ -44,94 +44,138 @@ fn source_path(p: &Photo) -> Option<&str> {
     }
 }
 
-struct Reader {
+/// Most history and snapshot data (estimated bytes, see [`row_bytes`]) kept for the recovery
+/// archive. The archive holds at most [`crate::lightroom_archive::MAX_ARCHIVE_BYTES`] (32 MiB)
+/// compressed, and Lightroom's settings text compresses about 8:1, so keeping more could not be
+/// archived anyway; steps past the budget are counted in a warning instead of held in memory.
+const MAX_KEPT_HISTORY: usize = 256 << 20;
+
+/// One table's columns, for picking fields out of a streamed record by name.
+struct Columns<'a>(&'a [String]);
+impl Columns<'_> {
+    fn at(&self, name: &str) -> Option<usize> {
+        self.0.iter().position(|c| c == name)
+    }
+    /// The column as `number` reads it from a [`Row`]: integers, finite reals truncated, else 0.
+    fn int(&self, r: &Record, name: &str) -> i64 {
+        match self.at(name).and_then(|i| r.values.get(i)) {
+            Some(SqlValue::Integer(n)) => *n,
+            Some(SqlValue::Real(n)) if n.is_finite() => *n as i64,
+            _ => 0,
+        }
+    }
+    /// Move the column's text out of the record ("" when it isn't text).
+    fn take_text(&self, r: &mut Record, name: &str) -> String {
+        match self.at(name).and_then(|i| r.values.get_mut(i)) {
+            Some(SqlValue::Text(s)) => std::mem::take(s),
+            _ => String::new(),
+        }
+    }
+    /// Every non-blob column as a [`Row`] (opaque Lightroom payloads never become JSON).
+    fn row(&self, r: Record) -> Row {
+        self.0
+            .iter()
+            .zip(r.values)
+            .filter_map(|(column, value)| {
+                let value = match value {
+                    SqlValue::Null => Value::Null,
+                    SqlValue::Integer(n) => json!(n),
+                    SqlValue::Real(n) => json!(n),
+                    SqlValue::Text(s) => Value::String(s),
+                    SqlValue::Blob(_) => return None,
+                };
+                Some((column.clone(), value))
+            })
+            .collect()
+    }
+}
+
+/// Rough bytes a [`Row`] holds: its keys and texts plus per-entry overhead.
+fn row_bytes(row: &Row) -> usize {
+    row.iter().map(|(k, v)| k.len() + v.as_str().map_or(0, str::len) + 64).sum()
+}
+
+struct Reader<'c> {
     db: Database,
     tables: Vec<LiveTable>,
+    cancel: &'c AtomicBool,
 }
-impl Reader {
-    fn table(&self, name: &str, required: bool) -> Result<Vec<Row>, String> {
+impl Reader<'_> {
+    /// Stream `name`'s rows to `visit`. A missing table is an error when `required`, else no rows.
+    /// [`RowError::Table`] means the table could not be read; [`RowError::Visitor`] is `visit`'s
+    /// own error (or cancellation), which always stops the import.
+    fn each(&self, name: &str, required: bool, visit: &mut dyn FnMut(&Columns, Record) -> Result<(), String>) -> Result<(), RowError<String>> {
         let Some(t) = self.tables.iter().find(|t| t.name == name) else {
-            return if required { Err(format!("unsupported Lightroom catalog: missing {name}")) } else { Ok(Vec::new()) };
+            return if required { Err(RowError::Visitor(format!("unsupported Lightroom catalog: missing {name}"))) } else { Ok(()) };
         };
-        let columns = t.column_names.as_ref().ok_or_else(|| format!("cannot read {name} columns"))?;
-        let rows = self.db.read_table(t.rootpage, columns.len()).map_err(|e| format!("{name}: {e:?}"))?;
-        if rows.len() > 1_000_000 {
-            return Err(format!("{name}: more than one million records"));
-        }
-        Ok(rows
-            .into_iter()
-            .map(|r| {
-                columns
-                    .iter()
-                    .cloned()
-                    .zip(r.values.into_iter().map(|v| match v {
-                        SqlValue::Null => Some(Value::Null),
-                        SqlValue::Integer(n) => Some(json!(n)),
-                        SqlValue::Real(n) => Some(json!(n)),
-                        SqlValue::Text(s) => Some(json!(s)),
-                        // Opaque Lightroom payloads never become JSON byte arrays.
-                        SqlValue::Blob(_) => None,
-                    }))
-                    .filter_map(|(column, value)| value.map(|value| (column, value)))
-                    .collect()
+        let columns = Columns(t.column_names.as_deref().ok_or_else(|| RowError::Table(format!("cannot read {name} columns")))?);
+        let cancel = self.cancel;
+        self.db
+            .for_each_row(t.rootpage, columns.0.len(), &mut |record| {
+                ensure_read_active(cancel)?;
+                visit(&columns, record)
             })
-            .collect())
+            .map_err(|e| match e {
+                RowError::Table(why) => RowError::Table(format!("{name}: {why}")),
+                visitor => visitor,
+            })
     }
 
-    fn optional_table(&self, name: &str, warnings: &mut Vec<String>) -> Result<Vec<Row>, String> {
-        match self.table(name, false) {
-            Ok(rows) => Ok(rows),
-            Err(error) => {
-                warnings.push(format!("skipping optional Lightroom table {name}: {error}"));
-                Ok(Vec::new())
+    /// A table the import needs: any failure stops it.
+    fn required(&self, name: &str, visit: &mut dyn FnMut(&Columns, Record) -> Result<(), String>) -> Result<(), String> {
+        self.each(name, true, visit).map_err(|e| match e {
+            RowError::Table(why) | RowError::Visitor(why) => why,
+        })
+    }
+
+    /// A table the import can do without: a read failure is a warning (rows streamed before it are
+    /// kept); the visitor's own errors and cancellation still stop the import.
+    fn optional(&self, name: &str, warnings: &mut Vec<String>, visit: &mut dyn FnMut(&Columns, Record) -> Result<(), String>) -> Result<(), String> {
+        match self.each(name, false, visit) {
+            Ok(()) => Ok(()),
+            Err(RowError::Table(why)) => {
+                warnings.push(format!("skipping optional Lightroom table {name}: {why}"));
+                Ok(())
             }
+            Err(RowError::Visitor(why)) => Err(why),
         }
     }
 
-    fn xmp_table(&self) -> Result<(Vec<Row>, Vec<String>), String> {
-        let Some(t) = self.tables.iter().find(|t| t.name == "Adobe_AdditionalMetadata") else { return Ok((Vec::new(), Vec::new())) };
-        let columns = t.column_names.as_ref().ok_or_else(|| "cannot read Adobe_AdditionalMetadata columns".to_string())?;
-        let rows = self.db.read_table(t.rootpage, columns.len()).map_err(|e| format!("Adobe_AdditionalMetadata: {e:?}"))?;
-        if rows.len() > 1_000_000 {
-            return Err("Adobe_AdditionalMetadata: more than one million records".into());
-        }
-        let mut warnings = Vec::new();
-        let mut out = Vec::with_capacity(rows.len());
-        for row in rows {
-            let image = row
-                .values
-                .iter()
-                .zip(columns)
-                .find_map(|(value, column)| {
-                    (column == "image").then_some(match value {
-                        SqlValue::Integer(n) => *n,
-                        _ => 0,
-                    })
-                })
-                .unwrap_or(0);
-            let mut mapped = Row::new();
-            for (column, value) in columns.iter().zip(row.values) {
-                let value = match value {
-                    SqlValue::Null => Some(Value::Null),
-                    SqlValue::Integer(n) => Some(json!(n)),
-                    SqlValue::Real(n) => Some(json!(n)),
-                    SqlValue::Text(s) => Some(json!(s)),
-                    SqlValue::Blob(bytes) if column == "xmp" => match decode_xmp_bytes(&bytes) {
-                        Ok(packet) => Some(Value::String(packet)),
-                        Err(error) => {
-                            warnings.push(format!("image {image}: {error}"));
-                            None
-                        }
-                    },
-                    SqlValue::Blob(_) => None,
-                };
-                if let Some(value) = value {
-                    mapped.insert(column.clone(), value);
-                }
+    /// A table kept whole as rows (the small collection tables).
+    fn optional_rows(&self, name: &str, warnings: &mut Vec<String>) -> Result<Vec<Row>, String> {
+        let mut rows = Vec::new();
+        self.optional(name, warnings, &mut |columns, record| {
+            rows.push(columns.row(record));
+            Ok(())
+        })?;
+        Ok(rows)
+    }
+
+    /// History or snapshot rows grouped by image, kept up to the shared `budget` (bytes left).
+    fn grouped_rows(&self, name: &str, warnings: &mut Vec<String>, budget: &mut usize) -> Result<HashMap<i64, Vec<Row>>, String> {
+        let mut out: HashMap<i64, Vec<Row>> = HashMap::new();
+        let mut dropped = 0usize;
+        self.optional(name, warnings, &mut |columns, record| {
+            let image = columns.int(&record, "image");
+            let row = columns.row(record);
+            let size = row_bytes(&row);
+            if size > *budget {
+                dropped = dropped.saturating_add(1);
+                *budget = 0;
+                return Ok(());
             }
-            out.push(mapped);
+            *budget -= size;
+            out.entry(image).or_default().push(row);
+            Ok(())
+        })?;
+        if dropped > 0 {
+            let kept: usize = out.values().map(Vec::len).sum();
+            warnings.push(format!(
+                "{name}: kept {kept} rows for the recovery archive; {dropped} more are not archived ({} MiB budget). Imported edits are not affected.",
+                MAX_KEPT_HISTORY >> 20
+            ));
         }
-        Ok((out, warnings))
+        Ok(out)
     }
 }
 
@@ -156,6 +200,11 @@ pub struct CatalogImport {
     pub members: Vec<Row>,
     pub collection_content: Vec<Row>,
     pub warnings: Vec<String>,
+    /// Photos whose Lightroom edits could not be read: the catalog has an
+    /// `Adobe_imageDevelopSettings` table but it failed to read, so these photos arrive unedited.
+    /// Reported as `editsNotImported` and shown in the import summary, never only as a warning.
+    #[serde(default)]
+    pub edits_not_imported: usize,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -248,26 +297,6 @@ fn bytes(path: &Path) -> Result<Vec<u8>, String> {
         return Err("catalog grew beyond import limit".into());
     }
     Ok(out)
-}
-
-fn xmp(v: Option<&Value>) -> Result<String, String> {
-    match v {
-        Some(Value::String(s)) => Ok(s.clone()),
-        Some(Value::Array(a)) if !a.is_empty() => {
-            let b: Vec<u8> = a.iter().filter_map(|n| n.as_u64().and_then(|n| u8::try_from(n).ok())).collect();
-            let size = b.get(..4).and_then(|s| <[u8; 4]>::try_from(s).ok()).map(u32::from_be_bytes).ok_or("truncated XMP header")?;
-            if size > 16 << 20 {
-                return Err("XMP packet exceeds 16 MiB".into());
-            }
-            let compressed = b.get(4..).ok_or("truncated XMP")?;
-            let decoded = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(compressed, 16 << 20).map_err(|_| "invalid compressed XMP")?;
-            if decoded.len() != size as usize {
-                return Err("XMP packet length mismatch".into());
-            }
-            String::from_utf8(decoded).map_err(|e| e.to_string())
-        }
-        _ => Ok(String::new()),
-    }
 }
 
 fn decode_xmp_bytes(bytes: &[u8]) -> Result<String, String> {
@@ -380,140 +409,185 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
     let before = std::fs::metadata(path).map_err(|e| e.to_string())?;
     let wal_path = PathBuf::from(format!("{}-wal", path.display()));
     let wal_before = std::fs::metadata(&wal_path).ok().map(|m| (m.len(), m.modified().ok()));
-    let main = bytes(path)?;
+    let main = FileSource::open(path)?;
     let wal = match std::fs::metadata(&wal_path) {
         Ok(_) => bytes(&wal_path)?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(e.to_string()),
     };
-    let wal_len = committed_wal_len(&main, &wal)?;
+    let wal_len = committed_wal_len(main.header(), &wal)?;
     ensure_read_active(cancel)?;
-    let db = Database::open_with_wal(main, &wal[..wal_len]).map_err(|e| format!("invalid SQLite catalog: {e:?}"))?;
+    let db = Database::open_file_with_wal(main, &wal[..wal_len]).map_err(|e| format!("invalid SQLite catalog: {e:?}"))?;
     let after = std::fs::metadata(path).map_err(|e| e.to_string())?;
     let wal_after = std::fs::metadata(&wal_path).ok().map(|m| (m.len(), m.modified().ok()));
     if before.len() != after.len() || before.modified().ok() != after.modified().ok() || wal_before != wal_after {
         return Err("catalog changed during reading; close Lightroom and retry".into());
     }
-    let reader = Reader { tables: db.live_tables()?, db };
+    let reader = Reader { tables: db.live_tables()?, db, cancel };
     let mut warnings = Vec::new();
-    let table = |name: &str, required: bool| -> Result<Vec<Row>, String> {
-        ensure_read_active(cancel)?;
-        let rows = reader.table(name, required)?;
-        done.fetch_add(1, Ordering::Relaxed);
-        Ok(rows)
+    // Each table is streamed; per row only the fields the import maps are kept.
+    let mut roots: BTreeMap<i64, (String, String, String)> = BTreeMap::new();
+    reader.required("AgLibraryRootFolder", &mut |c, mut r| {
+        let id = c.int(&r, "id_local");
+        roots.insert(id, (c.take_text(&mut r, "absolutePath"), c.take_text(&mut r, "name"), c.take_text(&mut r, "relativePathFromCatalog")));
+        Ok(())
+    })?;
+    done.fetch_add(1, Ordering::Relaxed);
+    let mut folders: HashMap<i64, (i64, String)> = HashMap::new();
+    reader.required("AgLibraryFolder", &mut |c, mut r| {
+        folders.insert(c.int(&r, "id_local"), (c.int(&r, "rootFolder"), c.take_text(&mut r, "pathFromRoot")));
+        Ok(())
+    })?;
+    done.fetch_add(1, Ordering::Relaxed);
+    let mut files: HashMap<i64, (i64, String)> = HashMap::new();
+    reader.required("AgLibraryFile", &mut |c, mut r| {
+        files.insert(c.int(&r, "id_local"), (c.int(&r, "folder"), c.take_text(&mut r, "idx_filename")));
+        Ok(())
+    })?;
+    done.fetch_add(1, Ordering::Relaxed);
+    // Develop settings carry every photo's edits: a table that exists but can't be read is not an
+    // optional table quietly skipped. Rows read before a failure are kept, and the photos left
+    // without settings are counted into `edits_not_imported` and reported prominently.
+    let mut develops: HashMap<i64, String> = HashMap::new();
+    let develop_error = match reader.each("Adobe_imageDevelopSettings", false, &mut |c, mut r| {
+        develops.insert(c.int(&r, "image"), c.take_text(&mut r, "text"));
+        Ok(())
+    }) {
+        Ok(()) => None,
+        Err(RowError::Table(why)) => Some(why),
+        Err(RowError::Visitor(why)) => return Err(why),
     };
-    let optional_table = |name: &str, warnings: &mut Vec<String>| -> Result<Vec<Row>, String> {
-        ensure_read_active(cancel)?;
-        let rows = reader.optional_table(name, warnings)?;
-        done.fetch_add(1, Ordering::Relaxed);
-        Ok(rows)
-    };
-    let roots: HashMap<_, _> = table("AgLibraryRootFolder", true)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
-    let folders: HashMap<_, _> = table("AgLibraryFolder", true)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
-    let files: HashMap<_, _> = table("AgLibraryFile", true)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
-    let develops: HashMap<_, _> = optional_table("Adobe_imageDevelopSettings", &mut warnings)?
-        .into_iter()
-        .map(|r| (number(&r, "image"), text(&r, "text").to_string()))
-        .collect();
-    ensure_read_active(cancel)?;
-    let (metadata_rows, metadata_warnings) = match reader.xmp_table() {
-        Ok(result) => result,
-        Err(error) => {
-            warnings.push(format!("skipping optional Lightroom table Adobe_AdditionalMetadata: {error}"));
-            (Vec::new(), Vec::new())
-        }
-    };
+    done.fetch_add(1, Ordering::Relaxed);
+    let mut metadata: HashMap<i64, String> = HashMap::new();
+    let mut metadata_warnings = Vec::new();
+    reader.optional("Adobe_AdditionalMetadata", &mut warnings, &mut |c, r| {
+        let image = c.int(&r, "image");
+        let packet = match c.at("xmp").and_then(|i| r.values.get(i)) {
+            Some(SqlValue::Text(s)) => s.clone(),
+            Some(SqlValue::Blob(bytes)) => match decode_xmp_bytes(bytes) {
+                Ok(packet) => packet,
+                Err(error) => {
+                    metadata_warnings.push(format!("image {image}: {error}"));
+                    return Ok(());
+                }
+            },
+            _ => return Ok(()),
+        };
+        metadata.insert(image, packet);
+        Ok(())
+    })?;
     warnings.extend(metadata_warnings);
     done.fetch_add(1, Ordering::Relaxed);
-    let metadata: HashMap<_, _> = metadata_rows.into_iter().map(|r| (number(&r, "image"), r)).collect();
-    let keyword_rows: HashMap<_, _> = optional_table("AgLibraryKeyword", &mut warnings)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
+    let mut keyword_rows: HashMap<i64, (i64, String)> = HashMap::new();
+    reader.optional("AgLibraryKeyword", &mut warnings, &mut |c, mut r| {
+        keyword_rows.insert(c.int(&r, "id_local"), (c.int(&r, "parent"), c.take_text(&mut r, "name")));
+        Ok(())
+    })?;
+    done.fetch_add(1, Ordering::Relaxed);
     let mut keywords: HashMap<i64, Vec<String>> = HashMap::new();
-    for r in optional_table("AgLibraryKeywordImage", &mut warnings)? {
-        ensure_read_active(cancel)?;
+    reader.optional("AgLibraryKeywordImage", &mut warnings, &mut |c, r| {
         let mut parts = Vec::new();
-        let mut at = number(&r, "tag");
+        let mut at = c.int(&r, "tag");
         let mut seen = HashSet::new();
         while at != 0 {
             if parts.len() >= 64 || !seen.insert(at) {
                 return Err("cyclic or overly deep keyword hierarchy".into());
             }
-            let Some(k) = keyword_rows.get(&at) else { break };
-            let name = text(k, "name");
+            let Some((parent, name)) = keyword_rows.get(&at) else { break };
             if !name.is_empty() {
-                parts.push(name.to_string());
+                parts.push(name.as_str());
             }
-            at = number(k, "parent");
+            at = *parent;
         }
         parts.reverse();
         if !parts.is_empty() {
-            keywords.entry(number(&r, "image")).or_default().push(parts.join("|"));
+            keywords.entry(c.int(&r, "image")).or_default().push(parts.join("|"));
         }
-    }
-    let group = |rows: Vec<Row>| {
-        let mut out: HashMap<i64, Vec<Row>> = HashMap::new();
-        for r in rows {
-            out.entry(number(&r, "image")).or_default().push(r);
-        }
-        out
-    };
+        Ok(())
+    })?;
+    done.fetch_add(1, Ordering::Relaxed);
     let mut root_paths = HashMap::new();
-    let mut root_ids: Vec<_> = roots.keys().copied().collect();
-    root_ids.sort_unstable();
-    for (id, root) in root_ids.iter().filter_map(|id| Some((*id, roots.get(id)?))) {
-        let absolute = text(root, "absolutePath");
-        let resolved = match relocated_root(absolute, text(root, "relativePathFromCatalog"), path) {
+    for (id, (absolute, name, relative)) in &roots {
+        let resolved = match relocated_root(absolute, relative, path) {
             Some(found) => {
                 let found = found.to_string_lossy().to_string();
-                warnings.push(format!("root folder {}: {absolute} not found; using {found} (relative to the catalog)", text(root, "name")));
+                warnings.push(format!("root folder {name}: {absolute} not found; using {found} (relative to the catalog)"));
                 found
             }
-            None => absolute.to_string(),
+            None => absolute.clone(),
         };
-        root_paths.insert(id, resolved);
+        root_paths.insert(*id, resolved);
     }
-    let mut history = group(optional_table("Adobe_libraryImageDevelopHistoryStep", &mut warnings)?);
-    let mut snapshots = group(optional_table("Adobe_libraryImageDevelopSnapshot", &mut warnings)?);
+    let mut budget = MAX_KEPT_HISTORY;
+    let mut history = reader.grouped_rows("Adobe_libraryImageDevelopHistoryStep", &mut warnings, &mut budget)?;
+    done.fetch_add(1, Ordering::Relaxed);
+    let mut snapshots = reader.grouped_rows("Adobe_libraryImageDevelopSnapshot", &mut warnings, &mut budget)?;
+    done.fetch_add(1, Ordering::Relaxed);
+    let collections = reader.optional_rows("AgLibraryCollection", &mut warnings)?;
+    done.fetch_add(1, Ordering::Relaxed);
+    let members = reader.optional_rows("AgLibraryCollectionImage", &mut warnings)?;
+    done.fetch_add(1, Ordering::Relaxed);
+    let collection_content = reader.optional_rows("AgLibraryCollectionContent", &mut warnings)?;
+    done.fetch_add(1, Ordering::Relaxed);
     let mut out = CatalogImport {
         source: path.to_string_lossy().into(),
         photos: Vec::new(),
-        collections: optional_table("AgLibraryCollection", &mut warnings)?,
-        members: optional_table("AgLibraryCollectionImage", &mut warnings)?,
-        collection_content: optional_table("AgLibraryCollectionContent", &mut warnings)?,
+        collections,
+        members,
+        collection_content,
         warnings,
+        edits_not_imported: 0,
     };
-    for image in table("Adobe_images", true)? {
-        ensure_read_active(cancel)?;
+    let mut photos = Vec::new();
+    reader.required("Adobe_images", &mut |c, r| {
+        let image = c.row(r);
         let id = number(&image, "id_local");
-        let file = files.get(&number(&image, "rootFile")).ok_or_else(|| format!("image {id}: missing file record"))?;
-        let folder = folders.get(&number(file, "folder")).ok_or_else(|| format!("image {id}: missing folder record"))?;
-        let root = roots.get(&number(folder, "rootFolder")).ok_or_else(|| format!("image {id}: missing root record"))?;
-        let root_path = root_paths.get(&number(root, "id_local")).map_or("", String::as_str);
-        let folder_path = text(folder, "pathFromRoot");
-        let name = text(file, "idx_filename");
+        let (folder_id, name) = files.get(&number(&image, "rootFile")).ok_or_else(|| format!("image {id}: missing file record"))?;
+        let (root_id, folder_path) = folders.get(folder_id).ok_or_else(|| format!("image {id}: missing folder record"))?;
+        if !roots.contains_key(root_id) {
+            return Err(format!("image {id}: missing root record"));
+        }
+        let root_path = root_paths.get(root_id).map_or("", String::as_str);
         if root_path.is_empty() || name.is_empty() {
             return Err(format!("image {id}: incomplete original path"));
         }
         let path = Path::new(root_path).join(folder_path).join(name).to_string_lossy().to_string();
-        let packet = match xmp(metadata.get(&id).and_then(|r| r.get("xmp"))) {
-            Ok(s) => s,
-            Err(e) => {
-                out.warnings.push(format!("image {id}: {e}"));
-                String::new()
-            }
-        };
-        out.photos.push(CatalogPhoto {
+        photos.push(CatalogPhoto {
             source_id: id,
             uuid: text(&image, "id_global").into(),
             path,
-            image,
-            settings: develops.get(&id).cloned().unwrap_or_default(),
-            xmp: packet,
+            settings: develops.remove(&id).unwrap_or_default(),
+            xmp: metadata.remove(&id).unwrap_or_default(),
             keywords: keywords.remove(&id).unwrap_or_default(),
             history: history.remove(&id).unwrap_or_default(),
             snapshots: snapshots.remove(&id).unwrap_or_default(),
+            image,
         });
+        Ok(())
+    })?;
+    done.fetch_add(1, Ordering::Relaxed);
+    out.photos = photos;
+    if let Some(why) = develop_error {
+        let missing = out.photos.iter().filter(|p| p.settings.is_empty()).count();
+        out.edits_not_imported = missing;
+        if missing == 0 {
+            out.warnings.push(format!("develop settings: the table ends in an unreadable part ({why}); every photo's edits were read before it"));
+        } else {
+            let total = out.photos.len();
+            let warning = format!(
+                "Lightroom edits were not imported for {missing} of {total} photos: the catalog's develop settings could not be read ({why}). \
+                 Their ratings, keywords and collections still import. Repair the catalog in Lightroom Classic (File > Optimize Catalog) \
+                 and import it again with updateExisting to bring in the edits."
+            );
+            out.warnings.insert(0, warning);
+        }
     }
     ensure_read_active(cancel)?;
+    reader.db.ensure_unchanged()?;
+    let wal_after = std::fs::metadata(&wal_path).ok().map(|m| (m.len(), m.modified().ok()));
+    if wal_before != wal_after {
+        return Err("catalog changed during reading; close Lightroom and retry".into());
+    }
     Ok(out)
 }
 
@@ -917,7 +991,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, data: CatalogImport, contex
     }
     s.merge_undo(s.undo.len().saturating_sub(undo0), "Import Lightroom Catalog");
     Ok(AppliedImport {
-        report: json!({"source":data.source,"photos":ids.len(),"imported":imported,"library":s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy()),"collections":albums.len(),"preservedExistingEdits":preserved,"missing":missing,"failed":files.failed,"warnings":warnings,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
+        report: json!({"source":data.source,"photos":ids.len(),"imported":imported,"library":s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy()),"collections":albums.len(),"editsNotImported":data.edits_not_imported,"preservedExistingEdits":preserved,"missing":missing,"failed":files.failed,"warnings":warnings,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
         index: index.clone(),
     })
 }
@@ -960,6 +1034,7 @@ mod tests {
             ],
             collection_content: Vec::new(),
             warnings: Vec::new(),
+            edits_not_imported: 0,
         }
     }
     #[test]
@@ -1064,9 +1139,9 @@ mod tests {
         let packet = b"<x:xmpmeta>example</x:xmpmeta>";
         let mut encoded = (packet.len() as u32).to_be_bytes().to_vec();
         encoded.extend(miniz_oxide::deflate::compress_to_vec_zlib(packet, 6));
-        assert_eq!(xmp(Some(&json!(encoded))).unwrap(), String::from_utf8_lossy(packet));
+        assert_eq!(decode_xmp_bytes(&encoded).unwrap(), String::from_utf8_lossy(packet));
         encoded[0] = 0xff;
-        assert!(xmp(Some(&json!(encoded))).is_err());
+        assert!(decode_xmp_bytes(&encoded).is_err());
         let (partial, _) = mapped_settings(
             "s = { Exposure2012 = 0.75, ToneCurvePV2012 = {0,0,128,150,255,255} }",
             crate::crs::Target::RawAbsolute,
@@ -1377,16 +1452,27 @@ mod tests {
     }
     /// A one-row-per-table SQLite file: `(name, columns, row)` each.
     fn native_catalog(tables: &[(&str, &str, Vec<SqlValue>)]) -> Vec<u8> {
+        native_catalog_with_last_table_page(tables, None)
+    }
+
+    fn native_catalog_with_last_table_page(tables: &[(&str, &str, Vec<SqlValue>)], last_page: Option<i64>) -> Vec<u8> {
+        catalog_pages(tables, 2048, last_page)
+    }
+
+    /// One page per table (`page_size` bytes each) after the schema page.
+    fn catalog_pages(tables: &[(&str, &str, Vec<SqlValue>)], page_size: usize, last_page: Option<i64>) -> Vec<u8> {
         use SqlValue::{Integer as I, Text as T};
-        let mut bytes = vec![0u8; 5 * 2048];
+        let pages = tables.len() + 1;
+        let mut bytes = vec![0u8; pages * page_size];
         bytes[..16].copy_from_slice(b"SQLite format 3\0");
-        bytes[16..18].copy_from_slice(&2048u16.to_be_bytes());
+        // the header stores 65,536 as 1
+        bytes[16..18].copy_from_slice(&u16::try_from(page_size).unwrap_or(1).to_be_bytes());
         bytes[18] = 1;
         bytes[19] = 1;
         bytes[21] = 64;
         bytes[22] = 32;
         bytes[23] = 32;
-        bytes[28..32].copy_from_slice(&5u32.to_be_bytes());
+        bytes[28..32].copy_from_slice(&(pages as u32).to_be_bytes());
         bytes[44..48].copy_from_slice(&4u32.to_be_bytes());
         bytes[56..60].copy_from_slice(&1u32.to_be_bytes());
         let mut schema = Vec::new();
@@ -1395,12 +1481,12 @@ mod tests {
                 T("table".into()),
                 T((*name).into()),
                 T((*name).into()),
-                I(i as i64 + 2),
+                I(if i + 1 == tables.len() { last_page.unwrap_or(i as i64 + 2) } else { i as i64 + 2 }),
                 T(format!("CREATE TABLE {name} ({columns})")),
             ]);
-            leaf(&mut bytes[(i + 1) * 2048..(i + 2) * 2048], 0, std::slice::from_ref(row));
+            leaf(&mut bytes[(i + 1) * page_size..(i + 2) * page_size], 0, std::slice::from_ref(row));
         }
-        leaf(&mut bytes[..2048], 100, &schema);
+        leaf(&mut bytes[..page_size], 100, &schema);
         bytes
     }
 
@@ -1432,6 +1518,29 @@ mod tests {
         assert_eq!(catalog.photos[0].uuid, "fixture-image");
         assert_eq!(number(&catalog.photos[0].image, "rating"), 5);
         assert!(catalog.photos[0].path.ends_with("test.ARW"));
+        // Put the required image table beyond the old 1 GiB cutoff without allocating it.
+        // A main-file-sized allocation would defeat the purpose of the page-backed reader.
+        // The large fixture relies on Unix sparse-file behavior; small parity runs everywhere.
+        #[cfg(unix)]
+        {
+            let far_offset = 1u64 << 30;
+            let bytes = native_catalog_with_last_table_page(&photo_tables(("/catalog/", "")), Some((far_offset / 2048 + 1) as i64));
+            use std::io::{Seek, SeekFrom, Write};
+            let mut sparse = std::fs::OpenOptions::new().write(true).truncate(true).open(&path).unwrap();
+            sparse.write_all(&bytes).unwrap();
+            sparse.set_len(far_offset + 2048).unwrap();
+            sparse.seek(SeekFrom::Start(far_offset)).unwrap();
+            sparse.write_all(&bytes[4 * 2048..5 * 2048]).unwrap();
+            drop(sparse);
+            let large = read(&path).unwrap();
+            assert_eq!(serde_json::to_value(&large.photos).unwrap(), serde_json::to_value(&catalog.photos).unwrap());
+            let mut session = crate::Session::new();
+            session.execute("library.importLightroom", &json!({"path": path.to_string_lossy()})).unwrap();
+            assert_eq!(session.catalog.len(), 1);
+            assert_eq!(session.catalog.photos().next().unwrap().rating, 5);
+            session.execute("edit.undo", &json!({})).unwrap();
+            assert!(session.catalog.is_empty());
+        }
         std::fs::write(&path, b"bad catalog").unwrap();
         assert!(read(&path).is_err());
         std::fs::remove_file(path).unwrap();
@@ -1513,6 +1622,158 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    const DEVELOP_COLUMNS: &str = "id_local INTEGER PRIMARY KEY, image, text, digest";
+
+    /// Issue #1234: a develop-settings table that exists but can't be read must not look like a
+    /// clean import. The photo still arrives, counted in `editsNotImported` with a leading warning.
+    #[test]
+    fn unreadable_develop_settings_are_reported_not_hidden() {
+        use SqlValue::{Integer as I, Null as N, Text as T};
+        let mut tables = photo_tables(("/catalog/", ""));
+        tables.push(("Adobe_imageDevelopSettings", DEVELOP_COLUMNS, vec![N, I(1), T("s = { Exposure2012 = 1.5 }".into()), N]));
+        let dir = std::env::temp_dir().join(format!("lightcraft-develop-unreadable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("catalog.lrcat");
+        let good = native_catalog(&tables);
+        std::fs::write(&path, &good).unwrap();
+        let catalog = read(&path).unwrap();
+        assert_eq!((catalog.edits_not_imported, catalog.photos[0].settings.as_str()), (0, "s = { Exposure2012 = 1.5 }"));
+        let mut session = crate::Session::new();
+        let report = session.execute("library.importLightroom", &json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(report["editsNotImported"], 0);
+        assert_eq!(session.catalog.photos().next().unwrap().develop.light.exposure, 1.5);
+        // the develop table's page (the fifth table, page 6) is no B-tree page any more
+        let mut bad = good;
+        bad[5 * 2048] = 0x07;
+        std::fs::write(&path, &bad).unwrap();
+        let catalog = read(&path).unwrap();
+        assert_eq!(catalog.edits_not_imported, 1);
+        assert!(catalog.warnings[0].starts_with("Lightroom edits were not imported for 1 of 1 photos"), "{:?}", catalog.warnings);
+        let mut session = crate::Session::new();
+        let report = session.execute("library.importLightroom", &json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(report["editsNotImported"], 1);
+        assert_eq!(session.catalog.len(), 1);
+        assert_eq!(session.catalog.photos().next().unwrap().rating, 5);
+        let inspected = session.execute("library.inspectLightroom", &json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(inspected["editsNotImported"], 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Issue #1234: a develop-settings table past the old 256 MiB per-table cap still imports its
+    /// edits. Five 60 MiB rows (a big zero `digest` blob each, stored in sparse overflow pages)
+    /// make a 300 MiB table in a file that takes about 20 MiB of disk.
+    #[cfg(unix)]
+    #[test]
+    fn develop_settings_past_the_old_table_cap_import_their_edits() {
+        use SqlValue::{Integer as I, Null as N, Text as T};
+        use std::io::{Seek, SeekFrom, Write};
+        const PAGE: usize = 65536;
+        const ROWS: usize = 5;
+        // SQLite file format §1.6: a payload of P bytes keeps K = M + (P − M) mod (U − 4) bytes in its
+        // cell (M = (U − 12) × 32 / 255 − 23); choose P so K = M and the rows share one leaf page.
+        let min_local = (PAGE - 12) * 32 / 255 - 23;
+        let per_page = PAGE - 4;
+        let overflow_pages = 960;
+        let payload_len = min_local + overflow_pages * per_page;
+        let settings = "s = { Exposure2012 = 1.25 }";
+        // record: header, then id (NULL alias), image (8-byte int), text, then the zero blob
+        let prefix = |image: i64, blob: usize| {
+            let mut header = vec![0];
+            header.push(6);
+            header.extend(varint(13 + 2 * settings.len() as u64));
+            header.extend(varint(12 + 2 * blob as u64));
+            let mut out = varint(1 + header.len() as u64);
+            out.extend(header);
+            out.extend(image.to_be_bytes());
+            out.extend(settings.as_bytes());
+            out
+        };
+        let blob = payload_len - prefix(0, payload_len).len();
+        assert_eq!(prefix(0, blob).len() + blob, payload_len);
+        assert!(payload_len * ROWS > 256 << 20 && payload_len <= 64 << 20);
+
+        // pages 1–5 are the schema and the four photo tables; 6 is the develop leaf
+        let mut tables = photo_tables(("/catalog/", ""));
+        tables.push(("Adobe_imageDevelopSettings", DEVELOP_COLUMNS, vec![N, I(1), T(String::new()), N]));
+        let mut file = catalog_pages(&tables, PAGE, None);
+        file[5 * PAGE..].fill(0);
+        // the develop leaf: ROWS cells, the last for image 1 (the catalog's photo) so that it lies
+        // past the old cap, each with its own overflow chain after page 6
+        let leaf = 5 * PAGE;
+        file[leaf] = 0x0d;
+        file[leaf + 3..leaf + 5].copy_from_slice(&(ROWS as u16).to_be_bytes());
+        let mut end = PAGE;
+        let mut chains = Vec::new();
+        for row in 0..ROWS {
+            let first = 7 + row * overflow_pages;
+            let mut record = prefix((ROWS - row) as i64, blob);
+            record.resize(min_local, 0);
+            let mut cell = varint(payload_len as u64);
+            cell.extend(varint(row as u64 + 1));
+            cell.extend(record);
+            cell.extend((first as u32).to_be_bytes());
+            end -= cell.len();
+            file[leaf + end..leaf + end + cell.len()].copy_from_slice(&cell);
+            file[leaf + 8 + 2 * row..leaf + 10 + 2 * row].copy_from_slice(&(end as u16).to_be_bytes());
+            chains.push(first);
+        }
+        let pages = 6 + ROWS * overflow_pages;
+
+        let dir = std::env::temp_dir().join(format!("lightcraft-develop-large-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("catalog.lrcat");
+        let mut out = std::fs::File::create(&path).unwrap();
+        out.write_all(&file).unwrap();
+        out.set_len((pages * PAGE) as u64).unwrap();
+        // only the overflow pages' next-page numbers are written; their payload stays a hole
+        for first in chains {
+            for page in first..first + overflow_pages - 1 {
+                out.seek(SeekFrom::Start(((page - 1) * PAGE) as u64)).unwrap();
+                out.write_all(&(page as u32 + 1).to_be_bytes()).unwrap();
+            }
+        }
+        drop(out);
+        let catalog = read(&path).unwrap();
+        assert_eq!(catalog.edits_not_imported, 0);
+        assert!(catalog.warnings.is_empty(), "{:?}", catalog.warnings);
+        assert_eq!(catalog.photos[0].settings, settings);
+        let mut session = crate::Session::new();
+        let report = session.execute("library.importLightroom", &json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(report["editsNotImported"], 0);
+        assert_eq!(session.catalog.photos().next().unwrap().develop.light.exposure, 1.25);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// History and snapshots are streamed and kept up to a budget; past it they are counted, not
+    /// held, and the import goes on.
+    #[test]
+    fn history_past_its_budget_is_counted_not_kept() {
+        use SqlValue::{Integer as I, Null as N, Text as T};
+        let mut tables = photo_tables(("/catalog/", ""));
+        tables.push((
+            "Adobe_libraryImageDevelopHistoryStep",
+            "id_local INTEGER PRIMARY KEY, image, name, text",
+            vec![N, I(1), T("Crop".into()), T("s = {}".into())],
+        ));
+        let path = std::env::temp_dir().join(format!("lightcraft-history-budget-{}.lrcat", std::process::id()));
+        std::fs::write(&path, native_catalog(&tables)).unwrap();
+        let catalog = read(&path).unwrap();
+        assert_eq!(catalog.photos[0].history.len(), 1);
+        assert_eq!(text(&catalog.photos[0].history[0], "name"), "Crop");
+        let main = FileSource::open(&path).unwrap();
+        let db = Database::open_file_with_wal(main, &[]).unwrap();
+        let cancel = AtomicBool::new(false);
+        let reader = Reader { tables: db.live_tables().unwrap(), db, cancel: &cancel };
+        let mut warnings = Vec::new();
+        let mut budget = 10;
+        let kept = reader.grouped_rows("Adobe_libraryImageDevelopHistoryStep", &mut warnings, &mut budget).unwrap();
+        assert!(kept.is_empty());
+        assert!(warnings[0].contains("1 more are not archived"), "{warnings:?}");
+        std::fs::remove_file(path).unwrap();
+    }
+
     #[test]
     fn oversized_optional_table_warns_and_is_skipped() {
         let mut main = vec![0u8; 2 * 512];
@@ -1537,10 +1798,14 @@ mod tests {
         page[8..10].copy_from_slice(&u16::try_from(start).unwrap_or(0).to_be_bytes());
         page[5..7].copy_from_slice(&u16::try_from(start).unwrap_or(0).to_be_bytes());
         let db = Database::open_with_wal(main, &[]).unwrap();
-        let reader =
-            Reader { db, tables: vec![LiveTable { name: "optional_history".into(), rootpage: 2, column_names: Some(vec!["payload".into()]) }] };
+        let cancel = AtomicBool::new(false);
+        let reader = Reader {
+            db,
+            tables: vec![LiveTable { name: "optional_history".into(), rootpage: 2, column_names: Some(vec!["payload".into()]) }],
+            cancel: &cancel,
+        };
         let mut warnings = Vec::new();
-        let rows = reader.optional_table("optional_history", &mut warnings).unwrap();
+        let rows = reader.optional_rows("optional_history", &mut warnings).unwrap();
         assert!(rows.is_empty());
         assert!(warnings.iter().any(|warning| warning.contains("optional_history")));
     }
