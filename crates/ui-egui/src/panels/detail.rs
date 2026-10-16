@@ -145,6 +145,21 @@ pub(crate) fn fit_texture_rect(area: Rect, size: [usize; 2]) -> Rect {
     Rect::from_center_size(area.center(), vec2(w * scale, h * scale))
 }
 
+/// `rect` moved onto whole physical pixels, at exactly the texture's size, when the texture is
+/// already the size it is drawn at (within half a pixel), as a display-fitted render at Fit is: centred
+/// on a fractional position, the GPU's bilinear filter would average every screen pixel with its
+/// neighbour (the 100 % view does the same in [`fit_rect`]). Textures of other sizes are left to
+/// the sampler.
+pub(crate) fn snap_fit_rect(rect: Rect, size: [usize; 2], ppp: f32) -> Rect {
+    let ppp = if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 };
+    let (w, h) = (size[0] as f32, size[1] as f32);
+    if (rect.width() * ppp - w).abs() > 0.5 || (rect.height() * ppp - h).abs() > 0.5 {
+        return rect;
+    }
+    let snap = |v: f32| (v * ppp).round() / ppp;
+    Rect::from_min_size(pos2(snap(rect.min.x), snap(rect.min.y)), vec2(w / ppp, h / ppp))
+}
+
 /// Keep the viewport inside the photo; axes smaller than the viewport stay centred.
 fn bounded_pan(area: Rect, size: egui::Vec2, pan: (f32, f32)) -> (f32, f32) {
     let bound = |visible: f32, image: f32, centre: f32| {
@@ -563,13 +578,35 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if app.size_hold.holding(now) {
         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(crate::region::HOLD_SECS));
     }
-    let want = plan.main_edge;
-    let (rw, rh) = if aspect >= 1.0 { (want, (want as f32 / aspect) as usize) } else { ((want as f32 * aspect) as usize, want) };
+    // At rest the whole frame renders at no less than the preview source level: the source is then
+    // copied 1:1 (no resample in the pipeline, whose prefilter and bilinear pass soften detail near
+    // the output's limit) and shrunk once, by the Lanczos display fit below.
+    let want = if interacting {
+        plan.main_edge
+    } else {
+        // (a user's explicit Preview size below the preview level still caps it)
+        let limit = if app.ui.settings.preview_limit == 0 { usize::MAX } else { app.ui.settings.preview_limit as usize };
+        let floor = lightcraft_engine::SourceLevel::Preview.max_edge().min(limit).min(native_long);
+        plan.main_edge.max(floor).min(texture_side.max(crate::state::MIN_TEXTURE_SIDE))
+    };
+    // The short side is rounded, not truncated: a truncated box (2560 x 1706 for a 2560 x 1707
+    // source) made the render a slightly anisotropic resample of its source, a 2-tap blur along
+    // one axis only. A box that matches the source to rounding is rendered at exactly its size.
+    let short = |e: usize, a: f32| ((e as f32 / a).round() as usize).max(1);
+    let (rw, rh) = if aspect >= 1.0 { (want, short(want, aspect)) } else { (short(want, 1.0 / aspect), want) };
     // hover and before renders are stand-ins: the preview size is plenty and keeps them cheap
     let se = app.ui.settings.stand_in_edge(want, texture_side);
-    let (sw, sh) = if aspect >= 1.0 { (se, (se as f32 / aspect) as usize) } else { ((se as f32 * aspect) as usize, se) };
+    let (sw, sh) = if aspect >= 1.0 { (se, short(se, aspect)) } else { (short(se, 1.0 / aspect), se) };
     if let Some(job) = app.session.loupe_job(id, rw.max(8), rh.max(8), !crop_tool) {
         let job = if interacting { job.draft() } else { job };
+        // at rest the render is shrunk to exactly the size it is drawn at with a Lanczos filter on
+        // the worker, so the window draws it texel for texel instead of shrinking it with 2-tap
+        // sampling (the render is up to a 64 px step larger, or the preview level)
+        let job = if interacting {
+            job
+        } else {
+            job.with_display_fit((target_rect.width() * ppp).round() as usize, (target_rect.height() * ppp).round() as usize)
+        };
         let job = job.with_overlay(overlay).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
         let job = job.with_hidden_grading(app.ui.grading_hidden_for(id));
         app.renderer.request(Slot::Main, job, 100);
@@ -625,6 +662,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if (split || show_before || split_view)
         && let Some(job) = app.session.render_job(id, sw.max(8), sh.max(8), true, !crop_tool)
     {
+        // (the same display fit as the After view, so both panes are the same texture size)
+        let job = if interacting {
+            job
+        } else {
+            job.with_display_fit((target_rect.width() * ppp).round() as usize, (target_rect.height() * ppp).round() as usize)
+        };
         app.renderer.request(Slot::Before, job, 90);
     }
     // zoomed past what the whole-frame render holds: also render the part on screen, at no more
@@ -692,7 +735,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         } else {
             return "none";
         };
-        let image_rect = fit_texture_rect(r, tex.size);
+        let image_rect = snap_fit_rect(fit_texture_rect(r, tex.size), tex.size, ppp);
         p.with_clip_rect(clip).image(tex.tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         what
     };
@@ -3047,6 +3090,27 @@ mod pen_tests {
         assert_eq!(pen_force(&i), Some(0.3), "the latest usable force");
         i.events = vec![touch(Some(4.0))];
         assert_eq!(pen_force(&i), Some(1.0));
+    }
+}
+
+#[cfg(test)]
+mod snap_tests {
+    use super::*;
+
+    /// A texture drawn at its own size lands on whole physical pixels at exactly that size (no
+    /// bilinear blur); a texture of another size (zoomed, a stand-in) keeps the rect it was given.
+    #[test]
+    fn a_fitted_texture_is_drawn_on_whole_pixels_at_its_own_size() {
+        let r = Rect::from_min_size(pos2(394.3, 130.5), vec2(1088.4, 720.2));
+        let s = snap_fit_rect(r, [1088, 720], 1.0);
+        assert_eq!((s.min.x, s.min.y, s.width(), s.height()), (394.0, 131.0, 1088.0, 720.0));
+        // at 1.5 points per pixel the snap is to physical pixels and the size stays in points
+        let hi = snap_fit_rect(Rect::from_min_size(pos2(100.3, 50.2), vec2(725.4, 480.1)), [1088, 720], 1.5);
+        assert!(((hi.min.x * 1.5).fract()).abs() < 1e-3 && (hi.width() - 1088.0 / 1.5).abs() < 1e-3, "{hi:?}");
+        let other = snap_fit_rect(r, [2560, 1694], 1.0);
+        assert_eq!(other, r);
+        let bad = snap_fit_rect(r, [1088, 720], f32::NAN);
+        assert_eq!((bad.width(), bad.height()), (1088.0, 720.0));
     }
 }
 

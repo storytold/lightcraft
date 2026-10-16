@@ -129,7 +129,9 @@ pub(crate) fn finish(format: Format, raw: Raw, meta: Meta, source_dims: (u32, u3
     let (image, alpha) = match opts.max_size {
         Some((mw, mh)) if (image.width as u32 > mw || image.height as u32 > mh) && mw > 0 && mh > 0 => {
             let factor = (image.width as f64 / mw as f64).max(image.height as f64 / mh as f64);
-            let f = if factor >= 2.0 { Filter::Box } else { Filter::Mitchell };
+            // (Lanczos at 2:1 and more as well: a box average there halves the contrast of
+            // detail near the output's resolution limit and aliases what is finer)
+            let f = if factor >= 2.0 { Filter::Lanczos3 } else { Filter::Mitchell };
             let img = fit(&image, mw as usize, mh as usize, f);
             let alpha = alpha.map(|a| fit(&a, mw as usize, mh as usize, f));
             (img, alpha)
