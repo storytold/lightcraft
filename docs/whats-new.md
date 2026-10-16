@@ -2,6 +2,18 @@
 
 ## 2026-10-14
 
+### Lightroom catalog import
+- Large catalogs import several times faster: originals are described from their headers, so a raw's pixel data is
+  never read (a DNG or CR3 from 2–3 % of its bytes; a raw shown from its embedded preview with that preview). A
+  38,500-photo catalog with 1.1 TB of originals on a USB SSD took about 2 minutes instead of about half an hour.
+  NEF, ORF, PEF, ARW6 and JPEG files are still read whole.
+- Those headers come in a few larger reads instead of many small ones, which matters on a network share or hard
+  disk, where each read waits for a round trip: a tiled DNG from Adobe's converter took up to 240 reads, now 2; a RAF
+  7, now 4.
+- Photos appear batch by batch while the catalog is imported. ✕ keeps what was added; importing the catalog again
+  continues and adds the collections.
+- Adding the photos no longer pauses the window: XMP and develop settings are prepared in the background.
+
 ### Lightroom radial masks on the right side
 - Radial masks brought over from Lightroom Classic (catalog import, XMP sidecars, edits inside DNGs and presets) now
   apply their effect inside the circle, as Lightroom does, instead of outside it (issue #1815). A mask inverted in
