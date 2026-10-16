@@ -134,6 +134,10 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         s.lut_profiles.push(LutProfile { id: id.clone(), name: display.clone(), group: group.clone(), file });
         imported.push(json!({"id": id, "name": display, "group": group}));
     }
+    // camera profiles (.dcp) among them
+    let (cameras, camera_failed) = super::dcp_profiles::import_files(s, &paths)?;
+    imported.extend(cameras);
+    failed.extend(camera_failed);
     s.save_prefs()?;
     // presets that name these profiles use them now
     crate::profile_refs::refresh(s);
@@ -147,12 +151,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import Profiles",
             [],
             None,
-            "{paths: [.cube file, folder or .zip]} — 3D LUTs become creative profiles (Amount 0–200 %; rendered on the CPU) in the profile browser's groups (folder / zip name, else Imported) → {imported: [{id, name, group}], failed}",
+            "{paths: [.cube / .dcp file, folder or .zip]} — 3D LUTs become creative profiles (Amount 0–200 %; rendered on the CPU) in the profile browser's groups (folder / zip name, else Imported); DNG camera profiles (.dcp, the user's own) become camera profiles (dcp: ids, group Camera Profiles) that replace a raw file's colour model when it is decoded → {imported: [{id, name, group | cameraModel}], failed}",
             always,
             import
         ),
-        cmd!("profile.deleteImported", "Delete Imported Profile", [], None, "{id: lut:…}", always, |s, p| {
+        cmd!("profile.deleteImported", "Delete Imported Profile", [], None, "{id: lut:… | dcp:…}", always, |s, p| {
             let id = str_param(p, "id").ok_or_else(|| bad("profile.deleteImported", "missing id"))?.to_string();
+            if super::dcp_profiles::is_dcp_id(&id) {
+                return s.execute("profile.deleteCamera", p);
+            }
             let Some(i) = s.lut_profiles.iter().position(|x| x.id == id) else {
                 return Err(bad("profile.deleteImported", format!("no imported profile `{id}`")));
             };

@@ -1085,7 +1085,7 @@ mod thumbnail_tests {
     #[test]
     fn a_fast_draft_is_drawn_in_the_frame_that_asked_for_it() {
         let mut s = Session::new();
-        s.media.file_loader = Some(Arc::new(|_, _| Ok((lightcraft_raster::Rgb32f::new(8, 8), Default::default()))));
+        s.media.file_loader = Some(Arc::new(|_, _, _| Ok((lightcraft_raster::Rgb32f::new(8, 8), Default::default()))));
         s.catalog.apply(Op::AddPhoto { photo: Box::new((*photo()).clone()) }).unwrap();
         let mut r = Renderer::with_worker_threads(1);
         let ctx = egui::Context::default();
@@ -1123,7 +1123,7 @@ mod thumbnail_tests {
         fixture_with(Session::new(), (*photo()).clone())
     }
     fn fixture_with(mut s: Session, photo: Photo) -> (crate::LightcraftApp, std::rc::Rc<std::cell::RefCell<Work>>, egui::Context) {
-        s.media.file_loader = Some(Arc::new(|_, _| {
+        s.media.file_loader = Some(Arc::new(|_, _, _| {
             let mut image = lightcraft_raster::Rgb32f::new(8, 8);
             image.data.fill([0.3, 0.2, 0.1]);
             Ok((image, Default::default()))
@@ -1234,7 +1234,7 @@ mod thumbnail_tests {
     #[test]
     fn a_panicking_render_is_a_failure_not_a_dead_worker() {
         let (mut app, _, ctx) = fixture_with(Session::new(), (*photo()).clone());
-        app.session.media.file_loader = Some(Arc::new(|_, _| panic!("decoder bug")));
+        app.session.media.file_loader = Some(Arc::new(|_, _, _| panic!("decoder bug")));
         app.renderer.offload = None; // the real job pool
         let slot = Slot::Thumb(PhotoId(1));
         let ask = |app: &mut crate::LightcraftApp| {
@@ -1402,7 +1402,7 @@ mod thumbnail_tests {
         let photo = app.session.catalog.photo(PhotoId(1)).unwrap().as_ref().clone();
         app.session = lightcraft_engine::Session::new();
         app.session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
-        app.session.media.file_loader = Some(Arc::new(|_, _| {
+        app.session.media.file_loader = Some(Arc::new(|_, _, _| {
             let mut image = lightcraft_raster::Rgb32f::new(8, 8);
             image.data.fill([0.1, 0.2, 0.9]);
             Ok((image, Default::default()))

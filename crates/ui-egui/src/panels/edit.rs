@@ -470,16 +470,20 @@ fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
         });
         register(ui.ctx(), format!("profileMenu:groupMenu:{g}"), r.response.rect);
     }
-    // imported LUT profile groups
-    let mut lut_groups: Vec<String> = app.session.lut_profiles.iter().map(|p| p.group.clone()).collect();
-    lut_groups.sort_unstable();
-    lut_groups.dedup();
+    // imported profile groups: LUT folders, then camera profiles
+    let imported = app.session.imported_profiles();
+    let mut lut_groups: Vec<String> = Vec::new();
+    for (_, _, g) in &imported {
+        if !lut_groups.contains(g) {
+            lut_groups.push(g.clone());
+        }
+    }
     for g in &lut_groups {
         // a folder's name as it is, and its own widget id even when it matches a built-in group
         let r = crate::widgets::menu_button(ui, g.as_str(), |ui| {
             ui.set_min_width(170.0);
-            for p in app.session.lut_profiles.iter().filter(|p| &p.group == g) {
-                item(ui, "group", &p.id, &p.name, &mut pick);
+            for (id, name, _) in imported.iter().filter(|p| &p.2 == g) {
+                item(ui, "group", id, name, &mut pick);
             }
         });
         register(ui.ctx(), format!("profileMenu:lutGroupMenu:{g}"), r.response.rect);

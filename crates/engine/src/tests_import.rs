@@ -1334,9 +1334,9 @@ fn look_loader(
     tone: lightcraft_pipeline::tone::CameraTone,
     calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 ) -> crate::media::FileLoader {
-    std::sync::Arc::new(move |path, max_edge| {
+    std::sync::Arc::new(move |path, max_edge, dcp| {
         calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let (img, mut info) = plain(path, max_edge)?;
+        let (img, mut info) = plain(path, max_edge, dcp)?;
         info.camera_tone = Some(tone);
         Ok((img, info))
     })

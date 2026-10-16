@@ -225,6 +225,8 @@ struct PrefsFile {
     label_sets: Vec<crate::cmd::manage::LabelSet>,
     /// Imported LUT profiles.
     lut_profiles: Vec<crate::cmd::lut_profiles::LutProfile>,
+    /// Imported camera profiles (`.dcp`).
+    dcp_profiles: Vec<crate::cmd::dcp_profiles::DcpEntry>,
     /// Keyword sets, the one in use, recent keywords.
     keyword_sets: Vec<crate::cmd::keywords::KeywordSet>,
     keyword_set: Option<String>,
@@ -502,6 +504,8 @@ impl Session {
         self.label_sets = prefs.label_sets;
         self.lut_profiles = prefs.lut_profiles;
         crate::cmd::lut_profiles::register_all(self);
+        self.dcp_profiles = prefs.dcp_profiles;
+        crate::cmd::dcp_profiles::register_all(self);
         self.keyword_sets = prefs.keyword_sets;
         self.keyword_set = prefs.keyword_set;
         self.recent_keywords = prefs.recent_keywords;
@@ -755,6 +759,7 @@ impl Session {
             mask_tool_effects: self.mask_tool_effects.clone(),
             label_sets: self.label_sets.clone(),
             lut_profiles: self.lut_profiles.clone(),
+            dcp_profiles: self.dcp_profiles.clone(),
             keyword_sets: self.keyword_sets.clone(),
             keyword_set: self.keyword_set.clone(),
             recent_keywords: self.recent_keywords.clone(),

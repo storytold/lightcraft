@@ -149,7 +149,7 @@ fn main() {
             }
             println!("  {:<36} {}", "load_bytes(2560):", best(n, || drop(lightcraft_engine::files::load_bytes(&bytes, 2560).expect("load"))));
             let (loader, _) = lightcraft_engine::files::fs_hooks();
-            println!("  {:<36} {}", "fs loader (2560, read+load):", best(n, || drop(loader(path, 2560).expect("load"))));
+            println!("  {:<36} {}", "fs loader (2560, read+load):", best(n, || drop(loader(path, 2560, None).expect("load"))));
         }
         return;
     }

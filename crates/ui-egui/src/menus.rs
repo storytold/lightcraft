@@ -1789,12 +1789,12 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             if paths.is_empty() {
                 return Some(Ok(Value::Null));
             }
-            // .cube LUTs (and those inside zips / folders) become profiles
+            // .cube LUTs (and those inside zips / folders) become profiles, .dcp files camera profiles
             let lut_paths: Vec<&String> = paths
                 .iter()
                 .filter(|p| {
                     let l = p.to_ascii_lowercase();
-                    l.ends_with(".cube") || l.ends_with(".zip") || std::path::Path::new(p.as_str()).is_dir()
+                    l.ends_with(".cube") || l.ends_with(".dcp") || l.ends_with(".zip") || std::path::Path::new(p.as_str()).is_dir()
                 })
                 .collect();
             // one toast for both halves (a second toast would replace the first)
@@ -1826,7 +1826,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                     }
                 }
             }
-            let preset_paths: Vec<&String> = paths.iter().filter(|p| !p.to_ascii_lowercase().ends_with(".cube")).collect();
+            // (.dcp camera profiles went to profile.import above)
+            let preset_paths: Vec<&String> = paths
+                .iter()
+                .filter(|p| {
+                    let l = p.to_ascii_lowercase();
+                    !l.ends_with(".cube") && !l.ends_with(".dcp")
+                })
+                .collect();
             let r = if preset_paths.is_empty() {
                 Ok(json!({"imported": [], "failed": [], "skipped": 0}))
             } else {

@@ -212,7 +212,10 @@ struct SmartCounts {
 fn original_only(source: crate::media::SourceRef) -> Option<crate::media::SourceRef> {
     use crate::media::SourceRef;
     match source {
-        SourceRef::File { path, max_edge, loader, denoise, .. } => Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise }),
+        // (a smart preview keeps the file's own colour: an imported camera profile is applied when the original is read)
+        SourceRef::File { path, max_edge, loader, denoise, .. } => {
+            Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, camera_profile: None })
+        }
         SourceRef::Loaded(d) if d.info.is_some() => Some(SourceRef::Loaded(d)),
         _ => None,
     }
@@ -548,7 +551,14 @@ mod tests {
         let mut jobs = jobs_for(&mut s, id, Some(512));
         assert_eq!(jobs.len(), 2, "view and thumbnail");
         assert!(jobs[0].view_cache.is_some(), "the view renders first");
-        jobs[1].source = SourceRef::File { path: "/nonexistent/photo.arw".into(), max_edge: 512, loader: None, fallback: None, denoise: None };
+        jobs[1].source = SourceRef::File {
+            path: "/nonexistent/photo.arw".into(),
+            max_edge: 512,
+            loader: None,
+            fallback: None,
+            denoise: None,
+            camera_profile: None,
+        };
         assert!(run_photo(jobs), "the thumbnail rendered from the view's decoded source");
     }
 

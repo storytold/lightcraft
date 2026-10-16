@@ -473,7 +473,10 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!("develop.profile", "Set Profile", [], None, "{id: profile id (see profiles.list), amount?: 0..200}", has_active, |s, p| {
             let id = str_param(p, "id").ok_or_else(|| bad("develop.profile", "missing id"))?.to_string();
-            if !crate::presets::PROFILES.iter().any(|x| x.id == id) && !s.lut_profiles.iter().any(|x| x.id == id) {
+            if !crate::presets::PROFILES.iter().any(|x| x.id == id)
+                && !s.lut_profiles.iter().any(|x| x.id == id)
+                && !s.dcp_profiles.iter().any(|x| x.id == id)
+            {
                 return Err(bad("develop.profile", format!("unknown profile `{id}`")));
             }
             edit(s, "develop.profile", "Profile", |d| {
