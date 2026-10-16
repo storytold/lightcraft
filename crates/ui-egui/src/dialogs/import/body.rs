@@ -2,6 +2,7 @@ use serde_json::json;
 
 use super::tags::{tag_field_width, tag_help, tag_toggle, unknown_tags_warning};
 use super::{Color32, ImportDialog, LightcraftApp, Rect, Sense, Slot, Stroke, StrokeKind, Tokens, Value, Vec2, pos2, register, vec2};
+use crate::menu_item::MenuItem;
 
 /// The review dialog's first size (points). It can be resized; the photo grid takes the height.
 pub(crate) const DIALOG_SIZE: [f32; 2] = [960.0, 720.0];

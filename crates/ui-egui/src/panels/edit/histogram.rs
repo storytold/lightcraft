@@ -1,6 +1,5 @@
 use super::hdr_flow::{LayoutFlow, hdr_histogram_key, sdr_histogram_key};
-#[cfg(test)]
-use super::sliders::reset_tip;
+use crate::menu_item::MenuItem;
 use super::{
     Align2, Color32, Histogram, Icon, LightcraftApp, PhotoId, Rect, RichText, RightPanel, Sense, Slot, Stroke, Tokens, divider, json, paint, pos2,
     register, vec2,
@@ -296,6 +295,7 @@ fn clip_button_colors(t: &Tokens, active: bool, hovered: bool, clipped: bool) ->
 
 #[cfg(test)]
 mod tests {
+    use super::super::sliders::reset_tip;
     use super::*;
 
     /// The two clipping chevrons were a fixed dark-grey tile (`from_gray(60)`) with a dimmed mark: on

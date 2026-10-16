@@ -1,3 +1,4 @@
+use crate::menu_item::MenuItem;
 use super::histogram::preview_histogram;
 use super::sliders::control;
 use super::{
@@ -412,15 +413,16 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
                         user_seen = true;
                         ui.separator();
                     }
-                    let r = ui.selectable_label(current.as_deref() == Some(p.name.as_str()), crate::i18n::builtin_label(&p.name, p.builtin));
-                    register(ui, format!("curvePreset:{}", p.name), r.rect);
+                    let label = crate::i18n::builtin_label(&p.name, p.builtin);
+                    let r =
+                        MenuItem::new(label).checked(current.as_deref() == Some(p.name.as_str())).widget(format!("curvePreset:{}", p.name)).show(ui);
                     if r.clicked() {
                         let _ = app.run("curve.applyPreset", json!({"name": p.name}));
                         ui.close();
                     }
                     if !p.builtin {
                         crate::widgets::context_menu(&r, |ui| {
-                            if ui.button(crate::i18n::tr("Delete Preset")).clicked() {
+                            if MenuItem::new(crate::i18n::tr("Delete Preset")).show(ui).clicked() {
                                 let _ = app.run("curve.deletePreset", json!({"name": p.name}));
                                 ui.close();
                             }
@@ -429,18 +431,22 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
                 }
                 ui.separator();
                 let shaped = current.as_deref() != Some("Linear");
-                let r = ui.add_enabled(shaped, egui::Button::new(crate::i18n::tr("Save Point Curve…")));
-                register(ui, "curvePresetMenu:save", r.rect);
+                let r = MenuItem::new(crate::i18n::tr("Save Point Curve…")).check_slot(true).enabled(shaped).widget("curvePresetMenu:save").show(ui);
                 if r.clicked() {
                     crate::panels::dialogs::prompt(app, "Save Point Curve Preset", "Preset name", "", "curve.savePreset", json!({}), "name");
                     ui.close();
                 }
-                if ui.add_enabled(app.services.pick_curve_preset_files.is_some(), egui::Button::new(crate::i18n::tr("Import Presets…"))).clicked() {
+                if MenuItem::new(crate::i18n::tr("Import Presets…"))
+                    .check_slot(true)
+                    .enabled(app.services.pick_curve_preset_files.is_some())
+                    .show(ui)
+                    .clicked()
+                {
                     let _ = app.run("file.importCurvePresets", json!({}));
                     ui.close();
                 }
                 let can_export = app.services.save_curve_preset_file.is_some() && !app.session.curve_presets.is_empty();
-                if ui.add_enabled(can_export, egui::Button::new(crate::i18n::tr("Export Presets…"))).clicked() {
+                if MenuItem::new(crate::i18n::tr("Export Presets…")).check_slot(true).enabled(can_export).show(ui).clicked() {
                     let _ = app.run("file.exportCurvePresets", json!({}));
                     ui.close();
                 }
@@ -467,14 +473,12 @@ fn curve_reset_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, ch: &str) {
     } else {
         crate::i18n::tr_format!("Reset {} Channel", crate::i18n::tr(channel_label(ch)))
     };
-    let r = ui.button(label);
-    register(ui, "curveMenu:resetChannel", r.rect);
+    let r = MenuItem::new(&label).widget("curveMenu:resetChannel").show(ui);
     if r.clicked() {
         let _ = app.run("curve.reset", json!({"channel": ch}));
         ui.close();
     }
-    let r = ui.button(crate::i18n::tr("Reset All Curves"));
-    register(ui, "curveMenu:resetAll", r.rect);
+    let r = MenuItem::new(crate::i18n::tr("Reset All Curves")).widget("curveMenu:resetAll").show(ui);
     if r.clicked() {
         let _ = app.run("curve.reset", json!({"channel": "all"}));
         ui.close();

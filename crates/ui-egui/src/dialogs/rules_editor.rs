@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use crate::album_picker::{AlbumEntry, AlbumPicker};
 use crate::date_picker::{DatePicker, PickedDate};
+use crate::menu_item::MenuItem;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -245,8 +246,8 @@ fn field_menu(ui: &mut egui::Ui, salt: &str, field: &mut String, op: &mut String
     let r = crate::widgets::combo_box(format!("{salt}-field")).width(150.0).height(400.0).selected_text(crate::i18n::tr(&label)).show_ui(ui, |ui| {
         let mut pick = None;
         let mut item = |ui: &mut egui::Ui, id: &'static str| {
-            let r = ui.selectable_label(current == id, crate::i18n::tr(field_label(id).unwrap_or(id)));
-            register(ui, format!("ruleFieldItem:{id}:{salt}"), r.rect);
+            let label = crate::i18n::tr(field_label(id).unwrap_or(id));
+            let r = MenuItem::new(label).checked(current == id).widget(format!("ruleFieldItem:{id}:{salt}")).show(ui);
             if r.clicked() {
                 pick = Some(id);
                 ui.close();
@@ -256,14 +257,9 @@ fn field_menu(ui: &mut egui::Ui, salt: &str, field: &mut String, op: &mut String
             item(ui, id);
         }
         ui.separator();
-        // submenu rows look like the items above them; the one holding the current field stands out
-        // (a transparent frame, not none: a frameless button drops its padding and hover fill; the
-        // list's style already drops the resting border)
-        ui.visuals_mut().widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+        // the submenu holding the current field is checked
         for (group, ids) in FIELD_GROUPS {
-            let text = RichText::new(crate::i18n::tr(group));
-            let text = if ids.contains(&current.as_str()) { text.strong() } else { text };
-            let r = crate::widgets::menu_button(ui, text, |ui| {
+            let r = MenuItem::new(crate::i18n::tr(group)).checked(ids.contains(&current.as_str())).submenu(ui, |ui| {
                 for id in *ids {
                     item(ui, id);
                 }

@@ -4,6 +4,7 @@ use lightcraft_develop::{ControlSpec, Section, SettingsGroup, Track};
 use serde_json::json;
 
 use crate::LightcraftApp;
+use crate::menu_item::MenuItem;
 use crate::state::Dialog;
 use crate::theme::Tokens;
 use lightcraft_engine::export::{ExportOptions, Resize};

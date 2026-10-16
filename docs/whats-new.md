@@ -215,7 +215,6 @@
   `folder.rename` and `folder.move` commands now refuse the home folder and its Pictures, Desktop and Downloads too,
   so a script or an agent can't do it either.
 
-
 ## 2026-10-27
 
 ### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin
@@ -313,7 +312,6 @@
   declared totals agree, and every APP2 segment is complete. Reordered valid chunks still work. An invalid
   sequence uses the existing unsupported-profile sRGB fallback, including when the JPEG is a raw preview.
 
-
 ## 2026-10-25
 
 ### `>=` and `<=` work in the search box
@@ -343,7 +341,6 @@
   a second. On a Mac the window also holds one drawable less: its width × height × 4 bytes, 15–22 MB for a
   1200–1500-point-wide window on a Retina display.
 
-
 ## 2026-10-24
 
 ### AI Denoise follows the photo's real noise
@@ -363,6 +360,15 @@
   it runs there: on an RTX 4080 SUPER a photo's tiles go about 6 to 10 times faster, with the same picture (Settings ▸ AI
   Denoise ▸ Run on chooses; Automatic times both). Photos
   denoised before are denoised again the next time they are needed. See [AI Denoise](denoise.md).
+
+### Menus look the same everywhere
+- Every menu row, in the menu bar, in right-click menus and in the dropdowns of the panels, now has one height, one
+  hover look and one check mark column, and shows its shortcut at the right edge as the menu bar does. Choices that
+  are on show a check mark that screen readers announce as checked, and a row that is off can't be chosen.
+- Help ▸ Keyboard Shortcuts shows the fixed keys on keycaps.
+- The tooltips of the tool strip, the bottom bar's view buttons, the top bar's icons and the mask overlay buttons
+  name the key their command has now, so a key you remapped shows as remapped. The tool strip's History & Activity
+  button no longer shows a Y it never had.
 
 ### A right-click on a text field while you carry photos opens no menu
 - While you drag photos from the grid, a right-click on a text field, such as the search box, opens no Cut, Copy and
@@ -407,7 +413,6 @@
   names in `dc:subject` and the paths in `lr:hierarchicalSubject`, as Lightroom Classic writes them, and LightCraft
   reads them back as the same keywords. A sidecar written by an earlier version is put right the next time it is
   saved.
-
 
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
@@ -520,7 +525,6 @@
   noise looks like grain. Edges are as sharp as before. Thumbnails and previews that LightCraft rendered from a raw
   are redrawn; the camera's own embedded preview, shown for an unedited raw until its render is ready, is unchanged.
 
-
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
   keyboard focus when the dialog opens, and Tab now moves on to the check box, Cancel and OK (Shift+Tab goes back).
@@ -582,7 +586,6 @@
   import adds some, others are removed, moved to Recently Deleted or relinked), the answer leaves out the photos that
   no longer apply, a photo added meanwhile is not part of that check, and the answer is not kept for a later request.
 
-
 ### Choose where a Lightroom catalog goes
 - File ▸ Import Lightroom Catalog… now asks first: merge the catalog's photos, collections and edits into the
   library open now, or create a new library for them, named after the catalog and placed next to the open library
@@ -640,7 +643,6 @@
   English before. So did "The download failed", shown under a denoise or face recognition model's download when the
   download gives no reason.
 
-
 ## 2026-10-22
 
 ### Exports don't create a photo's sidecar
@@ -653,7 +655,6 @@
   the brush stroke you are painting is no longer drawn in the overlay colour while you hold the button, so the photo
   stays visible as you dodge and burn (issue #2549). The stroke's effect still appears when you let go. With the
   overlay shown, the stroke is tinted as before; a colour overlay at opacity 0 leaves it untinted too.
-
 
 ### Reliability
 - Opening a library no longer writes through a link left at the lock's owner note (`catalog.lock.owner`): the link
@@ -760,7 +761,6 @@
   Slideshow Export no longer say "1 photos" or "1 stacks". The Import review's Move button counts photos that are
   in Recently Deleted apart, since they are restored and their files stay where they are: "Move 2 Photos · Restore 1
   Photo".
-
 
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a

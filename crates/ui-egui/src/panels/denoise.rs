@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 
 use super::settings::{check, choices, heading, hint};
 use crate::LightcraftApp;
+use crate::menu_item::MenuItem;
 use crate::theme::Tokens;
 use crate::widgets::register;
 

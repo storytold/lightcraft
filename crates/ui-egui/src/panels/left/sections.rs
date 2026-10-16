@@ -1,3 +1,4 @@
+use crate::menu_item::MenuItem;
 use super::albums::top_level_drop_target;
 use super::rows::{ROW_HEIGHT, note_width};
 use super::{Align2, Icon, LightcraftApp, Rect, Sense, SidebarSection, Tokens, icon_button, json, paint, pos2, register, vec2};
@@ -315,14 +316,12 @@ fn new_keyword(app: &mut LightcraftApp, _ctx: &egui::Context) {
 pub(super) fn sections_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, on: Option<SidebarSection>) {
     let mut run = None;
     if let Some(section) = on {
-        let hide = ui.button(crate::i18n::tr("Hide This Section"));
-        register(ui, "sidebarMenu:hide", hide.rect);
+        let hide = MenuItem::new(crate::i18n::tr("Hide This Section")).widget("sidebarMenu:hide").show(ui);
         if hide.clicked() {
             run = Some(("view.sidebarSection", json!({"section": section.id(), "show": false})));
         }
         for (up, label, widget) in [(true, "Move Up", "sidebarMenu:moveUp"), (false, "Move Down", "sidebarMenu:moveDown")] {
-            let item = ui.add_enabled(app.ui.sidebar.can_move(section, up), egui::Button::new(crate::i18n::tr(label)));
-            register(ui, widget, item.rect);
+            let item = MenuItem::new(crate::i18n::tr(label)).enabled(app.ui.sidebar.can_move(section, up)).widget(widget).show(ui);
             if item.clicked() {
                 run = Some(("view.sidebarMoveSection", json!({"section": section.id(), "direction": if up { "up" } else { "down" }})));
             }
@@ -330,15 +329,13 @@ pub(super) fn sections_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, on: Opti
         ui.separator();
     }
     for s in app.ui.sidebar.sections().iter().filter(|s| s.id.available()) {
-        let shown = ui.selectable_label(!s.hidden, crate::i18n::tr(s.id.title()));
-        register(ui, format!("sidebarMenu:section:{}", s.id.id()), shown.rect);
+        let shown = MenuItem::new(crate::i18n::tr(s.id.title())).checked(!s.hidden).widget(format!("sidebarMenu:section:{}", s.id.id())).show(ui);
         if shown.clicked() {
             run = Some(("view.sidebarSection", json!({"section": s.id.id(), "show": s.hidden})));
         }
     }
     ui.separator();
-    let reset = ui.add_enabled(!app.ui.sidebar.is_default(), egui::Button::new(crate::i18n::tr("Reset Sidebar Sections")));
-    register(ui, "sidebarMenu:reset", reset.rect);
+    let reset = MenuItem::new(crate::i18n::tr("Reset Sidebar Sections")).enabled(!app.ui.sidebar.is_default()).widget("sidebarMenu:reset").show(ui);
     if reset.clicked() {
         run = Some(("view.sidebarReset", json!({})));
     }
@@ -352,10 +349,10 @@ pub(super) fn sections_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, on: Opti
 
 /// The menu of Albums' +: Create Album, Smart Album, Folder…
 fn new_album_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    if ui.button(crate::i18n::tr("Create Album…")).clicked() {
+    if MenuItem::new(crate::i18n::tr("Create Album…")).show(ui).clicked() {
         app.ui.dialog = Some(crate::state::Dialog::NewAlbum { name: String::new(), folder: false, parent: None, include_selected: true });
     }
-    if ui.button(crate::i18n::tr("Create Smart Album…")).clicked() {
+    if MenuItem::new(crate::i18n::tr("Create Smart Album…")).show(ui).clicked() {
         app.ui.dialog = Some(crate::state::Dialog::SmartRules {
             id: None,
             name: String::new(),
@@ -363,16 +360,16 @@ fn new_album_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             parent: None,
         });
     }
-    if ui.button(crate::i18n::tr("Create Smart Album from Filter…")).clicked() {
+    if MenuItem::new(crate::i18n::tr("Create Smart Album from Filter…")).show(ui).clicked() {
         app.ui.dialog = Some(crate::state::Dialog::NewSmartAlbum { name: String::new(), parent: None });
     }
-    if ui.button(crate::i18n::tr("Create Folder…")).clicked() {
+    if MenuItem::new(crate::i18n::tr("Create Folder…")).show(ui).clicked() {
         app.ui.dialog = Some(crate::state::Dialog::NewAlbum { name: String::new(), folder: true, parent: None, include_selected: false });
     }
     // only once the albums were put in an order by hand
     if app.session.catalog.album_children_are_ordered(None) {
         ui.separator();
-        if ui.button(crate::i18n::tr("Sort Albums A–Z")).on_hover_text(crate::i18n::tr("Go back to listing them by name")).clicked() {
+        if MenuItem::new(crate::i18n::tr("Sort Albums A–Z")).show(ui).on_hover_text(crate::i18n::tr("Go back to listing them by name")).clicked() {
             let _ = app.run("album.sort", json!({}));
         }
     }

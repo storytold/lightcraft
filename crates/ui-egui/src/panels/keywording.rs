@@ -6,6 +6,7 @@ use lightcraft_catalog::{Catalog, PhotoId};
 use serde_json::json;
 
 use crate::LightcraftApp;
+use crate::menu_item::MenuItem;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -146,11 +147,7 @@ fn remove(app: &mut LightcraftApp, ctx: &egui::Context, chip: &Chip) {
 /// A chip's menu: it acts on the selected photos (deleting a keyword from the whole library is the
 /// Keyword List's).
 fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, chip: &Chip) {
-    let item = |ui: &mut egui::Ui, id: &str, label: &str| {
-        let r = ui.button(label);
-        register(ui, format!("keywordChipMenu:{id}"), r.rect);
-        r.clicked()
-    };
+    let item = |ui: &mut egui::Ui, id: &str, label: &str| MenuItem::new(label).widget(format!("keywordChipMenu:{id}")).show(ui).clicked();
     if !chip.on_all() && item(ui, "add", crate::i18n::tr("Add to All Selected Photos")) {
         let _ = app.run("photo.setMeta", json!({"addKeywords": [chip.path]}));
     }

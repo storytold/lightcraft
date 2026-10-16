@@ -9,6 +9,7 @@ use super::edit::apply_slider_out;
 use super::right::header;
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
+use crate::menu_item::MenuItem;
 use crate::theme::Tokens;
 use crate::widgets::{divider, icon_button, one_line, register, slider, text_button};
 
@@ -196,16 +197,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.label(egui::RichText::new(crate::i18n::tr("Masks")).font(t.semibold(13.0)).color(t.text_label));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let on = app.ui.mask_overlay;
-                if icon_button(ui, "maskOverlay", Icon::Eye, vec2(24.0, 24.0), on, true, "Show overlay (O)").clicked() {
+                let mac = crate::kbd::is_mac(ui.ctx());
+                let overlay_tip = crate::kbd::tip_with_shortcut(crate::i18n::tr("Show overlay"), "view.maskOverlay", &app.ui.settings.keymap, mac);
+                if icon_button(ui, "maskOverlay", Icon::Eye, vec2(24.0, 24.0), on, true, &overlay_tip).clicked() {
                     app.ui.mask_overlay = !on;
                 }
                 let all = app.ui.mask_overlay_all;
-                let all_mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
-                let all_base = crate::i18n::tr("Show all overlays");
-                let all_tip = match crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "view.maskOverlayAll") {
-                    Some(sc) => format!("{all_base} ({})", crate::menubar::shortcut_text(sc, all_mac)),
-                    None => all_base.to_string(),
-                };
+                let all_tip =
+                    crate::kbd::tip_with_shortcut(crate::i18n::tr("Show all overlays"), "view.maskOverlayAll", &app.ui.settings.keymap, mac);
                 if icon_button(ui, "maskOverlayAll", Icon::Stack, vec2(24.0, 24.0), all, true, &all_tip).clicked() {
                     app.ui.mask_overlay_all = !all;
                 }
@@ -426,7 +425,7 @@ fn menu_label(source: &str) -> &str {
 /// The right-click menu of a mask in the Masks list.
 fn mask_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: u32, name: &str, visible: bool, index: usize, count: usize) {
     let mut run = |ui: &mut egui::Ui, label: &str, enabled: bool, cmd: &str, p: serde_json::Value| {
-        if ui.add_enabled(enabled, egui::Button::new(menu_label(label))).clicked() {
+        if MenuItem::new(menu_label(label)).enabled(enabled).show(ui).clicked() {
             let _ = app.run(cmd, p);
             ui.close();
         }
@@ -439,11 +438,11 @@ fn mask_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: u32, name: &str, vi
     run(ui, "Move Up", index > 0, "mask.move", json!({"id": id, "delta": -1}));
     run(ui, "Move Down", index + 1 < count, "mask.move", json!({"id": id, "delta": 1}));
     ui.separator();
-    if ui.button(crate::i18n::tr("Rename…")).clicked() {
+    if MenuItem::new(crate::i18n::tr("Rename…")).show(ui).clicked() {
         app.ui.renaming_mask = Some((id, name.to_string()));
         ui.close();
     }
-    if ui.button(crate::i18n::tr("Delete Mask")).clicked() {
+    if MenuItem::new(crate::i18n::tr("Delete Mask")).show(ui).clicked() {
         let _ = app.run("mask.delete", json!({"id": id}));
         ui.close();
     }
@@ -462,7 +461,7 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let r = crate::widgets::dropdown(ui, "maskOverlayMode", menu_label(view.label()), t.font(12.5), t.text_label);
         egui::Popup::menu(&r).show(|ui| {
             for v in MaskView::ALL {
-                if ui.selectable_label(v == view, menu_label(v.label())).clicked() {
+                if MenuItem::new(menu_label(v.label())).checked(v == view).show(ui).clicked() {
                     let _ = app.run("view.maskOverlayMode", json!({"mode": v.name()}));
                 }
             }
@@ -667,7 +666,7 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
 /// The right-click / "…" menu of one component of the selected mask.
 fn component_row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: u32, k: usize, label: &str, count: usize) {
     let mut run = |ui: &mut egui::Ui, text: &str, p: serde_json::Value| {
-        if ui.button(menu_label(text)).clicked() {
+        if MenuItem::new(menu_label(text)).show(ui).clicked() {
             let mut p = p;
             p["id"] = json!(mask);
             p["component"] = json!(k);
@@ -678,16 +677,16 @@ fn component_row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: u32, k: 
     run(ui, "Invert", json!({"action": "invert"}));
     run(ui, &crate::i18n::tr_format!("Duplicate \"{label}\"", label = label), json!({"action": "duplicate"}));
     if k > 0 {
-        crate::widgets::menu_button(ui, crate::i18n::tr("Mode"), |ui| {
+        MenuItem::new(crate::i18n::tr("Mode")).submenu(ui, |ui| {
             for (op, text) in [("add", "Add"), ("subtract", "Subtract"), ("intersect", "Intersect")] {
                 run(ui, text, json!({"action": "op", "op": op}));
             }
         });
     }
-    crate::widgets::menu_button(ui, crate::i18n::tr("Intersect with"), |ui| component_menu(app, ui, "intersect"));
-    crate::widgets::menu_button(ui, crate::i18n::tr("Subtract"), |ui| component_menu(app, ui, "subtract"));
+    MenuItem::new(crate::i18n::tr("Intersect with")).submenu(ui, |ui| component_menu(app, ui, "intersect"));
+    MenuItem::new(crate::i18n::tr("Subtract")).submenu(ui, |ui| component_menu(app, ui, "subtract"));
     ui.separator();
-    if ui.button(crate::i18n::tr("Rename…")).clicked() {
+    if MenuItem::new(crate::i18n::tr("Rename…")).show(ui).clicked() {
         app.ui.renaming_component = Some((mask, k, label.to_string()));
         ui.close();
     }
@@ -696,7 +695,7 @@ fn component_row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: u32, k: 
     } else {
         crate::i18n::tr_format!("Delete \"{label}\"", label = label)
     };
-    if ui.button(del).clicked() {
+    if MenuItem::new(&del).show(ui).clicked() {
         let _ = app.run("mask.component", json!({"id": mask, "component": k, "action": "delete"}));
         ui.close();
     }
@@ -839,13 +838,11 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
 }
 
 fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
-    let b = ui.button(crate::i18n::tr("Object"));
-    register(ui, format!("maskComp:{op}:object"), b.rect);
+    let b = MenuItem::new(crate::i18n::tr("Object")).widget(format!("maskComp:{op}:object")).show(ui);
     if b.clicked() {
         start_object(app, ui.ctx(), op);
     }
-    let b = ui.button(crate::i18n::tr("Describe…"));
-    register(ui, format!("maskComp:{op}:prompt"), b.rect);
+    let b = MenuItem::new(crate::i18n::tr("Describe…")).widget(format!("maskComp:{op}:prompt")).show(ui);
     if b.clicked() {
         start_describe(app, op);
     }
@@ -861,8 +858,7 @@ fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
         if kind == "brush" && op == "intersect" {
             continue;
         }
-        let b = ui.button(menu_label(label));
-        register(ui, format!("maskComp:{op}:{kind}"), b.rect);
+        let b = MenuItem::new(menu_label(label)).widget(format!("maskComp:{op}:{kind}")).show(ui);
         if b.clicked() {
             if kind == "brush" {
                 let _ = app.run("tool.brush", json!({"op": op}));

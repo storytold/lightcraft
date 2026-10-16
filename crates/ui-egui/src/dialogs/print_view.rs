@@ -15,6 +15,7 @@ use lightcraft_engine::print_color::{ManagedSpace, PrintColorSettings, PrintInte
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
+use crate::menu_item::MenuItem;
 use crate::theme::Tokens;
 use crate::widgets::{register, text_button};
 
@@ -758,13 +759,13 @@ fn package_cells(
             for (how, label) in
                 [("toFront", "Bring to Front"), ("forward", "Bring Forward"), ("backward", "Send Backward"), ("toBack", "Send to Back")]
             {
-                if ui.button(crate::i18n::tr(label)).clicked() {
+                if MenuItem::new(crate::i18n::tr(label)).show(ui).clicked() {
                     run(app, &ctx, "print.cell.stack", json!({"id": id, "order": how}));
                     ui.close();
                 }
             }
             ui.separator();
-            if ui.button(crate::i18n::tr("Delete Cell")).clicked() {
+            if MenuItem::new(crate::i18n::tr("Delete Cell")).show(ui).clicked() {
                 run(app, &ctx, "print.cell.delete", json!({"id": id}));
                 ui.close();
             }
