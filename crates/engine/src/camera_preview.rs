@@ -34,7 +34,8 @@ use lightcraft_raw::{
 /// 7: the sensor proxy follows the file's lens warp when the camera JPEG is lens-corrected.
 /// 8: the bundled NIKON Z 6_2 profile.
 /// 9: the bundled NIKON Z 8 and NIKON D5300 profiles.
-pub const LOOK_VERSION: u32 = 9;
+/// 10: a previewless Canon CR3 uses the measured median camera tone.
+pub const LOOK_VERSION: u32 = 10;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
@@ -88,7 +89,12 @@ pub(crate) fn starting_colour(
     lens: Option<&LensGeometry>,
     embedded: Option<&lightcraft_develop::EmbeddedLens>,
 ) -> (Xy, CameraTransform, Option<CameraLook>) {
+    let own_matrix = lightcraft_raw::color::has_matrix(&raw.color);
     let (xy, t, look) = starting_colour_with(raw, |raw, t| fit_preview(raw, bytes, t, lens), |raw, t| monochrome_look(raw, bytes, t, lens));
+    let look = match look {
+        Some(look) => Some(look),
+        None => previewless_tone(raw, bytes, own_matrix, &t, &None).map(|tone| CameraLook { matrix: Mat3::IDENTITY, tone, hue_sat: None }),
+    };
     if look.is_none() && dng_tone_eligible(raw, &t) {
         let look = fit_dng_tone(raw, bytes, &t, embedded);
         return (xy, t, look);
@@ -149,6 +155,61 @@ fn starting_colour_with(
     // only a black-and-white JPEG: a colour one that gave no look pays nothing more
     let look = if black_and_white { monochrome(raw, &t) } else { None };
     (xy, t, look)
+}
+
+/// Median tone and chroma curves of the camera looks fitted to the embedded JPEGs of 50 public Canon RF-mount CR3
+/// files (R, RP, R3, R5, R6, R6 Mark II, R7, R10, R50, R100, R6 Mark III; the HDR-PQ files, which have no JPEG,
+/// are not among them). On a common scene-luminance grid, the median over the files whose own knots cover the grid
+/// point; the part past the covered range continues at half the last covered slope. The curves agree within roughly
+/// 15 % between bodies from 0.05 to 0.25 scene luminance (display 0.08-0.13 and 0.58-0.73 at the ends).
+const CANON_TONE_KNOTS: [[f32; 2]; 32] = [
+    [0.01300, 0.02133],
+    [0.01462, 0.02399],
+    [0.01645, 0.02399],
+    [0.01851, 0.02573],
+    [0.02082, 0.03036],
+    [0.02342, 0.03749],
+    [0.02635, 0.04490],
+    [0.02964, 0.05512],
+    [0.03334, 0.06410],
+    [0.03751, 0.07782],
+    [0.04219, 0.09449],
+    [0.04746, 0.11311],
+    [0.05340, 0.13590],
+    [0.06007, 0.16061],
+    [0.06757, 0.18507],
+    [0.07601, 0.21076],
+    [0.08551, 0.23481],
+    [0.09619, 0.26245],
+    [0.10821, 0.29332],
+    [0.12173, 0.32584],
+    [0.13694, 0.36895],
+    [0.15405, 0.40889],
+    [0.17330, 0.45380],
+    [0.19495, 0.50112],
+    [0.21931, 0.54242],
+    [0.24671, 0.58651],
+    [0.27754, 0.63641],
+    [0.31221, 0.67163],
+    [0.35122, 0.69642],
+    [0.39510, 0.71950],
+    [0.44447, 0.73694],
+    [0.50000, 0.75066],
+];
+const CANON_TONE_CHROMA: [f32; lightcraft_pipeline::tone::CHROMA_N] = [1.0191, 1.0141, 0.9875, 0.9537, 0.9309, 0.9176, 0.8915, 0.9833];
+
+/// The tone a Canon CR3 starts from when it has no embedded JPEG to fit a look to (the HDR-PQ shots of the R5 Mark II and R8
+/// carry only an HEVC preview) and takes the model's spectral colour matrices: the median camera tone of Canon
+/// RF-mount bodies ([`CANON_TONE_KNOTS`]), instead of LightCraft's default curve, which renders such a raw about
+/// 13 L* darker than the camera's own look. `None` for any raw with a preview, its own matrices or a fitted look.
+fn previewless_tone(raw: &RawImage, bytes: &[u8], own_matrix: bool, transform: &CameraTransform, look: &Option<CameraLook>) -> Option<CameraTone> {
+    if raw.format != RawFormat::Cr3 || own_matrix || transform.matrix_is_fallback || look.is_some() {
+        return None;
+    }
+    if lightcraft_raw::embedded_preview(bytes).is_some() {
+        return None;
+    }
+    CameraTone::new(CANON_TONE_KNOTS)?.with_chroma(CANON_TONE_CHROMA)
 }
 
 /// The colour a raw starts from ([`starting_colour`]) as DNG colour tags, for a DNG of the raw's camera RGB (Photo
@@ -3982,5 +4043,40 @@ mod tests {
         let mut looked = color;
         looked.profile.look_table = HsvTable::from_tags(&[1, 2, 1], &[0.0, 1.0, 1.0, 0.0, 1.0, 1.0], 0);
         assert!(looked.profile.look_table.is_some() && !eligible(RawFormat::Dng, looked), "a look table is the file's own rendering");
+    }
+    /// A Canon CR3 with no embedded JPEG (the HDR-PQ shots keep only an HEVC preview) and spectral matrices starts
+    /// from the median Canon camera tone; nothing else does.
+    #[test]
+    fn a_previewless_canon_cr3_gets_the_median_camera_tone() {
+        let tone = |format, model: &str, bytes: &[u8], own: bool, look: &Option<CameraLook>| {
+            let mut raw = raw_of(format, "Canon", model, Default::default());
+            let (_, t, _) = starting_colour(&mut raw, bytes, None, None);
+            previewless_tone(&raw, bytes, own, &t, look)
+        };
+        let got = tone(RawFormat::Cr3, "Canon EOS R5 Mark II", &[], false, &None).expect("spectral CR3 without a preview");
+        // the median look puts scene 0.18 near display 0.45, far above LightCraft's default curve there
+        let mid = got.apply(0.18);
+        assert!((0.40..0.55).contains(&mid), "{mid}");
+        assert!(got.chroma().iter().all(|c| (0.8..=1.1).contains(c)));
+        // a file's own matrices, a fitted look, a model outside the spectral table or another format keep their look
+        assert!(tone(RawFormat::Cr3, "Canon EOS R5 Mark II", &[], true, &None).is_none());
+        let fitted = dro_test_look(&std::array::from_fn(|i| 0.006 * 1.13f32.powi(i as i32)), &|x| x.sqrt());
+        assert!(tone(RawFormat::Cr3, "Canon EOS R5 Mark II", &[], false, &Some(fitted)).is_none());
+        assert!(tone(RawFormat::Cr3, "Canon EOS 7D", &[], false, &None).is_none());
+        assert!(tone(RawFormat::Cr2, "Canon EOS 600D", &[], false, &None).is_none());
+    }
+
+    #[test]
+    fn previewless_tone_reaches_the_shared_start_and_dng_tags() {
+        let original = raw_of(RawFormat::Cr3, "Canon", "Canon EOS R5 Mark II", Default::default());
+        let mut loaded = original.clone();
+        let (_, transform, look) = starting_colour(&mut loaded, &[], None, None);
+        assert!(!transform.matrix_is_fallback);
+        let look = look.expect("the starting-colour chain supplies the fallback tone");
+        assert!((0.40..0.55).contains(&look.tone.apply(0.18)));
+        let mut exported = original;
+        with_starting_colour(&mut exported, &[]);
+        let curve = exported.color.profile.tone_curve.expect("the same tone is written to DNG");
+        assert!((curve.eval(0.18) - look.tone.apply(0.18)).abs() < 0.01);
     }
 }
