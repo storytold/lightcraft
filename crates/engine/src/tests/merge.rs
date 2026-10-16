@@ -5,6 +5,81 @@ use serde_json::json;
 
 use crate::Session;
 
+#[test]
+fn hdr_merge_rejects_over_budget_dimensions_before_reading_sources() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let mut s = Session::new();
+    let mut ids = Vec::new();
+    for i in 0..32 {
+        let id = s.catalog.alloc_photo_id();
+        let path = format!("synthetic-{i}.dng");
+        let photo = lightcraft_catalog::Photo::new(
+            id,
+            lightcraft_catalog::Source::File { path: path.clone() },
+            &path,
+            "DNG",
+            65_535,
+            65_535,
+            "2026-10-16T00:00:00Z",
+        );
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        ids.push(id.0);
+    }
+
+    let reads = std::sync::Arc::new(AtomicUsize::new(0));
+    let count = reads.clone();
+    s.media.file_bytes = Some(std::sync::Arc::new(move |_| {
+        count.fetch_add(1, Ordering::Relaxed);
+        Err("source reader should not be called".into())
+    }));
+
+    let error = s.execute("merge.hdr", &json!({"ids": ids})).unwrap_err().to_string();
+    assert!(error.to_lowercase().contains("memory budget"), "{error}");
+    assert_eq!(reads.load(Ordering::Relaxed), 0, "Photo Merge read source bytes before rejecting its memory estimate");
+}
+
+#[test]
+fn hdr_batch_checks_each_bracket_set_before_reading_its_sources() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let mut s = Session::new();
+    let mut ids = Vec::new();
+    for (i, (width, height)) in [(65_535, 65_535), (65_535, 65_535), (320, 240), (320, 240)].into_iter().enumerate() {
+        let id = s.catalog.alloc_photo_id();
+        let path = format!("bracket-{i}.dng");
+        let photo = lightcraft_catalog::Photo::new(
+            id,
+            lightcraft_catalog::Source::File { path: path.clone() },
+            &path,
+            "DNG",
+            width,
+            height,
+            "2026-10-16T00:00:00Z",
+        );
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        ids.push(id);
+    }
+    for pair in [(&ids[0], &ids[1]), (&ids[2], &ids[3])] {
+        let op = s.catalog.group_ops(*pair.0, std::slice::from_ref(pair.1), true).unwrap();
+        s.catalog.apply(op).unwrap();
+    }
+
+    let reads = std::sync::Arc::new(AtomicUsize::new(0));
+    let count = reads.clone();
+    s.media.file_bytes = Some(std::sync::Arc::new(move |_| {
+        count.fetch_add(1, Ordering::Relaxed);
+        Err("synthetic source has no bytes".into())
+    }));
+
+    let result = s.execute("merge.hdrBatch", &json!({"ids": ids.iter().map(|id| id.0).collect::<Vec<_>>()})).unwrap();
+    let failed = result["failed"].as_array().unwrap();
+    assert_eq!(failed.len(), 2, "{result}");
+    assert!(failed[0]["error"].as_str().unwrap().contains("memory budget"), "{result}");
+    assert!(failed[1]["error"].as_str().unwrap().contains("synthetic source has no bytes"), "{result}");
+    assert_eq!(reads.load(Ordering::Relaxed), 1, "the oversized bracket was read, or the small bracket read more than once");
+}
+
 fn temp_dir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("lc-merge-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
@@ -249,4 +324,32 @@ fn a_photo_named_twice_is_merged_once() {
     let job = s.plan_merge(kind, finish, &[a, b, a, b, a].map(lightcraft_catalog::PhotoId), true).unwrap();
     assert_eq!(job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), vec![a, b]);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn merge_memory_estimate_is_checked_and_uses_a_controlled_budget() {
+    use crate::merge::{MergeKind, check_merge_memory_budget, estimate_merge_working_bytes, merge_memory_bytes};
+
+    let kind = MergeKind::Hdr { hdr: Default::default() };
+    let small = estimate_merge_working_bytes(&kind, &[(100, 100), (100, 100)], None).unwrap();
+    let larger = estimate_merge_working_bytes(&kind, &[(200, 100), (200, 100)], None).unwrap();
+    assert!(larger > small, "larger inputs must estimate more working memory: {small} → {larger}");
+
+    let required = estimate_merge_working_bytes(&kind, &[(5_000, 5_000), (5_000, 5_000)], None).unwrap();
+    let error = check_merge_memory_budget(required, 256 << 20).unwrap_err();
+    assert!(error.contains("merge memory budget") && error.contains("lower-resolution"), "{error}");
+    assert_eq!(merge_memory_bytes(Some(8 << 30), 1 << 30), 5 << 30, "75% of RAM less the cache budget");
+
+    let kinds = [
+        kind.clone(),
+        MergeKind::Panorama { pano: Default::default() },
+        MergeKind::HdrPanorama { hdr: Default::default(), pano: Default::default(), bracket: 3 },
+    ];
+    for kind in kinds {
+        let needed = estimate_merge_working_bytes(&kind, &[(5_000, 5_000), (5_000, 5_000), (5_000, 5_000), (5_000, 5_000)], None).unwrap();
+        assert!(check_merge_memory_budget(needed, 256 << 20).is_err(), "{kind:?} bypassed the controlled budget");
+    }
+
+    assert!(estimate_merge_working_bytes(&kind, &[(0, 100), (100, 100)], None).is_err(), "zero dimensions must be refused");
+    assert!(estimate_merge_working_bytes(&kind, &[(u32::MAX, u32::MAX), (1, 1)], None).is_err(), "overflow must be refused");
 }
