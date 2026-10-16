@@ -1,0 +1,28 @@
+[package]
+name = "lightcraft-vision"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+description = "LightCraft content models: SigLIP 2 and CLIP image and text embeddings in pure Rust on candle (L1)"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+lightcraft-raster = { workspace = true }
+
+# the towers run natively only (the web build has no content search)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+candle-core = { workspace = true, features = ["metal"] }
+candle-nn = { workspace = true, features = ["metal"] }
+
+[dev-dependencies]
+lightcraft-scenes = { workspace = true }
+png = { workspace = true }

@@ -833,3 +833,52 @@ fn jxl_bad_input_is_an_error() {
         encode_jxl(&EncodeImage::new(1, 1, 3, Samples::U8(&one)), &JxlOptions { quality: 1, ..Default::default() }, &EncodeMeta::default()).unwrap();
     assert_eq!(decode(&b, DecodeOptions::default()).unwrap().width, 1);
 }
+
+/// A big TIFF reduced as it is read looks like the whole decode fitted to the same box, without the whole image.
+#[test]
+fn tiff_reduced_while_read_matches_the_whole_decode() {
+    let (w, h) = (400u32, 300u32);
+    let n = (w * h) as usize;
+    // smooth ramps (averaging encoded values then is the same as averaging light, to within rounding)
+    let u16s: Vec<u16> = (0..n)
+        .flat_map(|i| {
+            let (x, y) = ((i % w as usize) as f32 / w as f32, (i / w as usize) as f32 / h as f32);
+            [(x * 60000.0) as u16, (y * 60000.0) as u16, ((x + y) * 30000.0) as u16]
+        })
+        .collect();
+    let u8s: Vec<u8> = u16s.iter().map(|v| (v >> 8) as u8).collect();
+    for comp in [TiffCompression::None, TiffCompression::Deflate, TiffCompression::Lzw] {
+        for b in [
+            encode_tiff(&EncodeImage::new(w, h, 3, Samples::U16(&u16s)), comp, &EncodeMeta::default()).unwrap(),
+            encode_tiff(&EncodeImage::new(w, h, 3, Samples::U8(&u8s)), comp, &EncodeMeta::default()).unwrap(),
+        ] {
+            let opts = DecodeOptions::fit(100, 100);
+            let whole = decode(&b, opts).unwrap();
+            let reduced = lightcraft_codecs::decode_tiff_reduced(std::io::Cursor::new(&b), opts).unwrap().expect("reduced");
+            assert_eq!((reduced.source_width, reduced.source_height), (w, h));
+            assert_eq!(reduced.bit_depth, whole.bit_depth);
+            assert!(reduced.image.width.max(reduced.image.height) >= 100, "covers the box: {}×{}", reduced.image.width, reduced.image.height);
+            // the same picture: compare the two at the reduced one's pixels
+            let (rw, rh) = (reduced.image.width, reduced.image.height);
+            let mut worst = 0f32;
+            for y in 2..rh - 2 {
+                for x in 2..rw - 2 {
+                    let (wx, wy) = (x * whole.image.width / rw, y * whole.image.height / rh);
+                    let (a, b) = (reduced.image.data[y * rw + x], whole.image.data[wy * whole.image.width + wx]);
+                    worst = worst.max((0..3).map(|c| (a[c] - b[c]).abs()).fold(0.0, f32::max));
+                }
+            }
+            assert!(worst < 0.03, "{comp:?}: worst difference {worst}");
+        }
+    }
+    let b = encode_tiff(&EncodeImage::new(w, h, 3, Samples::U16(&u16s)), TiffCompression::Deflate, &EncodeMeta::default()).unwrap();
+    // nothing to gain: decode it whole
+    assert!(lightcraft_codecs::decode_tiff_reduced(std::io::Cursor::new(&b), DecodeOptions::fit(300, 300)).unwrap().is_none());
+    assert!(lightcraft_codecs::decode_tiff_reduced(std::io::Cursor::new(&b), DecodeOptions::default()).unwrap().is_none());
+    // cut short or not a TIFF: an error, never a panic
+    for cut in [8, 200, b.len() / 2, b.len() - 10] {
+        let r = lightcraft_codecs::decode_tiff_reduced(std::io::Cursor::new(&b[..cut]), DecodeOptions::fit(50, 50));
+        assert!(r.is_err() || r.as_ref().is_ok_and(|d| d.is_some()), "{cut}: {:?}", r.map(|d| d.is_some()));
+    }
+    assert!(lightcraft_codecs::decode_tiff_reduced(std::io::Cursor::new(b"not a tiff at all"), DecodeOptions::fit(50, 50)).is_err());
+}

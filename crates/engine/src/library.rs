@@ -462,6 +462,9 @@ impl Session {
         // what was learned about the old library's faces is saved, and none of it carries over (photo ids are per library)
         #[cfg(not(target_arch = "wasm32"))]
         self.faces.library_changed();
+        // likewise the content index: saved, and the new library's is read when indexing or a search needs it
+        #[cfg(not(target_arch = "wasm32"))]
+        self.content.library_changed();
         let (mut journal, mut catalog, report) = Journal::open(catalog)?;
         // A loaded catalog counts revisions from 0, like every other one. Caches (sidebar counts,
         // keyword tree, the grid's list…) are keyed on the revision, so give each library loaded
@@ -686,6 +689,9 @@ impl Session {
             return Ok(());
         }
         let _ = self.end_interaction();
+        // the content index is a cache beside the library: written now, so nothing embedded is lost
+        #[cfg(not(target_arch = "wasm32"))]
+        self.content.save();
         let persisted = self.persist();
         self.save_view();
         let unlogged = if persisted.is_err() { self.pending_log.len() as u64 } else { 0 };

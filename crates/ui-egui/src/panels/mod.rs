@@ -4,6 +4,7 @@ pub mod activity;
 pub mod bottombar;
 pub mod chips;
 pub mod compare;
+pub mod content;
 pub mod crop_overlay;
 pub mod denoise;
 pub mod detail;
