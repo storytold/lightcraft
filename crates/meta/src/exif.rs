@@ -127,20 +127,32 @@ pub fn from_tiff(tiff: &Tiff) -> Metadata {
     m
 }
 
+/// Degrees/minutes/seconds triplet as decimal degrees. A component that is present but not a number (a rational
+/// with a zero denominator, as in the placeholder GPS block phones write without a fix) makes the whole value unusable.
 fn dms(ifd: &Ifd, tag: u16) -> Option<f64> {
-    let v = ifd.f64s(tag)?;
-    let d = *v.first()?;
-    let deg = d + v.get(1).copied().unwrap_or(0.0) / 60.0 + v.get(2).copied().unwrap_or(0.0) / 3600.0;
+    let v = ifd.value(tag)?;
+    let part = |i: usize| if i < v.count() { v.get_f64(i) } else { Some(0.0) };
+    let d = v.get_f64(0)?;
+    let deg = d + part(1)? / 60.0 + part(2)? / 3600.0;
     deg.is_finite().then_some(deg)
+}
+
+/// `Some(true)` for the negative hemisphere (`neg`), `Some(false)` for `pos`, `None` when the ref is missing or invalid.
+fn hemisphere(g: &Ifd, tag: u16, pos: char, neg: char) -> Option<bool> {
+    match g.string(tag)?.trim_start().chars().next()?.to_ascii_uppercase() {
+        c if c == neg => Some(true),
+        c if c == pos => Some(false),
+        _ => None,
+    }
 }
 
 fn read_gps(g: &Ifd) -> Option<Gps> {
     let mut lat = dms(g, t::GPS_LATITUDE)?;
     let mut lon = dms(g, t::GPS_LONGITUDE)?;
-    if g.string(t::GPS_LATITUDE_REF).is_some_and(|s| s.starts_with('S')) {
+    if hemisphere(g, t::GPS_LATITUDE_REF, 'N', 'S')? {
         lat = -lat;
     }
-    if g.string(t::GPS_LONGITUDE_REF).is_some_and(|s| s.starts_with('W')) {
+    if hemisphere(g, t::GPS_LONGITUDE_REF, 'E', 'W')? {
         lon = -lon;
     }
     if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
@@ -380,6 +392,28 @@ pub(crate) mod tests {
             assert!((g.longitude - 151.2112).abs() < 1e-4);
             assert_eq!(g.altitude, Some(-12.5));
         }
+    }
+
+    #[test]
+    fn placeholder_gps_block_is_no_location() {
+        // Android phones without a fix write NUL refs and 0/0 rationals (#1617).
+        let read = |lat_ref: &str, lat: Vec<(u32, u32)>| {
+            let mut gps = IfdBuilder::new();
+            gps.set(t::GPS_LATITUDE_REF, Value::Ascii(lat_ref.into()));
+            gps.set(t::GPS_LATITUDE, Value::Rational(lat));
+            gps.set(t::GPS_LONGITUDE_REF, Value::Ascii("E".into()));
+            gps.set(t::GPS_LONGITUDE, Value::Rational(vec![(151, 1), (12, 1), (4032, 100)]));
+            let mut ifd0 = IfdBuilder::new();
+            ifd0.set_child(t::GPS_IFD, gps);
+            read_exif(&TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()).gps
+        };
+        let valid = vec![(33, 1), (51, 1), (3564, 100)];
+        assert!(read("N", valid.clone()).is_some());
+        assert_eq!(read("N", vec![(0, 0), (0, 0), (0, 0)]), None, "0/0 rationals");
+        assert_eq!(read("N", vec![(33, 1), (0, 0), (0, 0)]), None, "0/0 minutes");
+        assert_eq!(read(" ", valid.clone()), None, "NUL ref");
+        assert_eq!(read("", valid.clone()), None, "empty ref");
+        assert_eq!(read("X", valid), None, "invalid ref");
     }
 
     #[test]
