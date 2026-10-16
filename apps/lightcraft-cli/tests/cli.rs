@@ -5,6 +5,449 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
 
+#[path = "support/lightroom_fixture.rs"]
+mod lightroom_fixture;
+
+struct LightroomScratch(std::path::PathBuf);
+
+impl Drop for LightroomScratch {
+    fn drop(&mut self) {
+        if std::env::var_os("LIGHTCRAFT_KEEP_SPARSE_FIXTURE").is_some() {
+            eprintln!("KEEP_SYNTHETIC_CLI_FIXTURE={}", self.0.display());
+            return;
+        }
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn test_scratch_root() -> std::path::PathBuf {
+    std::env::var_os("LIGHTCRAFT_TEST_SCRATCH").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir)
+}
+
+#[test]
+fn cli_inspects_and_imports_large_sparse_lightroom_catalog() {
+    use std::io::{Read, Seek, SeekFrom};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let scratch = test_scratch_root();
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let directory = scratch.join(format!("lightcraft-large-cli-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&directory).expect("create isolated CLI fixture directory");
+    let _cleanup = LightroomScratch(directory.clone());
+    let catalog = lightroom_fixture::write_large_sparse_catalog(&directory);
+    let before = std::fs::metadata(&catalog).expect("synthetic catalog metadata");
+    assert_eq!(before.len(), 1_073_807_360);
+    let photo_offset =
+        u64::from(lightroom_fixture::PHOTO_PAGE - 1).checked_mul(lightroom_fixture::PAGE_SIZE as u64).expect("synthetic high-page offset");
+    assert!(photo_offset > (1u64 << 30), "Adobe_images root page must be beyond 1 GiB");
+    let mut source = std::fs::File::open(&catalog).expect("open synthetic catalog read-only");
+    let mut header_before = [0u8; 100];
+    source.read_exact(&mut header_before).expect("read synthetic SQLite header");
+    let mut page_before = vec![0u8; lightroom_fixture::PAGE_SIZE];
+    source.seek(SeekFrom::Start(photo_offset)).expect("seek synthetic Adobe_images page");
+    source.read_exact(&mut page_before).expect("read synthetic Adobe_images page");
+    drop(source);
+    let companions = ["-wal", "-shm", "-journal"].map(|suffix| std::path::PathBuf::from(format!("{}{suffix}", catalog.display())));
+    assert!(companions.iter().all(|path| !path.exists()), "synthetic catalog starts without SQLite companions");
+
+    let inspect = Command::new(BIN)
+        .args(["run", "library.inspectLightroom", &format!("path={}", catalog.display())])
+        .env("LIGHTCRAFT_NO_PREFS", "1")
+        .env("LIGHTCRAFT_GPU", "0")
+        .output()
+        .expect("run isolated CLI inspection");
+    assert!(inspect.status.success(), "{}", String::from_utf8_lossy(&inspect.stderr));
+    let inspection: Vec<Value> =
+        String::from_utf8_lossy(&inspect.stdout).lines().map(|line| serde_json::from_str(line).expect("CLI JSON line")).collect();
+    assert_eq!(inspection.len(), 1, "{inspection:?}");
+    let inspected = &inspection[0]["result"];
+    assert_eq!(inspected["photos"], 1, "{inspected}");
+    assert_eq!(inspected["collections"], 0, "{inspected}");
+    assert_eq!(inspected["missing"].as_array().map(Vec::len), Some(1), "{inspected}");
+    assert!(
+        inspected["missing"][0]
+            .as_str()
+            .is_some_and(|path| path.ends_with("synthetic-originals/Photos/test.ARW") || path.ends_with("synthetic-originals\\Photos\\test.ARW")),
+        "{inspected}"
+    );
+    assert_eq!(inspected["warnings"].as_array().map(Vec::len), Some(0), "{inspected}");
+
+    // Assert every decoded high-offset row field through the public catalog reader, not only
+    // the CLI's summary counts. The fixture is also checked independently with SQLite.
+    let decoded = lightcraft_engine::lightroom_catalog::read(&catalog).expect("decode synthetic sparse catalog");
+    assert_eq!(decoded.photos.len(), 1);
+    assert!(decoded.warnings.is_empty(), "{:?}", decoded.warnings);
+    let photo = &decoded.photos[0];
+    assert_eq!(photo.source_id, 1);
+    assert_eq!(photo.uuid, "synthetic-large-catalog-uuid");
+    assert_eq!(photo.path, directory.join("synthetic-originals").join("Photos").join("test.ARW").to_string_lossy().as_ref());
+    assert_eq!(photo.image.get("rootFile"), Some(&json!(1)));
+    assert_eq!(photo.image.get("fileFormat"), Some(&json!("ARW")));
+    assert_eq!(photo.image.get("fileWidth"), Some(&json!(6000)));
+    assert_eq!(photo.image.get("fileHeight"), Some(&json!(4000)));
+    assert_eq!(photo.image.get("rating"), Some(&json!(5)));
+    assert_eq!(photo.image.get("pick"), Some(&json!(1)));
+    assert!(photo.settings.is_empty());
+    assert!(photo.xmp.is_empty());
+    assert!(photo.keywords.is_empty());
+
+    let small_catalog = lightroom_fixture::write_small_catalog(&directory);
+    let control = lightcraft_engine::lightroom_catalog::read(&small_catalog).expect("decode small synthetic control catalog");
+    assert_eq!(control.photos.len(), 1);
+    assert_eq!(photo.source_id, control.photos[0].source_id);
+    assert_eq!(photo.uuid, control.photos[0].uuid);
+    assert_eq!(photo.path, control.photos[0].path);
+    assert_eq!(photo.image, control.photos[0].image);
+
+    let library = directory.join("disposable-lightcraft-library");
+    let import = Command::new(BIN)
+        .args(["run", "--library", library.to_str().expect("library path"), "library.importLightroom", &format!("path={}", catalog.display())])
+        .env("LIGHTCRAFT_NO_PREFS", "1")
+        .env("LIGHTCRAFT_GPU", "0")
+        .output()
+        .expect("run isolated synthetic Lightroom import");
+    assert!(import.status.success(), "stdout={} stderr={}", String::from_utf8_lossy(&import.stdout), String::from_utf8_lossy(&import.stderr));
+    let imported: Vec<Value> =
+        String::from_utf8_lossy(&import.stdout).lines().map(|line| serde_json::from_str(line).expect("CLI JSON line")).collect();
+    assert_eq!(imported.len(), 1, "{imported:?}");
+    assert_eq!(imported[0]["result"]["photos"], 1, "{}", imported[0]);
+    assert_eq!(imported[0]["result"]["missing"].as_array().map(Vec::len), Some(1), "{}", imported[0]);
+    assert!(imported[0]["result"]["mapping"]["1"].as_u64().is_some(), "{}", imported[0]);
+    let imported_id = imported[0]["result"]["mapping"]["1"].as_u64().expect("imported photo identity");
+
+    let reimport = Command::new(BIN)
+        .args(["run", "--library", library.to_str().expect("library path"), "library.importLightroom", &format!("path={}", catalog.display())])
+        .env("LIGHTCRAFT_NO_PREFS", "1")
+        .env("LIGHTCRAFT_GPU", "0")
+        .output()
+        .expect("reimport same synthetic Lightroom catalog");
+    assert!(reimport.status.success(), "stdout={} stderr={}", String::from_utf8_lossy(&reimport.stdout), String::from_utf8_lossy(&reimport.stderr));
+    let reimported: Vec<Value> =
+        String::from_utf8_lossy(&reimport.stdout).lines().map(|line| serde_json::from_str(line).expect("reimport CLI JSON line")).collect();
+    assert_eq!(reimported.len(), 1, "{reimported:?}");
+    assert_eq!(
+        reimported[0]["result"]["mapping"]["1"].as_u64(),
+        Some(imported_id),
+        "UUID identity must retain its photo ID across process restart/reimport"
+    );
+
+    let persisted = Command::new(BIN)
+        .args(["run", "--library", library.to_str().expect("library path"), "library.info"])
+        .env("LIGHTCRAFT_NO_PREFS", "1")
+        .env("LIGHTCRAFT_GPU", "0")
+        .output()
+        .expect("verify disposable library persistence");
+    assert!(persisted.status.success(), "{}", String::from_utf8_lossy(&persisted.stderr));
+    let info: Vec<Value> =
+        String::from_utf8_lossy(&persisted.stdout).lines().map(|line| serde_json::from_str(line).expect("CLI JSON line")).collect();
+    assert_eq!(info.first().and_then(|line| line.pointer("/result/photos")).and_then(Value::as_u64), Some(1), "{info:?}");
+
+    let mut reopened = lightcraft_engine::Session::new();
+    reopened.open_library(&library, false).expect("reopen disposable imported library");
+    assert_eq!(reopened.catalog.len(), 1, "reimport must not duplicate the catalog record");
+    let imported_photo = reopened.catalog.photos().find(|photo| photo.id.0 == imported_id).expect("persisted photo mapped from Lightroom UUID");
+    assert_eq!(imported_photo.rating, 5);
+    assert_eq!(serde_json::to_value(imported_photo.flag).expect("serialize persisted flag"), json!("pick"));
+    assert_eq!(imported_photo.file_name, "test.ARW");
+    assert_eq!(
+        serde_json::to_value(&imported_photo.source).expect("serialize persisted source"),
+        json!({"type":"file","path":control.photos[0].path})
+    );
+    let identity_index: Value =
+        serde_json::from_slice(&std::fs::read(library.join("Interop/lightroom-index.json")).expect("read persisted Lightroom UUID index"))
+            .expect("parse persisted Lightroom UUID index");
+    assert_eq!(identity_index["photos"]["synthetic-large-catalog-uuid"].as_u64(), Some(imported_id));
+    reopened.close_library().expect("close reopened disposable library");
+
+    let after = std::fs::metadata(&catalog).expect("synthetic catalog metadata after CLI");
+    assert_eq!(before.len(), after.len());
+    assert_eq!(before.modified().ok(), after.modified().ok());
+    let mut source = std::fs::File::open(&catalog).expect("reopen synthetic source read-only");
+    let mut header_after = [0u8; 100];
+    source.read_exact(&mut header_after).expect("read header after CLI");
+    let mut page_after = vec![0u8; lightroom_fixture::PAGE_SIZE];
+    source.seek(SeekFrom::Start(photo_offset)).expect("seek high page after CLI");
+    source.read_exact(&mut page_after).expect("read high page after CLI");
+    assert_eq!(header_before, header_after, "CLI must leave source header unchanged");
+    assert_eq!(page_before, page_after, "CLI must leave high source page unchanged");
+    assert!(companions.iter().all(|path| !path.exists()), "inspection/import must not create source companions");
+}
+
+#[cfg(feature = "dhat-heap")]
+#[test]
+fn repeated_page_wal_heap_does_not_scale_with_payload_bytes() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let scratch = test_scratch_root();
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let directory = scratch.join(format!("lightcraft-wal-memory-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&directory).unwrap();
+    let cleanup = TestScratch(directory.clone());
+    let catalog_path = directory.join("synthetic-small.lrcat");
+    let page_one = write_synthetic_catalog(&catalog_path, &directory);
+
+    let small_peak = profiled_inspection_peak(&catalog_path, &directory.join("small.dhat")).unwrap();
+    let wal_path = std::path::PathBuf::from(format!("{}-wal", catalog_path.display()));
+    write_repeated_page_wal(&wal_path, &page_one, 4096, 2048);
+    let wal_peak = profiled_inspection_peak(&catalog_path, &directory.join("wal.dhat")).unwrap();
+    let delta = wal_peak.saturating_sub(small_peak);
+    eprintln!("DHAT_REPEATED_WAL small_peak_bytes={small_peak} wal_peak_bytes={wal_peak} delta_bytes={delta} frames=2048 page_size=4096");
+    assert!(
+        delta < 4 * 1024 * 1024,
+        "2048 repeated 4096-byte WAL frames should not be retained as payloads: baseline={small_peak} bytes, WAL={wal_peak} bytes"
+    );
+    let shm_path = std::path::PathBuf::from(format!("{}-shm", catalog_path.display()));
+    assert!(!shm_path.exists(), "read-only inspection must not create SQLite SHM");
+    drop(cleanup);
+}
+
+#[cfg(feature = "dhat-heap")]
+#[test]
+fn large_sparse_catalog_heap_stays_below_fixed_budget() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let scratch = test_scratch_root();
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let directory = scratch.join(format!("lightcraft-large-heap-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&directory).expect("create isolated heap fixtures");
+    let cleanup = LightroomScratch(directory.clone());
+    let small = directory.join("synthetic-small.lrcat");
+    write_synthetic_catalog(&small, &directory);
+    let large = lightroom_fixture::write_large_sparse_catalog(&directory);
+    let small_peak = profiled_inspection_peak(&small, &directory.join("small.dhat")).unwrap();
+    let large_peak = profiled_inspection_peak(&large, &directory.join("large.dhat")).unwrap();
+    let delta = large_peak.saturating_sub(small_peak);
+    eprintln!("DHAT_SPARSE_MAIN small_peak_bytes={small_peak} large_peak_bytes={large_peak} delta_bytes={delta} large_file_bytes=1073807360");
+    assert!(small_peak < 64 * 1024 * 1024, "small catalog peak {small_peak} bytes must stay below 64 MiB");
+    assert!(large_peak < 64 * 1024 * 1024, "large catalog peak {large_peak} bytes must stay below 64 MiB");
+    assert!(delta < 8 * 1024 * 1024, "large catalog added {delta} bytes over the small control; budget is 8 MiB");
+    let source_companions = ["-wal", "-shm", "-journal"].map(|suffix| std::path::PathBuf::from(format!("{}{suffix}", large.display())));
+    assert!(source_companions.iter().all(|path| !path.exists()), "heap profiling must not create SQLite source companions");
+    drop(cleanup);
+}
+
+#[cfg(feature = "dhat-heap")]
+struct TestScratch(std::path::PathBuf);
+
+#[cfg(feature = "dhat-heap")]
+impl Drop for TestScratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(feature = "dhat-heap")]
+fn profiled_inspection_peak(catalog: &std::path::Path, profile: &std::path::Path) -> Result<u64, String> {
+    let output = Command::new(BIN)
+        .args(["run", "library.inspectLightroom", &format!("path={}", catalog.display()), "library.memory"])
+        .env("LIGHTCRAFT_NO_PREFS", "1")
+        .env("LIGHTCRAFT_GPU", "0")
+        .env("LIGHTCRAFT_DHAT_FILE", profile)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(format!(
+            "CLI exit {}; stdout={} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let records = String::from_utf8(output.stdout)
+        .map_err(|error| error.to_string())?
+        .lines()
+        .map(serde_json::from_str::<Value>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    if records.first().and_then(|record| record.get("ok")).and_then(Value::as_bool) != Some(true)
+        || records.first().and_then(|record| record.pointer("/result/photos")).and_then(Value::as_u64) != Some(1)
+    {
+        return Err(format!("synthetic inspection returned unexpected JSON: {records:?}"));
+    }
+    records
+        .last()
+        .and_then(|record| record.pointer("/result/heap/peak"))
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("heap peak missing from CLI JSON: {records:?}"))
+}
+
+#[cfg(feature = "dhat-heap")]
+fn write_synthetic_catalog(path: &std::path::Path, root: &std::path::Path) -> Vec<u8> {
+    #[derive(Clone)]
+    enum Value {
+        Null,
+        Integer(i64),
+        Text(String),
+    }
+    fn varint(mut value: u64) -> Vec<u8> {
+        let mut bytes = vec![(value & 0x7f) as u8];
+        value >>= 7;
+        while value != 0 {
+            bytes.push((value & 0x7f) as u8 | 0x80);
+            value >>= 7;
+        }
+        bytes.reverse();
+        bytes
+    }
+    fn record(values: &[Value]) -> Vec<u8> {
+        let mut serials = Vec::new();
+        let mut body = Vec::new();
+        for value in values {
+            let serial = match value {
+                Value::Null => 0,
+                Value::Integer(number) if *number == 0 => 8,
+                Value::Integer(number) if *number == 1 => 9,
+                Value::Integer(number) if i8::try_from(*number).is_ok() => {
+                    body.push(*number as i8 as u8);
+                    1
+                }
+                Value::Integer(number) if i16::try_from(*number).is_ok() => {
+                    body.extend((*number as i16).to_be_bytes());
+                    2
+                }
+                Value::Integer(number) if i32::try_from(*number).is_ok() => {
+                    body.extend((*number as i32).to_be_bytes());
+                    3
+                }
+                Value::Integer(number) => {
+                    body.extend(number.to_be_bytes());
+                    6
+                }
+                Value::Text(text) => {
+                    body.extend(text.as_bytes());
+                    13 + 2 * text.len() as u64
+                }
+            };
+            serials.extend(varint(serial));
+        }
+        let header_size = 1 + serials.len();
+        let mut bytes = varint(header_size as u64);
+        bytes.extend(serials);
+        bytes.extend(body);
+        bytes
+    }
+    fn leaf(page: &mut [u8], base: usize, rows: &[Vec<Value>]) {
+        page[base] = 13;
+        page[base + 3..base + 5].copy_from_slice(&(rows.len() as u16).to_be_bytes());
+        let mut end = page.len();
+        for (index, values) in rows.iter().enumerate() {
+            let payload = record(values);
+            let mut cell = varint(payload.len() as u64);
+            cell.extend(varint(index as u64 + 1));
+            cell.extend(payload);
+            end -= cell.len();
+            page[end..end + cell.len()].copy_from_slice(&cell);
+            page[base + 8 + index * 2..base + 10 + index * 2].copy_from_slice(&(end as u16).to_be_bytes());
+        }
+        page[base + 5..base + 7].copy_from_slice(&(end as u16).to_be_bytes());
+    }
+    const PAGE: usize = 4096;
+    let tables = [
+        (
+            "AgLibraryRootFolder",
+            "id_local INTEGER PRIMARY KEY, absolutePath",
+            vec![Value::Null, Value::Text(root.join("originals").to_string_lossy().into_owned())],
+        ),
+        (
+            "AgLibraryFolder",
+            "id_local INTEGER PRIMARY KEY, rootFolder, pathFromRoot",
+            vec![Value::Null, Value::Integer(1), Value::Text("Photos".into())],
+        ),
+        ("AgLibraryFile", "id_local INTEGER PRIMARY KEY, folder, idx_filename", vec![Value::Null, Value::Integer(1), Value::Text("test.ARW".into())]),
+        (
+            "Adobe_images",
+            "id_local INTEGER PRIMARY KEY, id_global, rootFile, fileFormat, fileWidth, fileHeight, rating, pick",
+            vec![
+                Value::Null,
+                Value::Text("synthetic-wal-memory-uuid".into()),
+                Value::Integer(1),
+                Value::Text("ARW".into()),
+                Value::Integer(6000),
+                Value::Integer(4000),
+                Value::Integer(5),
+                Value::Integer(1),
+            ],
+        ),
+    ];
+    let mut file_bytes = vec![0u8; 5 * PAGE];
+    let mut schema = Vec::new();
+    for (index, (name, columns, row)) in tables.iter().enumerate() {
+        schema.push(vec![
+            Value::Text("table".into()),
+            Value::Text((*name).into()),
+            Value::Text((*name).into()),
+            Value::Integer(index as i64 + 2),
+            Value::Text(format!("CREATE TABLE {name} ({columns})")),
+        ]);
+        leaf(&mut file_bytes[(index + 1) * PAGE..(index + 2) * PAGE], 0, std::slice::from_ref(row));
+    }
+    let header = &mut file_bytes[..PAGE];
+    header[..16].copy_from_slice(b"SQLite format 3\0");
+    header[16..18].copy_from_slice(&(PAGE as u16).to_be_bytes());
+    header[18] = 1;
+    header[19] = 1;
+    header[21] = 64;
+    header[22] = 32;
+    header[23] = 32;
+    header[24..28].copy_from_slice(&1u32.to_be_bytes());
+    header[28..32].copy_from_slice(&5u32.to_be_bytes());
+    header[40..44].copy_from_slice(&1u32.to_be_bytes());
+    header[44..48].copy_from_slice(&4u32.to_be_bytes());
+    header[56..60].copy_from_slice(&1u32.to_be_bytes());
+    header[92..96].copy_from_slice(&1u32.to_be_bytes());
+    leaf(&mut file_bytes[..PAGE], 100, &schema);
+    std::fs::write(path, &file_bytes).unwrap();
+    file_bytes[..PAGE].to_vec()
+}
+
+#[cfg(feature = "dhat-heap")]
+fn write_repeated_page_wal(path: &std::path::Path, page: &[u8], page_size: usize, frames: usize) {
+    use std::io::{Seek, SeekFrom, Write};
+    fn checksum(bytes: &[u8], mut sum: (u32, u32)) -> (u32, u32) {
+        for word in bytes.chunks_exact(8) {
+            let left = u32::from_le_bytes(word[..4].try_into().unwrap());
+            let right = u32::from_le_bytes(word[4..].try_into().unwrap());
+            sum.0 = sum.0.wrapping_add(left).wrapping_add(sum.1);
+            sum.1 = sum.1.wrapping_add(right).wrapping_add(sum.0);
+        }
+        sum
+    }
+    let stride = page_size + 24;
+    let length = 32 + frames * stride;
+    let mut file = std::fs::File::create(path).unwrap();
+    file.set_len(length as u64).unwrap();
+    let mut header = [0u8; 32];
+    header[..4].copy_from_slice(&0x377f0682u32.to_be_bytes());
+    header[4..8].copy_from_slice(&3_007_000u32.to_be_bytes());
+    header[8..12].copy_from_slice(&(page_size as u32).to_be_bytes());
+    header[16..20].copy_from_slice(&123u32.to_be_bytes());
+    header[20..24].copy_from_slice(&456u32.to_be_bytes());
+    let mut sum = checksum(&header[..24], (0, 0));
+    header[24..28].copy_from_slice(&sum.0.to_be_bytes());
+    header[28..32].copy_from_slice(&sum.1.to_be_bytes());
+    file.seek(SeekFrom::Start(0)).unwrap();
+    file.write_all(&header).unwrap();
+    let zero_page = vec![0u8; page_size];
+    for index in 0..frames {
+        let mut frame = [0u8; 24];
+        frame[..4].copy_from_slice(&1u32.to_be_bytes());
+        frame[4..8].copy_from_slice(&(if index + 1 == frames { 5u32 } else { 0u32 }).to_be_bytes());
+        frame[8..12].copy_from_slice(&123u32.to_be_bytes());
+        frame[12..16].copy_from_slice(&456u32.to_be_bytes());
+        sum = checksum(&frame[..8], sum);
+        sum = checksum(if index + 1 == frames { page } else { &zero_page }, sum);
+        frame[16..20].copy_from_slice(&sum.0.to_be_bytes());
+        frame[20..24].copy_from_slice(&sum.1.to_be_bytes());
+        let offset = 32u64 + (index * stride) as u64;
+        file.seek(SeekFrom::Start(offset)).unwrap();
+        file.write_all(&frame).unwrap();
+        if index + 1 == frames {
+            file.seek(SeekFrom::Start(offset + 24)).unwrap();
+            file.write_all(page).unwrap();
+        }
+    }
+}
+
 const BIN: &str = env!("CARGO_BIN_EXE_lightcraft-cli");
 
 #[test]

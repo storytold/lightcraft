@@ -2,13 +2,21 @@
 //! Lightroom, Python and a C SQLite runtime are not needed. Original paths stay in place.
 //! Raw settings are archived before mutation; mapped edits are approximations, not Adobe renders.
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs::{File, Metadata};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
+use std::time::SystemTime;
 
-use crate::lightroom_sqlite::{Database, LiveTable, Value as SqlValue};
+#[cfg(test)]
+static AFTER_DATABASE_INIT_HOOK: std::sync::Mutex<Vec<(PathBuf, fn(&Path))>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+use crate::lightroom_sqlite::wal_checksum;
+use crate::lightroom_sqlite::{Database, Value as SqlValue};
 use lightcraft_catalog::{Album, Flag, Op, Photo, PhotoId, Source};
 use lightcraft_geom::{Affine, Orientation, Point, Rect};
 use serde::{Deserialize, Serialize};
@@ -16,8 +24,6 @@ use serde_json::{Value, json};
 
 type Row = BTreeMap<String, Value>;
 const COMMAND: &str = "library.importLightroom";
-/// Largest catalog database or WAL read into memory (4 GiB). The whole file is held in RAM, so the cap stays finite.
-const MAX_FILE: u64 = 1 << 32;
 
 fn error(why: impl Into<String>) -> crate::EngineError {
     crate::EngineError::BadParams { cmd: COMMAND.into(), msg: why.into() }
@@ -46,25 +52,26 @@ fn source_path(p: &Photo) -> Option<&str> {
 
 struct Reader {
     db: Database,
-    tables: Vec<LiveTable>,
 }
 impl Reader {
-    fn table(&self, name: &str, required: bool) -> Result<Vec<Row>, String> {
-        let Some(t) = self.tables.iter().find(|t| t.name == name) else {
+    fn table(&self, name: &str, required: bool, cancel: &AtomicBool) -> Result<Vec<Row>, String> {
+        let Some(t) = self.db.live_table(name, cancel)? else {
             return if required { Err(format!("unsupported Lightroom catalog: missing {name}")) } else { Ok(Vec::new()) };
         };
         let columns = t.column_names.as_ref().ok_or_else(|| format!("cannot read {name} columns"))?;
-        let rows = self.db.read_table(t.rootpage, columns.len()).map_err(|e| format!("{name}: {e:?}"))?;
+        let rows = self.db.read_table_with_cancel(t.rootpage, columns.len(), cancel).map_err(|e| format!("{name}: {e:?}"))?;
         if rows.len() > 1_000_000 {
             return Err(format!("{name}: more than one million records"));
         }
-        Ok(rows
-            .into_iter()
-            .map(|r| {
+        let mut mapped_rows = Vec::new();
+        mapped_rows.try_reserve_exact(rows.len()).map_err(|_| format!("{name}: unable to reserve bounded rows"))?;
+        for row in rows {
+            ensure_read_active(cancel)?;
+            mapped_rows.push(
                 columns
                     .iter()
                     .cloned()
-                    .zip(r.values.into_iter().map(|v| match v {
+                    .zip(row.values.into_iter().map(|value| match value {
                         SqlValue::Null => Some(Value::Null),
                         SqlValue::Integer(n) => Some(json!(n)),
                         SqlValue::Real(n) => Some(json!(n)),
@@ -73,31 +80,38 @@ impl Reader {
                         SqlValue::Blob(_) => None,
                     }))
                     .filter_map(|(column, value)| value.map(|value| (column, value)))
-                    .collect()
-            })
-            .collect())
+                    .collect(),
+            );
+        }
+        Ok(mapped_rows)
     }
 
-    fn optional_table(&self, name: &str, warnings: &mut Vec<String>) -> Result<Vec<Row>, String> {
-        match self.table(name, false) {
+    fn optional_table(&self, name: &str, warnings: &mut Vec<String>, cancel: &AtomicBool) -> Result<Vec<Row>, String> {
+        match self.table(name, false, cancel) {
             Ok(rows) => Ok(rows),
             Err(error) => {
+                ensure_read_active(cancel)?;
+                if self.db.has_observed_source_failure() {
+                    return Err(error);
+                }
                 warnings.push(format!("skipping optional Lightroom table {name}: {error}"));
                 Ok(Vec::new())
             }
         }
     }
 
-    fn xmp_table(&self) -> Result<(Vec<Row>, Vec<String>), String> {
-        let Some(t) = self.tables.iter().find(|t| t.name == "Adobe_AdditionalMetadata") else { return Ok((Vec::new(), Vec::new())) };
+    fn xmp_table(&self, cancel: &AtomicBool) -> Result<(Vec<Row>, Vec<String>), String> {
+        let Some(t) = self.db.live_table("Adobe_AdditionalMetadata", cancel)? else { return Ok((Vec::new(), Vec::new())) };
         let columns = t.column_names.as_ref().ok_or_else(|| "cannot read Adobe_AdditionalMetadata columns".to_string())?;
-        let rows = self.db.read_table(t.rootpage, columns.len()).map_err(|e| format!("Adobe_AdditionalMetadata: {e:?}"))?;
+        let rows = self.db.read_table_with_cancel(t.rootpage, columns.len(), cancel).map_err(|e| format!("Adobe_AdditionalMetadata: {e:?}"))?;
         if rows.len() > 1_000_000 {
             return Err("Adobe_AdditionalMetadata: more than one million records".into());
         }
         let mut warnings = Vec::new();
-        let mut out = Vec::with_capacity(rows.len());
+        let mut out = Vec::new();
+        out.try_reserve_exact(rows.len()).map_err(|_| "Adobe_AdditionalMetadata: unable to reserve bounded rows")?;
         for row in rows {
+            ensure_read_active(cancel)?;
             let image = row
                 .values
                 .iter()
@@ -111,6 +125,7 @@ impl Reader {
                 .unwrap_or(0);
             let mut mapped = Row::new();
             for (column, value) in columns.iter().zip(row.values) {
+                ensure_read_active(cancel)?;
                 let value = match value {
                     SqlValue::Null => Some(Value::Null),
                     SqlValue::Integer(n) => Some(json!(n)),
@@ -232,24 +247,6 @@ pub(crate) fn validate_for_job(data: &CatalogImport) -> Result<(), String> {
     validate(data)
 }
 
-fn bytes(path: &Path) -> Result<Vec<u8>, String> {
-    use std::io::Read;
-    let f = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let len = f.metadata().map_err(|e| e.to_string())?.len();
-    if len > MAX_FILE {
-        return Err("catalog or WAL exceeds 4 GiB import limit".into());
-    }
-    let mut out = Vec::new();
-    // Reserve the exact size up front: growing by doubling would briefly need about twice the catalog's size.
-    let wanted = usize::try_from(len).map_err(|_| "catalog is too large for this platform".to_string())?;
-    out.try_reserve_exact(wanted).map_err(|_| "not enough memory to read the catalog".to_string())?;
-    f.take(MAX_FILE + 1).read_to_end(&mut out).map_err(|e| e.to_string())?;
-    if out.len() as u64 > MAX_FILE {
-        return Err("catalog grew beyond import limit".into());
-    }
-    Ok(out)
-}
-
 fn xmp(v: Option<&Value>) -> Result<String, String> {
     match v {
         Some(Value::String(s)) => Ok(s.clone()),
@@ -283,26 +280,16 @@ fn decode_xmp_bytes(bytes: &[u8]) -> Result<String, String> {
     String::from_utf8(decoded).map_err(|e| e.to_string())
 }
 
+#[cfg(test)]
 fn be_word(bytes: &[u8], at: usize) -> Result<u32, String> {
     let word = bytes.get(at..at + 4).and_then(|s| <[u8; 4]>::try_from(s).ok()).ok_or("truncated WAL")?;
     Ok(u32::from_be_bytes(word))
 }
 
-fn wal_checksum(bytes: &[u8], big: bool, mut sum: (u32, u32)) -> (u32, u32) {
-    for pair in bytes.as_chunks::<8>().0 {
-        let first = [pair[0], pair[1], pair[2], pair[3]];
-        let second = [pair[4], pair[5], pair[6], pair[7]];
-        let (first, second) =
-            if big { (u32::from_be_bytes(first), u32::from_be_bytes(second)) } else { (u32::from_le_bytes(first), u32::from_le_bytes(second)) };
-        sum.0 = sum.0.wrapping_add(first).wrapping_add(sum.1);
-        sum.1 = sum.1.wrapping_add(second).wrapping_add(sum.0);
-    }
-    sum
-}
-
 // SQLite file format §4: validate the live checksum chain in constant space, then overlay
 // only its last committed prefix. The forensic timeline materializes EVERY historical
 // database snapshot; it must never be used to validate a large, actively used catalog.
+#[cfg(test)]
 fn committed_wal_len(main: &[u8], wal: &[u8]) -> Result<usize, String> {
     if wal.is_empty() {
         return Ok(0);
@@ -341,6 +328,114 @@ fn committed_wal_len(main: &[u8], wal: &[u8]) -> Result<usize, String> {
     Ok(committed)
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FileStamp {
+    len: u64,
+    modified: SystemTime,
+    is_file: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FileSnapshot {
+    stamp: FileStamp,
+    prefix: Vec<u8>,
+}
+
+struct GuardedFile {
+    path: PathBuf,
+    handle: File,
+    initial: FileSnapshot,
+    path_stamp: FileStamp,
+    prefix_limit: usize,
+}
+
+impl GuardedFile {
+    fn capture(path: &Path, source: &File, prefix_limit: usize) -> Result<Self, String> {
+        let path_stamp = file_stamp(&std::fs::metadata(path).map_err(|error| format!("{}: {error}", path.display()))?)?;
+        let initial = file_snapshot(source, prefix_limit)?;
+        if path_stamp != initial.stamp {
+            return Err("catalog changed during reading; close Lightroom and retry".into());
+        }
+        let handle = source.try_clone().map_err(|error| format!("{}: clone read-only source: {error}", path.display()))?;
+        Ok(Self { path: path.to_path_buf(), handle, initial, path_stamp, prefix_limit })
+    }
+
+    fn verify(&self) -> Result<(), String> {
+        let current = file_snapshot(&self.handle, self.prefix_limit)?;
+        let path_stamp = file_stamp(&std::fs::metadata(&self.path).map_err(|error| format!("{}: {error}", self.path.display()))?)?;
+        if current != self.initial || path_stamp != self.path_stamp || path_stamp != current.stamp {
+            return Err("catalog changed during reading; close Lightroom and retry".into());
+        }
+        Ok(())
+    }
+}
+
+struct SourceGuard {
+    main: GuardedFile,
+    wal_path: PathBuf,
+    wal: Option<GuardedFile>,
+}
+
+impl SourceGuard {
+    fn capture(main_path: &Path, main: &File, wal_path: &Path, wal: Option<&File>) -> Result<Self, String> {
+        let main = GuardedFile::capture(main_path, main, 100)?;
+        let wal_path_stamp = optional_path_stamp(wal_path)?;
+        let wal = match (wal, wal_path_stamp) {
+            (Some(file), Some(_)) => Some(GuardedFile::capture(wal_path, file, 32)?),
+            (None, None) => None,
+            _ => return Err("catalog changed during reading; close Lightroom and retry".into()),
+        };
+        Ok(Self { main, wal_path: wal_path.to_path_buf(), wal })
+    }
+
+    fn main_len(&self) -> u64 {
+        self.main.initial.stamp.len
+    }
+
+    fn wal_len(&self) -> Option<u64> {
+        self.wal.as_ref().map(|file| file.initial.stamp.len)
+    }
+
+    fn verify(&self) -> Result<(), String> {
+        self.main.verify()?;
+        match (&self.wal, optional_path_stamp(&self.wal_path)?) {
+            (Some(file), Some(_)) => file.verify(),
+            (None, None) => Ok(()),
+            _ => Err("catalog changed during reading; close Lightroom and retry".into()),
+        }
+    }
+}
+
+fn file_stamp(metadata: &Metadata) -> Result<FileStamp, String> {
+    Ok(FileStamp {
+        len: metadata.len(),
+        modified: metadata.modified().map_err(|error| format!("read source modification time: {error}"))?,
+        is_file: metadata.is_file(),
+    })
+}
+
+fn optional_path_stamp(path: &Path) -> Result<Option<FileStamp>, String> {
+    match std::fs::metadata(path) {
+        Ok(metadata) => file_stamp(&metadata).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("{}: {error}", path.display())),
+    }
+}
+
+fn file_snapshot(file: &File, prefix_limit: usize) -> Result<FileSnapshot, String> {
+    let metadata = file.metadata().map_err(|error| format!("source metadata: {error}"))?;
+    let stamp = file_stamp(&metadata)?;
+    if !stamp.is_file {
+        return Err("catalog source is not a regular file".into());
+    }
+    let prefix_len = usize::try_from(stamp.len.min(prefix_limit as u64)).map_err(|_| "source header length does not fit host")?;
+    let mut prefix = vec![0; prefix_len];
+    let mut reader = file.try_clone().map_err(|error| format!("clone read-only source: {error}"))?;
+    reader.seek(SeekFrom::Start(0)).map_err(|error| format!("seek source header: {error}"))?;
+    reader.read_exact(&mut prefix).map_err(|error| format!("read source header: {error}"))?;
+    Ok(FileSnapshot { stamp, prefix })
+}
+
 /// Where a root folder is when its `absolutePath` isn't a folder here (the catalog came from
 /// another computer): `relativePathFromCatalog`, which Lightroom records for roots on the
 /// catalog's volume, resolved against the catalog's folder, if that is a folder.
@@ -377,34 +472,42 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
     total.store(14, Ordering::Relaxed);
     done.store(0, Ordering::Relaxed);
     ensure_read_active(cancel)?;
-    let before = std::fs::metadata(path).map_err(|e| e.to_string())?;
     let wal_path = PathBuf::from(format!("{}-wal", path.display()));
-    let wal_before = std::fs::metadata(&wal_path).ok().map(|m| (m.len(), m.modified().ok()));
-    let main = bytes(path)?;
-    let wal = match std::fs::metadata(&wal_path) {
-        Ok(_) => bytes(&wal_path)?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(e) => return Err(e.to_string()),
+    let main_file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let wal_file = match File::open(&wal_path) {
+        Ok(file) => Some(file),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("{}: {e}", wal_path.display())),
     };
-    let wal_len = committed_wal_len(&main, &wal)?;
+    let source_guard = SourceGuard::capture(path, &main_file, &wal_path, wal_file.as_ref())?;
+    let main_len = source_guard.main_len();
+    let wal_file = match (wal_file, source_guard.wal_len()) {
+        (Some(file), Some(len)) => Some((file, len)),
+        (None, None) => None,
+        _ => return Err("catalog changed during reading; close Lightroom and retry".into()),
+    };
     ensure_read_active(cancel)?;
-    let db = Database::open_with_wal(main, &wal[..wal_len]).map_err(|e| format!("invalid SQLite catalog: {e:?}"))?;
-    let after = std::fs::metadata(path).map_err(|e| e.to_string())?;
-    let wal_after = std::fs::metadata(&wal_path).ok().map(|m| (m.len(), m.modified().ok()));
-    if before.len() != after.len() || before.modified().ok() != after.modified().ok() || wal_before != wal_after {
-        return Err("catalog changed during reading; close Lightroom and retry".into());
+    let db = Database::open_file_with_wal(main_file, main_len, wal_file, cancel).map_err(|e| format!("invalid SQLite catalog: {e:?}"))?;
+    source_guard.verify()?;
+    #[cfg(test)]
+    {
+        let mut hooks = AFTER_DATABASE_INIT_HOOK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(index) = hooks.iter().position(|(target, _)| target == path) {
+            let (_, hook) = hooks.remove(index);
+            hook(path);
+        }
     }
-    let reader = Reader { tables: db.live_tables()?, db };
+    let reader = Reader { db };
     let mut warnings = Vec::new();
     let table = |name: &str, required: bool| -> Result<Vec<Row>, String> {
         ensure_read_active(cancel)?;
-        let rows = reader.table(name, required)?;
+        let rows = reader.table(name, required, cancel)?;
         done.fetch_add(1, Ordering::Relaxed);
         Ok(rows)
     };
     let optional_table = |name: &str, warnings: &mut Vec<String>| -> Result<Vec<Row>, String> {
         ensure_read_active(cancel)?;
-        let rows = reader.optional_table(name, warnings)?;
+        let rows = reader.optional_table(name, warnings, cancel)?;
         done.fetch_add(1, Ordering::Relaxed);
         Ok(rows)
     };
@@ -416,9 +519,13 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
         .map(|r| (number(&r, "image"), text(&r, "text").to_string()))
         .collect();
     ensure_read_active(cancel)?;
-    let (metadata_rows, metadata_warnings) = match reader.xmp_table() {
+    let (metadata_rows, metadata_warnings) = match reader.xmp_table(cancel) {
         Ok(result) => result,
         Err(error) => {
+            ensure_read_active(cancel)?;
+            if reader.db.has_observed_source_failure() {
+                return Err(error);
+            }
             warnings.push(format!("skipping optional Lightroom table Adobe_AdditionalMetadata: {error}"));
             (Vec::new(), Vec::new())
         }
@@ -460,6 +567,7 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
     let mut root_ids: Vec<_> = roots.keys().copied().collect();
     root_ids.sort_unstable();
     for (id, root) in root_ids.iter().filter_map(|id| Some((*id, roots.get(id)?))) {
+        ensure_read_active(cancel)?;
         let absolute = text(root, "absolutePath");
         let resolved = match relocated_root(absolute, text(root, "relativePathFromCatalog"), path) {
             Some(found) => {
@@ -514,6 +622,7 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
         });
     }
     ensure_read_active(cancel)?;
+    source_guard.verify()?;
     Ok(out)
 }
 
@@ -926,6 +1035,20 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, data: CatalogImport, contex
 mod tests {
     use super::*;
     use lightcraft_geom::CropGeometry;
+
+    static CANCEL_DURING_PAGE_TEST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    static HIGH_PAGE_READS_TEST: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    fn cancel_after_keyword_root_page(page_id: u32) {
+        use std::sync::atomic::Ordering;
+        if (262_157..=262_159).contains(&page_id) {
+            HIGH_PAGE_READS_TEST.fetch_add(1, Ordering::Relaxed);
+            if page_id == 262_159 {
+                CANCEL_DURING_PAGE_TEST.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
     fn row(v: Value) -> Row {
         serde_json::from_value(v).unwrap()
     }
@@ -1375,6 +1498,20 @@ mod tests {
         }
         page[offset + 5..offset + 7].copy_from_slice(&(end as u16).to_be_bytes());
     }
+
+    fn leaf_one(page: &mut [u8], offset: usize, rowid: u64, values: &[SqlValue]) {
+        let payload = record(values);
+        let mut cell = varint(payload.len() as u64);
+        cell.extend(varint(rowid));
+        cell.extend(payload);
+        let end = page.len() - cell.len();
+        page[offset] = 13;
+        page[offset + 3..offset + 5].copy_from_slice(&1u16.to_be_bytes());
+        page[end..end + cell.len()].copy_from_slice(&cell);
+        page[offset + 5..offset + 7].copy_from_slice(&(end as u16).to_be_bytes());
+        page[offset + 8..offset + 10].copy_from_slice(&(end as u16).to_be_bytes());
+    }
+
     /// A one-row-per-table SQLite file: `(name, columns, row)` each.
     fn native_catalog(tables: &[(&str, &str, Vec<SqlValue>)]) -> Vec<u8> {
         use SqlValue::{Integer as I, Text as T};
@@ -1422,8 +1559,682 @@ mod tests {
         ]
     }
 
+    struct SparseCatalogFixture {
+        path: PathBuf,
+        keep: bool,
+    }
+
+    impl Drop for SparseCatalogFixture {
+        fn drop(&mut self) {
+            if self.keep {
+                return;
+            }
+            for suffix in ["", "-wal", "-shm", "-journal"] {
+                let path = PathBuf::from(format!("{}{suffix}", self.path.display()));
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+
+    fn sparse_catalog_fixture(large: bool) -> SparseCatalogFixture {
+        sparse_catalog_fixture_with_optional_wal_table(large, None)
+    }
+
+    fn sparse_catalog_fixture_with_optional_wal_table(large: bool, optional_wal_table: Option<&str>) -> SparseCatalogFixture {
+        use std::io::{Seek, SeekFrom, Write};
+
+        fn write_page(file: &mut std::fs::File, page_id: u32, page: &[u8], page_size: u64) {
+            let offset = u64::from(page_id - 1).checked_mul(page_size).expect("fixture page offset");
+            file.seek(SeekFrom::Start(offset)).expect("seek fixture page");
+            file.write_all(page).expect("write fixture page");
+        }
+
+        static NEXT_FIXTURE: AtomicUsize = AtomicUsize::new(0);
+        const PAGE_SIZE: usize = 4096;
+        const LOCK_BYTE_PAGE: u32 = 262_145;
+        let page_count = if large {
+            262_160
+        } else if optional_wal_table.is_some() {
+            7
+        } else {
+            6
+        };
+        let scratch =
+            std::env::var_os("LIGHTCRAFT_TEST_SCRATCH").or_else(|| std::env::var_os("TMPDIR")).map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        let scratch = scratch.join("lightcraft-lrcat-fixtures");
+        std::fs::create_dir_all(&scratch).expect("create fixture scratch directory");
+        let sequence = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+        let path = scratch.join(format!("synthetic-{}-{sequence}.lrcat", std::process::id()));
+        let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).expect("create new synthetic catalog");
+        drop(file);
+
+        if large && cfg!(windows) {
+            let set_sparse = std::process::Command::new("C:/Windows/System32/fsutil.exe")
+                .args(["sparse", "setflag"])
+                .arg(&path)
+                .output()
+                .expect("run fsutil sparse setflag on new synthetic fixture");
+            assert!(set_sparse.status.success(), "fsutil sparse setflag failed: {}", String::from_utf8_lossy(&set_sparse.stderr));
+            let query_sparse = std::process::Command::new("C:/Windows/System32/fsutil.exe")
+                .args(["sparse", "queryflag"])
+                .arg(&path)
+                .output()
+                .expect("verify sparse flag on synthetic fixture");
+            assert!(query_sparse.status.success(), "fsutil sparse queryflag failed: {}", String::from_utf8_lossy(&query_sparse.stderr));
+            let query = format!("{}{}", String::from_utf8_lossy(&query_sparse.stdout), String::from_utf8_lossy(&query_sparse.stderr));
+            assert!(query.to_ascii_lowercase().contains("sparse"), "fsutil did not confirm a sparse fixture: {query}");
+        }
+
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).expect("open synthetic catalog");
+        let length = u64::from(page_count).checked_mul(PAGE_SIZE as u64).expect("fixture length");
+        file.set_len(length).expect("extend synthetic catalog sparsely");
+
+        let tables = [
+            (
+                "AgLibraryRootFolder",
+                "id_local INTEGER PRIMARY KEY, absolutePath",
+                vec![SqlValue::Null, SqlValue::Text(scratch.join("synthetic-originals").to_string_lossy().into_owned())],
+            ),
+            (
+                "AgLibraryFolder",
+                "id_local INTEGER PRIMARY KEY, rootFolder, pathFromRoot",
+                vec![SqlValue::Null, SqlValue::Integer(1), SqlValue::Text("Photos".into())],
+            ),
+            (
+                "AgLibraryFile",
+                "id_local INTEGER PRIMARY KEY, folder, idx_filename",
+                vec![SqlValue::Null, SqlValue::Integer(1), SqlValue::Text("test.ARW".into())],
+            ),
+            (
+                "Adobe_images",
+                "id_local INTEGER PRIMARY KEY, id_global, rootFile, fileFormat, fileWidth, fileHeight, rating, pick",
+                vec![
+                    SqlValue::Null,
+                    SqlValue::Text("synthetic-large-catalog-uuid".into()),
+                    SqlValue::Integer(1),
+                    SqlValue::Text("ARW".into()),
+                    SqlValue::Integer(6000),
+                    SqlValue::Integer(4000),
+                    SqlValue::Integer(5),
+                    SqlValue::Integer(1),
+                ],
+            ),
+        ];
+        let mut schema = Vec::new();
+        for (index, (name, columns, row)) in tables.iter().enumerate() {
+            let rootpage = match index {
+                3 if large => page_count,
+                3 => 5,
+                _ => index as u32 + 2,
+            };
+            schema.push(vec![
+                SqlValue::Text("table".into()),
+                SqlValue::Text((*name).into()),
+                SqlValue::Text((*name).into()),
+                SqlValue::Integer(i64::from(rootpage)),
+                SqlValue::Text(format!("CREATE TABLE {name} ({columns})")),
+            ]);
+            let mut page = vec![0u8; PAGE_SIZE];
+            leaf(&mut page, 0, std::slice::from_ref(row));
+            write_page(&mut file, rootpage, &page, PAGE_SIZE as u64);
+        }
+
+        let keyword_root = if large { page_count - 1 } else { 6 };
+        schema.push(vec![
+            SqlValue::Text("table".into()),
+            SqlValue::Text("AgLibraryKeyword".into()),
+            SqlValue::Text("AgLibraryKeyword".into()),
+            SqlValue::Integer(i64::from(keyword_root)),
+            SqlValue::Text("CREATE TABLE AgLibraryKeyword (id_local INTEGER PRIMARY KEY, name, parent)".into()),
+        ]);
+        if let Some(name) = optional_wal_table {
+            let (columns, _) = match name {
+                "Adobe_imageDevelopSettings" => ("image INTEGER, text", vec![SqlValue::Integer(1), SqlValue::Text("s = {}".into())]),
+                "Adobe_AdditionalMetadata" => ("image INTEGER, xmp BLOB", vec![SqlValue::Integer(1), SqlValue::Null]),
+                _ => panic!("unsupported synthetic optional table {name}"),
+            };
+            schema.push(vec![
+                SqlValue::Text("table".into()),
+                SqlValue::Text(name.into()),
+                SqlValue::Text(name.into()),
+                SqlValue::Integer(i64::from(page_count)),
+                SqlValue::Text(format!("CREATE TABLE {name} ({columns})")),
+            ]);
+        }
+        let keyword_rows = [
+            vec![SqlValue::Null, SqlValue::Text("Synthetic one".into()), SqlValue::Null],
+            vec![SqlValue::Null, SqlValue::Text("Synthetic two".into()), SqlValue::Integer(1)],
+        ];
+        if large {
+            let left_page_id = page_count - 2;
+            let right_page_id = page_count - 3;
+            let mut interior = vec![0u8; PAGE_SIZE];
+            interior[0] = 0x05;
+            interior[3..5].copy_from_slice(&1u16.to_be_bytes());
+            let cell_at = PAGE_SIZE - 5;
+            interior[5..7].copy_from_slice(&(cell_at as u16).to_be_bytes());
+            interior[8..12].copy_from_slice(&right_page_id.to_be_bytes());
+            interior[12..14].copy_from_slice(&(cell_at as u16).to_be_bytes());
+            interior[cell_at..cell_at + 4].copy_from_slice(&left_page_id.to_be_bytes());
+            interior[cell_at + 4] = 1;
+            write_page(&mut file, keyword_root, &interior, PAGE_SIZE as u64);
+            let mut left_page = vec![0u8; PAGE_SIZE];
+            leaf_one(&mut left_page, 0, 1, &keyword_rows[0]);
+            write_page(&mut file, left_page_id, &left_page, PAGE_SIZE as u64);
+            let mut right_page = vec![0u8; PAGE_SIZE];
+            leaf_one(&mut right_page, 0, 2, &keyword_rows[1]);
+            write_page(&mut file, right_page_id, &right_page, PAGE_SIZE as u64);
+        } else {
+            let mut page = vec![0u8; PAGE_SIZE];
+            leaf(&mut page, 0, &keyword_rows);
+            write_page(&mut file, keyword_root, &page, PAGE_SIZE as u64);
+        }
+
+        let mut free_count = 0u32;
+        for page_id in 5..page_count {
+            if large && page_id != LOCK_BYTE_PAGE && page_id < page_count - 3 {
+                free_count += 1;
+            }
+        }
+        let first_trunk: u32 = if free_count == 0 { 0 } else { 5 };
+        let mut free_pages = (5..page_count).filter(|page_id| large && *page_id != LOCK_BYTE_PAGE && *page_id < page_count - 3);
+        let mut trunk = free_pages.next();
+        while let Some(trunk_page) = trunk {
+            let mut leaves = Vec::with_capacity(1018);
+            for _ in 0..1018 {
+                let Some(page_id) = free_pages.next() else { break };
+                leaves.push(page_id);
+            }
+            let next_trunk = free_pages.next();
+            let mut page = vec![0u8; PAGE_SIZE];
+            page[..4].copy_from_slice(&next_trunk.unwrap_or(0).to_be_bytes());
+            page[4..8].copy_from_slice(&(leaves.len() as u32).to_be_bytes());
+            for (index, page_id) in leaves.iter().enumerate() {
+                let at = 8 + index * 4;
+                page[at..at + 4].copy_from_slice(&page_id.to_be_bytes());
+            }
+            write_page(&mut file, trunk_page, &page, PAGE_SIZE as u64);
+            trunk = next_trunk;
+        }
+
+        let mut header_page = vec![0u8; PAGE_SIZE];
+        header_page[..16].copy_from_slice(b"SQLite format 3\0");
+        header_page[16..18].copy_from_slice(&(PAGE_SIZE as u16).to_be_bytes());
+        header_page[18] = 1;
+        header_page[19] = 1;
+        header_page[21] = 64;
+        header_page[22] = 32;
+        header_page[23] = 32;
+        header_page[24..28].copy_from_slice(&1u32.to_be_bytes());
+        header_page[28..32].copy_from_slice(&page_count.to_be_bytes());
+        header_page[32..36].copy_from_slice(&first_trunk.to_be_bytes());
+        header_page[36..40].copy_from_slice(&free_count.to_be_bytes());
+        header_page[40..44].copy_from_slice(&1u32.to_be_bytes());
+        header_page[44..48].copy_from_slice(&4u32.to_be_bytes());
+        header_page[56..60].copy_from_slice(&1u32.to_be_bytes());
+        header_page[92..96].copy_from_slice(&1u32.to_be_bytes());
+        leaf(&mut header_page, 100, &schema);
+        write_page(&mut file, 1, &header_page, PAGE_SIZE as u64);
+        file.sync_all().expect("flush synthetic catalog");
+        drop(file);
+
+        SparseCatalogFixture { path, keep: large && std::env::var_os("LIGHTCRAFT_KEEP_SPARSE_FIXTURE").is_some() }
+    }
+
+    fn optional_wal_fixture(table_name: &str) -> SparseCatalogFixture {
+        use std::io::Write;
+
+        const PAGE_SIZE: usize = 4096;
+        const PAGE_ID: u32 = 7;
+        const SALT: (u32, u32) = (0x1234_5678, 0x9abc_def0);
+
+        let fixture = sparse_catalog_fixture_with_optional_wal_table(false, Some(table_name));
+        let row = match table_name {
+            "Adobe_imageDevelopSettings" => vec![SqlValue::Integer(1), SqlValue::Text("s = {}".into())],
+            "Adobe_AdditionalMetadata" => vec![SqlValue::Integer(1), SqlValue::Null],
+            _ => panic!("unsupported synthetic optional table {table_name}"),
+        };
+        let mut page = vec![0u8; PAGE_SIZE];
+        leaf_one(&mut page, 0, 1, &row);
+
+        let mut wal = vec![0u8; 32];
+        wal[..4].copy_from_slice(&0x377f0682u32.to_be_bytes());
+        wal[4..8].copy_from_slice(&3_007_000u32.to_be_bytes());
+        wal[8..12].copy_from_slice(&(PAGE_SIZE as u32).to_be_bytes());
+        wal[16..20].copy_from_slice(&SALT.0.to_be_bytes());
+        wal[20..24].copy_from_slice(&SALT.1.to_be_bytes());
+        let mut checksum = wal_checksum(&wal[..24], false, (0, 0));
+        wal[24..28].copy_from_slice(&checksum.0.to_be_bytes());
+        wal[28..32].copy_from_slice(&checksum.1.to_be_bytes());
+
+        let mut frame = [0u8; 24];
+        frame[..4].copy_from_slice(&PAGE_ID.to_be_bytes());
+        frame[4..8].copy_from_slice(&PAGE_ID.to_be_bytes());
+        frame[8..12].copy_from_slice(&SALT.0.to_be_bytes());
+        frame[12..16].copy_from_slice(&SALT.1.to_be_bytes());
+        checksum = wal_checksum(&frame[..8], false, checksum);
+        checksum = wal_checksum(&page, false, checksum);
+        frame[16..20].copy_from_slice(&checksum.0.to_be_bytes());
+        frame[20..24].copy_from_slice(&checksum.1.to_be_bytes());
+        wal.extend(frame);
+        wal.extend(page);
+
+        let wal_path = PathBuf::from(format!("{}-wal", fixture.path.display()));
+        let mut writer = std::fs::OpenOptions::new().write(true).create_new(true).open(&wal_path).expect("create synthetic optional-table WAL");
+        writer.write_all(&wal).expect("write synthetic optional-table WAL");
+        writer.sync_all().expect("flush synthetic optional-table WAL");
+        fixture
+    }
+
+    fn mutate_optional_wal_frame_page_id(path: &Path) {
+        use std::io::{Seek, SeekFrom, Write};
+
+        let wal_path = PathBuf::from(format!("{}-wal", path.display()));
+        let mut wal = std::fs::OpenOptions::new().read(true).write(true).open(wal_path).expect("open synthetic WAL for indexed-frame mutation");
+        let modified = wal.metadata().expect("read synthetic WAL timestamp").modified().expect("synthetic WAL modification time");
+        wal.seek(SeekFrom::Start(32)).expect("seek indexed synthetic WAL frame");
+        wal.write_all(&8u32.to_be_bytes()).expect("change indexed synthetic WAL page id");
+        wal.sync_all().expect("flush indexed synthetic WAL mutation");
+        wal.set_times(std::fs::FileTimes::new().set_modified(modified)).expect("restore synthetic WAL modification time");
+        wal.sync_all().expect("flush restored synthetic WAL timestamp");
+    }
+
+    fn truncate_optional_wal_after_database_init(path: &Path) {
+        let wal_path = PathBuf::from(format!("{}-wal", path.display()));
+        let wal = std::fs::OpenOptions::new().write(true).open(wal_path).expect("open synthetic WAL for injected source-read failure");
+        wal.set_len(32).expect("truncate synthetic WAL after its index was built");
+    }
+
+    fn remove_wal_after_database_init(path: &Path) {
+        std::fs::remove_file(format!("{}-wal", path.display())).expect("delete synthetic WAL after database initialization");
+    }
+
+    fn reset_wal_after_database_init(path: &Path) {
+        use std::io::{Seek, SeekFrom, Write};
+        let wal_path = PathBuf::from(format!("{}-wal", path.display()));
+        let mut wal = std::fs::OpenOptions::new().write(true).open(wal_path).expect("open synthetic WAL for reset");
+        let modified = wal.metadata().expect("read WAL timestamp before reset").modified().expect("WAL modification timestamp");
+        wal.seek(SeekFrom::Start(16)).expect("seek WAL salt fields");
+        wal.write_all(&[0u8; 8]).expect("reset WAL salts");
+        wal.sync_all().expect("flush WAL reset");
+        wal.set_times(std::fs::FileTimes::new().set_modified(modified)).expect("restore WAL timestamp after reset");
+        wal.sync_all().expect("flush restored WAL timestamp");
+    }
+
+    fn grow_wal_after_database_init(path: &Path) {
+        use std::io::Write;
+        let wal_path = PathBuf::from(format!("{}-wal", path.display()));
+        let mut wal = std::fs::OpenOptions::new().append(true).open(wal_path).expect("open synthetic WAL for growth");
+        wal.write_all(&[0x5a]).expect("append synthetic WAL tail");
+        wal.sync_all().expect("flush WAL growth");
+    }
+
+    fn truncate_wal_after_database_init(path: &Path) {
+        let wal_path = PathBuf::from(format!("{}-wal", path.display()));
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(wal_path)
+            .expect("open synthetic WAL for truncation")
+            .set_len(32)
+            .expect("truncate synthetic WAL");
+    }
+
+    fn replace_file_with_distinct_stamp(path: &Path, changed_offset: usize) {
+        use std::io::Write;
+        let mut bytes = std::fs::read(path).expect("read synthetic source before replacement");
+        bytes[changed_offset] ^= 0x5a;
+        let replacement = PathBuf::from(format!("{}.replacement", path.display()));
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&replacement).expect("create replacement synthetic source");
+        file.write_all(&bytes).expect("write replacement synthetic source");
+        file.sync_all().expect("flush replacement synthetic source");
+        file.set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::UNIX_EPOCH))
+            .expect("stamp replacement synthetic source distinctly");
+        drop(file);
+        std::fs::remove_file(path).expect("remove old synthetic source path");
+        std::fs::rename(&replacement, path).expect("install replacement synthetic source");
+    }
+
+    fn replace_main_after_database_init(path: &Path) {
+        replace_file_with_distinct_stamp(path, 24);
+    }
+
+    fn replace_wal_after_database_init(path: &Path) {
+        replace_file_with_distinct_stamp(&PathBuf::from(format!("{}-wal", path.display())), 16);
+    }
+
+    fn remove_main_after_database_init(path: &Path) {
+        std::fs::remove_file(path).expect("delete synthetic main after database initialization");
+    }
+
+    fn assert_source_stamps_and_headers_unchanged(
+        path: &Path,
+        main_stamp: &std::fs::Metadata,
+        wal_stamp: &std::fs::Metadata,
+        main_header: &[u8; 100],
+        wal_header: &[u8; 32],
+    ) {
+        use std::io::Read;
+
+        let after_main = std::fs::metadata(path).expect("synthetic main metadata after observed WAL failure");
+        let wal_path = PathBuf::from(format!("{}-wal", path.display()));
+        let after_wal = std::fs::metadata(&wal_path).expect("synthetic WAL metadata after observed frame failure");
+        assert_eq!(main_stamp.len(), after_main.len());
+        assert_eq!(main_stamp.modified().ok(), after_main.modified().ok());
+        assert_eq!(wal_stamp.len(), after_wal.len());
+        assert_eq!(wal_stamp.modified().ok(), after_wal.modified().ok());
+        let mut main_prefix = [0u8; 100];
+        std::fs::File::open(path).expect("open synthetic main header").read_exact(&mut main_prefix).expect("read synthetic main header");
+        assert_eq!(main_header, &main_prefix);
+        let mut wal_prefix = [0u8; 32];
+        std::fs::File::open(wal_path).expect("open synthetic WAL header").read_exact(&mut wal_prefix).expect("read synthetic WAL header");
+        assert_eq!(wal_header, &wal_prefix);
+    }
+
+    fn read_after_indexed_optional_frame_changes(table_name: &str) -> Result<CatalogImport, String> {
+        use std::io::Read;
+
+        let fixture = optional_wal_fixture(table_name);
+        let wal_path = PathBuf::from(format!("{}-wal", fixture.path.display()));
+        let main_stamp = std::fs::metadata(&fixture.path).expect("synthetic main file stamp");
+        let wal_stamp = std::fs::metadata(&wal_path).expect("synthetic WAL file stamp");
+        let mut main_header = [0u8; 100];
+        std::fs::File::open(&fixture.path)
+            .expect("open synthetic main header before read")
+            .read_exact(&mut main_header)
+            .expect("read synthetic main header before read");
+        let mut wal_header = [0u8; 32];
+        std::fs::File::open(&wal_path)
+            .expect("open synthetic WAL header before read")
+            .read_exact(&mut wal_header)
+            .expect("read synthetic WAL header before read");
+        AFTER_DATABASE_INIT_HOOK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((fixture.path.clone(), mutate_optional_wal_frame_page_id));
+        let result = read(&fixture.path);
+        assert_source_stamps_and_headers_unchanged(&fixture.path, &main_stamp, &wal_stamp, &main_header, &wal_header);
+        result
+    }
+
     #[test]
-    fn reads_native_sqlite_tables_without_lightroom_or_external_processes() {
+    fn cancellation_stops_catalog_btree_traversal_between_pages() {
+        use std::sync::atomic::Ordering;
+
+        let fixture = sparse_catalog_fixture(true);
+        CANCEL_DURING_PAGE_TEST.store(false, Ordering::Relaxed);
+        HIGH_PAGE_READS_TEST.store(0, Ordering::Relaxed);
+        crate::lightroom_sqlite::set_page_read_hook_for_test(Some(cancel_after_keyword_root_page));
+        let result = read_with_progress(&fixture.path, &CANCEL_DURING_PAGE_TEST, &AtomicUsize::new(0), &AtomicUsize::new(0));
+        crate::lightroom_sqlite::set_page_read_hook_for_test(None);
+
+        let error = result.expect_err("cancellation must stop catalog page traversal");
+        assert!(error.contains("cancelled"), "unexpected cancellation error: {error}");
+        assert_eq!(HIGH_PAGE_READS_TEST.load(Ordering::Relaxed), 1, "must stop before reading child/overflow pages after cancellation");
+    }
+
+    #[test]
+    fn reads_large_sparse_catalog() {
+        use std::io::{Read, Seek, SeekFrom};
+
+        const LARGE_PAGE: u32 = 262_160;
+        const PAGE_SIZE: usize = 4096;
+        let small = sparse_catalog_fixture(false);
+        let large = sparse_catalog_fixture(true);
+        let expected_path = std::env::var_os("LIGHTCRAFT_TEST_SCRATCH")
+            .or_else(|| std::env::var_os("TMPDIR"))
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("lightcraft-lrcat-fixtures")
+            .join("synthetic-originals")
+            .join("Photos")
+            .join("test.ARW");
+        let small_catalog = read(&small.path).expect("small control catalog parses");
+        assert_eq!(small_catalog.photos.len(), 1);
+        assert_eq!(small_catalog.photos[0].source_id, 1);
+        assert_eq!(small_catalog.photos[0].uuid, "synthetic-large-catalog-uuid");
+        assert_eq!(number(&small_catalog.photos[0].image, "rating"), 5);
+        assert_eq!(number(&small_catalog.photos[0].image, "pick"), 1);
+        assert_eq!(small_catalog.photos[0].path, expected_path.to_string_lossy());
+
+        let high_page_offset = u64::from(LARGE_PAGE - 1) * PAGE_SIZE as u64;
+        assert!(high_page_offset > 1u64 << 30, "selected image-table page must be beyond 1 GiB");
+        let before = std::fs::metadata(&large.path).expect("large fixture metadata");
+        assert_eq!(before.len(), 1_073_807_360);
+        let high_page_offsets =
+            [LARGE_PAGE - 1, LARGE_PAGE - 2, LARGE_PAGE - 3, LARGE_PAGE - 4].map(|page_offset| u64::from(page_offset) * PAGE_SIZE as u64);
+        assert!(high_page_offsets.iter().all(|offset| *offset > 1u64 << 30), "table pages must be beyond 1 GiB");
+        let mut before_pages = Vec::new();
+        let mut source = std::fs::File::open(&large.path).expect("open large fixture read-only");
+        for offset in high_page_offsets {
+            let mut page = vec![0u8; PAGE_SIZE];
+            source.seek(SeekFrom::Start(offset)).expect("seek high table page");
+            source.read_exact(&mut page).expect("read high table page before inspection");
+            before_pages.push(page);
+        }
+        drop(source);
+        let companion_paths: Vec<_> =
+            ["-wal", "-shm", "-journal"].iter().map(|suffix| PathBuf::from(format!("{}{suffix}", large.path.display()))).collect();
+        assert!(companion_paths.iter().all(|path| !path.exists()), "fixture must start without SQLite companions");
+        if large.keep {
+            eprintln!("KEEP_SYNTHETIC_FIXTURE={}", large.path.display());
+        }
+
+        let catalog = read(&large.path).unwrap_or_else(|error| panic!("large sparse catalog should parse: {error}"));
+        assert_eq!(catalog.photos.len(), 1);
+        assert_eq!(catalog.photos[0].source_id, small_catalog.photos[0].source_id);
+        assert_eq!(catalog.photos[0].uuid, small_catalog.photos[0].uuid);
+        assert_eq!(catalog.photos[0].image, small_catalog.photos[0].image);
+        assert_eq!(catalog.photos[0].path, small_catalog.photos[0].path);
+        assert_eq!(catalog.photos[0].path, expected_path.to_string_lossy());
+
+        let after = std::fs::metadata(&large.path).expect("large fixture metadata after inspection");
+        assert_eq!(before.len(), after.len());
+        assert_eq!(before.modified().ok(), after.modified().ok());
+        let mut source = std::fs::File::open(&large.path).expect("reopen large fixture read-only");
+        for (offset, before_page) in high_page_offsets.into_iter().zip(before_pages) {
+            let mut after_page = vec![0u8; PAGE_SIZE];
+            source.seek(SeekFrom::Start(offset)).expect("seek high table page after inspection");
+            source.read_exact(&mut after_page).expect("read high table page after inspection");
+            assert_eq!(before_page, after_page, "inspection must not mutate source pages");
+        }
+        assert!(companion_paths.iter().all(|path| !path.exists()), "inspection must not create WAL/SHM/journal companions");
+    }
+
+    #[test]
+    fn detects_wal_creation_after_database_initialization() {
+        fn create_wal(path: &Path) {
+            let wal_path = PathBuf::from(format!("{}-wal", path.display()));
+            std::fs::write(wal_path, b"synthetic WAL appeared during read").expect("create synthetic WAL during read");
+        }
+
+        let fixture = sparse_catalog_fixture(false);
+        AFTER_DATABASE_INIT_HOOK.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((fixture.path.clone(), create_wal));
+        let result = read(&fixture.path);
+        assert!(result.is_err(), "reader must reject a WAL created while reading the main catalog");
+        assert!(result.unwrap_err().contains("catalog changed during reading"));
+    }
+
+    #[test]
+    fn detects_main_catalog_change_after_database_initialization() {
+        fn mutate_header(path: &Path) {
+            use std::io::{Seek, SeekFrom, Write};
+            let mut file = std::fs::OpenOptions::new().write(true).open(path).expect("open synthetic catalog for mutation");
+            file.seek(SeekFrom::Start(24)).expect("seek synthetic SQLite change counter");
+            file.write_all(&2u32.to_be_bytes()).expect("mutate synthetic SQLite change counter");
+            file.sync_all().expect("flush synthetic source mutation");
+        }
+
+        let fixture = sparse_catalog_fixture(false);
+        AFTER_DATABASE_INIT_HOOK.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((fixture.path.clone(), mutate_header));
+        let result = read(&fixture.path);
+        assert!(result.is_err(), "reader must reject an observable source mutation during table reads");
+        assert!(result.unwrap_err().contains("catalog changed during reading"));
+    }
+
+    #[test]
+    fn observed_changed_optional_settings_wal_frame_fails_public_read() {
+        let result = read_after_indexed_optional_frame_changes("Adobe_imageDevelopSettings");
+        assert!(result.is_err(), "an indexed source-frame change in an optional table must fail the whole read, not become a warning");
+    }
+
+    #[test]
+    fn observed_changed_optional_xmp_wal_frame_fails_public_read() {
+        let result = read_after_indexed_optional_frame_changes("Adobe_AdditionalMetadata");
+        assert!(result.is_err(), "an indexed source-frame change in optional XMP must fail the whole read, not become a warning");
+    }
+
+    #[test]
+    fn observed_optional_source_failure_fails_prepare_before_catalog_or_archive_effects() {
+        use std::io::Read;
+
+        let fixture = optional_wal_fixture("Adobe_imageDevelopSettings");
+        let wal_path = PathBuf::from(format!("{}-wal", fixture.path.display()));
+        let main_stamp = std::fs::metadata(&fixture.path).expect("synthetic main file stamp");
+        let wal_stamp = std::fs::metadata(&wal_path).expect("synthetic WAL file stamp");
+        let mut main_header = [0u8; 100];
+        std::fs::File::open(&fixture.path)
+            .expect("open synthetic main header before prepare")
+            .read_exact(&mut main_header)
+            .expect("read synthetic main header before prepare");
+        let mut wal_header = [0u8; 32];
+        std::fs::File::open(&wal_path)
+            .expect("open synthetic WAL header before prepare")
+            .read_exact(&mut wal_header)
+            .expect("read synthetic WAL header before prepare");
+        AFTER_DATABASE_INIT_HOOK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((fixture.path.clone(), mutate_optional_wal_frame_page_id));
+
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock after epoch").as_nanos();
+        let library = fixture.path.parent().expect("fixture parent").join(format!("disposable-failed-prepare-{}-{nonce}", std::process::id()));
+        let mut session = crate::Session::new();
+        session.open_library(&library, false).expect("open disposable synthetic library");
+        let catalog_before = session.catalog.to_snapshot();
+        let undo_before = session.undo.len();
+        let interop = library.join("Interop");
+        let index_path = interop.join("lightroom-index.json");
+        let index_before = std::fs::read(&index_path).ok();
+        let interop_existed_before = interop.exists();
+        let mut interop_entries_before = if interop_existed_before {
+            std::fs::read_dir(&interop)
+                .expect("read initial synthetic Interop directory")
+                .map(|entry| entry.expect("synthetic Interop entry").file_name())
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        interop_entries_before.sort();
+
+        let mut job =
+            crate::lightroom_job::LightroomJob::new(&mut session, fixture.path.clone(), false).expect("create synthetic Lightroom import job");
+        let result = job.prepare(&AtomicBool::new(false));
+        let error = match result {
+            Ok(_) => panic!("observed optional-source failure must abort preparation before staging"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("indexed WAL frame changed during reading"), "unexpected preparation error: {error}");
+        assert_eq!(session.catalog.to_snapshot(), catalog_before, "failed prepare must not mutate catalog");
+        assert_eq!(session.undo.len(), undo_before, "failed prepare must not add undo records");
+        assert_eq!(interop.exists(), interop_existed_before, "failed prepare must not create archive storage");
+        assert_eq!(std::fs::read(&index_path).ok(), index_before, "failed prepare must not write or alter the persistent import index");
+        let mut interop_entries_after = if interop.exists() {
+            std::fs::read_dir(&interop)
+                .expect("read Interop directory after failed prepare")
+                .map(|entry| entry.expect("synthetic Interop entry").file_name())
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        interop_entries_after.sort();
+        assert_eq!(interop_entries_after, interop_entries_before, "failed prepare must not create or change archives or the import index");
+        assert_source_stamps_and_headers_unchanged(&fixture.path, &main_stamp, &wal_stamp, &main_header, &wal_header);
+        session.close_library().expect("close disposable synthetic library");
+        let _ = std::fs::remove_dir_all(library);
+    }
+
+    #[test]
+    fn observed_optional_wal_read_error_fails_prepare_before_catalog_or_archive_effects() {
+        let fixture = optional_wal_fixture("Adobe_imageDevelopSettings");
+        AFTER_DATABASE_INIT_HOOK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((fixture.path.clone(), truncate_optional_wal_after_database_init));
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock after epoch").as_nanos();
+        let library = fixture.path.parent().expect("fixture parent").join(format!("disposable-failed-io-prepare-{}-{nonce}", std::process::id()));
+        let mut session = crate::Session::new();
+        session.open_library(&library, false).expect("open disposable synthetic library");
+        let catalog_before = session.catalog.to_snapshot();
+        let undo_before = session.undo.len();
+        let interop = library.join("Interop");
+        let entries_before = if interop.exists() {
+            std::fs::read_dir(&interop)
+                .expect("read initial synthetic Interop directory")
+                .map(|entry| entry.expect("synthetic Interop entry").file_name())
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+
+        let mut job =
+            crate::lightroom_job::LightroomJob::new(&mut session, fixture.path.clone(), false).expect("create synthetic Lightroom import job");
+        let result = job.prepare(&AtomicBool::new(false));
+        let error = match result {
+            Ok(_) => panic!("observed optional WAL read error must abort preparation before staging"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("indexed WAL frame header"), "unexpected optional WAL I/O error: {error}");
+        assert_eq!(session.catalog.to_snapshot(), catalog_before, "failed prepare must not mutate catalog");
+        assert_eq!(session.undo.len(), undo_before, "failed prepare must not add undo records");
+        let entries_after = if interop.exists() {
+            std::fs::read_dir(&interop)
+                .expect("read Interop directory after failed I/O prepare")
+                .map(|entry| entry.expect("synthetic Interop entry").file_name())
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        assert_eq!(entries_after, entries_before, "failed prepare must not stage an archive or index");
+        assert!(!interop.join("lightroom-index.json").exists(), "failed prepare must not persist an import index");
+        session.close_library().expect("close disposable synthetic library");
+        let _ = std::fs::remove_dir_all(library);
+    }
+
+    #[test]
+    fn rejects_supported_source_deletion_reset_growth_truncation_and_replacement() {
+        let mutations: [(&str, fn(&Path), bool); 7] = [
+            ("WAL deletion", remove_wal_after_database_init, true),
+            ("WAL reset", reset_wal_after_database_init, true),
+            ("WAL growth", grow_wal_after_database_init, true),
+            ("WAL truncation", truncate_wal_after_database_init, true),
+            ("WAL replacement", replace_wal_after_database_init, true),
+            ("MAIN deletion", remove_main_after_database_init, false),
+            ("MAIN replacement", replace_main_after_database_init, false),
+        ];
+        let mut accepted = Vec::new();
+        for (label, mutation, has_wal) in mutations {
+            let fixture = if has_wal { optional_wal_fixture("Adobe_imageDevelopSettings") } else { sparse_catalog_fixture(false) };
+            AFTER_DATABASE_INIT_HOOK.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((fixture.path.clone(), mutation));
+            if let Err(error) = read(&fixture.path) {
+                assert!(!error.is_empty(), "{label} should fail with an actionable error");
+            } else {
+                accepted.push(label);
+            }
+        }
+        assert!(accepted.is_empty(), "reader accepted source mutations after initialization: {accepted:?}");
+    }
+
+    #[test]
+    fn missing_main_open_is_reported_without_creating_a_source() {
+        let fixture = sparse_catalog_fixture(false);
+        let missing = fixture.path.with_extension("missing-synthetic-source");
+        let result = read(&missing);
+        assert!(result.is_err(), "opening a nonexistent source must fail");
+        assert!(!missing.exists(), "failed open must not create a source file");
+    }
+
+    #[test]
+    fn reads_native_catalog_fixture_without_lightroom_or_external_processes() {
         let bytes = native_catalog(&photo_tables(("/catalog/", "")));
         let path = std::env::temp_dir().join(format!("lightcraft-native-catalog-{}.lrcat", std::process::id()));
         std::fs::write(&path, &bytes).unwrap();
@@ -1436,7 +2247,6 @@ mod tests {
         assert!(read(&path).is_err());
         std::fs::remove_file(path).unwrap();
     }
-
     #[test]
     fn preparation_skips_missing_original_probes_but_keeps_catalog_records() {
         let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-offline-probes-{}", std::process::id()));
@@ -1512,6 +2322,56 @@ mod tests {
         assert!(catalog.warnings.is_empty(), "{:?}", catalog.warnings);
         std::fs::remove_dir_all(dir).unwrap();
     }
+    #[test]
+    fn oversized_optional_table_warns_and_is_skipped_upstream_fixture() {
+        let mut main = vec![0u8; 2 * 512];
+        main[..16].copy_from_slice(b"SQLite format 3\0");
+        main[16..18].copy_from_slice(&512u16.to_be_bytes());
+        main[18] = 1;
+        main[19] = 1;
+        main[21] = 64;
+        main[22] = 32;
+        main[23] = 32;
+        main[28..32].copy_from_slice(&2u32.to_be_bytes());
+        main[44..48].copy_from_slice(&4u32.to_be_bytes());
+        main[56..60].copy_from_slice(&1u32.to_be_bytes());
+        main[100] = 0x0d;
+        let schema = vec![
+            SqlValue::Text("table".into()),
+            SqlValue::Text("optional_history".into()),
+            SqlValue::Text("optional_history".into()),
+            SqlValue::Integer(2),
+            SqlValue::Text("CREATE TABLE optional_history (payload BLOB)".into()),
+        ];
+        leaf_one(&mut main[..512], 100, 1, &schema);
+        let page = &mut main[512..];
+        page[0] = 0x0d;
+        page[3..5].copy_from_slice(&1u16.to_be_bytes());
+        let mut cell = varint((64 * 1024 * 1024 + 1) as u64);
+        cell.extend(varint(1));
+        let start = 500 - cell.len();
+        page[start..start + cell.len()].copy_from_slice(&cell);
+        page[8..10].copy_from_slice(&u16::try_from(start).unwrap_or(0).to_be_bytes());
+        page[5..7].copy_from_slice(&u16::try_from(start).unwrap_or(0).to_be_bytes());
+        let db = Database::open_with_wal(main, &[]).unwrap();
+        let reader = Reader { db };
+        let mut warnings = Vec::new();
+        let cancel = AtomicBool::new(false);
+        let rows = reader.optional_table("optional_history", &mut warnings, &cancel).unwrap();
+        assert!(rows.is_empty());
+        assert!(warnings.iter().any(|warning| warning.contains("optional_history")));
+    }
+    #[test]
+    fn reads_native_sqlite_tables_without_lightroom_or_external_processes() {
+        let fixture = sparse_catalog_fixture(false);
+        let catalog = read(&fixture.path).expect("synthetic native SQLite catalog");
+        assert_eq!(catalog.photos.len(), 1);
+        assert_eq!(catalog.photos[0].uuid, "synthetic-large-catalog-uuid");
+        assert_eq!(number(&catalog.photos[0].image, "rating"), 5);
+        assert!(catalog.photos[0].path.ends_with("test.ARW"));
+        std::fs::write(&fixture.path, b"bad catalog").expect("replace only the unique synthetic source with invalid bytes");
+        assert!(read(&fixture.path).is_err());
+    }
 
     #[test]
     fn oversized_optional_table_warns_and_is_skipped() {
@@ -1526,7 +2386,15 @@ mod tests {
         main[28..32].copy_from_slice(&2u32.to_be_bytes());
         main[44..48].copy_from_slice(&4u32.to_be_bytes());
         main[56..60].copy_from_slice(&1u32.to_be_bytes());
-        main[100] = 0x0d;
+        let sql = "CREATE TABLE optional_history (payload BLOB)";
+        let schema = vec![
+            SqlValue::Text("table".into()),
+            SqlValue::Text("optional_history".into()),
+            SqlValue::Text("optional_history".into()),
+            SqlValue::Integer(2),
+            SqlValue::Text(sql.into()),
+        ];
+        leaf_one(&mut main[..512], 100, 1, &schema);
         let page = &mut main[512..];
         page[0] = 0x0d;
         page[3..5].copy_from_slice(&1u16.to_be_bytes());
@@ -1537,10 +2405,10 @@ mod tests {
         page[8..10].copy_from_slice(&u16::try_from(start).unwrap_or(0).to_be_bytes());
         page[5..7].copy_from_slice(&u16::try_from(start).unwrap_or(0).to_be_bytes());
         let db = Database::open_with_wal(main, &[]).unwrap();
-        let reader =
-            Reader { db, tables: vec![LiveTable { name: "optional_history".into(), rootpage: 2, column_names: Some(vec!["payload".into()]) }] };
+        let reader = Reader { db };
         let mut warnings = Vec::new();
-        let rows = reader.optional_table("optional_history", &mut warnings).unwrap();
+        let cancel = AtomicBool::new(false);
+        let rows = reader.optional_table("optional_history", &mut warnings, &cancel).unwrap();
         assert!(rows.is_empty());
         assert!(warnings.iter().any(|warning| warning.contains("optional_history")));
     }
