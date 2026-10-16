@@ -144,7 +144,7 @@ impl MergeJob {
                 let info = json!({
                     "reference": self.sources[r.reference].0.0,
                     "ev": r.ev, "evExif": r.ev_exif,
-                    "alignment": r.alignments.iter().map(|a| json!({"model": a.model, "inliers": a.inliers, "rmsPx": a.rms})).collect::<Vec<_>>(),
+                    "alignment": r.alignments.iter().zip(&r.local_shift).map(|(a, l)| json!({"model": a.model, "inliers": a.inliers, "rmsPx": a.rms, "localPx": l})).collect::<Vec<_>>(),
                 });
                 let ghost = (!r.ghost.data.is_empty()).then(|| r.ghost.oriented(r.orientation));
                 (r.radiance, r.color, r.orientation, r.metadata, r.baseline_exposure, lightcraft_merge::DngSamples::Half, None, info, ghost)

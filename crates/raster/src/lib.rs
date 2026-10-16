@@ -2,7 +2,8 @@
 //!
 //! - [`Image<T>`]: interleaved, row-major pixels (`Rgb32f = Image<[f32; 3]>`, `Rgba8 = Image<[u8; 4]>`,
 //!   `Plane = Image<f32>`).
-//! - Resampling ([`resample`]): separable Lanczos-3 / Mitchell / box, rayon-parallel.
+//! - Resampling ([`resample`]): separable Lanczos-3 / Mitchell / box, rayon-parallel; point sampling for warps
+//!   ([`sample`]: Lanczos-3 held to its neighbours' range).
 //! - Blur ([`blur`]): separable Gaussian via repeated box filters (O(1) per pixel in the radius).
 //! - Morphology ([`morph`]): square min / max filters (van Herk / Gil-Werman, O(1) per pixel in the radius).
 //! - [`Histogram`] of display-encoded RGB + luminance.
@@ -13,6 +14,7 @@ pub mod blur;
 pub mod histogram;
 pub mod morph;
 pub mod resample;
+pub mod sample;
 
 pub use histogram::{HdrBins, Histogram};
 

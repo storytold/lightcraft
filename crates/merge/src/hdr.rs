@@ -4,8 +4,9 @@
 //!    luminance without EXIF; ties by content); the middle one is the reference (geometry, colour
 //!    and the output's default brightness come from it). Everything below runs in that order, so
 //!    the result is the same whatever order the frames come in.
-//! 2. **Auto align** ([`crate::align`]): each frame is registered to the reference and resampled
-//!    into its geometry.
+//! 2. **Auto align** ([`crate::align`]): each frame is registered to the reference on small
+//!    versions, the fit refined at full size ([`crate::refine`]), and the frame resampled into the
+//!    reference's geometry (Lanczos-3, so the warp keeps fine detail).
 //! 3. **Exposure normalisation.** The exposure ratio between brightness-adjacent frames is
 //!    measured robustly — the median of log ratios over pixels well exposed in both — and chained
 //!    to the reference; EXIF is the fallback when too few pixels overlap. Radiance
@@ -23,7 +24,11 @@
 //!    disagree by more than a threshold (in log units, with a noise floor) are masked there. Masks
 //!    are dilated and feathered (Gaussian), upsampled, and remove the frame's weight. Their union
 //!    is the deghost overlay.
+//! 6. **Reference detail.** Where the reference is well exposed, the merge's finest detail (below
+//!    [`DETAIL_SIGMA`]) is the reference's own: it is the one frame neither resampled nor aligned
+//!    to only a fraction of a pixel ([`reference_detail`]).
 
+use lightcraft_geom::Homography;
 use lightcraft_raster::blur::gaussian;
 use lightcraft_raster::{Plane, Rgb32f};
 use rayon::prelude::*;
@@ -32,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use crate::align::{self, Alignment};
 use crate::frame::{Frame, FrameColor, consensus_multipliers};
 use crate::{MergeError, Progress, Result, check};
+use crate::{flow, refine};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -82,6 +88,9 @@ pub struct HdrResult {
     /// The same from EXIF, when every frame had it.
     pub ev_exif: Option<Vec<f64>>,
     pub alignments: Vec<Alignment>,
+    /// Per input: the largest local shift (pixels) left after its alignment and corrected tile by tile
+    /// ([`crate::flow`]); 0 for the reference and frames not aligned.
+    pub local_shift: Vec<f32>,
     pub color: FrameColor,
     pub raw: bool,
     pub orientation: lightcraft_geom::Orientation,
@@ -160,6 +169,7 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
 
     // 2. alignment
     let mut alignments = vec![Alignment::identity(); n];
+    let mut local_shift = vec![0f32; n];
     let mut valid: Vec<Option<Vec<bool>>> = vec![None; n];
     if opts.align {
         check(progress, 0.05, "Aligning")?;
@@ -187,10 +197,33 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
         for (i, a) in al {
             alignments[i] = a;
         }
-        check(progress, 0.35, "Resampling")?;
-        // one frame at a time (the warp is parallel inside): each warped copy replaces its frame before the next is made
-        for i in (0..n).filter(|&i| i != reference && alignments[i].model != "identity") {
-            let (img, v) = align::warp(&frames[i].image, &alignments[i].h);
+        check(progress, 0.3, "Refining the alignment")?;
+        // the fit on small versions refined at full size (a tenth of a work pixel is most of a full one), then the
+        // frame resampled; one frame at a time (both are parallel inside): each warped copy replaces its frame
+        // before the next is made
+        let ref_luma = refine::luma(&frames[reference].image, g0 * rel[reference], frames[reference].clip);
+        for i in (0..n).filter(|&i| i != reference) {
+            check(progress, 0.3 + 0.15 * i as f32 / n as f32, "Refining the alignment")?;
+            let luma = refine::luma(&frames[i].image, g0 * rel[i], frames[i].clip);
+            // the small versions' fit refined at full size; where they found nothing (a bright frame mostly clipped),
+            // patches at full size still may, searching wider
+            let (start, radius) = if alignments[i].model == "identity" {
+                (Homography::IDENTITY, refine::RECOVER_RADIUS)
+            } else {
+                (alignments[i].h, refine::radius_for(feats[i].1))
+            };
+            if let Some(a) = refine::fit(&ref_luma, &luma, &start, radius, i as u64 + 1, &refine::ALL_MODELS) {
+                alignments[i] = a;
+            }
+            if alignments[i].model == "identity" {
+                continue;
+            }
+            check(progress, 0.3 + 0.15 * i as f32 / n as f32, "Resampling")?;
+            // what the one model leaves (parallax, distortion): shifts measured tile by tile
+            let fl = flow::estimate(&ref_luma, &luma, &alignments[i].h, flow::RADIUS);
+            drop(luma);
+            local_shift[i] = fl.max();
+            let (img, v) = flow::warp(&frames[i].image, &alignments[i].h, &fl);
             frames[i].image = img;
             valid[i] = Some(v);
         }
@@ -279,6 +312,9 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
             }
         }
     });
+    check(progress, 0.9, "Merging")?;
+    // 6. the reference's own fine detail where it is well exposed
+    reference_detail(&mut out, &frames[reference], &sat[reference]);
     check(progress, 0.92, "Merging")?;
 
     let ghost = match &ghost_small {
@@ -298,9 +334,11 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
     // per-frame results in the caller's order
     let mut ev_in = vec![0.0; n];
     let mut alignments_in = vec![Alignment::identity(); n];
+    let mut local_in = vec![0f32; n];
     for (p, &i) in input.iter().enumerate() {
         ev_in[i] = ev[p];
         alignments_in[i] = alignments[p].clone();
+        local_in[i] = local_shift[p];
     }
     let ev_exif = ev_exif.map(|e: Vec<f64>| {
         let mut v = vec![0.0; n];
@@ -323,6 +361,7 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
         ev: ev_in,
         ev_exif,
         alignments: alignments_in,
+        local_shift: local_in,
         color,
         raw: rf.raw,
         orientation: rf.orientation,
@@ -331,6 +370,67 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
         lens: rf.lens.clone(),
         wb_multipliers,
     })
+}
+
+/// Below this scale (Gaussian σ, pixels) the merge's detail comes from the reference where it is well exposed.
+const DETAIL_SIGMA: f32 = 2.0;
+
+/// Give `out` (the merged radiance, in the reference's units) the reference frame's finest detail where the reference
+/// is well exposed. Every other frame was resampled into the reference's geometry (Lanczos-3 still softens the finest
+/// detail a little) and is aligned to a fraction of a pixel, not exactly; the brightest frames carry the most weight
+/// in the midtones and shadows, so the merge was a little softer than the reference alone. On luminance in √ space:
+/// `√Y' = √Y + α · (d − blur(d))` with `d = √Y_ref − √Y`, i.e. the merge's detail below [`DETAIL_SIGMA`] swapped for the
+/// reference's, and every channel scaled by `Y'/Y` so colour stays the merge's. `α` fades out where the reference nears
+/// its clip (its highlights come from darker frames) and where it is dark (there its detail is mostly noise, and the
+/// brighter frames' is cleaner).
+fn reference_detail(out: &mut Rgb32f, rf: &Frame, sat: &[f32]) {
+    let (w, h) = (out.width, out.height);
+    if rf.image.width != w || rf.image.height != h || sat.len() != w * h || w == 0 {
+        return;
+    }
+    let y = |p: [f32; 3]| align::luma(p).max(0.0);
+    let c = rf.clip;
+    let (lo, hi) = if rf.raw { (0.01, 0.05) } else { (0.04, 0.12) };
+    let d_at = |i: usize| {
+        let (m, r) = (out.data.get(i).copied().unwrap_or_default(), rf.image.data.get(i).copied().unwrap_or_default());
+        let dv = y(r).sqrt() - y(m).sqrt();
+        if dv.is_finite() { dv } else { 0.0 }
+    };
+    // α per pixel, and α·d (d = √Y_ref − √Y_merge)
+    let mut alpha = Plane::new(w, h);
+    let mut ad = Plane::new(w, h);
+    alpha.data.par_chunks_mut(w).zip(ad.data.par_chunks_mut(w)).enumerate().for_each(|(row, (arow, drow))| {
+        for (x, (a, dv)) in arow.iter_mut().zip(drow.iter_mut()).enumerate() {
+            let i = row * w + x;
+            let (Some(&s), Some(&r)) = (sat.get(i), rf.image.data.get(i)) else { continue };
+            *a = smoothstep(lo * c, hi * c, maxc(r)) * (1.0 - smoothstep(0.8 * c, 0.95 * c, s));
+            *dv = *a * d_at(i);
+        }
+    });
+    // d's blur over the pixels it applies to only (normalised by α's blur): the reference's clipped highlights,
+    // where d is far below zero, must not pull their neighbours' blur down (that left a bright rim around them)
+    let (ba, bad) = (gaussian(&alpha, DETAIL_SIGMA), gaussian(&ad, DETAIL_SIGMA));
+    drop(ad);
+    out.data.par_chunks_mut(w).enumerate().for_each(|(row, orow)| {
+        for (x, p) in orow.iter_mut().enumerate() {
+            let i = row * w + x;
+            let (Some(&a), Some(&wa), Some(&wd)) = (alpha.data.get(i), ba.data.get(i), bad.data.get(i)) else { continue };
+            let ym = y(*p);
+            if a <= 0.0 || wa <= 1e-4 || ym <= 1e-12 {
+                continue;
+            }
+            let dv = {
+                let (m, r) = (*p, rf.image.data.get(i).copied().unwrap_or_default());
+                let v = y(r).sqrt() - y(m).sqrt();
+                if v.is_finite() { v } else { 0.0 }
+            };
+            let sq = (ym.sqrt() + a * (dv - wd / wa)).max(0.0);
+            let scale = sq * sq / ym;
+            if scale.is_finite() {
+                *p = p.map(|v| v * scale);
+            }
+        }
+    });
 }
 
 /// Bilinear sample of a plane at continuous coordinates (pixel centres at +0.5).
