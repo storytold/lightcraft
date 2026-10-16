@@ -3,6 +3,10 @@
 //! Each [`Rule`] is `{field, op, value}`; [`FIELDS`] lists the fields with their kind, which
 //! decides the operators ([`ops_for`]). Text compares case-insensitively; dates are ISO strings
 //! compared by prefix; "in the last N days/weeks/months/years" is relative to [`now`].
+//!
+//! Rules about a photo's contents (`contents` shows "red car", is tagged `animal|bird`) need what the catalog can't
+//! see: the engine's content index. They ask it through a [`RuleContext`] installed for the thread ([`set_context`],
+//! [`crate::Catalog::query_with`]); without one they match nothing.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -53,6 +57,9 @@ pub enum Kind {
     /// One of a fixed set: (id, label). Rules store the id; people see the label.
     Choice(&'static [(&'static str, &'static str)]),
     Bool,
+    /// What a photo shows, from the content index: "shows" a text, or "is tagged" with an auto-tag
+    /// ([`RuleContext`]).
+    Contents,
 }
 
 /// The fields rules can test: (id, label, kind), in field-menu order ([`TOP_LEVEL_FIELDS`], then
@@ -123,6 +130,8 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     // Assisted Culling
     ("sharpness", "Focus (assisted culling)", Kind::Number),
     ("bestOfGroup", "Best of Similar Shots", Kind::Bool),
+    // Contents
+    ("contents", "Contents", Kind::Contents),
 ];
 
 /// The fields the field menu shows at its top level, before the groups.
@@ -141,6 +150,7 @@ pub const FIELD_GROUPS: &[(&str, &[&str])] = &[
     ("Size", &["longEdge", "shortEdge", "aspect", "megapixels"]),
     ("Develop", &["edited", "cropped", "treatment"]),
     ("Assisted Culling", &["sharpness", "bestOfGroup"]),
+    ("Contents", &["contents"]),
 ];
 
 /// The field-menu group `field` sits in; `None` for a top-level or unknown field.
@@ -283,6 +293,9 @@ fn field_problem(field: &str, op: &str, value: &Value, cat: &Catalog, owner: Opt
         }
         Kind::Date => date_problem(field, op, value),
         Kind::Choice(choices) => choice_problem(field, value, choices, cat),
+        Kind::Contents => contents_value(value)
+            .is_none()
+            .then(|| (Issue::NeedsText, format!("`{field}` needs what to look for (a text, a tag or {{text, min}}), not {value}"))),
         Kind::Text | Kind::Keywords => match value {
             Value::String(s) if !s.trim().is_empty() => None,
             Value::String(_) | Value::Null => {
@@ -566,6 +579,85 @@ pub fn ops_for(kind: Kind) -> &'static [(&'static str, &'static str)] {
         ],
         Kind::Choice(_) | Kind::Album => &[("is", "is"), ("isNot", "isn't")],
         Kind::Bool => &[("is", "is")],
+        Kind::Contents => &[("shows", "shows"), ("isTagged", "is tagged"), ("isNotTagged", "isn't tagged")],
+    }
+}
+
+/// What a Contents rule looks for: a text or a tag (`"red car"`, `"animal|bird"`), or `{text, min}` / `{tag}` with
+/// the score a photo needs (0–1; the model's own cut-off when there is none). `None` when it names nothing.
+pub fn contents_value(value: &Value) -> Option<(String, Option<f32>)> {
+    let text = |v: Option<&Value>| v.and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
+    match value {
+        Value::String(_) => text(Some(value)).map(|t| (t, None)),
+        Value::Object(o) => {
+            let t = text(o.get("text")).or_else(|| text(o.get("tag")))?;
+            let min = match o.get("min") {
+                None | Some(Value::Null) => None,
+                Some(m) => Some(m.as_f64().filter(|m| m.is_finite() && *m > 0.0 && *m <= 1.0)? as f32),
+            };
+            Some((t, min))
+        }
+        _ => None,
+    }
+}
+
+/// What rules and filters need from outside the catalog: what photos show, from the engine's content index (auto-tags
+/// and search by contents). Installed for the thread with [`set_context`]; without one, contents rules match nothing.
+pub trait RuleContext: Send + Sync {
+    /// Whether `photo` has auto-tag `tag` or one below it (`animal` covers `animal|bird|owl`). `None`: there are no
+    /// tags here (no content index).
+    fn has_tag(&self, photo: crate::PhotoId, tag: &str) -> Option<bool>;
+    /// How well `photo` shows `text` (a probability for the models LightCraft ships). `None`: not known (no index, the
+    /// text not read yet, the photo not indexed).
+    fn content_score(&self, photo: crate::PhotoId, text: &str) -> Option<f32>;
+    /// The score a photo needs to show a text when the rule names none (the model's cut-off).
+    fn content_min(&self) -> f32;
+}
+
+thread_local! {
+    static CONTEXT: std::cell::RefCell<Option<std::sync::Arc<dyn RuleContext>>> = const { std::cell::RefCell::new(None) };
+    static CONTEXT_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Install `ctx` for this thread's queries (the engine does before each; `None` removes it). Installing the same one
+/// again changes nothing ([`context_generation`] stays).
+pub fn set_context(ctx: Option<std::sync::Arc<dyn RuleContext>>) {
+    CONTEXT.with_borrow_mut(|c| {
+        let same = match (c.as_ref(), ctx.as_ref()) {
+            (None, None) => true,
+            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+            _ => false,
+        };
+        if !same {
+            CONTEXT_GENERATION.set(CONTEXT_GENERATION.get().wrapping_add(1));
+            *c = ctx;
+        }
+    });
+}
+
+/// Changes whenever another context is installed on this thread: caches of smart-album counts key on it.
+pub fn context_generation() -> u64 {
+    CONTEXT_GENERATION.get()
+}
+
+/// The context installed for this thread.
+pub fn context() -> Option<std::sync::Arc<dyn RuleContext>> {
+    CONTEXT.with_borrow(Clone::clone)
+}
+
+/// Whether `photo` has auto-tag `tag` ([`RuleContext::has_tag`]); `false` without a context or tags.
+pub fn has_content_tag(photo: crate::PhotoId, tag: &str) -> bool {
+    context().and_then(|c| c.has_tag(photo, tag)) == Some(true)
+}
+
+fn contents_matches(op: &str, p: &Photo, value: &Value) -> bool {
+    let (Some(ctx), Some((what, min))) = (context(), contents_value(value)) else { return false };
+    match op {
+        "shows" => ctx.content_score(p.id, &what).is_some_and(|s| s >= min.unwrap_or_else(|| ctx.content_min())),
+        "isTagged" => ctx.has_tag(p.id, &what) == Some(true),
+        // (without tags nothing is known, so nothing matches either way)
+        "isNotTagged" => ctx.has_tag(p.id, &what) == Some(false),
+        _ => false,
     }
 }
 
@@ -902,6 +994,7 @@ impl Rule {
             }
             "sharpness" => num_op(op, p.analysis.map(|a| a.sharpness as f64), value),
             "bestOfGroup" => yes(p.analysis.is_some_and(|a| a.best || a.group.is_none())),
+            "contents" => contents_matches(op, p, value),
             "album" => {
                 let id = album_rule_id(value);
                 // a smart album's photos are its matches; one being evaluated (a loop) holds none
@@ -959,6 +1052,21 @@ impl RuleSet {
     pub fn check_for(&self, cat: &Catalog, owner: Option<crate::AlbumId>) -> Vec<Problem> {
         let mut out = Vec::new();
         self.check_into(cat, owner, &mut Vec::new(), &mut out);
+        out
+    }
+
+    /// What the Contents rules ask, groups included, in order: (`shows`: a text; else a tag, what it names).
+    pub fn contents_asked(&self) -> Vec<(bool, String)> {
+        let mut out = Vec::new();
+        for rule in &self.rules {
+            match rule {
+                Rule::Group { group } => out.extend(group.contents_asked()),
+                Rule::Field { field, op, value } if field == "contents" => {
+                    out.extend(contents_value(value).map(|(t, _)| (op == "shows", t)));
+                }
+                Rule::Field { .. } => {}
+            }
+        }
         out
     }
 
@@ -1025,6 +1133,13 @@ impl RuleSet {
                         }
                         Value::String(s) => choice_label(field, s).map_or_else(|| s.clone(), str::to_lowercase),
                         Value::Null => String::new(),
+                        Value::Object(o) if field == "contents" => {
+                            let what = o.get("text").or_else(|| o.get("tag")).and_then(Value::as_str).unwrap_or("");
+                            match o.get("min").and_then(Value::as_f64) {
+                                Some(m) => format!("{what} (score ≥ {m})"),
+                                None => what.to_string(),
+                            }
+                        }
                         Value::Object(o) => format!(
                             "{} {}",
                             o.get("n").map(|n| n.to_string()).unwrap_or_default(),

@@ -8,8 +8,8 @@
 //! small part of the file (`cargo test -p lightcraft-raw --release --test sparse_corpus -- --nocapture`
 //! prints what each format reads).
 
-use lightcraft_raw::sparse::{HeaderPlan, Ranges, header_plan, preview_plan};
-use lightcraft_raw::{embedded_preview, probe, probe_info};
+use lightcraft_raw::sparse::{HeaderPlan, Ranges, header_plan, preview_plan, preview_plan_covering};
+use lightcraft_raw::{embedded_preview, embedded_preview_covering, probe, probe_info};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -20,13 +20,17 @@ fn corpus_root() -> PathBuf {
 /// Run the plan (with the embedded preview when `preview`), loading from `file` what it asks for
 /// into a buffer whose other bytes are `fill`.
 fn run(file: &[u8], fill: u8, preview: bool) -> (HeaderPlan, Vec<u8>, Ranges) {
+    run_with(file, fill, |buf, loaded| if preview { preview_plan(buf, loaded) } else { header_plan(buf, loaded) })
+}
+
+fn run_with(file: &[u8], fill: u8, plan: impl Fn(&[u8], &Ranges) -> HeaderPlan) -> (HeaderPlan, Vec<u8>, Ranges) {
     let mut buf = vec![fill; file.len()];
     let mut loaded = Ranges::new();
     let prefix = file.len().min(512 * 1024);
     buf[..prefix].copy_from_slice(&file[..prefix]);
     loaded.insert(0, prefix as u64);
     for _ in 0..32 {
-        match if preview { preview_plan(&buf, &loaded) } else { header_plan(&buf, &loaded) } {
+        match plan(&buf, &loaded) {
             HeaderPlan::Need(r) => {
                 for &(a, b) in r.spans() {
                     assert!(!loaded.overlaps(a, b), "asked again for {a}..{b}");
@@ -65,6 +69,7 @@ fn partial_reads_describe_raws_as_whole_files_do() {
     // format → (files ready, bytes read, bytes total, files read whole)
     let mut stats: BTreeMap<String, (usize, u64, u64, usize)> = BTreeMap::new();
     let mut preview_stats: BTreeMap<String, (usize, u64, u64, usize)> = BTreeMap::new();
+    let mut covering_stats: BTreeMap<(String, u32), (usize, u64, u64, usize)> = BTreeMap::new();
     for p in paths {
         let name = p.file_name().unwrap().to_string_lossy().to_string();
         let file = std::fs::read(&p).unwrap();
@@ -121,6 +126,31 @@ fn partial_reads_describe_raws_as_whole_files_do() {
             }
             (HeaderPlan::Need(_), _, _) => unreachable!(),
         }
+        // The smallest preview that covers a content scan's 512 px and a face scan's 2048 px: what the plan hands on
+        // is the whole file's choice, with the skipped bytes zeroed and again 0xFF.
+        for edge in [512u32, 2048] {
+            let wanted = embedded_preview_covering(&file, edge);
+            let entry = covering_stats.entry((format.clone(), edge)).or_default();
+            match run_with(&file, 0, |b, l| preview_plan_covering(b, l, edge)) {
+                (HeaderPlan::Ready, buf, loaded) => {
+                    assert!(embedded_preview_covering(&buf, edge) == wanted, "{name}: a different preview of at least {edge} px");
+                    let (plan_ff, buf_ff, loaded_ff) = run_with(&file, 0xff, |b, l| preview_plan_covering(b, l, edge));
+                    assert_eq!((plan_ff, loaded_ff.total()), (HeaderPlan::Ready, loaded.total()), "{name}: the {edge} px plan read skipped bytes");
+                    assert!(embedded_preview_covering(&buf_ff, edge) == wanted, "{name}: a different {edge} px preview (skipped bytes 0xFF)");
+                    entry.0 += 1;
+                    entry.1 += loaded.total();
+                    entry.2 += file.len() as u64;
+                }
+                (HeaderPlan::Whole(_), _, _) => entry.3 += 1,
+                (HeaderPlan::Need(_), _, _) => unreachable!(),
+            }
+        }
+    }
+    for ((format, edge), (ready, read, total, whole)) in covering_stats {
+        eprintln!(
+            "{format:>10} preview ≥ {edge} px: {ready} read from {:.1} % of their bytes, {whole} read whole",
+            read as f64 * 100.0 / total.max(1) as f64
+        );
     }
     for (format, (ready, read, total, whole)) in stats {
         eprintln!("{format:>10}: {ready} described from {:.1} % of their bytes, {whole} read whole", read as f64 * 100.0 / total.max(1) as f64);

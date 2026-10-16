@@ -189,6 +189,15 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
     if matches!(format, Some(crate::RawFormat::Crw | crate::RawFormat::Mrw | crate::RawFormat::X3f)) {
         return scan_for_jpeg(bytes);
     }
+    let found = tiff_candidates(bytes)?;
+    let best = choose(&found, min_edge).map(|s| if is_jxl(s) { s.to_vec() } else { trim_eoi(s).to_vec() });
+    // a TIFF raw whose preview no tag points to: one we can't decode (Leaf MOS), or Epson ERF (in its maker note)
+    best.or_else(|| format.filter(|f| !f.is_supported() || *f == crate::RawFormat::Erf).and_then(|_| scan_for_jpeg(bytes)))
+}
+
+/// Every preview a TIFF-based raw's tags point at (IFD strips and `JPEGInterchangeFormat` pointers, maker-note preview
+/// IFDs, an Olympus CameraSettings preview), usable or not. `None` when the file is not a TIFF.
+fn tiff_candidates(bytes: &[u8]) -> Option<Vec<&[u8]>> {
     let tiff = Tiff::parse(bytes).ok()?;
     let mut found: Vec<&[u8]> = Vec::new();
     for ifd in tiff.all_ifds() {
@@ -212,14 +221,85 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
     if let Some(p) = crate::vendor::orf::preview(bytes) {
         found.push(p);
     }
+    Some(found)
+}
+
+/// The preview [`preview_covering`] takes among a TIFF-based raw's candidates: the largest displayable one (a JPEG or
+/// a JPEG XL file), or with `min_edge` the smallest copy of it that covers that edge ([`smallest_covering`]).
+fn choose<'a>(found: &[&'a [u8]], min_edge: Option<u32>) -> Option<&'a [u8]> {
     let largest = found.iter().copied().filter(|s| is_dct_jpeg(s) || is_jxl(s)).max_by_key(|s| s.len());
-    let best = min_edge
-        .zip(largest)
-        .and_then(|(min, big)| smallest_covering(&found, big, min))
-        .or(largest)
-        .map(|s| if is_jxl(s) { s.to_vec() } else { trim_eoi(s).to_vec() });
-    // a TIFF raw whose preview no tag points to: one we can't decode (Leaf MOS), or Epson ERF (in its maker note)
-    best.or_else(|| format.filter(|f| !f.is_supported() || *f == crate::RawFormat::Erf).and_then(|_| scan_for_jpeg(bytes)))
+    min_edge.zip(largest).and_then(|(min, big)| smallest_covering(found, big, min)).or(largest)
+}
+
+/// Bytes past a candidate's unfinished head that [`covering_plan`] asks for with it.
+const HEAD_ROOM: u64 = 64 * 1024;
+
+/// How many leading bytes of a candidate [`is_dct_jpeg`], [`jpeg_frame`] and [`is_jxl`] look at: the JPEG's marker
+/// segments up to its first frame header (its size and component count, or the marker that stops the walk), and the
+/// JPEG XL signature. A walk that meets a byte the caller has not loaded stops there too, and that byte is inside the
+/// reach, so a caller that loads the reach and asks again ends with the walk the whole file gives.
+fn head_reach(b: &[u8]) -> usize {
+    let mut reach = 12usize;
+    let mut i = 2usize;
+    while i.saturating_add(4) <= b.len() {
+        if b.get(i) != Some(&0xff) {
+            reach = reach.max(i + 1);
+            break;
+        }
+        let m = b.get(i + 1).copied().unwrap_or(0);
+        if m == 0xff {
+            i += 1;
+            continue;
+        }
+        if matches!(m, 0xc0..=0xc2) {
+            // height, width and the component count (`jpeg_frame`)
+            reach = reach.max(i.saturating_add(10));
+            break;
+        }
+        if matches!(m, 0xc3 | 0xc5..=0xc7 | 0xcb | 0xcd..=0xcf | 0xda | 0xd9) {
+            reach = reach.max(i + 2);
+            break;
+        }
+        let len = b.get(i + 2..i + 4).map_or(0, |s| usize::from(u16::from_be_bytes([s[0], s[1]])));
+        reach = reach.max(i + 4);
+        i = i.saturating_add(2 + len);
+    }
+    reach.max(i.min(b.len())).min(b.len())
+}
+
+/// What [`embedded_preview_covering`] reads of a TIFF-based raw whose metadata `loaded` already holds (its
+/// [`crate::sparse::header_plan`] is `Ready`): the head of every candidate preview, then the one it takes. Only
+/// that one is read whole, so a 512 px thumbnail of a raw with a full-size JPEG beside a small one reads the small one.
+pub(crate) fn covering_plan(bytes: &[u8], loaded: &crate::sparse::Ranges, min_edge: u32) -> crate::sparse::HeaderPlan {
+    use crate::sparse::{HeaderPlan, Ranges};
+    let Some(found) = tiff_candidates(bytes) else { return HeaderPlan::Whole("TIFF structure") };
+    let base = bytes.as_ptr() as usize;
+    // every candidate is a slice of `bytes`: its place in the file
+    let at = |s: &[u8]| -> Option<(u64, u64)> {
+        let start = (s.as_ptr() as usize).checked_sub(base)?;
+        let end = start.checked_add(s.len()).filter(|&e| e <= bytes.len())?;
+        Some((start as u64, end as u64))
+    };
+    let mut need = Ranges::new();
+    for s in &found {
+        let Some((start, end)) = at(s) else { return HeaderPlan::Whole("a preview outside the file") };
+        let head_end = start.saturating_add(head_reach(s) as u64);
+        if !loaded.contains(start, head_end) {
+            // (a head the walk has not finished gets room to finish in, rather than a round per marker segment)
+            for &(a, b) in loaded.gaps(start, head_end.saturating_add(HEAD_ROOM).min(end)).spans() {
+                need.insert(a, b);
+            }
+        }
+    }
+    if !need.is_empty() {
+        return HeaderPlan::Need(need);
+    }
+    let Some(chosen) = choose(&found, Some(min_edge)) else { return HeaderPlan::Whole("no preview its tags point at") };
+    let Some((start, end)) = at(chosen) else { return HeaderPlan::Whole("a preview outside the file") };
+    if loaded.contains(start, end) {
+        return HeaderPlan::Ready;
+    }
+    HeaderPlan::Need(loaded.gaps(start, end))
 }
 
 /// The end of the DCT JPEG whose SOI is at `soi` (exclusive index after its EOI) and its component count,

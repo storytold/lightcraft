@@ -157,6 +157,32 @@ pub fn preview_plan(bytes: &[u8], loaded: &Ranges) -> HeaderPlan {
     plan(bytes, loaded, true)
 }
 
+/// [`preview_plan`] for [`crate::embedded_preview_covering`]`(bytes, min_edge)`: the header ranges, the head of every
+/// preview a TIFF-based raw's tags point at, and then only the preview that call takes — the small one when it is big
+/// enough, where [`preview_plan`] reads every preview. Once it says [`HeaderPlan::Ready`], that call on the buffer gives
+/// what it gives on the whole file. A CR3 or a RAF carries one preview, and gets [`preview_plan`].
+pub fn preview_plan_covering(bytes: &[u8], loaded: &Ranges, min_edge: u32) -> HeaderPlan {
+    if is_cr3(bytes) || bytes.starts_with(b"FUJIFILMCCD-RAW") {
+        return preview_plan(bytes, loaded);
+    }
+    let mut w = Want::new(bytes, loaded);
+    if !w.want(0, 16) {
+        return w.into_plan().unwrap_or(HeaderPlan::Whole("file too short"));
+    }
+    if bytes.get(..4).is_some_and(|m| matches!(m, b"IIRO" | b"IIRS" | b"MMOR")) {
+        return HeaderPlan::Whole("an ORF header probe reads samples");
+    }
+    if Tiff::sniff(bytes).is_none() {
+        return HeaderPlan::Whole("not a raw layout read in part");
+    }
+    // the header ranges, with every large preview skipped but its head — the `JPEGInterchangeFormat` blobs too, where
+    // a Sony ARW keeps its full-size JPEG — then the heads and the one preview the choice takes
+    match tiff_plan(bytes, loaded, false, true) {
+        HeaderPlan::Ready => crate::preview::covering_plan(bytes, loaded, min_edge),
+        other => other,
+    }
+}
+
 fn plan(bytes: &[u8], loaded: &Ranges, preview: bool) -> HeaderPlan {
     let mut w = Want::new(bytes, loaded);
     if !w.want(0, 16) {
@@ -170,7 +196,7 @@ fn plan(bytes: &[u8], loaded: &Ranges, preview: bool) -> HeaderPlan {
     } else if bytes.get(..4).is_some_and(|m| matches!(m, b"IIRO" | b"IIRS" | b"MMOR")) {
         HeaderPlan::Whole("an ORF header probe reads samples")
     } else if Tiff::sniff(bytes).is_some() {
-        tiff_plan(bytes, loaded, preview)
+        tiff_plan(bytes, loaded, preview, false)
     } else {
         HeaderPlan::Whole("not a raw layout read in part")
     }
@@ -216,7 +242,9 @@ fn finish(len: u64, loaded: &Ranges, holes: &Ranges, meta: &Ranges, ready: impl 
     if missing.is_empty() { ready() } else { HeaderPlan::Need(missing) }
 }
 
-fn tiff_plan(bytes: &[u8], loaded: &Ranges, preview: bool) -> HeaderPlan {
+/// `pointed_holes`: also skip the large JPEGs IFDs point at with `JPEGInterchangeFormat` (but their heads), for
+/// [`preview_plan_covering`], which then reads the one it takes.
+fn tiff_plan(bytes: &[u8], loaded: &Ranges, preview: bool, pointed_holes: bool) -> HeaderPlan {
     let len = bytes.len() as u64;
     let mut w = Want::new(bytes, loaded);
     let meta = match walk_tiff(&mut w, 0, bytes, &[]) {
@@ -260,6 +288,15 @@ fn tiff_plan(bytes: &[u8], loaded: &Ranges, preview: bool) -> HeaderPlan {
         && let Some(off) = tiff.ifds.first().and_then(|i| i.u64(crate::vendor::rw2::RAW_OFFSET))
     {
         holes.insert(off.saturating_add(HEAD), len);
+    }
+    if pointed_holes {
+        for ifd in tiff.all_ifds() {
+            if let (Some(off), Some(size)) = (ifd.u64(t::JPEG_INTERCHANGE_FORMAT), ifd.u64(t::JPEG_INTERCHANGE_FORMAT_LENGTH))
+                && size >= BULK
+            {
+                holes.insert(off.saturating_add(HEAD), off.saturating_add(size).min(len));
+            }
+        }
     }
     finish(len, loaded, &holes, &meta, || match crate::probe(bytes) {
         Some(RawFormat::Nef | RawFormat::Nrw | RawFormat::Orf | RawFormat::Pef | RawFormat::Erf | RawFormat::Mef) => {
@@ -494,6 +531,134 @@ mod tests {
             }
         }
         panic!("no answer after 32 rounds");
+    }
+
+    /// A DNG-shaped raw with two JPEG-compressed preview strips — full size and a small one of the same shape — and a
+    /// CFA strip; each fake JPEG is a SOI, a frame header, `fill` bytes and an EOI.
+    pub(crate) fn raw_with_two_previews(big_fill: usize, small_fill: usize) -> Vec<u8> {
+        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+        let jpeg = |w: u16, h: u16, fill: usize| {
+            let ([h0, h1], [w0, w1]) = (h.to_be_bytes(), w.to_be_bytes());
+            [&[0xffu8, 0xd8, 0xff, 0xc0, 0, 0x0b, 8, h0, h1, w0, w1, 1, 1, 0x11, 0][..], &vec![0x55; fill], &[0xff, 0xd9]].concat()
+        };
+        let preview = |w: u16, h: u16, fill: usize| {
+            let mut ifd = IfdBuilder::new();
+            ifd.set(t::COMPRESSION, Value::Short(vec![7]));
+            ifd.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::RGB]));
+            ifd.set(t::IMAGE_WIDTH, Value::Long(vec![u32::from(w)]));
+            ifd.set(t::IMAGE_LENGTH, Value::Long(vec![u32::from(h)]));
+            ifd.set_image(ImageData::Strips { rows_per_strip: u32::from(h), strips: vec![jpeg(w, h, fill)] });
+            ifd
+        };
+        let mut big = preview(6000, 4000, big_fill);
+        big.set(t::DNG_VERSION, Value::Byte(vec![1, 4, 0, 0]));
+        let small = preview(1616, 1077, small_fill);
+        let mut raw = IfdBuilder::new();
+        raw.set(t::COMPRESSION, Value::Short(vec![1]));
+        raw.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::CFA]));
+        raw.set(t::IMAGE_WIDTH, Value::Long(vec![6000]));
+        raw.set(t::IMAGE_LENGTH, Value::Long(vec![4000]));
+        raw.set_image(ImageData::Strips { rows_per_strip: 4000, strips: vec![vec![0x33u8; 3_000_000]] });
+        TiffWriter::default().write(&[big, small, raw]).expect("the fixture writes")
+    }
+
+    /// Runs `plan` to its end over `file` from a 64 KiB prefix, within the engine's 12 rounds; unloaded bytes are `fill`.
+    fn run_plan(file: &[u8], fill: u8, plan: impl Fn(&[u8], &Ranges) -> HeaderPlan) -> (HeaderPlan, Vec<u8>, Ranges) {
+        let mut buf = vec![fill; file.len()];
+        let mut loaded = Ranges::new();
+        let prefix = file.len().min(64 * 1024);
+        buf[..prefix].copy_from_slice(&file[..prefix]);
+        loaded.insert(0, prefix as u64);
+        for _ in 0..12 {
+            match plan(&buf, &loaded) {
+                HeaderPlan::Need(r) => {
+                    for &(a, b) in r.spans() {
+                        assert!(!loaded.overlaps(a, b), "asked again for {a}..{b}");
+                        buf[a as usize..b as usize].copy_from_slice(&file[a as usize..b as usize]);
+                        loaded.insert(a, b);
+                    }
+                }
+                done => return (done, buf, loaded),
+            }
+        }
+        panic!("no answer after 12 rounds (the engine's bound)");
+    }
+
+    /// A raw with a full-size JPEG beside a small one: a preview of at least 512 px reads the small one and not the
+    /// big one, which [`preview_plan`] reads whole; asked for more than the small one has, it reads the big one. Either
+    /// way the buffer gives what the whole file gives, whatever the unread bytes hold.
+    #[test]
+    fn a_covering_preview_reads_only_the_preview_it_takes() {
+        let file = raw_with_two_previews(2_000_000, 300_000);
+        let (every, _, read_every) = run_plan(&file, 0, preview_plan);
+        assert_eq!(every, HeaderPlan::Ready);
+        for (edge, big) in [(512u32, false), (1616, false), (1617, true), (6000, true)] {
+            let whole = crate::embedded_preview_covering(&file, edge).expect("a preview");
+            assert_eq!(whole.len() > 1_000_000, big, "{edge}: the fixture's choice");
+            for fill in [0u8, 0xff] {
+                let (plan, buf, loaded) = run_plan(&file, fill, |b, l| preview_plan_covering(b, l, edge));
+                assert_eq!(plan, HeaderPlan::Ready, "{edge}");
+                assert!(crate::embedded_preview_covering(&buf, edge) == Some(whole.clone()), "{edge}/{fill}: the whole file's preview");
+                let most = if big { 2_200_000 } else { 500_000 };
+                assert!(loaded.total() < most, "{edge}: read {} bytes (every preview: {})", loaded.total(), read_every.total());
+            }
+        }
+        // a CR3, a RAF and a file the header plan cannot describe answer as their own plans do
+        let mut not_raw = file.clone();
+        not_raw[0..4].copy_from_slice(b"XXXX");
+        assert!(matches!(run_plan(&not_raw, 0, |b, l| preview_plan_covering(b, l, 512)).0, HeaderPlan::Whole(_)));
+    }
+
+    /// A candidate's head the header plan did not load (its frame header sits past the 64 KiB kept at the start of a
+    /// skipped strip: a JPEG with a large APP segment) is asked for before the choice is made, so the choice is the
+    /// whole file's.
+    #[test]
+    fn a_preview_head_past_the_kept_bytes_is_read_before_choosing() {
+        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+        let jpeg = |w: u16, h: u16, app: usize, fill: usize| {
+            let ([h0, h1], [w0, w1]) = (h.to_be_bytes(), w.to_be_bytes());
+            let mut j = vec![0xffu8, 0xd8];
+            // APP segments of up to 65533 bytes each, pushing the frame header past the first 64 KiB
+            let mut left = app;
+            while left > 0 {
+                let n = left.min(60_000);
+                j.extend_from_slice(&[0xff, 0xe2]);
+                j.extend_from_slice(&((n + 2) as u16).to_be_bytes());
+                j.extend(std::iter::repeat_n(0x11u8, n));
+                left -= n;
+            }
+            j.extend_from_slice(&[0xff, 0xc0, 0, 0x0b, 8, h0, h1, w0, w1, 1, 1, 0x11, 0]);
+            j.extend(std::iter::repeat_n(0x55u8, fill));
+            j.extend_from_slice(&[0xff, 0xd9]);
+            j
+        };
+        let preview = |w: u16, h: u16, app: usize, fill: usize| {
+            let mut ifd = IfdBuilder::new();
+            ifd.set(t::COMPRESSION, Value::Short(vec![7]));
+            ifd.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::RGB]));
+            ifd.set(t::IMAGE_WIDTH, Value::Long(vec![u32::from(w)]));
+            ifd.set(t::IMAGE_LENGTH, Value::Long(vec![u32::from(h)]));
+            ifd.set_image(ImageData::Strips { rows_per_strip: u32::from(h), strips: vec![jpeg(w, h, app, fill)] });
+            ifd
+        };
+        let mut big = preview(6000, 4000, 0, 2_000_000);
+        big.set(t::DNG_VERSION, Value::Byte(vec![1, 4, 0, 0]));
+        let small = preview(1616, 1077, 150_000, 300_000);
+        let mut raw = IfdBuilder::new();
+        raw.set(t::COMPRESSION, Value::Short(vec![1]));
+        raw.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::CFA]));
+        raw.set(t::IMAGE_WIDTH, Value::Long(vec![6000]));
+        raw.set(t::IMAGE_LENGTH, Value::Long(vec![4000]));
+        raw.set_image(ImageData::Strips { rows_per_strip: 4000, strips: vec![vec![0x33u8; 3_000_000]] });
+        let file = TiffWriter::default().write(&[big, small, raw]).expect("the fixture writes");
+        let whole = crate::embedded_preview_covering(&file, 512).expect("a preview");
+        assert!(whole.len() < 1_000_000, "the small one is the whole file's choice");
+        for fill in [0u8, 0xff] {
+            let (plan, buf, loaded) = run_plan(&file, fill, |b, l| preview_plan_covering(b, l, 512));
+            assert_eq!(plan, HeaderPlan::Ready);
+            assert!(crate::embedded_preview_covering(&buf, 512) == Some(whole.clone()), "{fill}: the whole file's preview");
+            assert!(loaded.total() < 1_000_000, "the big preview is not read: {}", loaded.total());
+        }
     }
 
     #[test]

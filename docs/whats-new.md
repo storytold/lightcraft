@@ -2,6 +2,103 @@
 
 ## 2026-10-14
 
+### Indexing reads less of each raw
+- Indexing reads only a raw's header and the small embedded preview it uses, not its full-size preview: a 70 MB Sony
+  α1 ARW now costs under 1 MB of disk reads (8 MB before), so indexing a library on an external or network drive no
+  longer saturates the drive and leaves the grid's thumbnails waiting. Grid thumbnails of those raws read the small
+  preview the same way.
+
+### Search by content on the graphics card
+- The content models now run on the **graphics card** (Vulkan, DirectX 12 or Metal; NVIDIA, AMD, Intel, Apple),
+  with the processor as the fallback. On an RTX 4090 indexing goes from ~390 to ~1,750 photos a minute with SigLIP 2
+  Base and from ~50 to ~1,000 with the large So400m model, whose better searches are no longer a day's wait for a big
+  library; a search's text is ready in a few milliseconds. Results are the same as on the processor.
+- Settings ▸ Search says what runs the model and how long a photo takes (*Runs on GPU: NVIDIA GeForce RTX 4090 · 19 ms
+  per photo*). If the graphics card fails, the processor takes over at once without losing a photo, and Settings ▸
+  Search says so. *Use the GPU for rendering* (Settings ▸ Performance) switches it off too.
+- Indexing reads more photos at once at Normal and Fast pace (it was waiting for them), also on the processor; the
+  photos it renders itself (no usable preview) are rendered on the processor.
+- Agents: `content.status` gives `device`, `textDevice` and `gpuFallback`.
+
+### Search by content: a second model, and models tuned one by one
+- **CLIP ViT-B/32** (OpenAI, MIT licence, 605 MB) joins the SigLIP 2 models in Settings ▸ Search: the small, quick one,
+  about twice as fast at indexing as SigLIP 2 Base and a third of its download, for English searches and tags. It finds
+  less than SigLIP 2 (see docs/content-search.md for the measurements), so SigLIP 2 Base stays the recommended model.
+- Each model in Settings ▸ Search says what it is for and what it costs: *Small · fastest, ~2× faster · English only*,
+  *Base · fast · any language*, *Large · best search results, ~8× slower · any language*, and how many photos of the open
+  library it has indexed.
+- **Switching models keeps every index**: each model has its own index of the library and its own prepared
+  vocabulary, so going back to a model you used before needs no new scan. Settings ▸ Search says so, and so does the
+  message when you switch.
+- **SigLIP 2 So400m** now has its own cut-offs for searches and auto-tags, measured like the base model's: searches
+  with it find far more (about 70 % of the matching photos instead of 44 %, as precisely), at about 8 times the
+  indexing time; its auto-tags are no better than the base model's. A model already installed picks up new cut-offs
+  when LightCraft is updated.
+- Indexing stops sooner when you switch models: the photos still waiting in the batch it was on are skipped.
+- Agents: `content.models.list` gives each model's `hint {quality, relativeTime, englishOnly}` and `libraryIndex
+  {photos, bytes}`; CLIP installs and downloads like the others (`content.models.download {id:
+  "clip-vit-b32-openai", acknowledged: true}`).
+
+### Search by content: auto-tags
+- Indexed photos now get **tags** from a vocabulary of about 1,500 things a photo can show (beach, forest, rocks,
+  flower, crowd, heron, scorpion, camper van, wedding, sunset, snow…), arranged in levels (`animal › bird › heron`).
+  They are suggestions: nothing is written to your photos until you accept one.
+- **Library Filter ▸ Contents** (Shift+F) lists the library's tags with how many photos show each, a level counting
+  everything below it (`animal` covers every bird and dog). Pick one to see its photos, with every other filter.
+- **Keywording ▸ Suggested from contents**: the tags of the selected photos. Click one to make it a keyword
+  (`Contents|heron`, written to XMP and exported like any keyword; one undo step for the whole selection), or ✕ to
+  never suggest it for those photos again.
+- **Smart Collections** have a *Contents* criterion: *shows* a text (`red car`) or *is tagged* with a tag.
+- Settings ▸ Search ▸ **Auto-tags**: the keyword parent accepted tags go under (`Contents`, or none), the tags' cut-off
+  (Advanced) and the **vocabulary** itself, editable as text (one tag per line, synonyms after `=`) with Restore
+  Defaults. The vocabulary is prepared once per model in the background (*Preparing auto-tags* in the activity stack);
+  after that, tagging a large library takes about a second.
+- Agents: `content.tags`, `content.tagCounts`, `content.acceptTags`, `content.dismissTags`, `content.vocabulary`,
+  `content.setVocabulary`, `content.tagOptions`, and `library.filter {contentTag}` (docs/content-search.md).
+
+### Search by content: from the search bar
+- The search field's magnifier now opens **Search Text** / **Search Contents**. In Contents mode, type what is in the
+  photo (*beach at sunset*, *a dog on a jetty*, *trees seen from above*; other languages work too) and the grid shows
+  the photos that show it, best match first. It mixes with every other filter, and `contents:` / `shows:` words work in
+  the ordinary search as well: `rating:>=3 contents:"red car"`.
+- A chip above the grid shows the search, with **More** / **Fewer** to widen or narrow it and ✕ to end it; hovering a
+  photo shows how well it matched. When nothing clears the bar, the best matches are shown and the chip says so.
+- **Relevance** is a new sort (best match first), chosen for you while searching by contents; any other sort still
+  works, and ending the search brings back the one you had.
+- **Find Similar Contents** in the grid's and the loupe's context menu shows the photos with similar contents to a
+  photo (next to Find Similar Photos, which compares composition and tones).
+- While the library is still being indexed the bar says how much is done (*Indexed 41 % of photos*); with no model or
+  indexing off it says how to turn it on, with a button to Settings → Search. The search model loads in the
+  background: the window never waits for it.
+- `rating:>=3` and `<=` now work in the search field (only `>` and `<` did).
+- Indexing uses far less memory: at most 4 previews and 1 full render at a time, raws with a small embedded preview are
+  read from it, and very large TIFFs are reduced as they are read (a folder with a 2.3 GB layered TIFF peaked at 4.8 GB,
+  now 1.4 GB). The same makes grid thumbnails of such raws and TIFFs faster.
+
+### Search by content: indexing
+- With Settings ▸ Search ▸ **Index photo contents** on, LightCraft now looks at every photo of the library in the
+  background and remembers what it shows (an embedding per photo, in `content-embeddings-<model>.bin` beside the
+  catalog; about 1.5 KB a photo). It shows in the activity stack as *Indexing photo contents*; its ✕ stops it after the
+  photos it is on and keeps what is done, and turning the switch on again carries on. Quitting does not ask about it.
+- Settings ▸ Search shows how far it has got and the time left, a **Pace** (Low, Normal, Fast: how much of the computer
+  it may use) and **Clear Index**. New photos are indexed as they come in; edits never cause re-indexing (the unedited
+  photo is what is indexed), a replaced original does. Raws are indexed from their embedded preview.
+- Agents and the CLI can already search: `content.search {text: "kids on a beach"}` ranks the photos by how well they
+  match, `content.similar {id}` finds photos with similar contents, `content.status` reports progress
+  (docs/content-search.md).
+
+### Search by content: the models
+- Settings ▸ Search (new) lists the models LightCraft will use to find photos by what they show (Google's SigLIP 2:
+  base 256 px, recommended, 1.5 GB; base 384 px; So400m, 4.6 GB; all Apache-2.0). **Download** shows the licence first
+  and fetches nothing until "I have read these terms and accept them" is ticked; the model then comes from Hugging
+  Face, each file checked against its size and SHA-256, with its progress in the activity stack and a Cancel that
+  leaves nothing behind. **Test** checks the model on a few generated scenes and shows how long a photo takes.
+- A model whose files are already in its folder shows as found on this computer: **Check and Use** checks them without
+  downloading anything.
+- Everything stays on this computer. Indexing and searching photos by content come in the next steps; the Index photo
+  contents switch is remembered until then. Agents use `content.models.*`, `content.enable` and `content.status`
+  (docs/content-search.md).
+
 ### Lightroom radial masks on the right side
 - Radial masks brought over from Lightroom Classic (catalog import, XMP sidecars, edits inside DNGs and presets) now
   apply their effect inside the circle, as Lightroom does, instead of outside it (issue #1815). A mask inverted in

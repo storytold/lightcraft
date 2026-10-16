@@ -870,8 +870,22 @@ impl RenderJob {
     /// for it is told, instead of waiting forever on a worker that died (the pool doesn't replace
     /// it, so a few such panics used to stop every render).
     pub fn run(self) -> RenderResult {
+        self.run_guarded(true)
+    }
+
+    /// [`RenderJob::run`] on the CPU whatever the job is: background work that is not shown (the content scan's renders
+    /// of photos without a usable preview) leaves the GPU to the views. Two `lightcraft-cli run` processes crashed in
+    /// the NVIDIA Vulkan driver (`libnvidia-glcore` 615.71.09, inside `queue_submit`) while a content scan rendered
+    /// such photos on the GPU from its worker threads; it did not happen again in later runs, so the cause is not
+    /// known, and these small renders gain little from the GPU. Guarded as [`RenderJob::run`] is.
+    pub fn run_on_cpu(self) -> RenderResult {
+        self.run_guarded(false)
+    }
+
+    /// [`RenderJob::run_with`] inside the crash guard: a panic becomes this job's failure.
+    fn run_guarded(self, gpu_allowed: bool) -> RenderResult {
         let failed = self.failed(String::new());
-        crate::guard::catch("the render", || self.run_unguarded()).unwrap_or_else(|e| RenderResult { rendered: Err(e), ..failed })
+        crate::guard::catch("the render", || self.run_with(gpu_allowed)).unwrap_or_else(|e| RenderResult { rendered: Err(e), ..failed })
     }
 
     /// This job's result when it fails with `e`.
@@ -901,10 +915,11 @@ impl RenderJob {
         self
     }
 
-    /// [`Self::run_photo`], composed into its slide when this is a slide job (inside [`Self::run`]'s guard).
-    fn run_unguarded(self) -> RenderResult {
+    /// [`Self::run_photo`], composed into its slide when this is a slide job (inside [`Self::run_guarded`]'s crash
+    /// guard); `gpu_allowed` false keeps the render on the CPU.
+    fn run_with(self, gpu_allowed: bool) -> RenderResult {
         let slide = self.slide.clone();
-        let mut r = self.run_photo();
+        let mut r = self.run_photo(gpu_allowed);
         if let (Some(slide), Ok(rendered)) = (slide, r.rendered.as_mut()) {
             rendered.image = slide.compose(&rendered.image);
             rendered.deep = None;
@@ -913,7 +928,7 @@ impl RenderJob {
     }
 
     /// The photo's render (without slide composition).
-    fn run_photo(self) -> RenderResult {
+    fn run_photo(self, gpu_allowed: bool) -> RenderResult {
         if let Some((cache, key)) = &self.cache
             && let Some(img) = cache.get_at(self.cache_generation, *key)
         {
@@ -967,7 +982,7 @@ impl RenderJob {
                 let info = source.info_or(self.info);
                 // Thumbnails (many small jobs side by side) stay on the CPU; views and exports use
                 // the GPU when there is one.
-                let gpu = self.cache.is_none();
+                let gpu = gpu_allowed && self.cache.is_none();
                 let (mut rendered, gpu_fallback) = develop_reporting(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu);
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB
@@ -2253,6 +2268,29 @@ mod tests {
         assert!(s.media.has_source(id, SourceLevel::Full));
         assert!(!s.media.has_source(id, SourceLevel::Preview));
         assert!(!s.media.has_source(PhotoId(id.0 + 1), SourceLevel::Full));
+    }
+
+    #[test]
+    fn the_content_scans_renders_stay_on_the_cpu() {
+        let mut s = crate::Session::with_demo();
+        let id = s.active().unwrap();
+        let job = |s: &mut crate::Session| {
+            let mut j = s.variant_job(id, &DevelopSettings::default(), 256).unwrap();
+            // (the scan keeps them out of the thumbnail cache, which also kept thumbnails on the CPU)
+            j.cache = None;
+            j
+        };
+        let gpu_here = lightcraft_gpu::available();
+        // a GPU failure armed for the next GPU render on this thread: the scan's render must not be the one to meet it
+        lightcraft_gpu::inject_fault(lightcraft_gpu::Fault::Validation);
+        let scanned = crate::content_worker::render(job(&mut s))();
+        assert!(scanned.is_ok());
+        let shown = job(&mut s).run();
+        if gpu_here {
+            assert!(shown.gpu_fallback.is_some(), "the scan's render took the GPU");
+        }
+        lightcraft_gpu::reset_failures();
+        assert!(job(&mut s).run_on_cpu().gpu_fallback.is_none());
     }
 
     #[test]
