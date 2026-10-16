@@ -483,6 +483,73 @@
   files, the same files as `library.import` (issue #1080). They used to be skipped without a word.
 - Compare and Reference View panes say "Rendering…" (or that the photo can't be opened) the same way, so a
   magnified preview isn't taken for the photo when checking focus at 1:1.
+### Large libraries
+- The catalog on disk is several times smaller: a photo's record states only what was set (no empty fields, no default
+  develop settings), about 0.4 to 0.6 kB for an unedited photo where it was 3.4 to 3.7 kB. Edits, history steps and
+  versions are stored as what differs from the defaults.
+- Saving follows what changed, not the size of the library: the catalog file is rewritten when the changes since the
+  last rewrite have grown to a quarter of its size, where it used to be rewritten every 2000 changes. Importing 100,000
+  photos rewrote it 50 times (9.4 GB written); it is now 15 times (0.25 GB). Quitting no longer rewrites a large
+  catalog for a handful of changes.
+- The catalog's photos are saved in segment files (JSON files in `segments/` beside `catalog.snap`), and saving rewrites only the
+  segments whose photos changed: after edits in one place, 2 MB where it was the whole catalog (about 60 ms where it was 2 s,
+  for 3.5 million photos). Opening reads the segments on several threads: 0.15 s where it was 0.5 s for 300,000 photos,
+  1.7 s where it was 6.1 s for 3.5 million. A damaged segment is named when the library is opened, and nothing is
+  modified.
+- Less memory: photos whose develop settings are equal (above all, every photo nobody edited) hold them once.
+  A library of unedited photos takes about half the memory it did (1.4 kB per photo where it was 2.9 kB: 4.8 GB where
+  it was 10 GB for 3.5 million photos) and opens faster.
+- File ▸ Back Up Library backs up the catalog (not the photos) to a folder named after the time (UTC) in Backups in
+  the library folder, while you go on working, and says where it went when it is done. Each one shares with the one before it the files that didn't change, so a backup of a large library after a
+  day's work copies a few megabytes, and removing an older backup takes nothing from a newer one. Agents:
+  `library.backup` (`dir`; returns when the backup is made, or at once with `background`), `library.backupStatus`,
+  `library.backupPreferences` (the folder a library's backups go to), `library.checkBackup` (reads a backup against
+  the list of files it was made with, and names one that was edited or damaged since).
+- `lightcraft-cli run` waits for a restore or backup it started with `background=true`, and says how it ended.
+- Why a backup or a restore can't be made right now, or was not made (one is running already, the library is being
+  restored, it was stopped or given up), is said in your language. Errors that name a folder or a file are still in English.
+- A backup restored into another folder (`library.restore` with `to`) is now checked to open as a library there;
+  one that doesn't is taken back, as a restore of the open library already was.
+- What restores replaced (the Replaced folder in the library) no longer piles up for a library that keeps its
+  backups for a time: those folders go with the old backups, by the same rule, and the newest three stay. One you
+  renamed, put something into or opened as a library is left alone.
+- File ▸ Restore Library from Backup… now lists the library's backups to choose from, newest first, with when each
+  was made, how many photos it holds and its size; a backup of another library in the same folder is marked. Choose
+  Folder… is still there for a backup kept elsewhere, and also takes the folder the backups are in.
+- Old backups can go by themselves: Settings ▸ General ▸ Backups ▸ **Keep backups** (Forever, which is the usual, or
+  1, 3, 6 months or a year). After a backup is made, the library's own backups older than that are removed, and the note
+  that the library was backed up says how many; its newest three always stay, as does a backup you renamed or put
+  something of your own into, and backups of another library in the same folder are never touched. Agents: `keepDays` in
+  `library.backupPreferences` (any number of days), and `library.pruneBackups` to see which backups are that old
+  before any is removed. For more elaborate keeping, a backup tool such as `restic` or `rustic` can take the folder.
+- A library can be backed up without being asked, in two ways of their own, both off until chosen in Settings ▸
+  General ▸ Backups. **While open**: once a day, a week or a month, by itself in the background when the last backup
+  is that old (a month is thirty days; one that fails is tried again an hour later). **When quitting**: Ask (Back Up,
+  Skip or Cancel) or Always (LightCraft quits when the backup is made; Quit Without Waiting stops it). A backup of
+  the library that runs already is the one waited for. One that can't be made asks whether to quit anyway: never a
+  quit as if the library had been backed up, and never an app that can't be quit because a drive is unplugged. Only
+  the app you have open does either; snapshots, agents and the command line back up when told to. Settings shows when the library was last backed up. Agents:
+  `library.backupPreferences` takes `every` (never, day, week, month) and `onClose` (never, ask, always), and
+  answers them with `lastBackup`.
+- Settings ▸ General ▸ Backups shows the folder the library's backups go to, and sets it: Choose Folder… for one of
+  your own (on another drive, say), Use Library Folder for Backups in the library folder again. Agents:
+  `library.backupPreferences` also answers `folder` (where backups go, chosen or not) and takes `choose` (ask with a
+  folder dialog, in the app). A folder inside the library folder (other than Backups) or inside a backup is refused
+  for backups, by this command and by `library.backup`.
+- A backup can be put back: File ▸ Restore Library from Backup… (`library.restore`) makes the open library what the backup holds and goes on in it, and
+  keeps what the library was, with every change up to that moment, in Replaced in the library folder. With `to` it
+  restores into another folder instead, to look at a backup without giving up the library. A backup that was edited
+  or damaged, or that a newer LightCraft made, is refused with the library untouched; a restore cut short is finished
+  when the library is next opened. A backup folder itself no longer opens as a library, so that it stays what it was.
+  `library.backups` lists a folder's backups. In the app the backup is copied while you go on working (the
+  activity stack shows it and can stop it) and moved into place when the library is at rest; a toast says where what
+  the library held went. Agents: `background`, `library.restoreStatus`.
+- Libraries are upgraded when first opened (catalog format 11) and can't be opened by earlier versions afterwards. The
+  photos are split into segments only once the segments written read back the same. Copy or back up the whole library
+  folder: `catalog.snap` alone no longer holds the photos.
+  The library as it was is kept beside it (`catalog.snap.v6-…`, `catalog.log.v6-…`): to go back, see
+  `docs/catalog-persistence.md`.
+  Numbers and the measurements behind them: `docs/catalog-persistence.md`.
 
 ### Lens corrections
 - Sony A7R VI (ILCE-7RM6) raws are corrected for lens distortion from the table the camera records in each file,
