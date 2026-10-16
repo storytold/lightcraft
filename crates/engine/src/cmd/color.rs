@@ -7,7 +7,6 @@
 //! mixer, before vibrance, grading, vignette and curves).
 
 use lightcraft_color::perceptual::{lab_to_lch, oklab_from_2020};
-use lightcraft_color::spline::MonotoneCurve;
 use lightcraft_color::transfer::srgb_to_linear;
 use lightcraft_color::{REC2020, SRGB};
 use lightcraft_develop::{DevelopSettings, MAX_POINT_COLORS, MIXER_BANDS, PointColor, ToneCurve, Treatment, controls};
@@ -57,6 +56,11 @@ pub(crate) fn encoded_to_oklch(e: [f32; 3]) -> [f32; 3] {
 
 /// Everything after the colour mixer, neutralized (the colour Point Color sees).
 pub(crate) fn after_mixer_neutral(d: &mut DevelopSettings) {
+    // Retain the profile's upstream scalar effects once, but stop its conversion and
+    // post-mixer curves from being applied again while sampling the underlying color.
+    *d = lightcraft_pipeline::profiles::effective(d).into_owned();
+    d.profile.id = "lc.color".into();
+    d.profile.imported = None;
     d.color.vibrance = 0.0;
     d.color.saturation = 0.0;
     d.point_colors.clear();
@@ -72,6 +76,9 @@ pub(crate) fn after_mixer_neutral(d: &mut DevelopSettings) {
 fn targeted(s: &mut Session, p: &Value) -> Result<Value> {
     let c = "develop.targeted";
     let (x, y, delta) = (f64_req(p, "x", c)?, f64_req(p, "y", c)?, f64_req(p, "delta", c)?);
+    if ![x, y, delta].iter().all(|v| v.is_finite()) {
+        return Err(bad(c, "x, y and delta must be finite numbers"));
+    }
     let target = p.get("target").and_then(Value::as_str).unwrap_or("curve").to_string();
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
     let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
@@ -106,26 +113,30 @@ fn targeted(s: &mut Session, p: &Value) -> Result<Value> {
                 nudge(&mut changed, &mut d, region, delta);
             } else {
                 // point curve: move the point at the sampled input up/down (or add one there)
-                let (pts, v) = match channel {
-                    "red" => (&mut d.curve.red, e[0]),
-                    "green" => (&mut d.curve.green, e[1]),
-                    "blue" => (&mut d.curve.blue, e[2]),
-                    _ => (&mut d.curve.master, 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2]),
+                let (channel, curve) = super::curves::channel_mut(&mut d.curve, channel).map_err(|e| bad(c, e))?;
+                let v = match channel {
+                    "red" => e[0],
+                    "green" => e[1],
+                    "blue" => e[2],
+                    _ => 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2],
                 };
                 let v = v as f64;
-                if pts.is_empty() {
-                    *pts = vec![Point::new(0.0, 0.0), Point::new(1.0, 1.0)];
-                }
-                let curve = MonotoneCurve::new(&pts.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>());
                 let dy = delta / 255.0;
-                match pts.iter().position(|q| (q.x - v).abs() < 0.03) {
-                    Some(i) => pts[i].y = (pts[i].y + dy).clamp(0.0, 1.0),
+                let handles = curve.editable_points();
+                match handles.iter().enumerate().find(|(_, q)| (q.x - v).abs() < 0.03) {
+                    Some((i, point)) => {
+                        curve.try_move_point(i, Point::new(point.x, (point.y + dy).clamp(0.0, 1.0))).map_err(|e| bad(c, e.to_string()))?;
+                    }
                     None => {
-                        let i = pts.iter().position(|q| q.x > v).unwrap_or(pts.len());
-                        pts.insert(i, Point::new(v, (curve.eval(v) + dy).clamp(0.0, 1.0)));
+                        let y = curve.render_lut().eval(v as f32) as f64;
+                        curve.try_add_point(Point::new(v, (y + dy).clamp(0.0, 1.0))).map_err(|e| bad(c, e.to_string()))?;
                     }
                 }
-                changed.insert(format!("curve.{channel}"), json!(pts.iter().map(|q| [q.x, q.y]).collect::<Vec<_>>()));
+                let value = match curve.sparse_points() {
+                    Some(points) => json!(points.iter().map(|q| [q.x, q.y]).collect::<Vec<_>>()),
+                    None => serde_json::to_value(curve).map_err(|e| bad(c, e.to_string()))?,
+                };
+                changed.insert(format!("curve.{channel}"), value);
             }
         }
         "hue" | "sat" | "lum" => {
@@ -138,7 +149,7 @@ fn targeted(s: &mut Session, p: &Value) -> Result<Value> {
             let [_, _, h] = encoded_to_oklch(e);
             let w = lightcraft_pipeline::colorops::band_weights(h);
             let top = w.iter().cloned().fold(0.0f32, f32::max).max(1e-6);
-            let bw = d.treatment == Treatment::Bw || d.profile.id == "lc.mono";
+            let bw = d.is_bw();
             label = if bw { "B&W Mix" } else { "Color Mixer" };
             for (i, band) in MIXER_BANDS.iter().enumerate() {
                 let k = (w[i] / top) as f64;

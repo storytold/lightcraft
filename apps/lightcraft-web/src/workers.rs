@@ -97,7 +97,15 @@ async fn handle(scope: &web_sys::DedicatedWorkerGlobalScope, backend: Option<Bac
             match b.read(&key).await.ok().flatten().and_then(|bytes| lightcraft_preview::decode_jpeg(&bytes)) {
                 Some(image) => {
                     let histogram = Histogram::of_srgb8(&image);
-                    return Ok((Rendered { image, histogram, deep: None }, 0));
+                    return Ok((
+                        Rendered {
+                            image,
+                            histogram,
+                            deep: None,
+                            unsupported_edits: lightcraft_engine::pipeline::profile_table_diagnostics(&job.settings, &job.request()),
+                        },
+                        0,
+                    ));
                 }
                 None => cache_miss = true,
             }
@@ -325,7 +333,7 @@ impl Workers {
             let rgba = Uint8Array::new(&get(&data, "rgba")).to_vec();
             let hist = Uint32Array::new(&get(&data, "hist")).to_vec();
             match (Rgba8::from_bytes(wd, ht, &rgba), Histogram::from_words(&hist)) {
-                (Some(image), Some(histogram)) => Ok(Rendered { image, histogram, deep: None }),
+                (Some(image), Some(histogram)) => Ok(Rendered { image, histogram, deep: None, unsupported_edits: Vec::new() }),
                 _ => Err("render worker: bad image".to_string()),
             }
         } else {
@@ -424,6 +432,11 @@ impl Workers {
 
 impl RenderOffload for Workers {
     fn try_start(&mut self, slot: Slot, job: RenderJob) -> Option<RenderJob> {
+        // Explicit resources are session-owned and never serialized into worker messages.
+        // Inline rendering also retains unresolved-reference diagnostics.
+        if lightcraft_engine::pipeline::active_look_table(&job.settings).is_some() {
+            return Some(job);
+        }
         let mut g = self.0.borrow_mut();
         let g = &mut *g;
         if let Some((cache, _)) = job.cache.as_ref().or(job.view_cache.as_ref()) {
@@ -441,7 +454,7 @@ impl RenderOffload for Workers {
                 photo: job.photo,
                 level: job.level,
                 key: job.key,
-                rendered: Ok(Rendered { image, histogram, deep: None }),
+                rendered: Ok(Rendered { image, histogram, deep: None, unsupported_edits: Vec::new() }),
                 gpu_fallback: None,
                 loaded: None,
                 quick: None,

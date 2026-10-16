@@ -3166,6 +3166,7 @@ dependencies = [
  "lightcraft-geom",
  "proptest",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3246,6 +3247,7 @@ dependencies = [
  "lightcraft-tiff",
  "log",
  "miniz_oxide 0.8.9",
+ "quick-xml 0.38.4",
  "rayon",
  "serde",
  "serde_json",
@@ -3434,6 +3436,7 @@ dependencies = [
  "lightcraft-raster",
  "lightcraft-testkit",
  "lightcraft-tiff",
+ "md-5",
  "miniz_oxide 0.8.9",
  "proptest",
  "rayon",
@@ -3627,6 +3630,16 @@ checksum = "8ea1f30cedd69f0a2954655f7188c6a834246d2bcf1e315e2ac40c4b24dc9519"
 dependencies = [
  "cfg-if",
  "rayon",
+]
+
+[[package]]
+name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if",
+ "digest",
 ]
 
 [[package]]

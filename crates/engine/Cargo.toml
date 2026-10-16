@@ -27,6 +27,7 @@ lightcraft-meta = { workspace = true }
 lightcraft-lensdb = { workspace = true }
 lightcraft-faces = { workspace = true }
 miniz_oxide = { workspace = true }
+quick-xml = { workspace = true }
 lightcraft-merge = { workspace = true }
 lightcraft-geocode = { workspace = true }
 lightcraft-slideshow = { workspace = true }

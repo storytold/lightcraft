@@ -265,6 +265,10 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     if cancelled {
                         m += " · cancelled";
                     }
+                    if let Some(warning) = crate::widgets::export_unsupported_summary(&files) {
+                        m += " · ";
+                        m += &warning;
+                    }
                     if let Some(photos) = &photos {
                         m += " · ";
                         m += &apple_photos_note(photos);

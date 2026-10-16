@@ -18,7 +18,7 @@ fn temp_dir(tag: &str) -> PathBuf {
 }
 
 fn user_preset(id: &str, settings: serde_json::Value) -> Preset {
-    Preset { id: id.into(), name: id.into(), group: "User Presets".into(), settings, favorite: false, builtin: false }
+    Preset { id: id.into(), name: id.into(), group: "User Presets".into(), settings, unsupported_edits: Vec::new(), favorite: false, builtin: false }
 }
 
 fn with_presets(s: &mut Session) {
@@ -222,8 +222,9 @@ fn curve_presets_save_apply_export_import_and_persist() {
         s.execute("develop.set", &json!({"control": "curve.shadows", "value": 20})).unwrap();
         s.execute("curve.applyPreset", &json!({"name": "strong contrast"})).unwrap();
         let d = s.develop_of(s.active().unwrap()).unwrap();
-        assert_eq!(d.curve.master.len(), 5);
-        assert!(d.curve.master[1].y < 0.25 && d.curve.master[3].y > 0.75, "an S-curve");
+        let master = d.curve.master.sparse_points().unwrap();
+        assert_eq!(master.len(), 5);
+        assert!(master[1].y < 0.25 && master[3].y > 0.75, "an S-curve");
         assert_eq!(d.curve.shadows, 20.0);
         assert_eq!(s.execute("curve.presets", &json!({})).unwrap()["current"], "Strong Contrast");
         // save a custom one (with a red channel)
@@ -234,9 +235,9 @@ fn curve_presets_save_apply_export_import_and_persist() {
         // Linear resets every point channel
         s.execute("curve.applyPreset", &json!({"name": "Linear"})).unwrap();
         let d = s.develop_of(s.active().unwrap()).unwrap();
-        assert!(d.curve.master.is_empty() && d.curve.red.is_empty());
+        assert!(d.curve.master.sparse_points().unwrap().is_empty() && d.curve.red.sparse_points().unwrap().is_empty());
         s.execute("curve.applyPreset", &json!({"name": "Faded Red"})).unwrap();
-        assert_eq!(s.develop_of(s.active().unwrap()).unwrap().curve.red.len(), 2);
+        assert_eq!(s.develop_of(s.active().unwrap()).unwrap().curve.red.sparse_points().unwrap().len(), 2);
         // export (extension added), delete, re-import
         let r = s.execute("curve.exportPresets", &json!({"path": file.to_string_lossy()})).unwrap();
         assert_eq!(r["count"], 1);
@@ -411,4 +412,22 @@ fn slideshow_playback_settings_persist_with_the_library() {
     assert_eq!((s.slideshow.slide_duration, s.slideshow.fade_duration), (120.0, 0.0));
     drop(s);
     let _ = std::fs::remove_dir_all(&lib);
+}
+
+#[test]
+fn interior_diagonal_curve_survives_preset_roundtrip() {
+    use crate::cmd::curves::{CurvePreset, parse_file, to_file};
+    use lightcraft_develop::ToneCurve;
+    use lightcraft_geom::Point;
+    let points = vec![Point::new(0.25, 0.25), Point::new(0.75, 0.75)];
+    let before = ToneCurve { master: points.clone().into(), red: points.into(), ..Default::default() };
+    let preset = CurvePreset::from_curve("Interior", &before);
+    assert_eq!(preset.master.sparse_points().unwrap().len(), 2);
+    assert_eq!(preset.red.sparse_points().unwrap().len(), 2);
+    assert!(!preset.matches(&ToneCurve::default()));
+    let text = to_file(&[preset]);
+    let presets = parse_file(text.as_bytes()).unwrap();
+    let mut after = ToneCurve::default();
+    presets[0].apply(&mut after);
+    assert_eq!(after, before);
 }

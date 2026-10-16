@@ -32,7 +32,7 @@ const MODULES: &[Module] = &[
     Module {
         src: include_str!("wgsl/blur.wgsl"),
         bindings: &[("src", false, "f32"), ("dst", true, "f32")],
-        entries: &["box_h", "box_v", "median_h", "median_v"],
+        entries: &["box_h", "box_v", "median_h", "median_v", "detail_h", "detail_v"],
     },
     Module {
         src: include_str!("wgsl/resize.wgsl"),
@@ -51,6 +51,7 @@ const MODULES: &[Module] = &[
             "wb_k",
             "nr_lum",
             "chroma_k",
+            "nr_chroma_k",
             "nr_col",
             "subsample",
             "redeye_k",
@@ -724,6 +725,17 @@ pub fn groups1(n: usize) -> [u32; 3] {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn render_shaders_validate_without_an_adapter() {
+        for spec in super::MODULES {
+            let source = super::module_source(spec, &super::constants());
+            let module = wgpu::naga::front::wgsl::parse_str(&source).expect("render shader parses");
+            wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::all())
+                .validate(&module)
+                .expect("render shader validates with generated parameter offsets");
+        }
+    }
+
     #[test]
     fn limits_override_parses() {
         assert_eq!(super::parse_limits("webgpu"), Some((128 << 20, 256 << 20)));

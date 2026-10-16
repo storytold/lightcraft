@@ -460,6 +460,7 @@ fn hdr_jpeg_export_writes_a_gain_map_and_sdr_edits_stay_plain() {
     use lightcraft_codecs::gainmap;
     let mut s = Session::with_demo();
     let id = sunset(&mut s);
+    s.commit("Imported diagnostics", lightcraft_catalog::Op::SetUnsupportedEdits { id, fields: vec!["OwnHdrSetting".into()] }).unwrap();
     let o = ExportOptions::from_json(&json!({"longEdge": 320, "hdr": true}));
     assert!(o.hdr_output());
     // no HDR edit: an ordinary JPEG even with HDR output asked for
@@ -470,6 +471,7 @@ fn hdr_jpeg_export_writes_a_gain_map_and_sdr_edits_stay_plain() {
     assert_eq!(r["enabled"], true);
     let e = export_photo(&mut s, id, &o, 1).unwrap();
     assert!(gainmap::is_gain_map_jpeg(&e.bytes));
+    assert_eq!(e.unsupported_edits, ["OwnHdrSetting"], "the HDR gain-map branch retains source diagnostics");
     let gm = gainmap::read_jpeg(&e.bytes).unwrap();
     assert!(gm.meta.alternate_headroom > 0.5 && gm.meta.alternate_headroom <= 3.05, "headroom {}", gm.meta.alternate_headroom);
     // the base is the SDR rendition: the same pixels as the SDR export (the decoders agree)
@@ -1051,4 +1053,75 @@ fn same_folder_as_original_refuses_photos_without_a_folder() {
     let e = files[0]["error"].as_str().unwrap();
     assert!(e.contains("folder is missing") && e.contains(&gone), "{e}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn export_results_keep_prepared_unsupported_edit_names() {
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    s.commit("Imported diagnostics", lightcraft_catalog::Op::SetUnsupportedEdits { id, fields: vec!["FilterList".into()] }).unwrap();
+    let o = ExportOptions::from_json(&json!({"format": "png", "width": 16}));
+    let direct = export_photo(&mut s, id, &o, 1).unwrap();
+    assert_eq!(direct.unsupported_edits, ["FilterList"]);
+    let items = crate::export::prepare_batch(&mut s, &[id], &o).unwrap();
+    s.commit("Clear diagnostics", lightcraft_catalog::Op::SetUnsupportedEdits { id, fields: Vec::new() }).unwrap();
+    let mut write = |_: &str, _: &[u8]| Ok(());
+    let result = crate::export::run_batch(items, &o, &crate::export::Destination::default(), &mut write, &|_| false, true, &mut |_, _| true).unwrap();
+    assert_eq!(result[0]["unsupportedEdits"], json!(["FilterList"]), "background result follows its prepared photo state");
+}
+
+#[test]
+fn original_and_dng_results_retain_the_prepared_diagnostics() {
+    let dir = temp_dir("export-diagnostics-file");
+    let source = dir.join("Own.dng");
+    let original = synthetic_dng_with(None, Default::default());
+    std::fs::write(&source, &original).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [source]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    for format in [ExportFormat::Original, ExportFormat::Dng] {
+        s.commit("Imported diagnostics", lightcraft_catalog::Op::SetUnsupportedEdits { id, fields: vec!["OwnUnmappedSetting".into()] }).unwrap();
+        let options = ExportOptions { format, ..Default::default() };
+        let prepared = crate::export::prepare_export(&mut s, id, &options, 1).unwrap();
+        s.commit("Later diagnostics", lightcraft_catalog::Op::SetUnsupportedEdits { id, fields: vec!["LaterSetting".into()] }).unwrap();
+        let exported = prepared.run().unwrap();
+        assert_eq!(exported.unsupported_edits, ["OwnUnmappedSetting"], "the result follows its prepared source state");
+        if format == ExportFormat::Original {
+            assert_eq!(exported.bytes, original);
+            assert_eq!(exported.sidecars.len(), 1);
+        } else {
+            assert!(exported.sidecars.is_empty());
+            assert!(lightcraft_raw::decode(&exported.bytes).is_ok());
+        }
+    }
+    assert_eq!(std::fs::read(&source).unwrap(), original, "the original remains unchanged");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn unsuccessful_exports_do_not_report_successful_diagnostics() {
+    use crate::export::{Conflict, Destination, prepare_batch, run_batch};
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    s.commit("Imported diagnostics", lightcraft_catalog::Op::SetUnsupportedEdits { id, fields: vec!["OwnUnmappedSetting".into()] }).unwrap();
+    let options = ExportOptions::from_json(&json!({"format": "png", "width": 16}));
+    let items = prepare_batch(&mut s, &[id], &options).unwrap();
+    let mut reject = |_: &str, _: &[u8]| Err("synthetic destination full".to_string());
+    let failed = run_batch(items, &options, &Destination::default(), &mut reject, &|_| false, false, &mut |_, _| true).unwrap();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0]["error"], "synthetic destination full");
+    assert!(failed[0].get("path").is_none() && failed[0].get("unsupportedEdits").is_none());
+
+    let options = ExportOptions { conflict: Conflict::Skip, ..options };
+    let items = prepare_batch(&mut s, &[id], &options).unwrap();
+    let mut writes = 0;
+    let mut write = |_: &str, _: &[u8]| {
+        writes += 1;
+        Ok(())
+    };
+    let skipped = run_batch(items, &options, &Destination::default(), &mut write, &|_| true, false, &mut |_, _| true).unwrap();
+    assert_eq!(writes, 0);
+    assert_eq!(skipped.len(), 1);
+    assert!(skipped[0]["skipped"].is_string());
+    assert!(skipped[0].get("path").is_none() && skipped[0].get("unsupportedEdits").is_none());
 }

@@ -222,9 +222,14 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
 /// to report (`Err`). Variants we can't decode yet always fall back. So does any CR3 error: the CRX
 /// decoder is verified on few bodies, and every CR3 opened from its embedded JPEG before it existed.
 /// So does any other failure of a recognised raw (damaged or oversized raw data, unreadable TIFF
-/// structure): its preview may still be intact. Only a file that is not a raw reports an error.
+/// structure): its preview may still be intact. Enhanced DNG images must report the decode error
+/// instead of substituting another image. A file that is not a raw also reports an error.
 fn preview_reason(bytes: &[u8], e: lightcraft_raw::RawError) -> Result<String, String> {
     use lightcraft_raw::RawError;
+    // An enhanced image is the edited original; its preview is not an equivalent decode.
+    if lightcraft_raw::is_enhanced_dng(bytes) {
+        return Err(format!("The enhanced DNG image cannot be decoded ({e}); its embedded preview is not used as the edited original"));
+    }
     match e {
         RawError::Unsupported(why) => Ok(why),
         e if lightcraft_raw::probe(bytes) == Some(lightcraft_raw::RawFormat::Cr3) => Ok(format!("CR3 {e}")),
@@ -366,20 +371,25 @@ pub fn bin_factor(raw: &lightcraft_raw::RawImage, max_edge: usize) -> Option<usi
 /// instead of each one waking the pool from outside and waiting for it (which costs more than the
 /// loops themselves when the machine is busy).
 pub fn load_bytes(bytes: &[u8], max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    rayon::scope(|_| load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, None).map(|(img, _, info)| (img, info)))
+    rayon::scope(|_| load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, None, true).map(|(img, _, info)| (img, info)))
 }
 
 /// [`load_bytes`] taking the file's bytes: a raw file's bytes are freed as soon as it is decoded
 /// (less memory held while it is developed).
 pub fn load_vec(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None).map(|(img, _, info)| (img, info)))
+    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, true).map(|(img, _, info)| (img, info)))
+}
+
+/// [`load_vec`] using only camera profiles embedded in this build, independent of host configuration.
+pub fn load_vec_builtin_profiles(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
+    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, false).map(|(img, _, info)| (img, info)))
 }
 
 /// [`load_vec`] that also develops the photo's cached denoised picture (`spec`) from the same decode: the plain
 /// picture, the denoised one (`None` when it cannot be read or does not fit this raw: the plain one is then all
 /// there is) and the source facts. Both pictures are the same size.
 pub fn load_vec_pair(bytes: Vec<u8>, max_edge: usize, spec: &DenoiseSpec) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, Some(spec)))
+    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, Some(spec), true))
 }
 
 /// The denoised camera RGB of `raw` from its cached product, as the plain development would have it: the default
@@ -408,6 +418,7 @@ fn load_bytes_now(
     bytes: std::borrow::Cow<'_, [u8]>,
     max_edge: usize,
     denoise: Option<&DenoiseSpec>,
+    external_profiles: bool,
 ) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> {
     if lightcraft_raw::probe(&bytes).is_some() {
         let mut raw = match lightcraft_raw::decode(&bytes).map_err(|e| preview_reason(&bytes, e)) {
@@ -423,6 +434,8 @@ fn load_bytes_now(
         // Embedded lens corrections are applied by the pipeline ("Enable Profile Corrections"), not baked in
         // (removed before the camera look's binned sensor proxy too, which needs an empty `OpcodeList3`).
         let info = raw.info();
+        let (native_w, native_h) = info.developed_size();
+        let native_long = native_w.max(native_h);
         let lens = crate::lens_profiles::for_raw(&info, || lightcraft_meta::extract(&bytes));
         // (the camera look still pairs the sensor with the camera JPEG through the warp the camera applied to it)
         let lens_geometry = crate::camera_preview::lens_geometry(&raw.opcodes.list3);
@@ -432,7 +445,7 @@ fn load_bytes_now(
         let scale = WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
         // the source's segmentation mattes (DNG semantic masks), read while the starting colour is fitted
         let ((xy, t, camera_look), mattes) = rayon::join(
-            || crate::camera_preview::starting_colour(&mut raw, &bytes, lens_geometry.as_ref(), lens.as_ref()),
+            || crate::camera_preview::starting_colour(&mut raw, &bytes, external_profiles, lens_geometry.as_ref(), lens.as_ref()),
             || dng_mattes(&bytes, &info),
         );
         drop(bytes);
@@ -516,6 +529,7 @@ fn load_bytes_now(
             img,
             twin,
             SourceInfo {
+                native_long,
                 raw: true,
                 as_shot_temp: temp,
                 as_shot_tint: tint,
@@ -526,8 +540,6 @@ fn load_bytes_now(
                 camera_tone,
                 mattes,
                 local_tone,
-                // (the catalog knows the original's size: `media::source_info`)
-                native_long: None,
             },
         ));
     }
@@ -535,7 +547,8 @@ fn load_bytes_now(
     drop(bytes);
     let img = d.to_working();
     let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
-    Ok((img.into_oriented(Orientation::from_exif(d.orientation)), None, SourceInfo::default()))
+    let info = SourceInfo { native_long: d.source_width.max(d.source_height) as usize, ..Default::default() };
+    Ok((img.into_oriented(Orientation::from_exif(d.orientation)), None, info))
 }
 
 /// Which white-balance scale a raw is edited on, decided from the file alone, the way the catalog decides it from
@@ -665,11 +678,11 @@ fn matte_kind(name: &str) -> Option<lightcraft_pipeline::masks::MatteKind> {
 
 /// A DNG `ProfileToneCurve` (linear in, linear out, 1.0 = white after exposure compensation) as the
 /// finish stage's camera tone curve: 32 knots, log-spaced over 12 stops below white; above white
-/// the camera tone's shoulder continues it.
+/// the camera tone's shoulder continues it, or holds an exact white endpoint.
 pub(crate) fn dng_tone_curve(curve: &lightcraft_raw::profile::ToneCurve) -> Option<lightcraft_pipeline::tone::CameraTone> {
     let knots: [[f32; 2]; 32] = std::array::from_fn(|i| {
         let x = 2f32.powf(-12.0 + 12.0 * i as f32 / 31.0);
-        [x, curve.eval(x).min(0.9995)]
+        [x, curve.eval(x)]
     });
     lightcraft_pipeline::tone::CameraTone::new(knots)
 }
@@ -745,7 +758,8 @@ pub fn load_embedded_preview(bytes: &[u8], max_edge: usize) -> Option<(Rgb32f, S
     let d = decode_raw_preview(bytes, fit_box(max_edge), None)?;
     let img = d.to_working();
     let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
-    Some((img.oriented(preview_orientation(bytes, d.orientation)), SourceInfo::default()))
+    let info = SourceInfo { native_long: d.source_width.max(d.source_height) as usize, ..Default::default() };
+    Some((img.oriented(preview_orientation(bytes, d.orientation)), info))
 }
 
 /// The embedded preview of a raw file for display (sRGB, oriented, no larger than `max_edge`): the
@@ -1508,6 +1522,51 @@ pub(crate) mod tests {
         let id = lightcraft_catalog::PhotoId(r.imported[0]);
         assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some(want.as_str()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn native_detail_size_survives_decoder_downsampling() {
+        let dng = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+        let (full, full_info) = load_bytes(&dng, usize::MAX).unwrap();
+        let (small, small_info) = load_bytes(&dng, 16).unwrap();
+        assert!(small.width.max(small.height) < full.width.max(full.height));
+        assert_eq!(full_info.native_long, full.width.max(full.height));
+        assert_eq!(small_info.native_long, full_info.native_long);
+        let rgb = vec![128; 200 * 100 * 3];
+        let jpeg = encode_jpeg(&EncodeImage::new(200, 100, 3, Samples::U8(&rgb)), 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+        let (small, info) = load_bytes(&jpeg, 25).unwrap();
+        assert_eq!(small.width, 25);
+        assert_eq!(info.native_long, 200);
+        // Invalid default crops fall back to the full active image in the RAW decoder.
+        let mut raw = lightcraft_raw::decode(&dng).unwrap();
+        for crop in [lightcraft_raw::Rect::new(32, 0, 8, 12), lightcraft_raw::Rect::new(32, 24, 0, 0)] {
+            raw.crop = crop;
+            let bytes = lightcraft_raw::write_dng(&raw, &Default::default()).unwrap();
+            let (_, info) = load_bytes(&bytes, 16).unwrap();
+            assert_eq!(info.native_long, 32, "invalid crop {crop:?} retains the full sensor size");
+        }
+    }
+
+    #[test]
+    fn dng_profile_white_endpoint_reaches_rgb16() {
+        use lightcraft_pipeline::{DeepSamples, OutputDepth, OutputSpace, RenderRequest};
+        let profile = lightcraft_raw::profile::ToneCurve::from_tag(&[0.0, 0.0, 1.0, 1.0]).unwrap();
+        let tone = dng_tone_curve(&profile).unwrap();
+        assert_eq!(tone.apply(1.0), 1.0);
+        let info = SourceInfo { raw: true, relative_wb: true, camera_tone: Some(tone), ..Default::default() };
+        for exposure in [0.0, 1.0] {
+            let source = Arc::new(Rgb32f::from_fn(32, 16, |x, _| [if x < 16 { 0.25 } else { 2f32.powf(-exposure as f32) }; 3]));
+            let mut settings = lightcraft_develop::DevelopSettings::default();
+            settings.light.exposure = exposure;
+            let request = RenderRequest { depth: OutputDepth::U16, space: OutputSpace::AdobeRgb, ..RenderRequest::fit(32, 16) };
+            let result = lightcraft_pipeline::render(&source, &info, &settings, &request).deep.unwrap();
+            let DeepSamples::U16(samples) = result.samples else { panic!("expected native16-bit output") };
+            assert_eq!(&samples[(8 * 32 + 24) * 3..(8 * 32 + 24) * 3 + 3], &[65535; 3]);
+            let expected = OutputSpace::AdobeRgb.trc().encode(0.25 * 2f32.powf(exposure as f32));
+            for value in &samples[(8 * 32 + 8) * 3..(8 * 32 + 8) * 3 + 3] {
+                assert!((*value as f32 - expected * 65535.0).abs() < 3.0, "lower tones remain proportional");
+            }
+        }
     }
 
     /// Issue #367: probes read headers, not pixels, and report what the decode-based probe did:
@@ -2295,7 +2354,7 @@ pub(crate) mod tests {
         assert_eq!(p.kind, MediaKind::Raw, "still a raw file (filters, Convert to DNG…)");
         assert!(!p.develops_raw());
         // rendered like the JPEG it is: relative white balance, display tone curve, no raw defaults
-        assert_eq!(SourceInfo { native_long: None, ..crate::media::source_info(&p) }, SourceInfo::default());
+        assert_eq!(crate::media::source_info(&p), SourceInfo { native_long: 96, ..Default::default() });
         assert_eq!(*p.develop, lightcraft_develop::DevelopSettings::default());
         assert!(s.render_job(id, 48, 48, false, true).unwrap().run().rendered.is_ok());
         // agents see it
@@ -2596,7 +2655,7 @@ pub(crate) mod tests {
                 let mut p = Photo::new(PhotoId(1), Source::File { path: format!("/{name}") }, &name, format, 64, 48, "");
                 p.kind = MediaKind::Raw;
                 p.embedded_lens = embedded;
-                crate::import::apply_import_defaults(&s, &mut p);
+                crate::import::apply_import_defaults(&s, &mut p).unwrap();
                 assert_eq!(p.develop.optics.lens_profile, embedded.is_some(), "{format} {embedded:?}");
             }
         }
@@ -2645,5 +2704,112 @@ pub(crate) mod tests {
         assert!(!s.catalog.photo(old).unwrap().is_edited(), "still as imported");
         drop(s);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // No Adobe assets, real images, external decoders or opaque profile data.
+    fn enhanced_dng_with_jpeg(header_unsupported: bool) -> Vec<u8> {
+        use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+        use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+
+        let linear = |size: u32, subfile: u32, bits: u16, compression: u16, value: u16| {
+            let mut ifd = IfdBuilder::new();
+            ifd.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![subfile]));
+            ifd.set(t::IMAGE_WIDTH, Value::Long(vec![size]));
+            ifd.set(t::IMAGE_LENGTH, Value::Long(vec![size]));
+            ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![bits; 3]));
+            ifd.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![3]));
+            ifd.set(t::SAMPLE_FORMAT, Value::Short(vec![1]));
+            ifd.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::LINEAR_RAW]));
+            ifd.set(t::COMPRESSION, Value::Short(vec![compression]));
+            ifd.set(t::WHITE_LEVEL, Value::Long(vec![65535]));
+            let samples = (0..size * size * 3)
+                .flat_map(|_| if bits == 32 { u32::from(value).to_le_bytes().to_vec() } else { value.to_le_bytes().to_vec() })
+                .collect();
+            ifd.set_image(ImageData::Strips { rows_per_strip: size, strips: vec![samples] });
+            ifd
+        };
+
+        // A genuinely decodable JPEG, with dimensions distinct from either RAW image.
+        let pixels: Vec<u8> = (0..12 * 8).flat_map(|i| [(i * 2) as u8, 128, 200]).collect();
+        let jpeg = encode_jpeg(&EncodeImage::new(12, 8, 3, Samples::U8(&pixels)), 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+        let mut preview = IfdBuilder::new();
+        preview.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![1]));
+        preview.set(t::DNG_VERSION, Value::Byte(vec![1, 6, 0, 0]));
+        preview.set(t::IMAGE_WIDTH, Value::Long(vec![12]));
+        preview.set(t::IMAGE_LENGTH, Value::Long(vec![8]));
+        preview.set(t::BITS_PER_SAMPLE, Value::Short(vec![8; 3]));
+        preview.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![3]));
+        preview.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::RGB]));
+        preview.set(t::COMPRESSION, Value::Short(vec![6]));
+        preview.set(t::COLOR_MATRIX_1, Value::SRational(vec![(1, 1), (0, 1), (0, 1), (0, 1), (1, 1), (0, 1), (0, 1), (0, 1), (1, 1)]));
+        preview.set(t::CALIBRATION_ILLUMINANT_1, Value::Short(vec![21]));
+        preview.set(t::AS_SHOT_NEUTRAL, Value::Rational(vec![(1, 1); 3]));
+        preview.set_image(ImageData::Strips { rows_per_strip: 8, strips: vec![jpeg] });
+        preview.add_sub_ifd(linear(4, 0, 16, 1, 3000));
+        // Header case: unsupported integer depth. Decode-only case: unsupported compression.
+        preview.add_sub_ifd(linear(8, 16, if header_unsupported { 32 } else { 16 }, if header_unsupported { 1 } else { 65000 }, 50000));
+        TiffWriter::new(ByteOrder::Little, false).write(&[preview]).unwrap()
+    }
+
+    fn assert_enhanced_fixture_has_decodable_jpeg(bytes: &[u8]) {
+        assert!(lightcraft_raw::is_enhanced_dng(bytes));
+        let jpeg = lightcraft_raw::embedded_preview(bytes).expect("fixture contains an independently decodable JPEG");
+        let decoded = lightcraft_codecs::decode(&jpeg, Default::default()).unwrap();
+        assert_eq!((decoded.source_width, decoded.source_height), (12, 8));
+        let (preview, info) = load_embedded_preview(bytes, 64).expect("the old fallback must be available");
+        assert_eq!((preview.width, preview.height), (12, 8));
+        assert!(!info.raw, "the JPEG fallback is already rendered, not enhanced RAW pixels");
+    }
+
+    #[test]
+    fn enhanced_dng_header_failure_does_not_substitute_jpeg() {
+        let bytes = enhanced_dng_with_jpeg(true);
+        assert_enhanced_fixture_has_decodable_jpeg(&bytes);
+        assert!(matches!(lightcraft_raw::probe_info(&bytes), Err(lightcraft_raw::RawError::Unsupported(_))));
+        assert!(matches!(lightcraft_raw::decode(&bytes), Err(lightcraft_raw::RawError::Unsupported(_))));
+        let Err(probe_error) = probe_bytes("enhanced.dng", &bytes) else { panic!("unsupported enhancement must fail the import probe") };
+        let Err(decode_error) = load_bytes(&bytes, 64) else { panic!("unsupported enhancement must fail rendering") };
+        assert!(probe_error.contains("enhanced DNG"), "{probe_error}");
+        assert!(decode_error.contains("enhanced DNG"), "{decode_error}");
+    }
+
+    #[test]
+    fn enhanced_dng_decode_failure_does_not_substitute_jpeg() {
+        let bytes = enhanced_dng_with_jpeg(false);
+        assert_enhanced_fixture_has_decodable_jpeg(&bytes);
+        let raw_header = lightcraft_raw::probe_info(&bytes).unwrap();
+        assert_eq!((raw_header.width, raw_header.height), (8, 8), "the enhanced image is selected");
+        let probe = probe_bytes("enhanced.dng", &bytes).unwrap();
+        assert_eq!((probe.width, probe.height), (8, 8));
+        assert!(probe.preview_only.is_none(), "header probe succeeds without decoding compression");
+        assert!(matches!(lightcraft_raw::decode(&bytes), Err(lightcraft_raw::RawError::Unsupported(_))));
+        let Err(error) = load_bytes(&bytes, 64) else { panic!("full decode must not silently become JPEG") };
+        assert!(error.contains("enhanced DNG") && error.contains("65000"), "{error}");
+    }
+
+    #[test]
+    fn enhanced_dng_export_failure_writes_no_rendered_image() {
+        use crate::export::{Destination, ExportOptions, export_batch};
+        use serde_json::json;
+
+        let dir = crate::tests_xmp::temp_dir("enhanced-export-no-fallback");
+        let source = dir.join("enhanced.dng");
+        let output = dir.join("must-not-exist.png");
+        let bytes = enhanced_dng_with_jpeg(false);
+        std::fs::write(&source, &bytes).unwrap();
+        let mut session = crate::Session::new().with_fs();
+        let imported = session.execute("library.import", &json!({"paths": [source.to_string_lossy()]})).unwrap();
+        assert!(imported["failed"].as_array().unwrap().is_empty(), "{imported}");
+        let id = lightcraft_catalog::PhotoId(imported["imported"][0].as_u64().unwrap());
+        assert!(session.catalog.photo(id).unwrap().preview_only.is_none());
+        let options = ExportOptions::from_json(&json!({"format": "png", "longEdge": 0}));
+        let destination = Destination { exact: Some(output.to_string_lossy().into_owned()), ..Default::default() };
+        // The batch path used by app.export must propagate the source decode error.
+        let result = export_batch(&mut session, &[id], &options, &destination, &mut crate::export::write_file, &|p| std::path::Path::new(p).exists());
+        let Err(error) = result else { panic!("an export cannot claim the enhancement was rendered") };
+        assert!(error.contains("enhanced DNG") && error.contains("65000"), "{error}");
+        assert!(!output.exists(), "a failed decode must not create an exported image");
+        assert_eq!(std::fs::read(&source).unwrap(), bytes, "source remains unchanged");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

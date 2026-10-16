@@ -213,6 +213,9 @@ pub struct ImportReport {
     /// Per-photo diagnostics from foreign XMP develop settings that could not be fully carried over.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<ImportWarning>,
+    /// Per-photo names of saved edits that could not be applied, never their values.
+    #[serde(rename = "unsupportedEdits", skip_serializing_if = "Vec::is_empty")]
+    pub unsupported_edits: Vec<UnsupportedEdits>,
 }
 
 /// A structured diagnostic from foreign XMP develop settings.
@@ -254,6 +257,12 @@ pub struct ImportWarning {
     pub fields: Vec<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct UnsupportedEdits {
+    pub id: u64,
+    pub fields: Vec<String>,
+}
+
 /// A file moved by an import.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Moved {
@@ -281,7 +290,7 @@ pub fn import_defaults(p: &Photo) -> lightcraft_develop::DevelopSettings {
 /// Does the photo still look as the camera rendered it (its embedded camera preview is then a
 /// fair stand-in)? Not when a default preset changed it on import.
 pub fn has_import_look(p: &Photo) -> bool {
-    *p.develop == p.camera_defaults()
+    p.develop.same_values(&p.camera_defaults())
 }
 
 /// User defaults applied on import (Settings → Import; saved in the library's `prefs.json`).
@@ -340,7 +349,7 @@ impl ImportDefaults {
 
 /// Give a freshly imported photo its default settings: the camera defaults, then the matching
 /// default preset ([`ImportDefaults::preset_for`]), remembered as the photo's import look.
-pub fn apply_import_defaults(s: &Session, p: &mut Photo) {
+pub fn apply_import_defaults(s: &Session, p: &mut Photo) -> crate::Result<()> {
     // metadata defaults fill gaps only: the file's own copyright / creator win
     let d = &s.import_defaults;
     if p.meta.copyright.trim().is_empty() && !d.copyright.trim().is_empty() {
@@ -358,7 +367,8 @@ pub fn apply_import_defaults(s: &Session, p: &mut Photo) {
     let preset = s.import_defaults.preset_for(raw, &p.meta.camera).and_then(|id| s.presets.iter().find(|x| x.id == id));
     match preset {
         Some(pr) => {
-            let look = std::sync::Arc::new(pr.apply(&base, 1.0));
+            let look = std::sync::Arc::new(pr.try_apply(&base, 1.0).map_err(|e| crate::EngineError::Other(e.to_string()))?);
+            p.unsupported_edits = pr.merged_unsupported_edits(&p.unsupported_edits);
             p.develop = look.clone();
             p.import_look = (*look != base).then_some(look);
         }
@@ -367,6 +377,7 @@ pub fn apply_import_defaults(s: &Session, p: &mut Photo) {
             p.import_look = None;
         }
     }
+    Ok(())
 }
 
 pub fn is_supported(path: &Path) -> bool {
@@ -901,6 +912,16 @@ impl ImportJob {
     /// Snapshot what an import with `opts` needs from the session (no file-system calls). Takes
     /// the probes a preceding scan left ([`Session::import_probes`]).
     pub fn new(s: &mut Session, opts: ImportOptions) -> crate::Result<Self> {
+        // Refuse invalid saved preset models before any Copy/Move placement.
+        let defaults = &s.import_defaults;
+        let ids = defaults
+            .raw_preset
+            .iter()
+            .chain(defaults.other_preset.iter())
+            .chain(defaults.cameras.iter().filter(|_| defaults.per_camera).filter_map(|c| c.preset.as_ref()));
+        for preset in ids.filter_map(|id| s.presets.iter().find(|p| &p.id == id)).chain(opts.preset.iter()) {
+            preset.try_apply(&lightcraft_develop::DevelopSettings::default(), 1.0).map_err(|e| crate::EngineError::Other(e.to_string()))?;
+        }
         let mode = opts.mode;
         // Only a library on disk has an `Originals/` folder. The browser build keeps the bytes of
         // every added file in its own storage already, so "copy" there means "add".
@@ -1063,17 +1084,28 @@ impl ImportJob {
             // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
             // and names the copy when the file itself has none
             let raw = info.kind == MediaKind::Raw;
-            let packet = crate::sidecar::find_sidecar(&path, self.naming)
-                .and_then(|f| std::fs::read_to_string(f).ok())
-                .or_else(|| info.xmp.clone().filter(|_| raw));
+            // A present sidecar is authoritative: failure must not substitute embedded/default
+            // edits or start a copy/move. Keep failed files out of Ready (and Fresh replacement).
+            let packet = match crate::sidecar::find_sidecar(&path, self.naming) {
+                Some(file) => match std::fs::read_to_string(&file) {
+                    Ok(packet) => Some(packet),
+                    Err(error) => {
+                        self.done.fetch_add(1, Relaxed);
+                        plan.slots.push(Slot::Item(PreparedItem::Failed(path, format!("cannot read XMP {}: {error}", file.display()))));
+                        continue;
+                    }
+                },
+                None => info.xmp.clone().filter(|_| raw),
+            };
             let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);
-            let sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
-                Ok(sc) => Some(sc),
-                Err(e) => {
-                    log::warn!("import {path}: XMP: {e}");
-                    None
+            let sidecar = match packet.as_deref().map(|packet| crate::sidecar::parse_sidecar(packet, target)).transpose() {
+                Ok(sidecar) => sidecar,
+                Err(error) => {
+                    self.done.fetch_add(1, Relaxed);
+                    plan.slots.push(Slot::Item(PreparedItem::Failed(path, format!("cannot read XMP: {error}"))));
+                    continue;
                 }
-            });
+            };
             if info.captured.is_none() {
                 info.captured = sidecar.as_ref().and_then(|sc| sc.captured.clone());
             }
@@ -1397,16 +1429,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
             PreparedItem::Kept(k) => report.kept.push(k),
             PreparedItem::Ready(r) => {
                 let ReadyFile { path, stored, info, sidecar, placed: pl } = *r;
-                placed.extend(pl);
                 let id = s.catalog.alloc_photo_id();
-                if let Some(h) = &info.content_hash {
-                    new_hash.insert(h.clone(), id);
-                }
-                for old in info.content_hash.as_ref().and_then(|h| trash_hash.get(h)).into_iter().chain(trash_path.get(&stored)) {
-                    if purged.insert(*old) {
-                        purge.push(*old);
-                    }
-                }
                 let sidecar = sidecar.map(|sc| sc.resolve_label(&s.catalog)).filter(|sc| *sc != crate::sidecar::SidecarData::default());
                 // a copy is catalogued under its new name
                 let name = Path::new(&stored).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.clone());
@@ -1419,9 +1442,21 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 p.content_hash = info.content_hash;
                 p.embedded_lens = info.embedded_lens;
                 p.set_preview_only(info.preview_only.clone());
-                apply_import_defaults(s, &mut p);
+                if let Err(error) = apply_import_defaults(s, &mut p) {
+                    if let Some(placed) = &pl {
+                        crate::import_move::rollback(placed);
+                    }
+                    report.failed.push((path, error.to_string()));
+                    continue;
+                }
                 if let Some(sc) = &sidecar {
+                    let default_unsupported = p.unsupported_edits.clone();
                     crate::sidecar::merge_into(&mut p, sc, &now);
+                    if matches!(&sc.develop, Some(crate::sidecar::DevelopPatch::Partial(_))) {
+                        p.unsupported_edits = lightcraft_develop::unsupported_edits::bounded_names(
+                            default_unsupported.iter().chain(&p.unsupported_edits).map(String::as_str),
+                        );
+                    }
                     report.sidecars += 1;
                     report.warnings.extend(sc.warnings.iter().cloned().map(|mut warning| {
                         warning.path = path.clone();
@@ -1438,11 +1473,24 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                     }
                 }
                 if let Some(preset) = &opts.preset {
-                    let d = std::sync::Arc::new(preset.apply(&p.develop, 1.0));
+                    let d = match preset.try_apply(&p.develop, 1.0) {
+                        Ok(settings) => std::sync::Arc::new(settings),
+                        Err(error) => {
+                            if let Some(placed) = &pl {
+                                crate::import_move::rollback(placed);
+                            }
+                            report.failed.push((path, error.to_string()));
+                            continue;
+                        }
+                    };
+                    p.unsupported_edits = preset.merged_unsupported_edits(&p.unsupported_edits);
                     let label = format!("Preset: {}", preset.name);
                     p.develop = d.clone();
                     p.edited = Some(now.clone());
                     p.history.push(lightcraft_catalog::HistoryStep { label, settings: d });
+                }
+                if !p.unsupported_edits.is_empty() {
+                    report.unsupported_edits.push(UnsupportedEdits { id: id.0, fields: p.unsupported_edits.clone() });
                 }
                 report.imported.push(id.0);
                 p.local = opts.local;
@@ -1450,6 +1498,20 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                     // the state as browsed: a later change keeps the record from being forgotten
                     p.set_local_baseline();
                 }
+                // Only a successfully validated replacement may purge a deleted record or claim
+                // a content hash. A rejected preset must not destroy the old photo's edits either.
+                for old in p.content_hash.as_ref().and_then(|h| trash_hash.get(h)).into_iter().chain(match &p.source {
+                    Source::File { path } => trash_path.get(path),
+                    _ => None,
+                }) {
+                    if purged.insert(*old) {
+                        purge.push(*old);
+                    }
+                }
+                if let Some(hash) = &p.content_hash {
+                    new_hash.insert(hash.clone(), id);
+                }
+                placed.extend(pl);
                 ops.push(Op::AddPhoto { photo: Box::new(p) });
             }
         }
@@ -1547,7 +1609,12 @@ impl Session {
         let edge = edge.clamp(64, crate::media::SourceLevel::Thumb.max_edge());
         let level = crate::media::SourceLevel::Thumb;
         let source = self.media.origin_ref(&p.source, level.max_edge());
-        let key = lightcraft_preview::Hasher128::new().str(&c.path).u64(c.file_size).u64(edge as u64).finish().0 as u64;
+        let mut hash = lightcraft_preview::Hasher128::new();
+        hash.str(&c.path).u64(c.file_size).u64(edge as u64);
+        if let Some(table_key) = self.profile_table_key(&p.develop) {
+            hash.update(&table_key.0.to_le_bytes());
+        }
+        let key = hash.finish().0 as u64;
         let small = crate::media::RenderJob {
             request_id: 0,
             cache_generation: self.media.rendered.generation(),
@@ -1558,7 +1625,10 @@ impl Session {
             origin: p.source.clone(),
             info: crate::media::source_info(&p),
             settings: p.develop.clone(),
-            request: lightcraft_pipeline::RenderRequest::fit(edge, edge),
+            request: lightcraft_pipeline::RenderRequest {
+                imported_table: self.profile_table(&p.develop),
+                ..lightcraft_pipeline::RenderRequest::fit(edge, edge)
+            },
             key,
             cache: None,
             stages: None,
@@ -1568,10 +1638,18 @@ impl Session {
             preview_cut: None,
         };
         let embedded = match (&self.media.preview_loader, c.kind) {
-            (Some(l), MediaKind::Raw) => Some((c.path.clone(), l.clone(), edge)),
+            (Some(l), MediaKind::Raw) if lightcraft_pipeline::active_look_table(&p.develop).is_none() => Some((c.path.clone(), l.clone(), edge)),
             _ => None,
         };
-        Some(crate::media::QuickJob { request_id: 0, photo: id, key, cached: Vec::new(), embedded, small: Some(Box::new(small)) })
+        Some(crate::media::QuickJob {
+            unsupported_edits: lightcraft_pipeline::profile_table_diagnostics(&small.settings, &small.request),
+            request_id: 0,
+            photo: id,
+            key,
+            cached: Vec::new(),
+            embedded,
+            small: Some(Box::new(small)),
+        })
     }
 
     /// Use the system clock for import/edit times (native hosts).

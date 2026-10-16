@@ -1542,6 +1542,8 @@ pub struct Exported {
     /// Set when the render was tried on the GPU and fell back to the CPU: why (see
     /// `docs/gpu-pipeline.md`). The file holds the CPU render either way.
     pub gpu_fallback: Option<String>,
+    /// Names of source edits that LightCraft could not apply; no packet values.
+    pub unsupported_edits: Vec<String>,
 }
 
 /// Output size of photo `p` under `o` (its cropped full size when `o.resize` is `None`).
@@ -1570,6 +1572,7 @@ pub struct PreparedExport {
     /// The folder of the photo's original on disk ([`DestinationMode::SameAsOriginal`]); `None`
     /// for a demo photo or one in the browser's storage.
     pub source_dir: Option<String>,
+    pub unsupported_edits: Vec<String>,
     work: Work,
     /// The library's originals, which [`run_batch`] never writes over (shared by a batch).
     guard: std::sync::Arc<crate::originals::OriginalGuard>,
@@ -1633,6 +1636,7 @@ fn prepare_guarded(
     let p = session.catalog.photo(id).ok_or("no such photo")?;
     let file_name = o.file_name_for(p, seq);
     let source_dir = original_folder(&p.source);
+    let unsupported_edits = session.unsupported_edits(id);
     // HDR output only for photos edited in HDR; the rest of the batch exports as usual
     let sdr_opts;
     let o = if o.hdr && !p.develop.hdr.enabled {
@@ -1679,7 +1683,7 @@ fn prepare_guarded(
         };
         (work, weight)
     };
-    Ok(PreparedExport { photo: id, file_name, source_dir, work, guard, weight })
+    Ok(PreparedExport { photo: id, file_name, source_dir, unsupported_edits, work, guard, weight })
 }
 
 /// The folder a photo's original is in, for [`DestinationMode::SameAsOriginal`]. None for a demo
@@ -1727,21 +1731,28 @@ fn render_weight(full_px: usize, long: usize, level: crate::media::SourceLevel, 
 impl PreparedExport {
     pub fn run(self) -> Result<Exported, String> {
         let file_name = self.file_name;
+        let mut unsupported_edits = self.unsupported_edits;
         match self.work {
             Work::Render(w) => {
                 let RenderWork { job, hdr_job, meta, opts } = *w;
                 let result = job.run();
                 let r = result.rendered?;
                 let gpu_fallback = result.gpu_fallback;
+                unsupported_edits = lightcraft_develop::unsupported_edits::bounded_names(
+                    unsupported_edits.iter().chain(r.unsupported_edits.iter()).map(String::as_str),
+                );
                 let bytes = match hdr_job {
                     Some(hj) => {
                         let hr = hj.run().rendered?;
+                        unsupported_edits = lightcraft_develop::unsupported_edits::bounded_names(
+                            unsupported_edits.iter().chain(hr.unsupported_edits.iter()).map(String::as_str),
+                        );
                         let hdr = hr.deep.ok_or("the HDR render has no float samples")?;
                         encode_gain_map_jpeg(&r.image, &hdr, &opts, meta.as_ref())?
                     }
                     None => encode_rendered(&r, &opts, meta.as_ref())?,
                 };
-                Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback })
+                Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback, unsupported_edits })
             }
             Work::File { path, read, packet, dng, quality, lossy_edge, label, size, remove_location } => {
                 let bytes = match &read {
@@ -1762,6 +1773,7 @@ impl PreparedExport {
                         height: size.1,
                         sidecars: vec![("xmp", packet.into_bytes())],
                         gpu_fallback: None,
+                        unsupported_edits,
                     });
                 };
                 if lightcraft_raw::probe(&bytes).is_none() {
@@ -1780,7 +1792,15 @@ impl PreparedExport {
                 };
                 let dng = lightcraft_raw::write_dng(&raw, &lightcraft_raw::DngWriteOptions { xmp: Some(packet), compression, ..Default::default() })
                     .map_err(|e| e.to_string())?;
-                Ok(Exported { file_name, bytes: dng, width: raw.width, height: raw.height, sidecars: Vec::new(), gpu_fallback: None })
+                Ok(Exported {
+                    file_name,
+                    bytes: dng,
+                    width: raw.width,
+                    height: raw.height,
+                    sidecars: Vec::new(),
+                    gpu_fallback: None,
+                    unsupported_edits,
+                })
             }
         }
     }
@@ -1957,7 +1977,7 @@ fn sidecar_path(main: &str, ext: &str) -> String {
 /// sidecars as one: with Unique both get the same free name, with Skip the photo is skipped when
 /// either is taken. A path that is a catalogued original (or its sidecar) is refused whatever the
 /// policy. `progress(done, next file)` is called before each photo; returning false cancels the
-/// rest. Returns one JSON object per photo: `{path, width, height, bytes, sidecars}`,
+/// rest. Returns one JSON object per photo: `{path, width, height, bytes, sidecars, unsupportedEdits}`,
 /// `{skipped: path}` or (unless `stop_on_error`) `{photo, file, error}`.
 ///
 /// Several photos render side by side ([`export_parallelism`], within the memory of
@@ -2254,7 +2274,7 @@ impl<'a> Placer<'a> {
         match written {
             Ok((path, files, sidecars)) => {
                 self.taken.extend(files);
-                let mut entry = json!({"path": path, "width": e.width, "height": e.height, "bytes": e.bytes.len(), "sidecars": sidecars});
+                let mut entry = json!({"path": path, "width": e.width, "height": e.height, "bytes": e.bytes.len(), "sidecars": sidecars, "unsupportedEdits": e.unsupported_edits});
                 if let Some(why) = &e.gpu_fallback {
                     entry["gpuFallback"] = json!(why);
                 }
@@ -2927,8 +2947,13 @@ mod tests {
             let src = lightcraft_raster::Rgb32f::filled(16, 16, [0.18; 3]);
             let base = lightcraft_pipeline::RenderRequest::fit(16, 16);
             move |space| {
-                lightcraft_pipeline::render(&src, &Default::default(), &Default::default(), &lightcraft_pipeline::RenderRequest { space, ..base })
-                    .image
+                lightcraft_pipeline::render(
+                    &src,
+                    &Default::default(),
+                    &Default::default(),
+                    &lightcraft_pipeline::RenderRequest { space, ..base.clone() },
+                )
+                .image
             }
         };
         let reference =
@@ -3358,7 +3383,7 @@ mod tests {
     /// The files of a batch without their byte counts: a GPU render (when another test turns the
     /// GPU off mid-run) may differ from a CPU one by an LSB, never in name, size or order.
     fn shape(files: &[serde_json::Value]) -> Vec<serde_json::Value> {
-        files.iter().map(|f| json!({"path": f["path"], "width": f["width"], "height": f["height"], "error": f["error"]})).collect()
+        files.iter().map(|f| json!({"path": f["path"], "width": f["width"], "height": f["height"], "error": f["error"], "unsupportedEdits": f["unsupportedEdits"]})).collect()
     }
 
     /// Issue #675: a batch reports a render that fell back from the GPU to the CPU on that file's
@@ -3410,10 +3435,16 @@ mod tests {
     fn side_by_side_batches_match_one_at_a_time() {
         let mut s = crate::Session::with_demo();
         let ids: Vec<_> = s.visible().iter().copied().take(5).collect();
+        for (i, id) in ids.iter().enumerate() {
+            s.catalog.apply(lightcraft_catalog::Op::SetUnsupportedEdits { id: *id, fields: vec![format!("OwnSetting{i}")] }).unwrap();
+        }
         // one name for all: the Unique numbering follows the order the files are placed in
         let o = ExportOptions::from_json(&json!({"format": "png", "width": 40, "naming": "same"}));
         let (files, written, seen) = lanes_batch(&mut s, &ids, &o, 1, true, usize::MAX);
         let files = files.unwrap();
+        for (i, file) in files.iter().enumerate() {
+            assert_eq!(file["unsupportedEdits"], json!([format!("OwnSetting{i}")]), "diagnostics follow each prepared photo's place");
+        }
         let paths: Vec<_> = written.iter().map(|(p, _)| p.clone()).collect();
         assert_eq!(paths, ["out/same.png", "out/same-2.png", "out/same-3.png", "out/same-4.png", "out/same-5.png"]);
         let heights: std::collections::HashSet<_> = files.iter().map(|f| f["height"].as_u64()).collect();

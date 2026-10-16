@@ -714,7 +714,14 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, data: CatalogImport, contex
     photos.sort_by_key(|p| number(&p.image, "masterImage") != 0);
     let copy_masters: HashSet<_> = data.photos.iter().map(|p| number(&p.image, "masterImage")).filter(|id| *id != 0).collect();
     let mut planned: HashMap<PhotoId, Photo> = HashMap::new();
+    // Do not resurrect a failed normal-file import as a default catalog record. In particular,
+    // an unreadable authoritative sidecar must not be bypassed by the independent Lua source.
+    // Missing originals are separately identified and may still become offline placeholders.
+    let failed_paths: HashSet<String> = files.failed.iter().map(|(path, _)| key(path)).collect();
     for src in photos {
+        if failed_paths.contains(&key(&src.path)) {
+            continue;
+        }
         let master = number(&src.image, "masterImage");
         if master == 0 && missing_sources.contains(&key(&src.path)) {
             missing.push(src.path.clone());
@@ -766,19 +773,35 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, data: CatalogImport, contex
         ids.insert(src.source_id, p.id);
         index.photos.insert(identity(&data, src), p.id.0);
         let keep_develop = existing_id.is_some() && p.edited.is_some() && !update_existing;
-        let previous_develop = (p.develop.clone(), p.edited.clone());
+        let previous_develop = (p.develop.clone(), p.edited.clone(), p.unsupported_edits.clone());
+        let mut preserve_develop = keep_develop;
+        let mut native_full = false;
         if keep_develop {
             preserved += 1;
         }
         if !src.xmp.is_empty() {
             match crate::sidecar::parse_sidecar(&src.xmp, crate::crs::Target::for_photo(&p)) {
                 Ok(mut sc) => {
+                    native_full = matches!(&sc.develop, Some(crate::sidecar::DevelopPatch::Full(_)));
+                    let partial = matches!(&sc.develop, Some(crate::sidecar::DevelopPatch::Partial(_)));
                     if let Some(crate::sidecar::DevelopPatch::Partial(partial)) = &mut sc.develop {
                         strip_xmp_sentinels(partial);
                     }
+                    let previous_unsupported = p.unsupported_edits.clone();
                     crate::sidecar::merge_into(&mut p, &sc, &now);
+                    if partial {
+                        p.unsupported_edits = lightcraft_develop::unsupported_edits::bounded_names(
+                            previous_unsupported.iter().chain(&p.unsupported_edits).map(String::as_str),
+                        );
+                    }
                 }
-                Err(e) => warnings.push(format!("image {} XMP: {e}", src.source_id)),
+                Err(e) => {
+                    // A rejected saved packet must not be replaced silently by another source.
+                    // Ordinary catalog metadata below can still import; the existing edit and
+                    // its diagnostics stay together. A metadata-only valid packet does not block Lua.
+                    preserve_develop = true;
+                    warnings.push(format!("image {} XMP: {e}; kept existing edit and skipped catalog develop settings", src.source_id));
+                }
             }
         }
         p.rating = number(&src.image, "rating").clamp(0, 5) as u8;
@@ -794,7 +817,10 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, data: CatalogImport, contex
         if !src.keywords.is_empty() {
             p.meta.keywords = src.keywords.clone();
         }
-        if !src.settings.is_empty() && !keep_develop {
+        // Native Full settings in this catalog packet are authoritative, including function curves
+        // and explicit empty diagnostics. An explicit update may still overlay valid physical-
+        // sidecar edits imported earlier. Foreign XMP and Lua are partial; their names are combined.
+        if !src.settings.is_empty() && !preserve_develop && !native_full {
             let orientation = lightroom_orientation(text(&src.image, "orientation")).unwrap_or_default();
             let stored_aspect = number(&src.image, "fileWidth") as f64 / number(&src.image, "fileHeight") as f64;
             match mapped_settings(
@@ -804,18 +830,30 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, data: CatalogImport, contex
                 orientation,
                 stored_aspect,
             ) {
-                Ok((partial, unknown)) => {
-                    p.develop = Arc::new(lightcraft_develop::apply_partial(&p.develop, &partial, 1.0));
-                    p.edited = Some(now.clone());
-                    if !unknown.is_empty() {
-                        unmapped.insert(src.source_id, unknown);
+                Ok((partial, unknown)) => match lightcraft_develop::try_apply_partial(&p.develop, &partial, 1.0) {
+                    Ok(settings) => {
+                        p.develop = Arc::new(settings);
+                        p.edited = Some(now.clone());
+                        let unknown = lightcraft_develop::unsupported_edits::bounded_names(unknown.iter().map(String::as_str));
+                        p.unsupported_edits =
+                            lightcraft_develop::unsupported_edits::bounded_names(p.unsupported_edits.iter().chain(&unknown).map(String::as_str));
+                        if !unknown.is_empty() {
+                            unmapped.insert(src.source_id, unknown);
+                        }
                     }
+                    Err(e) => {
+                        preserve_develop = true;
+                        warnings.push(format!("image {} settings: {e}; kept existing edit", src.source_id));
+                    }
+                },
+                Err(e) => {
+                    preserve_develop = true;
+                    warnings.push(format!("image {} settings: {e}; kept existing edit", src.source_id));
                 }
-                Err(e) => warnings.push(format!("image {} settings: {e}", src.source_id)),
             }
         }
-        if keep_develop {
-            (p.develop, p.edited) = previous_develop;
+        if preserve_develop {
+            (p.develop, p.edited, p.unsupported_edits) = previous_develop;
         }
         // Missing files bypass normal-file preparation, including its Local promotion.
         // Import still joins the library, and a virtual copy must inherit that membership.
@@ -839,6 +877,9 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, data: CatalogImport, contex
                 Op::SetMeta { id: p.id, meta: Box::new(p.meta.clone()) },
                 Op::SetCaptured { id: p.id, captured: p.captured.clone() },
             ]);
+            if s.catalog.photo(p.id).is_some_and(|previous| previous.unsupported_edits != p.unsupported_edits) {
+                ops.push(Op::SetUnsupportedEdits { id: p.id, fields: p.unsupported_edits.clone() });
+            }
             ops.push(Op::SetDevelop { id: p.id, settings: p.develop.clone(), label: "Lightroom catalog".into(), edited: p.edited.clone() });
         } else {
             imported += 1;
@@ -1087,13 +1128,13 @@ mod tests {
         let (partial, unknown) = mapped_settings(settings, crate::crs::Target::RawRelative, 1.5, Orientation::Normal, 1.5).unwrap();
         assert_eq!(partial["wb"], json!({"mode": "asShot"}), "{partial}");
         assert_eq!(partial["light"]["exposure"], 0.5);
-        assert!(unknown.iter().any(|k| k.starts_with("Temperature, Tint")), "{unknown:?}");
+        assert!(unknown.iter().any(|k| k == "WhiteBalance (missing AsShotTemperature)"), "{unknown:?}");
         let (partial, unknown) = mapped_settings(settings, crate::crs::Target::RawAbsolute, 1.5, Orientation::Normal, 1.5).unwrap();
         assert_eq!(
             (partial["wb"]["mode"].as_str(), partial["wb"]["temp"].as_f64(), partial["wb"]["tint"].as_f64()),
             (Some("custom"), Some(3578.0), Some(-5.0))
         );
-        assert!(!unknown.iter().any(|k| k.starts_with("Temperature")), "{unknown:?}");
+        assert!(!unknown.iter().any(|k| k == "WhiteBalance (missing AsShotTemperature)"), "{unknown:?}");
     }
 
     #[test]

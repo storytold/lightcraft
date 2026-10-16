@@ -88,6 +88,8 @@ pub(crate) struct ExifSummary {
     pub thumbnail: Option<(usize, usize)>,
     /// EXIF ColorSpace = 0xFFFF with InteropIndex "R03" (Adobe RGB (1998) "option" files).
     pub adobe_rgb_hint: bool,
+    /// EXIF ColorSpace = 1 explicitly declares sRGB.
+    pub srgb_hint: bool,
 }
 
 pub(crate) fn summarize(blob: &[u8]) -> ExifSummary {
@@ -120,6 +122,7 @@ pub(crate) fn summarize(blob: &[u8]) -> ExifSummary {
         && let Some((ee, _)) = t.ifd(p)
     {
         let cs = ee.iter().find(|e| e.tag == 0xA001).and_then(|e| t.uint(e));
+        s.srgb_hint = cs == Some(1);
         let interop = ee.iter().find(|e| e.tag == 0xA005).and_then(|e| t.uint(e));
         if cs == Some(0xFFFF)
             && let Some((ie, _)) = interop.and_then(|p| t.ifd(p as usize))

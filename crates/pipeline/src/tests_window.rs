@@ -407,3 +407,20 @@ fn auto_mask_strokes_match_the_whole_render() {
     };
     check_noisy("auto mask", &s, PixelWindow { x: 400, y: 300, w: 300, h: 250 }, 2, 0.1);
 }
+
+#[test]
+fn cropped_native_detail_scale_matches_a_window_of_the_same_frame() {
+    let src = noisy_scene();
+    let info = SourceInfo { native_long: 1920, ..Default::default() };
+    let mut s = DevelopSettings::default();
+    s.crop.geometry.rect = Rect::new(0.1, 0.1, 0.9, 0.9);
+    s.detail.nr_luminance = 65.0;
+    s.detail.nr_color = 80.0;
+    s.detail.sharpen_amount = 90.0;
+    s.detail.sharpen_radius = 2.5;
+    let req = RenderRequest::fit(W, H);
+    let f = render(&src, &info, &s, &req).image;
+    let w = render(&src, &info, &s, &RenderRequest { window: Some(MID), ..req }).image;
+    let (max, mean) = compare(&f, &w, MID);
+    assert!(max <= 3 && mean <= 0.15, "native detail/crop/window: max {max}, mean {mean}");
+}

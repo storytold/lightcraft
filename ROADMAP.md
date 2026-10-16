@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~14 points and ~340–600 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (upstream fidelity integration and merged checklist recount; readiness unchanged) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 One-page summary of how close LightCraft is to Adobe Lightroom. Agents: read this, then pick work
 from [docs/gaps.md](docs/gaps.md). The full assessment, method and evidence are in
@@ -12,7 +12,7 @@ from [docs/gaps.md](docs/gaps.md). The full assessment, method and evidence are 
 
 | | Value | Kind |
 |---|---:|---|
-| **Feature breadth** (checklist) | **81.6%** of 532 rows (P0 98.0%, P1 95.2%, P2 50.0%) | measured: [parity-checklist.md](docs/parity-checklist.md) recount |
+| **Feature breadth** (checklist) | **82.6%** of 539 rows (P0 96.8%, P1 94.1%, P2 55.7%) | measured: [parity-checklist.md](docs/parity-checklist.md) recount |
 | **Feature breadth** (weighted by use) | **~77%** | estimated |
 | **Ready for real work** (full target) | **~61%** (56–66%) | estimated: weighted sum over the dimensions |
 | **Mainstream practitioner** | **~51%** (46–56%) | estimated |
@@ -30,7 +30,7 @@ Each audience with its own hours (Opus 5.5 agent wall-clock hours to ~95%):
 
 The gap between breadth and readiness is quality and coverage, not missing buttons: camera colour is
 estimated rather than measured, CR3 decodes on 26 verified Canon bodies (rarer CRX variants still open as previews), compressed ORF and HE NEF
-open as previews, rendering is tuned by eye, AI masks are heuristics, there is no lens database, and
+open as previews, measured rendering coverage is limited, AI masks are heuristics, there is no lens database, and
 tests run in CI on FreeBSD only. **Why alpha:** core workflows run end to end, but readiness is below
 the ~75% beta bar (it is above the ~40% alpha bar) and Lightroom's main inputs, raw files, still have blocking gaps (compressed ORF and HE NEF open as previews; Canon,
 ~30% of raw users, decodes CR3 on 26 verified bodies). It passes the alpha gate: all six core workflows
@@ -44,7 +44,7 @@ Hours are calibrated on this repo's PR history; see
 
 | Dimension | Ready | Breadth | Remaining | Doc |
 |---|---:|---:|---:|---|
-| Features | ~61% | ~77% (checklist 81.1%) | 600–1,100 h | [target-app-parity](docs/target-app-parity.md#features) |
+| Features | ~61% | ~77% (checklist 82.6%) | 600–1,100 h | [target-app-parity](docs/target-app-parity.md#features) |
 | ↳ RAW cameras, colour, lens profiles | ~60% | 83% of 1,446 Adobe models decode, 38% verified | 255–480 h | [raw-parity](docs/raw-parity.md) |
 | UI/UX fidelity | ~70% | ~85% | 32–54 h | [ui-parity](docs/ui-parity.md) |
 | File formats (non-raw) | ~70% | ~85% | 30–55 h | [file-format-parity](docs/file-format-parity.md) |
@@ -76,6 +76,19 @@ Hours are calibrated on this repo's PR history; see
 
 Weights and evidence: [target-app-parity.md](docs/target-app-parity.md#features).
 
+Local native 16-bit Lightroom comparisons now cover authored charts and selected saved edits.
+Imported B&W, continuous preset curves and separate saved-profile curves / parameters are supported.
+A saved profile carries its own monochrome conversion through profile-only copy, presets and sync;
+selecting a color profile no longer leaves that conversion behind in global treatment.
+V2 fixes global and imported-profile curves to ProPhoto primaries with sRGB encoding; existing V1
+edits retain their rendering. The controlled colour-chart result improves, but saved-photo results
+remain mixed. Refine Saturation is approximate; sharpening Detail and luminance-NR Contrast are
+stored but do not affect rendering despite measured Lightroom responses. Explicit runtime type-0
+HSV tables improve controlled chart error, while one saved Amount 120 photo has mixed regional results.
+Other profile tables, general Amount behavior, source colour / tone and imported HDR extended curves remain gaps. See the
+[bounded evidence](docs/target-app-parity.md#local-rendering-evidence-2026-10-10); the readiness and
+hour estimates above have not been recalculated from these measurements.
+
 ## Languages
 
 Measured from `crates/ui-egui/locales` (share of 2,304 catalog messages translated); none is `full`
@@ -104,7 +117,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 1. Camera colour of our own: measured calibration for the popular models (50–90 h)
 2. CR3 for every Canon body (25–45 h)
-3. Render-fidelity suite against Lightroom, then tuning (30–60 h)
+3. Expand the limited Lightroom render-fidelity suite across saved edits, then tune (30–60 h)
 4. ~~Full-resolution zoom~~ (done 2026-10-12)
 5. AI masks: Subject / Sky / People (40–70 h + model decision)
 6. Compressed ORF and HE NEF (28–55 h)
@@ -134,10 +147,21 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 - 2026-10-12: 117 Nikon and Fujifilm bodies verified, one CC0 raw.pixls.us file each pinned and checked
   against the camera JPEG (`crates/raw/tests/body_corpus.rs`); the sweep found COOLPIX 5700 / 8400 / 8800
   decoding wrongly. 354 models verified, ~58% of photographers on a verified body; headline numbers unchanged.
+- 2026-10-11 (second integration): upstream76b53778 retained with fork V2 defaults. Native D3500
+  controls are exact on one scene and differ only slightly in measured regions on the other. V3 tone
+  has mixed regional results and remains opt-in. Checklist recount: 80.8% of 531; readiness unchanged.
+
 - 2026-10-11: Canon EOS R5 Mark II C-RAW decodes from sensor data (57% of its files opened as a
   preview): the CRX QP map's first-symbol literal and limited-length escape; four CC0 R5 Mark II files
   pinned, the QP maps of 33,665 private C-RAW files decode exactly ([cr3.md](docs/cr3.md)). 235 models
   verified; RAW decoding 76% → 77%; headline numbers unchanged.
+- 2026-10-11 (runtime profiles): explicit type-0 HSV table resolution and rendering, with native chart
+  improvements and mixed regional results on one Nikon D3500 saved edit. Partial fidelity status,
+  readiness and hour estimates remain unchanged.
+- 2026-10-10 (saved edits): native 16-bit chart/photo measurements, saved-edit preservation guards,
+  separate imported-profile rendering and continuous preset curves; V2 corrects the curve working
+  space while preserving V1. Broad fidelity remains incomplete, including measured NR / sharpening
+  gaps. Checklist recount: 80.3% of 519 in-scope rows; readiness and hour estimates unchanged.
 - **2026-10-10 (UI docking):** Library, Tools, and Presets panels can be regrouped, split, floated within the app window, closed, and reopened. Tools keeps the current Edit/Crop/Masking mode; the photo view and filmstrip stay together. Panel moves and reset are available as UI commands, and saved UI preferences retain arrangements. Widget state styling uses the shared `craft-ui` theme helper, retaining the dark palette, typography, spacing and per-state borders. No readiness percentage change.
 - 2026-10-10 (RAW): RAW measured model by model against Adobe's 1,446-model list (234 verified, 943
   unverified, 233 preview-only, 36 unsupported; ~84% of photographers' cameras decode, ~40% on a
@@ -183,6 +207,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Rebased fidelity branch onto 0da998f2; preview NR scaling and mask/crop/import fixes retained; checklist recount 82.6% of 539; no aggregate fidelity or readiness gain claimed |
 | 2026-10-12 | minor | Italian interface (`it`, #1192): 2,201 of 2,398 messages, locale, menu command and tests; headline numbers unchanged |
 | 2026-10-13 | minor | Sony ILCA-99M2 camera colour profile in the log; numbers unchanged |
 | 2026-10-14 | minor | Localization ~52% → ~55% (mean of the 12 key languages): de, es, fr, ja and uk catalogs filled |
@@ -193,11 +218,14 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 | 2026-10-12 | minor | Epson ERF decoded: 3 more verified models (240); headline numbers unchanged |
 | 2026-10-12 | minor | Georgian (`ka`) interface language added (every catalog message) |
 | 2026-10-14 | minor | Full-resolution zoom (gap 4) closed: soft proofing gets zoom windows; headline numbers unchanged |
+| 2026-10-13 | minor | Rebased onto b3d392b4; four full-native D3500 states unchanged against the accepted renderer; catalog13/camera-look9/render65 and preset/sidecar integration preserved; checklist 80.8% of 533; no fidelity or readiness gain |
 | 2026-10-12 | minor | UI/UX remaining 40–70 h → 34–58 h (accessibility audit landed); headline numbers unchanged |
 | 2026-10-14 | minor | Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (coverage.py 515 → 545 verified); sensor verification does not establish colour parity (#1277); headline numbers unchanged |
 | 2026-10-12 | minor | 22 more CR3 bodies verified, EOS R6 Mark III white balance: RAW decoding 77% → 83%, RAW ~56% → ~60%; mainstream 49% → 51%, essentials 64% → 65%; full unchanged at ~61% |
 | 2026-10-12 | minor | 117 Nikon and Fujifilm bodies verified (354 models, 24%); headline numbers unchanged |
+| 2026-10-11 | minor | Recount after upstream76b53778 integration: checklist 80.8% of 531; V3 tone remains opt-in; readiness and hour estimates unchanged |
 | 2026-10-11 | minor | EOS R5 Mark II CR3 verified: CR3 on four verified bodies, RAW decoding 76% → 77%; headline numbers unchanged |
+| 2026-10-10 | minor | Restored saved-edit and measured-rendering evidence after the progress-doc restructure; V2 curves / V1 preservation, remaining detail and profile gaps; checklist 80.3% of 519, readiness and hours unchanged |
 | 2026-10-10 | minor | RAW measured model by model; RAW decode and colour as explicit rows: full 59% → 61%, mainstream 51% → 49%, essentials 63% → 64%; beta ~14 points |
 | 2026-10-10 | minor | Full ready restored to the additive weighted sum (~59%; method aligned with the standard, no new evidence); hours per audience; beta ~16 points away |
 | 2026-10-10 | minor | Mainstream practitioner and essentials user numbers; full ready 55% → 46% (method written down); beta 340–600 h |

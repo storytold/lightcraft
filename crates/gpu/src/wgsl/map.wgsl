@@ -156,19 +156,39 @@ fn chroma_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups
     put_rgb(i, vec3<f32>(c0.x / y, c0.y / y, c0.z / y));
 }
 
-// Colour NR: blend chromaticity towards its blur and re-apply luminance (a: image, b: chroma,
-// c: blurred chroma). P[1] = t.
+// Global colour NR uses unit-luminance chromaticity, including at black. Keep chroma_k above
+// unchanged: local Moire/Noise masks use its separate convention.
+fn nr_chromaticity(c0: vec3<f32>) -> vec3<f32> {
+    let peak = max(c0.x, max(c0.y, c0.z));
+    if (peak > 0.0) {
+        let scaled = c0 / peak;
+        return scaled / lum2020(scaled);
+    }
+    return vec3<f32>(1.0);
+}
+
+@compute @workgroup_size(256)
+fn nr_chroma_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
+    let i = lin_index(g, nw);
+    if (i >= pu(0u)) {
+        return;
+    }
+    put_rgb(i, nr_chromaticity(rgb_a(i)));
+}
+
+// Colour NR: blend original RGB towards the filtered chromaticity at original luminance.
+// a: image, c: blurred chroma. P[1] = t.
 @compute @workgroup_size(256)
 fn nr_col(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
     let i = lin_index(g, nw);
     if (i >= pu(0u)) {
         return;
     }
-    let yl = lum2020(rgb_a(i));
+    let original = rgb_a(i);
+    let yl = lum2020(original);
     let t = pf(1u);
-    let c0 = vec3<f32>(b[3u * i], b[3u * i + 1u], b[3u * i + 2u]);
-    let cb = vec3<f32>(c[3u * i], c[3u * i + 1u], c[3u * i + 2u]);
-    put_rgb(i, max((c0 + (cb - c0) * t) * yl, vec3<f32>(0.0)));
+    let cb = nr_chromaticity(vec3<f32>(c[3u * i], c[3u * i + 1u], c[3u * i + 2u]));
+    put_rgb(i, max(original + (cb * yl - original) * t, vec3<f32>(0.0)));
 }
 
 // Every P[1]-th value of `a` (airlight sampling). P[0] = output count.

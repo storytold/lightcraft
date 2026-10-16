@@ -21,6 +21,17 @@ fn edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut DevelopSettin
     ok()
 }
 
+fn partial_ops(s: &Session, ids: impl IntoIterator<Item = PhotoId>, partial: &Value, label: &str, command: &str) -> Result<Vec<Op>> {
+    let mut ops = Vec::new();
+    for id in ids {
+        if let Some(settings) = s.develop_of(id) {
+            let next = lightcraft_develop::try_apply_partial(&settings, partial, 1.0).map_err(|e| bad(command, e.to_string()))?;
+            ops.extend(s.develop_op(id, next, label));
+        }
+    }
+    Ok(ops)
+}
+
 fn section_param(p: &Value, c: &str) -> Result<Section> {
     let v = p.get("section").cloned().ok_or_else(|| bad(c, "missing `section`"))?;
     serde_json::from_value(v).map_err(|e| bad(c, e.to_string()))
@@ -466,17 +477,25 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!("develop.treatment", "Black & White", ["Photo"], Some("V"), "{bw?: bool} (toggles when omitted)", has_active, |s, p| {
             edit(s, "develop.treatment", "Treatment", |d| {
-                let bw = p.get("bw").and_then(Value::as_bool).unwrap_or(d.treatment != Treatment::Bw);
+                let profile_bw = d.profile.imported_look().is_some_and(|look| look.convert_to_grayscale);
+                let bw = p.get("bw").and_then(Value::as_bool).unwrap_or(!(d.treatment == Treatment::Bw || profile_bw));
+                if !bw && profile_bw {
+                    d.profile.id = "lc.color".into();
+                    d.profile.imported = None;
+                }
                 d.treatment = if bw { Treatment::Bw } else { Treatment::Color };
                 Ok(())
             })
         }),
         cmd!("develop.profile", "Set Profile", [], None, "{id: profile id (see profiles.list), amount?: 0..200}", has_active, |s, p| {
             let id = str_param(p, "id").ok_or_else(|| bad("develop.profile", "missing id"))?.to_string();
-            if !crate::presets::PROFILES.iter().any(|x| x.id == id) && !s.lut_profiles.iter().any(|x| x.id == id) {
+            if s.profile_info(&id).is_none() {
                 return Err(bad("develop.profile", format!("unknown profile `{id}`")));
             }
             edit(s, "develop.profile", "Profile", |d| {
+                if id != lightcraft_develop::IMPORTED_LOOK_ID {
+                    d.profile.imported = None;
+                }
                 d.profile.id = id.clone();
                 d.profile.amount = f64_or(p, "amount", d.profile.amount).clamp(0.0, 200.0);
                 Ok(())
@@ -500,15 +519,27 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!("develop.curve", "Set Point Curve", [], None, "{channel: master|red|green|blue, points: [[x,y],...] in 0..1}", has_active, |s, p| {
             let ch = str_param(p, "channel").unwrap_or("master").to_string();
-            let mut pts: Vec<Point> = p
-                .get("points")
-                .and_then(Value::as_array)
-                .ok_or_else(|| bad("develop.curve", "missing points"))?
+            let input = p.get("points").and_then(Value::as_array).ok_or_else(|| bad("develop.curve", "missing points"))?;
+            if input.len() > lightcraft_develop::MAX_POINT_CURVE_POINTS {
+                return Err(bad("develop.curve", "too many curve points"));
+            }
+            let points: Vec<Point> = input
                 .iter()
-                .filter_map(|q| Some(Point::new(q.get(0)?.as_f64()?.clamp(0.0, 1.0), q.get(1)?.as_f64()?.clamp(0.0, 1.0))))
-                .collect();
-            // stored in the order the curve runs, as the editor draws and drags them
-            pts.sort_by(|a, b| a.x.total_cmp(&b.x));
+                .map(|q| {
+                    let x = q
+                        .get(0)
+                        .and_then(Value::as_f64)
+                        .filter(|v| v.is_finite())
+                        .ok_or_else(|| bad("develop.curve", "each point needs finite x/y numbers"))?;
+                    let y = q
+                        .get(1)
+                        .and_then(Value::as_f64)
+                        .filter(|v| v.is_finite())
+                        .ok_or_else(|| bad("develop.curve", "each point needs finite x/y numbers"))?;
+                    Ok(Point::new(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)))
+                })
+                .collect::<Result<_>>()?;
+            let pts = lightcraft_develop::PointCurve::try_from_points(points).map_err(|e| bad("develop.curve", e.to_string()))?;
             edit(s, "develop.curve", "Tone Curve", |d| {
                 match ch.as_str() {
                     "master" | "rgb" => d.curve.master = pts,
@@ -812,11 +843,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let groups = groups_param(p, c)?.unwrap_or_else(|| s.copy_groups.clone());
                 let partial = lightcraft_develop::extract_groups(&s.develop_of(prev).unwrap_or_default(), &groups);
                 let ids: Vec<PhotoId> = s.targets(p)?.into_iter().filter(|id| *id != prev).collect();
-                let ops = ids
-                    .iter()
-                    .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
-                    .filter_map(|(id, d)| s.develop_op(id, lightcraft_develop::apply_partial(&d, &partial, 1.0), "Paste from Previous"))
-                    .collect::<Vec<_>>();
+                let ops = partial_ops(s, ids, &partial, "Paste from Previous", c)?;
                 let n = ops.len();
                 s.commit("Paste from Previous", Op::Batch { ops })?;
                 Ok(json!({"changed": n, "from": prev.0}))
@@ -835,15 +862,12 @@ pub fn specs() -> Vec<CommandSpec> {
                 if let Some(only) = groups_param(p, c)? {
                     // the clipboard holds whole groups: rebuild it with just the chosen (copied) ones
                     let only: Vec<_> = only.into_iter().filter(|g| s.copy_groups.contains(g)).collect();
-                    let full = lightcraft_develop::apply_partial(&DevelopSettings::default(), &clip, 1.0);
+                    let full = lightcraft_develop::try_apply_partial(&DevelopSettings::default(), &clip, 1.0)
+                        .map_err(|e| bad("develop.paste", e.to_string()))?;
                     clip = lightcraft_develop::extract_groups(&full, &only);
                 }
                 let ids = s.targets(p)?;
-                let ops = ids
-                    .iter()
-                    .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
-                    .filter_map(|(id, d)| s.develop_op(id, lightcraft_develop::apply_partial(&d, &clip, 1.0), "Paste Settings"))
-                    .collect::<Vec<_>>();
+                let ops = partial_ops(s, ids, &clip, "Paste Settings", "develop.paste")?;
                 let n = ops.len();
                 s.commit("Paste Settings", Op::Batch { ops })?;
                 Ok(json!({"changed": n}))
@@ -862,15 +886,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 let groups = groups_param(p, c)?.unwrap_or_else(SettingsGroup::default_copy);
                 let d = s.develop_of(id).unwrap_or_default();
                 let partial = lightcraft_develop::extract_groups(&d, &groups);
-                let ops = s
-                    .selection
-                    .ids
-                    .clone()
-                    .into_iter()
-                    .filter(|x| *x != id)
-                    .filter_map(|x| s.develop_of(x).map(|d| (x, d)))
-                    .filter_map(|(x, dd)| s.develop_op(x, lightcraft_develop::apply_partial(&dd, &partial, 1.0), "Sync Settings"))
-                    .collect::<Vec<_>>();
+                let ids = s.selection.ids.iter().copied().filter(|x| *x != id);
+                let ops = partial_ops(s, ids, &partial, "Sync Settings", "develop.sync")?;
                 let n = ops.len();
                 s.commit("Sync Settings", Op::Batch { ops })?;
                 Ok(json!({"changed": n}))
@@ -978,14 +995,28 @@ pub fn specs() -> Vec<CommandSpec> {
             let pid = str_param(p, "id").ok_or_else(|| bad("preset.apply", "missing id"))?;
             let preset = s.presets.iter().find(|x| x.id == pid).cloned().ok_or_else(|| bad("preset.apply", format!("unknown preset `{pid}`")))?;
             let amount = f64_or(p, "amount", 100.0).clamp(0.0, 200.0) / 100.0;
-            // `id` names the preset here: the photos are `ids`, else the selection
-            let ids = s.targets(&json!({"ids": p.get("ids")}))?;
-            let ops = ids
-                .iter()
-                .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
-                .filter_map(|(id, d)| s.develop_op(id, preset.apply(&d, amount), &format!("Preset: {}", preset.name)))
-                .collect::<Vec<_>>();
-            s.commit(&format!("Preset: {}", preset.name), Op::Batch { ops })?;
+            if amount == 0.0 {
+                return ok();
+            }
+            let label = format!("Preset: {}", preset.name);
+            let mut ops = Vec::new();
+            // `id` names the preset here, not the target photo.
+            for id in s.targets(&json!({"ids": p.get("ids")}))? {
+                let Some(d) = s.develop_of(id) else { continue };
+                let next = preset.try_apply(&d, amount).map_err(|e| bad("preset.apply", e.to_string()))?;
+                if next != *d {
+                    ops.extend(s.develop_op(id, next, &label));
+                }
+                if let Some(photo) = s.catalog.photo(id) {
+                    let fields = preset.merged_unsupported_edits(&photo.unsupported_edits);
+                    if fields != photo.unsupported_edits {
+                        ops.push(Op::SetUnsupportedEdits { id, fields });
+                    }
+                }
+            }
+            if !ops.is_empty() {
+                s.commit(&label, Op::Batch { ops })?;
+            }
             ok()
         }),
         cmd!("preset.create", "Create Preset", ["Photo"], None, "{name, group?, groups?: [settingsGroup]}", has_active, |s, p| {

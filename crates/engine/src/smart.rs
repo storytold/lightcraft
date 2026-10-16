@@ -462,8 +462,9 @@ mod tests {
         assert!(is_valid(&path));
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.camera_tone, Some(tone));
-        let header = lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() };
-        assert_eq!(loaded.info_or(header).camera_tone, Some(tone));
+        let header = lightcraft_pipeline::SourceInfo { raw: true, native_long: 6000, ..Default::default() };
+        assert_eq!(loaded.info_or(header.clone()).camera_tone, Some(tone));
+        assert_eq!(loaded.info_or(header).native_long, 6000, "offline proxy keeps original-pixel detail units from the catalog");
         // a hostile curve (reversing knots) is ignored, not trusted
         let nl = MAGIC.len() + bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
         let mut head: serde_json::Value = serde_json::from_slice(&bytes[MAGIC.len()..nl]).unwrap();

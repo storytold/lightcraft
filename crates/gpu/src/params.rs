@@ -3,7 +3,7 @@
 
 use lightcraft_develop::VignetteStyle;
 use lightcraft_pipeline::colorops::POINT_WORDS;
-use lightcraft_pipeline::finish::{FinishParams, MASK_TERMS, srgb_lut};
+use lightcraft_pipeline::finish::{CURVE_ENCODED_LIMIT, FinishParams, MASK_TERMS, srgb_lut};
 
 /// Entries per tone-curve table (`lightcraft_pipeline::finish` builds them at this size).
 pub const CURVE_N: u32 = 1024;
@@ -30,6 +30,8 @@ const FIELDS: &[(&str, usize)] = &[
     ("SHARPEN_MASK", 1),
     ("HAS_CLAR", 1),
     ("HAS_TEX", 1),
+    ("HAS_SHARPEN", 1),
+    ("SHARPEN_OFFSET", 1),
     ("HAS_DARK", 1),
     ("HAS_CHROMA", 1),
     ("OPS_IDENTITY", 1),
@@ -75,6 +77,16 @@ const FIELDS: &[(&str, usize)] = &[
     ("OUT_GAMMA", 1),
     // first row of a band dispatch (the kernel runs over rows Y0.., see `render`)
     ("Y0", 1),
+    ("TONE_SATURATION", 3),
+    ("PROFILE_CURVE_OFF", 1),
+    ("PROFILE_CURVES", 1),
+    ("CURVE_WORKING", 1),
+    ("CURVE_IN_M", 9),
+    ("CURVE_OUT_M", 9),
+    ("CURVE_LIMIT", 1),
+    ("SPLIT_CURVE_OFF", 1),
+    ("SPLIT_CURVES", 1),
+    ("SPLIT_CHANNEL_MASK", 1),
 ];
 
 /// `(name, index)` of every field (for the WGSL constants).
@@ -133,13 +145,15 @@ impl Block {
 pub struct Present {
     pub clarity: bool,
     pub texture: bool,
+    /// Global sharpening plane's offset in `tex`, when present.
+    pub sharpen_offset: Option<usize>,
     pub dark: bool,
     /// The blurred chromaticity follows the mask planes in the `masks` buffer.
     pub chroma: bool,
 }
 
-/// The `finish` kernel's parameter block and auxiliary table (tone LUT | chroma curve | sRGB LUT | curve LUTs |
-/// mask terms) for `fp` with `masks` (their local adjustments' terms).
+/// The `finish` kernel's parameter block and auxiliary table (tone LUT | chroma curve | sRGB LUT | global/profile curve LUTs |
+/// optional split master/channel LUTs | mask terms) for `fp` with `masks` (their local adjustments' terms).
 pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present) -> (Vec<u32>, Vec<f32>) {
     let mut aux: Vec<f32> = fp.tone.lut().to_vec();
     aux.extend_from_slice(fp.tone.chroma_lut());
@@ -150,6 +164,26 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         for l in c {
             assert_eq!(l.v.len(), CURVE_N as usize);
             aux.extend_from_slice(&l.v);
+        }
+    }
+    let profile_curve_off = aux.len();
+    if let Some(c) = &fp.profile_curves {
+        for l in c {
+            aux.extend_from_slice(&l.v);
+        }
+    }
+    let split_curve_off = aux.len();
+    let mut split_channel_mask = 0u32;
+    if let Some(split) = &fp.split_curves {
+        aux.extend_from_slice(&split.master.v);
+        for (i, channel) in split.channels.iter().enumerate() {
+            if let Some(channel) = channel {
+                split_channel_mask |= 1u32 << i;
+                aux.extend_from_slice(&channel.v);
+            } else {
+                // The mask skips identity axes; their fixed slots are never evaluated.
+                aux.resize(aux.len() + CURVE_N as usize, 0.0);
+            }
         }
     }
     let mask_off = aux.len();
@@ -165,7 +199,18 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.u("SRGB_OFF", srgb_off as u32);
     p.u("CURVE_OFF", curve_off as u32);
     p.b("CURVES", fp.curves.is_some());
+    p.u("PROFILE_CURVE_OFF", profile_curve_off as u32);
+    p.b("PROFILE_CURVES", fp.profile_curves.is_some());
+    p.u("SPLIT_CURVE_OFF", split_curve_off as u32);
+    p.b("SPLIT_CURVES", fp.split_curves.is_some());
+    p.u("SPLIT_CHANNEL_MASK", split_channel_mask);
     p.f("REFINE_SAT", fp.refine_sat);
+    if let Some(space) = fp.curve_space {
+        p.b("CURVE_WORKING", true);
+        p.fs("CURVE_IN_M", space.to_curve.as_flattened());
+        p.fs("CURVE_OUT_M", space.from_curve.as_flattened());
+        p.f("CURVE_LIMIT", CURVE_ENCODED_LIMIT);
+    }
     p.f("GAIN", fp.gain);
     p.f("EV", fp.ev);
     p.f("AIR", fp.air);
@@ -179,8 +224,13 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.f("SHARPEN_MASK", fp.sharpen_mask);
     p.b("HAS_CLAR", present.clarity);
     p.b("HAS_TEX", present.texture);
+    p.b("HAS_SHARPEN", present.sharpen_offset.is_some());
+    p.u("SHARPEN_OFFSET", present.sharpen_offset.unwrap_or(0) as u32);
     p.b("HAS_DARK", present.dark);
     p.b("HAS_CHROMA", present.chroma);
+    if let Some(anchor) = fp.tone.saturation_anchor() {
+        p.fs("TONE_SATURATION", &anchor);
+    }
 
     let ops = &fp.ops;
     p.b("OPS_IDENTITY", ops.is_identity());

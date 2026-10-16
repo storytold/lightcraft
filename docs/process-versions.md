@@ -5,10 +5,48 @@ Every photo's develop settings record the **rendering process** they are interpr
 this the process version. It lets the look of LightCraft improve (a new default tone curve, issue #146;
 stronger Light sliders, issue #196) without changing a single photo someone has already edited.
 
-| Process | What it changes |
-|---|---|
-| **V1** | LightCraft's rendering from before process versions existed. Frozen. |
-| **V2** (the latest) | Highlights and Shadows keep fine detail (issue #632): their base layer (`local::tone_base`) is the edge-aware filter of a separable median of log luminance (radius 0.15 % of the long edge, at most 24 px, `local::BASE_DETAIL`) instead of log luminance itself, so twigs, lines and texture take their surroundings' shift and keep their contrast; region edges stay sharp. CPU (`local::prepare`) and GPU prepare branch on `local::tone_base_detail` (0 = no median under V1); the base plane is cached per process (`local::BaseKey`). Renders without Highlights or Shadows (global or local) are the same as V1's. Tone map unchanged. |
+There are three processes. **V1** preserves LightCraft's rendering from before process versions
+existed. **V2**, the default used for new photos and Reset, moves global and imported-profile curves into fixed
+ProPhoto D50 primaries with the sRGB transfer curve. It applies global curves, their existing Refine
+Saturation formula, then profile curves before soft-proof and output gamut mapping. Choosing an
+export or display colour space therefore no longer changes the curve operation itself; target
+gamut limits still affect the delivered image. The base tone model is unchanged.
+
+In V2/V3 SDR, individual-channel curves alone do not activate Refine Saturation. A master,
+parametric or master-curve fade from a built-in profile curve still uses the existing refinement path. This corrects
+unwanted colour changes when only a red, green or blue curve is edited; the saved Refine value
+is retained. V1 and HDR, including enabled HDR with zero extra headroom, keep their prior behavior.
+See the [bounded native comparisons](target-app-parity.md#channel-only-refine-saturation-2026-10-11).
+
+The SDR V2/V3 mixed-curve correction separates master/parametric refinement
+from the following individual-channel curves. The Refine formula, fixed encoding domain and
+profile stage stay unchanged. It retains the old composed LUT at exactly100, and leaves
+master-only, channel-only, V1 and HDR paths intact. Eight native master/channel controls and
+mixed100 preserve RGB16/ICC exactly. Final integration CI, actual GPU checks and final-native
+equivalence passed; cache64 invalidates prior rendered previews. Refine99.99999 and100 are
+native-identical on the fixed chart, without a general continuity claim. Sequential LUT evaluation
+below100 remains an approximation to composed-LUT sampling. See the
+[mixed-curve evidence](target-app-parity.md#mixed-masterchannel-ordering-correction-2026-10-11).
+
+V1 retains its original target-primary curve stage. V2 bypasses its extra curve matrix/transfer
+operations when both curve LUT stages are identity, so no-curve renders without an active runtime
+table retain the same samples. Grain and
+external 3D LUTs remain in sRGB-encoded output primaries. HDR curves retain their slope-one extension
+above encoded SDR white; signed and above-peak curve outputs reach output gamut mapping. Only
+extreme encoded values are limited to ±1e15 to prevent f32 overflow during transfer decoding and
+matrix multiplication, independently of the display's peak. These contracts do not establish full
+Lightroom curve, profile, or HDR parity.
+
+**V3** is explicit opt-in: V2 curves plus the upstream median-prefiltered Highlights/Shadows base (radius 0.15% of the long edge, capped at 24 px). V1/V2 retain their original spatial base. CPU/GPU use the shared `tone_base_detail` and cache by process. The measured D3500 result has mixed regional changes and slower exports, so V3 is not the default for new imports, Reset or Update to Current Process.
+
+Upstream also used numeric V2 for median-base tone with its older curve space. Those settings cannot be distinguished reliably from this fork's V2 by the number alone. This fork preserves its established V2 meaning; no automatic upstream-V2 appearance migration is claimed.
+
+V2 and V3 can also apply an explicitly loaded runtime type-0 HSV profile table in **linear** ProPhoto,
+before camera tone and B&W. This is separate from the sRGB-encoded point-curve stage. It is CPU-only,
+SDR-only, with checked Amount and resource diagnostics; V1 does not apply it. Absent references,
+profile bypass and Amount 0 skip the table and its matrix round trip. See
+[loading and limits](control-protocol.md#explicit-runtime-profile-tables) and
+[bounded measurements](target-app-parity.md#runtime-profile-table-evidence-2026-10-11).
 
 ## The rule
 
@@ -22,14 +60,22 @@ stronger Light sliders, issue #196) without changing a single photo someone has 
 - Changes to how a file is decoded or which camera colour it gets change the source, not how settings
   are interpreted; the process doesn't reach that stage today.
 
+**Pre-release correction (2026-10-11):** the channel-only Refine correction above revises this
+fork's still-unreleased V2/V3 contract in place. Existing development V2/V3 images with only
+individual-channel curves and Refine below 100 will render differently; their saved settings are
+not rewritten. V1 stays frozen. This exception does not permit changing a released process's look.
+The verified mixed-order correction uses the same unreleased-fork exception, changing affected development
+V2/V3 SDR mixed edits below100 without rewriting their settings. It adds no permission to retune
+released processes, the master endpoint formula, V1 or HDR.
+
 ## Adding a process
 
-1. Add a variant to `Process` (`V2`), append it to `Process::ALL` (oldest first), give it its number in
-   `Process::version` and make it `Process::LATEST`.
+1. Add a variant to `Process`, append it to `Process::ALL` (oldest first), give it its number in
+   `Process::version` and evaluate it before making it `Process::LATEST` (the default, currently V2).
 2. The compiler then points at every `match` on `Process`. The base tone map is chosen in one place,
    `lightcraft_pipeline::finish::base_tone` (both the CPU and the GPU renderer take it from there): give
-   V2 its own arm and leave V1's alone. A process that changes another stage branches there the same
-   way, on `s.process.process()`; if that stage is cached (`Plan::lin_key`, the planes in `local.rs`),
+   the new process its own arm and leave older processes alone. A process that changes another stage
+   branches there the same way, on `s.process.process()`; if that stage is cached (`Plan::lin_key`, the planes in `local.rs`),
    add the process to its key.
 3. Keep `settings_saved_before_process_versions_load_as_v1` (`crates/develop/src/tests_process.rs`)
    passing: settings saved without the field must stay V1, not become the new latest. That is the
@@ -62,7 +108,7 @@ ignored; a photo imported with Lightroom edits is on LightCraft's latest process
 LightCraft photo that receives them keeps its own.
 
 **A number this build doesn't know** (a library or sidecar written by a newer LightCraft) loads, is
-kept when saved, and renders with the newest process this build has. Update to Current Process never
+kept when saved, and renders with the newest supported process (currently V3), independently of the default. Update to Current Process never
 moves a photo to an older process; Reset does move it to this build's latest.
 
 **A damaged value** (anything but a whole number from 0 to 2^32 - 1; `2.0` counts as 2) reads as V1,
@@ -76,3 +122,12 @@ The process is saved as `"process": <number>` in the settings JSON, except V1, w
 Settings made before process versions existed are therefore saved exactly as before, and their
 preview-cache keys (`DevelopSettings::hash64`) don't change. `develop.get` (MCP `get_develop`) always
 states the process.
+
+Imported Look table references require **settings schema 5** and **catalog format 11**. These are
+storage versions, distinct from rendering Processes 2 and 3. Only a canonical fingerprint is serialized;
+paths, table samples and loaded/unloaded state are session-only. Settings without a reference keep
+their existing wire representation and schema marker. Explicit Kelvin white balance requires
+settings schema 6. The combined writer uses catalog format 14, including the upstream history cursor
+and preview-only recheck stamp; opening an older catalog upgrades its envelope to 14, which older
+builds refuse instead of silently discarding new edit data. Loading or unloading a resource does not
+alter saved settings or undo history.

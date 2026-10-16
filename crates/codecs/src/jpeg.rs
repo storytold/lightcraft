@@ -190,8 +190,10 @@ pub(crate) fn decode_with_fallback(bytes: &[u8], opts: &DecodeOptions, fallback:
         decode_zune(bytes, &m)?
     };
     // A raw container may carry the colour declaration of an otherwise untagged preview.
-    // Apply it before linearization/resizing; existing JPEG metadata always wins.
-    let hint = fallback.filter(|_| m.icc.is_none() && m.exif.is_none()).map(|space| crate::SourceSpace::named(space, crate::SpaceOrigin::Container));
+    // Apply it before linearization/resizing; actual JPEG colour declarations win.
+    // Orientation-only EXIF is not a colour declaration.
+    let own_space = m.exif.as_deref().map(exif::summarize).is_some_and(|s| s.srgb_hint || s.adobe_rgb_hint);
+    let hint = fallback.filter(|_| m.icc.is_none() && !own_space).map(|space| crate::SourceSpace::named(space, crate::SpaceOrigin::Container));
     let meta = Meta { icc: m.icc, exif: m.exif, xmp: m.xmp, hint, ..Default::default() };
     finish(F, raw, meta, (m.width, m.height), opts)
 }
@@ -385,6 +387,24 @@ pub(crate) fn decode_codes8(bytes: &[u8]) -> Result<(usize, usize, usize, Vec<u8
 mod tests {
     use super::*;
 
+    fn preview_exif_color_space(adobe: bool) -> Vec<u8> {
+        let mut exif = b"II\x2a\0\x08\0\0\0\x01\0".to_vec();
+        // IFD0 points to ExifIFD at byte26; the sRGB case ends after ColorSpace.
+        exif.extend_from_slice(&[0x69, 0x87, 4, 0, 1, 0, 0, 0, 26, 0, 0, 0, 0, 0, 0, 0]);
+        exif.extend_from_slice(&(if adobe { 2u16 } else { 1 }).to_le_bytes());
+        exif.extend_from_slice(&[1, 0xa0, 3, 0, 1, 0, 0, 0]);
+        exif.extend_from_slice(&(if adobe { u16::MAX } else { 1 }).to_le_bytes());
+        exif.extend_from_slice(&[0, 0]);
+        if adobe {
+            exif.extend_from_slice(&[5, 0xa0, 4, 0, 1, 0, 0, 0, 56, 0, 0, 0]);
+        }
+        exif.extend_from_slice(&[0, 0, 0, 0]);
+        if adobe {
+            exif.extend_from_slice(&[1, 0, 1, 0, 2, 0, 4, 0, 0, 0, b'R', b'0', b'3', 0, 0, 0, 0, 0]);
+        }
+        exif
+    }
+
     #[test]
     fn container_fallback_matches_tagged_jpeg_before_resizing_and_keeps_own_metadata() {
         use crate::{ChromaSubsampling, EncodeImage, EncodeMeta, NamedSpace, Samples, SpaceOrigin, encode_jpeg};
@@ -401,20 +421,30 @@ mod tests {
         let untagged = encode(None, None);
         let adobe = crate::icc::write_named(NamedSpace::AdobeRgb);
         let tagged = encode(Some(&adobe), None);
-        for opts in [DecodeOptions::default(), DecodeOptions::fit(3, 3)] {
-            let with = crate::decode_jpeg_with_fallback(&untagged, opts, NamedSpace::AdobeRgb).unwrap();
-            let expected = crate::decode(&tagged, opts).unwrap();
-            assert_eq!(with.space.origin, SpaceOrigin::Container);
-            let (a, b) = (with.to_working(), expected.to_working());
-            for (p, q) in a.data.iter().zip(&b.data) {
-                assert!(p.iter().zip(q).all(|(a, b)| (a - b).abs() < 0.0001), "{p:?} != {q:?}");
+        let orientation = crate::exif::minimal_exif(6);
+        for bytes in [&untagged, &encode(None, Some(&orientation))] {
+            for opts in [DecodeOptions::default(), DecodeOptions::fit(3, 3)] {
+                let with = crate::decode_jpeg_with_fallback(bytes, opts, NamedSpace::AdobeRgb).unwrap();
+                assert_eq!(with.orientation, crate::decode(bytes, opts).unwrap().orientation);
+                let expected = crate::decode(&tagged, opts).unwrap();
+                assert_eq!(with.space.origin, SpaceOrigin::Container);
+                let (a, b) = (with.to_working(), expected.to_working());
+                for (p, q) in a.data.iter().zip(&b.data) {
+                    assert!(p.iter().zip(q).all(|(a, b)| (a - b).abs() < 0.0001), "{p:?} != {q:?}");
+                }
             }
         }
         let srgb = crate::icc::write_named(NamedSpace::Srgb);
-        let exif = crate::exif::minimal_exif(6);
-        for bytes in [encode(Some(&srgb), None), encode(None, Some(&exif)), encode(Some(b"bad ICC"), None)] {
+        let srgb_exif = preview_exif_color_space(false);
+        let adobe_exif = preview_exif_color_space(true);
+        for (bytes, fallback) in [
+            (encode(Some(&srgb), None), NamedSpace::AdobeRgb),
+            (encode(None, Some(&srgb_exif)), NamedSpace::AdobeRgb),
+            (encode(None, Some(&adobe_exif)), NamedSpace::Srgb),
+            (encode(Some(b"bad ICC"), None), NamedSpace::AdobeRgb),
+        ] {
             let opts = DecodeOptions::fit(5, 5);
-            let with = crate::decode_jpeg_with_fallback(&bytes, opts, NamedSpace::AdobeRgb).unwrap();
+            let with = crate::decode_jpeg_with_fallback(&bytes, opts, fallback).unwrap();
             let expected = crate::decode(&bytes, opts).unwrap();
             assert_eq!(with.space, expected.space);
             assert_eq!(with.image, expected.image);

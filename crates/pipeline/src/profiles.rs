@@ -1,15 +1,18 @@
 //! Base rendering profiles. A profile is a look applied *underneath* the user's sliders (the sliders
-//! stay at their displayed values); `profile.amount` (0–200 %) scales it. All looks are our own.
+//! stay at their displayed values); `profile.amount` (0–200 %) scales it. Built-in looks are our own;
+//! imported profiles carry only checked scalar settings and point curves from photo metadata.
 //!
 //! Every look is a set of *deltas* on the user's settings, each multiplied by the amount: slider
 //! offsets (contrast, saturation, colour mixer, B&W mix…), colour-grading wheels (added as colour
 //! vectors to the user's wheels) and point-curve fades (black/white output levels composed after
 //! the user's point curves). The CPU pipeline and the GPU path both render [`effective`]
-//! settings, so a profile needs no kernel of its own. No look adds grain.
+//! settings. Imported scalar looks use that same path; their independent point curves run after
+//! the user's curves and Refine Saturation in the shared finish stage. No look adds grain.
 
 use std::borrow::Cow;
 
 use lightcraft_develop::{DevelopSettings, Treatment, Wheel};
+#[cfg(test)]
 use lightcraft_geom::Point;
 
 /// Add a colour-grading wheel (`hue` °, `sat` 0..100, `lum` −100..100) scaled by `k` to `w`, as a
@@ -28,17 +31,33 @@ fn wheel(w: &mut Wheel, hue: f64, sat: f64, lum: f64, k: f64) {
     w.lum = (w.lum + lum * k).clamp(-100.0, 100.0);
 }
 
-/// Fade a point curve: output black level `black` and white level `white` (0..1, moved from the
-/// identity by `k`), composed after the user's curve (`y → b + y·(w − b)`).
-fn fade(pts: &mut Vec<Point>, black: f64, white: f64, k: f64) {
-    let b = (black * k).clamp(0.0, 0.45);
-    let w = (1.0 - (1.0 - white) * k).clamp(0.55, 1.0);
-    if pts.len() < 2 {
-        *pts = vec![Point::new(0.0, 0.0), Point::new(1.0, 1.0)];
+/// Per-channel output fades (master/red/green/blue), resolved in the shared finish LUT.
+/// Sparse curves keep the legacy handle transform; function curves retain their shape.
+pub(crate) fn curve_fades(s: &DevelopSettings) -> [Option<(f64, f64)>; 4] {
+    if !s.section_enabled("light") || !s.section_enabled("curve") {
+        return [None; 4];
     }
-    for p in pts.iter_mut() {
-        p.y = b + p.y.clamp(0.0, 1.0) * (w - b);
+    let k = (s.profile.amount / 100.0).clamp(0.0, 2.0);
+    if !k.is_finite() || k == 0.0 {
+        return [None; 4];
     }
+    let fade = |b: f64, w: f64| Some(((b * k).clamp(0.0, 0.45), (1.0 - (1.0 - w) * k).clamp(0.55, 1.0)));
+    let mut out = [None; 4];
+    match s.profile.id.as_str() {
+        "lc.film.warm-print" => out[0] = fade(0.04, 0.97),
+        "lc.film.cool-fade" => out[0] = fade(0.07, 0.95),
+        "lc.film.faded-slide" => {
+            out[1] = fade(0.0, 0.97);
+            out[3] = fade(0.06, 1.0);
+        }
+        "lc.muted.matte-soft" => out[0] = fade(0.08, 0.96),
+        "lc.muted.pastel-haze" => out[0] = fade(0.1, 1.0),
+        "lc.muted.quiet-green" => out[0] = fade(0.04, 1.0),
+        "lc.bw.soft" => out[0] = fade(0.06, 0.97),
+        "lc.bw.sepia" => out[0] = fade(0.04, 0.98),
+        _ => {}
+    }
+    out
 }
 
 /// The settings the pipeline actually renders: user settings plus the profile's look.
@@ -50,6 +69,16 @@ pub fn effective(s: &DevelopSettings) -> Cow<'_, DevelopSettings> {
     }
     let mut e = s.clone();
     let add = |v: &mut f64, d: f64| *v = (*v + d * k).clamp(-100.0, 100.0);
+    if let Some(look) = s.profile.imported_look() {
+        if !k.is_finite() || look.validate().is_err() {
+            return Cow::Borrowed(s);
+        }
+        add(&mut e.light.contrast, look.contrast);
+        add(&mut e.light.highlights, look.highlights);
+        add(&mut e.light.shadows, look.shadows);
+        add(&mut e.effects.clarity, look.clarity);
+        return Cow::Owned(e);
+    }
     match id {
         // ---- Basic
         "lc.neutral" => {
@@ -89,14 +118,12 @@ pub fn effective(s: &DevelopSettings) -> Cow<'_, DevelopSettings> {
             add(&mut e.light.contrast, 6.0);
             add(&mut e.color.saturation, -4.0);
             add(&mut e.mixer.orange.lum, 4.0);
-            fade(&mut e.curve.master, 0.04, 0.97, k);
             wheel(&mut e.grading.highlights, 40.0, 18.0, 0.0, k);
             wheel(&mut e.grading.shadows, 25.0, 8.0, 0.0, k);
         }
         "lc.film.cool-fade" => {
             add(&mut e.light.contrast, -8.0);
             add(&mut e.color.saturation, -10.0);
-            fade(&mut e.curve.master, 0.07, 0.95, k);
             wheel(&mut e.grading.shadows, 210.0, 16.0, 0.0, k);
             wheel(&mut e.grading.highlights, 190.0, 6.0, 0.0, k);
         }
@@ -113,8 +140,6 @@ pub fn effective(s: &DevelopSettings) -> Cow<'_, DevelopSettings> {
             add(&mut e.color.vibrance, 8.0);
             add(&mut e.color.saturation, 6.0);
             add(&mut e.curve.shadows, 10.0);
-            fade(&mut e.curve.blue, 0.06, 1.0, k);
-            fade(&mut e.curve.red, 0.0, 0.97, k);
         }
         // ---- Cinematic
         "lc.cine.teal-amber" => {
@@ -154,7 +179,6 @@ pub fn effective(s: &DevelopSettings) -> Cow<'_, DevelopSettings> {
             add(&mut e.light.contrast, -12.0);
             add(&mut e.color.saturation, -14.0);
             add(&mut e.curve.highlights, -6.0);
-            fade(&mut e.curve.master, 0.08, 0.96, k);
         }
         "lc.muted.bleached" => {
             add(&mut e.light.contrast, 22.0);
@@ -166,7 +190,6 @@ pub fn effective(s: &DevelopSettings) -> Cow<'_, DevelopSettings> {
             add(&mut e.light.contrast, -18.0);
             add(&mut e.color.saturation, -20.0);
             add(&mut e.color.vibrance, 12.0);
-            fade(&mut e.curve.master, 0.1, 1.0, k);
             wheel(&mut e.grading.highlights, 330.0, 6.0, 0.0, k);
             wheel(&mut e.grading.shadows, 200.0, 6.0, 0.0, k);
         }
@@ -177,7 +200,6 @@ pub fn effective(s: &DevelopSettings) -> Cow<'_, DevelopSettings> {
             add(&mut e.mixer.green.hue, -10.0);
             add(&mut e.mixer.yellow.sat, -18.0);
             add(&mut e.mixer.aqua.sat, -15.0);
-            fade(&mut e.curve.master, 0.04, 1.0, k);
         }
         // ---- B&W
         "lc.bw.mono-rich" => {
@@ -203,12 +225,10 @@ pub fn effective(s: &DevelopSettings) -> Cow<'_, DevelopSettings> {
             e.treatment = Treatment::Bw;
             add(&mut e.light.contrast, -14.0);
             add(&mut e.bw_mix.orange, 12.0);
-            fade(&mut e.curve.master, 0.06, 0.97, k);
         }
         "lc.bw.sepia" => {
             e.treatment = Treatment::Bw;
             add(&mut e.light.contrast, 6.0);
-            fade(&mut e.curve.master, 0.04, 0.98, k);
             wheel(&mut e.grading.shadows, 28.0, 18.0, 0.0, k);
             wheel(&mut e.grading.highlights, 45.0, 14.0, 0.0, k);
         }
@@ -276,7 +296,7 @@ mod tests {
             assert!((d(&full) - 2.0 * d(&half)).abs() < 1e-9, "{id}");
             assert!((d(&double) - 2.0 * d(&full)).abs() < 1e-9, "{id}");
             // wheels and point-curve fades grow with the amount
-            let lift = |e: &DevelopSettings| e.curve.master.first().map_or(0.0, |p| p.y);
+            let lift = |e: &DevelopSettings| curve_fades(e)[0].map_or(0.0, |(b, _)| b);
             for (a, b) in [(&half, &full), (&full, &double)] {
                 assert!(a.grading.shadows.sat <= b.grading.shadows.sat + 1e-9, "{id}");
                 assert!(a.grading.highlights.sat <= b.grading.highlights.sat + 1e-9, "{id}");
@@ -288,23 +308,38 @@ mod tests {
             assert_eq!(full.grain, s.grain, "{id} adds no grain");
             assert_eq!(full.profile, s.profile, "{id}");
         }
+        s.profile.id = lightcraft_develop::IMPORTED_LOOK_ID.into();
+        s.profile.imported =
+            Some(lightcraft_develop::ImportedLook { contrast: 20.0, highlights: -30.0, shadows: 40.0, clarity: 60.0, ..Default::default() });
+        let saved = s.clone();
+        for amount in [0.0, 50.0, 100.0, 200.0] {
+            s.profile.amount = amount;
+            let e = effective(&s);
+            let k = amount / 100.0;
+            assert_eq!(e.light.contrast, 5.0 + 20.0 * k);
+            assert_eq!(e.light.highlights, -30.0 * k);
+            assert_eq!(e.light.shadows, 40.0 * k);
+            assert_eq!(e.effects.clarity, (60.0 * k).min(100.0));
+            assert_eq!(e.profile, s.profile);
+            assert_eq!(e.curve, s.curve);
+            assert_eq!(e.grain, s.grain);
+        }
+        s.profile.amount = saved.profile.amount;
+        assert_eq!(s, saved, "rendering a profile must preserve the displayed user settings");
     }
 
     #[test]
     fn wheels_and_fades_compose_with_user_settings() {
         let mut s = DevelopSettings::default();
         s.grading.shadows = Wheel { hue: 195.0, sat: 10.0, lum: 0.0 };
-        s.curve.master = vec![Point::new(0.0, 0.0), Point::new(0.5, 0.6), Point::new(1.0, 1.0)];
+        s.curve.master = vec![Point::new(0.0, 0.0), Point::new(0.5, 0.6), Point::new(1.0, 1.0)].into();
         s.profile.id = "lc.cine.teal-amber".into();
         let e = effective(&s);
         assert!((e.grading.shadows.hue - 195.0).abs() < 1e-6 && (e.grading.shadows.sat - 40.0).abs() < 1e-6, "{:?}", e.grading.shadows);
         assert_eq!(e.curve.master, s.curve.master, "no fade in this look: the user's curve stays");
         s.profile.id = "lc.muted.matte-soft".into();
         let e = effective(&s);
-        assert_eq!(e.curve.master.len(), 3, "user points kept");
-        let ys: Vec<f64> = e.curve.master.iter().map(|p| p.y).collect();
-        for (y, want) in ys.iter().zip([0.08, 0.08 + 0.6 * 0.88, 0.96]) {
-            assert!((y - want).abs() < 1e-9, "{ys:?}");
-        }
+        assert_eq!(e.curve.master, s.curve.master, "profile never rewrites saved curve handles");
+        assert_eq!(curve_fades(&e)[0], Some((0.08, 0.96)));
     }
 }

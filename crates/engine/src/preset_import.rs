@@ -513,6 +513,8 @@ pub(crate) fn build(props: &Props, values: &crate::crs_masks::Values, name: Stri
     }
     // the profile it names, resolved against the user's imported profiles by `preset.import`
     if let Some(look) = crate::profile_refs::look_ref(props)
+        && !props.keys().any(|k| k == "crs:Look/crs:Parameters" || k.starts_with("crs:Look/crs:Parameters/"))
+        && !unmapped.iter().any(|v| v.starts_with("Look (invalid "))
         && let Some(o) = settings.as_object_mut()
     {
         o.insert("profile".into(), serde_json::json!({"look": look}));
@@ -529,7 +531,8 @@ pub(crate) fn build(props: &Props, values: &crate::crs_masks::Values, name: Stri
         .unwrap_or_else(|| "Imported Presets".into());
     let uuid = props.get("crs:UUID").and_then(|v| v.first()).map(|u| u.to_ascii_lowercase());
     let id = format!("user.xmp.{}", uuid.unwrap_or_else(|| crate::presets::slug(&format!("{group}-{name}"))));
-    Some(Imported { preset: Preset { id, name, group, settings, favorite: false, builtin: false }, unmapped })
+    let unmapped = lightcraft_develop::unsupported_edits::bounded_names(unmapped.iter().map(String::as_str));
+    Some(Imported { preset: Preset { id, name, group, settings, unsupported_edits: unmapped.clone(), favorite: false, builtin: false }, unmapped })
 }
 
 /// Read the presets in file `name` (`bytes`); `group` names the group when the file doesn't
@@ -589,7 +592,7 @@ pub fn read_presets(name: &str, bytes: &[u8], group: Option<String>) -> Result<V
                     {
                         p.group = g.clone();
                     }
-                    Imported { preset: p, unmapped: Vec::new() }
+                    Imported { unmapped: p.unsupported_edits.clone(), preset: p }
                 })
                 .collect()
         }),
@@ -698,7 +701,12 @@ text]], z = ZSTR "loc" }"#,
         let c = p.settings["curve"]["master"].as_array().unwrap();
         assert_eq!(c.len(), 3);
         assert!((c[0]["y"].as_f64().unwrap() - 20.0 / 255.0).abs() < 1e-9);
-        assert_eq!(v[0].unmapped, vec!["CameraProfile".to_string()], "profiles are ours; the rest is mapped or bookkeeping");
+        assert_eq!(
+            v[0].unmapped,
+            vec!["CameraProfile".to_string(), "EnableColorAdjustments".to_string()],
+            "profiles and unverified panel switches are reported"
+        );
+        assert_eq!(p.unsupported_edits, v[0].unmapped);
         // it parses into real develop settings
         let d = lightcraft_develop::DevelopSettings::default().merged(&p.settings).expect("valid develop settings");
         assert_eq!(d.light.exposure, 0.35);
@@ -828,7 +836,7 @@ text]], z = ZSTR "loc" }"#,
         let got: Vec<(String, String)> =
             r["imported"].as_array().unwrap().iter().map(|i| (i["name"].as_str().unwrap().into(), i["group"].as_str().unwrap().into())).collect();
         assert_eq!(got, [("Warm Fade".to_string(), "Film".to_string()), ("Bright".into(), "Street".into())]);
-        assert_eq!(r["imported"][0]["unmapped"], json!(["CameraProfile"]));
+        assert_eq!(r["imported"][0]["unmapped"], json!(["CameraProfile", "EnableColorAdjustments"]));
         assert_eq!(s.presets.len(), before + 2);
         // importing again adds nothing
         let r = s.execute("preset.import", &json!({"paths": paths})).unwrap();

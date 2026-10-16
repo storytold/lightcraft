@@ -68,6 +68,9 @@ pub struct XmpData {
     pub metadata: Metadata,
     /// The opaque `lc:settings` JSON string, if present.
     pub lc_settings: Option<String>,
+    /// Number of top-level native-settings properties, including structured/empty occurrences.
+    /// A consumer must not accept a scalar that hid a duplicate authoritative property.
+    pub lc_settings_count: usize,
     /// Every property found, keyed `prefix:name` (struct fields as `prefix:name/prefix:field`); arrays keep
     /// item order, language alternatives put `x-default` first.
     pub properties: BTreeMap<String, Vec<String>>,
@@ -328,9 +331,9 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
     }
     let struct_prefix = format!("{key}/");
     if p.attr("rdf:parseType") == Some("Resource") {
-        for c in &p.children {
-            collect_property(c, &struct_prefix, props);
-        }
+        // Resource structs can carry fields as attributes as well as child elements.
+        // Keep the flattened view consistent with node_struct and nested Descriptions.
+        collect_description(p, &struct_prefix, props);
         return;
     }
     if let Some(d) = p.children.iter().find(|c| c.name == "rdf:Description") {
@@ -459,7 +462,11 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     find_descriptions(&tree, &mut descs);
     let mut props = BTreeMap::new();
     let mut values = BTreeMap::new();
+    let mut lc_settings_count = 0usize;
     for d in descs {
+        lc_settings_count = lc_settings_count
+            .saturating_add(d.attrs.iter().filter(|(name, _)| name == "lc:settings").count())
+            .saturating_add(d.children.iter().filter(|node| node.name == "lc:settings").count());
         collect_description(d, "", &mut props);
         if let XmpValue::Struct(m) = node_struct(d) {
             values.extend(m);
@@ -542,7 +549,7 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     }
     m.regions = values.get("mwg-rs:Regions").map(parse_regions).unwrap_or_default();
     let lc_settings = props.get("lc:settings").and_then(|v| v.first()).cloned();
-    Ok(XmpData { metadata: m, lc_settings, properties: props, values })
+    Ok(XmpData { metadata: m, lc_settings, lc_settings_count, properties: props, values })
 }
 
 fn frac(v: f64) -> String {
@@ -678,6 +685,31 @@ pub fn write_xmp_lc(meta: &Metadata, lc: &[(&str, &str)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resource_struct_attributes_and_elements_flatten_like_description_fields() {
+        let forms = [
+            r#"<c:Parameters rdf:parseType="Resource" c:ConvertToGrayscale="True"><c:Version>1</c:Version></c:Parameters>"#,
+            r#"<c:Parameters><rdf:Description c:ConvertToGrayscale="True"><c:Version>1</c:Version></rdf:Description></c:Parameters>"#,
+            r#"<c:Parameters rdf:parseType="Resource"><c:ConvertToGrayscale>True</c:ConvertToGrayscale><c:Version>1</c:Version></c:Parameters>"#,
+            r#"<c:Parameters rdf:parseType="Resource" c:ConvertToGrayscale="True" c:Version="1"/>"#,
+        ];
+        let mut previous = None;
+        for form in forms {
+            let xml = format!(
+                r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:c="http://ns.adobe.com/camera-raw-settings/1.0/"><c:Look rdf:parseType="Resource">{form}</c:Look></rdf:Description>"#
+            );
+            let packet = parse_xmp(&xml).unwrap();
+            assert_eq!(packet.properties["crs:Look/crs:Parameters/crs:ConvertToGrayscale"], vec!["True"]);
+            assert_eq!(packet.properties["crs:Look/crs:Parameters/crs:Version"], vec!["1"]);
+            assert!(packet.properties.keys().all(|key| !key.contains("rdf:")));
+            if let Some((properties, values)) = previous {
+                assert_eq!(packet.properties, properties);
+                assert_eq!(packet.values, values);
+            }
+            previous = Some((packet.properties, packet.values));
+        }
+    }
 
     fn full() -> Metadata {
         Metadata {

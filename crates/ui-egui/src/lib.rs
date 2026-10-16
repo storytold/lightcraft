@@ -1514,7 +1514,7 @@ pub struct HoverPreview {
 }
 
 pub fn is_bw(d: &lightcraft_develop::DevelopSettings) -> bool {
-    d.treatment == lightcraft_develop::Treatment::Bw || d.profile.id == "lc.mono" || d.profile.id.starts_with("lc.bw.")
+    d.is_bw()
 }
 
 /// "Found 3 faces in 2 photos" for a `faces.detect` result.

@@ -121,6 +121,10 @@ pub struct SidecarData {
     /// Actionable diagnostics for foreign develop settings that were not fully carried over.
     /// These are surfaced in the photo import report and never persisted in the catalog.
     pub warnings: Vec<crate::import::ImportWarning>,
+    /// Names from the selected develop path. None preserves earlier diagnostics; Some(empty) clears.
+    pub unsupported_edits: Option<Vec<String>>,
+    /// Invalid native diagnostic metadata must not clear known limitations.
+    pub unsupported_edits_invalid: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -129,6 +133,50 @@ pub enum DevelopPatch {
     Full(Box<DevelopSettings>),
     /// Mapped `crs:` fields (partial JSON, merged like a preset).
     Partial(Value),
+}
+
+use lightcraft_develop::unsupported_edits::{
+    INVALID_DIAGNOSTICS as INVALID_UNSUPPORTED_DIAGNOSTICS, MAX_JSON_BYTES as MAX_UNSUPPORTED_JSON_BYTES, MAX_NAMES as MAX_UNSUPPORTED_NAMES,
+    name_valid as unsupported_name_valid,
+};
+
+#[cfg(test)]
+use lightcraft_develop::unsupported_edits::MAX_NAME_BYTES as MAX_UNSUPPORTED_NAME_BYTES;
+
+fn native_unsupported_names(text: &str) -> Option<Vec<String>> {
+    if text.len() > MAX_UNSUPPORTED_JSON_BYTES {
+        return None;
+    }
+    let mut fields = serde_json::from_str::<Vec<String>>(text).ok()?;
+    if fields.len() > MAX_UNSUPPORTED_NAMES || fields.iter().any(|name| !unsupported_name_valid(name)) {
+        return None;
+    }
+    fields.sort_unstable();
+    fields.dedup();
+    Some(fields)
+}
+
+/// Native settings are authoritative even when unreadable. Never substitute older foreign edits.
+fn native_settings(d: &lightcraft_meta::XmpData) -> std::result::Result<Option<DevelopSettings>, String> {
+    let value = d.values.get("lc:settings");
+    if value.is_none() && d.lc_settings.is_none() && !d.properties.contains_key("lc:settings") {
+        return Ok(None);
+    }
+    if d.lc_settings_count != 1 {
+        return Err("native lc:settings must contain exactly one settings object".into());
+    }
+    let text = match value {
+        Some(lightcraft_meta::XmpValue::Text(text)) => text.as_str(),
+        None => d.lc_settings.as_deref().ok_or_else(|| "native lc:settings is empty".to_string())?,
+        _ => return Err("native lc:settings must contain a JSON settings object, not structured XMP".into()),
+    };
+    let value: Value = serde_json::from_str(text).map_err(|e| format!("cannot read native lc:settings: {e}"))?;
+    if !value.is_object() {
+        return Err("native lc:settings must contain a JSON settings object".into());
+    }
+    // Deserialize the original JSON too: Value alone discards duplicate keys, which could hide
+    // an unsupported version or conflicting settings behind a later value.
+    serde_json::from_str(text).map(Some).map_err(|e| format!("cannot read native lc:settings: {e}"))
 }
 
 /// Parse a sidecar / XMP packet. `target` selects how a `crs:` white balance is read
@@ -178,9 +226,18 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
         out.label = Some(ColorLabel::parse(l.trim()));
         out.label_text = Some(l.trim().to_string());
     }
-    let full = d.lc_settings.as_deref().and_then(|j| serde_json::from_str::<Value>(j).ok()).and_then(|v| DevelopSettings::from_json(&v).ok());
+    let full = native_settings(&d)?;
     out.develop = match full {
-        Some(s) => Some(DevelopPatch::Full(Box::new(s))),
+        Some(s) => {
+            // Restore our names-only diagnostics with our settings. Foreign CRS can be stale;
+            // do not derive new warnings from it. Older native packets leave known warnings
+            // alone rather than falsely resolving them just because settings were saved.
+            if let Some(text) = lc("unsupportedEdits") {
+                out.unsupported_edits = native_unsupported_names(&text);
+                out.unsupported_edits_invalid = out.unsupported_edits.is_none();
+            }
+            Some(DevelopPatch::Full(Box::new(s)))
+        }
         None if crate::crs::has_adjustments(&d.properties) => {
             let (partial, unmapped) = crate::crs::to_partial_report(&d.properties, Some(&d.values), target, crate::crs_masks::DEFAULT_ASPECT);
             // Lightroom's default profiles are named by nearly every sidecar; our own starting look stands
@@ -240,6 +297,9 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
                     fields: other.into_iter().map(str::to_string).collect(),
                 });
             }
+            let invalid = unmapped.len() > MAX_UNSUPPORTED_NAMES || unmapped.iter().any(|name| !unsupported_name_valid(name));
+            out.unsupported_edits = Some(unmapped.into_iter().filter(|name| unsupported_name_valid(name)).take(MAX_UNSUPPORTED_NAMES).collect());
+            out.unsupported_edits_invalid = invalid;
             Some(DevelopPatch::Partial(partial))
         }
         None => None,
@@ -250,6 +310,15 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
 /// Apply sidecar data to a photo record (the sidecar wins, except that a capture time embedded in
 /// the file is kept). Returns true if develop changed.
 pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
+    if let Some(fields) = &sc.unsupported_edits {
+        p.unsupported_edits = fields.clone();
+    }
+    if sc.unsupported_edits_invalid
+        && p.unsupported_edits.len() < MAX_UNSUPPORTED_NAMES
+        && !p.unsupported_edits.iter().any(|field| field == INVALID_UNSUPPORTED_DIAGNOSTICS)
+    {
+        p.unsupported_edits.push(INVALID_UNSUPPORTED_DIAGNOSTICS.into());
+    }
     if p.captured.is_none() {
         p.captured = sc.captured.clone();
     }
@@ -356,13 +425,14 @@ pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_
     if remove_location {
         (meta.sublocation, meta.city, meta.state, meta.country, meta.gps) = (None, None, None, None, None);
     }
-    let settings = serde_json::to_string(&*p.develop).unwrap_or_default();
+    let settings = serde_json::to_string(&p.develop.to_json()).unwrap_or_default();
     let flag = match p.flag {
         Flag::None => "none",
         Flag::Pick => "pick",
         Flag::Reject => "reject",
     };
-    let mut lc = vec![("settings", settings.as_str()), ("flag", flag)];
+    let unsupported = serde_json::to_string(&p.unsupported_edits).unwrap_or_default();
+    let mut lc = vec![("settings", settings.as_str()), ("unsupportedEdits", unsupported.as_str()), ("flag", flag)];
     if !remove_location && !p.meta.location.trim().is_empty() {
         lc.push(("location", p.meta.location.as_str()));
     }
@@ -445,6 +515,11 @@ fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<
     if bytes.iter().all(u8::is_ascii_whitespace) {
         return Ok((fresh, false, None));
     }
+    if let Ok(old) = std::str::from_utf8(&bytes)
+        && let Ok(parsed) = lightcraft_meta::parse_xmp(old)
+    {
+        native_settings(&parsed).map_err(std::io::Error::other)?;
+    }
     let rules = lightcraft_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
     match std::str::from_utf8(&bytes)
         .map_err(|e| e.to_string())
@@ -500,23 +575,29 @@ fn file_path(p: &Photo) -> Option<&str> {
 
 /// The XMP packet that describes a photo on disk: its sidecar, else (raw/DNG) the embedded XMP.
 pub fn read_packet(original: &str, kind: MediaKind, naming: SidecarNaming) -> Option<(String, PathBuf)> {
-    if let Some(sc) = find_sidecar(original, naming)
-        && let Ok(s) = std::fs::read_to_string(&sc)
-    {
-        return Some((s, sc));
+    read_packet_checked(original, kind, naming).ok().flatten()
+}
+
+fn read_packet_checked(original: &str, kind: MediaKind, naming: SidecarNaming) -> std::io::Result<Option<(String, PathBuf)>> {
+    if let Some(sc) = find_sidecar(original, naming) {
+        return std::fs::read_to_string(&sc).map(|s| Some((s, sc)));
     }
     if kind == MediaKind::Raw {
-        let bytes = std::fs::read(original).ok()?;
-        let x = lightcraft_meta::embedded(&bytes).xmp?;
-        return Some((x, PathBuf::from(original)));
+        let bytes = std::fs::read(original)?;
+        return Ok(lightcraft_meta::embedded(&bytes).xmp.map(|x| (x, PathBuf::from(original))));
     }
-    None
+    Ok(None)
 }
 
 /// Photo ids touched by an op (for auto-write).
 pub(crate) fn op_photos(op: &Op, out: &mut Vec<PhotoId>) {
     match op {
-        Op::SetRating { id, .. } | Op::SetFlag { id, .. } | Op::SetLabel { id, .. } | Op::SetDevelop { id, .. } | Op::SetMeta { id, .. }
+        Op::SetRating { id, .. }
+        | Op::SetFlag { id, .. }
+        | Op::SetLabel { id, .. }
+        | Op::SetDevelop { id, .. }
+        | Op::SetMeta { id, .. }
+        | Op::SetUnsupportedEdits { id, .. }
             if !out.contains(id) =>
         {
             out.push(*id);
@@ -649,15 +730,31 @@ impl Session {
             .map_err(|e| EngineError::Other(format!("{}: unfinished XMP repair: {e}", preferred.display())))?;
         // Keep an existing packet's spelling/style so foreign properties survive this save and
         // subsequent Undo/Redo writes. Shared stems owned by another photo were excluded above.
+        let preferred_missing = !preferred.exists();
         // On a case-insensitive volume `a.xmp` also answers for `a.XMP`: the spelling the folder
         // lists comes first, so the atomic write doesn't rename the packet.
         use crate::rename::MoveFs;
         let existing: Vec<PathBuf> = candidates.into_iter().filter(|path| path.is_file()).collect();
         let listed = existing.iter().find(|path| crate::rename::RealFs.listed(path)).cloned();
-        let path = listed.or_else(|| existing.into_iter().next()).unwrap_or(preferred);
+        let path = listed.or_else(|| existing.into_iter().next()).unwrap_or_else(|| preferred.clone());
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
+        let orig = file_path(p).ok_or_else(|| EngineError::Other(format!("{} is not a file on disk", p.file_name)))?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
+        let alternate = if preferred_missing && path.is_file() {
+            // Only the ownership-filtered alternate may be adopted, never another photo's stem.
+            Some(std::fs::read_to_string(&path).map_err(err)?)
+        } else if !path.exists() && p.kind == MediaKind::Raw {
+            let bytes = std::fs::read(orig).map_err(err)?;
+            lightcraft_meta::embedded(&bytes).xmp
+        } else {
+            None
+        };
+        if let Some(packet) = alternate {
+            // A new sidecar must not shadow an unreadable native edit in the authoritative packet.
+            let parsed = lightcraft_meta::parse_xmp(&packet).map_err(|e| err(std::io::Error::other(e.to_string())))?;
+            native_settings(&parsed).map_err(|e| err(std::io::Error::other(e)))?;
+        }
         let (data, merged, backup) = sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)()).map_err(err)?;
         write_atomic(&path, data.as_bytes()).map_err(err)?;
         self.note_sidecar_write(&path, data.as_bytes());
@@ -673,7 +770,11 @@ impl Session {
     pub fn read_sidecar_op_with_warnings(&self, id: PhotoId) -> Result<Option<(Op, PathBuf, Vec<crate::import::ImportWarning>)>> {
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let Some(orig) = file_path(p) else { return Ok(None) };
-        let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_naming(id)) else { return Ok(None) };
+        let Some((packet, from)) =
+            read_packet_checked(orig, p.kind, self.sidecar_naming(id)).map_err(|e| EngineError::Other(format!("{orig}: {e}")))?
+        else {
+            return Ok(None);
+        };
         let sc = parse_sidecar(&packet, crate::crs::Target::for_photo(p)).map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?;
         let mut warnings = sc.warnings.clone();
         for warning in &mut warnings {
@@ -696,6 +797,9 @@ impl Session {
             Op::SetLabel { id, label: q.label },
             Op::SetMeta { id, meta: Box::new(q.meta.clone()) },
         ];
+        if q.unsupported_edits != p.unsupported_edits {
+            ops.push(Op::SetUnsupportedEdits { id, fields: q.unsupported_edits.clone() });
+        }
         if q.captured != p.captured {
             ops.push(Op::SetCaptured { id, captured: q.captured.clone() });
         }
@@ -899,3 +1003,271 @@ mod tests_repair_provenance;
 #[cfg(test)]
 #[path = "sidecar/tests_stem_owners.rs"]
 mod tests_stem_owners;
+
+#[cfg(test)]
+mod unsupported_edit_tests {
+    use super::*;
+
+    #[test]
+    fn shared_sidecar_op_carries_diagnostics_without_a_develop_change_and_undo_restores_them() {
+        let mut s = Session::with_demo();
+        let id = s.active().unwrap();
+        let develop = s.catalog.photo(id).unwrap().develop.clone();
+        let selected = SidecarData { unsupported_edits: Some(vec!["Look".into()]), ..Default::default() };
+        let op = s.sidecar_op(id, selected).unwrap();
+        let Op::Batch { ops } = &op else { panic!("expected a batch") };
+        assert!(ops.iter().any(|op| matches!(op, Op::SetUnsupportedEdits { .. })));
+        assert!(!ops.iter().any(|op| matches!(op, Op::SetDevelop { .. })));
+        let mut touched = Vec::new();
+        op_photos(&Op::SetUnsupportedEdits { id, fields: vec!["Look".into()] }, &mut touched);
+        assert_eq!(touched, [id], "warning-only writes must reach the normal auto-write owner");
+        let undo = s.catalog.apply(op).unwrap();
+        assert_eq!(s.catalog.photo(id).unwrap().unsupported_edits, ["Look"]);
+        assert_eq!(s.catalog.photo(id).unwrap().develop, develop);
+        let metadata = s.sidecar_op(id, SidecarData::default()).unwrap();
+        s.catalog.apply(metadata).unwrap();
+        assert_eq!(s.catalog.photo(id).unwrap().unsupported_edits, ["Look"], "no develop path preserves diagnostics");
+        let clear = s.sidecar_op(id, SidecarData { unsupported_edits: Some(vec![]), ..Default::default() }).unwrap();
+        let undo_clear = s.catalog.apply(clear).unwrap();
+        assert!(s.catalog.photo(id).unwrap().unsupported_edits.is_empty());
+        s.catalog.apply(undo_clear).unwrap();
+        assert_eq!(s.catalog.photo(id).unwrap().unsupported_edits, ["Look"]);
+        s.catalog.apply(undo).unwrap();
+        assert!(s.catalog.photo(id).unwrap().unsupported_edits.is_empty());
+        assert_eq!(s.catalog.photo(id).unwrap().develop, develop);
+    }
+
+    #[test]
+    fn native_sidecar_roundtrip_preserves_diagnostics_and_explicit_empty_clears() {
+        let mut photo = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "test", "PNG", 8, 8, "now");
+        photo.unsupported_edits = vec!["FilterList".into(), "Look".into()];
+        let catalog = lightcraft_catalog::Catalog::new();
+        let packet = sidecar_packet(&photo, &catalog);
+        let sc = parse_sidecar(&packet, crate::crs::Target::Rendered).unwrap();
+        assert_eq!(sc.unsupported_edits, Some(photo.unsupported_edits.clone()));
+        let mut target = photo.clone();
+        target.unsupported_edits = vec!["CameraProfile".into()];
+        merge_into(&mut target, &sc, "later");
+        assert_eq!(target.unsupported_edits, photo.unsupported_edits);
+        photo.unsupported_edits.clear();
+        let empty = parse_sidecar(&sidecar_packet(&photo, &catalog), crate::crs::Target::Rendered).unwrap();
+        merge_into(&mut target, &empty, "later");
+        assert!(target.unsupported_edits.is_empty());
+    }
+
+    #[test]
+    fn selected_import_path_controls_unsupported_diagnostics() {
+        let wrap = |attributes: &str, body: &str| {
+            format!(
+                r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmlns:lc="http://ns.lightcraft.app/lc/1.0/" {attributes}>{body}</rdf:Description>"#
+            )
+        };
+        let selected = parse_sidecar(
+            &wrap(r#"crs:Exposure2012="1" crs:FuturePanelControl="false" crs:FutureEditZero="0""#, ""),
+            crate::crs::Target::RawAbsolute,
+        )
+        .unwrap();
+        assert_eq!(selected.unsupported_edits, Some(vec!["FutureEditZero".into(), "FuturePanelControl".into()]));
+        let applied =
+            parse_sidecar(&wrap(r#"crs:AlreadyApplied="True" crs:CameraProfile="Procedural""#, ""), crate::crs::Target::RawAbsolute).unwrap();
+        assert_eq!(applied.unsupported_edits, None);
+        let native =
+            parse_sidecar(&wrap(r#"crs:CameraProfile="Procedural""#, "<lc:settings>{}</lc:settings>"), crate::crs::Target::RawAbsolute).unwrap();
+        assert_eq!(native.unsupported_edits, None);
+        let native_known = parse_sidecar(
+            &wrap(r#"crs:CameraProfile="Procedural""#, r#"<lc:settings>{}</lc:settings><lc:unsupportedEdits>["FilterList"]</lc:unsupportedEdits>"#),
+            crate::crs::Target::RawAbsolute,
+        )
+        .unwrap();
+        assert_eq!(native_known.unsupported_edits, Some(vec!["FilterList".into()]));
+        let native_cleared =
+            parse_sidecar(&wrap("", "<lc:settings>{}</lc:settings><lc:unsupportedEdits>[]</lc:unsupportedEdits>"), crate::crs::Target::RawAbsolute)
+                .unwrap();
+        assert_eq!(native_cleared.unsupported_edits, Some(Vec::new()));
+        let metadata_only = parse_sidecar(&wrap("", ""), crate::crs::Target::RawAbsolute).unwrap();
+        assert_eq!(metadata_only.unsupported_edits, None);
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_bounds_tests {
+    use super::*;
+
+    #[test]
+    fn maximal_valid_diagnostic_names_round_trip() {
+        let fields: Vec<String> = (0..MAX_UNSUPPORTED_NAMES).map(|i| format!("Field{i:03}{}", "A".repeat(MAX_UNSUPPORTED_NAME_BYTES - 8))).collect();
+        assert!(fields.iter().all(|name| name.len() == MAX_UNSUPPORTED_NAME_BYTES));
+        let text = serde_json::to_string(&fields).unwrap();
+        assert_eq!(text.len(), MAX_UNSUPPORTED_JSON_BYTES);
+        assert_eq!(native_unsupported_names(&text), Some(fields));
+    }
+
+    #[test]
+    fn native_diagnostic_names_are_validated_without_truncating_valid_names() {
+        let long = "A".repeat(256);
+        let values = vec!["FilterList".to_string(), "Mask: AI mask (?)".into(), "Mask: blend mode -7".into(), "未来字段".into(), long.clone()];
+        let parsed = native_unsupported_names(&serde_json::to_string(&values).unwrap()).unwrap();
+        assert!(parsed.contains(&long) && parsed.contains(&"未来字段".to_string()));
+        assert_eq!(parsed.len(), values.len());
+        for fields in
+            [vec![String::new()], vec!["Bad\nName".into()], vec!["{payload:value}".into()], vec!["A".repeat(257)], vec!["Field".into(); 257]]
+        {
+            assert!(native_unsupported_names(&serde_json::to_string(&fields).unwrap()).is_none());
+        }
+        assert!(native_unsupported_names(&" ".repeat(MAX_UNSUPPORTED_JSON_BYTES + 1)).is_none());
+        assert_eq!(native_unsupported_names("[]"), Some(vec![]));
+    }
+
+    #[test]
+    fn invalid_native_diagnostics_preserve_known_warnings_and_warn_on_fresh_import() {
+        let packet = r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:lc="http://ns.lightcraft.app/lc/1.0/"><lc:settings>{}</lc:settings><lc:unsupportedEdits>["{payload:value}"]</lc:unsupportedEdits></rdf:Description>"#;
+        let sc = parse_sidecar(packet, crate::crs::Target::RawAbsolute).unwrap();
+        assert!(sc.unsupported_edits.is_none() && sc.unsupported_edits_invalid);
+        let mut photo = Photo::new(PhotoId(1), Source::File { path: "/procedural.dng".into() }, "procedural.dng", "DNG", 8, 8, "2026-01-01");
+        photo.unsupported_edits = vec!["FilterList".into()];
+        merge_into(&mut photo, &sc, "2026-01-01");
+        assert_eq!(photo.unsupported_edits, ["FilterList", INVALID_UNSUPPORTED_DIAGNOSTICS]);
+        photo.unsupported_edits.clear();
+        merge_into(&mut photo, &sc, "2026-01-01");
+        assert_eq!(photo.unsupported_edits, [INVALID_UNSUPPORTED_DIAGNOSTICS]);
+        merge_into(&mut photo, &sc, "2026-01-01");
+        assert_eq!(photo.unsupported_edits, [INVALID_UNSUPPORTED_DIAGNOSTICS], "the warning is not duplicated");
+    }
+}
+
+#[cfg(test)]
+mod native_authority_tests {
+    use super::*;
+
+    fn packet(body: &str) -> String {
+        format!(
+            r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:lc="http://ns.lightcraft.app/lc/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="-2">{body}</rdf:Description>"#
+        )
+    }
+
+    fn rejected_packets() -> Vec<String> {
+        let mut packets: Vec<_> = [
+            "",
+            " ",
+            "null",
+            "[]",
+            "true",
+            r#"{"version":999}"#,
+            r#"{"version":999,"version":1}"#,
+            r#"{"version":1,"version":999}"#,
+            r#"{"light":{"exposure":1,"exposure":2}}"#,
+            r#"{"light":false}"#,
+            "{",
+        ]
+        .into_iter()
+        .map(|json| packet(&format!("<lc:settings>{json}</lc:settings>")))
+        .collect();
+        packets.extend([
+            packet("<lc:settings/><lc:settings>{}</lc:settings>"),
+            packet("<lc:settings>{}</lc:settings><lc:settings>{}</lc:settings>"),
+            packet(r#"<lc:settings rdf:parseType="Resource"><lc:future>1</lc:future></lc:settings>"#),
+            packet(r#"<lc:settings><rdf:Seq><rdf:li>{}</rdf:li></rdf:Seq></lc:settings>"#),
+            packet("<lc:settings>{}</lc:settings>").replace(" crs:Exposure2012", " lc:settings=\"{}\" crs:Exposure2012"),
+        ]);
+        packets
+    }
+
+    fn dir(tag: &str) -> PathBuf {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let path = std::env::temp_dir().join(format!("lc-native-authority-{tag}-{}-{stamp}", std::process::id()));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn unreadable_native_settings_never_fall_through_to_crs_on_any_target() {
+        for packet in rejected_packets() {
+            for target in [crate::crs::Target::Any, crate::crs::Target::Rendered, crate::crs::Target::RawAbsolute, crate::crs::Target::RawRelative] {
+                assert!(parse_sidecar(&packet, target).is_err(), "accepted native packet on {target:?}: {packet}");
+            }
+        }
+    }
+
+    #[test]
+    fn supported_native_settings_keep_process_hdr_and_schema_marker() {
+        for version in [0, 1] {
+            let wire = format!(r#"{{"version":{version},"process":77,"light":{{"exposure":0.4}},"hdr":{{"enabled":true,"max_ev":4.0}}}}"#);
+            let sc = parse_sidecar(&packet(&format!("<lc:settings>{wire}</lc:settings>")), crate::crs::Target::RawRelative).unwrap();
+            let Some(DevelopPatch::Full(settings)) = sc.develop else { panic!("native settings were not selected") };
+            assert_eq!(settings.version, version);
+            assert_eq!(settings.process, lightcraft_develop::ProcessVersion(77));
+            assert_eq!(settings.light.exposure, 0.4);
+            assert!(settings.hdr.enabled);
+            assert_eq!(settings.hdr.max_ev, 4.0);
+        }
+    }
+
+    #[test]
+    fn saving_refuses_authoritative_native_errors_before_backup_or_replace() {
+        let dir = dir("save");
+        let path = dir.join("photo.xmp");
+        for packet in rejected_packets() {
+            std::fs::write(&path, &packet).unwrap();
+            let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+            assert!(sidecar_contents(&path, self::packet("<lc:settings>{}</lc:settings>"), "now").is_err());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), packet);
+            assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), modified);
+            assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no backup/write is needed for a refused native document");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unreadable_or_future_alternate_sidecar_cannot_be_shadowed_by_a_new_preferred_file() {
+        let dir = dir("alternate");
+        let original = dir.join("photo.png");
+        std::fs::write(&original, b"procedural source bytes: metadata save does not decode").unwrap();
+        let original_text = original.to_string_lossy().to_string();
+        let preferred = sidecar_path(&original_text, SidecarNaming::Stem);
+        let alternate = sidecar_path(&original_text, SidecarNaming::Full);
+        let mut s = Session::new();
+        let id = s.catalog.alloc_photo_id();
+        let photo = Photo::new(id, Source::File { path: original_text.clone() }, "photo.png", "PNG", 8, 8, "now");
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        for bytes in [packet(r#"<lc:settings>{"version":999}</lc:settings>"#).into_bytes(), vec![0xff, 0xfe, 0xfd]] {
+            std::fs::write(&alternate, &bytes).unwrap();
+            let modified = std::fs::metadata(&alternate).unwrap().modified().unwrap();
+            assert!(s.read_sidecar_op(id).is_err());
+            assert!(s.save_sidecar(id).is_err());
+            assert!(!preferred.exists());
+            assert_eq!(std::fs::read(&alternate).unwrap(), bytes);
+            assert_eq!(std::fs::metadata(&alternate).unwrap().modified().unwrap(), modified);
+            assert_eq!(std::fs::read(&original).unwrap(), b"procedural source bytes: metadata save does not decode");
+            assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod native_function_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn function_sidecar_declares_schema2_and_keeps_upstream_process_hdr() {
+        let mut settings = DevelopSettings::from_json(&json!({
+            "version":2,"process":77,"hdr":{"enabled":true,"max_ev":4.0},
+            "curve":{"master":{"kind":"function","version":1,"base":{"pieces":[{"end":1.0,"hermite":[0.1,0.9,0.8,0.8]}]},"adjustments":[]}}
+        }))
+        .unwrap();
+        // Even an in-process caller that retained an older marker must write the new boundary.
+        settings.version = 1;
+        let mut photo = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "test", "PNG", 8, 8, "now");
+        photo.develop = Arc::new(settings.clone());
+        photo.unsupported_edits = vec!["Look".into()];
+        let packet = sidecar_packet(&photo, &lightcraft_catalog::Catalog::new());
+        let sc = parse_sidecar(&packet, crate::crs::Target::Rendered).unwrap();
+        let Some(DevelopPatch::Full(loaded)) = sc.develop else { panic!("function settings must remain native") };
+        assert_eq!(loaded.version, 2);
+        assert_eq!(loaded.curve, settings.curve);
+        assert_eq!(loaded.process, settings.process);
+        assert_eq!(loaded.hdr, settings.hdr);
+        assert_eq!(sc.unsupported_edits, Some(vec!["Look".into()]));
+    }
+}

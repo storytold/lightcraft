@@ -871,3 +871,19 @@ fn the_catalog_remembers_which_photos_its_latest_ops_changed_and_what_of_them() 
     assert_eq!(c.touched_since(long_ago), None);
     assert_eq!(c.touched_since(c.revision - 10), Some(vec![a]));
 }
+
+#[test]
+fn unsupported_edit_diagnostics_default_serialize_and_undo() {
+    let mut c = Catalog::new();
+    let id = photo(&mut c, "warnings", "2026-01-01");
+    let p = c.photo(id).unwrap();
+    let mut old = serde_json::to_value(p.as_ref()).unwrap();
+    old.as_object_mut().unwrap().remove("unsupported_edits");
+    assert!(serde_json::from_value::<Photo>(old).unwrap().unsupported_edits.is_empty());
+    let inverse = c.apply(Op::SetUnsupportedEdits { id, fields: vec!["CameraProfile".into(), "FilterList".into()] }).unwrap();
+    assert_eq!(c.photo(id).unwrap().unsupported_edits, ["CameraProfile", "FilterList"]);
+    let encoded = serde_json::to_vec(c.photo(id).unwrap().as_ref()).unwrap();
+    assert_eq!(serde_json::from_slice::<Photo>(&encoded).unwrap().unsupported_edits, ["CameraProfile", "FilterList"]);
+    c.apply(inverse).unwrap();
+    assert!(c.photo(id).unwrap().unsupported_edits.is_empty());
+}

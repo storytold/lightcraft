@@ -45,6 +45,8 @@ lightcraft-testkit = { path = "crates/testkit" }
 # foundation
 thiserror = "2"
 sha2 = "0.10"
+# Canonical runtime BigTable fingerprints; pure Rust on every target.
+md-5 = { version = "=0.10.6", default-features = false, features = ["force-soft"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 log = "0.4"

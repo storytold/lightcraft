@@ -27,6 +27,7 @@ What we write (standard namespaces, so other tools can read the metadata):
 | Pick / reject flag | `lc:flag` (`pick`, `reject`, `none`) |
 | Location | `lc:location` |
 | Develop settings | `lc:settings` — our complete `DevelopSettings` as JSON (exact round trip, incl. masks, spots, crop and the rendering process; settings without `process` are V1, see [process-versions.md](process-versions.md)) |
+| Unsupported saved edits | `lc:unsupportedEdits` — bounded JSON array of unsupported field names, preserved with native settings |
 
 `lc:` is `http://ns.lightcraft.app/lc/1.0/`.
 
@@ -36,10 +37,66 @@ has none, the sidecar's `exif:DateTimeOriginal`, else `photoshop:DateCreated`, e
 used — on import (it then also files a copied photo in its date folder) and by `photo.readMetadataFromFile` (undoable).
 `xmp:Rating="-1"` (the XMP convention for rejected) sets the reject flag. Develop settings come from
 `lc:settings` when present (exact); otherwise from the `crs:` fields below (approximate).
+Present native settings must be one valid JSON settings object in a supported schema. Invalid, structured,
+duplicate or explicitly newer native settings cause an error; they never fall back to preserved, potentially
+older CRS edits. A failed metadata read leaves that photo's catalog settings unchanged. An unreadable or invalid
+sidecar fails that file's import before Copy or Move places it; other valid files in the batch can still import.
+Declared future develop schemas are also refused when loading catalog settings, saved versions or history.
 
-When foreign `crs:` settings are only partly transferable, `library.import` includes per-photo `warnings` in its
-report. Warnings identify unsupported profile names, saved Upright geometry that will be recalculated, and other
-unmapped adjustments; they do not change the source packet or become catalog edits.
+Browsing or importing a path already in the catalog keeps its stored settings. After an import-parser fix,
+previously imported photos therefore retain their earlier interpretation until explicitly reloaded. Select the
+affected photos and use **Photo ▸ Read Metadata from File** to apply the current sidecar interpretation. Review
+before doing this: every stated field wins over its catalog value. If you also need undo/redo to leave the sidecar
+untouched, turn automatic XMP writing off first; undo/redo otherwise retains its normal auto-write behavior.
+
+## Unsupported saved edits
+
+Import and metadata reads retain the names of fields that could not be applied. The Edit and Info panels show a
+persistent notice; import, inspection and export command results expose `unsupportedEdits`, and CLI renders print
+these names to stderr. Successful exports still report limitations of the source edit. This does not recover an
+unsupported profile, filter or AI effect.
+
+The names survive catalog reopening and native XMP save/read/import. Metadata-only packets and rendered packets
+marked `AlreadyApplied` preserve existing diagnostics; a new applicable supported edit can clear them. Older native
+packets without `lc:unsupportedEdits` preserve diagnostics already in the catalog. Invalid or oversized diagnostic
+metadata is rejected, preserves existing names, and adds `InvalidSavedEditDiagnostics`. Limits are 66,305 bytes of encoded
+JSON, 256 names and 256 UTF-8 bytes per name; the UI abbreviates long lists and names.
+
+Catalog format 12 combines upstream Kelvin white balance with runtime profile-table references, independent imported-profile treatment, profile adjustments, continuous point curves
+and these diagnostics alongside the upstream format-3–6 operations.
+Existing compatible libraries upgrade on open; older LightCraft builds refuse the new format. For comparison with older builds, use a disposable library or a separately backed-up copy.
+
+## Continuous curves and older versions
+
+Develop schema 2 retains both legacy sparse point arrays and continuous function curves. Partial preset Amount
+blends each channel's evaluated curve, even when their knot positions differ; exact 0% and 100% retain the endpoint
+models. Function curves store an immutable piecewise cubic base and sparse signed corrections, so moving a handle
+does not replace the blended shape with a newly fitted handful of points. Native XMP, history, copy/paste and sync
+retain that complete model. Sparse settings keep their supported wire version on read, so existing Local-photo
+baseline fingerprints remain valid. New sparse settings use version 1; authoring function curves promotes them
+to version 2. Edited/default comparisons ignore only this version marker.
+
+Imported profile definitions require schema 3; their independent monochrome conversion requires schema 4
+when true. The new flag is omitted when false, so earlier native settings keep their serialized values and
+fingerprints. Earlier settings that already stored global B&W stay B&W: loading never guesses whether that
+choice originally came from a profile. Catalog format 10 prevents older readers from dropping the new flag.
+
+Imported Look table references require schema 5 (introduced in fork catalog format 11). The combined writer uses catalog format 12; explicit Kelvin white balance requires schema 6 even in standalone native sidecars and presets. They retain only a checked fingerprint;
+the resource path and table payload are never serialized. Resolve an explicitly selected XMP resource with
+[`profile.loadTable`](control-protocol.md#explicit-runtime-profile-tables) for the current session. Missing or
+unsupported resources produce rendering diagnostics; they do not replace saved settings. Older profiles with
+no table reference retain their existing wire shape and hash.
+
+New function preset files use `lightcraft.preset.v2` and curve presets use a version-2 `curves` envelope. Their old
+readers reject those formats; legacy sparse preset files remain readable. Older LightCraft versions that predate
+native-settings validation can still misread newer XMP and fall back to old CRS fields, so use a separate library
+and sidecar copies when comparing builds. A newer catalog format is always refused by older catalog readers.
+
+Curve models are bounded to 1,024 handles and 4,096 cubic pieces. A blend that exceeds those bounds or its numeric
+range fails before the edit is committed. Legacy sparse curves with outputs outside 0..1 retain their exact
+load/render and 0%/100% behavior, but partial Amount is currently unsupported: their old profile fade clips handles
+before fitting, which cannot be reproduced by clipping an arbitrary blended function. LightCraft reports the
+limitation and keeps the current edit and undo history. This is not a claim of Lightroom pixel parity.
 
 ## Saving into an existing sidecar
 
@@ -61,6 +118,11 @@ the only copy of those edits outside that application's catalog. Saving never dr
 - A sidecar that can't be read as XMP (not well-formed, not UTF-8, no `rdf:RDF`) is first copied to
   `<name>.xmp.bak-<date><time>` (`-1`, `-2`… if taken — a backup is never overwritten), then replaced. A sidecar that
   can't be read at all (permissions) is left alone and the save fails.
+- Well-formed XMP containing invalid or newer native settings is left unchanged and the save fails. This also
+  prevents creating a preferred sidecar that would hide such settings in an alternate sidecar or embedded raw
+  packet. Automatic writes obey the same guard (failures are logged); explicit Save Metadata reports the error.
+  A declared schema version is required to detect newer formats; unknown fields in the current schema retain
+  the existing ignore-on-read behavior. Older released builds do not gain these checks retroactively.
 
 Limits: LightCraft writes keywords to `dc:subject` only, so another application's `lr:hierarchicalSubject` is kept as
 it was and may still list keywords removed in LightCraft. LightCraft doesn't write `crs:`: the other application's
@@ -108,18 +170,28 @@ names are read (e.g. `Exposure2012`, not the older `Exposure`). `crs:ProcessVers
 application's renderer and is ignored: the photo keeps LightCraft's own process, the latest for a newly imported photo
 ([process-versions.md](process-versions.md)).
 
+White-balance temperature and tint can appear independently; an unstated axis keeps
+its stored destination value. The coordinate family is selected as a unit: measured
+raws use absolute fields, relative raws and rendered files prefer Incremental fields,
+and presets prefer absolute fields. A missing axis is never filled from a lower-priority
+family. Only a present absolute temperature requires `AsShotTemperature` for relative
+conversion; tint-only packets subtract `AsShotTint` when supplied (otherwise zero).
+Explicit As Shot still takes precedence over numeric coordinates. This preserves
+stored edits; it does not establish a Lightroom pixel match.
+
 | `crs:` field(s) | LightCraft control | Notes |
 |---|---|---|
 | `Exposure2012` | `light.exposure` | EV, 1:1 |
 | `Contrast2012`, `Highlights2012`, `Shadows2012`, `Whites2012`, `Blacks2012` | `light.contrast` … `light.blacks` | −100..100, 1:1 |
 | `HDREditMode` | `hdr.enabled` | `1` / `True` = HDR editing on, `0` / `False` off |
-| `WhiteBalance` | `wb.mode` | `As Shot`, `Auto`, `Daylight`, `Cloudy`, `Shade`, `Tungsten`, `Fluorescent`, `Flash`; other names → custom |
-| `Temperature`, `Tint` | `wb.temp`, `wb.tint` (+ `wb.scale: kelvin`) | Kelvin / tint as written for raws with colour matrices — in the file (DNG) or measured for the camera (`lightcraft_raw::spectral`: ILCE-7M3, D850, EOS 5D Mark III…, issue #730) or read from its white-balance presets (`lightcraft_raw::kelvin_presets`: ILCA-99M2, ILCA-77M2…) — and for presets; the mapped settings say `"scale": "kelvin"` so the value stays Kelvin wherever it lands. Raws LightCraft develops relative to their as-shot look (ARW, NEF, RW2, RAF, CR3, CR2, PEF, SRW of other cameras: 6500 K / 0 means as shot) take the same mired shift from the packet's `AsShotTemperature` / `AsShotTint` instead; without that reference a custom Kelvin stays As Shot and is reported (`Temperature, Tint (custom white balance without AsShotTemperature: kept As Shot)`), because read on the relative scale it would be a large colour cast (issue #510). Note that LightCraft's Kelvin for a camera comes from its measured matrices, Lightroom's from Adobe's: the two scales differ (about 7–10 % on the ILCE-7M3), so the number is carried over, not the exact look |
+| `WhiteBalance` | `wb.mode` | As Shot keeps the source white point. Other modes preserve resolved numeric Temperature/Tint as custom when representable on the target scale; without values, named presets resolve normally. |
+| `Temperature`, `Tint` | `wb.temp`, `wb.tint` (+ `wb.scale: kelvin`) | Kelvin / tint as written for raws with colour matrices — in the file (DNG) or measured for the camera (`lightcraft_raw::spectral`: ILCE-7M3, D850, EOS 5D Mark III…, issue #730) or read from its white-balance presets (`lightcraft_raw::kelvin_presets`: ILCA-99M2, ILCA-77M2…) — and for presets; the mapped settings say `"scale": "kelvin"` so the value stays Kelvin wherever it lands. Raws LightCraft develops relative to their as-shot look (ARW, NEF, RW2, RAF, CR3, CR2, PEF, SRW of other cameras: 6500 K / 0 means as shot) take the same mired shift from the packet's `AsShotTemperature` / `AsShotTint` instead; without that reference a custom Kelvin stays As Shot and is reported (`WhiteBalance (missing AsShotTemperature)`), because read on the relative scale it would be a large colour cast (issue #510). Note that LightCraft's Kelvin for a camera comes from its measured matrices, Lightroom's from Adobe's: the two scales differ (about 7–10 % on the ILCE-7M3), so the number is carried over, not the exact look |
 | `IncrementalTemperature`, `IncrementalTint` | `wb.temp`, `wb.tint` | rendered files: −100..100 on our relative scale (mired shift around 6500 K, same as the Temp slider); a rendered file with only `Temperature` shifts from `AsShotTemperature` like the raws above when it is present |
 | `Vibrance`, `Saturation` | `color.vibrance`, `color.saturation` | 1:1 |
 | `Texture`, `Clarity2012`, `Dehaze` | `effects.texture`, `effects.clarity`, `effects.dehaze` | 1:1 |
 | `HueAdjustment<Band>`, `SaturationAdjustment<Band>`, `LuminanceAdjustment<Band>` | `mixer.<band>.hue/sat/lum` | bands Red, Orange, Yellow, Green, Aqua, Blue, Purple, Magenta |
-| `ConvertToGrayscale` | `treatment` | `True` → B&W |
+| `ConvertToGrayscale` | `treatment` | The outer flag controls global treatment. The nested `Look/Parameters/ConvertToGrayscale` is retained independently in `profile.imported.convert_to_grayscale`: either true flag renders B&W, including profile Amount zero. An outer false with a monochrome Look was verified against a Lightroom export. Profile-only copy/paste, presets and sync carry the conversion; selecting a plain color profile removes only the profile conversion. Explicit Color clears an active imported monochrome profile. Attribute and child-element forms are accepted, including `rdf:parseType="Resource"` attributes. |
+| `Look/Parameters/ToneCurvePV2012`, `…Red/Green/Blue`; `Contrast2012`, `Highlights2012`, `Shadows2012`, `Clarity2012` | `profile.imported` | Checked per-photo profile definition with its own name and Amount (0..200%). Profile curves follow global curves and Refine Saturation; four scalar deltas affect effective rendering without moving the saved sliders. Amount blends the profile function with identity. This is a measured approximation; opaque tables and other profile parameters remain unsupported and `Look` stays in the diagnostic report. |
 | `GrayMixer<Band>` | `bw_mix.<band>` | |
 | `ParametricShadows`, `ParametricDarks`, `ParametricLights`, `ParametricHighlights` | `curve.shadows/darks/lights/highlights` | |
 | `ParametricShadowSplit`, `ParametricMidtoneSplit`, `ParametricHighlightSplit` | `curve.split_shadows/split_mid/split_highlights` | |
@@ -143,6 +215,8 @@ application's renderer and is ignored: the photo keeps LightCraft's own process,
 | `PerspectiveUpright` | `geometry.upright` | 0 off, 1 auto, 2 level, 3 vertical, 4 full, 5 guided; saved `UprightTransform_*` matrices are not imported, so photo import reports that Lightroom geometry was not preserved and the selected mode will be recalculated |
 | `HasCrop`, `CropLeft/Top/Right/Bottom`, `CropAngle` | `crop.geometry` | normalized edges → rect; angle in degrees; `HasCrop="False"` → no crop |
 
+Panel `Enable*` switches remain in the unmapped report: their exact saved-packet panel scope has not been verified, so the importer preserves supported slider values and reports those switches instead of guessing which groups to reset.
+
 Values pass through our control specs, so anything outside our slider ranges gets clamped.
 
 `crs:CameraProfile` is kept as the selected name in the photo's import warning and the active profile is left as it is: the name carries no rendering data and never selects an Adobe profile. Import reports such a profile as not applied (colours may differ from Lightroom), except Lightroom's default profiles (`Adobe Standard`, `Adobe Color`), which every sidecar names and which LightCraft's own starting look stands in for.
@@ -156,10 +230,15 @@ own (`Adobe Color` → Color, `Adobe Neutral`, `Adobe Vivid`, `Adobe Landscape`,
 `Modern 10`, `Vintage 02`) can't be used here, and a third-party profile not imported yet leaves the photo's profile as it
 is; import reports either per preset (`Profile “Name” (Lightroom's own)` / `(not imported yet)` in `unmapped`).
 References are resolved again whenever profiles are imported or deleted, so a pack's profiles and presets can come in
-either order. The look's embedded `Parameters` are not read.
+either order. Supported embedded `Parameters` are read as described above.
 
-**Not mapped:** camera profiles (`CameraProfile`; we have our own profile set), red eye, lens blur,
-process-version 2010 field names, and AI features. Local adjustments and spot removal are read as described below.
+**Not mapped:** SDR rendition controls and extended HDR curves (`SDR*`, `ExtendedToneCurve*`); camera profiles (`CameraProfile`), opaque Look tables and parameters outside the subset above, unsupported mask
+types and payloads (supported local corrections are listed below), red eye, lens blur, and AI features
+such as saved Denoise filters. Legacy process-version 2010 controls use the approximations described above.
+
+If a conversion-bearing Look has an invalid curve, scalar, Amount or identifier, only its independently
+understood conversion is retained in a neutral profile definition and the invalid component remains reported.
+It does not inherit a previous profile or turn an unsupported curve into a clamped approximation.
 
 ## Spot removal
 
@@ -179,6 +258,16 @@ sidecar written for a healed photo contains.
 
 A spot whose mask is any other kind is reported as `Spot: <kind>`. Sizes are clamped to our spot range. A sidecar's
 spots replace the photo's, as its masks do.
+
+The imported Look stage is partial, not a Lightroom appearance guarantee. Native D3500 comparisons improved
+B&W11 (mean DeltaE00 6.23 → 4.77) and B&W12 at Amount50 (12.44 → 11.39), but B&W10 worsened (5.63 → 7.32).
+An isolated B&W10 curve applied to Lightroom's baseline matched the parameters-only reference within mean0.20;
+this does not remove the underlying camera/tone error or the missing table. A saved HDR color case measured22.56,
+while its controlled SDR counterpart measured7.54: the legacy SDR curve is not a substitute for its extended HDR edit.
+These measurements use matching native RGB16 exports and exact native sample coordinates, without alignment or fitting.
+
+Enhanced DNG pixels take priority over the original raw image. If their header or compression is unsupported,
+import/render/export reports an error rather than silently replacing the enhanced image with an embedded JPEG.
 
 ## Local corrections (masks)
 

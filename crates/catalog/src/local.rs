@@ -112,7 +112,7 @@ impl Photo {
             && self.edited.is_none()
             && self.history.is_empty()
             && self.versions.is_empty()
-            && *self.develop == self.import_defaults()
+            && self.develop.same_values(&self.import_defaults())
             && self.analysis.is_none()
             && m.title.is_empty()
             && m.caption.is_empty()
@@ -290,6 +290,7 @@ impl Op {
             | Op::SetLabel { id, .. }
             | Op::SetDevelop { id, .. }
             | Op::SetMeta { id, .. }
+            | Op::SetUnsupportedEdits { id, .. }
             | Op::SetDeleted { id, .. }
             | Op::SetLocal { id, .. }
             | Op::SetVersions { id, .. }

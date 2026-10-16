@@ -62,7 +62,8 @@ impl SettingsHashes {
 }
 
 /// Bump when the pipeline's output changes, to invalidate cached thumbnails.
-pub const RENDER_CACHE_VERSION: u64 = 64;
+/// 66: upstream preview NR scaling, mask/crop fixes and camera-look version 10.
+pub const RENDER_CACHE_VERSION: u64 = 66;
 
 /// Thumbnails render at one of these long edges (so window/cell size changes reuse the cache).
 pub const THUMB_SIZES: [usize; 4] = [128, 256, 384, 512];
@@ -228,10 +229,12 @@ impl DecodedSource {
     /// with any stored camera tone curve. The original's size comes from `header` either way: the
     /// decoder only sees the level it decoded.
     pub fn info_or(&self, header: SourceInfo) -> SourceInfo {
-        match &self.info {
-            Some(info) => SourceInfo { native_long: info.native_long.or(header.native_long), ..info.clone() },
-            None => SourceInfo { camera_tone: self.camera_tone.or(header.camera_tone), ..header },
+        let native_long = header.native_long;
+        let mut info = self.info.clone().unwrap_or_else(|| SourceInfo { camera_tone: self.camera_tone.or(header.camera_tone), ..header });
+        if info.native_long == 0 {
+            info.native_long = native_long;
         }
+        info
     }
 }
 
@@ -925,7 +928,12 @@ impl RenderJob {
                 photo: self.photo,
                 level: self.level,
                 key: self.key,
-                rendered: Ok(Rendered { image, histogram, deep: None }),
+                rendered: Ok(Rendered {
+                    image,
+                    histogram,
+                    deep: None,
+                    unsupported_edits: lightcraft_pipeline::profile_table_diagnostics(&self.settings, &self.request),
+                }),
                 gpu_fallback: None,
                 loaded: None,
                 quick: None,
@@ -945,7 +953,12 @@ impl RenderJob {
                 photo: self.photo,
                 level: self.level,
                 key: self.key,
-                rendered: Ok(Rendered { image, histogram, deep: None }),
+                rendered: Ok(Rendered {
+                    image,
+                    histogram,
+                    deep: None,
+                    unsupported_edits: lightcraft_pipeline::profile_table_diagnostics(&self.settings, &self.request),
+                }),
                 gpu_fallback: None,
                 loaded: None,
                 quick: None,
@@ -1048,6 +1061,7 @@ fn develop_image(
 ) -> (Rendered, Option<String>) {
     // LUT profiles have no GPU stage: they render on the CPU
     let fallback = if gpu
+        && lightcraft_pipeline::active_look_table(s).is_none()
         && !lightcraft_pipeline::lut::is_lut_profile(&s.profile.id)
         && !s.masks.iter().any(|m| m.visible && m.refine > 0.0)
         && req.proof.is_none()
@@ -1083,6 +1097,7 @@ pub enum QuickSource {
 /// renders, the embedded preview of an unedited raw, a thumbnail-level render.
 #[derive(Clone)]
 pub struct QuickJob {
+    pub unsupported_edits: Vec<String>,
     pub request_id: u64,
     pub photo: PhotoId,
     pub key: u64,
@@ -1130,7 +1145,7 @@ impl QuickJob {
         };
         let rendered = |image: Rgba8| {
             let histogram = Histogram::of_srgb8(&image);
-            Ok(Rendered { image, histogram, deep: None })
+            Ok(Rendered { image, histogram, deep: None, unsupported_edits: self.unsupported_edits.clone() })
         };
         for (cache, k) in &self.cached {
             if let Some(img) = cache.get(*k) {
@@ -1166,11 +1181,12 @@ pub fn source_info(p: &Photo) -> SourceInfo {
         return SourceInfo { raw: true, ..Default::default() };
     }
     // the thumbnail and preview levels are smaller copies: noise reduction works in the original's pixels (#960)
-    let native_long = Some(p.width.max(p.height) as usize).filter(|&n| n > 0);
+    let native_long = p.width.max(p.height) as usize;
     SourceInfo { native_long, ..header_info(p) }
 }
 
 fn header_info(p: &Photo) -> SourceInfo {
+    let base = SourceInfo::default();
     // A raw shown from its embedded preview is a rendered (display-referred) JPEG: relative white
     // balance and the display tone curve, like any other rendered file.
     if p.develops_raw() {
@@ -1184,10 +1200,10 @@ fn header_info(p: &Photo) -> SourceInfo {
             relative_wb: relative,
             // (a fitted-look raw edited in Kelvin: its camera's matrices give the scale, see `files::WbScaleOf`)
             legacy_relative_wb: p.fitted_look() && !relative,
-            ..Default::default()
+            ..base
         }
     } else {
-        SourceInfo::default()
+        base
     }
 }
 
@@ -1221,7 +1237,7 @@ impl crate::Session {
             source_edge_needed(&p, &settings, apply_crop, max_w.max(max_h))
         });
         let source = self.media.source_ref(&p, level);
-        let request = RenderRequest { apply_crop, ..RenderRequest::fit(max_w, max_h) };
+        let request = RenderRequest { apply_crop, imported_table: self.profile_table(&settings), ..RenderRequest::fit(max_w, max_h) };
         // the photo id is part of the key: two photos with the same settings and size must not
         // share a result (a view slot showing photo A would otherwise look current for photo B)
         // …and so is the file's content: a file changed on disk (Reload) renders afresh
@@ -1231,6 +1247,7 @@ impl crate::Session {
         // Temporary "before" settings must not replace the photo's cached develop hash.
         let settings_hash = if before { settings.hash64() } else { self.media.settings_hashes.get(id, &settings) };
         let salt = self.media.denoise_salt(id, &settings);
+        let table_key = self.profile_table_key(&settings);
         let key = settings_hash
             ^ ((max_w as u64) << 40)
             ^ ((max_h as u64) << 20)
@@ -1238,10 +1255,14 @@ impl crate::Session {
             ^ (level as u64) << 60
             ^ id.0.wrapping_mul(0x9e37_79b9_7f4a_7c15)
             ^ content.rotate_left(17)
-            ^ salt;
+            ^ salt
+            ^ table_key.map_or(0, |k| k.0 as u64 ^ (k.0 >> 64) as u64);
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
             k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION).u64(crate::camera_profiles::cache_key());
+            if let Some(table_key) = table_key {
+                k.update(&table_key.0.to_le_bytes());
+            }
             // (only a render that uses a denoised picture has it in its key, so every other thumbnail stays valid)
             if salt != 0 {
                 k.u64(salt);
@@ -1274,20 +1295,29 @@ impl crate::Session {
     pub fn preview_job(&mut self, id: PhotoId, max_w: usize, max_h: usize, apply_crop: bool, settings: &DevelopSettings) -> Option<RenderJob> {
         let mut job = self.render_job(id, max_w, max_h, false, apply_crop)?;
         job.settings = Arc::new(settings.clone());
-        job.key = settings.hash64() ^ ((max_w as u64) << 40) ^ ((max_h as u64) << 20) ^ (apply_crop as u64) ^ (job.level as u64) << 60;
+        job.request.imported_table = self.profile_table(settings);
+        job.key = settings.hash64()
+            ^ ((max_w as u64) << 40)
+            ^ ((max_h as u64) << 20)
+            ^ (apply_crop as u64)
+            ^ (job.level as u64) << 60
+            ^ self.profile_table_key(settings).map_or(0, |k| k.0 as u64 ^ (k.0 >> 64) as u64);
         Some(job)
     }
 
     /// Cache key of a variant thumbnail ([`Self::variant_job`]).
-    pub fn variant_key(p: &Photo, settings: &DevelopSettings, edge: usize) -> Hash128 {
-        Hasher128::new()
-            .str(&content_key(p))
+    pub fn variant_key(&self, p: &Photo, settings: &DevelopSettings, edge: usize) -> Hash128 {
+        let mut hash = Hasher128::new();
+        hash.str(&content_key(p))
             .str("variant")
             .u64(settings.hash64())
             .u64(edge as u64)
             .u64(RENDER_CACHE_VERSION)
-            .u64(crate::camera_profiles::cache_key())
-            .finish()
+            .u64(crate::camera_profiles::cache_key());
+        if let Some(table_key) = self.profile_table_key(settings) {
+            hash.update(&table_key.0.to_le_bytes());
+        }
+        hash.finish()
     }
 
     /// A thumbnail of `id` rendered with `settings` instead of its own (profile and preset
@@ -1300,7 +1330,7 @@ impl crate::Session {
         let edge = edge.clamp(16, SourceLevel::Thumb.max_edge());
         let level = SourceLevel::Thumb;
         let source = self.media.source_ref(&p, level);
-        let ck = Self::variant_key(&p, settings, edge);
+        let ck = self.variant_key(&p, settings, edge);
         Some(RenderJob {
             request_id: 0,
             cache_generation: self.media.rendered.generation(),
@@ -1311,7 +1341,7 @@ impl crate::Session {
             origin: p.source.clone(),
             info: source_info(&p),
             settings: Arc::new(settings.clone()),
-            request: RenderRequest { apply_crop: true, ..RenderRequest::fit(edge, edge) },
+            request: RenderRequest { apply_crop: true, imported_table: self.profile_table(settings), ..RenderRequest::fit(edge, edge) },
             key: (ck.0 as u64) ^ ((ck.0 >> 64) as u64),
             cache: Some((self.media.rendered.clone(), ck)),
             stages: None,
@@ -1353,7 +1383,8 @@ impl crate::Session {
         let needed = (edge as f64 * w.max(h) / side).ceil().min(SourceLevel::Preview.max_edge() as f64);
         let level = SourceLevel::for_size(needed as usize);
         let source = self.media.source_ref(&p, level);
-        let ck = Self::variant_key(&p, &settings, edge);
+        let ck = self.variant_key(&p, &settings, edge);
+        let imported_table = self.profile_table(&settings);
         let preview_cut = self.face_preview_cut(&p, rect, edge, needed as usize);
         Some(RenderJob {
             request_id: 0,
@@ -1365,7 +1396,7 @@ impl crate::Session {
             origin: p.source.clone(),
             info: source_info(&p),
             settings: Arc::new(settings),
-            request: RenderRequest { apply_crop: true, ..RenderRequest::fit(edge, edge) },
+            request: RenderRequest { apply_crop: true, imported_table, ..RenderRequest::fit(edge, edge) },
             key: (ck.0 as u64) ^ ((ck.0 >> 64) as u64),
             cache: Some((self.media.rendered.clone(), ck)),
             stages: None,
@@ -1393,15 +1424,18 @@ impl crate::Session {
     }
 
     /// Size-independent cache key of a photo's view render (loupe) for its current settings.
-    fn view_key(p: &Photo, apply_crop: bool) -> Hash128 {
-        Hasher128::new()
-            .str(&content_key(p))
+    fn view_key(&self, p: &Photo, apply_crop: bool) -> Hash128 {
+        let mut hash = Hasher128::new();
+        hash.str(&content_key(p))
             .str("view")
             .u64(p.develop.hash64())
             .u64(apply_crop as u64)
             .u64(RENDER_CACHE_VERSION)
-            .u64(crate::camera_profiles::cache_key())
-            .finish()
+            .u64(crate::camera_profiles::cache_key());
+        if let Some(table_key) = self.profile_table_key(&p.develop) {
+            hash.update(&table_key.0.to_le_bytes());
+        }
+        hash.finish()
     }
 
     /// The loupe's render job: like [`Self::render_job`], and a full-quality result is kept as the
@@ -1409,7 +1443,7 @@ impl crate::Session {
     pub fn loupe_job(&mut self, id: PhotoId, max_w: usize, max_h: usize, apply_crop: bool) -> Option<RenderJob> {
         let mut job = self.render_job(id, max_w, max_h, false, apply_crop)?;
         let p = self.catalog.photo(id)?;
-        job.view_cache = Some((self.media.rendered.clone(), Self::view_key(p, apply_crop)));
+        job.view_cache = Some((self.media.rendered.clone(), self.view_key(p, apply_crop)));
         Some(job)
     }
 
@@ -1478,6 +1512,9 @@ impl crate::Session {
 
     /// The embedded preview of an unedited raw (path, loader), when the app installed a loader.
     fn embedded_of(&self, p: &Photo) -> Option<(String, PreviewLoader)> {
+        if lightcraft_pipeline::active_look_table(&p.develop).is_some() {
+            return None;
+        }
         match (&p.source, &self.media.preview_loader) {
             (Source::File { path }, Some(l)) if p.kind == MediaKind::Raw && crate::import::has_import_look(p) => Some((path.clone(), l.clone())),
             _ => None,
@@ -1518,11 +1555,17 @@ impl crate::Session {
         let p = self.catalog.photo(id)?.clone();
         let small = self.thumb_job(id, THUMB_SIZES[THUMB_SIZES.len() - 1])?;
         // (the thumbnail job itself starts with the cached thumbnail, after the sharper embedded preview)
-        let cached = vec![(self.media.rendered.clone(), Self::view_key(&p, apply_crop))];
-        let h = Hasher128::new().str(&content_key(&p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).finish();
+        let cached = vec![(self.media.rendered.clone(), self.view_key(&p, apply_crop))];
+        let mut hash = Hasher128::new();
+        hash.str(&content_key(&p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64);
+        if let Some(table_key) = self.profile_table_key(&p.develop) {
+            hash.update(&table_key.0.to_le_bytes());
+        }
+        let h = hash.finish();
         let key = h.0 as u64;
         let embedded = self.embedded_of(&p).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
-        Some(QuickJob { request_id: 0, photo: id, key, cached, embedded, small: apply_crop.then(|| Box::new(small)) })
+        let unsupported_edits = lightcraft_pipeline::profile_table_diagnostics(&small.settings, &small.request);
+        Some(QuickJob { unsupported_edits, request_id: 0, photo: id, key, cached, embedded, small: apply_crop.then(|| Box::new(small)) })
     }
 
     /// A first grid thumbnail for an unedited raw: the cached render for `job` (the real
@@ -1536,6 +1579,7 @@ impl crate::Session {
         let (path, l) = self.embedded_of(&p)?;
         let edge = job.request.max_w.max(job.request.max_h);
         Some(QuickJob {
+            unsupported_edits: lightcraft_pipeline::profile_table_diagnostics(&job.settings, &job.request),
             request_id: 0,
             photo: job.photo,
             key: job.key,
@@ -1785,6 +1829,7 @@ mod thumbnail_hash_tests {
             photo: PhotoId(1),
             key: 9,
             cached: Vec::new(),
+            unsupported_edits: Vec::new(),
             embedded: Some(("x.arw".into(), Arc::new(|_: &str, _: usize| -> Option<Rgba8> { panic!("preview reader bug") }), 256)),
             small: None,
         };
@@ -1803,14 +1848,14 @@ mod tests {
         // issue #960: noise reduction works in the original's pixels, so a grid cell drawn from the
         // 512-px thumbnail level denoises like a scaled-down export
         let p = Photo::new(PhotoId(1), Source::File { path: "/photos/a.ARW".into() }, "a.ARW", "ARW", 6000, 4000, "");
-        assert_eq!(source_info(&p).native_long, Some(6000));
+        assert_eq!(source_info(&p).native_long, 6000);
         let decoded = SourceInfo { raw: true, as_shot_temp: 4800.0, ..Default::default() };
         let thumb = DecodedSource::new(Arc::new(Rgb32f::new(8, 8)), Some(decoded.clone()));
         let info = thumb.info_or(source_info(&p));
-        assert_eq!(info, SourceInfo { native_long: Some(6000), ..decoded }, "the decoder's facts, the catalog's size");
+        assert_eq!(info, SourceInfo { native_long: 6000, ..decoded }, "the decoder's facts, the catalog's size");
         let unknown = Photo::new(PhotoId(2), Source::File { path: "/photos/b.jpg".into() }, "b.jpg", "JPEG", 0, 0, "");
-        assert_eq!(source_info(&unknown).native_long, None);
-        assert_eq!(source_info(&Photo::new(PhotoId(3), Source::Demo { scene: 0 }, "d", "ARW", 600, 400, "")).native_long, None);
+        assert_eq!(source_info(&unknown).native_long, 0);
+        assert_eq!(source_info(&Photo::new(PhotoId(3), Source::Demo { scene: 0 }, "d", "ARW", 600, 400, "")).native_long, 0);
     }
 
     #[test]
@@ -1923,7 +1968,7 @@ mod tests {
             denoise: None,
         };
         let undo_before = s.undo.len();
-        let request = job.request;
+        let request = job.request.clone();
         let r = job.run();
         let new = r.rendered.as_ref().unwrap().image.data.clone();
         // the old pipeline: the same settings against the relative-scale source facts of an older build
