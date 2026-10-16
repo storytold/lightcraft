@@ -109,6 +109,24 @@ async fn store_file(originals: Originals, backend: Option<Backend>, name: String
     ctx.request_repaint();
 }
 
+/// A keyed invite already carries the photo bytes. Store them the same way a drop does, so the
+/// next frame imports the path `store_file` queued. LightCraft's import is asynchronous, so this
+/// does not wait for the photo to appear in the grid.
+fn open_invite(app: &mut LightcraftApp, originals: &Originals, backend: &Option<Backend>, ctx: &egui::Context, invitation: craft_cloud_client::invite::Invitation) {
+    let name = invitation.name.clone();
+    let bytes = invitation.document.clone();
+    let mode = if invitation.read_only() { " (view only)" } else { "" };
+    let who = if invitation.recipient.is_empty() { String::new() } else { format!(" (shared with {})", invitation.recipient) };
+    if let Err(e) = invitation.join() {
+        log::warn!("invite relay join failed: {e}");
+    }
+    app.ui.status = format!("Adding \"{name}\"{mode}{who}");
+    let (originals, backend, ctx) = (originals.clone(), backend.clone(), ctx.clone());
+    wasm_bindgen_futures::spawn_local(async move {
+        store_file(originals, backend, name, bytes, ctx).await;
+    });
+}
+
 /// Read a browser `File` into storage.
 async fn read_file(originals: Originals, backend: Option<Backend>, file: web_sys::File, ctx: egui::Context) {
     match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
@@ -388,7 +406,7 @@ struct WebApp {
 }
 
 impl WebApp {
-    fn new(cc: &eframe::CreationContext<'_>, boot: Boot, chinese_font: Vec<u8>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>, boot: Boot, chinese_font: Vec<u8>, invite: Option<craft_cloud_client::invite::Invitation>) -> Self {
         let Boot { opts, backend, files, index, lib_dir } = boot;
         let originals = Originals::default();
         let t = perf_now();
@@ -435,11 +453,28 @@ impl WebApp {
         let frozen = Rc::new(Cell::new(false));
         let mut app = LightcraftApp::new(session, services(originals.clone(), backend.clone(), files.clone(), frozen.clone(), cc.egui_ctx.clone()))
             .with_chinese_font(chinese_font);
+        // Cloud storage through CollabCraft, when the app is served from its origin.
+        // Same-origin cookies carry the session; no token file on web.
+        // This block is always compiled (we are in the wasm32 module), but the
+        // cloud module itself is gated to wasm32, which is the only target that
+        // builds this file.
+        {
+            use crate::cloud::Service as CloudService;
+            let svc = CloudService::new(cc.egui_ctx.clone());
+            app.cloud.connect(svc);
+            app.share.connect(collabcraft_share::CollabCraft::from_fn(|| Some(craft_cloud_client::Client::from_page())).for_app("lightcraft"));
+        }
+        // Kick off the initial account probe and root-folder listing so the cloud
+        // controls are populated from the first frame (matches WordCraft/DeckCraft).
+        lightcraft_ui_egui::cloud::start(&mut app);
         let ui_written = files.get("ui.json").unwrap_or_default();
         if let Ok(ui) = serde_json::from_slice::<UiState>(&ui_written) {
             app.ui = ui;
         }
         app.ui = app.ui.sanitized();
+        if let Some(invitation) = invite {
+            open_invite(&mut app, &originals, &backend, &cc.egui_ctx, invitation);
+        }
         app.library_problem = problem;
         let n = opts.workers.unwrap_or_else(|| {
             let cores = window().map_or(1, |w| w.navigator().hardware_concurrency() as usize);
@@ -694,9 +729,17 @@ pub fn start(chinese_font: Vec<u8>) {
             log::error!("missing <canvas id=\"lightcraft_canvas\">");
             return;
         };
+        let invite = match craft_cloud_client::invite::arrive().await {
+            craft_cloud_client::invite::Arrival::Ordinary => None,
+            craft_cloud_client::invite::Arrival::Refused(reason) => {
+                craft_cloud_client::invite::refuse(&reason);
+                return;
+            }
+            craft_cloud_client::invite::Arrival::Invited(invitation) => Some(invitation),
+        };
         let boot = boot(opts).await;
         let runner = eframe::WebRunner::new();
-        let r = runner.start(canvas, eframe::WebOptions::default(), Box::new(move |cc| Ok(Box::new(WebApp::new(cc, boot, chinese_font))))).await;
+        let r = runner.start(canvas, eframe::WebOptions::default(), Box::new(move |cc| Ok(Box::new(WebApp::new(cc, boot, chinese_font, invite))))).await;
         match r {
             Ok(()) => {
                 if let Some(el) = window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id("lightcraft_loading")) {

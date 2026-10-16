@@ -188,6 +188,39 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ("bell", Icon::Bell, "Activity", "panel.activity"),
             ] {
                 let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
+                // When a cloud service is configured the static storage-status
+                // icon is replaced by the live account badge from craft-ui. The
+                // badge fits the same 28 × 28 slot; it grows rightward into the
+                // space the title bar leaves, which is never occupied on the
+                // narrow end of a large-photo window.
+                if id == "cloud" && crate::cloud::available(app) {
+                    // Account badge + presence. Both draw inside the allocated rect.
+                    let badge_rect = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, full.height()));
+                    // A transparent interaction on the badge area provides the context menu:
+                    // left-click is handled by the account badge itself (sign in/out);
+                    // right-click opens the cloud file browser directly from the top bar.
+                    let overlay = ui.interact(badge_rect, egui::Id::new("cloud-badge-ctx"), egui::Sense::click());
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(badge_rect));
+                    crate::cloud::who(app, &mut child);
+                    register(ui.ctx(), "icon:cloud", badge_rect);
+                    overlay.context_menu(|ui| {
+                        let open = ui.button(crate::i18n::tr("Open from CollabCraft…"));
+                        register(ui.ctx(), "menu:cloudOpen", open.rect);
+                        if open.clicked() {
+                            let _ = app.run("file.cloudOpen", json!({}));
+                            ui.close();
+                        }
+                        let has_photo = app.session.active().is_some();
+                        let save = ui.add_enabled(has_photo, egui::Button::new(crate::i18n::tr("Save to CollabCraft…")));
+                        register(ui.ctx(), "menu:cloudSave", save.rect);
+                        if save.clicked() {
+                            let _ = app.run("file.cloudSave", json!({}));
+                            ui.close();
+                        }
+                    });
+                    x -= 40.0;
+                    continue;
+                }
                 let resp = ui.interact(r, egui::Id::new(("top", id)), Sense::click()).on_hover_text(crate::i18n::tr(tip));
                 crate::widgets::announce(&resp, crate::i18n::tr(tip));
                 register(ui.ctx(), format!("icon:{id}"), r);

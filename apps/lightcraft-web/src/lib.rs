@@ -25,6 +25,8 @@ pub mod wire;
 #[cfg(target_arch = "wasm32")]
 mod backend;
 #[cfg(target_arch = "wasm32")]
+pub mod cloud;
+#[cfg(target_arch = "wasm32")]
 mod safety;
 #[cfg(target_arch = "wasm32")]
 mod web;

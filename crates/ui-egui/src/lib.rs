@@ -10,6 +10,7 @@ pub mod album_picker;
 pub mod brush_live;
 pub mod button;
 pub mod canvas_keys;
+pub mod cloud;
 mod command_error;
 pub mod control;
 pub mod credits;
@@ -63,6 +64,8 @@ mod tests_browse_active;
 mod tests_button;
 #[cfg(test)]
 mod tests_canvas_keys;
+#[cfg(test)]
+mod tests_cloud;
 #[cfg(test)]
 mod tests_compare;
 #[cfg(test)]
@@ -478,6 +481,14 @@ pub struct LightcraftApp {
     pub library_problem: Option<panels::library_problem::LibraryProblem>,
     /// The activity stack shows every task, not just the first few ("+N more" was clicked).
     pub activity_expanded: bool,
+    /// Cloud file browser / save / share state. Driven every frame by `cloud::pump`.
+    pub cloud: craft_ui::cloud::CloudFiles,
+    /// Share-dialog state. Shown by `share.show(ctx)` every frame.
+    pub share: craft_ui::share::ShareDialog,
+    /// Presence bar (other users viewing the same photo). Populated by `pump`.
+    pub presence: craft_ui::presence::PresenceBar,
+    /// Which cloud page the user opened from the File menu, if any.
+    pub cloud_page: Option<cloud::CloudPage>,
 }
 
 impl LightcraftApp {
@@ -557,6 +568,10 @@ impl LightcraftApp {
             library_problem: None,
             activity_expanded: false,
             model_setup: Default::default(),
+            cloud: Default::default(),
+            share: Default::default(),
+            presence: Default::default(),
+            cloud_page: None,
         }
     }
 
@@ -1118,6 +1133,11 @@ impl LightcraftApp {
         self.save_status(ctx);
         self.slideshow_tick(ctx);
         panels::faces::pump(self, ctx);
+        // Cloud Open / Save / Share: drain the worker channel and advance the UI state.
+        cloud::pump(self, ctx);
+        // Share dialog: draw the modal overlay when it is open. Called from logic so it appears
+        // even when the topbar (which normally opens it) is not drawn this frame.
+        self.share.show(ctx);
         // back from an external editor: pick up the files it saved
         let focused = ctx.input(|i| i.focused);
         if focused && !self.ui.was_focused && !self.ui.external_edits.is_empty() {
@@ -1445,6 +1465,9 @@ impl LightcraftApp {
             panels::notices::show(self, &ctx);
             panels::dialogs::show(self, &ctx);
             panels::library_problem::show(self, &ctx);
+            if let Some(page) = self.cloud_page {
+                cloud::modal(self, page, &ctx);
+            }
             panels::toast(self, &ctx);
             self.widgets = widgets::take_registry(&ctx);
             self.end_frame(&ctx, t0);
@@ -1463,6 +1486,10 @@ impl LightcraftApp {
         panels::notices::show(self, &ctx);
         panels::dialogs::show(self, &ctx);
         panels::library_problem::show(self, &ctx);
+        // Cloud Open / Save modal: drawn above all panels, below system dialogs.
+        if let Some(page) = self.cloud_page {
+            cloud::modal(self, page, &ctx);
+        }
         export_task::poll(self, &ctx);
         slideshow_export::poll(self, &ctx);
         panels::activity::show(self, &ctx);
