@@ -542,8 +542,10 @@ fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::path::Path>
                 .pick_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),
+        // (asked on the UI thread when the dialog off it can't be started, for whatever a folder
+        // is needed: a library to open, where backups go, a backup to restore. Its title fits all)
         pick_folder: Some(Box::new(|| {
-            file_dialog().set_title(lightcraft_ui_egui::i18n::tr("Open Library")).pick_folder().map(|p| p.to_string_lossy().to_string())
+            file_dialog().set_title(lightcraft_ui_egui::i18n::tr("Choose a Folder")).pick_folder().map(|p| p.to_string_lossy().to_string())
         })),
         #[cfg(target_os = "linux")]
         open_model_folder: Some(std::sync::Arc::new(|path: &str| {
