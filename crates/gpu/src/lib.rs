@@ -31,6 +31,8 @@ use lightcraft_raster::Rgb32f;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod backend;
+#[cfg(all(any(feature = "denoise", feature = "vision"), not(target_arch = "wasm32")))]
+mod compute;
 #[cfg(not(target_arch = "wasm32"))]
 mod ctx;
 #[cfg(not(target_arch = "wasm32"))]
@@ -43,6 +45,8 @@ pub mod nn;
 mod params;
 #[cfg(not(target_arch = "wasm32"))]
 mod render;
+#[cfg(all(feature = "vision", not(target_arch = "wasm32")))]
+pub mod transformer;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use render::GpuStages;
@@ -241,8 +245,9 @@ pub fn wait_idle(timeout: std::time::Duration) -> bool {
     }
 }
 
-/// Why GPU compute that has a device of its own (denoise, faces) is switched off by the user's settings, or `None`: the
-/// environment switches and the rendering preference, but not a render-device failure (the devices are separate).
+/// Why GPU compute that has a device of its own (denoise, faces, the content models) is switched off by the user's
+/// settings, or `None`: the environment switches and the rendering preference, but not a render-device failure (the
+/// devices are separate).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn switched_off() -> Option<String> {
     if env_disabled() {

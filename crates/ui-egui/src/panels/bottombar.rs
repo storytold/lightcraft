@@ -284,6 +284,14 @@ fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let _ = app.run("library.sort", json!({"key": k}));
         }
     }
+    // best match first: only while searching by contents
+    let searching = app.session.content_ask().is_some();
+    let r = ui.add_enabled(searching, egui::Button::selectable(cur.key == Relevance, crate::i18n::tr("Relevance")));
+    crate::widgets::register(ui.ctx(), "menu:sortRelevance", r.rect);
+    let r = r.on_disabled_hover_text(crate::i18n::tr("Search by contents to sort by how well photos match"));
+    if r.clicked() {
+        let _ = app.run("library.sort", json!({"key": "relevance", "ascending": false}));
+    }
     if cur.key == Random && ui.button(crate::i18n::tr("Reshuffle")).clicked() {
         let _ = app.run("library.shuffle", json!({}));
     }

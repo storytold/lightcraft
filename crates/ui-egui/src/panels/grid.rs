@@ -144,7 +144,8 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let sel_n = app.session.selection.ids.len();
     let chips = lightcraft_engine::filter_chips(&app.session.filter, &app.session.catalog);
     let total = app.session.source_total();
-    let counted = super::chips::count_text(ids.len(), total, !chips.is_empty());
+    let content = app.session.content_view();
+    let counted = super::chips::count_text(ids.len(), total, !chips.is_empty() || content.is_some());
     let cnt = if sel_n > 1 { crate::i18n::tr_format!("{sel_n} selected · {counted}", counted = counted, sel_n = sel_n) } else { counted };
     match app.session.browse.clone().filter(|_| app.session.source == lightcraft_engine::LibrarySource::Folder) {
         Some(b) => {
@@ -169,13 +170,25 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         }
     }
+    super::chips::content_strip(app, ui);
     super::chips::show(app, ui, &chips);
     if app.ui.filter_bar {
         super::filterbar::show(app, ui);
     }
     app.canvas_rect = Some(ui.max_rect());
     if ids.is_empty() {
-        if !chips.is_empty() {
+        if let Some(v) = &content {
+            use lightcraft_engine::content_query::ContentState;
+            let (title, body) = match &v.state {
+                ContentState::Preparing => ("Preparing search…", crate::i18n::tr("The search model is loading").to_string()),
+                ContentState::Problem(p) => ("Nothing to show for this search", crate::i18n::tr(p).to_string()),
+                ContentState::Ready if v.indexed == 0 => {
+                    ("No photos are indexed yet", crate::i18n::tr("Turn on Index photo contents in Settings → Search").to_string())
+                }
+                ContentState::Ready => ("No matching photos", crate::i18n::tr("Try More, other words, or remove a filter above").to_string()),
+            };
+            super::empty_message(ui, ui.max_rect(), title, &body);
+        } else if !chips.is_empty() {
             let body = match total {
                 Some(n) if n > 0 => {
                     crate::i18n::tr_format!("{n} photos in {} are hidden by the filters above", crate::i18n::source_title(&app.session), n = n)
@@ -231,7 +244,18 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let active = app.session.selection.active;
     // bring the active photo into view when it changes (keyboard, click, command) or the grid
     // comes back on screen; otherwise the scroll position is the user's
-    let scroll_to: Option<Rect> = if follow_active(ui.ctx(), egui::Id::new("grid-follow-active"), active, app.session.source) {
+    // a new search by contents starts at its best match (the top), wherever the grid was scrolled
+    let ask = app.session.content_ask().map(|a| format!("{a:?}"));
+    let new_ask = ui.ctx().data_mut(|d| {
+        let key = egui::Id::new("grid-content-ask");
+        let was: Option<Option<String>> = d.get_temp(key);
+        d.insert_temp(key, ask.clone());
+        ask.is_some() && was.is_some_and(|w| w != ask)
+    });
+    let follow = follow_active(ui.ctx(), egui::Id::new("grid-follow-active"), active, app.session.source);
+    let scroll_to: Option<Rect> = if new_ask {
+        lay.cells.first().copied()
+    } else if follow {
         active.and_then(|a| ids.iter().position(|x| *x == a)).and_then(|i| lay.cells.get(i).copied())
     } else {
         None
@@ -755,6 +779,21 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     if photo.flag == Flag::Reject {
         p.rect_filled(img_rect, 0.0, Color32::from_black_alpha(110));
     }
+    // a search by contents: on hover, how well this photo matched (a thin bar against the best match, and the score)
+    let resp = match app.session.content_score(id) {
+        Some(score) => {
+            if resp.hovered() {
+                let top = app.session.content_top_score().filter(|t| *t > 0.0).unwrap_or(1.0);
+                let frac = (score / top).clamp(0.0, 1.0);
+                let track = Rect::from_min_size(img_rect.left_top() + vec2(6.0, 6.0), vec2((img_rect.width() - 12.0).clamp(0.0, 80.0), 3.0));
+                p.rect_filled(track, 1.5, Color32::from_black_alpha(140));
+                p.rect_filled(Rect::from_min_size(track.min, vec2(track.width() * frac, track.height())), 1.5, t.accent);
+                register(ui.ctx(), format!("match:{}", id.0), track);
+            }
+            resp.on_hover_text(crate::i18n::tr_format!("match {score}", score = format!("{:.2}", score.min(1.0))))
+        }
+        None => resp,
+    };
     // interaction
     if let Some(k) = app.ui.keyword_painter.clone() {
         // painting: a click toggles the keyword on this photo
@@ -1078,6 +1117,14 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     crate::i18n::tr_format!("{n} similar photo{} · View ▸ Clear Filters to see all", if n == 1 { "" } else { "s" }, n = n),
                 );
             }
+            Err(e) => app.toast(ui.ctx(), e),
+        }
+    }
+    let similar = ui.button(crate::i18n::tr("Find Similar Contents"));
+    register(ui.ctx(), "menu:findSimilarContents", similar.rect);
+    if similar.on_hover_text(crate::i18n::tr("Photos showing the same kind of things (the content index, Settings → Search)")).clicked() {
+        match app.run("content.similar", json!({"id": id.0, "show": true})) {
+            Ok(_) => app.ui.view = crate::state::ViewMode::PhotoGrid,
             Err(e) => app.toast(ui.ctx(), e),
         }
     }

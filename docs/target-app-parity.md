@@ -1,6 +1,6 @@
 # Target-app parity: LightCraft vs Adobe Lightroom
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (natural-language search stays 🟡: a second model family, CLIP, and per-model cut-offs; headline numbers unchanged) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
 
 The authoritative assessment of how close LightCraft is to Lightroom. The row-by-row checklist is
 [parity-checklist.md](parity-checklist.md); the ranked work list is [gaps.md](gaps.md); deep areas
@@ -103,7 +103,7 @@ search embeddings; generative remove runs in Adobe's cloud.
 | Faces / People | YuNet detection, SFace / AuraFace recognition (opt-in downloads), People view | ✅ (MVP, [faces.md](faces.md)) |
 | Assisted culling | focus, bursts | 🟡 (no eyes-open / aesthetics scores) |
 | Auto (tone), adaptive presets | Auto calibrated on Lightroom's Auto results (#628); no adaptive presets | 🟡 |
-| Natural-language search | — | ⬜ |
+| Natural-language search | local content models, pure Rust on candle: SigLIP 2 (Base 1.5 GB, So400m 4.6 GB, multilingual) and CLIP ViT-B/32 (0.6 GB, English), opt-in downloads, each with its own index; search bar Contents mode and `contents:` words, Relevance sort, Find Similar Contents, auto-tags (Contents filter, Keywording suggestions, Smart Collection rule), cut-offs measured per model ([content-search.md](content-search.md)); not in the web build, English vocabulary, quality not compared with Lightroom's | 🟡 |
 
 **Blocked on a model strategy** (maintainer decision): licensable weights or our own training;
 pure-Rust inference is proven (faces, SAM 3, denoise).
@@ -300,6 +300,9 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Natural-language search stays 🟡: CLIP ViT-B/32 as a second model family (switching keeps each model's index), So400m and CLIP cut-offs measured; headline numbers not re-derived |
+| 2026-10-15 | minor | Natural-language search stays 🟡: auto-tags added (Contents filter, Keywording suggestions, Smart Collection Contents rule); one model family, no web build; headline numbers not re-derived |
+| 2026-10-15 | minor | Natural-language search ⬜ → 🟡 (local content search from the search bar; auto-tags still missing); headline numbers not re-derived |
 | 2026-10-14 | minor | Localization ~52% → ~55% (mean of the 12 key languages): de, es, fr, ja and uk catalogs filled |
 | 2026-10-12 | minor | UI/UX remaining 34–58 h → 32–54 h (canvas tools by keyboard); headline numbers unchanged |
 | 2026-10-14 | minor | Merge and HDR: merge 100% → 88% (LR-MERGE-HDR ✅ → 🟡 after testing on real 67 MP brackets; gap 29); area percentages unchanged |

@@ -66,6 +66,10 @@ mod tests_canvas_keys;
 #[cfg(test)]
 mod tests_compare;
 #[cfg(test)]
+mod tests_content_search;
+#[cfg(test)]
+mod tests_content_tags;
+#[cfg(test)]
 mod tests_copy_paste_dialogs;
 #[cfg(test)]
 mod tests_crop_rotate;
@@ -1207,6 +1211,7 @@ impl LightcraftApp {
         panels::denoise::pump(self, ctx);
         model_setup::pump(self, ctx);
         panels::faces::pump(self, ctx);
+        panels::content::pump(self, ctx);
         focus_scan::pump(self, ctx);
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);
@@ -1640,6 +1645,8 @@ pub struct Caches {
     folder_tree: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::FolderNode>>)>,
     people: Option<(u64, lightcraft_catalog::Filter, std::sync::Arc<Vec<lightcraft_catalog::Person>>)>,
     suggestions: Option<(u64, std::sync::Arc<Vec<String>>)>,
+    /// "Suggested from contents" (auto-tags) for the selection, by selection, library revision and tags.
+    content_suggestions: Option<(u64, std::sync::Arc<Vec<lightcraft_engine::ContentSuggestion>>)>,
     /// What the Add keyword box offers for the text typed in it, by library revision, the
     /// selection's keywords and that text.
     completions: Option<(u64, std::sync::Arc<panels::keywording::Offers>)>,
@@ -1690,6 +1697,9 @@ pub struct Caches {
     pub unnamed: Option<(u64, u64, f64, std::sync::Arc<panels::unnamed::Unnamed>)>,
     /// The most photos the face scan has had left at once since it last finished (the progress bar's whole).
     pub faces_peak: u64,
+    /// Content indexing: when to call `content.pump` next, and whether it was indexing then.
+    pub content_next_pump: f64,
+    pub content_indexing: bool,
     person_names: Option<(u64, std::sync::Arc<Vec<String>>)>,
     /// The grid's date runs, layout and indexes (by the visible list's generation).
     pub grid: panels::grid::GridCache,
@@ -1915,6 +1925,23 @@ impl Caches {
             }
         }
     }
+    /// The auto-tags suggested for `photos` (the Keywording panel's "Suggested from contents"), worked out again only
+    /// when the selection, the library or the tags change.
+    pub fn content_suggestions(
+        &mut self,
+        session: &mut lightcraft_engine::Session,
+        photos: &[lightcraft_catalog::PhotoId],
+    ) -> std::sync::Arc<Vec<lightcraft_engine::ContentSuggestion>> {
+        let k = key_of((session.catalog.revision, photos, session.content_tags_generation()));
+        match &self.content_suggestions {
+            Some((h, v)) if *h == k => v.clone(),
+            _ => {
+                let v = std::sync::Arc::new(session.content_suggestions(photos));
+                self.content_suggestions = Some((k, v.clone()));
+                v
+            }
+        }
+    }
     /// What the Add keyword box offers for `typed` (see [`panels::keywording::offers`]). Kept apart
     /// from [`Self::suggestions`]: both are asked for on every frame of typing, and each looks
     /// through the library's keywords.
@@ -1964,7 +1991,16 @@ impl Caches {
     ) -> std::sync::Arc<RulesView> {
         let relative = rules.depends_on_now();
         let minute = if relative { now.get(..16).unwrap_or(now) } else { "" };
-        let k = key_of((cat.revision, serde_json::to_string(rules).unwrap_or_default(), editing, &folder, minute, i18n::language().code()));
+        // (and what contents rules see, when the engine's content index changes)
+        let k = key_of((
+            cat.revision,
+            serde_json::to_string(rules).unwrap_or_default(),
+            editing,
+            &folder,
+            minute,
+            i18n::language().code(),
+            lightcraft_catalog::rules::context_generation(),
+        ));
         if let Some((key, v)) = &self.rules_view
             && *key == k
         {
@@ -2025,7 +2061,10 @@ impl Caches {
         let minute = if relative { now.get(..16).unwrap_or(now) } else { "" };
         // the counts of this minute, if there are any: an edit to a photo or a few is followed from them, a smart
         // album asking only those photos again; anything more, or a new minute, is counted from every photo
-        let kept = self.album_counts.take().filter(|(of, _, _)| of == minute);
+        // (and what contents rules see: auto-tags, texts, from the engine's content index; when that changes, every
+        // photo is counted again)
+        let minute = format!("{minute}|{}", lightcraft_catalog::rules::context_generation());
+        let kept = self.album_counts.take().filter(|(of, _, _)| *of == minute);
         if let Some((_, tally, shown)) = &kept
             && tally.revision() == cat.revision
         {
@@ -2052,7 +2091,7 @@ impl Caches {
             }
         };
         let shown = std::sync::Arc::new(tally.counts().clone());
-        self.album_counts = Some((minute.to_string(), tally, shown.clone()));
+        self.album_counts = Some((minute, tally, shown.clone()));
         shown
     }
 }
