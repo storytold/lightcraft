@@ -34,7 +34,8 @@ use lightcraft_raw::{
 /// 7: the sensor proxy follows the file's lens warp when the camera JPEG is lens-corrected.
 /// 8: the bundled NIKON Z 6_2 profile.
 /// 9: the bundled NIKON Z 8 and NIKON D5300 profiles.
-pub const LOOK_VERSION: u32 = 9;
+/// 10: DNG tone fit for profiles with a look table and for 1024 px (Lightroom) previews.
+pub const LOOK_VERSION: u32 = 10;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
@@ -107,14 +108,13 @@ fn identity_tone_curve(curve: Option<&lightcraft_raw::profile::ToneCurve>) -> bo
 }
 
 /// A DNG with its own colour model whose tone is not (yet) defined by the file: a matrix, no
-/// non-identity `ProfileToneCurve`, no `LookTable` (a look table is the file's own rendering).
+/// non-identity `ProfileToneCurve` and no `ProfileGainTableMap`. A `LookTable` does not define the tone: an
+/// Adobe Standard profile carries one without a tone curve and is rendered with Lightroom's default curve on
+/// top (Lightroom Classic's lossy DNGs rendered flat and dull without a fit), and the fit applies the tables
+/// to its proxy, so it fits only the tone around them.
 pub(crate) fn dng_tone_eligible(raw: &RawImage, t: &CameraTransform) -> bool {
     let p = &raw.color.profile;
-    raw.format == RawFormat::Dng
-        && !t.matrix_is_fallback
-        && identity_tone_curve(p.tone_curve.as_ref())
-        && p.look_table.is_none()
-        && p.gain_table_map.is_none()
+    raw.format == RawFormat::Dng && !t.matrix_is_fallback && identity_tone_curve(p.tone_curve.as_ref()) && p.gain_table_map.is_none()
 }
 
 /// [`starting_colour`] with the JPEG fit (the look, and whether the JPEG is black and white) and the black-and-white
@@ -424,9 +424,9 @@ const FIT_PREVIEW_MAX_PIXELS: u64 = 128_000_000;
 
 /// A DNG's tone and chroma curves fitted to its own camera JPEG ([`dng_tone_eligible`]); the file's colour model
 /// (matrix, profile tables, white balance) stays as it is: the proxy goes through the file's tables and the given
-/// colour of the search is the identity. Same held-out acceptance gates as [`fit_look`]; the preview must be near
-/// the raw's size, show the same picture ([`structure_agrees`]), and the curve must not clip more highlights than
-/// the plain render ([`clips_more`]).
+/// colour of the search is the identity. Same held-out acceptance gates as [`fit_look`]; the preview must not be a
+/// thumbnail ([`MIN_PREVIEW_FRACTION`]), must show the same picture ([`structure_agrees`]), and the curve must not
+/// clip more highlights than the plain render ([`clips_more`]).
 fn fit_dng_tone(raw: &RawImage, bytes: &[u8], transform: &CameraTransform, lens: Option<&lightcraft_develop::EmbeddedLens>) -> Option<CameraLook> {
     // Logged under LIGHTCRAFT_PROFILE so a corpus run can count the outcome per gate.
     let refuse = |why: &str| {
@@ -500,8 +500,9 @@ fn correct_vignetting(sensor: &mut Rgb32f, lens: Option<&lightcraft_develop::Emb
 }
 
 /// The embedded preview's long edge must be at least this share of the raw's (and 384 px): a DNG whose preview is a
-/// small thumbnail is not fitted.
-const MIN_PREVIEW_FRACTION: f64 = 0.9;
+/// small thumbnail is not fitted. The fit itself runs on a proxy of at most 384 px, so the 1024 px preview
+/// Lightroom writes into its DNGs (15% of a 33 MP raw's long edge) is plenty.
+const MIN_PREVIEW_FRACTION: f64 = 0.1;
 
 /// Lowest preview luminance and channel value a tone-only fit trains on (the other fits use 0.015 and 0.004): a dark
 /// night scene has most of its pixels below 0.015, and a curve fitted without them overshoots its shadows.
@@ -3959,7 +3960,7 @@ mod tests {
     }
 
     /// Which DNGs get a tone fitted to their camera JPEG: a colour matrix, a tone curve that is absent or the
-    /// identity, no look table; and no other raw format.
+    /// identity, with or without a look table; and no other raw format.
     #[test]
     fn dng_tone_gates_follow_the_files_own_tags() {
         use lightcraft_raw::profile::{HsvTable, ToneCurve};
@@ -3981,6 +3982,15 @@ mod tests {
         assert!(curved.profile.tone_curve.is_some() && !eligible(RawFormat::Dng, curved), "the file's own tone curve is kept");
         let mut looked = color;
         looked.profile.look_table = HsvTable::from_tags(&[1, 2, 1], &[0.0, 1.0, 1.0, 0.0, 1.0, 1.0], 0);
-        assert!(looked.profile.look_table.is_some() && !eligible(RawFormat::Dng, looked), "a look table is the file's own rendering");
+        assert!(looked.profile.look_table.is_some() && eligible(RawFormat::Dng, looked), "a look table defines colour, not tone");
+    }
+
+    /// The 1024 px preview Lightroom Classic writes into a 7008 px DNG is fitted; a 256 px thumbnail is not.
+    #[test]
+    fn dng_tone_fit_takes_lightroom_sized_previews() {
+        let floor = |raw_long: f64| (MIN_PREVIEW_FRACTION * raw_long).max(384.0);
+        assert!(1024.0 >= floor(7008.0));
+        assert!(256.0 < floor(7008.0));
+        assert!(1024.0 >= floor(9504.0), "a 61 MP raw too");
     }
 }
