@@ -162,7 +162,7 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         ui,
         t,
         crate::i18n::tr(
-            "Photo ▸ Edit In ▸ Edit in PhotoCraft (⇧⌘E, or right-click a photo) renders a copy with your edits, stacks it with the original and opens it in PhotoCraft. Save there and the copy updates here. As PSD, PhotoCraft saves straight back to it. Leave the location empty unless you use a portable copy.",
+            "Photo → Edit In → Edit in PhotoCraft (⇧⌘E, or right-click a photo) renders a copy with your edits, stacks it with the original and opens it in PhotoCraft. Save there and the copy updates here. As PSD, PhotoCraft saves straight back to it. Leave the location empty unless you use a portable copy.",
         ),
     );
     row(ui, t, crate::i18n::tr("Other editor"), |ui| {
@@ -1207,7 +1207,7 @@ pub fn new_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> 
         None => location,
     };
     if lightcraft_engine::library::is_library(&dir) {
-        return Err(format!("{}: there is a library here already; open it with File ▸ Open Library…", dir.display()));
+        return Err(format!("{}: there is a library here already; open it with File → Open Library…", dir.display()));
     }
     if dir.is_file() {
         return Err(format!("{}: is a file; a library is a folder", dir.display()));
