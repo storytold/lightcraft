@@ -626,6 +626,7 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     padded(ui, |ui| {
         camera_card(ui, &p);
+        recipe_card(app, ui, id);
         ui.add_space(6.0);
         if let Some(why) = &p.preview_only {
             if crate::widgets::preview_only_notice(ui, "info", why) {
@@ -877,6 +878,72 @@ pub(crate) fn focus_text(f: Option<&lightcraft_meta::FocusPoint>) -> Option<Stri
     let f = f?;
     let words: Vec<&str> = f.words().into_iter().map(crate::i18n::tr).collect();
     Some(if words.is_empty() { crate::i18n::tr("Focus point").to_string() } else { words.join(" · ") })
+}
+
+/// In-camera Fujifilm film settings. Loaded once per photo from `photo.fujiRecipe`
+/// (a RAF reads its embedded JPEG, not the sensor data) and cached for this panel.
+#[derive(Clone)]
+struct RecipeCache {
+    id: u64,
+    text: String,
+    lines: Vec<(String, String)>,
+}
+
+fn load_recipe(app: &mut LightcraftApp, id: PhotoId) -> RecipeCache {
+    let empty = RecipeCache { id: id.0, text: String::new(), lines: Vec::new() };
+    let Ok(v) = app.run("photo.fujiRecipe", json!({"id": id.0})) else { return empty };
+    if v.get("present").and_then(|p| p.as_bool()) != Some(true) {
+        return empty;
+    }
+    let lines = v
+        .get("lines")
+        .and_then(serde_json::Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    let label = row.get("label")?.as_str()?.to_string();
+                    let value = row.get("value")?.as_str()?.to_string();
+                    Some((label, value))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let text = v.get("text").and_then(serde_json::Value::as_str).unwrap_or("").to_string();
+    RecipeCache { id: id.0, text, lines }
+}
+
+fn recipe_card(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+    let key = egui::Id::new("info-fuji-recipe");
+    let cached: Option<RecipeCache> = ui.data(|d| d.get_temp(key));
+    let cache = if let Some(c) = cached.filter(|c| c.id == id.0) {
+        c
+    } else {
+        let loaded = load_recipe(app, id);
+        ui.data_mut(|d| d.insert_temp(key, loaded.clone()));
+        loaded
+    };
+    if cache.lines.is_empty() {
+        return;
+    }
+    ui.add_space(6.0);
+    let t = Tokens::get(ui.ctx());
+    egui::Frame::NONE.fill(t.canvas).corner_radius(6.0).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(egui::RichText::new(crate::i18n::tr("Film recipe")).size(12.0).color(t.text_label));
+        ui.add_space(4.0);
+        let dim = |s: &str| egui::RichText::new(s.to_string()).size(12.0).color(t.text_label);
+        egui::Grid::new("info-fuji-recipe").num_columns(2).spacing([24.0, 3.0]).show(ui, |ui| {
+            for (label, value) in &cache.lines {
+                ui.label(dim(crate::i18n::tr(label)));
+                ui.label(dim(crate::i18n::tr(value)));
+                ui.end_row();
+            }
+        });
+        ui.add_space(6.0);
+        if text_button(ui, "copyRecipe", "Copy recipe", false).clicked() {
+            ui.ctx().copy_text(cache.text.clone());
+        }
+    });
 }
 
 fn human_size(bytes: u64) -> String {

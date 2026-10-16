@@ -147,6 +147,22 @@ pub fn specs() -> Vec<CommandSpec> {
                 .unwrap_or_default();
             Ok(json!({"exif": exif, "xmp": xmp}))
         }),
+        cmd!(query "photo.fujiRecipe", "Fujifilm Recipe", [], None, "{id?} → {present, text, lines: [{tag, label, value}]} — in-camera film settings from a Fujifilm MakerNote, or present: false", always, |s, p| {
+            let id = photo_arg(s, p, "photo.fujiRecipe")?;
+            let ph = s.catalog.photo(id).ok_or_else(|| super::bad("photo.fujiRecipe", "no such photo"))?.clone();
+            let lightcraft_catalog::Source::File { path } = &ph.source else {
+                return Ok(json!({"present": false}));
+            };
+            let recipe = if let Some(read) = &s.media.file_bytes {
+                let bytes = read(path).map_err(|e| super::bad("photo.fujiRecipe", e))?;
+                lightcraft_meta::recipe_from_bytes(&bytes)
+            } else {
+                lightcraft_meta::read_recipe_file(std::path::Path::new(path)).map_err(|e| super::bad("photo.fujiRecipe", e))?
+            };
+            let Some(recipe) = recipe else { return Ok(json!({"present": false})) };
+            let lines: Vec<Value> = recipe.rows.iter().map(|r| json!({"tag": r.tag, "label": r.label, "value": r.value})).collect();
+            Ok(json!({"present": true, "text": recipe.text(), "lines": lines}))
+        }),
         cmd!(query "albums.list", "List Albums", [], None, "{}", always, |s, _| {
             let all: Vec<Album> = s.catalog.albums().cloned().collect();
             Ok(Value::Array(all.iter().filter(|a| a.parent.is_none()).map(|a| album_json(a, &all, &s.catalog, 0)).collect()))
