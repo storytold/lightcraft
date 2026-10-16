@@ -152,6 +152,11 @@
   ⇧-click and the line tapers from the old values to the new ones. The whole line is one undo step.
   `mask.brushStroke {connect: true}` does the same for agents.
 
+### Lightroom catalogs with leftover image records import
+- A Lightroom catalog with an image record whose file, folder or root record is gone no longer fails to import with
+  "missing file record" (issue #1588). Lightroom keeps such records, and its integrity check passes them. That
+  image is left out with a warning (the first 20 are named, then counted) and the rest of the catalog imports.
+## 2026-10-14
 ### Hard-edged Heal and Clone spots
 - A spot with Feather at 0 no longer draws black pixels exactly on its radius. This also fixes spots at 0% Opacity
   changing pixels along their edge. The hard edge now leaves pixels on the radius unchanged.

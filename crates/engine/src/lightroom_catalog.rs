@@ -481,17 +481,37 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
         collection_content: optional_table("AgLibraryCollectionContent", &mut warnings)?,
         warnings,
     };
+    // An image row whose file, folder or root record is gone (Lightroom leaves such rows behind, and its integrity
+    // check passes them) can't be located: it is left out with a warning, and the rest of the catalog imports
+    // (issue #1588). The first few are named, then only counted.
+    let mut left_out = 0usize;
+    let mut leave_out = |warnings: &mut Vec<String>, why: String| {
+        left_out += 1;
+        if left_out <= LEFT_OUT_NAMED {
+            warnings.push(format!("{why}; left out"));
+        }
+    };
     for image in table("Adobe_images", true)? {
         ensure_read_active(cancel)?;
         let id = number(&image, "id_local");
-        let file = files.get(&number(&image, "rootFile")).ok_or_else(|| format!("image {id}: missing file record"))?;
-        let folder = folders.get(&number(file, "folder")).ok_or_else(|| format!("image {id}: missing folder record"))?;
-        let root = roots.get(&number(folder, "rootFolder")).ok_or_else(|| format!("image {id}: missing root record"))?;
+        let Some(file) = files.get(&number(&image, "rootFile")) else {
+            leave_out(&mut out.warnings, format!("image {id}: missing file record"));
+            continue;
+        };
+        let Some(folder) = folders.get(&number(file, "folder")) else {
+            leave_out(&mut out.warnings, format!("image {id}: missing folder record"));
+            continue;
+        };
+        let Some(root) = roots.get(&number(folder, "rootFolder")) else {
+            leave_out(&mut out.warnings, format!("image {id}: missing root record"));
+            continue;
+        };
         let root_path = root_paths.get(&number(root, "id_local")).map_or("", String::as_str);
         let folder_path = text(folder, "pathFromRoot");
         let name = text(file, "idx_filename");
         if root_path.is_empty() || name.is_empty() {
-            return Err(format!("image {id}: incomplete original path"));
+            leave_out(&mut out.warnings, format!("image {id}: incomplete original path"));
+            continue;
         }
         let path = Path::new(root_path).join(folder_path).join(name).to_string_lossy().to_string();
         let packet = match xmp(metadata.get(&id).and_then(|r| r.get("xmp"))) {
@@ -513,9 +533,15 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
             snapshots: snapshots.remove(&id).unwrap_or_default(),
         });
     }
+    if left_out > LEFT_OUT_NAMED {
+        out.warnings.push(format!("{left_out} images left out in all: their original's file, folder or root record is missing or incomplete"));
+    }
     ensure_read_active(cancel)?;
     Ok(out)
 }
+
+/// How many of the images left out of an import (no file, folder or root record) the warnings name one by one.
+const LEFT_OUT_NAMED: usize = 20;
 
 fn ensure_read_active(cancel: &AtomicBool) -> Result<(), String> {
     if cancel.load(Ordering::Relaxed) { Err("Lightroom import cancelled".into()) } else { Ok(()) }
@@ -1377,6 +1403,12 @@ mod tests {
     }
     /// A one-row-per-table SQLite file: `(name, columns, row)` each.
     fn native_catalog(tables: &[(&str, &str, Vec<SqlValue>)]) -> Vec<u8> {
+        let tables: Vec<(&str, &str, Vec<Vec<SqlValue>>)> = tables.iter().map(|(n, c, row)| (*n, *c, vec![row.clone()])).collect();
+        native_catalog_rows(&tables)
+    }
+
+    /// A SQLite file with one page of rows per table: `(name, columns, rows)` each.
+    fn native_catalog_rows(tables: &[(&str, &str, Vec<Vec<SqlValue>>)]) -> Vec<u8> {
         use SqlValue::{Integer as I, Text as T};
         let mut bytes = vec![0u8; 5 * 2048];
         bytes[..16].copy_from_slice(b"SQLite format 3\0");
@@ -1390,7 +1422,7 @@ mod tests {
         bytes[44..48].copy_from_slice(&4u32.to_be_bytes());
         bytes[56..60].copy_from_slice(&1u32.to_be_bytes());
         let mut schema = Vec::new();
-        for (i, (name, columns, row)) in tables.iter().enumerate() {
+        for (i, (name, columns, rows)) in tables.iter().enumerate() {
             schema.push(vec![
                 T("table".into()),
                 T((*name).into()),
@@ -1398,7 +1430,7 @@ mod tests {
                 I(i as i64 + 2),
                 T(format!("CREATE TABLE {name} ({columns})")),
             ]);
-            leaf(&mut bytes[(i + 1) * 2048..(i + 2) * 2048], 0, std::slice::from_ref(row));
+            leaf(&mut bytes[(i + 1) * 2048..(i + 2) * 2048], 0, rows);
         }
         leaf(&mut bytes[..2048], 100, &schema);
         bytes
@@ -1434,6 +1466,25 @@ mod tests {
         assert!(catalog.photos[0].path.ends_with("test.ARW"));
         std::fs::write(&path, b"bad catalog").unwrap();
         assert!(read(&path).is_err());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    /// An image row whose file record is gone (Lightroom keeps such rows, and its integrity check passes them) is left
+    /// out with a warning instead of failing the whole import (issue #1588).
+    #[test]
+    fn an_image_without_a_file_record_is_left_out() {
+        use SqlValue::{Integer as I, Null as N, Text as T};
+        let mut tables: Vec<(&str, &str, Vec<Vec<SqlValue>>)> =
+            photo_tables(("/catalog/", "")).into_iter().map(|(n, c, row)| (n, c, vec![row])).collect();
+        let images = tables.iter_mut().find(|t| t.0 == "Adobe_images").unwrap();
+        // a second image whose rootFile (99) has no AgLibraryFile row
+        images.2.push(vec![N, T("orphan-image".into()), I(99), T("ARW".into()), I(20), I(10), I(0), I(0)]);
+        let path = std::env::temp_dir().join(format!("lightcraft-orphan-catalog-{}.lrcat", std::process::id()));
+        std::fs::write(&path, native_catalog_rows(&tables)).unwrap();
+        let catalog = read(&path).unwrap();
+        assert_eq!(catalog.photos.len(), 1, "the image that can be located is imported");
+        assert_eq!(catalog.photos[0].uuid, "fixture-image");
+        assert!(catalog.warnings.iter().any(|w| w.contains("image 2: missing file record; left out")), "{:?}", catalog.warnings);
         std::fs::remove_file(path).unwrap();
     }
 
