@@ -1,4 +1,4 @@
-//! Photo Merge commands: `merge.hdr`, `merge.panorama`, `merge.hdrPanorama`, `merge.hdrBatch`.
+//! Photo Merge commands: `merge.hdr`, `merge.panorama`, `merge.hdrPanorama`, `merge.hdrBatch`, `merge.focusStack`.
 //!
 //! Run synchronously here (CLI, MCP, control channel); the desktop UI plans the same job with
 //! [`Session::plan_merge`] and runs it on a worker thread. `preview: true` merges ≤ 1024 px frames
@@ -97,6 +97,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{ids?, align=true, deghost=none|low|medium|high, autoSettings=true, stack=false}: an HDR merge of each bracket set among the photos (each stack, then photos taken less than a second apart at exposures ≥ ½ EV apart) → {merged: [{id, path, …}], failed: [{photos, error}]}",
             can_merge,
             run_batch
+        ),
+        cmd!(
+            "merge.focusStack",
+            "Focus Stack Merge",
+            [],
+            None,
+            "{ids?, align=true, autoSettings=true, stack=false, preview=false, previewPath?}",
+            can_merge,
+            |s, p| run(s, "merge.focusStack", p)
         ),
     ]
 }

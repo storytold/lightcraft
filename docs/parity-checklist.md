@@ -1,6 +1,6 @@
 # Lightroom parity checklist
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (integration batch 36: slideshow module, print-ready PDF fixes, local adjustment presets, Layout Image loupe overlay, Delete in an album removes from it, new languages Czech, Polish, Italian-ready catalogs; many rows' notes updated by their PRs) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (LR-MERGE-HDR: full-size alignment refinement, local alignment and Lanczos-3 warps; integration batch 36: slideshow module, print-ready PDF fixes, local adjustment presets, Layout Image loupe overlay, Delete in an album removes from it, new languages Czech, Polish, Italian-ready catalogs; many rows' notes updated by their PRs) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 The measured, row-by-row checklist: one row per Lightroom feature, menu item and shortcut, what we
 have and what is missing. It answers *does the feature exist?* (feature breadth). Whether it is good
@@ -40,7 +40,7 @@ cited here still exists. Formerly docs/parity.md.
 | L. Presets (PRE) | 6 | 0 | 1 | 1 | 2/2 (100%) | 2/2 (100%) |
 | M. Versions & history (VER) | 5 | 0 | 0 | 0 | 1/1 (100%) | 3/3 (100%) |
 | N. Copy / paste / sync (SYNC) | 5 | 0 | 0 | 0 | 3/3 (100%) | 1/1 (100%) |
-| O. Merge (MERGE) | 3 | 1 | 0 | 0 | — | — |
+| O. Merge (MERGE) | 3 | 2 | 0 | 0 | — | — |
 | P. Enhance (ENH) | 0 | 0 | 2 | 0 | — | — |
 | Q. HDR (HDR) | 2 | 3 | 0 | 0 | — | — |
 | R. Video (VID) | 0 | 0 | 5 | 1 | — | 0/2 (0%) |
@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 84 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 40 | 23 | 23 | 8 | — | 24/26 (92%) |
-| **Total** | 419 | 61 | 59 | 35 | 194/201 (97%) | 148/161 (92%) |
+| **Total** | 419 | 62 | 59 | 35 | 194/201 (97%) | 148/161 (92%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 539 in-scope rows — P0 98.3% of 201 · P1 95.0% of 161 · P2 55.7% of 176.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.3%** of 540 in-scope rows — P0 98.3% of 201 · P1 95.0% of 161 · P2 55.6% of 177.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -153,7 +153,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-FILT-RATING | Rating filter | P0 | ✅ | `cmd:library.filter` (`rating`, `ratingOp`), `crates/ui-egui/src/panels/filterbar.rs` | ≥ / = / ≤ stars in the filter bar (`cmd:view.filterBar`) |
 | LR-FILT-FLAG | Flag filter | P0 | ✅ | `cmd:library.filter` (`flag`), `crates/ui-egui/src/panels/filterbar.rs` | picked / rejected / unflagged (one at a time) |
 | LR-FILT-LABEL | Colour-label filter | P1 | ✅ | `cmd:library.filter` (`label`), `crates/ui-egui/src/panels/filterbar.rs` | one label at a time; no “no label” choice |
-| LR-FILT-TYPE | Type / edited filter | P1 | ✅ | `cmd:library.filter` (`kind`, `merged`, `edited`), `crates/ui-egui/src/panels/filterbar.rs`, `crates/catalog/src/query.rs` (`merged_kind`) | photos / raw / videos / HDR / panoramas / HDR panoramas (merge results by name), edited / unedited; no depth kind |
+| LR-FILT-TYPE | Type / edited filter | P1 | ✅ | `cmd:library.filter` (`kind`, `merged`, `edited`), `crates/ui-egui/src/panels/filterbar.rs`, `crates/catalog/src/query.rs` (`merged_kind`) | photos / raw / videos / HDR / panoramas / HDR panoramas / focus stacks (merge results by name), edited / unedited; no depth kind |
 | LR-FILT-KEYWORD | Keyword filter | P1 | ✅ | `cmd:library.filter` (`keyword`), `crates/ui-egui/src/panels/filterbar.rs` | keyword picker |
 | LR-FILT-CAMERA | Camera / lens filter | P1 | ✅ | `cmd:library.filter` (`camera`, `lens`), `crates/ui-egui/src/panels/filterbar.rs` | camera and lens pickers |
 | LR-FILT-LOCATION | Location filter | P2 | ✅ | `cmd:library.filter` (`text`, `ruleSet` field `location`) | free text, or a rule on location / city / state / country (smart albums, `library.filter`) |
@@ -352,9 +352,10 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| LR-MERGE-HDR | HDR merge | P2 | 🟡 | `cmd:merge.hdr`, `cmd:dialog.mergeHdr`, `crates/merge/src/frame.rs` (`Frame::lens`), `crates/merge/src/hdr.rs` | auto align, deghost None–High + overlay, auto settings, float DNG, Create Stack; the DNG keeps the reference frame's embedded lens corrections (tested by `hdr_merge_keeps_the_reference_frames_lens_corrections`); raws without colour matrices of their own (CR2, NEF, ARW…) keep the colour they open with, written as DNG tags (`starting_colour_tags`; the look's chroma curve has no tag; panoramas too), issue #965; the DNG's `AsShotNeutral` is the median of the inputs' vendor white-balance multipliers, issue #1144. Tested on real Sony A7R VI brackets (67 MP, 2026-10-14): frames agree with the merged radiance within ~1 % in all channels, exposure steps match EXIF within 0.03 EV. A clipped highlight of the reference that moved in other frames (a star at 200 mm) stays instead of becoming a black hole, and deghost (≤ 2048 px maps) catches a brighter frame's ghost in a dark sky (`a_clipped_star_of_the_reference_is_not_erased_by_frames_where_it_moved`, `deghost_removes_a_bright_frames_ghost_in_a_dark_sky`). 🟡 because: AI Denoise doesn't run on merged DNGs (Bayer only; Lightroom's does), JPEG brackets are treated as linear (no camera response curve), and every frame is held as 32-bit float (~0.86 GB per 67 MP frame, so 7 frames need ~7 GB); gap 29 |
-| LR-MERGE-PANO | Panorama | P2 | ✅ | `cmd:merge.panorama`, `cmd:dialog.mergePanorama` | spherical/cylindrical/perspective + auto, boundary warp, auto crop, fill edges (diffusion), DNG whose `AsShotNeutral` is the median of its frames' as-shot white balance (vendor multipliers for CR2, NEF, ARW…), issue #1144; no lens model / 360° wrap |
+| LR-MERGE-HDR | HDR merge | P2 | 🟡 | `cmd:merge.hdr`, `cmd:dialog.mergeHdr`, `crates/merge/src/frame.rs` (`Frame::lens`), `crates/merge/src/hdr.rs`, `crates/merge/src/refine.rs` | auto align (refined at full size to ~0.1 px; local shifts such as parallax corrected tile by tile, `crates/merge/src/flow.rs`; the finest detail from the reference where it is well exposed; a mostly clipped frame the small versions can't align is recovered; Lanczos-3 warp; `tests/sharpness.rs`: 98.8 % of a handheld scene's detail kept, 86 % before), deghost None–High + overlay, auto settings, float DNG, Create Stack; the DNG keeps the reference frame's embedded lens corrections (tested by `hdr_merge_keeps_the_reference_frames_lens_corrections`); raws without colour matrices of their own (CR2, NEF, ARW…) keep the colour they open with, written as DNG tags (`starting_colour_tags`; the look's chroma curve has no tag; panoramas too), issue #965; the DNG's `AsShotNeutral` is the median of the inputs' vendor white-balance multipliers, issue #1144. Tested on real Sony A7R VI brackets (67 MP, 2026-10-14): frames agree with the merged radiance within ~1 % in all channels, exposure steps match EXIF within 0.03 EV. A clipped highlight of the reference that moved in other frames (a star at 200 mm) stays instead of becoming a black hole, and deghost (≤ 2048 px maps) catches a brighter frame's ghost in a dark sky (`a_clipped_star_of_the_reference_is_not_erased_by_frames_where_it_moved`, `deghost_removes_a_bright_frames_ghost_in_a_dark_sky`). 🟡 because: AI Denoise doesn't run on merged DNGs (Bayer only; Lightroom's does), JPEG brackets are treated as linear (no camera response curve), and every frame is held as 32-bit float (~0.86 GB per 67 MP frame, so 7 frames need ~7 GB); gap 29 |
+| LR-MERGE-PANO | Panorama | P2 | ✅ | `cmd:merge.panorama`, `cmd:dialog.mergePanorama` | spherical/cylindrical/perspective + auto (projected with Lanczos-3), boundary warp, auto crop, fill edges (diffusion), DNG whose `AsShotNeutral` is the median of its frames' as-shot white balance (vendor multipliers for CR2, NEF, ARW…), issue #1144; no lens model / 360° wrap |
 | LR-MERGE-HDRPANO | HDR panorama | P2 | ✅ | `cmd:merge.hdrPanorama`, `cmd:dialog.mergeHdrPanorama` | brackets grouped by EXIF |
+| LR-MERGE-FOCUS | Focus stack (beyond Lightroom) | P2 | 🟡 | `cmd:merge.focusStack`, `cmd:dialog.mergeFocusStack`, `crates/merge/src/focus.rs`, `crates/merge/tests/focus.rs` | photos focused at different distances → one DNG sharp throughout (`<name>-Focus.dng`), the photos taken in shooting order (capture time, then name): neighbour-to-neighbour similarity alignment chained (focus breathing) and refined at full size against the aligned neighbour (0.03 px on `tests/focus_sharpness.rs`, up to 1.9 px before), Lanczos-3 resampling (98–99 % of an ideal stack's texture), a failed step bridged to one of the three frames before, frames that align to nothing left out and reported; the most magnified frame as the reference; brightness measured from the pixels (auto ISO), EXIF only as a fallback; Laplacian-pyramid fusion with a steep soft selection above the noise floor, so out-of-focus areas average (about 5× less noise than one frame on a real 88-frame A7R VI macro crop) while texture keeps 95–100 % of a maximum selection's; one full-size frame in memory at a time; auto align, auto settings, Create Stack; type filter "Focus Stacks". Checked on a 175-frame A7R VI stack (no ghosting) and synthetic brackets; a similarity only (no tilt or rotation about the lens's side); no retouching between frames, no depth-map mode, no halo control. Not a Lightroom feature (Photoshop's Auto-Blend Layers ▸ Stack Images) |
 | LR-MERGE-HEADLESS | Merge with last settings | P2 | ✅ | `cmd:merge.hdrLast`, `cmd:merge.panoramaLast`, `cmd:merge.hdrPanoramaLast`, `cmd:merge.hdrBatch`, `crates/catalog/src/stacks.rs` (`bracket_sets`) | no dialog; the options of the last merge of that kind (defaults the first time). HDR for Each Bracket Set merges a batch like Lightroom's merge of stacks: one HDR per stack among the photos, then per bracket (photos taken less than a second apart, after the shutter time, at exposures ≥ ½ EV apart; bursts at one exposure are skipped), one after the other in the activity stack (cancelling one stops the rest; a failed set doesn't); CLI `merge hdr-batch FILES…` |
 
 ## P. Enhance (ENH)
@@ -561,7 +562,7 @@ visible menu bar yet: the menu model is only exposed through the control channel
 | MENU-PHOTO-FLIP | Flip horizontal / vertical | P0 | ✅ | `cmd:photo.flipHorizontal`, `cmd:photo.flipVertical` | |
 | MENU-PHOTO-CREATEVERSION | Create Version… | P1 | ✅ | `cmd:version.create` | no name prompt |
 | MENU-PHOTO-STACK | Stack submenu | P1 | ✅ | `cmd:stack.group`, `cmd:stack.ungroup`, `cmd:dialog.autoStack` | |
-| MENU-PHOTO-MERGE | Photo merge submenu | P2 | ✅ | `cmd:dialog.mergeHdr`, `cmd:dialog.mergePanorama`, `cmd:dialog.mergeHdrPanorama`, `cmd:merge.hdrLast`, `cmd:merge.hdrBatch` | |
+| MENU-PHOTO-MERGE | Photo merge submenu | P2 | ✅ | `cmd:dialog.mergeHdr`, `cmd:dialog.mergePanorama`, `cmd:dialog.mergeHdrPanorama`, `cmd:merge.hdrLast`, `cmd:dialog.mergeFocusStack`, `cmd:merge.focusStackLast` | also Focus Stack… and Focus Stack with Last Settings (beyond Lightroom) |
 | MENU-PHOTO-ENHANCE | Enhance… | P2 | ⬜ | | |
 | MENU-PHOTO-AUTO | Auto settings | P0 | ✅ | `cmd:develop.auto` | |
 | MENU-PHOTO-BW | Convert to B&W | P0 | ✅ | `cmd:develop.treatment` | |
@@ -813,6 +814,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-15 | patch | LR-VIEW-BEFOREAFTER: side by side and stacked panes share click-zoom animation for whole-frame images, window tiles and input; render requests keep the final target (#1821); status unchanged |
 | 2026-10-14 | patch | LR-MASK-BRUSH: ⇧-click with the brush draws a straight stroke from where the last stroke ended, tapering when the brush changed in between (`cmd:mask.brushStroke` `connect`); status unchanged |
 | 2026-10-14 | minor | LR-VIEW-ZOOM 🟡 → ✅: soft proofing gets zoom windows (mask overlays already had them; row text corrected), 1:1 pixels tested equal to the full-size export, slider-drag latency at 1:1 measured on Linux |
+| 2026-10-14 | minor | LR-MERGE-FOCUS: Photo Merge ▸ Focus Stack (beyond Lightroom) lands as a new row, status 🟡 (verified on a real 175-frame macro stack and synthetic brackets); LR-MERGE-HEADLESS, LR-FILT-TYPE and MENU-PHOTO-MERGE cite its command, last-settings command and type filter; their statuses unchanged |
 | 2026-10-13 | patch | LR-VIEW-COMPARE, LRC-LIB-COMPARE: ⌘/Ctrl- and Shift-clicks on the filmstrip in Compare change the selection as in the grid; the two photos shown stay selected and the active photo is unchanged (#187); statuses unchanged |
 | 2026-10-13 | minor | KEYC-SELECTONLYACTIVE: Edit → Select Only Active Photo (⌘⇧D) lands as a new row; status 🟡 (headless-tested, native macOS menu path unverified) |
 | 2026-10-13 | patch | LRC-LIB-CATALOG-IMPORT: a catalog whose tables are all still in its `-wal` file (main file schema format 0) opens instead of failing as an unsupported schema format; status unchanged |
@@ -887,3 +889,5 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-13 | minor | LRC-LIB-CATALOG-IMPORT review: offline Local promotion and result dismissal across library switches covered; redundant operation/settings copies removed. Status and summary counts unchanged. |
 | 2026-10-14 | patch | LRC-LIB-CATALOG-IMPORT: reconciled with upstream phased progress, cancellation kinds, WAL-only import, translations and current progress tracking. Status and summary counts unchanged. |
 | 2026-10-13 | minor | KEYC-COMPARE: `=` / `-` (also `+`) increase / decrease the grid thumbnail size (`view.thumbSizeUp` / `view.thumbSizeDown`, View menu), grids only; status unchanged (🟡) |
+| 2026-10-15 | minor | LR-MERGE-HDR: alignment refined at full size (patches, masked correlation), local shifts (parallax) corrected tile by tile, the finest detail from the reference, frames the small versions can't align recovered, Lanczos-3 warps (also LR-MERGE-PANO); status unchanged |
+| 2026-10-15 | minor | LR-MERGE-FOCUS: alignment refined at full size against the aligned neighbour, Lanczos-3 resampling; status unchanged |

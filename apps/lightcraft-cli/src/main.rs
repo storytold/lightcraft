@@ -5,8 +5,8 @@
 //! lightcraft-cli mcp [--connect [ADDR]] [--demo] [--compact] [FILES/FOLDERS…]
 //! lightcraft-cli render <in> -o <out> [--set control=value]… [--settings FILE.json|FILE.lcpreset] [--preset ID] [--size N] [--quality Q]
 //! lightcraft-cli snapshot [--library DIR | --demo] [--script FILE.jsonl] [-o OUT.png] [--size WxH] [--scale S] [FILES…]
-//! lightcraft-cli merge hdr|panorama|hdr-panorama|hdr-batch [OPTIONS] FILES…
-//! lightcraft-cli synth-merge hdr|panorama -o DIR
+//! lightcraft-cli merge hdr|panorama|hdr-panorama|hdr-batch|focus [OPTIONS] FILES…
+//! lightcraft-cli synth-merge hdr|panorama|focus -o DIR
 //! lightcraft-cli denoise-serve [--model ID] [--models DIR] [--listen ADDR] [--token-env VAR] [--run-on auto|gpu|cpu]
 //! lightcraft-cli commands [--json]
 //! lightcraft-cli controls [--json]
@@ -80,16 +80,18 @@ USAGE:
         -o, --output OUT  PNG path (a final screenshot is written here if the script took none)
         --size WxH        window size in points (default 1600x1000)
         --scale S         pixels per point (default 1)
-  lightcraft-cli merge hdr|panorama|hdr-panorama|hdr-batch [OPTIONS] FILES…
-      Photo Merge: writes <first>-HDR.dng / -Pano.dng / -HDR-Pano.dng next to the first file and
+  lightcraft-cli merge hdr|panorama|hdr-panorama|hdr-batch|focus [OPTIONS] FILES…
+      Photo Merge: writes <first>-HDR.dng / -Pano.dng / -HDR-Pano.dng / -Focus.dng next to the first file and
       prints the result as JSON. hdr-batch merges each bracket set among the files (photos taken
       less than a second apart at different exposures), e.g. a whole folder. Options:
         --deghost none|low|medium|high   --no-align   --bracket N (HDR panorama)
         --projection auto|spherical|cylindrical|perspective   --boundary-warp 0..100
         --auto-crop   --fill-edges   --no-auto-settings
         --preview OUT.png   only render a ≤ 1024 px preview (nothing written next to the files)
-  lightcraft-cli synth-merge hdr|panorama -o DIR
-      Write synthetic merge inputs (procedural scene; bracketed DNGs or overlapping PNG views).
+      focus takes only --no-align, --no-auto-settings and --preview.
+  lightcraft-cli synth-merge hdr|panorama|focus -o DIR
+      Write synthetic merge inputs (procedural scene; bracketed DNGs, overlapping PNG views or a
+      focus bracket as PNGs).
   lightcraft-cli denoise-serve [OPTIONS]
       Run AI Denoise tiles for LightCraft on other computers (LIGHTCRAFT_DENOISE_URL=<this host>:7990 and
       LIGHTCRAFT_DENOISE_TOKEN there; see docs/denoise.md). Serves the installed model selected in Settings,
@@ -375,7 +377,8 @@ fn merge(args: &[String]) -> Result<(), String> {
         Some("panorama" | "pano") => "merge.panorama",
         Some("hdr-panorama") => "merge.hdrPanorama",
         Some("hdr-batch") => "merge.hdrBatch",
-        _ => return Err("merge: expected hdr, panorama, hdr-panorama or hdr-batch".into()),
+        Some("focus" | "focus-stack") => "merge.focusStack",
+        _ => return Err("merge: expected hdr, panorama, hdr-panorama, hdr-batch or focus".into()),
     };
     let mut p = serde_json::Map::new();
     let mut files = Vec::new();
@@ -472,7 +475,18 @@ fn synth_merge(args: &[String]) -> Result<(), String> {
                 written.push(p);
             }
         }
-        _ => return Err("synth-merge: expected hdr or panorama".into()),
+        "focus" | "focus-stack" => {
+            let (_, frames) = lightcraft_merge::synth::focus_bracket(1800, 1200, 8).map_err(|e| e.to_string())?;
+            for (k, v) in frames.into_iter().enumerate() {
+                let p = Path::new(&dir).join(format!("focus-{k}.png"));
+                let png =
+                    lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&v.to_srgb8()), &lightcraft_codecs::EncodeMeta::default())
+                        .map_err(|e| e.to_string())?;
+                std::fs::write(&p, png).map_err(|e| e.to_string())?;
+                written.push(p);
+            }
+        }
+        _ => return Err("synth-merge: expected hdr, panorama or focus".into()),
     }
     for p in written {
         println!("{}", p.display());

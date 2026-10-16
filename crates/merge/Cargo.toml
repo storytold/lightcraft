@@ -3,7 +3,7 @@ name = "lightcraft-merge"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft Photo Merge: HDR merge (align, deghost) and panorama stitching (L3)"
+description = "LightCraft Photo Merge: HDR merge (align, deghost), panorama stitching and focus stacking (L3)"
 
 [lints]
 workspace = true
