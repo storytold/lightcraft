@@ -183,11 +183,13 @@ pub struct DecodedSource {
     pub camera_tone: Option<lightcraft_pipeline::tone::CameraTone>,
     /// The same picture developed from the AI-denoised mosaic, when the photo has one cached.
     pub denoised: Option<Arc<Twin>>,
+    /// The camera-profile choice it was decoded with (`profile.camera`; empty: the default).
+    pub camera: String,
 }
 
 impl DecodedSource {
     pub fn new(image: Arc<Rgb32f>, info: Option<SourceInfo>) -> Self {
-        DecodedSource { image, info, camera_tone: None, denoised: None }
+        DecodedSource { image, info, camera_tone: None, denoised: None, camera: String::new() }
     }
 
     /// The picture to develop for a Denoise `amount` (0 to 1, see [`DevelopSettings::denoise_amount`]): the plain one,
@@ -306,6 +308,7 @@ impl SourceRef {
                                     info: Some(info),
                                     camera_tone: None,
                                     denoised: twin.map(|t| Arc::new(Twin::new(Arc::new(t)))),
+                                    camera: String::new(),
                                 })
                             })
                         } else {
@@ -314,6 +317,11 @@ impl SourceRef {
                     }
                     None => plain(),
                 };
+                // remember which camera profile the picture was developed with (the cache compares it)
+                let r = r.map(|mut d| {
+                    d.camera = crate::camera_profiles::split_camera(path).1.unwrap_or("").to_string();
+                    d
+                });
                 // An offline original renders from its smart preview (no decoder facts: header ones).
                 return match (r, fallback) {
                     #[cfg(not(target_arch = "wasm32"))]
@@ -669,7 +677,20 @@ impl MediaCache {
     }
 
     fn source_ref_plain(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {
-        if cached && let Some(a) = self.get_source(p.id, level) {
+        let mut r = self.source_ref_cached(p, level, cached);
+        // the photo's camera-profile choice travels with its path to the file loader
+        let camera = camera_choice(p);
+        if !camera.is_empty()
+            && let SourceRef::File { path, .. } = &mut r
+        {
+            *path = crate::camera_profiles::with_camera(path, camera);
+        }
+        r
+    }
+
+    fn source_ref_cached(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {
+        let camera = camera_choice(p);
+        if cached && let Some(a) = self.get_source(p.id, level).filter(|a| a.camera == camera) {
             return SourceRef::Loaded(Box::new(a));
         }
         // a thumbnail of a photo whose preview is decoded (the one in the loupe) is cut from it; not
@@ -677,7 +698,7 @@ impl MediaCache {
         if cached
             && level == SourceLevel::Thumb
             && self.denoise.spec(p.id).is_none()
-            && let Some(big) = self.get_source(p.id, SourceLevel::Preview)
+            && let Some(big) = self.get_source(p.id, SourceLevel::Preview).filter(|a| a.camera == camera)
         {
             return SourceRef::Fit { from: Box::new(big), max_edge: level.max_edge() };
         }
@@ -726,6 +747,12 @@ impl MediaCache {
             }
         }
     }
+}
+
+/// A raw photo's camera-profile choice (`profile.camera`), which decides how its file is decoded;
+/// empty for anything else.
+fn camera_choice(p: &Photo) -> &str {
+    if p.develops_raw() { &p.develop.profile.camera } else { "" }
 }
 
 /// Everything needed to render one photo, detached from the session.

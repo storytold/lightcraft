@@ -39,6 +39,10 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             };
             let lower = f.to_ascii_lowercase();
+            // an XMP look with a colour table is a profile (`profile.import`), not a preset
+            if lower.ends_with(".xmp") && crate::xmp_look::is_look(&String::from_utf8_lossy(&bytes)) {
+                continue;
+            }
             let maybe_local = [".lrtemplate", ".xmp", ".zip", ".lceffect"].iter().any(|x| lower.ends_with(x));
             let before = effects.len() + effect_failed.len();
             let local = maybe_local && mef::found_in(&f, &bytes, rel.as_deref().and_then(mef::group_for_dir), &mut effects, &mut effect_failed);

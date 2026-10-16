@@ -3516,6 +3516,7 @@ dependencies = [
  "lightcraft-pipeline",
  "lightcraft-preview",
  "lightcraft-raster",
+ "lightcraft-raw",
  "lightcraft-slideshow",
  "lightcraft-testkit",
  "log",

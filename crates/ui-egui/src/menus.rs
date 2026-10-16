@@ -1794,7 +1794,18 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 .iter()
                 .filter(|p| {
                     let l = p.to_ascii_lowercase();
-                    l.ends_with(".cube") || l.ends_with(".zip") || std::path::Path::new(p.as_str()).is_dir()
+                    l.ends_with(".cube")
+                        || l.ends_with(".zip")
+                        || std::path::Path::new(p.as_str()).is_dir()
+                        || lightcraft_engine::xmp_look::is_look_file(std::path::Path::new(p.as_str()))
+                })
+                .collect();
+            // .dcp camera profiles (and those inside zips / folders): active for their camera from the next start
+            let dcp_paths: Vec<&String> = paths
+                .iter()
+                .filter(|p| {
+                    let l = p.to_ascii_lowercase();
+                    l.ends_with(".dcp") || l.ends_with(".zip") || std::path::Path::new(p.as_str()).is_dir()
                 })
                 .collect();
             // one toast for both halves (a second toast would replace the first)
@@ -1826,7 +1837,35 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                     }
                 }
             }
-            let preset_paths: Vec<&String> = paths.iter().filter(|p| !p.to_ascii_lowercase().ends_with(".cube")).collect();
+            if !dcp_paths.is_empty() {
+                match app.session.execute("camera.importDcp", &json!({"paths": dcp_paths})) {
+                    Ok(v) => {
+                        let n = v["imported"].as_array().map_or(0, Vec::len);
+                        if n > 0 {
+                            parts.push(format!(
+                                "Imported {n} camera profile{} (.dcp): pick one per photo in Profiles ▸ Camera Profile",
+                                if n == 1 { "" } else { "s" }
+                            ));
+                        }
+                        if v["restart"].as_bool() == Some(true) {
+                            parts.push(crate::i18n::tr("A new camera default applies after a restart").to_string());
+                        }
+                        problems.extend(v["failed"].as_array().into_iter().flatten().map(|f| {
+                            let name = f.get(0).and_then(Value::as_str).unwrap_or_default();
+                            let reason = f.get(1).and_then(Value::as_str).unwrap_or_default();
+                            format!("{name}: {reason}")
+                        }));
+                    }
+                    Err(e) => problems.push(e.to_string()),
+                }
+            }
+            let preset_paths: Vec<&String> = paths
+                .iter()
+                .filter(|p| {
+                    let l = p.to_ascii_lowercase();
+                    !l.ends_with(".cube") && !l.ends_with(".dcp") && !lightcraft_engine::xmp_look::is_look_file(std::path::Path::new(p.as_str()))
+                })
+                .collect();
             let r = if preset_paths.is_empty() {
                 Ok(json!({"imported": [], "failed": [], "skipped": 0}))
             } else {

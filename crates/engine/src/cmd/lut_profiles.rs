@@ -41,15 +41,26 @@ fn cube_files(paths: &[String]) -> (Vec<(String, String, Option<String>)>, Vec<V
     let mut out = Vec::new();
     let mut failed = Vec::new();
     let stem = |f: &Path| f.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    // an XMP look with a colour table, as `.cube` text (its own name and group when it has them)
+    let look = |name: String, text: &str, group: Option<String>, out: &mut Vec<(String, String, Option<String>)>, failed: &mut Vec<Value>| {
+        match crate::xmp_look::parse(text, &name) {
+            Ok(l) => out.push((l.name, l.lut.to_cube(), l.group.or(group))),
+            Err(e) => failed.push(json!([name, e])),
+        }
+    };
     for p in paths {
         let path = Path::new(p);
         if path.is_dir() {
-            let cube = |f: &Path| f.extension().is_some_and(|x| x.eq_ignore_ascii_case("cube"));
+            let cube = |f: &Path| f.extension().is_some_and(|x| x.eq_ignore_ascii_case("cube")) || crate::xmp_look::is_look_file(f);
             for ep in crate::walk::files_in(path, None, crate::walk::Limits::default(), cube).files {
                 match std::fs::read_to_string(&ep) {
                     Ok(t) => {
                         let group = ep.parent().and_then(|d| d.file_name()).map(|n| n.to_string_lossy().to_string());
-                        out.push((stem(&ep), t, group));
+                        if ep.extension().is_some_and(|x| x.eq_ignore_ascii_case("xmp")) {
+                            look(stem(&ep), &t, group, &mut out, &mut failed);
+                        } else {
+                            out.push((stem(&ep), t, group));
+                        }
                     }
                     Err(e) => failed.push(json!([stem(&ep), e.to_string()])),
                 }
@@ -63,7 +74,12 @@ fn cube_files(paths: &[String]) -> (Vec<(String, String, Option<String>)>, Vec<V
                 }
             };
             for (inner, data) in crate::preset_import::read_zip(&b).unwrap_or_default() {
-                if inner.to_ascii_lowercase().ends_with(".cube") {
+                let text = String::from_utf8_lossy(&data);
+                if inner.to_ascii_lowercase().ends_with(".xmp") && crate::xmp_look::is_look(&text) {
+                    let ip = Path::new(&inner);
+                    let group = ip.parent().and_then(|d| d.file_name()).map(|n| n.to_string_lossy().to_string());
+                    look(stem(ip), &text, group, &mut out, &mut failed);
+                } else if inner.to_ascii_lowercase().ends_with(".cube") {
                     let ip = Path::new(&inner);
                     let group = ip
                         .parent()
@@ -79,6 +95,7 @@ fn cube_files(paths: &[String]) -> (Vec<(String, String, Option<String>)>, Vec<V
             }
         } else {
             match std::fs::read_to_string(path) {
+                Ok(t) if path.extension().is_some_and(|x| x.eq_ignore_ascii_case("xmp")) => look(stem(path), &t, None, &mut out, &mut failed),
                 Ok(t) => out.push((stem(path), t, None)),
                 Err(e) => failed.push(json!([stem(path), e.to_string()])),
             }
@@ -147,7 +164,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import Profiles",
             [],
             None,
-            "{paths: [.cube file, folder or .zip]} — 3D LUTs become creative profiles (Amount 0–200 %; rendered on the CPU) in the profile browser's groups (folder / zip name, else Imported) → {imported: [{id, name, group}], failed}",
+            "{paths: [.cube file, XMP look (.xmp with crs:RGBTable), folder or .zip]} — 3D LUTs and XMP looks become creative profiles (Amount 0–200 %; rendered on the CPU) in the profile browser's groups (folder / zip name, else Imported) → {imported: [{id, name, group}], failed}",
             always,
             import
         ),

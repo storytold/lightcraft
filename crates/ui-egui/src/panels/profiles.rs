@@ -20,6 +20,47 @@ const THUMB_EDGE: usize = 256;
 /// Thumbnail columns.
 const COLUMNS: usize = 2;
 
+/// The raw's camera profile (personal fork): its camera's default, LightCraft's own colour, or one of
+/// the imported `.dcp` files for its camera. Hidden for photos that aren't developed from raw data.
+fn camera_profile_row(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId) {
+    let Some(photo) = app.session.catalog.photo(id).cloned() else { return };
+    if !photo.develops_raw() {
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    let camera = photo.meta.camera.clone();
+    let mut options: Vec<(String, String)> = Vec::new();
+    let default_name = match lightcraft_raw::dcp::resolve_camera("", &camera) {
+        Some(p) => format!("{} ({})", crate::i18n::tr("Camera default"), p.name),
+        None => crate::i18n::tr("Camera default (LightCraft)").to_string(),
+    };
+    options.push((String::new(), default_name));
+    options.push(("lc".into(), crate::i18n::tr("LightCraft colour").to_string()));
+    for (pid, p) in lightcraft_raw::dcp::library() {
+        if lightcraft_raw::dcp::covers_model(&p.model, &camera) {
+            let name = if p.name.is_empty() { pid.trim_start_matches("dcp:").to_string() } else { p.name.clone() };
+            options.push((pid, name));
+        }
+    }
+    let current = d.profile.camera.clone();
+    let shown = options.iter().find(|(o, _)| *o == current).map(|(_, n)| n.clone()).unwrap_or_else(|| current.clone());
+    let mut choice = current.clone();
+    ui.horizontal(|ui| {
+        ui.add_space(24.0);
+        ui.label(egui::RichText::new(crate::i18n::tr("Camera Profile")).color(t.text_dim).font(t.font(13.0)));
+        let r = crate::widgets::combo_box("cameraProfile").width((ui.available_width() - 24.0).max(80.0)).selected_text(shown).show_ui(ui, |ui| {
+            for (o, n) in &options {
+                ui.selectable_value(&mut choice, o.clone(), n);
+            }
+        });
+        register(ui.ctx(), "cameraProfile", r.response.rect);
+    });
+    if choice != current {
+        let _ = app.run("develop.cameraProfile", json!({"id": choice}));
+    }
+    ui.add_space(4.0);
+}
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = (*app.session.develop_of(id).unwrap_or_default()).clone();
@@ -42,6 +83,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         super::edit::control(app, ui, &d, "profile.amount", true);
         ui.add_space(6.0);
     }
+    camera_profile_row(app, ui, &d, id);
     divider(ui);
     // (title, cell tag, imported LUT folder, profiles)
     let mut sections: Vec<(&str, &str, bool, Vec<(String, String, String)>)> = Vec::new();

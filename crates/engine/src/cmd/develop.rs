@@ -484,6 +484,25 @@ pub fn specs() -> Vec<CommandSpec> {
             s.note_profile_used(&id);
             ok()
         }),
+        cmd!(
+            "develop.cameraProfile",
+            "Set Camera Profile",
+            [],
+            None,
+            "{id: \"\" (the camera's default), \"lc\" (LightCraft's own colour) or \"dcp:…\" (an imported .dcp, see camera.listDcp)} — how the raw is decoded",
+            has_active,
+            |s, p| {
+                const C: &str = "develop.cameraProfile";
+                let id = str_param(p, "id").unwrap_or("").trim().to_string();
+                if !(id.is_empty() || id == "lc" || lightcraft_raw::dcp::library_get(&id).is_some()) {
+                    return Err(bad(C, format!("unknown camera profile `{id}`")));
+                }
+                edit(s, C, "Camera Profile", |d| {
+                    d.profile.camera = id.clone();
+                    Ok(())
+                })
+            }
+        ),
         cmd!("profile.favorite", "Favorite Profile", [], None, "{id, favorite?: bool} (toggles when omitted)", always, |s, p| {
             let id = str_param(p, "id").ok_or_else(|| bad("profile.favorite", "missing id"))?.to_string();
             if crate::presets::profile(&id).is_none() && !s.lut_profiles.iter().any(|x| x.id == id) {
