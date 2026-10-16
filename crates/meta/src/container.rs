@@ -39,6 +39,9 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
     if let Some(c) = crate::cr3::parse_cr3(bytes) {
         return Embedded { exif: crate::cr3::merged_exif(&c), xmp: c.xmp.map(|b| String::from_utf8_lossy(b).into_owned()), ..Default::default() };
     }
+    if is_heif(bytes) {
+        return heif_embedded(bytes);
+    }
     if bytes.starts_with(&[0xff, 0xd8]) {
         jpeg_segments(bytes)
     } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -60,6 +63,45 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
     } else {
         Embedded::default()
     }
+}
+
+fn is_heif(bytes: &[u8]) -> bool {
+    if bytes.len() < 12 || &bytes[4..8] != b"ftyp" {
+        return false;
+    }
+    let brands = [b"heic".as_slice(), b"heix", b"hevc", b"heif", b"mif1", b"msf1", b"avif", b"avis"];
+    let size = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+    let end = size.clamp(16, bytes.len().min(64));
+    (8..end.saturating_sub(3)).step_by(4).any(|i| brands.iter().any(|b| &bytes[i..i + 4] == *b))
+}
+
+/// HEIF stores Exif as a TIFF payload after `Exif\0\0` and a 4-byte offset, and XMP as an XML
+/// packet. Both sit in item data; scanning the file finds them without decoding the picture (#1233).
+fn heif_embedded(bytes: &[u8]) -> Embedded {
+    let mut out = Embedded::default();
+    if let Some(i) = find_bytes(bytes, b"Exif\0\0") {
+        let rest = &bytes[i + 6..];
+        if rest.len() >= 8 {
+            let off = u32::from_be_bytes([rest[0], rest[1], rest[2], rest[3]]) as usize;
+            // The offset counts from the end of this field. Zero is the usual "TIFF follows" case.
+            let tiff = rest.get(off.saturating_add(4)..).filter(|t| t.starts_with(b"II*\0") || t.starts_with(b"MM\0*"));
+            let tiff = tiff.or_else(|| rest.get(off..).filter(|t| t.starts_with(b"II*\0") || t.starts_with(b"MM\0*")));
+            if let Some(tiff) = tiff {
+                out.exif = Some(tiff.to_vec());
+            }
+        }
+    }
+    if let Some(i) = find_bytes(bytes, b"<x:xmpmeta") {
+        let end = find_bytes(&bytes[i..], b"</x:xmpmeta>").map(|e| i + e + "</x:xmpmeta>".len());
+        if let Some(end) = end {
+            out.xmp = Some(String::from_utf8_lossy(&bytes[i..end]).into_owned());
+        }
+    }
+    out
+}
+
+fn find_bytes(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).position(|w| w == needle)
 }
 
 const XMP_SIG: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
@@ -319,6 +361,22 @@ mod tests {
         for n in 0..raf.len() {
             let _ = crate::extract(&raf[..n]);
         }
+    }
+
+    #[test]
+    fn heif_ftyp_yields_embedded_exif_and_xmp() {
+        let exif = sample_exif(ByteOrder::Little);
+        let mut payload = b"Exif\0\0".to_vec();
+        payload.extend_from_slice(&0u32.to_be_bytes());
+        payload.extend_from_slice(&exif);
+        payload.extend_from_slice(b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">hello</x:xmpmeta>");
+        let mut file = 20u32.to_be_bytes().to_vec();
+        file.extend_from_slice(b"ftypheic\0\0\0\0");
+        file.extend_from_slice(&payload);
+        let e = embedded(&file);
+        assert!(e.exif.as_ref().is_some_and(|b| b.starts_with(b"II*\0")));
+        assert!(e.xmp.as_deref().is_some_and(|s| s.contains("hello") && s.contains("</x:xmpmeta>")));
+        assert_eq!(crate::extract(&file).iso, Some(400));
     }
 
     #[test]
