@@ -1915,6 +1915,8 @@
   "Missing photos move to Recently Deleted and can be restored; no file on disk is touched.": "見つからない写真は「最近削除した写真」に移動し、復元できます。ディスク上のファイルには手を加えません",
   "Reading a sidecar replaces the photo's rating, labels, metadata and edits with what it says.": "サイドカーを読み込むと、写真のレーティング、ラベル、メタデータ、編集内容がその内容に置き換わります。",
   "Skipped: files already in the library elsewhere": "スキップ: 別の場所ですでにライブラリにあるファイル",
+  "Don't import files already in the library": "ライブラリにすでにあるファイルを読み込まない",
+  "A file with the same content as a photo of the library, under another name or in another folder. Untick to bring such files in as photos of their own. Remembered for the next Synchronize.": "ライブラリの写真と同じ内容のファイル（別の名前や別のフォルダーにあるもの）です。チェックを外すと、そのようなファイルを別の写真として取り込みます。次回の同期のために記憶されます。",
   "Skipped: files that can't be read": "スキップ: 読み込めないファイル",
   "This folder isn't there: it was moved or renamed, or its disk isn't connected.": "このフォルダが見つかりません。移動または名前の変更がされたか、ディスクが接続されていません。",
   "Relink photos whose file was renamed or moved": "ファイル名の変更や移動があった写真をリンクし直す",

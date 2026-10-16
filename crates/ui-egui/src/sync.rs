@@ -68,6 +68,8 @@ pub fn open(app: &mut LightcraftApp, path: &str, name: &str, disk: bool) -> Resu
         disk,
         counts: None,
         import_new: d.import_new,
+        // as the library's setting was last left
+        import_duplicates: app.session.import_defaults.import_duplicates,
         relink_moved: d.relink_moved,
         remove_missing: d.remove_missing,
         read_metadata: d.read_metadata,
@@ -128,7 +130,8 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     let c = SyncCounts {
         offline: changes.offline,
         new: changes.new.len(),
-        duplicates: changes.duplicates,
+        duplicates: changes.duplicates.len(),
+        copies: changes.importable_duplicates(&app.session.catalog).len(),
         unreadable: changes.unreadable.len(),
         missing: changes.missing.len(),
         metadata: changes.metadata.len(),
@@ -160,7 +163,9 @@ fn progress(app: &LightcraftApp) -> Option<ScanStage> {
 
 /// The dialog's body.
 pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
-    let Dialog::SynchronizeFolder { path, name, counts, import_new, relink_moved, remove_missing, read_metadata, .. } = dlg else { return };
+    let Dialog::SynchronizeFolder { path, name, counts, import_new, import_duplicates, relink_moved, remove_missing, read_metadata, .. } = dlg else {
+        return;
+    };
     let t = Tokens::get(ui.ctx());
     ui.set_min_width(420.0);
     ui.label(crate::i18n::tr("Bring the library up to date with this folder and the folders inside it:"));
@@ -188,9 +193,10 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
     };
     let count = |text: &str, n: usize| format!("{} ({n})", crate::i18n::tr(text));
     let dim = |ui: &mut egui::Ui, s: &str| ui.label(egui::RichText::new(s).color(t.text_dim));
-    let skipped = |ui: &mut egui::Ui| {
-        if c.duplicates > 0 {
-            dim(ui, &count("Skipped: files already in the library elsewhere", c.duplicates));
+    // the files skipped for being in the library elsewhere (`dups` of them), and those that can't be read
+    let skipped = |ui: &mut egui::Ui, dups: usize| {
+        if dups > 0 {
+            dim(ui, &count("Skipped: files already in the library elsewhere", dups));
         }
         if c.unreadable > 0 {
             dim(ui, &count("Skipped: files that can't be read", c.unreadable));
@@ -200,21 +206,38 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
         // nothing to choose: the answer takes the choices' place, and the one button closes
         // (`only_shows`)
         ui.label(crate::i18n::tr("The library is up to date with this folder."));
-        skipped(ui);
+        skipped(ui, c.duplicates);
         return;
     }
-    choice(ui, import_new, c.new, count("Import new photos", c.new), "syncImportNew");
+    // (the copies of library photos come in with the new ones when the box under is unticked; a copy
+    // of a photo in Recently Deleted never does: that photo is restored from there)
+    let incoming = c.new + if *import_duplicates { c.copies } else { 0 };
+    choice(ui, import_new, incoming, count("Import new photos", incoming), "syncImportNew");
+    if c.copies > 0 {
+        ui.indent("syncSkipDuplicatesIndent", |ui| {
+            let mut skip = !*import_duplicates;
+            let r = ui.add_enabled(*import_new, egui::Checkbox::new(&mut skip, count("Don't import files already in the library", c.copies)));
+            crate::widgets::register(ui, "syncSkipDuplicates", r.rect);
+            let r = r.on_hover_text(crate::i18n::tr("A file with the same content as a photo of the library, under another name or in another folder. Untick to bring such files in as photos of their own. Remembered for the next Synchronize."));
+            if r.changed() {
+                *import_duplicates = !skip;
+            }
+        });
+    }
     choice(ui, relink_moved, c.moved, count("Relink photos whose file was renamed or moved", c.moved), "syncRelinkMoved");
     choice(ui, remove_missing, c.missing, count("Remove missing photos from the library", c.missing), "syncRemoveMissing");
     choice(ui, read_metadata, c.metadata, count("Read metadata updates from XMP sidecars", c.metadata), "syncReadMetadata");
     ui.add_space(6.0);
+    if incoming + c.moved + c.missing + c.metadata == 0 {
+        dim(ui, crate::i18n::tr("The library is up to date with this folder."));
+    }
     if c.missing > 0 {
         dim(ui, crate::i18n::tr("Missing photos move to Recently Deleted and can be restored; no file on disk is touched."));
     }
     if c.metadata > 0 {
         dim(ui, crate::i18n::tr("Reading a sidecar replaces the photo's rating, labels, metadata and edits with what it says."));
     }
-    skipped(ui);
+    skipped(ui, if *import_duplicates { c.duplicates.saturating_sub(c.copies) } else { c.duplicates });
 }
 
 /// Synchronize with the dialog's choices: the scan the dialog showed is handed to a worker
@@ -222,7 +245,18 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
 /// stale (the folder's photos changed meanwhile) is refused and made again, keeping the choices.
 /// A folder that is up to date has nothing to hand over: confirming it only closes the dialog.
 pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
-    let Dialog::SynchronizeFolder { path, name, disk, counts: Some(counts), import_new, relink_moved, remove_missing, read_metadata, .. } = dlg
+    let Dialog::SynchronizeFolder {
+        path,
+        name,
+        disk,
+        counts: Some(counts),
+        import_new,
+        import_duplicates,
+        relink_moved,
+        remove_missing,
+        read_metadata,
+        ..
+    } = dlg
     else {
         return Err("the folder is still being scanned".into());
     };
@@ -239,7 +273,19 @@ pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
     if app.import.is_some() {
         return Err(crate::i18n::tr("Wait for the import to finish").to_string());
     }
-    let choice = SyncChoice { import_new: *import_new, relink_moved: *relink_moved, remove_missing: *remove_missing, read_metadata: *read_metadata };
+    // the library remembers the choice for the next Synchronize (and the next time this dialog opens)
+    if *import_duplicates != app.session.import_defaults.import_duplicates
+        && let Err(e) = app.run("library.preferences", json!({"import": {"importDuplicates": *import_duplicates}}))
+    {
+        log::warn!("synchronize: the choice about files already in the library was not saved: {e}");
+    }
+    let choice = SyncChoice {
+        import_new: *import_new,
+        import_duplicates: *import_duplicates,
+        relink_moved: *relink_moved,
+        remove_missing: *remove_missing,
+        read_metadata: *read_metadata,
+    };
     app.sync_owns_changes = false;
     let started = match app.session.take_folder_changes(path) {
         Some(changes) => SyncJob::start(&mut app.session, changes, choice).map_err(|e| e.to_string()),
@@ -250,10 +296,16 @@ pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
         Err(e) => {
             // look again, in the background, keeping what was ticked
             if open(app, path, name, *disk).is_ok()
-                && let Some(Dialog::SynchronizeFolder { import_new: i, relink_moved: l, remove_missing: m, read_metadata: x, .. }) =
-                    &mut app.ui.dialog
+                && let Some(Dialog::SynchronizeFolder {
+                    import_new: i,
+                    import_duplicates: u,
+                    relink_moved: l,
+                    remove_missing: m,
+                    read_metadata: x,
+                    ..
+                }) = &mut app.ui.dialog
             {
-                (*i, *l, *m, *x) = (*import_new, *relink_moved, *remove_missing, *read_metadata);
+                (*i, *u, *l, *m, *x) = (*import_new, *import_duplicates, *relink_moved, *remove_missing, *read_metadata);
             }
             return Err(e);
         }

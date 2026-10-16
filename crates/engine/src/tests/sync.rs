@@ -178,8 +178,81 @@ fn files_added_to_the_folder_or_a_folder_inside_it_are_new() {
     let before = s.catalog.to_snapshot();
     let r = scan(&mut s, &dir.path("trip"));
     assert_eq!(paths(&r, "new"), vec![dir.path("trip/c.png"), dir.path("trip/day2/d.png")], "{r}");
-    assert_eq!(r["duplicates"], 1, "{r}");
+    assert_eq!(paths(&r, "duplicates"), vec![dir.path("trip/a-copy.png")], "{r}");
+    let a = s.catalog.photos().find(|p| p.file_name == "a.png").map(|p| p.id.0);
+    assert_eq!(r["duplicates"][0]["existing"].as_u64(), a, "with the photo it has the content of: {r}");
     assert_eq!(s.catalog.to_snapshot(), before, "scanning changes nothing");
+}
+
+/// A library organized by folder can hold the same picture in two of them (a set filed under two
+/// topics). "Don't import files already in the library" is on until the person turns it off:
+///
+/// * Given a file with the bytes of a photo in another folder of the library, when the folder is
+///   synchronized, the copy is left out and said to be already in the library.
+/// * With the setting off, the copy comes in as a photo of its own, in its own folder; so do two
+///   copies of one new picture.
+/// * The setting is the library's (Synchronize Folder's), and stays as it was left.
+/// * A copy of a photo in Recently Deleted stays out, setting or not: synchronizing this folder
+///   never restores a photo of another folder (restoring it is for Recently Deleted to do).
+/// * The two photos stay apart: renamed on disk, each follows its own file.
+#[test]
+fn copies_of_photos_the_library_has_come_in_only_when_the_person_says_so() {
+    let dir = Scratch::new("copies");
+    let mut s = library(&dir);
+    write_png(&dir.path("trip/topic/new.png"), 9);
+    std::fs::copy(dir.path("trip/a.png"), dir.path("trip/topic/a.png")).unwrap();
+    std::fs::copy(dir.path("trip/topic/new.png"), dir.path("trip/topic/new-again.png")).unwrap();
+    // the default: left out
+    let r = s.execute("folder.synchronize", &json!({"path": dir.path("trip")})).unwrap();
+    assert_eq!(r["imported"], 1, "only the one new picture: {r}");
+    assert_eq!(s.catalog.len(), 3);
+    // turned off, and remembered: the next synchronize brings the copies in
+    s.execute("library.preferences", &json!({"import": {"importDuplicates": true}})).unwrap();
+    let r = scan(&mut s, &dir.path("trip"));
+    // (the library's copy of a.png, and whichever of the two new copies came second)
+    let left_out = paths(&r, "duplicates");
+    assert!(left_out.len() == 2 && left_out.contains(&dir.path("trip/topic/a.png")), "still told apart: {r}");
+    let r = s.execute("folder.synchronize", &json!({"path": dir.path("trip"), "scanned": true})).unwrap();
+    assert_eq!(r["imported"], 2, "{r}");
+    let in_topic: Vec<String> = s
+        .catalog
+        .photos()
+        .filter(|p| matches!(&p.source, lightcraft_catalog::Source::File { path } if path.contains("topic")))
+        .map(|p| p.file_name.clone())
+        .collect();
+    assert_eq!(in_topic.len(), 3, "the topic folder shows all three: {in_topic:?}");
+    let r = scan(&mut s, &dir.path("trip"));
+    assert!(paths(&r, "new").is_empty() && paths(&r, "duplicates").is_empty(), "nothing left to bring in: {r}");
+    // twins renamed on disk: each photo follows its own file
+    std::fs::rename(dir.path("trip/a.png"), dir.path("trip/first.png")).unwrap();
+    std::fs::rename(dir.path("trip/topic/a.png"), dir.path("trip/topic/second.png")).unwrap();
+    let r = scan(&mut s, &dir.path("trip"));
+    assert_eq!(r["moved"].as_array().map(Vec::len), Some(2), "{r}");
+    let r = s.execute("folder.synchronize", &json!({"path": dir.path("trip"), "scanned": true})).unwrap();
+    assert_eq!(r["relinked"], 2, "{r}");
+    let mut files: Vec<String> = s
+        .catalog
+        .photos()
+        .filter_map(|p| match &p.source {
+            lightcraft_catalog::Source::File { path } => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
+    files.sort();
+    files.dedup();
+    assert_eq!(files.len(), 5, "five photos, five files: {files:?}");
+    // a copy of a photo in Recently Deleted stays out, and that photo stays where it is
+    let b = s.catalog.photos().find(|p| p.file_name == "b.png").map(|p| p.id).unwrap();
+    s.execute("photo.delete", &json!({"ids": [b.0]})).unwrap();
+    std::fs::copy(dir.path("trip/day1/b.png"), dir.path("trip/topic/b copy.png")).unwrap();
+    let r = s.execute("folder.synchronize", &json!({"path": dir.path("trip/topic")})).unwrap();
+    assert_eq!(r["imported"], 0, "{r}");
+    assert!(s.catalog.photo(b).is_some_and(|p| p.deleted), "still in Recently Deleted");
+    // turned back on: a further copy is left out again
+    s.execute("library.preferences", &json!({"import": {"importDuplicates": false}})).unwrap();
+    std::fs::copy(dir.path("trip/first.png"), dir.path("trip/topic/third.png")).unwrap();
+    let r = s.execute("folder.synchronize", &json!({"path": dir.path("trip")})).unwrap();
+    assert_eq!(r["imported"], 0, "{r}");
 }
 
 #[test]
@@ -588,7 +661,7 @@ fn the_work_of_synchronizing_runs_apart_from_its_commits() {
     write_png(&dir.path("trip/c.png"), 3);
     std::fs::remove_file(dir.path("trip/day1/b.png")).unwrap();
     write_sidecar(&dir.path("trip/a.png"), 5, Duration::ZERO);
-    let choice = crate::sync::SyncChoice { import_new: true, relink_moved: true, remove_missing: true, read_metadata: true };
+    let choice = crate::sync::SyncChoice { import_new: true, relink_moved: true, remove_missing: true, read_metadata: true, ..Default::default() };
     let r = sync_in_halves(&mut s, &dir.path("trip"), choice);
     assert_eq!((r.imported, r.removed, r.read), (1, 1, 1), "{r:?}");
     assert_eq!(s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().rating, 5);

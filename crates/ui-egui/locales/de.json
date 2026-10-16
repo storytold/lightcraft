@@ -2067,6 +2067,8 @@
   "Missing photos move to Recently Deleted and can be restored; no file on disk is touched.": "Fehlende Fotos werden nach „Zuletzt gelöscht“ verschoben und können wiederhergestellt werden; keine Datei auf dem Datenträger wird verändert.",
   "Reading a sidecar replaces the photo's rating, labels, metadata and edits with what it says.": "Beim Lesen einer Begleitdatei werden Bewertung, Markierungen, Metadaten und Bearbeitungen des Fotos durch ihren Inhalt ersetzt.",
   "Skipped: files already in the library elsewhere": "Übersprungen: Dateien, die bereits an anderer Stelle in der Bibliothek sind",
+  "Don't import files already in the library": "Dateien, die bereits in der Bibliothek sind, nicht importieren",
+  "A file with the same content as a photo of the library, under another name or in another folder. Untick to bring such files in as photos of their own. Remembered for the next Synchronize.": "Eine Datei mit demselben Inhalt wie ein Foto der Bibliothek, unter anderem Namen oder in einem anderen Ordner. Deaktivieren, um solche Dateien als eigene Fotos aufzunehmen. Wird für die nächste Synchronisierung gemerkt.",
   "Skipped: files that can't be read": "Übersprungen: Dateien, die nicht gelesen werden können",
   "This folder isn't there: it was moved or renamed, or its disk isn't connected.": "Dieser Ordner ist nicht vorhanden: Er wurde verschoben oder umbenannt, oder sein Datenträger ist nicht verbunden.",
   "Relink photos whose file was renamed or moved": "Fotos neu verknüpfen, deren Datei umbenannt oder verschoben wurde",

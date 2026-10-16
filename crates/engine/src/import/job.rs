@@ -236,7 +236,10 @@ impl ImportJob {
             if let Source::File { path } = &p.source {
                 self.by_path.insert(path.clone(), (p.id, p.local));
             }
-            if let Some(h) = &p.content_hash {
+            // importing suspected duplicates: only a trashed photo's content still matches
+            if let Some(h) = &p.content_hash
+                && (p.deleted || !self.opts.import_duplicates)
+            {
                 self.by_hash.insert(h.clone(), Some(p.id));
             }
         }
@@ -399,7 +402,9 @@ impl ImportJob {
                 }
                 _ => path.clone(),
             };
-            if let Some(h) = &info.content_hash {
+            if let Some(h) = &info.content_hash
+                && !self.opts.import_duplicates
+            {
                 self.by_hash.insert(h.clone(), None);
             }
             self.done.fetch_add(1, Relaxed);
@@ -423,6 +428,7 @@ impl ImportJob {
             };
             if let PreparedItem::Ready(r) = &item
                 && let Some(h) = &r.info.content_hash
+                && !self.opts.import_duplicates
             {
                 self.by_hash.insert(h.clone(), None);
             }

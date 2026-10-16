@@ -1903,6 +1903,8 @@
   "Missing photos move to Recently Deleted and can be restored; no file on disk is touched.": "Les photos manquantes vont dans Supprimées récemment et peuvent être restaurées ; aucun fichier sur le disque n'est touché.",
   "Reading a sidecar replaces the photo's rating, labels, metadata and edits with what it says.": "Lire un fichier annexe remplace la note, les étiquettes, les métadonnées et les retouches de la photo par son contenu.",
   "Skipped: files already in the library elsewhere": "Ignorés : fichiers déjà ailleurs dans la bibliothèque",
+  "Don't import files already in the library": "Ne pas importer les fichiers déjà dans la bibliothèque",
+  "A file with the same content as a photo of the library, under another name or in another folder. Untick to bring such files in as photos of their own. Remembered for the next Synchronize.": "Un fichier au même contenu qu'une photo de la bibliothèque, sous un autre nom ou dans un autre dossier. Décochez pour ajouter ces fichiers comme photos à part entière. Mémorisé pour la prochaine synchronisation.",
   "Skipped: files that can't be read": "Ignorés : fichiers illisibles",
   "This folder isn't there: it was moved or renamed, or its disk isn't connected.": "Ce dossier est introuvable : il a été déplacé ou renommé, ou son disque n'est pas connecté.",
   "Relink photos whose file was renamed or moved": "Relier les photos dont le fichier a été renommé ou déplacé",

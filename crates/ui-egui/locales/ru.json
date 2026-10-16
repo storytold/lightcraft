@@ -1625,6 +1625,8 @@
   "Missing photos move to Recently Deleted and can be restored; no file on disk is touched.": "Отсутствующие фото перемещаются в «Недавно удалённые», их можно восстановить; файлы на диске не затрагиваются.",
   "Reading a sidecar replaces the photo's rating, labels, metadata and edits with what it says.": "Чтение XMP-файла заменяет оценку, метки, метаданные и правки фото его содержимым.",
   "Skipped: files already in the library elsewhere": "Пропущено: файлы, которые уже есть в библиотеке в другом месте",
+  "Don't import files already in the library": "Не импортировать файлы, которые уже есть в библиотеке",
+  "A file with the same content as a photo of the library, under another name or in another folder. Untick to bring such files in as photos of their own. Remembered for the next Synchronize.": "Файл с тем же содержимым, что и фото в библиотеке, под другим именем или в другой папке. Снимите флажок, чтобы добавлять такие файлы как отдельные фото. Запоминается для следующей синхронизации.",
   "Skipped: files that can't be read": "Пропущено: файлы, которые не удаётся прочитать",
   "This folder isn't there: it was moved or renamed, or its disk isn't connected.": "Этой папки нет: её переместили или переименовали, либо её диск не подключён.",
   "Relink photos whose file was renamed or moved": "Повторно связать фото, файл которых переименован или перемещён",

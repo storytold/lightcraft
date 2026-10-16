@@ -172,6 +172,38 @@ fn the_dialog_says_what_changed_in_the_folder() {
     assert_eq!(in_library(&h), vec!["a.png", "b.png"], "scanning changed nothing");
 }
 
+/// A file with the bytes of a library photo, under another name: "Don't import files already in
+/// the library" is ticked at first, and the file is skipped. Unticked, Synchronize brings it in as a
+/// photo of its own, and the library keeps the choice: the next dialog opens unticked.
+#[test]
+fn unticking_dont_import_files_already_in_the_library_brings_the_copies_in_and_is_remembered() {
+    let dir = Scratch::new("copies");
+    let mut h = changed_folder(&dir);
+    std::fs::copy(dir.path("trip/a.png"), dir.path("trip/a again.png")).unwrap();
+    open_and_scan(&mut h, &dir.path("trip"));
+    assert_eq!((counts(&h).new, counts(&h).duplicates), (1, 1), "{:?}", counts(&h));
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { import_duplicates: false, .. })), "ticked at first");
+    let unticked = |h: &Headless| matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { import_duplicates: true, .. }));
+    let mut landed = false;
+    for _ in 0..5 {
+        h.step();
+        let r = h.request("ui.clickWidget", json!({"id": "syncSkipDuplicates"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        if h.step_until(Duration::from_secs(3), unticked) {
+            landed = true;
+            break;
+        }
+    }
+    assert!(landed, "the box never unticked: {:?}", h.app.ui.dialog);
+    synchronize(&mut h);
+    assert_eq!(in_library(&h), vec!["a again.png", "a.png", "b.png", "c.png"], "the copy came in beside c");
+    assert!(h.app.session.import_defaults.import_duplicates, "the library keeps the choice");
+    // the next dialog opens as it was left
+    std::fs::copy(dir.path("trip/c.png"), dir.path("trip/c again.png")).unwrap();
+    open_and_scan(&mut h, &dir.path("trip"));
+    assert!(unticked(&h), "{:?}", h.app.ui.dialog);
+}
+
 #[test]
 fn synchronizing_with_the_defaults_imports_the_new_photos_only() {
     let dir = Scratch::new("defaults");
@@ -313,6 +345,7 @@ fn a_synchronize_and_an_import_never_run_at_once() {
         disk: false,
         counts: Some(crate::state::SyncCounts { new: 1, ..Default::default() }),
         import_new: true,
+        import_duplicates: false,
         relink_moved: true,
         remove_missing: false,
         read_metadata: false,

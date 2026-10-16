@@ -1907,6 +1907,8 @@
   "Missing photos move to Recently Deleted and can be restored; no file on disk is touched.": "缺失的照片会移到“最近删除”，可以恢复；磁盘上的文件不会被改动。",
   "Reading a sidecar replaces the photo's rating, labels, metadata and edits with what it says.": "读取附属文件会用其内容替换照片的评级、标签、元数据和编辑。",
   "Skipped: files already in the library elsewhere": "已跳过：已在图库其他位置的文件",
+  "Don't import files already in the library": "不导入已在图库中的文件",
+  "A file with the same content as a photo of the library, under another name or in another folder. Untick to bring such files in as photos of their own. Remembered for the next Synchronize.": "与图库中某张照片内容相同的文件，名称不同或位于其他文件夹。取消勾选可将此类文件作为独立照片导入。下次同步时会记住此设置。",
   "Skipped: files that can't be read": "已跳过：无法读取的文件",
   "This folder isn't there: it was moved or renamed, or its disk isn't connected.": "此文件夹不存在：它已被移动或重命名，或其磁盘未连接。",
   "Relink photos whose file was renamed or moved": "重新链接文件被重命名或移动的照片",

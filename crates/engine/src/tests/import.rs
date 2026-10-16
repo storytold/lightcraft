@@ -79,6 +79,39 @@ fn recursive_import_with_duplicates() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// Files whose content a photo already has, imported anyway (`importDuplicates`, as Synchronize
+/// Folder does with "Don't import files already in the library" unticked): a file with the bytes
+/// of a library photo, and two copies of one new picture, each come in as a photo of their own, and
+/// the photos stay told apart: no two keep the same content key.
+#[test]
+fn files_imported_although_a_photo_has_their_content_get_keys_of_their_own() {
+    let src = temp_dir("importdups");
+    write_png(&src.join("a.png"), 1);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
+    std::fs::create_dir_all(src.join("topic")).unwrap();
+    std::fs::copy(src.join("a.png"), src.join("topic/a.png")).unwrap();
+    write_png(&src.join("topic/b.png"), 2);
+    std::fs::copy(src.join("topic/b.png"), src.join("topic/b-again.png")).unwrap();
+    let topic = src.join("topic").to_string_lossy().to_string();
+    // without the param: the copies stay out
+    let r = s.execute("library.importPreview", &json!({"paths": [topic]})).unwrap();
+    assert_eq!(r["duplicates"], 2, "{r}");
+    let r = s.execute("library.import", &json!({"paths": [topic]})).unwrap();
+    assert_eq!((ids(&r, "imported"), ids(&r, "duplicates")), (1, 2), "{r}");
+    s.execute("edit.undo", &json!({})).unwrap();
+    // this import says otherwise: all three come in
+    let r = s.execute("library.import", &json!({"paths": [topic], "importDuplicates": true})).unwrap();
+    assert_eq!((ids(&r, "imported"), ids(&r, "duplicates")), (3, 0), "{r}");
+    assert_eq!(s.catalog.len(), 4);
+    let mut keys: Vec<String> = s.catalog.photos().filter_map(|p| p.content_hash.clone()).collect();
+    keys.sort();
+    keys.dedup();
+    assert_eq!(keys.len(), 4, "four photos, four content keys: {keys:?}");
+    assert!(!s.import_defaults.import_duplicates, "one import's choice is not remembered by itself");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 #[test]
 fn copy_into_library_and_persist() {
     let src = temp_dir("copysrc");
@@ -1287,6 +1320,20 @@ fn trashed_photo(tag: &str) -> (Session, std::path::PathBuf, u64) {
     s.execute("photo.rate", &json!({"ids": [id], "rating": 4})).unwrap();
     s.execute("photo.delete", &json!({"ids": [id]})).unwrap();
     (s, src, id)
+}
+
+/// A Fresh import with files whose content a photo has imported anyway: the trashed photo it
+/// replaces holds no content any more, so the new photo takes the content's own key (a `:dup` key
+/// would leave the content keyed by no photo, and later copies unnoticed).
+#[test]
+fn a_fresh_import_of_a_trashed_photos_file_keeps_the_contents_own_key() {
+    let (mut s, src, id) = trashed_photo("fresh-own-key");
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()], "importDuplicates": true, "onDeleted": "fresh"})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1, "{r}");
+    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(id)).is_none(), "the trashed record is replaced");
+    let keys: Vec<String> = s.catalog.photos().filter_map(|p| p.content_hash.clone()).collect();
+    assert!(keys.len() == 1 && !keys[0].contains(':'), "{keys:?}");
+    let _ = std::fs::remove_dir_all(&src);
 }
 
 /// Issue #706: import a photo, delete it, import the same file again. Before, the import skipped

@@ -1795,6 +1795,8 @@
   "Size limit": "Limit velikosti",
   "Skip": "Přeskočit",
   "Skipped: files already in the library elsewhere": "Přeskočeno: soubory již v knihovně na jiném místě",
+  "Don't import files already in the library": "Neimportovat soubory, které už v knihovně jsou",
+  "A file with the same content as a photo of the library, under another name or in another folder. Untick to bring such files in as photos of their own. Remembered for the next Synchronize.": "Soubor se stejným obsahem jako fotografie v knihovně, pod jiným názvem nebo v jiné složce. Zrušte zaškrtnutí, chcete-li takové soubory přidat jako samostatné fotografie. Zapamatuje se pro příští synchronizaci.",
   "Skipped: files that can't be read": "Přeskočeno: soubory, které nelze načíst",
   "Sky": "Obloha",
   "Slideshow": "Prezentace",

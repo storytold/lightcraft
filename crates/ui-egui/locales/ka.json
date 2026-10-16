@@ -1953,6 +1953,8 @@
   "Size rules measure the photo as shown: Megapixels now counts the cropped photo, like Long Edge, Short Edge and": "ზომის წესები ფოტოს ზომავს ისე, როგორც ჩანს: მეგაპიქსელი ახლა ჩამოჭრილ ფოტოს ითვლის, როგორც გრძელი გვერდი, მოკლე გვერდი და",
   "Skip": "გამოტოვება",
   "Skipped: files already in the library elsewhere": "გამოტოვებულია: ფაილები, რომლებიც ბიბლიოთეკაში უკვე სხვა ადგილასაა",
+  "Don't import files already in the library": "არ შემოიტანოს ფაილები, რომლებიც უკვე ბიბლიოთეკაშია",
+  "A file with the same content as a photo of the library, under another name or in another folder. Untick to bring such files in as photos of their own. Remembered for the next Synchronize.": "ფაილი, რომლის შიგთავსი ბიბლიოთეკის ფოტოს იდენტურია, სხვა სახელით ან სხვა საქაღალდეში. მოხსენით მონიშვნა, რომ ასეთი ფაილები ცალკე ფოტოებად შემოვიდეს. დაიმახსოვრება შემდეგი სინქრონიზაციისთვის.",
   "Skipped: files that can't be read": "გამოტოვებულია: ფაილები, რომელთა წაკითხვა შეუძლებელია",
   "Sky": "ცა",
   "Sky, Subject and Background masks instead of our heuristics, so the sky is selected where the camera found it": "ცის, საგნის და ფონის მონიშვნის ნიღბებისთვის ჩვენი ევრისტიკის ნაცვლად, ასე რომ ცა იქ მოინიშნება, სადაც კამერამ იპოვა",
