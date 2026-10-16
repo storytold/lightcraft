@@ -23,6 +23,12 @@ pub mod camera_profiles;
 pub mod cmd;
 pub mod config;
 pub mod contact_sheet;
+#[cfg(not(target_arch = "wasm32"))]
+mod content_index;
+pub mod content_models;
+pub mod content_query;
+#[cfg(not(target_arch = "wasm32"))]
+mod content_worker;
 pub mod crs;
 pub mod crs_masks;
 pub mod demo;
@@ -245,6 +251,10 @@ pub struct Session {
     pub(crate) denoise: denoise::State,
     /// Where the host keeps face models (one folder each); `None` where there is no file system (the web).
     pub face_models_dir: Option<std::path::PathBuf>,
+    /// Where the host keeps content models (`<config>/models/content`); `None` where there is no file system (the web).
+    pub content_models_dir: Option<std::path::PathBuf>,
+    /// Content model downloads and self-tests started this session.
+    pub content_jobs: content_models::Jobs,
     /// Face model downloads started this session (the staged files wait in `<face_models_dir>/.downloads`).
     pub face_downloads: face_download::Downloads,
     /// Reverse geocoding: the parsed place names and their download (`metadata.*PlaceNames`).
@@ -254,6 +264,11 @@ pub struct Session {
     /// The loaded recognition model and the face embeddings made with it.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) faces: faces_index::FacesState,
+    /// Content indexing (search by what photos show): the index of the model in use and the background scan.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) content: content_worker::State,
+    /// The library view's search by contents (`library.filter {contents}`, `contents:` words, Find Similar Contents).
+    pub content_query: content_query::ContentQuery,
     /// Reading focus points for photos imported before they were read (`photo.readFocusPoints`, `focus.pump`).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) focus_scan: focus_scan::FocusScan,
@@ -432,10 +447,15 @@ impl Session {
             denoise: Default::default(),
             face_models_dir: None,
             face_downloads: Default::default(),
+            content_models_dir: None,
+            content_jobs: Default::default(),
             place_names: Default::default(),
             face_catalog: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             faces: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            content: Default::default(),
+            content_query: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             focus_scan: Default::default(),
             clipboard: None,
@@ -964,8 +984,12 @@ impl Session {
 
     /// Photos shown in the grid/filmstrip for the current source, filter and sort.
     pub fn visible(&mut self) -> &[PhotoId] {
-        let mut key =
-            (self.catalog.revision, format!("{:?}|{:?}|{:?}|{:?}|{:?}", self.source, self.filter, self.sort, self.browse, self.library_folder));
+        // the search by contents first: it can change the sort (Relevance), and its ranking is part of the filter
+        let contents = self.content_refresh();
+        let mut key = (
+            self.catalog.revision,
+            format!("{:?}|{:?}|{:?}|{:?}|{:?}|c{contents}", self.source, self.filter, self.sort, self.browse, self.library_folder),
+        );
         // What a held view is told apart by: what is shown and how, and for a smart album its rules (rules that were
         // changed ask something else). Not the checks of Missing Photos below: they fill the view in, they are
         // no other view.
@@ -983,7 +1007,8 @@ impl Session {
         if self.visible_key.as_ref() != Some(&key) {
             // "in the last N days" rules count back from the session's clock
             lightcraft_catalog::rules::set_now(Some((self.clock)()));
-            let f = self.view_filter(self.source, &self.filter);
+            let mut f = self.view_filter(self.source, &self.filter);
+            f.ranked = self.content_query.ranked.clone();
             // A held view keeps the photos it shows that stopped matching what is asked of them (a smart album's
             // rules, a flag, the filter bar), as long as they are still where the view looks: in the library for
             // a view that is only a question, else in the album or folder shown. Taking a photo out of an album
@@ -1048,6 +1073,7 @@ impl Session {
                 && let Some(al) = self.catalog.album(a)
                 && !al.is_smart()
                 && self.filter == Filter::default()
+                && self.content_query.ranked.is_none()
             {
                 // each photo's place looked up, not searched for (a big album sorted in O(n log n))
                 let mut place: std::collections::HashMap<PhotoId, usize> = std::collections::HashMap::with_capacity(al.photos.len());
@@ -1059,9 +1085,11 @@ impl Session {
                     visible.reverse();
                 }
             }
-            if self.source == LibrarySource::RecentlyAdded {
-                // newest import first, whatever the sort direction (the grid groups by import day);
-                // a batch stays in file order (name, then id)
+            if self.source == LibrarySource::RecentlyAdded
+                && !(self.content_query.ranked.is_some() && self.sort.key == lightcraft_catalog::SortKey::Relevance)
+            {
+                // newest import first, whatever the sort direction (the grid groups by import day), except best
+                // matches first while searching by contents; a batch stays in file order (name, then id)
                 let cat = &self.catalog;
                 visible.sort_by(|a, b| {
                     let key = |id: &PhotoId| cat.photo(*id).map(|p| p.imported.clone()).unwrap_or_default();
@@ -1241,6 +1269,10 @@ mod tests_album_remove;
 mod tests_albums_local;
 #[cfg(test)]
 mod tests_color;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_content_index;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_content_models;
 #[cfg(test)]
 mod tests_crop_angle;
 #[cfg(test)]
