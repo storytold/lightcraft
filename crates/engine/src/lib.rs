@@ -18,6 +18,7 @@ pub mod activity;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod apple_photos;
 pub mod availability;
+pub mod backup_schedule;
 pub(crate) mod camera_preview;
 pub mod camera_profiles;
 pub mod cmd;
@@ -348,6 +349,32 @@ pub struct Session {
     pub slideshow_export: Option<std::sync::Arc<slideshow_export::ExportRun>>,
     /// The last (or running) Build Previews.
     pub preview_build: Option<std::sync::Arc<cmd::previews::PreviewBuild>>,
+    /// The library backup under way, or the last one made (`library.backup`).
+    pub backup: Option<std::sync::Arc<cmd::backup::BackupJob>>,
+    /// Where the library's backups go (a library preference; `None`: Backups in its folder).
+    pub backup_dir: Option<std::path::PathBuf>,
+    /// When the library is backed up without being asked (`library.backupPreferences`).
+    pub backup_schedule: backup_schedule::BackupSchedule,
+    /// How many days the library keeps its backups (`None`: forever). Older ones are removed
+    /// after a backup is made (`library.backupPreferences`, `keepDays`).
+    pub backup_keep_days: Option<u32>,
+    /// The library's own id, which its backups say they are of (given at its first backup, and
+    /// saved with it: a library made anew in the same folder has another).
+    pub library_id: Option<String>,
+    /// When the library was last backed up to the folder its backups go to (the session clock's
+    /// time; saved with the library).
+    pub last_backup: Option<String>,
+    /// When a backup by itself was last started in this session (see `backup_schedule::due`).
+    pub backup_tried: Option<String>,
+    /// Holds a backup before it starts reading (tests look at its row meanwhile).
+    #[doc(hidden)]
+    pub backup_hold: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The restore of the library that runs in the background, or the last one made that way
+    /// (`library.restore` with `background`).
+    pub restore: Option<std::sync::Arc<cmd::backup::RestoreJob>>,
+    /// Holds a restore before it starts (tests look at its row meanwhile).
+    #[cfg(test)]
+    pub(crate) restore_hold: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Develop defaults applied on import (persisted in prefs.json).
     pub import_defaults: import::ImportDefaults,
     /// Disk budget of the library's thumbnail cache in MB (0 = default; persisted in prefs.json).
@@ -481,6 +508,17 @@ impl Session {
             activity: Default::default(),
             preview_build: None,
             slideshow_export: None,
+            backup: None,
+            backup_dir: None,
+            backup_schedule: Default::default(),
+            backup_keep_days: None,
+            library_id: None,
+            last_backup: None,
+            backup_tried: None,
+            backup_hold: Default::default(),
+            restore: None,
+            #[cfg(test)]
+            restore_hold: Default::default(),
             import_defaults: import::ImportDefaults::default(),
             cache_mb: 0,
             slideshow: slideshow::PlaybackSettings::default(),
@@ -518,6 +556,9 @@ impl Session {
         }
         let empty = Value::Object(Default::default());
         let params = if params.is_null() { &empty } else { params };
+        if spec.journal {
+            self.not_stuck()?;
+        }
         self.run_command(id, spec.journal.then_some(params), |s| (spec.run)(s, params)).map_err(|e| match e {
             // a shared parameter check ([`Session::targets`]) names the command it ran for
             EngineError::BadParams { cmd, msg } if cmd.is_empty() => EngineError::BadParams { cmd: id.to_string(), msg },
@@ -585,6 +626,7 @@ impl Session {
 
     /// Apply an op as one undoable step.
     pub fn commit(&mut self, label: &str, op: Op) -> Result<()> {
+        self.not_stuck()?;
         let fwd = op.clone();
         let inv = self.apply_catalog(op)?;
         self.pending_log.push(fwd);
@@ -657,6 +699,7 @@ impl Session {
     /// scan, a raw's as-shot white read by a decode, raws rechecked after an update): journaled like any op, but not
     /// an undo step, and it leaves the redo stack alone.
     pub(crate) fn apply_system(&mut self, op: Op) -> Result<()> {
+        self.not_stuck()?;
         let fwd = op.clone();
         self.catalog.apply(op)?;
         self.pending_log.push(fwd);
@@ -726,6 +769,7 @@ impl Session {
     }
 
     pub(crate) fn undo_step_with(&mut self, fs: &dyn rename::MoveFs) -> Result<String> {
+        self.not_stuck()?;
         let mut e = self.undo.pop().ok_or_else(|| EngineError::Other("nothing to undo".into()))?;
         let redo = match self.apply_with_files(&mut e, fs) {
             Ok(r) => r,
@@ -751,6 +795,7 @@ impl Session {
     }
 
     pub(crate) fn redo_step_with(&mut self, fs: &dyn rename::MoveFs) -> Result<String> {
+        self.not_stuck()?;
         let mut e = self.redo.pop().ok_or_else(|| EngineError::Other("nothing to redo".into()))?;
         let undo = match self.apply_with_files(&mut e, fs) {
             Ok(r) => r,
@@ -1240,6 +1285,12 @@ mod tests_album_remove;
 #[cfg(test)]
 mod tests_albums_local;
 #[cfg(test)]
+mod tests_backup;
+#[cfg(test)]
+mod tests_backup_prune;
+#[cfg(test)]
+mod tests_backup_schedule;
+#[cfg(test)]
 mod tests_color;
 #[cfg(test)]
 mod tests_crop_angle;
@@ -1299,6 +1350,8 @@ mod tests_print;
 mod tests_process;
 #[cfg(test)]
 mod tests_recheck;
+#[cfg(test)]
+mod tests_restore;
 #[cfg(test)]
 mod tests_segment;
 #[cfg(test)]
