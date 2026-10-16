@@ -230,8 +230,34 @@ pub struct Gpu {
     dummy: wgpu::Buffer,
     /// Recycled buffers (see [`Buf`]).
     free: std::sync::Mutex<Vec<Tracked>>,
+    /// Timed-out submissions still own device work, even after their caller starts CPU fallback.
+    readbacks: std::sync::Mutex<Vec<PendingReadback>>,
     /// Largest storage buffer the device accepts (bytes).
     pub max_buffer: u64,
+}
+
+struct PendingReadback {
+    submission: wgpu::SubmissionIndex,
+    _work: crate::exit::Work<'static>,
+}
+
+/// Reap only submissions whose completion was observed. Keep both timeouts and unknown
+/// completion (including a driver panic) in flight; callers disable the device for the latter.
+fn reap_readbacks<T>(pending: &mut Vec<T>, mut poll: impl FnMut(&T) -> Result<wgpu::PollStatus, wgpu::PollError>) -> Result<bool, String> {
+    let mut error = None;
+    pending.retain(|p| match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| poll(p))) {
+        Ok(Ok(status)) => !status.wait_finished(),
+        Ok(Err(wgpu::PollError::Timeout)) => true,
+        Ok(Err(e)) => {
+            error.get_or_insert_with(|| format!("readback recovery failed: {e}"));
+            true
+        }
+        Err(_) => {
+            error.get_or_insert_with(|| "a GPU readback recovery poll panicked".into());
+            true
+        }
+    });
+    error.map_or_else(|| Ok(pending.is_empty()), Err)
 }
 
 /// WGSL constants shared by every module (generated from the CPU pipeline's values).
@@ -368,7 +394,7 @@ impl Gpu {
         });
         let max_buffer = limits.max_storage_buffer_binding_size.min(limits.max_buffer_size);
         log::info!("gpu: {} ({:?}), buffers ≤ {} MiB", info.name, info.backend, max_buffer >> 20);
-        Ok(Gpu { device, queue, info, kernels, dummy, free: Default::default(), max_buffer })
+        Ok(Gpu { device, queue, info, kernels, dummy, free: Default::default(), readbacks: Default::default(), max_buffer })
     }
 
     /// A buffer of `len` 32-bit values with undefined contents (a recycled one when possible).
@@ -409,10 +435,46 @@ impl Gpu {
     }
 
     /// Submit command buffers, then make the buffers this thread dropped before reusable.
-    pub fn submit(&self, cmds: impl IntoIterator<Item = wgpu::CommandBuffer>) {
-        self.queue.submit(cmds);
+    pub fn submit(&self, cmds: impl IntoIterator<Item = wgpu::CommandBuffer>) -> wgpu::SubmissionIndex {
+        let submission = self.queue.submit(cmds);
         let retired = take_retired();
         self.pool(retired);
+        submission
+    }
+
+    /// Reap timed-out work without waiting. Until it finishes, new renders use the CPU instead
+    /// of building a backlog behind a slow/hung submission. Existing renders may still finish.
+    /// Also called during shutdown, when no new render will arrive to drive device maintenance.
+    pub fn readbacks_ready(&self) -> bool {
+        let mut pending = self.readbacks.lock().unwrap_or_else(|e| e.into_inner());
+        // wgpu reports some driver/device failures by panicking from poll, not through
+        // PollError. Recovery also runs outside the render guard (including shutdown).
+        reap_readbacks(&mut pending, |p| {
+            self.device.poll(wgpu::PollType::Wait { submission_index: Some(p.submission.clone()), timeout: Some(std::time::Duration::ZERO) })
+        })
+        .unwrap_or_else(|reason| {
+            crate::mark_broken(&reason);
+            false
+        })
+    }
+
+    /// Wait for this render's submission only. A timeout retains shutdown accounting until
+    /// maintenance observes completion; it does not cancel work already running on the GPU.
+    pub fn wait(&self, submission: wgpu::SubmissionIndex, injected_timeout: bool) -> Result<(), Failure> {
+        #[cfg(test)]
+        WAIT_CALLS.with(|n| n.set(n.get() + 1));
+        let waited = if injected_timeout {
+            Err(wgpu::PollError::Timeout)
+        } else {
+            self.device.poll(wgpu::PollType::Wait { submission_index: Some(submission.clone()), timeout: Some(READBACK_TIMEOUT) })
+        };
+        waited.map(|_| ()).map_err(|e| {
+            let kind = poll_failure_kind(&e);
+            if kind == FailKind::Timeout {
+                self.readbacks.lock().unwrap_or_else(|e| e.into_inner()).push(PendingReadback { submission, _work: crate::exit::submitted() });
+            }
+            Failure { kind, reason: e.to_string() }
+        })
     }
 
     /// Put reusable buffers into the free pool (trimmed to its limit).
@@ -531,9 +593,9 @@ impl Gpu {
 
     /// Submit `enc`, then read back the first `len` 32-bit values of `src`.
     ///
-    /// A failed readback (device lost, map error, timeout) fails the render ([`FailKind::Fatal`])
-    /// and returns zeros, which the caller discards; after an earlier failure in the same render
-    /// nothing more is submitted.
+    /// A failed readback returns zeros, which the caller discards. Only a wait timeout is
+    /// recoverable; device loss and map errors remain fatal. After an earlier failure in the
+    /// same render nothing more is submitted.
     pub fn finish_and_read<T: bytemuck::Pod>(&self, mut enc: wgpu::CommandEncoder, src: &Buf, len: usize) -> Vec<T> {
         assert!(len <= src.len, "readback of {len} values from a buffer of {}", src.len);
         let zeros = || vec![<T as bytemuck::Zeroable>::zeroed(); len];
@@ -548,30 +610,34 @@ impl Gpu {
             mapped_at_creation: false,
         });
         enc.copy_buffer_to_buffer(src.raw(), 0, &staging, 0, size);
-        self.submit([enc.finish()]);
+        let submission = self.submit([enc.finish()]);
         let slice = staging.slice(..size);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
-        let failed = |why: String| {
-            fail(FailKind::Fatal, format!("readback failed: {why}"));
+        let failed = |kind, why: String| {
+            // Destroy cancels a pending map (or releases a completed one) without assuming its
+            // state: public unmap on an already-failed map would raise a validation error.
+            // wgpu defers freeing the native buffer until its submitted copy has completed.
+            staging.destroy();
+            fail(kind, format!("readback failed: {why}"));
             zeros()
         };
         // A lost device makes the wait fail and the map callback never run: checking both keeps
         // this from blocking forever (or handing back an unwritten buffer as the image).
-        if let Err(e) = self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(READBACK_TIMEOUT) }) {
-            return failed(format!("{e}"));
+        if let Err(e) = self.wait(submission, take_readback_timeout()) {
+            return failed(e.kind, e.reason);
         }
         // another thread's poll may be the one that runs the callback: allow it a moment
         match rx.recv_timeout(std::time::Duration::from_secs(10)) {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => return failed(format!("{e}")),
-            Err(e) => return failed(format!("map callback: {e}")),
+            Ok(Err(e)) => return failed(FailKind::Fatal, format!("{e}")),
+            Err(e) => return failed(FailKind::Fatal, format!("map callback: {e}")),
         }
         let data = match slice.get_mapped_range() {
             Ok(d) => d,
-            Err(e) => return failed(format!("{e:?}")),
+            Err(e) => return failed(FailKind::Fatal, format!("{e:?}")),
         };
         let out: Vec<T> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
@@ -583,6 +649,19 @@ impl Gpu {
 /// Longest wait for a render's GPU work: beyond it the render fails over to the CPU (drivers
 /// normally reset a hung GPU much sooner).
 const READBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+#[cfg(test)]
+thread_local! {
+    /// Observe profiling barriers without racing other tests' submissions or polls.
+    pub(crate) static WAIT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn poll_failure_kind(error: &wgpu::PollError) -> FailKind {
+    match error {
+        wgpu::PollError::Timeout => FailKind::Timeout,
+        _ => FailKind::Fatal,
+    }
+}
 
 /// `LIGHTCRAFT_GPU_LIMITS`: lower the device limits, e.g. to reproduce a smaller adapter.
 /// `webgpu` / `downlevel` = 128 MiB storage bindings and 256 MiB buffers (the WebGPU defaults),
@@ -614,9 +693,11 @@ pub(crate) enum FailKind {
     Limit,
     /// The device ran out of memory: this render only (the buffer pool is emptied).
     OutOfMemory,
+    /// The submitted work has not finished yet: this render only; drain it before trying again.
+    Timeout,
     /// The image came back entirely black: redone on the CPU in case the GPU dropped work.
     Blank,
-    /// Device error or loss, readback failure, incomplete image: the GPU is not used again.
+    /// Device error or loss, map failure, incomplete image: the GPU is not used again.
     Fatal,
 }
 
@@ -627,8 +708,29 @@ pub(crate) struct Failure {
 }
 
 thread_local! {
+    /// Inject a timeout after a real submission and map request, without a large/slow workload.
+    static READBACK_FAULT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// A lower buffer limit for the render on this thread (fault injection in tests).
     static LIMIT: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+pub(crate) struct ReadbackTimeout;
+
+impl ReadbackTimeout {
+    pub fn new() -> Self {
+        READBACK_FAULT.with(|f| f.set(true));
+        Self
+    }
+}
+
+impl Drop for ReadbackTimeout {
+    fn drop(&mut self) {
+        let _ = READBACK_FAULT.try_with(|f| f.set(false));
+    }
+}
+
+fn take_readback_timeout() -> bool {
+    READBACK_FAULT.with(|f| f.replace(false))
 }
 
 /// Lowers [`Gpu::limit`] on this thread while it lives.
@@ -724,6 +826,47 @@ pub fn groups1(n: usize) -> [u32; 3] {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn recovery_waits_for_every_submission_and_keeps_shutdown_busy() {
+        let gate = crate::exit::Gate::new();
+        let mut pending = vec![(1, gate.enter().unwrap()), (2, gate.enter().unwrap())];
+        gate.close();
+        assert_eq!(super::reap_readbacks(&mut pending, |_| Err(wgpu::PollError::Timeout)), Ok(false));
+        assert_eq!(super::reap_readbacks(&mut pending, |_| Ok(wgpu::PollStatus::Poll)), Ok(false));
+        assert_eq!(pending.len(), 2);
+        assert!(!gate.wait_idle(std::time::Duration::ZERO));
+        assert_eq!(
+            super::reap_readbacks(&mut pending, |(index, _)| if *index == 1 {
+                Ok(wgpu::PollStatus::WaitSucceeded)
+            } else {
+                Err(wgpu::PollError::Timeout)
+            }),
+            Ok(false)
+        );
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].0, 2, "finishing an earlier timeout must not clear a later one");
+        assert!(!gate.wait_idle(std::time::Duration::ZERO));
+        assert_eq!(super::reap_readbacks(&mut pending, |_| Ok(wgpu::PollStatus::WaitSucceeded)), Ok(true));
+        assert!(gate.wait_idle(std::time::Duration::ZERO));
+    }
+
+    #[test]
+    fn unknown_completion_is_fatal_and_never_reports_idle() {
+        let gate = crate::exit::Gate::new();
+        let mut pending = vec![gate.enter().unwrap()];
+        assert!(super::reap_readbacks(&mut pending, |_| Err(wgpu::PollError::WrongSubmissionIndex(2, 1))).is_err());
+        assert!(!gate.wait_idle(std::time::Duration::ZERO));
+        assert!(super::reap_readbacks(&mut pending, |_| panic!("driver poll failed")).unwrap_err().contains("panicked"));
+        assert!(!gate.wait_idle(std::time::Duration::ZERO));
+        assert_eq!(pending.len(), 1);
+    }
+
+    #[test]
+    fn only_a_poll_timeout_is_recoverable() {
+        assert_eq!(super::poll_failure_kind(&wgpu::PollError::Timeout), super::FailKind::Timeout);
+        assert_eq!(super::poll_failure_kind(&wgpu::PollError::WrongSubmissionIndex(2, 1)), super::FailKind::Fatal);
+    }
+
     #[test]
     fn limits_override_parses() {
         assert_eq!(super::parse_limits("webgpu"), Some((128 << 20, 256 << 20)));
