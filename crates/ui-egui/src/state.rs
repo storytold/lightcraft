@@ -635,6 +635,12 @@ pub struct UiState {
     /// The Build Previews run last announced (its identity, finished?).
     #[serde(skip)]
     pub preview_build_seen: Option<(usize, bool)>,
+    /// The library backup whose end was announced (see `backup_status`).
+    #[serde(skip)]
+    pub backup_seen: Option<usize>,
+    /// The library restore whose end was announced (see `restore_status`).
+    #[serde(skip)]
+    pub restore_seen: Option<usize>,
     /// Saving the library is failing (announced with a toast; the top bar shows a warning until
     /// a later save succeeds).
     #[serde(skip)]
@@ -1267,6 +1273,8 @@ impl Default for UiState {
             docking: None,
             language: crate::i18n::default_language(),
             preview_build_seen: None,
+            backup_seen: None,
+            restore_seen: None,
             unsaved_seen: false,
             luminance_map_restore: None,
             view: ViewMode::Detail,

@@ -72,7 +72,7 @@ impl Unit {
 #[serde(rename_all = "camelCase")]
 pub struct TaskInfo {
     pub id: u64,
-    /// A stable id: `import`, `export`, `scan`, `previews`, `smartPreviews`, `lightroom`, `merge`, `download`,
+    /// A stable id: `import`, `export`, `scan`, `previews`, `smartPreviews`, `backup`, `lightroom`, `merge`, `download`,
     /// `faces`, `denoise`, `findMissing`, `applePhotos`, `cache`, `focus`.
     pub kind: &'static str,
     /// English; the frontend translates it.
@@ -205,6 +205,12 @@ impl Activity {
         let tasks = lock(&self.inner.tasks);
         let entry = tasks.iter().find(|e| e.id == id).ok_or_else(|| format!("no task {id}"))?;
         if entry.try_cancel() { Ok(()) } else { Err(format!("{} can't be cancelled", entry.label)) }
+    }
+
+    /// The task that adopted `flag` as its cancel flag ([`Cancel::Flag`]), if it is in the list:
+    /// to tell a job's own row from others of its kind.
+    pub fn id_of(&self, flag: &Arc<AtomicBool>) -> Option<u64> {
+        lock(&self.inner.tasks).iter().find(|e| e.cancel.as_ref().is_some_and(|f| Arc::ptr_eq(f, flag))).map(|e| e.id)
     }
 
     /// Ask every cancellable task to stop; returns how many were asked.
