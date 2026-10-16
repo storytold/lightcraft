@@ -463,9 +463,7 @@ pub fn try_render(
         // sections switched off with their eye render as if at their defaults (issue #316)
         let effective = s.effective();
         let s: &DevelopSettings = &effective;
-        // the kernel has no masks' local Curves yet: those render on the CPU
-        let local_curves = s.masks.iter().any(|m| m.visible && !m.curve.is_identity());
-        if !enabled() || !handles(req.depth, req.proof.is_some(), req.overlay) || local_curves {
+        if !enabled() || !handles(req.depth, req.proof.is_some(), req.overlay) {
             return Err(Fallback::NotTried);
         }
         let s = &*lightcraft_pipeline::settings_for(s, req);
