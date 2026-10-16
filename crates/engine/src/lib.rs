@@ -23,6 +23,11 @@ pub mod camera_profiles;
 pub mod cmd;
 pub mod config;
 pub mod contact_sheet;
+#[cfg(not(target_arch = "wasm32"))]
+mod content_index;
+pub mod content_models;
+#[cfg(not(target_arch = "wasm32"))]
+mod content_worker;
 pub mod crs;
 pub mod crs_masks;
 pub mod demo;
@@ -245,6 +250,10 @@ pub struct Session {
     pub(crate) denoise: denoise::State,
     /// Where the host keeps face models (one folder each); `None` where there is no file system (the web).
     pub face_models_dir: Option<std::path::PathBuf>,
+    /// Where the host keeps content models (`<config>/models/content`); `None` where there is no file system (the web).
+    pub content_models_dir: Option<std::path::PathBuf>,
+    /// Content model downloads and self-tests started this session.
+    pub content_jobs: content_models::Jobs,
     /// Face model downloads started this session (the staged files wait in `<face_models_dir>/.downloads`).
     pub face_downloads: face_download::Downloads,
     /// Reverse geocoding: the parsed place names and their download (`metadata.*PlaceNames`).
@@ -254,6 +263,9 @@ pub struct Session {
     /// The loaded recognition model and the face embeddings made with it.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) faces: faces_index::FacesState,
+    /// Content indexing (search by what photos show): the index of the model in use and the background scan.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) content: content_worker::State,
     /// Reading focus points for photos imported before they were read (`photo.readFocusPoints`, `focus.pump`).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) focus_scan: focus_scan::FocusScan,
@@ -432,10 +444,14 @@ impl Session {
             denoise: Default::default(),
             face_models_dir: None,
             face_downloads: Default::default(),
+            content_models_dir: None,
+            content_jobs: Default::default(),
             place_names: Default::default(),
             face_catalog: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             faces: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            content: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             focus_scan: Default::default(),
             clipboard: None,
@@ -1241,6 +1257,10 @@ mod tests_album_remove;
 mod tests_albums_local;
 #[cfg(test)]
 mod tests_color;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_content_index;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_content_models;
 #[cfg(test)]
 mod tests_crop_angle;
 #[cfg(test)]

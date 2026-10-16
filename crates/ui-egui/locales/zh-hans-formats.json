@@ -295,5 +295,18 @@
   "Renames {n} face{} across the library. The files are not changed.": "在整个图库中重命名 {n} 张面孔。不会改动文件。{:.0}",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "“{to}”已经是另一个人。合并后成为一个人；撤销会再把他们分开。",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "已添加 {what} 合并（{mp}）：完整尺寸（{full}）所需的内存超出了这台电脑的内存",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "已添加 {what} 合并（{mp}），这是全景图的最大尺寸（完整尺寸：{full}）"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "已添加 {what} 合并（{mp}），这是全景图的最大尺寸（完整尺寸：{full}）",
+  "Model in use: {name}": "正在使用的模型：{name}",
+  "Works · {ms} ms per photo": "可用 · 每张照片 {ms} 毫秒",
+  "{got} of {total} from {host}": "从 {host} 下载 {got} / {total}",
+  "Downloads {size} from {host}, once. Each file is checked against its recorded checksum; then LightCraft starts using it.": "从 {host} 下载 {size}，只需一次。每个文件都会与记录的校验和核对，然后 LightCraft 开始使用它。",
+  "about {m} min left": "剩余约 {m} 分钟",
+  "about {h} h {m} min left": "剩余约 {h} 小时 {m} 分钟",
+  "{n} of {total} photos indexed": "已索引 {n}/{total} 张照片",
+  "Stopped at {n} of {total} photos.": "已在 {n}/{total} 张照片处停止。",
+  "All {total} photos are indexed.": "全部 {total} 张照片均已索引。",
+  "{n} of {total} photos indexed.": "已索引 {n}/{total} 张照片。",
+  "{n} photos could not be read.": "有 {n} 张照片无法读取。",
+  "{n} photos are offline: they are indexed when their drive is back.": "有 {n} 张照片处于离线状态：其驱动器恢复后将建立索引。",
+  "Index: {size}": "索引：{size}"
 }

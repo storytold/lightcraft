@@ -3217,6 +3217,7 @@ name = "lightcraft-engine"
 version = "0.8.0"
 dependencies = [
  "ab_glyph",
+ "half",
  "harfrust",
  "jxl-oxide",
  "libc",
@@ -3244,6 +3245,7 @@ dependencies = [
  "lightcraft-slideshow",
  "lightcraft-testkit",
  "lightcraft-tiff",
+ "lightcraft-vision",
  "log",
  "miniz_oxide 0.8.9",
  "rayon",
@@ -3518,11 +3520,26 @@ dependencies = [
  "lightcraft-raster",
  "lightcraft-slideshow",
  "lightcraft-testkit",
+ "lightcraft-vision",
  "log",
  "serde",
  "serde_json",
  "toml",
  "web-time",
+]
+
+[[package]]
+name = "lightcraft-vision"
+version = "0.8.0"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "lightcraft-raster",
+ "lightcraft-scenes",
+ "png",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -295,5 +295,18 @@
   "Renames {n} face{} across the library. The files are not changed.": "Renomeia {n} rosto{} na biblioteca. Os arquivos não são alterados.",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "“{to}” já é uma pessoa. Combiná-las deixa uma só; Desfazer as separa de novo.",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "{what} mesclagem adicionada em {mp}: o tamanho completo, {full}, precisa de mais memória do que este computador tem",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what} mesclagem adicionada em {mp}, o maior tamanho possível para um panorama (tamanho completo: {full})"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what} mesclagem adicionada em {mp}, o maior tamanho possível para um panorama (tamanho completo: {full})",
+  "Model in use: {name}": "Modelo em uso: {name}",
+  "Works · {ms} ms per photo": "Funciona · {ms} ms por foto",
+  "{got} of {total} from {host}": "{got} de {total} de {host}",
+  "Downloads {size} from {host}, once. Each file is checked against its recorded checksum; then LightCraft starts using it.": "Baixa {size} de {host}, uma única vez. Cada arquivo é verificado com sua soma de verificação registrada; depois o LightCraft começa a usá-lo.",
+  "about {m} min left": "cerca de {m} min restantes",
+  "about {h} h {m} min left": "cerca de {h} h {m} min restantes",
+  "{n} of {total} photos indexed": "{n} de {total} fotos indexadas",
+  "Stopped at {n} of {total} photos.": "Parado em {n} de {total} fotos.",
+  "All {total} photos are indexed.": "Todas as {total} fotos estão indexadas.",
+  "{n} of {total} photos indexed.": "{n} de {total} fotos indexadas.",
+  "{n} photos could not be read.": "{n} fotos não puderam ser lidas.",
+  "{n} photos are offline: they are indexed when their drive is back.": "{n} fotos estão offline: serão indexadas quando a unidade voltar.",
+  "Index: {size}": "Índice: {size}"
 }

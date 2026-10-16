@@ -2,6 +2,30 @@
 
 ## 2026-10-14
 
+### Search by content: indexing
+- With Settings ▸ Search ▸ **Index photo contents** on, LightCraft now looks at every photo of the library in the
+  background and remembers what it shows (an embedding per photo, in `content-embeddings-<model>.bin` beside the
+  catalog; about 1.5 KB a photo). It shows in the activity stack as *Indexing photo contents*; its ✕ stops it after the
+  photos it is on and keeps what is done, and turning the switch on again carries on. Quitting does not ask about it.
+- Settings ▸ Search shows how far it has got and the time left, a **Pace** (Low, Normal, Fast: how much of the computer
+  it may use) and **Clear Index**. New photos are indexed as they come in; edits never cause re-indexing (the unedited
+  photo is what is indexed), a replaced original does. Raws are indexed from their embedded preview.
+- Agents and the CLI can already search: `content.search {text: "kids on a beach"}` ranks the photos by how well they
+  match, `content.similar {id}` finds photos with similar contents, `content.status` reports progress
+  (docs/content-search.md). The search bar's Contents mode comes next.
+
+### Search by content: the models
+- Settings ▸ Search (new) lists the models LightCraft will use to find photos by what they show (Google's SigLIP 2:
+  base 256 px, recommended, 1.5 GB; base 384 px; So400m, 4.6 GB; all Apache-2.0). **Download** shows the licence first
+  and fetches nothing until "I have read these terms and accept them" is ticked; the model then comes from Hugging
+  Face, each file checked against its size and SHA-256, with its progress in the activity stack and a Cancel that
+  leaves nothing behind. **Test** checks the model on a few generated scenes and shows how long a photo takes.
+- A model whose files are already in its folder shows as found on this computer: **Check and Use** checks them without
+  downloading anything.
+- Everything stays on this computer. Indexing and searching photos by content come in the next steps; the Index photo
+  contents switch is remembered until then. Agents use `content.models.*`, `content.enable` and `content.status`
+  (docs/content-search.md).
+
 ### Lightroom radial masks on the right side
 - Radial masks brought over from Lightroom Classic (catalog import, XMP sidecars, edits inside DNGs and presets) now
   apply their effect inside the circle, as Lightroom does, instead of outside it (issue #1815). A mask inverted in

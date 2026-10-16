@@ -295,5 +295,18 @@
   "Already in “{}”": "Already in “{}”",
   "Move {n} photo{} to “{}”": "Move {n} photo{} to “{}”",
   "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
+  "Downloads {size} from {host}, once. Each file is checked against its recorded checksum; then LightCraft starts using it.": "ერთხელ ჩამოტვირთავს {size}-ს {host}-დან. თითოეული ფაილი მოწმდება ჩაწერილი საკონტროლო ჯამით; შემდეგ LightCraft დაიწყებს მის გამოყენებას.",
+  "Model in use: {name}": "გამოყენებული მოდელი: {name}",
+  "Works · {ms} ms per photo": "მუშაობს · {ms} ms ფოტოზე",
+  "{got} of {total} from {host}": "{got} / {total} — {host}-დან",
+  "All {total} photos are indexed.": "ყველა ფოტო ინდექსირებულია: {total}.",
+  "Index: {size}": "ინდექსი: {size}",
+  "Stopped at {n} of {total} photos.": "შეჩერდა ფოტოზე: {n} / {total}.",
+  "about {h} h {m} min left": "დარჩა დაახლოებით {h} სთ {m} წთ",
+  "about {m} min left": "დარჩა დაახლოებით {m} წთ",
+  "{n} of {total} photos indexed": "ინდექსირებული ფოტო: {n} / {total}",
+  "{n} of {total} photos indexed.": "ინდექსირებული ფოტო: {n} / {total}.",
+  "{n} photos are offline: they are indexed when their drive is back.": "ხაზგარეშე ფოტო: {n}. ისინი ინდექსირდება, როცა მათი დისკი დაბრუნდება.",
+  "{n} photos could not be read.": "ფოტო, რომლის წაკითხვაც ვერ მოხერხდა: {n}."
 }
