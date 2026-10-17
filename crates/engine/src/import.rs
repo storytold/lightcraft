@@ -109,6 +109,10 @@ pub struct ImportOptions {
     pub metadata_preset: Option<String>,
     /// Copy: raws are copied as DNG (Copy as DNG).
     pub convert_dng: bool,
+    /// Import files whose content the library already has as new photos (Lightroom's "Don't
+    /// Import Suspected Duplicates" unchecked). A file at a path the library already lists, or one
+    /// in Recently Deleted, is still handled as a duplicate.
+    pub import_duplicates: bool,
 }
 
 /// How copies are filed in the destination. The date is the capture time, else the time of the
@@ -312,6 +316,10 @@ pub struct ImportDefaults {
     pub auto_album: Option<String>,
     /// Open the import review when a camera or memory card is connected.
     pub show_on_card: bool,
+    /// Synchronize Folder brings in files whose content a photo of the library already has (at
+    /// another path) as photos of their own: "Don't import files already in the library" turned
+    /// off, and kept as it was last left. Off (such files left out) unless turned on.
+    pub import_duplicates: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -976,7 +984,10 @@ impl ImportJob {
             if let Source::File { path } = &p.source {
                 self.by_path.insert(path.clone(), (p.id, p.local));
             }
-            if let Some(h) = &p.content_hash {
+            // importing suspected duplicates: only a trashed photo's content still matches
+            if let Some(h) = &p.content_hash
+                && (p.deleted || !self.opts.import_duplicates)
+            {
                 self.by_hash.insert(h.clone(), Some(p.id));
             }
         }
@@ -1130,7 +1141,9 @@ impl ImportJob {
                 }
                 _ => path.clone(),
             };
-            if let Some(h) = &info.content_hash {
+            if let Some(h) = &info.content_hash
+                && !self.opts.import_duplicates
+            {
                 self.by_hash.insert(h.clone(), None);
             }
             self.done.fetch_add(1, Relaxed);
@@ -1154,6 +1167,7 @@ impl ImportJob {
             };
             if let PreparedItem::Ready(r) = &item
                 && let Some(h) = &r.info.content_hash
+                && !self.opts.import_duplicates
             {
                 self.by_hash.insert(h.clone(), None);
             }
@@ -1349,6 +1363,35 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     let mut placed: Vec<crate::import_move::Placed> = Vec::new();
     // photos added by this batch, by content (a duplicate of a file earlier in the import names it)
     let mut new_hash: HashMap<String, PhotoId> = HashMap::new();
+    // which of this batch's contents a photo of the library already has, when files whose content a
+    // photo already has are imported ([`ImportOptions::import_duplicates`]): such a file's photo gets
+    // a key of its own. Only the batch's contents are kept (no table of the whole library: this runs
+    // on the session's thread, batch after batch), and a trashed photo a Fresh import replaces holds
+    // nothing.
+    let held: std::collections::HashSet<String> = if opts.import_duplicates {
+        let batch: std::collections::HashSet<&str> = prepared
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                PreparedItem::Ready(r) => r.info.content_hash.as_deref(),
+                _ => None,
+            })
+            .collect();
+        let fresh = opts.on_deleted == OnDeleted::Fresh;
+        let mut held = std::collections::HashSet::new();
+        if !batch.is_empty() {
+            for p in s.catalog.photos().filter(|p| !(fresh && p.deleted)) {
+                if let Some(h) = p.content_hash.as_deref().map(crate::sync::base_hash)
+                    && batch.contains(h)
+                {
+                    held.insert(h.to_string());
+                }
+            }
+        }
+        held
+    } else {
+        Default::default()
+    };
     // Fresh: trashed photos a new import replaces (by content or by file), each removed once
     let (mut trash_hash, mut trash_path): (HashMap<String, PhotoId>, HashMap<String, PhotoId>) = Default::default();
     if opts.on_deleted == OnDeleted::Fresh {
@@ -1400,12 +1443,21 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 placed.extend(pl);
                 let id = s.catalog.alloc_photo_id();
                 if let Some(h) = &info.content_hash {
-                    new_hash.insert(h.clone(), id);
+                    new_hash.entry(h.clone()).or_insert(id);
                 }
                 for old in info.content_hash.as_ref().and_then(|h| trash_hash.get(h)).into_iter().chain(trash_path.get(&stored)) {
                     if purged.insert(*old) {
                         purge.push(*old);
                     }
+                }
+                // imported although another photo has this content: a Duplicate's hash (`:dup<id>`),
+                // so the two photos can be told apart and neither is mistaken for the other
+                let mut hash = info.content_hash.clone();
+                if opts.import_duplicates
+                    && let Some(h) = &mut hash
+                    && (new_hash.get(h.as_str()).is_some_and(|first| *first != id) || held.contains(h.as_str()))
+                {
+                    *h = format!("{h}:dup{}", id.0);
                 }
                 let sidecar = sidecar.map(|sc| sc.resolve_label(&s.catalog)).filter(|sc| *sc != crate::sidecar::SidecarData::default());
                 // a copy is catalogued under its new name
@@ -1416,7 +1468,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 p.captured = info.captured;
                 p.meta = info.meta;
                 p.as_shot_wb = info.as_shot_wb;
-                p.content_hash = info.content_hash;
+                p.content_hash = hash;
                 p.embedded_lens = info.embedded_lens;
                 p.set_preview_only(info.preview_only.clone());
                 apply_import_defaults(s, &mut p);
