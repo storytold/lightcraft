@@ -2157,5 +2157,10 @@
   "This is a Lightroom catalog, not a LightCraft library. Import it into a LightCraft library instead?": "To jest katalog Lightrooma, a nie biblioteka LightCraft. Zaimportować go zamiast tego do biblioteki LightCraft?",
   "Unnamed Faces": "Nienazwane twarze",
   "Vertical inset (% of short edge)": "Margines pionowy (% krótszego boku)",
-  "not added to Apple Photos (cancelled)": "nie dodano do aplikacji Zdjęcia (anulowano)"
+  "not added to Apple Photos (cancelled)": "nie dodano do aplikacji Zdjęcia (anulowano)",
+  "1 file you opened hasn't been imported yet. Quitting discards this request.": "Jeden otwarty plik nie został jeszcze zaimportowany. Zakończenie programu odrzuci to żądanie.",
+  "An import is already running. Wait for it to finish, then click Import again.": "Import już trwa. Poczekaj na jego zakończenie, a następnie ponownie kliknij Importuj.",
+  "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.": "Przed zmianą biblioteki zakończ lub anuluj import i zamknij okno Importuj zdjęcia. Zdjęcia z kolejki zostaną otwarte w tej bibliotece.",
+  "Quit LightCraft?": "Zakończyć LightCraft?",
+  "Waiting to import opened files": "Oczekiwanie na import otwartych plików"
 }

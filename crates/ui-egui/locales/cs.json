@@ -2063,5 +2063,10 @@
   "Open Settings": "Otevřít nastavení",
   "Select none": "Zrušit celý výběr",
   "Select all": "Vybrat vše",
-  "Visualize HDR": "Zobrazit rozsah HDR"
+  "Visualize HDR": "Zobrazit rozsah HDR",
+  "1 file you opened hasn't been imported yet. Quitting discards this request.": "Jeden otevřený soubor ještě nebyl importován. Ukončením se tento požadavek zahodí.",
+  "An import is already running. Wait for it to finish, then click Import again.": "Import již probíhá. Počkejte, až skončí, a potom znovu klikněte na Importovat.",
+  "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.": "Před změnou knihovny dokončete nebo zrušte import a zavřete okno Importovat fotografie. Fotografie ve frontě se otevřou v této knihovně.",
+  "Quit LightCraft?": "Ukončit LightCraft?",
+  "Waiting to import opened files": "Čekání na import otevřených souborů"
 }

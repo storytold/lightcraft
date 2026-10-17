@@ -48,14 +48,27 @@ pub fn may_close(app: &mut LightcraftApp) -> bool {
         return true;
     }
     // before the library is touched: a Cancel here keeps working with it
-    let running = app.session.activity.running_cancellable();
+    let mut running = app.session.activity.running_cancellable();
+    let queued = crate::import::pending_document_files(app);
+    running.retain(|task| task.kind != crate::import::DOCUMENT_OPEN_ACTIVITY);
+    let mut warnings = Vec::new();
+    if queued != 0 {
+        warnings.push(if queued == 1 {
+            crate::i18n::tr("1 file you opened hasn't been imported yet. Quitting discards this request.").to_string()
+        } else {
+            crate::i18n::tr_format!("{n} files you opened haven't been imported yet. Quitting discards these requests.", n = queued)
+        });
+    }
     if !running.is_empty() {
         let names = running.iter().map(|t| crate::i18n::tr(&t.label)).collect::<Vec<_>>().join(", ");
-        app.quit_prompt = Some(QuitPrompt::Tasks(if running.len() == 1 {
+        warnings.push(if running.len() == 1 {
             crate::i18n::tr_format!("1 task is still running: {names}. Quitting stops it.", names = names)
         } else {
             crate::i18n::tr_format!("{n} tasks are still running: {names}. Quitting stops them.", n = running.len(), names = names)
-        }));
+        });
+    }
+    if !warnings.is_empty() {
+        app.quit_prompt = Some(QuitPrompt::Tasks(warnings.join("\n\n")));
         return false;
     }
     if app.session.unsaved().is_none() {
@@ -127,8 +140,8 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
 
 pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     if let Some(QuitPrompt::Tasks(text)) = app.quit_prompt.clone() {
-        let buttons = [("quitAnyway", "Quit Anyway", Choice::QuitAnyway), ("quitCancel", "Cancel", Choice::Cancel)];
-        let Some(i) = window(ctx, "quit-tasks", "Quit while tasks are running?", &text, &buttons) else { return };
+        let buttons = [("quitAnyway", "Quit", Choice::QuitAnyway), ("quitCancel", "Cancel", Choice::Cancel)];
+        let Some(i) = window(ctx, "quit-tasks", "Quit LightCraft?", &text, &buttons) else { return };
         app.quit_prompt = None;
         if matches!(buttons[i].2, Choice::QuitAnyway) {
             app.session.activity.cancel_all();

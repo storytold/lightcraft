@@ -1,0 +1,19 @@
+[package]
+name = "lightcraft-macos-open"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Safe macOS Open Documents event queue for the desktop app"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+log = { workspace = true }
+objc2 = { workspace = true }
+objc2-app-kit = { workspace = true }
+objc2-foundation = { workspace = true, features = ["NSAppleEventManager", "NSAppleEventDescriptor", "NSURL", "NSString", "NSNotification"] }

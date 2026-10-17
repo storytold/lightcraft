@@ -2141,5 +2141,10 @@
   "Checking the GPU…": "正在檢查 GPU…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "只有在檢查顯示 GPU 能更快得出相同結果時，臉孔模型才會使用 GPU。",
-  "Checking the GPU for faces": "正在檢查用於臉孔的 GPU"
+  "Checking the GPU for faces": "正在檢查用於臉孔的 GPU",
+  "Quit LightCraft?": "結束 LightCraft？",
+  "Waiting to import opened files": "等待匯入已開啟的檔案",
+  "1 file you opened hasn't been imported yet. Quitting discards this request.": "您開啟的 1 個檔案尚未匯入。結束程式將取消此匯入要求。",
+  "An import is already running. Wait for it to finish, then click Import again.": "已有匯入正在進行。請等待其完成，然後再次按一下「匯入」。",
+  "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.": "切換照片庫前，請先完成或取消匯入，並關閉「匯入照片」。佇列中的照片將在此照片庫中開啟。"
 }

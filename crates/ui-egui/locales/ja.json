@@ -2340,5 +2340,10 @@
   "Checking the GPU…": "GPU を確認中…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "顔モデルが GPU を使うのは、同じ結果をより速く出せると確認できた場合だけです。",
-  "Checking the GPU for faces": "顔用の GPU を確認中"
+  "Checking the GPU for faces": "顔用の GPU を確認中",
+  "Quit LightCraft?": "LightCraftを終了しますか？",
+  "Waiting to import opened files": "開いたファイルの読み込み待ち",
+  "1 file you opened hasn't been imported yet. Quitting discards this request.": "開いたファイルのうち1個がまだ読み込まれていません。終了すると、この読み込み要求は破棄されます。",
+  "An import is already running. Wait for it to finish, then click Import again.": "読み込みはすでに実行中です。終わるまでお待ちになってから、もう一度「読み込み」をクリックしてください。",
+  "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.": "ライブラリを切り替える前に、読み込みを完了するかキャンセルして、「写真を読み込む」を閉じてください。待機中の写真はこのライブラリで開きます。"
 }

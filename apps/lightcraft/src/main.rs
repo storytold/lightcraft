@@ -28,6 +28,8 @@ mod appearance;
 mod colord;
 mod control_server;
 mod dialog_filter;
+#[cfg(any(target_os = "macos", test))]
+mod document_open;
 mod editors;
 mod hdr_display;
 mod logging;
@@ -35,6 +37,8 @@ mod logging;
 mod native_menu;
 #[cfg(target_os = "macos")]
 mod screen_profile;
+#[cfg(test)]
+mod tests_document_types;
 mod window_gpu;
 
 use dialog_filter::FileDialogExt as _;
@@ -55,10 +59,26 @@ fn app_icon() -> egui::IconData {
     eframe::icon_data::from_png_bytes(png).unwrap_or_default()
 }
 
-struct App(LightcraftApp, PrefsWriter, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>);
+struct App(
+    LightcraftApp,
+    PrefsWriter,
+    #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>,
+    #[cfg(target_os = "macos")] Option<lightcraft_macos_open::OpenDocuments>,
+    #[cfg(target_os = "macos")] document_open::PendingOpens,
+);
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Bind native requests before processing a menu action that could switch libraries.
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(events) = &self.3 {
+                for paths in events.take() {
+                    self.4.enqueue(paths, &mut self.0);
+                }
+            }
+            self.4.tick(&mut self.0);
+        }
         #[cfg(target_os = "macos")]
         if let Some(m) = self.2.as_mut()
             && m.update(&mut self.0, ctx)
@@ -953,6 +973,15 @@ fn main() -> eframe::Result {
             b.with_x11();
         }));
     }
+    // Install before the event loop can deliver the cold-start Open Documents event.
+    #[cfg(target_os = "macos")]
+    let documents = match lightcraft_macos_open::OpenDocuments::install() {
+        Ok(events) => Some(events),
+        Err(error) => {
+            log::error!("{error}");
+            None
+        }
+    };
     let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         eframe::run_native(
             "LightCraft",
@@ -961,7 +990,15 @@ fn main() -> eframe::Result {
                 // the window's renderer is up (eframe calls this after creating it)
                 win_files_app.started(window_renderer);
                 came_up_app.store(true, std::sync::atomic::Ordering::Relaxed);
+                #[cfg(target_os = "macos")]
+                let seed_demo = seed_demo && documents.as_ref().is_none_or(|events| !events.has_pending());
+
                 let (mut session, problem) = open_session(in_memory, library_dir, seed_demo && files.is_empty());
+                #[cfg(target_os = "macos")]
+                if let Some(events) = &documents {
+                    let ctx = cc.egui_ctx.clone();
+                    events.set_waker(move || ctx.request_repaint());
+                }
                 // AI masks: the SAM 3 checkpoint (facebook/sam3) in <config>/models/sam3, or LIGHTCRAFT_SAM3_DIR
                 // (never required: without it, AI masks offer to download it; see docs/ai-masks.md)
                 // and the user's own download locations, one base URL per line (LIGHTCRAFT_SAM3_MIRRORS too)
@@ -1023,6 +1060,10 @@ fn main() -> eframe::Result {
                     writer,
                     #[cfg(target_os = "macos")]
                     menu,
+                    #[cfg(target_os = "macos")]
+                    documents,
+                    #[cfg(target_os = "macos")]
+                    document_open::PendingOpens::default(),
                 )))
             }),
         )
@@ -1534,6 +1575,10 @@ mod tests {
                 PrefsWriter::default(),
                 #[cfg(target_os = "macos")]
                 None,
+                #[cfg(target_os = "macos")]
+                None,
+                #[cfg(target_os = "macos")]
+                document_open::PendingOpens::default(),
             );
             println!("calling on_exit");
             eframe::App::on_exit(&mut app, None);

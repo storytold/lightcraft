@@ -2718,5 +2718,10 @@
   "≥  at least": "≥  არანაკლებ",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-გადათრევა გასასწორებლად, ⇧G მართვადი Upright, ბადე გარდაქმნისას.",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "1 file you opened hasn't been imported yet. Quitting discards this request.": "თქვენ მიერ გახსნილი ერთი ფაილი ჯერ არ შემოტანილა. გასვლისას ეს მოთხოვნა გაუქმდება.",
+  "An import is already running. Wait for it to finish, then click Import again.": "იმპორტი უკვე მიმდინარეობს. დაელოდეთ მის დასრულებას და შემდეგ ისევ დააწკაპუნეთ იმპორტზე.",
+  "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.": "ბიბლიოთეკის შეცვლამდე დაასრულეთ ან გააუქმეთ იმპორტი და დახურეთ ფოტოების იმპორტის ფანჯარა. რიგში მყოფი ფოტოები ამ ბიბლიოთეკაში გაიხსნება.",
+  "Quit LightCraft?": "გავიდეთ LightCraft-იდან?",
+  "Waiting to import opened files": "გახსნილი ფაილების იმპორტის მოლოდინში"
 }

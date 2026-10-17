@@ -1990,5 +1990,10 @@
   "Test Face Model": "Testa il modello dei volti",
   "This build cannot run recognition models: they can be added and chosen, not used.": "Questa versione non può eseguire modelli di riconoscimento: si possono aggiungere e scegliere, non usare.",
   "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)": "Questa versione non ha dove tenere i modelli dei volti, quindi l'elenco dei modelli non è disponibile. (L'app desktop ce l'ha.)",
-  "Unnamed Faces": "Volti senza nome"
+  "Unnamed Faces": "Volti senza nome",
+  "1 file you opened hasn't been imported yet. Quitting discards this request.": "Un file aperto non è ancora stato importato. Uscendo, questa richiesta verrà scartata.",
+  "An import is already running. Wait for it to finish, then click Import again.": "È già in corso un'importazione. Attendi che finisca, poi fai di nuovo clic su Importa.",
+  "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.": "Completa o annulla l'importazione e chiudi Importa foto prima di cambiare libreria. Le foto in coda verranno aperte in questa libreria.",
+  "Quit LightCraft?": "Uscire da LightCraft?",
+  "Waiting to import opened files": "In attesa di importare i file aperti"
 }

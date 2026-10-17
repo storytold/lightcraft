@@ -2338,5 +2338,10 @@
   "Checking the GPU…": "Vérification du GPU…",
   "CPU": "Processeur",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Un modèle de visages n’utilise le GPU que si une vérification montre qu’il donne les mêmes résultats plus vite.",
-  "Checking the GPU for faces": "Vérification du GPU pour les visages"
+  "Checking the GPU for faces": "Vérification du GPU pour les visages",
+  "Quit LightCraft?": "Quitter LightCraft ?",
+  "Waiting to import opened files": "Fichiers ouverts en attente d'importation",
+  "1 file you opened hasn't been imported yet. Quitting discards this request.": "1 fichier que vous avez ouvert n'a pas encore été importé. Quitter annulera cette demande.",
+  "An import is already running. Wait for it to finish, then click Import again.": "Une importation est déjà en cours. Attendez qu'elle se termine, puis cliquez de nouveau sur Importer.",
+  "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.": "Terminez ou annulez l'importation et fermez Importer des photos avant de changer de bibliothèque. Les photos en attente s'ouvriront dans cette bibliothèque."
 }

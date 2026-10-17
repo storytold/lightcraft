@@ -2333,5 +2333,10 @@
   "Checking the GPU…": "Проверка ГП…",
   "CPU": "ЦП",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Модель лиц использует ГП, только если проверка показала, что он даёт те же результаты быстрее.",
-  "Checking the GPU for faces": "Проверка ГП для лиц"
+  "Checking the GPU for faces": "Проверка ГП для лиц",
+  "Quit LightCraft?": "Выйти из LightCraft?",
+  "Waiting to import opened files": "Открытые файлы ожидают импорта",
+  "1 file you opened hasn't been imported yet. Quitting discards this request.": "1 открытый вами файл ещё не импортирован. При выходе этот запрос будет отменён.",
+  "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.": "Завершите или отмените импорт и закройте «Импорт фото», прежде чем переключать библиотеку. Фото в очереди откроются в этой библиотеке.",
+  "An import is already running. Wait for it to finish, then click Import again.": "Импорт уже выполняется. Дождитесь его завершения и снова нажмите «Импорт»."
 }
