@@ -66,9 +66,13 @@ const NO_FRAMES_AFTER: Duration = Duration::from_secs(5);
 pub const HIDDEN_WINDOW_ERROR: &str = "the app drew no frame for 5 s, so the request was not run: its window is probably not visible \
 (on Wayland a window on a hidden workspace or minimized is not redrawn, which pauses the app). Bring the window on screen and send it again";
 
+/// Reads and writes go through the one `stream` (`&TcpStream` is `Read` and `Write`): no
+/// `try_clone`. On Windows a cloned socket handle is inheritable, so every program the app starts
+/// while a client is connected (a link in the browser, Show in Explorer, an external editor) kept a
+/// copy of the connection: closing it then reached the client only when that program exited, as a
+/// reset instead of a clean close.
 fn serve(stream: TcpStream, tx: &Sender<ControlRequest>, ctx: &egui::Context) {
-    let Ok(read) = stream.try_clone() else { return };
-    serve_lines(read, stream, |method, params| {
+    serve_lines(&stream, &stream, |method, params| {
         let (req, rrx) = ControlRequest::new(method, params);
         let state = Arc::clone(&req.state);
         tx.send(req).ok()?;
@@ -335,6 +339,37 @@ mod tests {
         assert_eq!(read_bounded_line(&mut &input[..], &mut buf, 10), Ok(true));
         assert_eq!(buf, line);
         assert!(read_bounded_line(&mut &[b'a'; 11][..], &mut buf, 10).is_err());
+    }
+
+    /// A program the app starts while a client is connected doesn't keep the connection open:
+    /// when the server closes it, the client sees that at once, not when the program exits.
+    #[cfg(windows)]
+    #[test]
+    fn a_program_started_meanwhile_does_not_hold_the_connection_open() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, _rx) = channel::<ControlRequest>();
+        let server = std::thread::spawn(move || {
+            let (s, _) = listener.accept().unwrap();
+            serve(s, &tx, &egui::Context::default());
+        });
+        let mut c = TcpStream::connect(addr).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+        // the connection is being served: start a program that lives about 4 s
+        std::thread::sleep(Duration::from_millis(200));
+        let mut child = std::process::Command::new("cmd").args(["/c", "ping -n 5 127.0.0.1 >nul"]).spawn().unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        // junk makes the server answer once and close
+        c.write_all(b"hello\n").unwrap();
+        let t0 = std::time::Instant::now();
+        let mut text = String::new();
+        let read = c.read_to_string(&mut text);
+        let waited = t0.elapsed();
+        server.join().unwrap();
+        let _ = child.wait();
+        assert!(read.is_ok(), "the close must be clean, not a reset: {read:?}");
+        assert!(text.contains("closing the connection"), "{text}");
+        assert!(waited < Duration::from_secs(2), "the client saw the close only after {waited:?}, when the program exited");
     }
 
     #[test]
