@@ -201,3 +201,36 @@ fn right_clicking_the_grids_stack_badge_opens_the_photo_menu() {
     h.settle(SETTLE);
     assert!(egui::Popup::is_any_open(&h.view.ctx), "the photo's menu, as on the rest of the cell");
 }
+
+/// The overlay's wiring: a photo with no marks drawn has nothing for the pill to dodge, so on a
+/// short 16:9 cell of the square grid at 90 pt (70 x 39) the pill keeps its word.
+#[test]
+fn the_preview_pill_keeps_its_word_on_a_short_photo_with_no_marks() {
+    let mut h = demo();
+    let id = first_photos(&mut h, 1)[0];
+    run(&mut h, "photo.rate", json!({"ids": [id.0], "rating": 0}));
+    run(&mut h, "photo.flag", json!({"ids": [id.0], "flag": "none"}));
+    run(&mut h, "photo.label", json!({"ids": [id.0], "label": "none"}));
+    let other = first_photos(&mut h, 2)[1];
+    run(&mut h, "library.select", json!({"ids": [other.0]}));
+    let p = h.app.session.catalog.photo(id).expect("photo").clone();
+    let op = lightcraft_catalog::Op::SetContent {
+        id,
+        width: 1600,
+        height: 900,
+        file_size: p.file_size,
+        content_hash: p.content_hash.clone(),
+        preview_only: Some("Cr3 files are not decoded yet".into()),
+        preview_checked: "0.5.0".into(),
+    };
+    h.app.session.catalog.apply(op).unwrap();
+    // no thumbnail yet: the photo is its placeholder, 16:9
+    h.app.renderer.set_offload(Box::new(RenderGate::new(Rc::new(Cell::new(false)))));
+    h.app.ui.view = ViewMode::SquareGrid;
+    h.app.ui.thumb_size = 90.0;
+    for _ in 0..10 {
+        h.step();
+    }
+    let pill = widget(&h, &format!("badge:previewOnly:{}", id.0)).expect("the pill is drawn");
+    assert!(pill.width() > 30.0, "its word is there, not the icon alone: {pill:?}");
+}

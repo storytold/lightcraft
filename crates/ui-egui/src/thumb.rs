@@ -283,10 +283,13 @@ pub(crate) struct PillPlace {
     pub full: bool,
 }
 
-/// Where the preview-only pill goes on `photo`, clear of `obstacles` (the marks row, the copy tag
-/// and the stack badge `stack`): above the marks row if it is free, else below the stack badge,
-/// else beside it as the icon alone; `None` when there is no room. The word goes before the icon.
-pub(crate) fn preview_pill_place(photo: Rect, text_w: f32, stack: Option<Rect>, obstacles: &[Rect], m: &Metrics) -> Option<PillPlace> {
+/// Where the preview-only pill goes on `photo`: above the marks row if that is clear, else below
+/// the stack badge `stack`, else beside it as the icon alone. `hard` are what it must never cover
+/// (the stack badge, the copy tag), `soft` what it may sit over when nothing else is clear (the
+/// marks strip, whose marks are drawn at its ends). Order: a spot clear of both, then one clear of
+/// `hard`, then, as it changes what editing does and so is never hidden, the icon at the first
+/// spot. The word goes before the icon.
+pub(crate) fn preview_pill_place(photo: Rect, text_w: f32, stack: Option<Rect>, hard: &[Rect], soft: &[Rect], m: &Metrics) -> PillPlace {
     let h = m.pill_icon;
     let x = photo.left() + m.inset;
     let above = (photo.bottom() - m.bar - 4.0 - h).max(photo.top() + m.inset);
@@ -296,14 +299,21 @@ pub(crate) fn preview_pill_place(photo: Rect, text_w: f32, stack: Option<Rect>, 
         tries.extend([(pos2(x, below), true), (pos2(x, below), false), (pos2(s.right() + 3.0, s.top()), false)]);
     }
     let overlap = |a: Rect, b: Rect| a.min.x < b.max.x && b.min.x < a.max.x && a.min.y < b.max.y && b.min.y < a.max.y;
-    let free = tries.into_iter().find_map(|(at, full)| {
-        let rect = Rect::from_min_size(at, vec2(if full { text_w + m.pill_extra } else { h }, h));
-        let inside =
-            rect.left() >= photo.left() && rect.right() <= photo.right() - m.inset && rect.top() >= photo.top() && rect.bottom() <= photo.bottom();
-        (inside && !obstacles.iter().any(|o| overlap(rect, *o))).then_some(PillPlace { rect, full })
-    });
-    // it changes what editing does: when nowhere is clear it is still there, as the icon at its first spot
-    Some(free.unwrap_or(PillPlace { rect: Rect::from_min_size(pos2(x, above), vec2(h, h)), full: false }))
+    let spots: Vec<PillPlace> = tries
+        .into_iter()
+        .map(|(at, full)| PillPlace { rect: Rect::from_min_size(at, vec2(if full { text_w + m.pill_extra } else { h }, h)), full })
+        .filter(|p| {
+            let r = p.rect;
+            r.left() >= photo.left() && r.right() <= photo.right() - m.inset && r.top() >= photo.top() && r.bottom() <= photo.bottom()
+        })
+        .collect();
+    let clear = |p: &&PillPlace, of: &[&[Rect]]| !of.iter().any(|set| set.iter().any(|o| overlap(p.rect, *o)));
+    spots
+        .iter()
+        .find(|p| clear(p, &[hard, soft]))
+        .or_else(|| spots.iter().find(|p| clear(p, &[hard])))
+        .copied()
+        .unwrap_or(PillPlace { rect: Rect::from_min_size(pos2(x, above), vec2(h, h)), full: false })
 }
 
 /// The strip the marks row covers: `None` when it draws nothing (no marks that fit, and no band
@@ -434,13 +444,12 @@ pub(crate) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, th: &Thumb) ->
     };
     let stack = th.stack.and_then(|(sid, pos)| stack_badge(app, ui, th, &t, sid, pos));
     let stack_rect = stack.as_ref().map(|(r, _)| *r);
-    let mut obstacles: Vec<Rect> = bar.into_iter().collect();
-    obstacles.extend(stack_rect);
+    let mut hard: Vec<Rect> = stack_rect.into_iter().collect();
     if let Some(name) = &photo.copy_name {
-        obstacles.extend(copy_tag(ui, th, &t, name, stack_rect.map(|r| r.width())));
+        hard.extend(copy_tag(ui, th, &t, name, stack_rect.map(|r| r.width())));
     }
     if let Some(why) = &photo.preview_only {
-        preview_pill(ui, th, &t, why, stack_rect, &obstacles);
+        preview_pill(ui, th, &t, why, stack_rect, &hard, bar.as_slice());
     }
     stack.map(|(_, r)| r)
 }
@@ -573,11 +582,11 @@ fn copy_tag(ui: &mut egui::Ui, th: &Thumb, t: &Tokens, name: &str, stack_w: Opti
 
 /// A raw shown from its embedded JPEG: a small amber "Preview" pill above the marks row, always
 /// shown (it changes what editing does) wherever it fits clear of the other marks.
-fn preview_pill(ui: &mut egui::Ui, th: &Thumb, t: &Tokens, why: &str, stack: Option<Rect>, obstacles: &[Rect]) {
+fn preview_pill(ui: &mut egui::Ui, th: &Thumb, t: &Tokens, why: &str, stack: Option<Rect>, hard: &[Rect], soft: &[Rect]) {
     let m = th.surface.metrics();
     let p = clipped(ui, th);
     let g = p.layout_no_wrap(crate::i18n::tr("Preview").into(), t.semibold(m.micro), Color32::WHITE);
-    let Some(place) = preview_pill_place(th.rect, g.size().x, stack, obstacles, &m) else { return };
+    let place = preview_pill_place(th.rect, g.size().x, stack, hard, soft, &m);
     let (br, full, h) = (place.rect, place.full, place.rect.height());
     p.rect_filled(br, h / 2.0, Color32::from_black_alpha(170));
     let icon = h - 4.0;
@@ -718,8 +727,8 @@ mod tests {
     fn the_preview_pill_shrinks_to_its_icon_on_a_narrow_tile() {
         let m = Surface::Grid.metrics();
         let photo = |w: f32| Rect::from_min_size(pos2(0.0, 0.0), vec2(w, 80.0));
-        assert!(preview_pill_place(photo(120.0), 40.0, None, &[], &m).is_some_and(|p| p.full));
-        let narrow = preview_pill_place(photo(60.0), 40.0, None, &[], &m).expect("the icon fits");
+        assert!(preview_pill_place(photo(120.0), 40.0, None, &[], &[], &m).full);
+        let narrow = preview_pill_place(photo(60.0), 40.0, None, &[], &[], &m);
         assert!(!narrow.full);
     }
 
@@ -732,23 +741,41 @@ mod tests {
             let photo = Rect::from_min_size(pos2(0.0, 0.0), vec2(w, h));
             let badge = Rect::from_min_size(pos2(m.inset, m.inset), vec2(badge_w, m.badge));
             let bar = marks_bar(photo, &m);
-            let place = preview_pill_place(photo, 30.0, Some(badge), &[bar, badge], &m);
+            let p = preview_pill_place(photo, 30.0, Some(badge), &[badge], &[bar], &m);
             let free = |r: Rect| !(r.min.x < badge.max.x && badge.min.x < r.max.x && r.min.y < badge.max.y && badge.min.y < r.max.y);
-            let p = place.expect("the pill is always placed");
             assert!(
                 free(p.rect) && photo.contains_rect(p.rect) && p.rect.bottom() <= bar.top() + 0.01,
                 "{surface:?}: {p:?} meets the badge {badge:?}"
             );
             // without the badge it sits where it always did
-            let alone = preview_pill_place(photo, 30.0, None, &[bar], &m).expect("room");
+            let alone = preview_pill_place(photo, 30.0, None, &[], &[bar], &m);
             assert_eq!(alone.rect.top(), (h - m.bar - 4.0 - m.pill_icon).max(m.inset), "{surface:?}");
         }
-        // a photo too small for the pill beside the badge has none
+        // a photo too small for the pill anywhere clear of the badge: nothing else fits, so the
+        // icon is drawn at its first spot, over the badge, rather than not at all
         let m = Surface::Film.metrics();
         let tiny = Rect::from_min_size(pos2(0.0, 0.0), vec2(40.0, 30.0));
         let badge = Rect::from_min_size(pos2(m.inset, m.inset), vec2(34.0, m.badge));
-        let last = preview_pill_place(tiny, 30.0, Some(badge), &[marks_bar(tiny, &m), badge], &m).expect("never hidden");
-        assert!(!last.full, "the icon alone, at its first spot");
+        let last = preview_pill_place(tiny, 30.0, Some(badge), &[badge], &[marks_bar(tiny, &m)], &m);
+        assert!(!last.full, "the icon alone");
+        assert_eq!(last.rect.min, pos2(m.inset, (tiny.bottom() - m.bar - 4.0 - m.pill_icon).max(m.inset)), "at its first spot");
+        assert!(last.rect.intersects(badge), "over the badge: the last resort");
+    }
+
+    /// A short photo with a collapsed stack's badge and a marks band (hovered, or rated): the spot
+    /// beside the badge overlaps the band, which is allowed (its marks sit at its ends), the badge
+    /// is not.
+    #[test]
+    fn the_pill_may_sit_over_the_marks_band_but_never_over_the_badge() {
+        let m = Surface::Grid.metrics();
+        let photo = Rect::from_min_size(pos2(0.0, 0.0), vec2(70.0, 39.0));
+        let badge = Rect::from_min_size(pos2(m.inset, m.inset), vec2(34.0, m.badge));
+        let band = marks_bar(photo, &m);
+        let p = preview_pill_place(photo, 30.0, Some(badge), &[badge], &[band], &m);
+        let overlap = |a: Rect, b: Rect| a.min.x < b.max.x && b.min.x < a.max.x && a.min.y < b.max.y && b.min.y < a.max.y;
+        assert!(!overlap(p.rect, badge), "{p:?} is over the badge {badge:?}");
+        assert!(photo.contains_rect(p.rect), "{p:?}");
+        assert!(p.rect.left() >= badge.right(), "beside the badge: {p:?}");
     }
 
     /// A square-grid 16:9 photo at 90 pt is 70 x 39: with no marks to draw the row covers nothing,
@@ -761,7 +788,7 @@ mod tests {
             let bar = marks_extent(photo, Marks::default(), false, false, false, &m);
             assert_eq!(bar, None, "{surface:?}: nothing drawn, nothing to avoid");
             let obstacles: Vec<Rect> = bar.into_iter().collect();
-            let place = preview_pill_place(photo, 30.0, None, &obstacles, &m).expect("placed");
+            let place = preview_pill_place(photo, 30.0, None, &[], &obstacles, &m);
             assert!(photo.contains_rect(place.rect) && place.full, "{surface:?}: {place:?}");
             // under the pointer the band is there, and the row covers its strip
             assert_eq!(marks_extent(photo, Marks::default(), true, false, false, &m), Some(marks_bar(photo, &m)));
