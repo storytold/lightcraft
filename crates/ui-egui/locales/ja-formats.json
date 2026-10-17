@@ -295,5 +295,14 @@
   "Renames {n} face{} across the library. The files are not changed.": "ライブラリ全体で{n}件の顔の名前を変更します。ファイルは変更されません。{:.0}",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "「{to}」はすでに別の人物です。まとめると1人になり、元に戻すと再び分かれます。",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "{what}合成を{mp}で追加しました：フルサイズ（{full}）にはこのコンピューターのメモリが足りません",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what}合成を{mp}で追加しました。パノラマの最大サイズです（フルサイズ：{full}）"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what}合成を{mp}で追加しました。パノラマの最大サイズです（フルサイズ：{full}）",
+  "Move the files of {n} photos to the Trash?": "{n}枚の写真のファイルをゴミ箱に移動しますか？",
+  "{n} photos are on a disk that has no Trash. Erase their files for good?": "{n}枚の写真はゴミ箱のないディスクにあります。ファイルを完全に消去しますか？",
+  "…and {n} more": "…ほか{n}個",
+  "Files erased: {files} (photos out of the library: {photos})": "消去したファイル: {files}個（ライブラリから除いた写真: {photos}枚）",
+  "Files moved to the Trash: {files} (photos out of the library: {photos})": "ゴミ箱に移動したファイル: {files}個（ライブラリから除いた写真: {photos}枚）",
+  "{n} could not be moved and stay in the library: {why}": "{n}個は移動できず、ライブラリに残ります: {why}",
+  "Photos whose file was already gone: {n}": "ファイルがすでになかった写真: {n}枚",
+  "Sidecars left in place: {n}": "そのまま残したサイドカー: {n}個",
+  "Files other photos still use, kept: {n}": "ほかの写真が使っているため残したファイル: {n}個"
 }

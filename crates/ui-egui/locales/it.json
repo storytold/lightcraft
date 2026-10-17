@@ -1990,5 +1990,20 @@
   "Test Face Model": "Testa il modello dei volti",
   "This build cannot run recognition models: they can be added and chosen, not used.": "Questa versione non può eseguire modelli di riconoscimento: si possono aggiungere e scegliere, non usare.",
   "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)": "Questa versione non ha dove tenere i modelli dei volti, quindi l'elenco dei modelli non è disponibile. (L'app desktop ce l'ha.)",
-  "Unnamed Faces": "Volti senza nome"
+  "Unnamed Faces": "Volti senza nome",
+  "Move Files to Trash": "Sposta i file nel Cestino",
+  "Move Files to Trash…": "Sposta i file nel Cestino…",
+  "Move All Files in Recently Deleted to Trash…": "Sposta nel Cestino tutti i file di Eliminate di recente…",
+  "Moving files to the Trash is not available here yet": "Lo spostamento dei file nel Cestino non è ancora disponibile qui",
+  "Recently Deleted is empty": "Eliminate di recente è vuoto",
+  "No photos of the library are selected": "Nessuna foto della libreria è selezionata",
+  "Erase Files": "Cancella i file",
+  "Move to Trash": "Sposta nel Cestino",
+  "Move this photo's file to the Trash?": "Spostare nel Cestino il file di questa foto?",
+  "The photos leave the library, also Recently Deleted. Their files go to the system Trash, with their XMP sidecars.": "Le foto escono dalla libreria, anche da Eliminate di recente. I loro file vanno nel Cestino di sistema, insieme ai file collaterali XMP.",
+  "Undo brings the photos back and moves the files back, as long as they are still in the Trash.": "Annulla riporta le foto e rimette a posto i file, finché sono ancora nel Cestino.",
+  "This photo is on a disk that has no Trash. Erase its file for good?": "Questa foto si trova su un disco senza Cestino. Cancellare definitivamente il suo file?",
+  "This cannot be undone: the files are not kept anywhere.": "Questa operazione non si può annullare: i file non vengono conservati da nessuna parte.",
+  "Only these files are erased; XMP sidecars beside them stay.": "Vengono cancellati solo questi file; i file collaterali XMP accanto a essi restano.",
+  "Cancel leaves these photos in the library and their files where they are.": "Annulla lascia queste foto nella libreria e i loro file dove sono."
 }

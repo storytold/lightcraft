@@ -295,5 +295,14 @@
   "Already in “{}”": "Již v „{}“",
   "Move {n} photo{} to “{}”": "Přesunout do „{1}“ fotografie: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Přesunout do „{1}“ fotografie: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Do „{1}“ přesunuto fotografií: {n}{0:.0}. Úpravy → Zpět je vrátí."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Do „{1}“ přesunuto fotografií: {n}{0:.0}. Úpravy → Zpět je vrátí.",
+  "Move the files of {n} photos to the Trash?": "Přesunout soubory {n} fotografií do koše?",
+  "{n} photos are on a disk that has no Trash. Erase their files for good?": "Fotografie ({n}) jsou na disku bez koše. Smazat jejich soubory natrvalo?",
+  "…and {n} more": "…a dalších {n}",
+  "Files erased: {files} (photos out of the library: {photos})": "Smazané soubory: {files} (fotografie odebrané z knihovny: {photos})",
+  "Files moved to the Trash: {files} (photos out of the library: {photos})": "Soubory přesunuté do koše: {files} (fotografie odebrané z knihovny: {photos})",
+  "{n} could not be moved and stay in the library: {why}": "Nepodařilo se přesunout ({n}), zůstávají v knihovně: {why}",
+  "Photos whose file was already gone: {n}": "Fotografie, jejichž soubor už chyběl: {n}",
+  "Sidecars left in place: {n}": "Doprovodné soubory ponechané na místě: {n}",
+  "Files other photos still use, kept: {n}": "Soubory, které stále používají jiné fotografie (ponechány): {n}"
 }

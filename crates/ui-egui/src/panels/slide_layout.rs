@@ -33,7 +33,7 @@ enum Unit {
 }
 
 fn set(app: &mut LightcraftApp, p: Value) {
-    let _ = app.run("slideshow.layout", p);
+    app.act("slideshow.layout", p);
 }
 
 /// A layout slider (`slider:{id}`): `key`'s value, 0–`max` (percent) or −180–180° (degrees).

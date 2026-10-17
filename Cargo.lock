@@ -3252,6 +3252,7 @@ dependencies = [
  "lightcraft-tiff",
  "log",
  "miniz_oxide 0.8.9",
+ "objc2-foundation 0.3.2",
  "rayon",
  "serde",
  "serde_json",

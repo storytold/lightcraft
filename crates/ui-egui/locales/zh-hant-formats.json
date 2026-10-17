@@ -295,5 +295,14 @@
   "Renames {n} face{} across the library. The files are not changed.": "在整個圖庫中重新命名 {n} 張面孔。不會改動檔案。{:.0}",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "「{to}」已經是另一個人。合併後成為一個人；還原會再把他們分開。",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "已新增{what}合併照片（{mp}）：完整尺寸（{full}）所需的記憶體超過這台電腦的記憶體",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "已新增{what}合併照片（{mp}），這是全景圖的最大尺寸（完整尺寸：{full}）"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "已新增{what}合併照片（{mp}），這是全景圖的最大尺寸（完整尺寸：{full}）",
+  "Move the files of {n} photos to the Trash?": "要將 {n} 張照片的檔案移至垃圾桶嗎？",
+  "{n} photos are on a disk that has no Trash. Erase their files for good?": "有 {n} 張照片位於沒有垃圾桶的磁碟上。要永久清除它們的檔案嗎？",
+  "…and {n} more": "…以及另外 {n} 個",
+  "Files erased: {files} (photos out of the library: {photos})": "已清除的檔案：{files} 個（移出照片庫的照片：{photos} 張）",
+  "Files moved to the Trash: {files} (photos out of the library: {photos})": "已移至垃圾桶的檔案：{files} 個（移出照片庫的照片：{photos} 張）",
+  "{n} could not be moved and stay in the library: {why}": "有 {n} 個無法移動，仍留在照片庫中：{why}",
+  "Photos whose file was already gone: {n}": "檔案已不存在的照片：{n} 張",
+  "Sidecars left in place: {n}": "保留在原處的附屬檔案：{n} 個",
+  "Files other photos still use, kept: {n}": "其他照片仍在使用而保留的檔案：{n} 個"
 }

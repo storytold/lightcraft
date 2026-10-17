@@ -295,5 +295,14 @@
   "Already in “{}”": "Already in “{}”",
   "Move {n} photo{} to “{}”": "Move {n} photo{} to “{}”",
   "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
+  "Move the files of {n} photos to the Trash?": "Spostare nel Cestino i file di {n} foto?",
+  "{n} photos are on a disk that has no Trash. Erase their files for good?": "{n} foto si trovano su un disco senza Cestino. Cancellare definitivamente i loro file?",
+  "…and {n} more": "…e altri {n}",
+  "Files erased: {files} (photos out of the library: {photos})": "File cancellati: {files} (foto tolte dalla libreria: {photos})",
+  "Files moved to the Trash: {files} (photos out of the library: {photos})": "File spostati nel Cestino: {files} (foto tolte dalla libreria: {photos})",
+  "{n} could not be moved and stay in the library: {why}": "{n} non sono stati spostati e restano nella libreria: {why}",
+  "Photos whose file was already gone: {n}": "Foto il cui file mancava già: {n}",
+  "Sidecars left in place: {n}": "File collaterali lasciati al loro posto: {n}",
+  "Files other photos still use, kept: {n}": "File ancora usati da altre foto, conservati: {n}"
 }

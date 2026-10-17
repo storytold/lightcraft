@@ -295,5 +295,14 @@
   "Renames {n} face{} across the library. The files are not changed.": "Renomeia {n} rosto{} na biblioteca. Os arquivos não são alterados.",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "“{to}” já é uma pessoa. Combiná-las deixa uma só; Desfazer as separa de novo.",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "{what} mesclagem adicionada em {mp}: o tamanho completo, {full}, precisa de mais memória do que este computador tem",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what} mesclagem adicionada em {mp}, o maior tamanho possível para um panorama (tamanho completo: {full})"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what} mesclagem adicionada em {mp}, o maior tamanho possível para um panorama (tamanho completo: {full})",
+  "Move the files of {n} photos to the Trash?": "Mover os arquivos de {n} fotos para o Lixo?",
+  "{n} photos are on a disk that has no Trash. Erase their files for good?": "{n} fotos estão em um disco sem Lixo. Apagar os arquivos delas definitivamente?",
+  "…and {n} more": "…e mais {n}",
+  "Files erased: {files} (photos out of the library: {photos})": "Arquivos apagados: {files} (fotos fora da biblioteca: {photos})",
+  "Files moved to the Trash: {files} (photos out of the library: {photos})": "Arquivos movidos para o Lixo: {files} (fotos fora da biblioteca: {photos})",
+  "{n} could not be moved and stay in the library: {why}": "{n} não puderam ser movidos e continuam na biblioteca: {why}",
+  "Photos whose file was already gone: {n}": "Fotos cujo arquivo já não existia: {n}",
+  "Sidecars left in place: {n}": "Arquivos sidecar deixados no lugar: {n}",
+  "Files other photos still use, kept: {n}": "Arquivos que outras fotos ainda usam (mantidos): {n}"
 }

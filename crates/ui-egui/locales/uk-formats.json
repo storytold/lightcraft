@@ -295,5 +295,14 @@
   "Already in “{}”": "Уже в «{}»",
   "Move {n} photo{} to “{}”": "Перемістити до «{1}» фото: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Перемістити до «{1}» фото: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "До «{1}» переміщено фото: {n}{0:.0}. Редагування → Скасувати поверне їх."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "До «{1}» переміщено фото: {n}{0:.0}. Редагування → Скасувати поверне їх.",
+  "Move the files of {n} photos to the Trash?": "Перемістити файли фото ({n}) до смітника?",
+  "{n} photos are on a disk that has no Trash. Erase their files for good?": "Фото ({n}) розташовані на диску без смітника. Стерти їхні файли назавжди?",
+  "…and {n} more": "…і ще {n}",
+  "Files erased: {files} (photos out of the library: {photos})": "Стерто файлів: {files} (фото вилучено з бібліотеки: {photos})",
+  "Files moved to the Trash: {files} (photos out of the library: {photos})": "Переміщено файлів до смітника: {files} (фото вилучено з бібліотеки: {photos})",
+  "{n} could not be moved and stay in the library: {why}": "Не вдалося перемістити ({n}), вони залишаються в бібліотеці: {why}",
+  "Photos whose file was already gone: {n}": "Фото, файлу яких уже не було: {n}",
+  "Sidecars left in place: {n}": "Залишено супровідних файлів: {n}",
+  "Files other photos still use, kept: {n}": "Файли, які використовують інші фото (залишено): {n}"
 }

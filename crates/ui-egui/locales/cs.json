@@ -2063,5 +2063,20 @@
   "Open Settings": "Otevřít nastavení",
   "Select none": "Zrušit celý výběr",
   "Select all": "Vybrat vše",
-  "Visualize HDR": "Zobrazit rozsah HDR"
+  "Visualize HDR": "Zobrazit rozsah HDR",
+  "Move Files to Trash": "Přesunout soubory do koše",
+  "Move Files to Trash…": "Přesunout soubory do koše…",
+  "Move All Files in Recently Deleted to Trash…": "Přesunout všechny soubory z „Nedávno odstraněné“ do koše…",
+  "Moving files to the Trash is not available here yet": "Přesun souborů do koše tu zatím není k dispozici",
+  "Recently Deleted is empty": "V „Nedávno odstraněných“ nic není",
+  "No photos of the library are selected": "Nejsou vybrány žádné fotografie z knihovny",
+  "Erase Files": "Smazat soubory natrvalo",
+  "Move to Trash": "Přesunout do koše",
+  "Move this photo's file to the Trash?": "Přesunout soubor této fotografie do koše?",
+  "The photos leave the library, also Recently Deleted. Their files go to the system Trash, with their XMP sidecars.": "Fotografie zmizí z knihovny i z „Nedávno odstraněných“. Jejich soubory se i s doprovodnými soubory XMP přesunou do systémového koše.",
+  "Undo brings the photos back and moves the files back, as long as they are still in the Trash.": "Zpět vrátí fotografie i jejich soubory na místo, dokud jsou soubory ještě v koši.",
+  "This photo is on a disk that has no Trash. Erase its file for good?": "Tato fotografie je na disku bez koše. Smazat její soubor natrvalo?",
+  "This cannot be undone: the files are not kept anywhere.": "Tuto akci nelze vrátit: soubory se nikde neuchovají.",
+  "Only these files are erased; XMP sidecars beside them stay.": "Smažou se jen tyto soubory; doprovodné soubory XMP vedle nich zůstanou.",
+  "Cancel leaves these photos in the library and their files where they are.": "Zrušit ponechá tyto fotografie v knihovně a jejich soubory na místě."
 }

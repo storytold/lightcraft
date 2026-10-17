@@ -1195,6 +1195,8 @@ pub enum Dialog {
     DeleteEffects {
         names: Vec<String>,
     },
+    /// Ask before photos' files go to the Trash, or (a disk without one) are erased.
+    TrashFiles(crate::panels::trash_files::TrashAsk),
     /// Confirm moving photos to Recently Deleted.
     ConfirmDelete {
         count: usize,

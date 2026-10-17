@@ -465,6 +465,28 @@
 - With several photos selected, the Keywords panel says how many photos its keywords belong to. The × on a keyword
   is a larger target that lights up on its own, and taking a keyword off several photos at once now says which
   keyword left how many photos, and that Edit ▸ Undo puts it back.
+### Move Files to Trash
+- **Photo ▸ Move Files to Trash…** (also in a photo's menu in the grid) takes the selected photos out of the library
+  and moves their files to the system Trash, with their XMP sidecars. It always asks first and lists the files.
+  It works on photos in the library and in Recently Deleted; from Recently Deleted all of them can go at once
+  (right-click a photo there ▸ Move All Files in Recently Deleted to Trash…).
+- Nothing else changed: Delete still moves photos to Recently Deleted, and Delete Permanently, Empty Recently
+  Deleted and Remove Folder from Library still leave every file where it is. With "Confirm before deleting" on,
+  the Delete question now has Move Files to Trash… as a second answer.
+- Undo brings the photos back and moves the files back out of the Trash, as long as they are still there. It
+  never replaces a file that is at their place now, and says what it could not put back.
+- A file that other photos of the library use (copies) stays until the last of them goes. A sidecar goes only
+  when it is that photo's alone: `IMG_1.xmp` stays while a raw, a video or anything else called `IMG_1` is beside
+  it, or a photo of that name stays in the library.
+- Photos whose folder can't be reached (a disk that is not connected) stay in the library: nothing says their
+  files are gone. A file that is gone from a folder that is there just lets its photo leave.
+- On a disk without a Trash (many network shares) the photos stay, and a second question asks whether their
+  files may be erased for good (its button waits a moment before it can be pressed). Only those files are erased;
+  sidecars beside them stay. That cannot be undone as far as the files go; Undo brings the photos back, shown as
+  missing, with their edits and keywords.
+- macOS and Linux for now. On Windows and in the browser the command says it is not available and changes
+  nothing.
+- For agents: `photo.trashFiles {ids?, noTrash?: keep|delete}` and `library.emptyRecentlyDeleted {files: "trash"}`.
 
 ### HDR and panorama merges of CR2 keep their colour
 - Photo Merge of Canon CR2 (and other raws whose colour LightCraft fits from the camera's own JPEG, such as NEF and
@@ -568,6 +590,26 @@
 - Settings ▸ General ▸ External Editing: the format (PSD or TIFF), colour space and bit depth for PhotoCraft and for
   the other editor (Edit in Other Editor, now ⌥⌘E), and where PhotoCraft is if you use a portable copy.
 - Export can write PSD too (flat, 8- or 16-bit).
+
+### Refused commands say why
+- When something you click, drop, drag a slider for, choose from a menu or press a key for can't be done, a message
+  at the bottom of the photo says why ("No photos selected", "Smart album “Trips view” would include itself in folder
+  “Trips”…") and stays long enough to read. Before, most such clicks did nothing and said nothing; only a few places,
+  such as an export that couldn't start, explained themselves.
+- Nothing claims a success that didn't happen: pressing 3 with no photo selected no longer says "Rated ★★★", ⌘Z with
+  nothing to undo no longer says "Undo", and Auto, a preset or Paste Settings that couldn't be applied say why
+  instead of "applied".
+
+### Folders of albums
+- Clicking a folder in the sidebar's Albums section shows the photos of every album and smart album inside it,
+  folders inside it included, each photo once, as a collection set does in Lightroom Classic. The grid is titled with
+  the folder's name and follows the sort and the filter bar. The triangle beside the folder opens and closes it; a
+  click on the row no longer does.
+- A folder's view can be saved as a smart album that follows the folder, also after its rules are edited (editing
+  the rules of a saved album view used to drop the album). It can't be made in, or moved into, the folder it shows
+  (it would include itself): that folder is no drop target and isn't offered under Move to, and commands say why.
+- Agents show a folder with `library.source {"kind": "album", "id": <folder id>}`; `albums.list` reports a folder's
+  `count`.
 
 ### Faster GPU exports
 - Exports with noise reduction, Texture, Clarity, Dehaze or Highlights and Shadows can be much faster on the GPU,

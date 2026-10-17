@@ -40,6 +40,7 @@ mod query;
 pub mod recheck;
 mod slideshow;
 mod sync;
+pub(crate) mod trash;
 mod xmp;
 
 use serde::Serialize;
@@ -168,6 +169,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(missing::specs());
         v.extend(recheck::specs());
         v.extend(sync::specs());
+        v.extend(trash::specs());
         v.extend(metadata::specs());
         v.extend(geocode::specs());
         v.extend(filters::specs());

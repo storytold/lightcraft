@@ -2718,5 +2718,20 @@
   "≥  at least": "≥  არანაკლებ",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-გადათრევა გასასწორებლად, ⇧G მართვადი Upright, ბადე გარდაქმნისას.",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "Move Files to Trash": "ფაილების ურნაში გადატანა",
+  "Move Files to Trash…": "ფაილების ურნაში გადატანა…",
+  "Move All Files in Recently Deleted to Trash…": "„ახლახან წაშლილის“ ყველა ფაილის ურნაში გადატანა…",
+  "Moving files to the Trash is not available here yet": "ფაილების ურნაში გადატანა აქ ჯერ მიუწვდომელია",
+  "Recently Deleted is empty": "„ახლახან წაშლილი“ ცარიელია",
+  "No photos of the library are selected": "ბიბლიოთეკის არცერთი ფოტო არ არის არჩეული",
+  "Erase Files": "ფაილების სამუდამოდ წაშლა",
+  "Move to Trash": "ურნაში გადატანა",
+  "Move this photo's file to the Trash?": "გადავიტანოთ ამ ფოტოს ფაილი ურნაში?",
+  "The photos leave the library, also Recently Deleted. Their files go to the system Trash, with their XMP sidecars.": "ფოტოები ბიბლიოთეკიდან გავა, „ახლახან წაშლილიდანაც“. მათი ფაილები XMP თანმხლებ ფაილებთან ერთად სისტემის ურნაში გადავა.",
+  "Undo brings the photos back and moves the files back, as long as they are still in the Trash.": "„დაბრუნება“ ფოტოებს აღადგენს და ფაილებს უკან დააბრუნებს, სანამ ისინი ჯერ კიდევ ურნაშია.",
+  "This photo is on a disk that has no Trash. Erase its file for good?": "ეს ფოტო ისეთ დისკზეა, რომელსაც ურნა არ აქვს. წავშალოთ მისი ფაილი სამუდამოდ?",
+  "This cannot be undone: the files are not kept anywhere.": "ამის დაბრუნება შეუძლებელია: ფაილები არსად შეინახება.",
+  "Only these files are erased; XMP sidecars beside them stay.": "იშლება მხოლოდ ეს ფაილები; მათ გვერდით არსებული XMP თანმხლები ფაილები რჩება.",
+  "Cancel leaves these photos in the library and their files where they are.": "„გაუქმება“ ამ ფოტოებს ბიბლიოთეკაში დატოვებს, მათ ფაილებს კი — თავის ადგილას."
 }

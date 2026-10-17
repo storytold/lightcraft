@@ -2157,5 +2157,20 @@
   "This is a Lightroom catalog, not a LightCraft library. Import it into a LightCraft library instead?": "To jest katalog Lightrooma, a nie biblioteka LightCraft. Zaimportować go zamiast tego do biblioteki LightCraft?",
   "Unnamed Faces": "Nienazwane twarze",
   "Vertical inset (% of short edge)": "Margines pionowy (% krótszego boku)",
-  "not added to Apple Photos (cancelled)": "nie dodano do aplikacji Zdjęcia (anulowano)"
+  "not added to Apple Photos (cancelled)": "nie dodano do aplikacji Zdjęcia (anulowano)",
+  "Move Files to Trash": "Przenieś pliki do Kosza",
+  "Move Files to Trash…": "Przenieś pliki do Kosza…",
+  "Move All Files in Recently Deleted to Trash…": "Przenieś wszystkie pliki z „Ostatnio usunięte” do Kosza…",
+  "Moving files to the Trash is not available here yet": "Przenoszenie plików do Kosza nie jest tu jeszcze dostępne",
+  "Recently Deleted is empty": "W „Ostatnio usuniętych” nic nie ma",
+  "No photos of the library are selected": "Nie zaznaczono żadnych zdjęć z biblioteki",
+  "Erase Files": "Usuń pliki na zawsze",
+  "Move to Trash": "Przenieś do Kosza",
+  "Move this photo's file to the Trash?": "Przenieść plik tego zdjęcia do Kosza?",
+  "The photos leave the library, also Recently Deleted. Their files go to the system Trash, with their XMP sidecars.": "Zdjęcia znikną z biblioteki, także z „Ostatnio usunięte”. Ich pliki trafią do systemowego Kosza razem z plikami pomocniczymi XMP.",
+  "Undo brings the photos back and moves the files back, as long as they are still in the Trash.": "Cofnij przywróci zdjęcia i odłoży pliki z powrotem, dopóki są jeszcze w Koszu.",
+  "This photo is on a disk that has no Trash. Erase its file for good?": "To zdjęcie jest na dysku bez Kosza. Usunąć jego plik na zawsze?",
+  "This cannot be undone: the files are not kept anywhere.": "Tego nie można cofnąć: pliki nie są nigdzie przechowywane.",
+  "Only these files are erased; XMP sidecars beside them stay.": "Usuwane są tylko te pliki; pliki pomocnicze XMP obok nich zostają.",
+  "Cancel leaves these photos in the library and their files where they are.": "Anuluj pozostawi te zdjęcia w bibliotece, a ich pliki tam, gdzie są."
 }

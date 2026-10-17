@@ -295,5 +295,14 @@
   "Already in “{}”": "Already in “{}”",
   "Move {n} photo{} to “{}”": "Move {n} photo{} to “{}”",
   "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
+  "Move the files of {n} photos to the Trash?": "გადავიტანოთ {n} ფოტოს ფაილები ურნაში?",
+  "{n} photos are on a disk that has no Trash. Erase their files for good?": "{n} ფოტო ისეთ დისკზეა, რომელსაც ურნა არ აქვს. წავშალოთ მათი ფაილები სამუდამოდ?",
+  "…and {n} more": "…და კიდევ {n}",
+  "Files erased: {files} (photos out of the library: {photos})": "წაშლილი ფაილები: {files} (ბიბლიოთეკიდან ამოღებული ფოტოები: {photos})",
+  "Files moved to the Trash: {files} (photos out of the library: {photos})": "ურნაში გადატანილი ფაილები: {files} (ბიბლიოთეკიდან ამოღებული ფოტოები: {photos})",
+  "{n} could not be moved and stay in the library: {why}": "{n} ვერ გადავიდა და ბიბლიოთეკაში რჩება: {why}",
+  "Photos whose file was already gone: {n}": "ფოტოები, რომელთა ფაილი უკვე აღარ იყო: {n}",
+  "Sidecars left in place: {n}": "ადგილზე დატოვებული თანმხლები ფაილები: {n}",
+  "Files other photos still use, kept: {n}": "ფაილები, რომლებსაც სხვა ფოტოები ჯერ კიდევ იყენებს (შენახულია): {n}"
 }

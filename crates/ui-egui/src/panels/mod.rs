@@ -37,6 +37,7 @@ pub mod slide_titles;
 pub mod slideshow;
 pub mod strip;
 pub mod topbar;
+pub mod trash_files;
 pub mod unnamed;
 
 use egui::{Align2, Rect, pos2, vec2};
