@@ -457,11 +457,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     f += (1.0 - f) * pf(F_VIG_HL) * sstep(0.4, 1.0, lum);
                 }
                 if (style == 2u) {
-                    d = d * (1.0 - (-amount) * t) + 0.0;
+                    // PaintOverlay: pure multiply (1.0 + amount * t), no highlight protection
+                    d = d * (1.0 + amount * t);
                 } else {
                     d = d * f;
                 }
             } else {
+                // Lightening: all styles use 0.85 factor
                 d = d + (1.0 - d) * amount * t * 0.85;
             }
         }
