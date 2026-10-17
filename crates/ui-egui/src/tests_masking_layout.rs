@@ -86,7 +86,7 @@ fn masking_long_names_and_describe_controls_stay_inside_the_panel() {
             let field = widgets.iter().find(|(id, _)| id == "maskDescribe").unwrap().1;
             let button = widgets.iter().find(|(id, _)| id == "button:maskDescribeGo").unwrap().1;
             assert!(field.right() <= button.left(), "the prompt must not overlap Select");
-            assert!(field.left() >= 24.0 && button.right() <= width - 22.0, "{locale:?} {width}: {field:?} {button:?}");
+            assert!(field.left() >= 16.0 && button.right() <= width - 16.0, "{locale:?} {width}: {field:?} {button:?}");
         }
     }
 }
