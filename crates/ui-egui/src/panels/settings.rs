@@ -653,6 +653,18 @@ fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     );
     #[cfg(target_os = "linux")]
     hint(ui, t, crate::i18n::tr("Profiles assigned in your desktop's colour settings are usually in ~/.local/share/icc."));
+    #[cfg(target_os = "windows")]
+    {
+        heading(ui, t, crate::i18n::tr("Refresh rate"));
+        check(ui, "settings.vrrFlickerWorkaround", &mut app.ui.settings.vrr_flicker_workaround, "Prevent VRR flicker on OLED and VA monitors");
+        hint(
+            ui,
+            t,
+            crate::i18n::tr(
+                "Renders continuously at the monitor's refresh rate to avoid brightness and gamma shifts caused by G-SYNC / FreeSync variable refresh rate changes. Increases GPU and battery usage.",
+            ),
+        );
+    }
 }
 
 fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {

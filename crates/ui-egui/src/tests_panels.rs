@@ -2409,3 +2409,21 @@ fn the_histogram_clipping_buttons_stay_clear_of_the_hovered_scroll_bar() {
     // and the shadow one keeps the same inset from its edge
     assert!(((low.left() - hist.left()) - (hist.right() - high.right())).abs() < 0.5, "{low:?} {high:?} in {hist:?}");
 }
+
+#[test]
+fn vrr_flicker_workaround_setting_toggles_and_persists() {
+    let mut h = demo([1400.0, 1000.0], json!({"view": "photoGrid"}));
+    assert!(!h.app.ui.settings.vrr_flicker_workaround);
+
+    // Opening settings dialog and switching to Display tab
+    h.request("ui.set", json!({"settingsTab": "display"}), T);
+    h.step();
+
+    // Verify toggle can be changed via settings
+    h.app.ui.settings.vrr_flicker_workaround = true;
+    let serialized = serde_json::to_string(&h.app.ui.settings).unwrap();
+    assert!(serialized.contains("\"vrrFlickerWorkaround\":true"));
+
+    let deserialized: crate::state::AppSettings = serde_json::from_str(&serialized).unwrap();
+    assert!(deserialized.vrr_flicker_workaround);
+}

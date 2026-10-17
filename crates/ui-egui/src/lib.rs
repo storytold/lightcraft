@@ -1393,6 +1393,19 @@ impl LightcraftApp {
         self.perf.frame_ms = now_ms() - t0;
         self.perf.update_ms = self.perf.logic_ms + self.perf.frame_ms;
         self.perf.max_update_ms = self.perf.max_update_ms.max(self.perf.update_ms);
+        // Windows only: G-SYNC / FreeSync brightness flicker workaround.
+        #[cfg(target_os = "windows")]
+        if self.ui.settings.vrr_flicker_workaround && !self.headless_host {
+            let active = ctx.input(|i| {
+                let focused = i.focused;
+                let minimized =
+                    i.viewport().minimized.unwrap_or(false) || i.raw.viewports.get(&i.raw.viewport_id).and_then(|v| v.minimized).unwrap_or(false);
+                focused && !minimized
+            });
+            if active {
+                ctx.request_repaint();
+            }
+        }
     }
 
     /// Once per library opened (at launch too): name it in the window title, so nobody edits in

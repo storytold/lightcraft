@@ -391,6 +391,9 @@ pub struct AppSettings {
     /// View ▸ Zoom to Focus Point: Toggle Zoom (Z) centres the zoomed view on the camera's focus point
     /// when the photo has one (`view.zoomToFocus`).
     pub zoom_to_focus: bool,
+    /// Windows only (inert elsewhere; the field stays on every platform so settings files remain portable).
+    /// Keep repainting continuously at display refresh rate to eliminate VRR / G-SYNC brightness flicker on OLED/VA panels.
+    pub vrr_flicker_workaround: bool,
 }
 
 impl Default for AppSettings {
@@ -420,6 +423,7 @@ impl Default for AppSettings {
             keyword_chips: KeywordChips::default(),
             focus_point: false,
             zoom_to_focus: true,
+            vrr_flicker_workaround: false,
         }
     }
 }
