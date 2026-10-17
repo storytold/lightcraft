@@ -45,3 +45,7 @@ sync_github_name = true
 [people.Silvertree2010]
 display_name = "Netter"
 sync_github_name = false
+
+[people.theDavidCoen]
+real_name = "David Coen"
+sync_github_name = true
