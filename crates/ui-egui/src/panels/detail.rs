@@ -2625,30 +2625,41 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
             }
             let img_area = Rect::from_min_max(cr.min + vec2(10.0, 22.0), cr.max - vec2(10.0, 8.0));
             super::grid::request_thumb(app, *id, (256.0 * ppp.min(2.0) / 2.0) as usize * 2, 8);
-            if let Some(tex) = app.renderer.thumb(*id) {
-                let [tw, th] = tex.size;
-                let s = (img_area.width() / tw as f32).min(img_area.height() / th as f32);
-                let fr = Rect::from_center_size(img_area.center(), vec2(tw as f32 * s, th as f32 * s));
-                p.image(tex.tex.id(), fr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-                if sel {
-                    p.rect_stroke(fr, 0.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Outside);
-                } else if state == lightcraft_engine::SelectionState::Selected {
-                    p.rect_stroke(fr, 0.0, Stroke::new(1.5, Color32::from_gray(170)), StrokeKind::Outside);
-                }
-                if app.ui.settings.film_badges
-                    && let Some(ph) = app.session.catalog.photo(*id)
-                {
-                    film_badges(p, &t, fr, ph);
-                }
-                if let Some(st) = app.session.catalog.stack_of(*id) {
-                    let text =
-                        if st.collapsed { st.photos.len().to_string() } else { format!("{}/{}", st.position(*id).unwrap_or(0) + 1, st.photos.len()) };
-                    let g = p.layout_no_wrap(text, t.semibold(9.5), Color32::WHITE);
-                    let br = Rect::from_min_size(fr.min + vec2(3.0, 3.0), vec2(g.size().x + 22.0, 15.0));
-                    p.rect_filled(br, 7.5, Color32::from_black_alpha(170));
-                    crate::icons::paint(p, Rect::from_min_size(br.min + vec2(4.0, 2.0), vec2(11.0, 11.0)), crate::icons::Icon::Stack, Color32::WHITE);
-                    p.galley(pos2(br.min.x + 17.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
-                }
+            let mut badge = None;
+            if let Some(photo) = app.session.catalog.photo(*id).cloned() {
+                let (photo_rect, failure) = if let Some(tex) = app.renderer.thumb(*id) {
+                    let [tw, th] = tex.size;
+                    let s = (img_area.width() / tw as f32).min(img_area.height() / th as f32);
+                    let fr = Rect::from_center_size(img_area.center(), vec2(tw as f32 * s, th as f32 * s));
+                    p.image(tex.tex.id(), fr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                    if sel {
+                        p.rect_stroke(fr, 0.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Outside);
+                    } else if state == lightcraft_engine::SelectionState::Selected {
+                        p.rect_stroke(fr, 0.0, Stroke::new(1.5, Color32::from_gray(170)), StrokeKind::Outside);
+                    }
+                    (fr, None)
+                } else {
+                    let ph = crate::thumb::placeholder_rect(img_area, super::grid::photo_aspect(Some(&*photo)));
+                    crate::thumb::paint_placeholder(p, ph);
+                    if sel {
+                        p.rect_stroke(ph, 0.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Outside);
+                    } else if state == lightcraft_engine::SelectionState::Selected {
+                        p.rect_stroke(ph, 0.0, Stroke::new(1.5, Color32::from_gray(170)), StrokeKind::Outside);
+                    }
+                    (ph, app.renderer.failure(crate::render::Slot::Thumb(*id)).map(str::to_owned))
+                };
+                let stack = app.session.catalog.stack_of(*id).map(|st| (st.id, st.position(*id).unwrap_or(0)));
+                let overlay = crate::thumb::Thumb {
+                    surface: crate::thumb::Surface::Film,
+                    photo: &photo,
+                    rect: photo_rect,
+                    stack,
+                    marks: app.ui.settings.film_badges,
+                    hot: false,
+                    failure,
+                    surround: true,
+                };
+                badge = crate::thumb::overlay(app, ui, &overlay);
             }
             if resp.clicked() {
                 let m = ui.input(|i| i.modifiers);
@@ -2675,34 +2686,11 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
             }
             // the same photo actions as the grid and loupe (Restore / Delete Permanently in Recently Deleted)
             resp.context_menu(|ui| super::grid::context_menu(app, ui, *id));
+            if let Some(badge) = badge {
+                badge.context_menu(|ui| super::grid::context_menu(app, ui, *id));
+            }
         }
     });
-}
-
-/// Rating, flag and edited badges along a filmstrip thumbnail's bottom edge (Settings → Interface).
-fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog::Photo) {
-    use crate::icons::{Icon, paint};
-    use lightcraft_catalog::Flag;
-    let edited = ph.is_edited();
-    if ph.rating == 0 && ph.flag == Flag::None && !edited {
-        return;
-    }
-    let bar = Rect::from_min_max(pos2(fr.left(), fr.bottom() - 15.0), fr.right_bottom());
-    p.rect_filled(bar, 0.0, Color32::from_black_alpha(130));
-    let y = bar.center().y;
-    let mut x = bar.left() + 3.0;
-    for i in 0..ph.rating {
-        paint(p, Rect::from_min_size(pos2(x + i as f32 * 9.0, y - 4.0), vec2(8.0, 8.0)), Icon::StarFilled, t.star);
-    }
-    x += ph.rating as f32 * 9.0 + 2.0;
-    match ph.flag {
-        Flag::Pick => paint(p, Rect::from_min_size(pos2(x, y - 5.0), vec2(10.0, 10.0)), Icon::FlagPick, t.pick),
-        Flag::Reject => paint(p, Rect::from_min_size(pos2(x, y - 5.0), vec2(10.0, 10.0)), Icon::FlagReject, t.reject),
-        Flag::None => {}
-    }
-    if edited {
-        paint(p, Rect::from_min_size(pos2(bar.right() - 13.0, y - 5.0), vec2(10.0, 10.0)), Icon::Sliders, t.text_label);
-    }
 }
 
 #[cfg(test)]

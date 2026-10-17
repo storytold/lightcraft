@@ -1,5 +1,24 @@
 # What's new in LightCraft
 
+## 2026-10-17
+
+### The same marks on every thumbnail
+- The filmstrip's thumbnails now carry what the grid's do: a virtual copy has its "Copy N" tag, so a copy and its
+  master tell apart; the stack badge can be clicked to expand or collapse the stack, with the same tooltip (now
+  translated); the colour label is a dot, and a grey placeholder stands in until the picture is drawn.
+- A thumbnail that can't be drawn shows a warning icon instead of a bare "!". Hover it to read why, and where to go:
+  right-click ▸ Locate Missing File… when the original is gone, Reload from Disk otherwise.
+- In the Photo Grid a colour label is no longer a tinted band over the bottom of the picture; it is the dot in the
+  row of marks, as in the Square Grid and the filmstrip.
+- On a narrow thumbnail (a portrait photo at the smallest size) the marks no longer run over the photo's edge: the
+  copy tag drops its name, the edited mark goes, five stars become one star and the number, and what still doesn't fit is left out;
+  the stack badge sheds its icon and then the "1/" of "1/12". Nothing is painted outside the photo. The Preview pill sits
+  above the marks on the filmstrip too, and steps aside for the stack badge. In the Photo Grid, which has no tinted
+  surround, the label dot is kept before the stars on a narrow photo and stays when ratings and flags are turned off.
+- The filmstrip now dims rejected photos as the grid does, and in the grid the dim sits under the marks, so the red
+  reject flag stays clear. Right-clicking the stack badge opens the photo's menu.
+- Screen readers say "rating 3 of 5" in every language, instead of building "stars" from an English plural.
+
 ## 2026-10-14
 
 ### Lightroom radial masks on the right side

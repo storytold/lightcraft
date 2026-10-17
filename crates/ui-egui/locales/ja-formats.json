@@ -202,7 +202,6 @@
   "{n} similar photo{} · View ▸ Clear Filters to see all": "似た写真{n}枚{:.0}・すべて表示するには「表示 → フィルターを解除」",
   "Moved; {} photo(s) relinked": "移動しました。{}枚の写真の参照先を更新しました",
   "{} label (click more labels to show any of them)": "{}ラベル（ほかのラベルもクリックすると、いずれかに一致する写真を表示）",
-  ", {} star{}": "、星{}つ{:.0}",
   ", {} label": "、{}ラベル",
   "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.": "{host} からダウンロードします。届いて確認が済むと、LightCraft がインストールし、{after}。",
   "{:.1} MB": "{:.1} MB",
@@ -295,5 +294,6 @@
   "Renames {n} face{} across the library. The files are not changed.": "ライブラリ全体で{n}件の顔の名前を変更します。ファイルは変更されません。{:.0}",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "「{to}」はすでに別の人物です。まとめると1人になり、元に戻すと再び分かれます。",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "{what}合成を{mp}で追加しました：フルサイズ（{full}）にはこのコンピューターのメモリが足りません",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what}合成を{mp}で追加しました。パノラマの最大サイズです（フルサイズ：{full}）"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what}合成を{mp}で追加しました。パノラマの最大サイズです（フルサイズ：{full}）",
+  ", rating {} of 5": "、評価: 5段階中{}"
 }

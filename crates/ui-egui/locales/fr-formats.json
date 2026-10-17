@@ -198,7 +198,6 @@
   "{n} similar photo{} · View ▸ Clear Filters to see all": "{n} photo{} similaire(s) · Affichage → Effacer les filtres pour tout voir",
   "Moved; {} photo(s) relinked": "Déplacé ; {} photo(s) de nouveau associée(s)",
   "{} label (click more labels to show any of them)": "Étiquette {} (cliquez sur « autres étiquettes » pour afficher celles de votre choix)",
-  ", {} star{}": ", {} étoile{}",
   ", {} label": ", étiquette {}",
   "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.": "Téléchargement depuis {host}. Une fois le téléchargement terminé et vérifié, LightCraft l’installe, {after}.",
   "{:.1} MB": "{:.1} Mo",
@@ -295,5 +294,6 @@
   "Already in “{}”": "Déjà dans « {} »",
   "Move {n} photo{} to “{}”": "Déplacer {n} photo{} vers « {} »",
   "Move {n} photo{} to “{}”?": "Déplacer {n} photo{} vers « {} » ?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} photo{} déplacée(s) vers « {} ». Modifier → Annuler les remet en place."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} photo{} déplacée(s) vers « {} ». Modifier → Annuler les remet en place.",
+  ", rating {} of 5": ", note : {} sur 5"
 }

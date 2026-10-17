@@ -202,7 +202,6 @@
   "{n} similar photo{} · View ▸ Clear Filters to see all": "{n} 張相似照片{:.0} · 選擇「檢視 → 清除篩選條件」可查看全部",
   "Moved; {} photo(s) relinked": "已移動；已重新連結 {} 張照片",
   "{} label (click more labels to show any of them)": "{}標籤（點擊更多標籤可顯示符合其中任一標籤的照片）",
-  ", {} star{}": "，{} 顆星{:.0}",
   ", {} label": "，{}標籤",
   "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.": "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.",
   "{:.1} MB": "{:.1} MB",
@@ -295,5 +294,6 @@
   "Renames {n} face{} across the library. The files are not changed.": "在整個圖庫中重新命名 {n} 張面孔。不會改動檔案。{:.0}",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "「{to}」已經是另一個人。合併後成為一個人；還原會再把他們分開。",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "已新增{what}合併照片（{mp}）：完整尺寸（{full}）所需的記憶體超過這台電腦的記憶體",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "已新增{what}合併照片（{mp}），這是全景圖的最大尺寸（完整尺寸：{full}）"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "已新增{what}合併照片（{mp}），這是全景圖的最大尺寸（完整尺寸：{full}）",
+  ", rating {} of 5": "，評分：{}/5"
 }

@@ -2179,5 +2179,10 @@
   "Checking the GPU…": "正在检查 GPU…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "只有检查表明 GPU 能更快给出相同结果时，人脸模型才会使用 GPU。",
-  "Checking the GPU for faces": "正在检查用于人脸的 GPU"
+  "Checking the GPU for faces": "正在检查用于人脸的 GPU",
+  "Stack — click to expand (S)": "堆叠 — 单击展开 (S)",
+  "Stack — click to collapse (S)": "堆叠 — 单击折叠 (S)",
+  "Virtual copy": "虚拟副本",
+  "Right-click ▸ Locate Missing File… to find it again.": "右键单击 → 定位缺失的文件…，即可重新找到它。",
+  "Right-click ▸ Reload from Disk to try again.": "右键单击 → 从磁盘重新读取，即可重试。"
 }

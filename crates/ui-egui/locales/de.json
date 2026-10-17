@@ -2341,5 +2341,10 @@
   "Checking the GPU…": "GPU wird geprüft …",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Ein Gesichtsmodell nutzt die GPU nur, wenn eine Prüfung zeigt, dass sie dieselben Ergebnisse schneller liefert.",
-  "Checking the GPU for faces": "GPU für Gesichter wird geprüft"
+  "Checking the GPU for faces": "GPU für Gesichter wird geprüft",
+  "Stack — click to expand (S)": "Stapel — Klicken zum Aufklappen (S)",
+  "Stack — click to collapse (S)": "Stapel — Klicken zum Zuklappen (S)",
+  "Virtual copy": "Virtuelle Kopie",
+  "Right-click ▸ Locate Missing File… to find it again.": "Rechtsklick → Fehlende Datei suchen…, um sie wiederzufinden.",
+  "Right-click ▸ Reload from Disk to try again.": "Rechtsklick → Vom Datenträger neu laden, um es erneut zu versuchen."
 }
