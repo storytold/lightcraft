@@ -250,7 +250,8 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
 /// Apply sidecar data to a photo record (the sidecar wins, except that a capture time embedded in
 /// the file is kept). Returns true if develop changed.
 pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
-    if p.captured.is_none() {
+    // (a date import guessed from the file's modification time is no capture time: the sidecar's wins)
+    if p.captured_stated().is_none() && sc.captured.is_some() {
         p.captured = sc.captured.clone();
     }
     if let Some(r) = sc.rating {
@@ -348,7 +349,8 @@ pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_
         keywords: p.meta.keywords.clone(),
         rating: Some(p.rating.min(5) as i8),
         label: p.label.map(|l| cat.label_name(l)),
-        capture_time: p.captured.as_deref().and_then(lightcraft_meta::DateTime::parse_iso),
+        // (never the file's modification time standing in for a capture time nobody stated)
+        capture_time: p.captured_stated().and_then(lightcraft_meta::DateTime::parse_iso),
         gps: p.meta.gps.map(|(latitude, longitude)| lightcraft_meta::Gps { latitude, longitude, altitude: None }),
         ..Default::default()
     };

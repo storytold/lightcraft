@@ -34,6 +34,9 @@ Reading merges into the catalog with the **sidecar winning** for every field it 
 kept. The one exception is the **capture time**: a time embedded in the file (EXIF/IPTC) always wins; when the file
 has none, the sidecar's `exif:DateTimeOriginal`, else `photoshop:DateCreated`, else `xmp:CreateDate` (ISO 8601) is
 used — on import (it then also files a copied photo in its date folder) and by `photo.readMetadataFromFile` (undoable).
+A photo with no capture time anywhere is dated by the file's modification time, as Lightroom does; that guess is never
+written to a sidecar as `exif:DateTimeOriginal` / `photoshop:DateCreated`, and a sidecar's capture time read later
+replaces it.
 `xmp:Rating="-1"` (the XMP convention for rejected) sets the reject flag. Develop settings come from
 `lc:settings` when present (exact); otherwise from the `crs:` fields below (approximate).
 

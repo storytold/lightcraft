@@ -1562,6 +1562,39 @@ fn heic_imports_as_a_normal_photo_or_says_why_not() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// An iPhone HEIC keeps its EXIF in an item of its container: the camera and the capture time come from
+/// there (they used to be blank, and the photo was dated by the file's modification time), and saving the
+/// sidecar writes that capture time.
+#[test]
+fn heic_camera_and_capture_time_come_from_its_exif() {
+    use lightcraft_heif::testdata::{Spec, build};
+    if !lightcraft_codecs::Format::Heif.can_decode() {
+        lightcraft_testkit::skip!(Feature, "HEIC needs the codecs' `heif` feature");
+        return;
+    }
+    let src = temp_dir("heic-exif");
+    let exif = lightcraft_meta::write_exif(&lightcraft_meta::Metadata {
+        make: Some("Apple".into()),
+        model: Some("iPhone 15".into()),
+        capture_time: lightcraft_meta::DateTime::parse_iso("2024-05-06T07:08:09"),
+        f_number: Some(1.6),
+        ..Default::default()
+    });
+    let grey = |_: u32, _: u32| [120u16, 120, 120];
+    std::fs::write(src.join("IMG_0001.HEIC"), build(&Spec { exif: Some(exif), ..Spec::new(32, 32, &grey) })).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let p = s.catalog.photos().next().unwrap().clone();
+    assert_eq!(p.meta.camera, "Apple iPhone 15");
+    assert_eq!(p.meta.aperture, Some(1.6));
+    assert_eq!(p.captured.as_deref(), Some("2024-05-06T07:08:09"), "the EXIF date, not the file's");
+    assert_eq!(p.captured_fallback, None);
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [p.id.0]})).unwrap();
+    let side = lightcraft_meta::parse_xmp(&std::fs::read_to_string(src.join("IMG_0001.xmp")).unwrap()).unwrap();
+    assert_eq!(side.properties.get("exif:DateTimeOriginal"), Some(&vec!["2024-05-06T07:08:09".to_string()]));
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// Issue #705: Nikon (and most cameras) write `.JPG` and `.NEF`, and a user may rename to `.Jpg`.
 /// The folder scan, `library.browse` and the sidecar lookup match extensions in any letter
 /// case. (The file dialog's filters, the one place that was case-sensitive on Linux before

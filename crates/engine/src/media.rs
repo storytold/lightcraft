@@ -1657,6 +1657,9 @@ pub struct ProbeInfo {
     /// capture date of a file whose metadata has none, as Lightroom does (exports saved without
     /// metadata would otherwise all land under "Unknown Date").
     pub file_modified: Option<String>,
+    /// [`ProbeInfo::captured`] is [`ProbeInfo::file_modified`] standing in for a capture time that
+    /// neither the file nor its sidecar has (set by the import, which dates such files so).
+    pub captured_is_file_date: bool,
     pub meta: lightcraft_catalog::Meta,
     pub as_shot_wb: Option<(f64, f64)>,
     /// Hash of the file's bytes (hex), for duplicate detection. When it is a 32-digit
