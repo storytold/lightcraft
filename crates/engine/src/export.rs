@@ -1309,7 +1309,14 @@ pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metada
     let profile = icc::write_named(named_space(space));
     let exif = meta.map(lightcraft_meta::write_exif);
     let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
-    let meta = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
+    let meta = EncodeMeta {
+        icc: Some(&profile),
+        exif: exif.as_deref(),
+        xmp: xmp.as_deref(),
+        ppi: Some(o.ppi),
+        make: meta.and_then(|m| m.make.as_deref()),
+        model: meta.and_then(|m| m.model.as_deref()),
+    };
     let e = EncodeImage::rgba8(&img);
     let r = match o.format {
         ExportFormat::Jpeg => {
@@ -1396,7 +1403,14 @@ pub fn encode_gain_map_jpeg(sdr: &Rgba8, hdr: &DeepImage, o: &ExportOptions, met
     let profile = icc::write_named(named_space(space));
     let exif = meta.map(lightcraft_meta::write_exif);
     let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
-    let em = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
+    let em = EncodeMeta {
+        icc: Some(&profile),
+        exif: exif.as_deref(),
+        xmp: xmp.as_deref(),
+        ppi: Some(o.ppi),
+        make: meta.and_then(|m| m.make.as_deref()),
+        model: meta.and_then(|m| m.model.as_deref()),
+    };
     let sub = if o.limit_kb.is_some() { ChromaSubsampling::S420 } else { ChromaSubsampling::S444 };
     gainmap::encode_jpeg(&EncodeImage::rgba8(&base), &map, &gm, o.quality, sub, &em).map_err(|e| e.to_string())
 }
@@ -1445,7 +1459,14 @@ pub fn encode_deep(img: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) 
     };
     let exif = meta.map(lightcraft_meta::write_exif);
     let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
-    let meta = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
+    let meta = EncodeMeta {
+        icc: Some(&profile),
+        exif: exif.as_deref(),
+        xmp: xmp.as_deref(),
+        ppi: Some(o.ppi),
+        make: meta.and_then(|m| m.make.as_deref()),
+        model: meta.and_then(|m| m.model.as_deref()),
+    };
     let (w, h) = (img.width as u32, img.height as u32);
     let e = match &img.samples {
         DeepSamples::U16(v) => EncodeImage::new(w, h, 3, Samples::U16(v)),
@@ -1520,7 +1541,10 @@ pub fn export_metadata(photo: &lightcraft_catalog::Photo, catalog: &lightcraft_c
         out.gps = m.gps.map(|(latitude, longitude)| Gps { latitude, longitude, altitude: None });
     }
     if o.metadata == MetadataPolicy::All {
-        out.model = text(&m.camera);
+        if let Some(identity) = &m.camera_identity {
+            out.make = identity.make.clone();
+            out.model = identity.model.clone();
+        }
         out.lens_model = text(&m.lens);
         out.focal_length = m.focal_mm.map(f64::from);
         out.f_number = m.aperture.map(f64::from);
@@ -1631,6 +1655,24 @@ fn prepare_guarded(
     guard: std::sync::Arc<crate::originals::OriginalGuard>,
 ) -> Result<PreparedExport, String> {
     let p = session.catalog.photo(id).ok_or("no such photo")?;
+    // Old catalogs cannot safely split their combined display label. Recover only from
+    // the original file when available; never invent Make/Model from that label.
+    let recovered = if p.meta.camera_identity.is_none() {
+        match (&p.source, &session.media.file_probe) {
+            (lightcraft_catalog::Source::File { path }, Some(probe)) => probe(path).ok().and_then(|info| {
+                info.meta.camera_identity.map(|identity| {
+                    let mut photo = (**p).clone();
+                    photo.meta.camera = identity.label();
+                    photo.meta.camera_identity = Some(identity);
+                    photo
+                })
+            }),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let p = recovered.as_ref().unwrap_or(p);
     let file_name = o.file_name_for(p, seq);
     let source_dir = original_folder(&p.source);
     // HDR output only for photos edited in HDR; the rest of the batch exports as usual
@@ -2332,10 +2374,45 @@ mod tests {
     }
 
     #[test]
+    fn exported_camera_identity_stays_separate_in_jpeg_and_tiff() {
+        use lightcraft_catalog::{CameraIdentity, Catalog, Photo, PhotoId, Source};
+        let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.jpg", "jpeg", 10, 10, "2026-09-30T00:00:00");
+        p.meta.camera = "Canon IXUS 185".into();
+        p.meta.camera_identity = Some(CameraIdentity { make: Some("Canon".into()), model: Some("Canon IXUS 185".into()) });
+        for format in [ExportFormat::Jpeg, ExportFormat::Tiff] {
+            for policy in [MetadataPolicy::All, MetadataPolicy::AllExceptCamera, MetadataPolicy::Copyright, MetadataPolicy::None] {
+                let o = ExportOptions { format, metadata: policy, ..Default::default() };
+                let metadata = export_metadata(&p, &Catalog::new(), &o);
+                let bytes = encode_with_metadata(&test_image(), &o, metadata.as_ref()).unwrap();
+                let back = lightcraft_meta::extract(&bytes);
+                if policy == MetadataPolicy::All {
+                    assert_eq!(back.make.as_deref(), Some("Canon"));
+                    assert_eq!(back.model.as_deref(), Some("Canon IXUS 185"));
+                    if format == ExportFormat::Tiff {
+                        let tiff = lightcraft_tiff::Tiff::parse(&bytes).unwrap();
+                        let ifd = &tiff.ifds[0];
+                        assert_eq!(ifd.value(lightcraft_tiff::tags::MAKE).and_then(|v| v.as_str()).as_deref(), Some("Canon"));
+                        assert_eq!(ifd.value(lightcraft_tiff::tags::MODEL).and_then(|v| v.as_str()).as_deref(), Some("Canon IXUS 185"));
+                    }
+                    let packet = lightcraft_meta::embedded(&bytes).xmp.unwrap();
+                    assert!(packet.contains("Canon IXUS 185"));
+                    assert!(!packet.contains("Canon Canon IXUS 185"));
+                } else {
+                    assert!(back.make.is_none() && back.model.is_none(), "camera policy respected");
+                }
+            }
+        }
+        p.meta.camera_identity = None;
+        let legacy = export_metadata(&p, &Catalog::new(), &ExportOptions::default()).unwrap();
+        assert!(legacy.make.is_none() && legacy.model.is_none(), "unknown source tags are never inferred from a display label");
+    }
+
+    #[test]
     fn metadata_policies() {
         use lightcraft_catalog::{Catalog, Photo, PhotoId, Source};
         let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.jpg", "jpeg", 10, 10, "2026-09-30T00:00:00");
         p.meta.camera = "Synthetic X2".into();
+        p.meta.camera_identity = Some(lightcraft_catalog::CameraIdentity { make: Some("Synthetic".into()), model: Some("Synthetic X2".into()) });
         p.meta.copyright = "(c) Me".into();
         p.meta.copyright_status = lightcraft_catalog::CopyrightStatus::Copyrighted;
         p.meta.usage_terms = "Editorial use only".into();

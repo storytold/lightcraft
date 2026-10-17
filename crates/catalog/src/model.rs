@@ -168,6 +168,9 @@ pub fn parse_shutter_seconds(s: &str) -> Option<f64> {
 #[serde(default)]
 pub struct Meta {
     pub camera: String,
+    /// Original EXIF identity. None means a catalog predating separate Make/Model storage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camera_identity: Option<CameraIdentity>,
     pub lens: String,
     pub focal_mm: Option<f32>,
     pub aperture: Option<f32>,
@@ -204,6 +207,36 @@ pub struct Meta {
     /// written to XMP. Left out of the catalog JSON when unknown, so older catalogs read unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<lightcraft_meta::FocusPoint>,
+}
+
+/// Keep the source tags separate; the library label is never written back as an EXIF Model.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CameraIdentity {
+    pub make: Option<String>,
+    pub model: Option<String>,
+}
+
+impl CameraIdentity {
+    pub fn label(&self) -> String {
+        let make = self.make.as_deref().unwrap_or_default().trim();
+        let model = self.model.as_deref().unwrap_or_default().trim();
+        let brand = match make.to_ascii_uppercase().as_str() {
+            "NIKON CORPORATION" => "NIKON",
+            "LEICA CAMERA AG" => "LEICA",
+            "RICOH IMAGING COMPANY, LTD." => "RICOH",
+            _ => make,
+        };
+        let includes_brand = !brand.is_empty()
+            && model.get(..brand.len()).is_some_and(|prefix| prefix.eq_ignore_ascii_case(brand))
+            && model.get(brand.len()..).is_some_and(|suffix| suffix.chars().next().is_none_or(|c| !c.is_alphanumeric() && c != '_'));
+        if make.is_empty() || includes_brand {
+            model.to_owned()
+        } else if model.is_empty() {
+            make.to_owned()
+        } else {
+            format!("{make} {model}")
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

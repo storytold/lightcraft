@@ -7,6 +7,66 @@ use crate::export::{ExportFormat, ExportOptions, export_photo};
 use crate::tests_xmp::{synthetic_dng_with, temp_dir};
 
 #[test]
+fn camera_tags_survive_import_export_and_legacy_catalogs() {
+    let dir = temp_dir("camera-identity-1618");
+    let src = dir.join("camera.jpg");
+    let img = lightcraft_raster::Rgba8::from_fn(32, 24, |x, y| [(x * 8) as u8, (y * 10) as u8, 90, 255]);
+    let metadata = lightcraft_meta::Metadata { make: Some("Canon".into()), model: Some("Canon IXUS 185".into()), ..Default::default() };
+    let exif = lightcraft_meta::write_exif(&metadata);
+    let encoded = lightcraft_codecs::encode_jpeg(
+        &lightcraft_codecs::EncodeImage::rgba8(&img),
+        90,
+        Default::default(),
+        &lightcraft_codecs::EncodeMeta { exif: Some(&exif), ..Default::default() },
+    )
+    .unwrap();
+    std::fs::write(&src, encoded).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    assert_eq!(s.catalog.photo(id).unwrap().meta.camera, "Canon IXUS 185");
+    for legacy in [false, true] {
+        if legacy {
+            let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+            meta.camera_identity = None;
+            meta.camera = "Canon Canon IXUS 185".into();
+            s.catalog.apply(lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+        }
+        for (format, depth) in [("jpeg", 8), ("tiff", 8), ("tiff", 16), ("tiff", 32)] {
+            let opts = ExportOptions::from_json(&json!({"format": format, "bitDepth": depth, "naming": "{camera}"}));
+            let out = export_photo(&mut s, id, &opts, 1).unwrap();
+            let back = lightcraft_meta::extract(&out.bytes);
+            assert_eq!(back.make.as_deref(), Some("Canon"), "{format}/{depth}, legacy={legacy}");
+            assert_eq!(back.model.as_deref(), Some("Canon IXUS 185"));
+            assert!(!out.file_name.contains("Canon Canon"));
+            if format == "tiff" {
+                let tiff = lightcraft_tiff::Tiff::parse(&out.bytes).unwrap();
+                assert_eq!(tiff.ifds[0].value(lightcraft_tiff::tags::MAKE).and_then(|v| v.as_str()).as_deref(), Some("Canon"));
+                assert_eq!(tiff.ifds[0].value(lightcraft_tiff::tags::MODEL).and_then(|v| v.as_str()).as_deref(), Some("Canon IXUS 185"));
+            }
+        }
+    }
+    // Explicit metadata refresh also repairs the stored library label, without a sidecar,
+    // preserving descriptive edits and participating in the normal undo/journal path.
+    let mut legacy = s.catalog.photo(id).unwrap().meta.clone();
+    legacy.title = "My edited title".into();
+    s.catalog.apply(lightcraft_catalog::Op::SetMeta { id, meta: Box::new(legacy.clone()) }).unwrap();
+    s.xmp.auto_write = true;
+    let result = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(result["read"].as_array().unwrap().len(), 1);
+    let repaired = &s.catalog.photo(id).unwrap().meta;
+    assert_eq!(repaired.camera, "Canon IXUS 185");
+    assert_eq!(repaired.title, "My edited title");
+    assert_eq!(repaired.camera_identity.as_ref().unwrap().make.as_deref(), Some("Canon"));
+    let saved = serde_json::to_string(repaired).unwrap();
+    assert_eq!(serde_json::from_str::<lightcraft_catalog::Meta>(&saved).unwrap(), *repaired);
+    assert!(!src.with_extension("xmp").exists());
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().meta, legacy);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn full_size_export_of_a_cropped_photo_is_not_upscaled() {
     let mut s = Session::with_demo();
     let id = s.active().unwrap();

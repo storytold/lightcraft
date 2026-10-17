@@ -15,9 +15,11 @@ use crate::media::{DenoiseSpec, FileLoader, FileProbe, PairLoader, PreviewLoader
 
 fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
     let shutter = m.exposure_time.map(|t| if t >= 1.0 { format!("{t:.0}") } else { format!("1/{:.0}", 1.0 / t) }).unwrap_or_default();
-    let camera = [m.make.clone().unwrap_or_default(), m.model.clone().unwrap_or_default()].join(" ").trim().to_string();
+    let camera_identity = lightcraft_catalog::CameraIdentity { make: m.make.clone(), model: m.model.clone() };
+    let camera = camera_identity.label();
     let meta = Meta {
         camera,
+        camera_identity: Some(camera_identity),
         // (a camera that writes no lens name, like Nikon's DSLRs, still says what range the lens covers)
         lens: m.lens_model.clone().or_else(|| m.lens_spec.and_then(lightcraft_meta::lens_spec_name)).unwrap_or_default(),
         focal_mm: m.focal_length.map(|f| f as f32),
@@ -1108,6 +1110,32 @@ impl crate::Session {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[test]
+    fn camera_identity_preserves_tags_and_deduplicates_labels() {
+        for (make, model, label) in [
+            ("Canon", "Canon IXUS 185", "Canon IXUS 185"),
+            ("NIKON CORPORATION", "NIKON Z 6_2", "NIKON Z 6_2"),
+            ("Leica Camera AG", "LEICA Q2", "LEICA Q2"),
+            ("RICOH IMAGING COMPANY, LTD.", "RICOH GR IIIx", "RICOH GR IIIx"),
+            ("samsung", "SM-A528B", "samsung SM-A528B"),
+            ("Canon", "Canonical", "Canon Canonical"),
+            ("", "Model", "Model"),
+            ("Maker", "", "Maker"),
+        ] {
+            let source = lightcraft_meta::Metadata { make: Some(make.into()), model: Some(model.into()), ..Default::default() };
+            let (meta, _) = super::meta_of(&source);
+            assert_eq!(meta.camera, label);
+            let identity = meta.camera_identity.as_ref().unwrap();
+            assert_eq!((identity.make.as_deref(), identity.model.as_deref()), (Some(make), Some(model)));
+            let encoded = serde_json::to_string(&meta).unwrap();
+            let restored: lightcraft_catalog::Meta = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(restored, meta, "catalog metadata round trip");
+        }
+        let legacy: lightcraft_catalog::Meta = serde_json::from_str(r#"{"camera":"Canon Canon IXUS 185"}"#).unwrap();
+        assert_eq!(legacy.camera, "Canon Canon IXUS 185");
+        assert!(legacy.camera_identity.is_none(), "legacy labels are not guessed into source tags");
+    }
+
     /// Keywords from a file keep their hierarchy: the paths of `lr:hierarchicalSubject`, not the
     /// flat names of `dc:subject` that LightCraft's exports (and Lightroom Classic) write besides
     /// them; an exported `travel|Italy|Rome` comes back as itself.
