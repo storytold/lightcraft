@@ -34,6 +34,11 @@ edits are preserved by default; `updateExisting=true` explicitly replaces them. 
 identity prevents reimport from duplicating virtual copies and collections. One undo step reverses
 catalog changes; any saved recovery archives remain available.
 
+Records marked `VIDEO` in the source catalog appear in the **Videos** type filter, including
+offline originals. Reimport also repairs the classification of videos imported as images by
+older builds, preserving their IDs, edits and album/stack membership. This does not add video
+playback, frame previews or video discovery through folder synchronization.
+
 Before changing records, the importer attempts to save source image records, decoded XMP,
 verbatim develop settings, history, snapshots and collection content to compressed
 `Interop/lightroom-import-N.lca` recovery archives in the LightCraft library. Archiving is

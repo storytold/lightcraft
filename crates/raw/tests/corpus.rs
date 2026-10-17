@@ -16,10 +16,11 @@ fn corpus_root() -> PathBuf {
 
 /// Variants known not to decode yet (see the crate docs): matched against the lower-case file name.
 const KNOWN_UNSUPPORTED: &[&str] = &[
-    "cr3-",           // Unverified CRX coding variants; exact supported cases live in cr3_corpus.rs.
-    "orf-olympus-em", // Olympus compressed ORF
-    "-he.nef",        // Nikon High Efficiency (HE / HE★) NEF, issue #193
-    "sraw",           // Canon sRAW / mRAW
+    "cr3-",                 // Unverified CRX coding variants; exact supported cases live in cr3_corpus.rs.
+    "orf-olympus-em",       // Olympus compressed ORF
+    "orf-olympus-epl7.orf", // E-PL7 is preview-only too (docs/raw/coverage.tsv).
+    "-he.nef",              // Nikon High Efficiency (HE / HE★) NEF, issue #193
+    "sraw",                 // Canon sRAW / mRAW
 ];
 
 #[test]

@@ -903,7 +903,7 @@ fn shadow(img: &mut Rgba8, tl: &crate::text::TextLayout, x: f64, y: f64, sigma: 
     let my0 = (y - pad).floor().max(-pad);
     let mx1 = (x + tl.width as f64 + pad).ceil().min(iw + pad);
     let my1 = (y + tl.height as f64 + pad).ceil().min(ih + pad);
-    if !(mx1 > mx0 && my1 > my0) || !mx0.is_finite() || !my0.is_finite() {
+    if !(mx1 > mx0 && my1 > my0 && mx0.is_finite() && my0.is_finite()) {
         return;
     }
     let (w, h) = ((mx1 - mx0) as usize, (my1 - my0) as usize);

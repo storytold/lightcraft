@@ -818,6 +818,10 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, data: CatalogImport, contex
             }
             p
         };
+        // Offline videos bypass file probing; Lightroom's format still identifies their kind.
+        if text(&src.image, "fileFormat").eq_ignore_ascii_case("VIDEO") {
+            p.kind = lightcraft_catalog::MediaKind::Video;
+        }
         ids.insert(src.source_id, p.id);
         index.photos.insert(identity(&data, src), p.id.0);
         let keep_develop = existing_id.is_some() && p.edited.is_some() && !update_existing;
@@ -882,7 +886,14 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, data: CatalogImport, contex
         if copy_masters.contains(&src.source_id) {
             planned.insert(photo_id, p.clone());
         }
-        if s.catalog.photo(p.id).is_some() {
+        if let Some(old) = s.catalog.photo(p.id) {
+            if old.kind != p.kind {
+                // Repair older imports with existing reversible operations. Removing just the
+                // record leaves album/stack membership intact; the enclosing batch is atomic.
+                let mut repaired = (**old).clone();
+                repaired.kind = p.kind;
+                ops.extend([Op::RemovePhoto { id: p.id }, Op::AddPhoto { photo: Box::new(repaired) }]);
+            }
             if was_local && promoted.insert(p.id) {
                 imported += 1;
                 ops.push(Op::SetLocal { id: p.id, local: false });
@@ -1476,6 +1487,83 @@ mod tests {
                 vec![N, T("fixture-image".into()), I(1), T("ARW".into()), I(20), I(10), I(5), I(1)],
             ),
         ]
+    }
+
+    #[test]
+    fn native_video_import_is_visible_in_video_filter() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-video-filter-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("videos.lrcat");
+        let mut tables = photo_tables((dir.to_str().unwrap(), ""));
+        tables[2].2[2] = SqlValue::Text("clip.MOV".into());
+        tables[3].2[3] = SqlValue::Text("VIDEO".into());
+        std::fs::write(&path, native_catalog(&tables)).unwrap();
+        let mut s = crate::Session::new();
+        let imported = s.execute("library.importLightroom", &json!({"path": path})).unwrap();
+        let id = PhotoId(imported["mapping"]["1"].as_u64().unwrap());
+        assert_eq!(s.catalog.photo(id).unwrap().kind, lightcraft_catalog::MediaKind::Video);
+        s.execute("library.filter", &json!({"kind": "video"})).unwrap();
+        assert_eq!(s.visible(), &[id]);
+        s.execute("library.filter", &json!({"kind": "image"})).unwrap();
+        assert!(s.visible().is_empty());
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert!(s.catalog.is_empty());
+        s.execute("edit.redo", &json!({})).unwrap();
+        s.execute("library.filter", &json!({"kind": "video"})).unwrap();
+        assert_eq!(s.visible(), &[id]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn native_video_reimport_repairs_kind_without_losing_edits_or_memberships() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-video-reimport-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("videos.lrcat");
+        let mut tables = photo_tables((dir.to_str().unwrap(), ""));
+        tables[2].2[2] = SqlValue::Text("clip.MOV".into());
+        tables[3].2[3] = SqlValue::Text("VIDEO".into());
+        std::fs::write(&path, native_catalog(&tables)).unwrap();
+        let mut s = crate::Session::new();
+        let id = s.catalog.alloc_photo_id();
+        let mut photo =
+            Photo::new(id, Source::File { path: dir.join("Photos/clip.MOV").to_string_lossy().into() }, "clip.MOV", "VIDEO", 1920, 1080, "before");
+        photo.rating = 5;
+        photo.flag = Flag::Pick;
+        photo.file_size = 1234;
+        photo.content_hash = Some("existing-content".into());
+        s.commit("Previous import", Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        let mut settings = lightcraft_develop::DevelopSettings::default();
+        settings.light.exposure = 0.75;
+        s.set_develop(id, settings, "Personal edit").unwrap();
+        let peer_id = s.catalog.alloc_photo_id();
+        let peer = Photo::new(peer_id, Source::File { path: "/missing/peer.jpg".into() }, "peer.jpg", "JPEG", 20, 10, "before");
+        s.commit("Peer", Op::AddPhoto { photo: Box::new(peer) }).unwrap();
+        let mut album = Album::new(s.catalog.alloc_album_id(), "Personal album");
+        album.photos = vec![id, peer_id];
+        s.commit("Album", Op::AddAlbum { album: album.clone() }).unwrap();
+        let stack = lightcraft_catalog::Stack { id: s.catalog.alloc_stack_id(), photos: vec![id, peer_id], collapsed: false };
+        s.commit("Stack", Op::AddStack { stack: stack.clone() }).unwrap();
+        let before = s.catalog.to_snapshot();
+        let mut expected = (**s.catalog.photo(id).unwrap()).clone();
+        expected.kind = lightcraft_catalog::MediaKind::Video;
+        s.execute("library.filter", &json!({"kind": "video"})).unwrap();
+        assert!(s.visible().is_empty());
+        let result = s.execute("library.importLightroom", &json!({"path": path})).unwrap();
+        assert_eq!(result["mapping"]["1"], id.0);
+        assert_eq!(result["imported"], 0);
+        assert_eq!(result["preservedExistingEdits"], 1);
+        assert_eq!(s.catalog.photo(id).unwrap().as_ref(), &expected);
+        assert_eq!(s.visible(), &[id]);
+        let after = s.catalog.to_snapshot();
+        assert_eq!(s.catalog.album(album.id), Some(&album));
+        assert_eq!(s.catalog.stack(stack.id), Some(&stack));
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.catalog.to_snapshot(), before);
+        assert!(s.visible().is_empty());
+        s.execute("edit.redo", &json!({})).unwrap();
+        assert_eq!(s.catalog.to_snapshot(), after);
+        assert_eq!(s.visible(), &[id]);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
