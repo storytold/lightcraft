@@ -3129,7 +3129,7 @@ mod tests {
     }
 
     /// Switching Settings tabs keeps the window's top edge (and its tab row) where it is and never makes it
-    /// narrower, though the tabs are of different heights and widths.
+    /// narrower or taller, though the tabs hold different amounts: the window is one size on every tab.
     #[test]
     fn settings_tabs_keep_the_window_in_place() {
         let mut h = demo([1300.0, 820.0]);
@@ -3148,7 +3148,7 @@ mod tests {
             assert!(now.width() >= first.width() - 1.0, "{tab}: width {} → {}", first.width(), now.width());
             heights.push(now.height());
         }
-        assert!(heights.iter().any(|h| (h - first.height()).abs() > 20.0), "the tabs differ in height: {heights:?}");
+        assert!(heights.iter().all(|h| (h - first.height()).abs() < 1.0), "the tabs keep the height of {}: {heights:?}", first.height());
     }
 
     /// Settings → Import → "Show the import review when a camera or card is connected": a card that

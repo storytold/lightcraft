@@ -22,7 +22,7 @@ use crate::widgets::register;
 
 /// Seconds the layout must stay unchanged before the preview is rendered again.
 pub const DEBOUNCE: f64 = 0.15;
-/// The preview's width in points.
+/// The preview's greatest width in points (less where the room is narrower).
 pub const PREVIEW_W: f32 = 300.0;
 
 #[derive(Clone, Copy)]
@@ -170,19 +170,40 @@ pub fn preview(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let look = template.as_ref().map_or_else(|| SlideLook::of(&app.session), |t| t.look.clone());
     let s = look.layout.clone();
     let overlays = look.overlays.clone();
+    // The room for the preview is the settings' own shape, whichever template is pointed at: the
+    // page below it must not move as the pointer goes over the templates (it would leave the
+    // row it is over). A template of another shape is drawn as large as fits in that room.
     let ratio = s.aspect.ratio(screen_aspect(ui.ctx())) as f32;
-    let h = (PREVIEW_W / ratio).clamp(80.0, 320.0);
-    let (rect, _) = ui.allocate_exact_size(vec2(PREVIEW_W, h), Sense::hover());
+    let own = SlideLook::of(&app.session).layout.aspect.ratio(screen_aspect(ui.ctx())) as f32;
+    let w = ui.available_width().clamp(1.0, PREVIEW_W);
+    let room_h = (w / own).clamp(80.0, 320.0);
+    let (room, _) = ui.allocate_exact_size(vec2(w, room_h), Sense::hover());
+    let (fit_w, fit_h) = if ratio >= w / room_h { (w, w / ratio) } else { (room_h * ratio, room_h) };
+    let rect = Rect::from_center_size(room.center(), vec2(fit_w, fit_h));
+    let h = rect.height();
+    let w = rect.width();
     register(ui.ctx(), "slideshow:preview", rect);
-    let p = ui.painter_at(rect.expand(1.0));
+    let p = ui.painter_at(room.expand(1.0));
     p.rect_stroke(rect, 0.0, Stroke::new(1.0, t.text_dim.gamma_multiply(0.5)), egui::StrokeKind::Outside);
     super::slide_titles::preview_choice(ui);
     if let Some(tpl) = &template {
+        // (said over the bottom of the preview and not below it, which would move the page)
         let name = if tpl.builtin { crate::i18n::tr(&tpl.name).to_string() } else { tpl.name.clone() };
-        ui.label(egui::RichText::new(crate::i18n::tr_format!("Template preview: {name}", name = name)).size(11.0).color(t.accent));
+        let mut said = crate::i18n::tr_format!("Template preview: {name}", name = name).to_string();
         if !tpl.description.is_empty() {
-            hint(ui, t, &tpl.description);
+            said = format!("{said}\n{}", tpl.description);
         }
+        let galley = ui.painter().layout(said, t.font(11.0), Color32::WHITE, (room.width() - 8.0).max(1.0));
+        let band = Rect::from_min_size(
+            pos2(room.left(), (room.bottom() - galley.size().y - 6.0).max(room.top())),
+            vec2(room.width(), galley.size().y + 6.0),
+        );
+        let paint = ui
+            .ctx()
+            .layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("settingsSlideshowTemplateSaid")))
+            .with_clip_rect(room.intersect(ui.clip_rect()));
+        paint.rect_filled(band, 0.0, Color32::from_black_alpha(190));
+        paint.galley(pos2(band.left() + 4.0, band.top() + 3.0), galley, Color32::WHITE);
     }
     if let Some(title) = super::slide_titles::preview_shows(ui.ctx()) {
         title_preview(app, ui, t, rect, title, &look);
@@ -194,7 +215,7 @@ pub fn preview(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         return;
     };
     let ppp = ui.ctx().pixels_per_point();
-    let (pw, ph) = (((PREVIEW_W * ppp).round() as usize).max(16), ((h * ppp).round() as usize).max(16));
+    let (pw, ph) = (((w * ppp).round() as usize).max(16), ((h * ppp).round() as usize).max(16));
     // the overlays and what they show of the photo (its rating, its metadata) change it too
     let shown = app.session.catalog.photo(id).filter(|_| overlays.any()).map_or(0, |p| {
         use std::hash::{Hash, Hasher};

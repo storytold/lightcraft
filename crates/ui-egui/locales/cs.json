@@ -2063,5 +2063,22 @@
   "Open Settings": "Otevřít nastavení",
   "Select none": "Zrušit celý výběr",
   "Select all": "Vybrat vše",
-  "Visualize HDR": "Zobrazit rozsah HDR"
+  "Visualize HDR": "Zobrazit rozsah HDR",
+  "Delete and Change Folder": "Odstranit a změnit složku",
+  "Delete the smart previews in the folder used until now?": "Odstranit inteligentní náhledy ve složce, která se používala dosud?",
+  "Edit In": "Upravit v",
+  "Files": "Soubory",
+  "Filter settings": "Filtrovat nastavení",
+  "Keep": "Ponechat",
+  "Model installation failed": "Instalace modelu se nezdařila",
+  "Monitor": "Monitor",
+  "No setting matches what is typed.": "Zadanému textu neodpovídá žádné nastavení.",
+  "On, every change to a photo's edits or metadata is written to an XMP file beside the photo, for other apps to read. Off, that happens when you choose Save Metadata to File in the Photo menu.": "Zapnuto: každá změna úprav nebo metadat fotografie se zapíše do souboru XMP vedle fotografie, aby ji mohly číst jiné aplikace. Vypnuto: děje se tak, když v nabídce Fotografie zvolíte Uložit metadata do souboru.",
+  "Photos whose originals are not connected are shown and edited from their smart previews; new ones can only be made from originals that are connected.": "Fotografie, jejichž originály nejsou připojeny, se zobrazují a upravují z jejich inteligentních náhledů; nové lze vytvořit jen z připojených originálů.",
+  "The download failed": "Stahování se nezdařilo",
+  "The model's file is deleted. To use it again you download or add it again.": "Soubor modelu se odstraní. Chcete-li jej znovu použít, musíte jej znovu stáhnout nebo přidat.",
+  "Thumbnails and previews are made again as you browse, which takes a while in a large library. Your photos and edits are not touched.": "Miniatury a náhledy se vytvoří znovu při procházení, což ve velké knihovně chvíli trvá. Vaše fotografie a úpravy zůstanou nedotčeny.",
+  "Try one word, or part of one: the names of tabs and sections, labels and explanations are all looked through.": "Zkuste jedno slovo nebo jeho část: prohledávají se názvy karet a sekcí, popisky i vysvětlivky.",
+  "starting…": "spouštění…",
+  "Photo > Edit In > Edit in PhotoCraft (⇧⌘E, or right-click a photo) renders a copy with your edits, stacks it with the original and opens it in PhotoCraft. Save there and the copy updates here. As PSD, PhotoCraft saves straight back to it. Leave the location empty unless you use a portable copy.": "Fotografie > Upravit v > Upravit v PhotoCraft (⇧⌘E nebo pravé tlačítko na fotografii) vykreslí kopii s vašimi úpravami, přidá ji do sady s originálem a otevře v PhotoCraft. Po uložení se kopie zde aktualizuje. Do PSD ukládá PhotoCraft přímo. Umístění ponechte prázdné, pokud nepoužíváte přenosnou kopii."
 }

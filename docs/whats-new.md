@@ -550,6 +550,79 @@
   scene) now develop from their sensor data with every editing tool, like the camera's other raws. Photos
   imported earlier switch over with Photo ▸ Reload from Disk.
 
+### Settings window
+- The tabs of Settings are grouped by what you come to do. **Library** is the library itself: where it is, opening
+  or making another, where its smart previews are kept and when photos only seen in Local leave the catalog (the
+  last two were under Performance). **Files** is what is written beside the photo files and what they are opened
+  in: XMP sidecars (which was under Import, though it governs every later edit) and External Editing (which was
+  under General). General keeps the language, startup and culling; Performance keeps rendering and the thumbnail
+  cache. Display is now **Monitor** and Interface is **Appearance**, so the monitor's colour profile and how
+  LightCraft looks are not mistaken for each other. Agents: `app.settings` takes `library` and `files` as tabs;
+  every tab id from before still opens its tab (`display` and `interface` are Monitor and Appearance).
+- Settings has a filter above its tabs. Type a word, or part of one, and the sections that have it are listed with
+  the tab each is on, whichever tab was open: the names of tabs and sections, labels, buttons and explanations
+  are all looked through, and every word typed has to be there. Click a section (or press Return for the first,
+  or ↓ to go down to them) and its tab opens at it. Esc empties the filter; a second Esc closes Settings. The
+  choices of a closed list and tooltips are not looked through. Scripts: `field:settingsFilter`, and
+  `settingsFound:<tab>:<section>` for each section found.
+- The filter of Settings finds more of what is typed and puts the best first. It is ready to type in when Settings
+  opens. Either spelling of a word finds the other (color, colour), also while it is being typed, and some words a
+  section does not say itself find it ("trash" for Culling, "scheme" for Appearance; in English). A section or tab
+  named for the word comes first, then one with it in a label, choice or button, then one that mentions it in an
+  explanation, so Return opens the best match and not the first tab that has the word. The line under a result
+  starts shortly before the word it was found by, which is drawn stronger. The folders shown in Settings (the
+  library's, a cache's) and its text boxes (what is typed into one, or what an empty one says) are no longer
+  looked through. The heading of the section opened is marked for a moment. Scripts: `settingsLanded:<section>`
+  while it is.
+- Settings by keyboard is a short way. Tab stops once at the tab bar (at the open tab) and once at each row of
+  choices (at the one that holds), and the arrow keys move inside: → ↓ to the next, ← ↑ to the one before, Home and
+  End to the ends, Space or Return to open or choose. General's first checkbox is four presses from the filter,
+  where it was some twenty. Whatever has the focus is ringed 2 pt in the text colour: tabs and choices as before,
+  and now checkboxes, buttons, closed lists, radio buttons, text boxes and the sections the filter finds. The star that
+  makes a theme a favourite is a Tab stop for every theme, not only for one that is a favourite already.
+- What Settings says can be read in every theme. Its explanations, the text a box shows while it is empty, "In Use"
+  on a theme's card and the lines that warn or refuse now stand at least 4.5:1 against what they are on (the
+  explanations were 4.2:1 in Charcoal and 4.3:1 in Silver, "In Use" 2.9:1 in Charcoal); the borders of text boxes,
+  checkboxes, radio buttons, buttons and each choice of a row, and the line under the tabs, stand 3:1, where they
+  were 1.2 to 1.7:1; so do the buttons of a question a button asks. The AI Denoise page's own lines are read the
+  same way. The colours of the rest of LightCraft are as they were.
+- The hint under External Editing drew two empty boxes where its menu path had arrows; it reads "Photo > Edit In >
+  Edit in PhotoCraft" now.
+- Photo ▸ Edit In, Edit in PhotoCraft and Edit in Other Editor have names in all nine languages, the ones the hint
+  under External Editing gives.
+- 27 sentences and names in Settings that no language had are in all nine: External Editing and its hints, the
+  Monitor tab, the questions asked before clearing the cache, removing a model and deleting smart previews, and
+  what automatic XMP writing does. "memory only", "(library default)" and "starting…" are translated too.
+- Each section of Settings can be found by scripts as `heading:<its English name>` in `ui.widgets`, whatever the
+  interface language.
+- Settings is one size on every tab and stays where it is as you go through them; before, each tab made its own
+  size and the tabs moved under the pointer. The tabs stay in place while a long page scrolls, a page that goes on
+  below shows a scroll handle without the pointer on it, and each page remembers where it was scrolled to.
+- Nothing in Settings runs off the side any more. A row with more choices than fit (the languages on General) wraps
+  onto further lines and a long label wraps in its column, where both used to widen the window: in a small
+  LightCraft window the labels and the Close button of General ended up off screen.
+- The tabs of Settings look like tabs: names on the window with a line under the open one, no longer the same
+  buttons as the choices under them (on General the languages read as a second row of tabs). In Settings a chosen
+  option is outlined as well as filled, so it stands out in every theme.
+- A tab or a choice reached with the keyboard shows a ring. Tab moves through them, ← and → along a row, and Space
+  or Return opens or chooses, as before: the focus was there all along but could not be seen. Text buttons
+  elsewhere in LightCraft show the same ring. Screen readers are told a choice in Settings is a radio button.
+- Settings asks before it does what is slow or impossible to take back. Clear Cache says that thumbnails and
+  previews are made again as you browse, and a model's Remove that its file is deleted, each with the action and
+  Keep under the button. Keep has the focus, so Return alone changes nothing; Esc or a click elsewhere answers no.
+- Changing the smart previews folder with "Delete them" chosen no longer deletes at the press of Choose Folder: with
+  the new folder chosen, it says how many smart previews would go and what they are for, and waits for Delete and
+  Change Folder or Cancel. The choice goes back to "Move them" afterwards, and neither it nor the question is
+  left standing when Settings is closed or another library is opened.
+- Esc in a text box of Settings (Copyright, Creator, the Auto Import album, the two External Editing boxes) gives
+  the text back and stays in Settings; in the first three it used to save what was typed, and in all of them it
+  closed the window. Those three now have the Cut / Copy / Paste menu too, and what is typed in Copyright or
+  Creator is saved when another tab is clicked, where it used to be dropped.
+- Automatically write changes into XMP sidecars says what is written where.
+- A long folder (General ▸ Library ▸ Location, the folder Auto Import watches, the smart previews folder, a monitor
+  profile's file) is shortened to its last folders ("…/Pictures/Library") on one line; rest the pointer on it for
+  the whole path.
+
 ### Switching libraries
 - File ▸ New Library… asks for a name, then where to put it, and opens the new library (issue #902).
 - File ▸ Open Recent Library lists the last 8 libraries; ones that are gone (moved, drive disconnected) are greyed

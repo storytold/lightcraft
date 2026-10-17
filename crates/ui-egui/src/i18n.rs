@@ -170,6 +170,22 @@ pub fn tr(source: &str) -> &str {
     tr_in(language(), source)
 }
 
+/// The source (English) text a piece of interface text stands for in the current language, or
+/// the text itself when it stands for none (it is English already, or was never a message). For
+/// names that scripts and tests look things up by, which must not change with the language.
+/// When two messages read alike in a language, the first in the catalog's order is given.
+pub fn source_of(text: &str) -> &str {
+    source_of_in(language(), text)
+}
+
+fn source_of_in(language: Locale, text: &str) -> &str {
+    language
+        .catalog()
+        .iter()
+        .find(|(source, translation)| translation.as_str() == text && !source.contains('|'))
+        .map_or(text, |(source, _)| source.as_str())
+}
+
 /// [`tr`] for a message whose translation depends on where it appears: a catalog entry keyed
 /// `"<context>|<source>"` wins, else the plain message. A language adds the contextual entry only
 /// where its shared translation reads wrongly there (Japanese はい / いいえ as a rule's value).
@@ -461,6 +477,17 @@ pub fn rules_label(rules: &lightcraft_catalog::RuleSet, catalog: &lightcraft_cat
 
 #[cfg(test)]
 mod tests {
+    /// A section's name for scripts is its English one whatever the language shows.
+    #[test]
+    fn interface_text_is_traced_back_to_its_source() {
+        let german = super::Locale::De.tr("Library").to_string();
+        assert_ne!(german, "Library", "German has a word of its own for it");
+        assert_eq!(super::source_of_in(super::Locale::De, &german), "Library");
+        assert_eq!(super::source_of_in(super::Locale::De, "Library"), "Library", "English text is itself");
+        assert_eq!(super::source_of_in(super::Locale::En, "Library"), "Library");
+        assert_eq!(super::source_of_in(super::Locale::De, "no such message"), "no such message");
+    }
+
     use super::*;
 
     #[test]
@@ -949,7 +976,7 @@ mod tests {
         let mut labels: Vec<&str> = lightcraft_engine::command_specs().iter().map(|spec| spec.label).collect();
         labels.extend(crate::menus::ui_commands().map(|command| command.1).filter(|label| !Locale::ALL.iter().any(|locale| locale.name() == *label)));
         labels.extend(lightcraft_develop::CONTROLS.iter().map(|control| control.label));
-        labels.extend(crate::panels::settings::TABS.iter().map(|(_, label)| *label));
+        labels.extend(crate::panels::settings::TABS.iter().map(|(id, label)| crate::panels::settings::tab_label(id, label)));
         for (_, label, kind) in lightcraft_catalog::rules::FIELDS {
             labels.push(label);
             labels.extend(lightcraft_catalog::rules::ops_for(*kind).iter().map(|(_, label)| *label));

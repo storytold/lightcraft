@@ -296,7 +296,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     // what is wrong with the user's own catalog (catalog.json in the models folder), if anything
     for e in list["catalog"]["errors"].as_array().into_iter().flatten().filter_map(Value::as_str).take(3) {
-        ui.add(egui::Label::new(RichText::new(format!("catalog.json: {e}")).font(t.font(11.5)).color(t.caution)).wrap());
+        ui.add(egui::Label::new(RichText::new(format!("catalog.json: {e}")).font(t.font(11.5)).color(t.legible(t.caution, t.chrome, 4.5))).wrap());
     }
     if let Some(d) = all.iter().find(|m| m["role"] == "detector") {
         ui.add_space(4.0);
@@ -384,6 +384,13 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                 if installed {
                     let r = ui.button(crate::i18n::tr("Remove"));
                     register(ui.ctx(), format!("faces:remove:{id}"), r.rect);
+                    let r = super::settings::ask_first(
+                        t,
+                        &format!("faces:remove:{id}"),
+                        r,
+                        "The model's file is deleted. To use it again you download or add it again.",
+                        "Remove",
+                    );
                     if r.clicked() {
                         let _ = app.run("faces.models.remove", json!({"id": id}));
                         app.caches.faces_epoch += 1;
