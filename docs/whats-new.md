@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-10-17
+
+### Reliability
+- A damaged or crafted TIFF-based raw with a very large number of strips or tiles can no longer make an import hang
+  while it reads the file's headers (issue #2128). Working out where each strip ends and which parts of the file to
+  skip now takes time in proportion to the number of strips, and a file with more than about a million of them is
+  read whole instead.
+
 ## 2026-10-14
 
 ### Lightroom catalog import

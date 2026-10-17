@@ -35,6 +35,7 @@ const MAX_ENTRIES: u64 = 8192;
 const MAX_BOXES: usize = 4096;
 /// Child IFDs listed by one `SubIFDs` entry.
 const MAX_CHILDREN: u64 = 4096;
+const MAX_SKIPPED_CHUNKS: usize = 1 << 20;
 /// The RAF raw container's pointer to its raw IFD.
 const RAF_RAW_IFD: u16 = 0xf000;
 
@@ -52,37 +53,35 @@ impl Ranges {
         if start >= end {
             return;
         }
-        let (mut start, mut end) = (start, end);
-        let mut out = Vec::with_capacity(self.0.len() + 1);
-        let mut placed = false;
-        for &(a, b) in &self.0 {
-            if b < start {
-                out.push((a, b));
-            } else if a > end {
-                if !placed {
-                    out.push((start, end));
-                    placed = true;
-                }
-                out.push((a, b));
-            } else {
-                start = start.min(a);
-                end = end.max(b);
+        let first = self.0.partition_point(|&(_, b)| b < start);
+        let last = self.0.partition_point(|&(a, _)| a <= end).max(first);
+        let merged = self.0.get(first..last).unwrap_or_default();
+        let start = merged.first().map_or(start, |&(a, _)| a.min(start));
+        let end = merged.last().map_or(end, |&(_, b)| b.max(end));
+        self.0.splice(first..last, [(start, end)]);
+    }
+
+    pub fn from_spans(mut spans: Vec<(u64, u64)>) -> Self {
+        spans.retain(|&(a, b)| a < b);
+        spans.sort_unstable();
+        let mut out: Vec<(u64, u64)> = Vec::with_capacity(spans.len());
+        for (a, b) in spans {
+            match out.last_mut() {
+                Some(last) if a <= last.1 => last.1 = last.1.max(b),
+                _ => out.push((a, b)),
             }
         }
-        if !placed {
-            out.push((start, end));
-        }
-        self.0 = out;
+        Self(out)
     }
 
     /// Whether all of `[start, end)` is covered (an empty range always is).
     pub fn contains(&self, start: u64, end: u64) -> bool {
-        start >= end || self.0.iter().any(|&(a, b)| a <= start && end <= b)
+        start >= end || self.0.get(self.0.partition_point(|&(_, b)| b < end)).is_some_and(|&(a, b)| a <= start && end <= b)
     }
 
     /// Whether some of `[start, end)` is covered.
     pub fn overlaps(&self, start: u64, end: u64) -> bool {
-        start < end && self.0.iter().any(|&(a, b)| a < end && start < b)
+        start < end && self.0.get(self.0.partition_point(|&(_, b)| b <= start)).is_some_and(|&(a, _)| a < end)
     }
 
     pub fn spans(&self) -> &[(u64, u64)] {
@@ -102,7 +101,7 @@ impl Ranges {
     pub fn gaps(&self, start: u64, end: u64) -> Ranges {
         let mut out = Ranges::new();
         let mut at = start;
-        for &(a, b) in &self.0 {
+        for &(a, b) in self.0.get(self.0.partition_point(|&(_, b)| b <= start)..).unwrap_or_default() {
             if b <= at {
                 continue;
             }
@@ -231,7 +230,7 @@ fn tiff_plan(bytes: &[u8], loaded: &Ranges, preview: bool) -> HeaderPlan {
         return HeaderPlan::Whole("its header probe reads samples");
     }
     let Ok(tiff) = Tiff::parse(bytes) else { return HeaderPlan::Whole("TIFF structure") };
-    let mut holes = Ranges::new();
+    let mut holes = Vec::new();
     for ifd in tiff.all_ifds() {
         let chunks: Vec<(u64, u64)> = match ifd.image() {
             // a preview's strips are read when the preview is wanted: only the raw image is skipped
@@ -249,11 +248,15 @@ fn tiff_plan(bytes: &[u8], loaded: &Ranges, preview: bool) -> HeaderPlan {
         if total < BULK {
             continue;
         }
+        if holes.len().saturating_add(chunks.len()) > MAX_SKIPPED_CHUNKS {
+            return HeaderPlan::Whole("too many strips or tiles");
+        }
         for (i, &(offset, size)) in chunks.iter().enumerate() {
             let start = if i == 0 { offset.saturating_add(HEAD) } else { offset };
-            holes.insert(start, offset.saturating_add(size).min(len));
+            holes.push((start, offset.saturating_add(size).min(len)));
         }
     }
+    let mut holes = Ranges::from_spans(holes);
     // A Panasonic RW2 keeps its raw data from `RawDataOffset` to the end, outside any TIFF image.
     if holes.is_empty()
         && bytes.starts_with(b"IIU\0")
@@ -553,6 +556,40 @@ mod tests {
         raf[100..104].copy_from_slice(&1000u32.to_be_bytes());
         raf[104..108].copy_from_slice(&1000u32.to_be_bytes());
         assert_eq!(run(&raf, 160, 0).0, HeaderPlan::Whole("RAF raw container"));
+    }
+
+    #[test]
+    fn ranges_built_from_a_million_chunks_stay_linear() {
+        use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
+        let n = 1_000_000u32;
+        let data = 64u32;
+        let mut ifd = IfdBuilder::new();
+        ifd.set(t::IMAGE_WIDTH, Value::Long(vec![1]));
+        ifd.set(t::IMAGE_LENGTH, Value::Long(vec![n]));
+        ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![8]));
+        ifd.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::CFA]));
+        ifd.set(t::ROWS_PER_STRIP, Value::Long(vec![1]));
+        ifd.set(t::STRIP_OFFSETS, Value::Long((0..n).map(|i| data + (n - 1 - i) * 2).collect()));
+        ifd.set(t::STRIP_BYTE_COUNTS, Value::Long(vec![1; n as usize]));
+        let file = TiffWriter::new(ByteOrder::Little, false).write(&[ifd]).unwrap();
+        let mut loaded = Ranges::new();
+        loaded.insert(0, file.len() as u64);
+        let started = std::time::Instant::now();
+        let plan = header_plan(&file, &loaded);
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+        assert!(matches!(plan, HeaderPlan::Whole(_)), "{plan:?}");
+
+        let spans: Vec<(u64, u64)> = (0..u64::from(n)).rev().map(|i| (i * 2, i * 2 + 1)).collect();
+        let started = std::time::Instant::now();
+        let r = Ranges::from_spans(spans);
+        let mut one_by_one = Ranges::new();
+        for i in 0..u64::from(n) {
+            one_by_one.insert(i * 2, i * 2 + 1);
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+        assert_eq!(r, one_by_one);
+        assert_eq!(r.spans().len(), n as usize);
+        assert_eq!(r.gaps(0, u64::from(n) * 2).total(), u64::from(n));
     }
 
     /// An ARW6 header probe reads every tile's headers and the first lines of its data, which lie in the strip a

@@ -127,6 +127,7 @@ impl ImageInfo {
         let (cw, ch) = self.chunk_size();
         let n = self.offsets.len().min(per_plane.saturating_mul(planes));
         let mut out = Vec::with_capacity(n);
+        let mut sorted: Option<Vec<u64>> = None;
         for i in 0..n {
             let plane = i / per_plane.max(1);
             let j = i % per_plane.max(1);
@@ -142,7 +143,13 @@ impl ImageInfo {
                 Some(&l) if l > 0 => l,
                 _ => {
                     // infer: up to the next larger offset, else end of data
-                    let next = self.offsets.iter().copied().filter(|&o| o > offset).min().unwrap_or(data_len);
+                    let sorted = sorted.get_or_insert_with(|| {
+                        let mut s = self.offsets.clone();
+                        s.sort_unstable();
+                        s.dedup();
+                        s
+                    });
+                    let next = sorted.get(sorted.partition_point(|&o| o <= offset)).copied().unwrap_or(data_len);
                     next.saturating_sub(offset)
                 }
             };
@@ -161,4 +168,28 @@ pub fn chunk_bytes<'a>(data: &'a [u8], c: &Chunk) -> Option<&'a [u8]> {
     }
     let end = (c.offset.saturating_add(c.len)).min(data.len() as u64) as usize;
     Some(&data[start..end])
+}
+#[cfg(test)]
+mod tests {
+    use crate::{ByteOrder, IfdBuilder, Tiff, TiffWriter, Value, tags};
+
+    #[test]
+    fn a_tiff_with_a_million_offsets_and_no_byte_counts_probes_quickly() {
+        let n = 1_000_000u32;
+        let mut ifd = IfdBuilder::new();
+        ifd.set(tags::IMAGE_WIDTH, Value::Long(vec![1]));
+        ifd.set(tags::IMAGE_LENGTH, Value::Long(vec![n]));
+        ifd.set(tags::BITS_PER_SAMPLE, Value::Short(vec![8]));
+        ifd.set(tags::ROWS_PER_STRIP, Value::Long(vec![1]));
+        ifd.set(tags::STRIP_OFFSETS, Value::Long((0..n).map(|i| 16 + (n - i) * 3).collect()));
+        let file = TiffWriter::new(ByteOrder::Little, false).write(&[ifd]).unwrap();
+        let tiff = Tiff::parse(&file).unwrap();
+        let info = tiff.ifds[0].image().unwrap();
+        let started = std::time::Instant::now();
+        let chunks = info.chunks(file.len() as u64);
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+        assert_eq!(chunks.len(), n as usize);
+        assert_eq!(chunks[1].len, 3, "up to the next larger offset");
+        assert_eq!(chunks[0].len, file.len() as u64 - u64::from(16 + n * 3), "the largest offset runs to the end of the data");
+    }
 }
