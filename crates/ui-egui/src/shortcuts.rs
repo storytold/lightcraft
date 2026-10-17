@@ -466,6 +466,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             app.toast(ctx, e);
         }
     }
+    let rotate_fires = fire.iter().any(|f| f == "crop.rotateAspect");
     for f in fire {
         // a slideshow: ←/→ step (a cut)
         if app.ui.slideshow.is_some() && matches!(f.as_str(), "library.next" | "library.previous") {
@@ -587,9 +588,12 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
                 continue;
             }
-            // X is both reject (library) and swap crop aspect (crop tool)
+            // X is both reject (library) and swap crop aspect (crop tool). When both bindings fire,
+            // swap once: twice would put the crop straight back (issue #1866).
             if f == "photo.reject" && app.ui.right == crate::state::RightPanel::Crop {
-                let _ = app.run("crop.rotateAspect", json!({}));
+                if !rotate_fires {
+                    let _ = app.run("crop.rotateAspect", json!({}));
+                }
                 continue;
             }
             if f == "crop.rotateAspect" && app.ui.right != crate::state::RightPanel::Crop {

@@ -668,7 +668,7 @@ From `06-shortcuts.md` part 1. Evidence is our binding; conflicts are explained 
 | KEY-GENAI | Generative toggles / variations — ⌥⇧G, ⌥←/→ | OOS | 🚫 | | |
 | KEY-DETECT | Detect objects — ⌥⇧O | P2 | ⬜ | | |
 | KEY-CROP-CONSTRAIN | Lock crop aspect — A | P1 | ✅ | `cmd:crop.aspect` (`toggle`, `current`) | A while cropping locks the current shape / unlocks |
-| KEY-CROP-SWAP | Swap crop orientation — X | P0 | ✅ | `cmd:crop.rotateAspect` | |
+| KEY-CROP-SWAP | Swap crop orientation — X | P0 | ✅ | `cmd:crop.rotateAspect` | in the crop tool X swaps once instead of also running Reject's swap, which put the crop straight back (issue #1866) |
 | KEY-CROP-OVERLAYORIENT | Crop overlay orientation — ⇧O | P1 | ✅ | `cmd:view.cropOverlayOrientation` | while cropping: O cycles the overlay, ⇧O its orientation |
 | KEY-CROP-RESET | Reset crop — ⌥⌘R | P0 | ✅ | `cmd:crop.reset` | |
 | KEY-STRAIGHTEN | Straighten while held — ⌘ drag | P1 | ✅ | `cmd:crop.straighten`, `crates/ui-egui/src/panels/detail.rs` (`straighten_overlay`) | ⌘-drag in Crop draws a level line; the crop tool stays active |

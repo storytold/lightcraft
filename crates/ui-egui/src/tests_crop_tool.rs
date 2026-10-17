@@ -62,3 +62,36 @@ fn escape_in_the_angle_field_only_leaves_the_field() {
     h.settle(SETTLE);
     assert_eq!((h.app.ui.view, h.app.ui.right == RightPanel::Crop), (ViewMode::Detail, false));
 }
+
+/// X in the crop tool swaps the crop's orientation once (issue #1866). X is both Reject and Swap
+/// Aspect, and both bindings fired: the crop turned portrait and straight back to landscape.
+#[test]
+fn x_in_the_crop_tool_swaps_the_aspect_once() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+    let landscape =
+        |h: &Headless, id: &lightcraft_catalog::PhotoId| h.app.session.catalog.photo(*id).is_some_and(|p| p.width > p.height && !p.is_edited());
+    let id = h.app.session.visible_cloned().into_iter().find(|id| landscape(&h, id)).unwrap();
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0], "active": id.0}}), T);
+    h.app.ui.view = ViewMode::Detail;
+    h.request("engine.execute", json!({"command": "panel.crop"}), T);
+    let r = h.request("engine.execute", json!({"command": "crop.aspect", "params": {"aspect": [3, 4]}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.ui.right, RightPanel::Crop);
+    let crop = |h: &Headless| {
+        let p = h.app.session.catalog.photo(id).unwrap();
+        let r = p.develop.crop.geometry.rect_px(p.width as f64, p.height as f64);
+        (r.width() > r.height(), p.develop.crop.aspect)
+    };
+    assert_eq!(crop(&h), (true, Some((300, 400))), "a 3:4 crop follows the landscape photo");
+    let undo = h.app.session.undo.len();
+    h.request("ui.key", json!({"key": "x"}), T);
+    h.settle(SETTLE);
+    assert_eq!(crop(&h), (false, Some((400, 300))), "X turns the crop portrait");
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one swap, one undo step");
+    assert_eq!(h.app.session.catalog.photo(id).unwrap().flag, lightcraft_catalog::Flag::None, "X doesn't reject while cropping");
+    h.request("ui.key", json!({"key": "x"}), T);
+    h.settle(SETTLE);
+    assert_eq!(crop(&h), (true, Some((300, 400))), "X again turns it back");
+}
