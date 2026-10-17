@@ -310,7 +310,11 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
             Box::new(|| {
                 let mut c = cargo();
                 c.args(["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]);
-                run(c, "cargo clippy --workspace --all-targets -- -D warnings")
+                run(c, "cargo clippy --workspace --all-targets -- -D warnings")?;
+                // the GPU crate's optional parts (the SAM 3 backbone kernels may be off in the workspace build)
+                let mut c = cargo();
+                c.args(["clippy", "-p", "lightcraft-gpu", "--features", "denoise,sam", "--all-targets", "--", "-D", "warnings"]);
+                run(c, "cargo clippy -p lightcraft-gpu --features denoise,sam --all-targets -- -D warnings")
             }),
         ),
         (
@@ -341,11 +345,11 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
                 for (backend, adapter) in backends {
                     let step = format!("gpu-{backend}");
                     let mut c = cargo();
-                    c.args(["test", "-p", "lightcraft-gpu", "--features", "denoise"])
+                    c.args(["test", "-p", "lightcraft-gpu", "--features", "denoise,sam"])
                         .env("LIGHTCRAFT_GPU_BACKEND", &backend)
                         .env(ci_report::SKIP_LOG_ENV, ci_report::skip_log(&root, &step));
                     let t = std::time::Instant::now();
-                    let ok = run(c, &format!("LIGHTCRAFT_GPU_BACKEND={backend} cargo test -p lightcraft-gpu --features denoise")).is_ok();
+                    let ok = run(c, &format!("LIGHTCRAFT_GPU_BACKEND={backend} cargo test -p lightcraft-gpu --features denoise,sam")).is_ok();
                     hardware_runs.borrow_mut().push(serde_json::json!({
                         "backend": backend,
                         "adapter": adapter,

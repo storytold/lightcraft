@@ -1990,5 +1990,15 @@
   "Test Face Model": "Testa il modello dei volti",
   "This build cannot run recognition models: they can be added and chosen, not used.": "Questa versione non può eseguire modelli di riconoscimento: si possono aggiungere e scegliere, non usare.",
   "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)": "Questa versione non ha dove tenere i modelli dei volti, quindi l'elenco dei modelli non è disponibile. (L'app desktop ce l'ha.)",
-  "Unnamed Faces": "Volti senza nome"
+  "Unnamed Faces": "Volti senza nome",
+  "AI masks": "Maschere IA",
+  "Runs on": "Eseguito su",
+  "Last photo": "Ultima foto",
+  "Remote worker": "Processo remoto",
+  "Not loaded yet": "Non ancora caricato",
+  "Run on": "Esegui su",
+  "Automatic (GPU when available)": "Automatico (GPU se disponibile)",
+  "CPU": "CPU",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "Le maschere Oggetto e Descrivi analizzano ogni foto una volta, sulla scheda grafica a meno che sia scelta la CPU o «Usa la GPU per il rendering» sia disattivato. Sul processore richiede molto più tempo.",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "Automatico esegue il modello sulla scheda grafica del Mac. Scegli CPU se lì le maschere IA non funzionano; sul processore richiedono molto più tempo."
 }
