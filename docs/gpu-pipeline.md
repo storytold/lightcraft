@@ -4,6 +4,11 @@ The CPU pipeline (`crates/pipeline`) is the reference ("oracle"). `lightcraft-gp
 evaluates the same stages with wgpu compute shaders (WGSL) on Metal / Vulkan / DX12. Everything is
 pure Rust (wgpu, naga); the drivers are the system's. No GL backend is compiled in.
 
+Process V3's camera-look Contrast and Blacks share the CPU's generated lookup tables and
+ProPhoto matrices. `finish.wgsl::light_ops` applies them after V2's Whites tone curve and
+before the colour stage. Full frames and render windows use the same pointwise operators;
+see [calibrated Light operators](light-v3.md) for HDR rules and limits.
+
 Warped geometry uses a CPU-computed coverage bit mask for the source boundary.
 The CPU reference evaluates that boundary in double precision; GPU float
 rounding otherwise can turn a blank edge pixel into a photo pixel. The mask

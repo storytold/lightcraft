@@ -1,7 +1,7 @@
 // The per-pixel stage: a straight port of `lightcraft_pipeline::finish` (keep in step with it).
 // Bindings: img (rgb, pre-exposure), log_l, base, clar, tex, dark, masks (NMASK planes, then the
 // blurred chromaticity when HAS_CHROMA), aux
-// (tone LUT | chroma curve | sRGB LUT | curve LUTs | mask terms), out (packed RGBA8).
+// (tone LUT | chroma curve | sRGB LUT | curve LUTs | mask terms | light operator tables), out (packed RGBA8).
 
 fn tone_apply(y: f32) -> f32 {
     if (y <= 0.0) {
@@ -45,6 +45,56 @@ fn curve(ch: u32, x: f32) -> f32 {
     let i = min(u32(f), CURVE_N - 2u);
     let t = f - f32(i);
     return aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * t;
+}
+
+// Process V3's calibrated Contrast, Blacks (`lightcraft_pipeline::light_v3`): operator `k`'s
+// table (linear output over encoded v) at v (`Operator::eval`).
+fn light_eval(k: u32, v: f32) -> f32 {
+    let o = pu(F_LIGHT_OFF) + k * LIGHT_N;
+    let f = clamp(v, 0.0, 1.0) * f32(LIGHT_N - 1u);
+    let i = min(u32(f), LIGHT_N - 2u);
+    let t = f - f32(i);
+    return aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * t;
+}
+
+// `Operator::channel`: one linear value; above 1 unchanged, below 0 shifted by F(0).
+fn light_channel(k: u32, x: f32) -> f32 {
+    if (x > 1.0) {
+        return x;
+    }
+    if (x < 0.0) {
+        return aux[pu(F_LIGHT_OFF) + k * LIGHT_N] + x;
+    }
+    return light_eval(k, encode_srgb(x));
+}
+
+// `Operator::luminance`: scaled by F of the ProPhoto luminance over it.
+fn light_lum(k: u32, p: vec3<f32>) -> vec3<f32> {
+    let y = PRO_Y.x * p.x + PRO_Y.y * p.y + PRO_Y.z * p.z;
+    if (!(y > 1e-6) || y > 1.0) {
+        return p;
+    }
+    return p * (light_channel(k, y) / y);
+}
+
+// `LightOps::apply`: linear Rec.2020 → ProPhoto, the operators in order, back.
+fn light_ops(d: vec3<f32>) -> vec3<f32> {
+    var p = mul3(PRO_FROM_2020, d);
+    let n = min(pu(F_LIGHT_OPS), 2u);
+    for (var k = 0u; k < n; k++) {
+        let mode = pu(F_LIGHT_MODE + k);
+        if (mode == 0u) {
+            p = vec3<f32>(light_channel(k, p.x), light_channel(k, p.y), light_channel(k, p.z));
+        } else if (mode == 1u) {
+            p = light_lum(k, p);
+        } else {
+            let a = vec3<f32>(light_channel(k, p.x), light_channel(k, p.y), light_channel(k, p.z));
+            let b = light_lum(k, p);
+            let w = pf(F_LIGHT_W + k);
+            p = vec3<f32>(w * a.x + (1.0 - w) * b.x, w * a.y + (1.0 - w) * b.y, w * a.z + (1.0 - w) * b.z);
+        }
+    }
+    return mul3(PRO_TO_2020, p);
 }
 
 fn band_weights(h: f32) -> array<f32, 8> {
@@ -421,6 +471,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (mx > 1.0) {
         let t = clamp((mx - 1.0) / max(mx - o, 1e-6), 0.0, 1.0);
         d = d + (o - d) * t;
+    }
+
+    // --- process V3: calibrated Contrast, Blacks
+    if (pu(F_LIGHT_OPS) != 0u) {
+        d = light_ops(d);
     }
 
     // --- colour

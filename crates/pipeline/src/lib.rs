@@ -30,6 +30,10 @@ pub mod cull;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
+pub mod light_v3;
+// generated (`light_v3_params.rs`), kept in its own compact layout
+#[rustfmt::skip]
+pub mod light_v3_params;
 pub mod local;
 pub mod local_tone;
 pub mod lut;
@@ -730,6 +734,10 @@ mod tests;
 mod tests_geometry;
 #[cfg(test)]
 mod tests_hdr;
+#[cfg(test)]
+mod tests_legacy;
+#[cfg(test)]
+mod tests_light;
 #[cfg(test)]
 mod tests_local;
 #[cfg(test)]

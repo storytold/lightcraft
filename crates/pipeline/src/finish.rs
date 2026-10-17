@@ -153,6 +153,9 @@ pub struct FinishParams {
     /// A LUT profile and its amount (0..2), applied to the display-encoded colour.
     pub lut: Option<(std::sync::Arc<crate::lut::Lut3d>, f32)>,
     pub tone: ToneMap,
+    /// Process V3's calibrated Contrast and Blacks on the camera-look path, applied after
+    /// the tone map (`None`: another process or path, or both at 0; see [`crate::light_v3`]).
+    pub light: Option<crate::light_v3::LightOps>,
     pub ops: ColorOps,
     /// Calibration: primaries matrix (row-major, linear Rec.2020) and shadows tint (−1..1).
     pub calib: Option<[[f32; 3]; 3]>,
@@ -229,6 +232,7 @@ impl FinishParams {
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
             tone: base_tone(s, info, peak),
+            light: crate::light_v3::LightOps::new(s, info),
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
             ops: ColorOps::new(s),
             curves: curve_luts(&s.curve),
@@ -274,6 +278,8 @@ impl FinishParams {
 /// rendering process. This is where a new tone model branches: a retuned default tone curve (issue
 /// #146) is a new [`Process`] with its own arm here, and V1's arm stays as it is, so photos edited
 /// under V1 keep their look (`docs/process-versions.md`). CPU and GPU both take it from here.
+/// From V3 the camera curve keeps V2 Whites; its Contrast and Blacks are the
+/// calibrated operators that follow the tone map ([`crate::light_v3`], [`FinishParams::light`]).
 /// `peak` is the HDR render's peak relative to SDR white ([`lightcraft_develop::Hdr::peak`]); at 1.0 (SDR)
 /// every arm is the SDR tone map. An HDR render keeps the camera's look through the midtones and
 /// lifts its highlights past white ([`ToneMap::camera_hdr`]), so it matches the SDR render below them.
@@ -283,6 +289,12 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
         // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
         Process::V1 | Process::V2 => match info.camera_tone.as_ref().filter(|_| info.raw) {
             Some(curve) => ToneMap::camera_hdr(curve, l.contrast, l.whites, l.blacks, peak),
+            None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
+            None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
+        },
+        // Keep V2 Whites in the camera curve; calibrated Contrast and Blacks follow it.
+        Process::V3 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+            Some(curve) => ToneMap::camera_hdr(curve, 0.0, l.whites, 0.0, peak),
             None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
         },
@@ -367,6 +379,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let p_lut = fp.lut.clone();
     let FinishParams {
         tone,
+        light,
         ops,
         curves,
         vig,
@@ -396,6 +409,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let aspect = vw / vh;
 
     let srgb = srgb_lut();
+    let preview_light = if exact { None } else { light.as_ref().and_then(|lo| crate::light_v3::PreviewOps::new(lo, &|v| encode_srgb(srgb, v))) };
     let peak = fp.peak;
     let hdr = peak > 1.0;
     let mut out = vec![T::default(); w * h];
@@ -542,6 +556,13 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             if mx > peak {
                 let t = ((mx - peak) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
                 d = d.map(|v| v + (o - v) * t);
+            }
+
+            // --- process V3: calibrated Contrast, Blacks (ProPhoto with the sRGB transfer)
+            if let Some(lo) = &preview_light {
+                d = lo.apply(d);
+            } else if let Some(lo) = light {
+                d = if exact { lo.apply(d, &linear_to_srgb) } else { lo.apply(d, &|v| encode_srgb(srgb, v)) };
             }
 
             // --- colour
@@ -756,7 +777,7 @@ pub fn srgb_lut() -> &'static [f32; SRGB_LUT_N + 1] {
 /// Linear → sRGB-encoded (clamped to 0..1) by an interpolated table: within 2e-5 of the exact
 /// curve (≪ one 8-bit or 10-bit step), several times faster than `powf`.
 #[inline]
-fn encode_srgb(lut: &[f32; SRGB_LUT_N + 1], v: f32) -> f32 {
+pub(crate) fn encode_srgb(lut: &[f32; SRGB_LUT_N + 1], v: f32) -> f32 {
     let f = v.clamp(0.0, 1.0) * SRGB_LUT_N as f32;
     let i = (f as usize).min(SRGB_LUT_N - 1);
     let t = f - i as f32;

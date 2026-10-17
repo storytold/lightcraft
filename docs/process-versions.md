@@ -1,5 +1,7 @@
 # Process versions
 
+> **Last updated:** 2026-10-12 · **Change:** minor (calibrated Contrast and Blacks)
+
 Every photo's develop settings record the **rendering process** they are interpreted by
 (`DevelopSettings::process`, a `ProcessVersion` in `crates/develop/src/settings.rs`). Lightroom calls
 this the process version. It lets the look of LightCraft improve (a new default tone curve, issue #146;
@@ -8,7 +10,13 @@ stronger Light sliders, issue #196) without changing a single photo someone has 
 | Process | What it changes |
 |---|---|
 | **V1** | LightCraft's rendering from before process versions existed. Frozen. |
-| **V2** (the latest) | Highlights and Shadows keep fine detail (issue #632): their base layer (`local::tone_base`) is the edge-aware filter of a separable median of log luminance (radius 0.15 % of the long edge, at most 24 px, `local::BASE_DETAIL`) instead of log luminance itself, so twigs, lines and texture take their surroundings' shift and keep their contrast; region edges stay sharp. CPU (`local::prepare`) and GPU prepare branch on `local::tone_base_detail` (0 = no median under V1); the base plane is cached per process (`local::BaseKey`). Renders without Highlights or Shadows (global or local) are the same as V1's. Tone map unchanged. |
+| **V2** | Highlights and Shadows keep fine detail (issue #632): their base layer (`local::tone_base`) is the edge-aware filter of a separable median of log luminance (radius 0.15 % of the long edge, at most 24 px, `local::BASE_DETAIL`) instead of log luminance itself, so twigs, lines and texture take their surroundings' shift and keep their contrast; region edges stay sharp. CPU (`local::prepare`) and GPU prepare branch on `local::tone_base_detail` (0 = no median under V1); the base plane is cached per process (`local::BaseKey`). Renders without Highlights or Shadows (global or local) are the same as V1's. Tone map unchanged. |
+| **V3** (the latest) | V2 plus calibrated global Contrast (per channel) and Blacks (per-channel/luminance mix) on raws with a camera tone curve. Whites behaves exactly as V2, both signs; its calibration is a planned follow-up. Other sources and local adjustments retain V2 operators. See [calibrated Light operators](light-v3.md). |
+
+The number for this calibration is provisional. Open PR #944 also proposes V3 and V4,
+#1283 proposes V3 for Dehaze, and #1286 follows #1283. Maintainers should assign final
+numbers and inheritance in merge order. The `Process::V3` arm in `Process::version()` is
+the single serialized-number definition; code and tests refer to the enum.
 
 ## The rule
 
@@ -61,7 +69,7 @@ written against the current rendering. `crs:ProcessVersion` numbers Adobe's rend
 ignored; a photo imported with Lightroom edits is on LightCraft's latest process, and an existing
 LightCraft photo that receives them keeps its own.
 
-**A number this build doesn't know** (a library or sidecar written by a newer LightCraft) loads, is
+**A number above this build's latest** (a library or sidecar written by a newer LightCraft) loads, is
 kept when saved, and renders with the newest process this build has. Update to Current Process never
 moves a photo to an older process; Reset does move it to this build's latest.
 
@@ -76,3 +84,14 @@ The process is saved as `"process": <number>` in the settings JSON, except V1, w
 Settings made before process versions existed are therefore saved exactly as before, and their
 preview-cache keys (`DevelopSettings::hash64`) don't change. `develop.get` (MCP `get_develop`) always
 states the process.
+
+From process V3 on, persistent thumbnail, view-render and variant keys also include the
+resolved rendering process. A future number can keep the same settings hash across builds
+while resolving to different operators, so those keys must differ. V1 and V2 omit this
+extra field and retain their existing cached renders. No cache-version bump is needed.
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-10-12 | minor | Calibrated Contrast and Blacks, V2 Whites, resolved-process cache keys and number coordination |
