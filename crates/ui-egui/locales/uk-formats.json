@@ -295,5 +295,9 @@
   "Already in “{}”": "Уже в «{}»",
   "Move {n} photo{} to “{}”": "Перемістити до «{1}» фото: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Перемістити до «{1}» фото: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "До «{1}» переміщено фото: {n}{0:.0}. Редагування → Скасувати поверне їх."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "До «{1}» переміщено фото: {n}{0:.0}. Редагування → Скасувати поверне їх.",
+  "Model in use: {name}": "Модель, що використовується: {name}",
+  "Works · {ms} ms per photo": "Працює · {ms} мс на фото",
+  "{got} of {total} from {host}": "{got} з {total} з {host}",
+  "Downloads {size} from {host}, once. Each file is checked against its recorded checksum; then LightCraft starts using it.": "Одноразово завантажує {size} з {host}. Кожен файл звіряється із записаною контрольною сумою, після чого LightCraft починає використовувати модель."
 }

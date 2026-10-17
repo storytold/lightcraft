@@ -2,6 +2,18 @@
 
 ## 2026-10-14
 
+### Search by content: the models
+- Settings ▸ Search (new) lists the models LightCraft will use to find photos by what they show (Google's SigLIP 2:
+  base 256 px, recommended, 1.5 GB; base 384 px; So400m, 4.6 GB; all Apache-2.0). **Download** shows the licence first
+  and fetches nothing until "I have read these terms and accept them" is ticked; the model then comes from Hugging
+  Face, each file checked against its size and SHA-256, with its progress in the activity stack and a Cancel that
+  leaves nothing behind. **Test** checks the model on a few generated scenes and shows how long a photo takes.
+- A model whose files are already in its folder shows as found on this computer: **Check and Use** checks them without
+  downloading anything.
+- Everything stays on this computer. Indexing and searching photos by content come in the next steps; the Index photo
+  contents switch is remembered until then. Agents use `content.models.*`, `content.enable` and `content.status`
+  (docs/content-search.md).
+
 ### Lightroom radial masks on the right side
 - Radial masks brought over from Lightroom Classic (catalog import, XMP sidecars, edits inside DNGs and presets) now
   apply their effect inside the circle, as Lightroom does, instead of outside it (issue #1815). A mask inverted in

@@ -28,6 +28,8 @@ serde_json = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]
+# Settings ▸ Search tests describe a small model of their own
+lightcraft-vision = { workspace = true }
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }

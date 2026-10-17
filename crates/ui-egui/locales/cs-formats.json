@@ -295,5 +295,9 @@
   "Already in “{}”": "Již v „{}“",
   "Move {n} photo{} to “{}”": "Přesunout do „{1}“ fotografie: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Přesunout do „{1}“ fotografie: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Do „{1}“ přesunuto fotografií: {n}{0:.0}. Úpravy → Zpět je vrátí."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Do „{1}“ přesunuto fotografií: {n}{0:.0}. Úpravy → Zpět je vrátí.",
+  "Model in use: {name}": "Používaný model: {name}",
+  "Works · {ms} ms per photo": "Funguje · {ms} ms na fotografii",
+  "{got} of {total} from {host}": "{got} z {total} z {host}",
+  "Downloads {size} from {host}, once. Each file is checked against its recorded checksum; then LightCraft starts using it.": "Jednou stáhne {size} z {host}. Každý soubor se porovná se zaznamenaným kontrolním součtem; pak jej LightCraft začne používat."
 }

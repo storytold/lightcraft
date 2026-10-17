@@ -8,6 +8,7 @@ mod activity;
 mod before;
 pub(crate) mod browse;
 mod color;
+mod content;
 pub(crate) mod convert;
 mod cull;
 pub mod curves;
@@ -173,6 +174,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(filters::specs());
         v.extend(denoise::specs());
         v.extend(face_models::specs());
+        v.extend(content::specs());
         v.extend(face_detect::specs());
         v.extend(face_recognize::specs());
         v.extend(focus::specs());
