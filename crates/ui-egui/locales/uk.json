@@ -2426,9 +2426,9 @@
   "Can't add to an album folder": "Не можна додати до теки альбомів",
   "An album folder holds albums, not photos: drop on an album inside it": "У теці альбомів лежать альбоми, а не фото: киньте на альбом усередині неї",
   "Can't add to a smart album": "Не можна додати до смарт-альбому",
-  "A smart album's rules choose its photos: change them with Edit Smart Album…": "Фото смарт-альбому вибирають його правила: змініть їх через «Редагувати смарт-альбом…»",
+  "A smart album's rules choose its photos: change them with Edit Smart Album…": "Фото смарт-альбому визначаються його правилами: змініть їх через «Редагувати смарт-альбом…»",
   "Add keywords in the Keyword List": "Додавайте ключові слова у списку ключових слів",
-  "Give photos a keyword in the Keyword List (Window ▸ Keywords, K): drop them on it there": "Щоб задати фото ключове слово, скористайтеся списком ключових слів (Вікно → Ключові слова, K): киньте фото там на потрібне слово",
+  "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "Щоб задати фото ключове слово, скористайтеся списком ключових слів (Вікно → Ключові слова, K): киньте фото там на потрібне слово",
   "Already on these photos": "Уже є в цих фото",
   "Can't go inside itself": "Не можна помістити всередину себе"
 }

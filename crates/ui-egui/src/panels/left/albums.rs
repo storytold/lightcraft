@@ -217,7 +217,7 @@ fn finish_drop(app: &mut LightcraftApp, ui: &egui::Ui, dragged: AlbumId, result:
 }
 
 /// Forgets how long the pointer rested on each folder (a new drag starts counting again).
-fn forget_hover(app: &LightcraftApp, ctx: &egui::Context) {
+pub(crate) fn forget_hover(app: &LightcraftApp, ctx: &egui::Context) {
     let ids: Vec<u64> = app.session.catalog.albums().filter(|a| a.folder).map(|a| a.id.0).collect();
     ctx.data_mut(|d| {
         for id in ids {
@@ -368,9 +368,8 @@ pub(super) fn top_level_drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, 
 /// button is up (the drop targets act on the release frame, before this runs).
 pub fn album_drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(id) = app.ui.dragging_album else { return };
-    let (released, down, pos, esc) =
-        ctx.input(|i| (i.pointer.primary_released(), i.pointer.primary_down(), i.pointer.latest_pos(), i.key_pressed(egui::Key::Escape)));
-    if released || !down || esc {
+    let (released, down, pos) = ctx.input(|i| (i.pointer.primary_released(), i.pointer.primary_down(), i.pointer.latest_pos()));
+    if released || !down {
         app.ui.dragging_album = None;
         forget_hover(app, ctx);
         return;

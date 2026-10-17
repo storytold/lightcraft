@@ -2430,7 +2430,7 @@
   "Can't add to a smart album": "スマートアルバムには追加できません",
   "A smart album's rules choose its photos: change them with Edit Smart Album…": "スマートアルバムの写真はルールで決まります：「スマートアルバムを編集…」で変更してください",
   "Add keywords in the Keyword List": "キーワードはキーワードリストで追加します",
-  "Give photos a keyword in the Keyword List (Window ▸ Keywords, K): drop them on it there": "写真にキーワードを付けるには、キーワードリスト（ウィンドウ → キーワード、K）で、そのキーワードにドロップしてください",
+  "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "写真にキーワードを付けるには、キーワードリスト（ウィンドウ → キーワード、K）で、そのキーワードにドロップしてください",
   "Already on these photos": "すでにこの写真にあります",
   "Can't go inside itself": "自分の中には入れられません"
 }

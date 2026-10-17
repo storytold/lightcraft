@@ -78,7 +78,13 @@ fn esc(h: &mut Headless) {
 
 /// What the dragged label says this frame instead of the count, if a drop target set it.
 fn hint(h: &Headless) -> Option<String> {
-    h.view.ctx.data(|d| d.get_temp::<(u64, String)>(egui::Id::new("drag-photos-hint"))).map(|(_, text)| text)
+    // (only the frame just run: `step` leaves the counter at the next one)
+    let frame = h.view.ctx.cumulative_frame_nr();
+    h.view
+        .ctx
+        .data(|d| d.get_temp::<(u64, String)>(egui::Id::unique("drag-photos-hint")))
+        .filter(|(f, _)| frame.saturating_sub(*f) <= 1)
+        .map(|(_, text)| text)
 }
 
 fn toast(h: &Headless) -> String {
@@ -163,6 +169,40 @@ fn esc_only_gives_up_an_album_or_keyword_drag() {
     assert_eq!(h.app.ui.lights_out, crate::state::LightsOut::On);
 }
 
+fn key(h: &mut Headless, key: egui::Key) {
+    for pressed in [true, false] {
+        h.events.push(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE });
+        h.step();
+    }
+}
+
+#[test]
+fn a_drag_started_before_full_screen_ends_with_the_button_and_esc_leaves() {
+    let mut h = app();
+    let (outside, _) = photos_around(&mut h, GARDEN);
+    let target = drag_photos(&mut h, &outside, &format!("source:album:{GARDEN}"));
+    // F while the button is still held: the layout that runs the drag's feedback is gone
+    key(&mut h, egui::Key::F);
+    assert!(h.app.ui.fullscreen, "F opened the full-screen preview");
+    release(&mut h, target);
+    assert_eq!(h.app.ui.dragging_photos, None, "the drag ended with the button");
+    key(&mut h, egui::Key::Escape);
+    assert!(!h.app.ui.fullscreen, "Esc leaves full screen");
+}
+
+#[test]
+fn esc_during_a_drag_leaves_a_dialog_open() {
+    let mut h = app();
+    let (outside, _) = photos_around(&mut h, GARDEN);
+    drag_photos(&mut h, &outside, &format!("source:album:{GARDEN}"));
+    run(&mut h, "dialog.newAlbum", json!({}));
+    h.step();
+    assert!(h.app.ui.dialog.is_some(), "a dialog opened over the drag");
+    esc(&mut h);
+    assert_eq!(h.app.ui.dragging_photos, None, "Esc gave up the drag");
+    assert!(h.app.ui.dialog.is_some(), "and only the drag");
+}
+
 #[test]
 fn an_album_row_says_how_many_photos_a_drop_adds() {
     let mut h = app();
@@ -177,9 +217,8 @@ fn an_album_row_says_how_many_photos_a_drop_adds() {
     assert_eq!(members(&h, GARDEN).len(), before.len() + 2);
     assert_eq!(toast(&h), "Added 2 photos to “Garden”");
     // one that is there already and one that isn't: only the one counts, and the toast says so
-    let (fresh, _) = photos_around(&mut h, GARDEN + 1);
-    let fresh = fresh.into_iter().find(|id| !members(&h, GARDEN).contains(id));
-    let Some(fresh) = fresh else { return };
+    let (fresh, _) = photos_around(&mut h, GARDEN);
+    let fresh = *fresh.first().expect("the grid shows a photo Garden still lacks");
     let pair = [inside, fresh];
     let target = drag_photos(&mut h, &pair, &format!("source:album:{GARDEN}"));
     assert!(hint(&h).is_some_and(|t| t.contains("1 photo ") && !t.contains("2 ")), "{:?}", hint(&h));

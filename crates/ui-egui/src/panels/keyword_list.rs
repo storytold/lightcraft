@@ -120,16 +120,11 @@ const KEYWORD_HINT: &str = "drag-keyword-hint";
 
 /// A keyword being dragged, each frame (after the panels, which take the drop): its name follows
 /// the pointer, and the drag ends with the button's release wherever it is (the list may be gone
-/// by then) or with Esc.
+/// by then). Esc ends it earlier in the frame (`LightcraftApp::end_drags`).
 pub fn drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(keyword) = app.ui.dragging_keyword.clone() else { return };
-    let (released, down, at, esc) =
-        ctx.input(|i| (i.pointer.any_released(), i.pointer.any_down(), i.pointer.latest_pos(), i.key_pressed(egui::Key::Escape)));
-    if released || !down || esc {
-        if esc {
-            // the drag's Esc, not also a dialog's or a view's
-            crate::widgets::take_escape(ctx);
-        }
+    let (released, down, at) = ctx.input(|i| (i.pointer.any_released(), i.pointer.any_down(), i.pointer.latest_pos()));
+    if released || !down {
         app.ui.dragging_keyword = None;
         return;
     }

@@ -30,7 +30,7 @@ fn keyword_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &KeywordNode, id: 
         ui,
         &resp,
         crate::i18n::tr("Add keywords in the Keyword List"),
-        crate::i18n::tr("Give photos a keyword in the Keyword List (Window ▸ Keywords, K): drop them on it there"),
+        crate::i18n::tr("Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there"),
     );
     if let Some(k) = open_id {
         tree_toggle(ui, &resp, indent, k, open, format!("keywordToggle:{}", n.path), &n.name);

@@ -400,13 +400,15 @@ fn folder_drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
     };
     crate::panels::grid::drag_hint(ui.ctx(), hint);
     if let Some(why) = refused {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
-        if released {
-            app.toast(ui.ctx(), why);
-            app.ui.dragging_photos = None;
-        }
+        crate::panels::grid::refuse_drop(app, ui.ctx(), crate::i18n::tr("Can't be moved here").to_string(), why, released);
         return;
     }
+    let hint = if all_here {
+        crate::i18n::tr_format!("Already in “{}”", name)
+    } else {
+        crate::i18n::tr_format!("Move {n} photo{} to “{}”", if count == 1 { "" } else { "s" }, name, n = count)
+    };
+    crate::panels::grid::drag_hint(ui.ctx(), hint);
     if all_here {
         if released {
             app.ui.dragging_photos = None;

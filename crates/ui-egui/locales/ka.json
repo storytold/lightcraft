@@ -3698,7 +3698,7 @@
   "Can't add to a smart album": "სმარტ-ალბომში დამატება შეუძლებელია",
   "A smart album's rules choose its photos: change them with Edit Smart Album…": "სმარტ-ალბომის ფოტოებს მისი წესები ირჩევს: შეცვალეთ „სმარტ-ალბომის რედაქტირება…“-ით",
   "Add keywords in the Keyword List": "საკვანძო სიტყვები დაამატეთ საკვანძო სიტყვების სიაში",
-  "Give photos a keyword in the Keyword List (Window ▸ Keywords, K): drop them on it there": "ფოტოებისთვის საკვანძო სიტყვის მისაცემად გამოიყენეთ საკვანძო სიტყვების სია (ფანჯარა → საკვანძო სიტყვები, K): ჩააგდეთ იქ სასურველ სიტყვაზე",
+  "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "ფოტოებისთვის საკვანძო სიტყვის მისაცემად გამოიყენეთ საკვანძო სიტყვების სია (ფანჯარა → საკვანძო სიტყვები, K): ჩააგდეთ იქ სასურველ სიტყვაზე",
   "Already on these photos": "ამ ფოტოებს უკვე აქვთ",
   "Can't go inside itself": "საკუთარ თავში ვერ მოხვდება"
 }

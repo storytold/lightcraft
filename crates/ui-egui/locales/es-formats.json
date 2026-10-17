@@ -328,6 +328,6 @@
   "View › Detail View ({keys}).": "Vista › Vista de detalle ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Archivo › Exportar… · Archivo › Imprimir… ({keys}).",
   "Add {n} photo{} to “{}”": "Añadir {n} foto{0} a “{1}”",
-  "{n} already there": "{n} ya estaban",
+  "{n} already there": "ya en el álbum: {n}",
   "Add “{keyword}” to {n} photo{}": "Añadir “{keyword}” a {n} foto{}"
 }

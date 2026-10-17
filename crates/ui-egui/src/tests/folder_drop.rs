@@ -212,7 +212,6 @@ fn photos_already_in_the_folder_stay_put() {
     release(&mut h, toggle.center());
     let target = folder_row(&h, &home).expect("opened");
     let garden = id_of(&h, "garden.png");
-    h.app.ui.dragging_photos = Some(vec![garden]);
     h.app.synthetic.push(egui::Event::PointerMoved(target.center()));
     h.app.synthetic.push(egui::Event::PointerButton {
         pos: target.center(),
@@ -220,6 +219,10 @@ fn photos_already_in_the_folder_stay_put() {
         pressed: true,
         modifiers: egui::Modifiers::NONE,
     });
+    h.step();
+    h.step();
+    // a drag exists only with a button down: the photos are picked up once it is
+    h.app.ui.dragging_photos = Some(vec![garden]);
     h.step();
     assert_eq!(hint(&h).as_deref(), Some("Already in “home”"));
     let undo = h.app.session.undo.len();
