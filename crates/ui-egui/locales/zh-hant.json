@@ -2141,5 +2141,17 @@
   "Checking the GPU…": "正在檢查 GPU…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "只有在檢查顯示 GPU 能更快得出相同結果時，臉孔模型才會使用 GPU。",
-  "Checking the GPU for faces": "正在檢查用於臉孔的 GPU"
+  "Checking the GPU for faces": "正在檢查用於臉孔的 GPU",
+  "Delete from Disk": "從磁碟刪除",
+  "Delete from Disk…": "從磁碟刪除…",
+  "Delete Rejected Photos…": "刪除已排除的照片…",
+  "Remove from Library": "從圖庫中移除",
+  "Nothing was deleted from disk for them. Remove them from the library instead? The files stay on disk.": "這些照片沒有從磁碟刪除任何內容。改為從圖庫中移除它們？檔案會保留在磁碟上。",
+  "Delete the rejected photo from disk, or just remove it from the library?": "要從磁碟刪除已排除的照片，還是僅從圖庫中移除？",
+  "Delete the selected photo from disk, or just remove it from the library?": "要從磁碟刪除所選照片，還是僅從圖庫中移除？",
+  "Remove takes them out of the library for good; the files stay on disk.": "「移除」會將它們永久移出圖庫；檔案保留在磁碟上。",
+  "Remove moves them to Recently Deleted; the files stay on disk.": "「移除」會將它們移到「最近刪除」；檔案保留在磁碟上。",
+  "There are no rejected photos here": "這裡沒有已排除的照片",
+  "Trash": "垃圾桶",
+  "Recycle Bin": "資源回收筒"
 }

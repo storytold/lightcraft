@@ -295,5 +295,10 @@
   "Already in “{}”": "Уже в «{}»",
   "Move {n} photo{} to “{}”": "Перемістити до «{1}» фото: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Перемістити до «{1}» фото: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "До «{1}» переміщено фото: {n}{0:.0}. Редагування → Скасувати поверне їх."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "До «{1}» переміщено фото: {n}{0:.0}. Редагування → Скасувати поверне їх.",
+  "Couldn't move {count} photo{} to the {bin}: {error}": "Не вдалося перемістити фото ({count}{:.0}) до об'єкта «{bin}»: {error}",
+  "Delete the {count} rejected photos from disk, or just remove them from the library?": "Видалити відхилені фото ({count}) з диска чи лише прибрати їх із бібліотеки?",
+  "Delete the {count} selected photos from disk, or just remove them from the library?": "Видалити вибрані фото ({count}) з диска чи лише прибрати їх із бібліотеки?",
+  "Delete from Disk moves the files and their XMP sidecars to the {bin} and removes the photos from the library. Undo can't bring the files back: restore them from the {bin}.": "«Видалити з диска» переміщує файли та їхні XMP-файли до об'єкта «{bin}» і прибирає фото з бібліотеки. Скасування не поверне файли: відновіть їх з об'єкта «{bin}».",
+  "Moved {n} file{} to the {bin}": "Файлів переміщено до об'єкта «{bin}»: {n}{:.0}"
 }

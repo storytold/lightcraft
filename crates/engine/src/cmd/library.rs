@@ -7,6 +7,104 @@ use serde_json::{Value, json};
 use super::{CommandSpec, always, bad, bool_or, cmd, has_active, has_library_selection, has_selection, ok, str_param};
 use crate::{LibrarySource, Result, Selection, Session};
 
+/// `photo.deleteFromDisk` is there where files can be moved to a trash (not on the web).
+fn can_trash(s: &Session) -> std::result::Result<(), String> {
+    crate::trash::available()?;
+    has_selection(s)
+}
+
+/// `photo.deleteFromDisk`: see its parameter text.
+fn delete_from_disk(s: &mut Session, p: &Value) -> Result<Value> {
+    use lightcraft_catalog::Source;
+    use std::collections::HashSet;
+    const C: &str = "photo.deleteFromDisk";
+    crate::trash::available().map_err(|e| bad(C, e))?;
+    let targets = s.targets(p)?;
+    if targets.is_empty() {
+        return Err(bad(C, "no photos selected"));
+    }
+    let before = s.visible_cloned();
+    let now = (s.clock)();
+    let path_of = |ph: &lightcraft_catalog::Photo| match &ph.source {
+        Source::File { path } => Some(path.clone()),
+        Source::Demo { .. } => None,
+    };
+    // the files to trash: those of the photos themselves (a virtual copy alone has no file of its own)
+    let mut files: Vec<String> = Vec::new();
+    for id in &targets {
+        if let Some(ph) = s.catalog.photo(*id)
+            && ph.copy_of.is_none()
+            && let Some(path) = path_of(ph)
+            && !files.contains(&path)
+        {
+            files.push(path);
+        }
+    }
+    let (mut gone, mut failed_paths): (HashSet<String>, HashSet<String>) = Default::default();
+    let (mut trashed, mut failed, mut missing) = (Vec::new(), Vec::new(), 0usize);
+    for path in &files {
+        match std::fs::symlink_metadata(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                missing += 1;
+                gone.insert(path.clone());
+                continue;
+            }
+            _ => {}
+        }
+        match crate::trash::trash(std::path::Path::new(path), &s.trash, &now) {
+            Ok(to) => {
+                trashed.push(json!({"from": path, "to": to.to_string_lossy()}));
+                gone.insert(path.clone());
+            }
+            Err(e) => {
+                let ids: Vec<u64> =
+                    targets.iter().filter(|id| s.catalog.photo(**id).and_then(|ph| path_of(ph)).as_ref() == Some(path)).map(|id| id.0).collect();
+                failed.push(json!({"path": path, "error": e, "ids": ids}));
+                failed_paths.insert(path.clone());
+            }
+        }
+    }
+    // sidecars go with their photo; one named after the stem only once no photo file shares it
+    // (all the photos are out of their folders by now, so a sibling left is another photo's)
+    let mut sidecars = Vec::new();
+    for path in files.iter().filter(|f| gone.contains(*f)) {
+        for (sc, stem_named) in crate::import_move::sidecars_of(std::path::Path::new(path)) {
+            if stem_named && crate::import_move::sibling_photo(&sc).is_some() {
+                continue;
+            }
+            match crate::trash::trash(&sc, &s.trash, &now) {
+                Ok(to) => sidecars.push(json!({"from": sc.to_string_lossy(), "to": to.to_string_lossy()})),
+                Err(e) => failed.push(json!({"path": sc.to_string_lossy(), "error": e, "ids": []})),
+            }
+        }
+    }
+    // out of the library: every photo of a file that left (also ones not selected, such as its
+    // virtual copies), and the selected photos that have no file of their own
+    let mut remove: Vec<PhotoId> = s.catalog.photos().filter(|ph| path_of(ph).is_some_and(|f| gone.contains(&f))).map(|ph| ph.id).collect();
+    for id in &targets {
+        let keep = s.catalog.photo(*id).and_then(|ph| path_of(ph)).is_some_and(|f| failed_paths.contains(&f));
+        if !keep && !remove.contains(id) && s.catalog.photo(*id).is_some() {
+            remove.push(*id);
+        }
+    }
+    if remove.is_empty() {
+        let why = failed.first().and_then(|f| f["error"].as_str()).unwrap_or("nothing to delete").to_string();
+        return Err(bad(C, why));
+    }
+    let op = s.catalog.delete_photos_permanently_ops(&remove);
+    let bin = s.trash.name();
+    s.commit("Delete from Disk", op).map_err(|e| bad(C, format!("the files are in the {bin} but the library couldn't be saved: {e}")))?;
+    select_after_deletion(s, &before);
+    Ok(json!({
+        "deleted": remove.len(),
+        "trashed": trashed,
+        "sidecars": sidecars,
+        "missing": missing,
+        "failed": failed,
+        "trash": bin,
+    }))
+}
+
 fn select_after_deletion(s: &mut Session, before: &[PhotoId]) {
     let at = before.iter().position(|id| Some(*id) == s.selection.active);
     let remaining: std::collections::HashSet<_> = s.visible_cloned().into_iter().collect();
@@ -918,6 +1016,15 @@ pub fn specs() -> Vec<CommandSpec> {
             select_after_deletion(s, &before);
             Ok(json!({"deleted": t.len()}))
         }),
+        cmd!(
+            "photo.deleteFromDisk",
+            "Delete from Disk",
+            [],
+            None,
+            "{ids?} — move the photos' files to the system Trash (Recycle Bin on Windows; never deleted outright) with their XMP sidecars (a sidecar named after the stem only when no other photo file shares it), then take the photos out of the library, virtual copies of those files included; a virtual copy alone is only taken out of the library; a file already gone is just taken out. A file that can't be moved (no Trash on its disk, no permission) stays, and so does its photo: listed in `failed`; nothing moved at all is an error. One undo step, which brings the photos back to the library but not their files (put those back from the Trash) → {deleted, trashed: [{from, to}], sidecars: [{from, to}], missing, failed: [{path, error, ids}], trash}",
+            can_trash,
+            delete_from_disk
+        ),
         // ---- metadata
         cmd!(
             "photo.setMeta",

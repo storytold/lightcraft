@@ -261,6 +261,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.rename", "Rename Photos…", Some("F2"), "Photo"),
     ("dialog.labelNames", "Edit Color Label Names…", None, ""),
     ("dialog.captureTime", "Edit Capture Time…", None, "Photo"),
+    ("dialog.deleteFromDisk", "Delete from Disk…", None, "Photo"),
+    ("dialog.deleteRejected", "Delete Rejected Photos…", Some("Cmd+Delete"), "Photo"),
     ("photo.tagFromTracklog", "Auto-Tag from Tracklog…", None, "Photo"),
     ("app.exportPrevious", "Export with Previous", Some("Cmd+Alt+Shift+E"), "File"),
 ];
@@ -1321,6 +1323,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 Some(Dialog::CaptureTime { mode, time: time.get(..19).unwrap_or(&time).to_string(), days: 0, hours: 0, minutes: 0, zone: 0.0 });
             Ok(Value::Null)
         }
+        "dialog.deleteFromDisk" => {
+            let ids: Vec<u64> = app.session.selected().iter().map(|id| id.0).collect();
+            if !open_delete_dialog(app, ids, false) {
+                return Some(Err("no photos selected".into()));
+            }
+            Ok(Value::Null)
+        }
+        "dialog.deleteRejected" => delete_rejected(app),
         "dialog.labelNames" => {
             let names =
                 lightcraft_catalog::ColorLabel::ALL.iter().map(|l| app.session.catalog.custom_label_name(*l).unwrap_or("").to_string()).collect();
@@ -2140,6 +2150,7 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
             app.session.active().is_some()
         }
         "photo.tagFromTracklog" => app.session.active().is_some() && app.services.pick_tracklog.is_some(),
+        "dialog.deleteFromDisk" => lightcraft_engine::trash::available().is_ok() && !app.session.selected().is_empty(),
         "photo.editInPhotoCraft" | "photo.editInExternal" => app.session.active().is_some() && app.services.open_with.is_some(),
         "app.exportPrevious" => app.session.active().is_some() && app.session.last_export.is_some(),
         "dialog.pasteSettings" => app.session.active().is_some() && app.session.clipboard.is_some(),
@@ -2242,18 +2253,52 @@ pub fn delete_in_album(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
     true
 }
 
-/// With Settings → General → "Confirm before deleting" on, open the confirmation dialog instead
-/// of deleting; true when it did (the dialog's OK runs `photo.delete`).
+/// With Settings → General → "Confirm before deleting" on, open the Delete dialog instead of
+/// deleting; true when it did. As in Lightroom it offers Delete from Disk (the files to the Trash),
+/// Cancel and Remove (its OK: `photo.delete`, to Recently Deleted).
 pub fn confirm_delete(app: &mut LightcraftApp) -> bool {
     if !app.ui.settings.confirm_delete {
         return false;
     }
-    let count = app.session.selected().len();
-    if count == 0 {
+    let ids: Vec<u64> = app.session.selected().iter().map(|id| id.0).collect();
+    open_delete_dialog(app, ids, false)
+}
+
+/// Open the Delete dialog (issue #1706) for `ids`; false when there is nothing to delete.
+pub fn open_delete_dialog(app: &mut LightcraftApp, ids: Vec<u64>, rejected: bool) -> bool {
+    if ids.is_empty() {
         return false;
     }
-    app.ui.dialog = Some(Dialog::ConfirmDelete { count });
+    app.ui.dialog = Some(Dialog::ConfirmDelete { count: ids.len(), ids, rejected, error: None });
     true
+}
+
+/// Photo ▸ Delete Rejected Photos… (⌘⌫), as in Lightroom: the rejected photos on screen. In an
+/// album they only leave the album (as the Delete key does there, issue #1805); elsewhere the Delete
+/// dialog asks whether to delete them from disk or remove them from the library.
+fn delete_rejected(app: &mut LightcraftApp) -> Result<Value, String> {
+    let rejected: Vec<u64> = app
+        .session
+        .visible_cloned()
+        .iter()
+        .filter(|id| app.session.catalog.photo(**id).is_some_and(|p| p.flag == lightcraft_engine::catalog::Flag::Reject && !p.deleted))
+        .map(|id| id.0)
+        .collect();
+    if rejected.is_empty() {
+        return Err(crate::i18n::tr("There are no rejected photos here").to_string());
+    }
+    if crate::menubar::in_normal_album(app) {
+        let lightcraft_engine::LibrarySource::Album(aid) = app.session.source else { return Ok(Value::Null) };
+        let r = app.run("album.removePhotos", json!({"id": aid.0, "ids": rejected}))?;
+        let ctx = app.tasks.repaint.clone().unwrap_or_default();
+        let n = r["removed"].as_u64().unwrap_or(0);
+        let name = r["album"].as_str().unwrap_or_default().to_string();
+        let what = crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n);
+        app.toast(&ctx, crate::i18n::tr_format!("Removed {what} from {name}", what = what, name = name));
+        return Ok(r);
+    }
+    open_delete_dialog(app, rejected, true);
+    Ok(Value::Null)
 }
 
 /// Platform-appropriate label for revealing a file in the system file manager.

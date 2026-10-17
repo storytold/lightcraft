@@ -295,5 +295,10 @@
   "Already in “{}”": "Bereits in „{}“",
   "Move {n} photo{} to “{}”": "{n} Foto{0} nach „{1}“ verschieben",
   "Move {n} photo{} to “{}”?": "{n} Foto{0} nach „{1}“ verschieben?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} Foto{0} nach „{1}“ verschoben. Bearbeiten → Rückgängig holt sie zurück."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} Foto{0} nach „{1}“ verschoben. Bearbeiten → Rückgängig holt sie zurück.",
+  "Couldn't move {count} photo{} to the {bin}: {error}": "{count} Foto{} konnte(n) nicht in den {bin} verschoben werden: {error}",
+  "Delete the {count} rejected photos from disk, or just remove them from the library?": "Die {count} abgelehnten Fotos von der Festplatte löschen oder nur aus der Bibliothek entfernen?",
+  "Delete the {count} selected photos from disk, or just remove them from the library?": "Die {count} ausgewählten Fotos von der Festplatte löschen oder nur aus der Bibliothek entfernen?",
+  "Delete from Disk moves the files and their XMP sidecars to the {bin} and removes the photos from the library. Undo can't bring the files back: restore them from the {bin}.": "„Von der Festplatte löschen“ verschiebt die Dateien und ihre XMP-Filialdateien in den {bin} und entfernt die Fotos aus der Bibliothek. Rückgängig holt die Dateien nicht zurück: Stellen Sie sie aus dem {bin} wieder her.",
+  "Moved {n} file{} to the {bin}": "{n} Datei(en){:.0} in den {bin} verschoben"
 }

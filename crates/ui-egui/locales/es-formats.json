@@ -295,5 +295,10 @@
   "Already in “{}”": "Ya está en “{}”",
   "Move {n} photo{} to “{}”": "Mover {n} foto{0} a “{1}”",
   "Move {n} photo{} to “{}”?": "¿Mover {n} foto{0} a “{1}”?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} foto{0} movida{0} a “{1}”. Editar → Deshacer las devuelve."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} foto{0} movida{0} a “{1}”. Editar → Deshacer las devuelve.",
+  "Couldn't move {count} photo{} to the {bin}: {error}": "No se pudo mover {count} foto{} a la {bin}: {error}",
+  "Delete the {count} rejected photos from disk, or just remove them from the library?": "¿Eliminar las {count} fotos rechazadas del disco o solo quitarlas de la biblioteca?",
+  "Delete the {count} selected photos from disk, or just remove them from the library?": "¿Eliminar las {count} fotos seleccionadas del disco o solo quitarlas de la biblioteca?",
+  "Delete from Disk moves the files and their XMP sidecars to the {bin} and removes the photos from the library. Undo can't bring the files back: restore them from the {bin}.": "Eliminar del disco mueve los archivos y sus archivos XMP complementarios a la {bin} y quita las fotos de la biblioteca. Deshacer no recupera los archivos: restáuralos desde la {bin}.",
+  "Moved {n} file{} to the {bin}": "{n} archivo{0} movido{0} a la {bin}"
 }

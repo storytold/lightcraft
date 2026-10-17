@@ -76,6 +76,8 @@ mod tests_curve;
 #[cfg(test)]
 mod tests_date_picker;
 #[cfg(test)]
+mod tests_delete_from_disk;
+#[cfg(test)]
 mod tests_dialog_fit;
 #[cfg(test)]
 mod tests_dialog_primary;

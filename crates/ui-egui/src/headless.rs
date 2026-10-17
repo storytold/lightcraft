@@ -4240,7 +4240,7 @@ mod tests {
         assert_eq!(h.app.ui.dialog, None);
         let active = h.app.session.active().unwrap();
         h.request("ui.key", json!({"key": "delete"}), t);
-        assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::ConfirmDelete { count: 1 }));
+        assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::ConfirmDelete { count: 1, .. })));
         assert!(!h.app.session.catalog.photo(active).unwrap().deleted);
         let r = h.request("ui.dialog.confirm", json!({}), t);
         assert_eq!(r["ok"], true, "{r}");

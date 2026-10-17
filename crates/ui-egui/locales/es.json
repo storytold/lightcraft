@@ -2340,5 +2340,17 @@
   "Checking the GPU…": "Comprobando la GPU…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Un modelo de caras usa la GPU solo cuando una comprobación muestra que da los mismos resultados más rápido.",
-  "Checking the GPU for faces": "Comprobando la GPU para las caras"
+  "Checking the GPU for faces": "Comprobando la GPU para las caras",
+  "Delete from Disk": "Eliminar del disco",
+  "Delete from Disk…": "Eliminar del disco…",
+  "Delete Rejected Photos…": "Eliminar fotos rechazadas…",
+  "Remove from Library": "Quitar de la biblioteca",
+  "Nothing was deleted from disk for them. Remove them from the library instead? The files stay on disk.": "No se eliminó nada del disco para ellas. ¿Quitarlas de la biblioteca en su lugar? Los archivos se quedan en el disco.",
+  "Delete the rejected photo from disk, or just remove it from the library?": "¿Eliminar la foto rechazada del disco o solo quitarla de la biblioteca?",
+  "Delete the selected photo from disk, or just remove it from the library?": "¿Eliminar la foto seleccionada del disco o solo quitarla de la biblioteca?",
+  "Remove takes them out of the library for good; the files stay on disk.": "Quitar las saca de la biblioteca para siempre; los archivos se quedan en el disco.",
+  "Remove moves them to Recently Deleted; the files stay on disk.": "Quitar las mueve a Eliminadas recientemente; los archivos se quedan en el disco.",
+  "There are no rejected photos here": "Aquí no hay fotos rechazadas",
+  "Trash": "Papelera",
+  "Recycle Bin": "Papelera de reciclaje"
 }

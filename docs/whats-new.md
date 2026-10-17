@@ -8,6 +8,17 @@
   Lightroom stays inverted, and older Radial Filters keep their Effect Outside / Invert Mask setting. Photos imported
   before this keep the masks they got: Photo ▸ Read Metadata from File reads a sidecar's again.
 
+### Delete from Disk
+- Delete now asks as Lightroom does: **Delete from Disk**, **Cancel** or **Remove** (issue #1706). Delete from Disk
+  moves the files, with their XMP sidecars, to the Trash (the Recycle Bin on Windows) and takes the photos out of the
+  library; nothing is deleted outright, so you can restore the files from the Trash. Remove works as Delete did before:
+  the photos go to Recently Deleted and the files stay on disk.
+- If a file can't go to the Trash (a disk without one, no permission), it stays where it is and the dialog says why,
+  offering to remove the photo from the library instead.
+- Photo ▸ Delete Rejected Photos… (⌘⌫ / Ctrl+Backspace) asks the same about the rejected photos on screen; in an
+  album it takes them out of the album. Photo ▸ Delete from Disk… opens the dialog even with the confirmation turned
+  off in Settings.
+
 ### Delete in an album removes from the album only
 - In an album, the Delete key now takes the selected photos out of the album, as in Lightroom. It used to move them
   to Recently Deleted, so they also left their folder's view (issue #1805). They stay in the library and in their

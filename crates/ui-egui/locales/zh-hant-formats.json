@@ -295,5 +295,10 @@
   "Renames {n} face{} across the library. The files are not changed.": "在整個圖庫中重新命名 {n} 張面孔。不會改動檔案。{:.0}",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "「{to}」已經是另一個人。合併後成為一個人；還原會再把他們分開。",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "已新增{what}合併照片（{mp}）：完整尺寸（{full}）所需的記憶體超過這台電腦的記憶體",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "已新增{what}合併照片（{mp}），這是全景圖的最大尺寸（完整尺寸：{full}）"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "已新增{what}合併照片（{mp}），這是全景圖的最大尺寸（完整尺寸：{full}）",
+  "Couldn't move {count} photo{} to the {bin}: {error}": "無法將 {count} 張照片{:.0}移到{bin}：{error}",
+  "Delete the {count} rejected photos from disk, or just remove them from the library?": "要從磁碟刪除這 {count} 張已排除的照片，還是僅從圖庫中移除？",
+  "Delete the {count} selected photos from disk, or just remove them from the library?": "要從磁碟刪除所選的 {count} 張照片，還是僅從圖庫中移除？",
+  "Delete from Disk moves the files and their XMP sidecars to the {bin} and removes the photos from the library. Undo can't bring the files back: restore them from the {bin}.": "「從磁碟刪除」會將檔案及其 XMP 附屬檔案移到{bin}，並將照片移出圖庫。還原無法找回檔案：請從{bin}中復原。",
+  "Moved {n} file{} to the {bin}": "已將 {n} 個檔案{:.0}移到{bin}"
 }

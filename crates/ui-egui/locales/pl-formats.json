@@ -295,5 +295,10 @@
   "Already in “{}”": "Już w „{}”",
   "Move {n} photo{} to “{}”": "Przenieś do „{1}” — zdjęcia: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Przenieść do „{1}” — zdjęcia: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Przeniesiono do „{1}” — zdjęcia: {n}{0:.0}. Edytuj → Cofnij przywróci je."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Przeniesiono do „{1}” — zdjęcia: {n}{0:.0}. Edytuj → Cofnij przywróci je.",
+  "Couldn't move {count} photo{} to the {bin}: {error}": "Nie udało się przenieść {count} zdjęci{} do {bin}: {error}",
+  "Delete from Disk moves the files and their XMP sidecars to the {bin} and removes the photos from the library. Undo can't bring the files back: restore them from the {bin}.": "Usuń z dysku przenosi pliki i ich pliki XMP do {bin} i usuwa zdjęcia z biblioteki. Cofnięcie nie przywróci plików: przywróć je z {bin}.",
+  "Delete the {count} rejected photos from disk, or just remove them from the library?": "Usunąć {count} odrzuconych zdjęć z dysku, czy tylko usunąć je z biblioteki?",
+  "Delete the {count} selected photos from disk, or just remove them from the library?": "Usunąć {count} zaznaczonych zdjęć z dysku, czy tylko usunąć je z biblioteki?",
+  "Moved {n} file{} to the {bin}": "Przeniesiono {n} plik{} do {bin}"
 }

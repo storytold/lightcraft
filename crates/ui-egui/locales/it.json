@@ -1990,5 +1990,17 @@
   "Test Face Model": "Testa il modello dei volti",
   "This build cannot run recognition models: they can be added and chosen, not used.": "Questa versione non può eseguire modelli di riconoscimento: si possono aggiungere e scegliere, non usare.",
   "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)": "Questa versione non ha dove tenere i modelli dei volti, quindi l'elenco dei modelli non è disponibile. (L'app desktop ce l'ha.)",
-  "Unnamed Faces": "Volti senza nome"
+  "Unnamed Faces": "Volti senza nome",
+  "Delete from Disk": "Elimina dal disco",
+  "Delete from Disk…": "Elimina dal disco…",
+  "Delete Rejected Photos…": "Elimina foto rifiutate…",
+  "Remove from Library": "Rimuovi dalla libreria",
+  "Nothing was deleted from disk for them. Remove them from the library instead? The files stay on disk.": "Per queste foto non è stato eliminato nulla dal disco. Rimuoverle invece dalla libreria? I file restano sul disco.",
+  "Delete the rejected photo from disk, or just remove it from the library?": "Eliminare la foto rifiutata dal disco o solo rimuoverla dalla libreria?",
+  "Delete the selected photo from disk, or just remove it from the library?": "Eliminare la foto selezionata dal disco o solo rimuoverla dalla libreria?",
+  "Remove takes them out of the library for good; the files stay on disk.": "Rimuovi le toglie definitivamente dalla libreria; i file restano sul disco.",
+  "Remove moves them to Recently Deleted; the files stay on disk.": "Rimuovi le sposta in Eliminate di recente; i file restano sul disco.",
+  "There are no rejected photos here": "Qui non ci sono foto rifiutate",
+  "Trash": "Cestino",
+  "Recycle Bin": "Cestino"
 }

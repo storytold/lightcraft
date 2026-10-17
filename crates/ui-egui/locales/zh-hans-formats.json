@@ -295,5 +295,10 @@
   "Renames {n} face{} across the library. The files are not changed.": "在整个图库中重命名 {n} 张面孔。不会改动文件。{:.0}",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "“{to}”已经是另一个人。合并后成为一个人；撤销会再把他们分开。",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "已添加 {what} 合并（{mp}）：完整尺寸（{full}）所需的内存超出了这台电脑的内存",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "已添加 {what} 合并（{mp}），这是全景图的最大尺寸（完整尺寸：{full}）"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "已添加 {what} 合并（{mp}），这是全景图的最大尺寸（完整尺寸：{full}）",
+  "Couldn't move {count} photo{} to the {bin}: {error}": "无法将 {count} 张照片{:.0}移到{bin}：{error}",
+  "Delete the {count} rejected photos from disk, or just remove them from the library?": "要从磁盘删除这 {count} 张被排除的照片，还是仅从图库中移去？",
+  "Delete the {count} selected photos from disk, or just remove them from the library?": "要从磁盘删除所选的 {count} 张照片，还是仅从图库中移去？",
+  "Delete from Disk moves the files and their XMP sidecars to the {bin} and removes the photos from the library. Undo can't bring the files back: restore them from the {bin}.": "“从磁盘删除”会将文件及其 XMP 附属文件移到{bin}，并将照片移出图库。撤销无法找回文件：请从{bin}中恢复。",
+  "Moved {n} file{} to the {bin}": "已将 {n} 个文件{:.0}移到{bin}"
 }
