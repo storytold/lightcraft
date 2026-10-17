@@ -2389,5 +2389,10 @@
   "Set up name suggestions…": "设置姓名建议…",
   "Top bar": "顶部栏",
   "Tool strip": "工具栏",
-  "Bottom bar": "底部栏"
+  "Bottom bar": "底部栏",
+  "Stack — click to expand (S)": "堆叠 — 单击展开 (S)",
+  "Stack — click to collapse (S)": "堆叠 — 单击折叠 (S)",
+  "Virtual copy": "虚拟副本",
+  "Right-click ▸ Locate Missing File… to find it again.": "右键单击 → 定位缺失的文件…，即可重新找到它。",
+  "Right-click ▸ Reload from Disk to try again.": "右键单击 → 从磁盘重新读取，即可重试。"
 }

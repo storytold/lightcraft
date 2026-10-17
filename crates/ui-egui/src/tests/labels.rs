@@ -45,8 +45,19 @@ fn label_tints_grid_and_filmstrip_chrome_without_changing_photo_pixels() {
         let mut h = app(view);
         let widget = if view == ViewMode::Detail { "film:1" } else { "thumb:1" };
         let cell = rect(&h, widget);
+        // (the photo grid's label is the dot in the marks row: no band is laid over its pixels; the
+        // square grid and the filmstrip also tint their surround)
         let sample = if view == ViewMode::PhotoGrid {
-            egui::pos2(cell.right() - 40.0, cell.bottom() - 8.0)
+            h.app.run("photo.label", json!({"label": "red"})).unwrap();
+            h.step();
+            let red = crate::theme::label_color(lightcraft_catalog::ColorLabel::Red);
+            let dot = h.view.painted_shapes().into_iter().find_map(|s| match s {
+                egui::epaint::Shape::Circle(c) if c.fill == red && cell.contains(c.center) => Some(c.center),
+                _ => None,
+            });
+            h.app.run("photo.label", json!({"label": "none"})).unwrap();
+            h.step();
+            dot.expect("the label dot")
         } else {
             egui::pos2(cell.left() + 4.0, cell.center().y)
         };

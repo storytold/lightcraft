@@ -3573,5 +3573,10 @@
   "Top bar": "Barre supérieure",
   "Tool strip": "Barre d’outils",
   "Bottom bar": "Barre inférieure",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Empêcher le scintillement G-SYNC/FreeSync (au prochain démarrage)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Empêcher le scintillement G-SYNC/FreeSync (au prochain démarrage)",
+  "Stack — click to expand (S)": "Pile — cliquer pour déplier (S)",
+  "Stack — click to collapse (S)": "Pile — cliquer pour replier (S)",
+  "Virtual copy": "Copie virtuelle",
+  "Right-click ▸ Locate Missing File… to find it again.": "Clic droit → Localiser le fichier manquant… pour le retrouver.",
+  "Right-click ▸ Reload from Disk to try again.": "Clic droit → Recharger depuis le disque pour réessayer."
 }

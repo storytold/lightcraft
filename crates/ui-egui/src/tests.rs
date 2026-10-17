@@ -87,6 +87,7 @@ mod sync;
 mod tallies;
 mod temp_slider;
 mod text_prompt;
+mod thumb;
 mod titlebar;
 mod tool_overlay;
 mod unsaved;

@@ -2386,5 +2386,10 @@
   "Top bar": "Верхня панель",
   "Tool strip": "Панель інструментів",
   "Bottom bar": "Нижня панель",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Запобігати мерехтінню G-SYNC/FreeSync (після перезапуску)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Запобігати мерехтінню G-SYNC/FreeSync (після перезапуску)",
+  "Stack — click to expand (S)": "Стос — клацніть, щоб розгорнути (S)",
+  "Stack — click to collapse (S)": "Стос — клацніть, щоб згорнути (S)",
+  "Virtual copy": "Віртуальна копія",
+  "Right-click ▸ Locate Missing File… to find it again.": "Клацніть правою кнопкою → Знайти відсутній файл…, щоб знайти його знову.",
+  "Right-click ▸ Reload from Disk to try again.": "Клацніть правою кнопкою → Перезавантажити з диска, щоб спробувати ще раз."
 }

@@ -2315,5 +2315,10 @@
   "Set up name suggestions…": "Skonfiguruj propozycje imion…",
   "Top bar": "Górny pasek",
   "Tool strip": "Pasek narzędzi",
-  "Bottom bar": "Dolny pasek"
+  "Bottom bar": "Dolny pasek",
+  "Stack — click to expand (S)": "Stos — kliknij, aby rozwinąć (S)",
+  "Stack — click to collapse (S)": "Stos — kliknij, aby zwinąć (S)",
+  "Virtual copy": "Kopia wirtualna",
+  "Right-click ▸ Locate Missing File… to find it again.": "Kliknij prawym przyciskiem → Znajdź brakujący plik…, aby go odnaleźć ponownie.",
+  "Right-click ▸ Reload from Disk to try again.": "Kliknij prawym przyciskiem → Wczytaj ponownie z dysku, aby spróbować jeszcze raz."
 }

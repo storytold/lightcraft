@@ -2438,5 +2438,10 @@
   "Set up name suggestions…": "Nastavit návrhy jmen…",
   "Top bar": "Horní lišta",
   "Tool strip": "Pruh nástrojů",
-  "Bottom bar": "Dolní lišta"
+  "Bottom bar": "Dolní lišta",
+  "Stack — click to expand (S)": "Sada — kliknutím rozbalíte (S)",
+  "Stack — click to collapse (S)": "Sada — kliknutím sbalíte (S)",
+  "Virtual copy": "Virtuální kopie",
+  "Right-click ▸ Locate Missing File… to find it again.": "Klikněte pravým tlačítkem → Najít chybějící soubor… a najděte jej znovu.",
+  "Right-click ▸ Reload from Disk to try again.": "Klikněte pravým tlačítkem → Znovu načíst z disku a zkuste to znovu."
 }

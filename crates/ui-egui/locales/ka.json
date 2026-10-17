@@ -3659,5 +3659,10 @@
   "Top bar": "ზედა ზოლი",
   "Tool strip": "ხელსაწყოების ზოლი",
   "Bottom bar": "ქვედა ზოლი",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)",
+  "Stack — click to expand (S)": "დასტა — დააწკაპუნეთ გასაშლელად (S)",
+  "Stack — click to collapse (S)": "დასტა — დააწკაპუნეთ ჩასაკეცად (S)",
+  "Virtual copy": "ვირტუალური ასლი",
+  "Right-click ▸ Locate Missing File… to find it again.": "მარჯვენა დაწკაპუნება → დაკარგული ფაილის მოძებნა… ფაილის ხელახლა საპოვნელად.",
+  "Right-click ▸ Reload from Disk to try again.": "მარჯვენა დაწკაპუნება → დისკიდან ხელახლა ჩატვირთვა, ხელახლა საცდელად."
 }
