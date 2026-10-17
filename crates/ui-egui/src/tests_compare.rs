@@ -209,3 +209,64 @@ fn a_compare_pane_says_when_its_render_failed() {
     assert!(h.step_until(SETTLE, failed), "the failure is said");
     assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("compare:rendering:")));
 }
+
+#[test]
+fn reference_escape_leaves_overlays_then_the_view_without_changing_edits() {
+    use crate::state::{LightsOut, ViewMode};
+    let mut h = demo();
+    let reference = h.app.session.visible_cloned()[0];
+    h.app.run("library.select", json!({"ids": [reference.0]})).unwrap();
+    h.app.run("view.reference", json!({})).unwrap();
+    let active = h.app.session.active().unwrap();
+    h.app.run("develop.set", json!({"control": "light.exposure", "value": 0.7})).unwrap();
+    h.app.ui.lights_out = LightsOut::Dim;
+    h.request("ui.key", json!({"key": "Escape"}), T);
+    assert_eq!((h.app.ui.view, h.app.ui.lights_out), (ViewMode::Reference, LightsOut::On));
+    h.request("ui.key", json!({"key": "Escape"}), T);
+    assert_eq!(h.app.ui.view, ViewMode::Detail);
+    assert_eq!(h.app.ui.reference, Some(reference.0), "leaving the view keeps the pinned photo");
+    assert_eq!(h.app.session.active(), Some(active));
+    assert_eq!(h.app.session.develop_of(active).unwrap().light.exposure, 0.7);
+    h.request("ui.key", json!({"key": "Escape"}), T);
+    assert_eq!(h.app.ui.view, ViewMode::PhotoGrid);
+}
+
+#[test]
+fn invalid_or_deleted_reference_is_refused_without_replacing_the_pin() {
+    let mut h = demo();
+    let ids = h.app.session.visible_cloned();
+    h.app.run("library.select", json!({"ids": [ids[0].0]})).unwrap();
+    h.app.run("photo.setReference", json!({})).unwrap();
+    h.app.run("photo.delete", json!({"ids": [ids[1].0]})).unwrap();
+    for id in [u64::MAX, ids[1].0] {
+        let r = h.app.run("photo.setReference", json!({"id": id}));
+        assert!(r.is_err(), "unavailable photo {id} must not be pinned");
+        assert_eq!(h.app.ui.reference, Some(ids[0].0));
+    }
+    h.app.run("library.select", json!({"ids": []})).unwrap();
+    assert!(h.app.run("photo.setReference", json!({})).is_err());
+    assert_eq!(h.app.ui.reference, Some(ids[0].0));
+}
+
+#[test]
+fn deleting_the_pinned_reference_stops_drawing_it_and_reentry_uses_a_live_photo() {
+    let mut h = demo();
+    let reference = h.app.session.visible_cloned()[0];
+    h.app.run("library.select", json!({"ids": [reference.0]})).unwrap();
+    h.app.run("view.reference", json!({})).unwrap();
+    h.settle(SETTLE);
+    let texture = h.app.renderer.textures.get(&crate::render::Slot::Compare(0)).unwrap().tex.id();
+    let drawn = |h: &Headless| h.view.painted_shapes().iter().any(|s| matches!(s, egui::epaint::Shape::Mesh(mesh) if mesh.texture_id == texture));
+    assert!(drawn(&h), "the live reference is shown before deletion");
+    let active = h.app.session.active().unwrap();
+    h.app.run("photo.delete", json!({"ids": [reference.0]})).unwrap();
+    h.settle(SETTLE);
+    assert!(!drawn(&h), "Recently Deleted photos must not remain on the reference canvas");
+    let r = h.app.run("view.reference", json!({})).unwrap();
+    assert_eq!(r["reference"], active.0);
+    assert_eq!(h.app.ui.reference, Some(active.0));
+    h.app.run("photo.restore", json!({"ids": [reference.0]})).unwrap();
+    h.app.run("photo.setReference", json!({"id": reference.0})).unwrap();
+    h.settle(SETTLE);
+    assert!(h.app.renderer.textures.get(&crate::render::Slot::Compare(0)).is_some_and(|t| t.photo == reference));
+}

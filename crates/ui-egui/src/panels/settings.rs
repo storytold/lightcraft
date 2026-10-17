@@ -1137,6 +1137,8 @@ fn switch_library(app: &mut LightcraftApp, path: &str) -> Result<Value, String> 
             Err(e) => Err(format!("{err}; reopening the previous library {} failed too: {e}", prev.display())),
         };
     }
+    // Photo IDs are local to a catalog: a pin cannot follow them into another library.
+    app.ui.reference = None;
     app.ui.settings.library_path = path.clone();
     if let Some(prev) = previous.filter(|p| p != &path && !app.ui.settings.recent_libraries.contains(p)) {
         remember_library(&mut app.ui.settings.recent_libraries, &prev);
@@ -1311,7 +1313,8 @@ mod tests {
     use serde_json::json;
 
     fn app_with_import() -> LightcraftApp {
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+        app.run("photo.setReference", json!({})).unwrap();
         app.import = Some(crate::import::ImportTask::new(vec!["a.jpg".into()], json!({"mode": "add"}), 0, false));
         app
     }
@@ -1319,17 +1322,21 @@ mod tests {
     #[test]
     fn open_library_is_refused_while_an_import_runs() {
         let mut app = app_with_import();
+        let pin = app.ui.reference;
         let err = open_library(&mut app, &json!({"path": "other"})).unwrap_err();
         assert!(err.contains("import to finish"), "{err}");
         assert!(app.import.is_some());
+        assert_eq!(app.ui.reference, pin, "a refused Open Library keeps the reference pin");
     }
 
     #[test]
     fn new_library_is_refused_while_an_import_runs() {
         let mut app = app_with_import();
+        let pin = app.ui.reference;
         let err = new_library(&mut app, &json!({"path": "other"})).unwrap_err();
         assert!(err.contains("import to finish"), "{err}");
         assert!(app.import.is_some());
+        assert_eq!(app.ui.reference, pin, "a refused New Library keeps the reference pin");
     }
 
     /// The menu items that switch libraries are greyed out meanwhile, like during a Lightroom import.
@@ -1349,11 +1356,18 @@ mod tests {
     fn open_library_is_refused_while_an_import_scan_runs() {
         let dir = std::env::temp_dir().join(format!("lc-ui-switchscan-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+        app.run("photo.setReference", json!({})).unwrap();
+        let pin = app.ui.reference;
         crate::import::open(&mut app, vec![dir.to_string_lossy().into_owned()]).unwrap();
         assert!(app.scan.is_some());
         let err = open_library(&mut app, &json!({"path": "other"})).unwrap_err();
         assert!(err.contains("import to finish"), "{err}");
+        assert_eq!(app.ui.reference, pin, "a refused Open Library during a scan keeps the reference pin");
+        let err = new_library(&mut app, &json!({"path": "other"})).unwrap_err();
+        assert!(err.contains("import to finish"), "{err}");
+        assert_eq!(app.ui.reference, pin, "a refused New Library during a scan keeps the reference pin");
+        assert!(app.scan.is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

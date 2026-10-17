@@ -484,6 +484,15 @@
 - Compare and Reference View panes say "Rendering…" (or that the photo can't be opened) the same way, so a
   magnified preview isn't taken for the photo when checking focus at 1:1.
 
+### Reference view reliability
+- Escape now leaves Reference for Detail without changing the active photo or its edits; the next
+  Escape returns to the grid. A dialog, tool or Lights Out still handles Escape first.
+- Successfully opening or creating a different library clears the pinned reference; a refused or
+  failed switch keeps it. Photo IDs belong to one catalog; a pin no longer silently becomes another
+  library's photo with the same numeric ID.
+- Missing or Recently Deleted photos cannot be pinned. Deleting the pinned reference stops drawing
+  it; re-entering Reference chooses a live photo, and restoring the deleted photo makes it pinnable again.
+
 ### Lens corrections
 - Sony A7R VI (ILCE-7RM6) raws are corrected for lens distortion from the table the camera records in each file,
   under Optics ▸ Enable Lens Corrections, on by default for newly imported photos. On 33 photos shot with the camera's

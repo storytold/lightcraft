@@ -586,8 +586,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             let reference = app
                 .ui
                 .reference
-                .filter(|r| app.session.catalog.photo(lightcraft_catalog::PhotoId(*r)).is_some())
-                .or_else(|| app.session.active().map(|a| a.0));
+                .filter(|r| app.session.catalog.photo(lightcraft_catalog::PhotoId(*r)).is_some_and(|p| !p.deleted))
+                .or_else(|| app.session.active().filter(|a| app.session.catalog.photo(*a).is_some_and(|p| !p.deleted)).map(|a| a.0));
             let Some(r) = reference else { return Some(Err("select a photo to use as the reference".into())) };
             app.ui.reference = Some(r);
             if app.session.active().is_none_or(|a| a.0 == r)
@@ -601,7 +601,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         "photo.setReference" => {
             let id = p.get("id").and_then(Value::as_u64).or_else(|| app.session.active().map(|a| a.0));
-            app.ui.reference = id;
+            let Some(id) = id else { return Some(Err("select a photo to use as the reference".into())) };
+            if app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).is_none_or(|p| p.deleted) {
+                return Some(Err(format!("no photo {id}")));
+            }
+            app.ui.reference = Some(id);
             Ok(json!({"reference": id}))
         }
         "compare.swap" => crate::panels::compare::swap(app),
@@ -632,7 +636,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 panel(app, &ctx, RightPanel::Crop, "Crop, Rotate, Geometry");
             } else if app.ui.view == ViewMode::People && app.ui.person_page.is_some() {
                 app.ui.person_page = None;
-            } else if matches!(app.ui.view, ViewMode::Compare | ViewMode::Survey) {
+            } else if matches!(app.ui.view, ViewMode::Compare | ViewMode::Survey | ViewMode::Reference) {
                 app.ui.view = ViewMode::Detail;
             } else if app.ui.view == ViewMode::Detail {
                 // a photo opened from a person's page (or the unnamed faces) goes back there, any other to the grid

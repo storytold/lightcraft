@@ -578,7 +578,7 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 /// the Edit panel works on, so a look can be matched by eye.
 pub fn show_reference(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let canvas = area_and_filmstrip(app, ui);
-    let reference = app.ui.reference.map(PhotoId).filter(|r| app.session.catalog.photo(*r).is_some());
+    let reference = app.ui.reference.map(PhotoId).filter(|r| app.session.catalog.photo(*r).is_some_and(|p| !p.deleted));
     let (Some(r), Some(active)) = (reference, app.session.active()) else {
         super::empty_message(ui, canvas, "No reference photo", "Right-click a photo ▸ Set as Reference Photo, then View → Reference View (Shift+R)");
         return;

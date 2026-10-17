@@ -183,6 +183,38 @@ fn missing_recent_libraries_are_greyed_out_and_pruned_and_the_list_is_capped() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn reference_photo_ids_do_not_cross_library_boundaries() {
+    let dir = temp("reference-switch");
+    let (first, second) = (dir.join("first"), dir.join("second"));
+    let mut session = lightcraft_engine::Session::new().with_fs();
+    session.open_library(&second, true).unwrap();
+    let new_photo = session.visible_cloned()[0];
+    session.close_library().unwrap();
+    session.open_library(&first, true).unwrap();
+    let old_reference = session.visible_cloned()[1];
+    let mut app = LightcraftApp::new(session, Services::default());
+    app.run("library.select", json!({"ids": [old_reference.0]})).unwrap();
+    app.run("photo.setReference", json!({})).unwrap();
+    app.run("view.reference", json!({})).unwrap();
+    let held = lightcraft_catalog::LibraryLock::acquire(&second, "another program").unwrap();
+    assert!(app.run("app.openLibrary", json!({"path": second.to_string_lossy()})).is_err());
+    assert_eq!(app.ui.reference, Some(old_reference.0), "a refused switch keeps the live pin");
+    drop(held);
+    app.run("app.openLibrary", json!({"path": second.to_string_lossy()})).unwrap();
+    assert!(app.session.catalog.photo(old_reference).is_some(), "the second library reuses this numeric ID");
+    assert_eq!(app.ui.reference, None, "the first library's pin must not acquire a different photo");
+    app.run("library.select", json!({"ids": [new_photo.0]})).unwrap();
+    let r = app.run("view.reference", json!({})).unwrap();
+    assert_eq!(r["reference"], new_photo.0);
+    app.run("app.newLibrary", json!({"path": dir.to_string_lossy(), "name": "Empty"})).unwrap();
+    assert_eq!(app.ui.reference, None, "New Library clears the old reference too");
+    assert!(app.run("view.reference", json!({})).is_err(), "an empty library cannot pin a reference");
+    assert_eq!(app.ui.reference, None);
+    app.session.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A library another program has open is refused before the current one is closed: the current
 /// library stays open with its photos, and the window title keeps its name.
 #[test]
