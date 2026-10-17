@@ -298,7 +298,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         active_area: Rect::new(0, 0, active_w, h),
         crop,
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
-        color: ColorData::default(),
+        color: ColorData { kelvin_presets: crate::kelvin_builtin::find(Some(&make), &model), ..Default::default() },
         wb_multipliers: wb,
         linearized: false,
         pixel_aspect,

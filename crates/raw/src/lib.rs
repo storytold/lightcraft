@@ -34,6 +34,7 @@ pub mod gaintable;
 pub mod highlight;
 #[cfg(feature = "jxl")]
 mod jxl;
+pub mod kelvin_builtin;
 pub mod kelvin_presets;
 pub mod lens_metadata;
 pub mod ljpeg;

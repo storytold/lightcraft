@@ -41,8 +41,12 @@ const MAX_TINT: f64 = 150.0;
 const MODELS: &[&str] = &["DSC-RX10", "ILCA-77M2", "ILCA-99M2", "ILCE-3500", "ILCE-7S", "SLT-A33"];
 
 /// Whether a raw of this Exif make and model is edited in Kelvin through its presets (when it has no colour
-/// matrices of its own or measured: see [`crate::spectral::find`], which comes first).
+/// matrices of its own or measured: see [`crate::spectral::find`], which comes first), from the file's presets or
+/// built-in ones ([`crate::kelvin_builtin`]).
 pub fn covers(make: Option<&str>, model: &str) -> bool {
+    if crate::kelvin_builtin::covers(make, model) {
+        return true;
+    }
     let model = model.trim();
     let model = model.strip_prefix("SONY ").or_else(|| model.strip_prefix("Sony ")).unwrap_or(model);
     make.is_none_or(|m| m.split_whitespace().next().is_some_and(|b| b.eq_ignore_ascii_case("SONY")))
