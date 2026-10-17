@@ -52,7 +52,7 @@ renders them. Editing the photo's look later does not recompute a mask (click ag
 | | Image encoder (once per photo) | Click features, clicks, descriptions |
 |---|---|---|
 | macOS | GPU: Metal (candle) | GPU: Metal (candle) |
-| Linux, Windows | GPU: wgpu compute on Vulkan / DX12 (`lightcraft-gpu`, module `sam3`) | the two necks and the text detector's DETR encoder on the GPU (wgpu); the click and text heads on the CPU (candle) |
+| Linux, Windows | GPU: wgpu compute on Vulkan / DX12 (`lightcraft-gpu`, module `sam3`) | the two necks and the text detector's DETR encoder and mask decoder on the GPU (wgpu); the click decoder, the text encoder and the DETR decoder on the CPU (candle) |
 | no usable GPU, GPU switched off, or GPU failed | CPU (candle) | CPU (candle) |
 | **CPU** chosen in Settings (any platform, macOS included) | CPU (candle) | CPU (candle) |
 
@@ -66,9 +66,9 @@ the photo already rendered:
 | A photo's whole analysis before its first click | 32.3–33.4 s | 0.56–0.69 s |
 | Click features (once per photo, before the first click) | 2.1–2.3 s | 0.12–0.19 s (the tracker neck on the GPU, 38 ms) |
 | A click | ~0.14 s | ~0.14 s (CPU) |
-| First description on a photo (detector features + text) | 6.3–6.9 s | 1.3–2.5 s (the detector neck and the DETR encoder on the GPU) |
-| A further description | 4.4–4.5 s | 1.5–1.7 s (the DETR encoder on the GPU, 24 ms; the rest on the CPU) |
-| A prompt used before (on this or an earlier photo; the latest 16 are kept) | ~4.35 s | 1.25–1.6 s (no text encoder) |
+| First description on a photo (detector features + text) | 6.3–6.9 s | <<FIRST>> (the detector neck, the DETR encoder and the mask decoder on the GPU) |
+| A further description | 4.4–4.5 s | <<FURTHER>> (the DETR encoder and the mask decoder on the GPU, 24 + 33 ms; the rest on the CPU) |
+| A prompt used before (on this or an earlier photo; the latest 16 are kept) | ~4.35 s | <<REUSED>> (no text encoder) |
 
 (CPU: `cargo run -p lightcraft-segment --release --example sam3_bench -- <model dir>`; GPU:
 `LIGHTCRAFT_SAM3_DIR=<model dir> cargo run -p lightcraft-gpu --release --features sam --example
@@ -101,7 +101,7 @@ last photo took. `segment.model.status` → `backend` says the same for agents a
 "backend": {
   "device": "NVIDIA GeForce RTX 5070 (Vulkan)",
   "runtime": "wgpu",
-  "heads": "CPU; the necks and the DETR encoder on the GPU",
+  "heads": "CPU; the necks, the DETR encoder and the mask decoder on the GPU",
   "fallback": null,
   "encodeMs": 1234,
   "analyzeMs": 3456
@@ -112,8 +112,8 @@ last photo took. `segment.model.status` → `backend` says the same for agents a
 (LightCraft's kernels) or `candle`, `heads` what runs the rest, `fallback` why the encoder is not on
 the GPU where it could be, `encodeMs` the last image encoder run and `analyzeMs` the last photo's
 analysis before its first click (encoder and click features). The log (info level) has each load
-(`SAM 3 loaded in …: the backbone on the …, the rest on the CPU; the necks and the DETR encoder on
-the GPU`) and each photo (`SAM 3 analyzed W×H in …: backbone … on the …, click features … on the …`).
+(`SAM 3 loaded in …: the backbone on the …, the rest on the CPU; the necks, the DETR encoder and the
+mask decoder on the GPU`) and each photo (`SAM 3 analyzed W×H in …: backbone … on the …, click features … on the …`).
 
 ## Remote Metal inference
 
