@@ -309,7 +309,7 @@ mod contact_sheet_tests {
             picker: Some(Box::new(move |req| {
                 requests.lock().unwrap().push(req);
                 let (tx, rx) = channel();
-                tx.send(vec!["Contact Sheet.pdf".into()]).unwrap();
+                tx.send(Ok(vec!["Contact Sheet.pdf".into()])).unwrap();
                 Ok(rx)
             })),
             write_shared: Some(Arc::new(move |path, data| {

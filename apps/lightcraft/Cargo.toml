@@ -44,6 +44,7 @@ rfd = { workspace = true }
 zbus = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+dispatch2 = "0.3.1"
 muda = { workspace = true }
 objc2 = { workspace = true }
 objc2-app-kit = { workspace = true }
@@ -52,3 +53,10 @@ objc2-foundation = { workspace = true }
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFRunLoop"] }
+
+[[test]]
+name = "native_dialog_callback"
+harness = false

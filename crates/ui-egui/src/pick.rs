@@ -62,25 +62,30 @@ pub const PRESET_EXTENSIONS: &[&str] = &["lcpreset", "xmp", "lrtemplate", "zip",
 /// What Import Point Curve Presets… opens.
 pub const CURVE_PRESET_EXTENSIONS: &[&str] = &["lccurve", "json"];
 
-/// The host's dialog starter: shows the request without blocking and answers through the
-/// channel with the chosen paths (none = cancelled). `Err` when no dialog could be started.
-pub type Picker = Box<dyn FnMut(PickRequest) -> Result<Receiver<Vec<String>>, String>>;
+/// The chosen paths, an empty successful answer for cancellation, or a dialog failure.
+pub type PickResult = Result<Vec<String>, String>;
 
-/// A dialog that is up for a command. When it closes, the command runs again with the answer
-/// under `key`.
+/// The host's dialog starter: shows the request without blocking and answers through the
+/// channel. The outer `Err` means no dialog could be started; the channel can report failures
+/// that happen after it starts.
+pub type Picker = Box<dyn FnMut(PickRequest) -> Result<Receiver<PickResult>, String>>;
+
+/// A command's pending dialog response, including a failed start. A successful choice runs the
+/// command again with the answer under `key`.
 pub struct Pending {
     pub command: String,
     params: Value,
     key: &'static str,
     kind: PickKind,
-    rx: Receiver<Vec<String>>,
+    // A failed start is reported on the next UI frame, just like a failed worker response.
+    rx: Result<Receiver<PickResult>, String>,
 }
 
 /// How a command's request for a path was answered.
 pub enum Picked {
     /// A synchronous dialog answered (an empty list: cancelled).
     Now(Vec<String>),
-    /// The dialog is up (or was already); the command runs again when it closes.
+    /// The request is pending (or was already); polling runs the command again if paths are chosen.
     Later,
     /// This host has no such dialog.
     Unavailable,
@@ -103,13 +108,10 @@ pub fn ask(
     }
     if let Some(start) = app.services.picker.as_mut() {
         let kind = request.kind;
-        match start(request) {
-            Ok(rx) => {
-                app.pending_picks.push(Pending { command: command.to_string(), params: params.clone(), key, kind, rx });
-                return Picked::Later;
-            }
-            Err(e) => log::warn!("{command}: no background file dialog ({e}); asking on the UI thread"),
-        }
+        let rx = start(request);
+        app.pending_picks.push(Pending { command: command.to_string(), params: params.clone(), key, kind, rx });
+        // A failure must never retry the same native dialog synchronously (#1996).
+        return Picked::Later;
     }
     match now(&mut app.services) {
         Some(paths) => Picked::Now(paths),
@@ -129,20 +131,44 @@ pub fn with_answer(params: &Value, key: &str, kind: PickKind, paths: &[String]) 
     Value::Object(p)
 }
 
+fn failed(app: &mut LightcraftApp, ctx: &egui::Context, error: &str) {
+    log::error!("File chooser: {error}");
+    app.toast_error(
+        ctx,
+        format!(
+            "{} {error}\n{}",
+            crate::i18n::tr("Couldn't open the file chooser:"),
+            crate::i18n::tr("Try starting LightCraft from your desktop or terminal.")
+        ),
+    );
+}
+
 /// Each frame: run the commands whose dialogs have closed with something chosen; forget the
-/// cancelled ones and those whose dialog went away without an answer.
+/// cancelled ones and report failures without retrying or changing the session.
 pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
+    let errors: Vec<_> = app.services.dialog_errors.as_ref().map(|rx| rx.try_iter().collect()).unwrap_or_default();
+    for error in errors {
+        failed(app, ctx, &error);
+    }
     if app.pending_picks.is_empty() {
         return;
     }
     let mut answered = Vec::new();
     let mut waiting = Vec::new();
     for p in std::mem::take(&mut app.pending_picks) {
-        match p.rx.try_recv() {
-            Ok(paths) if paths.is_empty() => {}
-            Ok(paths) => answered.push((p, paths)),
+        let result = match &p.rx {
+            Ok(rx) => rx.try_recv(),
+            Err(error) => {
+                failed(app, ctx, error);
+                continue;
+            }
+        };
+        match result {
+            Ok(Ok(paths)) if paths.is_empty() => {}
+            Ok(Ok(paths)) => answered.push((p, paths)),
+            Ok(Err(error)) => failed(app, ctx, &error),
             Err(TryRecvError::Empty) => waiting.push(p),
-            Err(TryRecvError::Disconnected) => log::warn!("{}: the file dialog ended without an answer", p.command),
+            Err(TryRecvError::Disconnected) => failed(app, ctx, "the file dialog ended without an answer"),
         }
     }
     if !waiting.is_empty() {
@@ -169,7 +195,7 @@ mod tests {
 
     const SETTLE: Duration = Duration::from_secs(20);
 
-    type Asked = Arc<Mutex<Vec<(PickRequest, Sender<Vec<String>>)>>>;
+    type Asked = Arc<Mutex<Vec<(PickRequest, Sender<PickResult>)>>>;
 
     /// A windowless app whose host shows dialogs "elsewhere": each request is recorded with the
     /// sender that answers it. Frames run through the headless harness, so [`poll`] and the import
@@ -228,7 +254,7 @@ mod tests {
         assert_eq!(asked.lock().unwrap().len(), 1);
         assert_eq!(h.app.pending_picks.len(), 1, "still waiting");
         // the user chooses a photo: the command runs again with it and opens the import review
-        asked.lock().unwrap()[0].1.send(vec![photo.clone()]).unwrap();
+        asked.lock().unwrap()[0].1.send(Ok(vec![photo.clone()])).unwrap();
         assert_eq!(import_sources(&mut h), Some(vec![photo]));
         assert!(h.app.pending_picks.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
@@ -238,15 +264,17 @@ mod tests {
     fn a_cancelled_or_vanished_dialog_runs_nothing() {
         let (mut h, asked) = app_with_picker();
         h.app.run("file.addPhotos", json!({})).unwrap();
-        asked.lock().unwrap()[0].1.send(vec![]).unwrap();
+        asked.lock().unwrap()[0].1.send(Ok(vec![])).unwrap();
         assert!(import_sources(&mut h).is_none(), "cancelled: no import review");
         assert!(h.app.pending_picks.is_empty());
+        assert!(h.app.ui.toast.is_none(), "cancellation is not an error");
         // the dialog thread ends without answering (the host dropped the sender)
         h.app.run("file.addFolder", json!({})).unwrap();
         assert_eq!(h.app.pending_picks.len(), 1);
         asked.lock().unwrap().pop();
         assert!(import_sources(&mut h).is_none());
         assert!(h.app.pending_picks.is_empty());
+        assert!(h.painted_text().iter().any(|text| text.contains("ended without an answer")));
     }
 
     #[test]
@@ -256,7 +284,7 @@ mod tests {
         let (mut h, asked) = app_with_picker();
         h.app.run("file.addFolder", json!({})).unwrap();
         assert_eq!(asked.lock().unwrap()[0].0.kind, PickKind::Folder);
-        asked.lock().unwrap()[0].1.send(vec![dir.to_string_lossy().to_string()]).unwrap();
+        asked.lock().unwrap()[0].1.send(Ok(vec![dir.to_string_lossy().to_string()])).unwrap();
         assert_eq!(import_sources(&mut h), Some(vec![dir.to_string_lossy().to_string()]));
         // a save dialog carries the suggested name; the command's other parameters survive
         h.app.run("file.exportPresets", json!({"group": "Mine"})).unwrap();
@@ -267,6 +295,92 @@ mod tests {
         assert_eq!(p, json!({"group": "Mine", "path": "/tmp/Mine.lcpreset"}));
         assert_eq!(with_answer(&Value::Null, "paths", PickKind::Files, &["a".to_string(), "b".to_string()]), json!({"paths": ["a", "b"]}));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_dialog_start_never_retries_the_synchronous_picker() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        app.services.picker = Some(Box::new(|_| Err("worker unavailable".into())));
+        app.services.pick_files = Some(Box::new(|| panic!("must not retry the native dialog")));
+        let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+        h.settle(SETTLE);
+        h.app.run("file.addPhotos", json!({})).unwrap();
+        h.step();
+        h.step();
+        assert!(h.app.pending_picks.is_empty());
+        assert!(h.painted_text().iter().any(|text| text.contains("worker unavailable")));
+        assert!(!matches!(h.app.ui.dialog, Some(Dialog::Import { .. })));
+        assert!(h.app.run("view.squareGrid", json!({})).is_ok());
+    }
+
+    fn screenshot(h: &mut Headless, name: &str) {
+        if let Some(dir) = std::env::var_os("LIGHTCRAFT_TEST_SHOTS") {
+            h.app.services.write = Some(Box::new(|path, bytes| std::fs::write(path, bytes).map_err(|e| e.to_string())));
+            h.app.services.png = Some(Box::new(|img| {
+                lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap()
+            }));
+            // Capture this frame: waiting for photo renders can outlast a toast in simulated time.
+            let image = h.paint();
+            let path = std::path::Path::new(&dir).join(name);
+            let response = crate::control::save_screenshot(&mut h.app, &image, Some(&path.to_string_lossy()));
+            assert_eq!(response["ok"], true, "{response}");
+        }
+    }
+
+    #[test]
+    fn a_failed_worker_reports_the_error_and_keeps_the_session_usable() {
+        for fullscreen in [false, true] {
+            let (mut h, asked) = app_with_picker();
+            h.app.services.pick_files = Some(Box::new(|| panic!("must not retry the native dialog")));
+            h.app.run("develop.set", json!({"values": {"light.exposure": 0.75}})).unwrap();
+            let catalog = h.app.session.catalog.to_snapshot();
+            let selected = h.app.session.selected();
+            let active = h.app.session.active();
+            if fullscreen {
+                h.app.run("view.fullScreenPreview", json!({})).unwrap();
+            }
+            h.app.ui.dialog = Some(Dialog::Rename { template: "keep this draft".into(), start: 7 });
+            h.app.run("file.addPhotos", json!({})).unwrap();
+            asked.lock().unwrap()[0].1.send(Err("macOS refused the file chooser".into())).unwrap();
+            h.step();
+            h.step();
+            assert!(h.app.pending_picks.is_empty());
+            assert!(h.painted_text().iter().any(|text| text.contains("macOS refused the file chooser")));
+            assert!(h.painted_text().iter().any(|text| text.contains("Try starting LightCraft")));
+            assert_eq!(h.app.session.catalog.to_snapshot(), catalog);
+            assert_eq!(h.app.session.selected(), selected);
+            assert_eq!(h.app.session.active(), active);
+            assert!(matches!(&h.app.ui.dialog, Some(Dialog::Rename { template, start: 7 }) if template == "keep this draft"));
+            assert_eq!(asked.lock().unwrap().len(), 1, "no automatic retry");
+            screenshot(&mut h, if fullscreen { "picker-worker-failure-fullscreen.png" } else { "picker-worker-failure.png" });
+            let response = h.request("engine.execute", json!({"command": "photo.rate", "params": {"rating": 4}}), SETTLE);
+            assert_eq!(response["ok"], true, "the control channel still answers commands: {response}");
+            let photo = h.app.run("photo.inspect", json!({})).unwrap();
+            assert_eq!(photo["rating"], 4);
+            assert_eq!(photo["develop"]["light"]["exposure"], 0.75);
+        }
+    }
+
+    #[test]
+    fn a_legacy_dialog_failure_is_visible_without_replacing_the_current_dialog() {
+        for fullscreen in [false, true] {
+            let (mut h, _) = app_with_picker();
+            let (tx, rx) = channel();
+            h.app.services.dialog_errors = Some(rx);
+            if fullscreen {
+                h.app.run("view.fullScreenPreview", json!({})).unwrap();
+            }
+            h.app.ui.dialog = Some(Dialog::Rename { template: "keep this draft".into(), start: 7 });
+            let catalog = h.app.session.catalog.to_snapshot();
+            tx.send("macOS refused the folder chooser".into()).unwrap();
+            h.step();
+            h.step();
+            assert!(h.painted_text().iter().any(|text| text.contains("macOS refused the folder chooser")));
+            assert!(matches!(&h.app.ui.dialog, Some(Dialog::Rename { template, start: 7 }) if template == "keep this draft"));
+            assert_eq!(h.app.session.catalog.to_snapshot(), catalog);
+            assert!(h.app.pending_picks.is_empty());
+            screenshot(&mut h, if fullscreen { "picker-legacy-failure-fullscreen.png" } else { "picker-legacy-failure.png" });
+        }
     }
 
     #[test]
