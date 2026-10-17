@@ -165,6 +165,20 @@ pub(crate) fn pan_image(app: &mut LightcraftApp, area: Rect, img: Rect, delta: e
     let _ = app.run("view.navigate", json!({"pan": pan}));
 }
 
+/// A drag with the middle button (the mouse wheel pressed) pans the zoomed photo whatever tool is
+/// active, so the healing brush, mask brushes and crop never paint or move while you look around;
+/// the hand cursor shows while it does.
+fn middle_pan(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, area: Rect, img: Rect) -> bool {
+    if !resp.dragged_by(egui::PointerButton::Middle) {
+        return false;
+    }
+    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    if img.width() > area.width() + 1.0 || img.height() > area.height() + 1.0 {
+        pan_image(app, area, img, resp.drag_delta());
+    }
+    true
+}
+
 /// Net vertical notches (up is positive) of unmodified line/page-unit wheel events: a real mouse wheel, not a trackpad.
 fn wheel_notches(events: &[egui::Event]) -> f32 {
     events
@@ -510,7 +524,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let mut navigating = false;
     for &view_area in &areas {
         let view_img = in_pane(view_area, img_rect);
-        if navigate_gesture(app, ui, &resp, view_area, view_img, native) {
+        if navigate_gesture(app, ui, &resp, view_area, view_img, native) || middle_pan(app, ui, &resp, view_area, view_img) {
             navigating = true;
             target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan);
             img_rect = target_rect;
