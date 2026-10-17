@@ -1,5 +1,14 @@
 # What's new in LightCraft
 
+## 2026-10-16
+
+### Dialog buttons say what they do
+- The confirm button in dialogs now names its action instead of "OK": Create for a new album, smart album, folder or
+  preset, Rename for photos, albums, keywords, people and presets, Create Stacks for Auto-Stack, Change Time for Capture Time,
+  Copy and Paste for settings, and Export 12 Photos in the Export dialog. Rename Photos now explains what its Tags
+  button lists and what happens on disk, instead of pointing at the button. Contact Sheet, Auto-Stack and
+  Slideshow Export no longer say "1 photos" or "1 stacks".
+
 ## 2026-10-14
 
 ### Lightroom radial masks on the right side

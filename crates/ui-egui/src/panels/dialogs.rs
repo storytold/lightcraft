@@ -333,7 +333,11 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     let preview = app.session.execute("stack.auto", &json!({"gap": *gap, "preview": true})).unwrap_or_default();
                     let scope = if app.session.selection.ids.len() > 1 { "the selected photos" } else { "the photos in view" };
                     ui.label(
-                        egui::RichText::new(crate::i18n::tr_format!("Creates {} stacks from {} of {scope}", preview["stacks"], preview["photos"], scope = crate::i18n::tr(scope))).color(t.text_dim),
+                        egui::RichText::new({
+                            let (stacks, photos) = (preview["stacks"].as_u64().unwrap_or(0), preview["photos"].as_u64().unwrap_or(0));
+                            crate::i18n::tr_format!("Creates {stacks} stack{} from {photos} of {scope}", if stacks == 1 { "" } else { "s" }, stacks = stacks, photos = photos, scope = crate::i18n::tr(scope))
+                        })
+                        .color(t.text_dim),
                     );
                 }
                 Dialog::Cull { reject_below, pick_best } => {
@@ -593,7 +597,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     });
                     field(ui, "Start at", |ui| ui.add(egui::DragValue::new(start).range(0..=999_999)));
                     ui.label(
-                        egui::RichText::new(crate::i18n::tr("Tags: see Tags beside the template. Files are renamed on disk (with their XMP sidecars); existing names get -1, -2…"))
+                        egui::RichText::new(crate::i18n::tr(
+                            "The Tags button lists placeholders for the template, such as {date} or {seq}. Each file is renamed on disk along with its XMP sidecar; a name that is taken gets -1, -2…",
+                        ))
                             .color(t.text_dim),
                     );
                     let (preview, total) = rename_preview(app, ui.ctx(), template, *start as usize);
@@ -722,7 +728,14 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     options.columns = options.columns.clamp(1, 8);
                     options.rows = options.rows.clamp(1, 10);
                     let n = app.session.selected().len();
-                    ui.label(crate::i18n::tr_format!("{n} selected photos · {pages} pages", n = n, pages = n.div_ceil(options.columns * options.rows)));
+                    let pages = n.div_ceil(options.columns * options.rows);
+                    ui.label(crate::i18n::tr_format!(
+                        "{n} selected photo{} · {pages} page{}",
+                        if n == 1 { "" } else { "s" },
+                        if pages == 1 { "" } else { "s" },
+                        n = n,
+                        pages = pages
+                    ));
                     field(ui, "Paper", |ui| {
                         crate::widgets::combo_box("contactSheetPaper").selected_text(&options.paper).show_ui(ui, |ui| {
                             ui.selectable_value(&mut options.paper, "a4".into(), "A4");
@@ -1347,6 +1360,11 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         add_label = crate::i18n::tr_format!("{verb} {n} Photo{}", if n == 1 { "" } else { "s" }, verb = crate::i18n::tr(verb), n = n);
                         add_label.as_str()
                     }
+                    Dialog::Export { .. } => {
+                        let n = app.session.selection.ids.len().max(1);
+                        add_label = crate::i18n::tr_format!("{verb} {n} Photo{}", if n == 1 { "" } else { "s" }, verb = crate::i18n::tr("Export"), n = n);
+                        add_label.as_str()
+                    }
                     Dialog::LightroomResult { first: Some(_), .. } => "Show in Library",
                     Dialog::ContactSheet { .. } => "Choose PDF…",
                     Dialog::SlideshowExport { .. } => "Export…",
@@ -1357,10 +1375,19 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     Dialog::FaceModel { info, .. } if !informational && info["download"].is_string() => "Download",
                     Dialog::FaceModel { .. } if !informational => "Install",
                     Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } => "Delete",
-                    Dialog::SaveEffect { .. } => "Create",
+                    Dialog::SaveEffect { .. } | Dialog::NewAlbum { .. } | Dialog::NewSmartAlbum { .. } | Dialog::SmartRules { id: None, .. } | Dialog::CreatePreset { .. } => "Create",
+                    Dialog::SmartRules { .. } | Dialog::LabelNames { .. } => "Save",
+                    Dialog::RenameKeyword { from, to } if app.session.catalog.has_keyword(to) && !lightcraft_catalog::keywords::same(from, to) => "Merge Keywords",
+                    Dialog::RenameAlbum { .. } | Dialog::Rename { .. } | Dialog::RenameKeyword { .. } => "Rename",
+                    Dialog::AutoStack { .. } => "Create Stacks",
+                    Dialog::CaptureTime { .. } => "Change Time",
+                    Dialog::Cull { .. } => "Cull",
+                    Dialog::CopySettings { .. } => "Copy",
+                    Dialog::PasteSettings { .. } => "Paste",
+                    Dialog::TextPrompt { command, .. } => prompt_verb(command),
                     Dialog::MovePhotos { .. } => "Move",
                     // (not "Merge": that is photo merging, HDR / panorama, in some languages)
-                    Dialog::MoveKeyword { .. } => "Merge Keywords",
+                    Dialog::MoveKeyword { .. } | Dialog::MergeKeywords { .. } => "Merge Keywords",
                     Dialog::KeywordSet { .. } => "Save",
                     Dialog::KeywordTag { editing: None, .. } => "Create",
                     Dialog::KeywordTag { .. } => "Save",
@@ -1372,8 +1399,17 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     Dialog::SamModel { error, .. } if error.is_some() || sam_failed => "Try Again",
                     Dialog::SamModel { .. } => "Download",
                     Dialog::RenamePerson { from, to, .. } if person_rename_plan(&app.session.catalog, from, to).needs_merge => "Merge",
-                    _ if informational => "Close",
-                    _ => "OK",
+                    Dialog::RenamePerson { .. } => "Rename",
+                    // the dialogs that only show something, or a model file that can't be used
+                    Dialog::About
+                    | Dialog::Shortcuts
+                    | Dialog::Settings { .. }
+                    | Dialog::SystemInfo { .. }
+                    | Dialog::AllMetadata { .. }
+                    | Dialog::WhatsNew
+                    | Dialog::ManageEffects { .. }
+                    | Dialog::LightroomResult { .. }
+                    | Dialog::FaceModel { .. } => "Close",
                 };
                 // installing waits for the licence to be accepted
                 // (and Synchronize waits for the scan)
@@ -1945,6 +1981,19 @@ pub fn prompt(app: &mut LightcraftApp, title: &str, hint: &str, value: &str, com
         Some(Dialog::TextPrompt { title: title.into(), hint: hint.into(), value: value.into(), command: command.into(), params, key: key.into() });
 }
 
+/// What a one-field prompt's confirm button says, by the command it runs. A command that isn't
+/// listed (one opened by automation) has no verb to name and keeps "OK".
+fn prompt_verb(command: &str) -> &'static str {
+    match command {
+        "album.rename" | "folder.rename" | "version.rename" | "preset.rename" | "mask.renameEffect" => "Rename",
+        "folder.create" | "mask.setEffectGroup" | "app.newLibrary" => "Create",
+        "preset.move" => "Move",
+        "keyword.saveSet" | "filter.savePreset" | "curve.savePreset" | "metadata.savePreset" => "Save",
+        "photo.tagFromTracklog" => "Add Locations",
+        _ => "OK",
+    }
+}
+
 /// The Export dialog's choices as `app.export` params (without the folder).
 fn export_dialog_params(
     opts: &lightcraft_engine::export::ExportOptions,
@@ -2109,7 +2158,9 @@ fn slideshow_export_body(app: &mut LightcraftApp, ui: &mut egui::Ui, settings: &
     let titles = usize::from(intro.is_some()) + usize::from(ending.is_some());
     let seconds = photos as f64 * slide + intro.unwrap_or(0.0) + ending.unwrap_or(0.0);
     let summary = crate::i18n::tr_format!(
-        "{n} photos in view · {slides} slides · {time}",
+        "{n} photo{} in view · {slides} slide{} · {time}",
+        if photos == 1 { "" } else { "s" },
+        if photos + titles == 1 { "" } else { "s" },
         n = photos,
         slides = photos + titles,
         time = format!("{}:{:02}", (seconds / 60.0).floor() as u64, (seconds % 60.0).round() as u64)
