@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-17
+
+### XMP with long nested names refused instead of filling memory
+- An XMP packet whose long struct names are nested deep over many fields no longer grows into gigabytes of property
+  names while it's read (issue #2120). A few hundred kilobytes could take 2.6 GB on import. LightCraft now stops at
+  64 MB of names and reports the packet as too large, as it already does for one nested too deep.
+
 ## 2026-10-14
 
 ### Lightroom radial masks on the right side
