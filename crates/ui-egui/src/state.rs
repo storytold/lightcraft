@@ -736,6 +736,8 @@ pub struct UiState {
     #[serde(skip)]
     pub unnamed_selected: std::collections::HashSet<(u64, usize)>,
     #[serde(skip)]
+    pub unnamed_show_ignored: bool,
+    #[serde(skip)]
     pub unnamed_name: String,
     #[serde(skip)]
     pub unnamed_anchor: Option<usize>,
@@ -1315,6 +1317,7 @@ impl Default for UiState {
             last_person: None,
             dismissed_faces: Default::default(),
             unnamed_selected: Default::default(),
+            unnamed_show_ignored: false,
             unnamed_name: String::new(),
             unnamed_anchor: None,
             unnamed_focus: false,

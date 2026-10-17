@@ -525,7 +525,13 @@ fn face_regions_found_meanwhile_leave_the_scan_current() {
     // background face search adds a region to a photo of the folder
     let a = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
     let mut meta = s.catalog.photo(a).unwrap().meta.clone();
-    meta.regions.push(lightcraft_meta::Region { rect: Default::default(), kind: lightcraft_meta::RegionKind::Face, name: None, description: None });
+    meta.regions.push(lightcraft_meta::Region {
+        rect: Default::default(),
+        kind: lightcraft_meta::RegionKind::Face,
+        name: None,
+        description: None,
+        ignored: false,
+    });
     s.catalog.apply(lightcraft_catalog::Op::SetMeta { id: a, meta: Box::new(meta) }).unwrap();
     let r = s.execute("folder.synchronize", &json!({"path": dir.path("trip"), "scanned": true})).unwrap();
     assert_eq!(r["imported"], 1, "{r}");

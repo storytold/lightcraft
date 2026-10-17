@@ -441,7 +441,7 @@ fn parse_one_region(item: &XmpValue, px_dims: Option<(f64, f64)>) -> Option<Regi
         t if t.eq_ignore_ascii_case("barcode") => RegionKind::BarCode,
         t => RegionKind::Other(t.to_string()),
     };
-    Some(Region { rect, kind, name, description })
+    Some(Region { rect, kind, name, description, ignored: false })
 }
 
 fn fmt_gps_coord(v: f64, pos: char, neg: char) -> String {
@@ -1029,7 +1029,8 @@ mod tests {
     /// `extract()`'s precedence (EXIF/IPTC never carry regions; XMP is read and filled in like keywords).
     #[test]
     fn regions_merge_like_keywords() {
-        let with_region = Region { rect: Rect::from_center(Point::new(0.5, 0.5), 0.2, 0.2), kind: RegionKind::Face, name: None, description: None };
+        let with_region =
+            Region { rect: Rect::from_center(Point::new(0.5, 0.5), 0.2, 0.2), kind: RegionKind::Face, name: None, description: None, ignored: false };
         let mut a = Metadata::default();
         let b = Metadata { regions: vec![with_region.clone()], ..Default::default() };
         a.fill_missing(&b);

@@ -289,6 +289,7 @@ fn detect_replaces_only_earlier_detections_and_is_one_undo_step() {
         kind: RegionKind::Face,
         name: name.map(str::to_string),
         description: description.map(str::to_string),
+        ignored: false,
     };
     let Some(mut s) = demo_with_yunet() else { return };
     let id = s.active().unwrap();

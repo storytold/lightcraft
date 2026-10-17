@@ -30,9 +30,57 @@ fn name_param(p: &Value, c: &str) -> Result<Option<String>> {
 /// Give a face region its name. Naming makes the face yours: a later "Detect Faces" run no longer replaces it.
 fn apply_name(region: &mut lightcraft_meta::Region, name: &Option<String>) {
     region.name = name.clone();
+    if name.is_some() {
+        region.ignored = false;
+    }
     if name.is_some() && region.description.as_deref().is_some_and(|d| d.starts_with(super::face_detect::MARK)) {
         region.description = None;
     }
+}
+
+/// `faces.setIgnoredFaces {faces: [{photo, index}], ignored}`: ignore or restore unnamed face regions as one undo step.
+fn set_ignored_faces(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "faces.setIgnoredFaces";
+    let ignored = p.get("ignored").and_then(Value::as_bool).ok_or_else(|| bad(C, "missing boolean `ignored`"))?;
+    let list = p.get("faces").and_then(Value::as_array).ok_or_else(|| bad(C, "missing `faces`"))?;
+    if list.len() > 5000 {
+        return Err(bad(C, "at most 5000 faces at a time"));
+    }
+    let mut by_photo: std::collections::BTreeMap<u64, Vec<usize>> = std::collections::BTreeMap::new();
+    for f in list {
+        let (Some(photo), Some(index)) =
+            (f.get("photo").and_then(Value::as_u64), f.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()))
+        else {
+            return Err(bad(C, "each face needs a `photo` and an `index`"));
+        };
+        by_photo.entry(photo).or_default().push(index);
+    }
+    let (mut ops, mut changed) = (Vec::new(), 0usize);
+    for (photo, indexes) in by_photo {
+        let id = lightcraft_catalog::PhotoId(photo);
+        let Some(photo) = s.catalog.photo(id) else { continue };
+        let mut meta = photo.meta.clone();
+        let mut photo_changed = 0usize;
+        for i in indexes {
+            if let Some(region) = meta.regions.get_mut(i).filter(|r| r.kind == lightcraft_meta::RegionKind::Face && r.name.is_none())
+                && region.ignored != ignored
+            {
+                region.ignored = ignored;
+                photo_changed += 1;
+            }
+        }
+        if photo_changed > 0 {
+            ops.push(Op::SetMeta { id, meta: Box::new(meta) });
+            changed += photo_changed;
+        }
+    }
+    if ops.is_empty() {
+        return Err(bad(C, "none of those unnamed faces changed"));
+    }
+    let photos = ops.len();
+    s.commit(if ignored { "Ignore Faces" } else { "Restore Faces" }, Op::Batch { ops })?;
+    s.skip_auto_write = true;
+    Ok(json!({"changed": changed, "photos": photos, "ignored": ignored}))
 }
 
 /// `faces.nameFaces {faces: [{photo, index}], name}`: name (or clear) many face regions at once, as one undo step: what
@@ -192,14 +240,17 @@ struct Arranged {
     suggestions: std::collections::HashMap<(u64, usize), (String, f32)>,
 }
 
-/// `faces.unnamed {limit?: 600}`: the faces nobody has named, to be named a group at a time. With recognition running,
+/// `faces.unnamed {limit?: 600, ignored?: false}`: unnamed or ignored faces. With recognition running,
 /// faces that look alike are next to each other, and a face the named faces recognise carries the name they suggest.
 fn unnamed(s: &mut Session, p: &Value) -> Result<Value> {
     let limit = p.get("limit").and_then(Value::as_u64).map_or(600, |n| usize::try_from(n).unwrap_or(600)).clamp(1, MAX_UNNAMED);
     let mut all: Vec<(u64, usize, lightcraft_geom::Rect)> = Vec::new();
     for ph in s.catalog.photos().filter(|ph| ph.in_library()) {
         for (index, r) in ph.meta.regions.iter().enumerate() {
-            if r.kind == lightcraft_meta::RegionKind::Face && r.name.is_none() {
+            if r.kind == lightcraft_meta::RegionKind::Face
+                && r.name.is_none()
+                && r.ignored == p.get("ignored").and_then(Value::as_bool).unwrap_or(false)
+            {
                 all.push((ph.id.0, index, r.rect));
             }
         }
@@ -380,7 +431,13 @@ mod imp {
         }
         let mut meta = photo.meta.clone();
         for rect in found {
-            meta.regions.push(Region { rect: *rect, kind: RegionKind::Face, name: None, description: Some(format!("{MARK}{LABEL}")) });
+            meta.regions.push(Region {
+                rect: *rect,
+                kind: RegionKind::Face,
+                name: None,
+                description: Some(format!("{MARK}{LABEL}")),
+                ignored: false,
+            });
         }
         if s.apply_system(Op::SetMeta { id, meta: Box::new(meta) }).is_ok() {
             // regions are not written to XMP, so no sidecar may be rewritten for this
@@ -714,7 +771,7 @@ mod imp {
         let pending = s.faces.queue.len() + s.faces.in_flight.len();
         let (mut gallery, mut candidates): (Vec<Arc<[f32]>>, Vec<(u64, usize, Rect, Arc<[f32]>)>) = (Vec::new(), Vec::new());
         for ph in s.catalog.photos().filter(|ph| ph.in_library()) {
-            for (index, r) in ph.meta.regions.iter().enumerate().filter(|(_, r)| r.kind == RegionKind::Face) {
+            for (index, r) in ph.meta.regions.iter().enumerate().filter(|(_, r)| r.kind == RegionKind::Face && !r.ignored) {
                 let Some(e) = s.faces.index.get(ph.id.0, &r.rect) else { continue };
                 match r.name.as_deref() {
                     Some(n) if n.trim().to_lowercase() == key => gallery.push(e.clone()),
@@ -883,7 +940,7 @@ mod imp {
         for id in &targets {
             let Some(photo) = s.catalog.photo(*id) else { continue };
             let mut faces = Vec::new();
-            for (index, r) in photo.meta.regions.iter().enumerate().filter(|(_, r)| r.kind == RegionKind::Face && r.name.is_none()) {
+            for (index, r) in photo.meta.regions.iter().enumerate().filter(|(_, r)| r.kind == RegionKind::Face && r.name.is_none() && !r.ignored) {
                 let Some(q) = s.faces.index.get(id.0, &r.rect) else {
                     faces.push(json!({"index": index, "pending": true}));
                     continue;
@@ -1148,7 +1205,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Unnamed Faces",
             [],
             None,
-            "{limit?: 600} → {total, faces: [{photo, index, rect, view, suggestion: {name, score} | null}], ordered, ready} — the faces nobody has named; with recognition running, look-alikes are next to each other and a face the named ones recognise carries the name they suggest. `view` is the box to show the face by. Name them with `faces.nameFaces`",
+            "{limit?: 600, ignored?: false} → {total, faces: [{photo, index, rect, view, suggestion: {name, score} | null}], ordered, ready} — unnamed faces by default, or ignored faces with `ignored: true`; ignored faces never appear in name suggestions. `view` is the box to show it by",
             super::always,
             unnamed
         ),
@@ -1160,6 +1217,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{faces: [{photo, index}], name} → {named, photos} — name (or, with a null or empty name, clear) many face regions as one undoable step; the sidecar is not touched",
             super::always,
             name_faces
+        ),
+        cmd!(
+            "faces.setIgnoredFaces",
+            "Ignore or Restore Faces",
+            [],
+            None,
+            "{faces: [{photo, index}], ignored: bool} → {changed, photos, ignored} — permanently hide unnamed faces from People and suggestions, or restore them; one undoable step, catalog-only",
+            super::always,
+            set_ignored_faces
         ),
         cmd!(
             query "faces.person",

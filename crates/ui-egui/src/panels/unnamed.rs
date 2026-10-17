@@ -62,18 +62,20 @@ pub fn parse(v: &Value) -> Unnamed {
 /// most every few seconds, since putting look-alikes together looks at every pair.
 pub fn faces(app: &mut LightcraftApp, now: f64) -> Arc<Unnamed> {
     let (rev, indexed) = (app.session.catalog.revision, app.caches.faces_indexed);
-    if let Some((r, i, at, list)) = &app.caches.unnamed
+    let ignored = app.ui.unnamed_show_ignored;
+    if let Some((r, i, showing_ignored, at, list)) = &app.caches.unnamed
         && *r == rev
+        && *showing_ignored == ignored
         && (*i == indexed || now - *at < 3.0)
     {
         return list.clone();
     }
-    let v = app.session.execute("faces.unnamed", &json!({})).unwrap_or(Value::Null);
+    let v = app.session.execute("faces.unnamed", &json!({"ignored": ignored})).unwrap_or(Value::Null);
     let list = Arc::new(parse(&v));
     // what was selected and has since been named (or removed) is no longer selected
     let present: std::collections::HashSet<(u64, usize)> = list.faces.iter().map(|f| (f.photo, f.index)).collect();
     app.ui.unnamed_selected.retain(|k| present.contains(k));
-    app.caches.unnamed = Some((rev, indexed, now, list.clone()));
+    app.caches.unnamed = Some((rev, indexed, ignored, now, list.clone()));
     list
 }
 
@@ -106,6 +108,10 @@ fn name(app: &mut LightcraftApp, faces: &[(u64, usize)], name: &str) {
 
 /// The bar above the faces while some are selected: how many, a box to name them all, and the people already named.
 pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    if app.ui.unnamed_show_ignored {
+        app.ui.unnamed_name.clear();
+        return;
+    }
     if app.ui.unnamed_selected.is_empty() {
         app.ui.unnamed_name.clear();
         return;
@@ -118,7 +124,7 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     };
     // the name the named faces suggest, when every selected face has the same one
     let suggested: Option<String> = {
-        let list = app.caches.unnamed.as_ref().map(|c| c.3.clone());
+        let list = app.caches.unnamed.as_ref().map(|c| c.4.clone());
         list.and_then(|l| {
             let names: std::collections::BTreeSet<Option<&str>> =
                 l.faces.iter().filter(|f| app.ui.unnamed_selected.contains(&(f.photo, f.index))).map(|f| f.suggestion.as_deref()).collect();
@@ -185,16 +191,21 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 /// The heading of the section, at `at`, and what it says about where the faces come from.
 pub fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed, at: egui::Pos2, right: f32) {
     let t = Tokens::get(ui.ctx());
+    let showing_ignored = app.ui.unnamed_show_ignored;
     let count = if list.total > list.faces.len() { format!("{} of {}", list.faces.len(), list.total) } else { list.total.to_string() };
     let p = ui.painter();
-    p.text(at, Align2::LEFT_CENTER, "Unnamed faces", t.semibold(15.0), t.text);
+    p.text(at, Align2::LEFT_CENTER, if showing_ignored { "Ignored faces" } else { "Unnamed faces" }, t.semibold(15.0), t.text);
     p.text(pos2(right, at.y), Align2::RIGHT_CENTER, count, t.font(13.0), t.text_dim);
     let sub = if !list.ready && list.faces.is_empty() {
         "Turn on face recognition in Settings to find the faces in your photos.".to_string()
     } else if list.faces.is_empty() && app.caches.faces_pending > 0 {
         format!("Looking through your photos… {} left", app.caches.faces_pending)
     } else if list.faces.is_empty() {
-        "No unnamed faces. Faces found in your photos appear here until you name them.".to_string()
+        if showing_ignored {
+            "No ignored faces. Ignored faces stay in your library and can be restored here.".to_string()
+        } else {
+            "No unnamed faces. Faces found in your photos appear here until you name or ignore them.".to_string()
+        }
     } else if list.ordered {
         "Faces that look alike are next to each other. Click to select, Shift-click for a range, then type a name.".to_string()
     } else {
@@ -208,8 +219,31 @@ pub fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed
         if b.clicked() {
             let _ = app.run("app.settings", json!({"tab": "faces"}));
         }
-    } else if !list.faces.is_empty() {
-        let r = Rect::from_min_size(pos2(right - 130.0, at.y + 12.0), vec2(130.0, 22.0));
+    }
+    let view_label = if showing_ignored { "Show unnamed" } else { "Show ignored" };
+    let view = ui.put(Rect::from_min_size(pos2(right - 116.0, at.y + 12.0), vec2(116.0, 22.0)), egui::Button::new(crate::i18n::tr(view_label)));
+    register(ui.ctx(), "unnamed:toggleIgnored", view.rect);
+    if view.clicked() {
+        app.ui.unnamed_show_ignored = !showing_ignored;
+        app.ui.unnamed_selected.clear();
+        app.ui.unnamed_anchor = None;
+    }
+    let mut offset = 124.0;
+    if !app.ui.unnamed_selected.is_empty() {
+        let action = if showing_ignored { "Restore selected" } else { "Ignore selected" };
+        let b = ui.put(Rect::from_min_size(pos2(right - offset - 132.0, at.y + 12.0), vec2(132.0, 22.0)), egui::Button::new(crate::i18n::tr(action)));
+        register(ui.ctx(), if showing_ignored { "unnamed:restoreSelected" } else { "unnamed:ignoreSelected" }, b.rect);
+        if b.clicked() {
+            let faces: Vec<_> = app.ui.unnamed_selected.iter().map(|(photo, index)| json!({"photo": photo, "index": index})).collect();
+            if app.run("faces.setIgnoredFaces", json!({"faces": faces, "ignored": !showing_ignored})).is_ok() {
+                app.ui.unnamed_selected.clear();
+                app.ui.unnamed_anchor = None;
+            }
+        }
+        offset += 140.0;
+    }
+    if !list.faces.is_empty() {
+        let r = Rect::from_min_size(pos2(right - offset - 130.0, at.y + 12.0), vec2(130.0, 22.0));
         let all = app.ui.unnamed_selected.len() == list.faces.len();
         let b = ui.put(r, egui::Button::new(crate::i18n::tr(if all { "Select none" } else { "Select all" })));
         register(ui.ctx(), "unnamed:selectAll", b.rect);

@@ -94,7 +94,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         } else {
             ("No named people in these photos", "Remove a filter above, or choose Clear all")
         };
-        super::empty_message(ui, ui.available_rect_before_wrap(), title, body);
+        let action = if app.ui.unnamed_show_ignored { "Show unnamed" } else { "Show ignored" };
+        let actions = [super::EmptyAction { command: "toggleIgnored", label: action, widget: "unnamed:toggleIgnored" }];
+        if super::empty_state(ui, ui.available_rect_before_wrap(), title, body, &actions, None) == Some("toggleIgnored") {
+            app.ui.unnamed_show_ignored = !app.ui.unnamed_show_ignored;
+            app.ui.unnamed_selected.clear();
+            app.ui.unnamed_anchor = None;
+        }
         return;
     }
     let ppp = ui.ctx().pixels_per_point();

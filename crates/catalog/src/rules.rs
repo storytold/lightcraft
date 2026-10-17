@@ -1166,6 +1166,7 @@ mod tests {
             kind,
             name: name.map(str::to_string),
             description: None,
+            ignored: false,
         };
         let mut p = photo(1);
         let m = |p: &Photo, field: &str, op: &str, value: serde_json::Value| {
@@ -1329,6 +1330,7 @@ mod tests {
             kind: lightcraft_meta::RegionKind::Face,
             name: Some("Ana".into()),
             description: None,
+            ignored: false,
         }];
         p.copy_name = Some("Bluish".into());
         for word in ["oregon", "kite", "ana", "bluish"] {

@@ -352,6 +352,7 @@ fn people_from_named_face_regions() {
         kind,
         name: name.map(str::to_string),
         description: None,
+        ignored: false,
     };
     let mut c = Catalog::new();
     let mut add = |name: &str, regions: Vec<Region>| {
@@ -420,9 +421,16 @@ fn empty_regions_are_not_serialized_and_default_when_missing() {
         kind: lightcraft_meta::RegionKind::Face,
         name: Some("A".into()),
         description: None,
+        ignored: false,
     });
     let back: Meta = serde_json::from_str(&serde_json::to_string(&with).unwrap()).unwrap();
     assert_eq!(back, with);
+    let mut ignored = with.clone();
+    ignored.regions[0].ignored = true;
+    let json = serde_json::to_string(&ignored).unwrap();
+    assert!(json.contains("\"ignored\":true"), "{json}");
+    let back: Meta = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, ignored);
 }
 
 /// The camera's focus point is optional camera data: absent from the catalog JSON when unknown (so a

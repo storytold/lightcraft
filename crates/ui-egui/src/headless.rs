@@ -1052,6 +1052,7 @@ mod tests {
             kind: lightcraft_meta::RegionKind::Face,
             name: None,
             description: None,
+            ignored: false,
         }];
         h.app.session.commit("setup", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
         h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
@@ -1240,6 +1241,7 @@ mod tests {
             kind: lightcraft_meta::RegionKind::Face,
             name: None,
             description: None,
+            ignored: false,
         }];
         h.app.session.commit("setup", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
         let offers = |h: &mut Headless| h.request("ui.widgets", json!({}), t).to_string().contains("\"faces:setup\"");
@@ -1317,6 +1319,7 @@ mod tests {
             kind: lightcraft_meta::RegionKind::Face,
             name: Some(name.to_string()),
             description: None,
+            ignored: false,
         };
         // Jane Doe twice in the first photo and once in the second; John Roe in the third
         for (id, regions) in [
@@ -1406,6 +1409,7 @@ mod tests {
             kind: lightcraft_meta::RegionKind::Face,
             name: name.map(str::to_string),
             description: None,
+            ignored: false,
         };
         for (id, name) in ids.iter().zip([Some("Jane Doe"), None, None, None, None, None, Some("John Roe")]) {
             let mut meta = h.app.session.catalog.photo(*id).unwrap().meta.clone();
@@ -1521,6 +1525,7 @@ mod tests {
             kind: lightcraft_meta::RegionKind::Face,
             name: name.map(str::to_string),
             description: None,
+            ignored: false,
         };
         for (id, regions) in [
             (ids[0], vec![face(0.1, Some("Jane Doe")), face(0.5, None)]),
@@ -1582,6 +1587,31 @@ mod tests {
         h.request("engine.execute", json!({"command": "edit.undo"}), t);
         h.step();
         assert_eq!(named(&h, ids[1], 0), None);
+        h.settle(SETTLE);
+        h.step();
+        h.request("ui.clickWidget", json!({"id": "unnamed:selectAll"}), t);
+        h.step();
+        h.step();
+        h.request("ui.clickWidget", json!({"id": "unnamed:ignoreSelected"}), t);
+        h.step();
+        h.settle(SETTLE);
+        h.step();
+        assert_eq!(tiles(&mut h), 0, "ignored faces leave the regular unnamed list");
+        h.request("ui.clickWidget", json!({"id": "unnamed:toggleIgnored"}), t);
+        h.step();
+        h.settle(SETTLE);
+        h.step();
+        assert_eq!(tiles(&mut h), 4, "ignored faces remain reviewable");
+        h.request("ui.clickWidget", json!({"id": "unnamed:selectAll"}), t);
+        h.step();
+        h.step();
+        h.request("ui.clickWidget", json!({"id": "unnamed:restoreSelected"}), t);
+        h.step();
+        h.request("ui.clickWidget", json!({"id": "unnamed:toggleIgnored"}), t);
+        h.step();
+        h.settle(SETTLE);
+        h.step();
+        assert_eq!(tiles(&mut h), 4, "restored faces return to the unnamed list");
     }
 
     /// A double click on an unnamed face opens its photo in the loupe, as in the grid (#1664); a single click still only
@@ -1600,6 +1630,7 @@ mod tests {
                 kind: lightcraft_meta::RegionKind::Face,
                 name: None,
                 description: None,
+                ignored: false,
             }];
             h.app.session.commit("setup", Op::SetMeta { id: *id, meta: Box::new(meta) }).unwrap();
         }
@@ -1648,6 +1679,7 @@ mod tests {
             kind: lightcraft_meta::RegionKind::Face,
             name: None,
             description: None,
+            ignored: false,
         }];
         h.app.session.commit("setup", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
         h.request("engine.execute", json!({"command": "view.people"}), t);
@@ -1690,6 +1722,7 @@ mod tests {
                     kind: lightcraft_meta::RegionKind::Face,
                     name: None,
                     description: None,
+                    ignored: false,
                 })
                 .collect();
             h.app.session.commit("setup", Op::SetMeta { id: *id, meta: Box::new(meta) }).unwrap();

@@ -274,7 +274,7 @@ fn detect(s: &mut Session, p: &Value) -> Result<Value> {
         };
         if apply && let Some(photo) = s.catalog.photo(id) {
             let mut meta = photo.meta.clone();
-            meta.regions.retain(|r| !is_detected(r));
+            meta.regions.retain(|r| !is_detected(r) || r.ignored);
             let fresh: Vec<&Face> = faces.iter().filter(|f| !overlaps_existing(f, &meta.regions)).collect();
             for f in fresh {
                 meta.regions.push(Region {
@@ -282,6 +282,7 @@ fn detect(s: &mut Session, p: &Value) -> Result<Value> {
                     kind: RegionKind::Face,
                     name: None,
                     description: Some(format!("{MARK}{LABEL}")),
+                    ignored: false,
                 });
             }
             ops.push(Op::SetMeta { id, meta: Box::new(meta) });
@@ -328,7 +329,7 @@ mod tests {
         Face { x0, y0, x1, y1, score: 0.9, landmarks: [(0.0, 0.0); 5] }
     }
     fn region(x0: f64, y0: f64, x1: f64, y1: f64) -> Region {
-        Region { rect: lightcraft_geom::Rect { x0, y0, x1, y1 }, kind: RegionKind::Face, name: Some("Ann".into()), description: None }
+        Region { rect: lightcraft_geom::Rect { x0, y0, x1, y1 }, kind: RegionKind::Face, name: Some("Ann".into()), description: None, ignored: false }
     }
 
     #[test]

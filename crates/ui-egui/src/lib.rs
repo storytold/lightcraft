@@ -1687,7 +1687,7 @@ pub struct Caches {
     /// The open person page: (name, catalog revision, faces indexed, when it was asked for, the page).
     pub person_page: Option<(String, u64, u64, f64, std::sync::Arc<panels::person::PersonPage>)>,
     /// The unnamed faces: (catalog revision, faces indexed, when it was asked for, the list).
-    pub unnamed: Option<(u64, u64, f64, std::sync::Arc<panels::unnamed::Unnamed>)>,
+    pub unnamed: Option<(u64, u64, bool, f64, std::sync::Arc<panels::unnamed::Unnamed>)>,
     /// The most photos the face scan has had left at once since it last finished (the progress bar's whole).
     pub faces_peak: u64,
     person_names: Option<(u64, std::sync::Arc<Vec<String>>)>,

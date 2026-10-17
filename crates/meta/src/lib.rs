@@ -65,6 +65,13 @@ pub struct Region {
     /// `mwg-rs:Name` (e.g. the person's name).
     pub name: Option<String>,
     pub description: Option<String>,
+    /// LightCraft-only persistent rejection for an unnamed face; never read from or written to XMP.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ignored: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 /// `mwg-rs:Type`. Unrecognised values are kept verbatim rather than dropped.
