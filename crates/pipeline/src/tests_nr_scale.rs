@@ -186,11 +186,11 @@ fn preview_from_a_smaller_source_level_matches_one_from_the_original() {
     let mut plain = s.clone();
     plain.detail.nr_luminance = 0.0;
     plain.detail.nr_color = 0.0;
-    let from_original = render(&original, &raw, &s, &req).image;
-    let told_diff = mean_abs_diff(&render(&thumb_level, &told, &s, &req).image, &from_original);
-    let untold_diff = mean_abs_diff(&render(&thumb_level, &raw, &s, &req).image, &from_original);
+    let from_original = render(&original, &raw, &s, &req).unwrap().image;
+    let told_diff = mean_abs_diff(&render(&thumb_level, &told, &s, &req).unwrap().image, &from_original);
+    let untold_diff = mean_abs_diff(&render(&thumb_level, &raw, &s, &req).unwrap().image, &from_original);
     // (the two sources differ a little anyway: the thumbnail level is resampled twice)
-    let resampling = mean_abs_diff(&render(&thumb_level, &told, &plain, &req).image, &render(&original, &raw, &plain, &req).image);
+    let resampling = mean_abs_diff(&render(&thumb_level, &told, &plain, &req).unwrap().image, &render(&original, &raw, &plain, &req).unwrap().image);
     eprintln!("mean |Δ| (8-bit) from the original's render: told {told_diff:.3}, not told {untold_diff:.3}, NR off {resampling:.3}");
     assert!(told_diff <= resampling + 0.1, "{told_diff} vs {resampling}");
     assert!(untold_diff > told_diff + 0.3, "the copy's own pixels change the result: {untold_diff} vs {told_diff}");

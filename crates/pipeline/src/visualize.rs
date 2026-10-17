@@ -330,7 +330,7 @@ mod tests {
         let s = DevelopSettings::default();
         for size in [400, 200] {
             let req = RenderRequest { overlay: Overlay::Spots(50), ..RenderRequest::fit(size, size) };
-            let v = render(&src, &info, &s, &req).image;
+            let v = render(&src, &info, &s, &req).unwrap().image;
             let at = |x: f64, y: f64| v.data[(y * v.height as f64) as usize * v.width + (x * v.width as f64) as usize];
             assert_eq!(at(0.25, 1.0 / 3.0), [255, 255, 255, 255], "speck at size {size}");
             assert_eq!(at(0.75, 2.0 / 3.0), [255, 255, 255, 255]);
@@ -348,7 +348,7 @@ mod tests {
         // left half orange, right half blue
         let src = Rgb32f::from_fn(32, 16, |x, _| if x < 16 { [0.4, 0.15, 0.04] } else { [0.03, 0.06, 0.35] });
         let info = SourceInfo::default();
-        let plain = render(&src, &info, &DevelopSettings::default(), &RenderRequest::fit(32, 16)).image;
+        let plain = render(&src, &info, &DevelopSettings::default(), &RenderRequest::fit(32, 16)).unwrap().image;
         // sample the orange as it renders
         let px = plain.data[8 * 32 + 4];
         let lin = [px[0], px[1], px[2]].map(|v| srgb_to_linear(v as f32 / 255.0));
@@ -357,14 +357,14 @@ mod tests {
         let mut s = DevelopSettings::default();
         s.point_colors.push(PointColor { lum: l as f64, chroma: ch as f64, hue: (h as f64).to_degrees(), hue_shift: 80.0, ..Default::default() });
         let req = RenderRequest { overlay: Overlay::PointColorRange(0), ..RenderRequest::fit(32, 16) };
-        let v = render(&src, &info, &s, &req).image;
+        let v = render(&src, &info, &s, &req).unwrap().image;
         let (o, b) = (v.data[8 * 32 + 4], v.data[8 * 32 + 28]);
         // the orange stays orange (and unshifted: the overlay shows the selection, not the edit)
         assert!(o[0].abs_diff(px[0]) <= 2 && o[2].abs_diff(px[2]) <= 2, "{o:?} vs {px:?}");
         // the blue turns grey
         assert!(b[0].abs_diff(b[2]) <= 1, "{b:?}");
         // without the overlay the edit shows
-        let e = render(&src, &info, &s, &RenderRequest::fit(32, 16)).image.data[8 * 32 + 4];
+        let e = render(&src, &info, &s, &RenderRequest::fit(32, 16)).unwrap().image.data[8 * 32 + 4];
         assert!(e[1].abs_diff(px[1]) > 10, "{e:?} vs {px:?}");
     }
 
@@ -377,10 +377,10 @@ mod tests {
         let shape = MaskShape::Radial { center: Point::new(0.25, 0.5), rx: 0.15, ry: 0.15, angle: 0.0, feather: 10.0, invert: false };
         let mut s = DevelopSettings::default();
         s.masks.push(Mask { id: 7, components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }], ..Default::default() });
-        let plain = render(&src, &info, &s, &RenderRequest::fit(80, 40)).image;
+        let plain = render(&src, &info, &s, &RenderRequest::fit(80, 40)).unwrap().image;
         let shot = |s: &DevelopSettings, view: MaskView| {
             let o = Overlay::Mask { id: 7, view, color: [255, 0, 0], opacity: 100 };
-            render(&src, &info, s, &RenderRequest { overlay: o, ..RenderRequest::fit(80, 40) }).image
+            render(&src, &info, s, &RenderRequest { overlay: o, ..RenderRequest::fit(80, 40) }).unwrap().image
         };
         let (inside, outside) = (20 * 80 + 20, 20 * 80 + 70);
         let c = shot(&s, MaskView::Color);
@@ -399,7 +399,7 @@ mod tests {
         assert_eq!(shot(&s, MaskView::WhiteOnBlack).data[inside], [255; 4]);
         // an unknown mask draws nothing
         let o = Overlay::Mask { id: 9, view: MaskView::WhiteOnBlack, color: [0; 3], opacity: 50 };
-        assert_eq!(render(&src, &info, &s, &RenderRequest { overlay: o, ..RenderRequest::fit(80, 40) }).image, plain);
+        assert_eq!(render(&src, &info, &s, &RenderRequest { overlay: o, ..RenderRequest::fit(80, 40) }).unwrap().image, plain);
         // parts round trip (web worker requests) and distinct cache keys
         let o = Overlay::Mask { id: 513, view: MaskView::ImageOnWhite, color: [12, 200, 255], opacity: 65 };
         let (k, v) = o.to_parts();
@@ -431,14 +431,14 @@ mod tests {
             ..Default::default()
         });
         let o = Overlay::AllMasks { view: MaskView::WhiteOnBlack, color: [255, 0, 0], opacity: 100 };
-        let img = render(&src, &info, &s, &RenderRequest { overlay: o, ..RenderRequest::fit(80, 40) }).image;
+        let img = render(&src, &info, &s, &RenderRequest { overlay: o, ..RenderRequest::fit(80, 40) }).unwrap().image;
         let (in_l, in_r, mid) = (20 * 80 + 12, 20 * 80 + 60, 20 * 80 + 40);
         assert_eq!(img.data[in_l], [255; 4], "left mask region painted");
         assert_eq!(img.data[in_r], [255; 4], "right mask region painted");
         assert_eq!(img.data[mid], [0, 0, 0, 255], "between the masks: black");
         // a hidden mask is skipped
         s.masks[1].visible = false;
-        let img2 = render(&src, &info, &s, &RenderRequest { overlay: o, ..RenderRequest::fit(80, 40) }).image;
+        let img2 = render(&src, &info, &s, &RenderRequest { overlay: o, ..RenderRequest::fit(80, 40) }).unwrap().image;
         assert_eq!(img2.data[in_r], [0, 0, 0, 255], "hidden right mask not painted: black like everything outside");
         assert_eq!(img2.data[in_l], [255; 4], "visible left mask still painted");
         // parts round trip and a stable, distinct cache key

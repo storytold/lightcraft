@@ -123,6 +123,14 @@ is no per-program override. Other programs that create a DX12 or Vulkan device a
 same way (PhotoCraft does). It is a driver issue: nothing in LightCraft itself
 walks the drive.
 
+## Window context
+
+CPU and GPU share the operator support calculation in `pipeline::plan`. A zoom
+window can prepare a larger work buffer than its display texture, then crop the
+result to the requested size. Device buffer limits still trigger CPU fallback.
+See [spatial context for zoom windows](window-context.md) for the filter radii,
+full-render preservation and benchmark (issue #1146).
+
 ## Where it is used
 - `lightcraft_engine::media::develop` (called by every `RenderJob`): loupe / before / compare views,
   `render_now` (CLI, MCP, control channel renders) and exports render on the GPU when one is
@@ -158,9 +166,24 @@ walks the drive.
   on the CPU.
 - Stage cache: `GpuStages` mirrors `StageCache` (same keys: source identity + `geo`, `lin_key`,
   per-plane radii) and lives in it as an extension, so the UI needs no change. The uploaded source is
-  kept per view. A tone / colour / exposure drag re-runs one dispatch of `finish` plus the readback.
-- One command encoder per render; the only mid-render readback is the airlight samples (dehaze, when
-  the dark channel is recomputed). Dropped buffers are recycled (exact size, ≤ 2 GB pool) once the
+  kept per view. Tone and colour edits reuse these stages. Exposure also re-evaluates any mask
+  whose selection reads it.
+- Mask alphas stay in the CPU and GPU stage caches, keyed by their definitions, work-frame
+  geometry and the image or Exposure when their selection reads those inputs. Refine Edges
+  reads pre-exposure luminance; the engine uses the CPU for visible refined masks.
+- Dehaze windows cache each renderer's full-resolution full-frame airlight statistic. The
+  statistic includes the same upstream stages and every-seventh-value dark-channel selection
+  as `window=None`. A whole-frame work buffer supplies it directly. Partial windows
+  copy their upstream pixels and dark channel from one full preparation, retained
+  up to 1 GiB and counted in stage bytes. The source upload and unchanged full-frame
+  sampling are reused. CPU and GPU enforce the same input and temporary-storage
+  limits before the statistic allocates, including on the CPU fallback. Over-budget
+  preparation uses the 384 px proxy when its full-frame budget is exceeded.
+  An oversized requested work buffer returns an error through the native job
+  or web worker. See
+  [window context](window-context.md) for invalidation rules, measurements and remaining costs.
+- Dehaze reads back sampled dark-channel values when computing airlight. The full-frame statistic
+  has its own command encoder. Dropped buffers are recycled (exact size, ≤ 2 GB pool) once the
   thread that dropped them has submitted — allocating and zero-filling fresh 100–300 MB buffers
   per pass cost as much as the passes.
 - `LIGHTCRAFT_PROFILE=1` prints GPU stage timings (each stage is then submitted and waited for).

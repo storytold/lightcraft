@@ -270,6 +270,43 @@ fn fill_box(src: &mut [[f32; 3]], tgt: &[[f32; 3]], alpha: &[f32], bw: usize, bh
     }
 }
 
+/// Bound the largest spot patch used by exact preparation. Other spots run later
+/// and release their scratch before the next patch is allocated.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn preparation_scratch(spots: &[Spot], frame: &Frame, w: usize, h: usize, ppl: f64) -> u64 {
+    let to_out = frame.norm_to_out(w, h);
+    spots
+        .iter()
+        .filter(|spot| !spot.points.is_empty())
+        .map(|spot| {
+            let r = radius_px(spot.size, ppl) as f32;
+            let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+            for point in &spot.points {
+                let p = to_out.apply(*point);
+                x0 = x0.min(p.x as f32 - r);
+                y0 = y0.min(p.y as f32 - r);
+                x1 = x1.max(p.x as f32 + r);
+                y1 = y1.max(p.y as f32 + r);
+            }
+            let pad = if spot.mode == SpotMode::Fill { 2.0 * r } else { r };
+            let (bx0, by0) = (((x0 - pad).floor().max(0.0)) as usize, ((y0 - pad).floor().max(0.0)) as usize);
+            let (bx1, by1) = (((x1 + pad).ceil() as usize).min(w), ((y1 + pad).ceil() as usize).min(h));
+            let pixels = (bx1.saturating_sub(bx0) as u64).saturating_mul(by1.saturating_sub(by0) as u64);
+            // Clone keeps alpha and two RGB patches. Heal additionally keeps its
+            // normalized-convolution buffers through construction of the result.
+            // Fill reserves the patch pyramid, nearest-neighbour fields and voting
+            // scratch, including thin pyramids. Spots run sequentially.
+            let per_pixel = match spot.mode {
+                SpotMode::Clone => 28,
+                SpotMode::Heal | SpotMode::Remove => 72,
+                SpotMode::Fill => 160,
+            };
+            pixels.saturating_mul(per_pixel)
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 /// Apply all spots to `img` (output resolution). `ppl` = output pixels per long-edge unit.
 pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
     if spots.is_empty() {

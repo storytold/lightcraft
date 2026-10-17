@@ -254,13 +254,13 @@ mod tests {
         s.red_eye.push(RedEye { center: Point::new(0.47, 0.5), rx: 0.1, ry: 0.08, ..Default::default() });
         let info = SourceInfo::default();
         for size in [400, 160] {
-            let img = render(&src, &info, &s, &RenderRequest::fit(size, size)).image;
+            let img = render(&src, &info, &s, &RenderRequest::fit(size, size)).unwrap().image;
             let (x, y) = ((0.45 * img.width as f64) as usize, (0.52 * img.height as f64) as usize);
             let p = img.data[y * img.width + x];
             assert!(p[0] < 90 && p[0].abs_diff(p[1]) < 12, "size {size}: pupil {p:?}");
             // skin outside the ellipse is untouched
             let q = img.data[(img.height / 2) * img.width + img.width / 10];
-            let plain = render(&src, &info, &Default::default(), &RenderRequest::fit(size, size)).image;
+            let plain = render(&src, &info, &Default::default(), &RenderRequest::fit(size, size)).unwrap().image;
             assert_eq!(q, plain.data[(img.height / 2) * img.width + img.width / 10]);
         }
     }
@@ -279,13 +279,13 @@ mod tests {
         let info = SourceInfo::default();
         let mut s = lightcraft_develop::DevelopSettings::default();
         s.red_eye.push(eye);
-        let img = render(&src, &info, &s, &RenderRequest::fit(400, 400)).image;
+        let img = render(&src, &info, &s, &RenderRequest::fit(400, 400)).unwrap().image;
         let at = |img: &lightcraft_raster::Rgba8, x: f64, y: f64| img.data[(y * 200.0) as usize * 400 + (x * 400.0) as usize];
         let c = at(&img, 0.525, 0.48);
         assert!(c[1] < 70 && c[0].abs_diff(c[1]) < 4, "dark neutral pupil: {c:?}");
         // catchlight up-left of the centre
         s.red_eye[0].catchlight = Some(Point::new(-0.35, -0.35));
-        let img = render(&src, &info, &s, &RenderRequest::fit(400, 400)).image;
+        let img = render(&src, &info, &s, &RenderRequest::fit(400, 400)).unwrap().image;
         let r = 14.0 / 400.0;
         let l = at(&img, 0.525 - 0.35 * r, 0.48 - 0.35 * r * 2.0);
         assert!(l[0] > 200 && l[1] > 200 && l[2] > 200, "catchlight {l:?}");

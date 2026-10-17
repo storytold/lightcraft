@@ -14,6 +14,7 @@
 //! `ONLY=window`: a 1:1 zoom window cut from the full-size original (the loupe's `Slot::Region`):
 //! the first window of a photo, a pan, and exposure / draft / NR changes with a warm stage cache;
 //! `DUMP=file` writes the GPU window's RGBA bytes, for pixel A/B comparisons between builds.
+//! `DEHAZE=0` disables Dehaze in typical settings; the default is 10.
 //! Opening a photo, per file: `ONLY=source` (decode steps), `ONLY=load` (what the app's loaders
 //! cost: file read, decode, binning, embedded stand-ins, `load_bytes(2560)`, the fs loader),
 //! `ONLY=load1` (decode checksum + `load_bytes(2560)`; `LOADONLY=1`: only that, for a profiler),
@@ -64,6 +65,19 @@ fn best(n: usize, mut f: impl FnMut()) -> T {
     b
 }
 
+/// Prepare a stand-in outside the timed interval, then measure its replacement.
+fn best_after<S>(n: usize, mut prepare: impl FnMut() -> S, mut render: impl FnMut(S)) -> T {
+    let mut b = T(f64::MAX, f64::MAX);
+    for _ in 0..n {
+        let state = prepare();
+        let (t, c) = (Instant::now(), cpu_ms());
+        render(state);
+        b.1 = b.1.min(cpu_ms() - c);
+        b.0 = b.0.min(t.elapsed().as_secs_f64() * 1e3);
+    }
+    b
+}
+
 fn typical() -> DevelopSettings {
     let mut s = DevelopSettings::default();
     s.light.exposure = 0.3;
@@ -71,10 +85,45 @@ fn typical() -> DevelopSettings {
     s.light.shadows = 30.0;
     s.effects.clarity = 15.0;
     s.effects.texture = 10.0;
-    s.effects.dehaze = 10.0;
+    s.effects.dehaze = std::env::var("DEHAZE").ok().and_then(|v| v.parse().ok()).unwrap_or(10.0);
     s.detail.nr_luminance = 30.0;
     s.detail.nr_color = 25.0;
     s.detail.sharpen_amount = 40.0;
+    // `NODEHAZE=1`: the same edit without Dehaze
+    if std::env::var_os("NODEHAZE").is_some() {
+        s.effects.dehaze = 0.0;
+    }
+    s
+}
+
+/// [`typical`] plus three masks: a radial gradient, a brush (three strokes) and either a linear
+/// gradient with Refine Edges (`refine`; such edits render on the CPU) or a Subject mask (the
+/// heuristic, which the GPU renderer evaluates on the CPU).
+fn with_masks(refine: bool) -> DevelopSettings {
+    use lightcraft_develop::{BrushStroke, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
+    use lightcraft_geom::Point;
+    let mut s = typical();
+    let mask = |id: u32, shape: MaskShape, exposure: f64, refine: f64| Mask {
+        id,
+        components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }],
+        adjust: LocalAdjustments { exposure, clarity: 10.0, ..Default::default() },
+        refine,
+        ..Default::default()
+    };
+    let radial = MaskShape::Radial { center: Point::new(0.45, 0.5), rx: 0.3, ry: 0.2, angle: 15.0, feather: 60.0, invert: false };
+    let strokes = (0..3)
+        .map(|i| BrushStroke {
+            points: (0..40).map(|k| Point::new(0.1 + k as f64 * 0.02, 0.2 + i as f64 * 0.25 + (k as f64 * 0.3).sin() * 0.05)).collect(),
+            size: 0.04,
+            ..Default::default()
+        })
+        .collect();
+    let third = if refine {
+        mask(3, MaskShape::Linear { start: Point::new(0.5, 0.0), end: Point::new(0.5, 0.6) }, -0.5, 60.0)
+    } else {
+        mask(3, MaskShape::Subject, 0.3, 0.0)
+    };
+    s.masks = vec![mask(1, radial, 0.5, 0.0), mask(2, MaskShape::Brush { strokes }, -0.3, 0.0), third];
     s
 }
 
@@ -233,56 +282,56 @@ fn main() {
     let view = RenderRequest::fit(1920, 1280);
     let draft = RenderRequest { quality: Quality::Draft, ..RenderRequest::fit(1152, 768) };
     if gpu {
-        let c = develop(&preview, &info, &s, &view, None, false).image;
-        let g = develop(&preview, &info, &s, &view, None, true).image;
+        let c = develop(&preview, &info, &s, &view, None, false).unwrap().image;
+        let g = develop(&preview, &info, &s, &view, None, true).unwrap().image;
         let (max, mean) = diff(&c, &g);
         println!("gpu vs cpu, loupe 1920×1280 typical: max {max} LSB, mean {mean:.4} LSB");
     }
 
     if run("cold") {
         // a new photo: no cached stages (the GPU also uploads the preview)
-        row("loupe 1920×1280 cold:", &mut |g| drop(develop(&preview, &info, &s, &view, None, g)));
-        row("loupe draft 1152×768 cold:", &mut |g| drop(develop(&preview, &info, &s, &draft, None, g)));
+        row("loupe 1920×1280 cold:", &mut |g| drop(develop(&preview, &info, &s, &view, None, g).unwrap()));
+        row("loupe draft 1152×768 cold:", &mut |g| drop(develop(&preview, &info, &s, &draft, None, g).unwrap()));
     }
     let caches = [StageCache::default(), StageCache::default()];
     let mut k = 0.0;
     if run("drag") {
         for g in backends {
-            drop(develop(&preview, &info, &s, &view, Some(&caches[*g as usize]), *g));
+            drop(develop(&preview, &info, &s, &view, Some(&caches[*g as usize]), *g).unwrap());
         }
         row("loupe 1920×1280 exposure drag (warm):", &mut |g| {
             let mut t = s.clone();
             k += 1.0;
             t.light.contrast = k % 50.0;
             t.light.exposure = 0.3 + k * 0.01;
-            drop(develop(&preview, &info, &t, &view, Some(&caches[g as usize]), g));
+            drop(develop(&preview, &info, &t, &view, Some(&caches[g as usize]), g).unwrap());
         });
         for g in backends {
-            drop(develop(&preview, &info, &s, &draft, Some(&caches[*g as usize]), *g));
+            drop(develop(&preview, &info, &s, &draft, Some(&caches[*g as usize]), *g).unwrap());
         }
         row("loupe draft highlights drag (warm):", &mut |g| {
             let mut t = s.clone();
             k += 1.0;
             t.light.highlights = -40.0 + k % 50.0;
-            drop(develop(&preview, &info, &t, &draft, Some(&caches[g as usize]), g));
+            drop(develop(&preview, &info, &t, &draft, Some(&caches[g as usize]), g).unwrap());
         });
         row("loupe draft clarity drag (warm):", &mut |g| {
             let mut t = s.clone();
             k += 1.0;
             t.effects.clarity = 15.0 + k % 50.0;
-            drop(develop(&preview, &info, &t, &draft, Some(&caches[g as usize]), g));
+            drop(develop(&preview, &info, &t, &draft, Some(&caches[g as usize]), g).unwrap());
         });
         row("loupe draft NR drag (warm):", &mut |g| {
             let mut t = s.clone();
             k += 1.0;
             t.detail.nr_luminance = 30.0 + k % 50.0;
-            drop(develop(&preview, &info, &t, &draft, Some(&caches[g as usize]), g));
+            drop(develop(&preview, &info, &t, &draft, Some(&caches[g as usize]), g).unwrap());
         });
         row("loupe 1920×1280 NR drag (warm):", &mut |g| {
             let mut t = s.clone();
             k += 1.0;
             t.detail.nr_luminance = 30.0 + k % 50.0;
-            drop(develop(&preview, &info, &t, &view, Some(&caches[g as usize]), g));
+            drop(develop(&preview, &info, &t, &view, Some(&caches[g as usize]), g).unwrap());
         });
     }
     if run("window") {
@@ -301,50 +350,144 @@ fn main() {
         // first window of a photo: nothing cached (the GPU uploads the original: `shared_source`)
         row("window first (upload original):", &mut |g| {
             lightcraft_engine::gpu::trim_pool(0);
-            drop(develop(&full, &info, &s, &at(w0, Quality::Full), Some(&StageCache::default()), g))
+            drop(develop(&full, &info, &s, &at(w0, Quality::Full), Some(&StageCache::default()), g).unwrap())
         });
+        // the loupe's first look at a new window: main's margin and Dehaze proxy (the exact one follows)
+        let bounded = |w: PixelWindow| RenderRequest { bounded_window: true, ..at(w, Quality::Full) };
+        row("window first, bounded:", &mut |g| {
+            lightcraft_engine::gpu::trim_pool(0);
+            drop(develop(&full, &info, &s, &bounded(w0), Some(&StageCache::default()), g).unwrap())
+        });
+        let cols: Vec<String> = backends
+            .iter()
+            .map(|&g| {
+                format!(
+                    "{}",
+                    best_after(
+                        n,
+                        || {
+                            lightcraft_engine::gpu::trim_pool(0);
+                            let cache = StageCache::default();
+                            drop(develop(&full, &info, &s, &bounded(w0), Some(&cache), g).unwrap());
+                            cache
+                        },
+                        |cache| drop(develop(&full, &info, &s, &at(w0, Quality::Full), Some(&cache), g).unwrap())
+                    )
+                )
+            })
+            .collect();
+        let first = if backends[0] { "gpu" } else { "cpu" };
+        println!("{:<38} {first}: {}{}", "window exact after bounded:", cols[0], cols.get(1).map(|g| format!("  |  gpu: {g}")).unwrap_or_default());
         let wc = [StageCache::default(), StageCache::default()];
         for g in backends {
-            drop(develop(&full, &info, &s, &at(w0, Quality::Full), Some(&wc[*g as usize]), *g));
+            drop(develop(&full, &info, &s, &at(w0, Quality::Full), Some(&wc[*g as usize]), *g).unwrap());
         }
         let mut step = 0usize;
+        row("window pan, bounded (warm src):", &mut |g| {
+            step += 1;
+            let w = win(fw / 2 + 512 * (step % 4 + 1), fh / 2);
+            drop(develop(&full, &info, &s, &bounded(w), Some(&wc[g as usize]), g).unwrap())
+        });
         row("window pan (new window, warm src):", &mut |g| {
             step += 1;
             let w = win(fw / 2 + 512 * (step % 4 + 1), fh / 2);
-            drop(develop(&full, &info, &s, &at(w, Quality::Full), Some(&wc[g as usize]), g))
+            drop(develop(&full, &info, &s, &at(w, Quality::Full), Some(&wc[g as usize]), g).unwrap())
         });
         for g in backends {
-            drop(develop(&full, &info, &s, &at(w0, Quality::Full), Some(&wc[*g as usize]), *g));
+            drop(develop(&full, &info, &s, &at(w0, Quality::Full), Some(&wc[*g as usize]), *g).unwrap());
         }
         row("window exposure change (warm):", &mut |g| {
             let mut t = s.clone();
             k += 1.0;
             t.light.exposure = 0.3 + k * 0.01;
-            drop(develop(&full, &info, &t, &at(w0, Quality::Full), Some(&wc[g as usize]), g));
+            drop(develop(&full, &info, &t, &at(w0, Quality::Full), Some(&wc[g as usize]), g).unwrap());
         });
         row("window draft exposure drag (warm):", &mut |g| {
             let mut t = s.clone();
             k += 1.0;
             t.light.exposure = 0.3 + k * 0.01;
-            drop(develop(&full, &info, &t, &at(w0, Quality::Draft), Some(&wc[g as usize]), g));
+            drop(develop(&full, &info, &t, &at(w0, Quality::Draft), Some(&wc[g as usize]), g).unwrap());
+        });
+        row("window draft NR drag (warm):", &mut |g| {
+            let mut t = s.clone();
+            k += 1.0;
+            t.detail.nr_luminance = 30.0 + k % 50.0;
+            drop(develop(&full, &info, &t, &at(w0, Quality::Draft), Some(&wc[g as usize]), g).unwrap());
         });
         row("window NR change (warm):", &mut |g| {
             let mut t = s.clone();
             k += 1.0;
             t.detail.nr_luminance = 30.0 + k % 50.0;
-            drop(develop(&full, &info, &t, &at(w0, Quality::Full), Some(&wc[g as usize]), g));
+            drop(develop(&full, &info, &t, &at(w0, Quality::Full), Some(&wc[g as usize]), g).unwrap());
         });
+        // a released drag: a few Draft ticks (untimed), then the Full render of the last value
+        for (label, nr) in [("window exposure release after drafts:", false), ("window NR release after drafts:", true)] {
+            let cols: Vec<String> = backends
+                .iter()
+                .map(|&g| {
+                    let mut b = T(f64::MAX, f64::MAX);
+                    for _ in 0..n {
+                        let mut t = s.clone();
+                        for _ in 0..3 {
+                            k += 1.0;
+                            if nr {
+                                t.detail.nr_luminance = 30.0 + k % 50.0;
+                            } else {
+                                t.light.exposure = 0.3 + k * 0.01;
+                            }
+                            drop(develop(&full, &info, &t, &at(w0, Quality::Draft), Some(&wc[g as usize]), g));
+                        }
+                        let (t0, c) = (Instant::now(), cpu_ms());
+                        drop(develop(&full, &info, &t, &at(w0, Quality::Full), Some(&wc[g as usize]), g));
+                        b = T(b.0.min(t0.elapsed().as_secs_f64() * 1e3), b.1.min(cpu_ms() - c));
+                    }
+                    format!("{b}")
+                })
+                .collect();
+            println!(
+                "{label:<38} {}: {}{}",
+                if backends[0] { "gpu" } else { "cpu" },
+                cols[0],
+                cols.get(1).map(|g| format!("  |  gpu: {g}")).unwrap_or_default()
+            );
+        }
         // `DUMP=file`: the GPU window's raw RGBA bytes (A/B pixel comparisons between builds)
         if let (true, Some(path)) = (gpu, std::env::var_os("DUMP")) {
-            let g = develop(&full, &info, &s, &at(w0, Quality::Full), Some(&StageCache::default()), true).image;
+            let g = develop(&full, &info, &s, &at(w0, Quality::Full), Some(&StageCache::default()), true).unwrap().image;
             let bytes: Vec<u8> = g.data.iter().flatten().copied().collect();
             std::fs::write(path, bytes).expect("dump");
         }
         if gpu && std::env::var_os("GPU_ONLY").is_none() {
-            let c = develop(&full, &info, &s, &at(w0, Quality::Full), None, false).image;
-            let g = develop(&full, &info, &s, &at(w0, Quality::Full), None, true).image;
+            let c = develop(&full, &info, &s, &at(w0, Quality::Full), None, false).unwrap().image;
+            let g = develop(&full, &info, &s, &at(w0, Quality::Full), None, true).unwrap().image;
             let (max, mean) = diff(&c, &g);
             println!("gpu vs cpu, window: max {max} LSB, mean {mean:.4} LSB");
+        }
+    }
+    if run("masks") {
+        // three masks (one with Refine Edges, or one Subject mask): a global exposure drag and a
+        // mask's own exposure drag, both of which leave the masks' alphas as they were
+        for refine in [true, false] {
+            let m = with_masks(refine);
+            let what = if refine { "masks+refine" } else { "masks+subject" };
+            let caches = [StageCache::default(), StageCache::default()];
+            for (req, size) in [(&view, "loupe 1920×1280"), (&draft, "draft 1152×768")] {
+                for g in backends {
+                    drop(develop(&preview, &info, &m, req, Some(&caches[*g as usize]), *g).unwrap());
+                }
+                row(&format!("{size} exposure drag, {what}:"), &mut |g| {
+                    let mut t = m.clone();
+                    k += 1.0;
+                    t.light.exposure = 0.3 + (k % 50.0) * 0.01;
+                    drop(develop(&preview, &info, &t, req, Some(&caches[g as usize]), g).unwrap());
+                });
+                row(&format!("{size} mask exposure drag, {what}:"), &mut |g| {
+                    let mut t = m.clone();
+                    k += 1.0;
+                    t.masks[0].adjust.exposure = 0.5 + (k % 50.0) * 0.01;
+                    drop(develop(&preview, &info, &t, req, Some(&caches[g as usize]), g).unwrap());
+                });
+            }
         }
     }
     if run("finish") {
@@ -370,12 +513,12 @@ fn main() {
             let mut t = s.clone();
             f(&mut t);
             for g in backends {
-                drop(develop(&preview, &info, &t, &view, Some(&caches[*g as usize]), *g));
+                drop(develop(&preview, &info, &t, &view, Some(&caches[*g as usize]), *g).unwrap());
             }
             row(&format!("finish 1920×1280 {name}"), &mut |g| {
                 k += 1.0;
                 t.light.exposure = 0.3 + k * 0.001;
-                drop(develop(&preview, &info, &t, &view, Some(&caches[g as usize]), g));
+                drop(develop(&preview, &info, &t, &view, Some(&caches[g as usize]), g).unwrap());
             });
         }
     }
@@ -406,7 +549,7 @@ fn main() {
         let cols: Vec<String> = backends
             .iter()
             .map(|&g| {
-                let ms = best(ne, || img = Some(develop(&full, &info, &s, &big, None, g).image));
+                let ms = best(ne, || img = Some(develop(&full, &info, &s, &big, None, g).unwrap().image));
                 format!("{ms}")
             })
             .collect();
@@ -417,7 +560,7 @@ fn main() {
             cols.get(1).map(|g| format!("  |  gpu: {g}")).unwrap_or_default()
         );
         if gpu {
-            let c = develop(&full, &info, &s, &big, None, false).image;
+            let c = develop(&full, &info, &s, &big, None, false).unwrap().image;
             let (max, mean) = diff(&c, img.as_ref().expect("rendered"));
             println!("gpu vs cpu, export {}×{} typical: max {max} LSB, mean {mean:.4} LSB", full.width, full.height);
         }

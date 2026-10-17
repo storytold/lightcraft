@@ -200,9 +200,9 @@ mod tests {
         let req = lightcraft_pipeline::RenderRequest::fit(w, h);
         let mut s = lightcraft_develop::DevelopSettings::default();
         let info = lightcraft_pipeline::SourceInfo { lens: Some(lens), ..Default::default() };
-        let before = spread(&line_rows(&lightcraft_pipeline::render(&src, &info, &s, &req).image));
+        let before = spread(&line_rows(&lightcraft_pipeline::render(&src, &info, &s, &req).unwrap().image));
         s.optics.lens_profile = true;
-        let after = spread(&line_rows(&lightcraft_pipeline::render(&src, &info, &s, &req).image));
+        let after = spread(&line_rows(&lightcraft_pipeline::render(&src, &info, &s, &req).unwrap().image));
         assert!(before > 2.0, "the recorded line is curved: {before} px");
         // 8-bit output and a 2 px line: the centroid measurement itself is good to about a pixel
         assert!(after < 1.0 && after < before / 8.0, "corrected line bent by {after} px (uncorrected {before})");

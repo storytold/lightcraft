@@ -165,7 +165,7 @@ fn verify_texture(h: &Headless, id: PhotoId) {
     }
     let req = lightcraft_engine::pipeline::RenderRequest { apply_crop: true, ..lightcraft_engine::pipeline::RenderRequest::fit(edge, edge) };
     // Fresh direct CPU render: no candidate job/hash/source/preview cache helpers.
-    let expected = lightcraft_engine::pipeline::render(&source, &info, &p.develop, &req).image;
+    let expected = lightcraft_engine::pipeline::render(&source, &info, &p.develop, &req).unwrap().image;
     assert_eq!(tex.size, [expected.width, expected.height]);
     assert_eq!(tex.pixels.as_ref().unwrap().pixels.iter().flat_map(|c| c.to_array()).collect::<Vec<_>>(), expected.as_bytes());
 }

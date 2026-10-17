@@ -27,7 +27,7 @@ fn left_mask(adjust: LocalAdjustments) -> DevelopSettings {
 }
 
 fn shot(src: &Rgb32f, s: &DevelopSettings) -> Rgba8 {
-    render(src, &SourceInfo::default(), s, &RenderRequest::fit(W, H)).image
+    render(src, &SourceInfo::default(), s, &RenderRequest::fit(W, H)).unwrap().image
 }
 
 /// Standard deviation of `f(pixel)` over columns `x0..x1` (rows 4..H-4).

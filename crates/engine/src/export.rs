@@ -2897,7 +2897,7 @@ mod tests {
         let c = DISPLAY_P3.to_space(&REC2020).apply_f32([0.04, 0.45, 0.04]);
         let src = lightcraft_raster::Rgb32f::filled(16, 16, c);
         let req = lightcraft_pipeline::RenderRequest { space, ..lightcraft_pipeline::RenderRequest::fit(16, 16) };
-        lightcraft_pipeline::render(&src, &Default::default(), &Default::default(), &req).image
+        lightcraft_pipeline::render(&src, &Default::default(), &Default::default(), &req).unwrap().image
     }
 
     /// Decode `bytes` and return the centre pixel in linear sRGB primaries (unclamped), plus the
@@ -2928,6 +2928,7 @@ mod tests {
             let base = lightcraft_pipeline::RenderRequest::fit(16, 16);
             move |space| {
                 lightcraft_pipeline::render(&src, &Default::default(), &Default::default(), &lightcraft_pipeline::RenderRequest { space, ..base })
+                    .unwrap()
                     .image
             }
         };
@@ -2971,7 +2972,7 @@ mod tests {
     fn ramp(depth: OutputDepth, space: OutputSpace) -> lightcraft_pipeline::Rendered {
         let src = lightcraft_raster::Rgb32f::from_fn(1024, 4, |x, _| [0.10 + 0.03 * x as f32 / 1023.0; 3]);
         let req = lightcraft_pipeline::RenderRequest { depth, space, ..lightcraft_pipeline::RenderRequest::fit(1024, 4) };
-        lightcraft_pipeline::render(&src, &Default::default(), &Default::default(), &req)
+        lightcraft_pipeline::render(&src, &Default::default(), &Default::default(), &req).unwrap()
     }
 
     fn distinct_levels(bytes: &[u8]) -> (usize, lightcraft_codecs::Decoded) {

@@ -420,6 +420,16 @@ pub fn source_uploads() -> u64 {
     }
 }
 
+/// Release a view's CPU and GPU image buffers, retaining only its small source-keyed scalars.
+/// Unlike [`StageCache::clear`], memory trimming must not require another full-frame statistic.
+pub fn trim_stages(stages: &StageCache) {
+    stages.trim_images();
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(gpu) = stages.peek_extension::<GpuStages>() {
+        gpu.trim_images();
+    }
+}
+
 /// Device bytes held by a view's GPU stages (kept with its [`StageCache`]); 0 when it has none.
 pub fn stage_bytes(stages: &StageCache) -> usize {
     #[cfg(not(target_arch = "wasm32"))]

@@ -792,6 +792,22 @@ impl RenderJob {
         self
     }
 
+    /// A window job rendered as main did (see [`lightcraft_pipeline::RenderRequest::bounded_window`]):
+    /// a quick first look while the exact window follows. Gets its own result key.
+    pub fn bounded_window(mut self) -> Self {
+        if cfg!(not(target_arch = "wasm32"))
+            && self.request.window.is_some()
+            && self.request.depth == lightcraft_pipeline::OutputDepth::U8
+            && !self.request.bounded_window
+        {
+            self.request.bounded_window = true;
+            self.key ^= 0x5851_f42d_4c95_7f2d;
+            self.cache = None;
+            self.view_cache = None;
+        }
+        self
+    }
+
     /// Draw a diagnostic overlay over the result (e.g. Point Color's visualized range). Gets its
     /// own result key.
     pub fn with_overlay(mut self, overlay: lightcraft_pipeline::Overlay) -> Self {
@@ -968,7 +984,23 @@ impl RenderJob {
                 // Thumbnails (many small jobs side by side) stay on the CPU; views and exports use
                 // the GPU when there is one.
                 let gpu = self.cache.is_none();
-                let (mut rendered, gpu_fallback) = develop_reporting(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu);
+                let (mut rendered, gpu_fallback) = match develop_reporting(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        return RenderResult {
+                            request_id: self.request_id,
+                            source_key: self.source_key,
+                            photo: self.photo,
+                            level: self.level,
+                            key: self.key,
+                            rendered: Err(error),
+                            gpu_fallback: None,
+                            loaded: (!was_loaded).then_some(source),
+                            quick: None,
+                            display: None,
+                        };
+                    }
+                };
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB
                 let mut srgb = None;
@@ -1015,8 +1047,15 @@ impl RenderJob {
 /// Render `src`: on the GPU when `gpu` is set and a GPU is available (`lightcraft_gpu`), else on
 /// the CPU, reusing `stages` either way. Both produce the same image within 1–3 LSB (see
 /// `docs/gpu-pipeline.md`); `LIGHTCRAFT_GPU=0` or [`lightcraft_gpu::set_enabled`] forces the CPU.
-pub fn develop(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>, gpu: bool) -> Rendered {
-    develop_reporting(src, info, s, req, stages, gpu).0
+pub fn develop(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    stages: Option<&StageCache>,
+    gpu: bool,
+) -> Result<Rendered, String> {
+    develop_reporting(src, info, s, req, stages, gpu).map(|r| r.0)
 }
 
 /// [`develop`], also saying why the render fell back from the GPU to the CPU when it did (`None`:
@@ -1029,13 +1068,13 @@ pub fn develop_reporting(
     req: &RenderRequest,
     stages: Option<&StageCache>,
     gpu: bool,
-) -> (Rendered, Option<String>) {
-    let (mut rendered, fallback) = develop_image(src, info, s, req, stages, gpu);
+) -> Result<(Rendered, Option<String>), String> {
+    let (mut rendered, fallback) = develop_image(src, info, s, req, stages, gpu)?;
     // an HDR edit's preview is its SDR rendition: its histogram shows the HDR range instead
     if let Some(h) = lightcraft_pipeline::hdr_histogram(src, info, s, req) {
         rendered.histogram = h;
     }
-    (rendered, fallback)
+    Ok((rendered, fallback))
 }
 
 fn develop_image(
@@ -1045,7 +1084,7 @@ fn develop_image(
     req: &RenderRequest,
     stages: Option<&StageCache>,
     gpu: bool,
-) -> (Rendered, Option<String>) {
+) -> Result<(Rendered, Option<String>), String> {
     // LUT profiles have no GPU stage: they render on the CPU
     let fallback = if gpu
         && !lightcraft_pipeline::lut::is_lut_profile(&s.profile.id)
@@ -1053,7 +1092,7 @@ fn develop_image(
         && req.proof.is_none()
     {
         match lightcraft_gpu::try_render(src, info, s, req, stages) {
-            Ok(r) => return (r, None),
+            Ok(r) => return Ok((r, None)),
             Err(lightcraft_gpu::Fallback::Failed(why)) => Some(why),
             Err(lightcraft_gpu::Fallback::NotTried) => None,
         }
@@ -1063,8 +1102,8 @@ fn develop_image(
     let rendered = match stages {
         Some(st) => lightcraft_pipeline::render_cached(src, info, s, req, st),
         None => lightcraft_pipeline::render(src, info, s, req),
-    };
-    (rendered, fallback)
+    }?;
+    Ok((rendered, fallback))
 }
 
 /// Where a [`QuickJob`]'s stand-in image came from.
@@ -1814,6 +1853,43 @@ mod tests {
     }
 
     #[test]
+    fn bounded_window_keys_are_distinct_and_order_independent() {
+        use lightcraft_pipeline::{MaskView, OutputDepth, Overlay, PixelWindow};
+        let mut session = crate::Session::with_demo();
+        let id = session.active().unwrap();
+        // Unedited Before and After views may share a key. Use distinct
+        // settings here to exercise both sets of render states.
+        let mut edit = (*session.develop_of(id).unwrap()).clone();
+        edit.light.exposure = 0.5;
+        session.set_develop(id, edit, "Exposure").unwrap();
+        let mut keys = std::collections::HashSet::new();
+        for before in [false, true] {
+            for x in [101, 202] {
+                let job = session.region_job_of(id, 1201, 803, PixelWindow { x, y: 77, w: 121, h: 83 }, true, before).unwrap();
+                for overlay in [
+                    Overlay::None,
+                    Overlay::Mask { id: 1, view: MaskView::Color, color: [255, 0, 0], opacity: 50 },
+                    Overlay::AllMasks { view: MaskView::Color, color: [0, 255, 0], opacity: 70 },
+                ] {
+                    let exact = job.clone().with_overlay(overlay);
+                    let bounded = exact.clone().bounded_window();
+                    assert!(bounded.request.is_bounded_window());
+                    assert_eq!(bounded.key, bounded.clone().bounded_window().key);
+                    assert_eq!(bounded.key, job.clone().bounded_window().with_overlay(overlay).key);
+                    assert_eq!(bounded.clone().draft().key, exact.clone().draft().bounded_window().key);
+                    for key in [exact.key, exact.clone().draft().key, bounded.key, bounded.draft().key] {
+                        assert!(keys.insert(key), "distinct inputs: before={before} x={x} overlay={overlay:?} key={key:016x}");
+                    }
+                    let deep = RenderJob { request: RenderRequest { depth: OutputDepth::U16, ..exact.request }, ..exact.clone() };
+                    assert_eq!(deep.clone().bounded_window().key, deep.key);
+                }
+            }
+        }
+        let full = session.render_job(id, 1201, 803, false, true).unwrap();
+        assert_eq!(full.clone().bounded_window().key, full.key);
+    }
+
+    #[test]
     fn denoise_mix_is_reserved_before_the_source_enters_the_cache() {
         let mut plain = Rgb32f::new(8, 8);
         plain.data.fill([1.0; 3]);
@@ -1871,7 +1947,7 @@ mod tests {
         job.settings = Arc::new(DevelopSettings::default());
         let r = job.clone().run();
         assert_eq!(r.loaded.as_ref().unwrap().info.as_ref(), Some(&info));
-        let expected = lightcraft_pipeline::render(&r.loaded.as_ref().unwrap().image, &info, &job.settings, &job.request);
+        let expected = lightcraft_pipeline::render(&r.loaded.as_ref().unwrap().image, &info, &job.settings, &job.request).unwrap();
         assert_eq!(r.rendered.as_ref().unwrap().image.data, expected.image.data);
         s.accept(&r);
         job.source = s.media.source_ref(s.catalog.photo(id).unwrap(), job.level);
@@ -1928,11 +2004,11 @@ mod tests {
         let new = r.rendered.as_ref().unwrap().image.data.clone();
         // the old pipeline: the same settings against the relative-scale source facts of an older build
         let old_info = SourceInfo { raw: true, relative_wb: true, as_shot_temp: 6500.0, as_shot_tint: 0.0, ..Default::default() };
-        let old = lightcraft_pipeline::render(&pixels, &old_info, &d, &request).image.data;
+        let old = lightcraft_pipeline::render(&pixels, &old_info, &d, &request).unwrap().image.data;
         assert_eq!(new, old, "the look of an existing edit changed");
         assert_ne!(
             new,
-            lightcraft_pipeline::render(&pixels, &decoded, &lightcraft_develop::DevelopSettings::for_raw(4986.0, -2.0), &request).image.data
+            lightcraft_pipeline::render(&pixels, &decoded, &lightcraft_develop::DevelopSettings::for_raw(4986.0, -2.0), &request).unwrap().image.data
         );
         // accepting the result records the as-shot white, journaled but not undoable, and the settings are untouched
         s.accept(&r);
@@ -1953,7 +2029,7 @@ mod tests {
         s.accept(&r);
         assert_eq!(s.pending_log.len(), log);
         // a catalog-only (proxy) render of the same settings before the decode gave the same pixels too
-        let proxy = lightcraft_pipeline::render(&pixels, &header, &d, &request).image.data;
+        let proxy = lightcraft_pipeline::render(&pixels, &header, &d, &request).unwrap().image.data;
         assert_eq!(proxy, old, "a smart preview of an existing edit changed");
     }
 

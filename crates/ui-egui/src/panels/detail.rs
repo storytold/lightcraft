@@ -361,7 +361,7 @@ struct WindowView {
 
 /// Ask for the window of `v` that holds what is on screen; remember it so its texture can be
 /// drawn where it belongs. `None`: no window is wanted (or possible) for this view.
-fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowView) -> Option<crate::region::RegionView> {
+fn request_window(app: &mut LightcraftApp, ctx: &egui::Context, c: &WindowCtx, v: &WindowView) -> Option<crate::region::RegionView> {
     let frame_edge = c.frame_edge?;
     // while a pinch or scroll runs the windows there are keep being drawn, magnified: no new one
     // per frame (zooming out would ask for ever wider ones)
@@ -412,11 +412,17 @@ fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowView) -> Opt
     // or the proof never leaves a stale region tile on screen while its replacement renders.
     let proof_key = if v.before { 0 } else { proof.map_or(0, |p| p.key()) };
     let look = job.settings.hash64() ^ overlay.key().rotate_left(17) ^ proof_key.rotate_left(41);
+    let shown = app.renderer.textures.get(&v.slot).filter(|t| t.photo == c.id).map(|t| t.key);
+    let placed =
+        app.region_tiles.iter().any(|((b, k), t)| *b == v.before && Some(*k) == shown && t.photo == c.id && t.window == win && t.full == (fw, fh));
+    let job = crate::region::first_window(job, shown, placed, c.interacting);
     let view = crate::region::RegionView { photo: c.id, before: v.before, key: job.key, full: (fw, fh), window: win, settings: look };
     // windows of other photos, looks and zooms of this side can't be drawn any more
-    app.region_tiles.retain(|(before, _), t| *before != v.before || t.is_current(c.id, (fw, fh), look, c.interacting));
+    app.region_tiles.retain(|(before, key), t| {
+        *before != v.before || (t.is_current(c.id, (fw, fh), look, c.interacting) && (Some(*key) == shown || *key == job.key))
+    });
     app.region_tiles.insert((v.before, job.key), view);
-    app.renderer.request(v.slot, job, 99);
+    app.renderer.request_window(ctx, v.slot, job, 99);
     Some(view)
 }
 
@@ -662,7 +668,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     let mut windows: Vec<(WindowView, crate::region::RegionView)> = Vec::new();
     for v in window_views {
-        if let Some(view) = request_window(app, &window_ctx, &v) {
+        if let Some(view) = request_window(app, ui.ctx(), &window_ctx, &v) {
             windows.push((v, view));
         }
     }
@@ -897,6 +903,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if let Some(why) = photo.preview_only.as_deref().filter(|_| !fullscreen) {
         preview_only_pill(ui, canvas, why);
     }
+    if let Some(error) = windows.iter().find_map(|(view, _)| app.renderer.failure(if view.before { Slot::RegionBefore } else { Slot::Region })) {
+        region_failure_notice(ui, canvas, error, app.ui.navigator && !fullscreen);
+    }
     resp.context_menu(|ui| {
         crate::widgets::menu_button(ui, crate::i18n::tr("Zoom"), |ui| {
             for (label, cmd) in [("Fit", "view.zoomFit"), ("100%", "view.zoom100"), ("Zoom In", "view.zoomIn"), ("Zoom Out", "view.zoomOut")] {
@@ -908,6 +917,23 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ui.separator();
         super::grid::context_menu(app, ui, id);
     });
+}
+
+/// A failed zoom job keeps the whole-frame preview visible. The status stays
+/// until the requested region succeeds or the view no longer needs that region.
+fn region_failure_notice(ui: &mut egui::Ui, canvas: Rect, error: &str, navigator: bool) {
+    let t = Tokens::get(ui.ctx());
+    let p = ui.painter_at(canvas);
+    let width = (canvas.width() - 48.0 - if navigator { NAV_W + 12.0 } else { 0.0 }).clamp(80.0, 420.0);
+    let message = crate::i18n::tr("Zoom detail is unavailable. Try a lower zoom.");
+    let g = p.layout(message.into(), t.font(12.0), Color32::WHITE, width);
+    let size = g.size() + vec2(20.0, 12.0);
+    // Leave room for the Before/After labels along the canvas' lower edge.
+    let r = Rect::from_min_size(pos2(canvas.left() + 12.0, canvas.bottom() - size.y - 36.0), size);
+    p.rect_filled(r, 4.0, Color32::from_black_alpha(225));
+    p.galley(r.min + vec2(10.0, 6.0), g, Color32::WHITE);
+    register(ui.ctx(), "notice:regionFailure:loupe", r);
+    ui.interact(r, egui::Id::new("region-failure-notice"), Sense::hover()).on_hover_text(error);
 }
 
 /// The info overlay at the canvas' top left (`view.infoOverlay`): file name with the capture date
@@ -3108,5 +3134,174 @@ mod info_overlay_tests {
         assert_eq!(copies.len(), 2, "the file name and its shadow: {copies:?}");
         assert_eq!(copies[1], Color32::WHITE, "the text on top");
         assert!(copies[0].r() < 64 && copies[0].a() > 0, "the shadow under it is dark: {:?}", copies[0]);
+    }
+}
+
+#[cfg(test)]
+mod bounded_window_tests {
+    use super::*;
+    use crate::{Services, headless::Headless};
+    use std::time::Duration;
+
+    fn exact_job(h: &mut Headless, view: crate::region::RegionView, slot: Slot) -> lightcraft_engine::RenderJob {
+        let job = if view.before {
+            h.app.session.region_job_before(view.photo, view.full.0, view.full.1, view.window, true)
+        } else {
+            h.app.session.region_job(view.photo, view.full.0, view.full.1, view.window, true)
+        }
+        .unwrap();
+        h.app.renderer.job_for(slot, job)
+    }
+
+    #[test]
+    fn a_pan_supersedes_an_exact_window_before_it_starts() {
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+        let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+        let timeout = Duration::from_secs(120);
+        h.request("ui.set", serde_json::json!({"view":"detail", "right":"none", "filmstrip":false}), timeout);
+        h.request("engine.execute", serde_json::json!({"command":"develop.set", "params":{"control":"effects.dehaze", "value":10.0}}), timeout);
+        assert!(h.settle(timeout));
+        h.app.ui.zoom = crate::state::Zoom::Percent(200.0);
+        assert!(h.step_until(timeout, |h| h.app.region_view.is_some()));
+        let first = h.app.region_view.unwrap();
+        let exact = exact_job(&mut h, first, Slot::Region);
+        assert_eq!(first.key, exact.clone().bounded_window().key);
+        assert!(h.step_until(timeout, |h| h.app.renderer.textures.get(&Slot::Region).is_some_and(|t| t.key == first.key)));
+        assert!(!h.app.renderer.is_pending(Slot::Region), "the exact replacement must wait before entering the worker pool");
+        assert!(h.busy(), "headless settling must include the deferred replacement");
+        h.app.ui.pan = (0.8, 0.5);
+        h.step();
+        let pan = h.app.region_view.unwrap();
+        assert_ne!(pan.window, first.window);
+        let next = exact_job(&mut h, pan, Slot::Region);
+        assert_eq!(pan.key, next.clone().bounded_window().key);
+        assert_eq!(h.app.renderer.wanted(Slot::Region), Some(pan.key), "the new bounded request goes straight to the worker pool");
+        assert!(h.settle(timeout));
+        assert_eq!(h.app.renderer.textures[&Slot::Region].key, next.key, "the final window still becomes exact");
+    }
+
+    #[test]
+    fn bounded_windows_finish_after_pan_photo_split_and_nr_drag() {
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+        let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+        let timeout = Duration::from_secs(120);
+        h.request("ui.set", serde_json::json!({"view":"detail", "right":"none", "filmstrip":false}), Duration::from_secs(20));
+        assert!(h.settle(timeout));
+        h.app.ui.zoom = crate::state::Zoom::Percent(200.0);
+        h.app.ui.before_after = crate::state::BeforeAfter::Split;
+        h.step();
+        // A pane can finish its bounded render before the other pane starts.
+        // Record each pane's first request before waiting for both.
+        let first = std::cell::Cell::new([h.app.region_view, h.app.region_before_view]);
+        assert!(h.step_until(timeout, |h| {
+            let mut views = first.get();
+            for (seen, current) in views.iter_mut().zip([h.app.region_view, h.app.region_before_view]) {
+                if seen.is_none() {
+                    *seen = current;
+                }
+            }
+            first.set(views);
+            views.iter().all(Option::is_some)
+        }));
+        let [after, before] = first.get();
+        for (view, slot) in [(after.unwrap(), Slot::Region), (before.unwrap(), Slot::RegionBefore)] {
+            let exact = exact_job(&mut h, view, slot);
+            assert_eq!(view.key, exact.clone().bounded_window().key);
+            assert!(h.step_until(timeout, |h| h.app.renderer.textures.get(&slot).is_some_and(|t| t.key == exact.key)));
+        }
+        let old = h.app.region_view.unwrap();
+        h.app.ui.pan = (0.8, 0.5);
+        assert!(h.step_until(timeout, |h| h.app.region_view.is_some_and(|v| v.window != old.window)));
+        let pan = h.app.region_view.unwrap();
+        let exact = exact_job(&mut h, pan, Slot::Region);
+        assert_eq!(pan.key, exact.clone().bounded_window().key);
+        assert!(h.step_until(timeout, |h| h.app.renderer.textures.get(&Slot::Region).is_some_and(|t| t.key == exact.key)));
+        h.app.session.begin_interaction("Noise reduction").unwrap();
+        h.request(
+            "engine.execute",
+            serde_json::json!({"command":"develop.set", "params":{"control":"detail.nr_luminance", "value":50.0}}),
+            Duration::from_secs(20),
+        );
+        assert!(h.settle(timeout));
+        let draft = h.app.region_view.unwrap();
+        let exact = exact_job(&mut h, draft, Slot::Region);
+        assert_eq!(draft.key, exact.clone().draft().key);
+        h.app.session.end_interaction().unwrap();
+        assert!(
+            h.step_until(timeout, |h| h.app.renderer.textures.get(&Slot::Region).is_some_and(|t| t.key == exact.key)),
+            "the final draft must be replaced without another edit"
+        );
+        let other = h.app.session.visible_cloned().iter().find(|id| **id != draft.photo).copied().unwrap();
+        h.request(
+            "engine.execute",
+            serde_json::json!({"command":"library.select", "params":{"ids":[other.0], "active":other.0}}),
+            Duration::from_secs(20),
+        );
+        assert!(h.step_until(timeout, |h| h.app.region_view.is_some_and(|v| v.photo == other)));
+        let photo = h.app.region_view.unwrap();
+        let exact = exact_job(&mut h, photo, Slot::Region);
+        assert_eq!(photo.key, exact.clone().bounded_window().key);
+        assert!(h.step_until(timeout, |h| h.app.renderer.textures.get(&Slot::Region).is_some_and(|t| t.photo == other && t.key == exact.key)));
+        assert!(h.settle(timeout));
+        if let Some(path) = std::env::var_os("LIGHTCRAFT_REVIEW_SCREENSHOT") {
+            let image = h.paint();
+            let image =
+                lightcraft_raster::Rgba8 { width: image.size[0], height: image.size[1], data: image.pixels.iter().map(|p| p.to_array()).collect() };
+            let png =
+                lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&image), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+            std::fs::write(path, png).unwrap();
+        }
+    }
+
+    /// A window not on screen yet is rendered main's way first (bounded margin, Dehaze proxy),
+    /// then the exact window replaces it.
+    #[test]
+    fn a_new_window_is_bounded_first_then_exact() {
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+        let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+        assert_eq!(h.request("ui.set", serde_json::json!({"view":"detail", "right":"none", "filmstrip":false}), Duration::from_secs(20))["ok"], true);
+        h.settle(Duration::from_secs(120));
+        h.app.ui.zoom = crate::state::Zoom::Percent(200.0);
+        assert!(h.step_until(Duration::from_secs(120), |h| h.app.region_view.is_some()), "a window is asked for");
+        let first = h.app.region_view.unwrap();
+        let exact = h
+            .app
+            .session
+            .region_job(first.photo, first.full.0, first.full.1, first.window, true)
+            .map(|j| h.app.renderer.job_for(Slot::Region, j))
+            .unwrap();
+        assert_ne!(first.key, exact.key);
+        assert_eq!(first.key, exact.clone().bounded_window().key, "main's window first");
+        let exact_key = exact.key;
+        assert!(
+            h.step_until(Duration::from_secs(120), |h| h.app.renderer.textures.get(&Slot::Region).is_some_and(|t| t.key == exact_key)),
+            "then the exact one"
+        );
+    }
+
+    /// With Dehaze on, the exact window after a drag can take ~0.3 s at 67 MP: the released drag
+    /// shows main's window first, then the exact one.
+    #[test]
+    fn a_released_drag_with_dehaze_is_bounded_first_then_exact() {
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+        let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+        let timeout = Duration::from_secs(120);
+        let set = |h: &mut Headless, control: &str, value: f64| {
+            h.request("engine.execute", serde_json::json!({"command":"develop.set", "params":{"control":control, "value":value}}), timeout);
+        };
+        h.request("ui.set", serde_json::json!({"view":"detail", "right":"none", "filmstrip":false}), Duration::from_secs(20));
+        set(&mut h, "effects.dehaze", 10.0);
+        h.app.ui.zoom = crate::state::Zoom::Percent(200.0);
+        assert!(h.settle(timeout));
+        h.app.session.begin_interaction("Exposure").unwrap();
+        set(&mut h, "light.exposure", 0.5);
+        assert!(h.settle(timeout));
+        let draft = h.app.region_view.unwrap();
+        let exact = exact_job(&mut h, draft, Slot::Region);
+        assert_eq!(draft.key, exact.clone().draft().key);
+        h.app.session.end_interaction().unwrap();
+        assert!(h.step_until(timeout, |h| h.app.region_view.is_some_and(|v| v.key != draft.key)));
+        assert_eq!(h.app.region_view.unwrap().key, exact.clone().bounded_window().key, "main's window first");
+        assert!(h.step_until(timeout, |h| h.app.renderer.textures.get(&Slot::Region).is_some_and(|t| t.key == exact.key)), "then the exact one");
     }
 }

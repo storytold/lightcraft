@@ -49,7 +49,7 @@ fn line_contrast(img: &Rgba8, x0: usize, x1: usize) -> f32 {
 }
 
 fn shot(s: &DevelopSettings) -> Rgba8 {
-    render(&scene(), &SourceInfo::default(), s, &RenderRequest::fit(W, H)).image
+    render(&scene(), &SourceInfo::default(), s, &RenderRequest::fit(W, H)).unwrap().image
 }
 
 /// Settings on `process`.
@@ -133,7 +133,7 @@ fn highlights_add_no_halo_at_a_strong_edge() {
     // (nearly) as much as those far from it, the dark ones stay where they are (the guided
     // filter's own softness leaves up to 4 levels within a few px of the edge, as before)
     let src = Rgb32f::from_fn(W, H, |x, _| if x < W / 2 { [0.85; 3] } else { [0.011; 3] });
-    let shot = |s: &DevelopSettings| render(&src, &SourceInfo::default(), s, &RenderRequest::fit(W, H)).image;
+    let shot = |s: &DevelopSettings| render(&src, &SourceInfo::default(), s, &RenderRequest::fit(W, H)).unwrap().image;
     let (plain, hl) = (shot(&on(Process::V2)), shot(&with("light.highlights", -100.0)));
     let at = |img: &Rgba8, x: usize| luma(img.data[(H / 2) * W + x]);
     let far = at(&hl, 100) - at(&plain, 100);
@@ -235,8 +235,8 @@ fn the_base_plane_is_cached_per_process() {
     let (info, req) = (SourceInfo::default(), RenderRequest::fit(W, H));
     let cache = StageCache::default();
     for s in [&s1, &s2, &s1, &s2] {
-        let warm = render_cached(&src, &info, s, &req, &cache).image;
-        assert!(warm == render(&src, &info, s, &req).image, "process {:?}", s.process);
+        let warm = render_cached(&src, &info, s, &req, &cache).unwrap().image;
+        assert!(warm == render(&src, &info, s, &req).unwrap().image, "process {:?}", s.process);
     }
     let sig = local::plane_sigmas(&s2, W as f64, Quality::Full);
     let sg = sig.base.unwrap();

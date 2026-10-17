@@ -1,6 +1,6 @@
 # Gaps: where LightCraft falls short of Lightroom
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** minor (gap 10: 515 of 1,446 models verified, ~84% of photographers on a verified body)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (gap 10: 515 of 1,446 models verified, ~84% of photographers on a verified body)
 
 Every known shortfall, one entry each, ranked by user impact (how many Lightroom users hit it, and
 how hard it blocks them), then by effort. **Agents pick work from the top** (the first entry nobody is
@@ -18,7 +18,7 @@ Hours are Opus 5.5 agent wall-clock hours (see [target-app-parity.md](target-app
 | 1 B | **Camera colour is estimated, not measured** (LR-PROF-CAMERACOLOR). Raws start from a per-file fit to the camera JPEG, 5 bundled profiles or 52 spectral matrices; others use a neutral matrix (a black-and-white camera JPEG gives its tone curve only, #577; dark JPEG tones also guide the toe, #1307) | ΔE vs camera JPEG 2.9–10 after fitting (raw-parity.md); 0 chart-calibrated models vs 1,500 Adobe Standard profiles | every raw shooter sees colour that is close but not Lightroom's; some get neutral-matrix colour | 50–90 | [raw-parity](raw-parity.md#colour) |
 | 2 B | **CR3 variants no public file uses** (LR-IMP-FORMATS): `crx.rs` refuses vertical-tile C-RAW, partial-subband and other plane coding, multi-tile 0x200 and adaptive low-frequency gains, and those files fall back to the preview. All 110 CC0 CR3s on raw.pixls.us (31 folders) decode from sensor data, so none of these variants has a public sample; 26 CR3 bodies are verified (M50 / R100 / R8 exact, R5 Mark II pinned, 22 more pinned on one CC0 file each and checked against the camera JPEG, [cr3.md](cr3.md#further-bodies-one-cc0-file-each)). HEIF stills are `.HIF` files, not CR3; no CR3 sRAW / mRAW sample exists | measured: Canon's share whose camera fully works 73% → 94% (raw-parity.md); 18 of 22 popular Canon bodies write CR3, all 18 now verified | +0.3 points of photographers; the variants surface only as user files that open as a preview | 10–25 | [raw-parity](raw-parity.md#remaining-work-ranked-by-photographers-unlocked-per-hour) |
 | 3 B | **Render fidelity unmeasured** (LR-BEHAV-RENDER-FIDELITY): tone, highlights, texture / clarity / dehaze, NR and sharpening are tuned by eye | no side-by-side suite; a retune needs a new process version (only V1 exists) | edits imported from Lightroom look different; the look "isn't Lightroom's" | 30–60 | [raw-parity](raw-parity.md), [process-versions](process-versions.md) |
-| 4 | ~~Original-pixel detail at 100%~~ (LR-VIEW-ZOOM): closed 2026-10-12, see Closed recently | checklist row ✅ | — | 0 | [ui-parity](ui-parity.md) |
+| 4 | ~~Original-pixel detail at 100%~~ (LR-VIEW-ZOOM): closed 2026-10-12, see Closed recently. Native windows now receive per-filter context, aligned reduced grids and the full render airlight when preparation fits its budget (#1146, [window context](window-context.md)); new windows and released Dehaze drags show a bounded render, then wait 100 ms before exact replacement. GPU haze statistics survive image-buffer trimming. Web retains the earlier bounded context and proxy airlight | checklist row ✅ | — | 0 | [ui-parity](ui-parity.md) |
 | 5 B | **AI masks: Subject, Sky, People, Background, Landscape** are heuristics; Object / Describe run SAM 3 but its download has no mirror configured | `crates/segment`; ai-masks.md; MASK rows 67% | masking is how most Lightroom users edit today | 40–70 + model decision | [target-app-parity](target-app-parity.md#ai) |
 | 6 B | **Compressed ORF** (every Olympus / OM body since ~2008) | measured: 66 of 78 Olympus / OM models preview-only; `orf.rs` refuses; OM bucket 3% of photographers, 3% of them fully work | +2.6 points; best gain per hour of any raw gap (~0.2) | 8–15 | [raw-parity](raw-parity.md#compressed-orf-a-clean-room-starting-point) (the two Olympus patents that describe the method) |
 | 7 | **Nikon High Efficiency NEF** (HE / HE★ on Z 8, Z 9, Z 6III, Z f, Z50II, Z5II when set to HE) | named and preview only (#193); needs a pure-Rust JPEG XS decoder | +1.1 points (only shots taken in HE; lossless works on the same bodies); low gain per hour (~0.04), so not a beta blocker | 20–40 | [raw-parity](raw-parity.md) |
@@ -77,6 +77,16 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | patch | LR-VIEW-ZOOM: retain GPU haze scalars during trimming and delay exact replacements by 100 ms; released Dehaze drags stay bounded first; status unchanged |
+| 2026-10-15 | patch | LR-VIEW-ZOOM: bounded-first replacement preserves exact caches; single-mask and all-mask overlays use windows; status unchanged |
+| 2026-10-14 | patch | LR-VIEW-ZOOM: restore the native airlight proxy fallback, count sequential NR storage and retain exact large-frame pans; status unchanged |
+| 2026-10-12 | minor | LR-VIEW-ZOOM: visible region failure status and NaN payload contract; status unchanged |
+| 2026-10-13 | minor | LR-VIEW-ZOOM: exact context is native-only; web keeps main's margin, pixels and memory use; remove admission estimator; status unchanged |
+| 2026-10-12 | minor | LR-VIEW-ZOOM: add wasm32 render admission and visible region failure status; qualify NaN payload equality; status unchanged |
+| 2026-10-12 | minor | LR-VIEW-ZOOM: bound exact preparation, share upstream pixels and reuse refinement intermediates; status unchanged |
+| 2026-10-12 | minor | Gap 4: supplied mattes and hidden masks skip unused context; inactive-mask tone bases keep their support when Clarity reads them, Defringe gets context, and window finishing is limited to requested pixels; sampling-grid and airlight differences remain, along with overlay and soft-proof gaps |
+| 2026-10-12 | minor | LR-VIEW-ZOOM round 4: CPU/GPU reduced planes keep the full-frame sampling scale and origin; airlight and rounding limits remain; status unchanged |
+| 2026-10-12 | minor | LR-VIEW-ZOOM round 5: full-resolution airlight for windows, cached mask alphas and corrected memory accounting; status unchanged |
 | 2026-10-14 | minor | Gap 26: at 100k photos stack and album lookups are indexed, so an "In a Stack" or "Album" smart album counts in ~14 ms (was 0.6–2.7 s); open time unchanged |
 | 2026-10-14 | minor | Gap 10: Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (coverage.py 515 → 545 verified); sensor verification does not establish colour parity (#1277) |
 | 2026-10-14 | minor | Gap 21: de, es, fr, ja and uk catalogs filled (97–99%); 55–90 h → 40–70 h |

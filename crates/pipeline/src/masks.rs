@@ -9,6 +9,7 @@
 use lightcraft_develop::{BrushStroke, LocalAdjustments, Mask, MaskOp, MaskShape, SegMask};
 use lightcraft_geom::{Orientation, Point};
 use lightcraft_raster::{Image, Plane, Rgb32f};
+use std::sync::Arc;
 
 use crate::for_rows;
 use crate::geometry::Frame;
@@ -90,12 +91,21 @@ impl Mattes {
             _ => Vec::new(),
         }
     }
+
+    /// Whether evaluation uses a supplied matte instead of a spatial heuristic.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn uses_matte(&self, shape: &MaskShape) -> bool {
+        // Background evaluates Subject and then inverts its alpha.
+        let shape = if matches!(shape, MaskShape::Background) { &MaskShape::Subject } else { shape };
+        !self.for_shape(shape).is_empty()
+    }
 }
 
 pub struct Evaluated {
     /// The mask's id ([`Mask::id`]).
     pub id: u32,
-    pub alpha: Plane,
+    /// Shared with the [`AlphaCache`] that keeps it for the next render.
+    pub alpha: Arc<Plane>,
     pub adjust: LocalAdjustments,
 }
 
@@ -111,32 +121,235 @@ pub fn evaluate(masks: &[Mask], frame: &Frame, w: usize, h: usize, img: &Rgb32f,
     masks
         .iter()
         .filter(|m| m.visible && !m.components.is_empty())
-        .map(|m| Evaluated { id: m.id, alpha: evaluate_one(m, frame, w, h, img, log_l, ev, mattes), adjust: m.adjust })
+        .map(|m| Evaluated { id: m.id, alpha: Arc::new(evaluate_one(m, frame, w, h, img, log_l, ev, mattes)), adjust: m.adjust })
         .collect()
+}
+
+/// What a render's masks are evaluated against besides their own definitions: [`alpha_key`] keys
+/// each alpha by the parts of it the mask reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AlphaKeys {
+    /// The output frame and size (`Plan::geo`): every mask depends on it.
+    pub geo: u64,
+    /// The image the masks see, before exposure (`Plan::lin_key`): range masks, the Sky / Subject
+    /// / Background heuristics, Auto Mask brushes and Refine Edges read it.
+    pub image: u64,
+}
+
+/// Alpha planes (`P`: a CPU [`Plane`], or a renderer's device buffer) of the last render's visible
+/// masks, keyed by [`alpha_key`]. A slider drag that changes nothing a mask reads (Exposure for
+/// gradients and brushes, Clarity, the mask's own sliders except Amount) reuses its alpha instead
+/// of evaluating it again. Holds only the masks of the last render (one plane per visible mask),
+/// tied to the segmentation mattes they were evaluated with.
+pub struct AlphaCache<P = Plane> {
+    mattes: Option<Arc<Mattes>>,
+    slots: Vec<(u64, Arc<P>)>,
+    refinement: RefinementCache,
+}
+
+impl<P> Clone for AlphaCache<P> {
+    fn clone(&self) -> Self {
+        AlphaCache { mattes: self.mattes.clone(), slots: self.slots.clone(), refinement: self.refinement.clone() }
+    }
+}
+
+impl<P> Default for AlphaCache<P> {
+    fn default() -> Self {
+        AlphaCache { mattes: None, slots: Vec::new(), refinement: RefinementCache::default() }
+    }
+}
+
+impl<P> AlphaCache<P> {
+    /// The alphas held for a render with `mattes` (none when the mattes changed), taken out of
+    /// the cache: hand back the ones the render used with [`Self::keep`].
+    pub fn take(&mut self, mattes: Option<&Arc<Mattes>>) -> Vec<(u64, Arc<P>)> {
+        let same = match (&self.mattes, mattes) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        };
+        let slots = std::mem::take(&mut self.slots);
+        if same {
+            slots
+        } else {
+            self.refinement = RefinementCache::default();
+            Vec::new()
+        }
+    }
+
+    /// Hold `slots` (the alphas a render with `mattes` used), dropping everything else.
+    pub fn keep(&mut self, mattes: Option<&Arc<Mattes>>, slots: Vec<(u64, Arc<P>)>) {
+        self.mattes = mattes.cloned();
+        self.slots = slots;
+    }
+
+    /// The alphas held.
+    pub fn planes(&self) -> impl Iterator<Item = &Arc<P>> {
+        self.slots.iter().map(|(_, p)| p)
+    }
+
+    /// CPU refinement intermediates, included in the stage cache's byte count.
+    pub fn refinement_planes(&self) -> impl Iterator<Item = &Arc<Plane>> {
+        self.refinement.guide.iter().flat_map(|(_, _, a, b)| [a, b]).chain(self.refinement.means.iter().map(|(_, _, p)| p))
+    }
+
+    pub fn len(&self) -> usize {
+        self.slots.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.slots.is_empty()
+    }
+}
+
+/// Whether the alpha of mask `m` reads the image (`.0`) and the global exposure (`.1`), beyond
+/// its own definition and the frame. Errs towards yes: a mask said to read something it doesn't
+/// is only evaluated more often than it needs to be.
+pub fn reads(m: &Mask) -> (bool, bool) {
+    let (mut image, mut exposure) = (m.refine > 0.0, false);
+    for c in &m.components {
+        let (i, e) = match &c.shape {
+            MaskShape::Linear { .. } | MaskShape::Radial { .. } | MaskShape::DepthRange { .. } | MaskShape::Landscape { .. } => (false, false),
+            MaskShape::Prompt { .. } => (false, false),
+            // a stored segmentation (or no clicks) reads nothing; clicks without one take the heuristic
+            MaskShape::Object { seg, detail, .. } => (seg.is_none() && detail.is_empty(), false),
+            MaskShape::Brush { strokes } => (strokes.iter().any(|s| s.auto_mask), false),
+            // (with a source matte these read neither: counted as if they did)
+            MaskShape::LuminanceRange { .. } | MaskShape::ColorRange { .. } | MaskShape::Sky => (true, true),
+            MaskShape::Subject | MaskShape::Background | MaskShape::People { .. } => (true, false),
+        };
+        image |= i;
+        exposure |= e;
+    }
+    (image, exposure)
+}
+
+/// Feeds `Debug` output to a hasher without building the string.
+struct HashWrite<'a, H: std::hash::Hasher>(&'a mut H);
+
+impl<H: std::hash::Hasher> std::fmt::Write for HashWrite<'_, H> {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.0.write(s.as_bytes());
+        Ok(())
+    }
+}
+
+/// The key of mask `m`'s alpha in a render with `keys` and global exposure `ev`: everything
+/// [`evaluate_one`] reads: its components, Refine Edges, Invert and Amount, the frame, and the
+/// image and exposure for the masks that read them ([`reads`]). Not its other sliders, name or id.
+pub fn alpha_key(m: &Mask, keys: AlphaKeys, ev: f32) -> u64 {
+    use std::fmt::Write;
+    use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hash, Hasher};
+    let (image, exposure) = reads(m);
+    let mut h = BuildHasherDefault::<DefaultHasher>::default().build_hasher();
+    keys.geo.hash(&mut h);
+    image.then_some(keys.image).hash(&mut h);
+    exposure.then_some(ev.to_bits()).hash(&mut h);
+    (m.refine.to_bits(), m.invert, m.adjust.amount.to_bits()).hash(&mut h);
+    // (`Debug` of an f64 round-trips: distinct definitions write distinct text)
+    let _ = write!(HashWrite(&mut h), "{:?}", m.components);
+    h.finish()
+}
+
+/// [`evaluate`], reusing the alphas `cache` holds for masks whose inputs are unchanged and keeping
+/// this render's there. The result is identical to [`evaluate`]'s.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_cached(
+    masks: &[Mask],
+    frame: &Frame,
+    w: usize,
+    h: usize,
+    img: &Rgb32f,
+    log_l: &Plane,
+    ev: f32,
+    mattes: Option<&Arc<Mattes>>,
+    keys: AlphaKeys,
+    cache: &mut AlphaCache,
+) -> Vec<Evaluated> {
+    let old = cache.take(mattes);
+    let mut refinement = std::mem::take(&mut cache.refinement);
+    // Means of geometric masks survive WB/NR edits; means of image-dependent
+    // shapes use the same dependency classifier as their unrefined alphas.
+    let mean_keys: Vec<_> =
+        masks.iter().filter(|m| m.visible && !m.components.is_empty() && m.refine > 0.0).map(|m| refinement_mean_key(m, keys, ev)).collect();
+    refinement.means.retain(|(k, _, _)| mean_keys.contains(k));
+    if mean_keys.is_empty() {
+        refinement.guide = None;
+    }
+    let mut used = Vec::new();
+    let out = masks
+        .iter()
+        .filter(|m| m.visible && !m.components.is_empty())
+        .map(|m| {
+            let key = alpha_key(m, keys, ev);
+            let alpha = match old.iter().find(|(k, _)| *k == key) {
+                Some((_, a)) => a.clone(),
+                None => Arc::new(evaluate_one_with_refinement(m, frame, w, h, img, log_l, ev, mattes.map(|a| &**a), &mut refinement, keys)),
+            };
+            used.push((key, alpha.clone()));
+            Evaluated { id: m.id, alpha, adjust: m.adjust }
+        })
+        .collect();
+    cache.keep(mattes, used);
+    cache.refinement = refinement;
+    out
+}
+
+/// `f(a, b)` for each value `a` of `p` and the value `b` at the same index of `q`, row-parallel.
+fn zip_rows(p: &mut Plane, q: &Plane, f: impl Fn(&mut f32, f32) + Sync + Send) {
+    let w = p.width;
+    for_rows(&mut p.data, w, |y, row| {
+        let Some(src) = q.data.get(y * w..y * w + row.len()) else { return };
+        for (a, b) in row.iter_mut().zip(src) {
+            f(a, *b);
+        }
+    });
+}
+
+/// `f` on each value of `p`, row-parallel.
+fn map_rows(p: &mut Plane, f: impl Fn(&mut f32) + Sync + Send) {
+    let w = p.width;
+    for_rows(&mut p.data, w, |_, row| row.iter_mut().for_each(&f));
 }
 
 /// The alpha plane of mask `m` (whether visible or not): its components combined, inverted and
 /// scaled by its amount.
 #[allow(clippy::too_many_arguments)]
 pub fn evaluate_one(m: &Mask, frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32, mattes: Option<&Mattes>) -> Plane {
+    evaluate_one_with_refinement(m, frame, w, h, img, log_l, ev, mattes, &mut RefinementCache::default(), AlphaKeys { geo: 0, image: 0 })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_one_with_refinement(
+    m: &Mask,
+    frame: &Frame,
+    w: usize,
+    h: usize,
+    img: &Rgb32f,
+    log_l: &Plane,
+    ev: f32,
+    mattes: Option<&Mattes>,
+    refinement: &mut RefinementCache,
+    keys: AlphaKeys,
+) -> Plane {
+    #[cfg(target_arch = "wasm32")]
+    let _ = (refinement, keys);
     let mut alpha = Plane::new(w, h);
     let mut first = true;
     for comp in &m.components {
         let mut c = shape_alpha(&comp.shape, frame, w, h, img, log_l, ev, mattes);
         if comp.invert {
-            c.data.iter_mut().for_each(|v| *v = 1.0 - *v);
+            map_rows(&mut c, |v| *v = 1.0 - *v);
         }
         if first && comp.op != MaskOp::Intersect {
             alpha = c;
             first = false;
             continue;
         }
-        for (a, c) in alpha.data.iter_mut().zip(&c.data) {
-            *a = match comp.op {
-                MaskOp::Add => a.max(*c),
-                MaskOp::Subtract => *a * (1.0 - c),
-                MaskOp::Intersect => *a * c,
-            };
+        match comp.op {
+            MaskOp::Add => zip_rows(&mut alpha, &c, |a, c| *a = a.max(c)),
+            MaskOp::Subtract => zip_rows(&mut alpha, &c, |a, c| *a *= 1.0 - c),
+            MaskOp::Intersect => zip_rows(&mut alpha, &c, |a, c| *a *= c),
         }
         first = false;
     }
@@ -145,17 +358,27 @@ pub fn evaluate_one(m: &Mask, frame: &Frame, w: usize, h: usize, img: &Rgb32f, l
         // the width of a soft brush edge or gradient)
         let k = (m.refine / 100.0).clamp(0.0, 1.0) as f32;
         let sigma = (0.04 * frame.output_long(w, h) as f32 * k).max(1.0);
+        #[cfg(target_arch = "wasm32")]
         let refined = guided_cross(log_l, &alpha, sigma, 0.02);
-        for (a, r) in alpha.data.iter_mut().zip(&refined.data) {
-            *a += (r - *a) * k.sqrt();
-        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let refined = guided_cross_cached(
+            log_l,
+            &alpha,
+            sigma,
+            0.02,
+            refinement,
+            crate::hash_of((keys.geo, keys.image)),
+            Some(refinement_mean_key(m, keys, ev)),
+        );
+        let t = k.sqrt();
+        zip_rows(&mut alpha, &refined, |a, r| *a += (r - *a) * t);
     }
     if m.invert {
-        alpha.data.iter_mut().for_each(|v| *v = 1.0 - *v);
+        map_rows(&mut alpha, |v| *v = 1.0 - *v);
     }
     let amt = (m.adjust.amount / 100.0) as f32;
     if (amt - 1.0).abs() > 1e-6 {
-        alpha.data.iter_mut().for_each(|v| *v *= amt);
+        map_rows(&mut alpha, |v| *v *= amt);
     }
     alpha
 }
@@ -210,37 +433,42 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
         MaskShape::Brush { strokes } => rasterize_brush(strokes, frame, w, h, img, log_l, &mut out),
         MaskShape::LuminanceRange { lo, hi, lo_feather, hi_feather } => {
             let (lo, hi, lf, hf) = (*lo as f32, *hi as f32, (*lo_feather as f32).max(1e-3), (*hi_feather as f32).max(1e-3));
-            for (v, l) in out.data.iter_mut().zip(&log_l.data) {
+            zip_rows(&mut out, log_l, |v, l| {
                 // map log luminance to a 0..1 perceptual scale (−8..+4 EV)
                 let y = ((l + ev + 8.0) / 12.0).clamp(0.0, 1.0);
                 *v = smooth(lo - lf, lo, y) * (1.0 - smooth(hi, hi + hf, y));
-            }
+            });
         }
         MaskShape::ColorRange { samples, refine } => {
             let tol = color_range_tolerance(*refine);
             let samples: Vec<[f32; 3]> = samples.iter().map(|s| [s[0] as f32, s[1] as f32, s[2] as f32]).collect();
-            for (v, c) in out.data.iter_mut().zip(&img.data) {
-                let lab = lightcraft_color::perceptual::oklab_from_2020(tonemap_for_select(c.map(|v| v * gain)));
-                let d = samples
-                    .iter()
-                    .map(|s| ((lab[1] - s[1]).powi(2) + (lab[2] - s[2]).powi(2) + 0.25 * (lab[0] - s[0]).powi(2)).sqrt())
-                    .fold(f32::MAX, f32::min);
-                *v = 1.0 - smooth(tol * 0.5, tol, d);
-            }
+            for_rows(&mut out.data, w, |y, row| {
+                let Some(src) = img.data.get(y * w..y * w + row.len()) else { return };
+                for (v, c) in row.iter_mut().zip(src) {
+                    let lab = lightcraft_color::perceptual::oklab_from_2020(tonemap_for_select(c.map(|v| v * gain)));
+                    let d = samples
+                        .iter()
+                        .map(|s| ((lab[1] - s[1]).powi(2) + (lab[2] - s[2]).powi(2) + 0.25 * (lab[0] - s[0]).powi(2)).sqrt())
+                        .fold(f32::MAX, f32::min);
+                    *v = 1.0 - smooth(tol * 0.5, tol, d);
+                }
+            });
         }
         MaskShape::Sky => {
             // Classical sky heuristic until the segmenter lands (M12): bright, smooth, blue-ish or
             // unsaturated, and connected to the top of the frame.
             let m = frame.out_to_norm(w, h);
-            for (i, v) in out.data.iter_mut().enumerate() {
-                let (x, y) = (i % w, i / w);
-                let n = m.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-                let c = img.data[i].map(|v| v * gain);
-                let l = log_l.data[i] + ev;
-                let blue = (c[2] - c[0]).max(0.0) / (c[2] + 1e-4);
-                let top = 1.0 - smooth(0.25, 0.7, n.y as f32);
-                *v = top * smooth(-3.5, -1.0, l) * (0.4 + 0.6 * smooth(0.0, 0.3, blue).max(smooth(0.0, 1.5, l)));
-            }
+            for_rows(&mut out.data, w, |y, row| {
+                let (Some(cs), Some(ls)) = (img.data.get(y * w..y * w + row.len()), log_l.data.get(y * w..y * w + row.len())) else { return };
+                for (x, (v, (c, l))) in row.iter_mut().zip(cs.iter().zip(ls)).enumerate() {
+                    let n = m.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+                    let c = c.map(|v| v * gain);
+                    let l = l + ev;
+                    let blue = (c[2] - c[0]).max(0.0) / (c[2] + 1e-4);
+                    let top = 1.0 - smooth(0.25, 0.7, n.y as f32);
+                    *v = top * smooth(-3.5, -1.0, l) * (0.4 + 0.6 * smooth(0.0, 0.3, blue).max(smooth(0.0, 1.5, l)));
+                }
+            });
             smooth_plane(&mut out, 0.01 * frame_px(frame, w));
         }
         MaskShape::Object { seg, detail, edge, .. } | MaskShape::Prompt { seg, detail, edge, .. } if seg.is_some() || !detail.is_empty() => {
@@ -260,18 +488,20 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
             // Saliency heuristic: centre-weighted local contrast (replaced by the segmenter in M12).
             let m = frame.out_to_norm(w, h);
             let blur = lightcraft_raster::blur::gaussian(log_l, 0.03 * frame_px(frame, w));
-            for (i, v) in out.data.iter_mut().enumerate() {
-                let (x, y) = (i % w, i / w);
-                let n = m.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-                let d = (((n.x - 0.5) / 0.35).powi(2) + ((n.y - 0.55) / 0.4).powi(2)).sqrt() as f32;
-                let contrast = (log_l.data[i] - blur.data[i]).abs();
-                *v = (1.0 - smooth(0.6, 1.0, d)) * (0.5 + 0.5 * smooth(0.05, 0.6, contrast));
-            }
+            for_rows(&mut out.data, w, |y, row| {
+                let (Some(ls), Some(bs)) = (log_l.data.get(y * w..y * w + row.len()), blur.data.get(y * w..y * w + row.len())) else { return };
+                for (x, (v, (l, b))) in row.iter_mut().zip(ls.iter().zip(bs)).enumerate() {
+                    let n = m.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+                    let d = (((n.x - 0.5) / 0.35).powi(2) + ((n.y - 0.55) / 0.4).powi(2)).sqrt() as f32;
+                    let contrast = (l - b).abs();
+                    *v = (1.0 - smooth(0.6, 1.0, d)) * (0.5 + 0.5 * smooth(0.05, 0.6, contrast));
+                }
+            });
             smooth_plane(&mut out, 0.015 * frame_px(frame, w));
         }
         MaskShape::Background => {
             let mut s = shape_alpha(&MaskShape::Subject, frame, w, h, img, log_l, ev, mattes);
-            s.data.iter_mut().for_each(|v| *v = 1.0 - *v);
+            map_rows(&mut s, |v| *v = 1.0 - *v);
             out = s;
         }
         MaskShape::DepthRange { .. } | MaskShape::Landscape { .. } => {}
@@ -338,6 +568,13 @@ fn frame_px(frame: &Frame, w: usize) -> f32 {
     frame.px_per_long(w) as f32
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn smooth_plane(p: &mut Plane, sigma: f32) {
+    let owned = std::mem::replace(p, Plane::new(0, 0));
+    *p = lightcraft_raster::blur::gaussian_owned(owned, sigma.max(0.5));
+}
+
+#[cfg(target_arch = "wasm32")]
 fn smooth_plane(p: &mut Plane, sigma: f32) {
     *p = lightcraft_raster::blur::gaussian(p, sigma.max(0.5));
 }
@@ -616,6 +853,13 @@ pub fn auto_refine(r: f64) -> (f32, f32) {
 
 /// Guided filter of `p` steered by `guide` (He et al.), clamped to 0..1: `p`'s edges snap to the
 /// guide's.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn guided_cross(guide: &Plane, p: &Plane, sigma: f32, eps: f32) -> Plane {
+    guided_cross_cached(guide, p, sigma, eps, &mut RefinementCache::default(), 0, None)
+}
+
+// Keep main's separate scalar buffers on wasm32.
+#[cfg(target_arch = "wasm32")]
 pub fn guided_cross(guide: &Plane, p: &Plane, sigma: f32, eps: f32) -> Plane {
     use lightcraft_raster::blur::gaussian;
     let mi = gaussian(guide, sigma);
@@ -624,17 +868,144 @@ pub fn guided_cross(guide: &Plane, p: &Plane, sigma: f32, eps: f32) -> Plane {
     let cii = gaussian(&guide.map(|a| a * a), sigma);
     let mut a = Plane::new(p.width, p.height);
     let mut b = Plane::new(p.width, p.height);
-    for i in 0..p.data.len() {
-        let var = (cii.data[i] - mi.data[i] * mi.data[i]).max(0.0);
-        let k = (cip.data[i] - mi.data[i] * mp.data[i]) / (var + eps);
-        a.data[i] = k;
-        b.data[i] = mp.data[i] - k * mi.data[i];
+    for ((a, b), (((cii, mi), cip), mp)) in a.data.iter_mut().zip(&mut b.data).zip(cii.data.iter().zip(&mi.data).zip(&cip.data).zip(&mp.data)) {
+        let var = (cii - mi * mi).max(0.0);
+        let k = (cip - mi * mp) / (var + eps);
+        *a = k;
+        *b = mp - k * mi;
     }
     let (ma, mb) = (gaussian(&a, sigma), gaussian(&b, sigma));
     let mut q = Plane::new(p.width, p.height);
-    for i in 0..q.data.len() {
-        q.data[i] = (ma.data[i] * guide.data[i] + mb.data[i]).clamp(0.0, 1.0);
+    for (q, ((ma, guide), mb)) in q.data.iter_mut().zip(ma.data.iter().zip(&guide.data).zip(&mb.data)) {
+        *q = (ma * guide + mb).clamp(0.0, 1.0);
     }
+    q
+}
+
+/// At most 512 MiB per stage entry (two entries per view). No extra buffers
+/// survive eviction, hiding the masks, changing supplied mattes or clearing stages.
+#[cfg(any(test, not(target_arch = "wasm32")))]
+const REFINEMENT_BYTES: usize = 512 * 1024 * 1024;
+
+#[derive(Clone, Default)]
+struct RefinementCache {
+    guide: Option<(u64, u32, Arc<Plane>, Arc<Plane>)>,
+    means: Vec<(u64, u32, Arc<Plane>)>,
+}
+
+#[cfg(any(test, not(target_arch = "wasm32")))]
+impl RefinementCache {
+    fn bytes(&self) -> usize {
+        self.guide.as_ref().map_or(0, |(_, _, a, b)| (a.len() + b.len()) * 4) + self.means.iter().map(|(_, _, p)| p.len() * 4).sum::<usize>()
+    }
+    fn trim(&mut self) {
+        while self.bytes() > REFINEMENT_BYTES && !self.means.is_empty() {
+            self.means.remove(0);
+        }
+        if self.bytes() > REFINEMENT_BYTES {
+            self.guide = None;
+        }
+    }
+}
+
+fn refinement_mean_key(m: &Mask, keys: AlphaKeys, ev: f32) -> u64 {
+    let mut shape = m.clone();
+    shape.refine = 0.0;
+    alpha_key(&shape, keys, ev)
+}
+
+/// Independent channels share a blur traversal. Every channel retains the
+/// scalar filter's pass order, band origins and arithmetic. This makes the
+/// horizontal recurrence vectorizable without changing V1/V2 pixels. Finite
+/// values (including signed zero) retain their bits; NaN payloads may differ.
+#[allow(clippy::too_many_arguments)]
+#[cfg(any(test, not(target_arch = "wasm32")))]
+fn guided_cross_cached(guide: &Plane, p: &Plane, sigma: f32, eps: f32, cache: &mut RefinementCache, guide_key: u64, mean_key: Option<u64>) -> Plane {
+    use lightcraft_raster::blur::gaussian_owned;
+    let sig = sigma.to_bits();
+    let old_guide = cache.guide.as_ref().filter(|(k, s, _, _)| *k == guide_key && *s == sig).map(|(_, _, a, b)| (a.clone(), b.clone()));
+    let old_mean = mean_key.and_then(|key| cache.means.iter().find(|(k, s, _)| *k == key && *s == sig).map(|(_, _, p)| p.clone()));
+    let (mi, cii, mp, cip) = match (old_guide, old_mean) {
+        (None, None) => {
+            let stats = gaussian_owned(guide.zip_map(p, |i, p| [i, i * i, p, i * p]), sigma);
+            (Arc::new(stats.map(|v| v[0])), Arc::new(stats.map(|v| v[1])), Arc::new(stats.map(|v| v[2])), stats.map(|v| v[3]))
+        }
+        (None, Some(mp)) => {
+            let stats = gaussian_owned(guide.zip_map(p, |i, p| [i, i * i, i * p]), sigma);
+            (Arc::new(stats.map(|v| v[0])), Arc::new(stats.map(|v| v[1])), mp, stats.map(|v| v[2]))
+        }
+        (Some((mi, cii)), None) => {
+            let stats = gaussian_owned(guide.zip_map(p, |i, p| [p, i * p]), sigma);
+            (mi, cii, Arc::new(stats.map(|v| v[0])), stats.map(|v| v[1]))
+        }
+        (Some((mi, cii)), Some(mp)) => (mi, cii, mp, gaussian_owned(guide.zip_map(p, |i, p| i * p), sigma)),
+    };
+    cache.guide = Some((guide_key, sig, mi.clone(), cii.clone()));
+    if let Some(key) = mean_key {
+        cache.means.retain(|(k, _, _)| *k != key);
+        cache.means.push((key, sig, mp.clone()));
+    }
+    cache.trim();
+    let mut ab = Image::<[f32; 2]>::new(p.width, p.height);
+    for_rows(&mut ab.data, p.width, |y, row| {
+        let range = y * p.width..y * p.width + row.len();
+        let (Some(mi), Some(cii), Some(mp), Some(cip)) =
+            (mi.data.get(range.clone()), cii.data.get(range.clone()), mp.data.get(range.clone()), cip.data.get(range))
+        else {
+            return;
+        };
+        for (out, (((mi, cii), mp), cip)) in row.iter_mut().zip(mi.iter().zip(cii).zip(mp).zip(cip)) {
+            let var = (cii - mi * mi).max(0.0);
+            let a = (cip - mi * mp) / (var + eps);
+            *out = [a, mp - a * mi];
+        }
+    });
+    drop((mi, cii, mp, cip));
+    let ab = gaussian_owned(ab, sigma);
+    guide.zip_map(&ab, |i, v| (v[0] * i + v[1]).clamp(0.0, 1.0))
+}
+
+#[cfg(test)]
+fn guided_cross_reference(guide: &Plane, p: &Plane, sigma: f32, eps: f32) -> Plane {
+    use lightcraft_raster::blur::{gaussian, gaussian_owned};
+    let mi = gaussian(guide, sigma);
+    let mp = gaussian(p, sigma);
+    let cip = gaussian_owned(guide.zip_map(p, |a, b| a * b), sigma);
+    let cii = gaussian_owned(guide.map(|a| a * a), sigma);
+    let w = p.width;
+    let rows = |y: usize, len: usize| y * w..y * w + len;
+    // a = cov(I, p) / (var(I) + eps), b = mean(p) − a · mean(I)
+    // Reuse the covariance buffer for coefficients, then release each input after its last read.
+    let mut a = cip;
+    for_rows(&mut a.data, w, |y, row| {
+        let r = rows(y, row.len());
+        let (Some(cii), Some(mi), Some(mp)) = (cii.data.get(r.clone()), mi.data.get(r.clone()), mp.data.get(r)) else {
+            return;
+        };
+        for (k, ((cii, mi), mp)) in row.iter_mut().zip(cii.iter().zip(mi).zip(mp)) {
+            let var = (cii - mi * mi).max(0.0);
+            *k = (*k - mi * mp) / (var + eps);
+        }
+    });
+    drop(cii);
+    let mut b = mp;
+    for_rows(&mut b.data, w, |y, row| {
+        let r = rows(y, row.len());
+        let (Some(ks), Some(mi)) = (a.data.get(r.clone()), mi.data.get(r)) else { return };
+        for (b, (k, mi)) in row.iter_mut().zip(ks.iter().zip(mi)) {
+            *b -= k * mi;
+        }
+    });
+    drop(mi);
+    let ma = gaussian_owned(a, sigma);
+    let mut q = gaussian_owned(b, sigma);
+    for_rows(&mut q.data, w, |y, row| {
+        let r = rows(y, row.len());
+        let (Some(ma), Some(g)) = (ma.data.get(r.clone()), guide.data.get(r)) else { return };
+        for (q, (a, g)) in row.iter_mut().zip(ma.iter().zip(g)) {
+            *q = (a * g + *q).clamp(0.0, 1.0);
+        }
+    });
     q
 }
 
@@ -680,9 +1051,7 @@ fn rasterize_brush(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, i
             // the refinement fills gaps along edges; it never takes paint away
             stroke_alpha = stroke_alpha.zip_map(&q, f32::max);
         }
-        for (o, a) in out.data.iter_mut().zip(&stroke_alpha.data) {
-            *o = if erase { *o * (1.0 - a) } else { o.max(*a) };
-        }
+        zip_rows(out, &stroke_alpha, |o, a| *o = if erase { *o * (1.0 - a) } else { o.max(a) });
     }
 }
 
@@ -1101,5 +1470,124 @@ mod tests {
         assert!(hair.get(190, 50) > 0.99 && hair.get(10, 50) < 0.01);
         let lips = MaskShape::People { person: 0, parts: vec!["Lips".into()] };
         assert_eq!(eval(&lips), shape_alpha(&lips, &f, w, h, &img, &l, 0.0, None));
+    }
+
+    /// The alpha cache's key changes with everything an alpha is evaluated from (a stale key would
+    /// put a stale mask on screen), and not with the mask's other sliders.
+    #[test]
+    fn alpha_keys_change_with_every_input_of_the_alpha() {
+        let keys = AlphaKeys { geo: 1, image: 2 };
+        let comp = |shape| MaskComponent { name: None, op: MaskOp::Add, invert: false, shape };
+        let one = |shape| Mask { components: vec![comp(shape)], ..Default::default() };
+        let radial = one(MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.3, ry: 0.2, angle: 0.0, feather: 50.0, invert: false });
+        let lum = one(MaskShape::LuminanceRange { lo: 0.3, hi: 0.7, lo_feather: 0.1, hi_feather: 0.1 });
+        let key = |m: &Mask| alpha_key(m, keys, 0.0);
+        // a stored segmentation of the same size with other logits
+        let object = |v: f32| {
+            let seg = Some(SegMask::from_logits(4, &[v; 16]));
+            one(MaskShape::Object { hint: vec![Point::new(0.5, 0.5)], exclude: vec![], seg, detail: vec![], edge: 0.0 })
+        };
+        assert_ne!(key(&object(4.0)), key(&object(-4.0)));
+        let edits: [fn(&mut Mask); 7] = [
+            |m| m.refine = 10.0,
+            |m| m.invert = true,
+            |m| m.adjust.amount = 50.0,
+            |m| m.components[0].invert = true,
+            |m| m.components[0].op = MaskOp::Intersect,
+            |m| {
+                if let MaskShape::Radial { feather, .. } = &mut m.components[0].shape {
+                    *feather = 50.5;
+                }
+            },
+            |m| {
+                let shape = MaskShape::Linear { start: Point::new(0.0, 0.0), end: Point::new(0.0, 1.0) };
+                m.components.push(MaskComponent { name: None, op: MaskOp::Subtract, invert: false, shape });
+            },
+        ];
+        for (i, edit) in edits.iter().enumerate() {
+            let mut m = radial.clone();
+            edit(&mut m);
+            assert_ne!(key(&m), key(&radial), "edit {i}");
+        }
+        let mut m = radial.clone();
+        (m.id, m.name, m.adjust.exposure, m.adjust.clarity) = (9, "Renamed".into(), 1.0, 30.0);
+        assert_eq!(key(&m), key(&radial));
+        // the frame for every mask; the image and the exposure for the masks that read them
+        let (other_geo, other_image) = (AlphaKeys { geo: 3, ..keys }, AlphaKeys { image: 4, ..keys });
+        let refined = Mask { refine: 40.0, ..radial.clone() };
+        for m in [&radial, &lum, &refined] {
+            assert_ne!(alpha_key(m, other_geo, 0.0), key(m));
+        }
+        assert_eq!((alpha_key(&radial, other_image, 0.0), alpha_key(&radial, keys, 1.0)), (key(&radial), key(&radial)));
+        assert_ne!(alpha_key(&lum, other_image, 0.0), key(&lum));
+        assert_ne!(alpha_key(&lum, keys, 1.0), key(&lum));
+        assert_ne!(alpha_key(&refined, other_image, 0.0), key(&refined));
+        assert_eq!(alpha_key(&refined, keys, 1.0), key(&refined));
+    }
+
+    /// Alphas are only handed back to a render with the segmentation mattes they were evaluated
+    /// with (another photo's mattes, or none, start empty).
+    #[test]
+    fn alpha_cache_is_tied_to_the_mattes() {
+        let (a, b) = (Arc::new(Mattes::default()), Arc::new(Mattes::default()));
+        let mut c = AlphaCache::<Plane>::default();
+        c.keep(Some(&a), vec![(1, Arc::new(Plane::new(2, 2)))]);
+        assert!(c.clone().take(Some(&b)).is_empty());
+        assert!(c.clone().take(None).is_empty());
+        assert_eq!(c.take(Some(&a)).len(), 1);
+        assert!(c.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod refinement_regression {
+    use super::*;
+    #[test]
+    fn packed_and_reused_refinement_preserves_finite_bits() {
+        for (w, h, sigma) in [(121, 83, 1.0), (399, 267, 11.7), (601, 403, 60.0)] {
+            let guide = Plane::from_fn(w, h, |x, y| ((x * 17 + y * 23) % 103) as f32 / 19.0 - 3.0);
+            let p = Plane::from_fn(w, h, |x, y| ((x * 7 + y * 11) % 97) as f32 / 97.0);
+            let expected = guided_cross_reference(&guide, &p, sigma, 0.02);
+            let mut cache = RefinementCache::default();
+            for (gkey, pkey) in [(1, 1), (1, 2), (2, 2), (2, 2)] {
+                let result = guided_cross_cached(&guide, &p, sigma, 0.02, &mut cache, gkey, Some(pkey));
+                for (actual, reference) in result.data.iter().zip(&expected.data) {
+                    assert_eq!(actual.to_bits(), reference.to_bits());
+                }
+                assert!(cache.bytes() <= REFINEMENT_BYTES);
+            }
+        }
+    }
+}
+#[cfg(test)]
+mod special_value_refinement_regression {
+    use super::*;
+    #[test]
+    // NaN payload propagation is not part of the grouped-filter contract. All
+    // other results, including signed zero and infinities, must retain their bits.
+    fn special_value_refinement_matches_scalar_values_and_classes() {
+        let vals = [-0.0, 0.0, 1.0, -1.0, f32::INFINITY, f32::NEG_INFINITY, f32::from_bits(0x7fc00001), f32::from_bits(0xffc00002)];
+        for (w, h, sigma) in [(17, 9, 0.0), (33, 65, 1.0), (65, 33, 11.7)] {
+            for mode in 0..3 {
+                let guide =
+                    Plane::from_fn(
+                        w,
+                        h,
+                        |x, y| if mode == 0 { ((x * 17 + y * 23) % 103) as f32 / 19.0 - 3.0 } else { vals[(x + y * 3) % vals.len()] },
+                    );
+                let p = Plane::from_fn(w, h, |x, y| if mode == 1 { ((x * 7 + y * 11) % 97) as f32 / 97.0 } else { vals[(x * 3 + y) % vals.len()] });
+                let expected = guided_cross_reference(&guide, &p, sigma, 0.02);
+                let mut cache = RefinementCache::default();
+                for (gkey, pkey) in [(1, 1), (1, 2), (2, 2), (2, 2)] {
+                    let result = guided_cross_cached(&guide, &p, sigma, 0.02, &mut cache, gkey, Some(pkey));
+                    for (i, (a, b)) in result.data.iter().zip(&expected.data).enumerate() {
+                        assert!(
+                            a.is_nan() && b.is_nan() || a.to_bits() == b.to_bits(),
+                            "w={w} h={h} sigma={sigma} mode={mode} gkey={gkey} pkey={pkey} pixel={i}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

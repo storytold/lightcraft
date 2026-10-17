@@ -57,10 +57,17 @@ impl Filter {
 /// Contributions for each output coordinate: (first source index, weights) — the exact taps
 /// [`resize`] uses (GPU kernels upload these tables).
 pub fn weights(src: usize, dst: usize, filter: Filter) -> Vec<(usize, Vec<f32>)> {
+    weights_range(src, dst, filter, 0..dst)
+}
+
+/// The full resize's taps for only `range` of its output coordinates. Scale,
+/// phase and edge normalization use the full dimensions, without allocating a
+/// table for the rest of a potentially large virtual frame.
+pub fn weights_range(src: usize, dst: usize, filter: Filter, range: std::ops::Range<usize>) -> Vec<(usize, Vec<f32>)> {
     let scale = src as f32 / dst as f32;
     let fscale = scale.max(1.0);
     let support = filter.support() * fscale;
-    (0..dst)
+    (range.start.min(dst)..range.end.min(dst))
         .map(|i| {
             let center = (i as f32 + 0.5) * scale;
             let lo = ((center - support).floor() as isize).max(0) as usize;
@@ -91,6 +98,16 @@ impl Pixel for f32 {
     #[inline]
     fn madd(self, o: Self, w: f32) -> Self {
         self + o * w
+    }
+}
+
+impl Pixel for [f32; 2] {
+    fn zero() -> Self {
+        [0.0; 2]
+    }
+    #[inline]
+    fn madd(self, o: Self, w: f32) -> Self {
+        [self[0] + o[0] * w, self[1] + o[1] * w]
     }
 }
 

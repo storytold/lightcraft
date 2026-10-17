@@ -50,10 +50,10 @@ fn failed_gpu_renders_fall_back_with_a_reason() {
     s.effects.clarity = 20.0;
     masked(&mut s, 4);
     let req = RenderRequest::fit(w, h);
-    let cpu = render(&src, &info, &s, &req).image;
+    let cpu = render(&src, &info, &s, &req).unwrap().image;
     let ok = |what: &str| {
         let g = lightcraft_gpu::render(&src, &info, &s, &req, None)
-            .unwrap_or_else(|| panic!("{what}: gpu render ({:?})", lightcraft_gpu::last_fallback()));
+            .unwrap_or_else(|| panic!("{what}: gpu render ({:?}).unwrap()", lightcraft_gpu::last_fallback()));
         let d = mean_abs_diff(&cpu, &g.image);
         assert!(d < 0.5, "{what}: GPU differs from the CPU by {d:.3} LSB");
     };

@@ -209,3 +209,24 @@ fn a_compare_pane_says_when_its_render_failed() {
     assert!(h.step_until(SETTLE, failed), "the failure is said");
     assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("compare:rendering:")));
 }
+
+#[test]
+fn compare_panes_show_bounded_windows_then_exact() {
+    use crate::render::Slot;
+    let mut h = demo();
+    let ids: Vec<_> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    h.request("engine.execute", json!({"command":"library.select", "params":{"ids":ids, "active":ids[0]}}), T);
+    h.request("engine.execute", json!({"command":"view.compare"}), T);
+    assert!(h.settle(SETTLE));
+    h.app.ui.zoom = Zoom::Percent(200.0);
+    assert!(h.step_until(SETTLE, |h| h.app.compare_windows.iter().all(Option::is_some)));
+    let views = h.app.compare_windows;
+    for (pane, view) in views.into_iter().enumerate() {
+        let view = view.unwrap();
+        let slot = Slot::CompareRegion(pane as u8);
+        let job = h.app.session.region_job(view.photo, view.full.0, view.full.1, view.window, true).unwrap();
+        let exact = h.app.renderer.job_for(slot, job);
+        assert_eq!(view.key, exact.clone().bounded_window().key);
+        assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&slot).is_some_and(|t| t.key == exact.key)));
+    }
+}

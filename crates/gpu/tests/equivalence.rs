@@ -71,7 +71,7 @@ fn diff(a: &Rgba8, b: &Rgba8) -> (f64, u8, f64) {
 }
 
 fn check(name: &str, src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> (f64, u8) {
-    let cpu = render(src, info, s, req).image;
+    let cpu = render(src, info, s, req).unwrap().image;
     let gpu = lightcraft_gpu::render(src, info, s, req, None).expect("gpu render");
     let (mean, max, over) = diff(&cpu, &gpu.image);
     eprintln!("{name:<28} {}x{}  mean {mean:.4}  max {max}  >1: {:.4}%", cpu.width, cpu.height, over * 100.0);
@@ -472,7 +472,7 @@ fn clipped_highlights_stay_neutral_on_both() {
     (l.exposure, l.contrast, l.highlights, l.shadows, l.whites, l.blacks) = (-0.88, 5.0, -75.0, 52.0, 6.0, -37.0);
     for (name, s) in [("clipped highlights -100", h100), ("clipped highlights #523", issue)] {
         check(name, &src, &info, &s, &req);
-        let cpu = render(&src, &info, &s, &req).image;
+        let cpu = render(&src, &info, &s, &req).unwrap().image;
         let gpu = lightcraft_gpu::render(&src, &info, &s, &req, None).expect("gpu render").image;
         for (who, img) in [("CPU", &cpu), ("GPU", &gpu)] {
             let p = img.get(90, 120);
@@ -573,6 +573,67 @@ fn cached_renders_match_uncached() {
     }
 }
 
+/// Mask alphas kept on the device across a slider drag: a warm render equals a fresh one whatever
+/// the edit (one each mask reads, and ones none of them read), the CPU's result within the bounds,
+/// and the alphas count in the stages' device bytes.
+#[test]
+fn cached_renders_with_masks_match_uncached() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(1, 900, 600);
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let cache = StageCache::default();
+    let req = RenderRequest::fit(640, 640);
+    let comp = |shape: MaskShape| MaskComponent { name: None, op: MaskOp::Add, invert: false, shape };
+    let mask = |id: u32, shape: MaskShape| Mask { id, components: vec![comp(shape)], ..Default::default() };
+    let mut s = DevelopSettings::default();
+    typical(&mut s);
+    let stroke = BrushStroke { points: (0..10).map(|k| Point::new(0.1 + 0.07 * k as f64, 0.6)).collect(), size: 0.04, ..Default::default() };
+    s.masks = vec![
+        mask(1, MaskShape::Radial { center: Point::new(0.4, 0.5), rx: 0.3, ry: 0.2, angle: 0.0, feather: 50.0, invert: false }),
+        mask(2, MaskShape::Brush { strokes: vec![stroke] }),
+        mask(3, MaskShape::LuminanceRange { lo: 0.3, hi: 0.7, lo_feather: 0.1, hi_feather: 0.1 }),
+        // no kernel: evaluated on the CPU and uploaded
+        mask(4, MaskShape::Subject),
+    ];
+    for (i, m) in s.masks.iter_mut().enumerate() {
+        m.adjust.exposure = 0.3 * i as f64 - 0.4;
+        m.adjust.clarity = 20.0;
+    }
+    let steps: Vec<Box<dyn Fn(&mut DevelopSettings)>> = vec![
+        Box::new(|_| {}),
+        Box::new(|s| s.light.exposure = 0.8),
+        Box::new(|s| s.masks[0].adjust.exposure = 1.0),
+        Box::new(|s| s.masks[3].adjust.amount = 50.0),
+        Box::new(|s| {
+            s.masks[0].components[0].shape =
+                MaskShape::Radial { center: Point::new(0.6, 0.4), rx: 0.2, ry: 0.2, angle: 0.0, feather: 30.0, invert: false }
+        }),
+        Box::new(|s| s.masks.swap(1, 2)),
+        Box::new(|s| {
+            s.wb.mode = WbMode::Custom;
+            s.wb.temp = 4300.0;
+        }),
+        Box::new(|s| s.masks[1].visible = false),
+    ];
+    for (i, step) in steps.iter().enumerate() {
+        step(&mut s);
+        let warm = lightcraft_gpu::render(&src, &info, &s, &req, Some(&cache)).expect("gpu");
+        let fresh = lightcraft_gpu::render(&src, &info, &s, &req, None).expect("gpu");
+        assert_eq!(warm.image, fresh.image, "step {i}");
+    }
+    check("masks after a cached drag", &src, &info, &s, &req);
+    // three visible masks of 4 B/px held on the device besides the stages
+    let out = lightcraft_gpu::render(&src, &info, &s, &req, Some(&cache)).expect("gpu").image;
+    let n = out.width * out.height;
+    let with = lightcraft_gpu::stage_bytes(&cache);
+    s.masks.clear();
+    let fresh = StageCache::default();
+    lightcraft_gpu::render(&src, &info, &s, &req, Some(&fresh)).expect("gpu");
+    assert!(with >= lightcraft_gpu::stage_bytes(&fresh) + 3 * 4 * n, "{with}");
+}
+
 /// Issue #632: the Highlights / Shadows base of each process (V1: the edge-aware filter of log
 /// luminance; V2: of its fine median, a radius that grows with the render) matches the CPU's, and
 /// a warm cache never hands one process the other's base.
@@ -634,7 +695,7 @@ fn overlays_match() {
     let s = DevelopSettings::default();
     for t in [20u8, 50, 90] {
         let req = RenderRequest { overlay: lightcraft_pipeline::Overlay::Spots(t), ..RenderRequest::fit(640, 640) };
-        let cpu = render(&src, &raw, &s, &req).image;
+        let cpu = render(&src, &raw, &s, &req).unwrap().image;
         let gpu = lightcraft_gpu::render(&src, &raw, &s, &req, None).expect("gpu").image;
         let differ = cpu.data.iter().zip(&gpu.data).filter(|(a, b)| a != b).count() as f64 / cpu.data.len() as f64;
         let white = cpu.data.iter().filter(|p| p[0] == 255).count() as f64 / cpu.data.len() as f64;
@@ -876,4 +937,203 @@ fn windows_of_a_big_photo_share_one_uploaded_source() {
     assert_eq!(lightcraft_gpu::shared_source_bytes(), 0, "an idle app gives it back");
     lightcraft_gpu::render(&src, &info, &s, &at(1000), Some(&after)).expect("gpu render");
     assert_eq!(lightcraft_gpu::source_uploads() - start, 2);
+}
+
+/// Issue #1146: supply the spatial context on both renderers, even when the
+/// requested texture has no margin. Compare against the full CPU reference too.
+#[test]
+fn tight_spatial_windows_match_full_and_cpu() {
+    if !gpu() {
+        return;
+    }
+    use lightcraft_pipeline::PixelWindow;
+    let src = Arc::new(Rgb32f::from_fn(600, 400, |x, y| {
+        let cell = |size: usize, k: usize| ((x / size * 7 + y / size * 13 + k) % 5) as f32 / 4.0;
+        let l = 0.02 + 0.5 * cell(97, 1) + 0.25 * cell(31, 2) + 0.1 * cell(11, 3);
+        [l * 1.1, l, l * 0.8]
+    }));
+    let info = SourceInfo::default();
+    for process in [Process::V1, Process::V2] {
+        for id in ["effects.dehaze", "effects.clarity", "effects.texture", "light.highlights", "light.shadows"] {
+            let mut s = DevelopSettings { process: process.version(), ..Default::default() };
+            lightcraft_develop::controls::set(&mut s, id, if id == "light.highlights" { -100.0 } else { 100.0 });
+            let req = RenderRequest::fit(2397, 1598);
+            let full = render(&src, &info, &s, &req).unwrap().image;
+            for (x, y) in [(999, 649), (388, 124), (0, 0), (1997, 1298)] {
+                let at = PixelWindow { x, y, w: 400, h: 300 };
+                let req = RenderRequest { window: Some(at), ..req };
+                check(id, &src, &info, &s, &req);
+                let g = lightcraft_gpu::render(&src, &info, &s, &req, None).expect("gpu window").image;
+                let (mean, max, _) = diff(&full.crop(x, y, at.w, at.h), &g);
+                eprintln!("full vs GPU {id} {process:?} ({x},{y}): max {max}, mean {mean:.6}");
+                assert!(mean < MEAN_LSB && max <= MAX_LSB, "{id}: max {max}, mean {mean}");
+            }
+        }
+    }
+}
+
+#[test]
+fn reviewed_window_context_and_requested_finish_match_cpu() {
+    if !gpu() {
+        return;
+    }
+    use lightcraft_pipeline::{
+        PixelWindow,
+        masks::{MatteKind, Mattes},
+    };
+    use lightcraft_raster::Image;
+    let src = Arc::new(Rgb32f::from_fn(1200, 800, |x, _| if x < 500 { [0.01; 3] } else { [0.4, 0.08, 0.5] }));
+    let mut mattes = Mattes::default();
+    mattes.push(MatteKind::Person, Image::from_fn(60, 40, |x, _| if x < 30 { 255 } else { 0 }));
+    let info = SourceInfo { mattes: Some(Arc::new(mattes)), ..Default::default() };
+    let at = PixelWindow { x: 500, y: 301, w: 161, h: 121 };
+    let req = RenderRequest { window: Some(at), ..RenderRequest::fit(1200, 800) };
+    let mut s = DevelopSettings::default();
+    s.optics.defringe_purple_amount = 20.0;
+    s.optics.defringe_purple_hue_lo = 0.0;
+    s.optics.defringe_purple_hue_hi = 100.0;
+    check("Defringe window", &src, &info, &s, &req);
+    let full = render(&src, &info, &s, &RenderRequest { window: None, ..req }).unwrap().image;
+    let g = lightcraft_gpu::render(&src, &info, &s, &req, None).unwrap().image;
+    let (mean, max, _) = diff(&full.crop(at.x, at.y, at.w, at.h), &g);
+    assert!(mean < MEAN_LSB && max <= MAX_LSB, "Defringe: max {max}, mean {mean}");
+
+    s = DevelopSettings::default();
+    s.masks.push(Mask {
+        components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Subject }],
+        adjust: lightcraft_develop::LocalAdjustments { exposure: 1.0, ..Default::default() },
+        ..Default::default()
+    });
+    check("Subject matte window", &src, &info, &s, &req);
+    s.masks[0].visible = false;
+    s.masks[0].adjust.clarity = 100.0;
+    s.masks[0].adjust.dehaze = 100.0;
+    check("hidden mask window", &src, &info, &s, &req);
+
+    s.masks[0].visible = true;
+    s.masks[0].adjust.dehaze = 0.0;
+    s.effects.texture = 60.0;
+    s.grain.amount = 40.0;
+    s.vignette.amount = -60.0;
+    check("requested finish with mask, grain and vignette", &src, &info, &s, &req);
+}
+
+#[test]
+fn clarity_with_hidden_or_empty_tone_masks_matches_cpu_and_full() {
+    if !gpu() {
+        return;
+    }
+    let src = Arc::new(Rgb32f::from_fn(600, 400, |x, y| {
+        let l = 0.003 + (((x * 17 + y * 23) % 103) as f32 / 102.0).powi(2);
+        [l * 1.1, l, l * 0.8]
+    }));
+    let info = SourceInfo::default();
+    let mask = || Mask {
+        components: vec![MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Linear { start: Point::new(0.1, 0.2), end: Point::new(0.9, 0.8) },
+        }],
+        ..Default::default()
+    };
+    for process in [Process::V1, Process::V2] {
+        for local_clarity in [false, true] {
+            for empty in [false, true] {
+                let mut s = DevelopSettings { process: process.version(), ..Default::default() };
+                let mut m = mask();
+                m.visible = empty;
+                if empty {
+                    m.components.clear();
+                }
+                m.adjust.highlights = -80.0;
+                m.adjust.shadows = 80.0;
+                s.masks.push(m);
+                if local_clarity {
+                    let mut m = mask();
+                    m.id = 2;
+                    m.adjust.clarity = 100.0;
+                    s.masks.push(m);
+                } else {
+                    s.effects.clarity = 100.0;
+                }
+                let name = format!("{process:?} local_clarity={local_clarity} empty={empty}");
+                let sig = lightcraft_pipeline::local::plane_sigmas(&s, 1200.0, Quality::Full);
+                assert!(sig.base.is_some(), "{name}: preserve the tone base selected on main");
+                check(&name, &src, &info, &s, &RenderRequest::fit(1200, 800));
+                // Full-resolution guided filters isolate context support. The
+                // subsampled tests below cover larger output sizes.
+                let req = RenderRequest::fit(360, 240);
+                let at = lightcraft_pipeline::PixelWindow { x: 121, y: 77, w: 121, h: 83 };
+                let window_req = RenderRequest { window: Some(at), ..req };
+                check(&name, &src, &info, &s, &window_req);
+                let full = lightcraft_gpu::render(&src, &info, &s, &req, None).expect("GPU full render").image;
+                let window = lightcraft_gpu::render(&src, &info, &s, &window_req, None).expect("GPU window render").image;
+                let (mean, max, _) = diff(&full.crop(at.x, at.y, at.w, at.h), &window);
+                assert!(max <= 1 && mean < 0.01, "{name}: window mean={mean}, max={max}");
+            }
+        }
+    }
+}
+#[path = "../../pipeline/tests/support/subsampled.rs"]
+mod subsampled;
+
+#[test]
+fn subsampled_windows_keep_full_frame_grid_and_cpu_parity() {
+    if !gpu() {
+        return;
+    }
+    for stripes in [false, true] {
+        subsampled::check_windows(
+            |src, info, s, req| {
+                let cpu = render(src, info, s, req).unwrap().image;
+                let gpu = lightcraft_gpu::render(src, info, s, req, None).expect("hardware GPU render").image;
+                let (mean, max, _) = diff(&cpu, &gpu);
+                assert!(mean < MEAN_LSB && max <= MAX_LSB, "CPU/GPU: max {max}, mean {mean}");
+                gpu
+            },
+            stripes,
+        );
+    }
+}
+
+#[path = "../../pipeline/tests/support/dehaze_airlight.rs"]
+mod dehaze_airlight;
+
+#[test]
+fn dehaze_whole_frame_uses_full_airlight() {
+    if !gpu() {
+        return;
+    }
+    dehaze_airlight::check(|src, info, s, req| lightcraft_gpu::render(src, info, s, req, None).expect("GPU render").image, true, 0);
+}
+
+#[test]
+fn dehaze_partial_window_uses_full_airlight() {
+    if !gpu() {
+        return;
+    }
+    dehaze_airlight::check(|src, info, s, req| lightcraft_gpu::render(src, info, s, req, None).expect("GPU render").image, false, 2);
+}
+
+#[test]
+fn dehaze_statistic_tracks_upstream_edits() {
+    if !gpu() {
+        return;
+    }
+    let cache = StageCache::default();
+    dehaze_airlight::check_edits(|src, info, s, req, cached| {
+        lightcraft_gpu::render(src, info, s, req, cached.then_some(&cache)).expect("GPU render").image
+    });
+}
+
+#[test]
+fn enabling_dehaze_replaces_a_window_local_preparation() {
+    if !lightcraft_gpu::available() {
+        return;
+    }
+    let cache = StageCache::default();
+    dehaze_airlight::check_enabling(|src, info, s, req, cached| {
+        lightcraft_gpu::render(src, info, s, req, cached.then_some(&cache)).expect("GPU render").image
+    });
 }

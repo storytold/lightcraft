@@ -171,6 +171,22 @@ fn nr_col(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) 
     put_rgb(i, max((c0 + (cb - c0) * t) * yl, vec3<f32>(0.0)));
 }
 
+// Same colour NR after consuming chroma in the blur. Recompute the original
+// chromaticity from the unchanged image with chroma_k's division order.
+@compute @workgroup_size(256)
+fn nr_col_owned(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
+    let i = lin_index(g, nw);
+    if (i >= pu(0u)) { return; }
+    let pixel = rgb_a(i);
+    let yl = lum2020(pixel);
+    let y = max(yl, 1e-6);
+    // P[2] is zero. The integer operation preserves the chroma kernel's f32
+    // rounding before the blend instead of contracting division into it.
+    let c0 = bitcast<vec3<f32>>(bitcast<vec3<u32>>(vec3<f32>(pixel.x / y, pixel.y / y, pixel.z / y)) ^ vec3<u32>(pu(2u)));
+    let cb = vec3<f32>(c[3u * i], c[3u * i + 1u], c[3u * i + 2u]);
+    put_rgb(i, max((c0 + (cb - c0) * pf(1u)) * yl, vec3<f32>(0.0)));
+}
+
 // Every P[1]-th value of `a` (airlight sampling). P[0] = output count.
 @compute @workgroup_size(256)
 fn subsample(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
