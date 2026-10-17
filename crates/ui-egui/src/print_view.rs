@@ -420,6 +420,19 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
             patch(app, &ctx, json!({"page": {"background": c}}));
         }
     });
+    if compose::has_page_options(l.style) {
+        ui.label(egui::RichText::new(crate::i18n::tr("Page Options")).color(t.text_label));
+        let p = &st.page;
+        for (id, label, on, key) in [
+            ("printPageNumbers", "Page Numbers", p.page_numbers, "pageNumbers"),
+            ("printPageInfo", "Page Info", p.page_info, "pageInfo"),
+            ("printCropMarks", "Crop Marks", p.crop_marks, "cropMarks"),
+        ] {
+            if let Some(v) = check(ui, id, label, on) {
+                patch(app, &ctx, json!({"page": {(key): v}}));
+            }
+        }
+    }
 
     heading(ui, t, "Print Job");
     row(ui, t, "Resolution", |ui| {
@@ -607,11 +620,13 @@ fn preview(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, s
             Some(page) => page.iter().map(|(r, id)| (*r, Some(*id))).collect(),
             None => st.layout.grid_rects().unwrap_or_default().into_iter().map(|r| (r, None)).collect(),
         };
+        let mut shown = Vec::new();
         for (i, (r, photo)) in cells.iter().enumerate() {
             let rect = sheet.rect(r);
             register(&ctx, format!("print:gridcell:{i}"), rect);
-            paint_cell(app, &painter, t, st, rect, *photo, &sheet, r);
+            shown.extend(paint_cell(app, &painter, t, st, rect, *photo, &sheet, r));
         }
+        page_options(&painter, st, &sheet, &shown, pu.page + 1);
     }
 
     // footer: page navigation and the selected cell
@@ -782,7 +797,7 @@ fn paint_cell(
     photo: Option<PhotoId>,
     sheet: &Sheet,
     inches: &layout::Rect,
-) {
+) -> Option<Rect> {
     let im = &st.image;
     if st.guides.show_cells {
         painter.rect_stroke(cell, 0.0, Stroke::new(1.0, Color32::from_rgba_unmultiplied(120, 150, 190, 150)), StrokeKind::Inside);
@@ -794,7 +809,7 @@ fn paint_cell(
     };
     let avail = cell.shrink(border);
     if avail.width() < 1.0 || avail.height() < 1.0 {
-        return;
+        return None;
     }
     // the photo's shape: its cropped size, or 3:2 for a placeholder
     let (nw, nh) = photo.and_then(|id| app.session.catalog.photo(id)).map_or((3.0, 2.0), |p| {
@@ -804,7 +819,7 @@ fn paint_cell(
     let scale = 8.0; // sub-point resolution for the rounding in `place`
     let aw = (f64::from(avail.width()) * scale).round() as usize;
     let ah = (f64::from(avail.height()) * scale).round() as usize;
-    let Some(p) = place(nw, nh, aw, ah, im.zoom_to_fill, im.rotate_to_fit) else { return };
+    let p = place(nw, nh, aw, ah, im.zoom_to_fill, im.rotate_to_fit)?;
     let shown = Rect::from_center_size(avail.center(), vec2(p.w as f32, p.h as f32) / scale as f32);
     let visible = shown.intersect(avail);
     if border > 0.0 {
@@ -855,6 +870,37 @@ fn paint_cell(
         let at = pos2(cell.center().x - galley.size().x / 2.0, cell.bottom() - galley.size().y - 3.0);
         painter.rect_filled(Rect::from_min_size(at, galley.size()).expand(2.0), 2.0, Color32::from_black_alpha(160));
         painter.galley(at, galley, Color32::WHITE);
+    }
+    Some(visible)
+}
+
+/// The Page Options as the print draws them ([`compose`]): crop marks at the corners of each
+/// photo, the page number at the bottom right and the print settings at the bottom left.
+fn page_options(painter: &egui::Painter, st: &PrintSettings, sheet: &Sheet, photos: &[Rect], number: usize) {
+    let p = &st.page;
+    let ink = compose::mark_ink(p.background);
+    let ink = Color32::from_rgb(ink[0], ink[1], ink[2]);
+    if p.crop_marks {
+        let (len, gap) = (compose::CROP_MARK_IN as f32 * sheet.scale, compose::CROP_MARK_GAP_IN as f32 * sheet.scale);
+        let stroke = Stroke::new(1.0, ink);
+        for r in photos {
+            for (corner, dx, dy) in
+                [(r.left_top(), -1.0, -1.0), (r.right_top(), 1.0, -1.0), (r.left_bottom(), -1.0, 1.0), (r.right_bottom(), 1.0, 1.0)]
+            {
+                painter.line_segment([corner + vec2(dx * gap, 0.0), corner + vec2(dx * (gap + len), 0.0)], stroke);
+                painter.line_segment([corner + vec2(0.0, dy * gap), corner + vec2(0.0, dy * (gap + len))], stroke);
+            }
+        }
+    }
+    let Ok(area) = st.layout.printable() else { return };
+    let area = sheet.rect(&area);
+    let font = egui::FontId::proportional((compose::PAGE_TEXT_PT as f32 / 72.0 * sheet.scale).max(4.0));
+    let y = (area.bottom() + sheet.page.bottom()) / 2.0;
+    if p.page_numbers {
+        painter.text(pos2(area.right(), y), Align2::RIGHT_CENTER, number.to_string(), font.clone(), ink);
+    }
+    if p.page_info {
+        painter.text(pos2(area.left(), y), Align2::LEFT_CENTER, compose::page_info_text(st), font, ink);
     }
 }
 
