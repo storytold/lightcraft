@@ -188,3 +188,16 @@ fn right_clicking_the_filmstrips_stack_badge_opens_the_photo_menu() {
     h.settle(SETTLE);
     assert!(egui::Popup::is_any_open(&h.view.ctx), "the photo's menu, as on the rest of the cell");
 }
+
+#[test]
+fn right_clicking_the_grids_stack_badge_opens_the_photo_menu() {
+    let mut h = demo();
+    let ids = first_photos(&mut h, 2);
+    run(&mut h, "stack.group", json!({"ids": [ids[0].0, ids[1].0], "collapsed": false}));
+    h.settle(SETTLE);
+    assert!(!egui::Popup::is_any_open(&h.view.ctx));
+    let r = h.request("ui.clickWidget", json!({"id": format!("stack:{}", ids[0].0), "button": "right"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(egui::Popup::is_any_open(&h.view.ctx), "the photo's menu, as on the rest of the cell");
+}

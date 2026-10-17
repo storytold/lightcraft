@@ -296,12 +296,21 @@ pub(crate) fn preview_pill_place(photo: Rect, text_w: f32, stack: Option<Rect>, 
         tries.extend([(pos2(x, below), true), (pos2(x, below), false), (pos2(s.right() + 3.0, s.top()), false)]);
     }
     let overlap = |a: Rect, b: Rect| a.min.x < b.max.x && b.min.x < a.max.x && a.min.y < b.max.y && b.min.y < a.max.y;
-    tries.into_iter().find_map(|(at, full)| {
+    let free = tries.into_iter().find_map(|(at, full)| {
         let rect = Rect::from_min_size(at, vec2(if full { text_w + m.pill_extra } else { h }, h));
         let inside =
             rect.left() >= photo.left() && rect.right() <= photo.right() - m.inset && rect.top() >= photo.top() && rect.bottom() <= photo.bottom();
         (inside && !obstacles.iter().any(|o| overlap(rect, *o))).then_some(PillPlace { rect, full })
-    })
+    });
+    // it changes what editing does: when nowhere is clear it is still there, as the icon at its first spot
+    Some(free.unwrap_or(PillPlace { rect: Rect::from_min_size(pos2(x, above), vec2(h, h)), full: false }))
+}
+
+/// The strip the marks row covers: `None` when it draws nothing (no marks that fit, and no band
+/// under the pointer or on a chosen photo), so that nothing else keeps clear of it.
+pub(crate) fn marks_extent(rect: Rect, marks: Marks, hot: bool, only_label: bool, label_first: bool, m: &Metrics) -> Option<Rect> {
+    let layout = bar_layout(rect.width(), marks, m, label_first);
+    (!layout.is_empty() || (!only_label && hot)).then(|| marks_bar(rect, m))
 }
 
 /// How the stack badge is drawn.
@@ -415,16 +424,17 @@ pub(crate) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, th: &Thumb) ->
     if let Some(error) = &th.failure {
         failure_mark(app, ui, th, &t, error);
     }
-    let bar = marks_bar(th.rect, &m);
-    if th.marks {
-        marks_row(&p, &t, &m, th, false);
+    let bar = if th.marks {
+        marks_row(&p, &t, &m, th, false)
     } else if !th.surround && photo.label.is_some() {
         // the setting is about ratings and flags: where no tinted surround says the label, its dot stays
-        marks_row(&p, &t, &m, th, true);
-    }
+        marks_row(&p, &t, &m, th, true)
+    } else {
+        None
+    };
     let stack = th.stack.and_then(|(sid, pos)| stack_badge(app, ui, th, &t, sid, pos));
     let stack_rect = stack.as_ref().map(|(r, _)| *r);
-    let mut obstacles = vec![bar];
+    let mut obstacles: Vec<Rect> = bar.into_iter().collect();
     obstacles.extend(stack_rect);
     if let Some(name) = &photo.copy_name {
         obstacles.extend(copy_tag(ui, th, &t, name, stack_rect.map(|r| r.width())));
@@ -448,14 +458,12 @@ fn failure_mark(app: &LightcraftApp, ui: &mut egui::Ui, th: &Thumb, t: &Tokens, 
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text.replace('\n', ": ")));
 }
 
-fn marks_row(p: &Painter, t: &Tokens, m: &Metrics, th: &Thumb, only_label: bool) {
+/// Draws the marks row; returns the strip it covers, if it drew anything.
+fn marks_row(p: &Painter, t: &Tokens, m: &Metrics, th: &Thumb, only_label: bool) -> Option<Rect> {
     let (photo, rect) = (th.photo, th.rect);
     let marks = if only_label { Marks { label: true, ..Marks::default() } } else { Marks::of(photo) };
     let layout = bar_layout(rect.width(), marks, m, !th.surround);
-    if layout.is_empty() && (only_label || !th.hot) {
-        return;
-    }
-    let bar = marks_bar(rect, m);
+    let bar = marks_extent(rect, marks, th.hot, only_label, !th.surround, m)?;
     if !only_label && (th.hot || m.band) {
         p.rect_filled(bar, 0.0, Color32::from_black_alpha(120));
     }
@@ -491,6 +499,7 @@ fn marks_row(p: &Painter, t: &Tokens, m: &Metrics, th: &Thumb, only_label: bool)
         let at = Rect::from_center_size(pos2(right - m.edited / 2.0, y), vec2(m.edited_icon, m.edited_icon));
         paint(p, at, Icon::Sliders, t.text_label);
     }
+    Some(bar)
 }
 
 /// The stack badge at the photo's top left: the number of photos on a collapsed stack's top,
@@ -635,6 +644,8 @@ mod tests {
             let m = surface.metrics();
             for marks in all_marks() {
                 for w in 0..400 {
+                    let first = bar_layout(w as f32, marks, &m, true);
+                    assert!(first.width(&m) <= w as f32, "{surface:?} {marks:?} at {w} (label first): {first:?}");
                     let l = bar_layout(w as f32, marks, &m, false);
                     assert!(l.width(&m) <= w as f32, "{surface:?} {marks:?} at {w}: {l:?} needs {}", l.width(&m));
                     if l.edited {
@@ -723,12 +734,11 @@ mod tests {
             let bar = marks_bar(photo, &m);
             let place = preview_pill_place(photo, 30.0, Some(badge), &[bar, badge], &m);
             let free = |r: Rect| !(r.min.x < badge.max.x && badge.min.x < r.max.x && r.min.y < badge.max.y && badge.min.y < r.max.y);
-            if let Some(p) = place {
-                assert!(
-                    free(p.rect) && photo.contains_rect(p.rect) && p.rect.bottom() <= bar.top() + 0.01,
-                    "{surface:?}: {p:?} meets the badge {badge:?}"
-                );
-            }
+            let p = place.expect("the pill is always placed");
+            assert!(
+                free(p.rect) && photo.contains_rect(p.rect) && p.rect.bottom() <= bar.top() + 0.01,
+                "{surface:?}: {p:?} meets the badge {badge:?}"
+            );
             // without the badge it sits where it always did
             let alone = preview_pill_place(photo, 30.0, None, &[bar], &m).expect("room");
             assert_eq!(alone.rect.top(), (h - m.bar - 4.0 - m.pill_icon).max(m.inset), "{surface:?}");
@@ -737,7 +747,25 @@ mod tests {
         let m = Surface::Film.metrics();
         let tiny = Rect::from_min_size(pos2(0.0, 0.0), vec2(40.0, 30.0));
         let badge = Rect::from_min_size(pos2(m.inset, m.inset), vec2(34.0, m.badge));
-        assert_eq!(preview_pill_place(tiny, 30.0, Some(badge), &[marks_bar(tiny, &m), badge], &m), None);
+        let last = preview_pill_place(tiny, 30.0, Some(badge), &[marks_bar(tiny, &m), badge], &m).expect("never hidden");
+        assert!(!last.full, "the icon alone, at its first spot");
+    }
+
+    /// A square-grid 16:9 photo at 90 pt is 70 x 39: with no marks to draw the row covers nothing,
+    /// and the pill sits where it always did instead of dodging a strip that is not there.
+    #[test]
+    fn a_short_photo_without_marks_leaves_the_pill_its_place() {
+        for (surface, w, h) in [(Surface::Grid, 70.0, 39.0), (Surface::Film, 100.0, 30.0)] {
+            let m = surface.metrics();
+            let photo = Rect::from_min_size(pos2(0.0, 0.0), vec2(w, h));
+            let bar = marks_extent(photo, Marks::default(), false, false, false, &m);
+            assert_eq!(bar, None, "{surface:?}: nothing drawn, nothing to avoid");
+            let obstacles: Vec<Rect> = bar.into_iter().collect();
+            let place = preview_pill_place(photo, 30.0, None, &obstacles, &m).expect("placed");
+            assert!(photo.contains_rect(place.rect) && place.full, "{surface:?}: {place:?}");
+            // under the pointer the band is there, and the row covers its strip
+            assert_eq!(marks_extent(photo, Marks::default(), true, false, false, &m), Some(marks_bar(photo, &m)));
+        }
     }
 
     /// "12/120" on a 60 pt photo, "3/12" on a 42 pt filmstrip photo: the badge sheds its icon, then
