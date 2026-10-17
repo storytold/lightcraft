@@ -7,6 +7,9 @@
 //! rule documented there; files it can't decode are reported as [`RawError::Unsupported`] and their embedded previews still work. So are High Efficiency NEFs
 //! (HE / HE★, Z 8, Z 9, Z 6III, Z f): they keep compression 34713 but carry a wavelet codestream that starts with
 //! the JPEG XS markers SOC + CAP (ISO/IEC 21122-1, `FF10 FF50`) and have no `0x0096` table (issue #193).
+//! Strips labelled 34713 without a `0x0096`
+//! linearization table are packed uncompressed data in several measured layouts ([`PackedLayout`]); Nikon small raw
+//! (sRAW) and the D1X's genuinely Huffman-coded strip stay refused.
 
 use super::{nefc, white_from_data};
 use crate::tiffraw::{Packing, check_image, read_image};
@@ -253,7 +256,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             values: [a, b, c, d].iter().map(|v| (**v * black_scale) as f32).collect(),
             ..Default::default()
         },
-        _ => BlackLevel::uniform(nrw_black(mn.as_ref(), bits).unwrap_or(0.0)),
+        _ => BlackLevel::uniform(nrw_black(mn.as_ref(), bits).unwrap_or_else(|| be16_black(&info, bytes.len() as u64, mn.as_ref(), samples))),
     };
     let wb = mn
         .as_ref()
@@ -342,8 +345,118 @@ fn uncompressed(bytes: &[u8], info: &ImageInfo, order: ByteOrder, mn: Option<&ma
     read_image(bytes, &top, order, packing)
 }
 
-/// Nikon Huffman-compressed strip (see [`super::nefc`]); the decode table is maker note `0x0096`. Decodes the first
-/// `rows` rows of the `info.height`.
+/// Packed layouts of strips that are labelled compression 34713 but have no linearization table (maker note
+/// `0x0096`): they hold plain packed samples, not Huffman codes. The layouts were measured from CC0 raw.pixls.us
+/// files by a clean-room black-box analysis (strip byte-count identity, same-colour smoothness and correlation with
+/// the camera JPEG against at least eight alternative packings). Every layout is a single strip with
+/// `stride = StripByteCounts / height`, selected only when `stride * height` equals the strip size exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PackedLayout {
+    /// LSB-first bit stream of `bits` per sample (12: 3 bytes per 2 samples, 14: 7 bytes per 4), rows byte aligned.
+    /// 12-bit rows are `3w/2` bytes (older bodies) or padded to 16 bytes (Z 6, D6); 14-bit rows are `7w/4` bytes
+    /// padded to 16 bytes.
+    Lsb { stride: usize },
+    /// D100: 16-byte chunks of fifteen data bytes holding ten MSB-first 12-bit samples, plus one zero pad byte. The
+    /// rows carry more samples than the IFD width (3040 against 3034); the extra columns are not image.
+    Chunked16 { stride: usize },
+    /// Coolpix NRW: one big-endian 16-bit word per pixel, rows `2w` bytes with no header or padding; the 12-bit sample
+    /// is the upper 12 bits of the word (the low nibble is zero, rarely 8).
+    Be16,
+}
+
+fn packed_layout(w: usize, h: usize, bits: u32, strip: u64) -> Option<PackedLayout> {
+    if w == 0 || h == 0 || !matches!(bits, 12 | 14) {
+        return None;
+    }
+    let strip = usize::try_from(strip).ok()?;
+    if !strip.is_multiple_of(h) {
+        return None;
+    }
+    let stride = strip / h;
+    let tight = w.checked_mul(bits as usize)?.div_ceil(8);
+    let tight = if bits == 12 && w.is_multiple_of(2) || bits == 14 && w.is_multiple_of(4) { tight } else { return None };
+    let padded = tight.checked_next_multiple_of(16)?;
+    let lsb_ok = match bits {
+        12 => stride == tight || stride == padded,
+        _ => stride == padded,
+    };
+    if lsb_ok {
+        return Some(PackedLayout::Lsb { stride });
+    }
+    None
+}
+
+fn d100_layout(w: usize, h: usize, bits: u32, strip: u64) -> Option<PackedLayout> {
+    let strip = usize::try_from(strip).ok()?;
+    if bits != 12 || h == 0 || !strip.is_multiple_of(h) {
+        return None;
+    }
+    let stride = strip / h;
+    let per_row = stride / 16 * 10;
+    (stride.is_multiple_of(16) && per_row >= w && per_row < w.checked_add(10)?).then_some(PackedLayout::Chunked16 { stride })
+}
+
+/// 12-bit strips of exactly `2 * w * h` bytes: big-endian 16-bit words (Coolpix P330, P7700, P7800 NRW, found by a
+/// clean-room black-box analysis of the CC0 files). Tried after the other layouts, whose strides (`1.5w` to
+/// `1.5w + 15`, or ten samples per 16 bytes) only reach `2w` for rows narrower than 40 samples, so it can't take a
+/// strip they handle.
+fn be16_layout(w: usize, h: usize, bits: u32, strip: u64) -> Option<PackedLayout> {
+    let want = w.checked_mul(h)?.checked_mul(2)?;
+    (bits == 12 && w > 0 && h > 0 && usize::try_from(strip).ok()? == want).then_some(PackedLayout::Be16)
+}
+
+/// Black level of the big-endian 16-bit layout, which carries neither `0x003d` nor an NRW block and has no masked
+/// pixels (the borders of the frame are image). The darkest samples of the three measured bodies are 214 (P330),
+/// 217 (P7700) and 201 (P7800, the only one with a dark enough frame: its per-channel 1st percentile is 209 / 225 /
+/// 223), and the other 12-bit Coolpix NRWs state 200 in their NRW block; so 200, never above the darkest sample.
+const BE16_BLACK: f32 = 200.0;
+
+fn be16_black(info: &ImageInfo, file_len: u64, mn: Option<&makernote::MakerNote>, samples: &[u16]) -> f32 {
+    let has_table = mn.is_some_and(|m| m.ifd.bytes(LINEARIZATION_TABLE).is_some());
+    let single = matches!(info.chunks(file_len).as_slice(), [c] if be16_layout(info.width as usize, info.height as usize, info.bits() as u32, c.len).is_some());
+    if info.compression != t::compression::NIKON || has_table || info.samples_per_pixel != 1 || !single {
+        return 0.0;
+    }
+    let darkest = samples.iter().copied().min().unwrap_or(0);
+    BE16_BLACK.min(f32::from(darkest))
+}
+
+/// Unpack a [`PackedLayout`] strip into `w * h` samples. Short input leaves the missing samples zero.
+fn unpack_packed(src: &[u8], w: usize, h: usize, bits: u32, layout: PackedLayout) -> Vec<u16> {
+    use rayon::prelude::*;
+    let mut out = vec![0u16; w * h];
+    let stride = match layout {
+        PackedLayout::Lsb { stride } | PackedLayout::Chunked16 { stride } => stride,
+        PackedLayout::Be16 => w.saturating_mul(2),
+    };
+    out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+        let Some(line) = src.get(y * stride..) else { return };
+        let line = &line[..stride.min(line.len())];
+        match layout {
+            PackedLayout::Lsb { .. } => crate::unpack::unpack_lsb(line, bits, row),
+            PackedLayout::Be16 => {
+                let (words, _) = line.as_chunks::<2>();
+                for (dst, word) in row.iter_mut().zip(words) {
+                    *dst = u16::from_be_bytes(*word) >> 4;
+                }
+            }
+            PackedLayout::Chunked16 { .. } => {
+                let mut samples = vec![0u16; line.len() / 16 * 10];
+                for (i, dst) in samples.chunks_mut(10).enumerate() {
+                    if let Some(chunk) = line.get(i * 16..i * 16 + 15) {
+                        crate::unpack::unpack_msb(chunk, 12, dst);
+                    }
+                }
+                let n = row.len().min(samples.len());
+                row[..n].copy_from_slice(&samples[..n]);
+            }
+        }
+    });
+    out
+}
+
+/// Nikon Huffman-compressed strip (see [`super::nefc`]); the decode table is maker note `0x0096`. Without a table the
+/// strip may be packed uncompressed data (see [`PackedLayout`]).
 fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>, rows: usize) -> Result<RawData> {
     let starts_with = |magic: &[u8]| {
         let start = info.chunks(bytes.len() as u64).first().and_then(|c| usize::try_from(c.offset).ok());
@@ -352,10 +465,9 @@ fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>,
     if starts_with(&JPEG_XS_START) {
         return Err(RawError::Unsupported(HIGH_EFFICIENCY.into()));
     }
-    // (some Z bodies label uncompressed, row-padded data 34713 without a table: not handled here yet)
-    let table = mn
-        .and_then(|m| Some((m.ifd.bytes(LINEARIZATION_TABLE)?, m.order)))
-        .ok_or_else(|| RawError::Unsupported("Nikon compressed NEF without a linearization table (maker note 0x96)".into()))?;
+    let Some(table) = mn.and_then(|m| Some((m.ifd.bytes(LINEARIZATION_TABLE)?, m.order))) else {
+        return packed(bytes, info, rows);
+    };
     if info.samples_per_pixel != 1 {
         return Err(RawError::Unsupported(format!("Nikon compressed NEF with {} samples per pixel", info.samples_per_pixel)));
     }
@@ -368,6 +480,36 @@ fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>,
     let src = usize::try_from(first.offset).ok().zip(usize::try_from(end).ok()).and_then(|(a, b)| bytes.get(a..b));
     let src = src.ok_or_else(|| RawError::Corrupt("NEF: image data outside the file".into()))?;
     Ok(RawData::U16(nefc::decode_rows(src, info.width as usize, info.height as usize, rows, bits, &table)?))
+}
+
+/// A table-less "compressed" strip: packed samples when the strip size matches a measured layout exactly.
+fn packed(bytes: &[u8], info: &ImageInfo, rows: usize) -> Result<RawData> {
+    let (w, h) = (info.width as usize, info.height as usize);
+    let bits = info.bits() as u32;
+    let chunks = info.chunks(bytes.len() as u64);
+    let layout = match chunks.as_slice() {
+        [c] if info.samples_per_pixel == 1 => {
+            packed_layout(w, h, bits, c.len).or_else(|| d100_layout(w, h, bits, c.len)).or_else(|| be16_layout(w, h, bits, c.len))
+        }
+        _ => None,
+    };
+    let (Some(layout), [c]) = (layout, chunks.as_slice()) else {
+        let small = bits == 12
+            && chunks.len() == 1
+            && w.checked_mul(h).and_then(|n| n.checked_mul(3)).is_some_and(|n| u64::try_from(n).ok() == Some(chunks[0].len));
+        return Err(RawError::Unsupported(if small {
+            "Nikon small raw (sRAW) not decoded yet".into()
+        } else {
+            "Nikon compressed NEF without a linearization table (maker note 0x96)".into()
+        }));
+    };
+    let src = lightcraft_tiff::image::chunk_bytes(bytes, c)
+        .filter(|src| u64::try_from(src.len()).ok() == Some(c.len))
+        .ok_or_else(|| RawError::Corrupt("NEF: incomplete image strip".into()))?;
+    if (w as u64).saturating_mul(h as u64) > crate::MAX_SAMPLES as u64 {
+        return Err(RawError::Limit("image too large"));
+    }
+    Ok(RawData::U16(unpack_packed(src, w, rows.min(h), bits, layout)))
 }
 
 #[cfg(test)]
@@ -818,5 +960,230 @@ mod tests {
         // a strip too short to hold the markers is still the missing-table case, not a panic
         let short = nef(34713, 14, vec![vec![0xff, 0x10]], 1, 1, 1);
         assert!(matches!(crate::decode(&short), Err(RawError::Unsupported(w)) if w.contains("linearization table")));
+    }
+
+    fn samples(n: usize, bits: u32) -> Vec<u16> {
+        (0..n).map(|i| (((i * 2654435761usize) >> 7) as u32 % (1 << bits)) as u16).collect()
+    }
+
+    fn pack_lsb(row: &[u16], bits: u32) -> Vec<u8> {
+        let (mut out, mut acc, mut n) = (Vec::new(), 0u64, 0u32);
+        for &v in row {
+            acc |= (v as u64) << n;
+            n += bits;
+            while n >= 8 {
+                out.push(acc as u8);
+                acc >>= 8;
+                n -= 8;
+            }
+        }
+        if n > 0 {
+            out.push(acc as u8);
+        }
+        out
+    }
+
+    fn pack_msb12(row: &[u16]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for pair in row.chunks(2) {
+            let (a, b) = (pair[0], pair.get(1).copied().unwrap_or(0));
+            out.extend([(a >> 4) as u8, ((a & 15) << 4) as u8 | (b >> 8) as u8, b as u8]);
+        }
+        out
+    }
+
+    /// Rows of `samples` packed by `row`, each padded with `pad` bytes of 0xA5 (never decoded).
+    fn strip(data: &[u16], w: usize, pad: usize, row: impl Fn(&[u16]) -> Vec<u8>) -> Vec<u8> {
+        data.chunks(w).flat_map(|r| row(r).into_iter().chain(std::iter::repeat_n(0xA5, pad))).collect()
+    }
+
+    fn decoded(strip: Vec<u8>, bits: u16, w: u32, h: u32) -> Result<Vec<u16>> {
+        let bytes = nef(34713, bits, vec![strip], w, h, h);
+        match crate::decode(&bytes)?.data {
+            RawData::U16(d) => Ok(d),
+            _ => Err(RawError::Unsupported("float".into())),
+        }
+    }
+
+    #[test]
+    fn packed_34713_layouts_round_trip() {
+        let (w, h) = (40usize, 6usize);
+        let d12 = samples(w * h, 12);
+        let d14 = samples(w * h, 14);
+        // group A: 12-bit, 3w/2 bytes per row
+        assert_eq!(decoded(strip(&d12, w, 0, |r| pack_lsb(r, 12)), 12, 40, 6).unwrap(), d12);
+        // group B: 12-bit, rows padded to 16 bytes (60 -> 64)
+        assert_eq!(decoded(strip(&d12, w, 4, |r| pack_lsb(r, 12)), 12, 40, 6).unwrap(), d12);
+        // group C: 14-bit, 70 bytes -> 80
+        assert_eq!(decoded(strip(&d14, w, 10, |r| pack_lsb(r, 14)), 14, 40, 6).unwrap(), d14);
+        // group E: 16-byte chunks, 15 data bytes (ten samples) + a zero byte; 16 chunks = 160 samples (at 40 wide the
+        // 64-byte stride would be group B's)
+        let (w, h) = (160usize, 3usize);
+        let d12 = samples(w * h, 12);
+        let e = strip(&d12, w, 0, |r| r.chunks(10).flat_map(|c| pack_msb12(c).into_iter().chain([0u8])).collect());
+        assert_eq!(e.len(), 256 * h);
+        assert_eq!(decoded(e, 12, 160, 3).unwrap(), d12);
+    }
+
+    /// Z 6II "Packed 14 bits" (maker note 0x93 = 10, issue #769): 6064x4040, 14-bit, one strip of 4040 rows of 10624
+    /// bytes (6064 * 14 / 8 = 10612, padded to a multiple of 16). Four rows keep the real stride.
+    #[test]
+    fn packed_14_bit_z6ii_geometry_with_row_padding() {
+        let (w, h) = (6064usize, 4usize);
+        let d14 = samples(w * h, 14);
+        let s = strip(&d14, w, 12, |r| pack_lsb(r, 14));
+        assert_eq!(s.len(), 10624 * h);
+        assert_eq!(decoded(s, 14, w as u32, h as u32).unwrap(), d14);
+        assert_eq!(packed_layout(6064, 4040, 14, 42_920_960), Some(PackedLayout::Lsb { stride: 10624 }));
+    }
+
+    #[test]
+    fn packed_layout_refuses_overflowing_dimensions() {
+        for bits in [12, 14] {
+            assert!(packed_layout(usize::MAX - 3, 1, bits, u64::MAX).is_none());
+        }
+        assert!(d100_layout(usize::MAX, 1, 12, u64::MAX).is_none());
+    }
+
+    /// Header probes inspect only the same top rows that the masked-column test uses. Routing
+    /// still validates the complete strip's layout, so header and full decode keep the same crop.
+    #[test]
+    fn packed_header_probe_reads_only_the_mask_rows() {
+        let (w, h) = (160usize, MASK_ROWS + 7);
+        let data = samples(w * h, 12);
+        for image in [strip(&data, w, 0, |r| pack_lsb(r, 12)), be16(&data)] {
+            let bytes = nef(34713, 12, vec![image], w as u32, h as u32, h as u32);
+            let tiff = Tiff::parse(&bytes).unwrap();
+            let info = raw_ifd(&tiff).unwrap().image().unwrap();
+            let RawData::U16(top) = packed(&bytes, &info, MASK_ROWS).unwrap() else { panic!("integer samples") };
+            assert_eq!(top, data[..w * MASK_ROWS]);
+            let header = decode(&bytes, Mode::Header).unwrap();
+            let full = decode(&bytes, Mode::Full).unwrap();
+            assert_eq!((header.active_area, header.crop), (full.active_area, full.crop));
+            assert!(matches!(header.data, RawData::U16(ref samples) if samples.is_empty()));
+        }
+    }
+
+    #[test]
+    fn packed_d100_rows_carry_extra_columns() {
+        // IFD width 154, rows hold 160 samples (16 chunks); the last 6 are dropped
+        let (w, wide, h) = (154usize, 160usize, 3usize);
+        let wide_data = samples(wide * h, 12);
+        let e = strip(&wide_data, wide, 0, |r| r.chunks(10).flat_map(|c| pack_msb12(c).into_iter().chain([0u8])).collect());
+        let got = decoded(e, 12, w as u32, h as u32).unwrap();
+        let want: Vec<u16> = wide_data.chunks(wide).flat_map(|r| r[..w].iter().copied()).collect();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn packed_34713_wrong_sizes_stay_refused() {
+        let d12 = samples(40 * 6, 12);
+        let good = strip(&d12, 40, 0, |r| pack_lsb(r, 12));
+        // one byte more or fewer, a stride that is neither tight nor 16-aligned, a 13-bit file
+        for len in [good.len() - 1, good.len() + 1, good.len() + 6] {
+            let mut s = good.clone();
+            s.resize(len, 0);
+            assert!(matches!(decoded(s, 12, 40, 6), Err(RawError::Unsupported(_))), "len {len}");
+        }
+        assert!(matches!(decoded(good.clone(), 13, 40, 6), Err(RawError::Unsupported(_))));
+        // 14-bit rows must be padded to 16 bytes
+        let d14 = samples(40 * 6, 14);
+        assert!(matches!(decoded(strip(&d14, 40, 0, |r| pack_lsb(r, 14)), 14, 40, 6), Err(RawError::Unsupported(_))));
+        // 3 bytes per IFD-width pixel is a Nikon small raw: still refused, with its own reason
+        let Err(RawError::Unsupported(why)) = decoded(vec![0; 3 * 40 * 6], 12, 40, 6) else { panic!("small raw decoded") };
+        assert!(why.contains("sRAW"), "{why}");
+    }
+
+    /// Big-endian 16-bit words holding the 12-bit samples in their upper bits.
+    fn be16(data: &[u16]) -> Vec<u8> {
+        data.iter().flat_map(|v| (v << 4).to_be_bytes()).collect()
+    }
+
+    #[test]
+    fn coolpix_be16_words_decode_and_wrong_sizes_are_refused() {
+        let (w, h) = (40usize, 6usize);
+        let d12 = samples(w * h, 12);
+        let good = be16(&d12);
+        assert_eq!(good.len(), 2 * w * h);
+        assert_eq!(decoded(good.clone(), 12, 40, 6).unwrap(), d12);
+        // a half-LSB in the low nibble does not change the sample
+        let mut half = good.clone();
+        for b in half.iter_mut().skip(1).step_by(2) {
+            *b |= 8;
+        }
+        assert_eq!(decoded(half, 12, 40, 6).unwrap(), d12);
+        // any other strip size, or another bit depth, is not this layout
+        for len in [good.len() - 2, good.len() - 1, good.len() + 1, good.len() + 2, good.len() + 16] {
+            let mut s = good.clone();
+            s.resize(len, 0);
+            assert!(matches!(decoded(s, 12, 40, 6), Err(RawError::Unsupported(_))), "len {len}");
+        }
+        assert!(matches!(decoded(good.clone(), 13, 40, 6), Err(RawError::Unsupported(_))));
+        // the black level is 200, but never above the darkest sample
+        let black = |data: &[u16]| crate::decode(&nef(34713, 12, vec![be16(data)], 40, 6, 6)).unwrap().black.values[0];
+        let mut d = d12.clone();
+        for v in &mut d {
+            *v = (*v).max(300);
+        }
+        assert_eq!(black(&d), 200.0);
+        d[5] = 150;
+        assert_eq!(black(&d), 150.0);
+    }
+
+    #[test]
+    fn coolpix_be16_does_not_take_other_layouts() {
+        // every width where another group's stride equals 2w must still go to that group (the narrow rows where they
+        // coincide are below the real-world widths; the other groups are tried first)
+        for w in (2..=400usize).step_by(2) {
+            let strip = 2 * w as u64 * 6;
+            let other = packed_layout(w, 6, 12, strip).or_else(|| d100_layout(w, 6, 12, strip));
+            if other.is_some() {
+                assert_eq!(packed_layout(w, 6, 12, strip).or_else(|| d100_layout(w, 6, 12, strip)).or_else(|| be16_layout(w, 6, 12, strip)), other);
+            }
+        }
+        assert_eq!(be16_layout(4032, 3024, 12, 24385536), Some(PackedLayout::Be16));
+        assert!(packed_layout(4032, 3024, 12, 24385536).is_none() && d100_layout(4032, 3024, 12, 24385536).is_none());
+        assert!(be16_layout(4032, 3024, 14, 24385536).is_none());
+        assert!(be16_layout(usize::MAX, usize::MAX, 12, u64::MAX).is_none());
+    }
+
+    #[test]
+    fn packed_34713_short_input_does_not_panic() {
+        let (w, h) = (40usize, 6usize);
+        for layout in [PackedLayout::Lsb { stride: 64 }, PackedLayout::Lsb { stride: 80 }, PackedLayout::Chunked16 { stride: 64 }, PackedLayout::Be16]
+        {
+            for len in [0, 1, 15, 16, 17, 63, 64, 65, 200] {
+                let bits = if matches!(layout, PackedLayout::Lsb { stride: 80 }) { 14 } else { 12 };
+                assert_eq!(unpack_packed(&vec![0xFF; len], w, h, bits, layout).len(), w * h);
+            }
+        }
+        // a strip that claims more bytes than the file has
+        let mut bytes = nef(34713, 12, vec![vec![0x55; 60 * 6]], 40, 6, 6);
+        bytes.truncate(bytes.len() - 100);
+        assert!(crate::decode(&bytes).is_err(), "a truncated packed strip is corrupt");
+    }
+    /// Keep every directory intact before a relocated tail strip, then remove its last rows.
+    fn truncated_tail_strip(mut bytes: Vec<u8>, keep: usize) -> Vec<u8> {
+        let tiff = Tiff::parse(&bytes).unwrap();
+        let raw = raw_ifd(&tiff).unwrap();
+        let info = raw.image().unwrap();
+        let chunk = info.chunks(bytes.len() as u64)[0];
+        let data = lightcraft_tiff::image::chunk_bytes(&bytes, &chunk).unwrap().to_vec();
+        let offset_entry = raw.get(t::STRIP_OFFSETS).unwrap().offset as usize;
+        let start = bytes.len() as u32;
+        bytes[offset_entry..offset_entry + 4].copy_from_slice(&start.to_be_bytes());
+        bytes.extend_from_slice(&data[..keep]);
+        bytes
+    }
+
+    #[test]
+    fn packed_rejects_tail_truncation_with_intact_directories() {
+        let bytes = nef(34713, 12, vec![vec![0x55; 360]], 40, 6, 6);
+        for keep in [0, 60, 359] {
+            let short = truncated_tail_strip(bytes.clone(), keep);
+            for mode in [Mode::Header, Mode::Full] {
+                assert!(matches!(decode(&short, mode), Err(RawError::Corrupt(_))));
+            }
+        }
     }
 }
