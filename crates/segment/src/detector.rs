@@ -6,6 +6,7 @@
 //! the Python/PyTorch SAM 3 code of Hugging Face Transformers (`models/sam3/modeling_sam3.py`), Copyright The HuggingFace
 //! Team and Meta Platforms, Inc.; translated to Rust on candle and restructured. See NOTICE.
 
+use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 use candle_core::{D, Device, IndexOp, Module, Tensor};
@@ -14,12 +15,15 @@ use candle_nn::{Conv2d, Conv2dConfig, GroupNorm, LayerNorm, Linear, VarBuilder};
 use crate::clip::TextEncoder;
 use crate::neck::{FPN, Neck};
 use crate::nn::{Attention, DecoderMlp, Mlp, TORCH_LN_EPS, cxcywh_to_xyxy, inverse_sigmoid, linear, ln, padding_bias, sine_grid, to_vec};
-use crate::{BackboneAccel, Error, Prediction, Result};
+use crate::{BackboneAccel, Error, Prediction, Result, cpu};
 
 const HIDDEN: usize = FPN;
 const HEADS: usize = 8;
 const QUERIES: usize = 200;
 const LAYERS: usize = 6;
+/// Prompts whose text features are kept: they don't depend on the image, and the same few come back (Subject's
+/// "person" on every photo). 32 KB each.
+const TEXT_CACHE: usize = 16;
 
 /// Detector image features, computed once per image.
 pub struct Features {
@@ -79,6 +83,8 @@ pub struct Detector {
     neck: Neck,
     text: TextEncoder,
     text_proj: Linear,
+    /// The latest prompts' token ids and valid marks with their features `[1, 32, 256]`, most recent last.
+    texts: Mutex<VecDeque<(Vec<u32>, Vec<bool>, Tensor)>>,
     encoder: Vec<EncoderLayer>,
     decoder: Vec<DecoderLayer>,
     out_ln: LayerNorm,
@@ -145,6 +151,7 @@ impl Detector {
             neck: Neck::new(vb.pp("vision_encoder.neck"))?,
             text: TextEncoder::new(vb.pp("text_encoder.text_model"))?,
             text_proj: linear(1024, HIDDEN, vb.pp("text_projection"))?,
+            texts: Mutex::new(VecDeque::with_capacity(TEXT_CACHE)),
             encoder,
             decoder,
             out_ln: ln(HIDDEN, TORCH_LN_EPS, d.pp("output_layer_norm"))?,
@@ -184,6 +191,23 @@ impl Detector {
         Ok(Features { levels, flat, pos, side })
     }
 
+    /// The prompt's features `[1, 32, 256]`: the CLIP text encoder and its projection, or the same tensor again
+    /// when the prompt was among the last [`TEXT_CACHE`].
+    fn text_features(&self, ids: &[u32], valid: &[bool]) -> Result<Tensor> {
+        let mut texts = self.texts.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(seen) = texts.iter().position(|(i, v, _)| i == ids && v == valid).and_then(|at| texts.remove(at)) {
+            let text = seen.2.clone();
+            texts.push_back(seen);
+            return Ok(text);
+        }
+        let text = self.text_proj.forward(&self.text.forward(ids, valid)?)?;
+        if texts.len() >= TEXT_CACHE {
+            texts.pop_front();
+        }
+        texts.push_back((ids.to_vec(), valid.to_vec(), text.clone()));
+        Ok(text)
+    }
+
     /// Box relative-position bias `[1, heads, 1 + 200, side²]` for reference boxes (cx, cy, w, h).
     fn rpb(&self, boxes: &Tensor, side: usize) -> Result<Tensor> {
         let xyxy = cxcywh_to_xyxy(boxes)?.squeeze(0)?; // [200, 4]
@@ -198,6 +222,9 @@ impl Detector {
         let dx = log_scale(coords.broadcast_sub(&pick(0, 2)?)?)?;
         let ey = self.rpb_y.forward(&dy)?; // [200, side, heads]
         let ex = self.rpb_x.forward(&dx)?;
+        if self.device.is_cpu() {
+            return cpu::box_bias(&ey, &ex);
+        }
         let m = ey.unsqueeze(2)?.broadcast_add(&ex.unsqueeze(1)?)?; // [200, side, side, heads]
         let m = m.reshape((QUERIES, side * side, HEADS))?.permute((2, 0, 1))?; // [heads, 200, side²]
         let m = m.pad_with_zeros(1, 1, 0)?; // the presence token attends everywhere
@@ -265,7 +292,7 @@ impl Detector {
 
     /// Run the detector for one tokenized prompt, the DETR encoder on `accel` when it runs it.
     pub fn predict(&self, f: &Features, ids: &[u32], valid: &[bool], accel: &EncoderAccel) -> Result<Output> {
-        let text = self.text_proj.forward(&self.text.forward(ids, valid)?)?; // [1, 32, 256]
+        let text = self.text_features(ids, valid)?;
         let text_bias = padding_bias(valid, &self.device)?;
 
         let memory = match self.encode_accelerated(f, &text, valid, accel)? {
@@ -358,4 +385,84 @@ pub fn merge(out: &Output, threshold: f32) -> Option<Prediction> {
         });
     }
     merged.map(|logits| Prediction { logits, score: best })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::Sam3;
+
+    /// The real checkpoint: `$LIGHTCRAFT_SAM3_DIR`, else the desktop app's folder.
+    fn model() -> Option<Sam3> {
+        let dir = std::env::var_os("LIGHTCRAFT_SAM3_DIR")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/lightcraft/models/sam3")))?;
+        crate::is_model_dir(&dir).then(|| Sam3::load_on(&dir, Device::Cpu).unwrap())
+    }
+
+    fn values(t: &Tensor) -> Vec<f32> {
+        t.flatten_all().unwrap().to_vec1().unwrap()
+    }
+
+    #[test]
+    fn the_box_bias_matches_the_tensor_ops_on_random_boxes() {
+        let Some(mut m) = model() else {
+            lightcraft_testkit::skip!(Model, "SAM 3 not installed (set LIGHTCRAFT_SAM3_DIR)");
+            return;
+        };
+        let (det, _, _) = m.detector_parts().unwrap();
+        let side = 72;
+        for _ in 0..3 {
+            let centres = Tensor::rand(0f32, 1.0, (1, QUERIES, 2), &Device::Cpu).unwrap();
+            let sizes = Tensor::rand(0.01f32, 0.6, (1, QUERIES, 2), &Device::Cpu).unwrap();
+            let boxes = Tensor::cat(&[centres, sizes], 2).unwrap();
+            let got = det.rpb(&boxes, side).unwrap();
+            // what the other devices run, from the same row and column terms
+            let xyxy = cxcywh_to_xyxy(&boxes).unwrap().squeeze(0).unwrap();
+            let coords = Tensor::arange(0u32, side as u32, &Device::Cpu).unwrap().to_dtype(candle_core::DType::F32).unwrap();
+            let coords = coords.affine(1.0 / side as f64, 0.0).unwrap().reshape((1, side, 1)).unwrap();
+            let term = |mlp: &DecoderMlp, a: usize, b: usize| {
+                let pick = Tensor::cat(&[xyxy.narrow(1, a, 1).unwrap(), xyxy.narrow(1, b, 1).unwrap()], 1).unwrap().unsqueeze(1).unwrap();
+                let d = (coords.broadcast_sub(&pick).unwrap() * 8.0).unwrap();
+                let d = d.sign().unwrap().mul(&((d.abs().unwrap() + 1.0).unwrap().log().unwrap() / 8f64.ln()).unwrap()).unwrap();
+                mlp.forward(&d).unwrap()
+            };
+            let (ey, ex) = (term(&det.rpb_y, 1, 3), term(&det.rpb_x, 0, 2));
+            let want = ey.unsqueeze(2).unwrap().broadcast_add(&ex.unsqueeze(1).unwrap()).unwrap();
+            let want = want.reshape((QUERIES, side * side, HEADS)).unwrap().permute((2, 0, 1)).unwrap().pad_with_zeros(1, 1, 0).unwrap();
+            assert_eq!(got.dims(), [1, HEADS, 1 + QUERIES, side * side]);
+            assert_eq!(values(&got), values(&want));
+        }
+    }
+
+    #[test]
+    fn prompt_features_are_kept_for_the_latest_prompts() {
+        let Some(mut m) = model() else {
+            lightcraft_testkit::skip!(Model, "SAM 3 not installed (set LIGHTCRAFT_SAM3_DIR)");
+            return;
+        };
+        let (det, tok, _) = m.detector_parts().unwrap();
+        let prompts: Vec<(Vec<u32>, Vec<bool>)> = (0..=TEXT_CACHE).map(|i| tok.encode(&format!("{i} people"))).collect();
+        let features = |i: usize| det.text_features(&prompts[i].0, &prompts[i].1).unwrap();
+        let first = features(0);
+        let fresh = det.text_proj.forward(&det.text.forward(&prompts[0].0, &prompts[0].1).unwrap()).unwrap();
+        assert_eq!(values(&first), values(&fresh));
+        // the same tensor again, also after other prompts
+        assert_eq!(features(0).id(), first.id());
+        let second = features(1);
+        for i in 2..TEXT_CACHE {
+            features(i);
+        }
+        assert_eq!(features(0).id(), first.id(), "prompt 0 is the latest one now");
+        // one more prompt drops the least recently used, prompt 1, which is computed again
+        features(TEXT_CACHE);
+        assert_eq!(det.texts.lock().unwrap().len(), TEXT_CACHE);
+        assert_eq!(features(0).id(), first.id());
+        let again = features(1);
+        assert_ne!(again.id(), second.id());
+        assert_eq!(values(&again), values(&second));
+    }
 }

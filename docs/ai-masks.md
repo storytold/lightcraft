@@ -66,8 +66,9 @@ the photo already rendered:
 | A photo's whole analysis before its first click | 32.3–33.4 s | 0.56–0.69 s |
 | Click features (once per photo, before the first click) | 2.1–2.3 s | 0.12–0.19 s (the tracker neck on the GPU, 38 ms) |
 | A click | ~0.14 s | ~0.14 s (CPU) |
-| First description on a photo (detector features + text) | 7.0–7.7 s | 1.9–2.8 s (the detector neck and the DETR encoder on the GPU) |
-| A further description | 5.1–5.5 s | 1.9–2.0 s (the DETR encoder on the GPU, 24 ms; the rest on the CPU) |
+| First description on a photo (detector features + text) | 6.3–6.9 s | 1.3–2.5 s (the detector neck and the DETR encoder on the GPU) |
+| A further description | 4.4–4.5 s | 1.5–1.7 s (the DETR encoder on the GPU, 24 ms; the rest on the CPU) |
+| A prompt used before (on this or an earlier photo; the latest 16 are kept) | ~4.35 s | 1.25–1.6 s (no text encoder) |
 
 (CPU: `cargo run -p lightcraft-segment --release --example sam3_bench -- <model dir>`; GPU:
 `LIGHTCRAFT_SAM3_DIR=<model dir> cargo run -p lightcraft-gpu --release --features sam --example
