@@ -245,6 +245,54 @@ fn record_codec() {
 }
 
 #[test]
+fn fragmented_record_keeps_nested_seq_values_and_escaped_strings() {
+    let rules = serde_json::from_value(serde_json::json!({
+        "rules": [{"field": "title", "op": "contains", "value": {"seq": {"text": "braces { } and quotes \" \\"}}}]
+    }))
+    .unwrap();
+    let album =
+        Album { smart: Some(Box::new(Filter { rule_set: Some(rules), ..Default::default() })), ..Album::new(AlbumId(1), "Größe ✓ { \" \\") };
+    let op = Op::AddAlbum { album: album.clone() };
+    let record = encode_record(1, &op);
+    assert_eq!(record.matches("{\"seq\":").count(), 2);
+    for fragment in [b"{\"seq\":".as_slice(), b"\xff\"{\\", b"garbage}"] {
+        let m = MemStore::new();
+        let mut log = fragment.to_vec();
+        log.extend_from_slice(record.as_bytes());
+        log.extend_from_slice(b"\r\n");
+        m.set(LOG, log);
+        let (_, loaded, report) = open(&m);
+        assert_eq!(loaded.album(album.id), Some(&album));
+        assert_eq!((report.replayed, report.torn_fragments, report.torn_bytes), (1, 1, 0));
+        assert!(report.damaged.is_none());
+    }
+}
+
+#[test]
+fn repeated_record_markers_do_not_hide_a_retried_record() {
+    let m = MemStore::new();
+    let (mut journal, catalog, _) = open(&m);
+    journal.snapshot(&catalog).unwrap();
+    drop(journal);
+    let fragment = b"{\"seq\":".repeat(300_000);
+    m.set(LOG, fragment.clone());
+    let (_, loaded, report) = open(&m);
+    assert_eq!(loaded.to_snapshot(), catalog.to_snapshot());
+    assert_eq!(report.torn_bytes as usize, fragment.len());
+    assert!(m.get(LOG).unwrap().is_empty());
+
+    let album = Album::new(AlbumId(1), "Recovered");
+    let mut log = fragment;
+    log.extend_from_slice(encode_record(1, &Op::AddAlbum { album: album.clone() }).as_bytes());
+    log.push(b'\n');
+    m.set(LOG, log);
+    let (_, loaded, report) = open(&m);
+    assert_eq!(loaded.album(album.id), Some(&album));
+    assert_eq!((report.replayed, report.torn_fragments, report.torn_bytes), (1, 1, 0));
+    assert!(report.damaged.is_none());
+}
+
+#[test]
 fn push_history_is_bounded_and_invertible() {
     let mut c = Catalog::new();
     let id = c.alloc_photo_id();

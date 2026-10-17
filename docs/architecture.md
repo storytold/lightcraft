@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (`cargo xtask ci` reports the machine and skipped tests; `testkit`) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-17 · **Change:** patch (linear-time damaged-journal suffix recovery, #2124) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How LightCraft is built today. The longer design document (`plan/architecture.md`) is local-only
 (`plan/` is gitignored); this page is the committed, current summary. Sizes are Rust lines counted
@@ -29,6 +29,9 @@ L5 depends on egui, eframe, winit or rfd, and that each crate only uses lower la
 - **Persistence** (`crates/catalog/src/journal.rs`): an append-only journal of human-readable
   operations plus periodic snapshots, compacted in the background; torn appends and crashes are
   tested (`tests_torn_append.rs`, `tests_journal.rs`). A lock file guards against two writers.
+  Recovery of a failed append's fragment scans the final JSON object once before validating its
+  CRC and sequence. Repeated record markers in damaged bytes do not cause repeated suffix parses;
+  nested smart-album values and escaped strings keep their existing recovery behavior.
 - **Edits** are a `develop::Settings` value (every slider is a control spec with id, range and
   default), normalized to image coordinates so previews and exports match. Process versions
   (`docs/process-versions.md`) keep old edits rendering the same after a retune.
@@ -77,5 +80,6 @@ the `lightcraft-gpu` tests once per backend with a hardware adapter (`LIGHTCRAFT
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | patch | Failed-append suffix recovery is linear in the damaged line length (#2124); catalog format unchanged |
 | 2026-10-11 | minor | Quality gates: the CI machine probe, visible skips (`testkit`) and `target/ci/report.json` |
 | 2026-10-10 | major | Created from the code (crate sizes, layers, data model, rendering, control, gates) |

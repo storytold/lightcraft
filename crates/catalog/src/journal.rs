@@ -269,10 +269,36 @@ fn newer(what: String) -> CatalogError {
 /// The record's CRC must match, so damage is never mistaken for it.
 fn resync(line: &[u8], last: u64) -> Option<(usize, (u64, Op))> {
     const START: &[u8] = b"{\"seq\":";
-    (1..line.len().saturating_sub(START.len() - 1)).filter(|&i| line[i..].starts_with(START)).find_map(|i| {
-        let rec = std::str::from_utf8(&line[i..]).ok().map(|l| l.trim_end_matches('\r')).and_then(decode_record)?;
-        (rec.0 <= last + 1).then_some((i, rec))
-    })
+    let end = line.iter().rposition(|b| *b != b'\r')? + 1;
+    let line = &line[..end];
+    if line.last() != Some(&b'}') {
+        return None;
+    }
+    // Find the final object's opening brace in one backwards pass. A nested smart-album
+    // rule value can also start with START, so the last marker alone is not enough.
+    let mut depth = 0usize;
+    let mut quoted = false;
+    for (at, byte) in line.iter().enumerate().rev() {
+        if *byte == b'"' && line[..at].iter().rev().take_while(|b| **b == b'\\').count().is_multiple_of(2) {
+            quoted = !quoted;
+        } else if !quoted {
+            match byte {
+                b'}' => depth += 1,
+                b'{' => {
+                    depth = depth.checked_sub(1)?;
+                    if depth == 0 {
+                        if at == 0 || !line[at..].starts_with(START) {
+                            return None;
+                        }
+                        let rec = decode_record(std::str::from_utf8(&line[at..]).ok()?)?;
+                        return (rec.0 <= last + 1).then_some((at, rec));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
 }
 
 /// Write `catalog.snap` for the state after op `seq`, streaming the JSON into the store (no
