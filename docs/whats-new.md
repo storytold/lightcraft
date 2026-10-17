@@ -375,6 +375,41 @@
   JPEG get faster too.
 ## 2026-10-12
 
+### The sidebar from the keyboard
+- **View ▸ Keyboard in Sidebar** (Cmd+Alt+B) gives the keys to the left sidebar: a ring shows the row they are
+  on, starting at what the grid shows. ↑ ↓ move (Home, End, Page Up, Page Down too), → unfolds a folder or
+  section or steps into it, ← folds it or steps out, Enter or Space chooses the row as a click does, typing goes
+  to the next row that starts so (the same letter again: the one after), and F2 renames an album, a keyword or
+  a folder.
+- Esc, Tab, the shortcut again, Find or a click on the photos gives the keys back. While they are in the sidebar,
+  keys without Cmd / Ctrl / Alt are not shortcuts (P finds a row, it does not flag a photo); with it off
+  nothing changes: a click on a row never takes the keys.
+- For agents: `view.sidebarKeys` `{on?}`; the ring is widget `sidebarCursor`.
+
+### The sidebar shows where you are
+- The row of what the grid shows (an album, a folder, Picks, a keyword or date it is narrowed to) now has a bar
+  at the panel's left edge and its name in a heavier face, as well as its fill. In every theme the fill alone
+  was close to the panel's own colour, and in Paper it was nearly the colour of a row the pointer rests on. In
+  the light themes the count on that row is darker, so it reads on the fill.
+- A folded section that holds what is shown has the same bar and says its name after the section's title
+  ("Albums  Lisbon") where the count of its rows was, so folding Albums no longer hides which album you are
+  in. A long name is cut to fit; hover the header for all of it.
+
+### Folders opens at your photo folders
+- In the left panel's Folders, a disk now opens at the first folder that holds photos or branches. The folders
+  that only lead there (`Users` ▸ `me` ▸ …) no longer get a row each, so the folder you look for is at the top
+  and the same count is not repeated down a staircase. A row's tooltip still gives its whole path. When your
+  photos are in several places on a disk, it opens at the folder they share; below that, every folder is a row
+  as before.
+- Right-click a folder ▸ **Show Parent Folder** lists the folder above it, one level each time; **Hide This
+  Parent** on the topmost such row takes it away again. Nothing on disk or in the library changes. A folder you
+  gave a colour label always keeps its row, and so does the folder the grid is showing.
+- In a narrow panel, the count of a deeply nested row no longer prints over the folder's name: it follows the
+  name, past the panel's edge, and scrolling sideways reaches it.
+- In Local, a folder eight levels below its place used to open onto nothing. It now says **Go Deeper**: click
+  it to add that folder to Local as a place of its own (a message says so), where it opens further.
+- For agents: `view.folderParent` `{path, show?}`.
+
 ### Canon CR2 highlights
 - Blown highlights in CR2 files from the Canon EOS 50D, 60D, 450D (Rebel XSi), 500D (Rebel T1i), 550D (Rebel T2i),
   1200D (Rebel T5) and 100D (Rebel SL1) now count as clipped (issue #1272). They used to stop at 81–98% of white, so
@@ -465,6 +500,27 @@
 - With several photos selected, the Keywords panel says how many photos its keywords belong to. The × on a keyword
   is a larger target that lights up on its own, and taking a keyword off several photos at once now says which
   keyword left how many photos, and that Edit ▸ Undo puts it back.
+### Several albums, folders, keywords or dates at once
+- In the left panel, Cmd+click (Ctrl+click on Windows and Linux) adds an album, a folder, a keyword or a date to the
+  ones chosen, or takes it away; Shift+click takes every row between the last one clicked and this one. The grid
+  shows the photos of any of them, each once. A plain click chooses one row alone, as before.
+- In the Keyword List (right panel ▸ Keywords) the same clicks pick several keywords.
+- Right-click one of several rows chosen to act on them all, as one step to undo: move albums into a folder, export
+  them, or delete them; give folders a colour label or remove them from the library; give keywords to the selected
+  photos, take them away, merge them or delete them. Deleting or removing several asks first and says what goes.
+  Right-click a row that is not among them and you get that row's own menu; the others stay chosen.
+- Dragging one of several albums or keywords moves them all (albums go into the folder they are dropped in or
+  beside; placing by hand among its neighbours stays one album's).
+- Right after choosing several rows with Cmd or Shift, the Delete key asks about those rows. Click anywhere else,
+  or select photos or change what is shown in any other way, and Delete is about the photos again; after a plain
+  click on an album it always was.
+- Cut, Copy and Paste in the albums' and keywords' menus: cut albums move into the folder where you choose Paste
+  (the Albums + menu pastes at the top level), copied albums are duplicated there with their photos; cut keywords
+  are nested inside the keyword where you choose Paste; copied keywords are text you can paste in a keyword box.
+- For agents: `library.source` takes `ids` (albums) or `paths` (folders), `library.filter` takes `keywords` and
+  `dates`; `album.delete`, `album.move` and the new `album.duplicate` take `ids`, `keyword.delete` and
+  `keyword.move` take `keywords`, `library.removeFolder` and `folder.label` take `paths`. `library.state` lists
+  `albums` and `libraryFolders`.
 
 ### HDR and panorama merges of CR2 keep their colour
 - Photo Merge of Canon CR2 (and other raws whose colour LightCraft fits from the camera's own JPEG, such as NEF and
@@ -568,6 +624,26 @@
 - Settings ▸ General ▸ External Editing: the format (PSD or TIFF), colour space and bit depth for PhotoCraft and for
   the other editor (Edit in Other Editor, now ⌥⌘E), and where PhotoCraft is if you use a portable copy.
 - Export can write PSD too (flat, 8- or 16-bit).
+
+### Refused commands say why
+- When something you click, drop, drag a slider for, choose from a menu or press a key for can't be done, a message
+  at the bottom of the photo says why ("No photos selected", "Smart album “Trips view” would include itself in folder
+  “Trips”…") and stays long enough to read. Before, most such clicks did nothing and said nothing; only a few places,
+  such as an export that couldn't start, explained themselves.
+- Nothing claims a success that didn't happen: pressing 3 with no photo selected no longer says "Rated ★★★", ⌘Z with
+  nothing to undo no longer says "Undo", and Auto, a preset or Paste Settings that couldn't be applied say why
+  instead of "applied".
+
+### Folders of albums
+- Clicking a folder in the sidebar's Albums section shows the photos of every album and smart album inside it,
+  folders inside it included, each photo once, as a collection set does in Lightroom Classic. The grid is titled with
+  the folder's name and follows the sort and the filter bar. The triangle beside the folder opens and closes it; a
+  click on the row no longer does.
+- A folder's view can be saved as a smart album that follows the folder, also after its rules are edited (editing
+  the rules of a saved album view used to drop the album). It can't be made in, or moved into, the folder it shows
+  (it would include itself): that folder is no drop target and isn't offered under Move to, and commands say why.
+- Agents show a folder with `library.source {"kind": "album", "id": <folder id>}`; `albums.list` reports a folder's
+  `count`.
 
 ### Faster GPU exports
 - Exports with noise reduction, Texture, Clarity, Dehaze or Highlights and Shadows can be much faster on the GPU,
