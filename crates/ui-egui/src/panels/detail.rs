@@ -43,6 +43,13 @@ pub enum Gesture {
     CropRotate {
         start_angle: f64,
         a0: f32,
+        /// On-screen centre of the crop overlay when the drag began. Not `map.screen(rect.center())`:
+        /// that treats the straightened-frame rect as oriented-image coords, so an off-centre box
+        /// still turns about the photo.
+        pivot: Pos2,
+        /// The crop as it stood when the drag began, so every step shrinks from the drawn crop
+        /// rather than from the previous step's shrunken one (issue #1794).
+        start_rect: lightcraft_geom::Rect,
     },
     Pan {
         start: (f32, f32),
@@ -1590,12 +1597,17 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
             return;
         }
         let d = app.session.develop_of(id).unwrap_or_default();
-        app.gesture = Some(match handles.iter().position(|h| h.distance(q) < 12.0) {
+        // Which handle was grabbed is decided by where the button went *down*, not by where the
+        // pointer has got to by the time egui reports the drag. Past 12 px — the handle's own hit
+        // radius — the live position misses it, and a handle drag silently becomes a rotate, which
+        // then runs into the ±45° clamp. `press_origin` is where the user's hand actually is.
+        let at = ui.input(|i| i.pointer.press_origin()).unwrap_or(q);
+        app.gesture = Some(match handles.iter().position(|h| h.distance(at) < 12.0) {
             Some(h) => Gesture::CropHandle { handle: h as u8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
-            None if inside(q) => Gesture::CropHandle { handle: 8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
+            None if inside(at) => Gesture::CropHandle { handle: 8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
             None => {
-                let c = map.screen(Point::new(0.5, 0.5));
-                Gesture::CropRotate { start_angle: d.crop.geometry.angle, a0: (q - c).angle() }
+                let c = crop_overlay_centre(&pts);
+                Gesture::CropRotate { start_angle: d.crop.geometry.angle, a0: (at - c).angle(), pivot: c, start_rect: d.crop.geometry.rect }
             }
         });
     }
@@ -1615,12 +1627,19 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
                     json!({"handle": handle, "from": [orig.x, orig.y], "to": [n.x, n.y], "start": [start.x0, start.y0, start.x1, start.y1], "keepRatio": keep_ratio}),
                 );
             }
-            Some(Gesture::CropRotate { start_angle, a0 }) => {
-                let c = map.screen(Point::new(0.5, 0.5));
-                let a = (q - c).angle();
-                let ang = (start_angle + (a - a0).to_degrees() as f64).clamp(-45.0, 45.0);
+            Some(Gesture::CropRotate { start_angle, a0, pivot, start_rect }) => {
+                let a = (q - pivot).angle();
+                // Negate the angle delta because straighten angle is opposite to rotation direction:
+                // dragging clockwise (positive delta) should rotate image clockwise,
+                // but straighten angle is the correction (opposite of rotation).
+                // `a`/`a0` are atan2 in (-π, π]: dragging down the left of the box crosses ±π, so
+                // the raw subtraction jumps by ~2π and the ±45° clamp snaps the crop to the stop.
+                let ang = (start_angle - shortest_turn(a0, a).to_degrees() as f64).clamp(-45.0, 45.0);
                 shown_angle = (ang * 100.0).round() / 100.0;
-                let _ = app.run("crop.straighten", json!({"angle": shown_angle}));
+                // `start_rect` is the drawn crop, not the last step's shrunken one: without it a
+                // centred crop comes back as the whole photo (issue #1794).
+                let _ =
+                    app.run("crop.straighten", json!({"angle": shown_angle, "from": [start_rect.x0, start_rect.y0, start_rect.x1, start_rect.y1]}));
             }
             _ => {}
         }
@@ -1734,6 +1753,25 @@ fn rotate_cursor(ui: &egui::Ui, at: Pos2, turn: f32) {
     p.circle_filled(at, 12.0, Color32::from_black_alpha(150));
     crate::icons::paint_turned(&p, r.shrink(2.0), crate::icons::Icon::RotateDrag, Color32::WHITE, turn);
     register(ui.ctx(), "cropRotateCursor", r);
+}
+
+/// Screen-space centre of the crop overlay (mean of its four corners).
+fn crop_overlay_centre(pts: &[Pos2]) -> Pos2 {
+    let n = pts.len().max(1) as f32;
+    pos2(pts.iter().map(|p| p.x).sum::<f32>() / n, pts.iter().map(|p| p.y).sum::<f32>() / n)
+}
+
+/// Shortest signed turn from `from` to `to` (egui `Vec2::angle`, radians in (-π, π]).
+fn shortest_turn(from: f32, to: f32) -> f32 {
+    let mut d = to - from;
+    let tau = std::f32::consts::PI * 2.0;
+    while d > std::f32::consts::PI {
+        d -= tau;
+    }
+    while d < -std::f32::consts::PI {
+        d += tau;
+    }
+    d
 }
 
 /// How far to turn the rotation pointer (radians, clockwise) so its arc, drawn bulging up, bulges
@@ -2791,6 +2829,27 @@ fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
 
 #[cfg(test)]
 mod tests {
+    /// Crossing the left (atan2 branch cut) must not jump by a full turn.
+    #[test]
+    fn shortest_turn_crosses_the_left_without_a_full_spin() {
+        use std::f32::consts::PI;
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-5;
+        // top-left (~-3π/4) down to just past the left axis (~π): a short clockwise step, not +7π/4
+        assert!(near(super::shortest_turn(-3.0 * PI / 4.0, -PI + 0.05), -PI / 4.0 + 0.05));
+        assert!(near(super::shortest_turn(-3.0 * PI / 4.0, PI - 0.05), -PI / 4.0 - 0.05));
+        // bottom-left (~+3π/4) up past the left axis: a short counter-clockwise step
+        assert!(near(super::shortest_turn(3.0 * PI / 4.0, PI - 0.05), PI / 4.0 - 0.05));
+        assert!(near(super::shortest_turn(3.0 * PI / 4.0, -PI + 0.05), PI / 4.0 + 0.05));
+        assert!(near(super::shortest_turn(0.2, 0.3), 0.1));
+    }
+
+    #[test]
+    fn crop_overlay_centre_is_the_mean_of_the_corners() {
+        use egui::pos2;
+        let c = super::crop_overlay_centre(&[pos2(0.0, 0.0), pos2(4.0, 0.0), pos2(4.0, 2.0), pos2(0.0, 2.0)]);
+        assert!((c.x - 2.0).abs() < 1e-6 && (c.y - 1.0).abs() < 1e-6);
+    }
+
     /// The rotation pointer's arc bulges away from the side of the crop box it is on, and follows
     /// a box that is itself rotated.
     #[test]

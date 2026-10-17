@@ -223,3 +223,17 @@ pub(crate) fn point(p: &Value, key: &str) -> Option<lightcraft_geom::Point> {
     let a = p.get(key)?.as_array()?;
     Some(lightcraft_geom::Point::new(a.first()?.as_f64()?, a.get(1)?.as_f64()?))
 }
+
+/// An optional `[x0, y0, x1, y1]` rectangle. Absent, or anything that is not four finite numbers
+/// with `x1 > x0` and `y1 > y0`, is `None`: the caller then uses the crop as it stands.
+pub(crate) fn opt_rect(p: &Value, key: &str) -> Option<lightcraft_geom::Rect> {
+    let a = p.get(key)?.as_array()?;
+    if a.len() != 4 {
+        return None;
+    }
+    let [x0, y0, x1, y1] = [a[0].as_f64()?, a[1].as_f64()?, a[2].as_f64()?, a[3].as_f64()?];
+    if !(x0.is_finite() && y0.is_finite() && x1 > x0 && y1 > y0) {
+        return None;
+    }
+    Some(lightcraft_geom::Rect::new(x0, y0, x1, y1))
+}

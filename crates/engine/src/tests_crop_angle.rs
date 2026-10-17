@@ -70,6 +70,54 @@ fn a_crop_that_still_fits_is_kept() {
 }
 
 #[test]
+fn a_rotate_drag_keeps_the_crop_it_started_from() {
+    // issue #1794: `from` is the crop the drag began with, so every step measures against the
+    // drawn crop. Without it a centred crop comes back as the whole photo.
+    let mut s = Session::with_demo();
+    let (w, h) = dims(&s);
+    let drawn = Rect::new(0.1, 0.1, 0.9, 0.9);
+    s.execute("crop.set", &json!({"rect": [drawn.x0, drawn.y0, drawn.x1, drawn.y1]})).unwrap();
+    let from = json!([drawn.x0, drawn.y0, drawn.x1, drawn.y1]);
+    for angle in [10.0, 20.0, 30.0, 20.0, 10.0, 0.0] {
+        s.execute("crop.straighten", &json!({"angle": angle, "from": from})).unwrap();
+        assert!(geometry(&s).is_within_image(w, h), "{angle}°");
+    }
+    let got = geometry(&s).rect_px(w, h);
+    let want = drawn.scale(w, h);
+    assert!((got.width() - want.width()).abs() < 1e-6, "the drawn crop must come home whole: {} -> {}", want.width(), got.width());
+
+    // a malformed `from` is ignored, not trusted
+    for bad in [json!([0.9, 0.9, 0.1, 0.1]), json!([0.1, 0.1]), json!([0.1, 0.1, 0.9])] {
+        s.execute("crop.straighten", &json!({"angle": 0.0, "from": bad})).unwrap();
+    }
+}
+
+#[test]
+fn a_locked_aspect_survives_rotating() {
+    // The aspect lock is set once, then every angle step measures the drawn crop: the ratio has to
+    // come out of `with_angle_from` unchanged, or a locked 4:5 crop drifts as the user rotates.
+    let mut s = Session::with_demo();
+    let (w, h) = dims(&s);
+    for lock in ["4x5", "1x1", "current"] {
+        s.execute("crop.reset", &json!({})).unwrap();
+        s.execute("crop.set", &json!({"rect": [0.2, 0.2, 0.8, 0.8]})).unwrap();
+        s.execute("crop.aspect", &json!({"aspect": lock})).unwrap();
+        let drawn = geometry(&s).rect;
+        let want = drawn.scale(w, h).width() / drawn.scale(w, h).height();
+        for angle in [10.0, 25.0, -25.0, 0.0] {
+            s.execute("crop.straighten", &json!({"angle": angle, "from": [drawn.x0, drawn.y0, drawn.x1, drawn.y1]})).unwrap();
+            let g = geometry(&s);
+            let px = g.rect.scale(w, h);
+            assert!((px.width() / px.height() - want).abs() < 1e-9, "{lock} at {angle}°: aspect {:.9}, want {want:.9}", px.width() / px.height());
+            assert!(g.is_within_image(w, h), "{lock} at {angle}°");
+        }
+        // and the crop is whole again at 0°, not left shrunk
+        let back = geometry(&s).rect.scale(w, h);
+        assert!((back.width() - drawn.scale(w, h).width()).abs() < 1e-6, "{lock} came home at {} not {}", back.width(), drawn.scale(w, h).width());
+    }
+}
+
+#[test]
 fn quick_develop_reset_and_batch_paths_fit_too() {
     let mut s = Session::with_demo();
     let (w, h) = dims(&s);

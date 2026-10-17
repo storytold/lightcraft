@@ -5,7 +5,7 @@ use lightcraft_develop::{DevelopSettings, Preset, ProcessVersion, Section, Setti
 use lightcraft_geom::{CropGeometry, CropHandle, Point, Rect, crop_fit_angle, drag_crop};
 use serde_json::{Value, json};
 
-use super::{CommandSpec, always, bad, bool_or, cmd, f64_or, f64_req, has_active, has_clipboard, has_selection, index_req, ok, str_param};
+use super::{CommandSpec, always, bad, bool_or, cmd, f64_or, f64_req, has_active, has_clipboard, has_selection, index_req, ok, opt_rect, str_param};
 use crate::{Result, Session, media::SourceLevel};
 
 fn active(s: &Session, c: &str) -> Result<PhotoId> {
@@ -588,15 +588,20 @@ pub fn specs() -> Vec<CommandSpec> {
             "Straighten",
             [],
             None,
-            "{angle: degrees -45..45} — keeps the crop if it still fits, else shrinks it about its centre (the largest crop of its aspect stays the largest)",
+            "{angle: degrees -45..45, from: [x0 y0 x1 y1] optional} — keeps the crop if it still fits, else shrinks it about its centre (the largest crop of its aspect stays the largest)",
             has_active,
             |s, p| {
                 let id = active(s, "crop.straighten")?;
                 let (w, h) = crop_dims(s, id);
                 let angle = f64_req(p, "angle", "crop.straighten")?.clamp(-45.0, 45.0);
+                // `from` is the crop the drag started from: a rotate drag re-enters here on every
+                // pointer move, and shrinking the last step's crop loses the drawn one (issue #1794)
+                let from = opt_rect(p, "from");
                 edit(s, "crop.straighten", "Straighten", |d| {
-                    // keep the current crop if it still fits, else shrink it about its centre until it does
-                    d.crop.geometry = d.crop.geometry.with_angle(angle, w, h);
+                    d.crop.geometry = match from {
+                        Some(r) => d.crop.geometry.with_angle_from(r, angle, w, h),
+                        None => d.crop.geometry.with_angle(angle, w, h),
+                    };
                     Ok(())
                 })
             }
