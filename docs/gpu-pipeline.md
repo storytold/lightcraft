@@ -4,6 +4,10 @@ The CPU pipeline (`crates/pipeline`) is the reference ("oracle"). `lightcraft-gp
 evaluates the same stages with wgpu compute shaders (WGSL) on Metal / Vulkan / DX12. Everything is
 pure Rust (wgpu, naga); the drivers are the system's. No GL backend is compiled in.
 
+CPU fast guided-filter allocation measurements and reproduction commands are documented in
+[guided-filter-memory.md](guided-filter-memory.md). That optimization retains the full-size base
+and does not change the GPU's coefficient buffers.
+
 Warped geometry uses a CPU-computed coverage bit mask for the source boundary.
 The CPU reference evaluates that boundary in double precision; GPU float
 rounding otherwise can turn a blank edge pixel into a photo pixel. The mask
