@@ -100,7 +100,7 @@ fn forget_gone(s: &mut Session, dir: &str, subfolders: bool, files: &[String]) -
     let mut forgotten = 0;
     for chunk in s.catalog.forgettable_local(&gone).chunks(2000) {
         let op = Op::Batch { ops: chunk.iter().map(|id| Op::RemovePhoto { id: *id }).collect() };
-        match s.catalog.apply(op.clone()) {
+        match s.apply_catalog(op.clone()) {
             Ok(_) => {
                 s.pending_log.push(op);
                 forgotten += chunk.len();
@@ -185,7 +185,7 @@ impl Session {
             return plan;
         }
         for op in plan.ops() {
-            match self.catalog.apply(op.clone()) {
+            match self.apply_catalog(op.clone()) {
                 Ok(_) => self.pending_log.push(op),
                 Err(e) => log::warn!("forget Local records: {e}"),
             }

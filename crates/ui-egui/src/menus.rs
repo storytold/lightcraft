@@ -417,6 +417,12 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         let ctx = app.tasks.repaint.clone().unwrap_or_default();
         return Some(crate::lightroom_import::command(app, id, p, &ctx));
     }
+    if id == "photo.analyze" && p.get("background").and_then(Value::as_bool).unwrap_or(false) {
+        return Some(crate::culling::start(app, p));
+    }
+    if id == "photo.analyze" && app.culling.is_some() {
+        return Some(Err("Assisted Culling is already running".into()));
+    }
     if let Some(language) = language_from_command(id) {
         app.ui.language = language;
         // Immediately, not on the next frame: the reply and anything else run this frame
@@ -1443,7 +1449,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "photo.editInExternal" => edit_in(app, &ctx, p, false),
         "photo.openOriginalInExternal" => open_original_in(app, &ctx, p),
         "dialog.cull" => {
-            app.ui.dialog = Some(Dialog::Cull { reject_below: 0.0, pick_best: true });
+            app.ui.dialog = Some(Dialog::Cull { reject_below: 0.0, pick_best: true, reanalyze: false });
             Ok(Value::Null)
         }
         "app.whatsNew" => {

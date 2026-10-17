@@ -336,7 +336,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         egui::RichText::new(crate::i18n::tr_format!("Creates {} stacks from {} of {scope}", preview["stacks"], preview["photos"], scope = crate::i18n::tr(scope))).color(t.text_dim),
                     );
                 }
-                Dialog::Cull { reject_below, pick_best } => {
+                Dialog::Cull { reject_below, pick_best, reanalyze } => {
                     let n = app.session.selection.ids.len();
                     let scope = if n > 1 { crate::i18n::tr_format!("the {n} selected photos", n = n) } else { crate::i18n::tr_format!("the {} photos in view", app.session.visible_cloned().len()) };
                     ui.label(egui::RichText::new(crate::i18n::tr_format!("Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).", scope = scope)).color(t.text_label));
@@ -346,6 +346,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     ui.label(egui::RichText::new(crate::i18n::tr(if *reject_below > 0.0 { "Blurry photos below the score are flagged as rejects." } else { "0: nothing is rejected." })).color(t.text_dim));
                     let r = ui.checkbox(pick_best, crate::i18n::tr("Pick the sharpest photo of each burst"));
                     crate::widgets::register(ui.ctx(), "check:cullPick", r.rect);
+                    let r = ui.checkbox(reanalyze, crate::i18n::tr("Re-analyse unchanged photos"));
+                    crate::widgets::register(ui.ctx(), "check:cullReanalyze", r.rect);
                     ui.label(egui::RichText::new(crate::i18n::tr("Scores stay on the photos: filter or make smart albums with Focus and Best of Similar Shots.")).color(t.text_dim));
                 }
                 Dialog::WhatsNew => {
@@ -1870,8 +1872,8 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::DenoiseModel { info, accepted } => crate::panels::denoise::install(app, info, *accepted),
         Dialog::FaceModel { path, info, accepted } => crate::panels::faces::install(app, path, info, *accepted),
         Dialog::AllMetadata { .. } | Dialog::SystemInfo { .. } | Dialog::WhatsNew => Ok(serde_json::Value::Null),
-        Dialog::Cull { reject_below, pick_best } => {
-            let mut p = json!({"pickBest": pick_best});
+        Dialog::Cull { reject_below, pick_best, reanalyze } => {
+            let mut p = json!({"pickBest": pick_best, "reanalyze": reanalyze, "background": true});
             if *reject_below > 0.0 {
                 p["rejectBelow"] = json!(reject_below);
             }

@@ -778,6 +778,129 @@ fn assisted_culling_groups_bursts_and_scores_focus() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn assisted_culling_reuses_unchanged_measurements_and_can_force_a_fresh_pass() {
+    let dir = temp_dir("cull-reuse");
+    let path = dir.join("photo.png");
+    write_png(&path, 60);
+    let mut s = Session::new().with_fs();
+    let imported = s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = lightcraft_catalog::PhotoId(imported["imported"][0].as_u64().unwrap());
+    let first = s.execute("photo.analyze", &json!({"ids": [id.0]})).unwrap();
+    let score = s.catalog.photo(id).unwrap().analysis.unwrap();
+    s.media.forget(id);
+    s.media.file_loader = Some(std::sync::Arc::new(|_, _| Err("the original is offline".into())));
+    let again = s.execute("photo.analyze", &json!({"ids": [id.0], "rejectBelow": 101})).unwrap();
+    assert_eq!(again["photos"], first["photos"], "unchanged measurements remain usable with the original offline");
+    assert_eq!(again["failed"], json!([]));
+    assert_eq!(s.catalog.photo(id).unwrap().flag, lightcraft_catalog::Flag::Reject, "new choices still apply to cached scores");
+    assert_eq!(s.catalog.photo(id).unwrap().analysis.unwrap(), score);
+    let forced = s.execute("photo.analyze", &json!({"ids": [id.0], "reanalyze": true})).unwrap();
+    assert_eq!(forced["photos"], json!([]), "a forced pass must actually read the source");
+    assert_eq!(forced["failed"][0][0], id.0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn assisted_culling_relink_with_retained_hash_does_not_reuse_old_scores() {
+    let dir = temp_dir("cull-relink-retained-hash");
+    let original = dir.join("original.png");
+    let replacement = dir.join("unreadable.png");
+    write_png(&original, 60);
+    std::fs::write(&replacement, b"not a PNG").unwrap();
+    let mut s = Session::new().with_fs();
+    let imported = s.execute("library.import", &json!({"paths": [original.to_string_lossy()]})).unwrap();
+    let id = lightcraft_catalog::PhotoId(imported["imported"][0].as_u64().unwrap());
+    let params = json!({"ids": [id.0], "rejectBelow": 101});
+    s.execute("photo.analyze", &json!({"ids": [id.0]})).unwrap();
+    let old_hash = s.catalog.photo(id).unwrap().content_hash.clone();
+    assert!(old_hash.is_some());
+    let pending = crate::cmd::cull::CullJob::prepare(&mut s, &params).unwrap().run(None);
+    s.execute("photo.relink", &json!({"id": id.0, "path": replacement.to_string_lossy()})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().content_hash, old_hash, "a failed probe retains the imported hash");
+    let stale = s.execute_fn("photo.analyze", |s| pending.apply(s)).unwrap();
+    assert_eq!(stale["photos"], json!([]));
+    assert_eq!(stale["failed"][0][0], id.0);
+    let retried = s.execute("photo.analyze", &params).unwrap();
+    assert_eq!(retried["photos"], json!([]), "the retained hash must not reuse measurements of the old file");
+    assert_eq!(retried["failed"][0][0], id.0);
+    assert_eq!(s.catalog.photo(id).unwrap().flag, lightcraft_catalog::Flag::None);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn assisted_culling_reload_undo_remeasures_current_file_and_discards_old_work() {
+    let dir = temp_dir("cull-reload-undo");
+    let path = dir.join("photo.png");
+    let save = |sharp: bool| {
+        let image = lightcraft_raster::Rgba8::from_fn(48, 32, |x, y| {
+            let v = if !sharp {
+                128
+            } else if (x + y) % 2 == 0 {
+                0
+            } else {
+                255
+            };
+            [v, v, v, 255]
+        });
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&image), &Default::default()).unwrap();
+        std::fs::write(&path, png).unwrap();
+    };
+    save(true);
+    let mut s = Session::new().with_fs();
+    let imported = s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = lightcraft_catalog::PhotoId(imported["imported"][0].as_u64().unwrap());
+    s.execute("photo.analyze", &json!({"ids": [id.0]})).unwrap();
+    assert!(s.catalog.photo(id).unwrap().analysis.unwrap().sharpness > 50.0);
+    let original_hash = s.catalog.photo(id).unwrap().content_hash.clone();
+    let params = json!({"ids": [id.0], "rejectBelow": 50});
+    let pending = crate::cmd::cull::CullJob::prepare(&mut s, &params).unwrap().run(None);
+    save(false);
+    let replacement_bytes = std::fs::read(&path).unwrap();
+    assert_eq!(s.execute("photo.reload", &json!({"ids": [id.0]})).unwrap()["reloaded"], json!([id.0]));
+    assert_ne!(s.catalog.photo(id).unwrap().content_hash, original_hash);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().content_hash, original_hash);
+    assert_eq!(std::fs::read(&path).unwrap(), replacement_bytes, "undo restores catalog metadata, not file bytes");
+    let stale = s.execute_fn("photo.analyze", |s| pending.apply(s)).unwrap();
+    assert_eq!(stale["photos"], json!([]), "change then undo must still discard the old in-flight result");
+    assert_eq!(stale["failed"][0][0], id.0);
+    let pending = crate::cmd::cull::CullJob::prepare(&mut s, &params).unwrap().run(None);
+    s.execute("edit.redo", &json!({})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    let stale = s.execute_fn("photo.analyze", |s| pending.apply(s)).unwrap();
+    assert_eq!(stale["photos"], json!([]), "redo then undo must also invalidate work for the restored hash");
+    assert_eq!(stale["failed"][0][0], id.0);
+    let fresh = s.execute("photo.analyze", &params).unwrap();
+    assert_eq!(fresh["failed"], json!([]));
+    assert_eq!(fresh["rejected"], 1);
+    let photo = s.catalog.photo(id).unwrap();
+    assert!(photo.analysis.unwrap().sharpness < 1.0, "the old H0 score must not be resurrected");
+    assert_eq!(photo.flag, lightcraft_catalog::Flag::Reject);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn assisted_culling_develop_and_rating_changes_keep_source_measurements() {
+    let dir = temp_dir("cull-edits-reuse");
+    let path = dir.join("photo.png");
+    write_png(&path, 60);
+    let mut s = Session::new().with_fs();
+    let imported = s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = lightcraft_catalog::PhotoId(imported["imported"][0].as_u64().unwrap());
+    let first = s.execute("photo.analyze", &json!({"ids": [id.0]})).unwrap();
+    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.rate", &json!({"rating": 4})).unwrap();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 1.0})).unwrap();
+    s.media.forget(id);
+    s.media.file_loader = Some(std::sync::Arc::new(|_, _| Err("offline".into())));
+    let reused = s.execute("photo.analyze", &json!({"ids": [id.0], "rejectBelow": 101})).unwrap();
+    assert_eq!(reused["photos"], first["photos"]);
+    assert_eq!(reused["failed"], json!([]));
+    assert_eq!(s.catalog.photo(id).unwrap().flag, lightcraft_catalog::Flag::Reject);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Find Dust Spots: soft dark spots on a smooth sky are found and healed (one undo step).
 #[test]
 fn dust_spots_are_found_and_healed() {

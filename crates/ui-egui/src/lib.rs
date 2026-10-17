@@ -13,6 +13,7 @@ pub mod canvas_keys;
 mod command_error;
 pub mod control;
 pub mod credits;
+pub mod culling;
 pub mod date_picker;
 pub mod docking;
 pub mod export_task;
@@ -71,6 +72,8 @@ mod tests_copy_paste_dialogs;
 mod tests_crop_rotate;
 #[cfg(test)]
 mod tests_crop_tool;
+#[cfg(test)]
+mod tests_culling;
 #[cfg(test)]
 mod tests_curve;
 #[cfg(test)]
@@ -437,6 +440,9 @@ pub struct LightcraftApp {
     pub sync_owns_changes: bool,
     /// A Synchronize Folder at work in the background.
     pub sync_run: Option<sync::SyncRun>,
+    /// Assisted Culling decoding and scoring on its worker.
+    pub culling: Option<culling::CullTask>,
+    pub last_culling_result: Option<Value>,
     /// A Lightroom catalog inspect/import in progress.
     pub lightroom: Option<lightroom_import::LightroomTask>,
     /// Last terminal Lightroom result, exposed by the command's status/wait response.
@@ -537,6 +543,8 @@ impl LightcraftApp {
             sync: None,
             sync_owns_changes: false,
             sync_run: None,
+            culling: None,
+            last_culling_result: None,
             lightroom: None,
             lightroom_last: None,
             lightroom_result: None,
@@ -1110,6 +1118,7 @@ impl LightcraftApp {
         import::poll_scan(self, ctx);
         sync::poll(self, ctx);
         sync::poll_run(self, ctx);
+        culling::poll(self, ctx);
         import::tick(self, ctx);
         lightroom_import::tick(self, ctx);
         recheck::tick(self);

@@ -322,6 +322,11 @@ pub struct Session {
     pub label_sets: Vec<cmd::manage::LabelSet>,
     /// Look-alike signatures by content key (Find Similar).
     pub signatures: std::collections::HashMap<String, [f32; 64]>,
+    /// One current assisted-culling measurement per photo (groups are recomputed per selection).
+    pub(crate) cull_measurements: std::collections::HashMap<PhotoId, (cmd::cull::MeasurementKey, cmd::cull::Measurement)>,
+    /// Source generations only for photos requested by culling; removed with the photo or library.
+    pub(crate) cull_source_generations: std::collections::HashMap<PhotoId, u64>,
+    cull_generation: u64,
     /// Imported `.cube` LUT profiles.
     pub lut_profiles: Vec<cmd::lut_profiles::LutProfile>,
     /// The target album B adds to (`None` = the Quick Collection).
@@ -470,6 +475,9 @@ impl Session {
             mask_tool_effects: Default::default(),
             label_sets: Vec::new(),
             signatures: Default::default(),
+            cull_measurements: Default::default(),
+            cull_source_generations: Default::default(),
+            cull_generation: 0,
             lut_profiles: Vec::new(),
             target_album: None,
             auto_import_seen: Default::default(),
@@ -614,7 +622,7 @@ impl Session {
                     invalidated.push(*id);
                     replaced.push(*id);
                 }
-                Op::SetFile { id, .. } | Op::Relink { id, .. } | Op::RemovePhoto { id } => invalidated.push(*id),
+                Op::SetFile { id, .. } | Op::Relink { id, .. } | Op::SetDeleted { id, .. } | Op::RemovePhoto { id } => invalidated.push(*id),
                 Op::AddPhoto { photo } => invalidated.push(photo.id),
                 Op::Batch { ops } => pending.extend(ops),
                 _ => {}
@@ -622,7 +630,7 @@ impl Session {
         }
         let inv = self.catalog.apply(op)?;
         for id in invalidated {
-            self.media.forget(id);
+            self.forget_source(id);
         }
         #[cfg(not(target_arch = "wasm32"))]
         for id in replaced {
@@ -631,6 +639,31 @@ impl Session {
         #[cfg(target_arch = "wasm32")]
         let _ = replaced;
         Ok(inv)
+    }
+
+    pub(crate) fn cull_source_generation(&mut self, id: PhotoId) -> u64 {
+        *self.cull_source_generations.entry(id).or_insert_with(|| {
+            self.cull_generation = self.cull_generation.wrapping_add(1);
+            self.cull_generation
+        })
+    }
+
+    fn forget_source(&mut self, id: PhotoId) {
+        self.media.forget(id);
+        self.cull_measurements.remove(&id);
+        if self.catalog.photo(id).is_none() {
+            self.cull_source_generations.remove(&id);
+        } else if let Some(generation) = self.cull_source_generations.get_mut(&id) {
+            // Undo restores catalog provenance, not file bytes. Never reuse an earlier generation.
+            self.cull_generation = self.cull_generation.wrapping_add(1);
+            *generation = self.cull_generation;
+        }
+    }
+
+    pub(crate) fn clear_cull_sources(&mut self) {
+        self.cull_measurements.clear();
+        self.cull_source_generations.clear();
+        self.cull_generation = 0;
     }
 
     /// [`Session::commit`] for an op that goes with a folder already renamed on disk; the undo
@@ -659,7 +692,7 @@ impl Session {
     /// an undo step, and it leaves the redo stack alone.
     pub(crate) fn apply_system(&mut self, op: Op) -> Result<()> {
         let fwd = op.clone();
-        self.catalog.apply(op)?;
+        self.apply_catalog(op)?;
         self.pending_log.push(fwd);
         Ok(())
     }

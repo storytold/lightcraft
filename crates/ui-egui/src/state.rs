@@ -1093,6 +1093,8 @@ pub enum Dialog {
     Cull {
         reject_below: f32,
         pick_best: bool,
+        #[serde(default)]
+        reanalyze: bool,
     },
     /// Help ▸ System Info: (label, value) rows.
     DenoiseModel {

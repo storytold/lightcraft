@@ -76,6 +76,23 @@ Survey and Reference, and leave text fields alone, so the search box still types
 commands (`view.thumbSizeUp`, `view.thumbSizeDown`, reachable from the control channel and MCP, which
 return `{"size"}`); the size is saved with the other interface settings.
 
+## Assisted Culling
+
+Photo → Assisted Culling… scores the selected photos, or all photos in the current view when
+zero or one is selected; the dialog shows that scope before confirmation. Decoding and scoring
+run on a worker with progress and Cancel in the activity stack, leaving navigation responsive.
+Cancellation discards the run's scores and flag changes; a decoder already processing one photo
+finishes that photo before stopping. A completed run is one undoable catalog change.
+
+During the current session, unchanged source-content measurements are reused on subsequent runs.
+Changing Reject below focus, Pick best, the selected photos or capture times recomputes groups
+and flags without decoding those sources again. Re-analyse unchanged photos forces fresh reads.
+Another library, a removed photo or changed source never receives a stale worker result.
+The measurement cache is not persisted across application restarts; saved scores remain on photos.
+Smart albums include photos added to My Photos, not files only browsed in Local.
+
+## References
+
 Public behaviour references, checked 2026-10-08 (thumbnail size: 2026-10-13):
 
 - [Lightroom Classic keyboard shortcuts](https://helpx.adobe.com/lightroom-classic/help/keyboard-shortcuts.html)
