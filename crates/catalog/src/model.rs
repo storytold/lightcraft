@@ -163,6 +163,10 @@ pub fn parse_shutter_seconds(s: &str) -> Option<f64> {
     .filter(|v: &f64| v.is_finite() && *v > 0.0)
 }
 
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// Descriptive + capture metadata.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -179,6 +183,12 @@ pub struct Meta {
     pub state: String,
     pub country: String,
     pub gps: Option<(f64, f64)>,
+    /// The position was removed on purpose (`photo.setMeta` with `gps: null`), and the sidecar still has
+    /// to lose it: the next save removes the sidecar's GPS and clears this flag. Read Metadata from File
+    /// takes whatever position the sidecar states (and clears the flag). Unset means the catalog simply
+    /// doesn't know a position. Left out of the catalog JSON when unset, so older catalogs read unchanged.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub gps_removed: bool,
     pub title: String,
     pub caption: String,
     /// Accessibility text and long description.

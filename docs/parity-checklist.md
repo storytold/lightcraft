@@ -797,6 +797,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | patch | LR-META-XMP: a GPS position cleared in LightCraft is removed from the sidecar by the next save (which then clears the removal; a failed save keeps it); Read Metadata from File takes the sidecar's position when it states one; a photo whose position was never set keeps its sidecar's; status unchanged |
 | 2026-10-16 | patch | LR-META-XMP: a sidecar's GPS wins over the position the camera embedded (on import and Read Metadata from File), and saving no longer rewrites a sidecar's GPS from the camera's; status unchanged |
 | 2026-10-12 | minor | LR-EDIT-OPTICS-PROFILE: Sony ARW shading, CA and distortion tables decoded with settings and provenance (raw IFD, `SR2SubIFD` fallback); applied corrections unchanged (ILCE-7RM4A and ILCE-7RM6 distortion); status unchanged (🟡) |
 | 2026-10-14 | minor | LR-IMP-CAMERA-COVERAGE: Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (coverage.py 515 → 545 verified); sensor verification does not establish colour parity (#1277); status unchanged (🟡) |

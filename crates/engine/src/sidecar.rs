@@ -287,6 +287,7 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
     }
     if let Some(gps) = sc.gps {
         m.gps = Some(gps);
+        m.gps_removed = false;
     }
     if let Some(marked) = sc.copyright_marked {
         m.copyright_status = lightcraft_catalog::CopyrightStatus::from_marked(Some(marked));
@@ -409,6 +410,10 @@ pub const OWNED: &[&str] = &[
 /// writes (`xmp:CreatorTool`) goes only into new sidecars.
 pub const OWNED_IF_STATED: &[&str] = &["exif:DateTimeOriginal", "photoshop:DateCreated", "exif:GPSLatitude", "exif:GPSLongitude"];
 
+/// Removed from a sidecar when LightCraft has explicitly cleared the position ([`lightcraft_catalog::Meta::gps_removed`]);
+/// otherwise a position the sidecar states is kept, even though LightCraft has none.
+const GPS_PROPS: &[&str] = &["exif:GPSLatitude", "exif:GPSLongitude"];
+
 /// Write `data` to `path` atomically: a temp file next to it, synced, then renamed over it.
 fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     lightcraft_catalog::safe_file::write_atomic(path, data)
@@ -457,7 +462,11 @@ fn sidecar_contents(path: &Path, p: &Photo, cat: &lightcraft_catalog::Catalog, s
     if bytes.iter().all(u8::is_ascii_whitespace) {
         return Ok((sidecar_packet(p, cat), false, None));
     }
-    let rules = lightcraft_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
+    let mut owned = OWNED.to_vec();
+    if p.meta.gps.is_none() && p.meta.gps_removed {
+        owned.extend_from_slice(GPS_PROPS);
+    }
+    let rules = lightcraft_meta::MergeRules { owned: &owned, owned_if_present: OWNED_IF_STATED };
     match std::str::from_utf8(&bytes)
         .map_err(|e| e.to_string())
         .and_then(|old| lightcraft_meta::merge_xmp(old, &packet(p, cat, false, !states_gps(old, p.meta.gps)), rules).map_err(|e| e.to_string()))
@@ -679,8 +688,13 @@ impl Session {
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
         let (data, merged, backup) = sidecar_contents(&path, p, &self.catalog, &(self.clock)()).map_err(err)?;
+        // an explicit GPS clear is written into the sidecar by this save: once it is in the file, the catalog's marker is done
+        let cleared = (p.meta.gps.is_none() && p.meta.gps_removed).then(|| lightcraft_catalog::Meta { gps_removed: false, ..p.meta.clone() });
         write_atomic(&path, data.as_bytes()).map_err(err)?;
         self.note_sidecar_write(&path, data.as_bytes());
+        if let Some(meta) = cleared {
+            self.apply_system(Op::SetMeta { id, meta: Box::new(meta) })?;
+        }
         Ok(SidecarSaved { path, merged, backup })
     }
 
